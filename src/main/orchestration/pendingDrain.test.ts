@@ -2,10 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { readPendingReports, applyPendingReports } from './pendingDrain'
+import { readPendingReports, applyPendingReports, MAX_APPLY_ATTEMPTS } from './pendingDrain'
 import {
   pendingReportFileName,
   pendingReportTempName,
+  parsePendingReport,
   serializePendingReport,
   type PendingReport
 } from '../../core/orchestration/pendingReports'
@@ -28,12 +29,21 @@ const report = (dispatchId: string): PendingReport => ({
   args: { type: 'worker_done', taskId: 't', dispatchId, outcome: 'succeeded' }
 })
 
-const queue = async (a: { at: string; nonce: string; dispatchId: string }): Promise<string> => {
+const queue = async (a: {
+  at: string
+  nonce: string
+  dispatchId: string
+  attempts?: number
+}): Promise<string> => {
   await fs.mkdir(dir, { recursive: true })
   const name = pendingReportFileName({ queuedAt: a.at, nonce: a.nonce })
   await fs.writeFile(
     path.join(dir, name),
-    serializePendingReport({ ...report(a.dispatchId), queuedAt: a.at }),
+    serializePendingReport({
+      ...report(a.dispatchId),
+      queuedAt: a.at,
+      ...(a.attempts === undefined ? {} : { attempts: a.attempts })
+    }),
     'utf8'
   )
   return name
@@ -115,7 +125,7 @@ describe('applyPendingReports', () => {
       log: () => {}
     })
     expect(seen).toEqual(['dsp_1', 'dsp_2'])
-    expect(r).toEqual({ applied: 2, rejected: 0, kept: 0 })
+    expect(r).toEqual({ applied: 2, rejected: 0, kept: 0, gaveUp: 0 })
     expect(await files()).toEqual([])
   })
 
@@ -131,7 +141,7 @@ describe('applyPendingReports', () => {
           : { ok: true, detail: 'accepted' },
       log: (m) => said.push(m)
     })
-    expect(r).toEqual({ applied: 1, rejected: 1, kept: 0 })
+    expect(r).toEqual({ applied: 1, rejected: 1, kept: 0, gaveUp: 0 })
     expect(await files()).toEqual([])
     // The rejection is the only record left of what that worker said, so it has to carry it.
     expect(said.join(' ')).toContain('unknown dispatch: dsp_gone')
@@ -149,15 +159,84 @@ describe('applyPendingReports', () => {
       },
       log: (m) => said.push(m)
     })
-    expect(r).toEqual({ applied: 1, rejected: 0, kept: 1 })
+    expect(r).toEqual({ applied: 1, rejected: 0, kept: 1, gaveUp: 0 })
     expect(await files()).toEqual(['2026-09-10T010000000Z-aaaaaaaa.json'])
     expect(said.join(' ')).toContain('disk on fire')
+  })
+
+  // Keeping a report whose application threw is right once. Kept forever it is the one shape in
+  // this design with no way back: the Dispatch is held open at every boot, the Task never moves,
+  // and nobody can see why.
+  it('counts the attempt on the report itself, so the count survives the restart', async () => {
+    await queue({ at: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa', dispatchId: 'dsp_boom' })
+    const r = await applyPendingReports({
+      queued: await readPendingReports({ dir, log: () => {} }),
+      apply: async () => {
+        throw new Error('disk on fire')
+      },
+      log: () => {}
+    })
+    expect(r.kept).toBe(1)
+    const left = await files()
+    expect(left).toEqual(['2026-09-10T010000000Z-aaaaaaaa.json'])
+    expect(
+      parsePendingReport(await fs.readFile(path.join(dir, left[0]), 'utf8'))?.attempts
+    ).toBe(1)
+  })
+
+  it('gives up on the last attempt, so the Dispatch stops being held open', async () => {
+    await queue({
+      at: '2026-09-10T01:00:00.000Z',
+      nonce: 'aaaaaaaa',
+      dispatchId: 'dsp_boom',
+      attempts: MAX_APPLY_ATTEMPTS - 1
+    })
+    await queue({ at: '2026-09-10T02:00:00.000Z', nonce: 'bbbbbbbb', dispatchId: 'dsp_2' })
+    const said: string[] = []
+    const r = await applyPendingReports({
+      queued: await readPendingReports({ dir, log: () => {} }),
+      apply: async (rep) => {
+        if (rep.args.dispatchId === 'dsp_boom') throw new Error('disk on fire')
+        return { ok: true, detail: 'accepted' }
+      },
+      log: (m) => said.push(m)
+    })
+    expect(r).toEqual({ applied: 1, rejected: 0, kept: 0, gaveUp: 1 })
+    expect(await files()).toEqual(['2026-09-10T010000000Z-aaaaaaaa.json.unapplied'])
+    expect(said.join(' ')).toContain('giving up')
+    expect(said.join(' ')).toContain('dsp_boom')
+  })
+
+  it('stops trying when it cannot even record the attempt', async () => {
+    await queue({ at: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa', dispatchId: 'dsp_boom' })
+    // A directory where the rewrite has to land: the attempt cannot be counted, so it cannot be
+    // bounded either, and going round again forever is the one outcome that is not allowed.
+    await fs.mkdir(
+      path.join(
+        dir,
+        pendingReportTempName(
+          pendingReportFileName({ queuedAt: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa' })
+        )
+      ),
+      { recursive: true }
+    )
+    const said: string[] = []
+    const r = await applyPendingReports({
+      queued: await readPendingReports({ dir, log: () => {} }),
+      apply: async () => {
+        throw new Error('disk on fire')
+      },
+      log: (m) => said.push(m)
+    })
+    expect(r.gaveUp).toBe(1)
+    expect(await files()).toContain('2026-09-10T010000000Z-aaaaaaaa.json.unapplied')
+    expect(said.join(' ')).toContain('giving up')
   })
 
   it('does nothing at all, and says nothing, when the queue is empty', async () => {
     const said: string[] = []
     const r = await applyPendingReports({ queued: [], apply: async () => ({ ok: true, detail: '' }), log: (m) => said.push(m) })
-    expect(r).toEqual({ applied: 0, rejected: 0, kept: 0 })
+    expect(r).toEqual({ applied: 0, rejected: 0, kept: 0, gaveUp: 0 })
     expect(said).toEqual([])
   })
 })

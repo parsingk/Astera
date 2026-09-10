@@ -3415,7 +3415,7 @@ export function registerIpc(
         log: orchLog
       })
       orchLog(
-        `pending reports — ${drained.applied} applied, ${drained.rejected} refused, ${drained.kept} left for the next start`
+        `pending reports — ${drained.applied} applied, ${drained.rejected} refused, ${drained.kept} left for the next start, ${drained.gaveUp} given up on`
       )
     }
     // One push for the state that was just loaded off disk. Startup races the renderer's first

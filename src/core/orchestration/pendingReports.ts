@@ -79,6 +79,11 @@ export interface PendingReport {
   sessionId: string
   cmd: string
   args: Record<string, unknown>
+  /** How many app starts have tried to apply this and been thrown out of. Absent on a report the
+   *  CLI has just written; the drain writes it back so the count survives the restart, because
+   *  that is the only place it can live — the app that would hold it in memory is the app that is
+   *  about to be gone. Its ceiling is the drain's (`MAX_APPLY_ATTEMPTS`). */
+  attempts?: number
 }
 
 /** `<queuedAt>-<nonce>.json`, sortable by name because the timestamp is ISO with its punctuation
@@ -123,7 +128,19 @@ export function parsePendingReport(text: string): PendingReport | null {
   if (typeof r.args !== 'object' || r.args === null || Array.isArray(r.args)) return null
   const args = r.args as Record<string, unknown>
   if (!isQueueableReport({ cmd: r.cmd, args })) return null
-  return { queuedAt: r.queuedAt, sessionId: r.sessionId, cmd: r.cmd, args }
+  // A count that is not a whole number is read as no count rather than as a reason to throw the
+  // report away — it only costs the report one more attempt than it should have had.
+  const attempts =
+    typeof r.attempts === 'number' && Number.isInteger(r.attempts) && r.attempts > 0
+      ? r.attempts
+      : undefined
+  return {
+    queuedAt: r.queuedAt,
+    sessionId: r.sessionId,
+    cmd: r.cmd,
+    args,
+    ...(attempts === undefined ? {} : { attempts })
+  }
 }
 
 /** Dispatches a queued report already speaks for, so the restart cleanup can leave them open.
