@@ -266,7 +266,7 @@ export const ko = {
   //
   // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
   // still want real translations.
-  'settings.info.hostHolding': '세션 {sessions}개 · 터미널 {terminals}개 보관 중',
+  'settings.info.hostHolding': '세션 {sessions}개, 터미널 {terminals}개 유지 중',
   'settings.info.hostNotConnected': '연결 안 됨',
   'settings.info.hostNotConnectedWhy': '연결 안 됨 · {detail}',
   'settings.slack.save': '저장',
@@ -385,9 +385,9 @@ export const ko = {
   'update.confirm.title': '지금 설치하고 재시작',
   'update.confirm.body': '진행 중인 세션 {count}개가 종료됩니다. 계속할까요?',
   'update.confirm.bodyKept':
-    '진행 중인 세션 {count}개는 Astera가 재시작하는 동안에도 계속 실행됩니다. 새 버전이 그 세션들을 다시 이어받을지는 업데이트에 달려 있어, 돌아오지 않을 수도 있습니다. 계속할까요?',
+    '진행 중인 세션 {count}개는 Astera가 재시작하는 동안에도 계속 실행됩니다. 새 버전이 이어받을지는 업데이트에 따라 다르므로 돌아오지 않을 수도 있습니다. 계속할까요?',
   'update.confirm.bodyMixed':
-    '진행 중인 세션 중 {ended}개는 종료됩니다. 나머지 {kept}개는 Astera가 재시작하는 동안에도 계속 실행되며, 새 버전이 그 세션들을 다시 이어받을지는 업데이트에 달려 있습니다. 계속할까요?',
+    '진행 중인 세션 중 {ended}개는 종료됩니다. 나머지 {kept}개는 재시작하는 동안에도 계속 실행되지만, 새 버전이 이어받을지는 업데이트에 따라 다릅니다. 계속할까요?',
   // UpdateGate.tsx — the screen that covers the app when the version is below the minimum the release policy sets
   'update.gate.title': '업데이트가 필요합니다',
   'update.gate.body': '{version} 버전으로 업데이트를 진행해주세요',
@@ -730,7 +730,7 @@ export const ko = {
   // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
   // still want real translations.
   'session.terminal.rollAdopted':
-    '재시작 후 이어받음 — 이 계정의 한도 상태를 알 수 없어, Codex가 사용량을 다시 기록할 때까지 계정을 전환하지 않습니다',
+    '재시작 후 이어받아 이 계정의 한도 상태를 모릅니다. Codex가 사용량을 다시 기록하면 그때 계정을 전환합니다',
   // Auto-resume failure toast. See the App.tsx comment for why it is a toast and not a banner —
   // for a rolling session with Slack off, this is the only path that calls a human.
   'session.toast.stalled': "'{title}' 세션이 멈춰 있습니다 — 자동 재개 실패, 확인이 필요합니다",
