@@ -117,7 +117,12 @@ export function reportedDispatchIdsOf(entries: readonly PendingReport[]): Set<st
  *  may go on to do something that depends on state that has not moved, and one told plainly that it
  *  failed retries or gives up on work that is actually finished. So the body says the report is
  *  safe, says nothing has changed yet, and says not to send it again. It is deliberately not shaped
- *  like a server reply: no `ok`, no `sent`, no `error`. */
+ *  like a server reply: no `ok`, no `sent`, no `error`.
+ *
+ *  **One notice answers both kinds of report, so it says nothing about what to do next.** After a
+ *  `worker_done` the next step is to stop, and the spec file's reporting obligation already says so;
+ *  after an `escalation` the worker is stuck and still has the work in front of it. A line telling
+ *  it that its work here was finished would be false for half of the reports it is printed for. */
 export function undeliveredReportNotice(a: { path: string }): string {
   return JSON.stringify({
     queued: true,
@@ -126,7 +131,7 @@ export function undeliveredReportNotice(a: { path: string }): string {
     note:
       'The app was not running, so this report could not be delivered. It has been written to the file ' +
       'named above and the app will apply it the next time it starts. Nothing in the job has changed ' +
-      'yet, so do not act as if this report had taken effect and do not send it again. Your work here ' +
-      'is finished: stop and wait.'
+      'yet, so do not act as if this report had taken effect, and do not send it again — a second ' +
+      'copy would not reach the app either.'
   })
 }

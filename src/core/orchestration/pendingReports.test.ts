@@ -127,7 +127,11 @@ describe('undeliveredReportNotice — what the agent is told', () => {
     expect(notice.sent).toBeUndefined()
     expect(notice.error).toBeUndefined()
   })
-  it('tells the agent to stop rather than send it again', () => {
+  it('tells the agent not to send it again', () => {
     expect(String(notice.note)).toMatch(/again/)
+  })
+  // The same notice answers an escalation, where the worker is stuck and its work is not over.
+  it('does not tell the worker its work here is finished', () => {
+    expect(String(notice.note)).not.toMatch(/finish/i)
   })
 })
