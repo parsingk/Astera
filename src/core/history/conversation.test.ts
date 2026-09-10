@@ -18,31 +18,32 @@ const turnFixture = (): string[] =>
 const toolParts = (turn: ConvTurn): Extract<ConvPart, { kind: 'tool' }>[] =>
   turn.parts.filter((p): p is Extract<ConvPart, { kind: 'tool' }> => p.kind === 'tool')
 
-describe('reduceTranscript — 실제 턴 하나 (conversation-turn.jsonl)', () => {
-  it('user / assistant / user 세 턴으로 묶인다', () => {
+describe('reduceTranscript — a real turn (conversation-turn.jsonl)', () => {
+  it('groups into user / assistant / user', () => {
     const turns = reduceTranscript(turnFixture())
     expect(turns.map((t) => t.role)).toEqual(['user', 'assistant', 'user'])
   })
 
-  it('중간 assistant 턴은 tool 파트들과 마지막 하나의 text 파트로만 이루어진다 — thinking·fallback 은 없다', () => {
+  it('the middle assistant turn is ten tool parts plus one trailing text part — no thinking or fallback slips through', () => {
     const [, assistantTurn] = reduceTranscript(turnFixture())
-    // 실측: Bash tool_use 10개 뒤에 최종 text 하나. 그 사이의 thinking 블록들은 파트를 만들지 않는다.
+    // Measured: ten Bash tool_use entries, interleaved with thinking blocks that contribute
+    // nothing, then one final text block that ends the response.
     expect(assistantTurn.parts).toHaveLength(11)
     expect(assistantTurn.parts.slice(0, -1).every((p) => p.kind === 'tool')).toBe(true)
     expect(assistantTurn.parts[assistantTurn.parts.length - 1].kind).toBe('text')
-    expect(assistantTurn.parts.every((p) => p.kind === 'tool' || p.kind === 'text')).toBe(true)
   })
 
-  it('턴의 id·timestamp는 그 턴을 만든 첫 항목의 것이다', () => {
+  it('a turn\'s id and timestamp come from the entry that produced its first part, not the run\'s first entry', () => {
     const turns = reduceTranscript(turnFixture())
     expect(turns[0]).toMatchObject({
       id: '39d0c83a-9d9a-43d8-b6db-26fdff6d09c9',
       timestamp: '2026-09-03T06:14:55.601Z'
     })
-    // 두 번째 턴의 첫 항목은 thinking 블록 하나뿐인 assistant 줄이다 — 파트는 없지만 턴은 거기서 열린다.
+    // The assistant run's first entry is a thinking-only line (uuid da126648-…) that contributes no
+    // part. The turn is anchored to the next entry instead — the first one with a real tool_use.
     expect(turns[1]).toMatchObject({
-      id: 'da126648-b81a-4cd0-a25c-b13a29f96a48',
-      timestamp: '2026-09-03T06:15:09.538Z'
+      id: 'eb31b40f-7d00-466b-a4b6-0bb649a0c74d',
+      timestamp: '2026-09-03T06:15:10.954Z'
     })
     expect(turns[2]).toMatchObject({
       id: 'c8682da0-3f92-4c0c-8c1e-1c695eda4031',
@@ -51,51 +52,83 @@ describe('reduceTranscript — 실제 턴 하나 (conversation-turn.jsonl)', () 
   })
 })
 
-describe('reduceTranscript — 도구별 outcome (conversation-shapes.jsonl)', () => {
-  it('Read(텍스트) 는 file.numLines 에서 "N lines" 를 낸다', () => {
-    const parts = reduceTranscript(shapesFixture()).flatMap(toolParts)
-    const read = parts.find((p) => p.name === 'Read' && p.target.endsWith('.md'))
-    expect(read?.outcome).not.toBeNull()
-    expect(read?.outcome?.ok).toBe(true)
-    expect(read?.outcome?.detail).toMatch(/^\d+ lines$/)
+describe('reduceTranscript — a dropped user record does not end an assistant run', () => {
+  it('a real isMeta coordinator record sitting between two tool_use entries does not split the run (real data, appended to conversation-shapes.jsonl)', () => {
+    // The isMeta record and the two Bash calls either side of it are real, redacted entries from a
+    // live transcript on this machine (a subagent run that was interrupted, then resumed by a
+    // coordinator message injected as an isMeta user record — exactly the shape that splits a run).
+    const turns = reduceTranscript(shapesFixture())
+    expect(turns.map((t) => t.role)).toEqual(['user', 'assistant'])
+    const ids = toolParts(turns[1]).map((p) => p.id)
+    expect(ids).toContain('toolu_018J7mWrzzYF37f9a1RCHQDn') // the Bash call before the isMeta record
+    expect(ids).toContain('toolu_019C5P4P4K6TCYk9tnL4EQ8y') // the Bash call after it — same turn
   })
 
-  it('Read(이미지) 는 개수 없이 detail 이 비어 있고 ok 는 true다', () => {
+  it('a <task-notification> record does not end an in-progress run either', () => {
+    const turns = reduceTranscript([
+      line({
+        type: 'assistant',
+        uuid: 'a1',
+        message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] }
+      }),
+      line({
+        type: 'user',
+        uuid: 'u1',
+        message: { content: '<task-notification>task-42 finished</task-notification>' }
+      }),
+      line({
+        type: 'assistant',
+        uuid: 'a2',
+        message: { content: [{ type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'pwd' } }] }
+      })
+    ])
+    expect(turns).toHaveLength(1)
+    expect(toolParts(turns[0]).map((p) => p.id)).toEqual(['t1', 't2'])
+  })
+})
+
+describe('reduceTranscript — tool outcomes (conversation-shapes.jsonl)', () => {
+  it('Read (text) — file.numLines becomes "N lines"', () => {
+    const parts = reduceTranscript(shapesFixture()).flatMap(toolParts)
+    const read = parts.find((p) => p.name === 'Read' && p.target.endsWith('.md'))
+    expect(read?.outcome).toEqual({ ok: true, detail: '27 lines' })
+  })
+
+  it('Read (image) — no count, detail is empty, still ok', () => {
     const parts = reduceTranscript(shapesFixture()).flatMap(toolParts)
     const read = parts.find((p) => p.name === 'Read' && p.target.endsWith('.png'))
     expect(read?.outcome).toEqual({ ok: true, detail: '' })
   })
 
-  it('Grep 은 mode 에 따라 numFiles 또는 numLines 에서 detail 을 낸다 — 이 표본은 content 모드라 matches', () => {
+  it('Grep — this sample is mode "content", so numLines becomes "N matches"', () => {
     const parts = reduceTranscript(shapesFixture()).flatMap(toolParts)
     const grep = parts.find((p) => p.name === 'Grep')
-    expect(grep?.outcome?.ok).toBe(true)
-    expect(grep?.outcome?.detail).toMatch(/^\d+ matches$/)
+    expect(grep?.outcome).toEqual({ ok: true, detail: '30 matches' })
   })
 
-  it('Edit 은 structuredPatch 의 +/- 라인을 세어 "+N -M" 을 낸다', () => {
+  it('Edit — sums structuredPatch +/- lines per hunk, and direction is not interchangeable', () => {
     const parts = reduceTranscript(shapesFixture()).flatMap(toolParts)
     const edits = parts.filter((p) => p.name === 'Edit')
-    expect(edits.length).toBeGreaterThanOrEqual(2) // 한 훅·여러 훅 두 표본 모두 있다
-    for (const edit of edits) {
-      expect(edit.outcome?.ok).toBe(true)
-      expect(edit.outcome?.detail).toMatch(/^\+\d+ -\d+$/)
-    }
+    const designEdit = edits.find((p) => p.target.includes('specs'))
+    const planEdit = edits.find((p) => p.target.includes('plans'))
+    // Exact values, not a /^\+\d+ -\d+$/ pattern — a regex still passes if + and - are swapped.
+    expect(designEdit?.outcome).toEqual({ ok: true, detail: '+6 -2' })
+    expect(planEdit?.outcome).toEqual({ ok: true, detail: '+2 -15' })
   })
 
-  it('Write 는 항상 "new file" 이다 — structuredPatch 가 비어 있어 셀 것이 없다', () => {
+  it('Write is always "new file" — structuredPatch is empty and content length is not shown', () => {
     const parts = reduceTranscript(shapesFixture()).flatMap(toolParts)
     const write = parts.find((p) => p.name === 'Write')
     expect(write?.outcome).toEqual({ ok: true, detail: 'new file' })
   })
 
-  it('Bash 성공은 stdout 에서 "N lines" 를 낸다', () => {
+  it('Bash success — "N lines" counted from stdout', () => {
     const parts = reduceTranscript(shapesFixture()).flatMap(toolParts)
     const bash = parts.find((p) => p.name === 'Bash' && p.outcome?.ok === true)
-    expect(bash?.outcome?.detail).toMatch(/^\d+ lines$/)
+    expect(bash?.outcome).toEqual({ ok: true, detail: '5 lines' })
   })
 
-  it('실패한 호출은 ok=false 이고, toolUseResult 가 문자열이어도 죽지 않는다', () => {
+  it('a failed call is not ok, and a string toolUseResult does not throw', () => {
     let turns: ConvTurn[] = []
     expect(() => {
       turns = reduceTranscript(shapesFixture())
@@ -104,7 +137,7 @@ describe('reduceTranscript — 도구별 outcome (conversation-shapes.jsonl)', (
     expect(failed?.outcome).toEqual({ ok: false, detail: '' })
   })
 
-  it('알 수 없는 도구 이름은 그대로 통과한다 — target 은 input 의 첫 문자열 값, detail 은 빈 문자열', () => {
+  it('an unknown tool name passes through — target is the first string value in input, detail is empty', () => {
     const turns = reduceTranscript([
       line({
         type: 'assistant',
@@ -127,8 +160,61 @@ describe('reduceTranscript — 도구별 outcome (conversation-shapes.jsonl)', (
   })
 })
 
-describe('reduceTranscript — 합성 케이스', () => {
-  it('배치로 나간 호출은 위치가 아니라 tool_use_id 로 짝짓는다 (결과가 뒤바뀐 순서로 와도)', () => {
+describe('reduceTranscript — outcome edge cases the fixtures do not exercise', () => {
+  it('a failed Write does not announce "new file" — the string toolUseResult guard applies to every tool', () => {
+    const turns = reduceTranscript([
+      line({
+        type: 'assistant',
+        uuid: 'a1',
+        message: {
+          content: [{ type: 'tool_use', id: 't1', name: 'Write', input: { file_path: '/x.ts', content: 'hi' } }]
+        }
+      }),
+      line({
+        type: 'user',
+        uuid: 'u1',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'EACCES: permission denied' }]
+        },
+        toolUseResult: "Error: EACCES: permission denied, open '/x.ts'"
+      })
+    ])
+    const tool = toolParts(turns[0])[0]
+    expect(tool.outcome).toEqual({ ok: false, detail: '' })
+  })
+
+  it('Bash stdout that is only a trailing newline renders no detail, not "0 lines"', () => {
+    const turns = reduceTranscript([
+      line({
+        type: 'assistant',
+        uuid: 'a1',
+        message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'true' } }] }
+      }),
+      line({
+        type: 'user',
+        uuid: 'u1',
+        message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: '' }] },
+        toolUseResult: { stdout: '\n', stderr: '', interrupted: false, isImage: false, noOutputExpected: false }
+      })
+    ])
+    const tool = toolParts(turns[0])[0]
+    expect(tool.outcome).toEqual({ ok: true, detail: '' })
+  })
+
+  it('a fallback block (a model-switch record) produces nothing — no empty-parts turn either', () => {
+    const turns = reduceTranscript([
+      line({
+        type: 'assistant',
+        uuid: 'a1',
+        message: { content: [{ type: 'fallback', from: { model: 'x' }, to: { model: 'y' } }] }
+      })
+    ])
+    expect(turns).toEqual([])
+  })
+})
+
+describe('reduceTranscript — synthetic cases', () => {
+  it('batched calls pair by tool_use_id, not position (results arrive in reverse order)', () => {
     const turns = reduceTranscript([
       line({
         type: 'assistant',
@@ -140,7 +226,7 @@ describe('reduceTranscript — 합성 케이스', () => {
         uuid: 'a2',
         message: { content: [{ type: 'tool_use', id: 't2', name: 'Write', input: { file_path: '/b.ts' } }] }
       }),
-      // 결과는 t2 -> t1 순서로, 호출 순서(t1 -> t2)와 반대로 온다
+      // The results come back t2, then t1 — the reverse of the call order (t1, then t2).
       line({
         type: 'user',
         uuid: 'u1',
@@ -164,7 +250,7 @@ describe('reduceTranscript — 합성 케이스', () => {
         }
       })
     ])
-    expect(turns).toHaveLength(1) // 연속된 assistant 두 줄이 하나의 턴으로 묶인다
+    expect(turns).toHaveLength(1) // two consecutive assistant entries merge into one turn
     const parts = toolParts(turns[0])
     const read = parts.find((p) => p.id === 't1')
     const write = parts.find((p) => p.id === 't2')
@@ -172,7 +258,7 @@ describe('reduceTranscript — 합성 케이스', () => {
     expect(write?.outcome).toEqual({ ok: true, detail: 'new file' })
   })
 
-  it('결과가 아직 안 온 호출은 outcome 이 null 로 남는다', () => {
+  it('a call with no result yet leaves outcome null', () => {
     const turns = reduceTranscript([
       line({
         type: 'assistant',
@@ -185,7 +271,7 @@ describe('reduceTranscript — 합성 케이스', () => {
     expect((tool as Extract<ConvPart, { kind: 'tool' }>).outcome).toBeNull()
   })
 
-  it('창 밖에서 온(짝 없는) tool_result 는 턴도 파트도 만들지 않는다', () => {
+  it('a tool_result with no matching call in the window produces no turn and no part', () => {
     const turns = reduceTranscript([
       line({
         type: 'user',
@@ -196,9 +282,9 @@ describe('reduceTranscript — 합성 케이스', () => {
     expect(turns).toEqual([])
   })
 
-  it('meta user 기록과 슬래시 커맨드류는 턴을 만들지 않고, 실제 사람 메시지만 턴이 된다', () => {
+  it('meta records and machine-prefixed records produce no turn; a real message does', () => {
     const turns = reduceTranscript([
-      line({ type: 'user', uuid: 'u0', isMeta: true, message: { content: '스킬 본문이 통째로 실린 자리' } }),
+      line({ type: 'user', uuid: 'u0', isMeta: true, message: { content: 'a whole skill body landed here' } }),
       line({ type: 'user', uuid: 'u1', message: { content: '<command-name>/clear</command-name>' } }),
       line({ type: 'user', uuid: 'u2', message: { content: 'why is store.load closing them' } })
     ])
@@ -206,7 +292,7 @@ describe('reduceTranscript — 합성 케이스', () => {
     expect(turns[0].parts).toEqual([{ kind: 'text', text: 'why is store.load closing them' }])
   })
 
-  it('깨진 줄은 건너뛰고, 앞뒤 줄은 그대로 살아남는다', () => {
+  it('a malformed line is skipped, and the lines around it survive', () => {
     const turns = reduceTranscript([
       line({ type: 'user', uuid: 'u1', message: { content: 'one' } }),
       '{ this is not json',
@@ -215,7 +301,7 @@ describe('reduceTranscript — 합성 케이스', () => {
     expect(turns.map((t) => t.id)).toEqual(['u1', 'u2'])
   })
 
-  it('방어적 케이스: 한 메시지 안에 text 와 tool_use 가 섞여도 등장 순서를 지킨다 (실데이터에는 없는 모양)', () => {
+  it('defensive: text and tool_use interleaved in one message keep source order (not seen in real data)', () => {
     const turns = reduceTranscript([
       line({
         type: 'assistant',

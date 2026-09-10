@@ -66,7 +66,8 @@ function targetOf(name: string, input: unknown): string {
 }
 
 /** Real Bash stdout almost always ends with a trailing newline; split('\n') would otherwise count
- *  the empty string after it as an extra line. */
+ *  the empty string after it as an extra line. Trimming happens before the emptiness check, not
+ *  after, so stdout that is only a trailing newline (`'\n'`) also counts as no output — not "0 lines". */
 function countLines(text: string): number {
   const trimmed = text.endsWith('\n') ? text.slice(0, -1) : text
   return trimmed.length === 0 ? 0 : trimmed.split('\n').length
@@ -113,9 +114,13 @@ function detailOf(name: string, result: Record<string, unknown>): string {
     case 'Write':
       return 'new file' // structuredPatch is empty and content length is not a useful number here
     case 'Bash': {
+      // Unlike the other tools above, the shapes doc does not pin a format for non-empty stdout —
+      // only that empty stdout is ''. "N lines" is chosen here to match Read/Grep's line-count
+      // convention; it is an implementation choice, not a measured fact.
       const stdout = result.stdout
-      if (typeof stdout !== 'string' || stdout.length === 0) return ''
-      return `${countLines(stdout)} lines`
+      if (typeof stdout !== 'string') return ''
+      const n = countLines(stdout)
+      return n === 0 ? '' : `${n} lines` // countLines already trims, so a lone '\n' is 0, not 1
     }
     default:
       return ''
@@ -163,8 +168,10 @@ function isToolResultOnly(blocks: Record<string, unknown>[]): boolean {
  *
  *  **Grouping.** An assistant entry carries exactly one block (measured: 7032 entries, 0 with more
  *  than one). A turn is a run of consecutive assistant entries, merged into one `ConvTurn`. The run
- *  ends at a user entry that is not only `tool_result` — a user entry whose blocks are all
- *  `tool_result` contributes no turn of its own; it only patches outcomes onto parts already built.
+ *  ends only when a user entry actually produces a turn of its own — a `tool_result`-only entry
+ *  never does (it only patches outcomes onto parts already built), and neither does a dropped one
+ *  (meta, or not real user text): a record that is not rendered cannot be the reason a response was
+ *  drawn as two. The turn-or-not decision happens before the run is closed, not after.
  *
  *  **Pairing.** Tool calls are issued in batches, so a `tool_result` does not follow its `tool_use`
  *  immediately. Pairing is by `tool_use_id` via `pending`, never by position. A `tool_result` whose
@@ -190,19 +197,22 @@ export function reduceTranscript(lines: string[]): ConvTurn[] {
 
     if (obj.type === 'assistant') {
       const blocks = messageBlocks(obj)
-      if (blocks.length === 0) continue
-      if (current === null) {
-        current = {
-          id: typeof obj.uuid === 'string' ? obj.uuid : '',
-          role: 'assistant',
-          parts: [],
-          timestamp: typeof obj.timestamp === 'string' ? obj.timestamp : undefined
-        }
-        turns.push(current)
-      }
       for (const block of blocks) {
         const part = blockToPart(block)
-        if (part === null) continue // thinking / fallback / unrecognized
+        if (part === null) continue // thinking / fallback / unrecognized — contributes nothing
+        // A turn is pushed only once it has a first real part, and `id`/`timestamp` are taken from
+        // the entry that produced it — not from the run's first entry. Most runs open with a
+        // thinking-only entry (measured: 1595 of 2040), and a turn anchored there would sit on
+        // screen with zero parts while a live tail is paused on exactly that entry.
+        if (current === null) {
+          current = {
+            id: typeof obj.uuid === 'string' ? obj.uuid : '',
+            role: 'assistant',
+            parts: [],
+            timestamp: typeof obj.timestamp === 'string' ? obj.timestamp : undefined
+          }
+          turns.push(current)
+        }
         current.parts.push(part)
         if (part.kind === 'tool') pending.set(part.id, part)
       }
@@ -223,11 +233,21 @@ export function reduceTranscript(lines: string[]): ConvTurn[] {
         }
         continue // answers a batch — not a turn of its own
       }
+      // PARKED, not handled: a user entry mixing `tool_result` with a `text` block (isToolResultOnly
+      // is false for it) falls through to the real-turn path below and its tool_result is never read
+      // — that call's outcome stays null forever. Measured at 0 occurrences across 80 transcripts, so
+      // this is a known, deliberate gap, not a miss.
 
-      current = null // any non-tool_result user entry ends the assistant run
+      // Whether this record produces a turn is decided before `current` is touched. A record that is
+      // dropped (meta, or not real user text) is not there, so it must not end an in-progress
+      // assistant run — measured: <task-notification> and isMeta skill-body records sit mid-run in
+      // real transcripts, and closing the run at every one of them split single assistant responses
+      // into many (846 + 31 such splits across six real transcripts).
       if (isMetaUserRecord(obj)) continue
       const text = userTurnText(obj.message)
       if (text === null || !isRealUserText(text)) continue
+
+      current = null // a real user turn does end the run
       turns.push({
         id: typeof obj.uuid === 'string' ? obj.uuid : '',
         role: 'user',
