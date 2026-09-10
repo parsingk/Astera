@@ -248,7 +248,13 @@ describe('writePendingReport — the report a closed app could not take', () => 
   const report = {
     sessionId: 'sess_1',
     cmd: 'send',
-    args: { type: 'worker_done', taskId: 'tsk_1', dispatchId: 'dsp_1', body: 'done\nand said so' },
+    args: {
+      type: 'worker_done',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_1',
+      outcome: 'succeeded',
+      body: 'done\nand said so'
+    },
     queuedAt: '2026-09-10T01:02:03.004Z',
     nonce: 'abcd1234'
   }

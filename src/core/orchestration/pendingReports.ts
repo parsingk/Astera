@@ -9,6 +9,7 @@
 // This module holds the decisions and the file format, with no filesystem in it: `src/cli/run.ts`
 // writes, `src/main/orchestration/pendingDrain.ts` reads and applies.
 import path from 'node:path'
+import { workerDoneFieldError } from './sendArgs'
 
 /** Folder beside the info file the CLI already reads (orch-info.json). One file per report rather
  *  than one appended log: two workers can finish at the same moment with the app gone, and two
@@ -44,10 +45,29 @@ export function pendingReportsDirFrom(infoPath: string): string {
  *  could act twice belongs here. */
 const QUEUEABLE_TYPES = new Set(['worker_done', 'escalation'])
 
-/** Is this the kind of command a file can stand in for. */
+/** Is this the kind of command a file can stand in for, **and would the app accept it**.
+ *
+ *  The second half matters as much as the first. A report the server would refuse must fail now,
+ *  the way it does today, so the worker sees the error and can correct itself. Queued instead, it
+ *  would be answered "recorded, do not send it again", hold its Dispatch open through the next
+ *  restart cleanup (`reportedDispatchIdsOf`), and then be refused by the drain — leaving that Task
+ *  stalled for the rest of the app session over a missing `--outcome`. Worse than the failure it
+ *  replaced.
+ *
+ *  `worker_done`'s fields are checked by the same function the server checks them with, so the two
+ *  cannot drift. The Task and the Dispatch are then required of **both** types, which is stricter
+ *  than the live path: the server fills a missing `dispatchId` on an escalation from the session's
+ *  open Dispatch, and by the time a queue is drained there may be no open Dispatch to read it from
+ *  — the worker's session died with the Host, or the restart cleanup closed it. An escalation with
+ *  no `dispatchId` could therefore only ever be refused, and one with no `taskId` would be posted
+ *  into whichever Run happened to be the most recent. */
 export function isQueueableReport(a: { cmd: string; args: Record<string, unknown> }): boolean {
   if (a.cmd !== 'send') return false
-  return typeof a.args.type === 'string' && QUEUEABLE_TYPES.has(a.args.type)
+  const type = a.args.type
+  if (typeof type !== 'string' || !QUEUEABLE_TYPES.has(type)) return false
+  if (typeof a.args.taskId !== 'string' || a.args.taskId.length === 0) return false
+  if (typeof a.args.dispatchId !== 'string' || a.args.dispatchId.length === 0) return false
+  return type !== 'worker_done' || workerDoneFieldError(a.args) === null
 }
 
 /** One undelivered report, as it sits on disk. `sessionId` is the worker's `ASTERA_SESSION`: the

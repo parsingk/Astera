@@ -21,11 +21,31 @@ const entry = (over: Partial<PendingReport> = {}): PendingReport => ({
 })
 
 describe('isQueueableReport — which commands a file can stand in for', () => {
+  const done = { type: 'worker_done', taskId: 'tsk_1', dispatchId: 'dsp_1', outcome: 'succeeded' }
+  const escalation = { type: 'escalation', taskId: 'tsk_1', dispatchId: 'dsp_1' }
+
   it('takes the completion report', () => {
-    expect(isQueueableReport({ cmd: 'send', args: { type: 'worker_done' } })).toBe(true)
+    expect(isQueueableReport({ cmd: 'send', args: done })).toBe(true)
+    expect(isQueueableReport({ cmd: 'send', args: { ...done, outcome: 'failed' } })).toBe(true)
   })
   it('takes the escalation', () => {
-    expect(isQueueableReport({ cmd: 'send', args: { type: 'escalation' } })).toBe(true)
+    expect(isQueueableReport({ cmd: 'send', args: escalation })).toBe(true)
+  })
+  // A report the server would reject must fail now, the way it does today, so the agent can correct
+  // itself. Queued, it would be answered "recorded, do not send it again", hold its Dispatch open
+  // through the restart cleanup, and then be refused by the drain -- a Task stalled for the rest of
+  // the app session by a typo.
+  it('refuses a completion report the server would reject as incomplete', () => {
+    expect(isQueueableReport({ cmd: 'send', args: { ...done, outcome: undefined } })).toBe(false)
+    expect(isQueueableReport({ cmd: 'send', args: { ...done, outcome: 'done' } })).toBe(false)
+    expect(isQueueableReport({ cmd: 'send', args: { ...done, taskId: undefined } })).toBe(false)
+    expect(isQueueableReport({ cmd: 'send', args: { ...done, dispatchId: '' } })).toBe(false)
+  })
+  // Stricter than the live path, which fills a missing dispatchId in from the session's open
+  // Dispatch. By the time the queue is drained there may be no open Dispatch to read it from.
+  it('refuses an escalation that does not name its Task and Dispatch', () => {
+    expect(isQueueableReport({ cmd: 'send', args: { ...escalation, dispatchId: undefined } })).toBe(false)
+    expect(isQueueableReport({ cmd: 'send', args: { ...escalation, taskId: undefined } })).toBe(false)
   })
   it('refuses ask — a file cannot answer a question', () => {
     expect(isQueueableReport({ cmd: 'ask', args: { question: 'which one?' } })).toBe(false)
@@ -36,12 +56,12 @@ describe('isQueueableReport — which commands a file can stand in for', () => {
     expect(isQueueableReport({ cmd: 'worker-read', args: { dispatch: 'dsp_1' } })).toBe(false)
   })
   it('refuses the message types a worker is never told to send', () => {
-    expect(isQueueableReport({ cmd: 'send', args: { type: 'status' } })).toBe(false)
-    expect(isQueueableReport({ cmd: 'send', args: { type: 'heartbeat' } })).toBe(false)
+    expect(isQueueableReport({ cmd: 'send', args: { ...done, type: 'status' } })).toBe(false)
+    expect(isQueueableReport({ cmd: 'send', args: { ...done, type: 'heartbeat' } })).toBe(false)
   })
   it('refuses a send with no type — the server would reject it too', () => {
     expect(isQueueableReport({ cmd: 'send', args: {} })).toBe(false)
-    expect(isQueueableReport({ cmd: 'send', args: { type: true } })).toBe(false)
+    expect(isQueueableReport({ cmd: 'send', args: { ...done, type: true } })).toBe(false)
   })
   it('refuses the commands that change a Run', () => {
     expect(isQueueableReport({ cmd: 'run-create', args: { objective: 'x' } })).toBe(false)
@@ -79,7 +99,7 @@ describe('serializePendingReport / parsePendingReport', () => {
     expect(parsePendingReport(serializePendingReport(entry()))).toEqual(entry())
   })
   it('reads back a body with newlines in it', () => {
-    const e = entry({ args: { type: 'worker_done', body: 'one\ntwo\nthree' } })
+    const e = entry({ args: { ...entry().args, body: 'one\ntwo\nthree' } })
     expect(parsePendingReport(serializePendingReport(e))).toEqual(e)
   })
   it('is null for a file that is not JSON', () => {
@@ -100,7 +120,7 @@ describe('reportedDispatchIdsOf — which Dispatches a queued report speaks for'
     expect(reportedDispatchIdsOf([entry()])).toEqual(new Set(['dsp_1']))
   })
   it('leaves out an escalation — the worker said it was stuck, not that it was done', () => {
-    const e = entry({ args: { type: 'escalation', dispatchId: 'dsp_2' } })
+    const e = entry({ args: { type: 'escalation', taskId: 'tsk_1', dispatchId: 'dsp_2' } })
     expect(reportedDispatchIdsOf([e])).toEqual(new Set())
   })
   it('leaves out a report that names no Dispatch', () => {
@@ -108,7 +128,7 @@ describe('reportedDispatchIdsOf — which Dispatches a queued report speaks for'
   })
   it('collects across several reports', () => {
     const a = entry()
-    const b = entry({ args: { type: 'worker_done', dispatchId: 'dsp_9' } })
+    const b = entry({ args: { ...entry().args, dispatchId: 'dsp_9' } })
     expect(reportedDispatchIdsOf([a, b])).toEqual(new Set(['dsp_1', 'dsp_9']))
   })
 })

@@ -17,6 +17,7 @@ import {
 import { TaskValidator } from './validator'
 import { FAILURE_LIMIT } from '../../core/orchestration/types'
 import { parseArgs } from '../../core/orchestration/cliArgs'
+import { isQueueableReport } from '../../core/orchestration/pendingReports'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -4191,5 +4192,51 @@ describe('handoff', () => {
     if ('error' in parsed) return
     expect(parsed.cmd).toBe('handoff')
     expect(parsed.wantsStdin).toEqual(['memo'])
+  })
+})
+
+// The pending-reports queue has to decide, with no server to ask, whether a report would be
+// accepted -- one it queues that the server would refuse holds a Dispatch open through the restart
+// cleanup and then stalls the Task, which is worse than the command simply failing. Both sides call
+// workerDoneFieldError, and this is what says so out loud: if the server ever grows a required
+// field the queue does not know about, this goes red.
+describe('the queue and the server ask for the same fields of a worker_done', () => {
+  const seed = async (): Promise<OrchServerDeps> => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    return deps
+  }
+
+  it('queues exactly what the server does not refuse for a missing field', async () => {
+    const seeded = await seed()
+    const d = seeded.getState().dispatches[0]
+    const shapes: Record<string, unknown>[] = [
+      { type: 'worker_done', taskId: d.taskId, dispatchId: d.id, outcome: 'succeeded' },
+      { type: 'worker_done', taskId: d.taskId, dispatchId: d.id, outcome: 'failed' },
+      { type: 'worker_done', taskId: d.taskId, dispatchId: d.id },
+      { type: 'worker_done', taskId: d.taskId, dispatchId: d.id, outcome: true },
+      { type: 'worker_done', taskId: d.taskId, dispatchId: d.id, outcome: 'maybe' },
+      { type: 'worker_done', taskId: d.taskId, outcome: 'succeeded' },
+      { type: 'worker_done', dispatchId: d.id, outcome: 'succeeded' }
+    ]
+    for (const args of shapes) {
+      // A fresh seed per shape: the first accepted report closes the Dispatch, and every one after
+      // it would come back alreadyReported instead of being judged on its fields.
+      const deps = await seed()
+      const r = await call(deps, 'send', args, 'sess1')
+      const refusedForFields =
+        r.status === 400 &&
+        /--task-id and --dispatch-id are required|--outcome must be/.test(
+          String((r.body as { error?: string }).error)
+        )
+      expect({ args, queued: isQueueableReport({ cmd: 'send', args }) }).toEqual({
+        args,
+        queued: !refusedForFields
+      })
+    }
   })
 })

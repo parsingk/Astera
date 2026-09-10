@@ -30,6 +30,7 @@ import {
   type OrchState,
   type Res
 } from '../../core/orchestration/state'
+import { workerDoneFieldError } from '../../core/orchestration/sendArgs'
 import {
   DEFAULT_ASK_TIMEOUT_MS,
   DEFAULT_CHECK_TIMEOUT_MS,
@@ -1300,12 +1301,15 @@ export async function handleCommand(
       const type = str(args.type) as MessageType | null
       if (!type) return bad('--type is required')
       if (type === 'worker_done') {
-        const taskId = str(args.taskId)
-        const dispatchId = str(args.dispatchId)
-        const outcome = str(args.outcome)
-        if (!taskId || !dispatchId) return bad('--task-id and --dispatch-id are required')
-        if (outcome !== 'succeeded' && outcome !== 'failed')
-          return bad('--outcome must be succeeded|failed')
+        // The check lives in core (workerDoneFieldError) because the pending-reports queue has to
+        // ask the same question with no server to ask — a report it queues that this would refuse
+        // is a Task stalled rather than a command the worker could have fixed. Same function, so
+        // the two cannot drift apart.
+        const fieldError = workerDoneFieldError(args)
+        if (fieldError) return bad(fieldError)
+        const taskId = str(args.taskId) as string
+        const dispatchId = str(args.dispatchId) as string
+        const outcome = str(args.outcome) as 'succeeded' | 'failed'
         // Only ownership is checked, regardless of state — a re-send for one's own already-closed
         // dispatch is not blocked here but passed on to applyWorkerDone so it comes back as the
         // idempotent alreadyReported. Checking here whether it is still open would block that
