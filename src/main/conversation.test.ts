@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { transcriptPathFor, createConversationSessions } from './conversation'
 import { ConversationFollow } from '../core/history/conversationRead'
-import type { ConvTurn } from '../core/history/conversation'
+import type { ConvPart, ConvTurn } from '../core/history/conversation'
 
 const POLL_MS = 1_000 // matches conversation.ts's own poll tick
 
@@ -429,17 +429,71 @@ describe('createConversationSessions', () => {
   it('retention shrinks back to zero once every unresolved call resolves', async () => {
     const p = path.join(dir, 't.jsonl')
     await writeFile(p, toolUseLine('a1', 'tool1') + toolUseLine('a1', 'tool2'))
-    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit: vi.fn() })
+    const emit = vi.fn()
+    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit })
     await sessions.open('s1')
     expect(sessions.retainedCount('s1')).toBe(2) // one entry per outstanding call, tool1 and tool2
 
-    await appendFile(p, toolResultLine('tool1', 'hi\n'))
-    await advance(POLL_MS)
-    expect(sessions.retainedCount('s1')).toBe(1) // tool2 is still outstanding, on the same turn
+    // The counts alone would pass even if the wrong call were resolved: two outstanding calls
+    // resolved in either order shrink 2 to 1 to 0 just the same. So each step also asserts WHICH
+    // call carries an outcome now, which is the thing an id-matching bug would get wrong.
+    const outcomes = (): Array<string | null> => {
+      const last = emit.mock.calls[emit.mock.calls.length - 1]
+      const turn = (last[1] as ConvTurn[])[0]
+      return turn.parts
+        .filter((part): part is Extract<ConvPart, { kind: 'tool' }> => part.kind === 'tool')
+        .map((part) => part.outcome?.detail ?? null)
+    }
 
+    // tool2 is answered FIRST, on purpose. Resolving in insertion order would land on tool1 and
+    // still shrink the count to 1, so a pairing bug that goes by order only shows up out of order.
     await appendFile(p, toolResultLine('tool2', 'bye\n'))
     await advance(POLL_MS)
+    expect(sessions.retainedCount('s1')).toBe(1) // tool1 is still outstanding, on the same turn
+    expect(outcomes()).toEqual([null, '1 lines']) // tool2 answered, tool1 not
+
+    await appendFile(p, toolResultLine('tool1', 'hi\n'))
+    await advance(POLL_MS)
     expect(sessions.retainedCount('s1')).toBe(0) // nothing left unresolved — nothing left retained
+    expect(outcomes()).toEqual(['1 lines', '1 lines'])
+    sessions.closeAll()
+  })
+
+  // The post-await guard compares the entry, not just the id. Membership alone would let a read
+  // started before a close finish afterwards and hand its turns to the conversation that reopened
+  // in the meantime — a different conversation that happens to share a session id.
+  it('a read still in flight from a closed conversation does not emit into the reopened one', async () => {
+    const p = path.join(dir, 't.jsonl')
+    await writeFile(p, userLine(1))
+    const emit = vi.fn()
+    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit })
+    await sessions.open('s1')
+
+    // Hold the first tick's read open, so the close and the reopen both land while it is unsettled.
+    let release: ((v: { turns: ConvTurn[]; restarted: boolean } | null) => void) | null = null
+    const originalRead = ConversationFollow.prototype.read
+    let calls = 0
+    vi.spyOn(ConversationFollow.prototype, 'read').mockImplementation(function (
+      this: ConversationFollow,
+      ...args: Parameters<typeof originalRead>
+    ) {
+      calls += 1
+      if (calls === 1) return new Promise((resolve) => (release = resolve))
+      return originalRead.apply(this, args)
+    })
+
+    await appendFile(p, userLine(2))
+    await advance(POLL_MS)
+    expect(release).not.toBeNull() // the first read really is held
+
+    sessions.close('s1')
+    await sessions.open('s1')
+    emit.mockClear()
+
+    // Now let the read from the closed conversation finish, carrying a turn.
+    release!({ turns: [{ id: 'stale', role: 'user', parts: [{ kind: 'text', text: 'stale' }] }], restarted: false })
+    await settleIo()
+    expect(emit).not.toHaveBeenCalled()
     sessions.closeAll()
   })
 
