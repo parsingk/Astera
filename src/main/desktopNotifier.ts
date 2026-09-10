@@ -35,21 +35,22 @@ export interface DesktopNotifierDeps {
   /** The OS sink. Injected so the decision is testable without Electron: index.ts passes the real
    *  Notification, a test passes a recorder. It is also where an OS refusal is swallowed (§9). */
   show: (req: DesktopShowRequest) => void
-  /** The one attention verdict (main/attention.ts). This sink only reads it — index.ts's dedicated tap
-   *  is the sole writer, and it runs before this one in the fan-out for exactly that reason (its own
-   *  comment explains why). A read rather than a second implementation of the classification this sink
-   *  used to carry itself. */
+  /** The one attention verdict (main/attention.ts). This sink subscribes to it rather than polling it —
+   *  see the constructor's own comment for why a read-per-event was tried and reverted. index.ts's
+   *  dedicated tap is the sole writer, and it runs before this one in the fan-out so a subscriber
+   *  attached here sees a session's transitions in the same order they actually happened. */
   attention: {
-    get: (sessionId: string) => Attention
+    subscribe: (fn: (sessionId: string, value: Attention) => void) => () => void
   }
 }
 
 /**
  * The desktop sink for the three notification events (design doc §6).
  *
- * **Nothing new is detected here.** It branches at the same two points SlackNotifier does — the
- * HookEventWatcher callback and the rolling state publisher — on the same inputs. That is most of why
- * the feature is small.
+ * **Nothing new is detected here.** `inputNeeded` comes from subscribing to the one shared attention
+ * verdict (main/attention.ts) rather than tapping the HookEventWatcher callback itself — the constructor
+ * comment explains why a per-event tap was tried and reverted. `limitWaiting`/`accountSwitched` still
+ * come straight from the rolling state publisher, unchanged. That is most of why the feature is small.
  *
  * Slack and the desktop both fire when both are enabled, and that is not duplication: they address
  * different people in different places — Slack the person who has left, the desktop notification the
@@ -63,43 +64,36 @@ export class DesktopNotifier {
    *  that sets it has a single obvious target. */
   private activeSessionId: string | null = null
 
-  constructor(private deps: DesktopNotifierDeps) {}
+  constructor(private deps: DesktopNotifierDeps) {
+    // input needed fires on the TRANSITION into `waiting`, not on every Notification read while a
+    // session is already `waiting`. `attention.subscribe` only calls back when a session's value
+    // actually changes (attention.ts's own guarantee), so this is exactly "a session just became
+    // blocked", once.
+    //
+    // A first version of this sink read `attention.get(sessionId)` inline inside a `Notification`
+    // branch instead — classify the payload, then check the current verdict, fire if `waiting`. That
+    // reads correctly for a single prompt, but `Attention` is level state, not an event: once a call is
+    // outstanding the verdict stays `waiting` for every Notification that arrives underneath it, so
+    // reading it per event re-fires for each one. Five subagents dispatched, one needing permission:
+    // the person approves it, the `Task` call is still outstanding so the verdict stays `waiting`, and
+    // each of the other four finishing popped another "waiting for your input" — the same false-alarm
+    // spam isNonPromptNotification/isIdleNotification existed to prevent, reinstated inside any window
+    // where the verdict happens to already be `waiting`. Subscribing instead of polling is what keeps
+    // that from firing more than once: two unanswered prompts back to back cannot happen on one
+    // session, because answering the first is what lets the next call run, so in the case that matters
+    // one transition is one prompt.
+    //
+    // This also means PreToolUse, PostToolUse and Stop need no branch here at all — a transition to
+    // `working` or `idle` never matches `=== 'waiting'`, so they are silently correct rather than
+    // explicitly ignored.
+    this.deps.attention.subscribe((sessionId, value) => {
+      if (value === 'waiting') this.fire('inputNeeded', sessionId)
+    })
+  }
 
   /** This arrives from the renderer, so it is narrowed here rather than trusted. */
   setActiveSession(sessionId: string | null): void {
     this.activeSessionId = typeof sessionId === 'string' && sessionId !== '' ? sessionId : null
-  }
-
-  /** The HookEventWatcher callback. Notification → input needed, read from the shared attention
-   *  verdict rather than classified here. This is a pure read — index.ts's dedicated tap is the only
-   *  thing that ever writes to `attention`, and it runs before this tap in the fan-out precisely so
-   *  the read below sees this same event's effect rather than the previous one's. PreToolUse and
-   *  PostToolUse are still not framed as a notification themselves; they only matter through what they
-   *  already did to `attention` before this call ever runs. */
-  onHookEvent(sessionId: string, payload: unknown): void {
-    if (typeof payload !== 'object' || payload === null) return
-    const name = (payload as { hook_event_name?: unknown }).hook_event_name
-    if (name === 'Notification') {
-      // This used to classify the payload itself (isNonPromptNotification, isIdleNotification) and
-      // fire straight off that; the classification now lives in attention.ts, and this only reads the
-      // result. The reasoning it applies is the same: a report of something already finished (a
-      // worker finished, login succeeded, an elicitation closed) is not a waiting screen, so a
-      // fan-out of subagents does not pop one false "waiting for your input" toast per worker as each
-      // one completes, and a login does not pop one either; nor is a plain idle notice ("Claude is
-      // waiting for your input" after N quiet seconds) one, since nothing is actually held up — real
-      // prompts arrive under their own types instead.
-      //
-      // The one addition: attention.ts also treats an idle notice as `waiting` when a PreToolUse call
-      // is still outstanding — the CLI reporting "waiting for your input" with a call unanswered
-      // underneath it, a prompt on screen rather than a genuinely idle box. slack.ts has always made
-      // this exception for a session whose tool-call capture can tell the two apart; this sink used to
-      // lack that capture and dropped idle unconditionally, and now gets the same exception by reading
-      // the shared verdict instead.
-      if (this.deps.attention.get(sessionId) === 'waiting') this.fire('inputNeeded', sessionId)
-    }
-    // Stop is deliberately not handled. It fires at the end of every response, so a notification on
-    // it announced each turn rather than anything finishing — Slack's thread is the right place for
-    // that, a toast is not.
   }
 
   /** The rolling state tap. waiting → the work has stopped on a limit; switching → it is proceeding

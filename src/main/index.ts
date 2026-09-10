@@ -22,6 +22,7 @@ import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
+import { fanOutHookEvent } from './hookFanOut'
 import { DesktopNotifier } from './desktopNotifier'
 import { createAttentionState } from './attention'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
@@ -493,34 +494,13 @@ app.whenReady().then(async () => {
   codexRolloutRef = codexRollout
   const hookWatcher = new HookEventWatcher(
     core.hookEventsDir,
-    (sid, payload) => {
-      // The attention state runs FIRST, not fourth — order matters here and nowhere else in this
-      // fan-out. It is the only writer to that state (desktop.onHookEvent below only reads it), so it
-      // has to update before desktop's tap runs or desktop would read this event's answer one event
-      // late. Its own try, same isolation as the taps below: a failure here must not cost Slack or
-      // rolling their turn.
-      try {
-        attention.onHookEvent(sid, payload)
-      } catch {
-        /* an attention-state failure must not block the others */
-      }
-      slack.onHookEvent(sid, payload)
-      // Rolling taps the hooks too — an idle Notification is the signal for the idle nudge.
-      // Isolated in its own try, separate from the Slack tap, so an exception on one side does not
-      // swallow the other.
-      try {
-        rollingRef?.onHookEvent(sid, payload)
-      } catch {
-        /* a rolling tap failure must not block the Slack notification */
-      }
-      // The desktop sink taps the same events. Its own try, for the same reason as the two above —
-      // an exception on one side must not swallow the others.
-      try {
-        desktop.onHookEvent(sid, payload)
-      } catch {
-        /* a desktop notification failure must not block the others */
-      }
-    },
+    // The fan-out itself lives in hookFanOut.ts, not here — see that file's own comment for why
+    // (in short: this callback used to be an untested closure, and Task 5's review deleted its attention
+    // tap and moved it last without a single test noticing, in production or in this suite). `desktop`
+    // is not one of these taps: it no longer reads a hook payload directly, it subscribes to `attention`
+    // instead (desktopNotifier.ts's constructor) — see hookFanOut.ts's own comment on why `attention`
+    // still runs first regardless.
+    (sid, payload) => fanOutHookEvent({ attention, slack, rolling: rollingRef }, sid, payload),
     slackLog
   )
   hookWatcher.start()
@@ -878,6 +858,7 @@ app.whenReady().then(async () => {
   registerIpc(
     core,
     win,
+    attention, // required (ipc.ts's own comment says why it moved ahead of the optional parameters)
     rolling,
     {
       notifier: slack,
@@ -913,8 +894,7 @@ app.whenReady().then(async () => {
       onHostClientReady: (stop) => {
         hostClientStopRef = stop
       }
-    },
-    attention
+    }
   )
   // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
   // Open/Quit would only repeat what the window and its close button already do — while tying the

@@ -576,6 +576,15 @@ export function forgetAttentionOnExit(
 export function registerIpc(
   core: Core,
   win: BrowserWindow,
+  /** The one attention verdict (main/attention.ts). Built in index.ts alongside `desktop` and handed
+   *  the same instance — this file's only use of it today is forgetting a session on exit; the IPC
+   *  that would let the renderer read it is not wired yet. Required, not optional, and placed ahead of
+   *  every optional parameter below (TypeScript refuses a required parameter after an optional one) —
+   *  deliberately: dropping `attention` from index.ts's call used to compile silently and leave the
+   *  feature dark (`forget` never called, and before that, the whole desktop sink dead), which no test
+   *  caught either, since `registerIpc` cannot be exercised without a full Electron harness. Requiring
+   *  it turns that specific mistake into a type error at the one real call site. */
+  attention: AttentionState,
   rolling?: RollingCoordinator,
   slack?: {
     notifier: SlackNotifier
@@ -619,11 +628,7 @@ export function registerIpc(
    *  fills it lives here. Optional so the existing harnesses keep compiling; a missing one is built. */
   agentGuestsIn?: AgentGuestRegistry<WebContents>,
   /** index.ts's share of the Astera Host — see HostWiring. */
-  hostWiring?: HostWiring,
-  /** The one attention verdict (main/attention.ts). Built in index.ts alongside `desktop` and handed
-   *  the same instance — this file's only use of it today is forgetting a session on exit; the IPC
-   *  that would let the renderer read it is not wired yet. */
-  attention?: AttentionState
+  hostWiring?: HostWiring
 ): void {
   const agentGuests = agentGuestsIn ?? new AgentGuestRegistry<WebContents>((id) => webContents.fromId(id))
   const send = (channel: string, payload: unknown): void => {
