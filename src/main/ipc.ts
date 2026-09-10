@@ -369,12 +369,16 @@ export function hostHandshakeMeans(held: string | null, answered: string): 'firs
  *  out of the ipc handler for the usual reason in this file: the handler is an electron-only closure
  *  no test can reach.
  *
- *  Three things are deliberately not counted:
+ *  **Runs are counted, on the same footing as the other two.** What decides it is not what a run is
+ *  but what happens to one when the app quits, and `RunManager.stopAppOwned` skips every pty that
+ *  outlives the app — so a Host-held run keeps running just as a session does. Leaving it out let
+ *  the row tell someone whose held work is a long build or a dev server that nothing of theirs was
+ *  protected, which is the one wrong answer this row must not give.
+ *
+ *  Two things are still not counted:
  *
  *  - **An exited pty.** The Host keeps one for its replay buffer, so it is in the list, but nothing
  *    about it survives closing the app — which is the only question this row answers.
- *  - **A run.** One assembled command that reports its exit is not work a person weighs before
- *    closing the app; sessions and terminals are.
  *  - **A pty with no note.** The reattach sweep kills that one rather than leave it ownerless, so
  *    counting it would report as held something the app is about to end.
  *
@@ -384,12 +388,14 @@ export function hostHandshakeMeans(held: string | null, answered: string): 'firs
 export function hostHoldings(entries: PtyEntry[]): HostHoldings {
   let sessions = 0
   let terminals = 0
+  let runs = 0
   for (const e of entries) {
     if (!e.alive || !e.meta) continue
     if (e.meta.kind === 'session') sessions += 1
     else if (e.meta.kind === 'terminal') terminals += 1
+    else if (e.meta.kind === 'run') runs += 1
   }
-  return { sessions, terminals }
+  return { sessions, terminals, runs }
 }
 
 /**

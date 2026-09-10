@@ -924,11 +924,25 @@ export default function App(): React.JSX.Element {
     // that can be slow or gone. Cleared first, because a re-open must not show the previous
     // opening's counts while this answer is in flight. A rejection is impossible on the main side,
     // and if one ever arrived it means the same thing as no answer.
+    //
+    // **The only fetch here with a cancel token, because it is the only slow one.** This round trip
+    // waits up to five seconds for the Host; close and reopen the modal inside that window and the
+    // first opening's reply lands into the second's row, putting counts from before on screen with
+    // nothing to say they are stale. The same guard, and the same reason, as the terminal list
+    // effect's `cancelled`.
     setHostHolding(null)
+    let cancelled = false
     void window.api.host
       .holdings()
-      .then(setHostHolding)
-      .catch(() => setHostHolding(null))
+      .then((h) => {
+        if (!cancelled) setHostHolding(h)
+      })
+      .catch(() => {
+        if (!cancelled) setHostHolding(null)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [showSettings])
 
   // Keyboard session tab switching: a global capture listener, so it works regardless of where focus
@@ -4091,7 +4105,8 @@ export default function App(): React.JSX.Element {
                             (hostHolding
                               ? ` · ${t('settings.info.hostHolding', {
                                   sessions: hostHolding.sessions,
-                                  terminals: hostHolding.terminals
+                                  terminals: hostHolding.terminals,
+                                  runs: hostHolding.runs
                                 })}`
                               : '')
                           : hostStatus?.problem

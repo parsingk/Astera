@@ -506,14 +506,15 @@ describe('hostHoldings — what the Info tab says the Host is holding', () => {
     restore: {}
   })
 
-  it('counts the live sessions and terminals separately', () => {
+  it('counts the live sessions, terminals and runs separately', () => {
     expect(
       hostHoldings([
         entry({ id: 'a', meta: note('session', 's1') }),
         entry({ id: 'b', meta: note('terminal', 't1') }),
-        entry({ id: 'c', meta: note('session', 's2') })
+        entry({ id: 'c', meta: note('session', 's2') }),
+        entry({ id: 'd', meta: note('run', 'r1') })
       ])
-    ).toEqual({ sessions: 2, terminals: 1 })
+    ).toEqual({ sessions: 2, terminals: 1, runs: 1 })
   })
 
   // An exited pty is history the Host keeps for its replay buffer. Nothing about it survives closing
@@ -521,21 +522,29 @@ describe('hostHoldings — what the Info tab says the Host is holding', () => {
   it('does not count a pty that has already exited', () => {
     expect(
       hostHoldings([entry({ meta: note('session', 's1'), alive: false })])
-    ).toEqual({ sessions: 0, terminals: 0 })
+    ).toEqual({ sessions: 0, terminals: 0, runs: 0 })
   })
 
-  // Runs are neither: a run is one assembled command that reports its exit, not work a person would
-  // lose. An entry with no note at all is one the sweep kills rather than adopts.
-  it('counts neither a run nor a pty with no note', () => {
-    expect(hostHoldings([entry({ meta: note('run', 'r1') }), entry({ meta: null })])).toEqual({
+  // A run the Host owns survives the quit exactly as a session does — RunManager.stopAppOwned skips
+  // every pty that outlives the app. Someone whose only held work is a long build or a dev server
+  // must not read this row as saying nothing of theirs is protected.
+  it('counts a run, because a Host-held run outlives the app too', () => {
+    expect(hostHoldings([entry({ meta: note('run', 'r1') })])).toEqual({
       sessions: 0,
-      terminals: 0
+      terminals: 0,
+      runs: 1
     })
+  })
+
+  // An entry with no note at all is one the sweep kills rather than adopts, so reporting it as held
+  // would name as protected something the app is about to end.
+  it('does not count a pty with no note', () => {
+    expect(hostHoldings([entry({ meta: null })])).toEqual({ sessions: 0, terminals: 0, runs: 0 })
   })
 
   // Zero is a real answer here, and it is the one a Host that has just started gives. It is only ever
   // reached by an entry list the Host actually sent — the row says nothing at all until then.
   it('answers zeros for a Host holding nothing', () => {
-    expect(hostHoldings([])).toEqual({ sessions: 0, terminals: 0 })
+    expect(hostHoldings([])).toEqual({ sessions: 0, terminals: 0, runs: 0 })
   })
 })

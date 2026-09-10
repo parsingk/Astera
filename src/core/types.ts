@@ -651,13 +651,19 @@ export interface HostStatus {
 /** How much of this app's work the Host is holding right now — the fact that makes the Info tab's
  *  Host row mean something, because it answers "will my work survive if I close this?".
  *
- *  Sessions and terminals only; see `hostHoldings` for what is left out and why. Asked separately
- *  from `HostStatus` rather than folded into it: the connection facts are known in the app the
- *  moment they are asked for, while this is a round trip to the Host, and a row that waited on the
- *  second would be a Settings modal that waits on a process that may be slow or gone. */
+ *  **All three kinds of pty, and runs are not the afterthought they look like.** `RunManager`'s quit
+ *  teardown (`stopAppOwned`) skips every pty that outlives the app, exactly as the session and
+ *  terminal managers do, so a Host-held run survives the quit too. Leaving it out would tell someone
+ *  whose held work is a long build or a dev server that nothing of theirs is protected. See
+ *  `hostHoldings` for what is still left out and why.
+ *
+ *  Asked separately from `HostStatus` rather than folded into it: the connection facts are known in
+ *  the app the moment they are asked for, while this is a round trip to the Host, and a row that
+ *  waited on the second would be a Settings modal that waits on a process that may be slow or gone. */
 export interface HostHoldings {
   sessions: number
   terminals: number
+  runs: number
 }
 
 /** The contract the renderer sees as window.api. The IPC adapter implements it. */
