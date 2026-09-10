@@ -4,7 +4,7 @@
     { "file": "Log.dc.html", "x": 460, "y": 0, "w": 900, "h": 820, "title": "1 · 작업 기록" },
     { "file": "Chat.dc.html", "x": 1440, "y": 0, "w": 900, "h": 820, "title": "2 · 대화 우선", "is_interactive": true },
     { "file": "Split.dc.html", "x": 2420, "y": 0, "w": 900, "h": 820, "title": "3 · 두 칸" },
-    { "file": "Aui.dc.html", "x": 3400, "y": 0, "w": 3400, "h": 1180, "title": "4 · assistant-ui 실물" }
+    { "file": "Aui.dc.html", "x": 3400, "y": 0, "w": 2320, "h": 1180, "title": "4 · assistant-ui 실물" }
   ],
   "launch": { "view": "canvas" }
 }
