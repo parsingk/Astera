@@ -279,7 +279,8 @@ const api = {
   },
   host: {
     status: invoke('host.status'),
-    sessionsOutlivingApp: invoke('host.sessionsOutlivingApp')
+    sessionsOutlivingApp: invoke('host.sessionsOutlivingApp'),
+    holdings: invoke('host.holdings')
   },
   platform: process.platform,
   win: {

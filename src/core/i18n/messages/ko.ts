@@ -259,6 +259,14 @@ export const ko = {
   'settings.info.cliNotDetected': '감지 안 됨',
   'settings.info.host': '백그라운드 호스트',
   'settings.info.hostConnected': '연결됨 · 규약 {protocol} · {uptime} 전부터',
+  // Appended to hostConnected with the same ' · ' the row already uses, and **only after the Host
+  // answers what it holds** — until then the row is the connection facts alone. Sessions and
+  // terminals only (see `hostHoldings`), because this row exists to answer "does my work survive if
+  // I close this?".
+  //
+  // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
+  // still want real translations.
+  'settings.info.hostHolding': '세션 {sessions}개 · 터미널 {terminals}개 보관 중',
   'settings.info.hostNotConnected': '연결 안 됨',
   'settings.info.hostNotConnectedWhy': '연결 안 됨 · {detail}',
   'settings.slack.save': '저장',

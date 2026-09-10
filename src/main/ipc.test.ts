@@ -4,6 +4,7 @@ import {
   codexRolloutFromNote,
   historyResumePlan,
   hostHandshakeMeans,
+  hostHoldings,
   parseAllowedExternalUrl,
   providerOfSession,
   liveWorkersFor,
@@ -13,6 +14,7 @@ import {
   staleSpecFiles
 } from './ipc'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
+import type { PtyEntry } from '../core/host/protocol'
 import type { Account, ScheduleConfig, SessionInfo } from '../core/types'
 
 const account = (over: Partial<Account>): Account =>
@@ -487,5 +489,53 @@ describe('codexRolloutFromNote — what an adopted codex session can be register
       rolloutPath: 'D:/r/one.jsonl',
       codexSessionId: null
     })
+  })
+})
+
+describe('hostHoldings — what the Info tab says the Host is holding', () => {
+  const entry = (over: Partial<PtyEntry>): PtyEntry => ({
+    id: 'p1',
+    pid: 100,
+    meta: null,
+    alive: true,
+    ...over
+  })
+  const note = (kind: 'session' | 'run' | 'terminal', id: string): PtyEntry['meta'] => ({
+    kind,
+    id,
+    restore: {}
+  })
+
+  it('counts the live sessions and terminals separately', () => {
+    expect(
+      hostHoldings([
+        entry({ id: 'a', meta: note('session', 's1') }),
+        entry({ id: 'b', meta: note('terminal', 't1') }),
+        entry({ id: 'c', meta: note('session', 's2') })
+      ])
+    ).toEqual({ sessions: 2, terminals: 1 })
+  })
+
+  // An exited pty is history the Host keeps for its replay buffer. Nothing about it survives closing
+  // the app, which is the question this row answers, so it is not held.
+  it('does not count a pty that has already exited', () => {
+    expect(
+      hostHoldings([entry({ meta: note('session', 's1'), alive: false })])
+    ).toEqual({ sessions: 0, terminals: 0 })
+  })
+
+  // Runs are neither: a run is one assembled command that reports its exit, not work a person would
+  // lose. An entry with no note at all is one the sweep kills rather than adopts.
+  it('counts neither a run nor a pty with no note', () => {
+    expect(hostHoldings([entry({ meta: note('run', 'r1') }), entry({ meta: null })])).toEqual({
+      sessions: 0,
+      terminals: 0
+    })
+  })
+
+  // Zero is a real answer here, and it is the one a Host that has just started gives. It is only ever
+  // reached by an entry list the Host actually sent — the row says nothing at all until then.
+  it('answers zeros for a Host holding nothing', () => {
+    expect(hostHoldings([])).toEqual({ sessions: 0, terminals: 0 })
   })
 })

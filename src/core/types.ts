@@ -648,6 +648,18 @@ export interface HostStatus {
   problem: string | null
 }
 
+/** How much of this app's work the Host is holding right now — the fact that makes the Info tab's
+ *  Host row mean something, because it answers "will my work survive if I close this?".
+ *
+ *  Sessions and terminals only; see `hostHoldings` for what is left out and why. Asked separately
+ *  from `HostStatus` rather than folded into it: the connection facts are known in the app the
+ *  moment they are asked for, while this is a round trip to the Host, and a row that waited on the
+ *  second would be a Settings modal that waits on a process that may be slow or gone. */
+export interface HostHoldings {
+  sessions: number
+  terminals: number
+}
+
 /** The contract the renderer sees as window.api. The IPC adapter implements it. */
 export interface CoreApi {
   accounts: {
@@ -1277,6 +1289,14 @@ export type RendererApi = CoreApi & {
      *  A count rather than a flag because the two kinds coexist: a session spawned before the Host
      *  answered is this app's own child and ends with it, whatever the Host owns by now. */
     sessionsOutlivingApp(): Promise<number>
+    /** What the Host says it is holding, or **null when it did not say** — there is no Host, the
+     *  connection is down, or it did not answer in time. Null and `{ sessions: 0, terminals: 0 }` are
+     *  opposite answers and the caller must not merge them: zero is the Host telling you nothing of
+     *  yours would survive, and null is nobody telling you anything.
+     *
+     *  Never rejects, and never blocks the caller for longer than the one round trip's own deadline.
+     *  The Info tab reads it beside `status()` and draws the row without waiting for it. */
+    holdings(): Promise<HostHoldings | null>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

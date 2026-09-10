@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, CliStatus, HistoryEntry, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
+import type { Account, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -416,6 +416,12 @@ export default function App(): React.JSX.Element {
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
   const [appVersion, setAppVersion] = useState('')
   const [hostStatus, setHostStatus] = useState<HostStatus | null>(null)
+  /** What the Host says it is holding, or null while it has not said — which is the state this
+   *  starts in every time the modal opens, and the state it stays in when there is no Host, when the
+   *  connection is down, and when the Host is too slow to answer. The row prints the clause only
+   *  once this is filled: zeros would be a claim that nothing of the person's survives closing the
+   *  app, and that is the one wrong answer worth avoiding here. */
+  const [hostHolding, setHostHolding] = useState<HostHoldings | null>(null)
   // The moment the check finished has to be held alongside the state so the "checked at 17:43" line
   // can carry it. Events that are not results (checking, downloading) have no time.
   const [update, setUpdate] = useState<(UpdateStatus & { checkedAt: number | null }) | null>(null)
@@ -913,6 +919,16 @@ export default function App(): React.JSX.Element {
     // Astera Host slice 1: this value goes stale, and the row is only ever on screen while this
     // modal is open, so it is read here rather than at startup.
     void window.api.host.status().then(setHostStatus)
+    // What it is holding is a round trip to the Host, so it is asked beside the status rather than
+    // through it: the status answers from inside this app and must not be made to wait on a process
+    // that can be slow or gone. Cleared first, because a re-open must not show the previous
+    // opening's counts while this answer is in flight. A rejection is impossible on the main side,
+    // and if one ever arrived it means the same thing as no answer.
+    setHostHolding(null)
+    void window.api.host
+      .holdings()
+      .then(setHostHolding)
+      .catch(() => setHostHolding(null))
   }, [showSettings])
 
   // Keyboard session tab switching: a global capture listener, so it works regardless of where focus
@@ -4068,7 +4084,16 @@ export default function App(): React.JSX.Element {
                           ? t('settings.info.hostConnected', {
                               protocol: hostStatus.protocol ?? 0,
                               uptime: hostUptime(hostStatus.startedAt)
-                            })
+                            }) +
+                            // Appended only once the Host has answered. Until then the row is the
+                            // connection facts alone, which is the whole truth it has: a count here
+                            // before the answer would be an invented one.
+                            (hostHolding
+                              ? ` · ${t('settings.info.hostHolding', {
+                                  sessions: hostHolding.sessions,
+                                  terminals: hostHolding.terminals
+                                })}`
+                              : '')
                           : hostStatus?.problem
                             ? t('settings.info.hostNotConnectedWhy', { detail: hostStatus.problem })
                             : t('settings.info.hostNotConnected')}

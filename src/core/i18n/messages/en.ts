@@ -233,6 +233,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.info.cliNotDetected': 'Not detected',
   'settings.info.host': 'Background host',
   'settings.info.hostConnected': 'Connected · protocol {protocol} · up {uptime}',
+  'settings.info.hostHolding': 'holding {sessions} session(s) · {terminals} terminal(s)',
   'settings.info.hostNotConnected': 'Not connected',
   'settings.info.hostNotConnectedWhy': 'Not connected · {detail}',
   'settings.slack.save': 'Save',
