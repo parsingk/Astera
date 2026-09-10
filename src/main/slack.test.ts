@@ -6,6 +6,7 @@ import type { Account, SessionInfo } from '../core/types'
 import { SlackNotifier, SlackConfigStore, type SlackConfig, type SlackDeps } from './slack'
 import { SlackPostError, type SlackTransport } from './slackTransport'
 import { isSlackReady } from '../core/slack/ready'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 
 /** 설정 한 벌을 만든다 — 지정하지 않은 필드는 null. SlackConfig에 필드가 늘 때마다 아래 테스트들의
  *  save()/toEqual()을 전부 손대야 하는 것을 막는다(실제로 겪었다).
@@ -557,6 +558,75 @@ describe('SlackNotifier 롤링·한도·종료', () => {
       // The record survived: a notification for this session still goes out afterwards.
       h.notifier.onRollState({ sessionId: 's-1', state: 'stalled', scope: 'session' })
       await vi.advanceTimersByTimeAsync(0)
+      expect(h.sent).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// 소켓이 끊기면 모든 pty 핸들이 PTY_LOST_SIGHT_EXIT_CODE 로 끝난다 — Host 는 그 프로세스를 그대로
+// 돌리고 있다. 오케스트레이션의 handleExit·검증기·releaseCoordinator 가 모두 이 코드를 "끝남"으로
+// 읽지 않기로 한 것과 같은 규칙인데, 그 계약이 세워질 때 Slack 만 빠졌다.
+describe('SlackNotifier 시야를 잃은 exit', () => {
+  it('연결이 끊긴 것뿐인 exit 에는 종료 알림을 보내지 않는다', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = setup()
+      h.notifier.register(info())
+      h.notifier.handleExit({ sessionId: 's-1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(h.sent).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 3초 타이머가 먼저 터지면 레코드가 지워지고, 뒤늦게 오는 재등록에는 물려받을 것이 없다 —
+  // 거짓 부고 뒤에 두 번째 스레드 루트가 따라붙는다. 재접속과 pty 목록 조회는 3초를 넘길 수 있다.
+  it('레코드도 지우지 않아, 늦게 오는 재접속이 스레드를 그대로 물려받는다', async () => {
+    vi.useFakeTimers()
+    try {
+      const posts: { text: string; threadTs?: string }[] = []
+      let seq = 0
+      const notifier = new SlackNotifier({
+        getAccount: () => account,
+        readStatusPayload: async () => null,
+        lang: () => 'ko',
+        log: () => {},
+        readFileTail: async () => null,
+        now: () => 1_000_000
+      })
+      notifier.setTransport({
+        supportsThreads: true,
+        post: async (text, threadTs) => {
+          posts.push({ text, threadTs })
+          return `ts-${++seq}`
+        }
+      })
+      notifier.register(info())
+      await vi.advanceTimersByTimeAsync(0)
+      notifier.handleExit({ sessionId: 's-1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+      await vi.advanceTimersByTimeAsync(10_000) // 재접속보다 타이머가 먼저 올 수 있는 창
+
+      notifier.register(info()) // 뒤늦은 재접속
+      notifier.onHookEvent('s-1', { hook_event_name: 'Notification', message: '재접속 후' })
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(posts).toHaveLength(2) // 루트 하나 + 알림 하나, 부고도 두 번째 루트도 없다
+      expect(posts[1].threadTs).toBe('ts-1')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('진짜 종료에는 그대로 알림을 보낸다', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = setup()
+      h.notifier.register(info())
+      h.notifier.handleExit({ sessionId: 's-1', exitCode: 0 })
+      await vi.advanceTimersByTimeAsync(10_000)
       expect(h.sent).toHaveLength(1)
     } finally {
       vi.useRealTimers()

@@ -24,6 +24,7 @@ import {
   type NotificationPayload
 } from '../core/hooks/notification'
 import type { SlackTransportConfig } from '../core/slack/ready'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { t, type Lang } from '../core/i18n'
 import {
   BotTransport,
@@ -717,8 +718,22 @@ export class SlackNotifier {
     if (record.scanner.push(e.data)) void this.onLimitText(record)
   }
 
-  /** The session exit notification — sent after a 3-second delay. If onRolled (a rolling switch) arrives in that window, it is cancelled. */
+  /** The session exit notification — sent after a 3-second delay. If onRolled (a rolling switch) arrives in that window, it is cancelled.
+   *
+   *  **An exit that only says the app lost sight of the session is not an ending**, and this reads
+   *  that code the way orchestration's `handleExit`, `TaskValidator.onRunExit` and
+   *  `releaseCoordinator` already do. The socket to the Host drops, every pty handle ends with it,
+   *  and the Host goes on running the process — so a notification here is a death notice for a
+   *  session that is still working, and the record deletion under it is worse: the reconnect and
+   *  its pty-list sweep can take longer than three seconds, and then the `register` that adopts
+   *  the session back has nothing to inherit and posts a second thread root behind the false
+   *  obituary. Cancelling the timer in `register` covers only the case where the adoption wins the
+   *  race; this covers the case where it does not.
+   *
+   *  The cost if the session really did die with its Host is that no exit notice is ever sent for
+   *  it — the same stall side of the same asymmetry the four other readers of this code accept. */
   handleExit(e: { sessionId: string; exitCode: number }): void {
+    if (e.exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
     const record = this.records.get(e.sessionId)
     if (!record || record.exitTimer) return
     record.exitTimer = setTimeout(() => {
