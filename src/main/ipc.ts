@@ -946,9 +946,17 @@ export function registerIpc(
     // A usage-limit roll's exit is not this case — the collector's `onSessionForked` re-keys the
     // unit onto the resumed session's id before this fires, so there is nothing left here to
     // interrupt (see that method's doc for the ordering this depends on).
-    void workUnitCollector
-      .onSessionExit(e.sessionId)
-      .catch((err) => orchLog(`work unit exit failed: ${String(err)}`))
+    // Not for an exit that only means the app lost sight of the session, the same rule the line
+    // below applies to the coordinator slot. This one is guarded here rather than inside the
+    // collector because the collector is not wrong: `onSessionExit` is written for a session that
+    // ended, and on that premise closing the busy registration, clearing the run state and marking
+    // every active unit INTERRUPTED_BY_SESSION_END are all correct. It is the premise that is false
+    // during a reconnect, and the premise belongs to the caller. Without this a socket blip leaves a
+    // false interruption standing against a live session until a person clears it from the screen.
+    if (e.exitCode !== PTY_LOST_SIGHT_EXIT_CODE)
+      void workUnitCollector
+        .onSessionExit(e.sessionId)
+        .catch((err) => orchLog(`work unit exit failed: ${String(err)}`))
     // The exit code goes with the id: an exit that only means the app lost sight of the session must
     // not empty the slot. See `releaseCoordinator` itself for why refusing is the whole fix.
     void releaseCoordinator?.(e.sessionId, e.exitCode) // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다
