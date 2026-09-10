@@ -11,9 +11,11 @@ import {
   buildRequest,
   resolveGuidePath,
   readGuide,
-  readInfo
+  readInfo,
+  writePendingReport
 } from './run'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
+import { parsePendingReport, pendingReportsDirFrom } from '../core/orchestration/pendingReports'
 
 describe('errorOutput', () => {
   it('메시지를 {error} JSON 한 줄로 감싼다', () => {
@@ -229,5 +231,58 @@ describe('browser commands', () => {
   })
   it('an explicit --timeout-ms still wins for browser-js', () => {
     expect(clientTimeoutMs({ cmd: 'browser-js', args: { timeoutMs: 5000 } })).toBe(5000 + 30_000)
+  })
+})
+
+describe('writePendingReport — the report a closed app could not take', () => {
+  let dir: string
+  let infoPath: string
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cli-pending-'))
+    infoPath = path.join(dir, 'orch-info.json')
+  })
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  const report = {
+    sessionId: 'sess_1',
+    cmd: 'send',
+    args: { type: 'worker_done', taskId: 'tsk_1', dispatchId: 'dsp_1', body: 'done\nand said so' },
+    queuedAt: '2026-09-10T01:02:03.004Z',
+    nonce: 'abcd1234'
+  }
+
+  it('writes the report where the app will look for it', async () => {
+    const r = writePendingReport({ infoPath, ...report })
+    expect(r.ok).toBe(true)
+    const written = (r as { ok: true; path: string }).path
+    expect(path.dirname(written)).toBe(pendingReportsDirFrom(infoPath))
+    expect(parsePendingReport(await fs.readFile(written, 'utf8'))).toEqual({
+      queuedAt: report.queuedAt,
+      sessionId: report.sessionId,
+      cmd: report.cmd,
+      args: report.args
+    })
+  })
+
+  it('makes the folder on the first report — nothing else creates it', async () => {
+    writePendingReport({ infoPath, ...report })
+    expect((await fs.stat(pendingReportsDirFrom(infoPath))).isDirectory()).toBe(true)
+  })
+
+  it('keeps two reports queued in the same millisecond apart', async () => {
+    writePendingReport({ infoPath, ...report })
+    writePendingReport({ infoPath, ...report, nonce: 'ffff0000' })
+    expect((await fs.readdir(pendingReportsDirFrom(infoPath))).length).toBe(2)
+  })
+
+  it('answers with an error instead of throwing when the queue cannot be written', async () => {
+    // A file where the folder has to go: the last line of defence failing, which the caller has to
+    // be able to tell the agent about rather than crash on.
+    await fs.writeFile(pendingReportsDirFrom(infoPath), 'in the way', 'utf8')
+    const r = writePendingReport({ infoPath, ...report })
+    expect(r.ok).toBe(false)
+    expect((r as { ok: false; error: string }).error).toContain(pendingReportsDirFrom(infoPath))
   })
 })

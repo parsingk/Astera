@@ -3,11 +3,19 @@
 // cannot be tested — that is why the side-effect-free functions and main() were pulled in here.
 // main() does not call itself inside this file, so importing this module (as the tests do) does not
 // terminate the process.
-import { readFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from '../core/orchestration/cliArgs'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
 import { SCRIPT_TIMEOUT_MS } from '../core/agentBrowser/script'
+import {
+  isQueueableReport,
+  pendingReportFileName,
+  pendingReportsDirFrom,
+  serializePendingReport,
+  undeliveredReportNotice
+} from '../core/orchestration/pendingReports'
 
 export function errorOutput(msg: string): string {
   return JSON.stringify({ error: msg })
@@ -136,6 +144,44 @@ export function readInfo(
   }
 }
 
+/** Writes one undelivered report into the queue beside the info file.
+ *
+ *  **Synchronous, and it answers instead of throwing.** This is the last line of defence: the server
+ *  could not be reached, so if this write is lost the finished work is lost with it. An error comes
+ *  back as a value so `main` can tell the agent both things that went wrong in one line — the report
+ *  did not reach the app *and* it could not be written down — rather than the process dying with a
+ *  stack trace in the middle of a worker's command.
+ *
+ *  The folder is created here because nothing else makes it: the app writes `orch-info.json` into
+ *  its parent, and this subfolder exists only once there has been something to queue. */
+export function writePendingReport(a: {
+  infoPath: string
+  sessionId: string
+  cmd: string
+  args: Record<string, unknown>
+  queuedAt: string
+  nonce: string
+}): { ok: true; path: string } | { ok: false; error: string } {
+  const dir = pendingReportsDirFrom(a.infoPath)
+  const file = path.join(dir, pendingReportFileName({ queuedAt: a.queuedAt, nonce: a.nonce }))
+  try {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      file,
+      serializePendingReport({
+        queuedAt: a.queuedAt,
+        sessionId: a.sessionId,
+        cmd: a.cmd,
+        args: a.args
+      }),
+      'utf8'
+    )
+    return { ok: true, path: file }
+  } catch (e) {
+    return { ok: false, error: `cannot write ${dir}: ${String(e)}` }
+  }
+}
+
 function readStdin(): Promise<string> {
   return new Promise((resolve) => {
     if (process.stdin.isTTY) return resolve('')
@@ -196,17 +242,48 @@ export async function main(): Promise<void> {
     out(errorOutput('ASTERA_INFO is not set — is this session started by the app?'))
     process.exit(1)
   }
-  const info = readInfo(infoPath)
-  if (!info.ok) {
-    out(errorOutput(info.error))
-    process.exit(1)
-  }
-
+  // **stdin is read before the info file, not after.** A report's body arrives on stdin, and the
+  // report has to be complete before either unreachable path below can write it down — the app
+  // deletes orch-info.json as it quits, so a worker that finishes while the app is closed fails at
+  // `readInfo`, not at `fetch`. For every other command this only changes the order of two steps
+  // that both end the same way.
   let args = parsed.args
   if (parsed.wantsStdin.length > 0) {
     const text = await readStdin()
     args = applyStdin({ args, keys: parsed.wantsStdin, text })
   }
+
+  /** The server could not be reached at all. A report is written down and the agent is told so;
+   *  everything else fails exactly as it did, because nothing else can be answered by a file.
+   *
+   *  **Exit 0 once it is recorded.** Not because it succeeded — the notice says plainly that it did
+   *  not — but because there is nothing here for the agent to do about it, and a non-zero exit is
+   *  what left workers deciding for themselves whether to retry, give up, or read their own finished
+   *  work as failed. When the write itself fails there is something wrong, and both halves of it are
+   *  said in one error. */
+  const unreachable: (reason: string) => never = (reason) => {
+    if (!isQueueableReport({ cmd: parsed.cmd, args })) {
+      out(errorOutput(reason))
+      process.exit(1)
+    }
+    const written = writePendingReport({
+      infoPath,
+      sessionId,
+      cmd: parsed.cmd,
+      args,
+      queuedAt: new Date().toISOString(),
+      nonce: randomBytes(4).toString('hex')
+    })
+    if (!written.ok) {
+      out(errorOutput(`${reason} — and the report could not be recorded either: ${written.error}`))
+      process.exit(1)
+    }
+    out(undeliveredReportNotice({ path: written.path }))
+    process.exit(0)
+  }
+
+  const info = readInfo(infoPath)
+  if (!info.ok) unreachable(info.error)
 
   // `astera browser js --file check.js` — the script from a file instead of stdin
   if (parsed.cmd === 'browser-js' && typeof args.file === 'string') {
@@ -234,8 +311,15 @@ export async function main(): Promise<void> {
     out(body)
     process.exit(exitCodeFor(res.status))
   } catch (e) {
-    out(errorOutput(`request failed: ${String(e)}`))
-    process.exit(1)
+    // **A timeout is not an unreachable server.** The deadline above is minutes long; reaching it
+    // means the connection was made and something on the other side is stuck, so the report may
+    // already have been applied. That keeps failing exactly as it did — only a request that never
+    // reached anything is written down.
+    if (ctl.signal.aborted) {
+      out(errorOutput(`request failed: ${String(e)}`))
+      process.exit(1)
+    }
+    unreachable(`request failed: ${String(e)}`)
   } finally {
     clearTimeout(timer)
   }
