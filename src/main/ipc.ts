@@ -14,6 +14,7 @@ import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
 import type { AttentionState } from './attention'
+import { createConversationSessions, transcriptPathFor, type ConversationSessions } from './conversation'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
 import { hostAddress, retireOlderHosts } from '../host/address'
@@ -573,12 +574,32 @@ export function forgetAttentionOnExit(
   attention?.forget(sessionId)
 }
 
+/**
+ * Whether a session exit should close its conversation window (main/conversation.ts), and does so.
+ *
+ * Same guard, and the same reason, as `forgetAttentionOnExit` just above: a lost-sight exit means the
+ * app only lost its pty handle, not that the session ended — the Host keeps running it and the view
+ * stays correct straight through the reconnect. Closing the conversation here would drop a window a
+ * person still has open, for no reason.
+ *
+ * A pure function for the same reason `forgetAttentionOnExit` is one: the real call sits inside
+ * `registerIpc`'s `onExit` closure, unreachable without an Electron harness.
+ */
+export function closeConversationOnExit(
+  sessions: Pick<ConversationSessions, 'close'> | undefined,
+  sessionId: string,
+  exitCode: number
+): void {
+  if (exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
+  sessions?.close(sessionId)
+}
+
 export function registerIpc(
   core: Core,
   win: BrowserWindow,
   /** The one attention verdict (main/attention.ts). Built in index.ts alongside `desktop` and handed
-   *  the same instance — this file's only use of it today is forgetting a session on exit; the IPC
-   *  that would let the renderer read it is not wired yet. Required, not optional, and placed ahead of
+   *  the same instance — forgetting a session's verdict on exit, and pushing every change through
+   *  `conversation:attention`, both read it. Required, not optional, and placed ahead of
    *  every optional parameter below (TypeScript refuses a required parameter after an optional one) —
    *  deliberately: dropping `attention` from index.ts's call used to compile silently and leave the
    *  feature dark (`forget` never called, and before that, the whole desktop sink dead), which no test
@@ -634,6 +655,20 @@ export function registerIpc(
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
+
+  // The conversation view: one follow per open session, polling only while at least one is open (see
+  // conversation.ts's own doc). transcriptPathFor reads the same statusLine payload rolling.ts,
+  // scheduler.ts and slack.ts already read for a claude session's transcript path, and answers null for
+  // a codex one exactly the way it answers null for a claude session with no status line yet — codex
+  // never writes one, so this needs no provider branch of its own.
+  const conversationSessions = createConversationSessions({
+    transcriptPathFor: (sessionId) =>
+      transcriptPathFor(sessionId, { readStatusPayload: (id) => core.statusLinePayload(id) }),
+    emit: (sessionId, turns, restarted) => send('conversation:append', { sessionId, turns, restarted })
+  })
+  // Every attention change, for every session — unlike conversation:append this is not gated on an
+  // open conversation. It is the same per-session verdict the desktop notifier already reads.
+  attention.subscribe((sessionId, value) => send('conversation:attention', { sessionId, value }))
 
   // Session working/idle detection: decided from the window-title OSC in the output, and session:busy
   // is emitted only when the state changes.
@@ -973,6 +1008,7 @@ export function registerIpc(
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
     forgetAttentionOnExit(attention, e.sessionId, e.exitCode) // drop the Map entry (its own doc above)
+    closeConversationOnExit(conversationSessions, e.sessionId, e.exitCode) // stop the follow (its own doc above)
     // The session ended (WU §14-4) — observation stops here, so any Work Unit still `active` is
     // interrupted, not completed; it waits on the How It Works screen until the person closes it.
     // A usage-limit roll's exit is not this case — the collector's `onSessionForked` re-keys the
@@ -5672,6 +5708,16 @@ export function registerIpc(
   ipcMain.handle('host.holdings', async () => {
     const entries = await hostPtyList?.()
     return entries ? hostHoldings(entries) : null
+  })
+
+  // The conversation view (main/conversation.ts). open/more answer null rather than reject on a
+  // missing or unreadable transcript — see that module's own doc; there is nothing here to translate.
+  ipcMain.handle('conversation.open', (_e, sessionId: string) => conversationSessions.open(sessionId))
+  ipcMain.handle('conversation.more', (_e, sessionId: string, before: number) =>
+    conversationSessions.more(sessionId, before)
+  )
+  ipcMain.handle('conversation.close', (_e, sessionId: string) => {
+    conversationSessions.close(sessionId)
   })
 
   // system (Electron extras)

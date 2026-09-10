@@ -49,7 +49,9 @@ const EVENT_CHANNELS = [
   'github:prs-updated',
   'github:status',
   'usage:accounts-updated',
-  'notify:activate'
+  'notify:activate',
+  'conversation:append',
+  'conversation:attention'
 ]
 
 const api = {
@@ -281,6 +283,11 @@ const api = {
     status: invoke('host.status'),
     sessionsOutlivingApp: invoke('host.sessionsOutlivingApp'),
     holdings: invoke('host.holdings')
+  },
+  conversation: {
+    open: invoke('conversation.open'),
+    more: invoke('conversation.more'),
+    close: invoke('conversation.close')
   },
   platform: process.platform,
   win: {

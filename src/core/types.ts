@@ -29,6 +29,8 @@ import type { GeneratorSettings } from './understanding/generatorSettings'
 import type { DesktopNotifySettings } from './notify/settings'
 import type { ModelListResult } from './models/types'
 import type { ThemeId } from './theme/themes'
+import type { ConvTurn } from './history/conversation'
+export type { ConvTurn } from './history/conversation'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
 // orchestration/types.ts is safe to reach for: its single import is a type-only providers/meta.ts,
 // already in tsconfig.web.json, so putting it in the renderer's compilation target pulled nothing
@@ -318,6 +320,14 @@ export interface SchedStateEvent {
   nextAt?: string // ISO — the next run time, when state='active'
   rule?: ScheduleRule // for the rule summary shown in the banner
 }
+
+/** Where a session stands right now (main/attention.ts's own type, restated here). This file cannot
+ *  import that module directly: it is compiled by tsconfig.web.json for the renderer too, and every
+ *  entry in that config's include list resolves under src/core or src/renderer — nothing there ever
+ *  reaches into src/main, unlike the softer, core-internal "role" boundary this file's note on
+ *  orchestration/state.ts describes (above). The two declarations have to be kept in step by hand if
+ *  a fourth value is ever added. */
+export type Attention = 'idle' | 'working' | 'waiting'
 
 /** One project terminal */
 export interface TerminalInfo {
@@ -628,6 +638,18 @@ export interface CoreEvents {
   // Carries the blocking unit's project and id so the toast it drives (App.tsx) can offer a button
   // that closes that unit directly, through the same call the row's own [완료] button uses.
   'sessionTasks:goalIgnored': { projectPath: string; blockingUnitId: string }
+  /** New turns for an open conversation view (main/conversation.ts) — its follow's own read, reduced
+   *  the same way the initial window was. Fires only for a session with an open conversation: the
+   *  poll starts on `conversation.open` and stops once the last one closes, so a session nobody is
+   *  looking at never reaches the renderer this way. `restarted` is the follow's own flag — the
+   *  transcript file was recreated (e.g. a resumed session reusing the path) since the last read, so
+   *  the renderer should treat this as a fresh conversation rather than an addition to what it drew. */
+  'conversation:append': { sessionId: string; turns: ConvTurn[]; restarted: boolean }
+  /** A session's attention verdict changed (main/attention.ts's `subscribe`). Unlike
+   *  'conversation:append' this is **not** gated on an open conversation — it is the same per-session
+   *  verdict the desktop notifier already reads, so it fires for every session regardless of which
+   *  tab, if any, is showing its conversation. */
+  'conversation:attention': { sessionId: string; value: Attention }
 }
 export type CoreEventChannel = keyof CoreEvents
 
@@ -1303,6 +1325,18 @@ export type RendererApi = CoreApi & {
      *  Never rejects, and never blocks the caller for longer than the one round trip's own deadline.
      *  The Info tab reads it beside `status()` and draws the row without waiting for it. */
     holdings(): Promise<HostHoldings | null>
+  }
+  /** The conversation view's IPC surface (main/conversation.ts). `open` and `more` fail soft: null
+   *  means the session has no transcript path yet, or the file could not be read — never an error,
+   *  and never a reason to treat a codex session (which never has a transcript path) differently from
+   *  a claude one that simply has not written a status line yet. The renderer draws "not available"
+   *  for both. New turns after `open` arrive as the 'conversation:append' event, not a return value. */
+  conversation: {
+    open(sessionId: string): Promise<{ turns: ConvTurn[]; from: number; more: boolean; follow: number } | null>
+    /** One window further back than `before` — an earlier `open`/`more` call's own `from`. Never
+     *  repeats a turn already returned. */
+    more(sessionId: string, before: number): Promise<{ turns: ConvTurn[]; from: number; more: boolean } | null>
+    close(sessionId: string): Promise<void>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   accountRemovalBlockers,
+  closeConversationOnExit,
   codexRolloutFromNote,
   forgetAttentionOnExit,
   historyResumePlan,
@@ -578,5 +579,28 @@ describe('forgetAttentionOnExit — the attention verdict on a session exit', ()
   // never constructed one) — an exit must not throw just because nothing is there to forget.
   it('does nothing, without throwing, when there is no attention state', () => {
     expect(() => forgetAttentionOnExit(undefined, 's1', 0)).not.toThrow()
+  })
+})
+
+// A `close` spy stands in for ConversationSessions here — unlike forgetAttentionOnExit's tests above,
+// what close() itself does (stop the follow, stop the timer once nothing is left open) is already
+// pinned by conversation.test.ts; this only has to show the exit code decides whether it is called.
+describe('closeConversationOnExit — a session exit closes its open conversation', () => {
+  it('a lost-sight exit leaves the conversation open', () => {
+    const close = vi.fn()
+    closeConversationOnExit({ close }, 's1', PTY_LOST_SIGHT_EXIT_CODE)
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  it('an ordinary exit closes it', () => {
+    const close = vi.fn()
+    closeConversationOnExit({ close }, 's1', 0)
+    expect(close).toHaveBeenCalledWith('s1')
+  })
+
+  // registerIpc constructs conversationSessions unconditionally today, but the guard does not assume
+  // that — the same defensive shape as forgetAttentionOnExit's undefined case above.
+  it('does nothing, without throwing, when there is no conversation sessions', () => {
+    expect(() => closeConversationOnExit(undefined, 's1', 0)).not.toThrow()
   })
 })
