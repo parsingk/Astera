@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><script src="./support.js"></script></head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; background: #17171a; color: #d0d0d6; }
+    * { box-sizing: border-box; }
+    .mono { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; }
+    .t { text-align: right; padding-right: 12px; font-size: 11px; color: #5f5f69; line-height: 1.6; }
+    .rail { background: #26262c; position: relative; }
+    .node { position: absolute; left: -3px; top: 7px; width: 7px; height: 7px; border-radius: 50%; }
+    .tick { position: absolute; left: -2px; top: 13px; width: 5px; height: 1px; background: #43434d; }
+    .act { font-size: 12px; line-height: 2.1; color: #767682; }
+    .act b { font-weight: 400; color: #c4c4cc; }
+  </style>
+</helmet>
+
+<div style="width: 900px; height: 820px; display: flex; flex-direction: column; background: #17171a; overflow: hidden;">
+
+  <div style="flex: none; height: 34px; display: flex; align-items: center; padding: 0 12px; background: #1a1a1e; border-bottom: 1px solid #000000; gap: 9px;">
+    <span style="width: 6px; height: 6px; border-radius: 50%; background: #79c98f;"></span>
+    <span style="font-size: 12px;">host 조각 3 설계</span>
+    <span style="font-size: 11px; color: #5f5f69;">39분째</span>
+    <div style="margin-left: auto; display: flex; background: #23232a; border-radius: 6px; padding: 2px; gap: 2px;">
+      <span style="font-size: 11.5px; color: #767682; padding: 4px 9px;">터미널</span>
+      <span style="font-size: 11.5px; color: #d0d0d6; background: #17171a; border-radius: 6px; padding: 4px 9px;">기록</span>
+    </div>
+  </div>
+
+  <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 18px 0 10px;">
+    <div style="display: grid; grid-template-columns: 68px 1px 1fr;">
+
+      <div class="t mono">14:02</div>
+      <div class="rail"><span class="node" style="background: #37b0c4;"></span></div>
+      <div style="padding: 0 28px 20px 18px;">
+        <div style="font-size: 11px; color: #767682; margin-bottom: 5px;">나</div>
+        <div style="font-size: 13.5px; line-height: 1.6; color: #e6e6ec;">store.load 가 재시작할 때 열린 Dispatch 를 전부 닫는데, 밀린 보고가 있는 건 남겨야 해. 어디를 봐야 하지?</div>
+      </div>
+
+      <div class="t mono">14:02</div>
+      <div class="rail"><span class="node" style="background: #17171a; border: 1.5px solid #4a4a52;"></span></div>
+      <div style="padding: 0 28px 4px 18px;">
+        <div style="font-size: 11px; color: #767682; margin-bottom: 5px;">Claude</div>
+        <p style="margin: 0 0 14px; font-size: 13px; line-height: 1.65;">정리 루프는 <span class="mono" style="font-size: 12px; color: #b9b9c2;">store.ts</span> 안에 있습니다. 지금은 살아 있는 세션 목록 하나만 보고 판단합니다.</p>
+      </div>
+
+      <div></div><div class="rail"><span class="tick"></span></div>
+      <div style="padding: 0 28px 0 18px;"><div class="act mono">읽음 <b>src/main/orchestration/store.ts</b> <span style="color: #4f4f59;">412줄</span></div></div>
+
+      <div></div><div class="rail"><span class="tick"></span></div>
+      <div style="padding: 0 28px 14px 18px;"><div class="act mono">찾음 <b>aliveSessionIds</b> <span style="color: #4f4f59;">6곳</span></div></div>
+
+      <div class="t mono">14:04</div>
+      <div class="rail"><span class="node" style="background: #17171a; border: 1.5px solid #4a4a52;"></span></div>
+      <div style="padding: 0 28px 4px 18px;">
+        <p style="margin: 0 0 14px; font-size: 13px; line-height: 1.65;">증거를 하나만 받고 있습니다. 밀린 보고를 <strong style="font-weight: 600; color: #e6e6ec;">두 번째 증거</strong>로 넣으면, 끝까지 마쳤다는 기록이 있는 Dispatch 는 닫지 않고 남길 수 있습니다.</p>
+        <div style="border-left: 2px solid #37b0c4; padding: 3px 0 3px 14px; margin: 0 0 14px;">
+          <pre class="mono" style="margin: 0; font-size: 12px; line-height: 1.6; color: #b9b9c2; overflow-x: auto;">const keep =
+  alive === "unknown" || alive?.has(d.sessionId) || reported?.has(d.id)</pre>
+        </div>
+      </div>
+
+      <div></div><div class="rail"><span class="tick"></span></div>
+      <div style="padding: 0 28px 0 18px;"><div class="act mono">고침 <b>store.ts</b> <span style="color: #79c98f;">+14</span> <span style="color: #d3706b;">−3</span></div></div>
+
+      <div></div><div class="rail"><span class="tick"></span></div>
+      <div style="padding: 0 28px 0 18px;"><div class="act mono">고침 <b>store.test.ts</b> <span style="color: #79c98f;">+38</span></div></div>
+
+      <div></div><div class="rail"><span class="tick"></span></div>
+      <div style="padding: 0 28px 16px 18px;"><div class="act mono">돌림 <b>vitest store.test.ts</b> <span style="color: #79c98f;">42 통과</span></div></div>
+
+      <div class="t mono">14:07</div>
+      <div class="rail"><span class="node" style="background: #d68b4f;"></span></div>
+      <div style="padding: 0 28px 4px 18px;">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 13px; border-left: 2px solid #d68b4f; background: rgba(214,139,79,.08);">
+          <div style="font-size: 12.5px; line-height: 1.45;">
+            <span style="color: #e0a86a; font-weight: 500;">답할 것이 있습니다</span>
+            <span style="display: block; color: #767682; font-size: 12px; margin-top: 2px;">src/main/ipc.ts 수정 승인을 기다립니다.</span>
+          </div>
+          <button style="margin-left: auto; font-family: inherit; font-size: 12px; font-weight: 500; background: #d68b4f; color: #2b1d07; border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; white-space: nowrap;">터미널로</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div style="flex: none; padding: 11px 28px 15px 86px; border-top: 1px solid #26262c;">
+    <div style="display: flex; align-items: flex-end; gap: 8px;">
+      <div style="flex: 1; font-size: 13px; line-height: 1.6; color: #5f5f69; padding: 5px 0;">터미널에서 답한 뒤에 이어서 칠 수 있습니다</div>
+      <div style="width: 26px; height: 26px; border-radius: 6px; background: #23232a; display: grid; place-items: center;">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#5f5f69" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":900,"height":820}}'>
+class Component extends DCLogic { renderVals() { return {} } }
+</script>
+</body>
+</html>

@@ -1,10 +1,9 @@
 {
   "artboards": [
-    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1200, "h": 760, "title": "대화 뷰", "is_interactive": true },
-    { "file": "Tools.dc.html", "x": 1280, "y": 0, "w": 560, "h": 680, "title": "한 줄 작업 표시", "is_interactive": true }
-  ],
-  "annotations": [
-    { "id": "brief", "x": 0, "y": -150, "w": 460, "text": "세션 탭 안에서 터미널과 토글. 승인·선택은 다시 그리지 않고 배너로 알린 뒤 터미널로 넘긴다. 13px/1.6, 문단 16px, 모서리 8px — 전부 앱의 값." }
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 360, "h": 560, "title": "무엇을 고르는가" },
+    { "file": "Log.dc.html", "x": 460, "y": 0, "w": 900, "h": 820, "title": "1 · 작업 기록" },
+    { "file": "Chat.dc.html", "x": 1440, "y": 0, "w": 900, "h": 820, "title": "2 · 대화 우선", "is_interactive": true },
+    { "file": "Split.dc.html", "x": 2420, "y": 0, "w": 900, "h": 820, "title": "3 · 두 칸" }
   ],
   "launch": { "view": "canvas" }
 }

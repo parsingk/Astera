@@ -1,251 +1,53 @@
 <!doctype html>
 <html>
-<head>
-  <meta charset="utf-8">
-  <script src="./support.js"></script>
-</head>
+<head><meta charset="utf-8"><script src="./support.js"></script></head>
 <body>
 <x-dc>
 <helmet>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap">
   <style>
-    /* 값은 src/renderer/src/styles.css 에서 그대로 가져왔다. 산문은 앱의 마크다운 미리보기와 같은
-       13px / 1.6 / 문단 간격 16px, 모서리는 앱의 최대치인 8px 을 넘지 않는다. */
     body { margin: 0; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; background: #17171a; color: #d0d0d6; }
-    a { color: #37b0c4; } a:hover { color: #5cc4d6; }
     * { box-sizing: border-box; }
-    ::-webkit-scrollbar { width: 10px; }
-    ::-webkit-scrollbar-thumb { background: #23232a; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+    h1 { font-size: 17px; font-weight: 600; margin: 0 0 6px; color: #eaeaf0; }
+    h2 { font-size: 13px; font-weight: 600; margin: 0 0 4px; color: #e2e2e8; }
+    p { margin: 0; font-size: 12.5px; line-height: 1.6; color: #93939e; }
+    .n { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; background: #23232a; color: #a3a3ae; font-size: 10.5px; font-weight: 600; margin-right: 8px; }
   </style>
 </helmet>
 
-<div style="width: 1200px; height: 760px; display: flex; flex-direction: column; background: #17171a; overflow: hidden;">
+<div style="width: 360px; height: 560px; background: #17171a; padding: 24px 22px; display: flex; flex-direction: column; gap: 20px; overflow: hidden;">
 
-  <!-- 탭 줄: 앱 것 그대로. 높이 34px, 구분선 #000 -->
-  <div style="display: flex; align-items: stretch; height: 34px; background: #1a1a1e; border-bottom: 1px solid #000000; flex: none;">
-    <div style="display: flex; align-items: center; gap: 7px; padding: 0 13px; font-size: 12px; color: #d0d0d6; background: #17171a; border-right: 1px solid #000000; box-shadow: inset 0 -2px 0 #37b0c4;">
-      <span style="width: 6px; height: 6px; border-radius: 50%; background: #79c98f; flex: none;"></span>host 조각 3 설계
-    </div>
-    <div style="display: flex; align-items: center; gap: 7px; padding: 0 13px; font-size: 12px; color: #767682; border-right: 1px solid #000000;">
-      <span style="width: 6px; height: 6px; border-radius: 50%; background: #4a4a52; flex: none;"></span>i18n 정리
-    </div>
-    <div style="display: flex; align-items: center; gap: 7px; padding: 0 13px; font-size: 12px; color: #767682; border-right: 1px solid #000000;">
-      <span style="width: 6px; height: 6px; border-radius: 50%; background: #4a4a52; flex: none;"></span>run 로그 파서
-    </div>
-    <div style="margin-left: auto; display: flex; align-items: center; padding: 0 8px;">
-      <div style="display: flex; background: #23232a; border-radius: 6px; padding: 2px; gap: 2px;">
-        <button onClick="{{ showTerm }}" style="{{ termBtn }}">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
-          터미널
-        </button>
-        <button onClick="{{ showConv }}" style="{{ convBtn }}">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z"></path></svg>
-          대화
-        </button>
-      </div>
-    </div>
+  <div>
+    <h1>대화 뷰, 방향 세 가지</h1>
+    <p>오른쪽 세 장은 같은 대화를 서로 다른 구조로 그린 것입니다. 색과 글자는 셋 다 앱 값이고, <strong style="color: #c4c4cc; font-weight: 500;">다른 것은 배치</strong>입니다.</p>
   </div>
 
-  <!-- ── 터미널 쪽 ─────────────────────────────────────── -->
-  <sc-if value="{{ isTerm }}" hint-placeholder-val="{{ false }}">
-    <div style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
-      <div style="flex: 1; min-height: 0; overflow: auto; padding: 10px 14px; font-family: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace; font-size: 12.5px; line-height: 1.5; color: #d0d0d6; white-space: pre-wrap;">● <span style="color: #93939e;">Read</span> src/main/orchestration/store.ts
-  ⎿ Read 412 lines
+  <div style="height: 1px; background: #26262c;"></div>
 
-● 정리가 증거를 하나만 받고 있습니다. 밀린 보고를 두 번째 증거로
-  넣으면 끝까지 마쳤다는 기록이 있는 Dispatch 는 남길 수 있습니다.
+  <div>
+    <h2><span class="n">1</span>작업 기록</h2>
+    <p style="padding-left: 26px;">시간축 한 줄에 전부 매답니다. 말풍선이 없고, 에이전트가 한 일이 대화와 같은 줄기에 섞여 순서대로 읽힙니다. 자리를 비웠다 돌아왔을 때 강합니다.</p>
+  </div>
 
-● <span style="color: #93939e;">Update</span> src/main/orchestration/store.ts
-  ⎿ Updated with 14 additions and 3 removals
+  <div>
+    <h2><span class="n">2</span>대화 우선</h2>
+    <p style="padding-left: 26px;">읽기 좋은 폭과 큰 글자. 에이전트가 한 일은 한 줄로 접어두고 누르면 펴집니다. 대화 자체가 주인공이고 기계 쪽은 숨습니다.</p>
+  </div>
 
-<span style="color: #d68b4f;">╭──────────────────────────────────────────────────────────╮</span>
-<span style="color: #d68b4f;">│</span>  src/main/ipc.ts 를 수정할까요?                          <span style="color: #d68b4f;">│</span>
-<span style="color: #d68b4f;">│</span>                                                          <span style="color: #d68b4f;">│</span>
-<span style="color: #d68b4f;">│</span>  <span style="color: #79c98f;">❯ 1. 예</span>                                                <span style="color: #d68b4f;">│</span>
-<span style="color: #d68b4f;">│</span>    2. 예, 이 세션에서는 다시 묻지 않기                    <span style="color: #d68b4f;">│</span>
-<span style="color: #d68b4f;">│</span>    3. 아니오                                             <span style="color: #d68b4f;">│</span>
-<span style="color: #d68b4f;">╰──────────────────────────────────────────────────────────╯</span>
-</div>
-      <div style="flex: none; padding: 8px 14px 12px; border-top: 1px solid #26262c;">
-        <div style="font-size: 12px; color: #767682;">승인·계획·모델 선택은 이 화면에서 합니다. 대화 화면은 이 순간을 다시 그리지 않습니다.</div>
-      </div>
-    </div>
-  </sc-if>
+  <div>
+    <h2><span class="n">3</span>두 칸</h2>
+    <p style="padding-left: 26px;">대화에서 작업 표시를 아예 빼고 오른쪽 칸으로 보냅니다. 글은 완전히 깨끗해지고, 지금 뭘 하는지와 뭐가 바뀌었는지는 항상 같은 자리에 있습니다.</p>
+  </div>
 
-  <!-- ── 대화 쪽 ───────────────────────────────────────── -->
-  <sc-if value="{{ isConv }}" hint-placeholder-val="{{ true }}">
-    <div style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
-
-      <div style="flex: 1; min-height: 0; overflow-y: auto;">
-        <div style="max-width: 720px; margin: 0 auto; padding: 20px 20px 8px; font-size: 13px; line-height: 1.6;">
-
-          <div style="display: flex; justify-content: flex-end; margin-bottom: 20px;">
-            <div style="background: #23232a; border-radius: 8px; padding: 9px 13px; max-width: 76%; white-space: pre-wrap;">store.load 가 재시작할 때 열린 Dispatch 를 전부 닫는데, 밀린 보고가 있는 건 남겨야 해. 어디를 봐야 하지?</div>
-          </div>
-
-          <div style="margin-bottom: 22px;">
-            <div style="display: flex; align-items: center; gap: 7px; font-size: 11px; color: #767682; margin-bottom: 8px;">
-              <span style="width: 16px; height: 16px; border-radius: 3px; background: #37b0c4; color: #0d2b30; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 600;">C</span>
-              Claude Sonnet 4.5
-            </div>
-            <p style="margin: 0 0 16px;">정리 루프는 <code style="font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: 12px; background: #23232a; padding: 1px 5px; border-radius: 3px;">store.ts</code> 안에 있습니다. 지금은 살아 있는 세션 목록 하나만 보고 판단하는데, 밀린 보고도 같은 자리에서 봐야 합니다.</p>
-
-            <div style="display: flex; flex-direction: column; gap: 3px; margin: 0 0 16px;">
-              <div style="display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid #26262c; border-radius: 6px; font-size: 12px; color: #93939e;">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#767682" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
-                <span style="font-family: ui-monospace, Consolas, monospace; color: #d0d0d6;">src/main/orchestration/store.ts</span>
-                <span style="margin-left: auto; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: #767682;">412줄</span>
-              </div>
-              <div style="display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid #26262c; border-radius: 6px; font-size: 12px; color: #93939e;">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#767682" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.7" y2="16.7"></line></svg>
-                <span style="font-family: ui-monospace, Consolas, monospace; color: #d0d0d6;">"aliveSessionIds"</span>
-                <span style="margin-left: auto; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: #767682;">6곳</span>
-              </div>
-            </div>
-
-            <p style="margin: 0 0 16px;">증거를 하나만 받고 있습니다. 밀린 보고를 <strong style="font-weight: 600; color: #d0d0d6;">두 번째 증거</strong>로 넣으면, 끝까지 마쳤다는 기록이 있는 Dispatch 는 닫지 않고 남길 수 있습니다.</p>
-
-            <div style="border: 1px solid #26262c; border-radius: 8px; overflow: hidden; margin: 0 0 16px;">
-              <div style="display: flex; align-items: center; justify-content: space-between; padding: 5px 10px; background: #1a1a1e; border-bottom: 1px solid #26262c; font-size: 11px; color: #93939e;">
-                <span style="font-family: ui-monospace, Consolas, monospace;">typescript</span>
-                <button style="background: none; border: 0; color: #767682; font: inherit; font-size: 11px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; padding: 0;">
-                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  복사
-                </button>
-              </div>
-              <pre style="margin: 0; padding: 10px 12px; overflow-x: auto; font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: 12px; line-height: 1.55; background: #131316;"><span style="color: #767682;">// 증거가 둘이면 둘 다 같은 자리에서 본다</span>
-<span style="color: #c39ac9;">const</span> keep =
-  alive === <span style="color: #a6c88a;">'unknown'</span> || alive?.has(d.sessionId) || reported?.has(d.id)</pre>
-            </div>
-
-            <div style="display: flex; flex-direction: column; gap: 3px; margin: 0 0 16px;">
-              <div style="display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid #26262c; border-radius: 6px; font-size: 12px; color: #93939e;">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#767682" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4v16h16v-7"></path><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"></path></svg>
-                <span style="font-family: ui-monospace, Consolas, monospace; color: #d0d0d6;">store.ts</span>
-                <span style="margin-left: auto; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px;"><span style="color: #79c98f;">+14</span> <span style="color: #d3706b;">−3</span></span>
-              </div>
-              <div style="display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid #26262c; border-radius: 6px; font-size: 12px; color: #93939e;">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#767682" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4v16h16v-7"></path><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"></path></svg>
-                <span style="font-family: ui-monospace, Consolas, monospace; color: #d0d0d6;">store.test.ts</span>
-                <span style="margin-left: auto; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px;"><span style="color: #79c98f;">+38</span></span>
-              </div>
-              <div style="display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid #26262c; border-radius: 6px; font-size: 12px; color: #93939e;">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#767682" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
-                <span style="font-family: ui-monospace, Consolas, monospace; color: #d0d0d6;">vitest run store.test.ts</span>
-                <span style="margin-left: auto; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: #79c98f;">42 통과</span>
-              </div>
-            </div>
-
-            <p style="margin: 0;">테스트를 먼저 빨갛게 만들고 고쳤습니다. 이제 보고가 말해주는 Dispatch 는 정리에서 살아남고, 드레인이 제대로 닫습니다.</p>
-          </div>
-
-          <div style="display: flex; justify-content: flex-end; margin-bottom: 20px;">
-            <div style="background: #23232a; border-radius: 8px; padding: 9px 13px; max-width: 76%;">좋아. 그럼 그 보고가 아예 못 읽히는 파일이면?</div>
-          </div>
-
-          <div style="margin-bottom: 8px;">
-            <div style="display: flex; align-items: center; gap: 7px; font-size: 11px; color: #767682; margin-bottom: 8px;">
-              <span style="width: 16px; height: 16px; border-radius: 3px; background: #37b0c4; color: #0d2b30; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 600;">C</span>
-              Claude Sonnet 4.5
-            </div>
-            <p style="margin: 0 0 16px;">지금은 읽다 실패하면 <strong style="font-weight: 600; color: #d0d0d6;">지웁니다</strong>. 그런데 그 순간이 하필 작업자가 쓰고 있는 중일 수 있어서, 이 기능이 막으려던 손실이 이 기능 안에서 일어납니다.</p>
-            <ul style="margin: 0 0 16px; padding-left: 20px;">
-              <li style="margin-bottom: 4px;">임시 이름으로 쓰고 이름을 바꿉니다</li>
-              <li style="margin-bottom: 4px;">못 읽는 파일은 지우지 않고 옆으로 치웁니다</li>
-              <li>로그에 그 파일 이름을 남깁니다</li>
-            </ul>
-          </div>
-
-        </div>
-      </div>
-
-      <sc-if value="{{ pending }}" hint-placeholder-val="{{ false }}">
-        <div style="max-width: 720px; width: 100%; margin: 0 auto; padding: 0 20px 8px; flex: none;">
-          <div style="display: flex; align-items: center; gap: 10px; background: rgba(214, 139, 79, .10); border: 1px solid rgba(214, 139, 79, .34); border-radius: 8px; padding: 10px 12px;">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#d68b4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none;"><path d="M12 9v4"></path><path d="M12 17h.01"></path><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>
-            <div style="font-size: 12.5px; line-height: 1.45;">
-              <span style="color: #e0a86a; font-weight: 500;">답할 것이 있습니다</span>
-              <span style="display: block; color: #767682; font-size: 12px; margin-top: 1px;">에이전트가 src/main/ipc.ts 수정 승인을 기다립니다.</span>
-            </div>
-            <button onClick="{{ showTerm }}" style="margin-left: auto; font-family: inherit; font-size: 12px; font-weight: 500; background: #d68b4f; color: #2b1d07; border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; white-space: nowrap;">터미널로 이동</button>
-          </div>
-        </div>
-      </sc-if>
-
-      <div style="flex: none; padding: 0 0 14px;">
-        <div style="max-width: 720px; margin: 0 auto; padding: 0 20px;">
-          <div style="{{ composerStyle }}">
-            <div style="{{ inputStyle }}">{{ inputText }}</div>
-            <button style="{{ sendStyle }}">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>
-            </button>
-          </div>
-          <div style="{{ hintStyle }}">{{ hintText }}</div>
-        </div>
-      </div>
-
-    </div>
-  </sc-if>
-
-  <!-- 시안 조작줄. 실제 앱에는 없다 -->
-  <div style="flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 14px; background: #101013; border-top: 1px solid #000000;">
-    <span style="font-size: 11px; color: #5f5f69;">시안 상태</span>
-    <button onClick="{{ setNormal }}" style="{{ normalChip }}">평소</button>
-    <button onClick="{{ setPending }}" style="{{ pendingChip }}">답할 것이 있을 때</button>
+  <div style="margin-top: auto; padding-top: 16px; border-top: 1px solid #26262c;">
+    <p style="font-size: 11.5px; color: #5f5f69;">셋 다 정해둔 것: 세션 탭 안에서 터미널과 토글하고, 승인이나 선택은 다시 그리지 않고 알린 뒤 터미널로 넘깁니다.</p>
   </div>
 
 </div>
 </x-dc>
 
-<script data-dc-script data-props='{"$preview":{"width":1200,"height":760}}'>
-class Component extends DCLogic {
-  constructor(props) {
-    super(props)
-    this.state = { view: 'conversation', pending: false }
-  }
-  renderVals() {
-    const isConv = this.state.view === 'conversation'
-    const pending = this.state.pending
-    const seg = (on) =>
-      'font-family: inherit; font-size: 11.5px; line-height: 1; border: 0; background: ' +
-      (on ? '#17171a' : 'transparent') + '; color: ' + (on ? '#d0d0d6' : '#767682') +
-      '; padding: 5px 10px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;'
-    const chip = (on) =>
-      'font-family: inherit; font-size: 11.5px; background: ' + (on ? '#23232a' : '#1a1a1e') +
-      '; color: ' + (on ? '#d0d0d6' : '#767682') + '; border: 1px solid ' + (on ? '#3a3a44' : '#26262c') +
-      '; border-radius: 6px; padding: 4px 10px; cursor: pointer;'
-    return {
-      isConv,
-      isTerm: !isConv,
-      pending,
-      showConv: () => this.setState({ view: 'conversation' }),
-      showTerm: () => this.setState({ view: 'terminal' }),
-      setNormal: () => this.setState({ pending: false, view: 'conversation' }),
-      setPending: () => this.setState({ pending: true, view: 'conversation' }),
-      convBtn: seg(isConv),
-      termBtn: seg(!isConv),
-      normalChip: chip(!pending),
-      pendingChip: chip(pending),
-      composerStyle:
-        'display: flex; align-items: flex-end; gap: 8px; background: ' +
-        (pending ? '#1f1b16' : '#1a1a1e') + '; border: 1px solid ' +
-        (pending ? 'rgba(214,139,79,.32)' : '#26262c') +
-        '; border-radius: 8px; padding: 8px 8px 8px 12px;',
-      inputStyle:
-        'flex: 1; font-size: 13px; line-height: 1.6; padding: 3px 0; color: #767682;',
-      inputText: pending ? '터미널에서 답한 뒤에 이어서 칠 수 있습니다' : '무엇을 시킬까요',
-      sendStyle:
-        'width: 28px; height: 28px; flex: none; border: 0; border-radius: 6px; background: ' +
-        (pending ? '#23232a' : '#37b0c4') + '; color: ' + (pending ? '#5f5f69' : '#0d2b30') +
-        '; display: grid; place-items: center; cursor: ' + (pending ? 'not-allowed' : 'pointer') + ';',
-      hintStyle:
-        'font-size: 11px; margin-top: 7px; color: ' + (pending ? '#d68b4f' : '#5f5f69') + ';',
-      hintText: pending
-        ? '선택지를 여기서 버튼으로 다시 그리지 않습니다. CLI 가 그리는 원래 화면에서 답하는 편이 안 깨집니다.'
-        : 'Enter 로 보내고 Shift+Enter 로 줄바꿈합니다.'
-    }
-  }
-}
+<script data-dc-script data-props='{"$preview":{"width":360,"height":560}}'>
+class Component extends DCLogic { renderVals() { return {} } }
 </script>
 </body>
 </html>
