@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { quitConfirmBody } from './quitConfirm'
+import { quitConfirmBody, updateConfirmBody } from './quitConfirm'
 
 describe('quitConfirmBody', () => {
   it('says everything ends when the app owns every running session', () => {
@@ -23,5 +23,32 @@ describe('quitConfirmBody', () => {
   // terminated sessions.
   it('reads a kept count larger than the running count as all of them kept', () => {
     expect(quitConfirmBody(2, 3)).toEqual({ key: 'common.quitConfirm.bodyKept', params: { count: 2 } })
+  })
+})
+
+describe('updateConfirmBody', () => {
+  it('says everything ends when the app owns every running session', () => {
+    expect(updateConfirmBody(3, 0)).toEqual({ key: 'update.confirm.body', params: { count: 3 } })
+  })
+
+  // The Host keeps these ptys running across the quit the install performs. Whether the version
+  // being installed then takes them back is the one thing this app cannot know — it would have to
+  // read the incoming build's Host protocol — so the sentence promises the survival it can see and
+  // says the rest is up to the update.
+  it('says the surviving sessions outlive the quit when the Host owns all of them', () => {
+    expect(updateConfirmBody(3, 3)).toEqual({ key: 'update.confirm.bodyKept', params: { count: 3 } })
+  })
+
+  it('names both halves when some sessions survive the quit and some do not', () => {
+    expect(updateConfirmBody(3, 1)).toEqual({
+      key: 'update.confirm.bodyMixed',
+      params: { kept: 1, ended: 2 }
+    })
+  })
+
+  // Same two-clocks hazard as the close confirmation's: the running count is the renderer's last
+  // render and the kept figure is main's answer at click time.
+  it('reads a kept count larger than the running count as all of them kept', () => {
+    expect(updateConfirmBody(2, 3)).toEqual({ key: 'update.confirm.bodyKept', params: { count: 2 } })
   })
 })

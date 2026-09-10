@@ -75,7 +75,7 @@ import * as sticky from './lib/stickyProject'
 import { dismiss, toast } from './lib/toast'
 import { spawnNotice } from './lib/spawnNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
-import { quitConfirmBody } from './lib/quitConfirm'
+import { quitConfirmBody, updateConfirmBody } from './lib/quitConfirm'
 import { terminalsWithCreated } from './lib/terminalTabs'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { worktreeErrorMessage } from './lib/worktreeErrors'
@@ -680,13 +680,23 @@ export default function App(): React.JSX.Element {
   // The install button on the toast is pressed later — it has to see the real number of running sessions at that moment
   const runningCountRef = useRef(0)
 
-  /** Installs the update right away. The app quits immediately, so it asks first when sessions are still running. */
+  /** Installs the update right away. The app quits immediately, so it asks first when sessions are still running.
+   *
+   *  What quitting costs is counted, not assumed, for the same reason the close button counts it
+   *  (closeWindow above): the Host keeps its own sessions running through the quit, and it takes a
+   *  moment to start, so at boot some of the running sessions are the app's own children and some are
+   *  not. `updateConfirmBody` turns the two counts into the sentence true of both halves — and, unlike
+   *  the close button's, one that stops short of promising the sessions come back, since only the
+   *  version being installed knows whether it retires this Host. Nothing kept, on a failure, is the
+   *  safe reading here too: it promises the person nothing survives. */
   const installUpdate = async (): Promise<void> => {
     const running = runningCountRef.current
     if (running > 0) {
+      const kept = await window.api.host.sessionsOutlivingApp().catch(() => 0)
+      const body = updateConfirmBody(running, kept)
       const ok = await confirmModal({
         title: tRef.current('update.confirm.title'),
-        body: tRef.current('update.confirm.body', { count: running }),
+        body: tRef.current(body.key, body.params),
         confirmLabel: tRef.current('update.toast.installNow')
       })
       if (!ok) return

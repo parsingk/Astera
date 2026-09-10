@@ -363,8 +363,23 @@ export const ko = {
   'update.toast.download': '다운로드',
   'update.toast.ready': '업데이트 v{version} 준비됨',
   'update.toast.installNow': '지금 설치',
+  // Slice 2 of the Astera Host. Installing quits the app, so this is the same three-way split the
+  // close confirmation faces, counted the same way (host.sessionsOutlivingApp) and shared with it —
+  // see `updateConfirmBody`. `body` is unchanged and still exact when the app owns every session.
+  //
+  // The two new rows stop short of the close confirmation's promise on purpose: a Host on an older
+  // protocol is retired by the app that finds it, and **only the incoming version knows whether its
+  // protocol moved**. So they say what is knowable — these sessions outlive the quit — and leave the
+  // rest to the update rather than promising a return this app cannot vouch for.
+  //
+  // es/ja have no row of their own for the two new keys and reach their English through the fallback
+  // (see `t`), the same as common.quitConfirm.bodyMixed; they still want real translations.
   'update.confirm.title': '지금 설치하고 재시작',
   'update.confirm.body': '진행 중인 세션 {count}개가 종료됩니다. 계속할까요?',
+  'update.confirm.bodyKept':
+    '진행 중인 세션 {count}개는 Astera가 재시작하는 동안에도 계속 실행됩니다. 새 버전이 그 세션들을 다시 이어받을지는 업데이트에 달려 있어, 돌아오지 않을 수도 있습니다. 계속할까요?',
+  'update.confirm.bodyMixed':
+    '진행 중인 세션 중 {ended}개는 종료됩니다. 나머지 {kept}개는 Astera가 재시작하는 동안에도 계속 실행되며, 새 버전이 그 세션들을 다시 이어받을지는 업데이트에 달려 있습니다. 계속할까요?',
   // UpdateGate.tsx — the screen that covers the app when the version is below the minimum the release policy sets
   'update.gate.title': '업데이트가 필요합니다',
   'update.gate.body': '{version} 버전으로 업데이트를 진행해주세요',
