@@ -318,7 +318,6 @@ export class SlackNotifier {
     this.threadIndex.clear()
   }
 
-  /** Called by ipc right after a slackNotify session spawns — starts tracking */
   /** The tab was renamed. Updates this record's copy so later messages carry the new prefix.
    *
    *  A copy is what makes this necessary: `SessionManager.spawn` returns `{ ...info }`, so the record
@@ -333,6 +332,10 @@ export class SlackNotifier {
     if (record) record.info = { ...record.info, title }
   }
 
+  /** Starts tracking a session. Called by ipc right after a `slackNotify` session spawns, and
+   *  again by the reattach adopter for a session the Host handed back after a reconnect — that
+   *  second caller registers over an id this already has a record for, and the body below says what
+   *  is carried across and what is not. */
   register(info: SessionInfo): void {
     if (!info.slackNotify) return
     // **A pending exit notification for this id is cancelled, the way onRolled cancels the one it
@@ -350,11 +353,30 @@ export class SlackNotifier {
       scanner: makeLimitScanner(provider),
       lastSent: new Map(),
       exitTimer: null,
-      thread: null,
+      // **Registering over a live id inherits that session's thread**, the same handover `onRolled`
+      // makes when a roll re-keys one chain onto a new id. The case is the Host's reconnect: the
+      // socket drops, the adopter takes the session back, and it re-registers under the id it
+      // already had. Opening a second root then puts another header in someone's channel every time
+      // the connection blips — nothing is lost, since replies in either thread resolve to the same
+      // session, but the channel fills with roots for a session that never restarted.
+      //
+      // Falsy when there is no earlier record, or when its thread was null (no thread transport, or
+      // `replaceTransport` reset it) — a new root is opened below, exactly as before.
+      thread: replaced?.thread ?? null,
       pendingTool: null
     }
     this.records.set(info.id, record)
-    record.thread = this.openThread(record)
+    if (record.thread) {
+      // The root post has a 10-second timeout and two retries, so an inherited thread can still be
+      // in flight — and its own resolve indexes only if the map still holds the record it was
+      // opened for, which is now the replaced one. Re-indexing here is what `onRolled` does with an
+      // inherited thread, and for the same reason: without it a reply in that thread reaches nobody.
+      void record.thread.then((ts) => {
+        if (ts && this.records.get(info.id) === record) this.threadIndex.set(ts, info.id)
+      })
+    } else {
+      record.thread = this.openThread(record)
+    }
   }
 
   /** The root message of the session thread. With a transport that does not support threads, nothing is

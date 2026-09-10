@@ -762,6 +762,63 @@ describe('SlackNotifier 세션 스레드', () => {
     expect(h.posts[1].threadTs).toBe('ts-1') // 같은 스레드
   })
 
+  // The Host's reconnect re-registers an adopted session under the id it already had. A second root
+  // is noise in someone's channel every time the connection blips, and the session has one thread
+  // that both roots' replies resolve into -- so the thread is inherited, the way onRolled does when
+  // a roll re-keys the same chain.
+  it('register over a live id keeps the thread it already has', async () => {
+    const h = threadSetup()
+    h.notifier.register(info())
+    await flush()
+    expect(h.posts).toHaveLength(1)
+
+    h.notifier.register(info()) // the reconnect takes the session back under the same id
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'Notification', message: '재접속 후' })
+    await flush()
+
+    expect(h.posts).toHaveLength(2) // no second root
+    expect(h.posts[1].threadTs).toBe('ts-1')
+    expect(h.notifier.resolveSessionByThread('ts-1')).toBe('s-1')
+  })
+
+  // The root post has a 10-second timeout and two retries, so a reconnect can land while it is
+  // still in flight. Inheriting the promise means the resolve that fills the thread index is
+  // checking identity against a record the map no longer holds -- so the new record re-indexes it,
+  // exactly as onRolled does, or a reply in that thread reaches nobody.
+  it('re-indexes an inherited thread whose root had not landed yet', async () => {
+    const posts: { text: string; threadTs?: string }[] = []
+    let release = (): void => {}
+    const transport: SlackTransport = {
+      supportsThreads: true,
+      post: async (text, threadTs) => {
+        posts.push({ text, threadTs })
+        if (threadTs === undefined)
+          await new Promise<void>((r) => {
+            release = r
+          })
+        return `ts-${posts.length}`
+      }
+    }
+    const notifier = new SlackNotifier({
+      getAccount: () => account,
+      readStatusPayload: async () => null,
+      lang: () => 'ko',
+      log: () => {},
+      readFileTail: async () => null,
+      now: () => 1_000_000
+    })
+    notifier.setTransport(transport)
+
+    notifier.register(info())
+    await flush()
+    notifier.register(info()) // the reconnect, while the root is still in flight
+    release()
+    await flush()
+
+    expect(posts).toHaveLength(1)
+    expect(notifier.resolveSessionByThread('ts-1')).toBe('s-1')
+  })
+
   it('old가 없으면 onRolled()에서 새 스레드를 연다', async () => {
     const h = threadSetup()
     // register 하지 않음 — old('s-1')가 없는 상태에서 onRolled만 호출
