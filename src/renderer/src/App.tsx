@@ -173,12 +173,21 @@ const SHORTCUTS: Array<{
   }
 ]
 
-function UpdateIndicator({ update }: { update: UpdateStatus | null }): React.JSX.Element | null {
+function UpdateIndicator({
+  update,
+  onInstall
+}: {
+  update: UpdateStatus | null
+  /** Installing quits the app, so this goes through App's installUpdate rather than calling
+   *  window.api.update.install directly: that is where the person is told what quitting costs their
+   *  running sessions, and every install path has to ask the same question. */
+  onInstall: () => void
+}): React.JSX.Element | null {
   const { t } = useI18n()
   if (!update || update.state === 'init' || update.state === 'uptodate') return null
   if (update.state === 'downloaded')
     return (
-      <button className="tb-update-btn" onClick={() => void window.api.update.install()}>
+      <button className="tb-update-btn" onClick={onInstall}>
         {t('update.tb.restartInstallVersion', { version: update.version ?? '' })}
       </button>
     )
@@ -204,12 +213,15 @@ function Titlebar({
   isMax,
   update,
   runningCount,
+  onInstall,
   runSlot
 }: {
   isMax: boolean
   update: UpdateStatus | null
   /** Only the close button reads it, and only on Linux — see closeWindow below */
   runningCount: number
+  /** Passed straight through to UpdateIndicator's restart button — see the prop there. */
+  onInstall: () => void
   /** 타이틀바 줄에 함께 놓이는 것 — 지금은 실행 구성 툴바다. 프롭 열넷을 내려보내는 대신 슬롯으로
    *  받아, 타이틀바는 무엇이 들어오는지 모른 채 자리만 내준다 */
   runSlot?: React.ReactNode
@@ -250,7 +262,7 @@ function Titlebar({
         <span className="tb-name">Astera</span>
       </div>
       {runSlot}
-      <UpdateIndicator update={update} />
+      <UpdateIndicator update={update} onInstall={onInstall} />
       {!isMac && (
         <div className="tb-controls" onDoubleClick={(e) => e.stopPropagation()}>
           <button
@@ -3275,7 +3287,7 @@ export default function App(): React.JSX.Element {
       <div className="app">
         {/* 0, not runningCount: this screen renders no ConfirmHost, so a close confirmation would
             never be answered and the close button would stop working entirely. */}
-        <Titlebar isMax={isMax} update={update} runningCount={0} />
+        <Titlebar isMax={isMax} update={update} runningCount={0} onInstall={() => void installUpdate()} />
         <div className="cli-missing">
           <h1>No CLI found to run</h1>
           <p>
@@ -3302,6 +3314,7 @@ export default function App(): React.JSX.Element {
         isMax={isMax}
         update={update}
         runningCount={runningCount}
+        onInstall={() => void installUpdate()}
         runSlot={
           currentProject ? (
             // The title bar toggles maximize on a double-click, and that is a React handler, so it
@@ -4130,8 +4143,11 @@ export default function App(): React.JSX.Element {
                                 newer one appears you have to be able to skip the staged build and go to
                                 that instead. If a re-check finds a newer version, autoDownload replaces
                                 the staged file and this button's version changes with it. */}
+                            {/* Through installUpdate, like every other install path: it quits the
+                                app, so the person is told what that costs their running sessions
+                                first. */}
                             {update?.state === 'downloaded' && (
-                              <button onClick={() => void window.api.update.install()}>
+                              <button onClick={() => void installUpdate()}>
                                 {t('update.info.restartInstallVersion', { version: update.version ?? '' })}
                               </button>
                             )}
