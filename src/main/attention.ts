@@ -3,11 +3,16 @@ import {
   isNonPromptNotification,
   type NotificationPayload
 } from '../core/hooks/notification'
+import type { Attention } from '../core/types'
 
 /** Where a session stands right now, from the app's own point of view rather than the transcript's —
  *  the transcript stays frozen while a permission prompt sits on screen (measured in the countToolUses
- *  comment in core/slack/transcript.ts), so there is nothing there to read this off. */
-export type Attention = 'idle' | 'working' | 'waiting'
+ *  comment in core/slack/transcript.ts), so there is nothing there to read this off.
+ *
+ *  Declared in core/types.ts because it crosses IPC and the renderer has to name it, and re-exported
+ *  here so this module's own consumers keep importing it from the module that produces it. One
+ *  declaration, not two kept in step by hand. */
+export type { Attention }
 
 export interface AttentionState {
   /** One hook event for one session. The payload is the raw hook payload, exactly as the existing

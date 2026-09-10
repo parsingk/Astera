@@ -325,8 +325,8 @@ export interface SchedStateEvent {
  *  import that module directly: it is compiled by tsconfig.web.json for the renderer too, and every
  *  entry in that config's include list resolves under src/core or src/renderer — nothing there ever
  *  reaches into src/main, unlike the softer, core-internal "role" boundary this file's note on
- *  orchestration/state.ts describes (above). The two declarations have to be kept in step by hand if
- *  a fourth value is ever added. */
+ *  orchestration/state.ts describes (above). So this is the single declaration, and main/attention.ts
+ *  re-exports it rather than carrying a copy that would have to be kept in step by hand. */
 export type Attention = 'idle' | 'working' | 'waiting'
 
 /** One project terminal */
