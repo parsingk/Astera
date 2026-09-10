@@ -673,11 +673,31 @@ export function registerIpc(
   // the preview.registerAgentGuest handler's own 'destroyed' listener exists for below, just with a
   // different signal: a guest `<webview>` is torn down with the DOM a reload replaces, so 'destroyed'
   // fires for it, but the main window's own WebContents survives a reload — nothing there is ever
-  // destroyed. 'did-finish-load' is what fires once a (re)load finishes; index.ts's own will-navigate
-  // guard already turns away anything that is not a load of the app's own document before it gets this
-  // far, so firing here on every load needs no isOwnDocument check of its own — and firing on the very
-  // first load is harmless, since nothing is open yet to close.
-  win.webContents.on('did-finish-load', () => conversationSessions.closeAll())
+  // destroyed.
+  //
+  // **'did-start-navigation', not 'will-navigate' or 'did-finish-load'.** 'will-navigate' is not a
+  // substitute: it does not fire for `webContents.reload()` at all, which is how this window actually
+  // reloads. 'did-finish-load' does fire, but too late — it races the fresh renderer's own re-open:
+  // React mounts, the panel calls `conversation.open`, main creates the new entry and starts the
+  // ticker, all before 'did-finish-load' gets around to firing, since nothing orders an
+  // `ipcMain.handle` dispatch against this navigation observer. `closeAll()` there would wipe the
+  // entry the fresh renderer had just opened, silently — no error, no retry, the panel just never
+  // updates again. 'did-start-navigation' fires before the new document can run any script at all, so
+  // this close always precedes whatever the fresh renderer goes on to open.
+  //
+  // Same dual-argument read as agentBrowser/buffers.ts's own onNav, for the same reason: Electron 41
+  // emits a single `{ url, isSameDocument, isMainFrame, ... }` details object, alongside the older
+  // positional arguments (marked deprecated) that this app still has to read for the boundary case
+  // where only those arrive. isMainFrame excludes a sub-frame's own navigation; isSameDocument excludes
+  // an in-page navigation (a hash change), which does not tear anything down and is not this app's own
+  // reload.
+  win.webContents.on('did-start-navigation', (...args: unknown[]) => {
+    const first = typeof args[0] === 'object' && args[0] !== null ? (args[0] as Record<string, unknown>) : null
+    const isMainFrame = typeof first?.isMainFrame === 'boolean' ? first.isMainFrame : args[3]
+    const isSameDocument = typeof first?.isSameDocument === 'boolean' ? first.isSameDocument : args[2]
+    if (isMainFrame !== true || isSameDocument === true) return
+    conversationSessions.closeAll()
+  })
 
   // Session working/idle detection: decided from the window-title OSC in the output, and session:busy
   // is emitted only when the state changes.

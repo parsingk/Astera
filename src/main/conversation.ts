@@ -48,16 +48,28 @@ export interface ConversationSessions {
   close(sessionId: string): void
   /** Every open conversation, closed at once — same timer rule as close(). */
   closeAll(): void
+  /** How many turns this session's follow is still retaining because at least one of their calls has
+   *  not resolved yet. Exists to be asserted by a test: a retention leak (keeping a turn after its
+   *  last call resolves) has no other observable trace — the emitted turns look identical either way,
+   *  since nothing re-emits a turn that already resolved. Not read by ipc.ts's own wiring. 0 for a
+   *  session that is not open. */
+  retainedCount(sessionId: string): number
 }
 
 interface Entry {
   filePath: string
   follow: ConversationFollow
+  /** Guards this one entry's own read against overlapping itself — see stepEntry's own doc for why
+   *  the guard has to be per entry rather than shared across every open conversation. */
+  inFlight: boolean
   /** Every tool call this follow has read the `tool_use` of but not yet the matching `tool_result`,
    *  carried into `follow.read()` on every tick — see reduceTranscript's own doc (core/history/
    *  conversation.ts) for what letting a Map outlive one call does. Seeded from `open`'s own window,
    *  not only from later ticks: a call already sitting unresolved in the first thing a person sees
-   *  is exactly as real as one a tick discovers afterward. */
+   *  is exactly as real as one a tick discovers afterward. Never shared between entries: each session
+   *  gets its own Map, created fresh in `open` below, so a resolution can never cross sessions even if
+   *  two of them happen to see the same `tool_use_id` (a fresh id space per CLI process, not a global
+   *  one). */
   pending: Map<string, ToolPart>
   /** Which turn a still-pending call (by its `tool_use_id`, the same key `pending` uses) belongs to —
    *  the turn to emit again once that entry disappears from `pending`, since resolving mutates the
@@ -95,11 +107,10 @@ export function createConversationSessions(deps: {
 }): ConversationSessions {
   const entries = new Map<string, Entry>()
   let ticker: ReturnType<typeof setInterval> | null = null
-  let inFlight = false // guards against a slow read still in flight when the interval fires again
 
   const ensureTicker = (): void => {
     if (ticker) return
-    ticker = setInterval(() => void tick(), POLL_MS)
+    ticker = setInterval(() => void tick().catch(() => {}), POLL_MS)
   }
   const dropTickerIfIdle = (): void => {
     if (entries.size > 0 || ticker === null) return
@@ -114,10 +125,12 @@ export function createConversationSessions(deps: {
   async function stepEntry(sessionId: string, entry: Entry): Promise<void> {
     const before = new Set(entry.pending.keys())
     const result = await entry.follow.read(entry.pending)
-    // The only await in this function. A `close` landing while it was in flight — session:exit, in
-    // production, not a synchronous re-entry from `emit` (that goes through `win.webContents.send`,
-    // which is asynchronous) — must not still report for a session nobody is watching any more.
-    if (!entries.has(sessionId)) return
+    // The only await in this function. `close` (session:exit, from inside main — never a synchronous
+    // re-entry from `emit`, which goes through `win.webContents.send` and so is asynchronous) can land
+    // while this was in flight, and even close-then-reopen inside the same await window — comparing
+    // the entry itself, not only whether the id is still present, catches that narrower case too: a
+    // fresh entry the reopen created must never be told about the old follow's turns.
+    if (entries.get(sessionId) !== entry) return
     if (result === null) return // file missing or unreadable right now — say nothing, retry next tick
 
     let resolvedTurns: ConvTurn[] = []
@@ -144,18 +157,28 @@ export function createConversationSessions(deps: {
     deps.emit(sessionId, turns, result.restarted)
   }
 
+  /** Dispatches one round of reads, one per open session, none of them awaiting each other.
+   *
+   *  **The in-flight guard is per entry, not shared across the whole tick.** The awaited work here is
+   *  a raw `fs.open`/`read`, which can hang indefinitely on Windows — a network path, a file under
+   *  OneDrive, a wedged AV filter driver — with no timeout of its own (unlike accountUsage.ts's poller,
+   *  whose awaited HTTP fetch has one). A guard shared across sessions would let exactly one such hang
+   *  freeze every open conversation forever, since the shared flag would never clear and every later
+   *  tick would return at the guard without even starting the other sessions' reads. Scoped to the
+   *  entry instead, a wedged session simply stops advancing on its own — skipped every tick from here
+   *  on, since its `inFlight` never clears — while every other open conversation keeps ticking. */
   async function tick(): Promise<void> {
-    if (inFlight) return // the previous tick's fs work has not settled yet — see stepEntry's own doc
-    inFlight = true
-    try {
-      // The live map, not a snapshot: a `close` reached from inside this loop (closeConversationOnExit,
-      // for a session further along than the one just emitted for) must drop that session from the
-      // rest of this same tick, and a Map iterator already skips an entry deleted before it is visited.
-      for (const [sessionId, entry] of entries) {
-        await stepEntry(sessionId, entry)
-      }
-    } finally {
-      inFlight = false
+    // The live map, not a snapshot: a `close` reached from inside this loop (closeConversationOnExit,
+    // for a session further along than the one just started) must drop that session from the rest of
+    // this same tick, and a Map iterator already skips an entry deleted before it is visited.
+    for (const [sessionId, entry] of entries) {
+      if (entry.inFlight) continue // this entry's previous read has not settled yet — try again next tick
+      entry.inFlight = true
+      void stepEntry(sessionId, entry)
+        .catch(() => {}) // one entry's failure must not become an unhandled rejection, or stop the others
+        .finally(() => {
+          entry.inFlight = false
+        })
     }
   }
 
@@ -171,6 +194,7 @@ export function createConversationSessions(deps: {
       entries.set(sessionId, {
         filePath,
         follow: new ConversationFollow(filePath, window.follow),
+        inFlight: false,
         pending,
         partOwner
       })
@@ -191,6 +215,9 @@ export function createConversationSessions(deps: {
     closeAll() {
       entries.clear()
       dropTickerIfIdle()
+    },
+    retainedCount(sessionId) {
+      return entries.get(sessionId)?.partOwner.size ?? 0
     }
   }
 }

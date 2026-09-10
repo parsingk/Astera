@@ -23,6 +23,19 @@ function userLine(n: number): string {
   return JSON.stringify({ type: 'user', uuid: `u${n}`, message: { content: `message ${n}` } }) + '\n'
 }
 
+/** An assistant entry carrying only a text part, the start of a run a following toolUseLine (below)
+ *  continues — the real shape ("Let me run the build." then Bash), not a synthetic one-part turn. */
+function textLine(turnId: string, text: string): string {
+  return (
+    JSON.stringify({
+      type: 'assistant',
+      uuid: turnId,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      message: { content: [{ type: 'text', text }] }
+    }) + '\n'
+  )
+}
+
 /** An assistant entry with one unresolved Bash call — `outcome: null` until a matching tool_result
  *  line (below) arrives. */
 function toolUseLine(turnId: string, toolId: string): string {
@@ -313,16 +326,22 @@ describe('createConversationSessions', () => {
   })
 
   // A build, a test run, a long Bash: the tool_use line is written immediately and the tool_result
-  // lands minutes later, in a separate read as a matter of course — not an edge case.
-  it('a tool result that lands in a later read updates the turn that is still waiting on it', async () => {
+  // lands minutes later, in a separate read as a matter of course — not an edge case. The turn has
+  // two parts (text, then the call), not one: a one-part fixture cannot tell "the whole turn was
+  // re-emitted" apart from "only the changed part was" — under the latter, a renderer told to replace
+  // by id would drop the assistant's own text the moment the call resolved.
+  it('a tool result that lands in a later read re-emits the whole turn, not only the resolved part', async () => {
     const p = path.join(dir, 't.jsonl')
-    await writeFile(p, toolUseLine('a1', 'tool1'))
+    await writeFile(p, textLine('a1', 'Let me run the build.') + toolUseLine('a1', 'tool1'))
     const emit = vi.fn()
     const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit })
 
     const opened = await sessions.open('s1')
     const turn = opened?.turns.find((t) => t.id === 'a1')
-    expect(turn?.parts[0]).toMatchObject({ kind: 'tool', id: 'tool1', outcome: null })
+    expect(turn?.parts).toEqual([
+      { kind: 'text', text: 'Let me run the build.' },
+      { kind: 'tool', id: 'tool1', name: 'Bash', target: 'echo hi', outcome: null }
+    ])
 
     await appendFile(p, toolResultLine('tool1', 'hi\n'))
     await advance(POLL_MS)
@@ -333,13 +352,130 @@ describe('createConversationSessions', () => {
     expect(restarted).toBe(false)
     const updated = turns.find((t: { id: string }) => t.id === 'a1')
     expect(updated).toBeDefined()
-    expect(updated.parts[0]).toEqual({
-      kind: 'tool',
-      id: 'tool1',
-      name: 'Bash',
-      target: 'echo hi',
-      outcome: { ok: true, detail: '1 lines' }
+    // Both parts, not only the one that changed — the text part unchanged, the tool part now resolved.
+    expect(updated.parts).toEqual([
+      { kind: 'text', text: 'Let me run the build.' },
+      { kind: 'tool', id: 'tool1', name: 'Bash', target: 'echo hi', outcome: { ok: true, detail: '1 lines' } }
+    ])
+    sessions.closeAll()
+  })
+
+  // accountUsage.ts's own poller — the shape this one's guard was copied from — wires its tick as
+  // `void tick().catch(() => {})` because an unhandled rejection can terminate the process; a rejecting
+  // read must not escape that way here either. Caught directly via Node's own `unhandledRejection`
+  // event, not inferred from a side effect, since a missing `.catch` leaves no other trace within one
+  // test run.
+  it('a rejecting read does not escape as an unhandled rejection', async () => {
+    const p = path.join(dir, 't.jsonl')
+    await writeFile(p, userLine(1))
+    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit: vi.fn() })
+    await sessions.open('s1')
+
+    vi.spyOn(ConversationFollow.prototype, 'read').mockRejectedValue(new Error('boom'))
+    const onUnhandled = vi.fn()
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      await advance(POLL_MS)
+      await new Promise((r) => realSetTimeout(r, 10)) // give a genuinely unhandled rejection time to surface
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+
+    expect(onUnhandled).not.toHaveBeenCalled()
+    sessions.closeAll()
+  })
+
+  // A wedged fs read (a network path, OneDrive, an AV filter driver — none of it has a timeout of its
+  // own, unlike accountUsage.ts's HTTP fetch) must stall only the session it belongs to. Reproduced by
+  // making the very first ConversationFollow.read() call in the test hang forever and letting every
+  // later call through to the real implementation — the first call is always session 'a' (opened
+  // first, ticked first), so 'a' wedges on tick one and never advances, while 'b' keeps going.
+  it('a wedged read stalls only its own session; every other open conversation keeps emitting', async () => {
+    const pA = path.join(dir, 'a.jsonl')
+    const pB = path.join(dir, 'b.jsonl')
+    await writeFile(pA, userLine(1))
+    await writeFile(pB, userLine(1))
+    const emit = vi.fn()
+    const sessions = createConversationSessions({
+      transcriptPathFor: async (id) => (id === 'a' ? pA : pB),
+      emit
     })
+    await sessions.open('a')
+    await sessions.open('b')
+
+    const originalRead = ConversationFollow.prototype.read
+    let calls = 0
+    vi.spyOn(ConversationFollow.prototype, 'read').mockImplementation(function (
+      this: ConversationFollow,
+      ...args: Parameters<typeof originalRead>
+    ) {
+      calls += 1
+      if (calls === 1) return new Promise(() => {}) // 'a's first read — never settles
+      return originalRead.apply(this, args)
+    })
+
+    for (let i = 2; i <= 11; i++) {
+      await appendFile(pB, userLine(i))
+      await advance(POLL_MS)
+    }
+
+    expect(emit.mock.calls.length).toBeGreaterThan(0)
+    expect(emit.mock.calls.every((c) => c[0] === 'b')).toBe(true) // 'a' never once got through
+    sessions.closeAll()
+  })
+
+  // A retention leak has no other observable trace (the emitted turns look the same either way), so
+  // this asserts the count directly via retainedCount, added to the interface for exactly this.
+  it('retention shrinks back to zero once every unresolved call resolves', async () => {
+    const p = path.join(dir, 't.jsonl')
+    await writeFile(p, toolUseLine('a1', 'tool1') + toolUseLine('a1', 'tool2'))
+    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit: vi.fn() })
+    await sessions.open('s1')
+    expect(sessions.retainedCount('s1')).toBe(2) // one entry per outstanding call, tool1 and tool2
+
+    await appendFile(p, toolResultLine('tool1', 'hi\n'))
+    await advance(POLL_MS)
+    expect(sessions.retainedCount('s1')).toBe(1) // tool2 is still outstanding, on the same turn
+
+    await appendFile(p, toolResultLine('tool2', 'bye\n'))
+    await advance(POLL_MS)
+    expect(sessions.retainedCount('s1')).toBe(0) // nothing left unresolved — nothing left retained
+    sessions.closeAll()
+  })
+
+  // Each session's `pending` Map is its own (created fresh in `open`), never a Map shared across
+  // sessions — this pins that: two sessions with calls under the *same* tool_use_id, and only one of
+  // them resolved. A shared Map would resolve both from the one tool_result.
+  it('one session\'s tool result cannot resolve a different session\'s call, even with the same id', async () => {
+    const pA = path.join(dir, 'a.jsonl')
+    const pB = path.join(dir, 'b.jsonl')
+    await writeFile(pA, toolUseLine('a1', 'tool1'))
+    await writeFile(pB, toolUseLine('b1', 'tool1'))
+    const emit = vi.fn()
+    const sessions = createConversationSessions({
+      transcriptPathFor: async (id) => (id === 'a' ? pA : pB),
+      emit
+    })
+    await sessions.open('a')
+    await sessions.open('b')
+    expect(sessions.retainedCount('a')).toBe(1)
+    expect(sessions.retainedCount('b')).toBe(1)
+
+    await appendFile(pA, toolResultLine('tool1', 'hi\n')) // resolves only a's own call
+    await advance(POLL_MS)
+
+    // Checked on the actual emitted content, not just retainedCount's map sizes: a Map shared between
+    // sessions would still shrink each session's own retainedCount back to the right-looking number,
+    // because it is a's own `open` that first claimed the shared 'tool1' key and b's `open` overwrote
+    // it — the outcome that lands is decided by *whose ToolPart the shared map points at*, not by
+    // which session's file the tool_result actually came from, and retainedCount cannot see that.
+    const aCall = emit.mock.calls.find((c) => c[0] === 'a')
+    expect(aCall).toBeDefined()
+    const aTurn = (aCall![1] as { id: string; parts: { outcome: unknown }[] }[]).find((t) => t.id === 'a1')
+    expect(aTurn?.parts[0].outcome).toEqual({ ok: true, detail: '1 lines' }) // a's own call actually resolved
+
+    expect(sessions.retainedCount('a')).toBe(0)
+    expect(sessions.retainedCount('b')).toBe(1) // b's own call, same id, is untouched
     sessions.closeAll()
   })
 })
