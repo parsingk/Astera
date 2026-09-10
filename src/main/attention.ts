@@ -72,12 +72,28 @@ export function createAttentionState(): AttentionState {
         // resolves an ordinary call also resolves a waiting one.
         setValue(sessionId, record, record.outstanding.size === 0 ? 'idle' : 'working')
       } else if (p.hook_event_name === 'Notification') {
-        // Order matters. An idle notice, and a report of something that already happened, both leave
-        // the value untouched. Everything else — including a notification_type nobody has seen
-        // before — is a waiting screen: the same call notification.ts makes for the notifier, because
-        // a missed waiting screen strands a session with nobody knowing while a surplus one only
-        // costs a glance.
-        if (isIdleNotification(p) || isNonPromptNotification(p)) return
+        // A report of something that already happened is never a waiting screen, regardless of
+        // anything else about the session.
+        if (isNonPromptNotification(p)) return
+        if (isIdleNotification(p)) {
+          // The two existing notifiers disagree here, and the disagreement is deliberate on both
+          // sides. desktopNotifier drops an idle notice unconditionally — it keeps no per-session
+          // capture and needs none. slack.ts also drops it, except when that session has a
+          // `pendingTool` captured from PreToolUse still open, because it can afford the extra
+          // exception: its sessions carry that capture, so it can tell an idle notice arriving while
+          // a call is outstanding apart from one arriving with nothing pending. That is the CLI
+          // reporting "waiting for your input" while a tool call sits unanswered — a prompt on
+          // screen, not an idle box. This state already tracks outstanding calls by id (see
+          // `outstanding` above), so it follows Slack's better-informed rule instead of the simpler
+          // one: idle with a call outstanding is `waiting`; idle with none leaves the value as it is.
+          const record = sessions.get(sessionId)
+          if (!record || record.outstanding.size === 0) return
+          setValue(sessionId, record, 'waiting')
+          return
+        }
+        // Everything else — including a notification_type nobody has seen before — is a waiting
+        // screen: the same call notification.ts makes for the notifier, because a missed waiting
+        // screen strands a session with nobody knowing while a surplus one only costs a glance.
         setValue(sessionId, recordFor(sessionId), 'waiting')
       } else if (p.hook_event_name === 'Stop') {
         // A stray Stop for a session never seen is already idle by default; only touch an existing

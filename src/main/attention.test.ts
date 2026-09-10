@@ -78,6 +78,32 @@ describe('createAttentionState — Notification', () => {
     state.onHookEvent('s1', notify('some_future_prompt'))
     expect(state.get('s1')).toBe('waiting')
   })
+
+  // slack.ts keeps an exception desktopNotifier does not: an idle notice arriving while a
+  // PreToolUse call is still outstanding is the CLI reporting "waiting for your input" with a call
+  // unanswered underneath it — a prompt on screen, not a genuinely idle box. This state tracks
+  // outstanding calls by id already, so it follows Slack's rule.
+  it('idle_prompt with a call outstanding is a waiting screen', () => {
+    const state = createAttentionState()
+    state.onHookEvent('s1', pre('call-1'))
+    state.onHookEvent('s1', notify('idle_prompt'))
+    expect(state.get('s1')).toBe('waiting')
+  })
+
+  it('idle_prompt with no call outstanding still leaves the value as it is', () => {
+    const state = createAttentionState()
+    state.onHookEvent('s1', notify('idle_prompt'))
+    expect(state.get('s1')).toBe('idle')
+  })
+
+  it('idle_prompt with a call outstanding goes to waiting, then back to idle once the call finishes', () => {
+    const state = createAttentionState()
+    state.onHookEvent('s1', pre('call-1'))
+    state.onHookEvent('s1', notify('idle_prompt'))
+    expect(state.get('s1')).toBe('waiting')
+    state.onHookEvent('s1', post('call-1'))
+    expect(state.get('s1')).toBe('idle')
+  })
 })
 
 describe('createAttentionState — leaving waiting', () => {
