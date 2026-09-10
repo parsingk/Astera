@@ -55,6 +55,11 @@ import {
   type OrchServer,
   type OrchServerDeps
 } from './orchestration/server'
+import { applyPendingReports, readPendingReports } from './orchestration/pendingDrain'
+import {
+  PENDING_REPORTS_DIR,
+  reportedDispatchIdsOf
+} from '../core/orchestration/pendingReports'
 import { OrchRollTap } from './orchestration/rollTap'
 import { TaskValidator } from './orchestration/validator'
 import {
@@ -1552,8 +1557,28 @@ export function registerIpc(
     // about its sessions, so the answer is `'unknown'` and the cleanup leaves open Dispatches where
     // they are. A Job that stalls is a person noticing nothing moved; the alternative was a second
     // agent dispatched into a worktree whose first one is still running.
+    // Reports that could not be delivered while the app was away. **Read before the cleanup and
+    // applied further down, after `orch` is assigned** — the two halves cannot be one call, and the
+    // gap between them is the whole point:
+    //
+    // - The cleanup below closes every open Dispatch it cannot prove alive, and `applyWorkerDone`
+    //   answers `alreadyReported` for a Dispatch that already has `endedAt`. So the report has to be
+    //   in hand *before* the load, or it is thrown away by the very boot that was supposed to take
+    //   it — and the reconciler then reads that Dispatch as a lost worker. `reportedDispatchIds`
+    //   carries that evidence into the cleanup; its own note has the rest.
+    // - Applying one reaches `startValidation` and `startReview`, which spawn, which needs `orch`
+    //   set — the same constraint `runScheduler` and the recovery boot sweep are under.
+    //
+    // Neither line can throw: `readPendingReports` swallows its own failures (a missing folder is
+    // the ordinary case, not an error) and `reportedDispatchIdsOf` is pure. A queue that cannot be
+    // read costs the reports in it, never the boot.
+    const pendingReportsDir = path.join(app.getPath('userData'), 'orch', PENDING_REPORTS_DIR)
+    const pendingReports = await readPendingReports({ dir: pendingReportsDir, log: orchLog })
     const aliveSessionIds = liveWorkersFor(await hostSessionsTakenBack)
-    const loaded = await store.load({ aliveSessionIds })
+    const loaded = await store.load({
+      aliveSessionIds,
+      reportedDispatchIds: reportedDispatchIdsOf(pendingReports.map((q) => q.report))
+    })
     // The unknown case gets a line of its own, because from the state alone it is indistinguishable
     // from a boot that had nothing to clean up — and a person looking for why a Job did not move
     // needs to be able to find it. The reason it could not be asked was logged by the Host wiring.
@@ -3353,6 +3378,46 @@ export function registerIpc(
     orch = { server, deps, cliPath, infoPath, skillsPath }
     orchRollTap = new OrchRollTap(deps)
     orchLog(`started — port=${server.port} cli=${cliPath} skills=${skillsPath}`)
+    // The other half of the queue read at the top of this function: the reports workers wrote down
+    // while there was no server to take them.
+    //
+    // **Awaited, and before everything below it.** `runScheduler` and the recovery boot sweep are
+    // both fired and forgotten, so the ordering only holds if this one is not: a Task these reports
+    // complete must be complete before the reconciler decides whether its worker was lost, and its
+    // dependents must be ready before the scheduler looks for something to dispatch. In the ordinary
+    // case there is nothing in the queue and this costs one `readdir` that already happened.
+    //
+    // Each report goes back through `handleCommand` under the worker's own session id, so it takes
+    // exactly the path a live one takes: the same ownership check, the same `applyWorkerDone`, the
+    // same validation and review after it. Nothing here needs a separate copy of any of that, and a
+    // copy would be the thing that drifts.
+    //
+    // **`deps.enabled()` guards it, for a reason the other two do not have.** `bootOrch` runs for
+    // any of the four toggles, so it can run with orchestration itself off — and then
+    // `handleCommand` answers every one of these with a 409, which the drain would read as the app
+    // refusing them and clear their files. That would delete finished workers' reports because
+    // somebody had the browser toggle on and orchestration off. They stay where they are instead,
+    // and the next start with orchestration on takes them.
+    if (pendingReports.length > 0 && !deps.enabled())
+      orchLog(
+        `pending reports — ${pendingReports.length} left untouched: orchestration is off, so there is nothing that can apply them yet`
+      )
+    else if (pendingReports.length > 0) {
+      const drained = await applyPendingReports({
+        queued: pendingReports,
+        apply: async (r) => {
+          const reply = await orchHandleCommand(deps, { sessionId: r.sessionId }, r.cmd, r.args)
+          return {
+            ok: reply.status >= 200 && reply.status < 300,
+            detail: `${reply.status} ${JSON.stringify(reply.body)}`
+          }
+        },
+        log: orchLog
+      })
+      orchLog(
+        `pending reports — ${drained.applied} applied, ${drained.rejected} refused, ${drained.kept} left for the next start`
+      )
+    }
     // One push for the state that was just loaded off disk. Startup races the renderer's first
     // orch.list (both happen at app start) and the settings toggle boots this long after it, and in
     // both cases the renderer has already been answered with an empty snapshot — with no push it
