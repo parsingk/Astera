@@ -35,12 +35,11 @@ export interface DesktopNotifierDeps {
   /** The OS sink. Injected so the decision is testable without Electron: index.ts passes the real
    *  Notification, a test passes a recorder. It is also where an OS refusal is swallowed (§9). */
   show: (req: DesktopShowRequest) => void
-  /** The one attention verdict (main/attention.ts), shared with index.ts's dedicated tap and, through
-   *  it, with Slack's own reading of the same hook stream. `onHookEvent` classifies a hook payload;
-   *  `get` reads the result back. index.ts hands the same instance to both, so this is a read rather
-   *  than a second implementation of the classification this sink used to carry itself. */
+  /** The one attention verdict (main/attention.ts). This sink only reads it — index.ts's dedicated tap
+   *  is the sole writer, and it runs before this one in the fan-out for exactly that reason (its own
+   *  comment explains why). A read rather than a second implementation of the classification this sink
+   *  used to carry itself. */
   attention: {
-    onHookEvent: (sessionId: string, payload: unknown) => void
     get: (sessionId: string) => Attention
   }
 }
@@ -72,16 +71,12 @@ export class DesktopNotifier {
   }
 
   /** The HookEventWatcher callback. Notification → input needed, read from the shared attention
-   *  verdict rather than classified here. PreToolUse and PostToolUse are still not framed as a
-   *  notification themselves, but every event is forwarded to `attention` regardless of its type —
-   *  the outstanding-call bookkeeping the idle exception below depends on lives entirely inside that
-   *  state, and it needs those events to keep it current. */
+   *  verdict rather than classified here. This is a pure read — index.ts's dedicated tap is the only
+   *  thing that ever writes to `attention`, and it runs before this tap in the fan-out precisely so
+   *  the read below sees this same event's effect rather than the previous one's. PreToolUse and
+   *  PostToolUse are still not framed as a notification themselves; they only matter through what they
+   *  already did to `attention` before this call ever runs. */
   onHookEvent(sessionId: string, payload: unknown): void {
-    // index.ts also feeds this same instance through its own dedicated tap; forwarding here as well
-    // is a second, idempotent update rather than the only one (a repeated event leaves the state
-    // exactly where it already was), so the read below is correct regardless of which of the two runs
-    // first for a given event.
-    this.deps.attention.onHookEvent(sessionId, payload)
     if (typeof payload !== 'object' || payload === null) return
     const name = (payload as { hook_event_name?: unknown }).hook_event_name
     if (name === 'Notification') {

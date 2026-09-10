@@ -12,8 +12,16 @@ const session = (id: string): SessionInfo => ({
   title: `session ${id}`
 })
 
+/** What every existing test in this file drives — the same surface `DesktopNotifier` itself exposes,
+ *  so no test body has to change to route through the feed below. */
+interface HarnessNotifier {
+  onHookEvent: (sessionId: string, payload: unknown) => void
+  onRollState: (ev: RollStateEvent) => void
+  setActiveSession: (sessionId: string | null) => void
+}
+
 interface Harness {
-  notifier: DesktopNotifier
+  notifier: HarnessNotifier
   shown: DesktopShowRequest[]
   focused: { value: boolean }
 }
@@ -23,15 +31,27 @@ function harness(flags: Partial<DesktopNotifySettings> = {}, sessions = ['s1', '
   const focused = { value: false }
   // The real state (main/attention.ts), not a stub — this sink now reads its verdict instead of
   // classifying a Notification payload itself, so a stub would just re-implement the thing this file
-  // is no longer supposed to know how to do.
-  const notifier = new DesktopNotifier({
+  // is no longer supposed to know how to do. `DesktopNotifier` only reads it (see its own comment);
+  // index.ts's dedicated tap is production's only writer, and it runs before the desktop tap for that
+  // reason. `onHookEvent` below plays the part of that tap — feeding `attention` first, then handing
+  // the same event to the real notifier — so every existing call in this file keeps working unedited.
+  const attention = createAttentionState()
+  const real = new DesktopNotifier({
     settings: { getDesktopNotify: () => ({ ...DESKTOP_NOTIFY_DEFAULTS, ...flags }) },
     isFocused: () => focused.value,
     getSession: (id) => (sessions.includes(id) ? session(id) : null),
     lang: () => 'en',
     show: (req) => shown.push(req),
-    attention: createAttentionState()
+    attention
   })
+  const notifier: HarnessNotifier = {
+    onHookEvent: (sessionId, payload) => {
+      attention.onHookEvent(sessionId, payload)
+      real.onHookEvent(sessionId, payload)
+    },
+    onRollState: (ev) => real.onRollState(ev),
+    setActiveSession: (sessionId) => real.setActiveSession(sessionId)
+  }
   return { notifier, shown, focused }
 }
 

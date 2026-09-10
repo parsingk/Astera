@@ -494,6 +494,16 @@ app.whenReady().then(async () => {
   const hookWatcher = new HookEventWatcher(
     core.hookEventsDir,
     (sid, payload) => {
+      // The attention state runs FIRST, not fourth — order matters here and nowhere else in this
+      // fan-out. It is the only writer to that state (desktop.onHookEvent below only reads it), so it
+      // has to update before desktop's tap runs or desktop would read this event's answer one event
+      // late. Its own try, same isolation as the taps below: a failure here must not cost Slack or
+      // rolling their turn.
+      try {
+        attention.onHookEvent(sid, payload)
+      } catch {
+        /* an attention-state failure must not block the others */
+      }
       slack.onHookEvent(sid, payload)
       // Rolling taps the hooks too — an idle Notification is the signal for the idle nudge.
       // Isolated in its own try, separate from the Slack tap, so an exception on one side does not
@@ -509,15 +519,6 @@ app.whenReady().then(async () => {
         desktop.onHookEvent(sid, payload)
       } catch {
         /* a desktop notification failure must not block the others */
-      }
-      // The attention state taps the same events too, its own try for the same reason. desktop above
-      // already forwards every event into this same instance as part of reading its verdict, so this
-      // is a second, idempotent feed rather than the only one — kept as its own tap regardless, so the
-      // state stays current (and forget()-able from ipc.ts) even if desktop's own wiring ever changes.
-      try {
-        attention.onHookEvent(sid, payload)
-      } catch {
-        /* an attention-state failure must not block the others */
       }
     },
     slackLog
