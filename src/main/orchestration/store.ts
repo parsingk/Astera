@@ -61,6 +61,22 @@ export class OrchestrationStore {
      *  close every Dispatch it cannot prove alive. That table was written before the app could tell
      *  "no Host" from "no answer"; now that it can, the two are not the same evidence. */
     aliveSessionIds?: ReadonlySet<string> | 'unknown'
+    /** Dispatches an undelivered `worker_done` in the pending-reports queue already speaks for
+     *  (`reportedDispatchIdsOf` in core/orchestration/pendingReports.ts).
+     *
+     *  **A third reason to leave a Dispatch open, and the queue would be inert without it.** A
+     *  worker that finished while the app was closed wrote its report to a file; that report is
+     *  applied a moment later in the same boot. Closing the Dispatch here first would throw it away
+     *  — `applyWorkerDone` answers the idempotent `alreadyReported` for a Dispatch that already has
+     *  `endedAt` — and would hand P1's reconciler a Dispatch its `isLost` reads as a lost worker, so
+     *  a second agent would start in the worktree the first one just committed in. That is the whole
+     *  failure the queue exists to prevent, and it is not covered by `aliveSessionIds`: the case
+     *  that matters most is precisely the one where nothing survived to be alive — the machine
+     *  rebooted, or the Host was killed, after the worker had already finished and reported.
+     *
+     *  Only a completion report is evidence; an escalation is a worker saying it is stuck and still
+     *  there, which is why the pure helper leaves those out. */
+    reportedDispatchIds?: ReadonlySet<string>
   }): Promise<{
     recovered: boolean
     unknownOutcomes: number
@@ -159,11 +175,15 @@ export class OrchestrationStore {
     // first is still in it. `'unknown'` says the caller could not find out, which is not evidence
     // that anything died — see the argument's own doc for why that is its own answer.
     const alive = a?.aliveSessionIds
+    const reported = a?.reportedDispatchIds
     let unknownOutcomes = 0
     const dispatches = st.dispatches.map((d) => {
       if (d.endedAt) return d
       if (alive === 'unknown') return d
       if (alive?.has(d.sessionId)) return d
+      // A report for this Dispatch is waiting on disk, so its worker did not die unreported — see
+      // the `reportedDispatchIds` argument's own note for what closing it here would cost.
+      if (reported?.has(d.id)) return d
       unknownOutcomes++
       return { ...d, endedAt: now, workerState: 'outcome_unknown' as const }
     })
