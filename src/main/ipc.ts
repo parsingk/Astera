@@ -669,6 +669,15 @@ export function registerIpc(
   // Every attention change, for every session — unlike conversation:append this is not gated on an
   // open conversation. It is the same per-session verdict the desktop notifier already reads.
   attention.subscribe((sessionId, value) => send('conversation:attention', { sessionId, value }))
+  // A renderer reload leaves every open conversation with nobody watching it — the same kind of gap
+  // the preview.registerAgentGuest handler's own 'destroyed' listener exists for below, just with a
+  // different signal: a guest `<webview>` is torn down with the DOM a reload replaces, so 'destroyed'
+  // fires for it, but the main window's own WebContents survives a reload — nothing there is ever
+  // destroyed. 'did-finish-load' is what fires once a (re)load finishes; index.ts's own will-navigate
+  // guard already turns away anything that is not a load of the app's own document before it gets this
+  // far, so firing here on every load needs no isOwnDocument check of its own — and firing on the very
+  // first load is harmless, since nothing is open yet to close.
+  win.webContents.on('did-finish-load', () => conversationSessions.closeAll())
 
   // Session working/idle detection: decided from the window-title OSC in the output, and session:busy
   // is emitted only when the state changes.

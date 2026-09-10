@@ -29,17 +29,17 @@ import type { GeneratorSettings } from './understanding/generatorSettings'
 import type { DesktopNotifySettings } from './notify/settings'
 import type { ModelListResult } from './models/types'
 import type { ThemeId } from './theme/themes'
-import type { ConvTurn } from './history/conversation'
-export type { ConvTurn } from './history/conversation'
+import type { ConvTurn } from './history/convTypes'
+export type { ConvTurn } from './history/convTypes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
-// orchestration/types.ts is safe to reach for: its single import is a type-only providers/meta.ts,
-// already in tsconfig.web.json, so putting it in the renderer's compilation target pulled nothing
-// else in with it. state.ts and view.ts never may, for two different reasons — view.ts imports
-// isSamePath from files/tree.ts, which imports node:path; state.ts is node-free but is main-side by
-// role (the server owns OrchState) and is deliberately out of tsconfig.web.json, so importing it
-// here is what would put it back in. Either way the wrong fix is "types": ["node"] — it makes the
-// import resolve by handing the renderer typecheck every Node global, which is the guard this note
-// stands to protect.
+// orchestration/types.ts is safe to reach for on its own: its single import is a type-only
+// providers/meta.ts, already in tsconfig.web.json. view.ts never may — it imports isSamePath from
+// files/tree.ts, which imports node:path. state.ts is node-free and, as of graph.ts's own type-only
+// import of it (also in tsconfig.web.json's include list), already sits there too — not because
+// anything here reaches for it, and that is still worth avoiding on purpose: it is main-side by role
+// (the server owns OrchState), so importing it from here would make that reliance direct rather than
+// incidental. Either way the wrong fix for a genuinely missing import is "types": ["node"] — it hands
+// the renderer typecheck every Node global, which is the guard this note stands to protect.
 import type { MessageType, Outcome, TaskStatus } from './orchestration/types'
 export type { MessageType, TaskStatus } from './orchestration/types'
 
@@ -638,12 +638,16 @@ export interface CoreEvents {
   // Carries the blocking unit's project and id so the toast it drives (App.tsx) can offer a button
   // that closes that unit directly, through the same call the row's own [완료] button uses.
   'sessionTasks:goalIgnored': { projectPath: string; blockingUnitId: string }
-  /** New turns for an open conversation view (main/conversation.ts) — its follow's own read, reduced
-   *  the same way the initial window was. Fires only for a session with an open conversation: the
-   *  poll starts on `conversation.open` and stops once the last one closes, so a session nobody is
-   *  looking at never reaches the renderer this way. `restarted` is the follow's own flag — the
-   *  transcript file was recreated (e.g. a resumed session reusing the path) since the last read, so
-   *  the renderer should treat this as a fresh conversation rather than an addition to what it drew. */
+  /** These turns are new **or updated** for an open conversation view (main/conversation.ts) — not
+   *  only new. A tool call's result routinely lands in a later read than its call did (a build, a
+   *  test run, any long `Bash`), and when that happens the turn carrying that call is sent again in
+   *  full, with the same `id`, its outcome now filled in — the renderer must replace a turn it has
+   *  already drawn when this event names an `id` it already has, not only append ids it does not.
+   *  Fires only for a session with an open conversation: the poll starts on `conversation.open` and
+   *  stops once the last one closes, so a session nobody is looking at never reaches the renderer this
+   *  way. `restarted` is the follow's own flag — the transcript file was recreated (e.g. a resumed
+   *  session reusing the path) since the last read, so the renderer should treat this as a fresh
+   *  conversation rather than an addition to what it drew. */
   'conversation:append': { sessionId: string; turns: ConvTurn[]; restarted: boolean }
   /** A session's attention verdict changed (main/attention.ts's `subscribe`). Unlike
    *  'conversation:append' this is **not** gated on an open conversation — it is the same per-session

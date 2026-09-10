@@ -1,6 +1,6 @@
 import { open } from 'node:fs/promises'
 import { JsonlTail } from '../rolling/jsonlTail'
-import { reduceTranscript, type ConvTurn } from './conversation'
+import { reduceTranscript, type ConvTurn, type ToolPart } from './conversation'
 
 /** Default window size for the conversation view's first read of a transcript. Same figure
  *  parseTranscriptTail (src/core/history/parser.ts) uses for the same reason: a full transcript can
@@ -156,9 +156,12 @@ export class ConversationFollow {
     this.tail = new JsonlTail(filePath, { offset })
   }
 
-  async read(): Promise<{ turns: ConvTurn[]; restarted: boolean } | null> {
+  /** `pending` is passed straight through to `reduceTranscript` — see that function's own doc for
+   *  what carrying it across calls does. Omitted, this behaves exactly as before: a call whose result
+   *  is not in these lines is dropped. */
+  async read(pending?: Map<string, ToolPart>): Promise<{ turns: ConvTurn[]; restarted: boolean } | null> {
     const result = await this.tail.read()
     if (result === null) return null
-    return { turns: reduceTranscript(result.lines), restarted: result.restarted }
+    return { turns: reduceTranscript(result.lines, pending), restarted: result.restarted }
   }
 }

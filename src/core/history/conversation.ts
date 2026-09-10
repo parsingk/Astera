@@ -1,35 +1,6 @@
 import { isMetaUserRecord, isRealUserText } from './parser'
-
-export interface ConvToolOutcome {
-  ok: boolean
-  /** The right-hand text of the row, already formatted, in the CLI's own terms:
-   *  "412 lines", "+14 -3", "6 files", "new file". Empty when there is nothing worth a number. */
-  detail: string
-}
-
-export type ConvPart =
-  | { kind: 'text'; text: string }
-  | {
-      kind: 'tool'
-      id: string
-      /** The tool as the CLI names it: Read, Edit, Write, Bash, Grep, or anything else. */
-      name: string
-      /** What it acted on, reduced to one string: a path, a command, a pattern. */
-      target: string
-      /** null while the result has not arrived, or when it fell outside the window. */
-      outcome: ConvToolOutcome | null
-    }
-
-export interface ConvTurn {
-  /** The uuid of the first entry the turn was built from. */
-  id: string
-  role: 'user' | 'assistant'
-  parts: ConvPart[]
-  /** The first entry's timestamp, when it has one. */
-  timestamp?: string
-}
-
-type ToolPart = Extract<ConvPart, { kind: 'tool' }>
+import type { ConvPart, ConvTurn, ToolPart } from './convTypes'
+export type { ConvToolOutcome, ConvPart, ConvTurn, ToolPart } from './convTypes'
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -180,10 +151,18 @@ function isToolResultOnly(blocks: Record<string, unknown>[]): boolean {
  *
  *  **Malformed input.** A line that does not parse, or parses to a non-object, is skipped. The
  *  window boundary makes torn lines routine, not exceptional, so this must not throw or lose the
- *  lines around it. */
-export function reduceTranscript(lines: string[]): ConvTurn[] {
+ *  lines around it.
+ *
+ *  **Carrying `pending` across calls.** A fresh Map by default, exactly as before — a `tool_result`
+ *  whose `tool_use` is not in *this* call's own lines is dropped (see Pairing above). A caller that
+ *  passes its own Map in gets the other behaviour instead: since a `tool_use` block adds to it and a
+ *  matching `tool_result` deletes from it (both below), a Map that outlives one call carries an
+ *  unresolved call from an earlier batch of lines into this one, and this call can resolve it —
+ *  mutating the very `ToolPart` object an earlier call already returned. main/conversation.ts's live
+ *  follow is the one caller that does this, to update a turn it has already emitted once the call it
+ *  was waiting on finally answers. */
+export function reduceTranscript(lines: string[], pending: Map<string, ToolPart> = new Map()): ConvTurn[] {
   const turns: ConvTurn[] = []
-  const pending = new Map<string, ToolPart>()
   let current: ConvTurn | null = null // the assistant run being built, or null between runs
 
   for (const raw of lines) {
