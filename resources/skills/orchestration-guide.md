@@ -492,9 +492,11 @@ server blocks `check` and `inbox` as coordinator-only (403).
   the Host keeps running finishes its Task. When the server cannot be reached at all, `worker_done`
   and `escalation` — and only those two — are appended to a queue in the app's profile, and the
   answer is `{"queued":true,"applied":false,"path":"…"}` with exit code `0`. Read both halves: the
-  report is safe and the app applies it the next time it starts, and nothing in the Job has moved
-  yet. Do not send it again and do not read it as the work having failed. Every other command still
-  fails the way it always did — a file cannot answer an `ask`.
+  report is safe and the app applies it at the next start that has orchestration on, and nothing in
+  the Job has moved yet. Do not send it again and do not read it as the work having failed. Every
+  other command still fails the way it always did — a file cannot answer an `ask`. A report the
+  server would reject anyway (no `--outcome`, no `--task-id`, no `--dispatch-id`) is not queued: it
+  fails as it always has, so fix it and send it again.
 - After reporting, end your turn and wait at the agent prompt. Do not close the terminal yourself — if
   the orchestrator reuses it, new instructions arrive as input.
 

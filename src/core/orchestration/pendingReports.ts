@@ -172,7 +172,14 @@ export function reportedDispatchIdsOf(entries: readonly PendingReport[]): Set<st
  *  **One notice answers both kinds of report, so it says nothing about what to do next.** After a
  *  `worker_done` the next step is to stop, and the spec file's reporting obligation already says so;
  *  after an `escalation` the worker is stuck and still has the work in front of it. A line telling
- *  it that its work here was finished would be false for half of the reports it is printed for. */
+ *  it that its work here was finished would be false for half of the reports it is printed for.
+ *
+ *  **What it says about when it will be applied is hedged on purpose.** "The next time the app
+ *  starts" was not true: the drain only runs on a start that has orchestration on, and whether it
+ *  is on is not something the worker can see. And the reason not to re-send is that the app
+ *  already has the report, not that a re-send would fail — once the app is back a re-send works
+ *  perfectly well, and an agent that tries it and finds the notice wrong has no reason to believe
+ *  the rest of it. */
 export function undeliveredReportNotice(a: { path: string }): string {
   return JSON.stringify({
     queued: true,
@@ -180,8 +187,8 @@ export function undeliveredReportNotice(a: { path: string }): string {
     path: a.path,
     note:
       'The app was not running, so this report could not be delivered. It has been written to the file ' +
-      'named above and the app will apply it the next time it starts. Nothing in the job has changed ' +
-      'yet, so do not act as if this report had taken effect, and do not send it again — a second ' +
-      'copy would not reach the app either.'
+      'named above, and the app applies it at the next start that has orchestration on. Nothing in ' +
+      'the job has changed yet, so do not act as if this report had taken effect. Do not send it ' +
+      'again either: the app already has it, and a second copy is only a second copy.'
   })
 }

@@ -1535,6 +1535,24 @@ export function registerIpc(
 
     const store = new OrchestrationStore(path.join(app.getPath('userData'), 'orchestration.json'))
     if (core.appSettings.getJobContinuityEnabled()) openContinuity()
+    // Reports that could not be delivered while the app was away. **Read before the cleanup and
+    // applied further down, after `orch` is assigned** — the two halves cannot be one call, and the
+    // gap between them is the whole point:
+    //
+    // - The cleanup below closes every open Dispatch it cannot prove alive, and `applyWorkerDone`
+    //   answers `alreadyReported` for a Dispatch that already has `endedAt`. So the report has to be
+    //   in hand *before* the load, or it is thrown away by the very boot that was supposed to take
+    //   it — and the reconciler then reads that Dispatch as a lost worker. `reportedDispatchIds`
+    //   carries that evidence into the cleanup; its own note has the rest.
+    // - Applying one reaches `startValidation` and `startReview`, which spawn, which needs `orch`
+    //   set — the same constraint `runScheduler` and the recovery boot sweep are under.
+    //
+    // Neither line can throw: `readPendingReports` swallows its own failures (a missing folder is
+    // the ordinary case, not an error) and `reportedDispatchIdsOf` is pure. A queue that cannot be
+    // read costs the reports in it, never the boot.
+    const pendingReportsDir = path.join(app.getPath('userData'), 'orch', PENDING_REPORTS_DIR)
+    const pendingReports = await readPendingReports({ dir: pendingReportsDir, log: orchLog })
+
     // Ask what the Host still had before deciding which workers were lost. Reattaching therefore
     // runs before the cleanup, not after it: the sessions it took back are the ones whose Dispatch
     // must stay open, and this is the only moment both facts are in hand.
@@ -1557,28 +1575,9 @@ export function registerIpc(
     // about its sessions, so the answer is `'unknown'` and the cleanup leaves open Dispatches where
     // they are. A Job that stalls is a person noticing nothing moved; the alternative was a second
     // agent dispatched into a worktree whose first one is still running.
-    // Reports that could not be delivered while the app was away. **Read before the cleanup and
-    // applied further down, after `orch` is assigned** — the two halves cannot be one call, and the
-    // gap between them is the whole point:
-    //
-    // - The cleanup below closes every open Dispatch it cannot prove alive, and `applyWorkerDone`
-    //   answers `alreadyReported` for a Dispatch that already has `endedAt`. So the report has to be
-    //   in hand *before* the load, or it is thrown away by the very boot that was supposed to take
-    //   it — and the reconciler then reads that Dispatch as a lost worker. `reportedDispatchIds`
-    //   carries that evidence into the cleanup; its own note has the rest.
-    // - Applying one reaches `startValidation` and `startReview`, which spawn, which needs `orch`
-    //   set — the same constraint `runScheduler` and the recovery boot sweep are under.
-    //
-    // Neither line can throw: `readPendingReports` swallows its own failures (a missing folder is
-    // the ordinary case, not an error) and `reportedDispatchIdsOf` is pure. A queue that cannot be
-    // read costs the reports in it, never the boot.
-    const pendingReportsDir = path.join(app.getPath('userData'), 'orch', PENDING_REPORTS_DIR)
-    const pendingReports = await readPendingReports({ dir: pendingReportsDir, log: orchLog })
     const aliveSessionIds = liveWorkersFor(await hostSessionsTakenBack)
-    const loaded = await store.load({
-      aliveSessionIds,
-      reportedDispatchIds: reportedDispatchIdsOf(pendingReports.map((q) => q.report))
-    })
+    const reportedDispatchIds = reportedDispatchIdsOf(pendingReports.map((q) => q.report))
+    const loaded = await store.load({ aliveSessionIds, reportedDispatchIds })
     // The unknown case gets a line of its own, because from the state alone it is indistinguishable
     // from a boot that had nothing to clean up — and a person looking for why a Job did not move
     // needs to be able to find it. The reason it could not be asked was logged by the Host wiring.
@@ -1589,6 +1588,18 @@ export function registerIpc(
     else if (aliveSessionIds && aliveSessionIds.size > 0)
       orchLog(
         `restart cleanup — the Host still runs ${aliveSessionIds.size} session(s); any open Dispatch of theirs was left open`
+      )
+    // The third reason a Dispatch survives the cleanup, said in the same voice as the two Host ones
+    // above. Without it a person reading the log sees a Dispatch that stayed open and no line
+    // explaining why — and this is the only one of the three that is about to change the Task a
+    // moment later. Counted against the loaded state rather than off the queue, so it says how
+    // many Dispatches were really held rather than how many files were found.
+    const heldByReport = store
+      .get()
+      .dispatches.filter((d) => !d.endedAt && reportedDispatchIds.has(d.id)).length
+    if (heldByReport > 0)
+      orchLog(
+        `restart cleanup — ${heldByReport} open dispatch(es) were left open because an undelivered report speaks for them; it is applied once the server is up`
       )
     if (loaded.stuckInterruptions > 0)
       orchLog(

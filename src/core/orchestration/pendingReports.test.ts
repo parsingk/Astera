@@ -164,4 +164,15 @@ describe('undeliveredReportNotice — what the agent is told', () => {
   it('does not tell the worker its work here is finished', () => {
     expect(String(notice.note)).not.toMatch(/finish/i)
   })
+  // It used to give "a second copy would not reach the app either" as the reason. Once the app is
+  // back a second copy reaches it perfectly well -- an agent that tries and finds it works learns
+  // that the notice can be wrong about the rest too.
+  it('gives a reason not to send it again that stays true after the app is back', () => {
+    expect(String(notice.note)).not.toMatch(/would not reach/)
+    expect(String(notice.note)).toMatch(/already has/)
+  })
+  // Whether the app applies it depends on the orchestration toggle, which the worker cannot see.
+  it('does not promise the next start will apply it', () => {
+    expect(String(notice.note)).not.toMatch(/next time it starts/)
+  })
 })
