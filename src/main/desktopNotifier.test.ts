@@ -233,6 +233,32 @@ describe('DesktopNotifier — waiting fires once per transition, not once per No
     h.notifier.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'idle_prompt' })
     expect(h.shown.map((s) => s.event)).toEqual(['inputNeeded'])
   })
+
+  // Leaving `waiting` is a transition too, and it must not fire. Without this, an edit that fires on
+  // any change rather than on the arrival at `waiting` passes every other test here: nothing else
+  // resolves a session out of `waiting` and then counts. Answering the prompt lets the call finish,
+  // and a toast at that moment would announce input needed for a session that is no longer blocked.
+  it('resolving the prompt does not fire a second time', () => {
+    const h = harness()
+    h.notifier.onHookEvent('s1', { hook_event_name: 'PreToolUse', tool_use_id: 'call-1' })
+    h.notifier.onHookEvent('s1', {
+      hook_event_name: 'Notification',
+      notification_type: 'permission_prompt'
+    })
+    h.notifier.onHookEvent('s1', { hook_event_name: 'PostToolUse', tool_use_id: 'call-1' })
+    expect(h.shown.map((s) => s.event)).toEqual(['inputNeeded'])
+  })
+
+  // The same on the other exit from `waiting`: the turn ends rather than the call finishing.
+  it('Stop while waiting does not fire', () => {
+    const h = harness()
+    h.notifier.onHookEvent('s1', {
+      hook_event_name: 'Notification',
+      notification_type: 'permission_prompt'
+    })
+    h.notifier.onHookEvent('s1', { hook_event_name: 'Stop' })
+    expect(h.shown.map((s) => s.event)).toEqual(['inputNeeded'])
+  })
 })
 
 describe('DesktopNotifier — suppression', () => {
