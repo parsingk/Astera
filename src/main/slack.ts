@@ -350,8 +350,8 @@ export class SlackNotifier {
     // `onRolled` makes when a roll re-keys one chain onto a new id, and for the same reason: the
     // session did not restart, so what has already been said about it still holds. The case is the
     // Host's reconnect — the socket drops, the adopter takes the session back, and it re-registers
-    // under the id it already had. Built from nothing, the record forgets three things at once, and
-    // each one is visible in somebody's channel:
+    // under the id it already had. Built from nothing, the record forgets four things at once, and
+    // each one shows up in what the next notification says or does not say:
     //
     // - `provider` decides the limit scanner, and `providerFor` falls back to claude for an account
     //   it cannot find, so a reconnect after that account was removed would quietly stop a codex
@@ -361,6 +361,20 @@ export class SlackNotifier {
     // - `thread` is the root message, so a second header is posted. Nothing is lost, since replies
     //   in either thread resolve to the same session, but the channel fills with roots for a
     //   session that never restarted.
+    // - `pendingTool` is the tool call the screen is still waiting on. It is not rebuilt by the
+    //   scrollback the reconnect replays: it comes from the PreToolUse hook and is cleared by the
+    //   matching PostToolUse, so dropping it costs the next "input needed" line its tool content
+    //   for the whole of that pending call.
+    //
+    // **`pendingTool` is carried because nothing that maintains it was interrupted.** Hook events
+    // reach this app through the hook-event file watcher, not over the Host socket, and the app was
+    // running throughout — so the record was accurate up to the instant this replaced it, and the
+    // call cannot have finished unobserved in between. That is exactly why the same field would
+    // **not** be safe to carry across an app restart, where the PostToolUse that ended the call may
+    // well have arrived while there was nothing to receive it; the two cases look identical at this
+    // call site. (A restart cannot reach this in any case — a fresh `SlackNotifier` has no record
+    // to inherit from. `onRolled` does not carry it either, for a third reason of its own: the roll
+    // starts the new session from the resume prompt, so that screen is already gone.)
     //
     // Each falls back to what it was before when there is no earlier record — and `thread` also
     // when the earlier one was null (no thread transport, or `replaceTransport` reset it), in which
@@ -376,12 +390,7 @@ export class SlackNotifier {
       lastSent: replaced?.lastSent ?? new Map(),
       exitTimer: null,
       thread: replaced?.thread ?? null,
-      // Not carried, and here that is a weaker call than it is in `onRolled`: a roll starts the new
-      // session from the resume prompt, so the screen the pending call belongs to is gone, whereas
-      // a reconnect leaves that screen exactly where it was. What it costs is the tool content in
-      // the next "input needed" line, not a duplicate or a wrong notification, and carrying it
-      // would be a decision about what a reconnect should remember that nobody has made.
-      pendingTool: null
+      pendingTool: replaced?.pendingTool ?? null
     }
     this.records.set(info.id, record)
     if (record.thread) {

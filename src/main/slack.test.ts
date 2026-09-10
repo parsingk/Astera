@@ -1696,6 +1696,25 @@ describe('SlackNotifier PreToolUse 대기 내용 캡처', () => {
     expect(h.sent[0]).toContain('2. 짬뽕')
   })
 
+  // The fourth thing a reconnect used to forget. This one is not rebuilt by the scrollback replay:
+  // it comes from the PreToolUse hook, which reaches the app through the hook-event file watcher
+  // and never over the Host socket, so the record was accurate right up to the moment register
+  // threw it away and the pending call cannot have completed unobserved.
+  it('register over a live id keeps the tool call the screen is still waiting on', async () => {
+    const h = setup({ readFileTail: async () => '' })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', pre('AskUserQuestion', ASK))
+    await flush()
+
+    h.notifier.register(info()) // the reconnect takes the session back under the same id
+    h.notifier.onHookEvent('s-1', notify('Claude needs your permission'))
+    await flush()
+
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0]).toContain('❓ 뭐 드실래요?')
+    expect(h.sent[0]).toContain('1. 짜장면')
+  })
+
   it('권한 승인 대기도 무엇을 승인하는지 담는다 — 이쪽도 transcript에는 없다', async () => {
     const h = setup({ readFileTail: async () => '' })
     h.notifier.register(info())
