@@ -8,68 +8,80 @@
   <style>
     body { margin: 0; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; background: #17171a; color: #d0d0d6; }
     * { box-sizing: border-box; }
-    h1 { font-size: 17px; font-weight: 600; margin: 0 0 5px; color: #eaeaf0; }
+    h1 { font-size: 18px; font-weight: 600; margin: 0 0 5px; color: #eaeaf0; }
     h2 { font-size: 12.5px; font-weight: 600; margin: 0 0 6px; color: #e2e2e8; }
     p { margin: 0; font-size: 12.5px; line-height: 1.6; color: #93939e; }
     li { font-size: 12.5px; line-height: 1.6; color: #93939e; margin-bottom: 3px; }
     ul { margin: 0; padding-left: 17px; }
     .shot { border: 1px solid #26262c; border-radius: 8px; overflow: hidden; background: #17171a; }
     .shot img { display: block; width: 100%; height: auto; }
-    .lab { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 7px; }
+    .lab { font-size: 11.5px; margin-bottom: 7px; color: #d0d0d6; }
+    .lab em { font-style: normal; color: #5f5f69; }
     .mono { font-family: ui-monospace, Consolas, monospace; }
     .pill { display: inline-block; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: #0d2b30; background: #37b0c4; border-radius: 4px; padding: 3px 8px; font-weight: 600; }
   </style>
 </helmet>
 
-<div style="width: 2320px; height: 1060px; background: #17171a; padding: 22px 24px; display: flex; flex-direction: column; gap: 16px; overflow: hidden;">
+<div style="width: 3400px; height: 1180px; background: #17171a; padding: 24px 26px; display: flex; flex-direction: column; gap: 16px; overflow: hidden;">
 
-  <div style="display: flex; align-items: flex-end; gap: 20px;">
-    <div style="max-width: 700px;">
+  <div style="display: flex; align-items: flex-end; gap: 24px;">
+    <div style="max-width: 780px;">
       <div style="margin-bottom: 8px;"><span class="pill">가기로 한 것</span></div>
-      <h1>assistant-ui 로 만든 대화 우선 화면</h1>
-      <p>시안이 아니라 화면 캡처입니다. assistant-ui 0.15.18 의 Thread 컴포넌트를, 대화 기록을 흉내 낸 외부 스토어에 물려 띄웠습니다. 오른쪽 사람 말풍선 중 하나는 컴포저가 아니라 <strong style="color: #c4c4cc; font-weight: 500;">밖에서</strong> 밀어 넣은 것입니다. 터미널에서 직접 친 경우를 확인한 것이고, 그대로 받아줍니다.</p>
+      <h1>assistant-ui 로 만든 대화 뷰</h1>
+      <p>그림이 아니라 화면 캡처입니다. assistant-ui 의 Thread 를, 대화 기록을 흉내 낸 외부 스토어에 물려 띄우고 Astera 껍데기를 입혔습니다. 한 줄 작업 표시, 승인 대기 배너, 터미널 토글까지 실제로 눌러서 동작하는 상태입니다.</p>
     </div>
     <div style="margin-left: auto; font-size: 11.5px; line-height: 1.7; color: #5f5f69; text-align: right;" class="mono">
       @assistant-ui/react 0.15.18 · shadcn 레지스트리 11개 파일<br>
-      번들 899 kB (gzip 274 kB) · 새 패키지 155개
+      우리가 쓴 것: ToolFallback, ToolGroup, Banner 슬롯 셋
     </div>
   </div>
 
-  <div style="flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+  <div style="flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 26px;">
     <div style="min-height: 0; display: flex; flex-direction: column;">
-      <div class="lab" style="color: #5f5f69;">그대로 썼을 때</div>
-      <div class="shot" style="flex: 1; min-height: 0;"><img src="aui-skin-default.png" alt="assistant-ui as shipped"></div>
+      <div class="lab">평소 <em>· 작업 표시를 펴 둔 상태</em></div>
+      <div class="shot" style="flex: 1; min-height: 0;"><img src="aui-conv.png" alt="the conversation view"></div>
     </div>
     <div style="min-height: 0; display: flex; flex-direction: column;">
-      <div class="lab" style="color: #37b0c4;">다크에 맞춘 것</div>
-      <div class="shot" style="flex: 1; min-height: 0; border-color: #37b0c4;"><img src="aui-skin-astera.png" alt="assistant-ui fitted to the Astera dark theme"></div>
+      <div class="lab" style="color: #e0a86a;">답할 것이 있을 때 <em style="color: #8a6a44;">· 입력창이 잠긴다</em></div>
+      <div class="shot" style="flex: 1; min-height: 0; border-color: rgba(214,139,79,.45);"><img src="aui-pending.png" alt="a decision waiting"></div>
+    </div>
+    <div style="min-height: 0; display: flex; flex-direction: column;">
+      <div class="lab">넘어간 터미널 <em>· 선택지는 여기서만 그린다</em></div>
+      <div class="shot" style="flex: 1; min-height: 0;"><img src="aui-term.png" alt="the terminal side of the toggle"></div>
     </div>
   </div>
 
-  <div style="flex: none; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; border-top: 1px solid #26262c; padding-top: 14px;">
+  <div style="flex: none; display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 26px; border-top: 1px solid #26262c; padding-top: 14px;">
     <div>
-      <h2>고친 것</h2>
+      <h2>한 줄 작업 표시</h2>
       <ul>
-        <li><strong style="color: #c4c4cc; font-weight: 500;">입력창.</strong> 기본은 어두운 테마인데도 밝게 뜹니다. <span class="mono" style="color: #b9b9c2;">--composer-bg</span> 가 <span class="mono" style="color: #b9b9c2;">:root</span> 에서 계산돼 다크 값을 못 받기 때문이라, 취향이 아니라 배선 문제입니다. 색을 직접 지정하고 모서리를 24px 알약에서 8px 로 낮췄습니다.</li>
-        <li><strong style="color: #c4c4cc; font-weight: 500;">스크롤바.</strong> 앱의 규칙을 그대로 가져왔습니다. 10px 폭, 손잡이 #23232a, 투명 트랙, hover 는 color-mix.</li>
-        <li><strong style="color: #c4c4cc; font-weight: 500;">보내기 버튼은 손 안 댔습니다.</strong> 모양까지 덮어썼다가 투박해져서 되돌렸습니다. 저쪽 원형 아이콘 버튼 그대로고, accent 색만 토큰으로 들어갑니다.</li>
+        <li>기본은 <span class="mono" style="color: #b9b9c2;">Used tool: Read</span> 였고, 지금은 <span class="mono" style="color: #b9b9c2;">읽음 store.ts 412줄</span> 입니다.</li>
+        <li>접힌 줄은 무엇을 몇 번 했는지 셉니다. <span class="mono" style="color: #b9b9c2;">읽기 1 · 찾기 1</span>, <span class="mono" style="color: #b9b9c2;">수정 2 · 실행 1</span>.</li>
+        <li>통과는 초록, 실패는 빨강. 파일 트리의 git 색과 같은 값입니다.</li>
       </ul>
     </div>
     <div>
-      <h2>그냥 딸려온 것</h2>
+      <h2>배너와 토글</h2>
       <ul>
-        <li>툴 호출을 <span class="mono" style="color: #b9b9c2;">2 tool calls</span> 로 자동으로 묶고 접습니다. 손으로 그렸던 그 동작입니다.</li>
-        <li>마크다운, 코드 블록, 복사 버튼, 언어 라벨.</li>
-        <li>바닥 고정 스크롤, 자동 높이 입력창, 답변 아래 동작 바.</li>
+        <li>배너는 선택지를 다시 그리지 않습니다. 기다리는 중이라고만 말하고 터미널로 보냅니다.</li>
+        <li>기다리는 동안 입력창이 잠깁니다. 터미널에서 답해야 이어집니다.</li>
+        <li>대화를 보고 있어도 터미널 탭에 주황 점이 떠서 놓치지 않습니다.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>다크에서 고친 것</h2>
+      <ul>
+        <li><strong style="color: #c4c4cc; font-weight: 500;">입력창.</strong> <span class="mono" style="color: #b9b9c2;">--composer-bg</span> 가 <span class="mono" style="color: #b9b9c2;">:root</span> 에서 계산돼 다크 값을 못 받습니다. 색을 직접 지정하고 모서리를 24px 에서 8px 로.</li>
+        <li><strong style="color: #c4c4cc; font-weight: 500;">스크롤바.</strong> 앱 규칙 그대로. 10px, 손잡이 #23232a, 투명 트랙.</li>
+        <li>보내기 버튼은 손 안 댔습니다. 저쪽 원형 아이콘 버튼 그대로고 accent 색만 토큰으로.</li>
       </ul>
     </div>
     <div>
       <h2>아직 남은 것</h2>
       <ul>
-        <li>툴 한 줄이 <span class="mono" style="color: #b9b9c2;">Used tool: Read</span> 입니다. <span class="mono" style="color: #b9b9c2;">읽음 store.ts 412줄</span> 로 바꿔야 하고, ToolFallback 을 우리 것으로 갈아끼우는 자리입니다.</li>
         <li>Tailwind 와 shadcn 이 함께 들어옵니다. 이 프로젝트에 지금 둘 다 없습니다.</li>
-        <li>마크다운 렌더러가 둘이 됩니다. 파일 에디터는 우리 것, 대화는 저쪽 것.</li>
-        <li>승인 대기 배너와 터미널 토글은 아직 안 붙였습니다.</li>
+        <li>마크다운 렌더러가 둘이 됩니다. 파일 에디터는 기존 것, 대화는 저쪽 것.</li>
+        <li>입력창 잠금을 지금은 CSS 로 했습니다. 실제로는 컴포저의 disabled 로 가야 합니다.</li>
       </ul>
     </div>
   </div>
@@ -77,7 +89,7 @@
 </div>
 </x-dc>
 
-<script data-dc-script data-props='{"$preview":{"width":2320,"height":1060}}'>
+<script data-dc-script data-props='{"$preview":{"width":3400,"height":1180}}'>
 class Component extends DCLogic { renderVals() { return {} } }
 </script>
 </body>
