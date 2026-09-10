@@ -618,9 +618,12 @@ export class CodexRollingCoordinator {
     chain.state = s
     // The record the 'adopted' banner said it was waiting for has arrived: from here the chain judges
     // limits from its own snapshot like every other, so the doubt the banner reports is resolved and
-    // leaving it up would be reporting a doubt that no longer exists. Safe to publish 'none' from
-    // here because both callers of refresh are guarded on the chain being neither rolling nor
-    // waiting, so there is no banner of their own to erase.
+    // leaving it up would be reporting a doubt that no longer exists.
+    //
+    // Safe to publish 'none' from here in all three callers. `evaluate` and the tick are guarded on
+    // the chain being neither rolling nor waiting, so neither has a banner of its own for this to
+    // erase. `forceRoll`, the dev hook, is not guarded — but it calls `onLimit` on the next line, so
+    // whatever banner that raises is published after this one and supersedes it.
     if (!chain.adoptedUnjudged) return
     chain.adoptedUnjudged = false
     this.pushState(chain, 'none')
