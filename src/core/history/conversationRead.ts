@@ -15,12 +15,25 @@ export const CONVERSATION_TAIL_BYTES = 256 * 1024
  *  bounding the work a file that is genuinely one immense line can force. */
 export const CONVERSATION_TAIL_BYTES_MAX = 4 * 1024 * 1024
 
+const NEWLINE = 0x0a // '\n' as a byte — see the doc comment below for why this is searched for in the
+// raw buffer, never in a decoded string.
+
 /** Reads a byte window ending at `endAt` (default: end of file) and reduces it to turns.
  *
  *  Follows parseTranscriptTail's shape rather than inventing a new one: stat for the size, clamp the
  *  start to 0, read the window into a buffer, and when the window starts mid-file drop everything up
  *  to the first newline — that leading fragment belongs to whatever came before the window, not to a
- *  usable record. A newline is one byte, so cutting there is safe even inside a multibyte character.
+ *  usable record.
+ *
+ *  **Bytes, not characters.** That newline search happens on the raw buffer (`indexOf(NEWLINE)`),
+ *  never on the string `.toString('utf8')` produces. Astera's transcripts are largely Korean, and a
+ *  decoded string's index counts UTF-16 units, not bytes — a Hangul syllable is 3 UTF-8 bytes but 1
+ *  UTF-16 unit, so a string-based search returns the wrong offset on the common case, not an edge
+ *  case (measured: three real 107-byte Korean lines, string-indexOf-based `from` off by 28 bytes from
+ *  the true line start). Every offset this function returns is computed from the buffer for exactly
+ *  this reason. Slicing on a byte index found this way is always safe even through a multibyte
+ *  character — 0x0a can never appear as a UTF-8 continuation byte, so it only ever means a real line
+ *  break, and content sliced away because of it is discarded, never decoded.
  *
  *  **Widening.** A single JSONL line bigger than the window is routine, not exceptional — an image
  *  Read result's base64 can run past a megabyte (see CONVERSATION_TAIL_BYTES_MAX's doc comment for
@@ -29,18 +42,37 @@ export const CONVERSATION_TAIL_BYTES_MAX = 4 * 1024 * 1024
  *  be wrong most conspicuously right when someone would actually look: just after the agent read a
  *  screenshot. So when a window comes back with zero turns and `more` is true, the window doubles and
  *  tries again, keeping `endAt` fixed, until a turn appears, `more` goes false (the window has reached
- *  the start of the file), or CONVERSATION_TAIL_BYTES_MAX is reached — whichever comes first. Reaching
- *  the cap with still nothing to show returns zero turns honestly rather than looping forever.
+ *  the start of the file), or CONVERSATION_TAIL_BYTES_MAX is reached — whichever comes first.
  *
  *  `from` is the byte offset the window actually started at (after that drop, when one happened, and
  *  after any widening) — a later call can pass it back as `endAt` to walk to the window just before
  *  this one, and because `from` always sits right after a real newline (or is 0), that next call never
  *  has to drop anything off its own far end. `more` is exactly whether anything lies before `from`,
- *  i.e. `from > 0`.
+ *  i.e. `from > 0`. **Exception, at the cap:** if the cap is reached with nothing found, `from` is
+ *  reported as the window's own `start` rather than wherever the newline search landed. The search can
+ *  land exactly on `end` there — the only newline in the window is the oversized line's own trailing
+ *  one — and returning that would make a caller paging backward with `endAt: from` repeat the exact
+ *  same read forever. `start` is always strictly less than `end` at the cap (the window is capped, not
+ *  the whole file), so paging always moves; the next window may itself end mid-line, which is fine —
+ *  the torn remainder is the same oversized line, which was never going to render either way.
  *
- *  `follow` is `end` — the offset a ConversationFollow should start at to pick up right where this
- *  window left off. Widening only ever moves `start` earlier; `end` is fixed for the whole call, so
- *  `follow` needs no special handling for it.
+ *  `follow` is the offset just past the LAST complete line inside the window — found the same way, in
+ *  the buffer. It usually equals `end` (when the window's own last byte is a newline), but not always:
+ *  a live session's file can have its last line half-written at the moment the window is read.
+ *  Pointing `follow` at `end` in that case would resume a ConversationFollow with an empty carry right
+ *  in the middle of that record — the writer finishes the line, appends another, and the follow only
+ *  ever sees the later one; the half-written record is lost for good. Stopping `follow` one line
+ *  earlier avoids that: JsonlTail's own carry logic, which ConversationFollow already wraps, picks up
+ *  the rest once the newline actually arrives. When there is no newline anywhere in the window,
+ *  `follow` is `from` — nothing in the window rendered, so re-reading from there next time duplicates
+ *  nothing.
+ *
+ *  `end` is clamped to the file's real size, and the buffer is trimmed to the bytes the read actually
+ *  returned (`bytesRead`) before anything is decoded. Without both: an `endAt` past EOF asks for more
+ *  bytes than exist, `Buffer.alloc`'s zero fill leaks NUL bytes into the decoded text (`.trim()` does
+ *  not strip NUL — it is not whitespace), and the uncapped `end` becomes a `follow` value past the
+ *  real file size. A ConversationFollow built from that sees `size < offset`, concludes the file was
+ *  recreated, and replays it from scratch — duplicating every turn already shown.
  *
  *  Same simplification as parseTranscriptTail: if `start` happens to land exactly on a line boundary,
  *  this still drops the line that begins there, because a byte offset alone cannot tell that apart
@@ -56,7 +88,7 @@ export async function readConversationWindow(
   try {
     handle = await open(filePath, 'r')
     const size = (await handle.stat()).size
-    const end = opts?.endAt ?? size
+    const end = Math.min(opts?.endAt ?? size, size)
 
     for (;;) {
       const start = Math.max(0, end - tailBytes)
@@ -64,26 +96,36 @@ export async function readConversationWindow(
       if (length <= 0) return { turns: [], from: 0, more: false, follow: end }
 
       const buffer = Buffer.alloc(length)
-      await handle.read(buffer, 0, length, start)
-      let text = buffer.toString('utf8')
+      const { bytesRead } = await handle.read(buffer, 0, length, start)
+      const used = buffer.subarray(0, bytesRead) // only the bytes actually read are real content
+
+      // The last complete line's end, independent of whatever gets trimmed off the front below — see
+      // the doc comment's `follow` paragraph.
+      const nlLast = used.lastIndexOf(NEWLINE)
+
+      let contentStart = 0
       let from = start
       if (start > 0) {
-        const nl = text.indexOf('\n')
-        if (nl === -1) {
-          // No complete line anywhere in this window — the window is still entirely inside one
-          // oversized line. `from` stays at `start`, so `more` still reports true.
-          text = ''
+        const nlFirst = used.indexOf(NEWLINE)
+        if (nlFirst === -1) {
+          contentStart = used.length // no complete line anywhere in this window
         } else {
-          text = text.slice(nl + 1)
-          from = start + nl + 1
+          contentStart = nlFirst + 1
+          from = start + nlFirst + 1
         }
       }
+      const follow = nlLast === -1 ? from : start + nlLast + 1
+
+      const text = used.subarray(contentStart).toString('utf8')
       const lines = text.split('\n').filter((l) => l.trim().length > 0)
       const turns = reduceTranscript(lines)
       const more = from > 0
 
       if (turns.length > 0 || !more || tailBytes >= CONVERSATION_TAIL_BYTES_MAX) {
-        return { turns, from, more, follow: end }
+        if (turns.length === 0 && tailBytes >= CONVERSATION_TAIL_BYTES_MAX) {
+          return { turns, from: start, more: start > 0, follow } // see the `from` paragraph above
+        }
+        return { turns, from, more, follow }
       }
       tailBytes = Math.min(tailBytes * 2, CONVERSATION_TAIL_BYTES_MAX)
     }
