@@ -10,6 +10,7 @@
 // writes, `src/main/orchestration/pendingDrain.ts` reads and applies.
 import path from 'node:path'
 import { workerDoneFieldError } from './sendArgs'
+import type { Dispatch } from './types'
 
 /** Folder beside the info file the CLI already reads (orch-info.json). One file per report rather
  *  than one appended log: two workers can finish at the same moment with the app gone, and two
@@ -175,6 +176,36 @@ export function reportedDispatchIdsOf(entries: readonly PendingReport[]): Set<st
     if (e.args.type !== 'worker_done') continue
     if (typeof e.args.dispatchId === 'string' && e.args.dispatchId.length > 0)
       out.add(e.args.dispatchId)
+  }
+  return out
+}
+
+/** Of the Dispatches the restart cleanup left open, the ones a queued report is the **only** reason
+ *  for — so the drain can undo that one reason, and nothing else, when it turns out it cannot
+ *  deliver the report after all.
+ *
+ *  **Why this is not just `reportedDispatchIdsOf` again.** `OrchestrationStore.load` leaves a
+ *  Dispatch open for three reasons and a report is only one of them. A session the Host still runs
+ *  is a worker that is demonstrably alive: writing its Dispatch off makes recovery's `isLost` read
+ *  it as lost and start a second agent in the worktree the first one is still in, which is the
+ *  failure the whole Host handshake exists to prevent — and a worker deliberately stays alive after
+ *  reporting, so "alive and reported" is an ordinary state, not a contradiction. `'unknown'` is not
+ *  evidence of anything, so nothing is named for that boot at all.
+ *
+ *  What is left is exactly the set the cleanup would have written off but for the report. Handing
+ *  one of these back is putting the boot where it would have been. */
+export function dispatchesHeldOnlyByReport(a: {
+  dispatches: readonly Dispatch[]
+  reported: ReadonlySet<string>
+  alive: ReadonlySet<string> | 'unknown' | undefined
+}): Set<string> {
+  const out = new Set<string>()
+  if (a.alive === 'unknown') return out
+  for (const d of a.dispatches) {
+    if (d.endedAt) continue
+    if (!a.reported.has(d.id)) continue
+    if (a.alive?.has(d.sessionId)) continue
+    out.add(d.id)
   }
   return out
 }

@@ -110,20 +110,43 @@ export async function readPendingReports(a: {
  *  **After `MAX_APPLY_ATTEMPTS` it is set aside.** Kept indefinitely, a report that throws every
  *  time is the one shape in this design with no way back: `reportedDispatchIdsOf` holds its
  *  Dispatch open at every start, so the Task never moves and recovery is never allowed to look at
- *  it, and there is no counter and no screen to see it on. Setting it aside ends that — the next
- *  start's cleanup closes the Dispatch and the reconciler is free to act — while the report itself
- *  stays on disk, and the log says loudly what was given up on.
+ *  it, and there is no counter and no screen to see it on. Setting it aside ends that — the report
+ *  itself stays on disk, and the log says loudly what was given up on.
+ *
+ *  **Both of those endings leave a Dispatch nothing speaks for, so both call `writeOff`.** The
+ *  restart cleanup left that Dispatch open on the strength of this report (`reportedDispatchIds` in
+ *  OrchestrationStore.load); once the report is refused or given up on, no report does, and the
+ *  Dispatch's Task is one `candidates` in main/recovery/reconciler.ts will not look at. Waiting for
+ *  the next start's cleanup to close it costs a whole app session in the refusal case and one more
+ *  start in the give-up case, for a Dispatch this boot already knows is finished with.
  *
  *  One report failing never stops the ones behind it: they are separate workers on separate Tasks. */
 export async function applyPendingReports(a: {
   queued: readonly QueuedReport[]
   apply(r: PendingReport): Promise<{ ok: boolean; detail: string }>
+  /** Close the Dispatch this report was the only thing holding open, if it still is one — the
+   *  wiring decides that (`dispatchesHeldOnlyByReport`) and writes the state; a Dispatch whose
+   *  session the Host still runs is never one of them.
+   *
+   *  **Not called for an applied report, nor for one that will be tried again.** Applying it closed
+   *  the Dispatch through the ordinary path, and a report that is still on disk still speaks for
+   *  its Dispatch at the next start.
+   *
+   *  A throw from here is logged and swallowed, like every other failure in this loop: a state
+   *  write that could not land leaves the Dispatch where it already was, which is one start behind,
+   *  and must not cost the reports queued after it. */
+  writeOff(r: PendingReport): Promise<void>
   log(m: string): void
 }): Promise<{ applied: number; rejected: number; kept: number; gaveUp: number }> {
   let applied = 0
   let rejected = 0
   let kept = 0
   let gaveUp = 0
+  const writeOff = async (report: PendingReport, where: string): Promise<void> => {
+    await a.writeOff(report).catch((err) => {
+      a.log(`pending reports: could not write off the Dispatch of ${where}: ${String(err)}`)
+    })
+  }
   for (const { file, report } of a.queued) {
     const where = `task=${String(report.args.taskId)} dispatch=${String(report.args.dispatchId)}`
     try {
@@ -139,6 +162,7 @@ export async function applyPendingReports(a: {
           `pending reports: the app refused ${String(report.args.type)} ${where} — ${r.detail}. ` +
             `The report said: ${JSON.stringify(report.args)}`
         )
+        await writeOff(report, where)
       }
       await fs.rm(file, { force: true }).catch(() => {})
     } catch (e) {
@@ -159,9 +183,10 @@ export async function applyPendingReports(a: {
         // move rather than before means the line cannot point at a name that was never written.
         a.log(
           `pending reports: giving up on ${where} after ${attempts} attempt(s) — the file is set ` +
-            `aside${kept ? ` as ${kept}` : ''} and its Dispatch will be left to recovery at the ` +
-            `next start. Last failure: ${String(e)}. The report said: ${JSON.stringify(report.args)}`
+            `aside${kept ? ` as ${kept}` : ''} and its Dispatch is left to recovery. Last failure: ` +
+            `${String(e)}. The report said: ${JSON.stringify(report.args)}`
         )
+        await writeOff(report, where)
       } else {
         kept++
         a.log(

@@ -10,6 +10,7 @@ import {
   serializePendingReport,
   parsePendingReport,
   reportedDispatchIdsOf,
+  dispatchesHeldOnlyByReport,
   undeliveredReportNotice,
   type PendingReport
 } from './pendingReports'
@@ -147,6 +148,65 @@ describe('serializePendingReport / parsePendingReport', () => {
   })
   it('is null for a command that would not have been queued in the first place', () => {
     expect(parsePendingReport(JSON.stringify(entry({ cmd: 'ask' })))).toBeNull()
+  })
+})
+
+// The drain has to be able to undo exactly one of the restart cleanup's three reasons for leaving a
+// Dispatch open, and only that one: a Dispatch whose session the Host still runs must stay open
+// whatever becomes of the report, because writing it off puts a second agent in a live worktree.
+describe('dispatchesHeldOnlyByReport', () => {
+  const dsp = (over: Record<string, unknown> = {}): never =>
+    ({ id: 'dsp_1', sessionId: 'sess_1', ...over }) as never
+
+  it('names a Dispatch the queued report is the only thing holding open', () => {
+    expect(
+      dispatchesHeldOnlyByReport({
+        dispatches: [dsp()],
+        reported: new Set(['dsp_1']),
+        alive: new Set<string>()
+      })
+    ).toEqual(new Set(['dsp_1']))
+  })
+
+  it('leaves out one whose session the Host still runs', () => {
+    expect(
+      dispatchesHeldOnlyByReport({
+        dispatches: [dsp()],
+        reported: new Set(['dsp_1']),
+        alive: new Set(['sess_1'])
+      })
+    ).toEqual(new Set())
+  })
+
+  it('names nothing at all when the Host could not be asked', () => {
+    expect(
+      dispatchesHeldOnlyByReport({
+        dispatches: [dsp()],
+        reported: new Set(['dsp_1']),
+        alive: 'unknown'
+      })
+    ).toEqual(new Set())
+  })
+
+  // No Host to survive in is the case the queue exists for, so an absent answer is not 'unknown'.
+  it('names it when there was no Host to survive in', () => {
+    expect(
+      dispatchesHeldOnlyByReport({
+        dispatches: [dsp()],
+        reported: new Set(['dsp_1']),
+        alive: undefined
+      })
+    ).toEqual(new Set(['dsp_1']))
+  })
+
+  it('leaves out one that is already closed, and one no report speaks for', () => {
+    expect(
+      dispatchesHeldOnlyByReport({
+        dispatches: [dsp({ endedAt: '2026-09-10T02:00:00.000Z' }), dsp({ id: 'dsp_2' })],
+        reported: new Set(['dsp_1', 'dsp_2', 'dsp_3']),
+        alive: undefined
+      })
+    ).toEqual(new Set(['dsp_2']))
   })
 })
 

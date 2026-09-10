@@ -58,6 +58,7 @@ import {
 import { applyPendingReports, readPendingReports } from './orchestration/pendingDrain'
 import {
   PENDING_REPORTS_DIR,
+  dispatchesHeldOnlyByReport,
   reportedDispatchIdsOf
 } from '../core/orchestration/pendingReports'
 import { OrchRollTap } from './orchestration/rollTap'
@@ -67,7 +68,8 @@ import {
   bindNativeSession,
   blockForValidation,
   blockForReview,
-  openReviewDispatch
+  openReviewDispatch,
+  writeOffDispatch
 } from '../core/orchestration/state'
 import { pickReviewer } from '../core/orchestration/reviewer'
 import { slotsToFill, tasksMissingAccounts } from '../core/orchestration/schedule'
@@ -1594,12 +1596,19 @@ export function registerIpc(
     // explaining why — and this is the only one of the three that is about to change the Task a
     // moment later. Counted against the loaded state rather than off the queue, so it says how
     // many Dispatches were really held rather than how many files were found.
-    const heldByReport = store
-      .get()
-      .dispatches.filter((d) => !d.endedAt && reportedDispatchIds.has(d.id)).length
-    if (heldByReport > 0)
+    //
+    // **The same set the drain hands back if it cannot deliver**, which is why it is
+    // `dispatchesHeldOnlyByReport` and not the queue's own `reportedDispatchIds`: a Dispatch whose
+    // session the Host still runs was staying open regardless, and saying the report held it would
+    // be claiming the drain can close it. It cannot, and must not.
+    const heldOnlyByReport = dispatchesHeldOnlyByReport({
+      dispatches: store.get().dispatches,
+      reported: reportedDispatchIds,
+      alive: aliveSessionIds
+    })
+    if (heldOnlyByReport.size > 0)
       orchLog(
-        `restart cleanup — ${heldByReport} open dispatch(es) were left open because an undelivered report speaks for them; the drain below says what became of each`
+        `restart cleanup — ${heldOnlyByReport.size} open dispatch(es) were left open because an undelivered report speaks for them; the drain below says what became of each`
       )
     if (loaded.stuckInterruptions > 0)
       orchLog(
@@ -3422,6 +3431,32 @@ export function registerIpc(
             ok: reply.status >= 200 && reply.status < 300,
             detail: `${reply.status} ${JSON.stringify(reply.body)}`
           }
+        },
+        // The other half of `heldOnlyByReport` above: a Dispatch the restart cleanup left open only
+        // because this report spoke for it, and the report has just turned out to be undeliverable.
+        // Closing it here is putting the boot where it would have been had the report never been
+        // queued — and it has to be *here*, because the recovery sweep that can then take the Task
+        // runs a few lines below and `candidates` skips a Task with any open Dispatch.
+        //
+        // **The set is the boot's, not a fresh read.** It was computed against the state the
+        // cleanup produced, so it holds the cleanup's own three reasons; asking again now would
+        // catch Dispatches that earlier reports in this very drain opened.
+        writeOff: async (r) => {
+          const dispatchId = String(r.args.dispatchId)
+          if (!heldOnlyByReport.has(dispatchId)) return
+          const res = writeOffDispatch(
+            deps.getState(),
+            { dispatchId },
+            new Date().toISOString()
+          )
+          if (!res.closed) return
+          await deps.setState(res.state)
+          orchLog(
+            `pending reports — dispatch=${dispatchId} is written off: it was left open only for a report that could not be applied, and recovery can take its Task at this start` +
+              (res.interrupted === 'validation' ? '. Its Task was validating and is now gated' : '') +
+              (res.interrupted === 'review' ? '. Its Task was reviewing and is now gated' : '') +
+              (res.stuck ? '. Its Task could not be interrupted and was left as it was' : '')
+          )
         },
         log: orchLog
       })
