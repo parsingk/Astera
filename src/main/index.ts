@@ -763,7 +763,10 @@ app.whenReady().then(async () => {
           codexRollout.unregister(p.oldSessionId)
           codexRollout.register(p.info, p.dest)
         } else if (channel === 'session:rollState') {
-          // codex rolling sends session:rollState too (switching/waiting/none) — suppress the resume window
+          // codex rolling sends session:rollState too (switching/waiting/adopted/none) — suppress the
+          // resume window. 'adopted' is not one of the states that suppresses: it says a chain taken
+          // back from the Host cannot judge its own limit, which is not a resume window, and the
+          // switch in handleRollState leaves it to the default on purpose.
           scheduler.handleRollState(payload as RollStateEvent)
         }
       } catch {

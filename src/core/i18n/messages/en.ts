@@ -233,6 +233,8 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.info.cliNotDetected': 'Not detected',
   'settings.info.host': 'Background host',
   'settings.info.hostConnected': 'Connected · protocol {protocol} · up {uptime}',
+  'settings.info.hostHolding':
+    'holding {sessions} session(s), {terminals} terminal(s), {runs} run(s)',
   'settings.info.hostNotConnected': 'Not connected',
   'settings.info.hostNotConnectedWhy': 'Not connected · {detail}',
   'settings.slack.save': 'Save',
@@ -331,6 +333,10 @@ export const en: Record<keyof typeof ko, string> = {
   'update.toast.installNow': 'Install now',
   'update.confirm.title': 'Install and restart now',
   'update.confirm.body': '{count} running session(s) will be terminated. Continue?',
+  'update.confirm.bodyKept':
+    '{count} running session(s) keep running while Astera restarts. Whether the new version takes them back depends on the update, so they may not come back. Continue?',
+  'update.confirm.bodyMixed':
+    '{ended} running session(s) will be terminated. The other {kept} keep running while Astera restarts, and whether the new version takes them back depends on the update. Continue?',
   'update.gate.title': 'Update required',
   'update.gate.body': 'Please update to version {version}',
   'update.gate.bodyNoVersion': 'Please update to continue',
@@ -624,6 +630,8 @@ export const en: Record<keyof typeof ko, string> = {
   'session.terminal.trustAccepting': 'Automatically accepting folder trust…',
   'session.terminal.weeklyLimitWaiting': 'Weekly limit reached — resuming automatically at {time}',
   'session.terminal.limitWaiting': 'Limit reached — resuming automatically at {time}',
+  'session.terminal.rollAdopted':
+    'Taken back after a restart — the limit on this account is unknown, so it will not switch until Codex reports usage again',
   'session.toast.stalled':
     'Session “{title}” is stuck — automatic resume failed, it needs a look',
   'session.terminal.loadingContent': 'Loading content…',

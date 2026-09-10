@@ -21,7 +21,7 @@ import { reattachSessions, type ReattachResult } from './host/reattach'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
+import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
@@ -365,6 +365,39 @@ export function hostHandshakeMeans(held: string | null, answered: string): 'firs
   return held === answered ? 'same-host' : 'other-host'
 }
 
+/** What the Info tab's Host row reports the Host is holding, read off a `pty-listed` reply. Hoisted
+ *  out of the ipc handler for the usual reason in this file: the handler is an electron-only closure
+ *  no test can reach.
+ *
+ *  **Runs are counted, on the same footing as the other two.** What decides it is not what a run is
+ *  but what happens to one when the app quits, and `RunManager.stopAppOwned` skips every pty that
+ *  outlives the app — so a Host-held run keeps running just as a session does. Leaving it out let
+ *  the row tell someone whose held work is a long build or a dev server that nothing of theirs was
+ *  protected, which is the one wrong answer this row must not give.
+ *
+ *  Two things are still not counted:
+ *
+ *  - **An exited pty.** The Host keeps one for its replay buffer, so it is in the list, but nothing
+ *    about it survives closing the app — which is the only question this row answers.
+ *  - **A pty with no note.** The reattach sweep kills that one rather than leave it ownerless, so
+ *    counting it would report as held something the app is about to end.
+ *
+ *  Zero is a real answer, and the one a Host that has just started gives. It is only ever reached
+ *  from entries the Host actually sent: a Host that has not answered is reported as nothing at all
+ *  by the caller, never as this. */
+export function hostHoldings(entries: PtyEntry[]): HostHoldings {
+  let sessions = 0
+  let terminals = 0
+  let runs = 0
+  for (const e of entries) {
+    if (!e.alive || !e.meta) continue
+    if (e.meta.kind === 'session') sessions += 1
+    else if (e.meta.kind === 'terminal') terminals += 1
+    else if (e.meta.kind === 'run') runs += 1
+  }
+  return { sessions, terminals, runs }
+}
+
 /**
  * The schedule a session taken back from the Host should be re-armed with, or null when there is
  * none to find. `spawnSession` registers one right after `core.sessions.spawn`; nothing did it for an
@@ -658,6 +691,15 @@ export function registerIpc(
   /** Astera Host slice 1: the channel exists, and nothing depends on it yet. Built at startup so
    *  slices 2 and 3 inherit an open line rather than one they have to reach for (design §7). */
   let hostClient: HostClient | null = null
+  /** One `pty-list` round trip, or null before the Host wiring has built one. `startHostClient`
+   *  assigns it; the `host.holdings` handler is the only caller, and it is registered outside that
+   *  function, which is why this is here rather than a local.
+   *
+   *  **Not routed through the sweep queue.** A sweep can be waiting out its own five seconds, and a
+   *  Settings row must not queue behind that; this asks its own question and reads its own reply.
+   *  Two concurrent `pty-list` calls are safe — each resolves on the first `pty-listed` it sees, and
+   *  both are the same Host describing the same registry a moment apart. */
+  let hostPtyList: (() => Promise<PtyEntry[] | null>) | null = null
   /** Settles `hostSessionsTakenBack`. `startHostClient` owns it and must call it on **every** path it
    *  can leave by, including the one where there is no Host at all — a path that returns without
    *  calling it leaves `bootOrch` waiting forever. The initialiser is never the function that runs:
@@ -5145,6 +5187,9 @@ export function registerIpc(
         // heard — and answered `null`, because a Host that was there a moment ago still has its ptys.
         if (!t.send({ t: 'pty-list' })) done(null)
       })
+    // The one message that already asks the Host what it holds, handed to the `host.holdings` IPC so
+    // the Info tab's row does not invent a second way to ask the same question.
+    hostPtyList = () => listPtys(transport)
 
     /** One sweep: ask the Host what it is holding, hand each entry to the manager its note names,
      *  and report what that answer is worth to the restart cleanup. Run at startup, and again on a
@@ -5307,12 +5352,27 @@ export function registerIpc(
           // Runs need no created-event of their own: RunManager.adopt's track() already fires
           // onStatus for every adopt the same as it does for a fresh start, and core.run.onStatus is
           // wired to send('run:status', ...) — the renderer's upsertRun adds a runId it has not seen
-          // the same way it applies any other update. Terminals have no such push at all — a project
-          // panel already open when one is adopted will not show it until terminal.list(projectPath)
-          // is queried again (reopening the panel, or reloading the project); nothing here invents
-          // one, since none of terminal.open's own callers get one either.
+          // the same way it applies any other update.
           run: (a) => core.run.adopt(a) !== null,
-          terminal: (a) => core.terminal.adopt(a) !== null
+          // Terminals had no such push, so a project panel already open when one was adopted showed
+          // nothing until terminal.list(projectPath) was queried again — reopening the panel, or
+          // reloading the project. 'terminal:created' is the terminal's 'session:created', and this
+          // is the only site that emits it: both sweeps (startup and reconnect) come through here.
+          //
+          // **Emitted before reattach sends pty-attach**, which is what makes the tab's replay work:
+          // the Host answers that attach with its ring buffer as ordinary terminal:data, and this
+          // event has already put the tab on screen and its listener on the channel by the time that
+          // round trip comes back.
+          terminal: (a) => {
+            const info = core.terminal.adopt(a)
+            if (!info) return false
+            try {
+              send('terminal:created', info)
+            } catch (err) {
+              hostLog(`host: terminal:created emit failed terminal=${info.id}: ${String(err)}`)
+            }
+            return true
+          }
         },
         log: (m) => hostLog(`host: ${m}`)
       })
@@ -5447,6 +5507,21 @@ export function registerIpc(
   // it. `SessionManager` counts the ptys the router marked, which is the same fact `will-quit` acts
   // on.
   ipcMain.handle('host.sessionsOutlivingApp', () => core.sessions.runningOutlivingApp().length)
+  // What the Host is holding, for the Info tab's Host row — the connection facts on their own say
+  // nothing about whether a person's work survives closing the app.
+  //
+  // **Null when the Host did not say, never zeros.** `listPtys` already draws that distinction for
+  // the restart cleanup and for the same reason: `[]` is the Host reporting an empty registry and
+  // null is no answer at all, and a row that printed "0 sessions" while a Host was busy holding
+  // twelve would be telling a person their work is about to be lost. Before the Host wiring has run
+  // (no out/main/host.js) `hostPtyList` is null and so is the answer.
+  //
+  // It never rejects: `listPtys` resolves null on a failed send and on its own timeout, and nothing
+  // else here can throw.
+  ipcMain.handle('host.holdings', async () => {
+    const entries = await hostPtyList?.()
+    return entries ? hostHoldings(entries) : null
+  })
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is

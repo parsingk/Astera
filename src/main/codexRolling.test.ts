@@ -1445,6 +1445,48 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  // The log line above is the whole record of that choice, and nobody opens rolling.log until
+  // something has already gone wrong. A session that was blocked when the app went down comes back
+  // and simply stops, with nothing on screen. So the same fact is published as a banner state.
+  //
+  // **Its own state, not 'waiting'.** 'waiting' means a retry is armed and carries the time it fires
+  // at; an adopted chain has neither, so the banner would print an empty or invented time under a
+  // sentence promising the session resumes by itself. This state promises nothing and says only what
+  // is true: the chain cannot tell whether the account is already blocked, so it will not roll until
+  // codex writes its next record.
+  it('publishes an adopted state so a chain that may already be blocked is not silent', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-adopted', cwd: h.info1.cwd })
+    h.coord.register(h.info1, file, false, false, 'cx-adopted')
+    expect(h.sent).toEqual([
+      { channel: 'session:rollState', payload: { sessionId: 's1', state: 'adopted' } }
+    ])
+    h.coord.stop()
+  })
+
+  // What the banner says it is waiting for is the next rate_limits record, so that record is what
+  // takes it down: from then on the chain judges limits from its own snapshot like any other, and
+  // leaving the banner up would be telling the person about a doubt that has been resolved.
+  it('clears the adopted state once the session writes a rate_limits record of its own', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-adopted', cwd: h.info1.cwd })
+    h.coord.register(h.info1, file, false, false, 'cx-adopted')
+    await advance(100)
+    await appendTokenCount(file, { primary: 10 })
+    await advance(20_000) // the 15s tick reads the tail
+    expect(h.sent.map((s) => s.payload.state)).toEqual(['adopted', 'none'])
+    h.coord.stop()
+  })
+
+  // A resume reads the block on record, so there is no doubt to report and no banner to show.
+  it('publishes no adopted state for a resume, which does read the block on record', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-resume', cwd: h.info1.cwd })
+    h.coord.register({ ...h.info1, resumeSessionId: 'cx-resume' }, file, true)
+    expect(h.sent).toEqual([])
+    h.coord.stop()
+  })
+
   // A resume does ask (when the account matches), so it must not carry the adopted line.
   it('does not say it for a resume, which does read the block on record', async () => {
     const logs: string[] = []

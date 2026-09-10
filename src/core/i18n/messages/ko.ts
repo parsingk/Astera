@@ -259,6 +259,18 @@ export const ko = {
   'settings.info.cliNotDetected': '감지 안 됨',
   'settings.info.host': '백그라운드 호스트',
   'settings.info.hostConnected': '연결됨 · 규약 {protocol} · {uptime} 전부터',
+  // Appended to hostConnected, and **only after the Host answers what it holds** — until then the
+  // row is the connection facts alone. This row exists to answer "does my work survive if I close
+  // this?", so it names all three kinds the Host can be holding: a run's pty outlives the app just
+  // as a session's and a terminal's do (`RunManager.stopAppOwned`), and a row that left runs out
+  // told someone whose work is a long build that none of it was protected.
+  //
+  // The three figures are separated by commas, not the ' · ' the connected row joins its own parts
+  // with: nested inside that row, the same separator made one clause read as three.
+  //
+  // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
+  // still want real translations.
+  'settings.info.hostHolding': '세션 {sessions}개, 터미널 {terminals}개, 실행 {runs}개 유지 중',
   'settings.info.hostNotConnected': '연결 안 됨',
   'settings.info.hostNotConnectedWhy': '연결 안 됨 · {detail}',
   'settings.slack.save': '저장',
@@ -363,8 +375,23 @@ export const ko = {
   'update.toast.download': '다운로드',
   'update.toast.ready': '업데이트 v{version} 준비됨',
   'update.toast.installNow': '지금 설치',
+  // Slice 2 of the Astera Host. Installing quits the app, so this is the same three-way split the
+  // close confirmation faces, counted the same way (host.sessionsOutlivingApp) and shared with it —
+  // see `updateConfirmBody`. `body` is unchanged and still exact when the app owns every session.
+  //
+  // The two new rows stop short of the close confirmation's promise on purpose: a Host on an older
+  // protocol is retired by the app that finds it, and **only the incoming version knows whether its
+  // protocol moved**. So they say what is knowable — these sessions outlive the quit — and leave the
+  // rest to the update rather than promising a return this app cannot vouch for.
+  //
+  // es/ja have no row of their own for the two new keys and reach their English through the fallback
+  // (see `t`), the same as common.quitConfirm.bodyMixed; they still want real translations.
   'update.confirm.title': '지금 설치하고 재시작',
   'update.confirm.body': '진행 중인 세션 {count}개가 종료됩니다. 계속할까요?',
+  'update.confirm.bodyKept':
+    '진행 중인 세션 {count}개는 Astera가 재시작하는 동안에도 계속 실행됩니다. 새 버전이 이어받을지는 업데이트에 따라 다르므로 돌아오지 않을 수도 있습니다. 계속할까요?',
+  'update.confirm.bodyMixed':
+    '진행 중인 세션 중 {ended}개는 종료됩니다. 나머지 {kept}개는 재시작하는 동안에도 계속 실행되지만, 새 버전이 이어받을지는 업데이트에 따라 다릅니다. 계속할까요?',
   // UpdateGate.tsx — the screen that covers the app when the version is below the minimum the release policy sets
   'update.gate.title': '업데이트가 필요합니다',
   'update.gate.body': '{version} 버전으로 업데이트를 진행해주세요',
@@ -698,6 +725,16 @@ export const ko = {
   'session.terminal.trustAccepting': '폴더 신뢰 자동 수락 중…',
   'session.terminal.weeklyLimitWaiting': '주간 한도 소진 — {time} 자동 재개',
   'session.terminal.limitWaiting': '한도 도달 — {time} 자동 재개',
+  // Slice 2 of the Astera Host: a codex rolling chain the app took back from the Host. It is
+  // deliberately not asked whether the account was already blocked (CodexRollingCoordinator.register
+  // says why), so if it came back blocked it stops until codex writes its next record — which used
+  // to be visible only in rolling.log. **No time is named**, unlike the two rows above: nothing is
+  // scheduled, and there is nothing to name.
+  //
+  // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
+  // still want real translations.
+  'session.terminal.rollAdopted':
+    '재시작 후 이어받아 이 계정의 한도 상태를 모릅니다. Codex가 사용량을 다시 기록하면 그때 계정을 전환합니다',
   // Auto-resume failure toast. See the App.tsx comment for why it is a toast and not a banner —
   // for a rolling session with Slack off, this is the only path that calls a human.
   'session.toast.stalled': "'{title}' 세션이 멈춰 있습니다 — 자동 재개 실패, 확인이 필요합니다",

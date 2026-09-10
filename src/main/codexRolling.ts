@@ -160,6 +160,12 @@ interface Chain {
    *  and "there was never a question" both leave priorReset undefined, and the first is the line the
    *  incident log of 2026-08-27 was full of, indistinguishable from an ordinary missing snapshot (why). */
   priorAsked: boolean
+  /** Whether this chain was adopted from the Host and therefore never asked the file what block the
+   *  conversation was already under — the state behind the 'adopted' banner. It is exactly the window
+   *  in which a chain that came back blocked cannot roll, and it closes on the first rate_limits
+   *  record this session writes for itself, which is the same moment `state` stops being null and the
+   *  ordinary verdicts take over. */
+  adoptedUnjudged: boolean
   scanner: CodexLimitScanner // detects the limit phrase in PTY output (corrects for chunk boundaries)
   modelChoice: CodexModelChoiceScanner // detects codex's approaching-limit model-switch prompt in the same stream
   textHit: boolean // whether the limit phrase was seen in this window — read only by judgedByPriorBlock and the ignored-phrase log now that the phrase-only verdict is retired
@@ -287,6 +293,7 @@ export class CodexRollingCoordinator {
       state: null,
       priorReset: undefined,
       priorAsked: false,
+      adoptedUnjudged: false,
       scanner: new CodexLimitScanner(),
       modelChoice: new CodexModelChoiceScanner(),
       textHit: false,
@@ -358,12 +365,21 @@ export class CodexRollingCoordinator {
       )
       // Said out loud, because what this costs looks from outside like a session that quietly never
       // resumes, and a decision that only exists in a comment is one nobody can find at 3am.
-      if (!locate)
+      //
+      // **And said on screen, not only in the log.** Nobody opens rolling.log until something has
+      // already gone wrong, and the thing that goes wrong here is a session that simply stops. The
+      // banner state is its own ('adopted') rather than a 'waiting': nothing is scheduled and there
+      // is no reset time to name, so 'waiting' would print a sentence about a resume that no timer
+      // is going to perform. `refresh` takes it down on the record it says it is waiting for.
+      if (!locate) {
         this.deps.log(
           `codex chain adopted without reading the block on record — if this session was already blocked ` +
             `while the app was away it waits for its next rate_limits record instead of rolling now ` +
             `session=${info.id}`
         )
+        chain.adoptedUnjudged = true
+        this.pushState(chain, 'adopted')
+      }
     } else if (locate) {
       this.startLocate(chain, this.deps.getAccount(ids[this.cycleIndexOf(chain)]))
     } else {
@@ -598,7 +614,19 @@ export class CodexRollingCoordinator {
   private async refresh(chain: Chain): Promise<void> {
     if (!chain.tail) return
     const s = await chain.tail.read()
-    if (s) chain.state = s
+    if (!s) return
+    chain.state = s
+    // The record the 'adopted' banner said it was waiting for has arrived: from here the chain judges
+    // limits from its own snapshot like every other, so the doubt the banner reports is resolved and
+    // leaving it up would be reporting a doubt that no longer exists.
+    //
+    // Safe to publish 'none' from here in all three callers. `evaluate` and the tick are guarded on
+    // the chain being neither rolling nor waiting, so neither has a banner of its own for this to
+    // erase. `forceRoll`, the dev hook, is not guarded — but it calls `onLimit` on the next line, so
+    // whatever banner that raises is published after this one and supersedes it.
+    if (!chain.adoptedUnjudged) return
+    chain.adoptedUnjudged = false
+    this.pushState(chain, 'none')
   }
 
   /** Refreshes the state and applies the verdict `limitReached` sees from the structured signal — or,

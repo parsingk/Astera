@@ -295,7 +295,13 @@ export interface RollStateEvent {
   sessionId: string
   // 'nudged' and 'stalled' are momentary events, not lasting states — the renderer leaves them out
   // of the banner and only Slack is told (see TerminalView.rollBannerVisible)
-  state: 'switching' | 'trust' | 'waiting' | 'nudged' | 'stalled' | 'none'
+  // 'adopted' is a codex rolling chain that came back from the Host and could not be told whether
+  // its account was already at its limit — asking is unsafe (see CodexRollingCoordinator.register),
+  // so it will not roll until codex writes its next rate_limits record. It is a lasting state like
+  // the first three, and it needs to be its own rather than a 'waiting': there is no retry armed and
+  // no time to put in `nextRetryAt`, and a banner promising a resume that nothing has scheduled is
+  // worse than the log line it replaces. Cleared by that next record.
+  state: 'switching' | 'trust' | 'waiting' | 'nudged' | 'stalled' | 'adopted' | 'none'
   accountLabel?: string // the account being switched to, when state='switching'
   // A re-publish of state='switching' (reattaching the banner to the new sessionId after a respawn).
   // It is not a new switch, so the renderer treats it the same but Slack ignores it to avoid a
@@ -592,6 +598,15 @@ export interface CoreEvents {
   'preview:agentEscape': { sessionId: string }
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
+  /** Main took a terminal back from the Host without the renderer asking — the reattach sweep, at
+   *  startup or after a reconnect. The counterpart of 'session:created', and it carries the whole
+   *  TerminalInfo for the same reason: the panel builds the tab from it.
+   *
+   *  It is **not** emitted on the user path (terminal.open), which builds its tab from that call's
+   *  return value — emitting there would place the same terminal twice. The panel drops one whose
+   *  projectPath is not the project it is showing; those stay alive in main, unshown, exactly as the
+   *  list query already leaves them (see `terminalsWithCreated`). */
+  'terminal:created': TerminalInfo
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to
   // send whole (one project's Runs and Tasks) and it removes any question of the renderer's copy
   // drifting from main's. Which project it is folded for is the last one orch.list asked about, after
@@ -631,6 +646,24 @@ export interface HostStatus {
   pid: number | null
   /** One clause saying why there is no connection, or null when there is one. */
   problem: string | null
+}
+
+/** How much of this app's work the Host is holding right now — the fact that makes the Info tab's
+ *  Host row mean something, because it answers "will my work survive if I close this?".
+ *
+ *  **All three kinds of pty, and runs are not the afterthought they look like.** `RunManager`'s quit
+ *  teardown (`stopAppOwned`) skips every pty that outlives the app, exactly as the session and
+ *  terminal managers do, so a Host-held run survives the quit too. Leaving it out would tell someone
+ *  whose held work is a long build or a dev server that nothing of theirs is protected. See
+ *  `hostHoldings` for what is still left out and why.
+ *
+ *  Asked separately from `HostStatus` rather than folded into it: the connection facts are known in
+ *  the app the moment they are asked for, while this is a round trip to the Host, and a row that
+ *  waited on the second would be a Settings modal that waits on a process that may be slow or gone. */
+export interface HostHoldings {
+  sessions: number
+  terminals: number
+  runs: number
 }
 
 /** The contract the renderer sees as window.api. The IPC adapter implements it. */
@@ -1262,6 +1295,14 @@ export type RendererApi = CoreApi & {
      *  A count rather than a flag because the two kinds coexist: a session spawned before the Host
      *  answered is this app's own child and ends with it, whatever the Host owns by now. */
     sessionsOutlivingApp(): Promise<number>
+    /** What the Host says it is holding, or **null when it did not say** — there is no Host, the
+     *  connection is down, or it did not answer in time. Null and `{ sessions: 0, terminals: 0 }` are
+     *  opposite answers and the caller must not merge them: zero is the Host telling you nothing of
+     *  yours would survive, and null is nobody telling you anything.
+     *
+     *  Never rejects, and never blocks the caller for longer than the one round trip's own deadline.
+     *  The Info tab reads it beside `status()` and draws the row without waiting for it. */
+    holdings(): Promise<HostHoldings | null>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, CliStatus, HistoryEntry, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
+import type { Account, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -75,7 +75,8 @@ import * as sticky from './lib/stickyProject'
 import { dismiss, toast } from './lib/toast'
 import { spawnNotice } from './lib/spawnNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
-import { quitConfirmBody } from './lib/quitConfirm'
+import { quitConfirmBody, updateConfirmBody } from './lib/quitConfirm'
+import { terminalsWithCreated } from './lib/terminalTabs'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { worktreeErrorMessage } from './lib/worktreeErrors'
 import { notifyCreated as notifyWorktreeCreated } from './lib/worktreeBus'
@@ -172,12 +173,21 @@ const SHORTCUTS: Array<{
   }
 ]
 
-function UpdateIndicator({ update }: { update: UpdateStatus | null }): React.JSX.Element | null {
+function UpdateIndicator({
+  update,
+  onInstall
+}: {
+  update: UpdateStatus | null
+  /** Installing quits the app, so this goes through App's installUpdate rather than calling
+   *  window.api.update.install directly: that is where the person is told what quitting costs their
+   *  running sessions, and every install path has to ask the same question. */
+  onInstall: () => void
+}): React.JSX.Element | null {
   const { t } = useI18n()
   if (!update || update.state === 'init' || update.state === 'uptodate') return null
   if (update.state === 'downloaded')
     return (
-      <button className="tb-update-btn" onClick={() => void window.api.update.install()}>
+      <button className="tb-update-btn" onClick={onInstall}>
         {t('update.tb.restartInstallVersion', { version: update.version ?? '' })}
       </button>
     )
@@ -203,12 +213,15 @@ function Titlebar({
   isMax,
   update,
   runningCount,
+  onInstall,
   runSlot
 }: {
   isMax: boolean
   update: UpdateStatus | null
   /** Only the close button reads it, and only on Linux — see closeWindow below */
   runningCount: number
+  /** Passed straight through to UpdateIndicator's restart button — see the prop there. */
+  onInstall: () => void
   /** 타이틀바 줄에 함께 놓이는 것 — 지금은 실행 구성 툴바다. 프롭 열넷을 내려보내는 대신 슬롯으로
    *  받아, 타이틀바는 무엇이 들어오는지 모른 채 자리만 내준다 */
   runSlot?: React.ReactNode
@@ -249,7 +262,7 @@ function Titlebar({
         <span className="tb-name">Astera</span>
       </div>
       {runSlot}
-      <UpdateIndicator update={update} />
+      <UpdateIndicator update={update} onInstall={onInstall} />
       {!isMac && (
         <div className="tb-controls" onDoubleClick={(e) => e.stopPropagation()}>
           <button
@@ -415,6 +428,12 @@ export default function App(): React.JSX.Element {
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
   const [appVersion, setAppVersion] = useState('')
   const [hostStatus, setHostStatus] = useState<HostStatus | null>(null)
+  /** What the Host says it is holding, or null while it has not said — which is the state this
+   *  starts in every time the modal opens, and the state it stays in when there is no Host, when the
+   *  connection is down, and when the Host is too slow to answer. The row prints the clause only
+   *  once this is filled: zeros would be a claim that nothing of the person's survives closing the
+   *  app, and that is the one wrong answer worth avoiding here. */
+  const [hostHolding, setHostHolding] = useState<HostHoldings | null>(null)
   // The moment the check finished has to be held alongside the state so the "checked at 17:43" line
   // can carry it. Events that are not results (checking, downloading) have no time.
   const [update, setUpdate] = useState<(UpdateStatus & { checkedAt: number | null }) | null>(null)
@@ -679,13 +698,23 @@ export default function App(): React.JSX.Element {
   // The install button on the toast is pressed later — it has to see the real number of running sessions at that moment
   const runningCountRef = useRef(0)
 
-  /** Installs the update right away. The app quits immediately, so it asks first when sessions are still running. */
+  /** Installs the update right away. The app quits immediately, so it asks first when sessions are still running.
+   *
+   *  What quitting costs is counted, not assumed, for the same reason the close button counts it
+   *  (closeWindow above): the Host keeps its own sessions running through the quit, and it takes a
+   *  moment to start, so at boot some of the running sessions are the app's own children and some are
+   *  not. `updateConfirmBody` turns the two counts into the sentence true of both halves — and, unlike
+   *  the close button's, one that stops short of promising the sessions come back, since only the
+   *  version being installed knows whether it retires this Host. Nothing kept, on a failure, is the
+   *  safe reading here too: it promises the person nothing survives. */
   const installUpdate = async (): Promise<void> => {
     const running = runningCountRef.current
     if (running > 0) {
+      const kept = await window.api.host.sessionsOutlivingApp().catch(() => 0)
+      const body = updateConfirmBody(running, kept)
       const ok = await confirmModal({
         title: tRef.current('update.confirm.title'),
-        body: tRef.current('update.confirm.body', { count: running }),
+        body: tRef.current(body.key, body.params),
         confirmLabel: tRef.current('update.toast.installNow')
       })
       if (!ok) return
@@ -902,6 +931,30 @@ export default function App(): React.JSX.Element {
     // Astera Host slice 1: this value goes stale, and the row is only ever on screen while this
     // modal is open, so it is read here rather than at startup.
     void window.api.host.status().then(setHostStatus)
+    // What it is holding is a round trip to the Host, so it is asked beside the status rather than
+    // through it: the status answers from inside this app and must not be made to wait on a process
+    // that can be slow or gone. Cleared first, because a re-open must not show the previous
+    // opening's counts while this answer is in flight. A rejection is impossible on the main side,
+    // and if one ever arrived it means the same thing as no answer.
+    //
+    // **The only fetch here with a cancel token, because it is the only slow one.** This round trip
+    // waits up to five seconds for the Host; close and reopen the modal inside that window and the
+    // first opening's reply lands into the second's row, putting counts from before on screen with
+    // nothing to say they are stale. The same guard, and the same reason, as the terminal list
+    // effect's `cancelled`.
+    setHostHolding(null)
+    let cancelled = false
+    void window.api.host
+      .holdings()
+      .then((h) => {
+        if (!cancelled) setHostHolding(h)
+      })
+      .catch(() => {
+        if (!cancelled) setHostHolding(null)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [showSettings])
 
   // Keyboard session tab switching: a global capture listener, so it works regardless of where focus
@@ -1158,12 +1211,25 @@ export default function App(): React.JSX.Element {
 
   // When a shell dies on its own (the user typed exit) its tab is removed — a dead shell tab is noise.
   // If it was the active tab, we go back to Run (the panel itself stays).
+  // Receives terminals main took back from the Host as tabs, the way session:created is received
+  // above. The user path builds its tab from what terminal.open returned, so only the reattach sweep
+  // sends this; without it a panel that was already open showed nothing until the project was
+  // reopened. The tab is added but not activated, on the same reasoning session:created uses for
+  // background=true: nobody asked for it just now, so it must not take the keys someone is typing.
+  // The root is read through the ref because this is registered once at mount (bottomRootRef, not
+  // currentProjectRef — with no project those two differ, and the panel shows the home root).
   useEffect(() => {
     const off = window.api.on('terminal:exit', ({ id }) => {
       setTerminals((prev) => prev.filter((x) => x.id !== id))
       setBottomTab((cur) => (cur === id ? 'run' : cur))
     })
-    return off
+    const offCreated = window.api.on('terminal:created', (info) => {
+      setTerminals((prev) => terminalsWithCreated(prev, info, bottomRootRef.current))
+    })
+    return () => {
+      off()
+      offCreated()
+    }
   }, [])
 
   /** Places a new session. Which group it goes into is decided by placeTab, a pure function in core
@@ -3221,7 +3287,7 @@ export default function App(): React.JSX.Element {
       <div className="app">
         {/* 0, not runningCount: this screen renders no ConfirmHost, so a close confirmation would
             never be answered and the close button would stop working entirely. */}
-        <Titlebar isMax={isMax} update={update} runningCount={0} />
+        <Titlebar isMax={isMax} update={update} runningCount={0} onInstall={() => void installUpdate()} />
         <div className="cli-missing">
           <h1>No CLI found to run</h1>
           <p>
@@ -3248,6 +3314,7 @@ export default function App(): React.JSX.Element {
         isMax={isMax}
         update={update}
         runningCount={runningCount}
+        onInstall={() => void installUpdate()}
         runSlot={
           currentProject ? (
             // The title bar toggles maximize on a double-click, and that is a React handler, so it
@@ -4044,7 +4111,17 @@ export default function App(): React.JSX.Element {
                           ? t('settings.info.hostConnected', {
                               protocol: hostStatus.protocol ?? 0,
                               uptime: hostUptime(hostStatus.startedAt)
-                            })
+                            }) +
+                            // Appended only once the Host has answered. Until then the row is the
+                            // connection facts alone, which is the whole truth it has: a count here
+                            // before the answer would be an invented one.
+                            (hostHolding
+                              ? ` · ${t('settings.info.hostHolding', {
+                                  sessions: hostHolding.sessions,
+                                  terminals: hostHolding.terminals,
+                                  runs: hostHolding.runs
+                                })}`
+                              : '')
                           : hostStatus?.problem
                             ? t('settings.info.hostNotConnectedWhy', { detail: hostStatus.problem })
                             : t('settings.info.hostNotConnected')}
@@ -4066,8 +4143,11 @@ export default function App(): React.JSX.Element {
                                 newer one appears you have to be able to skip the staged build and go to
                                 that instead. If a re-check finds a newer version, autoDownload replaces
                                 the staged file and this button's version changes with it. */}
+                            {/* Through installUpdate, like every other install path: it quits the
+                                app, so the person is told what that costs their running sessions
+                                first. */}
                             {update?.state === 'downloaded' && (
-                              <button onClick={() => void window.api.update.install()}>
+                              <button onClick={() => void installUpdate()}>
                                 {t('update.info.restartInstallVersion', { version: update.version ?? '' })}
                               </button>
                             )}
