@@ -801,6 +801,113 @@ export function closeDispatch(
   return ok(state, next)
 }
 
+/** An open Dispatch nobody can say anything more about, ended.
+ *
+ *  `outcome` stays absent on purpose: that is what tells recovery's `isLost` this attempt was lost
+ *  rather than reported, and `closedBy` stays absent because no person closed it. The two fields
+ *  travel together, which is why this is a function and not a spread at each call site — the
+ *  restart cleanup (`OrchestrationStore.load`) and the pending-report drain both write it, and a
+ *  second copy is a second thing to remember when either field moves. */
+export const endedUnproven = (d: Dispatch, now: string): Dispatch => ({
+  ...d,
+  endedAt: now,
+  workerState: 'outcome_unknown'
+})
+
+/** What a Task that was mid-validation or mid-review is owed once the thing running it is gone.
+ *
+ *  Both callers reach here from the same fact — the process that was validating or reviewing died
+ *  with the app, and nobody will ever bring its answer back — so the rule lives in one place:
+ *  `OrchestrationStore.load`'s restart cleanup for every such Task at boot, and
+ *  `writeOffDispatch` for the one Task under a Dispatch the pending-report drain had to write off.
+ *
+ *  Three answers, and they are three because the caller has to be able to say which happened.
+ *  `interrupted` names the Gate that was opened; `stuck` is a Task the transition refused, left
+ *  exactly as it was; both null and false is a Task that was owed nothing.
+ *
+ *  Anything else about the Task is left alone, `consecutiveFailures` included — a restart is not
+ *  evidence that the work was wrong. */
+export function interruptStalledTask(
+  s: OrchState,
+  a: { taskId: string },
+  now: string
+): { state: OrchState; interrupted: 'validation' | 'review' | null; stuck: boolean } {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return { state: s, interrupted: null, stuck: false }
+  if (task.status !== 'validating' && task.status !== 'reviewing')
+    return { state: s, interrupted: null, stuck: false }
+  // 검토는 질문을 손으로 쓰지 않고 blockForReview 에 맡긴다 — 그 질문에는 "끝난 일을 버리지 않고
+  // 이 Task 를 닫으려면 task-update --status completed" 라는 탈출구가 붙어 있고, reviewing Task
+  // 에는 그것이 꼭 필요하다: 구현이 끝나고 검증까지 통과했을 수 있는 일인데 resolveGate 는 Task 를
+  // pending 으로 돌려보내 그 일을 버린다. 문장을 여기 옮겨 적으면 같은 안내가 두 곳에 생겨
+  // 갈라진다. 검증 쪽 질문은 그대로 둔다.
+  const r =
+    task.status === 'validating'
+      ? createGate(
+          s,
+          { taskId: task.id, question: '앱이 재시작되어 검증이 중단되었습니다. 다시 검증할까요?' },
+          now
+        )
+      : blockForReview(s, { taskId: task.id, reason: '앱이 재시작되어 검토가 중단되었습니다' }, now)
+  // 전이가 막히면 그 Task 는 그대로 둔다 — 잃는 것보다 낫다
+  if (!r.ok) return { state: s, interrupted: null, stuck: true }
+  return {
+    state: r.state,
+    interrupted: task.status === 'validating' ? 'validation' : 'review',
+    stuck: false
+  }
+}
+
+/** The restart cleanup's whole rule, applied to one Dispatch.
+ *
+ *  **The caller must already have decided this Dispatch may be written off, and this function
+ *  cannot check that for it.** It knows nothing about the Host, so it will end a Dispatch whose
+ *  session is still running there — and a Dispatch ended with no outcome is what recovery's
+ *  `isLost` reads as a lost worker, which starts a second agent in the worktree the first one is
+ *  still in. That is the failure the Host handshake exists to prevent, and it is reachable from
+ *  here in one line. The only caller today is the pending-report drain's wiring, which passes ids
+ *  from `dispatchesHeldOnlyByReport` (core/orchestration/pendingReports.ts) — that function holds
+ *  the evidence rule, and a second caller needs one at least as strong before it may call this.
+ *
+ *  A parameter cannot carry that: the mistake worth preventing is not "called without filtering"
+ *  but "filtered on evidence that does not rule out a live session", and no signature can tell one
+ *  set of ids from another. Naming the requirement is the honest guard.
+ *
+ *  **Why one Dispatch has its own entry point.** The pending-report drain ends up holding a
+ *  Dispatch that the boot cleanup left open only because a queued report spoke for it, and then
+ *  finds it cannot apply that report — the app refuses it, or applying it throws until the drain
+ *  gives up. Nothing speaks for the Dispatch after that, and leaving it open costs the Task a whole
+ *  start: `candidates` in main/recovery/reconciler.ts skips a Task with any open Dispatch, so
+ *  recovery cannot take it until the next boot's cleanup writes it off. Closing it here lets the
+ *  same boot's recovery sweep, which runs after the drain, do that work now.
+ *
+ *  **It is the cleanup's rule and not a second one.** `endedUnproven` and `interruptStalledTask`
+ *  are the same two pieces `OrchestrationStore.load` uses, in the same order — the Dispatch first,
+ *  because `createGate` refuses to gate a Task with an open Dispatch.
+ *
+ *  `closed` is false, with the state untouched, for a Dispatch that is already ended or not there:
+ *  an earlier report in the same drain may have closed it, and a hand-written report may name a
+ *  Dispatch that never existed. */
+export function writeOffDispatch(
+  s: OrchState,
+  a: { dispatchId: string },
+  now: string
+): {
+  state: OrchState
+  closed: boolean
+  interrupted: 'validation' | 'review' | null
+  stuck: boolean
+} {
+  const dispatch = s.dispatches.find((d) => d.id === a.dispatchId && !d.endedAt)
+  if (!dispatch) return { state: s, closed: false, interrupted: null, stuck: false }
+  const ended: OrchState = {
+    ...s,
+    dispatches: replace(s.dispatches, endedUnproven(dispatch, now))
+  }
+  const r = interruptStalledTask(ended, { taskId: dispatch.taskId }, now)
+  return { state: r.state, closed: true, interrupted: r.interrupted, stuck: r.stuck }
+}
+
 /** 롤링이 세션을 갈아탈 때 열린 Dispatch 를 새 세션 id·계정으로 옮긴다.
  *
  *  **왜 필요한가.** `Dispatch.sessionId` 는 worker_done 을 되돌려 묶는 **유일한** 키다 —

@@ -7,11 +7,17 @@ import {
   pendingReportFileName,
   pendingReportTempName,
   parsePendingReport,
+  WORKING_FILE_TTL_MS,
   serializePendingReport,
   type PendingReport
 } from '../../core/orchestration/pendingReports'
 import { OrchestrationStore } from './store'
-import { applyWorkerDone, emptyState, type OrchState } from '../../core/orchestration/state'
+import {
+  applyWorkerDone,
+  emptyState,
+  writeOffDispatch,
+  type OrchState
+} from '../../core/orchestration/state'
 import { candidates } from '../recovery/reconciler'
 
 let dir: string
@@ -103,6 +109,33 @@ describe('readPendingReports', () => {
     expect(said).toEqual([])
   })
 
+  // The other half of the rename's safety. A process killed between the write and the rename leaves
+  // a working file the reader never picks up: never read, never applied, never counted, and until
+  // now never removed either.
+  it('removes a working file no write could still be in the middle of, and says so', async () => {
+    await queue({ at: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa', dispatchId: 'dsp_1' })
+    const tmp = pendingReportTempName(
+      pendingReportFileName({ queuedAt: '2026-09-10T02:00:00.000Z', nonce: 'bbbbbbbb' })
+    )
+    await fs.writeFile(path.join(dir, tmp), '{half writ', 'utf8')
+    const long_ago = new Date(Date.now() - WORKING_FILE_TTL_MS * 2)
+    await fs.utimes(path.join(dir, tmp), long_ago, long_ago)
+    const said: string[] = []
+    expect(await readPendingReports({ dir, log: (m) => said.push(m) })).toHaveLength(1)
+    expect(await files()).toEqual(['2026-09-10T010000000Z-aaaaaaaa.json'])
+    expect(said.join(' ')).toContain('bbbbbbbb')
+  })
+
+  // Nothing in this folder that is not a file is a report being written, and a rm that would have
+  // to recurse is a rm this has no business doing.
+  it('leaves an old directory under a working name alone', async () => {
+    await fs.mkdir(path.join(dir, 'stale.json.tmp'), { recursive: true })
+    const long_ago = new Date(Date.now() - WORKING_FILE_TTL_MS * 2)
+    await fs.utimes(path.join(dir, 'stale.json.tmp'), long_ago, long_ago)
+    expect(await readPendingReports({ dir, log: () => {} })).toEqual([])
+    expect(await files()).toEqual(['stale.json.tmp'])
+  })
+
   it('ignores anything that is not a report file', async () => {
     await queue({ at: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa', dispatchId: 'dsp_1' })
     await fs.writeFile(path.join(dir, 'notes.txt'), 'hello', 'utf8')
@@ -122,6 +155,7 @@ describe('applyPendingReports', () => {
         seen.push(String(rep.args.dispatchId))
         return { ok: true, detail: 'accepted' }
       },
+      writeOff: async () => {},
       log: () => {}
     })
     expect(seen).toEqual(['dsp_1', 'dsp_2'])
@@ -139,6 +173,7 @@ describe('applyPendingReports', () => {
         rep.args.dispatchId === 'dsp_gone'
           ? { ok: false, detail: 'unknown dispatch: dsp_gone' }
           : { ok: true, detail: 'accepted' },
+      writeOff: async () => {},
       log: (m) => said.push(m)
     })
     expect(r).toEqual({ applied: 1, rejected: 1, kept: 0, gaveUp: 0 })
@@ -157,6 +192,7 @@ describe('applyPendingReports', () => {
         if (rep.args.dispatchId === 'dsp_boom') throw new Error('disk on fire')
         return { ok: true, detail: 'accepted' }
       },
+      writeOff: async () => {},
       log: (m) => said.push(m)
     })
     expect(r).toEqual({ applied: 1, rejected: 0, kept: 1, gaveUp: 0 })
@@ -174,6 +210,7 @@ describe('applyPendingReports', () => {
       apply: async () => {
         throw new Error('disk on fire')
       },
+      writeOff: async () => {},
       log: () => {}
     })
     expect(r.kept).toBe(1)
@@ -199,6 +236,7 @@ describe('applyPendingReports', () => {
         if (rep.args.dispatchId === 'dsp_boom') throw new Error('disk on fire')
         return { ok: true, detail: 'accepted' }
       },
+      writeOff: async () => {},
       log: (m) => said.push(m)
     })
     expect(r).toEqual({ applied: 1, rejected: 0, kept: 0, gaveUp: 1 })
@@ -226,6 +264,7 @@ describe('applyPendingReports', () => {
       apply: async () => {
         throw new Error('disk on fire')
       },
+      writeOff: async () => {},
       log: (m) => said.push(m)
     })
     expect(r.gaveUp).toBe(1)
@@ -233,9 +272,94 @@ describe('applyPendingReports', () => {
     expect(said.join(' ')).toContain('giving up')
   })
 
+  // The Dispatch was left open at boot *because* this report spoke for it. Once the report is gone
+  // nothing does, and an open Dispatch is what candidates() in main/recovery/reconciler.ts skips --
+  // so without this the Task waits for the whole of the next app session.
+  it('writes off the Dispatch of a report the app refused', async () => {
+    await queue({ at: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa', dispatchId: 'dsp_gone' })
+    const off: string[] = []
+    await applyPendingReports({
+      queued: await readPendingReports({ dir, log: () => {} }),
+      apply: async () => ({ ok: false, detail: 'unknown dispatch' }),
+      writeOff: async (rep) => {
+        off.push(String(rep.args.dispatchId))
+      },
+      log: () => {}
+    })
+    expect(off).toEqual(['dsp_gone'])
+  })
+
+  it('writes off the Dispatch of a report it has given up on', async () => {
+    await queue({
+      at: '2026-09-10T01:00:00.000Z',
+      nonce: 'aaaaaaaa',
+      dispatchId: 'dsp_boom',
+      attempts: MAX_APPLY_ATTEMPTS - 1
+    })
+    const off: string[] = []
+    await applyPendingReports({
+      queued: await readPendingReports({ dir, log: () => {} }),
+      apply: async () => {
+        throw new Error('disk on fire')
+      },
+      writeOff: async (rep) => {
+        off.push(String(rep.args.dispatchId))
+      },
+      log: () => {}
+    })
+    expect(off).toEqual(['dsp_boom'])
+  })
+
+  // An applied report closed the Dispatch itself, and a kept one still speaks for it at the next
+  // start -- writing either off would be throwing away the evidence the queue exists to carry.
+  it('leaves the Dispatch of an applied report, and of one it will try again, alone', async () => {
+    await queue({ at: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa', dispatchId: 'dsp_ok' })
+    await queue({ at: '2026-09-10T02:00:00.000Z', nonce: 'bbbbbbbb', dispatchId: 'dsp_boom' })
+    const off: string[] = []
+    await applyPendingReports({
+      queued: await readPendingReports({ dir, log: () => {} }),
+      apply: async (rep) => {
+        if (rep.args.dispatchId === 'dsp_boom') throw new Error('disk on fire')
+        return { ok: true, detail: 'accepted' }
+      },
+      writeOff: async (rep) => {
+        off.push(String(rep.args.dispatchId))
+      },
+      log: () => {}
+    })
+    expect(off).toEqual([])
+  })
+
+  // Nothing in the drain may reach the boot. A state write that fails costs this Dispatch the start
+  // it would have saved -- which is where it was before -- and never the reports behind it.
+  it('carries on when writing the Dispatch off throws', async () => {
+    await queue({ at: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa', dispatchId: 'dsp_gone' })
+    await queue({ at: '2026-09-10T02:00:00.000Z', nonce: 'bbbbbbbb', dispatchId: 'dsp_2' })
+    const said: string[] = []
+    const r = await applyPendingReports({
+      queued: await readPendingReports({ dir, log: () => {} }),
+      apply: async (rep) =>
+        rep.args.dispatchId === 'dsp_gone'
+          ? { ok: false, detail: 'unknown dispatch' }
+          : { ok: true, detail: 'accepted' },
+      writeOff: async () => {
+        throw new Error('disk full')
+      },
+      log: (m) => said.push(m)
+    })
+    expect(r).toEqual({ applied: 1, rejected: 1, kept: 0, gaveUp: 0 })
+    expect(await files()).toEqual([])
+    expect(said.join(' ')).toContain('disk full')
+  })
+
   it('does nothing at all, and says nothing, when the queue is empty', async () => {
     const said: string[] = []
-    const r = await applyPendingReports({ queued: [], apply: async () => ({ ok: true, detail: '' }), log: (m) => said.push(m) })
+    const r = await applyPendingReports({
+      queued: [],
+      apply: async () => ({ ok: true, detail: '' }),
+      writeOff: async () => {},
+      log: (m) => said.push(m)
+    })
     expect(r).toEqual({ applied: 0, rejected: 0, kept: 0, gaveUp: 0 })
     expect(said).toEqual([])
   })
@@ -306,5 +430,29 @@ describe('a report that arrived while the app was away, from the boot the app th
     const after = reportOf(await bootWith(undefined))
     expect(after.tasks[0].status).toBe('dispatched')
     expect(candidates(after).map((c) => c.taskId)).toEqual(['tsk_1'])
+  })
+
+  // The third outcome: the Dispatch was held open for a report the app then would not take. Left
+  // as it was, the Task is invisible to recovery for this whole session -- the boot cleanup that
+  // finally closes it is the *next* one. Writing it off here puts the boot where it would have
+  // been if the report had never been queued, and the recovery sweep runs after the drain.
+  it('is written off by the drain when the app refuses it, and recovery takes the Task at this start', async () => {
+    const held = await bootWith(new Set(['dsp_1']))
+    expect(candidates(held)).toEqual([])
+
+    const off: string[] = []
+    await applyPendingReports({
+      queued: [{ file: path.join(dir, 'x.json'), report: report('dsp_1') }],
+      apply: async () => ({ ok: false, detail: 'unknown dispatch: dsp_1' }),
+      writeOff: async (rep) => {
+        off.push(String(rep.args.dispatchId))
+      },
+      log: () => {}
+    })
+    expect(off).toEqual(['dsp_1'])
+
+    const swept = writeOffDispatch(held, { dispatchId: 'dsp_1' }, '2026-09-10T05:00:00.000Z')
+    expect(swept.closed).toBe(true)
+    expect(candidates(swept.state).map((c) => c.taskId)).toEqual(['tsk_1'])
   })
 })

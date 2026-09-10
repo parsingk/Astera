@@ -7,9 +7,12 @@ import {
   pendingReportsDirFrom,
   pendingReportFileName,
   pendingReportTempName,
+  isAbandonedWorkingFile,
+  WORKING_FILE_TTL_MS,
   serializePendingReport,
   parsePendingReport,
   reportedDispatchIdsOf,
+  dispatchesHeldOnlyByReport,
   undeliveredReportNotice,
   type PendingReport
 } from './pendingReports'
@@ -147,6 +150,115 @@ describe('serializePendingReport / parsePendingReport', () => {
   })
   it('is null for a command that would not have been queued in the first place', () => {
     expect(parsePendingReport(JSON.stringify(entry({ cmd: 'ask' })))).toBeNull()
+  })
+})
+
+// The drain has to be able to undo exactly one of the restart cleanup's three reasons for leaving a
+// Dispatch open, and only that one: a Dispatch whose session the Host still runs must stay open
+// whatever becomes of the report, because writing it off puts a second agent in a live worktree.
+// A working file whose process was killed between the write and the rename is nobody's, and the
+// reader never picks it up -- so it sits in the profile for good. Sweeping it means telling it
+// apart from one a worker is writing at this very moment, which is the case the rename exists for.
+describe('isAbandonedWorkingFile', () => {
+  const NOW = Date.parse('2026-09-10T12:00:00.000Z')
+  const tmp = pendingReportTempName(
+    pendingReportFileName({ queuedAt: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa' })
+  )
+
+  it('keeps a working file a worker could still be writing', () => {
+    expect(isAbandonedWorkingFile({ name: tmp, modifiedAt: NOW - 1000, now: NOW })).toBe(false)
+    expect(
+      isAbandonedWorkingFile({ name: tmp, modifiedAt: NOW - WORKING_FILE_TTL_MS + 1000, now: NOW })
+    ).toBe(false)
+  })
+
+  it('sweeps one no write could still be in the middle of', () => {
+    expect(
+      isAbandonedWorkingFile({ name: tmp, modifiedAt: NOW - WORKING_FILE_TTL_MS, now: NOW })
+    ).toBe(true)
+  })
+
+  // Everything else in this folder is either a report to apply or a file deliberately kept for a
+  // person to look at. Age says nothing about any of them.
+  it('is not about reports, or about the files the drain sets aside', () => {
+    const report = pendingReportFileName({ queuedAt: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa' })
+    const old = { modifiedAt: NOW - WORKING_FILE_TTL_MS * 10, now: NOW }
+    expect(isAbandonedWorkingFile({ name: report, ...old })).toBe(false)
+    expect(isAbandonedWorkingFile({ name: `${report}.unreadable`, ...old })).toBe(false)
+    expect(isAbandonedWorkingFile({ name: `${report}.unapplied`, ...old })).toBe(false)
+    expect(isAbandonedWorkingFile({ name: 'notes.txt', ...old })).toBe(false)
+  })
+
+  // The name this sweeps is the whole of what the two writers produce, not any name ending in
+  // `.tmp`. Something else's scratch file in this folder is not this function's to judge.
+  it('is about the name the writers actually make, not any temporary name', () => {
+    const old = { modifiedAt: NOW - WORKING_FILE_TTL_MS * 10, now: NOW }
+    expect(isAbandonedWorkingFile({ name: 'something-else.tmp', ...old })).toBe(false)
+    expect(isAbandonedWorkingFile({ name: '.tmp', ...old })).toBe(false)
+    expect(isAbandonedWorkingFile({ name: tmp, ...old })).toBe(true)
+  })
+
+  // A file that is not older than the margin because the clock moved is a file this cannot judge,
+  // and a report in flight is the one thing this whole path exists not to lose.
+  it('keeps one whose age it cannot make sense of', () => {
+    expect(isAbandonedWorkingFile({ name: tmp, modifiedAt: NOW + 60_000, now: NOW })).toBe(false)
+    expect(isAbandonedWorkingFile({ name: tmp, modifiedAt: Number.NaN, now: NOW })).toBe(false)
+  })
+})
+
+describe('dispatchesHeldOnlyByReport', () => {
+  const dsp = (over: Record<string, unknown> = {}): never =>
+    ({ id: 'dsp_1', sessionId: 'sess_1', ...over }) as never
+
+  it('names a Dispatch the queued report is the only thing holding open', () => {
+    expect(
+      dispatchesHeldOnlyByReport({
+        dispatches: [dsp()],
+        reported: new Set(['dsp_1']),
+        alive: new Set<string>()
+      })
+    ).toEqual(new Set(['dsp_1']))
+  })
+
+  it('leaves out one whose session the Host still runs', () => {
+    expect(
+      dispatchesHeldOnlyByReport({
+        dispatches: [dsp()],
+        reported: new Set(['dsp_1']),
+        alive: new Set(['sess_1'])
+      })
+    ).toEqual(new Set())
+  })
+
+  it('names nothing at all when the Host could not be asked', () => {
+    expect(
+      dispatchesHeldOnlyByReport({
+        dispatches: [dsp()],
+        reported: new Set(['dsp_1']),
+        alive: 'unknown'
+      })
+    ).toEqual(new Set())
+  })
+
+  // No Host to survive in is the case the queue exists for, so an absent answer is not 'unknown'.
+  it('names it when there was no Host to survive in', () => {
+    expect(
+      dispatchesHeldOnlyByReport({
+        dispatches: [dsp()],
+        reported: new Set(['dsp_1']),
+        alive: undefined
+      })
+    ).toEqual(new Set(['dsp_1']))
+  })
+
+  it('leaves out one that is already closed, and one no report speaks for', () => {
+    expect(
+      dispatchesHeldOnlyByReport({
+        dispatches: [dsp({ endedAt: '2026-09-10T02:00:00.000Z' }), dsp({ id: 'dsp_2' })],
+        reported: new Set(['dsp_1', 'dsp_2', 'dsp_3']),
+        alive: undefined
+      })
+    ).toEqual(new Set(['dsp_2']))
   })
 })
 

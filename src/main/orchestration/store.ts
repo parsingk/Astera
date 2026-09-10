@@ -9,10 +9,10 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
-  blockForReview,
-  createGate,
   deleteRuns,
   emptyState,
+  endedUnproven,
+  interruptStalledTask,
   type OrchState
 } from '../../core/orchestration/state'
 
@@ -185,7 +185,7 @@ export class OrchestrationStore {
       // the `reportedDispatchIds` argument's own note for what closing it here would cost.
       if (reported?.has(d.id)) return d
       unknownOutcomes++
-      return { ...d, endedAt: now, workerState: 'outcome_unknown' as const }
+      return endedUnproven(d, now)
     })
 
     // 같은 이유로 Task 도 정리한다. validating 은 어딘가에서 검증 프로세스가 돌고 있다는 뜻인데,
@@ -211,28 +211,21 @@ export class OrchestrationStore {
     let staleReviews = 0
     let stuckInterruptions = 0
     let withGates: OrchState = { ...st, dispatches }
+    // **What is owed to one such Task lives in `interruptStalledTask`.** The pending-report drain
+    // writes off a Dispatch of its own when it could not deliver the report that was holding it
+    // open, and the Task under it is owed exactly this — the same Gate, with the same question,
+    // and the same silence when the transition refuses. Two copies of that rule would be two
+    // things to change the next time either half moves. What stays here is which Tasks to ask
+    // about and what to count, which is this boot's business and not the rule's.
     for (const t of st.tasks) {
-      if (t.status !== 'validating' && t.status !== 'reviewing') continue
-      // 검토는 질문을 손으로 쓰지 않고 blockForReview 에 맡긴다 — 그 질문에는 "끝난 일을 버리지 않고
-      // 이 Task 를 닫으려면 task-update --status completed" 라는 탈출구가 붙어 있고, reviewing Task
-      // 에는 그것이 꼭 필요하다: 구현이 끝나고 검증까지 통과했을 수 있는 일인데 resolveGate 는 Task 를
-      // pending 으로 돌려보내 그 일을 버린다. 문장을 여기 옮겨 적으면 같은 안내가 두 곳에 생겨
-      // 갈라진다. 검증 쪽 질문은 그대로 둔다.
-      const r =
-        t.status === 'validating'
-          ? createGate(
-              withGates,
-              { taskId: t.id, question: '앱이 재시작되어 검증이 중단되었습니다. 다시 검증할까요?' },
-              now
-            )
-          : blockForReview(withGates, { taskId: t.id, reason: '앱이 재시작되어 검토가 중단되었습니다' }, now)
-      if (!r.ok) {
-        // 전이가 막히면 그 Task 는 그대로 둔다 — 잃는 것보다 낫다
+      const r = interruptStalledTask(withGates, { taskId: t.id }, now)
+      if (r.stuck) {
         stuckInterruptions++
         continue
       }
+      if (!r.interrupted) continue
       withGates = r.state
-      if (t.status === 'validating') staleValidations++
+      if (r.interrupted === 'validation') staleValidations++
       else staleReviews++
     }
 

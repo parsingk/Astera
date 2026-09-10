@@ -29,6 +29,7 @@ import {
   detachCoordinator,
   bindNativeSession,
   beginValidation,
+  writeOffDispatch,
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate } from './types'
@@ -2515,5 +2516,85 @@ describe('a recovery Gate on a dispatched Task', () => {
     const closed = unwrap<unknown>(closeDispatch(s, { sessionId: 'sess-1', exitCode: 1 }, LATER)).state
     const gated = unwrap<Gate>(createGate(closed, { taskId: s.tasks[0].id, question: 'q' }, LATEST))
     expect(gated.state.tasks[0].status).toBe('blocked')
+  })
+})
+
+// The restart cleanup's rule for one Dispatch, so the pending-report drain can apply it to a
+// Dispatch it could not deliver a report to instead of leaving the Task waiting for the next start.
+describe('writeOffDispatch', () => {
+  it('ends an open Dispatch with no outcome to assert', () => {
+    const { s, dispatchId } = seed()
+    const r = writeOffDispatch(s, { dispatchId }, LATER)
+    expect(r.closed).toBe(true)
+    expect(r.state.dispatches[0].endedAt).toBe(LATER)
+    expect(r.state.dispatches[0].workerState).toBe('outcome_unknown')
+    expect(r.state.dispatches[0].outcome).toBeUndefined()
+  })
+
+  // The Task is left exactly as the restart cleanup leaves it: an outcome nobody can prove is not
+  // asserted, and consecutiveFailures is not a place to record that the app went down.
+  it('does not touch a dispatched Task', () => {
+    const { s, dispatchId, taskId } = seed()
+    const r = writeOffDispatch(s, { dispatchId }, LATER)
+    const t = r.state.tasks.find((x) => x.id === taskId)
+    expect(t?.status).toBe('dispatched')
+    expect(t?.consecutiveFailures).toBe(0)
+    expect(r.interrupted).toBeNull()
+    expect(r.stuck).toBe(false)
+  })
+
+  // The whole reason this is one function and not `endedAt = now`: a Task the app was in the middle
+  // of validating owes a Gate, and the restart cleanup is where that rule is written.
+  it('gates a validating Task, the way the restart cleanup does', () => {
+    const { s, dispatchId, taskId } = seed()
+    const validating: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'validating' as const } : t))
+    }
+    const r = writeOffDispatch(validating, { dispatchId }, LATER)
+    expect(r.interrupted).toBe('validation')
+    expect(r.state.tasks[0].status).toBe('blocked')
+    expect(r.state.gates).toHaveLength(1)
+  })
+
+  it('gates a reviewing Task through blockForReview', () => {
+    const { s, dispatchId, taskId } = seed()
+    const reviewing: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'reviewing' as const } : t))
+    }
+    const r = writeOffDispatch(reviewing, { dispatchId }, LATER)
+    expect(r.interrupted).toBe('review')
+    expect(r.state.gates[0].question).toContain('task-update --status completed')
+  })
+
+  // A second open Dispatch on the same Task is what createGate refuses to gate around. Nothing is
+  // lost and nothing is asserted; the caller is told so it can say why the Task did not move.
+  // openDispatch never makes this state -- orchestration.json outlives the process and is hand
+  // edited, which is the same reason candidates() guards a `dispatched` Task with no Dispatch.
+  it('reports a Task it could not interrupt rather than forcing it', () => {
+    const { s, dispatchId, taskId } = seed()
+    const validating: OrchState = {
+      ...s,
+      dispatches: [...s.dispatches, { ...s.dispatches[0], id: 'dsp_second', sessionId: 'sess2' }],
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'validating' as const } : t))
+    }
+    const r = writeOffDispatch(validating, { dispatchId }, EVEN_LATER)
+    expect(r.closed).toBe(true)
+    expect(r.stuck).toBe(true)
+    expect(r.interrupted).toBeNull()
+    expect(r.state.tasks[0].status).toBe('validating')
+    expect(r.state.gates).toHaveLength(0)
+  })
+
+  it('changes nothing for a Dispatch that is already closed, or one it has never heard of', () => {
+    const { s, dispatchId } = seed()
+    const once = writeOffDispatch(s, { dispatchId }, LATER)
+    const twice = writeOffDispatch(once.state, { dispatchId }, LATEST)
+    expect(twice.closed).toBe(false)
+    expect(twice.state).toBe(once.state)
+    const never = writeOffDispatch(s, { dispatchId: 'dsp_nope' }, LATER)
+    expect(never.closed).toBe(false)
+    expect(never.state).toBe(s)
   })
 })

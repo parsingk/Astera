@@ -6,6 +6,7 @@ import type { Account, SessionInfo } from '../core/types'
 import { SlackNotifier, SlackConfigStore, type SlackConfig, type SlackDeps } from './slack'
 import { SlackPostError, type SlackTransport } from './slackTransport'
 import { isSlackReady } from '../core/slack/ready'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 
 /** 설정 한 벌을 만든다 — 지정하지 않은 필드는 null. SlackConfig에 필드가 늘 때마다 아래 테스트들의
  *  save()/toEqual()을 전부 손대야 하는 것을 막는다(실제로 겪었다).
@@ -256,6 +257,29 @@ describe('SlackNotifier 훅 이벤트', () => {
     h.notifier.onHookEvent('s-1', ev)
     await flush()
     expect(h.sent).toHaveLength(1)
+    h.advance(10 * 60_000 + 1)
+    h.notifier.onHookEvent('s-1', ev)
+    await flush()
+    expect(h.sent).toHaveLength(2)
+  })
+
+  // Same call site and same shape as the thread root: the Host's reconnect re-registers a live id,
+  // and a record built from nothing forgets what has already gone out. A person gets the same
+  // notification twice every time the connection blips, inside the window that exists to stop it.
+  it('register over a live id keeps the dedup window', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    const ev = { hook_event_name: 'Notification', message: '같은 메시지' }
+    h.notifier.onHookEvent('s-1', ev)
+    await flush()
+    expect(h.sent).toHaveLength(1)
+
+    h.notifier.register(info()) // the reconnect takes the session back under the same id
+    h.notifier.onHookEvent('s-1', ev)
+    await flush()
+    expect(h.sent).toHaveLength(1)
+
+    // The window still ends where it did -- inherited, not extended.
     h.advance(10 * 60_000 + 1)
     h.notifier.onHookEvent('s-1', ev)
     await flush()
@@ -541,6 +565,76 @@ describe('SlackNotifier 롤링·한도·종료', () => {
   })
 })
 
+// A dropped socket ends every pty handle with PTY_LOST_SIGHT_EXIT_CODE while the Host goes on
+// running the process. Orchestration's handleExit, the validator and releaseCoordinator all agree
+// not to read that code as an ending; Slack was missed when that contract was established.
+describe('SlackNotifier and an exit that only means the app lost sight', () => {
+  it('sends no exit notification for a connection that merely dropped', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = setup()
+      h.notifier.register(info())
+      h.notifier.handleExit({ sessionId: 's-1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(h.sent).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // If the three-second timer fires first the record is deleted, and the re-register that arrives
+  // afterwards has nothing to inherit: a second thread root follows the false obituary. The
+  // reconnect and its pty-list sweep can easily take longer than three seconds.
+  it('keeps the record too, so a late reconnect still inherits the thread', async () => {
+    vi.useFakeTimers()
+    try {
+      const posts: { text: string; threadTs?: string }[] = []
+      let seq = 0
+      const notifier = new SlackNotifier({
+        getAccount: () => account,
+        readStatusPayload: async () => null,
+        lang: () => 'ko',
+        log: () => {},
+        readFileTail: async () => null,
+        now: () => 1_000_000
+      })
+      notifier.setTransport({
+        supportsThreads: true,
+        post: async (text, threadTs) => {
+          posts.push({ text, threadTs })
+          return `ts-${++seq}`
+        }
+      })
+      notifier.register(info())
+      await vi.advanceTimersByTimeAsync(0)
+      notifier.handleExit({ sessionId: 's-1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+      await vi.advanceTimersByTimeAsync(10_000) // the window where the timer beats the reconnect
+
+      notifier.register(info()) // the reconnect, arriving late
+      notifier.onHookEvent('s-1', { hook_event_name: 'Notification', message: '재접속 후' })
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(posts).toHaveLength(2) // one root + one notification: no obituary, no second root
+      expect(posts[1].threadTs).toBe('ts-1')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still notifies for a real ending', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = setup()
+      h.notifier.register(info())
+      h.notifier.handleExit({ sessionId: 's-1', exitCode: 0 })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(h.sent).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('SlackNotifier 비롤링 한도 감지의 provider 분리', () => {
   // 두 정규식은 'usage limit' + ' reached'에서 겹치므로, 실제로 갈리는 문구로만 검증한다.
   //   claude 전용 (detect.ts) : '5-hour limit' / 'session limit' 뒤에 ' reached'
@@ -599,6 +693,27 @@ describe('SlackNotifier 비롤링 한도 감지의 provider 분리', () => {
   // 주의: 실제 롤링 체인 세션은 handleData가 rollAccountIds로 먼저 걸러내므로 이 경로는 지금
   // 프로덕션에서 도달하지 않는다. onRolled가 레코드를 만들 때 provider를 잃지 않는다는 계약만
   // 고정한다 — 잃으면 스캐너가 조용히 claude로 바뀐다.
+  // The third field register discarded that onRolled carries. It matters only when the account has
+  // gone from the list in the meantime, because providerFor falls back to claude for an account it
+  // cannot find -- and then the reconnect silently swaps a codex session's scanner, which is the
+  // harm the onRolled contract below is pinned against.
+  it('keeps the codex scanner across a re-register, even once the account is gone', async () => {
+    let accountGone = false
+    const h = setup({
+      getAccount: (id) =>
+        accountGone ? null : id === codexAccount.id ? codexAccount : account
+    })
+    h.notifier.register(codexSession('s-cx'))
+    accountGone = true
+    h.notifier.register(codexSession('s-cx')) // the reconnect takes the session back under the same id
+    h.notifier.handleData({ sessionId: 's-cx', data: CLAUDE_ONLY })
+    await flush()
+    expect(h.sent).toEqual([])
+    h.notifier.handleData({ sessionId: 's-cx', data: CODEX_ONLY })
+    await flush()
+    expect(h.sent).toEqual(['[myproj] ⛔ 한도 도달 — 자동 재개 없음'])
+  })
+
   it('롤링 전환 후에도 codex 스캐너가 유지된다 (onRolled 재키잉)', async () => {
     const h = setup()
     h.notifier.register(codexSession('s-cx'))
@@ -760,6 +875,63 @@ describe('SlackNotifier 세션 스레드', () => {
 
     expect(h.posts).toHaveLength(2) // 루트를 새로 만들지 않았다
     expect(h.posts[1].threadTs).toBe('ts-1') // 같은 스레드
+  })
+
+  // The Host's reconnect re-registers an adopted session under the id it already had. A second root
+  // is noise in someone's channel every time the connection blips, and the session has one thread
+  // that both roots' replies resolve into -- so the thread is inherited, the way onRolled does when
+  // a roll re-keys the same chain.
+  it('register over a live id keeps the thread it already has', async () => {
+    const h = threadSetup()
+    h.notifier.register(info())
+    await flush()
+    expect(h.posts).toHaveLength(1)
+
+    h.notifier.register(info()) // the reconnect takes the session back under the same id
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'Notification', message: '재접속 후' })
+    await flush()
+
+    expect(h.posts).toHaveLength(2) // no second root
+    expect(h.posts[1].threadTs).toBe('ts-1')
+    expect(h.notifier.resolveSessionByThread('ts-1')).toBe('s-1')
+  })
+
+  // The root post has a 10-second timeout and two retries, so a reconnect can land while it is
+  // still in flight. Inheriting the promise means the resolve that fills the thread index is
+  // checking identity against a record the map no longer holds -- so the new record re-indexes it,
+  // exactly as onRolled does, or a reply in that thread reaches nobody.
+  it('re-indexes an inherited thread whose root had not landed yet', async () => {
+    const posts: { text: string; threadTs?: string }[] = []
+    let release = (): void => {}
+    const transport: SlackTransport = {
+      supportsThreads: true,
+      post: async (text, threadTs) => {
+        posts.push({ text, threadTs })
+        if (threadTs === undefined)
+          await new Promise<void>((r) => {
+            release = r
+          })
+        return `ts-${posts.length}`
+      }
+    }
+    const notifier = new SlackNotifier({
+      getAccount: () => account,
+      readStatusPayload: async () => null,
+      lang: () => 'ko',
+      log: () => {},
+      readFileTail: async () => null,
+      now: () => 1_000_000
+    })
+    notifier.setTransport(transport)
+
+    notifier.register(info())
+    await flush()
+    notifier.register(info()) // the reconnect, while the root is still in flight
+    release()
+    await flush()
+
+    expect(posts).toHaveLength(1)
+    expect(notifier.resolveSessionByThread('ts-1')).toBe('s-1')
   })
 
   it('old가 없으면 onRolled()에서 새 스레드를 연다', async () => {
@@ -1593,6 +1765,25 @@ describe('SlackNotifier PreToolUse 대기 내용 캡처', () => {
     expect(h.sent[0]).toContain('❓ 뭐 드실래요?')
     expect(h.sent[0]).toContain('1. 짜장면')
     expect(h.sent[0]).toContain('2. 짬뽕')
+  })
+
+  // The fourth thing a reconnect used to forget. This one is not rebuilt by the scrollback replay:
+  // it comes from the PreToolUse hook, which reaches the app through the hook-event file watcher
+  // and never over the Host socket, so the record was accurate right up to the moment register
+  // threw it away and the pending call cannot have completed unobserved.
+  it('register over a live id keeps the tool call the screen is still waiting on', async () => {
+    const h = setup({ readFileTail: async () => '' })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', pre('AskUserQuestion', ASK))
+    await flush()
+
+    h.notifier.register(info()) // the reconnect takes the session back under the same id
+    h.notifier.onHookEvent('s-1', notify('Claude needs your permission'))
+    await flush()
+
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0]).toContain('❓ 뭐 드실래요?')
+    expect(h.sent[0]).toContain('1. 짜장면')
   })
 
   it('권한 승인 대기도 무엇을 승인하는지 담는다 — 이쪽도 transcript에는 없다', async () => {

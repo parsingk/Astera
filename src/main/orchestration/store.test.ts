@@ -178,6 +178,26 @@ describe('OrchestrationStore', () => {
     expect(store.get().gates).toHaveLength(0)
   })
 
+  // The case the whole restart cleanup shape turns on, and the one no other test covered: a Task
+  // the app was validating whose Dispatch was **already** closed on disk before this boot. Nothing
+  // is written off here, so a cleanup expressed per closed Dispatch would never look at this Task
+  // and it would stay validating forever. The gate is owed to the Task, not to a Dispatch.
+  it('gates a validating Task whose Dispatch was already closed in the file', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.dispatches[0].endedAt = NOW
+    s.dispatches[0].outcome = 'succeeded'
+    s.tasks[0].status = 'validating'
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load()
+    expect(res.unknownOutcomes).toBe(0) // nothing was written off this boot
+    expect(res.staleValidations).toBe(1)
+    expect(res.stuckInterruptions).toBe(0)
+    expect(store.get().tasks[0].status).toBe('blocked')
+    expect(store.get().gates).toHaveLength(1)
+  })
+
   it('counts nothing stuck when the Dispatch closed and the gate could open', async () => {
     const file = path.join(dir, 'orchestration.json')
     const s = withOpenDispatch()
