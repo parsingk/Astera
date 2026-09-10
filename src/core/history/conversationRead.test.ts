@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm, writeFile, appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { readConversationWindow, ConversationFollow, CONVERSATION_TAIL_BYTES } from './conversationRead'
+import {
+  readConversationWindow,
+  ConversationFollow,
+  CONVERSATION_TAIL_BYTES,
+  CONVERSATION_TAIL_BYTES_MAX
+} from './conversationRead'
 
 let dir: string
 beforeEach(async () => {
@@ -18,6 +23,22 @@ afterEach(async () => {
  *  window mid-line straightforward. */
 function userLine(n: number): string {
   return JSON.stringify({ type: 'user', uuid: `u${n}`, message: { content: `message ${n}` } }) + '\n'
+}
+
+/** A user entry carrying only a tool_result, sized to `size` bytes of filler — mimics a real oversized
+ *  line: an image Read result, whose toolUseResult.file.base64 is what actually makes a JSONL line run
+ *  past a megabyte in practice. It never becomes a turn on its own — reduceTranscript only uses a
+ *  tool_result to patch a pending tool call's outcome, and none of these tests have that call pending
+ *  — so any turn a widened read returns around one of these lines can only have come from the ordinary
+ *  lines beside it, not from this one. */
+function bigToolResultLine(size: number): string {
+  return (
+    JSON.stringify({
+      type: 'user',
+      uuid: 'big',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'not-pending-in-this-window', content: 'x'.repeat(size) }] }
+    }) + '\n'
+  )
 }
 
 describe('readConversationWindow', () => {
@@ -97,6 +118,71 @@ describe('readConversationWindow', () => {
     // The whole (tiny) file fits well within the default window, so nothing is trimmed off the front.
     expect(CONVERSATION_TAIL_BYTES).toBeGreaterThan(content.length)
     expect(result?.from).toBe(0)
+  })
+})
+
+describe('readConversationWindow — widening past an oversized line', () => {
+  it('a last line bigger than the initial tailBytes still returns the ordinary turns before it', async () => {
+    const p = path.join(dir, 'oversized.jsonl')
+    const ordinary = [userLine(1), userLine(2), userLine(3), userLine(4), userLine(5)].join('')
+    const big = bigToolResultLine(5000) // comfortably bigger than the tiny tailBytes requested below
+    await writeFile(p, ordinary + big)
+
+    const result = await readConversationWindow(p, { tailBytes: 20 }) // far smaller than `big` alone
+    expect(result).not.toBeNull()
+    expect(result!.turns.length).toBeGreaterThan(0) // not the empty result the bug produced
+    // Every returned turn must be one of the ordinary lines — `big` never becomes a turn itself — so a
+    // non-empty result here can only have come from widening past it.
+    const ordinaryIds = new Set(['u1', 'u2', 'u3', 'u4', 'u5'])
+    for (const t of result!.turns) expect(ordinaryIds.has(t.id)).toBe(true)
+  })
+
+  it('widening stops at the cap: a file that is one single line bigger than it returns zero turns and terminates', async () => {
+    const p = path.join(dir, 'onegiant.jsonl')
+    const content = bigToolResultLine(CONVERSATION_TAIL_BYTES_MAX + 100_000) // one line, bigger than the cap
+    await writeFile(p, content)
+    // Completing at all — resolving rather than reading without bound — is itself under test.
+    const result = await readConversationWindow(p)
+    expect(result).not.toBeNull()
+    expect(result!.turns).toEqual([])
+    // The file is bigger than the cap, so the cap — not reaching the start of the file — is what
+    // stopped the widening: the only newline in the whole file is this one line's own trailing
+    // newline, mistaken for a partial fragment at the front and dropped (the "same simplification"
+    // note on readConversationWindow), so `from` sits at the file's own end, and `more` is true because
+    // there genuinely is more file before that point. Pinned to concrete values, not to the tautology
+    // `more === from > 0`, which would hold even if the cap silently stopped applying.
+    expect(result!.from).toBe(content.length)
+    expect(result!.more).toBe(true)
+  })
+
+  it('from and follow after widening point at the window actually used — no repeats, nothing lost', async () => {
+    const p = path.join(dir, 'oversized2.jsonl')
+    const n = 20
+    const ordinary = Array.from({ length: n }, (_, i) => userLine(i + 1)).join('')
+    const big = bigToolResultLine(500) // bigger than the tiny tailBytes requested below
+    const content = ordinary + big
+    await writeFile(p, content)
+
+    const first = await readConversationWindow(p, { tailBytes: 20 })
+    expect(first).not.toBeNull()
+    expect(first!.turns.length).toBeGreaterThan(0) // widening actually found something
+    expect(first!.follow).toBe(content.length) // follow tracks `end`, unaffected by widening
+
+    // A ConversationFollow resumed at `first.follow` sees nothing new yet — the widened window already
+    // reached the file's current end.
+    const follow = new ConversationFollow(p, first!.follow)
+    expect((await follow.read())?.turns).toEqual([])
+
+    // Walk backwards from `first.from`. This must not repeat anything `first` already returned, and
+    // together the two calls must cover every ordinary turn exactly once — whatever the widened
+    // window's own boundary happened to drop (see readConversationWindow's "same simplification" note)
+    // falls inside this next older window instead, since that window ends exactly at `first.from`.
+    const second = await readConversationWindow(p, { tailBytes: content.length, endAt: first!.from })
+    const firstIds = first!.turns.map((t) => t.id)
+    const secondIds = second!.turns.map((t) => t.id)
+    for (const id of firstIds) expect(secondIds).not.toContain(id)
+    const allIds = new Set([...firstIds, ...secondIds])
+    expect(allIds).toEqual(new Set(Array.from({ length: n }, (_, i) => `u${i + 1}`)))
   })
 })
 
