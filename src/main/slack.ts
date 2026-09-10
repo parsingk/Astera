@@ -346,23 +346,41 @@ export class SlackNotifier {
     // the session loses Slack for the rest of its life after a "session ended" that never happened.
     const replaced = this.records.get(info.id)
     if (replaced?.exitTimer) clearTimeout(replaced.exitTimer)
-    const provider = this.providerFor(info.accountId)
+    // **Registering over a live id carries the record's history across**, the same handover
+    // `onRolled` makes when a roll re-keys one chain onto a new id, and for the same reason: the
+    // session did not restart, so what has already been said about it still holds. The case is the
+    // Host's reconnect — the socket drops, the adopter takes the session back, and it re-registers
+    // under the id it already had. Built from nothing, the record forgets three things at once, and
+    // each one is visible in somebody's channel:
+    //
+    // - `provider` decides the limit scanner, and `providerFor` falls back to claude for an account
+    //   it cannot find, so a reconnect after that account was removed would quietly stop a codex
+    //   session's limit phrases being recognised at all.
+    // - `lastSent` is the dedup window, so the notification that went out a minute ago goes out
+    //   again — one duplicate per blip, inside the ten minutes that exist to prevent exactly that.
+    // - `thread` is the root message, so a second header is posted. Nothing is lost, since replies
+    //   in either thread resolve to the same session, but the channel fills with roots for a
+    //   session that never restarted.
+    //
+    // Each falls back to what it was before when there is no earlier record — and `thread` also
+    // when the earlier one was null (no thread transport, or `replaceTransport` reset it), in which
+    // case a root is opened below exactly as it always was.
+    const provider = replaced?.provider ?? this.providerFor(info.accountId)
     const record: SlackRecord = {
       info,
       provider,
+      // Fresh even when the provider was inherited: a scanner holds the tail of what it has been
+      // fed, and the reconnect replayed the scrollback. `onRolled` builds a new one for the same
+      // reason.
       scanner: makeLimitScanner(provider),
-      lastSent: new Map(),
+      lastSent: replaced?.lastSent ?? new Map(),
       exitTimer: null,
-      // **Registering over a live id inherits that session's thread**, the same handover `onRolled`
-      // makes when a roll re-keys one chain onto a new id. The case is the Host's reconnect: the
-      // socket drops, the adopter takes the session back, and it re-registers under the id it
-      // already had. Opening a second root then puts another header in someone's channel every time
-      // the connection blips — nothing is lost, since replies in either thread resolve to the same
-      // session, but the channel fills with roots for a session that never restarted.
-      //
-      // Falsy when there is no earlier record, or when its thread was null (no thread transport, or
-      // `replaceTransport` reset it) — a new root is opened below, exactly as before.
       thread: replaced?.thread ?? null,
+      // Not carried, and here that is a weaker call than it is in `onRolled`: a roll starts the new
+      // session from the resume prompt, so the screen the pending call belongs to is gone, whereas
+      // a reconnect leaves that screen exactly where it was. What it costs is the tool content in
+      // the next "input needed" line, not a duplicate or a wrong notification, and carrying it
+      // would be a decision about what a reconnect should remember that nobody has made.
       pendingTool: null
     }
     this.records.set(info.id, record)

@@ -262,6 +262,29 @@ describe('SlackNotifier 훅 이벤트', () => {
     expect(h.sent).toHaveLength(2)
   })
 
+  // Same call site and same shape as the thread root: the Host's reconnect re-registers a live id,
+  // and a record built from nothing forgets what has already gone out. A person gets the same
+  // notification twice every time the connection blips, inside the window that exists to stop it.
+  it('register over a live id keeps the dedup window', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    const ev = { hook_event_name: 'Notification', message: '같은 메시지' }
+    h.notifier.onHookEvent('s-1', ev)
+    await flush()
+    expect(h.sent).toHaveLength(1)
+
+    h.notifier.register(info()) // the reconnect takes the session back under the same id
+    h.notifier.onHookEvent('s-1', ev)
+    await flush()
+    expect(h.sent).toHaveLength(1)
+
+    // The window still ends where it did -- inherited, not extended.
+    h.advance(10 * 60_000 + 1)
+    h.notifier.onHookEvent('s-1', ev)
+    await flush()
+    expect(h.sent).toHaveLength(2)
+  })
+
   it('URL 미설정이면 아무것도 보내지 않는다', async () => {
     const h = setup()
     h.notifier.setWebhookUrl(null)
@@ -599,6 +622,27 @@ describe('SlackNotifier 비롤링 한도 감지의 provider 분리', () => {
   // 주의: 실제 롤링 체인 세션은 handleData가 rollAccountIds로 먼저 걸러내므로 이 경로는 지금
   // 프로덕션에서 도달하지 않는다. onRolled가 레코드를 만들 때 provider를 잃지 않는다는 계약만
   // 고정한다 — 잃으면 스캐너가 조용히 claude로 바뀐다.
+  // The third field register discarded that onRolled carries. It matters only when the account has
+  // gone from the list in the meantime, because providerFor falls back to claude for an account it
+  // cannot find -- and then the reconnect silently swaps a codex session's scanner, which is the
+  // harm the onRolled contract below is pinned against.
+  it('재접속으로 다시 등록해도 codex 스캐너가 유지된다 (계정이 사라진 뒤에도)', async () => {
+    let accountGone = false
+    const h = setup({
+      getAccount: (id) =>
+        accountGone ? null : id === codexAccount.id ? codexAccount : account
+    })
+    h.notifier.register(codexSession('s-cx'))
+    accountGone = true
+    h.notifier.register(codexSession('s-cx')) // the reconnect takes the session back under the same id
+    h.notifier.handleData({ sessionId: 's-cx', data: CLAUDE_ONLY })
+    await flush()
+    expect(h.sent).toEqual([])
+    h.notifier.handleData({ sessionId: 's-cx', data: CODEX_ONLY })
+    await flush()
+    expect(h.sent).toEqual(['[myproj] ⛔ 한도 도달 — 자동 재개 없음'])
+  })
+
   it('롤링 전환 후에도 codex 스캐너가 유지된다 (onRolled 재키잉)', async () => {
     const h = setup()
     h.notifier.register(codexSession('s-cx'))
