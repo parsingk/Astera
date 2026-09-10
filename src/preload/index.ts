@@ -41,6 +41,7 @@ const EVENT_CHANNELS = [
   'preview:agentEscape',
   'terminal:data',
   'terminal:exit',
+  'terminal:created',
   'orch:state',
   'understanding:changed',
   'sessionTasks:changed',

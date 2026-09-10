@@ -76,6 +76,7 @@ import { dismiss, toast } from './lib/toast'
 import { spawnNotice } from './lib/spawnNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
 import { quitConfirmBody } from './lib/quitConfirm'
+import { terminalsWithCreated } from './lib/terminalTabs'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { worktreeErrorMessage } from './lib/worktreeErrors'
 import { notifyCreated as notifyWorktreeCreated } from './lib/worktreeBus'
@@ -1158,12 +1159,25 @@ export default function App(): React.JSX.Element {
 
   // When a shell dies on its own (the user typed exit) its tab is removed — a dead shell tab is noise.
   // If it was the active tab, we go back to Run (the panel itself stays).
+  // Receives terminals main took back from the Host as tabs, the way session:created is received
+  // above. The user path builds its tab from what terminal.open returned, so only the reattach sweep
+  // sends this; without it a panel that was already open showed nothing until the project was
+  // reopened. The tab is added but not activated, on the same reasoning session:created uses for
+  // background=true: nobody asked for it just now, so it must not take the keys someone is typing.
+  // The root is read through the ref because this is registered once at mount (bottomRootRef, not
+  // currentProjectRef — with no project those two differ, and the panel shows the home root).
   useEffect(() => {
     const off = window.api.on('terminal:exit', ({ id }) => {
       setTerminals((prev) => prev.filter((x) => x.id !== id))
       setBottomTab((cur) => (cur === id ? 'run' : cur))
     })
-    return off
+    const offCreated = window.api.on('terminal:created', (info) => {
+      setTerminals((prev) => terminalsWithCreated(prev, info, bottomRootRef.current))
+    })
+    return () => {
+      off()
+      offCreated()
+    }
   }, [])
 
   /** Places a new session. Which group it goes into is decided by placeTab, a pure function in core

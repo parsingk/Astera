@@ -592,6 +592,15 @@ export interface CoreEvents {
   'preview:agentEscape': { sessionId: string }
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
+  /** Main took a terminal back from the Host without the renderer asking — the reattach sweep, at
+   *  startup or after a reconnect. The counterpart of 'session:created', and it carries the whole
+   *  TerminalInfo for the same reason: the panel builds the tab from it.
+   *
+   *  It is **not** emitted on the user path (terminal.open), which builds its tab from that call's
+   *  return value — emitting there would place the same terminal twice. The panel drops one whose
+   *  projectPath is not the project it is showing; those stay alive in main, unshown, exactly as the
+   *  list query already leaves them (see `terminalsWithCreated`). */
+  'terminal:created': TerminalInfo
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to
   // send whole (one project's Runs and Tasks) and it removes any question of the renderer's copy
   // drifting from main's. Which project it is folded for is the last one orch.list asked about, after

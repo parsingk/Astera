@@ -5307,12 +5307,27 @@ export function registerIpc(
           // Runs need no created-event of their own: RunManager.adopt's track() already fires
           // onStatus for every adopt the same as it does for a fresh start, and core.run.onStatus is
           // wired to send('run:status', ...) — the renderer's upsertRun adds a runId it has not seen
-          // the same way it applies any other update. Terminals have no such push at all — a project
-          // panel already open when one is adopted will not show it until terminal.list(projectPath)
-          // is queried again (reopening the panel, or reloading the project); nothing here invents
-          // one, since none of terminal.open's own callers get one either.
+          // the same way it applies any other update.
           run: (a) => core.run.adopt(a) !== null,
-          terminal: (a) => core.terminal.adopt(a) !== null
+          // Terminals had no such push, so a project panel already open when one was adopted showed
+          // nothing until terminal.list(projectPath) was queried again — reopening the panel, or
+          // reloading the project. 'terminal:created' is the terminal's 'session:created', and this
+          // is the only site that emits it: both sweeps (startup and reconnect) come through here.
+          //
+          // **Emitted before reattach sends pty-attach**, which is what makes the tab's replay work:
+          // the Host answers that attach with its ring buffer as ordinary terminal:data, and this
+          // event has already put the tab on screen and its listener on the channel by the time that
+          // round trip comes back.
+          terminal: (a) => {
+            const info = core.terminal.adopt(a)
+            if (!info) return false
+            try {
+              send('terminal:created', info)
+            } catch (err) {
+              hostLog(`host: terminal:created emit failed terminal=${info.id}: ${String(err)}`)
+            }
+            return true
+          }
         },
         log: (m) => hostLog(`host: ${m}`)
       })
