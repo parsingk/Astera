@@ -120,6 +120,29 @@ describe('OrchestrationStore', () => {
     expect(store.get().dispatches[0].workerState).toBe('outcome_unknown')
   })
 
+  // A worker that finished while the app was closed left its report in a file. Closing its Dispatch
+  // as outcome_unknown throws that report away — applyWorkerDone answers alreadyReported for a
+  // Dispatch that already has endedAt — and hands the recovery reconciler a worker it reads as lost,
+  // which is a second agent in a worktree the first one just committed in.
+  it('leaves a Dispatch open when an undelivered report already speaks for it', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ reportedDispatchIds: new Set(['dsp_1']) })
+    expect(res.unknownOutcomes).toBe(0)
+    expect(store.get().dispatches[0].endedAt).toBeUndefined()
+    expect(store.get().dispatches[0].workerState).toBe('ready')
+  })
+
+  it('still closes a Dispatch no queued report names', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ reportedDispatchIds: new Set(['dsp_other']) })
+    expect(res.unknownOutcomes).toBe(1)
+    expect(store.get().dispatches[0].workerState).toBe('outcome_unknown')
+  })
+
   it('closes every open Dispatch when it is told nothing, exactly as before', async () => {
     const file = path.join(dir, 'orchestration.json')
     await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
