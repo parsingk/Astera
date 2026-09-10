@@ -23,6 +23,7 @@ import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
 import { DesktopNotifier } from './desktopNotifier'
+import { createAttentionState } from './attention'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
@@ -374,6 +375,12 @@ app.whenReady().then(async () => {
     lang: () => core!.lang,
     log: slackLog
   })
+  // The one attention verdict (main/attention.ts): is a session working, or waiting for a person,
+  // decided from the same hook stream Slack and the desktop sink already read. Constructed here,
+  // beside them, and handed to both — the desktop sink below reads it instead of classifying a
+  // Notification payload itself, and ipc.ts's session-exit path forgets a session's entry here too
+  // (its own comment there explains the lost-sight exception).
+  const attention = createAttentionState()
   // The second outlet on the same pipe (design doc §6). Electron's Notification was unused in this
   // app until now — only Tray was.
   const desktop = new DesktopNotifier({
@@ -381,6 +388,7 @@ app.whenReady().then(async () => {
     isFocused: () => !win.isDestroyed() && win.isFocused(),
     getSession: (id) => core!.sessions.list().find((s) => s.id === id) ?? null,
     lang: () => core!.lang,
+    attention,
     show: (req) => {
       // If the OS refuses to show it — permission denied, notifications disabled at the system level
       // — it is dropped silently (§9). A notification saying that notifications do not work cannot be
@@ -501,6 +509,15 @@ app.whenReady().then(async () => {
         desktop.onHookEvent(sid, payload)
       } catch {
         /* a desktop notification failure must not block the others */
+      }
+      // The attention state taps the same events too, its own try for the same reason. desktop above
+      // already forwards every event into this same instance as part of reading its verdict, so this
+      // is a second, idempotent feed rather than the only one — kept as its own tap regardless, so the
+      // state stays current (and forget()-able from ipc.ts) even if desktop's own wiring ever changes.
+      try {
+        attention.onHookEvent(sid, payload)
+      } catch {
+        /* an attention-state failure must not block the others */
       }
     },
     slackLog
@@ -895,7 +912,8 @@ app.whenReady().then(async () => {
       onHostClientReady: (stop) => {
         hostClientStopRef = stop
       }
-    }
+    },
+    attention
   )
   // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
   // Open/Quit would only repeat what the window and its close button already do — while tying the

@@ -13,6 +13,7 @@ import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
+import type { AttentionState } from './attention'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
 import { hostAddress, retireOlderHosts } from '../host/address'
@@ -551,6 +552,27 @@ export function historyResumePlan(a: {
   return { blankSlate: true, initialPrompt: safe, mangled: false }
 }
 
+/**
+ * Whether a session exit should forget its attention verdict (main/attention.ts), and does so.
+ *
+ * **Not on a lost-sight exit** (`PTY_LOST_SIGHT_EXIT_CODE`): that code means the app lost its pty
+ * handle, not that the session ended — the Host keeps running it, and no hook event arrives again
+ * until the next tool call. Forgetting here would silently drop a `waiting` banner while a permission
+ * prompt is still on screen through the reconnect. slack.ts's `handleExit` guards the identical case
+ * for the identical reason, and this reads the same field it does.
+ *
+ * A pure function for the same reason `historyResumePlan` above it is: the real call sits inside
+ * `registerIpc`'s `onExit` closure, unreachable without an Electron harness.
+ */
+export function forgetAttentionOnExit(
+  attention: Pick<AttentionState, 'forget'> | undefined,
+  sessionId: string,
+  exitCode: number
+): void {
+  if (exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
+  attention?.forget(sessionId)
+}
+
 export function registerIpc(
   core: Core,
   win: BrowserWindow,
@@ -597,7 +619,11 @@ export function registerIpc(
    *  fills it lives here. Optional so the existing harnesses keep compiling; a missing one is built. */
   agentGuestsIn?: AgentGuestRegistry<WebContents>,
   /** index.ts's share of the Astera Host — see HostWiring. */
-  hostWiring?: HostWiring
+  hostWiring?: HostWiring,
+  /** The one attention verdict (main/attention.ts). Built in index.ts alongside `desktop` and handed
+   *  the same instance — this file's only use of it today is forgetting a session on exit; the IPC
+   *  that would let the renderer read it is not wired yet. */
+  attention?: AttentionState
 ): void {
   const agentGuests = agentGuestsIn ?? new AgentGuestRegistry<WebContents>((id) => webContents.fromId(id))
   const send = (channel: string, payload: unknown): void => {
@@ -941,6 +967,7 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
+    forgetAttentionOnExit(attention, e.sessionId, e.exitCode) // drop the Map entry (its own doc above)
     // The session ended (WU §14-4) — observation stops here, so any Work Unit still `active` is
     // interrupted, not completed; it waits on the How It Works screen until the person closes it.
     // A usage-limit roll's exit is not this case — the collector's `onSessionForked` re-keys the

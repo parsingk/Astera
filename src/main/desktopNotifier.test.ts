@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { RollStateEvent, SessionInfo } from '../core/types'
 import { DESKTOP_NOTIFY_DEFAULTS, type DesktopNotifySettings } from '../core/notify/settings'
 import { DesktopNotifier, type DesktopShowRequest } from './desktopNotifier'
+import { createAttentionState } from './attention'
 
 const session = (id: string): SessionInfo => ({
   id,
@@ -20,12 +21,16 @@ interface Harness {
 function harness(flags: Partial<DesktopNotifySettings> = {}, sessions = ['s1', 's2']): Harness {
   const shown: DesktopShowRequest[] = []
   const focused = { value: false }
+  // The real state (main/attention.ts), not a stub — this sink now reads its verdict instead of
+  // classifying a Notification payload itself, so a stub would just re-implement the thing this file
+  // is no longer supposed to know how to do.
   const notifier = new DesktopNotifier({
     settings: { getDesktopNotify: () => ({ ...DESKTOP_NOTIFY_DEFAULTS, ...flags }) },
     isFocused: () => focused.value,
     getSession: (id) => (sessions.includes(id) ? session(id) : null),
     lang: () => 'en',
-    show: (req) => shown.push(req)
+    show: (req) => shown.push(req),
+    attention: createAttentionState()
   })
   return { notifier, shown, focused }
 }
@@ -137,6 +142,17 @@ describe('DesktopNotifier — the three events', () => {
       'inputNeeded',
       'inputNeeded'
     ])
+  })
+
+  // The one behaviour change this task makes: attention.ts treats an idle notice as `waiting` when a
+  // PreToolUse call is still outstanding (its own Notification branch), and this sink now inherits
+  // that exception because it reads the shared verdict instead of dropping idle unconditionally as it
+  // did before. Before this task the sequence below showed nothing at all.
+  it('an idle_prompt with a call outstanding fires, where before it fired nothing', () => {
+    const h = harness()
+    h.notifier.onHookEvent('s1', { hook_event_name: 'PreToolUse', tool_use_id: 'call-1' })
+    h.notifier.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'idle_prompt' })
+    expect(h.shown.map((s) => s.event)).toEqual(['inputNeeded'])
   })
 
   // reattach is the re-publish that reattaches the banner to the new sessionId after a respawn — the
