@@ -860,6 +860,19 @@ export function interruptStalledTask(
 
 /** The restart cleanup's whole rule, applied to one Dispatch.
  *
+ *  **The caller must already have decided this Dispatch may be written off, and this function
+ *  cannot check that for it.** It knows nothing about the Host, so it will end a Dispatch whose
+ *  session is still running there — and a Dispatch ended with no outcome is what recovery's
+ *  `isLost` reads as a lost worker, which starts a second agent in the worktree the first one is
+ *  still in. That is the failure the Host handshake exists to prevent, and it is reachable from
+ *  here in one line. The only caller today is the pending-report drain's wiring, which passes ids
+ *  from `dispatchesHeldOnlyByReport` (core/orchestration/pendingReports.ts) — that function holds
+ *  the evidence rule, and a second caller needs one at least as strong before it may call this.
+ *
+ *  A parameter cannot carry that: the mistake worth preventing is not "called without filtering"
+ *  but "filtered on evidence that does not rule out a live session", and no signature can tell one
+ *  set of ids from another. Naming the requirement is the honest guard.
+ *
  *  **Why one Dispatch has its own entry point.** The pending-report drain ends up holding a
  *  Dispatch that the boot cleanup left open only because a queued report spoke for it, and then
  *  finds it cannot apply that report — the app refuses it, or applying it throws until the drain

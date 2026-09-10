@@ -189,6 +189,15 @@ describe('isAbandonedWorkingFile', () => {
     expect(isAbandonedWorkingFile({ name: 'notes.txt', ...old })).toBe(false)
   })
 
+  // The name this sweeps is the whole of what the two writers produce, not any name ending in
+  // `.tmp`. Something else's scratch file in this folder is not this function's to judge.
+  it('is about the name the writers actually make, not any temporary name', () => {
+    const old = { modifiedAt: NOW - WORKING_FILE_TTL_MS * 10, now: NOW }
+    expect(isAbandonedWorkingFile({ name: 'something-else.tmp', ...old })).toBe(false)
+    expect(isAbandonedWorkingFile({ name: '.tmp', ...old })).toBe(false)
+    expect(isAbandonedWorkingFile({ name: tmp, ...old })).toBe(true)
+  })
+
   // A file that is not older than the margin because the clock moved is a file this cannot judge,
   // and a report in flight is the one thing this whole path exists not to lose.
   it('keeps one whose age it cannot make sense of', () => {

@@ -565,11 +565,11 @@ describe('SlackNotifier 롤링·한도·종료', () => {
   })
 })
 
-// 소켓이 끊기면 모든 pty 핸들이 PTY_LOST_SIGHT_EXIT_CODE 로 끝난다 — Host 는 그 프로세스를 그대로
-// 돌리고 있다. 오케스트레이션의 handleExit·검증기·releaseCoordinator 가 모두 이 코드를 "끝남"으로
-// 읽지 않기로 한 것과 같은 규칙인데, 그 계약이 세워질 때 Slack 만 빠졌다.
-describe('SlackNotifier 시야를 잃은 exit', () => {
-  it('연결이 끊긴 것뿐인 exit 에는 종료 알림을 보내지 않는다', async () => {
+// A dropped socket ends every pty handle with PTY_LOST_SIGHT_EXIT_CODE while the Host goes on
+// running the process. Orchestration's handleExit, the validator and releaseCoordinator all agree
+// not to read that code as an ending; Slack was missed when that contract was established.
+describe('SlackNotifier and an exit that only means the app lost sight', () => {
+  it('sends no exit notification for a connection that merely dropped', async () => {
     vi.useFakeTimers()
     try {
       const h = setup()
@@ -582,9 +582,10 @@ describe('SlackNotifier 시야를 잃은 exit', () => {
     }
   })
 
-  // 3초 타이머가 먼저 터지면 레코드가 지워지고, 뒤늦게 오는 재등록에는 물려받을 것이 없다 —
-  // 거짓 부고 뒤에 두 번째 스레드 루트가 따라붙는다. 재접속과 pty 목록 조회는 3초를 넘길 수 있다.
-  it('레코드도 지우지 않아, 늦게 오는 재접속이 스레드를 그대로 물려받는다', async () => {
+  // If the three-second timer fires first the record is deleted, and the re-register that arrives
+  // afterwards has nothing to inherit: a second thread root follows the false obituary. The
+  // reconnect and its pty-list sweep can easily take longer than three seconds.
+  it('keeps the record too, so a late reconnect still inherits the thread', async () => {
     vi.useFakeTimers()
     try {
       const posts: { text: string; threadTs?: string }[] = []
@@ -607,20 +608,20 @@ describe('SlackNotifier 시야를 잃은 exit', () => {
       notifier.register(info())
       await vi.advanceTimersByTimeAsync(0)
       notifier.handleExit({ sessionId: 's-1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
-      await vi.advanceTimersByTimeAsync(10_000) // 재접속보다 타이머가 먼저 올 수 있는 창
+      await vi.advanceTimersByTimeAsync(10_000) // the window where the timer beats the reconnect
 
-      notifier.register(info()) // 뒤늦은 재접속
+      notifier.register(info()) // the reconnect, arriving late
       notifier.onHookEvent('s-1', { hook_event_name: 'Notification', message: '재접속 후' })
       await vi.advanceTimersByTimeAsync(0)
 
-      expect(posts).toHaveLength(2) // 루트 하나 + 알림 하나, 부고도 두 번째 루트도 없다
+      expect(posts).toHaveLength(2) // one root + one notification: no obituary, no second root
       expect(posts[1].threadTs).toBe('ts-1')
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('진짜 종료에는 그대로 알림을 보낸다', async () => {
+  it('still notifies for a real ending', async () => {
     vi.useFakeTimers()
     try {
       const h = setup()
@@ -696,7 +697,7 @@ describe('SlackNotifier 비롤링 한도 감지의 provider 분리', () => {
   // gone from the list in the meantime, because providerFor falls back to claude for an account it
   // cannot find -- and then the reconnect silently swaps a codex session's scanner, which is the
   // harm the onRolled contract below is pinned against.
-  it('재접속으로 다시 등록해도 codex 스캐너가 유지된다 (계정이 사라진 뒤에도)', async () => {
+  it('keeps the codex scanner across a re-register, even once the account is gone', async () => {
     let accountGone = false
     const h = setup({
       getAccount: (id) =>

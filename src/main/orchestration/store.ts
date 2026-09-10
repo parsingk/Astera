@@ -211,7 +211,6 @@ export class OrchestrationStore {
     let staleReviews = 0
     let stuckInterruptions = 0
     let withGates: OrchState = { ...st, dispatches }
-    //
     // **What is owed to one such Task lives in `interruptStalledTask`.** The pending-report drain
     // writes off a Dispatch of its own when it could not deliver the report that was holding it
     // open, and the Task under it is owed exactly this — the same Gate, with the same question,

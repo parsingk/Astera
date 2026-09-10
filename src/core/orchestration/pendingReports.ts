@@ -109,9 +109,11 @@ export interface PendingReport {
  *  removed — `:` is not a legal file name character on win32. The nonce keeps two reports queued in
  *  the same millisecond from being one file. */
 export function pendingReportFileName(a: { queuedAt: string; nonce: string }): string {
-  return `${a.queuedAt.replace(/[:.]/g, '')}-${a.nonce}.json`
+  return `${a.queuedAt.replace(/[:.]/g, '')}-${a.nonce}${REPORT_SUFFIX}`
 }
 
+/** What a finished report is named, and what `readPendingReports` picks up. */
+const REPORT_SUFFIX = '.json'
 const WORKING_SUFFIX = '.tmp'
 
 /** The name a report is written under before it is renamed into place.
@@ -162,7 +164,10 @@ export function isAbandonedWorkingFile(a: {
   modifiedAt: number
   now: number
 }): boolean {
-  if (!a.name.endsWith(WORKING_SUFFIX)) return false
+  // A report's working name, not any temporary name: both writers rename a `.json` into place, so
+  // that is the whole of what they can leave behind. Something else's scratch file in this folder
+  // was not put there by this design and is not this function's to judge.
+  if (!a.name.endsWith(`${REPORT_SUFFIX}${WORKING_SUFFIX}`)) return false
   if (!Number.isFinite(a.modifiedAt)) return false
   return a.now - a.modifiedAt >= WORKING_FILE_TTL_MS
 }
