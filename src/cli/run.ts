@@ -10,7 +10,7 @@ import { parseArgs } from '../core/orchestration/cliArgs'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
 import { SCRIPT_TIMEOUT_MS } from '../core/agentBrowser/script'
 import {
-  isQueueableReport,
+  queueableReportProblem,
   pendingReportFileName,
   pendingReportTempName,
   pendingReportsDirFrom,
@@ -281,8 +281,11 @@ export async function main(): Promise<void> {
    *  work as failed. When the write itself fails there is something wrong, and both halves of it are
    *  said in one error. */
   const unreachable: (reason: string) => never = (reason) => {
-    if (!isQueueableReport({ cmd: parsed.cmd, args })) {
-      out(errorOutput(reason))
+    const problem = queueableReportProblem({ cmd: parsed.cmd, args })
+    if (problem !== null) {
+      // A report one flag short of being recordable is told which flag, not that the app is away:
+      // the second is true and useless, and the agent could fix the first itself.
+      out(errorOutput(problem === 'not a report' ? reason : `${problem} (the app is not running)`))
       process.exit(1)
     }
     const written = writePendingReport({

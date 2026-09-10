@@ -1599,7 +1599,7 @@ export function registerIpc(
       .dispatches.filter((d) => !d.endedAt && reportedDispatchIds.has(d.id)).length
     if (heldByReport > 0)
       orchLog(
-        `restart cleanup — ${heldByReport} open dispatch(es) were left open because an undelivered report speaks for them; it is applied once the server is up`
+        `restart cleanup — ${heldByReport} open dispatch(es) were left open because an undelivered report speaks for them; the drain below says what became of each`
       )
     if (loaded.stuckInterruptions > 0)
       orchLog(

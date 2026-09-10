@@ -62,12 +62,30 @@ const QUEUEABLE_TYPES = new Set(['worker_done', 'escalation'])
  *  no `dispatchId` could therefore only ever be refused, and one with no `taskId` would be posted
  *  into whichever Run happened to be the most recent. */
 export function isQueueableReport(a: { cmd: string; args: Record<string, unknown> }): boolean {
-  if (a.cmd !== 'send') return false
+  return queueableReportProblem(a) === null && a.cmd === 'send'
+}
+
+/**
+ * Why this report cannot be queued, in words a worker can act on, or null when it can.
+ *
+ * The distinction matters because the two answers reach the worker differently. A command that is
+ * not a report at all gets the transport's own reason, which is the truth for it: the app is not
+ * there. A report whose fields are wrong gets **this** instead, because "the app is not running" is
+ * useless to an agent that is one missing flag away from a report the app would have taken. It could
+ * fix that itself, and only if it is told.
+ */
+export function queueableReportProblem(a: {
+  cmd: string
+  args: Record<string, unknown>
+}): string | null {
+  if (a.cmd !== 'send') return 'not a report'
   const type = a.args.type
-  if (typeof type !== 'string' || !QUEUEABLE_TYPES.has(type)) return false
-  if (typeof a.args.taskId !== 'string' || a.args.taskId.length === 0) return false
-  if (typeof a.args.dispatchId !== 'string' || a.args.dispatchId.length === 0) return false
-  return type !== 'worker_done' || workerDoneFieldError(a.args) === null
+  if (typeof type !== 'string' || !QUEUEABLE_TYPES.has(type)) return 'not a report'
+  if (typeof a.args.taskId !== 'string' || a.args.taskId.length === 0)
+    return '--task-id is required to record this report while the app is closed'
+  if (typeof a.args.dispatchId !== 'string' || a.args.dispatchId.length === 0)
+    return '--dispatch-id is required to record this report while the app is closed'
+  return type === 'worker_done' ? workerDoneFieldError(a.args) : null
 }
 
 /** One undelivered report, as it sits on disk. `sessionId` is the worker's `ASTERA_SESSION`: the

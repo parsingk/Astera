@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import {
+  queueableReportProblem,
   PENDING_REPORTS_DIR,
   isQueueableReport,
   pendingReportsDirFrom,
@@ -22,6 +23,30 @@ const entry = (over: Partial<PendingReport> = {}): PendingReport => ({
 })
 
 describe('isQueueableReport — which commands a file can stand in for', () => {
+  // The two refusals reach the worker differently on purpose: an agent one flag short of a report
+  // the app would have taken can fix that itself, and only if it is told which flag.
+  it('names the missing flag rather than the absent app', () => {
+    expect(queueableReportProblem({ cmd: 'inbox', args: {} })).toBe('not a report')
+    expect(
+      queueableReportProblem({ cmd: 'send', args: { type: 'worker_done', dispatchId: 'd1' } })
+    ).toContain('--task-id')
+    expect(
+      queueableReportProblem({ cmd: 'send', args: { type: 'worker_done', taskId: 't1' } })
+    ).toContain('--dispatch-id')
+    expect(
+      queueableReportProblem({
+        cmd: 'send',
+        args: { type: 'worker_done', taskId: 't1', dispatchId: 'd1' }
+      })
+    ).toContain('outcome')
+    expect(
+      queueableReportProblem({
+        cmd: 'send',
+        args: { type: 'worker_done', taskId: 't1', dispatchId: 'd1', outcome: 'succeeded' }
+      })
+    ).toBeNull()
+  })
+
   const done = { type: 'worker_done', taskId: 'tsk_1', dispatchId: 'dsp_1', outcome: 'succeeded' }
   const escalation = { type: 'escalation', taskId: 'tsk_1', dispatchId: 'dsp_1' }
 

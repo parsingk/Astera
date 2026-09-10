@@ -47,10 +47,16 @@ async function recordAttempt(file: string, report: PendingReport, attempts: numb
  *  again — the same one-way door `OrchestrationStore`'s `.bak` is, and for the same reason: a file
  *  the app could not use is still the only copy of what a worker said.
  *
- *  Best effort. If even the rename fails there is nothing further to try, and the caller has
- *  already logged what the file was. */
-async function setAside(file: string, why: 'unreadable' | 'unapplied'): Promise<void> {
-  await fs.rename(file, `${file}.${why}`).catch(() => {})
+ *  Best effort, and it answers with the name it wrote so the caller can put it in the log: the file
+ *  is the only remaining copy of what that worker reported, and a line that does not say where it
+ *  went sends whoever reads it hunting through a folder. Null when even the rename failed, which the
+ *  caller renders as no name rather than a wrong one. */
+async function setAside(file: string, why: 'unreadable' | 'unapplied'): Promise<string | null> {
+  const to = `${file}.${why}`
+  return fs
+    .rename(file, to)
+    .then(() => path.basename(to))
+    .catch(() => null)
 }
 
 /** Everything the queue folder holds, oldest attempt first.
@@ -147,12 +153,15 @@ export async function applyPendingReports(a: {
         })
       if (!recorded || attempts >= MAX_APPLY_ATTEMPTS) {
         gaveUp++
+        const kept = await setAside(file, 'unapplied')
+        // The file name goes in the line for the same reason the unreadable one names its file: the
+        // report is still on disk and this is the only thing that says where. Naming it after the
+        // move rather than before means the line cannot point at a name that was never written.
         a.log(
           `pending reports: giving up on ${where} after ${attempts} attempt(s) — the file is set ` +
-            `aside and its Dispatch will be left to recovery at the next start. Last failure: ` +
-            `${String(e)}. The report said: ${JSON.stringify(report.args)}`
+            `aside${kept ? ` as ${kept}` : ''} and its Dispatch will be left to recovery at the ` +
+            `next start. Last failure: ${String(e)}. The report said: ${JSON.stringify(report.args)}`
         )
-        await setAside(file, 'unapplied')
       } else {
         kept++
         a.log(
