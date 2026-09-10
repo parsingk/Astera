@@ -15,7 +15,12 @@ import {
   writePendingReport
 } from './run'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
-import { parsePendingReport, pendingReportsDirFrom } from '../core/orchestration/pendingReports'
+import {
+  parsePendingReport,
+  pendingReportFileName,
+  pendingReportTempName,
+  pendingReportsDirFrom
+} from '../core/orchestration/pendingReports'
 
 describe('errorOutput', () => {
   it('메시지를 {error} JSON 한 줄로 감싼다', () => {
@@ -270,6 +275,30 @@ describe('writePendingReport — the report a closed app could not take', () => 
       cmd: report.cmd,
       args: report.args
     })
+  })
+
+  // The window this whole path exists for is the app not running, and the moment the app comes back
+  // is exactly the moment it reads the queue. A plain writeFileSync can be read half-written, and
+  // the reader would find an unparseable file. So the report appears under its final name only once
+  // it is whole -- the same temporary-name-then-rename the orchestration store already uses.
+  it('leaves no working file beside the report it wrote', async () => {
+    const r = writePendingReport({ infoPath, ...report })
+    expect((r as { ok: true; path: string }).path.endsWith('.json')).toBe(true)
+    expect(await fs.readdir(pendingReportsDirFrom(infoPath))).toEqual([
+      path.basename((r as { ok: true; path: string }).path)
+    ])
+  })
+
+  it('clears its working file when the report cannot be put in place', async () => {
+    const name = pendingReportFileName({ queuedAt: report.queuedAt, nonce: report.nonce })
+    // A directory standing exactly where the report has to land: the write goes through and the
+    // rename cannot.
+    await fs.mkdir(path.join(pendingReportsDirFrom(infoPath), name), { recursive: true })
+    const r = writePendingReport({ infoPath, ...report })
+    expect(r.ok).toBe(false)
+    expect(await fs.readdir(pendingReportsDirFrom(infoPath))).not.toContain(
+      pendingReportTempName(name)
+    )
   })
 
   it('makes the folder on the first report — nothing else creates it', async () => {

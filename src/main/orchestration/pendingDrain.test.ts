@@ -5,6 +5,7 @@ import path from 'node:path'
 import { readPendingReports, applyPendingReports } from './pendingDrain'
 import {
   pendingReportFileName,
+  pendingReportTempName,
   serializePendingReport,
   type PendingReport
 } from '../../core/orchestration/pendingReports'
@@ -52,14 +53,44 @@ describe('readPendingReports', () => {
     expect(got.map((q) => q.report.args.dispatchId)).toEqual(['dsp_early', 'dsp_late'])
   })
 
-  it('throws away a file it cannot read, and says so, rather than complaining at every start', async () => {
+  // A report it cannot read is not a report it knows is worthless. It goes out of the way under a
+  // name the reader will not pick up again -- so it stops being retried and stops holding anything
+  // open -- but it stays on disk for a person to look at.
+  it('sets aside a file it cannot read, and says so, rather than deleting it', async () => {
     await queue({ at: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa', dispatchId: 'dsp_1' })
     await fs.writeFile(path.join(dir, '2026-09-10T020000000Z-bbbbbbbb.json'), '{half writ', 'utf8')
     const said: string[] = []
     const got = await readPendingReports({ dir, log: (m) => said.push(m) })
     expect(got).toHaveLength(1)
-    expect(await files()).toEqual(['2026-09-10T010000000Z-aaaaaaaa.json'])
+    expect(await files()).toEqual([
+      '2026-09-10T010000000Z-aaaaaaaa.json',
+      '2026-09-10T020000000Z-bbbbbbbb.json.unreadable'
+    ])
     expect(said.join(' ')).toContain('bbbbbbbb')
+  })
+
+  it('does not pick a set-aside file up again at the next start', async () => {
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, '2026-09-10T020000000Z-bbbbbbbb.json.unreadable'), '{half', 'utf8')
+    const said: string[] = []
+    expect(await readPendingReports({ dir, log: (m) => said.push(m) })).toEqual([])
+    expect(said).toEqual([])
+  })
+
+  // A worker writing its report at the moment the app boots is exactly the case this path is for.
+  // The CLI renames into place, so a torn write is only ever visible under the temporary name.
+  it('ignores the temporary file of a write that has not landed yet', async () => {
+    await queue({ at: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa', dispatchId: 'dsp_1' })
+    // The name the CLI writes under, not a literal: change the suffix to something ending in
+    // .json and this is where it shows up.
+    const tmp = pendingReportTempName(
+      pendingReportFileName({ queuedAt: '2026-09-10T02:00:00.000Z', nonce: 'bbbbbbbb' })
+    )
+    await fs.writeFile(path.join(dir, tmp), '{half writ', 'utf8')
+    const said: string[] = []
+    expect(await readPendingReports({ dir, log: (m) => said.push(m) })).toHaveLength(1)
+    expect(await files()).toContain(tmp)
+    expect(said).toEqual([])
   })
 
   it('ignores anything that is not a report file', async () => {

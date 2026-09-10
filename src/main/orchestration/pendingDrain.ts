@@ -15,6 +15,17 @@ export interface QueuedReport {
   report: PendingReport
 }
 
+/** Moves a file out of the reader's way without destroying it. The suffix is appended to the whole
+ *  name, so what is left no longer ends in `.json` and `readPendingReports` never picks it up
+ *  again — the same one-way door `OrchestrationStore`'s `.bak` is, and for the same reason: a file
+ *  the app could not use is still the only copy of what a worker said.
+ *
+ *  Best effort. If even the rename fails there is nothing further to try, and the caller has
+ *  already logged what the file was. */
+async function setAside(file: string, why: 'unreadable' | 'unapplied'): Promise<void> {
+  await fs.rename(file, `${file}.${why}`).catch(() => {})
+}
+
 /** Everything the queue folder holds, oldest attempt first.
  *
  *  Order is by file name, which is the moment each report was attempted (`pendingReportFileName`).
@@ -22,10 +33,12 @@ export interface QueuedReport {
  *  `alreadyReported` either way, and different Dispatches are independent — but the inbox reads in
  *  the order things happened, which is what a person going through it afterwards expects.
  *
- *  **A file it cannot read is deleted as it goes.** Nothing will ever be able to read it, and
- *  leaving it means the same complaint in the log at every start for as long as the profile lives.
- *  The log line names the file, which is the last trace of it. A missing folder is the ordinary
- *  case, not a failure: it exists only once there has been something to queue. */
+ *  **A file it cannot read is set aside, not deleted.** A report this cannot read is not a report
+ *  anyone knows is worthless — it may be a half-written file, or one this version does not
+ *  understand. Renaming it out of the way stops it being retried and complained about at every
+ *  start for as long as the profile lives, while leaving the evidence where a person can find it.
+ *  A missing folder is the ordinary case, not a failure: it exists only once there has been
+ *  something to queue. */
 export async function readPendingReports(a: {
   dir: string
   log(m: string): void
@@ -39,8 +52,8 @@ export async function readPendingReports(a: {
     const text = await fs.readFile(file, 'utf8').catch(() => null)
     const report = text === null ? null : parsePendingReport(text)
     if (!report) {
-      a.log(`pending reports: discarding ${name} — it is not a report this app can read`)
-      await fs.rm(file, { force: true }).catch(() => {})
+      a.log(`pending reports: setting aside ${name} — it is not a report this app can read`)
+      await setAside(file, 'unreadable')
       continue
     }
     out.push({ file, report })

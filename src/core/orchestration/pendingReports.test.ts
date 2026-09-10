@@ -5,6 +5,7 @@ import {
   isQueueableReport,
   pendingReportsDirFrom,
   pendingReportFileName,
+  pendingReportTempName,
   serializePendingReport,
   parsePendingReport,
   reportedDispatchIdsOf,
@@ -91,6 +92,15 @@ describe('pendingReportFileName', () => {
   it('holds no character win32 refuses in a file name', () => {
     const name = pendingReportFileName({ queuedAt: '2026-09-10T01:02:03.004Z', nonce: 'aaaaaaaa' })
     expect(name).toMatch(/^[A-Za-z0-9_.-]+\.json$/)
+  })
+})
+
+describe('pendingReportTempName', () => {
+  it('is not a name the reader picks up — that is the whole of its job', () => {
+    const name = pendingReportTempName(
+      pendingReportFileName({ queuedAt: '2026-09-10T01:02:03.004Z', nonce: 'aaaaaaaa' })
+    )
+    expect(name.endsWith('.json')).toBe(false)
   })
 })
 

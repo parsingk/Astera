@@ -88,6 +88,19 @@ export function pendingReportFileName(a: { queuedAt: string; nonce: string }): s
   return `${a.queuedAt.replace(/[:.]/g, '')}-${a.nonce}.json`
 }
 
+/** The name a report is written under before it is renamed into place.
+ *
+ *  **The rename is what makes the queue safe to read at any moment.** The window this whole path
+ *  exists for is the app not running, and the moment the app comes back is exactly the moment it
+ *  reads the queue — so a worker can be writing its report as the drain lists the folder. Written
+ *  in place, that report could be read half-finished; written here and renamed, it is either
+ *  absent or whole. Same shape as `OrchestrationStore`'s own writes.
+ *
+ *  It must not end in `.json`, which is the only thing `readPendingReports` picks up. */
+export function pendingReportTempName(fileName: string): string {
+  return `${fileName}.tmp`
+}
+
 export function serializePendingReport(r: PendingReport): string {
   return JSON.stringify(r)
 }

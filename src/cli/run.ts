@@ -4,7 +4,7 @@
 // main() does not call itself inside this file, so importing this module (as the tests do) does not
 // terminate the process.
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from '../core/orchestration/cliArgs'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
@@ -12,6 +12,7 @@ import { SCRIPT_TIMEOUT_MS } from '../core/agentBrowser/script'
 import {
   isQueueableReport,
   pendingReportFileName,
+  pendingReportTempName,
   pendingReportsDirFrom,
   serializePendingReport,
   undeliveredReportNotice
@@ -153,7 +154,14 @@ export function readInfo(
  *  stack trace in the middle of a worker's command.
  *
  *  The folder is created here because nothing else makes it: the app writes `orch-info.json` into
- *  its parent, and this subfolder exists only once there has been something to queue. */
+ *  its parent, and this subfolder exists only once there has been something to queue.
+ *
+ *  **Written under a temporary name and renamed into place**, the same shape as
+ *  `OrchestrationStore`'s writes. A worker reporting at the moment the app comes back is exactly
+ *  the case this whole path exists for, and that is also the moment the app lists this folder — so
+ *  a report written in place could be read half-finished. A same-directory rename onto a name
+ *  nothing else uses (the nonce makes it unique) is a metadata operation on both platforms: the
+ *  reader sees either no such file or the whole of it. */
 export function writePendingReport(a: {
   infoPath: string
   sessionId: string
@@ -163,11 +171,13 @@ export function writePendingReport(a: {
   nonce: string
 }): { ok: true; path: string } | { ok: false; error: string } {
   const dir = pendingReportsDirFrom(a.infoPath)
-  const file = path.join(dir, pendingReportFileName({ queuedAt: a.queuedAt, nonce: a.nonce }))
+  const name = pendingReportFileName({ queuedAt: a.queuedAt, nonce: a.nonce })
+  const file = path.join(dir, name)
+  const tmp = path.join(dir, pendingReportTempName(name))
   try {
     mkdirSync(dir, { recursive: true })
     writeFileSync(
-      file,
+      tmp,
       serializePendingReport({
         queuedAt: a.queuedAt,
         sessionId: a.sessionId,
@@ -176,8 +186,17 @@ export function writePendingReport(a: {
       }),
       'utf8'
     )
+    renameSync(tmp, file)
     return { ok: true, path: file }
   } catch (e) {
+    // The working file is cleared so a failed write leaves nothing behind. If even that fails
+    // there is nothing further to try: the reader ignores the name, so at worst a small file stays
+    // in the folder.
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* nothing left to try */
+    }
     return { ok: false, error: `cannot write ${dir}: ${String(e)}` }
   }
 }
