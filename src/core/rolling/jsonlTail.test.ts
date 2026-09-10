@@ -75,4 +75,35 @@ describe('JsonlTail', () => {
     await appendFile(p, '{"new":1}\n') // 그 뒤에 덧붙은 내용만
     expect((await tail.read())?.lines).toEqual(['{"new":1}'])
   })
+
+  // offset option — added for ConversationFollow (src/core/history/conversationRead.ts), which needs
+  // to resume a follow exactly where a prior windowed read left off, not at 0 or at the file's
+  // current end. New tests below are in English per that task's convention; the Korean tests above
+  // are existing and untouched.
+  it('offset: N starts reading from that byte offset, skipping everything before it', async () => {
+    const p = path.join(dir, 'h.jsonl')
+    const first = '{"a":1}\n'
+    await writeFile(p, first + '{"b":2}\n')
+    const tail = new JsonlTail(p, { offset: first.length })
+    expect((await tail.read())?.lines).toEqual(['{"b":2}'])
+  })
+
+  it('offset and startAtEnd together: startAtEnd wins', async () => {
+    const p = path.join(dir, 'i.jsonl')
+    await writeFile(p, '{"old":1}\n') // already there before construction
+    const tail = new JsonlTail(p, { offset: 0, startAtEnd: true })
+    const first = await tail.read()
+    expect(first?.lines).toEqual([]) // startAtEnd wins: the offset (0, which would have read it) is ignored
+    await appendFile(p, '{"new":1}\n')
+    expect((await tail.read())?.lines).toEqual(['{"new":1}'])
+  })
+
+  it('offset: a file shorter than the offset resets to 0 and reports restarted', async () => {
+    const p = path.join(dir, 'j.jsonl')
+    await writeFile(p, '{"z":9}\n') // shorter than the offset given below
+    const tail = new JsonlTail(p, { offset: 100 })
+    const result = await tail.read()
+    expect(result?.restarted).toBe(true)
+    expect(result?.lines).toEqual(['{"z":9}'])
+  })
 })
