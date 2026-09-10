@@ -295,7 +295,13 @@ export interface RollStateEvent {
   sessionId: string
   // 'nudged' and 'stalled' are momentary events, not lasting states — the renderer leaves them out
   // of the banner and only Slack is told (see TerminalView.rollBannerVisible)
-  state: 'switching' | 'trust' | 'waiting' | 'nudged' | 'stalled' | 'none'
+  // 'adopted' is a codex rolling chain that came back from the Host and could not be told whether
+  // its account was already at its limit — asking is unsafe (see CodexRollingCoordinator.register),
+  // so it will not roll until codex writes its next rate_limits record. It is a lasting state like
+  // the first three, and it needs to be its own rather than a 'waiting': there is no retry armed and
+  // no time to put in `nextRetryAt`, and a banner promising a resume that nothing has scheduled is
+  // worse than the log line it replaces. Cleared by that next record.
+  state: 'switching' | 'trust' | 'waiting' | 'nudged' | 'stalled' | 'adopted' | 'none'
   accountLabel?: string // the account being switched to, when state='switching'
   // A re-publish of state='switching' (reattaching the banner to the new sessionId after a respawn).
   // It is not a new switch, so the renderer treats it the same but Slack ignores it to avoid a

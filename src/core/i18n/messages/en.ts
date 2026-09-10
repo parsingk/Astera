@@ -628,6 +628,8 @@ export const en: Record<keyof typeof ko, string> = {
   'session.terminal.trustAccepting': 'Automatically accepting folder trust…',
   'session.terminal.weeklyLimitWaiting': 'Weekly limit reached — resuming automatically at {time}',
   'session.terminal.limitWaiting': 'Limit reached — resuming automatically at {time}',
+  'session.terminal.rollAdopted':
+    'Taken back after a restart — the limit on this account is unknown, so it will not switch until Codex reports usage again',
   'session.toast.stalled':
     'Session “{title}” is stuck — automatic resume failed, it needs a look',
   'session.terminal.loadingContent': 'Loading content…',

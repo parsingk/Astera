@@ -713,6 +713,16 @@ export const ko = {
   'session.terminal.trustAccepting': '폴더 신뢰 자동 수락 중…',
   'session.terminal.weeklyLimitWaiting': '주간 한도 소진 — {time} 자동 재개',
   'session.terminal.limitWaiting': '한도 도달 — {time} 자동 재개',
+  // Slice 2 of the Astera Host: a codex rolling chain the app took back from the Host. It is
+  // deliberately not asked whether the account was already blocked (CodexRollingCoordinator.register
+  // says why), so if it came back blocked it stops until codex writes its next record — which used
+  // to be visible only in rolling.log. **No time is named**, unlike the two rows above: nothing is
+  // scheduled, and there is nothing to name.
+  //
+  // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
+  // still want real translations.
+  'session.terminal.rollAdopted':
+    '재시작 후 이어받음 — 이 계정의 한도 상태를 알 수 없어, Codex가 사용량을 다시 기록할 때까지 계정을 전환하지 않습니다',
   // Auto-resume failure toast. See the App.tsx comment for why it is a toast and not a banner —
   // for a rolling session with Slack off, this is the only path that calls a human.
   'session.toast.stalled': "'{title}' 세션이 멈춰 있습니다 — 자동 재개 실패, 확인이 필요합니다",
