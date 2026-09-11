@@ -28,6 +28,16 @@ export function fitTerminalToHost(term: Terminal, host: HTMLElement): boolean {
   // Before the first render the cell dimensions are 0 — dividing then produces an absurd size, so it is
   // skipped and left to the next ResizeObserver callback
   if (!cell?.width || !cell.height) return false
+  // **A host that is not on screen is skipped for the same reason, and it is the more dangerous half.**
+  // An inactive pane is display:none and measures 0, and the clamps below would turn that into a 2x1
+  // grid — which, unlike an absurd size, looks entirely legitimate to everything downstream.
+  // TerminalView sends whatever this fits to the PTY, and a 2x1 conpty ends the agent: measured on
+  // codex, it redrew one character per line and the pty ended with no exit code at all about a second
+  // after it started. Three Job workers in a row died that way, because a worker's tab opens behind
+  // the tab already showing — the first worker of a Job survived and every one after it did not.
+  // Callers already guard their own paths (the font effect and the ResizeObserver in TerminalView);
+  // the construction path did not, and the guard belongs here where every caller gets it.
+  if (!host.clientWidth || !host.clientHeight) return false
   const cols = Math.max(2, Math.floor(host.clientWidth / cell.width))
   const rows = Math.max(1, Math.floor(host.clientHeight / cell.height))
   if (cols === term.cols && rows === term.rows) return false
