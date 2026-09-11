@@ -31,6 +31,9 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolKind>> = {
   Edit: "edit",
   Write: "create",
   Bash: "run",
+  // The same thing under another name: this app's own sessions run PowerShell on Windows, and the row
+  // read "PowerShell 1" where every other command reads 실행 (measured: 179 calls in one transcript).
+  PowerShell: "run",
   // codex's, which do the same five things under its own names. A row reads the same either way;
   // only the CLI's word for the tool differs (core/history/codexConversation.ts names them).
   shell_command: "run",

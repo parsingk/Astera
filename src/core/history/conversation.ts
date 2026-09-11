@@ -117,6 +117,26 @@ function blockToPart(block: Record<string, unknown>): ConvPart | null {
 /** A plain-string content is the text as-is. A block array's text is its `text` blocks joined — the
  *  same array shape also carries a pasted `image` block, which is silently skipped since only text
  *  renders as a turn. */
+/**
+ * A slash command as the person typed it, out of the record the CLI writes for one.
+ *
+ * Running `/clear` does not put `/clear` in the transcript: it puts three tags there — the command
+ * name, the CLI's own phrasing for it, and the arguments. Drawn as they are, a person sees markup
+ * they never wrote instead of the line they sent.
+ *
+ * Only the name and the arguments come back, joined the way they were typed. The message is the CLI
+ * talking to itself, not anything anyone said. Null for ordinary text, which is everything else.
+ */
+export function typedCommandOf(text: string): string | null {
+  const name = /<command-name>([^<]*)<\/command-name>/.exec(text)
+  if (name === null) return null
+  const command = name[1].trim()
+  if (command === '') return null
+  const args = /<command-args>([^<]*)<\/command-args>/.exec(text)
+  const rest = args === null ? '' : args[1].trim()
+  return rest === '' ? command : `${command} ${rest}`
+}
+
 function userTurnText(message: unknown): string | null {
   const content = isRecord(message) ? message.content : undefined
   if (typeof content === 'string') return content
@@ -125,7 +145,9 @@ function userTurnText(message: unknown): string | null {
       .filter(isRecord)
       .filter((b) => b.type === 'text' && typeof b.text === 'string')
       .map((b) => b.text as string)
-    return texts.length > 0 ? texts.join('\n\n') : null
+    if (texts.length === 0) return null
+    const joined = texts.join('\n\n')
+    return typedCommandOf(joined) ?? joined
   }
   return null
 }
@@ -223,8 +245,15 @@ export function reduceTranscript(lines: string[], pending: Map<string, ToolPart>
       // real transcripts, and closing the run at every one of them split single assistant responses
       // into many (846 + 31 such splits across six real transcripts).
       if (isMetaUserRecord(obj)) continue
-      const text = userTurnText(obj.message)
-      if (text === null || !isRealUserText(text)) continue
+      const raw = userTurnText(obj.message)
+      if (raw === null) continue
+      // A slash command is a thing the person did, so it belongs in the conversation — but the record
+      // the CLI writes for one is three tags, which isRealUserText rightly refuses as machine text
+      // (parser.ts's MACHINE_USER_PREFIXES, shared with the history list and Slack). Unwrapped here
+      // rather than there: this is the one reader that draws the turn a person took, and the others
+      // want the record left alone.
+      const text = typedCommandOf(raw) ?? raw
+      if (typedCommandOf(raw) === null && !isRealUserText(raw)) continue
 
       current = null // a real user turn does end the run
       turns.push({

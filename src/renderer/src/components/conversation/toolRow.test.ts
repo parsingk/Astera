@@ -38,6 +38,12 @@ describe('verbKeyOf', () => {
   it('passes an unknown tool name through unchanged', () => {
     expect(verbKeyOf('WebFetch')).toEqual({ name: 'WebFetch' })
   })
+
+  // PowerShell is Bash under another name on Windows, and this app's own sessions use it.
+  it('reads PowerShell as a run, the same as Bash', () => {
+    expect(verbKeyOf('PowerShell')).toEqual(verbKeyOf('Bash'))
+    expect(groupKeyOf('PowerShell')).toEqual(groupKeyOf('Bash'))
+  })
 })
 
 describe('groupKeyOf', () => {

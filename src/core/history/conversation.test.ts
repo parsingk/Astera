@@ -282,14 +282,45 @@ describe('reduceTranscript — synthetic cases', () => {
     expect(turns).toEqual([])
   })
 
-  it('meta records and machine-prefixed records produce no turn; a real message does', () => {
+  it('meta records produce no turn; a real message does', () => {
     const turns = reduceTranscript([
       line({ type: 'user', uuid: 'u0', isMeta: true, message: { content: 'a whole skill body landed here' } }),
-      line({ type: 'user', uuid: 'u1', message: { content: '<command-name>/clear</command-name>' } }),
       line({ type: 'user', uuid: 'u2', message: { content: 'why is store.load closing them' } })
     ])
     expect(turns).toHaveLength(1)
     expect(turns[0].parts).toEqual([{ kind: 'text', text: 'why is store.load closing them' }])
+  })
+
+  // A slash command used to be dropped here along with the rest of the machine-prefixed records, and
+  // that was wrong for this reader: the person typed it, and a conversation that skips it is missing
+  // a turn they took. It is the tags that must not be drawn, not the command.
+  it('draws a slash command the way it was typed, not as the tags the CLI records', () => {
+    const turns = reduceTranscript([
+      line({
+        type: 'user',
+        uuid: 'u1',
+        message: {
+          content:
+            '<command-name>/report</command-name>\n<command-message>report</command-message>\n<command-args>7d</command-args>'
+        }
+      })
+    ])
+    expect(turns).toHaveLength(1)
+    expect(turns[0].parts).toEqual([{ kind: 'text', text: '/report 7d' }])
+  })
+
+  it('leaves out the phrasing the CLI writes for itself, and the space when there are no arguments', () => {
+    const turns = reduceTranscript([
+      line({
+        type: 'user',
+        uuid: 'u1',
+        message: {
+          content:
+            '<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>'
+        }
+      })
+    ])
+    expect(turns[0].parts).toEqual([{ kind: 'text', text: '/clear' }])
   })
 
   it('a malformed line is skipped, and the lines around it survive', () => {
