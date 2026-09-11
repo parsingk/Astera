@@ -190,11 +190,43 @@ export class StatusLineManager {
       }
     }
     await fs.writeFile(this.hooksSettingsFile, JSON.stringify(hooksSettings, null, 2), 'utf8')
+    // Hook events are a queue the app drains while it runs, so anything still sitting here was
+    // written while it was away and is stale on arrival — a Notification from hours ago would push a
+    // session into `waiting` over whatever is true now. Dropped, not replayed.
     await fs.rm(this.hookEventsDir, { recursive: true, force: true }).catch(() => {})
     await fs.mkdir(this.hookEventsDir, { recursive: true })
-    // Clear the previous run's session files, then recreate the folder (safe because PTYs die when the app restarts)
-    await fs.rm(this.outDir, { recursive: true, force: true }).catch(() => {})
+    // The session payloads are NOT cleared here, and used to be. They are the latest snapshot rather
+    // than a queue, and the Host means a session outlives the app that started it: wiping the folder
+    // took the transcript path away from every session that survived a restart, so the conversation
+    // view read "no transcript yet" for a session with a full one and rolling could not find the file
+    // to resume from, until that session happened to write a statusline again. Collected by
+    // `pruneExcept` instead, once the app knows which sessions it actually has.
     await fs.mkdir(this.outDir, { recursive: true })
+  }
+
+  /** Deletes the stored payload of every session not in `keep`.
+   *
+   *  The collector for this folder. Called once the app has taken its sessions back from the Host
+   *  (main/ipc.ts), which is the first moment the full set is known — at `init` it is not, and
+   *  guessing there is what the old unconditional wipe amounted to. A payload for a session the app
+   *  has no record of can never be read by anything, so it is exactly the garbage that wipe was
+   *  after; a payload for a session that is merely exited stays, because its record is still around
+   *  and a resume may still ask for its transcript path.
+   *
+   *  Never throws: a folder that is not there yet, or one file that will not delete, leaves the rest
+   *  of the sweep alone. */
+  async pruneExcept(keep: ReadonlySet<string>): Promise<void> {
+    let names: string[]
+    try {
+      names = await fs.readdir(this.outDir)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue
+      if (keep.has(name.slice(0, -'.json'.length))) continue
+      await fs.rm(path.join(this.outDir, name), { force: true }).catch(() => {})
+    }
   }
 
   /** Injection info for a session spawn. originalCommand is the existing statusLine from the account's

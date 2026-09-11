@@ -90,3 +90,57 @@ describe('StatusLineManager 훅 주입', () => {
     expect(settings.hooks.Notification[0].hooks[0].command).toContain('astera-hook-capture.cjs')
   })
 })
+
+// What the app reads a session's transcript path out of. The folder used to be wiped at init, on the
+// grounds that a restart killed every pty; the Host made that false, and the wipe then cost every
+// surviving session its path until it next wrote a statusline.
+describe('StatusLineManager statusline payloads', () => {
+  let dir: string
+  let mgr: StatusLineManager
+
+  const writePayload = async (sessionId: string): Promise<void> => {
+    await fs.writeFile(
+      path.join(dir, 'statusline', `${sessionId}.json`),
+      JSON.stringify({ session_id: sessionId, transcript_path: `/t/${sessionId}.jsonl` }),
+      'utf8'
+    )
+  }
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-slp-'))
+    mgr = new StatusLineManager(dir)
+    await mgr.init()
+  })
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('init keeps a payload written by a previous run — a session can outlive the app', async () => {
+    await writePayload('survivor')
+    await new StatusLineManager(dir).init()
+    expect(await mgr.read('survivor')).toEqual({
+      session_id: 'survivor',
+      transcript_path: '/t/survivor.jsonl'
+    })
+  })
+
+  it('pruneExcept drops the payloads of sessions that are gone and keeps the rest', async () => {
+    await writePayload('alive')
+    await writePayload('gone')
+    await mgr.pruneExcept(new Set(['alive']))
+    expect(await mgr.read('alive')).not.toBeNull()
+    expect(await mgr.read('gone')).toBeNull()
+  })
+
+  it('pruneExcept leaves anything that is not a payload alone', async () => {
+    const stray = path.join(dir, 'statusline', 'notes.txt')
+    await fs.writeFile(stray, 'keep me', 'utf8')
+    await mgr.pruneExcept(new Set())
+    expect(await fs.readFile(stray, 'utf8')).toBe('keep me')
+  })
+
+  it('pruneExcept does not throw when there is no folder yet', async () => {
+    await fs.rm(path.join(dir, 'statusline'), { recursive: true, force: true })
+    await expect(mgr.pruneExcept(new Set(['alive']))).resolves.toBeUndefined()
+  })
+})

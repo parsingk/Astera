@@ -843,6 +843,14 @@ export function registerIpc(
   const hostSessionsTakenBack = new Promise<SessionsTakenBack>((resolve) => {
     settleSessionsTakenBack = resolve
   })
+  // Collect the statusline payloads of sessions that are gone. Hung off the promise above because
+  // this is the first moment `sessions.list()` is the real set: before the Host answers, a session it
+  // is still running has no record here, and dropping its payload then is what the old wipe at
+  // StatusLineManager.init did — it cost every surviving session its transcript path. Settles on
+  // every path, including the no-Host one, where the set is simply what the app restored by itself.
+  void hostSessionsTakenBack.then(() =>
+    core.pruneStatusLinePayloads(new Set(core.sessions.list().map((session) => session.id)))
+  )
   /** Job Continuity's recorder. Non-null only while the toggle is on: off means no file is opened and
    *  nothing is written (spec §0.4). Created before store.load in bootOrch so the restart's losses are
    *  journaled, and by the toggle handler when turned on at runtime. */
