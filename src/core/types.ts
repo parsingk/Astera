@@ -1358,6 +1358,12 @@ export type RendererApi = CoreApi & {
      *  repeats a turn already returned. */
     more(sessionId: string, before: number): Promise<{ turns: ConvTurn[]; from: number; more: boolean } | null>
     close(sessionId: string): Promise<void>
+    /** One session's attention verdict (main/attention.ts), read once rather than waited for — the
+     *  'conversation:attention' event only fires on a change, so a session already `waiting` (or
+     *  `working`) when its pane mounts needs this to know that before the first change arrives, if
+     *  one ever does. Independent of `open`: a fresh session on a trust prompt is `waiting` while
+     *  `open` still answers null. */
+    attention(sessionId: string): Promise<Attention>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

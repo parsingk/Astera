@@ -3,6 +3,7 @@ import {
   accountRemovalBlockers,
   closeConversationOnExit,
   codexRolloutFromNote,
+  conversationAttentionOf,
   forgetAttentionOnExit,
   historyResumePlan,
   hostHandshakeMeans,
@@ -602,5 +603,22 @@ describe('closeConversationOnExit — a session exit closes its open conversatio
   // that — the same defensive shape as forgetAttentionOnExit's undefined case above.
   it('does nothing, without throwing, when there is no conversation sessions', () => {
     expect(() => closeConversationOnExit(undefined, 's1', 0)).not.toThrow()
+  })
+})
+
+// The real attention state, for the same reason forgetAttentionOnExit's tests above use it: this
+// pins the actual value a caller reads back, not just which method got called.
+describe('conversationAttentionOf — the pane\'s one-shot read on mount', () => {
+  it('reads back whatever the session is currently at', () => {
+    const attention = createAttentionState()
+    attention.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'permission_prompt' })
+    expect(conversationAttentionOf(attention, 's1')).toBe('waiting')
+  })
+
+  // A session `get` has never seen defaults to idle (main/attention.ts) — this only has to prove
+  // the pass-through does not substitute a different default of its own.
+  it('reads idle for a session it has never seen', () => {
+    const attention = createAttentionState()
+    expect(conversationAttentionOf(attention, 'never-seen')).toBe('idle')
   })
 })

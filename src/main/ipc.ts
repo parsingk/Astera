@@ -13,7 +13,7 @@ import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
-import type { AttentionState } from './attention'
+import type { AttentionState, Attention } from './attention'
 import { createConversationSessions, transcriptPathFor, type ConversationSessions } from './conversation'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
@@ -593,6 +593,21 @@ export function closeConversationOnExit(
 ): void {
   if (exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
   sessions?.close(sessionId)
+}
+
+/**
+ * One session's attention verdict, read once rather than waited for. The conversation view's IPC
+ * surface (core/types.ts's `conversation`) is otherwise push-only — 'conversation:attention' fires
+ * only on a change — so a session already `waiting` (or `working`) when its conversation pane
+ * mounts would read `idle` until the next change, and a `waiting` session's next change is the
+ * answer to the very prompt the pane exists to surface. This is what the pane calls once on mount,
+ * before it subscribes to the push stream.
+ *
+ * A pure function for the same reason `forgetAttentionOnExit` above is one: the real call sits
+ * inside `registerIpc`'s handler registration, unreachable without an Electron harness.
+ */
+export function conversationAttentionOf(attention: Pick<AttentionState, 'get'>, sessionId: string): Attention {
+  return attention.get(sessionId)
 }
 
 export function registerIpc(
@@ -5807,6 +5822,10 @@ export function registerIpc(
   ipcMain.handle('conversation.close', (_e, sessionId: string) => {
     conversationSessions.close(sessionId)
   })
+  // Independent of open/more/close — a fresh session sitting on a trust prompt is `waiting` while
+  // `open` still answers null, so this reads main/attention.ts directly rather than folding onto
+  // conversationSessions.
+  ipcMain.handle('conversation.attention', (_e, sessionId: string) => conversationAttentionOf(attention, sessionId))
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
