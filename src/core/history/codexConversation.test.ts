@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { reduceCodexRollout } from './codexConversation'
+import { reduceCodexRollout, extractCodexModel } from './codexConversation'
 import type { ConvPart, ConvTurn, ToolPart } from './convTypes'
 
 const fixture = (): string[] =>
@@ -136,5 +136,24 @@ describe('reduceCodexRollout — the preamble codex writes for itself', () => {
       userRecord('<environment_context>\n  <cwd>/w</cwd>', '이어서 해줘')
     ])
     expect(turns.map(textOf)).toEqual(['<environment_context>\n  <cwd>/w</cwd>이어서 해줘'])
+  })
+})
+
+describe('extractCodexModel', () => {
+  const context = (model: string, effort: string): string =>
+    JSON.stringify({ type: 'turn_context', payload: { turn_id: 't', model, effort } })
+
+  // One per turn, so a session whose model changed halfway has two, and the later one is the truth.
+  it('takes the last context, not the first', () => {
+    expect(
+      extractCodexModel([context('gpt-5.6-sol', 'xhigh'), context('gpt-6-astra', 'high')])
+    ).toEqual({ model: 'gpt-6-astra', effort: 'high' })
+  })
+
+  it('answers nulls when the window holds no context at all', () => {
+    expect(extractCodexModel(fixture().filter((l) => !l.includes('turn_context')))).toEqual({
+      model: null,
+      effort: null
+    })
   })
 })

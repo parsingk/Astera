@@ -1204,6 +1204,7 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.slash.action': 'Go to the terminal',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effort': 'Change effort (in the terminal)',
+  'conversation.model.change': 'Change model and effort (in the terminal)',
   'conversation.model.aria': 'Model and effort',
   'conversation.model.unknown': 'Checking the model',
   'conversation.unavailable': 'This session has no transcript yet',

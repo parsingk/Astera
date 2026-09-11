@@ -205,6 +205,14 @@ export function modelLineOf(
   return format(info.model, info.effort);
 }
 
+/** How long after the paste the return is sent. The two have to arrive as two chunks — together they
+ *  reach the CLI as one, the return is swallowed into the paste, and nothing is submitted at all —
+ *  and how much separation is enough turns out to differ by CLI: Claude's took every gap tried,
+ *  codex's dropped some of the short ones (measured on both, 2026-09-12). A quarter second is far
+ *  above where the failures were and is nothing a person waits on, since the composer has already
+ *  cleared by then. */
+const SUBMIT_GAP_MS = 250
+
 /** How long to wait before re-reading the model after asking the CLI to switch. It rewrites its
  *  statusline as it goes, but not within the same breath as the command. */
 const MODEL_REREAD_MS = 1_500;
@@ -274,10 +282,11 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   const [commands, setCommands] = useState<readonly SlashCommand[]>([]);
   const [composerText, setComposerText] = useState("");
   const [slashActive, setSlashActive] = useState(0);
-  const [modelInfo, setModelInfo] = useState<{ model: string | null; effort: string | null }>({
-    model: null,
-    effort: null
-  });
+  const [modelInfo, setModelInfo] = useState<{
+    model: string | null
+    effort: string | null
+    canPick: boolean
+  }>({ model: null, effort: null, canPick: true });
 
   // Bumped by the mount effect on every run, and again in that same run's cleanup — so any callback
   // still holding a past run's captured `generation` value can tell, at any later point, whether the
@@ -310,7 +319,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     setMore(false);
     setAttention("idle");
     setSlashSent(false);
-    setModelInfo({ model: null, effort: null });
+    setModelInfo({ model: null, effort: null, canPick: true });
     setComposerText("");
     setSlashActive(0);
     setSlashDismissed(false);
@@ -539,9 +548,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       setSlashSent(isSlashCommand(text));
       const [paste, submit] = ptyWritesFor(text);
       window.api.sessions.write(sessionId, paste);
-      // A separate turn of the event loop, so the two land as two chunks. Sent together they reach
-      // the CLI as one, the return is swallowed into the paste, and nothing is submitted at all.
-      setTimeout(() => window.api.sessions.write(sessionId, submit), 0);
+      setTimeout(() => window.api.sessions.write(sessionId, submit), SUBMIT_GAP_MS);
     },
     [sessionId]
   );
@@ -646,7 +653,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     (text: string): void => {
       const [paste, submit] = ptyWritesFor(text);
       window.api.sessions.write(sessionId, paste);
-      setTimeout(() => window.api.sessions.write(sessionId, submit), 0);
+      setTimeout(() => window.api.sessions.write(sessionId, submit), SUBMIT_GAP_MS);
     },
     [sessionId]
   );
@@ -685,14 +692,15 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         }, MODEL_REREAD_MS);
       },
       onChangeEffort: () => {
-        // `/effort` opens a slider of its own — low through ultracode — and takes no argument, so
-        // there is nothing to set from here. The CLI owns that screen; open it and take the person
-        // there rather than drive its arrows blind.
-        sendCommand("/effort");
+        // Claude's `/effort` opens a slider of its own — low through ultracode — and codex's `/model`
+        // opens a picker that sets both. Neither takes an argument, so there is nothing to set from
+        // here: open the CLI's own screen and take the person to it rather than drive it blind.
+        sendCommand(modelInfo.canPick ? "/effort" : "/model");
         goTerminal();
-      }
+      },
+      canPick: modelInfo.canPick
     }),
-    [modelLine, modelInfo.model, sendCommand, goTerminal, sessionId]
+    [modelLine, modelInfo.model, modelInfo.canPick, sendCommand, goTerminal, sessionId]
   );
 
   const SlashMenuBanner = useCallback(

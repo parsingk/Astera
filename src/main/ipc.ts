@@ -10,11 +10,17 @@ import type { RollingCoordinator } from './rolling'
 import type { CodexRollingCoordinator } from './codexRolling'
 import type { SchedulerCoordinator } from './scheduler'
 import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
+import { readFileTail } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
 import type { AttentionState, Attention } from './attention'
-import { createConversationSessions, transcriptPathFor, type ConversationSessions } from './conversation'
+import {
+  createConversationSessions,
+  transcriptPathFor,
+  codexModelFor,
+  type ConversationSessions
+} from './conversation'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
 import { hostAddress, retireOlderHosts } from '../host/address'
@@ -5857,9 +5863,15 @@ export function registerIpc(
   // statusline of its own, so what the CLI reports about the model is read on demand. Never throws —
   // core.statusLinePayload answers null for a session that has written nothing, and the extractor
   // answers nulls for anything it cannot read.
-  ipcMain.handle('conversation.model', async (_e, sessionId: string) =>
-    extractStatusLineModel(await core.statusLinePayload(sessionId))
-  )
+  ipcMain.handle('conversation.model', async (_e, sessionId: string) => {
+    const fromStatusLine = extractStatusLineModel(await core.statusLinePayload(sessionId))
+    if (fromStatusLine.model !== null) return { ...fromStatusLine, canPick: true }
+    // codex keeps no statusline at all, so its rollout is the only place this exists.
+    const rollout = codexRollout?.rolloutPathFor(sessionId) ?? null
+    if (rollout === null) return { ...fromStatusLine, canPick: true }
+    const fromRollout = await codexModelFor(rollout, readFileTail)
+    return { ...fromRollout, canPick: false }
+  })
   // What `/` offers in the composer. Read on demand rather than watched: the folders change when a
   // person installs something, which is not while they are typing, and the pane asks once when it
   // opens. Answers an empty list rather than throwing for a session whose account has gone.

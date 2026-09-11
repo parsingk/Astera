@@ -1377,7 +1377,14 @@ export type RendererApi = CoreApi & {
     /** The model and effort the CLI last reported for this session, or nulls when it has reported
      *  nothing yet. Read rather than pushed: it changes only when a person changes it, which they do
      *  through the CLI's own screen, and there is no event for that. */
-    model(sessionId: string): Promise<{ model: string | null; effort: string | null }>
+    model(sessionId: string): Promise<{
+      model: string | null
+      effort: string | null
+      /** Whether a model can be chosen from a menu, or only through the CLI's own screen. True for
+       *  Claude, whose `/model <alias>` switches outright; false for codex, whose `/model` only ever
+       *  opens a picker and reads an argument as a message to answer. */
+      canPick: boolean
+    }>
     /** Everything `/` can start for this session, read off disk (main/slashCommands.ts). The CLI's
      *  own built-ins are not in it — nothing on disk describes them — and a name that is missing still
      *  runs when it is typed in full. */

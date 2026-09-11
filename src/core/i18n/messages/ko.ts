@@ -1398,6 +1398,7 @@ export const ko = {
   'conversation.slash.action': '터미널로 이동',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effort': 'effort 바꾸기 (터미널에서)',
+  'conversation.model.change': '모델과 effort 바꾸기 (터미널에서)',
   'conversation.model.aria': '모델과 effort',
   'conversation.model.unknown': '모델 확인 중',
   // ConversationPane.tsx — open() answering null, and a transcript that exists but has no turns yet.

@@ -32,20 +32,31 @@ export interface ModelControlProps {
   onPickModel: (alias: string) => void;
   /** Open the CLI's own model screen and go to the terminal, which is where its effort arrows are. */
   onChangeEffort: () => void;
+  /** Whether this CLI can be switched by name. codex cannot: its `/model` only opens a picker, and
+   *  an argument is read as a message to answer rather than a command — so for it the menu offers the
+   *  screen instead of names it would not understand. */
+  canPick: boolean;
 }
 
 /** The model and effort readout that sits in the composer, right of the attachment button. */
-export function ModelControl({ line, onPickModel, onChangeEffort }: ModelControlProps): ReactNode {
+export function ModelControl({
+  line,
+  onPickModel,
+  onChangeEffort,
+  canPick
+}: ModelControlProps): ReactNode {
   const { t } = useI18n();
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
 
-  const items: MenuItem[] = [
-    ...MODEL_CHOICES.map(
-      (choice): MenuItem => ({ label: choice.label, onSelect: () => onPickModel(choice.alias) })
-    ),
-    "separator",
-    { label: t("conversation.model.effort"), onSelect: onChangeEffort }
-  ];
+  const items: MenuItem[] = canPick
+    ? [
+        ...MODEL_CHOICES.map(
+          (choice): MenuItem => ({ label: choice.label, onSelect: () => onPickModel(choice.alias) })
+        ),
+        "separator",
+        { label: t("conversation.model.effort"), onSelect: onChangeEffort }
+      ]
+    : [{ label: t("conversation.model.change"), onSelect: onChangeEffort }];
 
   return (
     <>

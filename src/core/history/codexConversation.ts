@@ -234,3 +234,31 @@ export function reduceCodexRollout(
 
   return turns.filter((t) => t.parts.length > 0)
 }
+
+/**
+ * What model and effort a codex session is running under, read off the rollout's own `turn_context`
+ * records. The **last** one wins: codex writes one per turn, and a person who changed model mid
+ * session changed it for the turns after that, not the ones before.
+ *
+ * There is no statusline on this side — codex has no such mechanism at all — so this file is the only
+ * place the answer exists. Nulls when the window holds no `turn_context`, which is every session that
+ * has not completed a turn yet.
+ */
+export function extractCodexModel(lines: string[]): { model: string | null; effort: string | null } {
+  let model: string | null = null
+  let effort: string | null = null
+  for (const raw of lines) {
+    let obj: unknown
+    try {
+      obj = JSON.parse(raw)
+    } catch {
+      continue
+    }
+    if (!isRecord(obj) || obj.type !== 'turn_context') continue
+    const payload = obj.payload
+    if (!isRecord(payload)) continue
+    model = str(payload.model) ?? model
+    effort = str(payload.effort) ?? effort
+  }
+  return { model, effort }
+}

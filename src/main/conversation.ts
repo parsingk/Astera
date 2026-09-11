@@ -4,7 +4,7 @@ import {
   type ReduceLines
 } from '../core/history/conversationRead'
 import { reduceTranscript } from '../core/history/conversation'
-import { reduceCodexRollout } from '../core/history/codexConversation'
+import { reduceCodexRollout, extractCodexModel } from '../core/history/codexConversation'
 import { extractStatusLineSession } from '../core/usage/statusline'
 import type { ConvTurn, ToolPart } from '../core/history/conversation'
 
@@ -31,6 +31,25 @@ export async function transcriptPathFor(
     return null
   }
   return extractStatusLineSession(payload).transcriptPath
+}
+
+/** How much of a rollout's end to read when asking what model it is on. A `turn_context` is written
+ *  once per turn, so the last one is always near the end; this is the same order of size as the
+ *  conversation window itself and costs one bounded read. */
+const CODEX_CONTEXT_TAIL_BYTES = 256 * 1024
+
+/** What a codex session is running under, read from the end of its rollout.
+ *
+ *  The counterpart of the statusline payload on the Claude side, and it has to be a file read because
+ *  codex publishes nothing else — no statusline, no event. Answers nulls for anything it cannot read,
+ *  exactly as extractStatusLineModel does, because every caller is drawing a label. */
+export async function codexModelFor(
+  filePath: string,
+  readTail: (path: string, bytes: number) => Promise<string | null>
+): Promise<{ model: string | null; effort: string | null }> {
+  const text = await readTail(filePath, CODEX_CONTEXT_TAIL_BYTES).catch(() => null)
+  if (text === null) return { model: null, effort: null }
+  return extractCodexModel(text.split('\n').filter((l) => l.trim().length > 0))
 }
 
 export interface ConversationSessions {
