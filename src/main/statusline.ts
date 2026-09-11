@@ -129,11 +129,19 @@ export class StatusLineManager {
     // what made the notification feature inert for an ordinary session: the flag was on, the sink had
     // no per-session gate, and the event simply never arrived.
     //
-    // The cost is one node process when a prompt appears. The hooks below are kept out of here
-    // because nothing but slack.ts reads them, and a Slack session takes the other file anyway —
-    // Stop would spend a process at the end of every turn for an event with no reader.
+    // The cost is one node process when a prompt appears.
+    //
+    // Stop goes into every session for the same reason, and it is what lets a session stop waiting.
+    // main/attention.ts reads Notification to learn a session is waiting on a person, and Stop or
+    // PostToolUse to learn it no longer is. PostToolUse only ever fires when a call actually runs, so
+    // a person who answers "no" produces neither — and without Stop here an ordinary session would
+    // stay `waiting` for the rest of its life, with the conversation view's banner up and its
+    // composer locked the whole time (measured in the dev app, not reasoned about). It used to be
+    // kept out of here on the grounds that nothing but slack.ts read it; attention.ts reads it now.
+    // The cost is one node process at the end of a turn, which is minutes apart, not per keystroke.
     const notificationHook = {
-      Notification: [{ hooks: [{ type: 'command', command: hookCmd }] }]
+      Notification: [{ hooks: [{ type: 'command', command: hookCmd }] }],
+      Stop: [{ hooks: [{ type: 'command', command: hookCmd }] }]
     }
     const settings = {
       // It is a JSON string, so no shell escaping. Paths are normalised to forward slashes (fine on Windows too).
@@ -145,14 +153,14 @@ export class StatusLineManager {
       hooks: notificationHook
     }
     await fs.writeFile(this.settingsFile, JSON.stringify(settings, null, 2), 'utf8')
-    // What only slack.ts reads, on top: the turn summary's Stop, and the pending-question pair, which
-    // fires per tool call and is therefore matcher-limited. Only a Slack-notifying or rolling session
-    // pays for these.
+    // What only slack.ts reads, on top: the pending-question pair, which fires per tool call and is
+    // therefore matcher-limited. Only a Slack-notifying or rolling session pays for these. (Stop is
+    // in notificationHook above — slack.ts reads it for its turn summary, attention.ts for every
+    // session.)
     const hooksSettings = {
       ...settings,
       hooks: {
         ...notificationHook,
-        Stop: [{ hooks: [{ type: 'command', command: hookCmd }] }],
         // Captures what the waiting screen shows (the question and its options, the tool awaiting approval and its
         // arguments) **before** the tool runs. The transcript cannot supply it — Claude Code does not flush assistant
         // messages while it waits for user interaction, so while a question or approval prompt is on screen that
