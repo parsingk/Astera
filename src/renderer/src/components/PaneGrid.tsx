@@ -1,5 +1,5 @@
-import { useRef, useState, type CSSProperties } from 'react'
-import type { Account, RollStateEvent, SchedStateEvent, SessionInfo } from '../../../core/types'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import type { Account, Attention, RollStateEvent, SchedStateEvent, SessionInfo, SessionView } from '../../../core/types'
 import {
   MAX_PANES,
   clampRatio,
@@ -14,12 +14,14 @@ import {
   type Rect
 } from '../../../core/panes/tree'
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
+import { openSessionView, sessionViewOf, setSessionView, withoutClosedSessions } from '../../../core/panes/sessionView'
 import { tabLabels } from '../../../core/files/tabLabel'
 import type { RecordStatus } from '../../../core/understanding/types'
 import { displayHostOf } from '../../../core/preview/url'
 import { browserSlotDraw } from './browserSlot'
 import { useI18n } from '../i18n/I18nProvider'
 import { TerminalView } from './TerminalView'
+import { ConversationPane } from './conversation/ConversationPane'
 import { RECORD_GLYPH, RECORD_GLYPH_COLOR } from './UnderstandingIcons'
 import {
   WorkbenchTabs,
@@ -55,6 +57,8 @@ export function PaneGrid({
   rollStates,
   schedStates,
   busy,
+  attention,
+  conversationDefault,
   draggingTabId,
   newDisabled,
   onFocusPane,
@@ -99,6 +103,19 @@ export function PaneGrid({
   rollStates: Record<string, RollStateEvent>
   schedStates: Record<string, SchedStateEvent>
   busy: Record<string, boolean>
+  /** Task 10's tab-bar marker. App owns the subscription and the one-shot read
+   *  (window.api.on('conversation:attention', …), same effect block as session:busy/rollState/
+   *  schedState above it), for the same reason those three live in App rather than here: this
+   *  component makes no window.api calls of its own anywhere else, and stays a pure prop-driven
+   *  renderer. ConversationPane (./conversation/ConversationPane.tsx) tracks the very same broadcast
+   *  independently, for its own banner — that duplication is deliberate, not a shared source: it
+   *  needs the value only for whichever one session it currently has open, and only while mounted,
+   *  which is exactly when its own tab-bar segment does not need a marker. */
+  attention: Record<string, Attention>
+  /** Task 10: what a session tab not yet seen before opens showing. Only ever read at the moment a
+   *  tab first appears (see the session-view effect below) — changing the setting never reaches
+   *  into a tab that is already open. */
+  conversationDefault: SessionView
   /** The tab id being dragged (any kind), or null. App owns it so a drag started in one pane's bar is
    *  visible to every other pane */
   draggingTabId: string | null
@@ -145,6 +162,26 @@ export function PaneGrid({
   // The file tab each pane last showed. Kept across a switch to a session tab so the editor is hidden
   // rather than unmounted — remounting rebuilds the document that many times over
   const lastFileOfPane = useRef<Map<string, string>>(new Map())
+
+  // Task 10: which of the terminal or the conversation each session tab is showing, remembered per
+  // tab (core/panes/sessionView.ts holds the reducers; this owns the actual record). It lives here
+  // rather than in App — App already hands this component the one thing it needs from outside
+  // (conversationDefault, the setting a brand-new tab starts from), and everything else about the
+  // choice is local to how a session slot draws itself, the same reason lastFileOfPane above is a
+  // local ref rather than App state.
+  const [sessionViews, setSessionViews] = useState<Record<string, SessionView>>({})
+  // Seeds a session's view the moment its tab first appears, and drops the choice for a session
+  // that no longer has one — a tab the person closed and a session App forgot for any other reason
+  // both show up here the same way: missing from `sessions`. Reruns whenever `sessions` or the
+  // setting changes; openSessionView is a no-op for a session already seeded, so a later change to
+  // the setting alone never reaches into a tab that is already open (Task 10's requirement 2).
+  useEffect(() => {
+    setSessionViews((prev) => {
+      let next = prev
+      for (const s of sessions) next = openSessionView(next, s.id, conversationDefault)
+      return withoutClosedSessions(next, new Set(sessions.map((s) => s.id)))
+    })
+  }, [sessions, conversationDefault])
 
   const paneLeaves = layout ? leaves(layout) : []
   const rects: Map<string, Rect> = layout ? computeRects(layout) : new Map()
@@ -210,10 +247,26 @@ export function PaneGrid({
 
   return (
     <div className="panes pane-grid" ref={hostRef}>
+      {/* Session slots — the same rule the browser slots' own comment below states: one per tab for
+          the tab's whole life, display:none unless active, so the thing inside keeps its state
+          across a tab switch. Task 10 splits that rule in two within a session's own slot, and the
+          split is deliberate — do not "fix" the asymmetry into matching in either direction, both
+          are wrong:
+          **The terminal is always mounted, for the tab's whole life, exactly as before.** An
+          unmounted xterm loses its scrollback and its size, and this feature must cost the terminal
+          nothing, so it is only ever hidden by the inner .session-view wrapper's display:none, never
+          unmounted — TerminalView itself is untouched.
+          **The conversation pane mounts only while it is showing.** It has no scrollback to lose,
+          re-opening re-reads the window it would have shown anyway, and main only follows a
+          session's transcript between conversation.open and .close — mounting one ConversationPane
+          per session for the tab's whole life would have every session polling its transcript once a
+          second whether or not anyone ever looked. */}
       {sessions.map((s) => {
         const pane = paneOfSession.get(s.id)
         const visible = pane != null && pane.activeTabId === sessionTab(s.id)
         const rect = pane ? rects.get(pane.id) : undefined
+        const view = sessionViewOf(sessionViews, s.id)
+        const showingConversation = visible && view === 'conversation'
         return (
           <div
             key={s.id}
@@ -232,14 +285,33 @@ export function PaneGrid({
             }
             onMouseDown={() => pane && onFocusPane(pane.id)}
           >
-            <TerminalView
-              session={s}
-              onRestart={onRestart}
-              rollState={rollStates[s.id] ?? null}
-              schedState={schedStates[s.id] ?? null}
-              active={visible && pane != null && pane.id === activePaneId}
-              onOpenUrl={onOpenUrl}
-            />
+            <div className="session-view" style={{ display: showingConversation ? 'none' : 'flex' }}>
+              <TerminalView
+                session={s}
+                onRestart={onRestart}
+                rollState={rollStates[s.id] ?? null}
+                schedState={schedStates[s.id] ?? null}
+                // False while the conversation is showing — it must neither take focus nor be fitted
+                // to a pane it is not in front of (Task 10's brief).
+                active={visible && !showingConversation && pane != null && pane.id === activePaneId}
+                onOpenUrl={onOpenUrl}
+              />
+            </div>
+            {showingConversation && (
+              <div className="session-view" style={{ display: 'flex' }}>
+                <ConversationPane
+                  sessionId={s.id}
+                  onGoTerminal={() => {
+                    setSessionViews((prev) => setSessionView(prev, s.id, 'terminal'))
+                    // Same contract as PendingBanner.tsx's own onGoTerminal prop: focus the
+                    // session's terminal. Switching the view alone is not enough when this pane
+                    // is not the app's active one — TerminalView only focuses itself from its own
+                    // `active` prop, which also needs pane.id === activePaneId.
+                    if (pane) onFocusPane(pane.id)
+                  }}
+                />
+              </div>
+            )}
           </div>
         )
       })}
@@ -471,6 +543,20 @@ export function PaneGrid({
             }
           })
           .filter((x): x is WorkbenchTab => x != null)
+        // The toggle's own data — present only when this pane's active tab is a session, which is
+        // what keeps it off a file, browser, or record tab. Computed here rather than left for
+        // WorkbenchTabs to work out because parseTab, sessionViews and attention are all this
+        // component's own — WorkbenchTabs only draws what it is handed, the same split every other
+        // per-tab field above (busy, exited, rollTooltip) already follows.
+        const activeSessionRef = parseTab(l.activeTabId)
+        const activeSession =
+          activeSessionRef?.kind === 'session'
+            ? {
+                sessionId: activeSessionRef.id,
+                view: sessionViewOf(sessionViews, activeSessionRef.id),
+                attention: attention[activeSessionRef.id] ?? ('idle' as Attention)
+              }
+            : null
         return (
           <div
             key={`tabbar-${l.id}`}
@@ -493,6 +579,10 @@ export function PaneGrid({
               renamingTabId={renamingTabId}
               onRenameStart={onRenameStart}
               onRenameEnd={onRenameEnd}
+              activeSession={activeSession}
+              onSetSessionView={(sessionId, view) =>
+                setSessionViews((prev) => setSessionView(prev, sessionId, view))
+              }
             />
           </div>
         )

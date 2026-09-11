@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
+import type { Account, Attention, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, SessionView, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -506,6 +506,10 @@ export default function App(): React.JSX.Element {
   orchEnabledRef.current = orchEnabled
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   const [agentBrowserEnabled, setAgentBrowserEnabled] = useState(false) // the agent browser toggle
+  // Task 10: what a new session tab opens as. Needed outside the settings modal too — PaneGrid reads
+  // it the moment a session tab first appears — so it is loaded at mount like orchEnabled above,
+  // not only while the modal is open.
+  const [conversationDefault, setConversationDefault] = useState<SessionView>('terminal')
   // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
   // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
   const [jobsOpen, setJobsOpen] = useState(false)
@@ -549,6 +553,12 @@ export default function App(): React.JSX.Element {
   const [rollStates, setRollStates] = useState<Record<string, RollStateEvent>>({})
   const [schedStates, setSchedStates] = useState<Record<string, SchedStateEvent>>({}) // the schedule banner
   const [busy, setBusy] = useState<Record<string, boolean>>({}) // whether each session is working — the tab spinner
+  // Task 10's tab-bar marker (PaneGrid.tsx's own comment on the prop has the full reasoning). Same
+  // shape and the same subscription convention as rollStates/schedStates/busy above.
+  const [attention, setAttention] = useState<Record<string, Attention>>({})
+  // Every session id ever asked about with the one-shot attention read below — read once per
+  // session, ever, not on every render or every sessions-list change.
+  const requestedAttentionRef = useRef<Set<string>>(new Set())
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]) // file viewer tabs
   // How It Works record detail tabs. Kept in a separate list for the same reason as file tabs — a
   // `record:<id>` tab id carries neither the project nor the title, so this tab could not be drawn,
@@ -753,6 +763,10 @@ export default function App(): React.JSX.Element {
     // from a cold start until someone opened settings once — not late, absent.
     void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
+    // PaneGrid seeds a session tab's remembered view from this the moment the tab first appears, so
+    // it has to be loaded before a session ever spawns — the same reason orchEnabled above is loaded
+    // at mount rather than only while the settings modal is open.
+    void window.api.settings.getConversationDefault().then(setConversationDefault)
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
     void window.api.sessions.list().then((list) => {
       setSessions(list)
@@ -935,6 +949,8 @@ export default function App(): React.JSX.Element {
       .getAgentPermissionMode()
       .then((m) => setAgentYolo(m === 'yolo'))
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
+    // Re-syncs the new-tab default too, for the same reason as orchestration above.
+    void window.api.settings.getConversationDefault().then(setConversationDefault)
     // Astera Host slice 1: this value goes stale, and the row is only ever on screen while this
     // modal is open, so it is read here rather than at startup.
     void window.api.host.status().then(setHostStatus)
@@ -1173,9 +1189,22 @@ export default function App(): React.JSX.Element {
         const { [oldSessionId]: _dropped, ...rest } = prev
         return rest
       })
+      // Same drop, same reason: main's attention tracking (src/main/attention.ts) is per session id
+      // and starts fresh for the new one, so the old id's verdict is stale the instant it rolls.
+      setAttention((prev) => {
+        const { [oldSessionId]: _dropped, ...rest } = prev
+        return rest
+      })
     })
     const offBusy = window.api.on('session:busy', ({ sessionId, busy: b }) =>
       setBusy((prev) => (prev[sessionId] === b ? prev : { ...prev, [sessionId]: b }))
+    )
+    // Task 10's tab-bar marker. Fires app-wide on every attention change regardless of whether any
+    // conversation pane happens to be open (core/types.ts's own doc on the event) — this is a second,
+    // independent listener from ConversationPane's own, not something threaded down from it; see the
+    // `attention` prop's own comment in PaneGrid.tsx for why that duplication is deliberate.
+    const offAttention = window.api.on('conversation:attention', (e) =>
+      setAttention((prev) => (prev[e.sessionId] === e.value ? prev : { ...prev, [e.sessionId]: e.value }))
     )
     const offRollState = window.api.on('session:rollState', (ev) => {
       // A failed auto-resume is announced with a toast. Why not a banner: a banner only disappears once
@@ -1211,10 +1240,33 @@ export default function App(): React.JSX.Element {
     return () => {
       offRolled()
       offBusy()
+      offAttention()
       offRollState()
       offSchedState()
     }
   }, [])
+
+  // The one-shot half of Task 10's attention tracking, same pattern ConversationPane's own mount
+  // effect uses and for the same reason: 'conversation:attention' above only fires on a change, so a
+  // session already `waiting` before this ever asked about it would read as unmarked until its next
+  // change — which, for a session stuck on the very prompt the marker exists to surface, may not
+  // come. No sawLiveAttention-style ordering flag is needed the way ConversationPane's has one:
+  // `attention` starts with no entry for a session rather than seeding it to 'idle', so "already has
+  // an entry by the time this resolves" can only mean the live listener above beat it there — the
+  // one and only other writer of this id — so checking presence is enough to stop a late read from
+  // clobbering a newer value.
+  useEffect(() => {
+    for (const s of sessions) {
+      if (requestedAttentionRef.current.has(s.id)) continue
+      requestedAttentionRef.current.add(s.id)
+      void window.api.conversation
+        .attention(s.id)
+        .then((value) => {
+          setAttention((prev) => (s.id in prev ? prev : { ...prev, [s.id]: value }))
+        })
+        .catch(() => {})
+    }
+  }, [sessions])
 
   // When a shell dies on its own (the user typed exit) its tab is removed — a dead shell tab is noise.
   // If it was the active tab, we go back to Run (the panel itself stays).
@@ -3765,6 +3817,8 @@ export default function App(): React.JSX.Element {
                 rollStates={rollStates}
                 schedStates={schedStates}
                 busy={busy}
+                attention={attention}
+                conversationDefault={conversationDefault}
                 draggingTabId={dragTabId}
                 newDisabled={!anyCliOk}
                 onFocusPane={setActivePaneId}
@@ -4002,6 +4056,36 @@ export default function App(): React.JSX.Element {
                         value={storedLang ?? SYSTEM_LANG}
                         onChange={(v) => setLang(v === SYSTEM_LANG ? null : (v as Lang))}
                         ariaLabel={t('settings.general.language')}
+                      />
+                    </div>
+                    {/* Task 10: what a new session tab opens as. A plain enum with nothing coupled to
+                        it, so — unlike the resume-strategy pair below, which earns its own component
+                        exactly because setting one can flip the other — a settings-row beside the
+                        language row is all this needs. Only seeds a tab's own remembered choice the
+                        moment its tab first appears (core/panes/sessionView.ts), so changing this
+                        here never reaches into a tab that is already open. */}
+                    <div className="settings-row">
+                      <span>{t('settings.conversation.title')}</span>
+                      <Select
+                        items={[
+                          { value: 'terminal', label: t('settings.conversation.terminal') },
+                          { value: 'conversation', label: t('settings.conversation.conversation') }
+                        ]}
+                        value={conversationDefault}
+                        onChange={(v) => {
+                          const next = v as SessionView
+                          const prev = conversationDefault
+                          setConversationDefault(next) // an optimistic update — reverted below on failure
+                          void window.api.settings.setConversationDefault(next).catch((err) => {
+                            setConversationDefault(prev)
+                            toast.error(
+                              t('settings.conversation.saveFailed', {
+                                detail: err instanceof Error ? err.message : String(err)
+                              })
+                            )
+                          })
+                        }}
+                        ariaLabel={t('settings.conversation.title')}
                       />
                     </div>
                     {/* Agent orchestration — reuses the same settings-row plus settings-hint

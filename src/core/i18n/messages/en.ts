@@ -312,6 +312,11 @@ export const en: Record<keyof typeof ko, string> = {
     'Job Continuity will remain enabled, but a Job may pause when its original Claude Code or Codex session cannot be recovered.',
   'settings.jobContinuity.turnOffSmartResume.confirm': 'Turn off',
   'settings.jobContinuity.saveFailed': 'Could not save the Job Continuity setting: {detail}',
+  // Task 10 — the general settings tab's new-tab default, beside the language row
+  'settings.conversation.title': 'What a new session opens as',
+  'settings.conversation.terminal': 'Terminal',
+  'settings.conversation.conversation': 'Conversation',
+  'settings.conversation.saveFailed': 'Could not save the new-tab default: {detail}',
   'settings.font.latin': 'Terminal font (Latin)',
   'settings.font.hangul': 'Terminal font (Hangul)',
   'settings.font.system': 'System default',
@@ -1197,5 +1202,8 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.empty': 'Nothing has been said yet',
   'conversation.composer.placeholder': 'What should it do',
   'conversation.composer.locked': 'You can type again after answering in the terminal',
-  'conversation.loadMore': 'Load earlier'
+  'conversation.loadMore': 'Load earlier',
+  // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
+  'conversation.toggle.terminal': 'Terminal',
+  'conversation.toggle.conversation': 'Conversation'
 }

@@ -5343,6 +5343,15 @@ export function registerIpc(
     return core.appSettings.getTheme()
   })
 
+  // Task 10: what a new session tab opens as. Same trust-boundary check as the other enum settings
+  // above — the value the renderer sent is validated before being written to disk.
+  ipcMain.handle('settings.getConversationDefault', () => core.appSettings.getConversationDefault())
+  ipcMain.handle('settings.setConversationDefault', async (_e, view: unknown) => {
+    if (view !== 'terminal' && view !== 'conversation')
+      throw new Error(`INVALID_CONVERSATION_DEFAULT: ${String(view)}`)
+    await core.appSettings.setConversationDefault(view)
+  })
+
   // Astera Host. Unconditional — the Host is not an orchestration feature, so this must not go inside
   // bootOrch, which only runs when that toggle is on. A missing out/main/host.js (a partial build, or
   // a packaging mistake) leaves hostClient null and the app runs exactly as it does today. Once the

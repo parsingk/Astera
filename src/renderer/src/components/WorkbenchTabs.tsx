@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import type { Attention, SessionView } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
@@ -124,7 +125,9 @@ export function WorkbenchTabs({
   onDropTabInBar,
   renamingTabId,
   onRenameStart,
-  onRenameEnd
+  onRenameEnd,
+  activeSession,
+  onSetSessionView
 }: {
   tabs: WorkbenchTab[]
   activeTabId: string | null
@@ -149,6 +152,13 @@ export function WorkbenchTabs({
   onRenameStart: (tabId: string) => void
   /** 끝났다. title이 null이면 취소, 아니면 그 값으로 확정한다 */
   onRenameEnd: (tabId: string, title: string | null) => void
+  /** Task 10: the terminal/conversation toggle's own data, present only when this pane's active tab
+   *  is a session — null for a file, browser, or record tab, which is what keeps the toggle off
+   *  screen there. PaneGrid computes it (parseTab, its sessionViews and its attention record are
+   *  all its own); this component only draws what it is handed. */
+  activeSession: { sessionId: string; view: SessionView; attention: Attention } | null
+  /** The toggle's own write. */
+  onSetSessionView: (sessionId: string, view: SessionView) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // 드래그 중인 탭과 드롭 표시 위치(insertBefore ∈ [0, n]) — 드래그하는 동안만 쓰는 상태
@@ -179,6 +189,7 @@ export function WorkbenchTabs({
   }
 
   return (
+    <>
     <div
       className="tabs"
       onDragOver={(e) => {
@@ -334,5 +345,40 @@ export function WorkbenchTabs({
         +
       </button>
     </div>
+    {/* The terminal/conversation toggle (Task 10) — a sibling of .tabs, not a child of it: .tabs
+        scrolls and clips (overflow-x: auto) once there are enough tabs to need it, and the toggle
+        has to stay reachable regardless, the same reason .new-tab above is pinned with
+        position: sticky rather than living past the scroll. Only for a pane whose active tab is a
+        session (activeSession is null otherwise) — a file, browser, or record tab has no terminal
+        or conversation to switch between. */}
+    {activeSession && (
+      <div className="session-view-toggle">
+        <button
+          type="button"
+          className={`sv-seg${activeSession.view === 'terminal' ? ' active' : ''}`}
+          aria-pressed={activeSession.view === 'terminal'}
+          onClick={() => onSetSessionView(activeSession.sessionId, 'terminal')}
+        >
+          {t('conversation.toggle.terminal')}
+          {/* The marker sits on the segment the person is NOT looking at — it is the one telling
+              them where to look, not the one they are already on. */}
+          {activeSession.attention === 'waiting' && activeSession.view === 'conversation' && (
+            <span className="sv-seg-marker" aria-hidden="true" />
+          )}
+        </button>
+        <button
+          type="button"
+          className={`sv-seg${activeSession.view === 'conversation' ? ' active' : ''}`}
+          aria-pressed={activeSession.view === 'conversation'}
+          onClick={() => onSetSessionView(activeSession.sessionId, 'conversation')}
+        >
+          {t('conversation.toggle.conversation')}
+          {activeSession.attention === 'waiting' && activeSession.view === 'terminal' && (
+            <span className="sv-seg-marker" aria-hidden="true" />
+          )}
+        </button>
+      </div>
+    )}
+    </>
   )
 }

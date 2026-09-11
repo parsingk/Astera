@@ -159,7 +159,9 @@ const api = {
     getTerminalFont: invoke('settings.getTerminalFont'),
     setTerminalFont: invoke('settings.setTerminalFont'),
     getTheme: invoke('settings.getTheme'),
-    setTheme: invoke('settings.setTheme')
+    setTheme: invoke('settings.setTheme'),
+    getConversationDefault: invoke('settings.getConversationDefault'),
+    setConversationDefault: invoke('settings.setConversationDefault')
   },
   files: {
     list: invoke('files.list'),

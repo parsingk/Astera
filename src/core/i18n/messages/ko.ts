@@ -347,6 +347,11 @@ export const ko = {
     '작업 이어가기는 켜진 채로 남지만, 원래의 Claude Code 나 Codex 세션을 되살릴 수 없으면 작업이 멈출 수 있습니다.',
   'settings.jobContinuity.turnOffSmartResume.confirm': '끄기',
   'settings.jobContinuity.saveFailed': '작업 이어가기 설정을 저장하지 못했습니다: {detail}',
+  // Task 10 — the general settings tab's new-tab default, beside the language row
+  'settings.conversation.title': '새 세션의 기본 화면',
+  'settings.conversation.terminal': '터미널',
+  'settings.conversation.conversation': '대화',
+  'settings.conversation.saveFailed': '새 탭 기본값을 저장하지 못했습니다: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': '터미널 영문 폰트',
   'settings.font.hangul': '터미널 한글 폰트',
@@ -1391,5 +1396,8 @@ export const ko = {
   'conversation.empty': '아직 주고받은 것이 없습니다',
   'conversation.composer.placeholder': '무엇을 시킬까요',
   'conversation.composer.locked': '터미널에서 답한 뒤에 다시 입력할 수 있습니다',
-  'conversation.loadMore': '이전 대화 더 보기'
+  'conversation.loadMore': '이전 대화 더 보기',
+  // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
+  'conversation.toggle.terminal': '터미널',
+  'conversation.toggle.conversation': '대화'
 } as const

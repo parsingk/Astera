@@ -329,6 +329,11 @@ export interface SchedStateEvent {
  *  re-exports it rather than carrying a copy that would have to be kept in step by hand. */
 export type Attention = 'idle' | 'working' | 'waiting'
 
+/** Which of the terminal or the conversation a session tab shows (Task 10). Also the shape of the
+ *  `conversationDefault` setting: the same two values, meaning "what a session tab starts on"
+ *  there and "what it is showing right now" once it has one. */
+export type SessionView = 'terminal' | 'conversation'
+
 /** One project terminal */
 export interface TerminalInfo {
   id: string
@@ -950,6 +955,10 @@ export interface CoreApi {
     // back here is always one of the six known ids.
     getTheme(): Promise<ThemeId>
     setTheme(id: ThemeId): Promise<void>
+    // Task 10: what a new session tab opens as. Only ever seeds a tab's own remembered choice at the
+    // moment its tab first appears — changing this later never touches a tab that already exists.
+    getConversationDefault(): Promise<SessionView>
+    setConversationDefault(view: SessionView): Promise<void>
   }
   files: {
     // The file explorer. Every files.* IPC call goes through assertAllowedPath, which permits only

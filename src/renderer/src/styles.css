@@ -745,6 +745,13 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* .terminal-slot is not terminal-only: it is how a pane's body claims its place in the grid, and the
    editor slot PaneGrid draws for each pane uses the same class so both follow one placement rule */
 .terminal-slot { flex: 1; min-height: 0; }
+/* Task 10: the session slot's own two children — the terminal always mounted, the conversation pane
+   mounted only while it is showing (PaneGrid.tsx's own comment on the session slot has the reasoning
+   for that asymmetry). Both fill the slot exactly as TerminalView's own .terminal-wrap already does
+   on its own — min-width:0 matters here for the same reason it does on .terminal-slot itself (the
+   comment on .terminal-host below measures the sideways-shake bug that skipping it caused). Display
+   is set inline at the call site, not here, the same convention every other slot in this file uses. */
+.session-view { flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
 /* min-height:0 plus overflow:hidden — allows flex shrinking and confines the overflow to the slot, so
    the xterm canvas (rows × cellHeight) cannot spill past it and encroach on the bottom status bar */
 .terminal-wrap { position: relative; flex: 1; display: flex; min-height: 0; overflow: hidden; }
@@ -1793,13 +1800,16 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    z-index 1: above the slots (auto) and below the resizers (2) — the 5px hit area of a column resizer
    overlaps the top 3px of the group tab bar beneath it, so the resizer has to win for the boundary to be
    grabbable. */
-.panes.pane-grid .pane-tabbar { position: absolute; z-index: 1; height: var(--pane-tabbar-h); }
+/* display:flex added for Task 10's toggle: a second child sits beside .tabs, pinned at the right
+   rather than scrolling away with the tabs — .tabs gets flex:1;min-width:0 below so it is still the
+   one that shrinks and scrolls. */
+.panes.pane-grid .pane-tabbar { position: absolute; z-index: 1; height: var(--pane-tabbar-h); display: flex; }
 /* Background contrast is left alone. In this palette the WCAG luminance contrast between --panel, --bg,
    and --rail is around 1.06:1, so no combination of them is visible — which tab is active within a group
    was already carried by the text colour (--text-dim to --text, about 2.4:1). Only the background contrast
    intended as the "focused group" signal failed, so that role passes to the account-coloured underline
    (the focused prop). */
-.pane-tabbar .tabs { height: 100%; }
+.pane-tabbar .tabs { height: 100%; flex: 1; min-width: 0; }
 /* Drops the vertical padding and centres instead — the global tab bar (≈32px) is gone.
    Lets tabs shrink in a narrow group: the global bar was flex:none, so past six tabs it overflowed and got
    cut. A minimum width keeps them from shrinking past recognition */
@@ -1826,6 +1836,20 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    It is sticky above the tabs, so its background has to be the same opaque colour as the bar or the tabs
    passing underneath show through */
 .pane-tabbar .new-tab { padding: 0 10px; align-self: stretch; position: sticky; right: 0; z-index: 1; background: var(--panel); }
+/* The terminal/conversation toggle (Task 10) — a sibling of .tabs inside .pane-tabbar, pinned at the
+   right the same way .new-tab is, but as a flex sibling rather than position:sticky: unlike the tabs
+   row this one never scrolls, so there is nothing to stay pinned against. */
+.session-view-toggle { display: flex; align-items: center; gap: 3px; padding: 0 8px; flex: none; }
+.sv-seg {
+  display: flex; align-items: center; gap: 5px; padding: 3px 10px; font-size: 11px;
+  color: var(--text-dim); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  cursor: pointer; white-space: nowrap;
+}
+.sv-seg.active { color: var(--text); border-color: var(--accent); background: var(--elevated); }
+/* The marker belongs on the segment the person is not looking at — --warn-ink is the same colour the
+   in-pane pending banner uses (PendingBanner.tsx's --warn-bg/--warn-ink), so the two read as the one
+   signal rather than two different ones. */
+.sv-seg-marker { width: 6px; height: 6px; border-radius: 50%; background: var(--warn-ink); flex: none; }
 
 /* ---------- status bar ---------- */
 .statusbar {
