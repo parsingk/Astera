@@ -1177,5 +1177,19 @@ export const en: Record<keyof typeof ko, string> = {
   'hiw.verify.partial': 'Only some of it was checked',
   'hiw.verify.unverified': 'Nothing was checked',
   'hiw.verify.failed': 'A reported check failed',
-  'hiw.verify.reported': 'Reported by the agent — the app did not run it itself'
+  'hiw.verify.reported': 'Reported by the agent — the app did not run it itself',
+  'conversation.verb.read': 'read',
+  'conversation.verb.find': 'searched',
+  'conversation.verb.edit': 'edited',
+  'conversation.verb.create': 'created',
+  'conversation.verb.run': 'ran',
+  'conversation.verb.running': 'running',
+  'conversation.group.read': 'read',
+  'conversation.group.find': 'search',
+  'conversation.group.edit': 'edit',
+  'conversation.group.create': 'create',
+  'conversation.group.run': 'run',
+  'conversation.pending.title': 'An answer is waiting',
+  'conversation.pending.body': 'The agent is waiting. The choices are in the terminal.',
+  'conversation.pending.action': 'Go to the terminal'
 }

@@ -1,7 +1,7 @@
 // Korean catalog — this file is the source. A key added here must be added to en.ts too for
 // typecheck to pass (en's type is tied to this object's key set).
 // Key rule: <domain>.<context>.<name> — the domains are settings/files/explorer/worktree/
-// account/session/history/run/rolling/common.
+// account/session/history/run/rolling/common/conversation.
 export const ko = {
   'settings.title': '설정',
   'settings.tab.general': '일반',
@@ -1368,5 +1368,21 @@ export const ko = {
   'hiw.verify.partial': '일부만 확인되었습니다',
   'hiw.verify.unverified': '확인된 것이 없습니다',
   'hiw.verify.failed': '보고된 검사가 실패했습니다',
-  'hiw.verify.reported': '에이전트가 보고한 것입니다 — 앱이 직접 돌려 보지는 않았습니다'
+  'hiw.verify.reported': '에이전트가 보고한 것입니다 — 앱이 직접 돌려 보지는 않았습니다',
+  // ToolRow.tsx / PendingBanner.tsx (components/conversation/) — the tool row's verb, the collapsed
+  // group's per-kind counts, and the banner that says a decision is waiting in the terminal.
+  'conversation.verb.read': '읽음',
+  'conversation.verb.find': '찾음',
+  'conversation.verb.edit': '고침',
+  'conversation.verb.create': '만듦',
+  'conversation.verb.run': '돌림',
+  'conversation.verb.running': '실행 중',
+  'conversation.group.read': '읽기',
+  'conversation.group.find': '찾기',
+  'conversation.group.edit': '수정',
+  'conversation.group.create': '작성',
+  'conversation.group.run': '실행',
+  'conversation.pending.title': '답할 것이 있습니다',
+  'conversation.pending.body': '에이전트가 답을 기다립니다. 선택지는 터미널에 있습니다.',
+  'conversation.pending.action': '터미널로 이동'
 } as const
