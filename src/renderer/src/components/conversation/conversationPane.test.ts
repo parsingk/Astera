@@ -130,6 +130,23 @@ describe('nextTurnsFor', () => {
   // Reference identity, not just content — a filter that let a foreign event through would still
   // produce an array that *looks* like [turnA] if the event's own turns happened to be empty or
   // duplicate it, so this pins that `prev` itself comes back untouched, not a copy of it.
+  // The replace-by-id guarantee lives in mergeTurns, and this is the only test that reaches it
+  // through nextTurnsFor's own interface. Without it, an edit that stops delegating and appends
+  // instead passes every other test here: the neighbouring merge test adds a NEW id, which looks
+  // identical whether it was appended or merged. A resolved tool call would then draw a second
+  // copy of its turn below the pending one instead of filling it in.
+  it('replaces a turn of the same id in place, not at the end', () => {
+    const resolved = { ...turnA, parts: [{ kind: 'text' as const, text: 'resolved' }] }
+    const result = nextTurnsFor('s1', [turnA, turnB], {
+      sessionId: 's1',
+      turns: [resolved],
+      restarted: false
+    })
+    expect(result).toHaveLength(2)
+    expect(result[0]).toEqual(resolved)
+    expect(result[1]).toBe(turnB)
+  })
+
   it('leaves turns exactly as they were — same reference — for a foreign session', () => {
     const prev = [turnA]
     const result = nextTurnsFor('s1', prev, { sessionId: 's2', turns: [turnB], restarted: false })
