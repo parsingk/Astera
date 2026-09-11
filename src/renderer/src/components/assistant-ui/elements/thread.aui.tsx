@@ -78,6 +78,9 @@ export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
   Banner?: ComponentType | undefined;
+  /** Astera's own: sits in the composer's action row, right of the attachment button. Its own slot
+   *  rather than part of Banner because it belongs beside the controls, not above the input. */
+  ComposerExtras?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
   ToolGroup?:
     | ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>>
@@ -305,9 +308,13 @@ const Composer: FC<{
 };
 
 const ComposerAction: FC = () => {
+  const { ComposerExtras } = useContext(ThreadComponentsContext);
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-      <ComposerAddAttachment />
+      <div className="flex min-w-0 items-center gap-1.5">
+        <ComposerAddAttachment />
+        {ComposerExtras && <ComposerExtras />}
+      </div>
       <div className="flex items-center gap-1.5">
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
           <AuiIf condition={(s) => s.composer.dictation == null}>

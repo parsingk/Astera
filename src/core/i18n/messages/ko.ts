@@ -1397,6 +1397,9 @@ export const ko = {
   'conversation.slash.body': '명령이 여는 창은 터미널에 있어서 여기서는 보이지 않습니다.',
   'conversation.slash.action': '터미널로 이동',
   'conversation.model.line': '{model} · {effort}',
+  'conversation.model.effort': 'effort 바꾸기 (터미널에서)',
+  'conversation.model.aria': '모델과 effort',
+  'conversation.model.unknown': '모델 확인 중',
   // ConversationPane.tsx — open() answering null, and a transcript that exists but has no turns yet.
   'conversation.unavailable': '이 세션은 아직 기록이 없습니다',
   'conversation.empty': '아직 주고받은 것이 없습니다',

@@ -20,6 +20,7 @@ import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.a
 import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
 import { PendingBanner, SlashCommandNotice } from "./PendingBanner";
+import { ModelControl } from "./ModelControl";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
 import type { Attention } from "../../../../core/types";
@@ -196,6 +197,10 @@ export function modelLineOf(
   if (info.effort === null) return info.model;
   return format(info.model, info.effort);
 }
+
+/** How long to wait before re-reading the model after asking the CLI to switch. It rewrites its
+ *  statusline as it goes, but not within the same breath as the command. */
+const MODEL_REREAD_MS = 1_500;
 
 /** How often a pane with nothing to show asks again whether a transcript has appeared. */
 const UNAVAILABLE_RETRY_MS = 2_000;
@@ -508,6 +513,20 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     [t, status]
   );
 
+  const modelLine = modelLineOf(modelInfo, (model, effort) =>
+    t("conversation.model.line", { model, effort })
+  );
+
+  // The same two writes the composer makes, for a command a control sends rather than a person types.
+  const sendCommand = useCallback(
+    (text: string): void => {
+      const [paste, submit] = ptyWritesFor(text);
+      window.api.sessions.write(sessionId, paste);
+      setTimeout(() => window.api.sessions.write(sessionId, submit), 0);
+    },
+    [sessionId]
+  );
+
   const goTerminal = useCallback((): void => {
     setSlashSent(false);
     onGoTerminal();
@@ -516,6 +535,30 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   const Banner = useCallback(
     (): ReactNode => <PendingBanner onGoTerminal={goTerminal} />,
     [goTerminal]
+  );
+
+  const ComposerExtras = useCallback(
+    (): ReactNode => (
+      <ModelControl
+        line={modelLine}
+        onPickModel={(alias) => {
+          sendCommand(`/model ${alias}`);
+          // `/model` writes a new statusline as it switches, but not instantly.
+          setTimeout(() => {
+            void window.api.conversation
+              .model(sessionId)
+              .then(setModelInfo)
+              .catch(() => {});
+          }, MODEL_REREAD_MS);
+        }}
+        onChangeEffort={() => {
+          // The CLI owns that screen — open it and take the person there rather than drive it.
+          sendCommand("/model");
+          goTerminal();
+        }}
+      />
+    ),
+    [modelLine, sendCommand, goTerminal, sessionId]
   );
 
   const SlashBanner = useCallback(
@@ -530,8 +573,9 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       ToolGroup: ToolRowGroup,
       // An answer that is actually being waited on outranks a note about where a command went.
       Banner: attention === "waiting" ? Banner : slashSent ? SlashBanner : undefined,
+      ComposerExtras,
     }),
-    [Welcome, Banner, SlashBanner, attention, slashSent]
+    [Welcome, Banner, SlashBanner, ComposerExtras, attention, slashSent]
   );
 
   // Built unconditionally, ahead of the status branches below — the messages a still-loading or
@@ -564,23 +608,9 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   }
 
   const locked = attention === "waiting";
-  const modelLine = modelLineOf(modelInfo, (model, effort) =>
-    t("conversation.model.line", { model, effort })
-  );
 
   return (
     <div ref={paneRef} data-slot="conversation-pane" className="flex h-full min-h-0 flex-col">
-      {/* What the CLI is running under. The terminal has the CLI's own statusline for this; over here
-          there is nothing else that says it, and it is the first thing a person checks before asking
-          for something expensive. */}
-      {modelLine !== null && (
-        <div
-          data-slot="conversation-model"
-          className="text-muted-foreground px-4 pt-2 text-right text-xs"
-        >
-          {modelLine}
-        </div>
-      )}
       {more && (
         <div className="border-border/60 flex justify-center border-b py-1">
           <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>
