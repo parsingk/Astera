@@ -636,6 +636,20 @@ export type CoreEventChannel = keyof CoreEvents
  *  `--resume` 으로 이어간다. */
 export type ResumeStrategy = 'smart' | 'original'
 
+/** 에이전트를 권한 확인 없이 띄우는가. 'yolo' 는 CLI 마다의 우회 플래그를 붙이고
+ *  ('--dangerously-skip-permissions', '--dangerously-bypass-approvals-and-sandbox'), 'manual' 은
+ *  붙이지 않아 에이전트가 권한 프롬프트에서 멈춘다.
+ *
+ *  **기본값이 'yolo' 인 이유는 Job 워커가 어디서 도는가에 있다.** 워커는 언제나 방금 만들어진
+ *  워크트리에서 뜨고, 그 폴더에는 승인 이력이 없다 — 사람이 그 프로젝트에서 쌓아 둔 허용 목록은
+ *  `.claude/settings.local.json` 에 있는데 Claude Code 가 그 파일을 gitignore 하므로 체크아웃에
+ *  따라오지 않는다. 그래서 manual 로 둔 워커는 본 저장소에서라면 한 번도 묻지 않았을 것까지 묻고,
+ *  자율로 돌라고 띄운 세션이 첫 명령에서 선다.
+ *
+ *  Orca(stablyai/orca)가 같은 문제에 내린 결론이기도 하다 — 그쪽은 에이전트별 기본 실행 인수를
+ *  두고 그 기본값이 곧 우회 플래그다(`DEFAULT_TUI_AGENT_ARGS = YOLO_TUI_AGENT_ARGS`). */
+export type AgentPermissionMode = 'yolo' | 'manual'
+
 /** Astera Host slice 1: the app's view of the channel to the Host. Declared here rather than in
  *  src/main/host/client.ts so the renderer can name it without importing from src/main. */
 export interface HostStatus {
@@ -897,6 +911,9 @@ export interface CoreApi {
     // Job Continuity (docs/ASTERA_JOB_CONTINUITY_DURABLE_RECOVERY_SPEC.md §3). Off by default. Turning
     // it on while Smart Resume is off turns Smart Resume on as well — the result says so and the
     // settings screen shows the notice. Turning it off leaves Smart Resume alone.
+    // 에이전트를 권한 확인 없이 띄우는가. See AgentPermissionMode — 기본은 'yolo' 다.
+    getAgentPermissionMode(): Promise<AgentPermissionMode>
+    setAgentPermissionMode(mode: AgentPermissionMode): Promise<void>
     getJobContinuityEnabled(): Promise<boolean>
     setJobContinuityEnabled(enabled: boolean): Promise<{ smartResumeTurnedOn: boolean }>
     // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses

@@ -21,6 +21,16 @@ export const en: Record<keyof typeof ko, string> = {
     'It does not apply to sessions that are already open — only new sessions get it. ' +
     'Ask the session you want to orchestrate with to run astera help for the full usage guide.',
   'settings.orchestration.saveFailed': 'Could not save the orchestration setting: {detail}',
+  // Agent permission mode
+  'settings.agentPermission.label': 'Run agents without permission checks',
+  'settings.agentPermission.hint':
+    'Every agent session the app starts runs without permission prompts ' +
+    '(--dangerously-skip-permissions for claude, --dangerously-bypass-approvals-and-sandbox for codex). ' +
+    'On by default. A Job worker always starts in a worktree created moments earlier: that folder has no ' +
+    'approval history, and the allow list built up in the project (.claude/settings.local.json) does not ' +
+    'follow it there, so with this off a worker stalls on its first command. ' +
+    'Sessions already running are unaffected. It applies from the next session.',
+  'settings.agentPermission.saveFailed': 'Could not save the permission mode: {detail}',
   // Work unit tracking
   'settings.workUnit.label': 'Work unit tracking (experimental)',
   'settings.workUnit.hint':

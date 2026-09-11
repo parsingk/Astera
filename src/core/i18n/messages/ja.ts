@@ -23,6 +23,16 @@ export const ja: Catalog = {
     'すでに開いているセッションには適用されません — 新しいセッションから有効になります。' +
     'オーケストレーターとして使うセッションで astera help を実行させると、詳しい使い方が得られます。',
   'settings.orchestration.saveFailed': 'オーケストレーション設定を保存できませんでした: {detail}',
+  // エージェント権限モード
+  'settings.agentPermission.label': '権限確認なしでエージェントを実行',
+  'settings.agentPermission.hint':
+    'アプリが起動するすべてのエージェントセッションを権限確認なしで実行します' +
+    '(claude は --dangerously-skip-permissions、codex は --dangerously-bypass-approvals-and-sandbox)。' +
+    '既定はオンです。Job のワーカーは毎回新しく作られた worktree で起動しますが、そのフォルダには承認履歴がなく、' +
+    'プロジェクトに蓄積した許可リスト(.claude/settings.local.json)も引き継がれないため、' +
+    'オフにするとワーカーは最初のコマンドで停止します。' +
+    'すでに開いているセッションには適用されません。次のセッションから有効です。',
+  'settings.agentPermission.saveFailed': '権限モードを保存できませんでした: {detail}',
   // Work Unit 追跡
   'settings.workUnit.label': '作業単位の追跡（実験）',
   'settings.workUnit.hint':

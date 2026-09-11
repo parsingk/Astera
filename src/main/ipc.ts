@@ -1773,7 +1773,12 @@ export function registerIpc(
         const info = await spawnSession({
           accountId: o.accountId,
           cwd: o.cwd,
-          bypassPermissions: o.bypassPermissions,
+          // **워커의 권한 태도는 전역 설정이 정한다**(AgentPermissionMode). `??` 인 이유는 이
+          // 클로저가 값을 **만드는 자리가 아니라 메꾸는 자리**이기 때문이다 — 지금은 coordinator.ts
+          // 가 이 칸을 채우지 않지만(그쪽은 앱 설정을 볼 수 없다), 언젠가 Task 하나만 다르게
+          // 띄우기로 하면 그 값이 여기서 이겨야 한다. 근거는 startCoordinator 의 주석에 있다.
+          bypassPermissions:
+            o.bypassPermissions ?? core.appSettings.getAgentPermissionMode() === 'yolo',
           initialPrompt: o.initialPrompt,
           title: o.title, // the worker tab title is task.title
           // 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고 나머지는 갈아탈 순서다
@@ -3036,10 +3041,13 @@ export function registerIpc(
        *  **롤링 체인을 그대로 넘긴다** — 코디네이터도 에이전트라 한도에 걸린다. 워커에게 이 값을
        *  넘기는 것과 같은 이유이고 같은 기계를 탄다(rollAccountIds 의 JSDuc).
        *
-       *  **`bypassPermissions` 를 넘기지 않는다** — startWorker 가 넘기지 않는 것과 같은 이유다:
-       *  권한 검사를 에이전트의 말만으로 건너뛰는 쪽과 권한 프롬프트에서 멈추는 쪽 중, 멈추는 쪽이
-       *  허가 없는 실행에 대해 안전한 편이다. 멈추면 사람이 그 탭에서 답한다 — 코디네이터 탭은
-       *  보이므로(설계 결정 ④) 그 자리가 있다. */
+       *  **`bypassPermissions` 는 전역 설정이 정한다** — startWorker 와 같은 자리에서 같은 값을
+       *  읽는다(AgentPermissionMode). 한동안 이 자리는 그것을 넘기지 않았고, 그 선택은 "멈추는 쪽이
+       *  허가 없는 실행에 대해 안전하다" 는 것이었다. 뒤집은 근거는 안전이 덜 중요해져서가 아니라
+       *  **멈춤이 실제로는 안전이 아니라 정지였기 때문이다**: 코디네이터는 워크트리가 아니라 프로젝트
+       *  루트에서 뜨지만 그가 띄우는 워커는 매번 새 워크트리에서 뜨고, 사람이 그 프로젝트에 쌓아 둔
+       *  허용 목록은 거기 따라오지 않는다. 그래서 manual 인 Job 은 자율로 돌라고 띄운 세션이 첫
+       *  명령에서 서고, 사람은 탭마다 승인하러 다니게 된다 — 사용자가 보고한 그대로다. */
       startCoordinator: async (a) => {
         // **브리핑은 파일로, 세션에는 한 줄만.** 이 프롬프트는 argv 로 가고 win32 에서 세션은
         // `cmd.exe /c` 로 뜨므로 줄바꿈이 명령을 끊는다 — 워커의 spec 파일과 탭 재개 브리핑이
@@ -3063,6 +3071,7 @@ export function registerIpc(
         const info = await spawnSession({
           accountId: a.accountId,
           cwd: a.cwd,
+          bypassPermissions: core.appSettings.getAgentPermissionMode() === 'yolo',
           initialPrompt: coordinatorLaunchPrompt(briefPath.replace(/\\/g, '/')),
           // 탭 제목 — 워커 탭이 Task 제목을 쓰는 것과 같은 이유다. 없으면 워크트리 basename 으로
           // 떠서 사용자가 이것이 무엇인지 알 수 없다.
@@ -5127,6 +5136,15 @@ export function registerIpc(
     // Turning it off does not close the server — handoffEnabled() is read per request.
     if (strategy === 'smart' && orchWiring) await startOrch()
     if (strategy === 'smart') installStubsForCurrentToggles()
+  })
+
+  // 에이전트 권한 모드. 값 검사만 하고 부수 효과는 없다 — 이 값은 **다음 spawn 부터** 읽히고
+  // (startWorker·startCoordinator 가 그때 getAgentPermissionMode 를 부른다), 이미 떠 있는 세션의
+  // 인수는 spawn 시점에 고정되므로 되돌릴 방법이 없다. 오케스트레이션 토글의 힌트가 같은 말을 한다.
+  ipcMain.handle('settings.getAgentPermissionMode', () => core.appSettings.getAgentPermissionMode())
+  ipcMain.handle('settings.setAgentPermissionMode', async (_e, mode: unknown) => {
+    if (mode !== 'yolo' && mode !== 'manual') throw new Error(`INVALID_AGENT_PERMISSION_MODE: ${String(mode)}`)
+    await core.appSettings.setAgentPermissionMode(mode)
   })
 
   // Job Continuity. The rule that may also turn Smart Resume on lives in the store (core/continuity/
