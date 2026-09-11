@@ -883,7 +883,9 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     // `isDisabled` does reach the composer's actual <textarea> — assistant-ui's
     // useComposerInputDisabled (useComposerInputState.js) ORs it with a `disabled` prop, and
     // ComposerInput.js applies the result — so this is the real lock, not a stand-in for one.
-    isDisabled: attention === "waiting",
+    // Never disabled. The composer writes to the very pty the CLI's prompt is on, so a person can
+    // answer it from here — see `locked`'s removal below for the whole reasoning.
+    isDisabled: false,
     // No `isRunning`. In assistant-ui it means "a run this component controls is in progress, with
     // a cancel path" — we have neither: the CLI owns the run, and there is no `onCancel` to give
     // this adapter. Setting it true while `working` swallows Enter, hides Send behind
@@ -902,7 +904,6 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     return <div data-slot="conversation-pane-loading" className="h-full" />;
   }
 
-  const locked = attention === "waiting";
 
   return (
     <div ref={paneRef} data-slot="conversation-pane" className="flex h-full min-h-0 flex-col">
@@ -926,16 +927,6 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
           </ModelSlotContext.Provider>
         </BannerSlotContext.Provider>
       </div>
-      {/* The banner above already says an answer is waiting; this says why the input itself went
-          quiet, right where a person's eye lands after finding out typing did nothing. */}
-      {locked && (
-        <div
-          data-slot="conversation-pane-locked"
-          className="text-muted-foreground border-border/60 border-t px-4 py-1.5 text-center text-xs"
-        >
-          {t("conversation.composer.locked")}
-        </div>
-      )}
     </div>
   );
 }

@@ -1197,8 +1197,8 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.group.create': 'create',
   'conversation.group.run': 'run',
   'conversation.pending.title': 'An answer is waiting',
-  'conversation.pending.body': 'The agent is waiting. The choices are in the terminal.',
-  'conversation.pending.action': 'Go to the terminal',
+  'conversation.pending.body': 'Type your answer below and it goes straight through. The choices are on the terminal screen.',
+  'conversation.pending.action': 'See the choices',
   'conversation.slash.title': 'Slash commands run in the terminal',
   'conversation.slash.body': 'The screen this one opens is over there, not here.',
   'conversation.slash.action': 'Go to the terminal',
@@ -1210,7 +1210,6 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.unavailable': 'This session has no transcript yet',
   'conversation.empty': 'Nothing has been said yet',
   'conversation.composer.placeholder': 'What should it do',
-  'conversation.composer.locked': 'You can type again after answering in the terminal',
   'conversation.loadMore': 'Load earlier',
   // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
   'conversation.toggle.terminal': 'Terminal',
