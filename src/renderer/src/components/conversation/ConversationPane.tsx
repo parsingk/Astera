@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  memo,
   useCallback,
   useContext,
   useEffect,
@@ -19,6 +20,12 @@ import {
 } from "@assistant-ui/react";
 import { ChevronUpIcon } from "lucide-react";
 import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.aui";
+
+/** The composer belongs to this subtree, and a controlled input that re-renders while a character is
+ *  on its way in can be handed back the value it had a moment ago — which is a keystroke lost. The
+ *  menu below changes on every key, so the menu must not be able to re-render this: its rows travel
+ *  by context to a slot inside, and everything else this takes is stable. */
+const MemoThread = memo(Thread);
 import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
 import { PendingBanner, SlashCommandNotice } from "./PendingBanner";
@@ -258,6 +265,9 @@ const ModelSlotContext = createContext<ModelControlProps | null>(null);
  *  neighbours while someone is typing into it is not something to leave in place and hope about. */
 const BannerSlotContext = createContext<ReactNode>(null);
 
+/** Always mounted, and empty when there is nothing to say. Handing the Thread a slot that comes and
+ *  goes would change its `components` the moment a menu opens, which re-renders the composer at the
+ *  exact instant a character is arriving in it. */
 function ConversationBannerSlot(): ReactNode {
   return useContext(BannerSlotContext);
 }
@@ -320,6 +330,9 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // the generation alone cannot decide it.
   const mountedForRef = useRef<string | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
+  // Whether the last keystroke left the composer in a state a menu cares about — see the input
+  // listener, which uses it to stay silent for ordinary typing.
+  const triggerArmedRef = useRef(false);
   // What the thread's scroll looked like just before a load-earlier prepend, so the layout effect
   // below can put the reader back where they were. Null except between that prepend and its
   // correction.
@@ -672,14 +685,22 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     const onInput = (e: Event): void => {
       const target = e.target;
       if (!(target instanceof HTMLTextAreaElement)) return;
-      // Deferred: this listener sits on the pane, which is inside React's own root, so a state
-      // update made here lands in the middle of the keystroke's dispatch and can make React paint
-      // before the composer's own handler has taken the character. A microtask puts it after every
+      // A key that cannot open, close or narrow a menu changes nothing here, so it sets no state and
+      // causes no render. That is most of what anyone types, and every render this pane makes while a
+      // character is on its way into the composer is a chance to hand the composer back the value it
+      // had a moment ago.
+      const value = target.value;
+      const caret = target.selectionStart ?? value.length;
+      const couldTrigger = value.startsWith("/") || fileTokenAt(value, caret) !== null;
+      if (!couldTrigger && !triggerArmedRef.current) return;
+      triggerArmedRef.current = couldTrigger;
+      // Deferred: this listener sits on the pane, which is inside React's own root, so a state update
+      // made here lands in the middle of the keystroke's dispatch. A microtask puts it after every
       // handler for that event, which is where a bystander belongs.
       queueMicrotask(() => {
         setSlashDismissed(false);
-        setComposerText(target.value);
-        setComposerCaret(target.selectionStart ?? target.value.length);
+        setComposerText(value);
+        setComposerCaret(caret);
         setSlashActive(0);
       });
     };
@@ -827,10 +848,10 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       Welcome,
       ToolFallback: ToolRow,
       ToolGroup: ToolRowGroup,
-      Banner: banner === null ? undefined : ConversationBannerSlot,
+      Banner: ConversationBannerSlot,
       ComposerExtras: ComposerModelSlot,
     }),
-    [Welcome, banner]
+    [Welcome]
   );
 
   // Built unconditionally, ahead of the status branches below — the messages a still-loading or
@@ -878,7 +899,10 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         <BannerSlotContext.Provider value={banner}>
           <ModelSlotContext.Provider value={modelSlot}>
           <AssistantRuntimeProvider runtime={runtime}>
-            <Thread components={components} composerPlaceholder={t("conversation.composer.placeholder")} />
+              <MemoThread
+              components={components}
+              composerPlaceholder={t("conversation.composer.placeholder")}
+            />
           </AssistantRuntimeProvider>
           </ModelSlotContext.Provider>
         </BannerSlotContext.Provider>
