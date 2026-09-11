@@ -562,6 +562,11 @@ export default function App(): React.JSX.Element {
   // Fix round 1: the most recent session:rolled, for PaneGrid to carry a rolled session's remembered
   // terminal/conversation choice to its new id (PaneGrid's own `lastRoll` prop comment has the full
   // reasoning). Deliberately never reset back to null — see that comment.
+  // One slot, deliberately: if two different sessions ever rolled inside a single React commit, the
+  // second value would overwrite the first and that tab's choice would fall back to the setting.
+  // Nobody has seen that happen (each roll reaches here as its own IPC message, after its own file
+  // I/O), and the cost when it does is one tab showing the default until someone clicks the toggle,
+  // so a queue and the pruning it would need buy less than they cost.
   const [lastRoll, setLastRoll] = useState<{ oldSessionId: string; newSessionId: string } | null>(
     null
   )
