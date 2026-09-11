@@ -561,22 +561,34 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     () => ({
       line: modelLine,
       onPickModel: (alias) => {
+        const was = modelInfo.model;
         sendCommand(`/model ${alias}`);
         // `/model` writes a new statusline as it switches, but not instantly.
         setTimeout(() => {
           void window.api.conversation
             .model(sessionId)
-            .then(setModelInfo)
+            .then((info) => {
+              setModelInfo(info);
+              // Switching to another family asks first, because the conversation is cached for the
+              // model it is on — and it asks on the CLI's own screen, which is not this one. Nothing
+              // here can tell in advance which switches ask, so the evidence is that the model did
+              // not move: either something is waiting over there, or it was already this model and
+              // the notice costs a glance.
+              // And cleared when it did move: a switch that went through has nothing to explain.
+              setSlashSent(info.model === was);
+            })
             .catch(() => {});
         }, MODEL_REREAD_MS);
       },
       onChangeEffort: () => {
-        // The CLI owns that screen — open it and take the person there rather than drive it.
-        sendCommand("/model");
+        // `/effort` opens a slider of its own — low through ultracode — and takes no argument, so
+        // there is nothing to set from here. The CLI owns that screen; open it and take the person
+        // there rather than drive its arrows blind.
+        sendCommand("/effort");
         goTerminal();
       }
     }),
-    [modelLine, sendCommand, goTerminal, sessionId]
+    [modelLine, modelInfo.model, sendCommand, goTerminal, sessionId]
   );
 
   const SlashBanner = useCallback(
