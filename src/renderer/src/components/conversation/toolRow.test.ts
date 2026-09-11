@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { verbKeyOf, groupKeyOf, summarize, outcomeText, shortenTarget, ToolRowGroup } from './ToolRow'
+import { verbKeyOf, groupKeyOf, summarize, outcomeText, shortenTarget, ToolRow, ToolRowGroup } from './ToolRow'
 import type { ThreadGroupPart } from '../assistant-ui/elements/thread.aui'
 import { ToolGroupRoot, ToolGroupContent } from '../assistant-ui/elements/tool-group.aui'
 
@@ -203,6 +203,59 @@ describe('ToolRowGroup', () => {
     expect(html).toContain('conversation.group.run 1')
     expect(html).toContain('conversation.group.find 1')
     expect(html).not.toContain('conversation.group.edit')
+  })
+
+  // Guards the `.filter(Boolean)` after the split. An index that points at nothing, or at a
+  // part that is not a tool call, maps to an empty name, and without the filter `summarize`
+  // counts that empty string as a kind of its own — the trigger then carries a bare count with
+  // no label in front of it. No other fixture reaches past its parts, so none of them can tell
+  // whether the filter is there.
+  it('ignores an index that points at nothing, rather than counting it as a nameless kind', () => {
+    mockParts = [{ type: 'tool-call', toolName: 'Read' }, { type: 'text' }]
+    const group: ThreadGroupPart = {
+      type: 'group-tool',
+      status: { type: 'complete' },
+      indices: [0, 1, 7]
+    }
+    const html = renderToStaticMarkup(React.createElement(ToolRowGroup, { group }))
+    expect(html).toContain('conversation.group.read 1')
+    // With the filter there is exactly one kind, so the ' · ' separator never appears.
+    // Without it the empty name becomes a second kind and the separator shows up in front of a
+    // bare, label-less count.
+    expect(html).not.toContain('·')
+  })
+})
+
+// The branch choosing which label shape the left column takes lives in ToolRow, not in either
+// lookup function, so testing verbKeyOf and groupKeyOf in isolation leaves it uncovered. A
+// refactor that merges the two branches, on the grounds that both return a ToolLabel, puts the
+// finished verb back next to the running marker with every test still green.
+describe('ToolRow — which label the left column takes', () => {
+  const render = (toolName: string, result: { ok: boolean; detail: string } | undefined): string =>
+    renderToStaticMarkup(
+      React.createElement(ToolRow as React.ComponentType<Record<string, unknown>>, {
+        type: 'tool-call',
+        toolCallId: 't1',
+        toolName,
+        args: { target: 'src/a.ts' },
+        result,
+        status: { type: 'complete' },
+        addResult: () => {},
+        resume: () => {},
+        respondToApproval: async () => {}
+      })
+    )
+
+  it('uses the group form while the call is still running', () => {
+    const html = render('Read', undefined)
+    expect(html).toContain('conversation.group.read')
+    expect(html).not.toContain('conversation.verb.read')
+  })
+
+  it('uses the finished form once the call has an outcome', () => {
+    const html = render('Read', { ok: true, detail: '412 lines' })
+    expect(html).toContain('conversation.verb.read')
+    expect(html).not.toContain('conversation.group.read')
   })
 })
 
