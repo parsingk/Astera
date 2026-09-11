@@ -984,7 +984,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 
 /* the two-column restructuring of the settings modal */
 /* Proportional to the window with a floor and ceiling (clamp) so it does not become oversized on a large monitor. The body is flex and fills the remaining height. */
-.modal.settings { width: clamp(600px, 58vw, 940px); height: clamp(440px, 70vh, 800px); padding: 0; gap: 0; overflow: hidden; }
+/* Widened once the General tab grew past what the old ceiling could hold: the 200px nav is fixed, so
+   every setting added takes its space out of the pane beside it, and the hint paragraphs under each
+   toggle are what wrapped first. The floors move with the ceilings — a floor that stays put only
+   defers the same crowding to a small window. */
+.modal.settings { width: clamp(720px, 68vw, 1180px); height: clamp(520px, 80vh, 960px); padding: 0; gap: 0; overflow: hidden; }
 .settings-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 26px; border-bottom: 1px solid var(--line); }
 .settings-close { background: none; border: none; color: var(--text-dim); font-size: 14px; line-height: 1; cursor: pointer; padding: 6px 10px; border-radius: var(--radius); }
 .settings-close:hover { color: var(--text); background: var(--line-soft); }
