@@ -23,6 +23,7 @@ import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
+import { markCodexProjectTrusted } from '../core/accounts/codexTrust'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
@@ -1599,6 +1600,13 @@ export function registerIpc(
       orchLog(
         `restart cleanup — the Host still runs ${aliveSessionIds.size} session(s); any open Dispatch of theirs was left open`
       )
+    // Said out loud because emptying the slot is what turns the Run's safety net and its restart
+    // button back on, and both are invisible until someone looks at the Jobs list. A person whose
+    // Job stopped answering needs a line that says when it lost its coordinator.
+    if (loaded.coordinatorsLost > 0)
+      orchLog(
+        `restart cleanup — ${loaded.coordinatorsLost} Run(s) lost their coordinator to the restart; the app answers their workers now and the Jobs list offers to start a new one`
+      )
     // The third reason a Dispatch survives the cleanup, said in the same voice as the two Host ones
     // above. Without it a person reading the log sees a Dispatch that stayed open and no line
     // explaining why — and this is the only one of the three that is about to change the Task a
@@ -1750,6 +1758,33 @@ export function registerIpc(
     // 그래도 지금 이 조합을 그대로 두는 이유: 롤링의 idle nudge 는 Notification 훅을 정지 신호로
     // 쓴다(rolling.ts 의 onHookEvent) — 훅을 떼면 그 갈래가 워커에게만 사라진다.
     // **wantHooks 에 체인과 별개인 자기 입력을 주는 일은 나중으로 남긴다.**
+    /** Marks the repository behind `cwd` trusted for this codex account before a session is spawned
+     *  into it, so an agent nobody is sitting in front of does not stop at codex's "Do you trust this
+     *  folder?" menu.
+     *
+     *  **Only the orchestration path calls this**, not the shared `spawnSession` every tab goes
+     *  through. The justification is exactly that nobody is there: a worker starts in a worktree made
+     *  seconds earlier, which no person has ever approved, and the menu is a wall it cannot get past
+     *  on its own — measured, three workers in a row. A person opening a tab is present to answer, and
+     *  pre-approving a folder on their behalf would take away a decision they still have.
+     *
+     *  **claude needs no counterpart**: `--dangerously-skip-permissions` covers its trust prompt too,
+     *  which is why Orca's own preset module (src/main/agent-trust-presets.ts) has cursor, copilot and
+     *  codex in it and no claude. codex is the exception there for the reason its note gives — the
+     *  bypass flag sets approval and sandbox policy, and trust is a different question.
+     *
+     *  Best-effort: a config.toml this cannot write is a menu the agent will meet, not a reason to
+     *  refuse to start it. The same convention as the other incidental failures around here. */
+    const preTrustCodexWorkspace = async (accountId: string, cwd: string): Promise<void> => {
+      const account = core.accounts.get(accountId)
+      if (!account || providerOf(account) !== 'codex') return
+      try {
+        await markCodexProjectTrusted(account.configDir, cwd)
+      } catch (e) {
+        orchLog(`codex trust preset failed account=${accountId} cwd=${cwd}: ${String(e)}`)
+      }
+    }
+
     const coordinator = new OrchCoordinator({
       // session:created is emitted at three sites: here (this spawnSession closure), in
       // startCoordinator's own registration below, and in startHostClient's reattach adopter. All
@@ -1765,6 +1800,8 @@ export function registerIpc(
       // too, where the renderer has already built a tab from the return value, placing the same session
       // twice.
       spawnSession: async (o) => {
+        // 워커는 방금 만들어진 워크트리에서 뜬다 — 사람이 승인한 적 없는 폴더다(위 주석).
+        await preTrustCodexWorkspace(o.accountId, o.cwd)
         // satisfies pins this to the coordinator's opts shape: spawnSession above takes opts: any, so a
         // misspelled field (titel and friends) would fail compilation nowhere but at this hop — the
         // defence of making title required on the coordinator side would end here. Narrowing all of
@@ -3065,6 +3102,10 @@ export function registerIpc(
         // the two cannot drift.
         const briefPath = path.join(specsDir, coordinatorBriefName(a.runId))
         await fs.writeFile(briefPath, a.brief, 'utf8')
+        // 코디네이터는 프로젝트 루트에서 뜨므로 대개 이미 신뢰돼 있다 — 그래도 부른다. 그 Run 을
+        // 처음 돌리는 사람에게는 여기가 첫 codex 세션이고, 멈추면 아무도 답할 사람이 없는 것은
+        // 워커와 같다(preTrustCodexWorkspace 의 주석).
+        await preTrustCodexWorkspace(a.accountId, a.cwd)
         // **워커와 같은 래퍼를 쓴다**(위 spawnSession) — 그 래퍼가 계정 객체를 찾고, 롤링
         // 코디네이터에 등록하고, orchEnv 를 실어 준다. core.sessions.spawn 을 직접 부르면 그 셋을
         // 여기서 다시 하게 되고, 그중 하나를 빠뜨리면 코디네이터는 한도에 걸린 채 멈춰 선다.
