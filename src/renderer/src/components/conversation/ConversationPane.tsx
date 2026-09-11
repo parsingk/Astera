@@ -23,6 +23,11 @@ import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
 import { PendingBanner, SlashCommandNotice } from "./PendingBanner";
 import { ModelControl, type ModelControlProps } from "./ModelControl";
+import { SlashMenu } from "./SlashMenu";
+import {
+  filterSlashCommands,
+  type SlashCommand
+} from "../../../../core/commands/slashCommands";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
 import type { Attention } from "../../../../core/types";
@@ -259,6 +264,12 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // Set when a slash command is sent from here, cleared the moment anything comes back — see
   // SlashCommandNotice for what it says and why it is not the pending banner.
   const [slashSent, setSlashSent] = useState(false);
+  // What `/` offers, read once when the pane opens, and what the composer holds right now. The text
+  // is tracked by listening to the composer rather than asking the runtime for it: the input is
+  // assistant-ui's, `input` events bubble to this pane's own root, and that is the whole of it.
+  const [commands, setCommands] = useState<readonly SlashCommand[]>([]);
+  const [composerText, setComposerText] = useState("");
+  const [slashActive, setSlashActive] = useState(0);
   const [modelInfo, setModelInfo] = useState<{ model: string | null; effort: string | null }>({
     model: null,
     effort: null
@@ -296,6 +307,9 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     setAttention("idle");
     setSlashSent(false);
     setModelInfo({ model: null, effort: null });
+    setComposerText("");
+    setSlashActive(0);
+    setSlashDismissed(false);
 
     // Set once a live push arrives, so the one-shot attention read below (which can resolve after a
     // push that overtook it) never clobbers a value that is already newer than the one it fetched.
@@ -333,6 +347,13 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         .catch(() => {});
     };
     readModel();
+
+    void window.api.conversation
+      .commands(sessionId)
+      .then((list) => {
+        if (isCurrent()) setCommands(list);
+      })
+      .catch(() => {});
 
     const offAppend = window.api.on("conversation:append", (e) => {
       if (!isCurrent()) return;
@@ -533,6 +554,85 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     [t, status]
   );
 
+  // Escape closes the menu without closing anything else; it reopens the moment the text changes,
+  // which is what a person means by dismissing a suggestion rather than abandoning the command.
+  // State, not a ref: the listener below sets it, and only a state change redraws the banner slot.
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const slashMatches = slashDismissed ? null : filterSlashCommands(commands, composerText);
+  const slashOpen = slashMatches !== null && slashMatches.length > 0;
+  const slashOpenRef = useRef(slashOpen);
+  slashOpenRef.current = slashOpen;
+  const slashMatchesRef = useRef(slashMatches);
+  slashMatchesRef.current = slashMatches;
+  const slashActiveRef = useRef(slashActive);
+  slashActiveRef.current = slashActive;
+
+  /** Puts a chosen command on the line, in place of the token that was being typed. Written through
+   *  `insertText` rather than by setting `value`: the input belongs to assistant-ui's own store, and
+   *  only a real edit event reaches it. */
+  const takeCommand = useCallback((command: SlashCommand): void => {
+    const input = paneRef.current?.querySelector("textarea");
+    if (!input) return;
+    input.focus();
+    input.setSelectionRange(0, input.value.length);
+    document.execCommand("insertText", false, `/${command.name} `);
+    setSlashDismissed(true);
+  }, []);
+
+  const takeCommandRef = useRef(takeCommand);
+  takeCommandRef.current = takeCommand;
+
+  // The composer is assistant-ui's, so this listens to it from the outside: `input` bubbles up to this
+  // pane's root, and the keys the menu needs are caught on the way down, before the composer's own
+  // Enter can send a half-typed command as a message.
+  useEffect(() => {
+    const pane = paneRef.current;
+    if (!pane) return;
+    const onInput = (e: Event): void => {
+      const target = e.target;
+      if (!(target instanceof HTMLTextAreaElement)) return;
+      setSlashDismissed(false);
+      setComposerText(target.value);
+      setSlashActive(0);
+    };
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (!slashOpenRef.current) return;
+      const matches = slashMatchesRef.current;
+      if (matches === null || matches.length === 0) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        setSlashActive((i) => (i + step + matches.length) % matches.length);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        takeCommandRef.current(matches[Math.min(slashActiveRef.current, matches.length - 1)]);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        e.stopPropagation();
+        takeCommandRef.current(matches[Math.min(slashActiveRef.current, matches.length - 1)]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSlashDismissed(true);
+        setSlashActive(0);
+      }
+    };
+    pane.addEventListener("input", onInput);
+    pane.addEventListener("keydown", onKeyDown, true); // capture: ahead of the composer's own Enter
+    return () => {
+      pane.removeEventListener("input", onInput);
+      pane.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [status]);
+
   const modelLine = modelLineOf(modelInfo, (model, effort) =>
     t("conversation.model.line", { model, effort })
   );
@@ -591,6 +691,18 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     [modelLine, modelInfo.model, sendCommand, goTerminal, sessionId]
   );
 
+  const SlashMenuBanner = useCallback(
+    (): ReactNode => (
+      <SlashMenu
+        items={slashMatches ?? []}
+        active={Math.min(slashActive, Math.max((slashMatches?.length ?? 1) - 1, 0))}
+        onPick={takeCommand}
+        onHover={setSlashActive}
+      />
+    ),
+    [slashMatches, slashActive, takeCommand]
+  );
+
   const SlashBanner = useCallback(
     (): ReactNode => <SlashCommandNotice onGoTerminal={goTerminal} />,
     [goTerminal]
@@ -601,11 +713,18 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       Welcome,
       ToolFallback: ToolRow,
       ToolGroup: ToolRowGroup,
-      // An answer that is actually being waited on outranks a note about where a command went.
-      Banner: attention === "waiting" ? Banner : slashSent ? SlashBanner : undefined,
+      // An answer that is actually being waited on outranks everything; after that, a list being
+      // typed into outranks a note about a command already sent.
+      Banner: attention === "waiting"
+        ? Banner
+        : slashOpen
+          ? SlashMenuBanner
+          : slashSent
+            ? SlashBanner
+            : undefined,
       ComposerExtras: ComposerModelSlot,
     }),
-    [Welcome, Banner, SlashBanner, attention, slashSent]
+    [Welcome, Banner, SlashBanner, SlashMenuBanner, attention, slashSent, slashOpen]
   );
 
   // Built unconditionally, ahead of the status branches below — the messages a still-loading or

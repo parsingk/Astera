@@ -1,3 +1,4 @@
+import type { SlashCommand } from './commands/slashCommands'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { EmulationMetrics } from './preview/viewports'
 import type { CaptureResult, Rect } from './preview/pick/types'
@@ -1377,6 +1378,10 @@ export type RendererApi = CoreApi & {
      *  nothing yet. Read rather than pushed: it changes only when a person changes it, which they do
      *  through the CLI's own screen, and there is no event for that. */
     model(sessionId: string): Promise<{ model: string | null; effort: string | null }>
+    /** Everything `/` can start for this session, read off disk (main/slashCommands.ts). The CLI's
+     *  own built-ins are not in it — nothing on disk describes them — and a name that is missing still
+     *  runs when it is typed in full. */
+    commands(sessionId: string): Promise<SlashCommand[]>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

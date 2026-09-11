@@ -116,6 +116,7 @@ import { previewShotsDir } from './preview/shots'
 import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
 import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/statusline'
+import { listSlashCommands } from './slashCommands'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
@@ -5850,6 +5851,19 @@ export function registerIpc(
   ipcMain.handle('conversation.model', async (_e, sessionId: string) =>
     extractStatusLineModel(await core.statusLinePayload(sessionId))
   )
+  // What `/` offers in the composer. Read on demand rather than watched: the folders change when a
+  // person installs something, which is not while they are typing, and the pane asks once when it
+  // opens. Answers an empty list rather than throwing for a session whose account has gone.
+  ipcMain.handle('conversation.commands', async (_e, sessionId: string) => {
+    const session = core.sessions.list().find((s) => s.id === sessionId)
+    if (!session) return []
+    try {
+      const account = core.accounts.get(session.accountId)
+      return await listSlashCommands({ configDir: account.configDir, cwd: session.cwd ?? null })
+    } catch {
+      return []
+    }
+  })
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
