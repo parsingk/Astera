@@ -101,6 +101,16 @@
 }
 
 @layer base {
+  /* The app-wide margin reset (its box-sizing half is in styles.css, which is where it used to
+     live whole). It has to be layered: unlayered rules beat layered ones at any specificity, so
+     an unlayered `* { margin: 0 }` wins against .mt-auto, .mb-14 and every other margin utility,
+     and the conversation view loses its composer's place at the bottom and every gap between its
+     paragraphs. In @layer base it sits below @layer utilities, so a utility wins, while every
+     unlayered rule in styles.css still beats it exactly as before. */
+  * {
+    margin: 0;
+  }
+
   /* assistant-ui's vendored components assume one of Tailwind preflight's resets: a default border
      colour for any element that sets a border width without a colour utility. (box-sizing: border-box,
      preflight's other assumption, needs nothing here — styles.css already sets it globally.) Scoped to

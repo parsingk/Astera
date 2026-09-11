@@ -6,7 +6,8 @@ import {
   nextTurnsFor,
   shouldResetPaging,
   nextAttentionFor,
-  composerTextOf
+  composerTextOf,
+  shouldCloseStaleOpen
 } from './ConversationPane'
 import type { ConvTurn } from '../../../../core/history/convTypes'
 
@@ -197,5 +198,23 @@ describe('composerTextOf', () => {
     ] as unknown as AppendMessage['content']
 
     expect(composerTextOf(parts)).toBe('hello world')
+  })
+})
+
+// The rule this guards is the one the hand check caught: an `open` that resolves after its own run
+// ended must not close a session a newer run has since opened. Unconditional closing looks harmless
+// in the code and leaves every other test here green, while the pane it breaks still draws its turns
+// and simply stops updating.
+describe('shouldCloseStaleOpen', () => {
+  it('does not close a session the pane is still mounted for', () => {
+    expect(shouldCloseStaleOpen('s1', 's1')).toBe(false)
+  })
+
+  it('closes when the pane has unmounted', () => {
+    expect(shouldCloseStaleOpen(null, 's1')).toBe(true)
+  })
+
+  it('closes the old session when the pane has moved to another one', () => {
+    expect(shouldCloseStaleOpen('s2', 's1')).toBe(true)
   })
 })

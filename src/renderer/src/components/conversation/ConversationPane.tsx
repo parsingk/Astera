@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
@@ -134,6 +142,34 @@ export function composerTextOf(parts: AppendMessage["content"]): string {
   return parts.filter(isTextPart).map((part) => part.text).join("");
 }
 
+/**
+ * Whether an `open` that resolved after its own run ended should close the session it opened.
+ *
+ * Only when no later run of the same pane is mounted for that session. main keys its follow by
+ * session id and nothing else, so a close sent for a session a newer run has already opened takes
+ * that newer follow with it: the pane keeps the turns it drew, and never hears another thing —
+ * no live append, and `more` answers null so "load earlier" does nothing at all, silently.
+ *
+ * Two opens for one session overlap whenever the pane remounts before the first resolves: every
+ * React.StrictMode double-mount in development, and a quick toggle out and back in anywhere. The
+ * second open resolves first often enough for this to be the common case, not the rare one — it
+ * was measured losing three mounts out of four.
+ */
+export function shouldCloseStaleOpen(mountedFor: string | null, sessionId: string): boolean {
+  return mountedFor !== sessionId;
+}
+
+/** How long a pending scroll correction stays armed. Long enough for the thread's own render pass to
+ *  land the prepended messages, short enough that an unrelated later resize cannot inherit it. */
+const RESTORE_SCROLL_DEADLINE_MS = 1_500;
+
+/** The thread's own scrolling element. `data-slot` rather than a class: the slot attribute is set by
+ *  the vendored thread in this repository, so it is ours to depend on, while the classes beside it
+ *  come from upstream and change with it. */
+function threadViewport(pane: HTMLElement | null): HTMLElement | null {
+  return pane?.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]') ?? null;
+}
+
 // ---- component ------------------------------------------------------------------------------
 
 type Status = "loading" | "unavailable" | "ready";
@@ -161,10 +197,24 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // this effect) reads and compares the same ref for the identical reason: an in-flight `more()`
   // must never apply a different session's byte offsets to this one.
   const generationRef = useRef(0);
+  // Which session this pane is mounted for at this instant, or null while it is unmounted. Read only
+  // by the stale branch of `open` below — see shouldCloseStaleOpen for what it is deciding and why
+  // the generation alone cannot decide it.
+  const mountedForRef = useRef<string | null>(null);
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  // What the thread's scroll looked like just before a load-earlier prepend, so the layout effect
+  // below can put the reader back where they were. Null except between that prepend and its
+  // correction.
+  const restoreScrollRef = useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+    deadline: number;
+  } | null>(null);
 
   useEffect(() => {
     const generation = ++generationRef.current;
     const isCurrent = (): boolean => generationRef.current === generation;
+    mountedForRef.current = sessionId;
 
     setStatus("loading");
     setTurns([]);
@@ -222,11 +272,11 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         if (!isCurrent()) {
           // The pane moved on (a sessionId change, or unmount) before this resolved. main's `open`
           // sets its entry only after its own awaits (main/conversation.ts), so the `close()` this
-          // run's own cleanup already fired found nothing to remove yet — closing again now is what
+          // run's own cleanup already fired found nothing to remove yet — closing now is what
           // actually stops the follow and its 1s ticker for a session this pane no longer shows.
-          // React.StrictMode's double-mount runs this exact path on every dev mount and happens to
-          // self-heal there, which is exactly why it would go unnoticed without this.
-          void window.api.conversation.close(sessionId);
+          if (shouldCloseStaleOpen(mountedForRef.current, sessionId)) {
+            void window.api.conversation.close(sessionId);
+          }
           return;
         }
         // null is ordinary, not an error: a freshly spawned session has not written a status line
@@ -247,6 +297,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
 
     return () => {
       generationRef.current += 1;
+      mountedForRef.current = null;
       offAppend();
       offAttention();
       void window.api.conversation.close(sessionId);
@@ -267,8 +318,16 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         if (res === null) return;
         // Prepend, never replace — `more` never repeats a turn already returned (its own doc
         // comment in core/types.ts), so there is nothing here for mergeTurns's by-id replacement to
-        // do. Keeping the reader's scroll position steady across this prepend is a markup concern,
-        // hand-checked once this pane is actually mounted (Task 10).
+        // do.
+        const viewport = threadViewport(paneRef.current);
+        restoreScrollRef.current =
+          viewport && res.turns.length > 0
+            ? {
+                scrollHeight: viewport.scrollHeight,
+                scrollTop: viewport.scrollTop,
+                deadline: Date.now() + RESTORE_SCROLL_DEADLINE_MS
+              }
+            : null;
         setTurns((prev) => [...res.turns, ...prev]);
         setFrom(res.from);
         setMore(res.more);
@@ -278,6 +337,42 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         if (generationRef.current === generation) setLoadingMore(false);
       });
   }, [sessionId, from, more, loadingMore]);
+
+  // Content arriving above the reader would otherwise slide everything they were looking at down by
+  // its own height: the thread manages its own scrolling, which suppresses the browser's scroll
+  // anchoring, so nothing compensates on its own. Measured before this: a prepend moved the reader's
+  // line down by exactly what was added, and a whole earlier window is a screenful or more.
+  //
+  // Driven by the thread growing rather than by `turns` changing, because those are not the same
+  // moment: the runtime hands the prepended messages to the thread, which renders them in a later
+  // pass, so a layout effect on `turns` measures a viewport that has not grown yet and corrects by
+  // nothing at all. The first firing is often the load-earlier bar disappearing, which shrinks the
+  // content — hence waiting for a net gain rather than acting on the first change, and a deadline so
+  // a prepend that never lands cannot leave a correction armed for the next unrelated resize.
+  useLayoutEffect(() => {
+    const viewport = threadViewport(paneRef.current);
+    const content = viewport?.firstElementChild;
+    if (!viewport || !content) return;
+    const observer = new ResizeObserver(() => {
+      const pending = restoreScrollRef.current;
+      if (!pending) return;
+      if (Date.now() > pending.deadline) {
+        restoreScrollRef.current = null;
+        return;
+      }
+      const grew = viewport.scrollHeight - pending.scrollHeight;
+      if (grew <= 0) return;
+      restoreScrollRef.current = null;
+      // The viewport scrolls smoothly by default, which would animate this correction into the very
+      // lurch it exists to remove.
+      const behaviour = viewport.style.scrollBehavior;
+      viewport.style.scrollBehavior = "auto";
+      viewport.scrollTop = pending.scrollTop + grew;
+      viewport.style.scrollBehavior = behaviour;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [status]);
 
   const messages = useMemo(() => toThreadMessages(turns), [turns]);
 
@@ -362,7 +457,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   const locked = attention === "waiting";
 
   return (
-    <div data-slot="conversation-pane" className="flex h-full min-h-0 flex-col">
+    <div ref={paneRef} data-slot="conversation-pane" className="flex h-full min-h-0 flex-col">
       {more && (
         <div className="border-border/60 flex justify-center border-b py-1">
           <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>

@@ -253,7 +253,11 @@
   --ease: 120ms cubic-bezier(0.2, 0.6, 0.3, 1);
 }
 
-* { box-sizing: border-box; margin: 0; }
+/* The margin half of this reset lives in tailwind.css's @layer base, not here: an unlayered rule
+   beats every layered one whatever its specificity, so keeping `margin: 0` here silently zeroed
+   every margin utility the vendored conversation markup relies on. box-sizing collides with
+   nothing and stays. */
+* { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body { font-family: var(--sans); letter-spacing: var(--tracking); background: var(--bg); color: var(--text); }
 
