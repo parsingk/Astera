@@ -25,6 +25,15 @@ export const ko = {
     '이미 열려 있는 세션에는 적용되지 않습니다. 새 세션부터 동작합니다. ' +
     '오케스트레이터로 쓸 세션에서 astera help 를 실행하게 하면 전체 사용법을 얻습니다.',
   'settings.orchestration.saveFailed': '오케스트레이션 설정을 저장하지 못했습니다: {detail}',
+  // 에이전트 권한 모드
+  'settings.agentPermission.label': '권한 확인 없이 에이전트 실행',
+  'settings.agentPermission.hint':
+    '켜면 앱이 띄우는 모든 에이전트 세션이 권한 확인 없이 실행됩니다 ' +
+    '(claude 는 --dangerously-skip-permissions, codex 는 --dangerously-bypass-approvals-and-sandbox). ' +
+    '기본값은 켜짐입니다. Job 워커는 매번 새로 만든 워크트리에서 뜨는데, 그 폴더에는 승인 이력이 없고 ' +
+    '프로젝트에 쌓아 둔 허용 목록(.claude/settings.local.json)도 따라오지 않아, 끄면 워커가 첫 명령에서 멈춥니다. ' +
+    '이미 열려 있는 세션에는 적용되지 않습니다. 새 세션부터 동작합니다.',
+  'settings.agentPermission.saveFailed': '권한 모드를 저장하지 못했습니다: {detail}',
   // Work Unit 추적
   'settings.workUnit.label': '작업 단위 추적 (실험)',
   'settings.workUnit.hint':
@@ -1115,6 +1124,7 @@ export const ko = {
   // 모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버린다. 중단한 작업이나 워커가 죽어 dispatched 에
   // 멈춘 Task 를 가진 Run 은 영원히 남는다
   'jobs.run.start': '실행',
+  'jobs.run.starting': '시작하는 중…',
   'jobs.run.pause': '일시 중지',
   'jobs.run.pauseHint': '이 예약을 세웁니다 — 도는 Task 도 함께 멈춥니다',
   'jobs.run.pauseConfirmTitle': '예약 일시 중지',

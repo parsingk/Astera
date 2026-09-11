@@ -24,6 +24,16 @@ export const es: Catalog = {
     'Pida a la sesión que vaya a usar como orquestador que ejecute astera help para obtener la guía de uso completa.',
   'settings.orchestration.saveFailed':
     'No se pudo guardar la configuración de orquestación: {detail}',
+  // Modo de permisos del agente
+  'settings.agentPermission.label': 'Ejecutar agentes sin comprobar permisos',
+  'settings.agentPermission.hint':
+    'Todas las sesiones de agente que inicia la aplicación se ejecutan sin preguntar por permisos ' +
+    '(--dangerously-skip-permissions para claude, --dangerously-bypass-approvals-and-sandbox para codex). ' +
+    'Activado de forma predeterminada. Un worker de Job siempre arranca en un worktree recién creado: esa ' +
+    'carpeta no tiene historial de aprobaciones y la lista de permitidos acumulada en el proyecto ' +
+    '(.claude/settings.local.json) no lo acompaña, así que al desactivarlo el worker se detiene en su primer comando. ' +
+    'Las sesiones ya abiertas no se ven afectadas. Se aplica a partir de la siguiente sesión.',
+  'settings.agentPermission.saveFailed': 'No se pudo guardar el modo de permisos: {detail}',
   // Seguimiento de unidades de trabajo
   'settings.workUnit.label': 'Seguimiento de unidades de trabajo (experimental)',
   'settings.workUnit.hint':
@@ -963,6 +973,7 @@ export const es: Catalog = {
   'jobs.state.blocked': 'Esperando a una persona',
   'jobs.run.running': 'en curso',
   'jobs.run.start': 'Ejecutar',
+  'jobs.run.starting': 'Iniciando…',
   'jobs.run.pause': 'Pausar',
   'jobs.run.pauseHint': 'Detiene esta programación; las tareas en curso también se detienen',
   'jobs.run.pauseConfirmTitle': 'Pausar la programación',

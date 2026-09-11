@@ -76,6 +76,19 @@ export function ResumeStrategySettings(): React.JSX.Element {
 
   return (
     <div className="settings-resume-strategy">
+      {/* **작업 이어가기가 먼저 온다.** 이 묶음은 오케스트레이션 토글 바로 아래에 서고(App.tsx),
+          거기 붙어야 하는 것은 재개 전략이 아니라 이 칸이다 — 둘 다 Job 에 관한 실험 기능이다.
+          재개 전략이 뒤로 가도 짝은 끊기지 않는다: 이 칸을 켜면 그것이 picker 를 smart 로 넘길 수
+          있고, 그 일이 바로 아래에서 보이는 편이 위에서 보이는 것보다 낫다. */}
+      <label className="settings-row">
+        <span>{t('settings.jobContinuity.label')}</span>
+        <input
+          type="checkbox"
+          checked={continuity}
+          onChange={(e) => toggleContinuity(e.target.checked)}
+        />
+      </label>
+      <span className="settings-hint">{t('settings.jobContinuity.hint')}</span>
       <div className="settings-row">
         <span>{t('settings.resumeStrategy.label')}</span>
       </div>
@@ -101,15 +114,6 @@ export function ResumeStrategySettings(): React.JSX.Element {
           </span>
         </button>
       </div>
-      <label className="settings-row">
-        <span>{t('settings.jobContinuity.label')}</span>
-        <input
-          type="checkbox"
-          checked={continuity}
-          onChange={(e) => toggleContinuity(e.target.checked)}
-        />
-      </label>
-      <span className="settings-hint">{t('settings.jobContinuity.hint')}</span>
     </div>
   )
 }

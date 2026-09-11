@@ -685,10 +685,11 @@ export class OrchCoordinator {
       this.deps.writeToSession(a.terminal, '\r')
       promptWrite('confirmed', 'typed')
     } else {
-      // bypassPermissions is not passed — the choice is between a worker stalling on a permission
-      // prompt and skipping the permission check on the orchestrator's word alone, and that was
-      // never decided. The default (not passing it, so the worker stalls if a permission prompt
-      // appears) is the safer side of unauthorized execution, so it is left alone.
+      // bypassPermissions is not passed **from here** — it is decided now, but not by this module:
+      // the value is the app-wide AgentPermissionMode, and this file cannot read app settings (it
+      // takes deps and stays testable). The wiring fills the field in as it spawns, and the reason
+      // the default moved from "stall" to "bypass" is written there (startCoordinator in
+      // src/main/ipc.ts). Leaving the field unset here is what lets that happen.
       promptWrite('requested', 'argv')
       const spawned = await this.deps.spawnSession({
         accountId: a.accountId,

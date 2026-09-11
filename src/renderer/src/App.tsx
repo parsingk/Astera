@@ -496,6 +496,9 @@ export default function App(): React.JSX.Element {
   const [slackLoaded, setSlackLoaded] = useState(false)
   const [wtRoot, setWtRoot] = useState('') // the worktree root in the settings modal
   const [orchEnabled, setOrchEnabled] = useState(false) // the agent orchestration toggle
+  // 에이전트 권한 모드. **기본이 yolo 라 초기값도 true 다** — false 로 두면 모달이 열리는 순간
+  // 꺼진 체크박스가 잠깐 보였다가 켜지고, 그 깜빡임은 사용자가 끈 것으로 읽힌다.
+  const [agentYolo, setAgentYolo] = useState(true)
   // The rail button for Jobs is gated on this, so the shortcut must be too — a key that opens a view
   // whose control is not on screen leaves the user somewhere they cannot get back from. Read through a
   // ref for the same reason as jobsOpenRef.
@@ -927,6 +930,10 @@ export default function App(): React.JSX.Element {
     // Same re-sync for work unit tracking. Unlike orchestration, nothing outside this modal reads it yet,
     // so there is no mount-time fetch to keep honest — this is the only read.
     void window.api.settings.getWorkUnitTrackingEnabled().then(setWorkUnitTrackingEnabled)
+    // 권한 모드도 같은 갈래다 — 이 모달 밖에서 읽는 곳이 없으므로 마운트 시점 읽기는 두지 않는다.
+    void window.api.settings
+      .getAgentPermissionMode()
+      .then((m) => setAgentYolo(m === 'yolo'))
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
     // Astera Host slice 1: this value goes stale, and the row is only ever on screen while this
     // modal is open, so it is read here rather than at startup.
@@ -4024,6 +4031,35 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.orchestration.hint')}</span>
+                    {/* 권한 모드 — 오케스트레이션 바로 아래. 위 토글이 켜는 것이 워커를 띄우는 일이고,
+                        이 토글이 정하는 것은 그 워커가 승인을 묻는가이기 때문이다. 같은
+                        optimistic-update-then-revert 관례를 쓴다. */}
+                    <label className="settings-row">
+                      <span>{t('settings.agentPermission.label')}</span>
+                      <input
+                        type="checkbox"
+                        checked={agentYolo}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                          setAgentYolo(next)
+                          void window.api.settings
+                            .setAgentPermissionMode(next ? 'yolo' : 'manual')
+                            .catch((err) => {
+                              setAgentYolo(!next)
+                              toast.error(
+                                t('settings.agentPermission.saveFailed', {
+                                  detail: err instanceof Error ? err.message : String(err)
+                                })
+                              )
+                            })
+                        }}
+                      />
+                    </label>
+                    <span className="settings-hint">{t('settings.agentPermission.hint')}</span>
+                    {/* 작업 이어가기와 재개 전략 — 오케스트레이션 바로 아래에 둔다. 이어가기는 Job 이
+                        재시작을 건너 살아남게 하는 것이라 위 토글과 한 갈래이고, 재개 전략은 그것이
+                        켜질 때 함께 움직인다(spec §3). 그 둘이 한 컴포넌트인 이유는 그 파일에 있다. */}
+                    <ResumeStrategySettings />
                     {/* Work unit tracking — same settings-row/settings-hint/label shape as orchestration
                         above, and the same optimistic-update-then-revert-on-failure behaviour. Off by
                         default: nothing is read from before the moment this is turned on. */}
@@ -4070,13 +4106,9 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.agentBrowser.hint')}</span>
-                    {/* 재개 전략 — 한도에 걸린 세션을 어떻게 이어갈지. Appearance 가 아니라 여기 있는
-                        이유: 이것은 보이는 방식이 아니라 동작이고, 바로 위 오케스트레이션 토글과 같은
-                        갈래(롤링·워커)를 건드린다. */}
                     {/* 설명 생성 — 작업 단위 추적이 모은 것을 무엇으로 설명할 것인가.
                         추적 토글 바로 아래에 두는 이유: 추적이 이 설정의 입력을 만든다. */}
                     <GeneratorSettings />
-                    <ResumeStrategySettings />
                   </>
                 )}
                 {settingsTab === 'appearance' && (

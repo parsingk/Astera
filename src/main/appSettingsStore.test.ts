@@ -554,3 +554,39 @@ describe('AppSettingsStore desktop notifications', () => {
     expect(parsed.desktopNotify).toBeUndefined()
   })
 })
+
+// Orca ships its agents' launch args with the permission bypass on (DEFAULT_TUI_AGENT_ARGS =
+// YOLO_TUI_AGENT_ARGS, src/shared/tui-agent-launch-defaults.ts), and this app follows it — a Job
+// worker starts in a worktree with no approval history of its own, so manual is a wall by default.
+// The narrowing is githubPolling's: a default-on setting reads as off only on the explicit value.
+describe('agentPermissionMode', () => {
+  it('defaults to yolo — a fresh install runs Jobs without a permission wall', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getAgentPermissionMode()).toBe('yolo')
+  })
+
+  it("only an explicit 'manual' turns it off, and it persists", async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setAgentPermissionMode('manual')
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getAgentPermissionMode()).toBe('manual')
+  })
+
+  it('anything else in the user-editable file reads as yolo', async () => {
+    const f = file()
+    await fs.writeFile(f, JSON.stringify({ agentPermissionMode: 'nope' }), 'utf8')
+    const store = new AppSettingsStore(f)
+    await store.load()
+    expect(store.getAgentPermissionMode()).toBe('yolo')
+  })
+
+  it('a corrupt file resets it to yolo', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getAgentPermissionMode()).toBe('yolo')
+  })
+})

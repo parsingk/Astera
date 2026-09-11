@@ -659,3 +659,73 @@ describe('OrchestrationStore', () => {
     expect((await new OrchestrationStore(file).load()).before).toBeNull()
   })
 })
+
+// One stale field disables both ways back. `inbox.ts` only nets Runs whose coordinatorSessionId is
+// absent, and `view.ts` only offers the restart button then — so a slot still naming a session that
+// died with its Host leaves a Job with no one to answer its workers and no button to fix it. Measured:
+// a worker asked a question and nothing answered it until a person ran the CLI by hand.
+describe('a coordinator that did not survive the restart', () => {
+  const withCoordinator = (): OrchState => ({
+    ...emptyState(),
+    runs: [
+      {
+        id: 'run_1',
+        objective: 'o',
+        cwd: 'D:/p',
+        createdAt: NOW,
+        coordinatorAccountId: 'acc1',
+        coordinatorSessionId: 'coord1'
+      }
+    ]
+  })
+
+  it('empties the slot when the Host does not have that session', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withCoordinator()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: new Set(['someone-else']) })
+    expect(res.coordinatorsLost).toBe(1)
+    expect(store.get().runs[0].coordinatorSessionId).toBeUndefined()
+    // The account is what the restart button starts the next one on — losing it loses the button too.
+    expect(store.get().runs[0].coordinatorAccountId).toBe('acc1')
+  })
+
+  it('keeps the slot when the Host handed that session back', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withCoordinator()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: new Set(['coord1']) })
+    expect(res.coordinatorsLost).toBe(0)
+    expect(store.get().runs[0].coordinatorSessionId).toBe('coord1')
+  })
+
+  // Emptying a slot whose session is in fact alive puts "restart the coordinator" on that Run's line,
+  // and one click is a second coordinator in a worktree the first is still working in — the accident
+  // releaseCoordinator's own note exists to prevent. "Could not ask" is not "nothing is there".
+  it('leaves the slot alone when it could not be told what is alive', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withCoordinator()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: 'unknown' })
+    expect(res.coordinatorsLost).toBe(0)
+    expect(store.get().runs[0].coordinatorSessionId).toBe('coord1')
+  })
+
+  // No Host at all is a real answer: nothing could have outlived the app, so nothing did.
+  it('empties the slot when there was no Host to outlive the app', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withCoordinator()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load()
+    expect(res.coordinatorsLost).toBe(1)
+    expect(store.get().runs[0].coordinatorSessionId).toBeUndefined()
+  })
+
+  it('says nothing happened for a Run that never had a coordinator', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load()
+    expect(res.coordinatorsLost).toBe(0)
+  })
+})

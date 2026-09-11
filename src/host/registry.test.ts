@@ -282,3 +282,39 @@ describe('PtyRegistry', () => {
     expect(received).toBe('/s /c "npm run build"')
   })
 })
+
+// A worker that died a second after it started left nothing but a timestamp and an exit code the pty
+// layer could not even supply, because the buffer is cleared on the next line and the Host is the
+// only place it existed. The last screen is the difference between "it ended" and knowing why.
+describe('the last screen of a session that ended badly', () => {
+  it('logs the tail, stripped of escapes and on one line', () => {
+    const p = fakePty()
+    const { r, logs } = registry({ pty: p })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    p.emit("\u001b[31m'codex' is not recognized\u001b[0m\nas a command\n")
+    p.exit(1)
+    const line = logs.find((l) => l.includes('last screen'))
+    expect(line).toBeDefined()
+    expect(line).toContain("'codex' is not recognized")
+    expect(line).not.toContain('\u001b')
+    expect(line).not.toContain('\n')
+  })
+
+  // A session someone closed is the ordinary end of a session, and its screen is theirs, not the log's.
+  it('says nothing for a clean exit', () => {
+    const p = fakePty()
+    const { r, logs } = registry({ pty: p })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    p.emit('all done\n')
+    p.exit(0)
+    expect(logs.some((l) => l.includes('last screen'))).toBe(false)
+  })
+
+  it('says so when the session ended badly with nothing on screen', () => {
+    const p = fakePty()
+    const { r, logs } = registry({ pty: p })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    p.exit(1)
+    expect(logs.some((l) => l.includes('last screen: (nothing)'))).toBe(true)
+  })
+})

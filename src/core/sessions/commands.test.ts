@@ -33,10 +33,16 @@ describe('initialPrompt', () => {
 })
 
 describe('claude --add-dir', () => {
-  it('grants read access to the given directories, variadically, before the prompt', () => {
-    const { args } = buildClaudeCommand('linux')({ addDirs: ['/data/shots'], initialPrompt: 'fix it' })
+  it('grants read access to the given directories, variadically', () => {
+    const { args } = buildClaudeCommand('linux')({ addDirs: ['/data/shots'] })
     expect(args.slice(0, 2)).toEqual(['--add-dir', '/data/shots'])
-    expect(args.indexOf('--add-dir')).toBeLessThan(args.indexOf('fix it'))
+  })
+  // The variadic option eats every positional that follows it, and the prompt is a positional. A
+  // session whose prompt was eaten comes up at an empty REPL and never runs its turn — that is a
+  // coordinator that never dispatches a Task, and a worker that never reads its spec.
+  it('cannot swallow the prompt — `--` fences it off', () => {
+    const { args } = buildClaudeCommand('linux')({ addDirs: ['/data/shots'], initialPrompt: 'fix it' })
+    expect(args).toEqual(['--add-dir', '/data/shots', '--', 'fix it'])
   })
   it('emits nothing when there are no directories', () => {
     expect(buildClaudeCommand('linux')({}).args).toEqual([])
