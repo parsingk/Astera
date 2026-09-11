@@ -7,7 +7,8 @@ import {
   shouldResetPaging,
   nextAttentionFor,
   composerTextOf,
-  shouldCloseStaleOpen
+  shouldCloseStaleOpen,
+  ptyWritesFor
 } from './ConversationPane'
 import type { ConvTurn } from '../../../../core/history/convTypes'
 
@@ -216,5 +217,26 @@ describe('shouldCloseStaleOpen', () => {
 
   it('closes the old session when the pane has moved to another one', () => {
     expect(shouldCloseStaleOpen('s2', 's1')).toBe(true)
+  })
+})
+
+// Measured in the dev app: sent as plain typed characters, `/status` opened the model picker and
+// saved a default, because the CLI's own autocomplete had read the slash key by key and the return
+// took the highlighted entry. Bracketed paste is what tells it the text is pasted.
+describe('ptyWritesFor', () => {
+  it('wraps the text in the bracketed-paste markers', () => {
+    const [paste] = ptyWritesFor('/status')
+    expect(paste).toBe('\u001b[200~/status\u001b[201~')
+  })
+
+  it('keeps the return out of the paste, so the two can be written separately', () => {
+    const [paste, submit] = ptyWritesFor('hello')
+    expect(submit).toBe('\r')
+    expect(paste).not.toContain('\r')
+  })
+
+  it('leaves a newline inside the message where it was', () => {
+    const [paste] = ptyWritesFor('first\nsecond')
+    expect(paste).toBe('\u001b[200~first\nsecond\u001b[201~')
   })
 })

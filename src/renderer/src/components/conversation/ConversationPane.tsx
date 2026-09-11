@@ -138,6 +138,20 @@ function isTextPart(part: { type: string; text?: string }): part is { type: "tex
 /** What the composer's `onNew` writes to the pty: the typed text, and nothing else. An attachment or
  *  any other part kind that might ride along in `AppendMessage.content` is silently dropped — there
  *  is no pty-shaped thing to send for it. */
+/**
+ * What the composer puts on the pty for one message: the text as a bracketed paste, then the return
+ * that submits it. Two strings because they have to arrive as two chunks — see `onNew`.
+ *
+ * The markers are how a terminal says "this is pasted, not typed". Without them the CLI reads the
+ * text key by key through its own autocomplete, so a line beginning with `/` opens its command menu
+ * and the return picks whatever that menu has highlighted instead of running what was typed: sending
+ * `/status` this way opened the model picker and saved a default (measured in the dev app). They also
+ * keep a newline inside a message from submitting it halfway through.
+ */
+export function ptyWritesFor(text: string): [paste: string, submit: string] {
+  return ["\u001b[200~" + text + "\u001b[201~", "\r"];
+}
+
 export function composerTextOf(parts: AppendMessage["content"]): string {
   return parts.filter(isTextPart).map((part) => part.text).join("");
 }
@@ -420,7 +434,11 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       // terminal are doing the same thing. The typed turn is never pushed into `messages` locally:
       // it comes back through the transcript like every other turn, and adding it here would show
       // it twice.
-      window.api.sessions.write(sessionId, composerTextOf(message.content) + "\r");
+      const [paste, submit] = ptyWritesFor(composerTextOf(message.content));
+      window.api.sessions.write(sessionId, paste);
+      // A separate turn of the event loop, so the two land as two chunks. Sent together they reach
+      // the CLI as one, the return is swallowed into the paste, and nothing is submitted at all.
+      setTimeout(() => window.api.sessions.write(sessionId, submit), 0);
     },
     [sessionId]
   );

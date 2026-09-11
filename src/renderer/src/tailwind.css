@@ -146,6 +146,38 @@
     background-color: transparent;
     opacity: 1;
   }
+
+  /* A list carries its own indent instead of the browser's. The markdown components indent with
+     `ms-5` and nothing else, which only reads as 20px if the browser's own 40px padding is gone —
+     preflight takes it away, so without this a bulleted answer sits three times as far in as the
+     paragraph above it. */
+  .aui-root ol,
+  .aui-root ul,
+  .aui-root menu {
+    padding: 0;
+  }
+
+  /* A code block takes the same monospace stack inline code already gets from `font-mono`. The
+     markdown components name a font on neither, because preflight gives both the same one; without
+     it a fenced block falls back to whatever the browser calls `monospace` and does not match the
+     inline code in the sentence above it. */
+  .aui-root code,
+  .aui-root kbd,
+  .aui-root pre,
+  .aui-root samp {
+    font-family: var(
+      --font-mono,
+      ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      Monaco,
+      Consolas,
+      'Liberation Mono',
+      'Courier New',
+      monospace
+    );
+    font-size: 1em;
+  }
 }
 
 .aui-root {
