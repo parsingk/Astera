@@ -159,6 +159,9 @@ export function shouldCloseStaleOpen(mountedFor: string | null, sessionId: strin
   return mountedFor !== sessionId;
 }
 
+/** How often a pane with nothing to show asks again whether a transcript has appeared. */
+const UNAVAILABLE_RETRY_MS = 2_000;
+
 /** How long a pending scroll correction stays armed. Long enough for the thread's own render pass to
  *  land the prepended messages, short enough that an unrelated later resize cannot inherit it. */
 const RESTORE_SCROLL_DEADLINE_MS = 1_500;
@@ -304,6 +307,41 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     };
   }, [sessionId]);
 
+  // `open` answering null is a moment, not a verdict. A session that has only just started reports
+  // its transcript path a beat after it comes up, and a session resumed from history does the same —
+  // it keeps the id and the file it is resuming, so the whole earlier conversation is there as soon
+  // as the path arrives. The pane used to latch on to that first null for the rest of the tab's life,
+  // and it hid the composer while doing it, so someone who opened the view a second too early was
+  // left with a dead panel and no way to type. Retried here rather than followed in main because a
+  // fresh `open` is what carries the paging window that an append event has no room for. It keeps
+  // asking for as long as the pane is open and empty, which for a codex session is forever: one small
+  // file read every couple of seconds while a person is looking at an empty panel, and the
+  // alternative is that dead end again.
+  useEffect(() => {
+    if (status !== "unavailable") return;
+    const generation = generationRef.current;
+    const timer = setInterval(() => {
+      void window.api.conversation
+        .open(sessionId)
+        .then((res) => {
+          if (generationRef.current !== generation) {
+            // Same reasoning as the mount effect's own stale branch, and the same guard.
+            if (shouldCloseStaleOpen(mountedForRef.current, sessionId)) {
+              void window.api.conversation.close(sessionId);
+            }
+            return;
+          }
+          if (res === null) return;
+          setTurns(res.turns);
+          setFrom(res.from);
+          setMore(res.more);
+          setStatus("ready");
+        })
+        .catch(() => {});
+    }, UNAVAILABLE_RETRY_MS);
+    return () => clearInterval(timer);
+  }, [sessionId, status]);
+
   const loadMore = useCallback(() => {
     if (!more || loadingMore) return;
     const generation = generationRef.current;
@@ -393,10 +431,10 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         data-slot="conversation-pane-empty"
         className="text-muted-foreground px-4 text-center text-sm"
       >
-        {t("conversation.empty")}
+        {t(status === "unavailable" ? "conversation.unavailable" : "conversation.empty")}
       </div>
     ),
-    [t]
+    [t, status]
   );
 
   const Banner = useCallback(
@@ -436,17 +474,6 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     // drives the banner and the real lock while `waiting`.
     onNew,
   });
-
-  if (status === "unavailable") {
-    return (
-      <div
-        data-slot="conversation-pane-unavailable"
-        className="text-muted-foreground flex h-full items-center justify-center px-6 text-center text-sm"
-      >
-        {t("conversation.unavailable")}
-      </div>
-    );
-  }
 
   if (status === "loading") {
     // Nothing to draw yet. Showing "unavailable" here would flash wrong for the ordinary case (a
