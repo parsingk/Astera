@@ -225,6 +225,13 @@ export function modelLineOf(
  *  cleared by then. */
 const SUBMIT_GAP_MS = 250
 
+/** How long a slash command is given to show up in the conversation before the pane says where it
+ *  went. A command that becomes a prompt — every skill command — writes its user turn as soon as the
+ *  CLI takes it, and main notices within its own second; one that opens the CLI's own screen never
+ *  writes anything at all. So silence for this long is the evidence, and nothing needs to know in
+ *  advance which kind a command was. */
+const SLASH_SILENCE_MS = 4_000
+
 /** How long codex's `/model` takes to put its picker on screen before the chosen row can be pressed.
  *  Generous on purpose: a keystroke that arrives early lands in the composer instead, where it is one
  *  visible stray character rather than a wrong choice. */
@@ -333,6 +340,8 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // Whether the last keystroke left the composer in a state a menu cares about — see the input
   // listener, which uses it to stay silent for ordinary typing.
   const triggerArmedRef = useRef(false);
+  /** The pending 'where did it go' notice, cancelled the moment anything comes back. */
+  const slashSilenceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // What the thread's scroll looked like just before a load-earlier prepend, so the layout effect
   // below can put the reader back where they were. Null except between that prepend and its
   // correction.
@@ -407,7 +416,10 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     const offAppend = window.api.on("conversation:append", (e) => {
       if (!isCurrent()) return;
       if (e.sessionId === sessionId) {
-        // Something came back, so the notice has said what it had to say.
+        // Something came back, so the command landed in the conversation after all and there is
+        // nothing to explain.
+        if (slashSilenceRef.current !== null) clearTimeout(slashSilenceRef.current);
+        slashSilenceRef.current = null;
         setSlashSent(false);
         readModel();
       }
@@ -461,6 +473,8 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     return () => {
       generationRef.current += 1;
       mountedForRef.current = null;
+      if (slashSilenceRef.current !== null) clearTimeout(slashSilenceRef.current);
+      slashSilenceRef.current = null;
       offAppend();
       offAttention();
       void window.api.conversation.close(sessionId);
@@ -581,7 +595,12 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       // it comes back through the transcript like every other turn, and adding it here would show
       // it twice.
       const text = composerTextOf(message.content);
-      setSlashSent(isSlashCommand(text));
+      if (slashSilenceRef.current !== null) clearTimeout(slashSilenceRef.current);
+      slashSilenceRef.current = null;
+      setSlashSent(false);
+      if (isSlashCommand(text)) {
+        slashSilenceRef.current = setTimeout(() => setSlashSent(true), SLASH_SILENCE_MS);
+      }
       const [paste, submit] = ptyWritesFor(text);
       window.api.sessions.write(sessionId, paste);
       setTimeout(() => window.api.sessions.write(sessionId, submit), SUBMIT_GAP_MS);

@@ -5891,7 +5891,11 @@ export function registerIpc(
     if (!session) return []
     try {
       const account = core.accounts.get(session.accountId)
-      return await listSlashCommands({ configDir: account.configDir, cwd: session.cwd ?? null })
+      return await listSlashCommands({
+        configDir: account.configDir,
+        cwd: session.cwd ?? null,
+        kind: account.provider === 'codex' ? 'codex' : 'claude'
+      })
     } catch {
       return []
     }

@@ -1,6 +1,10 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { frontmatterDescription, type SlashCommand } from '../core/commands/slashCommands'
+import {
+  CODEX_SLASH_COMMANDS,
+  frontmatterDescription,
+  type SlashCommand
+} from '../core/commands/slashCommands'
 
 // What `/` can start, read off disk for one session.
 //
@@ -105,8 +109,13 @@ async function pluginPaths(configDir: string): Promise<string[]> {
 export async function listSlashCommands(opts: {
   configDir: string
   cwd: string | null
+  /** Which agent is asking. codex takes none of what is on disk as a command — it answers
+   *  `Unrecognized command` for the skills in its own folder — so it gets its own list instead
+   *  (core/commands/slashCommands.ts). Measured, not assumed. */
+  kind?: 'claude' | 'codex'
 }): Promise<SlashCommand[]> {
   const { configDir, cwd } = opts
+  if (opts.kind === 'codex') return [...CODEX_SLASH_COMMANDS]
   const groups = await Promise.all([
     cwd === null ? [] : commandsIn(path.join(cwd, '.claude', 'commands'), 'project'),
     cwd === null ? [] : skillsIn(path.join(cwd, '.claude', 'skills'), 'project'),

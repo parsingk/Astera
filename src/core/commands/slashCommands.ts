@@ -4,8 +4,9 @@ export interface SlashCommand {
   name: string
   /** The one-line description from the file's frontmatter, or '' when it has none. */
   description: string
-  /** Where it came from, for the menu's right-hand label. */
-  source: 'user' | 'project' | 'plugin'
+  /** Where it came from, for the menu's right-hand label. `cli` is the agent's own built-in,
+   *  which only codex lists here — Claude's built-ins are not on disk and are deliberately absent. */
+  source: 'user' | 'project' | 'plugin' | 'cli'
 }
 
 /** The `description:` line of a markdown frontmatter block, or '' when there is none.
@@ -51,3 +52,27 @@ export function filterSlashCommands(
   }
   return [...starts, ...contains]
 }
+
+/**
+ * What codex's own `/` offers, as its menu listed it on 2026-09-12 (codex 0.154.0).
+ *
+ * Hand-kept, because none of it is on disk. It is here at all because the alternative was worse: the
+ * disk walk that serves Claude finds the skills under `~/.codex/skills`, and codex does not take them
+ * as commands — it answers `Unrecognized command '/astera-task'`. A menu of things the CLI rejects is
+ * worse than a short one that works.
+ *
+ * Every one of these opens codex's own screen rather than producing a turn, which is why the pane's
+ * notice exists: sent from the conversation they do run, and what they draw is over in the terminal.
+ */
+export const CODEX_SLASH_COMMANDS: readonly SlashCommand[] = [
+  { name: 'model', description: 'choose what model and reasoning effort to use', source: 'cli' },
+  { name: 'fast', description: '1.5x speed, increased usage', source: 'cli' },
+  { name: 'usage', description: 'usage limits and resets', source: 'cli' },
+  { name: 'ide', description: 'include current selection, open files, and other context from your IDE', source: 'cli' },
+  { name: 'permissions', description: 'choose what Codex is allowed to do', source: 'cli' },
+  { name: 'keymap', description: 'remap TUI shortcuts', source: 'cli' },
+  { name: 'vim', description: 'toggle Vim mode for the composer', source: 'cli' },
+  { name: 'sandbox-add-read-dir', description: 'let sandbox read a directory', source: 'cli' },
+  { name: 'experimental', description: 'toggle experimental features', source: 'cli' },
+  { name: 'feedback', description: 'report an issue', source: 'cli' }
+]
