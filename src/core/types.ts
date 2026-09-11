@@ -1389,6 +1389,9 @@ export type RendererApi = CoreApi & {
      *  own built-ins are not in it — nothing on disk describes them — and a name that is missing still
      *  runs when it is typed in full. */
     commands(sessionId: string): Promise<SlashCommand[]>
+    /** Project files matching what follows an `@`, best first, already capped. Root-relative with
+     *  forward slashes. Empty for a session with no project, or one whose folder cannot be read. */
+    files(sessionId: string, query: string): Promise<string[]>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

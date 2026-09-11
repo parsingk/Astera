@@ -123,6 +123,7 @@ import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
 import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/statusline'
 import { listSlashCommands } from './slashCommands'
+import { createFileIndex } from './fileIndex'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
@@ -684,6 +685,9 @@ export function registerIpc(
   // scheduler.ts and slack.ts already read for a claude session's transcript path, and answers null for
   // a codex one exactly the way it answers null for a claude session with no status line yet — codex
   // never writes one, so this needs no provider branch of its own.
+  /** How many file rows the composer's `@` menu shows. More than a screenful is not a menu. */
+  const CONVERSATION_FILE_MATCHES = 30
+  const fileIndex = createFileIndex()
   const conversationSessions = createConversationSessions({
     // Claude first, because a Claude session answers immediately and is the common case; the codex
     // rollout is asked for only when it does not. Neither answering is ordinary, not an error: a
@@ -5875,6 +5879,13 @@ export function registerIpc(
   // What `/` offers in the composer. Read on demand rather than watched: the folders change when a
   // person installs something, which is not while they are typing, and the pane asks once when it
   // opens. Answers an empty list rather than throwing for a session whose account has gone.
+  // What `@` offers. The walk behind it is cached per project (main/fileIndex.ts), so this is one
+  // in-memory filter per keystroke rather than one tree walk.
+  ipcMain.handle('conversation.files', async (_e, sessionId: string, query: string) => {
+    const session = core.sessions.list().find((s) => s.id === sessionId)
+    if (!session?.cwd) return []
+    return fileIndex.search(session.cwd, query, CONVERSATION_FILE_MATCHES)
+  })
   ipcMain.handle('conversation.commands', async (_e, sessionId: string) => {
     const session = core.sessions.list().find((s) => s.id === sessionId)
     if (!session) return []

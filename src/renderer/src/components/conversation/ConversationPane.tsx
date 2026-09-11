@@ -27,11 +27,12 @@ import {
   CLAUDE_MODEL_CHOICES,
   CODEX_MODEL_CHOICES
 } from "../../../../core/models/cliModels";
-import { SlashMenu } from "./SlashMenu";
+import { CompletionMenu, type CompletionRow } from "./CompletionMenu";
 import {
   filterSlashCommands,
   type SlashCommand
 } from "../../../../core/commands/slashCommands";
+import { fileTokenAt } from "../../../../core/files/fileMatch";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
 import type { Attention } from "../../../../core/types";
@@ -290,6 +291,8 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // assistant-ui's, `input` events bubble to this pane's own root, and that is the whole of it.
   const [commands, setCommands] = useState<readonly SlashCommand[]>([]);
   const [composerText, setComposerText] = useState("");
+  const [composerCaret, setComposerCaret] = useState(0);
+  const [fileMatches, setFileMatches] = useState<readonly string[]>([]);
   const [slashActive, setSlashActive] = useState(0);
   const [modelInfo, setModelInfo] = useState<{
     model: string | null
@@ -330,6 +333,8 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     setSlashSent(false);
     setModelInfo({ model: null, effort: null, canPick: true });
     setComposerText("");
+    setComposerCaret(0);
+    setFileMatches([]);
     setSlashActive(0);
     setSlashDismissed(false);
 
@@ -579,28 +584,75 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // State, not a ref: the listener below sets it, and only a state change redraws the banner slot.
   const [slashDismissed, setSlashDismissed] = useState(false);
   const slashMatches = slashDismissed ? null : filterSlashCommands(commands, composerText);
-  const slashOpen = slashMatches !== null && slashMatches.length > 0;
+
+  // `@` is looked for only when `/` is not answering: a line that starts a command is not also naming
+  // a file, and two menus over one composer would have to fight over the same Enter.
+  const fileToken =
+    slashDismissed || slashMatches !== null ? null : fileTokenAt(composerText, composerCaret);
+  const fileQuery = fileToken === null ? null : fileToken.query;
+
+  // What `@` is asking for, fetched per keystroke. Cheap after the first one: main walks the project
+  // once and keeps the list (main/fileIndex.ts), so this is an in-memory filter and a round trip.
+  useEffect(() => {
+    if (fileQuery === null) {
+      setFileMatches([]);
+      return;
+    }
+    const generation = generationRef.current;
+    let cancelled = false;
+    void window.api.conversation
+      .files(sessionId, fileQuery)
+      .then((paths) => {
+        if (cancelled || generationRef.current !== generation) return;
+        setFileMatches(paths);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, fileQuery]);
+
+  const rows: CompletionRow[] =
+    slashMatches !== null
+      ? slashMatches.map((c) => ({
+          key: `${c.source}:${c.name}`,
+          label: `/${c.name}`,
+          hint: c.description,
+          right: c.source
+        }))
+      : fileToken === null
+        ? []
+        : fileMatches.map((p) => ({ key: p, label: p }));
+  const slashOpen = rows.length > 0;
   const slashOpenRef = useRef(slashOpen);
   slashOpenRef.current = slashOpen;
-  const slashMatchesRef = useRef(slashMatches);
-  slashMatchesRef.current = slashMatches;
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
   const slashActiveRef = useRef(slashActive);
   slashActiveRef.current = slashActive;
 
   /** Puts a chosen command on the line, in place of the token that was being typed. Written through
    *  `insertText` rather than by setting `value`: the input belongs to assistant-ui's own store, and
    *  only a real edit event reaches it. */
-  const takeCommand = useCallback((command: SlashCommand): void => {
+  const takeRow = useCallback((row: CompletionRow): void => {
     const input = paneRef.current?.querySelector("textarea");
     if (!input) return;
     input.focus();
-    input.setSelectionRange(0, input.value.length);
-    document.execCommand("insertText", false, `/${command.name} `);
+    const token = fileTokenAt(input.value, input.selectionStart ?? input.value.length);
+    if (row.label.startsWith("/")) {
+      // A command is the whole line, so the whole line is what it replaces.
+      input.setSelectionRange(0, input.value.length);
+      document.execCommand("insertText", false, `${row.label} `);
+    } else if (token !== null) {
+      // A file reference is one word inside a sentence: only the `@…` being typed is replaced.
+      input.setSelectionRange(token.start, input.selectionStart ?? input.value.length);
+      document.execCommand("insertText", false, `@${row.label} `);
+    }
     setSlashDismissed(true);
   }, []);
 
-  const takeCommandRef = useRef(takeCommand);
-  takeCommandRef.current = takeCommand;
+  const takeRowRef = useRef(takeRow);
+  takeRowRef.current = takeRow;
 
   // The composer is assistant-ui's, so this listens to it from the outside: `input` bubbles up to this
   // pane's root, and the keys the menu needs are caught on the way down, before the composer's own
@@ -613,12 +665,13 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       if (!(target instanceof HTMLTextAreaElement)) return;
       setSlashDismissed(false);
       setComposerText(target.value);
+      setComposerCaret(target.selectionStart ?? target.value.length);
       setSlashActive(0);
     };
     const onKeyDown = (e: KeyboardEvent): void => {
       if (!slashOpenRef.current) return;
-      const matches = slashMatchesRef.current;
-      if (matches === null || matches.length === 0) return;
+      const matches = rowsRef.current;
+      if (matches.length === 0) return;
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         e.stopPropagation();
@@ -629,13 +682,13 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
-        takeCommandRef.current(matches[Math.min(slashActiveRef.current, matches.length - 1)]);
+        takeRowRef.current(matches[Math.min(slashActiveRef.current, matches.length - 1)]);
         return;
       }
       if (e.key === "Tab") {
         e.preventDefault();
         e.stopPropagation();
-        takeCommandRef.current(matches[Math.min(slashActiveRef.current, matches.length - 1)]);
+        takeRowRef.current(matches[Math.min(slashActiveRef.current, matches.length - 1)]);
         return;
       }
       if (e.key === "Escape") {
@@ -737,14 +790,14 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
 
   const SlashMenuBanner = useCallback(
     (): ReactNode => (
-      <SlashMenu
-        items={slashMatches ?? []}
-        active={Math.min(slashActive, Math.max((slashMatches?.length ?? 1) - 1, 0))}
-        onPick={takeCommand}
+      <CompletionMenu
+        rows={rows}
+        active={Math.min(slashActive, Math.max(rows.length - 1, 0))}
+        onPick={takeRow}
         onHover={setSlashActive}
       />
     ),
-    [slashMatches, slashActive, takeCommand]
+    [rows, slashActive, takeRow]
   );
 
   const SlashBanner = useCallback(

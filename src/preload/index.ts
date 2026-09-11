@@ -294,7 +294,8 @@ const api = {
     close: invoke('conversation.close'),
     attention: invoke('conversation.attention'),
     model: invoke('conversation.model'),
-    commands: invoke('conversation.commands')
+    commands: invoke('conversation.commands'),
+    files: invoke('conversation.files')
   },
   platform: process.platform,
   win: {
