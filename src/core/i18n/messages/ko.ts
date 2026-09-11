@@ -1115,6 +1115,7 @@ export const ko = {
   // 모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버린다. 중단한 작업이나 워커가 죽어 dispatched 에
   // 멈춘 Task 를 가진 Run 은 영원히 남는다
   'jobs.run.start': '실행',
+  'jobs.run.starting': '시작하는 중…',
   'jobs.run.pause': '일시 중지',
   'jobs.run.pauseHint': '이 예약을 세웁니다 — 도는 Task 도 함께 멈춥니다',
   'jobs.run.pauseConfirmTitle': '예약 일시 중지',

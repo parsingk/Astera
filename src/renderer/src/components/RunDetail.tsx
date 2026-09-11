@@ -281,11 +281,20 @@ export function RunDetail({
    *  있으면 인라인, 없으면 토스트"라는 이 저장소의 규칙 옆에 같은 일을 하는 두 번째 장치를
    *  세우는 것이라 고르지 않았다. */
   const [gateError, setGateError] = useState<string | null>(null)
-  /** 그래프의 노드 버튼이 무언가를 조용히 버릴 수 있는 동안 — Task 짓기 폼이 열려 있거나, 질문을
-   *  쓰는 중이거나, 명령이 도는 중이다. 이 동안은 노드 버튼(↗ 포함)을 전부 숨기고 배경 클릭으로
-   *  창을 닫지도 않는다: 다른 버튼을 누르면 지금 쓰던 것을 잃고, 배경을 눌러 창을 닫으면 도는
-   *  명령의 결과를 아무도 보지 못한다(이 창을 새로 열지 않는 한 다시 알 길이 없다). */
-  const formOpen = authoring || asking !== null || answering !== null || busy !== null
+  /** 아래 칸이 폼에 내준 동안 — Task 를 짓거나, 질문을 쓰거나, 답을 쓰는 중이다.
+   *
+   *  **`busy` 와 갈라 두는 이유가 이 값의 존재 이유다.** 둘 다 formOpen 을 참으로 만들지만 버튼
+   *  줄에게는 다른 상황이다: 폼이 열리면 그 줄이 자리를 내주는 것이 맞고(아래 `.detail-graph-head`
+   *  의 주석), 명령이 도는 동안은 **남아서 무엇이 도는지 말해야 한다**. 한 값으로 겸하게 했더니
+   *  실행을 누르는 순간 Task 추가·실행·병합이 통째로 사라졌다가 몇 초 뒤 다른 구성으로 돌아왔고,
+   *  그 사이 화면에는 아무 표시가 없어 멈춘 것으로 보고됐다 — 그 몇 초는 대개 `git worktree add`
+   *  의 체크아웃이다(server.ts 의 run-start 가 코디네이터보다 워크트리를 먼저 만든다). */
+  const authoringOpen = authoring || asking !== null || answering !== null
+  /** 그래프의 노드 버튼이 무언가를 조용히 버릴 수 있는 동안 — 위의 폼들에 더해 명령이 도는 중이다.
+   *  이 동안은 노드 버튼(↗ 포함)을 전부 숨기고 배경 클릭으로 창을 닫지도 않는다: 다른 버튼을
+   *  누르면 지금 쓰던 것을 잃고, 배경을 눌러 창을 닫으면 도는 명령의 결과를 아무도 보지 못한다
+   *  (이 창을 새로 열지 않는 한 다시 알 길이 없다). */
+  const formOpen = authoringOpen || busy !== null
   /** 띄우기 버튼을 보일 조건 — **넷 다** 참이어야 한다. 한 자리에 모아 두는 것은 하나만
    *  보고 고치면 나머지 조건을 깨뜨리기 쉬워서다.
    *
@@ -694,9 +703,16 @@ export function RunDetail({
                 통째로 NewTaskModal 로 바뀌어 아직 안 보낸 질문을 잃고, Task 를 짓는 중에 누르면
                 폼이 다시 그려져 채워 둔 것을 잃는다. 이 버튼이 여는 것은 새 창이 아니라 아래 칸
                 (.detail-events)의 두 번째 모습이다: 그래프는 그대로 보이고 아래만 바뀐다. */}
-            {!formOpen && (
+            {!authoringOpen && (
               <div className="detail-graph-head">
-                <button className="jobs-new" onClick={() => setAuthoring(true)}>
+                {/* 명령이 도는 동안 이 줄은 남지만(authoringOpen 의 주석), 그 동안 Task 를 짓기
+                    시작하면 폼이 열리며 줄이 사라지고 도는 명령의 결과를 아무도 보지 못한다 —
+                    실행·병합이 busy 를 잠그는 것과 같은 이유다. */}
+                <button
+                  className="jobs-new"
+                  disabled={busy !== null}
+                  onClick={() => setAuthoring(true)}
+                >
                   + {t('jobs.task.new')}
                 </button>
                 {/* Task 를 다 짜고 누르는 버튼. **Task 가 없으면 잠근다** — 빈 Run 을 시작하면
@@ -710,7 +726,17 @@ export function RunDetail({
                     title={t('jobs.run.startHint')}
                     onClick={() => void startRunNow()}
                   >
-                    {t('jobs.run.start')}
+                    {/* 도는 동안은 회전과 문구로 바뀐다. **이 버튼에만 둔다** — 여기서 기다리는
+                        것은 워크트리 체크아웃이라 초 단위이고(authoringOpen 의 주석), 병합은
+                        묻는 모달을 한 번 지나므로 누른 직후가 빈 화면이 아니다. */}
+                    {busy === RUN_START ? (
+                      <>
+                        <span className="loading-spinner" aria-hidden="true" />
+                        {t('jobs.run.starting')}
+                      </>
+                    ) : (
+                      t('jobs.run.start')
+                    )}
                   </button>
                 )}
                 {/* **예약에서는 아이콘 토글 하나가 그 자리를 대신한다.** 시작과 재생이 같은 동작이라

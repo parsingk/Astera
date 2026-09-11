@@ -963,6 +963,7 @@ export const es: Catalog = {
   'jobs.state.blocked': 'Esperando a una persona',
   'jobs.run.running': 'en curso',
   'jobs.run.start': 'Ejecutar',
+  'jobs.run.starting': 'Iniciando…',
   'jobs.run.pause': 'Pausar',
   'jobs.run.pauseHint': 'Detiene esta programación; las tareas en curso también se detienen',
   'jobs.run.pauseConfirmTitle': 'Pausar la programación',

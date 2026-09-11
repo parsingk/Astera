@@ -943,6 +943,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.state.blocked': 'Waiting for a person',
   'jobs.run.running': 'in progress',
   'jobs.run.start': 'Run',
+  'jobs.run.starting': 'Starting…',
   'jobs.run.pause': 'Pause',
   'jobs.run.pauseHint': 'Holds this schedule — running tasks stop too',
   'jobs.run.pauseConfirmTitle': 'Pause the schedule',

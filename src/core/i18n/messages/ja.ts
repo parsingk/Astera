@@ -950,6 +950,7 @@ export const ja: Catalog = {
   'jobs.state.blocked': '人を待っている',
   'jobs.run.running': '進行中',
   'jobs.run.start': '実行',
+  'jobs.run.starting': '開始しています…',
   'jobs.run.pause': '一時停止',
   'jobs.run.pauseHint': 'この予約を止めます — 実行中の Task も停止します',
   'jobs.run.pauseConfirmTitle': '予約を一時停止',
