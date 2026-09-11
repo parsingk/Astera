@@ -1,7 +1,20 @@
 import { describe, it, expect } from 'vitest'
 import type { AppendMessage } from '@assistant-ui/react'
-import { toThreadMessages, mergeTurns, composerTextOf } from './ConversationPane'
+import {
+  toThreadMessages,
+  mergeTurns,
+  nextTurnsFor,
+  shouldResetPaging,
+  nextAttentionFor,
+  composerTextOf
+} from './ConversationPane'
 import type { ConvTurn } from '../../../../core/history/convTypes'
+
+// Shared by mergeTurns's and nextTurnsFor's describe blocks below — both need "some existing turns",
+// and nextTurnsFor's own tests need mergeTurns's actual behavior underneath them, not a lookalike.
+const turnA: ConvTurn = { id: 'a', role: 'user', parts: [{ kind: 'text', text: 'a' }] }
+const turnB: ConvTurn = { id: 'b', role: 'assistant', parts: [{ kind: 'text', text: 'b' }] }
+const turnC: ConvTurn = { id: 'c', role: 'user', parts: [{ kind: 'text', text: 'c' }] }
 
 describe('toThreadMessages', () => {
   it('maps a text part, a tool part with an outcome, and a tool part without one', () => {
@@ -68,10 +81,6 @@ describe('toThreadMessages', () => {
 })
 
 describe('mergeTurns', () => {
-  const turnA: ConvTurn = { id: 'a', role: 'user', parts: [{ kind: 'text', text: 'a' }] }
-  const turnB: ConvTurn = { id: 'b', role: 'assistant', parts: [{ kind: 'text', text: 'b' }] }
-  const turnC: ConvTurn = { id: 'c', role: 'user', parts: [{ kind: 'text', text: 'c' }] }
-
   it('appends a genuinely new turn', () => {
     const result = mergeTurns([turnA, turnB], [turnC], false)
     expect(result).toEqual([turnA, turnB, turnC])
@@ -109,13 +118,66 @@ describe('mergeTurns', () => {
   })
 })
 
+describe('nextTurnsFor', () => {
+  // Two panes can be open on two different sessions at once (conversation:append fires app-wide,
+  // per session, regardless of which pane is showing it) — this is the check that stands between
+  // them and drawing each other's turns.
+  it('merges when the event belongs to this pane\'s own session', () => {
+    const result = nextTurnsFor('s1', [turnA], { sessionId: 's1', turns: [turnB], restarted: false })
+    expect(result).toEqual([turnA, turnB])
+  })
+
+  // Reference identity, not just content — a filter that let a foreign event through would still
+  // produce an array that *looks* like [turnA] if the event's own turns happened to be empty or
+  // duplicate it, so this pins that `prev` itself comes back untouched, not a copy of it.
+  it('leaves turns exactly as they were — same reference — for a foreign session', () => {
+    const prev = [turnA]
+    const result = nextTurnsFor('s1', prev, { sessionId: 's2', turns: [turnB], restarted: false })
+    expect(result).toBe(prev)
+  })
+})
+
+describe('shouldResetPaging', () => {
+  it('true for this pane\'s own restart', () => {
+    expect(shouldResetPaging('s1', { sessionId: 's1', restarted: true })).toBe(true)
+  })
+
+  it('false for this pane\'s own append that is not a restart', () => {
+    expect(shouldResetPaging('s1', { sessionId: 's1', restarted: false })).toBe(false)
+  })
+
+  // The same blind spot nextTurnsFor's foreign-session test guards: a restart on a session this
+  // pane is not showing must not reset a paging window that is still perfectly valid.
+  it('false for a restart reported on a foreign session', () => {
+    expect(shouldResetPaging('s1', { sessionId: 's2', restarted: true })).toBe(false)
+  })
+})
+
+describe('nextAttentionFor', () => {
+  it('reads the value for this pane\'s own session', () => {
+    expect(nextAttentionFor('s1', { sessionId: 's1', value: 'waiting' })).toBe('waiting')
+  })
+
+  // Same shape as nextTurnsFor's and shouldResetPaging's own foreign-session case: this event also
+  // fires for every session app-wide, and a firing for a session this pane is not showing must be a
+  // complete no-op — undefined is the caller's cue to leave attention exactly as it is.
+  it('is undefined for a foreign session', () => {
+    expect(nextAttentionFor('s1', { sessionId: 's2', value: 'waiting' })).toBeUndefined()
+  })
+})
+
 describe('composerTextOf', () => {
   it('joins only the text parts and ignores the rest', () => {
-    const parts: AppendMessage['content'] = [
+    const parts = [
       { type: 'text', text: 'hello ' },
-      { type: 'image', image: 'data:image/png;base64,abc' },
+      // A non-text part that happens to carry a `.text` field of its own — no real part type does
+      // (ImageMessagePart has no `.text`), but `Array.prototype.join` renders a genuinely *missing*
+      // `.text` as `''` regardless of whether the filter ran, so a fixture without one cannot tell
+      // "filtered before mapping" apart from "not filtered, relying on undefined-to-empty-string
+      // coercion". This sentinel value would leak into the result if the filter were ever removed.
+      { type: 'image', image: 'data:image/png;base64,abc', text: 'SHOULD NOT APPEAR' },
       { type: 'text', text: 'world' }
-    ]
+    ] as unknown as AppendMessage['content']
 
     expect(composerTextOf(parts)).toBe('hello world')
   })

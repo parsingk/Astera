@@ -90,14 +90,6 @@ export type ThreadComponents = {
 export type ThreadProps = {
   components?: ThreadComponents | undefined;
   autoFocus?: boolean | undefined;
-  /**
-   * Locks the composer's actual `<textarea>` — reaches `ComposerPrimitive.Input`'s `disabled` prop,
-   * which TextareaAutosizeProps forwards straight to the element. The external-store adapter's own
-   * `isDisabled` does not do this: it is only copied onto thread state, and nothing in
-   * `@assistant-ui/core`'s composer primitives reads that state back, so a caller that needs typing
-   * to actually stop has to pass this instead.
-   */
-  composerDisabled?: boolean | undefined;
   /** Overrides the input's placeholder text. Falls back to this file's own default when omitted. */
   composerPlaceholder?: string | undefined;
 };
@@ -144,7 +136,6 @@ const ThreadHistorySkeleton: FC = () => (
 export const Thread: FC<ThreadProps> = ({
   components = EMPTY_COMPONENTS,
   autoFocus = true,
-  composerDisabled = false,
   composerPlaceholder,
 }) => {
   const isEmpty = useAuiState(isNewChatView);
@@ -154,7 +145,6 @@ export const Thread: FC<ThreadProps> = ({
       <ThreadRoot
         isEmpty={isEmpty}
         autoFocus={autoFocus}
-        composerDisabled={composerDisabled}
         composerPlaceholder={composerPlaceholder}
       />
     </ThreadComponentsContext.Provider>
@@ -164,9 +154,8 @@ export const Thread: FC<ThreadProps> = ({
 const ThreadRoot: FC<{
   isEmpty: boolean;
   autoFocus: boolean;
-  composerDisabled: boolean;
   composerPlaceholder: string | undefined;
-}> = ({ isEmpty, autoFocus, composerDisabled, composerPlaceholder }) => {
+}> = ({ isEmpty, autoFocus, composerPlaceholder }) => {
   const { Welcome = ThreadWelcome, Banner } = useContext(ThreadComponentsContext);
 
   return (
@@ -216,11 +205,7 @@ const ThreadRoot: FC<{
             <ThreadScrollToBottom />
             <ThreadFollowupSuggestions />
             {Banner && <Banner />}
-            <Composer
-              autoFocus={autoFocus}
-              disabled={composerDisabled}
-              placeholder={composerPlaceholder}
-            />
+            <Composer autoFocus={autoFocus} placeholder={composerPlaceholder} />
             <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
               <ThreadSuggestions />
             </AuiIf>
@@ -294,9 +279,8 @@ const ThreadSuggestionItem: FC = () => {
 
 const Composer: FC<{
   autoFocus: boolean;
-  disabled: boolean;
   placeholder: string | undefined;
-}> = ({ autoFocus, disabled, placeholder }) => {
+}> = ({ autoFocus, placeholder }) => {
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       <ComposerPrimitive.AttachmentDropzone asChild>
@@ -312,7 +296,6 @@ const Composer: FC<{
             autoFocus={autoFocus}
             enterKeyHint="send"
             aria-label="Message input"
-            disabled={disabled}
           />
           <ComposerAction />
         </div>

@@ -1390,6 +1390,6 @@ export const ko = {
   'conversation.unavailable': '이 세션은 아직 기록이 없습니다',
   'conversation.empty': '아직 주고받은 것이 없습니다',
   'conversation.composer.placeholder': '무엇을 시킬까요',
-  'conversation.composer.locked': '터미널에서 답한 뒤에 이어서 칠 수 있습니다',
+  'conversation.composer.locked': '터미널에서 답한 뒤에 다시 입력할 수 있습니다',
   'conversation.loadMore': '이전 대화 더 보기'
 } as const
