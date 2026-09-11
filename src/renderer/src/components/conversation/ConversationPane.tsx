@@ -40,6 +40,8 @@ import {
   type SlashCommand
 } from "../../../../core/commands/slashCommands";
 import { fileTokenAt } from "../../../../core/files/fileMatch";
+import { promptLinesOf } from "../../../../core/history/promptLines";
+import * as sessionBus from "../../lib/sessionBus";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
 import type { Attention } from "../../../../core/types";
@@ -225,6 +227,13 @@ export function modelLineOf(
  *  cleared by then. */
 const SUBMIT_GAP_MS = 250
 
+/** How much of the CLI's screen the waiting banner quotes, and how often it re-reads it. A prompt is
+ *  a handful of lines, and it moves while it is up — an arrow shifts, a second question follows.
+ *  Sixteen because that is what the longest real prompt measured needs: Claude Code's trust prompt for
+ *  a new folder runs fifteen lines from its rule down to `Enter to confirm`. */
+const PROMPT_LINES_MAX = 16
+const PROMPT_POLL_MS = 500
+
 /** How long a slash command is given to show up in the conversation before the pane says where it
  *  went. A command that becomes a prompt — every skill command — writes its user turn as soon as the
  *  CLI takes it, and main notices within its own second; one that opens the CLI's own screen never
@@ -320,6 +329,8 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   const [composerCaret, setComposerCaret] = useState(0);
   const [fileMatches, setFileMatches] = useState<readonly string[]>([]);
   const [slashActive, setSlashActive] = useState(0);
+  /** The question the CLI is showing, while it is showing one. */
+  const [promptLines, setPromptLines] = useState<readonly string[]>([]);
   const [modelInfo, setModelInfo] = useState<{
     model: string | null
     effort: string | null
@@ -365,6 +376,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     setModelInfo({ model: null, effort: null, canPick: true });
     setComposerText("");
     setComposerCaret(0);
+    setPromptLines([]);
     setFileMatches([]);
     setSlashActive(0);
     setSlashDismissed(false);
@@ -620,6 +632,31 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     [t, status]
   );
 
+  // What the CLI is waiting on, read from the terminal's own buffer.
+  //
+  // The buffer, not the rendered rows: while the conversation is the one showing, that terminal is
+  // hidden and xterm stops *painting* it, so its DOM holds whatever was on screen when it was last
+  // visible. Quoting that put a question from minutes ago next to an invitation to answer — worse
+  // than showing nothing. `write` keeps the buffer current regardless of painting, and sessionBus
+  // hands out a reader for exactly that (registered by TerminalView, which already needed it).
+  //
+  // Polled, because a screen is not an event: the highlighted choice moves, a second question
+  // follows the first. Only while something is actually being asked.
+  useEffect(() => {
+    if (attention !== "waiting") {
+      setPromptLines([]);
+      return;
+    }
+    const read = (): void => {
+      const screen = sessionBus.screenOf(sessionId);
+      if (screen === null) return; // no terminal registered — cannot tell, so leave what is there
+      setPromptLines(promptLinesOf(screen.split("\n"), PROMPT_LINES_MAX));
+    };
+    read();
+    const timer = setInterval(read, PROMPT_POLL_MS);
+    return () => clearInterval(timer);
+  }, [attention, sessionId]);
+
   // Escape closes the menu without closing anything else; it reopens the moment the text changes,
   // which is what a person means by dismissing a suggestion rather than abandoning the command.
   // State, not a ref: the listener below sets it, and only a state change redraws the banner slot.
@@ -850,7 +887,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // into outranks a note about a command already sent.
   const banner: ReactNode =
     attention === "waiting" ? (
-      <PendingBanner onGoTerminal={goTerminal} />
+      <PendingBanner onGoTerminal={goTerminal} lines={promptLines} />
     ) : slashOpen ? (
       <CompletionMenu
         rows={rows}

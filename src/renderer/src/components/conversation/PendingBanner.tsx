@@ -9,25 +9,39 @@ export interface PendingBannerProps {
    *  draws the CLI's own choices as buttons of its own: the CLI owns that screen, and a second, drawn
    *  copy of it would drift from the real one silently, with a wrong choice there being undoable. */
   onGoTerminal: () => void;
+  /** The question, in the CLI's own words, as its terminal is showing it right now
+   *  (core/history/promptLines.ts). Quoted rather than rebuilt, for the reason above: a quote cannot
+   *  disagree with the screen it came from. Empty draws nothing. */
+  lines?: readonly string[];
 }
 
 /** The banner shown above the composer while the CLI is waiting on a decision it owns. */
-export function PendingBanner({ onGoTerminal }: PendingBannerProps): ReactNode {
+export function PendingBanner({ onGoTerminal, lines = [] }: PendingBannerProps): ReactNode {
   const { t } = useI18n();
 
   return (
     <div
       role="status"
       data-slot="conversation-pending-banner"
-      className="flex items-center justify-between gap-3 rounded-(--composer-radius) border border-[var(--warn-line)] bg-[var(--warn-bg)] px-4 py-2.5 text-sm text-[var(--warn-ink)]"
+      className="flex flex-col gap-2 rounded-(--composer-radius) border border-[var(--warn-line)] bg-[var(--warn-bg)] px-4 py-2.5 text-sm text-[var(--warn-ink)]"
     >
-      <div className="min-w-0">
-        <p className="font-medium">{t("conversation.pending.title")}</p>
-        <p>{t("conversation.pending.body")}</p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-medium">{t("conversation.pending.title")}</p>
+          <p>{t("conversation.pending.body")}</p>
+        </div>
+        <Button size="sm" className="shrink-0" onClick={onGoTerminal}>
+          {t("conversation.pending.action")}
+        </Button>
       </div>
-      <Button size="sm" className="shrink-0" onClick={onGoTerminal}>
-        {t("conversation.pending.action")}
-      </Button>
+      {lines.length > 0 && (
+        <pre
+          data-slot="conversation-pending-screen"
+          className="max-h-56 overflow-auto rounded-md bg-black/20 px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap"
+        >
+          {lines.join("\n")}
+        </pre>
+      )}
     </div>
   );
 }
