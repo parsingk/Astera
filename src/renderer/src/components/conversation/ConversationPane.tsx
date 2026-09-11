@@ -9,7 +9,7 @@ import {
 } from "@assistant-ui/react";
 import { ChevronUpIcon } from "lucide-react";
 import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.aui";
-import { TooltipIconButton } from "../assistant-ui/elements/tooltip-icon-button";
+import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
 import { PendingBanner } from "./PendingBanner";
 import { useI18n } from "../../i18n/I18nProvider";
@@ -112,10 +112,24 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
 
   useEffect(() => {
     let cancelled = false;
+    // Set once a live push arrives, so the one-shot read below (which can resolve after a push
+    // that overtook it) never clobbers a value that is already newer than the one it fetched.
+    let sawLiveAttention = false;
     setStatus("loading");
     setTurns([]);
     setMore(false);
     setAttention("idle");
+
+    // `conversation:attention` only fires on a change, so a session already `waiting` (or
+    // `working`) when this pane mounts would otherwise read `idle` until the next change — and for
+    // a `waiting` session, blocked on the very prompt this pane exists to surface, that next change
+    // may never come (main/ipc.ts's `conversationAttentionOf` doc says the same). Called before the
+    // subscribe below, though the guard above is what actually makes the ordering safe rather than
+    // where these two lines sit.
+    void window.api.conversation.attention(sessionId).then((value) => {
+      if (cancelled || sawLiveAttention) return;
+      setAttention(value);
+    });
 
     // Subscribed before `open()` resolves, on general principle rather than because a race is
     // plausible here: main starts following a session only from `open` (main/conversation.ts), and
@@ -131,6 +145,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     // while another session's conversation is open elsewhere.
     const offAttention = window.api.on("conversation:attention", (e) => {
       if (cancelled || e.sessionId !== sessionId) return;
+      sawLiveAttention = true;
       setAttention(e.value);
     });
 
@@ -244,20 +259,37 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     return <div data-slot="conversation-pane-loading" className="h-full" />;
   }
 
+  const composerDisabled = attention === "waiting";
+
   return (
     <div data-slot="conversation-pane" className="flex h-full min-h-0 flex-col">
       {more && (
         <div className="border-border/60 flex justify-center border-b py-1">
-          <TooltipIconButton tooltip="Load earlier messages" onClick={loadMore} disabled={loadingMore}>
+          <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>
             <ChevronUpIcon />
-          </TooltipIconButton>
+            {t("conversation.loadMore")}
+          </Button>
         </div>
       )}
       <div className="min-h-0 flex-1">
         <AssistantRuntimeProvider runtime={runtime}>
-          <Thread components={components} />
+          <Thread
+            components={components}
+            composerDisabled={composerDisabled}
+            composerPlaceholder={t("conversation.composer.placeholder")}
+          />
         </AssistantRuntimeProvider>
       </div>
+      {/* The banner above already says an answer is waiting; this says why the input itself went
+          quiet, right where a person's eye lands after finding out typing did nothing. */}
+      {composerDisabled && (
+        <div
+          data-slot="conversation-pane-locked"
+          className="text-muted-foreground border-border/60 border-t px-4 py-1.5 text-center text-xs"
+        >
+          {t("conversation.composer.locked")}
+        </div>
+      )}
     </div>
   );
 }

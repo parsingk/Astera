@@ -1194,5 +1194,8 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.pending.body': 'The agent is waiting. The choices are in the terminal.',
   'conversation.pending.action': 'Go to the terminal',
   'conversation.unavailable': 'This session has no transcript yet',
-  'conversation.empty': 'Nothing has been said yet'
+  'conversation.empty': 'Nothing has been said yet',
+  'conversation.composer.placeholder': 'What should it do',
+  'conversation.composer.locked': 'You can type again after answering in the terminal',
+  'conversation.loadMore': 'Load earlier'
 }
