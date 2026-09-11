@@ -29,8 +29,11 @@ export function frontmatterDescription(text: string): string {
  *  further in is a path or a date. Once a space has been typed the name is settled and the person is
  *  writing arguments, so the menu goes away rather than hovering over what they are typing.
  *
- *  Matching is a plain substring on the name, in the order the caller gave — the CLI's own menu
- *  narrows the same way, and a cleverer ranking would only disagree with it. */
+ *  What matches, and in what order: a name that *starts* with what has been typed comes first, then
+ *  one that merely contains it. Typing `b` should put `brainstorming` at the top rather than bury it
+ *  under everything with a b in the middle, and the row Enter takes is the first row — so the order
+ *  is not decoration, it decides what a person gets for pressing return. Ties keep the caller's own
+ *  order, which is the project's commands, then the person's, then plugins. */
 export function filterSlashCommands(
   commands: readonly SlashCommand[],
   text: string
@@ -39,5 +42,12 @@ export function filterSlashCommands(
   const typed = text.slice(1)
   if (/\s/.test(typed)) return null
   const needle = typed.toLowerCase()
-  return commands.filter((c) => c.name.toLowerCase().includes(needle))
+  const starts: SlashCommand[] = []
+  const contains: SlashCommand[] = []
+  for (const command of commands) {
+    const name = command.name.toLowerCase()
+    if (name.startsWith(needle)) starts.push(command)
+    else if (name.includes(needle)) contains.push(command)
+  }
+  return [...starts, ...contains]
 }

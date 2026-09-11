@@ -23,6 +23,10 @@ import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
 import { PendingBanner, SlashCommandNotice } from "./PendingBanner";
 import { ModelControl, type ModelControlProps } from "./ModelControl";
+import {
+  CLAUDE_MODEL_CHOICES,
+  CODEX_MODEL_CHOICES
+} from "../../../../core/models/cliModels";
 import { SlashMenu } from "./SlashMenu";
 import {
   filterSlashCommands,
@@ -212,6 +216,11 @@ export function modelLineOf(
  *  above where the failures were and is nothing a person waits on, since the composer has already
  *  cleared by then. */
 const SUBMIT_GAP_MS = 250
+
+/** How long codex's `/model` takes to put its picker on screen before the chosen row can be pressed.
+ *  Generous on purpose: a keystroke that arrives early lands in the composer instead, where it is one
+ *  visible stray character rather than a wrong choice. */
+const CODEX_PICKER_MS = 1_500
 
 /** How long to wait before re-reading the model after asking the CLI to switch. It rewrites its
  *  statusline as it goes, but not within the same breath as the command. */
@@ -636,9 +645,22 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         setSlashActive(0);
       }
     };
+    // A click on the conversation puts the caret back in the composer. Without it the focus sits on
+    // whatever was clicked — the thread, a tool row, the toggle — and the next thing typed goes
+    // nowhere, which reads as the first character being eaten. Not for a click on something that
+    // takes input or acts on its own: a button, a link, the menu.
+    const onPointerUp = (e: MouseEvent): void => {
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest("button, a, input, textarea, [role='option'], [role='menuitem']")) return;
+      if (window.getSelection()?.toString()) return; // selecting text is not asking to type
+      pane.querySelector("textarea")?.focus();
+    };
+    pane.addEventListener("mouseup", onPointerUp);
     pane.addEventListener("input", onInput);
     pane.addEventListener("keydown", onKeyDown, true); // capture: ahead of the composer's own Enter
     return () => {
+      pane.removeEventListener("mouseup", onPointerUp);
       pane.removeEventListener("input", onInput);
       pane.removeEventListener("keydown", onKeyDown, true);
     };
@@ -671,9 +693,18 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   const modelSlot = useMemo<ModelControlProps>(
     () => ({
       line: modelLine,
-      onPickModel: (alias) => {
+      onPickModel: (key) => {
+        if (!modelInfo.canPick) {
+          // codex takes no name: open its picker, press the row, and stop. It asks for the reasoning
+          // level next, on a screen that names the model it is asking about — so the person confirms
+          // what was actually chosen instead of trusting a list that may have moved under us.
+          sendCommand("/model");
+          setTimeout(() => window.api.sessions.write(sessionId, key), CODEX_PICKER_MS);
+          goTerminal();
+          return;
+        }
         const was = modelInfo.model;
-        sendCommand(`/model ${alias}`);
+        sendCommand(`/model ${key}`);
         // `/model` writes a new statusline as it switches, but not instantly.
         setTimeout(() => {
           void window.api.conversation
@@ -698,9 +729,10 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         sendCommand(modelInfo.canPick ? "/effort" : "/model");
         goTerminal();
       },
-      canPick: modelInfo.canPick
+      effortLabel: t(modelInfo.canPick ? "conversation.model.effort" : "conversation.model.change"),
+      choices: modelInfo.canPick ? CLAUDE_MODEL_CHOICES : CODEX_MODEL_CHOICES
     }),
-    [modelLine, modelInfo.model, modelInfo.canPick, sendCommand, goTerminal, sessionId]
+    [modelLine, modelInfo.model, modelInfo.canPick, sendCommand, goTerminal, sessionId, t]
   );
 
   const SlashMenuBanner = useCallback(

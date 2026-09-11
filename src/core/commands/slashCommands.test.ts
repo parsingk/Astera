@@ -39,6 +39,19 @@ describe('filterSlashCommands', () => {
     expect(filterSlashCommands(commands, '/BRAIN')?.map((c) => c.name)).toEqual(['brainstorming'])
   })
 
+  // Enter takes the first row, so this is not about tidiness: typing `r` has to offer `report`
+  // before something with an r buried in the middle of it.
+  it('puts what starts with the typed letters ahead of what merely contains them', () => {
+    const found = filterSlashCommands(
+      [
+        { name: 'astera-report', description: '', source: 'user' },
+        { name: 'report', description: '', source: 'plugin' }
+      ],
+      '/rep'
+    )
+    expect(found?.map((c) => c.name)).toEqual(['report', 'astera-report'])
+  })
+
   // The two cases that decide whether the menu is help or a nuisance.
   it('stays away from a message that merely contains a slash, and from arguments', () => {
     expect(filterSlashCommands(commands, 'src/main 을 봐줘')).toBeNull()
