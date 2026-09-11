@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -20,7 +22,7 @@ import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.a
 import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
 import { PendingBanner, SlashCommandNotice } from "./PendingBanner";
-import { ModelControl } from "./ModelControl";
+import { ModelControl, type ModelControlProps } from "./ModelControl";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
 import type { Attention } from "../../../../core/types";
@@ -214,6 +216,24 @@ const RESTORE_SCROLL_DEADLINE_MS = 1_500;
  *  come from upstream and change with it. */
 function threadViewport(pane: HTMLElement | null): HTMLElement | null {
   return pane?.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]') ?? null;
+}
+
+/**
+ * The composer's model control, as a component type that never changes.
+ *
+ * The Thread takes its slots as component *types*, and React unmounts and remounts a slot the moment
+ * that type changes identity. A `useCallback` here looked stable and was not: its dependencies reach
+ * PaneGrid's inline `onGoTerminal`, which is a new function on every App render, so the slot was
+ * rebuilt a few times a second and the open menu inside it died with each rebuild — pressed once, gone
+ * before a choice could be made. So the type is fixed at module scope and everything that does change
+ * arrives through context, which re-renders the control instead of replacing it.
+ */
+const ModelSlotContext = createContext<ModelControlProps | null>(null);
+
+function ComposerModelSlot(): ReactNode {
+  const props = useContext(ModelSlotContext);
+  if (props === null) return null;
+  return <ModelControl {...props} />;
 }
 
 // ---- component ------------------------------------------------------------------------------
@@ -537,27 +557,25 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     [goTerminal]
   );
 
-  const ComposerExtras = useCallback(
-    (): ReactNode => (
-      <ModelControl
-        line={modelLine}
-        onPickModel={(alias) => {
-          sendCommand(`/model ${alias}`);
-          // `/model` writes a new statusline as it switches, but not instantly.
-          setTimeout(() => {
-            void window.api.conversation
-              .model(sessionId)
-              .then(setModelInfo)
-              .catch(() => {});
-          }, MODEL_REREAD_MS);
-        }}
-        onChangeEffort={() => {
-          // The CLI owns that screen — open it and take the person there rather than drive it.
-          sendCommand("/model");
-          goTerminal();
-        }}
-      />
-    ),
+  const modelSlot = useMemo<ModelControlProps>(
+    () => ({
+      line: modelLine,
+      onPickModel: (alias) => {
+        sendCommand(`/model ${alias}`);
+        // `/model` writes a new statusline as it switches, but not instantly.
+        setTimeout(() => {
+          void window.api.conversation
+            .model(sessionId)
+            .then(setModelInfo)
+            .catch(() => {});
+        }, MODEL_REREAD_MS);
+      },
+      onChangeEffort: () => {
+        // The CLI owns that screen — open it and take the person there rather than drive it.
+        sendCommand("/model");
+        goTerminal();
+      }
+    }),
     [modelLine, sendCommand, goTerminal, sessionId]
   );
 
@@ -573,9 +591,9 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       ToolGroup: ToolRowGroup,
       // An answer that is actually being waited on outranks a note about where a command went.
       Banner: attention === "waiting" ? Banner : slashSent ? SlashBanner : undefined,
-      ComposerExtras,
+      ComposerExtras: ComposerModelSlot,
     }),
-    [Welcome, Banner, SlashBanner, ComposerExtras, attention, slashSent]
+    [Welcome, Banner, SlashBanner, attention, slashSent]
   );
 
   // Built unconditionally, ahead of the status branches below — the messages a still-loading or
@@ -620,9 +638,11 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         </div>
       )}
       <div className="min-h-0 flex-1">
-        <AssistantRuntimeProvider runtime={runtime}>
-          <Thread components={components} composerPlaceholder={t("conversation.composer.placeholder")} />
-        </AssistantRuntimeProvider>
+        <ModelSlotContext.Provider value={modelSlot}>
+          <AssistantRuntimeProvider runtime={runtime}>
+            <Thread components={components} composerPlaceholder={t("conversation.composer.placeholder")} />
+          </AssistantRuntimeProvider>
+        </ModelSlotContext.Provider>
       </div>
       {/* The banner above already says an answer is waiting; this says why the input itself went
           quiet, right where a person's eye lands after finding out typing did nothing. */}
