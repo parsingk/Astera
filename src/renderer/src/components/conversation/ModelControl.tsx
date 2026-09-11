@@ -25,8 +25,8 @@ const MODEL_CHOICES: readonly { alias: string; label: string }[] = [
 ];
 
 export interface ModelControlProps {
-  /** What to show: the model and effort the CLI last reported, already formatted. Null while it has
-   *  reported nothing, which is ordinary for a session that has only just started. */
+  /** What to show: the model and effort the CLI last reported, already formatted. Null means the
+   *  control is not drawn at all — see ComposerModelSlot in ConversationPane.tsx. */
   line: string | null;
   /** Switch to this alias. The caller writes `/model <alias>` to the pty. */
   onPickModel: (alias: string) => void;
@@ -59,7 +59,7 @@ export function ModelControl({ line, onPickModel, onChangeEffort }: ModelControl
           setAt({ x: Math.round(r.left), y: Math.round(r.top) });
         }}
       >
-        {line ?? t("conversation.model.unknown")}
+        {line}
       </button>
       {at && <ContextMenu x={at.x} y={at.y} items={items} onClose={() => setAt(null)} />}
     </>

@@ -237,7 +237,11 @@ const ModelSlotContext = createContext<ModelControlProps | null>(null);
 
 function ComposerModelSlot(): ReactNode {
   const props = useContext(ModelSlotContext);
-  if (props === null) return null;
+  // Nothing known, nothing drawn. A session whose CLI has not said what it is running is either just
+  // starting or is codex, which keeps no statusline at all — and the menu's model names are the
+  // Claude CLI's own aliases, so offering them on a codex session would send a command it has never
+  // heard of. Drawing only what has been read keeps that from being possible.
+  if (props === null || props.line === null) return null;
   return <ModelControl {...props} />;
 }
 
