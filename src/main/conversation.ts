@@ -1,4 +1,10 @@
-import { readConversationWindow, ConversationFollow } from '../core/history/conversationRead'
+import {
+  readConversationWindow,
+  ConversationFollow,
+  type ReduceLines
+} from '../core/history/conversationRead'
+import { reduceTranscript } from '../core/history/conversation'
+import { reduceCodexRollout } from '../core/history/codexConversation'
 import { extractStatusLineSession } from '../core/usage/statusline'
 import type { ConvTurn, ToolPart } from '../core/history/conversation'
 
@@ -58,6 +64,10 @@ export interface ConversationSessions {
 
 interface Entry {
   filePath: string
+  /** Claude's transcript and codex's rollout are different files with different records; this is the
+   *  one that reads THIS session's. Held per entry because `more` has to fold a window the same way
+   *  `open` folded the first one. */
+  reduce: ReduceLines
   follow: ConversationFollow
   /** Guards this one entry's own read against overlapping itself — see stepEntry's own doc for why
    *  the guard has to be per entry rather than shared across every open conversation. */
@@ -101,8 +111,20 @@ function trackPending(turns: ConvTurn[], pending: Map<string, ToolPart>, partOwn
  * for their own per-session polls, so a conversation tab opened once and left alone does not leave a
  * tick running for the rest of the app's life.
  */
+/** Where one session's conversation is written, and how to read it. Two agents keep two kinds of
+ *  file: Claude a transcript the statusline points at, codex a rollout the app finds for itself. */
+export interface ConversationSource {
+  path: string
+  format: 'claude' | 'codex'
+}
+
+const REDUCERS: Record<ConversationSource['format'], ReduceLines> = {
+  claude: reduceTranscript,
+  codex: reduceCodexRollout
+}
+
 export function createConversationSessions(deps: {
-  transcriptPathFor: (sessionId: string) => Promise<string | null>
+  sourceFor: (sessionId: string) => Promise<ConversationSource | null>
   emit: (sessionId: string, turns: ConvTurn[], restarted: boolean) => void
 }): ConversationSessions {
   const entries = new Map<string, Entry>()
@@ -184,16 +206,19 @@ export function createConversationSessions(deps: {
 
   return {
     async open(sessionId) {
-      const filePath = await deps.transcriptPathFor(sessionId)
-      if (filePath === null) return null
-      const window = await readConversationWindow(filePath)
+      const source = await deps.sourceFor(sessionId)
+      if (source === null) return null
+      const reduce = REDUCERS[source.format]
+      const filePath = source.path
+      const window = await readConversationWindow(filePath, { reduce })
       if (window === null) return null
       const pending = new Map<string, ToolPart>()
       const partOwner = new Map<string, ConvTurn>()
       trackPending(window.turns, pending, partOwner)
       entries.set(sessionId, {
         filePath,
-        follow: new ConversationFollow(filePath, window.follow),
+        reduce,
+        follow: new ConversationFollow(filePath, window.follow, reduce),
         inFlight: false,
         pending,
         partOwner
@@ -204,7 +229,10 @@ export function createConversationSessions(deps: {
     async more(sessionId, before) {
       const entry = entries.get(sessionId)
       if (!entry) return null
-      const window = await readConversationWindow(entry.filePath, { endAt: before })
+      const window = await readConversationWindow(entry.filePath, {
+        endAt: before,
+        reduce: entry.reduce
+      })
       if (window === null) return null
       return { turns: window.turns, from: window.from, more: window.more }
     },

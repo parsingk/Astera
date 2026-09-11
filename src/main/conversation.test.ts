@@ -126,7 +126,7 @@ describe('createConversationSessions', () => {
   it('open on a session with no transcript path answers null and starts no timer', async () => {
     const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
     const sessions = createConversationSessions({
-      transcriptPathFor: async () => null,
+      sourceFor: async () => null,
       emit: vi.fn()
     })
     await expect(sessions.open('s1')).resolves.toBeNull()
@@ -137,7 +137,7 @@ describe('createConversationSessions', () => {
     const p = path.join(dir, 't.jsonl')
     await writeFile(p, userLine(1))
     const emit = vi.fn()
-    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit })
+    const sessions = createConversationSessions({ sourceFor: async () => ({ path: p, format: 'claude' }), emit })
 
     const opened = await sessions.open('s1')
     expect(opened?.turns.map((t) => t.id)).toEqual(['u1'])
@@ -166,7 +166,7 @@ describe('createConversationSessions', () => {
     }
     await writeFile(p, content)
 
-    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit: vi.fn() })
+    const sessions = createConversationSessions({ sourceFor: async () => ({ path: p, format: 'claude' }), emit: vi.fn() })
     const opened = await sessions.open('s1')
     expect(opened).not.toBeNull()
     expect(opened?.more).toBe(true)
@@ -192,7 +192,7 @@ describe('createConversationSessions', () => {
     await writeFile(pB, userLine(1))
     const emit = vi.fn()
     const sessions = createConversationSessions({
-      transcriptPathFor: async (id) => (id === 'a' ? pA : pB),
+      sourceFor: async (id: string) => ({ path: id === 'a' ? pA : pB, format: 'claude' as const }),
       emit
     })
     await sessions.open('a')
@@ -216,7 +216,7 @@ describe('createConversationSessions', () => {
     await writeFile(pA, userLine(1))
     await writeFile(pB, userLine(1))
     const sessions = createConversationSessions({
-      transcriptPathFor: async (id) => (id === 'a' ? pA : pB),
+      sourceFor: async (id: string) => ({ path: id === 'a' ? pA : pB, format: 'claude' as const }),
       emit: vi.fn()
     })
 
@@ -242,7 +242,7 @@ describe('createConversationSessions', () => {
     const p = path.join(dir, 't.jsonl')
     await writeFile(p, userLine(1))
     const emit = vi.fn()
-    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit })
+    const sessions = createConversationSessions({ sourceFor: async () => ({ path: p, format: 'claude' }), emit })
     await sessions.open('s1')
     await rm(p)
 
@@ -255,7 +255,7 @@ describe('createConversationSessions', () => {
     const p = path.join(dir, 't.jsonl')
     await writeFile(p, userLine(1) + userLine(2) + userLine(3) + userLine(4) + userLine(5))
     const emit = vi.fn()
-    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit })
+    const sessions = createConversationSessions({ sourceFor: async () => ({ path: p, format: 'claude' }), emit })
     await sessions.open('s1')
 
     // A much shorter file at the same path — JsonlTail reads this as the file having been recreated
@@ -279,7 +279,7 @@ describe('createConversationSessions', () => {
     const p = path.join(dir, 't.jsonl')
     await writeFile(p, userLine(1))
     const emit = vi.fn()
-    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit })
+    const sessions = createConversationSessions({ sourceFor: async () => ({ path: p, format: 'claude' }), emit })
     await sessions.open('s1')
     await appendFile(p, userLine(2))
 
@@ -303,7 +303,7 @@ describe('createConversationSessions', () => {
     await writeFile(p, userLine(1))
     const emit = vi.fn()
     const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
-    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit })
+    const sessions = createConversationSessions({ sourceFor: async () => ({ path: p, format: 'claude' }), emit })
     await sessions.open('s1')
 
     const tickFn = setIntervalSpy.mock.calls[0][0] as () => void
@@ -334,7 +334,7 @@ describe('createConversationSessions', () => {
     const p = path.join(dir, 't.jsonl')
     await writeFile(p, textLine('a1', 'Let me run the build.') + toolUseLine('a1', 'tool1'))
     const emit = vi.fn()
-    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit })
+    const sessions = createConversationSessions({ sourceFor: async () => ({ path: p, format: 'claude' }), emit })
 
     const opened = await sessions.open('s1')
     const turn = opened?.turns.find((t) => t.id === 'a1')
@@ -368,7 +368,7 @@ describe('createConversationSessions', () => {
   it('a rejecting read does not escape as an unhandled rejection', async () => {
     const p = path.join(dir, 't.jsonl')
     await writeFile(p, userLine(1))
-    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit: vi.fn() })
+    const sessions = createConversationSessions({ sourceFor: async () => ({ path: p, format: 'claude' }), emit: vi.fn() })
     await sessions.open('s1')
 
     vi.spyOn(ConversationFollow.prototype, 'read').mockRejectedValue(new Error('boom'))
@@ -397,7 +397,7 @@ describe('createConversationSessions', () => {
     await writeFile(pB, userLine(1))
     const emit = vi.fn()
     const sessions = createConversationSessions({
-      transcriptPathFor: async (id) => (id === 'a' ? pA : pB),
+      sourceFor: async (id: string) => ({ path: id === 'a' ? pA : pB, format: 'claude' as const }),
       emit
     })
     await sessions.open('a')
@@ -430,7 +430,7 @@ describe('createConversationSessions', () => {
     const p = path.join(dir, 't.jsonl')
     await writeFile(p, toolUseLine('a1', 'tool1') + toolUseLine('a1', 'tool2'))
     const emit = vi.fn()
-    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit })
+    const sessions = createConversationSessions({ sourceFor: async () => ({ path: p, format: 'claude' }), emit })
     await sessions.open('s1')
     expect(sessions.retainedCount('s1')).toBe(2) // one entry per outstanding call, tool1 and tool2
 
@@ -466,7 +466,7 @@ describe('createConversationSessions', () => {
     const p = path.join(dir, 't.jsonl')
     await writeFile(p, userLine(1))
     const emit = vi.fn()
-    const sessions = createConversationSessions({ transcriptPathFor: async () => p, emit })
+    const sessions = createConversationSessions({ sourceFor: async () => ({ path: p, format: 'claude' }), emit })
     await sessions.open('s1')
 
     // Hold the first tick's read open, so the close and the reopen both land while it is unsettled.
@@ -507,7 +507,7 @@ describe('createConversationSessions', () => {
     await writeFile(pB, toolUseLine('b1', 'tool1'))
     const emit = vi.fn()
     const sessions = createConversationSessions({
-      transcriptPathFor: async (id) => (id === 'a' ? pA : pB),
+      sourceFor: async (id: string) => ({ path: id === 'a' ? pA : pB, format: 'claude' as const }),
       emit
     })
     await sessions.open('a')

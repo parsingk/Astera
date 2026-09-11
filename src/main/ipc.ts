@@ -679,8 +679,17 @@ export function registerIpc(
   // a codex one exactly the way it answers null for a claude session with no status line yet — codex
   // never writes one, so this needs no provider branch of its own.
   const conversationSessions = createConversationSessions({
-    transcriptPathFor: (sessionId) =>
-      transcriptPathFor(sessionId, { readStatusPayload: (id) => core.statusLinePayload(id) }),
+    // Claude first, because a Claude session answers immediately and is the common case; the codex
+    // rollout is asked for only when it does not. Neither answering is ordinary, not an error: a
+    // session that has only just started has written nothing to point at yet.
+    sourceFor: async (sessionId) => {
+      const transcript = await transcriptPathFor(sessionId, {
+        readStatusPayload: (id) => core.statusLinePayload(id)
+      })
+      if (transcript !== null) return { path: transcript, format: 'claude' }
+      const rollout = codexRollout?.rolloutPathFor(sessionId) ?? null
+      return rollout === null ? null : { path: rollout, format: 'codex' }
+    },
     emit: (sessionId, turns, restarted) => send('conversation:append', { sessionId, turns, restarted })
   })
   // Every attention change, for every session — unlike conversation:append this is not gated on an

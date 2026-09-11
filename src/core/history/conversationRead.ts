@@ -2,6 +2,11 @@ import { open } from 'node:fs/promises'
 import { JsonlTail } from '../rolling/jsonlTail'
 import { reduceTranscript, type ConvTurn, type ToolPart } from './conversation'
 
+/** How a window's lines become turns. Two of them exist — Claude's transcript and codex's
+ *  rollout (codexConversation.ts) — and which one a session needs is settled by whoever opens
+ *  it, not here: this module only knows how to find whole lines in a file. */
+export type ReduceLines = (lines: string[], pending?: Map<string, ToolPart>) => ConvTurn[]
+
 /** Default window size for the conversation view's first read of a transcript. Same figure
  *  parseTranscriptTail (src/core/history/parser.ts) uses for the same reason: a full transcript can
  *  run into the megabytes, and this view only needs enough of the tail to render something useful. */
@@ -81,7 +86,7 @@ const NEWLINE = 0x0a // '\n' as a byte — see the doc comment below for why thi
  *  this is left as is rather than fixed. */
 export async function readConversationWindow(
   filePath: string,
-  opts?: { tailBytes?: number; endAt?: number }
+  opts?: { tailBytes?: number; endAt?: number; reduce?: ReduceLines }
 ): Promise<{ turns: ConvTurn[]; from: number; more: boolean; follow: number } | null> {
   let tailBytes = opts?.tailBytes ?? CONVERSATION_TAIL_BYTES
   let handle: Awaited<ReturnType<typeof open>> | undefined
@@ -118,7 +123,7 @@ export async function readConversationWindow(
 
       const text = used.subarray(contentStart).toString('utf8')
       const lines = text.split('\n').filter((l) => l.trim().length > 0)
-      const turns = reduceTranscript(lines)
+      const turns = (opts?.reduce ?? reduceTranscript)(lines)
       const more = from > 0
 
       if (turns.length > 0 || !more || tailBytes >= CONVERSATION_TAIL_BYTES_MAX) {
@@ -152,7 +157,11 @@ export async function readConversationWindow(
 export class ConversationFollow {
   private readonly tail: JsonlTail
 
-  constructor(filePath: string, offset: number) {
+  constructor(
+    filePath: string,
+    offset: number,
+    private readonly reduce: ReduceLines = reduceTranscript
+  ) {
     this.tail = new JsonlTail(filePath, { offset })
   }
 
@@ -162,6 +171,6 @@ export class ConversationFollow {
   async read(pending?: Map<string, ToolPart>): Promise<{ turns: ConvTurn[]; restarted: boolean } | null> {
     const result = await this.tail.read()
     if (result === null) return null
-    return { turns: reduceTranscript(result.lines, pending), restarted: result.restarted }
+    return { turns: this.reduce(result.lines, pending), restarted: result.restarted }
   }
 }

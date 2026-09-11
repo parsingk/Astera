@@ -24,12 +24,19 @@ type ToolKind = "read" | "find" | "edit" | "create" | "run";
 /** The tool-name to kind mapping. Code, not copy — see the brief's table for why Grep and Glob share
  *  "find" and everything else passes its own name through untranslated. */
 const KIND_BY_TOOL: Readonly<Record<string, ToolKind>> = {
+  // Claude's tools.
   Read: "read",
   Grep: "find",
   Glob: "find",
   Edit: "edit",
   Write: "create",
   Bash: "run",
+  // codex's, which do the same five things under its own names. A row reads the same either way;
+  // only the CLI's word for the tool differs (core/history/codexConversation.ts names them).
+  shell_command: "run",
+  apply_patch: "edit",
+  web_search: "find",
+  tool_search: "find",
 };
 
 const VERB_KEY: Readonly<Record<ToolKind, MessageKey>> = {
