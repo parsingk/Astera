@@ -14,6 +14,14 @@ export interface JsonlTailOptions {
    *  start offset, and after that the ordinary offset increment and recreation detection behave as
    *  usual. */
   startAtEnd?: boolean
+  /** Start reading from this byte offset instead of 0 — for resuming a follow exactly where an
+   *  earlier windowed read left off (see ConversationFollow, src/core/history/conversationRead.ts),
+   *  rather than from the start of the file or from whatever the file's size happens to be now.
+   *  Not combined with startAtEnd: if both are given, startAtEnd wins, since it needs the file's
+   *  current size (stat'd in the constructor) while offset is a value the caller already has. After
+   *  construction this behaves like any other offset: recreation detection is unchanged — a file that
+   *  got shorter than this offset still resets to 0 and reports restarted: true. */
+  offset?: number
 }
 
 export class JsonlTail {
@@ -32,6 +40,7 @@ export class JsonlTail {
     opts: JsonlTailOptions = {}
   ) {
     if (opts.startAtEnd) this.startOffset = stat(filePath).then((s) => s.size).catch(() => 0)
+    else if (opts.offset !== undefined) this.offset = opts.offset
   }
 
   /** The lines newly **completed** since the last call (blank lines excluded).

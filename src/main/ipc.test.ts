@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   accountRemovalBlockers,
+  closeConversationOnExit,
   codexRolloutFromNote,
+  conversationAttentionOf,
+  forgetAttentionOnExit,
   historyResumePlan,
   hostHandshakeMeans,
   hostHoldings,
@@ -13,7 +16,9 @@ import {
   sessionsTakenBackOnFailure,
   staleSpecFiles
 } from './ipc'
+import { createAttentionState } from './attention'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import type { PtyEntry } from '../core/host/protocol'
 import type { Account, ScheduleConfig, SessionInfo } from '../core/types'
 
@@ -546,5 +551,74 @@ describe('hostHoldings — what the Info tab says the Host is holding', () => {
   // reached by an entry list the Host actually sent — the row says nothing at all until then.
   it('answers zeros for a Host holding nothing', () => {
     expect(hostHoldings([])).toEqual({ sessions: 0, terminals: 0, runs: 0 })
+  })
+})
+
+// The real attention state (main/attention.ts) is used below rather than a recorder stub, so these
+// pin the actual observable effect — what get() reads back after the exit — not just which branch
+// forget() happened to be called from.
+describe('forgetAttentionOnExit — the attention verdict on a session exit', () => {
+  // A lost-sight exit means the app only lost its pty handle, not that the session ended — the Host
+  // keeps running it, and no hook event arrives again until the next tool call. Forgetting here would
+  // silently drop a `waiting` banner while a permission prompt is still on screen through the
+  // reconnect.
+  it('a lost-sight exit leaves the value', () => {
+    const attention = createAttentionState()
+    attention.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'permission_prompt' })
+    forgetAttentionOnExit(attention, 's1', PTY_LOST_SIGHT_EXIT_CODE)
+    expect(attention.get('s1')).toBe('waiting')
+  })
+
+  it('an ordinary exit clears it', () => {
+    const attention = createAttentionState()
+    attention.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'permission_prompt' })
+    forgetAttentionOnExit(attention, 's1', 0)
+    expect(attention.get('s1')).toBe('idle')
+  })
+
+  // registerIpc's real call passes attention as an optional dep (it is undefined in a harness that
+  // never constructed one) — an exit must not throw just because nothing is there to forget.
+  it('does nothing, without throwing, when there is no attention state', () => {
+    expect(() => forgetAttentionOnExit(undefined, 's1', 0)).not.toThrow()
+  })
+})
+
+// A `close` spy stands in for ConversationSessions here — unlike forgetAttentionOnExit's tests above,
+// what close() itself does (stop the follow, stop the timer once nothing is left open) is already
+// pinned by conversation.test.ts; this only has to show the exit code decides whether it is called.
+describe('closeConversationOnExit — a session exit closes its open conversation', () => {
+  it('a lost-sight exit leaves the conversation open', () => {
+    const close = vi.fn()
+    closeConversationOnExit({ close }, 's1', PTY_LOST_SIGHT_EXIT_CODE)
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  it('an ordinary exit closes it', () => {
+    const close = vi.fn()
+    closeConversationOnExit({ close }, 's1', 0)
+    expect(close).toHaveBeenCalledWith('s1')
+  })
+
+  // registerIpc constructs conversationSessions unconditionally today, but the guard does not assume
+  // that — the same defensive shape as forgetAttentionOnExit's undefined case above.
+  it('does nothing, without throwing, when there is no conversation sessions', () => {
+    expect(() => closeConversationOnExit(undefined, 's1', 0)).not.toThrow()
+  })
+})
+
+// The real attention state, for the same reason forgetAttentionOnExit's tests above use it: this
+// pins the actual value a caller reads back, not just which method got called.
+describe('conversationAttentionOf — the pane\'s one-shot read on mount', () => {
+  it('reads back whatever the session is currently at', () => {
+    const attention = createAttentionState()
+    attention.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'permission_prompt' })
+    expect(conversationAttentionOf(attention, 's1')).toBe('waiting')
+  })
+
+  // A session `get` has never seen defaults to idle (main/attention.ts) — this only has to prove
+  // the pass-through does not substitute a different default of its own.
+  it('reads idle for a session it has never seen', () => {
+    const attention = createAttentionState()
+    expect(conversationAttentionOf(attention, 'never-seen')).toBe('idle')
   })
 })

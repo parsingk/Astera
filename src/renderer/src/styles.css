@@ -253,7 +253,11 @@
   --ease: 120ms cubic-bezier(0.2, 0.6, 0.3, 1);
 }
 
-* { box-sizing: border-box; margin: 0; }
+/* The margin half of this reset lives in tailwind.css's @layer base, not here: an unlayered rule
+   beats every layered one whatever its specificity, so keeping `margin: 0` here silently zeroed
+   every margin utility the vendored conversation markup relies on. box-sizing collides with
+   nothing and stays. */
+* { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body { font-family: var(--sans); letter-spacing: var(--tracking); background: var(--bg); color: var(--text); }
 
@@ -701,7 +705,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .pr-create-detail { margin: 0; max-height: 120px; overflow: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); white-space: pre-wrap; }
 
 /* ---------- tabs ---------- */
-.tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tabs { display: flex; align-items: center; overflow-x: auto; }
 /* 이 padding 은 죽은 값이다 — WorkbenchTabs 는 .pane-tabbar 안에서만 렌더링되고, 거기서는
    .pane-tabbar .tab 이 padding: 0 12px 로 덮어쓴다. 앱이 실제로 그리는 모든 탭이 그 규칙을 타므로,
    여기 다시 토큰을 걸지 않는다 */
@@ -745,6 +749,19 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* .terminal-slot is not terminal-only: it is how a pane's body claims its place in the grid, and the
    editor slot PaneGrid draws for each pane uses the same class so both follow one placement rule */
 .terminal-slot { flex: 1; min-height: 0; }
+/* Task 10: the session slot's own two children — the terminal always mounted, the conversation pane
+   mounted only while it is showing (PaneGrid.tsx's own comment on the session slot has the reasoning
+   for that asymmetry). Both fill the slot exactly as TerminalView's own .terminal-wrap already does
+   on its own — min-width:0 matters here for the same reason it does on .terminal-slot itself (the
+   comment on .terminal-host below measures the sideways-shake bug that skipping it caused). Display
+   is set inline at the call site, not here, the same convention every other slot in this file uses.
+   Not named .session-view: that class already belongs to the div wrapping <PaneGrid> in App.tsx (its
+   own rule is above, near .surfaces), and a second rule under the same name silently merged into it
+   — the container holding the whole pane grid gained this rule's min-width:0, and these two children
+   gained that div's display:flex, invisibly, through nothing either rule's own text said. Fix round 1
+   caught it; this file already tells this exact story once, at .surfaces's own comment on why it is
+   not named .workbench. */
+.session-slot-view { flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
 /* min-height:0 plus overflow:hidden — allows flex shrinking and confines the overflow to the slot, so
    the xterm canvas (rows × cellHeight) cannot spill past it and encroach on the bottom status bar */
 .terminal-wrap { position: relative; flex: 1; display: flex; min-height: 0; overflow: hidden; }
@@ -1807,13 +1824,23 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    z-index 1: above the slots (auto) and below the resizers (2) — the 5px hit area of a column resizer
    overlaps the top 3px of the group tab bar beneath it, so the resizer has to win for the boundary to be
    grabbable. */
-.panes.pane-grid .pane-tabbar { position: absolute; z-index: 1; height: var(--pane-tabbar-h); }
+/* display:flex added for Task 10's toggle: a second child sits beside .tabs, pinned at the right
+   rather than scrolling away with the tabs — .tabs gets flex:1;min-width:0 below so it is still the
+   one that shrinks and scrolls.
+   background and border-bottom moved here from .tabs (its only other use, the top-level app tab bar,
+   is long gone — .tabs is only ever rendered inside this element now): before the toggle, .tabs was
+   this bar's sole child and painted the whole thing. With a second child beside it, .tabs painting
+   only its own width left the toggle's strip showing the plain body background with no hairline under
+   it — invisible in this palette (--panel/--bg/--rail read the same, this file's own note below on
+   why), a visible seam in a theme where they do not. The bar's background and its bottom edge belong
+   to the bar itself, not to whichever of its children happens to be widest. */
+.panes.pane-grid .pane-tabbar { position: absolute; z-index: 1; height: var(--pane-tabbar-h); display: flex; background: var(--panel); border-bottom: 1px solid var(--line); }
 /* Background contrast is left alone. In this palette the WCAG luminance contrast between --panel, --bg,
    and --rail is around 1.06:1, so no combination of them is visible — which tab is active within a group
    was already carried by the text colour (--text-dim to --text, about 2.4:1). Only the background contrast
    intended as the "focused group" signal failed, so that role passes to the account-coloured underline
    (the focused prop). */
-.pane-tabbar .tabs { height: 100%; }
+.pane-tabbar .tabs { height: 100%; flex: 1; min-width: 0; }
 /* Drops the vertical padding and centres instead — the global tab bar (≈32px) is gone.
    Lets tabs shrink in a narrow group: the global bar was flex:none, so past six tabs it overflowed and got
    cut. A minimum width keeps them from shrinking past recognition */
@@ -1840,6 +1867,24 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    It is sticky above the tabs, so its background has to be the same opaque colour as the bar or the tabs
    passing underneath show through */
 .pane-tabbar .new-tab { padding: 0 10px; align-self: stretch; position: sticky; right: 0; z-index: 1; background: var(--panel); }
+/* The terminal/conversation toggle (Task 10) — a sibling of .tabs inside .pane-tabbar, pinned at the
+   right the same way .new-tab is, but as a flex sibling rather than position:sticky: unlike the tabs
+   row this one never scrolls, so there is nothing to stay pinned against.
+   Fix round 1: icon-only (~46px total for the pair), not two words (~170px) — a flex:none control at
+   word-width left less than one tab's own min-width once MAX_PANES's four columns narrowed every
+   bar; the words survive as title/aria-label on each button and as the setting's own row label. */
+.session-view-toggle { display: flex; align-items: center; gap: 3px; padding: 0 6px; flex: none; }
+.sv-seg {
+  position: relative; display: flex; align-items: center; justify-content: center; padding: 4px;
+  color: var(--text-dim); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sv-seg.active { color: var(--text); border-color: var(--accent); background: var(--elevated); }
+/* A corner badge, not an inline dot beside the icon — the button's own box stays the same small size
+   whether or not it is marked, which an inline dot (with its own gap) would not. The colour is the
+   same --warn-ink the in-pane pending banner uses (PendingBanner.tsx's --warn-bg/--warn-ink), so the
+   two read as the one signal rather than two different ones. */
+.sv-seg-marker { position: absolute; top: -2px; right: -2px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn-ink); }
 
 /* ---------- status bar ---------- */
 .statusbar {

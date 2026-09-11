@@ -1,7 +1,7 @@
 // Korean catalog — this file is the source. A key added here must be added to en.ts too for
 // typecheck to pass (en's type is tied to this object's key set).
 // Key rule: <domain>.<context>.<name> — the domains are settings/files/explorer/worktree/
-// account/session/history/run/rolling/common.
+// account/session/history/run/rolling/common/conversation.
 export const ko = {
   'settings.title': '설정',
   'settings.tab.general': '일반',
@@ -349,6 +349,11 @@ export const ko = {
     '작업 이어가기는 켜진 채로 남지만, 원래의 Claude Code 나 Codex 세션을 되살릴 수 없으면 작업이 멈출 수 있습니다.',
   'settings.jobContinuity.turnOffSmartResume.confirm': '끄기',
   'settings.jobContinuity.saveFailed': '작업 이어가기 설정을 저장하지 못했습니다: {detail}',
+  // Task 10 — the general settings tab's new-tab default, beside the language row
+  'settings.conversation.title': '새 세션의 기본 화면',
+  'settings.conversation.terminal': '터미널',
+  'settings.conversation.conversation': '대화',
+  'settings.conversation.saveFailed': '새 세션의 기본 화면 설정을 저장하지 못했습니다: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': '터미널 영문 폰트',
   'settings.font.hangul': '터미널 한글 폰트',
@@ -1370,5 +1375,31 @@ export const ko = {
   'hiw.verify.partial': '일부만 확인되었습니다',
   'hiw.verify.unverified': '확인된 것이 없습니다',
   'hiw.verify.failed': '보고된 검사가 실패했습니다',
-  'hiw.verify.reported': '에이전트가 보고한 것입니다 — 앱이 직접 돌려 보지는 않았습니다'
+  'hiw.verify.reported': '에이전트가 보고한 것입니다 — 앱이 직접 돌려 보지는 않았습니다',
+  // ToolRow.tsx / PendingBanner.tsx (components/conversation/) — the tool row's verb, the collapsed
+  // group's per-kind counts, and the banner that says a decision is waiting in the terminal.
+  'conversation.verb.read': '읽음',
+  'conversation.verb.find': '찾음',
+  'conversation.verb.edit': '고침',
+  'conversation.verb.create': '만듦',
+  'conversation.verb.run': '돌림',
+  'conversation.verb.running': '실행 중',
+  'conversation.outcome.failed': '실패',
+  'conversation.group.read': '읽기',
+  'conversation.group.find': '찾기',
+  'conversation.group.edit': '수정',
+  'conversation.group.create': '작성',
+  'conversation.group.run': '실행',
+  'conversation.pending.title': '답할 것이 있습니다',
+  'conversation.pending.body': '에이전트가 답을 기다립니다. 선택지는 터미널에 있습니다.',
+  'conversation.pending.action': '터미널로 이동',
+  // ConversationPane.tsx — open() answering null, and a transcript that exists but has no turns yet.
+  'conversation.unavailable': '이 세션은 아직 기록이 없습니다',
+  'conversation.empty': '아직 주고받은 것이 없습니다',
+  'conversation.composer.placeholder': '무엇을 시킬까요',
+  'conversation.composer.locked': '터미널에서 답한 뒤에 다시 입력할 수 있습니다',
+  'conversation.loadMore': '이전 대화 더 보기',
+  // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
+  'conversation.toggle.terminal': '터미널',
+  'conversation.toggle.conversation': '대화'
 } as const

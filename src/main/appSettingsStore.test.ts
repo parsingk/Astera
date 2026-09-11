@@ -299,6 +299,39 @@ describe('resumeStrategy', () => {
   })
 })
 
+describe('conversationDefault', () => {
+  it('기본값은 terminal이다', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getConversationDefault()).toBe('terminal')
+  })
+
+  it('conversation을 저장하고 새 인스턴스가 다시 읽는다', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setConversationDefault('conversation')
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getConversationDefault()).toBe('conversation')
+  })
+
+  it('알 수 없는 값은 terminal로 떨어진다', async () => {
+    for (const raw of [{ conversationDefault: 'both' }, { conversationDefault: 1 }, { conversationDefault: null }]) {
+      await fs.writeFile(file(), JSON.stringify(raw), 'utf8')
+      const store = new AppSettingsStore(file())
+      await store.load()
+      expect(store.getConversationDefault()).toBe('terminal')
+    }
+  })
+
+  it('terminal일 때는 파일에 그 키를 쓰지 않는다', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    await store.setConversationDefault('terminal')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('conversationDefault')
+  })
+})
+
 describe('닫은 업데이트 캠페인 id', () => {
   it('없으면 null이다', async () => {
     const store = new AppSettingsStore(file())

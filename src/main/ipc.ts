@@ -13,6 +13,8 @@ import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
+import type { AttentionState, Attention } from './attention'
+import { createConversationSessions, transcriptPathFor, type ConversationSessions } from './conversation'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
 import { hostAddress, retireOlderHosts } from '../host/address'
@@ -552,9 +554,74 @@ export function historyResumePlan(a: {
   return { blankSlate: true, initialPrompt: safe, mangled: false }
 }
 
+/**
+ * Whether a session exit should forget its attention verdict (main/attention.ts), and does so.
+ *
+ * **Not on a lost-sight exit** (`PTY_LOST_SIGHT_EXIT_CODE`): that code means the app lost its pty
+ * handle, not that the session ended — the Host keeps running it, and no hook event arrives again
+ * until the next tool call. Forgetting here would silently drop a `waiting` banner while a permission
+ * prompt is still on screen through the reconnect. slack.ts's `handleExit` guards the identical case
+ * for the identical reason, and this reads the same field it does.
+ *
+ * A pure function for the same reason `historyResumePlan` above it is: the real call sits inside
+ * `registerIpc`'s `onExit` closure, unreachable without an Electron harness.
+ */
+export function forgetAttentionOnExit(
+  attention: Pick<AttentionState, 'forget'> | undefined,
+  sessionId: string,
+  exitCode: number
+): void {
+  if (exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
+  attention?.forget(sessionId)
+}
+
+/**
+ * Whether a session exit should close its conversation window (main/conversation.ts), and does so.
+ *
+ * Same guard, and the same reason, as `forgetAttentionOnExit` just above: a lost-sight exit means the
+ * app only lost its pty handle, not that the session ended — the Host keeps running it and the view
+ * stays correct straight through the reconnect. Closing the conversation here would drop a window a
+ * person still has open, for no reason.
+ *
+ * A pure function for the same reason `forgetAttentionOnExit` is one: the real call sits inside
+ * `registerIpc`'s `onExit` closure, unreachable without an Electron harness.
+ */
+export function closeConversationOnExit(
+  sessions: Pick<ConversationSessions, 'close'> | undefined,
+  sessionId: string,
+  exitCode: number
+): void {
+  if (exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
+  sessions?.close(sessionId)
+}
+
+/**
+ * One session's attention verdict, read once rather than waited for. The conversation view's IPC
+ * surface (core/types.ts's `conversation`) is otherwise push-only — 'conversation:attention' fires
+ * only on a change — so a session already `waiting` (or `working`) when its conversation pane
+ * mounts would read `idle` until the next change, and a `waiting` session's next change is the
+ * answer to the very prompt the pane exists to surface. This is what the pane calls once on mount,
+ * before it subscribes to the push stream.
+ *
+ * A pure function for the same reason `forgetAttentionOnExit` above is one: the real call sits
+ * inside `registerIpc`'s handler registration, unreachable without an Electron harness.
+ */
+export function conversationAttentionOf(attention: Pick<AttentionState, 'get'>, sessionId: string): Attention {
+  return attention.get(sessionId)
+}
+
 export function registerIpc(
   core: Core,
   win: BrowserWindow,
+  /** The one attention verdict (main/attention.ts). Built in index.ts alongside `desktop` and handed
+   *  the same instance — forgetting a session's verdict on exit, and pushing every change through
+   *  `conversation:attention`, both read it. Required, not optional, and placed ahead of
+   *  every optional parameter below (TypeScript refuses a required parameter after an optional one) —
+   *  deliberately: dropping `attention` from index.ts's call used to compile silently and leave the
+   *  feature dark (`forget` never called, and before that, the whole desktop sink dead), which no test
+   *  caught either, since `registerIpc` cannot be exercised without a full Electron harness. Requiring
+   *  it turns that specific mistake into a type error at the one real call site. */
+  attention: AttentionState,
   rolling?: RollingCoordinator,
   slack?: {
     notifier: SlackNotifier
@@ -604,6 +671,49 @@ export function registerIpc(
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
+
+  // The conversation view: one follow per open session, polling only while at least one is open (see
+  // conversation.ts's own doc). transcriptPathFor reads the same statusLine payload rolling.ts,
+  // scheduler.ts and slack.ts already read for a claude session's transcript path, and answers null for
+  // a codex one exactly the way it answers null for a claude session with no status line yet — codex
+  // never writes one, so this needs no provider branch of its own.
+  const conversationSessions = createConversationSessions({
+    transcriptPathFor: (sessionId) =>
+      transcriptPathFor(sessionId, { readStatusPayload: (id) => core.statusLinePayload(id) }),
+    emit: (sessionId, turns, restarted) => send('conversation:append', { sessionId, turns, restarted })
+  })
+  // Every attention change, for every session — unlike conversation:append this is not gated on an
+  // open conversation. It is the same per-session verdict the desktop notifier already reads.
+  attention.subscribe((sessionId, value) => send('conversation:attention', { sessionId, value }))
+  // A renderer reload leaves every open conversation with nobody watching it — the same kind of gap
+  // the preview.registerAgentGuest handler's own 'destroyed' listener exists for below, just with a
+  // different signal: a guest `<webview>` is torn down with the DOM a reload replaces, so 'destroyed'
+  // fires for it, but the main window's own WebContents survives a reload — nothing there is ever
+  // destroyed.
+  //
+  // **'did-start-navigation', not 'will-navigate' or 'did-finish-load'.** 'will-navigate' is not a
+  // substitute: it does not fire for `webContents.reload()` at all, which is how this window actually
+  // reloads. 'did-finish-load' does fire, but too late — it races the fresh renderer's own re-open:
+  // React mounts, the panel calls `conversation.open`, main creates the new entry and starts the
+  // ticker, all before 'did-finish-load' gets around to firing, since nothing orders an
+  // `ipcMain.handle` dispatch against this navigation observer. `closeAll()` there would wipe the
+  // entry the fresh renderer had just opened, silently — no error, no retry, the panel just never
+  // updates again. 'did-start-navigation' fires before the new document can run any script at all, so
+  // this close always precedes whatever the fresh renderer goes on to open.
+  //
+  // Same dual-argument read as agentBrowser/buffers.ts's own onNav, for the same reason: Electron 41
+  // emits a single `{ url, isSameDocument, isMainFrame, ... }` details object, alongside the older
+  // positional arguments (marked deprecated) that this app still has to read for the boundary case
+  // where only those arrive. isMainFrame excludes a sub-frame's own navigation; isSameDocument excludes
+  // an in-page navigation (a hash change), which does not tear anything down and is not this app's own
+  // reload.
+  win.webContents.on('did-start-navigation', (...args: unknown[]) => {
+    const first = typeof args[0] === 'object' && args[0] !== null ? (args[0] as Record<string, unknown>) : null
+    const isMainFrame = typeof first?.isMainFrame === 'boolean' ? first.isMainFrame : args[3]
+    const isSameDocument = typeof first?.isSameDocument === 'boolean' ? first.isSameDocument : args[2]
+    if (isMainFrame !== true || isSameDocument === true) return
+    conversationSessions.closeAll()
+  })
 
   // Session working/idle detection: decided from the window-title OSC in the output, and session:busy
   // is emitted only when the state changes.
@@ -733,6 +843,14 @@ export function registerIpc(
   const hostSessionsTakenBack = new Promise<SessionsTakenBack>((resolve) => {
     settleSessionsTakenBack = resolve
   })
+  // Collect the statusline payloads of sessions that are gone. Hung off the promise above because
+  // this is the first moment `sessions.list()` is the real set: before the Host answers, a session it
+  // is still running has no record here, and dropping its payload then is what the old wipe at
+  // StatusLineManager.init did — it cost every surviving session its transcript path. Settles on
+  // every path, including the no-Host one, where the set is simply what the app restored by itself.
+  void hostSessionsTakenBack.then(() =>
+    core.pruneStatusLinePayloads(new Set(core.sessions.list().map((session) => session.id)))
+  )
   /** Job Continuity's recorder. Non-null only while the toggle is on: off means no file is opened and
    *  nothing is written (spec §0.4). Created before store.load in bootOrch so the restart's losses are
    *  journaled, and by the toggle handler when turned on at runtime. */
@@ -942,6 +1060,8 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
+    forgetAttentionOnExit(attention, e.sessionId, e.exitCode) // drop the Map entry (its own doc above)
+    closeConversationOnExit(conversationSessions, e.sessionId, e.exitCode) // stop the follow (its own doc above)
     // The session ended (WU §14-4) — observation stops here, so any Work Unit still `active` is
     // interrupted, not completed; it waits on the How It Works screen until the person closes it.
     // A usage-limit roll's exit is not this case — the collector's `onSessionForked` re-keys the
@@ -5231,6 +5351,15 @@ export function registerIpc(
     return core.appSettings.getTheme()
   })
 
+  // Task 10: what a new session tab opens as. Same trust-boundary check as the other enum settings
+  // above — the value the renderer sent is validated before being written to disk.
+  ipcMain.handle('settings.getConversationDefault', () => core.appSettings.getConversationDefault())
+  ipcMain.handle('settings.setConversationDefault', async (_e, view: unknown) => {
+    if (view !== 'terminal' && view !== 'conversation')
+      throw new Error(`INVALID_CONVERSATION_DEFAULT: ${String(view)}`)
+    await core.appSettings.setConversationDefault(view)
+  })
+
   // Astera Host. Unconditional — the Host is not an orchestration feature, so this must not go inside
   // bootOrch, which only runs when that toggle is on. A missing out/main/host.js (a partial build, or
   // a packaging mistake) leaves hostClient null and the app runs exactly as it does today. Once the
@@ -5700,6 +5829,20 @@ export function registerIpc(
     const entries = await hostPtyList?.()
     return entries ? hostHoldings(entries) : null
   })
+
+  // The conversation view (main/conversation.ts). open/more answer null rather than reject on a
+  // missing or unreadable transcript — see that module's own doc; there is nothing here to translate.
+  ipcMain.handle('conversation.open', (_e, sessionId: string) => conversationSessions.open(sessionId))
+  ipcMain.handle('conversation.more', (_e, sessionId: string, before: number) =>
+    conversationSessions.more(sessionId, before)
+  )
+  ipcMain.handle('conversation.close', (_e, sessionId: string) => {
+    conversationSessions.close(sessionId)
+  })
+  // Independent of open/more/close — a fresh session sitting on a trust prompt is `waiting` while
+  // `open` still answers null, so this reads main/attention.ts directly rather than folding onto
+  // conversationSessions.
+  ipcMain.handle('conversation.attention', (_e, sessionId: string) => conversationAttentionOf(attention, sessionId))
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is

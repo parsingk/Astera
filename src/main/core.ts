@@ -70,6 +70,9 @@ export interface Core {
   codexUsageFetcher: CodexUsageFetcher
   accountUsage: AccountUsageStore // last-known usage per account (design doc §3)
   statusLinePayload: (sessionId: string) => Promise<unknown | null> // Raw payload, for rolling
+  /** Drops the stored statusline payload of every session not in `keep` — see
+   *  StatusLineManager.pruneExcept for what it collects and when it may be called. */
+  pruneStatusLinePayloads: (keep: ReadonlySet<string>) => Promise<void>
   hookEventsDir: string // Hook event file directory — watched by index.ts's HookEventWatcher
   // Rolling config persistence. index.ts does the persisting (the rolling.ts persistConfig wiring);
   // ipc.ts no longer restores from here — it only reads (get) for sessions.resumeDefaults
@@ -342,6 +345,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     accountSyncSettings,
     usageSession,
     statusLinePayload: (sessionId: string) => statusLine.read(sessionId),
+    pruneStatusLinePayloads: (keep: ReadonlySet<string>) => statusLine.pruneExcept(keep),
     hookEventsDir: statusLine.hookEventsDir,
     rollConfig,
     schedulerConfig,

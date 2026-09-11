@@ -49,7 +49,9 @@ const EVENT_CHANNELS = [
   'github:prs-updated',
   'github:status',
   'usage:accounts-updated',
-  'notify:activate'
+  'notify:activate',
+  'conversation:append',
+  'conversation:attention'
 ]
 
 const api = {
@@ -157,7 +159,9 @@ const api = {
     getTerminalFont: invoke('settings.getTerminalFont'),
     setTerminalFont: invoke('settings.setTerminalFont'),
     getTheme: invoke('settings.getTheme'),
-    setTheme: invoke('settings.setTheme')
+    setTheme: invoke('settings.setTheme'),
+    getConversationDefault: invoke('settings.getConversationDefault'),
+    setConversationDefault: invoke('settings.setConversationDefault')
   },
   files: {
     list: invoke('files.list'),
@@ -283,6 +287,12 @@ const api = {
     status: invoke('host.status'),
     sessionsOutlivingApp: invoke('host.sessionsOutlivingApp'),
     holdings: invoke('host.holdings')
+  },
+  conversation: {
+    open: invoke('conversation.open'),
+    more: invoke('conversation.more'),
+    close: invoke('conversation.close'),
+    attention: invoke('conversation.attention')
   },
   platform: process.platform,
   win: {

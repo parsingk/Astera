@@ -1,0 +1,114 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><script src="./support.js"></script></head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; background: #17171a; color: #d0d0d6; }
+    * { box-sizing: border-box; }
+    .mono { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; }
+    .prose { font-size: 15px; line-height: 1.75; color: #cdcdd5; }
+    .prose p { margin: 0 0 20px; }
+    .prose strong { font-weight: 600; color: #eaeaf0; }
+    .row { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: #767682; padding: 3px 0; }
+    .row b { font-weight: 400; color: #b9b9c2; }
+  </style>
+</helmet>
+
+<div style="width: 900px; height: 820px; display: flex; flex-direction: column; background: #17171a; overflow: hidden;">
+
+  <div style="flex: none; height: 34px; display: flex; align-items: center; padding: 0 12px; background: #1a1a1e; border-bottom: 1px solid #000000; gap: 9px;">
+    <span style="width: 6px; height: 6px; border-radius: 50%; background: #79c98f;"></span>
+    <span style="font-size: 12px;">host 조각 3 설계</span>
+    <div style="margin-left: auto; display: flex; background: #23232a; border-radius: 6px; padding: 2px; gap: 2px;">
+      <span style="font-size: 11.5px; color: #767682; padding: 4px 9px;">터미널</span>
+      <span style="font-size: 11.5px; color: #d0d0d6; background: #17171a; border-radius: 6px; padding: 4px 9px;">대화</span>
+    </div>
+  </div>
+
+  <div style="flex: 1; min-height: 0; overflow-y: auto;">
+    <div style="max-width: 620px; margin: 0 auto; padding: 36px 20px 12px;">
+
+      <div style="display: flex; justify-content: flex-end; margin-bottom: 34px;">
+        <div style="background: #23232a; border-radius: 8px; padding: 12px 16px; max-width: 82%; font-size: 15px; line-height: 1.7; color: #e2e2e8;">store.load 가 재시작할 때 열린 Dispatch 를 전부 닫는데, 밀린 보고가 있는 건 남겨야 해. 어디를 봐야 하지?</div>
+      </div>
+
+      <div style="margin-bottom: 34px;">
+        <div class="prose">
+          <p>정리 루프는 <span class="mono" style="font-size: 13.5px; color: #b9b9c2;">store.ts</span> 안에 있습니다. 지금은 살아 있는 세션 목록 하나만 보고 판단하는데, 밀린 보고도 같은 자리에서 봐야 합니다.</p>
+          <p>증거를 하나만 받고 있습니다. 밀린 보고를 <strong>두 번째 증거</strong>로 넣으면, 끝까지 마쳤다는 기록이 있는 Dispatch 는 닫지 않고 남길 수 있습니다.</p>
+        </div>
+
+        <div style="margin: 0 0 20px; padding: 14px 16px; background: #131316; border-radius: 8px;">
+          <pre class="mono" style="margin: 0; font-size: 13px; line-height: 1.6; color: #b9b9c2; overflow-x: auto;">const keep =
+  alive === "unknown" || alive?.has(d.sessionId) || reported?.has(d.id)</pre>
+        </div>
+
+        <div style="margin: 0 0 20px;">
+          <button onClick="{{ toggle }}" style="{{ sumStyle }}">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="{{ caretStyle }}"><polyline points="9 6 15 12 9 18"></polyline></svg>
+            {{ sumText }}
+          </button>
+          <sc-if value="{{ open }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 8px 0 2px 22px;">
+              <div class="row"><span class="mono" style="width: 30px; color: #4f4f59;">읽음</span><span class="mono" style="font-size: 12.5px;"><b>store.ts</b></span><span style="margin-left: auto;" class="mono">412줄</span></div>
+              <div class="row"><span class="mono" style="width: 30px; color: #4f4f59;">찾음</span><span class="mono" style="font-size: 12.5px;"><b>aliveSessionIds</b></span><span style="margin-left: auto;" class="mono">6곳</span></div>
+              <div class="row"><span class="mono" style="width: 30px; color: #4f4f59;">고침</span><span class="mono" style="font-size: 12.5px;"><b>store.ts</b></span><span style="margin-left: auto;" class="mono"><span style="color: #79c98f;">+14</span> <span style="color: #d3706b;">−3</span></span></div>
+              <div class="row"><span class="mono" style="width: 30px; color: #4f4f59;">고침</span><span class="mono" style="font-size: 12.5px;"><b>store.test.ts</b></span><span style="margin-left: auto;" class="mono"><span style="color: #79c98f;">+38</span></span></div>
+              <div class="row"><span class="mono" style="width: 30px; color: #4f4f59;">돌림</span><span class="mono" style="font-size: 12.5px;"><b>vitest store.test.ts</b></span><span style="margin-left: auto; color: #79c98f;" class="mono">42 통과</span></div>
+            </div>
+          </sc-if>
+        </div>
+
+        <div class="prose"><p style="margin: 0;">테스트를 먼저 빨갛게 만들고 고쳤습니다. 이제 보고가 말해주는 Dispatch 는 정리에서 살아남고, 드레인이 제대로 닫습니다.</p></div>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; margin-bottom: 34px;">
+        <div style="background: #23232a; border-radius: 8px; padding: 12px 16px; max-width: 82%; font-size: 15px; line-height: 1.7; color: #e2e2e8;">좋아. 그럼 그 보고가 아예 못 읽히는 파일이면?</div>
+      </div>
+
+      <div class="prose">
+        <p style="margin: 0;">지금은 읽다 실패하면 <strong>지웁니다</strong>. 그런데 그 순간이 하필 작업자가 쓰고 있는 중일 수 있어서, 이 기능이 막으려던 손실이 이 기능 안에서 일어납니다.</p>
+      </div>
+
+    </div>
+  </div>
+
+  <div style="flex: none; padding: 0 20px 22px;">
+    <div style="max-width: 620px; margin: 0 auto;">
+      <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #a8834f; padding: 0 4px 10px;">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#d68b4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16h.01"></path></svg>
+        터미널에서 승인을 기다리고 있습니다.
+        <button style="font-family: inherit; font-size: 12.5px; background: none; border: 0; color: #d68b4f; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; padding: 0;">보러 가기</button>
+      </div>
+      <div style="display: flex; align-items: flex-end; gap: 10px; background: #1e1e23; border: 1px solid #2e2e36; border-radius: 8px; padding: 12px 12px 12px 18px;">
+        <div style="flex: 1; font-size: 15px; line-height: 1.6; color: #63636d; padding: 4px 0;">무엇을 시킬까요</div>
+        <div style="width: 34px; height: 34px; border-radius: 8px; background: #37b0c4; display: grid; place-items: center;">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#0d2b30" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":900,"height":820}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { open: false } }
+  renderVals() {
+    const open = this.state.open
+    return {
+      open,
+      toggle: () => this.setState({ open: !open }),
+      sumText: open ? '한 일 5가지' : '파일 하나 읽고 둘 고쳤습니다 · 테스트 42개 통과',
+      sumStyle: 'display: inline-flex; align-items: center; gap: 7px; font-family: inherit; font-size: 13px; background: none; border: 0; color: #767682; padding: 0; cursor: pointer;',
+      caretStyle: 'flex: none; transition: transform .12s; transform: rotate(' + (open ? 90 : 0) + 'deg);'
+    }
+  }
+}
+</script>
+</body>
+</html>
