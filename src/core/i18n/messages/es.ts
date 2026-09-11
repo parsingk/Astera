@@ -24,6 +24,16 @@ export const es: Catalog = {
     'Pida a la sesión que vaya a usar como orquestador que ejecute astera help para obtener la guía de uso completa.',
   'settings.orchestration.saveFailed':
     'No se pudo guardar la configuración de orquestación: {detail}',
+  // Modo de permisos del agente
+  'settings.agentPermission.label': 'Ejecutar agentes sin comprobar permisos',
+  'settings.agentPermission.hint':
+    'Todas las sesiones de agente que inicia la aplicación se ejecutan sin preguntar por permisos ' +
+    '(--dangerously-skip-permissions para claude, --dangerously-bypass-approvals-and-sandbox para codex). ' +
+    'Activado de forma predeterminada. Un worker de Job siempre arranca en un worktree recién creado: esa ' +
+    'carpeta no tiene historial de aprobaciones y la lista de permitidos acumulada en el proyecto ' +
+    '(.claude/settings.local.json) no lo acompaña, así que al desactivarlo el worker se detiene en su primer comando. ' +
+    'Las sesiones ya abiertas no se ven afectadas. Se aplica a partir de la siguiente sesión.',
+  'settings.agentPermission.saveFailed': 'No se pudo guardar el modo de permisos: {detail}',
   // Seguimiento de unidades de trabajo
   'settings.workUnit.label': 'Seguimiento de unidades de trabajo (experimental)',
   'settings.workUnit.hint':
@@ -131,6 +141,8 @@ export const es: Catalog = {
   'common.quitConfirm.title': 'Cerrar y salir de Astera',
   'common.quitConfirm.body':
     'Al cerrar la ventana, Astera se cierra y se finalizarán {count} sesiones en curso. ¿Continuar?',
+  'common.quitConfirm.bodyKept':
+    'Al cerrar la ventana, Astera se cierra. Las {count} sesiones en curso siguen ejecutándose y volverán la próxima vez que abras Astera. ¿Continuar?',
   // index.ts — system tray context menu
   'common.trayOpen': 'Abrir',
   'common.trayQuit': 'Salir',
@@ -191,6 +203,10 @@ export const es: Catalog = {
   'settings.info.registeredAccounts': 'Cuentas registradas',
   'settings.info.update': 'Actualización',
   'settings.info.cliNotDetected': 'No detectado',
+  'settings.info.host': 'Host en segundo plano',
+  'settings.info.hostConnected': 'Conectado · protocolo {protocol} · desde hace {uptime}',
+  'settings.info.hostNotConnected': 'Sin conexión',
+  'settings.info.hostNotConnectedWhy': 'Sin conexión · {detail}',
   'settings.slack.save': 'Guardar',
   'settings.slack.saved': 'Guardado',
   'settings.slack.saveFailed': 'No se pudo guardar la configuración de Slack: {detail}',
@@ -249,6 +265,17 @@ export const es: Catalog = {
   'settings.resumeStrategy.original.label': 'Reanudar la sesión original',
   'settings.resumeStrategy.original.hint': 'Continúa la conversación con el resume propio del CLI.',
   'settings.resumeStrategy.saveFailed': 'No se pudo guardar la estrategia de reanudación: {detail}',
+  'settings.jobContinuity.label': 'Continuidad de trabajos (experimental)',
+  'settings.jobContinuity.hint':
+    'Mantiene los trabajos recuperables tras fallos y reinicios. ' +
+    'Usa el estado duradero del trabajo, la recuperación de la sesión nativa y la reanudación inteligente cuando hace falta.',
+  'settings.jobContinuity.smartResumeTurnedOn':
+    'Continuidad de trabajos activada. La reanudación inteligente también se activó para una recuperación automática completa.',
+  'settings.jobContinuity.turnOffSmartResume.title': '¿Desactivar la reanudación inteligente?',
+  'settings.jobContinuity.turnOffSmartResume.body':
+    'La continuidad de trabajos seguirá activada, pero un trabajo puede detenerse cuando no se pueda recuperar su sesión original de Claude Code o Codex.',
+  'settings.jobContinuity.turnOffSmartResume.confirm': 'Desactivar',
+  'settings.jobContinuity.saveFailed': 'No se pudo guardar el ajuste de continuidad de trabajos: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': 'Fuente latina del terminal',
   'settings.font.hangul': 'Fuente hangul del terminal',
@@ -946,6 +973,7 @@ export const es: Catalog = {
   'jobs.state.blocked': 'Esperando a una persona',
   'jobs.run.running': 'en curso',
   'jobs.run.start': 'Ejecutar',
+  'jobs.run.starting': 'Iniciando…',
   'jobs.run.pause': 'Pausar',
   'jobs.run.pauseHint': 'Detiene esta programación; las tareas en curso también se detienen',
   'jobs.run.pauseConfirmTitle': 'Pausar la programación',
@@ -1010,6 +1038,32 @@ export const es: Catalog = {
   'jobs.event.gateResolved': 'decidido',
   'jobs.event.limitHit': 'límite alcanzado',
   'jobs.event.resumed': 'worker reanudado',
+  'jobs.event.runtimeLost': 'entorno perdido',
+  'jobs.event.recovery': 'recuperación',
+  'jobs.recovery.resumeNative': 'reanudar la sesión',
+  'jobs.recovery.redispatch': 'volver a despachar',
+  'jobs.recovery.recheck': 'repetir la comprobación',
+  'jobs.recovery.smartResume': 'reanudar con informe',
+  'jobs.recovery.review': 'decide una persona',
+  // Por que la recuperacion decidio lo que decidio. La pregunta del Gate y la linea del historial
+  // usan la misma frase.
+  'jobs.recovery.reason.worktreeGone': 'el worktree ya no está, así que allí no se puede verificar ni continuar nada',
+  'jobs.recovery.reason.operationInProgress': 'hay un {operation} en curso en el worktree y no debe reanudarse automáticamente',
+  'jobs.recovery.reason.conflicts': 'el worktree tiene archivos en conflicto',
+  'jobs.recovery.reason.treeUnreadable': 'no se pudo leer el worktree, así que nada de su estado es fiable',
+  'jobs.recovery.reason.journalUnreadable': 'no se pudo leer el registro, así que nada de este intento es fiable',
+  'jobs.recovery.reason.nativeSession': 'la sesión propia del agente se puede reanudar, así que la conversación continúa',
+  'jobs.recovery.reason.committedWithCheck': 'el worker hizo commit antes de perderse, así que su comprobación decide el resultado',
+  'jobs.recovery.reason.committedNoCheck': 'el worker hizo commit antes de perderse y esta tarea no tiene comprobación que demuestre el resultado',
+  'jobs.recovery.reason.producedNothing': 'el worker no produjo nada, así que reiniciarlo no duplica trabajo',
+  'jobs.recovery.reason.promptNeverLeft': 'el prompt nunca salió de la aplicación, así que no se inició nada',
+  'jobs.recovery.reason.briefing': 'el worktree tiene trabajo sin terminar, así que un worker nuevo empieza desde un informe',
+  'jobs.recovery.reason.smartResumeOff': 'el worktree tiene trabajo sin terminar y la reanudación inteligente está desactivada',
+  'jobs.recovery.reason.coordinatorRun': 'un coordinador dirige este Job y decide qué se inicia, así que la aplicación no inició nada por su cuenta',
+  'jobs.recovery.gate.question': 'El worker de esta tarea se perdió y no se pudo continuar automáticamente: {reason}.',
+  'jobs.recovery.gate.reviewFirst': 'Revisa el worktree antes de responder.',
+  'jobs.recovery.gate.unsafeNote': 'No se ha tocado nada del worktree.',
+  'jobs.recovery.gate.restart': 'Reiniciar con un worker nuevo',
   'jobs.event.status': 'estado',
   'jobs.event.workerDone': 'informe del worker',
   'jobs.event.question': 'pregunta',

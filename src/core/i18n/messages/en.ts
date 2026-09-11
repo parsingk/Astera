@@ -21,6 +21,16 @@ export const en: Record<keyof typeof ko, string> = {
     'It does not apply to sessions that are already open — only new sessions get it. ' +
     'Ask the session you want to orchestrate with to run astera help for the full usage guide.',
   'settings.orchestration.saveFailed': 'Could not save the orchestration setting: {detail}',
+  // Agent permission mode
+  'settings.agentPermission.label': 'Run agents without permission checks',
+  'settings.agentPermission.hint':
+    'Every agent session the app starts runs without permission prompts ' +
+    '(--dangerously-skip-permissions for claude, --dangerously-bypass-approvals-and-sandbox for codex). ' +
+    'On by default. A Job worker always starts in a worktree created moments earlier: that folder has no ' +
+    'approval history, and the allow list built up in the project (.claude/settings.local.json) does not ' +
+    'follow it there, so with this off a worker stalls on its first command. ' +
+    'Sessions already running are unaffected. It applies from the next session.',
+  'settings.agentPermission.saveFailed': 'Could not save the permission mode: {detail}',
   // Work unit tracking
   'settings.workUnit.label': 'Work unit tracking (experimental)',
   'settings.workUnit.hint':
@@ -171,6 +181,10 @@ export const en: Record<keyof typeof ko, string> = {
   'common.quitConfirm.title': 'Close and quit Astera',
   'common.quitConfirm.body':
     'Closing the window quits Astera, and {count} running session(s) will be terminated. Continue?',
+  'common.quitConfirm.bodyKept':
+    'Closing the window quits Astera. {count} running session(s) keep running and come back the next time you open Astera. Continue?',
+  'common.quitConfirm.bodyMixed':
+    'Closing the window quits Astera. {kept} running session(s) keep running and come back the next time you open Astera; {ended} will be terminated. Continue?',
   'common.trayOpen': 'Open',
   'common.trayQuit': 'Quit',
   'session.rail.toggleSidebar': 'Toggle sidebar',
@@ -227,6 +241,12 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.info.registeredAccounts': 'Registered accounts',
   'settings.info.update': 'Update',
   'settings.info.cliNotDetected': 'Not detected',
+  'settings.info.host': 'Background host',
+  'settings.info.hostConnected': 'Connected · protocol {protocol} · up {uptime}',
+  'settings.info.hostHolding':
+    'holding {sessions} session(s), {terminals} terminal(s), {runs} run(s)',
+  'settings.info.hostNotConnected': 'Not connected',
+  'settings.info.hostNotConnectedWhy': 'Not connected · {detail}',
   'settings.slack.save': 'Save',
   'settings.slack.saved': 'Saved',
   'settings.slack.saveFailed': 'Could not save the Slack settings: {detail}',
@@ -281,6 +301,17 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.resumeStrategy.original.label': 'Resume original session',
   'settings.resumeStrategy.original.hint': "Continues the conversation with the CLI's own resume.",
   'settings.resumeStrategy.saveFailed': 'Could not save the resume strategy: {detail}',
+  'settings.jobContinuity.label': 'Job Continuity (experimental)',
+  'settings.jobContinuity.hint':
+    'Keep Jobs recoverable across crashes and restarts. ' +
+    'Uses durable job state, native session recovery, and Smart Resume when needed.',
+  'settings.jobContinuity.smartResumeTurnedOn':
+    'Job Continuity enabled. Smart Resume was also enabled for full automatic recovery.',
+  'settings.jobContinuity.turnOffSmartResume.title': 'Turn off Smart Resume?',
+  'settings.jobContinuity.turnOffSmartResume.body':
+    'Job Continuity will remain enabled, but a Job may pause when its original Claude Code or Codex session cannot be recovered.',
+  'settings.jobContinuity.turnOffSmartResume.confirm': 'Turn off',
+  'settings.jobContinuity.saveFailed': 'Could not save the Job Continuity setting: {detail}',
   'settings.font.latin': 'Terminal font (Latin)',
   'settings.font.hangul': 'Terminal font (Hangul)',
   'settings.font.system': 'System default',
@@ -312,6 +343,10 @@ export const en: Record<keyof typeof ko, string> = {
   'update.toast.installNow': 'Install now',
   'update.confirm.title': 'Install and restart now',
   'update.confirm.body': '{count} running session(s) will be terminated. Continue?',
+  'update.confirm.bodyKept':
+    '{count} running session(s) keep running while Astera restarts. Whether the new version takes them back depends on the update, so they may not come back. Continue?',
+  'update.confirm.bodyMixed':
+    '{ended} running session(s) will be terminated. The other {kept} keep running while Astera restarts, and whether the new version takes them back depends on the update. Continue?',
   'update.gate.title': 'Update required',
   'update.gate.body': 'Please update to version {version}',
   'update.gate.bodyNoVersion': 'Please update to continue',
@@ -605,6 +640,8 @@ export const en: Record<keyof typeof ko, string> = {
   'session.terminal.trustAccepting': 'Automatically accepting folder trust…',
   'session.terminal.weeklyLimitWaiting': 'Weekly limit reached — resuming automatically at {time}',
   'session.terminal.limitWaiting': 'Limit reached — resuming automatically at {time}',
+  'session.terminal.rollAdopted':
+    'Taken back after a restart — the limit on this account is unknown, so it will not switch until Codex reports usage again',
   'session.toast.stalled':
     'Session “{title}” is stuck — automatic resume failed, it needs a look',
   'session.terminal.loadingContent': 'Loading content…',
@@ -916,6 +953,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.state.blocked': 'Waiting for a person',
   'jobs.run.running': 'in progress',
   'jobs.run.start': 'Run',
+  'jobs.run.starting': 'Starting…',
   'jobs.run.pause': 'Pause',
   'jobs.run.pauseHint': 'Holds this schedule — running tasks stop too',
   'jobs.run.pauseConfirmTitle': 'Pause the schedule',
@@ -979,6 +1017,32 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.event.gateResolved': 'decided',
   'jobs.event.limitHit': 'usage limit hit',
   'jobs.event.resumed': 'worker resumed',
+  'jobs.event.runtimeLost': 'runtime lost',
+  'jobs.event.recovery': 'recovery',
+  'jobs.recovery.resumeNative': 'resume the session',
+  'jobs.recovery.redispatch': 're-dispatch',
+  'jobs.recovery.recheck': 're-run the check',
+  'jobs.recovery.smartResume': 'hand over a briefing',
+  'jobs.recovery.review': 'ask a person',
+  // Why recovery decided what it did. The Gate's question and the Timeline row read the same
+  // sentence; the table in core/recovery/decide.ts picks one of these keys per row.
+  'jobs.recovery.reason.worktreeGone': 'the worktree is gone, so nothing can be verified or continued there',
+  'jobs.recovery.reason.operationInProgress': 'a {operation} is in progress in the worktree and must not be resumed automatically',
+  'jobs.recovery.reason.conflicts': 'the worktree holds conflicted files',
+  'jobs.recovery.reason.treeUnreadable': 'the worktree could not be read, so nothing about it can be relied on',
+  'jobs.recovery.reason.journalUnreadable': 'the journal could not be read, so nothing about this attempt can be relied on',
+  'jobs.recovery.reason.nativeSession': 'the agent own session can be resumed, so the conversation continues',
+  'jobs.recovery.reason.committedWithCheck': 'the worker committed before it was lost, so its check decides the outcome',
+  'jobs.recovery.reason.committedNoCheck': 'the worker committed before it was lost and this Task has no check to prove the result',
+  'jobs.recovery.reason.producedNothing': 'the worker produced nothing, so restarting it duplicates no work',
+  'jobs.recovery.reason.promptNeverLeft': 'the prompt never left the app, so nothing was started',
+  'jobs.recovery.reason.briefing': 'the worktree holds unfinished work, so a new worker starts from a briefing',
+  'jobs.recovery.reason.smartResumeOff': 'the worktree holds unfinished work and Smart Resume is off',
+  'jobs.recovery.reason.coordinatorRun': 'a coordinator drives this Job and decides what to start, so the app started nothing on its own',
+  'jobs.recovery.gate.question': 'The worker for this Task was lost and could not be continued automatically: {reason}.',
+  'jobs.recovery.gate.reviewFirst': 'Review the worktree before answering.',
+  'jobs.recovery.gate.unsafeNote': 'Nothing in the worktree has been touched.',
+  'jobs.recovery.gate.restart': 'Restart with a new worker',
   'jobs.event.status': 'status',
   'jobs.event.workerDone': 'worker report',
   'jobs.event.question': 'question',

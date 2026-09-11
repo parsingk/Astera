@@ -23,6 +23,16 @@ export const ja: Catalog = {
     'すでに開いているセッションには適用されません — 新しいセッションから有効になります。' +
     'オーケストレーターとして使うセッションで astera help を実行させると、詳しい使い方が得られます。',
   'settings.orchestration.saveFailed': 'オーケストレーション設定を保存できませんでした: {detail}',
+  // エージェント権限モード
+  'settings.agentPermission.label': '権限確認なしでエージェントを実行',
+  'settings.agentPermission.hint':
+    'アプリが起動するすべてのエージェントセッションを権限確認なしで実行します' +
+    '(claude は --dangerously-skip-permissions、codex は --dangerously-bypass-approvals-and-sandbox)。' +
+    '既定はオンです。Job のワーカーは毎回新しく作られた worktree で起動しますが、そのフォルダには承認履歴がなく、' +
+    'プロジェクトに蓄積した許可リスト(.claude/settings.local.json)も引き継がれないため、' +
+    'オフにするとワーカーは最初のコマンドで停止します。' +
+    'すでに開いているセッションには適用されません。次のセッションから有効です。',
+  'settings.agentPermission.saveFailed': '権限モードを保存できませんでした: {detail}',
   // Work Unit 追跡
   'settings.workUnit.label': '作業単位の追跡（実験）',
   'settings.workUnit.hint':
@@ -129,6 +139,8 @@ export const ja: Catalog = {
   'common.quitConfirm.title': '閉じて Astera を終了',
   'common.quitConfirm.body':
     'ウィンドウを閉じると Astera が終了し、進行中のセッション {count} 件も終了します。続行しますか？',
+  'common.quitConfirm.bodyKept':
+    'ウィンドウを閉じると Astera が終了します。進行中のセッション {count} 件はそのまま実行され続け、次に Astera を開いたときに戻ります。続行しますか？',
   // index.ts — system tray context menu
   'common.trayOpen': '開く',
   'common.trayQuit': '終了',
@@ -190,6 +202,10 @@ export const ja: Catalog = {
   'settings.info.registeredAccounts': '登録アカウント',
   'settings.info.update': 'アップデート',
   'settings.info.cliNotDetected': '未検出',
+  'settings.info.host': 'バックグラウンドホスト',
+  'settings.info.hostConnected': '接続済み · プロトコル {protocol} · {uptime} 前から',
+  'settings.info.hostNotConnected': '未接続',
+  'settings.info.hostNotConnectedWhy': '未接続 · {detail}',
   'settings.slack.save': '保存',
   'settings.slack.saved': '保存しました',
   'settings.slack.saveFailed': 'Slack 設定を保存できませんでした: {detail}',
@@ -244,6 +260,17 @@ export const ja: Catalog = {
   'settings.resumeStrategy.original.label': '元のセッションを再開',
   'settings.resumeStrategy.original.hint': '従来の Resume で会話を続けます。',
   'settings.resumeStrategy.saveFailed': '再開方法を保存できませんでした: {detail}',
+  'settings.jobContinuity.label': 'ジョブの継続 (実験的)',
+  'settings.jobContinuity.hint':
+    'クラッシュや再起動をまたいでジョブを復旧できる状態に保ちます。' +
+    'ジョブの状態をディスクに残し、エージェントの元のセッションを復元し、必要なときはスマート再開を使います。',
+  'settings.jobContinuity.smartResumeTurnedOn':
+    'ジョブの継続を有効にしました。完全な自動復旧のため、スマート再開も有効にしました。',
+  'settings.jobContinuity.turnOffSmartResume.title': 'スマート再開を無効にしますか？',
+  'settings.jobContinuity.turnOffSmartResume.body':
+    'ジョブの継続は有効のままですが、元の Claude Code や Codex のセッションを復元できない場合、ジョブが停止することがあります。',
+  'settings.jobContinuity.turnOffSmartResume.confirm': '無効にする',
+  'settings.jobContinuity.saveFailed': 'ジョブの継続の設定を保存できませんでした: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': 'ターミナルの欧文フォント',
   'settings.font.hangul': 'ターミナルのハングルフォント',
@@ -933,6 +960,7 @@ export const ja: Catalog = {
   'jobs.state.blocked': '人を待っている',
   'jobs.run.running': '進行中',
   'jobs.run.start': '実行',
+  'jobs.run.starting': '開始しています…',
   'jobs.run.pause': '一時停止',
   'jobs.run.pauseHint': 'この予約を止めます — 実行中の Task も停止します',
   'jobs.run.pauseConfirmTitle': '予約を一時停止',
@@ -996,6 +1024,31 @@ export const ja: Catalog = {
   'jobs.event.gateResolved': '判断済み',
   'jobs.event.limitHit': '上限停止',
   'jobs.event.resumed': 'ワーカー再開',
+  'jobs.event.runtimeLost': '実行環境を喪失',
+  'jobs.event.recovery': '復旧',
+  'jobs.recovery.resumeNative': 'セッション再開',
+  'jobs.recovery.redispatch': '再配置',
+  'jobs.recovery.recheck': '検査をやり直し',
+  'jobs.recovery.smartResume': '引き継ぎ再開',
+  'jobs.recovery.review': '人が判断',
+  // 復旧がなぜそう判断したか。Gate の質問と履歴の行が同じ文を使う。
+  'jobs.recovery.reason.worktreeGone': 'ワークツリーが失われ、そこでは何も確認も継続もできません',
+  'jobs.recovery.reason.operationInProgress': 'ワークツリーで {operation} が進行中のため、自動で再開してはいけません',
+  'jobs.recovery.reason.conflicts': 'ワークツリーに競合したファイルがあります',
+  'jobs.recovery.reason.treeUnreadable': 'ワークツリーを読めなかったため、その状態は何も信頼できません',
+  'jobs.recovery.reason.journalUnreadable': '記録を読めなかったため、この試行について何も信頼できません',
+  'jobs.recovery.reason.nativeSession': 'エージェント自身のセッションを再開できるため、会話がそのまま続きます',
+  'jobs.recovery.reason.committedWithCheck': 'ワーカーは失われる前にコミットしており、検査が結果を判定します',
+  'jobs.recovery.reason.committedNoCheck': 'ワーカーは失われる前にコミットしましたが、このタスクには結果を証明する検査がありません',
+  'jobs.recovery.reason.producedNothing': 'ワーカーは何も生成しなかったため、再開しても作業は重複しません',
+  'jobs.recovery.reason.promptNeverLeft': 'プロンプトがアプリから出ておらず、何も始まっていません',
+  'jobs.recovery.reason.briefing': 'ワークツリーに未完了の作業が残っているため、新しいワーカーが引き継ぎ文から始めます',
+  'jobs.recovery.reason.smartResumeOff': 'ワークツリーに未完了の作業が残っていますが、スマート再開がオフです',
+  'jobs.recovery.reason.coordinatorRun': 'この Job はコーディネーターが管理しており、何を始めるかはコーディネーターが決めるため、アプリは自分では起動しませんでした',
+  'jobs.recovery.gate.question': 'このタスクのワーカーが失われ、自動で継続できませんでした: {reason}。',
+  'jobs.recovery.gate.reviewFirst': '回答する前にワークツリーを確認してください。',
+  'jobs.recovery.gate.unsafeNote': 'ワークツリーには何も手を加えていません。',
+  'jobs.recovery.gate.restart': '新しいワーカーで再開',
   'jobs.event.status': '状況',
   'jobs.event.workerDone': 'ワーカー報告',
   'jobs.event.question': '質問',

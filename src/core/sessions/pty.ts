@@ -1,3 +1,5 @@
+import type { PtyMeta } from '../host/protocol'
+
 export interface PtyLike {
   pid: number
   onData(cb: (data: string) => void): void
@@ -7,13 +9,57 @@ export interface PtyLike {
   kill(): void
   pause(): void
   resume(): void
+  /** Merges these keys into the note this pty was spawned with (`PtySpawnOptions.meta`'s `restore`),
+   *  so something the app learns or changes after the spawn is what it reads back when it adopts the
+   *  pty again after a restart.
+   *
+   *  **Optional because only a pty that outlives the app has anywhere to keep a note.** node-pty's
+   *  pty is this process's own child and dies with it, so there is no later app to read one and the
+   *  method is simply absent there. Every caller is `pty.remember?.(…)`, which is a no-op with no
+   *  Host — the standing rule that the app without one behaves exactly as it always has. */
+  remember?(patch: Record<string, unknown>): void
+  /** Whether the process behind this pty keeps running after the app quits — true for a pty the Host
+   *  owns, false for one that is this process's own child.
+   *
+   *  **Written by whoever made the pty, read by whoever has to tear it down.** `createPtyRouter` is
+   *  the one place that chooses between the two factories, so it stamps every handle it hands out
+   *  with the answer for that call; `createHostPtyFactory`'s `attach` stamps its own, because
+   *  adoption after a restart is the one pty creation that never goes through the router. A quit
+   *  arriving in between — the Host is starting, so an early session went to node-pty while a later
+   *  one went to the Host — then has a per-pty answer instead of one answer for all of them, and the
+   *  app's own children are ended exactly as they were before a Host existed.
+   *
+   *  Optional so that the stub ptys the managers' own tests build need not carry it; absent reads as
+   *  false, which is the safe direction — an unmarked pty is treated as the app's own and torn down,
+   *  never left behind as an orphan nothing can reach. */
+  outlivesApp?: boolean
 }
+
+/** The exit code a pty handle reports when the **app** lost sight of the process, rather than the
+ *  process reporting how it ended.
+ *
+ *  Only the Host-backed handle produces it, from `onHostGone`: the socket to the Host went away, so no
+ *  `pty-exit` can ever arrive for that pty and a record left 'running' would wait for one forever. The
+ *  process itself is very probably still alive — the Host outlives the app, and the connection
+ *  dropping is not the Host dying.
+ *
+ *  Not a code any real process can report, which is what makes it usable as a signal: node-pty gives
+ *  a status from `waitpid` on posix (0-255) or a Windows exit code, and neither is negative.
+ *
+ *  Read it wherever an exit would otherwise be taken as proof the work ended — orchestration's
+ *  `handleExit` is the one place today, because closing a Dispatch there is what makes P1's reconciler
+ *  start a second agent in a worktree the first is still working in. */
+export const PTY_LOST_SIGHT_EXIT_CODE = -1
 
 export interface PtySpawnOptions {
   cwd: string
   cols: number
   rows: number
   env: Record<string, string | undefined>
+  /** What the app needs to rebuild its own record for this pty after a restart. Only the Host-backed
+   *  factory uses it; nodePtyFactory ignores it, which is what keeps the two interchangeable
+   *  (slice 2 design §4). */
+  meta?: PtyMeta
 }
 
 /**
@@ -59,8 +105,30 @@ export function withExitedPtyGuard(p: PtyLike): PtyLike {
     },
     kill: () => p.kill(),
     pause: () => p.pause(),
-    resume: () => p.resume()
+    resume: () => p.resume(),
+    // Forwarded rather than dropped. This wrapper only ever sees a node-pty handle today, where both
+    // are absent anyway — but a rebuilt object silently answers "the app made me" for a pty the Host
+    // owns, which at quit is a session the person was promised would survive being killed instead.
+    // A wrapper that loses a field is a hard defect to see, so it does not lose one.
+    outlivesApp: p.outlivesApp,
+    remember: p.remember ? (patch) => p.remember?.(patch) : undefined
   }
+}
+
+/** What `nodePtyFactory` hands `pty.spawn`. Written field by field rather than spread, so `meta` — a
+ *  note for the Host, meaningless to node-pty — cannot reach it: the same explicit shape
+ *  `createHostPtyFactory` builds for `pty-spawn`, and the same four fields this call had before `meta`
+ *  was added. Lives here, apart from the factory, because `nodePtyFactory` loads node-pty's native
+ *  binding and so cannot be imported by a vitest run — the reason `withExitedPtyGuard` is tested from
+ *  this file too. */
+export function nodePtySpawnOptions(opts: PtySpawnOptions): {
+  name: string
+  cwd: string
+  cols: number
+  rows: number
+  env: Record<string, string | undefined>
+} {
+  return { name: 'xterm-256color', cwd: opts.cwd, cols: opts.cols, rows: opts.rows, env: opts.env }
 }
 
 /** args as a string is node-pty's "command line verbatim" form (its own type is

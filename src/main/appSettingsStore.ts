@@ -4,7 +4,8 @@ import { isLang, type Lang } from '../core/i18n'
 import { sanitizeFontFamily } from '../core/terminal/font'
 import type { TerminalFont } from '../core/terminal/font'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from '../core/theme/themes'
-import type { ResumeStrategy } from '../core/types'
+import type { AgentPermissionMode, ResumeStrategy } from '../core/types'
+import { applyContinuityToggle } from '../core/continuity/settings'
 import {
   readGeneratorSettings,
   writableGeneratorSettings,
@@ -18,8 +19,8 @@ import {
 } from '../core/notify/settings'
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, the
- *  orchestration toggle, the work unit tracking toggle, the agent browser toggle, the resume strategy,
- *  the terminal font, the theme, and the desktop notification flags.
+ *  orchestration toggle, the work unit tracking toggle, the agent browser toggle, the Job Continuity
+ *  toggle, the resume strategy, the terminal font, the theme, and the desktop notification flags.
  *  A null lang means the user has never picked one explicitly — the caller derives it with
  *  pickInitialLang(app.getLocale()). The derived value is not stored. */
 export class AppSettingsStore {
@@ -29,6 +30,9 @@ export class AppSettingsStore {
   private orchestrationEnabled = false
   private workUnitTrackingEnabled = false
   private agentBrowserEnabled = false
+  /** Job Continuity (spec §3). Off by default; enabling it can also set resumeStrategy — see
+   *  setJobContinuityEnabled. */
+  private jobContinuityEnabled = false
   /** PR-status background polling (design doc §4, the fallback lever). Default on; the narrowing
    *  is inverted from the toggles above — the file is user-editable, so only an explicit false
    *  reads as off, and anything else (absent, corrupt) reads as on. */
@@ -36,6 +40,9 @@ export class AppSettingsStore {
   /** 설명을 누가·무엇으로 만드는가. 비어 있으면 생성하지 않는다 (설계 D2) */
   private generator: GeneratorSettings = {}
   private resumeStrategy: ResumeStrategy = 'original'
+  /** 에이전트를 권한 확인 없이 띄우는가. **기본은 'yolo'** — 그 근거는 AgentPermissionMode 에 있다.
+   *  githubPolling 과 같은 방향의 좁히기다: 기본이 켜짐인 값이라 파일에 명시된 'manual' 만 끈다. */
+  private agentPermissionMode: AgentPermissionMode = 'yolo'
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID
   /** Desktop notifications, one flag per event. Written and read as one object, so the four move
@@ -64,6 +71,8 @@ export class AppSettingsStore {
         (parsed as { workUnitTrackingEnabled?: unknown }).workUnitTrackingEnabled === true
       this.agentBrowserEnabled =
         (parsed as { agentBrowserEnabled?: unknown }).agentBrowserEnabled === true
+      this.jobContinuityEnabled =
+        (parsed as { jobContinuityEnabled?: unknown }).jobContinuityEnabled === true
       this.githubPolling = (parsed as { githubPolling?: unknown }).githubPolling !== false
       // Narrowed on read, like generator and terminalFont and for the same reason: the file is
       // user-editable, and the narrowing is per flag's own default (see readDesktopNotify).
@@ -75,6 +84,12 @@ export class AppSettingsStore {
       // Narrowed to === 'smart' — the file is user-editable, so anything else ('ask', 42, null) reads as 'original'
       this.resumeStrategy =
         (parsed as { resumeStrategy?: unknown }).resumeStrategy === 'smart' ? 'smart' : 'original'
+      // Narrowed the other way round, because the default is the other way round: only the explicit
+      // 'manual' turns the bypass off, and anything else the user-editable file holds reads as 'yolo'.
+      this.agentPermissionMode =
+        (parsed as { agentPermissionMode?: unknown }).agentPermissionMode === 'manual'
+          ? 'manual'
+          : 'yolo'
       // Sanitised on read as well as on write: the file is user-editable, and the value ends up in a
       // CSS font-family string. Anything that does not survive is treated as unset.
       const font = (parsed as { terminalFont?: unknown }).terminalFont
@@ -95,10 +110,12 @@ export class AppSettingsStore {
         this.orchestrationEnabled = false
         this.workUnitTrackingEnabled = false
         this.agentBrowserEnabled = false
+        this.jobContinuityEnabled = false
         this.githubPolling = true
         this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
         this.generator = {}
         this.resumeStrategy = 'original'
+        this.agentPermissionMode = 'yolo'
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
         return { recovered: false }
@@ -111,10 +128,12 @@ export class AppSettingsStore {
       this.orchestrationEnabled = false
       this.workUnitTrackingEnabled = false
       this.agentBrowserEnabled = false
+      this.jobContinuityEnabled = false
       this.githubPolling = true
       this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
       this.generator = {}
       this.resumeStrategy = 'original'
+      this.agentPermissionMode = 'yolo'
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
       return { recovered: true }
@@ -171,6 +190,16 @@ export class AppSettingsStore {
     await this.persist()
   }
 
+  getAgentPermissionMode(): AgentPermissionMode {
+    return this.agentPermissionMode
+  }
+
+  /** 워커와 코디네이터를 띄우는 배선이 이 값을 읽어 bypassPermissions 로 넘긴다(src/main/ipc.ts). */
+  async setAgentPermissionMode(mode: AgentPermissionMode): Promise<void> {
+    this.agentPermissionMode = mode
+    await this.persist()
+  }
+
   getGithubPolling(): boolean {
     return this.githubPolling
   }
@@ -214,6 +243,23 @@ export class AppSettingsStore {
     await this.persist()
   }
 
+  getJobContinuityEnabled(): boolean {
+    return this.jobContinuityEnabled
+  }
+
+  /** One persist for both fields: the rule may change resumeStrategy as well (spec §3.2), and
+   *  writing them separately would leave a window where the file says on/original. */
+  async setJobContinuityEnabled(enabled: boolean): Promise<{ smartResumeTurnedOn: boolean }> {
+    const r = applyContinuityToggle(
+      { jobContinuity: this.jobContinuityEnabled, resumeStrategy: this.resumeStrategy },
+      enabled
+    )
+    this.jobContinuityEnabled = r.jobContinuity
+    this.resumeStrategy = r.resumeStrategy
+    await this.persist()
+    return { smartResumeTurnedOn: r.smartResumeTurnedOn }
+  }
+
   getTerminalFont(): TerminalFont {
     return this.terminalFont
   }
@@ -246,10 +292,12 @@ export class AppSettingsStore {
       orchestrationEnabled?: boolean
       workUnitTrackingEnabled?: boolean
       agentBrowserEnabled?: boolean
+      jobContinuityEnabled?: boolean
       githubPolling?: boolean
       desktopNotify?: DesktopNotifySettings
       generator?: GeneratorSettings
       resumeStrategy?: ResumeStrategy
+      agentPermissionMode?: AgentPermissionMode
       terminalFont?: TerminalFont
       theme?: ThemeId
     } = {}
@@ -258,7 +306,11 @@ export class AppSettingsStore {
     if (this.orchestrationEnabled) data.orchestrationEnabled = true
     if (this.workUnitTrackingEnabled) data.workUnitTrackingEnabled = true
     if (this.agentBrowserEnabled) data.agentBrowserEnabled = true
+    if (this.jobContinuityEnabled) data.jobContinuityEnabled = true
     if (this.githubPolling === false) data.githubPolling = false
+    // Written only when it is off, for the same reason githubPolling is: the default belongs in one
+    // place, and that place is load's narrowing.
+    if (this.agentPermissionMode === 'manual') data.agentPermissionMode = 'manual'
     // Every flag at its default leaves the key out of the file entirely; load reconstructs those
     // defaults from an absent key, so nothing is lost.
     const desktopNotify = writableDesktopNotify(this.desktopNotify)

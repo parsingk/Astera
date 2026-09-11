@@ -9,10 +9,11 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
-  blockForReview,
-  createGate,
   deleteRuns,
+  detachCoordinator,
   emptyState,
+  endedUnproven,
+  interruptStalledTask,
   type OrchState
 } from '../../core/orchestration/state'
 
@@ -41,7 +42,43 @@ export class OrchestrationStore {
 
   constructor(private filePath: string) {}
 
-  async load(): Promise<{
+  async load(a?: {
+    /** What the caller could learn about the sessions that outlived the app, in three answers — and
+     *  they are three answers, not two, because reading the third as the first is what starts a
+     *  second agent in a worktree the first is still working in.
+     *
+     *  - **A set**: the Host answered, and these are the sessions it is still running. A Dispatch
+     *    whose session is among them did not die with the app, so closing it as outcome_unknown would
+     *    be a lie — and P1's reconciler reads a closed Dispatch with no outcome as a lost worker and
+     *    starts another agent for that Task. An empty set is a real answer: the Host had nothing.
+     *  - **`'unknown'`**: there is a Host, and it could not be asked — it never answered the list, or
+     *    never finished the handshake, or the sweep that reads it failed. Nothing here is evidence
+     *    that any worker died, so no open Dispatch is closed. The cost is a Job that stalls until a
+     *    person or the next restart looks; the alternative costs two agents in one worktree.
+     *  - **Absent**: there is no Host, so nothing could have survived. This is what was always true
+     *    before the Host owned the terminals, and it is what this does with no argument at all.
+     *
+     *  **This is a deliberate departure from slice 2 design §8**, whose risk table has the cleanup
+     *  close every Dispatch it cannot prove alive. That table was written before the app could tell
+     *  "no Host" from "no answer"; now that it can, the two are not the same evidence. */
+    aliveSessionIds?: ReadonlySet<string> | 'unknown'
+    /** Dispatches an undelivered `worker_done` in the pending-reports queue already speaks for
+     *  (`reportedDispatchIdsOf` in core/orchestration/pendingReports.ts).
+     *
+     *  **A third reason to leave a Dispatch open, and the queue would be inert without it.** A
+     *  worker that finished while the app was closed wrote its report to a file; that report is
+     *  applied a moment later in the same boot. Closing the Dispatch here first would throw it away
+     *  — `applyWorkerDone` answers the idempotent `alreadyReported` for a Dispatch that already has
+     *  `endedAt` — and would hand P1's reconciler a Dispatch its `isLost` reads as a lost worker, so
+     *  a second agent would start in the worktree the first one just committed in. That is the whole
+     *  failure the queue exists to prevent, and it is not covered by `aliveSessionIds`: the case
+     *  that matters most is precisely the one where nothing survived to be alive — the machine
+     *  rebooted, or the Host was killed, after the worker had already finished and reported.
+     *
+     *  Only a completion report is evidence; an escalation is a worker saying it is stuck and still
+     *  there, which is why the pure helper leaves those out. */
+    reportedDispatchIds?: ReadonlySet<string>
+  }): Promise<{
     recovered: boolean
     unknownOutcomes: number
     pruned: number
@@ -49,6 +86,24 @@ export class OrchestrationStore {
     /** 재시작에 끊긴 검토. staleValidations 와 따로 센다 — 배선이 이 숫자를 시작 로그에 적으므로
      *  한데 묶으면 검토가 끊긴 재시작이 "검증이 끊겼다"고 기록된다. */
     staleReviews: number
+    /** Tasks the cleanup wanted to interrupt and could not, because the Dispatch under them stayed
+     *  open — `createGate` refuses to gate a Task with an open Dispatch, and `blockForReview` refuses
+     *  for its own reasons. They are left exactly as they were, which for a validating or reviewing
+     *  Task means it stays that way until something else moves it. Counted so the wiring can say so:
+     *  a person looking at a Task stuck in validating has no other way to find out why. */
+    stuckInterruptions: number
+    /** Runs whose coordinator did not outlive the restart, and whose slot this sweep emptied.
+     *
+     *  **Counted because emptying it is what turns two things back on**, and a person needs to know
+     *  which Job they happened to: `inbox.ts` only nets Runs with no coordinator, and the Jobs list
+     *  only offers the restart button then (`view.ts`). A slot left naming a dead session is a Job
+     *  with nobody to answer its workers and no button to fix it — measured: a worker asked a
+     *  question and nothing answered until a person ran the CLI by hand. */
+    coordinatorsLost: number
+    /** The file as read — after the field migrations, before the restart cleanup — or null when
+     *  there was nothing to read. Job Continuity diffs this against get() so every worker the
+     *  restart lost is journaled (P0 design §5). */
+    before: OrchState | null
   }> {
     let parsed: unknown
     try {
@@ -56,16 +111,16 @@ export class OrchestrationStore {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
         this.state = emptyState()
-        return { recovered: false, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0 }
+        return { recovered: false, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null }
       }
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0 }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null }
     }
     if (!isValidState(parsed)) {
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0 }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null }
     }
 
     // isValidState only checks that the arrays exist, so the elements of parsed's arrays are
@@ -113,15 +168,33 @@ export class OrchestrationStore {
     // 빠지고 디스패치 시점에 Gate 를 연다 — 조용히 멈추지 않으므로 사람이 계정을 넣으면 곧바로 돈다.
     for (const r of st.runs as unknown as Record<string, unknown>[]) delete r.provider
 
+    // Captured here: the migrations above are in place, the cleanup below builds new objects
+    const before: OrchState = st
+
     const now = new Date().toISOString()
     // Restart cleanup: for an open Dispatch, the session died along with the app. The outcome
     // cannot be proven, so leave it as outcome_unknown and do not touch the Task (section 7 of the
     // orchestration guide).
+    //
+    // That sentence is still true for every Dispatch the Host does not have — but the Host now keeps
+    // ptys running across an app restart, so it is no longer true for all of them. A session the
+    // caller names in `aliveSessionIds` was taken back by reattachSessions and is still working, so
+    // its Dispatch stays open: closing it would be read by the recovery reconciler as a lost worker
+    // (its `isLost`), and a second agent would start on the same Task in the same worktree while the
+    // first is still in it. `'unknown'` says the caller could not find out, which is not evidence
+    // that anything died — see the argument's own doc for why that is its own answer.
+    const alive = a?.aliveSessionIds
+    const reported = a?.reportedDispatchIds
     let unknownOutcomes = 0
     const dispatches = st.dispatches.map((d) => {
       if (d.endedAt) return d
+      if (alive === 'unknown') return d
+      if (alive?.has(d.sessionId)) return d
+      // A report for this Dispatch is waiting on disk, so its worker did not die unreported — see
+      // the `reportedDispatchIds` argument's own note for what closing it here would cost.
+      if (reported?.has(d.id)) return d
       unknownOutcomes++
-      return { ...d, endedAt: now, workerState: 'outcome_unknown' as const }
+      return endedUnproven(d, now)
     })
 
     // 같은 이유로 Task 도 정리한다. validating 은 어딘가에서 검증 프로세스가 돌고 있다는 뜻인데,
@@ -135,27 +208,33 @@ export class OrchestrationStore {
     // 나쁘다: 검증에는 앱 쪽 큐가 있어 사람이 다시 돌릴 수 있지만, 검토를 다시 띄우는 명령은
     // 코디네이터에게 없고 reviewing -> dispatched 전이가 없어 --retry-of 도 거절된다. 그대로 두면
     // Task 는 영원히 reviewing 이고 그 아래 의존 서브트리 전체가 pending 에 멈춘다.
+    //
+    // **The paragraph above no longer holds for every Dispatch, so the outcome here is no longer the
+    // same for every Task.** A Dispatch the map above kept open — its session survived in the Host,
+    // or the caller could not find out — is exactly what `createGate` refuses to gate ("cannot gate a
+    // task with an open dispatch"), so `r.ok` is false and the `continue` below leaves that Task
+    // validating or reviewing. That is the right outcome: its worker may well still be running, and
+    // gating it would move a Task out from under a live agent. But it is silent, which is why those
+    // Tasks are counted into `stuckInterruptions` and the wiring logs the number.
     let staleValidations = 0
     let staleReviews = 0
+    let stuckInterruptions = 0
     let withGates: OrchState = { ...st, dispatches }
+    // **What is owed to one such Task lives in `interruptStalledTask`.** The pending-report drain
+    // writes off a Dispatch of its own when it could not deliver the report that was holding it
+    // open, and the Task under it is owed exactly this — the same Gate, with the same question,
+    // and the same silence when the transition refuses. Two copies of that rule would be two
+    // things to change the next time either half moves. What stays here is which Tasks to ask
+    // about and what to count, which is this boot's business and not the rule's.
     for (const t of st.tasks) {
-      if (t.status !== 'validating' && t.status !== 'reviewing') continue
-      // 검토는 질문을 손으로 쓰지 않고 blockForReview 에 맡긴다 — 그 질문에는 "끝난 일을 버리지 않고
-      // 이 Task 를 닫으려면 task-update --status completed" 라는 탈출구가 붙어 있고, reviewing Task
-      // 에는 그것이 꼭 필요하다: 구현이 끝나고 검증까지 통과했을 수 있는 일인데 resolveGate 는 Task 를
-      // pending 으로 돌려보내 그 일을 버린다. 문장을 여기 옮겨 적으면 같은 안내가 두 곳에 생겨
-      // 갈라진다. 검증 쪽 질문은 그대로 둔다.
-      const r =
-        t.status === 'validating'
-          ? createGate(
-              withGates,
-              { taskId: t.id, question: '앱이 재시작되어 검증이 중단되었습니다. 다시 검증할까요?' },
-              now
-            )
-          : blockForReview(withGates, { taskId: t.id, reason: '앱이 재시작되어 검토가 중단되었습니다' }, now)
-      if (!r.ok) continue // 전이가 막히면 그 Task 는 그대로 둔다 — 잃는 것보다 낫다
+      const r = interruptStalledTask(withGates, { taskId: t.id }, now)
+      if (r.stuck) {
+        stuckInterruptions++
+        continue
+      }
+      if (!r.interrupted) continue
       withGates = r.state
-      if (t.status === 'validating') staleValidations++
+      if (r.interrupted === 'validation') staleValidations++
       else staleReviews++
     }
 
@@ -190,14 +269,59 @@ export class OrchestrationStore {
     // blocked 로 옮기고 Gate 를 열어 둔 결과가 그쪽에 있다 — st 를 펼치면 그 복구가 조용히 덮인다
     // (실제로 그렇게 썼다가 store.test.ts 의 복구 테스트 셋이 잡았다). dispatches 만 따로 넘기는
     // 것은 그것이 outcome 정규화를 거친 별도 배열이기 때문이다.
-    this.state = deleteRuns({ ...withGates, dispatches }, doomed)
+    // **The coordinator slot gets the same three answers the Dispatches above got, and for the same
+    // reason.** `Run.coordinatorSessionId` is the only record of "there is someone to answer", and two
+    // recoveries read it as *absent*: `inbox.ts` nets exactly the Runs without one, and the Jobs list
+    // offers the restart button for exactly those (`view.ts`). Left naming a session that died with its
+    // Host, one stale field silences both — the Job has nobody to answer its workers and no button to
+    // fix it, which is what a worker asking a question and waiting until a person ran the CLI by hand
+    // actually was.
+    //
+    // `'unknown'` changes nothing here for the same reason it changes nothing above: emptying a slot
+    // whose coordinator is in fact alive puts "restart the coordinator" on that Run's line, and one
+    // click is a second coordinator in the worktree the first is still working in — the accident
+    // `releaseCoordinator` (src/main/ipc.ts) refuses to risk. No Host at all is a real answer: nothing
+    // could have outlived the app, so nothing did.
+    //
+    // **detachCoordinator does the emptying**, not a `delete` written here — the same discipline the
+    // `deleteRuns` note below states. The rule for what leaving a coordinator means belongs in one
+    // place, and `releaseCoordinator` already goes through it.
+    let coordinatorsLost = 0
+    let swept: OrchState = withGates
+    for (const r of withGates.runs) {
+      if (!r.coordinatorSessionId) continue
+      if (alive === 'unknown') continue
+      if (alive?.has(r.coordinatorSessionId)) continue
+      const detached = detachCoordinator(swept, { runId: r.id })
+      if (!detached.ok) continue
+      swept = detached.state
+      coordinatorsLost++
+    }
+    this.state = deleteRuns({ ...swept, dispatches }, doomed)
 
-    if (unknownOutcomes > 0 || doomed.size > 0 || staleValidations > 0 || staleReviews > 0) {
+    if (
+      unknownOutcomes > 0 ||
+      doomed.size > 0 ||
+      staleValidations > 0 ||
+      staleReviews > 0 ||
+      coordinatorsLost > 0
+    ) {
       if (doomed.size > 0) await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       // Unguarded save — the same rewrite convention as RunConfigStore and SchedulerConfigStore
       await this.save(this.state).catch(() => {})
     }
-    return { recovered: false, unknownOutcomes, pruned: doomed.size, staleValidations, staleReviews }
+    // stuckInterruptions is deliberately not in the save condition above: a stuck Task is one nothing
+    // changed, so there is nothing new to write for it.
+    return {
+      recovered: false,
+      unknownOutcomes,
+      pruned: doomed.size,
+      staleValidations,
+      staleReviews,
+      stuckInterruptions,
+      coordinatorsLost,
+      before
+    }
   }
 
   get(): OrchState {

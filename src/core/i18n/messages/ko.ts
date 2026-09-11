@@ -25,6 +25,15 @@ export const ko = {
     '이미 열려 있는 세션에는 적용되지 않습니다. 새 세션부터 동작합니다. ' +
     '오케스트레이터로 쓸 세션에서 astera help 를 실행하게 하면 전체 사용법을 얻습니다.',
   'settings.orchestration.saveFailed': '오케스트레이션 설정을 저장하지 못했습니다: {detail}',
+  // 에이전트 권한 모드
+  'settings.agentPermission.label': '권한 확인 없이 에이전트 실행',
+  'settings.agentPermission.hint':
+    '켜면 앱이 띄우는 모든 에이전트 세션이 권한 확인 없이 실행됩니다 ' +
+    '(claude 는 --dangerously-skip-permissions, codex 는 --dangerously-bypass-approvals-and-sandbox). ' +
+    '기본값은 켜짐입니다. Job 워커는 매번 새로 만든 워크트리에서 뜨는데, 그 폴더에는 승인 이력이 없고 ' +
+    '프로젝트에 쌓아 둔 허용 목록(.claude/settings.local.json)도 따라오지 않아, 끄면 워커가 첫 명령에서 멈춥니다. ' +
+    '이미 열려 있는 세션에는 적용되지 않습니다. 새 세션부터 동작합니다.',
+  'settings.agentPermission.saveFailed': '권한 모드를 저장하지 못했습니다: {detail}',
   // Work Unit 추적
   'settings.workUnit.label': '작업 단위 추적 (실험)',
   'settings.workUnit.hint':
@@ -180,8 +189,19 @@ export const ko = {
   'common.or': '또는',
   // App.tsx — Linux에서만 뜨는 창 닫기 확인. 거기서는 트레이로 숨는 대신 앱이 실제로 종료되고
   // will-quit이 실행 중 세션을 모두 죽인다. 업데이트 설치와 같은 결과이므로 같은 동의를 받는다
+  // Slice 2 of the Astera Host: the comment above still describes the no-Host case, which is now one
+  // of three. When the Host owns a session's pty, will-quit leaves it running; the Host takes a moment
+  // to start, so a session spawned at boot can be the app's own child while a later one is the Host's.
+  // App.tsx picks between the three by counting, through host.sessionsOutlivingApp() — see
+  // `quitConfirmBody`. `bodyKept` is every session surviving, `bodyMixed` is some of them.
   'common.quitConfirm.title': '닫고 Astera 종료',
   'common.quitConfirm.body': '창을 닫으면 Astera가 종료되고 진행 중인 세션 {count}개도 함께 종료됩니다. 계속할까요?',
+  'common.quitConfirm.bodyKept':
+    '창을 닫으면 Astera가 종료됩니다. 진행 중인 세션 {count}개는 계속 실행되고, 다시 열면 그대로 돌아옵니다. 계속할까요?',
+  // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
+  // still want real translations.
+  'common.quitConfirm.bodyMixed':
+    '창을 닫으면 Astera가 종료됩니다. 진행 중인 세션 중 {kept}개는 계속 실행되어 다시 열면 그대로 돌아오고, {ended}개는 함께 종료됩니다. 계속할까요?',
   // index.ts — system tray context menu
   'common.trayOpen': '열기',
   'common.trayQuit': '종료',
@@ -246,6 +266,22 @@ export const ko = {
   'settings.info.registeredAccounts': '등록 계정',
   'settings.info.update': '업데이트',
   'settings.info.cliNotDetected': '감지 안 됨',
+  'settings.info.host': '백그라운드 호스트',
+  'settings.info.hostConnected': '연결됨 · 규약 {protocol} · {uptime} 전부터',
+  // Appended to hostConnected, and **only after the Host answers what it holds** — until then the
+  // row is the connection facts alone. This row exists to answer "does my work survive if I close
+  // this?", so it names all three kinds the Host can be holding: a run's pty outlives the app just
+  // as a session's and a terminal's do (`RunManager.stopAppOwned`), and a row that left runs out
+  // told someone whose work is a long build that none of it was protected.
+  //
+  // The three figures are separated by commas, not the ' · ' the connected row joins its own parts
+  // with: nested inside that row, the same separator made one clause read as three.
+  //
+  // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
+  // still want real translations.
+  'settings.info.hostHolding': '세션 {sessions}개, 터미널 {terminals}개, 실행 {runs}개 유지 중',
+  'settings.info.hostNotConnected': '연결 안 됨',
+  'settings.info.hostNotConnectedWhy': '연결 안 됨 · {detail}',
   'settings.slack.save': '저장',
   'settings.slack.saved': '저장됨',
   'settings.slack.saveFailed': 'Slack 설정을 저장하지 못했습니다: {detail}',
@@ -300,6 +336,17 @@ export const ko = {
   'settings.resumeStrategy.original.label': '원래 세션 재개',
   'settings.resumeStrategy.original.hint': '기존 Resume 방식으로 대화를 이어갑니다.',
   'settings.resumeStrategy.saveFailed': '재개 방식을 저장하지 못했습니다: {detail}',
+  'settings.jobContinuity.label': '작업 이어가기 (실험)',
+  'settings.jobContinuity.hint':
+    '앱이 죽거나 다시 시작해도 작업을 복구할 수 있게 유지합니다. ' +
+    '작업 상태를 디스크에 남기고, 에이전트의 원래 세션을 되살리며, 필요할 때 스마트 재개를 씁니다.',
+  'settings.jobContinuity.smartResumeTurnedOn':
+    '작업 이어가기를 켰습니다. 완전한 자동 복구를 위해 스마트 재개도 함께 켰습니다.',
+  'settings.jobContinuity.turnOffSmartResume.title': '스마트 재개를 끌까요?',
+  'settings.jobContinuity.turnOffSmartResume.body':
+    '작업 이어가기는 켜진 채로 남지만, 원래의 Claude Code 나 Codex 세션을 되살릴 수 없으면 작업이 멈출 수 있습니다.',
+  'settings.jobContinuity.turnOffSmartResume.confirm': '끄기',
+  'settings.jobContinuity.saveFailed': '작업 이어가기 설정을 저장하지 못했습니다: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': '터미널 영문 폰트',
   'settings.font.hangul': '터미널 한글 폰트',
@@ -337,8 +384,23 @@ export const ko = {
   'update.toast.download': '다운로드',
   'update.toast.ready': '업데이트 v{version} 준비됨',
   'update.toast.installNow': '지금 설치',
+  // Slice 2 of the Astera Host. Installing quits the app, so this is the same three-way split the
+  // close confirmation faces, counted the same way (host.sessionsOutlivingApp) and shared with it —
+  // see `updateConfirmBody`. `body` is unchanged and still exact when the app owns every session.
+  //
+  // The two new rows stop short of the close confirmation's promise on purpose: a Host on an older
+  // protocol is retired by the app that finds it, and **only the incoming version knows whether its
+  // protocol moved**. So they say what is knowable — these sessions outlive the quit — and leave the
+  // rest to the update rather than promising a return this app cannot vouch for.
+  //
+  // es/ja have no row of their own for the two new keys and reach their English through the fallback
+  // (see `t`), the same as common.quitConfirm.bodyMixed; they still want real translations.
   'update.confirm.title': '지금 설치하고 재시작',
   'update.confirm.body': '진행 중인 세션 {count}개가 종료됩니다. 계속할까요?',
+  'update.confirm.bodyKept':
+    '진행 중인 세션 {count}개는 Astera가 재시작하는 동안에도 계속 실행됩니다. 새 버전이 이어받을지는 업데이트에 따라 다르므로 돌아오지 않을 수도 있습니다. 계속할까요?',
+  'update.confirm.bodyMixed':
+    '진행 중인 세션 중 {ended}개는 종료됩니다. 나머지 {kept}개는 재시작하는 동안에도 계속 실행되지만, 새 버전이 이어받을지는 업데이트에 따라 다릅니다. 계속할까요?',
   // UpdateGate.tsx — the screen that covers the app when the version is below the minimum the release policy sets
   'update.gate.title': '업데이트가 필요합니다',
   'update.gate.body': '{version} 버전으로 업데이트를 진행해주세요',
@@ -672,6 +734,16 @@ export const ko = {
   'session.terminal.trustAccepting': '폴더 신뢰 자동 수락 중…',
   'session.terminal.weeklyLimitWaiting': '주간 한도 소진 — {time} 자동 재개',
   'session.terminal.limitWaiting': '한도 도달 — {time} 자동 재개',
+  // Slice 2 of the Astera Host: a codex rolling chain the app took back from the Host. It is
+  // deliberately not asked whether the account was already blocked (CodexRollingCoordinator.register
+  // says why), so if it came back blocked it stops until codex writes its next record — which used
+  // to be visible only in rolling.log. **No time is named**, unlike the two rows above: nothing is
+  // scheduled, and there is nothing to name.
+  //
+  // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
+  // still want real translations.
+  'session.terminal.rollAdopted':
+    '재시작 후 이어받아 이 계정의 한도 상태를 모릅니다. Codex가 사용량을 다시 기록하면 그때 계정을 전환합니다',
   // Auto-resume failure toast. See the App.tsx comment for why it is a toast and not a banner —
   // for a rolling session with Slack off, this is the only path that calls a human.
   'session.toast.stalled': "'{title}' 세션이 멈춰 있습니다 — 자동 재개 실패, 확인이 필요합니다",
@@ -1052,6 +1124,7 @@ export const ko = {
   // 모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버린다. 중단한 작업이나 워커가 죽어 dispatched 에
   // 멈춘 Task 를 가진 Run 은 영원히 남는다
   'jobs.run.start': '실행',
+  'jobs.run.starting': '시작하는 중…',
   'jobs.run.pause': '일시 중지',
   'jobs.run.pauseHint': '이 예약을 세웁니다 — 도는 Task 도 함께 멈춥니다',
   'jobs.run.pauseConfirmTitle': '예약 일시 중지',
@@ -1118,6 +1191,32 @@ export const ko = {
   'jobs.event.gateResolved': '결정 완료',
   'jobs.event.limitHit': '한도 정지',
   'jobs.event.resumed': '워커 재개',
+  'jobs.event.runtimeLost': '실행 환경 잃음',
+  'jobs.event.recovery': '복구',
+  'jobs.recovery.resumeNative': '세션 재개',
+  'jobs.recovery.redispatch': '재배치',
+  'jobs.recovery.recheck': '검사 다시',
+  'jobs.recovery.smartResume': '인계 재개',
+  'jobs.recovery.review': '사람이 판단',
+  // 복구가 왜 그렇게 정했는지. Gate 의 질문과 히스토리 줄이 같은 문장을 쓴다 —
+  // core/recovery/decide.ts 의 표가 줄마다 이 키 하나를 고른다.
+  'jobs.recovery.reason.worktreeGone': '워크트리가 사라져서 거기서는 아무것도 확인하거나 이어갈 수 없습니다',
+  'jobs.recovery.reason.operationInProgress': '워크트리에서 {operation} 작업이 진행 중이라 자동으로 이어가면 안 됩니다',
+  'jobs.recovery.reason.conflicts': '워크트리에 충돌 난 파일이 있습니다',
+  'jobs.recovery.reason.treeUnreadable': '워크트리를 읽지 못해서 그 상태를 하나도 믿을 수 없습니다',
+  'jobs.recovery.reason.journalUnreadable': '기록을 읽지 못해서 이 시도에 대해 아무것도 믿을 수 없습니다',
+  'jobs.recovery.reason.nativeSession': '에이전트의 원래 세션을 되살릴 수 있어서 대화가 그대로 이어집니다',
+  'jobs.recovery.reason.committedWithCheck': '워커가 사라지기 전에 커밋을 남겨서, 검사가 결과를 판정합니다',
+  'jobs.recovery.reason.committedNoCheck': '워커가 사라지기 전에 커밋을 남겼는데, 이 작업에는 결과를 증명할 검사가 없습니다',
+  'jobs.recovery.reason.producedNothing': '워커가 아무것도 만들지 않아서 다시 시작해도 겹치는 작업이 없습니다',
+  'jobs.recovery.reason.promptNeverLeft': '프롬프트가 앱을 떠나지 않아서 시작된 것이 없습니다',
+  'jobs.recovery.reason.briefing': '워크트리에 하던 작업이 남아 있어서, 새 워커가 인계문을 받고 시작합니다',
+  'jobs.recovery.reason.smartResumeOff': '워크트리에 하던 작업이 남아 있는데 스마트 재개가 꺼져 있습니다',
+  'jobs.recovery.reason.coordinatorRun': '이 Job 은 코디네이터가 관리합니다. 무엇을 시작할지는 코디네이터가 정하므로 앱이 임의로 띄우지 않았습니다',
+  'jobs.recovery.gate.question': '이 작업의 워커가 사라졌고 자동으로 이어갈 수 없었습니다: {reason}.',
+  'jobs.recovery.gate.reviewFirst': '답하기 전에 워크트리를 확인하세요.',
+  'jobs.recovery.gate.unsafeNote': '워크트리는 아무것도 건드리지 않았습니다.',
+  'jobs.recovery.gate.restart': '새 워커로 다시 시작',
   'jobs.event.status': '소식',
   'jobs.event.workerDone': '워커 보고',
   'jobs.event.question': '질문',

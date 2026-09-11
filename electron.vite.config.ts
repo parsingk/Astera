@@ -8,7 +8,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: 'src/main/index.ts',
-          cli: 'src/cli/index.ts'
+          cli: 'src/cli/index.ts',
+          host: 'src/host/index.ts'
         }
       }
     }

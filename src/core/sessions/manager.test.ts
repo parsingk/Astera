@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { Account } from '../types'
-import type { PtyFactory, PtyLike, PtySpawnOptions } from './pty'
+import { PTY_LOST_SIGHT_EXIT_CODE, type PtyFactory, type PtyLike, type PtySpawnOptions } from './pty'
 import { SessionManager, prependToPath } from './manager'
 import { buildClaudeCommand, buildCodexCommand } from './commands'
 import { makeDescriptors } from '../providers/descriptor'
@@ -18,6 +19,8 @@ class FakePty implements PtyLike {
   // 호출 횟수 — failsafe 타이머가 "몇 번" resume했는지가 판정 대상이다
   pauseCalls = 0
   resumeCalls = 0
+  /** The note patches this pty was asked to keep — what a Host-backed pty sends as pty-note. */
+  remembered: Record<string, unknown>[] = []
   onData(cb: (d: string) => void) { this.dataCb = cb }
   onExit(cb: (e: { exitCode: number }) => void) { this.exitCb = cb }
   write(d: string) { this.written.push(d) }
@@ -25,6 +28,11 @@ class FakePty implements PtyLike {
   kill() { this.killed = true; this.exitCb({ exitCode: 0 }) }
   pause() { this.paused = true; this.pauseCalls++ }
   resume() { this.paused = false; this.resumeCalls++ }
+  remember(patch: Record<string, unknown>) { this.remembered.push(patch) }
+  /** What `createPtyRouter` stamps on a real handle — set by the tests that care which
+   *  factory made the pty. Absent is a pty this process owns, which is what the router
+   *  writes with no Host and what every other test here wants. */
+  outlivesApp?: boolean
 }
 
 const account: Account = {
@@ -82,6 +90,62 @@ describe('SessionManager', () => {
       const { manager } = setup()
       expect(manager.rename('nope', '결제')).toBeNull()
       expect(manager.list()).toHaveLength(0)
+    })
+
+    // The Host is holding a note that still says the title this session was spawned with, and adopt()
+    // rebuilds the record from it. Without this, a renamed session comes back from a restart under
+    // its old name.
+    it('tells the pty the new title, so a restart does not bring the old one back', () => {
+      const { manager, spawned } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      manager.rename(info.id, 'Auth refactor')
+      expect(spawned[0].pty.remembered).toEqual([{ title: 'Auth refactor' }])
+    })
+
+    // The stored title, not the text typed: an empty name is the project folder name, and that is what
+    // adopt() has to read back.
+    it('remembers the normalised title rather than what was typed', () => {
+      const { manager, spawned } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      manager.rename(info.id, '   ')
+      expect(spawned[0].pty.remembered).toEqual([{ title: info.title }])
+    })
+
+    // A node-pty pty has no remember at all — nothing about it survives the app, so there is nothing
+    // to remember it for. Renaming must still work exactly as it always has.
+    it('renames a pty that cannot remember anything', () => {
+      const pty: PtyLike = {
+        pid: 1,
+        onData: () => {},
+        onExit: () => {},
+        write: () => {},
+        resize: () => {},
+        kill: () => {},
+        pause: () => {},
+        resume: () => {}
+      }
+      const manager = new SessionManager(() => pty, makeDescriptors(process.platform))
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      expect(manager.rename(info.id, 'Auth refactor')).toBe('Auth refactor')
+    })
+  })
+
+  // The other half of the note's write path: something outside this manager learns a fact about a
+  // session — the codex rollout watcher finding the file that session writes to — and the manager is
+  // what holds the pty the note lives on.
+  describe('remember', () => {
+    it('passes a patch to the session pty that holds the note', () => {
+      const { manager, spawned } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      manager.remember(info.id, { rolloutPath: 'D:/r/one.jsonl', codexSessionId: 'cx-1' })
+      expect(spawned[0].pty.remembered).toEqual([{ rolloutPath: 'D:/r/one.jsonl', codexSessionId: 'cx-1' }])
+    })
+
+    // The watcher's poll can land after the tab was closed and the session forgotten; the same reason
+    // rename answers null instead of throwing.
+    it('ignores a session it does not have', () => {
+      const { manager } = setup()
+      expect(() => manager.remember('nope', { rolloutPath: 'D:/r/one.jsonl' })).not.toThrow()
     })
   })
 
@@ -726,6 +790,215 @@ describe('SessionManager', () => {
       const env: Record<string, string | undefined> = {}
       prependToPath(env, 'C:\\shuttle')
       expect(env.PATH).toBe('C:\\shuttle')
+    })
+  })
+
+  // The Host stores this and hands it back after a restart; it is the only thing that lets the app
+  // rebuild this session's record without having persisted anything itself.
+  it('tells the pty factory what this session is, so it can be rebuilt later', () => {
+    const { manager, spawned } = setup()
+    const info = manager.spawn({
+      account,
+      cwd: process.cwd(),
+      title: 'Auth refactor',
+      rollAccountIds: ['acc_1', 'acc_2']
+    })
+    expect(spawned[0].opts.meta).toEqual({
+      kind: 'session',
+      id: info.id,
+      restore: {
+        accountId: account.id,
+        cwd: process.cwd(),
+        title: 'Auth refactor',
+        rollAccountIds: ['acc_1', 'acc_2']
+      }
+    })
+  })
+
+  describe('adopt', () => {
+    // After a restart the process is already running; adopt rebuilds only the app's own record of it.
+    it('adopts a running pty and puts the session back in the list', () => {
+      const { manager } = setup()
+      const pty = new FakePty()
+      const info = manager.adopt({
+        kind: 'session',
+        id: 'sess-from-host',
+        pty,
+        restore: { accountId: account.id, cwd: 'D:/p', title: 'Auth refactor', rollAccountIds: ['acc_1'] }
+      })
+      expect(info).toMatchObject({
+        accountId: account.id,
+        cwd: 'D:/p',
+        title: 'Auth refactor',
+        status: 'running',
+        rollAccountIds: ['acc_1']
+      })
+      expect(manager.list().map((s) => s.id)).toEqual([info!.id])
+    })
+
+    it('an adopted session streams and exits like a spawned one', () => {
+      const { manager } = setup()
+      const data: string[] = []
+      let exited: number | null = null
+      manager.onData = (e) => data.push(e.data)
+      manager.onExit = (e) => {
+        exited = e.exitCode
+      }
+      const pty = new FakePty()
+      const info = manager.adopt({ kind: 'session', id: 'sess-from-host', pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
+      pty.dataCb('output')
+      pty.exitCb({ exitCode: 0 })
+      expect(data).toEqual(['output'])
+      expect(exited).toBe(0)
+      expect(manager.list().find((s) => s.id === info.id)?.status).toBe('exited')
+    })
+
+    // The backpressure accounting is part of the record, not of the spawn — an adopted session with no
+    // tab is exactly the one that would otherwise wedge at highWater.
+    it('an adopted session pauses at highWater and resumes on an ack, like a spawned one', () => {
+      const { manager } = setup(100, 20)
+      const pty = new FakePty()
+      const info = manager.adopt({ kind: 'session', id: 'sess-from-host', pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
+      pty.dataCb('x'.repeat(150))
+      expect(pty.paused).toBe(true)
+      manager.ack(info.id, 150)
+      expect(pty.paused).toBe(false)
+    })
+
+    // The directory may have been renamed or unmounted since; the process is already running there, so
+    // refusing would orphan it. Only spawn checks the cwd, because only spawn is about to use it.
+    it('does not check the cwd — the process is already running in it', () => {
+      const { manager } = setup()
+      const missing = path.join(process.cwd(), 'no-such-directory-for-adopt')
+      expect(existsSync(missing)).toBe(false)
+      const adopted = manager.adopt({
+        kind: 'session',
+        id: 'sess-from-host',
+        pty: new FakePty(),
+        restore: { accountId: account.id, cwd: missing, title: 't' }
+      })
+      expect(adopted).not.toBeNull()
+    })
+
+    // The session keeps the id it had before the restart. The agent process is still writing its
+    // statusLine and hook capture into files named after that id, and the scheduler's entries key on it
+    // too — under an id of our own invention the app would read files nothing ever wrote.
+    it('keeps the id it is handed rather than minting one', () => {
+      const { manager } = setup()
+      const info = manager.adopt({
+        kind: 'session',
+        id: 'sess-from-host',
+        pty: new FakePty(),
+        restore: { accountId: account.id, cwd: 'D:/p', title: 't' }
+      })!
+      expect(info.id).toBe('sess-from-host')
+      expect(manager.list().map((s) => s.id)).toEqual(['sess-from-host'])
+      // and it is the id the manager answers to from here on
+      expect(manager.rename('sess-from-host', 'renamed')).toBe('renamed')
+    })
+
+    // The app may have died inside a backpressure pause — a window every tabless orchestration worker
+    // sits in constantly, because nothing acks its output. Nothing releases that pause while the app is
+    // gone, and a rebuilt record says paused:false, so ack() (which resumes only what it believes is
+    // paused) could never release it either: the session would be wedged shut while reporting 'running'.
+    it('resumes the pty it adopts, in case the app died inside a backpressure pause', () => {
+      const { manager } = setup()
+      const pty = new FakePty()
+      manager.adopt({
+        kind: 'session',
+        id: 'sess-from-host',
+        pty,
+        restore: { accountId: account.id, cwd: 'D:/p', title: 't' }
+      })
+      expect(pty.resumeCalls).toBe(1)
+    })
+
+    // null is "I cannot read this", and the shapes overlap enough that a note of another kind can be
+    // readable — so the kind is checked before anything else, not inferred from the fields present.
+    it('refuses a note of another kind', () => {
+      const { manager } = setup()
+      const asRun = manager.adopt({
+        kind: 'run',
+        id: 'run-from-host',
+        pty: new FakePty(),
+        restore: { accountId: account.id, cwd: 'D:/p', title: 't' }
+      })
+      expect(asRun).toBeNull()
+      expect(manager.list()).toEqual([])
+    })
+
+    // The note crossed a process boundary, so its contents are parsed rather than trusted.
+    it('drops a rollAccountIds that is not all strings', () => {
+      const { manager } = setup()
+      const info = manager.adopt({
+        kind: 'session',
+        id: 'sess-from-host',
+        pty: new FakePty(),
+        restore: { accountId: account.id, cwd: 'D:/p', title: 't', rollAccountIds: ['acc_1', 7] }
+      })!
+      expect(info).not.toHaveProperty('rollAccountIds')
+    })
+
+    it('refuses a restore it cannot read rather than inventing a session', () => {
+      const { manager } = setup()
+      expect(manager.adopt({ kind: 'session', id: 'sess-from-host', pty: new FakePty(), restore: { cwd: 'D:/p' } })).toBeNull()
+      expect(manager.list()).toEqual([])
+    })
+
+    // A dropped connection ends every handle with PTY_LOST_SIGHT_EXIT_CODE, so the manager marks the
+    // session exited while the Host keeps running the real process. When the socket comes back the same
+    // session is adopted again, under the id it never stopped having — so the record this manager holds
+    // has to be the new one, once, rather than a second entry beside the corpse.
+    it('takes a session back over its own exited record, leaving one live record under the same id', () => {
+      const { manager } = setup()
+      const data: string[] = []
+      manager.onData = (e) => data.push(e.data)
+      const dropped = new FakePty()
+      manager.adopt({ kind: 'session', id: 'sess-from-host', pty: dropped, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })
+      dropped.exitCb({ exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+      expect(manager.list().find((s) => s.id === 'sess-from-host')?.status).toBe('exited')
+
+      const back = new FakePty()
+      const info = manager.adopt({ kind: 'session', id: 'sess-from-host', pty: back, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
+      expect(info.id).toBe('sess-from-host')
+      expect(manager.list().filter((s) => s.id === 'sess-from-host')).toHaveLength(1)
+      expect(manager.list().find((s) => s.id === 'sess-from-host')?.status).toBe('running')
+      // The live record is the new pty's, not the dead one's: input goes to the pty that can take it,
+      // and the old handle is no longer the one the manager answers for.
+      manager.write('sess-from-host', 'hello')
+      expect(back.written).toEqual(['hello'])
+      expect(dropped.written).toEqual([])
+      back.dataCb('from the reattach')
+      expect(data).toEqual(['from the reattach'])
+    })
+  })
+
+  // Quitting used to be one decision for every pty at once, and the Host's startup is a window in
+  // which the app makes some of its own before the Host answers. Splitting the running sessions by
+  // who owns their pty is what lets the quit path end the app's own children — which die with the
+  // app anyway — while leaving the Host's alone.
+  describe('who a running session belongs to', () => {
+    it('splits the running sessions into the ones the app owns and the ones that outlive it', () => {
+      const { manager, spawned } = setup()
+      const mine = manager.spawn({ account, cwd: process.cwd() })
+      const hosts = manager.spawn({ account, cwd: process.cwd() })
+      spawned[1].pty.outlivesApp = true
+      expect(manager.runningAppOwned().map((s) => s.id)).toEqual([mine.id])
+      expect(manager.runningOutlivingApp().map((s) => s.id)).toEqual([hosts.id])
+    })
+
+    // list() keeps exited sessions so a tab can outlive its process. Neither list may report one:
+    // the quit path would kill a pty that is already gone, and the close confirmation would promise
+    // the person a session that is not running comes back.
+    it('counts neither an exited session, whoever owned it', () => {
+      const { manager, spawned } = setup()
+      manager.spawn({ account, cwd: process.cwd() })
+      manager.spawn({ account, cwd: process.cwd() })
+      spawned[1].pty.outlivesApp = true
+      spawned[0].pty.exitCb({ exitCode: 0 })
+      spawned[1].pty.exitCb({ exitCode: 0 })
+      expect(manager.runningAppOwned()).toEqual([])
+      expect(manager.runningOutlivingApp()).toEqual([])
     })
   })
 })

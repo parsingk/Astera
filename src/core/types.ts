@@ -295,7 +295,13 @@ export interface RollStateEvent {
   sessionId: string
   // 'nudged' and 'stalled' are momentary events, not lasting states — the renderer leaves them out
   // of the banner and only Slack is told (see TerminalView.rollBannerVisible)
-  state: 'switching' | 'trust' | 'waiting' | 'nudged' | 'stalled' | 'none'
+  // 'adopted' is a codex rolling chain that came back from the Host and could not be told whether
+  // its account was already at its limit — asking is unsafe (see CodexRollingCoordinator.register),
+  // so it will not roll until codex writes its next rate_limits record. It is a lasting state like
+  // the first three, and it needs to be its own rather than a 'waiting': there is no retry armed and
+  // no time to put in `nextRetryAt`, and a banner promising a resume that nothing has scheduled is
+  // worse than the log line it replaces. Cleared by that next record.
+  state: 'switching' | 'trust' | 'waiting' | 'nudged' | 'stalled' | 'adopted' | 'none'
   accountLabel?: string // the account being switched to, when state='switching'
   // A re-publish of state='switching' (reattaching the banner to the new sessionId after a respawn).
   // It is not a new switch, so the renderer treats it the same but Slack ignores it to avoid a
@@ -387,6 +393,10 @@ export type JobEventKind =
   | 'gate-resolved'
   | 'limit-hit'
   | 'resumed'
+  /** Job Continuity: the app restarted and this worker's process was gone (journal ATTEMPT_LOST). */
+  | 'runtime-lost'
+  /** Job Continuity: recovery strategy decision (journal RECOVERY_STRATEGY_SELECTED). */
+  | 'recovery'
 
 /** 타임라인 한 줄. 저장된 레코드가 아니라 core/orchestration/timeline.ts 가 파생한 값이다.
  *  Jobs 사이드바의 JobTask 와 같은 자리에 있는 이유도 같다 — 렌더러가 그리는 투영이다. */
@@ -588,6 +598,15 @@ export interface CoreEvents {
   'preview:agentEscape': { sessionId: string }
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
+  /** Main took a terminal back from the Host without the renderer asking — the reattach sweep, at
+   *  startup or after a reconnect. The counterpart of 'session:created', and it carries the whole
+   *  TerminalInfo for the same reason: the panel builds the tab from it.
+   *
+   *  It is **not** emitted on the user path (terminal.open), which builds its tab from that call's
+   *  return value — emitting there would place the same terminal twice. The panel drops one whose
+   *  projectPath is not the project it is showing; those stay alive in main, unshown, exactly as the
+   *  list query already leaves them (see `terminalsWithCreated`). */
+  'terminal:created': TerminalInfo
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to
   // send whole (one project's Runs and Tasks) and it removes any question of the renderer's copy
   // drifting from main's. Which project it is folded for is the last one orch.list asked about, after
@@ -616,6 +635,50 @@ export type CoreEventChannel = keyof CoreEvents
  *  시작한다(브리핑을 만들 수 없으면 적용되지 않는다). 'original' 은 기존 동작: 대화 파일을 넘겨
  *  `--resume` 으로 이어간다. */
 export type ResumeStrategy = 'smart' | 'original'
+
+/** 에이전트를 권한 확인 없이 띄우는가. 'yolo' 는 CLI 마다의 우회 플래그를 붙이고
+ *  ('--dangerously-skip-permissions', '--dangerously-bypass-approvals-and-sandbox'), 'manual' 은
+ *  붙이지 않아 에이전트가 권한 프롬프트에서 멈춘다.
+ *
+ *  **기본값이 'yolo' 인 이유는 Job 워커가 어디서 도는가에 있다.** 워커는 언제나 방금 만들어진
+ *  워크트리에서 뜨고, 그 폴더에는 승인 이력이 없다 — 사람이 그 프로젝트에서 쌓아 둔 허용 목록은
+ *  `.claude/settings.local.json` 에 있는데 Claude Code 가 그 파일을 gitignore 하므로 체크아웃에
+ *  따라오지 않는다. 그래서 manual 로 둔 워커는 본 저장소에서라면 한 번도 묻지 않았을 것까지 묻고,
+ *  자율로 돌라고 띄운 세션이 첫 명령에서 선다.
+ *
+ *  Orca(stablyai/orca)가 같은 문제에 내린 결론이기도 하다 — 그쪽은 에이전트별 기본 실행 인수를
+ *  두고 그 기본값이 곧 우회 플래그다(`DEFAULT_TUI_AGENT_ARGS = YOLO_TUI_AGENT_ARGS`). */
+export type AgentPermissionMode = 'yolo' | 'manual'
+
+/** Astera Host slice 1: the app's view of the channel to the Host. Declared here rather than in
+ *  src/main/host/client.ts so the renderer can name it without importing from src/main. */
+export interface HostStatus {
+  connected: boolean
+  protocol: number | null
+  hostVersion: string | null
+  startedAt: string | null
+  pid: number | null
+  /** One clause saying why there is no connection, or null when there is one. */
+  problem: string | null
+}
+
+/** How much of this app's work the Host is holding right now — the fact that makes the Info tab's
+ *  Host row mean something, because it answers "will my work survive if I close this?".
+ *
+ *  **All three kinds of pty, and runs are not the afterthought they look like.** `RunManager`'s quit
+ *  teardown (`stopAppOwned`) skips every pty that outlives the app, exactly as the session and
+ *  terminal managers do, so a Host-held run survives the quit too. Leaving it out would tell someone
+ *  whose held work is a long build or a dev server that nothing of theirs is protected. See
+ *  `hostHoldings` for what is still left out and why.
+ *
+ *  Asked separately from `HostStatus` rather than folded into it: the connection facts are known in
+ *  the app the moment they are asked for, while this is a round trip to the Host, and a row that
+ *  waited on the second would be a Settings modal that waits on a process that may be slow or gone. */
+export interface HostHoldings {
+  sessions: number
+  terminals: number
+  runs: number
+}
 
 /** The contract the renderer sees as window.api. The IPC adapter implements it. */
 export interface CoreApi {
@@ -845,6 +908,14 @@ export interface CoreApi {
     // How a session that hits its limit gets continued. See ResumeStrategy.
     getResumeStrategy(): Promise<ResumeStrategy>
     setResumeStrategy(strategy: ResumeStrategy): Promise<void>
+    // Job Continuity (docs/ASTERA_JOB_CONTINUITY_DURABLE_RECOVERY_SPEC.md §3). Off by default. Turning
+    // it on while Smart Resume is off turns Smart Resume on as well — the result says so and the
+    // settings screen shows the notice. Turning it off leaves Smart Resume alone.
+    // 에이전트를 권한 확인 없이 띄우는가. See AgentPermissionMode — 기본은 'yolo' 다.
+    getAgentPermissionMode(): Promise<AgentPermissionMode>
+    setAgentPermissionMode(mode: AgentPermissionMode): Promise<void>
+    getJobContinuityEnabled(): Promise<boolean>
+    setJobContinuityEnabled(enabled: boolean): Promise<{ smartResumeTurnedOn: boolean }>
     // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses
     // the app's default chain for that half.
     getTerminalFont(): Promise<TerminalFont>
@@ -1229,5 +1300,26 @@ export type RendererApi = CoreApi & {
   orch: OrchApi
   understanding: UnderstandingApi
   sessionTasks: SessionTaskApi
+  /** Astera Host (slice 1). The Host owns nothing yet — this reports whether the channel to it is
+   *  open, so the slice can be checked by a person rather than only by tests. */
+  host: {
+    status(): Promise<HostStatus>
+    /** How many of the running sessions would keep running if the app quit — the ones whose ptys the
+     *  Host owns. Asked at the moment the window-close confirmation is about to tell the person what
+     *  quitting costs them, because the answer changes during a run (the Host connects some
+     *  milliseconds after launch) and a stale one would be a false promise either way.
+     *
+     *  A count rather than a flag because the two kinds coexist: a session spawned before the Host
+     *  answered is this app's own child and ends with it, whatever the Host owns by now. */
+    sessionsOutlivingApp(): Promise<number>
+    /** What the Host says it is holding, or **null when it did not say** — there is no Host, the
+     *  connection is down, or it did not answer in time. Null and `{ sessions: 0, terminals: 0 }` are
+     *  opposite answers and the caller must not merge them: zero is the Host telling you nothing of
+     *  yours would survive, and null is nobody telling you anything.
+     *
+     *  Never rejects, and never blocks the caller for longer than the one round trip's own deadline.
+     *  The Info tab reads it beside `status()` and draws the row without waiting for it. */
+    holdings(): Promise<HostHoldings | null>
+  }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

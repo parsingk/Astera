@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { withExitedPtyGuard, type PtyLike } from './pty'
+import { nodePtySpawnOptions, withExitedPtyGuard, type PtyLike } from './pty'
 
 /** node-pty 의 **두 단계 종료 통지**를 그대로 흉내낸다.
  *
@@ -40,6 +40,29 @@ class TwoPhasePty implements PtyLike {
 }
 
 describe('withExitedPtyGuard', () => {
+
+  // A wrapper that quietly loses a field is the hardest kind of defect to see, and losing this one
+  // would report a Host-owned pty as the app's own — which at quit kills a session the person was
+  // told would survive.
+  it('carries the fields it does not wrap', () => {
+    const patches: Array<Record<string, unknown>> = []
+    const base = {
+      pid: 1,
+      onData: () => {},
+      onExit: () => {},
+      write: () => {},
+      resize: () => {},
+      kill: () => {},
+      pause: () => {},
+      resume: () => {},
+      outlivesApp: true,
+      remember: (patch: Record<string, unknown>) => patches.push(patch)
+    }
+    const g = withExitedPtyGuard(base)
+    expect(g.outlivesApp).toBe(true)
+    g.remember?.({ title: 'kept' })
+    expect(patches).toEqual([{ title: 'kept' }])
+  })
   // 이 구간이 이 가드의 존재 이유다. 실행 패널이 열리는 순간 ResizeObserver 가 보내는 resize 가
   // 빠르게 끝나는 실행의 종료와 겹치면, 던져진 예외가 ipcMain 핸들러 밖으로 나가 main 프로세스가
   // 통째로 죽었다. 호출자들의 종료 가드는 전부 늦은 쪽 신호(onExit)를 보므로 여기를 막지 못한다.
@@ -89,5 +112,24 @@ describe('withExitedPtyGuard', () => {
     expect(raw.killed).toBe(true)
     expect(raw.paused).toBe(1)
     expect(raw.resumed).toBe(1)
+  })
+})
+
+// nodePtyFactory itself cannot be imported here — it loads node-pty's native binding, which is why
+// withExitedPtyGuard is tested through this file rather than through the factory that uses it. The
+// options it builds can be, and they are the one part of the no-Host path this slice could have
+// changed: `meta` was added to PtySpawnOptions for the Host, and a spread would have carried it into
+// node-pty on a path that is supposed to be untouched.
+describe('nodePtySpawnOptions', () => {
+  it('hands node-pty the four fields it had before `meta` existed, and no more', () => {
+    expect(
+      nodePtySpawnOptions({
+        cwd: 'D:/p',
+        cols: 80,
+        rows: 24,
+        env: { PATH: '/bin' },
+        meta: { kind: 'session', id: 's1', restore: { accountId: 'a1' } }
+      })
+    ).toEqual({ name: 'xterm-256color', cwd: 'D:/p', cols: 80, rows: 24, env: { PATH: '/bin' } })
   })
 })

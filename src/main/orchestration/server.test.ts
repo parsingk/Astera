@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { handleCommand, handleExit, type OrchServerDeps } from './server'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { OrchCoordinator, type CoordinatorDeps } from './coordinator'
 import { OrchestrationStore } from './store'
 import {
@@ -16,6 +17,7 @@ import {
 import { TaskValidator } from './validator'
 import { FAILURE_LIMIT } from '../../core/orchestration/types'
 import { parseArgs } from '../../core/orchestration/cliArgs'
+import { isQueueableReport } from '../../core/orchestration/pendingReports'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -1113,6 +1115,18 @@ describe('handleCommand — retained dispatch', () => {
     expect(d.workerState).toBe('stopped')
     expect(d.endedAt).toBeDefined()
     expect(released).toEqual([dispatchId])
+  })
+
+  // Recovery reads this to tell a deliberate close from a crash (Dispatch.closedBy)
+  it('worker-stop and worker-abandon record who closed the dispatch', async () => {
+    const stop = await seedRetained(false)
+    const stopped = await call(stop.deps, 'worker-stop', { dispatch: stop.dispatchId })
+    expect(stopped.status).toBe(200)
+    expect(stop.deps.getState().dispatches.find((d) => d.id === stop.dispatchId)?.closedBy).toBe('stop')
+
+    const abandon = await seedRetained(false)
+    await call(abandon.deps, 'worker-abandon', { dispatch: abandon.dispatchId })
+    expect(abandon.deps.getState().dispatches.find((d) => d.id === abandon.dispatchId)?.closedBy).toBe('abandon')
   })
 
   it('retained에 worker-release는 200이지만 skipped를 싣는다 — 조용히 건너뛰지 않는다', async () => {
@@ -2564,6 +2578,121 @@ describe('검토 Dispatch 가 스스로 끝나지 못했을 때 — handleExit �
     expect(calls).toBe(0)
     expect(deps.getState().tasks[0].status).toBe('completed')
     expect('limitResetsAt' in deps.getState().dispatches.find((d) => d.id === reviewId)!).toBe(false)
+  })
+})
+
+// Job Continuity P1: a worker Dispatch that closes on its own, with no reported outcome, is a
+// stranded Task. handleExit is the only place that observes that moment, so it is also the only
+// place that can hand the dispatch id to recovery.
+describe('handleExit — onDispatchLost hands a stranded implementer to recovery', () => {
+  /** run + task + open implementer dispatch (sessionId='sess1') — same shape as the probeLimit
+   *  block's seedOpenDispatch, plus the dispatchId onDispatchLost is expected to report. */
+  const seedOpenDispatch = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    dispatchId: string
+  }> => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    const dispatchId = deps.getState().dispatches[0].id
+    return { deps, dispatchId }
+  }
+
+  /** Task in `reviewing` with an open review Dispatch (sessionId='sess_review') — same injection
+   *  shape as the 'task-create --review 와 검토 라우팅' and '검토 Dispatch 가 스스로 끝나지 못했을 때'
+   *  blocks build: the review Dispatch is appended straight onto state (the wiring that opens it is
+   *  not the server's job), not routed through worker-start. */
+  const seedReviewing = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    reviewDispatchId: string
+  }> => {
+    const deps = makeDeps()
+    deps.startReview = () => {}
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', review: true })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const impl = deps.getState().dispatches[0]
+    await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId: impl.id, outcome: 'succeeded', subject: 's', body: 'b' },
+      impl.sessionId
+    )
+    const reviewDispatchId = 'dsp_review'
+    await deps.setState({
+      ...deps.getState(),
+      dispatches: [
+        ...deps.getState().dispatches,
+        {
+          id: reviewDispatchId,
+          taskId,
+          provider: 'codex' as const,
+          accountId: 'acc1',
+          sessionId: 'sess_review',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/review.md',
+          review: true,
+          startedAt: NOW,
+          workerState: 'ready' as const,
+          retained: false
+        }
+      ]
+    })
+    return { deps, reviewDispatchId }
+  }
+
+  it('an implementer dispatch that ends without reporting reaches onDispatchLost with its own dispatch id', async () => {
+    const lost: string[] = []
+    const { deps, dispatchId } = await seedOpenDispatch()
+    deps.onDispatchLost = (a) => lost.push(a.dispatchId)
+    await handleExit(deps, { sessionId: 'sess1', exitCode: 1 })
+    expect(lost).toEqual([dispatchId])
+  })
+
+  // The failure this whole slice exists to prevent, arriving through the one path nobody traced. The
+  // socket to the Host drops while the Host is alive and still running the ptys; every handle ends
+  // with PTY_LOST_SIGHT_EXIT_CODE, SessionManager records the session exited, and if that reached
+  // closeDispatch the reconciler would read the worker as lost and start a second agent in the same
+  // worktree as the one still running.
+  it('an exit that only says the app lost sight of the pty leaves the Dispatch open and writes nothing', async () => {
+    const { deps } = await seedOpenDispatch()
+    const before = deps.getState()
+    let writes = 0
+    const inner = deps.setState.bind(deps)
+    deps.setState = async (next): Promise<void> => {
+      writes++
+      await inner(next)
+    }
+    await handleExit(deps, { sessionId: 'sess1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+    expect(writes).toBe(0)
+    expect(deps.getState()).toBe(before) // the same object — no new state was even built
+    expect(deps.getState().dispatches[0].endedAt).toBeUndefined()
+    expect(deps.getState().dispatches[0].workerState).toBe('ready')
+  })
+
+  it('a lost-sight exit is not reported to recovery either', async () => {
+    const lost: string[] = []
+    const { deps } = await seedOpenDispatch()
+    deps.onDispatchLost = (a) => lost.push(a.dispatchId)
+    await handleExit(deps, { sessionId: 'sess1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+    expect(lost).toEqual([])
+  })
+
+  it("a reviewer's exit does not reach onDispatchLost — its Gate is the recovery path", async () => {
+    const lost: string[] = []
+    const { deps } = await seedReviewing()
+    deps.onDispatchLost = (a) => lost.push(a.dispatchId)
+    await handleExit(deps, { sessionId: 'sess_review', exitCode: 1 })
+    expect(lost).toEqual([])
+    // Proof the reviewer branch was actually taken, not that the fixture failed to open a review
+    // dispatch: the Gate is the recovery path for a reviewer that ends without reporting.
+    const st = deps.getState()
+    expect(st.tasks[0].status).toBe('blocked')
+    expect(st.gates).toHaveLength(1)
   })
 })
 
@@ -4063,5 +4192,51 @@ describe('handoff', () => {
     if ('error' in parsed) return
     expect(parsed.cmd).toBe('handoff')
     expect(parsed.wantsStdin).toEqual(['memo'])
+  })
+})
+
+// The pending-reports queue has to decide, with no server to ask, whether a report would be
+// accepted -- one it queues that the server would refuse holds a Dispatch open through the restart
+// cleanup and then stalls the Task, which is worse than the command simply failing. Both sides call
+// workerDoneFieldError, and this is what says so out loud: if the server ever grows a required
+// field the queue does not know about, this goes red.
+describe('the queue and the server ask for the same fields of a worker_done', () => {
+  const seed = async (): Promise<OrchServerDeps> => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    return deps
+  }
+
+  it('queues exactly what the server does not refuse for a missing field', async () => {
+    const seeded = await seed()
+    const d = seeded.getState().dispatches[0]
+    const shapes: Record<string, unknown>[] = [
+      { type: 'worker_done', taskId: d.taskId, dispatchId: d.id, outcome: 'succeeded' },
+      { type: 'worker_done', taskId: d.taskId, dispatchId: d.id, outcome: 'failed' },
+      { type: 'worker_done', taskId: d.taskId, dispatchId: d.id },
+      { type: 'worker_done', taskId: d.taskId, dispatchId: d.id, outcome: true },
+      { type: 'worker_done', taskId: d.taskId, dispatchId: d.id, outcome: 'maybe' },
+      { type: 'worker_done', taskId: d.taskId, outcome: 'succeeded' },
+      { type: 'worker_done', dispatchId: d.id, outcome: 'succeeded' }
+    ]
+    for (const args of shapes) {
+      // A fresh seed per shape: the first accepted report closes the Dispatch, and every one after
+      // it would come back alreadyReported instead of being judged on its fields.
+      const deps = await seed()
+      const r = await call(deps, 'send', args, 'sess1')
+      const refusedForFields =
+        r.status === 400 &&
+        /--task-id and --dispatch-id are required|--outcome must be/.test(
+          String((r.body as { error?: string }).error)
+        )
+      expect({ args, queued: isQueueableReport({ cmd: 'send', args }) }).toEqual({
+        args,
+        queued: !refusedForFields
+      })
+    }
   })
 })

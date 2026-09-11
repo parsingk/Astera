@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, CliStatus, HistoryEntry, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
+import type { Account, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -75,6 +75,8 @@ import * as sticky from './lib/stickyProject'
 import { dismiss, toast } from './lib/toast'
 import { spawnNotice } from './lib/spawnNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
+import { quitConfirmBody, updateConfirmBody } from './lib/quitConfirm'
+import { terminalsWithCreated } from './lib/terminalTabs'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { worktreeErrorMessage } from './lib/worktreeErrors'
 import { notifyCreated as notifyWorktreeCreated } from './lib/worktreeBus'
@@ -171,12 +173,21 @@ const SHORTCUTS: Array<{
   }
 ]
 
-function UpdateIndicator({ update }: { update: UpdateStatus | null }): React.JSX.Element | null {
+function UpdateIndicator({
+  update,
+  onInstall
+}: {
+  update: UpdateStatus | null
+  /** Installing quits the app, so this goes through App's installUpdate rather than calling
+   *  window.api.update.install directly: that is where the person is told what quitting costs their
+   *  running sessions, and every install path has to ask the same question. */
+  onInstall: () => void
+}): React.JSX.Element | null {
   const { t } = useI18n()
   if (!update || update.state === 'init' || update.state === 'uptodate') return null
   if (update.state === 'downloaded')
     return (
-      <button className="tb-update-btn" onClick={() => void window.api.update.install()}>
+      <button className="tb-update-btn" onClick={onInstall}>
         {t('update.tb.restartInstallVersion', { version: update.version ?? '' })}
       </button>
     )
@@ -202,12 +213,15 @@ function Titlebar({
   isMax,
   update,
   runningCount,
+  onInstall,
   runSlot
 }: {
   isMax: boolean
   update: UpdateStatus | null
   /** Only the close button reads it, and only on Linux — see closeWindow below */
   runningCount: number
+  /** Passed straight through to UpdateIndicator's restart button — see the prop there. */
+  onInstall: () => void
   /** 타이틀바 줄에 함께 놓이는 것 — 지금은 실행 구성 툴바다. 프롭 열넷을 내려보내는 대신 슬롯으로
    *  받아, 타이틀바는 무엇이 들어오는지 모른 채 자리만 내준다 */
   runSlot?: React.ReactNode
@@ -217,14 +231,21 @@ function Titlebar({
   // too would put the same functionality at both ends of the window. .titlebar--mac reserves the
   // left-hand margin the traffic lights sit in.
   const isMac = window.api.platform === 'darwin'
-  /** On Linux the X really quits the app (there is no tray to hide in — main/index.ts win.on('close')),
-   *  and will-quit kills every running session. That is the same outcome the update install asks about,
-   *  so it asks the same way. On win32/macOS the window only hides, so nothing is asked. */
+  /** On Linux the X really quits the app (there is no tray to hide in — main/index.ts win.on('close')).
+   *  What quitting costs is no longer one answer: with no Host, will-quit kills every running session,
+   *  the same outcome the update install asks about; a session whose pty the Host owns keeps running
+   *  instead, and the Host takes a moment to start, so at boot some of them are one and some the
+   *  other. `quitConfirmBody` turns the two counts into the sentence that is true of both halves. The
+   *  answer is read here rather than held in state because it changes during a run — the Host connects
+   *  some milliseconds after launch. Nothing kept, on a failure, is the safe reading: it promises the
+   *  person nothing comes back. On win32/macOS the window only hides, so nothing is asked. */
   const closeWindow = async (): Promise<void> => {
     if (window.api.platform === 'linux' && runningCount > 0) {
+      const kept = await window.api.host.sessionsOutlivingApp().catch(() => 0)
+      const body = quitConfirmBody(runningCount, kept)
       const ok = await confirmModal({
         title: t('common.quitConfirm.title'),
-        body: t('common.quitConfirm.body', { count: runningCount }),
+        body: t(body.key, body.params),
         confirmLabel: t('common.close')
       })
       if (!ok) return
@@ -241,7 +262,7 @@ function Titlebar({
         <span className="tb-name">Astera</span>
       </div>
       {runSlot}
-      <UpdateIndicator update={update} />
+      <UpdateIndicator update={update} onInstall={onInstall} />
       {!isMac && (
         <div className="tb-controls" onDoubleClick={(e) => e.stopPropagation()}>
           <button
@@ -306,6 +327,15 @@ function formatResetHud(resetsAt: string | null | undefined): string | null {
     return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`
   }
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
+}
+
+/** "7m", "2h" — a coarse uptime is all this row needs; it is a sign of life, not a metric, which is
+ *  also why the unit is not translated. */
+const hostUptime = (startedAt: string | null): string => {
+  if (!startedAt) return '—'
+  const ms = Date.now() - new Date(startedAt).getTime()
+  const minutes = Math.max(0, Math.round(ms / 60_000))
+  return minutes < 60 ? `${minutes}m` : `${Math.round(minutes / 60)}h`
 }
 
 /** The status bar usage chip — a mini progress bar plus n%. Colours: green below 70, yellow 70–84,
@@ -397,6 +427,13 @@ export default function App(): React.JSX.Element {
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null) // prefill for WorktreePanel's 'start session'
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
   const [appVersion, setAppVersion] = useState('')
+  const [hostStatus, setHostStatus] = useState<HostStatus | null>(null)
+  /** What the Host says it is holding, or null while it has not said — which is the state this
+   *  starts in every time the modal opens, and the state it stays in when there is no Host, when the
+   *  connection is down, and when the Host is too slow to answer. The row prints the clause only
+   *  once this is filled: zeros would be a claim that nothing of the person's survives closing the
+   *  app, and that is the one wrong answer worth avoiding here. */
+  const [hostHolding, setHostHolding] = useState<HostHoldings | null>(null)
   // The moment the check finished has to be held alongside the state so the "checked at 17:43" line
   // can carry it. Events that are not results (checking, downloading) have no time.
   const [update, setUpdate] = useState<(UpdateStatus & { checkedAt: number | null }) | null>(null)
@@ -459,6 +496,9 @@ export default function App(): React.JSX.Element {
   const [slackLoaded, setSlackLoaded] = useState(false)
   const [wtRoot, setWtRoot] = useState('') // the worktree root in the settings modal
   const [orchEnabled, setOrchEnabled] = useState(false) // the agent orchestration toggle
+  // 에이전트 권한 모드. **기본이 yolo 라 초기값도 true 다** — false 로 두면 모달이 열리는 순간
+  // 꺼진 체크박스가 잠깐 보였다가 켜지고, 그 깜빡임은 사용자가 끈 것으로 읽힌다.
+  const [agentYolo, setAgentYolo] = useState(true)
   // The rail button for Jobs is gated on this, so the shortcut must be too — a key that opens a view
   // whose control is not on screen leaves the user somewhere they cannot get back from. Read through a
   // ref for the same reason as jobsOpenRef.
@@ -661,13 +701,23 @@ export default function App(): React.JSX.Element {
   // The install button on the toast is pressed later — it has to see the real number of running sessions at that moment
   const runningCountRef = useRef(0)
 
-  /** Installs the update right away. The app quits immediately, so it asks first when sessions are still running. */
+  /** Installs the update right away. The app quits immediately, so it asks first when sessions are still running.
+   *
+   *  What quitting costs is counted, not assumed, for the same reason the close button counts it
+   *  (closeWindow above): the Host keeps its own sessions running through the quit, and it takes a
+   *  moment to start, so at boot some of the running sessions are the app's own children and some are
+   *  not. `updateConfirmBody` turns the two counts into the sentence true of both halves — and, unlike
+   *  the close button's, one that stops short of promising the sessions come back, since only the
+   *  version being installed knows whether it retires this Host. Nothing kept, on a failure, is the
+   *  safe reading here too: it promises the person nothing survives. */
   const installUpdate = async (): Promise<void> => {
     const running = runningCountRef.current
     if (running > 0) {
+      const kept = await window.api.host.sessionsOutlivingApp().catch(() => 0)
+      const body = updateConfirmBody(running, kept)
       const ok = await confirmModal({
         title: tRef.current('update.confirm.title'),
-        body: tRef.current('update.confirm.body', { count: running }),
+        body: tRef.current(body.key, body.params),
         confirmLabel: tRef.current('update.toast.installNow')
       })
       if (!ok) return
@@ -740,13 +790,22 @@ export default function App(): React.JSX.Element {
     // new tab of the active group (intoGroupBackground in core/panes/place.ts) without making it the
     // active tab.
     const offCreated = window.api.on('session:created', (info) => {
-      // A session we already know about does nothing — right after a reload, the sessions.list()
-      // re-adoption above can overlap with this event. **This is not the guard that prevents a
-      // duplicate tab**: intoGroupBackground in place.ts filters on its first line with groupOfTab
-      // and makes the second placement a no-op. What this guard buys is not triggering the setSessions
-      // and setLayout re-render that comes along with that no-op.
-      if (sessionsRef.current.some((s) => s.id === info.id)) return
-      setSessions((prev) => (prev.some((s) => s.id === info.id) ? prev : [...prev, info]))
+      // A session we already know about and still believe is running does nothing — right after a
+      // reload, the sessions.list() re-adoption above can overlap with this event. **This is not the
+      // guard that prevents a duplicate tab**: intoGroupBackground in place.ts filters on its first
+      // line with groupOfTab and makes the second placement a no-op. What this guard buys is not
+      // triggering the setSessions and setLayout re-render that comes along with that no-op.
+      //
+      // **A session we know about and marked exited is a different case, and it has to fall through.**
+      // When the channel to the Host drops, every pty handle in main ends and session:exit closes the
+      // tab here — but the Host is still running the process, so the reconnect takes the session back
+      // under the same id and re-emits this event. Returning early there would leave a live agent with
+      // no tab and an 'exited' row until the next reload.
+      const known = sessionsRef.current.find((s) => s.id === info.id)
+      if (known && known.status !== 'exited') return
+      setSessions((prev) =>
+        prev.some((s) => s.id === info.id) ? prev.map((s) => (s.id === info.id ? info : s)) : [...prev, info]
+      )
       // background=true: the tab appears but takes neither the active tab nor focus. If a worker
       // appeared while the user was typing into their own session, the keys after that would go into
       // the worker's PTY (a permission prompt in the worker's TUI would consume them as its answer).
@@ -871,7 +930,38 @@ export default function App(): React.JSX.Element {
     // Same re-sync for work unit tracking. Unlike orchestration, nothing outside this modal reads it yet,
     // so there is no mount-time fetch to keep honest — this is the only read.
     void window.api.settings.getWorkUnitTrackingEnabled().then(setWorkUnitTrackingEnabled)
+    // 권한 모드도 같은 갈래다 — 이 모달 밖에서 읽는 곳이 없으므로 마운트 시점 읽기는 두지 않는다.
+    void window.api.settings
+      .getAgentPermissionMode()
+      .then((m) => setAgentYolo(m === 'yolo'))
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
+    // Astera Host slice 1: this value goes stale, and the row is only ever on screen while this
+    // modal is open, so it is read here rather than at startup.
+    void window.api.host.status().then(setHostStatus)
+    // What it is holding is a round trip to the Host, so it is asked beside the status rather than
+    // through it: the status answers from inside this app and must not be made to wait on a process
+    // that can be slow or gone. Cleared first, because a re-open must not show the previous
+    // opening's counts while this answer is in flight. A rejection is impossible on the main side,
+    // and if one ever arrived it means the same thing as no answer.
+    //
+    // **The only fetch here with a cancel token, because it is the only slow one.** This round trip
+    // waits up to five seconds for the Host; close and reopen the modal inside that window and the
+    // first opening's reply lands into the second's row, putting counts from before on screen with
+    // nothing to say they are stale. The same guard, and the same reason, as the terminal list
+    // effect's `cancelled`.
+    setHostHolding(null)
+    let cancelled = false
+    void window.api.host
+      .holdings()
+      .then((h) => {
+        if (!cancelled) setHostHolding(h)
+      })
+      .catch(() => {
+        if (!cancelled) setHostHolding(null)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [showSettings])
 
   // Keyboard session tab switching: a global capture listener, so it works regardless of where focus
@@ -1128,12 +1218,25 @@ export default function App(): React.JSX.Element {
 
   // When a shell dies on its own (the user typed exit) its tab is removed — a dead shell tab is noise.
   // If it was the active tab, we go back to Run (the panel itself stays).
+  // Receives terminals main took back from the Host as tabs, the way session:created is received
+  // above. The user path builds its tab from what terminal.open returned, so only the reattach sweep
+  // sends this; without it a panel that was already open showed nothing until the project was
+  // reopened. The tab is added but not activated, on the same reasoning session:created uses for
+  // background=true: nobody asked for it just now, so it must not take the keys someone is typing.
+  // The root is read through the ref because this is registered once at mount (bottomRootRef, not
+  // currentProjectRef — with no project those two differ, and the panel shows the home root).
   useEffect(() => {
     const off = window.api.on('terminal:exit', ({ id }) => {
       setTerminals((prev) => prev.filter((x) => x.id !== id))
       setBottomTab((cur) => (cur === id ? 'run' : cur))
     })
-    return off
+    const offCreated = window.api.on('terminal:created', (info) => {
+      setTerminals((prev) => terminalsWithCreated(prev, info, bottomRootRef.current))
+    })
+    return () => {
+      off()
+      offCreated()
+    }
   }, [])
 
   /** Places a new session. Which group it goes into is decided by placeTab, a pure function in core
@@ -3191,7 +3294,7 @@ export default function App(): React.JSX.Element {
       <div className="app">
         {/* 0, not runningCount: this screen renders no ConfirmHost, so a close confirmation would
             never be answered and the close button would stop working entirely. */}
-        <Titlebar isMax={isMax} update={update} runningCount={0} />
+        <Titlebar isMax={isMax} update={update} runningCount={0} onInstall={() => void installUpdate()} />
         <div className="cli-missing">
           <h1>No CLI found to run</h1>
           <p>
@@ -3218,6 +3321,7 @@ export default function App(): React.JSX.Element {
         isMax={isMax}
         update={update}
         runningCount={runningCount}
+        onInstall={() => void installUpdate()}
         runSlot={
           currentProject ? (
             // The title bar toggles maximize on a double-click, and that is a React handler, so it
@@ -3927,6 +4031,35 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.orchestration.hint')}</span>
+                    {/* 권한 모드 — 오케스트레이션 바로 아래. 위 토글이 켜는 것이 워커를 띄우는 일이고,
+                        이 토글이 정하는 것은 그 워커가 승인을 묻는가이기 때문이다. 같은
+                        optimistic-update-then-revert 관례를 쓴다. */}
+                    <label className="settings-row">
+                      <span>{t('settings.agentPermission.label')}</span>
+                      <input
+                        type="checkbox"
+                        checked={agentYolo}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                          setAgentYolo(next)
+                          void window.api.settings
+                            .setAgentPermissionMode(next ? 'yolo' : 'manual')
+                            .catch((err) => {
+                              setAgentYolo(!next)
+                              toast.error(
+                                t('settings.agentPermission.saveFailed', {
+                                  detail: err instanceof Error ? err.message : String(err)
+                                })
+                              )
+                            })
+                        }}
+                      />
+                    </label>
+                    <span className="settings-hint">{t('settings.agentPermission.hint')}</span>
+                    {/* 작업 이어가기와 재개 전략 — 오케스트레이션 바로 아래에 둔다. 이어가기는 Job 이
+                        재시작을 건너 살아남게 하는 것이라 위 토글과 한 갈래이고, 재개 전략은 그것이
+                        켜질 때 함께 움직인다(spec §3). 그 둘이 한 컴포넌트인 이유는 그 파일에 있다. */}
+                    <ResumeStrategySettings />
                     {/* Work unit tracking — same settings-row/settings-hint/label shape as orchestration
                         above, and the same optimistic-update-then-revert-on-failure behaviour. Off by
                         default: nothing is read from before the moment this is turned on. */}
@@ -3973,13 +4106,9 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.agentBrowser.hint')}</span>
-                    {/* 재개 전략 — 한도에 걸린 세션을 어떻게 이어갈지. Appearance 가 아니라 여기 있는
-                        이유: 이것은 보이는 방식이 아니라 동작이고, 바로 위 오케스트레이션 토글과 같은
-                        갈래(롤링·워커)를 건드린다. */}
                     {/* 설명 생성 — 작업 단위 추적이 모은 것을 무엇으로 설명할 것인가.
                         추적 토글 바로 아래에 두는 이유: 추적이 이 설정의 입력을 만든다. */}
                     <GeneratorSettings />
-                    <ResumeStrategySettings />
                   </>
                 )}
                 {settingsTab === 'appearance' && (
@@ -4008,6 +4137,29 @@ export default function App(): React.JSX.Element {
                       <span>{cli?.codex.version ?? t('settings.info.cliNotDetected')}</span>
                     </div>
                     <div className="settings-row">
+                      <span>{t('settings.info.host')}</span>
+                      <span>
+                        {hostStatus?.connected
+                          ? t('settings.info.hostConnected', {
+                              protocol: hostStatus.protocol ?? 0,
+                              uptime: hostUptime(hostStatus.startedAt)
+                            }) +
+                            // Appended only once the Host has answered. Until then the row is the
+                            // connection facts alone, which is the whole truth it has: a count here
+                            // before the answer would be an invented one.
+                            (hostHolding
+                              ? ` · ${t('settings.info.hostHolding', {
+                                  sessions: hostHolding.sessions,
+                                  terminals: hostHolding.terminals,
+                                  runs: hostHolding.runs
+                                })}`
+                              : '')
+                          : hostStatus?.problem
+                            ? t('settings.info.hostNotConnectedWhy', { detail: hostStatus.problem })
+                            : t('settings.info.hostNotConnected')}
+                      </span>
+                    </div>
+                    <div className="settings-row">
                       <span>{t('settings.info.registeredAccounts')}</span>
                       <span>{accounts.length}</span>
                     </div>
@@ -4023,8 +4175,11 @@ export default function App(): React.JSX.Element {
                                 newer one appears you have to be able to skip the staged build and go to
                                 that instead. If a re-check finds a newer version, autoDownload replaces
                                 the staged file and this button's version changes with it. */}
+                            {/* Through installUpdate, like every other install path: it quits the
+                                app, so the person is told what that costs their running sessions
+                                first. */}
                             {update?.state === 'downloaded' && (
-                              <button onClick={() => void window.api.update.install()}>
+                              <button onClick={() => void installUpdate()}>
                                 {t('update.info.restartInstallVersion', { version: update.version ?? '' })}
                               </button>
                             )}

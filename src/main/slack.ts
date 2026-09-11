@@ -24,6 +24,7 @@ import {
   type NotificationPayload
 } from '../core/hooks/notification'
 import type { SlackTransportConfig } from '../core/slack/ready'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { t, type Lang } from '../core/i18n'
 import {
   BotTransport,
@@ -318,7 +319,6 @@ export class SlackNotifier {
     this.threadIndex.clear()
   }
 
-  /** Called by ipc right after a slackNotify session spawns — starts tracking */
   /** The tab was renamed. Updates this record's copy so later messages carry the new prefix.
    *
    *  A copy is what makes this necessary: `SessionManager.spawn` returns `{ ...info }`, so the record
@@ -333,20 +333,78 @@ export class SlackNotifier {
     if (record) record.info = { ...record.info, title }
   }
 
+  /** Starts tracking a session. Called by ipc right after a `slackNotify` session spawns, and
+   *  again by the reattach adopter for a session the Host handed back after a reconnect — that
+   *  second caller registers over an id this already has a record for, and the body below says what
+   *  is carried across and what is not. */
   register(info: SessionInfo): void {
     if (!info.slackNotify) return
-    const provider = this.providerFor(info.accountId)
+    // **A pending exit notification for this id is cancelled, the way onRolled cancels the one it
+    // re-keys past.** Registering over a live id used to be impossible; the Host's reconnect makes it
+    // ordinary — the socket drops, every pty handle ends, `handleExit` schedules its three seconds,
+    // and the app takes the same session back under the same id well inside that window. Left armed,
+    // that timer deletes the record built just below and drops the session from the thread index, so
+    // the session loses Slack for the rest of its life after a "session ended" that never happened.
+    const replaced = this.records.get(info.id)
+    if (replaced?.exitTimer) clearTimeout(replaced.exitTimer)
+    // **Registering over a live id carries the record's history across**, the same handover
+    // `onRolled` makes when a roll re-keys one chain onto a new id, and for the same reason: the
+    // session did not restart, so what has already been said about it still holds. The case is the
+    // Host's reconnect — the socket drops, the adopter takes the session back, and it re-registers
+    // under the id it already had. Built from nothing, the record forgets four things at once, and
+    // each one shows up in what the next notification says or does not say:
+    //
+    // - `provider` decides the limit scanner, and `providerFor` falls back to claude for an account
+    //   it cannot find, so a reconnect after that account was removed would quietly stop a codex
+    //   session's limit phrases being recognised at all.
+    // - `lastSent` is the dedup window, so the notification that went out a minute ago goes out
+    //   again — one duplicate per blip, inside the ten minutes that exist to prevent exactly that.
+    // - `thread` is the root message, so a second header is posted. Nothing is lost, since replies
+    //   in either thread resolve to the same session, but the channel fills with roots for a
+    //   session that never restarted.
+    // - `pendingTool` is the tool call the screen is still waiting on. It is not rebuilt by the
+    //   scrollback the reconnect replays: it comes from the PreToolUse hook and is cleared by the
+    //   matching PostToolUse, so dropping it costs the next "input needed" line its tool content
+    //   for the whole of that pending call.
+    //
+    // **`pendingTool` is carried because nothing that maintains it was interrupted.** Hook events
+    // reach this app through the hook-event file watcher, not over the Host socket, and the app was
+    // running throughout — so the record was accurate up to the instant this replaced it, and the
+    // call cannot have finished unobserved in between. That is exactly why the same field would
+    // **not** be safe to carry across an app restart, where the PostToolUse that ended the call may
+    // well have arrived while there was nothing to receive it; the two cases look identical at this
+    // call site. (A restart cannot reach this in any case — a fresh `SlackNotifier` has no record
+    // to inherit from. `onRolled` does not carry it either, for a third reason of its own: the roll
+    // starts the new session from the resume prompt, so that screen is already gone.)
+    //
+    // Each falls back to what it was before when there is no earlier record — and `thread` also
+    // when the earlier one was null (no thread transport, or `replaceTransport` reset it), in which
+    // case a root is opened below exactly as it always was.
+    const provider = replaced?.provider ?? this.providerFor(info.accountId)
     const record: SlackRecord = {
       info,
       provider,
+      // Fresh even when the provider was inherited: a scanner holds the tail of what it has been
+      // fed, and the reconnect replayed the scrollback. `onRolled` builds a new one for the same
+      // reason.
       scanner: makeLimitScanner(provider),
-      lastSent: new Map(),
+      lastSent: replaced?.lastSent ?? new Map(),
       exitTimer: null,
-      thread: null,
-      pendingTool: null
+      thread: replaced?.thread ?? null,
+      pendingTool: replaced?.pendingTool ?? null
     }
     this.records.set(info.id, record)
-    record.thread = this.openThread(record)
+    if (record.thread) {
+      // The root post has a 10-second timeout and two retries, so an inherited thread can still be
+      // in flight — and its own resolve indexes only if the map still holds the record it was
+      // opened for, which is now the replaced one. Re-indexing here is what `onRolled` does with an
+      // inherited thread, and for the same reason: without it a reply in that thread reaches nobody.
+      void record.thread.then((ts) => {
+        if (ts && this.records.get(info.id) === record) this.threadIndex.set(ts, info.id)
+      })
+    } else {
+      record.thread = this.openThread(record)
+    }
   }
 
   /** The root message of the session thread. With a transport that does not support threads, nothing is
@@ -660,8 +718,22 @@ export class SlackNotifier {
     if (record.scanner.push(e.data)) void this.onLimitText(record)
   }
 
-  /** The session exit notification — sent after a 3-second delay. If onRolled (a rolling switch) arrives in that window, it is cancelled. */
+  /** The session exit notification — sent after a 3-second delay. If onRolled (a rolling switch) arrives in that window, it is cancelled.
+   *
+   *  **An exit that only says the app lost sight of the session is not an ending**, and this reads
+   *  that code the way orchestration's `handleExit`, `TaskValidator.onRunExit` and
+   *  `releaseCoordinator` already do. The socket to the Host drops, every pty handle ends with it,
+   *  and the Host goes on running the process — so a notification here is a death notice for a
+   *  session that is still working, and the record deletion under it is worse: the reconnect and
+   *  its pty-list sweep can take longer than three seconds, and then the `register` that adopts
+   *  the session back has nothing to inherit and posts a second thread root behind the false
+   *  obituary. Cancelling the timer in `register` covers only the case where the adoption wins the
+   *  race; this covers the case where it does not.
+   *
+   *  The cost if the session really did die with its Host is that no exit notice is ever sent for
+   *  it — the same stall side of the same asymmetry the four other readers of this code accept. */
   handleExit(e: { sessionId: string; exitCode: number }): void {
+    if (e.exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
     const record = this.records.get(e.sessionId)
     if (!record || record.exitTimer) return
     record.exitTimer = setTimeout(() => {

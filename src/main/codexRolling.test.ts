@@ -1382,6 +1382,140 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  it('reports the native session id when a rollout is attached on register', async () => {
+    const seen: Array<[string, string]> = []
+    const h = harness({ onNativeSession: (sid, native) => seen.push([sid, native]) })
+    const file = path.join(tmp, 'rollout.jsonl')
+    await fs.writeFile(file, '', 'utf8')
+    h.coord.register({ ...h.info1, resumeSessionId: 'cx-resume' }, file)
+    expect(seen).toEqual([[h.info1.id, 'cx-resume']])
+  })
+
+  // The hazard an adopted session's locate would create: since = adopt time, necessarily in the
+  // past, so findRollout's "newest wins" rule can claim a different, newer session's file in the
+  // The mapping the adopter reads out of the Host's note is the one this chain could never find for
+  // itself, and it is not a guess: the rollout watcher established it while the session ran, in the
+  // one moment findRollout's rule holds. Handed it, the chain is mapped from registration and its
+  // next limit is an ordinary roll.
+  it('an adopted codex session rolls when it is handed the mapping from the note', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-adopted', cwd: h.info1.cwd })
+    h.coord.register(h.info1, file, false, false, 'cx-adopted')
+    await advance(100) // no locate poll to wait for — it is mapped already
+    expect(h.coord.rolloutPathFor(h.info1.id)).toBe(file)
+    expect(h.coord.findLiveByCodexSession('cx-adopted')?.id).toBe(h.info1.id)
+    await appendTokenCount(file, { primary: 95 })
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    expect(h.spawned[0].resumeSessionId).toBe('cx-adopted')
+    h.coord.stop()
+  })
+
+  // A chain that had already rolled before the restart comes back sitting on a later account, and the
+  // cycle starts at 0 — so the first limit would record the block against the account at index 0,
+  // broadcast that to every other chain, and roll to index 1, which is the exhausted account it is
+  // already on. The account the session is really running under is in the note, so the cycle is
+  // positioned from it.
+  it('an adopted chain that had already rolled rolls off the account it is really on', async () => {
+    const h = harness()
+    const onC2: SessionInfo = { ...h.info1, accountId: 'c2' }
+    const file = await writeRollout({ accountId: 'c2', uuid: 'cx-rolled', cwd: onC2.cwd })
+    h.coord.register(onC2, file, false, false, 'cx-rolled')
+    await advance(100)
+    await appendTokenCount(file, { primary: 95 })
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c1'])
+    h.coord.stop()
+  })
+
+  // The one thing an adoption deliberately does not do is ask the file what block the conversation
+  // already ended on — the copy a recent roll made holds the previous account's records and nothing
+  // here can tell it from an ordinary file. What a person sees when that costs something is a session
+  // that quietly never resumes, so the choice is stated in the log the coordinator already writes.
+  it('says in the log that an adopted chain does not read the block on record', async () => {
+    const logs: string[] = []
+    const h = harness({ log: (m) => logs.push(m) })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-adopted', cwd: h.info1.cwd })
+    h.coord.register(h.info1, file, false, false, 'cx-adopted')
+    expect(logs.some((l) => l.includes('adopted without reading the block on record'))).toBe(true)
+    h.coord.stop()
+  })
+
+  // The log line above is the whole record of that choice, and nobody opens rolling.log until
+  // something has already gone wrong. A session that was blocked when the app went down comes back
+  // and simply stops, with nothing on screen. So the same fact is published as a banner state.
+  //
+  // **Its own state, not 'waiting'.** 'waiting' means a retry is armed and carries the time it fires
+  // at; an adopted chain has neither, so the banner would print an empty or invented time under a
+  // sentence promising the session resumes by itself. This state promises nothing and says only what
+  // is true: the chain cannot tell whether the account is already blocked, so it will not roll until
+  // codex writes its next record.
+  it('publishes an adopted state so a chain that may already be blocked is not silent', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-adopted', cwd: h.info1.cwd })
+    h.coord.register(h.info1, file, false, false, 'cx-adopted')
+    expect(h.sent).toEqual([
+      { channel: 'session:rollState', payload: { sessionId: 's1', state: 'adopted' } }
+    ])
+    h.coord.stop()
+  })
+
+  // What the banner says it is waiting for is the next rate_limits record, so that record is what
+  // takes it down: from then on the chain judges limits from its own snapshot like any other, and
+  // leaving the banner up would be telling the person about a doubt that has been resolved.
+  it('clears the adopted state once the session writes a rate_limits record of its own', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-adopted', cwd: h.info1.cwd })
+    h.coord.register(h.info1, file, false, false, 'cx-adopted')
+    await advance(100)
+    await appendTokenCount(file, { primary: 10 })
+    await advance(20_000) // the 15s tick reads the tail
+    expect(h.sent.map((s) => s.payload.state)).toEqual(['adopted', 'none'])
+    h.coord.stop()
+  })
+
+  // A resume reads the block on record, so there is no doubt to report and no banner to show.
+  it('publishes no adopted state for a resume, which does read the block on record', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-resume', cwd: h.info1.cwd })
+    h.coord.register({ ...h.info1, resumeSessionId: 'cx-resume' }, file, true)
+    expect(h.sent).toEqual([])
+    h.coord.stop()
+  })
+
+  // A resume does ask (when the account matches), so it must not carry the adopted line.
+  it('does not say it for a resume, which does read the block on record', async () => {
+    const logs: string[] = []
+    const h = harness({ log: (m) => logs.push(m) })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-resume', cwd: h.info1.cwd })
+    h.coord.register({ ...h.info1, resumeSessionId: 'cx-resume' }, file, true)
+    expect(logs.some((l) => l.includes('adopted without reading the block on record'))).toBe(false)
+    h.coord.stop()
+  })
+
+  // Unchanged for a note that carries no mapping: there is nothing to hand over, so the chain is
+  // registered unmapped rather than sent scanning.
+  it('an adopted codex session never reaches the locate — it stays unmapped from registration', async () => {
+    const h = harness()
+    // A real, matching file exists — if locate ran, it would find this.
+    await writeRollout({ accountId: 'c1', uuid: 'cx-adopted', cwd: h.info1.cwd })
+    h.coord.register(h.info1, undefined, undefined, false)
+    await advance(1_500) // past where the first locate poll would have landed, had one been armed
+    expect(h.coord.rolloutPathFor(h.info1.id)).toBeNull()
+    // The model-switch prompt still gets answered — it does not depend on ever having located a file.
+    h.coord.handleData({ sessionId: h.info1.id, data: MODEL_PROMPT })
+    await advance(300)
+    expect(h.written).toEqual([
+      [h.info1.id, '2'],
+      [h.info1.id, '\r']
+    ])
+    h.coord.stop()
+  })
+
   // 실측 로그(dev): `codex rolled …` 바로 뒤에 `codex rollout not found within 60000ms — rolling
   // disabled`. 롤의 respawn 도 `codex resume` 이라 새 rollout 이 생기지 않으니 재-locate 는 실패할
   // 수밖에 없고, 그 순간부터 그 체인은 두 번째 한도를 영영 보지 못한다. 단일 계정 체인에서는

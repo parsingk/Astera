@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { PtyFactory, PtyLike, PtySpawnOptions } from '../core/sessions/pty'
 import { RunManager } from './runManager'
-import type { RunConfig } from '../core/run/config'
+import type { RunConfig, RunStatus } from '../core/run/config'
 
 // node-pty 를 흉내낸다 — **종료된 pty 에 write/resize 를 부르면 던진다.** 이 더블이 그것을 no-op
 // 으로 두고 있었던 탓에, RunManager 가 끝난 실행에 resize 를 흘려보내 main 프로세스를 죽이는 결함이
@@ -30,6 +30,9 @@ class FakePty implements PtyLike {
   resume() {}
   /** 실물의 종료를 흉내낸다 — 콜백을 부르기 전에 죽은 상태가 된다 */
   exit(exitCode: number) { this.exited = true; this.exitCb({ exitCode }) }
+  /** What `createPtyRouter` stamps on a real handle. Absent is the app's own child, which is what
+   *  the router writes with no Host and what every other test in this file wants. */
+  outlivesApp?: boolean
 }
 
 const cfg: RunConfig = { id: 'c1', name: 'dev', type: 'shell', command: 'npm run dev' }
@@ -94,6 +97,174 @@ describe('RunManager', () => {
     const st = mgr.start(startOpts())
     expect('validation' in st).toBe(false)
     expect(mgr.get(st.runId)?.validation).toBeUndefined()
+  })
+
+  // The Host stores this and hands it back after a restart; it is the only thing that lets the app
+  // rebuild this run's record without having persisted anything itself.
+  it('tells the pty factory what this run is, so it can be rebuilt later', () => {
+    const { mgr, spawned } = setup()
+    const status = mgr.start(startOpts())
+    expect(spawned[0].opts.meta).toMatchObject({ kind: 'run', id: status.runId })
+    expect(spawned[0].opts.meta?.restore).toMatchObject({
+      projectPath: status.projectPath,
+      configId: status.configId,
+      command: status.command,
+      cwd: status.projectPath, // this configuration overrides none, so the project path is where it ran
+      seq: status.seq,
+      startedAt: status.startedAt
+    })
+  })
+
+  // Where the process actually started, which is a spawn-time value like startedAt: the configuration
+  // on disk may be edited before the restart, and cwdOf answers for the process that is running.
+  it('records the directory the run started in, a configuration override included', () => {
+    const { mgr, spawned } = setup()
+    mgr.start(startOpts({ config: { ...cfg, cwd: 'D:/p/api' } }))
+    expect(spawned[0].opts.cwd).toBe('D:/p/api')
+    expect(spawned[0].opts.meta?.restore).toMatchObject({ cwd: 'D:/p/api' })
+  })
+
+  // A restored validation run must still carry the tag — otherwise decideStart's `validation !== true`
+  // filter would treat it as the user's own live run and target it for a same-config ▶, and run.stop
+  // would not route through TaskValidator.markStopped.
+  it('a validation run says so in restore too, not just on status', () => {
+    const { mgr, spawned } = setup()
+    mgr.start(startOpts({ validation: true }))
+    expect(spawned[0].opts.meta?.restore).toMatchObject({ validation: true })
+  })
+
+  it('an ordinary run has no validation key in restore, not a false one', () => {
+    const { mgr, spawned } = setup()
+    mgr.start(startOpts())
+    expect(spawned[0].opts.meta?.restore).not.toHaveProperty('validation')
+  })
+
+  describe('adopt', () => {
+    const restore = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+      projectPath: 'D:/p',
+      projectName: 'p',
+      configId: 'cfg',
+      configName: 'dev',
+      command: 'npm run dev',
+      cwd: 'D:/p/api',
+      seq: 0,
+      startedAt: 1_700_000_000_000,
+      ...over
+    })
+
+    // After a restart the process is already running; adopt rebuilds only the app's own record of it.
+    it('adopts a running pty and puts the run back in the list', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: restore() })
+      expect(status).toMatchObject({
+        projectPath: 'D:/p',
+        configId: 'cfg',
+        command: 'npm run dev',
+        status: 'running'
+      })
+      expect(mgr.listByProject('D:/p').map((r) => r.runId)).toEqual([status!.runId])
+      expect(mgr.listActive().map((r) => r.runId)).toEqual([status!.runId])
+    })
+
+    // startedAt is a spawn-time moment nothing else writes down, so it has to come back from the note:
+    // taken as "now", a dev server that has run for a day reads as having just started, and several
+    // runs rebuilt around one restart tie-break arbitrarily instead of by real age.
+    it('keeps the startedAt the note carries instead of restarting the clock', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: restore() })!
+      expect(status.startedAt).toBe(1_700_000_000_000)
+    })
+
+    // Without the tag a rebuilt validation run is an ordinary one to decideStart, which would let a
+    // same-config ▶ take it over instead of leaving it to the orchestrator.
+    it('keeps the validation tag, and leaves the key off an ordinary run', () => {
+      const { mgr } = setup()
+      const validation = mgr.adopt({ kind: 'run', id: 'run-validation', pty: new FakePty(), restore: restore({ validation: true }) })!
+      expect(validation.validation).toBe(true)
+      expect(mgr.adopt({ kind: 'run', id: 'run-ordinary', pty: new FakePty(), restore: restore() })).not.toHaveProperty('validation')
+    })
+
+    // The seat is the run's place in its project's list; a rebuilt run has to sit back down in its own.
+    it('keeps the seat the note carries', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: restore({ seq: 3 }) })!
+      expect(status.seq).toBe(3)
+    })
+
+    it('an adopted run streams, reports status and settles whenExited like a started one', async () => {
+      const { mgr } = setup()
+      const datas: { runId: string; data: string }[] = []
+      const statuses: RunStatus[] = []
+      mgr.onData = (e) => datas.push(e)
+      mgr.onStatus = (s) => statuses.push(s)
+      const pty = new FakePty()
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty, restore: restore() })!
+      expect(statuses.map((s) => s.status)).toEqual(['running']) // the list and the badge refresh
+      pty.dataCb('listening on http://localhost:5173/\n')
+      expect(datas).toEqual([{ runId: status.runId, data: 'listening on http://localhost:5173/\n' }])
+      expect(mgr.recentOutput(status.runId)).toContain('listening on')
+      expect(mgr.get(status.runId)?.detectedUrl).toBe('http://localhost:5173/')
+      const waiting = mgr.whenExited(status.runId)
+      pty.exit(2)
+      await expect(waiting).resolves.toBe(2)
+      expect(mgr.get(status.runId)?.status).toBe('exited')
+    })
+
+    // cwdOf is what a relative path in the output is resolved against, and the truth is the directory
+    // the process actually started in — a spawn-time value like startedAt, since the configuration on
+    // disk may have been edited since.
+    it('resolves output paths against the cwd the note carries', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: restore() })!
+      expect(mgr.cwdOf(status.runId)).toBe('D:/p/api')
+    })
+
+    // A note written before runs recorded their cwd. The project path is what start itself falls back
+    // to when the configuration overrides none, so it is the right answer for a note that has none.
+    it('falls back to the project path when the note carries no cwd', () => {
+      const { mgr } = setup()
+      const note = restore()
+      delete note.cwd
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: note })!
+      expect(mgr.cwdOf(status.runId)).toBe('D:/p')
+    })
+
+    // The run keeps the id it had before the restart, so everything already addressing it still does.
+    it('keeps the runId it is handed rather than minting one', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: restore() })!
+      expect(status.runId).toBe('run-from-host')
+      expect(mgr.get('run-from-host')?.command).toBe('npm run dev')
+      expect(mgr.listByProject('D:/p').map((r) => r.runId)).toEqual(['run-from-host'])
+    })
+
+    // A number that crossed a process boundary can be anything; a NaN seq would sort the run out of its
+    // list and a NaN startedAt would print as an unreadable age.
+    it('refuses a seq or a startedAt that is not a finite number', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({
+        kind: 'run',
+        id: 'run-from-host',
+        pty: new FakePty(),
+        restore: restore({ seq: Number.NaN, startedAt: Number.NaN })
+      })!
+      expect(status.seq).toBe(0)
+      expect(Number.isFinite(status.startedAt)).toBe(true)
+    })
+
+    // null is "I cannot read this", and the shapes overlap enough that a note of another kind can be
+    // readable — so the kind is checked before anything else, not inferred from the fields present.
+    it('refuses a note of another kind', () => {
+      const { mgr } = setup()
+      expect(mgr.adopt({ kind: 'terminal', id: 'term-from-host', pty: new FakePty(), restore: restore() })).toBeNull()
+      expect(mgr.listByProject('D:/p')).toEqual([])
+    })
+
+    it('refuses a restore it cannot read', () => {
+      const { mgr } = setup()
+      expect(mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: { projectPath: 'D:/p' } })).toBeNull()
+      expect(mgr.listByProject('D:/p')).toEqual([])
+    })
   })
 
   // The constraint this feature removes. Two runs of one project — even of one configuration — live
@@ -199,12 +370,27 @@ describe('RunManager', () => {
       expect(killed).toHaveLength(1)
     })
 
-    it('stopAll reaches every running run', () => {
+    it('stopAppOwned reaches every running run the app made', () => {
       const { mgr, spawned } = setup('linux')
       mgr.start(startOpts())
       mgr.start(startOpts({ projectPath: 'D:/b', projectName: 'b' }))
-      mgr.stopAll()
+      mgr.stopAppOwned()
       expect(spawned.every((s) => s.pty.killed)).toBe(true)
+    })
+
+    // A run started in the window before the Host answered is this process's own child; one started
+    // after belongs to the Host and survives the quit that ends the app. The tree kill is why the
+    // difference matters more for a run than for anything else: `npm run dev`'s own children have
+    // nothing left to reap them once the app is gone, and only the tree kill reaches them.
+    it('stopAppOwned leaves a run whose pty outlives the app alone', () => {
+      const { mgr, spawned, killed } = setup('win32')
+      mgr.start(startOpts())
+      mgr.start(startOpts({ projectPath: 'D:/b', projectName: 'b' }))
+      spawned[1].pty.outlivesApp = true
+      mgr.stopAppOwned()
+      expect(killed).toHaveLength(1) // the tree kill went out for the app's own run only
+      expect(spawned.map((s) => s.pty.killed)).toEqual([false, false]) // win32 kills the tree, not the pty
+      expect(mgr.listActive().map((r) => r.status)).toEqual(['stopping', 'running'])
     })
   })
 

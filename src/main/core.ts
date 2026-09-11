@@ -8,6 +8,7 @@ import { PROVIDERS, providerOf } from '../core/providers/meta'
 import { makeDescriptors, descriptorOf, isAmbientDir, type ProviderDescriptor } from '../core/providers/descriptor'
 import { SessionManager } from '../core/sessions/manager'
 import { nodePtyFactory } from '../core/sessions/nodePtyFactory'
+import { createPtyRouter } from './host/ptyRouter'
 import { HistoryIndex } from '../core/history/index'
 import { SessionCwdCache } from '../core/history/sessionCwdCache'
 import { ProjectSettings } from '../core/projects/settings'
@@ -33,6 +34,7 @@ import { previewShotsDir } from './preview/shots'
 import { setPseudoLocalization } from '../core/i18n/pseudo'
 import type { Lang, Message } from '../core/i18n'
 import type { Account, DetectCandidate, Provider, SessionUsage } from '../core/types'
+import type { PtyFactory } from '../core/sessions/pty'
 
 export interface Core {
   accounts: AccountRegistry
@@ -89,6 +91,15 @@ export interface Core {
   // The current language main uses when building user-visible sentences — settings.setLang updates it.
   // Pure core modules only produce a Message (a key); translation happens in this layer, which knows the language
   lang: Lang
+  // Switches the one PtyFactory that SessionManager, RunManager and TerminalManager were built with.
+  // `registerIpc` calls `use()` exactly once, when the Host answers its first handshake, and nothing
+  // calls it again: a dropped connection is not the Host dying, and going back to node-pty there would
+  // spawn a session the Host's own ptys cannot be reconciled with. `use(null)` therefore has no caller
+  // outside the router's test, and is kept as the honest inverse of a switch that can be made.
+  // The router no longer answers "do the ptys outlive the app" for the app as a whole: it writes that
+  // onto each handle instead (`PtyLike.outlivesApp`), because with a Host starting up both kinds are
+  // live at once and the quit path has to end one and leave the other.
+  ptyRouter: { use(f: PtyFactory | null): void }
 }
 
 // An alias narrowed to just the shape accountLogout actually uses — node:child_process's execFile has so many
@@ -163,10 +174,13 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
       : resolveNodePath(process.env as { PATH?: string }, existsSync, process.platform)
   )
   await statusLine.init()
+  // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once
+  // the Host answers; until then, and whenever there is no Host, this is node-pty exactly as before.
+  const ptyRouter = createPtyRouter(nodePtyFactory)
   // descriptors is injected explicitly — left unspecified, each of them calls makeDescriptors(process.platform)
   // again, so every instance gets its own table (plus two command builders SessionManager never uses).
   const sessions = new SessionManager(
-    nodePtyFactory,
+    ptyRouter.factory,
     descriptors,
     undefined,
     undefined,
@@ -215,8 +229,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   await accountUsage.load()
   const keybindings = new KeybindingsStore(path.join(userDataDir, 'keybindings.json'))
   await keybindings.load()
-  const run = new RunManager(nodePtyFactory)
-  const terminal = new TerminalManager(nodePtyFactory)
+  const run = new RunManager(ptyRouter.factory)
+  const terminal = new TerminalManager(ptyRouter.factory)
   // ipc.ts owns the accounts.onChanged wiring (history.reload included); nothing is wired here because it would be overwritten there
   const detectFor = async (excludeDirs: string[]): Promise<DetectCandidate[]> => {
     const lists = await Promise.all(
@@ -342,6 +356,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     codexUsageFetcher,
     accountUsage,
     keybindings,
-    lang: appSettings.getLang() ?? pickInitialLang(osLocale)
+    lang: appSettings.getLang() ?? pickInitialLang(osLocale),
+    ptyRouter
   }
 }

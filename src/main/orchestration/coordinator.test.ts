@@ -483,6 +483,134 @@ describe('OrchCoordinator.startWorker', () => {
     const written = await fs.readFile(r.specPath, 'utf8')
     expect(written).toContain('knowledge/a.md')
   })
+
+  it('reports the prompt hand-off around a spawn: requested, then confirmed, via argv', async () => {
+    const deps = makeDeps()
+    const seen: Array<{ phase: string; via: string; promptLength: number; dispatchId: string }> = []
+    const co = new OrchCoordinator({
+      ...deps,
+      onPromptWrite: (e) => seen.push({ phase: e.phase, via: e.via, promptLength: e.promptLength, dispatchId: e.dispatchId })
+    })
+    await co.startWorker({
+      dispatchId: 'dsp_1',
+      taskId: 'tsk_1',
+      title: 't',
+      spec: 's',
+      provider: 'codex',
+      accountId: 'acc',
+      rollAccountIds: ['acc'],
+      runCwd: dir,
+      worktree: 'current'
+    })
+    expect(seen.map((s) => s.phase)).toEqual(['requested', 'confirmed'])
+    expect(seen.every((s) => s.via === 'argv' && s.dispatchId === 'dsp_1' && s.promptLength > 0)).toBe(true)
+    expect(deps.spawned).toHaveLength(1)
+  })
+
+  it('reports the prompt hand-off around a typed prompt for a reused terminal', async () => {
+    const deps = makeDeps()
+    const seen: string[] = []
+    const co = new OrchCoordinator({ ...deps, onPromptWrite: (e) => seen.push(`${e.phase}:${e.via}`) })
+    await co.startWorker({
+      dispatchId: 'dsp_1',
+      taskId: 'tsk_1',
+      title: 't',
+      spec: 's',
+      provider: 'codex',
+      accountId: 'acc',
+      rollAccountIds: ['acc'],
+      runCwd: dir,
+      worktree: 'current',
+      terminal: 'sess-live',
+      terminalCwd: dir,
+      terminalProvider: 'codex',
+      terminalAccountId: 'acc'
+    })
+    expect(seen).toEqual(['requested:typed', 'confirmed:typed'])
+    expect(deps.written).toHaveLength(2)
+    expect(deps.written[1]).toBe('\r')
+  })
+
+  it('resumes the provider session and names the new dispatch in the phrase', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({
+      dispatchId: 'dsp_new',
+      taskId: 'tsk_1',
+      title: 't',
+      spec: 's',
+      provider: 'codex',
+      accountId: 'acc',
+      rollAccountIds: ['acc'],
+      runCwd: dir,
+      worktree: 'current',
+      resume: { nativeSessionId: 'native-uuid' }
+    })
+    const spawned = deps.spawned[0] as { resumeSessionId?: string; resumePrompt?: string; initialPrompt?: string }
+    expect(spawned.resumeSessionId).toBe('native-uuid')
+    // codex takes the phrase as resumePrompt; claude takes it as the positional initialPrompt
+    expect(spawned.resumePrompt).toContain('dsp_new')
+    expect(spawned.resumePrompt).toContain('tsk_1')
+  })
+
+  it('gives claude the phrase as its initial prompt', async () => {
+    const deps = makeDeps()
+    deps.accountProvider = () => 'claude'
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({
+      dispatchId: 'dsp_new',
+      taskId: 'tsk_1',
+      title: 't',
+      spec: 's',
+      provider: 'claude',
+      accountId: 'acc',
+      rollAccountIds: ['acc'],
+      runCwd: dir,
+      worktree: 'current',
+      resume: { nativeSessionId: 'native-uuid' }
+    })
+    const spawned = deps.spawned[0] as { resumeSessionId?: string; resumePrompt?: string; initialPrompt: string }
+    expect(spawned.resumeSessionId).toBe('native-uuid')
+    expect(spawned.initialPrompt).toContain('dsp_new')
+    expect(spawned.resumePrompt).toBeUndefined()
+  })
+
+  it('writes the briefing into the spec file before the agent is launched', async () => {
+    const deps = makeDeps()
+    let specWhenSpawned = ''
+    const spawnSession = deps.spawnSession
+    deps.spawnSession = async (o) => {
+      specWhenSpawned = await fs.readFile(path.join(specsDir, 'tsk_1-dsp_new.md'), 'utf8')
+      return spawnSession(o)
+    }
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({
+      dispatchId: 'dsp_new',
+      taskId: 'tsk_1',
+      title: 't',
+      spec: 's',
+      provider: 'codex',
+      accountId: 'acc',
+      rollAccountIds: ['acc'],
+      runCwd: dir,
+      worktree: 'current',
+      resume: { briefing: 'PREVIOUS ATTEMPT: it got as far as X' }
+    })
+    expect(specWhenSpawned).toContain('PREVIOUS ATTEMPT: it got as far as X')
+    expect(specWhenSpawned).toContain('Resume briefing')
+  })
+
+  it('an ordinary start is unchanged', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({
+      dispatchId: 'dsp_1', taskId: 'tsk_1', title: 't', spec: 's', provider: 'codex',
+      accountId: 'acc', rollAccountIds: ['acc'], runCwd: dir, worktree: 'current'
+    })
+    const spawned = deps.spawned[0] as { resumeSessionId?: string; initialPrompt: string }
+    expect(spawned.resumeSessionId).toBeUndefined()
+    expect(spawned.initialPrompt).toContain('Read ')
+  })
 })
 
 // committing은 a.worktree가 아니라 확정된 cwd에서 유도한다(coordinator.ts의 startWorker 안,

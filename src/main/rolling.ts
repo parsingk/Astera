@@ -108,6 +108,9 @@ export interface RollingDeps {
    *  reverting to per-chain isolation. The same reasoning made rollAccountIds required. */
   blocks: BlockRegistry
   persistConfig?: (claudeSessionId: string, config: RollConfig) => void // saves the rolling config
+  /** Job Continuity: the provider's own session id, the moment it is first learned for a live session
+   *  and again when it changes (a respawn). Optional — without the feature nothing listens. */
+  onNativeSession?: (sessionId: string, nativeSessionId: string) => void
   copy?: (src: string, dest: string) => Promise<void> // for test injection — defaults to copyTranscript
   now?: () => number
   probeActivity?: (transcriptPath: string) => Promise<number | null> // for test injection — defaults to lastActivityAt
@@ -304,10 +307,37 @@ export class RollingCoordinator {
   register(info: SessionInfo, resumeTranscriptPath?: string): void {
     const ids = info.rollAccountIds ?? []
     if (ids.length < 1) return
+    // **Where in the chain this session already is.** The cycle's own start is 0, which is right for
+    // every caller that spawns a session and then registers it — all of them put the account they
+    // spawned on at the head of the chain (the renderer passes `accountIds[0]` as the account it is
+    // spawning; `rollChainFor` builds a worker's chain with the requested account first; a coordinator
+    // session's chain is that one account). Adoption is the caller that does not: a session taken back
+    // from the Host may have rolled onto a later account before the restart, and it comes back with the
+    // account it is really running under in `SessionInfo.accountId`. Left at 0, its first limit would be
+    // wrong three ways over — the block recorded against the account at index 0, that record broadcast
+    // to every other chain through `blocks.record`, and the roll aimed at index 1, the exhausted account
+    // it is already sitting on.
+    //
+    // Positioned for every caller rather than behind an adopted flag, because for all the others this is
+    // the identity: their account *is* `ids[0]`, so it reads 0 and nothing moves. A caller whose session
+    // starts on a later account would want this too, which is why there is nothing to gate.
+    //
+    // `indexOf` cannot answer -1 here. The two fields are written together by one `spawn` call — the
+    // account it was given and the chain it was given — and adoption restores them from one note written
+    // by that same call; a note whose `rollAccountIds` cannot be read leaves the field absent, and this
+    // function has already returned above on the empty chain.
+    //
+    // `> 0` rather than `>= 0` reads oddly against that: 0 is already where the cycle starts, so the
+    // condition only ever guards the -1 the paragraph above says cannot arrive. Kept because the
+    // alternative is a branch whose only reachable case is the impossible one — and if a future note
+    // writer does break the argument, staying at 0 is what every caller did before this line existed.
+    const cycle = new RollCycle(ids.length)
+    const at = ids.indexOf(info.accountId)
+    if (at > 0) cycle.advanceTo(at)
     this.chains.set(info.id, {
       accountIds: ids,
       prompt: info.rollPrompt?.trim() || t(this.deps.lang(), 'rolling.continuePrompt'), // user-specified text, or the default when empty
-      cycle: new RollCycle(ids.length),
+      cycle,
       liveId: info.id,
       liveInfo: info,
       cwd: info.cwd,
@@ -1650,6 +1680,7 @@ export class RollingCoordinator {
       // On first learning claudeSessionId (null→value), save the rolling config once — for restoring it after a disable-and-resume
       if (!chain.claudeSessionId)
         this.deps.persistConfig?.(meta.sessionId, { accountIds: chain.accountIds, prompt: chain.prompt })
+      if (chain.claudeSessionId !== meta.sessionId) this.deps.onNativeSession?.(chain.liveId, meta.sessionId)
       chain.claudeSessionId = meta.sessionId
     }
     if (meta.transcriptPath) {

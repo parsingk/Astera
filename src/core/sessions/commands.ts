@@ -28,7 +28,17 @@ export function buildClaudeCommand(platform: NodeJS.Platform): CommandBuilder {
     if (resumeSessionId) args.push('--resume', resumeSessionId)
     // Starts without permission prompts
     if (bypassPermissions) args.push('--dangerously-skip-permissions')
-    if (initialPrompt) args.push(initialPrompt)
+    // **`--` first, always.** The prompt is a positional argument and `--add-dir` above is variadic,
+    // so with nothing between them the CLI reads the prompt as one more directory to grant — an
+    // unreadable one, silently ignored — and the session comes up at an empty REPL having been told
+    // nothing (measured on claude 2.1.268: `-p --add-dir <dir> "say PONG"` answers "Input must be
+    // provided…", the same call with `--` answers PONG). Every launch that carries a prompt but no
+    // permission bypass and no resume took that shape: the Job coordinator (main/ipc.ts's
+    // startCoordinator withholds `bypassPermissions` on purpose) and the worker beside it, so a Job
+    // sat at `ready` with a live session that had never been asked for anything.
+    // Unconditional rather than only when addDirs is set: the fence costs one token and states the
+    // rule once, where a condition would have to be revisited by whoever adds the next option.
+    if (initialPrompt) args.push('--', initialPrompt)
     // On win32 claude may be a .cmd shim, so it is spawned through a cmd.exe wrapper
     return platform === 'win32'
       ? { file: 'cmd.exe', args: ['/c', 'claude', ...args] }

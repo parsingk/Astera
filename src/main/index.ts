@@ -59,6 +59,7 @@ let codexRolloutRef: CodexRolloutWatcher | null = null
 let slackInboxControllerRef: SlackInboxController | null = null // Slack inbound socket rebuilder — cut on quit
 let rollingRef: RollingCoordinator | null = null // lets the hook callback reach a coordinator created later
 let orchRef: OrchHandle | null = null // orchestration shutdown cleanup + the rolling seam
+let hostClientStopRef: (() => Promise<void>) | null = null // Astera Host client — closes the socket on quit
 // fix wave 최종, F1: the tab-briefing function, handed over unconditionally (OrchWiring.onTabResumeReady)
 // — unlike orchRef above, this is set the moment registerIpc runs, whether or not orchestration ever
 // boots. Read by the two rolling coordinators' resumeText dep when orchRef is null (orchestration off),
@@ -469,6 +470,16 @@ app.whenReady().then(async () => {
       }
     },
     onTurnComplete: (sessionId, rolloutPath) => slack.onCodexTurnComplete(sessionId, rolloutPath),
+    // The mapping goes into the note the Host keeps for that session's pty, which is the only place it
+    // can be read back from after a restart — the scan that made it cannot be run again for a session
+    // whose spawn is in the past. With no Host the pty has no note and this does nothing.
+    remember: (sessionId, note) => {
+      try {
+        core!.sessions.remember(sessionId, note)
+      } catch {
+        /* writing the mapping down must not disturb the poll that produced it */
+      }
+    },
     log: slackLog
   })
   codexRolloutRef = codexRollout
@@ -674,6 +685,8 @@ app.whenReady().then(async () => {
       void core!.rollConfig.set(sid, cfg).catch(() => {})
     },
     orchEnv: () => orchRef?.orchEnv(),
+    // Job Continuity: binds the native session id to the open Dispatch as soon as the coordinator learns it.
+    onNativeSession: (sid, native) => orchRef?.onNativeSession(sid, native),
     // Job 워커의 재개 packet(Task 4b/4c), 없으면(오케스트레이션이 꺼져 있거나 탭 세션이면) 탭
     // 브리핑으로 저하한다 — resumeTextDep 의 JSDoc(fix wave 최종, F1/F3).
     resumeText: resumeTextDep,
@@ -750,7 +763,10 @@ app.whenReady().then(async () => {
           codexRollout.unregister(p.oldSessionId)
           codexRollout.register(p.info, p.dest)
         } else if (channel === 'session:rollState') {
-          // codex rolling sends session:rollState too (switching/waiting/none) — suppress the resume window
+          // codex rolling sends session:rollState too (switching/waiting/adopted/none) — suppress the
+          // resume window. 'adopted' is not one of the states that suppresses: it says a chain taken
+          // back from the Host cannot judge its own limit, which is not a resume window, and the
+          // switch in handleRollState leaves it to the default on purpose.
           scheduler.handleRollState(payload as RollStateEvent)
         }
       } catch {
@@ -807,6 +823,8 @@ app.whenReady().then(async () => {
       void core!.rollConfig.set(sid, cfg).catch(() => {}) // fire-and-forget
     },
     orchEnv: () => orchRef?.orchEnv(),
+    // Job Continuity: binds the native session id to the open Dispatch as soon as the coordinator learns it.
+    onNativeSession: (sid, native) => orchRef?.onNativeSession(sid, native),
     // Job 워커의 재개 packet(Task 4b/4c) — rolling.ts 의 같은 필드, 같은 resumeTextDep 이다.
     resumeText: resumeTextDep,
     // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이
@@ -825,6 +843,18 @@ app.whenReady().then(async () => {
       appendFileSync(orchLogFile, `${new Date().toISOString()} ${m}\n`)
     } catch {
       /* a logging failure must not block orchestration */
+    }
+  }
+  // The app's side of the Astera Host channel. Its own file, beside rolling.log, slack.log and
+  // orchestration.log — one per subsystem. The Host writes host/host.log from its end; this is the
+  // other end of the same conversation, and somebody asking why Settings says Not connected has to
+  // find it under a name that says Host rather than buried in an unrelated subsystem's log.
+  const hostLogFile = path.join(app.getPath('userData'), 'host-client.log')
+  const hostLog = (m: string): void => {
+    try {
+      appendFileSync(hostLogFile, `${new Date().toISOString()} ${m}\n`)
+    } catch {
+      /* a logging failure must not take the Host client down */
     }
   }
   registerIpc(
@@ -857,7 +887,15 @@ app.whenReady().then(async () => {
       workUnitForkRef = notify
     },
     desktop,
-    agentGuests
+    agentGuests,
+    {
+      log: hostLog,
+      // Handed over as soon as the client exists, whether or not a Host is ever reached — the same
+      // shape as onTabResumeReady above. Read from will-quit.
+      onHostClientReady: (stop) => {
+        hostClientStopRef = stop
+      }
+    }
   )
   // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
   // Open/Quit would only repeat what the window and its close button already do — while tying the
@@ -1054,8 +1092,20 @@ app.on('window-all-closed', () => {
 })
 app.on('will-quit', () => {
   if (!core) return
-  const running = core.sessions.list().filter((s) => s.status === 'running')
-  for (const s of running) {
+  // **Whether quitting ends a pty is now a question, and it is asked per pty** (slice 2 design §1).
+  // While they were all this process's own children, ending them here was the only honest thing to
+  // do: an orphaned agent keeps spending tokens with nobody able to reach it. One the Host owns is
+  // its child instead, `sessions.kill` reaches across the socket and ends the real process, and
+  // running this cleanup on it would leave the terminals surviving a crash but not an ordinary quit
+  // — the exact inverse of what the slice promises.
+  //
+  // Both kinds can be live at once: the Host takes a moment to start, and a session, Run or terminal
+  // made before it answered went to node-pty. Asking "is a Host installed" would sweep those into
+  // whichever branch the answer chose, so each manager is asked about its own ptys instead. The
+  // router wrote the answer onto each handle at the moment it chose the factory — see
+  // `PtyLike.outlivesApp`. With no Host every pty is the app's own and this runs exactly as it did
+  // before a Host existed: same teardown, same order.
+  for (const s of core.sessions.runningAppOwned()) {
     try {
       core.sessions.kill(s.id)
     } catch {
@@ -1077,19 +1127,32 @@ app.on('will-quit', () => {
   } catch {
     /* shutdown cleanup failures are ignored */
   }
+  // Both of these end ptys, so both skip the Host's for the same reason the session loop above does
+  // — a Run's dev server and a project terminal survive a quit exactly as an agent session does.
+  // A run the app owns still gets the tree kill it always got, which is the whole reason this is a
+  // per-pty question: only that reaches the build's own children (`RunManager.stopAppOwned`).
   try {
-    core.run.stopAll()
+    core.run.stopAppOwned()
   } catch {
     /* a run cleanup failure must not block quit */
   }
   try {
-    core.terminal.closeAll() // project terminal cleanup
+    core.terminal.closeAppOwned() // project terminal cleanup
   } catch {
     /* shutdown cleanup failures are ignored */
   }
   try {
     orchRef?.stop() // close the orchestration server + delete the token file
     orchRef = null
+  } catch {
+    /* shutdown cleanup failures are ignored */
+  }
+  try {
+    // The Host client's socket and its retry timers. Nothing is awaited: `stop()` has done its work
+    // by the time it returns, and asynchronous cleanup may not finish before the process ends
+    // (OrchWiring.onStarted's JSDoc, ipc.ts, on why these are all synchronous).
+    void hostClientStopRef?.()
+    hostClientStopRef = null
   } catch {
     /* shutdown cleanup failures are ignored */
   }

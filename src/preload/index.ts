@@ -41,6 +41,7 @@ const EVENT_CHANNELS = [
   'preview:agentEscape',
   'terminal:data',
   'terminal:exit',
+  'terminal:created',
   'orch:state',
   'understanding:changed',
   'sessionTasks:changed',
@@ -149,6 +150,10 @@ const api = {
     listModels: invoke('settings.listModels'),
     getResumeStrategy: invoke('settings.getResumeStrategy'),
     setResumeStrategy: invoke('settings.setResumeStrategy'),
+    getAgentPermissionMode: invoke('settings.getAgentPermissionMode'),
+    setAgentPermissionMode: invoke('settings.setAgentPermissionMode'),
+    getJobContinuityEnabled: invoke('settings.getJobContinuityEnabled'),
+    setJobContinuityEnabled: invoke('settings.setJobContinuityEnabled'),
     getTerminalFont: invoke('settings.getTerminalFont'),
     setTerminalFont: invoke('settings.setTerminalFont'),
     getTheme: invoke('settings.getTheme'),
@@ -273,6 +278,11 @@ const api = {
     list: invoke('sessionTasks.list'),
     complete: invoke('sessionTasks.complete'),
     cancel: invoke('sessionTasks.cancel')
+  },
+  host: {
+    status: invoke('host.status'),
+    sessionsOutlivingApp: invoke('host.sessionsOutlivingApp'),
+    holdings: invoke('host.holdings')
   },
   platform: process.platform,
   win: {

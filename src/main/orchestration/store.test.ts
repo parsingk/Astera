@@ -100,6 +100,115 @@ describe('OrchestrationStore', () => {
     expect(store.get().dispatches[0].endedAt).toBeTruthy()
   })
 
+  // Once the Host owns the terminals, a worker outlives the app. Closing its Dispatch as
+  // outcome_unknown would make P1's reconciler start a second agent on the same Task.
+  it('leaves a Dispatch open when its session is still alive in the Host', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: new Set(['sess1']) })
+    expect(res.unknownOutcomes).toBe(0)
+    expect(store.get().dispatches[0].endedAt).toBeUndefined()
+  })
+
+  it('still closes a Dispatch whose session the Host does not have', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: new Set(['someone-else']) })
+    expect(res.unknownOutcomes).toBe(1)
+    expect(store.get().dispatches[0].workerState).toBe('outcome_unknown')
+  })
+
+  // A worker that finished while the app was closed left its report in a file. Closing its Dispatch
+  // as outcome_unknown throws that report away — applyWorkerDone answers alreadyReported for a
+  // Dispatch that already has endedAt — and hands the recovery reconciler a worker it reads as lost,
+  // which is a second agent in a worktree the first one just committed in.
+  it('leaves a Dispatch open when an undelivered report already speaks for it', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ reportedDispatchIds: new Set(['dsp_1']) })
+    expect(res.unknownOutcomes).toBe(0)
+    expect(store.get().dispatches[0].endedAt).toBeUndefined()
+    expect(store.get().dispatches[0].workerState).toBe('ready')
+  })
+
+  it('still closes a Dispatch no queued report names', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ reportedDispatchIds: new Set(['dsp_other']) })
+    expect(res.unknownOutcomes).toBe(1)
+    expect(store.get().dispatches[0].workerState).toBe('outcome_unknown')
+  })
+
+  it('closes every open Dispatch when it is told nothing, exactly as before', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    expect((await store.load()).unknownOutcomes).toBe(1)
+  })
+
+  // "we could not ask the Host" is not "the Host has nothing". Reading the first as the second closes
+  // a Dispatch whose worker is demonstrably still running, and the reconciler then starts a second
+  // agent in its worktree.
+  it('leaves every open Dispatch alone when it could not be told what is alive', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: 'unknown' })
+    expect(res.unknownOutcomes).toBe(0)
+    expect(store.get().dispatches[0].endedAt).toBeUndefined()
+    expect(store.get().dispatches[0].workerState).toBe('ready')
+  })
+
+  // createGate refuses to gate a Task whose Dispatch is open, and this is the one restart that can
+  // hand it one. The Task stays validating; the count is what keeps that from being silent.
+  it('counts a validating Task it could not interrupt because the Dispatch stayed open', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0].status = 'validating'
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: new Set(['sess1']) })
+    expect(res.staleValidations).toBe(0)
+    expect(res.stuckInterruptions).toBe(1)
+    expect(store.get().tasks[0].status).toBe('validating')
+    expect(store.get().gates).toHaveLength(0)
+  })
+
+  // The case the whole restart cleanup shape turns on, and the one no other test covered: a Task
+  // the app was validating whose Dispatch was **already** closed on disk before this boot. Nothing
+  // is written off here, so a cleanup expressed per closed Dispatch would never look at this Task
+  // and it would stay validating forever. The gate is owed to the Task, not to a Dispatch.
+  it('gates a validating Task whose Dispatch was already closed in the file', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.dispatches[0].endedAt = NOW
+    s.dispatches[0].outcome = 'succeeded'
+    s.tasks[0].status = 'validating'
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load()
+    expect(res.unknownOutcomes).toBe(0) // nothing was written off this boot
+    expect(res.staleValidations).toBe(1)
+    expect(res.stuckInterruptions).toBe(0)
+    expect(store.get().tasks[0].status).toBe('blocked')
+    expect(store.get().gates).toHaveLength(1)
+  })
+
+  it('counts nothing stuck when the Dispatch closed and the gate could open', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0].status = 'validating'
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load()
+    expect(res.staleValidations).toBe(1)
+    expect(res.stuckInterruptions).toBe(0)
+  })
+
   // provider 가 Run 에서 Task 로 내려간 뒤 남는 칸 — 두 칸을 함께 두면 어느 쪽이 정본인지
   // 코드마다 달라진다(위 accountId 이행과 같은 이유)
   it('옛 Run.provider 를 지운다', async () => {
@@ -531,5 +640,92 @@ describe('OrchestrationStore', () => {
     expect(r.pruned).toBe(0)
     expect(store.get().runs).toHaveLength(1)
     expect(store.get().messages).toHaveLength(1)
+  })
+
+  it('load returns the state as read, before the restart cleanup', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const loaded = await store.load()
+    expect(loaded.before?.dispatches[0].endedAt).toBeUndefined()
+    expect(loaded.before?.dispatches[0].workerState).toBe('ready')
+    expect(store.get().dispatches[0].workerState).toBe('outcome_unknown')
+  })
+
+  it('load returns before: null when there is no file or it is unreadable', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    expect((await new OrchestrationStore(file).load()).before).toBeNull()
+    await fs.writeFile(file, '{ not json', 'utf8')
+    expect((await new OrchestrationStore(file).load()).before).toBeNull()
+  })
+})
+
+// One stale field disables both ways back. `inbox.ts` only nets Runs whose coordinatorSessionId is
+// absent, and `view.ts` only offers the restart button then — so a slot still naming a session that
+// died with its Host leaves a Job with no one to answer its workers and no button to fix it. Measured:
+// a worker asked a question and nothing answered it until a person ran the CLI by hand.
+describe('a coordinator that did not survive the restart', () => {
+  const withCoordinator = (): OrchState => ({
+    ...emptyState(),
+    runs: [
+      {
+        id: 'run_1',
+        objective: 'o',
+        cwd: 'D:/p',
+        createdAt: NOW,
+        coordinatorAccountId: 'acc1',
+        coordinatorSessionId: 'coord1'
+      }
+    ]
+  })
+
+  it('empties the slot when the Host does not have that session', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withCoordinator()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: new Set(['someone-else']) })
+    expect(res.coordinatorsLost).toBe(1)
+    expect(store.get().runs[0].coordinatorSessionId).toBeUndefined()
+    // The account is what the restart button starts the next one on — losing it loses the button too.
+    expect(store.get().runs[0].coordinatorAccountId).toBe('acc1')
+  })
+
+  it('keeps the slot when the Host handed that session back', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withCoordinator()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: new Set(['coord1']) })
+    expect(res.coordinatorsLost).toBe(0)
+    expect(store.get().runs[0].coordinatorSessionId).toBe('coord1')
+  })
+
+  // Emptying a slot whose session is in fact alive puts "restart the coordinator" on that Run's line,
+  // and one click is a second coordinator in a worktree the first is still working in — the accident
+  // releaseCoordinator's own note exists to prevent. "Could not ask" is not "nothing is there".
+  it('leaves the slot alone when it could not be told what is alive', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withCoordinator()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: 'unknown' })
+    expect(res.coordinatorsLost).toBe(0)
+    expect(store.get().runs[0].coordinatorSessionId).toBe('coord1')
+  })
+
+  // No Host at all is a real answer: nothing could have outlived the app, so nothing did.
+  it('empties the slot when there was no Host to outlive the app', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withCoordinator()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load()
+    expect(res.coordinatorsLost).toBe(1)
+    expect(store.get().runs[0].coordinatorSessionId).toBeUndefined()
+  })
+
+  it('says nothing happened for a Run that never had a coordinator', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load()
+    expect(res.coordinatorsLost).toBe(0)
   })
 })

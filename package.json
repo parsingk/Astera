@@ -1,6 +1,6 @@
 {
   "name": "astera",
-  "version": "1.3.16",
+  "version": "1.3.17",
   "private": true,
   "description": "Desktop app for running and orchestrating many Claude Code and Codex sessions — account rolling on usage limits, git worktree isolation, and Slack remote control.",
   "homepage": "https://github.com/parsingk/Astera",
@@ -14,7 +14,7 @@
   "author": "parsingk",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "main": "out/main/index.js",
   "scripts": {

@@ -1,12 +1,21 @@
 import { describe, it, expect } from 'vitest'
 import {
   accountRemovalBlockers,
+  codexRolloutFromNote,
   historyResumePlan,
+  hostHandshakeMeans,
+  hostHoldings,
   parseAllowedExternalUrl,
-  providerOfSession
+  providerOfSession,
+  liveWorkersFor,
+  rollCoordinatorForSession,
+  scheduleForAdoptedSession,
+  sessionsTakenBackOnFailure,
+  staleSpecFiles
 } from './ipc'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
-import type { Account, SessionInfo } from '../core/types'
+import type { PtyEntry } from '../core/host/protocol'
+import type { Account, ScheduleConfig, SessionInfo } from '../core/types'
 
 const account = (over: Partial<Account>): Account =>
   ({
@@ -49,6 +58,32 @@ describe('providerOfSession', () => {
         throw new Error('no such account')
       })
     ).toBeNull()
+  })
+})
+
+// Reused by the reattach adopter (registerIpc's startHostClient) so a session taken back from the
+// Host registers with the same coordinator spawnSession would have chosen.
+describe('rollCoordinatorForSession', () => {
+  it('routes a codex session to codexRolling', () => {
+    const list = [sess('s1', 'acc1')]
+    const get = (id: string): Account => account({ id, provider: 'codex' })
+    expect(rollCoordinatorForSession('s1', list, get)).toBe('codexRolling')
+  })
+
+  it('routes a claude session to rolling', () => {
+    const list = [sess('s1', 'acc1')]
+    const get = (id: string): Account => account({ id, provider: 'claude' })
+    expect(rollCoordinatorForSession('s1', list, get)).toBe('rolling')
+  })
+
+  // A caller that folded this into an if/else on the provider string alone would let a gone account
+  // fall into the else branch and register with rolling — the wrong coordinator for a codex session.
+  it('routes to neither when the account is gone', () => {
+    const list = [sess('s1', 'acc1')]
+    const get = (): Account => {
+      throw new Error('no such account')
+    }
+    expect(rollCoordinatorForSession('s1', list, get)).toBeNull()
   })
 })
 
@@ -190,5 +225,326 @@ describe('historyResumePlan — 사이드바 재개의 백지 재개 판정', ()
     })
     expect(plan.blankSlate).toBe(true)
     expect(plan.mangled).toBe(false)
+  })
+})
+
+describe('staleSpecFiles — which spec files a boot clears', () => {
+  const SPECS = String.raw`C:\Users\me\AppData\astera\orch\specs`
+  const SEP = '\\'
+  const open = (name: string): { specPath: string } => ({ specPath: [SPECS, name].join(SEP) })
+  const closed = (name: string): { endedAt: string; specPath: string } => ({
+    endedAt: '2026-09-09T00:00:00.000Z',
+    specPath: [SPECS, name].join(SEP)
+  })
+
+  it('keeps the spec file of a Dispatch that is still open', () => {
+    expect(
+      staleSpecFiles({ files: ['tsk_1-dsp_1.md'], dispatches: [open('tsk_1-dsp_1.md')], runs: [], live: undefined })
+    ).toEqual([])
+  })
+
+  it('deletes the spec file of a Dispatch the restart closed', () => {
+    expect(
+      staleSpecFiles({
+        files: ['tsk_1-dsp_1.md', 'tsk_2-dsp_2.md'],
+        dispatches: [open('tsk_1-dsp_1.md'), closed('tsk_2-dsp_2.md')],
+        runs: [],
+        live: undefined
+      })
+    ).toEqual(['tsk_2-dsp_2.md'])
+  })
+
+  it('deletes a file no Dispatch claims', () => {
+    expect(staleSpecFiles({ files: ['orphan.md'], dispatches: [], runs: [], live: undefined })).toEqual([
+      'orphan.md'
+    ])
+  })
+
+  // An older Dispatch may have been opened before its worker ever wrote a spec. That means there is
+  // nothing here to delete, not that this decision is shaky.
+  it('an open Dispatch whose spec file is already gone changes nothing', () => {
+    expect(
+      staleSpecFiles({
+        files: ['orphan.md'],
+        dispatches: [open('tsk_1-dsp_1.md'), open('tsk_2-dsp_2.md')],
+        runs: [],
+        live: undefined
+      })
+    ).toEqual(['orphan.md'])
+  })
+
+  // openDispatch opens with specPath as an empty string and fills it in once the worker has actually
+  // started. That empty value must not protect any file.
+  it('a Dispatch whose specPath is still the empty placeholder protects nothing', () => {
+    expect(
+      staleSpecFiles({
+        files: ['tsk_1-dsp_1.md'],
+        dispatches: [{ specPath: '' }, { specPath: '' }],
+        runs: [],
+        live: undefined
+      })
+    ).toEqual(['tsk_1-dsp_1.md'])
+  })
+
+  // orchestration.json gets hand-edited, and this repository sees both separators.
+  it('matches a specPath written with either separator', () => {
+    expect(
+      staleSpecFiles({
+        files: ['tsk_1-dsp_1.md'],
+        dispatches: [{ specPath: 'C:/Users/me/orch/specs/tsk_1-dsp_1.md' }],
+        runs: [],
+        live: undefined
+      })
+    ).toEqual([])
+  })
+
+  // A coordinator brief lives in the same folder and no Dispatch claims it as its own. If its session
+  // survived, that brief is a live agent's instructions.
+  it('keeps a coordinator brief whose session the Host handed back', () => {
+    expect(
+      staleSpecFiles({
+        files: ['coordinator-run_1.md'],
+        dispatches: [],
+        runs: [{ id: 'run_1', coordinatorSessionId: 'sess_c' }],
+        live: new Set(['sess_c'])
+      })
+    ).toEqual([])
+  })
+
+  it('deletes a coordinator brief whose session did not survive', () => {
+    expect(
+      staleSpecFiles({
+        files: ['coordinator-run_1.md'],
+        dispatches: [],
+        runs: [{ id: 'run_1', coordinatorSessionId: 'sess_c' }],
+        live: new Set(['someone-else'])
+      })
+    ).toEqual(['coordinator-run_1.md'])
+  })
+
+  it('deletes every coordinator brief when there is no Host, exactly as before', () => {
+    expect(
+      staleSpecFiles({
+        files: ['coordinator-run_1.md'],
+        dispatches: [],
+        runs: [{ id: 'run_1', coordinatorSessionId: 'sess_c' }],
+        live: undefined
+      })
+    ).toEqual(['coordinator-run_1.md'])
+  })
+
+  it('keeps a coordinator brief when what the Host still runs is unknown', () => {
+    expect(
+      staleSpecFiles({
+        files: ['coordinator-run_1.md', 'coordinator-run_2.md'],
+        dispatches: [],
+        runs: [{ id: 'run_1', coordinatorSessionId: 'sess_c' }, { id: 'run_2' }],
+        live: 'unknown'
+      })
+    ).toEqual(['coordinator-run_2.md'])
+  })
+})
+
+describe('liveWorkersFor — the three answers the Host can give about its sessions', () => {
+  it('no Host at all is the pre-Host answer: nothing survived', () => {
+    expect(liveWorkersFor(null)).toBeUndefined()
+  })
+
+  // This one line was the round's Critical. If 'unknown' folds into undefined, the Dispatch of a live
+  // worker is closed and a second agent starts in the same worktree.
+  it('an unanswered Host stays unknown and does not collapse into "nothing survived"', () => {
+    expect(liveWorkersFor('unknown')).toBe('unknown')
+  })
+
+  it('an answer is the set of sessions it named', () => {
+    expect(liveWorkersFor({ adopted: 1, refused: 0, sessions: ['sess_a'] })).toEqual(new Set(['sess_a']))
+  })
+
+  it('an answer naming nothing is an empty set, not unknown — the Host really had nothing', () => {
+    expect(liveWorkersFor({ adopted: 0, refused: 2, sessions: [] })).toEqual(new Set())
+  })
+})
+
+describe('sessionsTakenBackOnFailure — what startHostClient\'s outer catch settles with', () => {
+  // A throw before anything ever accepted a connection (hostAddress, retireOlderHosts) is the
+  // deterministic no-Host case — the same answer a missing out/main/host.js already settles.
+  it('no peer ever seen settles null, same as no Host at all', () => {
+    expect(sessionsTakenBackOnFailure(false)).toBeNull()
+  })
+
+  // A throw after a peer answered (createHostPtyFactory, the trailing onHostClientReady wiring) means
+  // a Host may already be holding sessions this app never took back. Settling null there would have
+  // the restart cleanup close a Dispatch whose worker is still running — the duplicate-agent failure
+  // liveWorkersFor's own 'unknown' case exists to prevent.
+  it('a peer was seen settles unknown, not null — its sessions are not evidence of nothing', () => {
+    expect(sessionsTakenBackOnFailure(true)).toBe('unknown')
+  })
+})
+
+describe('hostHandshakeMeans — what a completed handshake means for the ptys the app already had', () => {
+  const a = '4242@2026-09-09T00:00:00.000Z'
+
+  it('the boot handshake is the startup chain\'s, not a reconnect', () => {
+    expect(hostHandshakeMeans(null, a)).toBe('first')
+  })
+
+  // The load-bearing one. A dropped socket ends every pty handle in the app while the Host keeps
+  // running the processes; if this read as a new Host, nothing would take them back and the app would
+  // sit beside a Host holding live agents it no longer knows about.
+  it('the same Host answering again is a reconnect, and its ptys are still there to take back', () => {
+    expect(hostHandshakeMeans(a, a)).toBe('same-host')
+  })
+
+  it('a different Host means the ptys the old one held are gone', () => {
+    expect(hostHandshakeMeans(a, '5150@2026-09-09T00:00:00.000Z')).toBe('other-host')
+  })
+
+  // A Host that died and whose successor was handed the same pid — ordinary on win32, and the whole
+  // reason `startedAt` is half of the identity rather than the pid being all of it.
+  it('the same pid at a different start time is a different Host', () => {
+    expect(hostHandshakeMeans(a, '4242@2026-09-09T00:00:05.000Z')).toBe('other-host')
+  })
+})
+
+describe('scheduleForAdoptedSession — re-arming the schedule of a session taken back from the Host', () => {
+  const rule = { kind: 'interval', everyMinutes: 30 } as const
+  const cfg = { command: '/status', rule } as unknown as ScheduleConfig
+  const store = (entries: Record<string, ScheduleConfig>) => (k: string): ScheduleConfig | null => entries[k] ?? null
+
+  // The mistake this function exists to make impossible: scheduler.json is keyed by the conversation's
+  // own session id, and looking it up by the app session id would silently find nothing for every
+  // session — the same "no schedule, no warning" the adopter had before.
+  it('never looks the schedule up under the app session id', () => {
+    const asked: string[] = []
+    scheduleForAdoptedSession({ id: 'app-sess-1', resumeSessionId: 'conv-9' }, 'conv-from-statusline', (k) => {
+      asked.push(k)
+      return null
+    })
+    expect(asked).not.toContain('app-sess-1')
+  })
+
+  it('uses resumeSessionId when the session was started as a resume — the key is known without a file', () => {
+    expect(scheduleForAdoptedSession({ id: 'app-sess-1', resumeSessionId: 'conv-9' }, null, store({ 'conv-9': cfg }))).toBe(cfg)
+  })
+
+  // The ordinary case: a session that was never resumed learned its key at runtime, and the statusLine
+  // capture file the CLI wrote is still in the profile under the app session id the adoption kept.
+  it('falls back to the id the statusLine payload carries', () => {
+    expect(
+      scheduleForAdoptedSession({ id: 'app-sess-1' }, 'conv-from-statusline', store({ 'conv-from-statusline': cfg }))
+    ).toBe(cfg)
+  })
+
+  // A session neither started as a resume nor found in the statusLine capture, and whose note carries
+  // no codex session id either — a claude session whose capture file is gone, or a codex one the scan
+  // had not mapped when the app went down. No key, so no schedule, and the store is not guessed at.
+  it('gives up when neither source knows the conversation id, without asking the store', () => {
+    let asked = 0
+    expect(
+      scheduleForAdoptedSession({ id: 'app-sess-1' }, null, () => {
+        asked += 1
+        return cfg
+      })
+    ).toBeNull()
+    expect(asked).toBe(0)
+  })
+
+  it('a key with nothing stored under it is no schedule, not a made-up one', () => {
+    expect(scheduleForAdoptedSession({ id: 'app-sess-1' }, 'conv-9', store({}))).toBeNull()
+  })
+
+  // codex has no statusLine, so the id its rollout watcher mapped — carried in the note since the
+  // watcher started writing it down — is the only thing that can answer for a codex session that was
+  // not started as a resume. Same second argument, a different source for it.
+  it('takes the codex session id the note carried, the only key a codex session has', () => {
+    expect(scheduleForAdoptedSession({ id: 'app-sess-1' }, 'cx-conv-1', store({ 'cx-conv-1': cfg }))).toBe(cfg)
+  })
+})
+
+describe('codexRolloutFromNote — what an adopted codex session can be registered with', () => {
+  // The whole point of remembering it: the watcher's own discovery cannot be run for an adopted
+  // session, so the note is the only way it can be watched at all.
+  it('reads back the rollout the watcher mapped before the restart', () => {
+    expect(codexRolloutFromNote({ title: 't', rolloutPath: 'D:/r/one.jsonl', codexSessionId: 'cx-1' })).toEqual({
+      rolloutPath: 'D:/r/one.jsonl',
+      codexSessionId: 'cx-1'
+    })
+  })
+
+  // The case the skip protects. A claude session's note, or a codex one whose scan had not answered
+  // before the app went down: registering it would set the watcher scanning, and for an adopted
+  // session that scan claims another session's file.
+  it('answers null for a note with no rollout in it', () => {
+    expect(codexRolloutFromNote({ title: 't', accountId: 'acc_1' })).toBeNull()
+  })
+
+  it('answers null rather than trusting a rollout path that is not a string', () => {
+    expect(codexRolloutFromNote({ rolloutPath: 42, codexSessionId: 'cx-1' })).toBeNull()
+  })
+
+  // The path is what registration needs; the id is what the scheduler needs. A note that has one and
+  // not the other still gets the watcher going.
+  it('keeps a path whose note carries no usable id', () => {
+    expect(codexRolloutFromNote({ rolloutPath: 'D:/r/one.jsonl' })).toEqual({
+      rolloutPath: 'D:/r/one.jsonl',
+      codexSessionId: null
+    })
+  })
+})
+
+describe('hostHoldings — what the Info tab says the Host is holding', () => {
+  const entry = (over: Partial<PtyEntry>): PtyEntry => ({
+    id: 'p1',
+    pid: 100,
+    meta: null,
+    alive: true,
+    ...over
+  })
+  const note = (kind: 'session' | 'run' | 'terminal', id: string): PtyEntry['meta'] => ({
+    kind,
+    id,
+    restore: {}
+  })
+
+  it('counts the live sessions, terminals and runs separately', () => {
+    expect(
+      hostHoldings([
+        entry({ id: 'a', meta: note('session', 's1') }),
+        entry({ id: 'b', meta: note('terminal', 't1') }),
+        entry({ id: 'c', meta: note('session', 's2') }),
+        entry({ id: 'd', meta: note('run', 'r1') })
+      ])
+    ).toEqual({ sessions: 2, terminals: 1, runs: 1 })
+  })
+
+  // An exited pty is history the Host keeps for its replay buffer. Nothing about it survives closing
+  // the app, which is the question this row answers, so it is not held.
+  it('does not count a pty that has already exited', () => {
+    expect(
+      hostHoldings([entry({ meta: note('session', 's1'), alive: false })])
+    ).toEqual({ sessions: 0, terminals: 0, runs: 0 })
+  })
+
+  // A run the Host owns survives the quit exactly as a session does — RunManager.stopAppOwned skips
+  // every pty that outlives the app. Someone whose only held work is a long build or a dev server
+  // must not read this row as saying nothing of theirs is protected.
+  it('counts a run, because a Host-held run outlives the app too', () => {
+    expect(hostHoldings([entry({ meta: note('run', 'r1') })])).toEqual({
+      sessions: 0,
+      terminals: 0,
+      runs: 1
+    })
+  })
+
+  // An entry with no note at all is one the sweep kills rather than adopts, so reporting it as held
+  // would name as protected something the app is about to end.
+  it('does not count a pty with no note', () => {
+    expect(hostHoldings([entry({ meta: null })])).toEqual({ sessions: 0, terminals: 0, runs: 0 })
+  })
+
+  // Zero is a real answer here, and it is the one a Host that has just started gives. It is only ever
+  // reached by an entry list the Host actually sent — the row says nothing at all until then.
+  it('answers zeros for a Host holding nothing', () => {
+    expect(hostHoldings([])).toEqual({ sessions: 0, terminals: 0, runs: 0 })
   })
 })

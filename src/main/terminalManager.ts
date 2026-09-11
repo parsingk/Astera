@@ -44,19 +44,52 @@ export class TerminalManager {
       cwd: projectPath,
       cols: cols ?? 120,
       rows: rows ?? 30,
-      env: { ...process.env }
+      env: { ...process.env },
+      meta: { kind: 'terminal', id, restore: { projectPath } }
     })
-    const live: LiveTerminal = { id, projectPath, pty, buffer: '' }
-    this.terminals.set(id, live)
+    return this.track({ id, projectPath }, pty)
+  }
+
+  /** The bookkeeping half of an open: the live record, the replay buffer and the two callbacks.
+   *  `open` calls it for a pty it just created; `adopt` calls it for one the Host was already running.
+   *  Shared so the two can never drift apart. */
+  private track(info: TerminalInfo, pty: PtyLike): TerminalInfo {
+    const live: LiveTerminal = { ...info, pty, buffer: '' }
+    this.terminals.set(info.id, live)
     pty.onData((data) => {
       live.buffer = (live.buffer + data).slice(-OUTPUT_LIMIT)
-      this.onData?.({ id, data })
+      this.onData?.({ id: info.id, data })
     })
     pty.onExit(({ exitCode }) => {
-      this.terminals.delete(id) // Already gone on the close() path, so a no-op there
-      this.onExit?.({ id, exitCode })
+      this.terminals.delete(info.id) // Already gone on the close() path, so a no-op there
+      this.onExit?.({ id: info.id, exitCode })
     })
-    return { id, projectPath }
+    return { ...info }
+  }
+
+  /** Takes over a pty the Host is already running, rebuilding this terminal's record from the note the
+   *  app left with it (slice 2 design §7). Returns null for a note this build cannot read — a terminal
+   *  invented from a half-understood record would be worse than one the app admits it lost.
+   *
+   *  Deliberately does none of open's other work: the process exists, so there is no shell to resolve.
+   *  The replay buffer starts empty — it only ever held what this process printed while the app was
+   *  watching, and it was not watching across the restart.
+   *
+   *  **Keeps the terminal's own id** — `PtyMeta.id`, which the Host hands back beside the note. Every
+   *  write, resize and close names a terminal by it, and so does the renderer's tab.
+   *
+   *  **The caller must hand over a pty it believes is still live.** This method cannot tell: an attach
+   *  handle for a process that already ended looks exactly like one for a running process and will never
+   *  deliver an exit, so a dead pty adopted here leaves a tab that never closes itself and a shell the
+   *  user can type into with nothing on the other end. The Host's entry carries an `alive` flag;
+   *  filtering on it is the caller's job. */
+  adopt(a: { kind: string; id: string; pty: PtyLike; restore: Record<string, unknown> }): TerminalInfo | null {
+    // Checked before the field below, because `projectPath` alone is a strict subset of a run's note: a
+    // run adopted here would come back rebuilt as a terminal, and read as one from then on.
+    if (a.kind !== 'terminal') return null
+    const projectPath = a.restore.projectPath
+    if (typeof projectPath !== 'string' || !projectPath) return null
+    return this.track({ id: a.id, projectPath }, a.pty)
   }
 
   write(id: string, data: string): void {
@@ -75,6 +108,14 @@ export class TerminalManager {
     live.pty.kill()
   }
 
+  /** Whether this manager is holding that terminal right now. There is no exited state to ask about —
+   *  an exit deletes the entry — so holding it is the whole answer. The reattach sweep asks, so a
+   *  terminal opened between the Host handshake and the `pty-list` reply is not adopted a second time
+   *  on top of the handle it already has. */
+  holds(id: string): boolean {
+    return this.terminals.has(id)
+  }
+
   /** That project's terminals plus their replay buffers — on panel re-entry the renderer writes these into xterm first. */
   list(projectPath: string): TerminalBuffer[] {
     return [...this.terminals.values()]
@@ -82,8 +123,11 @@ export class TerminalManager {
       .map((t) => ({ id: t.id, buffer: t.buffer }))
   }
 
-  /** App shutdown (will-quit) */
-  closeAll(): void {
-    for (const id of [...this.terminals.keys()]) this.close(id)
+  /** App shutdown (will-quit). Closes the terminals whose ptys are this process's own children and
+   *  leaves the Host's alone — those are the ones a restart takes back, and closing one here would
+   *  also drop the app's record of a pty that is still running. With no Host every pty is the app's
+   *  own, so this closes all of them exactly as it always did. */
+  closeAppOwned(): void {
+    for (const [id, live] of [...this.terminals]) if (!live.pty.outlivesApp) this.close(id)
   }
 }

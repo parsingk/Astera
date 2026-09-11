@@ -22,13 +22,17 @@ import {
   resolveGate,
   deleteRuns,
   spawnScheduledRun,
+  pauseSchedule,
   latestOrdinaryRun,
   setRunWorktree,
   attachCoordinator,
   detachCoordinator,
+  bindNativeSession,
+  beginValidation,
+  writeOffDispatch,
   type OrchState
 } from './state'
-import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task } from './types'
+import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate } from './types'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 const LATER = '2026-08-04T01:00:00.000Z'
@@ -1794,6 +1798,30 @@ describe('spawnScheduledRun', () => {
   })
 })
 
+describe('pauseSchedule', () => {
+  it('pausing a schedule records that the person closed the dispatches', () => {
+    const { s, templateId } = template()
+    const fired = unwrap<{ id: string }>(spawnScheduledRun(s, templateId, FIRE) as never)
+    const readyTask = fired.state.tasks.find((t) => t.runId === fired.value.id && t.status === 'ready')!
+    const opened = unwrap<{ id: string }>(
+      openDispatch(
+        fired.state,
+        {
+          taskId: readyTask.id,
+          provider: 'codex',
+          accountId: 'acc1',
+          sessionId: 'sess1',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/x.md'
+        },
+        FIRE
+      ) as never
+    )
+    const r = unwrap<unknown>(pauseSchedule(opened.state, templateId, NOW))
+    for (const d of r.state.dispatches.filter((x) => x.endedAt === NOW)) expect(d.closedBy).toBe('pause')
+  })
+})
+
 describe('latestOrdinaryRun', () => {
   const plain = (state: OrchState, objective: string): { state: OrchState; id: string } => {
     const r = unwrap<{ id: string }>(
@@ -2343,5 +2371,230 @@ describe('코디네이터 세션 붙이기·떼기', () => {
     expect(saved.coordinatorAccountId).toBe('acc1')
     expect(saved).not.toHaveProperty('coordinatorSessionId')
     expect(saved).not.toHaveProperty('coordinatorFailures')
+  })
+})
+
+describe('bindNativeSession', () => {
+  const opened = (): OrchState => {
+    const r0 = unwrap<{ id: string }>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW))
+    const r1 = unwrap<Task>(
+      createTask(r0.state, { runId: r0.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    )
+    const r2 = unwrap<{ id: string }>(
+      openDispatch(
+        r1.state,
+        {
+          taskId: r1.value.id,
+          provider: 'claude',
+          accountId: 'a1',
+          sessionId: 'sess-1',
+          cwd: 'D:/p',
+          specPath: 'D:/spec.md'
+        },
+        NOW
+      )
+    )
+    return r2.state
+  }
+
+  it('records the provider session id on an open dispatch', () => {
+    const s = opened()
+    const r = unwrap<{ nativeSessionId?: string }>(
+      bindNativeSession(s, { dispatchId: s.dispatches[0].id, nativeSessionId: 'claude-uuid' })
+    )
+    expect(r.value.nativeSessionId).toBe('claude-uuid')
+    expect(r.state.dispatches[0].nativeSessionId).toBe('claude-uuid')
+  })
+
+  it('the same value again returns the state untouched', () => {
+    const open1 = opened()
+    const dispatchId = open1.dispatches[0].id
+    const s = unwrap<unknown>(
+      bindNativeSession(open1, { dispatchId, nativeSessionId: 'x' })
+    ).state
+    const r = bindNativeSession(s, { dispatchId: s.dispatches[0].id, nativeSessionId: 'x' })
+    expect(r.ok && r.state).toBe(s)
+  })
+
+  it('a different value replaces (a roll respawned the process)', () => {
+    const open1 = opened()
+    const dispatchId = open1.dispatches[0].id
+    const s = unwrap<unknown>(
+      bindNativeSession(open1, { dispatchId, nativeSessionId: 'x' })
+    ).state
+    const r = unwrap<{ nativeSessionId?: string }>(
+      bindNativeSession(s, { dispatchId: s.dispatches[0].id, nativeSessionId: 'y' })
+    )
+    expect(r.value.nativeSessionId).toBe('y')
+  })
+
+  it('rejects an unknown dispatch and a closed one', () => {
+    const s = opened()
+    expect(bindNativeSession(s, { dispatchId: 'nope', nativeSessionId: 'x' })).toEqual({
+      ok: false,
+      error: 'unknown dispatch: nope'
+    })
+    const closed = unwrap<unknown>(
+      closeDispatch(s, { sessionId: 'sess-1', exitCode: 0 }, LATER)
+    ).state
+    const r = bindNativeSession(closed, { dispatchId: s.dispatches[0].id, nativeSessionId: 'x' })
+    expect(r.ok).toBe(false)
+  })
+})
+
+describe('beginValidation', () => {
+  const taskDispatchedFixture = (): OrchState => {
+    const r0 = unwrap<{ id: string }>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW))
+    const r1 = unwrap<Task>(
+      createTask(r0.state, { runId: r0.value.id, title: 't', spec: 'do it', deps: [] }, NOW)
+    )
+    const r2 = unwrap<{ id: string }>(
+      openDispatch(
+        r1.state,
+        {
+          taskId: r1.value.id,
+          provider: 'codex',
+          accountId: 'acc1',
+          sessionId: 'sess-1',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/x.md'
+        },
+        NOW
+      )
+    )
+    return r2.state
+  }
+
+  it('moves a dispatched Task into validating so its check can run', () => {
+    const s = taskDispatchedFixture()
+    const before = s.tasks[0]
+    const r = unwrap<Task>(beginValidation(s, { taskId: before.id }, LATER))
+    expect(r.value.status).toBe('validating')
+    expect(r.value.updatedAt).toBe(LATER)
+  })
+
+  it('refuses a Task that is not dispatched, and an unknown one', () => {
+    const s = taskDispatchedFixture()
+    const validating = unwrap<Task>(beginValidation(s, { taskId: s.tasks[0].id }, LATER)).state
+    expect(beginValidation(validating, { taskId: s.tasks[0].id }, LATEST).ok).toBe(true) // already there: no-op
+    expect(beginValidation(s, { taskId: 'nope' }, LATER)).toEqual({ ok: false, error: 'unknown task: nope' })
+    // a Task that never reached dispatched cannot enter its check
+    const pending = { ...s, tasks: [{ ...s.tasks[0], status: 'pending' as const }] }
+    const refused = beginValidation(pending, { taskId: s.tasks[0].id }, LATER)
+    expect(refused.ok).toBe(false)
+  })
+})
+
+describe('a recovery Gate on a dispatched Task', () => {
+  const taskDispatchedFixture = (): OrchState => {
+    const r0 = unwrap<{ id: string }>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW))
+    const r1 = unwrap<Task>(
+      createTask(r0.state, { runId: r0.value.id, title: 't', spec: 'do it', deps: [] }, NOW)
+    )
+    const r2 = unwrap<{ id: string }>(
+      openDispatch(
+        r1.state,
+        {
+          taskId: r1.value.id,
+          provider: 'codex',
+          accountId: 'acc1',
+          sessionId: 'sess-1',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/x.md'
+        },
+        NOW
+      )
+    )
+    return r2.state
+  }
+
+  it('is allowed once the dispatch is closed, and still refused while it is open', () => {
+    const s = taskDispatchedFixture()
+    const open = createGate(s, { taskId: s.tasks[0].id, question: 'q' }, LATER)
+    expect(open.ok).toBe(false) // an open dispatch still wins
+
+    const closed = unwrap<unknown>(closeDispatch(s, { sessionId: 'sess-1', exitCode: 1 }, LATER)).state
+    const gated = unwrap<Gate>(createGate(closed, { taskId: s.tasks[0].id, question: 'q' }, LATEST))
+    expect(gated.state.tasks[0].status).toBe('blocked')
+  })
+})
+
+// The restart cleanup's rule for one Dispatch, so the pending-report drain can apply it to a
+// Dispatch it could not deliver a report to instead of leaving the Task waiting for the next start.
+describe('writeOffDispatch', () => {
+  it('ends an open Dispatch with no outcome to assert', () => {
+    const { s, dispatchId } = seed()
+    const r = writeOffDispatch(s, { dispatchId }, LATER)
+    expect(r.closed).toBe(true)
+    expect(r.state.dispatches[0].endedAt).toBe(LATER)
+    expect(r.state.dispatches[0].workerState).toBe('outcome_unknown')
+    expect(r.state.dispatches[0].outcome).toBeUndefined()
+  })
+
+  // The Task is left exactly as the restart cleanup leaves it: an outcome nobody can prove is not
+  // asserted, and consecutiveFailures is not a place to record that the app went down.
+  it('does not touch a dispatched Task', () => {
+    const { s, dispatchId, taskId } = seed()
+    const r = writeOffDispatch(s, { dispatchId }, LATER)
+    const t = r.state.tasks.find((x) => x.id === taskId)
+    expect(t?.status).toBe('dispatched')
+    expect(t?.consecutiveFailures).toBe(0)
+    expect(r.interrupted).toBeNull()
+    expect(r.stuck).toBe(false)
+  })
+
+  // The whole reason this is one function and not `endedAt = now`: a Task the app was in the middle
+  // of validating owes a Gate, and the restart cleanup is where that rule is written.
+  it('gates a validating Task, the way the restart cleanup does', () => {
+    const { s, dispatchId, taskId } = seed()
+    const validating: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'validating' as const } : t))
+    }
+    const r = writeOffDispatch(validating, { dispatchId }, LATER)
+    expect(r.interrupted).toBe('validation')
+    expect(r.state.tasks[0].status).toBe('blocked')
+    expect(r.state.gates).toHaveLength(1)
+  })
+
+  it('gates a reviewing Task through blockForReview', () => {
+    const { s, dispatchId, taskId } = seed()
+    const reviewing: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'reviewing' as const } : t))
+    }
+    const r = writeOffDispatch(reviewing, { dispatchId }, LATER)
+    expect(r.interrupted).toBe('review')
+    expect(r.state.gates[0].question).toContain('task-update --status completed')
+  })
+
+  // A second open Dispatch on the same Task is what createGate refuses to gate around. Nothing is
+  // lost and nothing is asserted; the caller is told so it can say why the Task did not move.
+  // openDispatch never makes this state -- orchestration.json outlives the process and is hand
+  // edited, which is the same reason candidates() guards a `dispatched` Task with no Dispatch.
+  it('reports a Task it could not interrupt rather than forcing it', () => {
+    const { s, dispatchId, taskId } = seed()
+    const validating: OrchState = {
+      ...s,
+      dispatches: [...s.dispatches, { ...s.dispatches[0], id: 'dsp_second', sessionId: 'sess2' }],
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'validating' as const } : t))
+    }
+    const r = writeOffDispatch(validating, { dispatchId }, EVEN_LATER)
+    expect(r.closed).toBe(true)
+    expect(r.stuck).toBe(true)
+    expect(r.interrupted).toBeNull()
+    expect(r.state.tasks[0].status).toBe('validating')
+    expect(r.state.gates).toHaveLength(0)
+  })
+
+  it('changes nothing for a Dispatch that is already closed, or one it has never heard of', () => {
+    const { s, dispatchId } = seed()
+    const once = writeOffDispatch(s, { dispatchId }, LATER)
+    const twice = writeOffDispatch(once.state, { dispatchId }, LATEST)
+    expect(twice.closed).toBe(false)
+    expect(twice.state).toBe(once.state)
+    const never = writeOffDispatch(s, { dispatchId: 'dsp_nope' }, LATER)
+    expect(never.closed).toBe(false)
+    expect(never.state).toBe(s)
   })
 })

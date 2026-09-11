@@ -256,6 +256,9 @@ export function TerminalView({
           {rollState.state === 'switching' &&
             t('session.terminal.rollSwitching', { label: rollState.accountLabel ?? '' })}
           {rollState.state === 'trust' && t('session.terminal.trustAccepting')}
+          {/* No time and no promise, unlike 'waiting' just below: an adopted chain has neither a
+              retry armed nor a reset to name. See RollStateEvent's own note on the state. */}
+          {rollState.state === 'adopted' && t('session.terminal.rollAdopted')}
           {rollState.state === 'waiting' &&
             (rollState.scope === 'weekly'
               ? t('session.terminal.weeklyLimitWaiting', {

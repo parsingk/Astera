@@ -48,7 +48,11 @@ export function NewSessionDialog({
   const [rollMode, setRollMode] = useState(false) // auto-resume toggle for a single account
   const [rollPrompt, setRollPrompt] = useState('') // text to send on a rolling resume (empty means the default)
   const [slackNotify, setSlackNotify] = useState(false) // Slack progress notifications
-  const [bypassPermissions, setBypassPermissions] = useState(false) // start without permission prompts
+  // **전역 권한 모드가 이 칸의 기본값이다**(AgentPermissionMode, 기본 'yolo'). 초기값을 true 로 두는
+  // 것은 아래 fetch 가 돌아오기 전의 한 프레임을 위해서다 — false 로 시작하면 기본이 켜짐인 설정에서
+  // 체크박스가 꺼진 채 잠깐 보였다가 켜진다. 사람이 이 모달에서 끄면 그 세션에만 적용되고 전역
+  // 설정은 그대로다: 이 체크박스는 언제나 "이번 세션"을 말한다.
+  const [bypassPermissions, setBypassPermissions] = useState(true) // start without permission prompts
   const [slackReady, setSlackReady] = useState(false) // whether a webhook URL is configured — the checkbox is disabled when it is not
   // Both CLIs, because either one can be the missing one — the app opens with just one installed
   const [cliOk, setCliOk] = useState({ claude: true, codex: true })
@@ -82,6 +86,9 @@ export function NewSessionDialog({
     // only botToken + channelId could not tick the checkbox even though the bot path was actually on.
     void window.api.slack.getConfig().then((c) => setSlackReady(isSlackReady(c)))
     void window.api.system.checkCli().then((c) => setCliOk({ claude: c.claude.ok, codex: c.codex.ok }))
+    void window.api.settings
+      .getAgentPermissionMode()
+      .then((m) => setBypassPermissions(m === 'yolo'))
   }, [])
 
   useEffect(() => {

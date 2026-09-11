@@ -984,7 +984,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 
 /* the two-column restructuring of the settings modal */
 /* Proportional to the window with a floor and ceiling (clamp) so it does not become oversized on a large monitor. The body is flex and fills the remaining height. */
-.modal.settings { width: clamp(600px, 58vw, 940px); height: clamp(440px, 70vh, 800px); padding: 0; gap: 0; overflow: hidden; }
+/* Widened once the General tab grew past what the old ceiling could hold: the 200px nav is fixed, so
+   every setting added takes its space out of the pane beside it, and the hint paragraphs under each
+   toggle are what wrapped first. The floors move with the ceilings — a floor that stays put only
+   defers the same crowding to a small window. */
+.modal.settings { width: clamp(720px, 68vw, 1180px); height: clamp(520px, 80vh, 960px); padding: 0; gap: 0; overflow: hidden; }
 .settings-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 26px; border-bottom: 1px solid var(--line); }
 .settings-close { background: none; border: none; color: var(--text-dim); font-size: 14px; line-height: 1; cursor: pointer; padding: 6px 10px; border-radius: var(--radius); }
 .settings-close:hover { color: var(--text); background: var(--line-soft); }
@@ -1538,6 +1542,19 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    6px 은 .jobs-run-head 의 7px 보다 한 단 좁다 — 그쪽은 배지와 글자가 섞인 줄이고 여기는 버튼만 선다 */
 .detail-graph-head { flex: none; display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
 .detail-graph-head .jobs-new { margin: 0; }
+/* 실행 버튼이 회전을 담는 동안만 걸리는 셋. **`:has()` 로 그때만 거는 이유**: .jobs-new 를 통째로
+   inline-flex 로 바꾸면 옆 버튼의 `+ {Task 추가}` 가 두 텍스트 노드라 각각 flex 항목이 되어 gap 만큼
+   벌어진다 — 도는 동안만 필요한 규칙이 늘 서 있는 버튼의 생김새를 바꾸는 셈이다.
+   기본 button 은 inline-block 이라 flex 로 바꾸지 않으면 span 인 회전이 inline 으로 남아 width/height
+   가 먹지 않는다(button.ghost 가 inline-flex 인 덕에 워크트리 줄의 회전이 보이는 것과 같은 자리).
+   12px 인 이유도 .worktree-actions .ghost.removing 과 같다 — 공용 링은 14px 이고 이 줄의 글자는 12px
+   이라, 그대로 두면 도는 동안에만 버튼이 커져 줄 높이가 흔들린다.
+   opacity 를 되돌리는 것도 그 선례와 같은 이유다: 전역 button:disabled 의 .5 가 부모에 걸리면 자식인
+   회전이 그것을 되돌릴 수 없어 함께 흐려진다. 못 누른다는 것은 button.primary:disabled 의 색이 이미
+   말하고 있고, 이 버튼이 그 동안 하는 일은 잠긴 척이 아니라 상태를 말하는 것이다. */
+.detail-graph-head .jobs-new:has(.loading-spinner) { display: inline-flex; align-items: center; gap: 6px; }
+.detail-graph-head .jobs-new:has(.loading-spinner):disabled { opacity: 1; }
+.detail-graph-head .jobs-new .loading-spinner { width: 12px; height: 12px; }
 /* safe center — 그림이 칸보다 작으면 가운데에 놓이고, 커지면 왼쪽 위부터 놓인다. safe 가 없으면
    넘칠 때도 가운데로 밀어붙여 **위쪽과 왼쪽이 스크롤로 닿지 않는 자리**로 잘려 나간다 */
 .detail-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; display: grid; place-content: safe center; }
@@ -2330,8 +2347,14 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .file-editor .cm-editor, .file-editor .cm-gutters { background: var(--md-code-bg); }
 .file-editor .cm-scroller { font-family: Consolas, 'Courier New', monospace; font-size: 13px; }
 /* The search panel is open but never drawn — FileFindBar is what the user sees. It has to stay open
-   because @codemirror/search only highlights matches while it is (see FileFindBar's own note). */
-.file-editor .cm-panels { display: none; }
+   because @codemirror/search only highlights matches while it is (see FileFindBar's own note).
+   Collapsed to zero height rather than `display: none`: an open panel contributes a scroll margin,
+   and CodeMirror measures it with getBoundingClientRect. A display:none element reports an all-zero
+   rect at the viewport origin, which that formula reads as a panel covering the whole editor — every
+   scrollIntoView then overshoots by an editor height. Kept in flow at zero height it measures 0.
+   `.cm-editor` is in the selector for the same reason as the match colours below — oneDark draws a
+   2px border on the panel, and without the extra class this rule only ties with it. */
+.file-editor .cm-editor .cm-panels { height: 0; overflow: hidden; border: 0; }
 /* The match you are on must read as stronger than the rest. oneDark has it the other way round: it
    paints .cm-searchMatch at #72a1ff59 and then the selected one at #6199ff2f, which is fainter. The
    hue stays oneDark's; only the weight changes, and the ring carries most of it so the code

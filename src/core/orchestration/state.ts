@@ -251,7 +251,7 @@ export function pauseSchedule(s: OrchState, templateId: string, now: string): Re
       // 그래프가 거짓말을 한다(재시작 정리가 그런 Dispatch 를 outcome_unknown 으로 읽는다).
       dispatches: s.dispatches.map((d) =>
         taskIds.has(d.taskId) && !d.outcome && !d.endedAt
-          ? { ...d, workerState: 'stopped' as const, endedAt: now }
+          ? { ...d, workerState: 'stopped' as const, endedAt: now, closedBy: 'pause' as const }
           : d
       )
     },
@@ -567,6 +567,19 @@ export function applyValidationResult(
   return ok(state, next)
 }
 
+/** Sends a Task that already produced output into its check without a worker report (P1 design §6).
+ *
+ *  Recovery uses it for the one case where the work survived but the report did not: the worker
+ *  committed and was then lost, so the check is what can judge the result (spec §16 Example E).
+ *  Deliberately not `applyWorkerDone`: that records a report this app never received. */
+export function beginValidation(s: OrchState, a: { taskId: string }, now: string): Res<Task> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return err(`unknown task: ${a.taskId}`)
+  const moved = moveTask(task, 'validating', now)
+  if (!moved) return err(`cannot begin validation from status: ${task.status}`)
+  return ok({ ...s, tasks: replace(s.tasks, moved) }, moved)
+}
+
 /** 검증을 아예 돌릴 수 없을 때. 조용히 통과시키면 "검증됨"과 "검증 못 함"이 화면에서 같아지고,
  *  인프라 문제로 실패시키면 멀쩡한 작업이 재시도 세 번 끝에 회로 차단까지 간다. 어느 쪽도 기계가
  *  정할 일이 아니므로 Gate 를 열어 사람에게 넘긴다. */
@@ -788,6 +801,113 @@ export function closeDispatch(
   return ok(state, next)
 }
 
+/** An open Dispatch nobody can say anything more about, ended.
+ *
+ *  `outcome` stays absent on purpose: that is what tells recovery's `isLost` this attempt was lost
+ *  rather than reported, and `closedBy` stays absent because no person closed it. The two fields
+ *  travel together, which is why this is a function and not a spread at each call site — the
+ *  restart cleanup (`OrchestrationStore.load`) and the pending-report drain both write it, and a
+ *  second copy is a second thing to remember when either field moves. */
+export const endedUnproven = (d: Dispatch, now: string): Dispatch => ({
+  ...d,
+  endedAt: now,
+  workerState: 'outcome_unknown'
+})
+
+/** What a Task that was mid-validation or mid-review is owed once the thing running it is gone.
+ *
+ *  Both callers reach here from the same fact — the process that was validating or reviewing died
+ *  with the app, and nobody will ever bring its answer back — so the rule lives in one place:
+ *  `OrchestrationStore.load`'s restart cleanup for every such Task at boot, and
+ *  `writeOffDispatch` for the one Task under a Dispatch the pending-report drain had to write off.
+ *
+ *  Three answers, and they are three because the caller has to be able to say which happened.
+ *  `interrupted` names the Gate that was opened; `stuck` is a Task the transition refused, left
+ *  exactly as it was; both null and false is a Task that was owed nothing.
+ *
+ *  Anything else about the Task is left alone, `consecutiveFailures` included — a restart is not
+ *  evidence that the work was wrong. */
+export function interruptStalledTask(
+  s: OrchState,
+  a: { taskId: string },
+  now: string
+): { state: OrchState; interrupted: 'validation' | 'review' | null; stuck: boolean } {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return { state: s, interrupted: null, stuck: false }
+  if (task.status !== 'validating' && task.status !== 'reviewing')
+    return { state: s, interrupted: null, stuck: false }
+  // 검토는 질문을 손으로 쓰지 않고 blockForReview 에 맡긴다 — 그 질문에는 "끝난 일을 버리지 않고
+  // 이 Task 를 닫으려면 task-update --status completed" 라는 탈출구가 붙어 있고, reviewing Task
+  // 에는 그것이 꼭 필요하다: 구현이 끝나고 검증까지 통과했을 수 있는 일인데 resolveGate 는 Task 를
+  // pending 으로 돌려보내 그 일을 버린다. 문장을 여기 옮겨 적으면 같은 안내가 두 곳에 생겨
+  // 갈라진다. 검증 쪽 질문은 그대로 둔다.
+  const r =
+    task.status === 'validating'
+      ? createGate(
+          s,
+          { taskId: task.id, question: '앱이 재시작되어 검증이 중단되었습니다. 다시 검증할까요?' },
+          now
+        )
+      : blockForReview(s, { taskId: task.id, reason: '앱이 재시작되어 검토가 중단되었습니다' }, now)
+  // 전이가 막히면 그 Task 는 그대로 둔다 — 잃는 것보다 낫다
+  if (!r.ok) return { state: s, interrupted: null, stuck: true }
+  return {
+    state: r.state,
+    interrupted: task.status === 'validating' ? 'validation' : 'review',
+    stuck: false
+  }
+}
+
+/** The restart cleanup's whole rule, applied to one Dispatch.
+ *
+ *  **The caller must already have decided this Dispatch may be written off, and this function
+ *  cannot check that for it.** It knows nothing about the Host, so it will end a Dispatch whose
+ *  session is still running there — and a Dispatch ended with no outcome is what recovery's
+ *  `isLost` reads as a lost worker, which starts a second agent in the worktree the first one is
+ *  still in. That is the failure the Host handshake exists to prevent, and it is reachable from
+ *  here in one line. The only caller today is the pending-report drain's wiring, which passes ids
+ *  from `dispatchesHeldOnlyByReport` (core/orchestration/pendingReports.ts) — that function holds
+ *  the evidence rule, and a second caller needs one at least as strong before it may call this.
+ *
+ *  A parameter cannot carry that: the mistake worth preventing is not "called without filtering"
+ *  but "filtered on evidence that does not rule out a live session", and no signature can tell one
+ *  set of ids from another. Naming the requirement is the honest guard.
+ *
+ *  **Why one Dispatch has its own entry point.** The pending-report drain ends up holding a
+ *  Dispatch that the boot cleanup left open only because a queued report spoke for it, and then
+ *  finds it cannot apply that report — the app refuses it, or applying it throws until the drain
+ *  gives up. Nothing speaks for the Dispatch after that, and leaving it open costs the Task a whole
+ *  start: `candidates` in main/recovery/reconciler.ts skips a Task with any open Dispatch, so
+ *  recovery cannot take it until the next boot's cleanup writes it off. Closing it here lets the
+ *  same boot's recovery sweep, which runs after the drain, do that work now.
+ *
+ *  **It is the cleanup's rule and not a second one.** `endedUnproven` and `interruptStalledTask`
+ *  are the same two pieces `OrchestrationStore.load` uses, in the same order — the Dispatch first,
+ *  because `createGate` refuses to gate a Task with an open Dispatch.
+ *
+ *  `closed` is false, with the state untouched, for a Dispatch that is already ended or not there:
+ *  an earlier report in the same drain may have closed it, and a hand-written report may name a
+ *  Dispatch that never existed. */
+export function writeOffDispatch(
+  s: OrchState,
+  a: { dispatchId: string },
+  now: string
+): {
+  state: OrchState
+  closed: boolean
+  interrupted: 'validation' | 'review' | null
+  stuck: boolean
+} {
+  const dispatch = s.dispatches.find((d) => d.id === a.dispatchId && !d.endedAt)
+  if (!dispatch) return { state: s, closed: false, interrupted: null, stuck: false }
+  const ended: OrchState = {
+    ...s,
+    dispatches: replace(s.dispatches, endedUnproven(dispatch, now))
+  }
+  const r = interruptStalledTask(ended, { taskId: dispatch.taskId }, now)
+  return { state: r.state, closed: true, interrupted: r.interrupted, stuck: r.stuck }
+}
+
 /** 롤링이 세션을 갈아탈 때 열린 Dispatch 를 새 세션 id·계정으로 옮긴다.
  *
  *  **왜 필요한가.** `Dispatch.sessionId` 는 worker_done 을 되돌려 묶는 **유일한** 키다 —
@@ -831,6 +951,22 @@ export function rekeyDispatch(
     },
     next
   )
+}
+
+/** Records the provider's own session id on an open Dispatch (Job Continuity P0 design §8). The same
+ *  value again is a no-op that returns the input state; a different value replaces it — a roll
+ *  respawns the process and the new one has a new id. A closed Dispatch is refused: nothing will
+ *  resume it, and binding would make the record claim a session that is not this attempt's. */
+export function bindNativeSession(
+  s: OrchState,
+  a: { dispatchId: string; nativeSessionId: string }
+): Res<Dispatch> {
+  const dispatch = s.dispatches.find((d) => d.id === a.dispatchId)
+  if (!dispatch) return err(`unknown dispatch: ${a.dispatchId}`)
+  if (dispatch.endedAt) return err(`dispatch is closed: ${a.dispatchId}`)
+  if (dispatch.nativeSessionId === a.nativeSessionId) return ok(s, dispatch)
+  const next: Dispatch = { ...dispatch, nativeSessionId: a.nativeSessionId }
+  return ok({ ...s, dispatches: replace(s.dispatches, next) }, next)
 }
 
 /** 정지 시점 스냅샷을 열린 Dispatch 에 남긴다. **Task 도 Dispatch 의 종료 상태도 건드리지 않는다** —

@@ -26,8 +26,8 @@ describe('canTransition', () => {
     expect(canTransition('dispatched', 'completed')).toBe(true)
     expect(canTransition('dispatched', 'failed')).toBe(true)
   })
-  it('dispatched에서 blocked로 갈 수 없다 — 열린 dispatch가 있는 Task는 Gate로 막지 않는다', () => {
-    expect(canTransition('dispatched', 'blocked')).toBe(false)
+  it('dispatched에서 blocked로 갈 수 있다 — 열린 dispatch가 있는 Task는 createGate에서 실패한다 (P1 recovery)', () => {
+    expect(canTransition('dispatched', 'blocked')).toBe(true)
   })
   it('failed에서 dispatched로 재시도할 수 있다', () => {
     expect(canTransition('failed', 'dispatched')).toBe(true)

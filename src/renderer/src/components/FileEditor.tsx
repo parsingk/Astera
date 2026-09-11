@@ -77,10 +77,17 @@ const sharedBase: Extension[] = [
    *  is per file and travels with the cached state between panes, exactly like the undo history.
    *
    *  `createPanel` returns an empty div because the panel is never seen: FileFindBar draws the UI and
-   *  styles.css hides `.cm-panels`. The panel still has to be *opened*, because @codemirror/search
-   *  gates highlighting on it (searchHighlighter paints nothing while `panel` is null) — FileFindBar
-   *  opens and closes it alongside itself. */
-  search({ top: true, createPanel: () => ({ dom: document.createElement('div') }) }),
+   *  styles.css collapses `.cm-panels` to nothing. The panel still has to be *opened*, because
+   *  @codemirror/search gates highlighting on it (searchHighlighter paints nothing while `panel` is
+   *  null) — FileFindBar opens and closes it alongside itself.
+   *
+   *  **The panel object carries its own `top`.** `search({ top: true })` only reaches CodeMirror's own
+   *  SearchPanel class; a panel returned from `createPanel` defaults to the bottom group unless it says
+   *  otherwise. That mattered: an open bottom panel contributes a bottom scroll margin, and
+   *  `PanelGroup.scrollMargin()` measures the panel's DOM rect, so once the panel was open every
+   *  `scrollIntoView` — the jump to a match, and each later Home/End/Ctrl+arrow that left the viewport —
+   *  overshot by the height of the editor and left the cursor scrolled off the top. */
+  search({ top: true, createPanel: () => ({ dom: document.createElement('div'), top: true }) }),
   /** Ahead of basicSetup's searchKeymap, which binds Mod-f to CodeMirror's own panel. Escape hands
    *  back when the bar is closed so that the other Escape handlers still get their turn. */
   Prec.high(
