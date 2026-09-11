@@ -125,6 +125,27 @@
   .aui-root *::after {
     border-color: var(--border);
   }
+
+  /* And the third one: a form control inherits the page's colour and font rather than falling back to
+     the browser's own. Without it the composer's textarea draws black text on a dark panel — typed
+     letters simply do not show — because nothing in this repository styles a bare textarea and no
+     utility on it names a colour. Preflight's own form-control reset, narrowed to .aui-root for the
+     same reason the border rule is. Still @layer base, so any utility that does name a colour, a font
+     or a radius keeps winning. */
+  .aui-root button,
+  .aui-root input,
+  .aui-root optgroup,
+  .aui-root select,
+  .aui-root textarea {
+    color: inherit;
+    font: inherit;
+    font-feature-settings: inherit;
+    font-variation-settings: inherit;
+    letter-spacing: inherit;
+    border-radius: 0;
+    background-color: transparent;
+    opacity: 1;
+  }
 }
 
 .aui-root {
