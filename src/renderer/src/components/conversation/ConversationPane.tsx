@@ -722,7 +722,15 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       if (!(target instanceof Element)) return;
       if (target.closest("button, a, input, textarea, [role='option'], [role='menuitem']")) return;
       if (window.getSelection()?.toString()) return; // selecting text is not asking to type
-      pane.querySelector("textarea")?.focus();
+      const input = pane.querySelector("textarea");
+      if (!input) return;
+      // Already there, so there is nothing to put back — and calling focus() anyway would collapse
+      // whatever is selected inside it. A drag that starts in the composer and ends outside it lands
+      // here, and losing the selection at that moment means the next Backspace deletes one character
+      // instead of the words someone just swept.
+      if (document.activeElement === input) return;
+      if (input.selectionStart !== input.selectionEnd) return;
+      input.focus();
     };
     pane.addEventListener("mouseup", onPointerUp);
     pane.addEventListener("input", onInput);
