@@ -64,6 +64,24 @@ export function parseStatusLinePayload(payload: unknown): SessionUsage | null {
 /** Pulls the session identity metadata (session_id, transcript_path) out of the statusLine payload —
  *  rolling uses it as the path of the transcript copy and as the ID to --resume. It lives here
  *  because the capture script records the whole payload. */
+/** What the CLI reports about the model it is running under, or nulls when it has said nothing yet.
+ *
+ *  The conversation view has no statusline of its own to read this off — the terminal draws one and
+ *  this pane does not — so it asks here. Same tolerance as extractStatusLineSession below: a payload
+ *  that is missing, malformed, or shaped unexpectedly answers nulls rather than throwing, because
+ *  every caller is drawing a label and none of them can do anything useful with an error. */
+export function extractStatusLineModel(payload: unknown): {
+  model: string | null
+  effort: string | null
+} {
+  if (typeof payload !== 'object' || payload === null) return { model: null, effort: null }
+  const p = payload as { model?: unknown; effort?: unknown }
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null)
+  const field = (v: unknown, key: string): string | null =>
+    typeof v === 'object' && v !== null ? str((v as Record<string, unknown>)[key]) : null
+  return { model: field(p.model, 'display_name'), effort: field(p.effort, 'level') }
+}
+
 export function extractStatusLineSession(payload: unknown): {
   sessionId: string | null
   transcriptPath: string | null

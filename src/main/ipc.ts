@@ -115,7 +115,7 @@ import { AgentBrowserRuns, devServersFor } from './agentBrowser/runs'
 import { previewShotsDir } from './preview/shots'
 import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
-import { extractStatusLineSession } from '../core/usage/statusline'
+import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/statusline'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
@@ -5843,6 +5843,13 @@ export function registerIpc(
   // `open` still answers null, so this reads main/attention.ts directly rather than folding onto
   // conversationSessions.
   ipcMain.handle('conversation.attention', (_e, sessionId: string) => conversationAttentionOf(attention, sessionId))
+  // Same shape of thing and the same reason as `attention` above: the conversation view has no
+  // statusline of its own, so what the CLI reports about the model is read on demand. Never throws —
+  // core.statusLinePayload answers null for a session that has written nothing, and the extractor
+  // answers nulls for anything it cannot read.
+  ipcMain.handle('conversation.model', async (_e, sessionId: string) =>
+    extractStatusLineModel(await core.statusLinePayload(sessionId))
+  )
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is

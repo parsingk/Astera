@@ -1393,6 +1393,10 @@ export const ko = {
   'conversation.pending.title': '답할 것이 있습니다',
   'conversation.pending.body': '에이전트가 답을 기다립니다. 선택지는 터미널에 있습니다.',
   'conversation.pending.action': '터미널로 이동',
+  'conversation.slash.title': '슬래시 명령은 터미널에서 진행됩니다',
+  'conversation.slash.body': '명령이 여는 창은 터미널에 있어서 여기서는 보이지 않습니다.',
+  'conversation.slash.action': '터미널로 이동',
+  'conversation.model.line': '{model} · {effort}',
   // ConversationPane.tsx — open() answering null, and a transcript that exists but has no turns yet.
   'conversation.unavailable': '이 세션은 아직 기록이 없습니다',
   'conversation.empty': '아직 주고받은 것이 없습니다',

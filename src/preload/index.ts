@@ -292,7 +292,8 @@ const api = {
     open: invoke('conversation.open'),
     more: invoke('conversation.more'),
     close: invoke('conversation.close'),
-    attention: invoke('conversation.attention')
+    attention: invoke('conversation.attention'),
+    model: invoke('conversation.model')
   },
   platform: process.platform,
   win: {

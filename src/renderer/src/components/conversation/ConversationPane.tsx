@@ -19,7 +19,7 @@ import { ChevronUpIcon } from "lucide-react";
 import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.aui";
 import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
-import { PendingBanner } from "./PendingBanner";
+import { PendingBanner, SlashCommandNotice } from "./PendingBanner";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
 import type { Attention } from "../../../../core/types";
@@ -173,6 +173,30 @@ export function shouldCloseStaleOpen(mountedFor: string | null, sessionId: strin
   return mountedFor !== sessionId;
 }
 
+/**
+ * Whether what a person just sent is a slash command rather than a message.
+ *
+ * Leading whitespace only, deliberately: `/` anywhere else is a path or a date, and a message that
+ * merely mentions one is not a command. Nothing is inferred about which command it is — every one of
+ * them draws on the CLI's own screen, and that is the whole point of the notice this decides.
+ */
+export function isSlashCommand(text: string): boolean {
+  return text.trimStart().startsWith("/");
+}
+
+/**
+ * The one-line label for what the CLI is running under, or null when it has told us nothing worth
+ * drawing. Effort alone is not worth a line: it means nothing without the model it belongs to.
+ */
+export function modelLineOf(
+  info: { model: string | null; effort: string | null },
+  format: (model: string, effort: string) => string
+): string | null {
+  if (info.model === null) return null;
+  if (info.effort === null) return info.model;
+  return format(info.model, info.effort);
+}
+
 /** How often a pane with nothing to show asks again whether a transcript has appeared. */
 const UNAVAILABLE_RETRY_MS = 2_000;
 
@@ -207,6 +231,13 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   const [more, setMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [attention, setAttention] = useState<Attention>("idle");
+  // Set when a slash command is sent from here, cleared the moment anything comes back — see
+  // SlashCommandNotice for what it says and why it is not the pending banner.
+  const [slashSent, setSlashSent] = useState(false);
+  const [modelInfo, setModelInfo] = useState<{ model: string | null; effort: string | null }>({
+    model: null,
+    effort: null
+  });
 
   // Bumped by the mount effect on every run, and again in that same run's cleanup — so any callback
   // still holding a past run's captured `generation` value can tell, at any later point, whether the
@@ -238,6 +269,8 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     setFrom(0);
     setMore(false);
     setAttention("idle");
+    setSlashSent(false);
+    setModelInfo({ model: null, effort: null });
 
     // Set once a live push arrives, so the one-shot attention read below (which can resolve after a
     // push that overtook it) never clobbers a value that is already newer than the one it fetched.
@@ -263,8 +296,26 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     // its poll ticks no faster than once a second, so the first possible append is already far
     // behind this synchronous subscribe. Registering first just means that guarantee is never the
     // reason this is safe.
+    // Nothing pushes the model: it changes only when a person changes it, on the CLI's own screen.
+    // Read once here and again on every turn, which is the one moment we know the CLI has just been
+    // through a render and rewritten what we read this from.
+    const readModel = (): void => {
+      void window.api.conversation
+        .model(sessionId)
+        .then((info) => {
+          if (isCurrent()) setModelInfo(info);
+        })
+        .catch(() => {});
+    };
+    readModel();
+
     const offAppend = window.api.on("conversation:append", (e) => {
       if (!isCurrent()) return;
+      if (e.sessionId === sessionId) {
+        // Something came back, so the notice has said what it had to say.
+        setSlashSent(false);
+        readModel();
+      }
       setTurns((prev) => nextTurnsFor(sessionId, prev, e));
       if (shouldResetPaging(sessionId, e)) {
         setFrom(0);
@@ -434,7 +485,9 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       // terminal are doing the same thing. The typed turn is never pushed into `messages` locally:
       // it comes back through the transcript like every other turn, and adding it here would show
       // it twice.
-      const [paste, submit] = ptyWritesFor(composerTextOf(message.content));
+      const text = composerTextOf(message.content);
+      setSlashSent(isSlashCommand(text));
+      const [paste, submit] = ptyWritesFor(text);
       window.api.sessions.write(sessionId, paste);
       // A separate turn of the event loop, so the two land as two chunks. Sent together they reach
       // the CLI as one, the return is swallowed into the paste, and nothing is submitted at all.
@@ -455,9 +508,19 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     [t, status]
   );
 
+  const goTerminal = useCallback((): void => {
+    setSlashSent(false);
+    onGoTerminal();
+  }, [onGoTerminal]);
+
   const Banner = useCallback(
-    (): ReactNode => <PendingBanner onGoTerminal={onGoTerminal} />,
-    [onGoTerminal]
+    (): ReactNode => <PendingBanner onGoTerminal={goTerminal} />,
+    [goTerminal]
+  );
+
+  const SlashBanner = useCallback(
+    (): ReactNode => <SlashCommandNotice onGoTerminal={goTerminal} />,
+    [goTerminal]
   );
 
   const components = useMemo<ThreadComponents>(
@@ -465,9 +528,10 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       Welcome,
       ToolFallback: ToolRow,
       ToolGroup: ToolRowGroup,
-      Banner: attention === "waiting" ? Banner : undefined,
+      // An answer that is actually being waited on outranks a note about where a command went.
+      Banner: attention === "waiting" ? Banner : slashSent ? SlashBanner : undefined,
     }),
-    [Welcome, Banner, attention]
+    [Welcome, Banner, SlashBanner, attention, slashSent]
   );
 
   // Built unconditionally, ahead of the status branches below — the messages a still-loading or
@@ -500,9 +564,23 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   }
 
   const locked = attention === "waiting";
+  const modelLine = modelLineOf(modelInfo, (model, effort) =>
+    t("conversation.model.line", { model, effort })
+  );
 
   return (
     <div ref={paneRef} data-slot="conversation-pane" className="flex h-full min-h-0 flex-col">
+      {/* What the CLI is running under. The terminal has the CLI's own statusline for this; over here
+          there is nothing else that says it, and it is the first thing a person checks before asking
+          for something expensive. */}
+      {modelLine !== null && (
+        <div
+          data-slot="conversation-model"
+          className="text-muted-foreground px-4 pt-2 text-right text-xs"
+        >
+          {modelLine}
+        </div>
+      )}
       {more && (
         <div className="border-border/60 flex justify-center border-b py-1">
           <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>

@@ -8,7 +8,9 @@ import {
   nextAttentionFor,
   composerTextOf,
   shouldCloseStaleOpen,
-  ptyWritesFor
+  ptyWritesFor,
+  isSlashCommand,
+  modelLineOf
 } from './ConversationPane'
 import type { ConvTurn } from '../../../../core/history/convTypes'
 
@@ -238,5 +240,37 @@ describe('ptyWritesFor', () => {
   it('leaves a newline inside the message where it was', () => {
     const [paste] = ptyWritesFor('first\nsecond')
     expect(paste).toBe('\u001b[200~first\nsecond\u001b[201~')
+  })
+})
+
+describe('isSlashCommand', () => {
+  it('is true for a command, with or without leading spaces', () => {
+    expect(isSlashCommand('/model')).toBe(true)
+    expect(isSlashCommand('   /status arg')).toBe(true)
+  })
+
+  // The interesting half: a slash inside a sentence is not a command, and raising the notice for one
+  // would tell a person their perfectly ordinary message went somewhere it did not.
+  it('is false for a message that merely contains a slash', () => {
+    expect(isSlashCommand('src/main/ipc.ts 를 봐줘')).toBe(false)
+    expect(isSlashCommand('2026/09/11 에 뭐 했지')).toBe(false)
+    expect(isSlashCommand('')).toBe(false)
+  })
+})
+
+describe('modelLineOf', () => {
+  const format = (model: string, effort: string): string => `${model} @ ${effort}`
+
+  it('joins the model and the effort', () => {
+    expect(modelLineOf({ model: 'Opus 5', effort: 'xhigh' }, format)).toBe('Opus 5 @ xhigh')
+  })
+
+  it('draws the model alone rather than an effort with nothing to belong to', () => {
+    expect(modelLineOf({ model: 'Opus 5', effort: null }, format)).toBe('Opus 5')
+  })
+
+  it('draws nothing at all when the CLI has not said what it is running', () => {
+    expect(modelLineOf({ model: null, effort: 'xhigh' }, format)).toBeNull()
+    expect(modelLineOf({ model: null, effort: null }, format)).toBeNull()
   })
 })

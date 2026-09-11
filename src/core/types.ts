@@ -1373,6 +1373,10 @@ export type RendererApi = CoreApi & {
      *  one ever does. Independent of `open`: a fresh session on a trust prompt is `waiting` while
      *  `open` still answers null. */
     attention(sessionId: string): Promise<Attention>
+    /** The model and effort the CLI last reported for this session, or nulls when it has reported
+     *  nothing yet. Read rather than pushed: it changes only when a person changes it, which they do
+     *  through the CLI's own screen, and there is no event for that. */
+    model(sessionId: string): Promise<{ model: string | null; effort: string | null }>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }
