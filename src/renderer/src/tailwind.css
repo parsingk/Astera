@@ -1,0 +1,129 @@
+/* Tailwind for the vendored shadcn/assistant-ui components only. Imported by layer instead of as a
+   whole so that preflight never loads — preflight resets margins, borders, headings, lists and form
+   controls globally, and this app already has a complete hand-written stylesheet (styles.css) with none
+   of that assumed away. `tailwindcss/preflight.css` is deliberately not one of the imports below. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Utility classes the vendored components use that Tailwind v4 no longer ships inline: `animate-in`,
+   `fade-in-*`, `zoom-in-*`, `slide-in-from-*` (attachment/image/reasoning/thread) and `.shimmer`
+   (reasoning/tool-fallback/tool-group, "thinking" state). */
+@import "tw-animate-css";
+@import "tw-shimmer";
+
+/* Tailwind's default dark variant only matches under a .dark ancestor class. Astera never adds one —
+   every theme (Vega, Orion, Umbra, Aurora, Antares, Quasar, Sirius) is a dark palette, switched by
+   ThemeProvider rewriting custom properties on :root, not by toggling a class. Redefined to always match
+   so the vendored components' dark: utilities (which refine, not invert, their light-mode styling) apply. */
+@custom-variant dark (&);
+
+/* shadcn's init also scaffolds --sidebar-* and --chart-* tokens; dropped, since nothing vendored so far
+   uses a sidebar or a chart and the brief's mapping table doesn't name them either. Add them back,
+   mapped the same way as the tokens below, the day something actually needs them. */
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: var(--sans);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  /* Not var(--accent): Astera's own --accent (styles.css) is already a real, differently-meant colour
+     (the active-marker/focus teal), and this token needs shadcn's own muted-hover-surface meaning, not
+     that one. Pointed straight at --elevated to avoid the name colliding with Astera's token. */
+  --color-accent: var(--elevated);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  /* --radius itself is not redeclared below (styles.css already has one) so these all derive from
+     Astera's own 6px. Where styles.css also already names --radius-sm/--radius-lg directly (3px/8px),
+     its values win over these calc()s — see the note on the :root block below. */
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  @keyframes collapsible-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto));
+    }
+  }
+  @keyframes collapsible-up {
+    from {
+      height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto));
+    }
+    to {
+      height: 0;
+    }
+  }
+}
+
+/* shadcn's tokens, pointed at Astera's own palette (styles.css) instead of a second copy of the same
+   colours — every one of these already changes with the active theme, since ThemeProvider rewrites the
+   Astera custom properties on :root, not these.
+   --ring is deliberately absent: Astera's own --ring (styles.css, unlayered) already means the same
+   thing (focus-ring colour) and, being unlayered, would win over one declared here regardless. --radius
+   itself is absent for the same reason; --radius-sm/--radius-lg above are @theme values (Tailwind puts
+   them in @layer theme), so Astera's own fixed 3px/8px (unlayered) win there too, on the sizes Astera has
+   an opinion about — the calc()s above only end up mattering for the sizes it doesn't. */
+:root {
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--panel);
+  --card-foreground: var(--text);
+  --popover: var(--panel);
+  --popover-foreground: var(--text);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-ink);
+  --secondary: var(--elevated);
+  --secondary-foreground: var(--text);
+  --muted: var(--elevated);
+  --muted-foreground: var(--text-dim);
+  --accent-foreground: var(--text);
+  --destructive: var(--git-deleted);
+  --border: var(--line-soft);
+  --input: var(--line-soft);
+}
+
+@layer base {
+  /* assistant-ui's vendored components assume one of Tailwind preflight's resets: a default border
+     colour for any element that sets a border width without a colour utility. (box-sizing: border-box,
+     preflight's other assumption, needs nothing here — styles.css already sets it globally.) Scoped to
+     .aui-root, the class assistant-ui's own Thread root already carries, so nothing outside the
+     conversation view is affected; @layer base keeps this below the border-input/border-destructive/etc
+     utility classes (@layer utilities), so an element that does name a colour still wins. */
+  .aui-root,
+  .aui-root *,
+  .aui-root::before,
+  .aui-root::after,
+  .aui-root *::before,
+  .aui-root *::after {
+    border-color: var(--border);
+  }
+}
+
+.aui-root {
+  /* Two defaults the Thread root pins inline (style={{...}}), found by spike, both needing
+     !important to beat an inline style set on that same element:
+     --composer-bg: upstream sets it to var(--color-card); under @theme inline that reference resolves
+     at :root and never reaches a dark theme, so the composer renders with a light background. Named the
+     surface directly instead of chasing that indirection.
+     --composer-radius: upstream pins a 24px pill; this app's floating-panel radius is 8px. */
+  --composer-bg: var(--panel) !important;
+  --composer-radius: var(--radius-lg) !important;
+}
