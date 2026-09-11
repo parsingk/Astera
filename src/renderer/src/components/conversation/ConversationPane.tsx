@@ -253,6 +253,15 @@ function threadViewport(pane: HTMLElement | null): HTMLElement | null {
  */
 const ModelSlotContext = createContext<ModelControlProps | null>(null);
 
+/** The banner slot's contents, for the same reason the model slot has one: a slot rebuilt on every
+ *  render is unmounted and remounted on every keystroke, and React churning the composer's own
+ *  neighbours while someone is typing into it is not something to leave in place and hope about. */
+const BannerSlotContext = createContext<ReactNode>(null);
+
+function ConversationBannerSlot(): ReactNode {
+  return useContext(BannerSlotContext);
+}
+
 function ComposerModelSlot(): ReactNode {
   const props = useContext(ModelSlotContext);
   // Nothing known, nothing drawn. A session whose CLI has not said what it is running is either just
@@ -663,10 +672,16 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     const onInput = (e: Event): void => {
       const target = e.target;
       if (!(target instanceof HTMLTextAreaElement)) return;
-      setSlashDismissed(false);
-      setComposerText(target.value);
-      setComposerCaret(target.selectionStart ?? target.value.length);
-      setSlashActive(0);
+      // Deferred: this listener sits on the pane, which is inside React's own root, so a state
+      // update made here lands in the middle of the keystroke's dispatch and can make React paint
+      // before the composer's own handler has taken the character. A microtask puts it after every
+      // handler for that event, which is where a bystander belongs.
+      queueMicrotask(() => {
+        setSlashDismissed(false);
+        setComposerText(target.value);
+        setComposerCaret(target.selectionStart ?? target.value.length);
+        setSlashActive(0);
+      });
     };
     const onKeyDown = (e: KeyboardEvent): void => {
       if (!slashOpenRef.current) return;
@@ -738,11 +753,6 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     onGoTerminal();
   }, [onGoTerminal]);
 
-  const Banner = useCallback(
-    (): ReactNode => <PendingBanner onGoTerminal={goTerminal} />,
-    [goTerminal]
-  );
-
   const modelSlot = useMemo<ModelControlProps>(
     () => ({
       line: modelLine,
@@ -788,40 +798,31 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     [modelLine, modelInfo.model, modelInfo.canPick, sendCommand, goTerminal, sessionId, t]
   );
 
-  const SlashMenuBanner = useCallback(
-    (): ReactNode => (
+  // An answer that is actually being waited on outranks everything; after that, a list being typed
+  // into outranks a note about a command already sent.
+  const banner: ReactNode =
+    attention === "waiting" ? (
+      <PendingBanner onGoTerminal={goTerminal} />
+    ) : slashOpen ? (
       <CompletionMenu
         rows={rows}
         active={Math.min(slashActive, Math.max(rows.length - 1, 0))}
         onPick={takeRow}
         onHover={setSlashActive}
       />
-    ),
-    [rows, slashActive, takeRow]
-  );
-
-  const SlashBanner = useCallback(
-    (): ReactNode => <SlashCommandNotice onGoTerminal={goTerminal} />,
-    [goTerminal]
-  );
+    ) : slashSent ? (
+      <SlashCommandNotice onGoTerminal={goTerminal} />
+    ) : null;
 
   const components = useMemo<ThreadComponents>(
     () => ({
       Welcome,
       ToolFallback: ToolRow,
       ToolGroup: ToolRowGroup,
-      // An answer that is actually being waited on outranks everything; after that, a list being
-      // typed into outranks a note about a command already sent.
-      Banner: attention === "waiting"
-        ? Banner
-        : slashOpen
-          ? SlashMenuBanner
-          : slashSent
-            ? SlashBanner
-            : undefined,
+      Banner: banner === null ? undefined : ConversationBannerSlot,
       ComposerExtras: ComposerModelSlot,
     }),
-    [Welcome, Banner, SlashBanner, SlashMenuBanner, attention, slashSent, slashOpen]
+    [Welcome, banner]
   );
 
   // Built unconditionally, ahead of the status branches below — the messages a still-loading or
@@ -866,11 +867,13 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         </div>
       )}
       <div className="min-h-0 flex-1">
-        <ModelSlotContext.Provider value={modelSlot}>
+        <BannerSlotContext.Provider value={banner}>
+          <ModelSlotContext.Provider value={modelSlot}>
           <AssistantRuntimeProvider runtime={runtime}>
             <Thread components={components} composerPlaceholder={t("conversation.composer.placeholder")} />
           </AssistantRuntimeProvider>
-        </ModelSlotContext.Provider>
+          </ModelSlotContext.Provider>
+        </BannerSlotContext.Provider>
       </div>
       {/* The banner above already says an answer is waiting; this says why the input itself went
           quiet, right where a person's eye lands after finding out typing did nothing. */}
