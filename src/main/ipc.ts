@@ -122,8 +122,9 @@ import { previewShotsDir } from './preview/shots'
 import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
 import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/statusline'
-import { listSlashCommands } from './slashCommands'
+import { listSlashCommands, listCodexMentions } from './slashCommands'
 import { createFileIndex } from './fileIndex'
+import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
@@ -5883,8 +5884,25 @@ export function registerIpc(
   // in-memory filter per keystroke rather than one tree walk.
   ipcMain.handle('conversation.files', async (_e, sessionId: string, query: string) => {
     const session = core.sessions.list().find((s) => s.id === sessionId)
-    if (!session?.cwd) return []
-    return fileIndex.search(session.cwd, query, CONVERSATION_FILE_MATCHES)
+    if (!session) return []
+    const files = session.cwd
+      ? await fileIndex.search(session.cwd, query, CONVERSATION_FILE_MATCHES)
+      : []
+    // codex asks for a skill by mentioning it, the same way it mentions a file, so both belong in
+    // the one list — skills first, being far fewer and named rather than found.
+    let account: { provider?: string; configDir: string } | null = null
+    try {
+      account = core.accounts.get(session.accountId)
+    } catch {
+      account = null
+    }
+    if (account?.provider !== 'codex') return files
+    const skills = filterFilePaths(
+      await listCodexMentions(account.configDir),
+      query,
+      CONVERSATION_FILE_MATCHES
+    )
+    return [...skills, ...files].slice(0, CONVERSATION_FILE_MATCHES)
   })
   ipcMain.handle('conversation.commands', async (_e, sessionId: string) => {
     const session = core.sessions.list().find((s) => s.id === sessionId)

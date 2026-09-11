@@ -133,3 +133,23 @@ export async function listSlashCommands(opts: {
   ])
   return groups.flat().sort((a, b) => a.name.localeCompare(b.name))
 }
+
+/**
+ * What codex offers after an `@`, besides files: the skills it can be asked for by name.
+ *
+ * codex takes none of these as a `/` command — it answers `Unrecognized command` — but it does take
+ * them as mentions. Measured in this machine's own rollouts, where a past session carries the message
+ * `@astera-task`, alongside file mentions written the same way (`@novels/…/episode_2.corr`). So one
+ * list serves both: whatever is chosen goes on the line after an `@`.
+ *
+ * Both places skills live are walked: the person's own folder, and the ones a plugin brought.
+ */
+export async function listCodexMentions(configDir: string): Promise<string[]> {
+  const own = await skillsIn(path.join(configDir, 'skills'), 'user')
+  const fromPlugins = await pluginPaths(configDir).then(async (paths) => {
+    const nested = await Promise.all(paths.map((p) => skillsIn(path.join(p, 'skills'), 'plugin')))
+    return nested.flat()
+  })
+  const names = [...own, ...fromPlugins].map((c) => c.name)
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b))
+}
