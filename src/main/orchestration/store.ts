@@ -10,6 +10,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
   deleteRuns,
+  detachCoordinator,
   emptyState,
   endedUnproven,
   interruptStalledTask,
@@ -91,6 +92,14 @@ export class OrchestrationStore {
      *  Task means it stays that way until something else moves it. Counted so the wiring can say so:
      *  a person looking at a Task stuck in validating has no other way to find out why. */
     stuckInterruptions: number
+    /** Runs whose coordinator did not outlive the restart, and whose slot this sweep emptied.
+     *
+     *  **Counted because emptying it is what turns two things back on**, and a person needs to know
+     *  which Job they happened to: `inbox.ts` only nets Runs with no coordinator, and the Jobs list
+     *  only offers the restart button then (`view.ts`). A slot left naming a dead session is a Job
+     *  with nobody to answer its workers and no button to fix it — measured: a worker asked a
+     *  question and nothing answered until a person ran the CLI by hand. */
+    coordinatorsLost: number
     /** The file as read — after the field migrations, before the restart cleanup — or null when
      *  there was nothing to read. Job Continuity diffs this against get() so every worker the
      *  restart lost is journaled (P0 design §5). */
@@ -102,16 +111,16 @@ export class OrchestrationStore {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
         this.state = emptyState()
-        return { recovered: false, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, before: null }
+        return { recovered: false, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null }
       }
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, before: null }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null }
     }
     if (!isValidState(parsed)) {
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, before: null }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null }
     }
 
     // isValidState only checks that the arrays exist, so the elements of parsed's arrays are
@@ -260,9 +269,43 @@ export class OrchestrationStore {
     // blocked 로 옮기고 Gate 를 열어 둔 결과가 그쪽에 있다 — st 를 펼치면 그 복구가 조용히 덮인다
     // (실제로 그렇게 썼다가 store.test.ts 의 복구 테스트 셋이 잡았다). dispatches 만 따로 넘기는
     // 것은 그것이 outcome 정규화를 거친 별도 배열이기 때문이다.
-    this.state = deleteRuns({ ...withGates, dispatches }, doomed)
+    // **The coordinator slot gets the same three answers the Dispatches above got, and for the same
+    // reason.** `Run.coordinatorSessionId` is the only record of "there is someone to answer", and two
+    // recoveries read it as *absent*: `inbox.ts` nets exactly the Runs without one, and the Jobs list
+    // offers the restart button for exactly those (`view.ts`). Left naming a session that died with its
+    // Host, one stale field silences both — the Job has nobody to answer its workers and no button to
+    // fix it, which is what a worker asking a question and waiting until a person ran the CLI by hand
+    // actually was.
+    //
+    // `'unknown'` changes nothing here for the same reason it changes nothing above: emptying a slot
+    // whose coordinator is in fact alive puts "restart the coordinator" on that Run's line, and one
+    // click is a second coordinator in the worktree the first is still working in — the accident
+    // `releaseCoordinator` (src/main/ipc.ts) refuses to risk. No Host at all is a real answer: nothing
+    // could have outlived the app, so nothing did.
+    //
+    // **detachCoordinator does the emptying**, not a `delete` written here — the same discipline the
+    // `deleteRuns` note below states. The rule for what leaving a coordinator means belongs in one
+    // place, and `releaseCoordinator` already goes through it.
+    let coordinatorsLost = 0
+    let swept: OrchState = withGates
+    for (const r of withGates.runs) {
+      if (!r.coordinatorSessionId) continue
+      if (alive === 'unknown') continue
+      if (alive?.has(r.coordinatorSessionId)) continue
+      const detached = detachCoordinator(swept, { runId: r.id })
+      if (!detached.ok) continue
+      swept = detached.state
+      coordinatorsLost++
+    }
+    this.state = deleteRuns({ ...swept, dispatches }, doomed)
 
-    if (unknownOutcomes > 0 || doomed.size > 0 || staleValidations > 0 || staleReviews > 0) {
+    if (
+      unknownOutcomes > 0 ||
+      doomed.size > 0 ||
+      staleValidations > 0 ||
+      staleReviews > 0 ||
+      coordinatorsLost > 0
+    ) {
       if (doomed.size > 0) await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       // Unguarded save — the same rewrite convention as RunConfigStore and SchedulerConfigStore
       await this.save(this.state).catch(() => {})
@@ -276,6 +319,7 @@ export class OrchestrationStore {
       staleValidations,
       staleReviews,
       stuckInterruptions,
+      coordinatorsLost,
       before
     }
   }
