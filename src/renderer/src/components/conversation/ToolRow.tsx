@@ -8,10 +8,10 @@ import {
 import { ChevronDownIcon } from "lucide-react";
 import type { ThreadGroupPart } from "../assistant-ui/elements/thread.aui";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "../ui/collapsible";
+  ToolGroupRoot,
+  ToolGroupContent,
+} from "../assistant-ui/elements/tool-group.aui";
+import { CollapsibleTrigger } from "../ui/collapsible";
 import { cn } from "../../lib/utils";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MessageKey } from "../../../../core/i18n";
@@ -172,10 +172,12 @@ function ToolRowGroupTrigger({ counts }: { counts: ToolGroupCount[] }): ReactNod
  * `useAuiState`'s reference-equality check does not force a re-render on every store tick when the
  * set of names has not actually changed.
  *
- * Built on the plain `Collapsible` primitives rather than `tool-group.aui.tsx`'s `ToolGroupRoot` /
- * `ToolGroupContent`: those resolve their own imports through the `@/` alias, which only
- * `electron.vite.config.ts` defines — `vitest.config.ts` does not, so a test importing them fails to
- * resolve the module entirely, not just to reproduce the fallback's exact collapse animation.
+ * The wrapper is `tool-group.aui.tsx`'s `ToolGroupRoot` / `ToolGroupContent`, not a plain
+ * `Collapsible` — only the trigger between them is ours. `ToolGroupRoot` calls `useScrollLock`
+ * during the expand/collapse animation, which is what keeps expanding a collapsed run partway up a
+ * long conversation from shifting everything below it and jumping the viewport under the reader's
+ * eyes. That is solved once, in the component already vendored for it; re-deriving it here would be
+ * the same bug (or a subtly different one) waiting to ship a second time.
  */
 export const ToolRowGroup: ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>> = ({
   group,
@@ -193,11 +195,9 @@ export const ToolRowGroup: ComponentType<PropsWithChildren<{ group: ThreadGroupP
   const counts = summarize(namesKey === "" ? [] : namesKey.split(","));
 
   return (
-    <Collapsible defaultOpen={false} className="w-full">
+    <ToolGroupRoot variant="ghost">
       <ToolRowGroupTrigger counts={counts} />
-      <CollapsibleContent className="overflow-hidden">
-        <div className="mt-1 flex flex-col gap-1">{children}</div>
-      </CollapsibleContent>
-    </Collapsible>
+      <ToolGroupContent>{children}</ToolGroupContent>
+    </ToolGroupRoot>
   );
 };
