@@ -1184,6 +1184,7 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.verb.create': 'created',
   'conversation.verb.run': 'ran',
   'conversation.verb.running': 'running',
+  'conversation.outcome.failed': 'failed',
   'conversation.group.read': 'read',
   'conversation.group.find': 'search',
   'conversation.group.edit': 'edit',

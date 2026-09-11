@@ -50,12 +50,32 @@ const GROUP_KEY: Readonly<Record<ToolKind, MessageKey>> = {
 
 const isToolKind = (k: string): k is ToolKind => Object.hasOwn(GROUP_KEY, k);
 
-/** The i18n key for a tool's verb ("읽음" for Read), or the tool's own name when it is not one of
- *  the five kinds above. A plain function rather than something read off the rendered row, so the
- *  row and `toolRow.test.ts` drive off exactly the same mapping. */
-export function verbKeyOf(toolName: string): MessageKey | string {
+/** A tool's resolved label: a known i18n key, or the tool's own name passed through unchanged. A
+ *  plain `MessageKey | string` return here collapses to `string` — nothing distinguishes the two
+ *  arms at the type level, so a caller that wants to call `t()` safely has to re-derive "is this
+ *  tool known" itself and cast the result back to `MessageKey`. This discriminates instead: a
+ *  caller branches on `'key' in result`, and TypeScript actually narrows `result.key` to
+ *  `MessageKey` in that branch — no re-lookup, no cast. */
+export type ToolLabel = { readonly key: MessageKey } | { readonly name: string };
+
+function resolveLabel(toolName: string, table: Readonly<Record<ToolKind, MessageKey>>): ToolLabel {
   const kind = KIND_BY_TOOL[toolName];
-  return kind ? VERB_KEY[kind] : toolName;
+  return kind ? { key: table[kind] } : { name: toolName };
+}
+
+/** The verb form of a tool's label ("읽음" for Read) — the settled form, once a call has an
+ *  outcome. A plain function rather than something read off the rendered row, so the row and
+ *  `toolRow.test.ts` drive off exactly the same mapping. */
+export function verbKeyOf(toolName: string): ToolLabel {
+  return resolveLabel(toolName, VERB_KEY);
+}
+
+/** The group form of a tool's label ("읽기" for Read) — used for the left column while a call is
+ *  still running. A finished-form verb ("읽음") next to a still-running marker would read as
+ *  contradicting itself; the group form ("읽기") is already the word for "in progress", so the row
+ *  reuses it instead of inventing a third, running-only verb. */
+export function groupKeyOf(toolName: string): ToolLabel {
+  return resolveLabel(toolName, GROUP_KEY);
 }
 
 export interface ToolGroupCount {
@@ -98,6 +118,22 @@ function groupLabel(t: (key: MessageKey) => string, count: ToolGroupCount): stri
   return `${label} ${count.count}`;
 }
 
+/**
+ * The right-hand outcome text. A success with nothing to report renders nothing at all — that is
+ * the ordinary case (most successful calls) and it must stay quiet. A failure always says so in
+ * words: colour alone cannot carry it, which this repo already rules out elsewhere (PrBadge.tsx:
+ * "Colour is never the only carrier"), and core's own failure shape can leave `detail` empty —
+ * `toolUseResult` is a plain string when a call fails, so core's reduction records
+ * `detail: isRecord(result) ? detailOf(...) : ''` for that case (src/core/history/conversation.ts) —
+ * which would otherwise draw a failed `Edit` with a blank right side, pixel-identical to a quiet
+ * success.
+ */
+export function outcomeText(t: (key: MessageKey) => string, outcome: ConvToolOutcome): string {
+  if (outcome.ok) return outcome.detail;
+  const failed = t("conversation.outcome.failed");
+  return outcome.detail ? `${failed} · ${outcome.detail}` : failed;
+}
+
 /** The one-line tool row: verb, target, outcome right-aligned. Registered as `ToolFallback` in
  *  `ThreadComponents` (Task 9 wires it) — the args/result shape is the contract Task 9's mapping
  *  produces from `ConvPart`'s tool variant (`src/core/history/convTypes.ts`). */
@@ -107,9 +143,10 @@ export const ToolRow: ToolCallMessagePartComponent<{ target: string }, ConvToolO
   result,
 }) => {
   const { t } = useI18n();
-  const knownKind = KIND_BY_TOOL[toolName];
-  const verbKey = verbKeyOf(toolName);
-  const verb = knownKind ? t(verbKey as MessageKey) : verbKey;
+  // Running shows the group form ("읽기") — the verb form ("읽음") is a finished shape, and next to
+  // a live marker it would read as contradicting itself.
+  const label = result === undefined ? groupKeyOf(toolName) : verbKeyOf(toolName);
+  const left = "key" in label ? t(label.key) : label.name;
   const target = shortenTarget(toolName, args.target);
 
   return (
@@ -117,7 +154,7 @@ export const ToolRow: ToolCallMessagePartComponent<{ target: string }, ConvToolO
       data-slot="conversation-tool-row"
       className="flex min-w-0 items-center gap-2 py-0.5 text-sm"
     >
-      <span className="text-muted-foreground shrink-0">{verb}</span>
+      <span className="text-muted-foreground shrink-0">{left}</span>
       <span className="min-w-0 flex-1 truncate" title={args.target}>
         {target}
       </span>
@@ -135,7 +172,7 @@ export const ToolRow: ToolCallMessagePartComponent<{ target: string }, ConvToolO
             result.ok ? "text-[var(--git-new)]" : "text-[var(--git-deleted)]",
           )}
         >
-          {result.detail}
+          {outcomeText(t, result)}
         </span>
       )}
     </div>
@@ -192,7 +229,9 @@ export const ToolRowGroup: ComponentType<PropsWithChildren<{ group: ThreadGroupP
       })
       .join(","),
   );
-  const counts = summarize(namesKey === "" ? [] : namesKey.split(","));
+  // A missing or non-tool-call index maps to '' above; without filtering it back out here, that
+  // empty string would count as a kind of its own and draw a bare, label-less count in the summary.
+  const counts = summarize(namesKey.split(",").filter(Boolean));
 
   return (
     <ToolGroupRoot variant="ghost">

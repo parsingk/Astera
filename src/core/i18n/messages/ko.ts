@@ -1377,6 +1377,7 @@ export const ko = {
   'conversation.verb.create': '만듦',
   'conversation.verb.run': '돌림',
   'conversation.verb.running': '실행 중',
+  'conversation.outcome.failed': '실패',
   'conversation.group.read': '읽기',
   'conversation.group.find': '찾기',
   'conversation.group.edit': '수정',
