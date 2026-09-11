@@ -473,6 +473,8 @@ export default function App(): React.JSX.Element {
     | 'general'
     | 'appearance'
     | 'accounts'
+    | 'agent'
+    | 'hiw'
     | 'info'
     | 'shortcuts'
     | 'slack'
@@ -3963,6 +3965,11 @@ export default function App(): React.JSX.Element {
                     ['general', t('settings.tab.general')],
                     ['appearance', t('settings.tab.appearance')],
                     ['accounts', t('settings.tab.accounts')],
+                    // 에이전트와 How It Works — 둘 다 일반에서 갈라져 나왔고, 계정 바로 뒤가
+                    // 제자리다: 어느 계정으로 무엇을 띄울지 정한 다음에 오는 이야기다.
+                    // How It Works 의 이름은 사이드바·탭과 같은 키를 쓴다(새 문구를 만들지 않는다).
+                    ['agent', t('settings.tab.agent')],
+                    ['hiw', t('hiw.title')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
                     ['notifications', t('settings.tab.notifications')],
@@ -3983,7 +3990,10 @@ export default function App(): React.JSX.Element {
               </nav>
               <div className="settings-content">
                 {settingsTab === 'general' && (
-                  <>
+                  // .settings-stack 은 '기능 하나 = 굵은 제목 + 바로 아래 설명' 으로 읽히게 하는
+                  // 배치다. 일반·에이전트·How It Works 세 탭이 같이 쓴다 — 셋 다 토글과 설명이
+                  // 번갈아 오는 모양이라서다. 제목과 설명은 .settings-group 으로 붙인다.
+                  <div className="settings-stack">
                     <div className="settings-row">
                       <span>{t('settings.general.language')}</span>
                       <Select
@@ -4004,6 +4014,10 @@ export default function App(): React.JSX.Element {
                         ariaLabel={t('settings.general.language')}
                       />
                     </div>
+                  </div>
+                )}
+                {settingsTab === 'agent' && (
+                  <div className="settings-stack">
                     {/* Agent orchestration — reuses the same settings-row plus settings-hint
                         combination as the language row. Turning it on starts the server immediately, but
                         sessions that are already running do not get the CLI path (environment variables
@@ -4011,105 +4025,119 @@ export default function App(): React.JSX.Element {
                         Why the container is a label rather than a div: pressing the text has to toggle it
                         too (the same wrapping approach the checkboxes in NewSessionDialog use). The flex
                         and colour rules of settings-row apply regardless of the tag. */}
-                    <label className="settings-row">
-                      <span>{t('settings.orchestration.label')}</span>
-                      <input
-                        type="checkbox"
-                        checked={orchEnabled}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                          setOrchEnabled(next) // an optimistic update — reverted below on failure
-                          void window.api.settings.setOrchestrationEnabled(next).catch((err) => {
-                            setOrchEnabled(!next)
-                            toast.error(
-                              t('settings.orchestration.saveFailed', {
-                                detail: err instanceof Error ? err.message : String(err)
-                              })
-                            )
-                          })
-                        }}
-                      />
-                    </label>
-                    <span className="settings-hint">{t('settings.orchestration.hint')}</span>
-                    {/* 권한 모드 — 오케스트레이션 바로 아래. 위 토글이 켜는 것이 워커를 띄우는 일이고,
-                        이 토글이 정하는 것은 그 워커가 승인을 묻는가이기 때문이다. 같은
-                        optimistic-update-then-revert 관례를 쓴다. */}
-                    <label className="settings-row">
-                      <span>{t('settings.agentPermission.label')}</span>
-                      <input
-                        type="checkbox"
-                        checked={agentYolo}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                          setAgentYolo(next)
-                          void window.api.settings
-                            .setAgentPermissionMode(next ? 'yolo' : 'manual')
-                            .catch((err) => {
-                              setAgentYolo(!next)
+                    <div className="settings-group">
+                      <label className="settings-row">
+                        <span>{t('settings.orchestration.label')}</span>
+                        <input
+                          type="checkbox"
+                          checked={orchEnabled}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                            setOrchEnabled(next) // an optimistic update — reverted below on failure
+                            void window.api.settings.setOrchestrationEnabled(next).catch((err) => {
+                              setOrchEnabled(!next)
                               toast.error(
-                                t('settings.agentPermission.saveFailed', {
+                                t('settings.orchestration.saveFailed', {
                                   detail: err instanceof Error ? err.message : String(err)
                                 })
                               )
                             })
-                        }}
-                      />
-                    </label>
-                    <span className="settings-hint">{t('settings.agentPermission.hint')}</span>
+                          }}
+                        />
+                      </label>
+                      <span className="settings-hint">{t('settings.orchestration.hint')}</span>
+                    </div>
+                    {/* 권한 모드 — 오케스트레이션 바로 아래. 위 토글이 켜는 것이 워커를 띄우는 일이고,
+                        이 토글이 정하는 것은 그 워커가 승인을 묻는가이기 때문이다. 같은
+                        optimistic-update-then-revert 관례를 쓴다. */}
+                    <div className="settings-group">
+                      <label className="settings-row">
+                        <span>{t('settings.agentPermission.label')}</span>
+                        <input
+                          type="checkbox"
+                          checked={agentYolo}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                            setAgentYolo(next)
+                            void window.api.settings
+                              .setAgentPermissionMode(next ? 'yolo' : 'manual')
+                              .catch((err) => {
+                                setAgentYolo(!next)
+                                toast.error(
+                                  t('settings.agentPermission.saveFailed', {
+                                    detail: err instanceof Error ? err.message : String(err)
+                                  })
+                                )
+                              })
+                          }}
+                        />
+                      </label>
+                      <span className="settings-hint">{t('settings.agentPermission.hint')}</span>
+                    </div>
                     {/* 작업 이어가기와 재개 전략 — 오케스트레이션 바로 아래에 둔다. 이어가기는 Job 이
                         재시작을 건너 살아남게 하는 것이라 위 토글과 한 갈래이고, 재개 전략은 그것이
                         켜질 때 함께 움직인다(spec §3). 그 둘이 한 컴포넌트인 이유는 그 파일에 있다. */}
                     <ResumeStrategySettings />
-                    {/* Work unit tracking — same settings-row/settings-hint/label shape as orchestration
-                        above, and the same optimistic-update-then-revert-on-failure behaviour. Off by
-                        default: nothing is read from before the moment this is turned on. */}
-                    <label className="settings-row">
-                      <span>{t('settings.workUnit.label')}</span>
-                      <input
-                        type="checkbox"
-                        checked={workUnitTrackingEnabled}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                          setWorkUnitTrackingEnabled(next) // an optimistic update — reverted below on failure
-                          void window.api.settings.setWorkUnitTrackingEnabled(next).catch((err) => {
-                            setWorkUnitTrackingEnabled(!next)
-                            toast.error(
-                              t('settings.workUnit.saveFailed', {
-                                detail: err instanceof Error ? err.message : String(err)
-                              })
-                            )
-                          })
-                        }}
-                      />
-                    </label>
-                    <span className="settings-hint">{t('settings.workUnit.hint')}</span>
                     {/* Agent browser — same settings-row/settings-hint/label shape and the same
                         optimistic-update-then-revert as the two above. Off by default: it installs a
                         skill into every account and starts the local server. */}
-                    <label className="settings-row">
-                      <span>{t('settings.agentBrowser.label')}</span>
-                      <input
-                        type="checkbox"
-                        checked={agentBrowserEnabled}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                          setAgentBrowserEnabled(next)
-                          void window.api.settings.setAgentBrowserEnabled(next).catch((err) => {
-                            setAgentBrowserEnabled(!next)
-                            toast.error(
-                              t('settings.agentBrowser.saveFailed', {
-                                detail: err instanceof Error ? err.message : String(err)
-                              })
-                            )
-                          })
-                        }}
-                      />
-                    </label>
-                    <span className="settings-hint">{t('settings.agentBrowser.hint')}</span>
-                    {/* 설명 생성 — 작업 단위 추적이 모은 것을 무엇으로 설명할 것인가.
-                        추적 토글 바로 아래에 두는 이유: 추적이 이 설정의 입력을 만든다. */}
+                    <div className="settings-group">
+                      <label className="settings-row">
+                        <span>{t('settings.agentBrowser.label')}</span>
+                        <input
+                          type="checkbox"
+                          checked={agentBrowserEnabled}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                            setAgentBrowserEnabled(next)
+                            void window.api.settings.setAgentBrowserEnabled(next).catch((err) => {
+                              setAgentBrowserEnabled(!next)
+                              toast.error(
+                                t('settings.agentBrowser.saveFailed', {
+                                  detail: err instanceof Error ? err.message : String(err)
+                                })
+                              )
+                            })
+                          }}
+                        />
+                      </label>
+                      <span className="settings-hint">{t('settings.agentBrowser.hint')}</span>
+                    </div>
+                  </div>
+                )}
+                {/* How It Works — 추적과 설명 생성은 한 기능의 두 손잡이다(README 도 그렇게 묶어
+                    설명한다). 탭 이름이 곧 기능 이름이라 안에 제목을 또 세우지 않는다 — 다른 어느
+                    탭도 그러지 않는다. 추적이 먼저다: 그것이 모으는 것이 설명 생성의 입력이다. */}
+                {settingsTab === 'hiw' && (
+                  <div className="settings-stack">
+                    {/* Work unit tracking — same settings-row/settings-hint/label shape as the toggles
+                        in the agent tab, and the same optimistic-update-then-revert-on-failure
+                        behaviour. Off by default: nothing is read from before the moment this is
+                        turned on. */}
+                    <div className="settings-group">
+                      <label className="settings-row">
+                        <span>{t('settings.workUnit.label')}</span>
+                        <input
+                          type="checkbox"
+                          checked={workUnitTrackingEnabled}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                            setWorkUnitTrackingEnabled(next) // an optimistic update — reverted below on failure
+                            void window.api.settings.setWorkUnitTrackingEnabled(next).catch((err) => {
+                              setWorkUnitTrackingEnabled(!next)
+                              toast.error(
+                                t('settings.workUnit.saveFailed', {
+                                  detail: err instanceof Error ? err.message : String(err)
+                                })
+                              )
+                            })
+                          }}
+                        />
+                      </label>
+                      <span className="settings-hint">{t('settings.workUnit.hint')}</span>
+                    </div>
                     <GeneratorSettings />
-                  </>
+                  </div>
                 )}
                 {settingsTab === 'appearance' && (
                   <>

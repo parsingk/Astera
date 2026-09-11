@@ -7,6 +7,8 @@ export const ko = {
   'settings.tab.general': '일반',
   'settings.tab.appearance': '모양',
   'settings.tab.accounts': '계정',
+  // 에이전트 세션을 어떻게 띄우고 이어가는가 — 일반에서 갈라져 나온 탭이다
+  'settings.tab.agent': '에이전트',
   'settings.tab.info': '정보',
   'settings.tab.shortcuts': '단축키',
   'settings.tab.history': '히스토리',

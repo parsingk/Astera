@@ -993,7 +993,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .settings-close { background: none; border: none; color: var(--text-dim); font-size: 14px; line-height: 1; cursor: pointer; padding: 6px 10px; border-radius: var(--radius); }
 .settings-close:hover { color: var(--text); background: var(--line-soft); }
 .settings-body { display: flex; flex: 1; min-height: 0; }
-.settings-nav { display: flex; flex-direction: column; gap: 2px; width: 200px; flex-shrink: 0; padding: 16px 12px; border-right: 1px solid var(--line); }
+/* overflow-y: 탭이 열둘이 되면서 여유가 사라졌다 — 모달 높이가 바닥값(clamp 의 520px)일 때 nav 가
+   쓸 수 있는 높이와 필요한 높이가 둘 다 463px 로 정확히 같다(실측). 지금은 맞지만 탭이 하나만 더
+   늘거나 어느 번역 라벨이 두 줄로 접히면 잘려서 안 보인다. auto 라서 넘칠 때만 스크롤이 생긴다. */
+.settings-nav { display: flex; flex-direction: column; gap: 2px; width: 200px; flex-shrink: 0; padding: 16px 12px; border-right: 1px solid var(--line); overflow-y: auto; }
 .settings-nav-item { text-align: left; background: none; border: none; color: var(--text-dim); font-size: 13.5px; padding: 8px 12px; border-radius: var(--radius); cursor: pointer; }
 .settings-nav-item:hover { background: var(--line-soft); color: var(--text); }
 .settings-nav-item.active { background: var(--line-soft); color: var(--text); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
@@ -1019,7 +1022,16 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .theme-card-bars { display: flex; width: 100%; height: 18px; border-radius: inherit; overflow: hidden; }
 .theme-card-bars i { flex: 1; }
 .theme-card-name { font-weight: 600; }
-/* ---------- 일반 탭: 재개 방식 카드 ---------- */
+/* ---------- 일반·에이전트·How It Works 탭: 기능 묶음 ---------- */
+/* 토글마다 설명이 붙는 탭들의 배치다. .settings-content 의 18px gap 은 '제목과 그 설명 사이'와
+   '기능과 기능 사이'에 똑같이 들어가 전부 한 덩어리로 읽혔다. 그 둘을 가른다: .settings-group 이
+   제목과 그 아래(설명 또는 카드)를 붙이고, .settings-stack 의 gap 이 기능 사이를 띄운다.
+   제목은 굵게 + --text 로 올려 설명(--text-faint)과 층이 지게 한다. .settings-row 의 기본
+   --text-dim 은 다른 탭에 그대로 둔다 — 그쪽은 줄이 몇 개뿐이라 층이 필요 없다. */
+.settings-stack { display: flex; flex-direction: column; gap: 22px; }
+.settings-stack .settings-row span:first-child { color: var(--text); font-weight: 600; }
+.settings-group { display: flex; flex-direction: column; gap: 6px; }
+/* ---------- 에이전트 탭: 재개 방식 카드 ---------- */
 /* .theme-grid/.theme-card와 같은 두 열 카드 배치다. 다만 팔레트 미리보기가 없어 인라인 스타일이
    필요 없으므로 색은 앱 토큰(--line 등)에서 그대로 가져온다. */
 /* 설명 생성 설정. 형제인 resume-strategy 와 같은 토큰만 쓴다 — 새 색을 만들지 않는다 */
@@ -1033,7 +1045,9 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .settings-gen-refresh:disabled { opacity: 0.5; cursor: default; }
 .settings-gen-refresh:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
 
-.settings-resume-strategy { display: flex; flex-direction: column; gap: 8px; }
+/* 안에 기능이 둘(작업 이어가기·재개 방식)이라 gap 은 묶음 사이 값이다 — .settings-stack 과
+   같은 22px 라야 이 컴포넌트의 경계가 다른 기능 사이와 구별되지 않는다. */
+.settings-resume-strategy { display: flex; flex-direction: column; gap: 22px; }
 .resume-strategy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .resume-strategy-card { display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
   padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg);

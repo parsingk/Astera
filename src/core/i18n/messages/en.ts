@@ -6,6 +6,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.tab.general': 'General',
   'settings.tab.appearance': 'Appearance',
   'settings.tab.accounts': 'Accounts',
+  'settings.tab.agent': 'Agents',
   'settings.tab.info': 'Info',
   'settings.tab.shortcuts': 'Shortcuts',
   'settings.tab.history': 'History',

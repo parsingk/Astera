@@ -80,39 +80,51 @@ export function ResumeStrategySettings(): React.JSX.Element {
           거기 붙어야 하는 것은 재개 전략이 아니라 이 칸이다 — 둘 다 Job 에 관한 실험 기능이다.
           재개 전략이 뒤로 가도 짝은 끊기지 않는다: 이 칸을 켜면 그것이 picker 를 smart 로 넘길 수
           있고, 그 일이 바로 아래에서 보이는 편이 위에서 보이는 것보다 낫다. */}
-      <label className="settings-row">
-        <span>{t('settings.jobContinuity.label')}</span>
-        <input
-          type="checkbox"
-          checked={continuity}
-          onChange={(e) => toggleContinuity(e.target.checked)}
-        />
-      </label>
-      <span className="settings-hint">{t('settings.jobContinuity.hint')}</span>
-      <div className="settings-row">
-        <span>{t('settings.resumeStrategy.label')}</span>
+      {/* 두 기능이므로 묶음도 둘이다 — .settings-group 이 제목과 그 아래(설명 또는 카드)를 붙이고,
+          이 컨테이너의 gap 이 묶음 사이를 띄운다(일반 탭의 다른 기능들과 같은 간격). */}
+      <div className="settings-group">
+        <label className="settings-row">
+          <span>{t('settings.jobContinuity.label')}</span>
+          <input
+            type="checkbox"
+            checked={continuity}
+            onChange={(e) => toggleContinuity(e.target.checked)}
+          />
+        </label>
+        <span className="settings-hint">{t('settings.jobContinuity.hint')}</span>
       </div>
-      <div className="resume-strategy-grid">
-        <button
-          type="button"
-          className={`resume-strategy-card${strategy === 'smart' ? ' on' : ''}`}
-          aria-pressed={strategy === 'smart'}
-          onClick={() => void pick('smart')}
-        >
-          <span className="resume-strategy-card-name">{t('settings.resumeStrategy.smart.label')}</span>
-          <span className="resume-strategy-card-desc">{t('settings.resumeStrategy.smart.hint')}</span>
-        </button>
-        <button
-          type="button"
-          className={`resume-strategy-card${strategy === 'original' ? ' on' : ''}`}
-          aria-pressed={strategy === 'original'}
-          onClick={() => void pick('original')}
-        >
-          <span className="resume-strategy-card-name">{t('settings.resumeStrategy.original.label')}</span>
-          <span className="resume-strategy-card-desc">
-            {t('settings.resumeStrategy.original.hint')}
-          </span>
-        </button>
+      <div className="settings-group">
+        <div className="settings-row">
+          <span>{t('settings.resumeStrategy.label')}</span>
+        </div>
+        <div className="resume-strategy-grid">
+          <button
+            type="button"
+            className={`resume-strategy-card${strategy === 'smart' ? ' on' : ''}`}
+            aria-pressed={strategy === 'smart'}
+            onClick={() => void pick('smart')}
+          >
+            <span className="resume-strategy-card-name">
+              {t('settings.resumeStrategy.smart.label')}
+            </span>
+            <span className="resume-strategy-card-desc">
+              {t('settings.resumeStrategy.smart.hint')}
+            </span>
+          </button>
+          <button
+            type="button"
+            className={`resume-strategy-card${strategy === 'original' ? ' on' : ''}`}
+            aria-pressed={strategy === 'original'}
+            onClick={() => void pick('original')}
+          >
+            <span className="resume-strategy-card-name">
+              {t('settings.resumeStrategy.original.label')}
+            </span>
+            <span className="resume-strategy-card-desc">
+              {t('settings.resumeStrategy.original.hint')}
+            </span>
+          </button>
+        </div>
       </div>
     </div>
   )
