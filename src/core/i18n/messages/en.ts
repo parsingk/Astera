@@ -1192,5 +1192,7 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.group.run': 'run',
   'conversation.pending.title': 'An answer is waiting',
   'conversation.pending.body': 'The agent is waiting. The choices are in the terminal.',
-  'conversation.pending.action': 'Go to the terminal'
+  'conversation.pending.action': 'Go to the terminal',
+  'conversation.unavailable': 'This session has no transcript yet',
+  'conversation.empty': 'Nothing has been said yet'
 }
