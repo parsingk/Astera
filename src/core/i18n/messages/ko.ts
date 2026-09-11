@@ -351,7 +351,7 @@ export const ko = {
   'settings.conversation.title': '새 세션의 기본 화면',
   'settings.conversation.terminal': '터미널',
   'settings.conversation.conversation': '대화',
-  'settings.conversation.saveFailed': '새 탭 기본값을 저장하지 못했습니다: {detail}',
+  'settings.conversation.saveFailed': '새 세션의 기본 화면 설정을 저장하지 못했습니다: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': '터미널 영문 폰트',
   'settings.font.hangul': '터미널 한글 폰트',

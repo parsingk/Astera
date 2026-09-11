@@ -14,7 +14,13 @@ import {
   type Rect
 } from '../../../core/panes/tree'
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
-import { openSessionView, sessionViewOf, setSessionView, withoutClosedSessions } from '../../../core/panes/sessionView'
+import {
+  carryRolledView,
+  openSessionView,
+  sessionViewOf,
+  setSessionView,
+  withoutClosedSessions
+} from '../../../core/panes/sessionView'
 import { tabLabels } from '../../../core/files/tabLabel'
 import type { RecordStatus } from '../../../core/understanding/types'
 import { displayHostOf } from '../../../core/preview/url'
@@ -59,6 +65,7 @@ export function PaneGrid({
   busy,
   attention,
   conversationDefault,
+  lastRoll,
   draggingTabId,
   newDisabled,
   onFocusPane,
@@ -116,6 +123,12 @@ export function PaneGrid({
    *  tab first appears (see the session-view effect below) — changing the setting never reaches
    *  into a tab that is already open. */
   conversationDefault: SessionView
+  /** Fix round 1: the most recent `session:rolled` App has seen, or null before the first one. App
+   *  owns the subscription (`session:rolled`, the same handler that swaps the id in `sessions` and
+   *  `layout`) and never clears this back to null — the seeding effect below applies it through
+   *  `carryRolledView`, which is a no-op once already applied, so a stale value costing nothing on a
+   *  later rerun is simpler than a reset that has to race the effect that consumes it. */
+  lastRoll: { oldSessionId: string; newSessionId: string } | null
   /** The tab id being dragged (any kind), or null. App owns it so a drag started in one pane's bar is
    *  visible to every other pane */
   draggingTabId: string | null
@@ -165,23 +178,27 @@ export function PaneGrid({
 
   // Task 10: which of the terminal or the conversation each session tab is showing, remembered per
   // tab (core/panes/sessionView.ts holds the reducers; this owns the actual record). It lives here
-  // rather than in App — App already hands this component the one thing it needs from outside
-  // (conversationDefault, the setting a brand-new tab starts from), and everything else about the
-  // choice is local to how a session slot draws itself, the same reason lastFileOfPane above is a
-  // local ref rather than App state.
+  // rather than in App — App already hands this component the two things it needs from outside
+  // (conversationDefault, the setting a brand-new tab starts from, and lastRoll, below), and
+  // everything else about the choice is local to how a session slot draws itself, the same reason
+  // lastFileOfPane above is a local ref rather than App state.
   const [sessionViews, setSessionViews] = useState<Record<string, SessionView>>({})
-  // Seeds a session's view the moment its tab first appears, and drops the choice for a session
-  // that no longer has one — a tab the person closed and a session App forgot for any other reason
-  // both show up here the same way: missing from `sessions`. Reruns whenever `sessions` or the
-  // setting changes; openSessionView is a no-op for a session already seeded, so a later change to
-  // the setting alone never reaches into a tab that is already open (Task 10's requirement 2).
+  // Seeds a session's view the moment its tab first appears, carries a rolled session's choice to
+  // its new id first (fix round 1: without this, a roll's id swap read as an unrelated tab closing
+  // and a new one opening, and the survivor's view silently reset to the setting), and drops the
+  // choice for a session that no longer has one — a tab the person closed and a session App forgot
+  // for any other reason both show up here the same way: missing from `sessions`. Reruns whenever
+  // `sessions`, the setting, or `lastRoll` changes; both openSessionView and carryRolledView are
+  // no-ops once already applied, so a `lastRoll` that never resets to null (App does not clear it —
+  // see its own comment) costs nothing on a rerun for an unrelated reason.
   useEffect(() => {
     setSessionViews((prev) => {
       let next = prev
+      if (lastRoll) next = carryRolledView(next, lastRoll.oldSessionId, lastRoll.newSessionId)
       for (const s of sessions) next = openSessionView(next, s.id, conversationDefault)
       return withoutClosedSessions(next, new Set(sessions.map((s) => s.id)))
     })
-  }, [sessions, conversationDefault])
+  }, [sessions, conversationDefault, lastRoll])
 
   const paneLeaves = layout ? leaves(layout) : []
   const rects: Map<string, Rect> = layout ? computeRects(layout) : new Map()
@@ -265,7 +282,7 @@ export function PaneGrid({
         const pane = paneOfSession.get(s.id)
         const visible = pane != null && pane.activeTabId === sessionTab(s.id)
         const rect = pane ? rects.get(pane.id) : undefined
-        const view = sessionViewOf(sessionViews, s.id)
+        const view = sessionViewOf(sessionViews, s.id, conversationDefault)
         const showingConversation = visible && view === 'conversation'
         return (
           <div
@@ -285,7 +302,7 @@ export function PaneGrid({
             }
             onMouseDown={() => pane && onFocusPane(pane.id)}
           >
-            <div className="session-view" style={{ display: showingConversation ? 'none' : 'flex' }}>
+            <div className="session-slot-view" style={{ display: showingConversation ? 'none' : 'flex' }}>
               <TerminalView
                 session={s}
                 onRestart={onRestart}
@@ -298,7 +315,7 @@ export function PaneGrid({
               />
             </div>
             {showingConversation && (
-              <div className="session-view" style={{ display: 'flex' }}>
+              <div className="session-slot-view" style={{ display: 'flex' }}>
                 <ConversationPane
                   sessionId={s.id}
                   onGoTerminal={() => {
@@ -553,7 +570,7 @@ export function PaneGrid({
           activeSessionRef?.kind === 'session'
             ? {
                 sessionId: activeSessionRef.id,
-                view: sessionViewOf(sessionViews, activeSessionRef.id),
+                view: sessionViewOf(sessionViews, activeSessionRef.id, conversationDefault),
                 attention: attention[activeSessionRef.id] ?? ('idle' as Attention)
               }
             : null

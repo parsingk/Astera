@@ -559,6 +559,12 @@ export default function App(): React.JSX.Element {
   // Every session id ever asked about with the one-shot attention read below — read once per
   // session, ever, not on every render or every sessions-list change.
   const requestedAttentionRef = useRef<Set<string>>(new Set())
+  // Fix round 1: the most recent session:rolled, for PaneGrid to carry a rolled session's remembered
+  // terminal/conversation choice to its new id (PaneGrid's own `lastRoll` prop comment has the full
+  // reasoning). Deliberately never reset back to null — see that comment.
+  const [lastRoll, setLastRoll] = useState<{ oldSessionId: string; newSessionId: string } | null>(
+    null
+  )
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]) // file viewer tabs
   // How It Works record detail tabs. Kept in a separate list for the same reason as file tabs — a
   // `record:<id>` tab id carries neither the project nor the title, so this tab could not be drawn,
@@ -1195,6 +1201,10 @@ export default function App(): React.JSX.Element {
         const { [oldSessionId]: _dropped, ...rest } = prev
         return rest
       })
+      // Fix round 1: the opposite of the three drops above — the terminal/conversation choice is not
+      // a verdict about the process, it is a property of the tab, and the tab is the same one. Tells
+      // PaneGrid to carry it to the new id instead of reading a rename as an unrelated close+open.
+      setLastRoll({ oldSessionId, newSessionId: info.id })
     })
     const offBusy = window.api.on('session:busy', ({ sessionId, busy: b }) =>
       setBusy((prev) => (prev[sessionId] === b ? prev : { ...prev, [sessionId]: b }))
@@ -3819,6 +3829,7 @@ export default function App(): React.JSX.Element {
                 busy={busy}
                 attention={attention}
                 conversationDefault={conversationDefault}
+                lastRoll={lastRoll}
                 draggingTabId={dragTabId}
                 newDisabled={!anyCliOk}
                 onFocusPane={setActivePaneId}

@@ -316,7 +316,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.conversation.title': 'What a new session opens as',
   'settings.conversation.terminal': 'Terminal',
   'settings.conversation.conversation': 'Conversation',
-  'settings.conversation.saveFailed': 'Could not save the new-tab default: {detail}',
+  'settings.conversation.saveFailed': 'Could not save what a new session opens as: {detail}',
   'settings.font.latin': 'Terminal font (Latin)',
   'settings.font.hangul': 'Terminal font (Hangul)',
   'settings.font.system': 'System default',
