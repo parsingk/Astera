@@ -76,6 +76,35 @@ const MANAGED_ENV_KEYS = [
   'ASTERA_SESSION'
 ] as const
 
+/**
+ * What a Claude Code session sets to describe *itself*, cleared for the same reason as the list above
+ * and with a worse symptom.
+ *
+ * Launch Astera from a terminal that is inside a Claude Code session — `npm run dev` from one, which
+ * is exactly how this app gets developed — and the app inherits these. Every session it then spawns
+ * is told it is a child of that session, and Claude Code answers by **writing no transcript at all**:
+ * `⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker`, one line on the terminal
+ * and nothing else. The conversation view reads a Claude session through that transcript, so it stays
+ * empty forever, for a session answering perfectly well an inch away. Measured 2026-09-12: a session
+ * spawned that way reported a transcript path for a file that was never created.
+ *
+ * Only what names the parent's session. `CLAUDE_CODE_GIT_BASH_PATH` and `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
+ * are settings a person chose and are left exactly as they are — the one just below is read back a few
+ * lines down on purpose.
+ */
+const INHERITED_AGENT_ENV_KEYS = [
+  'CLAUDECODE',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_CODE_BRIDGE_SESSION_ID',
+  'CLAUDE_CODE_MESSAGING_SOCKET',
+  'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CLAUDE_PID',
+  'CLAUDE_EFFORT'
+] as const
+
 export function prependToPath(env: Record<string, string | undefined>, dir: string): void {
   const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH'
   const current = env[key]
@@ -192,6 +221,9 @@ export class SessionManager {
     // capture paths mix this session's statusLine and hook output into another instance's files.
     // Same rule as configDirEnv on the line above, and as runAccountLogout in main/core.ts.
     for (const k of MANAGED_ENV_KEYS) delete env[k]
+    // ...and the same for the marks a Claude Code session leaves on its own environment, whose
+    // consequence is a session that writes no transcript. See that list's own note.
+    for (const k of INHERITED_AGENT_ENV_KEYS) delete env[k]
     // Windows only: CLAUDE_CODE_GIT_BASH_PATH exists for Git for Windows, and on other platforms the
     // agent's bash is the system one. The agent's hooks and statusLine need a real Git Bash when
     // available; without one the statusLine capture never runs and the app never learns this session's

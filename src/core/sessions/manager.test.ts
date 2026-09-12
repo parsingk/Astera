@@ -728,6 +728,29 @@ describe('SessionManager', () => {
       }
     })
 
+    // The same leak one variable family over, and with a worse symptom. Launch the app from a terminal
+    // inside a Claude Code session and every session it spawns is told it is a child of that one, at
+    // which point Claude Code writes no transcript at all — and the conversation view, which reads a
+    // Claude session through exactly that file, is empty forever for a session that is answering fine.
+    it('clears the marks a Claude Code session leaves on its own environment', () => {
+      vi.stubEnv('CLAUDECODE', '1')
+      vi.stubEnv('CLAUDE_CODE_CHILD_SESSION', '1')
+      vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'parent-session')
+      vi.stubEnv('CLAUDE_CODE_ENTRYPOINT', 'cli')
+      const { manager, spawned } = setup()
+      manager.spawn({ account, cwd: process.cwd() })
+      for (const k of ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT'])
+        expect(k in spawned[0].opts.env).toBe(false)
+    })
+
+    // What a person set for themselves is not a mark of the parent's session, and stays.
+    it('leaves a setting the person chose alone', () => {
+      vi.stubEnv('CLAUDE_CODE_MAX_OUTPUT_TOKENS', '64000')
+      const { manager, spawned } = setup()
+      manager.spawn({ account, cwd: process.cwd() })
+      expect(spawned[0].opts.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('64000')
+    })
+
     it('orchEnv가 있으면 상속값이 아니라 orchEnv 값이 이긴다', () => {
       stubInherited()
       const { manager, spawned } = setup()
