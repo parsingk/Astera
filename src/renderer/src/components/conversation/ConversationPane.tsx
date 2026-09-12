@@ -31,11 +31,11 @@ import { ToolRow, ToolRowGroup } from "./ToolRow";
 import { PendingBanner, SlashCommandNotice } from "./PendingBanner";
 import { ModelControl, type ModelControlProps } from "./ModelControl";
 import {
-  CLAUDE_EFFORT_CHOICES,
-  CLAUDE_MODEL_CHOICES,
-  CODEX_EFFORT_CHOICES,
-  CODEX_MODEL_CHOICES
+  CODEX_EFFORT_ROWS,
+  effortChoicesOf,
+  modelChoicesOf
 } from "../../../../core/models/cliModels";
+import type { ModelDescriptor } from "../../../../core/models/types";
 import { codexDigitFor, codexPickerStep } from "../../../../core/models/codexPicker";
 import { CompletionMenu, type CompletionRow } from "./CompletionMenu";
 import {
@@ -257,10 +257,6 @@ const ARROW_STEPS_MAX = 12
  *  advance which kind a command was. */
 const SLASH_SILENCE_MS = 4_000
 
-/** How long codex's `/model` takes to put its picker on screen before the chosen row can be pressed.
- *  Generous on purpose: a keystroke that arrives early lands in the composer instead, where it is one
- *  visible stray character rather than a wrong choice. */
-const CODEX_PICKER_MS = 1_500
 /** How long to wait for one of codex's two picker screens to be the one on screen. Generous, because
  *  the cost of giving up early is only that the person finishes on the terminal, while the cost of
  *  pressing into a screen that has not arrived is a keystroke landing somewhere nobody chose. */
@@ -310,11 +306,13 @@ function ConversationBannerSlot(): ReactNode {
 
 function ComposerModelSlot(): ReactNode {
   const props = useContext(ModelSlotContext);
-  // Nothing known, nothing drawn. A session whose CLI has not said what it is running is either just
-  // starting or is codex, which keeps no statusline at all — and the menu's model names are the
-  // Claude CLI's own aliases, so offering them on a codex session would send a command it has never
-  // heard of. Drawing only what has been read keeps that from being possible.
-  if (props === null || props.line === null) return null;
+  // Drawn as soon as the CLI is known, which is from the session's account rather than from anything
+  // it has said. What it is *set to* can genuinely be unknown for a while — codex reports its model a
+  // turn at a time, so a session that has not answered anything yet has none to report — and that is
+  // no reason to withhold the menu: the choices are the CLI's own either way, and the readout says it
+  // does not know yet. Nothing is drawn only when the account is gone and neither CLI can be told
+  // from the other, because the menus are not interchangeable.
+  if (props === null || (props.cli !== 'claude' && props.cli !== 'codex')) return null;
   return <ModelControl {...props} />;
 }
 
@@ -354,11 +352,13 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   /** A walk across an unnumbered list is in flight. A ref as well as the state below it: the walk
    *  reads this between its own awaits, where a state value would still be the one it started with. */
   const answeringRef = useRef(false);
+  /** What this session's CLI says it can run. Asked once per session — see conversation.models. */
+  const [models, setModels] = useState<readonly ModelDescriptor[]>([]);
   const [modelInfo, setModelInfo] = useState<{
     model: string | null
     effort: string | null
-    canPick: boolean
-  }>({ model: null, effort: null, canPick: true });
+    cli: 'claude' | 'codex' | null
+  }>({ model: null, effort: null, cli: null });
 
   // Bumped by the mount effect on every run, and again in that same run's cleanup — so any callback
   // still holding a past run's captured `generation` value can tell, at any later point, whether the
@@ -396,7 +396,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     setMore(false);
     setAttention("idle");
     setSlashSent(false);
-    setModelInfo({ model: null, effort: null, canPick: true });
+    setModelInfo({ model: null, effort: null, cli: null });
     setComposerText("");
     setComposerCaret(0);
     setPromptLines([]);
@@ -915,6 +915,25 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     onGoTerminal();
   }, [onGoTerminal]);
 
+  // What this session's CLI offers. Asked once when the pane opens rather than watched: the answer
+  // depends on the account's subscription and its organisation's policy, neither of which changes
+  // while someone is looking at a menu, and main keeps it cached per account for the app's life.
+  useEffect(() => {
+    let current = true;
+    setModels([]);
+    void window.api.conversation
+      .models(sessionId)
+      .then((result) => {
+        if (current) setModels(result.models);
+      })
+      .catch(() => {
+        // The menu offers no models; the CLI's own screen still does.
+      });
+    return () => {
+      current = false;
+    };
+  }, [sessionId]);
+
   /** Read the model and effort line again, after something that changes it. */
   const rereadModel = useCallback(async (): Promise<void> => {
     try {
@@ -955,7 +974,14 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
    * among its rows, nothing further is pressed and the question is left up for a person.
    */
   const pickCodexEffort = useCallback(
-    async (label: string): Promise<void> => {
+    async (level: string): Promise<void> => {
+      const row = CODEX_EFFORT_ROWS[level];
+      if (row === undefined) {
+        // `max` and `ultra` sit behind codex's own `More reasoning…` row, a screen further in.
+        sendCommand("/model");
+        goTerminal();
+        return;
+      }
       sendCommand("/model");
       if ((await waitForCodexStep("model")) === null) {
         goTerminal();
@@ -967,7 +993,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         goTerminal();
         return;
       }
-      const digit = codexDigitFor(rows, label);
+      const digit = codexDigitFor(rows, row);
       if (digit === null) {
         goTerminal(); // codex renamed its rows; its own screen is still up and readable
         return;
@@ -978,17 +1004,47 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     [sendCommand, waitForCodexStep, goTerminal, rereadModel, sessionId]
   );
 
+  /**
+   * Switch codex's model from here.
+   *
+   * Its picker is answered by position, and the row a name sits at is codex's to change — so the
+   * digit is read off the screen that is up rather than counted from a list this app keeps
+   * (codexDigitFor). A name that is no longer listed presses nothing.
+   *
+   * codex asks for the reasoning level straight after, and Enter there keeps the level it is already
+   * pointing at: the person asked for a model, not a level, so that is the answer that changes only
+   * what was asked for.
+   */
+  const pickCodexModel = useCallback(
+    async (id: string): Promise<void> => {
+      sendCommand("/model");
+      const rows = await waitForCodexStep("model");
+      if (rows === null) {
+        goTerminal();
+        return;
+      }
+      const digit = codexDigitFor(rows, id);
+      if (digit === null) {
+        goTerminal();
+        return;
+      }
+      window.api.sessions.write(sessionId, digit);
+      if ((await waitForCodexStep("effort")) === null) {
+        goTerminal();
+        return;
+      }
+      window.api.sessions.write(sessionId, "\r"); // keep the level it is pointing at
+      setTimeout(() => void rereadModel(), MODEL_REREAD_MS);
+    },
+    [sendCommand, waitForCodexStep, goTerminal, rereadModel, sessionId]
+  );
+
   const modelSlot = useMemo<ModelControlProps>(
     () => ({
       line: modelLine,
       onPickModel: (key) => {
-        if (!modelInfo.canPick) {
-          // codex takes no name: open its picker, press the row, and stop. It asks for the reasoning
-          // level next, on a screen that names the model it is asking about — so the person confirms
-          // what was actually chosen instead of trusting a list that may have moved under us.
-          sendCommand("/model");
-          setTimeout(() => window.api.sessions.write(sessionId, key), CODEX_PICKER_MS);
-          goTerminal();
+        if (modelInfo.cli === 'codex') {
+          void pickCodexModel(key);
           return;
         }
         const was = modelInfo.model;
@@ -1011,31 +1067,35 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         }, MODEL_REREAD_MS);
       },
       onPickEffort: (key) => {
-        if (!modelInfo.canPick) {
+        if (modelInfo.cli === 'codex') {
           void pickCodexEffort(key);
           return;
         }
         // Claude's own screen is a slider, but the command takes the name outright, so there is
-        // nothing to drive (measured — CLAUDE_EFFORT_CHOICES carries the reading).
+        // nothing to drive (measured 2026-09-12: `/effort high` answered "Set effort level to high").
+        // It is saved as the default for new sessions, which is what that screen's Enter does too.
         sendCommand(`/effort ${key}`);
         setTimeout(() => void rereadModel(), MODEL_REREAD_MS);
       },
       onChangeEffort: () => {
         // What the rows above do not cover: Claude's `s` (this session only) and codex's Max and
         // Ultra, both of which live one screen further in. Open the CLI's own screen for those.
-        sendCommand(modelInfo.canPick ? "/effort" : "/model");
+        sendCommand(modelInfo.cli === 'codex' ? "/model" : "/effort");
         goTerminal();
       },
       effortLabel: t("conversation.model.effortMore"),
-      effortChoices: modelInfo.canPick ? CLAUDE_EFFORT_CHOICES : CODEX_EFFORT_CHOICES,
-      choices: modelInfo.canPick ? CLAUDE_MODEL_CHOICES : CODEX_MODEL_CHOICES
+      cli: modelInfo.cli,
+      effortChoices: effortChoicesOf(models, modelInfo.model),
+      choices: modelChoicesOf(models)
     }),
     [
       modelLine,
       modelInfo.model,
-      modelInfo.canPick,
+      modelInfo.cli,
+      models,
       sendCommand,
       goTerminal,
+      pickCodexModel,
       pickCodexEffort,
       rereadModel,
       sessionId,

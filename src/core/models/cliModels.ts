@@ -1,83 +1,60 @@
-/** A model a session can be switched to, and how its CLI is told to switch. */
+import type { ModelDescriptor } from './types'
+
+/** One row of the model menu: what the pane sends, and what it shows. */
 export interface CliModelChoice {
-  /** What the pane sends. Claude takes a name on the command line; codex takes a position in the
-   *  picker its own `/model` opens, because that command reads an argument as a message to answer
-   *  rather than as a model (measured 2026-09-12: `/model gpt-5.6-sol` was answered, not obeyed). */
+  /** What the pane acts on — a name for Claude's `/model`, and for codex the name to look for on its
+   *  own picker screen (core/models/codexPicker.ts finds the digit that takes that row). */
   key: string
   /** The CLI's own name for it. Not translated: these are product names. */
   label: string
 }
 
 /**
- * What Claude's `/model` takes. Sending one of these switches outright, with no screen in between,
- * except that crossing model families asks first because the conversation is cached for the model it
- * is on — the pane notices that nothing moved and says where the question went.
+ * The models a session can switch to, out of what its CLI answered (main/ipc.ts's
+ * `conversation.models`, the same list and cache settings uses).
  *
- * Hand-kept, and it is the one thing here that can go out of date. A model added upstream is missing
- * from this list until someone adds it; one removed answers with the CLI's own error in the terminal.
- * Neither is silent, and typing the name in full still works either way.
+ * Asked rather than kept: which models an account can reach depends on its subscription and its
+ * organisation's policy, and nothing in this app can see either. A list written here would be a
+ * guess that goes quietly stale — and for codex it would be worse than stale, because its picker is
+ * answered by position.
  */
-export const CLAUDE_MODEL_CHOICES: readonly CliModelChoice[] = [
-  { key: 'default', label: 'Default' },
-  { key: 'opus', label: 'Opus' },
-  { key: 'opus[1m]', label: 'Opus (1M context)' },
-  { key: 'sonnet', label: 'Sonnet' },
-  { key: 'haiku', label: 'Haiku' },
-  { key: 'fable', label: 'Fable' }
-]
+export function modelChoicesOf(models: readonly ModelDescriptor[]): CliModelChoice[] {
+  return models.map((m) => ({ key: m.id, label: m.name }))
+}
 
 /**
- * What codex's own picker lists, in its order — the key is the digit that selects that row.
+ * The reasoning levels the model a session is on accepts, out of that same answer.
  *
- * Positional, so a list that has gone stale picks the wrong row. That is survivable only because the
- * pane stops there: codex asks for the reasoning level next, on a screen that names the model it is
- * asking about, and the person is looking at it. A wrong row is read and cancelled rather than
- * silently applied, which is why this never answers that second question for them.
+ * Per model, because they genuinely differ: Haiku takes none at all, and gpt-5.5 stops at xhigh
+ * where gpt-6-astra goes to ultra (both measured 2026-09-12). `current` is what the CLI reports it is
+ * running, which is a display name on one side (`Opus 5 (1M context)`) and an id on the other
+ * (`gpt-5.6-sol`), so both are compared. A model the list does not carry falls back to the one the
+ * CLI calls its default, and then to nothing — an empty list draws no effort rows rather than rows
+ * that would be refused.
  */
-export const CODEX_MODEL_CHOICES: readonly CliModelChoice[] = [
-  { key: '1', label: 'gpt-6-astra' },
-  { key: '2', label: 'gpt-5.6-sol' },
-  { key: '3', label: 'gpt-5.6-terra' },
-  { key: '4', label: 'gpt-5.6-luna' },
-  { key: '5', label: 'gpt-5.5' }
-]
+export function effortChoicesOf(
+  models: readonly ModelDescriptor[],
+  current: string | null
+): CliModelChoice[] {
+  const wanted = current?.trim().toLowerCase() ?? ''
+  const match =
+    models.find((m) => m.id.toLowerCase() === wanted || m.name.toLowerCase() === wanted) ??
+    models.find((m) => m.isDefault === true)
+  return (match?.effortLevels ?? []).map((level) => ({ key: level, label: level }))
+}
 
 /**
- * What Claude's `/effort` takes. Its own screen is a slider rather than a list — `low medium high
- * xhigh max ultracode`, moved with the arrow keys — but the command also takes the name outright, so
- * the pane never has to drive that slider (both measured 2026-09-12: `/effort high` answered "Set
- * effort level to high").
+ * What codex calls a reasoning level on its own picker, keyed by the name its model list uses.
  *
- * It is saved as the default for new sessions, which is what Claude's own screen does on Enter too;
- * the screen's `s` key, which would change this session alone, has no spoken form and stays there.
- *
- * Hand-kept, with the same caveat as CLAUDE_MODEL_CHOICES: a level added upstream is missing until
- * someone adds it, and one removed answers with the CLI's own error where it can be read.
+ * The two do not agree, and only the picker's wording can be found on the screen: the list says
+ * `xhigh`, the screen says `Extra high` (measured 2026-09-12). Hence this, and hence its gaps —
+ * `max` and `ultra` are real levels that codex keeps behind a `More reasoning…` row, one screen
+ * further in than the walk goes, so they are not offered here and the menu's terminal row is what
+ * reaches them.
  */
-export const CLAUDE_EFFORT_CHOICES: readonly CliModelChoice[] = [
-  { key: 'low', label: 'low' },
-  { key: 'medium', label: 'medium' },
-  { key: 'high', label: 'high' },
-  { key: 'xhigh', label: 'xhigh' },
-  { key: 'max', label: 'max' },
-  { key: 'ultracode', label: 'ultracode' }
-]
-
-/**
- * What codex calls its reasoning levels. codex has no `/effort`: `/model` asks two questions in a
- * row, the model first and the reasoning level second, and the level is the second screen's rows.
- *
- * The key is the **name** on that screen, not a digit, and the digit is read off the screen when the
- * screen is up (codexDigitFor in ./codexPicker.ts). So unlike CODEX_MODEL_CHOICES this list going
- * stale cannot press the wrong row — a name that is no longer there presses nothing.
- *
- * codex's fifth row, `More reasoning…`, opens a further screen for Max and Ultra. It is left out
- * deliberately: answering it would need a third screen driven from here, and the menu already offers
- * the terminal for what it does not cover.
- */
-export const CODEX_EFFORT_CHOICES: readonly CliModelChoice[] = [
-  { key: 'Low', label: 'Low' },
-  { key: 'Medium', label: 'Medium' },
-  { key: 'High', label: 'High' },
-  { key: 'Extra high', label: 'Extra high' }
-]
+export const CODEX_EFFORT_ROWS: Readonly<Record<string, string>> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high'
+}

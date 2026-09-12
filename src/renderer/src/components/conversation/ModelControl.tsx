@@ -12,9 +12,13 @@ export interface ModelChoice {
 }
 
 export interface ModelControlProps {
-  /** What to show: the model and effort the CLI last reported, already formatted. Null means the
-   *  control is not drawn at all — see ComposerModelSlot in ConversationPane.tsx. */
+  /** What to show: the model and effort the CLI last reported, already formatted. Null when it has
+   *  not said yet — codex reports this a turn at a time — and then the button says so rather than
+   *  going missing, because the menu under it works either way. */
   line: string | null;
+  /** Which CLI this session runs. The caller draws nothing at all when this is null (the account is
+   *  gone), because the two CLIs' menus are not interchangeable — see ComposerModelSlot. */
+  cli: 'claude' | 'codex' | null;
   /** The models this session can be switched to, in the CLI's own order. Empty draws no rows. */
   choices: readonly ModelChoice[];
   onPickModel: (key: string) => void;
@@ -68,7 +72,7 @@ export function ModelControl({
           setAt({ x: Math.round(r.left), y: Math.round(r.top) });
         }}
       >
-        {line}
+        {line ?? t("conversation.model.unknown")}
       </button>
       {at && <ContextMenu x={at.x} y={at.y} items={items} onClose={() => setAt(null)} />}
     </>

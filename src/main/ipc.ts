@@ -5284,9 +5284,11 @@ export function registerIpc(
    *
    *  **앱이 사는 동안 한 번만 묻는다.** claude 쪽 왕복이 1.6초라 설정을 열 때마다 물으면
    *  눈에 띈다. 새로 고침은 renderer 가 `refresh: true` 로 요청한다. */
-  ipcMain.handle('settings.listModels', async (_e, accountId: unknown, refresh: unknown) => {
-    if (typeof accountId !== 'string') throw new Error(`INVALID_ACCOUNT_ID: ${String(accountId)}`)
-    if (refresh !== true) {
+  /** One account's model list, cached as above. Two callers ask for it — settings, and the
+   *  conversation view's model menu — and they share the cache rather than each paying claude's
+   *  1.6-second round trip. */
+  const modelsForAccount = async (accountId: string, refresh: boolean): Promise<ModelListResult> => {
+    if (!refresh) {
       const hit = modelCache.get(accountId)
       if (hit) return hit
     }
@@ -5304,6 +5306,11 @@ export function registerIpc(
     // 실패는 캐시하지 않는다 — 로그인하고 다시 열면 바로 보여야 한다
     if (!result.error) modelCache.set(accountId, result)
     return result
+  }
+
+  ipcMain.handle('settings.listModels', async (_e, accountId: unknown, refresh: unknown) => {
+    if (typeof accountId !== 'string') throw new Error(`INVALID_ACCOUNT_ID: ${String(accountId)}`)
+    return modelsForAccount(accountId, refresh === true)
   })
 
   // How a session that hits its limit gets continued. The same trust-boundary check as setLang — the
@@ -5869,13 +5876,33 @@ export function registerIpc(
   // core.statusLinePayload answers null for a session that has written nothing, and the extractor
   // answers nulls for anything it cannot read.
   ipcMain.handle('conversation.model', async (_e, sessionId: string) => {
-    const fromStatusLine = extractStatusLineModel(await core.statusLinePayload(sessionId))
-    if (fromStatusLine.model !== null) return { ...fromStatusLine, canPick: true }
-    // codex keeps no statusline at all, so its rollout is the only place this exists.
-    const rollout = codexRollout?.rolloutPathFor(sessionId) ?? null
-    if (rollout === null) return { ...fromStatusLine, canPick: true }
-    const fromRollout = await codexModelFor(rollout, readFileTail)
-    return { ...fromRollout, canPick: false }
+    // The account says which CLI this is; what has been read does not. An earlier version asked the
+    // files — no statusline and no rollout meant Claude — and so called a codex session that had not
+    // had a turn yet Claude, because a rollout only exists once there has been one. The same mistake
+    // tabResumeTextFor's own comment above is about: an unknown provider is not Claude.
+    const sessions = core.sessions.list()
+    const cli = providerOfSession(sessionId, sessions, (id) => core.accounts.get(id))
+    if (cli === 'codex') {
+      // codex keeps no statusline at all, so its rollout is the only place this exists — and it is
+      // written a turn at a time, so a session that has not answered anything yet reports nothing.
+      const rollout = codexRollout?.rolloutPathFor(sessionId) ?? null
+      const fromRollout =
+        rollout === null
+          ? { model: null, effort: null }
+          : await codexModelFor(rollout, readFileTail)
+      return { ...fromRollout, cli }
+    }
+    return { ...extractStatusLineModel(await core.statusLinePayload(sessionId)), cli }
+  })
+  // What the model menu offers. The same list settings shows and the same per-account cache — the
+  // models an account can reach depend on its subscription and its organisation's policy, so the CLI
+  // is the only thing that knows them, and a list kept in this repository would be a guess that goes
+  // quietly stale. Answers the empty list with a reason rather than throwing, for a session whose
+  // account is gone.
+  ipcMain.handle('conversation.models', async (_e, sessionId: string) => {
+    const info = core.sessions.list().find((s) => s.id === sessionId)
+    if (!info) return { models: [], error: 'SESSION_GONE' }
+    return modelsForAccount(info.accountId, false)
   })
   // What `/` offers in the composer. Read on demand rather than watched: the folders change when a
   // person installs something, which is not while they are typing, and the pane asks once when it

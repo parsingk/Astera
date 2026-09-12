@@ -1380,11 +1380,22 @@ export type RendererApi = CoreApi & {
     model(sessionId: string): Promise<{
       model: string | null
       effort: string | null
-      /** Whether a model can be chosen from a menu, or only through the CLI's own screen. True for
-       *  Claude, whose `/model <alias>` switches outright; false for codex, whose `/model` only ever
-       *  opens a picker and reads an argument as a message to answer. */
-      canPick: boolean
+      /** Which CLI this session runs, which decides what a model menu may offer: Claude takes
+       *  `/model <alias>` outright, codex only ever opens a picker and reads an argument as a message
+       *  to answer. Taken from the session's account, not from what has been read — a codex session
+       *  that has not had a turn yet has no model to report, and reading that silence as Claude is how
+       *  `/model opus` would get sent to codex, which answers it and charges for the answer.
+       *
+       *  null when the session's account is gone and neither can be told from the other. Then no menu
+       *  is offered at all: a wrong guess here spends someone's tokens. */
+      cli: 'claude' | 'codex' | null
     }>
+    /** The models this session's CLI offers, as the CLI itself answers it (main/ipc.ts's
+     *  `settings.listModels`, same per-account cache). Read here rather than kept as a list in this
+     *  repository: the models an account can reach depend on its subscription and its organisation's
+     *  policy, which nothing here can see. `error` is set and `models` empty when the CLI would not
+     *  say — then the menu offers nothing and the CLI's own screen still does. */
+    models(sessionId: string): Promise<ModelListResult>
     /** Everything `/` can start for this session, read off disk (main/slashCommands.ts). The CLI's
      *  own built-ins are not in it — nothing on disk describes them — and a name that is missing still
      *  runs when it is typed in full. */
