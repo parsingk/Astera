@@ -1396,6 +1396,14 @@ export type RendererApi = CoreApi & {
      *  policy, which nothing here can see. `error` is set and `models` empty when the CLI would not
      *  say — then the menu offers nothing and the CLI's own screen still does. */
     models(sessionId: string): Promise<ModelListResult>
+    /** Save something dropped or pasted into the composer and answer with the path a CLI can read it
+     *  at. The pty carries text only, so a path is what an image can be handed over as — and the
+     *  composer types it into the message, where it can be seen and edited like any other word.
+     *
+     *  Saved under the app's own folder, not the project: a picture pasted into a sentence is not a
+     *  file someone asked to add to their repository. Rejects an empty payload, one over the cap, and
+     *  a session id that is not a uuid (it names the folder). */
+    attach(sessionId: string, name: string, mime: string, base64: string): Promise<string>
     /** Everything `/` can start for this session, read off disk (main/slashCommands.ts). The CLI's
      *  own built-ins are not in it — nothing on disk describes them — and a name that is missing still
      *  runs when it is typed in full. */

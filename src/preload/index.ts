@@ -295,6 +295,7 @@ const api = {
     attention: invoke('conversation.attention'),
     model: invoke('conversation.model'),
     models: invoke('conversation.models'),
+    attach: invoke('conversation.attach'),
     commands: invoke('conversation.commands'),
     files: invoke('conversation.files')
   },

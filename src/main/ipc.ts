@@ -35,6 +35,7 @@ import { markCodexProjectTrusted } from '../core/accounts/codexTrust'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
+import { attachmentNameOf } from '../core/files/attachmentName'
 import { listClaudeModels, listCodexModels } from './models/discover'
 import { UnderstandingPipeline } from './understanding/pipeline'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
@@ -241,6 +242,10 @@ export interface HostWiring {
  *  handleCommand 는 caller.sessionId 가 Dispatch 를 가진 적이 있으면 워커로 보고 COORDINATOR_ONLY
  *  명령을 막는다. 겹치면 앱이 워커로 오인되어 Task 를 만들 수 없게 된다. 세션 id 는 randomUUID
  *  (core/sessions/manager.ts)이므로 콜론이 들어갈 자리가 없다. */
+/** The most this will write for one dropped or pasted file. A prompt attachment is a screenshot or a
+ *  document, not a disk image, and the cap is what keeps a stray drop from filling a disk. */
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
 const UI_CALLER = 'astera:app'
 
 /** http:/https:/mailto: 만 허용하는 스킴 화이트리스트. 통과하면 파싱된 URL 을 돌려준다 —
@@ -742,6 +747,8 @@ export function registerIpc(
    *  설정을 열 때마다 물으면 눈에 띈다. 디스크에 두지 않는 이유: 목록은 계정의 구독·조직
    *  정책에 따라 바뀌고, 그 변화를 우리가 감지할 방법이 없다. 새로 고침은 사용자가 누른다. */
   const modelCache = new Map<string, ModelListResult>()
+  /** Tells two attachments saved in the same second apart. */
+  let attachmentNonce = 0
   const busyScanners = new Map<string, BusyScanner>()
   const busyState = new Map<string, boolean>()
   /** 그 세션의 busy 신호를 **판정에 쓸 수 있는가** (`ProviderDescriptor.busyTitleReliable`).
@@ -5894,6 +5901,38 @@ export function registerIpc(
     }
     return { ...extractStatusLineModel(await core.statusLinePayload(sessionId)), cli }
   })
+  /**
+   * Put something dropped or pasted into the composer on disk, and answer with its path.
+   *
+   * The pty carries text and nothing else, so an image cannot be handed to a CLI the way it is handed
+   * to a chat box — what a CLI takes is a path it can read. This writes the bytes somewhere it can,
+   * and the composer types the path into the message like any other word, which is also why the
+   * person can see and edit exactly what will be sent.
+   *
+   * Under this app's own folder rather than the project: a picture someone pastes into a sentence is
+   * not a file they asked to add to their repository, and writing there would show up in their next
+   * `git status`.
+   */
+  ipcMain.handle(
+    'conversation.attach',
+    async (_e, sessionId: string, name: unknown, mime: unknown, base64: unknown) => {
+      if (typeof name !== 'string' || typeof mime !== 'string' || typeof base64 !== 'string')
+        throw new Error('INVALID_ATTACHMENT')
+      const bytes = Buffer.from(base64, 'base64')
+      if (bytes.byteLength === 0) throw new Error('EMPTY_ATTACHMENT')
+      if (bytes.byteLength > MAX_ATTACHMENT_BYTES) throw new Error('ATTACHMENT_TOO_LARGE')
+      // The session id comes from the renderer and is a folder name here, so it is checked rather
+      // than trusted — every id this app makes is a uuid, and nothing else may name a directory.
+      if (!/^[0-9a-fA-F-]{36}$/.test(sessionId)) throw new Error('INVALID_SESSION_ID')
+      const dir = path.join(app.getPath('userData'), 'attachments', sessionId)
+      await fs.mkdir(dir, { recursive: true })
+      const file = path.join(dir, attachmentNameOf(name, mime, new Date(), ++attachmentNonce))
+      await fs.writeFile(file, bytes)
+      // Forward slashes: this is typed into a prompt, where a Windows backslash reads as an escape.
+      return file.replaceAll('\\', '/')
+    }
+  )
+
   // What the model menu offers. The same list settings shows and the same per-account cache — the
   // models an account can reach depend on its subscription and its organisation's policy, so the CLI
   // is the only thing that knows them, and a list kept in this repository would be a guess that goes

@@ -868,6 +868,71 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   /** Puts a chosen command on the line, in place of the token that was being typed. Written through
    *  `insertText` rather than by setting `value`: the input belongs to assistant-ui's own store, and
    *  only a real edit event reaches it. */
+  /** Put text into the composer as though it had been typed. `insertText` rather than an assignment
+   *  for the reason the completion menu gives: the composer is a controlled input, and only a real
+   *  edit reaches the store behind it. */
+  const insertIntoComposer = useCallback((text: string): void => {
+    const input = paneRef.current?.querySelector("textarea");
+    if (!input) return;
+    input.focus();
+    document.execCommand("insertText", false, text);
+  }, []);
+
+  /**
+   * A file dropped on this pane, or an image pasted into it, becomes a path in the message.
+   *
+   * That is the only form a pty takes: it carries characters, so there is no way to hand a CLI an
+   * image except to tell it where one is. Both CLIs read a path, and putting it in the composer
+   * rather than somewhere invisible means the person sees exactly what is about to be sent and can
+   * write a sentence around it.
+   *
+   * A file dragged from the filesystem already has a path, and that one is used as it is — copying it
+   * would leave a second, stale version of a file the CLI could have read where it lay. Only
+   * something with no path of its own (a clipboard image) is written out.
+   */
+  const attachFile = useCallback(
+    async (file: File): Promise<void> => {
+      const existing = window.api.files.pathForFile(file);
+      if (existing !== "") {
+        insertIntoComposer(`${existing.replaceAll("\\", "/")} `);
+        return;
+      }
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      const saved = await window.api.conversation.attach(
+        sessionId,
+        file.name,
+        file.type,
+        dataUrl.slice(dataUrl.indexOf(",") + 1)
+      );
+      insertIntoComposer(`${saved} `);
+    },
+    [insertIntoComposer, sessionId]
+  );
+
+  /** Files out of a drop or a paste, in the order they came. Empty for anything else, which is what
+   *  lets ordinary text paste through untouched. */
+  const onComposerFiles = useCallback(
+    (files: readonly File[]): void => {
+      if (files.length === 0) return;
+      void (async () => {
+        for (const file of files) {
+          try {
+            await attachFile(file);
+          } catch {
+            // One that cannot be saved is skipped; the rest still go in, and the CLI's own screen is
+            // still there for anything this cannot carry.
+          }
+        }
+      })();
+    },
+    [attachFile]
+  );
+
   const takeRow = useCallback((row: CompletionRow): void => {
     const input = paneRef.current?.querySelector("textarea");
     if (!input) return;
@@ -1383,7 +1448,26 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
 
 
   return (
-    <div ref={paneRef} data-slot="conversation-pane" className="flex h-full min-h-0 flex-col">
+    <div
+      ref={paneRef}
+      data-slot="conversation-pane"
+      className="flex h-full min-h-0 flex-col"
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length === 0) return;
+        e.preventDefault();
+        onComposerFiles(files);
+      }}
+      onPaste={(e) => {
+        const files = Array.from(e.clipboardData.files);
+        if (files.length === 0) return; // ordinary text goes through untouched
+        e.preventDefault();
+        onComposerFiles(files);
+      }}
+    >
       {more && (
         <div className="border-border/60 flex justify-center border-b py-1">
           <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>
