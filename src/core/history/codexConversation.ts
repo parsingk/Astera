@@ -106,12 +106,90 @@ function shellOutcome(output: unknown): { ok: boolean; detail: string } {
   return { ok: code === 0, detail: code === 0 ? '' : `exit ${code}` }
 }
 
+/**
+ * A tool result's text, whichever shape codex wrote it in.
+ *
+ * `function_call_output` carries a string; `custom_tool_call_output` carries the same `input_text`
+ * parts a message does (measured 2026-09-12 across 649 real outputs). Reading only the string shape
+ * meant every `exec` result was judged as if it were empty — no outcome, nothing to open.
+ */
+function outputText(output: unknown): string | null {
+  const direct = str(output)
+  if (direct !== null) return direct
+  if (!Array.isArray(output)) return null
+  const parts: string[] = []
+  for (const part of output) {
+    if (!isRecord(part)) continue
+    const text = str(part.text)
+    if (text !== null) parts.push(text)
+  }
+  return parts.length === 0 ? null : parts.join('')
+}
+
+/**
+ * What an `exec` ran, out of the little script codex writes for it.
+ *
+ * The call's `input` is not arguments but source: `const r = await tools.exec_command({cmd:"…",
+ * "workdir":"…", …}); text(r.output);` (measured). The command is a JSON string literal inside it, so
+ * it is read as one — parsed rather than unescaped by hand, since the backslashes in a Windows path
+ * are exactly what a hand-rolled version gets wrong.
+ *
+ * Falls back to the script's own first line: a row that names something is worth more than a row that
+ * names nothing, which is what this drew before.
+ */
+function execTarget(input: unknown): string | null {
+  const text = str(input)
+  if (text === null) return null
+  const m = /\bcmd"?\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text)
+  if (m !== null) {
+    try {
+      const cmd = JSON.parse(m[1]) as unknown
+      if (typeof cmd === 'string' && cmd !== '') return cmd
+    } catch {
+      // fall through to the line below
+    }
+  }
+  return text.split('\n')[0].trim() || null
+}
+
+/**
+ * How an `exec` ended, from the first line of what it wrote back.
+ *
+ * Measured over 649 real outputs: `Script completed` (622), `Script failed` (9), `Script running with
+ * cell ID N` (12, still going in the background), `aborted by user after 3.4s` (1). Anything that is
+ * not a plain completion is worth saying out loud, so it becomes the row's detail.
+ */
+function execOutcome(text: string): { ok: boolean; detail: string } {
+  const first = text.split('\n')[0].trim()
+  if (first.startsWith('Script completed')) return { ok: true, detail: '' }
+  if (first.startsWith('Script failed')) return { ok: false, detail: first }
+  if (first.startsWith('aborted')) return { ok: false, detail: first }
+  return { ok: true, detail: first }
+}
+
 /** Whether an `apply_patch` applied. Measured: a success opens with `Success.`, a refusal opens with
  *  the reason instead. */
 function patchOutcome(output: unknown): { ok: boolean; detail: string } {
-  const text = str(output)
+  const text = outputText(output)
   if (text === null) return { ok: true, detail: '' }
   return { ok: text.startsWith('Success'), detail: '' }
+}
+
+/**
+ * Which of the three readings a tool result gets, decided by what the result says rather than by
+ * which record kind carried it.
+ *
+ * `custom_tool_call` used to mean `apply_patch` and the outcome was read as one. codex now sends
+ * `exec` through the same record, and reading its output for `Success.` called every command that
+ * ever ran a failure. The evidence each reading looks for is in the text itself, so the text is what
+ * chooses.
+ */
+function toolOutcome(output: unknown): { ok: boolean; detail: string } {
+  const text = outputText(output)
+  if (text === null) return { ok: true, detail: '' }
+  if (/^Exit code:\s*-?\d+/m.test(text)) return shellOutcome(text)
+  if (/^(Script |aborted\b)/.test(text)) return execOutcome(text)
+  return patchOutcome(text)
 }
 
 /**
@@ -182,7 +260,9 @@ export function reduceCodexRollout(
       const callId = str(payload.call_id) ?? str(payload.id)
       if (callId === null) continue
       const target =
-        (kind === 'custom_tool_call' ? patchTarget(payload.input) : null) ??
+        (kind === 'custom_tool_call'
+          ? (patchTarget(payload.input) ?? execTarget(payload.input))
+          : null) ??
         argField(payload.arguments, ['command', 'path', 'file_path', 'pattern', 'query']) ??
         str(payload.query) ??
         ''
@@ -208,10 +288,7 @@ export function reduceCodexRollout(
       if (callId === null) continue
       const part = pending.get(callId)
       if (part === undefined) continue // its call fell outside this window
-      part.outcome =
-        kind === 'custom_tool_call_output'
-          ? patchOutcome(payload.output)
-          : shellOutcome(payload.output)
+      part.outcome = toolOutcome(payload.output)
       pending.delete(callId)
       continue
     }

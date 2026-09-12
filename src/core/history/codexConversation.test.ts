@@ -157,3 +157,88 @@ describe('extractCodexModel', () => {
     })
   })
 })
+
+// codex's `exec`, as it really writes it (measured 2026-09-12). The call carries a little script
+// rather than arguments, and the result comes back as `input_text` parts rather than a string — the
+// reducer read neither, so every command drew a row named "exec" with nothing in it.
+describe('codex exec', () => {
+  const call = JSON.stringify({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call',
+      id: 'ctc_1',
+      call_id: 'call_1',
+      name: 'exec',
+      input:
+        'const r = await tools.exec_command({cmd:\"npm test\",\"workdir\":\"/tmp\"}); text(r.output);\n'
+    }
+  })
+  const outputOf = (first: string): string =>
+    JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call_output',
+        call_id: 'call_1',
+        output: [{ type: 'input_text', text: first }]
+      }
+    })
+
+  const toolOf = (lines: string[]): { target: string; outcome: unknown } => {
+    const turns = reduceCodexRollout(lines, new Map())
+    const part = turns.flatMap((t) => t.parts).find((x) => x.kind === 'tool')
+    if (part === undefined || part.kind !== 'tool') throw new Error('no tool row')
+    return { target: part.target, outcome: part.outcome }
+  }
+
+  it('names the command it ran, out of the script codex wrote for it', () => {
+    expect(toolOf([call]).target).toBe('npm test')
+  })
+
+  it('reads a result that arrives as parts rather than a string', () => {
+    expect(toolOf([call, outputOf('Script completed\nWall time 4.1 seconds')]).outcome).toEqual({
+      ok: true,
+      detail: ''
+    })
+  })
+
+  // 622 of 649 real outputs say `Script completed`; 9 say `Script failed`. Judging either by
+  // apply_patch's `Success.` called every one of them a failure.
+  it('calls a failure a failure, and says which', () => {
+    expect(toolOf([call, outputOf('Script failed\nWall time 0.3 seconds')]).outcome).toEqual({
+      ok: false,
+      detail: 'Script failed'
+    })
+  })
+
+  it('says so when a command was left running or cut short', () => {
+    expect(toolOf([call, outputOf('Script running with cell ID 12')]).outcome).toEqual({
+      ok: true,
+      detail: 'Script running with cell ID 12'
+    })
+    expect(toolOf([call, outputOf('aborted by user after 3.4s')]).outcome).toEqual({
+      ok: false,
+      detail: 'aborted by user after 3.4s'
+    })
+  })
+
+  it('still reads an apply_patch, whose result is a plain string', () => {
+    const patch = JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call',
+        id: 'ctc_2',
+        call_id: 'call_2',
+        name: 'apply_patch',
+        input: '*** Begin Patch\n*** Update File: src/a.ts\n'
+      }
+    })
+    const done = JSON.stringify({
+      type: 'response_item',
+      payload: { type: 'custom_tool_call_output', call_id: 'call_2', output: 'Success. Updated.' }
+    })
+    const turns = reduceCodexRollout([patch, done], new Map())
+    const part = turns.flatMap((t) => t.parts).find((x) => x.kind === 'tool')
+    expect(part && part.kind === 'tool' ? part.target : null).toBe('src/a.ts')
+    expect(part && part.kind === 'tool' ? part.outcome : null).toEqual({ ok: true, detail: '' })
+  })
+})
