@@ -47,6 +47,7 @@ import {
   type SlashCommand
 } from "../../../../core/commands/slashCommands";
 import { fileTokenAt } from "../../../../core/files/fileMatch";
+import { draftOf, forgetDraft, keepDraft } from "./drafts";
 import { promptLinesOf } from "../../../../core/history/promptLines";
 import {
   promptChoicesOf,
@@ -304,6 +305,11 @@ const MODEL_SETTLE_MS = 60
 const MODEL_OPENING_MS = 200
 const MODEL_OPENING_TRIES = 10
 
+/** How long to keep looking for the composer to put an unsent draft back into. It is a child of the
+ *  Thread, which mounts a moment after this pane does. */
+const DRAFT_RESTORE_MS = 80
+const DRAFT_RESTORE_TRIES = 25
+
 /** How long the button may say a change is on its way before giving up on saying so. Longer than the
  *  walk's own wait, so an answer that is merely slow still lands while it is still being waited for,
  *  and short enough that a change the CLI quietly refused stops pretending. */
@@ -423,6 +429,23 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // Whether the last keystroke left the composer in a state a menu cares about — see the input
   // listener, which uses it to stay silent for ordinary typing.
   const triggerArmedRef = useRef(false);
+  /**
+   * What the composer holds right now, or null when this mount has not seen it hold anything.
+   *
+   * A ref, and written on every keystroke before the listener below decides whether anything else is
+   * worth doing: assigning to it renders nothing, and the one place that needs it is a cleanup that
+   * runs when the composer is already gone. React detaches refs and removes the DOM before a passive
+   * effect's cleanup runs, so reading the textarea there finds nothing — measured, and it is why the
+   * first version of the draft kept nothing at all.
+   *
+   * Null rather than an empty string, because the two mean different things to the draft below. An
+   * empty string is "someone cleared it", which throws the draft away. Null is "nobody typed here",
+   * which leaves it alone — and that is what StrictMode's extra mount/cleanup pair is, so without the
+   * distinction every mount deleted the draft the last unmount had just saved. Worse, StrictMode
+   * doubles effects in development only, so drafts would have worked in a packaged build and not
+   * while anyone was working on them.
+   */
+  const composerValueRef = useRef<string | null>(null);
   /** The pending 'where did it go' notice, cancelled the moment anything comes back. */
   const slashSilenceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // What the thread's scroll looked like just before a load-earlier prepend, so the layout effect
@@ -447,6 +470,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     setSlashSent(false);
     setModelInfo({ model: null, effort: null, cli: null });
     setComposerText("");
+    composerValueRef.current = null;
     setComposerCaret(0);
     setPromptLines([]);
     setFileMatches([]);
@@ -555,6 +579,9 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       });
 
     return () => {
+      // Whatever is in the composer goes with the session, not with the pane. This runs on a
+      // sessionId change and on unmount, which between them are every way a composer disappears.
+      if (composerValueRef.current !== null) keepDraft(sessionId, composerValueRef.current);
       generationRef.current += 1;
       mountedForRef.current = null;
       if (slashSilenceRef.current !== null) clearTimeout(slashSilenceRef.current);
@@ -679,6 +706,8 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       // it comes back through the transcript like every other turn, and adding it here would show
       // it twice.
       const text = composerTextOf(message.content);
+      forgetDraft(sessionId); // it was sent; there is nothing left to put back
+      composerValueRef.current = null;
       if (slashSilenceRef.current !== null) clearTimeout(slashSilenceRef.current);
       slashSilenceRef.current = null;
       setSlashSent(false);
@@ -872,6 +901,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       // character is on its way into the composer is a chance to hand the composer back the value it
       // had a moment ago.
       const value = target.value;
+      composerValueRef.current = value; // see the ref's own note: no render, and the draft needs it
       const caret = target.selectionStart ?? value.length;
       const couldTrigger = value.startsWith("/") || fileTokenAt(value, caret) !== null;
       if (!couldTrigger && !triggerArmedRef.current) return;
@@ -977,6 +1007,31 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     const timer = setTimeout(() => setModelBusy(false), MODEL_BUSY_MAX_MS);
     return () => clearTimeout(timer);
   }, [modelBusy]);
+
+  // ...and put back when it comes back. The composer belongs to the Thread and appears a moment
+  // after this pane does, so this waits for it rather than assuming it. `insertText` rather than a
+  // direct assignment for the same reason the completion menu uses it: the composer is a controlled
+  // input, and only a real edit reaches the store behind it.
+  useEffect(() => {
+    const text = draftOf(sessionId);
+    if (text === "") return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      const input = paneRef.current?.querySelector("textarea");
+      if (input) {
+        clearInterval(timer);
+        // Only into a composer nobody has touched: someone who started typing in the moment this
+        // took must not have a sentence from before shoved in front of theirs.
+        if (input.value === "") {
+          input.focus();
+          document.execCommand("insertText", false, text);
+        }
+        return;
+      }
+      if (++tries >= DRAFT_RESTORE_TRIES) clearInterval(timer);
+    }, DRAFT_RESTORE_MS);
+    return () => clearInterval(timer);
+  }, [sessionId]);
 
   // What codex is running, read off the bar it keeps at the bottom of its own screen.
   //
