@@ -20,6 +20,10 @@ import { findRollout } from '../core/rolling/codexLocate'
 import { limitStateFromLines, type CodexLimitState } from '../core/rolling/codexSignal'
 import { tailLines } from '../core/rolling/tailLines'
 import { contextFromLines, sessionUsageOf } from '../core/usage/codex'
+import path from 'node:path'
+
+/** win32 first: two paths that differ only in case or separator are the same folder (project-wide rule) */
+const norm = (p: string): string => path.resolve(p).toLowerCase()
 
 const POLL_MS = 1_000 // Same value as LOCATE_POLL_MS in codexRolling.ts (which is not exported there)
 
@@ -228,6 +232,30 @@ export class CodexRolloutWatcher {
     return out
   }
 
+  /**
+   * Whether this entry is the one a newly appeared rollout in its folder should belong to.
+   *
+   * The scan's rule is "the newest file created after I started is mine", and that is only true while
+   * nothing newer than me is also looking. A session adopted back from the Host after a restart has
+   * been waiting a long time, so the next rollout to appear in its folder may well be a session
+   * someone opened a moment ago — and "newest wins" would hand it to the waiting one, locking the
+   * rightful session out of its own conversation through claimed() below.
+   *
+   * So the newest starter wins: of the entries still looking in the same account and folder, only the
+   * one that started last may claim. A freshly spawned session's `since` is milliseconds before its
+   * own file; an adopted one's is minutes or hours earlier, and it waits until it is alone again,
+   * which is exactly when the next file to appear really is its own.
+   */
+  private mayClaim(self: Entry): boolean {
+    for (const e of this.entries.values()) {
+      if (e === self || e.disposed || e.rolloutPath) continue
+      if (e.accountId !== self.accountId) continue
+      if (norm(e.cwd) !== norm(self.cwd)) continue
+      if (e.since > self.since) return false
+    }
+    return true
+  }
+
   private ensureTicker(): void {
     if (this.ticker) return
     this.ticker = setInterval(() => void this.tick(), POLL_MS)
@@ -258,6 +286,7 @@ export class CodexRolloutWatcher {
     if (!entry.tail) {
       const account = this.deps.getAccount(entry.accountId)
       if (!account) return
+      if (!this.mayClaim(entry)) return // a session that started more recently is waiting for this file
       const found = await findRollout({
         configDir: account.configDir,
         cwd: entry.cwd,

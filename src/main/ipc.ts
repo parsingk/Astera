@@ -5615,41 +5615,51 @@ export function registerIpc(
                 )
               else if (coordinator === 'rolling') rolling?.register(info)
             }
-            // codexRollout is registered **only from the note**, never left to find the file itself.
-            // The distinction is the whole of the safety here, so it is worth stating both halves.
+            // codexRollout is registered from the note when the note has a mapping, and left to
+            // find the file itself when it does not. The distinction used to be "note or nothing",
+            // and that skipped session was mute for the rest of its life: no usage chips, no turn
+            // notifications, and — since the conversation view reads its transcript through
+            // rolloutPathFor — an empty conversation for a session that was answering perfectly well
+            // on the terminal. Measured: a codex session idle at the moment the app closed came back,
+            // was asked a question, answered it, and the conversation view stayed blank.
             //
-            // Why it must not scan. It keys a session's rollout by `findRollout({ since, cwd, ... })`,
-            // which for a freshly spawned session is safe because since = the spawn moment: at that
-            // instant nothing else can have a newer file in the same cwd/account, so "pick the newest
-            // candidate created after since" always resolves to this session's own file. An adopted
-            // session's real spawn was before the restart, so since would have to be that earlier
-            // moment — and between then and whenever the scan actually runs, another session can
-            // legitimately open in the same cwd/account and create a newer file, which "newest wins"
-            // would hand to the adopted entry instead, permanently locking the rightful session out of
-            // its own file via claimed()'s excludePaths. There is no narrower since that fixes it: the
-            // discovery rule assumes the caller's own file is definitionally the newest thing that
-            // exists the moment a match is found, and that only holds right after a real spawn. It is
-            // the same hazard `codexRolling`'s `locate: false` above avoids, and this watcher has no
-            // such switch — handing it a path is what turns the scan off, since register attaches to
-            // the file it is given and never looks for one.
+            // Why a mapping is handed over rather than searched for. The scan keys a rollout by
+            // `findRollout({ since, cwd, ... })`, which for a freshly spawned session is safe because
+            // since = the spawn moment: nothing else can have a newer file in the same cwd and
+            // account, so "newest created after since" is this session's own file. An adopted
+            // session's spawn was before the restart, and between then and the scan another session
+            // can legitimately open in the same folder — "newest wins" would hand it that one and lock
+            // the rightful session out through claimed().
             //
-            // Why the note can be trusted with it. The path is not a guess: the watcher mapped it while
-            // the session ran, in the one moment the discovery rule does hold, and handed it to
-            // `SessionManager.remember` — so what comes back is that session's own file, established
-            // before the restart rather than inferred after it. A note with no path is a session the
-            // scan never mapped, and it is skipped, which is exactly the case the old refusal protected.
+            // Why searching is nonetheless right when there is no mapping. A note with no path is a
+            // session the watcher never mapped, which is a session that had written no rollout at all
+            // — so there is no earlier file of its own to miss, and `since` is the moment it is taken
+            // back rather than the moment it spawned. The remaining hazard, another session opening in
+            // the same folder before this one says anything, is answered in the watcher itself: of the
+            // entries still looking in one folder, only the one that started last may claim
+            // (mayClaim). A session adopted hours ago waits until it is alone again, which is exactly
+            // when the next file to appear really is its own.
             //
-            // What registering restores, and a skip still costs: the usage chips
-            // (CodexRolloutWatcher.usage), turn-triggered Slack notifications (onTurnComplete), Work
-            // Unit detection (rolloutPathFor feeds the transcript path) and the scheduler's key
-            // (codexSessionId, read below). The tail starts at the end of the file, so turns that
-            // completed while the app was closed are not reported now — the same rule a resume follows.
+            // What is still lost either way: turns that completed while the app was closed are not
+            // reported, and a session whose rollout was created in the last moments before the restart
+            // but not yet mapped stays unmapped, because nothing created after the adoption will ever
+            // be its file — codex appends to the one it already has.
             if (codexNote) {
               try {
                 // The id goes in too, so `codexSessionIdFor` answers for an adopted session the way it
                 // does for a scanned one — the scheduler learns its store key from it, and unlike a
                 // resume there is no `info.resumeSessionId` carrying the same value.
                 codexRollout?.register(info, codexNote.rolloutPath, codexNote.codexSessionId ?? undefined)
+              } catch {
+                /* A failed codex rollout-watcher registration does not block taking the session back */
+              }
+            } else if (coordinator === 'codexRolling') {
+              // Codex, and nothing known about its rollout. Registered unmapped so the scan can pick
+              // up the file its next turn creates — see the two paragraphs above for why that is safe
+              // here and was not before. `coordinator` is what says this is codex at all: it comes
+              // from the account, and keeps "the account is gone" as its own answer.
+              try {
+                codexRollout?.register(info)
               } catch {
                 /* A failed codex rollout-watcher registration does not block taking the session back */
               }
