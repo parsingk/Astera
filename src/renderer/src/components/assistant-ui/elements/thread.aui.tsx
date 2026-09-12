@@ -55,7 +55,6 @@ import {
   MicIcon,
   MoreHorizontalIcon,
   PencilIcon,
-  RefreshCwIcon,
   SquareIcon,
 } from "lucide-react";
 import {
@@ -517,6 +516,11 @@ const AssistantMessage: FC = () => {
   );
 };
 
+/** Copy, export and the rest of what can be done to a turn that has already happened.
+ *
+ *  No Refresh: assistant-ui's `Reload` asks the runtime to run the turn again, and the runtime behind
+ *  this one is a transcript being read from disk (ConversationPane's external store). There is no
+ *  turn to re-run from here — the CLI owns that — so the button could only ever do nothing. */
 const AssistantActionBar: FC = () => {
   return (
     <ActionBarPrimitive.Root
@@ -534,11 +538,6 @@ const AssistantActionBar: FC = () => {
           </AuiIf>
         </TooltipIconButton>
       </ActionBarPrimitive.Copy>
-      <ActionBarPrimitive.Reload asChild>
-        <TooltipIconButton tooltip="Refresh">
-          <RefreshCwIcon />
-        </TooltipIconButton>
-      </ActionBarPrimitive.Reload>
       <ActionBarMorePrimitive.Root>
         <ActionBarMorePrimitive.Trigger asChild>
           <TooltipIconButton
