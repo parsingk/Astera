@@ -20,6 +20,24 @@ export const CONVERSATION_TAIL_BYTES = 256 * 1024
  *  bounding the work a file that is genuinely one immense line can force. */
 export const CONVERSATION_TAIL_BYTES_MAX = 4 * 1024 * 1024
 
+/**
+ * Why a window that holds turns can still be the wrong window.
+ *
+ * The tail is measured in bytes because that is the only thing that can be measured before the lines
+ * are read. It is not a measure of conversation: Claude writes records beside the turns — attachments,
+ * file-history snapshots — that dwarf them, and a session with a single "안녕" and its answer had
+ * already written a 296KB transcript (measured 2026-09-12). The last 256KB of that file held the
+ * answer and nothing else, the loop was satisfied by having *a* turn, and the view drew an answer to a
+ * question that was not on screen.
+ *
+ * So the condition is what was actually missing, not a count: keep widening while the window has
+ * nothing a person said in it. An answer with no question is not a conversation, and there is nothing
+ * to tune.
+ */
+function hasSomethingSaid(turns: readonly ConvTurn[]): boolean {
+  return turns.some((t) => t.role === 'user')
+}
+
 const NEWLINE = 0x0a // '\n' as a byte — see the doc comment below for why this is searched for in the
 // raw buffer, never in a decoded string.
 
@@ -86,9 +104,10 @@ const NEWLINE = 0x0a // '\n' as a byte — see the doc comment below for why thi
  *  this is left as is rather than fixed. */
 export async function readConversationWindow(
   filePath: string,
-  opts?: { tailBytes?: number; endAt?: number; reduce?: ReduceLines }
+  opts?: { tailBytes?: number; endAt?: number; reduce?: ReduceLines; anyTurnWillDo?: boolean }
 ): Promise<{ turns: ConvTurn[]; from: number; more: boolean; follow: number } | null> {
   let tailBytes = opts?.tailBytes ?? CONVERSATION_TAIL_BYTES
+  const enough = opts?.anyTurnWillDo === true ? (t: readonly ConvTurn[]): boolean => t.length > 0 : hasSomethingSaid
   let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
     handle = await open(filePath, 'r')
@@ -126,7 +145,7 @@ export async function readConversationWindow(
       const turns = (opts?.reduce ?? reduceTranscript)(lines)
       const more = from > 0
 
-      if (turns.length > 0 || !more || tailBytes >= CONVERSATION_TAIL_BYTES_MAX) {
+      if (enough(turns) || !more || tailBytes >= CONVERSATION_TAIL_BYTES_MAX) {
         if (turns.length === 0 && tailBytes >= CONVERSATION_TAIL_BYTES_MAX) {
           return { turns, from: start, more: start > 0, follow } // see the `from` paragraph above
         }

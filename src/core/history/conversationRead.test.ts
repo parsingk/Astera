@@ -78,6 +78,31 @@ describe('readConversationWindow', () => {
     expect(result?.turns.map((t) => t.id)).toEqual(['u1', 'u2', 'u3'])
   })
 
+  // Measured 2026-09-12: a session with one "안녕" and its answer had already written 296KB, because
+  // Claude writes attachments and file-history snapshots beside the turns. The last 256KB of it held
+  // the answer alone, and the view drew an answer to a question that was not on screen.
+  it('widens past a window holding only an answer, until what was said is in it', async () => {
+    const said = JSON.stringify({
+      type: 'user',
+      uuid: 'u1',
+      message: { role: 'user', content: '안녕' }
+    })
+    const bulk = JSON.stringify({ type: 'file-history-snapshot', blob: 'x'.repeat(4_000) })
+    const answered = JSON.stringify({
+      type: 'assistant',
+      uuid: 'a1',
+      message: { role: 'assistant', content: [{ type: 'text', text: '안녕하세요' }] }
+    })
+    const p = path.join(dir, 'padded.jsonl')
+    await writeFile(p, [said, bulk, answered].join('\n') + '\n')
+
+    const narrow = await readConversationWindow(p, { tailBytes: 2_000, anyTurnWillDo: true })
+    expect(narrow?.turns.map((t) => t.role)).toEqual(['assistant'])
+
+    const result = await readConversationWindow(p, { tailBytes: 2_000 })
+    expect(result?.turns.map((t) => t.role)).toEqual(['user', 'assistant'])
+  })
+
   it('a window that starts mid-file discards the partial first line', async () => {
     const p = path.join(dir, 'mid.jsonl')
     const l1 = userLine(1)
@@ -87,7 +112,10 @@ describe('readConversationWindow', () => {
     // Big enough for all of l3 plus roughly half of l2, so the window starts mid l2, not on a line
     // boundary — the case this behaviour exists for.
     const tailBytes = byteLen(l3) + Math.floor(byteLen(l2) / 2)
-    const result = await readConversationWindow(p, { tailBytes })
+    // anyTurnWillDo: this one is about what a window does with a half-line at its front, and the
+    // default — widen until something a person said is in view — would widen past the window it is
+    // testing.
+    const result = await readConversationWindow(p, { tailBytes, anyTurnWillDo: true })
     expect(result?.more).toBe(true)
     expect(result?.from).toBeGreaterThan(0)
     // The partial l2 fragment is dropped; only the complete line after it (l3) is reduced.
@@ -106,7 +134,7 @@ describe('readConversationWindow', () => {
     const first = await readConversationWindow(p, { tailBytes })
     expect(first?.turns.map((t) => t.id)).toEqual(['u3'])
 
-    const second = await readConversationWindow(p, { tailBytes: 10_000, endAt: first!.from })
+    const second = await readConversationWindow(p, { anyTurnWillDo: true, tailBytes: 10_000, endAt: first!.from })
     expect(second?.turns.map((t) => t.id)).toEqual(['u1', 'u2']) // the entries before `from`, not u3 again
     expect(second?.from).toBe(0)
     expect(second?.more).toBe(false)
