@@ -1393,6 +1393,8 @@ export const ko = {
   'conversation.pending.title': '답할 것이 있습니다',
   'conversation.pending.body': '아래에 답을 입력하면 그대로 전해집니다. 선택지는 터미널 화면에 있습니다.',
   'conversation.pending.action': '선택지 보기',
+  'conversation.pending.pick': '아래에서 고르면 그대로 전해집니다. 직접 입력해도 됩니다.',
+  'conversation.pending.terminal': '터미널로 이동',
   'conversation.slash.title': '슬래시 명령은 터미널에서 진행됩니다',
   'conversation.slash.body': '명령이 여는 창은 터미널에 있어서 여기서는 보이지 않습니다.',
   'conversation.slash.action': '터미널로 이동',

@@ -1199,6 +1199,8 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.pending.title': 'An answer is waiting',
   'conversation.pending.body': 'Type your answer below and it goes straight through. The choices are on the terminal screen.',
   'conversation.pending.action': 'See the choices',
+  'conversation.pending.pick': 'Pick one below and it goes straight through — or type your answer.',
+  'conversation.pending.terminal': 'Go to the terminal',
   'conversation.slash.title': 'Slash commands run in the terminal',
   'conversation.slash.body': 'The screen this one opens is over there, not here.',
   'conversation.slash.action': 'Go to the terminal',

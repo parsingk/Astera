@@ -41,6 +41,11 @@ import {
 } from "../../../../core/commands/slashCommands";
 import { fileTokenAt } from "../../../../core/files/fileMatch";
 import { promptLinesOf } from "../../../../core/history/promptLines";
+import {
+  promptChoicesOf,
+  stepToward,
+  type PromptChoice
+} from "../../../../core/history/promptChoices";
 import * as sessionBus from "../../lib/sessionBus";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
@@ -234,6 +239,14 @@ const SUBMIT_GAP_MS = 250
 const PROMPT_LINES_MAX = 16
 const PROMPT_POLL_MS = 500
 
+/** How an unnumbered choice is answered: one arrow key, then a fresh look at the screen, and never
+ *  more than this many of them before giving up. The gap is what lets the CLI redraw before the next
+ *  look — below it the walk reads its own stale screen and takes a second step it did not need. The
+ *  cap ends a walk that is not converging (a list longer than it, a highlight that will not move)
+ *  without ever pressing return on a row nobody asked for. */
+const ARROW_STEP_MS = 120
+const ARROW_STEPS_MAX = 12
+
 /** How long a slash command is given to show up in the conversation before the pane says where it
  *  went. A command that becomes a prompt — every skill command — writes its user turn as soon as the
  *  CLI takes it, and main notices within its own second; one that opens the CLI's own screen never
@@ -331,6 +344,9 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   const [slashActive, setSlashActive] = useState(0);
   /** The question the CLI is showing, while it is showing one. */
   const [promptLines, setPromptLines] = useState<readonly string[]>([]);
+  /** A walk across an unnumbered list is in flight. A ref as well as the state below it: the walk
+   *  reads this between its own awaits, where a state value would still be the one it started with. */
+  const answeringRef = useRef(false);
   const [modelInfo, setModelInfo] = useState<{
     model: string | null
     effort: string | null
@@ -657,6 +673,58 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     return () => clearInterval(timer);
   }, [attention, sessionId]);
 
+  // The rows of that same quote, as something to press. They come out of the quote rather than
+  // alongside it, so what the buttons say and what the banner shows can never be two different
+  // readings of the screen.
+  const choices = useMemo(() => promptChoicesOf(promptLines), [promptLines]);
+  const [answering, setAnswering] = useState(false);
+
+  /**
+   * Answers one of those rows on the CLI's own screen.
+   *
+   * A numbered row is sent as its number: that is an answer the CLI takes whole, and it does not
+   * depend on where the highlight happens to be.
+   *
+   * An unnumbered one has to be walked to, and the walk asks the screen again before every key it
+   * sends (stepToward in core/history/promptChoices.ts explains why in full). The short of it: the
+   * last key of a walk is a return, and a return pressed against a screen that moved confirms
+   * something nobody chose, with no way back. Re-reading costs a buffer read per step.
+   *
+   * Nothing is pressed when the row is no longer there — the prompt was answered on the terminal, or
+   * a different one replaced it. The button goes quiet for the length of the walk so a second press
+   * cannot interleave its own arrows with this one's.
+   */
+  const answerChoice = useCallback(
+    async (choice: PromptChoice): Promise<void> => {
+      if (answeringRef.current) return;
+      answeringRef.current = true;
+      setAnswering(true);
+      try {
+        if (choice.number !== null) {
+          window.api.sessions.write(sessionId, String(choice.number));
+          return;
+        }
+        for (let step = 0; step < ARROW_STEPS_MAX; step++) {
+          const screen = sessionBus.screenOf(sessionId);
+          if (screen === null) return; // no terminal registered — nothing to read, so nothing to press
+          const now = promptChoicesOf(promptLinesOf(screen.split("\n"), PROMPT_LINES_MAX));
+          const key = stepToward(now, choice.label);
+          if (key === null) return; // the row is gone: the prompt was answered or replaced
+          if (key === "enter") {
+            window.api.sessions.write(sessionId, "\r");
+            return;
+          }
+          window.api.sessions.write(sessionId, key === "down" ? "\u001b[B" : "\u001b[A");
+          await new Promise((resolve) => setTimeout(resolve, ARROW_STEP_MS));
+        }
+      } finally {
+        answeringRef.current = false;
+        setAnswering(false);
+      }
+    },
+    [sessionId]
+  );
+
   // Escape closes the menu without closing anything else; it reopens the moment the text changes,
   // which is what a person means by dismissing a suggestion rather than abandoning the command.
   // State, not a ref: the listener below sets it, and only a state change redraws the banner slot.
@@ -887,7 +955,13 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // into outranks a note about a command already sent.
   const banner: ReactNode =
     attention === "waiting" ? (
-      <PendingBanner onGoTerminal={goTerminal} lines={promptLines} />
+      <PendingBanner
+        onGoTerminal={goTerminal}
+        lines={promptLines}
+        choices={choices}
+        onChoose={(choice) => void answerChoice(choice)}
+        answering={answering}
+      />
     ) : slashOpen ? (
       <CompletionMenu
         rows={rows}
