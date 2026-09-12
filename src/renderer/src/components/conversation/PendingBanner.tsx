@@ -111,3 +111,44 @@ export function SlashCommandNotice({ onGoTerminal }: PendingBannerProps): ReactN
     </div>
   );
 }
+
+/** The messages the CLI is holding until the turn it is on finishes.
+ *
+ *  Read off its screen, never queued here — the CLI keeps this queue itself and only its copy can be
+ *  edited with the up arrow, so a second one would be a second answer to the same question
+ *  (core/history/queuedMessages.ts). This only says what is already true over there.
+ */
+export function QueuedNotice({
+  messages,
+  onGoTerminal
+}: {
+  messages: readonly string[];
+  onGoTerminal: () => void;
+}): ReactNode {
+  const { t } = useI18n();
+  if (messages.length === 0) return null;
+
+  return (
+    <div
+      role="status"
+      data-slot="conversation-queued"
+      className="border-border/60 text-muted-foreground flex items-start justify-between gap-3 rounded-(--composer-radius) border px-4 py-2.5 text-sm"
+    >
+      <div className="min-w-0">
+        <p className="text-foreground font-medium">
+          {t("conversation.queued.title", { count: String(messages.length) })}
+        </p>
+        <ol className="mt-1 flex flex-col gap-0.5">
+          {messages.map((text, i) => (
+            <li key={`${i}-${text}`} className="truncate">
+              {text}
+            </li>
+          ))}
+        </ol>
+      </div>
+      <Button size="sm" variant="outline" className="shrink-0" onClick={onGoTerminal}>
+        {t("conversation.queued.edit")}
+      </Button>
+    </div>
+  );
+}

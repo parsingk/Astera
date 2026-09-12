@@ -28,7 +28,7 @@ import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.a
 const MemoThread = memo(Thread);
 import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
-import { PendingBanner, SlashCommandNotice } from "./PendingBanner";
+import { PendingBanner, QueuedNotice, SlashCommandNotice } from "./PendingBanner";
 import { ModelControl, type ModelControlProps } from "./ModelControl";
 import {
   CODEX_EFFORT_ROWS,
@@ -49,6 +49,7 @@ import {
 import { fileTokenAt } from "../../../../core/files/fileMatch";
 import { draftOf, forgetDraft, keepDraft } from "./drafts";
 import { promptLinesOf } from "../../../../core/history/promptLines";
+import { queuedMessagesOf } from "../../../../core/history/queuedMessages";
 import {
   promptChoicesOf,
   stepToward,
@@ -1008,6 +1009,31 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     return () => clearTimeout(timer);
   }, [modelBusy]);
 
+  // What the CLI is holding until the turn it is on finishes. Its queue, not ours — read off its
+  // screen the same way and for the same reason as everything else here, on the output that changes
+  // it rather than on a clock.
+  const [queued, setQueued] = useState<readonly string[]>([]);
+  useEffect(() => {
+    const read = (): void => {
+      const screen = sessionBus.screenOf(sessionId);
+      if (screen === null) return;
+      const now = queuedMessagesOf(screen.split("\n"));
+      setQueued((prev) =>
+        prev.length === now.length && prev.every((text, i) => text === now[i]) ? prev : now
+      );
+    };
+    read();
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const stop = sessionBus.observe(sessionId, () => {
+      clearTimeout(settle);
+      settle = setTimeout(read, MODEL_SETTLE_MS);
+    });
+    return () => {
+      clearTimeout(settle);
+      stop();
+    };
+  }, [sessionId]);
+
   // ...and put back when it comes back. The composer belongs to the Thread and appears a moment
   // after this pane does, so this waits for it rather than assuming it. `insertText` rather than a
   // direct assignment for the same reason the completion menu uses it: the composer is a controlled
@@ -1307,6 +1333,8 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         onPick={takeRow}
         onHover={setSlashActive}
       />
+    ) : queued.length > 0 ? (
+      <QueuedNotice messages={queued} onGoTerminal={goTerminal} />
     ) : slashSent ? (
       <SlashCommandNotice onGoTerminal={goTerminal} />
     ) : null;
