@@ -111,18 +111,24 @@
     margin: 0;
   }
 
-  /* assistant-ui's vendored components assume one of Tailwind preflight's resets: a default border
-     colour for any element that sets a border width without a colour utility. (box-sizing: border-box,
-     preflight's other assumption, needs nothing here — styles.css already sets it globally.) Scoped to
-     .aui-root, the class assistant-ui's own Thread root already carries, so nothing outside the
-     conversation view is affected; @layer base keeps this below the border-input/border-destructive/etc
-     utility classes (@layer utilities), so an element that does name a colour still wins. */
+  /* assistant-ui's vendored components assume one of Tailwind preflight's resets: every element
+     starts with no border, in a solid style, in a default colour — so a `border` utility names a
+     width only. Zeroing the width is the part whose absence is visible: a browser gives a textarea a
+     border of its own, and colouring it without zeroing it drew a second, paler box inside the
+     composer's own.
+
+     (box-sizing: border-box, preflight's other assumption, needs nothing here — styles.css already
+     sets it globally.) Scoped to .aui-root, the class assistant-ui's own Thread root already carries,
+     so nothing outside the conversation view is affected; @layer base keeps this below the border-*
+     utility classes (@layer utilities), so an element that does name a width or a colour still wins. */
   .aui-root,
   .aui-root *,
   .aui-root::before,
   .aui-root::after,
   .aui-root *::before,
   .aui-root *::after {
+    border-width: 0;
+    border-style: solid;
     border-color: var(--border);
   }
 

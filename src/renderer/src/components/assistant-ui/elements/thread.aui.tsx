@@ -23,6 +23,7 @@ import {
   ToolGroupTrigger,
 } from "@/components/assistant-ui/elements/tool-group.aui";
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button";
+import { matchesLimitPhrase } from "../../../../../core/rolling/detect";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -398,6 +399,17 @@ const AssistantMessage: FC = () => {
     ReasoningGroup,
   } = useContext(ThreadComponentsContext);
 
+  // A limit notice is not an answer — it says the session has stopped and will not run again until a
+  // reset. It arrives as an ordinary assistant message, so in the body colour it reads as one more
+  // line of prose and is missed. `matchesLimitPhrase` is the app's single definition of that phrase
+  // (core/rolling/detect.ts), the same one the account roll acts on, so this cannot come to disagree
+  // with what the app does about it.
+  const isLimitNotice = useAuiState((s) =>
+    s.message.content.some(
+      (part) => part.type === "text" && matchesLimitPhrase(part.text),
+    ),
+  );
+
   const ACTION_BAR_PT = "pt-1.5";
   // Keep the action bar inside the contained root's paint box, then cancel its reserved space in flow.
   const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`;
@@ -410,7 +422,11 @@ const AssistantMessage: FC = () => {
     >
       <div
         data-slot="aui_assistant-message-content"
-        className="text-foreground px-2 leading-relaxed wrap-break-word"
+        data-limit-notice={isLimitNotice ? "true" : undefined}
+        className={cn(
+          "px-2 leading-relaxed wrap-break-word",
+          isLimitNotice ? "text-[var(--danger)]" : "text-foreground",
+        )}
       >
         <MessagePrimitive.GroupedParts
           groupBy={groupPartByType({

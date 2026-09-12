@@ -636,11 +636,13 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     [sessionId]
   );
 
+  // The margin on this is what keeps it off the composer: an empty thread centres its whole column,
+  // so without one the line and the box below it end up touching.
   const Welcome = useCallback(
     (): ReactNode => (
       <div
         data-slot="conversation-pane-empty"
-        className="text-muted-foreground px-4 text-center text-sm"
+        className="text-muted-foreground mb-12 px-4 text-center text-sm"
       >
         {t(status === "unavailable" ? "conversation.unavailable" : "conversation.empty")}
       </div>
