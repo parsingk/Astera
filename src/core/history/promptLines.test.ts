@@ -69,6 +69,17 @@ const codexScreen = [
   '› @'
 ]
 
+// codex's own trust prompt for a new folder (measured 2026-09-12). It marks its highlighted choice
+// with `›` — the very character its input line starts with — which an earlier version of this did not
+// expect, and would have cut the whole dialog away at.
+const codexTrustScreen = [
+  '> You are in C:' + String.fromCharCode(92) + 'Temp' + String.fromCharCode(92) + 'scratchpad' + String.fromCharCode(92) + 'codexprobe',
+  '  Do you trust the contents of this directory?',
+  '› 1. Yes, continue',
+  '  2. No, quit',
+  '  Press enter to continue'
+]
+
 describe('promptLinesOf', () => {
   it('keeps the question and every one of its options', () => {
     const kept = promptLinesOf(approvalScreen, 16)
@@ -115,6 +126,15 @@ describe('promptLinesOf', () => {
     // One `› @` survives: codex echoes a past input with the same marker, and that echo is
     // transcript, not the line waiting for an answer.
     expect(kept.filter((l) => l.trim() === '› @')).toHaveLength(1)
+  })
+
+  // Same trap as Claude's, one character apart: codex marks its highlighted choice with the character
+  // its input line starts with too.
+  it('keeps codex a dialog whose choice carries its prompt marker', () => {
+    const kept = promptLinesOf(codexTrustScreen, 16)
+    expect(kept).toContain('› 1. Yes, continue')
+    expect(kept).toContain('  2. No, quit')
+    expect(kept).toContain('  Press enter to continue')
   })
 
   it('keeps the end of a long screen rather than its beginning', () => {

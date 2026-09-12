@@ -277,7 +277,12 @@ describe('modelLineOf', () => {
 })
 
 describe('keepWhatIsKnown', () => {
-  const codex = (model: string | null, effort: string | null) => ({ model, effort, cli: 'codex' as const })
+  type Reading = { model: string | null; effort: string | null; cli: 'claude' | 'codex' | null }
+  const codex = (model: string | null, effort: string | null): Reading => ({
+    model,
+    effort,
+    cli: 'codex'
+  })
 
   // The one this exists for: codex records its model a turn at a time, so between turns the reading
   // that goes through IPC is a pair of nulls while its own screen says the model plainly. Letting the
@@ -302,7 +307,7 @@ describe('keepWhatIsKnown', () => {
 
   // A different CLI is a different session's answer arriving, not a quieter one.
   it('replaces everything when the CLI itself is different', () => {
-    const claude = { model: null, effort: null, cli: 'claude' as const }
+    const claude: Reading = { model: null, effort: null, cli: 'claude' }
     expect(keepWhatIsKnown(codex('gpt-5.6-sol', 'low'), claude)).toEqual(claude)
   })
 })

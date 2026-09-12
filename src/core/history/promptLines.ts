@@ -26,8 +26,12 @@ function isBorder(line: string): boolean {
  *     highlighted choice carries the very same `❯` — and, measured on a real trust prompt, carries no
  *     number either (`❯ No, exit`), so no amount of reading the text after the marker tells the two
  *     apart. A numbered choice is let through as well, as a second guard for a dialog drawn inside a
- *     box. Codex needs neither test: it draws no rule around its composer, and its choices are
- *     numbered rows that do not carry `›` at all, so its last marker line is always the input.
+ *     box.
+ *
+ *     Codex is the other way round: it draws no rule around its composer, so the box test cannot
+ *     apply to it, but it *does* mark its highlighted choice with `›` — `› 1. Yes, continue` on its
+ *     own trust prompt, measured. So the number test is what saves its choices, and the absence of
+ *     one is what identifies its input line.
  *   - of what is left, the last `max` lines, with no attempt to find where the question begins.
  *     Cutting at the blank line above it was tried and lost the options, because a dialog has blank
  *     lines inside it. A line or two of the turn above costs a glance; a quote missing `Yes, I trust
@@ -42,12 +46,17 @@ export function promptLinesOf(rows: readonly string[], max: number): string[] {
   let input = -1
   for (let i = lines.length - 1; i >= 0; i--) {
     const start = lines[i].trimStart()
-    if (start.startsWith(CODEX_INPUT)) {
+    const marker = start.startsWith(CODEX_INPUT)
+      ? CODEX_INPUT
+      : start.startsWith(CLAUDE_INPUT)
+        ? CLAUDE_INPUT
+        : null
+    if (marker === null) continue
+    if (/^\d+\.\s/.test(start.slice(marker.length).trimStart())) continue // a numbered choice
+    if (marker === CODEX_INPUT) {
       input = i
       break
     }
-    if (!start.startsWith(CLAUDE_INPUT)) continue
-    if (/^\d+\.\s/.test(start.slice(CLAUDE_INPUT.length).trimStart())) continue // a numbered choice
     let above = i - 1
     while (above >= 0 && lines[above].trim() === '') above--
     if (above < 0 || !isBorder(lines[above])) continue // not boxed — the highlighted choice
