@@ -63,3 +63,28 @@ export function codexDigitFor(rows: readonly string[], label: string): string | 
   }
   return null
 }
+
+/**
+ * The model and reasoning level codex is running, off the status line it keeps at the bottom of its
+ * own screen (`  gpt-5.6-sol xhigh · D:\novel_docs`, measured 2026-09-12).
+ *
+ * Read from the screen because it is the only place this is true continuously. codex's rollout — the
+ * app's other source — records the model a turn at a time, so a session that has not answered
+ * anything reports none at all, and one whose model was just changed goes on reporting the old one
+ * until the next turn. Neither is what a person who just changed it is looking at.
+ *
+ * Only the last line is considered, which is where that bar sits; a `·` elsewhere on the screen is
+ * some other line's punctuation. null when the bar is not there — a picker is up over it, the session
+ * is still starting — and the caller then keeps whatever it had.
+ */
+export function codexStatusModel(
+  rows: readonly string[]
+): { model: string; effort: string } | null {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const line = rows[i].trim()
+    if (line === '') continue
+    const match = /^(\S+)\s+(\S+)\s+·\s+\S/.exec(line)
+    return match === null ? null : { model: match[1], effort: match[2] }
+  }
+  return null
+}

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { codexPickerStep, codexPickerRows, codexDigitFor } from './codexPicker'
+import {
+  codexPickerStep,
+  codexPickerRows,
+  codexDigitFor,
+  codexStatusModel
+} from './codexPicker'
 
 // Both screens as codex drew them (measured 2026-09-12, codex in a fresh folder).
 const modelStep = [
@@ -77,5 +82,33 @@ describe('codexDigitFor', () => {
   it('answers null for a row that is not on the screen', () => {
     expect(codexDigitFor(effortStep, 'Ultra')).toBeNull()
     expect(codexDigitFor([], 'High')).toBeNull()
+  })
+})
+
+describe('codexStatusModel', () => {
+  // The bar codex keeps at the bottom of its screen, as it drew it (measured 2026-09-12).
+  it('reads the model and level codex is running right now', () => {
+    expect(
+      codexStatusModel([
+        '› Ask Codex to do anything',
+        '  gpt-5.6-sol xhigh · ~\\AppData\\Local\\Temp\\claude\\scratchpad\\codexprobe'
+      ])
+    ).toEqual({ model: 'gpt-5.6-sol', effort: 'xhigh' })
+  })
+
+  it('follows a change the rollout has not recorded yet', () => {
+    expect(codexStatusModel(['• Model changed to gpt-5.6-sol high', '  gpt-5.6-sol high · D:\\x'])).toEqual(
+      { model: 'gpt-5.6-sol', effort: 'high' }
+    )
+  })
+
+  // Only the bottom line is the bar. A `·` further up belongs to some other line.
+  it('does not read a line that merely has a dot in it', () => {
+    expect(codexStatusModel(['  Tip: run codex app · visit chatgpt.com', '› Ask Codex to do anything'])).toBeNull()
+  })
+
+  it('answers null while the bar is covered or absent', () => {
+    expect(codexStatusModel(['  Press enter to confirm or esc to go back'])).toBeNull()
+    expect(codexStatusModel([])).toBeNull()
   })
 })

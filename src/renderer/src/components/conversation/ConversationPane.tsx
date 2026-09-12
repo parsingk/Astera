@@ -36,7 +36,11 @@ import {
   modelChoicesOf
 } from "../../../../core/models/cliModels";
 import type { ModelDescriptor } from "../../../../core/models/types";
-import { codexDigitFor, codexPickerStep } from "../../../../core/models/codexPicker";
+import {
+  codexDigitFor,
+  codexPickerStep,
+  codexStatusModel
+} from "../../../../core/models/codexPicker";
 import { CompletionMenu, type CompletionRow } from "./CompletionMenu";
 import {
   filterSlashCommands,
@@ -261,6 +265,10 @@ const SLASH_SILENCE_MS = 4_000
  *  the cost of giving up early is only that the person finishes on the terminal, while the cost of
  *  pressing into a screen that has not arrived is a keystroke landing somewhere nobody chose. */
 const CODEX_STEP_WAIT_MS = 4_000
+/** How often codex's own status bar is read for the model and level it is running. Only codex needs
+ *  it — Claude pushes a statusline of its own — and it is one buffer read and one match, so the rate
+ *  is chosen to feel immediate after a change rather than to be cheap. */
+const MODEL_POLL_MS = 2_000
 
 /** How long to wait before re-reading the model after asking the CLI to switch. It rewrites its
  *  statusline as it goes, but not within the same breath as the command. */
@@ -915,6 +923,31 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     onGoTerminal();
   }, [onGoTerminal]);
 
+  // What codex is running, read off the bar it keeps at the bottom of its own screen.
+  //
+  // The app's other source is the rollout, and it records this a turn at a time: a session that has
+  // not answered anything reports no model at all, and one whose model was just changed from this
+  // very menu goes on reporting the old one until the next turn. Neither is what the person who just
+  // changed it is looking at. The screen is, and the buffer behind it keeps taking writes whether or
+  // not this view is the one showing (the same reading the waiting banner is built on).
+  //
+  // Claude needs none of this: it writes a statusline the app already receives.
+  useEffect(() => {
+    if (modelInfo.cli !== "codex") return;
+    const read = (): void => {
+      const screen = sessionBus.screenOf(sessionId);
+      if (screen === null) return;
+      const now = codexStatusModel(screen.split("\n"));
+      if (now === null) return; // a picker is up over the bar, or codex is still starting
+      setModelInfo((prev) =>
+        prev.model === now.model && prev.effort === now.effort ? prev : { ...prev, ...now }
+      );
+    };
+    read();
+    const timer = setInterval(read, MODEL_POLL_MS);
+    return () => clearInterval(timer);
+  }, [modelInfo.cli, sessionId]);
+
   // What this session's CLI offers. Asked once when the pane opens rather than watched: the answer
   // depends on the account's subscription and its organisation's policy, neither of which changes
   // while someone is looking at a menu, and main keeps it cached per account for the app's life.
@@ -998,10 +1031,11 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         goTerminal(); // codex renamed its rows; its own screen is still up and readable
         return;
       }
+      // The readout follows from codex's own status bar (the poll above), not from a re-read of the
+      // rollout — that is a turn behind and would put the old level back.
       window.api.sessions.write(sessionId, digit); // a digit selects and confirms in one keystroke
-      setTimeout(() => void rereadModel(), MODEL_REREAD_MS);
     },
-    [sendCommand, waitForCodexStep, goTerminal, rereadModel, sessionId]
+    [sendCommand, waitForCodexStep, goTerminal, sessionId]
   );
 
   /**
@@ -1034,9 +1068,8 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         return;
       }
       window.api.sessions.write(sessionId, "\r"); // keep the level it is pointing at
-      setTimeout(() => void rereadModel(), MODEL_REREAD_MS);
     },
-    [sendCommand, waitForCodexStep, goTerminal, rereadModel, sessionId]
+    [sendCommand, waitForCodexStep, goTerminal, sessionId]
   );
 
   const modelSlot = useMemo<ModelControlProps>(

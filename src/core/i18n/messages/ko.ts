@@ -1404,7 +1404,7 @@ export const ko = {
   'conversation.model.effort': 'effort 바꾸기 (터미널에서)',
   'conversation.model.change': '모델과 effort 바꾸기 (터미널에서)',
   'conversation.model.aria': '모델과 effort',
-  'conversation.model.unknown': '모델 확인 중',
+  'conversation.model.unknown': '모델',
   // ConversationPane.tsx — open() answering null, and a transcript that exists but has no turns yet.
   'conversation.unavailable': '이 세션은 아직 기록이 없습니다',
   'conversation.empty': '아직 주고받은 것이 없습니다',
