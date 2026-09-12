@@ -25,6 +25,12 @@ const BUFFER_TRIM_AT = BUFFER_CAP * 1.5
 
 const buffers = new Map<string, string>()
 const listeners = new Map<string, Listener>()
+/** Onlookers. `listeners` holds the one consumer that writes into a terminal and acks, which is what
+ *  the backpressure above is counted against — there can only ever be one of those. These are the
+ *  other way round: any number, told that output happened, acking nothing and consuming nothing. The
+ *  conversation view uses one to notice that the CLI has redrawn, instead of asking on a timer
+ *  whether it has. */
+const observers = new Map<string, Set<Listener>>()
 let initialized = false
 
 export function init(): void {
@@ -36,6 +42,17 @@ export function init(): void {
     else {
       const next = (buffers.get(sessionId) ?? '') + data
       buffers.set(sessionId, next.length > BUFFER_TRIM_AT ? next.slice(-BUFFER_CAP) : next)
+    }
+    // After the consumer, and never able to stop it: an onlooker that throws must not cost the
+    // terminal its output or its ack.
+    const watching = observers.get(sessionId)
+    if (!watching) return
+    for (const fn of watching) {
+      try {
+        fn(data)
+      } catch {
+        // an onlooker's problem is its own
+      }
     }
   })
 }
@@ -53,9 +70,28 @@ export function attach(sessionId: string, listener: Listener): () => void {
   }
 }
 
+/** Be told when a session produces output, without consuming it. Returns an unsubscribe.
+ *
+ *  Deliberately not `attach`: that one is the terminal's, it is a single slot, and what it hands over
+ *  is also what the ack (and so the PTY's backpressure) is counted from. This one is additive and
+ *  owes nothing. */
+export function observe(sessionId: string, fn: Listener): () => void {
+  let set = observers.get(sessionId)
+  if (!set) {
+    set = new Set()
+    observers.set(sessionId, set)
+  }
+  set.add(fn)
+  return () => {
+    set.delete(fn)
+    if (set.size === 0) observers.delete(sessionId)
+  }
+}
+
 export function discard(sessionId: string): void {
   listeners.delete(sessionId)
   buffers.delete(sessionId)
+  observers.delete(sessionId)
 }
 
 // ---- input direction: paste into a session's terminal ----

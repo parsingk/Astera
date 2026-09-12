@@ -165,6 +165,29 @@ export function nextAttentionFor(
   return event.sessionId === paneSessionId ? event.value : undefined;
 }
 
+/**
+ * One reading of the model layered onto what is already known.
+ *
+ * A null model is not "no model" — it is the CLI not having said. codex says it a turn at a time, so
+ * a session that has not answered anything reports nulls while its own screen is showing the model
+ * plainly, and the screen is read separately (codexStatusModel). Letting the silence through would
+ * erase that reading every time the transcript ticks, which is exactly what it did.
+ *
+ * A reading for a different CLI replaces everything: that is a different session's answer arriving,
+ * not a quieter one.
+ */
+export function keepWhatIsKnown<T extends { model: string | null; effort: string | null; cli: unknown }>(
+  prev: T,
+  next: T
+): T {
+  if (next.cli !== prev.cli) return next
+  return {
+    ...next,
+    model: next.model ?? prev.model,
+    effort: next.effort ?? prev.effort
+  };
+}
+
 function isTextPart(part: { type: string; text?: string }): part is { type: "text"; text: string } {
   return part.type === "text";
 }
@@ -265,14 +288,32 @@ const SLASH_SILENCE_MS = 4_000
  *  the cost of giving up early is only that the person finishes on the terminal, while the cost of
  *  pressing into a screen that has not arrived is a keystroke landing somewhere nobody chose. */
 const CODEX_STEP_WAIT_MS = 4_000
-/** How often codex's own status bar is read for the model and level it is running. Only codex needs
- *  it — Claude pushes a statusline of its own — and it is one buffer read and one match, so the rate
- *  is chosen to feel immediate after a change rather than to be cheap. */
-const MODEL_POLL_MS = 2_000
+/** How long between looks while stepping through codex's picker. One buffer read and one match, so
+ *  it can be this short — and it is most of what a person waits through, since every key in that walk
+ *  waits for its screen. */
+const CODEX_STEP_POLL_MS = 120
 
-/** How long to wait before re-reading the model after asking the CLI to switch. It rewrites its
- *  statusline as it goes, but not within the same breath as the command. */
-const MODEL_REREAD_MS = 1_500;
+/** How long after a session stops producing output its status bar is read. Not a polling interval —
+ *  the read is triggered by the output itself — but a settle: a TUI redraws in several chunks, and
+ *  reading between two of them can catch the bar half-rewritten. Short enough to be imperceptible. */
+const MODEL_SETTLE_MS = 60
+
+/** A bar that is already drawn produces no output, so nothing would trigger a first read if this pane
+ *  opened before the terminal it reads from had registered its reader. These are that first read's
+ *  retries — they stop the moment one succeeds, and never run again. */
+const MODEL_OPENING_MS = 200
+const MODEL_OPENING_TRIES = 10
+
+/** How long the button may say a change is on its way before giving up on saying so. Longer than the
+ *  walk's own wait, so an answer that is merely slow still lands while it is still being waited for,
+ *  and short enough that a change the CLI quietly refused stops pretending. */
+const MODEL_BUSY_MAX_MS = 6_000
+
+/** When to look again for a model the CLI was asked to switch to, in order. Several tries rather than
+ *  one long wait: the CLI rewrites its statusline as it goes, and how long that takes is not something
+ *  to guess at once — the answer usually arrives inside the first step, and stopping the moment it
+ *  does is what keeps the button from sitting there after the change already happened. */
+const MODEL_REREAD_STEPS_MS = [250, 350, 500, 900, 1_500];
 
 /** How often a pane with nothing to show asks again whether a transcript has appeared. */
 const UNAVAILABLE_RETRY_MS = 2_000;
@@ -443,7 +484,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       void window.api.conversation
         .model(sessionId)
         .then((info) => {
-          if (isCurrent()) setModelInfo(info);
+          if (isCurrent()) setModelInfo((prev) => keepWhatIsKnown(prev, info));
         })
         .catch(() => {});
     };
@@ -923,6 +964,20 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     onGoTerminal();
   }, [onGoTerminal]);
 
+  /** A change is on its way and the readout has not caught up — the button says so, because driving a
+   *  CLI and reading it back takes long enough that a silent button looks like a missed press. */
+  const [modelBusy, setModelBusy] = useState(false);
+
+  // Whatever the change was, the readout moving is what it was waiting for.
+  useEffect(() => setModelBusy(false), [modelLine]);
+
+  // ...and it never waits forever: a CLI can refuse a switch on a screen this pane cannot see.
+  useEffect(() => {
+    if (!modelBusy) return;
+    const timer = setTimeout(() => setModelBusy(false), MODEL_BUSY_MAX_MS);
+    return () => clearTimeout(timer);
+  }, [modelBusy]);
+
   // What codex is running, read off the bar it keeps at the bottom of its own screen.
   //
   // The app's other source is the rollout, and it records this a turn at a time: a session that has
@@ -931,21 +986,41 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // changed it is looking at. The screen is, and the buffer behind it keeps taking writes whether or
   // not this view is the one showing (the same reading the waiting banner is built on).
   //
+  // Read when the screen changes, not on a clock. The output that redraws that bar already arrives
+  // here — sessionBus carries it to the terminal — so this listens in on it. A timer would be a
+  // choice between a readout that lags and work done every tick forever; this is neither, and it
+  // answers a change made on the terminal just as promptly as one made from this menu.
+  //
   // Claude needs none of this: it writes a statusline the app already receives.
   useEffect(() => {
     if (modelInfo.cli !== "codex") return;
-    const read = (): void => {
+    const read = (): boolean => {
       const screen = sessionBus.screenOf(sessionId);
-      if (screen === null) return;
+      if (screen === null) return false; // no terminal registered for this session yet
       const now = codexStatusModel(screen.split("\n"));
-      if (now === null) return; // a picker is up over the bar, or codex is still starting
+      if (now === null) return false; // a picker is up over the bar, or codex is still starting
       setModelInfo((prev) =>
         prev.model === now.model && prev.effort === now.effort ? prev : { ...prev, ...now }
       );
+      return true;
     };
-    read();
-    const timer = setInterval(read, MODEL_POLL_MS);
-    return () => clearInterval(timer);
+    // The bar is already there — this pane may have opened long after it was drawn, and a drawn bar
+    // sends nothing that would wake the listener below.
+    let left = MODEL_OPENING_TRIES;
+    const opening = setInterval(() => {
+      if (read() || --left <= 0) clearInterval(opening);
+    }, MODEL_OPENING_MS);
+    if (read()) clearInterval(opening);
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const stop = sessionBus.observe(sessionId, () => {
+      clearTimeout(settle);
+      settle = setTimeout(read, MODEL_SETTLE_MS);
+    });
+    return () => {
+      clearInterval(opening);
+      clearTimeout(settle);
+      stop();
+    };
   }, [modelInfo.cli, sessionId]);
 
   // What this session's CLI offers. Asked once when the pane opens rather than watched: the answer
@@ -967,14 +1042,30 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     };
   }, [sessionId]);
 
-  /** Read the model and effort line again, after something that changes it. */
-  const rereadModel = useCallback(async (): Promise<void> => {
-    try {
-      setModelInfo(await window.api.conversation.model(sessionId));
-    } catch {
-      // The readout keeps what it had; nothing here is worth interrupting a person for.
-    }
-  }, [sessionId]);
+  /**
+   * Read the model back until `moved` says it has, and answer whether it did.
+   *
+   * Each read is applied as it comes, so the readout follows the first one that carries the change
+   * rather than the last one in the ladder. False means every look still showed the old value, which
+   * is the only evidence available that a switch is waiting on the CLI's own screen instead.
+   */
+  const rereadModelUntil = useCallback(
+    async (moved: (info: { model: string | null; effort: string | null }) => boolean) => {
+      for (const delay of MODEL_REREAD_STEPS_MS) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        let info: Awaited<ReturnType<typeof window.api.conversation.model>>;
+        try {
+          info = await window.api.conversation.model(sessionId);
+        } catch {
+          continue; // the readout keeps what it had; nothing here is worth interrupting a person for
+        }
+        setModelInfo((prev) => keepWhatIsKnown(prev, info));
+        if (moved(info)) return true;
+      }
+      return false;
+    },
+    [sessionId]
+  );
 
   /** Wait until the screen codex is showing is the one named, and answer with its lines. Null when it
    *  never arrives — the caller's cue to stop pressing keys and hand over to the terminal. */
@@ -988,7 +1079,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
           if (codexPickerStep(rows) === which) return rows;
         }
         if (Date.now() >= deadline) return null;
-        await new Promise((resolve) => setTimeout(resolve, PROMPT_POLL_MS));
+        await new Promise((resolve) => setTimeout(resolve, CODEX_STEP_POLL_MS));
       }
     },
     [sessionId]
@@ -1009,25 +1100,30 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   const pickCodexEffort = useCallback(
     async (level: string): Promise<void> => {
       const row = CODEX_EFFORT_ROWS[level];
+      setModelBusy(true);
       if (row === undefined) {
         // `max` and `ultra` sit behind codex's own `More reasoning…` row, a screen further in.
+        setModelBusy(false);
         sendCommand("/model");
         goTerminal();
         return;
       }
       sendCommand("/model");
       if ((await waitForCodexStep("model")) === null) {
+        setModelBusy(false);
         goTerminal();
         return;
       }
       window.api.sessions.write(sessionId, "\r"); // keep the model it is on
       const rows = await waitForCodexStep("effort");
       if (rows === null) {
+        setModelBusy(false);
         goTerminal();
         return;
       }
       const digit = codexDigitFor(rows, row);
       if (digit === null) {
+        setModelBusy(false);
         goTerminal(); // codex renamed its rows; its own screen is still up and readable
         return;
       }
@@ -1051,19 +1147,23 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
    */
   const pickCodexModel = useCallback(
     async (id: string): Promise<void> => {
+      setModelBusy(true);
       sendCommand("/model");
       const rows = await waitForCodexStep("model");
       if (rows === null) {
+        setModelBusy(false);
         goTerminal();
         return;
       }
       const digit = codexDigitFor(rows, id);
       if (digit === null) {
+        setModelBusy(false);
         goTerminal();
         return;
       }
       window.api.sessions.write(sessionId, digit);
       if ((await waitForCodexStep("effort")) === null) {
+        setModelBusy(false);
         goTerminal();
         return;
       }
@@ -1081,23 +1181,17 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
           return;
         }
         const was = modelInfo.model;
+        setModelBusy(true);
         sendCommand(`/model ${key}`);
-        // `/model` writes a new statusline as it switches, but not instantly.
-        setTimeout(() => {
-          void window.api.conversation
-            .model(sessionId)
-            .then((info) => {
-              setModelInfo(info);
-              // Switching to another family asks first, because the conversation is cached for the
-              // model it is on — and it asks on the CLI's own screen, which is not this one. Nothing
-              // here can tell in advance which switches ask, so the evidence is that the model did
-              // not move: either something is waiting over there, or it was already this model and
-              // the notice costs a glance.
-              // And cleared when it did move: a switch that went through has nothing to explain.
-              setSlashSent(info.model === was);
-            })
-            .catch(() => {});
-        }, MODEL_REREAD_MS);
+        // Switching to another family asks first, because the conversation is cached for the model it
+        // is on — and it asks on the CLI's own screen, which is not this one. Nothing here can tell in
+        // advance which switches ask, so the evidence is that the model never moved: either something
+        // is waiting over there, or it was already this model and the notice costs a glance. Cleared
+        // when it did move: a switch that went through has nothing to explain.
+        void rereadModelUntil((info) => info.model !== was).then((moved) => {
+          setModelBusy(false);
+          setSlashSent(!moved);
+        });
       },
       onPickEffort: (key) => {
         if (modelInfo.cli === 'codex') {
@@ -1107,8 +1201,10 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         // Claude's own screen is a slider, but the command takes the name outright, so there is
         // nothing to drive (measured 2026-09-12: `/effort high` answered "Set effort level to high").
         // It is saved as the default for new sessions, which is what that screen's Enter does too.
+        const was = modelInfo.effort;
+        setModelBusy(true);
         sendCommand(`/effort ${key}`);
-        setTimeout(() => void rereadModel(), MODEL_REREAD_MS);
+        void rereadModelUntil((info) => info.effort !== was).then(() => setModelBusy(false));
       },
       onChangeEffort: () => {
         // What the rows above do not cover: Claude's `s` (this session only) and codex's Max and
@@ -1116,6 +1212,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         sendCommand(modelInfo.cli === 'codex' ? "/model" : "/effort");
         goTerminal();
       },
+      busy: modelBusy,
       effortLabel: t("conversation.model.effortMore"),
       cli: modelInfo.cli,
       effortChoices: effortChoicesOf(models, modelInfo.model, modelInfo.cli),
@@ -1125,12 +1222,13 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       modelLine,
       modelInfo.model,
       modelInfo.cli,
+      modelBusy,
       models,
       sendCommand,
       goTerminal,
       pickCodexModel,
       pickCodexEffort,
-      rereadModel,
+      rereadModelUntil,
       sessionId,
       t
     ]

@@ -3,6 +3,7 @@ import type { AppendMessage } from '@assistant-ui/react'
 import {
   toThreadMessages,
   mergeTurns,
+  keepWhatIsKnown,
   nextTurnsFor,
   shouldResetPaging,
   nextAttentionFor,
@@ -272,5 +273,36 @@ describe('modelLineOf', () => {
   it('draws nothing at all when the CLI has not said what it is running', () => {
     expect(modelLineOf({ model: null, effort: 'xhigh' }, format)).toBeNull()
     expect(modelLineOf({ model: null, effort: null }, format)).toBeNull()
+  })
+})
+
+describe('keepWhatIsKnown', () => {
+  const codex = (model: string | null, effort: string | null) => ({ model, effort, cli: 'codex' as const })
+
+  // The one this exists for: codex records its model a turn at a time, so between turns the reading
+  // that goes through IPC is a pair of nulls while its own screen says the model plainly. Letting the
+  // silence through erased the screen's reading every time the transcript ticked.
+  it('keeps what is known when the new reading says nothing', () => {
+    expect(keepWhatIsKnown(codex('gpt-5.6-sol', 'low'), codex(null, null))).toEqual(
+      codex('gpt-5.6-sol', 'low')
+    )
+  })
+
+  it('takes a reading that does say something', () => {
+    expect(keepWhatIsKnown(codex('gpt-5.6-sol', 'low'), codex('gpt-5.6-terra', 'medium'))).toEqual(
+      codex('gpt-5.6-terra', 'medium')
+    )
+  })
+
+  it('fills in one field without losing the other', () => {
+    expect(keepWhatIsKnown(codex('gpt-5.6-sol', 'low'), codex('gpt-5.6-terra', null))).toEqual(
+      codex('gpt-5.6-terra', 'low')
+    )
+  })
+
+  // A different CLI is a different session's answer arriving, not a quieter one.
+  it('replaces everything when the CLI itself is different', () => {
+    const claude = { model: null, effort: null, cli: 'claude' as const }
+    expect(keepWhatIsKnown(codex('gpt-5.6-sol', 'low'), claude)).toEqual(claude)
   })
 })

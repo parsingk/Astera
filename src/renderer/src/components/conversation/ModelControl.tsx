@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import { Loader2Icon } from "lucide-react";
 import { ContextMenu, type MenuItem } from "../ContextMenu";
 import { useI18n } from "../../i18n/I18nProvider";
 
@@ -31,6 +32,10 @@ export interface ModelControlProps {
   /** The label for that row, which differs by CLI: Claude's screen sets effort alone, codex's sets
    *  model and effort together. */
   effortLabel: string;
+  /** A change has been sent and the readout has not caught up. It takes a moment — the CLI has to be
+   *  driven and then read back — and without a sign of it the button looks like it ignored the
+   *  press. */
+  busy?: boolean;
 }
 
 /** The model and effort readout that sits in the composer, right of the attachment button. */
@@ -41,7 +46,8 @@ export function ModelControl({
   effortChoices,
   onPickEffort,
   onChangeEffort,
-  effortLabel
+  effortLabel,
+  busy = false
 }: ModelControlProps): ReactNode {
   const { t } = useI18n();
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
@@ -64,15 +70,17 @@ export function ModelControl({
     <>
       <button
         type="button"
-        className="text-muted-foreground hover:text-foreground max-w-56 truncate px-1.5 py-0.5 text-xs"
+        className="text-muted-foreground hover:text-foreground flex max-w-56 items-center gap-1 px-1.5 py-0.5 text-xs"
         aria-label={t("conversation.model.aria")}
         title={t("conversation.model.aria")}
+        aria-busy={busy || undefined}
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
           setAt({ x: Math.round(r.left), y: Math.round(r.top) });
         }}
       >
-        {line ?? t("conversation.model.unknown")}
+        {busy && <Loader2Icon className="size-3 shrink-0 animate-spin" aria-hidden="true" />}
+        <span className="truncate">{line ?? t("conversation.model.unknown")}</span>
       </button>
       {at && <ContextMenu x={at.x} y={at.y} items={items} onClose={() => setAt(null)} />}
     </>
