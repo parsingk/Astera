@@ -28,7 +28,12 @@ import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.a
 const MemoThread = memo(Thread);
 import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
-import { PendingBanner, QueuedNotice, SlashCommandNotice } from "./PendingBanner";
+import {
+  PendingBanner,
+  QueuedNotice,
+  RunningNotice,
+  SlashCommandNotice
+} from "./PendingBanner";
 import { ModelControl, type ModelControlProps } from "./ModelControl";
 import {
   CODEX_EFFORT_ROWS,
@@ -50,6 +55,12 @@ import { fileTokenAt } from "../../../../core/files/fileMatch";
 import { draftOf, forgetDraft, keepDraft } from "./drafts";
 import { promptLinesOf } from "../../../../core/history/promptLines";
 import { queuedMessagesOf } from "../../../../core/history/queuedMessages";
+import {
+  isAwaitingReply,
+  sendPending,
+  unsettledSends,
+  type PendingSend
+} from "../../../../core/history/pendingSends";
 import {
   promptChoicesOf,
   stepToward,
@@ -310,6 +321,12 @@ const MODEL_OPENING_TRIES = 10
  *  Thread, which mounts a moment after this pane does. */
 const DRAFT_RESTORE_MS = 80
 const DRAFT_RESTORE_TRIES = 25
+
+/** How long a message shown before the transcript carries it may stay that way, and how often that is
+ *  checked. A message can be swallowed by a dialog the CLI had open and never recorded at all, and a
+ *  bubble that stayed forever would be a worse lie than the delay it exists to cover. */
+const PENDING_MAX_MS = 60_000
+const PENDING_SWEEP_MS = 5_000
 
 /** How long the button may say a change is on its way before giving up on saying so. Longer than the
  *  walk's own wait, so an answer that is merely slow still lands while it is still being waited for,
@@ -698,7 +715,37 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     return () => observer.disconnect();
   }, [status]);
 
-  const messages = useMemo(() => toThreadMessages(turns), [turns]);
+  /** Sent, and not yet seen come back in the transcript — see core/history/pendingSends.ts. */
+  const [pending, setPending] = useState<readonly PendingSend[]>([]);
+
+  // Settled by the transcript growing the turn, and given up on when it never does. Both are decided
+  // in one place; this only re-decides it when there is something to decide.
+  useEffect(() => {
+    if (pending.length === 0) return;
+    const settle = (): void =>
+      setPending((prev) => {
+        const next = unsettledSends(prev, turns, Date.now(), PENDING_MAX_MS);
+        return next.length === prev.length ? prev : next;
+      });
+    settle();
+    const timer = setInterval(settle, PENDING_SWEEP_MS);
+    return () => clearInterval(timer);
+  }, [pending, turns]);
+
+  const messages = useMemo(
+    () => [
+      ...toThreadMessages(turns),
+      // The person's own words, shown before the CLI writes them down. The transcript is still the
+      // only place a turn really exists — this is a copy that lives exactly as long as it takes the
+      // real one to arrive.
+      ...pending.map((p) => ({
+        id: p.id,
+        role: "user" as const,
+        content: [{ type: "text" as const, text: p.text }]
+      }))
+    ],
+    [turns, pending]
+  );
 
   const onNew = useCallback(
     async (message: AppendMessage) => {
@@ -707,6 +754,10 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       // it comes back through the transcript like every other turn, and adding it here would show
       // it twice.
       const text = composerTextOf(message.content);
+      // Shown straight away. Without this the message is nowhere until the CLI writes it down — a
+      // moment for Claude, not until the turn produces something for codex — and the only honest
+      // reading of that gap is that the send did not work.
+      setPending((prev) => sendPending(prev, turns, text, crypto.randomUUID(), Date.now()));
       forgetDraft(sessionId); // it was sent; there is nothing left to put back
       composerValueRef.current = null;
       if (slashSilenceRef.current !== null) clearTimeout(slashSilenceRef.current);
@@ -719,7 +770,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       window.api.sessions.write(sessionId, paste);
       setTimeout(() => window.api.sessions.write(sessionId, submit), SUBMIT_GAP_MS);
     },
-    [sessionId]
+    [sessionId, turns]
   );
 
   // The margin on this is what keeps it off the composer: an empty thread centres its whole column,
@@ -1400,6 +1451,8 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       />
     ) : queued.length > 0 ? (
       <QueuedNotice messages={queued} onGoTerminal={goTerminal} />
+    ) : isAwaitingReply(turns, pending.length) ? (
+      <RunningNotice working={attention === "working"} />
     ) : slashSent ? (
       <SlashCommandNotice onGoTerminal={goTerminal} />
     ) : null;

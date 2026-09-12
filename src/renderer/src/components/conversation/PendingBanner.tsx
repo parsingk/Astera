@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { Loader2Icon } from "lucide-react";
 import { Button } from "../ui/button";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { PromptChoice } from "../../../../core/history/promptChoices";
@@ -147,6 +148,27 @@ export function QueuedNotice({
       <Button size="sm" variant="outline" className="shrink-0" onClick={onGoTerminal}>
         {t("conversation.queued.edit")}
       </Button>
+    </div>
+  );
+}
+
+/** The CLI has the person's last message and has not answered it yet.
+ *
+ *  Quiet, and it says which of the two it is when the app can tell them apart: `working` means a tool
+ *  is running, which only Claude reports (it has hooks; codex has none), and everything else is the
+ *  wait before the first words arrive.
+ */
+export function RunningNotice({ working }: { working: boolean }): ReactNode {
+  const { t } = useI18n();
+
+  return (
+    <div
+      role="status"
+      data-slot="conversation-running"
+      className="text-muted-foreground flex items-center gap-2 px-4 py-1.5 text-sm"
+    >
+      <Loader2Icon className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+      <span>{t(working ? "conversation.running.working" : "conversation.running.thinking")}</span>
     </div>
   );
 }
