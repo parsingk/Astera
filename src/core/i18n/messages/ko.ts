@@ -1395,7 +1395,7 @@ export const ko = {
   'conversation.pending.action': '선택지 보기',
   'conversation.pending.pick': '아래에서 고르면 그대로 전해집니다. 직접 입력해도 됩니다.',
   'conversation.pending.terminal': '터미널로 이동',
-  'conversation.queued.title': '{count}개가 차례를 기다립니다',
+  'conversation.queued.title': '메시지가 대기 중입니다',
   'conversation.queued.edit': '터미널에서 수정',
   'conversation.slash.title': '슬래시 명령은 터미널에서 진행됩니다',
   'conversation.slash.body': '명령이 여는 창은 터미널에 있어서 여기서는 보이지 않습니다.',

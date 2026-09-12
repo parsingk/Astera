@@ -135,9 +135,7 @@ export function QueuedNotice({
       className="border-border/60 text-muted-foreground flex items-start justify-between gap-3 rounded-(--composer-radius) border px-4 py-2.5 text-sm"
     >
       <div className="min-w-0">
-        <p className="text-foreground font-medium">
-          {t("conversation.queued.title", { count: String(messages.length) })}
-        </p>
+        <p className="text-foreground font-medium">{t("conversation.queued.title")}</p>
         <ol className="mt-1 flex flex-col gap-0.5">
           {messages.map((text, i) => (
             <li key={`${i}-${text}`} className="truncate">
