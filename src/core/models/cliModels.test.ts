@@ -31,28 +31,41 @@ describe('modelChoicesOf', () => {
 describe('effortChoicesOf', () => {
   // The reason this is per model rather than one list: they really do differ.
   it('offers the levels the model it is on takes, not every level there is', () => {
-    expect(effortChoicesOf(codex, 'gpt-5.5').map((c) => c.key)).toEqual([
+    expect(effortChoicesOf(claude, 'Opus (1M context)', 'claude').map((c) => c.key)).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max'
+    ])
+    expect(effortChoicesOf([claude[2]], 'Haiku', 'claude')).toEqual([])
+  })
+
+  // codex's own picker reaches four of the six; the other two are a screen further in, and a row that
+  // can only send someone to the terminal is worse than no row.
+  it('offers codex only the levels its picker can be answered on', () => {
+    expect(effortChoicesOf(codex, 'gpt-6-astra', 'codex').map((c) => c.key)).toEqual([
       'low',
       'medium',
       'high',
       'xhigh'
     ])
-    expect(effortChoicesOf(codex, 'gpt-6-astra').map((c) => c.key)).toContain('ultra')
+    expect(effortChoicesOf(codex, 'gpt-6-astra', 'claude').map((c) => c.key)).toContain('ultra')
   })
 
   it('matches what the CLI reports, whether that is an id or a display name', () => {
-    expect(effortChoicesOf(claude, 'Opus (1M context)')).toHaveLength(5)
-    expect(effortChoicesOf(claude, 'opus[1m]')).toHaveLength(5)
+    expect(effortChoicesOf(claude, 'Opus (1M context)', 'claude')).toHaveLength(5)
+    expect(effortChoicesOf(claude, 'opus[1m]', 'claude')).toHaveLength(5)
   })
 
   it('falls back to the default model when what it reports is not in the list', () => {
-    expect(effortChoicesOf(codex, 'gpt-9-unheard-of').map((c) => c.key)).toContain('ultra')
+    expect(effortChoicesOf(codex, 'gpt-9-unheard-of', 'claude').map((c) => c.key)).toContain('ultra')
   })
 
   // Haiku takes no effort at all, and rows that would be refused are worse than no rows.
   it('offers nothing for a model that takes no effort, and nothing for no list', () => {
-    expect(effortChoicesOf([claude[2]], 'Haiku')).toEqual([])
-    expect(effortChoicesOf([], 'anything')).toEqual([])
+    expect(effortChoicesOf([claude[2]], 'Haiku', 'claude')).toEqual([])
+    expect(effortChoicesOf([], 'anything', 'claude')).toEqual([])
   })
 })
 

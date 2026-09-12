@@ -1085,7 +1085,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
       },
       effortLabel: t("conversation.model.effortMore"),
       cli: modelInfo.cli,
-      effortChoices: effortChoicesOf(models, modelInfo.model),
+      effortChoices: effortChoicesOf(models, modelInfo.model, modelInfo.cli),
       choices: modelChoicesOf(models)
     }),
     [

@@ -31,16 +31,24 @@ export function modelChoicesOf(models: readonly ModelDescriptor[]): CliModelChoi
  * (`gpt-5.6-sol`), so both are compared. A model the list does not carry falls back to the one the
  * CLI calls its default, and then to nothing — an empty list draws no effort rows rather than rows
  * that would be refused.
+ *
+ * On codex the levels are narrowed again, to the ones its picker puts on the screen this app can
+ * answer: `max` and `ultra` are real levels of the model, and codex keeps them behind a
+ * `More reasoning…` row one screen further in. A row that can only say "go to the terminal" is worse
+ * than no row, and the menu already ends with one that says exactly that.
  */
 export function effortChoicesOf(
   models: readonly ModelDescriptor[],
-  current: string | null
+  current: string | null,
+  cli: 'claude' | 'codex' | null
 ): CliModelChoice[] {
   const wanted = current?.trim().toLowerCase() ?? ''
   const match =
     models.find((m) => m.id.toLowerCase() === wanted || m.name.toLowerCase() === wanted) ??
     models.find((m) => m.isDefault === true)
-  return (match?.effortLevels ?? []).map((level) => ({ key: level, label: level }))
+  const levels = match?.effortLevels ?? []
+  const reachable = cli === 'codex' ? levels.filter((l) => l in CODEX_EFFORT_ROWS) : levels
+  return reachable.map((level) => ({ key: level, label: level }))
 }
 
 /**
