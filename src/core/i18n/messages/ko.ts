@@ -1399,6 +1399,8 @@ export const ko = {
   'conversation.slash.body': '명령이 여는 창은 터미널에 있어서 여기서는 보이지 않습니다.',
   'conversation.slash.action': '터미널로 이동',
   'conversation.model.line': '{model} · {effort}',
+  'conversation.model.effortRow': 'effort: {level}',
+  'conversation.model.effortMore': '더 보기 (터미널)',
   'conversation.model.effort': 'effort 바꾸기 (터미널에서)',
   'conversation.model.change': '모델과 effort 바꾸기 (터미널에서)',
   'conversation.model.aria': '모델과 effort',

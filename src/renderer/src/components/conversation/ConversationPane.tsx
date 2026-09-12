@@ -31,9 +31,12 @@ import { ToolRow, ToolRowGroup } from "./ToolRow";
 import { PendingBanner, SlashCommandNotice } from "./PendingBanner";
 import { ModelControl, type ModelControlProps } from "./ModelControl";
 import {
+  CLAUDE_EFFORT_CHOICES,
   CLAUDE_MODEL_CHOICES,
+  CODEX_EFFORT_CHOICES,
   CODEX_MODEL_CHOICES
 } from "../../../../core/models/cliModels";
+import { codexDigitFor, codexPickerStep } from "../../../../core/models/codexPicker";
 import { CompletionMenu, type CompletionRow } from "./CompletionMenu";
 import {
   filterSlashCommands,
@@ -258,6 +261,10 @@ const SLASH_SILENCE_MS = 4_000
  *  Generous on purpose: a keystroke that arrives early lands in the composer instead, where it is one
  *  visible stray character rather than a wrong choice. */
 const CODEX_PICKER_MS = 1_500
+/** How long to wait for one of codex's two picker screens to be the one on screen. Generous, because
+ *  the cost of giving up early is only that the person finishes on the terminal, while the cost of
+ *  pressing into a screen that has not arrived is a keystroke landing somewhere nobody chose. */
+const CODEX_STEP_WAIT_MS = 4_000
 
 /** How long to wait before re-reading the model after asking the CLI to switch. It rewrites its
  *  statusline as it goes, but not within the same breath as the command. */
@@ -908,6 +915,69 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     onGoTerminal();
   }, [onGoTerminal]);
 
+  /** Read the model and effort line again, after something that changes it. */
+  const rereadModel = useCallback(async (): Promise<void> => {
+    try {
+      setModelInfo(await window.api.conversation.model(sessionId));
+    } catch {
+      // The readout keeps what it had; nothing here is worth interrupting a person for.
+    }
+  }, [sessionId]);
+
+  /** Wait until the screen codex is showing is the one named, and answer with its lines. Null when it
+   *  never arrives — the caller's cue to stop pressing keys and hand over to the terminal. */
+  const waitForCodexStep = useCallback(
+    async (which: "model" | "effort"): Promise<string[] | null> => {
+      const deadline = Date.now() + CODEX_STEP_WAIT_MS;
+      for (;;) {
+        const screen = sessionBus.screenOf(sessionId);
+        if (screen !== null) {
+          const rows = screen.split("\n");
+          if (codexPickerStep(rows) === which) return rows;
+        }
+        if (Date.now() >= deadline) return null;
+        await new Promise((resolve) => setTimeout(resolve, PROMPT_POLL_MS));
+      }
+    },
+    [sessionId]
+  );
+
+  /**
+   * Set codex's reasoning level from here.
+   *
+   * codex has no `/effort`. `/model` asks two questions on one command — the model, then the
+   * reasoning level — so reaching the second means answering the first, and the answer that changes
+   * nothing is Enter on the model it is already on.
+   *
+   * Every key waits for the screen it is meant for and is chosen from that screen's own rows. A
+   * counted sequence would be three guesses about a terminal this cannot see, and the key it would
+   * guess wrong about is the one that confirms. When a screen does not arrive, or the level is not
+   * among its rows, nothing further is pressed and the question is left up for a person.
+   */
+  const pickCodexEffort = useCallback(
+    async (label: string): Promise<void> => {
+      sendCommand("/model");
+      if ((await waitForCodexStep("model")) === null) {
+        goTerminal();
+        return;
+      }
+      window.api.sessions.write(sessionId, "\r"); // keep the model it is on
+      const rows = await waitForCodexStep("effort");
+      if (rows === null) {
+        goTerminal();
+        return;
+      }
+      const digit = codexDigitFor(rows, label);
+      if (digit === null) {
+        goTerminal(); // codex renamed its rows; its own screen is still up and readable
+        return;
+      }
+      window.api.sessions.write(sessionId, digit); // a digit selects and confirms in one keystroke
+      setTimeout(() => void rereadModel(), MODEL_REREAD_MS);
+    },
+    [sendCommand, waitForCodexStep, goTerminal, rereadModel, sessionId]
+  );
+
   const modelSlot = useMemo<ModelControlProps>(
     () => ({
       line: modelLine,
@@ -940,17 +1010,37 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
             .catch(() => {});
         }, MODEL_REREAD_MS);
       },
+      onPickEffort: (key) => {
+        if (!modelInfo.canPick) {
+          void pickCodexEffort(key);
+          return;
+        }
+        // Claude's own screen is a slider, but the command takes the name outright, so there is
+        // nothing to drive (measured — CLAUDE_EFFORT_CHOICES carries the reading).
+        sendCommand(`/effort ${key}`);
+        setTimeout(() => void rereadModel(), MODEL_REREAD_MS);
+      },
       onChangeEffort: () => {
-        // Claude's `/effort` opens a slider of its own — low through ultracode — and codex's `/model`
-        // opens a picker that sets both. Neither takes an argument, so there is nothing to set from
-        // here: open the CLI's own screen and take the person to it rather than drive it blind.
+        // What the rows above do not cover: Claude's `s` (this session only) and codex's Max and
+        // Ultra, both of which live one screen further in. Open the CLI's own screen for those.
         sendCommand(modelInfo.canPick ? "/effort" : "/model");
         goTerminal();
       },
-      effortLabel: t(modelInfo.canPick ? "conversation.model.effort" : "conversation.model.change"),
+      effortLabel: t("conversation.model.effortMore"),
+      effortChoices: modelInfo.canPick ? CLAUDE_EFFORT_CHOICES : CODEX_EFFORT_CHOICES,
       choices: modelInfo.canPick ? CLAUDE_MODEL_CHOICES : CODEX_MODEL_CHOICES
     }),
-    [modelLine, modelInfo.model, modelInfo.canPick, sendCommand, goTerminal, sessionId, t]
+    [
+      modelLine,
+      modelInfo.model,
+      modelInfo.canPick,
+      sendCommand,
+      goTerminal,
+      pickCodexEffort,
+      rereadModel,
+      sessionId,
+      t
+    ]
   );
 
   // An answer that is actually being waited on outranks everything; after that, a list being typed

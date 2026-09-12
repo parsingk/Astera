@@ -18,7 +18,11 @@ export interface ModelControlProps {
   /** The models this session can be switched to, in the CLI's own order. Empty draws no rows. */
   choices: readonly ModelChoice[];
   onPickModel: (key: string) => void;
-  /** Open the CLI's own screen for what cannot be set from here, and go to the terminal. */
+  /** The reasoning levels this session can be set to, in the CLI's own order. Empty draws no rows. */
+  effortChoices: readonly ModelChoice[];
+  onPickEffort: (key: string) => void;
+  /** Open the CLI's own screen for what these rows do not cover — codex keeps Max and Ultra behind a
+   *  further screen — and go to the terminal. */
   onChangeEffort: () => void;
   /** The label for that row, which differs by CLI: Claude's screen sets effort alone, codex's sets
    *  model and effort together. */
@@ -30,15 +34,25 @@ export function ModelControl({
   line,
   choices,
   onPickModel,
+  effortChoices,
+  onPickEffort,
   onChangeEffort,
   effortLabel
 }: ModelControlProps): ReactNode {
   const { t } = useI18n();
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
 
+  // One flat menu, models first and reasoning levels after a rule. A submenu would read better and
+  // ContextMenu has none; a prefix on each level's label says which half of the menu it belongs to
+  // without one.
   const items: MenuItem[] = [
     ...choices.map((choice): MenuItem => ({ label: choice.label, onSelect: () => onPickModel(choice.key) })),
-    ...(choices.length > 0 ? (["separator"] as MenuItem[]) : []),
+    ...(choices.length > 0 && effortChoices.length > 0 ? (["separator"] as MenuItem[]) : []),
+    ...effortChoices.map((choice): MenuItem => ({
+      label: t("conversation.model.effortRow", { level: choice.label }),
+      onSelect: () => onPickEffort(choice.key)
+    })),
+    ...(effortChoices.length > 0 ? (["separator"] as MenuItem[]) : []),
     { label: effortLabel, onSelect: onChangeEffort }
   ];
 

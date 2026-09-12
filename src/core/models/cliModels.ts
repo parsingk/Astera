@@ -41,3 +41,43 @@ export const CODEX_MODEL_CHOICES: readonly CliModelChoice[] = [
   { key: '4', label: 'gpt-5.6-luna' },
   { key: '5', label: 'gpt-5.5' }
 ]
+
+/**
+ * What Claude's `/effort` takes. Its own screen is a slider rather than a list — `low medium high
+ * xhigh max ultracode`, moved with the arrow keys — but the command also takes the name outright, so
+ * the pane never has to drive that slider (both measured 2026-09-12: `/effort high` answered "Set
+ * effort level to high").
+ *
+ * It is saved as the default for new sessions, which is what Claude's own screen does on Enter too;
+ * the screen's `s` key, which would change this session alone, has no spoken form and stays there.
+ *
+ * Hand-kept, with the same caveat as CLAUDE_MODEL_CHOICES: a level added upstream is missing until
+ * someone adds it, and one removed answers with the CLI's own error where it can be read.
+ */
+export const CLAUDE_EFFORT_CHOICES: readonly CliModelChoice[] = [
+  { key: 'low', label: 'low' },
+  { key: 'medium', label: 'medium' },
+  { key: 'high', label: 'high' },
+  { key: 'xhigh', label: 'xhigh' },
+  { key: 'max', label: 'max' },
+  { key: 'ultracode', label: 'ultracode' }
+]
+
+/**
+ * What codex calls its reasoning levels. codex has no `/effort`: `/model` asks two questions in a
+ * row, the model first and the reasoning level second, and the level is the second screen's rows.
+ *
+ * The key is the **name** on that screen, not a digit, and the digit is read off the screen when the
+ * screen is up (codexDigitFor in ./codexPicker.ts). So unlike CODEX_MODEL_CHOICES this list going
+ * stale cannot press the wrong row — a name that is no longer there presses nothing.
+ *
+ * codex's fifth row, `More reasoning…`, opens a further screen for Max and Ultra. It is left out
+ * deliberately: answering it would need a third screen driven from here, and the menu already offers
+ * the terminal for what it does not cover.
+ */
+export const CODEX_EFFORT_CHOICES: readonly CliModelChoice[] = [
+  { key: 'Low', label: 'Low' },
+  { key: 'Medium', label: 'Medium' },
+  { key: 'High', label: 'High' },
+  { key: 'Extra high', label: 'Extra high' }
+]
