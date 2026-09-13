@@ -23,6 +23,15 @@
 - 複数の `claude` / `codex` セッションを、画面を分割して並行して作業
 - プロジェクトごとのターミナル
 
+**会話画面**
+- セッションをターミナルとしても、ふつうのチャット UI としても見られます。どちらも同じセッションで、
+  見え方が違うだけです — セッション右上でいつでも切り替え、**設定 → 一般**で既定を決めます
+- ファイルをドロップするか画像を貼り付けると、そのパスがメッセージに入ります
+
+<div align="center">
+<img src="assets/conversation.jpg" width="820" alt="The same four sessions shown as chat threads in a 2x2 grid — three Claude Code and one Codex, each with its own composer, model and reasoning effort" />
+</div>
+
 **アカウント**
 - ベンダーごとに複数のアカウントを持ち、それぞれを専用の `CLAUDE_CONFIG_DIR` / `CODEX_HOME` で隔離
 - **アカウントローリング:** セッションが利用量の上限に達すると、Astera がトランスクリプトから

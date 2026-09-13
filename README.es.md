@@ -23,6 +23,16 @@
 - Varias sesiones `claude` / `codex`, trabajadas en paneles divididos
 - Una terminal por proyecto
 
+**Vista de conversación**
+- Una sesión puede verse como la terminal en la que corre, o como una interfaz de chat normal. Es la
+  misma sesión en ambos casos: se cambia desde la parte superior derecha de cualquier sesión, y el
+  valor por defecto está en **Ajustes → General**
+- Arrastra un archivo o pega una imagen y su ruta entra en el mensaje
+
+<div align="center">
+<img src="assets/conversation.jpg" width="820" alt="The same four sessions shown as chat threads in a 2x2 grid — three Claude Code and one Codex, each with its own composer, model and reasoning effort" />
+</div>
+
 **Cuentas**
 - Varias cuentas por proveedor, cada una aislada mediante su propio `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Rotación de cuentas:** cuando una sesión alcanza un límite de uso, Astera lo detecta en la

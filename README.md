@@ -23,6 +23,16 @@
 - Multiple `claude` / `codex` sessions, worked on across split panes
 - A terminal per project
 
+**Conversation view**
+- A session can be read as the terminal it runs in, or as an ordinary chat interface. It is the same
+  session either way — switch it from the top right of any session, and set the default in
+  **Settings → General**
+- Drop a file or paste an image and its path goes into the message
+
+<div align="center">
+<img src="assets/conversation.jpg" width="820" alt="The same four sessions shown as chat threads in a 2x2 grid — three Claude Code and one Codex, each with its own composer, model and reasoning effort" />
+</div>
+
 **Accounts**
 - Several accounts per vendor, each isolated through its own `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Account rolling:** when a session hits a usage limit, Astera detects it from the transcript,
