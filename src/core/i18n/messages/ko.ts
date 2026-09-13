@@ -697,6 +697,15 @@ export const ko = {
   // Someone reading this has just installed the app and may never have opened a terminal — so it names
   // the programs rather than "a CLI", leads with the button rather than a command, and keeps the
   // command itself one click away for whoever wants it.
+  // The one question a first run asks: what a new session opens on. Shown only on a machine with no
+  // settings file at all — see main/appSettingsStore.ts's firstRunAsked for why an update never sees it.
+  'firstRun.title': '새 세션을 어떤 화면으로 시작할까요?',
+  'firstRun.body': '둘 다 같은 세션입니다 — 보는 방식만 다르고, 언제든 탭에서 서로 바꿀 수 있습니다.',
+  'firstRun.terminal': '터미널',
+  'firstRun.terminalWhat': 'CLI 화면 그대로',
+  'firstRun.conversation': '대화',
+  'firstRun.conversationWhat': '주고받은 대화로 읽기',
+  'firstRun.later': '나중에 설정 › 새 세션의 기본 화면에서 바꿀 수 있습니다.',
   'setup.title': '클로드와 코덱스 프로그램을 찾을 수 없습니다',
   'setup.body': '사용하시려는 프로그램을 아래 설치 버튼을 눌러 설치해 주세요',
   'setup.claudeWhat': 'Anthropic 의 코딩 에이전트',

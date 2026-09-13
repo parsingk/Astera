@@ -50,6 +50,17 @@ export class AppSettingsStore {
    *  see core/panes/sessionView.ts's openSessionView for why a later change here never reaches back
    *  into a tab that already exists. */
   private conversationDefault: SessionView = 'terminal'
+  /**
+   * Whether this person has already been asked, once, what a new session should open on.
+   *
+   * **True by default, and the file says so only when it is false** — the same one-sided narrowing
+   * githubPolling and agentPermissionMode use, and here it is what tells a new install from an old
+   * one. An installation that predates this question has a settings file with no such key, and
+   * reading that absence as "already asked" is the whole point: someone who has been using the app
+   * for months must not be interrupted by a first-run question. Only the absence of the **file**
+   * means a first run.
+   */
+  private firstRunAsked = true
   /** Desktop notifications, one flag per event. Written and read as one object, so the four move
    *  together and there is one place that knows what a missing file means. */
   private desktopNotify: DesktopNotifySettings = { ...DESKTOP_NOTIFY_DEFAULTS }
@@ -113,6 +124,10 @@ export class AppSettingsStore {
         (parsed as { conversationDefault?: unknown }).conversationDefault === 'conversation'
           ? 'conversation'
           : 'terminal'
+      // A file that exists is an app that has been used before — unless it says outright that the
+      // question is still open, which is what a first run that wrote settings before answering leaves
+      // behind. See the field's own note for why the absence means the opposite here.
+      this.firstRunAsked = (parsed as { firstRunAsked?: unknown }).firstRunAsked !== false
       return { recovered: false }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -130,6 +145,9 @@ export class AppSettingsStore {
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
         this.conversationDefault = 'terminal'
+        // No settings file at all: nobody has used this app on this machine yet. The one state the
+        // first-run question is for.
+        this.firstRunAsked = false
         return { recovered: false }
       }
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
@@ -149,6 +167,9 @@ export class AppSettingsStore {
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
       this.conversationDefault = 'terminal'
+      // A file that could not be read is still a file: this person has used the app before, and a
+      // corrupt settings file is not a reason to put a first-run question in front of them.
+      this.firstRunAsked = true
       return { recovered: true }
     }
   }
@@ -298,6 +319,18 @@ export class AppSettingsStore {
     return this.conversationDefault
   }
 
+  /** Whether the first-run question has already been put to this person. */
+  getFirstRunAsked(): boolean {
+    return this.firstRunAsked
+  }
+
+  /** It has been put to them — answered or dismissed, which are the same thing to this flag: it asks
+   *  once. */
+  async markFirstRunAsked(): Promise<void> {
+    this.firstRunAsked = true
+    await this.persist()
+  }
+
   async setConversationDefault(view: SessionView): Promise<void> {
     this.conversationDefault = view
     await this.persist()
@@ -323,6 +356,7 @@ export class AppSettingsStore {
       terminalFont?: TerminalFont
       theme?: ThemeId
       conversationDefault?: SessionView
+      firstRunAsked?: false
     } = {}
     if (this.lang) data.lang = this.lang
     if (this.dismissedCampaignId) data.dismissedCampaignId = this.dismissedCampaignId
@@ -331,6 +365,10 @@ export class AppSettingsStore {
     if (this.agentBrowserEnabled) data.agentBrowserEnabled = true
     if (this.jobContinuityEnabled) data.jobContinuityEnabled = true
     if (this.githubPolling === false) data.githubPolling = false
+    // Written only while the question is still open, which is the same one-sided rule as the two
+    // below — and here it carries the difference between a new install and an old one, so an absent
+    // key has to keep meaning "asked". See the field's own note.
+    if (this.firstRunAsked === false) data.firstRunAsked = false
     // Written only when it is off, for the same reason githubPolling is: the default belongs in one
     // place, and that place is load's narrowing.
     if (this.agentPermissionMode === 'manual') data.agentPermissionMode = 'manual'

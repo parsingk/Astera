@@ -161,6 +161,8 @@ const api = {
     setTerminalFont: invoke('settings.setTerminalFont'),
     getTheme: invoke('settings.getTheme'),
     setTheme: invoke('settings.setTheme'),
+    getFirstRunAsked: invoke('settings.getFirstRunAsked'),
+    markFirstRunAsked: invoke('settings.markFirstRunAsked'),
     getConversationDefault: invoke('settings.getConversationDefault'),
     setConversationDefault: invoke('settings.setConversationDefault')
   },

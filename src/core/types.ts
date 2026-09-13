@@ -963,6 +963,13 @@ export interface CoreApi {
     // back here is always one of the six known ids.
     getTheme(): Promise<ThemeId>
     setTheme(id: ThemeId): Promise<void>
+    /** Whether the one first-run question has already been put to this person. False only on a
+     *  machine with no settings file at all — an installation that predates the question has a file
+     *  without the key, and reading that as "already asked" is what keeps a long-standing user from
+     *  being interrupted by it (main/appSettingsStore.ts's own field says the rest). */
+    getFirstRunAsked(): Promise<boolean>
+    /** It has been put to them. Answering and dismissing are the same thing here: it asks once. */
+    markFirstRunAsked(): Promise<void>
     // Task 10: what a new session tab opens as. Only ever seeds a tab's own remembered choice at the
     // moment its tab first appears — changing this later never touches a tab that already exists.
     getConversationDefault(): Promise<SessionView>

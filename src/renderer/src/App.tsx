@@ -39,6 +39,7 @@ import { GithubSettings } from './components/GithubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import { CliMissingScreen } from './components/CliMissingScreen'
+import { FirstRunDialog } from './components/FirstRunDialog'
 import type {
   OpenSessionTask,
   OrchSnapshot,
@@ -513,6 +514,10 @@ export default function App(): React.JSX.Element {
   // it the moment a session tab first appears — so it is loaded at mount like orchEnabled above,
   // not only while the modal is open.
   const [conversationDefault, setConversationDefault] = useState<SessionView>('terminal')
+  /** Whether the one first-run question has been put to this person — null until main has said.
+   *  False only on a machine with no settings file at all, so an update never sees the modal
+   *  (main/appSettingsStore.ts's firstRunAsked carries the whole rule). */
+  const [firstRunAsked, setFirstRunAsked] = useState<boolean | null>(null)
   // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
   // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
   const [jobsOpen, setJobsOpen] = useState(false)
@@ -781,6 +786,12 @@ export default function App(): React.JSX.Element {
     // it has to be loaded before a session ever spawns — the same reason orchEnabled above is loaded
     // at mount rather than only while the settings modal is open.
     void window.api.settings.getConversationDefault().then(setConversationDefault)
+    // Read here with the rest: the modal below is drawn from it, and it must not flash in front of
+    // someone who has used the app for months while an answer is in flight.
+    void window.api.settings
+      .getFirstRunAsked()
+      .then(setFirstRunAsked)
+      .catch(() => setFirstRunAsked(true)) // could not tell — the quiet answer is the right one
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
     void window.api.sessions.list().then((list) => {
       setSessions(list)
@@ -4675,6 +4686,26 @@ export default function App(): React.JSX.Element {
         />
       )}
       <ConfirmHost />
+      {/* The first-run question. Two things gate it, and the second was measured rather than guessed:
+          it sits below the CLI-missing branch above, which returns early, and it waits for an account
+          to exist. A genuinely fresh profile opens with the detected-accounts modal already up, and
+          this one stacked straight on top of it — two modals on the very first screen. Waiting is also
+          the better question: before there is an account there are no sessions to have a default view
+          for. Answering and dismissing settle it the same way — it asks once. */}
+      {firstRunAsked === false && accounts.length > 0 && (
+        <FirstRunDialog
+          onPick={(view) => {
+            setFirstRunAsked(true)
+            setConversationDefault(view)
+            void window.api.settings.setConversationDefault(view)
+            void window.api.settings.markFirstRunAsked()
+          }}
+          onDismiss={() => {
+            setFirstRunAsked(true)
+            void window.api.settings.markFirstRunAsked()
+          }}
+        />
+      )}
       <ToastHost />
     </div>
   )

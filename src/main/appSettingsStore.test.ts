@@ -67,8 +67,13 @@ describe('AppSettingsStore', () => {
     await store.load()
     await store.setLang('en')
     // persist는 falsy 값을 생략한다(정해진 관례) — load가 `=== true`로 읽으므로
-    // orchestrationEnabled:false를 파일에 남기지 않아도 결과가 같다
-    expect(JSON.parse(await fs.readFile(nested, 'utf8'))).toEqual({ lang: 'en' })
+    // orchestrationEnabled:false를 파일에 남기지 않아도 결과가 같다.
+    // firstRunAsked 는 그 관례의 반대편이라 여기 남는다: 없는 키가 "이미 물었다"를 뜻하므로,
+    // 아직 묻지 않았다는 사실은 파일이 직접 말해야 한다(필드 주석 참조)
+    expect(JSON.parse(await fs.readFile(nested, 'utf8'))).toEqual({
+      lang: 'en',
+      firstRunAsked: false
+    })
   })
 
   it('agent browser is off until turned on, and survives a reload', async () => {
@@ -364,7 +369,9 @@ describe('닫은 업데이트 캠페인 id', () => {
     await store.setDismissedCampaignId('c1')
     expect(JSON.parse(await fs.readFile(file(), 'utf8'))).toEqual({
       lang: 'en',
-      dismissedCampaignId: 'c1'
+      dismissedCampaignId: 'c1',
+      // 아직 묻지 않은 첫 실행 질문 — 없는 키가 "이미 물었다"라 이쪽이 파일에 남는다
+      firstRunAsked: false
     })
     // 반대 순서도 — 캠페인을 닫은 뒤 언어를 바꿔도 닫은 기록이 남아야 한다
     await store.setLang('ko')
@@ -621,5 +628,51 @@ describe('agentPermissionMode', () => {
     const store = new AppSettingsStore(file())
     await store.load()
     expect(store.getAgentPermissionMode()).toBe('yolo')
+  })
+})
+
+// The first-run question asks once, and only of someone who has never used this app here. Everything
+// about telling those two apart lives in load's three branches, so that is what these hold down.
+describe('AppSettingsStore first-run question', () => {
+  it('is still to be asked when there is no settings file at all', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getFirstRunAsked()).toBe(false)
+  })
+
+  // The one that matters most: someone who has been using the app since before this question existed
+  // has a settings file with no such key, and must not be interrupted by it.
+  it('is treated as asked for a settings file written before it existed', async () => {
+    await fs.writeFile(file(), JSON.stringify({ lang: 'ko', theme: 'vega' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getFirstRunAsked()).toBe(true)
+  })
+
+  it('stays open across a restart when a first run wrote settings before answering', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load() // no file: still to be asked
+    await a.setLang('en') // ...and they change something else first
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getFirstRunAsked()).toBe(false)
+  })
+
+  it('is closed once, by answering or dismissing, and stays closed', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.markFirstRunAsked()
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getFirstRunAsked()).toBe(true)
+  })
+
+  // A file that cannot be read is still a file: this person has used the app before, and a corrupt
+  // settings file is no reason to put a first-run question in front of them.
+  it('is treated as asked when the file is corrupt', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    expect(await store.load()).toEqual({ recovered: true })
+    expect(store.getFirstRunAsked()).toBe(true)
   })
 })

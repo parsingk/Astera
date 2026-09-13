@@ -5390,6 +5390,11 @@ export function registerIpc(
 
   // Task 10: what a new session tab opens as. Same trust-boundary check as the other enum settings
   // above — the value the renderer sent is validated before being written to disk.
+  /** Whether the one first-run question has already been put to this person. See the store's own
+   *  field for what tells a new install from an old one — in short, only the absence of a settings
+   *  file counts. */
+  ipcMain.handle('settings.getFirstRunAsked', () => core.appSettings.getFirstRunAsked())
+  ipcMain.handle('settings.markFirstRunAsked', () => core.appSettings.markFirstRunAsked())
   ipcMain.handle('settings.getConversationDefault', () => core.appSettings.getConversationDefault())
   ipcMain.handle('settings.setConversationDefault', async (_e, view: unknown) => {
     if (view !== 'terminal' && view !== 'conversation')
