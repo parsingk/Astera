@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { installCommandFor } from './cliInstall'
+import { installCommandFor, locateCommandFor } from './cliInstall'
 
 describe('installCommandFor', () => {
   it('runs the vendors own Windows installers through PowerShell', () => {
@@ -59,5 +59,39 @@ describe('installCommandFor', () => {
   it('answers null where no installer has been measured', () => {
     expect(installCommandFor('claude', 'freebsd')).toBeNull()
     expect(installCommandFor('codex', 'aix')).toBeNull()
+  })
+})
+
+// An installer writes the new directory into the environment the OS keeps; a program already running
+// has a copy taken at launch, and a relaunch inherits that same copy (measured — the app came back
+// and still found neither CLI). So after installing, the machine has to be asked.
+describe('locateCommandFor', () => {
+  it('reads the environment Windows itself keeps, not the one this process was given', () => {
+    const c = locateCommandFor('claude', 'win32', '/bin/sh')
+    expect(c?.command).toBe('powershell.exe')
+    const line = c?.args.at(-1) ?? ''
+    expect(line).toContain("GetEnvironmentVariable('Path','Machine')")
+    expect(line).toContain("GetEnvironmentVariable('Path','User')")
+    expect(line).toContain('Get-Command claude')
+  })
+
+  // A login shell is what reads the profile files a POSIX installer appends its PATH line to.
+  it('asks a login shell on macOS and Linux', () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const c = locateCommandFor('codex', platform, '/bin/zsh')
+      expect(c?.command).toBe('/bin/zsh')
+      expect(c?.args).toEqual(['-lc', 'command -v codex'])
+    }
+  })
+
+  // Nothing here names a directory: a vendor moving its binary must not need a change in this app.
+  it('never guesses where a vendor put its binary', () => {
+    for (const platform of ['win32', 'darwin', 'linux'] as const)
+      for (const cli of ['claude', 'codex'] as const)
+        expect(locateCommandFor(cli, platform, '/bin/sh')?.display).not.toMatch(/\.local|Programs|usr\//)
+  })
+
+  it('answers null where no installer has been measured', () => {
+    expect(locateCommandFor('claude', 'freebsd', '/bin/sh')).toBeNull()
   })
 })

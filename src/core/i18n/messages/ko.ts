@@ -708,7 +708,7 @@ export const ko = {
   'setup.hideCommand': '명령어 숨기기',
   'setup.showLog': '자세히',
   'setup.hideLog': '접기',
-  'setup.done': '{name} 설치가 끝났습니다. 앱을 다시 시작하면 바로 쓸 수 있습니다.',
+  'setup.notFoundYet': '{name} 설치는 끝났는데 아직 찾지 못했습니다. 앱을 다시 시작해 주세요.',
   'setup.restart': '앱 다시 시작',
   'setup.failed': '설치하지 못했습니다.',
   'setup.failedHelp': '아래 명령어를 직접 실행한 뒤 앱을 다시 시작해도 됩니다.',

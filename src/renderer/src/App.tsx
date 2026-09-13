@@ -3362,7 +3362,7 @@ export default function App(): React.JSX.Element {
         {/* 0, not runningCount: this screen renders no ConfirmHost, so a close confirmation would
             never be answered and the close button would stop working entirely. */}
         <Titlebar isMax={isMax} update={update} runningCount={0} onInstall={() => void installUpdate()} />
-        <CliMissingScreen />
+        <CliMissingScreen onFound={setCli} />
       </div>
     )
   }

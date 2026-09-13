@@ -36,7 +36,8 @@ import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
 import { attachmentNameOf } from '../core/files/attachmentName'
-import { installCommandFor } from '../core/install/cliInstall'
+import { installCommandFor, locateCommandFor } from '../core/install/cliInstall'
+import { prependToPath } from '../core/sessions/manager'
 import { listClaudeModels, listCodexModels } from './models/discover'
 import { UnderstandingPipeline } from './understanding/pipeline'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
@@ -6044,6 +6045,40 @@ export function registerIpc(
    * One at a time. Two installers writing to the same `~/.local/bin` at once is not a state worth
    * reasoning about, and nobody needs both this second.
    */
+  /**
+   * Where the machine says a CLI is now, with this process's PATH updated to match — or null when it
+   * still cannot be found.
+   *
+   * An installer writes the new directory into the environment the operating system keeps. It cannot
+   * reach into a program that is already running: this app's environment was copied when it started,
+   * and **a relaunch inherits that same copy**, so restarting does not fix it either (measured — the
+   * app came back and still found neither CLI). Left there, someone would install, restart, be told
+   * again that nothing is installed, and have no way to tell which part had failed.
+   *
+   * So the machine is asked (locateCommandFor), and what it answers is put in front of this process's
+   * own PATH. That is enough for everything downstream: `system.checkCli` runs through PATH, and a
+   * spawned session copies this process's environment (core/sessions/manager.ts).
+   */
+  const adoptInstalledCli = async (cli: 'claude' | 'codex'): Promise<string | null> => {
+    const plan = locateCommandFor(cli, process.platform, process.env.SHELL ?? '/bin/sh')
+    if (plan === null) return null
+    const found = await new Promise<string | null>((resolve) => {
+      execFile(plan.command, plan.args, { timeout: 15_000 }, (err, stdout) => {
+        if (err) return resolve(null)
+        const line = stdout
+          .split('\n')
+          .map((l) => l.trim())
+          .find((l) => l !== '')
+        resolve(line ?? null)
+      })
+    })
+    // Checked on disk before it is believed: a shell that answers with something that is not there
+    // would put a directory on PATH that hides nothing and helps nobody.
+    if (found === null || !existsSync(found)) return null
+    prependToPath(process.env as Record<string, string | undefined>, path.dirname(found))
+    return found
+  }
+
   let installingCli = false
   ipcMain.handle('system.installCli', async (_e, cli: unknown) => {
     if (cli !== 'claude' && cli !== 'codex') throw new Error(`INVALID_CLI: ${String(cli)}`)
@@ -6069,7 +6104,11 @@ export function registerIpc(
       child.on('close', (code) => {
         installingCli = false
         send('cli:install', { cli, kind: 'done', code })
-        resolve({ ok: code === 0, code })
+        if (code !== 0) return resolve({ ok: false, code })
+        // Found and adopted here rather than left to a restart — see adoptInstalledCli for why a
+        // restart is not enough. `at` being null is not a failed install: it is an install this app
+        // cannot see yet, which is the one case the restart button is still there for.
+        void adoptInstalledCli(cli).then((at) => resolve({ ok: true, code, at }))
       })
     })
   })

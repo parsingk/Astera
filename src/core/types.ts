@@ -1146,6 +1146,10 @@ export interface SystemApi {
     ok: boolean
     code: number | null
     error?: string
+    /** Where the machine says it is now, once main has put that directory on its own PATH — so the
+     *  app can carry on without a restart. Null after an install this app still cannot see, which is
+     *  the only case the restart button is there for. */
+    at?: string | null
   }>
   /** Starts the app again, for after an install: the CLI lands somewhere new on PATH and a running
    *  process cannot be told about it. The Host keeps the sessions. */

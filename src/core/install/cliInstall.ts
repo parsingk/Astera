@@ -72,3 +72,48 @@ export function installCommandFor(cli: InstallableCli, platform: string): Instal
   }
   return null
 }
+
+/**
+ * How to ask this machine where a CLI is, **as the machine sees it now** rather than as this process
+ * was told at launch.
+ *
+ * An installer writes the new directory into the environment the operating system keeps; it cannot
+ * reach into a program that is already running, whose environment was copied when it started. So
+ * after an install this app still cannot see what it just installed — and restarting does not fix it
+ * either, because a relaunch inherits the same stale copy (measured: the app came back and still
+ * found neither CLI).
+ *
+ * Hence asking rather than guessing. Windows keeps the authoritative value in the Machine and User
+ * environment blocks; a POSIX login shell builds it from the profile files the installer edited.
+ * Neither answer depends on this app knowing where a vendor decided to put its binary, which is the
+ * one thing that would quietly rot when a vendor moves it.
+ *
+ * `loginShell` is the caller's `$SHELL`, or any POSIX shell when that is unset — passed in rather
+ * than read here so this stays a function of its arguments.
+ */
+export function locateCommandFor(
+  cli: InstallableCli,
+  platform: string,
+  loginShell: string
+): InstallCommand | null {
+  if (platform === 'win32') {
+    // Machine first, then User: the same order Windows composes PATH in, so a per-user install is
+    // found even when a machine-wide one of the same name exists.
+    const line =
+      "$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + " +
+      "[Environment]::GetEnvironmentVariable('Path','User'); " +
+      `(Get-Command ${cli} -ErrorAction SilentlyContinue).Source`
+    return {
+      command: 'powershell.exe',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', line],
+      display: line,
+      source: SOURCES[cli]
+    }
+  }
+  if (platform === 'darwin' || platform === 'linux') {
+    // A login shell, because that is what reads the profile files an installer appends a PATH line to.
+    const line = `command -v ${cli}`
+    return { command: loginShell, args: ['-lc', line], display: line, source: SOURCES[cli] }
+  }
+  return null
+}

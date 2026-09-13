@@ -617,7 +617,7 @@ export const en: Record<keyof typeof ko, string> = {
   'setup.hideCommand': 'Hide command',
   'setup.showLog': 'Details',
   'setup.hideLog': 'Hide details',
-  'setup.done': '{name} is installed. Restart the app and you can start using it.',
+  'setup.notFoundYet': '{name} is installed, but it cannot be found yet. Please restart the app.',
   'setup.restart': 'Restart Astera',
   'setup.failed': 'The install did not finish.',
   'setup.failedHelp': 'You can run the command below yourself, then restart the app.',
