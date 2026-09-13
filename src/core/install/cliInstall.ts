@@ -10,6 +10,17 @@ export interface InstallCommand {
   /** The same thing as one line, for the screen to show beside the button. Someone who would rather
    *  run it themselves, or who has to after a failure, needs it in a form they can copy. */
   display: string
+  /** Where the bytes come from, for the screen to say out loud. A button that runs a download is a
+   *  thing to be wary of, and naming the vendor's own host is the answer to that wariness — the same
+   *  answer the command gives a reader who can read it. */
+  source: string
+}
+
+/** The host each vendor serves its installer from. Beside the commands on purpose: if one ever moves,
+ *  the sentence on screen and the command under it move together. */
+const SOURCES: Readonly<Record<InstallableCli, string>> = {
+  claude: 'claude.ai',
+  codex: 'chatgpt.com'
 }
 
 /**
@@ -50,13 +61,14 @@ export function installCommandFor(cli: InstallableCli, platform: string): Instal
       // instructions rely on — it changes nothing on the machine.
       command: 'powershell.exe',
       args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', line],
-      display: line
+      display: line,
+      source: SOURCES[cli]
     }
   }
   if (platform === 'darwin' || platform === 'linux') {
     const line = COMMANDS.posix[cli]
     // `sh -c` is only the runner; the pipeline names its own interpreter, exactly as documented.
-    return { command: '/bin/sh', args: ['-c', line], display: line }
+    return { command: '/bin/sh', args: ['-c', line], display: line, source: SOURCES[cli] }
   }
   return null
 }

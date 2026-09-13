@@ -693,6 +693,27 @@ export const ko = {
   // Nothing to do with the default account above — this only remembers which account this project used,
   // so the next new session preselects it. Named accordingly to stop the two reading as one feature.
   'session.new.saveDefaultAccount': '이 프로젝트에서 이 계정을 기억',
+  // The first-run screen, shown when neither CLI is installed (renderer/components/CliMissingScreen.tsx).
+  // Someone reading this has just installed the app and may never have opened a terminal — so it names
+  // the programs rather than "a CLI", leads with the button rather than a command, and keeps the
+  // command itself one click away for whoever wants it.
+  'setup.title': '클로드와 코덱스 프로그램을 찾을 수 없습니다',
+  'setup.body': '사용하시려는 프로그램을 아래 설치 버튼을 눌러 설치해 주세요',
+  'setup.claudeWhat': 'Anthropic 의 코딩 에이전트',
+  'setup.codexWhat': 'OpenAI 의 코딩 에이전트',
+  'setup.source': '{host} 에서 받아 설치합니다',
+  'setup.install': '설치',
+  'setup.installing': '설치하는 중…',
+  'setup.showCommand': '명령어 보기',
+  'setup.hideCommand': '명령어 숨기기',
+  'setup.showLog': '자세히',
+  'setup.hideLog': '접기',
+  'setup.done': '{name} 설치가 끝났습니다. 앱을 다시 시작하면 바로 쓸 수 있습니다.',
+  'setup.restart': '앱 다시 시작',
+  'setup.failed': '설치하지 못했습니다.',
+  'setup.failedHelp': '아래 명령어를 직접 실행한 뒤 앱을 다시 시작해도 됩니다.',
+  'setup.unsupported': '이 운영체제용 설치 방법은 아직 없습니다. 직접 설치한 뒤 앱을 다시 시작하세요.',
+  'setup.language': '언어',
   'session.new.bypassPermissions': '권한 확인 없이 실행 (bypass permissions)',
   'session.new.start': '시작',
   // Waiting text between pressing Start and the tab opening. Splitting off a worktree chains fetch, worktree add and

@@ -24,7 +24,8 @@ describe('installCommandFor', () => {
       expect(installCommandFor('claude', platform)).toEqual({
         command: '/bin/sh',
         args: ['-c', 'curl -fsSL https://claude.ai/install.sh | bash'],
-        display: 'curl -fsSL https://claude.ai/install.sh | bash'
+        display: 'curl -fsSL https://claude.ai/install.sh | bash',
+        source: 'claude.ai'
       })
       expect(installCommandFor('codex', platform)?.args.at(-1)).toBe(
         'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
@@ -38,6 +39,19 @@ describe('installCommandFor', () => {
     for (const platform of ['win32', 'darwin', 'linux'] as const)
       for (const cli of ['claude', 'codex'] as const)
         expect(installCommandFor(cli, platform)?.display).not.toContain('npm')
+  })
+
+  // The screen says where the download comes from, and that sentence has to be the host the command
+  // actually reaches — so the two live together.
+  it('names the host its own command downloads from', () => {
+    for (const platform of ['win32', 'darwin', 'linux'] as const) {
+      const claude = installCommandFor('claude', platform)
+      const codex = installCommandFor('codex', platform)
+      expect(claude?.source).toBe('claude.ai')
+      expect(claude?.display).toContain('claude.ai')
+      expect(codex?.source).toBe('chatgpt.com')
+      expect(codex?.display).toContain('chatgpt.com')
+    }
   })
 
   // A platform nobody has measured is better served by the commands in the text than by a button
