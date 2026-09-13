@@ -29,6 +29,7 @@ const EVENT_CHANNELS = [
   'accounts:ghostsChanged',
   'files:changed',
   'git:changed',
+  'cli:install',
   'run:data',
   'run:status',
   'run:focus',
@@ -214,6 +215,8 @@ const api = {
     pickFile: invoke('system.pickFile'),
     pathExists: invoke('system.pathExists'),
     checkCli: invoke('system.checkCli'),
+    installCli: invoke('system.installCli'),
+    relaunch: invoke('system.relaunch'),
     appVersion: invoke('system.appVersion'),
     homeDir: invoke('system.homeDir'),
     openExternal: invoke('system.openExternal')

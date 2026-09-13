@@ -36,6 +36,7 @@ import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
 import { attachmentNameOf } from '../core/files/attachmentName'
+import { installCommandFor } from '../core/install/cliInstall'
 import { listClaudeModels, listCodexModels } from './models/discover'
 import { UnderstandingPipeline } from './understanding/pipeline'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
@@ -6031,6 +6032,56 @@ export function registerIpc(
     const [claude, codex] = await Promise.all([check('claude'), check('codex')])
     return { claude, codex }
   })
+  /**
+   * Installs one of the two CLIs with the command its own vendor documents for this platform
+   * (core/install/cliInstall.ts holds the table and the reasoning).
+   *
+   * Reached only from the screen that appears when neither CLI is present — the app is a launcher for
+   * them, so with both missing there is nothing to launch and nothing else to do. Output is streamed
+   * to that screen as it arrives: an installer that runs behind a spinner and then says "failed" tells
+   * nobody anything, and this is the one screen a person cannot get past.
+   *
+   * One at a time. Two installers writing to the same `~/.local/bin` at once is not a state worth
+   * reasoning about, and nobody needs both this second.
+   */
+  let installingCli = false
+  ipcMain.handle('system.installCli', async (_e, cli: unknown) => {
+    if (cli !== 'claude' && cli !== 'codex') throw new Error(`INVALID_CLI: ${String(cli)}`)
+    const plan = installCommandFor(cli, process.platform)
+    if (plan === null) return { ok: false, code: null, error: 'UNSUPPORTED_PLATFORM' }
+    if (installingCli) return { ok: false, code: null, error: 'ALREADY_RUNNING' }
+    installingCli = true
+    send('cli:install', { cli, kind: 'start', text: `$ ${plan.display}
+` })
+    return await new Promise((resolve) => {
+      const child = spawn(plan.command, plan.args, { windowsHide: true })
+      const stream = (buf: Buffer): void =>
+        send('cli:install', { cli, kind: 'out', text: buf.toString() })
+      child.stdout.on('data', stream)
+      child.stderr.on('data', stream) // an installer says most of what matters here
+      child.on('error', (err) => {
+        installingCli = false
+        send('cli:install', { cli, kind: 'out', text: `${err.message}
+` })
+        send('cli:install', { cli, kind: 'done', code: null })
+        resolve({ ok: false, code: null, error: err.message })
+      })
+      child.on('close', (code) => {
+        installingCli = false
+        send('cli:install', { cli, kind: 'done', code })
+        resolve({ ok: code === 0, code })
+      })
+    })
+  })
+
+  /** Starts the app again. The installer puts the CLI somewhere new on PATH, and a process that is
+   *  already running cannot be told about it — its environment was taken at launch. The Host keeps the
+   *  sessions, so this costs nothing but the window. */
+  ipcMain.handle('system.relaunch', () => {
+    app.relaunch()
+    app.quit()
+  })
+
   ipcMain.handle('system.appVersion', () => app.getVersion())
   // 프로젝트가 지정되지 않았을 때 아래쪽 패널의 터미널이 열릴 자리. cmd 나 셸을 직접 띄웠을 때와
   // 같은 곳이고, 세 플랫폼 모두 app.getPath('home') 이 그 값을 준다.

@@ -38,6 +38,7 @@ import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import { ConfirmHost } from './components/ConfirmHost'
+import { CliMissingScreen } from './components/CliMissingScreen'
 import type {
   OpenSessionTask,
   OrchSnapshot,
@@ -3353,30 +3354,15 @@ export default function App(): React.JSX.Element {
   // Only when neither CLI is present is there nothing to launch. With one of the two installed the app
   // opens as usual, and the new-session dialog blocks the accounts whose CLI is missing.
   //
-  // Deliberately English-only, and deliberately not routed through t(). This screen replaces the whole
-  // workbench, so the rail is never rendered — and the settings modal that holds the language switch
-  // lives on that rail. Someone stuck here cannot change the language, so the text stays in the one
-  // language every reader of an npm install command already has to read. Do not move these strings
-  // into the i18n catalog: following the stored language is exactly the behaviour being avoided.
+  // The screen itself — what it offers, how it installs, and why it is English-only — lives in
+  // CliMissingScreen.tsx.
   if (cli && !cli.claude.ok && !cli.codex.ok) {
     return (
       <div className="app">
         {/* 0, not runningCount: this screen renders no ConfirmHost, so a close confirmation would
             never be answered and the close button would stop working entirely. */}
         <Titlebar isMax={isMax} update={update} runningCount={0} onInstall={() => void installUpdate()} />
-        <div className="cli-missing">
-          <h1>No CLI found to run</h1>
-          <p>
-            This app is a launcher that runs the installed <code>claude</code> or <code>codex</code>{' '}
-            CLI. Install either one, then restart the app.
-          </p>
-          <p>
-            Install: <code>npm install -g @anthropic-ai/claude-code</code>
-          </p>
-          <p>
-            Install: <code>npm install -g @openai/codex</code>
-          </p>
-        </div>
+        <CliMissingScreen />
       </div>
     )
   }

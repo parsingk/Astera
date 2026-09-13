@@ -579,6 +579,13 @@ export interface CoreEvents {
   /** A desktop notification was clicked. Main has already raised the window; the renderer activates
    *  that session's tab, through the path the tab bar already uses (design doc §7). */
   'notify:activate': { sessionId: string }
+  /** An install running on the screen shown when neither CLI is present. `start` carries the command
+   *  as one line so the screen can show what it is about to run; `out` is a chunk of the installer's
+   *  own output, stdout and stderr together, because an installer says most of what matters on the
+   *  second; `done` ends it, with the exit code or null when it never started. */
+  'cli:install':
+    | { cli: 'claude' | 'codex'; kind: 'start' | 'out'; text: string }
+    | { cli: 'claude' | 'codex'; kind: 'done'; code: number | null }
   'run:data': { runId: string; data: string } // run output, per run
   'run:status': RunStatus // run state change (running/stopping/exited)
   /** The run the console should move to. A chain's first run is what run.start returns and what the
@@ -1130,6 +1137,19 @@ export interface SystemApi {
   pickFile(defaultPath?: string): Promise<string | null>
   pathExists(p: string): Promise<boolean>
   checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>
+  /** Installs one CLI with the command its vendor documents for this platform. Reached only from the
+   *  screen shown when neither is present. Output arrives as `cli:install` events while it runs; this
+   *  resolves when the installer exits. `error` names why nothing ran at all — an unmeasured platform,
+   *  or an install already in flight — as opposed to an installer that ran and failed, which is a
+   *  non-zero `code`. */
+  installCli(cli: 'claude' | 'codex'): Promise<{
+    ok: boolean
+    code: number | null
+    error?: string
+  }>
+  /** Starts the app again, for after an install: the CLI lands somewhere new on PATH and a running
+   *  process cannot be told about it. The Host keeps the sessions. */
+  relaunch(): Promise<void>
   appVersion(): Promise<string>
   /** 프로젝트가 지정되지 않았을 때 아래쪽 패널의 터미널이 열릴 자리 — 셸을 직접 띄웠을 때와 같은 곳 */
   homeDir(): Promise<string>
