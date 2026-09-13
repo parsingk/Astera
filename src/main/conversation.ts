@@ -163,7 +163,43 @@ export function createConversationSessions(deps: {
    *  doc), so `before` — this call's *own* snapshot of what was outstanding walking in — is what lets
    *  this tell "resolved just now" apart from "still outstanding" once `follow.read` returns; reading
    *  `entry.pending` again afterward would only show the second of those two. */
+  /** Re-reads where this session's conversation is being written and re-seats the follow when it has
+   *  moved, answering whether it did.
+   *
+   *  `/clear` (codex: `/new`) does not truncate anything — the CLI leaves the file it was writing and
+   *  starts a **different** one. The follow opened with the old path then reads a file that will never
+   *  grow again, so the view keeps showing the conversation the person just cleared, for good; nothing
+   *  in the tail's own `restarted` flag catches it, since that only sees a file recreated at the same
+   *  path.
+   *
+   *  Emitted as a restart because that is what it is from the view's side: the turns held belong to a
+   *  conversation that is no longer this session's, so they are replaced rather than appended to. The
+   *  pending maps go with them — a call left unresolved in the old transcript can never be resolved by
+   *  lines from a file that knows nothing about it. */
+  async function reseat(sessionId: string, entry: Entry): Promise<boolean> {
+    const source = await deps.sourceFor(sessionId)
+    if (source === null || source.path === entry.filePath) return false
+    const reduce = REDUCERS[source.format]
+    const window = await readConversationWindow(source.path, { reduce })
+    // The CLI points at the new file the moment it opens it, which can be before there is anything
+    // readable in it. Leaving the entry where it is means the next tick tries again — moving it to a
+    // file that answers null would emit an empty restart and blank the view for a tick.
+    if (window === null) return false
+    // Same guard as stepEntry's own: a close (or close-then-reopen) can land across either await, and
+    // a fresh entry must not be handed the turns this one read.
+    if (entries.get(sessionId) !== entry) return true
+    entry.filePath = source.path
+    entry.reduce = reduce
+    entry.follow = new ConversationFollow(source.path, window.follow, reduce)
+    entry.pending.clear()
+    entry.partOwner.clear()
+    trackPending(window.turns, entry.pending, entry.partOwner)
+    deps.emit(sessionId, window.turns, true)
+    return true
+  }
+
   async function stepEntry(sessionId: string, entry: Entry): Promise<void> {
+    if (await reseat(sessionId, entry)) return
     const before = new Set(entry.pending.keys())
     const result = await entry.follow.read(entry.pending)
     // The only await in this function. `close` (session:exit, from inside main — never a synchronous

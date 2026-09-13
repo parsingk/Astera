@@ -27,6 +27,11 @@ const norm = (p: string): string => path.resolve(p).toLowerCase()
 
 const POLL_MS = 1_000 // Same value as LOCATE_POLL_MS in codexRolling.ts (which is not exported there)
 
+/** How often a session that already has a rollout looks for a newer one. Coarser than the poll: `/new`
+ *  is a person's keystroke, so seconds of lag costs nothing, and this is the one step here that walks a
+ *  folder rather than reading forward from an offset. */
+const RESCAN_MS = 5_000
+
 interface Entry {
   sessionId: string
   accountId: string
@@ -46,6 +51,13 @@ interface Entry {
    *  pair out of that session's note, and it has no `resumeSessionId` to carry the id instead. */
   codexSessionId: string | null
   tail: JsonlTail | null
+  /** When the current rollout was adopted — the cutoff a re-scan uses to ask whether codex has since
+   *  opened a *newer* file for this session (`/new`). Null while nothing is mapped. */
+  mappedAt: number | null
+  /** The next tick this entry may re-scan on. A re-scan is throttled because it walks the account's
+   *  rollout folders; the walk itself is cheap when nothing is newer, since findRollout stats before it
+   *  parses and a cutoff of `mappedAt` leaves it nothing to parse. */
+  rescanAt: number
   disposed: boolean
   /** Whether turn completion is reported. Every codex session is watched (the usage chips need it);
    *  only the ones that asked for Slack notifications get the callback. */
@@ -153,6 +165,8 @@ export class CodexRolloutWatcher {
       rolloutPath: rolloutPath ?? null,
       codexSessionId: codexSessionId ?? null,
       tail: rolloutPath ? new JsonlTail(rolloutPath, { startAtEnd: true }) : null,
+      mappedAt: rolloutPath ? this.now() : null,
+      rescanAt: this.now() + RESCAN_MS,
       disposed: false,
       notifyTurns: info.slackNotify === true,
       limits: null,
@@ -256,6 +270,53 @@ export class CodexRolloutWatcher {
     return true
   }
 
+  /**
+   * Moves a mapped entry onto a newer rollout, when codex has opened one for it.
+   *
+   * `/new` does not truncate the rollout — codex leaves the file it was writing and starts another, so
+   * everything read from here (the usage chips' figures, turn completion, and the path the conversation
+   * view follows) would otherwise stay pinned to a conversation the person has already ended, silently
+   * and for the rest of the session.
+   *
+   * **Only when this session is alone in its account and folder.** From the filesystem side a new
+   * rollout is just the newest file in a folder: nothing in `session_meta` says which session opened it
+   * (measured — a `/new` file is byte-identical in shape to a freshly spawned one, same `thread_source`,
+   * `source` and `originator`). With two codex sessions in the same folder, handing the file to the
+   * wrong one would drag a session out of its own live conversation, which is far worse than leaving a
+   * cleared one showing. So this narrows to the case where the answer cannot be wrong, and the rest keep
+   * today's behaviour.
+   */
+  private async rescan(entry: Entry): Promise<void> {
+    if (entry.mappedAt === null || this.now() < entry.rescanAt) return
+    entry.rescanAt = this.now() + RESCAN_MS
+    for (const e of this.entries.values()) {
+      if (e === entry || e.disposed) continue
+      if (e.accountId === entry.accountId && norm(e.cwd) === norm(entry.cwd)) return
+    }
+    const account = this.deps.getAccount(entry.accountId)
+    if (!account) return
+    const found = await findRollout({
+      configDir: account.configDir,
+      cwd: entry.cwd,
+      // The clock-skew margin findRollout allows means the file we are already on can come back here;
+      // the path comparison below is what settles it, so no separate guard is needed.
+      since: entry.mappedAt,
+      now: this.now,
+      excludePaths: this.claimed(entry)
+    })
+    if (entry.disposed || !found || found.path === entry.rolloutPath) return
+    entry.rolloutPath = found.path
+    entry.codexSessionId = found.sessionId
+    entry.tail = new JsonlTail(found.path)
+    entry.mappedAt = this.now()
+    // Both belong to the conversation that has just ended: its context is not this one's, and its limit
+    // windows were read for it. Same rule the `r.restarted` branch below applies for a recreated file.
+    entry.limits = null
+    entry.context = null
+    this.rememberMapping(entry.sessionId, found.path, found.sessionId)
+    this.deps.log(`codex rollout watch remapped session=${entry.sessionId} path=${found.path}`)
+  }
+
   private ensureTicker(): void {
     if (this.ticker) return
     this.ticker = setInterval(() => void this.tick(), POLL_MS)
@@ -301,6 +362,7 @@ export class CodexRolloutWatcher {
       entry.rolloutPath = found.path
       entry.codexSessionId = found.sessionId
       entry.tail = new JsonlTail(found.path)
+      entry.mappedAt = this.now()
       // Told once, here, because this is the one moment the scan makes a mapping and the only moment it
       // can be told: after a restart the scan that produced it cannot be run again for this session.
       this.rememberMapping(entry.sessionId, found.path, found.sessionId)
@@ -309,6 +371,8 @@ export class CodexRolloutWatcher {
       // first call, so it reads the whole file from offset 0. Deferring does not narrow the range read, so it does not
       // filter out past turns — this delay has no practical effect.
     }
+    await this.rescan(entry)
+    if (entry.disposed || !entry.tail) return
     const r = await entry.tail.read()
     if (!r || entry.disposed) return
     if (r.restarted) {

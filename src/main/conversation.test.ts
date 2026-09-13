@@ -153,6 +153,98 @@ describe('createConversationSessions', () => {
     sessions.closeAll()
   })
 
+  // `/clear` (codex `/new`) leaves the file it was writing and opens another — the view has to follow
+  // it there, or it shows the conversation the person just cleared for the rest of the session.
+  it('follows the session to a new file when the CLI starts writing a different one', async () => {
+    const first = path.join(dir, 'first.jsonl')
+    const second = path.join(dir, 'second.jsonl')
+    await writeFile(first, userLine(1))
+    const emit = vi.fn()
+    let current = first
+    const sessions = createConversationSessions({
+      sourceFor: async () => ({ path: current, format: 'claude' }),
+      emit
+    })
+
+    expect((await sessions.open('s1'))?.turns.map((t) => t.id)).toEqual(['u1'])
+
+    await writeFile(second, userLine(9))
+    current = second
+    await advance(POLL_MS)
+
+    expect(emit).toHaveBeenCalledTimes(1)
+    const [sessionId, turns, restarted] = emit.mock.calls[0]
+    expect(sessionId).toBe('s1')
+    expect(turns.map((t: { id: string }) => t.id)).toEqual(['u9'])
+    expect(restarted).toBe(true) // replaces what the view holds — the old turns are not this session's
+    sessions.closeAll()
+  })
+
+  it('keeps reading the new file forward once it has moved', async () => {
+    const first = path.join(dir, 'first.jsonl')
+    const second = path.join(dir, 'second.jsonl')
+    await writeFile(first, userLine(1))
+    const emit = vi.fn()
+    let current = first
+    const sessions = createConversationSessions({
+      sourceFor: async () => ({ path: current, format: 'claude' }),
+      emit
+    })
+    await sessions.open('s1')
+
+    await writeFile(second, userLine(9))
+    current = second
+    await advance(POLL_MS)
+    await appendFile(second, userLine(10))
+    await advance(POLL_MS)
+
+    expect(emit).toHaveBeenCalledTimes(2)
+    const [, turns, restarted] = emit.mock.calls[1]
+    expect(turns.map((t: { id: string }) => t.id)).toEqual(['u10']) // only the new turn, not u9 again
+    expect(restarted).toBe(false)
+    sessions.closeAll()
+  })
+
+  // The CLI points at the file the moment it opens it, which can be before there is a readable line in
+  // it. Moving then would blank the view for a tick; staying put means the next tick tries again.
+  it('stays on the old file until the new one can be read', async () => {
+    const first = path.join(dir, 'first.jsonl')
+    const second = path.join(dir, 'second.jsonl')
+    await writeFile(first, userLine(1))
+    const emit = vi.fn()
+    let current = first
+    const sessions = createConversationSessions({
+      sourceFor: async () => ({ path: current, format: 'claude' }),
+      emit
+    })
+    await sessions.open('s1')
+
+    current = second // named, but nothing on disk yet
+    await advance(POLL_MS)
+    expect(emit).not.toHaveBeenCalled()
+
+    await writeFile(second, userLine(9))
+    await advance(POLL_MS)
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(emit.mock.calls[0][2]).toBe(true)
+    sessions.closeAll()
+  })
+
+  it('says nothing when the path has not moved', async () => {
+    const p = path.join(dir, 't.jsonl')
+    await writeFile(p, userLine(1))
+    const emit = vi.fn()
+    const sessions = createConversationSessions({
+      sourceFor: async () => ({ path: p, format: 'claude' }),
+      emit
+    })
+    await sessions.open('s1')
+    await advance(POLL_MS)
+    await advance(POLL_MS)
+    expect(emit).not.toHaveBeenCalled()
+    sessions.closeAll()
+  })
+
   it('more walks backwards and does not repeat what open already returned', async () => {
     const p = path.join(dir, 't.jsonl')
     // Enough lines to exceed readConversationWindow's default tail (256KB), so open() only captures
@@ -312,8 +404,11 @@ describe('createConversationSessions', () => {
       .spyOn(ConversationFollow.prototype, 'read')
       .mockImplementation(() => new Promise((resolve) => (resolveRead = resolve)))
 
-    tickFn() // begins this tick's read for s1, which the mock leaves pending
-    expect(readSpy).toHaveBeenCalledTimes(1)
+    tickFn() // begins this tick's work for s1
+    // The read is reached after the entry's path check, which awaits sourceFor — so it starts a
+    // microtask or two into the tick rather than synchronously with it.
+    await settleIo()
+    expect(readSpy).toHaveBeenCalledTimes(1) // and the mock leaves it pending
 
     sessions.close('s1') // the pty exited (or the tab closed) while this read was still in flight
     resolveRead({ turns: [{ id: 'u2', role: 'user', parts: [{ kind: 'text', text: 'message 2' }] }], restarted: false })

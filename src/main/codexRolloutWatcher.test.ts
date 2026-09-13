@@ -254,6 +254,65 @@ describe('CodexRolloutWatcher', () => {
     w.stop()
   })
 
+  // `/new` does not truncate the rollout — codex leaves it and opens another. Without this the watcher
+  // stays on the ended conversation: the usage chips freeze and the conversation view keeps showing
+  // what the person just cleared.
+  it('moves to the newer rollout when the session starts a new conversation', async () => {
+    const cwd = path.join(dir, 'proj')
+    const first = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(first)
+
+    now += 30_000 // past the re-scan throttle
+    const second = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd3', 'sess-b', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(second)
+    expect(w.codexSessionIdFor('live-1')).toBe('sess-b')
+    w.stop()
+  })
+
+  it('writes the newer mapping down, so a restart adopts the conversation the session is really on', async () => {
+    const cwd = path.join(dir, 'proj')
+    await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const remember = vi.fn()
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, remember, now: () => now })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    remember.mockClear()
+
+    now += 30_000
+    const second = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd3', 'sess-b', cwd)
+    await advance(TICK)
+    expect(remember).toHaveBeenCalledWith('live-1', { rolloutPath: second, codexSessionId: 'sess-b' })
+    w.stop()
+  })
+
+  // Two codex sessions in one folder: nothing in a rollout says which of them opened it (measured — a
+  // `/new` file carries the same session_meta shape as a freshly spawned one). Guessing would drag a
+  // session out of its own live conversation, so neither moves.
+  it('leaves a mapped session where it is while another shares its account and folder', async () => {
+    const cwd = path.join(dir, 'proj')
+    const first = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    now += 1_000
+    const second = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd3', 'sess-b', cwd)
+    w.register(session('live-2', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(first)
+    expect(w.rolloutPathFor('live-2')).toBe(second)
+
+    now += 30_000
+    await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd4', 'sess-c', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(first)
+    expect(w.rolloutPathFor('live-2')).toBe(second)
+    w.stop()
+  })
+
   // A session taken back from the Host is registered with the path its note carried, and that note
   // carries the id beside it. Unlike a resume, an adopted session has no `info.resumeSessionId` to hold
   // the id instead — left null here, nothing could ever answer the scheduler for it and its schedule
