@@ -608,12 +608,11 @@ export const en: Record<keyof typeof ko, string> = {
   // The first-run screen — see the Korean catalog for what it is and who reads it.
   // The first-run question — see the Korean catalog for when it is shown.
   'firstRun.title': 'What should a new session open on?',
-  'firstRun.body': 'Both are the same session — only the way you look at it differs, and a tab can switch between them at any time.',
+  'firstRun.body': 'Both are the same session. Only the way you look at it differs, and you can change it in Settings, or from the top right of a session, at any time.',
   'firstRun.terminal': 'Terminal',
   'firstRun.terminalWhat': 'The CLI as it is',
   'firstRun.conversation': 'Conversation',
   'firstRun.conversationWhat': 'Read it as the exchange it is',
-  'firstRun.later': 'You can change this later in Settings › Default view for a new session.',
   'setup.title': 'Claude Code and Codex were not found',
   'setup.body': 'Press Install below on whichever one you want to use.',
   'setup.claudeWhat': "Anthropic's coding agent",

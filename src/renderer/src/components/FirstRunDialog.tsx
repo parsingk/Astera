@@ -10,9 +10,10 @@ import { useI18n } from '../i18n/I18nProvider'
  * told apart). It asks once: answering and dismissing settle it the same way, because a question that
  * comes back is worse than a default.
  *
- * There is no wrong answer here and the modal says so — the two are one session seen two ways, a tab
- * switches between them whenever it likes, and the line at the bottom names where the setting lives
- * for anyone who wants to change their mind later.
+ * There is no wrong answer here and the modal says so in one line: the two are one session seen two
+ * ways, and it names both places the choice can be changed afterwards — Settings, and the switch at
+ * the top right of any session. Said once — a second line underneath repeating it read as a warning
+ * about a decision that does not deserve one.
  */
 export function FirstRunDialog({
   onPick,
@@ -50,7 +51,6 @@ export function FirstRunDialog({
             <span className="first-run-what">{t('firstRun.conversationWhat')}</span>
           </button>
         </div>
-        <p className="first-run-later">{t('firstRun.later')}</p>
       </div>
     </div>
   )
