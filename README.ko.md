@@ -30,7 +30,7 @@
 - 파일을 끌어다 놓거나 이미지를 붙여넣으면 그 경로가 메시지에 들어갑니다
 
 <div align="center">
-<img src="assets/conversation.jpg" width="820" alt="The same four sessions shown as chat threads in a 2x2 grid — three Claude Code and one Codex, each with its own composer, model and reasoning effort" />
+<img src="assets/conversation.jpg" width="820" alt="The same four sessions read as chat threads in a 2x2 grid — three Claude Code and one Codex, on two Claude accounts and a Codex one, each pane with its own composer, model and reasoning effort, and the accounts and project history in the sidebar" />
 </div>
 
 **계정**

@@ -30,7 +30,7 @@
 - Arrastra un archivo o pega una imagen y su ruta entra en el mensaje
 
 <div align="center">
-<img src="assets/conversation.jpg" width="820" alt="The same four sessions shown as chat threads in a 2x2 grid — three Claude Code and one Codex, each with its own composer, model and reasoning effort" />
+<img src="assets/conversation.jpg" width="820" alt="The same four sessions read as chat threads in a 2x2 grid — three Claude Code and one Codex, on two Claude accounts and a Codex one, each pane with its own composer, model and reasoning effort, and the accounts and project history in the sidebar" />
 </div>
 
 **Cuentas**
