@@ -934,6 +934,9 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
   // whether the CLI is at a prompt that takes typing or holding a dialog that throws typing away —
   // `seenScreen: false` is what says so, and composerLocked reads it.
   const [seenScreen, setSeenScreen] = useState(false);
+  // The screen as it came, beside the window promptLinesOf cut out of it. Only the trust prompt reads
+  // it, and only when that window came back without rows — see `fresh` below.
+  const [screenLines, setScreenLines] = useState<readonly string[]>([]);
   // ...but never shut for long. A session whose terminal registers no reader at all must not keep its
   // composer shut for the rest of its life over a question nobody is asking.
   const [waitedForScreen, setWaitedForScreen] = useState(false);
@@ -952,6 +955,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
       const screen = sessionBus.screenOf(sessionId);
       if (screen === null) return; // no terminal registered — cannot tell, so leave what is there
       setSeenScreen(true);
+      setScreenLines(screen.split(String.fromCharCode(10)));
       setPromptLines(promptLinesOf(screen.split("\n"), PROMPT_LINES_MAX));
     };
     read();
@@ -965,7 +969,21 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
   // The rows of that same quote, as something to press. They come out of the quote rather than
   // alongside it, so what the buttons say and what the banner shows can never be two different
   // readings of the screen.
-  const fresh = useMemo(() => promptChoicesOf(promptLines), [promptLines]);
+  // promptLinesOf keeps the last PROMPT_LINES_MAX lines of the screen, which is a quote's worth and not
+  // a promise to have kept any particular row. How many lines a dialog takes depends on the folder's
+  // path, the window's width and how much of it wraps — none of which this can hold an opinion about —
+  // so on some screens the rows to press fall outside that window and the banner came up with nothing
+  // to press, which is exactly what it exists to offer.
+  //
+  // So when the window yields none, the whole screen is asked instead. Gated on the trust prompt on
+  // purpose: an ordinary screen's own composer line starts with the very marker promptChoicesOf looks
+  // for, and asking the whole screen there would draw a button for the input box. A trust dialog has no
+  // composer on it — the only marked row is the one being offered.
+  const fresh = useMemo(() => {
+    const windowed = promptChoicesOf(promptLines)
+    if (windowed.length > 0 || !isFolderTrustPrompt(promptLines)) return windowed
+    return promptChoicesOf(screenLines)
+  }, [promptLines, screenLines]);
   /** The folder-trust question, which takes one of its rows and nothing else — typing into it is
    *  discarded by the CLI. It gets its own heading, and it is the one prompt that locks the composer
    *  (see `isDisabled` below). */

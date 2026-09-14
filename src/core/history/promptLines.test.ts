@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { promptLinesOf, isFolderTrustPrompt } from './promptLines'
+import { promptChoicesOf } from './promptChoices'
 
 // A real Claude approval screen, as its terminal drew it (measured 2026-09-12). Note where the dialog
 // sits: at the bottom, with no input line under it, and with its highlighted choice carrying the very
@@ -202,5 +203,39 @@ describe('isFolderTrustPrompt', () => {
 
   it('answers false for an empty quote', () => {
     expect(isFolderTrustPrompt([])).toBe(false)
+  })
+})
+
+// How many lines a trust dialog takes depends on the path, the width, and how much of it wraps, so its
+// rows can fall outside the window promptLinesOf keeps. The whole screen still has them, and a trust
+// screen carries no composer line for promptChoicesOf to mistake for a row.
+describe('a trust dialog whose rows fall outside the quoted window', () => {
+  const dialog = [
+    ' Accessing workspace:',
+    '',
+    ' D:' + String.fromCharCode(92) + 'a-very-long-path-that-wraps-and-wraps',
+    '',
+    ' Quick safety check: Is this a project you created or one you trust?',
+    '',
+    " Claude Code'll be able to read, edit, and execute files here.",
+    '',
+    ' Security guide',
+    '',
+    ' ❯ No, exit',
+    '   Yes, I trust this folder',
+    '',
+    ' Enter to confirm · Esc to cancel'
+  ]
+
+  it('still reads as the trust question from a window too small to hold its rows', () => {
+    const tiny = promptLinesOf(dialog, 6)
+    expect(isFolderTrustPrompt(tiny)).toBe(true)
+  })
+
+  it('gives up its rows to the whole screen when the window has none', () => {
+    // a window small enough to keep only the tail, past the marked row
+    const tiny = promptLinesOf(dialog, 2)
+    expect(promptChoicesOf(tiny)).toEqual([])
+    expect(promptChoicesOf(dialog).map((c) => c.label)).toEqual(['No, exit', 'Yes, I trust this folder'])
   })
 })
