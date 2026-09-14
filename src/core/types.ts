@@ -330,6 +330,18 @@ export interface SchedStateEvent {
  *  re-exports it rather than carrying a copy that would have to be kept in step by hand. */
 export type Attention = 'idle' | 'working' | 'waiting'
 
+/** The tool call a session's Claude Code is waiting on, captured by the PreToolUse hook **before** the
+ *  CLI draws its dialog (main/pendingPrompt.ts). `input` is the model's own tool input, untouched — for
+ *  `AskUserQuestion` the questions the conversation view draws as a card. Gone once the matching
+ *  PostToolUse, or the turn's Stop, arrives. Only Claude sessions produce this: codex has no hooks. */
+export interface PendingToolPrompt {
+  toolUseId: string
+  tool: string
+  input: unknown
+  /** When the capture arrived, ms since epoch. */
+  at: number
+}
+
 /** Which of the terminal or the conversation a session tab shows (Task 10). Also the shape of the
  *  `conversationDefault` setting: the same two values, meaning "what a session tab starts on"
  *  there and "what it is showing right now" once it has one. */

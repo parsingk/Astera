@@ -25,6 +25,7 @@ import { HookEventWatcher } from './hookEvents'
 import { fanOutHookEvent } from './hookFanOut'
 import { DesktopNotifier } from './desktopNotifier'
 import { createAttentionState } from './attention'
+import { createPendingPromptState } from './pendingPrompt'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
@@ -405,6 +406,9 @@ app.whenReady().then(async () => {
   // Notification payload itself, and ipc.ts's session-exit path forgets a session's entry here too
   // (its own comment there explains the lost-sight exception).
   const attention = createAttentionState()
+  // The waiting tool call per session (main/pendingPrompt.ts): what the conversation view draws a
+  // question card from. Built here, beside attention, for the same two readers — the fan-out and ipc.
+  const pendingPrompt = createPendingPromptState()
   // The second outlet on the same pipe (design doc §6). Electron's Notification was unused in this
   // app until now — only Tray was.
   const desktop = new DesktopNotifier({
@@ -523,7 +527,7 @@ app.whenReady().then(async () => {
     // is not one of these taps: it no longer reads a hook payload directly, it subscribes to `attention`
     // instead (desktopNotifier.ts's constructor) — see hookFanOut.ts's own comment on why `attention`
     // still runs first regardless.
-    (sid, payload) => fanOutHookEvent({ attention, slack, rolling: rollingRef }, sid, payload),
+    (sid, payload) => fanOutHookEvent({ attention, pendingPrompt, slack, rolling: rollingRef }, sid, payload),
     slackLog
   )
   hookWatcher.start()
