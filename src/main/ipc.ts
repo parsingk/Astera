@@ -237,7 +237,9 @@ export interface HostWiring {
   /** Hands over the shutdown handle once the client is built. Called from inside `registerIpc`, not
    *  from a boot path — the same shape as `OrchWiring.onTabResumeReady` — and read from will-quit.
    *  Not called at all when there is no Host bundle to talk to: there is then nothing to stop. */
-  onHostClientReady: (stop: () => Promise<void>) => void
+  /** The two controls the app needs over its Host once the client is up: `stop` closes this side's
+   *  socket and timers on quit, `retire` also asks the Host itself to leave — see client.ts. */
+  onHostClientReady: (controls: { stop: () => Promise<void>; retire: () => Promise<void> }) => void
 }
 
 /** 앱 자신이 명령을 부를 때의 호출자 id. **어떤 세션 id 와도 겹칠 수 없는 모양**이어야 한다 —
@@ -5821,7 +5823,7 @@ export function registerIpc(
       })
       .then(settleSessionsTakenBack)
 
-    hostWiring?.onHostClientReady(() => client.stop())
+    hostWiring?.onHostClientReady({ stop: () => client.stop(), retire: () => client.retire() })
   }
   // **A throw in here must not be allowed to leave `hostSessionsTakenBack` pending.** The settlement
   // above covers every asynchronous path, but the body has work ahead of that chain — `retireOlderHosts`
