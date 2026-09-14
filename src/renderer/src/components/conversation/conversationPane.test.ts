@@ -387,11 +387,11 @@ describe('choicesToShow', () => {
 // of the screen landed on a folder-trust dialog. Everything typed in between went into a dialog that
 // discards typing — the failure this view exists to prevent.
 describe('composerLocked', () => {
-  it('is shut while the pane does not yet know what the CLI is showing', () => {
+  it('is shut while the CLI is offering no line to type on', () => {
     expect(composerLocked(false, false, false)).toBe(true)
   })
 
-  it('opens as soon as a reading lands and says it is not a trust prompt', () => {
+  it('opens once the CLI shows its own input line', () => {
     expect(composerLocked(false, true, false)).toBe(false)
   })
 

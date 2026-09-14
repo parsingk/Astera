@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { promptLinesOf, isFolderTrustPrompt } from './promptLines'
+import { promptLinesOf, isFolderTrustPrompt, hasInputLine } from './promptLines'
 import { promptChoicesOf } from './promptChoices'
 
 // A real Claude approval screen, as its terminal drew it (measured 2026-09-12). Note where the dialog
@@ -237,5 +237,45 @@ describe('a trust dialog whose rows fall outside the quoted window', () => {
     const tiny = promptLinesOf(dialog, 2)
     expect(promptChoicesOf(tiny)).toEqual([])
     expect(promptChoicesOf(dialog).map((c) => c.label)).toEqual(['No, exit', 'Yes, I trust this folder'])
+  })
+})
+
+// The conversation view keeps its composer shut until the CLI is offering a line to type on, so this
+// has to tell a dialog and a still-starting CLI apart from a prompt that is ready.
+describe('hasInputLine', () => {
+  it('says no while a trust dialog is up, marked either way', () => {
+    for (const mark of ['❯', '>']) {
+      expect(
+        hasInputLine([
+          ' Quick safety check: Is this a project you created or one you trust?',
+          '',
+          ' Security guide',
+          '',
+          mark + ' No, exit',
+          '   Yes, I trust this folder',
+          '',
+          ' Enter to confirm · Esc to cancel'
+        ])
+      ).toBe(false)
+    }
+  })
+
+  it('says yes for a boxed composer, marked either way', () => {
+    for (const mark of ['❯', '>']) {
+      expect(
+        hasInputLine([
+          ' Welcome back',
+          '',
+          '────────────',
+          mark + ' ',
+          '────────────'
+        ])
+      ).toBe(true)
+    }
+  })
+
+  it('says no for a screen with nothing on it yet', () => {
+    expect(hasInputLine([])).toBe(false)
+    expect(hasInputLine(['', '  ', ''])).toBe(false)
   })
 })

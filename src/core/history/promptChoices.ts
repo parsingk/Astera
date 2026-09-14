@@ -1,7 +1,10 @@
 /** The marker a CLI puts in front of the choice it is currently pointing at. The same characters an
  *  input line starts with — which is why promptLinesOf has already taken the input line away by the
  *  time these lines get here, and why nothing below tries to tell the two apart again. */
-const MARKERS = ['❯', '›'] // ❯ (claude), › (codex)
+// ❯ (claude), › (codex), and `>` — Claude Code's plain fallback for ❯, which is what it drew on a
+// real trust prompt (`> No, exit`). Without it that screen carried no marked row, so it offered
+// nothing to press and the banner above it had no buttons.
+const MARKERS = ['❯', '›', '>']
 
 /** A numbered row: `1. Yes`. The number is what a CLI takes as an answer on its own, so a choice that
  *  has one needs no walking to reach. */

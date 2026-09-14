@@ -53,7 +53,7 @@ import {
 } from "../../../../core/commands/slashCommands";
 import { fileTokenAt } from "../../../../core/files/fileMatch";
 import { draftOf, forgetDraft, keepDraft } from "./drafts";
-import { promptLinesOf, isFolderTrustPrompt } from "../../../../core/history/promptLines";
+import { promptLinesOf, isFolderTrustPrompt, hasInputLine } from "../../../../core/history/promptLines";
 import { queuedMessagesOf } from "../../../../core/history/queuedMessages";
 import {
   isAwaitingReply,
@@ -274,17 +274,19 @@ export function shouldShowPrompt(attention: Attention, choiceCount: number, trus
 /**
  * Whether the composer is shut.
  *
- * Two reasons, and they are the same reason at different moments: the pane knows the CLI is holding a
- * dialog that discards typing, or it does not yet know what the CLI is holding at all.
+ * Two reasons, and they are the same reason at different moments: the CLI is holding a dialog that
+ * discards typing, or it is not offering a line to type on at all.
  *
- * The second was a real gap. A pane opens, its composer invites typing, and half a second later the
- * first reading of the screen lands and shuts it — so what a person typed in between went into a
- * folder-trust dialog that ignored every keystroke, which is the whole failure this view was supposed
- * to stop. Shut until told otherwise is the honest default while a session has written nothing; it
- * lasts one fast poll, and `waited` lifts it regardless if no reading ever comes.
+ * The second is the one that bit. Waiting to be *told* it is a dialog cannot work, because for the
+ * first second of a session there is no dialog on the screen to see — the CLI has not drawn it yet
+ * (measured: composer open and the screen readable at 440ms, the trust dialog only at ~980ms), and
+ * everything typed into that window went nowhere. So the test is the other way round and positive:
+ * the composer opens when the CLI's own input line is on the screen, and not before. A CLI that is
+ * still starting, or holding any dialog, is offering no such line. `waited` lifts it regardless if no
+ * reading ever comes, so a terminal that registers no reader cannot cost a session its composer.
  */
-export function composerLocked(trust: boolean, knowsScreen: boolean, waited: boolean): boolean {
-  return trust || !(knowsScreen || waited)
+export function composerLocked(trust: boolean, cliTakesTyping: boolean, waited: boolean): boolean {
+  return trust || !(cliTakesTyping || waited)
 }
 
 export function choicesToShow(
@@ -988,6 +990,12 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
    *  discarded by the CLI. It gets its own heading, and it is the one prompt that locks the composer
    *  (see `isDisabled` below). */
   const trustPrompt = useMemo(() => isFolderTrustPrompt(promptLines), [promptLines]);
+  // Whether the CLI is showing a line to type on. A session that has already written turns is past
+  // all of this and is never held back by it.
+  const cliTakesTyping = useMemo(
+    () => turns.length > 0 || hasInputLine(screenLines),
+    [turns.length, screenLines]
+  );
   // The last reading that had rows in it. A ref rather than state: it is written during the render that
   // consumes it, and re-rendering for it would only re-run this block to the same answer. Cleared the
   // moment the trust prompt is gone, so nothing is held across two different questions.
@@ -1668,7 +1676,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
     // line, and **discards typed text outright**. That is the bug this started from — a person typed
     // into an open composer, nothing was sent anywhere, and the session looked dead. Its two rows are
     // drawn as buttons right above, so nothing is lost by closing the box that cannot work.
-    isDisabled: composerLocked(trustPrompt, seenScreen || turns.length > 0, waitedForScreen),
+    isDisabled: composerLocked(trustPrompt, cliTakesTyping, waitedForScreen),
     // No `isRunning`. In assistant-ui it means "a run this component controls is in progress, with
     // a cancel path" — we have neither: the CLI owns the run, and there is no `onCancel` to give
     // this adapter. Setting it true while `working` swallows Enter, hides Send behind

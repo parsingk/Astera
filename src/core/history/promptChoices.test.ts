@@ -78,3 +78,31 @@ describe('stepToward', () => {
     expect(stepToward([{ label: 'a', number: null, selected: false }], 'a')).toBeNull()
   })
 })
+
+// Claude Code draws `>` instead of `❯` when it falls back to plain characters. Captured from a real
+// trust prompt in a project folder — the screen that came back with a banner and nothing to press.
+describe('a screen marked with the plain fallback', () => {
+  const screen = [
+    ' Accessing workspace:',
+    '',
+    ' D:' + String.fromCharCode(92) + 'parsingk' + String.fromCharCode(92) + 'ai-novel-translator',
+    '',
+    ' Quick safety check: Is this a project you created or one you trust?',
+    '',
+    " Claude Code'll be able to read, edit, and execute files here.",
+    '',
+    ' Security guide',
+    '',
+    '> No, exit',
+    '  Yes, I trust this folder',
+    '',
+    ' Enter to confirm · Esc to cancel'
+  ]
+
+  it('reads its rows the same as one marked with ❯', () => {
+    expect(promptChoicesOf(screen)).toEqual([
+      { label: 'No, exit', number: null, selected: true },
+      { label: 'Yes, I trust this folder', number: null, selected: false }
+    ])
+  })
+})

@@ -1,5 +1,11 @@
-/** The marker a CLI puts at the start of the line a person types on. */
-const CLAUDE_INPUT = '❯' // ❯ — claude, and also its highlighted choice
+/** The markers a CLI puts at the start of the line a person types on.
+ *
+ *  Claude Code draws two of them. `❯` is what it uses when it believes the terminal can render it,
+ *  and `>` is its plain fallback — measured on a real trust prompt, which came back as `> No, exit`
+ *  over `  Yes, I trust this folder`. Nothing downstream could see that screen as a list of choices,
+ *  so the conversation view quoted the question and offered nothing to press. Both spellings are the
+ *  same mark and are treated as one. */
+const CLAUDE_INPUTS = ['❯', '>']
 const CODEX_INPUT = '›' // › — codex
 
 /** What a TUI draws a box or a rule out of. A line of nothing but these is a border, not content. */
@@ -40,17 +46,28 @@ function isBorder(line: string): boolean {
  * Empty when the screen is empty, which is how a caller learns to draw nothing rather than an empty
  * box.
  */
-export function promptLinesOf(rows: readonly string[], max: number): string[] {
+/** Where the line a person types on is, or -1 when the CLI is not offering one — it is starting up, or
+ *  it is holding a dialog that takes a keypress instead. Shared with promptLinesOf, which cuts the
+ *  screen there, so the two can never disagree about what the input line is. */
+export function inputLineAt(rows: readonly string[]): number {
   const lines = rows.map((r) => r.replace(/\s+$/, ''))
+  return scanForInput(lines)
+}
 
+/** Whether the CLI is showing a line a person can type on. The conversation view keeps its own composer
+ *  shut until this is true for a session that has written nothing yet: an open box over a CLI that is
+ *  still starting, or holding a dialog, invites typing that goes nowhere. */
+export function hasInputLine(rows: readonly string[]): boolean {
+  return inputLineAt(rows) !== -1
+}
+
+function scanForInput(lines: readonly string[]): number {
   let input = -1
   for (let i = lines.length - 1; i >= 0; i--) {
     const start = lines[i].trimStart()
     const marker = start.startsWith(CODEX_INPUT)
       ? CODEX_INPUT
-      : start.startsWith(CLAUDE_INPUT)
-        ? CLAUDE_INPUT
-        : null
+      : (CLAUDE_INPUTS.find((m) => start.startsWith(m)) ?? null)
     if (marker === null) continue
     if (/^\d+\.\s/.test(start.slice(marker.length).trimStart())) continue // a numbered choice
     if (marker === CODEX_INPUT) {
@@ -63,6 +80,12 @@ export function promptLinesOf(rows: readonly string[], max: number): string[] {
     input = i
     break
   }
+  return input
+}
+
+export function promptLinesOf(rows: readonly string[], max: number): string[] {
+  const lines = rows.map((r) => r.replace(/\s+$/, ''))
+  const input = scanForInput(lines)
 
   const above = input === -1 ? lines : lines.slice(0, input)
   // Trailing blanks go, and so does the rule that was the top of the composer's box — cutting the
