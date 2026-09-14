@@ -27,7 +27,7 @@ async function verify(javaHome: string): Promise<Jdk | null> {
     // Going through a shell splits the unquoted absolute path into tokens, which breaks the invocation or does
     // something worse. system.checkCli in ipc.ts uses shell:true because it runs a 'name' off PATH (claude/codex);
     // here an absolute path is executed directly, so no shell is the correct choice.
-    execFile(javaExe, ['-version'], { timeout: 5000 }, (_err, stdout, stderr) => {
+    execFile(javaExe, ['-version'], { timeout: 5000, windowsHide: true }, (_err, stdout, stderr) => {
       // java -version has always written to stderr (JDK 9+ included) — reading only stdout yields an empty
       // string. Passing them combined lets parseJavaVersion find it on whichever stream it landed.
       const parsed = parseJavaVersion(`${stdout}\n${stderr}`)
@@ -41,7 +41,7 @@ async function verify(javaHome: string): Promise<Jdk | null> {
 function pathJavaHome(): Promise<string | null> {
   const finder = process.platform === 'win32' ? 'where' : 'which'
   return new Promise((resolve) => {
-    execFile(finder, ['java'], { shell: true, timeout: 5000 }, (err, stdout) => {
+    execFile(finder, ['java'], { shell: true, timeout: 5000, windowsHide: true }, (err, stdout) => {
       if (err) return resolve(null)
       const first = stdout
         .split(/\r\n|\r|\n/)

@@ -32,7 +32,7 @@ const TIMEOUT_MS = 10_000
  *  shapes and descriptor.ts is out of scope for this change. */
 function runSecurityRead(file: string, args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile(file, args, { timeout: 5_000 }, (err, stdout) => {
+    execFile(file, args, { timeout: 5_000, windowsHide: true }, (err, stdout) => {
       resolve(err ? null : stdout)
     })
   })
