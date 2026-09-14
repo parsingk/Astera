@@ -37,7 +37,7 @@ import { reattachSessions, type ReattachResult } from './host/reattach'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
+import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { markCodexProjectTrusted } from '../core/accounts/codexTrust'
 import { descriptorOf } from '../core/providers/descriptor'
@@ -438,6 +438,32 @@ export function hostHoldings(entries: PtyEntry[]): HostHoldings {
     else if (e.meta.kind === 'run') runs += 1
   }
   return { sessions, terminals, runs }
+}
+
+/** Whether the outdated Host should be replaced *now* (docs/superpowers/specs/2026-09-14-host-replacement-design.md
+ *  §4). Four gates, and every one has to open:
+ *
+ *  - `outdated` — there is a newer build to run at all (`HostStatus.outdated`).
+ *  - `holdings` all zero — replacing costs nobody anything. **`null` is not zero**: it is the Host not
+ *    answering the list in time, and a Host too slow to enumerate twelve terminals is not one to
+ *    retire on the assumption it had none. The same distinction `host.holdings` and the restart
+ *    cleanup already draw.
+ *  - not `inFlight` — one replacement at a time; a Run tearing down its tree sends a burst of
+ *    `pty-exit`s, and each of them asks this question.
+ *  - not `quitting` — the app is on its way out, and `will-quit` is the one that decides what
+ *    happens to the Host's ptys then.
+ *
+ *  Hoisted out of the wiring for the usual reason in this file: the wiring is an electron-only
+ *  closure no test can reach, and this is the rule that ends a process. */
+export function hostReplaceDue(a: {
+  outdated: boolean
+  holdings: HostHoldings | null
+  inFlight: boolean
+  quitting: boolean
+}): boolean {
+  if (!a.outdated || a.inFlight || a.quitting) return false
+  if (a.holdings === null) return false
+  return a.holdings.sessions === 0 && a.holdings.terminals === 0 && a.holdings.runs === 0
 }
 
 /**
@@ -870,6 +896,17 @@ export function registerIpc(
    *  Two concurrent `pty-list` calls are safe — each resolves on the first `pty-listed` it sees, and
    *  both are the same Host describing the same registry a moment apart. */
   let hostPtyList: (() => Promise<PtyEntry[] | null>) | null = null
+  /** Retires the Host and starts one from this app's own build, resolving with the status the new
+   *  connection settled at. Null before the Host wiring has run. The Info tab's *Restart now* and the
+   *  automatic replacement in `startHostClient` both go through it, so there is one place that knows
+   *  the order (docs/superpowers/specs/2026-09-14-host-replacement-design.md §5). */
+  let hostReplace: (() => Promise<HostStatus>) | null = null
+  /** Set from `before-quit`. The replacement rule stands aside once this is true: the app is on its
+   *  way out and `will-quit` decides what happens to the Host's ptys then. */
+  let quittingForHost = false
+  app.on('before-quit', () => {
+    quittingForHost = true
+  })
   /** Settles `hostSessionsTakenBack`. `startHostClient` owns it and must call it on **every** path it
    *  can leave by, including the one where there is no Host at all — a path that returns without
    *  calling it leaves `bootOrch` waiting forever. The initialiser is never the function that runs:
@@ -5646,6 +5683,59 @@ export function registerIpc(
     // the Info tab's row does not invent a second way to ask the same question.
     hostPtyList = () => listPtys(transport)
 
+    /** One replacement at a time. Shared by the automatic rule and the Info tab's button, which is
+     *  what keeps a click during an automatic replacement from retiring the Host that was just
+     *  started. */
+    let replacing = false
+    const replaceHost = async (why: string): Promise<HostStatus> => {
+      if (replacing) return client.status()
+      replacing = true
+      const was = client.status()
+      hostLog(`host: replacing the Host (${was.hostVersion ?? '?'}, pid ${was.pid ?? '?'}) ${why}`)
+      try {
+        // retire() stops the client too, which is what keeps the reconnect loop from putting the
+        // very same Host back the moment the socket drops (the 1.3.18 failure, in the other
+        // direction). restart() brings the loop back once the retire has settled.
+        // announce: the Host ends what it holds on the way out, and the app must hear that even
+        // though it is the one that asked (see retire's own comment).
+        await client.retire({ announce: true })
+        client.restart()
+        await client.ready(READY_TIMEOUT_MS)
+        const now = client.status()
+        hostLog(
+          now.connected
+            ? `host: replaced — now Host ${now.hostVersion} (pid ${now.pid})`
+            : `host: the replacement did not come up: ${now.problem ?? 'no answer'}`
+        )
+        return now
+      } finally {
+        replacing = false
+      }
+    }
+    hostReplace = () => replaceHost('on request')
+
+    /** The automatic rule: an outdated Host is replaced the first moment it holds nothing (design
+     *  §4). Asked after every `pty-exit` the Host reports and once after the startup sweep; each ask
+     *  is one `pty-list` round trip, and they do not overlap. */
+    let checking = false
+    const maybeReplace = async (why: string): Promise<void> => {
+      if (checking || replacing || quittingForHost || !client.status().outdated) return
+      checking = true
+      try {
+        const entries = await listPtys(transport)
+        const holdings = entries ? hostHoldings(entries) : null
+        if (!hostReplaceDue({ outdated: client.status().outdated, holdings, inFlight: replacing, quitting: quittingForHost })) return
+        await replaceHost(`${why}, and it holds nothing`)
+      } catch (e) {
+        hostLog(`host: the replacement check failed: ${String(e)}`)
+      } finally {
+        checking = false
+      }
+    }
+    client.onMessage((m) => {
+      if (m.t === 'pty-exit') void maybeReplace('after a pty exited')
+    })
+
     /** One sweep: ask the Host what it is holding, hand each entry to the manager its note names,
      *  and report what that answer is worth to the restart cleanup. Run at startup, and again on a
      *  reconnect to the **same** Host — the onConnect wiring below is where that identity is judged.
@@ -5842,6 +5932,9 @@ export function registerIpc(
         log: (m) => hostLog(`host: ${m}`)
       })
       hostLog(`host: took back ${res.adopted} session(s), refused ${res.refused} (${why})`)
+      // An outdated Host that came back holding nothing is replaced now rather than at the next
+      // pty-exit, which for an empty Host would never come.
+      void maybeReplace(`${why}, sweep done`)
       return res
     }
 
@@ -5963,7 +6056,8 @@ export function registerIpc(
         hostVersion: null,
         startedAt: null,
         pid: null,
-        problem: 'out/main/host.js was not found'
+        problem: 'out/main/host.js was not found',
+        outdated: false
       }
   )
   // How many of the running sessions would still be running after this app quits — the window-close
@@ -5995,6 +6089,24 @@ export function registerIpc(
   ipcMain.handle('host.holdings', async () => {
     const entries = await hostPtyList?.()
     return entries ? hostHoldings(entries) : null
+  })
+  // The Info tab's *Restart now*: retire the Host this app is connected to and start one from this
+  // app's build, whatever the old one holds — the renderer has already told the person what ends
+  // (design §6). Answers the status the new connection settled at, or the current status when the
+  // Host wiring never ran.
+  ipcMain.handle('host.replace', async (): Promise<HostStatus> => {
+    if (hostReplace) return hostReplace()
+    return (
+      hostClient?.status() ?? {
+        connected: false,
+        protocol: null,
+        hostVersion: null,
+        startedAt: null,
+        pid: null,
+        problem: 'out/main/host.js was not found',
+        outdated: false
+      }
+    )
   })
 
   // The conversation view (main/conversation.ts). open/more answer null rather than reject on a
@@ -6268,6 +6380,20 @@ export function registerIpc(
   // 'Quit' in the forced-update gate. On win32/macOS win.close only minimises to the tray, so app.quit
   // is the only real exit — before-quit sets quitting=true, which lets it through the window close guard.
   ipcMain.on('app.quit', () => app.quit())
+  // Quit *and* end what the Host is keeping. The tray's "Quit and end sessions" and the Linux close
+  // confirmation's checkbox both land here (design §6). Retire first: `will-quit` skips every pty the
+  // Host owns, by design, so this is the one path that reaches them. Awaited, and a failure is not
+  // one — a Host that never answered has nothing to end — and quit follows either way.
+  ipcMain.on('app.quitEndingSessions', () => {
+    void (async () => {
+      try {
+        await hostClient?.retire()
+      } catch {
+        /* nothing to end */
+      }
+      app.quit()
+    })()
+  })
   win.on('maximize', () => send('win:maximized', true))
   win.on('unmaximize', () => send('win:maximized', false))
 

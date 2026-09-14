@@ -245,12 +245,23 @@ function Titlebar({
     if (window.api.platform === 'linux' && runningCount > 0) {
       const kept = await window.api.host.sessionsOutlivingApp().catch(() => 0)
       const body = quitConfirmBody(runningCount, kept)
-      const ok = await confirmModal({
+      // When some sessions would be kept, the same dialog offers to end them too: the decision
+      // belongs to the quit it rides on (host-replacement design §6). Taking it retires the Host
+      // before quitting, which is the one path that reaches the ptys will-quit skips.
+      const answer = await confirmModalWithChoices({
         title: t('common.quitConfirm.title'),
         body: t(body.key, body.params),
-        confirmLabel: t('common.close')
+        confirmLabel: t('common.close'),
+        choices:
+          kept > 0
+            ? [{ id: 'endKept', label: t('common.quitConfirm.endKept', { kept }), hint: t('common.quitConfirm.endKeptHint') }]
+            : undefined
       })
-      if (!ok) return
+      if (!answer.ok) return
+      if (answer.checked.includes('endKept')) {
+        window.api.app.quitEndingSessions()
+        return
+      }
     }
     window.api.win.close()
   }
@@ -436,6 +447,28 @@ export default function App(): React.JSX.Element {
    *  once this is filled: zeros would be a claim that nothing of the person's survives closing the
    *  app, and that is the one wrong answer worth avoiding here. */
   const [hostHolding, setHostHolding] = useState<HostHoldings | null>(null)
+  const [hostRestarting, setHostRestarting] = useState(false)
+  /** The Info tab's *Restart now*: confirm with what ends, replace, then re-read the row. */
+  const restartHost = async (): Promise<void> => {
+    const h = hostHolding
+    const body = h
+      ? t('settings.info.hostRestartConfirmBody', { sessions: h.sessions, terminals: h.terminals, runs: h.runs })
+      : t('settings.info.hostRestartConfirmBodyNone')
+    const ok = await confirmModal({
+      title: t('settings.info.hostRestartConfirmTitle'),
+      body,
+      confirmLabel: t('settings.info.hostRestartNow')
+    })
+    if (!ok) return
+    setHostRestarting(true)
+    try {
+      const status = await window.api.host.replace()
+      setHostStatus(status)
+      setHostHolding(status.connected ? await window.api.host.holdings().catch(() => null) : null)
+    } finally {
+      setHostRestarting(false)
+    }
+  }
   // The moment the check finished has to be held alongside the state so the "checked at 17:43" line
   // can carry it. Events that are not results (checking, downloading) have no time.
   const [update, setUpdate] = useState<(UpdateStatus & { checkedAt: number | null }) | null>(null)
@@ -4283,6 +4316,16 @@ export default function App(): React.JSX.Element {
                               protocol: hostStatus.protocol ?? 0,
                               uptime: hostUptime(hostStatus.startedAt)
                             }) +
+                            // The Host outlived an update and still runs the previous version. Said
+                            // here because this row is the one place its version is on screen, and
+                            // the automatic replacement (host-replacement design §4) is otherwise
+                            // invisible until it happens.
+                            (hostStatus.outdated
+                              ? ` · ${t('settings.info.hostOutdated', {
+                                  host: hostStatus.hostVersion ?? '?',
+                                  app: appVersion
+                                })}`
+                              : '') +
                             // Appended only once the Host has answered. Until then the row is the
                             // connection facts alone, which is the whole truth it has: a count here
                             // before the answer would be an invented one.
@@ -4296,6 +4339,18 @@ export default function App(): React.JSX.Element {
                           : hostStatus?.problem
                             ? t('settings.info.hostNotConnectedWhy', { detail: hostStatus.problem })
                             : t('settings.info.hostNotConnected')}
+                        {/* Not waiting for the automatic replacement. Confirms with the holdings,
+                            because the count is the only honest part of the offer (design §6). */}
+                        {hostStatus?.connected && hostStatus.outdated && (
+                          <button
+                            type="button"
+                            disabled={hostRestarting}
+                            onClick={() => void restartHost()}
+                            style={{ marginLeft: 8 }}
+                          >
+                            {hostRestarting ? t('settings.info.hostRestarting') : t('settings.info.hostRestartNow')}
+                          </button>
+                        )}
                       </span>
                     </div>
                     <div className="settings-row">

@@ -147,6 +147,7 @@ export const es: Catalog = {
   // index.ts — system tray context menu
   'common.trayOpen': 'Abrir',
   'common.trayQuit': 'Salir',
+  'common.trayQuitEnding': 'Salir y terminar las sesiones',
   // App.tsx — rail, session spawn failure, placeholder, status bar usage
   'session.rail.toggleSidebar': 'Contraer o expandir la barra lateral',
   'session.spawn.failed': 'No se pudo iniciar la sesión: {message}',

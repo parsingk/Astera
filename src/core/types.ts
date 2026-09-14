@@ -699,6 +699,11 @@ export interface HostStatus {
   pid: number | null
   /** One clause saying why there is no connection, or null when there is one. */
   problem: string | null
+  /** The Host is running an older build than this app — it outlived an update and still runs the
+   *  previous host.js. The app replaces it on its own the first moment it holds nothing, and the Info
+   *  tab offers to do it now (docs/superpowers/specs/2026-09-14-host-replacement-design.md). False
+   *  whenever the version cannot be compared, and false for a Host *newer* than the app. */
+  outdated: boolean
 }
 
 /** How much of this app's work the Host is holding right now — the fact that makes the Info tab's
@@ -1256,6 +1261,9 @@ export interface KeysApi {
  *  real), so a quit path that works everywhere is needed separately */
 export interface AppControlApi {
   quit(): void
+  /** Quit and end what the Host is keeping alive, instead of leaving it running. The Host is retired
+   *  first — `will-quit` skips its ptys by design, so this is the one path that reaches them. */
+  quitEndingSessions(): void
 }
 
 /**
@@ -1389,6 +1397,10 @@ export type RendererApi = CoreApi & {
      *  derived from the platform, because the runtime has a supported fallback and the install
      *  confirmation must not promise what that fallback cannot keep. */
     survivesUpdate(): Promise<boolean>
+    /** Retires the Host and starts one from this app's own build — the Info tab's *Restart now*.
+     *  Ends everything the Host holds, so the caller has already shown what that is. Resolves with
+     *  the status the new connection settled at (docs/superpowers/specs/2026-09-14-host-replacement-design.md). */
+    replace(): Promise<HostStatus>
     /** What the Host says it is holding, or **null when it did not say** — there is no Host, the
      *  connection is down, or it did not answer in time. Null and `{ sessions: 0, terminals: 0 }` are
      *  opposite answers and the caller must not merge them: zero is the Host telling you nothing of

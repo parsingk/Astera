@@ -432,3 +432,122 @@ describe('HostClient', () => {
     await c.stop()
   })
 })
+
+describe('HostClient.restart', () => {
+  // retire() is stop() plus a polite word to the Host; restart() is the counterpart that brings the
+  // same cycle back so an outdated Host can be *replaced* rather than merely ended
+  // (docs/superpowers/specs/2026-09-14-host-replacement-design.md §5).
+  it('connects again after stop(), to whatever is at the address now', async () => {
+    const addr = addressFor('restart-a')
+    const first = await serveAt(addr, { version: '1.0.0' })
+    const c = new HostClient({ address: addr.address, appVersion: '2.0.0', log: () => {}, spawnHost: () => {} })
+    c.start()
+    await settled(c, (s) => s.connected && s.hostVersion === '1.0.0')
+    await c.stop()
+    await first.close()
+    servers = servers.filter((s) => s !== first)
+    const second = await serveAt(addr, { version: '2.0.0' })
+    void second
+    c.restart()
+    await settled(c, (s) => s.connected && s.hostVersion === '2.0.0')
+    expect(c.status().outdated).toBe(false)
+  })
+
+  it('starts a Host when nothing answers after the restart, exactly as the first cycle does', async () => {
+    const addr = addressFor('restart-b')
+    let spawned = 0
+    const c = new HostClient({
+      address: addr.address,
+      appVersion: '2.0.0',
+      log: () => {},
+      spawnHost: () => {
+        spawned += 1
+        void serveAt(addr, { version: '2.0.0' })
+      }
+    })
+    c.start()
+    await settled(c, (s) => s.connected)
+    expect(spawned).toBe(1)
+    await c.stop()
+    for (const s of servers) await s.close().catch(() => {})
+    servers = []
+    c.restart()
+    await settled(c, (s) => s.connected)
+    expect(spawned).toBe(2)
+  })
+
+  it('reports the new Host through onConnect with a different identity', async () => {
+    const addr = addressFor('restart-c')
+    const first = await serveAt(addr)
+    const seen: string[] = []
+    const c = new HostClient({ address: addr.address, appVersion: '2.0.0', log: () => {}, spawnHost: () => {} })
+    c.onConnect((h) => seen.push(`${h.pid}@${h.startedAt}`))
+    c.start()
+    await waitFor(() => seen.length === 1)
+    await c.stop()
+    await first.close()
+    servers = servers.filter((s) => s !== first)
+    await serveAt(addr)
+    c.restart()
+    await waitFor(() => seen.length === 2)
+    // Same test process, so the pid repeats; startedAt is what tells the two servers apart.
+    expect(seen[0]).not.toBe(seen[1])
+  })
+
+  it('is a no-op while the client is still running', async () => {
+    const addr = addressFor('restart-d')
+    await serveAt(addr)
+    let logs: string[] = []
+    const c = new HostClient({ address: addr.address, appVersion: '2.0.0', log: (m) => logs.push(m), spawnHost: () => {} })
+    c.start()
+    await settled(c, (s) => s.connected)
+    const before = c.status()
+    logs = []
+    c.restart()
+    await new Promise((r) => setTimeout(r, 100))
+    expect(c.status()).toEqual(before)
+    expect(logs).toEqual([])
+  })
+
+  it('marks a Host older than the app as outdated, and one that is not as not', async () => {
+    const addr = addressFor('outdated')
+    await serveAt(addr, { version: '1.3.20' })
+    const c = new HostClient({ address: addr.address, appVersion: '1.3.21', log: () => {}, spawnHost: () => {} })
+    c.start()
+    await settled(c, (s) => s.connected)
+    expect(c.status().outdated).toBe(true)
+    await c.stop()
+
+    const addr2 = addressFor('current')
+    await serveAt(addr2, { version: '1.3.21' })
+    const c2 = new HostClient({ address: addr2.address, appVersion: '1.3.21', log: () => {}, spawnHost: () => {} })
+    c2.start()
+    await settled(c2, (s) => s.connected)
+    expect(c2.status().outdated).toBe(false)
+    await c2.stop()
+  })
+})
+
+describe('HostClient.retire announce', () => {
+  it('tells disconnect subscribers when asked to, and stays silent by default', async () => {
+    const addrA = addressFor('retire-announce')
+    await serveAt(addrA)
+    let gone = 0
+    const a = new HostClient({ address: addrA.address, appVersion: '1.0.0', log: () => {}, spawnHost: () => {} })
+    a.onDisconnect(() => gone++)
+    a.start()
+    await settled(a, (s) => s.connected)
+    await a.retire({ announce: true })
+    expect(gone).toBe(1)
+
+    const addrB = addressFor('retire-quiet')
+    await serveAt(addrB)
+    let quiet = 0
+    const b = new HostClient({ address: addrB.address, appVersion: '1.0.0', log: () => {}, spawnHost: () => {} })
+    b.onDisconnect(() => quiet++)
+    b.start()
+    await settled(b, (s) => s.connected)
+    await b.retire()
+    expect(quiet).toBe(0)
+  })
+})
