@@ -35,7 +35,7 @@ async function verify(candidate: string): Promise<PythonInterpreter | null> {
     // No shell:true — candidate paths contain spaces (e.g. a project path or `Program Files`), and
     // going through a shell would split the unquoted absolute path into tokens (same reasoning as
     // jdkScanner's verify()).
-    execFile(candidate, ['--version'], { timeout: 5000 }, (_err, stdout, stderr) => {
+    execFile(candidate, ['--version'], { timeout: 5000, windowsHide: true }, (_err, stdout, stderr) => {
       // Python 3.4+ writes this to stdout; Python 2 wrote it to stderr — combine both like
       // parseJavaVersion does, so whichever stream it landed on is still found.
       const version = parsePythonVersion(`${stdout}\n${stderr}`)
@@ -54,7 +54,7 @@ function pathPythons(): Promise<string[]> {
     pythonBinNames(process.platform).map(
       (name) =>
         new Promise<string[]>((resolve) => {
-          execFile(finder, [name], { shell: true, timeout: 5000 }, (err, stdout) => {
+          execFile(finder, [name], { shell: true, timeout: 5000, windowsHide: true }, (err, stdout) => {
             if (err) return resolve([])
             resolve(
               stdout

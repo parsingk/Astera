@@ -57,7 +57,7 @@ export class RunManager {
   constructor(
     private ptyFactory: PtyFactory,
     private platform: NodeJS.Platform = process.platform,
-    private killRunner: KillRunner = (cmd) => execFile(cmd.file, cmd.args, () => {})
+    private killRunner: KillRunner = (cmd) => execFile(cmd.file, cmd.args, { windowsHide: true }, () => {})
   ) {}
 
   /** Starts a run. Its seat in the project's list comes from placeNewRun: the earliest finished run of

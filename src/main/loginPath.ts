@@ -90,7 +90,7 @@ export async function readLoginPath(opts: {
 
 function runShell(file: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { timeout: PROBE_TIMEOUT_MS, encoding: 'utf8' }, (err, stdout) => {
+    execFile(file, args, { timeout: PROBE_TIMEOUT_MS, encoding: 'utf8', windowsHide: true }, (err, stdout) => {
       // Treated as success if stdout has the markers even when the exit code is nonzero — it's
       // common for the rc file's last command to fail and leave the shell exiting non-zero.
       if (err && !stdout) reject(err)

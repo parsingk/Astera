@@ -110,7 +110,7 @@ export interface Core {
 type ExecFileFn = (
   file: string,
   args: string[],
-  options: { env: NodeJS.ProcessEnv; shell: boolean; timeout: number },
+  options: { env: NodeJS.ProcessEnv; shell: boolean; timeout: number; windowsHide: boolean },
   callback: (error: Error | null, stdout: string, stderr: string) => void
 ) => void
 
@@ -134,7 +134,7 @@ export function runAccountLogout(
   if (isAmbientDir(d, homeDir, configDir)) delete env[d.configDirEnv]
   else env[d.configDirEnv] = configDir
   return new Promise((resolve) => {
-    execFileFn(d.cliFile, d.logoutArgs, { env, shell: true, timeout: 30_000 }, (err, _out, stderr) => {
+    execFileFn(d.cliFile, d.logoutArgs, { env, shell: true, timeout: 30_000, windowsHide: true }, (err, _out, stderr) => {
       if (err) {
         const detail = (stderr || err.message || '').toString().trim()
         resolve({

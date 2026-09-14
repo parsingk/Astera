@@ -96,7 +96,7 @@ export interface ProviderDescriptor extends ProviderMeta {
 /** Runs security(1) and returns only the exit code. stdout/stderr are discarded (only existence matters). */
 function runSecurity(file: string, args: string[]): Promise<number> {
   return new Promise((resolve) => {
-    execFile(file, args, { timeout: 5_000 }, (err) => {
+    execFile(file, args, { timeout: 5_000, windowsHide: true }, (err) => {
       resolve(err ? ((err as NodeJS.ErrnoException & { code?: number }).code ?? 1) : 0)
     })
   })

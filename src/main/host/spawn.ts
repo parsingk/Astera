@@ -42,6 +42,11 @@ export function hostSpawnPlan(a: {
       // Nothing reads the Host's output, and a pipe nobody drains would eventually block it. Its log
       // file is where it speaks.
       stdio: 'ignore',
+      // The Host is a console program started from a windowed one, so without this Windows is free to
+      // give it a console of its own — a black window that flashes up behind the app. `detached`
+      // already asks for DETACHED_PROCESS, which normally covers it; this says so rather than
+      // relying on that mapping, and costs nothing on the platforms that ignore it.
+      windowsHide: true,
       env: {
         ...env,
         ELECTRON_RUN_AS_NODE: '1',

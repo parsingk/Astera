@@ -6146,7 +6146,7 @@ export function registerIpc(
   ipcMain.handle('system.checkCli', async () => {
     const check = (cli: string): Promise<{ ok: boolean; version?: string }> =>
       new Promise((resolve) => {
-        execFile(cli, ['--version'], { shell: true, timeout: 10_000 }, (err, stdout) => {
+        execFile(cli, ['--version'], { shell: true, timeout: 10_000, windowsHide: true }, (err, stdout) => {
           resolve(err ? { ok: false } : { ok: true, version: stdout.trim() })
         })
       })
@@ -6183,7 +6183,7 @@ export function registerIpc(
     const plan = locateCommandFor(cli, process.platform, process.env.SHELL ?? '/bin/sh')
     if (plan === null) return null
     const found = await new Promise<string | null>((resolve) => {
-      execFile(plan.command, plan.args, { timeout: 15_000 }, (err, stdout) => {
+      execFile(plan.command, plan.args, { timeout: 15_000, windowsHide: true }, (err, stdout) => {
         if (err) return resolve(null)
         const line = stdout
           .split('\n')

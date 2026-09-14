@@ -3,10 +3,12 @@
 // `astera` CLI shuttle already avoids shipping a Node binary.
 //
 // Everything it needs arrives in the environment, because it has no `app.getPath('userData')` to ask.
+import childProcess from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
 import * as pty from 'node-pty'
 import { hostAddress } from './address'
+import { hideForkedConsoleWindows } from './childWindows'
 import { openHostLog } from './log'
 import { startHostServer, ADDRESS_TAKEN } from './server'
 import { PtyRegistry } from './registry'
@@ -28,6 +30,11 @@ const EXIT_SETTLE_MS = 300
 const EXIT_HAMMER_MS = 1_500
 
 async function main(): Promise<void> {
+  // Before anything can create a child: node-pty forks a helper on every ConPTY kill, and from 1.3.20
+  // this process is a console-subsystem node.exe, so that helper would be handed a console window of
+  // its own — a black window flashing up whenever a person closes a session tab. See childWindows.ts.
+  hideForkedConsoleWindows(childProcess, process.platform)
+
   const profileDir = process.env.ASTERA_HOST_PROFILE_DIR
   if (!profileDir) {
     process.stderr.write('astera-host: ASTERA_HOST_PROFILE_DIR is required\n')
