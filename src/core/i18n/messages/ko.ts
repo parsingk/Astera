@@ -1428,6 +1428,8 @@ export const ko = {
   'conversation.pending.terminal': '터미널로 이동',
   'conversation.running.thinking': '생각 중',
   'conversation.running.working': '실행 중',
+  'conversation.exited.title': '이 세션은 종료되었습니다',
+  'conversation.running.interrupt': '중단 (Esc)',
   'conversation.queued.title': '메시지가 대기 중입니다',
   'conversation.queued.edit': '터미널에서 수정',
   'conversation.slash.title': '슬래시 명령은 터미널에서 진행됩니다',

@@ -67,13 +67,26 @@ export function unsettledSends(
  * only honest reading is "this did not work", which is what someone watching a codex session
  * actually concluded.
  *
- * Read off the transcript rather than from a busy flag so it means the same thing for both CLIs:
- * codex reports no hooks at all, and its own screen is not a place a turn's shape can be read from.
+ * Two readings, and both have to agree. The transcript says whether the person's last word has been
+ * answered; the CLI's own screen says whether it is still working on it. Neither alone is enough: the
+ * transcript cannot see a command answered on the CLI's own screen, and the screen cannot tell a turn
+ * meant for this pane from one someone typed in the terminal beside it.
+ *
  * A streaming answer ends it as soon as its first words are written down — by then the answer itself
  * is what says something is happening.
  */
-export function isAwaitingReply(turns: readonly ConvTurn[], pendingCount: number): boolean {
+export function isAwaitingReply(
+  turns: readonly ConvTurn[],
+  pendingCount: number,
+  cliBusy: boolean
+): boolean {
   if (pendingCount > 0) return true
   const last = turns[turns.length - 1]
-  return last !== undefined && last.role === 'user'
+  if (last === undefined || last.role !== 'user') return false
+  // The transcript says a turn went unanswered; only the CLI says whether it is still answering it.
+  // Those two came apart every time a CLI answered somewhere other than the transcript — `/model`,
+  // `/effort`, `/clear` leave a user turn with nothing after it for good — and this view sat saying
+  // the CLI was thinking while it was idle at its prompt, with the composer shut behind the same
+  // reading. cliBusyOf (./cliBusy.ts) reads what the CLI prints about itself, and it is the authority.
+  return cliBusy
 }

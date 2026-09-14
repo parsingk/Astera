@@ -320,6 +320,7 @@ export function PaneGrid({
                   sessionId={s.id}
                   // The same reading TerminalView's own `active` gets just above, with the view test
                   // flipped — whichever of the two is showing is the one that should hold the caret.
+                  exited={s.status === 'exited'}
                   active={visible && showingConversation && pane != null && pane.id === activePaneId}
                   onGoTerminal={() => {
                     setSessionViews((prev) => setSessionView(prev, s.id, 'terminal'))

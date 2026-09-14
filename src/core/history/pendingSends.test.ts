@@ -50,19 +50,29 @@ describe('sendPending / unsettledSends', () => {
 
 describe('isAwaitingReply', () => {
   it('is true while something sent has not been written down yet', () => {
-    expect(isAwaitingReply([], 1)).toBe(true)
+    expect(isAwaitingReply([], 1, false)).toBe(true)
   })
 
-  it('is true while the last turn is the person’s own', () => {
-    expect(isAwaitingReply([said('t1', 'user', '안녕')], 0)).toBe(true)
+  it('is true while the last turn is the person’s own and the CLI is still at it', () => {
+    expect(isAwaitingReply([said('t1', 'user', '안녕')], 0, true)).toBe(true)
+  })
+
+  // The case that reported this: `/model`, `/effort` and `/clear` are answered on the CLI's own screen
+  // and leave a user turn with nothing after it for good. The transcript's shape says "unanswered"
+  // forever; the CLI, sitting idle at its prompt, says otherwise, and it is the one that knows.
+  it('is false once the CLI is no longer working, whatever the transcript looks like', () => {
+    expect(isAwaitingReply([said('t1', 'user', '/model default')], 0, false)).toBe(false)
+    expect(isAwaitingReply([said('t1', 'user', '안녕')], 0, false)).toBe(false)
   })
 
   // Once the answer starts being written, the answer itself is the sign that something is happening.
   it('is false once an answer follows it', () => {
-    expect(isAwaitingReply([said('t1', 'user', '안녕'), said('t2', 'assistant', '네')], 0)).toBe(false)
+    expect(
+      isAwaitingReply([said('t1', 'user', '안녕'), said('t2', 'assistant', '네')], 0, true)
+    ).toBe(false)
   })
 
   it('is false for a conversation that has not started', () => {
-    expect(isAwaitingReply([], 0)).toBe(false)
+    expect(isAwaitingReply([], 0, true)).toBe(false)
   })
 })

@@ -321,18 +321,15 @@ describe('keepWhatIsKnown', () => {
 // dir. `attention` is built from hook events, so it says `idle` throughout, and the pane used to show
 // an empty thread with a composer whose keystrokes went into a dialog that ignores them.
 describe('shouldReadPromptScreen', () => {
-  it('reads while a hook says the session is waiting', () => {
+  // Three things read the screen now — the prompt no hook reported, the composer lock, and whether
+  // the CLI is still working — and the last two are wanted for a session's whole life, not just its
+  // first moment. Reading is not showing; what the pane draws is shouldShowPrompt's business.
+  it('reads for any session, in any state', () => {
     expect(shouldReadPromptScreen('waiting', 12)).toBe(true)
-  })
-
-  it('reads while the session has written nothing, whatever attention says', () => {
     expect(shouldReadPromptScreen('idle', 0)).toBe(true)
     expect(shouldReadPromptScreen('working', 0)).toBe(true)
-  })
-
-  it('stops once the session has a conversation of its own', () => {
-    expect(shouldReadPromptScreen('idle', 1)).toBe(false)
-    expect(shouldReadPromptScreen('working', 3)).toBe(false)
+    expect(shouldReadPromptScreen('idle', 1)).toBe(true)
+    expect(shouldReadPromptScreen('working', 3)).toBe(true)
   })
 })
 

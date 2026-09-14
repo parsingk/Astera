@@ -1230,6 +1230,8 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.pending.terminal': 'Go to the terminal',
   'conversation.running.thinking': 'Thinking',
   'conversation.running.working': 'Working',
+  'conversation.exited.title': 'This session has ended',
+  'conversation.running.interrupt': 'Stop (Esc)',
   'conversation.queued.title': 'Messages are waiting',
   'conversation.queued.edit': 'Edit on the terminal',
   'conversation.slash.title': 'Slash commands run in the terminal',

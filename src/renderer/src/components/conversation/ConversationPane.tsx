@@ -30,6 +30,7 @@ import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
 import {
   PendingBanner,
+  ExitedNotice,
   QueuedNotice,
   RunningNotice,
   SlashCommandNotice
@@ -54,6 +55,7 @@ import {
 import { fileTokenAt } from "../../../../core/files/fileMatch";
 import { draftOf, forgetDraft, keepDraft } from "./drafts";
 import { promptLinesOf, isFolderTrustPrompt, hasInputLine } from "../../../../core/history/promptLines";
+import { cliBusyOf } from "../../../../core/history/cliBusy";
 import { queuedMessagesOf } from "../../../../core/history/queuedMessages";
 import {
   isAwaitingReply,
@@ -76,6 +78,9 @@ export interface ConversationPaneProps {
   /** Task 10 wires this to focus the session's terminal — the same contract as PendingBanner.tsx's own
    *  prop of this name. This pane only threads it through to the banner. */
   onGoTerminal: () => void;
+  /** The session has ended. Its pty is gone, so the composer is shut and the pane says so rather than
+   *  taking words for a process that cannot hear them — the terminal beside it has the restart. */
+  exited?: boolean;
   /** This pane is the window's active one and is the one showing. Mirrors TerminalView's prop of the
    *  same name, and exists for the same reason: `pane.focusLeft`/`Right`/`Up`/`Down` only move which
    *  pane is active, and it is each pane's own job to take the caret. Without this, moving to a
@@ -225,7 +230,18 @@ function isTextPart(part: { type: string; text?: string }): part is { type: "tex
  * keep a newline inside a message from submitting it halfway through.
  */
 /**
- * Whether to keep reading the CLI's screen for a question it is sitting on.
+ * Whether to keep reading the CLI's screen.
+ *
+ * Always, while the pane is open. It used to be only while a session had written nothing, when the
+ * screen was wanted for one thing — a prompt no hook had reported. Three things read it now: that, the
+ * composer lock, and whether the CLI is still working, and the last two are wanted for the whole life
+ * of a session, not just its first moment. A read is a slice of a buffer already in memory.
+ *
+ * The old rule is kept below as the parameters it took, so what it answers stays honest for the
+ * tests that pin it: reading is not showing, and what the pane draws from the reading is decided
+ * elsewhere (shouldShowPrompt).
+ *
+ * Older note, on why the screen is read at all:
  *
  * `waiting` is the ordinary answer: a hook told us a prompt is up. The second case is the window no
  * hook can speak for — a session that has written nothing yet. The prompts a CLI puts up before a
@@ -235,8 +251,8 @@ function isTextPart(part: { type: string; text?: string }): part is { type: "tex
  *
  * It closes as soon as the session writes its first turn, so an ordinary conversation pays nothing.
  */
-export function shouldReadPromptScreen(attention: Attention, turnCount: number): boolean {
-  return attention === 'waiting' || turnCount === 0
+export function shouldReadPromptScreen(_attention: Attention, _turnCount: number): boolean {
+  return true
 }
 
 /**
@@ -490,7 +506,7 @@ type Status = "loading" | "unavailable" | "ready";
  * lifecycle, the two event subscriptions, load-more's paging) or reads one of the pure functions
  * above. Nothing here decides what a tool row or the pending banner look like — those are Task 8's.
  */
-export function ConversationPane({ sessionId, onGoTerminal, active = false }: ConversationPaneProps): ReactNode {
+export function ConversationPane({ sessionId, onGoTerminal, active = false, exited = false }: ConversationPaneProps): ReactNode {
   const { t } = useI18n();
   const [status, setStatus] = useState<Status>("loading");
   const [turns, setTurns] = useState<ConvTurn[]>([]);
@@ -849,13 +865,29 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
     [turns, pending]
   );
 
-  const onNew = useCallback(
-    async (message: AppendMessage) => {
+  /**
+   * Presses Escape on the CLI, which is what a person reaches for to stop it mid-turn.
+   *
+   * Written straight to the pty rather than dressed up as a cancel: the terminal beside this view
+   * interrupts with exactly this keypress, and the CLI owns what it means — stop the turn, close the
+   * dialog it has up, whatever it is doing. A cancel of our own would have to guess at that and would
+   * be wrong the moment the CLI changed its mind about any of it.
+   */
+  const interruptRef = useRef<() => void | Promise<void>>(() => {});
+  const isRunningRef = useRef(false);
+  const sendTextRef = useRef<(text: string) => void | Promise<void>>(() => {});
+
+  const interrupt = useCallback(async (): Promise<void> => {
+    window.api.sessions.write(sessionId, String.fromCharCode(27));
+  }, [sessionId]);
+  interruptRef.current = interrupt;
+
+  const sendText = useCallback(
+    async (text: string) => {
       // The pty is the only channel there is — a person typing here and a person typing in the
       // terminal are doing the same thing. The typed turn is never pushed into `messages` locally:
       // it comes back through the transcript like every other turn, and adding it here would show
       // it twice.
-      const text = composerTextOf(message.content);
       // Nothing leaves this box into a dialog that throws typing away.
       //
       // The lock below cannot be the whole guarantee, because it can only shut once the pane has seen
@@ -902,6 +934,12 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
       setTimeout(() => window.api.sessions.write(sessionId, submit), SUBMIT_GAP_MS);
     },
     [sessionId, turns]
+  );
+  sendTextRef.current = sendText;
+
+  const onNew = useCallback(
+    async (message: AppendMessage) => sendText(composerTextOf(message.content)),
+    [sendText]
   );
 
   // The margin on this is what keeps it off the composer: an empty thread centres its whole column,
@@ -981,15 +1019,24 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
   // purpose: an ordinary screen's own composer line starts with the very marker promptChoicesOf looks
   // for, and asking the whole screen there would draw a button for the input box. A trust dialog has no
   // composer on it — the only marked row is the one being offered.
-  const fresh = useMemo(() => {
-    const windowed = promptChoicesOf(promptLines)
-    if (windowed.length > 0 || !isFolderTrustPrompt(promptLines)) return windowed
-    return promptChoicesOf(screenLines)
-  }, [promptLines, screenLines]);
+  // Only a screen that could be a question is read as one. The screen itself is read at all times now
+  // — the composer lock and the running notice both want it — but a working CLI's screen is full of
+  // lines that look like rows to a parser and are not: a queued message sits under the same `>` a
+  // choice is marked with, and reading those as choices put a question on screen that nobody asked.
+  //
+  // A hook saying the session is waiting, a session that has written nothing yet (where no hook can
+  // speak for it), or the trust prompt itself. Everything else is the CLI getting on with its work.
   /** The folder-trust question, which takes one of its rows and nothing else — typing into it is
    *  discarded by the CLI. It gets its own heading, and it is the one prompt that locks the composer
    *  (see `isDisabled` below). */
   const trustPrompt = useMemo(() => isFolderTrustPrompt(promptLines), [promptLines]);
+  const promptCandidate = attention === "waiting" || turns.length === 0 || trustPrompt;
+  const fresh = useMemo(() => {
+    if (!promptCandidate) return [];
+    const windowed = promptChoicesOf(promptLines)
+    if (windowed.length > 0 || !isFolderTrustPrompt(promptLines)) return windowed
+    return promptChoicesOf(screenLines)
+  }, [promptCandidate, promptLines, screenLines]);
   // Whether the CLI is showing a line to type on. A session that has already written turns is past
   // all of this and is never held back by it.
   const cliTakesTyping = useMemo(
@@ -1221,6 +1268,39 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
       });
     };
     const onKeyDown = (e: KeyboardEvent): void => {
+      // Escape goes to the CLI, the same key that stops it in the terminal — unless our own menu is
+      // open, which takes it first (below) to close itself, the way every menu does.
+      // Enter, while the CLI is working, still sends. assistant-ui stops sending once `isRunning` is
+      // set — which it is, so that the composer's own button can offer to stop — and the CLI itself
+      // takes messages while it works and queues them (the notice above says so when it does). Losing
+      // that to a button label would make this view worse than the terminal at the one thing it is
+      // for, so the key is handled here and the button keeps its new job.
+      if (
+        e.key === "Enter" &&
+        !e.shiftKey &&
+        !e.altKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !slashOpenRef.current &&
+        isRunningRef.current
+      ) {
+        const box = e.target instanceof HTMLTextAreaElement ? e.target : null;
+        const text = box?.value.trim() ?? "";
+        if (box && text !== "") {
+          e.preventDefault();
+          e.stopPropagation();
+          box.select();
+          document.execCommand("insertText", false, ""); // clears it the way the composer expects
+          void sendTextRef.current(text);
+          return;
+        }
+      }
+      if (e.key === "Escape" && !slashOpenRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        void interruptRef.current();
+        return;
+      }
       if (!slashOpenRef.current) return;
       const matches = rowsRef.current;
       if (matches.length === 0) return;
@@ -1621,8 +1701,16 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
   // An answer that is actually being waited on outranks everything; after that, a list being typed
   // into outranks a note about a command already sent.
   // Which of the two the prompt branch takes is shouldShowPrompt's rule, above.
-  const banner: ReactNode =
-    shouldShowPrompt(attention, choices.length, trustPrompt) ? (
+  /** A turn this pane sent is still unanswered. Drives the notice and, through `isRunning`, what the
+   *  composer's own button is offering to do. */
+  /** What the CLI says it is doing, read off its own screen — the authority on whether anything is
+   *  still in flight. See core/history/cliBusy.ts. */
+  const cliBusy = useMemo(() => cliBusyOf(screenLines), [screenLines]);
+  const awaitingReply = isAwaitingReply(turns, pending.length, cliBusy);
+  isRunningRef.current = awaitingReply;
+  const banner: ReactNode = exited ? (
+      <ExitedNotice onGoTerminal={goTerminal} />
+    ) : shouldShowPrompt(attention, choices.length, trustPrompt) ? (
       <PendingBanner
         onGoTerminal={goTerminal}
         lines={promptLines}
@@ -1640,7 +1728,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
       />
     ) : queued.length > 0 ? (
       <QueuedNotice messages={queued} onGoTerminal={goTerminal} />
-    ) : isAwaitingReply(turns, pending.length) ? (
+    ) : awaitingReply ? (
       <RunningNotice working={attention === "working"} />
     ) : slashSent ? (
       <SlashCommandNotice onGoTerminal={goTerminal} />
@@ -1676,16 +1764,14 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
     // line, and **discards typed text outright**. That is the bug this started from — a person typed
     // into an open composer, nothing was sent anywhere, and the session looked dead. Its two rows are
     // drawn as buttons right above, so nothing is lost by closing the box that cannot work.
-    isDisabled: composerLocked(trustPrompt, cliTakesTyping, waitedForScreen),
-    // No `isRunning`. In assistant-ui it means "a run this component controls is in progress, with
-    // a cancel path" — we have neither: the CLI owns the run, and there is no `onCancel` to give
-    // this adapter. Setting it true while `working` swallows Enter, hides Send behind
-    // `!thread.isRunning`, and leaves Cancel rendered but disabled (no `capabilities.cancel`) — a
-    // person could type but never send, for most of an agent's working life. The CLI itself accepts
-    // typing while it works; blocking here would make this view worse at its one job than the
-    // terminal it sits beside. The live marker on an unfinished tool row (ToolRow.tsx,
-    // `result === undefined`) already carries "something is happening" — `attention` itself still
-    // drives the banner and the real lock while `waiting`.
+    isDisabled: exited || composerLocked(trustPrompt, cliTakesTyping, waitedForScreen),
+    // `isRunning` with a real `onCancel` behind it. The note that used to sit here said there was no
+    // cancel path to give this adapter and so no honest way to set the flag; there is one now — the
+    // CLI stops on Escape, which is how a person stops it in the terminal — and with it the composer's
+    // own send button turns into the stop button while a turn is in flight, rather than a second
+    // button somewhere else meaning the same thing.
+    isRunning: awaitingReply,
+    onCancel: interrupt,
     onNew,
   });
 

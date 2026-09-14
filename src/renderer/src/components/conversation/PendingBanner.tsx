@@ -188,3 +188,23 @@ export function RunningNotice({ working }: { working: boolean }): ReactNode {
     </div>
   );
 }
+
+/** What the pane says once the session has ended. The composer is shut behind it — the pty is gone and
+ *  a word typed here would reach nothing — and the way back is the terminal, which is where a session
+ *  is restarted. */
+export function ExitedNotice({ onGoTerminal }: { onGoTerminal: () => void }): ReactNode {
+  const { t } = useI18n();
+
+  return (
+    <div
+      role="status"
+      data-slot="conversation-exited"
+      className="flex items-center justify-between gap-3 rounded-(--composer-radius) border border-[var(--warn-line)] bg-[var(--warn-bg)] px-4 py-2.5 text-sm text-[var(--warn-ink)]"
+    >
+      <p className="font-medium">{t("conversation.exited.title")}</p>
+      <Button size="sm" variant="default" className="shrink-0" onClick={onGoTerminal}>
+        {t("conversation.pending.terminal")}
+      </Button>
+    </div>
+  );
+}
