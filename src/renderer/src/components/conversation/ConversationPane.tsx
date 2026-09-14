@@ -76,6 +76,12 @@ export interface ConversationPaneProps {
   /** Task 10 wires this to focus the session's terminal — the same contract as PendingBanner.tsx's own
    *  prop of this name. This pane only threads it through to the banner. */
   onGoTerminal: () => void;
+  /** This pane is the window's active one and is the one showing. Mirrors TerminalView's prop of the
+   *  same name, and exists for the same reason: `pane.focusLeft`/`Right`/`Up`/`Down` only move which
+   *  pane is active, and it is each pane's own job to take the caret. Without this, moving to a
+   *  neighbouring conversation left the caret in the pane you came from — the marker said one session
+   *  and the typing went to another. */
+  active?: boolean;
 }
 
 // ---- pure functions ------------------------------------------------------------------------
@@ -427,7 +433,7 @@ type Status = "loading" | "unavailable" | "ready";
  * lifecycle, the two event subscriptions, load-more's paging) or reads one of the pure functions
  * above. Nothing here decides what a tool row or the pending banner look like — those are Task 8's.
  */
-export function ConversationPane({ sessionId, onGoTerminal }: ConversationPaneProps): ReactNode {
+export function ConversationPane({ sessionId, onGoTerminal, active = false }: ConversationPaneProps): ReactNode {
   const { t } = useI18n();
   const [status, setStatus] = useState<Status>("loading");
   const [turns, setTurns] = useState<ConvTurn[]>([]);
@@ -470,6 +476,19 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // the generation alone cannot decide it.
   const mountedForRef = useRef<string | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
+
+  // Takes the caret when this pane becomes the active one, the way TerminalView focuses its xterm for
+  // the same prop. Keyed on `active` alone, so it fires on the transition rather than on every render:
+  // pressing a choice button or the model picker inside the pane must not yank the caret back.
+  //
+  // The composer is looked up rather than held in a ref — assistant-ui owns that <textarea> and gives
+  // no ref for it. A miss (still mounting, or disabled while the folder-trust prompt is up) is fine:
+  // focusing nothing is what should happen there anyway.
+  useEffect(() => {
+    if (!active) return;
+    const ta = paneRef.current?.querySelector("textarea");
+    if (ta && !ta.disabled) ta.focus();
+  }, [active]);
   // Whether the last keystroke left the composer in a state a menu cares about — see the input
   // listener, which uses it to stay silent for ordinary typing.
   const triggerArmedRef = useRef(false);

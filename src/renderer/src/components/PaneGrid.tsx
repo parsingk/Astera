@@ -318,6 +318,9 @@ export function PaneGrid({
               <div className="session-slot-view" style={{ display: 'flex' }}>
                 <ConversationPane
                   sessionId={s.id}
+                  // The same reading TerminalView's own `active` gets just above, with the view test
+                  // flipped — whichever of the two is showing is the one that should hold the caret.
+                  active={visible && showingConversation && pane != null && pane.id === activePaneId}
                   onGoTerminal={() => {
                     setSessionViews((prev) => setSessionView(prev, s.id, 'terminal'))
                     // Same contract as PendingBanner.tsx's own onGoTerminal prop: focus the

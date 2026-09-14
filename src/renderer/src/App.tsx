@@ -1020,6 +1020,16 @@ export default function App(): React.JSX.Element {
       if (modalOpenRef.current || isConfirmOpen()) return
       const focusEl = document.activeElement as HTMLElement | null
       const inXterm = !!focusEl?.closest('.xterm')
+      // The conversation view's composer is a real <textarea>, so the `editable` guard below caught it
+      // and every app shortcut with that guard died the moment a person clicked into it — Ctrl+Shift+E,
+      // Ctrl+Tab, Ctrl+Shift+arrow. The guard predates this view: its exceptions name xterm and
+      // CodeMirror, the two text surfaces that existed when it was written.
+      //
+      // The composer is the third, and it plays the part xterm plays in the other view — the place you
+      // sit while working, not a form field. So it takes the same deal xterm already took: app
+      // navigation wins over the field's own editing (Ctrl+Shift+arrow selects by word in a textarea;
+      // the terminal gave that up for pane focus long ago, and a message box is no more precious).
+      const inConversation = !!focusEl?.closest('[data-slot="conversation-pane"]')
       const editable =
         !!focusEl &&
         (focusEl.tagName === 'INPUT' ||
@@ -1034,7 +1044,7 @@ export default function App(): React.JSX.Element {
       // contenteditable=true on .cm-content for an editable file, so without this exception the toggle
       // would be blocked entirely while the editor has focus.
       if (action === 'explorer.toggleMode') {
-        if (editable && !focusEl?.closest('.xterm, .cm-editor')) return
+        if (editable && !inConversation && !focusEl?.closest('.xterm, .cm-editor')) return
         e.preventDefault()
         e.stopPropagation()
         if (e.repeat) return
@@ -1157,7 +1167,7 @@ export default function App(): React.JSX.Element {
       // The exception is scoped to .cm-editor rather than to every input, so a rebind onto an arrow chord
       // still leaves a settings field's own selection alone. Same shape as explorer.toggleMode's exception.
       const tabCycle = action === 'sessionTab.prev' || action === 'sessionTab.next'
-      if (editable && !inXterm && !(tabCycle && focusEl?.closest('.cm-editor'))) return
+      if (editable && !inXterm && !inConversation && !(tabCycle && focusEl?.closest('.cm-editor'))) return
       // With Shift, move focus to a neighbouring group; otherwise cycle tabs within the
       // active group. Global session cycling is gone: sessions are scattered across groups, so there is
       // no such thing as a "global order". To reach a session in another group, move groups with
