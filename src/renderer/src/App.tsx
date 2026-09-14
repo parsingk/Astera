@@ -78,6 +78,7 @@ import { dismiss, toast } from './lib/toast'
 import { spawnNotice } from './lib/spawnNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
 import { quitConfirmBody, updateConfirmBody } from './lib/quitConfirm'
+import { toggleSidebarView, type SidebarView } from '../../core/ui/sidebar'
 import { terminalsWithCreated } from './lib/terminalTabs'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { worktreeErrorMessage } from './lib/worktreeErrors'
@@ -503,6 +504,11 @@ export default function App(): React.JSX.Element {
   // 단축키가 늘 같은 방향으로만 계산되므로, 최신 값을 이 ref 로 읽는다(이 파일의 다른 ref 들과 같은 이유)
   const explorerOpenRef = useRef(explorerOpen)
   explorerOpenRef.current = explorerOpen // the file explorer toggle
+  // Read by toggleSidebar, for the reason explorerOpenRef is: the keydown listener closes over the
+  // first render, and whether the sidebar is on screen decides whether a press shows a view or
+  // collapses it.
+  const sidebarOpenRef = useRef(sidebarOpen)
+  sidebarOpenRef.current = sidebarOpen
   const [showSettings, setShowSettings] = useState(false)
   const [settingsTab, setSettingsTab] = useState<
     | 'general'
@@ -1841,46 +1847,35 @@ export default function App(): React.JSX.Element {
    *
    *  사이드바의 표시 여부는 sidebarOpen 하나가 정한다. 예전에는 sidebarOpen || explorerOpen 이라
    *  탐색기가 켜져 있는 동안 사이드바 토글이 아무 반응도 없었다 — OR 가 언제나 참이었기 때문이다. */
-  const toggleExplorer = (): void => {
-    // 켜는 경우인지는 갱신자 밖에서 정한다. setState 갱신자는 StrictMode 에서 두 번 불릴 수 있으므로
-    // 그 안에서 다른 setState 를 부르지 않는다는 것이 이 파일의 규약이다(setLayout 쪽 주석들과 같은 이유)
-    const opening = !explorerOpenRef.current
-    if (opening) {
-      setSidebarOpen(true)
-      setJobsOpen(false) // 사이드바는 한 번에 한 뷰만 보여준다
-      setHiwOpen(false)
-    }
-    setExplorerOpen(opening)
-  }
-
-  /** Jobs 사이드바 토글 — 탐색기 토글과 같은 규칙이다: 켤 때 사이드바가 접혀 있으면 함께 펴고, 세
-   *  뷰 중 하나만 보이므로 탐색기가 열려 있었다면 닫는다.
+  /** The rail's three view toggles, all one rule now (core/ui/sidebar.ts). Pressing the view that is
+   *  showing collapses the sidebar with it; pressing any other shows that one instead, unfolding the
+   *  sidebar if it was collapsed.
    *
-   *  Reads the ref rather than the render value, exactly as toggleExplorer does: this now also runs
-   *  from the keydown listener, which is registered once and closes over the first render. Reading
-   *  `jobsOpen` there would compute `opening` from a value frozen at mount, so the shortcut would only
-   *  ever open the view and never close it. */
-  const toggleJobs = (): void => {
-    const opening = !jobsOpenRef.current
-    if (opening) {
-      setSidebarOpen(true)
-      setExplorerOpen(false)
-      setHiwOpen(false)
-    }
-    setJobsOpen(opening)
+   *  **Why the flags are read from refs, not from the render values.** These run from the keydown
+   *  listener, which is registered once and closes over the first render — reading `explorerOpen`
+   *  there would compute the next state from a value frozen at mount, so a shortcut would only ever
+   *  open a view and never close it.
+   *
+   *  The next state is computed once, outside every updater: a setState updater can be invoked twice
+   *  under StrictMode, and this file's rule is that no updater calls another setState. */
+  const toggleSidebar = (view: SidebarView): void => {
+    const next = toggleSidebarView(
+      {
+        open: sidebarOpenRef.current,
+        explorer: explorerOpenRef.current,
+        jobs: jobsOpenRef.current,
+        understanding: hiwOpenRef.current
+      },
+      view
+    )
+    setSidebarOpen(next.open)
+    setExplorerOpen(next.explorer)
+    setJobsOpen(next.jobs)
+    setHiwOpen(next.understanding)
   }
-
-  /** How It Works 사이드바 토글 — toggleJobs 와 같은 규칙: 켤 때 사이드바가 접혀 있으면 함께 펴고,
-   *  세 뷰 중 하나만 보이므로 나머지 둘을 끈다. Reads the ref for the reason toggleJobs gives. */
-  const toggleHiw = (): void => {
-    const opening = !hiwOpenRef.current
-    if (opening) {
-      setSidebarOpen(true)
-      setExplorerOpen(false)
-      setJobsOpen(false)
-    }
-    setHiwOpen(opening)
-  }
+  const toggleExplorer = (): void => toggleSidebar('explorer')
+  const toggleJobs = (): void => toggleSidebar('jobs')
+  const toggleHiw = (): void => toggleSidebar('understanding')
 
   // A setState updater can be invoked twice under StrictMode (in development), so setActivePaneId and
   // createGroup are never called inside the setLayout callback — the current values are read from refs
