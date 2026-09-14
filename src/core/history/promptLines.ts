@@ -76,3 +76,21 @@ export function promptLinesOf(rows: readonly string[], max: number): string[] {
     .filter((l, i, all) => l.trim() !== '' || (i > 0 && all[i - 1].trim() !== ''))
   return body.slice(Math.max(0, body.length - max))
 }
+
+/** The wording each CLI uses to ask whether this folder is trusted, lowercased. Measured off both
+ *  screens rather than guessed: Claude Code opens with "Quick safety check: Is this a project you
+ *  created or one you trust?" and offers "Yes, I trust this folder"; codex asks "Do you trust the
+ *  contents of this directory?". Any one of them is enough. */
+const TRUST_PHRASES = ['do you trust', 'i trust this folder', 'quick safety check']
+
+/** Whether the quoted prompt is the folder-trust question either CLI asks the first time an account
+ *  opens a folder.
+ *
+ *  Only ever picks which heading the banner draws, so a miss costs a wording rather than a
+ *  behaviour — the generic heading is the fallback and the choices are unaffected. That is why
+ *  matching on the CLIs' own words is acceptable here and would not be for anything that decides what
+ *  a keypress does. */
+export function isFolderTrustPrompt(lines: readonly string[]): boolean {
+  const text = lines.join(' ').toLowerCase()
+  return TRUST_PHRASES.some((phrase) => text.includes(phrase))
+}

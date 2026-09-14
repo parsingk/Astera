@@ -23,6 +23,10 @@ export interface PendingBannerProps {
   /** An answer is on its way to the CLI. The buttons go quiet so a second press cannot race the
    *  first one's walk across the list. */
   answering?: boolean;
+  /** This is the folder-trust question (core/history/promptLines.ts). It gets its own heading and
+   *  drops the hint about typing an answer, because that prompt takes no typing — only one of its
+   *  rows. The composer is locked for the same reason; see `isDisabled` in ConversationPane.tsx. */
+  trust?: boolean;
 }
 
 /** The banner shown above the composer while the CLI is waiting on a decision it owns. */
@@ -32,6 +36,7 @@ export function PendingBanner({
   choices = [],
   onChoose,
   answering = false,
+  trust = false,
 }: PendingBannerProps): ReactNode {
   const { t } = useI18n();
   const pickable = choices.length > 0 && onChoose !== undefined;
@@ -44,8 +49,10 @@ export function PendingBanner({
     >
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-medium">{t("conversation.pending.title")}</p>
-          <p>{t(pickable ? "conversation.pending.pick" : "conversation.pending.body")}</p>
+          <p className="font-medium">
+            {t(trust ? "conversation.pending.trust" : "conversation.pending.title")}
+          </p>
+          {!trust && <p>{t(pickable ? "conversation.pending.pick" : "conversation.pending.body")}</p>}
         </div>
         <Button
           size="sm"

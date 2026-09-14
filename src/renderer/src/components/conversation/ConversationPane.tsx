@@ -53,7 +53,7 @@ import {
 } from "../../../../core/commands/slashCommands";
 import { fileTokenAt } from "../../../../core/files/fileMatch";
 import { draftOf, forgetDraft, keepDraft } from "./drafts";
-import { promptLinesOf } from "../../../../core/history/promptLines";
+import { promptLinesOf, isFolderTrustPrompt } from "../../../../core/history/promptLines";
 import { queuedMessagesOf } from "../../../../core/history/queuedMessages";
 import {
   isAwaitingReply,
@@ -846,6 +846,10 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   // alongside it, so what the buttons say and what the banner shows can never be two different
   // readings of the screen.
   const choices = useMemo(() => promptChoicesOf(promptLines), [promptLines]);
+  /** The folder-trust question, which takes one of its rows and nothing else — typing into it is
+   *  discarded by the CLI. It gets its own heading, and it is the one prompt that locks the composer
+   *  (see `isDisabled` below). */
+  const trustPrompt = useMemo(() => isFolderTrustPrompt(promptLines), [promptLines]);
   const [answering, setAnswering] = useState(false);
 
   /**
@@ -1472,6 +1476,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
         choices={choices}
         onChoose={(choice) => void answerChoice(choice)}
         answering={answering}
+        trust={trustPrompt}
       />
     ) : slashOpen ? (
       <CompletionMenu
@@ -1509,9 +1514,16 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     // `isDisabled` does reach the composer's actual <textarea> — assistant-ui's
     // useComposerInputDisabled (useComposerInputState.js) ORs it with a `disabled` prop, and
     // ComposerInput.js applies the result — so this is the real lock, not a stand-in for one.
-    // Never disabled. The composer writes to the very pty the CLI's prompt is on, so a person can
-    // answer it from here — see `locked`'s removal below for the whole reasoning.
-    isDisabled: false,
+    //
+    // Open for every prompt but one. The composer writes to the very pty the CLI's prompt is on, so
+    // for anything that reads a line — a permission question, a free-text answer — typing here is
+    // answering it, and locking would take that away.
+    //
+    // The folder-trust question is the exception, and the only one so far: it reads a keypress, not a
+    // line, and **discards typed text outright**. That is the bug this started from — a person typed
+    // into an open composer, nothing was sent anywhere, and the session looked dead. Its two rows are
+    // drawn as buttons right above, so nothing is lost by closing the box that cannot work.
+    isDisabled: trustPrompt,
     // No `isRunning`. In assistant-ui it means "a run this component controls is in progress, with
     // a cancel path" — we have neither: the CLI owns the run, and there is no `onCancel` to give
     // this adapter. Setting it true while `working` swallows Enter, hides Send behind

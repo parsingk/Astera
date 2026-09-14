@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { promptLinesOf } from './promptLines'
+import { promptLinesOf, isFolderTrustPrompt } from './promptLines'
 
 // A real Claude approval screen, as its terminal drew it (measured 2026-09-12). Note where the dialog
 // sits: at the bottom, with no input line under it, and with its highlighted choice carrying the very
@@ -152,5 +152,55 @@ describe('promptLinesOf', () => {
   it('answers nothing for an empty screen', () => {
     expect(promptLinesOf([], 16)).toEqual([])
     expect(promptLinesOf(['   ', ''], 16)).toEqual([])
+  })
+})
+
+// Both screens below are the real thing, captured from each CLI the first time an account opened a
+// never-before-seen folder (measured 2026-09-14).
+describe('isFolderTrustPrompt', () => {
+  it('knows Claude Code asking about a new folder', () => {
+    expect(
+      isFolderTrustPrompt([
+        ' Accessing workspace:',
+        ' D:\demo\todo-api',
+        ' Quick safety check: Is this a project you created or one you trust?',
+        " Claude Code'll be able to read, edit, and execute files here.",
+        ' Security guide',
+        ' ❯ No, exit',
+        '   Yes, I trust this folder',
+        ' Enter to confirm · Esc to cancel'
+      ])
+    ).toBe(true)
+  })
+
+  it('knows codex asking the same thing in its own words', () => {
+    expect(
+      isFolderTrustPrompt([
+        '> You are in D:\demo\todo-api',
+        '  Do you trust the contents of this directory? Working with untrusted contents',
+        '  comes with higher risk of prompt injection.',
+        '› 1. Yes, continue',
+        '  2. No, quit',
+        '  Press enter to continue'
+      ])
+    ).toBe(true)
+  })
+
+  // Every other prompt keeps the generic heading and an open composer — a permission question is
+  // answered by typing as much as by picking.
+  it('leaves an ordinary permission question alone', () => {
+    expect(
+      isFolderTrustPrompt([
+        ' Bash command',
+        '   npm test',
+        ' Do you want to proceed?',
+        ' ❯ 1. Yes',
+        '   2. No, and tell Claude what to do differently'
+      ])
+    ).toBe(false)
+  })
+
+  it('answers false for an empty quote', () => {
+    expect(isFolderTrustPrompt([])).toBe(false)
   })
 })
