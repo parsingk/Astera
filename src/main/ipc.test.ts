@@ -8,6 +8,7 @@ import {
   historyResumePlan,
   hostHandshakeMeans,
   hostHoldings,
+  hostReplaceDue,
   parseAllowedExternalUrl,
   providerOfSession,
   liveWorkersFor,
@@ -620,5 +621,36 @@ describe('conversationAttentionOf — the pane\'s one-shot read on mount', () =>
   it('reads idle for a session it has never seen', () => {
     const attention = createAttentionState()
     expect(conversationAttentionOf(attention, 'never-seen')).toBe('idle')
+  })
+})
+
+describe('hostReplaceDue - when an outdated Host is replaced', () => {
+  const empty = { sessions: 0, terminals: 0, runs: 0 }
+  const base = { outdated: true, holdings: empty, inFlight: false, quitting: false }
+
+  it('is due only when every gate is open: outdated, holding nothing, nothing in flight, not quitting', () => {
+    expect(hostReplaceDue(base)).toBe(true)
+  })
+
+  it('never replaces a Host that is not outdated', () => {
+    expect(hostReplaceDue({ ...base, outdated: false })).toBe(false)
+  })
+
+  it('waits while the Host holds anything at all, of any kind', () => {
+    expect(hostReplaceDue({ ...base, holdings: { sessions: 1, terminals: 0, runs: 0 } })).toBe(false)
+    expect(hostReplaceDue({ ...base, holdings: { sessions: 0, terminals: 1, runs: 0 } })).toBe(false)
+    expect(hostReplaceDue({ ...base, holdings: { sessions: 0, terminals: 0, runs: 1 } })).toBe(false)
+  })
+
+  it('does not read an unanswered list as an empty one', () => {
+    expect(hostReplaceDue({ ...base, holdings: null })).toBe(false)
+  })
+
+  it('runs one replacement at a time', () => {
+    expect(hostReplaceDue({ ...base, inFlight: true })).toBe(false)
+  })
+
+  it('stands aside while the app is quitting', () => {
+    expect(hostReplaceDue({ ...base, quitting: true })).toBe(false)
   })
 })

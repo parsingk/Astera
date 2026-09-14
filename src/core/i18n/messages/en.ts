@@ -184,10 +184,13 @@ export const en: Record<keyof typeof ko, string> = {
     'Closing the window quits Astera, and {count} running session(s) will be terminated. Continue?',
   'common.quitConfirm.bodyKept':
     'Closing the window quits Astera. {count} running session(s) keep running and come back the next time you open Astera. Continue?',
+  'common.quitConfirm.endKept': 'End the {kept} kept session(s) too',
+  'common.quitConfirm.endKeptHint': 'The Host is ended. They will not be there when you reopen.',
   'common.quitConfirm.bodyMixed':
     'Closing the window quits Astera. {kept} running session(s) keep running and come back the next time you open Astera; {ended} will be terminated. Continue?',
   'common.trayOpen': 'Open',
   'common.trayQuit': 'Quit',
+  'common.trayQuitEnding': 'Quit and end sessions',
   'session.rail.toggleSidebar': 'Toggle sidebar',
   'session.spawn.failed': 'Failed to start session: {message}',
   'session.spawn.failedWorktreeKept':
@@ -246,6 +249,13 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.info.hostConnected': 'Connected · protocol {protocol} · up {uptime}',
   'settings.info.hostHolding':
     'holding {sessions} session(s), {terminals} terminal(s), {runs} run(s)',
+  'settings.info.hostOutdated': 'Host {host} · app {app} · replaced with the new version once it holds nothing',
+  'settings.info.hostRestartNow': 'Restart now',
+  'settings.info.hostRestarting': 'Restarting…',
+  'settings.info.hostRestartConfirmTitle': 'Restart the Host',
+  'settings.info.hostRestartConfirmBody':
+    'The Host is ended now and started again on the new version. The {sessions} session(s), {terminals} terminal(s) and {runs} run(s) it is holding end with it. Continue?',
+  'settings.info.hostRestartConfirmBodyNone': 'The Host is ended now and started again on the new version. It is holding nothing. Continue?',
   'settings.info.hostNotConnected': 'Not connected',
   'settings.info.hostNotConnectedWhy': 'Not connected · {detail}',
   'settings.slack.save': 'Save',

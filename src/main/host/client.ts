@@ -3,6 +3,7 @@
 // as a sentence somebody can read, rather than reaching a caller.
 import net from 'node:net'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage } from '../../core/host/protocol'
+import { hostIsOutdated } from './outdated'
 import { encodeLine, createLineReader } from '../../host/framing'
 // HostStatus is declared in core/types.ts, not here, so the renderer can name it without importing
 // from src/main.
@@ -105,7 +106,8 @@ export class HostClient {
     hostVersion: null,
     startedAt: null,
     pid: null,
-    problem: null
+    problem: null,
+    outdated: false
   }
 
   constructor(private readonly deps: HostClientDeps) {}
@@ -225,7 +227,7 @@ export class HostClient {
    * in host/index.ts) and returns. It never throws: a Host that was not there, or does not answer, is
    * the outcome this was asking for.
    */
-  async retire(): Promise<void> {
+  async retire(a: { announce?: boolean } = {}): Promise<void> {
     try {
       this.send({ t: 'retire' })
     } catch {
@@ -236,7 +238,43 @@ export class HostClient {
     } catch {
       /* same */
     }
+    // `stop()` is deliberate, so the socket's close handler tells nobody — that is right for the
+    // install path, where the app is quitting and will-quit owns what happens next. It is wrong for
+    // a retire whose point is to *replace* the Host while the app keeps running: the Host ends every
+    // pty it holds on the way out, and the `pty-exit`s it would report never arrive on a socket
+    // already destroyed. Without this the app would show those sessions running forever. Announcing
+    // runs the same fan-out a real drop runs, so each handle ends itself with PTY_LOST_SIGHT and each
+    // manager marks its record the way it already knows how to.
+    if (a.announce) {
+      for (const cb of [...this.disconnectSubscribers]) {
+        try {
+          cb()
+        } catch (err) {
+          this.deps.log(`a disconnect subscriber threw: ${String(err)}`)
+        }
+      }
+    }
     await sleep(RETIRE_SETTLE_MS)
+  }
+
+  /**
+   * Starts trying again after `stop()` — the same cycle, from the top: reach the address, start a
+   * Host if nothing answers, shake hands. `stop()` was written to be final, and the one caller that
+   * needed it final (an install that must not have a Host put back behind it) still gets that; this
+   * is the counterpart for the case that wants exactly the opposite — a Host retired *in order to*
+   * be replaced (docs/superpowers/specs/2026-09-14-host-replacement-design.md §5). The Host it
+   * starts is whatever `spawnHost` was built with, which is this app's own build.
+   *
+   * A no-op while the client is running: there is nothing to restart, and a second `cycle()` beside
+   * the live one would race it for the socket.
+   */
+  restart(): void {
+    if (!this.stopped) return
+    this.stopped = false
+    this.drops = 0
+    // What is known about the *previous* Host is not a description of the one being started.
+    this.state = { ...this.state, connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem: null, outdated: false }
+    void this.cycle()
   }
 
   private async cycle(): Promise<void> {
@@ -336,15 +374,21 @@ export class HostClient {
     if (m?.t === 'hello') {
       this.clearHandshake()
       this.drops = 0
+      // Judged here, from the two versions this handshake already carries, so the status the Info tab
+      // reads and the replacement rule in ipc.ts act on cannot disagree about it.
+      const outdated = hostIsOutdated(m.host, this.deps.appVersion)
       this.state = {
         connected: true,
         protocol: m.protocol,
         hostVersion: m.host,
         startedAt: m.startedAt,
         pid: m.pid,
-        problem: null
+        problem: null,
+        outdated
       }
-      this.deps.log(`connected to Host ${m.host} (pid ${m.pid}, protocol ${m.protocol})`)
+      this.deps.log(
+        `connected to Host ${m.host} (pid ${m.pid}, protocol ${m.protocol})${outdated ? ` — older than this app (${this.deps.appVersion}); replaced once it holds nothing` : ''}`
+      )
       this.settleReady()
       // After settleReady, so a first-connection subscriber and a `ready()` caller see the same
       // already-connected status rather than racing over it.
@@ -386,7 +430,7 @@ export class HostClient {
   }
 
   private fail(problem: string): void {
-    this.state = { connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem }
+    this.state = { connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem, outdated: false }
     this.deps.log(problem)
     this.settleReady()
   }

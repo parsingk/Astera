@@ -202,11 +202,16 @@ export const ko = {
     '창을 닫으면 Astera가 종료됩니다. 진행 중인 세션 {count}개는 계속 실행되고, 다시 열면 그대로 돌아옵니다. 계속할까요?',
   // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
   // still want real translations.
+  // The checkbox beside bodyKept/bodyMixed: quit *and* end the kept sessions, which is what a person
+  // who thought "close" meant "everything stops" actually wants (host-replacement design §6).
+  'common.quitConfirm.endKept': '유지되는 세션 {kept}개도 함께 끝내기',
+  'common.quitConfirm.endKeptHint': 'Host 를 종료합니다. 다시 열어도 돌아오지 않습니다.',
   'common.quitConfirm.bodyMixed':
     '창을 닫으면 Astera가 종료됩니다. 진행 중인 세션 중 {kept}개는 계속 실행되어 다시 열면 그대로 돌아오고, {ended}개는 함께 종료됩니다. 계속할까요?',
   // index.ts — system tray context menu
   'common.trayOpen': '열기',
   'common.trayQuit': '종료',
+  'common.trayQuitEnding': '세션 모두 끝내고 종료',
   // App.tsx — rail, session spawn failure, placeholder, status bar usage
   'session.rail.toggleSidebar': '사이드바 접기/펼치기',
   'session.spawn.failed': '세션 시작 실패: {message}',
@@ -282,6 +287,15 @@ export const ko = {
   // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
   // still want real translations.
   'settings.info.hostHolding': '세션 {sessions}개, 터미널 {terminals}개, 실행 {runs}개 유지 중',
+  // The Host outlived an update and still runs the previous version. Replaced on its own the first
+  // moment it holds nothing; the button is for not waiting (host-replacement design §6).
+  'settings.info.hostOutdated': 'Host {host} · 앱 {app} · 아무것도 유지하지 않게 되면 새 버전으로 바뀝니다',
+  'settings.info.hostRestartNow': '지금 재시작',
+  'settings.info.hostRestarting': '재시작 중…',
+  'settings.info.hostRestartConfirmTitle': 'Host 재시작',
+  'settings.info.hostRestartConfirmBody':
+    'Host 를 지금 종료하고 새 버전으로 다시 시작합니다. 유지 중인 세션 {sessions}개, 터미널 {terminals}개, 실행 {runs}개가 함께 종료됩니다. 계속할까요?',
+  'settings.info.hostRestartConfirmBodyNone': 'Host 를 지금 종료하고 새 버전으로 다시 시작합니다. 유지 중인 것은 없습니다. 계속할까요?',
   'settings.info.hostNotConnected': '연결 안 됨',
   'settings.info.hostNotConnectedWhy': '연결 안 됨 · {detail}',
   'settings.slack.save': '저장',

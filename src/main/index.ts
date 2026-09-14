@@ -281,7 +281,24 @@ function createWindow(): BrowserWindow {
 function trayMenuTemplate(win: BrowserWindow): Electron.MenuItemConstructorOptions[] {
   return [
     { label: t(core!.lang, 'common.trayOpen'), click: () => win.show() },
-    { label: t(core!.lang, 'common.trayQuit'), click: () => app.quit() }
+    // Quit keeps the Host's sessions running; that is the Host's purpose, and the quit confirmation
+    // says so. This is the other intention — end everything — given a place where a person on win32
+    // or macOS actually quits from, since there is no dialog there (design §6). Retire first: the
+    // will-quit cleanup skips every pty the Host owns, so this is the one path that reaches them.
+    { label: t(core!.lang, 'common.trayQuit'), click: () => app.quit() },
+    {
+      label: t(core!.lang, 'common.trayQuitEnding'),
+      click: () => {
+        void (async () => {
+          try {
+            await hostClientRetireRef?.()
+          } catch {
+            /* nothing to end */
+          }
+          app.quit()
+        })()
+      }
+    }
   ]
 }
 

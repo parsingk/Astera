@@ -145,6 +145,7 @@ export const ja: Catalog = {
   // index.ts — system tray context menu
   'common.trayOpen': '開く',
   'common.trayQuit': '終了',
+  'common.trayQuitEnding': 'セッションをすべて終えて終了',
   // App.tsx — rail, session spawn failure, placeholder, status bar usage
   'session.rail.toggleSidebar': 'サイドバーの折りたたみ/展開',
   'session.spawn.failed': 'セッションの開始に失敗しました: {message}',
