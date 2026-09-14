@@ -271,6 +271,22 @@ export function shouldShowPrompt(attention: Attention, choiceCount: number, trus
  * Holding is safe to press either way: answerChoice re-reads the screen before every key it sends
  * (see stepToward), and a numbered row is answered by its number, which is absolute.
  */
+/**
+ * Whether the composer is shut.
+ *
+ * Two reasons, and they are the same reason at different moments: the pane knows the CLI is holding a
+ * dialog that discards typing, or it does not yet know what the CLI is holding at all.
+ *
+ * The second was a real gap. A pane opens, its composer invites typing, and half a second later the
+ * first reading of the screen lands and shuts it — so what a person typed in between went into a
+ * folder-trust dialog that ignored every keystroke, which is the whole failure this view was supposed
+ * to stop. Shut until told otherwise is the honest default while a session has written nothing; it
+ * lasts one fast poll, and `waited` lifts it regardless if no reading ever comes.
+ */
+export function composerLocked(trust: boolean, knowsScreen: boolean, waited: boolean): boolean {
+  return trust || !(knowsScreen || waited)
+}
+
 export function choicesToShow(
   fresh: readonly PromptChoice[],
   held: readonly PromptChoice[],
@@ -343,6 +359,15 @@ const SUBMIT_GAP_MS = 250
  *  a new folder runs fifteen lines from its rule down to `Enter to confirm`. */
 const PROMPT_LINES_MAX = 16
 const PROMPT_POLL_MS = 500
+
+/** How fast the screen is asked for before it has answered once. The composer stays shut while the
+ *  pane cannot tell what the CLI is showing, so this is the length of that shut moment — short
+ *  enough not to be felt, and it ends the first time a reading lands. */
+const PROMPT_FIRST_POLL_MS = 60
+
+/** How long the pane waits for a first reading before opening the composer anyway. A terminal that
+ *  never registers a reader must not cost a session its composer for good. */
+const SCREEN_WAIT_MAX_MS = 3_000
 
 /** How an unnumbered choice is answered: one arrow key, then a fresh look at the screen, and never
  *  more than this many of them before giving up. The gap is what lets the CLI redraw before the next
@@ -829,6 +854,35 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
       // it comes back through the transcript like every other turn, and adding it here would show
       // it twice.
       const text = composerTextOf(message.content);
+      // Nothing leaves this box into a dialog that throws typing away.
+      //
+      // The lock below cannot be the whole guarantee, because it can only shut once the pane has seen
+      // the dialog, and for the first second of a session there is no dialog on the screen to see —
+      // the CLI has not drawn it yet (measured: the composer is open and the screen readable at 440ms,
+      // and the folder-trust dialog only appears at ~980ms). A person typing into that window had
+      // every keystroke swallowed, which is the failure this whole view exists to prevent.
+      //
+      // So the screen is read once more here, at the only moment that settles it: the instant before
+      // anything is written. If a trust dialog is up, the send does not happen, the text stays where
+      // it is, and the banner — which the same reading raises — says what is being asked instead.
+      const screenNow = sessionBus.screenOf(sessionId);
+      if (screenNow !== null) {
+        const linesNow = promptLinesOf(screenNow.split(String.fromCharCode(10)), PROMPT_LINES_MAX);
+        if (isFolderTrustPrompt(linesNow)) {
+          setPromptLines(linesNow); // raises the banner on the same reading that refused the send
+          // assistant-ui empties its composer on submit whatever this handler does, so the text is put
+          // back by hand — the same execCommand path the `@` and slash menus already use to write into
+          // that controlled input. Nothing a person typed is lost to a dialog that would not have taken
+          // it anyway.
+          requestAnimationFrame(() => {
+            const box = paneRef.current?.querySelector("textarea");
+            if (!box || box.value !== "") return;
+            box.focus();
+            document.execCommand("insertText", false, text);
+          });
+          return;
+        }
+      }
       // Shown straight away. Without this the message is nowhere until the CLI writes it down — a
       // moment for Claude, not until the turn produces something for codex — and the only honest
       // reading of that gap is that the send did not work.
@@ -876,6 +930,19 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
   // When to read at all is shouldReadPromptScreen's rule, above — a prompt the hooks never reported is
   // the case it exists for.
   const readPromptScreen = shouldReadPromptScreen(attention, turns.length);
+  // Whether this session's screen has been read even once. Until it has, the pane does not know
+  // whether the CLI is at a prompt that takes typing or holding a dialog that throws typing away —
+  // `seenScreen: false` is what says so, and composerLocked reads it.
+  const [seenScreen, setSeenScreen] = useState(false);
+  // ...but never shut for long. A session whose terminal registers no reader at all must not keep its
+  // composer shut for the rest of its life over a question nobody is asking.
+  const [waitedForScreen, setWaitedForScreen] = useState(false);
+  useEffect(() => {
+    setSeenScreen(false);
+    setWaitedForScreen(false);
+    const timer = setTimeout(() => setWaitedForScreen(true), SCREEN_WAIT_MAX_MS);
+    return () => clearTimeout(timer);
+  }, [sessionId]);
   useEffect(() => {
     if (!readPromptScreen) {
       setPromptLines([]);
@@ -884,12 +951,16 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
     const read = (): void => {
       const screen = sessionBus.screenOf(sessionId);
       if (screen === null) return; // no terminal registered — cannot tell, so leave what is there
+      setSeenScreen(true);
       setPromptLines(promptLinesOf(screen.split("\n"), PROMPT_LINES_MAX));
     };
     read();
-    const timer = setInterval(read, PROMPT_POLL_MS);
+    // Quickly until the first reading lands, then at the ordinary pace. The first one is what a person
+    // waits behind, and it is late for a reason that clears in a tick or two: TerminalView registers
+    // the reader as it mounts, which is the same moment this pane is mounting beside it.
+    const timer = setInterval(read, seenScreen ? PROMPT_POLL_MS : PROMPT_FIRST_POLL_MS);
     return () => clearInterval(timer);
-  }, [readPromptScreen, sessionId]);
+  }, [readPromptScreen, seenScreen, sessionId]);
 
   // The rows of that same quote, as something to press. They come out of the quote rather than
   // alongside it, so what the buttons say and what the banner shows can never be two different
@@ -1579,7 +1650,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
     // line, and **discards typed text outright**. That is the bug this started from — a person typed
     // into an open composer, nothing was sent anywhere, and the session looked dead. Its two rows are
     // drawn as buttons right above, so nothing is lost by closing the box that cannot work.
-    isDisabled: trustPrompt,
+    isDisabled: composerLocked(trustPrompt, seenScreen || turns.length > 0, waitedForScreen),
     // No `isRunning`. In assistant-ui it means "a run this component controls is in progress, with
     // a cancel path" — we have neither: the CLI owns the run, and there is no `onCancel` to give
     // this adapter. Setting it true while `working` swallows Enter, hides Send behind

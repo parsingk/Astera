@@ -14,7 +14,8 @@ import {
   modelLineOf,
   shouldReadPromptScreen,
   shouldShowPrompt,
-  choicesToShow
+  choicesToShow,
+  composerLocked
 } from './ConversationPane'
 import type { ConvTurn } from '../../../../core/history/convTypes'
 
@@ -379,5 +380,27 @@ describe('choicesToShow', () => {
   it('draws nothing for any other prompt that read none', () => {
     expect(choicesToShow([], rows, false)).toEqual([])
     expect(choicesToShow([], [], true)).toEqual([])
+  })
+})
+
+// The composer used to open the moment a pane did, and shut half a second later when the first reading
+// of the screen landed on a folder-trust dialog. Everything typed in between went into a dialog that
+// discards typing — the failure this view exists to prevent.
+describe('composerLocked', () => {
+  it('is shut while the pane does not yet know what the CLI is showing', () => {
+    expect(composerLocked(false, false, false)).toBe(true)
+  })
+
+  it('opens as soon as a reading lands and says it is not a trust prompt', () => {
+    expect(composerLocked(false, true, false)).toBe(false)
+  })
+
+  it('stays shut for the trust prompt however much it knows', () => {
+    expect(composerLocked(true, true, true)).toBe(true)
+  })
+
+  // A terminal that registers no reader at all must not cost a session its composer for good.
+  it('opens once it has waited long enough, reading or no reading', () => {
+    expect(composerLocked(false, false, true)).toBe(false)
   })
 })
