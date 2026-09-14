@@ -1,5 +1,5 @@
 import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, type WebContents } from 'electron'
-import { promises as fs, existsSync, readFileSync, unlinkSync } from 'node:fs'
+import { promises as fs, cpSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import net from 'node:net'
@@ -23,6 +23,14 @@ import {
 } from './conversation'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
+import {
+  hostRuntimeBase,
+  hostRuntimePaths,
+  prepareHostRuntime,
+  sweepHostRuntime,
+  type HostRuntimePaths,
+  type RuntimeFs
+} from './host/runtime'
 import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { reattachSessions, type ReattachResult } from './host/reattach'
@@ -239,7 +247,13 @@ export interface HostWiring {
    *  Not called at all when there is no Host bundle to talk to: there is then nothing to stop. */
   /** The two controls the app needs over its Host once the client is up: `stop` closes this side's
    *  socket and timers on quit, `retire` also asks the Host itself to leave — see client.ts. */
-  onHostClientReady: (controls: { stop: () => Promise<void>; retire: () => Promise<void> }) => void
+  onHostClientReady: (controls: {
+    stop: () => Promise<void>
+    retire: () => Promise<void>
+    /** Whether the Host survives an installer replacing the app — see `host.survivesUpdate`. Read at
+     *  install time, not at wiring time: the Host's runtime is resolved after this hands over. */
+    survivesUpdate: () => boolean
+  }) => void
 }
 
 /** 앱 자신이 명령을 부를 때의 호출자 id. **어떤 세션 id 와도 겹칠 수 없는 모양**이어야 한다 —
@@ -841,6 +855,12 @@ export function registerIpc(
   /** Astera Host slice 1: the channel exists, and nothing depends on it yet. Built at startup so
    *  slices 2 and 3 inherit an open line rather than one they have to reach for (design §7). */
   let hostClient: HostClient | null = null
+  /** Whether the Host this app is connected to keeps its sessions through an update being installed.
+   *  True off win32, where a running binary can simply be replaced; on win32 it is true only once the
+   *  Host is running from its own runtime rather than the app's executable inside the install
+   *  directory. Read by `host.survivesUpdate` for the install confirmation, which must not promise
+   *  what the fallback path cannot deliver. */
+  let hostSurvivesUpdate = process.platform !== 'win32'
   /** One `pty-list` round trip, or null before the Host wiring has built one. `startHostClient`
    *  assigns it; the `host.holdings` handler is the only caller, and it is registered outside that
    *  function, which is why this is here rather than a local.
@@ -5404,6 +5424,86 @@ export function registerIpc(
     await core.appSettings.setConversationDefault(view)
   })
 
+  /**
+   * Puts the Host's own runtime in place and hands back what to spawn it with, or null to spawn the
+   * way every version before this one did (docs/superpowers/specs/2026-09-14-host-runtime-design.md).
+   *
+   * **Why the Host needs an executable of its own, on win32 only.** It is started from
+   * `process.execPath` — the app's Astera.exe run with ELECTRON_RUN_AS_NODE — and Windows locks the
+   * image of a running process. A Host that outlives the app therefore pins the install directory,
+   * which is what made installing 1.3.18 fail and what still costs a person their terminals on every
+   * Windows update. macOS and Linux replace a running binary without complaint, so `hostRuntimeBase`
+   * returns null there and nothing below runs.
+   *
+   * Every failure here returns null rather than throwing. A Host spawned from the app executable is
+   * exactly today's behaviour — worse on update day, and completely fine otherwise — so there is no
+   * failure in this function worth refusing to start a Host over.
+   */
+  const prepareHostRuntimeFor = (profileDir: string, log: (m: string) => void): HostRuntimePaths | null => {
+    const base = hostRuntimeBase({
+      platform: process.platform,
+      localAppData: process.env.LOCALAPPDATA,
+      userData: profileDir,
+      appName: app.getName()
+    })
+    if (!base) return null
+    // **Packaged builds only**, unlike `skillsPath` above, which reads the same resource either way.
+    // The runtime carries a *copy* of host.js taken when the payload was assembled, and in development
+    // host.js is rebuilt constantly — a dev Host would silently run whatever `npm run host-runtime`
+    // last produced. `npm run dev` therefore keeps spawning from the Electron binary, which is what it
+    // has always done and what the packaged fallback does too.
+    if (!app.isPackaged) return null
+    const shippedRoot = path.join(process.resourcesPath, 'host-runtime')
+    // Which Node is actually in that directory is read from the directory, not from a constant in
+    // this file: the two can then never disagree about what was shipped.
+    let nodeVersion = ''
+    try {
+      const manifest: unknown = JSON.parse(readFileSync(path.join(shippedRoot, 'runtime.json'), 'utf8'))
+      if (manifest && typeof manifest === 'object' && typeof (manifest as { node?: unknown }).node === 'string') {
+        nodeVersion = (manifest as { node: string }).node.trim()
+      }
+    } catch {
+      /* nothing shipped, or unreadable — prepareHostRuntime says so below */
+    }
+    if (!nodeVersion) {
+      log('no host runtime shipped with this build — the Host runs from the app executable')
+      return null
+    }
+    const appVersion = app.getVersion()
+    const paths = hostRuntimePaths({ base, nodeVersion, appVersion })
+    // The shipped tree carries the same `node-<version>` directory the install uses, so putting it in
+    // place is one copy. scripts/host-runtime.mjs says why it is nested rather than flat.
+    const shipped = path.join(shippedRoot, path.basename(paths.nodeDir))
+    const runtimeFs: RuntimeFs = {
+      exists: existsSync,
+      readdir: (p) => {
+        try {
+          return readdirSync(p)
+        } catch {
+          return []
+        }
+      },
+      copy: (from, to) => cpSync(from, to, { recursive: true }),
+      rename: (from, to) => renameSync(from, to),
+      rm: (p) => rmSync(p, { recursive: true, force: true })
+    }
+    const installed = prepareHostRuntime({
+      paths,
+      shipped,
+      appVersion,
+      // Two app instances cannot share a profile (the single-instance lock), but they can share this
+      // machine-wide directory — a second profile, or another user's install. The pid keeps their
+      // staging directories apart; the rename decides who wins.
+      stamp: String(process.pid),
+      fs: runtimeFs,
+      log
+    })
+    if (!installed.ready) return null
+    if (installed.did !== 'nothing') log(`host runtime installed (${installed.did}): ${paths.exePath}`)
+    sweepHostRuntime({ paths, nodeVersion, appVersion, fs: runtimeFs, log })
+    return paths
+  }
+
   // Astera Host. Unconditional — the Host is not an orchestration feature, so this must not go inside
   // bootOrch, which only runs when that toggle is on. A missing out/main/host.js (a partial build, or
   // a packaging mistake) leaves hostClient null and the app runs exactly as it does today. Once the
@@ -5427,6 +5527,10 @@ export function registerIpc(
       settleSessionsTakenBack(null)
       return
     }
+    // What the Host is actually started with. Null means `process.execPath` and the asar's host.js —
+    // the arrangement every version before this one used, and the one a win32 installer has to fight.
+    const runtime = prepareHostRuntimeFor(profileDir, hostLog)
+    hostSurvivesUpdate = process.platform !== 'win32' || runtime !== null
     // An update changes the protocol, and the Host from the previous version is still there holding
     // terminals this app cannot speak to. Ask it to leave first. A restart does not come through
     // here, because the protocol has not changed and the address is the same one.
@@ -5475,8 +5579,8 @@ export function registerIpc(
       log: hostLog,
       spawnHost: () => {
         const plan = hostSpawnPlan({
-          execPath: process.execPath,
-          entryPath: entry,
+          execPath: runtime?.exePath ?? process.execPath,
+          entryPath: runtime?.entryPath ?? entry,
           profileDir,
           logPath: path.join(profileDir, 'host', 'host.log'),
           version: app.getVersion()
@@ -5823,7 +5927,11 @@ export function registerIpc(
       })
       .then(settleSessionsTakenBack)
 
-    hostWiring?.onHostClientReady({ stop: () => client.stop(), retire: () => client.retire() })
+    hostWiring?.onHostClientReady({
+      stop: () => client.stop(),
+      retire: () => client.retire(),
+      survivesUpdate: () => hostSurvivesUpdate
+    })
   }
   // **A throw in here must not be allowed to leave `hostSessionsTakenBack` pending.** The settlement
   // above covers every asynchronous path, but the body has work ahead of that chain — `retireOlderHosts`
@@ -5868,6 +5976,11 @@ export function registerIpc(
   // it. `SessionManager` counts the ptys the router marked, which is the same fact `will-quit` acts
   // on.
   ipcMain.handle('host.sessionsOutlivingApp', () => core.sessions.runningOutlivingApp().length)
+  // Whether those sessions also survive the *install*, which is a different question from whether
+  // they survive this app process ending. On win32 they only do once the Host runs from its own
+  // runtime; the renderer asks rather than assuming, because the fallback path (no runtime shipped,
+  // or it could not be installed) is real and must not be promised over.
+  ipcMain.handle('host.survivesUpdate', () => hostSurvivesUpdate)
   // What the Host is holding, for the Info tab's Host row — the connection facts on their own say
   // nothing about whether a person's work survives closing the app.
   //

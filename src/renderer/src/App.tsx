@@ -742,8 +742,12 @@ export default function App(): React.JSX.Element {
   const installUpdate = async (): Promise<void> => {
     const running = runningCountRef.current
     if (running > 0) {
-      const kept = await window.api.host.sessionsOutlivingApp().catch(() => 0)
-      const body = updateConfirmBody(running, kept, window.api.platform !== 'win32')
+      const [kept, hostSurvives] = await Promise.all([
+        window.api.host.sessionsOutlivingApp().catch(() => 0),
+        // Nothing survives, on a failure: the safe reading here is the one that promises least.
+        window.api.host.survivesUpdate().catch(() => false)
+      ])
+      const body = updateConfirmBody(running, kept, hostSurvives)
       const ok = await confirmModal({
         title: tRef.current('update.confirm.title'),
         body: tRef.current(body.key, body.params),

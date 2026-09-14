@@ -122,10 +122,21 @@ jobs:
       # so with --dir in place NEITHER stage ever wrote the file. electron-updater reads it to learn
       # which repository to check, so every update check died with ENOENT. That is what shipped in
       # every Windows release from v1.0.0 through v1.1.0.
+      # host-runtime sits between the two: it needs out/main/host.js, and electron-builder needs its
+      # output (win.extraResources). It fetches a pinned node.exe, verifies it against a SHA-256 in
+      # the script, and lays out resources/host-runtime — the executable the Host runs from, so that a
+      # Host outliving the app stops pinning the install directory. It is deliberately fail-closed: a
+      # hash mismatch or an unreachable nodejs.org fails the release rather than quietly shipping a
+      # Windows build whose Host still has to be killed to install over.
+      #
+      # The signing stage below needs no exception for it. Its collection step takes only binaries
+      # whose Authenticode status is not already Valid, and node.exe arrives signed by the OpenJS
+      # Foundation — so it is skipped and keeps the signature it came with.
       - name: Build unpacked app
         shell: pwsh
         run: |
           npm run build
+          npm run host-runtime
           npx electron-builder --win --publish never
 
       # ---- Signing stage 1: the binaries inside the package -------------------------------------

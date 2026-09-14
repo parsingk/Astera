@@ -1379,6 +1379,16 @@ export type RendererApi = CoreApi & {
      *  A count rather than a flag because the two kinds coexist: a session spawned before the Host
      *  answered is this app's own child and ends with it, whatever the Host owns by now. */
     sessionsOutlivingApp(): Promise<number>
+    /** Whether the sessions `sessionsOutlivingApp` counts also survive an update being *installed* —
+     *  a different question from surviving this app process ending.
+     *
+     *  True on macOS and Linux, which replace a running binary and leave the Host alone. On Windows
+     *  it is true only once the Host runs from its own runtime outside the install directory
+     *  (docs/superpowers/specs/2026-09-14-host-runtime-design.md): spawned from the app's executable
+     *  it pins the very file being replaced, so the installer has to end it. Asked rather than
+     *  derived from the platform, because the runtime has a supported fallback and the install
+     *  confirmation must not promise what that fallback cannot keep. */
+    survivesUpdate(): Promise<boolean>
     /** What the Host says it is holding, or **null when it did not say** — there is no Host, the
      *  connection is down, or it did not answer in time. Null and `{ sessions: 0, terminals: 0 }` are
      *  opposite answers and the caller must not merge them: zero is the Host telling you nothing of
