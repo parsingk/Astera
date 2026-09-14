@@ -59,8 +59,12 @@ export function quitConfirmBody(running: number, kept: number): Message {
  *
  *  A person quitting through the window close button on Linux gets `quitConfirmBody` instead, and no
  *  such caveat, because nothing is being replaced there. */
-export function updateConfirmBody(running: number, kept: number): Message {
-  const split = splitOnQuit(running, kept)
+export function updateConfirmBody(running: number, kept: number, hostSurvives = true): Message {
+  // Nothing survives an install on win32, whatever the Host owns. An installer there cannot write
+  // over a running image, and the Host is the very file being replaced — so the app retires it before
+  // handing over (update:install, main/index.ts). Saying they keep running would be a promise this
+  // platform cannot keep.
+  const split = splitOnQuit(running, hostSurvives ? kept : 0)
   if (split.kind === 'allKept') return { key: 'update.confirm.bodyKept', params: { count: split.count } }
   // Unchanged from before the Host existed, and still exactly true when it owns none of them.
   if (split.kind === 'noneKept') return { key: 'update.confirm.body', params: { count: split.count } }

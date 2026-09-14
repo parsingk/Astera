@@ -51,6 +51,10 @@ export const READY_TIMEOUT_MS = CONNECT_PHASE_MS + HANDSHAKE_MS
 /** After a connection that worked drops, wait before trying again: 1s, 2s, 4s, capped at 30s. */
 const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
 
+/** How long `retire()` waits for the Host to be gone. Covers the Host's own EXIT_HAMMER_MS
+ *  (host/index.ts), which is the point by which it has stopped being polite about leaving. */
+const RETIRE_SETTLE_MS = 2_000
+
 /** Which Host answered, as the `hello` reports it. Two `hello`s with the same pair came from the same
  *  process, and one whose registry therefore still holds the ptys this app spawned before the drop. */
 export interface HostIdentity {
@@ -208,6 +212,33 @@ export class HostClient {
 
   /** One attempt at having a working connection: reach the address, spawning a Host if nothing
    *  answers, then shake hands. Returns when the connection is up or the cycle has given up. */
+  /**
+   * Asks the Host to leave, and stops trying to keep one.
+   *
+   * For the one moment the Host cannot be allowed to outlive the app: installing a new version over
+   * it. The Host is the app's own executable run as node, so on win32 it pins `Astera.exe` and no
+   * installer can write over a running image — and if it is merely killed, this client puts a new one
+   * back a second later (see the reconnect in `attach`), which is what made an update fail to install
+   * at all. `stop()` first, so nothing is restarted behind the retire.
+   *
+   * Waits out the Host's own way out (300ms to settle, 1.5s before it stops being polite — EXIT_*_MS
+   * in host/index.ts) and returns. It never throws: a Host that was not there, or does not answer, is
+   * the outcome this was asking for.
+   */
+  async retire(): Promise<void> {
+    try {
+      this.send({ t: 'retire' })
+    } catch {
+      /* nothing listening is the state this asks for */
+    }
+    try {
+      await this.stop()
+    } catch {
+      /* same */
+    }
+    await sleep(RETIRE_SETTLE_MS)
+  }
+
   private async cycle(): Promise<void> {
     if (this.stopped) return
     const attempts = this.deps.attempts ?? DEFAULT_ATTEMPTS

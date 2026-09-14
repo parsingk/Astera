@@ -52,3 +52,16 @@ describe('updateConfirmBody', () => {
     expect(updateConfirmBody(2, 3)).toEqual({ key: 'update.confirm.bodyKept', params: { count: 2 } })
   })
 })
+
+// win32 cannot write over a running image, and the Host is the file being replaced — so the app
+// retires it before handing over to the installer and nothing survives the install there.
+describe('updateConfirmBody where the Host cannot survive the install', () => {
+  it('says every session ends, however many the Host owns', () => {
+    expect(updateConfirmBody(3, 3, false)).toEqual({ key: 'update.confirm.body', params: { count: 3 } })
+    expect(updateConfirmBody(3, 2, false)).toEqual({ key: 'update.confirm.body', params: { count: 3 } })
+  })
+
+  it('leaves the platforms that can keep them alone', () => {
+    expect(updateConfirmBody(3, 3, true)).toEqual({ key: 'update.confirm.bodyKept', params: { count: 3 } })
+  })
+})

@@ -743,7 +743,7 @@ export default function App(): React.JSX.Element {
     const running = runningCountRef.current
     if (running > 0) {
       const kept = await window.api.host.sessionsOutlivingApp().catch(() => 0)
-      const body = updateConfirmBody(running, kept)
+      const body = updateConfirmBody(running, kept, window.api.platform !== 'win32')
       const ok = await confirmModal({
         title: tRef.current('update.confirm.title'),
         body: tRef.current(body.key, body.params),

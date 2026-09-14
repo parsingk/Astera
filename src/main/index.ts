@@ -62,6 +62,9 @@ let slackInboxControllerRef: SlackInboxController | null = null // Slack inbound
 let rollingRef: RollingCoordinator | null = null // lets the hook callback reach a coordinator created later
 let orchRef: OrchHandle | null = null // orchestration shutdown cleanup + the rolling seam
 let hostClientStopRef: (() => Promise<void>) | null = null // Astera Host client — closes the socket on quit
+// Asks the Host to leave. Only the update path uses it: an installer cannot write over a running
+// Host, and killing one this client is still watching only gets a fresh one started.
+let hostClientRetireRef: (() => Promise<void>) | null = null
 // fix wave 최종, F1: the tab-briefing function, handed over unconditionally (OrchWiring.onTabResumeReady)
 // — unlike orchRef above, this is set the moment registerIpc runs, whether or not orchestration ever
 // boots. Read by the two rolling coordinators' resumeText dep when orchRef is null (orchestration off),
@@ -891,8 +894,9 @@ app.whenReady().then(async () => {
       log: hostLog,
       // Handed over as soon as the client exists, whether or not a Host is ever reached — the same
       // shape as onTabResumeReady above. Read from will-quit.
-      onHostClientReady: (stop) => {
+      onHostClientReady: ({ stop, retire }) => {
         hostClientStopRef = stop
+        hostClientRetireRef = retire
       }
     }
   )
@@ -1038,7 +1042,26 @@ app.whenReady().then(async () => {
             /* the state is delivered through the error event */
           }
         })
-        ipcMain.handle('update:install', () => {
+        ipcMain.handle('update:install', async () => {
+          // The Host stands down first. It is the app's own executable run as node, so on win32 it
+          // pins `Astera.exe` and the installer cannot write over it; and killing one while this app
+          // still watches the address only gets a fresh one started a second later, which is what
+          // made the install give up and say the app could not be closed. Retiring ends its sessions
+          // and stops this side from putting another one back.
+          //
+          // Awaited, and a failure is not one: the point is to be gone, and a Host that never
+          // answered is already that. quitAndInstall follows either way — the installer's own
+          // customCheckAppRunning (build/installer.nsh) is the net under this.
+          // win32 only. There an installer cannot write over a running image, and the Host runs the
+          // very file being replaced. macOS and Linux swap a running binary without complaint, so the
+          // Host keeps its sessions through an install there — which is the whole point of having one.
+          if (process.platform === 'win32') {
+            try {
+              await hostClientRetireRef?.()
+            } catch {
+              /* already gone, or never there */
+            }
+          }
           autoUpdater.quitAndInstall()
         })
 
