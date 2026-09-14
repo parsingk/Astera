@@ -1421,6 +1421,7 @@ export const ko = {
   'conversation.group.run': '실행',
   'conversation.pending.title': '질문이 있습니다',
   'conversation.pending.trust': '폴더 신뢰 확인',
+  'conversation.pending.trustBody': '이 폴더에서 작업하려면 먼저 신뢰할지 확인해야 합니다.',
   'conversation.pending.body': '아래에 답을 입력하면 그대로 전해집니다. 선택지는 터미널 화면에 있습니다.',
   'conversation.pending.action': '선택지 보기',
   'conversation.pending.pick': '아래에서 고르면 그대로 전해집니다. 직접 입력해도 됩니다.',

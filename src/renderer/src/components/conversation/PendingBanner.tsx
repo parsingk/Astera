@@ -52,7 +52,14 @@ export function PendingBanner({
           <p className="font-medium">
             {t(trust ? "conversation.pending.trust" : "conversation.pending.title")}
           </p>
-          {!trust && <p>{t(pickable ? "conversation.pending.pick" : "conversation.pending.body")}</p>}
+          {/* The trust step says what it is in our own words. Quoting the CLI here bought nothing —
+              the question is always the same one — and it cost the step its reason to exist on a
+              screen that reads back only partly, which is exactly the screen this prompt appears on. */}
+          <p>
+            {trust
+              ? t("conversation.pending.trustBody")
+              : t(pickable ? "conversation.pending.pick" : "conversation.pending.body")}
+          </p>
         </div>
         <Button
           size="sm"
@@ -60,10 +67,12 @@ export function PendingBanner({
           className="shrink-0"
           onClick={onGoTerminal}
         >
-          {t(pickable ? "conversation.pending.terminal" : "conversation.pending.action")}
+          {t(
+            pickable || trust ? "conversation.pending.terminal" : "conversation.pending.action"
+          )}
         </Button>
       </div>
-      {lines.length > 0 && (
+      {!trust && lines.length > 0 && (
         <pre
           data-slot="conversation-pending-screen"
           className="max-h-56 overflow-auto rounded-md bg-black/20 px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap"

@@ -245,9 +245,14 @@ export function shouldReadPromptScreen(attention: Attention, turnCount: number):
  * Choices are the narrow half of the rule on purpose: promptChoicesOf answers with rows only for a
  * screen that is offering a marked list to pick from, so a session merely sitting at its own composer
  * — the usual state of one with nothing written yet — produces none and nothing is shown.
+ *
+ * `trust` is here so that it cannot come apart from the composer lock, which is driven by the same
+ * flag. It did come apart: the lock read the quoted lines while this read the parsed rows, and a
+ * screen that gave up its words but not its marker — the shape a partially readable terminal produces
+ * — locked the box and drew nothing to explain why. One flag, one outcome.
  */
-export function shouldShowPrompt(attention: Attention, choiceCount: number): boolean {
-  return attention === 'waiting' || choiceCount > 0
+export function shouldShowPrompt(attention: Attention, choiceCount: number, trust = false): boolean {
+  return attention === 'waiting' || choiceCount > 0 || trust
 }
 
 export function ptyWritesFor(text: string): [paste: string, submit: string] {
@@ -1488,7 +1493,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
   // into outranks a note about a command already sent.
   // Which of the two the prompt branch takes is shouldShowPrompt's rule, above.
   const banner: ReactNode =
-    shouldShowPrompt(attention, choices.length) ? (
+    shouldShowPrompt(attention, choices.length, trustPrompt) ? (
       <PendingBanner
         onGoTerminal={goTerminal}
         lines={promptLines}

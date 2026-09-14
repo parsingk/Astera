@@ -1223,6 +1223,7 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.group.run': 'run',
   'conversation.pending.title': 'A question is waiting',
   'conversation.pending.trust': 'Folder trust check',
+  'conversation.pending.trustBody': 'This folder has to be trusted before any work can start in it.',
   'conversation.pending.body': 'Type your answer below and it goes straight through. The choices are on the terminal screen.',
   'conversation.pending.action': 'See the choices',
   'conversation.pending.pick': 'Pick one below and it goes straight through — or type your answer.',

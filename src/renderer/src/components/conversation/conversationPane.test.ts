@@ -347,4 +347,12 @@ describe('shouldShowPrompt', () => {
     expect(shouldShowPrompt('idle', 0)).toBe(false)
     expect(shouldShowPrompt('working', 0)).toBe(false)
   })
+
+  // The composer lock is driven by the same flag, so these two cannot come apart. They did: a screen
+  // that read back far enough to name the trust question but not far enough to carry its marker gave
+  // choices of 0, and the pane locked the box while drawing nothing to say why.
+  it('shows the trust step even when the screen gave up no rows to press', () => {
+    expect(shouldShowPrompt('idle', 0, true)).toBe(true)
+    expect(shouldShowPrompt('working', 0, true)).toBe(true)
+  })
 })
