@@ -17,6 +17,10 @@ files:
   # this asar copy, it exists only to satisfy OFL 1.1's distribution requirement. Same reasoning as
   # resources/skills above — keeping it out of the asar avoids shipping the same document twice.
   - '!resources/font-licenses/**'
+  # The Host's own runtime (node.exe + node-pty + host.js, ~90 MB) ships through win.extraResources
+  # below, and only on Windows. Keeping it out of the asar is not a tidiness point here: without this
+  # line every platform's package would carry a second, unreachable copy of a Windows Node binary.
+  - '!resources/host-runtime/**'
 asarUnpack:
   - '**/node_modules/node-pty/**'
 extraResources:
@@ -80,6 +84,17 @@ win:
   # code signing (see the extraResources comment above). The resources copy ships on both platforms.
   extraFiles:
     - LICENSE
+  # The Host's own Node, so a Host that outlives the app stops pinning the install directory and a
+  # Windows session survives an update (docs/superpowers/specs/2026-09-14-host-runtime-design.md).
+  # Assembled by scripts/host-runtime.mjs between `electron-vite build` and packaging.
+  #
+  # **win: only.** macOS and Linux replace a running binary, so their Hosts already survive an install
+  # and would carry 90 MB for nothing. A platform-specific extraResources *appends* to the top-level
+  # list rather than replacing it — app-builder-lib's getFileMatchers adds config[name] and then
+  # customBuildOptions[name] — so LICENSE, skills and font-licenses above still ship on Windows.
+  extraResources:
+    - from: resources/host-runtime
+      to: host-runtime
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

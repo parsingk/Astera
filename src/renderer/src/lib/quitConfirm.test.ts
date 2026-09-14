@@ -53,8 +53,10 @@ describe('updateConfirmBody', () => {
   })
 })
 
-// win32 cannot write over a running image, and the Host is the file being replaced — so the app
-// retires it before handing over to the installer and nothing survives the install there.
+// The case where the Host is spawned from the app's own executable: win32 cannot write over a running
+// image, so the Host pins the very file being replaced and the app retires it before handing over to
+// the installer. Once it runs from its own runtime this stops being reachable on any platform — but
+// the fallback that produces it is supported, so the sentence for it has to stay right.
 describe('updateConfirmBody where the Host cannot survive the install', () => {
   it('says every session ends, however many the Host owns', () => {
     expect(updateConfirmBody(3, 3, false)).toEqual({ key: 'update.confirm.body', params: { count: 3 } })

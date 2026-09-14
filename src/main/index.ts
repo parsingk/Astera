@@ -65,6 +65,9 @@ let hostClientStopRef: (() => Promise<void>) | null = null // Astera Host client
 // Asks the Host to leave. Only the update path uses it: an installer cannot write over a running
 // Host, and killing one this client is still watching only gets a fresh one started.
 let hostClientRetireRef: (() => Promise<void>) | null = null
+// Whether the Host keeps its sessions through an installer. Only the update path reads it: it decides
+// whether the Host has to be retired first, or can simply be left running.
+let hostSurvivesUpdateRef: (() => boolean) | null = null
 // fix wave 최종, F1: the tab-briefing function, handed over unconditionally (OrchWiring.onTabResumeReady)
 // — unlike orchRef above, this is set the moment registerIpc runs, whether or not orchestration ever
 // boots. Read by the two rolling coordinators' resumeText dep when orchRef is null (orchestration off),
@@ -894,9 +897,10 @@ app.whenReady().then(async () => {
       log: hostLog,
       // Handed over as soon as the client exists, whether or not a Host is ever reached — the same
       // shape as onTabResumeReady above. Read from will-quit.
-      onHostClientReady: ({ stop, retire }) => {
+      onHostClientReady: ({ stop, retire, survivesUpdate }) => {
         hostClientStopRef = stop
         hostClientRetireRef = retire
+        hostSurvivesUpdateRef = survivesUpdate
       }
     }
   )
@@ -1043,19 +1047,22 @@ app.whenReady().then(async () => {
           }
         })
         ipcMain.handle('update:install', async () => {
-          // The Host stands down first. It is the app's own executable run as node, so on win32 it
-          // pins `Astera.exe` and the installer cannot write over it; and killing one while this app
+          // **The Host is left running wherever it can be.** That is the point of having one: its
+          // sessions carry on through the install and the new version takes them back. macOS and
+          // Linux replace a running binary without complaint, so this was always true there.
+          //
+          // On win32 it is true only once the Host runs from its own runtime outside the install
+          // directory (docs/superpowers/specs/2026-09-14-host-runtime-design.md). Spawned from the
+          // app's own executable — this version's fallback, and every version up to 1.3.19 — it pins
+          // `Astera.exe` and the installer cannot write over it; worse, killing one while this app
           // still watches the address only gets a fresh one started a second later, which is what
-          // made the install give up and say the app could not be closed. Retiring ends its sessions
-          // and stops this side from putting another one back.
+          // made installing 1.3.18 give up and say the app could not be closed. So on that path the
+          // Host still stands down first, and `survivesUpdate` is what tells the two apart.
           //
           // Awaited, and a failure is not one: the point is to be gone, and a Host that never
           // answered is already that. quitAndInstall follows either way — the installer's own
           // customCheckAppRunning (build/installer.nsh) is the net under this.
-          // win32 only. There an installer cannot write over a running image, and the Host runs the
-          // very file being replaced. macOS and Linux swap a running binary without complaint, so the
-          // Host keeps its sessions through an install there — which is the whole point of having one.
-          if (process.platform === 'win32') {
+          if (!(hostSurvivesUpdateRef?.() ?? process.platform !== 'win32')) {
             try {
               await hostClientRetireRef?.()
             } catch {

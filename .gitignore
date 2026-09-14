@@ -6,6 +6,12 @@ node_modules/
 out/
 dist-installer/
 
+# Build inputs that are fetched, not authored: the Host's runtime payload (a pinned node.exe and the
+# files copied around it — scripts/host-runtime.mjs) and the download cache behind it. Pinned by
+# version and SHA-256 in that script, so the bytes are reproducible without committing 90 MB.
+resources/host-runtime/
+build/.cache/
+
 # docs/ is handled as a whitelist. Everything else there is design and planning notes that stay
 # local — written this way round so a new note defaults to "not published".
 docs/*

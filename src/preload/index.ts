@@ -291,6 +291,7 @@ const api = {
   host: {
     status: invoke('host.status'),
     sessionsOutlivingApp: invoke('host.sessionsOutlivingApp'),
+    survivesUpdate: invoke('host.survivesUpdate'),
     holdings: invoke('host.holdings')
   },
   conversation: {

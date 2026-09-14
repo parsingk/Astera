@@ -23,11 +23,12 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "dist": "electron-vite build && electron-builder --publish never",
-    "dist:win": "electron-vite build && electron-builder --win --publish never",
+    "dist": "electron-vite build && npm run host-runtime && electron-builder --publish never",
+    "dist:win": "electron-vite build && npm run host-runtime && electron-builder --win --publish never",
     "dist:mac": "electron-vite build && electron-builder --mac --publish never",
     "dist:linux": "electron-vite build && electron-builder --linux --publish never",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "host-runtime": "node scripts/host-runtime.mjs"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.18",

@@ -60,10 +60,15 @@ export function quitConfirmBody(running: number, kept: number): Message {
  *  A person quitting through the window close button on Linux gets `quitConfirmBody` instead, and no
  *  such caveat, because nothing is being replaced there. */
 export function updateConfirmBody(running: number, kept: number, hostSurvives = true): Message {
-  // Nothing survives an install on win32, whatever the Host owns. An installer there cannot write
-  // over a running image, and the Host is the very file being replaced — so the app retires it before
-  // handing over (update:install, main/index.ts). Saying they keep running would be a promise this
-  // platform cannot keep.
+  // `hostSurvives` is whether the Host lives through the installer, asked of main rather than guessed
+  // from the platform (`host.survivesUpdate`). It is false on win32 only while the Host is spawned
+  // from the app's own executable: Windows locks a running image, so the Host pins the very file
+  // being replaced and has to be retired before handing over. Once it runs from its own runtime the
+  // installer has nothing of its to fight, and this is true on every platform.
+  //
+  // False collapses `kept` to zero rather than adding a fourth sentence. What the person needs to
+  // know is the same thing in both cases — how much of this ends — and the honest answer where the
+  // Host cannot survive is "all of it".
   const split = splitOnQuit(running, hostSurvives ? kept : 0)
   if (split.kind === 'allKept') return { key: 'update.confirm.bodyKept', params: { count: split.count } }
   // Unchanged from before the Host existed, and still exactly true when it owns none of them.

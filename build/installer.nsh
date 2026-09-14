@@ -7,8 +7,14 @@
 ; takes the place of _CHECK_APP_RUNNING). Its version gives up too early for this app.
 ;
 ; Astera runs a Host process that outlives the app, so that sessions survive closing and reopening
-; it. The Host is the app's own executable run as node — same file, same directory — so on Windows it
-; pins `Astera.exe`, and no installer can write over a running image. It has to go before we copy.
+; it. Up to and including 1.3.19 the Host was the app's own executable run as node — same file, same
+; directory — so it pinned `Astera.exe`, and no installer can write over a running image. It had to go
+; before we copy.
+;
+; From 1.3.20 the Host runs from its own Node under %LOCALAPPDATA% and pins nothing here, so this
+; macro finds nothing and returns on its first pass. **It stays anyway**, for the people this ships
+; for: everyone updating *from* a version whose Host is still inside $INSTDIR. It also remains the net
+; under the app's own retire, which that fallback path still performs.
 ;
 ; That much the stock check already does: it kills everything whose path is under $INSTDIR, Host
 ; included. What defeats it is that **the app puts the Host back**. Lose the connection and the app
