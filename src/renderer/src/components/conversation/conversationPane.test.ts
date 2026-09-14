@@ -13,7 +13,8 @@ import {
   isSlashCommand,
   modelLineOf,
   shouldReadPromptScreen,
-  shouldShowPrompt
+  shouldShowPrompt,
+  choicesToShow
 } from './ConversationPane'
 import type { ConvTurn } from '../../../../core/history/convTypes'
 
@@ -354,5 +355,29 @@ describe('shouldShowPrompt', () => {
   it('shows the trust step even when the screen gave up no rows to press', () => {
     expect(shouldShowPrompt('idle', 0, true)).toBe(true)
     expect(shouldShowPrompt('working', 0, true)).toBe(true)
+  })
+})
+
+// A CLI draws a dialog in pieces, so a poll can land between the question and its rows. The trust
+// prompt is the one whose buttons are the only way through — the composer beside it is locked — so it
+// keeps the last reading that had any rather than flickering them away.
+describe('choicesToShow', () => {
+  const rows = [
+    { label: 'No, exit', number: null, selected: true },
+    { label: 'Yes, I trust this folder', number: null, selected: false }
+  ]
+
+  it('draws the rows this tick read, whenever it read any', () => {
+    expect(choicesToShow(rows, [], false)).toEqual(rows)
+    expect(choicesToShow(rows, [], true)).toEqual(rows)
+  })
+
+  it('keeps the last rows through a tick that read none, while the trust prompt is up', () => {
+    expect(choicesToShow([], rows, true)).toEqual(rows)
+  })
+
+  it('draws nothing for any other prompt that read none', () => {
+    expect(choicesToShow([], rows, false)).toEqual([])
+    expect(choicesToShow([], [], true)).toEqual([])
   })
 })

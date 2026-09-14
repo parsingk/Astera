@@ -255,6 +255,31 @@ export function shouldShowPrompt(attention: Attention, choiceCount: number, trus
   return attention === 'waiting' || choiceCount > 0 || trust
 }
 
+/**
+ * Which rows to draw as buttons, given this tick's reading and the last one that had any.
+ *
+ * A CLI draws a dialog in pieces — the question first, its rows a moment later — so a poll that lands
+ * in between reads a screen with words but no marked row, and promptChoicesOf rightly answers none.
+ * Dropping the buttons for that tick makes them flicker, and a person mid-reach presses nothing.
+ *
+ * `hold` is the caller's answer to "is the same question still up", and it is passed true only for the
+ * folder-trust prompt. That prompt earns it where others do not: its two rows are fixed for its whole
+ * life, so a held reading cannot go stale, and it is the one prompt whose buttons are the only way
+ * through — the composer beside it is locked. An ordinary prompt keeps today's behaviour, where what
+ * is drawn is only ever what was last read.
+ *
+ * Holding is safe to press either way: answerChoice re-reads the screen before every key it sends
+ * (see stepToward), and a numbered row is answered by its number, which is absolute.
+ */
+export function choicesToShow(
+  fresh: readonly PromptChoice[],
+  held: readonly PromptChoice[],
+  hold: boolean
+): readonly PromptChoice[] {
+  if (fresh.length > 0) return fresh
+  return hold ? held : []
+}
+
 export function ptyWritesFor(text: string): [paste: string, submit: string] {
   return ["\u001b[200~" + text + "\u001b[201~", "\r"];
 }
@@ -869,11 +894,18 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false }: Co
   // The rows of that same quote, as something to press. They come out of the quote rather than
   // alongside it, so what the buttons say and what the banner shows can never be two different
   // readings of the screen.
-  const choices = useMemo(() => promptChoicesOf(promptLines), [promptLines]);
+  const fresh = useMemo(() => promptChoicesOf(promptLines), [promptLines]);
   /** The folder-trust question, which takes one of its rows and nothing else — typing into it is
    *  discarded by the CLI. It gets its own heading, and it is the one prompt that locks the composer
    *  (see `isDisabled` below). */
   const trustPrompt = useMemo(() => isFolderTrustPrompt(promptLines), [promptLines]);
+  // The last reading that had rows in it. A ref rather than state: it is written during the render that
+  // consumes it, and re-rendering for it would only re-run this block to the same answer. Cleared the
+  // moment the trust prompt is gone, so nothing is held across two different questions.
+  const heldChoices = useRef<readonly PromptChoice[]>([]);
+  const choices = choicesToShow(fresh, heldChoices.current, trustPrompt);
+  if (fresh.length > 0) heldChoices.current = fresh;
+  else if (!trustPrompt) heldChoices.current = [];
   const [answering, setAnswering] = useState(false);
 
   /**
