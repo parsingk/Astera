@@ -15,12 +15,18 @@ describe('fanOutHookEvent — every tap sees the event', () => {
       onHookEvent: (sessionId, payload) => seen.push({ name, sessionId, payload })
     })
     fanOutHookEvent(
-      { attention: tap('attention'), slack: tap('slack'), rolling: tap('rolling') },
+      {
+        attention: tap('attention'),
+        pendingPrompt: tap('pendingPrompt'),
+        slack: tap('slack'),
+        rolling: tap('rolling')
+      },
       's1',
       { hook_event_name: 'Notification' }
     )
     expect(seen).toEqual([
       { name: 'attention', sessionId: 's1', payload: { hook_event_name: 'Notification' } },
+      { name: 'pendingPrompt', sessionId: 's1', payload: { hook_event_name: 'Notification' } },
       { name: 'slack', sessionId: 's1', payload: { hook_event_name: 'Notification' } },
       { name: 'rolling', sessionId: 's1', payload: { hook_event_name: 'Notification' } }
     ])
@@ -32,12 +38,17 @@ describe('fanOutHookEvent — every tap sees the event', () => {
     const calls: string[] = []
     expect(() =>
       fanOutHookEvent(
-        { attention: recorder(calls, 'attention'), slack: recorder(calls, 'slack'), rolling: null },
+        {
+          attention: recorder(calls, 'attention'),
+          pendingPrompt: recorder(calls, 'pendingPrompt'),
+          slack: recorder(calls, 'slack'),
+          rolling: null
+        },
         's1',
         {}
       )
     ).not.toThrow()
-    expect(calls).toEqual(['attention', 'slack'])
+    expect(calls).toEqual(['attention', 'pendingPrompt', 'slack'])
   })
 })
 
@@ -50,13 +61,14 @@ describe('fanOutHookEvent — attention runs first', () => {
     fanOutHookEvent(
       {
         attention: recorder(calls, 'attention'),
+        pendingPrompt: recorder(calls, 'pendingPrompt'),
         slack: recorder(calls, 'slack'),
         rolling: recorder(calls, 'rolling')
       },
       's1',
       { hook_event_name: 'PreToolUse', tool_use_id: 'call-1' }
     )
-    expect(calls).toEqual(['attention', 'slack', 'rolling'])
+    expect(calls).toEqual(['attention', 'pendingPrompt', 'slack', 'rolling'])
   })
 })
 
@@ -70,6 +82,7 @@ describe('fanOutHookEvent — one tap throwing does not stop the others', () => 
       fanOutHookEvent(
         {
           attention: recorder(calls, 'attention', true),
+          pendingPrompt: recorder(calls, 'pendingPrompt'),
           slack: recorder(calls, 'slack'),
           rolling: recorder(calls, 'rolling')
         },
@@ -77,7 +90,24 @@ describe('fanOutHookEvent — one tap throwing does not stop the others', () => 
         {}
       )
     ).not.toThrow()
-    expect(calls).toEqual(['attention', 'slack', 'rolling'])
+    expect(calls).toEqual(['attention', 'pendingPrompt', 'slack', 'rolling'])
+  })
+
+  it('pendingPrompt throwing still lets slack and rolling run', () => {
+    const calls: string[] = []
+    expect(() =>
+      fanOutHookEvent(
+        {
+          attention: recorder(calls, 'attention'),
+          pendingPrompt: recorder(calls, 'pendingPrompt', true),
+          slack: recorder(calls, 'slack'),
+          rolling: recorder(calls, 'rolling')
+        },
+        's1',
+        {}
+      )
+    ).not.toThrow()
+    expect(calls).toEqual(['attention', 'pendingPrompt', 'slack', 'rolling'])
   })
 
   // rolling is last, so this mainly pins that its own try does not let the exception escape the whole
@@ -88,6 +118,7 @@ describe('fanOutHookEvent — one tap throwing does not stop the others', () => 
       fanOutHookEvent(
         {
           attention: recorder(calls, 'attention'),
+          pendingPrompt: recorder(calls, 'pendingPrompt'),
           slack: recorder(calls, 'slack'),
           rolling: recorder(calls, 'rolling', true)
         },
@@ -95,7 +126,7 @@ describe('fanOutHookEvent — one tap throwing does not stop the others', () => 
         {}
       )
     ).not.toThrow()
-    expect(calls).toEqual(['attention', 'slack', 'rolling'])
+    expect(calls).toEqual(['attention', 'pendingPrompt', 'slack', 'rolling'])
   })
 
   // slack itself is intentionally left unguarded (matching its behaviour before this task), so a throw
@@ -106,6 +137,7 @@ describe('fanOutHookEvent — one tap throwing does not stop the others', () => 
       fanOutHookEvent(
         {
           attention: recorder(calls, 'attention'),
+          pendingPrompt: recorder(calls, 'pendingPrompt'),
           slack: recorder(calls, 'slack', true),
           rolling: recorder(calls, 'rolling')
         },
@@ -114,6 +146,6 @@ describe('fanOutHookEvent — one tap throwing does not stop the others', () => 
       )
     ).toThrow('slack boom')
     // attention still ran before the throw; rolling never got its turn.
-    expect(calls).toEqual(['attention', 'slack'])
+    expect(calls).toEqual(['attention', 'pendingPrompt', 'slack'])
   })
 })
