@@ -54,7 +54,6 @@ import {
   DownloadIcon,
   MicIcon,
   MoreHorizontalIcon,
-  PencilIcon,
   SquareIcon,
 } from "lucide-react";
 import {
@@ -592,9 +591,6 @@ const UserMessage: FC = () => {
             components={{ File: UserFilePart, Image: UserImagePart }}
           />
         </div>
-        <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
-          <UserActionBar />
-        </div>
       </div>
 
       <BranchPicker
@@ -605,21 +601,9 @@ const UserMessage: FC = () => {
   );
 };
 
-const UserActionBar: FC = () => {
-  return (
-    <ActionBarPrimitive.Root
-      hideWhenRunning
-      autohide="not-last"
-      className="aui-user-action-bar-root flex flex-col items-end"
-    >
-      <ActionBarPrimitive.Edit asChild>
-        <TooltipIconButton tooltip="Edit" className="aui-user-action-edit">
-          <PencilIcon />
-        </TooltipIconButton>
-      </ActionBarPrimitive.Edit>
-    </ActionBarPrimitive.Root>
-  );
-};
+// No action bar on a user message. Its one control was Edit, and there is nothing here to edit: the
+// transcript belongs to the CLI, which wrote these turns down as they happened and has no notion of
+// one being rewritten afterwards. The button offered something the view cannot do.
 
 const EditComposer: FC = () => {
   return (
