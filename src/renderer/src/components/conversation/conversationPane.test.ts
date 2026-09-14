@@ -11,7 +11,9 @@ import {
   shouldCloseStaleOpen,
   ptyWritesFor,
   isSlashCommand,
-  modelLineOf
+  modelLineOf,
+  shouldReadPromptScreen,
+  shouldShowPrompt
 } from './ConversationPane'
 import type { ConvTurn } from '../../../../core/history/convTypes'
 
@@ -309,5 +311,40 @@ describe('keepWhatIsKnown', () => {
   it('replaces everything when the CLI itself is different', () => {
     const claude: Reading = { model: null, effort: null, cli: 'claude' }
     expect(keepWhatIsKnown(codex('gpt-5.6-sol', 'low'), claude)).toEqual(claude)
+  })
+})
+
+// A CLI puts its first question up before any hook can fire and before there is a transcript to read
+// it off — Claude Code's folder-trust prompt, codex's numbered one, a theme picker on a fresh config
+// dir. `attention` is built from hook events, so it says `idle` throughout, and the pane used to show
+// an empty thread with a composer whose keystrokes went into a dialog that ignores them.
+describe('shouldReadPromptScreen', () => {
+  it('reads while a hook says the session is waiting', () => {
+    expect(shouldReadPromptScreen('waiting', 12)).toBe(true)
+  })
+
+  it('reads while the session has written nothing, whatever attention says', () => {
+    expect(shouldReadPromptScreen('idle', 0)).toBe(true)
+    expect(shouldReadPromptScreen('working', 0)).toBe(true)
+  })
+
+  it('stops once the session has a conversation of its own', () => {
+    expect(shouldReadPromptScreen('idle', 1)).toBe(false)
+    expect(shouldReadPromptScreen('working', 3)).toBe(false)
+  })
+})
+
+describe('shouldShowPrompt', () => {
+  it('shows while a hook says the session is waiting, even with nothing to pick', () => {
+    expect(shouldShowPrompt('waiting', 0)).toBe(true)
+  })
+
+  it('shows a question nobody reported, on the strength of its choices alone', () => {
+    expect(shouldShowPrompt('idle', 2)).toBe(true)
+  })
+
+  it('stays out of the way of a session merely sitting at its own composer', () => {
+    expect(shouldShowPrompt('idle', 0)).toBe(false)
+    expect(shouldShowPrompt('working', 0)).toBe(false)
   })
 })

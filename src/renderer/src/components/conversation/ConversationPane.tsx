@@ -218,6 +218,32 @@ function isTextPart(part: { type: string; text?: string }): part is { type: "tex
  * `/status` this way opened the model picker and saved a default (measured in the dev app). They also
  * keep a newline inside a message from submitting it halfway through.
  */
+/**
+ * Whether to keep reading the CLI's screen for a question it is sitting on.
+ *
+ * `waiting` is the ordinary answer: a hook told us a prompt is up. The second case is the window no
+ * hook can speak for — a session that has written nothing yet. The prompts a CLI puts up before a
+ * session exists (Claude Code's "do you trust this folder", codex's numbered one, a theme picker on a
+ * fresh config dir) come before any hook fires and leave no transcript, so without this the pane shows
+ * an empty thread and a composer whose every keystroke goes into a dialog that ignores it.
+ *
+ * It closes as soon as the session writes its first turn, so an ordinary conversation pays nothing.
+ */
+export function shouldReadPromptScreen(attention: Attention, turnCount: number): boolean {
+  return attention === 'waiting' || turnCount === 0
+}
+
+/**
+ * Whether the pane shows the question rather than its ordinary notices.
+ *
+ * Choices are the narrow half of the rule on purpose: promptChoicesOf answers with rows only for a
+ * screen that is offering a marked list to pick from, so a session merely sitting at its own composer
+ * — the usual state of one with nothing written yet — produces none and nothing is shown.
+ */
+export function shouldShowPrompt(attention: Attention, choiceCount: number): boolean {
+  return attention === 'waiting' || choiceCount > 0
+}
+
 export function ptyWritesFor(text: string): [paste: string, submit: string] {
   return ["\u001b[200~" + text + "\u001b[201~", "\r"];
 }
@@ -797,8 +823,12 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
   //
   // Polled, because a screen is not an event: the highlighted choice moves, a second question
   // follows the first. Only while something is actually being asked.
+  //
+  // When to read at all is shouldReadPromptScreen's rule, above — a prompt the hooks never reported is
+  // the case it exists for.
+  const readPromptScreen = shouldReadPromptScreen(attention, turns.length);
   useEffect(() => {
-    if (attention !== "waiting") {
+    if (!readPromptScreen) {
       setPromptLines([]);
       return;
     }
@@ -810,7 +840,7 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
     read();
     const timer = setInterval(read, PROMPT_POLL_MS);
     return () => clearInterval(timer);
-  }, [attention, sessionId]);
+  }, [readPromptScreen, sessionId]);
 
   // The rows of that same quote, as something to press. They come out of the quote rather than
   // alongside it, so what the buttons say and what the banner shows can never be two different
@@ -1433,8 +1463,9 @@ export function ConversationPane({ sessionId, onGoTerminal }: ConversationPanePr
 
   // An answer that is actually being waited on outranks everything; after that, a list being typed
   // into outranks a note about a command already sent.
+  // Which of the two the prompt branch takes is shouldShowPrompt's rule, above.
   const banner: ReactNode =
-    attention === "waiting" ? (
+    shouldShowPrompt(attention, choices.length) ? (
       <PendingBanner
         onGoTerminal={goTerminal}
         lines={promptLines}
