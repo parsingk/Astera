@@ -10,9 +10,17 @@ import type { RollingCoordinator } from './rolling'
 import type { CodexRollingCoordinator } from './codexRolling'
 import type { SchedulerCoordinator } from './scheduler'
 import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
+import { readFileTail } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
+import type { AttentionState, Attention } from './attention'
+import {
+  createConversationSessions,
+  transcriptPathFor,
+  codexModelFor,
+  type ConversationSessions
+} from './conversation'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
 import { hostAddress, retireOlderHosts } from '../host/address'
@@ -27,6 +35,9 @@ import { markCodexProjectTrusted } from '../core/accounts/codexTrust'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
+import { attachmentNameOf } from '../core/files/attachmentName'
+import { installCommandFor, locateCommandFor } from '../core/install/cliInstall'
+import { prependToPath } from '../core/sessions/manager'
 import { listClaudeModels, listCodexModels } from './models/discover'
 import { UnderstandingPipeline } from './understanding/pipeline'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
@@ -113,7 +124,10 @@ import { AgentBrowserRuns, devServersFor } from './agentBrowser/runs'
 import { previewShotsDir } from './preview/shots'
 import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
-import { extractStatusLineSession } from '../core/usage/statusline'
+import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/statusline'
+import { listSlashCommands, listCodexMentions } from './slashCommands'
+import { createFileIndex } from './fileIndex'
+import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
@@ -230,6 +244,10 @@ export interface HostWiring {
  *  handleCommand 는 caller.sessionId 가 Dispatch 를 가진 적이 있으면 워커로 보고 COORDINATOR_ONLY
  *  명령을 막는다. 겹치면 앱이 워커로 오인되어 Task 를 만들 수 없게 된다. 세션 id 는 randomUUID
  *  (core/sessions/manager.ts)이므로 콜론이 들어갈 자리가 없다. */
+/** The most this will write for one dropped or pasted file. A prompt attachment is a screenshot or a
+ *  document, not a disk image, and the cap is what keeps a stray drop from filling a disk. */
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
 const UI_CALLER = 'astera:app'
 
 /** http:/https:/mailto: 만 허용하는 스킴 화이트리스트. 통과하면 파싱된 URL 을 돌려준다 —
@@ -552,9 +570,74 @@ export function historyResumePlan(a: {
   return { blankSlate: true, initialPrompt: safe, mangled: false }
 }
 
+/**
+ * Whether a session exit should forget its attention verdict (main/attention.ts), and does so.
+ *
+ * **Not on a lost-sight exit** (`PTY_LOST_SIGHT_EXIT_CODE`): that code means the app lost its pty
+ * handle, not that the session ended — the Host keeps running it, and no hook event arrives again
+ * until the next tool call. Forgetting here would silently drop a `waiting` banner while a permission
+ * prompt is still on screen through the reconnect. slack.ts's `handleExit` guards the identical case
+ * for the identical reason, and this reads the same field it does.
+ *
+ * A pure function for the same reason `historyResumePlan` above it is: the real call sits inside
+ * `registerIpc`'s `onExit` closure, unreachable without an Electron harness.
+ */
+export function forgetAttentionOnExit(
+  attention: Pick<AttentionState, 'forget'> | undefined,
+  sessionId: string,
+  exitCode: number
+): void {
+  if (exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
+  attention?.forget(sessionId)
+}
+
+/**
+ * Whether a session exit should close its conversation window (main/conversation.ts), and does so.
+ *
+ * Same guard, and the same reason, as `forgetAttentionOnExit` just above: a lost-sight exit means the
+ * app only lost its pty handle, not that the session ended — the Host keeps running it and the view
+ * stays correct straight through the reconnect. Closing the conversation here would drop a window a
+ * person still has open, for no reason.
+ *
+ * A pure function for the same reason `forgetAttentionOnExit` is one: the real call sits inside
+ * `registerIpc`'s `onExit` closure, unreachable without an Electron harness.
+ */
+export function closeConversationOnExit(
+  sessions: Pick<ConversationSessions, 'close'> | undefined,
+  sessionId: string,
+  exitCode: number
+): void {
+  if (exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
+  sessions?.close(sessionId)
+}
+
+/**
+ * One session's attention verdict, read once rather than waited for. The conversation view's IPC
+ * surface (core/types.ts's `conversation`) is otherwise push-only — 'conversation:attention' fires
+ * only on a change — so a session already `waiting` (or `working`) when its conversation pane
+ * mounts would read `idle` until the next change, and a `waiting` session's next change is the
+ * answer to the very prompt the pane exists to surface. This is what the pane calls once on mount,
+ * before it subscribes to the push stream.
+ *
+ * A pure function for the same reason `forgetAttentionOnExit` above is one: the real call sits
+ * inside `registerIpc`'s handler registration, unreachable without an Electron harness.
+ */
+export function conversationAttentionOf(attention: Pick<AttentionState, 'get'>, sessionId: string): Attention {
+  return attention.get(sessionId)
+}
+
 export function registerIpc(
   core: Core,
   win: BrowserWindow,
+  /** The one attention verdict (main/attention.ts). Built in index.ts alongside `desktop` and handed
+   *  the same instance — forgetting a session's verdict on exit, and pushing every change through
+   *  `conversation:attention`, both read it. Required, not optional, and placed ahead of
+   *  every optional parameter below (TypeScript refuses a required parameter after an optional one) —
+   *  deliberately: dropping `attention` from index.ts's call used to compile silently and leave the
+   *  feature dark (`forget` never called, and before that, the whole desktop sink dead), which no test
+   *  caught either, since `registerIpc` cannot be exercised without a full Electron harness. Requiring
+   *  it turns that specific mistake into a type error at the one real call site. */
+  attention: AttentionState,
   rolling?: RollingCoordinator,
   slack?: {
     notifier: SlackNotifier
@@ -605,12 +688,69 @@ export function registerIpc(
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
 
+  // The conversation view: one follow per open session, polling only while at least one is open (see
+  // conversation.ts's own doc). transcriptPathFor reads the same statusLine payload rolling.ts,
+  // scheduler.ts and slack.ts already read for a claude session's transcript path, and answers null for
+  // a codex one exactly the way it answers null for a claude session with no status line yet — codex
+  // never writes one, so this needs no provider branch of its own.
+  /** How many file rows the composer's `@` menu shows. More than a screenful is not a menu. */
+  const CONVERSATION_FILE_MATCHES = 30
+  const fileIndex = createFileIndex()
+  const conversationSessions = createConversationSessions({
+    // Claude first, because a Claude session answers immediately and is the common case; the codex
+    // rollout is asked for only when it does not. Neither answering is ordinary, not an error: a
+    // session that has only just started has written nothing to point at yet.
+    sourceFor: async (sessionId) => {
+      const transcript = await transcriptPathFor(sessionId, {
+        readStatusPayload: (id) => core.statusLinePayload(id)
+      })
+      if (transcript !== null) return { path: transcript, format: 'claude' }
+      const rollout = codexRollout?.rolloutPathFor(sessionId) ?? null
+      return rollout === null ? null : { path: rollout, format: 'codex' }
+    },
+    emit: (sessionId, turns, restarted) => send('conversation:append', { sessionId, turns, restarted })
+  })
+  // Every attention change, for every session — unlike conversation:append this is not gated on an
+  // open conversation. It is the same per-session verdict the desktop notifier already reads.
+  attention.subscribe((sessionId, value) => send('conversation:attention', { sessionId, value }))
+  // A renderer reload leaves every open conversation with nobody watching it — the same kind of gap
+  // the preview.registerAgentGuest handler's own 'destroyed' listener exists for below, just with a
+  // different signal: a guest `<webview>` is torn down with the DOM a reload replaces, so 'destroyed'
+  // fires for it, but the main window's own WebContents survives a reload — nothing there is ever
+  // destroyed.
+  //
+  // **'did-start-navigation', not 'will-navigate' or 'did-finish-load'.** 'will-navigate' is not a
+  // substitute: it does not fire for `webContents.reload()` at all, which is how this window actually
+  // reloads. 'did-finish-load' does fire, but too late — it races the fresh renderer's own re-open:
+  // React mounts, the panel calls `conversation.open`, main creates the new entry and starts the
+  // ticker, all before 'did-finish-load' gets around to firing, since nothing orders an
+  // `ipcMain.handle` dispatch against this navigation observer. `closeAll()` there would wipe the
+  // entry the fresh renderer had just opened, silently — no error, no retry, the panel just never
+  // updates again. 'did-start-navigation' fires before the new document can run any script at all, so
+  // this close always precedes whatever the fresh renderer goes on to open.
+  //
+  // Same dual-argument read as agentBrowser/buffers.ts's own onNav, for the same reason: Electron 41
+  // emits a single `{ url, isSameDocument, isMainFrame, ... }` details object, alongside the older
+  // positional arguments (marked deprecated) that this app still has to read for the boundary case
+  // where only those arrive. isMainFrame excludes a sub-frame's own navigation; isSameDocument excludes
+  // an in-page navigation (a hash change), which does not tear anything down and is not this app's own
+  // reload.
+  win.webContents.on('did-start-navigation', (...args: unknown[]) => {
+    const first = typeof args[0] === 'object' && args[0] !== null ? (args[0] as Record<string, unknown>) : null
+    const isMainFrame = typeof first?.isMainFrame === 'boolean' ? first.isMainFrame : args[3]
+    const isSameDocument = typeof first?.isSameDocument === 'boolean' ? first.isSameDocument : args[2]
+    if (isMainFrame !== true || isSameDocument === true) return
+    conversationSessions.closeAll()
+  })
+
   // Session working/idle detection: decided from the window-title OSC in the output, and session:busy
   // is emitted only when the state changes.
   /** 계정 id → 그 계정의 모델 목록. **앱이 사는 동안만** 든다 — claude 쪽 왕복이 1.6초라
    *  설정을 열 때마다 물으면 눈에 띈다. 디스크에 두지 않는 이유: 목록은 계정의 구독·조직
    *  정책에 따라 바뀌고, 그 변화를 우리가 감지할 방법이 없다. 새로 고침은 사용자가 누른다. */
   const modelCache = new Map<string, ModelListResult>()
+  /** Tells two attachments saved in the same second apart. */
+  let attachmentNonce = 0
   const busyScanners = new Map<string, BusyScanner>()
   const busyState = new Map<string, boolean>()
   /** 그 세션의 busy 신호를 **판정에 쓸 수 있는가** (`ProviderDescriptor.busyTitleReliable`).
@@ -733,6 +873,14 @@ export function registerIpc(
   const hostSessionsTakenBack = new Promise<SessionsTakenBack>((resolve) => {
     settleSessionsTakenBack = resolve
   })
+  // Collect the statusline payloads of sessions that are gone. Hung off the promise above because
+  // this is the first moment `sessions.list()` is the real set: before the Host answers, a session it
+  // is still running has no record here, and dropping its payload then is what the old wipe at
+  // StatusLineManager.init did — it cost every surviving session its transcript path. Settles on
+  // every path, including the no-Host one, where the set is simply what the app restored by itself.
+  void hostSessionsTakenBack.then(() =>
+    core.pruneStatusLinePayloads(new Set(core.sessions.list().map((session) => session.id)))
+  )
   /** Job Continuity's recorder. Non-null only while the toggle is on: off means no file is opened and
    *  nothing is written (spec §0.4). Created before store.load in bootOrch so the restart's losses are
    *  journaled, and by the toggle handler when turned on at runtime. */
@@ -942,6 +1090,8 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
+    forgetAttentionOnExit(attention, e.sessionId, e.exitCode) // drop the Map entry (its own doc above)
+    closeConversationOnExit(conversationSessions, e.sessionId, e.exitCode) // stop the follow (its own doc above)
     // The session ended (WU §14-4) — observation stops here, so any Work Unit still `active` is
     // interrupted, not completed; it waits on the How It Works screen until the person closes it.
     // A usage-limit roll's exit is not this case — the collector's `onSessionForked` re-keys the
@@ -5143,9 +5293,11 @@ export function registerIpc(
    *
    *  **앱이 사는 동안 한 번만 묻는다.** claude 쪽 왕복이 1.6초라 설정을 열 때마다 물으면
    *  눈에 띈다. 새로 고침은 renderer 가 `refresh: true` 로 요청한다. */
-  ipcMain.handle('settings.listModels', async (_e, accountId: unknown, refresh: unknown) => {
-    if (typeof accountId !== 'string') throw new Error(`INVALID_ACCOUNT_ID: ${String(accountId)}`)
-    if (refresh !== true) {
+  /** One account's model list, cached as above. Two callers ask for it — settings, and the
+   *  conversation view's model menu — and they share the cache rather than each paying claude's
+   *  1.6-second round trip. */
+  const modelsForAccount = async (accountId: string, refresh: boolean): Promise<ModelListResult> => {
+    if (!refresh) {
       const hit = modelCache.get(accountId)
       if (hit) return hit
     }
@@ -5163,6 +5315,11 @@ export function registerIpc(
     // 실패는 캐시하지 않는다 — 로그인하고 다시 열면 바로 보여야 한다
     if (!result.error) modelCache.set(accountId, result)
     return result
+  }
+
+  ipcMain.handle('settings.listModels', async (_e, accountId: unknown, refresh: unknown) => {
+    if (typeof accountId !== 'string') throw new Error(`INVALID_ACCOUNT_ID: ${String(accountId)}`)
+    return modelsForAccount(accountId, refresh === true)
   })
 
   // How a session that hits its limit gets continued. The same trust-boundary check as setLang — the
@@ -5229,6 +5386,20 @@ export function registerIpc(
     if (!isThemeId(id)) return core.appSettings.getTheme()
     await core.appSettings.setTheme(id)
     return core.appSettings.getTheme()
+  })
+
+  // Task 10: what a new session tab opens as. Same trust-boundary check as the other enum settings
+  // above — the value the renderer sent is validated before being written to disk.
+  /** Whether the one first-run question has already been put to this person. See the store's own
+   *  field for what tells a new install from an old one — in short, only the absence of a settings
+   *  file counts. */
+  ipcMain.handle('settings.getFirstRunAsked', () => core.appSettings.getFirstRunAsked())
+  ipcMain.handle('settings.markFirstRunAsked', () => core.appSettings.markFirstRunAsked())
+  ipcMain.handle('settings.getConversationDefault', () => core.appSettings.getConversationDefault())
+  ipcMain.handle('settings.setConversationDefault', async (_e, view: unknown) => {
+    if (view !== 'terminal' && view !== 'conversation')
+      throw new Error(`INVALID_CONVERSATION_DEFAULT: ${String(view)}`)
+    await core.appSettings.setConversationDefault(view)
   })
 
   // Astera Host. Unconditional — the Host is not an orchestration feature, so this must not go inside
@@ -5451,41 +5622,51 @@ export function registerIpc(
                 )
               else if (coordinator === 'rolling') rolling?.register(info)
             }
-            // codexRollout is registered **only from the note**, never left to find the file itself.
-            // The distinction is the whole of the safety here, so it is worth stating both halves.
+            // codexRollout is registered from the note when the note has a mapping, and left to
+            // find the file itself when it does not. The distinction used to be "note or nothing",
+            // and that skipped session was mute for the rest of its life: no usage chips, no turn
+            // notifications, and — since the conversation view reads its transcript through
+            // rolloutPathFor — an empty conversation for a session that was answering perfectly well
+            // on the terminal. Measured: a codex session idle at the moment the app closed came back,
+            // was asked a question, answered it, and the conversation view stayed blank.
             //
-            // Why it must not scan. It keys a session's rollout by `findRollout({ since, cwd, ... })`,
-            // which for a freshly spawned session is safe because since = the spawn moment: at that
-            // instant nothing else can have a newer file in the same cwd/account, so "pick the newest
-            // candidate created after since" always resolves to this session's own file. An adopted
-            // session's real spawn was before the restart, so since would have to be that earlier
-            // moment — and between then and whenever the scan actually runs, another session can
-            // legitimately open in the same cwd/account and create a newer file, which "newest wins"
-            // would hand to the adopted entry instead, permanently locking the rightful session out of
-            // its own file via claimed()'s excludePaths. There is no narrower since that fixes it: the
-            // discovery rule assumes the caller's own file is definitionally the newest thing that
-            // exists the moment a match is found, and that only holds right after a real spawn. It is
-            // the same hazard `codexRolling`'s `locate: false` above avoids, and this watcher has no
-            // such switch — handing it a path is what turns the scan off, since register attaches to
-            // the file it is given and never looks for one.
+            // Why a mapping is handed over rather than searched for. The scan keys a rollout by
+            // `findRollout({ since, cwd, ... })`, which for a freshly spawned session is safe because
+            // since = the spawn moment: nothing else can have a newer file in the same cwd and
+            // account, so "newest created after since" is this session's own file. An adopted
+            // session's spawn was before the restart, and between then and the scan another session
+            // can legitimately open in the same folder — "newest wins" would hand it that one and lock
+            // the rightful session out through claimed().
             //
-            // Why the note can be trusted with it. The path is not a guess: the watcher mapped it while
-            // the session ran, in the one moment the discovery rule does hold, and handed it to
-            // `SessionManager.remember` — so what comes back is that session's own file, established
-            // before the restart rather than inferred after it. A note with no path is a session the
-            // scan never mapped, and it is skipped, which is exactly the case the old refusal protected.
+            // Why searching is nonetheless right when there is no mapping. A note with no path is a
+            // session the watcher never mapped, which is a session that had written no rollout at all
+            // — so there is no earlier file of its own to miss, and `since` is the moment it is taken
+            // back rather than the moment it spawned. The remaining hazard, another session opening in
+            // the same folder before this one says anything, is answered in the watcher itself: of the
+            // entries still looking in one folder, only the one that started last may claim
+            // (mayClaim). A session adopted hours ago waits until it is alone again, which is exactly
+            // when the next file to appear really is its own.
             //
-            // What registering restores, and a skip still costs: the usage chips
-            // (CodexRolloutWatcher.usage), turn-triggered Slack notifications (onTurnComplete), Work
-            // Unit detection (rolloutPathFor feeds the transcript path) and the scheduler's key
-            // (codexSessionId, read below). The tail starts at the end of the file, so turns that
-            // completed while the app was closed are not reported now — the same rule a resume follows.
+            // What is still lost either way: turns that completed while the app was closed are not
+            // reported, and a session whose rollout was created in the last moments before the restart
+            // but not yet mapped stays unmapped, because nothing created after the adoption will ever
+            // be its file — codex appends to the one it already has.
             if (codexNote) {
               try {
                 // The id goes in too, so `codexSessionIdFor` answers for an adopted session the way it
                 // does for a scanned one — the scheduler learns its store key from it, and unlike a
                 // resume there is no `info.resumeSessionId` carrying the same value.
                 codexRollout?.register(info, codexNote.rolloutPath, codexNote.codexSessionId ?? undefined)
+              } catch {
+                /* A failed codex rollout-watcher registration does not block taking the session back */
+              }
+            } else if (coordinator === 'codexRolling') {
+              // Codex, and nothing known about its rollout. Registered unmapped so the scan can pick
+              // up the file its next turn creates — see the two paragraphs above for why that is safe
+              // here and was not before. `coordinator` is what says this is codex at all: it comes
+              // from the account, and keeps "the account is gone" as its own answer.
+              try {
+                codexRollout?.register(info)
               } catch {
                 /* A failed codex rollout-watcher registration does not block taking the session back */
               }
@@ -5701,6 +5882,126 @@ export function registerIpc(
     return entries ? hostHoldings(entries) : null
   })
 
+  // The conversation view (main/conversation.ts). open/more answer null rather than reject on a
+  // missing or unreadable transcript — see that module's own doc; there is nothing here to translate.
+  ipcMain.handle('conversation.open', (_e, sessionId: string) => conversationSessions.open(sessionId))
+  ipcMain.handle('conversation.more', (_e, sessionId: string, before: number) =>
+    conversationSessions.more(sessionId, before)
+  )
+  ipcMain.handle('conversation.close', (_e, sessionId: string) => {
+    conversationSessions.close(sessionId)
+  })
+  // Independent of open/more/close — a fresh session sitting on a trust prompt is `waiting` while
+  // `open` still answers null, so this reads main/attention.ts directly rather than folding onto
+  // conversationSessions.
+  ipcMain.handle('conversation.attention', (_e, sessionId: string) => conversationAttentionOf(attention, sessionId))
+  // Same shape of thing and the same reason as `attention` above: the conversation view has no
+  // statusline of its own, so what the CLI reports about the model is read on demand. Never throws —
+  // core.statusLinePayload answers null for a session that has written nothing, and the extractor
+  // answers nulls for anything it cannot read.
+  ipcMain.handle('conversation.model', async (_e, sessionId: string) => {
+    // The account says which CLI this is; what has been read does not. An earlier version asked the
+    // files — no statusline and no rollout meant Claude — and so called a codex session that had not
+    // had a turn yet Claude, because a rollout only exists once there has been one. The same mistake
+    // tabResumeTextFor's own comment above is about: an unknown provider is not Claude.
+    const sessions = core.sessions.list()
+    const cli = providerOfSession(sessionId, sessions, (id) => core.accounts.get(id))
+    if (cli === 'codex') {
+      // codex keeps no statusline at all, so its rollout is the only place this exists — and it is
+      // written a turn at a time, so a session that has not answered anything yet reports nothing.
+      const rollout = codexRollout?.rolloutPathFor(sessionId) ?? null
+      const fromRollout =
+        rollout === null
+          ? { model: null, effort: null }
+          : await codexModelFor(rollout, readFileTail)
+      return { ...fromRollout, cli }
+    }
+    return { ...extractStatusLineModel(await core.statusLinePayload(sessionId)), cli }
+  })
+  /**
+   * Put something dropped or pasted into the composer on disk, and answer with its path.
+   *
+   * The pty carries text and nothing else, so an image cannot be handed to a CLI the way it is handed
+   * to a chat box — what a CLI takes is a path it can read. This writes the bytes somewhere it can,
+   * and the composer types the path into the message like any other word, which is also why the
+   * person can see and edit exactly what will be sent.
+   *
+   * Under this app's own folder rather than the project: a picture someone pastes into a sentence is
+   * not a file they asked to add to their repository, and writing there would show up in their next
+   * `git status`.
+   */
+  ipcMain.handle(
+    'conversation.attach',
+    async (_e, sessionId: string, name: unknown, mime: unknown, base64: unknown) => {
+      if (typeof name !== 'string' || typeof mime !== 'string' || typeof base64 !== 'string')
+        throw new Error('INVALID_ATTACHMENT')
+      const bytes = Buffer.from(base64, 'base64')
+      if (bytes.byteLength === 0) throw new Error('EMPTY_ATTACHMENT')
+      if (bytes.byteLength > MAX_ATTACHMENT_BYTES) throw new Error('ATTACHMENT_TOO_LARGE')
+      // The session id comes from the renderer and is a folder name here, so it is checked rather
+      // than trusted — every id this app makes is a uuid, and nothing else may name a directory.
+      if (!/^[0-9a-fA-F-]{36}$/.test(sessionId)) throw new Error('INVALID_SESSION_ID')
+      const dir = path.join(app.getPath('userData'), 'attachments', sessionId)
+      await fs.mkdir(dir, { recursive: true })
+      const file = path.join(dir, attachmentNameOf(name, mime, new Date(), ++attachmentNonce))
+      await fs.writeFile(file, bytes)
+      // Forward slashes: this is typed into a prompt, where a Windows backslash reads as an escape.
+      return file.replaceAll('\\', '/')
+    }
+  )
+
+  // What the model menu offers. The same list settings shows and the same per-account cache — the
+  // models an account can reach depend on its subscription and its organisation's policy, so the CLI
+  // is the only thing that knows them, and a list kept in this repository would be a guess that goes
+  // quietly stale. Answers the empty list with a reason rather than throwing, for a session whose
+  // account is gone.
+  ipcMain.handle('conversation.models', async (_e, sessionId: string) => {
+    const info = core.sessions.list().find((s) => s.id === sessionId)
+    if (!info) return { models: [], error: 'SESSION_GONE' }
+    return modelsForAccount(info.accountId, false)
+  })
+  // What `/` offers in the composer. Read on demand rather than watched: the folders change when a
+  // person installs something, which is not while they are typing, and the pane asks once when it
+  // opens. Answers an empty list rather than throwing for a session whose account has gone.
+  // What `@` offers. The walk behind it is cached per project (main/fileIndex.ts), so this is one
+  // in-memory filter per keystroke rather than one tree walk.
+  ipcMain.handle('conversation.files', async (_e, sessionId: string, query: string) => {
+    const session = core.sessions.list().find((s) => s.id === sessionId)
+    if (!session) return []
+    const files = session.cwd
+      ? await fileIndex.search(session.cwd, query, CONVERSATION_FILE_MATCHES)
+      : []
+    // codex asks for a skill by mentioning it, the same way it mentions a file, so both belong in
+    // the one list — skills first, being far fewer and named rather than found.
+    let account: { provider?: string; configDir: string } | null = null
+    try {
+      account = core.accounts.get(session.accountId)
+    } catch {
+      account = null
+    }
+    if (account?.provider !== 'codex') return files
+    const skills = filterFilePaths(
+      await listCodexMentions(account.configDir),
+      query,
+      CONVERSATION_FILE_MATCHES
+    )
+    return [...skills, ...files].slice(0, CONVERSATION_FILE_MATCHES)
+  })
+  ipcMain.handle('conversation.commands', async (_e, sessionId: string) => {
+    const session = core.sessions.list().find((s) => s.id === sessionId)
+    if (!session) return []
+    try {
+      const account = core.accounts.get(session.accountId)
+      return await listSlashCommands({
+        configDir: account.configDir,
+        cwd: session.cwd ?? null,
+        kind: account.provider === 'codex' ? 'codex' : 'claude'
+      })
+    } catch {
+      return []
+    }
+  })
+
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
   // already validated by run.start and run.saveConfigs. Omitting it (undefined) behaves exactly as the
@@ -5737,6 +6038,94 @@ export function registerIpc(
     const [claude, codex] = await Promise.all([check('claude'), check('codex')])
     return { claude, codex }
   })
+  /**
+   * Installs one of the two CLIs with the command its own vendor documents for this platform
+   * (core/install/cliInstall.ts holds the table and the reasoning).
+   *
+   * Reached only from the screen that appears when neither CLI is present — the app is a launcher for
+   * them, so with both missing there is nothing to launch and nothing else to do. Output is streamed
+   * to that screen as it arrives: an installer that runs behind a spinner and then says "failed" tells
+   * nobody anything, and this is the one screen a person cannot get past.
+   *
+   * One at a time. Two installers writing to the same `~/.local/bin` at once is not a state worth
+   * reasoning about, and nobody needs both this second.
+   */
+  /**
+   * Where the machine says a CLI is now, with this process's PATH updated to match — or null when it
+   * still cannot be found.
+   *
+   * An installer writes the new directory into the environment the operating system keeps. It cannot
+   * reach into a program that is already running: this app's environment was copied when it started,
+   * and **a relaunch inherits that same copy**, so restarting does not fix it either (measured — the
+   * app came back and still found neither CLI). Left there, someone would install, restart, be told
+   * again that nothing is installed, and have no way to tell which part had failed.
+   *
+   * So the machine is asked (locateCommandFor), and what it answers is put in front of this process's
+   * own PATH. That is enough for everything downstream: `system.checkCli` runs through PATH, and a
+   * spawned session copies this process's environment (core/sessions/manager.ts).
+   */
+  const adoptInstalledCli = async (cli: 'claude' | 'codex'): Promise<string | null> => {
+    const plan = locateCommandFor(cli, process.platform, process.env.SHELL ?? '/bin/sh')
+    if (plan === null) return null
+    const found = await new Promise<string | null>((resolve) => {
+      execFile(plan.command, plan.args, { timeout: 15_000 }, (err, stdout) => {
+        if (err) return resolve(null)
+        const line = stdout
+          .split('\n')
+          .map((l) => l.trim())
+          .find((l) => l !== '')
+        resolve(line ?? null)
+      })
+    })
+    // Checked on disk before it is believed: a shell that answers with something that is not there
+    // would put a directory on PATH that hides nothing and helps nobody.
+    if (found === null || !existsSync(found)) return null
+    prependToPath(process.env as Record<string, string | undefined>, path.dirname(found))
+    return found
+  }
+
+  let installingCli = false
+  ipcMain.handle('system.installCli', async (_e, cli: unknown) => {
+    if (cli !== 'claude' && cli !== 'codex') throw new Error(`INVALID_CLI: ${String(cli)}`)
+    const plan = installCommandFor(cli, process.platform)
+    if (plan === null) return { ok: false, code: null, error: 'UNSUPPORTED_PLATFORM' }
+    if (installingCli) return { ok: false, code: null, error: 'ALREADY_RUNNING' }
+    installingCli = true
+    send('cli:install', { cli, kind: 'start', text: `$ ${plan.display}
+` })
+    return await new Promise((resolve) => {
+      const child = spawn(plan.command, plan.args, { windowsHide: true })
+      const stream = (buf: Buffer): void =>
+        send('cli:install', { cli, kind: 'out', text: buf.toString() })
+      child.stdout.on('data', stream)
+      child.stderr.on('data', stream) // an installer says most of what matters here
+      child.on('error', (err) => {
+        installingCli = false
+        send('cli:install', { cli, kind: 'out', text: `${err.message}
+` })
+        send('cli:install', { cli, kind: 'done', code: null })
+        resolve({ ok: false, code: null, error: err.message })
+      })
+      child.on('close', (code) => {
+        installingCli = false
+        send('cli:install', { cli, kind: 'done', code })
+        if (code !== 0) return resolve({ ok: false, code })
+        // Found and adopted here rather than left to a restart — see adoptInstalledCli for why a
+        // restart is not enough. `at` being null is not a failed install: it is an install this app
+        // cannot see yet, which is the one case the restart button is still there for.
+        void adoptInstalledCli(cli).then((at) => resolve({ ok: true, code, at }))
+      })
+    })
+  })
+
+  /** Starts the app again. The installer puts the CLI somewhere new on PATH, and a process that is
+   *  already running cannot be told about it — its environment was taken at launch. The Host keeps the
+   *  sessions, so this costs nothing but the window. */
+  ipcMain.handle('system.relaunch', () => {
+    app.relaunch()
+    app.quit()
+  })
+
   ipcMain.handle('system.appVersion', () => app.getVersion())
   // 프로젝트가 지정되지 않았을 때 아래쪽 패널의 터미널이 열릴 자리. cmd 나 셸을 직접 띄웠을 때와
   // 같은 곳이고, 세 플랫폼 모두 app.getPath('home') 이 그 값을 준다.

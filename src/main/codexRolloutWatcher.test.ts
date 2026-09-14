@@ -203,6 +203,116 @@ describe('CodexRolloutWatcher', () => {
     w.stop()
   })
 
+  // A session adopted back from the Host with no mapping in its note used to be skipped outright, and
+  // was then mute for the rest of its life — no usage, no turn notifications, and an empty
+  // conversation view for a session answering perfectly well on the terminal. It is registered
+  // unmapped now, and the file its next turn creates is found the ordinary way.
+  it('maps a session registered with no path at all, from the next rollout to appear', async () => {
+    const cwd = path.join(dir, 'proj')
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('adopted-1', cwd))
+    expect(w.rolloutPathFor('adopted-1')).toBeNull()
+    now += 5_000
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('adopted-1')).toBe(p)
+    w.stop()
+  })
+
+  // The hazard that registering unmapped would otherwise reopen: a session that has been waiting since
+  // before a restart must not take the rollout of one somebody opened a moment ago. Of the entries
+  // still looking in one folder, the one that started last is the owner.
+  it('leaves a new rollout to the session that started most recently', async () => {
+    const cwd = path.join(dir, 'proj')
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('waiting-since-before', cwd))
+    now += 60_000
+    w.register(session('just-spawned', cwd))
+    now += 1_000
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('just-spawned')).toBe(p)
+    expect(w.rolloutPathFor('waiting-since-before')).toBeNull()
+    w.stop()
+  })
+
+  // ...and it is only a wait, not a refusal: once the newer session has what is its own, the one that
+  // was waiting takes the next file to appear.
+  it('lets the waiting session take the next one', async () => {
+    const cwd = path.join(dir, 'proj')
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('waiting-since-before', cwd))
+    now += 60_000
+    w.register(session('just-spawned', cwd))
+    now += 1_000
+    await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    await advance(TICK)
+    now += 1_000
+    const mine = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd3', 'sess-b', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('waiting-since-before')).toBe(mine)
+    w.stop()
+  })
+
+  // `/new` does not truncate the rollout — codex leaves it and opens another. Without this the watcher
+  // stays on the ended conversation: the usage chips freeze and the conversation view keeps showing
+  // what the person just cleared.
+  it('moves to the newer rollout when the session starts a new conversation', async () => {
+    const cwd = path.join(dir, 'proj')
+    const first = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(first)
+
+    now += 30_000 // past the re-scan throttle
+    const second = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd3', 'sess-b', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(second)
+    expect(w.codexSessionIdFor('live-1')).toBe('sess-b')
+    w.stop()
+  })
+
+  it('writes the newer mapping down, so a restart adopts the conversation the session is really on', async () => {
+    const cwd = path.join(dir, 'proj')
+    await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const remember = vi.fn()
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, remember, now: () => now })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    remember.mockClear()
+
+    now += 30_000
+    const second = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd3', 'sess-b', cwd)
+    await advance(TICK)
+    expect(remember).toHaveBeenCalledWith('live-1', { rolloutPath: second, codexSessionId: 'sess-b' })
+    w.stop()
+  })
+
+  // Two codex sessions in one folder: nothing in a rollout says which of them opened it (measured — a
+  // `/new` file carries the same session_meta shape as a freshly spawned one). Guessing would drag a
+  // session out of its own live conversation, so neither moves.
+  it('leaves a mapped session where it is while another shares its account and folder', async () => {
+    const cwd = path.join(dir, 'proj')
+    const first = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    now += 1_000
+    const second = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd3', 'sess-b', cwd)
+    w.register(session('live-2', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(first)
+    expect(w.rolloutPathFor('live-2')).toBe(second)
+
+    now += 30_000
+    await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd4', 'sess-c', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(first)
+    expect(w.rolloutPathFor('live-2')).toBe(second)
+    w.stop()
+  })
+
   // A session taken back from the Host is registered with the path its note carried, and that note
   // carries the id beside it. Unlike a resume, an adopted session has no `info.resumeSessionId` to hold
   // the id instead — left null here, nothing could ever answer the scheduler for it and its schedule

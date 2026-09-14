@@ -129,11 +129,19 @@ export class StatusLineManager {
     // what made the notification feature inert for an ordinary session: the flag was on, the sink had
     // no per-session gate, and the event simply never arrived.
     //
-    // The cost is one node process when a prompt appears. The hooks below are kept out of here
-    // because nothing but slack.ts reads them, and a Slack session takes the other file anyway —
-    // Stop would spend a process at the end of every turn for an event with no reader.
+    // The cost is one node process when a prompt appears.
+    //
+    // Stop goes into every session for the same reason, and it is what lets a session stop waiting.
+    // main/attention.ts reads Notification to learn a session is waiting on a person, and Stop or
+    // PostToolUse to learn it no longer is. PostToolUse only ever fires when a call actually runs, so
+    // a person who answers "no" produces neither — and without Stop here an ordinary session would
+    // stay `waiting` for the rest of its life, with the conversation view's banner up and its
+    // composer locked the whole time (measured in the dev app, not reasoned about). It used to be
+    // kept out of here on the grounds that nothing but slack.ts read it; attention.ts reads it now.
+    // The cost is one node process at the end of a turn, which is minutes apart, not per keystroke.
     const notificationHook = {
-      Notification: [{ hooks: [{ type: 'command', command: hookCmd }] }]
+      Notification: [{ hooks: [{ type: 'command', command: hookCmd }] }],
+      Stop: [{ hooks: [{ type: 'command', command: hookCmd }] }]
     }
     const settings = {
       // It is a JSON string, so no shell escaping. Paths are normalised to forward slashes (fine on Windows too).
@@ -145,14 +153,14 @@ export class StatusLineManager {
       hooks: notificationHook
     }
     await fs.writeFile(this.settingsFile, JSON.stringify(settings, null, 2), 'utf8')
-    // What only slack.ts reads, on top: the turn summary's Stop, and the pending-question pair, which
-    // fires per tool call and is therefore matcher-limited. Only a Slack-notifying or rolling session
-    // pays for these.
+    // What only slack.ts reads, on top: the pending-question pair, which fires per tool call and is
+    // therefore matcher-limited. Only a Slack-notifying or rolling session pays for these. (Stop is
+    // in notificationHook above — slack.ts reads it for its turn summary, attention.ts for every
+    // session.)
     const hooksSettings = {
       ...settings,
       hooks: {
         ...notificationHook,
-        Stop: [{ hooks: [{ type: 'command', command: hookCmd }] }],
         // Captures what the waiting screen shows (the question and its options, the tool awaiting approval and its
         // arguments) **before** the tool runs. The transcript cannot supply it — Claude Code does not flush assistant
         // messages while it waits for user interaction, so while a question or approval prompt is on screen that
@@ -182,11 +190,43 @@ export class StatusLineManager {
       }
     }
     await fs.writeFile(this.hooksSettingsFile, JSON.stringify(hooksSettings, null, 2), 'utf8')
+    // Hook events are a queue the app drains while it runs, so anything still sitting here was
+    // written while it was away and is stale on arrival — a Notification from hours ago would push a
+    // session into `waiting` over whatever is true now. Dropped, not replayed.
     await fs.rm(this.hookEventsDir, { recursive: true, force: true }).catch(() => {})
     await fs.mkdir(this.hookEventsDir, { recursive: true })
-    // Clear the previous run's session files, then recreate the folder (safe because PTYs die when the app restarts)
-    await fs.rm(this.outDir, { recursive: true, force: true }).catch(() => {})
+    // The session payloads are NOT cleared here, and used to be. They are the latest snapshot rather
+    // than a queue, and the Host means a session outlives the app that started it: wiping the folder
+    // took the transcript path away from every session that survived a restart, so the conversation
+    // view read "no transcript yet" for a session with a full one and rolling could not find the file
+    // to resume from, until that session happened to write a statusline again. Collected by
+    // `pruneExcept` instead, once the app knows which sessions it actually has.
     await fs.mkdir(this.outDir, { recursive: true })
+  }
+
+  /** Deletes the stored payload of every session not in `keep`.
+   *
+   *  The collector for this folder. Called once the app has taken its sessions back from the Host
+   *  (main/ipc.ts), which is the first moment the full set is known — at `init` it is not, and
+   *  guessing there is what the old unconditional wipe amounted to. A payload for a session the app
+   *  has no record of can never be read by anything, so it is exactly the garbage that wipe was
+   *  after; a payload for a session that is merely exited stays, because its record is still around
+   *  and a resume may still ask for its transcript path.
+   *
+   *  Never throws: a folder that is not there yet, or one file that will not delete, leaves the rest
+   *  of the sweep alone. */
+  async pruneExcept(keep: ReadonlySet<string>): Promise<void> {
+    let names: string[]
+    try {
+      names = await fs.readdir(this.outDir)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue
+      if (keep.has(name.slice(0, -'.json'.length))) continue
+      await fs.rm(path.join(this.outDir, name), { force: true }).catch(() => {})
+    }
   }
 
   /** Injection info for a session spawn. originalCommand is the existing statusLine from the account's

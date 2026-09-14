@@ -172,14 +172,21 @@ export function TerminalView({
     // Design Mode's "send to session" pastes here — the same path as Ctrl+V, so the prompt arrives
     // bracketed and unsubmitted (sessionBus.registerPaste explains why not sessions.write)
     const unregisterPaste = sessionBus.registerPaste(session.id, (text) => term.paste(text))
-    // The visible screen, so a send can tell an agent at its prompt from one holding a dialog open.
-    // The viewport rather than the whole scrollback: a dialog answered ten minutes ago is not what is
-    // waiting now, and `translateToString(true)` trims the padding a TUI draws to the right edge.
+    // The live screen, so a send can tell an agent at its prompt from one holding a dialog open.
+    // One screen's worth rather than the whole scrollback: a dialog answered ten minutes ago is not
+    // what is waiting now, and `translateToString(true)` trims the padding a TUI draws to the right edge.
+    //
+    // **baseY, not viewportY.** viewportY follows where the person has scrolled this terminal to, and
+    // the readers of this are not asking "what is he looking at" but "what is the CLI showing" — the
+    // conversation view builds its prompt and the buttons to answer it out of this, and a session
+    // scrolled up a few lines handed back a screen with the dialog's rows missing, so there was
+    // nothing to build them from. baseY is the top of the live screen whatever the scrollback is
+    // doing, which is the question actually being asked.
     const unregisterScreen = sessionBus.registerScreen(session.id, () => {
       const buffer = term.buffer.active
       const rows: string[] = []
       for (let i = 0; i < term.rows; i += 1) {
-        const line = buffer.getLine(buffer.viewportY + i)
+        const line = buffer.getLine(buffer.baseY + i)
         if (line) rows.push(line.translateToString(true))
       }
       return rows.join('\n')

@@ -22,7 +22,9 @@ import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
+import { fanOutHookEvent } from './hookFanOut'
 import { DesktopNotifier } from './desktopNotifier'
+import { createAttentionState } from './attention'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
@@ -374,6 +376,12 @@ app.whenReady().then(async () => {
     lang: () => core!.lang,
     log: slackLog
   })
+  // The one attention verdict (main/attention.ts): is a session working, or waiting for a person,
+  // decided from the same hook stream Slack and the desktop sink already read. Constructed here,
+  // beside them, and handed to both — the desktop sink below reads it instead of classifying a
+  // Notification payload itself, and ipc.ts's session-exit path forgets a session's entry here too
+  // (its own comment there explains the lost-sight exception).
+  const attention = createAttentionState()
   // The second outlet on the same pipe (design doc §6). Electron's Notification was unused in this
   // app until now — only Tray was.
   const desktop = new DesktopNotifier({
@@ -381,6 +389,7 @@ app.whenReady().then(async () => {
     isFocused: () => !win.isDestroyed() && win.isFocused(),
     getSession: (id) => core!.sessions.list().find((s) => s.id === id) ?? null,
     lang: () => core!.lang,
+    attention,
     show: (req) => {
       // If the OS refuses to show it — permission denied, notifications disabled at the system level
       // — it is dropped silently (§9). A notification saying that notifications do not work cannot be
@@ -485,24 +494,13 @@ app.whenReady().then(async () => {
   codexRolloutRef = codexRollout
   const hookWatcher = new HookEventWatcher(
     core.hookEventsDir,
-    (sid, payload) => {
-      slack.onHookEvent(sid, payload)
-      // Rolling taps the hooks too — an idle Notification is the signal for the idle nudge.
-      // Isolated in its own try, separate from the Slack tap, so an exception on one side does not
-      // swallow the other.
-      try {
-        rollingRef?.onHookEvent(sid, payload)
-      } catch {
-        /* a rolling tap failure must not block the Slack notification */
-      }
-      // The desktop sink taps the same events. Its own try, for the same reason as the two above —
-      // an exception on one side must not swallow the others.
-      try {
-        desktop.onHookEvent(sid, payload)
-      } catch {
-        /* a desktop notification failure must not block the others */
-      }
-    },
+    // The fan-out itself lives in hookFanOut.ts, not here — see that file's own comment for why
+    // (in short: this callback used to be an untested closure, and Task 5's review deleted its attention
+    // tap and moved it last without a single test noticing, in production or in this suite). `desktop`
+    // is not one of these taps: it no longer reads a hook payload directly, it subscribes to `attention`
+    // instead (desktopNotifier.ts's constructor) — see hookFanOut.ts's own comment on why `attention`
+    // still runs first regardless.
+    (sid, payload) => fanOutHookEvent({ attention, slack, rolling: rollingRef }, sid, payload),
     slackLog
   )
   hookWatcher.start()
@@ -860,6 +858,7 @@ app.whenReady().then(async () => {
   registerIpc(
     core,
     win,
+    attention, // required (ipc.ts's own comment says why it moved ahead of the optional parameters)
     rolling,
     {
       notifier: slack,

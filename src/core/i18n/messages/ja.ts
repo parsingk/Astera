@@ -7,6 +7,7 @@ export const ja: Catalog = {
   'settings.tab.general': '一般',
   'settings.tab.appearance': '外観',
   'settings.tab.accounts': 'アカウント',
+  'settings.tab.agent': 'エージェント',
   'settings.tab.info': '情報',
   'settings.tab.shortcuts': 'ショートカット',
   'settings.tab.history': '履歴',

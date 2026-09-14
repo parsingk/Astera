@@ -5,6 +5,7 @@ import { I18nProvider } from './i18n/I18nProvider'
 import { ThemeProvider, bootTheme } from './lib/theme'
 import { TerminalFontProvider } from './lib/terminalFont'
 import { setPseudoLocalization } from '../../core/i18n/pseudo'
+import './tailwind.css'
 import './styles.css'
 
 // Dev-only layout check: VITE_PSEUDO_LOCALE=1 ASTERA_PSEUDO_LOCALE=1 npm run dev

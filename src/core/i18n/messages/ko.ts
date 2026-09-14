@@ -1,12 +1,14 @@
 // Korean catalog — this file is the source. A key added here must be added to en.ts too for
 // typecheck to pass (en's type is tied to this object's key set).
 // Key rule: <domain>.<context>.<name> — the domains are settings/files/explorer/worktree/
-// account/session/history/run/rolling/common.
+// account/session/history/run/rolling/common/conversation.
 export const ko = {
   'settings.title': '설정',
   'settings.tab.general': '일반',
   'settings.tab.appearance': '모양',
   'settings.tab.accounts': '계정',
+  // 에이전트 세션을 어떻게 띄우고 이어가는가 — 일반에서 갈라져 나온 탭이다
+  'settings.tab.agent': '에이전트',
   'settings.tab.info': '정보',
   'settings.tab.shortcuts': '단축키',
   'settings.tab.history': '히스토리',
@@ -347,6 +349,11 @@ export const ko = {
     '작업 이어가기는 켜진 채로 남지만, 원래의 Claude Code 나 Codex 세션을 되살릴 수 없으면 작업이 멈출 수 있습니다.',
   'settings.jobContinuity.turnOffSmartResume.confirm': '끄기',
   'settings.jobContinuity.saveFailed': '작업 이어가기 설정을 저장하지 못했습니다: {detail}',
+  // Task 10 — the general settings tab's new-tab default, beside the language row
+  'settings.conversation.title': '새 세션의 기본 화면',
+  'settings.conversation.terminal': '터미널',
+  'settings.conversation.conversation': '대화',
+  'settings.conversation.saveFailed': '새 세션의 기본 화면 설정을 저장하지 못했습니다: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': '터미널 영문 폰트',
   'settings.font.hangul': '터미널 한글 폰트',
@@ -686,6 +693,35 @@ export const ko = {
   // Nothing to do with the default account above — this only remembers which account this project used,
   // so the next new session preselects it. Named accordingly to stop the two reading as one feature.
   'session.new.saveDefaultAccount': '이 프로젝트에서 이 계정을 기억',
+  // The first-run screen, shown when neither CLI is installed (renderer/components/CliMissingScreen.tsx).
+  // Someone reading this has just installed the app and may never have opened a terminal — so it names
+  // the programs rather than "a CLI", leads with the button rather than a command, and keeps the
+  // command itself one click away for whoever wants it.
+  // The one question a first run asks: what a new session opens on. Shown only on a machine with no
+  // settings file at all — see main/appSettingsStore.ts's firstRunAsked for why an update never sees it.
+  'firstRun.title': '새 세션을 어떤 화면으로 시작할까요?',
+  'firstRun.body': '둘 다 같은 세션입니다. 보는 방식만 다르고 언제든 설정 또는 세션 우측 상단에서 변경하실 수 있습니다.',
+  'firstRun.terminal': '터미널',
+  'firstRun.terminalWhat': 'CLI 화면 그대로',
+  'firstRun.conversation': '대화',
+  'firstRun.conversationWhat': '주고받은 대화로 읽기',
+  'setup.title': '클로드와 코덱스 프로그램을 찾을 수 없습니다',
+  'setup.body': '사용하시려는 프로그램을 아래 설치 버튼을 눌러 설치해 주세요',
+  'setup.claudeWhat': 'Anthropic 의 코딩 에이전트',
+  'setup.codexWhat': 'OpenAI 의 코딩 에이전트',
+  'setup.source': '{host} 에서 받아 설치합니다',
+  'setup.install': '설치',
+  'setup.installing': '설치하는 중…',
+  'setup.showCommand': '명령어 보기',
+  'setup.hideCommand': '명령어 숨기기',
+  'setup.showLog': '자세히',
+  'setup.hideLog': '접기',
+  'setup.notFoundYet': '{name} 설치는 끝났는데 아직 찾지 못했습니다. 앱을 다시 시작해 주세요.',
+  'setup.restart': '앱 다시 시작',
+  'setup.failed': '설치하지 못했습니다.',
+  'setup.failedHelp': '아래 명령어를 직접 실행한 뒤 앱을 다시 시작해도 됩니다.',
+  'setup.unsupported': '이 운영체제용 설치 방법은 아직 없습니다. 직접 설치한 뒤 앱을 다시 시작하세요.',
+  'setup.language': '언어',
   'session.new.bypassPermissions': '권한 확인 없이 실행 (bypass permissions)',
   'session.new.start': '시작',
   // Waiting text between pressing Start and the tab opening. Splitting off a worktree chains fetch, worktree add and
@@ -1368,5 +1404,50 @@ export const ko = {
   'hiw.verify.partial': '일부만 확인되었습니다',
   'hiw.verify.unverified': '확인된 것이 없습니다',
   'hiw.verify.failed': '보고된 검사가 실패했습니다',
-  'hiw.verify.reported': '에이전트가 보고한 것입니다 — 앱이 직접 돌려 보지는 않았습니다'
+  'hiw.verify.reported': '에이전트가 보고한 것입니다 — 앱이 직접 돌려 보지는 않았습니다',
+  // ToolRow.tsx / PendingBanner.tsx (components/conversation/) — the tool row's verb, the collapsed
+  // group's per-kind counts, and the banner that says a decision is waiting in the terminal.
+  'conversation.verb.read': '읽음',
+  'conversation.verb.find': '찾음',
+  'conversation.verb.edit': '고침',
+  'conversation.verb.create': '만듦',
+  'conversation.verb.run': '돌림',
+  'conversation.verb.running': '실행 중',
+  'conversation.outcome.failed': '실패',
+  'conversation.group.read': '읽기',
+  'conversation.group.find': '찾기',
+  'conversation.group.edit': '수정',
+  'conversation.group.create': '작성',
+  'conversation.group.run': '실행',
+  'conversation.pending.title': '질문이 있습니다',
+  'conversation.pending.trust': '디렉토리 신뢰 확인',
+  'conversation.pending.trustBody': '이 디렉토리에서 작업하려면 먼저 신뢰할지 확인해야 합니다.',
+  'conversation.pending.body': '아래에 답을 입력하면 그대로 전해집니다. 선택지는 터미널 화면에 있습니다.',
+  'conversation.pending.action': '선택지 보기',
+  'conversation.pending.pick': '아래에서 고르면 그대로 전해집니다. 직접 입력해도 됩니다.',
+  'conversation.pending.terminal': '터미널로 이동',
+  'conversation.running.thinking': '생각 중',
+  'conversation.running.working': '실행 중',
+  'conversation.exited.title': '이 세션은 종료되었습니다',
+  'conversation.running.interrupt': '중단 (Esc)',
+  'conversation.queued.title': '메시지가 대기 중입니다',
+  'conversation.queued.edit': '터미널에서 수정',
+  'conversation.slash.title': '슬래시 명령은 터미널에서 진행됩니다',
+  'conversation.slash.body': '명령이 여는 창은 터미널에 있어서 여기서는 보이지 않습니다.',
+  'conversation.slash.action': '터미널로 이동',
+  'conversation.model.line': '{model} · {effort}',
+  'conversation.model.effortRow': 'effort: {level}',
+  'conversation.model.effortMore': '더 보기 (터미널)',
+  'conversation.model.effort': 'effort 바꾸기 (터미널에서)',
+  'conversation.model.change': '모델과 effort 바꾸기 (터미널에서)',
+  'conversation.model.aria': '모델과 effort',
+  'conversation.model.unknown': '모델',
+  // ConversationPane.tsx — open() answering null, and a transcript that exists but has no turns yet.
+  'conversation.unavailable': '이 세션은 아직 기록이 없습니다',
+  'conversation.empty': '아직 주고받은 것이 없습니다',
+  'conversation.composer.placeholder': '무엇을 시킬까요',
+  'conversation.loadMore': '이전 대화 더 보기',
+  // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
+  'conversation.toggle.terminal': '터미널',
+  'conversation.toggle.conversation': '대화'
 } as const

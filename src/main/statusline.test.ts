@@ -69,9 +69,18 @@ describe('StatusLineManager 훅 주입', () => {
   // Stop 은 턴이 끝날 때마다, 도구 짝은 도구 호출마다 프로세스를 하나씩 띄운다.
   it('기본 설정 파일은 Slack 만 읽는 훅을 갖지 않는다 (회귀 가드)', async () => {
     const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-statusline-settings.json'), 'utf8'))
-    expect(settings.hooks.Stop).toBeUndefined()
     expect(settings.hooks.PreToolUse).toBeUndefined()
     expect(settings.hooks.PostToolUse).toBeUndefined()
+  })
+
+  // Stop left the guard above deliberately, and the rule that guard states is why it could: it asks
+  // that no process be spent on a hook nobody reads, and main/attention.ts reads this one for every
+  // session. It is the only event an ordinary session ever gets that can end a `waiting` value —
+  // PostToolUse fires only when a call actually runs, so answering "no" to an approval produces
+  // none, and without this the conversation view's banner and its locked composer never come back.
+  it('the default settings file carries Stop, which is how a session stops waiting', async () => {
+    const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-statusline-settings.json'), 'utf8'))
+    expect(settings.hooks.Stop[0].hooks[0].command).toContain('astera-hook-capture.cjs')
   })
 
   // 반대쪽 절반 — Slack 세션은 Stop 을 받아야 한다. 턴 요약이 그 훅에서 온다.
@@ -79,5 +88,59 @@ describe('StatusLineManager 훅 주입', () => {
     const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-hooks-settings.json'), 'utf8'))
     expect(settings.hooks.Stop[0].hooks[0].command).toContain('astera-hook-capture.cjs')
     expect(settings.hooks.Notification[0].hooks[0].command).toContain('astera-hook-capture.cjs')
+  })
+})
+
+// What the app reads a session's transcript path out of. The folder used to be wiped at init, on the
+// grounds that a restart killed every pty; the Host made that false, and the wipe then cost every
+// surviving session its path until it next wrote a statusline.
+describe('StatusLineManager statusline payloads', () => {
+  let dir: string
+  let mgr: StatusLineManager
+
+  const writePayload = async (sessionId: string): Promise<void> => {
+    await fs.writeFile(
+      path.join(dir, 'statusline', `${sessionId}.json`),
+      JSON.stringify({ session_id: sessionId, transcript_path: `/t/${sessionId}.jsonl` }),
+      'utf8'
+    )
+  }
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-slp-'))
+    mgr = new StatusLineManager(dir)
+    await mgr.init()
+  })
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('init keeps a payload written by a previous run — a session can outlive the app', async () => {
+    await writePayload('survivor')
+    await new StatusLineManager(dir).init()
+    expect(await mgr.read('survivor')).toEqual({
+      session_id: 'survivor',
+      transcript_path: '/t/survivor.jsonl'
+    })
+  })
+
+  it('pruneExcept drops the payloads of sessions that are gone and keeps the rest', async () => {
+    await writePayload('alive')
+    await writePayload('gone')
+    await mgr.pruneExcept(new Set(['alive']))
+    expect(await mgr.read('alive')).not.toBeNull()
+    expect(await mgr.read('gone')).toBeNull()
+  })
+
+  it('pruneExcept leaves anything that is not a payload alone', async () => {
+    const stray = path.join(dir, 'statusline', 'notes.txt')
+    await fs.writeFile(stray, 'keep me', 'utf8')
+    await mgr.pruneExcept(new Set())
+    expect(await fs.readFile(stray, 'utf8')).toBe('keep me')
+  })
+
+  it('pruneExcept does not throw when there is no folder yet', async () => {
+    await fs.rm(path.join(dir, 'statusline'), { recursive: true, force: true })
+    await expect(mgr.pruneExcept(new Set(['alive']))).resolves.toBeUndefined()
   })
 })

@@ -24,6 +24,15 @@
 - 다중 `claude` / `codex` 세션을 여러 화면으로 분할하여 작업
 - 프로젝트별 터미널
 
+**대화 화면**
+- 세션을 터미널로도, 일반 채팅 UI 로도 볼 수 있습니다. 같은 세션을 보는 방식만 다른 것이라,
+  세션 우측 상단에서 언제든 바꾸고 **설정 → 일반**에서 기본값을 정합니다
+- 파일을 끌어다 놓거나 이미지를 붙여넣으면 그 경로가 메시지에 들어갑니다
+
+<div align="center">
+<img src="assets/conversation.jpg" width="820" alt="The same four sessions read as chat threads in a 2x2 grid — three Claude Code and one Codex, on two Claude accounts and a Codex one, each pane with its own composer, model and reasoning effort, and the accounts and project history in the sidebar" />
+</div>
+
 **계정**
 - 벤더별로 여러 계정을 둘 수 있으며, 각 계정은 자체 `CLAUDE_CONFIG_DIR` / `CODEX_HOME`으로 격리
 - **계정 롤링:** 세션이 사용량 한도에 걸리면 Astera가 트랜스크립트에서 이를 감지하고 리셋 시각을

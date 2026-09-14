@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><script src="./support.js"></script></head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; background: #17171a; color: #d0d0d6; }
+    * { box-sizing: border-box; }
+    h1 { font-size: 18px; font-weight: 600; margin: 0 0 5px; color: #eaeaf0; }
+    h2 { font-size: 12.5px; font-weight: 600; margin: 0 0 6px; color: #e2e2e8; }
+    p { margin: 0; font-size: 12.5px; line-height: 1.6; color: #93939e; }
+    li { font-size: 12.5px; line-height: 1.6; color: #93939e; margin-bottom: 3px; }
+    ul { margin: 0; padding-left: 17px; }
+    .shot { border: 1px solid #26262c; border-radius: 8px; overflow: hidden; background: #17171a; }
+    .shot img { display: block; width: 100%; height: auto; }
+    .lab { font-size: 11.5px; margin-bottom: 7px; color: #d0d0d6; }
+    .lab em { font-style: normal; color: #5f5f69; }
+    .mono { font-family: ui-monospace, Consolas, monospace; }
+    .pill { display: inline-block; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: #0d2b30; background: #37b0c4; border-radius: 4px; padding: 3px 8px; font-weight: 600; }
+  </style>
+</helmet>
+
+<div style="width: 2320px; height: 1180px; background: #17171a; padding: 24px 26px; display: flex; flex-direction: column; gap: 16px; overflow: hidden;">
+
+  <div style="display: flex; align-items: flex-end; gap: 24px;">
+    <div style="max-width: 780px;">
+      <div style="margin-bottom: 8px;"><span class="pill">가기로 한 것</span></div>
+      <h1>assistant-ui 로 만든 대화 뷰</h1>
+      <p>그림이 아니라 화면 캡처입니다. assistant-ui 의 Thread 를, 대화 기록을 흉내 낸 외부 스토어에 물려 띄우고 Astera 껍데기를 입혔습니다. 한 줄 작업 표시와 승인 대기 배너까지 실제로 눌러서 동작하는 상태입니다.</p>
+    </div>
+    <div style="margin-left: auto; font-size: 11.5px; line-height: 1.7; color: #5f5f69; text-align: right;" class="mono">
+      @assistant-ui/react 0.15.18 · shadcn 레지스트리 11개 파일<br>
+      우리가 쓴 것: ToolFallback, ToolGroup, Banner 슬롯 셋
+    </div>
+  </div>
+
+  <div style="flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 26px;">
+    <div style="min-height: 0; display: flex; flex-direction: column;">
+      <div class="lab">평소 <em>· 작업 표시를 펴 둔 상태</em></div>
+      <div class="shot" style="flex: 1; min-height: 0;"><img src="aui-conv.png" alt="the conversation view"></div>
+    </div>
+    <div style="min-height: 0; display: flex; flex-direction: column;">
+      <div class="lab" style="color: #e0a86a;">답할 것이 있을 때 <em style="color: #8a6a44;">· 입력창이 잠긴다</em></div>
+      <div class="shot" style="flex: 1; min-height: 0; border-color: rgba(214,139,79,.45);"><img src="aui-pending.png" alt="a decision waiting"></div>
+    </div>
+  </div>
+
+  <div style="flex: none; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 26px; border-top: 1px solid #26262c; padding-top: 14px;">
+    <div>
+      <h2>한 줄 작업 표시</h2>
+      <ul>
+        <li>기본은 <span class="mono" style="color: #b9b9c2;">Used tool: Read</span> 였고, 지금은 <span class="mono" style="color: #b9b9c2;">읽음 store.ts 412줄</span> 입니다.</li>
+        <li>접힌 줄은 무엇을 몇 번 했는지 셉니다. <span class="mono" style="color: #b9b9c2;">읽기 1 · 찾기 1</span>, <span class="mono" style="color: #b9b9c2;">수정 2 · 실행 1</span>.</li>
+        <li>통과는 초록, 실패는 빨강. 파일 트리의 git 색과 같은 값입니다.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>답할 것이 있을 때</h2>
+      <ul>
+        <li>배너는 선택지를 다시 그리지 않습니다. 기다리는 중이라고만 말하고 터미널로 보냅니다.</li>
+        <li>기다리는 동안 입력창이 잠깁니다. 터미널에서 답해야 이어집니다.</li>
+        <li>터미널 탭에 주황 점이 떠서, 대화를 보고 있어도 놓치지 않습니다. 터미널 자체는 지금 것 그대로입니다.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>다크에서 고친 것과 남은 것</h2>
+      <ul>
+        <li><strong style="color: #c4c4cc; font-weight: 500;">입력창.</strong> <span class="mono" style="color: #b9b9c2;">--composer-bg</span> 가 <span class="mono" style="color: #b9b9c2;">:root</span> 에서 계산돼 다크 값을 못 받습니다. 색을 직접 지정하고 모서리를 24px 에서 8px 로. 보내기 버튼은 저쪽 것 그대로 두고 accent 색만 토큰으로.</li>
+        <li><strong style="color: #c4c4cc; font-weight: 500;">스크롤바.</strong> 앱 규칙 그대로. 10px, 손잡이 #23232a, 투명 트랙.</li>
+        <li>남은 것: Tailwind 와 shadcn 이 함께 들어오고, 마크다운 렌더러가 둘이 됩니다. 입력창 잠금도 CSS 가 아니라 컴포저의 disabled 로 가야 합니다.</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":2320,"height":1180}}'>
+class Component extends DCLogic { renderVals() { return {} } }
+</script>
+</body>
+</html>

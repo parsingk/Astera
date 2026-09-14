@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseStatusLinePayload, extractStatusLineSession } from './statusline'
+import { parseStatusLinePayload, extractStatusLineSession, extractStatusLineModel } from './statusline'
 
 describe('parseStatusLinePayload', () => {
   it('context_window.used_percentage를 그대로 쓰고 rate_limits를 매핑한다', () => {
@@ -83,5 +83,24 @@ describe('extractStatusLineSession', () => {
       sessionId: null,
       transcriptPath: null
     })
+  })
+})
+
+describe('extractStatusLineModel', () => {
+  it('reads the display name and the effort level', () => {
+    expect(
+      extractStatusLineModel({
+        model: { id: 'claude-opus-5[1m]', display_name: 'Opus 5 (1M context)' },
+        effort: { level: 'xhigh' }
+      })
+    ).toEqual({ model: 'Opus 5 (1M context)', effort: 'xhigh' })
+  })
+
+  // Every caller is drawing a label, so anything unreadable has to answer nulls rather than throw.
+  it('answers nulls for a payload that is missing, malformed or shaped unexpectedly', () => {
+    expect(extractStatusLineModel(null)).toEqual({ model: null, effort: null })
+    expect(extractStatusLineModel('nope')).toEqual({ model: null, effort: null })
+    expect(extractStatusLineModel({ model: 'Opus 5', effort: 'xhigh' })).toEqual({ model: null, effort: null })
+    expect(extractStatusLineModel({ model: { display_name: '  ' }, effort: {} })).toEqual({ model: null, effort: null })
   })
 })

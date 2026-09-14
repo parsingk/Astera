@@ -29,6 +29,7 @@ const EVENT_CHANNELS = [
   'accounts:ghostsChanged',
   'files:changed',
   'git:changed',
+  'cli:install',
   'run:data',
   'run:status',
   'run:focus',
@@ -49,7 +50,9 @@ const EVENT_CHANNELS = [
   'github:prs-updated',
   'github:status',
   'usage:accounts-updated',
-  'notify:activate'
+  'notify:activate',
+  'conversation:append',
+  'conversation:attention'
 ]
 
 const api = {
@@ -157,7 +160,11 @@ const api = {
     getTerminalFont: invoke('settings.getTerminalFont'),
     setTerminalFont: invoke('settings.setTerminalFont'),
     getTheme: invoke('settings.getTheme'),
-    setTheme: invoke('settings.setTheme')
+    setTheme: invoke('settings.setTheme'),
+    getFirstRunAsked: invoke('settings.getFirstRunAsked'),
+    markFirstRunAsked: invoke('settings.markFirstRunAsked'),
+    getConversationDefault: invoke('settings.getConversationDefault'),
+    setConversationDefault: invoke('settings.setConversationDefault')
   },
   files: {
     list: invoke('files.list'),
@@ -210,6 +217,8 @@ const api = {
     pickFile: invoke('system.pickFile'),
     pathExists: invoke('system.pathExists'),
     checkCli: invoke('system.checkCli'),
+    installCli: invoke('system.installCli'),
+    relaunch: invoke('system.relaunch'),
     appVersion: invoke('system.appVersion'),
     homeDir: invoke('system.homeDir'),
     openExternal: invoke('system.openExternal')
@@ -283,6 +292,17 @@ const api = {
     status: invoke('host.status'),
     sessionsOutlivingApp: invoke('host.sessionsOutlivingApp'),
     holdings: invoke('host.holdings')
+  },
+  conversation: {
+    open: invoke('conversation.open'),
+    more: invoke('conversation.more'),
+    close: invoke('conversation.close'),
+    attention: invoke('conversation.attention'),
+    model: invoke('conversation.model'),
+    models: invoke('conversation.models'),
+    attach: invoke('conversation.attach'),
+    commands: invoke('conversation.commands'),
+    files: invoke('conversation.files')
   },
   platform: process.platform,
   win: {

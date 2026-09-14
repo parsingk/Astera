@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
+import type { Account, Attention, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, SessionView, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -38,6 +38,8 @@ import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import { ConfirmHost } from './components/ConfirmHost'
+import { CliMissingScreen } from './components/CliMissingScreen'
+import { FirstRunDialog } from './components/FirstRunDialog'
 import type {
   OpenSessionTask,
   OrchSnapshot,
@@ -473,6 +475,8 @@ export default function App(): React.JSX.Element {
     | 'general'
     | 'appearance'
     | 'accounts'
+    | 'agent'
+    | 'hiw'
     | 'info'
     | 'shortcuts'
     | 'slack'
@@ -506,6 +510,14 @@ export default function App(): React.JSX.Element {
   orchEnabledRef.current = orchEnabled
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   const [agentBrowserEnabled, setAgentBrowserEnabled] = useState(false) // the agent browser toggle
+  // Task 10: what a new session tab opens as. Needed outside the settings modal too — PaneGrid reads
+  // it the moment a session tab first appears — so it is loaded at mount like orchEnabled above,
+  // not only while the modal is open.
+  const [conversationDefault, setConversationDefault] = useState<SessionView>('terminal')
+  /** Whether the one first-run question has been put to this person — null until main has said.
+   *  False only on a machine with no settings file at all, so an update never sees the modal
+   *  (main/appSettingsStore.ts's firstRunAsked carries the whole rule). */
+  const [firstRunAsked, setFirstRunAsked] = useState<boolean | null>(null)
   // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
   // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
   const [jobsOpen, setJobsOpen] = useState(false)
@@ -549,6 +561,23 @@ export default function App(): React.JSX.Element {
   const [rollStates, setRollStates] = useState<Record<string, RollStateEvent>>({})
   const [schedStates, setSchedStates] = useState<Record<string, SchedStateEvent>>({}) // the schedule banner
   const [busy, setBusy] = useState<Record<string, boolean>>({}) // whether each session is working — the tab spinner
+  // Task 10's tab-bar marker (PaneGrid.tsx's own comment on the prop has the full reasoning). Same
+  // shape and the same subscription convention as rollStates/schedStates/busy above.
+  const [attention, setAttention] = useState<Record<string, Attention>>({})
+  // Every session id ever asked about with the one-shot attention read below — read once per
+  // session, ever, not on every render or every sessions-list change.
+  const requestedAttentionRef = useRef<Set<string>>(new Set())
+  // Fix round 1: the most recent session:rolled, for PaneGrid to carry a rolled session's remembered
+  // terminal/conversation choice to its new id (PaneGrid's own `lastRoll` prop comment has the full
+  // reasoning). Deliberately never reset back to null — see that comment.
+  // One slot, deliberately: if two different sessions ever rolled inside a single React commit, the
+  // second value would overwrite the first and that tab's choice would fall back to the setting.
+  // Nobody has seen that happen (each roll reaches here as its own IPC message, after its own file
+  // I/O), and the cost when it does is one tab showing the default until someone clicks the toggle,
+  // so a queue and the pruning it would need buy less than they cost.
+  const [lastRoll, setLastRoll] = useState<{ oldSessionId: string; newSessionId: string } | null>(
+    null
+  )
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]) // file viewer tabs
   // How It Works record detail tabs. Kept in a separate list for the same reason as file tabs — a
   // `record:<id>` tab id carries neither the project nor the title, so this tab could not be drawn,
@@ -753,6 +782,16 @@ export default function App(): React.JSX.Element {
     // from a cold start until someone opened settings once — not late, absent.
     void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
+    // PaneGrid seeds a session tab's remembered view from this the moment the tab first appears, so
+    // it has to be loaded before a session ever spawns — the same reason orchEnabled above is loaded
+    // at mount rather than only while the settings modal is open.
+    void window.api.settings.getConversationDefault().then(setConversationDefault)
+    // Read here with the rest: the modal below is drawn from it, and it must not flash in front of
+    // someone who has used the app for months while an answer is in flight.
+    void window.api.settings
+      .getFirstRunAsked()
+      .then(setFirstRunAsked)
+      .catch(() => setFirstRunAsked(true)) // could not tell — the quiet answer is the right one
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
     void window.api.sessions.list().then((list) => {
       setSessions(list)
@@ -935,6 +974,8 @@ export default function App(): React.JSX.Element {
       .getAgentPermissionMode()
       .then((m) => setAgentYolo(m === 'yolo'))
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
+    // Re-syncs the new-tab default too, for the same reason as orchestration above.
+    void window.api.settings.getConversationDefault().then(setConversationDefault)
     // Astera Host slice 1: this value goes stale, and the row is only ever on screen while this
     // modal is open, so it is read here rather than at startup.
     void window.api.host.status().then(setHostStatus)
@@ -979,6 +1020,16 @@ export default function App(): React.JSX.Element {
       if (modalOpenRef.current || isConfirmOpen()) return
       const focusEl = document.activeElement as HTMLElement | null
       const inXterm = !!focusEl?.closest('.xterm')
+      // The conversation view's composer is a real <textarea>, so the `editable` guard below caught it
+      // and every app shortcut with that guard died the moment a person clicked into it — Ctrl+Shift+E,
+      // Ctrl+Tab, Ctrl+Shift+arrow. The guard predates this view: its exceptions name xterm and
+      // CodeMirror, the two text surfaces that existed when it was written.
+      //
+      // The composer is the third, and it plays the part xterm plays in the other view — the place you
+      // sit while working, not a form field. So it takes the same deal xterm already took: app
+      // navigation wins over the field's own editing (Ctrl+Shift+arrow selects by word in a textarea;
+      // the terminal gave that up for pane focus long ago, and a message box is no more precious).
+      const inConversation = !!focusEl?.closest('[data-slot="conversation-pane"]')
       const editable =
         !!focusEl &&
         (focusEl.tagName === 'INPUT' ||
@@ -993,7 +1044,7 @@ export default function App(): React.JSX.Element {
       // contenteditable=true on .cm-content for an editable file, so without this exception the toggle
       // would be blocked entirely while the editor has focus.
       if (action === 'explorer.toggleMode') {
-        if (editable && !focusEl?.closest('.xterm, .cm-editor')) return
+        if (editable && !inConversation && !focusEl?.closest('.xterm, .cm-editor')) return
         e.preventDefault()
         e.stopPropagation()
         if (e.repeat) return
@@ -1116,7 +1167,7 @@ export default function App(): React.JSX.Element {
       // The exception is scoped to .cm-editor rather than to every input, so a rebind onto an arrow chord
       // still leaves a settings field's own selection alone. Same shape as explorer.toggleMode's exception.
       const tabCycle = action === 'sessionTab.prev' || action === 'sessionTab.next'
-      if (editable && !inXterm && !(tabCycle && focusEl?.closest('.cm-editor'))) return
+      if (editable && !inXterm && !inConversation && !(tabCycle && focusEl?.closest('.cm-editor'))) return
       // With Shift, move focus to a neighbouring group; otherwise cycle tabs within the
       // active group. Global session cycling is gone: sessions are scattered across groups, so there is
       // no such thing as a "global order". To reach a session in another group, move groups with
@@ -1173,9 +1224,26 @@ export default function App(): React.JSX.Element {
         const { [oldSessionId]: _dropped, ...rest } = prev
         return rest
       })
+      // Same drop, same reason: main's attention tracking (src/main/attention.ts) is per session id
+      // and starts fresh for the new one, so the old id's verdict is stale the instant it rolls.
+      setAttention((prev) => {
+        const { [oldSessionId]: _dropped, ...rest } = prev
+        return rest
+      })
+      // Fix round 1: the opposite of the three drops above — the terminal/conversation choice is not
+      // a verdict about the process, it is a property of the tab, and the tab is the same one. Tells
+      // PaneGrid to carry it to the new id instead of reading a rename as an unrelated close+open.
+      setLastRoll({ oldSessionId, newSessionId: info.id })
     })
     const offBusy = window.api.on('session:busy', ({ sessionId, busy: b }) =>
       setBusy((prev) => (prev[sessionId] === b ? prev : { ...prev, [sessionId]: b }))
+    )
+    // Task 10's tab-bar marker. Fires app-wide on every attention change regardless of whether any
+    // conversation pane happens to be open (core/types.ts's own doc on the event) — this is a second,
+    // independent listener from ConversationPane's own, not something threaded down from it; see the
+    // `attention` prop's own comment in PaneGrid.tsx for why that duplication is deliberate.
+    const offAttention = window.api.on('conversation:attention', (e) =>
+      setAttention((prev) => (prev[e.sessionId] === e.value ? prev : { ...prev, [e.sessionId]: e.value }))
     )
     const offRollState = window.api.on('session:rollState', (ev) => {
       // A failed auto-resume is announced with a toast. Why not a banner: a banner only disappears once
@@ -1211,10 +1279,33 @@ export default function App(): React.JSX.Element {
     return () => {
       offRolled()
       offBusy()
+      offAttention()
       offRollState()
       offSchedState()
     }
   }, [])
+
+  // The one-shot half of Task 10's attention tracking, same pattern ConversationPane's own mount
+  // effect uses and for the same reason: 'conversation:attention' above only fires on a change, so a
+  // session already `waiting` before this ever asked about it would read as unmarked until its next
+  // change — which, for a session stuck on the very prompt the marker exists to surface, may not
+  // come. No sawLiveAttention-style ordering flag is needed the way ConversationPane's has one:
+  // `attention` starts with no entry for a session rather than seeding it to 'idle', so "already has
+  // an entry by the time this resolves" can only mean the live listener above beat it there — the
+  // one and only other writer of this id — so checking presence is enough to stop a late read from
+  // clobbering a newer value.
+  useEffect(() => {
+    for (const s of sessions) {
+      if (requestedAttentionRef.current.has(s.id)) continue
+      requestedAttentionRef.current.add(s.id)
+      void window.api.conversation
+        .attention(s.id)
+        .then((value) => {
+          setAttention((prev) => (s.id in prev ? prev : { ...prev, [s.id]: value }))
+        })
+        .catch(() => {})
+    }
+  }, [sessions])
 
   // When a shell dies on its own (the user typed exit) its tab is removed — a dead shell tab is noise.
   // If it was the active tab, we go back to Run (the panel itself stays).
@@ -3284,30 +3375,15 @@ export default function App(): React.JSX.Element {
   // Only when neither CLI is present is there nothing to launch. With one of the two installed the app
   // opens as usual, and the new-session dialog blocks the accounts whose CLI is missing.
   //
-  // Deliberately English-only, and deliberately not routed through t(). This screen replaces the whole
-  // workbench, so the rail is never rendered — and the settings modal that holds the language switch
-  // lives on that rail. Someone stuck here cannot change the language, so the text stays in the one
-  // language every reader of an npm install command already has to read. Do not move these strings
-  // into the i18n catalog: following the stored language is exactly the behaviour being avoided.
+  // The screen itself — what it offers, how it installs, and why it is English-only — lives in
+  // CliMissingScreen.tsx.
   if (cli && !cli.claude.ok && !cli.codex.ok) {
     return (
       <div className="app">
         {/* 0, not runningCount: this screen renders no ConfirmHost, so a close confirmation would
             never be answered and the close button would stop working entirely. */}
         <Titlebar isMax={isMax} update={update} runningCount={0} onInstall={() => void installUpdate()} />
-        <div className="cli-missing">
-          <h1>No CLI found to run</h1>
-          <p>
-            This app is a launcher that runs the installed <code>claude</code> or <code>codex</code>{' '}
-            CLI. Install either one, then restart the app.
-          </p>
-          <p>
-            Install: <code>npm install -g @anthropic-ai/claude-code</code>
-          </p>
-          <p>
-            Install: <code>npm install -g @openai/codex</code>
-          </p>
-        </div>
+        <CliMissingScreen onFound={setCli} />
       </div>
     )
   }
@@ -3765,6 +3841,9 @@ export default function App(): React.JSX.Element {
                 rollStates={rollStates}
                 schedStates={schedStates}
                 busy={busy}
+                attention={attention}
+                conversationDefault={conversationDefault}
+                lastRoll={lastRoll}
                 draggingTabId={dragTabId}
                 newDisabled={!anyCliOk}
                 onFocusPane={setActivePaneId}
@@ -3963,6 +4042,11 @@ export default function App(): React.JSX.Element {
                     ['general', t('settings.tab.general')],
                     ['appearance', t('settings.tab.appearance')],
                     ['accounts', t('settings.tab.accounts')],
+                    // 에이전트와 How It Works — 둘 다 일반에서 갈라져 나왔고, 계정 바로 뒤가
+                    // 제자리다: 어느 계정으로 무엇을 띄울지 정한 다음에 오는 이야기다.
+                    // How It Works 의 이름은 사이드바·탭과 같은 키를 쓴다(새 문구를 만들지 않는다).
+                    ['agent', t('settings.tab.agent')],
+                    ['hiw', t('hiw.title')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
                     ['notifications', t('settings.tab.notifications')],
@@ -3983,7 +4067,10 @@ export default function App(): React.JSX.Element {
               </nav>
               <div className="settings-content">
                 {settingsTab === 'general' && (
-                  <>
+                  // .settings-stack 은 '기능 하나 = 굵은 제목 + 바로 아래 설명' 으로 읽히게 하는
+                  // 배치다. 일반·에이전트·How It Works 세 탭이 같이 쓴다 — 셋 다 토글과 설명이
+                  // 번갈아 오는 모양이라서다. 제목과 설명은 .settings-group 으로 붙인다.
+                  <div className="settings-stack">
                     <div className="settings-row">
                       <span>{t('settings.general.language')}</span>
                       <Select
@@ -4004,6 +4091,40 @@ export default function App(): React.JSX.Element {
                         ariaLabel={t('settings.general.language')}
                       />
                     </div>
+                    {/* Task 10: what a new session tab opens as. A plain enum with nothing coupled to
+                        it, so — unlike the resume-strategy pair below, which earns its own component
+                        exactly because setting one can flip the other — a settings-row beside the
+                        language row is all this needs. Only seeds a tab's own remembered choice the
+                        moment its tab first appears (core/panes/sessionView.ts), so changing this
+                        here never reaches into a tab that is already open. */}
+                    <div className="settings-row">
+                      <span>{t('settings.conversation.title')}</span>
+                      <Select
+                        items={[
+                          { value: 'terminal', label: t('settings.conversation.terminal') },
+                          { value: 'conversation', label: t('settings.conversation.conversation') }
+                        ]}
+                        value={conversationDefault}
+                        onChange={(v) => {
+                          const next = v as SessionView
+                          const prev = conversationDefault
+                          setConversationDefault(next) // an optimistic update — reverted below on failure
+                          void window.api.settings.setConversationDefault(next).catch((err) => {
+                            setConversationDefault(prev)
+                            toast.error(
+                              t('settings.conversation.saveFailed', {
+                                detail: err instanceof Error ? err.message : String(err)
+                              })
+                            )
+                          })
+                        }}
+                        ariaLabel={t('settings.conversation.title')}
+                      />
+                    </div>
+                  </div>
+                )}
+                {settingsTab === 'agent' && (
+                  <div className="settings-stack">
                     {/* Agent orchestration — reuses the same settings-row plus settings-hint
                         combination as the language row. Turning it on starts the server immediately, but
                         sessions that are already running do not get the CLI path (environment variables
@@ -4011,105 +4132,119 @@ export default function App(): React.JSX.Element {
                         Why the container is a label rather than a div: pressing the text has to toggle it
                         too (the same wrapping approach the checkboxes in NewSessionDialog use). The flex
                         and colour rules of settings-row apply regardless of the tag. */}
-                    <label className="settings-row">
-                      <span>{t('settings.orchestration.label')}</span>
-                      <input
-                        type="checkbox"
-                        checked={orchEnabled}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                          setOrchEnabled(next) // an optimistic update — reverted below on failure
-                          void window.api.settings.setOrchestrationEnabled(next).catch((err) => {
-                            setOrchEnabled(!next)
-                            toast.error(
-                              t('settings.orchestration.saveFailed', {
-                                detail: err instanceof Error ? err.message : String(err)
-                              })
-                            )
-                          })
-                        }}
-                      />
-                    </label>
-                    <span className="settings-hint">{t('settings.orchestration.hint')}</span>
-                    {/* 권한 모드 — 오케스트레이션 바로 아래. 위 토글이 켜는 것이 워커를 띄우는 일이고,
-                        이 토글이 정하는 것은 그 워커가 승인을 묻는가이기 때문이다. 같은
-                        optimistic-update-then-revert 관례를 쓴다. */}
-                    <label className="settings-row">
-                      <span>{t('settings.agentPermission.label')}</span>
-                      <input
-                        type="checkbox"
-                        checked={agentYolo}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                          setAgentYolo(next)
-                          void window.api.settings
-                            .setAgentPermissionMode(next ? 'yolo' : 'manual')
-                            .catch((err) => {
-                              setAgentYolo(!next)
+                    <div className="settings-group">
+                      <label className="settings-row">
+                        <span>{t('settings.orchestration.label')}</span>
+                        <input
+                          type="checkbox"
+                          checked={orchEnabled}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                            setOrchEnabled(next) // an optimistic update — reverted below on failure
+                            void window.api.settings.setOrchestrationEnabled(next).catch((err) => {
+                              setOrchEnabled(!next)
                               toast.error(
-                                t('settings.agentPermission.saveFailed', {
+                                t('settings.orchestration.saveFailed', {
                                   detail: err instanceof Error ? err.message : String(err)
                                 })
                               )
                             })
-                        }}
-                      />
-                    </label>
-                    <span className="settings-hint">{t('settings.agentPermission.hint')}</span>
+                          }}
+                        />
+                      </label>
+                      <span className="settings-hint">{t('settings.orchestration.hint')}</span>
+                    </div>
+                    {/* 권한 모드 — 오케스트레이션 바로 아래. 위 토글이 켜는 것이 워커를 띄우는 일이고,
+                        이 토글이 정하는 것은 그 워커가 승인을 묻는가이기 때문이다. 같은
+                        optimistic-update-then-revert 관례를 쓴다. */}
+                    <div className="settings-group">
+                      <label className="settings-row">
+                        <span>{t('settings.agentPermission.label')}</span>
+                        <input
+                          type="checkbox"
+                          checked={agentYolo}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                            setAgentYolo(next)
+                            void window.api.settings
+                              .setAgentPermissionMode(next ? 'yolo' : 'manual')
+                              .catch((err) => {
+                                setAgentYolo(!next)
+                                toast.error(
+                                  t('settings.agentPermission.saveFailed', {
+                                    detail: err instanceof Error ? err.message : String(err)
+                                  })
+                                )
+                              })
+                          }}
+                        />
+                      </label>
+                      <span className="settings-hint">{t('settings.agentPermission.hint')}</span>
+                    </div>
                     {/* 작업 이어가기와 재개 전략 — 오케스트레이션 바로 아래에 둔다. 이어가기는 Job 이
                         재시작을 건너 살아남게 하는 것이라 위 토글과 한 갈래이고, 재개 전략은 그것이
                         켜질 때 함께 움직인다(spec §3). 그 둘이 한 컴포넌트인 이유는 그 파일에 있다. */}
                     <ResumeStrategySettings />
-                    {/* Work unit tracking — same settings-row/settings-hint/label shape as orchestration
-                        above, and the same optimistic-update-then-revert-on-failure behaviour. Off by
-                        default: nothing is read from before the moment this is turned on. */}
-                    <label className="settings-row">
-                      <span>{t('settings.workUnit.label')}</span>
-                      <input
-                        type="checkbox"
-                        checked={workUnitTrackingEnabled}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                          setWorkUnitTrackingEnabled(next) // an optimistic update — reverted below on failure
-                          void window.api.settings.setWorkUnitTrackingEnabled(next).catch((err) => {
-                            setWorkUnitTrackingEnabled(!next)
-                            toast.error(
-                              t('settings.workUnit.saveFailed', {
-                                detail: err instanceof Error ? err.message : String(err)
-                              })
-                            )
-                          })
-                        }}
-                      />
-                    </label>
-                    <span className="settings-hint">{t('settings.workUnit.hint')}</span>
                     {/* Agent browser — same settings-row/settings-hint/label shape and the same
                         optimistic-update-then-revert as the two above. Off by default: it installs a
                         skill into every account and starts the local server. */}
-                    <label className="settings-row">
-                      <span>{t('settings.agentBrowser.label')}</span>
-                      <input
-                        type="checkbox"
-                        checked={agentBrowserEnabled}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                          setAgentBrowserEnabled(next)
-                          void window.api.settings.setAgentBrowserEnabled(next).catch((err) => {
-                            setAgentBrowserEnabled(!next)
-                            toast.error(
-                              t('settings.agentBrowser.saveFailed', {
-                                detail: err instanceof Error ? err.message : String(err)
-                              })
-                            )
-                          })
-                        }}
-                      />
-                    </label>
-                    <span className="settings-hint">{t('settings.agentBrowser.hint')}</span>
-                    {/* 설명 생성 — 작업 단위 추적이 모은 것을 무엇으로 설명할 것인가.
-                        추적 토글 바로 아래에 두는 이유: 추적이 이 설정의 입력을 만든다. */}
+                    <div className="settings-group">
+                      <label className="settings-row">
+                        <span>{t('settings.agentBrowser.label')}</span>
+                        <input
+                          type="checkbox"
+                          checked={agentBrowserEnabled}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                            setAgentBrowserEnabled(next)
+                            void window.api.settings.setAgentBrowserEnabled(next).catch((err) => {
+                              setAgentBrowserEnabled(!next)
+                              toast.error(
+                                t('settings.agentBrowser.saveFailed', {
+                                  detail: err instanceof Error ? err.message : String(err)
+                                })
+                              )
+                            })
+                          }}
+                        />
+                      </label>
+                      <span className="settings-hint">{t('settings.agentBrowser.hint')}</span>
+                    </div>
+                  </div>
+                )}
+                {/* How It Works — 추적과 설명 생성은 한 기능의 두 손잡이다(README 도 그렇게 묶어
+                    설명한다). 탭 이름이 곧 기능 이름이라 안에 제목을 또 세우지 않는다 — 다른 어느
+                    탭도 그러지 않는다. 추적이 먼저다: 그것이 모으는 것이 설명 생성의 입력이다. */}
+                {settingsTab === 'hiw' && (
+                  <div className="settings-stack">
+                    {/* Work unit tracking — same settings-row/settings-hint/label shape as the toggles
+                        in the agent tab, and the same optimistic-update-then-revert-on-failure
+                        behaviour. Off by default: nothing is read from before the moment this is
+                        turned on. */}
+                    <div className="settings-group">
+                      <label className="settings-row">
+                        <span>{t('settings.workUnit.label')}</span>
+                        <input
+                          type="checkbox"
+                          checked={workUnitTrackingEnabled}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                            setWorkUnitTrackingEnabled(next) // an optimistic update — reverted below on failure
+                            void window.api.settings.setWorkUnitTrackingEnabled(next).catch((err) => {
+                              setWorkUnitTrackingEnabled(!next)
+                              toast.error(
+                                t('settings.workUnit.saveFailed', {
+                                  detail: err instanceof Error ? err.message : String(err)
+                                })
+                              )
+                            })
+                          }}
+                        />
+                      </label>
+                      <span className="settings-hint">{t('settings.workUnit.hint')}</span>
+                    </div>
                     <GeneratorSettings />
-                  </>
+                  </div>
                 )}
                 {settingsTab === 'appearance' && (
                   <>
@@ -4561,6 +4696,26 @@ export default function App(): React.JSX.Element {
         />
       )}
       <ConfirmHost />
+      {/* The first-run question. Two things gate it, and the second was measured rather than guessed:
+          it sits below the CLI-missing branch above, which returns early, and it waits for an account
+          to exist. A genuinely fresh profile opens with the detected-accounts modal already up, and
+          this one stacked straight on top of it — two modals on the very first screen. Waiting is also
+          the better question: before there is an account there are no sessions to have a default view
+          for. Answering and dismissing settle it the same way — it asks once. */}
+      {firstRunAsked === false && accounts.length > 0 && (
+        <FirstRunDialog
+          onPick={(view) => {
+            setFirstRunAsked(true)
+            setConversationDefault(view)
+            void window.api.settings.setConversationDefault(view)
+            void window.api.settings.markFirstRunAsked()
+          }}
+          onDismiss={() => {
+            setFirstRunAsked(true)
+            void window.api.settings.markFirstRunAsked()
+          }}
+        />
+      )}
       <ToastHost />
     </div>
   )

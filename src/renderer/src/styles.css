@@ -253,7 +253,11 @@
   --ease: 120ms cubic-bezier(0.2, 0.6, 0.3, 1);
 }
 
-* { box-sizing: border-box; margin: 0; }
+/* The margin half of this reset lives in tailwind.css's @layer base, not here: an unlayered rule
+   beats every layered one whatever its specificity, so keeping `margin: 0` here silently zeroed
+   every margin utility the vendored conversation markup relies on. box-sizing collides with
+   nothing and stays. */
+* { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body { font-family: var(--sans); letter-spacing: var(--tracking); background: var(--bg); color: var(--text); }
 
@@ -701,7 +705,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .pr-create-detail { margin: 0; max-height: 120px; overflow: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); white-space: pre-wrap; }
 
 /* ---------- tabs ---------- */
-.tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tabs { display: flex; align-items: center; overflow-x: auto; }
 /* 이 padding 은 죽은 값이다 — WorkbenchTabs 는 .pane-tabbar 안에서만 렌더링되고, 거기서는
    .pane-tabbar .tab 이 padding: 0 12px 로 덮어쓴다. 앱이 실제로 그리는 모든 탭이 그 규칙을 타므로,
    여기 다시 토큰을 걸지 않는다 */
@@ -745,6 +749,19 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* .terminal-slot is not terminal-only: it is how a pane's body claims its place in the grid, and the
    editor slot PaneGrid draws for each pane uses the same class so both follow one placement rule */
 .terminal-slot { flex: 1; min-height: 0; }
+/* Task 10: the session slot's own two children — the terminal always mounted, the conversation pane
+   mounted only while it is showing (PaneGrid.tsx's own comment on the session slot has the reasoning
+   for that asymmetry). Both fill the slot exactly as TerminalView's own .terminal-wrap already does
+   on its own — min-width:0 matters here for the same reason it does on .terminal-slot itself (the
+   comment on .terminal-host below measures the sideways-shake bug that skipping it caused). Display
+   is set inline at the call site, not here, the same convention every other slot in this file uses.
+   Not named .session-view: that class already belongs to the div wrapping <PaneGrid> in App.tsx (its
+   own rule is above, near .surfaces), and a second rule under the same name silently merged into it
+   — the container holding the whole pane grid gained this rule's min-width:0, and these two children
+   gained that div's display:flex, invisibly, through nothing either rule's own text said. Fix round 1
+   caught it; this file already tells this exact story once, at .surfaces's own comment on why it is
+   not named .workbench. */
+.session-slot-view { flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
 /* min-height:0 plus overflow:hidden — allows flex shrinking and confines the overflow to the slot, so
    the xterm canvas (rows × cellHeight) cannot spill past it and encroach on the bottom status bar */
 .terminal-wrap { position: relative; flex: 1; display: flex; min-height: 0; overflow: hidden; }
@@ -993,7 +1010,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .settings-close { background: none; border: none; color: var(--text-dim); font-size: 14px; line-height: 1; cursor: pointer; padding: 6px 10px; border-radius: var(--radius); }
 .settings-close:hover { color: var(--text); background: var(--line-soft); }
 .settings-body { display: flex; flex: 1; min-height: 0; }
-.settings-nav { display: flex; flex-direction: column; gap: 2px; width: 200px; flex-shrink: 0; padding: 16px 12px; border-right: 1px solid var(--line); }
+/* overflow-y: 탭이 열둘이 되면서 여유가 사라졌다 — 모달 높이가 바닥값(clamp 의 520px)일 때 nav 가
+   쓸 수 있는 높이와 필요한 높이가 둘 다 463px 로 정확히 같다(실측). 지금은 맞지만 탭이 하나만 더
+   늘거나 어느 번역 라벨이 두 줄로 접히면 잘려서 안 보인다. auto 라서 넘칠 때만 스크롤이 생긴다. */
+.settings-nav { display: flex; flex-direction: column; gap: 2px; width: 200px; flex-shrink: 0; padding: 16px 12px; border-right: 1px solid var(--line); overflow-y: auto; }
 .settings-nav-item { text-align: left; background: none; border: none; color: var(--text-dim); font-size: 13.5px; padding: 8px 12px; border-radius: var(--radius); cursor: pointer; }
 .settings-nav-item:hover { background: var(--line-soft); color: var(--text); }
 .settings-nav-item.active { background: var(--line-soft); color: var(--text); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
@@ -1019,7 +1039,16 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .theme-card-bars { display: flex; width: 100%; height: 18px; border-radius: inherit; overflow: hidden; }
 .theme-card-bars i { flex: 1; }
 .theme-card-name { font-weight: 600; }
-/* ---------- 일반 탭: 재개 방식 카드 ---------- */
+/* ---------- 일반·에이전트·How It Works 탭: 기능 묶음 ---------- */
+/* 토글마다 설명이 붙는 탭들의 배치다. .settings-content 의 18px gap 은 '제목과 그 설명 사이'와
+   '기능과 기능 사이'에 똑같이 들어가 전부 한 덩어리로 읽혔다. 그 둘을 가른다: .settings-group 이
+   제목과 그 아래(설명 또는 카드)를 붙이고, .settings-stack 의 gap 이 기능 사이를 띄운다.
+   제목은 굵게 + --text 로 올려 설명(--text-faint)과 층이 지게 한다. .settings-row 의 기본
+   --text-dim 은 다른 탭에 그대로 둔다 — 그쪽은 줄이 몇 개뿐이라 층이 필요 없다. */
+.settings-stack { display: flex; flex-direction: column; gap: 22px; }
+.settings-stack .settings-row span:first-child { color: var(--text); font-weight: 600; }
+.settings-group { display: flex; flex-direction: column; gap: 6px; }
+/* ---------- 에이전트 탭: 재개 방식 카드 ---------- */
 /* .theme-grid/.theme-card와 같은 두 열 카드 배치다. 다만 팔레트 미리보기가 없어 인라인 스타일이
    필요 없으므로 색은 앱 토큰(--line 등)에서 그대로 가져온다. */
 /* 설명 생성 설정. 형제인 resume-strategy 와 같은 토큰만 쓴다 — 새 색을 만들지 않는다 */
@@ -1033,7 +1062,9 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .settings-gen-refresh:disabled { opacity: 0.5; cursor: default; }
 .settings-gen-refresh:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
 
-.settings-resume-strategy { display: flex; flex-direction: column; gap: 8px; }
+/* 안에 기능이 둘(작업 이어가기·재개 방식)이라 gap 은 묶음 사이 값이다 — .settings-stack 과
+   같은 22px 라야 이 컴포넌트의 경계가 다른 기능 사이와 구별되지 않는다. */
+.settings-resume-strategy { display: flex; flex-direction: column; gap: 22px; }
 .resume-strategy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .resume-strategy-card { display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
   padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg);
@@ -1793,13 +1824,23 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    z-index 1: above the slots (auto) and below the resizers (2) — the 5px hit area of a column resizer
    overlaps the top 3px of the group tab bar beneath it, so the resizer has to win for the boundary to be
    grabbable. */
-.panes.pane-grid .pane-tabbar { position: absolute; z-index: 1; height: var(--pane-tabbar-h); }
+/* display:flex added for Task 10's toggle: a second child sits beside .tabs, pinned at the right
+   rather than scrolling away with the tabs — .tabs gets flex:1;min-width:0 below so it is still the
+   one that shrinks and scrolls.
+   background and border-bottom moved here from .tabs (its only other use, the top-level app tab bar,
+   is long gone — .tabs is only ever rendered inside this element now): before the toggle, .tabs was
+   this bar's sole child and painted the whole thing. With a second child beside it, .tabs painting
+   only its own width left the toggle's strip showing the plain body background with no hairline under
+   it — invisible in this palette (--panel/--bg/--rail read the same, this file's own note below on
+   why), a visible seam in a theme where they do not. The bar's background and its bottom edge belong
+   to the bar itself, not to whichever of its children happens to be widest. */
+.panes.pane-grid .pane-tabbar { position: absolute; z-index: 1; height: var(--pane-tabbar-h); display: flex; background: var(--panel); border-bottom: 1px solid var(--line); }
 /* Background contrast is left alone. In this palette the WCAG luminance contrast between --panel, --bg,
    and --rail is around 1.06:1, so no combination of them is visible — which tab is active within a group
    was already carried by the text colour (--text-dim to --text, about 2.4:1). Only the background contrast
    intended as the "focused group" signal failed, so that role passes to the account-coloured underline
    (the focused prop). */
-.pane-tabbar .tabs { height: 100%; }
+.pane-tabbar .tabs { height: 100%; flex: 1; min-width: 0; }
 /* Drops the vertical padding and centres instead — the global tab bar (≈32px) is gone.
    Lets tabs shrink in a narrow group: the global bar was flex:none, so past six tabs it overflowed and got
    cut. A minimum width keeps them from shrinking past recognition */
@@ -1826,6 +1867,24 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    It is sticky above the tabs, so its background has to be the same opaque colour as the bar or the tabs
    passing underneath show through */
 .pane-tabbar .new-tab { padding: 0 10px; align-self: stretch; position: sticky; right: 0; z-index: 1; background: var(--panel); }
+/* The terminal/conversation toggle (Task 10) — a sibling of .tabs inside .pane-tabbar, pinned at the
+   right the same way .new-tab is, but as a flex sibling rather than position:sticky: unlike the tabs
+   row this one never scrolls, so there is nothing to stay pinned against.
+   Fix round 1: icon-only (~46px total for the pair), not two words (~170px) — a flex:none control at
+   word-width left less than one tab's own min-width once MAX_PANES's four columns narrowed every
+   bar; the words survive as title/aria-label on each button and as the setting's own row label. */
+.session-view-toggle { display: flex; align-items: center; gap: 3px; padding: 0 6px; flex: none; }
+.sv-seg {
+  position: relative; display: flex; align-items: center; justify-content: center; padding: 4px;
+  color: var(--text-dim); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sv-seg.active { color: var(--text); border-color: var(--accent); background: var(--elevated); }
+/* A corner badge, not an inline dot beside the icon — the button's own box stays the same small size
+   whether or not it is marked, which an inline dot (with its own gap) would not. The colour is the
+   same --warn-ink the in-pane pending banner uses (PendingBanner.tsx's --warn-bg/--warn-ink), so the
+   two read as the one signal rather than two different ones. */
+.sv-seg-marker { position: absolute; top: -2px; right: -2px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn-ink); }
 
 /* ---------- status bar ---------- */
 .statusbar {
@@ -1867,8 +1926,39 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .metric-reset { opacity: .7; }
 
 /* ---------- CLI not found screen ---------- */
-.cli-missing { margin: auto; max-width: 480px; text-align: center; display: flex; flex-direction: column; gap: 12px; }
-.cli-missing code { background: var(--elevated); color: var(--text); padding: 2px 6px; border-radius: var(--radius-sm); }
+.cli-missing { margin: auto; max-width: 520px; display: flex; flex-direction: column; gap: 14px; text-align: center; }
+.cli-missing h1 { font-size: 20px; margin: 0; }
+.cli-missing > p { margin: 0; color: var(--text-dim); }
+/* One card per program: what it is on the left, the button on the right. The command is not here —
+   it is one click behind the line below, because the reader of this screen has just installed the app
+   and may never have opened a terminal. It stays reachable for whoever wants to run it themselves. */
+.cli-missing-actions { display: flex; flex-direction: column; gap: 10px; }
+.cli-missing-row { display: flex; flex-direction: column; gap: 8px; text-align: left; border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.cli-missing-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.cli-missing-name { font-weight: 600; }
+.cli-missing-what { font-size: 12px; color: var(--text-dim); }
+.cli-missing-head button { flex: none; min-width: 92px; }
+.cli-missing-source { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-faint); }
+.cli-missing-row code { background: var(--elevated); color: var(--text); padding: 6px 8px; border-radius: var(--radius-sm); font-size: 12px; word-break: break-all; }
+/* A plain-text button: it opens or closes something on this screen, and a second filled button beside
+   the real one would compete with it. */
+.cli-missing-link { background: none; border: none; padding: 0; color: var(--accent); font-size: 12px; cursor: pointer; }
+.cli-missing-link:hover { text-decoration: underline; }
+.cli-missing-link.is-current { color: var(--text); font-weight: 600; text-decoration: none; cursor: default; }
+.cli-missing-primary { font-weight: 600; }
+.cli-missing-failed { color: var(--danger); margin: 0; }
+/* Tall enough to read an installer's own progress, and it scrolls itself as output arrives. */
+.cli-missing-log { max-height: 220px; overflow: auto; text-align: left; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; background: var(--elevated); border-radius: var(--radius-sm); padding: 8px 10px; margin: 0; }
+.cli-missing-lang { display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 12px; color: var(--text-faint); margin-top: 4px; }
+
+/* ---------- first run ---------- */
+/* Two choices side by side, each naming itself and what it is. Neither is primary: there is no wrong
+   answer, and making one look like the answer would invent a recommendation this screen does not have. */
+.modal.first-run { max-width: 440px; }
+.first-run-choices { display: flex; gap: 10px; }
+.first-run-choices button { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 12px 14px; text-align: left; height: auto; }
+.first-run-name { font-weight: 600; }
+.first-run-what { font-size: 12px; color: var(--text-dim); }
 
 /* ---------- file viewer ---------- */
 .file-truncated { padding: 4px 12px; font-size: 12px; color: var(--warn); background: var(--warn-bg); flex: none; }

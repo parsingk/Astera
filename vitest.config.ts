@@ -1,6 +1,19 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  // The vendored shadcn and assistant-ui components (src/renderer/src/components/ui/,
+  // components/assistant-ui/elements/) import each other through the `@` alias. electron.vite.config.ts
+  // resolves it for the real app; without the same alias here, a test importing one of those
+  // components — directly, or transitively through a house component that reuses one — fails to
+  // resolve the module at all, before any test in it even runs. Written the same way
+  // electron.vite.config.ts does it (fileURLToPath + import.meta.url, not path.resolve(__dirname, ...))
+  // so the two cannot quietly drift to resolving `@` to two different folders.
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src/renderer/src', import.meta.url))
+    }
+  },
   test: {
     include: [
       'src/core/**/*.test.ts',

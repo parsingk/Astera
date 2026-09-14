@@ -1,8 +1,9 @@
 import { useState } from 'react'
+import type { Attention, SessionView } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
-import { Globe, Repeat } from 'lucide-react'
+import { Globe, MessageSquare, Repeat, Terminal } from 'lucide-react'
 
 /** File viewer tab. Renderer-only — unlike sessions, main is not involved. id = `file:${path}`.
  *  (FileTabs.tsx가 이 탭 줄로 대체되면서 타입만 여기로 옮겨 왔다) */
@@ -124,7 +125,9 @@ export function WorkbenchTabs({
   onDropTabInBar,
   renamingTabId,
   onRenameStart,
-  onRenameEnd
+  onRenameEnd,
+  activeSession,
+  onSetSessionView
 }: {
   tabs: WorkbenchTab[]
   activeTabId: string | null
@@ -149,6 +152,13 @@ export function WorkbenchTabs({
   onRenameStart: (tabId: string) => void
   /** 끝났다. title이 null이면 취소, 아니면 그 값으로 확정한다 */
   onRenameEnd: (tabId: string, title: string | null) => void
+  /** Task 10: the terminal/conversation toggle's own data, present only when this pane's active tab
+   *  is a session — null for a file, browser, or record tab, which is what keeps the toggle off
+   *  screen there. PaneGrid computes it (parseTab, its sessionViews and its attention record are
+   *  all its own); this component only draws what it is handed. */
+  activeSession: { sessionId: string; view: SessionView; attention: Attention } | null
+  /** The toggle's own write. */
+  onSetSessionView: (sessionId: string, view: SessionView) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // 드래그 중인 탭과 드롭 표시 위치(insertBefore ∈ [0, n]) — 드래그하는 동안만 쓰는 상태
@@ -179,6 +189,7 @@ export function WorkbenchTabs({
   }
 
   return (
+    <>
     <div
       className="tabs"
       onDragOver={(e) => {
@@ -334,5 +345,67 @@ export function WorkbenchTabs({
         +
       </button>
     </div>
+    {/* The terminal/conversation toggle (Task 10) — a sibling of .tabs, not a child of it: .tabs
+        scrolls and clips (overflow-x: auto) once there are enough tabs to need it, and the toggle
+        has to stay reachable regardless, the same reason .new-tab above is pinned with
+        position: sticky rather than living past the scroll. Only for a pane whose active tab is a
+        session (activeSession is null otherwise) — a file, browser, or record tab has no terminal
+        or conversation to switch between.
+        Fix round 1: icon-only, not the two words. At words this ran to ~170px in English and was
+        flex:none beside a shrinking .tabs — at MAX_PANES's four columns on a modest window that left
+        less room than one tab's own min-width, squeezing every tab bar in the app to fit a control
+        used far less often than a tab is clicked. The words still exist, in `title`/`aria-label` and
+        in the setting's own row in Settings.
+        Its own onDragOver/onDrop/onDragLeave mirror .tabs's (below): before this toggle existed,
+        .tabs was this bar's sole child and its own handlers covered the whole width, including the
+        empty space past the last tab — dropAt(tabs.length) there means "insert after the last tab",
+        the same target this strip now sits over. Without its own copy, that same drop would land on
+        no element with a handler at all, and a session pane's bar would refuse a tab dropped on its
+        right third. */}
+    {activeSession && (
+      <div
+        className="session-view-toggle"
+        onDragOver={(e) => {
+          if (!draggingTabId) return
+          e.preventDefault()
+          setDropAt(tabs.length)
+        }}
+        onDrop={commitDrop}
+        onDragLeave={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+          setDropAt(null)
+        }}
+      >
+        <button
+          type="button"
+          className={`sv-seg${activeSession.view === 'terminal' ? ' active' : ''}`}
+          aria-pressed={activeSession.view === 'terminal'}
+          title={t('conversation.toggle.terminal')}
+          aria-label={t('conversation.toggle.terminal')}
+          onClick={() => onSetSessionView(activeSession.sessionId, 'terminal')}
+        >
+          <Terminal size={13} aria-hidden="true" />
+          {/* The marker sits on the segment the person is NOT looking at — it is the one telling
+              them where to look, not the one they are already on. */}
+          {activeSession.attention === 'waiting' && activeSession.view === 'conversation' && (
+            <span className="sv-seg-marker" aria-hidden="true" />
+          )}
+        </button>
+        <button
+          type="button"
+          className={`sv-seg${activeSession.view === 'conversation' ? ' active' : ''}`}
+          aria-pressed={activeSession.view === 'conversation'}
+          title={t('conversation.toggle.conversation')}
+          aria-label={t('conversation.toggle.conversation')}
+          onClick={() => onSetSessionView(activeSession.sessionId, 'conversation')}
+        >
+          <MessageSquare size={13} aria-hidden="true" />
+          {activeSession.attention === 'waiting' && activeSession.view === 'terminal' && (
+            <span className="sv-seg-marker" aria-hidden="true" />
+          )}
+        </button>
+      </div>
+    )}
+    </>
   )
 }

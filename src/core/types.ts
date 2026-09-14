@@ -1,3 +1,4 @@
+import type { SlashCommand } from './commands/slashCommands'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { EmulationMetrics } from './preview/viewports'
 import type { CaptureResult, Rect } from './preview/pick/types'
@@ -29,15 +30,17 @@ import type { GeneratorSettings } from './understanding/generatorSettings'
 import type { DesktopNotifySettings } from './notify/settings'
 import type { ModelListResult } from './models/types'
 import type { ThemeId } from './theme/themes'
+import type { ConvTurn } from './history/convTypes'
+export type { ConvTurn } from './history/convTypes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
-// orchestration/types.ts is safe to reach for: its single import is a type-only providers/meta.ts,
-// already in tsconfig.web.json, so putting it in the renderer's compilation target pulled nothing
-// else in with it. state.ts and view.ts never may, for two different reasons — view.ts imports
-// isSamePath from files/tree.ts, which imports node:path; state.ts is node-free but is main-side by
-// role (the server owns OrchState) and is deliberately out of tsconfig.web.json, so importing it
-// here is what would put it back in. Either way the wrong fix is "types": ["node"] — it makes the
-// import resolve by handing the renderer typecheck every Node global, which is the guard this note
-// stands to protect.
+// orchestration/types.ts is safe to reach for on its own: its single import is a type-only
+// providers/meta.ts, already in tsconfig.web.json. view.ts never may — it imports isSamePath from
+// files/tree.ts, which imports node:path. state.ts is node-free and, as of graph.ts's own type-only
+// import of it (also in tsconfig.web.json's include list), already sits there too — not because
+// anything here reaches for it, and that is still worth avoiding on purpose: it is main-side by role
+// (the server owns OrchState), so importing it from here would make that reliance direct rather than
+// incidental. Either way the wrong fix for a genuinely missing import is "types": ["node"] — it hands
+// the renderer typecheck every Node global, which is the guard this note stands to protect.
 import type { MessageType, Outcome, TaskStatus } from './orchestration/types'
 export type { MessageType, TaskStatus } from './orchestration/types'
 
@@ -319,6 +322,19 @@ export interface SchedStateEvent {
   rule?: ScheduleRule // for the rule summary shown in the banner
 }
 
+/** Where a session stands right now (main/attention.ts's own type, restated here). This file cannot
+ *  import that module directly: it is compiled by tsconfig.web.json for the renderer too, and every
+ *  entry in that config's include list resolves under src/core or src/renderer — nothing there ever
+ *  reaches into src/main, unlike the softer, core-internal "role" boundary this file's note on
+ *  orchestration/state.ts describes (above). So this is the single declaration, and main/attention.ts
+ *  re-exports it rather than carrying a copy that would have to be kept in step by hand. */
+export type Attention = 'idle' | 'working' | 'waiting'
+
+/** Which of the terminal or the conversation a session tab shows (Task 10). Also the shape of the
+ *  `conversationDefault` setting: the same two values, meaning "what a session tab starts on"
+ *  there and "what it is showing right now" once it has one. */
+export type SessionView = 'terminal' | 'conversation'
+
 /** One project terminal */
 export interface TerminalInfo {
   id: string
@@ -563,6 +579,13 @@ export interface CoreEvents {
   /** A desktop notification was clicked. Main has already raised the window; the renderer activates
    *  that session's tab, through the path the tab bar already uses (design doc §7). */
   'notify:activate': { sessionId: string }
+  /** An install running on the screen shown when neither CLI is present. `start` carries the command
+   *  as one line so the screen can show what it is about to run; `out` is a chunk of the installer's
+   *  own output, stdout and stderr together, because an installer says most of what matters on the
+   *  second; `done` ends it, with the exit code or null when it never started. */
+  'cli:install':
+    | { cli: 'claude' | 'codex'; kind: 'start' | 'out'; text: string }
+    | { cli: 'claude' | 'codex'; kind: 'done'; code: number | null }
   'run:data': { runId: string; data: string } // run output, per run
   'run:status': RunStatus // run state change (running/stopping/exited)
   /** The run the console should move to. A chain's first run is what run.start returns and what the
@@ -628,6 +651,22 @@ export interface CoreEvents {
   // Carries the blocking unit's project and id so the toast it drives (App.tsx) can offer a button
   // that closes that unit directly, through the same call the row's own [완료] button uses.
   'sessionTasks:goalIgnored': { projectPath: string; blockingUnitId: string }
+  /** These turns are new **or updated** for an open conversation view (main/conversation.ts) — not
+   *  only new. A tool call's result routinely lands in a later read than its call did (a build, a
+   *  test run, any long `Bash`), and when that happens the turn carrying that call is sent again in
+   *  full, with the same `id`, its outcome now filled in — the renderer must replace a turn it has
+   *  already drawn when this event names an `id` it already has, not only append ids it does not.
+   *  Fires only for a session with an open conversation: the poll starts on `conversation.open` and
+   *  stops once the last one closes, so a session nobody is looking at never reaches the renderer this
+   *  way. `restarted` is the follow's own flag — the transcript file was recreated (e.g. a resumed
+   *  session reusing the path) since the last read, so the renderer should treat this as a fresh
+   *  conversation rather than an addition to what it drew. */
+  'conversation:append': { sessionId: string; turns: ConvTurn[]; restarted: boolean }
+  /** A session's attention verdict changed (main/attention.ts's `subscribe`). Unlike
+   *  'conversation:append' this is **not** gated on an open conversation — it is the same per-session
+   *  verdict the desktop notifier already reads, so it fires for every session regardless of which
+   *  tab, if any, is showing its conversation. */
+  'conversation:attention': { sessionId: string; value: Attention }
 }
 export type CoreEventChannel = keyof CoreEvents
 
@@ -924,6 +963,17 @@ export interface CoreApi {
     // back here is always one of the six known ids.
     getTheme(): Promise<ThemeId>
     setTheme(id: ThemeId): Promise<void>
+    /** Whether the one first-run question has already been put to this person. False only on a
+     *  machine with no settings file at all — an installation that predates the question has a file
+     *  without the key, and reading that as "already asked" is what keeps a long-standing user from
+     *  being interrupted by it (main/appSettingsStore.ts's own field says the rest). */
+    getFirstRunAsked(): Promise<boolean>
+    /** It has been put to them. Answering and dismissing are the same thing here: it asks once. */
+    markFirstRunAsked(): Promise<void>
+    // Task 10: what a new session tab opens as. Only ever seeds a tab's own remembered choice at the
+    // moment its tab first appears — changing this later never touches a tab that already exists.
+    getConversationDefault(): Promise<SessionView>
+    setConversationDefault(view: SessionView): Promise<void>
   }
   files: {
     // The file explorer. Every files.* IPC call goes through assertAllowedPath, which permits only
@@ -1094,6 +1144,23 @@ export interface SystemApi {
   pickFile(defaultPath?: string): Promise<string | null>
   pathExists(p: string): Promise<boolean>
   checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>
+  /** Installs one CLI with the command its vendor documents for this platform. Reached only from the
+   *  screen shown when neither is present. Output arrives as `cli:install` events while it runs; this
+   *  resolves when the installer exits. `error` names why nothing ran at all — an unmeasured platform,
+   *  or an install already in flight — as opposed to an installer that ran and failed, which is a
+   *  non-zero `code`. */
+  installCli(cli: 'claude' | 'codex'): Promise<{
+    ok: boolean
+    code: number | null
+    error?: string
+    /** Where the machine says it is now, once main has put that directory on its own PATH — so the
+     *  app can carry on without a restart. Null after an install this app still cannot see, which is
+     *  the only case the restart button is there for. */
+    at?: string | null
+  }>
+  /** Starts the app again, for after an install: the CLI lands somewhere new on PATH and a running
+   *  process cannot be told about it. The Host keeps the sessions. */
+  relaunch(): Promise<void>
   appVersion(): Promise<string>
   /** 프로젝트가 지정되지 않았을 때 아래쪽 패널의 터미널이 열릴 자리 — 셸을 직접 띄웠을 때와 같은 곳 */
   homeDir(): Promise<string>
@@ -1320,6 +1387,61 @@ export type RendererApi = CoreApi & {
      *  Never rejects, and never blocks the caller for longer than the one round trip's own deadline.
      *  The Info tab reads it beside `status()` and draws the row without waiting for it. */
     holdings(): Promise<HostHoldings | null>
+  }
+  /** The conversation view's IPC surface (main/conversation.ts). `open` and `more` fail soft: null
+   *  means the session has no transcript path yet, or the file could not be read — never an error,
+   *  and never a reason to treat a codex session (which never has a transcript path) differently from
+   *  a claude one that simply has not written a status line yet. The renderer draws "not available"
+   *  for both. New turns after `open` arrive as the 'conversation:append' event, not a return value. */
+  conversation: {
+    open(sessionId: string): Promise<{ turns: ConvTurn[]; from: number; more: boolean; follow: number } | null>
+    /** One window further back than `before` — an earlier `open`/`more` call's own `from`. Never
+     *  repeats a turn already returned. */
+    more(sessionId: string, before: number): Promise<{ turns: ConvTurn[]; from: number; more: boolean } | null>
+    close(sessionId: string): Promise<void>
+    /** One session's attention verdict (main/attention.ts), read once rather than waited for — the
+     *  'conversation:attention' event only fires on a change, so a session already `waiting` (or
+     *  `working`) when its pane mounts needs this to know that before the first change arrives, if
+     *  one ever does. Independent of `open`: a fresh session on a trust prompt is `waiting` while
+     *  `open` still answers null. */
+    attention(sessionId: string): Promise<Attention>
+    /** The model and effort the CLI last reported for this session, or nulls when it has reported
+     *  nothing yet. Read rather than pushed: it changes only when a person changes it, which they do
+     *  through the CLI's own screen, and there is no event for that. */
+    model(sessionId: string): Promise<{
+      model: string | null
+      effort: string | null
+      /** Which CLI this session runs, which decides what a model menu may offer: Claude takes
+       *  `/model <alias>` outright, codex only ever opens a picker and reads an argument as a message
+       *  to answer. Taken from the session's account, not from what has been read — a codex session
+       *  that has not had a turn yet has no model to report, and reading that silence as Claude is how
+       *  `/model opus` would get sent to codex, which answers it and charges for the answer.
+       *
+       *  null when the session's account is gone and neither can be told from the other. Then no menu
+       *  is offered at all: a wrong guess here spends someone's tokens. */
+      cli: 'claude' | 'codex' | null
+    }>
+    /** The models this session's CLI offers, as the CLI itself answers it (main/ipc.ts's
+     *  `settings.listModels`, same per-account cache). Read here rather than kept as a list in this
+     *  repository: the models an account can reach depend on its subscription and its organisation's
+     *  policy, which nothing here can see. `error` is set and `models` empty when the CLI would not
+     *  say — then the menu offers nothing and the CLI's own screen still does. */
+    models(sessionId: string): Promise<ModelListResult>
+    /** Save something dropped or pasted into the composer and answer with the path a CLI can read it
+     *  at. The pty carries text only, so a path is what an image can be handed over as — and the
+     *  composer types it into the message, where it can be seen and edited like any other word.
+     *
+     *  Saved under the app's own folder, not the project: a picture pasted into a sentence is not a
+     *  file someone asked to add to their repository. Rejects an empty payload, one over the cap, and
+     *  a session id that is not a uuid (it names the folder). */
+    attach(sessionId: string, name: string, mime: string, base64: string): Promise<string>
+    /** Everything `/` can start for this session, read off disk (main/slashCommands.ts). The CLI's
+     *  own built-ins are not in it — nothing on disk describes them — and a name that is missing still
+     *  runs when it is typed in full. */
+    commands(sessionId: string): Promise<SlashCommand[]>
+    /** Project files matching what follows an `@`, best first, already capped. Root-relative with
+     *  forward slashes. Empty for a session with no project, or one whose folder cannot be read. */
+    files(sessionId: string, query: string): Promise<string[]>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

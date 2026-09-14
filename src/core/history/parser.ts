@@ -62,7 +62,7 @@ const MACHINE_USER_PREFIXES = [
 ]
 
 /** 사람이 실제로 쓴 텍스트인가 (제목과 대화 판정이 함께 쓴다) */
-function isRealUserText(text: string): boolean {
+export function isRealUserText(text: string): boolean {
   const t = text.trim()
   if (!t) return false
   return !MACHINE_USER_PREFIXES.some((p) => t.startsWith(p))
@@ -82,7 +82,7 @@ function isRealUserText(text: string): boolean {
  *  `turnCompanion`·`sourceToolUseID` 도 같은 레코드에 함께 오지만(실측) 이 판정은 `isMeta` 하나만
  *  본다 — 셋 중 그 하나가 "사람이 쓴 것이 아니다"를 직접 뜻하고, 나머지 둘은 그 레코드가 어디서
  *  왔는지를 말할 뿐이다. */
-function isMetaUserRecord(obj: Record<string, unknown>): boolean {
+export function isMetaUserRecord(obj: Record<string, unknown>): boolean {
   return obj.isMeta === true
 }
 

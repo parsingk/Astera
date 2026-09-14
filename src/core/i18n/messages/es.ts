@@ -6,6 +6,7 @@ export const es: Catalog = {
   'settings.tab.general': 'General',
   'settings.tab.appearance': 'Apariencia',
   'settings.tab.accounts': 'Cuentas',
+  'settings.tab.agent': 'Agentes',
   'settings.tab.info': 'Información',
   'settings.tab.shortcuts': 'Atajos',
   'settings.tab.history': 'Historial',
