@@ -34,6 +34,7 @@ import {
 } from './host/runtime'
 import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
+import { createHostProcFactory } from './host/procFactory'
 import { reattachSessions, type ReattachResult } from './host/reattach'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
@@ -428,17 +429,19 @@ export function hostHandshakeMeans(held: string | null, answered: string): 'firs
  *  Zero is a real answer, and the one a Host that has just started gives. It is only ever reached
  *  from entries the Host actually sent: a Host that has not answered is reported as nothing at all
  *  by the caller, never as this. */
-export function hostHoldings(entries: PtyEntry[]): HostHoldings {
+export function hostHoldings(entries: PtyEntry[], procEntries: PtyEntry[] = []): HostHoldings {
   let sessions = 0
   let terminals = 0
   let runs = 0
+  let chats = 0
   for (const e of entries) {
     if (!e.alive || !e.meta) continue
     if (e.meta.kind === 'session') sessions += 1
     else if (e.meta.kind === 'terminal') terminals += 1
     else if (e.meta.kind === 'run') runs += 1
   }
-  return { sessions, terminals, runs }
+  for (const e of procEntries) if (e.alive && e.meta?.kind === 'chat') chats += 1
+  return { sessions, terminals, runs, chats }
 }
 
 /** Whether the outdated Host should be replaced *now* (docs/superpowers/specs/2026-09-14-host-replacement-design.md
@@ -464,7 +467,7 @@ export function hostReplaceDue(a: {
 }): boolean {
   if (!a.outdated || a.inFlight || a.quitting) return false
   if (a.holdings === null) return false
-  return a.holdings.sessions === 0 && a.holdings.terminals === 0 && a.holdings.runs === 0
+  return a.holdings.sessions === 0 && a.holdings.terminals === 0 && a.holdings.runs === 0 && a.holdings.chats === 0
 }
 
 /**
@@ -901,6 +904,8 @@ export function registerIpc(
    *  Two concurrent `pty-list` calls are safe — each resolves on the first `pty-listed` it sees, and
    *  both are the same Host describing the same registry a moment apart. */
   let hostPtyList: (() => Promise<PtyEntry[] | null>) | null = null
+  /** `hostPtyList`'s twin for line processes. Same shape, same caller. */
+  let hostProcList: (() => Promise<PtyEntry[] | null>) | null = null
   /** Retires the Host and starts one from this app's own build, resolving with the status the new
    *  connection settled at. Null before the Host wiring has run. The Info tab's *Restart now* and the
    *  automatic replacement in `startHostClient` both go through it, so there is one place that knows
@@ -5649,6 +5654,8 @@ export function registerIpc(
       log: (m: string) => hostLog(`host: ${m}`)
     }
     const { factory, attach } = createHostPtyFactory(transport)
+    // The same transport, for line processes (chat-sessions design §6.5).
+    const procFactory = createHostProcFactory(transport)
 
     // How long reattaching is willing to wait for the first handshake's outcome before deciding the
     // Host is not there. READY_TIMEOUT_MS is the sum of the two sequential phases `ready()` (armed
@@ -5688,6 +5695,22 @@ export function registerIpc(
     // The one message that already asks the Host what it holds, handed to the `host.holdings` IPC so
     // the Info tab's row does not invent a second way to ask the same question.
     hostPtyList = () => listPtys(transport)
+    // listPtys's twin for line processes.
+    const listProcs = (t: typeof transport): Promise<PtyEntry[] | null> =>
+      new Promise((resolve) => {
+        const done = (entries: PtyEntry[] | null): void => {
+          clearTimeout(timer)
+          off()
+          resolve(entries)
+        }
+        const off = t.onHostMessage((m) => {
+          if (m.t === 'proc-listed') done(m.entries)
+        })
+        const timer = setTimeout(() => done(null), 5_000)
+        timer.unref?.()
+        if (!t.send({ t: 'proc-list' })) done(null)
+      })
+    hostProcList = () => listProcs(transport)
 
     /** One replacement at a time. Shared by the automatic rule and the Info tab's button, which is
      *  what keeps a click during an automatic replacement from retiring the Host that was just
@@ -5729,7 +5752,11 @@ export function registerIpc(
       checking = true
       try {
         const entries = await listPtys(transport)
-        const holdings = entries ? hostHoldings(entries) : null
+        const procEntries = await listProcs(transport)
+        // A null proc list is not zero chats: it is the Host not answering, exactly as a null pty
+        // list is not an empty one (listPtys's doc above) — either unknown collapses the holdings to
+        // null, and hostReplaceDue declines rather than replacing a Host that may still hold chats.
+        const holdings = entries && procEntries ? hostHoldings(entries, procEntries) : null
         if (!hostReplaceDue({ outdated: client.status().outdated, holdings, inFlight: replacing, quitting: quittingForHost })) return
         await replaceHost(`${why}, and it holds nothing`)
       } catch (e) {
@@ -5764,6 +5791,7 @@ export function registerIpc(
       // it adopt nothing and report nothing adopted, which reads identically to a Host that really
       // is holding nothing.
       const entries = await listPtys(transport)
+      const procEntries = await listProcs(transport)
       if (entries === null) {
         hostLog(
           'host: the Host did not answer the pty list — nothing was taken back, and what it is still running is unknown, so no worker is written off'
@@ -5775,6 +5803,10 @@ export function registerIpc(
         attach,
         sendAttach: (id) => transport.send({ t: 'pty-attach', id }),
         kill: (id) => transport.send({ t: 'pty-kill', id }),
+        listProcs: async () => procEntries ?? [],
+        attachProc: procFactory.attach,
+        sendAttachProc: (id) => transport.send({ t: 'proc-attach', id }),
+        killProc: (id) => transport.send({ t: 'proc-kill', id }),
         // Asked per kind, because the id in the note is the manager's own, not the pty's. Exited does
         // not count as held: a reconnect's whole job is adopting the records the fabricated exit marked
         // exited. A terminal has no exited state to ask about — its exit deletes the entry.
@@ -5782,6 +5814,7 @@ export function registerIpc(
           if (a.kind === 'session') return core.sessions.list().some((s) => s.id === a.id && s.status === 'running')
           if (a.kind === 'run') return core.run.get(a.id)?.status === 'running'
           if (a.kind === 'terminal') return core.terminal.holds(a.id)
+          if (a.kind === 'chat') return false // slice 2: the chat manager answers this
           return false
         },
         adopters: {
@@ -5933,6 +5966,12 @@ export function registerIpc(
               hostLog(`host: terminal:created emit failed terminal=${info.id}: ${String(err)}`)
             }
             return true
+          },
+          // Slice 2 replaces this with ChatSessionManager.adopt. Until then a chat note this build finds
+          // is one it cannot read, and reattach kills the orphan rather than leaving it ownerless.
+          chat: () => {
+            hostLog('host: a chat session note was found, but this build does not adopt chat sessions yet')
+            return false
           }
         },
         log: (m) => hostLog(`host: ${m}`)
@@ -5965,6 +6004,7 @@ export function registerIpc(
       // Idempotent: `use` is one assignment of the same object, and it only changes which factory the
       // *next* spawn reaches, never a handle already handed out (see ptyRouter's own tests).
       core.ptyRouter.use(factory)
+      core.procRouter.use(procFactory.factory)
       // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this
       // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
       // that chain has already given up before a peer ever said hello — a handshake that outlasts its
@@ -6093,8 +6133,8 @@ export function registerIpc(
   // It never rejects: `listPtys` resolves null on a failed send and on its own timeout, and nothing
   // else here can throw.
   ipcMain.handle('host.holdings', async () => {
-    const entries = await hostPtyList?.()
-    return entries ? hostHoldings(entries) : null
+    const [entries, procEntries] = await Promise.all([hostPtyList?.(), hostProcList?.()])
+    return entries ? hostHoldings(entries, procEntries ?? []) : null
   })
   // The Info tab's *Restart now*: retire the Host this app is connected to and start one from this
   // app's build, whatever the old one holds — the renderer has already told the person what ends

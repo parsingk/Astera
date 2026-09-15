@@ -286,7 +286,7 @@ export const ko = {
   //
   // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
   // still want real translations.
-  'settings.info.hostHolding': '세션 {sessions}개, 터미널 {terminals}개, 실행 {runs}개 유지 중',
+  'settings.info.hostHolding': '세션 {sessions}개, 대화 {chats}개, 터미널 {terminals}개, 실행 {runs}개 유지 중',
   // The Host outlived an update and still runs the previous version. Replaced on its own the first
   // moment it holds nothing; the button is for not waiting (host-replacement design §6).
   'settings.info.hostOutdated': 'Host {host} · 앱 {app} · 아무것도 유지하지 않게 되면 새 버전으로 바뀝니다',
@@ -294,7 +294,7 @@ export const ko = {
   'settings.info.hostRestarting': '재시작 중…',
   'settings.info.hostRestartConfirmTitle': 'Host 재시작',
   'settings.info.hostRestartConfirmBody':
-    'Host 를 지금 종료하고 새 버전으로 다시 시작합니다. 유지 중인 세션 {sessions}개, 터미널 {terminals}개, 실행 {runs}개가 함께 종료됩니다. 계속할까요?',
+    'Host 를 지금 종료하고 새 버전으로 다시 시작합니다. 유지 중인 세션 {sessions}개, 대화 {chats}개, 터미널 {terminals}개, 실행 {runs}개가 함께 종료됩니다. 계속할까요?',
   'settings.info.hostRestartConfirmBodyNone': 'Host 를 지금 종료하고 새 버전으로 다시 시작합니다. 유지 중인 것은 없습니다. 계속할까요?',
   'settings.info.hostNotConnected': '연결 안 됨',
   'settings.info.hostNotConnectedWhy': '연결 안 됨 · {detail}',

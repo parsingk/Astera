@@ -453,7 +453,7 @@ export default function App(): React.JSX.Element {
   const restartHost = async (): Promise<void> => {
     const h = hostHolding
     const body = h
-      ? t('settings.info.hostRestartConfirmBody', { sessions: h.sessions, terminals: h.terminals, runs: h.runs })
+      ? t('settings.info.hostRestartConfirmBody', { sessions: h.sessions, chats: h.chats, terminals: h.terminals, runs: h.runs })
       : t('settings.info.hostRestartConfirmBodyNone')
     const ok = await confirmModal({
       title: t('settings.info.hostRestartConfirmTitle'),
@@ -4327,6 +4327,7 @@ export default function App(): React.JSX.Element {
                             (hostHolding
                               ? ` · ${t('settings.info.hostHolding', {
                                   sessions: hostHolding.sessions,
+                                  chats: hostHolding.chats,
                                   terminals: hostHolding.terminals,
                                   runs: hostHolding.runs
                                 })}`

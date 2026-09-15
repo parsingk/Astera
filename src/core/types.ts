@@ -737,6 +737,8 @@ export interface HostHoldings {
   sessions: number
   terminals: number
   runs: number
+  /** chat sessions' line processes */
+  chats: number
 }
 
 /** The contract the renderer sees as window.api. The IPC adapter implements it. */
