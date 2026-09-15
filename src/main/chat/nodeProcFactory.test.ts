@@ -20,13 +20,17 @@ describe('nodeProcFactory', () => {
     const lines: string[] = []
     let exit: number | null = null
     const p = nodeProcFactory(process.execPath, ['-e', ECHO], { cwd: process.cwd(), env: process.env })
-    p.onLine((l) => lines.push(l))
     p.onExit((e) => { exit = e.exitCode })
-    p.write('{"id":1}')
-    await until(() => (lines.includes('echo:{"id":1}') ? true : undefined))
-    expect(p.outlivesApp).toBeUndefined() // the router stamps it; the factory does not
-    p.kill()
-    await until(() => (exit === null ? undefined : exit))
+    try {
+      p.onLine((l) => lines.push(l))
+      p.write('{"id":1}')
+      await until(() => (lines.includes('echo:{"id":1}') ? true : undefined))
+      expect(p.outlivesApp).toBeUndefined() // the router stamps it; the factory does not
+      p.kill()
+      await until(() => (exit === null ? undefined : exit))
+    } finally {
+      p.kill() // no-op once already exited; kills the child on any earlier failure or timeout
+    }
   })
   it('a missing binary ends with code 1', async () => {
     let exit: number | null = null
