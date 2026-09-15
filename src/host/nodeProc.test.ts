@@ -43,4 +43,19 @@ describe('nodeProcSpawn', () => {
     expect(code).toBe(1)
     expect(logs.some((l) => /could not start|ENOENT/.test(l))).toBe(true)
   })
+
+  it('a write after the child has already exited is dropped, never thrown', async () => {
+    const logs: string[] = []
+    const spawn = nodeProcSpawn({ log: (m) => logs.push(m), platform: process.platform })
+    let exit: number | null = null
+    const p = spawn(process.execPath, ['-e', 'process.exit(0)'], { cwd: process.cwd(), env: process.env })
+    p.onExit((e) => { exit = e.exitCode })
+    await until(() => (exit === null ? undefined : exit))
+    expect(() => {
+      p.write('late\n')
+      p.write('late\n')
+      p.kill()
+    }).not.toThrow()
+    await new Promise((r) => setTimeout(r, 50))
+  })
 })
