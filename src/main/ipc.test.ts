@@ -363,11 +363,11 @@ describe('liveWorkersFor — the three answers the Host can give about its sessi
   })
 
   it('an answer is the set of sessions it named', () => {
-    expect(liveWorkersFor({ adopted: 1, refused: 0, sessions: ['sess_a'] })).toEqual(new Set(['sess_a']))
+    expect(liveWorkersFor({ adopted: 1, refused: 0, sessions: ['sess_a'], chats: [] })).toEqual(new Set(['sess_a']))
   })
 
   it('an answer naming nothing is an empty set, not unknown — the Host really had nothing', () => {
-    expect(liveWorkersFor({ adopted: 0, refused: 2, sessions: [] })).toEqual(new Set())
+    expect(liveWorkersFor({ adopted: 0, refused: 2, sessions: [], chats: [] })).toEqual(new Set())
   })
 })
 
@@ -506,7 +506,7 @@ describe('hostHoldings — what the Info tab says the Host is holding', () => {
     alive: true,
     ...over
   })
-  const note = (kind: 'session' | 'run' | 'terminal', id: string): PtyEntry['meta'] => ({
+  const note = (kind: 'session' | 'run' | 'terminal' | 'chat', id: string): PtyEntry['meta'] => ({
     kind,
     id,
     restore: {}
@@ -520,7 +520,7 @@ describe('hostHoldings — what the Info tab says the Host is holding', () => {
         entry({ id: 'c', meta: note('session', 's2') }),
         entry({ id: 'd', meta: note('run', 'r1') })
       ])
-    ).toEqual({ sessions: 2, terminals: 1, runs: 1 })
+    ).toEqual({ sessions: 2, terminals: 1, runs: 1, chats: 0 })
   })
 
   // An exited pty is history the Host keeps for its replay buffer. Nothing about it survives closing
@@ -528,7 +528,7 @@ describe('hostHoldings — what the Info tab says the Host is holding', () => {
   it('does not count a pty that has already exited', () => {
     expect(
       hostHoldings([entry({ meta: note('session', 's1'), alive: false })])
-    ).toEqual({ sessions: 0, terminals: 0, runs: 0 })
+    ).toEqual({ sessions: 0, terminals: 0, runs: 0, chats: 0 })
   })
 
   // A run the Host owns survives the quit exactly as a session does — RunManager.stopAppOwned skips
@@ -538,20 +538,31 @@ describe('hostHoldings — what the Info tab says the Host is holding', () => {
     expect(hostHoldings([entry({ meta: note('run', 'r1') })])).toEqual({
       sessions: 0,
       terminals: 0,
-      runs: 1
+      runs: 1,
+      chats: 0
     })
   })
 
   // An entry with no note at all is one the sweep kills rather than adopts, so reporting it as held
   // would name as protected something the app is about to end.
   it('does not count a pty with no note', () => {
-    expect(hostHoldings([entry({ meta: null })])).toEqual({ sessions: 0, terminals: 0, runs: 0 })
+    expect(hostHoldings([entry({ meta: null })])).toEqual({ sessions: 0, terminals: 0, runs: 0, chats: 0 })
   })
 
   // Zero is a real answer here, and it is the one a Host that has just started gives. It is only ever
   // reached by an entry list the Host actually sent — the row says nothing at all until then.
   it('answers zeros for a Host holding nothing', () => {
-    expect(hostHoldings([])).toEqual({ sessions: 0, terminals: 0, runs: 0 })
+    expect(hostHoldings([])).toEqual({ sessions: 0, terminals: 0, runs: 0, chats: 0 })
+  })
+
+  // Chats are line processes, listed separately from ptys — the second argument, not the first.
+  it('counts a live chat process from the proc list', () => {
+    expect(hostHoldings([], [entry({ meta: note('chat', 'c1') })])).toEqual({
+      sessions: 0,
+      terminals: 0,
+      runs: 0,
+      chats: 1
+    })
   })
 })
 
@@ -625,7 +636,7 @@ describe('conversationAttentionOf — the pane\'s one-shot read on mount', () =>
 })
 
 describe('hostReplaceDue - when an outdated Host is replaced', () => {
-  const empty = { sessions: 0, terminals: 0, runs: 0 }
+  const empty = { sessions: 0, terminals: 0, runs: 0, chats: 0 }
   const base = { outdated: true, holdings: empty, inFlight: false, quitting: false }
 
   it('is due only when every gate is open: outdated, holding nothing, nothing in flight, not quitting', () => {
@@ -637,9 +648,10 @@ describe('hostReplaceDue - when an outdated Host is replaced', () => {
   })
 
   it('waits while the Host holds anything at all, of any kind', () => {
-    expect(hostReplaceDue({ ...base, holdings: { sessions: 1, terminals: 0, runs: 0 } })).toBe(false)
-    expect(hostReplaceDue({ ...base, holdings: { sessions: 0, terminals: 1, runs: 0 } })).toBe(false)
-    expect(hostReplaceDue({ ...base, holdings: { sessions: 0, terminals: 0, runs: 1 } })).toBe(false)
+    expect(hostReplaceDue({ ...base, holdings: { sessions: 1, terminals: 0, runs: 0, chats: 0 } })).toBe(false)
+    expect(hostReplaceDue({ ...base, holdings: { sessions: 0, terminals: 1, runs: 0, chats: 0 } })).toBe(false)
+    expect(hostReplaceDue({ ...base, holdings: { sessions: 0, terminals: 0, runs: 1, chats: 0 } })).toBe(false)
+    expect(hostReplaceDue({ ...base, holdings: { sessions: 0, terminals: 0, runs: 0, chats: 1 } })).toBe(false)
   })
 
   it('does not read an unanswered list as an empty one', () => {

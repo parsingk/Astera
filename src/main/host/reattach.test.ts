@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import { reattachSessions } from './reattach'
 import type { PtyEntry } from '../../core/host/protocol'
 import type { PtyLike } from '../../core/sessions/pty'
+import type { ProcLike } from '../../core/sessions/proc'
 
 const pty = (): PtyLike => ({ pid: 1, onData: () => {}, onExit: () => {}, write: () => {}, resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {} })
+const proc = (): ProcLike => ({ pid: 1, onLine: () => {}, onExit: () => {}, write: () => {}, kill: () => {} })
 
 const entry = (over: Partial<PtyEntry> = {}): PtyEntry => ({
   id: 'p1',
@@ -13,22 +15,38 @@ const entry = (over: Partial<PtyEntry> = {}): PtyEntry => ({
   ...over
 })
 
+const procEntry = (over: Partial<PtyEntry> = {}): PtyEntry => ({
+  id: 'p1',
+  pid: 10,
+  meta: { kind: 'chat', id: 'chat_1', restore: { accountId: 'a1' } },
+  alive: true,
+  ...over
+})
+
 const deps = (over: Partial<Parameters<typeof reattachSessions>[0]> = {}) => {
   const adopted: Array<[string, Record<string, unknown>]> = []
   const attached: string[] = []
   const killed: string[] = []
   const logs: string[] = []
+  const attachedProcs: string[] = []
+  const killedProcs: string[] = []
+  const adoptedChats: Array<Record<string, unknown>> = []
   return {
-    adopted, attached, killed, logs,
+    adopted, attached, killed, logs, attachedProcs, killedProcs, adoptedChats,
     d: {
       list: async () => [entry()],
       attach: (a: { id: string; pid: number }) => { attached.push(a.id); return pty() },
       sendAttach: (id: string) => { attached.push(`sent:${id}`) },
       kill: (id: string) => killed.push(id),
+      listProcs: async () => [] as PtyEntry[],
+      attachProc: (a: { id: string; pid: number }) => { attachedProcs.push(a.id); return proc() },
+      sendAttachProc: (id: string) => { attachedProcs.push(`sent:${id}`) },
+      killProc: (id: string) => killedProcs.push(id),
       adopters: {
         session: (a: { restore: Record<string, unknown> }) => { adopted.push(['session', a.restore]); return true },
         run: (a: { restore: Record<string, unknown> }) => { adopted.push(['run', a.restore]); return true },
-        terminal: (a: { restore: Record<string, unknown> }) => { adopted.push(['terminal', a.restore]); return true }
+        terminal: (a: { restore: Record<string, unknown> }) => { adopted.push(['terminal', a.restore]); return true },
+        chat: (a: { restore: Record<string, unknown> }) => { adoptedChats.push(a.restore); return true }
       },
       heldLive: () => false,
       log: (m: string) => logs.push(m),
@@ -43,7 +61,8 @@ describe('reattachSessions', () => {
     expect(await reattachSessions(h.d as never)).toEqual({
       adopted: 1,
       refused: 0,
-      sessions: []
+      sessions: [],
+      chats: []
     })
     expect(h.adopted).toEqual([['terminal', { projectPath: 'D:/p' }]])
     expect(h.attached).toEqual(['p1', 'sent:p1'])
@@ -67,7 +86,7 @@ describe('reattachSessions', () => {
 
   it('leaves a pty that has already exited alone', async () => {
     const h = deps({ list: async () => [entry({ alive: false })] })
-    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 0, sessions: [] })
+    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 0, sessions: [], chats: [] })
     expect(h.adopted).toEqual([])
     expect(h.killed).toEqual([])
   })
@@ -82,14 +101,14 @@ describe('reattachSessions', () => {
         terminal: () => false
       }
     })
-    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 1, sessions: [] })
+    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 1, sessions: [], chats: [] })
     expect(h.killed).toEqual(['p1'])
     expect(h.logs.some((l) => l.includes('p1'))).toBe(true)
   })
 
   it('kills a pty with no note at all', async () => {
     const h = deps({ list: async () => [entry({ meta: null })] })
-    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 1, sessions: [] })
+    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 1, sessions: [], chats: [] })
     expect(h.killed).toEqual(['p1'])
   })
 
@@ -120,7 +139,7 @@ describe('reattachSessions', () => {
       }
     })
     const res = await reattachSessions(h.d as never)
-    expect(res).toEqual({ adopted: 2, refused: 1, sessions: [] })
+    expect(res).toEqual({ adopted: 2, refused: 1, sessions: [], chats: [] })
     expect(h.killed).toEqual(['bad'])
   })
 
@@ -130,7 +149,7 @@ describe('reattachSessions', () => {
     const h = deps({
       list: async () => [entry({ meta: { kind: 'bogus' as never, id: 'x', restore: {} } })]
     })
-    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 1, sessions: [] })
+    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 1, sessions: [], chats: [] })
     expect(h.killed).toEqual(['p1'])
   })
 
@@ -155,7 +174,7 @@ describe('reattachSessions', () => {
       list: async () => [entry({ id: 'p2', meta: { kind: 'terminal', id: 'trm_new', restore: { projectPath: 'D:/p' } } })],
       heldLive: (a: { kind: string; id: string }) => a.id === 'trm_new'
     })
-    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 0, sessions: [] })
+    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 0, sessions: [], chats: [] })
     expect(h.adopted).toEqual([])
     expect(h.killed).toEqual([])
     expect(h.attached).toEqual([]) // no second handle was even built
@@ -168,6 +187,43 @@ describe('reattachSessions', () => {
       list: async () => [entry({ id: 'p3', meta: { kind: 'session', id: 'sess_mine', restore: { accountId: 'a', cwd: 'D:/p', title: 't' } } })],
       heldLive: () => true
     })
-    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 0, sessions: ['sess_mine'] })
+    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 0, sessions: ['sess_mine'], chats: [] })
+  })
+})
+
+describe('reattachSessions — line processes', () => {
+  it('adopts a chat note through the chat adopter, then asks for its replay, and lists it', async () => {
+    const h = deps({ list: async () => [], listProcs: async () => [procEntry()] })
+    const res = await reattachSessions(h.d as never)
+    expect(h.adoptedChats).toEqual([{ accountId: 'a1' }])
+    expect(h.attachedProcs).toEqual(['p1', 'sent:p1'])
+    expect(res).toEqual({ adopted: 1, refused: 0, sessions: [], chats: ['chat_1'] })
+  })
+  it('kills a process with no note, or with a note that is not a chat, and counts the refusal', async () => {
+    const h = deps({ list: async () => [], listProcs: async () => [procEntry({ meta: null }), procEntry({ id: 'p2', meta: { kind: 'session', id: 's', restore: {} } })] })
+    const res = await reattachSessions(h.d as never)
+    expect(h.killedProcs).toEqual(['p1', 'p2'])
+    expect(res.refused).toBe(2)
+  })
+  it('a chat the app already holds live is left alone and still listed', async () => {
+    const h = deps({ list: async () => [], listProcs: async () => [procEntry()], heldLive: (a: { kind: string; id: string }) => a.kind === 'chat' })
+    const res = await reattachSessions(h.d as never)
+    expect(h.attachedProcs).toEqual([])
+    expect(res.chats).toEqual(['chat_1'])
+  })
+  it('an adopter that refuses, or throws, kills the process', async () => {
+    const h = deps({ list: async () => [], listProcs: async () => [procEntry()] })
+    h.d.adopters.chat = () => false
+    expect((await reattachSessions(h.d as never)).refused).toBe(1)
+    expect(h.killedProcs).toEqual(['p1'])
+  })
+  it('an exited process is neither adopted nor refused', async () => {
+    const h = deps({ list: async () => [], listProcs: async () => [procEntry({ alive: false })] })
+    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 0, sessions: [], chats: [] })
+  })
+  it('without listProcs there is no proc sweep', async () => {
+    const h = deps({ list: async () => [] })
+    delete (h.d as { listProcs?: unknown }).listProcs
+    expect((await reattachSessions(h.d as never)).chats).toEqual([])
   })
 })

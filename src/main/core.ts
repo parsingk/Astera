@@ -9,6 +9,8 @@ import { makeDescriptors, descriptorOf, isAmbientDir, type ProviderDescriptor } 
 import { SessionManager } from '../core/sessions/manager'
 import { nodePtyFactory } from '../core/sessions/nodePtyFactory'
 import { createPtyRouter } from './host/ptyRouter'
+import { createProcRouter } from './host/procRouter'
+import { nodeProcFactory } from './chat/nodeProcFactory'
 import { HistoryIndex } from '../core/history/index'
 import { SessionCwdCache } from '../core/history/sessionCwdCache'
 import { ProjectSettings } from '../core/projects/settings'
@@ -35,6 +37,7 @@ import { setPseudoLocalization } from '../core/i18n/pseudo'
 import type { Lang, Message } from '../core/i18n'
 import type { Account, DetectCandidate, Provider, SessionUsage } from '../core/types'
 import type { PtyFactory } from '../core/sessions/pty'
+import type { ProcFactory } from '../core/sessions/proc'
 
 export interface Core {
   accounts: AccountRegistry
@@ -103,6 +106,10 @@ export interface Core {
   // onto each handle instead (`PtyLike.outlivesApp`), because with a Host starting up both kinds are
   // live at once and the quit path has to end one and leave the other.
   ptyRouter: { use(f: PtyFactory | null): void }
+  /** One ProcFactory for the app's life, for chat sessions' line processes; the Host-backed one is
+   *  attached by registerIpc once the Host answers, the fallback is child_process (chat-sessions
+   *  design §6.5). `factory` is exposed because the chat manager (slice 2) is built later than createCore. */
+  procRouter: { factory: ProcFactory; use(f: ProcFactory | null): void }
 }
 
 // An alias narrowed to just the shape accountLogout actually uses — node:child_process's execFile has so many
@@ -180,6 +187,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once
   // the Host answers; until then, and whenever there is no Host, this is node-pty exactly as before.
   const ptyRouter = createPtyRouter(nodePtyFactory)
+  const procRouter = createProcRouter(nodeProcFactory)
   // descriptors is injected explicitly — left unspecified, each of them calls makeDescriptors(process.platform)
   // again, so every instance gets its own table (plus two command builders SessionManager never uses).
   const sessions = new SessionManager(
@@ -361,6 +369,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     accountUsage,
     keybindings,
     lang: appSettings.getLang() ?? pickInitialLang(osLocale),
-    ptyRouter
+    ptyRouter,
+    procRouter
   }
 }
