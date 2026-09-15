@@ -5,7 +5,7 @@
 // idle — so this module can be started for real inside a test at an address of that test's own.
 import net from 'node:net'
 import { promises as fs } from 'node:fs'
-import { HOST_PROTOCOL, type ClientMessage, type HostMessage } from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_FEATURE_PROC, type ClientMessage, type HostMessage } from '../core/host/protocol'
 import { encodeLine, createLineReader } from './framing'
 import type { HostLog } from './log'
 
@@ -144,7 +144,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
             return
           }
           deps.log.write(`client ${String(m.app)} connected`)
-          send({ t: 'hello', protocol: HOST_PROTOCOL, host: deps.version, pid: process.pid, startedAt })
+          send({ t: 'hello', protocol: HOST_PROTOCOL, host: deps.version, pid: process.pid, startedAt, features: [HOST_FEATURE_PROC] })
           return
         }
         if (m?.t === 'retire') {

@@ -35,6 +35,7 @@ import {
 import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
+import { hostSpeaksProcs } from './host/outdated'
 import { reattachSessions, type ReattachResult } from './host/reattach'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
@@ -409,9 +410,9 @@ export function hostHandshakeMeans(held: string | null, answered: string): 'firs
   return held === answered ? 'same-host' : 'other-host'
 }
 
-/** What the Info tab's Host row reports the Host is holding, read off a `pty-listed` reply. Hoisted
- *  out of the ipc handler for the usual reason in this file: the handler is an electron-only closure
- *  no test can reach.
+/** What the Info tab's Host row reports the Host is holding, read off a `pty-listed` and a
+ *  `proc-listed` reply. Hoisted out of the ipc handler for the usual reason in this file: the handler
+ *  is an electron-only closure no test can reach.
  *
  *  **Runs are counted, on the same footing as the other two.** What decides it is not what a run is
  *  but what happens to one when the app quits, and `RunManager.stopAppOwned` skips every pty that
@@ -428,8 +429,13 @@ export function hostHandshakeMeans(held: string | null, answered: string): 'firs
  *
  *  Zero is a real answer, and the one a Host that has just started gives. It is only ever reached
  *  from entries the Host actually sent: a Host that has not answered is reported as nothing at all
- *  by the caller, never as this. */
-export function hostHoldings(entries: PtyEntry[], procEntries: PtyEntry[] = []): HostHoldings {
+ *  by the caller, never as this.
+ *
+ *  `procEntries` has no default: both callers (`maybeReplace`, and the `host.holdings` handler) must
+ *  say explicitly what they are passing — `[]` for a Host that does not speak procs or did not
+ *  answer, the real list otherwise — rather than one of them silently falling back to a default that
+ *  reads as "no line processes" when it may only mean "not asked". */
+export function hostHoldings(entries: PtyEntry[], procEntries: PtyEntry[]): HostHoldings {
   let sessions = 0
   let terminals = 0
   let runs = 0
@@ -911,6 +917,13 @@ export function registerIpc(
    *  automatic replacement in `startHostClient` both go through it, so there is one place that knows
    *  the order (docs/superpowers/specs/2026-09-14-host-replacement-design.md §5). */
   let hostReplace: (() => Promise<HostStatus>) | null = null
+  /** Whether the connected Host announced the proc-* family in its hello — asked of a Host that
+   *  cannot answer proc-list only runs the proc-list timer out, and an outdated Host is exactly the
+   *  one the automatic replacement must still be able to reach (outdated.ts's own doc on
+   *  `hostSpeaksProcs`). Defined once, here, because `sweep`/`maybeReplace` (inside
+   *  `startHostClient`) and the `host.holdings` handler (outside it) all ask the same question — the
+   *  same reason `hostPtyList` above is a local rather than a closure-only const. */
+  const speaksProcs = (): boolean => hostSpeaksProcs(hostClient?.status() ?? { connected: false, features: [] })
   /** Set from `before-quit`. The replacement rule stands aside once this is true: the app is on its
    *  way out and `will-quit` decides what happens to the Host's ptys then. */
   let quittingForHost = false
@@ -5745,18 +5758,17 @@ export function registerIpc(
 
     /** The automatic rule: an outdated Host is replaced the first moment it holds nothing (design
      *  §4). Asked after every `pty-exit` the Host reports and once after the startup sweep; each ask
-     *  is one `pty-list` round trip, and they do not overlap. */
+     *  is one `pty-list` round trip, plus one `proc-list` when the Host speaks procs, and they do not
+     *  overlap. */
     let checking = false
     const maybeReplace = async (why: string): Promise<void> => {
       if (checking || replacing || quittingForHost || !client.status().outdated) return
       checking = true
       try {
-        const entries = await listPtys(transport)
-        const procEntries = await listProcs(transport)
-        // A null proc list is not zero chats: it is the Host not answering, exactly as a null pty
-        // list is not an empty one (listPtys's doc above) — either unknown collapses the holdings to
-        // null, and hostReplaceDue declines rather than replacing a Host that may still hold chats.
-        const holdings = entries && procEntries ? hostHoldings(entries, procEntries) : null
+        const [entries, procEntries] = await Promise.all([listPtys(transport), speaksProcs() ? listProcs(transport) : Promise.resolve<PtyEntry[]>([])])
+        // Unknown is not zero, for either list: a Host that should have answered and did not is not
+        // replaced on a guess (hostReplaceDue's own rule).
+        const holdings = entries !== null && procEntries !== null ? hostHoldings(entries, procEntries) : null
         if (!hostReplaceDue({ outdated: client.status().outdated, holdings, inFlight: replacing, quitting: quittingForHost })) return
         await replaceHost(`${why}, and it holds nothing`)
       } catch (e) {
@@ -5791,22 +5803,29 @@ export function registerIpc(
       // it adopt nothing and report nothing adopted, which reads identically to a Host that really
       // is holding nothing.
       const entries = await listPtys(transport)
-      const procEntries = await listProcs(transport)
       if (entries === null) {
         hostLog(
           'host: the Host did not answer the pty list — nothing was taken back, and what it is still running is unknown, so no worker is written off'
         )
         return 'unknown'
       }
+      // Only a Host that announced the proc-* family is asked (protocol.ts's contract). A null answer
+      // from one that did is "did not answer" — nothing is adopted, and the log says so.
+      const procEntries = speaksProcs() ? await listProcs(transport) : []
+      if (procEntries === null) hostLog('host: the Host did not answer the proc list — no line process was taken back')
       const res = await reattachSessions({
         list: async () => entries,
         attach,
         sendAttach: (id) => transport.send({ t: 'pty-attach', id }),
         kill: (id) => transport.send({ t: 'pty-kill', id }),
-        listProcs: async () => procEntries ?? [],
-        attachProc: procFactory.attach,
-        sendAttachProc: (id) => transport.send({ t: 'proc-attach', id }),
-        killProc: (id) => transport.send({ t: 'proc-kill', id }),
+        ...(speaksProcs()
+          ? {
+              listProcs: async () => procEntries ?? [],
+              attachProc: procFactory.attach,
+              sendAttachProc: (id) => transport.send({ t: 'proc-attach', id }),
+              killProc: (id) => transport.send({ t: 'proc-kill', id })
+            }
+          : {}),
         // Asked per kind, because the id in the note is the manager's own, not the pty's. Exited does
         // not count as held: a reconnect's whole job is adopting the records the fabricated exit marked
         // exited. A terminal has no exited state to ask about — its exit deletes the entry.
@@ -5976,7 +5995,7 @@ export function registerIpc(
         },
         log: (m) => hostLog(`host: ${m}`)
       })
-      hostLog(`host: took back ${res.adopted} session(s), refused ${res.refused} (${why})`)
+      hostLog(`host: took back ${res.adopted} (session(s) ${res.sessions.length}, chat(s) ${res.chats.length}), refused ${res.refused} (${why})`)
       // An outdated Host that came back holding nothing is replaced now rather than at the next
       // pty-exit, which for an empty Host would never come.
       void maybeReplace(`${why}, sweep done`)
@@ -6103,7 +6122,8 @@ export function registerIpc(
         startedAt: null,
         pid: null,
         problem: 'out/main/host.js was not found',
-        outdated: false
+        outdated: false,
+        features: []
       }
   )
   // How many of the running sessions would still be running after this app quits — the window-close
@@ -6133,7 +6153,7 @@ export function registerIpc(
   // It never rejects: `listPtys` resolves null on a failed send and on its own timeout, and nothing
   // else here can throw.
   ipcMain.handle('host.holdings', async () => {
-    const [entries, procEntries] = await Promise.all([hostPtyList?.(), hostProcList?.()])
+    const [entries, procEntries] = await Promise.all([hostPtyList?.(), speaksProcs() ? hostProcList?.() : Promise.resolve<PtyEntry[]>([])])
     return entries ? hostHoldings(entries, procEntries ?? []) : null
   })
   // The Info tab's *Restart now*: retire the Host this app is connected to and start one from this
@@ -6150,7 +6170,8 @@ export function registerIpc(
         startedAt: null,
         pid: null,
         problem: 'out/main/host.js was not found',
-        outdated: false
+        outdated: false,
+        features: []
       }
     )
   })

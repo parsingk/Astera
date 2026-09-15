@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { hostAddress } from '../../host/address'
 import { startHostServer, type HostServer } from '../../host/server'
+import { encodeLine, createLineReader } from '../../host/framing'
 import { HOST_PROTOCOL, type HostMessage } from '../../core/host/protocol'
 import { HostClient } from './client'
 
@@ -66,6 +67,39 @@ describe('HostClient', () => {
     expect(c.status()).toMatchObject({ connected: true, protocol: HOST_PROTOCOL, hostVersion: '1.2.3', problem: null })
     expect(c.status().pid).toBe(process.pid)
     await c.stop()
+  })
+
+  it('reports the features a hello names', async () => {
+    const addr = addressFor('features')
+    await serveAt(addr)
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    c.start()
+    await settled(c, (s) => s.connected)
+    expect(c.status().features).toEqual(['proc'])
+    await c.stop()
+  })
+
+  // An older Host's hello carries no `features` at all — absent means none, not a parse failure.
+  it('defaults to no features for a hello that does not name any', async () => {
+    const addr = addressFor('no-features')
+    const raw = net.createServer((sock) => {
+      sock.setEncoding('utf8')
+      const read = createLineReader({
+        onMessage: () => {
+          sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, host: '1.0.0', pid: process.pid, startedAt: new Date().toISOString() }))
+        },
+        onBadLine: () => {},
+        onHandlerError: () => {}
+      })
+      sock.on('data', read)
+    })
+    await new Promise<void>((resolve) => raw.listen(addr.address, resolve))
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    c.start()
+    await settled(c, (s) => s.connected)
+    expect(c.status().features).toEqual([])
+    await c.stop()
+    await new Promise<void>((resolve) => raw.close(() => resolve()))
   })
 
   it('asks for a Host when none answers, and connects once it appears', async () => {

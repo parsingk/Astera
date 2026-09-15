@@ -719,12 +719,16 @@ export interface HostStatus {
    *  tab offers to do it now (docs/superpowers/specs/2026-09-14-host-replacement-design.md). False
    *  whenever the version cannot be compared, and false for a Host *newer* than the app. */
   outdated: boolean
+  /** What the Host announced it can do (protocol.ts HOST_FEATURE_*); empty until a hello, and for a
+   *  Host that predates the field. */
+  features: string[]
 }
 
 /** How much of this app's work the Host is holding right now — the fact that makes the Info tab's
  *  Host row mean something, because it answers "will my work survive if I close this?".
  *
- *  **All three kinds of pty, and runs are not the afterthought they look like.** `RunManager`'s quit
+ *  **The three kinds of pty and the chat sessions' line processes, and runs are not the afterthought
+ *  they look like.** `RunManager`'s quit
  *  teardown (`stopAppOwned`) skips every pty that outlives the app, exactly as the session and
  *  terminal managers do, so a Host-held run survives the quit too. Leaving it out would tell someone
  *  whose held work is a long build or a dev server that nothing of theirs is protected. See

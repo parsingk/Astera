@@ -18,6 +18,10 @@
  *  it, which is the one thing the guard must never cause (chat-sessions design §6.5). */
 export const HOST_PROTOCOL = 3
 
+/** The proc-* family (line processes). Announced in `hello.features` by a Host that has it; a Host
+ *  from before it sends no `features` at all. */
+export const HOST_FEATURE_PROC = 'proc'
+
 /** What the app needs to rebuild its own record for a session after a restart. The Host stores it
  *  and hands it back untouched — only the manager that wrote it knows how to read it (slice 2
  *  design §4).
@@ -92,7 +96,17 @@ export type ClientMessage =
   | { t: 'proc-attach'; id: string }
 
 export type HostMessage =
-  | { t: 'hello'; protocol: number; host: string; pid: number; startedAt: string }
+  | {
+      t: 'hello'
+      protocol: number
+      host: string
+      pid: number
+      startedAt: string
+      /** What this Host can do beyond protocol 3's original set. Optional because older Hosts do not
+       *  send it — absent means none. Additive on purpose: the protocol stays 3 (see HOST_PROTOCOL's
+       *  comment). */
+      features?: string[]
+    }
   | { t: 'protocol-mismatch'; protocol: number }
   | { t: 'pty-spawned'; id: string; pid: number }
   | { t: 'pty-failed'; id: string; error: string }
