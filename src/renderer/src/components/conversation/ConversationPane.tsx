@@ -54,6 +54,7 @@ import {
 } from "../../../../core/commands/slashCommands";
 import { fileTokenAt } from "../../../../core/files/fileMatch";
 import { draftOf, forgetDraft, keepDraft } from "./drafts";
+import { rememberAskAnswers, recallAskAnswers, forgetOtherAskAnswers } from "./askDrafts";
 import { promptLinesOf, isFolderTrustPrompt, hasInputLine } from "../../../../core/history/promptLines";
 import { cliBusyOf } from "../../../../core/history/cliBusy";
 import { queuedMessagesOf } from "../../../../core/history/queuedMessages";
@@ -77,9 +78,9 @@ import {
   type Answer,
   type AskForm
 } from "../../../../core/prompts/askUserQuestion";
-import { askStageOf, askCardStateOf } from "../../../../core/prompts/askScreen";
+import { askStageOf, askCardStateOf, type AskStage } from "../../../../core/prompts/askScreen";
 import { describeToolRequest } from "../../../../core/prompts/toolRequest";
-import { driveAsk, type AskStopReason } from "./askDriver";
+import { driveAsk, type AskStopReason, type AskOutcome } from "./askDriver";
 import { QuestionCard } from "./QuestionCard";
 import * as sessionBus from "../../lib/sessionBus";
 import { useI18n } from "../../i18n/I18nProvider";
@@ -294,6 +295,21 @@ export function shouldReadPromptScreen(_attention: Attention, _turnCount: number
  */
 export function shouldShowPrompt(attention: Attention, choiceCount: number, trust = false): boolean {
   return attention === 'waiting' || choiceCount > 0 || trust
+}
+
+/**
+ * Whether the question card, rather than the screen-quoting banner, takes the slot.
+ *
+ * The card is drawn from the hook's capture, which outlives the dialog when the question is declined
+ * on the terminal: Esc runs no tool, so no PostToolUse clears it, and Stop is a turn away. If the model
+ * then asks for an approval, the screen shows that prompt's rows while the capture still says
+ * "question". The card yields in exactly that case — the dialog is not on screen *and* the screen is
+ * offering choices of its own. With no choices on screen the card stays: that is the moment between
+ * the hook firing and the CLI drawing the dialog, when the card is right to say it is waiting.
+ */
+export function askCardShown(stage: AskStage | null, choiceCount: number): boolean {
+  if (stage === null) return false;
+  return stage.kind !== "none" || choiceCount === 0;
 }
 
 /**
@@ -542,8 +558,8 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   /** The tool call the CLI is waiting on, from the PreToolUse hook (main/pendingPrompt.ts). What the
    *  question card is drawn from — never the screen (core/prompts/askUserQuestion.ts). */
   const [pendingPrompt, setPendingPrompt] = useState<PendingToolPrompt | null>(null);
-  /** The answers being composed on the card, keyed by the call, so a card that re-renders for the same
-   *  question keeps them and a new question starts blank. */
+  /** The answers being composed on the card, keyed by the call, so a card that re-renders *and
+   *  re-mounts* for the same question keeps them (askDrafts.ts) and a new question starts blank. */
   const [askAnswers, setAskAnswers] = useState<{ toolUseId: string; answers: Answer[] } | null>(null);
   /** The driver is sending keys. Stays true after a successful submit until PostToolUse clears the
    *  capture — the card goes quiet rather than flickering into the "started on the terminal" state
@@ -1131,10 +1147,20 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       return;
     }
     const toolUseId = pendingPrompt.toolUseId;
-    setAskAnswers((prev) => (prev !== null && prev.toolUseId === toolUseId ? prev : { toolUseId, answers: emptyAnswers(askForm) }));
+    forgetOtherAskAnswers(toolUseId);
+    setAskAnswers((prev) =>
+      prev !== null && prev.toolUseId === toolUseId
+        ? prev
+        : { toolUseId, answers: recallAskAnswers(toolUseId) ?? emptyAnswers(askForm) }
+    );
     setAskAnswering(false);
     setAskNotice(null);
   }, [askForm, pendingPrompt]);
+
+  // Kept outside the component as well, so a toggle to the terminal and back finds them (askDrafts.ts).
+  useEffect(() => {
+    if (askAnswers !== null) rememberAskAnswers(askAnswers.toolUseId, askAnswers.answers);
+  }, [askAnswers]);
 
   /**
    * Sends the card's answers to the dialog. The driver reads the screen before every key and confirms
@@ -1146,17 +1172,29 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     if (!allAnswered(askForm, askAnswers.answers)) return;
     setAskAnswering(true);
     setAskNotice(null);
-    const result = await driveAsk({
-      form: askForm,
-      answers: askAnswers.answers,
-      readScreen: () => sessionBus.screenOf(sessionId),
-      write: (keys) => window.api.sessions.write(sessionId, keys),
-      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-    });
+    // Which mount this press belongs to. The pane resets everything on a sessionId change, and a
+    // result arriving after that must not write a stale notice onto the next session's card.
+    const generation = generationRef.current;
+    let result: AskOutcome;
+    try {
+      result = await driveAsk({
+        form: askForm,
+        answers: askAnswers.answers,
+        readScreen: () => sessionBus.screenOf(sessionId),
+        write: (keys) => window.api.sessions.write(sessionId, keys),
+        wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+      });
+    } catch {
+      // The driver only reads and writes through the two callbacks above; a throw here is a screen
+      // reader or a pty write failing. The dialog is untouched, so it is the same situation as `stuck`.
+      result = { outcome: "stopped", reason: "stuck", stage: { kind: "none" } };
+    }
+    if (generationRef.current !== generation) return;
     if (result.outcome === "stopped") {
       setAskNotice(result.reason);
       setAskAnswering(false);
     }
+    // 'submitted' keeps the card quiet until PostToolUse clears the capture (the effect above resets).
   }, [askForm, askAnswers, askAnswering, sessionId]);
 
   /**
@@ -1818,7 +1856,11 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   const awaitingReply = isAwaitingReply(turns, pending.length, cliBusy);
   isRunningRef.current = awaitingReply;
   const askCard: ReactNode =
-    askForm !== null && pendingPrompt !== null && askAnswers !== null && askAnswers.toolUseId === pendingPrompt.toolUseId ? (
+    askForm !== null &&
+    pendingPrompt !== null &&
+    askAnswers !== null &&
+    askAnswers.toolUseId === pendingPrompt.toolUseId &&
+    askCardShown(askStage, choices.length) ? (
       <QuestionCard
         form={askForm}
         answers={askAnswers.answers}

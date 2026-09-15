@@ -14,6 +14,7 @@ import {
   modelLineOf,
   shouldReadPromptScreen,
   shouldShowPrompt,
+  askCardShown,
   choicesToShow,
   composerLocked,
   nextPendingPromptFor
@@ -354,6 +355,25 @@ describe('shouldShowPrompt', () => {
   it('shows the trust step even when the screen gave up no rows to press', () => {
     expect(shouldShowPrompt('idle', 0, true)).toBe(true)
     expect(shouldShowPrompt('working', 0, true)).toBe(true)
+  })
+})
+
+describe('askCardShown', () => {
+  const none = { kind: 'none' } as const
+  const question = { kind: 'question', index: 0, pristine: true, textRowFocused: false, submitRowFocused: false } as const
+  it('no form: never', () => {
+    expect(askCardShown(null, 0)).toBe(false)
+  })
+  it('the dialog on screen: the card, whatever else the screen shows', () => {
+    expect(askCardShown(question, 0)).toBe(true)
+    expect(askCardShown(question, 3)).toBe(true)
+  })
+  it('no dialog yet and nothing to press: the card, waiting', () => {
+    expect(askCardShown(none, 0)).toBe(true)
+  })
+  // The regression: a declined question's capture outliving its dialog while an approval prompt is up.
+  it('no dialog but the screen offers rows of its own: the banner', () => {
+    expect(askCardShown(none, 3)).toBe(false)
   })
 })
 
