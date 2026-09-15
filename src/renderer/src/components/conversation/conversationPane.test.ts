@@ -15,7 +15,8 @@ import {
   shouldReadPromptScreen,
   shouldShowPrompt,
   choicesToShow,
-  composerLocked
+  composerLocked,
+  nextPendingPromptFor
 } from './ConversationPane'
 import type { ConvTurn } from '../../../../core/history/convTypes'
 
@@ -399,5 +400,16 @@ describe('composerLocked', () => {
   // A terminal that registers no reader at all must not cost a session its composer for good.
   it('opens once it has waited long enough, reading or no reading', () => {
     expect(composerLocked(false, false, true)).toBe(false)
+  })
+})
+
+describe('nextPendingPromptFor', () => {
+  const prompt = { toolUseId: 'call-1', tool: 'AskUserQuestion', input: { questions: [] }, at: 1 }
+  it("this pane's session: the event's prompt, null included", () => {
+    expect(nextPendingPromptFor('s1', { sessionId: 's1', prompt })).toBe(prompt)
+    expect(nextPendingPromptFor('s1', { sessionId: 's1', prompt: null })).toBeNull()
+  })
+  it('another session: undefined, the cue to leave the state alone', () => {
+    expect(nextPendingPromptFor('s1', { sessionId: 's2', prompt })).toBeUndefined()
   })
 })
