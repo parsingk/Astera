@@ -5,6 +5,7 @@ import { Loader2Icon } from "lucide-react";
 import { Button } from "../ui/button";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { PromptChoice } from "../../../../core/history/promptChoices";
+import type { ToolRequestSummary } from "../../../../core/prompts/toolRequest";
 
 export interface PendingBannerProps {
   /** Focuses the session's terminal. Still offered with the choices drawn: a prompt this cannot read
@@ -27,6 +28,9 @@ export interface PendingBannerProps {
    *  drops the hint about typing an answer, because that prompt takes no typing — only one of its
    *  rows. The composer is locked for the same reason; see `isDisabled` in ConversationPane.tsx. */
   trust?: boolean;
+  /** What the waiting call is about — the command, the file — from the PreToolUse capture
+   *  (core/prompts/toolRequest.ts). Drawn above the quoted screen; null draws nothing extra. */
+  about?: ToolRequestSummary | null;
 }
 
 /** The banner shown above the composer while the CLI is waiting on a decision it owns. */
@@ -37,6 +41,7 @@ export function PendingBanner({
   onChoose,
   answering = false,
   trust = false,
+  about = null,
 }: PendingBannerProps): ReactNode {
   const { t } = useI18n();
   const pickable = choices.length > 0 && onChoose !== undefined;
@@ -72,6 +77,17 @@ export function PendingBanner({
           )}
         </Button>
       </div>
+      {!trust && about !== null && (
+        <div
+          data-slot="conversation-pending-about"
+          className="rounded-md border border-[var(--warn-line)]/60 px-3 py-2 text-xs"
+        >
+          <p className="font-medium">
+            {t("conversation.pending.about")} · {about.tool}
+          </p>
+          <pre className="mt-1 font-mono whitespace-pre-wrap">{about.lines.join("\n")}</pre>
+        </div>
+      )}
       {!trust && lines.length > 0 && (
         <pre
           data-slot="conversation-pending-screen"
