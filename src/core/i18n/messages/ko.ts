@@ -277,11 +277,11 @@ export const ko = {
   'settings.info.hostConnected': '연결됨 · 규약 {protocol} · {uptime} 전부터',
   // Appended to hostConnected, and **only after the Host answers what it holds** — until then the
   // row is the connection facts alone. This row exists to answer "does my work survive if I close
-  // this?", so it names all three kinds the Host can be holding: a run's pty outlives the app just
+  // this?", so it names all four kinds the Host can be holding: a run's pty outlives the app just
   // as a session's and a terminal's do (`RunManager.stopAppOwned`), and a row that left runs out
   // told someone whose work is a long build that none of it was protected.
   //
-  // The three figures are separated by commas, not the ' · ' the connected row joins its own parts
+  // The four figures are separated by commas, not the ' · ' the connected row joins its own parts
   // with: nested inside that row, the same separator made one clause read as three.
   //
   // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they

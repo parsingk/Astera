@@ -5,6 +5,7 @@
 // host.js until something ends it. This is the fact that tells the app there is a newer one to run,
 // so it can replace the old Host the first moment doing so costs nothing (§4).
 import { compareVersions } from '../updatePolicy'
+import { HOST_FEATURE_PROC } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
  *  cannot be parsed is **not** outdated: replacing a Host on a guess about what it is would be worse
@@ -14,4 +15,12 @@ export function hostIsOutdated(hostVersion: string | null, appVersion: string): 
   if (hostVersion === null) return false
   const cmp = compareVersions(hostVersion, appVersion)
   return cmp !== null && cmp < 0
+}
+
+/** Whether the connected Host can be asked about line processes — it said so in its hello. A Host that
+ *  predates the feature holds none and would only run the proc-list timer out, and an outdated Host is
+ *  exactly the one the automatic replacement must still be able to replace, so this is a capability
+ *  check, not an age check (chat-sessions design §6.5). */
+export function hostSpeaksProcs(status: { connected: boolean; features: readonly string[] }): boolean {
+  return status.connected && status.features.includes(HOST_FEATURE_PROC)
 }

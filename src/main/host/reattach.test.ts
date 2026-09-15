@@ -216,6 +216,13 @@ describe('reattachSessions — line processes', () => {
     h.d.adopters.chat = () => false
     expect((await reattachSessions(h.d as never)).refused).toBe(1)
     expect(h.killedProcs).toEqual(['p1'])
+
+    const h2 = deps({ list: async () => [], listProcs: async () => [procEntry()] })
+    h2.d.adopters.chat = () => {
+      throw new Error('bad note')
+    }
+    expect((await reattachSessions(h2.d as never)).refused).toBe(1)
+    expect(h2.killedProcs).toEqual(['p1'])
   })
   it('an exited process is neither adopted nor refused', async () => {
     const h = deps({ list: async () => [], listProcs: async () => [procEntry({ alive: false })] })
