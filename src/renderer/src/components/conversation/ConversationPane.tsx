@@ -68,10 +68,23 @@ import {
   stepToward,
   type PromptChoice
 } from "../../../../core/history/promptChoices";
+import {
+  parseAskUserQuestion,
+  emptyAnswers,
+  togglePick,
+  setOther,
+  allAnswered,
+  type Answer,
+  type AskForm
+} from "../../../../core/prompts/askUserQuestion";
+import { askStageOf, askCardStateOf } from "../../../../core/prompts/askScreen";
+import { describeToolRequest } from "../../../../core/prompts/toolRequest";
+import { driveAsk, type AskStopReason } from "./askDriver";
+import { QuestionCard } from "./QuestionCard";
 import * as sessionBus from "../../lib/sessionBus";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
-import type { Attention } from "../../../../core/types";
+import type { Attention, PendingToolPrompt } from "../../../../core/types";
 
 export interface ConversationPaneProps {
   sessionId: string;
@@ -187,6 +200,18 @@ export function nextAttentionFor(
   event: { sessionId: string; value: Attention }
 ): Attention | undefined {
   return event.sessionId === paneSessionId ? event.value : undefined;
+}
+
+/**
+ * What this pane's waiting tool call becomes after a `conversation:pendingPrompt` event — `undefined`
+ * means "not mine", the caller's cue to leave it exactly as it is. Same rule as `nextAttentionFor`,
+ * for the same reason: the event fires for every session app-wide.
+ */
+export function nextPendingPromptFor(
+  paneSessionId: string,
+  event: { sessionId: string; prompt: PendingToolPrompt | null }
+): PendingToolPrompt | null | undefined {
+  return event.sessionId === paneSessionId ? event.prompt : undefined;
 }
 
 /**
@@ -514,6 +539,17 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   const [more, setMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [attention, setAttention] = useState<Attention>("idle");
+  /** The tool call the CLI is waiting on, from the PreToolUse hook (main/pendingPrompt.ts). What the
+   *  question card is drawn from — never the screen (core/prompts/askUserQuestion.ts). */
+  const [pendingPrompt, setPendingPrompt] = useState<PendingToolPrompt | null>(null);
+  /** The answers being composed on the card, keyed by the call, so a card that re-renders for the same
+   *  question keeps them and a new question starts blank. */
+  const [askAnswers, setAskAnswers] = useState<{ toolUseId: string; answers: Answer[] } | null>(null);
+  /** The driver is sending keys. Stays true after a successful submit until PostToolUse clears the
+   *  capture — the card goes quiet rather than flickering into the "started on the terminal" state
+   *  while the review it just confirmed is still on screen. */
+  const [askAnswering, setAskAnswering] = useState(false);
+  const [askNotice, setAskNotice] = useState<AskStopReason | null>(null);
   // Set when a slash command is sent from here, cleared the moment anything comes back — see
   // SlashCommandNotice for what it says and why it is not the pending banner.
   const [slashSent, setSlashSent] = useState(false);
@@ -603,6 +639,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     setFrom(0);
     setMore(false);
     setAttention("idle");
+    setPendingPrompt(null);
     setSlashSent(false);
     setModelInfo({ model: null, effort: null, cli: null });
     setComposerText("");
@@ -629,6 +666,18 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       .then((value) => {
         if (!isCurrent() || sawLiveAttention) return;
         setAttention(value);
+      })
+      .catch(() => {});
+
+    // The waiting tool call, read once for the same reason attention is: the push fires only on a
+    // change, and a question already up when this pane mounts would otherwise not be drawn until the
+    // next one.
+    let sawLivePendingPrompt = false;
+    void window.api.conversation
+      .pendingPrompt(sessionId)
+      .then((prompt) => {
+        if (!isCurrent() || sawLivePendingPrompt) return;
+        setPendingPrompt(prompt);
       })
       .catch(() => {});
 
@@ -685,6 +734,14 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       setAttention(next);
     });
 
+    const offPendingPrompt = window.api.on("conversation:pendingPrompt", (e) => {
+      if (!isCurrent()) return;
+      const next = nextPendingPromptFor(sessionId, e);
+      if (next === undefined) return;
+      sawLivePendingPrompt = true;
+      setPendingPrompt(next);
+    });
+
     void window.api.conversation
       .open(sessionId)
       .then((res) => {
@@ -724,6 +781,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       slashSilenceRef.current = null;
       offAppend();
       offAttention();
+      offPendingPrompt();
       void window.api.conversation.close(sessionId);
     };
   }, [sessionId]);
@@ -1051,6 +1109,55 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   if (fresh.length > 0) heldChoices.current = fresh;
   else if (!trustPrompt) heldChoices.current = [];
   const [answering, setAnswering] = useState(false);
+
+  // ---- The question card (core/prompts/askUserQuestion.ts, askScreen.ts; ./askDriver.ts) ----
+  /** The question as a form, when the waiting call is an AskUserQuestion whose input reads in full.
+   *  null falls back to the banner below, which quotes the screen as it always has. */
+  const askForm = useMemo<AskForm | null>(
+    () =>
+      pendingPrompt !== null && pendingPrompt.tool === "AskUserQuestion"
+        ? parseAskUserQuestion(pendingPrompt.input)
+        : null,
+    [pendingPrompt]
+  );
+  /** Where the dialog is on the terminal right now — decides whether the card may drive it. */
+  const askStage = useMemo(() => (askForm === null ? null : askStageOf(screenLines, askForm)), [askForm, screenLines]);
+  // A new call starts with blank answers and a clean slate; the same call keeps what was composed.
+  useEffect(() => {
+    if (askForm === null || pendingPrompt === null) {
+      setAskAnswers(null);
+      setAskAnswering(false);
+      setAskNotice(null);
+      return;
+    }
+    const toolUseId = pendingPrompt.toolUseId;
+    setAskAnswers((prev) => (prev !== null && prev.toolUseId === toolUseId ? prev : { toolUseId, answers: emptyAnswers(askForm) }));
+    setAskAnswering(false);
+    setAskNotice(null);
+  }, [askForm, pendingPrompt]);
+
+  /**
+   * Sends the card's answers to the dialog. The driver reads the screen before every key and confirms
+   * only against a matching review (askDriver.ts). A stop keeps the answers and shows why; a submit
+   * leaves the card quiet until PostToolUse clears the capture (the effect above resets everything).
+   */
+  const submitAsk = useCallback(async (): Promise<void> => {
+    if (askForm === null || askAnswers === null || askAnswering) return;
+    if (!allAnswered(askForm, askAnswers.answers)) return;
+    setAskAnswering(true);
+    setAskNotice(null);
+    const result = await driveAsk({
+      form: askForm,
+      answers: askAnswers.answers,
+      readScreen: () => sessionBus.screenOf(sessionId),
+      write: (keys) => window.api.sessions.write(sessionId, keys),
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    });
+    if (result.outcome === "stopped") {
+      setAskNotice(result.reason);
+      setAskAnswering(false);
+    }
+  }, [askForm, askAnswers, askAnswering, sessionId]);
 
   /**
    * Answers one of those rows on the CLI's own screen.
@@ -1701,6 +1808,8 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   // An answer that is actually being waited on outranks everything; after that, a list being typed
   // into outranks a note about a command already sent.
   // Which of the two the prompt branch takes is shouldShowPrompt's rule, above.
+  // A parsed question outranks the banner: it is the same waiting decision, drawn from the model's own
+  // call rather than from the screen.
   /** A turn this pane sent is still unanswered. Drives the notice and, through `isRunning`, what the
    *  composer's own button is offering to do. */
   /** What the CLI says it is doing, read off its own screen — the authority on whether anything is
@@ -1708,8 +1817,34 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   const cliBusy = useMemo(() => cliBusyOf(screenLines), [screenLines]);
   const awaitingReply = isAwaitingReply(turns, pending.length, cliBusy);
   isRunningRef.current = awaitingReply;
+  const askCard: ReactNode =
+    askForm !== null && pendingPrompt !== null && askAnswers !== null && askAnswers.toolUseId === pendingPrompt.toolUseId ? (
+      <QuestionCard
+        form={askForm}
+        answers={askAnswers.answers}
+        state={askCardStateOf(askStage ?? { kind: "none" }, askAnswering)}
+        notice={askNotice}
+        canSubmit={allAnswered(askForm, askAnswers.answers)}
+        onToggle={(q, option) =>
+          setAskAnswers((prev) => (prev === null ? prev : { ...prev, answers: togglePick(askForm, prev.answers, q, option) }))
+        }
+        onOther={(q, text) =>
+          setAskAnswers((prev) => (prev === null ? prev : { ...prev, answers: setOther(askForm, prev.answers, q, text) }))
+        }
+        onSubmit={() => void submitAsk()}
+        onGoTerminal={goTerminal}
+      />
+    ) : null;
+  /** What an approval prompt is about, when the hook captured its call (Slack or rolling sessions carry
+   *  the full tool pair; others have no capture and the banner reads as before). */
+  const about =
+    pendingPrompt !== null && pendingPrompt.tool !== "AskUserQuestion"
+      ? describeToolRequest(pendingPrompt.tool, pendingPrompt.input)
+      : null;
   const banner: ReactNode = exited ? (
       <ExitedNotice onGoTerminal={goTerminal} />
+    ) : askCard !== null ? (
+      askCard
     ) : shouldShowPrompt(attention, choices.length, trustPrompt) ? (
       <PendingBanner
         onGoTerminal={goTerminal}
@@ -1718,6 +1853,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
         onChoose={(choice) => void answerChoice(choice)}
         answering={answering}
         trust={trustPrompt}
+        about={about}
       />
     ) : slashOpen ? (
       <CompletionMenu
