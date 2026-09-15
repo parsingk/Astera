@@ -89,7 +89,7 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     request: null,
     model: { model: null, effort: null, planMode: false },
     error: null,
-    outlivesApp: false,
+    outlivesApp: false, // placeholder — state() below reads the live value off `proc` instead
     truncated: mode.mode === 'adopt' ? mode.truncated : false
   }
   let lastEmitted: { status: ChatState['status']; request: ChatRequest | null; model: ChatModel } = {
@@ -98,12 +98,24 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     model: state.model
   }
   let flushScheduled = false
+  let readyEmitted = false
 
+  // A listener throwing must not become an uncaught exception, nor stop the other listeners, nor leave
+  // `lastEmitted` out of sync with what was actually delivered (flush() below assigns lastEmitted before
+  // calling this, so a throw here can never roll that back).
   function emit(e: ChatEvent): void {
-    for (const fn of listeners) fn(e)
+    for (const fn of listeners) {
+      try {
+        fn(e)
+      } catch (err) {
+        log(`chat event listener threw: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
   }
 
   function emitReady(): void {
+    if (readyEmitted) return
+    readyEmitted = true
     emit({ type: 'ready', threadId: threadId as string, rolloutPath })
   }
 
@@ -113,12 +125,23 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     queueMicrotask(flush)
   }
 
+  // Captures the values to emit (`next`) and commits them to `lastEmitted` *before* calling any
+  // listener — a listener that reacts to a `request` event by synchronously patching state again (e.g.
+  // `adapter.answer(...)` from inside the callback) must schedule a fresh flush that compares against
+  // what this flush is about to report, not against the pre-flush snapshot; otherwise that further
+  // change is invisible to the next flush and never emitted (assigning lastEmitted after emitting loses
+  // exactly that change, since the reentrant patch already mutated `state` by the time this function
+  // would have read it again).
   function flush(): void {
     flushScheduled = false
-    if (!same(state.request, lastEmitted.request)) emit({ type: 'request', request: state.request })
-    if (!same(state.status, lastEmitted.status)) emit({ type: 'status', status: state.status })
-    if (!same(state.model, lastEmitted.model)) emit({ type: 'model', model: state.model })
-    lastEmitted = { status: state.status, request: state.request, model: state.model }
+    const next = { status: state.status, request: state.request, model: state.model }
+    const requestChanged = !same(next.request, lastEmitted.request)
+    const statusChanged = !same(next.status, lastEmitted.status)
+    const modelChanged = !same(next.model, lastEmitted.model)
+    lastEmitted = next
+    if (requestChanged) emit({ type: 'request', request: next.request })
+    if (statusChanged) emit({ type: 'status', status: next.status })
+    if (modelChanged) emit({ type: 'model', model: next.model })
   }
 
   function patch(partial: Partial<Pick<ChatState, 'status' | 'request' | 'model'>>): void {
@@ -246,13 +269,19 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     try {
       await request('initialize', initializeParams(version))
       notify('initialized', {})
-      const collabP = request('collaborationMode/list', {})
+      // Neither list call is fatal: a thread can start (and be talked to) without knowing the plan
+      // effort or the model catalogue, so a failure here only means the feature that needed it degrades
+      // (no reasoning_effort in the plan struct, an empty model list) — never a reason to end the session.
+      const collabP = request('collaborationMode/list', {}).catch((err: unknown) => {
+        log(`collaborationMode/list failed: ${err instanceof Error ? err.message : String(err)}`)
+        return null
+      })
       const modelP = request('model/list', { includeHidden: false }).catch((err: unknown) => {
         log(`model/list failed: ${err instanceof Error ? err.message : String(err)}`)
         return null
       })
       const [collabResult, modelResult] = await Promise.all([collabP, modelP])
-      planEffort = planEffortOf(collabResult)
+      planEffort = collabResult === null ? null : planEffortOf(collabResult)
       models = modelResult === null ? [] : modelsOf(modelResult)
       const threadResult = a.resumeThreadId
         ? await request('thread/resume', threadResumeParams({ threadId: a.resumeThreadId, cwd: a.cwd, bypass: a.bypass }))
@@ -321,7 +350,9 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     setModel: (model, effort) => safe(Promise.resolve(patch({ model: { ...state.model, model, effort } }))),
     setPlanMode: (on) => safe(Promise.resolve(patch({ model: { ...state.model, planMode: on } }))),
     listModels: () => safe(doListModels()),
-    state: () => ({ ...state }),
+    // Live from the process, not stamped at construction — the manager (Task 5) overrides it on the
+    // proc itself as ownership is decided, and this must track that, not a snapshot from before it was.
+    state: () => ({ ...state, outlivesApp: proc.outlivesApp === true }),
     on: (fn) => {
       listeners.push(fn)
       return () => {

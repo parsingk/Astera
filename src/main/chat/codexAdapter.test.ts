@@ -5,11 +5,11 @@ import type { ProcLike } from '../../core/sessions/proc'
 import type { ChatEvent } from '../../core/chat/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 
-function fakeProc(): ProcLike & { written: string[]; feed(line: string): void; exit(code: number): void; notes: Record<string, unknown>[] } {
+function fakeProc(): ProcLike & { written: string[]; feed(line: string): void; exit(code: number): void; notes: Record<string, unknown>[]; outlivesApp?: boolean } {
   let onLine: (l: string) => void = () => {}
   let onExit: (e: { exitCode: number }) => void = () => {}
   const p = {
-    pid: 42, written: [] as string[], notes: [] as Record<string, unknown>[],
+    pid: 42, written: [] as string[], notes: [] as Record<string, unknown>[], outlivesApp: undefined as boolean | undefined,
     onLine: (cb: (l: string) => void) => { onLine = cb },
     onExit: (cb: (e: { exitCode: number }) => void) => { onExit = cb },
     write: (line: string) => { p.written.push(line) },
@@ -70,6 +70,28 @@ describe('createCodexAdapter — handshake', () => {
     await starting
     expect(a.state().status).toBe('idle')
   })
+  it('a refused collaborationMode/list is not fatal — start still resolves, and plan mode sends without an effort', async () => {
+    const p = fakeProc()
+    const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 1000 })
+    const events: ChatEvent[] = []
+    a.on((e) => events.push(e))
+    const starting = a.start({ cwd: 'D:/x', bypass: false })
+    await tick()
+    p.feed(replyWith(p, 'initialize', F.INITIALIZE_RESULT))
+    await tick()
+    const collabReq = p.written.map((w) => JSON.parse(w) as { id?: string; method?: string }).find((w) => w.method === 'collaborationMode/list')
+    if (!collabReq) throw new Error('no request collaborationMode/list')
+    p.feed(JSON.stringify({ id: collabReq.id, error: { code: -32600, message: 'unknown method' } }))
+    p.feed(replyWith(p, 'model/list', F.MODEL_LIST_RESULT))
+    await tick()
+    p.feed(replyWith(p, 'thread/start', F.THREAD_START_RESULT))
+    await starting
+    expect(events[0]).toMatchObject({ type: 'ready' })
+    await a.setPlanMode(true)
+    void a.send('ask me')
+    await tick()
+    expect(JSON.parse(p.written.at(-1) as string).params.collaborationMode).toEqual({ mode: 'plan', settings: { model: 'gpt-6-astra' } })
+  })
   it('a refused initialize ends the session with the message', async () => {
     const p = fakeProc()
     const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 1000 })
@@ -118,6 +140,21 @@ describe('createCodexAdapter — a turn with a question', () => {
     expect(JSON.parse(p.written.at(-1) as string)).toEqual({ id: 5, error: { code: -32601, message: 'unsupported request: item/permissions/requestApproval' } })
     expect(events).toContainEqual({ type: 'error', message: 'unsupported request: item/permissions/requestApproval' })
     expect(a.state().request).toBeNull()
+  })
+  it('a subscriber that answers synchronously inside the request event still sees the clearing event', async () => {
+    const { p, a, events } = await started()
+    a.on((e) => {
+      if (e.type === 'request' && e.request) void a.answer(e.request.id, { kind: 'approval', decision: 'accept' })
+    })
+    void a.send('do it')
+    await tick()
+    p.feed(F.TURN_STARTED)
+    p.feed(F.COMMAND_APPROVAL)
+    await tick()
+    await tick()
+    const requestEvents = events.filter((e): e is Extract<ChatEvent, { type: 'request' }> => e.type === 'request')
+    expect(requestEvents.some((e) => e.request?.kind === 'approval')).toBe(true)
+    expect(requestEvents.some((e) => e.request === null)).toBe(true)
   })
   it('interrupt asks for the running turn and is a no-op without one', async () => {
     const { p, a } = await started()
@@ -169,6 +206,12 @@ describe('createCodexAdapter — replay after adoption', () => {
     await tick()
     expect(a.state().truncated).toBe(true)
     expect(a.state().status).toBe('idle')
+  })
+  it('reads outlivesApp live from the process, not from a snapshot taken at start', async () => {
+    const { p, a } = adopted()
+    p.outlivesApp = true
+    await a.start({ cwd: 'D:/x', bypass: false })
+    expect(a.state().outlivesApp).toBe(true)
   })
   it('exit ends pending requests and is reported with its code', async () => {
     const { p, a, events } = await started()
