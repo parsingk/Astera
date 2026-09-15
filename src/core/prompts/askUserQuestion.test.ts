@@ -147,7 +147,7 @@ describe('answers', () => {
 describe('cleanOther', () => {
   // A newline would press Enter on the dialog and a tab would move its focus (spec §6, §8).
   it('turns newlines and tabs into spaces and drops control characters, without trimming', () => {
-    expect(cleanOther('a\r\nb\tcd ')).toBe('a b cd ')
+    expect(cleanOther('a\r\nb\tc\u001bd ')).toBe('a b cd ')
     expect(cleanOther('표 2단으로 정리')).toBe('표 2단으로 정리')
   })
 })
