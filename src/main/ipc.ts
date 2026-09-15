@@ -15,6 +15,7 @@ import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
 import type { AttentionState, Attention } from './attention'
+import type { PendingPromptState } from './pendingPrompt'
 import {
   createConversationSessions,
   transcriptPathFor,
@@ -680,6 +681,9 @@ export function registerIpc(
    *  caught either, since `registerIpc` cannot be exercised without a full Electron harness. Requiring
    *  it turns that specific mistake into a type error at the one real call site. */
   attention: AttentionState,
+  /** The waiting-tool-call capture (main/pendingPrompt.ts). Required for the same reason `attention` is:
+   *  dropping it from index.ts's call must be a type error, not a dark feature. */
+  pendingPrompt: PendingPromptState,
   rolling?: RollingCoordinator,
   slack?: {
     notifier: SlackNotifier
@@ -755,6 +759,7 @@ export function registerIpc(
   // Every attention change, for every session — unlike conversation:append this is not gated on an
   // open conversation. It is the same per-session verdict the desktop notifier already reads.
   attention.subscribe((sessionId, value) => send('conversation:attention', { sessionId, value }))
+  pendingPrompt.subscribe((sessionId, prompt) => send('conversation:pendingPrompt', { sessionId, prompt }))
   // A renderer reload leaves every open conversation with nobody watching it — the same kind of gap
   // the preview.registerAgentGuest handler's own 'destroyed' listener exists for below, just with a
   // different signal: a guest `<webview>` is torn down with the DOM a reload replaces, so 'destroyed'
@@ -1150,6 +1155,7 @@ export function registerIpc(
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
     forgetAttentionOnExit(attention, e.sessionId, e.exitCode) // drop the Map entry (its own doc above)
+    forgetAttentionOnExit(pendingPrompt, e.sessionId, e.exitCode) // same guard: a lost-sight exit keeps the capture
     closeConversationOnExit(conversationSessions, e.sessionId, e.exitCode) // stop the follow (its own doc above)
     // The session ended (WU §14-4) — observation stops here, so any Work Unit still `active` is
     // interrupted, not completed; it waits on the How It Works screen until the person closes it.
@@ -6122,6 +6128,7 @@ export function registerIpc(
   // `open` still answers null, so this reads main/attention.ts directly rather than folding onto
   // conversationSessions.
   ipcMain.handle('conversation.attention', (_e, sessionId: string) => conversationAttentionOf(attention, sessionId))
+  ipcMain.handle('conversation.pendingPrompt', (_e, sessionId: string) => pendingPrompt.get(sessionId))
   // Same shape of thing and the same reason as `attention` above: the conversation view has no
   // statusline of its own, so what the CLI reports about the model is read on demand. Never throws —
   // core.statusLinePayload answers null for a session that has written nothing, and the extractor

@@ -52,7 +52,8 @@ const EVENT_CHANNELS = [
   'usage:accounts-updated',
   'notify:activate',
   'conversation:append',
-  'conversation:attention'
+  'conversation:attention',
+  'conversation:pendingPrompt'
 ]
 
 const api = {
@@ -301,6 +302,7 @@ const api = {
     more: invoke('conversation.more'),
     close: invoke('conversation.close'),
     attention: invoke('conversation.attention'),
+    pendingPrompt: invoke('conversation.pendingPrompt'),
     model: invoke('conversation.model'),
     models: invoke('conversation.models'),
     attach: invoke('conversation.attach'),
