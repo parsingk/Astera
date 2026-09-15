@@ -886,6 +886,7 @@ app.whenReady().then(async () => {
     core,
     win,
     attention, // required (ipc.ts's own comment says why it moved ahead of the optional parameters)
+    pendingPrompt,
     rolling,
     {
       notifier: slack,

@@ -679,6 +679,9 @@ export interface CoreEvents {
    *  verdict the desktop notifier already reads, so it fires for every session regardless of which
    *  tab, if any, is showing its conversation. */
   'conversation:attention': { sessionId: string; value: Attention }
+  /** A session's waiting tool call changed (main/pendingPrompt.ts's `subscribe`): captured, replaced, or
+   *  cleared (`prompt: null`). Not gated on an open conversation, like 'conversation:attention'. */
+  'conversation:pendingPrompt': { sessionId: string; prompt: PendingToolPrompt | null }
 }
 export type CoreEventChannel = keyof CoreEvents
 
@@ -1439,6 +1442,9 @@ export type RendererApi = CoreApi & {
      *  one ever does. Independent of `open`: a fresh session on a trust prompt is `waiting` while
      *  `open` still answers null. */
     attention(sessionId: string): Promise<Attention>
+    /** The tool call this session's CLI is waiting on, read once on mount — the push above fires only on
+     *  a change, so a question already up when the pane opens needs this. null when nothing is waiting. */
+    pendingPrompt(sessionId: string): Promise<PendingToolPrompt | null>
     /** The model and effort the CLI last reported for this session, or nulls when it has reported
      *  nothing yet. Read rather than pushed: it changes only when a person changes it, which they do
      *  through the CLI's own screen, and there is no event for that. */
