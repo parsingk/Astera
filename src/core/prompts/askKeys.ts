@@ -13,7 +13,7 @@
 // This module only lists keys; it never sends one. The driver reads the screen between steps.
 import type { AskQuestion, Answer } from './askUserQuestion'
 
-export const DOWN = '[B'
+export const DOWN = '\u001b[B'
 export const TAB = '\t'
 export const ENTER = '\r'
 
