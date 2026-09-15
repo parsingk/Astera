@@ -28,7 +28,8 @@ import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
 import type { GeneratorSettings } from './understanding/generatorSettings'
 import type { DesktopNotifySettings } from './notify/settings'
-import type { ModelListResult } from './models/types'
+import type { ModelDescriptor, ModelListResult } from './models/types'
+import type { ChatAnswer, ChatEvent, ChatState } from './chat/types'
 import type { ThemeId } from './theme/themes'
 import type { ConvTurn } from './history/convTypes'
 export type { ConvTurn } from './history/convTypes'
@@ -73,6 +74,8 @@ export interface CliStatus {
 
 export type SessionStatus = 'running' | 'exited'
 
+export type SessionKind = 'terminal' | 'chat'
+
 export interface SessionInfo {
   id: string
   accountId: string
@@ -86,6 +89,11 @@ export interface SessionInfo {
   slackNotify?: boolean // Slack progress notifications — decides hook injection and notifier registration at spawn, and propagates through rolling respawns
   bypassPermissions?: boolean // start without permission prompts — passes --dangerously-skip-permissions at spawn, propagates through rolling and resume
   schedule?: ScheduleConfig // recurring command schedule — only meaningful on the initial spawn; the coordinator owns its lifetime afterwards
+  /** How the CLI runs. Absent means 'terminal' — every session before chat sessions, every Host note
+   *  already written, every fixture (chat-sessions design §5). Read it through sessionKindOf(). */
+  kind?: SessionKind
+  /** Chat only: the protocol's own thread id once known (Codex threadId). What resume needs. */
+  threadId?: string
 }
 
 /** The stored settings the resume modal reads to seed its checkboxes.
@@ -682,6 +690,9 @@ export interface CoreEvents {
   /** A session's waiting tool call changed (main/pendingPrompt.ts's `subscribe`): captured, replaced, or
    *  cleared (`prompt: null`). Not gated on an open conversation, like 'conversation:attention'. */
   'conversation:pendingPrompt': { sessionId: string; prompt: PendingToolPrompt | null }
+  /** A chat session's adapter reported something (main/chat/manager.ts's `subscribe`). Not gated on an
+   *  open conversation, like conversation:attention. */
+  'chat:event': { sessionId: string; event: ChatEvent }
 }
 export type CoreEventChannel = keyof CoreEvents
 
@@ -779,6 +790,8 @@ export interface CoreApi {
       slackNotify?: boolean
       bypassPermissions?: boolean // start without permission prompts
       schedule?: ScheduleConfig // recurring command schedule
+      kind?: SessionKind // default 'terminal'
+      resumeThreadId?: string // chat only: resume this protocol thread instead of starting one
     }): Promise<SessionInfo>
     write(id: string, data: string): void
     resize(id: string, cols: number, rows: number): void
@@ -1487,6 +1500,18 @@ export type RendererApi = CoreApi & {
     /** Project files matching what follows an `@`, best first, already capped. Root-relative with
      *  forward slashes. Empty for a session with no project, or one whose folder cannot be read. */
     files(sessionId: string, query: string): Promise<string[]>
+  }
+  // Optional for now: Task 6 makes this required once the preload block exists (a chat session's own
+  // IPC surface, the counterpart of `conversation` above for sessions whose kind is 'chat').
+  chat?: {
+    send(sessionId: string, text: string): Promise<void>
+    interrupt(sessionId: string): Promise<void>
+    answer(sessionId: string, requestId: string, answer: ChatAnswer): Promise<void>
+    setModel(sessionId: string, model: string, effort: string | null): Promise<void>
+    setPlanMode(sessionId: string, on: boolean): Promise<void>
+    listModels(sessionId: string): Promise<ModelDescriptor[]>
+    /** One-shot on mount; null for a session that is not a chat session. */
+    state(sessionId: string): Promise<ChatState | null>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }
