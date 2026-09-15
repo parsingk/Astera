@@ -23,6 +23,11 @@ export const nodeProcFactory: ProcFactory = (file, args, opts): ProcLike => {
   child.stderr?.resume() // not protocol; drained so the child cannot block on it
   child.on('exit', (code, signal) => end(code ?? (signal ? 1 : 0)))
   child.on('error', () => end(1))
+  // A stream failing under a write or read is the child going away; `exit`/`error` on the child
+  // already report that — these must not throw.
+  child.stdin?.on('error', () => {})
+  child.stdout?.on('error', () => {})
+  child.stderr?.on('error', () => {})
   return {
     get pid() {
       return child.pid ?? 0
