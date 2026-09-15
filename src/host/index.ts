@@ -13,6 +13,9 @@ import { openHostLog } from './log'
 import { startHostServer, ADDRESS_TAKEN } from './server'
 import { PtyRegistry } from './registry'
 import { attachPtyHost } from './ptyHost'
+import { attachProcHost } from './procHost'
+import { ProcRegistry } from './procRegistry'
+import { nodeProcSpawn } from './nodeProc'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
@@ -52,6 +55,14 @@ async function main(): Promise<void> {
   })
   let handlePty: ReturnType<typeof attachPtyHost> | null = null
 
+  // The Host's second registry: line processes — a chat session's protocol child (chat-sessions design
+  // §6.5). Same lifetime rules as the ptys, none of the terminal parts.
+  const procs = new ProcRegistry({
+    spawn: nodeProcSpawn({ log: (m) => log.write(m), platform: process.platform }),
+    log: (m) => log.write(m)
+  })
+  let handleProc: ReturnType<typeof attachProcHost> | null = null
+
   let server: Awaited<ReturnType<typeof startHostServer>>
   /** Every way out goes through here, and it ends the process whatever happened on the way. An earlier
    *  version put `process.exit(0)` after `killAll()` inside a `.then()` that nothing caught, and on
@@ -68,6 +79,7 @@ async function main(): Promise<void> {
       .catch((err) => log.write(`the server did not close cleanly: ${String(err)}`))
       .finally(() => {
         registry.killAll()
+        procs.killAll()
         // Both deferred, and both unref'd: see EXIT_SETTLE_MS. Unref'd so that a Host whose loop
         // empties on its own is not held open by its own way out.
         setTimeout(() => process.exit(0), EXIT_SETTLE_MS).unref()
@@ -82,8 +94,8 @@ async function main(): Promise<void> {
       version: process.env.ASTERA_HOST_VERSION ?? '0.0.0',
       idleMs: IDLE_MS,
       onIdle: () => leave(),
-      onMessage: (m, send) => handlePty?.(m, send) ?? false,
-      holdsWork: () => registry.liveCount() > 0,
+      onMessage: (m, send) => (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false),
+      holdsWork: () => registry.liveCount() + procs.liveCount() > 0,
       log
     })
   } catch (err) {
@@ -95,6 +107,7 @@ async function main(): Promise<void> {
   }
 
   handlePty = attachPtyHost({ registry, broadcast: (m) => server.broadcast(m) })
+  handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })
 
   for (const signal of ['SIGINT', 'SIGTERM'] as const)
     process.on(signal, () => leave(signal))
