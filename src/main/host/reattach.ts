@@ -73,6 +73,10 @@ export interface ReattachResult {
   sessions: string[]
   /** The chat session ids this sweep leaves the app running, as `sessions` does for ptys. */
   chats: string[]
+  /** Set by the caller when the Host was asked for its line processes and did not answer: `chats` is
+   *  then not a fact, and a boot cleanup must not write a chat session off on it (the same rule
+   *  SessionsTakenBack's 'unknown' states for ptys). */
+  chatsUnknown?: boolean
 }
 
 export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResult> {

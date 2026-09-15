@@ -282,7 +282,7 @@ export const ko = {
   // told someone whose work is a long build that none of it was protected.
   //
   // The four figures are separated by commas, not the ' · ' the connected row joins its own parts
-  // with: nested inside that row, the same separator made one clause read as three.
+  // with: nested inside that row, the same separator made one clause read as four.
   //
   // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
   // still want real translations.

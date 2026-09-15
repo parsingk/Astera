@@ -45,7 +45,8 @@ export const nodeProcFactory: ProcFactory = (file, args, opts): ProcLike => {
       if (ended || !child.pid) return
       // treeKillCommand(platform, pid) — pid then platform, as the brief first had it, is not this
       // function's real parameter order (src/core/run/kill.ts). It does still return null on posix,
-      // where the caller ends the process group with an ordinary signal instead.
+      // where the caller falls back to SIGTERM to the child itself — not its children; treeKillCommand's
+      // posix contract is the same, and codex app-server's own children are its to clean up on SIGTERM.
       const k = treeKillCommand(process.platform, child.pid)
       if (k === null) child.kill('SIGTERM')
       else spawn(k.file, k.args, { windowsHide: true, stdio: 'ignore' }).on('error', () => child.kill())
