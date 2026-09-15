@@ -7,16 +7,30 @@ import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import type { ProcFactory, ProcLike, ProcSpawnOptions } from '../../core/sessions/proc'
 import type { HostPtyTransport } from './ptyFactory'
 
-function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: number, startDead = false): ProcLike {
+function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: number, startDead = false, startReplaying = false): ProcLike {
   let state: 'pending' | 'live' | 'exited' = startLive ? 'live' : 'pending'
   let pid = startPid
   const queue: string[] = []
   let onLine: (line: string) => void = () => {}
   let onExit: (e: { exitCode: number }) => void = () => {}
 
+  // Ordering the replay against the lines arriving live meanwhile (chat-sessions design §6.5): while
+  // replaying, a live proc-line is held rather than delivered, so the batch from proc-attached always
+  // comes first; seq then tells apart a line already delivered from one still to come.
+  let lastSeq = 0
+  let replaying = startLive && startReplaying
+  const held: Array<{ seq: number; line: string }> = []
+
+  const deliver = (seq: number, line: string): void => {
+    if (seq <= lastSeq) return
+    lastSeq = seq
+    onLine(line)
+  }
+
   const end = (exitCode: number): void => {
     state = 'exited'
     queue.length = 0
+    held.length = 0
     unsubscribe()
     unsubscribeGone()
     onExit({ exitCode })
@@ -38,7 +52,18 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
       return
     }
     if (m.t === 'proc-line') {
-      onLine(m.line)
+      if (state === 'exited') return
+      if (replaying) held.push({ seq: m.seq, line: m.line })
+      else deliver(m.seq, m.line)
+      return
+    }
+    if (m.t === 'proc-attached') {
+      if (state === 'exited') return
+      replaying = false
+      for (const l of m.lines) deliver(l.seq, l.line)
+      held.sort((x, y) => x.seq - y.seq)
+      for (const l of held) deliver(l.seq, l.line)
+      held.length = 0
       return
     }
     if ((m.t === 'proc-failed' || m.t === 'proc-exit') && state !== 'exited') end(m.t === 'proc-exit' ? m.exitCode : 1)
@@ -99,7 +124,7 @@ export function createHostProcFactory(t: HostPtyTransport): {
   return {
     factory,
     attach: (a) => {
-      const p = handle(t, a.id, true, a.pid)
+      const p = handle(t, a.id, true, a.pid, false, true)
       p.outlivesApp = true
       return p
     }

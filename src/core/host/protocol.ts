@@ -93,7 +93,7 @@ export type ClientMessage =
   /** Same contract as pty-note, for a line process. */
   | { t: 'proc-note'; id: string; patch: Record<string, unknown> }
   | { t: 'proc-list' }
-  /** Replays the buffered lines to the client that asked, one proc-line each. */
+  /** Replays the buffered lines to the client that asked, as one proc-attached. */
   | { t: 'proc-attach'; id: string }
 
 export type HostMessage =
@@ -116,7 +116,11 @@ export type HostMessage =
   | { t: 'pty-listed'; entries: PtyEntry[] }
   | { t: 'proc-spawned'; id: string; pid: number }
   | { t: 'proc-failed'; id: string; error: string }
-  /** One complete stdout line, newline removed. Broadcast, like pty-data. */
-  | { t: 'proc-line'; id: string; line: string }
+  /** One stdout line, live. `seq` counts from 1 per process and is never reused; a client that has
+   *  seen a seq drops the line — the replay below repeats seqs on purpose. */
+  | { t: 'proc-line'; id: string; seq: number; line: string }
+  /** The answer to proc-attach: every buffered line, oldest first, with the seq each was sent with.
+   *  One message, so the receiver knows where the replay ends; empty for an unknown or ended id. */
+  | { t: 'proc-attached'; id: string; lines: Array<{ seq: number; line: string }> }
   | { t: 'proc-exit'; id: string; exitCode: number }
   | { t: 'proc-listed'; entries: PtyEntry[] }

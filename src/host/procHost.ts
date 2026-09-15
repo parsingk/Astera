@@ -11,7 +11,7 @@ export function attachProcHost(a: {
   registry: ProcRegistry
   broadcast(m: HostMessage): void
 }): (m: ClientMessage, send: (h: HostMessage) => void) => boolean {
-  a.registry.onLine((id, line) => a.broadcast({ t: 'proc-line', id, line }))
+  a.registry.onLine((id, seq, line) => a.broadcast({ t: 'proc-line', id, seq, line }))
   a.registry.onExit((id, exitCode) => a.broadcast({ t: 'proc-exit', id, exitCode }))
 
   return (m, send) => {
@@ -33,12 +33,11 @@ export function attachProcHost(a: {
       case 'proc-list':
         send({ t: 'proc-listed', entries: a.registry.list() })
         return true
-      case 'proc-attach': {
-        // One message per line rather than one carrying an array: the receiver already has a handler
-        // for a line, and a replay is only lines that arrived while it was away.
-        for (const line of a.registry.buffer(m.id)) send({ t: 'proc-line', id: m.id, line })
+      case 'proc-attach':
+        // The whole buffer in one message: the receiver needs to know where the replay ends, so it
+        // can order the lines that arrived live meanwhile behind it (procFactory.ts).
+        send({ t: 'proc-attached', id: m.id, lines: a.registry.buffer(m.id) })
         return true
-      }
       default:
         return false
     }

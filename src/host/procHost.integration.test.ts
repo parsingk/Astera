@@ -88,7 +88,7 @@ describe('proc-* over the Host server', () => {
 
     a.send({ t: 'proc-write', id: 'p1', line: 'ping' })
     const line = await a.waitFor((m) => m.t === 'proc-line')
-    expect(line).toEqual({ t: 'proc-line', id: 'p1', line: 'echo:ping' })
+    expect(line).toEqual({ t: 'proc-line', id: 'p1', seq: 1, line: 'echo:ping' })
 
     a.send({ t: 'proc-list' })
     const listed = await a.waitFor((m) => m.t === 'proc-listed')
@@ -99,8 +99,8 @@ describe('proc-* over the Host server', () => {
     await b.waitFor((m) => m.t === 'hello')
     const before = a.got.length
     b.send({ t: 'proc-attach', id: 'p1' })
-    const replayed = await b.waitFor((m) => m.t === 'proc-line')
-    expect(replayed).toEqual({ t: 'proc-line', id: 'p1', line: 'echo:ping' })
+    const replayed = await b.waitFor((m) => m.t === 'proc-attached')
+    expect(replayed).toEqual({ t: 'proc-attached', id: 'p1', lines: [{ seq: 1, line: 'echo:ping' }] })
     expect(a.got.length).toBe(before)
 
     a.send({ t: 'proc-kill', id: 'p1' })

@@ -49,8 +49,8 @@ describe('attachProcHost', () => {
     h.proc.emit('one\ntwo\n')
     h.proc.exit(0)
     expect(h.broadcast).toEqual([
-      { t: 'proc-line', id: 'p1', line: 'one' },
-      { t: 'proc-line', id: 'p1', line: 'two' },
+      { t: 'proc-line', id: 'p1', seq: 1, line: 'one' },
+      { t: 'proc-line', id: 'p1', seq: 2, line: 'two' },
       { t: 'proc-exit', id: 'p1', exitCode: 0 }
     ])
   })
@@ -64,18 +64,18 @@ describe('attachProcHost', () => {
     h.send({ t: 'proc-kill', id: 'p1' })
     expect(h.proc.killed).toBe(true)
   })
-  it('proc-list answers the entries; proc-attach replays the buffer to the asker only, one line each', () => {
+  it('proc-list answers the entries; proc-attach answers one proc-attached holding the buffer, to the asker only', () => {
     const h = harness()
     h.spawn()
     h.proc.emit('a\nb\n')
     h.send({ t: 'proc-list' })
-    expect(h.replies[1]).toEqual({ t: 'proc-listed', entries: [{ id: 'p1', pid: 11, meta: { kind: 'chat', id: 'chat_1', restore: {} }, alive: true, truncated: false }] })
-    h.replies.length = 0
+    expect(h.replies.at(-1)).toMatchObject({ t: 'proc-listed' })
+    const before = h.broadcast.length
     h.send({ t: 'proc-attach', id: 'p1' })
-    expect(h.replies).toEqual([{ t: 'proc-line', id: 'p1', line: 'a' }, { t: 'proc-line', id: 'p1', line: 'b' }])
-    h.replies.length = 0
+    expect(h.replies.at(-1)).toEqual({ t: 'proc-attached', id: 'p1', lines: [{ seq: 1, line: 'a' }, { seq: 2, line: 'b' }] })
+    expect(h.broadcast.length).toBe(before)
     h.send({ t: 'proc-attach', id: 'nope' })
-    expect(h.replies).toEqual([])
+    expect(h.replies.at(-1)).toEqual({ t: 'proc-attached', id: 'nope', lines: [] })
   })
   it('does not own pty-* or handshake messages', () => {
     const h = harness()

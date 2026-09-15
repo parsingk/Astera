@@ -24,7 +24,7 @@ function fakeProc(pid = 4242): RegistryProc & { sent: string[]; killed: boolean;
 const harness = (over: { bufferChars?: number; spawnThrows?: boolean } = {}) => {
   const procs: ReturnType<typeof fakeProc>[] = []
   const logs: string[] = []
-  const lines: Array<[string, string]> = []
+  const lines: Array<[string, number, string]> = []
   const exits: Array<[string, number]> = []
   const registry = new ProcRegistry({
     spawn: () => {
@@ -36,7 +36,7 @@ const harness = (over: { bufferChars?: number; spawnThrows?: boolean } = {}) => 
     log: (m) => logs.push(m),
     bufferChars: over.bufferChars
   })
-  registry.onLine((id, line) => lines.push([id, line]))
+  registry.onLine((id, seq, line) => lines.push([id, seq, line]))
   registry.onExit((id, code) => exits.push([id, code]))
   const open = (id = 'p1', m: PtyMeta | null = meta()) =>
     registry.open({ id, file: 'codex', args: ['app-server'], opts: { cwd: 'D:/p', env: {} }, meta: m ?? undefined })
@@ -70,8 +70,8 @@ describe('ProcRegistry — lines', () => {
     h.open()
     h.procs[0].emit('{"a":1}\r\n{"b"')
     h.procs[0].emit(':2}\n')
-    expect(h.lines).toEqual([['p1', '{"a":1}'], ['p1', '{"b":2}']])
-    expect(h.registry.buffer('p1')).toEqual(['{"a":1}', '{"b":2}'])
+    expect(h.lines).toEqual([['p1', 1, '{"a":1}'], ['p1', 2, '{"b":2}']])
+    expect(h.registry.buffer('p1')).toEqual([{ seq: 1, line: '{"a":1}' }, { seq: 2, line: '{"b":2}' }])
   })
   it('write appends exactly one newline', () => {
     const h = harness()
@@ -94,17 +94,26 @@ describe('ProcRegistry — the buffer', () => {
     const h = harness({ bufferChars: 12 })
     h.open()
     h.procs[0].emit('aaaa\nbbbb\n') // 5 + 5 = 10 ≤ 12
-    expect(h.registry.buffer('p1')).toEqual(['aaaa', 'bbbb'])
+    expect(h.registry.buffer('p1')).toEqual([{ seq: 1, line: 'aaaa' }, { seq: 2, line: 'bbbb' }])
     expect(h.registry.list()[0].truncated).toBe(false)
     h.procs[0].emit('cccc\n') // 15 > 12 → drop 'aaaa'
-    expect(h.registry.buffer('p1')).toEqual(['bbbb', 'cccc'])
+    expect(h.registry.buffer('p1')).toEqual([{ seq: 2, line: 'bbbb' }, { seq: 3, line: 'cccc' }])
+    expect(h.registry.list()[0].truncated).toBe(true)
+  })
+  it('stamps every line with a seq from 1 and keeps the seq with the line, also past a drop', () => {
+    const h = harness({ bufferChars: 12 })
+    h.registry.open({ id: 'p1', file: 'x', args: [], opts: { cwd: '.', env: {} } })
+    h.procs[0].emit('aaaa\nbbbb\ncccc\n')
+    expect(h.lines.map(([, seq, line]) => [seq, line])).toEqual([[1, 'aaaa'], [2, 'bbbb'], [3, 'cccc']])
+    // 'aaaa' was dropped by the cap (5 + 5 + 5 > 12); the seqs of what stays are untouched.
+    expect(h.registry.buffer('p1')).toEqual([{ seq: 2, line: 'bbbb' }, { seq: 3, line: 'cccc' }])
     expect(h.registry.list()[0].truncated).toBe(true)
   })
   it('never drops the only line, however long', () => {
     const h = harness({ bufferChars: 4 })
     h.open()
     h.procs[0].emit('a-very-long-line\n')
-    expect(h.registry.buffer('p1')).toEqual(['a-very-long-line'])
+    expect(h.registry.buffer('p1')).toEqual([{ seq: 1, line: 'a-very-long-line' }])
   })
   it('the default cap is one million characters', () => {
     expect(PROC_BUFFER_CHARS).toBe(1_000_000)
@@ -120,7 +129,7 @@ describe('ProcRegistry — exit', () => {
     h.open()
     h.procs[0].emit('done\nlast')
     h.procs[0].exit(3)
-    expect(h.lines).toEqual([['p1', 'done'], ['p1', 'last']])
+    expect(h.lines).toEqual([['p1', 1, 'done'], ['p1', 2, 'last']])
     expect(h.exits).toEqual([['p1', 3]])
     expect(h.registry.list()[0].alive).toBe(false)
     expect(h.registry.buffer('p1')).toEqual([])

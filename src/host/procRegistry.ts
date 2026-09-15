@@ -30,7 +30,9 @@ interface Entry {
   proc: RegistryProc
   pid: number
   meta: PtyMeta | null
-  lines: string[]
+  lines: Array<{ seq: number; line: string }>
+  /** The last seq stamped; the next line gets seq + 1. */
+  seq: number
   chars: number
   truncated: boolean
   alive: boolean
@@ -46,7 +48,7 @@ export interface ProcRegistryDeps {
 
 export class ProcRegistry {
   private readonly entries = new Map<string, Entry>()
-  private lineCb: (id: string, line: string) => void = () => {}
+  private lineCb: (id: string, seq: number, line: string) => void = () => {}
   private exitCb: (id: string, exitCode: number) => void = () => {}
   private readonly deps: ProcRegistryDeps
   private readonly cap: number
@@ -56,7 +58,7 @@ export class ProcRegistry {
     this.cap = Math.max(1, deps.bufferChars ?? PROC_BUFFER_CHARS)
   }
 
-  onLine(cb: (id: string, line: string) => void): void {
+  onLine(cb: (id: string, seq: number, line: string) => void): void {
     this.lineCb = cb
   }
 
@@ -79,6 +81,7 @@ export class ProcRegistry {
       pid: proc.pid,
       meta: a.meta ?? null,
       lines: [],
+      seq: 0,
       chars: 0,
       truncated: false,
       alive: true,
@@ -104,16 +107,19 @@ export class ProcRegistry {
   }
 
   /** Appends a line to the replay buffer, dropping the oldest whole lines past the cap — never half a
-   *  line, which a JSON reader could not use — and never the only line, however long. */
+   *  line, which a JSON reader could not use — and never the only line, however long. Stamps the line
+   *  with the next seq for this process; a dropped line's seq is never reused. */
   private keep(entry: Entry, line: string): void {
-    entry.lines.push(line)
+    entry.seq += 1
+    const seq = entry.seq
+    entry.lines.push({ seq, line })
     entry.chars += line.length + 1
     while (entry.chars > this.cap && entry.lines.length > 1) {
-      const dropped = entry.lines.shift() as string
-      entry.chars -= dropped.length + 1
+      const dropped = entry.lines.shift() as { seq: number; line: string }
+      entry.chars -= dropped.line.length + 1
       entry.truncated = true
     }
-    this.lineCb(entry.id, line)
+    this.lineCb(entry.id, seq, line)
   }
 
   private live(id: string): Entry | null {
@@ -137,9 +143,10 @@ export class ProcRegistry {
     e.meta = { ...e.meta, restore: { ...e.meta.restore, ...patch } }
   }
 
-  /** The buffered lines, oldest first; empty for an unknown or ended id. A copy, so a replay that is
-   *  being sent cannot be changed under the sender by a line arriving meanwhile. */
-  buffer(id: string): string[] {
+  /** The buffered lines, oldest first, each with the seq it was sent with; empty for an unknown or
+   *  ended id. A copy, so a replay that is being sent cannot be changed under the sender by a line
+   *  arriving meanwhile. */
+  buffer(id: string): Array<{ seq: number; line: string }> {
     return [...(this.entries.get(id)?.lines ?? [])]
   }
 

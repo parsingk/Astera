@@ -66,8 +66,8 @@ describe('createHostProcFactory', () => {
     p.onExit((e) => { exit = e.exitCode })
     const id = spawnedId(t)
     t.deliver({ t: 'proc-spawned', id, pid: 1 })
-    t.deliver({ t: 'proc-line', id, line: 'a' })
-    t.deliver({ t: 'proc-line', id: 'other', line: 'b' })
+    t.deliver({ t: 'proc-line', id, seq: 1, line: 'a' })
+    t.deliver({ t: 'proc-line', id: 'other', seq: 1, line: 'b' })
     t.deliver({ t: 'proc-exit', id, exitCode: 4 })
     expect(lines).toEqual(['a'])
     expect(exit).toBe(4)
@@ -110,6 +110,44 @@ describe('createHostProcFactory', () => {
     t.deliver({ t: 'proc-exit', id, exitCode: 0 })
     p.kill()
     expect(t.sent.filter((m) => m.t === 'proc-kill')).toHaveLength(1)
+  })
+  it('a spawned handle drops a line whose seq it has already delivered', () => {
+    const t = transport()
+    const p = createHostProcFactory(t).factory('codex', [], opts)
+    const id = spawnedId(t)
+    const got: string[] = []
+    p.onLine((l) => got.push(l))
+    t.deliver({ t: 'proc-spawned', id, pid: 7 })
+    t.deliver({ t: 'proc-line', id, seq: 1, line: 'a' })
+    t.deliver({ t: 'proc-line', id, seq: 1, line: 'a' })
+    t.deliver({ t: 'proc-line', id, seq: 2, line: 'b' })
+    expect(got).toEqual(['a', 'b'])
+  })
+  it('an attached handle holds live lines until proc-attached, then delivers the replay, then the held lines it has not seen, in seq order', () => {
+    const t = transport()
+    const p = createHostProcFactory(t).attach({ id: 'p9', pid: 7 })
+    const got: string[] = []
+    p.onLine((l) => got.push(l))
+    t.deliver({ t: 'proc-line', id: 'p9', seq: 3, line: 'c-live' }) // landed between our proc-attach and the Host reading it
+    t.deliver({ t: 'proc-line', id: 'p9', seq: 4, line: 'd-live' })
+    expect(got).toEqual([])
+    t.deliver({ t: 'proc-attached', id: 'p9', lines: [{ seq: 1, line: 'a' }, { seq: 2, line: 'b' }, { seq: 3, line: 'c-live' }] })
+    expect(got).toEqual(['a', 'b', 'c-live', 'd-live'])
+    t.deliver({ t: 'proc-line', id: 'p9', seq: 4, line: 'd-live' })
+    t.deliver({ t: 'proc-line', id: 'p9', seq: 5, line: 'e' })
+    expect(got).toEqual(['a', 'b', 'c-live', 'd-live', 'e'])
+  })
+  it('an attached handle whose process exits before the replay lands still delivers the replay first', () => {
+    const t = transport()
+    const p = createHostProcFactory(t).attach({ id: 'p9', pid: 7 })
+    const got: string[] = []
+    let exit = -1
+    p.onLine((l) => got.push(l))
+    p.onExit((e) => { exit = e.exitCode })
+    t.deliver({ t: 'proc-exit', id: 'p9', exitCode: 0 })
+    expect(exit).toBe(0)
+    t.deliver({ t: 'proc-attached', id: 'p9', lines: [{ seq: 1, line: 'a' }] })
+    expect(got).toEqual([]) // an exited handle delivers nothing more — the buffer went with the process anyway
   })
   it('attach hands back a live handle with the given pid, marked as outliving the app', () => {
     const t = transport()
