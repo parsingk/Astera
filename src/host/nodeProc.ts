@@ -30,6 +30,12 @@ export function nodeProcSpawn(a: { log(m: string): void; platform: NodeJS.Platfo
     child.stderr?.setEncoding('utf8')
     // stderr is not protocol; it is the process complaining. The Host's log is where that belongs.
     child.stderr?.on('data', (c: string) => a.log(`proc pid ${child.pid ?? '?'} stderr: ${c.trim().slice(0, 400)}`))
+    // A stream whose pipe closes under it (the process exiting while a write or read is in flight)
+    // emits 'error' on that stream alone. With zero listeners Node treats that as unhandled and
+    // throws, crashing the whole Host over one line process's ordinary teardown race — logged instead.
+    child.stdin?.on('error', (err) => a.log(`proc pid ${child.pid ?? '?'} stdin: ${String(err)}`))
+    child.stdout?.on('error', (err) => a.log(`proc pid ${child.pid ?? '?'} stdout: ${String(err)}`))
+    child.stderr?.on('error', (err) => a.log(`proc pid ${child.pid ?? '?'} stderr: ${String(err)}`))
     child.on('exit', (code, signal) => end(code ?? (signal ? 1 : 0)))
     // ENOENT and its kind arrive here, asynchronously, with no pid — the registry sees a process that
     // started and ended at once with code 1 and a log line saying why.
@@ -48,6 +54,7 @@ export function nodeProcSpawn(a: { log(m: string): void; platform: NodeJS.Platfo
         onExit = cb
       },
       write: (data) => {
+        if (ended) return
         child.stdin?.write(data)
       },
       kill: () => {
