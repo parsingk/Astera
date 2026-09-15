@@ -78,7 +78,11 @@ export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResu
     }
     try {
       const pty = deps.attach({ id: e.id, pid: e.pid })
-      const ok = deps.adopters[e.meta.kind]?.({ id: e.meta.id, kind: e.meta.kind, pty, restore: e.meta.restore }) ?? false
+      const kind = e.meta.kind
+      // A pty never carries a chat note — chat sessions are line processes, listed separately (Task 5
+      // adds that sweep). One that does is a note this build cannot read, refused like any other.
+      const adopter = kind === 'chat' ? undefined : deps.adopters[kind]
+      const ok = adopter?.({ id: e.meta.id, kind, pty, restore: e.meta.restore }) ?? false
       if (!ok) {
         deps.log(`pty ${e.id} carries a ${e.meta.kind} note this build cannot read — killing it`)
         deps.kill(e.id)
