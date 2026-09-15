@@ -63,6 +63,8 @@ export function nodeProcSpawn(a: { log(m: string): void; platform: NodeJS.Platfo
           // The whole tree: `codex app-server` and `claude` both start children of their own.
           spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => child.kill())
         } else {
+          // SIGTERM to the child itself — not its children; treeKillCommand's posix contract is the
+          // same, and codex app-server's own children are its to clean up on SIGTERM.
           child.kill('SIGTERM')
         }
       }

@@ -5810,17 +5810,21 @@ export function registerIpc(
         return 'unknown'
       }
       // Only a Host that announced the proc-* family is asked (protocol.ts's contract). A null answer
-      // from one that did is "did not answer" — nothing is adopted, and the log says so.
-      const procEntries = speaksProcs() ? await listProcs(transport) : []
+      // from one that did is "did not answer" — nothing is adopted, and the log says so. Hoisted once
+      // for the three reads below rather than calling speaksProcs() again at each one.
+      const speaks = speaksProcs()
+      // A Host that announced procs but wedges adds proc-list's 5 s to the pty list's 5 s; sequential
+      // on purpose so the pty list's null can return first.
+      const procEntries = speaks ? await listProcs(transport) : []
       if (procEntries === null) hostLog('host: the Host did not answer the proc list — no line process was taken back')
       const res = await reattachSessions({
         list: async () => entries,
         attach,
         sendAttach: (id) => transport.send({ t: 'pty-attach', id }),
         kill: (id) => transport.send({ t: 'pty-kill', id }),
-        ...(speaksProcs()
+        ...(speaks && procEntries !== null
           ? {
-              listProcs: async () => procEntries ?? [],
+              listProcs: async () => procEntries,
               attachProc: procFactory.attach,
               sendAttachProc: (id) => transport.send({ t: 'proc-attach', id }),
               killProc: (id) => transport.send({ t: 'proc-kill', id })
@@ -5995,7 +5999,11 @@ export function registerIpc(
         },
         log: (m) => hostLog(`host: ${m}`)
       })
-      hostLog(`host: took back ${res.adopted} (session(s) ${res.sessions.length}, chat(s) ${res.chats.length}), refused ${res.refused} (${why})`)
+      // procEntries === null here means a speaking Host did not answer the proc list: chats is then
+      // not a fact, the same reason a null pty list returns 'unknown' above rather than an empty list.
+      if (speaks && procEntries === null) res.chatsUnknown = true
+      // adopted counts every kind taken back; only chats are broken out because only they are new.
+      hostLog(`host: took back ${res.adopted} (of which ${res.chats.length} chat process(es)), refused ${res.refused} (${why})`)
       // An outdated Host that came back holding nothing is replaced now rather than at the next
       // pty-exit, which for an empty Host would never come.
       void maybeReplace(`${why}, sweep done`)
@@ -6023,7 +6031,11 @@ export function registerIpc(
       // Idempotent: `use` is one assignment of the same object, and it only changes which factory the
       // *next* spawn reaches, never a handle already handed out (see ptyRouter's own tests).
       core.ptyRouter.use(factory)
-      core.procRouter.use(procFactory.factory)
+      // Only a Host that speaks procs gets the router: against an older one a proc-spawn would get
+      // neither proc-spawned nor proc-failed and the handle would hang pending forever. The fallback
+      // (the app's own child, outlivesApp false) is the honest answer until that Host is replaced;
+      // this runs again on the next handshake.
+      core.procRouter.use(speaksProcs() ? procFactory.factory : null)
       // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this
       // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
       // that chain has already given up before a peer ever said hello — a handshake that outlasts its

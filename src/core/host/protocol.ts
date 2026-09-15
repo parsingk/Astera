@@ -12,10 +12,11 @@
  *  which is exactly the wrong behaviour the version guard exists to make impossible.
  *
  *  **Still 3 with the proc-* family.** Those messages are additive and the app sends them only to a
- *  Host whose version can answer them — `hello` carries the Host's version and `hostIsOutdated`
- *  compares it, and the 1.3.22 replacement swaps an outdated Host the moment it holds nothing. A
- *  bump would put the new app on a new pipe name and leave the old Host's terminals invisible to
- *  it, which is the one thing the guard must never cause (chat-sessions design §6.5). */
+ *  Host that announced the feature in its `hello` (`features: ['proc']`, HOST_FEATURE_PROC below;
+ *  `hostSpeaksProcs` in main/host/outdated.ts is the check). A capability, not an age: an outdated
+ *  Host is exactly the one the automatic replacement must still reach, and it cannot answer a
+ *  proc-list. A bump would put the new app on a new pipe name and leave the old Host's terminals
+ *  invisible to it, which is the one thing the guard must never cause (chat-sessions design §6.5). */
 export const HOST_PROTOCOL = 3
 
 /** The proc-* family (line processes). Announced in `hello.features` by a Host that has it; a Host

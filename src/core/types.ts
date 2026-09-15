@@ -727,12 +727,11 @@ export interface HostStatus {
 /** How much of this app's work the Host is holding right now — the fact that makes the Info tab's
  *  Host row mean something, because it answers "will my work survive if I close this?".
  *
- *  **The three kinds of pty and the chat sessions' line processes, and runs are not the afterthought
- *  they look like.** `RunManager`'s quit
- *  teardown (`stopAppOwned`) skips every pty that outlives the app, exactly as the session and
- *  terminal managers do, so a Host-held run survives the quit too. Leaving it out would tell someone
- *  whose held work is a long build or a dev server that nothing of theirs is protected. See
- *  `hostHoldings` for what is still left out and why.
+ *  **The three kinds of pty, the chat sessions' line processes, and runs are not the afterthought
+ *  they look like.** `RunManager`'s quit teardown (`stopAppOwned`) skips every pty that outlives the
+ *  app, exactly as the session and terminal managers do, so a Host-held run survives the quit too.
+ *  Leaving it out would tell someone whose held work is a long build or a dev server that nothing of
+ *  theirs is protected. See `hostHoldings` for what is still left out and why.
  *
  *  Asked separately from `HostStatus` rather than folded into it: the connection facts are known in
  *  the app the moment they are asked for, while this is a round trip to the Host, and a row that
@@ -741,7 +740,7 @@ export interface HostHoldings {
   sessions: number
   terminals: number
   runs: number
-  /** chat sessions' line processes */
+  /** Chat sessions' line processes, alive. */
   chats: number
 }
 

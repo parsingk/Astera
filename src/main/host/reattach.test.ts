@@ -58,12 +58,16 @@ const deps = (over: Partial<Parameters<typeof reattachSessions>[0]> = {}) => {
 describe('reattachSessions', () => {
   it('hands each entry to the manager its kind names, and asks the Host to replay', async () => {
     const h = deps()
-    expect(await reattachSessions(h.d as never)).toEqual({
+    const res = await reattachSessions(h.d as never)
+    expect(res).toEqual({
       adopted: 1,
       refused: 0,
       sessions: [],
       chats: []
     })
+    // chatsUnknown is the caller's to set (ipc's sweep does it); reattachSessions itself never
+    // produces one, so the shape here is pinned as undefined.
+    expect(res.chatsUnknown).toBeUndefined()
     expect(h.adopted).toEqual([['terminal', { projectPath: 'D:/p' }]])
     expect(h.attached).toEqual(['p1', 'sent:p1'])
   })
