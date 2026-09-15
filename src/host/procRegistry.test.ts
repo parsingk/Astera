@@ -38,8 +38,8 @@ const harness = (over: { bufferChars?: number; spawnThrows?: boolean } = {}) => 
   })
   registry.onLine((id, line) => lines.push([id, line]))
   registry.onExit((id, code) => exits.push([id, code]))
-  const open = (id = 'p1', m: PtyMeta | undefined = meta()) =>
-    registry.open({ id, file: 'codex', args: ['app-server'], opts: { cwd: 'D:/p', env: {} }, meta: m })
+  const open = (id = 'p1', m: PtyMeta | null = meta()) =>
+    registry.open({ id, file: 'codex', args: ['app-server'], opts: { cwd: 'D:/p', env: {} }, meta: m ?? undefined })
   return { registry, procs, logs, lines, exits, open }
 }
 
@@ -135,7 +135,7 @@ describe('ProcRegistry — notes, kill, killAll', () => {
     h.open()
     h.registry.note('p1', { threadId: 'thr_1' })
     expect(h.registry.list()[0].meta?.restore).toEqual({ accountId: 'a1', threadId: 'thr_1' })
-    h.open('p2', undefined)
+    h.open('p2', null)
     h.registry.note('p2', { x: 1 })
     expect(h.registry.list()[1].meta).toBeNull()
     h.procs[0].exit(0)
