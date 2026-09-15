@@ -95,3 +95,13 @@ export function buildCodexCommand(platform: NodeJS.Platform): CommandBuilder {
       : { file: 'codex', args }
   }
 }
+
+/** A chat session's line process: `codex app-server`, spoken over stdio (chat-sessions design §6.5,
+ *  core/chat/codexProtocol.ts). No resume/bypass/prompt args here — those are protocol calls the
+ *  adapter makes once the process is up (thread/start, thread/resume), not argv. Same win32 wrapping
+ *  as buildCodexCommand, for the same reason: on win32 codex may be a shim the shell must resolve. */
+export function buildCodexAppServerCommand(platform: NodeJS.Platform): { file: string; args: string[] } {
+  return platform === 'win32'
+    ? { file: 'cmd.exe', args: ['/c', 'codex', 'app-server'] }
+    : { file: 'codex', args: ['app-server'] }
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildClaudeCommand, buildCodexCommand } from './commands'
+import { buildClaudeCommand, buildCodexCommand, buildCodexAppServerCommand } from './commands'
 
 describe('initialPrompt', () => {
   it('claude: 마지막 위치 인자로 싣는다', () => {
@@ -55,5 +55,14 @@ describe('claude --add-dir', () => {
   })
   it('codex ignores addDirs — it reads those paths without a prompt', () => {
     expect(buildCodexCommand('linux')({ addDirs: ['/data/shots'] }).args).not.toContain('--add-dir')
+  })
+})
+
+describe('buildCodexAppServerCommand', () => {
+  it('wraps through cmd.exe on win32', () => {
+    expect(buildCodexAppServerCommand('win32')).toEqual({ file: 'cmd.exe', args: ['/c', 'codex', 'app-server'] })
+  })
+  it('runs codex directly elsewhere', () => {
+    expect(buildCodexAppServerCommand('linux')).toEqual({ file: 'codex', args: ['app-server'] })
   })
 })
