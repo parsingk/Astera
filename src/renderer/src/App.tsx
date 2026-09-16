@@ -840,9 +840,22 @@ export default function App(): React.JSX.Element {
       .getFirstRunAsked()
       .then(setFirstRunAsked)
       .catch(() => setFirstRunAsked(true)) // could not tell — the quiet answer is the right one
+    // The schedule banner's one-shot read. 'session:schedState' is pushed on changes only, so a session
+    // whose schedule was registered before this renderer existed — a reload, or main re-arming a
+    // session while the window was still coming up — would wear no banner until its next due tick.
+    // Null is the ordinary answer (no live schedule) and changes nothing.
+    const seedSchedState = (sessionId: string): void => {
+      void window.api.scheduler
+        .state(sessionId)
+        .then((ev) => {
+          if (ev) setSchedStates((prev) => ({ ...prev, [sessionId]: ev }))
+        })
+        .catch(() => {})
+    }
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
     void window.api.sessions.list().then((list) => {
       setSessions(list)
+      for (const s of list) if (s.status === 'running') seedSchedState(s.id)
       if (list.length === 0) return
       // Every session belongs to exactly one group (invariant 1) — all re-adopted sessions go into the
       // first group, and a running session (or the first one, if none) becomes the active tab
@@ -898,6 +911,9 @@ export default function App(): React.JSX.Element {
       // the worker's PTY (a permission prompt in the worker's TUI would consume them as its answer).
       // So orchestration terminals open as inactive background tabs.
       place(layoutRef.current, info.id, null, null, true)
+      // A session main made on its own can already carry a schedule — the reattach sweep re-arms one
+      // from the stored config as it hands the session back.
+      seedSchedState(info.id)
     })
     // The campaign verdict comes after the policy lookup — it can arrive later or earlier than the mount, so both paths are taken
     const offCampaign = window.api.update.onCampaign((c) => {

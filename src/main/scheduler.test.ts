@@ -118,6 +118,16 @@ describe('SchedulerCoordinator', () => {
     expect(ev?.payload.nextAt).toBe(new Date(2026, 6, 31, 18, 0).toISOString())
   })
 
+  it('stateOf answers with what register pushed, and with null for a session that has no live schedule', () => {
+    const h = harness()
+    h.coord.register(info('s1', everyMin()))
+    const pushed = h.sent.find((s) => s.channel === 'session:schedState')?.payload
+    expect(h.coord.stateOf('s1')).toEqual(pushed)
+    expect(h.coord.stateOf('nobody')).toBeNull()
+    h.coord.disable('s1')
+    expect(h.coord.stateOf('s1')).toBeNull()
+  })
+
   it('rekey: delivers to the new id after a rolling switch, and sends off for the old id', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin()))

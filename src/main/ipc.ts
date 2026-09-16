@@ -4225,6 +4225,10 @@ export function registerIpc(
 
   // Turning a schedule off — the banner button
   ipcMain.handle('scheduler.disable', (_e, sessionId: string) => scheduler?.disable(sessionId))
+  // The banner's snapshot, read once per session as the renderer adopts it: session:schedState is
+  // pushed on changes only, so a renderer that mounted after the schedule was registered (a reload)
+  // has heard nothing about it.
+  ipcMain.handle('scheduler.state', (_e, sessionId: string) => scheduler?.stateOf(sessionId) ?? null)
 
   // history
   ipcMain.handle('history.page', (_e, req?: HistoryPageRequest) => core.history.page(req))

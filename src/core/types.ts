@@ -923,6 +923,10 @@ export interface CoreApi {
   }
   scheduler: {
     disable(sessionId: string): Promise<void> // turn off the schedule of a running session — the banner button
+    // What the banner would say for this session right now, or null when it has no live schedule. The
+    // 'session:schedState' event is pushed on changes only, so a renderer that mounted after the
+    // schedule was registered (a reload) reads this once as it adopts the session.
+    state(sessionId: string): Promise<SchedStateEvent | null>
   }
   slack: {
     // Webhook, plus bot token and channel, plus app token, plus the allowed Member ID.

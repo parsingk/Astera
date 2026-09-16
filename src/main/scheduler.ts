@@ -208,6 +208,16 @@ export class SchedulerCoordinator {
     this.deps.log(`schedule disabled session=${sessionId}`)
   }
 
+  /** What the banner should show right now — the same payload pushState sends — or null for a session
+   *  without a live schedule. The renderer reads this once when it adopts a session: `session:schedState`
+   *  is pushed on changes only, so a renderer mounted after `register()` (a reload, a restart's adoption
+   *  racing the window) would otherwise show no banner until the next due tick. */
+  stateOf(sessionId: string): SchedStateEvent | null {
+    const entry = this.entries.get(sessionId)
+    if (!entry || entry.disposed) return null
+    return this.activeState(entry)
+  }
+
   /** App-shutdown cleanup (will-quit) */
   stop(): void {
     for (const entry of [...this.entries.values()]) this.dispose(entry)
@@ -309,13 +319,19 @@ export class SchedulerCoordinator {
     )
   }
 
-  private pushState(entry: Entry): void {
-    this.deps.send('session:schedState', {
+  /** The one place an 'active' banner payload is built — pushState sends it, stateOf hands it out, and
+   *  the two can never drift into saying different things about the same entry. */
+  private activeState(entry: Entry): SchedStateEvent {
+    return {
       sessionId: entry.liveId,
       state: 'active',
       nextAt: new Date(entry.nextAt).toISOString(),
       rule: entry.config.rule
-    } satisfies SchedStateEvent)
+    }
+  }
+
+  private pushState(entry: Entry): void {
+    this.deps.send('session:schedState', this.activeState(entry))
   }
 
   private dispose(entry: Entry): void {

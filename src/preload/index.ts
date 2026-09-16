@@ -131,7 +131,8 @@ const api = {
     restore: invoke('localHistory.restore')
   },
   scheduler: {
-    disable: invoke('scheduler.disable')
+    disable: invoke('scheduler.disable'),
+    state: invoke('scheduler.state')
   },
   slack: {
     getConfig: invoke('slack.getConfig'),
