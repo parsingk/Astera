@@ -810,8 +810,11 @@ app.whenReady().then(async () => {
     write: (id, d) => {
       if (core!.chat.has(id)) {
         // A chat session takes a turn, not keys — the claude coordinator's write dep carries the whole
-        // argument. The only thing this coordinator writes is the answer to the model-switch prompt,
-        // which is a pty screen, so in practice a chat chain never reaches here.
+        // argument. A chat chain reaches here from one place: `resumeInPlace`, the single-account path
+        // where a wait ends on the account the session is already on. Its carry-on text goes through the
+        // driver and the Enter that follows it on a pty is a no-op, because the driver has already sent
+        // the message. (The coordinator's other write is the answer to the model-switch prompt, which is
+        // a pty screen a chat session does not have.)
         if (d === ENTER) return
         void sessionDriver
           .deliver(id, d)
@@ -872,11 +875,17 @@ app.whenReady().then(async () => {
           // rollout file appears — without re-registering, both turn-completion notifications and the
           // usage chips stop for good after the switch. codexRolling is the codex-only coordinator
           // (ipc.ts's spawn branch already splits on provider), so every session reaching here is
-          // codex — re-checking the provider is unnecessary. Unconditional, matching the spawn path:
-          // the chips are needed whether or not this session asked for Slack, and the watcher gates
-          // the turn callback on info.slackNotify itself.
+          // codex — re-checking the provider is unnecessary. Unconditional for a pty session, matching
+          // the spawn path: the chips are needed whether or not this session asked for Slack, and the
+          // watcher gates the turn callback on info.slackNotify itself.
+          //
+          // **A chat session registers itself instead.** Its `ready` event names the thread and the
+          // rollout and registers them with `{ notifyTurns: false }` (ipc.ts) — a chat session announces
+          // its own turn ends from the protocol, so a watcher callback would make it two. Registering
+          // here would set that flag back to its default and double every notification for the rest of
+          // the chain. The old id is still dropped: that session is dead either way.
           codexRollout.unregister(p.oldSessionId)
-          codexRollout.register(p.info, p.dest)
+          if (!core!.chat.has(p.info.id)) codexRollout.register(p.info, p.dest)
         } else if (channel === 'session:rollState') {
           // codex rolling sends session:rollState too (switching/waiting/adopted/none) — suppress the
           // resume window. 'adopted' is not one of the states that suppresses: it says a chain taken

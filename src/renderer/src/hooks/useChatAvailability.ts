@@ -7,8 +7,10 @@ export interface ChatAvailability {
   hostOk: boolean
   /** Why 대화 cannot be *started* right now, or null when it can. One value, because both CLIs open a
    *  chat session the same way (a Host-owned line process) and the Host is the only thing that ever
-   *  says no. Resuming one has a second rule — it only works on the account that holds the thread —
-   *  but that is the resume modal's own (core/resume.ts's resumeChatAllowed), not this hook's. */
+   *  says no. Resuming one has a second rule — an account has to be picked for it, and since slice 4c
+   *  that can be any logged-in account of the transcript's provider, because the chat spawn copies the
+   *  transcript across the same way the terminal path does — but that is the resume modal's own
+   *  (core/resume.ts's resumeChatAllowed), not this hook's. */
   reason: 'host' | null
   enabled: boolean
 }

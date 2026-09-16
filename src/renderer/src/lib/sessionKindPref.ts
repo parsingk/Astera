@@ -7,9 +7,11 @@ import type { SessionKind } from '../../../core/types'
  *  dialog on an option it cannot use.
  *
  *  Whether 'chat' is actually offered right now is not this module's question — the Host has to speak
- *  proc-* (useChatAvailability), and a resume also has to be on the account that holds the thread
- *  (resumeChatAllowed). Each dialog decides that for itself and falls back to 'terminal' in its own
- *  state when the remembered choice is not available. */
+ *  proc-* (useChatAvailability), and a resume also has to have an account picked for it
+ *  (resumeChatAllowed). Since slice 4c that account can be any logged-in account of the transcript's
+ *  provider, not only the one that holds the thread: the chat spawn copies the transcript into the
+ *  chosen account's config dir exactly as the terminal path does. Each dialog decides that for itself
+ *  and falls back to 'terminal' in its own state when the remembered choice is not available. */
 
 const KEY = 'newSession.kind'
 
