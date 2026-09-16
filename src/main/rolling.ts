@@ -531,12 +531,11 @@ export class RollingCoordinator {
    *  null on purpose: this payload carries no usage windows, and letting applyMeta parse it would only
    *  re-derive the same nothing.
    *
-   *  **Usage does not arrive here.** This payload carries no window at all, so the apply's last act —
-   *  refreshing `lastUsagePct` from the payload — reads nothing out of it and leaves the field null. A
-   *  chat chain learns its usage on the rateLimit event instead (`onChatLimit`), and the two are
-   *  ordered the right way round in practice: meta lands at `ready` and again when the transcript
-   *  lookup succeeds, both before any turn has run. The exception is a `/clear`, whose second `ready`
-   *  comes back through here and does null the figure — the next turn's rateLimit event replaces it. */
+   *  **This is identity only — it touches nothing about usage.** A chat chain's usage arrives on the
+   *  rateLimit event instead (`onChatLimit`), and it survives a later meta: the payload built here
+   *  carries no window at all, so the apply's last act — refreshing `lastUsagePct` from that payload —
+   *  has nothing to say and its verdict is put back. Without that the figure was nulled by every
+   *  `/clear` and every late transcript lookup, which handed the replay grace back its blindfold. */
   onChatMeta(
     sessionId: string,
     meta: { claudeSessionId: string | null; transcriptPath: string | null }
@@ -552,11 +551,15 @@ export class RollingCoordinator {
       chain.transcriptPath = null
       chain.limitTail = null
     }
+    // applyMeta ends by refreshing lastUsagePct out of the payload's usage windows, and this payload has
+    // none — so the figure onChatLimit recorded is carried across rather than nulled by an identity update.
+    const usagePct = chain.lastUsagePct
     this.applyMeta(
       chain,
       { session_id: meta.claudeSessionId ?? undefined, transcript_path: meta.transcriptPath ?? undefined },
       null
     )
+    chain.lastUsagePct = usagePct
   }
 
   /** ipc's chat subscriber: a chat session's rateLimit event — what the limit phrase in the pty bytes is

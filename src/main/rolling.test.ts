@@ -3107,4 +3107,36 @@ describe('chat chains', () => {
     // The abort a chain that never learned a path takes today — a visible wait rather than silence.
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
   })
+
+  // The other half of Ruling 4c-7. A meta event is identity only — it carries no usage window at all —
+  // so the figure the rateLimit event recorded has to survive one. It did not: applyMeta's last act
+  // refreshes lastUsagePct from the payload it was handed, and a chat meta payload has nothing to give
+  // it, so every `/clear` (and every late transcript lookup) nulled the number and handed the replay
+  // grace back its blindfold.
+  it('a later meta does not wipe the usage figure the rateLimit recorded', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1', 'a2', 'a3'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    // The new session, inside the 60-second replay grace: it reports 99% on an ordinary turn…
+    h.coord.onChatMeta('s2', { claudeSessionId: 'th-2', transcriptPath: 'D:/t/th-2.jsonl' })
+    h.coord.onChatLimit('s2', {
+      status: 'allowed_warning',
+      resetsAt: null,
+      utilization: 0.99,
+      window: 'seven_day',
+      source: 'event'
+    })
+    // …and then a `/clear` starts a third conversation. The identity changes; the account's usage is a
+    // fact about the account, so it does not.
+    h.coord.onChatMeta('s2', { claudeSessionId: 'th-3', transcriptPath: 'D:/t/th-3.jsonl' })
+    h.coord.onChatLimit('s2', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2', 'copy', 'kill:s2', 'spawn:s3:a3'])
+  })
 })
