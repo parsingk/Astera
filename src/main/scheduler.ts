@@ -272,9 +272,13 @@ export class SchedulerCoordinator {
 
   private fire(entry: Entry): void {
     entry.pending = false
-    const liveId = entry.liveId // captured: a rekey or dispose while the send is in flight must not touch the moved entry
+    // Captured: a rekey or dispose while the send is in flight must not touch the moved entry. Both
+    // continuations below check it — a stale success is as much a hazard as a stale rejection, since it
+    // would otherwise zero out rejections a newer round (under the new liveId) has since accumulated.
+    const liveId = entry.liveId
     void this.deps.deliver(liveId, entry.config.command).then(
       () => {
+        if (entry.disposed || entry.liveId !== liveId) return
         entry.rejections = 0
         this.deps.log(`schedule fired session=${liveId} nextAt=${new Date(entry.nextAt).toISOString()}`)
       },

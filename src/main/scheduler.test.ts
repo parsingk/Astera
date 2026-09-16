@@ -340,9 +340,9 @@ describe('chat sessions', () => {
     const h = harness()
     h.rejectNext.count = 2
     h.coord.register(chatInfo('c1', everyMin('go')), 'codex')
-    await vi.advanceTimersByTimeAsync(60_000 + 15_000) // due: attempt 1 rejects
-    await vi.advanceTimersByTimeAsync(15_000)          // attempt 2 rejects
-    await vi.advanceTimersByTimeAsync(15_000)          // attempt 3 lands
+    await vi.advanceTimersByTimeAsync(60_000 + 15_000) // due at 60s (attempt 1 rejects) and the 75s tick (attempt 2 rejects) both land in this span
+    await vi.advanceTimersByTimeAsync(15_000)          // 90s tick: attempt 3 lands
+    await vi.advanceTimersByTimeAsync(15_000)          // 105s tick: nothing pending — a no-op
     expect(h.delivered).toEqual([{ id: 'c1', text: 'go' }])
   })
 
@@ -358,5 +358,36 @@ describe('chat sessions', () => {
     // normally: the refusal count was reset with the drop.
     await vi.advanceTimersByTimeAsync(15_000)
     expect(h.delivered).toEqual([{ id: 'c1', text: 'go' }])
+  })
+
+  it('a stale deliver resolving after a rekey does not reset rejections or log a fired line for the old id', async () => {
+    const logs: string[] = []
+    const deliverCalls: { id: string; text: string }[] = []
+    let resolveStale: (() => void) | undefined
+    const h = harness({
+      log: (m) => logs.push(m),
+      deliver: (id, text) => {
+        deliverCalls.push({ id, text })
+        // c1's round is left hanging — it resolves late, once the entry has already moved to c2.
+        // c2's round always rejects, so the number of attempts it takes to drop the round exposes
+        // whether the late c1 resolution wrongly reset the carried-over rejection count.
+        if (id === 'c1') return new Promise<void>((resolve) => (resolveStale = resolve))
+        return Promise.reject(new Error('refused'))
+      }
+    })
+    h.coord.register(chatInfo('c1', everyMin('go')), 'codex')
+    await vi.advanceTimersByTimeAsync(60_000) // due: c1's round fires and hangs (deliver's promise is still pending)
+    h.coord.rekey('c1', 'c2')
+    await vi.advanceTimersByTimeAsync(60_000) // 120s tick: c2's round comes due and rejects once — rejections=1
+    expect(logs).toContain('schedule send refused session=c2 (1/3): refused')
+    resolveStale?.() // the stale c1 promise resolves now, well after the rekey
+    await vi.advanceTimersByTimeAsync(0) // flushes the stale .then
+    expect(logs.some((m) => m.includes('schedule fired session=c1'))).toBe(false)
+    // If the stale resolve had reset rejections to 0, c2 would get a fresh 3-attempt budget and the
+    // round would still be pending after two more rejections. With the guard, only two more are needed
+    // (1 carried over + 2 more = 3) before the round is dropped.
+    await vi.advanceTimersByTimeAsync(2 * 15_000)
+    expect(logs.some((m) => m.includes('schedule round dropped session=c2'))).toBe(true)
+    expect(deliverCalls.filter((c) => c.id === 'c2')).toHaveLength(3)
   })
 })
