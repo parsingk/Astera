@@ -397,6 +397,19 @@ describe('createClaudeAdapter — the model and the permission mode', () => {
   })
 })
 
+describe('createClaudeAdapter — rate limit', () => {
+  it('a rate_limit_event is emitted as a rateLimit event and leaves the chat state alone', async () => {
+    const { p, a, events } = await started()
+    const before = a.state()
+    p.feed(F.RATE_LIMIT_EVENT)
+    await tick()
+    expect(events.filter((e) => e.type === 'rateLimit')).toEqual([
+      { type: 'rateLimit', info: { status: 'allowed_warning', resetsAt: 1789552800 * 1000, utilization: 0.99, window: 'seven_day', source: 'event' } }
+    ])
+    expect(a.state()).toEqual(before)
+  })
+})
+
 describe('createClaudeAdapter — replay after adoption', () => {
   function adopted(truncated = false, answered: string[] = []): Made {
     const p = fakeProc()

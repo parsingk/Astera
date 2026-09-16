@@ -212,6 +212,45 @@ describe('claudeEffectsOf', () => {
   })
 
   it('everything else is nothing', () => {
-    expect(claudeEffectsOf(message(F.RATE_LIMIT_EVENT))).toEqual([])
+    // RATE_LIMIT_EVENT is no longer an example of this — it now produces a rateLimit effect (below) —
+    // so an unhandled message type stands in for it.
+    const line = JSON.stringify({ type: 'stream_event', session_id: 's' })
+    expect(claudeEffectsOf(message(line))).toEqual([])
+  })
+
+  it('a rate_limit_event becomes a rateLimit effect with the wire fields normalised', () => {
+    const effects = claudeEffectsOf(message(F.RATE_LIMIT_EVENT))
+    expect(effects).toEqual([
+      { type: 'rateLimit', info: { status: 'allowed_warning', resetsAt: 1789552800 * 1000, utilization: 0.99, window: 'seven_day', source: 'event' } }
+    ])
+  })
+
+  it('a rejected event carries its status through; a missing resetsAt is null', () => {
+    const line = F.RATE_LIMIT_EVENT.replace('"status":"allowed_warning"', '"status":"rejected"').replace('"resetsAt":1789552800,', '')
+    const effects = claudeEffectsOf(message(line))
+    expect(effects[0]).toMatchObject({ type: 'rateLimit', info: { status: 'rejected', resetsAt: null, source: 'event' } })
+  })
+
+  it('a failed result whose text is a limit phrase adds a rejected rateLimit beside the error', () => {
+    // matchesLimitPhrase requires the window name between "your" and "limit" (detect.ts's LIMIT_RE) —
+    // "session" stands in for it here. Split by concatenation, same convention as claudeSignal.test.ts's
+    // LIMIT_TEXT, so this file carries no bare limit phrase for the repo self-trigger scan to catch.
+    const limitText = "You've hit your " + 'session limit · resets 3pm'
+    const line = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: limitText, session_id: 's' })
+    const effects = claudeEffectsOf(message(line))
+    expect(effects.map((e) => e.type)).toEqual(['turn', 'event', 'rateLimit', 'event']) // turn null, error, rateLimit, idle
+    expect(effects[2]).toMatchObject({ type: 'rateLimit', info: { status: 'rejected', source: 'result' } })
+  })
+
+  it('a failed result whose text is not a limit phrase adds no rateLimit', () => {
+    const line = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'boom', session_id: 's' })
+    expect(claudeEffectsOf(message(line)).map((e) => e.type)).toEqual(['turn', 'event', 'event'])
+  })
+
+  it('an assistant frame with error rate_limit adds a rejected rateLimit beside working', () => {
+    const line = JSON.stringify({ type: 'assistant', error: 'rate_limit', message: { role: 'assistant', content: [] }, session_id: 's' })
+    const effects = claudeEffectsOf(message(line))
+    expect(effects.map((e) => e.type)).toEqual(['event', 'rateLimit'])
+    expect(effects[1]).toMatchObject({ type: 'rateLimit', info: { status: 'rejected', source: 'assistant' } })
   })
 })

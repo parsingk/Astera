@@ -149,6 +149,11 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
           core.patch({ model: { ...effect.event.model, effort: effect.event.model.effort ?? core.state.model.effort, planMode: core.state.model.planMode } })
         } else if (effect.event.type === 'error') core.fail(effect.event.message)
         break
+      case 'rateLimit':
+        // Immediate, not folded into ChatState: rolling and Slack read it off the event stream, and the
+        // pane draws nothing from it, so there is no state field for `patch` to coalesce it into.
+        core.emit({ type: 'rateLimit', info: effect.info })
+        break
       default:
         // 'resolved' and 'fileChange' are Codex-only; claudeEffectsOf never emits them.
         break

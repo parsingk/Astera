@@ -9,17 +9,19 @@
 // `system/status` carries only `permissionMode` -- never enough to build a full `model` event without
 // inventing `model: null`, hence the dedicated `planMode` effect (see `claudeEffectsOf` below).
 
-import type { ChatAnswer, ApprovalDecision } from './types'
+import type { ChatAnswer, ApprovalDecision, RateLimitInfo } from './types'
 import { parseAskUserQuestion, expectedAnswers } from '../prompts/askUserQuestion'
 import { describeToolRequest } from '../prompts/toolRequest'
 import type { ModelDescriptor } from '../models/types'
 import { parseClaudeModels } from '../models/parse'
 import type { ProtocolEffect, DecodedRequest } from './codexProtocol'
+import { matchesLimitPhrase } from '../rolling/detect'
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
 const obj = (v: unknown): Record<string, unknown> | null =>
   v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
 const arr = (v: unknown): unknown[] | null => (Array.isArray(v) ? v : null)
+const num = (v: unknown): number | null => (typeof v === 'number' ? v : null)
 
 export type ClaudeFrame =
   | { kind: 'control_response'; requestId: string; ok: true; response: Record<string, unknown> }
@@ -160,6 +162,25 @@ export function encodeClaudeAnswer(frame: Extract<ClaudeFrame, { kind: 'control_
 const working: ProtocolEffect = { type: 'event', event: { type: 'status', status: 'working' } }
 const idle: ProtocolEffect = { type: 'event', event: { type: 'status', status: 'idle' } }
 
+/** Builds the rateLimit effect for all three sources (see the slice 4 records' `rate-limit-shapes.md`
+ *  for the measured wire shapes). `info` is the dedicated event's own `rate_limit_info` object for
+ *  `source: 'event'`, and null for the other two sources, which carry no such object on the wire and
+ *  so are reported as a plain rejection. The wire's `resetsAt` is epoch seconds; RateLimitInfo's is
+ *  milliseconds, converted here so nothing downstream has to remember which unit it started in. */
+function rateLimitOf(info: Record<string, unknown> | null, source: RateLimitInfo['source']): ProtocolEffect {
+  const seconds = num(info?.resetsAt)
+  return {
+    type: 'rateLimit',
+    info: {
+      status: str(info?.status) ?? 'rejected',
+      resetsAt: seconds === null ? null : seconds * 1000,
+      utilization: num(info?.utilization),
+      window: str(info?.rateLimitType),
+      source
+    }
+  }
+}
+
 export function claudeEffectsOf(frame: Extract<ClaudeFrame, { kind: 'message' }>): ProtocolEffect[] {
   const b = frame.body
 
@@ -180,7 +201,9 @@ export function claudeEffectsOf(frame: Extract<ClaudeFrame, { kind: 'message' }>
     return [{ type: 'planMode', on: b.permissionMode === 'plan' }]
   }
 
-  if (frame.type === 'assistant') return [working]
+  // An assistant frame that failed for a rate limit still means the CLI is working (it retries), so
+  // the rateLimit effect rides beside `working` rather than replacing it.
+  if (frame.type === 'assistant') return [working, ...(b.error === 'rate_limit' ? [rateLimitOf(null, 'assistant')] : [])]
 
   if (frame.type === 'user') {
     const content = arr(obj(b.message)?.content) ?? []
@@ -192,6 +215,10 @@ export function claudeEffectsOf(frame: Extract<ClaudeFrame, { kind: 'message' }>
     return toolUseIds.map((toolUseId) => ({ type: 'resolvedTool', toolUseId }))
   }
 
+  // The dedicated, always-informational rate-limit signal — distinct from a rejected turn's result
+  // text and from an assistant frame's error, both handled below.
+  if (frame.type === 'rate_limit_event') return [rateLimitOf(obj(b.rate_limit_info), 'event')]
+
   if (frame.type === 'result') {
     const isError = b.is_error === true
     const terminalReason = str(b.terminal_reason)
@@ -200,6 +227,10 @@ export function claudeEffectsOf(frame: Extract<ClaudeFrame, { kind: 'message' }>
       const message = str(b.result) || str(b.subtype) || 'error'
       out.push({ type: 'event', event: { type: 'error', message } })
     }
+    // A rejected turn has no rate_limit_info object of its own — the CLI's only tell is the same
+    // limit phrase the rolling scanner watches for on screen, so the phrase test is reused rather
+    // than duplicated.
+    if (isError && matchesLimitPhrase(str(b.result) ?? '')) out.push(rateLimitOf(null, 'result'))
     out.push(idle)
     return out
   }

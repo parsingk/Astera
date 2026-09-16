@@ -6,7 +6,7 @@
 // kebab-case strings, plan mode is a per-turn struct whose `settings.model` is required, and
 // `availableDecisions` is an experimental field the generated types don't carry — read defensively.
 
-import type { ChatRequest, ChatAnswer, ChatEvent, ApprovalDecision } from './types'
+import type { ChatRequest, ChatAnswer, ChatEvent, ApprovalDecision, RateLimitInfo } from './types'
 import type { AskForm } from '../prompts/askUserQuestion'
 import { expectedAnswers } from '../prompts/askUserQuestion'
 import type { ModelDescriptor } from '../models/types'
@@ -235,6 +235,9 @@ export type ProtocolEffect =
    *  model, so it cannot be folded into a full `model` event without inventing one. The adapter
    *  patches `state.model.planMode` in place and leaves the rest of the model alone. */
   | { type: 'planMode'; on: boolean }
+  /** Claude only, for now: a rate-limit signal, straight through to a ChatEvent of the same shape —
+   *  see RateLimitInfo (core/chat/types.ts) for where each field comes from. */
+  | { type: 'rateLimit'; info: RateLimitInfo }
 
 export function effectsOf(frame: Extract<CodexFrame, { kind: 'notification' }>): ProtocolEffect[] {
   const p = obj(frame.params) ?? {}

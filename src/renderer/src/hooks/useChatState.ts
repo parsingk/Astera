@@ -27,6 +27,10 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
       return { ...state, model: event.model }
     case 'error':
       return { ...state, error: event.message }
+    case 'rateLimit':
+      // Rolling and Slack read this straight off the event stream; the pane draws none of it, so
+      // ChatPaneState has no field for `patch` to fold it into.
+      return state
     case 'exit':
       return { ...state, status: 'idle', request: null }
   }
