@@ -8,6 +8,7 @@ import {
   type SocketClient
 } from './slackInbox'
 import { MAX_INJECT_CHARS } from '../core/slack/inbound'
+import type { ChatRequest } from '../core/chat/types'
 
 const CH = 'C-target'
 const ME = 'U-owner' // 허용된 Member ID — Slack은 메시지 이벤트의 user 필드로 보낸다
@@ -623,5 +624,154 @@ describe('SlackInboxController — 설정 변경 시 재구성', () => {
     expect(h.sockets).toHaveLength(2)
     expect(h.sockets[0].disconnects).toBe(1) // C1 소켓은 끊겼다
     expect(h.sockets[1].disconnects).toBe(0) // 최종적으로 C2 소켓만 살아있다
+  })
+})
+
+describe('chat sessions', () => {
+  function chatDeps(over: Partial<SlackInboxDeps> = {}): ReturnType<typeof setup> & {
+    delivered: string[]
+    answered: Array<{ requestId: string; answer: unknown }>
+    setPending: (r: ChatRequest | null) => void
+  } {
+    const delivered: string[] = []
+    const answered: Array<{ requestId: string; answer: unknown }> = []
+    let pending: ChatRequest | null = null
+    const h = setup({
+      isChat: () => true,
+      pendingRequest: () => pending,
+      deliverChat: async (_id, text) => {
+        delivered.push(text)
+      },
+      answerChat: async (_id, requestId, answer) => {
+        answered.push({ requestId, answer })
+      },
+      ...over
+    })
+    return { ...h, delivered, answered, setPending: (r) => { pending = r } }
+  }
+
+  const form = {
+    questions: [
+      {
+        header: 'F',
+        question: 'How?',
+        multiSelect: false,
+        options: [
+          { label: 'A', description: null },
+          { label: 'B', description: null }
+        ]
+      },
+      {
+        header: 'S',
+        question: 'Which?',
+        multiSelect: true,
+        options: [
+          { label: 'X', description: null },
+          { label: 'Y', description: null }
+        ]
+      }
+    ]
+  }
+
+  it('with no card open, the reply is one chat turn — no Enter, no pty write', async () => {
+    const h = chatDeps()
+    const c = fakeClient()
+    await h.inbox.start(c.client)
+
+    c.emit('message', { ack: async () => {}, event: message({ text: 'do the thing', thread_ts: 'T-live' }) })
+    await flush()
+
+    expect(h.delivered).toEqual(['do the thing'])
+    expect(h.writes).toEqual([])
+  })
+
+  it('a question card: the reply becomes the card’s answers', async () => {
+    const h = chatDeps()
+    h.setPending({ id: 'q1', kind: 'question', form })
+    const c = fakeClient()
+    await h.inbox.start(c.client)
+
+    c.emit('message', { ack: async () => {}, event: message({ text: '2 / 1,2', thread_ts: 'T-live' }) })
+    await flush()
+
+    expect(h.answered).toEqual([
+      {
+        requestId: 'q1',
+        answer: {
+          kind: 'question',
+          answers: [
+            { picks: [1], other: '' },
+            { picks: [0, 1], other: '' }
+          ]
+        }
+      }
+    ])
+    expect(h.delivered).toEqual([])
+  })
+
+  it('a malformed question reply posts the reason and answers nothing', async () => {
+    const h = chatDeps()
+    h.setPending({ id: 'q1', kind: 'question', form })
+    const c = fakeClient()
+    await h.inbox.start(c.client)
+
+    c.emit('message', { ack: async () => {}, event: message({ text: '2', thread_ts: 'T-live' }) })
+    await flush()
+
+    expect(h.answered).toEqual([])
+    // exact ko text of slack.choice.countMismatch (src/core/i18n/messages/ko.ts)
+    expect(h.notes.map((n) => n.text)).toEqual([
+      "⚠️ 질문이 2개인데 답은 1개입니다 — 질문마다 '/'로 구분해 주세요 (예: 1,3 / 2)"
+    ])
+  })
+
+  it('an approval card: 허용 / 항상 허용 / 거절 decide it; an unknown word posts the hint', async () => {
+    const h = chatDeps()
+    h.setPending({
+      id: 'a1',
+      kind: 'approval',
+      about: { tool: 'Write', lines: ['p'] },
+      decisions: ['accept', 'acceptForSession', 'decline']
+    })
+    const c = fakeClient()
+    await h.inbox.start(c.client)
+
+    c.emit('message', { ack: async () => {}, event: message({ text: '항상 허용', thread_ts: 'T-live', ts: '1' }) })
+    await flush()
+
+    expect(h.answered).toEqual([{ requestId: 'a1', answer: { kind: 'approval', decision: 'acceptForSession' } }])
+
+    c.emit('message', { ack: async () => {}, event: message({ text: 'maybe', thread_ts: 'T-live', ts: '2' }) })
+    await flush()
+
+    expect(h.answered).toHaveLength(1)
+    expect(h.notes.map((n) => n.text)).toEqual(['⚠️ 허용, 항상 허용 또는 거절로 답장해 주세요'])
+  })
+
+  it('a refused turn posts the CLI’s reason', async () => {
+    const h = chatDeps({
+      deliverChat: async () => {
+        throw new Error('turn in progress')
+      }
+    })
+    const c = fakeClient()
+    await h.inbox.start(c.client)
+
+    c.emit('message', { ack: async () => {}, event: message({ text: 'hi', thread_ts: 'T-live' }) })
+    await flush()
+
+    expect(h.notes.map((n) => n.text)).toEqual(['⚠️ CLI가 메시지를 받지 않았습니다 — turn in progress'])
+  })
+
+  it('a terminal session takes the pty path exactly as before', async () => {
+    const h = chatDeps({ isChat: () => false })
+    const c = fakeClient()
+    await h.inbox.start(c.client)
+
+    c.emit('message', { ack: async () => {}, event: message({ text: 'ls', thread_ts: 'T-live' }) })
+    await flush()
+
+    expect(h.writes.map((w) => w.data)).toEqual(['ls'])
+    expect(h.delivered).toEqual([])
   })
 })
