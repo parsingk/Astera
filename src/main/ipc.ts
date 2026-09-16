@@ -1276,14 +1276,23 @@ export function registerIpc(
    *  retries this on every later status change until it lands (a cheap directory probe when it keeps
    *  missing, since `locate` gives up on a `readdir`/`access` failure rather than throwing). One lookup
    *  per session at a time: a status can change several times inside one probe, and without that the
-   *  retries would pile up, every one of them reading the same directory for the same answer. */
+   *  retries would pile up, every one of them reading the same directory for the same answer.
+   *
+   *  A hit is kept only while the thread it was looked up for is still the session's. The id can change
+   *  under a lookup that is already in flight — a `/clear` starts a new conversation with a new id, and
+   *  the `ready` branch below drops the stored entry for exactly that reason — and the in-flight guard
+   *  above is keyed by session, so the newer call returns at its first line and the older answer is the
+   *  one that resolves. Without this check that answer would write the dead conversation's file back
+   *  and, worse, disarm the retry: the `status` branch looks again only while the map has nothing for
+   *  this session. The comparison is sound because the manager assigns `info.threadId` before it calls
+   *  its subscribers, so by the time any lookup resolves it already names the newest thread. */
   const findClaudeChatTranscript = (sessionId: string, accountId: string, threadId: string): void => {
     if (findingChatTranscript.has(sessionId)) return
     findingChatTranscript.add(sessionId)
     core.history
       .transcriptPathById(accountId, threadId)
       .then((p) => {
-        if (p) chatTranscripts.set(sessionId, p)
+        if (p && core.chat.info(sessionId)?.threadId === threadId) chatTranscripts.set(sessionId, p)
       })
       .catch((err) => chatWiringLog(`chat ${sessionId}: transcript lookup failed: ${String(err)}`))
       .finally(() => findingChatTranscript.delete(sessionId))

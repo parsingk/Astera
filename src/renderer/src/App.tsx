@@ -848,7 +848,10 @@ export default function App(): React.JSX.Element {
       void window.api.scheduler
         .state(sessionId)
         .then((ev) => {
-          if (ev) setSchedStates((prev) => ({ ...prev, [sessionId]: ev }))
+          // Presence guard, the same one the attention seeding below uses and for the same reason: an
+          // invoke reply and a session:schedState push have no order between them, so an entry that is
+          // already here came from the live listener and is the fresher of the two.
+          if (ev) setSchedStates((prev) => (sessionId in prev ? prev : { ...prev, [sessionId]: ev }))
         })
         .catch(() => {})
     }
