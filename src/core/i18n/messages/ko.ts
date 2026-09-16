@@ -784,6 +784,7 @@ export const ko = {
   'session.resume.originalAccountSuffix': ' (원 계정)',
   'session.resume.crossAccountHint': '전사를 이 계정으로 복사한 뒤 이어갑니다 (원본 전사는 보존).',
   'session.resume.rollChainHint': '한도 도달 시 이 순서로 전환합니다: {chain}',
+  'session.resume.kindOwnAccountOnly': '대화 세션은 원래 계정에서만 이어갈 수 있습니다',
   'session.resume.confirm': '이어하기',
   // TerminalView.tsx — only the rolling banner and the loading/exit overlays the renderer draws (main's direct PTY
   // writes are separate and handled elsewhere)

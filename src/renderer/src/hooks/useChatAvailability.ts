@@ -2,20 +2,20 @@ import { useEffect, useState } from 'react'
 import type { HostStatus } from '../../../core/types'
 import { HOST_FEATURE_PROC } from '../../../core/host/protocol'
 
-/** Why 대화 cannot be started right now, or null when it can. Both CLIs open a chat session the same
- *  way (a Host-owned line process), so the Host is the only thing that ever says no. */
-export type ChatDisabledReason = 'host'
-
 export interface ChatAvailability {
   /** Whether the Host has announced the proc-* family a chat session's line process needs. */
   hostOk: boolean
-  reason: ChatDisabledReason | null
+  /** Why 대화 cannot be *started* right now, or null when it can. One value, because both CLIs open a
+   *  chat session the same way (a Host-owned line process) and the Host is the only thing that ever
+   *  says no. Resuming one has a second rule — it only works on the account that holds the thread —
+   *  but that is the resume modal's own (core/resume.ts's resumeChatAllowed), not this hook's. */
+  reason: 'host' | null
   enabled: boolean
 }
 
 /** 대화 needs the Host's proc-* family and nothing else — either account can open one once that is up. */
 export function chatAvailabilityOf(a: { hostOk: boolean }): ChatAvailability {
-  const reason: ChatDisabledReason | null = a.hostOk ? null : 'host'
+  const reason = a.hostOk ? null : ('host' as const)
   return { hostOk: a.hostOk, reason, enabled: reason === null }
 }
 

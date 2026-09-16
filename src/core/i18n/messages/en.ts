@@ -681,6 +681,7 @@ export const en: Record<keyof typeof ko, string> = {
   'session.resume.crossAccountHint':
     'Copies the transcript to this account, then resumes (the original transcript is kept).',
   'session.resume.rollChainHint': 'Rolls through these accounts on limit: {chain}',
+  'session.resume.kindOwnAccountOnly': 'A chat session can be resumed only on its own account',
   'session.resume.confirm': 'Resume',
   'session.terminal.rollSwitching': 'Switching to “{label}”…',
   'session.terminal.trustAccepting': 'Automatically accepting folder trust…',

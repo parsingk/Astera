@@ -6,9 +6,10 @@ import type { SessionKind } from '../../../core/types'
  *  kind every account and every Host can start, so a corrupt or missing value never strands the
  *  dialog on an option it cannot use.
  *
- *  Whether 'chat' is actually offered right now (the Host's proc-* feature, the primary account's
- *  provider) is not this module's question — the dialog decides that and falls back to 'terminal' in
- *  its own state when the remembered choice is not available. */
+ *  Whether 'chat' is actually offered right now is not this module's question — the Host has to speak
+ *  proc-* (useChatAvailability), and a resume also has to be on the account that holds the thread
+ *  (resumeChatAllowed). Each dialog decides that for itself and falls back to 'terminal' in its own
+ *  state when the remembered choice is not available. */
 
 const KEY = 'newSession.kind'
 

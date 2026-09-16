@@ -638,13 +638,14 @@ export function ConversationPane({
   /** What the model readout and its menu are looking at. A terminal session's comes from the rollout
    *  and the CLI's own status bar, layered by the state above; a chat session's comes from the manager,
    *  which is the only thing that knows — there is no screen to read and the rollout is a turn behind.
-   *  `cli` is the session's own provider once the manager has said (`chat.state`); 'codex' is only a
-   *  placeholder for the moment before that answer lands (useChatState.ts), not a claim about the CLI. */
+   *  `cli` is the session's own provider once the manager has said (`chat.state`), and null until then:
+   *  the two CLIs' menus are not interchangeable, so the control is drawn only once it is known which
+   *  one this is (ComposerModelSlot), rather than guessed at for the moment before the answer lands. */
   const modelInfo = isChat
     ? {
         model: chat === null ? null : chat.model.model,
         effort: chat === null ? null : chat.model.effort,
-        cli: chat === null ? "codex" as const : chat.provider
+        cli: chat === null ? null : chat.provider
       }
     : terminalModelInfo;
 
@@ -1722,8 +1723,8 @@ export function ConversationPane({
   //
   // Claude needs none of this: it writes a statusline the app already receives.
   useEffect(() => {
-    // A chat session is codex too, and it still has no bar: the manager says what the model is, on the
-    // event stream, the moment it changes (see `modelInfo` above).
+    // Neither CLI's chat session has a bar to read: there is no terminal at all. The manager says what
+    // the model is, on the event stream, the moment it changes (see `modelInfo` above).
     if (isChat) return;
     if (modelInfo.cli !== "codex") return;
     const read = (): boolean => {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Account, HistoryEntry, RollConfig, ScheduleConfig, SessionKind } from '../../../core/types'
-import { resumeAccountOptions, resumeRollAccountIds } from '../../../core/resume'
+import { resumeAccountOptions, resumeChatAllowed, resumeRollAccountIds } from '../../../core/resume'
 import { isSlackReady } from '../../../core/slack/ready'
 import { useI18n } from '../i18n/I18nProvider'
 import { useChatAvailability } from '../hooks/useChatAvailability'
@@ -11,7 +11,9 @@ import { ScheduleFields } from './ScheduleFields'
 
 /** Modal for resuming a session from history. Only logged-in accounts appear as candidates and the
  *  original account is preselected. Picking a different account makes ipc copy the transcript into that
- *  account's configDir before --resume (the same approach rolling uses).
+ *  account's configDir before --resume (the same approach rolling uses) — which is a 터미널 resume only:
+ *  a 대화 session resumes by its protocol thread id, and that id means nothing in another account's
+ *  config dir, so the choice is offered on the owning account alone (resumeChatAllowed).
  *
  *  The rolling, scheduler, Slack and permission checkboxes are settled here. ipc.ts used to quietly
  *  revive the saved rolling and schedule settings (with no way to turn them off) and there was no way
@@ -122,11 +124,16 @@ export function ResumeDialog({
 
   // The Host poll is shared with NewSessionDialog; either provider's account can open a chat session.
   const { enabled: chatEnabled } = useChatAvailability()
+  // …but resuming one is narrower than starting one: it only works on the account that holds the
+  // thread (resumeChatAllowed, ruling S3-9).
+  const chatAllowed = resumeChatAllowed({ chatEnabled, selectedId, ownerId: entry.accountId, ownerGone })
   // A remembered 대화 falls back to 터미널 while it is unavailable — never persisted, so it is offered
-  // again once the condition clears (same reasoning as NewSessionDialog's own fallback effect).
+  // again once the condition clears (same reasoning as NewSessionDialog's own fallback effect). Picking
+  // another account is one of those conditions: the choice comes back the moment the owner is picked
+  // again, which is why nothing is written to sessionKindPref here.
   useEffect(() => {
-    if (kind === 'chat' && !chatEnabled) setKind('terminal')
-  }, [kind, chatEnabled])
+    if (kind === 'chat' && !chatAllowed) setKind('terminal')
+  }, [kind, chatAllowed])
 
   const confirm = (): void => {
     if (!selectedId) return
@@ -163,7 +170,7 @@ export function ResumeDialog({
             <button
               type="button"
               className={`segmented${kind === 'chat' ? ' active' : ''}`}
-              disabled={!chatEnabled}
+              disabled={!chatAllowed}
               onClick={() => {
                 setKind('chat')
                 sessionKindPref.write('chat')
@@ -175,7 +182,13 @@ export function ResumeDialog({
           {!chatEnabled && (
             <span className="kind-note">{t('session.new.kindHostOld')}</span>
           )}
-          {chatEnabled && kind === 'chat' && (
+          {/* The Host's own note keeps precedence above; this one only ever explains the account. It
+              waits for a selection to exist — before the login check answers there is no account to
+              say anything about, and the note would be about nothing. */}
+          {chatEnabled && selectedId !== '' && !chatAllowed && (
+            <span className="kind-note">{t('session.resume.kindOwnAccountOnly')}</span>
+          )}
+          {chatAllowed && kind === 'chat' && (
             <span className="kind-note">{t('session.new.kindChatHint')}</span>
           )}
         </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resumeAccountOptions, restoreRollAccountIds, resumeRollAccountIds } from './resume'
+import { resumeAccountOptions, restoreRollAccountIds, resumeRollAccountIds, resumeChatAllowed } from './resume'
 import type { Account } from './types'
 
 const acc = (id: string): Account => ({
@@ -131,5 +131,23 @@ describe('resumeRollAccountIds', () => {
   it('선택 계정이 목록에 없으면 claude로 간주한다', () => {
     const accounts = [acc('a'), codexAcc('x')]
     expect(resumeRollAccountIds(['a'], accounts, 'gone')).toEqual(['gone', 'a'])
+  })
+})
+
+describe('resumeChatAllowed', () => {
+  it('is allowed on the account the transcript belongs to', () => {
+    expect(resumeChatAllowed({ chatEnabled: true, selectedId: 'a', ownerId: 'a', ownerGone: false })).toBe(true)
+  })
+
+  it('is refused on another account — a protocol thread lives in one config dir', () => {
+    expect(resumeChatAllowed({ chatEnabled: true, selectedId: 'b', ownerId: 'a', ownerGone: false })).toBe(false)
+  })
+
+  it('is refused when the owning account is gone, whatever is selected', () => {
+    expect(resumeChatAllowed({ chatEnabled: true, selectedId: 'a', ownerId: 'a', ownerGone: true })).toBe(false)
+  })
+
+  it('is refused while the Host cannot open a chat session at all', () => {
+    expect(resumeChatAllowed({ chatEnabled: false, selectedId: 'a', ownerId: 'a', ownerGone: false })).toBe(false)
   })
 })

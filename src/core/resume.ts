@@ -36,6 +36,29 @@ export function resumeAccountOptions(
 }
 
 /**
+ * Whether the resume modal may offer 대화 (a chat session) right now (pure function, ruling S3-9).
+ *
+ * A terminal resume can run on any logged-in account of the same provider: the transcript is a file,
+ * and ipc copies it into the chosen account's configDir before `--resume`. A chat session cannot. It
+ * resumes by handing the CLI its protocol thread id, and that thread lives in the config dir of the
+ * account it was held on — under another account the id names nothing, and the CLI would start a blank
+ * session while the modal claimed it was continuing this one. So 대화 is offered only on the
+ * transcript's own account, and only while that account is still registered (a ghost cannot
+ * authenticate, so it is never a candidate to begin with). `chatEnabled` is the Host's own answer
+ * (useChatAvailability) and outranks both.
+ */
+export function resumeChatAllowed(a: {
+  chatEnabled: boolean
+  selectedId: string
+  /** The account the transcript belongs to — `entry.accountId`. */
+  ownerId: string
+  /** The owner is unregistered or gone altogether, so nothing can be resumed on it. */
+  ownerGone: boolean
+}): boolean {
+  return a.chatEnabled && !a.ownerGone && a.selectedId === a.ownerId
+}
+
+/**
  * Computes the roll account order to restore on a history resume (pure function).
  * Removes accounts that no longer exist from the saved order and cyclically reorders it so the
  * resume target account comes first (because --resume has to run on the account that holds the
