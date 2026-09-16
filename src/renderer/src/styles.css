@@ -1887,6 +1887,17 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    word-width left less than one tab's own min-width once MAX_PANES's four columns narrowed every
    bar; the words survive as title/aria-label on each button and as the setting's own row label. */
 .session-view-toggle { display: flex; align-items: center; gap: 3px; padding: 0 6px; flex: none; }
+/* Task 8: a chat session has no terminal to switch to, so its pane wears this instead of the two
+   .sv-seg buttons above — same slot (inside .session-view-toggle), sized to match their height
+   (.sv-seg's 4px padding + 1px border around a 13px icon) rather than the toggle's own tighter 3px
+   gap, so the tab bar's right edge does not visibly resize between a terminal and a chat tab. Muted
+   and non-interactive on purpose — it names the session's kind, it does not offer a choice. */
+.view-toggle-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 21px; padding: 0 8px; font-size: 11px; line-height: 1;
+  color: var(--text-dim); background: var(--elevated); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); white-space: nowrap; cursor: default;
+}
 .sv-seg {
   position: relative; display: flex; align-items: center; justify-content: center; padding: 4px;
   color: var(--text-dim); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm);

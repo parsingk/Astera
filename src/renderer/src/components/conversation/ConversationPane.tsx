@@ -86,6 +86,7 @@ import * as sessionBus from "../../lib/sessionBus";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
 import type { Attention, PendingToolPrompt } from "../../../../core/types";
+import type { PaneTransport } from "./paneTransport";
 
 export interface ConversationPaneProps {
   sessionId: string;
@@ -101,6 +102,10 @@ export interface ConversationPaneProps {
    *  neighbouring conversation left the caret in the pane you came from — the marker said one session
    *  and the typing went to another. */
   active?: boolean;
+  /** Task 8: which protocol this pane's session speaks — PaneGrid passes `{ kind: 'chat' }` for a
+   *  chat session's slot (its only view) and otherwise leaves this at its terminal default. Task 10
+   *  gives this branching meaning; nothing in this file reads it yet. */
+  transport?: PaneTransport;
 }
 
 // ---- pure functions ------------------------------------------------------------------------
@@ -547,7 +552,13 @@ type Status = "loading" | "unavailable" | "ready";
  * lifecycle, the two event subscriptions, load-more's paging) or reads one of the pure functions
  * above. Nothing here decides what a tool row or the pending banner look like — those are Task 8's.
  */
-export function ConversationPane({ sessionId, onGoTerminal, active = false, exited = false }: ConversationPaneProps): ReactNode {
+export function ConversationPane({
+  sessionId,
+  onGoTerminal,
+  active = false,
+  exited = false,
+  transport = { kind: "terminal" }
+}: ConversationPaneProps): ReactNode {
   const { t } = useI18n();
   const [status, setStatus] = useState<Status>("loading");
   const [turns, setTurns] = useState<ConvTurn[]>([]);

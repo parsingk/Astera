@@ -108,6 +108,7 @@ import {
 } from '../../core/panes/tree'
 import { browserTab, fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
+import { sessionKindOf } from '../../core/sessions/kind'
 import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
 import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
@@ -2007,13 +2008,19 @@ export default function App(): React.JSX.Element {
     // A restarted session inherits the tab position the old one held — it neither steals the active
     // group nor leaves a tab pointing at a dead session id
     setSessions((prev) => prev.filter((s) => s.id !== old.id))
+    // Task 7 review carry-over: without `kind`, a restarted chat session spawned as a plain terminal
+    // one instead — `spawn`'s default. `resumeThreadId` is the thread to pick the conversation back
+    // up on; it is omitted (not sent as undefined-but-present) for a session that never reached
+    // `ready` and so never got one, the same as any other resume path in this file.
     void spawn({
       accountIds: [old.accountId],
       cwd: old.cwd,
       saveDefault: false,
       slackNotify: old.slackNotify,
       bypassPermissions: old.bypassPermissions,
-      replacesSessionId: old.id
+      replacesSessionId: old.id,
+      kind: old.kind,
+      ...(sessionKindOf(old) === 'chat' && old.threadId !== undefined ? { resumeThreadId: old.threadId } : {})
     })
   }
 

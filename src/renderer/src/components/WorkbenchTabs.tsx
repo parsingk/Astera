@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Attention, SessionView } from '../../../core/types'
+import type { Attention, SessionKind, SessionView } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
@@ -156,7 +156,7 @@ export function WorkbenchTabs({
    *  is a session — null for a file, browser, or record tab, which is what keeps the toggle off
    *  screen there. PaneGrid computes it (parseTab, its sessionViews and its attention record are
    *  all its own); this component only draws what it is handed. */
-  activeSession: { sessionId: string; view: SessionView; attention: Attention } | null
+  activeSession: { sessionId: string; view: SessionView; attention: Attention; kind: SessionKind } | null
   /** The toggle's own write. */
   onSetSessionView: (sessionId: string, view: SessionView) => void
 }): React.JSX.Element {
@@ -376,34 +376,44 @@ export function WorkbenchTabs({
           setDropAt(null)
         }}
       >
-        <button
-          type="button"
-          className={`sv-seg${activeSession.view === 'terminal' ? ' active' : ''}`}
-          aria-pressed={activeSession.view === 'terminal'}
-          title={t('conversation.toggle.terminal')}
-          aria-label={t('conversation.toggle.terminal')}
-          onClick={() => onSetSessionView(activeSession.sessionId, 'terminal')}
-        >
-          <Terminal size={13} aria-hidden="true" />
-          {/* The marker sits on the segment the person is NOT looking at — it is the one telling
-              them where to look, not the one they are already on. */}
-          {activeSession.attention === 'waiting' && activeSession.view === 'conversation' && (
-            <span className="sv-seg-marker" aria-hidden="true" />
-          )}
-        </button>
-        <button
-          type="button"
-          className={`sv-seg${activeSession.view === 'conversation' ? ' active' : ''}`}
-          aria-pressed={activeSession.view === 'conversation'}
-          title={t('conversation.toggle.conversation')}
-          aria-label={t('conversation.toggle.conversation')}
-          onClick={() => onSetSessionView(activeSession.sessionId, 'conversation')}
-        >
-          <MessageSquare size={13} aria-hidden="true" />
-          {activeSession.attention === 'waiting' && activeSession.view === 'terminal' && (
-            <span className="sv-seg-marker" aria-hidden="true" />
-          )}
-        </button>
+        {activeSession.kind === 'chat' ? (
+          // A chat session has no terminal to switch to — the toggle would offer a choice that does
+          // nothing, so this badge stands in its place instead (Task 8's brief).
+          <span className="view-toggle-badge" title={t('session.new.kindChatHint')}>
+            {t('session.kind.chat')}
+          </span>
+        ) : (
+          <>
+            <button
+              type="button"
+              className={`sv-seg${activeSession.view === 'terminal' ? ' active' : ''}`}
+              aria-pressed={activeSession.view === 'terminal'}
+              title={t('conversation.toggle.terminal')}
+              aria-label={t('conversation.toggle.terminal')}
+              onClick={() => onSetSessionView(activeSession.sessionId, 'terminal')}
+            >
+              <Terminal size={13} aria-hidden="true" />
+              {/* The marker sits on the segment the person is NOT looking at — it is the one telling
+                  them where to look, not the one they are already on. */}
+              {activeSession.attention === 'waiting' && activeSession.view === 'conversation' && (
+                <span className="sv-seg-marker" aria-hidden="true" />
+              )}
+            </button>
+            <button
+              type="button"
+              className={`sv-seg${activeSession.view === 'conversation' ? ' active' : ''}`}
+              aria-pressed={activeSession.view === 'conversation'}
+              title={t('conversation.toggle.conversation')}
+              aria-label={t('conversation.toggle.conversation')}
+              onClick={() => onSetSessionView(activeSession.sessionId, 'conversation')}
+            >
+              <MessageSquare size={13} aria-hidden="true" />
+              {activeSession.attention === 'waiting' && activeSession.view === 'terminal' && (
+                <span className="sv-seg-marker" aria-hidden="true" />
+              )}
+            </button>
+          </>
+        )}
       </div>
     )}
     </>
