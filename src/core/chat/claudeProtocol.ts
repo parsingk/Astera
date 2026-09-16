@@ -9,7 +9,7 @@
 // `system/status` carries only `permissionMode` -- never enough to build a full `model` event without
 // inventing `model: null`, hence the dedicated `planMode` effect (see `claudeEffectsOf` below).
 
-import type { ChatRequest, ChatAnswer, ApprovalDecision } from './types'
+import type { ChatAnswer, ApprovalDecision } from './types'
 import { parseAskUserQuestion, expectedAnswers } from '../prompts/askUserQuestion'
 import { describeToolRequest } from '../prompts/toolRequest'
 import type { ModelDescriptor } from '../models/types'
@@ -134,10 +134,17 @@ export function decodeClaudeRequest(frame: Extract<ClaudeFrame, { kind: 'control
   }
 }
 
+/** Both refusals below are the caller pairing an answer with the wrong request, never anything the CLI
+ *  can send: every request `decodeClaudeRequest` returns carries its tool call's `input`, and a question
+ *  answer only ever comes off a question card. A fallback would put a quietly wrong frame on the wire —
+ *  an empty `updatedInput`, or an answer map built from no questions at all — and the CLI would act on
+ *  it, so this throws where it used to invent a value. */
 export function encodeClaudeAnswer(frame: Extract<ClaudeFrame, { kind: 'control_request' }>, decoded: DecodedRequest, answer: ChatAnswer): string {
-  const input = decoded.input ?? {}
+  const input = decoded.input
+  if (!input) throw new Error(`encodeClaudeAnswer: no input on request ${decoded.request.id}`)
   if (answer.kind === 'question') {
-    const form = decoded.request.kind === 'question' ? decoded.request.form : { questions: [] }
+    if (decoded.request.kind !== 'question') throw new Error(`encodeClaudeAnswer: a question answer for an ${decoded.request.kind} request (${decoded.request.id})`)
+    const form = decoded.request.form
     const answers = Object.fromEntries(form.questions.map((q, i) => [q.question, expectedAnswers(form, answer.answers, i).join(', ')]))
     return encodeControlSuccess(frame.requestId, { behavior: 'allow', updatedInput: { ...input, answers } })
   }

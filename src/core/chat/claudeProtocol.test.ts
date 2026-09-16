@@ -29,7 +29,11 @@ describe('frames', () => {
     expect(decodeClaudeFrame(F.SYSTEM_INIT)).toMatchObject({ kind: 'message', type: 'system', subtype: 'init' })
     expect(decodeClaudeFrame(F.ASSISTANT_ASK_TOOL_USE)).toMatchObject({ kind: 'message', type: 'assistant', subtype: null })
     expect(decodeClaudeFrame(F.USER_ECHO_ASK_RESULT)).toMatchObject({ kind: 'message', type: 'user', subtype: null })
+    expect(decodeClaudeFrame(F.USER_ECHO_WRITE_DENIED)).toMatchObject({ kind: 'message', type: 'user', subtype: null })
     expect(decodeClaudeFrame(F.RESULT_SUCCESS_ASK)).toMatchObject({ kind: 'message', type: 'result', subtype: 'success' })
+    expect(decodeClaudeFrame(F.RESULT_WITH_DENIALS)).toMatchObject({ kind: 'message', type: 'result', subtype: 'success' })
+    expect(decodeClaudeFrame(F.INTERRUPT_RESPONSE)).toMatchObject({ kind: 'control_response', requestId: 'astera-2', ok: true })
+    expect(decodeClaudeFrame(F.SET_MODE_RESPONSE)).toMatchObject({ kind: 'control_response', requestId: 'astera-3', ok: true })
     expect(decodeClaudeFrame(F.RATE_LIMIT_EVENT)).toMatchObject({ kind: 'message', type: 'rate_limit_event', subtype: null })
     expect(decodeClaudeFrame('not json')).toBeNull()
     expect(decodeClaudeFrame('{"no":"type"}')).toBeNull()
@@ -145,6 +149,23 @@ describe('decodeClaudeRequest', () => {
   it('an unsupported control_request subtype decodes to null', () => {
     const line = JSON.stringify({ type: 'control_request', request_id: 'x', request: { subtype: 'request_user_dialog' } })
     expect(decodeClaudeRequest(req(line))).toBeNull()
+  })
+})
+
+describe('encodeClaudeAnswer', () => {
+  it('refuses a question answer for an approval — the pairing is the caller’s mistake, not a wire case', () => {
+    const frame = req(F.CAN_USE_TOOL_WRITE)
+    const d = decodeClaudeRequest(frame)
+    if (!d) throw new Error()
+    expect(() => encodeClaudeAnswer(frame, d, { kind: 'question', answers: [] })).toThrow(/question answer/)
+  })
+
+  it('refuses a request that carries no input — every request this codec decodes has one', () => {
+    const frame = req(F.CAN_USE_TOOL_WRITE)
+    const d = decodeClaudeRequest(frame)
+    if (!d) throw new Error()
+    const { input: _input, ...withoutInput } = d
+    expect(() => encodeClaudeAnswer(frame, withoutInput, { kind: 'approval', decision: 'accept' })).toThrow(/no input/)
   })
 })
 
