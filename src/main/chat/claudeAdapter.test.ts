@@ -42,21 +42,29 @@ const replyWith = (p: { written: string[] }, subtype: string, recorded: string):
 const errReply = (p: { written: string[] }, subtype: string, error: string): string =>
   JSON.stringify({ type: 'control_response', response: { subtype: 'error', request_id: idOf(p, subtype), error } })
 
-function fresh(): { p: ReturnType<typeof fakeProc>; a: ReturnType<typeof createClaudeAdapter>; events: ChatEvent[] } {
-  const p = fakeProc()
-  const a = createClaudeAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1.3.23', log: () => {}, requestTimeoutMs: 30_000 })
-  const events: ChatEvent[] = []
-  a.on((e) => events.push(e))
-  return { p, a, events }
+interface Made {
+  p: ReturnType<typeof fakeProc>
+  a: ReturnType<typeof createClaudeAdapter>
+  events: ChatEvent[]
+  logs: string[]
 }
 
-async function started(): Promise<{ p: ReturnType<typeof fakeProc>; a: ReturnType<typeof createClaudeAdapter>; events: ChatEvent[] }> {
-  const { p, a, events } = fresh()
-  const starting = a.start({ cwd: 'D:/x', bypass: false })
+function fresh(): Made {
+  const p = fakeProc()
+  const logs: string[] = []
+  const a = createClaudeAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1.3.23', log: (m) => logs.push(m), requestTimeoutMs: 30_000 })
+  const events: ChatEvent[] = []
+  a.on((e) => events.push(e))
+  return { p, a, events, logs }
+}
+
+async function started(): Promise<Made> {
+  const made = fresh()
+  const starting = made.a.start({ cwd: 'D:/x', bypass: false })
   await tick()
-  p.feed(replyWith(p, 'initialize', F.INITIALIZE_RESPONSE))
+  made.p.feed(replyWith(made.p, 'initialize', F.INITIALIZE_RESPONSE))
   await starting
-  return { p, a, events }
+  return made
 }
 
 describe('createClaudeAdapter — handshake', () => {
@@ -91,6 +99,16 @@ describe('createClaudeAdapter — handshake', () => {
     await expect(starting).rejects.toThrow('unknown option')
     expect(events).toContainEqual({ type: 'error', message: 'unknown option --output-format' })
     expect(p.kill).toHaveBeenCalled()
+  })
+
+  it('a handshake answered in plan mode starts the session in plan mode', async () => {
+    const { p, a } = fresh()
+    const starting = a.start({ cwd: 'D:/x', bypass: false })
+    await tick()
+    const recorded = (JSON.parse(F.INITIALIZE_RESPONSE) as { response: { response: Record<string, unknown> } }).response.response
+    p.feed(okReply(p, 'initialize', { ...recorded, current_permission_mode: 'plan' }))
+    await starting
+    expect(a.state().model.planMode).toBe(true)
   })
 
   it('state() hands out a copy of the model, so a caller cannot write into the session', async () => {
@@ -179,6 +197,80 @@ describe('createClaudeAdapter — a turn with a question', () => {
     expect(a.state().request).toBeNull()
     // Remembered, not only announced — a pane that mounts after this moment reads state.error.
     expect(a.state().error).toContain('unsupported request')
+  })
+
+  it('a control_request the codec cannot read at all is refused too, and one with no id is only dropped', async () => {
+    const { p, a } = await started()
+    // No readable `request` object: the codec drops the whole frame, but the CLI is still blocked on it.
+    p.feed(JSON.stringify({ type: 'control_request', request_id: 'x2', request: 7 }))
+    await tick()
+    expect(lastWrote(p)).toEqual({
+      type: 'control_response',
+      response: { subtype: 'error', request_id: 'x2', error: 'unsupported request: ?' }
+    })
+    const sent = p.written.length
+    p.feed(JSON.stringify({ type: 'control_request', request: { subtype: 'can_use_tool' } }))
+    await tick()
+    expect(p.written.length).toBe(sent) // no request_id: there is nothing to answer
+    expect(a.state().request).toBeNull()
+  })
+
+  it('a can_use_tool whose input cannot be read says so by name, apart from an unsupported subtype', async () => {
+    const { p, a, events } = await started()
+    const raw = JSON.parse(F.CAN_USE_TOOL_ASK) as { request: { input: unknown } }
+    raw.request.input = { questions: 'not a list' } // fails parseAskUserQuestion's own schema check
+    p.feed(JSON.stringify(raw))
+    await tick()
+    expect(lastWrote(p)).toEqual({
+      type: 'control_response',
+      response: { subtype: 'error', request_id: '61631f85-69f4-404a-b464-da9956967ec5', error: 'unreadable request: can_use_tool AskUserQuestion' }
+    })
+    expect(events).toContainEqual({ type: 'error', message: 'unreadable request: can_use_tool AskUserQuestion' })
+    expect(a.state().request).toBeNull()
+  })
+
+  it('a card on screen outranks the working frames the turn keeps sending, until it is answered', async () => {
+    const { p, a } = await started()
+    void a.send('write a file')
+    await tick()
+    p.feed(F.SYSTEM_INIT)
+    p.feed(F.CAN_USE_TOOL_WRITE)
+    await tick()
+    expect(a.state().status).toBe('waiting')
+    // The CLI goes on talking while it waits for the answer — an assistant frame means 'working', and
+    // taking the pane off the question the person is being asked is not what it means.
+    p.feed(F.ASSISTANT_ASK_TOOL_USE)
+    await tick()
+    expect(a.state()).toMatchObject({ status: 'waiting', request: { id: 'e2c6575b-58ee-471f-9814-b42385019f90' } })
+    await a.answer('e2c6575b-58ee-471f-9814-b42385019f90', { kind: 'approval', decision: 'accept' })
+    await tick()
+    expect(a.state()).toMatchObject({ status: 'working', request: null })
+  })
+
+  it('an answered request is noted, so the next app knows it was answered before the restart', async () => {
+    const { p, a } = await started()
+    void a.send('write a file')
+    await tick()
+    p.feed(F.SYSTEM_INIT)
+    p.feed(F.CAN_USE_TOOL_WRITE)
+    await tick()
+    await a.answer('e2c6575b-58ee-471f-9814-b42385019f90', { kind: 'approval', decision: 'accept' })
+    expect(p.notes.at(-1)).toEqual({ answered: ['e2c6575b-58ee-471f-9814-b42385019f90'] })
+  })
+
+  it('a write that fails leaves the card up and says so, since nothing reached the CLI', async () => {
+    const { p, a } = await started()
+    void a.send('write a file')
+    await tick()
+    p.feed(F.SYSTEM_INIT)
+    p.feed(F.CAN_USE_TOOL_WRITE)
+    await tick()
+    p.write = () => {
+      throw new Error('write EPIPE')
+    }
+    await expect(a.answer('e2c6575b-58ee-471f-9814-b42385019f90', { kind: 'approval', decision: 'accept' })).rejects.toThrow('EPIPE')
+    await tick()
+    expect(a.state()).toMatchObject({ status: 'waiting', request: { id: 'e2c6575b-58ee-471f-9814-b42385019f90' } })
   })
 
   it('interrupts the running turn, and the aborted result is idle without an error', async () => {
@@ -279,12 +371,17 @@ describe('createClaudeAdapter — the model and the permission mode', () => {
 })
 
 describe('createClaudeAdapter — replay after adoption', () => {
-  function adopted(truncated = false): { p: ReturnType<typeof fakeProc>; a: ReturnType<typeof createClaudeAdapter>; events: ChatEvent[] } {
+  function adopted(truncated = false, answered: string[] = []): Made {
     const p = fakeProc()
-    const a = createClaudeAdapter({ proc: p, mode: { mode: 'adopt', threadId: SESSION_ID, rolloutPath: null, truncated }, version: '1', log: () => {}, requestTimeoutMs: 30_000 })
+    const logs: string[] = []
+    const a = createClaudeAdapter({
+      proc: p,
+      mode: { mode: 'adopt', threadId: SESSION_ID, rolloutPath: null, truncated, answered },
+      version: '1', log: (m) => logs.push(m), requestTimeoutMs: 30_000
+    })
     const events: ChatEvent[] = []
     a.on((e) => events.push(e))
-    return { p, a, events }
+    return { p, a, events, logs }
   }
 
   it('speaks no handshake and is ready with the adopted session at once', async () => {
@@ -294,13 +391,39 @@ describe('createClaudeAdapter — replay after adoption', () => {
     expect(events[0]).toEqual({ type: 'ready', threadId: SESSION_ID, rolloutPath: null })
   })
 
-  it('a request answered before the restart is not shown — its tool_result echo follows it', async () => {
+  it('a request answered before the restart is not shown — its tool_result echo alone settles it', async () => {
     const { p, a, events } = adopted()
     await a.start({ cwd: 'D:/x', bypass: false })
-    for (const l of [F.SYSTEM_INIT, F.CAN_USE_TOOL_ASK, F.USER_ECHO_ASK_RESULT, F.RESULT_SUCCESS_ASK]) p.feed(l)
+    // No `result` here on purpose: the echo is what has to clear the card, and a turn that is still
+    // running proves it did (the finished turn's own rule is the next test).
+    for (const l of [F.SYSTEM_INIT, F.CAN_USE_TOOL_ASK, F.USER_ECHO_ASK_RESULT]) p.feed(l)
     await tick()
-    expect(a.state()).toMatchObject({ status: 'idle', request: null })
+    expect(a.state()).toMatchObject({ status: 'working', request: null })
     expect(events.filter((e) => e.type === 'request')).toEqual([])
+  })
+
+  it('a can_use_tool answered before the restart is skipped outright, while another one still opens', async () => {
+    const { p, a, events, logs } = adopted(false, ['61631f85-69f4-404a-b464-da9956967ec5'])
+    await a.start({ cwd: 'D:/x', bypass: false })
+    p.feed(F.SYSTEM_INIT)
+    p.feed(F.CAN_USE_TOOL_ASK) // replayed: the answer went out before the restart, its echo did not
+    await tick()
+    expect(a.state().request).toBeNull()
+    expect(events.filter((e) => e.type === 'request')).toEqual([])
+    expect(p.written).toEqual([]) // answered once already — nothing goes on the wire a second time
+    expect(logs.some((l) => l.includes('skipped a replayed can_use_tool'))).toBe(true)
+    p.feed(F.CAN_USE_TOOL_WRITE)
+    await tick()
+    expect(a.state()).toMatchObject({ status: 'waiting', request: { id: 'e2c6575b-58ee-471f-9814-b42385019f90' } })
+  })
+
+  it('the requests a finished turn takes with it are logged, so the drop is not silent', async () => {
+    const { p, a, logs } = adopted()
+    await a.start({ cwd: 'D:/x', bypass: false })
+    for (const l of [F.SYSTEM_INIT, F.CAN_USE_TOOL_WRITE, F.RESULT_WITH_DENIALS]) p.feed(l)
+    await tick()
+    expect(a.state().request).toBeNull()
+    expect(logs.some((l) => l.includes('1 open request'))).toBe(true)
   })
 
   it('a request the finished turn left behind is not shown either — the CLI does not keep one across a result', async () => {
@@ -351,6 +474,9 @@ describe('createClaudeAdapter — replay after adoption', () => {
     expect(a.state().outlivesApp).toBe(true)
   })
 
+})
+
+describe('createClaudeAdapter — exit', () => {
   it('exit ends pending requests and is reported with its code', async () => {
     const { p, a, events } = await started()
     const listing = a.setModel('sonnet', null)

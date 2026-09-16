@@ -12,7 +12,10 @@
 //  - `system/init` repeats at the head of every turn and carries the model but no effort, so a model
 //    event must not wipe an effort — or the plan mode — that is already known (see applyEffect).
 //  - A finished turn takes every open permission prompt with it: the CLI does not keep a `can_use_tool`
-//    open across a `result`, which is also the replay rule for a request answered before a restart.
+//    open across a `result`, so a replayed turn that ends in one leaves no card behind either.
+//  - A `can_use_tool` is settled on the wire only by the CLI's own `tool_result` echo, which lags our
+//    answer by the tool's run time. A request answered inside that window has no echo behind it in the
+//    replay, so it is skipped by id instead (`answered` below, ruling S3-7).
 import type { ProcLike } from '../../core/sessions/proc'
 import type { ChatAdapter, ChatAnswer } from '../../core/chat/types'
 import type { ModelDescriptor } from '../../core/models/types'
@@ -39,6 +42,11 @@ export interface ClaudeAdapterDeps {
  *  turn as running ('working') rather than as no turn at all ('idle'). */
 const PENDING_TURN = 'pending'
 
+/** How many answered request ids are kept in the note. The replay only ever carries the CLI's recent
+ *  output, so a handful would do; this is small enough to write on every answer and long enough that
+ *  the window can never outrun it. */
+const ANSWERED_KEPT = 32
+
 export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
   const { proc, mode, log } = deps
   const core = createAdapterCore({ proc, log, requestTimeoutMs: deps.requestTimeoutMs }, mode, 'claude')
@@ -49,6 +57,16 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
    *  queue and everything the pane reads off it; this is the one question it cannot answer for us —
    *  which ids are still open when a turn ends. */
   const openTools = new Map<string, string | undefined>()
+  /** The `can_use_tool` requests this session has answered, newest last, written to the Host note on
+   *  every answer and read back out of it after a restart (ruling S3-7).
+   *
+   *  Claude's only settle mark for a request is the CLI's own `tool_result` echo, and that lags our
+   *  answer by however long the tool runs — so the replay an adopted session reads can carry a request
+   *  that is already answered, with no echo behind it to clear it. Shown, it would be answered twice:
+   *  once by the app that is gone and once by the person looking at it now. This list is what tells the
+   *  two apart. Codex needs none of it, because its `serverRequest/resolved` follows every answer at
+   *  once and the replay carries that too. */
+  const answered: string[] = mode.mode === 'adopt' ? [...(mode.answered ?? [])] : []
 
   // ---- the wire: one place to send, one place to read a line ----
 
@@ -65,8 +83,21 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
    *  whose echo the replay does not carry. The turn marker is already null by the time this runs, so the
    *  emptied queue settles on 'idle'. */
   function endOpenRequests(): void {
+    if (openTools.size === 0) return
+    // Said out loud: a card disappearing on its own is the kind of thing whose only trace should not be
+    // the screen it left.
+    log(`the turn ended with ${openTools.size} open request(s) — the CLI keeps none across a result`)
     for (const id of openTools.keys()) core.resolveRequest(id)
     openTools.clear()
+  }
+
+  /** Remembers a request as answered, for a replay after a restart to skip — see `answered`. The note
+   *  is fire-and-forget, the same as `remember({ threadId })`: a Host that does not take it costs this
+   *  session nothing while it runs, and the list is rewritten whole on the next answer anyway. */
+  function rememberAnswered(requestId: string): void {
+    answered.push(requestId)
+    if (answered.length > ANSWERED_KEPT) answered.splice(0, answered.length - ANSWERED_KEPT)
+    proc.remember?.({ answered: [...answered] })
   }
 
   function applyEffect(effect: ProtocolEffect): void {
@@ -95,8 +126,15 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
         core.patch({ model: { ...core.state.model, planMode: effect.on } })
         break
       case 'event':
-        if (effect.event.type === 'status') core.patch({ status: effect.event.status, truncated: false })
-        else if (effect.event.type === 'model') {
+        if (effect.event.type === 'status') {
+          // A card on screen outranks 'working'. The CLI goes on talking while it waits for an answer
+          // (every assistant frame means 'working'), and the person is being asked a question — the
+          // status that says so stays until the answer or the turn's end takes the card away, both of
+          // which come through the core's own empty-queue status rather than through here. 'idle' is
+          // not guarded: it only ever arrives with the `result` that has already emptied the queue.
+          if (effect.event.status === 'working' && core.state.request !== null) core.patch({ truncated: false })
+          else core.patch({ status: effect.event.status, truncated: false })
+        } else if (effect.event.type === 'model') {
           // `system/init` repeats every turn with the model in force but no effort, and its plan mode
           // arrives as the `planMode` effect right behind this one — so neither is taken from here: an
           // absent effort keeps the one already known rather than blanking the pill.
@@ -109,22 +147,61 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
     }
   }
 
+  /** Refused on the wire as well as reported: a control_request left hanging blocks the CLI's turn. */
+  function refuseRequest(requestId: string, reason: string): void {
+    proc.write(encodeControlError(requestId, reason))
+    core.fail(reason)
+  }
+
   function handleControlRequest(frame: Extract<ClaudeFrame, { kind: 'control_request' }>): void {
+    // Before anything is decoded or written: this one was answered by the process that is gone, and the
+    // only right thing to do with it is nothing at all. Request ids are unique per CLI process, so a
+    // live request can never carry an answered id and this needs no "the replay is over" marker.
+    if (frame.subtype === 'can_use_tool' && answered.includes(frame.requestId)) {
+      log(`skipped a replayed can_use_tool ${frame.requestId}: answered before the restart`)
+      return
+    }
     const decoded = decodeClaudeRequest(frame)
     if (!decoded) {
-      // Refused on the wire as well as reported: a control_request left hanging blocks the CLI's turn.
-      proc.write(encodeControlError(frame.requestId, `unsupported request: ${frame.subtype}`))
-      core.fail(`unsupported request: ${frame.subtype}`)
+      // Two different failures, said apart: a subtype this build has no card for, and a `can_use_tool`
+      // whose own input would not read (an AskUserQuestion that fails parseAskUserQuestion, say).
+      const toolName = typeof frame.request.tool_name === 'string' ? frame.request.tool_name : '?'
+      refuseRequest(frame.requestId, frame.subtype === 'can_use_tool' ? `unreadable request: can_use_tool ${toolName}` : `unsupported request: ${frame.subtype}`)
       return
     }
     openTools.set(decoded.request.id, decoded.toolUseId)
     core.openRequest(decoded.request.id, { decoded, wireId: frame.requestId })
   }
 
+  /** A `control_request` line the codec could not read at all — no `request` object, or a subtype that
+   *  is not a string — comes back from `decodeClaudeFrame` as null, indistinguishable from any other
+   *  unreadable line. The CLI is still blocked on it, so the raw line is looked at once more for the
+   *  one field an answer needs. Null when the line is not a control_request at all (the ordinary case
+   *  for an unreadable line, and none of this adapter's business); a null `requestId` when it is one
+   *  but names no request, where there is nothing to answer and inventing an id would answer
+   *  somebody else's. */
+  function unreadableControlRequest(line: string): { requestId: string | null } | null {
+    try {
+      const o: unknown = JSON.parse(line)
+      if (typeof o !== 'object' || o === null) return null
+      const { type, request_id: requestId } = o as { type?: unknown; request_id?: unknown }
+      if (type !== 'control_request') return null
+      return { requestId: typeof requestId === 'string' ? requestId : null }
+    } catch {
+      return null
+    }
+  }
+
   function handleLine(line: string): void {
     if (core.ended) return
     const frame = decodeClaudeFrame(line)
-    if (!frame) return
+    if (!frame) {
+      const raw = unreadableControlRequest(line)
+      if (!raw) return
+      if (raw.requestId !== null) refuseRequest(raw.requestId, 'unsupported request: ?')
+      else log('dropped a control_request that names no request_id — there is nothing to answer')
+      return
+    }
     if (frame.kind === 'control_response') core.settle(frame.requestId, frame.ok ? { ok: true, value: frame.response } : { ok: false, error: frame.error })
     else if (frame.kind === 'control_request') handleControlRequest(frame)
     else for (const effect of claudeEffectsOf(frame)) applyEffect(effect)
@@ -179,6 +256,9 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
     })
     if (!entry) throw new Error(`no open request: ${requestId}`)
     openTools.delete(requestId)
+    // Only once the answer is actually on the wire — a write that threw answered nothing, and noting it
+    // would hide the request from the replay that is the person's one chance to answer it again.
+    rememberAnswered(requestId)
   }
 
   async function doSetModel(model: string): Promise<void> {
