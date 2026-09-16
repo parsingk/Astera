@@ -475,6 +475,18 @@ export class HistoryIndex {
     return entry
   }
 
+  /** The transcript file for one (accountId, sessionId) pair, found the same way `locateEntry` finds it
+   *  by entryId — a thin public wrapper for a caller that has the two parts separately (main/ipc.ts's
+   *  chat subscriber, which learns a Claude session's threadId from a `ready` event and its accountId
+   *  from `core.chat.info`) rather than the combined `accountId:sessionId` string `preview` takes. Does
+   *  not touch `entryById`: this is a one-off lookup for a session that has not necessarily been listed. */
+  async transcriptPathById(accountId: string, sessionId: string): Promise<string | null> {
+    const account = this.getAccounts().find((a) => a.id === accountId)
+    if (!account) return null
+    const entry = await this.strategyFor(account).locate(account, sessionId, this.io)
+    return entry?.filePath ?? null
+  }
+
   /**
    * Registers the watch on every scan root — one native recursive handle each.
    *

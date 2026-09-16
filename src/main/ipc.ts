@@ -770,15 +770,27 @@ export function registerIpc(
   // conversation.ts's own doc). transcriptPathFor reads the same statusLine payload rolling.ts,
   // scheduler.ts and slack.ts already read for a claude session's transcript path, and answers null for
   // a codex one exactly the way it answers null for a claude session with no status line yet — codex
-  // never writes one, so this needs no provider branch of its own.
+  // never writes one, so this needs no provider branch of its own. A claude *chat* session writes no
+  // statusline either (Task 4), so its transcript is found the same way a codex chat session's rollout
+  // is — registered by id as the chat subscriber below learns it — rather than through that payload.
   /** How many file rows the composer's `@` menu shows. More than a screenful is not a menu. */
   const CONVERSATION_FILE_MATCHES = 30
   const fileIndex = createFileIndex()
+  // A claude chat session's transcript path, keyed by the app session id (not the CLI's own threadId) —
+  // filled by the chat subscriber's `ready`/`status` branches below once history's by-id lookup finds
+  // the file, and read by `sourceFor` immediately after. Beside codexRollout in spirit: both are "where
+  // a chat session's transcript lives", just registered through a different mechanism per CLI (codex
+  // names its own rollout path on `ready`; claude's file is found by session id instead).
+  const chatTranscripts = new Map<string, string>()
   const conversationSessions = createConversationSessions({
-    // Claude first, because a Claude session answers immediately and is the common case; the codex
-    // rollout is asked for only when it does not. Neither answering is ordinary, not an error: a
-    // session that has only just started has written nothing to point at yet.
+    // A claude chat session's transcript first — it is already known by the time this is asked, so no
+    // disk probe is needed here. Then claude's statusline-based route (a terminal claude session, or a
+    // codex chat session's `ready` has not yet run), then the codex rollout. Neither of the latter two
+    // answering is ordinary, not an error: a session that has only just started has written nothing to
+    // point at yet.
     sourceFor: async (sessionId) => {
+      const chatTranscript = chatTranscripts.get(sessionId)
+      if (chatTranscript) return { path: chatTranscript, format: 'claude' }
       const transcript = await transcriptPathFor(sessionId, {
         readStatusPayload: (id) => core.statusLinePayload(id)
       })
@@ -1256,6 +1268,19 @@ export function registerIpc(
    *  than this subscriber. Named for the wiring, not for chat, because `core.ts` already has a
    *  `chatLog` of its own that writes `chat.log` — two different files, two different names. */
   const chatWiringLog = hostWiring?.log ?? ((): void => {})
+  /** Looks up a claude chat session's transcript by (accountId, threadId) through the history index and
+   *  stores it in `chatTranscripts` on a hit. A miss is not an error — the file appears with the
+   *  session's first turn, so `ready` can easily run before it exists — the `status` branch below
+   *  retries this on every later status change until it lands (a cheap directory probe when it keeps
+   *  missing, since `locate` gives up on a `readdir`/`access` failure rather than throwing). */
+  const findClaudeChatTranscript = (sessionId: string, accountId: string, threadId: string): void => {
+    core.history
+      .transcriptPathById(accountId, threadId)
+      .then((p) => {
+        if (p) chatTranscripts.set(sessionId, p)
+      })
+      .catch((err) => chatWiringLog(`chat ${sessionId}: transcript lookup failed: ${String(err)}`))
+  }
   /** Everything one chat session's adapter reports, in one subscriber (chat-sessions design §6). The
    *  event always goes to the renderer — the chat pane is driven entirely by this channel — and three
    *  of the six kinds also settle something in main:
@@ -1264,12 +1289,17 @@ export function registerIpc(
    *  path is offered to us. Registering it with the **existing** watcher rather than teaching anything
    *  a second way to find a rollout is what makes every codex-shaped feature work for a chat session
    *  without knowing it is one: `sourceFor` reads the conversation through `rolloutPathFor`, the usage
-   *  chips read `usage(sessionId)`, and `conversation.model` reads the model off the same file.
+   *  chips read `usage(sessionId)`, and `conversation.model` reads the model off the same file. A claude
+   *  chat session's `ready` carries no such path (claude writes no rollout); its transcript is instead
+   *  looked up by id through `findClaudeChatTranscript` and kept in `chatTranscripts` for `sourceFor`.
    *
    *  `status` is the attention value. A chat session has no hook stream to infer one from — the
-   *  adapter says outright what the session is doing, which is why `attention.set` exists.
+   *  adapter says outright what the session is doing, which is why `attention.set` exists. It also
+   *  doubles as the retry for a claude transcript lookup that missed on `ready` (the file is not
+   *  written until the session's first turn).
    *
-   *  `exit` drops both. The rest of an exit is the pty's (`onSessionExit`, assigned just above). */
+   *  `exit` drops both, plus the transcript entry. The rest of an exit is the pty's (`onSessionExit`,
+   *  assigned just above). */
   core.chat.subscribe((sessionId, event) => {
     send('chat:event', { sessionId, event })
     if (event.type === 'ready') {
@@ -1290,11 +1320,17 @@ export function registerIpc(
         /* A failed rollout-watcher registration does not take the chat session down */
         chatWiringLog(`chat ${sessionId}: rollout registration failed: ${String(err)}`)
       }
+      if (core.chat.state(sessionId)?.provider === 'claude') findClaudeChatTranscript(sessionId, info.accountId, event.threadId)
     } else if (event.type === 'status') {
       attention.set(sessionId, event.status)
+      if (!chatTranscripts.has(sessionId) && core.chat.state(sessionId)?.provider === 'claude') {
+        const info = core.chat.info(sessionId)
+        if (info?.threadId) findClaudeChatTranscript(sessionId, info.accountId, info.threadId)
+      }
     } else if (event.type === 'exit') {
       attention.forget(sessionId)
       codexRollout?.unregister(sessionId)
+      chatTranscripts.delete(sessionId)
     }
   })
   // run output and status to the renderer
@@ -4077,6 +4113,7 @@ export function registerIpc(
   ipcMain.on('sessions.ack', (_e, id, bytes) => core.sessions.ack(id, bytes))
   ipcMain.handle('sessions.kill', (_e, id) => {
     codexRollout?.unregister(id) // also unregister on the tab-close path, which arrives before the exit event
+    chatTranscripts.delete(id) // same reason — the exit event that would otherwise drop it may not beat this
     // Closing a chat session's tab ends its line process, the same gesture on the same button — which
     // manager holds the id is not something the renderer knows or should have to ask.
     if (core.chat.has(id)) return core.chat.kill(id)
@@ -6361,6 +6398,11 @@ export function registerIpc(
   // core.statusLinePayload answers null for a session that has written nothing, and the extractor
   // answers nulls for anything it cannot read.
   ipcMain.handle('conversation.model', async (_e, sessionId: string) => {
+    // A chat session's own adapter already knows its model — set once on start, and again on every
+    // /model change — so it answers before any file would (a fresh claude chat session has not written
+    // a transcript yet, and a fresh codex one no rollout), for both providers.
+    const chatState = core.chat.state(sessionId) // null for an id core.chat does not hold (a pty session)
+    if (chatState) return { model: chatState.model.model, effort: chatState.model.effort, cli: chatState.provider }
     // The account says which CLI this is; what has been read does not. An earlier version asked the
     // files — no statusline and no rollout meant Claude — and so called a codex session that had not
     // had a turn yet Claude, because a rollout only exists once there has been one. The same mistake
