@@ -73,7 +73,7 @@ describe('SchedulerCoordinator', () => {
   it('interval rule: after N minutes the tick delivers the command once', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin('상태 점검')))
-    await vi.advanceTimersByTimeAsync(60_000 + 15_000) // 1분 경과 + 다음 tick
+    await vi.advanceTimersByTimeAsync(60_000 + 15_000) // one minute on, plus the tick that sees it
     expect(h.delivered.map((d) => d.text)).toEqual(['상태 점검'])
     expect(h.delivered.every((d) => d.id === 's1')).toBe(true)
   })
@@ -106,7 +106,7 @@ describe('SchedulerCoordinator', () => {
     const h = harness({ now: () => t })
     h.coord.register(info('s1', everyMin()))
     t += 10 * 60_000 // 10분 점프 — 명목상 10회차가 지났지만 busy는 아니었다
-    await vi.advanceTimersByTimeAsync(15_000 + 200) // 다음 폴링 tick 1회
+    await vi.advanceTimersByTimeAsync(15_000 + 200) // one more polling tick
     expect(h.delivered.map((d) => d.text)).toEqual(['c'])
   })
 
@@ -146,8 +146,8 @@ describe('SchedulerCoordinator', () => {
     await vi.advanceTimersByTimeAsync(60_000 + 15_000) // 발화 시각 도달 — pending은 서지만 억제로 미전송
     expect(h.delivered).toEqual([])
     h.coord.handleRollState({ sessionId: 's1', state: 'none' }) // 억제 해제 — 즉시 발화하지 않는다
-    expect(h.delivered).toEqual([]) // none 수신 직후에는 아직 미전송 (같은 입력 줄 충돌 회피)
-    await vi.advanceTimersByTimeAsync(15_000 + 200) // 다음 tick(≤15초)
+    expect(h.delivered).toEqual([]) // still unsent right after none — it would collide on the same input line
+    await vi.advanceTimersByTimeAsync(15_000 + 200) // the next tick (within 15 s)
     expect(h.delivered.map((d) => d.text)).toEqual(['c'])
   })
 
@@ -157,7 +157,7 @@ describe('SchedulerCoordinator', () => {
     h.coord.handleRollState({ sessionId: 's1', state: 'switching' })
     h.coord.rekey('s1', 's2')
     await vi.advanceTimersByTimeAsync(60_000 + 15_000) // tick이 발화 시각 도달을 보고 pending을 세움
-    expect(h.delivered).toEqual([]) // suppressed가 살아있어 억제 유지 — 미전송
+    expect(h.delivered).toEqual([]) // suppressed survived the rekey, so the round is still held — unsent
   })
 
   it('nudged suppresses firing (idle still does not send) — the next tick after none sends once', async () => {
@@ -172,7 +172,7 @@ describe('SchedulerCoordinator', () => {
     expect(h.delivered).toEqual([])
     h.coord.handleRollState({ sessionId: 's1', state: 'none' }) // 억제 해제 — 즉시 발화하지 않는다
     expect(h.delivered).toEqual([])
-    await vi.advanceTimersByTimeAsync(15_000 + 200) // 다음 tick(≤15초)
+    await vi.advanceTimersByTimeAsync(15_000 + 200) // the next tick (within 15 s)
     expect(h.delivered.map((d) => d.text)).toEqual(['c'])
   })
 
@@ -357,6 +357,24 @@ describe('chat sessions', () => {
     // The next round came due at 120 s (interval rounds recompute from the previous due time) and fires
     // normally: the refusal count was reset with the drop.
     await vi.advanceTimersByTimeAsync(15_000)
+    expect(h.delivered).toEqual([{ id: 'c1', text: 'go' }])
+  })
+
+  it('a new round starts with a full attempt budget, even after the previous one ended part-refused', async () => {
+    // The refusal budget is "3 times per round", so a round that never used its three attempts must not
+    // hand its leftovers to the next one. That is reachable: busy holds a refused round past the next due
+    // time, and the round that comes due then is the one this asserts on. Four refusals are queued, so
+    // with the counter carried over the second round would be dropped on its first attempt and nothing
+    // would ever be delivered; with the counter reset at the due branch the third attempt of the second
+    // round lands.
+    const h = harness()
+    h.rejectNext.count = 4
+    h.coord.register(chatInfo('c1', everyMin('go')), 'codex')
+    await vi.advanceTimersByTimeAsync(60_000 + 15_000) // the 60 s and 75 s ticks: attempts one and two of round one refuse
+    h.coord.handleBusy('c1', true) // busy from here — the round still owed cannot retry
+    await vi.advanceTimersByTimeAsync(3 * 15_000) // 90 s and 105 s held; 120 s is round two coming due
+    h.coord.handleBusy('c1', false) // the idle edge sends round two's first attempt
+    await vi.advanceTimersByTimeAsync(2 * 15_000 + 200) // 135 s and 150 s: its second and third attempts
     expect(h.delivered).toEqual([{ id: 'c1', text: 'go' }])
   })
 

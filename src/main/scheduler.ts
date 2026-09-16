@@ -46,14 +46,18 @@ interface Entry {
   config: ScheduleConfig
   nextAt: number
   pending: boolean // the fire time has arrived and we are waiting for busy to clear — being a boolean, overlapping rounds collapse into one
-  busy: boolean // taps ipc's session:busy (BusyScanner)
+  // Whether the session is in the middle of something. The two kinds report it from different places and
+  // ipc.ts feeds both into handleBusy: a terminal session's comes from session:busy (the OSC scanner the
+  // BusyScanner runs over the pty's output), a chat session's from the chat protocol's own `status` event
+  // (anything but 'idle' is busy, a question card included).
+  busy: boolean
   suppressed: boolean // suppresses firing during a rolling resume window (the trust prompt, waiting, switching) — handleRollState
   provider: Provider // decides where learnKey reads the session id from — claude's statusLine, codex's rollout watcher
   kind: SessionKind // decides where learnKey reads the session id from ahead of provider — a chat session always uses chatThreadId
   sessionKey: string | null // the conversation's own session id — the scheduler.json key. Null until learned (or supplied by a resume)
   learnable: boolean // whether this session's key can be learned at all — see register for what each provider needs
   learning: boolean // guards against overlapping readStatusPayload calls
-  rejections: number // consecutive deliver refusals for the current pending round — reset on a successful fire, a rekey, or a round drop
+  rejections: number // deliver refusals within the current pending round — reset when a new round comes due, on a successful fire, on a rekey, and on a round drop
   disposed: boolean
 }
 
@@ -110,10 +114,12 @@ export class SchedulerCoordinator {
     )
   }
 
-  /** Taps ipc's session:busy changes — on the transition to idle a backed-up round is sent immediately
-   *  (without waiting for a tick). Unlike 'none' (handleRollState) this fires straight away: busy
-   *  clearing means the user has just finished typing, so there is no risk of the PTY being in the middle
-   *  of receiving some other automated input. */
+  /** Taps the busy signal of either kind — a terminal session's session:busy, a chat session's protocol
+   *  `status` — and on the transition to idle a backed-up round is sent immediately (without waiting for
+   *  a tick). Unlike 'none' (handleRollState) this fires straight away, because for both kinds the clear
+   *  names a moment that is safe to send into: on a pty the person has just finished typing, so nothing
+   *  else is part-way down the same input line; on a chat session the CLI itself reported that it is idle,
+   *  so no turn and no question card is in flight and a new turn is exactly what it is waiting for. */
   handleBusy(sessionId: string, busy: boolean): void {
     const entry = this.entries.get(sessionId)
     if (!entry || entry.disposed) return
@@ -222,6 +228,12 @@ export class SchedulerCoordinator {
           // the catch below isolates this entry alone and does not starve the rest of the tick.
           entry.nextAt = nextFireAt(entry.config.rule, this.now())
           entry.pending = true // set even while suppressed — the round is not lost and is sent once after suppression lifts
+          // A fresh round gets the full three-attempt budget. This branch runs exactly once per round, so
+          // it is the one place that can make the counter mean what its name says. Without it a round that
+          // ended part-refused (busy held it past the next due time, so its remaining attempts were never
+          // spent) would lend its refusals to the round that follows, and the new one would be dropped
+          // early for a CLI that has refused nothing since.
+          entry.rejections = 0
           this.pushState(entry)
         }
         if (entry.pending && !entry.busy && !entry.suppressed) this.fire(entry)
