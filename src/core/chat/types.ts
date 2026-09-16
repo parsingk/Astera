@@ -2,6 +2,7 @@ import type { Attention } from '../types'
 import type { AskForm, Answer } from '../prompts/askUserQuestion'
 import type { ToolRequestSummary } from '../prompts/toolRequest'
 import type { ModelDescriptor } from '../models/types'
+import type { Provider } from '../providers/meta'
 
 /** The same three words the attention state uses, on purpose: a chat session's status IS its attention. */
 export type ChatStatus = Attention
@@ -31,6 +32,8 @@ export interface ChatState {
   outlivesApp: boolean
   /** The replay this state was rebuilt from had lost its head, so `status` is a guess until the next event. */
   truncated: boolean
+  /** Which CLI this session is — set once at construction (adapterCore.ts), never patched. */
+  provider: Provider
 }
 
 export type ChatEvent =

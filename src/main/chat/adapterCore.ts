@@ -36,7 +36,8 @@ export interface OpenRequest {
 }
 
 export interface AdapterCore {
-  /** Which CLI this session is. Kept here until ChatState carries it (Task 4). */
+  /** Which CLI this session is — also mirrored onto state.provider (and snapshot()'s copy of it), so
+   *  a caller holding only a ChatState still knows which CLI it came from. */
   readonly provider: Provider
   /** The live object — adapters read it directly and change it through `patch`. */
   readonly state: ChatState
@@ -121,7 +122,8 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
     model: { model: null, effort: null, planMode: false },
     error: null,
     outlivesApp: false, // placeholder — snapshot() below reads the live value off `proc` instead
-    truncated: mode.mode === 'adopt' ? mode.truncated : false
+    truncated: mode.mode === 'adopt' ? mode.truncated : false,
+    provider
   }
   let lastEmitted: { status: ChatState['status']; request: ChatRequest | null; model: ChatModel; truncated: boolean } = {
     status: state.status,
@@ -306,7 +308,7 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
     turnId: () => turn,
     // Live from the process, not stamped at construction — the manager overrides outlivesApp on the proc
     // itself as ownership is decided, and this must track that, not a snapshot from before it was.
-    snapshot: () => ({ ...state, model: { ...state.model }, outlivesApp: proc.outlivesApp === true }),
+    snapshot: () => ({ ...state, model: { ...state.model }, outlivesApp: proc.outlivesApp === true, provider }),
     onExit
   }
 }

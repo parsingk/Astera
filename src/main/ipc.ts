@@ -1388,8 +1388,9 @@ export function registerIpc(
     // replaying a file into a new process), no statusLine, and no orchestration env — an orchestrated
     // worker is driven by writing to a terminal, which this session does not have. So it forks here,
     // before any of that, and hands back the SessionInfo its own manager built.
-    // `core.chat.spawn` throws for a non-Codex account (slice 3 adds Claude); it is left to propagate,
-    // and the renderer shows it in the same toast it shows for any failed spawn.
+    // `core.chat.spawn` picks the process and adapter by the account's provider (Task 4) — a failure
+    // building either one is left to propagate, and the renderer shows it in the same toast it shows
+    // for any failed spawn.
     if (opts.kind === 'chat') {
       // The already-open guard, for the resume path this branch has of its own. The two checks at the
       // top of this function read `opts.resumeSessionId`, which a chat resume never sets — it carries

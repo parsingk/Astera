@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import type { Account, SessionInfo } from '../../core/types'
+import type { Provider } from '../../core/providers/meta'
 import type { ProcFactory, ProcLike, ProcSpawnOptions } from '../../core/sessions/proc'
 import { makeDescriptors } from '../../core/providers/descriptor'
 import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState } from '../../core/chat/types'
+import { claudeLaunchArgs } from '../../core/chat/claudeProtocol'
 import type { AdapterMode } from './codexAdapter'
 import { ChatSessionManager, type ChatManagerDeps } from './manager'
 
@@ -40,6 +42,7 @@ class FakeProc implements ProcLike {
 
 interface FakeAdapterHandle {
   mode: AdapterMode
+  provider: Provider
   startCalls: Array<{ cwd: string; resumeThreadId?: string; bypass: boolean }>
   killCalls: number
   emit(e: ChatEvent): void
@@ -57,6 +60,7 @@ function makeAdapterFactory(startRejects = false): {
     const listeners: Array<(e: ChatEvent) => void> = []
     const handle: FakeAdapterHandle = {
       mode: a.mode,
+      provider: a.provider,
       startCalls: [],
       killCalls: 0,
       emit: (e) => {
@@ -81,7 +85,8 @@ function makeAdapterFactory(startRejects = false): {
         model: { model: null, effort: null, planMode: false },
         error: null,
         outlivesApp: a.proc.outlivesApp === true,
-        truncated: a.mode.mode === 'adopt' ? a.mode.truncated : false
+        truncated: a.mode.mode === 'adopt' ? a.mode.truncated : false,
+        provider: a.provider
       }),
       on: (fn) => {
         listeners.push(fn)
@@ -108,10 +113,14 @@ const codexAccount: Account = {
   provider: 'codex'
 }
 
+// A non-ambient configDir, like codexAccount's own — the isolation env var (CLAUDE_CONFIG_DIR) is only
+// injected off the home default, so a fixture at the ambient path would silently drop it from every
+// assertion below. provider is left unset on purpose: providerOf's own default (absent means 'claude')
+// is what a chat account built before Task 2 looks like, and spawn must still route it here.
 const claudeAccount: Account = {
   id: 'acc-cl',
   label: 'claude',
-  configDir: 'C:\\Users\\tester\\.claude',
+  configDir: 'C:\\Users\\tester\\.claude-accounts\\work',
   color: '#fff',
   createdAt: '2026-07-29T00:00:00Z'
 }
@@ -154,23 +163,50 @@ describe('ChatSessionManager.spawn', () => {
         accountId: codexAccount.id,
         cwd: 'D:/proj',
         title: 'proj',
+        provider: 'codex',
         bypassPermissions: false
       }
     })
 
     expect(handles).toHaveLength(1)
     expect(handles[0].mode).toEqual({ mode: 'fresh' })
+    expect(handles[0].provider).toBe('codex')
     expect(handles[0].startCalls).toEqual([{ cwd: 'D:/proj', resumeThreadId: undefined, bypass: false }])
 
     expect(info.kind).toBe('chat')
     expect(info.status).toBe('running')
     expect(info.title).toBe('proj')
     expect(manager.list().map((s) => s.id)).toContain(info.id)
+    expect(manager.state(info.id)?.provider).toBe('codex')
   })
 
-  it('throws for a non-codex account', () => {
-    const { manager } = setup()
-    expect(() => manager.spawn({ account: claudeAccount, cwd: 'D:/proj' })).toThrow()
+  it('spawns a claude account over the claude CLI, wires env and meta, and reaches the adapter as claude', () => {
+    const { spawned, manager, handles } = setup('win32')
+    const info = manager.spawn({ account: claudeAccount, cwd: 'D:/proj' })
+
+    expect(spawned).toHaveLength(1)
+    expect(spawned[0].file).toBe('cmd.exe')
+    expect(spawned[0].args).toEqual(['/c', 'claude', ...claudeLaunchArgs({ resumeSessionId: undefined, bypass: false })])
+    expect(spawned[0].opts.env.CLAUDE_CONFIG_DIR).toBe(claudeAccount.configDir)
+    expect(spawned[0].opts.meta).toEqual({
+      kind: 'chat',
+      id: info.id,
+      restore: {
+        accountId: claudeAccount.id,
+        cwd: 'D:/proj',
+        title: 'proj',
+        provider: 'claude',
+        bypassPermissions: false
+      }
+    })
+
+    expect(handles).toHaveLength(1)
+    expect(handles[0].mode).toEqual({ mode: 'fresh' })
+    expect(handles[0].provider).toBe('claude')
+
+    expect(info.kind).toBe('chat')
+    expect(info.status).toBe('running')
+    expect(manager.state(info.id)?.provider).toBe('claude')
   })
 
   it('carries resumeThreadId and bypassPermissions through to info, meta and adapter.start', () => {
@@ -278,6 +314,28 @@ describe('ChatSessionManager.adopt', () => {
       truncated: true
     })
     expect(manager.list().map((s) => s.id)).toContain('sess-1')
+    // No provider in the note (a pre-Task-4 restart) — falls back to codex.
+    expect(handles.at(-1)?.provider).toBe('codex')
+    expect(manager.state('sess-1')?.provider).toBe('codex')
+  })
+
+  it('a note with provider: claude adopts as claude', () => {
+    const { manager, handles } = setup()
+    const info = manager.adopt({
+      id: 'sess-4',
+      proc: new FakeProc(),
+      restore: {
+        accountId: claudeAccount.id,
+        cwd: 'D:/proj',
+        title: 'proj',
+        provider: 'claude',
+        threadId: 'th-9'
+      },
+      truncated: false
+    })
+    expect(info).toMatchObject({ id: 'sess-4', accountId: claudeAccount.id })
+    expect(handles.at(-1)?.provider).toBe('claude')
+    expect(manager.state('sess-4')?.provider).toBe('claude')
   })
 
   it('a note with neither flag leaves them unset rather than guessing', () => {

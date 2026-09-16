@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { buildClaudeCommand, buildCodexCommand, buildCodexAppServerCommand } from './commands'
+import { buildClaudeCommand, buildCodexCommand, buildCodexAppServerCommand, buildClaudeChatCommand } from './commands'
+import { claudeLaunchArgs } from '../chat/claudeProtocol'
 
 describe('initialPrompt', () => {
   it('claude: 마지막 위치 인자로 싣는다', () => {
@@ -64,5 +65,26 @@ describe('buildCodexAppServerCommand', () => {
   })
   it('runs codex directly elsewhere', () => {
     expect(buildCodexAppServerCommand('linux')).toEqual({ file: 'codex', args: ['app-server'] })
+  })
+})
+
+describe('buildClaudeChatCommand', () => {
+  it('wraps through cmd.exe on win32, claude first', () => {
+    const { file, args } = buildClaudeChatCommand('win32', { bypass: false })
+    expect(file).toBe('cmd.exe')
+    expect(args[0]).toBe('/c')
+    expect(args[1]).toBe('claude')
+    expect(args.slice(2)).toEqual(claudeLaunchArgs({ bypass: false }))
+  })
+  it('runs claude directly elsewhere', () => {
+    const { file, args } = buildClaudeChatCommand('linux', { bypass: false })
+    expect(file).toBe('claude')
+    expect(args).toEqual(claudeLaunchArgs({ bypass: false }))
+  })
+  it('carries resume, bypass and model through claudeLaunchArgs, in that order', () => {
+    const { args } = buildClaudeChatCommand('linux', { resumeSessionId: 'th-1', bypass: true, model: 'opus' })
+    expect(args).toEqual(claudeLaunchArgs({ resumeSessionId: 'th-1', bypass: true, model: 'opus' }))
+    expect(args.indexOf('--resume=th-1')).toBeLessThan(args.indexOf('--permission-mode'))
+    expect(args.indexOf('--permission-mode')).toBeLessThan(args.indexOf('--model'))
   })
 })

@@ -1,13 +1,14 @@
-// The chat session manager (chat-sessions design §6): owns one Codex adapter per chat session,
-// mirroring the parts of the pty SessionManager (core/sessions/manager.ts) the app relies on — a
-// spawn/adopt pair that produces a SessionInfo, list/info/has lookups, rename/remember note-keeping,
-// the running(outlivesApp) split, and a kill that never throws for an id it does not know.
+// The chat session manager (chat-sessions design §6): owns one adapter per chat session, mirroring the
+// parts of the pty SessionManager (core/sessions/manager.ts) the app relies on — a spawn/adopt pair that
+// produces a SessionInfo, list/info/has lookups, rename/remember note-keeping, the running(outlivesApp)
+// split, and a kill that never throws for an id it does not know.
 //
-// Unlike SessionManager, a chat session's process never talks lines of terminal output to the
-// renderer — it talks the codex app-server protocol (core/chat/codexProtocol.ts) through
-// Task 4's adapter (./codexAdapter.ts), and this manager's job is only to spawn/adopt that process,
-// hold one adapter per session, keep SessionInfo in step with what the adapter reports, and fan the
-// adapter's events out to whoever is watching (main/ipc.ts's chat:event bridge, in Task 6).
+// Unlike SessionManager, a chat session's process never talks lines of terminal output to the renderer —
+// it talks its CLI's own line protocol (core/chat/codexProtocol.ts or core/chat/claudeProtocol.ts)
+// through an adapter (./codexAdapter.ts, ./claudeAdapter.ts) picked by the account's provider (Task 4),
+// and this manager's job is only to spawn/adopt that process, hold one adapter per session, keep
+// SessionInfo in step with what the adapter reports, and fan the adapter's events out to whoever is
+// watching (main/ipc.ts's chat:event bridge, in Task 6).
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { Account, SessionInfo } from '../../core/types'
@@ -16,11 +17,12 @@ import { providerOf } from '../../core/providers/meta'
 import { descriptorOf, type ProviderDescriptor } from '../../core/providers/descriptor'
 import type { ProcFactory, ProcLike } from '../../core/sessions/proc'
 import { cliEnvFor } from '../../core/sessions/cliEnv'
-import { buildCodexAppServerCommand } from '../../core/sessions/commands'
+import { buildCodexAppServerCommand, buildClaudeChatCommand } from '../../core/sessions/commands'
 import type { PtyMeta } from '../../core/host/protocol'
 import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState } from '../../core/chat/types'
 import type { ModelDescriptor } from '../../core/models/types'
 import { createCodexAdapter, type AdapterMode } from './codexAdapter'
+import { createClaudeAdapter } from './claudeAdapter'
 
 export interface ChatManagerDeps {
   factory: ProcFactory
@@ -29,8 +31,8 @@ export interface ChatManagerDeps {
   platform: NodeJS.Platform
   version: string
   log(m: string): void
-  /** Test injection; default createCodexAdapter. */
-  createAdapter?(a: { proc: ProcLike; mode: AdapterMode; version: string; log(m: string): void }): ChatAdapter
+  /** Test injection; default createClaudeAdapter / createCodexAdapter, picked by provider. */
+  createAdapter?(a: { proc: ProcLike; mode: AdapterMode; version: string; log(m: string): void; provider: Provider }): ChatAdapter
 }
 
 interface LiveChatSession {
@@ -46,9 +48,10 @@ export class ChatSessionManager {
 
   constructor(private deps: ChatManagerDeps) {}
 
-  /** Throws for a non-Codex account (slice 3 adds Claude). Returns at once; the adapter's start() runs
-   *  in the background and its failure is an `error` event followed by `exit` (the adapter kills its
-   *  own proc on a failed handshake — see codexAdapter.ts's doStart). */
+  /** Picks the process command and the adapter by the account's provider. Returns at once; the
+   *  adapter's start() runs in the background and its failure is an `error` event followed by `exit`
+   *  (the adapter kills its own proc on a failed handshake — see codexAdapter.ts's / claudeAdapter.ts's
+   *  doStart). */
   spawn(opts: {
     account: Account
     cwd: string
@@ -57,7 +60,6 @@ export class ChatSessionManager {
     title?: string
   }): SessionInfo {
     const provider = providerOf(opts.account)
-    if (provider !== 'codex') throw new Error(`CHAT_UNSUPPORTED_PROVIDER: ${provider}`)
     const descriptor = descriptorOf(this.deps.descriptors, opts.account)
 
     const id = randomUUID()
@@ -67,7 +69,13 @@ export class ChatSessionManager {
     const resumeThreadId = opts.resumeThreadId
 
     const env = cliEnvFor({ base: process.env, account: opts.account, descriptor, homeDir: this.deps.homeDir })
-    const { file, args } = buildCodexAppServerCommand(this.deps.platform)
+    // Codex resumes over the app-server protocol (thread/resume, sent by the adapter once the process is
+    // up); Claude has no such call, so its resume id is argv (--resume=<id>) instead — buildClaudeChatCommand
+    // takes it directly.
+    const { file, args } =
+      provider === 'claude'
+        ? buildClaudeChatCommand(this.deps.platform, { resumeSessionId: resumeThreadId, bypass })
+        : buildCodexAppServerCommand(this.deps.platform)
     const meta: PtyMeta = {
       kind: 'chat',
       id,
@@ -75,6 +83,7 @@ export class ChatSessionManager {
         accountId: opts.account.id,
         cwd: opts.cwd,
         title,
+        provider,
         bypassPermissions: bypass,
         ...(resumeThreadId ? { threadId: resumeThreadId } : {})
       }
@@ -93,7 +102,7 @@ export class ChatSessionManager {
       threadId: resumeThreadId
     }
 
-    const adapter = this.makeAdapter(proc, { mode: 'fresh' })
+    const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)
     this.track(id, info, proc, adapter)
     void adapter.start({ cwd: opts.cwd, resumeThreadId, bypass }).catch((err: unknown) => {
       this.deps.log(`chat adapter start failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -113,6 +122,13 @@ export class ChatSessionManager {
     if (!accountId || !cwd || !title) return null
     const threadId = str('threadId') ?? null
     const rolloutPath = str('rolloutPath') ?? null
+    // A note written before Claude support (slice 3) carries no `provider` at all — every one of those
+    // is a Codex chat session, the only provider chat sessions could be at the time, so an absent or
+    // unrecognized value defaults to 'codex' rather than guessing from the account. This manager (like
+    // the pty SessionManager's own adopt) keeps no account registry to look one up in, so that guess
+    // would need a new dependency for a case a plain default already answers correctly.
+    const noteProvider = r.provider
+    const provider: Provider = noteProvider === 'claude' || noteProvider === 'codex' ? noteProvider : 'codex'
 
     const info: SessionInfo = {
       id: a.id,
@@ -131,7 +147,7 @@ export class ChatSessionManager {
       ...(threadId ? { threadId, resumeSessionId: threadId } : {})
     }
 
-    const adapter = this.makeAdapter(a.proc, { mode: 'adopt', threadId, rolloutPath, truncated: a.truncated })
+    const adapter = this.makeAdapter(a.proc, { mode: 'adopt', threadId, rolloutPath, truncated: a.truncated }, provider)
     this.track(a.id, info, a.proc, adapter)
     // Adopt mode's start() resolves at once (see codexAdapter.ts's doStart) — bypass is meaningless
     // here (a running thread was not just started with a bypass flag) so a neutral false is passed.
@@ -240,9 +256,10 @@ export class ChatSessionManager {
     }
   }
 
-  private makeAdapter(proc: ProcLike, mode: AdapterMode): ChatAdapter {
-    const create = this.deps.createAdapter ?? createCodexAdapter
-    return create({ proc, mode, version: this.deps.version, log: this.deps.log })
+  private makeAdapter(proc: ProcLike, mode: AdapterMode, provider: Provider): ChatAdapter {
+    const args = { proc, mode, version: this.deps.version, log: this.deps.log, provider }
+    if (this.deps.createAdapter) return this.deps.createAdapter(args)
+    return provider === 'claude' ? createClaudeAdapter(args) : createCodexAdapter(args)
   }
 
   private track(id: string, info: SessionInfo, proc: ProcLike, adapter: ChatAdapter): void {

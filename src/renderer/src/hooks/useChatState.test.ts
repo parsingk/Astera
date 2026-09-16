@@ -8,7 +8,8 @@ const base: ChatState = {
   model: { model: null, effort: null, planMode: false },
   error: null,
   outlivesApp: true,
-  truncated: true
+  truncated: true,
+  provider: 'codex'
 }
 
 describe('foldChatEvent', () => {

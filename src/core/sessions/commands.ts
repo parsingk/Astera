@@ -1,3 +1,5 @@
+import { claudeLaunchArgs } from '../chat/claudeProtocol'
+
 export interface SpawnCommand {
   file: string
   args: string[]
@@ -104,4 +106,20 @@ export function buildCodexAppServerCommand(platform: NodeJS.Platform): { file: s
   return platform === 'win32'
     ? { file: 'cmd.exe', args: ['/c', 'codex', 'app-server'] }
     : { file: 'codex', args: ['app-server'] }
+}
+
+/** A chat session's line process for Claude: `claude --output-format stream-json …`, spoken over stdio
+ *  (chat-sessions design §6.5's Claude sibling, core/chat/claudeProtocol.ts). Unlike Codex's app-server
+ *  command, resume/bypass/model are argv here (Claude has no equivalent of thread/resume) — built by
+ *  claudeLaunchArgs so this and the adapter's own reasoning about those flags never drift apart. Same
+ *  win32 wrapping as buildCodexAppServerCommand, for the same reason: on win32 claude may be a shim the
+ *  shell must resolve. */
+export function buildClaudeChatCommand(
+  platform: NodeJS.Platform,
+  opts: { resumeSessionId?: string; bypass: boolean; model?: string | null }
+): { file: string; args: string[] } {
+  const args = claudeLaunchArgs(opts)
+  return platform === 'win32'
+    ? { file: 'cmd.exe', args: ['/c', 'claude', ...args] }
+    : { file: 'claude', args }
 }
