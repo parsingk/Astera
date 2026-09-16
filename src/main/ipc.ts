@@ -1261,12 +1261,14 @@ export function registerIpc(
       if (!info) return
       try {
         if (event.rolloutPath === null) {
-          // The thread exists but codex has not named its file yet. Registering unmapped lets the
-          // watcher's own scan find it by cwd and time, exactly as it does for a terminal session
-          // that has not had its first turn — logged because a session that stays unmapped is mute
-          // (no conversation, no chips) and nothing else would say why.
+          // The thread exists but codex has not named its file yet. Registering unmapped (but with
+          // the thread id already in hand) lets the watcher's own scan find the file by cwd and time,
+          // exactly as it does for a terminal session that has not had its first turn, while
+          // codexSessionIdFor answers this thread's id right away instead of waiting on that scan —
+          // logged because a session that stays unmapped is mute (no conversation, no chips) and
+          // nothing else would say why.
           chatLog(`chat ${sessionId}: thread ${event.threadId} has no rollout path; the watcher will scan for it`)
-          codexRollout?.register(info)
+          codexRollout?.register(info, undefined, event.threadId)
         } else codexRollout?.register(info, event.rolloutPath, event.threadId)
       } catch (err) {
         /* A failed rollout-watcher registration does not take the chat session down */
@@ -1318,7 +1320,7 @@ export function registerIpc(
   // 세션 목록을 건네고 결과를 렌더러가 읽을 모양으로 바꾸는 일만 한다. 렌더러에도 같은 검사를 두면
   // 두 곳이 어긋날 수 있으므로 두지 않는다: 여기가 경계다.
   ipcMain.handle('accounts.remove', async (_e, id) => {
-    const blockers = accountRemovalBlockers(id, core.sessions.list())
+    const blockers = accountRemovalBlockers(id, allSessions())
     if (blockers.length > 0) return { ok: false as const, titles: blockers }
     await core.accounts.remove(id)
     return { ok: true as const, titles: [] as string[] }
@@ -2515,7 +2517,7 @@ export function registerIpc(
       const deadline = Date.now() + WORKTREE_CLOSE_TIMEOUT_MS
       while (
         Date.now() < deadline &&
-        core.sessions.list().some((x) => x.status === 'running' && isPathWithin(worktreePath, x.cwd))
+        allSessions().some((x) => x.status === 'running' && isPathWithin(worktreePath, x.cwd))
       )
         await new Promise((r) => setTimeout(r, 50))
       const entry = core.worktrees.list().find((w) => isSamePath(w.path, worktreePath))
@@ -4145,7 +4147,7 @@ export function registerIpc(
   // The reason travels as a tag plus values rather than a sentence — the renderer translates it into
   // the current language.
   const isPathInUse = (p: string): string | null => {
-    const s = core.sessions.list().find((x) => x.status === 'running' && isPathWithin(p, x.cwd))
+    const s = allSessions().find((x) => x.status === 'running' && isPathWithin(p, x.cwd))
     if (s) return `SESSION:${s.title}`
     // listActive already excludes finished runs. A stopping run still holds the path — its process tree
     // is being torn down — so it is not filtered out here.
@@ -4281,7 +4283,7 @@ export function registerIpc(
   // root as the projectPath of the Local History snapshot. The throwing conditions and messages are
   // unchanged, so the 21 existing call sites behave identically while ignoring the return value.
   const assertAllowedPath = async (p: string): Promise<string> => {
-    const roots = core.sessions.list().map((s) => s.cwd)
+    const roots = allSessions().map((s) => s.cwd)
     const sessionRoot = roots.find((r) => isPathWithin(r, p))
     if (sessionRoot) return sessionRoot
     const worktree = core.worktrees.list().find((w) => isPathWithin(w.path, p)) // a registered worktree
@@ -6091,7 +6093,10 @@ export function registerIpc(
             if (!info) return false
             const rolloutPath = typeof a.restore.rolloutPath === 'string' ? a.restore.rolloutPath : undefined
             const threadId = typeof a.restore.threadId === 'string' ? a.restore.threadId : undefined
-            if (rolloutPath !== undefined || threadId !== undefined) {
+            // Only a path-only note is registered here. A thread-bearing note makes core.chat.adopt's
+            // adapter re-enter its ready state synchronously, and the chat subscriber above already
+            // registers that case — registering it again here would be a duplicate.
+            if (threadId === undefined && rolloutPath !== undefined) {
               try {
                 codexRollout?.register(info, rolloutPath, threadId)
               } catch (err) {
