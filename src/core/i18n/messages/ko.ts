@@ -1149,7 +1149,7 @@ export const ko = {
   'slack.approval.hintAlways': '💡 허용, 항상 허용 또는 거절로 답장',
   'slack.approval.unknownReply': '⚠️ 허용 또는 거절로 답장해 주세요',
   'slack.approval.unknownReplyAlways': '⚠️ 허용, 항상 허용 또는 거절로 답장해 주세요',
-  'slack.chat.sendRefused': '⚠️ CLI 가 메시지를 받지 않았습니다 — {reason}',
+  'slack.chat.sendRefused': '⚠️ CLI가 메시지를 받지 않았습니다 — {reason}',
   'slack.chat.turnFailed': '⚠️ 턴 실패 — {message}',
   'slack.limitNoResume': '⛔ 한도 도달 — 자동 재개 없음',
   'slack.limitNoResumeAt': '⛔ 한도 도달 — 자동 재개 없음 (리셋 {at})',

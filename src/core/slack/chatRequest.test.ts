@@ -58,6 +58,9 @@ describe('questionAnswerOf', () => {
     expect(questionAnswerOf('1,2 / 1', form)).toEqual({ ok: false, reason: { key: 'slack.choice.singleOnlyAt', params: { index: 1 } } })
     expect(questionAnswerOf('1 / 4', form)).toEqual({ ok: false, reason: { key: 'slack.choice.outOfRangeAt', params: { index: 2, n: '4', max: 3 } } })
   })
+  it('repeated picks are deduped, keeping first-occurrence order', () => {
+    expect(questionAnswerOf('3,1,3', { questions: [form.questions[1]] })).toEqual({ ok: true, answers: [{ picks: [2, 0], other: '' }] })
+  })
 })
 
 describe('approvalDecisionOf', () => {
