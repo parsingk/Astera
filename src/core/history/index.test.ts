@@ -124,7 +124,7 @@ describe('HistoryIndex (lazy)', () => {
     expect(await index.transcriptPathById('no-such-account', 's')).toBeNull()
   })
 
-  it('transcriptPathById는 그 계정에 없는 세션 id면 null이다 (entryById를 채우지 않는다)', async () => {
+  it('transcriptPathById는 그 계정에 없는 세션 id면 null이다', async () => {
     const a = account('acc-a')
     await writeTranscript(a, 'p', 's.jsonl', 's')
     index = new HistoryIndex(() => [a])

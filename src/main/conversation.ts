@@ -56,7 +56,13 @@ export interface ConversationSessions {
   /** Opens a session's conversation: the first window, plus a follow positioned at its end. Null
    *  when the session has no transcript path, or the file cannot be read (transcriptPathFor and
    *  readConversationWindow's own null contracts, respectively) — never an error. Starts the poll
-   *  timer if this is the first conversation open. */
+   *  timer if this is the first conversation open.
+   *
+   *  A second open for a session that is already open **replaces** its follow with one seated at the
+   *  file's current end: whatever the old follow had not read yet is emitted to nobody. So the only
+   *  caller may be the pane that owns the tab — PaneGrid mounts one ConversationPane per session, and
+   *  it opens on mount and closes on unmount. A test or a CDP script that wants the turns reads the
+   *  file itself rather than opening a second time behind the pane's back (ruling S3-10). */
   open(
     sessionId: string
   ): Promise<{ turns: ConvTurn[]; from: number; more: boolean; follow: number } | null>

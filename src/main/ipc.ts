@@ -1268,18 +1268,25 @@ export function registerIpc(
    *  than this subscriber. Named for the wiring, not for chat, because `core.ts` already has a
    *  `chatLog` of its own that writes `chat.log` — two different files, two different names. */
   const chatWiringLog = hostWiring?.log ?? ((): void => {})
+  /** The sessions whose transcript lookup is in flight right now — see findClaudeChatTranscript. */
+  const findingChatTranscript = new Set<string>()
   /** Looks up a claude chat session's transcript by (accountId, threadId) through the history index and
    *  stores it in `chatTranscripts` on a hit. A miss is not an error — the file appears with the
    *  session's first turn, so `ready` can easily run before it exists — the `status` branch below
    *  retries this on every later status change until it lands (a cheap directory probe when it keeps
-   *  missing, since `locate` gives up on a `readdir`/`access` failure rather than throwing). */
+   *  missing, since `locate` gives up on a `readdir`/`access` failure rather than throwing). One lookup
+   *  per session at a time: a status can change several times inside one probe, and without that the
+   *  retries would pile up, every one of them reading the same directory for the same answer. */
   const findClaudeChatTranscript = (sessionId: string, accountId: string, threadId: string): void => {
+    if (findingChatTranscript.has(sessionId)) return
+    findingChatTranscript.add(sessionId)
     core.history
       .transcriptPathById(accountId, threadId)
       .then((p) => {
         if (p) chatTranscripts.set(sessionId, p)
       })
       .catch((err) => chatWiringLog(`chat ${sessionId}: transcript lookup failed: ${String(err)}`))
+      .finally(() => findingChatTranscript.delete(sessionId))
   }
   /** Everything one chat session's adapter reports, in one subscriber (chat-sessions design §6). The
    *  event always goes to the renderer — the chat pane is driven entirely by this channel — and three
@@ -1289,9 +1296,10 @@ export function registerIpc(
    *  path is offered to us. Registering it with the **existing** watcher rather than teaching anything
    *  a second way to find a rollout is what makes every codex-shaped feature work for a chat session
    *  without knowing it is one: `sourceFor` reads the conversation through `rolloutPathFor`, the usage
-   *  chips read `usage(sessionId)`, and `conversation.model` reads the model off the same file. A claude
-   *  chat session's `ready` carries no such path (claude writes no rollout); its transcript is instead
-   *  looked up by id through `findClaudeChatTranscript` and kept in `chatTranscripts` for `sourceFor`.
+   *  chips read `usage(sessionId)`, and `conversation.model` reads the model off the same file. That
+   *  registration is for codex sessions only — claude writes no rollout at all, so the watcher would
+   *  scan for a file that will never exist; a claude chat session's transcript is instead looked up by
+   *  id through `findClaudeChatTranscript` and kept in `chatTranscripts` for `sourceFor`.
    *
    *  `status` is the attention value. A chat session has no hook stream to infer one from — the
    *  adapter says outright what the session is doing, which is why `attention.set` exists. It also
@@ -1305,22 +1313,28 @@ export function registerIpc(
     if (event.type === 'ready') {
       const info = core.chat.info(sessionId)
       if (!info) return
-      try {
-        if (event.rolloutPath === null) {
-          // The thread exists but codex has not named its file yet. Registering unmapped (but with
-          // the thread id already in hand) lets the watcher's own scan find the file by cwd and time,
-          // exactly as it does for a terminal session that has not had its first turn, while
-          // codexSessionIdFor answers this thread's id right away instead of waiting on that scan —
-          // logged because a session that stays unmapped is mute (no conversation, no chips) and
-          // nothing else would say why.
-          chatWiringLog(`chat ${sessionId}: thread ${event.threadId} has no rollout path; the watcher will scan for it`)
-          codexRollout?.register(info, undefined, event.threadId)
-        } else codexRollout?.register(info, event.rolloutPath, event.threadId)
-      } catch (err) {
-        /* A failed rollout-watcher registration does not take the chat session down */
-        chatWiringLog(`chat ${sessionId}: rollout registration failed: ${String(err)}`)
+      // The rollout watcher is codex's: claude writes no rollout at all, so registering a claude session
+      // would set the watcher scanning for a file that is never going to be there (once a second, each
+      // one an ENOENT) and leave a log line saying it was looking.
+      const provider = core.chat.state(sessionId)?.provider
+      if (provider === 'codex') {
+        try {
+          if (event.rolloutPath === null) {
+            // The thread exists but codex has not named its file yet. Registering unmapped (but with
+            // the thread id already in hand) lets the watcher's own scan find the file by cwd and time,
+            // exactly as it does for a terminal session that has not had its first turn, while
+            // codexSessionIdFor answers this thread's id right away instead of waiting on that scan —
+            // logged because a session that stays unmapped is mute (no conversation, no chips) and
+            // nothing else would say why.
+            chatWiringLog(`chat ${sessionId}: thread ${event.threadId} has no rollout path; the watcher will scan for it`)
+            codexRollout?.register(info, undefined, event.threadId)
+          } else codexRollout?.register(info, event.rolloutPath, event.threadId)
+        } catch (err) {
+          /* A failed rollout-watcher registration does not take the chat session down */
+          chatWiringLog(`chat ${sessionId}: rollout registration failed: ${String(err)}`)
+        }
       }
-      if (core.chat.state(sessionId)?.provider === 'claude') findClaudeChatTranscript(sessionId, info.accountId, event.threadId)
+      if (provider === 'claude') findClaudeChatTranscript(sessionId, info.accountId, event.threadId)
     } else if (event.type === 'status') {
       attention.set(sessionId, event.status)
       if (!chatTranscripts.has(sessionId) && core.chat.state(sessionId)?.provider === 'claude') {
