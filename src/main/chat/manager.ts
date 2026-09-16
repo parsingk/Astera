@@ -121,7 +121,14 @@ export class ChatSessionManager {
       status: 'running',
       title,
       kind: 'chat',
-      ...(threadId ? { threadId } : {})
+      // The bypass box the session was started with. It is in the note (spawn writes it), and without
+      // it a session taken back after a restart reads as "asks for permission" in every place that
+      // shows the flag — a promise the running process is not keeping.
+      ...(typeof r.bypassPermissions === 'boolean' ? { bypassPermissions: r.bypassPermissions } : {}),
+      // resumeSessionId is the codex-side id the rest of the app keys on (the scheduler's store key,
+      // the rollout watcher). `ready` sets both for a thread that is still starting; a note that
+      // already names the thread must not have to wait for that to say what it is.
+      ...(threadId ? { threadId, resumeSessionId: threadId } : {})
     }
 
     const adapter = this.makeAdapter(a.proc, { mode: 'adopt', threadId, rolloutPath, truncated: a.truncated })

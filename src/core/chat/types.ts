@@ -35,7 +35,11 @@ export interface ChatState {
 
 export type ChatEvent =
   | { type: 'ready'; threadId: string; rolloutPath: string | null }
-  | { type: 'status'; status: ChatStatus }
+  /** `truncated` rides along on the status event because the two move together: the first thing a
+   *  rebuilt session hears that is definite about its turn both settles the status and ends the guess
+   *  (see codexAdapter.ts). Optional so a sender that has nothing to say about it says nothing — a
+   *  fold that sees it absent leaves the flag as it was. */
+  | { type: 'status'; status: ChatStatus; truncated?: boolean }
   | { type: 'request'; request: ChatRequest | null }
   | { type: 'model'; model: ChatModel }
   | { type: 'error'; message: string }

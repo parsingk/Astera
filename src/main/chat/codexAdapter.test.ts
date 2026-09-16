@@ -32,7 +32,7 @@ const tick = () => new Promise<void>((r) => setTimeout(r, 0))
 
 async function started(): Promise<{ p: ReturnType<typeof fakeProc>; a: ReturnType<typeof createCodexAdapter>; events: ChatEvent[] }> {
   const p = fakeProc()
-  const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1.3.23', log: () => {}, requestTimeoutMs: 1000 })
+  const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1.3.23', log: () => {}, requestTimeoutMs: 30_000})
   const events: ChatEvent[] = []
   a.on((e) => events.push(e))
   const starting = a.start({ cwd: 'D:/x', bypass: false })
@@ -58,10 +58,19 @@ describe('createCodexAdapter — handshake', () => {
     expect(p.notes[0]).toMatchObject({ threadId: '01a0a6cb-43a2-7d71-994f-72e53764fbc1' })
     expect((await a.listModels()).length).toBe(5)
     expect(a.state().status).toBe('idle')
+    // Seeded from thread/start itself, not left blank until the first thread/settings/updated.
+    expect(a.state().model).toEqual({ model: 'gpt-6-astra', effort: 'xhigh', planMode: false })
+    expect(events).toContainEqual({ type: 'model', model: { model: 'gpt-6-astra', effort: 'xhigh', planMode: false } })
+  })
+  it('state() hands out a copy of the model, so a caller cannot write into the session', async () => {
+    const { a } = await started()
+    const first = a.state()
+    first.model.model = 'tampered'
+    expect(a.state().model.model).toBe('gpt-6-astra')
   })
   it('resumes instead of starting when given a thread id, without the history', async () => {
     const p = fakeProc()
-    const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 1000 })
+    const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 30_000})
     const starting = a.start({ cwd: 'D:/x', bypass: true, resumeThreadId: '01a0a6cd-7f52-7690-a1ae-d7c9cb688c35' })
     await tick(); p.feed(replyWith(p, 'initialize', F.INITIALIZE_RESULT)); await tick()
     p.feed(replyWith(p, 'collaborationMode/list', F.COLLAB_MODES_RESULT)); p.feed(replyWith(p, 'model/list', F.MODEL_LIST_RESULT)); await tick()
@@ -72,7 +81,7 @@ describe('createCodexAdapter — handshake', () => {
   })
   it('a refused collaborationMode/list is not fatal — start still resolves, and plan mode sends without an effort', async () => {
     const p = fakeProc()
-    const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 1000 })
+    const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 30_000})
     const events: ChatEvent[] = []
     a.on((e) => events.push(e))
     const starting = a.start({ cwd: 'D:/x', bypass: false })
@@ -94,7 +103,7 @@ describe('createCodexAdapter — handshake', () => {
   })
   it('a refused initialize ends the session with the message', async () => {
     const p = fakeProc()
-    const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 1000 })
+    const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 30_000})
     const events: ChatEvent[] = []
     a.on((e) => events.push(e))
     const starting = a.start({ cwd: 'D:/x', bypass: false })
@@ -140,6 +149,44 @@ describe('createCodexAdapter — a turn with a question', () => {
     expect(JSON.parse(p.written.at(-1) as string)).toEqual({ id: 5, error: { code: -32601, message: 'unsupported request: item/permissions/requestApproval' } })
     expect(events).toContainEqual({ type: 'error', message: 'unsupported request: item/permissions/requestApproval' })
     expect(a.state().request).toBeNull()
+    // Remembered, not only announced — a pane that mounts after this moment reads state.error.
+    expect(a.state().error).toContain('unsupported request')
+  })
+  it('two server requests queue: the first stays on screen until it is answered, then the second takes its place', async () => {
+    const { p, a } = await started()
+    void a.send('do two things')
+    await tick()
+    p.feed(F.TURN_STARTED)
+    p.feed(F.COMMAND_APPROVAL) // id 0
+    p.feed(JSON.stringify({ method: 'item/commandExecution/requestApproval', id: 1, params: { command: 'ls -la', availableDecisions: ['accept', 'cancel'] } }))
+    await tick()
+    expect(a.state().request).toMatchObject({ id: '0', kind: 'approval', about: { lines: ['git log --oneline -1'] } })
+    await a.answer('0', { kind: 'approval', decision: 'accept' })
+    await tick()
+    expect(a.state()).toMatchObject({ status: 'waiting', request: { id: '1', about: { lines: ['ls -la'] } } })
+    await a.answer('1', { kind: 'approval', decision: 'decline' })
+    await tick()
+    expect(a.state()).toMatchObject({ status: 'working', request: null })
+  })
+  it('interrupt swallows “no active turn” and still rejects anything else', async () => {
+    const { p, a } = await started()
+    void a.send('count')
+    await tick()
+    p.feed(F.TURN_STARTED)
+    await tick()
+    const gone = a.interrupt()
+    await tick()
+    p.feed(JSON.stringify({ id: lastReq(p).id, error: { code: -32600, message: 'no active turn to interrupt' } }))
+    await expect(gone).resolves.toBeUndefined()
+    const refused = a.interrupt()
+    await tick()
+    p.feed(JSON.stringify({ id: lastReq(p).id, error: { code: -32600, message: 'thread is busy' } }))
+    await expect(refused).rejects.toThrow('thread is busy')
+  })
+  it('a request written after the process is gone is refused at once, not after the timeout', async () => {
+    const { p, a } = await started()
+    p.exit(0)
+    await expect(a.send('x')).rejects.toThrow('process ended')
   })
   it('a subscriber that answers synchronously inside the request event still sees the clearing event', async () => {
     const { p, a, events } = await started()
@@ -176,7 +223,7 @@ describe('createCodexAdapter — a turn with a question', () => {
 describe('createCodexAdapter — replay after adoption', () => {
   function adopted(truncated = false) {
     const p = fakeProc()
-    const a = createCodexAdapter({ proc: p, mode: { mode: 'adopt', threadId: '01a0a6cb-43a2-7d71-994f-72e53764fbc1', rolloutPath: null, truncated }, version: '1', log: () => {}, requestTimeoutMs: 1000 })
+    const a = createCodexAdapter({ proc: p, mode: { mode: 'adopt', threadId: '01a0a6cb-43a2-7d71-994f-72e53764fbc1', rolloutPath: null, truncated }, version: '1', log: () => {}, requestTimeoutMs: 30_000})
     const events: ChatEvent[] = []
     a.on((e) => events.push(e))
     return { p, a, events }
@@ -206,6 +253,15 @@ describe('createCodexAdapter — replay after adoption', () => {
     await tick()
     expect(a.state().truncated).toBe(true)
     expect(a.state().status).toBe('idle')
+  })
+  it('the first frame that is definite about the turn clears truncated, and says so on the status event', async () => {
+    const { p, a, events } = adopted(true)
+    await a.start({ cwd: 'D:/x', bypass: false })
+    expect(a.state().truncated).toBe(true)
+    p.feed(F.TURN_STARTED)
+    await tick()
+    expect(a.state().truncated).toBe(false)
+    expect(events).toContainEqual({ type: 'status', status: 'working', truncated: false })
   })
   it('reads outlivesApp live from the process, not from a snapshot taken at start', async () => {
     const { p, a } = adopted()

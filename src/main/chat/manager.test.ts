@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
-import type { Account } from '../../core/types'
+import type { Account, SessionInfo } from '../../core/types'
 import type { ProcFactory, ProcLike, ProcSpawnOptions } from '../../core/sessions/proc'
 import { makeDescriptors } from '../../core/providers/descriptor'
 import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState } from '../../core/chat/types'
@@ -45,8 +45,10 @@ interface FakeAdapterHandle {
   emit(e: ChatEvent): void
 }
 
-/** A fake adapter factory: one FakeAdapterHandle per session, in spawn/adopt call order. */
-function makeAdapterFactory(): {
+/** A fake adapter factory: one FakeAdapterHandle per session, in spawn/adopt call order.
+ *  `startRejects` makes every adapter's start() reject, which is what a refused handshake looks like
+ *  to the manager. */
+function makeAdapterFactory(startRejects = false): {
   createAdapter: NonNullable<ChatManagerDeps['createAdapter']>
   handles: FakeAdapterHandle[]
 } {
@@ -65,7 +67,7 @@ function makeAdapterFactory(): {
     const adapter: ChatAdapter = {
       start: (o) => {
         handle.startCalls.push(o)
-        return Promise.resolve()
+        return startRejects ? Promise.reject(new Error('too old')) : Promise.resolve()
       },
       send: () => Promise.resolve(),
       interrupt: () => Promise.resolve(),
@@ -114,25 +116,26 @@ const claudeAccount: Account = {
   createdAt: '2026-07-29T00:00:00Z'
 }
 
-function setup(platform: NodeJS.Platform = 'win32') {
+function setup(platform: NodeJS.Platform = 'win32', startRejects = false) {
   const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
   const factory: ProcFactory = (file, args, opts) => {
     const proc = new FakeProc()
     spawned.push({ file, args, opts, proc })
     return proc
   }
-  const { createAdapter, handles } = makeAdapterFactory()
+  const { createAdapter, handles } = makeAdapterFactory(startRejects)
   const descriptors = makeDescriptors(platform)
+  const logged: string[] = []
   const manager = new ChatSessionManager({
     factory,
     descriptors,
     homeDir: 'C:\\Users\\tester',
     platform,
     version: '1.0.0',
-    log: () => {},
+    log: (m) => logged.push(m),
     createAdapter
   })
-  return { spawned, manager, handles }
+  return { spawned, manager, handles, logged }
 }
 
 describe('ChatSessionManager.spawn', () => {
@@ -188,6 +191,18 @@ describe('ChatSessionManager.spawn', () => {
     })
     expect(handles[0].startCalls).toEqual([{ cwd: 'D:/proj', resumeThreadId: 'th-resume', bypass: true }])
   })
+
+  it('a handshake that never completes is logged, not thrown at the caller', async () => {
+    const { manager, logged } = setup('win32', true)
+    let info: SessionInfo | null = null
+    expect(() => {
+      info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    }).not.toThrow()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(info).not.toBeNull()
+    expect(logged.some((m) => m.includes('chat adapter start failed') && m.includes('too old'))).toBe(true)
+  })
 })
 
 describe('event wiring', () => {
@@ -238,7 +253,8 @@ describe('ChatSessionManager.adopt', () => {
         cwd: 'D:/proj',
         title: 'proj',
         threadId: 'th-2',
-        rolloutPath: 'D:/r.jsonl'
+        rolloutPath: 'D:/r.jsonl',
+        bypassPermissions: true
       },
       truncated: true
     })
@@ -249,7 +265,11 @@ describe('ChatSessionManager.adopt', () => {
       status: 'running',
       title: 'proj',
       kind: 'chat',
-      threadId: 'th-2'
+      threadId: 'th-2',
+      // Both come straight out of the note: the bypass box the session was started with, and the
+      // codex-side id the scheduler and the rollout watcher key on.
+      bypassPermissions: true,
+      resumeSessionId: 'th-2'
     })
     expect(handles.at(-1)?.mode).toEqual({
       mode: 'adopt',
@@ -258,6 +278,18 @@ describe('ChatSessionManager.adopt', () => {
       truncated: true
     })
     expect(manager.list().map((s) => s.id)).toContain('sess-1')
+  })
+
+  it('a note with neither flag leaves them unset rather than guessing', () => {
+    const { manager } = setup()
+    const info = manager.adopt({
+      id: 'sess-3',
+      proc: new FakeProc(),
+      restore: { accountId: codexAccount.id, cwd: 'D:/proj', title: 'proj' },
+      truncated: false
+    })
+    expect(info?.bypassPermissions).toBeUndefined()
+    expect(info?.resumeSessionId).toBeUndefined()
   })
 
   it('a note without cwd gives null', () => {

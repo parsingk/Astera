@@ -4,15 +4,23 @@ import type { ChatPaneState } from '../components/conversation/paneTransport'
 
 /** One event folded onto a known state — never called with `null`, since an event that arrives before
  *  the state is known is queued (see below) and one that arrives for a session `chat.state` answered
- *  `null` for (not a chat session) has nothing to fold onto. */
-function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEvent): NonNullable<ChatPaneState> {
+ *  `null` for (not a chat session) has nothing to fold onto. Exported for its own test; the hook below
+ *  is the only caller in the app. */
+export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEvent): NonNullable<ChatPaneState> {
   switch (event.type) {
     case 'ready':
       return state
     case 'status':
       // A fresh turn starting clears the previous turn's error — it would otherwise sit there,
-      // outliving the failure it described.
-      return { ...state, status: event.status, error: event.status === 'working' ? null : state.error }
+      // outliving the failure it described. `truncated` rides on this event (core/chat/types.ts):
+      // the adapter clears its guess the moment something definite about the turn arrives, and this
+      // is where the pane stops saying "확인하는 중". Absent means "nothing to say", not false.
+      return {
+        ...state,
+        status: event.status,
+        error: event.status === 'working' ? null : state.error,
+        ...(event.truncated === undefined ? {} : { truncated: event.truncated })
+      }
     case 'request':
       return { ...state, request: event.request }
     case 'model':

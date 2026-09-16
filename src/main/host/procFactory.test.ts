@@ -137,7 +137,7 @@ describe('createHostProcFactory', () => {
     t.deliver({ t: 'proc-line', id: 'p9', seq: 5, line: 'e' })
     expect(got).toEqual(['a', 'b', 'c-live', 'd-live', 'e'])
   })
-  it('an attached handle whose process exits before the replay lands still delivers the replay first', () => {
+  it('an attached handle whose process exits before the replay lands ignores the late replay', () => {
     const t = transport()
     const p = createHostProcFactory(t).attach({ id: 'p9', pid: 7 })
     const got: string[] = []

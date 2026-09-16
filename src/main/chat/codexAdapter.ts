@@ -1,6 +1,7 @@
 // The Codex adapter: drives one `codex app-server` over a ProcLike through Task 3's codec
 // (core/chat/codexProtocol.ts) and exposes it as a ChatAdapter (core/chat/types.ts). It owns the one
-// mutable thing a live session has — its ChatState — and the one open server request the UI can answer.
+// mutable thing a live session has — its ChatState — and the open server requests the UI can answer,
+// of which the oldest is the one on screen (`queue` below).
 //
 // Two shapes matter more than the rest of the file:
 //  - Replay idempotence. Client request ids carry a per-instance random prefix
@@ -45,10 +46,16 @@ function safe<T>(p: Promise<T>): Promise<T> {
   return p
 }
 
-/** Value equality for the plain, JSON-shaped state fields — a reset back to a value already emitted
- *  (e.g. the model reset at the end of a fresh start) must not read as "changed". */
+/** Value equality for the plain, JSON-shaped state fields — a request rebuilt from a replayed frame is
+ *  a fresh object with the same contents, and must not read as "changed". */
 function same(a: unknown, b: unknown): boolean {
   return a === b || JSON.stringify(a) === JSON.stringify(b)
+}
+
+/** The model is three known fields, so it is compared as three known fields rather than by serialising
+ *  it — same answer, no allocation, and no dependence on key order. */
+function sameModel(a: ChatModel, b: ChatModel): boolean {
+  return a.model === b.model && a.effort === b.effort && a.planMode === b.planMode
 }
 
 function turnIdOf(result: unknown): string | null {
@@ -77,10 +84,13 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
   let planEffort: string | null = null
   let models: ModelDescriptor[] = []
   let ended = false
-  let currentRequestId: string | null = null
 
   const pending = new Map<string, Pending>()
   const open = new Map<string, { decoded: DecodedRequest; wireId: JsonRpcId }>()
+  /** The open server requests in arrival order; `queue[0]` is the one the pane is showing. A second
+   *  request that lands while the first is still up waits its turn rather than replacing it — an
+   *  overwrite would leave the first unanswered forever, with the server still blocking on it. */
+  const queue: string[] = []
   const fileChanges = new Map<string, FileChange[]>()
   const listeners: Array<(e: ChatEvent) => void> = []
 
@@ -92,10 +102,11 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     outlivesApp: false, // placeholder — state() below reads the live value off `proc` instead
     truncated: mode.mode === 'adopt' ? mode.truncated : false
   }
-  let lastEmitted: { status: ChatState['status']; request: ChatRequest | null; model: ChatModel } = {
+  let lastEmitted: { status: ChatState['status']; request: ChatRequest | null; model: ChatModel; truncated: boolean } = {
     status: state.status,
     request: state.request,
-    model: state.model
+    model: state.model,
+    truncated: state.truncated
   }
   let flushScheduled = false
   let readyEmitted = false
@@ -134,19 +145,29 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
   // would have read it again).
   function flush(): void {
     flushScheduled = false
-    const next = { status: state.status, request: state.request, model: state.model }
+    const next = { status: state.status, request: state.request, model: state.model, truncated: state.truncated }
     const requestChanged = !same(next.request, lastEmitted.request)
-    const statusChanged = !same(next.status, lastEmitted.status)
-    const modelChanged = !same(next.model, lastEmitted.model)
+    // `truncated` travels on the status event rather than one of its own: a pane that hears the status
+    // is exactly the pane that has to stop saying "확인하는 중", and the two always settle together.
+    const statusChanged = next.status !== lastEmitted.status || next.truncated !== lastEmitted.truncated
+    const modelChanged = !sameModel(next.model, lastEmitted.model)
     lastEmitted = next
     if (requestChanged) emit({ type: 'request', request: next.request })
-    if (statusChanged) emit({ type: 'status', status: next.status })
+    if (statusChanged) emit({ type: 'status', status: next.status, truncated: next.truncated })
     if (modelChanged) emit({ type: 'model', model: next.model })
   }
 
-  function patch(partial: Partial<Pick<ChatState, 'status' | 'request' | 'model'>>): void {
+  function patch(partial: Partial<Pick<ChatState, 'status' | 'request' | 'model' | 'truncated'>>): void {
     Object.assign(state, partial)
     scheduleFlush()
+  }
+
+  /** An error the session has to remember, not just announce: a pane that mounts after this moment
+   *  reads `state.error` and would otherwise show nothing at all. Every error emission goes through
+   *  here so the two can never come apart. */
+  function fail(message: string): void {
+    state.error = message
+    emit({ type: 'error', message })
   }
 
   function rememberFileChange(itemId: string, changes: FileChange[]): void {
@@ -160,6 +181,10 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
   // ---- the wire: one place to send, one place to read a line ----
 
   function request(method: string, params: unknown): Promise<unknown> {
+    // Nothing will ever answer a request written to a process that has gone: the onExit below already
+    // rejected everything that was in flight, and a new one would only sit out the full timeout before
+    // saying the same thing. Refused at once, with the same message the in-flight ones got.
+    if (ended) return Promise.reject(new Error('process ended'))
     const id = `${idPrefix}-${nextId++}`
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -184,6 +209,19 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     proc.write(encodeNotification(method, params))
   }
 
+  /** Takes one request out of the queue and, if it was the one on screen, shows the next one — or
+   *  clears the slot with `emptyStatus` when it was the last. An id that is not in the queue (a
+   *  replayed resolution for a request answered before the restart) settles nothing. */
+  function dropRequest(id: string, emptyStatus: ChatState['status']): void {
+    const wasShowing = queue[0] === id
+    const i = queue.indexOf(id)
+    if (i >= 0) queue.splice(i, 1)
+    if (!wasShowing) return
+    const next = queue.length > 0 ? open.get(queue[0]) : undefined
+    if (next) patch({ request: next.decoded.request, status: 'waiting' })
+    else patch({ request: null, status: emptyStatus })
+  }
+
   function applyEffect(effect: ProtocolEffect): void {
     switch (effect.type) {
       case 'thread':
@@ -195,26 +233,23 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
         break
       case 'turn':
         turnId = effect.turnId
+        // The first thing that is definite about the turn ends the guess a truncated replay left
+        // behind — without this the flag never cleared and the pane said "확인하는 중" for ever.
+        patch({ truncated: false })
         break
       case 'resolved': {
         const id = String(effect.requestId)
         open.delete(id)
-        if (currentRequestId === id) {
-          currentRequestId = null
-          patch({ request: null, status: turnId !== null ? 'working' : 'idle' })
-        }
+        dropRequest(id, turnId !== null ? 'working' : 'idle')
         break
       }
       case 'fileChange':
         rememberFileChange(effect.itemId, effect.changes)
         break
       case 'event':
-        if (effect.event.type === 'status') patch({ status: effect.event.status })
+        if (effect.event.type === 'status') patch({ status: effect.event.status, truncated: false })
         else if (effect.event.type === 'model') patch({ model: effect.event.model })
-        else if (effect.event.type === 'error') {
-          state.error = effect.event.message
-          emit(effect.event)
-        }
+        else if (effect.event.type === 'error') fail(effect.event.message)
         break
     }
   }
@@ -230,14 +265,13 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
   function handleServerRequest(frame: Extract<CodexFrame, { kind: 'request' }>): void {
     const decoded = decodeServerRequest(frame, fileChanges)
     if (!decoded) {
-      const message = `unsupported request: ${frame.method}`
-      proc.write(encodeError(frame.id, UNSUPPORTED_REQUEST, message))
-      emit({ type: 'error', message })
+      proc.write(encodeError(frame.id, UNSUPPORTED_REQUEST, `unsupported request: ${frame.method}`))
+      fail(`unsupported request: ${frame.method}`)
       return
     }
     open.set(decoded.request.id, { decoded, wireId: frame.id })
-    currentRequestId = decoded.request.id
-    patch({ request: decoded.request, status: 'waiting' })
+    queue.push(decoded.request.id)
+    if (queue[0] === decoded.request.id) patch({ request: decoded.request, status: 'waiting' })
   }
 
   function handleLine(line: string): void {
@@ -255,7 +289,7 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     for (const entry of pending.values()) entry.reject(new Error('process ended'))
     pending.clear()
     open.clear()
-    currentRequestId = null
+    queue.length = 0
     emit({ type: 'exit', code: exitCode })
   })
 
@@ -291,12 +325,16 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
       threadId = info.threadId
       rolloutPath = info.rolloutPath
       threadModel = info.model
-      patch({ model: { model: null, effort: null, planMode: false } })
+      // Seeded from the thread itself rather than left blank until the first thread/settings/updated:
+      // the pane's model pill would otherwise read "unknown" for a fresh session, and picking an
+      // effort off it would send the list's default model instead of the one the thread is on.
+      // planMode stays false — a resumed thread's collaboration mode arrives with that first update.
+      patch({ model: { model: info.model, effort: info.effort, planMode: false } })
       emitReady()
       proc.remember?.({ threadId, rolloutPath })
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
-      emit({ type: 'error', message })
+      fail(message)
       proc.kill()
       throw e
     }
@@ -322,10 +360,7 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     if (!entry) throw new Error(`no open request: ${requestId}`)
     proc.write(encodeAnswer(entry.wireId, entry.decoded, answer))
     open.delete(requestId)
-    if (currentRequestId === requestId) {
-      currentRequestId = null
-      patch({ request: null, status: 'working' })
-    }
+    dropRequest(requestId, 'working')
   }
 
   async function doListModels(): Promise<ModelDescriptor[]> {
@@ -344,7 +379,19 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     send: (text) => safe(doSend(text)),
     interrupt: () => {
       if (threadId === null || turnId === null) return Promise.resolve()
-      return safe(request('turn/interrupt', { threadId, turnId }).then(() => undefined))
+      return safe(
+        request('turn/interrupt', { threadId, turnId })
+          .then(() => undefined)
+          .catch((e: unknown) => {
+            const message = e instanceof Error ? e.message : String(e)
+            // Measured: codex answers turn/interrupt with "no active turn to interrupt" when the turn
+            // ended between the person pressing stop and the request arriving. The person asked for the
+            // turn to be over and it is — there is nothing to report, so this resolves instead of
+            // raising a toast for a race the session already won. Every other refusal still rejects.
+            if (!/no active turn/i.test(message)) throw e
+            log(`turn/interrupt: ${message} — the turn was already over`)
+          })
+      )
     },
     answer: (requestId, answer) => safe(doAnswer(requestId, answer)),
     setModel: (model, effort) => safe(Promise.resolve(patch({ model: { ...state.model, model, effort } }))),
@@ -352,7 +399,7 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     listModels: () => safe(doListModels()),
     // Live from the process, not stamped at construction — the manager (Task 5) overrides it on the
     // proc itself as ownership is decided, and this must track that, not a snapshot from before it was.
-    state: () => ({ ...state, outlivesApp: proc.outlivesApp === true }),
+    state: () => ({ ...state, model: { ...state.model }, outlivesApp: proc.outlivesApp === true }),
     on: (fn) => {
       listeners.push(fn)
       return () => {

@@ -112,6 +112,46 @@ describe('server requests', () => {
     expect(d.request.about.lines[1]).toBe('probe')
     expect(JSON.parse(encodeAnswer(0, d, { kind: 'approval', decision: 'decline' }))).toEqual({ id: 0, result: { decision: 'decline' } })
   })
+  it('a long diff is cut to 60 lines whose last one is the ellipsis', () => {
+    const diff = Array.from({ length: 70 }, (_, i) => `+line ${i}`).join('\n') + '\n'
+    const started = JSON.stringify({ method: 'item/started', params: { item: { type: 'fileChange', id: 'it-1', changes: [{ path: 'D:/x.txt', kind: { type: 'update' }, diff }], status: 'inProgress' } } })
+    const fx = effectsOf(note(started)).find((e) => e.type === 'fileChange')
+    if (fx?.type !== 'fileChange') throw new Error()
+    // The trailing newline must not become a 71st, empty line — diffLines drops exactly that one.
+    expect(fx.changes[0].diff.endsWith('\n')).toBe(true)
+    const d = decodeServerRequest(req(JSON.stringify({ method: 'item/fileChange/requestApproval', id: 0, params: { itemId: 'it-1' } })), new Map([[fx.itemId, fx.changes]]))
+    if (d?.request.kind !== 'approval') throw new Error()
+    const lines = d.request.about.lines
+    expect(lines.length).toBe(60)
+    expect(lines[0]).toBe('update D:/x.txt')
+    expect(lines[58]).toBe('+line 57')
+    expect(lines[59]).toBe('…')
+  })
+  it('a one-line diff with a final newline is one line, not two', () => {
+    const started = JSON.stringify({ method: 'item/started', params: { item: { type: 'fileChange', id: 'it-2', changes: [{ path: 'D:/y.txt', kind: { type: 'add' }, diff: 'probe\n' }], status: 'inProgress' } } })
+    const fx = effectsOf(note(started)).find((e) => e.type === 'fileChange')
+    if (fx?.type !== 'fileChange') throw new Error()
+    const d = decodeServerRequest(req(JSON.stringify({ method: 'item/fileChange/requestApproval', id: 0, params: { itemId: 'it-2' } })), new Map([[fx.itemId, fx.changes]]))
+    if (d?.request.kind !== 'approval') throw new Error()
+    expect(d.request.about.lines).toEqual(['add D:/y.txt', 'probe'])
+  })
+  it('a command approval appends its reason under the command', () => {
+    const line = JSON.stringify({ method: 'item/commandExecution/requestApproval', id: 0, params: { command: 'curl https://example.com', commandActions: [{ type: 'unknown', command: 'curl https://example.com' }], reason: '`curl …` requires approval: a rule says so' } })
+    const d = decodeServerRequest(req(line), noChanges)
+    if (d?.request.kind !== 'approval') throw new Error()
+    expect(d.request.about.lines).toEqual(['curl https://example.com', '`curl …` requires approval: a rule says so'])
+  })
+  it('acceptForSession is offered when Codex lists it and when it says nothing at all', () => {
+    const withIt = JSON.stringify({ method: 'item/commandExecution/requestApproval', id: 0, params: { command: 'ls', availableDecisions: ['accept', 'acceptForSession', 'cancel'] } })
+    const silent = JSON.stringify({ method: 'item/commandExecution/requestApproval', id: 0, params: { command: 'ls' } })
+    const decisionsOf = (l: string): unknown => {
+      const d = decodeServerRequest(req(l), noChanges)
+      if (d?.request.kind !== 'approval') throw new Error()
+      return d.request.decisions
+    }
+    expect(decisionsOf(withIt)).toEqual(['accept', 'acceptForSession', 'decline'])
+    expect(decisionsOf(silent)).toEqual(['accept', 'acceptForSession', 'decline'])
+  })
   it('an unknown request decodes to null', () => {
     expect(decodeServerRequest({ kind: 'request', id: 9, method: 'item/permissions/requestApproval', params: {} }, noChanges)).toBeNull()
   })

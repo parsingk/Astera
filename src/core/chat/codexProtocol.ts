@@ -84,9 +84,10 @@ export function threadResumeParams(a: { threadId: string; cwd: string; bypass: b
 export function threadOf(result: unknown): { threadId: string; rolloutPath: string | null; model: string | null; effort: string | null } | null {
   const o = obj(result)
   const thread = o ? obj(o.thread) : null
-  const threadId = thread ? str(thread.id) : null
-  if (!o || !threadId) return null
-  return { threadId, rolloutPath: str(thread?.path ?? null), model: str(o.model), effort: str(o.reasoningEffort) }
+  if (!o || !thread) return null
+  const threadId = str(thread.id)
+  if (!threadId) return null
+  return { threadId, rolloutPath: str(thread.path ?? null), model: str(o.model), effort: str(o.reasoningEffort) }
 }
 
 /** The entry with mode 'plan' in a collaborationMode/list result, its reasoning_effort, else null. */
