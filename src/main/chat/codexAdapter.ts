@@ -84,6 +84,11 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
   let planEffort: string | null = null
   let models: ModelDescriptor[] = []
   let ended = false
+  // The person's own explicit picks, kept apart from `state.model` (which also carries the thread's own
+  // model/effort, seeded from thread/start purely for display — F2). A fresh session where the person
+  // has picked nothing must send no top-level model/effort on turn/start, exactly as before F2; only
+  // `setModel` ever writes here.
+  let picked: { model: string | null; effort: string | null } = { model: null, effort: null }
 
   const pending = new Map<string, Pending>()
   const open = new Map<string, { decoded: DecodedRequest; wireId: JsonRpcId }>()
@@ -346,7 +351,7 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     const result = await request(
       'turn/start',
       turnStartParams({
-        threadId, text, model: state.model.model, effort: state.model.effort,
+        threadId, text, model: picked.model, effort: picked.effort,
         planMode: state.model.planMode, planEffort, threadModel
       })
     )
@@ -394,7 +399,10 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
       )
     },
     answer: (requestId, answer) => safe(doAnswer(requestId, answer)),
-    setModel: (model, effort) => safe(Promise.resolve(patch({ model: { ...state.model, model, effort } }))),
+    setModel: (model, effort) => {
+      picked = { model, effort }
+      return safe(Promise.resolve(patch({ model: { ...state.model, model, effort } })))
+    },
     setPlanMode: (on) => safe(Promise.resolve(patch({ model: { ...state.model, planMode: on } }))),
     listModels: () => safe(doListModels()),
     // Live from the process, not stamped at construction — the manager (Task 5) overrides it on the

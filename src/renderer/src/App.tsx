@@ -1466,8 +1466,10 @@ export default function App(): React.JSX.Element {
       // setSessions callback, through sessionsRef: a state updater has to be pure, and StrictMode may run
       // it twice, so raising a toast inside risks firing twice.
       const notice = spawnNotice({
-        requestedResumeSessionId: opts.resumeSessionId,
-        returnedResumeSessionId: info.resumeSessionId,
+        // A chat resume never sets resumeSessionId — it asks by resumeThreadId instead — so the two
+        // are merged here for spawnNotice, which only ever sees one flat id either way.
+        requestedResumeSessionId: opts.resumeSessionId ?? opts.resumeThreadId,
+        returnedResumeSessionId: info.threadId ?? info.resumeSessionId,
         returnedTabAlreadyOpen: sessionsRef.current.some((s) => s.id === info.id)
       })
       setSessions((prev) => (prev.some((s) => s.id === info.id) ? prev : [...prev, info]))

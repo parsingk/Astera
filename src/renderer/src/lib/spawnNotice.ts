@@ -9,11 +9,14 @@
 export type SpawnNotice = 'resumeLiveIgnored' | 'smartResume' | null
 
 export function spawnNotice(a: {
-  /** 모달이 재개하려던 대화의 id. 새 세션이면 undefined. */
+  /** 모달이 재개하려던 대화의 id — 터미널은 `resumeSessionId`, 채팅은 `resumeThreadId` 다. 새
+   *  세션이면 undefined. 부르는 쪽이 `opts.resumeSessionId ?? opts.resumeThreadId` 로 합쳐 넘긴다. */
   requestedResumeSessionId: string | undefined
-  /** 돌아온 세션이 실제로 재개한 대화의 id(`SessionInfo.resumeSessionId`). **백지 재개면
-   *  undefined 다** — spawnSession(main/ipc.ts)이 백지로 갈 때 이 값을 지우고 넘기기 때문이고,
-   *  그것이 이 판정이 읽는 신호다. 그쪽 분기가 바뀌면 이 함수도 함께 바뀌어야 한다. */
+  /** 돌아온 세션이 실제로 재개한 대화의 id — 터미널은 `SessionInfo.resumeSessionId`, 채팅은
+   *  `SessionInfo.threadId` 다(부르는 쪽이 `info.threadId ?? info.resumeSessionId` 로 합쳐 넘긴다;
+   *  세션 kind 마다 둘 중 하나만 채워지므로 순서는 결과에 영향이 없다). **백지 재개면 undefined
+   *  다** — spawnSession(main/ipc.ts)이 백지로 갈 때 이 값을 지우고 넘기기 때문이고, 그것이 이
+   *  판정이 읽는 신호다. 그쪽 분기가 바뀌면 이 함수도 함께 바뀌어야 한다. */
   returnedResumeSessionId: string | undefined
   /** 돌아온 세션이 이미 열려 있던 탭인가. main 의 롤링 가드가 걸리면 새로 띄우지 않고 살아 있는
    *  탭을 그대로 돌려준다. */

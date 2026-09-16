@@ -121,7 +121,15 @@ describe('createCodexAdapter — a turn with a question', () => {
     await a.setPlanMode(true)
     void a.send('ask me')
     await tick()
-    expect(lastReq(p)).toMatchObject({ method: 'turn/start', params: { collaborationMode: { mode: 'plan', settings: { model: 'gpt-6-astra', reasoning_effort: 'medium' } } } })
+    // Nothing picked — the thread's own model/effort (seeded from thread/start, F2) shows in the pane
+    // but never rides top-level on the wire; only the plan struct carries it.
+    const req = lastReq(p)
+    expect(req.method).toBe('turn/start')
+    expect(req.params).toEqual({
+      threadId: '01a0a6cb-43a2-7d71-994f-72e53764fbc1',
+      input: [{ type: 'text', text: 'ask me' }],
+      collaborationMode: { mode: 'plan', settings: { model: 'gpt-6-astra', reasoning_effort: 'medium' } }
+    })
     p.feed(F.TURN_STARTED)
     p.feed(F.THREAD_SETTINGS_UPDATED_PLAN)
     p.feed(F.REQUEST_USER_INPUT)
@@ -140,6 +148,21 @@ describe('createCodexAdapter — a turn with a question', () => {
     await tick()
     expect(a.state().status).toBe('idle')
     expect(events.filter((e) => e.type === 'request').length).toBe(2)   // shown once, cleared once
+  })
+  it('a person who picked a model and effort sends exactly that pick, plan mode off', async () => {
+    const { p, a } = await started()
+    await a.setModel('gpt-5.5', 'high')
+    void a.send('ask me')
+    await tick()
+    const req = lastReq(p)
+    expect(req.method).toBe('turn/start')
+    expect(req.params).toEqual({
+      threadId: '01a0a6cb-43a2-7d71-994f-72e53764fbc1',
+      input: [{ type: 'text', text: 'ask me' }],
+      model: 'gpt-5.5',
+      effort: 'high',
+      collaborationMode: { mode: 'default', settings: { model: 'gpt-5.5' } }
+    })
   })
   it('answering an id that is not open is an error, and an unknown server request is refused on the wire', async () => {
     const { p, a, events } = await started()
