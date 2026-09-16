@@ -229,8 +229,9 @@ export function NewSessionDialog({
       // success and failure come back here, and on success App has already closed the modal so the
       // setStarting below is a no-op.
       await onSpawn({
-        // 대화 is a single account, no rolling, no schedule, no Slack — none of that applies to a
-        // Host-owned line process (no CLI to hook or bypass a limit on the way this pty rolls).
+        // 대화 is a single account, and rolling alone stays off for it — a Host-owned line process
+        // has no CLI to hook a rolling resume into yet (slice 4c). Schedule (4a) and Slack (4b) now
+        // apply to a chat session the same as a 터미널.
         accountIds: kind === 'chat' ? [accountIds[0]] : accountIds,
         cwd,
         saveDefault,
