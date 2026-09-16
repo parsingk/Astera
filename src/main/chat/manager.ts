@@ -11,7 +11,7 @@
 // watching (main/ipc.ts's chat:event bridge, in Task 6).
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import type { Account, SessionInfo } from '../../core/types'
+import type { Account, ScheduleConfig, SessionInfo } from '../../core/types'
 import type { Provider } from '../../core/providers/meta'
 import { providerOf } from '../../core/providers/meta'
 import { descriptorOf, type ProviderDescriptor } from '../../core/providers/descriptor'
@@ -58,6 +58,10 @@ export class ChatSessionManager {
     resumeThreadId?: string
     bypassPermissions?: boolean
     title?: string
+    schedule?: ScheduleConfig
+    slackNotify?: boolean
+    rollAccountIds?: string[]
+    rollPrompt?: string
   }): SessionInfo {
     const provider = providerOf(opts.account)
     const descriptor = descriptorOf(this.deps.descriptors, opts.account)
@@ -67,6 +71,7 @@ export class ChatSessionManager {
     const bypassPermissions = opts.bypassPermissions
     const bypass = !!bypassPermissions
     const resumeThreadId = opts.resumeThreadId
+    const { schedule, slackNotify, rollAccountIds, rollPrompt } = opts
 
     const env = cliEnvFor({ base: process.env, account: opts.account, descriptor, homeDir: this.deps.homeDir })
     // Codex resumes over the app-server protocol (thread/resume, sent by the adapter once the process is
@@ -85,7 +90,13 @@ export class ChatSessionManager {
         title,
         provider,
         bypassPermissions: bypass,
-        ...(resumeThreadId ? { threadId: resumeThreadId } : {})
+        ...(resumeThreadId ? { threadId: resumeThreadId } : {}),
+        // The three features that ride on the session and must come back after a restart — the same
+        // three the pty note carries (core/sessions/manager.ts). The schedule is not here on purpose: the
+        // scheduler's own store is the truth for it (chat-sessions slice 4 design §5.1).
+        ...(slackNotify === undefined ? {} : { slackNotify }),
+        ...(rollAccountIds === undefined ? {} : { rollAccountIds }),
+        ...(rollPrompt === undefined ? {} : { rollPrompt })
       }
     }
     const proc = this.deps.factory(file, args, { cwd: opts.cwd, env, meta })
@@ -99,7 +110,11 @@ export class ChatSessionManager {
       kind: 'chat',
       bypassPermissions,
       resumeSessionId: resumeThreadId,
-      threadId: resumeThreadId
+      threadId: resumeThreadId,
+      ...(schedule === undefined ? {} : { schedule }),
+      ...(slackNotify === undefined ? {} : { slackNotify }),
+      ...(rollAccountIds === undefined ? {} : { rollAccountIds }),
+      ...(rollPrompt === undefined ? {} : { rollPrompt })
     }
 
     const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)
@@ -149,7 +164,14 @@ export class ChatSessionManager {
       // resumeSessionId is the codex-side id the rest of the app keys on (the scheduler's store key,
       // the rollout watcher). `ready` sets both for a thread that is still starting; a note that
       // already names the thread must not have to wait for that to say what it is.
-      ...(threadId ? { threadId, resumeSessionId: threadId } : {})
+      ...(threadId ? { threadId, resumeSessionId: threadId } : {}),
+      ...(typeof r.slackNotify === 'boolean' ? { slackNotify: r.slackNotify } : {}),
+      // A chain with a non-string member is dropped whole rather than filtered — a chain is an ordered
+      // promise, and half of one is a different promise.
+      ...(Array.isArray(r.rollAccountIds) && r.rollAccountIds.every((x) => typeof x === 'string')
+        ? { rollAccountIds: [...(r.rollAccountIds as string[])] }
+        : {}),
+      ...(typeof r.rollPrompt === 'string' ? { rollPrompt: r.rollPrompt } : {})
     }
 
     const adapter = this.makeAdapter(a.proc, { mode: 'adopt', threadId, rolloutPath, truncated: a.truncated, answered }, provider)

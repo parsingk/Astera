@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
-import type { Account, SessionInfo } from '../../core/types'
+import type { Account, ScheduleConfig, SessionInfo } from '../../core/types'
 import type { Provider } from '../../core/providers/meta'
 import type { ProcFactory, ProcLike, ProcSpawnOptions } from '../../core/sessions/proc'
 import { makeDescriptors } from '../../core/providers/descriptor'
@@ -239,6 +239,35 @@ describe('ChatSessionManager.spawn', () => {
     expect(info).not.toBeNull()
     expect(logged.some((m) => m.includes('chat adapter start failed') && m.includes('too old'))).toBe(true)
   })
+
+  it('carries schedule, slackNotify, rollAccountIds and rollPrompt onto info, and all but schedule onto the note', () => {
+    const { spawned, manager } = setup('win32')
+    const schedule: ScheduleConfig = { rule: { kind: 'interval', minutes: 5 }, command: 'status' }
+    const info = manager.spawn({
+      account: codexAccount,
+      cwd: 'D:/p',
+      schedule,
+      slackNotify: true,
+      rollAccountIds: ['a1', 'a2'],
+      rollPrompt: 'carry on'
+    })
+    expect(info.schedule).toEqual(schedule)
+    expect(info.slackNotify).toBe(true)
+    expect(info.rollAccountIds).toEqual(['a1', 'a2'])
+    expect(info.rollPrompt).toBe('carry on')
+    const meta = spawned[0].opts.meta!
+    expect(meta.restore).toMatchObject({ slackNotify: true, rollAccountIds: ['a1', 'a2'], rollPrompt: 'carry on' })
+    expect(meta.restore).not.toHaveProperty('schedule')
+  })
+
+  it('spawn without the feature fields writes none of them to info or the note', () => {
+    const { spawned, manager } = setup('win32')
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/p' })
+    expect(info).not.toHaveProperty('schedule')
+    expect(info).not.toHaveProperty('slackNotify')
+    expect(info).not.toHaveProperty('rollAccountIds')
+    expect(spawned[0].opts.meta!.restore).not.toHaveProperty('slackNotify')
+  })
 })
 
 describe('event wiring', () => {
@@ -388,6 +417,27 @@ describe('ChatSessionManager.adopt', () => {
     const { manager } = setup()
     expect(manager.adopt({ id: 'x', proc: new FakeProc(), restore: { cwd: 'D:/p', title: 't' }, truncated: false })).toBeNull()
     expect(manager.adopt({ id: 'y', proc: new FakeProc(), restore: { accountId: 'a', cwd: 'D:/p' }, truncated: false })).toBeNull()
+  })
+
+  it('adopt restores slackNotify, rollAccountIds and rollPrompt from the note, and ignores malformed ones', () => {
+    const { manager } = setup()
+    const info = manager.adopt({
+      id: 'x',
+      proc: new FakeProc(),
+      truncated: false,
+      restore: { accountId: 'acc', cwd: 'D:/p', title: 't', provider: 'codex', slackNotify: true, rollAccountIds: ['a1', 7], rollPrompt: 'go' }
+    })!
+    expect(info.slackNotify).toBe(true)
+    expect(info.rollPrompt).toBe('go')
+    expect(info).not.toHaveProperty('rollAccountIds') // one non-string element: the whole chain is dropped, never guessed
+    const clean = manager.adopt({
+      id: 'y',
+      proc: new FakeProc(),
+      truncated: false,
+      restore: { accountId: 'acc', cwd: 'D:/p', title: 't', provider: 'codex', rollAccountIds: ['a1', 'a2'] }
+    })!
+    expect(clean.rollAccountIds).toEqual(['a1', 'a2'])
+    expect(clean).not.toHaveProperty('slackNotify')
   })
 })
 
