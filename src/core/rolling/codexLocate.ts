@@ -65,6 +65,12 @@ export async function findRollout(opts: {
   //  (2) A rollout another active chain has already latched onto — two rolling tabs in the same folder
   //      under the same account splitting one conversation between them.
   excludePaths?: string[]
+  // When set, a candidate whose own id differs is dropped before the newest-wins contest. A chat
+  // session's rollout is looked for by a thread id the protocol already handed over (attachChat), so the
+  // scan does not have to trust "newest in this folder" when it can match the id outright — the case a
+  // second session in the same folder would otherwise mislead. Absent keeps the newest-wins rule, which
+  // is every pty caller.
+  sessionId?: string
 }): Promise<{ path: string; sessionId: string } | null> {
   const now = (opts.now ?? Date.now)()
   const root = path.join(opts.configDir, 'sessions')
@@ -102,6 +108,8 @@ export async function findRollout(opts: {
     // if session_meta has no session_id, fall back to the uuid in the filename (mirrors buildEntry in history/strategies/codex.ts)
     const sessionId = meta.sessionId ?? file.match(ROLLOUT_UUID_RE)?.[1] ?? null
     if (!sessionId) continue
+    const wantId = opts.sessionId
+    if (wantId && sessionId !== wantId) continue
     if (!best || bornAt > best.bornAt) best = { path: file, sessionId, bornAt }
   }
   return best ? { path: best.path, sessionId: best.sessionId } : null

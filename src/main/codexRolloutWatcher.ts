@@ -358,7 +358,8 @@ export class CodexRolloutWatcher {
         cwd: entry.cwd,
         since: entry.since,
         now: this.now,
-        excludePaths: this.claimed(entry)
+        excludePaths: this.claimed(entry),
+        sessionId: entry.codexSessionId ?? undefined
       })
       if (entry.disposed || !found) return
       // Another session can claim it first across the await — re-check so one rollout ends up owned by exactly one

@@ -296,6 +296,24 @@ describe('findRollout', () => {
     const r = await findRollout({ configDir: home, cwd: 'D:\\work\\p', since: NOW - 5_000, now: () => NOW })
     expect(r?.sessionId).toBe(uuid)
   })
+
+  it('sessionId가 주어지면 id가 다른 후보는 더 새 파일이어도 무시한다', async () => {
+    const st = await fs.stat(await makeRollout({ y: '2026', m: '07', d: '09', uuid: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', cwd: home, mtimeMs: NOW }))
+    const since = st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs
+    await gap()
+    await makeRollout({ y: '2026', m: '07', d: '09', uuid: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', cwd: home, mtimeMs: NOW + 1000 })
+    const found = await findRollout({ configDir: home, cwd: home, since, now: () => NOW + 5000, sessionId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+    expect(found?.sessionId).toBe('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+  })
+
+  it('sessionId가 없으면 종전대로 가장 새 파일을 고른다', async () => {
+    const st = await fs.stat(await makeRollout({ y: '2026', m: '07', d: '09', uuid: 'cccccccc-cccc-cccc-cccc-cccccccccccc', cwd: home, mtimeMs: NOW }))
+    const since = st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs
+    await gap()
+    await makeRollout({ y: '2026', m: '07', d: '09', uuid: 'dddddddd-dddd-dddd-dddd-dddddddddddd', cwd: home, mtimeMs: NOW + 1000 })
+    const found = await findRollout({ configDir: home, cwd: home, since, now: () => NOW + 5000 })
+    expect(found?.sessionId).toBe('dddddddd-dddd-dddd-dddd-dddddddddddd')
+  })
 })
 
 // 2026-08-31 실측. 설명 생성 에이전트는 `codex exec` 로 **같은 계정·같은 폴더**에서 돌고, 사용자

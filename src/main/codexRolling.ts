@@ -630,7 +630,8 @@ export class CodexRollingCoordinator {
         cwd: chain.cwd,
         since,
         now: this.now,
-        excludePaths: this.claimedRollouts(chain)
+        excludePaths: this.claimedRollouts(chain),
+        sessionId: chain.codexSessionId ?? undefined
       })
       // `rolloutPath` joins the guard here and not above: an `attachChat` that lands while findRollout is
       // in flight clears the locate timer, and clearing a timer cannot stop a tick already running. Left
