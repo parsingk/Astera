@@ -110,7 +110,7 @@ describe('CodexRolloutWatcher', () => {
   // A chat session's turn end is announced from its own protocol (SlackNotifier.onChatEvent), so this
   // watcher's own turn-complete callback has to be switched off for it — otherwise every turn goes out
   // twice. Without opts the default still fires ('task_complete를 만나면 콜백한다' above covers that).
-  it('opts.notifyTurns: false 로 등록하면 task_complete가 와도 콜백하지 않는다', async () => {
+  it('does not call back on task_complete when registered with opts.notifyTurns: false', async () => {
     const cwd = path.join(dir, 'proj')
     const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
     const onTurnComplete = vi.fn()

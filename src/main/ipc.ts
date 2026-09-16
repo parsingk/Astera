@@ -6250,7 +6250,9 @@ export function registerIpc(
             // creates — the same "no mapping means nothing to miss" reasoning as the pty adopter's.
             if (threadId === undefined) {
               try {
-                codexRollout?.register(info, rolloutPath)
+                // A chat session's turn end is announced from the protocol (`onChatEvent`), so the
+                // watcher's callback stays off here as it does in the `ready` branch.
+                codexRollout?.register(info, rolloutPath, undefined, { notifyTurns: false })
               } catch (err) {
                 /* A failed rollout-watcher registration does not block taking the session back */
                 hostLog(`host: chat ${info.id} rollout registration failed: ${String(err)}`)

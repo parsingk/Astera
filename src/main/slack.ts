@@ -364,7 +364,7 @@ export class SlackNotifier {
     // `onRolled` makes when a roll re-keys one chain onto a new id, and for the same reason: the
     // session did not restart, so what has already been said about it still holds. The case is the
     // Host's reconnect — the socket drops, the adopter takes the session back, and it re-registers
-    // under the id it already had. Built from nothing, the record forgets four things at once, and
+    // under the id it already had. Built from nothing, the record forgets five things at once, and
     // each one shows up in what the next notification says or does not say:
     //
     // - `provider` decides the limit scanner, and `providerFor` falls back to claude for an account
@@ -379,6 +379,8 @@ export class SlackNotifier {
     //   scrollback the reconnect replays: it comes from the PreToolUse hook and is cleared by the
     //   matching PostToolUse, so dropping it costs the next "input needed" line its tool content
     //   for the whole of that pending call.
+    // - `chat` is the protocol state a chat record carries — status, open card, previous excerpt —
+    //   which the reconnect must not drop, because the session did not restart.
     //
     // **`pendingTool` is carried because nothing that maintains it was interrupted.** Hook events
     // reach this app through the hook-event file watcher, not over the Host socket, and the app was
