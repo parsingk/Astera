@@ -1279,5 +1279,16 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.loadMore': 'Load earlier',
   // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
   'conversation.toggle.terminal': 'Terminal',
-  'conversation.toggle.conversation': 'Conversation'
+  'conversation.toggle.conversation': 'Conversation',
+  // Task 9 — the chat pane's request card (ChatRequestCard.tsx) and the plan-mode pill (ModelControl.tsx)
+  'chat.approval.title': 'Codex asks to run {tool}',
+  'chat.approval.accept': 'Allow',
+  'chat.approval.acceptForSession': 'Always allow in this session',
+  'chat.approval.decline': 'Deny',
+  'chat.notice.checking': 'Checking where the session stands',
+  'chat.notice.endsWithApp': 'This session ends when the app quits',
+  'chat.notice.error': 'The turn failed: {message}',
+  'chat.model.plan': 'Plan',
+  'chat.model.planOn': 'Plan mode on',
+  'chat.model.planOff': 'Plan mode off'
 }

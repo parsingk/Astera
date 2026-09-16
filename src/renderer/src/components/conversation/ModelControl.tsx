@@ -36,6 +36,12 @@ export interface ModelControlProps {
    *  driven and then read back — and without a sign of it the button looks like it ignored the
    *  press. */
   busy?: boolean;
+  /** Chat sessions only: whether plan mode is on right now. Ignored when `onTogglePlan` is absent. */
+  planMode?: boolean;
+  /** Chat sessions only: a small **Plan** pill is drawn beside the line when this is given, filled
+   *  when `planMode`. Absent for every existing caller (Claude, codex terminal sessions), which have
+   *  no such toggle. */
+  onTogglePlan?: () => void;
 }
 
 /** The model and effort readout that sits in the composer, right of the attachment button. */
@@ -47,7 +53,9 @@ export function ModelControl({
   onPickEffort,
   onChangeEffort,
   effortLabel,
-  busy = false
+  busy = false,
+  planMode = false,
+  onTogglePlan
 }: ModelControlProps): ReactNode {
   const { t } = useI18n();
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
@@ -68,20 +76,37 @@ export function ModelControl({
 
   return (
     <>
-      <button
-        type="button"
-        className="text-muted-foreground hover:text-foreground flex max-w-56 items-center gap-1 px-1.5 py-0.5 text-xs"
-        aria-label={t("conversation.model.aria")}
-        title={t("conversation.model.aria")}
-        aria-busy={busy || undefined}
-        onClick={(e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          setAt({ x: Math.round(r.left), y: Math.round(r.top) });
-        }}
-      >
-        {busy && <Loader2Icon className="size-3 shrink-0 animate-spin" aria-hidden="true" />}
-        <span className="truncate">{line ?? t("conversation.model.unknown")}</span>
-      </button>
+      <div className="flex min-w-0 items-center gap-1">
+        <button
+          type="button"
+          className="text-muted-foreground hover:text-foreground flex max-w-56 items-center gap-1 px-1.5 py-0.5 text-xs"
+          aria-label={t("conversation.model.aria")}
+          title={t("conversation.model.aria")}
+          aria-busy={busy || undefined}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setAt({ x: Math.round(r.left), y: Math.round(r.top) });
+          }}
+        >
+          {busy && <Loader2Icon className="size-3 shrink-0 animate-spin" aria-hidden="true" />}
+          <span className="truncate">{line ?? t("conversation.model.unknown")}</span>
+        </button>
+        {onTogglePlan && (
+          <button
+            type="button"
+            aria-pressed={planMode}
+            title={t(planMode ? "chat.model.planOn" : "chat.model.planOff")}
+            onClick={onTogglePlan}
+            className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] leading-none font-medium tracking-wide uppercase transition-colors ${
+              planMode
+                ? "border-foreground bg-foreground text-background"
+                : "border-border/60 text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t("chat.model.plan")}
+          </button>
+        )}
+      </div>
       {at && <ContextMenu x={at.x} y={at.y} items={items} onClose={() => setAt(null)} />}
     </>
   );

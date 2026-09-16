@@ -22,7 +22,9 @@ export interface QuestionCardProps {
   onToggle: (question: number, option: number) => void;
   onOther: (question: number, text: string) => void;
   onSubmit: () => void;
-  onGoTerminal: () => void;
+  /** null hides the "answer in the terminal" link — a chat session's card has no terminal to fall
+   *  back to (ChatRequestCard.tsx). */
+  onGoTerminal: (() => void) | null;
 }
 
 /**
@@ -68,9 +70,11 @@ export function QuestionCard({
     >
       <div className="flex items-center justify-between gap-3">
         <p className="font-medium">{t("conversation.ask.title")}</p>
-        <Button size="sm" variant={drivable ? "outline" : "default"} className="shrink-0" onClick={onGoTerminal}>
-          {t("conversation.pending.terminal")}
-        </Button>
+        {onGoTerminal !== null && (
+          <Button size="sm" variant={drivable ? "outline" : "default"} className="shrink-0" onClick={onGoTerminal}>
+            {t("conversation.pending.terminal")}
+          </Button>
+        )}
       </div>
 
       <div data-slot="conversation-question-list" className="flex max-h-[50vh] flex-col gap-4 overflow-auto pr-1">

@@ -1484,5 +1484,16 @@ export const ko = {
   'conversation.loadMore': '이전 대화 더 보기',
   // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
   'conversation.toggle.terminal': '터미널',
-  'conversation.toggle.conversation': '대화'
+  'conversation.toggle.conversation': '대화',
+  // Task 9 — the chat pane's request card (ChatRequestCard.tsx) and the plan-mode pill (ModelControl.tsx)
+  'chat.approval.title': 'Codex 가 {tool} 실행 허가를 묻습니다',
+  'chat.approval.accept': '허용',
+  'chat.approval.acceptForSession': '이 세션에서는 항상 허용',
+  'chat.approval.decline': '거절',
+  'chat.notice.checking': '상태를 확인하는 중',
+  'chat.notice.endsWithApp': '이 세션은 앱을 끄면 끝납니다',
+  'chat.notice.error': '턴이 실패했습니다: {message}',
+  'chat.model.plan': 'Plan',
+  'chat.model.planOn': 'Plan 모드 켬',
+  'chat.model.planOff': 'Plan 모드 끔'
 } as const
