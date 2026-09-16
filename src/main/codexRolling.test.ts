@@ -109,6 +109,10 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     initialPrompt?: string
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }[]
+  /** The spawn opts exactly as the coordinator built them. `spawned` above copies four fields out by
+   *  hand, which cannot answer "is this field there at all" — and that is the question a chat roll
+   *  has to answer about `resumePrompt` (a chat session has no argv for one to ride on). */
+  spawnedOpts: Parameters<CodexRollingDeps['spawn']>[0][]
   written: [string, string][]
   info1: SessionInfo
 } {
@@ -123,6 +127,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     initialPrompt?: string
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }[] = []
+  const spawnedOpts: Parameters<CodexRollingDeps['spawn']>[0][] = []
   const written: [string, string][] = []
   let seq = 1
   const coord = new CodexRollingCoordinator({
@@ -146,6 +151,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
         initialPrompt: opts.initialPrompt,
         orchEnv: opts.orchEnv
       })
+      spawnedOpts.push(opts)
       events.push(`spawn:${info.id}:${opts.account.id}`)
       return info
     },
@@ -175,7 +181,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
   }
   // settleIo가 "아직 뭔가 도착하는 중인가"를 판단할 근거 — 자세한 이유는 settleIo 위 주석에
   ioProbes.push(() => events.length + sent.length + copied.length + spawned.length + written.length)
-  return { coord, events, sent, copied, spawned, written, info1 }
+  return { coord, events, sent, copied, spawned, spawnedOpts, written, info1 }
 }
 
 // codex 0.146.0에서 관찰한 한도 문구.
@@ -1914,6 +1920,66 @@ describe('중단된 롤이 다음 시도를 예약한다', () => {
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
     const first = await jumpToRetry(h)
     expect(lastRetryAt(h)).toBeGreaterThan(first)
+    h.coord.stop()
+  })
+})
+
+// A chat session is the same chain on a different kind of process. Three things it does not have:
+// a PTY (no limit phrase ever reaches handleData, so the tick's structured verdict is the only
+// trigger), a filesystem search for its rollout (the protocol's ready event names it — attachChat),
+// and a command line (the carry-on prompt is its first turn, not an argv). Everything else — the
+// copy, the kill, the cycle position, the healthy timer — is the pty chain's path unchanged.
+describe('chat chains', () => {
+  /** The same chain as info1, on a chat session. `kind` is what register reads (sessionKindOf). */
+  const chatInfo = (info1: SessionInfo): SessionInfo => ({ ...info1, kind: 'chat' })
+
+  it('attaches its rollout from the ready event and rolls with the prompt as its first turn', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo(h.info1)) // no resume id and no path — register arms the locate poll
+    h.coord.attachChat('s1', 'cx-chat', file) // ready knows both, so the poll is pre-empted
+    await appendLimitError(file)
+    await advance(15_000) // the tick — a chat session prints no phrase, so this is the only trigger
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    expect(h.spawnedOpts[0]).toMatchObject({
+      kind: 'chat',
+      resumeSessionId: 'cx-chat',
+      initialPrompt: '이어서 작업 진행해 줘'
+    })
+    // Not merely undefined: the field is absent. `resumePrompt` is the argument codex appends behind
+    // `codex resume <id>`, and a chat session is not started from a command line at all.
+    expect(h.spawnedOpts[0]).not.toHaveProperty('resumePrompt')
+    expect(h.written).toEqual([]) // nothing is typed into a session that takes turns, not keys
+    h.coord.stop()
+  })
+
+  it('leaves the chain unmapped when ready has no path yet, until the locate poll finds the file', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-late', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-late', null)
+    // The thread id is known from this moment — it is what the history-resume guard answers with and
+    // what the roll resumes — but nothing is mapped, so a limit could not be acted on yet.
+    expect(h.coord.findLiveByCodexSession('cx-chat-late')?.id).toBe('s1')
+    expect(h.coord.rolloutPathFor('s1')).toBeNull()
+    await advance(1_500) // the poll register armed, left running for exactly this
+    expect(h.coord.rolloutPathFor('s1')).toBe(file)
+    h.coord.stop()
+  })
+
+  // Why the poll has to be stopped, not merely overtaken: startLocate builds its tail *without*
+  // startAtEnd, so a poll that finds the same file a second after ready would re-anchor at the
+  // file's start and read the conversation's earlier records as this session's own verdict.
+  it('does not re-read the conversation from the start after ready has mapped it', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-seen', cwd: h.info1.cwd, primary: 95 })
+    await appendLimitError(file) // a block this conversation already ended on, before we attached
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-seen', file)
+    await advance(15_000) // past the locate poll and the first tick
+    await advance(15_000) // and past the tick after it, the one a re-anchored tail would fire on
+    expect(h.events).toEqual([])
+    expect(h.coord.rolloutPathFor('s1')).toBe(file)
     h.coord.stop()
   })
 })

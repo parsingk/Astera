@@ -3,7 +3,7 @@
 // it is far shorter because none of the statusLine-specific problems (a stale snapshot, readiness
 // polling, auto-accepting trust) apply. Every side effect is injected through deps — it does not depend
 // on electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
-import type { Account, ResumeStrategy, RollStateEvent, SessionInfo } from '../core/types'
+import type { Account, ResumeStrategy, RollStateEvent, SessionInfo, SessionKind } from '../core/types'
 import type { RollConfig } from '../core/rolling/config'
 import { RollCycle } from '../core/rolling/cycle'
 import {
@@ -15,6 +15,7 @@ import {
 } from '../core/rolling/retry'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
+import { sessionKindOf } from '../core/sessions/kind'
 import { copyTranscript } from '../core/rolling/transcript'
 import { codexHistoryStrategy } from '../core/history/strategies/codex'
 import { findRollout } from '../core/rolling/codexLocate'
@@ -56,6 +57,11 @@ export interface CodexRollingDeps {
   spawn(opts: {
     account: Account
     cwd: string
+    /** Which kind of session to respawn — the chain's own kind, unchanged by the roll. The wiring
+     *  routes a `'chat'` spawn to the chat manager and everything else to the pty one (index.ts), so
+     *  this coordinator never has to know either manager. Absent means the pty spawn, which is what
+     *  every caller that predates chat chains means. */
+    kind?: SessionKind
     resumeSessionId?: string
     resumePrompt?: string
     /** 백지 재개(Smart Resume)로 새 세션을 띄울 때 실을 첫 프롬프트. `resumePrompt` 와 달리
@@ -142,6 +148,10 @@ interface Chain {
   accountIds: string[]
   prompt: string
   cycle: RollCycle
+  /** Whether this chain's session is a pty or a chat session. Read at registration (sessionKindOf)
+   *  and carried for the chain's whole life: a roll respawns the same kind, so the field is never
+   *  recomputed from the session the roll just created. */
+  kind: SessionKind
   liveId: string
   liveInfo: SessionInfo
   cwd: string
@@ -284,6 +294,7 @@ export class CodexRollingCoordinator {
       accountIds: ids,
       prompt: info.rollPrompt?.trim() || t(this.deps.lang(), 'rolling.continuePrompt'),
       cycle: new RollCycle(ids.length),
+      kind: sessionKindOf(info),
       liveId: info.id,
       liveInfo: info,
       cwd: info.cwd,
@@ -387,6 +398,53 @@ export class CodexRollingCoordinator {
     }
     this.ensureTicker()
     this.deps.log(`codex chain registered session=${info.id} accounts=${ids.join(',')}`)
+  }
+
+  /** A chat session's `ready` event: the thread id codex gave this conversation and, when it named
+   *  the file, the rollout it writes to. ipc's chat subscriber is the caller.
+   *
+   *  **A pty chain learns the same two facts, from somewhere else.** It is either handed them on a
+   *  resume (register's attach branch) or it scans the filesystem for a matching rollout
+   *  (startLocate/findRollout). A chat session is told them by the protocol, which is both earlier
+   *  and exact — so a path arriving here stops the poll register armed. Leaving it running is not
+   *  harmless: startLocate builds its tail **without** `startAtEnd`, so a poll that finds the same
+   *  file a second later re-anchors at the file's start and reads the records this conversation
+   *  ended on as this session's own verdict — the misjudgement attachRollout's `startAtEnd` exists
+   *  to prevent. A poll already awaiting findRollout when this lands still finishes; what it then
+   *  re-attaches is this same session's own new file, so it costs a re-read, not a wrong account.
+   *
+   *  **A null path is the ready event that only knows the thread id.** The id is recorded anyway —
+   *  it is what findLiveByCodexSession answers with and what the roll resumes — and the poll is left
+   *  to map the file, exactly as it does for a fresh pty session. Until it does, the chain is
+   *  unmapped and onLimit's own guard says so.
+   *
+   *  Unregistered or disposed ids do nothing: the subscriber calls this for every chat session, and
+   *  only those that were given a roll chain have a chain here. */
+  attachChat(sessionId: string, codexSessionId: string, rolloutPath: string | null): void {
+    const chain = this.chains.get(sessionId)
+    if (!chain || chain.disposed) return
+    if (!rolloutPath) {
+      // Reported the moment it is learned, like both mapping paths do — Job Continuity binds the
+      // native id here, and the locate that maps the file later sees the same id and stays quiet.
+      if (chain.codexSessionId !== codexSessionId)
+        this.deps.onNativeSession?.(chain.liveId, codexSessionId)
+      chain.codexSessionId = codexSessionId
+      this.deps.log(`codex chat thread id learned session=${sessionId} id=${codexSessionId}`)
+      return
+    }
+    if (chain.locateTimer) {
+      clearTimeout(chain.locateTimer)
+      chain.locateTimer = null
+    }
+    this.attachRollout(chain, codexSessionId, rolloutPath)
+    // The same write the other two mapping paths make on success (register's attach branch and
+    // startLocate): without it a chat conversation's roll config would live only as long as the
+    // session, and the next resume of it could not be prefilled.
+    this.deps.persistConfig?.(codexSessionId, {
+      accountIds: chain.accountIds,
+      prompt: chain.prompt
+    })
+    this.deps.log(`codex rollout attached from chat ready session=${sessionId} id=${codexSessionId}`)
   }
 
   /** Whether this conversation belongs to an active rolling chain — the history resume guard (mirrors findLiveByClaudeSession in rolling.ts) */
@@ -1219,14 +1277,30 @@ export class CodexRollingCoordinator {
       // true once the packet moved behind a pointer line (Task 7, resumePacket.ts) — folding a
       // mangled path through the sanitizer would have pointed it at a file that no longer exists,
       // not merely lost a character).
+      //
+      // **A chat chain carries the same prompt as its first turn.** A chat session is not started
+      // from a command line: the prompt is a message its manager sends once the handshake is done,
+      // so it rides as `initialPrompt` — the field the wiring routes into the chat spawn — and
+      // `resumePrompt`, which only ever exists as the argument behind `codex resume <id>`, is not
+      // passed at all. It is passed unsanitized for the same reason: sanitizeResumePrompt blanks
+      // the characters a Windows command line would eat, and there is no command line here. That
+      // makes `mangled` a pty concern too, so it does not choose the text either — it can still
+      // refuse *this* roll's blank slate one branch above, which for a chat chain costs a rollout
+      // copy and a resume it did not strictly need, and that is the conservative side of it.
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
+      const chat = chain.kind === 'chat'
       const info = this.deps.spawn({
         account: target,
         cwd: chain.cwd,
+        kind: chain.kind,
         resumeSessionId: smart ? undefined : codexSessionId,
-        resumePrompt: smart ? undefined : mangled ? chain.prompt : prompt,
-        initialPrompt: smart ? sanitizeResumePrompt(prompt) : undefined,
+        ...(chat
+          ? { initialPrompt: prompt }
+          : {
+              resumePrompt: smart ? undefined : mangled ? chain.prompt : prompt,
+              initialPrompt: smart ? sanitizeResumePrompt(prompt) : undefined
+            }),
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // the Slack notification is kept per chain (mirrors rolling.ts)
         bypassPermissions: chain.liveInfo.bypassPermissions,
