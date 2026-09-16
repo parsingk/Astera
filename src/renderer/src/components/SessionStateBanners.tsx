@@ -21,10 +21,28 @@ const fmtDateTime = (iso?: string): string =>
 export const rollBannerVisible = (s: RollStateEvent | null): s is RollStateEvent =>
   !!s && s.state !== 'none' && s.state !== 'nudged' && s.state !== 'stalled'
 
+/** One banner's height in the strip — the same 25px `.sched-banner.below-roll` offsets by, measured
+ *  there. Kept beside that rule so the two move together. */
+const BANNER_ROW_PX = 25
+
+/** How much room the strip needs, in pixels — 0 when neither banner is shown.
+ *
+ *  Both banners are absolutely positioned, which is right over a terminal: they float above scrollback,
+ *  and covered pixels scroll back into view. The conversation pane's top is message content, so the pane
+ *  reserves this much in its flex column instead and the thread starts below the strip. The terminal
+ *  reserves nothing and is unchanged. The roll half asks rollBannerVisible rather than repeating its
+ *  condition — a second copy would drift and the reserved height would stop matching what is drawn. */
+export const stateBannerHeight = (
+  rollState: RollStateEvent | null,
+  schedState: SchedStateEvent | null
+): number =>
+  (rollBannerVisible(rollState) ? BANNER_ROW_PX : 0) + (schedState?.state === 'active' ? BANNER_ROW_PX : 0)
+
 /** The rolling and schedule banners a session shows across the top of its view — the terminal's since
  *  their features existed, the chat pane's since chat-sessions slice 4 (§5.6). Both are absolutely
  *  positioned (`.roll-banner` / `.sched-banner` in styles.css), so the host element must be
- *  `position: relative` — `.terminal-wrap` is, and the conversation pane's root gets `relative`. */
+ *  `position: relative` — `.terminal-wrap` is, and the conversation pane wraps this in a `relative`
+ *  strip sized by stateBannerHeight above. */
 export function SessionStateBanners({
   sessionId,
   rollState,

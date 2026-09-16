@@ -91,7 +91,7 @@ import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
 import type { Attention, PendingToolPrompt, RollStateEvent, SchedStateEvent } from "../../../../core/types";
 import { chatBannerFor, composerLockedFor, type PaneTransport } from "./paneTransport";
-import { SessionStateBanners } from "../SessionStateBanners";
+import { SessionStateBanners, stateBannerHeight } from "../SessionStateBanners";
 
 export interface ConversationPaneProps {
   sessionId: string;
@@ -2183,6 +2183,12 @@ export function ConversationPane({
     return <div data-slot="conversation-pane-loading" className="h-full" />;
   }
 
+  // The banners are absolutely positioned, which over a terminal costs nothing — they float above
+  // scrollback. Here they would sit on top of the first message, so the strip gets a box of its own
+  // height at the head of the flex column and the thread starts below it. Zero, and no box at all, when
+  // nothing is showing.
+  const bannerStripHeight = isChat ? stateBannerHeight(rollState, schedState) : 0;
+
 
   return (
     <div
@@ -2205,7 +2211,11 @@ export function ConversationPane({
         onComposerFiles(files);
       }}
     >
-      {isChat && <SessionStateBanners sessionId={sessionId} rollState={rollState} schedState={schedState} />}
+      {isChat && bannerStripHeight > 0 && (
+        <div className="relative shrink-0" style={{ height: bannerStripHeight }}>
+          <SessionStateBanners sessionId={sessionId} rollState={rollState} schedState={schedState} />
+        </div>
+      )}
       {more && (
         <div className="border-border/60 flex justify-center border-b py-1">
           <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>

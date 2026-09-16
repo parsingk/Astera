@@ -229,7 +229,8 @@ export function ResumeDialog({
             <span className="roll-prompt-hint">{t('session.resume.crossAccountHint')}</span>
           )}
         </div>
-        {/* Rolling and Slack come to 대화 in slices 4b/4c — see NewSessionDialog's own note by the same guard. */}
+        {/* Rolling and Slack come to 대화 in slices 4b/4c, one guard per block with the schedule row
+            unguarded between them — see NewSessionDialog's own note by the same guard. */}
         {kind === 'terminal' && (
           <>
             <label className="row check-small">
@@ -254,21 +255,12 @@ export function ResumeDialog({
                 )}
               </div>
             )}
-            <label className="row check-small">
-              <input
-                type="checkbox"
-                checked={slackReady && slackNotify}
-                disabled={!slackReady}
-                onChange={(e) => setSlackNotify(e.target.checked)}
-              />
-              {t('session.new.slackNotify')}
-              {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
-            </label>
           </>
         )}
+        {/* The label follows the field below it — see NewSessionDialog's own note. */}
         <label className="row check-small">
           <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
-          {t('session.new.schedLabel')}
+          {t(kind === 'chat' ? 'session.new.schedLabelChat' : 'session.new.schedLabel')}
         </label>
         {/* Mounted only after the saved-value lookup finishes — ScheduleFields reads initial exactly
             once, at mount. schedule ?? savedSchedule: on a toggle off and back on, a value the user
@@ -278,6 +270,18 @@ export function ResumeDialog({
             that limitation carries over here as well. */}
         {schedOn && loadedDefaults && (
           <ScheduleFields initial={schedule ?? savedSchedule} onChange={setSchedule} chat={kind === 'chat'} />
+        )}
+        {kind === 'terminal' && (
+          <label className="row check-small">
+            <input
+              type="checkbox"
+              checked={slackReady && slackNotify}
+              disabled={!slackReady}
+              onChange={(e) => setSlackNotify(e.target.checked)}
+            />
+            {t('session.new.slackNotify')}
+            {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
+          </label>
         )}
         <label className="row check-small">
           <input

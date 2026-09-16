@@ -413,7 +413,9 @@ export function NewSessionDialog({
           )}
         </div>
         {/* Rolling and Slack come to 대화 in slices 4b/4c — a chat session has no CLI to hook a rolling
-            resume or a Slack notifier into yet. */}
+            resume or a Slack notifier into yet. One guard per block, with the schedule row unguarded
+            between them (spec §5.6), so a 터미널 keeps the row order it has always had: rolling,
+            schedule, Slack. */}
         {kind === 'terminal' && (
           <>
             <label className="row check-small">
@@ -442,23 +444,13 @@ export function NewSessionDialog({
                 <span className="roll-prompt-hint">{t('session.new.rollPromptHint')}</span>
               </div>
             )}
-            {/* Slack notifications work for every provider — claude detects turn completion through the
-                statusLine hook, codex through rollout's task_complete */}
-            <label className="row check-small">
-              <input
-                type="checkbox"
-                checked={slackReady && slackNotify}
-                disabled={!slackReady}
-                onChange={(e) => setSlackNotify(e.target.checked)}
-              />
-              {t('session.new.slackNotify')}
-              {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
-            </label>
           </>
         )}
+        {/* The label follows the field below it: a 대화 gets a prompt sent as a new turn, a 터미널 gets a
+            command run in its shell. */}
         <label className="row check-small">
           <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
-          {t('session.new.schedLabel')}
+          {t(kind === 'chat' ? 'session.new.schedLabelChat' : 'session.new.schedLabel')}
         </label>
         {/* initial={schedule} restores the previous input when this is toggled off and back on —
             ScheduleFields loses its internal state on unmount, so the parent holds the last value that
@@ -466,6 +458,20 @@ export function NewSessionDialog({
             is not restored, because onChange emits null for it so it never reaches schedule — not a
             complete fix, but it covers the common case (toggling the checkbox). */}
         {schedOn && <ScheduleFields initial={schedule} onChange={setSchedule} chat={kind === 'chat'} />}
+        {/* Slack notifications work for every provider — claude detects turn completion through the
+            statusLine hook, codex through rollout's task_complete */}
+        {kind === 'terminal' && (
+          <label className="row check-small">
+            <input
+              type="checkbox"
+              checked={slackReady && slackNotify}
+              disabled={!slackReady}
+              onChange={(e) => setSlackNotify(e.target.checked)}
+            />
+            {t('session.new.slackNotify')}
+            {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
+          </label>
+        )}
         <label className="row check-small">
           <input type="checkbox" checked={saveDefault} onChange={(e) => setSaveDefault(e.target.checked)} />
           {t('session.new.saveDefaultAccount')}

@@ -301,11 +301,11 @@ export interface SessionUsage {
   weekly: RateLimitWindow | null // the weekly (7-day) window
 }
 
-/** Rolling progress (main to renderer, for the terminal banner) */
+/** Rolling progress (main to renderer, for the banner both views wear — the terminal and the chat pane) */
 export interface RollStateEvent {
   sessionId: string
   // 'nudged' and 'stalled' are momentary events, not lasting states — the renderer leaves them out
-  // of the banner and only Slack is told (see TerminalView.rollBannerVisible)
+  // of the banner and only Slack is told (see SessionStateBanners.rollBannerVisible)
   // 'adopted' is a codex rolling chain that came back from the Host and could not be told whether
   // its account was already at its limit — asking is unsafe (see CodexRollingCoordinator.register),
   // so it will not roll until codex writes its next rate_limits record. It is a lasting state like
@@ -322,7 +322,7 @@ export interface RollStateEvent {
   scope?: 'session' | 'weekly' // which limit, when state='waiting' — selects the banner wording and time format
 }
 
-/** Schedule progress (main to renderer, for the terminal banner) */
+/** Schedule progress (main to renderer, for the banner both views wear — the terminal and the chat pane) */
 export interface SchedStateEvent {
   sessionId: string
   state: 'active' | 'off' // off covers turning it off, the session ending, and clearing the old id when rolling re-keys it

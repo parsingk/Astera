@@ -759,8 +759,10 @@ export const ko = {
   'session.new.schedDaysUnit': '일',
   'session.new.schedCommandPlaceholder': '실행할 명령어 (필수)',
   'session.new.schedHint': '지정 주기마다 이 명령을 세션에 전송',
-  // 대화 session's scheduler — what fills the field is a prompt, not a command (chat-sessions slice 4a,
-  // Task 1: a slash command on codex 대화 lands as prompt text, not a command)
+  // 대화 session's scheduler — what it sends is a prompt, not a command, so the checkbox label, the
+  // field's placeholder and its hint all say so (chat-sessions slice 4a, Task 1: a slash command on
+  // codex 대화 lands as prompt text, not a command)
+  'session.new.schedLabelChat': '스케쥴러 — 주기적으로 프롬프트 자동 전송',
   'session.new.schedCommandPlaceholderChat': '보낼 프롬프트 (필수)',
   'session.new.schedHintChat': '지정 주기마다 이 프롬프트를 새 턴으로 전송',
   // Shared by NewSessionDialog.tsx and TerminalView.tsx — weekday button labels, weekday text in the schedule summary.
@@ -812,8 +814,9 @@ export const ko = {
   'session.terminal.loadingContent': '내용 불러오는 중…',
   'session.terminal.exited': '종료됨 (코드 {code})',
   'session.terminal.restart': '다시 시작',
-  // TerminalView.tsx schedule banner — schedRuleSummary is a module-level pure function, so it takes t as an argument
-  // (the same convention as fmtTime/fmtDateTime). A merge from main brought in hardcoded text, later moved into this catalog
+  // The schedule banner SessionStateBanners.tsx draws, on the terminal and on the conversation pane alike
+  // — schedRuleSummary is a module-level pure function, so it takes t as an argument (the same convention
+  // as fmtTime/fmtDateTime beside it). A merge from main brought in hardcoded text, later moved into this catalog
   'session.terminal.schedFallback': '스케쥴',
   'session.terminal.schedSummary.interval': '{minutes}분마다',
   'session.terminal.schedSummary.daily': '매일 {time}',

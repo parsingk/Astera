@@ -9,7 +9,7 @@ import { ScheduleRuleFields } from './ScheduleRuleFields'
  *
  *  **규칙 부분은 ScheduleRuleFields 가 그린다.** Job 예약이 같은 규칙 UI 를 쓰면서 명령 칸만
  *  필요 없어서 나눴다. 이 컴포넌트가 더하는 것은 명령 한 칸과 "규칙 + 명령" 의 조립뿐이다.
- *  이 컴포넌트의 공개 인터페이스는 나누기 전과 같다.
+ *  Splitting it kept the public interface as it was; the `chat` prop below is the one thing added since.
  *  initial 은 마운트 때 한 번만 읽는다 — 타이핑 중에 되먹이면 입력이 되돌아간다. */
 export function ScheduleFields({
   initial,
