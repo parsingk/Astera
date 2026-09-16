@@ -1982,4 +1982,37 @@ describe('chat chains', () => {
     expect(h.coord.rolloutPathFor('s1')).toBe(file)
     h.coord.stop()
   })
+
+  // The `mangled` refusal exists because a briefing that names a filesystem path is handed to codex as
+  // an argv, and the argv sanitizer would blank characters out of it. A chat spawn has no command line
+  // at all — the briefing is sent as the session's first turn, untouched — so a briefing the sanitizer
+  // would alter is still a perfectly good first turn, and refusing the blank slate over it costs a
+  // rollout copy and a `thread/resume` the chain did not need.
+  it('keeps its blank slate when the sanitizer would have changed the briefing', async () => {
+    const logs: string[] = []
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve('Fix the "quote" bug & the pipe | issue'),
+      log: (m) => logs.push(m)
+    })
+    const file = await writeRollout({
+      accountId: 'c1',
+      uuid: 'cx-chat-sanitize',
+      cwd: h.info1.cwd,
+      primary: 95
+    })
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-sanitize', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(h.events).toEqual(['kill:s1', 'spawn:s2:c2']) // no 'copy' — the new session starts blank
+    expect(h.spawnedOpts[0]).toMatchObject({
+      kind: 'chat',
+      initialPrompt: 'Fix the "quote" bug & the pipe | issue' // and it goes over unsanitized
+    })
+    expect(h.spawnedOpts[0].resumeSessionId).toBeUndefined()
+    // The refusal log would be a falsehood here — it says the argv sanitizer forced a `--resume`.
+    expect(logs.some((l) => l.includes('smart resume refused'))).toBe(false)
+    h.coord.stop()
+  })
 })

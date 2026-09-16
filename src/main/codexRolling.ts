@@ -632,7 +632,11 @@ export class CodexRollingCoordinator {
         now: this.now,
         excludePaths: this.claimedRollouts(chain)
       })
-      if (chain.disposed || chain.liveId !== liveId) return
+      // `rolloutPath` joins the guard here and not above: an `attachChat` that lands while findRollout is
+      // in flight clears the locate timer, and clearing a timer cannot stop a tick already running. Left
+      // out, that tick would attach again — and it builds its tail *without* startAtEnd, which is the
+      // re-anchoring attachChat's timer-clearing exists to prevent (see attachChat).
+      if (chain.disposed || chain.liveId !== liveId || chain.rolloutPath) return
       // When two chains poll side by side, the other one can bite first while the findRollout above is in
       // flight — re-checking after the await keeps one rollout to one chain. Both paths were produced by
       // findRollout, so the strings are identical.
@@ -1228,8 +1232,16 @@ export class CodexRollingCoordinator {
       // so a mangled path is mangled either way. What refusing the blank slate buys is that the
       // mangled hint then arrives alongside the full copied conversation and `--resume`, so it is a
       // minor loss instead of a session starting from nothing.
+      //
+      // **It is a pty concern, so a chat chain is not asked.** That whole argument is about an argv:
+      // a chat spawn has no command line, its briefing rides as `initialPrompt` and is sent unsanitized
+      // as the session's first turn (see the spawn below). So a briefing the sanitizer would alter is
+      // still a valid first turn, and refusing the blank slate over it would cost a chat chain a rollout
+      // copy and a `thread/resume` it did not need — and log a line naming a sanitizer that never ran.
       const sanitizedPrompt = sanitizeResumePrompt(prompt)
-      if (strategy === 'smart' && briefed && sanitizedPrompt !== prompt) {
+      const mangled =
+        chain.kind !== 'chat' && strategy === 'smart' && briefed && sanitizedPrompt !== prompt
+      if (mangled) {
         // fix wave 최종, F6: 이 거부는 로그가 없으면 조용히 영구화된다 — userData 경로 하나에
         // `["&|<>^%]` 나 연속된 공백이 있으면 이 설치본의 codex Smart Resume 은 롤마다 여기서
         // 거부되지만, 그때까지 rolling.log 에는 그 사실이 한 줄도 남지 않았다. "폐기된 브리핑은
@@ -1238,7 +1250,6 @@ export class CodexRollingCoordinator {
           `codex smart resume refused — the briefing pointer would be mangled by the argv sanitizer, falling back to --resume session=${chain.liveId}`
         )
       }
-      const mangled = strategy === 'smart' && briefed && sanitizedPrompt !== prompt
       const smart = strategy === 'smart' && briefed && !mangled
       // 거부된 포인터를 그대로 재개 프롬프트로 쓰지 않는다. F3 이 "설정이 꺼진 롤은 탭 브리핑을 아예
       // 만들지 않는다"로 사용자 문구(chain.prompt, NewSessionDialog 의 rollPrompt)를 지켰지만, 그
@@ -1284,9 +1295,9 @@ export class CodexRollingCoordinator {
       // `resumePrompt`, which only ever exists as the argument behind `codex resume <id>`, is not
       // passed at all. It is passed unsanitized for the same reason: sanitizeResumePrompt blanks
       // the characters a Windows command line would eat, and there is no command line here. That
-      // makes `mangled` a pty concern too, so it does not choose the text either — it can still
-      // refuse *this* roll's blank slate one branch above, which for a chat chain costs a rollout
-      // copy and a resume it did not strictly need, and that is the conservative side of it.
+      // makes `mangled` a pty concern from end to end, which is why the branch above does not ask it
+      // of a chat chain at all — neither the text nor the blank slate is decided by a sanitizer that
+      // never runs on this path.
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const chat = chain.kind === 'chat'
