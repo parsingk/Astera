@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
-import type { Account, HistoryEntry, RollConfig, ScheduleConfig } from '../../../core/types'
+import type { Account, HistoryEntry, HostStatus, RollConfig, ScheduleConfig, SessionKind } from '../../../core/types'
 import { resumeAccountOptions, resumeRollAccountIds } from '../../../core/resume'
+import { providerOf } from '../../../core/providers/meta'
+import { HOST_FEATURE_PROC } from '../../../core/host/protocol'
 import { isSlackReady } from '../../../core/slack/ready'
 import { useI18n } from '../i18n/I18nProvider'
 import { isGhostAccountId } from '../../../core/accounts/ghostId'
+import * as sessionKindPref from '../lib/sessionKindPref'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleFields } from './ScheduleFields'
 
@@ -31,6 +34,7 @@ export function ResumeDialog({
   ghostAccounts: Account[]
   onConfirm: (opts: {
     accountIds: string[] // [0] = the account to continue on, with the chain after it when rolling is on
+    kind: SessionKind
     roll: boolean
     rollPrompt?: string
     slackNotify: boolean
@@ -42,6 +46,10 @@ export function ResumeDialog({
   const { t } = useI18n()
   const [options, setOptions] = useState<Account[] | null>(null) // null = login status still being checked
   const [selectedId, setSelectedId] = useState<string>('')
+  // Session kind — terminal (pty) or chat (a Host-owned line process resumed by its protocol thread
+  // id, not a transcript copy). Same remembered-and-falls-back rule as NewSessionDialog.
+  const [kind, setKind] = useState<SessionKind>(sessionKindPref.read)
+  const [hostStatus, setHostStatus] = useState<HostStatus | null>(null)
   // The saved settings — the source of the checkbox initial values and the input to the roll chain calculation
   const [savedRoll, setSavedRoll] = useState<RollConfig | null>(null)
   const [rollOn, setRollOn] = useState(false)
@@ -109,20 +117,54 @@ export function ResumeDialog({
     }
   }, [entry.sessionId])
 
+  useEffect(() => {
+    // Same 2s poll as NewSessionDialog — the Host connects moments after the app launches, so a
+    // single read at mount would leave this dialog's chat option looking permanently unavailable too.
+    let cancelled = false
+    const poll = (): void => {
+      void window.api.host.status().then((s) => {
+        if (!cancelled) setHostStatus(s)
+      })
+    }
+    poll()
+    const id = setInterval(poll, 2000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
+
   const crossAccount = selectedId !== '' && selectedId !== entry.accountId
   // The chain that actually goes to spawn — the display uses this value too (the result after the provider filter and the rotation reorder)
   const rollChain = selectedId ? resumeRollAccountIds(savedRoll?.accountIds ?? null, accounts, selectedId) : []
   const labelOf = (id: string): string => accounts.find((a) => a.id === id)?.label ?? id
 
+  // The entry's own provider — cross-account resume only ever offers same-provider accounts
+  // (resumeAccountOptions), so this is also selectedId's provider once one is picked.
+  const entryProvider = owner ? providerOf(owner) : 'claude'
+  const hostOk = !!hostStatus && hostStatus.connected && hostStatus.features.includes(HOST_FEATURE_PROC)
+  const chatDisabledReason: 'host' | 'provider' | null = !hostOk
+    ? 'host'
+    : entryProvider !== 'codex'
+      ? 'provider'
+      : null
+  const chatEnabled = chatDisabledReason === null
+  // A remembered 대화 falls back to 터미널 while it is unavailable — never persisted, so it is offered
+  // again once the condition clears (same reasoning as NewSessionDialog's own fallback effect).
+  useEffect(() => {
+    if (kind === 'chat' && !chatEnabled) setKind('terminal')
+  }, [kind, chatEnabled])
+
   const confirm = (): void => {
     if (!selectedId) return
     onConfirm({
-      accountIds: rollOn ? rollChain : [selectedId],
-      roll: rollOn,
-      rollPrompt: rollOn ? rollPrompt.trim() || undefined : undefined,
-      slackNotify: slackReady && slackNotify,
+      accountIds: kind === 'chat' ? [selectedId] : rollOn ? rollChain : [selectedId],
+      kind,
+      roll: kind === 'chat' ? false : rollOn,
+      rollPrompt: kind === 'chat' ? undefined : rollOn ? rollPrompt.trim() || undefined : undefined,
+      slackNotify: kind === 'chat' ? false : slackReady && slackNotify,
       bypassPermissions,
-      schedule: schedOn ? (schedule ?? undefined) : undefined
+      schedule: kind === 'chat' ? undefined : schedOn ? (schedule ?? undefined) : undefined
     })
   }
 
@@ -150,6 +192,40 @@ export function ResumeDialog({
           </div>
         )}
         <div className="field">
+          <label>{t('session.new.kindLabel')}</label>
+          <div className="kind-segmented">
+            <button
+              type="button"
+              className={`segmented${kind === 'terminal' ? ' active' : ''}`}
+              onClick={() => {
+                setKind('terminal')
+                sessionKindPref.write('terminal')
+              }}
+            >
+              {t('session.kind.terminal')}
+            </button>
+            <button
+              type="button"
+              className={`segmented${kind === 'chat' ? ' active' : ''}`}
+              disabled={!chatEnabled}
+              onClick={() => {
+                setKind('chat')
+                sessionKindPref.write('chat')
+              }}
+            >
+              {t('session.kind.chat')}
+            </button>
+          </div>
+          {!chatEnabled && (
+            <span className="check-note">
+              {t(chatDisabledReason === 'host' ? 'session.new.kindHostOld' : 'session.new.kindCodexOnly')}
+            </span>
+          )}
+          {chatEnabled && kind === 'chat' && (
+            <span className="check-note">{t('session.new.kindChatHint')}</span>
+          )}
+        </div>
+        <div className="field">
           <label>{t('session.field.account')}</label>
           {options === null ? (
             <span className="check-note">{t('session.resume.checkingLogin')}</span>
@@ -167,49 +243,54 @@ export function ResumeDialog({
             <span className="roll-prompt-hint">{t('session.resume.crossAccountHint')}</span>
           )}
         </div>
-        <label className="row check-small">
-          <input type="checkbox" checked={rollOn} onChange={(e) => setRollOn(e.target.checked)} />
-          {t('session.new.rollLabel')}
-        </label>
-        {rollOn && (
-          <div className="field roll-prompt-field">
-            <input
-              type="text"
-              className="roll-prompt-input"
-              value={rollPrompt}
-              maxLength={500}
-              placeholder={t('session.new.rollPromptPlaceholder')}
-              onChange={(e) => setRollPrompt(e.target.value)}
-            />
-            <span className="roll-prompt-hint">{t('session.new.rollPromptHint')}</span>
-            {rollChain.length >= 2 && (
-              <span className="roll-prompt-hint">
-                {t('session.resume.rollChainHint', { chain: rollChain.map(labelOf).join(' → ') })}
-              </span>
+        {/* None of this applies to 대화 — see NewSessionDialog's own note by the same guard. */}
+        {kind === 'terminal' && (
+          <>
+            <label className="row check-small">
+              <input type="checkbox" checked={rollOn} onChange={(e) => setRollOn(e.target.checked)} />
+              {t('session.new.rollLabel')}
+            </label>
+            {rollOn && (
+              <div className="field roll-prompt-field">
+                <input
+                  type="text"
+                  className="roll-prompt-input"
+                  value={rollPrompt}
+                  maxLength={500}
+                  placeholder={t('session.new.rollPromptPlaceholder')}
+                  onChange={(e) => setRollPrompt(e.target.value)}
+                />
+                <span className="roll-prompt-hint">{t('session.new.rollPromptHint')}</span>
+                {rollChain.length >= 2 && (
+                  <span className="roll-prompt-hint">
+                    {t('session.resume.rollChainHint', { chain: rollChain.map(labelOf).join(' → ') })}
+                  </span>
+                )}
+              </div>
             )}
-          </div>
+            <label className="row check-small">
+              <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
+              {t('session.new.schedLabel')}
+            </label>
+            {/* Mounted only after the saved-value lookup finishes — ScheduleFields reads initial exactly
+                once, at mount. schedule ?? savedSchedule: on a toggle off and back on, a value the user
+                already edited (schedule) is restored first, and before any edit it is filled from the saved
+                value (savedSchedule). schedule only ever holds the last value that was valid (an
+                intermediate state with an empty command sends null from onChange and is not recorded), so
+                that limitation carries over here as well. */}
+            {schedOn && loadedDefaults && <ScheduleFields initial={schedule ?? savedSchedule} onChange={setSchedule} />}
+            <label className="row check-small">
+              <input
+                type="checkbox"
+                checked={slackReady && slackNotify}
+                disabled={!slackReady}
+                onChange={(e) => setSlackNotify(e.target.checked)}
+              />
+              {t('session.new.slackNotify')}
+              {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
+            </label>
+          </>
         )}
-        <label className="row check-small">
-          <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
-          {t('session.new.schedLabel')}
-        </label>
-        {/* Mounted only after the saved-value lookup finishes — ScheduleFields reads initial exactly
-            once, at mount. schedule ?? savedSchedule: on a toggle off and back on, a value the user
-            already edited (schedule) is restored first, and before any edit it is filled from the saved
-            value (savedSchedule). schedule only ever holds the last value that was valid (an
-            intermediate state with an empty command sends null from onChange and is not recorded), so
-            that limitation carries over here as well. */}
-        {schedOn && loadedDefaults && <ScheduleFields initial={schedule ?? savedSchedule} onChange={setSchedule} />}
-        <label className="row check-small">
-          <input
-            type="checkbox"
-            checked={slackReady && slackNotify}
-            disabled={!slackReady}
-            onChange={(e) => setSlackNotify(e.target.checked)}
-          />
-          {t('session.new.slackNotify')}
-          {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
-        </label>
         <label className="row check-small">
           <input
             type="checkbox"
@@ -222,7 +303,7 @@ export function ResumeDialog({
           <button onClick={onCancel}>{t('common.cancel')}</button>
           <button
             className="primary"
-            disabled={!selectedId || (schedOn && !schedule)}
+            disabled={!selectedId || (kind === 'terminal' && schedOn && !schedule)}
             onClick={confirm}
           >
             {t('session.resume.confirm')}

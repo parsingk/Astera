@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, Attention, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, SessionView, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
+import type { Account, Attention, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, SessionView, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -1400,8 +1400,10 @@ export default function App(): React.JSX.Element {
     accountIds: string[]
     cwd: string
     saveDefault: boolean
+    kind?: SessionKind
     resumeSessionId?: string
     resumeTranscriptPath?: string
+    resumeThreadId?: string // chat only: resume this protocol thread instead of starting one
     roll?: boolean
     rollPrompt?: string
     slackNotify?: boolean
@@ -1439,8 +1441,10 @@ export default function App(): React.JSX.Element {
       const info = await window.api.sessions.spawn({
         accountId: opts.accountIds[0],
         cwd,
+        kind: opts.kind, // default 'terminal'
         resumeSessionId: opts.resumeSessionId,
         resumeTranscriptPath: opts.resumeTranscriptPath, // the transcript copy source when resuming under a different account
+        resumeThreadId: opts.resumeThreadId, // chat only: resume this protocol thread instead of starting one
         rollAccountIds: rolling ? opts.accountIds : undefined,
         rollPrompt: rolling ? opts.rollPrompt : undefined,
         slackNotify: opts.slackNotify, // Slack progress notifications
@@ -2018,6 +2022,10 @@ export default function App(): React.JSX.Element {
     cwd: string,
     opts: {
       accountIds: string[]
+      // Optional (rather than mirroring ResumeDialog's own required onConfirm field) so this keeps
+      // typechecking as HistoryBrowser's own onResume prop — untouched by this task — is still declared
+      // without it; the dialog always sends one in practice.
+      kind?: SessionKind
       roll: boolean
       rollPrompt?: string
       slackNotify: boolean
@@ -2031,8 +2039,12 @@ export default function App(): React.JSX.Element {
       accountIds: opts.accountIds,
       cwd,
       saveDefault: false,
-      resumeSessionId: entry.sessionId,
-      resumeTranscriptPath: entry.filePath, // the source transcript to copy into the target account's configDir
+      kind: opts.kind,
+      // A chat resume has no transcript file to copy — the Host resumes the protocol thread itself,
+      // keyed by the id the history entry already carries as sessionId (chat-sessions design §6.5).
+      ...(opts.kind === 'chat'
+        ? { resumeThreadId: entry.sessionId }
+        : { resumeSessionId: entry.sessionId, resumeTranscriptPath: entry.filePath }),
       roll: opts.roll,
       rollPrompt: opts.rollPrompt,
       slackNotify: opts.slackNotify,

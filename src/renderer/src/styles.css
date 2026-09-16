@@ -887,6 +887,19 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .field input[type="text"], .field textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 6px; border-radius: var(--radius); }
 /* A field entered line by line, like environment variables — monospaced so the values line up visibly, and resizable in height by the user */
 .field textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
+/* The session-kind toggle (터미널/대화, Task 7) — two labelled buttons, not the icon pair
+   WorkbenchTabs's .session-view-toggle uses (that one flips which half of an already-open tab shows;
+   this one decides how the session is spawned at all, before anything exists to switch between). */
+.kind-segmented { display: flex; gap: 6px; }
+.kind-segmented .segmented {
+  padding: 5px 12px; font-size: 12px; color: var(--text-dim); background: none;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer;
+}
+.kind-segmented .segmented.active { color: var(--text); border-color: var(--accent); background: var(--elevated); }
+.kind-segmented .segmented:disabled { opacity: 0.5; cursor: not-allowed; }
+/* A hint or disabled-reason note directly under a .field control that is not one of the checkbox rows
+   (label.check-small) the other .check-note rule above targets — the kind toggle is the first of these. */
+.field > .check-note { display: block; margin-top: 4px; font-size: 11px; color: var(--text-dim); opacity: 0.85; }
 /* NewRunModal's concurrency box. The palette rule above matches input[type="text"] only, so this one
    field fell through to the browser default — a white box with a light-grey native spinner — next to a
    text input and a Select that both follow the theme. The resting look is taken from .sel-trigger, the

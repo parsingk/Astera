@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, BranchRef, ScheduleConfig, Provider } from '../../../core/types'
+import type { Account, BranchRef, HostStatus, ScheduleConfig, SessionKind, Provider } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
+import { HOST_FEATURE_PROC } from '../../../core/host/protocol'
 import { isSlackReady } from '../../../core/slack/ready'
 import { orderBranchesForPicker, reconcileBaseRef } from '../../../core/worktrees/base'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
+import * as sessionKindPref from '../lib/sessionKindPref'
 import { AccountSelect } from './AccountSelect'
 import { BranchGlyph } from './BranchGlyph'
 import { Select, type SelectOption } from './Select'
@@ -28,6 +30,7 @@ export function NewSessionDialog({
     accountIds: string[]
     cwd: string
     saveDefault: boolean
+    kind: SessionKind
     roll: boolean
     rollPrompt?: string
     slackNotify: boolean
@@ -45,6 +48,10 @@ export function NewSessionDialog({
   // Account slots — [0] is the primary account, slots 1 and 2 are the switch order once the limit is hit
   const [accountIds, setAccountIds] = useState<string[]>([accounts[0]?.id ?? ''])
   const [saveDefault, setSaveDefault] = useState(false)
+  // Session kind — terminal (pty) or chat (a Host-owned line process, no terminal at all). Remembered
+  // across dialog opens (sessionKindPref) and forced back to 'terminal' below whenever chat is not
+  // available, so the toggle never sticks on a choice the person cannot actually start.
+  const [kind, setKind] = useState<SessionKind>(sessionKindPref.read)
   const [rollMode, setRollMode] = useState(false) // auto-resume toggle for a single account
   const [rollPrompt, setRollPrompt] = useState('') // text to send on a rolling resume (empty means the default)
   const [slackNotify, setSlackNotify] = useState(false) // Slack progress notifications
@@ -56,6 +63,10 @@ export function NewSessionDialog({
   const [slackReady, setSlackReady] = useState(false) // whether a webhook URL is configured — the checkbox is disabled when it is not
   // Both CLIs, because either one can be the missing one — the app opens with just one installed
   const [cliOk, setCliOk] = useState({ claude: true, codex: true })
+  // Astera Host status, polled while this dialog is open — a chat session needs the Host's proc-*
+  // family (HOST_FEATURE_PROC), and the Host connects a few moments after the app launches, so a
+  // single read at mount would leave the toggle looking permanently unavailable on a fresh start.
+  const [hostStatus, setHostStatus] = useState<HostStatus | null>(null)
   const [repoRoot, setRepoRoot] = useState<string | null>(null) // result of the git repo check
   const [resolvingRepo, setResolvingRepo] = useState(false) // blocks start while the check runs — stops a spawn with the previous repoRoot
   const [useWorktree, setUseWorktree] = useState(false)
@@ -89,6 +100,24 @@ export function NewSessionDialog({
     void window.api.settings
       .getAgentPermissionMode()
       .then((m) => setBypassPermissions(m === 'yolo'))
+  }, [])
+
+  useEffect(() => {
+    // Re-asked every 2s for as long as this dialog stays open — the Host connects moments after the
+    // app launches, so a single read at mount would leave a fresh start's chat option looking
+    // permanently unavailable.
+    let cancelled = false
+    const poll = (): void => {
+      void window.api.host.status().then((s) => {
+        if (!cancelled) setHostStatus(s)
+      })
+    }
+    poll()
+    const id = setInterval(poll, 2000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
   }, [])
 
   useEffect(() => {
@@ -172,6 +201,21 @@ export function NewSessionDialog({
   // supports codex too (codexRolling.ts) and so do Slack notifications (turn completion is detected
   // from rollout's task_complete), so this flag must not hide either of those.
   const primaryCliMissing = !cliOk[primaryProvider]
+  // 대화 is available only once the Host has announced the proc-* family and the primary account is
+  // Codex — the strings table's kindHostOld / kindCodexOnly say which reason applies.
+  const hostOk = !!hostStatus && hostStatus.connected && hostStatus.features.includes(HOST_FEATURE_PROC)
+  const chatDisabledReason: 'host' | 'provider' | null = !hostOk
+    ? 'host'
+    : primaryProvider !== 'codex'
+      ? 'provider'
+      : null
+  const chatEnabled = chatDisabledReason === null
+  // A remembered 대화 falls back to 터미널 while it is unavailable — never write here, so the person's
+  // actual choice survives a temporary gap (the Host still connecting, the primary account not yet
+  // switched to Codex) and chat is offered again once the condition clears.
+  useEffect(() => {
+    if (kind === 'chat' && !chatEnabled) setKind('terminal')
+  }, [kind, chatEnabled])
   // Per-slot options: this slot's current value plus any account no other slot uses (no duplicates).
   // Rolling slots (1 and 2) only offer accounts with the same provider as the primary account.
   const options = (slot: number): Account[] =>
@@ -213,18 +257,21 @@ export function NewSessionDialog({
       // success and failure come back here, and on success App has already closed the modal so the
       // setStarting below is a no-op.
       await onSpawn({
-        accountIds,
+        // 대화 is a single account, no rolling, no schedule, no Slack — none of that applies to a
+        // Host-owned line process (no CLI to hook or bypass a limit on the way this pty rolls).
+        accountIds: kind === 'chat' ? [accountIds[0]] : accountIds,
         cwd,
         saveDefault,
-        roll: rollChecked,
-        rollPrompt: rollChecked ? rollPrompt.trim() || undefined : undefined,
-        slackNotify: slackReady && slackNotify,
+        kind,
+        roll: kind === 'chat' ? false : rollChecked,
+        rollPrompt: kind === 'chat' ? undefined : rollChecked ? rollPrompt.trim() || undefined : undefined,
+        slackNotify: kind === 'chat' ? false : slackReady && slackNotify,
         bypassPermissions,
         useWorktree: withWorktree,
         worktreeName: wtName.trim() || undefined,
         worktreeBaseRef: wtBaseRef || undefined,
         repoRoot,
-        schedule: schedOn ? (schedule ?? undefined) : undefined
+        schedule: kind === 'chat' ? undefined : schedOn ? (schedule ?? undefined) : undefined
       })
     } finally {
       if (mounted.current) setStarting(false)
@@ -307,8 +354,42 @@ export function NewSessionDialog({
           </>
         )}
         <div className="field">
+          <label>{t('session.new.kindLabel')}</label>
+          <div className="kind-segmented">
+            <button
+              type="button"
+              className={`segmented${kind === 'terminal' ? ' active' : ''}`}
+              onClick={() => {
+                setKind('terminal')
+                sessionKindPref.write('terminal')
+              }}
+            >
+              {t('session.kind.terminal')}
+            </button>
+            <button
+              type="button"
+              className={`segmented${kind === 'chat' ? ' active' : ''}`}
+              disabled={!chatEnabled}
+              onClick={() => {
+                setKind('chat')
+                sessionKindPref.write('chat')
+              }}
+            >
+              {t('session.kind.chat')}
+            </button>
+          </div>
+          {!chatEnabled && (
+            <span className="check-note">
+              {t(chatDisabledReason === 'host' ? 'session.new.kindHostOld' : 'session.new.kindCodexOnly')}
+            </span>
+          )}
+          {chatEnabled && kind === 'chat' && (
+            <span className="check-note">{t('session.new.kindChatHint')}</span>
+          )}
+        </div>
+        <div className="field">
           <label>{t('session.field.account')}</label>
-          {accountIds.map((id, slot) => (
+          {(kind === 'chat' ? accountIds.slice(0, 1) : accountIds).map((id, slot) => (
             <div className="account-slot" key={slot}>
               <span className="slot-label">
                 {slot === 0
@@ -341,7 +422,7 @@ export function NewSessionDialog({
               )}
             </div>
           ))}
-          {canAdd && (
+          {canAdd && kind === 'terminal' && (
             <button
               className="add-account"
               onClick={() =>
@@ -357,54 +438,60 @@ export function NewSessionDialog({
             </button>
           )}
         </div>
-        <label className="row check-small">
-          <input
-            type="checkbox"
-            checked={rollChecked}
-            disabled={multi}
-            onChange={(e) => setRollMode(e.target.checked)}
-          />
-          {t('session.new.rollLabel')}
-          {multi && <span className="check-note">{t('session.new.multiAccountAuto')}</span>}
-        </label>
-        {rollChecked && (
-          <div className="field roll-prompt-field">
-            {/* Keep the placeholder in sync with the actual default rolling.ts and codexRolling.ts send
-                (the rolling.continuePrompt key) — that key follows the app language too, so in both ko
-                and en, session.new.rollPromptPlaceholder and rolling.continuePrompt must hold the same value. */}
-            <input
-              type="text"
-              className="roll-prompt-input"
-              value={rollPrompt}
-              maxLength={500}
-              placeholder={t('session.new.rollPromptPlaceholder')}
-              onChange={(e) => setRollPrompt(e.target.value)}
-            />
-            <span className="roll-prompt-hint">{t('session.new.rollPromptHint')}</span>
-          </div>
+        {/* None of this applies to 대화 — a chat session has no CLI to hook a rolling resume or a
+            Slack notifier into, and no shell to send a scheduled command to. */}
+        {kind === 'terminal' && (
+          <>
+            <label className="row check-small">
+              <input
+                type="checkbox"
+                checked={rollChecked}
+                disabled={multi}
+                onChange={(e) => setRollMode(e.target.checked)}
+              />
+              {t('session.new.rollLabel')}
+              {multi && <span className="check-note">{t('session.new.multiAccountAuto')}</span>}
+            </label>
+            {rollChecked && (
+              <div className="field roll-prompt-field">
+                {/* Keep the placeholder in sync with the actual default rolling.ts and codexRolling.ts send
+                    (the rolling.continuePrompt key) — that key follows the app language too, so in both ko
+                    and en, session.new.rollPromptPlaceholder and rolling.continuePrompt must hold the same value. */}
+                <input
+                  type="text"
+                  className="roll-prompt-input"
+                  value={rollPrompt}
+                  maxLength={500}
+                  placeholder={t('session.new.rollPromptPlaceholder')}
+                  onChange={(e) => setRollPrompt(e.target.value)}
+                />
+                <span className="roll-prompt-hint">{t('session.new.rollPromptHint')}</span>
+              </div>
+            )}
+            <label className="row check-small">
+              <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
+              {t('session.new.schedLabel')}
+            </label>
+            {/* initial={schedule} restores the previous input when this is toggled off and back on —
+                ScheduleFields loses its internal state on unmount, so the parent holds the last value that
+                was valid (schedule) and feeds it back in. An intermediate input state with an empty command
+                is not restored, because onChange emits null for it so it never reaches schedule — not a
+                complete fix, but it covers the common case (toggling the checkbox). */}
+            {schedOn && <ScheduleFields initial={schedule} onChange={setSchedule} />}
+            {/* Slack notifications work for every provider — claude detects turn completion through the
+                statusLine hook, codex through rollout's task_complete */}
+            <label className="row check-small">
+              <input
+                type="checkbox"
+                checked={slackReady && slackNotify}
+                disabled={!slackReady}
+                onChange={(e) => setSlackNotify(e.target.checked)}
+              />
+              {t('session.new.slackNotify')}
+              {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
+            </label>
+          </>
         )}
-        <label className="row check-small">
-          <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
-          {t('session.new.schedLabel')}
-        </label>
-        {/* initial={schedule} restores the previous input when this is toggled off and back on —
-            ScheduleFields loses its internal state on unmount, so the parent holds the last value that
-            was valid (schedule) and feeds it back in. An intermediate input state with an empty command
-            is not restored, because onChange emits null for it so it never reaches schedule — not a
-            complete fix, but it covers the common case (toggling the checkbox). */}
-        {schedOn && <ScheduleFields initial={schedule} onChange={setSchedule} />}
-        {/* Slack notifications work for every provider — claude detects turn completion through the
-            statusLine hook, codex through rollout's task_complete */}
-        <label className="row check-small">
-          <input
-            type="checkbox"
-            checked={slackReady && slackNotify}
-            disabled={!slackReady}
-            onChange={(e) => setSlackNotify(e.target.checked)}
-          />
-          {t('session.new.slackNotify')}
-          {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
-        </label>
         <label className="row check-small">
           <input type="checkbox" checked={saveDefault} onChange={(e) => setSaveDefault(e.target.checked)} />
           {t('session.new.saveDefaultAccount')}
@@ -429,7 +516,7 @@ export function NewSessionDialog({
               resolvingRepo ||
               accountIds.some((id) => !id) ||
               primaryCliMissing ||
-              (schedOn && !schedule)
+              (kind === 'terminal' && schedOn && !schedule)
             }
             onClick={() => void start()}
           >

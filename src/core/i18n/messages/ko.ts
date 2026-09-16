@@ -684,6 +684,14 @@ export const ko = {
   'session.new.cliMissingPost': '설치 후 다시 시도하세요.',
   'session.field.projectFolder': '프로젝트 폴더',
   'session.field.account': '계정',
+  // 세션 방식 선택(Task 7) — 터미널/대화 세그먼트 컨트롤. 대화는 Host 가 proc-* 를 말해야 하고
+  // (kindHostOld) 주 계정이 Codex 여야 한다(kindCodexOnly); 둘 다 만족해야 켜진다.
+  'session.kind.terminal': '터미널',
+  'session.kind.chat': '대화',
+  'session.new.kindLabel': '세션 방식',
+  'session.new.kindChatHint': '대화 세션은 터미널 없이 대화창만 씁니다. 선택지와 권한 확인이 카드로 옵니다.',
+  'session.new.kindHostOld': 'Host 가 새 버전으로 바뀐 뒤 사용할 수 있습니다',
+  'session.new.kindCodexOnly': '지금은 Codex 계정에서만 열 수 있습니다',
   'session.new.folderNotSelected': '(선택 안 됨)',
   'session.new.pickFolder': '선택…',
   'session.new.useWorktree': 'worktree로 분리해서 시작',
