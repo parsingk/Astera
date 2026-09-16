@@ -142,7 +142,7 @@ export function ResumeDialog({
       kind,
       roll: kind === 'chat' ? false : rollOn,
       rollPrompt: kind === 'chat' ? undefined : rollOn ? rollPrompt.trim() || undefined : undefined,
-      slackNotify: kind === 'chat' ? false : slackReady && slackNotify,
+      slackNotify: slackReady && slackNotify,
       bypassPermissions,
       schedule: schedOn ? (schedule ?? undefined) : undefined
     })
@@ -229,8 +229,8 @@ export function ResumeDialog({
             <span className="roll-prompt-hint">{t('session.resume.crossAccountHint')}</span>
           )}
         </div>
-        {/* Rolling and Slack come to 대화 in slices 4b/4c, one guard per block with the schedule row
-            unguarded between them — see NewSessionDialog's own note by the same guard. */}
+        {/* Rolling comes to 대화 in slice 4c, guarded on its own with the schedule and Slack rows
+            unguarded after it — see NewSessionDialog's own note by the same guard. */}
         {kind === 'terminal' && (
           <>
             <label className="row check-small">
@@ -271,18 +271,16 @@ export function ResumeDialog({
         {schedOn && loadedDefaults && (
           <ScheduleFields initial={schedule ?? savedSchedule} onChange={setSchedule} chat={kind === 'chat'} />
         )}
-        {kind === 'terminal' && (
-          <label className="row check-small">
-            <input
-              type="checkbox"
-              checked={slackReady && slackNotify}
-              disabled={!slackReady}
-              onChange={(e) => setSlackNotify(e.target.checked)}
-            />
-            {t('session.new.slackNotify')}
-            {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
-          </label>
-        )}
+        <label className="row check-small">
+          <input
+            type="checkbox"
+            checked={slackReady && slackNotify}
+            disabled={!slackReady}
+            onChange={(e) => setSlackNotify(e.target.checked)}
+          />
+          {t('session.new.slackNotify')}
+          {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
+        </label>
         <label className="row check-small">
           <input
             type="checkbox"
