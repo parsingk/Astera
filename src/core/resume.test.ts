@@ -135,19 +135,15 @@ describe('resumeRollAccountIds', () => {
 })
 
 describe('resumeChatAllowed', () => {
-  it('is allowed on the account the transcript belongs to', () => {
-    expect(resumeChatAllowed({ chatEnabled: true, selectedId: 'a', ownerId: 'a', ownerGone: false })).toBe(true)
+  it('allows any selected account, even one other than the transcript\'s owner — the copy comes from the file, not the owner (resumeAccountOptions already filtered it to a logged-in account of the same provider)', () => {
+    expect(resumeChatAllowed({ chatEnabled: true, selectedId: 'b' })).toBe(true)
   })
 
-  it('is refused on another account — a protocol thread lives in one config dir', () => {
-    expect(resumeChatAllowed({ chatEnabled: true, selectedId: 'b', ownerId: 'a', ownerGone: false })).toBe(false)
-  })
-
-  it('is refused when the owning account is gone, whatever is selected', () => {
-    expect(resumeChatAllowed({ chatEnabled: true, selectedId: 'a', ownerId: 'a', ownerGone: true })).toBe(false)
+  it('is refused while nothing is selected yet', () => {
+    expect(resumeChatAllowed({ chatEnabled: true, selectedId: '' })).toBe(false)
   })
 
   it('is refused while the Host cannot open a chat session at all', () => {
-    expect(resumeChatAllowed({ chatEnabled: false, selectedId: 'a', ownerId: 'a', ownerGone: false })).toBe(false)
+    expect(resumeChatAllowed({ chatEnabled: false, selectedId: 'a' })).toBe(false)
   })
 })

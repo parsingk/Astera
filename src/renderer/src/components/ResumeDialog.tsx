@@ -11,9 +11,8 @@ import { ScheduleFields } from './ScheduleFields'
 
 /** Modal for resuming a session from history. Only logged-in accounts appear as candidates and the
  *  original account is preselected. Picking a different account makes ipc copy the transcript into that
- *  account's configDir before --resume (the same approach rolling uses) — which is a 터미널 resume only:
- *  a 대화 session resumes by its protocol thread id, and that id means nothing in another account's
- *  config dir, so the choice is offered on the owning account alone (resumeChatAllowed).
+ *  account's configDir before --resume — since slice 4c both 터미널 and 대화 resume this way, so either
+ *  kind can run on any candidate the picker offers (resumeChatAllowed).
  *
  *  The rolling, scheduler, Slack and permission checkboxes are settled here. ipc.ts used to quietly
  *  revive the saved rolling and schedule settings (with no way to turn them off) and there was no way
@@ -48,7 +47,9 @@ export function ResumeDialog({
   const [options, setOptions] = useState<Account[] | null>(null) // null = login status still being checked
   const [selectedId, setSelectedId] = useState<string>('')
   // Session kind — terminal (pty) or chat (a Host-owned line process resumed by its protocol thread
-  // id, not a transcript copy). Same remembered-and-falls-back rule as NewSessionDialog.
+  // id — since slice 4c the transcript is copied into the chosen account first, same as terminal, so
+  // either kind can land on any candidate the picker offers). Same remembered-and-falls-back rule as
+  // NewSessionDialog.
   const [kind, setKind] = useState<SessionKind>(sessionKindPref.read)
   // The saved settings — the source of the checkbox initial values and the input to the roll chain calculation
   const [savedRoll, setSavedRoll] = useState<RollConfig | null>(null)
@@ -124,9 +125,9 @@ export function ResumeDialog({
 
   // The Host poll is shared with NewSessionDialog; either provider's account can open a chat session.
   const { enabled: chatEnabled } = useChatAvailability()
-  // …but resuming one is narrower than starting one: it only works on the account that holds the
-  // thread (resumeChatAllowed, ruling S3-9).
-  const chatAllowed = resumeChatAllowed({ chatEnabled, selectedId, ownerId: entry.accountId, ownerGone })
+  // Resuming one is no narrower than starting one any more (resumeChatAllowed) — the chat spawn path
+  // copies the transcript into the chosen account too, so any candidate the picker offers works.
+  const chatAllowed = resumeChatAllowed({ chatEnabled, selectedId })
   // A remembered 대화 falls back to 터미널 while it is unavailable — never persisted, so it is offered
   // again once the condition clears (same reasoning as NewSessionDialog's own fallback effect). Picking
   // another account is one of those conditions: the choice comes back the moment the owner is picked
@@ -138,10 +139,10 @@ export function ResumeDialog({
   const confirm = (): void => {
     if (!selectedId) return
     onConfirm({
-      accountIds: kind === 'chat' ? [selectedId] : rollOn ? rollChain : [selectedId],
+      accountIds: rollOn ? rollChain : [selectedId],
       kind,
-      roll: kind === 'chat' ? false : rollOn,
-      rollPrompt: kind === 'chat' ? undefined : rollOn ? rollPrompt.trim() || undefined : undefined,
+      roll: rollOn,
+      rollPrompt: rollOn ? rollPrompt.trim() || undefined : undefined,
       slackNotify: slackReady && slackNotify,
       bypassPermissions,
       schedule: schedOn ? (schedule ?? undefined) : undefined
@@ -181,12 +182,6 @@ export function ResumeDialog({
           </div>
           {!chatEnabled && (
             <span className="kind-note">{t('session.new.kindHostOld')}</span>
-          )}
-          {/* The Host's own note keeps precedence above; this one only ever explains the account. It
-              waits for a selection to exist — before the login check answers there is no account to
-              say anything about, and the note would be about nothing. */}
-          {chatEnabled && selectedId !== '' && !chatAllowed && (
-            <span className="kind-note">{t('session.resume.kindOwnAccountOnly')}</span>
           )}
           {chatAllowed && kind === 'chat' && (
             <span className="kind-note">{t('session.new.kindChatHint')}</span>
@@ -229,33 +224,28 @@ export function ResumeDialog({
             <span className="roll-prompt-hint">{t('session.resume.crossAccountHint')}</span>
           )}
         </div>
-        {/* Rolling comes to 대화 in slice 4c, guarded on its own with the schedule and Slack rows
-            unguarded after it — see NewSessionDialog's own note by the same guard. */}
-        {kind === 'terminal' && (
-          <>
-            <label className="row check-small">
-              <input type="checkbox" checked={rollOn} onChange={(e) => setRollOn(e.target.checked)} />
-              {t('session.new.rollLabel')}
-            </label>
-            {rollOn && (
-              <div className="field roll-prompt-field">
-                <input
-                  type="text"
-                  className="roll-prompt-input"
-                  value={rollPrompt}
-                  maxLength={500}
-                  placeholder={t('session.new.rollPromptPlaceholder')}
-                  onChange={(e) => setRollPrompt(e.target.value)}
-                />
-                <span className="roll-prompt-hint">{t('session.new.rollPromptHint')}</span>
-                {rollChain.length >= 2 && (
-                  <span className="roll-prompt-hint">
-                    {t('session.resume.rollChainHint', { chain: rollChain.map(labelOf).join(' → ') })}
-                  </span>
-                )}
-              </div>
+        {/* Rolling now applies to 대화 too (slice 4c) — see NewSessionDialog's own note. */}
+        <label className="row check-small">
+          <input type="checkbox" checked={rollOn} onChange={(e) => setRollOn(e.target.checked)} />
+          {t('session.new.rollLabel')}
+        </label>
+        {rollOn && (
+          <div className="field roll-prompt-field">
+            <input
+              type="text"
+              className="roll-prompt-input"
+              value={rollPrompt}
+              maxLength={500}
+              placeholder={t('session.new.rollPromptPlaceholder')}
+              onChange={(e) => setRollPrompt(e.target.value)}
+            />
+            <span className="roll-prompt-hint">{t('session.new.rollPromptHint')}</span>
+            {rollChain.length >= 2 && (
+              <span className="roll-prompt-hint">
+                {t('session.resume.rollChainHint', { chain: rollChain.map(labelOf).join(' → ') })}
+              </span>
             )}
-          </>
+          </div>
         )}
         {/* The label follows the field below it — see NewSessionDialog's own note. */}
         <label className="row check-small">

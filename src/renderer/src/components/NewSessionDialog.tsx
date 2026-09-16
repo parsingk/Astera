@@ -229,15 +229,14 @@ export function NewSessionDialog({
       // success and failure come back here, and on success App has already closed the modal so the
       // setStarting below is a no-op.
       await onSpawn({
-        // 대화 is a single account, and rolling alone stays off for it — a Host-owned line process
-        // has no CLI to hook a rolling resume into yet (slice 4c). Schedule (4a) and Slack (4b) now
-        // apply to a chat session the same as a 터미널.
-        accountIds: kind === 'chat' ? [accountIds[0]] : accountIds,
+        // Rolling used to be terminal-only (a Host-owned line process had no CLI to hook a rolling
+        // resume into) — since slice 4c 대화 rolls too, so nothing here is kind-gated any more.
+        accountIds,
         cwd,
         saveDefault,
         kind,
-        roll: kind === 'chat' ? false : rollChecked,
-        rollPrompt: kind === 'chat' ? undefined : rollChecked ? rollPrompt.trim() || undefined : undefined,
+        roll: rollChecked,
+        rollPrompt: rollChecked ? rollPrompt.trim() || undefined : undefined,
         slackNotify: slackReady && slackNotify,
         bypassPermissions,
         useWorktree: withWorktree,
@@ -364,7 +363,7 @@ export function NewSessionDialog({
         )}
         <div className="field">
           <label>{t('session.field.account')}</label>
-          {(kind === 'chat' ? accountIds.slice(0, 1) : accountIds).map((id, slot) => (
+          {accountIds.map((id, slot) => (
             <div className="account-slot" key={slot}>
               <span className="slot-label">
                 {slot === 0
@@ -397,7 +396,7 @@ export function NewSessionDialog({
               )}
             </div>
           ))}
-          {canAdd && kind === 'terminal' && (
+          {canAdd && (
             <button
               className="add-account"
               onClick={() =>
@@ -413,39 +412,35 @@ export function NewSessionDialog({
             </button>
           )}
         </div>
-        {/* Rolling comes to 대화 in slice 4c — a chat session has no CLI to hook a rolling resume
-            into yet. Guarded on its own, with the schedule and Slack rows unguarded after it
-            (spec §5.6), so a 터미널 keeps the row order it has always had: rolling, schedule,
-            Slack. */}
-        {kind === 'terminal' && (
-          <>
-            <label className="row check-small">
-              <input
-                type="checkbox"
-                checked={rollChecked}
-                disabled={multi}
-                onChange={(e) => setRollMode(e.target.checked)}
-              />
-              {t('session.new.rollLabel')}
-              {multi && <span className="check-note">{t('session.new.multiAccountAuto')}</span>}
-            </label>
-            {rollChecked && (
-              <div className="field roll-prompt-field">
-                {/* Keep the placeholder in sync with the actual default rolling.ts and codexRolling.ts send
-                    (the rolling.continuePrompt key) — that key follows the app language too, so in both ko
-                    and en, session.new.rollPromptPlaceholder and rolling.continuePrompt must hold the same value. */}
-                <input
-                  type="text"
-                  className="roll-prompt-input"
-                  value={rollPrompt}
-                  maxLength={500}
-                  placeholder={t('session.new.rollPromptPlaceholder')}
-                  onChange={(e) => setRollPrompt(e.target.value)}
-                />
-                <span className="roll-prompt-hint">{t('session.new.rollPromptHint')}</span>
-              </div>
-            )}
-          </>
+        {/* Rolling now applies to 대화 too (slice 4c) — its resume path copies the transcript into
+            the next account exactly as 터미널's does, so the same chain mechanism can hook into it.
+            Unguarded by kind, with the schedule and Slack rows kept in the same order after it
+            (spec §5.6). */}
+        <label className="row check-small">
+          <input
+            type="checkbox"
+            checked={rollChecked}
+            disabled={multi}
+            onChange={(e) => setRollMode(e.target.checked)}
+          />
+          {t('session.new.rollLabel')}
+          {multi && <span className="check-note">{t('session.new.multiAccountAuto')}</span>}
+        </label>
+        {rollChecked && (
+          <div className="field roll-prompt-field">
+            {/* Keep the placeholder in sync with the actual default rolling.ts and codexRolling.ts send
+                (the rolling.continuePrompt key) — that key follows the app language too, so in both ko
+                and en, session.new.rollPromptPlaceholder and rolling.continuePrompt must hold the same value. */}
+            <input
+              type="text"
+              className="roll-prompt-input"
+              value={rollPrompt}
+              maxLength={500}
+              placeholder={t('session.new.rollPromptPlaceholder')}
+              onChange={(e) => setRollPrompt(e.target.value)}
+            />
+            <span className="roll-prompt-hint">{t('session.new.rollPromptHint')}</span>
+          </div>
         )}
         {/* The label follows the field below it: a 대화 gets a prompt sent as a new turn, a 터미널 gets a
             command run in its shell. */}
