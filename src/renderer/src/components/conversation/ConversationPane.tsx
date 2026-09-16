@@ -539,12 +539,14 @@ function ConversationBannerSlot(): ReactNode {
 
 function ComposerModelSlot(): ReactNode {
   const props = useContext(ModelSlotContext);
-  // Drawn as soon as the CLI is known, which is from the session's account rather than from anything
-  // it has said. What it is *set to* can genuinely be unknown for a while — codex reports its model a
-  // turn at a time, so a session that has not answered anything yet has none to report — and that is
-  // no reason to withhold the menu: the choices are the CLI's own either way, and the readout says it
-  // does not know yet. Nothing is drawn only when the account is gone and neither CLI can be told
-  // from the other, because the menus are not interchangeable.
+  // Drawn as soon as the CLI is known. For a terminal session that is the session's account; for a
+  // chat session it is the manager's word (`chat.provider`), which is null for the moment before
+  // `chat.state` answers. What the CLI is *set to* can genuinely be unknown for longer — codex
+  // reports its model a turn at a time, so a session that has not answered anything yet has none to
+  // report — and that is no reason to withhold the menu: the choices are the CLI's own either way,
+  // and the readout says it does not know yet. Nothing is drawn while `cli` is null — the account is
+  // gone, or the manager has not said yet — because the two CLIs' menus are not interchangeable and
+  // a placeholder would show one CLI's menu for the other.
   if (props === null || (props.cli !== 'claude' && props.cli !== 'codex')) return null;
   return <ModelControl {...props} />;
 }

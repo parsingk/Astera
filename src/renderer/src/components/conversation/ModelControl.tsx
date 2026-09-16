@@ -18,7 +18,8 @@ export interface ModelControlProps {
    *  going missing, because the menu under it works either way. */
   line: string | null;
   /** Which CLI this session runs. The caller draws nothing at all when this is null (the account is
-   *  gone), because the two CLIs' menus are not interchangeable — see ComposerModelSlot. */
+   *  gone, or a chat session's manager has not said yet), because the two CLIs' menus are not
+   *  interchangeable — see ComposerModelSlot. */
   cli: 'claude' | 'codex' | null;
   /** The models this session can be switched to, in the CLI's own order. Empty draws no rows. */
   choices: readonly ModelChoice[];
