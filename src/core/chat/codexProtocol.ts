@@ -133,6 +133,12 @@ export interface FileChange {
 export interface DecodedRequest {
   request: ChatRequest
   questionIds: string[] | null
+  /** Claude's `tool_use_id` for the call this request is about — Codex has no equivalent field. */
+  toolUseId?: string
+  /** The tool call's raw input, carried through so the answer can echo it back unchanged. */
+  input?: Record<string, unknown>
+  /** Claude's `permission_suggestions` filtered to `destination: 'session'` — what `acceptForSession` grants. */
+  suggestions?: unknown[]
 }
 
 export function askFormOf(questions: unknown): AskForm {
@@ -222,6 +228,13 @@ export type ProtocolEffect =
   | { type: 'turn'; turnId: string | null }
   | { type: 'resolved'; requestId: JsonRpcId }
   | { type: 'fileChange'; itemId: string; changes: FileChange[] }
+  /** Claude only: a tool_use this session asked about has been answered — the `user` echo carrying
+   *  its `tool_result`. Mirrors `resolved` for Codex's requestId, keyed by Claude's `tool_use_id`. */
+  | { type: 'resolvedTool'; toolUseId: string }
+  /** Claude only: `system/status`'s `permissionMode` is a partial update — it says nothing about the
+   *  model, so it cannot be folded into a full `model` event without inventing one. The adapter
+   *  patches `state.model.planMode` in place and leaves the rest of the model alone. */
+  | { type: 'planMode'; on: boolean }
 
 export function effectsOf(frame: Extract<CodexFrame, { kind: 'notification' }>): ProtocolEffect[] {
   const p = obj(frame.params) ?? {}

@@ -256,6 +256,9 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
         else if (effect.event.type === 'model') patch({ model: effect.event.model })
         else if (effect.event.type === 'error') fail(effect.event.message)
         break
+      default:
+        // 'resolvedTool' and 'planMode' are Claude-only effects; effectsOf (Codex) never emits them.
+        break
     }
   }
 
