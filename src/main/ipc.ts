@@ -1385,6 +1385,11 @@ export function registerIpc(
         // the line above just dropped it: at `ready` the file this conversation will be written to
         // does not exist yet. On a `/clear` this same call re-points the chain at the new thread.
         rolling?.onChatMeta(sessionId, { claudeSessionId: event.threadId, transcriptPath: null })
+        // A `/clear` gives the conversation a new id; the schedule is keyed by the old one, so it is
+        // re-keyed here for every ready (a codex thread id never changes, so the scheduler's own
+        // same-key guard makes this a no-op there — but claude is the only provider that reaches this
+        // branch anyway).
+        scheduler?.relearn(sessionId, event.threadId)
         findClaudeChatTranscript(sessionId, info.accountId, event.threadId)
       }
     } else if (event.type === 'status') {

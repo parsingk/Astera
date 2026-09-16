@@ -418,4 +418,19 @@ describe('chat sessions', () => {
     expect(logs.some((m) => m.includes('schedule round dropped session=c2'))).toBe(true)
     expect(deliverCalls.filter((c) => c.id === 'c2')).toHaveLength(3)
   })
+
+  it('relearn re-keys the persisted schedule when the thread id changes', () => {
+    const h = harness()
+    h.coord.register(chatInfo('s1', everyMin(), 'th-1'), 'claude')
+    h.coord.relearn('s1', 'th-2')
+    expect(h.deleted).toContain('th-1')
+    expect(h.persisted.map((p) => p.key)).toContain('th-2')
+  })
+
+  it('relearn on the same key does nothing', () => {
+    const h = harness()
+    h.coord.register(chatInfo('s1', everyMin(), 'th-1'), 'claude') // resumeSessionId seeds sessionKey
+    h.coord.relearn('s1', 'th-1')
+    expect(h.deleted).toEqual([])
+  })
 })

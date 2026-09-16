@@ -199,6 +199,28 @@ export class SchedulerCoordinator {
     this.deps.log(`schedule rekeyed ${oldId} → ${newId}`)
   }
 
+  /** A `/clear` gave this chat session a new conversation id (claude only — a codex thread id never
+   *  changes). The schedule is stored under the old id, so without this a restart could not find it. The
+   *  live entry is untouched (it follows the session, not the key); only the persistence key moves.
+   *
+   *  Called for every chat `ready`, so the common no-op cases come first: an unknown or disposed entry,
+   *  a key that has not changed, or a first key on an entry that had none yet (that one is a plain learn,
+   *  not a re-key, so nothing is deleted). */
+  relearn(sessionId: string, key: string): void {
+    const entry = this.entries.get(sessionId)
+    if (!entry || entry.disposed || entry.sessionKey === key) return
+    if (entry.sessionKey === null) {
+      entry.sessionKey = key
+      this.deps.persistConfig?.(key, entry.config)
+      return
+    }
+    const old = entry.sessionKey
+    this.deps.deleteConfig?.(old)
+    entry.sessionKey = key
+    this.deps.persistConfig?.(key, entry.config)
+    this.deps.log(`schedule relearned ${sessionId} ${old} → ${key}`)
+  }
+
   /** The banner's off button (the scheduler.disable IPC) — disposes the entry and deletes the persisted config */
   disable(sessionId: string): void {
     const entry = this.entries.get(sessionId)
