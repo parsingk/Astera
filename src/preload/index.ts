@@ -53,7 +53,8 @@ const EVENT_CHANNELS = [
   'notify:activate',
   'conversation:append',
   'conversation:attention',
-  'conversation:pendingPrompt'
+  'conversation:pendingPrompt',
+  'chat:event'
 ]
 
 const api = {
@@ -308,6 +309,17 @@ const api = {
     attach: invoke('conversation.attach'),
     commands: invoke('conversation.commands'),
     files: invoke('conversation.files')
+  },
+  // A chat session talks to its adapter through these; everything it hears back arrives on the one
+  // 'chat:event' channel above, not as a return value (chat-sessions design §6).
+  chat: {
+    send: invoke('chat.send'),
+    interrupt: invoke('chat.interrupt'),
+    answer: invoke('chat.answer'),
+    setModel: invoke('chat.setModel'),
+    setPlanMode: invoke('chat.setPlanMode'),
+    listModels: invoke('chat.listModels'),
+    state: invoke('chat.state')
   },
   platform: process.platform,
   win: {

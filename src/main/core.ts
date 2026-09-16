@@ -1,7 +1,7 @@
 import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { appendFileSync, existsSync } from 'node:fs'
 import { app } from 'electron'
 import { AccountRegistry } from '../core/accounts/registry'
 import { PROVIDERS, providerOf } from '../core/providers/meta'
@@ -11,6 +11,7 @@ import { nodePtyFactory } from '../core/sessions/nodePtyFactory'
 import { createPtyRouter } from './host/ptyRouter'
 import { createProcRouter } from './host/procRouter'
 import { nodeProcFactory } from './chat/nodeProcFactory'
+import { ChatSessionManager } from './chat/manager'
 import { HistoryIndex } from '../core/history/index'
 import { SessionCwdCache } from '../core/history/sessionCwdCache'
 import { ProjectSettings } from '../core/projects/settings'
@@ -42,6 +43,12 @@ import type { ProcFactory } from '../core/sessions/proc'
 export interface Core {
   accounts: AccountRegistry
   sessions: SessionManager
+  /** The chat sessions (chat-sessions design §6) — the line-process counterpart of `sessions`. Kept
+   *  beside it rather than inside it because the two share only a SessionInfo: a chat session's
+   *  process speaks the codex app-server protocol, not terminal bytes, so nothing about writing,
+   *  resizing or acking a pty applies to it. `registerIpc` fans its events out as `chat:event` and
+   *  every lookup that resolves a session id asks both. */
+  chat: ChatSessionManager
   history: HistoryIndex
   // Provider descriptor table. ipc reads per-provider facts from it without branching —
   // before it was exposed, choosing the transcript path mapper was a hardcoded branch in ipc.ts
@@ -188,6 +195,18 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // the Host answers; until then, and whenever there is no Host, this is node-pty exactly as before.
   const ptyRouter = createPtyRouter(nodePtyFactory)
   const procRouter = createProcRouter(nodeProcFactory)
+  // Its own file, next to slack.log / orchestration.log / host-client.log — the same convention every
+  // other long-running subsystem in main follows. A chat session's failures are protocol failures and
+  // there is no terminal to print them on, so this file is the only place they are recorded.
+  // Never throws: a log that cannot be written must not take a chat session down with it.
+  const chatLogFile = path.join(userDataDir, 'chat.log')
+  const chatLog = (m: string): void => {
+    try {
+      appendFileSync(chatLogFile, `${new Date().toISOString()} ${m}\n`)
+    } catch {
+      /* a failed log write blocks nothing */
+    }
+  }
   // descriptors is injected explicitly — left unspecified, each of them calls makeDescriptors(process.platform)
   // again, so every instance gets its own table (plus two command builders SessionManager never uses).
   const sessions = new SessionManager(
@@ -201,6 +220,19 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
     [previewShotsDir(userDataDir)]
   )
+  // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
+  // the reason SessionManager is handed `ptyRouter.factory`: which one a spawn reaches is decided at
+  // spawn time, once registerIpc has learned whether this Host speaks procs. `version` is the app's
+  // own — the codex app-server handshake reports a client version, and inventing one here would make
+  // every Astera build look the same to it.
+  const chat = new ChatSessionManager({
+    factory: procRouter.factory,
+    descriptors,
+    homeDir: os.homedir(),
+    platform: process.platform,
+    version: app.getVersion(),
+    log: chatLog
+  })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.
   // Ghosts join the sources so an unregistered account's transcripts stay in the sidebar.
@@ -341,6 +373,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   return {
     accounts,
     sessions,
+    chat,
     history,
     descriptors,
     projects,

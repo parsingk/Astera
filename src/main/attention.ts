@@ -22,6 +22,12 @@ export interface AttentionState {
    *  Read `hook_event_name` off it yourself; it is `unknown` because the watcher does not validate.
    *  The name matches the three existing taps on purpose, so the fan-out reads the same for all. */
   onHookEvent(sessionId: string, payload: unknown): void
+  /** Writes a session's value outright, with none of `onHookEvent`'s bookkeeping — no `outstanding`
+   *  set is touched, because the caller already knows the answer. This is how a chat session's
+   *  attention is fed (chat-sessions design §6): its adapter reports a status directly, so there is
+   *  no hook stream to infer one from. Fires subscribers only when the value actually changes, the
+   *  same rule every other write here follows. */
+  set(sessionId: string, value: Attention): void
   /** The session ended; forget it. */
   forget(sessionId: string): void
   get(sessionId: string): Attention
@@ -108,6 +114,9 @@ export function createAttentionState(): AttentionState {
         record.outstanding.clear()
         setValue(sessionId, record, 'idle')
       }
+    },
+    set(sessionId, value) {
+      setValue(sessionId, recordFor(sessionId), value)
     },
     forget(sessionId) {
       sessions.delete(sessionId)

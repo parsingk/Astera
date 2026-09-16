@@ -104,6 +104,7 @@ import {
 import { coordinatorLaunchPrompt } from '../core/orchestration/handover'
 import { detachCoordinator } from '../core/orchestration/state'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
+import type { ChatAnswer } from '../core/chat/types'
 import { firesDue } from '../core/orchestration/fire'
 import { reapableChildRuns } from '../core/orchestration/reap'
 import {
@@ -742,6 +743,14 @@ export function registerIpc(
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
+  /** Every session this app holds, pty and chat alike. A chat session lives in its own manager
+   *  (core.chat) but is a SessionInfo with a real accountId and cwd like any other, so every lookup
+   *  that resolves a session id to its account, provider or folder has to look in both — otherwise a
+   *  chat session has no provider (no model line, no usage chips), no cwd (no `@` files) and no
+   *  account (no slash commands), while answering perfectly well on its own pane.
+   *  Built fresh per call, exactly as the `core.sessions.list()` calls it replaces were: both managers
+   *  already return copies, and the callers are user-paced. */
+  const allSessions = (): SessionInfo[] => [...core.sessions.list(), ...core.chat.list()]
 
   // The conversation view: one follow per open session, polling only while at least one is open (see
   // conversation.ts's own doc). transcriptPathFor reads the same statusLine payload rolling.ts,
@@ -1160,7 +1169,15 @@ export function registerIpc(
     // off. Escape stripping lives inside push, behind the gate (tail.ts).
     orchTails.push(e.sessionId, e.data)
   }
-  core.sessions.onExit = (e) => {
+  /** What an ended session costs the app, whichever manager it came from. `core.sessions.onExit` and
+   *  `core.chat.onExit` are both this function: a chat session's exit has to reach the renderer as the
+   *  same `session:exit` a pty's does (that is what closes the tab), and every other consumer here —
+   *  the agent-browser run, the Slack notice, the Work Unit collector, the coordinators — reasons about
+   *  a session id, not about how that session's process was spawned. The handful of things that are
+   *  genuinely per-kind are NOT here: the pty's own cleanup (busy scanners, the rolling coordinators)
+   *  is harmless for a chat id and is left where it was, and the chat's own (attention, the rollout
+   *  watcher) lives in the chat subscriber below, next to the events that set them up. */
+  const onSessionExit = (e: { sessionId: string; exitCode: number }): void => {
     batcher.flush()
     // Before the renderer hears about it, because that is what closes the tab. A run outlives its
     // session by up to the whole script deadline, and its next open() would find no guest, ask for a
@@ -1217,6 +1234,51 @@ export function registerIpc(
     // 재시작 정리가 outcome_unknown 으로 처리하며 Task 는 건드리지 않는다.
     if (orchRollTap) orchRollTap.onExit(e)
   }
+  core.sessions.onExit = onSessionExit
+  core.chat.onExit = onSessionExit
+  /** Chat sessions' own log line. They are the Host's line processes, so their notices belong in the
+   *  same file the Host's own do. Read from `hostWiring` here rather than through the reattach sweep's
+   *  `hostLog`, which is declared inside a closure that runs much later than this subscriber. */
+  const chatLog = hostWiring?.log ?? ((): void => {})
+  /** Everything one chat session's adapter reports, in one subscriber (chat-sessions design §6). The
+   *  event always goes to the renderer — the chat pane is driven entirely by this channel — and three
+   *  of the six kinds also settle something in main:
+   *
+   *  `ready` is the first moment the thread's identity exists, and it is the only moment the rollout's
+   *  path is offered to us. Registering it with the **existing** watcher rather than teaching anything
+   *  a second way to find a rollout is what makes every codex-shaped feature work for a chat session
+   *  without knowing it is one: `sourceFor` reads the conversation through `rolloutPathFor`, the usage
+   *  chips read `usage(sessionId)`, and `conversation.model` reads the model off the same file.
+   *
+   *  `status` is the attention value. A chat session has no hook stream to infer one from — the
+   *  adapter says outright what the session is doing, which is why `attention.set` exists.
+   *
+   *  `exit` drops both. The rest of an exit is the pty's (`onSessionExit`, assigned just above). */
+  core.chat.subscribe((sessionId, event) => {
+    send('chat:event', { sessionId, event })
+    if (event.type === 'ready') {
+      const info = core.chat.info(sessionId)
+      if (!info) return
+      try {
+        if (event.rolloutPath === null) {
+          // The thread exists but codex has not named its file yet. Registering unmapped lets the
+          // watcher's own scan find it by cwd and time, exactly as it does for a terminal session
+          // that has not had its first turn — logged because a session that stays unmapped is mute
+          // (no conversation, no chips) and nothing else would say why.
+          chatLog(`chat ${sessionId}: thread ${event.threadId} has no rollout path; the watcher will scan for it`)
+          codexRollout?.register(info)
+        } else codexRollout?.register(info, event.rolloutPath, event.threadId)
+      } catch (err) {
+        /* A failed rollout-watcher registration does not take the chat session down */
+        chatLog(`chat ${sessionId}: rollout registration failed: ${String(err)}`)
+      }
+    } else if (event.type === 'status') {
+      attention.set(sessionId, event.status)
+    } else if (event.type === 'exit') {
+      attention.forget(sessionId)
+      codexRollout?.unregister(sessionId)
+    }
+  })
   // run output and status to the renderer
   core.run.onData = (e) => send('run:data', e)
   core.run.onStatus = (e) => {
@@ -1303,6 +1365,21 @@ export function registerIpc(
       void core.schedulerConfig.set(opts.resumeSessionId, opts.schedule).catch(() => {})
     }
     const account = core.accounts.get(opts.accountId)
+    // A chat session is a line process, not a pty, and nothing below this line applies to one: there is
+    // no roll chain to resolve providers for, no transcript to copy (its thread is resumed by id, not by
+    // replaying a file into a new process), no statusLine, and no orchestration env — an orchestrated
+    // worker is driven by writing to a terminal, which this session does not have. So it forks here,
+    // before any of that, and hands back the SessionInfo its own manager built.
+    // `core.chat.spawn` throws for a non-Codex account (slice 3 adds Claude); it is left to propagate,
+    // and the renderer shows it in the same toast it shows for any failed spawn.
+    if (opts.kind === 'chat') {
+      return core.chat.spawn({
+        account,
+        cwd: opts.cwd,
+        resumeThreadId: opts.resumeThreadId,
+        bypassPermissions: opts.bypassPermissions === true
+      })
+    }
     // Resolves and passes the provider of every account in the roll chain — the manager rejects a mix.
     // The rollAccountIds combination the modal settled on is checked here as well.
     //
@@ -3969,9 +4046,15 @@ export function registerIpc(
   ipcMain.on('sessions.ack', (_e, id, bytes) => core.sessions.ack(id, bytes))
   ipcMain.handle('sessions.kill', (_e, id) => {
     codexRollout?.unregister(id) // also unregister on the tab-close path, which arrives before the exit event
+    // Closing a chat session's tab ends its line process, the same gesture on the same button — which
+    // manager holds the id is not something the renderer knows or should have to ask.
+    if (core.chat.has(id)) return core.chat.kill(id)
     return core.sessions.kill(id)
   })
-  ipcMain.handle('sessions.list', () => core.sessions.list())
+  // Both managers' sessions, in one list: the renderer draws one row per SessionInfo and reads `kind`
+  // to decide which pane goes in it (core/sessions/kind.ts), so a second call would only give it two
+  // lists to merge itself.
+  ipcMain.handle('sessions.list', () => allSessions())
   // Renaming a tab. The renderer holds the sessions list it draws from, so it applies the returned
   // title itself — no broadcast, because the rename starts there and this app has one window.
   //
@@ -3983,6 +4066,9 @@ export function registerIpc(
   ipcMain.handle('sessions.rename', (_e, id: string, title: string) => {
     if (typeof id !== 'string' || typeof title !== 'string')
       throw new Error(`INVALID_RENAME: ${String(id)}`)
+    // A chat session carries none of the three things the list below tells: it has no Slack thread, and
+    // neither rolling coordinator knows it. So its rename is the manager's write and nothing more.
+    if (core.chat.has(id)) return core.chat.rename(id, title)
     const next = core.sessions.rename(id, title)
     if (next === null) return null
     slack?.notifier.rename(id, next) // the prefix on every later message in the thread
@@ -4176,7 +4262,7 @@ export function registerIpc(
   // Both answer as SessionUsage, so the renderer asks one question for every session.
   // A provider that cannot be decided (session or account gone) answers null, same as having no data.
   ipcMain.handle('usage.session', (_e, sessionId: string) => {
-    const provider = providerOfSession(sessionId, core.sessions.list(), (id) => core.accounts.get(id))
+    const provider = providerOfSession(sessionId, allSessions(), (id) => core.accounts.get(id))
     if (provider === 'codex') return codexRollout?.usage(sessionId) ?? null
     if (provider === 'claude') return core.usageSession(sessionId)
     return null
@@ -5837,7 +5923,7 @@ export function registerIpc(
           if (a.kind === 'session') return core.sessions.list().some((s) => s.id === a.id && s.status === 'running')
           if (a.kind === 'run') return core.run.get(a.id)?.status === 'running'
           if (a.kind === 'terminal') return core.terminal.holds(a.id)
-          if (a.kind === 'chat') return false // slice 2: the chat manager answers this
+          if (a.kind === 'chat') return core.chat.info(a.id)?.status === 'running'
           return false
         },
         adopters: {
@@ -5990,11 +6076,35 @@ export function registerIpc(
             }
             return true
           },
-          // Slice 2 replaces this with ChatSessionManager.adopt. Until then a chat note this build finds
-          // is one it cannot read, and reattach kills the orphan rather than leaving it ownerless.
-          chat: () => {
-            hostLog('host: a chat session note was found, but this build does not adopt chat sessions yet')
-            return false
+          // A chat session comes back the same way a pty session does: the manager rebuilds its record
+          // from the note, and `session:created` puts the tab back on screen — reattaching can land
+          // well after the renderer has mounted, so without that event a session taken back
+          // successfully would be invisible until the next reload.
+          //
+          // The rollout is registered from the note for exactly the reason the pty adopter's own is
+          // (see its long comment above): an adopted session's file was created before the restart, so
+          // the watcher's "newest in this cwd since now" scan would either miss it or claim another
+          // session's. A note without the pair is left to that scan, which is safe here for the same
+          // reason it is there — no mapping means the session had written no rollout to miss.
+          chat: (a) => {
+            const info = core.chat.adopt(a)
+            if (!info) return false
+            const rolloutPath = typeof a.restore.rolloutPath === 'string' ? a.restore.rolloutPath : undefined
+            const threadId = typeof a.restore.threadId === 'string' ? a.restore.threadId : undefined
+            if (rolloutPath !== undefined || threadId !== undefined) {
+              try {
+                codexRollout?.register(info, rolloutPath, threadId)
+              } catch (err) {
+                /* A failed rollout-watcher registration does not block taking the session back */
+                hostLog(`host: chat ${info.id} rollout registration failed: ${String(err)}`)
+              }
+            }
+            try {
+              send('session:created', info)
+            } catch (err) {
+              hostLog(`host: session:created emit failed chat=${info.id}: ${String(err)}`)
+            }
+            return true
           }
         },
         log: (m) => hostLog(`host: ${m}`)
@@ -6147,7 +6257,13 @@ export function registerIpc(
   // spawned in the window before the Host answered is this app's own child and really does end with
   // it. `SessionManager` counts the ptys the router marked, which is the same fact `will-quit` acts
   // on.
-  ipcMain.handle('host.sessionsOutlivingApp', () => core.sessions.runningOutlivingApp().length)
+  // Chat sessions counted alongside the ptys: a Host-owned line process survives this app quitting
+  // exactly as a Host-owned pty does, and the question the confirmation asks is about work left
+  // running, not about which manager was holding it.
+  ipcMain.handle(
+    'host.sessionsOutlivingApp',
+    () => core.sessions.runningOutlivingApp().length + core.chat.runningOutlivingApp().length
+  )
   // Whether those sessions also survive the *install*, which is a different question from whether
   // they survive this app process ending. On win32 they only do once the Host runs from its own
   // runtime; the renderer asks rather than assuming, because the fallback path (no runtime shipped,
@@ -6211,7 +6327,7 @@ export function registerIpc(
     // files — no statusline and no rollout meant Claude — and so called a codex session that had not
     // had a turn yet Claude, because a rollout only exists once there has been one. The same mistake
     // tabResumeTextFor's own comment above is about: an unknown provider is not Claude.
-    const sessions = core.sessions.list()
+    const sessions = allSessions()
     const cli = providerOfSession(sessionId, sessions, (id) => core.accounts.get(id))
     if (cli === 'codex') {
       // codex keeps no statusline at all, so its rollout is the only place this exists — and it is
@@ -6263,7 +6379,7 @@ export function registerIpc(
   // quietly stale. Answers the empty list with a reason rather than throwing, for a session whose
   // account is gone.
   ipcMain.handle('conversation.models', async (_e, sessionId: string) => {
-    const info = core.sessions.list().find((s) => s.id === sessionId)
+    const info = allSessions().find((s) => s.id === sessionId)
     if (!info) return { models: [], error: 'SESSION_GONE' }
     return modelsForAccount(info.accountId, false)
   })
@@ -6273,7 +6389,7 @@ export function registerIpc(
   // What `@` offers. The walk behind it is cached per project (main/fileIndex.ts), so this is one
   // in-memory filter per keystroke rather than one tree walk.
   ipcMain.handle('conversation.files', async (_e, sessionId: string, query: string) => {
-    const session = core.sessions.list().find((s) => s.id === sessionId)
+    const session = allSessions().find((s) => s.id === sessionId)
     if (!session) return []
     const files = session.cwd
       ? await fileIndex.search(session.cwd, query, CONVERSATION_FILE_MATCHES)
@@ -6295,7 +6411,7 @@ export function registerIpc(
     return [...skills, ...files].slice(0, CONVERSATION_FILE_MATCHES)
   })
   ipcMain.handle('conversation.commands', async (_e, sessionId: string) => {
-    const session = core.sessions.list().find((s) => s.id === sessionId)
+    const session = allSessions().find((s) => s.id === sessionId)
     if (!session) return []
     try {
       const account = core.accounts.get(session.accountId)
@@ -6308,6 +6424,30 @@ export function registerIpc(
       return []
     }
   })
+
+  // The chat pane (main/chat/manager.ts). The counterpart of the conversation block above for a
+  // session whose kind is 'chat': where a terminal session is driven by writing bytes into its pty,
+  // this one is driven by these seven calls, and everything it says back arrives on 'chat:event'.
+  //
+  // None of them check whether the id is a chat session's. The manager answers an id it does not hold
+  // with the harmless nothing — a resolved promise, an empty model list, a null state — which is the
+  // same convention `sessions.kill` has always had, and it means a stale renderer call arriving just
+  // after a session exited is not an error anybody has to handle.
+  ipcMain.handle('chat.send', (_e, sessionId: string, text: string) => core.chat.send(sessionId, text))
+  ipcMain.handle('chat.interrupt', (_e, sessionId: string) => core.chat.interrupt(sessionId))
+  ipcMain.handle('chat.answer', (_e, sessionId: string, requestId: string, answer: ChatAnswer) =>
+    core.chat.answer(sessionId, requestId, answer)
+  )
+  ipcMain.handle('chat.setModel', (_e, sessionId: string, model: string, effort: string | null) =>
+    core.chat.setModel(sessionId, model, effort)
+  )
+  ipcMain.handle('chat.setPlanMode', (_e, sessionId: string, on: boolean) =>
+    core.chat.setPlanMode(sessionId, on)
+  )
+  ipcMain.handle('chat.listModels', (_e, sessionId: string) => core.chat.listModels(sessionId))
+  // What the pane reads once on mount, so a tab reopened (or a renderer reloaded) mid-conversation
+  // shows the state the adapter is actually in rather than waiting for the next event to arrive.
+  ipcMain.handle('chat.state', (_e, sessionId: string) => core.chat.state(sessionId))
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is

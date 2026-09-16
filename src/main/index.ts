@@ -1163,6 +1163,17 @@ app.on('will-quit', () => {
       /* so one failed kill does not block cleanup of the remaining sessions */
     }
   }
+  // The chat sessions' line processes, on exactly the same terms. Their handles carry the same
+  // `outlivesApp` the router wrote onto the ptys, so the Host's are left running and the app's own
+  // children are ended — an orphaned `codex app-server` would otherwise sit there with nobody able to
+  // reach it, which is the same harm the loop above exists to prevent.
+  for (const s of core.chat.runningAppOwned()) {
+    try {
+      core.chat.kill(s.id)
+    } catch {
+      /* so one failed kill does not block cleanup of the remaining chat sessions */
+    }
+  }
   try {
     codexRollingRef?.stop()
   } catch {

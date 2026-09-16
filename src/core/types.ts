@@ -1501,9 +1501,10 @@ export type RendererApi = CoreApi & {
      *  forward slashes. Empty for a session with no project, or one whose folder cannot be read. */
     files(sessionId: string, query: string): Promise<string[]>
   }
-  // Optional for now: Task 6 makes this required once the preload block exists (a chat session's own
-  // IPC surface, the counterpart of `conversation` above for sessions whose kind is 'chat').
-  chat?: {
+  /** A chat session's own IPC surface, the counterpart of `conversation` above for sessions whose kind
+   *  is 'chat'. Every method takes a session id and is a no-op (or null) for an id the chat manager
+   *  does not hold, so the renderer never has to check the kind before asking. */
+  chat: {
     send(sessionId: string, text: string): Promise<void>
     interrupt(sessionId: string): Promise<void>
     answer(sessionId: string, requestId: string, answer: ChatAnswer): Promise<void>
