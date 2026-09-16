@@ -36,7 +36,7 @@ describe('describeChatRequest', () => {
   })
 
   it('an approval card: the tool, its lines, and the hint naming exactly the offered decisions', () => {
-    expect(describeChatRequest(approval, 'ko')).toBe('🔧 Write\nD:/p/probe.txt\n💡 허용, 항상 허용 또는 거절 로 답장')
+    expect(describeChatRequest(approval, 'ko')).toBe('🔧 Write\nD:/p/probe.txt\n💡 허용, 항상 허용 또는 거절로 답장')
     expect(describeChatRequest(approvalNoAlways, 'en')).toBe('🔧 Write\nD:/p/probe.txt\n💡 Reply 허용 (allow) or 거절 (decline)')
   })
 })
