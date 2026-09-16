@@ -21,7 +21,19 @@ import type { Provider } from '../../core/providers/meta'
 
 export type AdapterMode =
   | { mode: 'fresh' }
-  | { mode: 'adopt'; threadId: string | null; rolloutPath: string | null; truncated: boolean }
+  | {
+      mode: 'adopt'
+      threadId: string | null
+      rolloutPath: string | null
+      truncated: boolean
+      /** Server requests this session answered before the app restarted, by request id — read back off
+       *  the Host note the adapter wrote them to. A Claude `can_use_tool` is only settled on the wire by
+       *  the CLI's own `tool_result` echo, which lags our answer by however long the tool runs, so the
+       *  replay can carry a request that is already answered; the Claude adapter skips those rather than
+       *  showing (and letting the person answer) one twice. Absent for Codex, whose every answer is
+       *  followed at once by a `serverRequest/resolved` the replay carries too. */
+      answered?: string[]
+    }
 
 export interface AdapterCoreDeps {
   proc: ProcLike
@@ -56,14 +68,19 @@ export interface AdapterCore {
   /** False when the id is not one this core is waiting on — a replayed answer to an earlier instance. */
   settle(id: string, result: { ok: true; value: unknown } | { ok: false; error: string }): boolean
   nextId(): string
-  /** Server-request queue: the head is what the pane shows. */
+  /** Server-request queue: the head is what the pane shows. A second open for an id already in the
+   *  queue is refused — the same request can never hold two slots. */
   openRequest(id: string, entry: OpenRequest): void
   /** Drop by id and promote the next; an empty queue goes to working if a turn is running, else idle. */
   resolveRequest(id: string): void
-  /** Same, for answer(): hands the entry over so the adapter can write the reply. */
-  takeRequest(id: string): OpenRequest | undefined
+  /** Same, for answer(): hands the entry to `write` — the adapter's own line for the reply — and drops
+   *  it from the queue only once that write has returned. A write that throws takes nothing out: the
+   *  card is still on screen, still answerable, and the throw reaches the caller. */
+  takeRequest(id: string, write: (entry: OpenRequest) => void): OpenRequest | undefined
   /** Resolve by the tool call the request is about rather than by its id — Claude's `tool_result` echo
-   *  names the `tool_use_id`, not the request. False when no open request is about that call. */
+   *  names the `tool_use_id`, not the request. Every open request about that call is resolved (the
+   *  Claude adapter's own `openTools` drops them all too, and the two must agree). False when none
+   *  was. */
   resolveByToolUse(toolUseId: string): boolean
   setTurn(turnId: string | null): void
   turnId(): string | null
@@ -73,6 +90,27 @@ export interface AdapterCore {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
+
+/** Why a client request's promise rejected, when the core is the one that rejected it: the process
+ *  ended, or nothing answered in time. An error the CLI itself replied with carries no reason — it is
+ *  the CLI's own words, and a caller that swallows one (codex's "no active turn") must not swallow
+ *  these two as well. Adapters used to tell them apart by matching the message text. */
+export type RequestFailure = 'exit' | 'timeout'
+
+export interface RequestError extends Error {
+  reason: RequestFailure
+}
+
+/** Exported for an adapter that refuses a write on its own account for one of the same two reasons —
+ *  the Claude adapter's `send` after exit — so that every rejection with that message carries it. */
+export function requestError(reason: RequestFailure, message: string): RequestError {
+  return Object.assign(new Error(message), { reason })
+}
+
+export function isRequestError(e: unknown): e is RequestError {
+  const reason = e instanceof Error ? (e as Partial<RequestError>).reason : undefined
+  return reason === 'exit' || reason === 'timeout'
+}
 
 /** Attaches a no-op rejection handler so a caller that fires-and-forgets (`void a.send(...)`) never
  *  turns a later timeout/exit rejection into an unhandled-rejection warning — the promise returned to
@@ -197,11 +235,11 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
     // Nothing will ever answer a request written to a process that has gone: onExit below already
     // rejected everything that was in flight, and a new one would only sit out the full timeout before
     // saying the same thing. Refused at once, with the same message the in-flight ones got.
-    if (ended) return Promise.reject(new Error('process ended'))
+    if (ended) return Promise.reject(requestError('exit', 'process ended'))
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id)
-        reject(new Error(`timeout: ${label ?? id}`))
+        reject(requestError('timeout', `timeout: ${label ?? id}`))
       }, timeoutMs ?? defaultTimeoutMs)
       pending.set(id, {
         resolve: (v) => {
@@ -240,6 +278,13 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
   }
 
   function openRequest(id: string, entry: OpenRequest): void {
+    // A request id is unique per CLI process, so a second open for one already here is the adapter
+    // reading the same request twice. Pushing it would put the id in the queue twice: answering it
+    // would leave the ghost slot behind, showing a card nothing will ever resolve.
+    if (open.has(id)) {
+      log(`ignored a second open request for ${id} — one is already open`)
+      return
+    }
     open.set(id, entry)
     queue.push(id)
     if (queue[0] === id) patch({ request: entry.decoded.request, status: 'waiting' })
@@ -250,9 +295,13 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
     dropRequest(id, turn !== null ? 'working' : 'idle')
   }
 
-  function takeRequest(id: string): OpenRequest | undefined {
+  function takeRequest(id: string, write: (entry: OpenRequest) => void): OpenRequest | undefined {
     const entry = open.get(id)
     if (!entry) return undefined
+    // Written first, dropped second: a write that throws (a pipe that has gone) never reached the CLI,
+    // so the request is still open over there and has to stay open here too — otherwise the person's
+    // answer is lost with nothing on screen left to answer again.
+    write(entry)
     open.delete(id)
     // The person answering is the turn carrying on, so the empty slot is 'working' rather than the
     // turn-dependent status resolveRequest uses: the reply is what unblocks the server.
@@ -261,17 +310,18 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
   }
 
   function resolveByToolUse(toolUseId: string): boolean {
-    for (const [id, entry] of open) {
-      if (entry.decoded.toolUseId !== toolUseId) continue
-      resolveRequest(id)
-      return true
-    }
-    return false
+    // Every match, not the first: one tool call can only be the subject of one request in practice, but
+    // the Claude adapter's own openTools map drops every entry for the call, and the two disagreeing
+    // would leave a request open here that nothing will ever resolve. Collected before resolving —
+    // resolveRequest writes to `open`.
+    const ids = [...open].filter(([, entry]) => entry.decoded.toolUseId === toolUseId).map(([id]) => id)
+    for (const id of ids) resolveRequest(id)
+    return ids.length > 0
   }
 
   function onExit(code: number): void {
     ended = true
-    for (const entry of pending.values()) entry.reject(new Error('process ended'))
+    for (const entry of pending.values()) entry.reject(requestError('exit', 'process ended'))
     pending.clear()
     open.clear()
     queue.length = 0

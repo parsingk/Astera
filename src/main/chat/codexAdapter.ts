@@ -180,7 +180,7 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
 
   async function doSend(text: string): Promise<void> {
     if (threadId === null) throw new Error('no active thread')
-    core.state.error = null
+    core.patch({ error: null })
     const result = await request(
       'turn/start',
       turnStartParams({
@@ -194,9 +194,10 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
   }
 
   async function doAnswer(requestId: string, answer: ChatAnswer): Promise<void> {
-    const entry = core.takeRequest(requestId)
+    // The write goes through the core so that a write which throws leaves the card open — see
+    // takeRequest's own doc. Nothing is left to do here once it has returned.
+    const entry = core.takeRequest(requestId, (e) => proc.write(encodeAnswer(e.wireId, e.decoded, answer)))
     if (!entry) throw new Error(`no open request: ${requestId}`)
-    proc.write(encodeAnswer(entry.wireId, entry.decoded, answer))
   }
 
   async function doListModels(): Promise<ModelDescriptor[]> {

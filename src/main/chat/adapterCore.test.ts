@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createAdapterCore, type AdapterCore, type AdapterMode } from './adapterCore'
+import { createAdapterCore, isRequestError, type AdapterCore, type AdapterMode, type RequestError } from './adapterCore'
 import type { ProcLike } from '../../core/sessions/proc'
 import type { ChatEvent } from '../../core/chat/types'
 import type { DecodedRequest } from '../../core/chat/codexProtocol'
@@ -68,6 +68,27 @@ describe('createAdapterCore — client requests', () => {
     expect(mine.map((id) => id.split('-').at(-1))).toEqual(['1', '2'])
     expect(other.nextId().split('-')[0]).not.toBe(mine[0].split('-')[0])
   })
+  it('honours the timeout it is handed rather than the one the core was built with', async () => {
+    const { p, c } = made({ mode: 'fresh' }, 30_000)
+    const asked = c.request('x-1', () => p.write('line'), 5, 'set_model')
+    await expect(asked).rejects.toThrow('timeout: set_model')
+  })
+  it('both of its own refusals name a reason, so a caller can tell them from an error the CLI sent back', async () => {
+    const { p, c } = made({ mode: 'fresh' }, 5)
+    const timedOut = await c.request('x-1', () => p.write('a')).catch((e: unknown) => e)
+    expect(isRequestError(timedOut)).toBe(true)
+    expect((timedOut as RequestError).reason).toBe('timeout')
+    const { p: p2, c: c2 } = made()
+    const dying = c2.request('x-2', () => p2.write('b')).catch((e: unknown) => e)
+    c2.onExit(0)
+    expect((await dying as RequestError).reason).toBe('exit')
+    expect(((await c2.request('x-3', () => {}).catch((e: unknown) => e)) as RequestError).reason).toBe('exit')
+    // An error the CLI itself replied with is not one of the two — it carries no reason at all.
+    const { c: c3 } = made()
+    const refused = c3.request('x-4', () => {}).catch((e: unknown) => e)
+    c3.settle('x-4', { ok: false, error: 'No conversation in progress' })
+    expect(isRequestError(await refused)).toBe(false)
+  })
   it('exit rejects everything in flight and refuses every later request at once, not after the timeout', async () => {
     const { p, c, events } = made()
     const asked = c.request('x-1', () => p.write('a'))
@@ -118,21 +139,49 @@ describe('createAdapterCore — the server-request queue', () => {
     expect(c.state.request).toMatchObject({ id: '0' })
     expect(events.filter((e) => e.type === 'request').length).toBe(1)
   })
-  it('takeRequest hands the entry over, promotes the next, and returns undefined for an id it does not hold', async () => {
+  it('takeRequest writes the answer, hands the entry over, promotes the next, and returns undefined for an id it does not hold', async () => {
     const { c } = made()
+    const sent: string[] = []
     c.setTurn('t1')
     c.openRequest('0', { decoded: approval('0', 'git log'), wireId: 0 })
     c.openRequest('1', { decoded: approval('1', 'ls -la'), wireId: 7 })
     await tick()
-    expect(c.takeRequest('nope')).toBeUndefined()
-    const taken = c.takeRequest('0')
+    expect(c.takeRequest('nope', () => sent.push('nope'))).toBeUndefined()
+    expect(sent).toEqual([])   // nothing is written for a request that is not open
+    const taken = c.takeRequest('0', (e) => sent.push(String(e.wireId)))
     expect(taken?.wireId).toBe(0)
+    expect(sent).toEqual(['0'])
     await tick()
     expect(c.state.request).toMatchObject({ id: '1' })
-    expect(c.takeRequest('0')).toBeUndefined()   // taken once, gone
-    expect(c.takeRequest('1')?.wireId).toBe(7)
+    expect(c.takeRequest('0', () => {})).toBeUndefined()   // taken once, gone
+    expect(c.takeRequest('1', () => {})?.wireId).toBe(7)
     await tick()
     expect(c.state).toMatchObject({ request: null, status: 'working' })
+  })
+  it('a write that throws leaves the card where it was — nothing reached the CLI, so nothing was answered', async () => {
+    const { c } = made()
+    c.openRequest('0', { decoded: approval('0', 'git log'), wireId: 0 })
+    await tick()
+    expect(() => c.takeRequest('0', () => { throw new Error('write EPIPE') })).toThrow('write EPIPE')
+    await tick()
+    expect(c.state).toMatchObject({ request: { id: '0' }, status: 'waiting' })
+    // Still answerable: the person can press again once the pipe is back.
+    expect(c.takeRequest('0', () => {})?.wireId).toBe(0)
+  })
+  it('a second openRequest for an id already open is refused, so the queue can never hold it twice', async () => {
+    const { c } = made()
+    c.openRequest('0', { decoded: approval('0', 'git log'), wireId: 0 })
+    c.openRequest('0', { decoded: approval('0', 'rm -rf /'), wireId: 9 })
+    await tick()
+    expect(c.state.request).toMatchObject({ about: { lines: ['git log'] } })
+    expect(c.takeRequest('0', () => {})?.wireId).toBe(0)
+    await tick()
+    expect(c.state).toMatchObject({ request: null, status: 'working' })
+    // The proof that the second one took no slot: a queue holding a leftover '0' would keep the next
+    // request off the screen for ever, since the head would never be its id.
+    c.openRequest('1', { decoded: approval('1', 'ls -la'), wireId: 1 })
+    await tick()
+    expect(c.state.request).toMatchObject({ id: '1' })
   })
   it('resolveByToolUse finds the open request by the tool call it is about, and says so when nothing matches', async () => {
     const { c } = made()
@@ -151,7 +200,7 @@ describe('createAdapterCore — the server-request queue', () => {
     c.openRequest('0', { decoded: approval('0', 'git log'), wireId: 0 })
     await tick()
     c.onExit(0)
-    expect(c.takeRequest('0')).toBeUndefined()
+    expect(c.takeRequest('0', () => {})).toBeUndefined()
     expect(c.resolveByToolUse('toolu_01')).toBe(false)
   })
 })
@@ -174,6 +223,19 @@ describe('createAdapterCore — emission', () => {
     c.patch({ status: 'working', model: { model: null, effort: null, planMode: false }, request: null })
     await tick()
     expect(events.length).toBe(1)
+  })
+  it('a subscriber that patches synchronously inside a request emission still gets the follow-up event', async () => {
+    const { c, events } = made()
+    // What the pane does when it answers the card the moment it is drawn — the answer lands while this
+    // very flush is still running, and the clearing event must not be swallowed by it (see flush()).
+    c.on((e) => {
+      if (e.type === 'request' && e.request) c.takeRequest(e.request.id, () => {})
+    })
+    c.openRequest('0', { decoded: approval('0', 'git log'), wireId: 0 })
+    await tick()
+    const requests = events.filter((e) => e.type === 'request')
+    expect(requests.length).toBe(2)
+    expect(requests.at(-1)).toEqual({ type: 'request', request: null })
   })
   it('a listener that throws neither escapes nor stops the ones after it', async () => {
     const { c } = made()

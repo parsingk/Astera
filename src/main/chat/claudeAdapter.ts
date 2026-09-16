@@ -22,7 +22,7 @@ import {
   decodeClaudeFrame, decodeClaudeRequest, encodeClaudeAnswer, encodeControlError, encodeControlRequest,
   encodeUserTurn, claudeEffectsOf, claudeModelsOf
 } from '../../core/chat/claudeProtocol'
-import { createAdapterCore, safe, type AdapterMode } from './adapterCore'
+import { createAdapterCore, isRequestError, requestError, safe, type AdapterMode } from './adapterCore'
 
 export interface ClaudeAdapterDeps {
   proc: ProcLike
@@ -162,20 +162,23 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
   async function doSend(text: string): Promise<void> {
     // Nothing would ever answer a turn written to a process that has gone, and a user frame gets no
     // reply to time out on — so this says the same thing the core says to a request made after exit.
-    if (core.ended) throw new Error('process ended')
+    if (core.ended) throw requestError('exit', 'process ended')
     core.patch({ error: null, status: 'working' })
     core.setTurn(PENDING_TURN)
     proc.write(encodeUserTurn(text))
   }
 
   async function doAnswer(requestId: string, answer: ChatAnswer): Promise<void> {
-    const entry = core.takeRequest(requestId)
+    // The write goes through the core so that a write which throws leaves the card open — see
+    // takeRequest's own doc. encodeClaudeAnswer reads only the id off the frame — everything else it
+    // needs is in `decoded` — so the frame the line came on is rebuilt from the id rather than kept
+    // alive for it.
+    const entry = core.takeRequest(requestId, (e) => {
+      const frame: Extract<ClaudeFrame, { kind: 'control_request' }> = { kind: 'control_request', requestId: String(e.wireId), subtype: 'can_use_tool', request: {} }
+      proc.write(encodeClaudeAnswer(frame, e.decoded, answer))
+    })
     if (!entry) throw new Error(`no open request: ${requestId}`)
     openTools.delete(requestId)
-    // encodeClaudeAnswer reads only the id off the frame — everything else it needs is in `decoded` —
-    // so the frame the line came on is rebuilt from the id rather than kept alive for it.
-    const frame: Extract<ClaudeFrame, { kind: 'control_request' }> = { kind: 'control_request', requestId: String(entry.wireId), subtype: 'can_use_tool', request: {} }
-    proc.write(encodeClaudeAnswer(frame, entry.decoded, answer))
   }
 
   async function doSetModel(model: string): Promise<void> {
@@ -212,13 +215,14 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
         control({ subtype: 'interrupt' })
           .then(() => undefined)
           .catch((e: unknown) => {
-            const message = e instanceof Error ? e.message : String(e)
-            // The core's own two refusals mean the interrupt never reached an answer: nothing was
-            // stopped, and the caller has to hear about it.
-            if (message === 'process ended' || message.startsWith('timeout: ')) throw e
-            // An error reply is the CLI refusing, which measured means the turn ended between the person
-            // pressing stop and the request landing. They asked for the turn to be over and it is.
-            log(`interrupt refused: ${message} — the turn was already over`)
+            // The core's own two refusals (the process ended, nothing answered in time) mean the
+            // interrupt never reached an answer: nothing was stopped, and the caller has to hear about
+            // it. They say so on the error itself — see isRequestError.
+            if (isRequestError(e)) throw e
+            // What is left is an error reply, the CLI refusing, which measured means the turn ended
+            // between the person pressing stop and the request landing. They asked for the turn to be
+            // over and it is.
+            log(`interrupt refused: ${e instanceof Error ? e.message : String(e)} — the turn was already over`)
           })
       ),
     answer: (requestId, answer) => safe(doAnswer(requestId, answer)),
