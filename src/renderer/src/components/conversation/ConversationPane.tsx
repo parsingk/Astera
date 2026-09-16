@@ -549,6 +549,23 @@ function ComposerModelSlot(): ReactNode {
   return <ModelControl {...props} />;
 }
 
+// ---- the chat transport's failures ------------------------------------------------------------
+
+/** What a rejected `window.api.chat.*` call reads as. An Error's own words when it has them, since
+ *  main puts the adapter's reason there, and the value itself otherwise. */
+function chatErrorText(err: unknown): string {
+  return String(err instanceof Error ? err.message : err);
+}
+
+/** Says so when a fire-and-forget `chat.*` call fails.
+ *
+ *  Every call the model menu makes is answered by an event rather than by its own promise, so there is
+ *  nothing waiting on the returned promise to notice a rejection — and a model that never changed,
+ *  with nothing said, looks exactly like a menu that ignored the press. */
+function sayIfFailed(call: Promise<void>): void {
+  void call.catch((err: unknown) => toast.error(chatErrorText(err)));
+}
+
 // ---- component ------------------------------------------------------------------------------
 
 type Status = "loading" | "unavailable" | "ready";
@@ -765,12 +782,17 @@ export function ConversationPane({
     };
     readModel();
 
-    void window.api.conversation
-      .commands(sessionId)
-      .then((list) => {
-        if (isCurrent()) setCommands(list);
-      })
-      .catch(() => {});
+    // What `/` offers, for the transport that can run it. A chat session is offered no `/` rows —
+    // those commands are the CLI's own, typed at a prompt it does not have (see `slashMatches`) — so
+    // the list is not asked for either.
+    if (!isChat) {
+      void window.api.conversation
+        .commands(sessionId)
+        .then((list) => {
+          if (isCurrent()) setCommands(list);
+        })
+        .catch(() => {});
+    }
 
     const offAppend = window.api.on("conversation:append", (e) => {
       if (!isCurrent()) return;
@@ -1006,8 +1028,16 @@ export function ConversationPane({
   const interrupt = useCallback(async (): Promise<void> => {
     // A chat session has no pty to press Escape on: the same stop is a request on the app-server, and
     // the manager answers it with a status the pane hears back as an event.
+    //
+    // Said out loud when it fails, the way a send is: this is called as `void interruptRef.current()`
+    // and as the composer's own `onCancel`, so a rejection nobody catches is a stop that silently did
+    // not happen while the turn goes on running.
     if (isChat) {
-      await window.api.chat.interrupt(sessionId);
+      try {
+        await window.api.chat.interrupt(sessionId);
+      } catch (err) {
+        toast.error(chatErrorText(err));
+      }
       return;
     }
     window.api.sessions.write(sessionId, String.fromCharCode(27));
@@ -1024,8 +1054,17 @@ export function ConversationPane({
         try {
           await window.api.chat.send(sessionId, text);
         } catch (err) {
-          toast.error(String(err instanceof Error ? err.message : err));
+          // The text is still in the person's hands — the composer cleared, but the draft below was
+          // not thrown away, so leaving the tab and coming back offers it again to retry with.
+          toast.error(chatErrorText(err));
+          return;
         }
+        // It was sent; there is nothing left to put back. Without these two the pane's own cleanup
+        // writes the sent text back as this session's draft (`keepDraft`) and the next mount inserts
+        // it into the composer — a message already answered, sitting there ready to be sent twice.
+        // The same pair the terminal path runs below, and neither touches a screen.
+        forgetDraft(sessionId);
+        composerValueRef.current = null;
         return;
       }
       // The pty is the only channel there is — a person typing here and a person typing in the
@@ -1878,11 +1917,13 @@ export function ConversationPane({
         ? {
             // A chat session's menu asks the manager outright: no command is typed anywhere, no
             // picker is walked, and the answer comes back as a `model` event — which is why nothing
-            // here has to say it is busy, and why `onChangeEffort` has nothing left to open.
+            // here has to say it is busy. Nothing is left over for `onChangeEffort` either: the
+            // levels this can set are the whole of what there is, and there is no screen to send
+            // anyone to for the rest — so the row is not offered at all (ModelControl.tsx).
             line: modelLine,
             cli: "codex",
             choices: modelChoicesOf(models),
-            onPickModel: (key) => void window.api.chat.setModel(sessionId, key, modelInfo.effort),
+            onPickModel: (key) => sayIfFailed(window.api.chat.setModel(sessionId, key, modelInfo.effort)),
             effortChoices: effortChoicesOf(models, modelInfo.model, "codex"),
             onPickEffort: (level) => {
               // setModel takes the pair, and an effort on its own is not a pair: the model it belongs
@@ -1890,13 +1931,11 @@ export function ConversationPane({
               // yet. With neither there is nothing honest to send.
               const model = modelInfo.model ?? models.find((m) => m.isDefault)?.id ?? "";
               if (model === "") return;
-              void window.api.chat.setModel(sessionId, model, level);
+              sayIfFailed(window.api.chat.setModel(sessionId, model, level));
             },
-            onChangeEffort: () => {},
-            effortLabel: t("conversation.model.effortMore"),
             busy: false,
             planMode,
-            onTogglePlan: () => void window.api.chat.setPlanMode(sessionId, !planMode)
+            onTogglePlan: () => sayIfFailed(window.api.chat.setPlanMode(sessionId, !planMode))
           }
         : {
             line: modelLine,
@@ -2021,23 +2060,22 @@ export function ConversationPane({
       onHover={setSlashActive}
     />
   );
-  /** What a chat session's banner slot is for, in the order paneTransport.ts sets out. `{ kind:
-   *  'none' }` for a terminal session, whose `chat` is null — so the chain below is simply not
-   *  entered. */
-  const chatBanner = chatBannerFor(chat);
+  /** What a chat session's banner slot is for, in the order paneTransport.ts sets out. Null for a
+   *  terminal session, which does not ask: its chain below never reads this. */
+  const chatBanner = isChat ? chatBannerFor(chat) : null;
   const banner: ReactNode = isChat ? (
     // No PendingBanner and no ask card here: both are drawn from a terminal's screen and a hook's
     // capture. A chat session's one waiting decision is `chat.request`, and ChatRequestCard draws it
     // — the question through the very same QuestionCard, the approval with its own buttons.
     exited ? (
       <ExitedNotice onGoTerminal={null} />
-    ) : chatBanner.kind === "request" ? (
+    ) : chatBanner?.kind === "request" ? (
       <ChatRequestCard sessionId={sessionId} request={chatBanner.request} />
-    ) : chatBanner.kind === "error" ? (
+    ) : chatBanner?.kind === "error" ? (
       <ChatNotice text={t("chat.notice.error", { message: chatBanner.message })} />
-    ) : chatBanner.kind === "checking" ? (
+    ) : chatBanner?.kind === "checking" ? (
       <ChatNotice text={t("chat.notice.checking")} />
-    ) : chatBanner.kind === "endsWithApp" ? (
+    ) : chatBanner?.kind === "endsWithApp" ? (
       <ChatNotice text={t("chat.notice.endsWithApp")} />
     ) : slashOpen ? (
       completionMenu

@@ -27,11 +27,15 @@ export interface ModelControlProps {
   effortChoices: readonly ModelChoice[];
   onPickEffort: (key: string) => void;
   /** Open the CLI's own screen for what these rows do not cover — codex keeps Max and Ultra behind a
-   *  further screen — and go to the terminal. */
-  onChangeEffort: () => void;
+   *  further screen — and go to the terminal.
+   *
+   *  Absent for a chat session, and then the row is not drawn at all: the levels above are the whole
+   *  of what there is over that protocol, and there is no screen to open or terminal to go to, so a
+   *  row offering both would name a way out the session does not have. */
+  onChangeEffort?: () => void;
   /** The label for that row, which differs by CLI: Claude's screen sets effort alone, codex's sets
-   *  model and effort together. */
-  effortLabel: string;
+   *  model and effort together. Read only when `onChangeEffort` is given — they are one row. */
+  effortLabel?: string;
   /** A change has been sent and the readout has not caught up. It takes a moment — the CLI has to be
    *  driven and then read back — and without a sign of it the button looks like it ignored the
    *  press. */
@@ -60,6 +64,11 @@ export function ModelControl({
   const { t } = useI18n();
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
 
+  // The last row, and the rule above it, only for a caller that has somewhere further to go — see
+  // `onChangeEffort`. Without it the rule would close the menu on nothing.
+  const more: MenuItem[] =
+    onChangeEffort === undefined ? [] : [{ label: effortLabel ?? "", onSelect: onChangeEffort }];
+
   // One flat menu, models first and reasoning levels after a rule. A submenu would read better and
   // ContextMenu has none; a prefix on each level's label says which half of the menu it belongs to
   // without one.
@@ -70,8 +79,8 @@ export function ModelControl({
       label: t("conversation.model.effortRow", { level: choice.label }),
       onSelect: () => onPickEffort(choice.key)
     })),
-    ...(effortChoices.length > 0 ? (["separator"] as MenuItem[]) : []),
-    { label: effortLabel, onSelect: onChangeEffort }
+    ...(effortChoices.length > 0 && more.length > 0 ? (["separator"] as MenuItem[]) : []),
+    ...more
   ];
 
   return (
