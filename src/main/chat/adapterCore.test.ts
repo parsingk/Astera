@@ -260,12 +260,21 @@ describe('createAdapterCore — emission', () => {
     expect(c.state.error).toBe('no such thread')
     expect(events).toEqual([{ type: 'error', message: 'no such thread' }])
   })
-  it('ready is emitted once, however many times the thread is announced', () => {
+  it('ready is emitted once per thread id, however many times the same one is announced', () => {
     const { c, events } = made()
     c.emitReady('thread-1', 'D:/rollout.jsonl')
     c.emitReady('thread-1', 'D:/rollout.jsonl')
-    c.emitReady('thread-2', null)
     expect(events).toEqual([{ type: 'ready', threadId: 'thread-1', rolloutPath: 'D:/rollout.jsonl' }])
+  })
+  it('a thread id that differs from the last one emitted is announced again — a /clear starts a new session', () => {
+    const { c, events } = made()
+    c.emitReady('thread-1', 'D:/rollout.jsonl')
+    c.emitReady('thread-2', null)
+    c.emitReady('thread-2', null)
+    expect(events).toEqual([
+      { type: 'ready', threadId: 'thread-1', rolloutPath: 'D:/rollout.jsonl' },
+      { type: 'ready', threadId: 'thread-2', rolloutPath: null }
+    ])
   })
 })
 

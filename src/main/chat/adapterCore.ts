@@ -58,7 +58,7 @@ export interface AdapterCore {
   emit(e: ChatEvent): void
   on(fn: (e: ChatEvent) => void): () => void
   fail(message: string): void
-  /** Once per adapter, whatever else is announced afterwards. */
+  /** Once per thread id: the same id announced again says nothing, a different one is announced anew. */
   emitReady(threadId: string, rolloutPath: string | null): void
   readonly ended: boolean
   /** Client request bookkeeping: `write` puts the line on the wire, the reply comes back through
@@ -170,7 +170,8 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
     truncated: state.truncated
   }
   let flushScheduled = false
-  let readyEmitted = false
+  /** The thread id the last `ready` carried, or null while none has been emitted — see emitReady. */
+  let lastReadyThreadId: string | null = null
 
   // A listener throwing must not become an uncaught exception, nor stop the other listeners, nor leave
   // `lastEmitted` out of sync with what was actually delivered (flush() below assigns lastEmitted before
@@ -185,9 +186,15 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
     }
   }
 
+  // Guarded by the id rather than by "has one been emitted", because a session's thread id can change
+  // under it: a Claude `/clear` sent as a user turn makes the CLI reset the conversation and open a new
+  // one, whose `system/init` names a session id this session has never seen (measured 2026-09-16, slice
+  // 4 records `slash-command-measurements.md`). Everything keyed by that id — the transcript route, the
+  // scheduler's persisted key, the Host note the session is resumed from — has to be told, so a changed
+  // id is announced again. Codex repeats the same id at every turn and so still says this once.
   function emitReady(threadId: string, rolloutPath: string | null): void {
-    if (readyEmitted) return
-    readyEmitted = true
+    if (threadId === lastReadyThreadId) return
+    lastReadyThreadId = threadId
     emit({ type: 'ready', threadId, rolloutPath })
   }
 

@@ -1344,7 +1344,15 @@ export function registerIpc(
           chatWiringLog(`chat ${sessionId}: rollout registration failed: ${String(err)}`)
         }
       }
-      if (provider === 'claude') findClaudeChatTranscript(sessionId, info.accountId, event.threadId)
+      if (provider === 'claude') {
+        // A second `ready` means the thread id changed under the session — a `/clear` starts a new
+        // conversation with a new id (claudeAdapter.ts). Its transcript file does not exist yet: it is
+        // written with that conversation's first turn. Dropping the old entry is what re-arms the
+        // retry, since the `status` branch below looks again only while the map has nothing for this
+        // session, and the pane's follow re-seats itself onto the new file through `sourceFor`.
+        chatTranscripts.delete(sessionId)
+        findClaudeChatTranscript(sessionId, info.accountId, event.threadId)
+      }
     } else if (event.type === 'status') {
       attention.set(sessionId, event.status)
       // The scheduler's busy signal for a chat session (slice 4 design §5.5): a pty's comes from the

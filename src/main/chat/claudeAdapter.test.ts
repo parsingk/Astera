@@ -331,6 +331,33 @@ describe('createClaudeAdapter — a turn with a question', () => {
     // 'working', not 'idle' — the provisional turn marker send() set is what tells the two apart.
     expect(a.state()).toMatchObject({ status: 'working', request: null })
   })
+
+  it('follows the new session id a /clear starts, and stays quiet while the id repeats', async () => {
+    const { p, a, events } = await started()
+    void a.send('hello')
+    await tick()
+    p.feed(F.SYSTEM_INIT)
+    await tick()
+    expect(events.filter((e) => e.type === 'ready')).toEqual([{ type: 'ready', threadId: SESSION_ID, rolloutPath: null }])
+
+    // What a `/clear` looks like on the wire (measured 2026-09-16): the CLI resets the conversation and
+    // the next turn's init names a session id that is not the one this session started with.
+    const cleared = '8b6cd849-90b6-42b9-b271-be0b78db8df7'
+    const reinit = JSON.stringify({ ...(JSON.parse(F.SYSTEM_INIT) as Record<string, unknown>), session_id: cleared })
+    p.feed(reinit)
+    await tick()
+    expect(events.filter((e) => e.type === 'ready')).toEqual([
+      { type: 'ready', threadId: SESSION_ID, rolloutPath: null },
+      { type: 'ready', threadId: cleared, rolloutPath: null }
+    ])
+    expect(p.notes.at(-1)).toEqual({ threadId: cleared })
+
+    // The init at the head of every later turn carries the same id, and says nothing.
+    p.feed(reinit)
+    await tick()
+    expect(events.filter((e) => e.type === 'ready').length).toBe(2)
+    expect(p.notes.filter((n) => n.threadId === cleared).length).toBe(1)
+  })
 })
 
 describe('createClaudeAdapter — the model and the permission mode', () => {

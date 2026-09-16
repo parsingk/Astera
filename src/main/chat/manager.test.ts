@@ -280,16 +280,21 @@ describe('event wiring', () => {
     manager.subscribe((sessionId, e) => seen.push([sessionId, e]))
 
     handles[0].emit({ type: 'ready', threadId: 'th-1', rolloutPath: null })
+    expect(manager.info(info.id)?.threadId).toBe('th-1')
+    // A second ready with another id is a claude session whose `/clear` started a new one, and the
+    // session's identity has to move with it — everything keyed by the id reads it from here.
+    handles[0].emit({ type: 'ready', threadId: 'th-2', rolloutPath: null })
     handles[0].emit({ type: 'exit', code: 7 })
 
     const after = manager.info(info.id)
-    expect(after?.threadId).toBe('th-1')
-    expect(after?.resumeSessionId).toBe('th-1')
+    expect(after?.threadId).toBe('th-2')
+    expect(after?.resumeSessionId).toBe('th-2')
     expect(after?.status).toBe('exited')
     expect(after?.exitCode).toBe(7)
     expect(exits).toEqual([{ sessionId: info.id, exitCode: 7 }])
     expect(seen).toEqual([
       [info.id, { type: 'ready', threadId: 'th-1', rolloutPath: null }],
+      [info.id, { type: 'ready', threadId: 'th-2', rolloutPath: null }],
       [info.id, { type: 'exit', code: 7 }]
     ])
   })

@@ -8,7 +8,8 @@
 // What is Claude's alone, and where the two files therefore part company:
 //  - There is no thread/start. `initialize` hands over the model catalogue and the permission mode and
 //    nothing else; a fresh session's id arrives only with the first turn's `system/init`, so `ready`
-//    waits for it (a resumed one is the id we asked for, and is ready at once).
+//    waits for it (a resumed one is the id we asked for, and is ready at once). The id is not settled
+//    for good either: a `/clear` starts a new conversation under a new id, and `ready` says so again.
 //  - `system/init` repeats at the head of every turn and carries the model but no effort, so a model
 //    event must not wipe an effort — or the plan mode — that is already known (see applyEffect).
 //  - A finished turn takes every open permission prompt with it: the CLI does not keep a `can_use_tool`
@@ -51,6 +52,10 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
   const { proc, mode, log } = deps
   const core = createAdapterCore({ proc, log, requestTimeoutMs: deps.requestTimeoutMs }, mode, 'claude')
 
+  /** The CLI's session id, followed rather than learned once. A `/clear` sent as a user turn resets the
+   *  conversation and the next `system/init` names a new id (measured 2026-09-16), and this session is
+   *  that conversation whatever it is now called — so a changed id replaces this one, is announced
+   *  again, and is written to the note the session would be resumed from. */
   let threadId: string | null = mode.mode === 'adopt' ? mode.threadId : null
   let models: ModelDescriptor[] = []
   /** The open `can_use_tool` requests, request id -> the tool call each is about. The core owns the
@@ -104,7 +109,9 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
   function applyEffect(effect: ProtocolEffect): void {
     switch (effect.type) {
       case 'thread':
-        if (threadId === null) {
+        // `system/init` repeats at the head of every turn, so this is a change test, not a first-time
+        // one: the same id says nothing, a different one is the `/clear` case above.
+        if (threadId !== effect.threadId) {
           threadId = effect.threadId
           core.emitReady(threadId, null)
           proc.remember?.({ threadId })
