@@ -1310,6 +1310,14 @@ export function registerIpc(
    *  assigned just above). */
   core.chat.subscribe((sessionId, event) => {
     send('chat:event', { sessionId, event })
+    // Slack hears every event of a registered chat session (slice 4 design §7.1); unregistered ones
+    // return at the notifier's first line. The transcript path is a getter because Claude's file exists
+    // only after the first turn and Codex names its rollout at `ready` — the summary reads it when the
+    // turn ends, not when the session starts.
+    slack?.notifier.onChatEvent(sessionId, event, {
+      provider: core.chat.state(sessionId)?.provider ?? 'codex',
+      transcriptPath: () => chatTranscripts.get(sessionId) ?? codexRollout?.rolloutPathFor(sessionId) ?? null
+    })
     if (event.type === 'ready') {
       const info = core.chat.info(sessionId)
       if (!info) return
@@ -1319,6 +1327,8 @@ export function registerIpc(
       const provider = core.chat.state(sessionId)?.provider
       if (provider === 'codex') {
         try {
+          // A chat session's turn end is announced from the protocol (onChatEvent above); the
+          // watcher's own callback would make it two, so it is told not to notify on this one.
           if (event.rolloutPath === null) {
             // The thread exists but codex has not named its file yet. Registering unmapped (but with
             // the thread id already in hand) lets the watcher's own scan find the file by cwd and time,
@@ -1327,8 +1337,8 @@ export function registerIpc(
             // logged because a session that stays unmapped is mute (no conversation, no chips) and
             // nothing else would say why.
             chatWiringLog(`chat ${sessionId}: thread ${event.threadId} has no rollout path; the watcher will scan for it`)
-            codexRollout?.register(info, undefined, event.threadId)
-          } else codexRollout?.register(info, event.rolloutPath, event.threadId)
+            codexRollout?.register(info, undefined, event.threadId, { notifyTurns: false })
+          } else codexRollout?.register(info, event.rolloutPath, event.threadId, { notifyTurns: false })
         } catch (err) {
           /* A failed rollout-watcher registration does not take the chat session down */
           chatWiringLog(`chat ${sessionId}: rollout registration failed: ${String(err)}`)
@@ -1466,7 +1476,7 @@ export function registerIpc(
     // schedule used to belong on that list too — no shell to send a scheduled command to — but that
     // stopped being true once delivery started going through the session driver (Task 2), so the chat
     // branch below registers its own schedule instead of falling through to the pty branch's block.
-    // Slack and rolling still fork here, unregistered, until slices 4b and 4c wire them in.
+    // Rolling still forks here, unregistered, until slice 4c wires it in.
     // `core.chat.spawn` picks the process and adapter by the account's provider (Task 4) — a failure
     // building either one is left to propagate, and the renderer shows it in the same toast it shows
     // for any failed spawn.
@@ -1476,8 +1486,9 @@ export function registerIpc(
         cwd: opts.cwd,
         resumeThreadId: opts.resumeThreadId,
         bypassPermissions: opts.bypassPermissions === true,
-        schedule: opts.schedule
-        // slackNotify / rollAccountIds / rollPrompt join here in slices 4b and 4c
+        schedule: opts.schedule,
+        slackNotify: opts.slackNotify === true
+        // rollAccountIds / rollPrompt join here in slice 4c
       })
       // The schedule is the one feature this slice attaches to a chat session (chat-sessions slice 4
       // design §5.2 / §6). Same call, same provider argument as the pty branch below.
@@ -1486,6 +1497,13 @@ export function registerIpc(
           scheduler?.register(chatInfo, providerOf(account))
         } catch {
           /* A failed schedule registration does not block session creation */
+        }
+      }
+      if (slack && chatInfo.slackNotify === true) {
+        try {
+          slack.notifier.register(chatInfo)
+        } catch {
+          /* A failed Slack registration does not block session creation */
         }
       }
       return chatInfo
@@ -6230,6 +6248,13 @@ export function registerIpc(
                 } catch (err) {
                   hostLog(`host: could not re-arm the schedule of chat session ${info.id}: ${String(err)}`)
                 }
+              }
+            }
+            if (info.slackNotify === true) {
+              try {
+                slack?.notifier.register(info)
+              } catch {
+                /* A failed Slack registration does not block taking the session back */
               }
             }
             try {

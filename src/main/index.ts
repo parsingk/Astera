@@ -480,6 +480,12 @@ app.whenReady().then(async () => {
       isOwnMessage: (ts) => slack.isOwnMessage(ts),
       // On a choice prompt, turn the reply into a key sequence and carry it through Submit
       pendingChoiceShape: (sid) => slack.pendingChoiceShape(sid),
+      // A chat session has no pty to type into: its reply is read against the card it holds and goes
+      // out through the session driver or as the card's answer (slice 4 design §7.3).
+      isChat: (sid) => core!.chat.has(sid),
+      pendingRequest: (sid) => core!.chat.state(sid)?.request ?? null,
+      deliverChat: (sid, text) => sessionDriver.deliver(sid, text),
+      answerChat: (sid, requestId, answer) => core!.chat.answer(sid, requestId, answer),
       log: slackLog
     }),
     createClient: (appToken) => createSocketClient(appToken),
