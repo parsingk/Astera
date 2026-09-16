@@ -172,6 +172,12 @@ export function toSessionInput(text: string): SessionInput {
   return { text: safe.replace(/\r\n|\r|\n/g, '\x1b\r'), submit: true }
 }
 
+/** A chat turn's text from a reply. Control characters go (the same set toSessionInput strips), but
+ *  newlines stay: a chat turn is a JSON string, not keys typed into a TUI, so there is nothing to fold. */
+export function sanitizeChatText(text: string): string {
+  return text.replace(CONTROL_CHARS_EXCEPT_NEWLINE, '')
+}
+
 /** The shape of one choice screen — whether each question is multi-select, and how many items can be
  *  picked by number */
 export interface ChoiceShape {

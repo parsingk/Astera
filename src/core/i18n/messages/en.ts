@@ -978,6 +978,13 @@ export const en: Record<keyof typeof ko, string> = {
   'slack.inbox.tooLong': '⚠️ The reply was too long to deliver (up to {max} characters)',
   'slack.inbox.sessionEnded': '⚠️ This session has ended, so the input could not be delivered',
   'slack.inbox.injectFailed': '⚠️ The input could not be delivered',
+  // core/slack/chatRequest.ts — a chat session's open card as Slack text, and a thread reply's result.
+  'slack.approval.hint': '💡 Reply 허용 (allow) or 거절 (decline)',
+  'slack.approval.hintAlways': '💡 Reply 허용 (allow), 항상 허용 (always allow) or 거절 (decline)',
+  'slack.approval.unknownReply': '⚠️ Please reply 허용 (allow) or 거절 (decline)',
+  'slack.approval.unknownReplyAlways': '⚠️ Please reply 허용 (allow), 항상 허용 (always allow) or 거절 (decline)',
+  'slack.chat.sendRefused': '⚠️ The CLI did not take the message — {reason}',
+  'slack.chat.turnFailed': '⚠️ Turn failed — {message}',
   'slack.limitNoResume': '⛔ Limit reached — no auto-resume',
   'slack.limitNoResumeAt': '⛔ Limit reached — no auto-resume (resets {at})',
   'notify.inputNeeded': 'Needs your confirmation',

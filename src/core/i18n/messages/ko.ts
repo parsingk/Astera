@@ -1144,6 +1144,13 @@ export const ko = {
   'slack.inbox.tooLong': '⚠️ 답장이 너무 길어 전달하지 않았습니다 ({max}자 이하만 가능)',
   'slack.inbox.sessionEnded': '⚠️ 이 세션은 종료되어 입력을 전달하지 못했습니다',
   'slack.inbox.injectFailed': '⚠️ 입력을 전달하지 못했습니다',
+  // core/slack/chatRequest.ts — a chat session's open card as Slack text, and a thread reply's result.
+  'slack.approval.hint': '💡 허용 또는 거절 로 답장',
+  'slack.approval.hintAlways': '💡 허용, 항상 허용 또는 거절 로 답장',
+  'slack.approval.unknownReply': '⚠️ 허용 또는 거절 로 답장해 주세요',
+  'slack.approval.unknownReplyAlways': '⚠️ 허용, 항상 허용 또는 거절 로 답장해 주세요',
+  'slack.chat.sendRefused': '⚠️ CLI 가 메시지를 받지 않았습니다 — {reason}',
+  'slack.chat.turnFailed': '⚠️ 턴 실패 — {message}',
   'slack.limitNoResume': '⛔ 한도 도달 — 자동 재개 없음',
   'slack.limitNoResumeAt': '⛔ 한도 도달 — 자동 재개 없음 (리셋 {at})',
   // Desktop notification bodies. They follow the app language, the same way Slack's already do. The
