@@ -207,8 +207,11 @@ export function RunningNotice({ working }: { working: boolean }): ReactNode {
 
 /** What the pane says once the session has ended. The composer is shut behind it — the pty is gone and
  *  a word typed here would reach nothing — and the way back is the terminal, which is where a session
- *  is restarted. */
-export function ExitedNotice({ onGoTerminal }: { onGoTerminal: () => void }): ReactNode {
+ *  is restarted.
+ *
+ *  `onGoTerminal` null (or absent) hides that way back, for the same reason QuestionCard's own prop
+ *  takes null: a chat session has no terminal beside it to go to (ConversationPane.tsx, Task 10). */
+export function ExitedNotice({ onGoTerminal }: { onGoTerminal?: (() => void) | null }): ReactNode {
   const { t } = useI18n();
 
   return (
@@ -218,9 +221,27 @@ export function ExitedNotice({ onGoTerminal }: { onGoTerminal: () => void }): Re
       className="flex items-center justify-between gap-3 rounded-(--composer-radius) border border-[var(--warn-line)] bg-[var(--warn-bg)] px-4 py-2.5 text-sm text-[var(--warn-ink)]"
     >
       <p className="font-medium">{t("conversation.exited.title")}</p>
-      <Button size="sm" variant="default" className="shrink-0" onClick={onGoTerminal}>
-        {t("conversation.pending.terminal")}
-      </Button>
+      {onGoTerminal !== null && onGoTerminal !== undefined && (
+        <Button size="sm" variant="default" className="shrink-0" onClick={onGoTerminal}>
+          {t("conversation.pending.terminal")}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** One line a chat session's pane has to say and nobody has to act on: the last turn's error, a replay
+ *  whose head was lost, a process that will not outlive the app (paneTransport.ts's ChatBanner). Built
+ *  like QueuedNotice and SlashCommandNotice — the same quiet border, the same padding — minus the way
+ *  out they offer, because a chat session has no terminal to send anyone to. */
+export function ChatNotice({ text }: { text: string }): ReactNode {
+  return (
+    <div
+      role="status"
+      data-slot="chat-notice"
+      className="border-border/60 text-muted-foreground rounded-(--composer-radius) border px-4 py-2.5 text-sm"
+    >
+      {text}
     </div>
   );
 }
