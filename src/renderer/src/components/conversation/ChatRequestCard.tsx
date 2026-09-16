@@ -6,7 +6,7 @@ import { Button } from "../ui/button";
 import { useI18n } from "../../i18n/I18nProvider";
 import { toast } from "../../lib/toast";
 import type { MessageKey } from "../../../../core/i18n";
-import type { Provider } from "../../../../core/providers/meta";
+import { PROVIDER_META, type Provider } from "../../../../core/providers/meta";
 import type { ApprovalDecision, ChatRequest } from "../../../../core/chat/types";
 import { allAnswered, emptyAnswers, setOther, togglePick, type Answer } from "../../../../core/prompts/askUserQuestion";
 import { forgetOtherAskAnswers, recallAskAnswers, rememberAskAnswers } from "./askDrafts";
@@ -39,22 +39,24 @@ const errorMessageOf = (err: unknown): string => (err instanceof Error ? err.mes
  * has to notice that on its own.
  */
 export function ChatRequestCard({ sessionId, request, provider }: ChatRequestCardProps): ReactNode {
+  // The one place this card's CLI name is read off the provider — PROVIDER_META is the single source
+  // of truth for it (AccountPanel.tsx reads the same field the same way).
+  const who = PROVIDER_META[provider].displayName;
   if (request.kind === "question")
-    return <QuestionRequestCard sessionId={sessionId} request={request} provider={provider} />;
-  return <ApprovalRequestCard sessionId={sessionId} request={request} provider={provider} />;
+    return <QuestionRequestCard sessionId={sessionId} request={request} who={who} />;
+  return <ApprovalRequestCard sessionId={sessionId} request={request} who={who} />;
 }
 
 function QuestionRequestCard({
   sessionId,
   request,
-  provider
+  who
 }: {
   sessionId: string;
   request: Extract<ChatRequest, { kind: "question" }>;
-  provider: Provider;
+  who: string;
 }): ReactNode {
   const { t } = useI18n();
-  const who = provider === "claude" ? "Claude" : "Codex";
   const key = `${sessionId}|${request.id}`;
   const [draft, setDraft] = useState<{ key: string; answers: Answer[] }>(() => ({
     key,
@@ -110,14 +112,13 @@ function QuestionRequestCard({
 function ApprovalRequestCard({
   sessionId,
   request,
-  provider
+  who
 }: {
   sessionId: string;
   request: Extract<ChatRequest, { kind: "approval" }>;
-  provider: Provider;
+  who: string;
 }): ReactNode {
   const { t } = useI18n();
-  const who = provider === "claude" ? "Claude" : "Codex";
   const [busy, setBusy] = useState(false);
 
   const decide = async (decision: ApprovalDecision): Promise<void> => {

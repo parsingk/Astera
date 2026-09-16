@@ -2,15 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { chatAvailabilityOf } from './useChatAvailability'
 
 describe('chatAvailabilityOf', () => {
-  it('a Codex account can start 대화 once the Host speaks proc', () => {
-    expect(chatAvailabilityOf({ hostOk: true })).toEqual({
-      hostOk: true,
-      reason: null,
-      enabled: true
-    })
-  })
-
-  it('a Claude account can start 대화 once the Host speaks proc, same as Codex', () => {
+  it('any account is enabled when the Host speaks proc', () => {
     expect(chatAvailabilityOf({ hostOk: true })).toEqual({
       hostOk: true,
       reason: null,
