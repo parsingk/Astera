@@ -80,8 +80,9 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
 
   /** A finished turn takes every prompt with it (measured): an open request still on screen here is one
    *  the person can no longer answer — in a replay, one that was answered before the app restarted and
-   *  whose echo the replay does not carry. The turn marker is already null by the time this runs, so the
-   *  emptied queue settles on 'idle'. */
+   *  whose echo the replay does not carry (the `answered` note catches most of those before they are
+   *  ever opened; this catches what no note names). The turn marker is already null by the time this
+   *  runs, so the emptied queue settles on 'idle'. */
   function endOpenRequests(): void {
     if (openTools.size === 0) return
     // Said out loud: a card disappearing on its own is the kind of thing whose only trace should not be
