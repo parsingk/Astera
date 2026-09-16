@@ -660,6 +660,10 @@ export const en: Record<keyof typeof ko, string> = {
   'session.new.schedDaysUnit': 'day(s)',
   'session.new.schedCommandPlaceholder': 'Command to run (required)',
   'session.new.schedHint': 'Sent to the session on each scheduled run',
+  // 대화 session's scheduler — what fills the field is a prompt, not a command (chat-sessions slice 4a,
+  // Task 1: a slash command on codex 대화 lands as prompt text, not a command)
+  'session.new.schedCommandPlaceholderChat': 'Prompt to send (required)',
+  'session.new.schedHintChat': 'Sends this prompt as a new turn at each due time',
   'session.sched.weekday.sun': 'Sun',
   'session.sched.weekday.mon': 'Mon',
   'session.sched.weekday.tue': 'Tue',

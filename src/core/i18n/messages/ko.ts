@@ -759,6 +759,10 @@ export const ko = {
   'session.new.schedDaysUnit': '일',
   'session.new.schedCommandPlaceholder': '실행할 명령어 (필수)',
   'session.new.schedHint': '지정 주기마다 이 명령을 세션에 전송',
+  // 대화 session's scheduler — what fills the field is a prompt, not a command (chat-sessions slice 4a,
+  // Task 1: a slash command on codex 대화 lands as prompt text, not a command)
+  'session.new.schedCommandPlaceholderChat': '보낼 프롬프트 (필수)',
+  'session.new.schedHintChat': '지정 주기마다 이 프롬프트를 새 턴으로 전송',
   // Shared by NewSessionDialog.tsx and TerminalView.tsx — weekday button labels, weekday text in the schedule summary.
   // Index 0 = Sunday (matches the Date.getDay() convention)
   'session.sched.weekday.sun': '일',

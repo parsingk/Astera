@@ -320,6 +320,8 @@ export function PaneGrid({
                   exited={s.status === 'exited'}
                   active={visible && pane != null && pane.id === activePaneId}
                   transport={{ kind: 'chat' }}
+                  rollState={rollStates[s.id] ?? null}
+                  schedState={schedStates[s.id] ?? null}
                   onGoTerminal={() => {}}
                 />
               </div>

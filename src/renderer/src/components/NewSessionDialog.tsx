@@ -243,7 +243,7 @@ export function NewSessionDialog({
         worktreeName: wtName.trim() || undefined,
         worktreeBaseRef: wtBaseRef || undefined,
         repoRoot,
-        schedule: kind === 'chat' ? undefined : schedOn ? (schedule ?? undefined) : undefined
+        schedule: schedOn ? (schedule ?? undefined) : undefined
       })
     } finally {
       if (mounted.current) setStarting(false)
@@ -412,8 +412,8 @@ export function NewSessionDialog({
             </button>
           )}
         </div>
-        {/* None of this applies to 대화 — a chat session has no CLI to hook a rolling resume or a
-            Slack notifier into, and no shell to send a scheduled command to. */}
+        {/* Rolling and Slack come to 대화 in slices 4b/4c — a chat session has no CLI to hook a rolling
+            resume or a Slack notifier into yet. */}
         {kind === 'terminal' && (
           <>
             <label className="row check-small">
@@ -442,16 +442,6 @@ export function NewSessionDialog({
                 <span className="roll-prompt-hint">{t('session.new.rollPromptHint')}</span>
               </div>
             )}
-            <label className="row check-small">
-              <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
-              {t('session.new.schedLabel')}
-            </label>
-            {/* initial={schedule} restores the previous input when this is toggled off and back on —
-                ScheduleFields loses its internal state on unmount, so the parent holds the last value that
-                was valid (schedule) and feeds it back in. An intermediate input state with an empty command
-                is not restored, because onChange emits null for it so it never reaches schedule — not a
-                complete fix, but it covers the common case (toggling the checkbox). */}
-            {schedOn && <ScheduleFields initial={schedule} onChange={setSchedule} />}
             {/* Slack notifications work for every provider — claude detects turn completion through the
                 statusLine hook, codex through rollout's task_complete */}
             <label className="row check-small">
@@ -466,6 +456,16 @@ export function NewSessionDialog({
             </label>
           </>
         )}
+        <label className="row check-small">
+          <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
+          {t('session.new.schedLabel')}
+        </label>
+        {/* initial={schedule} restores the previous input when this is toggled off and back on —
+            ScheduleFields loses its internal state on unmount, so the parent holds the last value that
+            was valid (schedule) and feeds it back in. An intermediate input state with an empty command
+            is not restored, because onChange emits null for it so it never reaches schedule — not a
+            complete fix, but it covers the common case (toggling the checkbox). */}
+        {schedOn && <ScheduleFields initial={schedule} onChange={setSchedule} chat={kind === 'chat'} />}
         <label className="row check-small">
           <input type="checkbox" checked={saveDefault} onChange={(e) => setSaveDefault(e.target.checked)} />
           {t('session.new.saveDefaultAccount')}
@@ -490,7 +490,7 @@ export function NewSessionDialog({
               resolvingRepo ||
               accountIds.some((id) => !id) ||
               primaryCliMissing ||
-              (kind === 'terminal' && schedOn && !schedule)
+              (schedOn && !schedule)
             }
             onClick={() => void start()}
           >

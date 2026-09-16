@@ -144,7 +144,7 @@ export function ResumeDialog({
       rollPrompt: kind === 'chat' ? undefined : rollOn ? rollPrompt.trim() || undefined : undefined,
       slackNotify: kind === 'chat' ? false : slackReady && slackNotify,
       bypassPermissions,
-      schedule: kind === 'chat' ? undefined : schedOn ? (schedule ?? undefined) : undefined
+      schedule: schedOn ? (schedule ?? undefined) : undefined
     })
   }
 
@@ -229,7 +229,7 @@ export function ResumeDialog({
             <span className="roll-prompt-hint">{t('session.resume.crossAccountHint')}</span>
           )}
         </div>
-        {/* None of this applies to 대화 — see NewSessionDialog's own note by the same guard. */}
+        {/* Rolling and Slack come to 대화 in slices 4b/4c — see NewSessionDialog's own note by the same guard. */}
         {kind === 'terminal' && (
           <>
             <label className="row check-small">
@@ -255,17 +255,6 @@ export function ResumeDialog({
               </div>
             )}
             <label className="row check-small">
-              <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
-              {t('session.new.schedLabel')}
-            </label>
-            {/* Mounted only after the saved-value lookup finishes — ScheduleFields reads initial exactly
-                once, at mount. schedule ?? savedSchedule: on a toggle off and back on, a value the user
-                already edited (schedule) is restored first, and before any edit it is filled from the saved
-                value (savedSchedule). schedule only ever holds the last value that was valid (an
-                intermediate state with an empty command sends null from onChange and is not recorded), so
-                that limitation carries over here as well. */}
-            {schedOn && loadedDefaults && <ScheduleFields initial={schedule ?? savedSchedule} onChange={setSchedule} />}
-            <label className="row check-small">
               <input
                 type="checkbox"
                 checked={slackReady && slackNotify}
@@ -276,6 +265,19 @@ export function ResumeDialog({
               {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
             </label>
           </>
+        )}
+        <label className="row check-small">
+          <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
+          {t('session.new.schedLabel')}
+        </label>
+        {/* Mounted only after the saved-value lookup finishes — ScheduleFields reads initial exactly
+            once, at mount. schedule ?? savedSchedule: on a toggle off and back on, a value the user
+            already edited (schedule) is restored first, and before any edit it is filled from the saved
+            value (savedSchedule). schedule only ever holds the last value that was valid (an
+            intermediate state with an empty command sends null from onChange and is not recorded), so
+            that limitation carries over here as well. */}
+        {schedOn && loadedDefaults && (
+          <ScheduleFields initial={schedule ?? savedSchedule} onChange={setSchedule} chat={kind === 'chat'} />
         )}
         <label className="row check-small">
           <input
@@ -289,7 +291,7 @@ export function ResumeDialog({
           <button onClick={onCancel}>{t('common.cancel')}</button>
           <button
             className="primary"
-            disabled={!selectedId || (kind === 'terminal' && schedOn && !schedule)}
+            disabled={!selectedId || (schedOn && !schedule)}
             onClick={confirm}
           >
             {t('session.resume.confirm')}

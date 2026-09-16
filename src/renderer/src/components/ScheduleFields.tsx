@@ -13,10 +13,16 @@ import { ScheduleRuleFields } from './ScheduleRuleFields'
  *  initial 은 마운트 때 한 번만 읽는다 — 타이핑 중에 되먹이면 입력이 되돌아간다. */
 export function ScheduleFields({
   initial,
-  onChange
+  onChange,
+  chat = false
 }: {
   initial?: ScheduleConfig | null
   onChange: (v: ScheduleConfig | null) => void
+  /** A 대화 session's scheduled command is a prompt sent as a new turn, not a shell command — swaps the
+   *  command field's placeholder and hint text (chat-sessions slice 4a, Task 1's measurement: a slash
+   *  command lands as a command on Claude but as plain prompt text on codex, so both dialogs offer this
+   *  worded as a prompt). */
+  chat?: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
   const [rule, setRule] = useState<ScheduleRule | null>(initial?.rule ?? null)
@@ -38,10 +44,10 @@ export function ScheduleFields({
         type="text"
         value={command}
         maxLength={500}
-        placeholder={t('session.new.schedCommandPlaceholder')}
+        placeholder={t(chat ? 'session.new.schedCommandPlaceholderChat' : 'session.new.schedCommandPlaceholder')}
         onChange={(e) => setCommand(e.target.value)}
       />
-      <span className="roll-prompt-hint">{t('session.new.schedHint')}</span>
+      <span className="roll-prompt-hint">{t(chat ? 'session.new.schedHintChat' : 'session.new.schedHint')}</span>
     </div>
   )
 }

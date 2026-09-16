@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import type { RollStateEvent, SchedStateEvent, ScheduleRule, SessionInfo } from '../../../core/types'
+import type { RollStateEvent, SchedStateEvent, SessionInfo } from '../../../core/types'
 import { nextResize, type Dims } from '../../../core/terminal/resize'
 import { xtermThemeOf } from '../../../core/theme/apply'
-import { schedRuleSummary } from '../../../core/scheduler/summary'
 import { fitTerminalToHost } from '../lib/fitTerminal'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import * as sessionBus from '../lib/sessionBus'
@@ -12,19 +11,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
 import { attachConsoleLinks } from '../terminalLinks'
-
-const fmtTime = (iso?: string): string =>
-  iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
-// A weekly retry can be days away, so show month/day plus the time
-const fmtDateTime = (iso?: string): string =>
-  iso
-    ? new Date(iso).toLocaleString([], {
-        month: 'numeric',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      })
-    : ''
+import { SessionStateBanners } from './SessionStateBanners'
 
 export function TerminalView({
   session,
@@ -249,42 +236,10 @@ export function TerminalView({
     if (active && session.status !== 'exited') termRef.current?.focus()
   }, [active, session.status])
 
-  // Whether the roll-banner is shown — the same condition as the sched-banner's below-roll offset
-  // decision, so it is merged into one type guard used in both places. Kept separate, a change to the
-  // condition would only be made on one side and the offset would silently drift.
-  const rollBannerVisible = (s: RollStateEvent | null): s is RollStateEvent =>
-    !!s && s.state !== 'none' && s.state !== 'nudged' && s.state !== 'stalled'
-
   return (
     <div className="terminal-wrap">
       <div className="terminal-host" ref={hostRef} />
-      {rollBannerVisible(rollState) && (
-        <div className="roll-banner">
-          {rollState.state === 'switching' &&
-            t('session.terminal.rollSwitching', { label: rollState.accountLabel ?? '' })}
-          {rollState.state === 'trust' && t('session.terminal.trustAccepting')}
-          {/* No time and no promise, unlike 'waiting' just below: an adopted chain has neither a
-              retry armed nor a reset to name. See RollStateEvent's own note on the state. */}
-          {rollState.state === 'adopted' && t('session.terminal.rollAdopted')}
-          {rollState.state === 'waiting' &&
-            (rollState.scope === 'weekly'
-              ? t('session.terminal.weeklyLimitWaiting', {
-                  time: fmtDateTime(rollState.nextRetryAt)
-                })
-              : t('session.terminal.limitWaiting', { time: fmtTime(rollState.nextRetryAt) }))}
-        </div>
-      )}
-      {schedState && schedState.state === 'active' && (
-        <div className={`sched-banner${rollBannerVisible(rollState) ? ' below-roll' : ''}`}>
-          <span>
-            {schedRuleSummary(t, schedState.rule)}
-            {t('session.terminal.schedNextRun', { time: fmtDateTime(schedState.nextAt) })}
-          </span>
-          <button onClick={() => void window.api.scheduler.disable(session.id)}>
-            {t('session.terminal.schedDisable')}
-          </button>
-        </div>
-      )}
+      <SessionStateBanners sessionId={session.id} rollState={rollState} schedState={schedState} />
       {loading && session.status !== 'exited' && (
         <div className="loading-overlay">
           <span className="loading-spinner" aria-hidden="true" />

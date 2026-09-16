@@ -89,8 +89,9 @@ import { useChatState } from "../../hooks/useChatState";
 import { toast } from "../../lib/toast";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
-import type { Attention, PendingToolPrompt } from "../../../../core/types";
+import type { Attention, PendingToolPrompt, RollStateEvent, SchedStateEvent } from "../../../../core/types";
 import { chatBannerFor, composerLockedFor, type PaneTransport } from "./paneTransport";
+import { SessionStateBanners } from "../SessionStateBanners";
 
 export interface ConversationPaneProps {
   sessionId: string;
@@ -115,6 +116,11 @@ export interface ConversationPaneProps {
    *  `window.api.chat.*` instead. Every branch is written `isChat ? … : <what a terminal does>`, so
    *  a terminal session's path through this file is exactly what it was. */
   transport?: PaneTransport;
+  /** The rolling and schedule banners (chat-sessions slice 4 §5.6): PaneGrid passes the per-session
+   *  events it already holds for TerminalView. Absent for a terminal session's conversation view — its
+   *  TerminalView shows them. */
+  rollState?: RollStateEvent | null;
+  schedState?: SchedStateEvent | null;
 }
 
 // ---- pure functions ------------------------------------------------------------------------
@@ -585,7 +591,9 @@ export function ConversationPane({
   onGoTerminal,
   active = false,
   exited = false,
-  transport = { kind: "terminal" }
+  transport = { kind: "terminal" },
+  rollState = null,
+  schedState = null
 }: ConversationPaneProps): ReactNode {
   const { t } = useI18n();
   /** Read once and asked everywhere below, so the two transports can never be told apart two
@@ -2180,7 +2188,7 @@ export function ConversationPane({
     <div
       ref={paneRef}
       data-slot="conversation-pane"
-      className="flex h-full min-h-0 flex-col"
+      className="relative flex h-full min-h-0 flex-col"
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files")) e.preventDefault();
       }}
@@ -2197,6 +2205,7 @@ export function ConversationPane({
         onComposerFiles(files);
       }}
     >
+      {isChat && <SessionStateBanners sessionId={sessionId} rollState={rollState} schedState={schedState} />}
       {more && (
         <div className="border-border/60 flex justify-center border-b py-1">
           <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>
