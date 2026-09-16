@@ -772,9 +772,14 @@ export class SlackNotifier {
       // handing it over would put the old question in the new session's first notification. count could not
       // serve as a baseline either once the transcript has changed.
       pendingTool: null,
-      // Rolling re-keys a terminal session's account mid-chain — a chat session has no roll chain to
-      // resolve providers for (ipc.ts's spawn comment), so this path never sees one.
-      chat: null
+      // A chat chain rolls too (slice 4c), so a chat record stays one. Of the three fields, only the
+      // excerpt is carried: the new process starts idle with no card open, and the third reason
+      // `pendingTool` is dropped does not apply here — nothing in `chat` describes a screen. The
+      // excerpt has to survive because the resumed process is handed the same conversation, so its
+      // file still ends with the turn posted before the switch; read against an empty memory that
+      // stale text passes as this session's own answer, and the dedup history — carried just above —
+      // then drops the identical line, leaving the first turn after a roll unannounced.
+      chat: old?.chat ? { status: 'idle', request: null, lastExcerpt: old.chat.lastExcerpt } : null
     }
     this.records.set(newInfo.id, record)
     if (record.thread) {

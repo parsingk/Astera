@@ -2072,11 +2072,15 @@ export default function App(): React.JSX.Element {
       cwd,
       saveDefault: false,
       kind: opts.kind,
-      // A chat resume has no transcript file to copy — the Host resumes the protocol thread itself,
-      // keyed by the id the history entry already carries as sessionId (chat-sessions design §6.5).
+      // The file goes with either kind: resuming under another account copies it into that account's
+      // folder first, and the CLI reads the conversation from there whichever way it is driven
+      // (spec §8.4). Only the name of the conversation differs — a chat resume gives the protocol
+      // thread id the history entry carries as sessionId (chat-sessions design §6.5), a terminal one
+      // the pty session id.
+      resumeTranscriptPath: entry.filePath,
       ...(opts.kind === 'chat'
         ? { resumeThreadId: entry.sessionId }
-        : { resumeSessionId: entry.sessionId, resumeTranscriptPath: entry.filePath }),
+        : { resumeSessionId: entry.sessionId }),
       roll: opts.roll,
       rollPrompt: opts.rollPrompt,
       slackNotify: opts.slackNotify,

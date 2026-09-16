@@ -56,6 +56,11 @@ if (shouldForceWaylandOzone(process.platform, process.env['WAYLAND_DISPLAY'], ex
 // it is on screen, so this window doubles as the query throttle.
 const USAGE_GATE_MAX_AGE_MS = 10_000
 
+// The carriage return the rolling coordinators write to submit a prompt on a pty. The `write` routing
+// in their dep blocks below recognises it in order to drop it: a chat session is handed a whole
+// message rather than keystrokes, so the Enter that follows the text on a pty has nothing to do there.
+const ENTER = String.fromCharCode(13)
+
 let core: Core | null = null
 let codexRollingRef: CodexRollingCoordinator | null = null
 let schedulerRef: SchedulerCoordinator | null = null
@@ -541,6 +546,16 @@ app.whenReady().then(async () => {
 
   // Account rolling: progress logs go to userData/rolling.log (same pattern as updater.log)
   const rollLog = path.join(app.getPath('userData'), 'rolling.log')
+  // Both coordinators' `log` dep, and the one their chat routing below writes its own refusals to — a
+  // named function rather than the two inline copies it replaces, because that routing is in the dep
+  // literal and cannot reach the `log` it is declaring.
+  const rollingLog = (m: string): void => {
+    try {
+      appendFileSync(rollLog, `${new Date().toISOString()} ${m}\n`)
+    } catch {
+      /* a logging failure must not block rolling */
+    }
+  }
   const schedLog = (m: string): void => {
     try {
       appendFileSync(rollLog, `${new Date().toISOString()} [sched] ${m}\n`)
@@ -618,9 +633,37 @@ app.whenReady().then(async () => {
   // would compile and pass every test while sharing nothing.
   const blocks = new BlockRegistry()
   const rolling = new RollingCoordinator({
-    spawn: (opts) => core!.sessions.spawn(opts),
-    write: (id, d) => core!.sessions.write(id, d),
-    kill: (id) => core!.sessions.kill(id),
+    // A chain's session may be a pty or a chat session (slice 4c); the coordinator says which through
+    // `kind` and the rest is routed here, so neither coordinator imports a manager. A chat respawn
+    // resumes by thread id — the same value a pty chain resumes by, under the chat manager's name for
+    // it — and carries the chain's carry-on prompt as its first turn.
+    spawn: (opts) =>
+      opts.kind === 'chat'
+        ? core!.chat.spawn({
+            account: opts.account,
+            cwd: opts.cwd,
+            resumeThreadId: opts.resumeSessionId,
+            initialPrompt: opts.initialPrompt,
+            rollAccountIds: opts.rollAccountIds,
+            slackNotify: opts.slackNotify,
+            bypassPermissions: opts.bypassPermissions,
+            title: opts.title
+          })
+        : core!.sessions.spawn(opts),
+    // A chat session takes a turn, not keys: the text goes through the session driver and the Enter
+    // that follows it on a pty is a no-op here — the driver already sent the message. A refusal is
+    // logged rather than thrown, because every caller of this dep is a timer with nobody to tell.
+    write: (id, d) => {
+      if (!core!.chat.has(id)) {
+        core!.sessions.write(id, d)
+        return
+      }
+      if (d === ENTER) return
+      void sessionDriver
+        .deliver(id, d)
+        .catch((err) => rollingLog(`chat write refused session=${id}: ${String(err)}`))
+    },
+    kill: (id) => (core!.chat.has(id) ? core!.chat.kill(id) : core!.sessions.kill(id)),
     getAccount: (id) => {
       try {
         return core!.accounts.get(id)
@@ -628,7 +671,9 @@ app.whenReady().then(async () => {
         return null
       }
     },
-    readStatusPayload: (id) => core!.statusLinePayload(id),
+    // A chat session writes no statusLine — it never calls the hook at all — so this would poll a file
+    // that is never written. ipc pushes the same two facts in through onChatMeta instead.
+    readStatusPayload: (id) => (core!.chat.has(id) ? Promise.resolve(null) : core!.statusLinePayload(id)),
     // What the limit evidence gate decides on. The screen phrase is only the trigger; whether to start a
     // roll or a wait is settled by asking the account for its usage — the statusLine snapshot freezes at
     // a stale value once a session halts on a limit, whereas this lookup is independent of session state.
@@ -721,13 +766,7 @@ app.whenReady().then(async () => {
         /* a desktop notification failure must not block rolling */
       }
     },
-    log: (m) => {
-      try {
-        appendFileSync(rollLog, `${new Date().toISOString()} ${m}\n`)
-      } catch {
-        /* a logging failure must not block rolling */
-      }
-    },
+    log: rollingLog,
     lang: () => core!.lang,
     blocks,
     persistConfig: (sid, cfg) => {
@@ -750,9 +789,35 @@ app.whenReady().then(async () => {
   // Codex account rolling. Uses the same log file and event channels as the Claude coordinator, but
   // does not depend on statusLine or Slack.
   const codexRolling = new CodexRollingCoordinator({
-    spawn: (opts) => core!.sessions.spawn(opts),
-    kill: (id) => core!.sessions.kill(id),
+    // Routed by kind exactly as the claude coordinator's is, and for the same reason — see its own
+    // comment. `resumePrompt` has no counterpart here: it is the argument behind `codex resume <id>`,
+    // and a chat session is not started from a command line, so a chat roll carries its prompt as
+    // `initialPrompt` (codexRolling.ts's roll() sends only that one for a chat chain).
+    spawn: (opts) =>
+      opts.kind === 'chat'
+        ? core!.chat.spawn({
+            account: opts.account,
+            cwd: opts.cwd,
+            resumeThreadId: opts.resumeSessionId,
+            initialPrompt: opts.initialPrompt,
+            rollAccountIds: opts.rollAccountIds,
+            slackNotify: opts.slackNotify,
+            bypassPermissions: opts.bypassPermissions,
+            title: opts.title
+          })
+        : core!.sessions.spawn(opts),
+    kill: (id) => (core!.chat.has(id) ? core!.chat.kill(id) : core!.sessions.kill(id)),
     write: (id, d) => {
+      if (core!.chat.has(id)) {
+        // A chat session takes a turn, not keys — the claude coordinator's write dep carries the whole
+        // argument. The only thing this coordinator writes is the answer to the model-switch prompt,
+        // which is a pty screen, so in practice a chat chain never reaches here.
+        if (d === ENTER) return
+        void sessionDriver
+          .deliver(id, d)
+          .catch((err) => rollingLog(`[codex] chat write refused session=${id}: ${String(err)}`))
+        return
+      }
       try {
         core!.sessions.write(id, d)
       } catch {
@@ -860,13 +925,7 @@ app.whenReady().then(async () => {
         /* a desktop notification failure must not block rolling */
       }
     },
-    log: (m) => {
-      try {
-        appendFileSync(rollLog, `${new Date().toISOString()} [codex] ${m}\n`)
-      } catch {
-        /* a logging failure must not block rolling */
-      }
-    },
+    log: (m) => rollingLog(`[codex] ${m}`),
     lang: () => core!.lang,
     blocks,
     persistConfig: (sid, cfg) => {

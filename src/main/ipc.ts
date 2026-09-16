@@ -1292,14 +1292,20 @@ export function registerIpc(
     core.history
       .transcriptPathById(accountId, threadId)
       .then((p) => {
-        if (p && core.chat.info(sessionId)?.threadId === threadId) chatTranscripts.set(sessionId, p)
+        if (p && core.chat.info(sessionId)?.threadId === threadId) {
+          chatTranscripts.set(sessionId, p)
+          // The second half of what a pty chain reads off its statusLine. A claude chat session's file
+          // does not exist at `ready`, so this lookup — not that event — is the moment the chain can be
+          // told where its transcript is, and until it is told the limit tail has nothing to read.
+          rolling?.onChatMeta(sessionId, { claudeSessionId: threadId, transcriptPath: p })
+        }
       })
       .catch((err) => chatWiringLog(`chat ${sessionId}: transcript lookup failed: ${String(err)}`))
       .finally(() => findingChatTranscript.delete(sessionId))
   }
   /** Everything one chat session's adapter reports, in one subscriber (chat-sessions design §6). The
-   *  event always goes to the renderer — the chat pane is driven entirely by this channel — and three
-   *  of the six kinds also settle something in main:
+   *  event always goes to the renderer — the chat pane is driven entirely by this channel — and four
+   *  of the seven kinds also settle something in main:
    *
    *  `ready` is the first moment the thread's identity exists, and it is the only moment the rollout's
    *  path is offered to us. Registering it with the **existing** watcher rather than teaching anything
@@ -1310,13 +1316,21 @@ export function registerIpc(
    *  scan for a file that will never exist; a claude chat session's transcript is instead looked up by
    *  id through `findClaudeChatTranscript` and kept in `chatTranscripts` for `sourceFor`.
    *
+   *  `ready` is also where a rolling chain is handed the identity a pty chain reads off its statusLine
+   *  (slice 4c) — a chat session never calls that hook, so the two facts are pushed in from here
+   *  instead. Half of the claude pair arrives later, with the transcript lookup.
+   *
    *  `status` is the attention value. A chat session has no hook stream to infer one from — the
    *  adapter says outright what the session is doing, which is why `attention.set` exists. It also
    *  doubles as the retry for a claude transcript lookup that missed on `ready` (the file is not
    *  written until the session's first turn).
    *
+   *  `rateLimit` is the chain's limit signal — the protocol says outright what a pty chain has to read
+   *  off the screen.
+   *
    *  `exit` drops both, plus the transcript entry. The rest of an exit is the pty's (`onSessionExit`,
-   *  assigned just above). */
+   *  assigned just above) — including both coordinators' own `handleExit`, which is why disposing the
+   *  chain is not on this list. */
   core.chat.subscribe((sessionId, event) => {
     send('chat:event', { sessionId, event })
     // Slack hears every event of a registered chat session (slice 4 design §7.1); unregistered ones
@@ -1352,6 +1366,11 @@ export function registerIpc(
           /* A failed rollout-watcher registration does not take the chat session down */
           chatWiringLog(`chat ${sessionId}: rollout registration failed: ${String(err)}`)
         }
+        // The rolling chain learns the same pair from the same event, and this is the only moment it is
+        // offered: the coordinator's own locate poll is a filesystem search, and for a session that
+        // resumed a thread the file it would find is older than the search window. A session with no
+        // chain returns at attachChat's first line.
+        codexRolling?.attachChat(sessionId, event.threadId, event.rolloutPath)
       }
       if (provider === 'claude') {
         // A second `ready` means the thread id changed under the session — a `/clear` starts a new
@@ -1360,6 +1379,12 @@ export function registerIpc(
         // retry, since the `status` branch below looks again only while the map has nothing for this
         // session, and the pane's follow re-seats itself onto the new file through `sourceFor`.
         chatTranscripts.delete(sessionId)
+        // The chain is told the thread id now and the transcript path when the lookup below lands —
+        // `applyMeta` applies whichever half it is given and ignores the other, so the two calls
+        // complete the pair between them. The path is null here rather than read from the map because
+        // the line above just dropped it: at `ready` the file this conversation will be written to
+        // does not exist yet. On a `/clear` this same call re-points the chain at the new thread.
+        rolling?.onChatMeta(sessionId, { claudeSessionId: event.threadId, transcriptPath: null })
         findClaudeChatTranscript(sessionId, info.accountId, event.threadId)
       }
     } else if (event.type === 'status') {
@@ -1371,6 +1396,13 @@ export function registerIpc(
         const info = core.chat.info(sessionId)
         if (info?.threadId) findClaudeChatTranscript(sessionId, info.accountId, info.threadId)
       }
+    } else if (event.type === 'rateLimit') {
+      // What the limit phrase on a screen is to a pty chain. Only the claude coordinator is told, and
+      // not because of a provider check: the claude adapter is the only one that produces this event
+      // at all — codex opts out of `account/rateLimits/updated` at initialize (OPT_OUT_NOTIFICATIONS)
+      // and `effectsOf` emits none — so asking which provider it is could not change the outcome. A
+      // session with no chain returns at onChatLimit's first line.
+      rolling?.onChatLimit(sessionId, event.info)
     } else if (event.type === 'exit') {
       attention.forget(sessionId)
       codexRollout?.unregister(sessionId)
@@ -1480,51 +1512,13 @@ export function registerIpc(
     // own key is the thread id — claude's arrives only after the resumed session's first turn, same as
     // a fresh one's. Persisting under it here is what lets a schedule on a resumed chat be prefilled
     // the next time it is resumed, the same way sessions.resumeDefaults already does for a pty.
-    const resumeKey = opts.resumeSessionId ?? opts.resumeThreadId
-    if (resumeKey && opts.schedule) {
-      void core.schedulerConfig.set(resumeKey, opts.schedule).catch(() => {})
+    // The same value answers "is this a resume at all, of either kind", which is what the transcript
+    // copy below asks — hence the name rather than `resumeKey`.
+    const resumeId = opts.resumeSessionId ?? opts.resumeThreadId
+    if (resumeId && opts.schedule) {
+      void core.schedulerConfig.set(resumeId, opts.schedule).catch(() => {})
     }
     const account = core.accounts.get(opts.accountId)
-    // A chat session is a line process, not a pty, and most of what follows this line does not apply to
-    // one: there is no roll chain to resolve providers for, no transcript to copy (its thread is resumed
-    // by id, not by replaying a file into a new process), no statusLine, and no orchestration env — an
-    // orchestrated worker is driven by writing to a terminal, which this session does not have. So it
-    // forks here, before any of that, and hands back the SessionInfo its own manager built. The
-    // schedule used to belong on that list too — no shell to send a scheduled command to — but that
-    // stopped being true once delivery started going through the session driver (Task 2), so the chat
-    // branch below registers its own schedule instead of falling through to the pty branch's block.
-    // Rolling still forks here, unregistered, until slice 4c wires it in.
-    // `core.chat.spawn` picks the process and adapter by the account's provider (Task 4) — a failure
-    // building either one is left to propagate, and the renderer shows it in the same toast it shows
-    // for any failed spawn.
-    if (opts.kind === 'chat') {
-      const chatInfo = core.chat.spawn({
-        account,
-        cwd: opts.cwd,
-        resumeThreadId: opts.resumeThreadId,
-        bypassPermissions: opts.bypassPermissions === true,
-        schedule: opts.schedule,
-        slackNotify: opts.slackNotify === true
-        // rollAccountIds / rollPrompt join here in slice 4c
-      })
-      // The schedule is the one feature this slice attaches to a chat session (chat-sessions slice 4
-      // design §5.2 / §6). Same call, same provider argument as the pty branch below.
-      if (chatInfo.schedule) {
-        try {
-          scheduler?.register(chatInfo, providerOf(account))
-        } catch {
-          /* A failed schedule registration does not block session creation */
-        }
-      }
-      if (slack && chatInfo.slackNotify === true) {
-        try {
-          slack.notifier.register(chatInfo)
-        } catch {
-          /* A failed Slack registration does not block session creation */
-        }
-      }
-      return chatInfo
-    }
     // Resolves and passes the provider of every account in the roll chain — the manager rejects a mix.
     // The rollAccountIds combination the modal settled on is checked here as well.
     //
@@ -1549,6 +1543,12 @@ export function registerIpc(
     // worst case the session is not found and a new one starts, with no data loss. Cross-provider
     // combinations are blocked by ResumeDialog (resumeAccountOptions), so only same-provider ones
     // reach here.
+    //
+    // **This runs for a chat session too, which is why it sits above the fork.** The CLI reads the
+    // conversation out of the account folder it is launched under whichever way it is driven — claude
+    // from `--resume=<id>` argv, codex from the thread id it is asked to resume — so a chat session
+    // reopened under another account needs the same copy a pty one does (spec §8.4), and the chain it
+    // may register just below wants the same `resumeTranscriptDest` handed over.
     // Where the resumed session's transcript ends up. Kept beyond the copy because codexRolling needs
     // it: `codex resume` appends to this file instead of creating a new rollout, so the coordinator's
     // creation-time search can never find it and the path has to be handed over (see attachRollout).
@@ -1570,6 +1570,14 @@ export function registerIpc(
     // **설정이 꺼져 있으면 브리핑을 아예 만들지 않는다.** `buildTabResumeText` 의 'handover' 는
     // 파일을 쓰는 부수 효과가 있다 — 쓰지도 않을 브리핑 파일을 재개할 때마다 남길 이유가 없다
     // (codexRolling.ts 의 `tabFallback = strategy === 'smart'` 와 같은 판단).
+    //
+    // **A chat resume is deliberately not offered this.** The condition stays on `opts.resumeSessionId`,
+    // which only a pty resume sets — a chat resume carries `opts.resumeThreadId` instead. It is out of
+    // this slice, not impossible: the cancellation the pty path relies on is dropping `resumeSessionId`
+    // from what `core.sessions.spawn` turns into argv, and a chat session has no one equivalent to drop
+    // (claude's resume is argv, codex's is a protocol call the adapter makes on its own), so a
+    // blank-slate chat resume is its own piece of work. The copy below is not gated this way — that
+    // half is shared.
     let blankSlatePrompt: string | undefined
     if (opts.resumeSessionId) {
       const strategy = core.appSettings.getResumeStrategy()
@@ -1603,9 +1611,12 @@ export function registerIpc(
         )
       }
     }
+    // `resumeId` rather than `opts.resumeSessionId`: this half runs for both kinds, and a chat resume
+    // names the conversation with `opts.resumeThreadId`. `blankSlatePrompt` can only be set on the pty
+    // path, so for a chat resume the first condition is always true.
     if (
       !blankSlatePrompt &&
-      opts.resumeSessionId &&
+      resumeId &&
       typeof opts.resumeTranscriptPath === 'string' &&
       opts.resumeTranscriptPath
     ) {
@@ -1622,6 +1633,65 @@ export function registerIpc(
       } catch {
         /* A failed copy is ignored */
       }
+    }
+    // A chat session is a line process, not a pty, and what follows this line does not apply to one:
+    // no statusLine, and no orchestration env — an orchestrated worker is driven by writing to a
+    // terminal, which this session does not have. So it forks here and hands back the SessionInfo its
+    // own manager built. Two things used to be on that list and no longer are: the schedule (no shell
+    // to send a scheduled command to), which stopped being true once delivery started going through
+    // the session driver (Task 2), and rolling, which slice 4c wires in below — that is also why the
+    // transcript copy above is no longer past this fork, since a chat chain rolled onto another
+    // account needs the same file handed over that a pty chain does.
+    // `core.chat.spawn` picks the process and adapter by the account's provider (Task 4) — a failure
+    // building either one is left to propagate, and the renderer shows it in the same toast it shows
+    // for any failed spawn.
+    if (opts.kind === 'chat') {
+      // The provider mix is rejected before anything is spawned, exactly as it is for a pty — there
+      // the verdict is `core.sessions.spawn`'s, which is handed `rollProviders` above, and a chat
+      // spawn does not go through that manager. Same rule, same error: the two coordinators are
+      // separate implementations and a chain cannot be half of each.
+      if (rollProviders && rollProviders.length > 0 && rollProviders.some((p: Provider) => p !== rollProviders[0]))
+        throw new Error('ROLL_MIXED_PROVIDER: cannot roll a mix of Claude and Codex accounts')
+      const chatInfo = core.chat.spawn({
+        account,
+        cwd: opts.cwd,
+        resumeThreadId: opts.resumeThreadId,
+        bypassPermissions: opts.bypassPermissions === true,
+        schedule: opts.schedule,
+        slackNotify: opts.slackNotify === true,
+        rollAccountIds: opts.rollAccountIds,
+        rollPrompt: opts.rollPrompt
+      })
+      // The schedule is the one feature this slice attaches to a chat session (chat-sessions slice 4
+      // design §5.2 / §6). Same call, same provider argument as the pty branch below.
+      if (chatInfo.schedule) {
+        try {
+          scheduler?.register(chatInfo, providerOf(account))
+        } catch {
+          /* A failed schedule registration does not block session creation */
+        }
+      }
+      if (slack && chatInfo.slackNotify === true) {
+        try {
+          slack.notifier.register(chatInfo)
+        } catch {
+          /* A failed Slack registration does not block session creation */
+        }
+      }
+      // The same registration the pty path does below, with the same two arguments — a chat chain
+      // rolls through the same coordinators (slice 4c), which route the respawn back to the chat
+      // manager by the chain's kind (index.ts). The copy above is what `resumeTranscriptDest` names,
+      // and codex needs it for the reason its own comment below gives: a resumed rollout is appended
+      // to rather than created, so the coordinator can never find it by searching.
+      if ((opts.rollAccountIds?.length ?? 0) >= 1) {
+        try {
+          if (providerOf(account) === 'codex') codexRolling?.register(chatInfo, resumeTranscriptDest, resumeSameAccount)
+          else rolling?.register(chatInfo, resumeTranscriptDest)
+        } catch {
+          /* A failed rolling registration does not block session creation */
+        }
+      }
+      return chatInfo
     }
     // orchEnv is decided in this one place — the user path (sessions.spawn) and the coordinator path
     // (OrchCoordinator.spawnSession) both go through this function, so passing it per call site would
@@ -6256,6 +6326,29 @@ export function registerIpc(
               } catch (err) {
                 /* A failed rollout-watcher registration does not block taking the session back */
                 hostLog(`host: chat ${info.id} rollout registration failed: ${String(err)}`)
+              }
+            }
+            // The roll chain, re-registered from the note as the pty adopter does — the chain the note
+            // records is the whole of what rolling knows about this session, and without this the
+            // session comes back with its accounts listed and no coordinator watching it. The codex
+            // arguments are the pty adopter's own, for the reasons its long comment gives: `false` for
+            // sameAccount (a reopened conversation's limit records may only be believed for the account
+            // that wrote them) and `false` for locate (an adopted session's file predates the search
+            // window, so the scan would either miss it or claim another session's), with the note's
+            // path and thread id handed over instead. Unlike the rollout registration above, this runs
+            // for a thread-bearing note as well: the synchronous `ready` it produces reaches the
+            // subscriber's `attachChat`/`onChatMeta` before this line has registered anything, so those
+            // calls find no chain and return. codex is handed the pair here instead; claude's arrives
+            // just after, from the transcript lookup that same `ready` started — it resolves on a later
+            // microtask, so it cannot run before this line.
+            if ((info.rollAccountIds?.length ?? 0) >= 1) {
+              try {
+                const coordinator = rollCoordinatorForSession(info.id, core.chat.list(), (id) => core.accounts.get(id))
+                if (coordinator === 'codexRolling') codexRolling?.register(info, rolloutPath, false, false, threadId)
+                else if (coordinator === 'rolling') rolling?.register(info)
+              } catch (err) {
+                /* A failed rolling registration does not block taking the session back */
+                hostLog(`host: chat ${info.id} rolling registration failed: ${String(err)}`)
               }
             }
             // The schedule, re-armed as the pty adopter does (scheduleForAdoptedSession): the store is

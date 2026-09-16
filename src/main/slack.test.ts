@@ -2040,4 +2040,44 @@ describe('SlackNotifier chat events', () => {
     await flush()
     expect(h.sent).toEqual([])
   })
+
+  it('a rolled chat record carries the previous excerpt, so a file that has not caught up is re-read', async () => {
+    // The roll hands the new account's process the same conversation, so the file still ends with the
+    // turn that was posted before the switch. Without the carried excerpt that stale text reads as the
+    // new session's own answer — and since the dedup history is carried, the identical line is then
+    // dropped and the first turn after a roll is announced not at all.
+    const reads: string[] = [assistantLine('OLD'), assistantLine('OLD')]
+    let waits = 0
+    const h = setup({ wait: async () => { waits += 1 }, readFileTail: async () => reads.shift() ?? assistantLine('NEW') })
+    h.notifier.register(chatInfo())
+    const at = claudeAt('D:/t.jsonl')
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush()
+    h.notifier.onRolled('s-1', chatInfo({ id: 's-2' }))
+    h.notifier.onChatEvent('s-2', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-2', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush(); await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ✅ 응답 완료\n> OLD', '[myproj · work1] ✅ 응답 완료\n> NEW'])
+    expect(waits).toBe(1)
+  })
+
+  it('a rolled chat record posts the new session’s first summary at once when the text is genuinely new', async () => {
+    // The carried excerpt is a memory of the previous turn, not a gate: a file that already holds this
+    // turn's answer is accepted on the first read, exactly as it is without a roll.
+    const reads: string[] = [assistantLine('FIRST')]
+    let waits = 0
+    const h = setup({ wait: async () => { waits += 1 }, readFileTail: async () => reads.shift() ?? assistantLine('SECOND') })
+    h.notifier.register(chatInfo())
+    const at = claudeAt('D:/t.jsonl')
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush()
+    h.notifier.onRolled('s-1', chatInfo({ id: 's-2' }))
+    h.notifier.onChatEvent('s-2', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-2', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush(); await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ✅ 응답 완료\n> FIRST', '[myproj · work1] ✅ 응답 완료\n> SECOND'])
+    expect(waits).toBe(0)
+  })
 })
