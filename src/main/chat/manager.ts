@@ -62,6 +62,7 @@ export class ChatSessionManager {
     slackNotify?: boolean
     rollAccountIds?: string[]
     rollPrompt?: string
+    initialPrompt?: string
   }): SessionInfo {
     const provider = providerOf(opts.account)
     const descriptor = descriptorOf(this.deps.descriptors, opts.account)
@@ -72,6 +73,7 @@ export class ChatSessionManager {
     const bypass = !!bypassPermissions
     const resumeThreadId = opts.resumeThreadId
     const { schedule, slackNotify, rollAccountIds, rollPrompt } = opts
+    const initialPrompt = opts.initialPrompt
 
     const env = cliEnvFor({ base: process.env, account: opts.account, descriptor, homeDir: this.deps.homeDir })
     // Codex resumes over the app-server protocol (thread/resume, sent by the adapter once the process is
@@ -119,9 +121,21 @@ export class ChatSessionManager {
 
     const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)
     this.track(id, info, proc, adapter)
-    void adapter.start({ cwd: opts.cwd, resumeThreadId, bypass }).catch((err: unknown) => {
-      this.deps.log(`chat adapter start failed: ${err instanceof Error ? err.message : String(err)}`)
-    })
+    void adapter
+      .start({ cwd: opts.cwd, resumeThreadId, bypass })
+      .then(() => {
+        // A rolling respawn's carry-on prompt (spec §8.2): the first turn, sent only once the handshake
+        // has settled — Claude's `initialize`, Codex's `thread/start` or `thread/resume` — because
+        // Codex refuses a turn before its thread exists and Claude would otherwise take the frame ahead
+        // of the initialize it is still answering. Never on the note: a restart must not re-send it.
+        if (initialPrompt === undefined) return
+        return adapter.send(initialPrompt).catch((err: unknown) => {
+          this.deps.log(`chat initial prompt failed session=${id}: ${err instanceof Error ? err.message : String(err)}`)
+        })
+      })
+      .catch((err: unknown) => {
+        this.deps.log(`chat adapter start failed: ${err instanceof Error ? err.message : String(err)}`)
+      })
     return { ...info }
   }
 
@@ -212,12 +226,6 @@ export class ChatSessionManager {
     live.info.title = title
     live.proc.remember?.({ title })
     return title
-  }
-
-  /** Merges a patch into the note the process's Host entry keeps — fire-and-forget, same convention
-   *  as SessionManager.remember. Unknown id: ignored. */
-  remember(id: string, patch: Record<string, unknown>): void {
-    this.sessions.get(id)?.proc.remember?.(patch)
   }
 
   /** The running chat sessions this app has to end when it quits (mirrors SessionManager.runningAppOwned). */

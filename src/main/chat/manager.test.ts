@@ -45,13 +45,15 @@ interface FakeAdapterHandle {
   provider: Provider
   startCalls: Array<{ cwd: string; resumeThreadId?: string; bypass: boolean }>
   killCalls: number
+  sent: string[]
   emit(e: ChatEvent): void
 }
 
 /** A fake adapter factory: one FakeAdapterHandle per session, in spawn/adopt call order.
  *  `startRejects` makes every adapter's start() reject, which is what a refused handshake looks like
- *  to the manager. */
-function makeAdapterFactory(startRejects = false): {
+ *  to the manager. `sendRejects` makes every adapter's send() reject, which is what Codex's
+ *  "no active thread" refusal looks like before its handshake has settled. */
+function makeAdapterFactory(startRejects = false, sendRejects = false): {
   createAdapter: NonNullable<ChatManagerDeps['createAdapter']>
   handles: FakeAdapterHandle[]
 } {
@@ -63,6 +65,7 @@ function makeAdapterFactory(startRejects = false): {
       provider: a.provider,
       startCalls: [],
       killCalls: 0,
+      sent: [],
       emit: (e) => {
         for (const fn of listeners) fn(e)
       }
@@ -73,7 +76,10 @@ function makeAdapterFactory(startRejects = false): {
         handle.startCalls.push(o)
         return startRejects ? Promise.reject(new Error('too old')) : Promise.resolve()
       },
-      send: () => Promise.resolve(),
+      send: (text) => {
+        handle.sent.push(text)
+        return sendRejects ? Promise.reject(new Error('no active thread')) : Promise.resolve()
+      },
       interrupt: () => Promise.resolve(),
       answer: () => Promise.resolve(),
       setModel: () => Promise.resolve(),
@@ -125,14 +131,14 @@ const claudeAccount: Account = {
   createdAt: '2026-07-29T00:00:00Z'
 }
 
-function setup(platform: NodeJS.Platform = 'win32', startRejects = false) {
+function setup(platform: NodeJS.Platform = 'win32', startRejects = false, sendRejects = false) {
   const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
   const factory: ProcFactory = (file, args, opts) => {
     const proc = new FakeProc()
     spawned.push({ file, args, opts, proc })
     return proc
   }
-  const { createAdapter, handles } = makeAdapterFactory(startRejects)
+  const { createAdapter, handles } = makeAdapterFactory(startRejects, sendRejects)
   const descriptors = makeDescriptors(platform)
   const logged: string[] = []
   const manager = new ChatSessionManager({
@@ -145,6 +151,15 @@ function setup(platform: NodeJS.Platform = 'win32', startRejects = false) {
     createAdapter
   })
   return { spawned, manager, handles, logged }
+}
+
+/** Waits out the microtask chain behind a `void adapter.start(...).then(...).catch(...)` fire-and-forget
+ *  call, without a fake timer — there is no macrotask in that chain to advance, only promises to settle. */
+async function flushPromises(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
 }
 
 describe('ChatSessionManager.spawn', () => {
@@ -267,6 +282,33 @@ describe('ChatSessionManager.spawn', () => {
     expect(info).not.toHaveProperty('slackNotify')
     expect(info).not.toHaveProperty('rollAccountIds')
     expect(spawned[0].opts.meta!.restore).not.toHaveProperty('slackNotify')
+  })
+})
+
+describe('ChatSessionManager.spawn — initialPrompt', () => {
+  it('initialPrompt is sent as the first turn after start() resolves, once', async () => {
+    const { manager, handles } = setup()
+    manager.spawn({ account: codexAccount, cwd: 'D:/p', initialPrompt: 'carry on' })
+    await flushPromises()
+    expect(handles[0].sent).toEqual(['carry on'])
+  })
+
+  it('a rejected initial prompt is logged, not thrown, and nothing else changes', async () => {
+    const { manager, handles, logged } = setup('win32', false, true)
+    expect(() => {
+      manager.spawn({ account: codexAccount, cwd: 'D:/p', initialPrompt: 'carry on' })
+    }).not.toThrow()
+    await flushPromises()
+    expect(handles[0].sent).toEqual(['carry on'])
+    expect(logged.some((m) => m.includes('chat initial prompt failed') && m.includes('no active thread'))).toBe(true)
+  })
+
+  it('no initialPrompt means nothing is sent, and the note carries no prompt', async () => {
+    const { manager, handles, spawned } = setup()
+    manager.spawn({ account: codexAccount, cwd: 'D:/p' })
+    await flushPromises()
+    expect(handles[0].sent).toEqual([])
+    expect(spawned[0].opts.meta!.restore).not.toHaveProperty('initialPrompt')
   })
 })
 
@@ -466,7 +508,7 @@ describe('runningAppOwned / runningOutlivingApp', () => {
   })
 })
 
-describe('rename / remember / state / has / kill', () => {
+describe('rename / state / has / kill', () => {
   it('rename writes the note and returns the title', () => {
     const { manager, spawned } = setup()
     const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
@@ -478,13 +520,6 @@ describe('rename / remember / state / has / kill', () => {
   it('rename on an unknown id returns null', () => {
     const { manager } = setup()
     expect(manager.rename('nope', 'x')).toBeNull()
-  })
-
-  it('remember passes a patch to the proc', () => {
-    const { manager, spawned } = setup()
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
-    manager.remember(info.id, { rolloutPath: 'D:/r.jsonl' })
-    expect(spawned[0].proc.notes).toEqual([{ rolloutPath: 'D:/r.jsonl' }])
   })
 
   it('state(id) reports outlivesApp from the proc, live', () => {
