@@ -1337,6 +1337,9 @@ export function registerIpc(
       if (provider === 'claude') findClaudeChatTranscript(sessionId, info.accountId, event.threadId)
     } else if (event.type === 'status') {
       attention.set(sessionId, event.status)
+      // The scheduler's busy signal for a chat session (slice 4 design §5.5): a pty's comes from the
+      // OSC scanner, a chat session's from the protocol itself. `waiting` (a card is open) is busy too.
+      scheduler?.handleBusy(sessionId, event.status !== 'idle')
       if (!chatTranscripts.has(sessionId) && core.chat.state(sessionId)?.provider === 'claude') {
         const info = core.chat.info(sessionId)
         if (info?.threadId) findClaudeChatTranscript(sessionId, info.accountId, info.threadId)
@@ -1429,15 +1432,25 @@ export function registerIpc(
     // register() cannot obtain a sessionKey through learning (learnKey) (both on scheduler.ts's SchedulerCoordinator). Without
     // writing resumeSessionId (the rollout session id) as the key here, a codex schedule would exist
     // only for the session's lifetime and could never be prefilled on the next resume.
-    if (opts.resumeSessionId && opts.schedule) {
-      void core.schedulerConfig.set(opts.resumeSessionId, opts.schedule).catch(() => {})
+    // A chat resume falls back to resumeThreadId: opts.resumeSessionId is never set for one (a chat
+    // resume carries the protocol thread id instead, in opts.resumeThreadId), and the chat manager's
+    // own key is the thread id — claude's arrives only after the resumed session's first turn, same as
+    // a fresh one's. Persisting under it here is what lets a schedule on a resumed chat be prefilled
+    // the next time it is resumed, the same way sessions.resumeDefaults already does for a pty.
+    const resumeKey = opts.resumeSessionId ?? opts.resumeThreadId
+    if (resumeKey && opts.schedule) {
+      void core.schedulerConfig.set(resumeKey, opts.schedule).catch(() => {})
     }
     const account = core.accounts.get(opts.accountId)
-    // A chat session is a line process, not a pty, and nothing below this line applies to one: there is
-    // no roll chain to resolve providers for, no transcript to copy (its thread is resumed by id, not by
-    // replaying a file into a new process), no statusLine, and no orchestration env — an orchestrated
-    // worker is driven by writing to a terminal, which this session does not have. So it forks here,
-    // before any of that, and hands back the SessionInfo its own manager built.
+    // A chat session is a line process, not a pty, and most of what follows this line does not apply to
+    // one: there is no roll chain to resolve providers for, no transcript to copy (its thread is resumed
+    // by id, not by replaying a file into a new process), no statusLine, and no orchestration env — an
+    // orchestrated worker is driven by writing to a terminal, which this session does not have. So it
+    // forks here, before any of that, and hands back the SessionInfo its own manager built. The
+    // schedule used to belong on that list too — no shell to send a scheduled command to — but that
+    // stopped being true once delivery started going through the session driver (Task 2), so the chat
+    // branch below registers its own schedule instead of falling through to the pty branch's block.
+    // Slack and rolling still fork here, unregistered, until slices 4b and 4c wire them in.
     // `core.chat.spawn` picks the process and adapter by the account's provider (Task 4) — a failure
     // building either one is left to propagate, and the renderer shows it in the same toast it shows
     // for any failed spawn.
@@ -1454,12 +1467,24 @@ export function registerIpc(
         const liveTerminal = codexRolling?.findLiveByCodexSession(opts.resumeThreadId)
         if (liveTerminal) return liveTerminal
       }
-      return core.chat.spawn({
+      const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
         resumeThreadId: opts.resumeThreadId,
-        bypassPermissions: opts.bypassPermissions === true
+        bypassPermissions: opts.bypassPermissions === true,
+        schedule: opts.schedule
+        // slackNotify / rollAccountIds / rollPrompt join here in slices 4b and 4c
       })
+      // The schedule is the one feature this slice attaches to a chat session (chat-sessions slice 4
+      // design §5.2 / §6). Same call, same provider argument as the pty branch below.
+      if (chatInfo.schedule) {
+        try {
+          scheduler?.register(chatInfo, providerOf(account))
+        } catch {
+          /* A failed schedule registration does not block session creation */
+        }
+      }
+      return chatInfo
     }
     // Resolves and passes the provider of every account in the roll chain — the manager rejects a mix.
     // The rollAccountIds combination the modal settled on is checked here as well.
@@ -6186,6 +6211,21 @@ export function registerIpc(
               } catch (err) {
                 /* A failed rollout-watcher registration does not block taking the session back */
                 hostLog(`host: chat ${info.id} rollout registration failed: ${String(err)}`)
+              }
+            }
+            // The schedule, re-armed as the pty adopter does (scheduleForAdoptedSession): the store is
+            // the truth, and the key is the thread id the note carries. A note without one is a chat
+            // session that never had a turn — nothing to re-arm; its schedule, if any, was never
+            // persisted either.
+            if (info.threadId) {
+              const schedule = scheduleForAdoptedSession(info, info.threadId, (key) => core.schedulerConfig.get(key))
+              if (schedule) {
+                try {
+                  scheduler?.register({ ...info, schedule }, providerOf(core.accounts.get(info.accountId)))
+                  hostLog(`host: re-armed the schedule of chat session ${info.id}`)
+                } catch (err) {
+                  hostLog(`host: could not re-arm the schedule of chat session ${info.id}: ${String(err)}`)
+                }
               }
             }
             try {
