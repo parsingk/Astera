@@ -4,21 +4,31 @@ import { SchedulerCoordinator, type SchedulerDeps } from './scheduler'
 
 function harness(overrides: Partial<SchedulerDeps> = {}): {
   coord: SchedulerCoordinator
-  written: { id: string; data: string }[]
+  delivered: { id: string; text: string }[]
+  rejectNext: { count: number } // how many upcoming deliver calls reject
   sent: { channel: string; payload: Record<string, unknown> }[]
   persisted: { key: string; config: unknown }[]
   deleted: string[]
   payloads: Map<string, unknown>
   statusCalls: string[] // readStatusPayload 호출 인자 기록 — codex 게이팅 검증용
+  threadIds: Map<string, string>
 } {
-  const written: { id: string; data: string }[] = []
+  const delivered: { id: string; text: string }[] = []
+  const rejectNext = { count: 0 }
   const sent: { channel: string; payload: Record<string, unknown> }[] = []
   const persisted: { key: string; config: unknown }[] = []
   const deleted: string[] = []
   const payloads = new Map<string, unknown>()
   const statusCalls: string[] = []
+  const threadIds = new Map<string, string>()
   const coord = new SchedulerCoordinator({
-    write: (id, data) => written.push({ id, data }),
+    deliver: async (id, text) => {
+      if (rejectNext.count > 0) {
+        rejectNext.count -= 1
+        throw new Error('refused')
+      }
+      delivered.push({ id, text })
+    },
     readStatusPayload: (id) => {
       statusCalls.push(id)
       return Promise.resolve(payloads.get(id) ?? null)
@@ -27,9 +37,10 @@ function harness(overrides: Partial<SchedulerDeps> = {}): {
     log: () => {},
     persistConfig: (key, config) => persisted.push({ key, config }),
     deleteConfig: (key) => deleted.push(key),
+    chatThreadId: (id) => threadIds.get(id) ?? null,
     ...overrides
   } satisfies SchedulerDeps)
-  return { coord, written, sent, persisted, deleted, payloads, statusCalls }
+  return { coord, delivered, rejectNext, sent, persisted, deleted, payloads, statusCalls, threadIds }
 }
 
 const info = (id: string, schedule?: ScheduleConfig): SessionInfo => ({
@@ -46,6 +57,10 @@ const everyMin = (command = 'c'): ScheduleConfig => ({
   command
 })
 
+const chatInfo = (id: string, schedule?: ScheduleConfig, threadId?: string): SessionInfo => ({
+  ...info(id, schedule), kind: 'chat', ...(threadId ? { threadId, resumeSessionId: threadId } : {})
+})
+
 beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date(2026, 6, 31, 10, 0, 0)) // 2026-07-31(금) 10:00 로컬
@@ -55,34 +70,34 @@ afterEach(() => {
 })
 
 describe('SchedulerCoordinator', () => {
-  it('간격 규칙: N분 경과 후 tick에서 명령 → 150ms 뒤 Enter를 전송한다', async () => {
+  it('interval rule: after N minutes the tick delivers the command once', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin('상태 점검')))
-    await vi.advanceTimersByTimeAsync(60_000 + 15_000) // 1분 경과 + 다음 tick + Enter 지연
-    expect(h.written.map((w) => w.data)).toEqual(['상태 점검', '\r'])
-    expect(h.written.every((w) => w.id === 's1')).toBe(true)
+    await vi.advanceTimersByTimeAsync(60_000 + 15_000) // 1분 경과 + 다음 tick
+    expect(h.delivered.map((d) => d.text)).toEqual(['상태 점검'])
+    expect(h.delivered.every((d) => d.id === 's1')).toBe(true)
   })
 
-  it('schedule 없는 세션은 등록되지 않는다', async () => {
+  it('a session without a schedule is not registered', async () => {
     const h = harness()
     h.coord.register(info('s1'))
     await vi.advanceTimersByTimeAsync(10 * 60_000)
-    expect(h.written).toEqual([])
+    expect(h.delivered).toEqual([])
     expect(h.sent).toEqual([])
   })
 
-  it('busy면 대기하고 유휴 전환 시 1회만 전송한다 (겹친 회차 합침)', async () => {
+  it('busy holds the round; idle sends once (overlapping rounds merge)', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin()))
     h.coord.handleBusy('s1', true)
     await vi.advanceTimersByTimeAsync(3 * 60_000 + 15_000) // 3회차 경과 — pending 1개로 합쳐짐
-    expect(h.written).toEqual([])
+    expect(h.delivered).toEqual([])
     h.coord.handleBusy('s1', false)
     await vi.advanceTimersByTimeAsync(200)
-    expect(h.written.map((w) => w.data)).toEqual(['c', '\r'])
+    expect(h.delivered.map((d) => d.text)).toEqual(['c'])
   })
 
-  it('busy 아니어도 clock jump로 여러 회차를 건너뛰면 재계산 후 1회만 발화한다 (놓친 회차 무시)', async () => {
+  it('even without busy, a clock jump across several rounds recomputes and fires once (a missed round is ignored)', async () => {
     // deps.now를 직접 제어해 "시스템 sleep 후 재개"처럼 10회차 분(10분)을 한 번에 건너뛴다.
     // tick 폴링(15초)은 정상 진행하되, 그 한 번의 tick이 관측하는 now()만 크게 앞서 있는 상황 —
     // busy 병합(pending boolean)과 별개로, nextAt 재계산 자체가 밀린 횟수를 쌓지 않고 현재 시각
@@ -91,8 +106,8 @@ describe('SchedulerCoordinator', () => {
     const h = harness({ now: () => t })
     h.coord.register(info('s1', everyMin()))
     t += 10 * 60_000 // 10분 점프 — 명목상 10회차가 지났지만 busy는 아니었다
-    await vi.advanceTimersByTimeAsync(15_000 + 200) // 다음 폴링 tick 1회 + Enter 지연
-    expect(h.written.map((w) => w.data)).toEqual(['c', '\r'])
+    await vi.advanceTimersByTimeAsync(15_000 + 200) // 다음 폴링 tick 1회
+    expect(h.delivered.map((d) => d.text)).toEqual(['c'])
   })
 
   it('등록 시 schedState active 이벤트에 nextAt(ISO)을 실어 보낸다', () => {
@@ -103,17 +118,17 @@ describe('SchedulerCoordinator', () => {
     expect(ev?.payload.nextAt).toBe(new Date(2026, 6, 31, 18, 0).toISOString())
   })
 
-  it('rekey: 롤링 전환 후 새 id로 전송하고, 옛 id에는 off를 보낸다', async () => {
+  it('rekey: delivers to the new id after a rolling switch, and sends off for the old id', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin()))
     h.coord.rekey('s1', 's2')
     const off = h.sent.find((s) => s.payload.sessionId === 's1' && s.payload.state === 'off')
     expect(off).toBeTruthy()
     await vi.advanceTimersByTimeAsync(60_000 + 15_000)
-    expect(h.written.map((w) => w.id)).toEqual(['s2', 's2'])
+    expect(h.delivered.map((d) => d.id)).toEqual(['s2'])
   })
 
-  it('rekey 시 밀린 회차(pending)를 버린다 — 롤링 재개 구간과의 입력 충돌 회피', async () => {
+  it('rekey drops a backed-up pending round — avoids an input collision with the rolling resume window', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin()))
     h.coord.handleBusy('s1', true) // busy 중 발화 시각 도달 — pending=true로 대기
@@ -121,31 +136,31 @@ describe('SchedulerCoordinator', () => {
     h.coord.rekey('s1', 's2') // 롤 발생 — pending은 폐기되어야 한다
     h.coord.handleBusy('s2', false) // 새 PTY 유휴 전환 — 폐기 안 됐다면 즉시 발화했을 시점
     await vi.advanceTimersByTimeAsync(200)
-    expect(h.written).toEqual([])
+    expect(h.delivered).toEqual([])
   })
 
-  it('롤링 재개 구간(switching) 중에는 유휴여도 전송하지 않고, none 수신 직후엔 미전송·다음 tick에서 1회 전송한다', async () => {
+  it('during the rolling resume window (switching) idle still does not send, and right after none it still does not send — the next tick sends once', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin()))
     h.coord.handleRollState({ sessionId: 's1', state: 'switching' })
     await vi.advanceTimersByTimeAsync(60_000 + 15_000) // 발화 시각 도달 — pending은 서지만 억제로 미전송
-    expect(h.written).toEqual([])
+    expect(h.delivered).toEqual([])
     h.coord.handleRollState({ sessionId: 's1', state: 'none' }) // 억제 해제 — 즉시 발화하지 않는다
-    expect(h.written).toEqual([]) // none 수신 직후에는 아직 미전송 (같은 입력 줄 충돌 회피)
-    await vi.advanceTimersByTimeAsync(15_000 + 200) // 다음 tick(≤15초) + Enter 지연
-    expect(h.written.map((w) => w.data)).toEqual(['c', '\r'])
+    expect(h.delivered).toEqual([]) // none 수신 직후에는 아직 미전송 (같은 입력 줄 충돌 회피)
+    await vi.advanceTimersByTimeAsync(15_000 + 200) // 다음 tick(≤15초)
+    expect(h.delivered.map((d) => d.text)).toEqual(['c'])
   })
 
-  it('rekey는 suppressed를 유지한다 — 재게시 이벤트 도착 전 찰나에 억제가 풀리지 않는다', async () => {
+  it('rekey keeps suppressed — the re-published event leaves no window in which suppression is off', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin()))
     h.coord.handleRollState({ sessionId: 's1', state: 'switching' })
     h.coord.rekey('s1', 's2')
     await vi.advanceTimersByTimeAsync(60_000 + 15_000) // tick이 발화 시각 도달을 보고 pending을 세움
-    expect(h.written).toEqual([]) // suppressed가 살아있어 억제 유지 — 미전송
+    expect(h.delivered).toEqual([]) // suppressed가 살아있어 억제 유지 — 미전송
   })
 
-  it('nudged 동안은 억제된다(유휴여도 미전송) — none 수신 후 다음 tick에서 1회 전송한다', async () => {
+  it('nudged suppresses firing (idle still does not send) — the next tick after none sends once', async () => {
     // 당시엔 nudged 뒤에 'none'이 뒤따르지 않아 억제가 영구 latch될 위험 때문에
     // nudged를 억제 대상에서 제외했었다. rolling.ts의 resetAnchorCheck가 이제 Enter 전송 직후
     // 'none'을 게시하도록 고쳐져 그 위험이 없어졌으므로, switching/trust/waiting과
@@ -154,11 +169,11 @@ describe('SchedulerCoordinator', () => {
     h.coord.register(info('s1', everyMin()))
     h.coord.handleRollState({ sessionId: 's1', state: 'nudged' })
     await vi.advanceTimersByTimeAsync(60_000 + 15_000) // 발화 시각 도달 — pending은 서지만 억제로 미전송
-    expect(h.written).toEqual([])
+    expect(h.delivered).toEqual([])
     h.coord.handleRollState({ sessionId: 's1', state: 'none' }) // 억제 해제 — 즉시 발화하지 않는다
-    expect(h.written).toEqual([])
-    await vi.advanceTimersByTimeAsync(15_000 + 200) // 다음 tick(≤15초) + Enter 지연
-    expect(h.written.map((w) => w.data)).toEqual(['c', '\r'])
+    expect(h.delivered).toEqual([])
+    await vi.advanceTimersByTimeAsync(15_000 + 200) // 다음 tick(≤15초)
+    expect(h.delivered.map((d) => d.text)).toEqual(['c'])
   })
 
   // stalled은 switching/trust/waiting/nudged와 달리 억제 목록에 넣지 않는다(default case로 빠진다,
@@ -166,15 +181,15 @@ describe('SchedulerCoordinator', () => {
   // 짝이 되는 'none' 해제가 나올 일이 없어 영구 latch된다(과거에 겪은 부류의 버그) — 그래서 넣지
   // 않았다는 결정을 pin한다. suppressed 여부를 직접 노출하지 않으므로, 다른 테스트처럼 예정된
   // 발화가 억제 없이 정상적으로 나가는지로 간접 관찰한다.
-  it('stalled 수신은 스케쥴 발화를 억제하지 않는다', async () => {
+  it('receiving stalled does not suppress a scheduled fire', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin()))
     h.coord.handleRollState({ sessionId: 's1', state: 'stalled' })
     await vi.advanceTimersByTimeAsync(60_000 + 15_000) // 발화 시각 도달 — 억제라면 여기서 미전송
-    expect(h.written.map((w) => w.data)).toEqual(['c', '\r'])
+    expect(h.delivered.map((d) => d.text)).toEqual(['c'])
   })
 
-  it('억제 중에는 handleBusy(false)가 와도 전송하지 않는다', async () => {
+  it('while suppressed, handleBusy(false) still does not send', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin()))
     h.coord.handleBusy('s1', true)
@@ -182,7 +197,7 @@ describe('SchedulerCoordinator', () => {
     await vi.advanceTimersByTimeAsync(60_000 + 15_000) // 발화 시각 도달 — busy+suppressed 둘 다 대기
     h.coord.handleBusy('s1', false) // 유휴 전환되어도 억제가 남아 있으면 전송하지 않는다
     await vi.advanceTimersByTimeAsync(200)
-    expect(h.written).toEqual([])
+    expect(h.delivered).toEqual([])
   })
 
   it('statusline에서 claude session id를 학습해 1회 영속한다', async () => {
@@ -252,7 +267,7 @@ describe('SchedulerCoordinator', () => {
     expect(h.persisted).toEqual([])
   })
 
-  it('disable: 영속 삭제 + off 이벤트 + 이후 미전송', async () => {
+  it('disable: deletes the persisted config, sends off, and stops further sends', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin()))
     h.payloads.set('s1', { session_id: 'claude-sess', transcript_path: 'D:\\t.jsonl' })
@@ -261,23 +276,87 @@ describe('SchedulerCoordinator', () => {
     expect(h.deleted).toEqual(['claude-sess'])
     expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'off' })
     await vi.advanceTimersByTimeAsync(5 * 60_000)
-    expect(h.written).toEqual([])
+    expect(h.delivered).toEqual([])
   })
 
-  it('handleExit: 엔트리 폐기, 이후 미전송', async () => {
+  it('handleExit: disposes the entry and stops further sends', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin()))
     h.coord.handleExit({ sessionId: 's1' })
     await vi.advanceTimersByTimeAsync(5 * 60_000)
-    expect(h.written).toEqual([])
+    expect(h.delivered).toEqual([])
   })
 
-  it('stop: 모든 엔트리 폐기 (will-quit 정리)', async () => {
+  it('stop: disposes every entry (will-quit cleanup)', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin()))
     h.coord.register(info('s2', everyMin()))
     h.coord.stop()
     await vi.advanceTimersByTimeAsync(5 * 60_000)
-    expect(h.written).toEqual([])
+    expect(h.delivered).toEqual([])
+  })
+})
+
+describe('chat sessions', () => {
+  it('a chat entry fires through deliver once per round — no Enter', async () => {
+    const h = harness()
+    h.coord.register(chatInfo('c1', everyMin('status')), 'codex')
+    await vi.advanceTimersByTimeAsync(60_000 + 15_000)
+    expect(h.delivered).toEqual([{ id: 'c1', text: 'status' }])
+  })
+
+  it('busy from a chat status (working or waiting) holds the round; idle releases it once', async () => {
+    const h = harness()
+    h.coord.register(chatInfo('c1', everyMin()), 'claude')
+    h.coord.handleBusy('c1', true) // ipc: status !== 'idle'
+    await vi.advanceTimersByTimeAsync(2 * 60_000 + 15_000)
+    expect(h.delivered).toEqual([])
+    h.coord.handleBusy('c1', false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.delivered.map((d) => d.text)).toEqual(['c'])
+  })
+
+  it('learns a chat session key from chatThreadId and persists once; asks again while it is null', async () => {
+    const h = harness()
+    h.coord.register(chatInfo('c1', everyMin()), 'claude')
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(h.persisted).toEqual([])
+    expect(h.statusCalls).toEqual([]) // never the statusLine for a chat session, whatever the provider
+    h.threadIds.set('c1', 'th-9')
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(h.persisted).toEqual([{ key: 'th-9', config: everyMin() }])
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(h.persisted).toHaveLength(1)
+  })
+
+  it('a chat resume (threadId known) registers with the key and does not re-persist', async () => {
+    const h = harness()
+    h.coord.register(chatInfo('c1', everyMin(), 'th-1'), 'codex')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(h.persisted).toEqual([])
+  })
+
+  it('a rejected deliver keeps the round pending and retries next tick, up to MAX_REJECTIONS_PER_ROUND', async () => {
+    const h = harness()
+    h.rejectNext.count = 2
+    h.coord.register(chatInfo('c1', everyMin('go')), 'codex')
+    await vi.advanceTimersByTimeAsync(60_000 + 15_000) // due: attempt 1 rejects
+    await vi.advanceTimersByTimeAsync(15_000)          // attempt 2 rejects
+    await vi.advanceTimersByTimeAsync(15_000)          // attempt 3 lands
+    expect(h.delivered).toEqual([{ id: 'c1', text: 'go' }])
+  })
+
+  it('after MAX_REJECTIONS_PER_ROUND rejections the round is dropped, and the next round starts clean', async () => {
+    const h = harness()
+    h.rejectNext.count = 3
+    h.coord.register(chatInfo('c1', everyMin('go')), 'codex')
+    // Due at 60 s (ticks at 60, 75, 90 s are the three rejected attempts); the tick at 105 s makes no
+    // fourth attempt — the round was dropped at the third refusal.
+    await vi.advanceTimersByTimeAsync(60_000 + 15_000 * 3)
+    expect(h.delivered).toEqual([])
+    // The next round came due at 120 s (interval rounds recompute from the previous due time) and fires
+    // normally: the refusal count was reset with the drop.
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(h.delivered).toEqual([{ id: 'c1', text: 'go' }])
   })
 })

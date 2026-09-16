@@ -1,17 +1,25 @@
-// The session scheduler coordinator. Once a session starts, it periodically types a command into the
-// PTY according to the rule registered for it (4 modes). The pure decision (the next fire time) lives
-// in core/scheduler/rule and every side effect is injected through deps — it does not depend on
-// electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
-import type { SessionInfo, SchedStateEvent, ScheduleConfig, Provider } from '../core/types'
+// The session scheduler coordinator. Once a session starts, it periodically hands a command to the
+// session through its driver according to the rule registered for it (4 modes). The pure decision (the
+// next fire time) lives in core/scheduler/rule and every side effect is injected through deps — it does
+// not depend on electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
+import type { SessionInfo, SchedStateEvent, ScheduleConfig, Provider, SessionKind } from '../core/types'
 import { nextFireAt } from '../core/scheduler/rule'
 import { extractStatusLineSession } from '../core/usage/statusline'
 import { PROVIDER_META } from '../core/providers/meta'
+import { sessionKindOf } from '../core/sessions/kind'
 
 const TICK_MS = 15_000 // how often the fire time and metadata learning are checked (the same as rolling)
-const ENTER_DELAY_MS = 150 // the gap between the command text and Enter (the rolling convention — time for the TUI to digest the paste)
+
+// A CLI that refuses a turn is usually mid-turn for a moment (a pty write racing a busy prompt, a chat
+// adapter still finishing the previous send) and a short retry clears it. A CLI that refuses forever
+// (a dead session, a permanent error) must not be spammed every tick, so the round is dropped after
+// this many attempts and picked up fresh at the next scheduled time.
+export const MAX_REJECTIONS_PER_ROUND = 3
 
 export interface SchedulerDeps {
-  write(sessionId: string, data: string): void
+  /** One command to the session, through its driver (sessionDriver.ts) — a pty gets the text and an
+   *  Enter, a chat session gets one send. Rejects when the CLI refused it or the session is gone. */
+  deliver(sessionId: string, text: string): Promise<void>
   readStatusPayload(sessionId: string): Promise<unknown | null>
   send(channel: 'session:schedState', payload: unknown): void
   log(message: string): void
@@ -28,6 +36,8 @@ export interface SchedulerDeps {
    *  Synchronous, unlike readStatusPayload, because the watcher answers from what its poll already
    *  collected. Absent (no watcher wired) codex keeps the old behaviour — no learning, no persistence. */
   codexSessionId?: (sessionId: string) => string | null
+  /** A chat session's protocol thread id, or null until the adapter has reported it. */
+  chatThreadId?: (sessionId: string) => string | null
   now?: () => number
 }
 
@@ -39,10 +49,11 @@ interface Entry {
   busy: boolean // taps ipc's session:busy (BusyScanner)
   suppressed: boolean // suppresses firing during a rolling resume window (the trust prompt, waiting, switching) — handleRollState
   provider: Provider // decides where learnKey reads the session id from — claude's statusLine, codex's rollout watcher
+  kind: SessionKind // decides where learnKey reads the session id from ahead of provider — a chat session always uses chatThreadId
   sessionKey: string | null // the conversation's own session id — the scheduler.json key. Null until learned (or supplied by a resume)
   learnable: boolean // whether this session's key can be learned at all — see register for what each provider needs
   learning: boolean // guards against overlapping readStatusPayload calls
-  enterTimer: ReturnType<typeof setTimeout> | null
+  rejections: number // consecutive deliver refusals for the current pending round — reset on a successful fire, a rekey, or a round drop
   disposed: boolean
 }
 
@@ -68,6 +79,7 @@ export class SchedulerCoordinator {
     if (!info.schedule) return
     const nextAt = nextFireAt(info.schedule.rule, this.now())
     if (!Number.isFinite(nextAt)) return // a rule isValidRule should have rejected — do not register it
+    const kind = sessionKindOf(info)
     const entry: Entry = {
       liveId: info.id,
       config: info.schedule,
@@ -76,14 +88,18 @@ export class SchedulerCoordinator {
       busy: false,
       suppressed: false,
       provider,
+      kind,
       sessionKey: info.resumeSessionId ?? null,
-      // claude learns from its statusLine payload, which is always there. codex has no statusLine but
-      // its rollout watcher knows the id — it is learnable exactly when that accessor was wired.
+      // A chat session's key is its protocol thread id, whatever the provider — it is learnable exactly
+      // when the adapter accessor was wired. A terminal session keeps the old rule: claude learns from
+      // its statusLine payload, which is always there; codex has no statusLine but its rollout watcher
+      // knows the id — it is learnable exactly when that accessor was wired.
       learnable:
-        PROVIDER_META[provider].usesStatusLine ||
-        (provider === 'codex' && this.deps.codexSessionId !== undefined),
+        kind === 'chat'
+          ? this.deps.chatThreadId !== undefined
+          : PROVIDER_META[provider].usesStatusLine || (provider === 'codex' && this.deps.codexSessionId !== undefined),
       learning: false,
-      enterTimer: null,
+      rejections: 0,
       disposed: false
     }
     this.entries.set(info.id, entry)
@@ -159,6 +175,7 @@ export class SchedulerCoordinator {
     this.entries.delete(oldId)
     entry.liveId = newId
     entry.busy = false // the new PTY is judged again by its own OSC (the same reason as the busy drop in App.tsx)
+    entry.rejections = 0 // the new session is judged on its own
     // A round backed up across the roll is dropped — the fire time passing while busy (hence pending) and
     // then a roll happening is a common combination, and keeping it alive would let a schedule firing
     // overlap the awaitingReady resume window right after the respawn (auto-accepting the trust prompt
@@ -228,15 +245,20 @@ export class SchedulerCoordinator {
    *  Its id comes from the rollout watcher instead, which scans for the rollout of every codex session
    *  and gets the id together with the path (`codexSessionId` in SchedulerDeps).
    *
+   *  A chat session never touches the statusLine file either — stream-json writes none — its id comes
+   *  from the adapter's `ready` instead (`chatThreadId` in SchedulerDeps), the same for every provider.
+   *
    *  A null answer is "not yet", not "never": the rollout appears a moment after spawn and the statusLine
    *  payload lands on the first render, so tick() simply asks again next time. */
   private async learnKey(entry: Entry): Promise<void> {
     entry.learning = true
     try {
       const learned =
-        entry.provider === 'codex'
-          ? (this.deps.codexSessionId?.(entry.liveId) ?? null)
-          : extractStatusLineSession(await this.deps.readStatusPayload(entry.liveId)).sessionId
+        entry.kind === 'chat'
+          ? (this.deps.chatThreadId?.(entry.liveId) ?? null)
+          : entry.provider === 'codex'
+            ? (this.deps.codexSessionId?.(entry.liveId) ?? null)
+            : extractStatusLineSession(await this.deps.readStatusPayload(entry.liveId)).sessionId
       // disposed/sessionKey are re-checked because the claude branch above awaits — a dispose or a
       // competing learn can land in that window. The codex branch is synchronous and cannot, but the
       // check costs nothing and the two branches are better off answering to the same rule.
@@ -250,13 +272,25 @@ export class SchedulerCoordinator {
 
   private fire(entry: Entry): void {
     entry.pending = false
-    const liveId = entry.liveId // captured so a rekey or dispose before Enter does not make us write to a stale session
-    this.deps.write(liveId, entry.config.command)
-    entry.enterTimer = setTimeout(() => {
-      entry.enterTimer = null
-      if (!entry.disposed && entry.liveId === liveId) this.deps.write(liveId, '\r')
-    }, ENTER_DELAY_MS)
-    this.deps.log(`schedule fired session=${liveId} nextAt=${new Date(entry.nextAt).toISOString()}`)
+    const liveId = entry.liveId // captured: a rekey or dispose while the send is in flight must not touch the moved entry
+    void this.deps.deliver(liveId, entry.config.command).then(
+      () => {
+        entry.rejections = 0
+        this.deps.log(`schedule fired session=${liveId} nextAt=${new Date(entry.nextAt).toISOString()}`)
+      },
+      (err: unknown) => {
+        if (entry.disposed || entry.liveId !== liveId) return
+        entry.rejections += 1
+        const reason = err instanceof Error ? err.message : String(err)
+        if (entry.rejections < MAX_REJECTIONS_PER_ROUND) {
+          entry.pending = true // the round is still owed; the next tick tries again
+          this.deps.log(`schedule send refused session=${liveId} (${entry.rejections}/${MAX_REJECTIONS_PER_ROUND}): ${reason}`)
+        } else {
+          entry.rejections = 0
+          this.deps.log(`schedule round dropped session=${liveId} after ${MAX_REJECTIONS_PER_ROUND} refusals: ${reason}`)
+        }
+      }
+    )
   }
 
   private pushState(entry: Entry): void {
@@ -271,7 +305,6 @@ export class SchedulerCoordinator {
   private dispose(entry: Entry): void {
     if (entry.disposed) return
     entry.disposed = true
-    if (entry.enterTimer) clearTimeout(entry.enterTimer)
     this.entries.delete(entry.liveId)
     this.deps.send('session:schedState', { sessionId: entry.liveId, state: 'off' } satisfies SchedStateEvent)
     if (this.entries.size === 0 && this.ticker) {

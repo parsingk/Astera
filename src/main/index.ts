@@ -17,6 +17,7 @@ import { registerPreviewEmulation } from './preview/emulation'
 import { registerPreviewCapture } from './preview/capture'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
+import { chatDriver, ptyDriver, routedDriver } from './sessionDriver'
 import { CodexRollingCoordinator } from './codexRolling'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { SlackNotifier, SlackConfigStore } from './slack'
@@ -552,15 +553,21 @@ app.whenReady().then(async () => {
     else if (dropped > 0 || pruned > 0)
       schedLog(`scheduler.json cleaned up (${dropped} invalid, ${pruned} expired) — .bak kept`)
   }
+  // One driver per session kind and a router that asks core which kind an id is, on every call — an id
+  // rolling has re-keyed is judged again (chat-sessions slice 4 design §5.4). Shared by the scheduler
+  // now; Slack (4b) and rolling (4c) send through it too.
+  const sessionDriver = routedDriver(
+    (id) => core!.chat.has(id),
+    ptyDriver({
+      write: (id, d) => {
+        core!.sessions.write(id, d) // a throw is the rejection the caller sees
+      }
+    }),
+    chatDriver({ send: (id, text) => core!.chat.send(id, text) })
+  )
   // Session scheduler: runs periodic commands automatically. Logs share rolling.log ([sched] prefix)
   const scheduler = new SchedulerCoordinator({
-    write: (id, d) => {
-      try {
-        core!.sessions.write(id, d)
-      } catch {
-        /* a write failure must not block the schedule timer */
-      }
-    },
+    deliver: (id, text) => sessionDriver.deliver(id, text),
     readStatusPayload: (id) => core!.statusLinePayload(id),
     send: (channel, payload) => {
       try {
@@ -580,7 +587,10 @@ app.whenReady().then(async () => {
     // codex 세션의 scheduler.json 키. claude 가 statusLine 페이로드에서 얻는 것을 codex 는 여기서
     // 얻는다 — rollout 감시자는 모든 codex 세션에 붙고, 그 탐색이 경로와 세션 id 를 함께 낸다.
     // 이 배선이 없던 동안 codex 스케줄은 세션이 사는 동안만 돌고 아무 키로도 저장되지 않았다.
-    codexSessionId: (id) => codexRollout.codexSessionIdFor(id)
+    codexSessionId: (id) => codexRollout.codexSessionIdFor(id),
+    // A chat session's scheduler.json key: the protocol thread id the adapter reported (Codex at ready,
+    // Claude after the first turn); null until then, and the coordinator asks again next tick.
+    chatThreadId: (id) => core!.chat.info(id)?.threadId ?? null
   })
   schedulerRef = scheduler
   // Direct account-usage lookups. It carries its own call coalescing, backoff and 10-second timeout, so
