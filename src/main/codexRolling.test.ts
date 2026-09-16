@@ -142,7 +142,8 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
         resumeSessionId: opts.resumeSessionId,
         rollAccountIds: opts.rollAccountIds,
         slackNotify: opts.slackNotify,
-        bypassPermissions: opts.bypassPermissions
+        bypassPermissions: opts.bypassPermissions,
+        rollPrompt: opts.rollPrompt
       }
       spawned.push({
         info,
@@ -2013,6 +2014,17 @@ describe('chat chains', () => {
     expect(h.spawnedOpts[0].resumeSessionId).toBeUndefined()
     // The refusal log would be a falsehood here — it says the argv sanitizer forced a `--resume`.
     expect(logs.some((l) => l.includes('smart resume refused'))).toBe(false)
+    h.coord.stop()
+  })
+
+  it('carries the user rollPrompt onto the roll spawn', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-rp', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo({ ...h.info1, rollPrompt: 'keep going' }))
+    h.coord.attachChat('s1', 'cx-rp', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(h.spawnedOpts[0]).toMatchObject({ rollPrompt: 'keep going' })
     h.coord.stop()
   })
 })

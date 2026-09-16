@@ -76,7 +76,8 @@ function harness(overrides: Partial<RollingDeps> = {}): {
         resumeSessionId: opts.resumeSessionId,
         rollAccountIds: opts.rollAccountIds,
         slackNotify: opts.slackNotify,
-        bypassPermissions: opts.bypassPermissions
+        bypassPermissions: opts.bypassPermissions,
+        rollPrompt: opts.rollPrompt
       }
       spawned.push({ ...info, orchEnv: opts.orchEnv })
       spawnedOpts.push(opts)
@@ -3138,5 +3139,16 @@ describe('chat chains', () => {
     await flush()
     await flush()
     expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2', 'copy', 'kill:s2', 'spawn:s3:a3'])
+  })
+
+  it('carries the user rollPrompt onto the roll spawn', async () => {
+    const h = harness()
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { rollPrompt: 'keep going in Korean' }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.spawnedOpts[0]).toMatchObject({ rollPrompt: 'keep going in Korean' })
   })
 })

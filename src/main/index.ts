@@ -645,6 +645,7 @@ app.whenReady().then(async () => {
             resumeThreadId: opts.resumeSessionId,
             initialPrompt: opts.initialPrompt,
             rollAccountIds: opts.rollAccountIds,
+            rollPrompt: opts.rollPrompt,
             slackNotify: opts.slackNotify,
             bypassPermissions: opts.bypassPermissions,
             title: opts.title
@@ -801,6 +802,7 @@ app.whenReady().then(async () => {
             resumeThreadId: opts.resumeSessionId,
             initialPrompt: opts.initialPrompt,
             rollAccountIds: opts.rollAccountIds,
+            rollPrompt: opts.rollPrompt,
             slackNotify: opts.slackNotify,
             bypassPermissions: opts.bypassPermissions,
             title: opts.title

@@ -108,6 +108,12 @@ export interface RollingDeps {
      *  type into — the manager sends this once the protocol handshake is done — so what a pty roll does
      *  afterwards (poll for readiness, then write the prompt and Enter) is done here instead, in one go. */
     initialPrompt?: string
+    /** The user's carry-on prompt as they typed it (empty/undefined means the default). Carried onto
+     *  every roll so the respawned session's note keeps it — without it a restart re-registers the
+     *  chain with the UI-language default. This is `liveInfo.rollPrompt`, not `chain.prompt`: the
+     *  latter has the default already resolved, and writing a resolved default into the note pins the
+     *  language it was resolved in. */
+    rollPrompt?: string
   }): SessionInfo
   write(sessionId: string, data: string): void
   kill(sessionId: string): void
@@ -1395,7 +1401,8 @@ export class RollingCoordinator {
         // carries its first turn with it — there is no screen to type one into afterwards. A pty chain
         // passes 'terminal' and no prompt, which is what every caller did before chat sessions existed.
         kind: chain.kind,
-        initialPrompt: chatPrompt
+        initialPrompt: chatPrompt,
+        rollPrompt: chain.liveInfo.rollPrompt
       })
       this.chains.delete(oldId)
       chain.liveId = info.id

@@ -70,6 +70,12 @@ export interface CodexRollingDeps {
      *  조용히 버려진다. orchestration 이 새 Job 워커를 띄울 때 첫 프롬프트를 싣는 것과 같은 경로
      *  (initialPrompt)를 백지 재개에도 그대로 쓴다. */
     initialPrompt?: string
+    /** The user's carry-on prompt as they typed it (empty/undefined means the default). Carried onto
+     *  every roll so the respawned session's note keeps it — without it a restart re-registers the
+     *  chain with the UI-language default. This is `liveInfo.rollPrompt`, not `chain.prompt`: the
+     *  latter has the default already resolved, and writing a resolved default into the note pins the
+     *  language it was resolved in. */
+    rollPrompt?: string
     rollAccountIds?: string[]
     slackNotify?: boolean
     bypassPermissions?: boolean
@@ -1319,7 +1325,8 @@ export class CodexRollingCoordinator {
         // Kept per chain, like the two above: a roll is the same work on another account, so a
         // name the person gave the tab survives it.
         title: chain.liveInfo.title,
-        orchEnv: this.deps.orchEnv?.()
+        orchEnv: this.deps.orchEnv?.(),
+        rollPrompt: chain.liveInfo.rollPrompt
       })
       this.chains.delete(oldId)
       chain.liveId = info.id
