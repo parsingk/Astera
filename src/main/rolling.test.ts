@@ -8,6 +8,7 @@ import { claudeHistoryStrategy } from '../core/history/strategies/claude'
 import { matchesLimitPhrase } from '../core/rolling/detect'
 import { parseResetTime } from '../core/rolling/resetTime'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
+import type { RollConfig } from '../core/rolling/config'
 import { RollingCoordinator, type RollingDeps } from './rolling'
 
 const acc = (id: string, label: string): Account => ({
@@ -38,6 +39,13 @@ function harness(overrides: Partial<RollingDeps> = {}): {
   sent: { channel: string; payload: Record<string, unknown> }[]
   copied: { src: string; dest: string }[]
   spawned: (SessionInfo & { orchEnv?: { cliPath: string; infoPath: string; skillsPath: string } })[]
+  /** The whole opts object each spawn was given. `spawned` only carries the fields the fake turns back
+   *  into a SessionInfo, and a chat roll is decided by two that it does not — kind and initialPrompt. */
+  spawnedOpts: Parameters<RollingDeps['spawn']>[0][]
+  persisted: { key: string; config: RollConfig }[]
+  /** Sessions whose statusLine is never read. A chat session writes none, so the real wiring answers
+   *  null for it — listing the id here makes the fake say the same thing. */
+  chatIds: Set<string>
   payloads: Map<string, unknown>
   info1: SessionInfo
 } {
@@ -51,6 +59,9 @@ function harness(overrides: Partial<RollingDeps> = {}): {
   const sent: { channel: string; payload: Record<string, unknown> }[] = []
   const copied: { src: string; dest: string }[] = []
   const spawned: (SessionInfo & { orchEnv?: { cliPath: string; infoPath: string; skillsPath: string } })[] = []
+  const spawnedOpts: Parameters<RollingDeps['spawn']>[0][] = []
+  const persisted: { key: string; config: RollConfig }[] = []
+  const chatIds = new Set<string>()
   const payloads = new Map<string, unknown>()
   let seq = 1
   const coord = new RollingCoordinator({
@@ -68,13 +79,16 @@ function harness(overrides: Partial<RollingDeps> = {}): {
         bypassPermissions: opts.bypassPermissions
       }
       spawned.push({ ...info, orchEnv: opts.orchEnv })
+      spawnedOpts.push(opts)
+      if (opts.kind === 'chat') chatIds.add(info.id) // the respawned chat session has no statusLine either
       events.push(`spawn:${info.id}:${opts.account.id}`)
       return info
     },
     write: (id, data) => written.push({ id, data }),
     kill: (id) => events.push(`kill:${id}`),
     getAccount: (id) => accounts[id] ?? null,
-    readStatusPayload: (id) => Promise.resolve(payloads.get(id) ?? null),
+    readStatusPayload: (id) => Promise.resolve(chatIds.has(id) ? null : (payloads.get(id) ?? null)),
+    persistConfig: (key, config) => persisted.push({ key, config }),
     send: (channel, p) => sent.push({ channel, payload: p as Record<string, unknown> }),
     log: () => {},
     lang: () => 'ko', // 기존 한국어 기대값을 유지
@@ -97,7 +111,7 @@ function harness(overrides: Partial<RollingDeps> = {}): {
   // settleIo가 "아직 뭔가 도착하는 중인가"를 판단할 근거. 하네스가 스스로 등록하므로 호출부는
   // 그대로다 — 자세한 이유는 settleIo 위 주석에
   ioProbes.push(() => events.length + written.length + sent.length + copied.length + spawned.length)
-  return { coord, events, written, sent, copied, spawned, payloads, info1 }
+  return { coord, events, written, sent, copied, spawned, spawnedOpts, persisted, chatIds, payloads, info1 }
 }
 
 // 이 리터럴이 통짜면 이 테스트 파일 자체가 롤링 세션의 PTY로 흘러갈 때(예: cat/read) 스캐너가
@@ -2882,5 +2896,131 @@ describe('등록 시점의 재개 정보', () => {
     await flush()
     expect(h.copied.some((c) => c.src === DEST)).toBe(false)
     expect(h.sent.at(-1)?.payload.state).toBe('waiting') // "세션 메타 없음"으로 중단하고 재시도를 예약한다
+  })
+})
+
+// Chat sessions (slice 4c). A chat chain has no PTY of its own: the CLI session id and the transcript
+// path a PTY chain reads off the statusLine are pushed in by ipc (onChatMeta), the limit that a PTY
+// chain matches in its bytes arrives as a rateLimit event (onChatLimit), and the carry-on prompt a PTY
+// chain types into the screen after the respawn rides along with the spawn as the new process's first
+// turn. Everything between those ends — the evidence gate, the block records, the retry plan, the copy
+// and the re-key — is the same code.
+describe('chat chains', () => {
+  const chatInfo = (id: string, over: Partial<SessionInfo> = {}): SessionInfo => ({
+    id,
+    accountId: 'a1',
+    cwd: 'D:\\work\\p',
+    status: 'running',
+    title: 'p',
+    kind: 'chat',
+    rollAccountIds: ['a1', 'a2'],
+    ...over
+  })
+  const rejected = {
+    status: 'rejected',
+    resetsAt: null,
+    utilization: null,
+    window: null,
+    source: 'event'
+  } as const
+
+  it('a chat chain learns its id and transcript from onChatMeta, persisting the config once', () => {
+    const h = harness()
+    h.chatIds.add('c1') // a chat session writes no statusLine — the real wiring answers null for it
+    h.coord.register(chatInfo('c1'))
+    // Either half may arrive first, and each call applies what it has
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: null })
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    expect(h.persisted).toEqual([
+      { key: 'th-1', config: { accountIds: ['a1', 'a2'], prompt: expect.any(String) } }
+    ])
+    expect(h.coord.findLiveByClaudeSession('th-1')?.id).toBe('c1')
+  })
+
+  it('a rejected rateLimit rolls the chat chain: copy → kill → chat spawn with the carry-on prompt as its first turn, no write', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    expect(h.spawnedOpts[0]).toMatchObject({
+      kind: 'chat',
+      resumeSessionId: 'th-1',
+      initialPrompt: expect.any(String),
+      rollAccountIds: ['a1', 'a2']
+    })
+    expect(h.written).toEqual([]) // no typed prompt, no Enter — the prompt went with the spawn
+    const states = h.sent.filter((s) => s.channel === 'session:rollState').map((s) => s.payload.state)
+    // awaitingReady is released with the spawn, so 'none' follows at once — there is no readiness poll
+    expect(states.slice(-2)).toEqual(['switching', 'none'])
+  })
+
+  it('a rateLimit that is not rejected does nothing (logged once)', async () => {
+    const logs: string[] = []
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)), log: (m) => logs.push(m) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', {
+      status: 'allowed_warning',
+      resetsAt: null,
+      utilization: 0.99,
+      window: 'seven_day',
+      source: 'event'
+    })
+    h.coord.onChatLimit('c1', {
+      status: 'allowed_warning',
+      resetsAt: null,
+      utilization: 0.995,
+      window: 'seven_day',
+      source: 'event'
+    })
+    await flush()
+    expect(h.events).toEqual([])
+    expect(logs.filter((l) => l.includes('rate limit not rejected'))).toHaveLength(1)
+  })
+
+  // The post-switch cooldown is `awaitingReady`, and onChatLimit answers to it exactly as the PTY
+  // phrase path in handleData does. It cannot be demonstrated on a chat chain: a chat respawn releases
+  // the flag as it spawns (there is no readiness poll to wait for and nothing is replayed into a fresh
+  // process), so a chat chain's cooldown is already over. So the rule is pinned on a PTY chain, which
+  // holds the flag until its automatic prompt goes out.
+  //
+  // What is asserted is that the account is never asked. "No second roll" alone proves nothing here —
+  // the replay grace refuses a limit for the first 60 seconds after a roll, and onLimit guards the same
+  // flag again at the end — so the clock is moved past that grace and the observable is the lookup the
+  // cooldown skips. The trust dialog is what keeps the flag up that long: it blocks the 30-second
+  // no-statusline fallback, which would otherwise have released it.
+  it('a rejected rateLimit during the post-switch cooldown is ignored', async () => {
+    let usageCalls = 0
+    const h = harness({
+      readUsage: () => {
+        usageCalls++
+        return Promise.resolve(peak(100))
+      }
+    })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }) // → a2 (s2), awaitingReady = true
+    await flush()
+    expect(h.spawned).toHaveLength(1)
+    h.coord.handleData({ sessionId: 's2', data: 'Do you trust the files in this folder?' })
+    await vi.advanceTimersByTimeAsync(65_000) // past REPLAY_GRACE_MS, still short of the 120s deadline
+    const asked = usageCalls
+    h.coord.onChatLimit('s2', rejected)
+    await flush()
+    await flush()
+    expect(usageCalls).toBe(asked) // the account is not even asked — the cooldown refused it first
+    expect(h.spawned).toHaveLength(1) // and nothing rolled
+  })
+
+  it('an unknown session id is ignored by both entry points', () => {
+    const h = harness()
+    h.coord.onChatMeta('nobody', { claudeSessionId: 'x', transcriptPath: null })
+    h.coord.onChatLimit('nobody', rejected)
+    expect(h.events).toEqual([])
   })
 })

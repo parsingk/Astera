@@ -2,14 +2,23 @@
 // account → auto-accepting the trust prompt → automatically sending "carry on with the work". The pure
 // decisions live in core/rolling and every side effect is injected through deps — it does not depend on
 // electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
+//
+// A chain whose session is a chat session (kind 'chat') rolls through the same middle and differs only
+// at the two ends, because it has no terminal: the identity a statusLine would report is pushed in by
+// ipc (onChatMeta), the limit a screen would print arrives as an event (onChatLimit), and the carry-on
+// prompt a screen would be typed into rides along with the respawn as the new process's first turn —
+// so no readiness poll, no trust dialog and no post-switch cooldown. See those three sites.
 import type {
   Account,
   RateLimitPeak,
   ResumeStrategy,
   SessionInfo,
+  SessionKind,
   RollStateEvent,
   SessionUsage
 } from '../core/types'
+import type { RateLimitInfo } from '../core/chat/types'
+import { sessionKindOf } from '../core/sessions/kind'
 import type { RollConfig } from '../core/rolling/config'
 import {
   OutputScanner,
@@ -91,6 +100,14 @@ export interface RollingDeps {
     title?: string
     /** astera CLI 환경. 배선이 넘긴다 — 없으면 세션은 CLI 없이 뜬다 */
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
+    /** Which kind of session to respawn — the chain's own kind, carried through every roll. The wiring
+     *  routes on it (index.ts): 'chat' goes to the chat manager, anything else to the pty manager.
+     *  Absent means 'terminal', so a caller that predates chat sessions keeps working. */
+    kind?: SessionKind
+    /** Chat only: the carry-on prompt, as the new process's first turn. A chat session has no screen to
+     *  type into — the manager sends this once the protocol handshake is done — so what a pty roll does
+     *  afterwards (poll for readiness, then write the prompt and Enter) is done here instead, in one go. */
+    initialPrompt?: string
   }): SessionInfo
   write(sessionId: string, data: string): void
   kill(sessionId: string): void
@@ -172,6 +189,11 @@ export interface RollingDeps {
 
 interface Chain {
   accountIds: string[]
+  /** What kind of session this chain is rolling. A 'chat' chain has no pty: the fields a statusLine
+   *  fills in are pushed in by ipc (onChatMeta), the limit arrives as an event (onChatLimit), and the
+   *  prompt goes out with the spawn rather than being typed into a screen. Every other path — the
+   *  evidence gate, the block records, the retry plan, the copy and the re-key — is shared. */
+  kind: SessionKind
   prompt: string // the text sent on a rolling resume (user-specified, or the default t('rolling.continuePrompt'))
   cycle: RollCycle
   liveId: string // the app session id (changes on every roll)
@@ -248,6 +270,10 @@ interface Chain {
   // Throttles the limitTail read-failure log to once per chain — the same convention as unmappedWarned
   // (codexRolling.ts). A path that fails keeps failing, so there is no reason to log it again every 15-second tick.
   limitTailReadFailWarned: boolean
+  // Throttles onChatLimit's "not rejected" log to once per chain — the same convention as the two flags
+  // above. A chat session reports its rate limit on every turn, so the warning-level statuses ('allowed',
+  // 'allowed_warning') arrive continuously and logging each one would bury everything else.
+  chatLimitIgnoredWarned: boolean
 }
 
 /** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts).
@@ -336,6 +362,7 @@ export class RollingCoordinator {
     if (at > 0) cycle.advanceTo(at)
     this.chains.set(info.id, {
       accountIds: ids,
+      kind: sessionKindOf(info), // absent means 'terminal', which is every caller that predates chat sessions
       prompt: info.rollPrompt?.trim() || t(this.deps.lang(), 'rolling.continuePrompt'), // user-specified text, or the default when empty
       cycle,
       liveId: info.id,
@@ -372,7 +399,8 @@ export class RollingCoordinator {
       choicePending: false,
       lastUsagePct: null,
       limitTail: null,
-      limitTailReadFailWarned: false
+      limitTailReadFailWarned: false,
+      chatLimitIgnoredWarned: false
     })
     this.ensureTicker()
     this.deps.log(`chain registered session=${info.id} accounts=${ids.join(',')}`)
@@ -488,6 +516,67 @@ export class RollingCoordinator {
       this.answerLimitChoice(chain, hit.text)
       void this.onLimitCandidate(chain, hit.text)
     }
+  }
+
+  /** ipc's chat subscriber: the CLI session id (the protocol's threadId) and the transcript path a chat
+   *  session has learned — exactly the two facts a pty chain reads off its statusLine.
+   *
+   *  **Why they are pushed in rather than read.** A chat session runs the CLI over a protocol, not a
+   *  terminal, so it never calls the statusLine hook: `readStatusPayload` answers null for it forever.
+   *  The same two values arrive on the protocol's own events instead, and the wiring hands them here.
+   *
+   *  Either may arrive first and each call applies what it has, so the payload is built with the
+   *  statusLine's own field names and handed to the same learner the pty path uses — the persist-once
+   *  gate, the native-session report and the transcript tail then all behave identically. `parsed` is
+   *  null on purpose: this payload carries no usage windows, and letting applyMeta parse it would only
+   *  re-derive the same nothing. */
+  onChatMeta(
+    sessionId: string,
+    meta: { claudeSessionId: string | null; transcriptPath: string | null }
+  ): void {
+    const chain = this.chains.get(sessionId)
+    if (!chain || chain.disposed) return
+    this.applyMeta(
+      chain,
+      { session_id: meta.claudeSessionId ?? undefined, transcript_path: meta.transcriptPath ?? undefined },
+      null
+    )
+  }
+
+  /** ipc's chat subscriber: a chat session's rateLimit event — what the limit phrase in the pty bytes is
+   *  to `handleData`.
+   *
+   *  Only `'rejected'` counts. The other statuses ('allowed', 'allowed_warning') ride along with every
+   *  turn and say the account still answers; acting on them would roll a chain that is working. A
+   *  rejection means the CLI refused the turn, which is the same event a pty session prints its limit
+   *  phrase for — so from here on it is the shared path: `onLimitCandidate` asks the account itself and
+   *  decides, exactly as it does for a phrase.
+   *
+   *  `awaitingReady` is honoured for the same reason the pty branch in `handleData` honours it: it is
+   *  the post-switch cooldown, and a limit reported against the account we have just left must not
+   *  re-roll the account we have just arrived on. It is not gated on the chain's kind — the wiring only
+   *  calls this for a chat session, and a chain that answers to it while holding the flag is telling the
+   *  truth whatever kind it is.
+   *
+   *  No text is passed on: there is no phrase here to read a reset time out of. `info.resetsAt` is
+   *  deliberately not turned into a synthetic line — `recordRecovery` already takes the account's own
+   *  answer (the `queried` argument, from the lookup `onLimitCandidate` just made) and that is the same
+   *  fact from the same source, without inventing a sentence to parse. */
+  onChatLimit(sessionId: string, info: RateLimitInfo): void {
+    const chain = this.chains.get(sessionId)
+    if (!chain || chain.disposed) return
+    if (info.status !== 'rejected') {
+      if (!chain.chatLimitIgnoredWarned) {
+        chain.chatLimitIgnoredWarned = true
+        this.deps.log(
+          `chat rate limit not rejected — no action status=${info.status} window=${info.window ?? '-'} ` +
+            `utilization=${info.utilization ?? '-'} session=${chain.liveId}`
+        )
+      }
+      return
+    }
+    if (chain.awaitingReady) return
+    void this.onLimitCandidate(chain, undefined)
   }
 
   /** Session exit — the chain is not disposed while a roll is in progress (roll() owns the old→new
@@ -1196,6 +1285,29 @@ export class RollingCoordinator {
       // (!briefed) 이 스위치가 켜져 있어도 적용하지 않는다 — 계획의 지배 제약이고, 그 경우 아래는
       // 오늘과 같은 경로(복사 + `--resume`)를 그대로 지난다.
       const smart = briefing !== null && briefing.briefed
+      // A chat chain's carry-on prompt, resolved here for the same two reasons the briefing above is: it
+      // is an await with a side effect (resumeText rewrites a Job worker's spec file), and the kill→spawn
+      // →re-key sequence below admits no await at all. A pty roll asks this question after the respawn
+      // instead (sendPrompt), because there it has to wait for a screen to type into; a chat roll has
+      // nowhere to type it later — it goes with the spawn — so it has to be in hand before the kill.
+      //
+      // The expression is sendPrompt's, verbatim, so both kinds say the same thing on the same roll: the
+      // briefing when Smart Resume produced one, otherwise a fresh 'handover' ask with tabFallback false
+      // (this process is about to be handed the whole conversation by its resume, so a tab session has
+      // nothing left to hand over — see resumePromptFor). The id asked about is the old one, as the smart
+      // branch above already asks: the new session does not exist yet.
+      let chatPrompt: string | undefined
+      if (chain.kind === 'chat') {
+        chatPrompt = smart
+          ? briefing?.prompt
+          : (await this.resumePromptFor(chain, chain.liveId, 'handover', false)).prompt
+        if (chain.disposed) {
+          this.deps.log(
+            `roll aborted — chain disposed while building the resume prompt session=${chain.liveId}`
+          )
+          return
+        }
+      }
       // Published only once both aborts above are behind us — matches codexRolling.ts. Publishing this
       // before the metadata check announced a switch to Slack that never happens, and it also claimed the
       // stop episode in the orchestration tap with reason 'switching' (no reset time), so the reschedule's
@@ -1233,7 +1345,12 @@ export class RollingCoordinator {
         // another account, so a name a person gave it must not be traded back for the folder name
         // halfway through — spawn's default would do exactly that if this were omitted.
         title: chain.liveInfo.title,
-        orchEnv: this.deps.orchEnv?.()
+        orchEnv: this.deps.orchEnv?.(),
+        // The chain's kind decides which manager the wiring respawns it through, and a chat respawn
+        // carries its first turn with it — there is no screen to type one into afterwards. A pty chain
+        // passes 'terminal' and no prompt, which is what every caller did before chat sessions existed.
+        kind: chain.kind,
+        initialPrompt: chatPrompt
       })
       this.chains.delete(oldId)
       chain.liveId = info.id
@@ -1283,9 +1400,29 @@ export class RollingCoordinator {
       // A re-publish that reattaches the banner to the new sessionId — not a new switch, so Slack does not announce it
       this.pushState(chain, 'switching', { accountLabel: target.label, reattach: true })
       this.deps.log(`rolled ${oldId} → ${info.id} account=${target.label}`)
-      // The briefing built above is passed down so sendPrompt does not ask resumeText a second time
-      // (Step 4) — undefined on the ordinary path, where sendPrompt keeps asking for itself as before.
-      this.scheduleAutoPrompt(chain, smart ? briefing?.prompt : undefined)
+      if (chain.kind === 'chat') {
+        // A chat roll is already finished here, which is why it does not go through scheduleAutoPrompt:
+        //   - no readiness poll. That poll exists to find the moment a pty has a prompt line to type
+        //     into; this prompt left with the spawn and the chat manager sends it once the protocol
+        //     handshake is done, so there is nothing to wait for and nothing to time out into 'stalled'.
+        //   - no trust dialog. That is a screen a fresh `claude` draws in a terminal, and the auto-accept
+        //     only ever runs inside this same window.
+        //   - the cooldown is over. awaitingReady holds off limit detection while a `--resume` replays
+        //     the old conversation — including the very limit phrase that caused this roll — onto the new
+        //     session's screen. A chat process replays nothing: it reports what happens from now on, so
+        //     the first rejection it reports is a new one. (The separate 60-second replay grace still
+        //     refuses one that arrives inside it, because that grace is keyed off the roll rather than
+        //     off this flag; an account that is already exhausted is then caught the way it is on a pty
+        //     roll, by the transcript tail on the 15-second tick — see inReplayGrace.)
+        // What is shared is the healthy timer: 60 seconds with no limit means this account took the work.
+        chain.awaitingReady = false
+        this.armHealthy(chain)
+        this.pushState(chain, 'none')
+      } else {
+        // The briefing built above is passed down so sendPrompt does not ask resumeText a second time
+        // (Step 4) — undefined on the ordinary path, where sendPrompt keeps asking for itself as before.
+        this.scheduleAutoPrompt(chain, smart ? briefing?.prompt : undefined)
+      }
     } catch (err) {
       this.deps.log(`roll failed: ${err instanceof Error ? err.message : String(err)}`)
       // **The state published here can be optimistic.** If the throw landed between the kill and the
@@ -1341,23 +1478,7 @@ export class RollingCoordinator {
       }, ENTER_DELAY_MS)
       chain.awaitingReady = false
       this.deps.log(`auto-prompt sent session=${liveId}`)
-      // No limit detected for 60 seconds after the switch → reset the consecutive block count (the timer is cleared if onLimit arrives first)
-      chain.healthyTimer = setTimeout(() => {
-        chain.healthyTimer = null
-        chain.cycle.onHealthy()
-        // The only account this timer says anything about is the current one — the block records of other accounts (a weekly exhaustion, say) are kept
-        chain.recovery[chain.cycle.currentIndex] = null
-        // And what it says is that 60 seconds passed with **no limit detected** — not that a turn actually
-        // ran (codex's settleInPlace is the only site with that evidence; the claude-side settleInPlace
-        // asks a weaker question — whether the statusLine came back). The shared record goes with it
-        // because a false one keeps every other chain off the account until its recorded reset time passes;
-        // the price is that a *true* record another chain wrote inside this window is erased by a session
-        // that has not produced any work of its own yet (blockRegistry.clear).
-        this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
-        // 플래그는 *이전* 계정의 차단 에피소드를 가리킨다. 남겨 두면 새 계정에서의 첫 대기가
-        // 제자리 재개를 건너뛰고 쓸데없이 respawn 한다. codex 쪽도 같은 자리에서 무조건 해제한다.
-        chain.inPlaceUsed = false
-      }, HEALTHY_MS)
+      this.armHealthy(chain)
     }
     const tick = async (): Promise<void> => {
       if (chain.disposed || chain.liveId !== liveId || chain.rolling) return
@@ -1419,6 +1540,32 @@ export class RollingCoordinator {
       chain.promptTimer = setTimeout(() => void tick(), READY_POLL_MS)
     }
     chain.promptTimer = setTimeout(() => void tick(), READY_POLL_MS)
+  }
+
+  /** Arms the post-switch healthy timer: no limit detected for 60 seconds after a switch → reset the
+   *  consecutive block count (the timer is cleared if onLimit arrives first).
+   *
+   *  Both ends of a roll arm it — a pty chain once its automatic prompt has gone out (sendPrompt), a
+   *  chat chain as the spawn returns, because that is the moment each of them stops waiting and starts
+   *  working. It is one function so the two cannot drift: what the timer clears is shared state (the
+   *  cycle's streak, this chain's record, the registry every other chain reads). */
+  private armHealthy(chain: Chain): void {
+    chain.healthyTimer = setTimeout(() => {
+      chain.healthyTimer = null
+      chain.cycle.onHealthy()
+      // The only account this timer says anything about is the current one — the block records of other accounts (a weekly exhaustion, say) are kept
+      chain.recovery[chain.cycle.currentIndex] = null
+      // And what it says is that 60 seconds passed with **no limit detected** — not that a turn actually
+      // ran (codex's settleInPlace is the only site with that evidence; the claude-side settleInPlace
+      // asks a weaker question — whether the statusLine came back). The shared record goes with it
+      // because a false one keeps every other chain off the account until its recorded reset time passes;
+      // the price is that a *true* record another chain wrote inside this window is erased by a session
+      // that has not produced any work of its own yet (blockRegistry.clear).
+      this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
+      // 플래그는 *이전* 계정의 차단 에피소드를 가리킨다. 남겨 두면 새 계정에서의 첫 대기가
+      // 제자리 재개를 건너뛰고 쓸데없이 respawn 한다. codex 쪽도 같은 자리에서 무조건 해제한다.
+      chain.inPlaceUsed = false
+    }, HEALTHY_MS)
   }
 
   /** The 15-second tick — refreshes session metadata, evaluates the fallback trigger (five_hour or
