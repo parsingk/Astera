@@ -281,6 +281,44 @@ export function NewSessionDialog({
             {t('session.new.cliMissingPost')}
           </p>
         )}
+        {/* The kind is the first decision — how the session runs at all — so it heads the form as its
+            own section, ruled off from the folder and account it applies to. Placed between those two
+            it read as one more field of the same run, and where the kind ended and the account began
+            could not be told apart (reported from a hand check of the dialog). */}
+        <div className="field kind-field">
+          <label>{t('session.new.kindLabel')}</label>
+          <div className="kind-segmented">
+            <button
+              type="button"
+              className={`segmented${kind === 'terminal' ? ' active' : ''}`}
+              onClick={() => {
+                setKind('terminal')
+                sessionKindPref.write('terminal')
+              }}
+            >
+              {t('session.kind.terminal')}
+            </button>
+            <button
+              type="button"
+              className={`segmented${kind === 'chat' ? ' active' : ''}`}
+              disabled={!chatEnabled}
+              onClick={() => {
+                setKind('chat')
+                sessionKindPref.write('chat')
+              }}
+            >
+              {t('session.kind.chat')}
+            </button>
+          </div>
+          {!chatEnabled && (
+            <span className="kind-note">
+              {t(chatDisabledReason === 'host' ? 'session.new.kindHostOld' : 'session.new.kindCodexOnly')}
+            </span>
+          )}
+          {chatEnabled && kind === 'chat' && (
+            <span className="kind-note">{t('session.new.kindChatHint')}</span>
+          )}
+        </div>
         <div className="field">
           <label>{t('session.field.projectFolder')}</label>
           <div className="row">
@@ -326,40 +364,6 @@ export function NewSessionDialog({
             )}
           </>
         )}
-        <div className="field">
-          <label>{t('session.new.kindLabel')}</label>
-          <div className="kind-segmented">
-            <button
-              type="button"
-              className={`segmented${kind === 'terminal' ? ' active' : ''}`}
-              onClick={() => {
-                setKind('terminal')
-                sessionKindPref.write('terminal')
-              }}
-            >
-              {t('session.kind.terminal')}
-            </button>
-            <button
-              type="button"
-              className={`segmented${kind === 'chat' ? ' active' : ''}`}
-              disabled={!chatEnabled}
-              onClick={() => {
-                setKind('chat')
-                sessionKindPref.write('chat')
-              }}
-            >
-              {t('session.kind.chat')}
-            </button>
-          </div>
-          {!chatEnabled && (
-            <span className="kind-note">
-              {t(chatDisabledReason === 'host' ? 'session.new.kindHostOld' : 'session.new.kindCodexOnly')}
-            </span>
-          )}
-          {chatEnabled && kind === 'chat' && (
-            <span className="kind-note">{t('session.new.kindChatHint')}</span>
-          )}
-        </div>
         <div className="field">
           <label>{t('session.field.account')}</label>
           {(kind === 'chat' ? accountIds.slice(0, 1) : accountIds).map((id, slot) => (

@@ -890,9 +890,13 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* The session-kind toggle (터미널/대화, Task 7) — two labelled buttons, not the icon pair
    WorkbenchTabs's .session-view-toggle uses (that one flips which half of an already-open tab shows;
    this one decides how the session is spawned at all, before anything exists to switch between). */
+/* Its own section at the head of the form, ruled off from the folder and account fields beneath it:
+   the same 12px gap the other fields keep between them made the three read as one run of fields. The
+   two buttons share the width, so the row reads as a mode switch rather than two small options. */
+.kind-field { padding-bottom: 12px; border-bottom: 1px solid var(--line-soft); }
 .kind-segmented { display: flex; gap: 6px; }
 .kind-segmented .segmented {
-  padding: 5px 12px; font-size: 12px; color: var(--text-dim); background: none;
+  flex: 1; padding: 6px 12px; font-size: 12px; color: var(--text-dim); background: none;
   border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer;
 }
 .kind-segmented .segmented.active { color: var(--text); border-color: var(--accent); background: var(--elevated); }
@@ -1900,6 +1904,19 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
   color: var(--text-dim); background: var(--elevated); border: 1px solid var(--line);
   border-radius: var(--radius-sm); white-space: nowrap; cursor: default;
 }
+/* The chat composer's Plan pill (ModelControl.tsx, chat sessions only). Same three variables as the
+   active states of .sv-seg and .kind-segmented, so "on" reads the way every other pressed toggle in
+   the app reads: accent border, lifted background, full text colour. Off is muted, like .sv-seg. */
+.plan-pill {
+  flex: none; display: inline-flex; align-items: center; padding: 2px 6px;
+  font-size: 10px; line-height: 1; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-dim); background: none; border: 1px solid var(--line); border-radius: 999px;
+  cursor: pointer; transition: color 120ms, border-color 120ms, background 120ms;
+}
+.plan-pill:hover { color: var(--text); }
+/* On reads as on from across the room: accent text and border on the lifted background, and bolder —
+   a 1px accent border alone was the whole difference and it did not register (measured). */
+.plan-pill[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--elevated); font-weight: 700; }
 .sv-seg {
   position: relative; display: flex; align-items: center; justify-content: center; padding: 4px;
   color: var(--text-dim); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm);

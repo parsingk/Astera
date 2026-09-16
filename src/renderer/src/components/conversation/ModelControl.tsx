@@ -113,11 +113,11 @@ export function ModelControl({
             aria-pressed={planMode}
             title={t(planMode ? "chat.model.planOn" : "chat.model.planOff")}
             onClick={onTogglePlan}
-            className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] leading-none font-medium tracking-wide uppercase transition-colors ${
-              planMode
-                ? "border-foreground bg-foreground text-background"
-                : "border-border/60 text-muted-foreground hover:text-foreground"
-            }`}
+            // Styled in styles.css (.plan-pill), keyed on aria-pressed: this project has no Tailwind
+            // colour tokens (bg-foreground and friends compile to nothing — measured: the pill looked
+            // the same on and off), and its active toggles (.sv-seg.active, .kind-segmented .segmented.active)
+            // are plain CSS on the same three variables, so the pill follows them.
+            className="plan-pill"
           >
             {t("chat.model.plan")}
           </button>

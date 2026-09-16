@@ -149,26 +149,9 @@ export function ResumeDialog({
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal resume" onClick={(e) => e.stopPropagation()}>
         <h2>{t('session.resume.title')}</h2>
-        <div className="field">
-          <label>{t('session.resume.conversationLabel')}</label>
-          <span className="path">{entry.title}</span>
-        </div>
-        <div className="field">
-          <label>{t('session.field.projectFolder')}</label>
-          <span className="path">{cwd}</span>
-        </div>
-        {/* Only when the owning account is gone. With it alive the picker already preselects it and puts
-            the '(original account)' suffix on it, so a second row would just repeat that. */}
-        {ownerGone && (
-          <div className="field">
-            <label>{t('session.resume.originAccount')}</label>
-            <span className="path">
-              {owner?.label ?? entry.accountId}
-              <em className="origin-deleted">{t('session.resume.originDeleted')}</em>
-            </span>
-          </div>
-        )}
-        <div className="field">
+        {/* Heads the form as its own ruled-off section, as in NewSessionDialog: the way the resumed
+            session runs is decided before the conversation, folder and account it applies to. */}
+        <div className="field kind-field">
           <label>{t('session.new.kindLabel')}</label>
           <div className="kind-segmented">
             <button
@@ -202,6 +185,25 @@ export function ResumeDialog({
             <span className="kind-note">{t('session.new.kindChatHint')}</span>
           )}
         </div>
+        <div className="field">
+          <label>{t('session.resume.conversationLabel')}</label>
+          <span className="path">{entry.title}</span>
+        </div>
+        <div className="field">
+          <label>{t('session.field.projectFolder')}</label>
+          <span className="path">{cwd}</span>
+        </div>
+        {/* Only when the owning account is gone. With it alive the picker already preselects it and puts
+            the '(original account)' suffix on it, so a second row would just repeat that. */}
+        {ownerGone && (
+          <div className="field">
+            <label>{t('session.resume.originAccount')}</label>
+            <span className="path">
+              {owner?.label ?? entry.accountId}
+              <em className="origin-deleted">{t('session.resume.originDeleted')}</em>
+            </span>
+          </div>
+        )}
         <div className="field">
           <label>{t('session.field.account')}</label>
           {options === null ? (
