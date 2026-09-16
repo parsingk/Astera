@@ -290,7 +290,8 @@ describe('ChatSessionManager.adopt', () => {
         title: 'proj',
         threadId: 'th-2',
         rolloutPath: 'D:/r.jsonl',
-        bypassPermissions: true
+        bypassPermissions: true,
+        answered: ['req-1', 'req-2']
       },
       truncated: true
     })
@@ -311,7 +312,9 @@ describe('ChatSessionManager.adopt', () => {
       mode: 'adopt',
       threadId: 'th-2',
       rolloutPath: 'D:/r.jsonl',
-      truncated: true
+      truncated: true,
+      // The requests the previous app answered, for the Claude adapter's replay guard (ruling S3-7).
+      answered: ['req-1', 'req-2']
     })
     expect(manager.list().map((s) => s.id)).toContain('sess-1')
     // No provider in the note (a pre-Task-4 restart) — falls back to codex.
@@ -336,6 +339,24 @@ describe('ChatSessionManager.adopt', () => {
     expect(info).toMatchObject({ id: 'sess-4', accountId: claudeAccount.id })
     expect(handles.at(-1)?.provider).toBe('claude')
     expect(manager.state('sess-4')?.provider).toBe('claude')
+  })
+
+  it('an answered list that is not a list of ids is read as none, rather than handed on as it stands', () => {
+    const { manager, handles } = setup()
+    manager.adopt({
+      id: 'sess-5',
+      proc: new FakeProc(),
+      restore: { accountId: claudeAccount.id, cwd: 'D:/proj', title: 'proj', provider: 'claude', answered: 'req-1' },
+      truncated: false
+    })
+    expect(handles.at(-1)?.mode).toMatchObject({ answered: [] })
+    manager.adopt({
+      id: 'sess-6',
+      proc: new FakeProc(),
+      restore: { accountId: claudeAccount.id, cwd: 'D:/proj', title: 'proj', provider: 'claude', answered: ['req-1', 7] },
+      truncated: false
+    })
+    expect(handles.at(-1)?.mode).toMatchObject({ answered: ['req-1'] })
   })
 
   it('a note with neither flag leaves them unset rather than guessing', () => {

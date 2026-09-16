@@ -129,6 +129,11 @@ export class ChatSessionManager {
     // would need a new dependency for a case a plain default already answers correctly.
     const noteProvider = r.provider
     const provider: Provider = noteProvider === 'claude' || noteProvider === 'codex' ? noteProvider : 'codex'
+    // The server requests the previous app answered (the Claude adapter writes them — see its `answered`
+    // doc and ruling S3-7). Read defensively for the same reason every other field here is: the note is
+    // whatever a Host wrote, possibly an older build's, and a shape this one cannot use is no ids at all
+    // rather than a reason to lose the session.
+    const answered = Array.isArray(r.answered) ? r.answered.filter((v): v is string => typeof v === 'string') : []
 
     const info: SessionInfo = {
       id: a.id,
@@ -147,7 +152,7 @@ export class ChatSessionManager {
       ...(threadId ? { threadId, resumeSessionId: threadId } : {})
     }
 
-    const adapter = this.makeAdapter(a.proc, { mode: 'adopt', threadId, rolloutPath, truncated: a.truncated }, provider)
+    const adapter = this.makeAdapter(a.proc, { mode: 'adopt', threadId, rolloutPath, truncated: a.truncated, answered }, provider)
     this.track(a.id, info, a.proc, adapter)
     // Adopt mode's start() resolves at once (see codexAdapter.ts's doStart) — bypass is meaningless
     // here (a running thread was not just started with a bypass flag) so a neutral false is passed.
