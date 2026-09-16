@@ -1281,6 +1281,7 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.toggle.terminal': 'Terminal',
   'conversation.toggle.conversation': 'Conversation',
   // Task 9 — the chat pane's request card (ChatRequestCard.tsx) and the plan-mode pill (ModelControl.tsx)
+  'chat.ask.title': 'Codex asks',
   'chat.approval.title': 'Codex asks to run {tool}',
   'chat.approval.accept': 'Allow',
   'chat.approval.acceptForSession': 'Always allow in this session',

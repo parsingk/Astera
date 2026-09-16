@@ -540,6 +540,20 @@ export function codexRolloutFromNote(
   return { rolloutPath, codexSessionId: typeof codexSessionId === 'string' ? codexSessionId : null }
 }
 
+/**
+ * The running chat session already on a protocol thread, if there is one. One `codex app-server` per
+ * thread: two processes resuming the same thread would both append to the one rollout, and the second
+ * would silently overwrite what the first is in the middle of writing.
+ *
+ * The terminal side has the same rule and its own index for it (`codexRolling.findLiveByCodexSession`,
+ * which the resume path consults before spawning); a chat session is not in that index, so its own
+ * check is this list scan. Pure, and separate from the spawn closure, for the same reason
+ * `codexRolloutFromNote` above is.
+ */
+export function liveChatOnThread(threadId: string, sessions: SessionInfo[]): SessionInfo | null {
+  return sessions.find((s) => s.status === 'running' && s.threadId === threadId) ?? null
+}
+
 /** The coordinator's brief, named for the Run it manages. It lives in the same directory as the
  *  workers' spec files, so the boot sweep has to be able to recognise one; `startCoordinator` writes
  *  it. The name is here, in one place, so those two cannot drift. */
@@ -1236,10 +1250,12 @@ export function registerIpc(
   }
   core.sessions.onExit = onSessionExit
   core.chat.onExit = onSessionExit
-  /** Chat sessions' own log line. They are the Host's line processes, so their notices belong in the
-   *  same file the Host's own do. Read from `hostWiring` here rather than through the reattach sweep's
-   *  `hostLog`, which is declared inside a closure that runs much later than this subscriber. */
-  const chatLog = hostWiring?.log ?? ((): void => {})
+  /** Chat sessions' own log line, as this wiring block sees it. They are the Host's line processes, so
+   *  their notices belong in the same file the Host's own do. Read from `hostWiring` here rather than
+   *  through the reattach sweep's `hostLog`, which is declared inside a closure that runs much later
+   *  than this subscriber. Named for the wiring, not for chat, because `core.ts` already has a
+   *  `chatLog` of its own that writes `chat.log` — two different files, two different names. */
+  const chatWiringLog = hostWiring?.log ?? ((): void => {})
   /** Everything one chat session's adapter reports, in one subscriber (chat-sessions design §6). The
    *  event always goes to the renderer — the chat pane is driven entirely by this channel — and three
    *  of the six kinds also settle something in main:
@@ -1267,12 +1283,12 @@ export function registerIpc(
           // codexSessionIdFor answers this thread's id right away instead of waiting on that scan —
           // logged because a session that stays unmapped is mute (no conversation, no chips) and
           // nothing else would say why.
-          chatLog(`chat ${sessionId}: thread ${event.threadId} has no rollout path; the watcher will scan for it`)
+          chatWiringLog(`chat ${sessionId}: thread ${event.threadId} has no rollout path; the watcher will scan for it`)
           codexRollout?.register(info, undefined, event.threadId)
         } else codexRollout?.register(info, event.rolloutPath, event.threadId)
       } catch (err) {
         /* A failed rollout-watcher registration does not take the chat session down */
-        chatLog(`chat ${sessionId}: rollout registration failed: ${String(err)}`)
+        chatWiringLog(`chat ${sessionId}: rollout registration failed: ${String(err)}`)
       }
     } else if (event.type === 'status') {
       attention.set(sessionId, event.status)
@@ -1375,6 +1391,18 @@ export function registerIpc(
     // `core.chat.spawn` throws for a non-Codex account (slice 3 adds Claude); it is left to propagate,
     // and the renderer shows it in the same toast it shows for any failed spawn.
     if (opts.kind === 'chat') {
+      // The already-open guard, for the resume path this branch has of its own. The two checks at the
+      // top of this function read `opts.resumeSessionId`, which a chat resume never sets — it carries
+      // the protocol thread id instead (App.tsx's resumeFromHistory) — so resuming a thread as 대화
+      // walked straight past them and started a second process on the same rollout. Both indexes are
+      // consulted, and the outcome is the terminal path's own: hand back the session that is already
+      // on that thread so its tab is focused instead of a rival being spawned.
+      if (opts.resumeThreadId) {
+        const liveChat = liveChatOnThread(opts.resumeThreadId, core.chat.list())
+        if (liveChat) return liveChat
+        const liveTerminal = codexRolling?.findLiveByCodexSession(opts.resumeThreadId)
+        if (liveTerminal) return liveTerminal
+      }
       return core.chat.spawn({
         account,
         cwd: opts.cwd,
@@ -6093,12 +6121,16 @@ export function registerIpc(
             if (!info) return false
             const rolloutPath = typeof a.restore.rolloutPath === 'string' ? a.restore.rolloutPath : undefined
             const threadId = typeof a.restore.threadId === 'string' ? a.restore.threadId : undefined
-            // Only a path-only note is registered here. A thread-bearing note makes core.chat.adopt's
-            // adapter re-enter its ready state synchronously, and the chat subscriber above already
-            // registers that case — registering it again here would be a duplicate.
-            if (threadId === undefined && rolloutPath !== undefined) {
+            // Everything but a thread-bearing note is registered here. A thread-bearing one makes
+            // core.chat.adopt's adapter re-enter its ready state synchronously, and the chat
+            // subscriber above already registers that case — registering it again here would be a
+            // duplicate. Without a thread the subscriber never fires at all, so both remaining cases
+            // belong to this line: a path is handed straight over (mapped), and a note carrying
+            // neither is registered unmapped so the watcher's own scan can find the file its next turn
+            // creates — the same "no mapping means nothing to miss" reasoning as the pty adopter's.
+            if (threadId === undefined) {
               try {
-                codexRollout?.register(info, rolloutPath, threadId)
+                codexRollout?.register(info, rolloutPath)
               } catch (err) {
                 /* A failed rollout-watcher registration does not block taking the session back */
                 hostLog(`host: chat ${info.id} rollout registration failed: ${String(err)}`)

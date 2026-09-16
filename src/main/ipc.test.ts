@@ -9,6 +9,7 @@ import {
   hostHandshakeMeans,
   hostHoldings,
   hostReplaceDue,
+  liveChatOnThread,
   parseAllowedExternalUrl,
   providerOfSession,
   liveWorkersFor,
@@ -495,6 +496,24 @@ describe('codexRolloutFromNote — what an adopted codex session can be register
       rolloutPath: 'D:/r/one.jsonl',
       codexSessionId: null
     })
+  })
+})
+
+describe('liveChatOnThread — one codex app-server per protocol thread', () => {
+  const chat = (id: string, threadId: string | undefined, status: SessionInfo['status']): SessionInfo =>
+    ({ id, accountId: 'acc1', cwd: 'C:\\p', title: 't', status, kind: 'chat', threadId }) as SessionInfo
+
+  it('finds the running session already on the thread', () => {
+    const list = [chat('s1', 'th-a', 'running'), chat('s2', 'th-b', 'running')]
+    expect(liveChatOnThread('th-b', list)?.id).toBe('s2')
+  })
+
+  it('an exited session on that thread does not count — its process is gone', () => {
+    expect(liveChatOnThread('th-a', [chat('s1', 'th-a', 'exited')])).toBeNull()
+  })
+
+  it('a session that has not reached ready has no thread to match', () => {
+    expect(liveChatOnThread('th-a', [chat('s1', undefined, 'running')])).toBeNull()
   })
 })
 

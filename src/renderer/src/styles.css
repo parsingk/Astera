@@ -897,9 +897,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 }
 .kind-segmented .segmented.active { color: var(--text); border-color: var(--accent); background: var(--elevated); }
 .kind-segmented .segmented:disabled { opacity: 0.5; cursor: not-allowed; }
-/* A hint or disabled-reason note directly under a .field control that is not one of the checkbox rows
-   (label.check-small) the other .check-note rule above targets — the kind toggle is the first of these. */
-.field > .check-note { display: block; margin-top: 4px; font-size: 11px; color: var(--text-dim); opacity: 0.85; }
+/* The kind toggle's own hint and disabled-reason note. Scoped to its own class rather than written as
+   `.field > .check-note`: that shape also matched spans this branch never touched (ResumeDialog's
+   "로그인 상태 확인 중", RunConfigForm's four loading notes), restyling them as a side effect of adding
+   this one. */
+.kind-note { display: block; margin-top: 4px; font-size: 11px; color: var(--text-dim); opacity: 0.85; }
 /* NewRunModal's concurrency box. The palette rule above matches input[type="text"] only, so this one
    field fell through to the browser default — a white box with a light-grey native spinner — next to a
    text input and a Select that both follow the theme. The resting look is taken from .sel-trigger, the

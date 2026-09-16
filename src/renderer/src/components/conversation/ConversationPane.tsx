@@ -2070,7 +2070,10 @@ export function ConversationPane({
     exited ? (
       <ExitedNotice onGoTerminal={null} />
     ) : chatBanner?.kind === "request" ? (
-      <ChatRequestCard sessionId={sessionId} request={chatBanner.request} />
+      // Keyed on the request so a new one gets a new card: the old one's `busy`/`submitting` state
+      // would otherwise survive into it, and the person would meet a card whose buttons are already
+      // disabled by an answer they gave to something else.
+      <ChatRequestCard key={chatBanner.request.id} sessionId={sessionId} request={chatBanner.request} />
     ) : chatBanner?.kind === "error" ? (
       <ChatNotice text={t("chat.notice.error", { message: chatBanner.message })} />
     ) : chatBanner?.kind === "checking" ? (

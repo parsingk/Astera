@@ -19,6 +19,9 @@ export interface QuestionCardProps {
   /** Why the last attempt stopped, if it did. The answers are kept; the terminal button becomes primary. */
   notice: AskStopReason | null;
   canSubmit: boolean;
+  /** Who is asking, written out. Defaults to the Claude wording every terminal caller wants; a chat
+   *  session passes its own, because the asker there is Codex. */
+  title?: string;
   onToggle: (question: number, option: number) => void;
   onOther: (question: number, text: string) => void;
   onSubmit: () => void;
@@ -43,6 +46,7 @@ export function QuestionCard({
   state,
   notice,
   canSubmit,
+  title,
   onToggle,
   onOther,
   onSubmit,
@@ -69,7 +73,7 @@ export function QuestionCard({
       className="border-border/60 bg-background/95 flex flex-col gap-3 rounded-(--composer-radius) border px-4 py-3 text-sm"
     >
       <div className="flex items-center justify-between gap-3">
-        <p className="font-medium">{t("conversation.ask.title")}</p>
+        <p className="font-medium">{title ?? t("conversation.ask.title")}</p>
         {onGoTerminal !== null && (
           <Button size="sm" variant={drivable ? "outline" : "default"} className="shrink-0" onClick={onGoTerminal}>
             {t("conversation.pending.terminal")}

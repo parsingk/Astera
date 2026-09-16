@@ -83,15 +83,22 @@ export function ModelControl({
     ...more
   ];
 
+  // Nothing to choose from — the readout stays, the press does not. A chat session can reach this: it
+  // has no "more" row of its own, so before model/list has answered (or when it answered with nothing)
+  // the whole menu is empty, and opening it put an empty box under the cursor that closed on the next
+  // click. Every terminal caller always has the "more" row, so this is never their state.
+  const openable = items.length > 0;
+
   return (
     <>
       <div className="flex min-w-0 items-center gap-1">
         <button
           type="button"
-          className="text-muted-foreground hover:text-foreground flex max-w-56 items-center gap-1 px-1.5 py-0.5 text-xs"
+          className="text-muted-foreground hover:text-foreground flex max-w-56 items-center gap-1 px-1.5 py-0.5 text-xs disabled:hover:text-muted-foreground"
           aria-label={t("conversation.model.aria")}
           title={t("conversation.model.aria")}
           aria-busy={busy || undefined}
+          disabled={!openable}
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
             setAt({ x: Math.round(r.left), y: Math.round(r.top) });
@@ -116,7 +123,7 @@ export function ModelControl({
           </button>
         )}
       </div>
-      {at && <ContextMenu x={at.x} y={at.y} items={items} onClose={() => setAt(null)} />}
+      {at && openable && <ContextMenu x={at.x} y={at.y} items={items} onClose={() => setAt(null)} />}
     </>
   );
 }

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, BranchRef, HostStatus, ScheduleConfig, SessionKind, Provider } from '../../../core/types'
+import type { Account, BranchRef, ScheduleConfig, SessionKind, Provider } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
-import { HOST_FEATURE_PROC } from '../../../core/host/protocol'
 import { isSlackReady } from '../../../core/slack/ready'
+import { useChatAvailability } from '../hooks/useChatAvailability'
 import { orderBranchesForPicker, reconcileBaseRef } from '../../../core/worktrees/base'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
@@ -63,10 +63,6 @@ export function NewSessionDialog({
   const [slackReady, setSlackReady] = useState(false) // whether a webhook URL is configured — the checkbox is disabled when it is not
   // Both CLIs, because either one can be the missing one — the app opens with just one installed
   const [cliOk, setCliOk] = useState({ claude: true, codex: true })
-  // Astera Host status, polled while this dialog is open — a chat session needs the Host's proc-*
-  // family (HOST_FEATURE_PROC), and the Host connects a few moments after the app launches, so a
-  // single read at mount would leave the toggle looking permanently unavailable on a fresh start.
-  const [hostStatus, setHostStatus] = useState<HostStatus | null>(null)
   const [repoRoot, setRepoRoot] = useState<string | null>(null) // result of the git repo check
   const [resolvingRepo, setResolvingRepo] = useState(false) // blocks start while the check runs — stops a spawn with the previous repoRoot
   const [useWorktree, setUseWorktree] = useState(false)
@@ -100,24 +96,6 @@ export function NewSessionDialog({
     void window.api.settings
       .getAgentPermissionMode()
       .then((m) => setBypassPermissions(m === 'yolo'))
-  }, [])
-
-  useEffect(() => {
-    // Re-asked every 2s for as long as this dialog stays open — the Host connects moments after the
-    // app launches, so a single read at mount would leave a fresh start's chat option looking
-    // permanently unavailable.
-    let cancelled = false
-    const poll = (): void => {
-      void window.api.host.status().then((s) => {
-        if (!cancelled) setHostStatus(s)
-      })
-    }
-    poll()
-    const id = setInterval(poll, 2000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
   }, [])
 
   useEffect(() => {
@@ -202,14 +180,9 @@ export function NewSessionDialog({
   // from rollout's task_complete), so this flag must not hide either of those.
   const primaryCliMissing = !cliOk[primaryProvider]
   // 대화 is available only once the Host has announced the proc-* family and the primary account is
-  // Codex — the strings table's kindHostOld / kindCodexOnly say which reason applies.
-  const hostOk = !!hostStatus && hostStatus.connected && hostStatus.features.includes(HOST_FEATURE_PROC)
-  const chatDisabledReason: 'host' | 'provider' | null = !hostOk
-    ? 'host'
-    : primaryProvider !== 'codex'
-      ? 'provider'
-      : null
-  const chatEnabled = chatDisabledReason === null
+  // Codex — the strings table's kindHostOld / kindCodexOnly say which reason applies. The poll and the
+  // order the two reasons are tested in live in the hook, shared with ResumeDialog.
+  const { reason: chatDisabledReason, enabled: chatEnabled } = useChatAvailability(primaryProvider)
   // A remembered 대화 falls back to 터미널 while it is unavailable — never write here, so the person's
   // actual choice survives a temporary gap (the Host still connecting, the primary account not yet
   // switched to Codex) and chat is offered again once the condition clears.
@@ -379,12 +352,12 @@ export function NewSessionDialog({
             </button>
           </div>
           {!chatEnabled && (
-            <span className="check-note">
+            <span className="kind-note">
               {t(chatDisabledReason === 'host' ? 'session.new.kindHostOld' : 'session.new.kindCodexOnly')}
             </span>
           )}
           {chatEnabled && kind === 'chat' && (
-            <span className="check-note">{t('session.new.kindChatHint')}</span>
+            <span className="kind-note">{t('session.new.kindChatHint')}</span>
           )}
         </div>
         <div className="field">

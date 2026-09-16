@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import type { Account, HistoryEntry, HostStatus, RollConfig, ScheduleConfig, SessionKind } from '../../../core/types'
+import type { Account, HistoryEntry, RollConfig, ScheduleConfig, SessionKind } from '../../../core/types'
 import { resumeAccountOptions, resumeRollAccountIds } from '../../../core/resume'
 import { providerOf } from '../../../core/providers/meta'
-import { HOST_FEATURE_PROC } from '../../../core/host/protocol'
 import { isSlackReady } from '../../../core/slack/ready'
 import { useI18n } from '../i18n/I18nProvider'
+import { useChatAvailability } from '../hooks/useChatAvailability'
 import { isGhostAccountId } from '../../../core/accounts/ghostId'
 import * as sessionKindPref from '../lib/sessionKindPref'
 import { AccountSelect } from './AccountSelect'
@@ -49,7 +49,6 @@ export function ResumeDialog({
   // Session kind — terminal (pty) or chat (a Host-owned line process resumed by its protocol thread
   // id, not a transcript copy). Same remembered-and-falls-back rule as NewSessionDialog.
   const [kind, setKind] = useState<SessionKind>(sessionKindPref.read)
-  const [hostStatus, setHostStatus] = useState<HostStatus | null>(null)
   // The saved settings — the source of the checkbox initial values and the input to the roll chain calculation
   const [savedRoll, setSavedRoll] = useState<RollConfig | null>(null)
   const [rollOn, setRollOn] = useState(false)
@@ -117,23 +116,6 @@ export function ResumeDialog({
     }
   }, [entry.sessionId])
 
-  useEffect(() => {
-    // Same 2s poll as NewSessionDialog — the Host connects moments after the app launches, so a
-    // single read at mount would leave this dialog's chat option looking permanently unavailable too.
-    let cancelled = false
-    const poll = (): void => {
-      void window.api.host.status().then((s) => {
-        if (!cancelled) setHostStatus(s)
-      })
-    }
-    poll()
-    const id = setInterval(poll, 2000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
-
   const crossAccount = selectedId !== '' && selectedId !== entry.accountId
   // The chain that actually goes to spawn — the display uses this value too (the result after the provider filter and the rotation reorder)
   const rollChain = selectedId ? resumeRollAccountIds(savedRoll?.accountIds ?? null, accounts, selectedId) : []
@@ -142,13 +124,8 @@ export function ResumeDialog({
   // The entry's own provider — cross-account resume only ever offers same-provider accounts
   // (resumeAccountOptions), so this is also selectedId's provider once one is picked.
   const entryProvider = owner ? providerOf(owner) : 'claude'
-  const hostOk = !!hostStatus && hostStatus.connected && hostStatus.features.includes(HOST_FEATURE_PROC)
-  const chatDisabledReason: 'host' | 'provider' | null = !hostOk
-    ? 'host'
-    : entryProvider !== 'codex'
-      ? 'provider'
-      : null
-  const chatEnabled = chatDisabledReason === null
+  // The Host poll and the order the two reasons are tested in are shared with NewSessionDialog.
+  const { reason: chatDisabledReason, enabled: chatEnabled } = useChatAvailability(entryProvider)
   // A remembered 대화 falls back to 터미널 while it is unavailable — never persisted, so it is offered
   // again once the condition clears (same reasoning as NewSessionDialog's own fallback effect).
   useEffect(() => {
@@ -217,12 +194,12 @@ export function ResumeDialog({
             </button>
           </div>
           {!chatEnabled && (
-            <span className="check-note">
+            <span className="kind-note">
               {t(chatDisabledReason === 'host' ? 'session.new.kindHostOld' : 'session.new.kindCodexOnly')}
             </span>
           )}
           {chatEnabled && kind === 'chat' && (
-            <span className="check-note">{t('session.new.kindChatHint')}</span>
+            <span className="kind-note">{t('session.new.kindChatHint')}</span>
           )}
         </div>
         <div className="field">

@@ -438,6 +438,10 @@ export default function App(): React.JSX.Element {
   // sessions 조회가 판정하므로 여기서 따로 청소하지 않는다.
   const lastSessionIdRef = useRef<string | null>(null)
   if (activeSessionId) lastSessionIdRef.current = activeSessionId
+  /** What kind of session the active tab is — 'terminal' when the tab is not a session at all, which
+   *  is the right answer for the one reader below (the first-run question, which is about terminal
+   *  sessions and must not open over a chat tab). */
+  const activeSessionKind = sessionKindOf(sessions.find((s) => s.id === activeSessionId) ?? {})
   const [showNew, setShowNew] = useState(false)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null) // prefill for WorktreePanel's 'start session'
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
@@ -4775,8 +4779,14 @@ export default function App(): React.JSX.Element {
           to exist. A genuinely fresh profile opens with the detected-accounts modal already up, and
           this one stacked straight on top of it — two modals on the very first screen. Waiting is also
           the better question: before there is an account there are no sessions to have a default view
-          for. Answering and dismissing settle it the same way — it asks once. */}
-      {firstRunAsked === false && accounts.length > 0 && (
+          for. Answering and dismissing settle it the same way — it asks once.
+
+          A chat tab is the third gate, and the reason is that the question does not apply to one: a
+          chat session has one view and no terminal to default to, so asking "터미널 or 대화?" over it
+          would settle a preference the tab underneath cannot honour — and dismissing is permanent, so
+          it would burn the one asking. Deferred, not dismissed: the next time a terminal tab is
+          active, the question is still waiting. */}
+      {firstRunAsked === false && accounts.length > 0 && activeSessionKind !== 'chat' && (
         <FirstRunDialog
           onPick={(view) => {
             setFirstRunAsked(true)

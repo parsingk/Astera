@@ -1486,6 +1486,7 @@ export const ko = {
   'conversation.toggle.terminal': '터미널',
   'conversation.toggle.conversation': '대화',
   // Task 9 — the chat pane's request card (ChatRequestCard.tsx) and the plan-mode pill (ModelControl.tsx)
+  'chat.ask.title': 'Codex 가 묻습니다',
   'chat.approval.title': 'Codex 가 {tool} 실행 허가를 묻습니다',
   'chat.approval.accept': '허용',
   'chat.approval.acceptForSession': '이 세션에서는 항상 허용',
