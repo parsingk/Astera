@@ -563,7 +563,16 @@ app.whenReady().then(async () => {
         core!.sessions.write(id, d) // a throw is the rejection the caller sees
       }
     }),
-    chatDriver({ send: (id, text) => core!.chat.send(id, text) })
+    // The manager's `send` resolves for an id it does not know, and a silent resolve reads as "delivered"
+    // to everything on the other side of this seam — the scheduler zeroes its refusal count on it, and
+    // 4b's Slack notice and 4c's rolling prompt are both written against "a rejection means not sent".
+    // The driver's own contract says it rejects when the CLI refused the message **or the session is
+    // gone**, so the second half is kept here, at the seam, rather than left to the router's `isChat`
+    // check a microsecond earlier.
+    chatDriver({
+      send: (id, text) =>
+        core!.chat.has(id) ? core!.chat.send(id, text) : Promise.reject(new Error(`no chat session: ${id}`))
+    })
   )
   // Session scheduler: runs periodic commands automatically. Logs share rolling.log ([sched] prefix)
   const scheduler = new SchedulerCoordinator({

@@ -36,6 +36,22 @@ describe('chatDriver', () => {
     const d = chatDriver({ send: async () => { throw new Error('turn in progress') } })
     await expect(d.deliver('c1', 'x')).rejects.toThrow('turn in progress')
   })
+
+  it('a send that knows nothing of the id rejects — the "or the session is gone" half of the contract', async () => {
+    // The chat manager's own `send` resolves for an id it does not know, which would read as "delivered"
+    // to everything downstream: the scheduler would zero its refusal count, and 4b's Slack path and 4c's
+    // rolling prompt both treat a resolve as sent. So index.ts composes this driver with a core.chat.has
+    // guard in front of the manager, and what it hands in is a send shaped like the one below. This pins
+    // the driver's end of that contract — a live id resolves, a gone one rejects, and the reason travels
+    // out of deliver unchanged.
+    const live = new Set(['c1'])
+    const d = chatDriver({
+      send: (id) => (live.has(id) ? Promise.resolve() : Promise.reject(new Error(`no chat session: ${id}`)))
+    })
+    await expect(d.deliver('c1', 'x')).resolves.toBeUndefined()
+    live.delete('c1') // the session exits between one round and the next
+    await expect(d.deliver('c1', 'x')).rejects.toThrow('no chat session: c1')
+  })
 })
 
 describe('routedDriver', () => {

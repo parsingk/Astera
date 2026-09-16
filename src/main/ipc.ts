@@ -1415,6 +1415,22 @@ export function registerIpc(
       const live = codexRolling.findLiveByCodexSession(opts.resumeSessionId)
       if (live) return live
     }
+    // The same guard for the resume path a 대화 has of its own. The two checks above read
+    // `opts.resumeSessionId`, which a chat resume never sets — it carries the protocol thread id instead
+    // (App.tsx's resumeFromHistory), and only a chat resume sets that — so resuming a thread as 대화
+    // walked straight past them and started a second process on the same rollout. Both indexes are
+    // consulted, and the outcome is the terminal path's own: hand back the session that is already on
+    // that thread so its tab is focused instead of a rival being spawned.
+    // It sits here, with its two siblings and above the persist below, because handing back an existing
+    // tab must write nothing: a person who ticks 스케쥴 in the resume dialog for a 대화 that is already
+    // open gets that tab back with no schedule armed on it, and an entry written to scheduler.json then
+    // would pre-fill the next resume dialog as though it had been on.
+    if (opts.resumeThreadId) {
+      const liveChat = liveChatOnThread(opts.resumeThreadId, core.chat.list())
+      if (liveChat) return liveChat
+      const liveTerminal = codexRolling?.findLiveByCodexSession(opts.resumeThreadId)
+      if (liveTerminal) return liveTerminal
+    }
     // Resuming re-stamps updatedAt when it revives a schedule. register() already knows the sessionKey,
     // so it never goes through learning (learnKey) and persistConfig is not called — meaning a resume
     // on its own does not refresh updatedAt, and a schedule someone resumes and uses daily would still
@@ -1455,18 +1471,6 @@ export function registerIpc(
     // building either one is left to propagate, and the renderer shows it in the same toast it shows
     // for any failed spawn.
     if (opts.kind === 'chat') {
-      // The already-open guard, for the resume path this branch has of its own. The two checks at the
-      // top of this function read `opts.resumeSessionId`, which a chat resume never sets — it carries
-      // the protocol thread id instead (App.tsx's resumeFromHistory) — so resuming a thread as 대화
-      // walked straight past them and started a second process on the same rollout. Both indexes are
-      // consulted, and the outcome is the terminal path's own: hand back the session that is already
-      // on that thread so its tab is focused instead of a rival being spawned.
-      if (opts.resumeThreadId) {
-        const liveChat = liveChatOnThread(opts.resumeThreadId, core.chat.list())
-        if (liveChat) return liveChat
-        const liveTerminal = codexRolling?.findLiveByCodexSession(opts.resumeThreadId)
-        if (liveTerminal) return liveTerminal
-      }
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
