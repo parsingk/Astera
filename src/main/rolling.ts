@@ -529,13 +529,29 @@ export class RollingCoordinator {
    *  statusLine's own field names and handed to the same learner the pty path uses — the persist-once
    *  gate, the native-session report and the transcript tail then all behave identically. `parsed` is
    *  null on purpose: this payload carries no usage windows, and letting applyMeta parse it would only
-   *  re-derive the same nothing. */
+   *  re-derive the same nothing.
+   *
+   *  **Usage does not arrive here.** This payload carries no window at all, so the apply's last act —
+   *  refreshing `lastUsagePct` from the payload — reads nothing out of it and leaves the field null. A
+   *  chat chain learns its usage on the rateLimit event instead (`onChatLimit`), and the two are
+   *  ordered the right way round in practice: meta lands at `ready` and again when the transcript
+   *  lookup succeeds, both before any turn has run. The exception is a `/clear`, whose second `ready`
+   *  comes back through here and does null the figure — the next turn's rateLimit event replaces it. */
   onChatMeta(
     sessionId: string,
     meta: { claudeSessionId: string | null; transcriptPath: string | null }
   ): void {
     const chain = this.chains.get(sessionId)
     if (!chain || chain.disposed) return
+    // A `/clear` starts a new conversation under a new id, and the file the old one was written to is
+    // not this one's. The path (and the tail reading it) go before the apply, so roll() cannot copy the
+    // dead conversation into the target account and resume the new id against it. Nothing is lost by
+    // dropping them: the transcript lookup this same event arms reports the new path a moment later,
+    // and applyMeta builds the tail for it then.
+    if (meta.claudeSessionId !== null && meta.claudeSessionId !== chain.claudeSessionId) {
+      chain.transcriptPath = null
+      chain.limitTail = null
+    }
     this.applyMeta(
       chain,
       { session_id: meta.claudeSessionId ?? undefined, transcript_path: meta.transcriptPath ?? undefined },
@@ -561,10 +577,18 @@ export class RollingCoordinator {
    *  No text is passed on: there is no phrase here to read a reset time out of. `info.resetsAt` is
    *  deliberately not turned into a synthetic line — `recordRecovery` already takes the account's own
    *  answer (the `queried` argument, from the lookup `onLimitCandidate` just made) and that is the same
-   *  fact from the same source, without inventing a sentence to parse. */
+   *  fact from the same source, without inventing a sentence to parse.
+   *
+   *  **This is where a chat chain's usage arrives** (spec §8.1's utilization clause, Ruling 4c-7). It is
+   *  recorded from every status, not just a rejection: the useful readings ride on the 'allowed_warning'
+   *  events, and a rejection carries none of its own. It is the statusLine's `usedPercent` counterpart —
+   *  the number `inReplayGrace`, `limitEvidence` and the single-account reset anchor all read — and
+   *  without it a chat chain's figure is null for its whole life, which makes the replay grace
+   *  unconditional for the 60 seconds after a roll. */
   onChatLimit(sessionId: string, info: RateLimitInfo): void {
     const chain = this.chains.get(sessionId)
     if (!chain || chain.disposed) return
+    if (info.utilization !== null) chain.lastUsagePct = Math.round(info.utilization * 100)
     if (info.status !== 'rejected') {
       if (!chain.chatLimitIgnoredWarned) {
         chain.chatLimitIgnoredWarned = true
@@ -1133,10 +1157,28 @@ export class RollingCoordinator {
    *  자체로 갖고 있지만, deps.readStatusPayload 자체는 재던지지 않는다는 계약이 없다. 그래서
    *  resumePromptFor 가 deps.resumeText 를 감싸는 것과 같은 자리에서 직접 감싸 로그만 남기고
    *  넘어간다. 그 await 뒤에는 이 넓어진 가드를 다시 확인한다 — 새로 연 await 창이기 때문이다(위
-   *  첫 가드와 같은 이유이나, 이번에는 적용 자체를 아직 하지 않았다는 점이 다르다). */
+   *  첫 가드와 같은 이유이나, 이번에는 적용 자체를 아직 하지 않았다는 점이 다르다).
+   *
+   *  **A chat chain has no verdict to reach here (Ruling 4c-6).** The question this function asks is
+   *  "did the statusLine come back", and a chat session never calls that hook — `readStatusPayload`
+   *  answers null for it forever. The two fields the answer is read off, `claudeSessionId` and
+   *  `transcriptPath`, were pushed in by `onChatMeta` long before the limit, so every one of them is
+   *  already non-null and the function would fall straight through to declaring health: resetting the
+   *  cycle's streak and this chain's record, and clearing the account's entry in the **shared** block
+   *  registry — every other chain in both coordinators reads that entry — on the evidence of nothing.
+   *  So a chat chain returns before any of it. Nothing is scheduled in its place and nothing needs to
+   *  be: the block record ages out at its own reset, the tick has the chain back (the wait timer is
+   *  gone), and a fresh rateLimit event re-plans from scratch. */
   private async settleInPlace(chain: Chain, liveId: string): Promise<void> {
     chain.healthyTimer = null
     if (chain.disposed || chain.liveId !== liveId) return
+    if (chain.kind === 'chat') {
+      this.deps.log(
+        `in-place resume on a chat chain: no verdict — the block record ages out at its reset; ` +
+          `a fresh rateLimit re-plans session=${liveId}`
+      )
+      return
+    }
     let payload: unknown | null = null
     try {
       payload = await this.deps.readStatusPayload(chain.liveId)

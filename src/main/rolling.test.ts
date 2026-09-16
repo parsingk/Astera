@@ -3023,4 +3023,88 @@ describe('chat chains', () => {
     h.coord.onChatLimit('nobody', rejected)
     expect(h.events).toEqual([])
   })
+
+  // Ruling 4c-6. The settle verdict asks one question — did the statusLine come back — and answers it
+  // by looking at claudeSessionId and transcriptPath. For a chat chain those two were pushed in by
+  // onChatMeta before the limit ever happened, so the verdict passed on evidence it had not gathered
+  // and cleared the block record every other chain in both coordinators reads.
+  //
+  // **What the assertion can see.** The wait runs until the record's own expiry, so by the time the
+  // in-place resume happens `blocks.get` answers null either way — an expired record is not a block.
+  // What the bug does is *delete the entry*, and `size` is what tells "aged out where it stands" from
+  // "torn up". The cross-chain cost of tearing it up is already pinned on the pty path (the shared
+  // record test above).
+  it('an in-place resume declares nothing — the block record is left to age out', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks, readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    // A single account is the whole in-place path: there is nowhere to roll to, so the limit becomes a
+    // wait and the wait resumes on the account it is already on.
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual([]) // no copy, no kill, no spawn — it waits
+    expect(blocks.size).toBe(1)
+    // The wait (15 minutes — the fallback when no reset time is known), then the in-place resume, then
+    // the settle verdict 60 seconds after it.
+    await vi.advanceTimersByTimeAsync(15 * 60_000 + 61_000)
+    await flush()
+    // The resume really happened — the routed text went out through `write`. (The Enter that follows it
+    // on a pty is dropped by the chat write dep in index.ts, so it is not this coordinator's concern.)
+    expect(h.written.filter((w) => w.id === 'c1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    expect(blocks.size).toBe(1)
+  })
+
+  // Ruling 4c-7 (spec §8.1's utilization clause). A chat session writes no statusLine, so the number
+  // the replay grace, the limit-evidence gate and the single-account blind-spot check all read can only
+  // arrive on the rateLimit event. Without it the grace is unconditional for the whole 60 seconds after
+  // a roll, and switching onto an account that is already exhausted is met with silence.
+  it('a rateLimit records the usage figure, so an exhausted account is not shielded by the replay grace', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1', 'a2', 'a3'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    // The new session, still inside the 60-second replay grace. An 'allowed_warning' rides along with
+    // an ordinary turn and rolls nothing — what it does is say this account is at 99%.
+    h.coord.onChatMeta('s2', { claudeSessionId: 'th-2', transcriptPath: 'D:/t/th-2.jsonl' })
+    h.coord.onChatLimit('s2', {
+      status: 'allowed_warning',
+      resetsAt: null,
+      utilization: 0.99,
+      window: 'seven_day',
+      source: 'event'
+    })
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    // …so the rejection that follows it, still inside the grace, is read the way the pty path reads a
+    // snapshot that already says exhausted: genuine, not an echo of the limit that caused the roll.
+    h.coord.onChatLimit('s2', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2', 'copy', 'kill:s2', 'spawn:s3:a3'])
+  })
+
+  // A `/clear` starts a new conversation under a new id, and the file the old one was written to is not
+  // this one's. Left in place, the next roll copies that dead conversation into the target account and
+  // resumes the new id against it.
+  it('a changed id drops the transcript the old conversation was written to', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-2', transcriptPath: null }) // the /clear's second ready
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.copied).toEqual([])
+    expect(h.events).toEqual([])
+    // The abort a chain that never learned a path takes today — a visible wait rather than silence.
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+  })
 })
