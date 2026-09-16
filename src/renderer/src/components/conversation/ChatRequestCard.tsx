@@ -6,6 +6,7 @@ import { Button } from "../ui/button";
 import { useI18n } from "../../i18n/I18nProvider";
 import { toast } from "../../lib/toast";
 import type { MessageKey } from "../../../../core/i18n";
+import type { Provider } from "../../../../core/providers/meta";
 import type { ApprovalDecision, ChatRequest } from "../../../../core/chat/types";
 import { allAnswered, emptyAnswers, setOther, togglePick, type Answer } from "../../../../core/prompts/askUserQuestion";
 import { forgetOtherAskAnswers, recallAskAnswers, rememberAskAnswers } from "./askDrafts";
@@ -14,6 +15,8 @@ import { QuestionCard } from "./QuestionCard";
 export interface ChatRequestCardProps {
   sessionId: string;
   request: ChatRequest;
+  /** Which CLI this session runs, so the card can name it in its title rather than say Codex always. */
+  provider: Provider;
 }
 
 /** The order the three decisions are offered in when a request lists them, least to most final —
@@ -29,25 +32,29 @@ const DECISION_LABEL: Record<ApprovalDecision, MessageKey> = {
 const errorMessageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /**
- * The chat pane's one banner slot while Codex is waiting on an answer only a person can give: an
+ * The chat pane's one banner slot while the CLI is waiting on an answer only a person can give: an
  * AskUserQuestion form, drawn through the same QuestionCard the terminal sessions use, or a
  * PendingBanner-styled approval for a tool call. Draws only what `request` says right now — the card
  * disappears the moment the pane's own state drops the request (Task 10 unmounts it), so nothing here
  * has to notice that on its own.
  */
-export function ChatRequestCard({ sessionId, request }: ChatRequestCardProps): ReactNode {
-  if (request.kind === "question") return <QuestionRequestCard sessionId={sessionId} request={request} />;
-  return <ApprovalRequestCard sessionId={sessionId} request={request} />;
+export function ChatRequestCard({ sessionId, request, provider }: ChatRequestCardProps): ReactNode {
+  if (request.kind === "question")
+    return <QuestionRequestCard sessionId={sessionId} request={request} provider={provider} />;
+  return <ApprovalRequestCard sessionId={sessionId} request={request} provider={provider} />;
 }
 
 function QuestionRequestCard({
   sessionId,
-  request
+  request,
+  provider
 }: {
   sessionId: string;
   request: Extract<ChatRequest, { kind: "question" }>;
+  provider: Provider;
 }): ReactNode {
   const { t } = useI18n();
+  const who = provider === "claude" ? "Claude" : "Codex";
   const key = `${sessionId}|${request.id}`;
   const [draft, setDraft] = useState<{ key: string; answers: Answer[] }>(() => ({
     key,
@@ -90,7 +97,7 @@ function QuestionRequestCard({
       answers={answers}
       state={submitting ? "answering" : "ready"}
       notice={null}
-      title={t("chat.ask.title")}
+      title={t("chat.ask.title", { who })}
       canSubmit={allAnswered(request.form, answers) && !submitting}
       onToggle={(q, option) => update(togglePick(request.form, answers, q, option))}
       onOther={(q, text) => update(setOther(request.form, answers, q, text))}
@@ -102,12 +109,15 @@ function QuestionRequestCard({
 
 function ApprovalRequestCard({
   sessionId,
-  request
+  request,
+  provider
 }: {
   sessionId: string;
   request: Extract<ChatRequest, { kind: "approval" }>;
+  provider: Provider;
 }): ReactNode {
   const { t } = useI18n();
+  const who = provider === "claude" ? "Claude" : "Codex";
   const [busy, setBusy] = useState(false);
 
   const decide = async (decision: ApprovalDecision): Promise<void> => {
@@ -126,7 +136,7 @@ function ApprovalRequestCard({
       data-slot="chat-request-approval"
       className="flex flex-col gap-2 rounded-(--composer-radius) border border-[var(--warn-line)] bg-[var(--warn-bg)] px-4 py-2.5 text-sm text-[var(--warn-ink)]"
     >
-      <p className="font-medium">{t("chat.approval.title", { tool: request.about.tool })}</p>
+      <p className="font-medium">{t("chat.approval.title", { who, tool: request.about.tool })}</p>
       <pre
         data-slot="chat-request-approval-lines"
         className="max-h-72 overflow-auto rounded-md bg-black/20 px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap"

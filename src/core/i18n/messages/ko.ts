@@ -684,14 +684,13 @@ export const ko = {
   'session.new.cliMissingPost': '설치 후 다시 시도하세요.',
   'session.field.projectFolder': '프로젝트 폴더',
   'session.field.account': '계정',
-  // 세션 방식 선택(Task 7) — 터미널/대화 세그먼트 컨트롤. 대화는 Host 가 proc-* 를 말해야 하고
-  // (kindHostOld) 주 계정이 Codex 여야 한다(kindCodexOnly); 둘 다 만족해야 켜진다.
+  // 세션 방식 선택(Task 7) — 터미널/대화 세그먼트 컨트롤. 대화는 Host 가 proc-* 를 말해야 켜진다
+  // (kindHostOld); 계정이 Codex 인지 Claude 인지는 더 이상 가리지 않는다.
   'session.kind.terminal': '터미널',
   'session.kind.chat': '대화',
   'session.new.kindLabel': '세션 방식',
   'session.new.kindChatHint': '대화 세션은 터미널 없이 대화창만 씁니다. 선택지와 권한 확인이 카드로 옵니다.',
   'session.new.kindHostOld': 'Host 가 새 버전으로 바뀐 뒤 사용할 수 있습니다',
-  'session.new.kindCodexOnly': '지금은 Codex 계정에서만 열 수 있습니다',
   'session.new.folderNotSelected': '(선택 안 됨)',
   'session.new.pickFolder': '선택…',
   'session.new.useWorktree': 'worktree로 분리해서 시작',
@@ -1486,8 +1485,8 @@ export const ko = {
   'conversation.toggle.terminal': '터미널',
   'conversation.toggle.conversation': '대화',
   // Task 9 — the chat pane's request card (ChatRequestCard.tsx) and the plan-mode pill (ModelControl.tsx)
-  'chat.ask.title': 'Codex 가 묻습니다',
-  'chat.approval.title': 'Codex 가 {tool} 실행 허가를 묻습니다',
+  'chat.ask.title': '{who} 가 묻습니다',
+  'chat.approval.title': '{who} 가 {tool} 실행 허가를 묻습니다',
   'chat.approval.accept': '허용',
   'chat.approval.acceptForSession': '이 세션에서는 항상 허용',
   'chat.approval.decline': '거절',

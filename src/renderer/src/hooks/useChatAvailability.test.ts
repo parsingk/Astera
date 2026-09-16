@@ -2,21 +2,23 @@ import { describe, it, expect } from 'vitest'
 import { chatAvailabilityOf } from './useChatAvailability'
 
 describe('chatAvailabilityOf', () => {
-  it('a Codex account with a Host that has proc can start 대화', () => {
-    expect(chatAvailabilityOf({ hostOk: true, provider: 'codex' })).toEqual({
+  it('a Codex account can start 대화 once the Host speaks proc', () => {
+    expect(chatAvailabilityOf({ hostOk: true })).toEqual({
       hostOk: true,
       reason: null,
       enabled: true
     })
   })
 
-  it('a Claude account is told about the account, even while the Host is still connecting', () => {
-    expect(chatAvailabilityOf({ hostOk: false, provider: 'claude' }).reason).toBe('provider')
-    expect(chatAvailabilityOf({ hostOk: true, provider: 'claude' }).reason).toBe('provider')
+  it('a Claude account can start 대화 once the Host speaks proc, same as Codex', () => {
+    expect(chatAvailabilityOf({ hostOk: true })).toEqual({
+      hostOk: true,
+      reason: null,
+      enabled: true
+    })
   })
 
-  it('the Host is the reason only once the account is not', () => {
-    const a = chatAvailabilityOf({ hostOk: false, provider: 'codex' })
-    expect(a).toEqual({ hostOk: false, reason: 'host', enabled: false })
+  it('the Host is the only reason it can be unavailable', () => {
+    expect(chatAvailabilityOf({ hostOk: false })).toEqual({ hostOk: false, reason: 'host', enabled: false })
   })
 })

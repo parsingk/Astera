@@ -179,13 +179,12 @@ export function NewSessionDialog({
   // supports codex too (codexRolling.ts) and so do Slack notifications (turn completion is detected
   // from rollout's task_complete), so this flag must not hide either of those.
   const primaryCliMissing = !cliOk[primaryProvider]
-  // 대화 is available only once the Host has announced the proc-* family and the primary account is
-  // Codex — the strings table's kindHostOld / kindCodexOnly say which reason applies. The poll and the
-  // order the two reasons are tested in live in the hook, shared with ResumeDialog.
-  const { reason: chatDisabledReason, enabled: chatEnabled } = useChatAvailability(primaryProvider)
+  // 대화 is available once the Host has announced the proc-* family — either provider's account can
+  // open one. The poll lives in the hook, shared with ResumeDialog.
+  const { enabled: chatEnabled } = useChatAvailability()
   // A remembered 대화 falls back to 터미널 while it is unavailable — never write here, so the person's
-  // actual choice survives a temporary gap (the Host still connecting, the primary account not yet
-  // switched to Codex) and chat is offered again once the condition clears.
+  // actual choice survives a temporary gap (the Host still connecting) and chat is offered again once
+  // the condition clears.
   useEffect(() => {
     if (kind === 'chat' && !chatEnabled) setKind('terminal')
   }, [kind, chatEnabled])
@@ -311,9 +310,7 @@ export function NewSessionDialog({
             </button>
           </div>
           {!chatEnabled && (
-            <span className="kind-note">
-              {t(chatDisabledReason === 'host' ? 'session.new.kindHostOld' : 'session.new.kindCodexOnly')}
-            </span>
+            <span className="kind-note">{t('session.new.kindHostOld')}</span>
           )}
           {chatEnabled && kind === 'chat' && (
             <span className="kind-note">{t('session.new.kindChatHint')}</span>

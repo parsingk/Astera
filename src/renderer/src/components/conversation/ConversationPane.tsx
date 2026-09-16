@@ -638,12 +638,13 @@ export function ConversationPane({
   /** What the model readout and its menu are looking at. A terminal session's comes from the rollout
    *  and the CLI's own status bar, layered by the state above; a chat session's comes from the manager,
    *  which is the only thing that knows — there is no screen to read and the rollout is a turn behind.
-   *  Always codex for a chat session: that is the only CLI with an app-server. */
+   *  `cli` is the session's own provider once the manager has said (`chat.state`); 'codex' is only a
+   *  placeholder for the moment before that answer lands (useChatState.ts), not a claim about the CLI. */
   const modelInfo = isChat
     ? {
         model: chat === null ? null : chat.model.model,
         effort: chat === null ? null : chat.model.effort,
-        cli: "codex" as const
+        cli: chat === null ? "codex" as const : chat.provider
       }
     : terminalModelInfo;
 
@@ -1921,10 +1922,14 @@ export function ConversationPane({
             // levels this can set are the whole of what there is, and there is no screen to send
             // anyone to for the rest — so the row is not offered at all (ModelControl.tsx).
             line: modelLine,
-            cli: "codex",
+            cli: modelInfo.cli,
             choices: modelChoicesOf(models),
             onPickModel: (key) => sayIfFailed(window.api.chat.setModel(sessionId, key, modelInfo.effort)),
-            effortChoices: effortChoicesOf(models, modelInfo.model, "codex"),
+            // Claude's chat protocol has no effort channel at all — its `set_model` control request
+            // carries only the model (claudeAdapter.ts's doSetModel) — so effortChoicesOf's rows
+            // (its models still report levels; only codex's own picker gets filtered) would offer a
+            // control that does nothing. Codex keeps the rows the terminal picker offers.
+            effortChoices: modelInfo.cli === "claude" ? [] : effortChoicesOf(models, modelInfo.model, "codex"),
             onPickEffort: (level) => {
               // setModel takes the pair, and an effort on its own is not a pair: the model it belongs
               // to is whatever this thread is on, or the default the list marks when it has not said
@@ -2073,7 +2078,12 @@ export function ConversationPane({
       // Keyed on the request so a new one gets a new card: the old one's `busy`/`submitting` state
       // would otherwise survive into it, and the person would meet a card whose buttons are already
       // disabled by an answer they gave to something else.
-      <ChatRequestCard key={chatBanner.request.id} sessionId={sessionId} request={chatBanner.request} />
+      <ChatRequestCard
+        key={chatBanner.request.id}
+        sessionId={sessionId}
+        request={chatBanner.request}
+        provider={chat === null ? "codex" : chat.provider}
+      />
     ) : chatBanner?.kind === "error" ? (
       <ChatNotice text={t("chat.notice.error", { message: chatBanner.message })} />
     ) : chatBanner?.kind === "checking" ? (

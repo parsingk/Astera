@@ -600,7 +600,6 @@ export const en: Record<keyof typeof ko, string> = {
   'session.new.kindLabel': 'Session type',
   'session.new.kindChatHint': 'A chat session has no terminal — only the conversation view. Questions and approvals arrive as cards.',
   'session.new.kindHostOld': 'Available once the Host has been replaced by the new version',
-  'session.new.kindCodexOnly': 'For now only a Codex account can open one',
   'session.new.folderNotSelected': '(Not selected)',
   'session.new.pickFolder': 'Select…',
   'session.new.useWorktree': 'Start in a separate worktree',
@@ -1281,8 +1280,8 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.toggle.terminal': 'Terminal',
   'conversation.toggle.conversation': 'Conversation',
   // Task 9 — the chat pane's request card (ChatRequestCard.tsx) and the plan-mode pill (ModelControl.tsx)
-  'chat.ask.title': 'Codex asks',
-  'chat.approval.title': 'Codex asks to run {tool}',
+  'chat.ask.title': '{who} asks',
+  'chat.approval.title': '{who} asks to run {tool}',
   'chat.approval.accept': 'Allow',
   'chat.approval.acceptForSession': 'Always allow in this session',
   'chat.approval.decline': 'Deny',

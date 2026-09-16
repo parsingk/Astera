@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Account, HistoryEntry, RollConfig, ScheduleConfig, SessionKind } from '../../../core/types'
 import { resumeAccountOptions, resumeRollAccountIds } from '../../../core/resume'
-import { providerOf } from '../../../core/providers/meta'
 import { isSlackReady } from '../../../core/slack/ready'
 import { useI18n } from '../i18n/I18nProvider'
 import { useChatAvailability } from '../hooks/useChatAvailability'
@@ -121,11 +120,8 @@ export function ResumeDialog({
   const rollChain = selectedId ? resumeRollAccountIds(savedRoll?.accountIds ?? null, accounts, selectedId) : []
   const labelOf = (id: string): string => accounts.find((a) => a.id === id)?.label ?? id
 
-  // The entry's own provider — cross-account resume only ever offers same-provider accounts
-  // (resumeAccountOptions), so this is also selectedId's provider once one is picked.
-  const entryProvider = owner ? providerOf(owner) : 'claude'
-  // The Host poll and the order the two reasons are tested in are shared with NewSessionDialog.
-  const { reason: chatDisabledReason, enabled: chatEnabled } = useChatAvailability(entryProvider)
+  // The Host poll is shared with NewSessionDialog; either provider's account can open a chat session.
+  const { enabled: chatEnabled } = useChatAvailability()
   // A remembered 대화 falls back to 터미널 while it is unavailable — never persisted, so it is offered
   // again once the condition clears (same reasoning as NewSessionDialog's own fallback effect).
   useEffect(() => {
@@ -177,9 +173,7 @@ export function ResumeDialog({
             </button>
           </div>
           {!chatEnabled && (
-            <span className="kind-note">
-              {t(chatDisabledReason === 'host' ? 'session.new.kindHostOld' : 'session.new.kindCodexOnly')}
-            </span>
+            <span className="kind-note">{t('session.new.kindHostOld')}</span>
           )}
           {chatEnabled && kind === 'chat' && (
             <span className="kind-note">{t('session.new.kindChatHint')}</span>
