@@ -107,6 +107,27 @@ describe('CodexRolloutWatcher', () => {
     w.stop()
   })
 
+  // A chat session's turn end is announced from its own protocol (SlackNotifier.onChatEvent), so this
+  // watcher's own turn-complete callback has to be switched off for it — otherwise every turn goes out
+  // twice. Without opts the default still fires ('task_complete를 만나면 콜백한다' above covers that).
+  it('opts.notifyTurns: false 로 등록하면 task_complete가 와도 콜백하지 않는다', async () => {
+    const cwd = path.join(dir, 'proj')
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const onTurnComplete = vi.fn()
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete,
+      log: () => {},
+      now: () => now
+    })
+    w.register(session('live-1', cwd, true), p, 'cx-1', { notifyTurns: false })
+    await advance(TICK)
+    await appendFile(p, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n')
+    await advance(TICK)
+    expect(onTurnComplete).not.toHaveBeenCalled()
+    w.stop()
+  })
+
   // 탐색은 경로와 세션 id 를 함께 돌려주는데(findRollout) 지금까지 경로만 남기고 id 는 버렸다.
   // 그 id 가 codex 에서 claude 의 statusLine session_id 에 해당하는 값이고, 스케줄러가 키를 배울
   // 유일한 출처다 — 이 감시자는 **모든** codex 세션에 붙으므로 롤링을 켜지 않은 세션도 답할 수 있다.

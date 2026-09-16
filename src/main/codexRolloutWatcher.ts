@@ -151,8 +151,13 @@ export class CodexRolloutWatcher {
    *
    *  codexSessionId: the conversation's own id, for the one caller that knows it without this watcher
    *  having scanned — the reattach adopter, which reads it out of the Host's note beside the path. A
-   *  resuming caller leaves it out: it holds the same value as `info.resumeSessionId` already. */
-  register(info: SessionInfo, rolloutPath?: string, codexSessionId?: string): void {
+   *  resuming caller leaves it out: it holds the same value as `info.resumeSessionId` already.
+   *
+   *  opts.notifyTurns: a chat session's turn end is announced from its own protocol
+   *  (SlackNotifier.onChatEvent), so its registration passes `false` here — otherwise this watcher's
+   *  own task_complete callback would announce the same turn a second time. Left out, the default
+   *  still follows `info.slackNotify`, as it always has. */
+  register(info: SessionInfo, rolloutPath?: string, codexSessionId?: string, opts?: { notifyTurns?: boolean }): void {
     if (!this.deps.getAccount(info.accountId)) {
       this.deps.log(`codex rollout watch registration cancelled — no such account session=${info.id}`)
       return
@@ -168,7 +173,7 @@ export class CodexRolloutWatcher {
       mappedAt: rolloutPath ? this.now() : null,
       rescanAt: this.now() + RESCAN_MS,
       disposed: false,
-      notifyTurns: info.slackNotify === true,
+      notifyTurns: opts?.notifyTurns ?? info.slackNotify === true,
       limits: null,
       context: null,
       contextSeed: rolloutPath ? seedContext(rolloutPath) : null
