@@ -201,7 +201,10 @@ interface Chain {
   healthyTimer: ReturnType<typeof setTimeout> | null
   disposed: boolean
   recovery: (BlockRecord | null)[]
-  inPlaceUsed: boolean // whether an in-place resume was already used for this blocked episode (cleared by healthyTimer)
+  // Whether an in-place resume was already used for this blocked episode. The health declaration
+  // releases it — the 60-second post-switch timer for a pty chain, a clean completed turn consumed on
+  // the tick for a chat chain (spec §14.6) — as does a successful in-place settle (settleInPlace).
+  inPlaceUsed: boolean
   // The state-publication generation counter, incremented on every pushState. The deferred 'none' of
   // resumeInPlace (its 150ms Enter timer) captures the generation at scheduling time; on firing it
   // publishes only if the generation is unchanged, and skips as stale if a 'waiting' or 'switching'
@@ -486,6 +489,9 @@ export class CodexRollingCoordinator {
   onChatStatus(sessionId: string, status: Attention): void {
     const chain = this.chains.get(sessionId)
     if (!chain || chain.disposed) return
+    // Harmless today — the wiring only emits this for a chat session — but it keeps the two flags'
+    // scope on the face of the code: they are a chat chain's health evidence and nothing else reads them.
+    if (chain.kind !== 'chat') return
     if (status !== 'idle') {
       chain.chatLimitInTurn = false // a new turn begins; a limit judged inside it is recorded by onLimit
       return

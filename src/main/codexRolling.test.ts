@@ -2072,4 +2072,37 @@ describe('chat chains', () => {
     expect(blocks.get('c2', Date.now())).not.toBeNull()
     h.coord.stop()
   })
+
+  // The codex analogue of the claude side's "a turn that carried a limit is not evidence". Here it is
+  // the only shape there is: codex has no rate-limit event, so every chat limit arrives from the rollout
+  // tail on the tick — which is exactly why `onLimit` is where the running turn is disqualified. A
+  // single account makes the limit a wait on the account the chain is already on, so the chain and the
+  // record are both still there to be asked about after the in-place resume.
+  it('a limit read off the rollout disqualifies the turn it landed in', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000) // 5분 뒤
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-chat-turnlimit', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(chatInfo(single))
+    h.coord.attachChat('s1', 'cx-chat-turnlimit', file)
+    h.coord.onChatStatus('s1', 'working') // a turn begins
+    await appendLimitError(file)
+    await advance(15_000) // the tick reads the record → onLimit → the wait branch
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    // Another chain's record on the same account, outliving this test's window. The chain's own expires
+    // at the very reset the wait is aimed at, so `get` would answer null either way.
+    blocks.record('c1', { at: Date.now() + 40 * 60_000, weekly: true, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('s1', 'idle') // the turn ends — but a limit landed inside it
+    await advanceIntoResume(400_000) // the wait expires (reset + 60s) → resume in place
+    expect(h.written.filter(([id, d]) => id === 's1' && d === '이어서 작업 진행해 줘')).toHaveLength(1)
+    await advance(15_000) // the first tick after the resume, its tail re-anchored past the record
+    // Still inside settleInPlace's own 60-second window (it is armed at the resume), so nothing but the
+    // tick has had a say yet — no respawn, and no verdict of its own.
+    expect(h.events).toEqual([])
+    expect(blocks.get('c1', Date.now())).not.toBeNull()
+    h.coord.stop()
+  })
 })

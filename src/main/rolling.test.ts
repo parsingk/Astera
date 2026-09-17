@@ -3284,4 +3284,61 @@ describe('chat chains', () => {
     expect(h.events).toEqual([])
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
   })
+
+  /** A rate_limit entry as the transcript records it. Split the same way LIMIT_TEXT is, and for the
+   *  same reason — a whole phrase in this source file fires the scanner when the file itself scrolls
+   *  through a rolling session. */
+  const limitRecord = (tsMs: number): string =>
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: "You've hit your " + 'weekly limit' }]
+      },
+      error: 'rate_limit',
+      apiErrorStatus: 429,
+      timestamp: new Date(tsMs).toISOString()
+    })
+
+  // The claude coordinator has a **second** live limit path besides the rateLimit event: the transcript
+  // tail on the tick. A limit that arrives that way (a subagent's rate_limit record, say — the main turn
+  // then completes normally and no rejected event ever fires) still has to disqualify the turn it landed
+  // in. It did not: `onLimit` cleared chatTurnDone but never set chatLimitInTurn, so the `idle` that
+  // followed set chatTurnDone again, the wait held the tick off, and the first tick after the in-place
+  // resume — whose re-anchored tail is past the record — consumed it and declared health on a genuinely
+  // blocked account. Nothing afterwards corrects that: it wipes the shared registry entry every other
+  // chain reads and releases inPlaceUsed, the latch Ruling 4c-6 deliberately withheld from chat chains.
+  it('a limit read off the transcript disqualifies the turn it landed in', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'astera-chat-tail-'))
+    const tPath = path.join(dir, 'th-1.jsonl')
+    await fsp.writeFile(tPath, '', 'utf8')
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    h.chatIds.add('c1')
+    // One account: the limit becomes a wait on the account the chain is already sitting on, so both the
+    // chain and the record are still there to be asked about afterwards.
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: tPath })
+    h.coord.onChatStatus('c1', 'working') // a turn begins
+    await fsp.writeFile(tPath, limitRecord(Date.now() + 1_000) + '\n', 'utf8')
+    await advanceIo(15_000) // the tick: ① reads the record → onLimit → the wait branch
+    expect(h.events).toEqual([]) // no copy, no kill, no spawn — it waits where it is
+    // Another chain's record on the same account, outliving the wait. The chain's own record carries no
+    // reset time, so it ages out at exactly the wait's length and `get` would answer null either way.
+    blocks.record('a1', { at: Date.now() + 20 * 60_000, weekly: true, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('c1', 'idle') // the turn ends — but a limit landed inside it
+    await advanceIo(15 * 60_000 + 1_000) // the wait expires → resume in place
+    expect(h.written.filter((w) => w.id === 'c1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    await advanceIo(15_000) // the first tick after the resume, its tail re-anchored past the record
+    expect(blocks.get('a1', Date.now())).not.toBeNull()
+    // The other half of what a health declaration would have released: inPlaceUsed. It is not readable
+    // from outside, so it is read through the behaviour it decides — a second limit's wait falls back to
+    // a respawn rather than resuming in place a second time.
+    await fsp.appendFile(tPath, limitRecord(Date.now() + 1_000) + '\n', 'utf8')
+    await advanceIo(15_000) // ① again → onLimit → a second wait
+    await advanceIo(20 * 60_000) // past that wait
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a1'])
+    expect(h.written.filter((w) => w.id === 'c1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    await fsp.rm(dir, { recursive: true, force: true })
+  })
 })

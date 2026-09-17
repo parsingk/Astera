@@ -226,7 +226,10 @@ interface Chain {
   lastScreen: string
   waitTimer: ReturnType<typeof setTimeout> | null
   healthyTimer: ReturnType<typeof setTimeout> | null
-  inPlaceUsed: boolean // 이 차단 에피소드에서 제자리 재개를 이미 썼는가 (정착 성공 시 해제)
+  // 이 차단 에피소드에서 제자리 재개를 이미 썼는가. 건강 선언이 해제한다 — pty 체인은 전환 뒤 60초
+  // 타이머(declareHealthy), chat 체인은 tick 이 소비하는 깨끗하게 끝난 턴(명세 §14.6) — 그리고
+  // 제자리 재개의 정착 판정(settleInPlace)이 성공했을 때도.
+  inPlaceUsed: boolean
   promptTimer: ReturnType<typeof setTimeout> | null
   trustTimer: ReturnType<typeof setTimeout> | null
   disposed: boolean
@@ -649,6 +652,9 @@ export class RollingCoordinator {
   onChatStatus(sessionId: string, status: Attention): void {
     const chain = this.chains.get(sessionId)
     if (!chain || chain.disposed) return
+    // Harmless today — the wiring only emits this for a chat session — but it keeps the two flags'
+    // scope on the face of the code: they are a chat chain's health evidence and nothing else reads them.
+    if (chain.kind !== 'chat') return
     if (status !== 'idle') {
       chain.chatLimitInTurn = false // a new turn begins; a rejection inside it is recorded by onChatLimit
       return
@@ -990,9 +996,19 @@ export class RollingCoordinator {
       clearTimeout(chain.healthyTimer)
       chain.healthyTimer = null
     }
-    // The chat counterpart of clearing the healthy timer just above: a turn that completed before this
-    // limit says nothing about the account we are now about to leave or wait on, so it is not evidence
-    // any more (spec §14.6).
+    // The chat counterpart of clearing the healthy timer just above (spec §14.6).
+    //
+    // **Both halves, because the rateLimit event is not the only way a chat chain's limit arrives.** It
+    // can also be read off the transcript by `limitTailCheck` on the tick — a subagent's rate_limit
+    // record, say, where the main turn then completes normally and no rejected event ever fires. That
+    // path reaches here without `onChatLimit` having marked anything, so the turn is disqualified here;
+    // otherwise the `idle` that follows makes the turn look clean, the wait holds the tick off, and the
+    // first tick after the in-place resume (whose re-anchored tail is past the record) declares health
+    // on an account that is genuinely blocked. Nothing afterwards corrects that. The event path sets the
+    // same flag in `onChatLimit`, before its own gate; setting it twice costs nothing.
+    if (chain.kind === 'chat') chain.chatLimitInTurn = true
+    // And a turn that completed *before* this limit says nothing about the account we are now about to
+    // leave or wait on, so it stops being evidence too.
     chain.chatTurnDone = false
     const action = chain.cycle.onLimit()
     // One clock reading for the whole verdict. pickAvailable and planRetry below have to judge the same
