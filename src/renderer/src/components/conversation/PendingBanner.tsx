@@ -195,8 +195,20 @@ export function QueuedNotice({
  *  but it still names the state for anything reading the page out loud: `working` means a tool is
  *  running, which only Claude reports (it has hooks; codex has none), and everything else is the
  *  wait before the first words arrive.
+ *
+ *  It carries the way to stop, which is the other half of the same report: the composer's own stop
+ *  button belongs to assistant-ui's `isRunning`, and that is deliberately narrow — it also decides
+ *  whether a message can be typed at all, and both CLIs take one while they work and queue it. So for
+ *  most of a turn the button was simply not there, and Escape, which has always worked, is not
+ *  something anyone can see. The control sits with the mark instead, up for exactly as long as it is.
  */
-export function RunningNotice({ working }: { working: boolean }): ReactNode {
+export function RunningNotice({
+  working,
+  onStop
+}: {
+  working: boolean;
+  onStop: () => void;
+}): ReactNode {
   const { t } = useI18n();
 
   return (
@@ -204,11 +216,18 @@ export function RunningNotice({ working }: { working: boolean }): ReactNode {
       role="status"
       data-slot="conversation-running"
       aria-label={t(working ? "conversation.running.working" : "conversation.running.thinking")}
-      className="text-muted-foreground py-0.5 text-sm"
+      className="text-muted-foreground flex items-center gap-2 py-0.5 text-sm"
     >
       <span aria-hidden className="animate-pulse">
         {"●"}
       </span>
+      <button
+        type="button"
+        onClick={onStop}
+        className="hover:text-foreground cursor-pointer text-xs underline-offset-2 hover:underline"
+      >
+        {t("conversation.running.interrupt")}
+      </button>
     </div>
   );
 }

@@ -62,6 +62,20 @@ describe('createCodexAdapter — handshake', () => {
     expect(a.state().model).toEqual({ model: 'gpt-6-astra', effort: 'xhigh', planMode: false })
     expect(events).toContainEqual({ type: 'model', model: { model: 'gpt-6-astra', effort: 'xhigh', planMode: false } })
   })
+  // Reported as "the model keeps changing during a conversation". thread/start seeds the effort
+  // (xhigh, above), and a later thread/settings/updated carrying none replaced the whole model object
+  // with one whose effort was null -- so the composer's readout lost its "@ xhigh" and got it back on
+  // the next update that had one. The generated ThreadSettings type declares `effort: ReasoningEffort |
+  // null`, and a real session shows both: turn_context has no effort for its first turns and medium
+  // from the third on. Claude's adapter has kept a known effort across a null since it was written;
+  // this is that same rule. The recorded line stays verbatim -- only the one field under test varies.
+  it('a settings update without an effort keeps the one already known', async () => {
+    const { p, a } = await started()
+    p.feed(F.THREAD_SETTINGS_UPDATED_PLAN.replace('"effort":"medium"', '"effort":null'))
+    await tick()
+    expect(a.state().model).toEqual({ model: 'gpt-6-astra', effort: 'xhigh', planMode: true })
+  })
+
   it('state() hands out a copy of the model, so a caller cannot write into the session', async () => {
     const { a } = await started()
     const first = a.state()

@@ -555,15 +555,16 @@ function ConversationBannerSlot(): ReactNode {
 /** Whether the mark at the end of the output is up, and which state it names. Its own context for the
  *  same reason the two above have one: the slot is a component *type* the Thread holds on to, so it is
  *  fixed at module scope and everything that changes arrives through here. */
-const RunningSlotContext = createContext<{ show: boolean; working: boolean }>({
-  show: false,
-  working: false
-});
+const RunningSlotContext = createContext<{
+  show: boolean;
+  working: boolean;
+  onStop: () => void;
+}>({ show: false, working: false, onStop: () => {} });
 
 function ConversationRunningSlot(): ReactNode {
-  const { show, working } = useContext(RunningSlotContext);
+  const { show, working, onStop } = useContext(RunningSlotContext);
   if (!show) return null;
-  return <RunningNotice working={working} />;
+  return <RunningNotice working={working} onStop={onStop} />;
 }
 
 function ComposerModelSlot(): ReactNode {
@@ -2092,7 +2093,10 @@ export function ConversationPane({
   const runningSlot = useMemo(
     () => ({
       show: isWorkingNow(pending.length, cliBusy),
-      working: isChat ? chatStatus === "working" : attention === "working"
+      working: isChat ? chatStatus === "working" : attention === "working",
+      // Through the ref, so the memo does not rebuild — and so the button presses the very same stop
+      // Escape does, rather than a second path that could drift from it.
+      onStop: () => void interruptRef.current()
     }),
     [pending.length, cliBusy, isChat, chatStatus, attention]
   );

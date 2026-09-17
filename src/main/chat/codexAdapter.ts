@@ -96,7 +96,23 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
         break
       case 'event':
         if (effect.event.type === 'status') core.patch({ status: effect.event.status, truncated: false })
-        else if (effect.event.type === 'model') core.patch({ model: effect.event.model })
+        // The known effort survives an update that carries none. `thread/settings/updated` is the
+        // whole of the thread's settings, but its `effort` is nullable, and thread/start above has
+        // already seeded a real one — so replacing the object wholesale dropped the readout's "@ xhigh"
+        // every time an update arrived without one, and put it back on the next one that had it.
+        // Reported as "the model keeps changing during a conversation". The model name gets the same
+        // guard for the same reason: losing it sends the composer back to naming the account's default
+        // instead, which is a different name again. claudeAdapter has kept the effort this way since it
+        // was written; this is that rule, here. planMode is not guarded — codex derives it from the
+        // collaborationMode on the very same update, so the update is the authority on it.
+        else if (effect.event.type === 'model')
+          core.patch({
+            model: {
+              ...effect.event.model,
+              model: effect.event.model.model ?? core.state.model.model,
+              effort: effect.event.model.effort ?? core.state.model.effort
+            }
+          })
         else if (effect.event.type === 'error') core.fail(effect.event.message)
         break
       default:
