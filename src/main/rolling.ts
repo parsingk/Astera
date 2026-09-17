@@ -249,6 +249,10 @@ interface Chain {
    *  purpose — a login is a fact about this machine's account folder, not a usage verdict to broadcast
    *  through the shared BlockRegistry, and every chain learns it from the same source on its own tick. */
   loggedOut: Set<string>
+  /** The in-flight latch of refreshLoginState. One round at a time per chain: the probes are I/O and the
+   *  tick is 15 seconds, so two overlapping rounds could resolve out of order and leave the older
+   *  verdict standing. */
+  loginRefreshing: boolean
   lastBlindProbeAt: number // the file-tree stat throttle — used by idleNudgeCheck (it survived the removal of 3-a)
   resetCheckAt: number | null // the scheduled time (ms) of the single-account reset anchor — prevents rescheduling the same time (3-b)
   resetTimer: ReturnType<typeof setTimeout> | null
@@ -351,7 +355,10 @@ const retryState = (chain: Chain, blocks: BlockRegistry, now: number): RetryStat
       // A logged-out account is unusable now with no known reset — exactly what an `at: null` record
       // means to this layer, so `retry.ts` needs no new concept (spec §15.2). `pickAvailable` skips it;
       // `planRetry` reads it as now + RETRY_FALLBACK_MS, which is the re-check cadence we want: if the
-      // person logs back in, the next tick drops the id and the account is a candidate again.
+      // person logs back in, the next tick drops the id and the account is a candidate again — the next
+      // tick **including while this chain is waiting**, since tick() refreshes login state before it
+      // skips a chain whose wait is armed (ruling 4e-3). Were that not so, this sentence would be false
+      // for exactly the chain that most needs it: one sitting in the logged-out reschedule loop.
       chain.loggedOut.has(id) ? { at: null, weekly: false, since: now } : null
     )
   )
@@ -442,6 +449,7 @@ export class RollingCoordinator {
       disposed: false,
       recovery: ids.map(() => null),
       loggedOut: new Set(),
+      loginRefreshing: false,
       lastBlindProbeAt: 0,
       resetCheckAt: null,
       resetTimer: null,
@@ -1779,7 +1787,16 @@ export class RollingCoordinator {
    *  slow I/O does not delay another's tick). The ordering *within* a chain is enforced by tickChain. */
   private tick(): void {
     for (const chain of this.chains.values()) {
-      if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) continue
+      if (chain.disposed) continue
+      // Above the rolling/waitTimer guard on purpose (ruling 4e-3). A waiting chain still relearns
+      // login state, because the wait's target is re-checked at fire time against **this** set: frozen
+      // for the wait's duration it would miss a target that logged out during the wait — the exact
+      // failure §15 exists to stop — and a chain already in the logged-out reschedule loop would never
+      // see the account come back, since rescheduleAbortedRoll re-arms waitTimer inside its own fire
+      // callback. Nothing else in tickChain may move up here: this call touches only chain.loggedOut,
+      // which no roll in flight reads.
+      void this.refreshLoginState(chain)
+      if (chain.rolling || chain.waitTimer || chain.awaitingReady) continue
       void this.tickChain(chain)
     }
   }
@@ -1787,19 +1804,36 @@ export class RollingCoordinator {
   /** Refreshes `chain.loggedOut` from the login probe. Fire-and-forget from the tick: the verdict is a
    *  filter, not a gate, so a refresh that lands a tick late costs one attempt at most — the same
    *  attempt the chain made before this existed. Guarded across the await like every other tick worker:
-   *  a chain disposed or re-keyed while the probes were in flight must not have a stale set written back. */
+   *  a chain disposed or re-keyed while the probes were in flight must not have a stale set written back.
+   *
+   *  **It runs for a waiting chain too** (ruling 4e-3) — see tick(), which calls it above the waitTimer
+   *  guard. That is the only reason resumeAfterWait's check is worth anything: it reads a set refreshed
+   *  within the last tick rather than one frozen when the wait was planned, and it is what lets the
+   *  reschedule loop end when the person logs back in.
+   *
+   *  `loginRefreshing` latches one round at a time. The probes are I/O and the tick is 15 seconds; two
+   *  slow rounds overlapping could otherwise resolve out of order and write an older verdict last. */
   private async refreshLoginState(chain: Chain): Promise<void> {
     const probe = this.deps.loginStatus
-    if (!probe) return
+    if (!probe || chain.loginRefreshing) return
+    chain.loginRefreshing = true
     const liveId = chain.liveId
-    const pairs = await Promise.all(
-      chain.accountIds.map(async (id) => [id, await probe(id).catch(() => true)] as const)
-    )
-    if (chain.disposed || chain.liveId !== liveId) return
-    const out = new Set(pairs.filter(([, ok]) => !ok).map(([id]) => id))
-    if (out.size !== chain.loggedOut.size || [...out].some((id) => !chain.loggedOut.has(id)))
-      this.deps.log(`logged-out accounts session=${chain.liveId} ids=${[...out].join(',')}`)
-    chain.loggedOut = out
+    try {
+      const pairs = await Promise.all(
+        chain.accountIds.map(async (id) => [id, await probe(id).catch(() => true)] as const)
+      )
+      if (chain.disposed || chain.liveId !== liveId) return
+      const out = new Set(pairs.filter(([, ok]) => !ok).map(([id]) => id))
+      if (out.size !== chain.loggedOut.size || [...out].some((id) => !chain.loggedOut.has(id)))
+        this.deps.log(
+          out.size === 0
+            ? `all accounts logged in session=${chain.liveId}`
+            : `logged-out accounts session=${chain.liveId} ids=${[...out].join(',')}`
+        )
+      chain.loggedOut = out
+    } finally {
+      chain.loginRefreshing = false
+    }
   }
 
   /** The processing order for a single chain's tick. It used to throw limitTailCheck (①) and the fallback
@@ -1815,7 +1849,8 @@ export class RollingCoordinator {
    *  completed. Chains remain independent of each other — tick()'s for loop calls each chain's tickChain
    *  fire-and-forget, so one chain's slow I/O does not hold up another's tick. */
   private async tickChain(chain: Chain): Promise<void> {
-    void this.refreshLoginState(chain) // independent of everything below; the set is read by retryState on the next verdict
+    // refreshLoginState is deliberately NOT here — it moved up into tick(), above the waitTimer guard
+    // that keeps this method from being called at all for a waiting chain (ruling 4e-3).
     await this.limitTailCheck(chain) // independent of statusLine — completes ① before the fallback
     // The across-await state guard — ① may have caught a hit and already started a roll (rolling) or set a
     // wait (waitTimer). onLimit sets those fields synchronously on that path, so if ① fired we skip the

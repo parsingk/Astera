@@ -3451,16 +3451,20 @@ describe('logged-out accounts', () => {
     expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // nothing was spawned
     const waiting = h.sent.filter((s) => s.channel === 'session:rollState' && s.payload.state === 'waiting')
     expect(waiting.length).toBe(1) // the waiting banner, with a retry time ~15 minutes out
+    // …and that "~15 minutes" is asserted, not just claimed: a logged-out account is synthesised with
+    // an unknown reset, so planRetry's fallback (RETRY_FALLBACK_MS) is what the banner must carry —
+    // not the 60-second anti-hammering floor it would fall back to if the synthesis went missing.
+    expect(Date.parse(String(waiting[0].payload.nextRetryAt)) - Date.now()).toBeGreaterThanOrEqual(14 * 60_000)
   })
 
   // a2 carries a short, real block — recorded by another chain, say — so its blockedUntil looks sooner
   // than a1's or a3's plain 15-minute (unknown reset) fallback, and planRetry aims the wait at it (spec
-  // §15.2: an unknown-reset account looks like it recovers soon). It has been logged out since the very
-  // first tick, but that is not read again before the wait fires: chain.loggedOut only refreshes on a
-  // tick, and tick() skips a chain whose wait is armed (tickChain, where the refresh lives, is never
-  // called for it), so nothing relearns anything until the wait timer itself goes off. resumeAfterWait
-  // has to check chain.loggedOut for itself at that moment (spec §15.3) — the roll must not be attempted.
-  it('does not roll onto a target that went logged out during the wait', async () => {
+  // §15.2: an unknown-reset account looks like it recovers soon). a2 is logged out from the very first
+  // tick, i.e. **before** the wait was ever planned — the refresh that runs while the chain waits
+  // (ruling 4e-3) therefore keeps answering the same thing, and what this test pins is only that
+  // resumeAfterWait reads chain.loggedOut for itself at fire time (spec §15.3) rather than trusting the
+  // plan it was handed minutes earlier. The genuine live→logged-out transition is the next test.
+  it('does not roll onto a target that was logged out before the wait was planned', async () => {
     // a1's own hit needs a genuinely later reset than the flat 15-minute fallback every logged-out
     // account gets from chain.loggedOut — otherwise a1 (an unknown-reset record, the same shape) ties
     // with a2 and a3 in planRetry, and since ties keep the first index, the target would be a1 itself
@@ -3483,6 +3487,113 @@ describe('logged-out accounts', () => {
     expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // rescheduled, not spawned
     // rescheduleAbortedRoll republishes 'waiting' — resumeInPlace would have published 'nudged' instead
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+  })
+
+  // The failure this slice exists to stop, in its real shape: every account is logged in when the wait
+  // is planned, and the target logs out **while the chain is waiting**. Only a refresh that runs for a
+  // waiting chain can see it — tick() refreshes login state before it skips a chain whose wait is armed
+  // (ruling 4e-3). With the refresh back under that guard the set is frozen for the wait's whole
+  // duration and the chain rolls straight onto the dead account.
+  it('does not roll onto a target that logged out during the wait', async () => {
+    const T0 = Date.UTC(2026, 7, 3, 0, 0) // 11am(Asia/Seoul) = 02:00Z → +2h, inside the 5h session cap
+    vi.setSystemTime(new Date(T0))
+    let a2LoggedIn = true // flipped once the wait is armed
+    const blocks = new BlockRegistry()
+    const h = harness({
+      blocks,
+      loginStatus: (id) => Promise.resolve(id === 'a2' ? a2LoggedIn : true)
+    })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    await advanceIo(15_000) // one tick — every account answers logged in
+    // a2 and a3 carry real blocks another chain recorded, so nothing is available and the chain waits.
+    // a2's reset is the earliest, so planRetry aims the wait at a2 — a LIVE account at planning time,
+    // which is what separates this test from the one above.
+    const t = Date.now()
+    blocks.record('a2', { at: t + 5 * 60_000, weekly: false, since: t }, t)
+    blocks.record('a3', { at: t + 45 * 60_000, weekly: false, since: t }, t)
+    h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '11am') })
+    await flush()
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // no roll yet — waiting
+    const at = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    a2LoggedIn = false // the person logs out of a2 mid-wait
+    await advanceIo(15_000) // one tick INSIDE the wait relearns it
+    await advanceIo(at - Date.now() + 1_000) // the wait timer fires, targeting a2
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // rescheduled, not spawned
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+  })
+
+  // The other direction of the same defect: once the guard has fired, rescheduleAbortedRoll re-arms the
+  // wait synchronously, so a chain that never refreshes while waiting can never see the account come
+  // back — it loops on a ~15-minute reschedule (one 'waiting' publication, i.e. one Slack message and
+  // one desktop toast, per round) for as long as the person stays logged out. The refresh that now runs
+  // for a waiting chain ends the loop on the first tick after the re-login.
+  it('rolls onto the target once it is logged back in during the reschedule loop', async () => {
+    const T0 = Date.UTC(2026, 7, 3, 0, 0)
+    vi.setSystemTime(new Date(T0))
+    let a2LoggedIn = false
+    const h = harness({
+      loginStatus: (id) => Promise.resolve(id === 'a1' || (id === 'a2' && a2LoggedIn))
+    })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    await advanceIo(15_000) // one tick learns a2 and a3 as logged out
+    h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '11am') })
+    await flush()
+    const at = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    await advanceIo(at - Date.now() + 1_000) // fires on a logged-out a2 → rescheduled, no roll
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([])
+    const next = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    a2LoggedIn = true // the person logs back in while the chain is waiting
+    await advanceIo(15_000) // the tick relearns it — this is exactly what the wait guard used to hide
+    await advanceIo(next - Date.now() + 1_000) // the next scheduled attempt
+    expect(h.events).toContain('spawn:s2:a2') // the chain rolled onto the account that came back
+  })
+
+  // Ruling 4e-5's second half: one refresh round at a time per chain. The probes are I/O (on darwin a
+  // `security` spawn), the tick is 15 seconds, and without the latch a slow round would be joined by a
+  // fresh one every tick — with the older verdict free to resolve last and overwrite the newer one.
+  it('does not start a second login refresh while one is still in flight', async () => {
+    const calls: string[] = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const h = harness({
+      loginStatus: (id) => {
+        calls.push(id)
+        return gate.then(() => true)
+      }
+    })
+    h.payloads.set('s1', payload(20))
+    h.coord.register(h.info1)
+    await advanceIo(15_000) // round 1 starts and stays in flight
+    expect(calls).toEqual(['a1', 'a2', 'a3'])
+    await advanceIo(15_000) // the next tick must not start a second round
+    expect(calls).toEqual(['a1', 'a2', 'a3'])
+    release()
+    await flush()
+    await advanceIo(15_000) // round 1 has settled, so the latch is clear and this tick probes again
+    expect(calls).toEqual(['a1', 'a2', 'a3', 'a1', 'a2', 'a3'])
+  })
+
+  // Ruling 4e-6: the transition back to "everybody is in" used to log an empty `ids=`, which reads as a
+  // truncated line rather than as good news.
+  it('logs that every account is logged in again rather than an empty id list', async () => {
+    const lines: string[] = []
+    let a2LoggedIn = false
+    const h = harness({
+      log: (m) => lines.push(m),
+      loginStatus: (id) => Promise.resolve(id !== 'a2' || a2LoggedIn)
+    })
+    h.payloads.set('s1', payload(20))
+    h.coord.register(h.info1)
+    await advanceIo(15_000)
+    expect(lines.some((l) => l.startsWith('logged-out accounts session=s1 ids=a2'))).toBe(true)
+    a2LoggedIn = true
+    await advanceIo(15_000)
+    expect(lines).toContain('all accounts logged in session=s1')
+    expect(lines.some((l) => l.endsWith('ids='))).toBe(false)
   })
 
   it('behaves as before when the dep is absent', async () => {

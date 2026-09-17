@@ -211,6 +211,10 @@ interface Chain {
    *  purpose — a login is a fact about this machine's account folder, not a usage verdict to broadcast
    *  through the shared BlockRegistry, and every chain learns it from the same source on its own tick. */
   loggedOut: Set<string>
+  /** The in-flight latch of refreshLoginState. One round at a time per chain: the probes are I/O and the
+   *  tick is 15 seconds, so two overlapping rounds could resolve out of order and leave the older
+   *  verdict standing. */
+  loginRefreshing: boolean
   // Whether an in-place resume was already used for this blocked episode. The health declaration
   // releases it — the 60-second post-switch timer for a pty chain, a clean completed turn consumed on
   // the tick for a chat chain (spec §14.6) — as does a successful in-place settle (settleInPlace).
@@ -277,7 +281,10 @@ const retryState = (chain: Chain, blocks: BlockRegistry, now: number): RetryStat
       // A logged-out account is unusable now with no known reset — exactly what an `at: null` record
       // means to this layer, so `retry.ts` needs no new concept (spec §15.2). `pickAvailable` skips it;
       // `planRetry` reads it as now + RETRY_FALLBACK_MS, which is the re-check cadence we want: if the
-      // person logs back in, the next tick drops the id and the account is a candidate again.
+      // person logs back in, the next tick drops the id and the account is a candidate again — the next
+      // tick **including while this chain is waiting**, since tick() refreshes login state before it
+      // skips a chain whose wait is armed (ruling 4e-3). Were that not so, this sentence would be false
+      // for exactly the chain that most needs it: one sitting in the logged-out reschedule loop.
       chain.loggedOut.has(id) ? { at: null, weekly: false, since: now } : null
     )
   )
@@ -379,6 +386,7 @@ export class CodexRollingCoordinator {
       disposed: false,
       recovery: ids.map(() => null),
       loggedOut: new Set(),
+      loginRefreshing: false,
       inPlaceUsed: false,
       stateSeq: 0,
       lastState: null,
@@ -1567,19 +1575,36 @@ export class CodexRollingCoordinator {
   /** Refreshes `chain.loggedOut` from the login probe. Fire-and-forget from the tick: the verdict is a
    *  filter, not a gate, so a refresh that lands a tick late costs one attempt at most — the same
    *  attempt the chain made before this existed. Guarded across the await like every other tick worker:
-   *  a chain disposed or re-keyed while the probes were in flight must not have a stale set written back. */
+   *  a chain disposed or re-keyed while the probes were in flight must not have a stale set written back.
+   *
+   *  **It runs for a waiting chain too** (ruling 4e-3) — see tick(), which calls it above the waitTimer
+   *  guard. That is the only reason resumeAfterWait's check is worth anything: it reads a set refreshed
+   *  within the last tick rather than one frozen when the wait was planned, and it is what lets the
+   *  reschedule loop end when the person logs back in.
+   *
+   *  `loginRefreshing` latches one round at a time. The probes are I/O and the tick is 15 seconds; two
+   *  slow rounds overlapping could otherwise resolve out of order and write an older verdict last. */
   private async refreshLoginState(chain: Chain): Promise<void> {
     const probe = this.deps.loginStatus
-    if (!probe) return
+    if (!probe || chain.loginRefreshing) return
+    chain.loginRefreshing = true
     const liveId = chain.liveId
-    const pairs = await Promise.all(
-      chain.accountIds.map(async (id) => [id, await probe(id).catch(() => true)] as const)
-    )
-    if (chain.disposed || chain.liveId !== liveId) return
-    const out = new Set(pairs.filter(([, ok]) => !ok).map(([id]) => id))
-    if (out.size !== chain.loggedOut.size || [...out].some((id) => !chain.loggedOut.has(id)))
-      this.deps.log(`logged-out accounts session=${chain.liveId} ids=${[...out].join(',')}`)
-    chain.loggedOut = out
+    try {
+      const pairs = await Promise.all(
+        chain.accountIds.map(async (id) => [id, await probe(id).catch(() => true)] as const)
+      )
+      if (chain.disposed || chain.liveId !== liveId) return
+      const out = new Set(pairs.filter(([, ok]) => !ok).map(([id]) => id))
+      if (out.size !== chain.loggedOut.size || [...out].some((id) => !chain.loggedOut.has(id)))
+        this.deps.log(
+          out.size === 0
+            ? `all accounts logged in session=${chain.liveId}`
+            : `logged-out accounts session=${chain.liveId} ids=${[...out].join(',')}`
+        )
+      chain.loggedOut = out
+    } finally {
+      chain.loginRefreshing = false
+    }
   }
 
   /** The 15-second tick — refreshes the state, applies verdict ① (reachedType with no phrase), the
@@ -1587,8 +1612,17 @@ export class CodexRollingCoordinator {
    *  verdict can fire without a phrase) and fallback ③ (100% plus 30 seconds of no output) */
   private tick(): void {
     for (const chain of this.chains.values()) {
-      if (chain.disposed || chain.rolling || chain.waitTimer) continue
-      void this.refreshLoginState(chain) // before the tail check — an unmapped chain still learns its accounts' login state
+      if (chain.disposed) continue
+      // Above the rolling/waitTimer guard, and above the tail check (ruling 4e-3). A waiting chain
+      // still relearns login state, because the wait's target is re-checked at fire time against
+      // **this** set: frozen for the wait's duration it would miss a target that logged out during the
+      // wait — the exact failure §15 exists to stop — and a chain already in the logged-out reschedule
+      // loop would never see the account come back, since rescheduleAbortedRoll re-arms waitTimer
+      // inside its own fire callback. An unmapped chain (no tail) learns its accounts' login state for
+      // the same reason. Nothing else may move up here: this call touches only chain.loggedOut, which
+      // no roll in flight reads.
+      void this.refreshLoginState(chain)
+      if (chain.rolling || chain.waitTimer) continue
       if (!chain.tail) continue
       void this.refresh(chain).then(() => {
         if (chain.disposed || chain.rolling || chain.waitTimer) return
