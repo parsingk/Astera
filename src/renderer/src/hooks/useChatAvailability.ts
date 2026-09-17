@@ -13,12 +13,32 @@ export interface ChatAvailability {
    *  (core/resume.ts's resumeChatAllowed), not this hook's. */
   reason: 'host' | null
   enabled: boolean
+  /** The Host has not answered yet, so there is no verdict — neither "available" nor "too old".
+   *
+   *  It is separate from `enabled` because the two mean different things to a caller that acts on the
+   *  answer, and conflating them cost the setting its effect: the dialogs drop a 대화 selection back to
+   *  터미널 when 대화 cannot be started, and with `enabled` false during the first moment of the dialog's
+   *  life that ran immediately, every time, before the Host could say yes. Nothing put the selection
+   *  back once it did. Anything that reports or acts on unavailability waits for this to be false. */
+  checking: boolean
 }
 
-/** 대화 needs the Host's proc-* family and nothing else — either account can open one once that is up. */
-export function chatAvailabilityOf(a: { hostOk: boolean }): ChatAvailability {
-  const reason = a.hostOk ? null : ('host' as const)
-  return { hostOk: a.hostOk, reason, enabled: reason === null }
+/** 대화 needs the Host's proc-* family and nothing else — either account can open one once that is up.
+ *  `answered` is whether the Host has replied at all yet; until it has, there is no verdict to give. */
+export function chatAvailabilityOf(a: { hostOk: boolean; answered: boolean }): ChatAvailability {
+  return {
+    hostOk: a.hostOk,
+    // Only a real answer produces a reason: "the Host is too old" is a claim, and it must not be made
+    // about a question still in flight.
+    reason: a.answered && !a.hostOk ? ('host' as const) : null,
+    // Never offered on an unanswered question either — this one stays the narrow "known to work".
+    // `answered` is part of it rather than left to the caller: today's only caller derives `hostOk`
+    // from the same status that decides `answered`, so the two cannot disagree — but a second caller
+    // that passed an optimistic `hostOk` before asking would otherwise get `enabled` and `checking`
+    // both true, which is the contradiction this whole flag exists to remove.
+    enabled: a.hostOk && a.answered,
+    checking: !a.answered
+  }
 }
 
 /**
@@ -49,5 +69,6 @@ export function useChatAvailability(): ChatAvailability {
   }, [])
 
   const hostOk = !!hostStatus && hostStatus.connected && hostStatus.features.includes(HOST_FEATURE_PROC)
-  return chatAvailabilityOf({ hostOk })
+  // A null status is the poll not having come back yet — the one state that is neither yes nor no.
+  return chatAvailabilityOf({ hostOk, answered: hostStatus !== null })
 }

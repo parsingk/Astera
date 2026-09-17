@@ -127,7 +127,7 @@ export function ResumeDialog({
   const labelOf = (id: string): string => accounts.find((a) => a.id === id)?.label ?? id
 
   // The Host poll is shared with NewSessionDialog; either provider's account can open a chat session.
-  const { enabled: chatEnabled } = useChatAvailability()
+  const { enabled: chatEnabled, checking: chatChecking } = useChatAvailability()
   // Resuming one is no narrower than starting one any more (resumeChatAllowed) — the chat spawn path
   // copies the transcript into the chosen account too, so any candidate the picker offers works.
   const chatAllowed = resumeChatAllowed({ chatEnabled, selectedId })
@@ -135,9 +135,14 @@ export function ResumeDialog({
   // again once the condition clears (same reasoning as NewSessionDialog's own fallback effect). Picking
   // another account is one of those conditions: the choice comes back the moment the owner is picked
   // again, which is why the fallback is state here and never written back to the setting.
+  // Two things here are unknown for the first moment rather than false: whether the Host can run 대화
+  // at all (chatChecking), and which account this resumes on — `options` is null until the login probe
+  // answers, and `selectedId` is '' until then, which alone makes chatAllowed false. Acting on either
+  // before it is known threw the seeded 대화 selection away and never put it back. Same defect as
+  // NewSessionDialog's, with one more source of "not yet".
   useEffect(() => {
-    if (kind === 'chat' && !chatAllowed) setKind('terminal')
-  }, [kind, chatAllowed])
+    if (kind === 'chat' && !chatAllowed && !chatChecking && options !== null) setKind('terminal')
+  }, [kind, chatAllowed, chatChecking, options])
 
   const confirm = (): void => {
     if (!selectedId) return
@@ -181,7 +186,7 @@ export function ResumeDialog({
               {t('session.kind.chat')}
             </button>
           </div>
-          {!chatEnabled && (
+          {!chatEnabled && !chatChecking && (
             <span className="kind-note">{t('session.new.kindHostOld')}</span>
           )}
           {chatAllowed && kind === 'chat' && (

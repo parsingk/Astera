@@ -187,16 +187,20 @@ export function NewSessionDialog({
   const primaryCliMissing = !cliOk[primaryProvider]
   // 대화 is available once the Host has announced the proc-* family — either provider's account can
   // open one. The poll lives in the hook, shared with ResumeDialog.
-  const { enabled: chatEnabled } = useChatAvailability()
+  const { enabled: chatEnabled, checking: chatChecking } = useChatAvailability()
   // The same login map the sidebar's account rows use — no new IPC. Only the roll slots consult it
   // (spec §15.4): slot 0 is where the user chose to run, and that choice fails visibly on its own.
   const { loginMap } = useAccountStatus(accounts)
-  // A remembered 대화 falls back to 터미널 while it is unavailable — never write here, so the person's
-  // actual choice survives a temporary gap (the Host still connecting) and chat is offered again once
-  // the condition clears.
+  // A 대화 default falls back to 터미널 while it is unavailable — never written back, so the setting
+  // survives a temporary gap (the Host still connecting) and chat is offered again once it clears.
+  //
+  // Gated on the Host having actually answered. Without that this fired on mount every time, because
+  // an unanswered poll reads as "not enabled": the selection the setting had just seeded was dropped
+  // before the Host could say yes, and nothing put it back afterwards (reported — the setting said
+  // 대화 and the dialog opened on 터미널).
   useEffect(() => {
-    if (kind === 'chat' && !chatEnabled) setKind('terminal')
-  }, [kind, chatEnabled])
+    if (kind === 'chat' && !chatEnabled && !chatChecking) setKind('terminal')
+  }, [kind, chatEnabled, chatChecking])
   // Per-slot options: this slot's current value plus any account no other slot uses (no duplicates).
   // Rolling slots (1 and 2) only offer accounts with the same provider as the primary account, and
   // drop any account the login probe has answered "logged out" for (spec §15.4) — a slot already
@@ -325,7 +329,7 @@ export function NewSessionDialog({
               {t('session.kind.chat')}
             </button>
           </div>
-          {!chatEnabled && (
+          {!chatEnabled && !chatChecking && (
             <span className="kind-note">{t('session.new.kindHostOld')}</span>
           )}
           {chatEnabled && kind === 'chat' && (
