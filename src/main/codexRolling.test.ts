@@ -2103,6 +2103,96 @@ describe('chat chains', () => {
     // tick has had a say yet — no respawn, and no verdict of its own.
     expect(h.events).toEqual([])
     expect(blocks.get('c1', Date.now())).not.toBeNull()
+    // Ruling 4d-8: and past that window too. settleInPlace used to judge a chat chain the pty way — the
+    // rollout grew, so a turn ran — which is the wrong question here (a refused turn grows the rollout
+    // as well) and reached the same four statements, shared registry clear included. It now logs and
+    // returns before the size verdict, so the chain is left exactly as the tick left it.
+    await advance(60_000)
+    expect(h.events).toEqual([])
+    expect(blocks.get('c1', Date.now())).not.toBeNull()
+    h.coord.stop()
+  })
+
+  // Ruling 4d-6, the same scenario with one thing added: a permission card opens in the middle of the
+  // turn. The adapter reports that as `waiting` and then `working` again (adapterCore.ts's dropRequest)
+  // — two non-idle statuses inside a turn that never ended. A level-triggered clear read each of them as
+  // "a new turn begins" and wiped the disqualification onLimit had just recorded, so the `idle` that
+  // closed that very turn counted as health again. The flag is cleared on the idle→non-idle edge only.
+  it('a card opening mid-turn does not re-qualify the turn a rollout limit landed in', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000) // 5분 뒤
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-chat-card', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(chatInfo(single))
+    h.coord.attachChat('s1', 'cx-chat-card', file)
+    h.coord.onChatStatus('s1', 'working') // a turn begins
+    await appendLimitError(file)
+    await advance(15_000) // the tick reads the record → onLimit → the wait branch
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    blocks.record('c1', { at: Date.now() + 40 * 60_000, weekly: true, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('s1', 'waiting') // a permission card opens — still the same turn
+    h.coord.onChatStatus('s1', 'working') // and closes again
+    h.coord.onChatStatus('s1', 'idle') // the turn ends — and a limit landed inside it
+    await advanceIntoResume(400_000) // the wait expires (reset + 60s) → resume in place
+    expect(h.written.filter(([id, d]) => id === 's1' && d === '이어서 작업 진행해 줘')).toHaveLength(1)
+    await advance(15_000) // the first tick after the resume, its tail re-anchored past the record
+    expect(h.events).toEqual([])
+    expect(blocks.get('c1', Date.now())).not.toBeNull()
+    h.coord.stop()
+  })
+
+  // Ruling 4d-7. A chat chain declares health on every clean turn, but the **shared** registry clear is
+  // a once-per-arrival valve. blockRegistry.clear's safety argument is that a healthy timer is armed
+  // once per arrival and never re-armed, so the valve cannot reach a chain that has been working for an
+  // hour — declaring off turns instead would have had it fire for the chain's whole life, erasing every
+  // record any other chain ever wrote about the account it sits on. Only the shared write is latched;
+  // the per-chain half still runs on every clean turn. An in-place resume is an arrival on the same
+  // account, so it re-opens the valve exactly as a roll does.
+  it('the shared record is cleared by the first clean turn after an arrival, not by later ones', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000) // 5분 뒤
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-chat-valve', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    const far = (): { at: number; weekly: boolean; since: number } => ({
+      at: Date.now() + 40 * 60_000,
+      weekly: true,
+      since: Date.now()
+    })
+    h.coord.register(chatInfo(single))
+    h.coord.attachChat('s1', 'cx-chat-valve', file)
+    blocks.record('c1', far(), Date.now())
+    h.coord.onChatStatus('s1', 'working')
+    h.coord.onChatStatus('s1', 'idle')
+    await advance(15_000)
+    expect(blocks.get('c1', Date.now())).toBeNull() // the first clean turn after the arrival spends it
+    blocks.record('c1', far(), Date.now())
+    h.coord.onChatStatus('s1', 'working')
+    h.coord.onChatStatus('s1', 'idle')
+    await advance(15_000)
+    expect(blocks.get('c1', Date.now())).not.toBeNull() // the second releases only this chain's own state
+    // That assertion is made, so the surviving record is dropped here: left standing, the retry plan
+    // below would merge its 40-minute reset over the rollout's own 5-minute one and the wait would be
+    // aimed 40 minutes out (laterBlock, core/rolling/retry.ts).
+    blocks.clear('c1')
+    // A limit, a wait and an in-place resume — an arrival on the same account.
+    h.coord.onChatStatus('s1', 'working')
+    await appendLimitError(file)
+    await advance(15_000) // the tick reads the record → onLimit → the wait branch
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    h.coord.onChatStatus('s1', 'idle') // that turn ends disqualified
+    await advanceIntoResume(400_000) // the wait expires (reset + 60s) → resume in place
+    expect(h.written.filter(([id, d]) => id === 's1' && d === '이어서 작업 진행해 줘')).toHaveLength(1)
+    blocks.record('c1', far(), Date.now())
+    h.coord.onChatStatus('s1', 'working')
+    h.coord.onChatStatus('s1', 'idle')
+    await advance(15_000)
+    expect(blocks.get('c1', Date.now())).toBeNull()
     h.coord.stop()
   })
 })

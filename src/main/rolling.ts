@@ -226,9 +226,10 @@ interface Chain {
   lastScreen: string
   waitTimer: ReturnType<typeof setTimeout> | null
   healthyTimer: ReturnType<typeof setTimeout> | null
-  // 이 차단 에피소드에서 제자리 재개를 이미 썼는가. 건강 선언이 해제한다 — pty 체인은 전환 뒤 60초
-  // 타이머(declareHealthy), chat 체인은 tick 이 소비하는 깨끗하게 끝난 턴(명세 §14.6) — 그리고
-  // 제자리 재개의 정착 판정(settleInPlace)이 성공했을 때도.
+  // Whether an in-place resume was already used for this blocked episode. A health declaration releases
+  // it — the 60-second post-switch timer for a pty chain (declareHealthy), a clean completed turn
+  // consumed on the tick for a chat chain (spec §14.6) — as does a successful in-place settle
+  // (settleInPlace).
   inPlaceUsed: boolean
   promptTimer: ReturnType<typeof setTimeout> | null
   trustTimer: ReturnType<typeof setTimeout> | null
@@ -295,6 +296,19 @@ interface Chain {
   // 60-second timer (armHealthy).
   chatTurnDone: boolean
   chatLimitInTurn: boolean
+  // The previous status onChatStatus saw, so chatLimitInTurn is cleared on the idle→non-idle **edge**
+  // rather than on every non-idle status (Ruling 4d-6). A permission card opening mid-turn reports
+  // 'waiting' and then 'working' again without the turn ever having ended (adapterCore.ts's
+  // dropRequest); clearing on each of those wiped a disqualification the transcript tail had already
+  // recorded, and the 'idle' that closed that same turn then counted as health.
+  chatPrevStatus: Attention
+  // Whether this chain has already spent its **shared** registry clear on the account it is sitting on
+  // (Ruling 4d-7). A chat chain declares health off every clean turn, so without a latch the valve
+  // blockRegistry.clear documents as "armed once per arrival" would fire for the chain's whole life and
+  // erase every record another chain ever wrote about the account. It is reset at every arrival — a
+  // roll, and an in-place resume — and read only at the tick's chat consumption site, so the pty timer
+  // path is untouched. The per-chain half of a health declaration still runs on every clean turn.
+  chatValveSpent: boolean
 }
 
 /** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts).
@@ -424,7 +438,9 @@ export class RollingCoordinator {
       limitTailReadFailWarned: false,
       chatLimitIgnoredWarned: false,
       chatTurnDone: false,
-      chatLimitInTurn: false
+      chatLimitInTurn: false,
+      chatPrevStatus: 'idle',
+      chatValveSpent: false
     })
     this.ensureTicker()
     this.deps.log(`chain registered session=${info.id} accounts=${ids.join(',')}`)
@@ -656,9 +672,14 @@ export class RollingCoordinator {
     // scope on the face of the code: they are a chat chain's health evidence and nothing else reads them.
     if (chain.kind !== 'chat') return
     if (status !== 'idle') {
-      chain.chatLimitInTurn = false // a new turn begins; a rejection inside it is recorded by onChatLimit
+      // Only the idle→non-idle edge is a new turn beginning. A status change inside a turn — a
+      // permission card opening ('waiting') and closing again ('working') — is not, and treating it as
+      // one would clear a rejection this turn has already been disqualified by.
+      if (chain.chatPrevStatus === 'idle') chain.chatLimitInTurn = false
+      chain.chatPrevStatus = status
       return
     }
+    chain.chatPrevStatus = 'idle'
     if (!chain.chatLimitInTurn) chain.chatTurnDone = true
   }
 
@@ -1171,6 +1192,11 @@ export class RollingCoordinator {
     // again and pushes the session we just resumed straight back into a wait.
     chain.lastOutputAt = this.now()
     chain.inPlaceUsed = true
+    // A resume in place is an arrival too — on the account the chain already holds — so the
+    // shared-clear valve re-opens here exactly as it does on a roll (Ruling 4d-7). Without this the
+    // chain would sit on a reset account for the rest of its life unable to tear up a false record
+    // another chain wrote about it.
+    chain.chatValveSpent = false
     // 'nudged' is the right state: this is a reset resume rather than an account switch, the renderer
     // treats it as a momentary event, and the Slack mapping (slack.limitReset) already exists. It is the
     // same sequence resetAnchorCheck uses.
@@ -1293,15 +1319,11 @@ export class RollingCoordinator {
     }
     // 메타가 있다 — 예전 healthyTimer 가 하던 것 그대로. 이것을 하지 않으면 recovery[current] 가
     // 남아 limitEvidence 가 계속 참이고(idle nudge·리셋 앵커가 영구 무장), 계정이 여럿이면
-    // cycle.streak 가 리셋되지 않아 다음 한도가 "한 바퀴 전체 차단"으로 잘못 읽힌다.
-    chain.cycle.onHealthy()
-    chain.recovery[chain.cycle.currentIndex] = null
-    // 이 판정이 본 것은 "60초 동안 한도가 감지되지 않았다"에 "statusLine 이 돌아왔다"가 더해진
-    // 것이다. 공유 기록도 함께 지운다 — 거짓 기록 하나가 기록된 리셋 시각까지 다른 모든 체인을
-    // 그 계정에서 막아 두기 때문이고, 대가는 이 창 안에 다른 체인이 쓴 *참* 기록이 지워지는
-    // 것이다(blockRegistry.clear).
-    this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
-    chain.inPlaceUsed = false
+    // cycle.streak 가 리셋되지 않아 다음 한도가 "한 바퀴 전체 차단"으로 잘못 읽힌다. 이 판정이 본
+    // 것은 "60초 동안 한도가 감지되지 않았다"에 "statusLine 이 돌아왔다"가 더해진 것이고, 그래서
+    // 공유 기록도 함께 지운다 — declareHealthy 가 그 네 문장을 그대로 들고 있다(Ruling 4d-8: 여기에
+    // 다시 적어 두면 둘이 갈라진다). pty 전용 자리이므로 clearShared 는 기본값 그대로다.
+    this.declareHealthy(chain)
   }
 
   /** A roll gave up. Schedule the next attempt instead of leaving the chain idle.
@@ -1544,9 +1566,14 @@ export class RollingCoordinator {
         // 60 seconds later if no limit was detected; a chat chain declares health off the first turn
         // that completes without a rejection instead (spec §14.6), because the protocol says outright
         // when a turn ran. So the two flags that carry that evidence start this arrival clean — no turn
-        // of the old session's, and no rejection of it, may be read as this account's.
+        // of the old session's, and no rejection of it, may be read as this account's. The status the
+        // edge is measured from starts clean with them (Ruling 4d-6) — the new session has run no turn
+        // yet, so its first non-idle status is a turn beginning — and so does the shared-clear valve
+        // (Ruling 4d-7): this is an arrival, which is exactly what re-opens it.
         chain.chatTurnDone = false
         chain.chatLimitInTurn = false
+        chain.chatPrevStatus = 'idle'
+        chain.chatValveSpent = false
         chain.awaitingReady = false
         this.pushState(chain, 'none')
       } else {
@@ -1694,15 +1721,20 @@ export class RollingCoordinator {
    *  **What the evidence is worth differs by caller, and the pty side is the weaker one.** The timer says
    *  60 seconds passed with **no limit detected** — not that a turn actually ran (codex's settleInPlace
    *  is the only other site with that evidence; the claude-side settleInPlace asks a weaker question
-   *  still — whether the statusLine came back). A chat chain's turn is the direct claim. */
-  private declareHealthy(chain: Chain): void {
+   *  still — whether the statusLine came back). A chat chain's turn is the direct claim.
+   *
+   *  **`clearShared`** is how the once-per-arrival valve is kept (Ruling 4d-7). The pty callers leave it
+   *  at true: each of them fires once per arrival, so they are their own latch. The chat consumption
+   *  site in the tick fires on every clean turn, so it passes false after the first one — the per-chain
+   *  statements below still run each time, only the registry every other chain reads is spared. */
+  private declareHealthy(chain: Chain, clearShared = true): void {
     chain.cycle.onHealthy()
     // The only account this says anything about is the current one — the block records of other accounts (a weekly exhaustion, say) are kept
     chain.recovery[chain.cycle.currentIndex] = null
     // The shared record goes with it because a false one keeps every other chain off the account until
     // its recorded reset time passes; the price is that a *true* record another chain wrote inside this
     // window is erased by a session that has not produced any work of its own yet (blockRegistry.clear).
-    this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
+    if (clearShared) this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
     // 플래그는 *이전* 계정의 차단 에피소드를 가리킨다. 남겨 두면 새 계정에서의 첫 대기가
     // 제자리 재개를 건너뛰고 쓸데없이 respawn 한다. codex 쪽도 같은 자리에서 무조건 해제한다.
     chain.inPlaceUsed = false
@@ -1746,9 +1778,14 @@ export class RollingCoordinator {
     // placed after that is unreachable for this kind. Reading the tail first is the point of the
     // ordering: a rejection can be recorded a beat after the status flips back to idle, and a turn that
     // ended in a limit must not be counted. The guard above has already established that ① did not fire.
+    //
+    // The **shared** clear is passed only on the first clean turn after an arrival (Ruling 4d-7). It is
+    // latched here rather than inside declareHealthy so the pty timer path stays exactly what it was —
+    // that path arms its timer once per arrival and so is its own latch already.
     if (chain.kind === 'chat' && chain.chatTurnDone) {
       chain.chatTurnDone = false
-      this.declareHealthy(chain)
+      this.declareHealthy(chain, !chain.chatValveSpent)
+      chain.chatValveSpent = true
     }
     void this.idleNudgeCheck(chain) // independent of statusLine — does not wait for a payload
     const payload = await this.deps.readStatusPayload(chain.liveId)

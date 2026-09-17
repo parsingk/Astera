@@ -222,6 +222,19 @@ interface Chain {
   // 60-second timer roll() arms.
   chatTurnDone: boolean
   chatLimitInTurn: boolean
+  // The previous status onChatStatus saw, so chatLimitInTurn is cleared on the idle→non-idle **edge**
+  // rather than on every non-idle status (Ruling 4d-6). A permission card opening mid-turn reports
+  // 'waiting' and then 'working' again without the turn ever having ended (adapterCore.ts's
+  // dropRequest); clearing on each of those wiped a disqualification the rollout tail had already
+  // recorded, and the 'idle' that closed that same turn then counted as health.
+  chatPrevStatus: Attention
+  // Whether this chain has already spent its **shared** registry clear on the account it is sitting on
+  // (Ruling 4d-7). A chat chain declares health off every clean turn, so without a latch the valve
+  // blockRegistry.clear documents as "armed once per arrival" would fire for the chain's whole life and
+  // erase every record another chain ever wrote about the account. It is reset at every arrival — a
+  // roll, and an in-place resume — and read only at the tick's chat consumption site, so the pty timer
+  // path is untouched. The per-chain half of a health declaration still runs on every clean turn.
+  chatValveSpent: boolean
 }
 
 /** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts).
@@ -348,7 +361,9 @@ export class CodexRollingCoordinator {
       stateSeq: 0,
       lastState: null,
       chatTurnDone: false,
-      chatLimitInTurn: false
+      chatLimitInTurn: false,
+      chatPrevStatus: 'idle',
+      chatValveSpent: false
     }
     this.chains.set(info.id, chain)
     // **Where in the chain this session already is** — the same rule, and the same reasoning, as
@@ -493,9 +508,14 @@ export class CodexRollingCoordinator {
     // scope on the face of the code: they are a chat chain's health evidence and nothing else reads them.
     if (chain.kind !== 'chat') return
     if (status !== 'idle') {
-      chain.chatLimitInTurn = false // a new turn begins; a limit judged inside it is recorded by onLimit
+      // Only the idle→non-idle edge is a new turn beginning. A status change inside a turn — a
+      // permission card opening ('waiting') and closing again ('working') — is not, and treating it as
+      // one would clear a limit this turn has already been disqualified by.
+      if (chain.chatPrevStatus === 'idle') chain.chatLimitInTurn = false
+      chain.chatPrevStatus = status
       return
     }
+    chain.chatPrevStatus = 'idle'
     if (!chain.chatLimitInTurn) chain.chatTurnDone = true
   }
 
@@ -891,11 +911,17 @@ export class CodexRollingCoordinator {
    *  60 seconds; a chat chain's completed turn says the account actually took the work. The shared record
    *  goes either way, because a false one keeps every other chain off the account until its recorded
    *  reset time passes — the price being that a *true* record another chain wrote inside a pty chain's
-   *  window is erased by a session that has not produced any work of its own yet (blockRegistry.clear). */
-  private declareHealthy(chain: Chain): void {
+   *  window is erased by a session that has not produced any work of its own yet (blockRegistry.clear).
+   *
+   *  **`clearShared`** is how the once-per-arrival valve is kept (Ruling 4d-7). The pty callers leave it
+   *  at true: each of them fires once per arrival, so they are their own latch. The chat consumption
+   *  site in the tick fires on every clean turn, so it passes false after the first one — the two
+   *  per-chain statements below still run each time, only the registry every other chain reads is
+   *  spared. */
+  private declareHealthy(chain: Chain, clearShared = true): void {
     chain.cycle.onHealthy()
     chain.recovery[chain.cycle.currentIndex] = null
-    this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
+    if (clearShared) this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
     chain.inPlaceUsed = false
   }
 
@@ -1103,6 +1129,11 @@ export class CodexRollingCoordinator {
       chain.scanner = new CodexLimitScanner()
       chain.lastOutputAt = this.now()
       chain.inPlaceUsed = true
+      // A resume in place is an arrival too — on the account the chain already holds — so the
+      // shared-clear valve re-opens here exactly as it does on a roll (Ruling 4d-7). Without this the
+      // chain would sit on a reset account for the rest of its life unable to tear up a false record
+      // another chain wrote about it.
+      chain.chatValveSpent = false
       // 'nudged' is the right state — this is a reset resume, not an account switch, the renderer
       // treats it as a momentary event, and the Slack mapping (slack.limitReset) already exists. Same
       // choice as the claude-side resumeInPlace.
@@ -1172,6 +1203,21 @@ export class CodexRollingCoordinator {
   ): Promise<void> {
     chain.healthyTimer = null
     if (chain.disposed || chain.liveId !== liveId) return
+    // A chat chain gets no verdict here (Ruling 4d-8, mirroring the claude side's Ruling 4c-6 gate).
+    // The size question is the wrong one for it: a refused turn appends to the rollout just as an
+    // accepted one does, so "it grew" would declare health on an account that has just said no — and
+    // that declaration resets the cycle's streak, drops this chain's record, releases inPlaceUsed and
+    // clears the **shared** registry entry every other chain reads. It has a better answer already: a
+    // turn that completes with no limit in it, consumed on the tick (spec §14.6). Nothing is scheduled
+    // in its place and nothing needs to be — the block record ages out at its own reset, the tick has
+    // the chain back now the wait timer is gone, and the next rollout record re-plans from scratch.
+    if (chain.kind === 'chat') {
+      this.deps.log(
+        `codex in-place resume on a chat chain: no verdict — health comes from a clean completed turn ` +
+          `session=${liveId}`
+      )
+      return
+    }
     const sizeAfter = chain.rolloutPath
       ? await this.rolloutSize(chain.rolloutPath).catch(() => null)
       : null
@@ -1187,15 +1233,13 @@ export class CodexRollingCoordinator {
       return
     }
     // A turn ran — what the plain healthy timer always did. Without this, recovery[current] stays set
-    // and the next limit is misread as a whole lap being blocked.
-    chain.cycle.onHealthy()
-    chain.recovery[chain.cycle.currentIndex] = null
-    // The rollout grew, so a turn actually ran on this account — of the four clear sites this is the only
-    // one holding evidence of work rather than 60 seconds of silence. So the account demonstrably works and
-    // the shared record must go too: otherwise one bad reading keeps every other chain off it until its
-    // recorded reset time passes (blockRegistry.clear).
-    this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
-    chain.inPlaceUsed = false
+    // and the next limit is misread as a whole lap being blocked. The rollout grew, so a turn actually
+    // ran on this account — of the pty clear sites this is the only one holding evidence of work rather
+    // than 60 seconds of silence — so the shared record goes too: otherwise one bad reading keeps every
+    // other chain off the account until its recorded reset time passes (blockRegistry.clear). Those are
+    // exactly declareHealthy's four statements, and writing them out again here is how the two drift
+    // (Ruling 4d-8). A pty-only site, so clearShared keeps its default.
+    this.declareHealthy(chain)
   }
 
   /** A roll gave up. Schedule the next attempt instead of leaving the chain idle.
@@ -1464,9 +1508,14 @@ export class CodexRollingCoordinator {
         }, HEALTHY_MS)
       } else {
         // The evidence starts clean on every arrival — no turn of the old session's, and no limit of
-        // its own, may be read as this account's.
+        // its own, may be read as this account's. So does the status the edge is measured from (Ruling
+        // 4d-6): the new session has run no turn yet, so its first non-idle status is a turn beginning.
+        // And so does the shared-clear valve (Ruling 4d-7) — this is an arrival, which is what re-opens
+        // it.
         chain.chatTurnDone = false
         chain.chatLimitInTurn = false
+        chain.chatPrevStatus = 'idle'
+        chain.chatValveSpent = false
       }
       this.pushState(chain, 'none')
     } catch (err) {
@@ -1508,9 +1557,14 @@ export class CodexRollingCoordinator {
         // the refusal that ended a turn is only known after `refresh` above has read the record, and a
         // turn that ended in a limit must not be counted. The outer loop skips a chain with no tail, so
         // an unmapped chat chain never declares health — correctly: nothing was read.
+        //
+        // The **shared** clear is passed only on the first clean turn after an arrival (Ruling 4d-7).
+        // It is latched here rather than inside declareHealthy so the pty timer path stays exactly what
+        // it was — that path arms its timer once per arrival and so is its own latch already.
         if (chain.kind === 'chat' && chain.chatTurnDone) {
           chain.chatTurnDone = false
-          this.declareHealthy(chain)
+          this.declareHealthy(chain, !chain.chatValveSpent)
+          chain.chatValveSpent = true
         }
       })
     }

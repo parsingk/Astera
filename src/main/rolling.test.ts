@@ -3341,4 +3341,87 @@ describe('chat chains', () => {
     expect(h.written.filter((w) => w.id === 'c1' && w.data === RESUME_PROMPT)).toHaveLength(1)
     await fsp.rm(dir, { recursive: true, force: true })
   })
+
+  // Ruling 4d-6, the same scenario with one thing added: a permission card opens in the middle of the
+  // turn. The adapter reports that as `waiting` and then `working` again (adapterCore.ts's dropRequest)
+  // — two non-idle statuses inside a turn that never ended. A level-triggered clear read each of them as
+  // "a new turn begins" and wiped the disqualification the tail-detected limit had just recorded, so the
+  // `idle` that closed that very turn counted as health again and the defect above came straight back.
+  // The flag is therefore cleared on the idle→non-idle **edge** only.
+  it('a card opening mid-turn does not re-qualify the turn a transcript limit landed in', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'astera-chat-card-'))
+    const tPath = path.join(dir, 'th-1.jsonl')
+    await fsp.writeFile(tPath, '', 'utf8')
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: tPath })
+    h.coord.onChatStatus('c1', 'working') // a turn begins
+    await fsp.writeFile(tPath, limitRecord(Date.now() + 1_000) + '\n', 'utf8')
+    await advanceIo(15_000) // the tick: ① reads the record → onLimit → the wait branch
+    expect(h.events).toEqual([]) // no copy, no kill, no spawn — it waits where it is
+    blocks.record('a1', { at: Date.now() + 20 * 60_000, weekly: true, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('c1', 'waiting') // a permission card opens — still the same turn
+    h.coord.onChatStatus('c1', 'working') // and closes again
+    h.coord.onChatStatus('c1', 'idle') // the turn ends — and a limit landed inside it
+    await advanceIo(15 * 60_000 + 1_000) // the wait expires → resume in place
+    expect(h.written.filter((w) => w.id === 'c1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    await advanceIo(15_000) // the first tick after the resume, its tail re-anchored past the record
+    expect(blocks.get('a1', Date.now())).not.toBeNull()
+    // inPlaceUsed is read through the behaviour it decides, as in the test above: a second limit's wait
+    // falls back to a respawn rather than resuming in place a second time.
+    await fsp.appendFile(tPath, limitRecord(Date.now() + 1_000) + '\n', 'utf8')
+    await advanceIo(15_000) // ① again → onLimit → a second wait
+    await advanceIo(20 * 60_000) // past that wait
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a1'])
+    expect(h.written.filter((w) => w.id === 'c1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    await fsp.rm(dir, { recursive: true, force: true })
+  })
+
+  // Ruling 4d-7. A chat chain declares health on every clean turn, but the **shared** registry clear is
+  // a once-per-arrival valve. blockRegistry.clear's safety argument is that a healthy timer is armed
+  // once per arrival and never re-armed, so the valve cannot reach a chain that has been working for an
+  // hour — declaring off turns instead would have had it fire for the chain's whole life, erasing every
+  // record any other chain ever wrote about the account it sits on. The per-chain half (the streak, this
+  // chain's own record, the inPlaceUsed latch) still runs on every clean turn; only the shared write is
+  // latched, and only an arrival re-opens it.
+  it('the shared record is cleared by the first clean turn after an arrival, not by later ones', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks, readUsage: () => Promise.resolve(peak(100)) })
+    // utilization is carried so lastUsagePct is 100: the second limit lands inside the 60-second replay
+    // grace of the first roll, and only a usage figure at or above the gate gets it past that.
+    const hot = { ...rejected, utilization: 1 }
+    const far = (): { at: number; weekly: boolean; since: number } => ({
+      at: Date.now() + 30 * 60_000,
+      weekly: false,
+      since: Date.now()
+    })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1', 'a2', 'a3'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', hot)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    blocks.record('a2', far(), Date.now())
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatStatus('s2', 'idle')
+    await advanceIo(15_000)
+    expect(blocks.get('a2', Date.now())).toBeNull() // the first clean turn after the arrival spends it
+    blocks.record('a2', far(), Date.now())
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatStatus('s2', 'idle')
+    await advanceIo(15_000)
+    expect(blocks.get('a2', Date.now())).not.toBeNull() // the second releases only this chain's own state
+    h.coord.onChatLimit('s2', hot) // a new arrival re-opens the valve
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2', 'copy', 'kill:s2', 'spawn:s3:a3'])
+    blocks.record('a3', far(), Date.now())
+    h.coord.onChatStatus('s3', 'working')
+    h.coord.onChatStatus('s3', 'idle')
+    await advanceIo(15_000)
+    expect(blocks.get('a3', Date.now())).toBeNull()
+  })
 })
