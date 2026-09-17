@@ -85,7 +85,7 @@ export interface SessionInfo {
   title: string
   resumeSessionId?: string
   rollAccountIds?: string[] // rolling account order; [0] is the initial account. One element waits out the reset instead of switching (every Job worker is one)
-  rollPrompt?: string // the carry-on prompt sent when rolling (empty means the default). Only meaningful on the initial spawn
+  rollPrompt?: string // the carry-on prompt sent when rolling (empty means the default). It rides every roll, so the respawned session's note keeps the text the user typed rather than a default resolved in whatever language the app was in
   slackNotify?: boolean // Slack progress notifications — decides hook injection and notifier registration at spawn, and propagates through rolling respawns
   bypassPermissions?: boolean // start without permission prompts — passes --dangerously-skip-permissions at spawn, propagates through rolling and resume
   schedule?: ScheduleConfig // recurring command schedule — only meaningful on the initial spawn; the coordinator owns its lifetime afterwards

@@ -160,4 +160,21 @@ describe('isLoggedIn 프로브 — 어떤 증거를 보는가', () => {
     await fs.writeFile(path.join(dir, '.credentials.json'), '{}', 'utf8')
     expect(await probe(dir)).toBe(true)
   })
+
+  // darwin 은 만료된 파일에서 끝나지 않는다 — Keychain 에 살아 있는 자격이 있을 수 있으니 그쪽으로
+  // 떨어진다(win32 는 위 테스트대로 그 자리에서 거짓이다). 두 방향 모두 고정한다: 폴백이 사라지면
+  // 첫 번째가, 폴백이 무조건 참을 답하면 두 번째가 깨진다.
+  it('claude: darwin 은 만료된 .credentials.json 을 Keychain 으로 넘긴다 — 있으면 로그인', async () => {
+    const has: KeychainHas = async () => true
+    const probe = claudeLoginProbe({ platform: 'darwin', homeDir: dir, account: 'u', keychainHas: has, now: () => 2000 })
+    await fs.writeFile(path.join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { refreshTokenExpiresAt: 1000 } }), 'utf8')
+    expect(await probe(dir)).toBe(true)
+  })
+
+  it('claude: darwin 이어도 Keychain 에 없으면 만료된 파일은 로그아웃이다', async () => {
+    const never: KeychainHas = async () => false
+    const probe = claudeLoginProbe({ platform: 'darwin', homeDir: dir, account: 'u', keychainHas: never, now: () => 2000 })
+    await fs.writeFile(path.join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { refreshTokenExpiresAt: 1000 } }), 'utf8')
+    expect(await probe(dir)).toBe(false)
+  })
 })

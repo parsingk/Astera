@@ -433,4 +433,16 @@ describe('chat sessions', () => {
     h.coord.relearn('s1', 'th-1')
     expect(h.deleted).toEqual([])
   })
+
+  // The third branch: an entry that never had a key. A chat session registered without a
+  // resumeSessionId has sessionKey null until its first `ready`, and that first call is a plain learn,
+  // not a re-key — persisting under the new key but deleting nothing, because there is no old key to
+  // delete and `deleteConfig(null)` would be a wrong argument at best.
+  it('relearn on an entry with no key yet is a plain learn — it persists and deletes nothing', () => {
+    const h = harness()
+    h.coord.register(chatInfo('s1', everyMin()), 'claude') // no resumeSessionId — sessionKey stays null
+    h.coord.relearn('s1', 'th-1')
+    expect(h.persisted.map((p) => p.key)).toContain('th-1')
+    expect(h.deleted).toEqual([])
+  })
 })

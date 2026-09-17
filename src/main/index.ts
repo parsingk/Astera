@@ -882,19 +882,28 @@ app.whenReady().then(async () => {
           // watcher gates the turn callback on info.slackNotify itself.
           //
           // **A chat session is registered here too, not just by its own `ready`.** A rolled chat
-          // session resumes the same codex thread, but `ready` only fires ~1–3s later once the respawned
-          // CLI completes its handshake — until then this session would otherwise sit unwatched, missing
-          // usage chips and turn notifications. Its `ready` event names the thread and the rollout and
-          // registers them with `{ notifyTurns: false }` (ipc.ts) — a chat session announces its own turn
-          // ends from the protocol, so a watcher callback would make it two — and passing the same flag
-          // here closes that gap without double-announcing anything. `register` replaces the entry
-          // wholesale (codexRolloutWatcher.ts), so `ready`'s later re-register does not drift the flag
-          // back to its default; that is why the old Ruling 4c-6 skip is no longer needed here.
+          // session's `ready` only fires ~1–3s later, once the respawned CLI completes its handshake,
+          // and until then nothing in the watcher knows this session at all. What that costs is not
+          // notifications — they are off for a chat session (`{ notifyTurns: false }`, below: it
+          // announces its own turn ends from the protocol, so a watcher callback would make it two) —
+          // nor the usage chips, which `register` resets along with `limits`/`context` anyway. It is
+          // that `codexSessionIdFor` and `rolloutPathFor` have no answer for the new id during that
+          // window, and everything that asks them (the history-resume guard, the rollout lookups) is
+          // told this session does not exist. Registering here closes exactly that gap. `register`
+          // replaces the entry wholesale (codexRolloutWatcher.ts), so `ready`'s later re-register does
+          // not drift the flag back to its default; that is why the old Ruling 4c-6 skip is no longer
+          // needed here.
           //
-          // The old registration's native id must be read before it is dropped — `unregister` erases it,
-          // and only this session's own resumed thread should carry it forward.
+          // The old registration's native id is read before it is dropped — `unregister` erases it —
+          // **and only when `p.dest` is there**, i.e. when this roll resumed the same thread onto a
+          // copied rollout. A blank-slate roll (Smart Resume) starts a *different* thread and
+          // codexRolling nulls `chain.codexSessionId` for it, so handing the old id over would have the
+          // watcher's own `findRollout` narrow its search to the dead thread and hide the new rollout
+          // for the whole handshake window.
           const rolledChatId = core!.chat.has(p.info.id)
-            ? codexRollout.codexSessionIdFor(p.oldSessionId) ?? undefined
+            ? p.dest
+              ? codexRollout.codexSessionIdFor(p.oldSessionId) ?? undefined
+              : undefined
             : null
           codexRollout.unregister(p.oldSessionId)
           if (rolledChatId !== null) codexRollout.register(p.info, p.dest, rolledChatId, { notifyTurns: false })

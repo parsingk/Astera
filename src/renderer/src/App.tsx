@@ -611,11 +611,13 @@ export default function App(): React.JSX.Element {
   // Every session id ever asked about with the one-shot attention read below — read once per
   // session, ever, not on every render or every sessions-list change.
   const requestedAttentionRef = useRef<Set<string>>(new Set())
-  // Every session whose roll-state / schedule push listener has fired at least once. A seed reply is
-  // dropped for a session already in the set: an invoke reply and a push have no order between them, so
-  // a push — including an 'off'/'none' that removed the banner — is always the fresher fact. This
-  // replaces the old "already in state" presence guard, which could not tell a removal from a
-  // never-seeded session and so let a just-disabled banner be re-seeded.
+  // Every session whose roll-state / schedule push listener has decided banner state at least once. A
+  // seed reply is dropped for a session already in the set: an invoke reply and a push have no order
+  // between them, so a push — including an 'off'/'none' that removed the banner — is always the fresher
+  // fact. This replaces the old "already in state" presence guard, which could not tell a removal from a
+  // never-seeded session and so let a just-disabled banner be re-seeded. A push that decides nothing is
+  // not recorded: 'stalled' is a toast and leaves the banner alone, so marking it heard would drop a
+  // seed that is still the only thing that knows what the banner should say.
   const heardRollRef = useRef<Set<string>>(new Set())
   const heardSchedRef = useRef<Set<string>>(new Set())
   // Fix round 1: the most recent session:rolled, for PaneGrid to carry a rolled session's remembered
@@ -1329,7 +1331,6 @@ export default function App(): React.JSX.Element {
       setAttention((prev) => (prev[e.sessionId] === e.value ? prev : { ...prev, [e.sessionId]: e.value }))
     )
     const offRollState = window.api.on('session:rollState', (ev) => {
-      heardRollRef.current.add(ev.sessionId)
       // A failed auto-resume is announced with a toast. Why not a banner: a banner only disappears once
       // 'none' arrives, and nothing publishes that after stalled, so it would stay forever. And a
       // rolling session with Slack turned off has no record in SlackNotifier (see register in
@@ -1343,6 +1344,9 @@ export default function App(): React.JSX.Element {
         toast.error(t('session.toast.stalled', { title }))
         return // a momentary event, so it is not kept as banner state
       }
+      // Marked heard *below* the return above: 'stalled' is momentary and touches no banner state, so
+      // recording it would only make a legitimate seed for this session be dropped as stale.
+      heardRollRef.current.add(ev.sessionId)
       setRollStates((prev) => {
         if (ev.state === 'none') {
           const { [ev.sessionId]: _dropped, ...rest } = prev
