@@ -1005,6 +1005,35 @@ describe('RollingCoordinator 단일 계정 자동 재개', () => {
     expect(h.spawned).toEqual([])
     expect(resumeCount(h)).toBe(1)
   })
+
+  it('stateOf reflects a waiting state', async () => {
+    const h = harness()
+    const now = Date.now()
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(now + 10 * MIN).toISOString() }))
+    h.coord.register(infoSelf())
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }); await flush()
+    expect(h.coord.stateOf('s1')).toMatchObject({ state: 'waiting', scope: 'session' })
+  })
+
+  // The wait timer fires resumeInPlace, which publishes the momentary 'nudged' on its way to sending the
+  // carry-on prompt. That must not erase the recorded 'waiting' — the banner a late-mounting renderer
+  // reads back is only replaced by 'none' (after the Enter that follows the prompt), not by a nudge.
+  it('a nudge from resuming in place does not clobber the recorded waiting state', async () => {
+    const h = harness()
+    const now = Date.now()
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(now + 10 * MIN).toISOString() }))
+    h.coord.register(infoSelf())
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }); await flush()
+    const waiting = h.coord.stateOf('s1')
+    expect(waiting).toMatchObject({ state: 'waiting' })
+    const retryAt = Date.parse(String(waiting?.nextRetryAt))
+    await vi.advanceTimersByTimeAsync(retryAt - Date.now() + 10) // fires the wait timer, short of the 150ms Enter delay
+    expect(resumeCount(h)).toBe(1) // resumed in place — publishes the momentary 'nudged'
+    expect(h.sent.some((s) => s.payload.state === 'nudged')).toBe(true)
+    expect(h.coord.stateOf('s1')).toEqual(waiting) // the nudge left the recorded wait untouched
+    await vi.advanceTimersByTimeAsync(150) // the Enter delay — 'none' now clears it
+    expect(h.coord.stateOf('s1')).toBeNull()
+  })
 })
 
 describe('사각지대 3-b — 단일 계정 reset 앵커 후향 판정', () => {
@@ -2957,6 +2986,19 @@ describe('chat chains', () => {
     const states = h.sent.filter((s) => s.channel === 'session:rollState').map((s) => s.payload.state)
     // awaitingReady is released with the spawn, so 'none' follows at once — there is no readiness poll
     expect(states.slice(-2)).toEqual(['switching', 'none'])
+  })
+
+  it('stateOf returns the last lasting roll state and null after none', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    // rolled: the chain now lives under s2, and its banner is 'switching' (reattach) then 'none'
+    expect(h.coord.stateOf('s2')).toBeNull() // 'none' was published at the end of a chat roll
+    expect(h.coord.stateOf('c1')).toBeNull() // old id is gone
   })
 
   it('a rateLimit that is not rejected does nothing (logged once)', async () => {

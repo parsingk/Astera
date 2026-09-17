@@ -1951,6 +1951,10 @@ describe('chat chains', () => {
     // `codex resume <id>`, and a chat session is not started from a command line at all.
     expect(h.spawnedOpts[0]).not.toHaveProperty('resumePrompt')
     expect(h.written).toEqual([]) // nothing is typed into a session that takes turns, not keys
+    // The banner ends on 'none' (chat chains skip the readiness poll), so both the old and the rolled-to
+    // id read back with no snapshot to hand a late-mounting renderer.
+    expect(h.coord.stateOf('s2')).toBeNull()
+    expect(h.coord.stateOf('s1')).toBeNull()
     h.coord.stop()
   })
 

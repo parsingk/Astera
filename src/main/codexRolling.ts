@@ -201,6 +201,9 @@ interface Chain {
   // has published something more recent in the meantime. Same mechanism and same reason as the claude
   // side (rolling.ts) — codex got its first deferred publish with the in-place resume.
   stateSeq: number
+  // The last lasting rollState payload pushState published — null once it was 'none' (or nothing has
+  // published yet). Read back by stateOf for a renderer that mounts after the push already happened.
+  lastState: RollStateEvent | null
 }
 
 /** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts).
@@ -324,7 +327,8 @@ export class CodexRollingCoordinator {
       disposed: false,
       recovery: ids.map(() => null),
       inPlaceUsed: false,
-      stateSeq: 0
+      stateSeq: 0,
+      lastState: null
     }
     this.chains.set(info.id, chain)
     // **Where in the chain this session already is** — the same rule, and the same reasoning, as
@@ -519,6 +523,16 @@ export class CodexRollingCoordinator {
     if (!chain || chain.disposed) throw new Error('no active codex rolling chain')
     await this.refresh(chain)
     this.onLimit(chain, 'force')
+  }
+
+  /** The roll banner's snapshot, read once as the renderer adopts a session — session:rollState is
+   *  pushed on changes only, so a renderer that mounted after the state was published (a reload) would
+   *  wear no banner. The payload is re-stamped with the chain's current liveId: the recorded one was
+   *  right when it was sent, but a later reattach moved the chain to a new id. */
+  stateOf(sessionId: string): RollStateEvent | null {
+    const chain = this.chains.get(sessionId)
+    if (!chain || chain.disposed || !chain.lastState) return null
+    return { ...chain.lastState, sessionId: chain.liveId }
   }
 
   /** App shutdown and test cleanup — clears every timer */
@@ -1429,7 +1443,13 @@ export class CodexRollingCoordinator {
     extra?: Partial<RollStateEvent>
   ): void {
     chain.stateSeq++ // the generation advances on every publication — the basis for deciding whether a deferred publication is stale
-    this.deps.send('session:rollState', { sessionId: chain.liveId, state, ...extra })
+    const payload: RollStateEvent = { sessionId: chain.liveId, state, ...extra }
+    // The lasting states are what a late-mounting renderer has to be able to read back; the momentary
+    // ones (nudged/stalled) the renderer never keeps as a banner, so they must not overwrite the last
+    // lasting one either. 'none' clears it.
+    if (state === 'none') chain.lastState = null
+    else if (state !== 'nudged' && state !== 'stalled') chain.lastState = payload
+    this.deps.send('session:rollState', payload)
   }
 
   private disposeChain(chain: Chain): void {

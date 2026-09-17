@@ -265,7 +265,8 @@ const api = {
     install: () => ipcRenderer.invoke('update:install')
   },
   rolling: {
-    forceRoll: invoke('rolling.forceRoll')
+    forceRoll: invoke('rolling.forceRoll'),
+    state: invoke('rolling.state')
   },
   app: {
     // The 'quit app' of the forced-update gate. win.close cannot be used: on win32/macOS it only minimises to the tray

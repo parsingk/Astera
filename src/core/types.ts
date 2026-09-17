@@ -1268,10 +1268,13 @@ export interface UpdateApi {
   install(): Promise<void>
 }
 
-/** A rolling API for development only — packaged builds do not register the handler, so calls are
- *  rejected there (used for manual end-to-end checks) */
+/** The rolling coordinators' renderer surface. `forceRoll` is development only — packaged builds do not
+ *  register its handler, so calls are rejected there (used for manual end-to-end checks). `state` is
+ *  registered in every build: the roll banner's one-shot snapshot, read as the renderer adopts a session
+ *  (`session:rollState` is pushed on changes only). */
 export interface RollingApi {
   forceRoll(sessionId?: string): Promise<void>
+  state(sessionId: string): Promise<RollStateEvent | null>
 }
 
 /** Window controls (not core — the renderer/Electron layer, the same layer as system) */

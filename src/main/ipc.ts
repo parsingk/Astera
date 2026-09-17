@@ -4313,6 +4313,11 @@ export function registerIpc(
   // pushed on changes only, so a renderer that mounted after the schedule was registered (a reload)
   // has heard nothing about it.
   ipcMain.handle('scheduler.state', (_e, sessionId: string) => scheduler?.stateOf(sessionId) ?? null)
+  // The roll banner's snapshot, read once per session as the renderer adopts it — the mirror of
+  // scheduler.state. A session is in at most one coordinator; ask claude first, codex second.
+  ipcMain.handle('rolling.state', (_e, sessionId: string) =>
+    rolling?.stateOf(sessionId) ?? codexRolling?.stateOf(sessionId) ?? null
+  )
 
   // history
   ipcMain.handle('history.page', (_e, req?: HistoryPageRequest) => core.history.page(req))
