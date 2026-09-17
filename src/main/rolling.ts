@@ -115,7 +115,20 @@ export interface RollingDeps {
      *  latter has the default already resolved, and writing a resolved default into the note pins the
      *  language it was resolved in. */
     rollPrompt?: string
+    /** Chat only, Claude only: start the next process on this model. See `chosenModelOf` below. */
+    model?: string | null
   }): SessionInfo
+  /** The model the person picked in this session, or null when they picked none.
+   *
+   *  A roll has to carry it because Claude's model is argv and nothing about it survives the process —
+   *  `--resume` restores the conversation, not a mid-session `set_model` — so a respawn without it puts
+   *  the next account's process on the CLI's own default. Someone who picked Opus watched it turn into
+   *  the default partway through a chain, which is how this was found. codex needs nothing here: its
+   *  model lives on the thread and `thread/resume` reports it back.
+   *
+   *  Optional, so a wiring that predates this (and every terminal chain, which has no such choice to
+   *  make) behaves exactly as before. */
+  chosenModelOf?(sessionId: string): string | null
   write(sessionId: string, data: string): void
   kill(sessionId: string): void
   getAccount(id: string): Account | null
@@ -1518,6 +1531,9 @@ export class RollingCoordinator {
       // new one, so disposeChain does not misfire. A blank-slate roll omits resumeSessionId entirely —
       // the new process is a fresh `claude`, not a `claude --resume`, and the briefing is typed into it
       // by scheduleAutoPrompt once it is ready, the same channel every ordinary roll already uses.
+      // Read before the kill, not after: the manager drops the session together with its process, and
+      // the person's model choice is held there. Reading it afterwards returns null every time.
+      const chosenModel = this.deps.chosenModelOf?.(chain.liveId) ?? null
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const info = this.deps.spawn({
@@ -1537,7 +1553,10 @@ export class RollingCoordinator {
         // passes 'terminal' and no prompt, which is what every caller did before chat sessions existed.
         kind: chain.kind,
         initialPrompt: chatPrompt,
-        rollPrompt: chain.liveInfo.rollPrompt
+        rollPrompt: chain.liveInfo.rollPrompt,
+        // Carried so the chain keeps running on what the person chose. The respawned session records it
+        // as its own choice, so the roll after this one reads it back the same way.
+        model: chosenModel
       })
       this.chains.delete(oldId)
       chain.liveId = info.id

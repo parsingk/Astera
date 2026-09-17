@@ -662,9 +662,13 @@ app.whenReady().then(async () => {
             rollPrompt: opts.rollPrompt,
             slackNotify: opts.slackNotify,
             bypassPermissions: opts.bypassPermissions,
-            title: opts.title
+            title: opts.title,
+            model: opts.model
           })
         : core!.sessions.spawn(opts),
+    // What the roll above carries: the model the person picked, read off the session being rolled
+    // before it is killed. Terminal chains never reach this — the manager only knows chat sessions.
+    chosenModelOf: (id) => core!.chat.chosenModelOf(id),
     // A chat session takes a turn, not keys: the text goes through the session driver and the Enter
     // that follows it on a pty is a no-op here — the driver already sent the message. A refusal is
     // logged rather than thrown, because every caller of this dep is a timer with nobody to tell.

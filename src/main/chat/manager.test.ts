@@ -224,6 +224,35 @@ describe('ChatSessionManager.spawn', () => {
     expect(manager.state(info.id)?.provider).toBe('claude')
   })
 
+  // A model the person picked is argv for Claude — there is no protocol call that outlives the process,
+  // so a session started without it comes up on the CLI's own default. That is what a roll used to do:
+  // pick Opus, roll to the next account, and the new process launches with no --model and reports the
+  // default back. Reported as "I picked Opus and it turned into Fable partway through".
+  it('launches with the model it is given, so a roll can carry the one that was picked', () => {
+    const { spawned, manager } = setup('win32')
+    manager.spawn({ account: claudeAccount, cwd: 'D:/proj', model: 'opus' })
+    expect(spawned[0].args).toEqual([
+      '/c',
+      'claude',
+      ...claudeLaunchArgs({ resumeSessionId: undefined, bypass: false, model: 'opus' })
+    ])
+  })
+
+  // What the roll reads when it respawns. It is the person's choice, not the model in use: the CLI can
+  // move off a model by itself (a limit reached mid-session), and carrying that onto a fresh account
+  // would pin the fallback on an account that never hit anything.
+  it('remembers the model the person picked, across a pick and a spawn', async () => {
+    const { manager } = setup('win32')
+    const seeded = manager.spawn({ account: claudeAccount, cwd: 'D:/proj', model: 'opus' })
+    expect(manager.chosenModelOf(seeded.id)).toBe('opus')
+
+    const fresh = manager.spawn({ account: claudeAccount, cwd: 'D:/proj' })
+    expect(manager.chosenModelOf(fresh.id)).toBeNull()
+    await manager.setModel(fresh.id, 'sonnet', null)
+    expect(manager.chosenModelOf(fresh.id)).toBe('sonnet')
+    expect(manager.chosenModelOf('nobody')).toBeNull()
+  })
+
   it('carries resumeThreadId and bypassPermissions through to info, meta and adapter.start', () => {
     const { spawned, manager, handles } = setup('win32')
     const info = manager.spawn({

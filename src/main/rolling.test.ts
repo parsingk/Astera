@@ -2988,6 +2988,30 @@ describe('chat chains', () => {
     expect(states.slice(-2)).toEqual(['switching', 'none'])
   })
 
+  // Claude's model is argv and nothing about it survives the process — `--resume` restores the
+  // conversation, not a mid-session set_model. So a roll that respawns without it starts the next
+  // account's process on the CLI's own default, and a person who picked Opus watches it turn into
+  // whatever that account defaults to. Read before the kill, because the manager drops the session with
+  // the process and the choice goes with it.
+  it('a chat roll carries the model the person picked', async () => {
+    const killed = new Set<string>()
+    const h = harness({
+      readUsage: () => Promise.resolve(peak(100)),
+      // Mimics the manager: the session is gone once killed, and the choice goes with it. A read
+      // placed after the kill comes back null here exactly as it would in the app, so this catches
+      // the ordering and not just the plumbing.
+      chosenModelOf: (id) => (killed.has(id) ? null : 'opus'),
+      kill: (id) => void killed.add(id)
+    })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.spawnedOpts[0]).toMatchObject({ kind: 'chat', model: 'opus' })
+  })
+
   it('stateOf returns the last lasting roll state and null after none', async () => {
     const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
     h.chatIds.add('c1')

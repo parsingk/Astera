@@ -39,6 +39,14 @@ interface LiveChatSession {
   info: SessionInfo
   proc: ProcLike
   adapter: ChatAdapter
+  /** The model the *person* picked, or null while they have not. Deliberately not "the model in use":
+   *  a CLI can move off a model on its own (Claude does, when a limit is reached mid-session), and
+   *  carrying that onto the fresh account a roll switches to would pin a fallback on an account that
+   *  never hit anything. What a roll has to carry is the choice. Claude needs it because its model is
+   *  argv and nothing about it survives the process — `--resume` restores the conversation, not a
+   *  mid-session `set_model`. codex does not: its model lives on the thread, and `thread/resume`
+   *  reports it back (codexAdapter seeds its state from that same result). */
+  chosenModel: string | null
 }
 
 export class ChatSessionManager {
@@ -63,6 +71,9 @@ export class ChatSessionManager {
     rollAccountIds?: string[]
     rollPrompt?: string
     initialPrompt?: string
+    /** Claude only: start the CLI on this model (`--model`). A roll passes the chain's remembered
+     *  choice here, which is the only way it survives — see LiveChatSession.chosenModel. */
+    model?: string | null
   }): SessionInfo {
     const provider = providerOf(opts.account)
     const descriptor = descriptorOf(this.deps.descriptors, opts.account)
@@ -81,7 +92,7 @@ export class ChatSessionManager {
     // takes it directly.
     const { file, args } =
       provider === 'claude'
-        ? buildClaudeChatCommand(this.deps.platform, { resumeSessionId: resumeThreadId, bypass })
+        ? buildClaudeChatCommand(this.deps.platform, { resumeSessionId: resumeThreadId, bypass, model: opts.model })
         : buildCodexAppServerCommand(this.deps.platform)
     const meta: PtyMeta = {
       kind: 'chat',
@@ -120,7 +131,7 @@ export class ChatSessionManager {
     }
 
     const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)
-    this.track(id, info, proc, adapter)
+    this.track(id, info, proc, adapter, opts.model ?? null)
     void adapter
       .start({ cwd: opts.cwd, resumeThreadId, bypass })
       .then(() => {
@@ -189,7 +200,10 @@ export class ChatSessionManager {
     }
 
     const adapter = this.makeAdapter(a.proc, { mode: 'adopt', threadId, rolloutPath, truncated: a.truncated, answered }, provider)
-    this.track(a.id, info, a.proc, adapter)
+    // Null, not a guess: an adopted session is one the app found already running after a restart, and
+    // nothing it left behind says which model a person picked in it. A roll from here starts the next
+    // process on the CLI's default, which is what it did for every session before this existed.
+    this.track(a.id, info, a.proc, adapter, null)
     // Adopt mode's start() resolves at once (see codexAdapter.ts's doStart) — bypass is meaningless
     // here (a running thread was not just started with a bypass flag) so a neutral false is passed.
     void adapter.start({ cwd, bypass: false }).catch((err: unknown) => {
@@ -262,7 +276,12 @@ export class ChatSessionManager {
 
   setModel(id: string, model: string, effort: string | null): Promise<void> {
     const live = this.sessions.get(id)
-    return live ? live.adapter.setModel(model, effort) : Promise.resolve()
+    if (!live) return Promise.resolve()
+    // Written before the adapter is asked, not after: the roll reads this, and a pick whose control
+    // call is still in flight is still the person's choice. A refusal leaves it set, which is the
+    // lesser wrong — the alternative loses a choice the CLI may well have taken.
+    live.chosenModel = model
+    return live.adapter.setModel(model, effort)
   }
 
   setPlanMode(id: string, on: boolean): Promise<void> {
@@ -297,9 +316,21 @@ export class ChatSessionManager {
     return provider === 'claude' ? createClaudeAdapter(args) : createCodexAdapter(args)
   }
 
-  private track(id: string, info: SessionInfo, proc: ProcLike, adapter: ChatAdapter): void {
+  private track(
+    id: string,
+    info: SessionInfo,
+    proc: ProcLike,
+    adapter: ChatAdapter,
+    chosenModel: string | null
+  ): void {
     adapter.on((e) => this.handleEvent(id, e))
-    this.sessions.set(id, { info, proc, adapter })
+    this.sessions.set(id, { info, proc, adapter, chosenModel })
+  }
+
+  /** The model the person picked for this session, for the roll that has to carry it. Null when they
+   *  have picked none, and for a session that is not here. */
+  chosenModelOf(id: string): string | null {
+    return this.sessions.get(id)?.chosenModel ?? null
   }
 
   private handleEvent(id: string, e: ChatEvent): void {
