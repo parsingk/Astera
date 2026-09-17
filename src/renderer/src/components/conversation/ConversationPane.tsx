@@ -414,12 +414,19 @@ export function isSlashCommand(text: string): boolean {
 /**
  * The one-line label for what the CLI is running under, or null when it has told us nothing worth
  * drawing. Effort alone is not worth a line: it means nothing without the model it belongs to.
+ *
+ * `fallbackModel` is what to draw while the CLI has reported no model at all — a chat session's
+ * default model from the list it answered at the handshake (the `resolvedModel` of the `default`
+ * entry). Claude names its current model only on `system/init`, which arrives with the first turn, so
+ * a freshly opened chat pane otherwise sits on the "model" placeholder until someone sends something.
+ * Drawn alone: an effort with no reported model still belongs to nothing.
  */
 export function modelLineOf(
   info: { model: string | null; effort: string | null },
-  format: (model: string, effort: string) => string
+  format: (model: string, effort: string) => string,
+  fallbackModel: string | null = null
 ): string | null {
-  if (info.model === null) return null;
+  if (info.model === null) return fallbackModel;
   if (info.effort === null) return info.model;
   return format(info.model, info.effort);
 }
@@ -1632,8 +1639,14 @@ export function ConversationPane({
     };
   }, [status]);
 
-  const modelLine = modelLineOf(modelInfo, (model, effort) =>
-    t("conversation.model.line", { model, effort })
+  // Before the first turn a chat session's CLI has said nothing about its model (see modelLineOf), but
+  // the model list it answered at the handshake names the account's default; a terminal session reads
+  // its model off the screen and needs no stand-in.
+  const defaultModelFallback = isChat ? (models.find((m) => m.isDefault)?.resolvedModel ?? null) : null;
+  const modelLine = modelLineOf(
+    modelInfo,
+    (model, effort) => t("conversation.model.line", { model, effort }),
+    defaultModelFallback
   );
 
   // The same two writes the composer makes, for a command a control sends rather than a person types.

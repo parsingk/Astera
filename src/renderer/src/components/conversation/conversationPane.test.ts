@@ -280,6 +280,22 @@ describe('modelLineOf', () => {
     expect(modelLineOf({ model: null, effort: 'xhigh' }, format)).toBeNull()
     expect(modelLineOf({ model: null, effort: null }, format)).toBeNull()
   })
+
+  // Before the first turn the CLI has said nothing (system/init arrives with the turn), but the model
+  // list it answered at the handshake names the account's default. That is worth drawing, alone —
+  // an effort with no reported model still belongs to nothing.
+  it('falls back to the given default model while the CLI has said nothing', () => {
+    expect(modelLineOf({ model: null, effort: null }, format, 'claude-opus-5[1m]')).toBe('claude-opus-5[1m]')
+    expect(modelLineOf({ model: null, effort: 'xhigh' }, format, 'claude-opus-5[1m]')).toBe('claude-opus-5[1m]')
+  })
+
+  it('the reported model wins over the fallback', () => {
+    expect(modelLineOf({ model: 'Opus 5', effort: null }, format, 'claude-opus-5[1m]')).toBe('Opus 5')
+  })
+
+  it('a null fallback changes nothing', () => {
+    expect(modelLineOf({ model: null, effort: null }, format, null)).toBeNull()
+  })
 })
 
 describe('keepWhatIsKnown', () => {

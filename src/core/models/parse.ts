@@ -48,6 +48,7 @@ export function parseClaudeModels(raw: unknown): ModelDescriptor[] {
       name: str(m.displayName) ?? id,
       description: str(m.description),
       isDefault: id === 'default',
+      resolvedModel: str(m.resolvedModel) ?? undefined,
       effortLevels: m.supportsEffort === true ? strArray(m.supportedEffortLevels) : undefined
     })
   }

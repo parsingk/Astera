@@ -48,8 +48,17 @@ describe('parseClaudeModels', () => {
       name: 'Default (recommended)',
       description: 'Opus 5',
       isDefault: true,
+      resolvedModel: 'claude-opus-5[1m]',
       effortLevels: ['low', 'medium', 'high', 'xhigh', 'max']
     })
+  })
+
+  // 첫 턴 전에는 CLI 가 현재 모델을 말해 주지 않는다(system/init 은 턴이 시작될 때 온다). 목록의
+  // default 줄이 가리키는 정식 이름이 그때 보여 줄 수 있는 유일한 값이라 버리지 않고 남긴다.
+  it("default 줄의 resolvedModel 을 남긴다 — 첫 턴 전에 보여 줄 기본 모델", () => {
+    const m = parseClaudeModels(claudeRaw)
+    expect(m.find((x) => x.isDefault)?.resolvedModel).toBe('claude-opus-5[1m]')
+    expect(m.find((x) => x.id === 'haiku')?.resolvedModel).toBe('claude-haiku-4-5-20251001')
   })
 
   // --model 이 받는 값은 value 다 — resolvedModel 은 그것이 가리키는 정식 이름이라 다르다
