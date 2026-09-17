@@ -20,6 +20,7 @@ import { SchedulerCoordinator } from './scheduler'
 import { chatDriver, ptyDriver, routedDriver } from './sessionDriver'
 import { CodexRollingCoordinator } from './codexRolling'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
+import { memoiseLoginStatus } from '../core/accounts/loginStatusCache'
 import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
@@ -632,6 +633,19 @@ app.whenReady().then(async () => {
   // One registry for both coordinators — the sharing is the feature (SPEC §11.2/6). Two instances
   // would compile and pass every test while sharing nothing.
   const blocks = new BlockRegistry()
+  // One memo for both coordinators, for the same reason (ruling 4e-5). Every chain asks this for every
+  // account in its roll chain on every 15-second tick, and chains overlap: four chains over three
+  // accounts asked twelve times for three answers. On win32 that is a file read each; on darwin
+  // claudeLoginProbe can fall through to the Keychain, which spawns a `security` process per ask. The
+  // TTL sits under the tick, so a login change is still picked up within a tick or two.
+  //
+  // `ipcMain.handle('accounts.loginStatus')` is deliberately NOT memoised: the renderer re-queries on
+  // window focus exactly because the person just went and logged in somewhere else, and a cached
+  // verdict would show them a stale marker. Two paths, two trades — the coordinators run a filter, the
+  // panel shows a fact.
+  const cachedLoginStatus = memoiseLoginStatus((id) => core!.accounts.loginStatus(id), {
+    ttlMs: 10_000
+  })
   const rolling = new RollingCoordinator({
     // A chain's session may be a pty or a chat session (slice 4c); the coordinator says which through
     // `kind` and the rest is routed here, so neither coordinator imports a manager. A chat respawn
@@ -674,8 +688,9 @@ app.whenReady().then(async () => {
     },
     // The same verdict the account panel and the resume dialog show. A chain asks it on its tick and
     // skips an account that cannot authenticate (spec §15.2) — before this, a roll onto a logged-out
-    // account copied the transcript and respawned into a CLI that immediately failed.
-    loginStatus: (accountId) => core!.accounts.loginStatus(accountId),
+    // account copied the transcript and respawned into a CLI that immediately failed. Memoised: see
+    // cachedLoginStatus above for why this path is and the IPC one is not.
+    loginStatus: cachedLoginStatus,
     // A chat session writes no statusLine — it never calls the hook at all — so this would poll a file
     // that is never written. ipc pushes the same two facts in through onChatMeta instead.
     readStatusPayload: (id) => (core!.chat.has(id) ? Promise.resolve(null) : core!.statusLinePayload(id)),
@@ -842,8 +857,9 @@ app.whenReady().then(async () => {
     },
     // The same verdict the account panel and the resume dialog show. A chain asks it on its tick and
     // skips an account that cannot authenticate (spec §15.2) — before this, a roll onto a logged-out
-    // account copied the transcript and respawned into a CLI that immediately failed.
-    loginStatus: (accountId) => core!.accounts.loginStatus(accountId),
+    // account copied the transcript and respawned into a CLI that immediately failed. Memoised: see
+    // cachedLoginStatus above for why this path is and the IPC one is not.
+    loginStatus: cachedLoginStatus,
     send: (channel, payload) => {
       try {
         if (!win.isDestroyed()) win.webContents.send(channel, payload)

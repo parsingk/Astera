@@ -46,10 +46,6 @@ export function ResumeDialog({
   const { t } = useI18n()
   const [options, setOptions] = useState<Account[] | null>(null) // null = login status still being checked
   const [selectedId, setSelectedId] = useState<string>('')
-  // Which accounts are currently logged in — set alongside `options` below, and read again when the
-  // saved roll chain is filtered (spec §15.4): a chain entry that has since logged out would prefill a
-  // chain that cannot roll.
-  const [loggedIn, setLoggedIn] = useState<Set<string>>(new Set())
   // Session kind — terminal (pty) or chat (a Host-owned line process resumed by its protocol thread
   // id — since slice 4c the transcript is copied into the chosen account first, same as terminal, so
   // either kind can land on any candidate the picker offers). Same remembered-and-falls-back rule as
@@ -82,7 +78,6 @@ export function ResumeDialog({
     ).then((pairs) => {
       if (cancelled) return
       const loggedIn = new Set(pairs.filter(([, ok]) => ok).map(([id]) => id))
-      setLoggedIn(loggedIn)
       // The owner goes in as an object: an unregistered owner is not in `accounts`, so looking it up by id
       // would fail and the provider would fall back to claude — offering claude accounts for a codex
       // transcript. Only registered accounts are passed as candidates.
@@ -124,15 +119,8 @@ export function ResumeDialog({
   }, [entry.sessionId])
 
   const crossAccount = selectedId !== '' && selectedId !== entry.accountId
-  // The chain that actually goes to spawn — the display uses this value too (the result after the
-  // provider filter, the rotation reorder, and the logged-out drop). The saved chain may name an
-  // account that has since been logged out; offering it would prefill a chain that cannot roll (spec
-  // §15.4). The selected account is kept regardless — it is the one being resumed on.
-  const rollChain = selectedId
-    ? resumeRollAccountIds(savedRoll?.accountIds ?? null, accounts, selectedId).filter(
-        (id) => id === selectedId || loggedIn.has(id)
-      )
-    : []
+  // The chain that actually goes to spawn — the display uses this value too (the result after the provider filter and the rotation reorder)
+  const rollChain = selectedId ? resumeRollAccountIds(savedRoll?.accountIds ?? null, accounts, selectedId) : []
   const labelOf = (id: string): string => accounts.find((a) => a.id === id)?.label ?? id
 
   // The Host poll is shared with NewSessionDialog; either provider's account can open a chat session.
