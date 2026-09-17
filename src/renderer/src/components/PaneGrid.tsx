@@ -22,6 +22,7 @@ import {
   withoutClosedSessions
 } from '../../../core/panes/sessionView'
 import { tabLabels } from '../../../core/files/tabLabel'
+import { sessionKindOf } from '../../../core/sessions/kind'
 import type { RecordStatus } from '../../../core/understanding/types'
 import { displayHostOf } from '../../../core/preview/url'
 import { browserSlotDraw } from './browserSlot'
@@ -64,7 +65,6 @@ export function PaneGrid({
   schedStates,
   busy,
   attention,
-  conversationDefault,
   lastRoll,
   draggingTabId,
   newDisabled,
@@ -119,10 +119,6 @@ export function PaneGrid({
    *  needs the value only for whichever one session it currently has open, and only while mounted,
    *  which is exactly when its own tab-bar segment does not need a marker. */
   attention: Record<string, Attention>
-  /** Task 10: what a session tab not yet seen before opens showing. Only ever read at the moment a
-   *  tab first appears (see the session-view effect below) — changing the setting never reaches
-   *  into a tab that is already open. */
-  conversationDefault: SessionView
   /** Fix round 1: the most recent `session:rolled` App has seen, or null before the first one. App
    *  owns the subscription (`session:rolled`, the same handler that swaps the id in `sessions` and
    *  `layout`) and never clears this back to null — the seeding effect below applies it through
@@ -178,10 +174,13 @@ export function PaneGrid({
 
   // Task 10: which of the terminal or the conversation each session tab is showing, remembered per
   // tab (core/panes/sessionView.ts holds the reducers; this owns the actual record). It lives here
-  // rather than in App — App already hands this component the two things it needs from outside
-  // (conversationDefault, the setting a brand-new tab starts from, and lastRoll, below), and
-  // everything else about the choice is local to how a session slot draws itself, the same reason
+  // rather than in App — the only thing it needs from outside is `lastRoll` below, and everything
+  // else about the choice is local to how a session slot draws itself, the same reason
   // lastFileOfPane above is a local ref rather than App state.
+  //
+  // A tab starts on the terminal. There is no setting for that any more: the one that used to seed it
+  // shared its two words with the session kind, and people reached for it meaning "open new sessions
+  // as 대화" — so it became the default *kind* instead, and this choice is the tab bar's toggle alone.
   const [sessionViews, setSessionViews] = useState<Record<string, SessionView>>({})
   // Seeds a session's view the moment its tab first appears, carries a rolled session's choice to
   // its new id first (fix round 1: without this, a roll's id swap read as an unrelated tab closing
@@ -195,10 +194,13 @@ export function PaneGrid({
     setSessionViews((prev) => {
       let next = prev
       if (lastRoll) next = carryRolledView(next, lastRoll.oldSessionId, lastRoll.newSessionId)
-      for (const s of sessions) next = openSessionView(next, s.id, conversationDefault)
+      // A chat session's view never changes (Task 8) — it always shows the conversation pane, so
+      // there is nothing here to seed for it, and seeding one anyway would be a value nothing ever
+      // reads back once the slot below stops consulting sessionViews for a chat session at all.
+      for (const s of sessions) if (sessionKindOf(s) !== 'chat') next = openSessionView(next, s.id, 'terminal')
       return withoutClosedSessions(next, new Set(sessions.map((s) => s.id)))
     })
-  }, [sessions, conversationDefault, lastRoll])
+  }, [sessions, lastRoll])
 
   const paneLeaves = layout ? leaves(layout) : []
   const rects: Map<string, Rect> = layout ? computeRects(layout) : new Map()
@@ -277,13 +279,20 @@ export function PaneGrid({
           re-opening re-reads the window it would have shown anyway, and main only follows a
           session's transcript between conversation.open and .close — mounting one ConversationPane
           per session for the tab's whole life would have every session polling its transcript once a
-          second whether or not anyone ever looked. */}
+          second whether or not anyone ever looked.
+          **Task 8: a chat session's slot has no terminal at all** — this whole split is a terminal
+          session's rule. A chat session mounts only the conversation pane, always, whatever
+          sessionViews would otherwise say. */}
       {sessions.map((s) => {
         const pane = paneOfSession.get(s.id)
         const visible = pane != null && pane.activeTabId === sessionTab(s.id)
         const rect = pane ? rects.get(pane.id) : undefined
-        const view = sessionViewOf(sessionViews, s.id, conversationDefault)
-        const showingConversation = visible && view === 'conversation'
+        // Task 8: a chat session's only view is the conversation pane — no TerminalView is ever
+        // mounted for it, whatever sessionViews says (there is nothing to seed for it either, see
+        // the seeding effect above).
+        const chat = sessionKindOf(s) === 'chat'
+        const view = sessionViewOf(sessionViews, s.id, 'terminal')
+        const showingConversation = !chat && visible && view === 'conversation'
         return (
           <div
             key={s.id}
@@ -302,36 +311,52 @@ export function PaneGrid({
             }
             onMouseDown={() => pane && onFocusPane(pane.id)}
           >
-            <div className="session-slot-view" style={{ display: showingConversation ? 'none' : 'flex' }}>
-              <TerminalView
-                session={s}
-                onRestart={onRestart}
-                rollState={rollStates[s.id] ?? null}
-                schedState={schedStates[s.id] ?? null}
-                // False while the conversation is showing — it must neither take focus nor be fitted
-                // to a pane it is not in front of (Task 10's brief).
-                active={visible && !showingConversation && pane != null && pane.id === activePaneId}
-                onOpenUrl={onOpenUrl}
-              />
-            </div>
-            {showingConversation && (
+            {chat ? (
               <div className="session-slot-view" style={{ display: 'flex' }}>
                 <ConversationPane
                   sessionId={s.id}
-                  // The same reading TerminalView's own `active` gets just above, with the view test
-                  // flipped — whichever of the two is showing is the one that should hold the caret.
                   exited={s.status === 'exited'}
-                  active={visible && showingConversation && pane != null && pane.id === activePaneId}
-                  onGoTerminal={() => {
-                    setSessionViews((prev) => setSessionView(prev, s.id, 'terminal'))
-                    // Same contract as PendingBanner.tsx's own onGoTerminal prop: focus the
-                    // session's terminal. Switching the view alone is not enough when this pane
-                    // is not the app's active one — TerminalView only focuses itself from its own
-                    // `active` prop, which also needs pane.id === activePaneId.
-                    if (pane) onFocusPane(pane.id)
-                  }}
+                  active={visible && pane != null && pane.id === activePaneId}
+                  transport={{ kind: 'chat' }}
+                  rollState={rollStates[s.id] ?? null}
+                  schedState={schedStates[s.id] ?? null}
+                  onGoTerminal={() => {}}
                 />
               </div>
+            ) : (
+              <>
+                <div className="session-slot-view" style={{ display: showingConversation ? 'none' : 'flex' }}>
+                  <TerminalView
+                    session={s}
+                    onRestart={onRestart}
+                    rollState={rollStates[s.id] ?? null}
+                    schedState={schedStates[s.id] ?? null}
+                    // False while the conversation is showing — it must neither take focus nor be fitted
+                    // to a pane it is not in front of (Task 10's brief).
+                    active={visible && !showingConversation && pane != null && pane.id === activePaneId}
+                    onOpenUrl={onOpenUrl}
+                  />
+                </div>
+                {showingConversation && (
+                  <div className="session-slot-view" style={{ display: 'flex' }}>
+                    <ConversationPane
+                      sessionId={s.id}
+                      // The same reading TerminalView's own `active` gets just above, with the view test
+                      // flipped — whichever of the two is showing is the one that should hold the caret.
+                      exited={s.status === 'exited'}
+                      active={visible && showingConversation && pane != null && pane.id === activePaneId}
+                      onGoTerminal={() => {
+                        setSessionViews((prev) => setSessionView(prev, s.id, 'terminal'))
+                        // Same contract as PendingBanner.tsx's own onGoTerminal prop: focus the
+                        // session's terminal. Switching the view alone is not enough when this pane
+                        // is not the app's active one — TerminalView only focuses itself from its own
+                        // `active` prop, which also needs pane.id === activePaneId.
+                        if (pane) onFocusPane(pane.id)
+                      }}
+                    />
+                  </div>
+                )}
+              </>
             )}
           </div>
         )
@@ -574,8 +599,11 @@ export function PaneGrid({
           activeSessionRef?.kind === 'session'
             ? {
                 sessionId: activeSessionRef.id,
-                view: sessionViewOf(sessionViews, activeSessionRef.id, conversationDefault),
-                attention: attention[activeSessionRef.id] ?? ('idle' as Attention)
+                view: sessionViewOf(sessionViews, activeSessionRef.id, 'terminal'),
+                attention: attention[activeSessionRef.id] ?? ('idle' as Attention),
+                // WorkbenchTabs swaps the toggle for a badge on this alone — a chat session has no
+                // terminal to switch to, so `view` above is along for the ride but never drawn there.
+                kind: sessionKindOf(sessionOf.get(activeSessionRef.id) ?? {})
               }
             : null
         return (
@@ -601,9 +629,13 @@ export function PaneGrid({
               onRenameStart={onRenameStart}
               onRenameEnd={onRenameEnd}
               activeSession={activeSession}
-              onSetSessionView={(sessionId, view) =>
+              onSetSessionView={(sessionId, view) => {
+                // Belt and braces: WorkbenchTabs no longer draws a toggle for a chat session at all
+                // (its badge branch has no click to fire this from), but a chat session's view is
+                // not a thing this map is allowed to hold regardless of who calls in.
+                if (sessionKindOf(sessionOf.get(sessionId) ?? {}) === 'chat') return
                 setSessionViews((prev) => setSessionView(prev, sessionId, view))
-              }
+              }}
             />
           </div>
         )

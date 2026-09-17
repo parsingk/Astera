@@ -27,21 +27,47 @@ export function fileMarkerProbe(marker: string): LoginProbe {
 /**
  * The claude probe.
  *
- * Order matters — **file first, Keychain second**. If the file exists, that settles it and the
- * keychain isn't even asked. Two reasons: (1) environments that write the file, via older claude
- * versions or CLAUDE_CODE-related settings, still exist, and (2) the keychain service-name
- * convention isn't a documented contract, just what was observed on one version, and will eventually
- * drift. If it does drift, the file path still being alive keeps the probe from failing outright.
+ * Order matters — **file first, Keychain second**. If the file exists it settles the login — with one
+ * exception: a refresh token whose recorded expiry has passed. On darwin an expired file is not the
+ * end (the Keychain may hold a live credential, so the probe falls through to it); off darwin an
+ * expired file is logged out. A present, unexpired file settles it and the keychain isn't even asked.
+ * Two reasons for file-first: (1) environments that write the file, via older claude versions or
+ * CLAUDE_CODE-related settings, still exist, and (2) the keychain service-name convention isn't a
+ * documented contract, just what was observed on one version, and will eventually drift. If it does
+ * drift, the file path still being alive keeps the probe from failing outright.
  */
 export function claudeLoginProbe(opts: {
   platform: NodeJS.Platform
   homeDir: string
   account: string
   keychainHas: KeychainHas
+  now?: () => number
 }): LoginProbe {
-  const fileProbe = fileMarkerProbe('.credentials.json')
   return async (configDir) => {
-    if (await fileProbe(configDir)) return true
+    const credPath = path.join(configDir, '.credentials.json')
+    if (await exists(credPath)) {
+      // The file's presence still settles a login, with one exception: a refresh token whose recorded
+      // expiry has passed. The CLI writes `claudeAiOauth.refreshTokenExpiresAt` in ms; once it is behind
+      // us the account cannot authenticate until `claude login`, yet the file it left is still on disk —
+      // so `loginStatus`, the resume dialog's candidate list and a roll chain's targets would all keep
+      // treating a dead account as live. Only a numeric, past value turns the answer over; a missing or
+      // malformed field, or an unreadable file, keeps the presence-means-logged-in rule, because the one
+      // fact we are acting on is the field itself and its absence is not evidence of expiry.
+      const now = (opts.now ?? Date.now)()
+      let expired = false
+      try {
+        const parsed = JSON.parse(await fs.readFile(credPath, 'utf8')) as {
+          claudeAiOauth?: { refreshTokenExpiresAt?: unknown }
+        }
+        const exp = parsed.claudeAiOauth?.refreshTokenExpiresAt
+        if (typeof exp === 'number' && exp <= now) expired = true
+      } catch {
+        /* unreadable or unparsable — fall through to "present means logged in" */
+      }
+      if (!expired) return true
+      if (opts.platform !== 'darwin') return false
+      // darwin: a dead file does not end it — the Keychain may hold a live credential (below)
+    }
     if (opts.platform !== 'darwin') return false
     // The ambient-directory special case (no CLAUDE_CONFIG_DIR → no suffix in the keychain item) lives
     // in claudeKeychainServicesFor now — see its docstring in keychain.ts. usage.ts's readAccessToken

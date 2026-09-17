@@ -27,6 +27,10 @@ export interface HookFanOutTaps {
   /** The one attention verdict (main/attention.ts) — see `fanOutHookEvent`'s own comment for why it
    *  runs first. */
   attention: HookFanOutTap
+  /** The pending-prompt capture (main/pendingPrompt.ts). Second, after `attention`, for the same reason
+   *  `attention` is first: it produces a value other code reads, and a later tap that reads it should
+   *  find it current. In its own `try`, like the others. */
+  pendingPrompt: HookFanOutTap
   slack: HookFanOutTap
   /** Absent until the rolling coordinator is constructed later in the boot sequence — the same reason
    *  index.ts's own `rollingRef` starts `null` (see that variable's comment in index.ts). */
@@ -45,8 +49,10 @@ export interface HookFanOutTaps {
  * purpose: it is the one tap here whose whole job is producing a value other code reads, so any future
  * tap that reads `attention`'s state directly (the way `desktopNotifier.ts` used to, and the mistake
  * that shipped once already — see attention.ts's own history) gets a current answer for free, without
- * having to remember to check where in this list it was added. `slack` and `rolling` do not read
- * `attention` and are unaffected by their order relative to each other.
+ * having to remember to check where in this list it was added. `pendingPrompt` comes second under the
+ * same rule: it is the other tap whose whole job is producing a value (the waiting tool call) that
+ * `ipc.ts` pushes to the renderer. `slack` and `rolling` do not read `attention` and are unaffected by
+ * their order relative to each other.
  *
  * Each tap after the first runs inside its own `try` so one tap's exception cannot swallow another's —
  * `attention`'s `try` matters even more now that it is first: without it, a throw there would cost
@@ -58,6 +64,11 @@ export function fanOutHookEvent(taps: HookFanOutTaps, sessionId: string, payload
     taps.attention.onHookEvent(sessionId, payload)
   } catch {
     /* an attention-state failure must not block the others */
+  }
+  try {
+    taps.pendingPrompt.onHookEvent(sessionId, payload)
+  } catch {
+    /* a capture failure must not block the others */
   }
   taps.slack.onHookEvent(sessionId, payload)
   // Rolling taps the hooks too — an idle Notification is the signal for the idle nudge.

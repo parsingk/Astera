@@ -1,9 +1,9 @@
-// Slack progress notifications. Hook events (Stop, Notification), rolling state, non-rolling limits, and
-// session exits are sent through either an Incoming Webhook or a Slack bot (chat.postMessage) — both are
-// abstracted behind SlackTransport in slackTransport.ts, so this file does not know which implementation
-// it has. As with RollingCoordinator, every side effect is injected through deps — no electron dependency,
-// verified with vitest. The wiring is in ipc.ts and index.ts. The Webhook URL and bot token are never
-// written to the log.
+// Slack progress notifications. Hook events (Stop, Notification), a chat session's own protocol events
+// (onChatEvent), rolling state, non-rolling limits, and session exits are sent through either an Incoming
+// Webhook or a Slack bot (chat.postMessage) — both are abstracted behind SlackTransport in
+// slackTransport.ts, so this file does not know which implementation it has. As with RollingCoordinator,
+// every side effect is injected through deps — no electron dependency, verified with vitest. The wiring
+// is in ipc.ts and index.ts. The Webhook URL and bot token are never written to the log.
 import { promises as fs } from 'node:fs'
 import type { Account, SessionInfo, RollStateEvent } from '../core/types'
 import { OutputScanner } from '../core/rolling/detect'
@@ -17,6 +17,8 @@ import {
 } from '../core/slack/transcript'
 import type { ChoiceShape } from '../core/slack/inbound'
 import { extractLastAgentMessage } from '../core/slack/codexTranscript'
+import { describeChatRequest } from '../core/slack/chatRequest'
+import type { ChatEvent, ChatRequest, ChatStatus } from '../core/chat/types'
 import {
   isIdleNotification,
   isNonPromptNotification,
@@ -25,6 +27,7 @@ import {
 } from '../core/hooks/notification'
 import type { SlackTransportConfig } from '../core/slack/ready'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
+import { sessionKindOf } from '../core/sessions/kind'
 import { t, type Lang } from '../core/i18n'
 import {
   BotTransport,
@@ -55,6 +58,11 @@ const OWN_TS_LIMIT = 500 // the cap on remembering ts values we posted (the seco
 // (extractPendingToolUse) — rolling.ts has to answer the same idle question, and the reason for splitting
 // on type rather than on wording is written there.
 const TAIL_BYTES = 256 * 1024 // how much of the transcript tail to read (the same as parseTranscriptTail in history)
+// The working→idle edge can arrive a beat before the CLI has finished writing that turn's text — so the
+// excerpt read is retried this many times, waiting this long between each, before giving up and posting
+// completion with no excerpt (see sendChatTurnSummary). Exported for the test.
+export const CHAT_EXCERPT_RETRIES = 4
+export const CHAT_EXCERPT_RETRY_MS = 500
 
 export interface SlackDeps {
   getAccount(id: string): Account | null // the account label for the message prefix
@@ -67,6 +75,7 @@ export interface SlackDeps {
   fetchFn?: typeof fetch // for test injection — defaults to the global fetch
   now?: () => number
   createPoster?: (token: string) => SlackPoster // for test injection — defaults to createWebClient
+  wait?: (ms: number) => Promise<void> // test injection for sendChatTurnSummary's re-read window; default setTimeout
 }
 
 /** The common shape of the non-rolling limit detection scanner — feed it a chunk and it returns only
@@ -113,6 +122,10 @@ interface SlackRecord {
    *  at the end of the file, and one awaiting approval is nowhere in it at all. What it still cannot see is
    *  the subagent case above, and that is what made the PostToolUse hook necessary. */
   pendingTool: { name: string; input: unknown; id: string } | null
+  /** A chat session's protocol state as this notifier last heard it (null for a terminal session): the
+   *  status for the working→idle edge that means "turn over", the open card, and the previous turn's
+   *  excerpt so a re-read can tell "the file has not caught up" from "the model said the same thing". */
+  chat: { status: ChatStatus; request: ChatRequest | null; lastExcerpt: string | null } | null
 }
 
 /** Reads only the last maxBytes of a file — safe for a large transcript (the same rule as the tail read in history/parser.ts) */
@@ -351,7 +364,7 @@ export class SlackNotifier {
     // `onRolled` makes when a roll re-keys one chain onto a new id, and for the same reason: the
     // session did not restart, so what has already been said about it still holds. The case is the
     // Host's reconnect — the socket drops, the adopter takes the session back, and it re-registers
-    // under the id it already had. Built from nothing, the record forgets four things at once, and
+    // under the id it already had. Built from nothing, the record forgets five things at once, and
     // each one shows up in what the next notification says or does not say:
     //
     // - `provider` decides the limit scanner, and `providerFor` falls back to claude for an account
@@ -366,6 +379,8 @@ export class SlackNotifier {
     //   scrollback the reconnect replays: it comes from the PreToolUse hook and is cleared by the
     //   matching PostToolUse, so dropping it costs the next "input needed" line its tool content
     //   for the whole of that pending call.
+    // - `chat` is the protocol state a chat record carries — status, open card, previous excerpt —
+    //   which the reconnect must not drop, because the session did not restart.
     //
     // **`pendingTool` is carried because nothing that maintains it was interrupted.** Hook events
     // reach this app through the hook-event file watcher, not over the Host socket, and the app was
@@ -391,7 +406,12 @@ export class SlackNotifier {
       lastSent: replaced?.lastSent ?? new Map(),
       exitTimer: null,
       thread: replaced?.thread ?? null,
-      pendingTool: replaced?.pendingTool ?? null
+      pendingTool: replaced?.pendingTool ?? null,
+      // A terminal session has no protocol to hold — null, as it always was. A chat session starts (or
+      // carries across a reconnect's) its own state; the reconnect case mirrors thread and lastSent
+      // above, for the same reason: the session did not restart, so what onChatEvent already knows still
+      // holds.
+      chat: sessionKindOf(info) === 'chat' ? (replaced?.chat ?? { status: 'idle', request: null, lastExcerpt: null }) : null
     }
     this.records.set(info.id, record)
     if (record.thread) {
@@ -518,6 +538,60 @@ export class SlackNotifier {
     } else if (p.hook_event_name === 'PostToolUse') {
       this.clearPendingTool(record, p.tool_use_id)
     }
+  }
+
+  /** A chat session's protocol events, straight from ipc's chat subscriber (chat-sessions slice 4
+   *  design §7.1). Where the terminal path reads a hook file and searches the transcript for an
+   *  unanswered tool_use, a chat session already holds the request — so the card is described from it —
+   *  and says when a turn is over — so the summary is posted on that edge. Codex chat sessions post
+   *  from here only: the rollout watcher's own turn-complete callback is switched off for them at
+   *  registration (`notifyTurns: false`), or every turn would be announced twice. */
+  onChatEvent(sessionId: string, event: ChatEvent, at: { provider: Provider; transcriptPath: () => string | null }): void {
+    const record = this.records.get(sessionId)
+    if (!record) return
+    if (record.chat === null) record.chat = { status: 'idle', request: null, lastExcerpt: null }
+    const chat = record.chat
+    switch (event.type) {
+      case 'status': {
+        const wasWorking = chat.status === 'working'
+        chat.status = event.status
+        // 'waiting' is a card: the card's own event posts for it; the turn is still running.
+        if (wasWorking && event.status === 'idle') void this.sendChatTurnSummary(record, at)
+        break
+      }
+      case 'request':
+        chat.request = event.request
+        if (event.request) void this.send(record, `${t(this.deps.lang(), 'slack.inputNeeded')}\n${describeChatRequest(event.request, this.deps.lang())}`)
+        break
+      case 'error':
+        void this.send(record, t(this.deps.lang(), 'slack.chat.turnFailed', { message: event.message }))
+        break
+      default:
+        break // ready / model / exit: nothing to say here (exit is handleExit's, wired from onSessionExit)
+    }
+  }
+
+  /** The turn's text from the file the CLI writes, read a few times if it is still behind the protocol
+   *  (the edge arrives a beat before the record lands): while the extractor answers nothing or the same
+   *  text as the previous turn, wait and read again, up to CHAT_EXCERPT_RETRIES times; then post what
+   *  there is — completion is announced even without an excerpt, the sendStopSummary rule. */
+  private async sendChatTurnSummary(record: SlackRecord, at: { provider: Provider; transcriptPath: () => string | null }): Promise<void> {
+    const chat = record.chat
+    if (!chat) return
+    const extract = at.provider === 'codex' ? extractLastAgentMessage : extractLastTurnAssistantText
+    const wait = this.deps.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+    let excerpt: string | null = null
+    for (let attempt = 0; attempt <= CHAT_EXCERPT_RETRIES; attempt++) {
+      const path = at.transcriptPath()
+      const tail = path ? await this.readTail(path, TAIL_BYTES) : null
+      excerpt = tail ? extract(tail) : null
+      if (excerpt !== null && excerpt !== chat.lastExcerpt) break
+      if (attempt < CHAT_EXCERPT_RETRIES) await wait(CHAT_EXCERPT_RETRY_MS)
+    }
+    if (excerpt !== null) chat.lastExcerpt = excerpt
+    if (excerpt && excerpt.length > EXCERPT_MAX) excerpt = excerpt.slice(0, EXCERPT_MAX) + '…'
+    const done = t(this.deps.lang(), 'slack.turnDone')
+    await this.send(record, excerpt ? `${done}\n> ${excerpt.replace(/\n/g, '\n> ')}` : done)
   }
 
   /**
@@ -697,7 +771,15 @@ export class SlackNotifier {
       // screen. The new session starts again from the resume prompt, so that screen is already gone, and
       // handing it over would put the old question in the new session's first notification. count could not
       // serve as a baseline either once the transcript has changed.
-      pendingTool: null
+      pendingTool: null,
+      // A chat chain rolls too (slice 4c), so a chat record stays one. Of the three fields, only the
+      // excerpt is carried: the new process starts idle with no card open, and the third reason
+      // `pendingTool` is dropped does not apply here — nothing in `chat` describes a screen. The
+      // excerpt has to survive because the resumed process is handed the same conversation, so its
+      // file still ends with the turn posted before the switch; read against an empty memory that
+      // stale text passes as this session's own answer, and the dedup history — carried just above —
+      // then drops the identical line, leaving the first turn after a roll unannounced.
+      chat: old?.chat ? { status: 'idle', request: null, lastExcerpt: old.chat.lastExcerpt } : null
     }
     this.records.set(newInfo.id, record)
     if (record.thread) {

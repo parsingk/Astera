@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react'
-import type { Account, HistoryEntry, RollConfig, ScheduleConfig } from '../../../core/types'
-import { resumeAccountOptions, resumeRollAccountIds } from '../../../core/resume'
+import type { Account, HistoryEntry, RollConfig, ScheduleConfig, SessionKind } from '../../../core/types'
+import { resumeAccountOptions, resumeChatAllowed, resumeRollAccountIds } from '../../../core/resume'
 import { isSlackReady } from '../../../core/slack/ready'
 import { useI18n } from '../i18n/I18nProvider'
+import { useChatAvailability } from '../hooks/useChatAvailability'
 import { isGhostAccountId } from '../../../core/accounts/ghostId'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleFields } from './ScheduleFields'
 
 /** Modal for resuming a session from history. Only logged-in accounts appear as candidates and the
  *  original account is preselected. Picking a different account makes ipc copy the transcript into that
- *  account's configDir before --resume (the same approach rolling uses).
+ *  account's configDir before --resume — since slice 4c both 터미널 and 대화 resume this way, so either
+ *  kind can run on any candidate the picker offers (resumeChatAllowed).
  *
  *  The rolling, scheduler, Slack and permission checkboxes are settled here. ipc.ts used to quietly
  *  revive the saved rolling and schedule settings (with no way to turn them off) and there was no way
@@ -20,6 +22,7 @@ export function ResumeDialog({
   cwd,
   accounts,
   ghostAccounts,
+  defaultSessionKind,
   onConfirm,
   onCancel
 }: {
@@ -29,8 +32,12 @@ export function ResumeDialog({
   /** Unregistered sources. Used only to identify the entry's owner — a ghost can never be a candidate,
    *  because resuming needs an account that can authenticate. */
   ghostAccounts: Account[]
+  /** Which kind the dialog opens on (the Settings default). Seeds the selection below and nothing
+   *  more — picking the other one here belongs to this session and is not written back. */
+  defaultSessionKind: SessionKind
   onConfirm: (opts: {
     accountIds: string[] // [0] = the account to continue on, with the chain after it when rolling is on
+    kind: SessionKind
     roll: boolean
     rollPrompt?: string
     slackNotify: boolean
@@ -42,6 +49,11 @@ export function ResumeDialog({
   const { t } = useI18n()
   const [options, setOptions] = useState<Account[] | null>(null) // null = login status still being checked
   const [selectedId, setSelectedId] = useState<string>('')
+  // Session kind — terminal (pty) or chat (a Host-owned line process resumed by its protocol thread
+  // id — since slice 4c the transcript is copied into the chosen account first, same as terminal, so
+  // either kind can land on any candidate the picker offers). Same seeded-and-falls-back rule as
+  // NewSessionDialog.
+  const [kind, setKind] = useState<SessionKind>(defaultSessionKind)
   // The saved settings — the source of the checkbox initial values and the input to the roll chain calculation
   const [savedRoll, setSavedRoll] = useState<RollConfig | null>(null)
   const [rollOn, setRollOn] = useState(false)
@@ -114,10 +126,29 @@ export function ResumeDialog({
   const rollChain = selectedId ? resumeRollAccountIds(savedRoll?.accountIds ?? null, accounts, selectedId) : []
   const labelOf = (id: string): string => accounts.find((a) => a.id === id)?.label ?? id
 
+  // The Host poll is shared with NewSessionDialog; either provider's account can open a chat session.
+  const { enabled: chatEnabled, checking: chatChecking } = useChatAvailability()
+  // Resuming one is no narrower than starting one any more (resumeChatAllowed) — the chat spawn path
+  // copies the transcript into the chosen account too, so any candidate the picker offers works.
+  const chatAllowed = resumeChatAllowed({ chatEnabled, selectedId })
+  // A remembered 대화 falls back to 터미널 while it is unavailable — never persisted, so it is offered
+  // again once the condition clears (same reasoning as NewSessionDialog's own fallback effect). Picking
+  // another account is one of those conditions: the choice comes back the moment the owner is picked
+  // again, which is why the fallback is state here and never written back to the setting.
+  // Two things here are unknown for the first moment rather than false: whether the Host can run 대화
+  // at all (chatChecking), and which account this resumes on — `options` is null until the login probe
+  // answers, and `selectedId` is '' until then, which alone makes chatAllowed false. Acting on either
+  // before it is known threw the seeded 대화 selection away and never put it back. Same defect as
+  // NewSessionDialog's, with one more source of "not yet".
+  useEffect(() => {
+    if (kind === 'chat' && !chatAllowed && !chatChecking && options !== null) setKind('terminal')
+  }, [kind, chatAllowed, chatChecking, options])
+
   const confirm = (): void => {
     if (!selectedId) return
     onConfirm({
       accountIds: rollOn ? rollChain : [selectedId],
+      kind,
       roll: rollOn,
       rollPrompt: rollOn ? rollPrompt.trim() || undefined : undefined,
       slackNotify: slackReady && slackNotify,
@@ -130,6 +161,38 @@ export function ResumeDialog({
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal resume" onClick={(e) => e.stopPropagation()}>
         <h2>{t('session.resume.title')}</h2>
+        {/* Heads the form as its own ruled-off section, as in NewSessionDialog: the way the resumed
+            session runs is decided before the conversation, folder and account it applies to. */}
+        <div className="field kind-field">
+          <label>{t('session.new.kindLabel')}</label>
+          <div className="kind-segmented">
+            <button
+              type="button"
+              className={`segmented${kind === 'terminal' ? ' active' : ''}`}
+              onClick={() => {
+                setKind('terminal')
+              }}
+            >
+              {t('session.kind.terminal')}
+            </button>
+            <button
+              type="button"
+              className={`segmented${kind === 'chat' ? ' active' : ''}`}
+              disabled={!chatAllowed}
+              onClick={() => {
+                setKind('chat')
+              }}
+            >
+              {t('session.kind.chat')}
+            </button>
+          </div>
+          {!chatEnabled && !chatChecking && (
+            <span className="kind-note">{t('session.new.kindHostOld')}</span>
+          )}
+          {chatAllowed && kind === 'chat' && (
+            <span className="kind-note">{t('session.new.kindChatHint')}</span>
+          )}
+        </div>
         <div className="field">
           <label>{t('session.resume.conversationLabel')}</label>
           <span className="path">{entry.title}</span>
@@ -167,6 +230,7 @@ export function ResumeDialog({
             <span className="roll-prompt-hint">{t('session.resume.crossAccountHint')}</span>
           )}
         </div>
+        {/* Rolling now applies to 대화 too (slice 4c) — see NewSessionDialog's own note. */}
         <label className="row check-small">
           <input type="checkbox" checked={rollOn} onChange={(e) => setRollOn(e.target.checked)} />
           {t('session.new.rollLabel')}
@@ -189,9 +253,10 @@ export function ResumeDialog({
             )}
           </div>
         )}
+        {/* The label follows the field below it — see NewSessionDialog's own note. */}
         <label className="row check-small">
           <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
-          {t('session.new.schedLabel')}
+          {t(kind === 'chat' ? 'session.new.schedLabelChat' : 'session.new.schedLabel')}
         </label>
         {/* Mounted only after the saved-value lookup finishes — ScheduleFields reads initial exactly
             once, at mount. schedule ?? savedSchedule: on a toggle off and back on, a value the user
@@ -199,7 +264,9 @@ export function ResumeDialog({
             value (savedSchedule). schedule only ever holds the last value that was valid (an
             intermediate state with an empty command sends null from onChange and is not recorded), so
             that limitation carries over here as well. */}
-        {schedOn && loadedDefaults && <ScheduleFields initial={schedule ?? savedSchedule} onChange={setSchedule} />}
+        {schedOn && loadedDefaults && (
+          <ScheduleFields initial={schedule ?? savedSchedule} onChange={setSchedule} chat={kind === 'chat'} />
+        )}
         <label className="row check-small">
           <input
             type="checkbox"

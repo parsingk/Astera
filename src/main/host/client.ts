@@ -107,7 +107,8 @@ export class HostClient {
     startedAt: null,
     pid: null,
     problem: null,
-    outdated: false
+    outdated: false,
+    features: []
   }
 
   constructor(private readonly deps: HostClientDeps) {}
@@ -273,7 +274,7 @@ export class HostClient {
     this.stopped = false
     this.drops = 0
     // What is known about the *previous* Host is not a description of the one being started.
-    this.state = { ...this.state, connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem: null, outdated: false }
+    this.state = { ...this.state, connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem: null, outdated: false, features: [] }
     void this.cycle()
   }
 
@@ -384,7 +385,8 @@ export class HostClient {
         startedAt: m.startedAt,
         pid: m.pid,
         problem: null,
-        outdated
+        outdated,
+        features: Array.isArray(m.features) ? m.features.filter((f): f is string => typeof f === 'string') : []
       }
       this.deps.log(
         `connected to Host ${m.host} (pid ${m.pid}, protocol ${m.protocol})${outdated ? ` — older than this app (${this.deps.appVersion}); replaced once it holds nothing` : ''}`
@@ -430,7 +432,7 @@ export class HostClient {
   }
 
   private fail(problem: string): void {
-    this.state = { connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem, outdated: false }
+    this.state = { connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem, outdated: false, features: [] }
     this.deps.log(problem)
     this.settleReady()
   }

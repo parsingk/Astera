@@ -5,6 +5,7 @@
 // one nobody can claim.
 import type { PtyEntry } from '../../core/host/protocol'
 import type { PtyLike } from '../../core/sessions/pty'
+import type { ProcLike } from '../../core/sessions/proc'
 
 /** What an adopter needs to rebuild its record: the id and kind from the Host's note — so a
  *  manager's own `adopt` can check the kind and keep the original id (design §10) — the live pty,
@@ -14,6 +15,17 @@ interface AdoptArgs {
   kind: string
   pty: PtyLike
   restore: Record<string, unknown>
+}
+
+/** What the chat adopter needs: like AdoptArgs, with a line process instead of a pty, and whether the
+ *  Host's replay buffer had to drop lines — the adapter reads that before trusting the replay for
+ *  status (chat-sessions design §6.5). */
+interface AdoptProcArgs {
+  id: string
+  kind: 'chat'
+  proc: ProcLike
+  restore: Record<string, unknown>
+  truncated: boolean
 }
 
 /** Each adopter reports whether it could rebuild its record from the note — true once the pty is
@@ -27,6 +39,13 @@ export interface ReattachDeps {
   /** Asks the Host to replay this session's scrollback to us. */
   sendAttach(id: string): void
   kill(id: string): void
+  /** The Host's line processes. Absent when the app does not ask for them — nothing sends proc-list
+   *  to a Host that cannot answer it. */
+  listProcs?(): Promise<PtyEntry[]>
+  attachProc?(a: { id: string; pid: number }): ProcLike
+  /** Asks the Host to replay this process's buffered lines to us. */
+  sendAttachProc?(id: string): void
+  killProc?(id: string): void
   /** Whether the app already has a **live** record for the thing this note names — the manager the
    *  kind names, holding that id and still running.
    *
@@ -39,6 +58,7 @@ export interface ReattachDeps {
     session(a: AdoptArgs): boolean
     run(a: AdoptArgs): boolean
     terminal(a: AdoptArgs): boolean
+    chat?(a: AdoptProcArgs): boolean
   }
   log(m: string): void
 }
@@ -51,6 +71,12 @@ export interface ReattachResult {
    *  adopted session keeps (design §10), so this is exactly the same id Task 8's Dispatch matching
    *  already has stored. Runs and terminals have no such consumer, so only sessions are listed. */
   sessions: string[]
+  /** The chat session ids this sweep leaves the app running, as `sessions` does for ptys. */
+  chats: string[]
+  /** Set by the caller when the Host was asked for its line processes and did not answer: `chats` is
+   *  then not a fact, and a boot cleanup must not write a chat session off on it (the same rule
+   *  SessionsTakenBack's 'unknown' states for ptys). */
+  chatsUnknown?: boolean
 }
 
 export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResult> {
@@ -78,7 +104,11 @@ export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResu
     }
     try {
       const pty = deps.attach({ id: e.id, pid: e.pid })
-      const ok = deps.adopters[e.meta.kind]?.({ id: e.meta.id, kind: e.meta.kind, pty, restore: e.meta.restore }) ?? false
+      const kind = e.meta.kind
+      // A pty never carries a chat note — chat sessions are line processes, listed separately (Task 5
+      // adds that sweep). One that does is a note this build cannot read, refused like any other.
+      const adopter = kind === 'chat' ? undefined : deps.adopters[kind]
+      const ok = adopter?.({ id: e.meta.id, kind, pty, restore: e.meta.restore }) ?? false
       if (!ok) {
         deps.log(`pty ${e.id} carries a ${e.meta.kind} note this build cannot read — killing it`)
         deps.kill(e.id)
@@ -99,5 +129,46 @@ export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResu
       refused += 1
     }
   }
-  return { adopted, refused, sessions }
+  const chats: string[] = []
+  if (deps.listProcs && deps.attachProc && deps.sendAttachProc && deps.killProc) {
+    for (const e of await deps.listProcs()) {
+      if (!e.alive) continue
+      if (!e.meta) {
+        deps.log(`proc ${e.id} has no note saying what it is — killing it rather than leaving it ownerless`)
+        deps.killProc(e.id)
+        refused += 1
+        continue
+      }
+      if (e.meta.kind !== 'chat') {
+        deps.log(`proc ${e.id} carries a ${e.meta.kind} note, which is not a line process — killing it`)
+        deps.killProc(e.id)
+        refused += 1
+        continue
+      }
+      if (deps.heldLive({ kind: 'chat', id: e.meta.id })) {
+        deps.log(`proc ${e.id} is already ours and running — left as it is`)
+        chats.push(e.meta.id)
+        continue
+      }
+      try {
+        const proc = deps.attachProc({ id: e.id, pid: e.pid })
+        const ok = deps.adopters.chat?.({ id: e.meta.id, kind: 'chat', proc, restore: e.meta.restore, truncated: e.truncated === true }) ?? false
+        if (!ok) {
+          deps.log(`proc ${e.id} carries a chat note this build cannot read — killing it`)
+          deps.killProc(e.id)
+          refused += 1
+          continue
+        }
+        // Only after somebody owns it, as with a pty: the replay arrives as ordinary lines.
+        deps.sendAttachProc(e.id)
+        adopted += 1
+        chats.push(e.meta.id)
+      } catch (err) {
+        deps.log(`proc ${e.id} could not be taken back: ${String(err)}`)
+        deps.killProc(e.id)
+        refused += 1
+      }
+    }
+  }
+  return { adopted, refused, sessions, chats }
 }

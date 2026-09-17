@@ -304,36 +304,64 @@ describe('resumeStrategy', () => {
   })
 })
 
-describe('conversationDefault', () => {
+describe('defaultSessionKind', () => {
   it('기본값은 terminal이다', async () => {
     const store = new AppSettingsStore(file())
     await store.load()
-    expect(store.getConversationDefault()).toBe('terminal')
+    expect(store.getDefaultSessionKind()).toBe('terminal')
   })
 
-  it('conversation을 저장하고 새 인스턴스가 다시 읽는다', async () => {
+  it('chat을 저장하고 새 인스턴스가 다시 읽는다', async () => {
     const a = new AppSettingsStore(file())
     await a.load()
-    await a.setConversationDefault('conversation')
+    await a.setDefaultSessionKind('chat')
     const b = new AppSettingsStore(file())
     await b.load()
-    expect(b.getConversationDefault()).toBe('conversation')
+    expect(b.getDefaultSessionKind()).toBe('chat')
   })
 
   it('알 수 없는 값은 terminal로 떨어진다', async () => {
-    for (const raw of [{ conversationDefault: 'both' }, { conversationDefault: 1 }, { conversationDefault: null }]) {
+    for (const raw of [{ defaultSessionKind: 'both' }, { defaultSessionKind: 1 }, { defaultSessionKind: null }]) {
       await fs.writeFile(file(), JSON.stringify(raw), 'utf8')
       const store = new AppSettingsStore(file())
       await store.load()
-      expect(store.getConversationDefault()).toBe('terminal')
+      expect(store.getDefaultSessionKind()).toBe('terminal')
     }
   })
 
   it('terminal일 때는 파일에 그 키를 쓰지 않는다', async () => {
     const store = new AppSettingsStore(file())
     await store.load()
-    await store.setConversationDefault('terminal')
-    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('conversationDefault')
+    await store.setDefaultSessionKind('terminal')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('defaultSessionKind')
+  })
+
+  // 이 설정이 대신한 예전 키(conversationDefault)를 이어받는다. 예전 것은 "새 세션의 기본 화면"
+  // 이라는 이름에 터미널/대화 두 선택지였고, 거기서 '대화'를 고른 사람이 원한 것이 지금 이 설정이
+  // 정하는 바로 그것이다 — 그래서 다시 고르게 하지 않고 넘겨받는다.
+  it('예전 conversationDefault=conversation 은 chat 으로 이어받는다', async () => {
+    await fs.writeFile(file(), JSON.stringify({ conversationDefault: 'conversation' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getDefaultSessionKind()).toBe('chat')
+  })
+
+  it('예전 conversationDefault=terminal 은 terminal 그대로다', async () => {
+    await fs.writeFile(file(), JSON.stringify({ conversationDefault: 'terminal' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getDefaultSessionKind()).toBe('terminal')
+  })
+
+  it('새 키가 있으면 예전 키는 무시한다', async () => {
+    await fs.writeFile(
+      file(),
+      JSON.stringify({ defaultSessionKind: 'terminal', conversationDefault: 'conversation' }),
+      'utf8'
+    )
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getDefaultSessionKind()).toBe('terminal')
   })
 })
 

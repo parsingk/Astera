@@ -8,16 +8,18 @@ import {
 } from './sessionView'
 
 describe('openSessionView', () => {
-  // Requirement 1: a new session tab takes its view from the setting.
+  // Requirement 1: a tab with no entry yet takes the default it is given. PaneGrid passes 'terminal'
+  // (a terminal session's tab starts on the terminal); the parameter is kept general because that is
+  // what makes the first paint and the seeding effect agree, whatever the caller settles on.
   it('seeds a session with no entry from the given default', () => {
     const result = openSessionView({}, 's1', 'conversation')
     expect(sessionViewOf(result, 's1', 'terminal')).toBe('conversation')
   })
 
-  // Requirement 2: changing the setting does not change a tab that already exists. PaneGrid calls
-  // openSessionView again on every render of the sessions list, passing whatever the setting reads
-  // right now — so a session that already has an entry has to come back untouched even when the
-  // default argument itself has since changed, or the whole feature would flip every open tab the
+  // Requirement 2: re-seeding does not change a tab that already exists. PaneGrid calls
+  // openSessionView again on every render of the sessions list — so a session that already has an
+  // entry has to come back untouched even when the default argument itself differs, or the whole
+  // feature would flip every open tab the
   // moment someone changed the setting in Settings.
   it('is a no-op — same reference back — for a session that already has an entry, even with a different default', () => {
     const seeded = openSessionView({}, 's1', 'terminal')

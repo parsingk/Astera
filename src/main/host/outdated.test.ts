@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated } from './outdated'
+import { hostIsOutdated, hostSpeaksProcs } from './outdated'
 
 describe('hostIsOutdated', () => {
   it('is true when the Host is strictly older than the app', () => {
@@ -22,5 +22,20 @@ describe('hostIsOutdated', () => {
     expect(hostIsOutdated('dev', '1.3.21')).toBe(false)
     expect(hostIsOutdated('1.3.20-beta.1', '1.3.21')).toBe(false)
     expect(hostIsOutdated('1.3.20', 'unknown')).toBe(false)
+  })
+})
+
+describe('hostSpeaksProcs', () => {
+  it('is true for a connected Host that named the proc feature', () => {
+    expect(hostSpeaksProcs({ connected: true, features: ['proc'] })).toBe(true)
+  })
+
+  it('is false for a connected Host that named no features at all — it predates proc-list', () => {
+    expect(hostSpeaksProcs({ connected: true, features: [] })).toBe(false)
+  })
+
+  // Nothing to ask, whatever the last hello said: there is no connection to send proc-list on.
+  it('is false while disconnected, even if the last hello named the feature', () => {
+    expect(hostSpeaksProcs({ connected: false, features: ['proc'] })).toBe(false)
   })
 })

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, Attention, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, SessionView, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
+import type { Account, Attention, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, SessionView, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -78,6 +78,7 @@ import { dismiss, toast } from './lib/toast'
 import { spawnNotice } from './lib/spawnNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
 import { quitConfirmBody, updateConfirmBody } from './lib/quitConfirm'
+import { toggleSidebarView, type SidebarView } from '../../core/ui/sidebar'
 import { terminalsWithCreated } from './lib/terminalTabs'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { worktreeErrorMessage } from './lib/worktreeErrors'
@@ -107,6 +108,7 @@ import {
 } from '../../core/panes/tree'
 import { browserTab, fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
+import { sessionKindOf } from '../../core/sessions/kind'
 import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
 import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
@@ -452,7 +454,7 @@ export default function App(): React.JSX.Element {
   const restartHost = async (): Promise<void> => {
     const h = hostHolding
     const body = h
-      ? t('settings.info.hostRestartConfirmBody', { sessions: h.sessions, terminals: h.terminals, runs: h.runs })
+      ? t('settings.info.hostRestartConfirmBody', { sessions: h.sessions, chats: h.chats, terminals: h.terminals, runs: h.runs })
       : t('settings.info.hostRestartConfirmBodyNone')
     const ok = await confirmModal({
       title: t('settings.info.hostRestartConfirmTitle'),
@@ -503,6 +505,11 @@ export default function App(): React.JSX.Element {
   // 단축키가 늘 같은 방향으로만 계산되므로, 최신 값을 이 ref 로 읽는다(이 파일의 다른 ref 들과 같은 이유)
   const explorerOpenRef = useRef(explorerOpen)
   explorerOpenRef.current = explorerOpen // the file explorer toggle
+  // Read by toggleSidebar, for the reason explorerOpenRef is: the keydown listener closes over the
+  // first render, and whether the sidebar is on screen decides whether a press shows a view or
+  // collapses it.
+  const sidebarOpenRef = useRef(sidebarOpen)
+  sidebarOpenRef.current = sidebarOpen
   const [showSettings, setShowSettings] = useState(false)
   const [settingsTab, setSettingsTab] = useState<
     | 'general'
@@ -543,10 +550,9 @@ export default function App(): React.JSX.Element {
   orchEnabledRef.current = orchEnabled
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   const [agentBrowserEnabled, setAgentBrowserEnabled] = useState(false) // the agent browser toggle
-  // Task 10: what a new session tab opens as. Needed outside the settings modal too — PaneGrid reads
-  // it the moment a session tab first appears — so it is loaded at mount like orchEnabled above,
-  // not only while the modal is open.
-  const [conversationDefault, setConversationDefault] = useState<SessionView>('terminal')
+  // Which kind the new-session and resume dialogs open on. Needed outside the settings modal — both
+  // dialogs seed their own selection from it — so it is loaded at mount like orchEnabled above.
+  const [defaultSessionKind, setDefaultSessionKind] = useState<SessionKind>('terminal')
   /** Whether the one first-run question has been put to this person — null until main has said.
    *  False only on a machine with no settings file at all, so an update never sees the modal
    *  (main/appSettingsStore.ts's firstRunAsked carries the whole rule). */
@@ -600,6 +606,15 @@ export default function App(): React.JSX.Element {
   // Every session id ever asked about with the one-shot attention read below — read once per
   // session, ever, not on every render or every sessions-list change.
   const requestedAttentionRef = useRef<Set<string>>(new Set())
+  // Every session whose roll-state / schedule push listener has decided banner state at least once. A
+  // seed reply is dropped for a session already in the set: an invoke reply and a push have no order
+  // between them, so a push — including an 'off'/'none' that removed the banner — is always the fresher
+  // fact. This replaces the old "already in state" presence guard, which could not tell a removal from a
+  // never-seeded session and so let a just-disabled banner be re-seeded. A push that decides nothing is
+  // not recorded: 'stalled' is a toast and leaves the banner alone, so marking it heard would drop a
+  // seed that is still the only thing that knows what the banner should say.
+  const heardRollRef = useRef<Set<string>>(new Set())
+  const heardSchedRef = useRef<Set<string>>(new Set())
   // Fix round 1: the most recent session:rolled, for PaneGrid to carry a rolled session's remembered
   // terminal/conversation choice to its new id (PaneGrid's own `lastRoll` prop comment has the full
   // reasoning). Deliberately never reset back to null — see that comment.
@@ -819,19 +834,42 @@ export default function App(): React.JSX.Element {
     // from a cold start until someone opened settings once — not late, absent.
     void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
-    // PaneGrid seeds a session tab's remembered view from this the moment the tab first appears, so
-    // it has to be loaded before a session ever spawns — the same reason orchEnabled above is loaded
-    // at mount rather than only while the settings modal is open.
-    void window.api.settings.getConversationDefault().then(setConversationDefault)
+    // Both session dialogs seed their kind from this, so it has to be loaded before either can open —
+    // the same reason orchEnabled above is loaded at mount rather than only while the modal is open.
+    void window.api.settings.getDefaultSessionKind().then(setDefaultSessionKind)
     // Read here with the rest: the modal below is drawn from it, and it must not flash in front of
     // someone who has used the app for months while an answer is in flight.
     void window.api.settings
       .getFirstRunAsked()
       .then(setFirstRunAsked)
       .catch(() => setFirstRunAsked(true)) // could not tell — the quiet answer is the right one
+    // The schedule banner's one-shot read. 'session:schedState' is pushed on changes only, so a session
+    // whose schedule was registered before this renderer existed — a reload, or main re-arming a
+    // session while the window was still coming up — would wear no banner until its next due tick.
+    // Null is the ordinary answer (no live schedule) and changes nothing.
+    const seedSchedState = (sessionId: string): void => {
+      void window.api.scheduler
+        .state(sessionId)
+        .then((ev) => {
+          if (ev && !heardSchedRef.current.has(sessionId))
+            setSchedStates((prev) => ({ ...prev, [sessionId]: ev }))
+        })
+        .catch(() => {})
+    }
+    // The roll banner's own one-shot read, same reasoning as the schedule seed just above.
+    const seedRollState = (sessionId: string): void => {
+      void window.api.rolling
+        .state(sessionId)
+        .then((ev) => {
+          if (ev && !heardRollRef.current.has(sessionId))
+            setRollStates((prev) => ({ ...prev, [sessionId]: ev }))
+        })
+        .catch(() => {})
+    }
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
     void window.api.sessions.list().then((list) => {
       setSessions(list)
+      for (const s of list) if (s.status === 'running') { seedSchedState(s.id); seedRollState(s.id) }
       if (list.length === 0) return
       // Every session belongs to exactly one group (invariant 1) — all re-adopted sessions go into the
       // first group, and a running session (or the first one, if none) becomes the active tab
@@ -887,6 +925,10 @@ export default function App(): React.JSX.Element {
       // the worker's PTY (a permission prompt in the worker's TUI would consume them as its answer).
       // So orchestration terminals open as inactive background tabs.
       place(layoutRef.current, info.id, null, null, true)
+      // A session main made on its own can already carry a schedule — the reattach sweep re-arms one
+      // from the stored config as it hands the session back.
+      seedSchedState(info.id)
+      seedRollState(info.id)
     })
     // The campaign verdict comes after the policy lookup — it can arrive later or earlier than the mount, so both paths are taken
     const offCampaign = window.api.update.onCampaign((c) => {
@@ -1011,8 +1053,8 @@ export default function App(): React.JSX.Element {
       .getAgentPermissionMode()
       .then((m) => setAgentYolo(m === 'yolo'))
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
-    // Re-syncs the new-tab default too, for the same reason as orchestration above.
-    void window.api.settings.getConversationDefault().then(setConversationDefault)
+    // Re-syncs the new-session default too, for the same reason as orchestration above.
+    void window.api.settings.getDefaultSessionKind().then(setDefaultSessionKind)
     // Astera Host slice 1: this value goes stale, and the row is only ever on screen while this
     // modal is open, so it is read here rather than at startup.
     void window.api.host.status().then(setHostStatus)
@@ -1296,6 +1338,9 @@ export default function App(): React.JSX.Element {
         toast.error(t('session.toast.stalled', { title }))
         return // a momentary event, so it is not kept as banner state
       }
+      // Marked heard *below* the return above: 'stalled' is momentary and touches no banner state, so
+      // recording it would only make a legitimate seed for this session be dropped as stale.
+      heardRollRef.current.add(ev.sessionId)
       setRollStates((prev) => {
         if (ev.state === 'none') {
           const { [ev.sessionId]: _dropped, ...rest } = prev
@@ -1305,6 +1350,7 @@ export default function App(): React.JSX.Element {
       })
     })
     const offSchedState = window.api.on('session:schedState', (ev) => {
+      heardSchedRef.current.add(ev.sessionId)
       setSchedStates((prev) => {
         if (ev.state === 'off') {
           const { [ev.sessionId]: _dropped, ...rest } = prev
@@ -1394,8 +1440,10 @@ export default function App(): React.JSX.Element {
     accountIds: string[]
     cwd: string
     saveDefault: boolean
+    kind?: SessionKind
     resumeSessionId?: string
     resumeTranscriptPath?: string
+    resumeThreadId?: string // chat only: resume this protocol thread instead of starting one
     roll?: boolean
     rollPrompt?: string
     slackNotify?: boolean
@@ -1433,8 +1481,10 @@ export default function App(): React.JSX.Element {
       const info = await window.api.sessions.spawn({
         accountId: opts.accountIds[0],
         cwd,
+        kind: opts.kind, // default 'terminal'
         resumeSessionId: opts.resumeSessionId,
         resumeTranscriptPath: opts.resumeTranscriptPath, // the transcript copy source when resuming under a different account
+        resumeThreadId: opts.resumeThreadId, // chat only: resume this protocol thread instead of starting one
         rollAccountIds: rolling ? opts.accountIds : undefined,
         rollPrompt: rolling ? opts.rollPrompt : undefined,
         slackNotify: opts.slackNotify, // Slack progress notifications
@@ -1451,8 +1501,10 @@ export default function App(): React.JSX.Element {
       // setSessions callback, through sessionsRef: a state updater has to be pure, and StrictMode may run
       // it twice, so raising a toast inside risks firing twice.
       const notice = spawnNotice({
-        requestedResumeSessionId: opts.resumeSessionId,
-        returnedResumeSessionId: info.resumeSessionId,
+        // A chat resume never sets resumeSessionId — it asks by resumeThreadId instead — so the two
+        // are merged here for spawnNotice, which only ever sees one flat id either way.
+        requestedResumeSessionId: opts.resumeSessionId ?? opts.resumeThreadId,
+        returnedResumeSessionId: info.threadId ?? info.resumeSessionId,
         returnedTabAlreadyOpen: sessionsRef.current.some((s) => s.id === info.id)
       })
       setSessions((prev) => (prev.some((s) => s.id === info.id) ? prev : [...prev, info]))
@@ -1841,46 +1893,35 @@ export default function App(): React.JSX.Element {
    *
    *  사이드바의 표시 여부는 sidebarOpen 하나가 정한다. 예전에는 sidebarOpen || explorerOpen 이라
    *  탐색기가 켜져 있는 동안 사이드바 토글이 아무 반응도 없었다 — OR 가 언제나 참이었기 때문이다. */
-  const toggleExplorer = (): void => {
-    // 켜는 경우인지는 갱신자 밖에서 정한다. setState 갱신자는 StrictMode 에서 두 번 불릴 수 있으므로
-    // 그 안에서 다른 setState 를 부르지 않는다는 것이 이 파일의 규약이다(setLayout 쪽 주석들과 같은 이유)
-    const opening = !explorerOpenRef.current
-    if (opening) {
-      setSidebarOpen(true)
-      setJobsOpen(false) // 사이드바는 한 번에 한 뷰만 보여준다
-      setHiwOpen(false)
-    }
-    setExplorerOpen(opening)
-  }
-
-  /** Jobs 사이드바 토글 — 탐색기 토글과 같은 규칙이다: 켤 때 사이드바가 접혀 있으면 함께 펴고, 세
-   *  뷰 중 하나만 보이므로 탐색기가 열려 있었다면 닫는다.
+  /** The rail's three view toggles, all one rule now (core/ui/sidebar.ts). Pressing the view that is
+   *  showing collapses the sidebar with it; pressing any other shows that one instead, unfolding the
+   *  sidebar if it was collapsed.
    *
-   *  Reads the ref rather than the render value, exactly as toggleExplorer does: this now also runs
-   *  from the keydown listener, which is registered once and closes over the first render. Reading
-   *  `jobsOpen` there would compute `opening` from a value frozen at mount, so the shortcut would only
-   *  ever open the view and never close it. */
-  const toggleJobs = (): void => {
-    const opening = !jobsOpenRef.current
-    if (opening) {
-      setSidebarOpen(true)
-      setExplorerOpen(false)
-      setHiwOpen(false)
-    }
-    setJobsOpen(opening)
+   *  **Why the flags are read from refs, not from the render values.** These run from the keydown
+   *  listener, which is registered once and closes over the first render — reading `explorerOpen`
+   *  there would compute the next state from a value frozen at mount, so a shortcut would only ever
+   *  open a view and never close it.
+   *
+   *  The next state is computed once, outside every updater: a setState updater can be invoked twice
+   *  under StrictMode, and this file's rule is that no updater calls another setState. */
+  const toggleSidebar = (view: SidebarView): void => {
+    const next = toggleSidebarView(
+      {
+        open: sidebarOpenRef.current,
+        explorer: explorerOpenRef.current,
+        jobs: jobsOpenRef.current,
+        understanding: hiwOpenRef.current
+      },
+      view
+    )
+    setSidebarOpen(next.open)
+    setExplorerOpen(next.explorer)
+    setJobsOpen(next.jobs)
+    setHiwOpen(next.understanding)
   }
-
-  /** How It Works 사이드바 토글 — toggleJobs 와 같은 규칙: 켤 때 사이드바가 접혀 있으면 함께 펴고,
-   *  세 뷰 중 하나만 보이므로 나머지 둘을 끈다. Reads the ref for the reason toggleJobs gives. */
-  const toggleHiw = (): void => {
-    const opening = !hiwOpenRef.current
-    if (opening) {
-      setSidebarOpen(true)
-      setExplorerOpen(false)
-      setJobsOpen(false)
-    }
-    setHiwOpen(opening)
-  }
+  const toggleExplorer = (): void => toggleSidebar('explorer')
+  const toggleJobs = (): void => toggleSidebar('jobs')
+  const toggleHiw = (): void => toggleSidebar('understanding')
 
   // A setState updater can be invoked twice under StrictMode (in development), so setActivePaneId and
   // createGroup are never called inside the setLayout callback — the current values are read from refs
@@ -2008,13 +2049,19 @@ export default function App(): React.JSX.Element {
     // A restarted session inherits the tab position the old one held — it neither steals the active
     // group nor leaves a tab pointing at a dead session id
     setSessions((prev) => prev.filter((s) => s.id !== old.id))
+    // Task 7 review carry-over: without `kind`, a restarted chat session spawned as a plain terminal
+    // one instead — `spawn`'s default. `resumeThreadId` is the thread to pick the conversation back
+    // up on; it is omitted (not sent as undefined-but-present) for a session that never reached
+    // `ready` and so never got one, the same as any other resume path in this file.
     void spawn({
       accountIds: [old.accountId],
       cwd: old.cwd,
       saveDefault: false,
       slackNotify: old.slackNotify,
       bypassPermissions: old.bypassPermissions,
-      replacesSessionId: old.id
+      replacesSessionId: old.id,
+      kind: old.kind,
+      ...(sessionKindOf(old) === 'chat' && old.threadId !== undefined ? { resumeThreadId: old.threadId } : {})
     })
   }
 
@@ -2023,6 +2070,10 @@ export default function App(): React.JSX.Element {
     cwd: string,
     opts: {
       accountIds: string[]
+      // Optional (rather than mirroring ResumeDialog's own required onConfirm field) so this keeps
+      // typechecking as HistoryBrowser's own onResume prop — untouched by this task — is still declared
+      // without it; the dialog always sends one in practice.
+      kind?: SessionKind
       roll: boolean
       rollPrompt?: string
       slackNotify: boolean
@@ -2036,8 +2087,16 @@ export default function App(): React.JSX.Element {
       accountIds: opts.accountIds,
       cwd,
       saveDefault: false,
-      resumeSessionId: entry.sessionId,
-      resumeTranscriptPath: entry.filePath, // the source transcript to copy into the target account's configDir
+      kind: opts.kind,
+      // The file goes with either kind: resuming under another account copies it into that account's
+      // folder first, and the CLI reads the conversation from there whichever way it is driven
+      // (spec §8.4). Only the name of the conversation differs — a chat resume gives the protocol
+      // thread id the history entry carries as sessionId (chat-sessions design §6.5), a terminal one
+      // the pty session id.
+      resumeTranscriptPath: entry.filePath,
+      ...(opts.kind === 'chat'
+        ? { resumeThreadId: entry.sessionId }
+        : { resumeSessionId: entry.sessionId }),
       roll: opts.roll,
       rollPrompt: opts.rollPrompt,
       slackNotify: opts.slackNotify,
@@ -3797,6 +3856,7 @@ export default function App(): React.JSX.Element {
                 <HistoryBrowser
                   accounts={accounts}
                   ghostAccounts={ghostAccounts}
+                  defaultSessionKind={defaultSessionKind}
                   onResume={resumeFromHistory}
                 />
               </>
@@ -3879,7 +3939,6 @@ export default function App(): React.JSX.Element {
                 schedStates={schedStates}
                 busy={busy}
                 attention={attention}
-                conversationDefault={conversationDefault}
                 lastRoll={lastRoll}
                 draggingTabId={dragTabId}
                 newDisabled={!anyCliOk}
@@ -4045,6 +4104,7 @@ export default function App(): React.JSX.Element {
       {showNew && (
         <NewSessionDialog
           accounts={accounts}
+          defaultSessionKind={defaultSessionKind}
           runningCount={runningCount}
           initialCwd={newSessionCwd}
           // The promise is passed straight through — the dialog awaits it to show a start-pending state
@@ -4128,36 +4188,37 @@ export default function App(): React.JSX.Element {
                         ariaLabel={t('settings.general.language')}
                       />
                     </div>
-                    {/* Task 10: what a new session tab opens as. A plain enum with nothing coupled to
-                        it, so — unlike the resume-strategy pair below, which earns its own component
-                        exactly because setting one can flip the other — a settings-row beside the
-                        language row is all this needs. Only seeds a tab's own remembered choice the
-                        moment its tab first appears (core/panes/sessionView.ts), so changing this
-                        here never reaches into a tab that is already open. */}
+                    {/* Which kind the two session dialogs open on. A plain enum with nothing coupled
+                        to it, so — unlike the resume-strategy pair below, which earns its own
+                        component exactly because setting one can flip the other — a settings-row
+                        beside the language row is all this needs. It seeds each dialog's own
+                        selection and nothing else: picking the other kind inside the dialog belongs
+                        to that session and is not written back here. */}
                     <div className="settings-row">
-                      <span>{t('settings.conversation.title')}</span>
+                      <span>{t('settings.defaultKind.title')}</span>
                       <Select
                         items={[
-                          { value: 'terminal', label: t('settings.conversation.terminal') },
-                          { value: 'conversation', label: t('settings.conversation.conversation') }
+                          { value: 'terminal', label: t('settings.defaultKind.terminal') },
+                          { value: 'chat', label: t('settings.defaultKind.chat') }
                         ]}
-                        value={conversationDefault}
+                        value={defaultSessionKind}
                         onChange={(v) => {
-                          const next = v as SessionView
-                          const prev = conversationDefault
-                          setConversationDefault(next) // an optimistic update — reverted below on failure
-                          void window.api.settings.setConversationDefault(next).catch((err) => {
-                            setConversationDefault(prev)
+                          const next = v as SessionKind
+                          const prev = defaultSessionKind
+                          setDefaultSessionKind(next) // an optimistic update — reverted below on failure
+                          void window.api.settings.setDefaultSessionKind(next).catch((err) => {
+                            setDefaultSessionKind(prev)
                             toast.error(
-                              t('settings.conversation.saveFailed', {
+                              t('settings.defaultKind.saveFailed', {
                                 detail: err instanceof Error ? err.message : String(err)
                               })
                             )
                           })
                         }}
-                        ariaLabel={t('settings.conversation.title')}
+                        ariaLabel={t('settings.defaultKind.title')}
                       />
                     </div>
+                    <p className="settings-hint">{t('settings.defaultKind.hint')}</p>
                   </div>
                 )}
                 {settingsTab === 'agent' && (
@@ -4332,6 +4393,7 @@ export default function App(): React.JSX.Element {
                             (hostHolding
                               ? ` · ${t('settings.info.hostHolding', {
                                   sessions: hostHolding.sessions,
+                                  chats: hostHolding.chats,
                                   terminals: hostHolding.terminals,
                                   runs: hostHolding.runs
                                 })}`
@@ -4760,13 +4822,19 @@ export default function App(): React.JSX.Element {
           to exist. A genuinely fresh profile opens with the detected-accounts modal already up, and
           this one stacked straight on top of it — two modals on the very first screen. Waiting is also
           the better question: before there is an account there are no sessions to have a default view
-          for. Answering and dismissing settle it the same way — it asks once. */}
+          for. Answering and dismissing settle it the same way — it asks once.
+
+          A chat tab is the third gate, and the reason is that the question does not apply to one: a
+          chat session has one view and no terminal to default to, so asking "터미널 or 대화?" over it
+          would settle a preference the tab underneath cannot honour — and dismissing is permanent, so
+          it would burn the one asking. Deferred, not dismissed: the next time a terminal tab is
+          active, the question is still waiting. */}
       {firstRunAsked === false && accounts.length > 0 && (
         <FirstRunDialog
-          onPick={(view) => {
+          onPick={(kind) => {
             setFirstRunAsked(true)
-            setConversationDefault(view)
-            void window.api.settings.setConversationDefault(view)
+            setDefaultSessionKind(kind)
+            void window.api.settings.setDefaultSessionKind(kind)
             void window.api.settings.markFirstRunAsked()
           }}
           onDismiss={() => {

@@ -12,12 +12,10 @@ import type { SessionView } from '../types'
 export type SessionViewMap = Record<string, SessionView>
 
 /**
- * Seeds a session's remembered choice the moment its tab first appears, from whatever
- * `conversationDefault` reads at that moment. A no-op — the same reference back — when the session
- * already has an entry: that is what keeps a later change to the setting from reaching backward
- * into a tab that already exists (requirement 2 of Task 10's brief), and what keeps main
- * re-announcing a session it already told PaneGrid about (`session:created` firing again after a
- * Host reconnect) from re-stamping a choice the person already flipped away from that default.
+ * Seeds a session's remembered choice the moment its tab first appears. A no-op — the same reference
+ * back — when the session already has an entry, which is what keeps main re-announcing a session it
+ * already told PaneGrid about (`session:created` firing again after a Host reconnect) from
+ * re-stamping a choice the person already flipped away from.
  */
 export function openSessionView(
   views: SessionViewMap,
@@ -28,15 +26,11 @@ export function openSessionView(
   return { ...views, [sessionId]: defaultView }
 }
 
-/** What a session tab is showing right now. `defaultView` for a session with no entry yet — a
- *  literal 'terminal' here, rather than the caller's actual `conversationDefault`, was fix round
- *  1's bug: PaneGrid's seeding effect runs after the first render, so a brand-new tab's very first
- *  paint read this fallback before the effect ever ran. With `conversationDefault` set to
- *  'conversation', that first paint mounted the terminal as `active` (it focuses itself), and the
- *  very next commit tore that down for the conversation pane instead — a focus grab nobody asked
- *  for, gone before anyone could act on it. Taking the same default the seeding effect will settle
- *  on as a parameter, rather than a hardcoded stand-in for it, is what makes the first paint already
- *  correct. */
+/** What a session tab is showing right now. `defaultView` covers a session with no entry yet, and is
+ *  the same value the seeding effect will settle on — taking it as a parameter rather than hardcoding
+ *  a stand-in is what makes a brand-new tab's very first paint already correct. PaneGrid's seeding
+ *  effect runs after that first render, so a fallback that disagreed with it would mount one pane and
+ *  tear it down on the very next commit (fix round 1's bug: a focus grab nobody asked for). */
 export function sessionViewOf(
   views: SessionViewMap,
   sessionId: string,

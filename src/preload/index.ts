@@ -52,7 +52,9 @@ const EVENT_CHANNELS = [
   'usage:accounts-updated',
   'notify:activate',
   'conversation:append',
-  'conversation:attention'
+  'conversation:attention',
+  'conversation:pendingPrompt',
+  'chat:event'
 ]
 
 const api = {
@@ -129,7 +131,8 @@ const api = {
     restore: invoke('localHistory.restore')
   },
   scheduler: {
-    disable: invoke('scheduler.disable')
+    disable: invoke('scheduler.disable'),
+    state: invoke('scheduler.state')
   },
   slack: {
     getConfig: invoke('slack.getConfig'),
@@ -163,8 +166,8 @@ const api = {
     setTheme: invoke('settings.setTheme'),
     getFirstRunAsked: invoke('settings.getFirstRunAsked'),
     markFirstRunAsked: invoke('settings.markFirstRunAsked'),
-    getConversationDefault: invoke('settings.getConversationDefault'),
-    setConversationDefault: invoke('settings.setConversationDefault')
+    getDefaultSessionKind: invoke('settings.getDefaultSessionKind'),
+    setDefaultSessionKind: invoke('settings.setDefaultSessionKind')
   },
   files: {
     list: invoke('files.list'),
@@ -262,7 +265,8 @@ const api = {
     install: () => ipcRenderer.invoke('update:install')
   },
   rolling: {
-    forceRoll: invoke('rolling.forceRoll')
+    forceRoll: invoke('rolling.forceRoll'),
+    state: invoke('rolling.state')
   },
   app: {
     // The 'quit app' of the forced-update gate. win.close cannot be used: on win32/macOS it only minimises to the tray
@@ -301,11 +305,24 @@ const api = {
     more: invoke('conversation.more'),
     close: invoke('conversation.close'),
     attention: invoke('conversation.attention'),
+    pendingPrompt: invoke('conversation.pendingPrompt'),
     model: invoke('conversation.model'),
     models: invoke('conversation.models'),
     attach: invoke('conversation.attach'),
     commands: invoke('conversation.commands'),
     files: invoke('conversation.files')
+  },
+  // A chat session talks to its adapter through these; everything it hears back arrives on the one
+  // 'chat:event' channel above, not as a return value (chat-sessions design §6).
+  chat: {
+    send: invoke('chat.send'),
+    interrupt: invoke('chat.interrupt'),
+    answer: invoke('chat.answer'),
+    setModel: invoke('chat.setModel'),
+    setPlanMode: invoke('chat.setPlanMode'),
+    listModels: invoke('chat.listModels'),
+    configuredModel: invoke('chat.configuredModel'),
+    state: invoke('chat.state')
   },
   platform: process.platform,
   win: {

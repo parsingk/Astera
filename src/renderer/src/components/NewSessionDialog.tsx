@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, BranchRef, ScheduleConfig, Provider } from '../../../core/types'
+import type { Account, BranchRef, ScheduleConfig, SessionKind, Provider } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
+import { rollChainCandidates } from '../../../core/resume'
 import { isSlackReady } from '../../../core/slack/ready'
+import { useChatAvailability } from '../hooks/useChatAvailability'
+import { useAccountStatus } from '../hooks/useAccountStatus'
 import { orderBranchesForPicker, reconcileBaseRef } from '../../../core/worktrees/base'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
@@ -19,15 +22,20 @@ export function NewSessionDialog({
   runningCount,
   initialCwd = null, // prefill from WorktreePanel's 'start session'
   onSpawn,
-  onCancel
+  onCancel,
+  defaultSessionKind
 }: {
   accounts: Account[]
   runningCount: number
   initialCwd?: string | null
+  /** Which kind the dialog opens on (the Settings default). Seeds the selection below and nothing
+   *  more — picking the other one here belongs to this session and is not written back. */
+  defaultSessionKind: SessionKind
   onSpawn: (opts: {
     accountIds: string[]
     cwd: string
     saveDefault: boolean
+    kind: SessionKind
     roll: boolean
     rollPrompt?: string
     slackNotify: boolean
@@ -45,6 +53,11 @@ export function NewSessionDialog({
   // Account slots — [0] is the primary account, slots 1 and 2 are the switch order once the limit is hit
   const [accountIds, setAccountIds] = useState<string[]>([accounts[0]?.id ?? ''])
   const [saveDefault, setSaveDefault] = useState(false)
+  // Session kind — terminal (pty) or chat (a Host-owned line process, no terminal at all). Seeded
+  // from the Settings default and forced back to 'terminal' below whenever chat is not available, so
+  // the toggle never sticks on a choice the person cannot actually start. Changing it here is this
+  // session's business — it is not written back to the setting.
+  const [kind, setKind] = useState<SessionKind>(defaultSessionKind)
   const [rollMode, setRollMode] = useState(false) // auto-resume toggle for a single account
   const [rollPrompt, setRollPrompt] = useState('') // text to send on a rolling resume (empty means the default)
   const [slackNotify, setSlackNotify] = useState(false) // Slack progress notifications
@@ -172,17 +185,42 @@ export function NewSessionDialog({
   // supports codex too (codexRolling.ts) and so do Slack notifications (turn completion is detected
   // from rollout's task_complete), so this flag must not hide either of those.
   const primaryCliMissing = !cliOk[primaryProvider]
+  // 대화 is available once the Host has announced the proc-* family — either provider's account can
+  // open one. The poll lives in the hook, shared with ResumeDialog.
+  const { enabled: chatEnabled, checking: chatChecking } = useChatAvailability()
+  // The same login map the sidebar's account rows use — no new IPC. Only the roll slots consult it
+  // (spec §15.4): slot 0 is where the user chose to run, and that choice fails visibly on its own.
+  const { loginMap } = useAccountStatus(accounts)
+  // A 대화 default falls back to 터미널 while it is unavailable — never written back, so the setting
+  // survives a temporary gap (the Host still connecting) and chat is offered again once it clears.
+  //
+  // Gated on the Host having actually answered. Without that this fired on mount every time, because
+  // an unanswered poll reads as "not enabled": the selection the setting had just seeded was dropped
+  // before the Host could say yes, and nothing put it back afterwards (reported — the setting said
+  // 대화 and the dialog opened on 터미널).
+  useEffect(() => {
+    if (kind === 'chat' && !chatEnabled && !chatChecking) setKind('terminal')
+  }, [kind, chatEnabled, chatChecking])
   // Per-slot options: this slot's current value plus any account no other slot uses (no duplicates).
-  // Rolling slots (1 and 2) only offer accounts with the same provider as the primary account.
-  const options = (slot: number): Account[] =>
-    accounts.filter(
+  // Rolling slots (1 and 2) only offer accounts with the same provider as the primary account, and
+  // drop any account the login probe has answered "logged out" for (spec §15.4) — a slot already
+  // holding an account keeps showing it regardless, so the control never renders with a value absent
+  // from its own option list.
+  const options = (slot: number): Account[] => {
+    const live = slot === 0 ? null : new Set(rollChainCandidates(accounts.map((a) => a.id), loginMap))
+    return accounts.filter(
       (a) =>
         (slot === 0 || provider(a) === primaryProvider) &&
-        (a.id === accountIds[slot] || !accountIds.includes(a.id))
+        (a.id === accountIds[slot] || !accountIds.includes(a.id)) &&
+        (live === null || a.id === accountIds[slot] || live.has(a.id))
     )
+  }
   const canAdd =
     accountIds.length < MAX_ROLL_ACCOUNTS &&
-    accounts.some((a) => provider(a) === primaryProvider && !accountIds.includes(a.id))
+    accounts.some(
+      (a) =>
+        provider(a) === primaryProvider && !accountIds.includes(a.id) && loginMap[a.id] !== false
+    )
   // Whether rolling is on — with multiple accounts (2+) it is always on (checkbox pinned and disabled), with a single account the user toggles it
   const multi = accountIds.length >= 2
   // The current branch leads, outside any group: forking from what you are on is the common case, and the
@@ -213,9 +251,12 @@ export function NewSessionDialog({
       // success and failure come back here, and on success App has already closed the modal so the
       // setStarting below is a no-op.
       await onSpawn({
+        // Rolling used to be terminal-only (a Host-owned line process had no CLI to hook a rolling
+        // resume into) — since slice 4c 대화 rolls too, so nothing here is kind-gated any more.
         accountIds,
         cwd,
         saveDefault,
+        kind,
         roll: rollChecked,
         rollPrompt: rollChecked ? rollPrompt.trim() || undefined : undefined,
         slackNotify: slackReady && slackNotify,
@@ -261,6 +302,40 @@ export function NewSessionDialog({
             {t('session.new.cliMissingPost')}
           </p>
         )}
+        {/* The kind is the first decision — how the session runs at all — so it heads the form as its
+            own section, ruled off from the folder and account it applies to. Placed between those two
+            it read as one more field of the same run, and where the kind ended and the account began
+            could not be told apart (reported from a hand check of the dialog). */}
+        <div className="field kind-field">
+          <label>{t('session.new.kindLabel')}</label>
+          <div className="kind-segmented">
+            <button
+              type="button"
+              className={`segmented${kind === 'terminal' ? ' active' : ''}`}
+              onClick={() => {
+                setKind('terminal')
+              }}
+            >
+              {t('session.kind.terminal')}
+            </button>
+            <button
+              type="button"
+              className={`segmented${kind === 'chat' ? ' active' : ''}`}
+              disabled={!chatEnabled}
+              onClick={() => {
+                setKind('chat')
+              }}
+            >
+              {t('session.kind.chat')}
+            </button>
+          </div>
+          {!chatEnabled && !chatChecking && (
+            <span className="kind-note">{t('session.new.kindHostOld')}</span>
+          )}
+          {chatEnabled && kind === 'chat' && (
+            <span className="kind-note">{t('session.new.kindChatHint')}</span>
+          )}
+        </div>
         <div className="field">
           <label>{t('session.field.projectFolder')}</label>
           <div className="row">
@@ -357,6 +432,10 @@ export function NewSessionDialog({
             </button>
           )}
         </div>
+        {/* Rolling now applies to 대화 too (slice 4c) — its resume path copies the transcript into
+            the next account exactly as 터미널's does, so the same chain mechanism can hook into it.
+            Unguarded by kind, with the schedule and Slack rows kept in the same order after it
+            (spec §5.6). */}
         <label className="row check-small">
           <input
             type="checkbox"
@@ -383,16 +462,18 @@ export function NewSessionDialog({
             <span className="roll-prompt-hint">{t('session.new.rollPromptHint')}</span>
           </div>
         )}
+        {/* The label follows the field below it: a 대화 gets a prompt sent as a new turn, a 터미널 gets a
+            command run in its shell. */}
         <label className="row check-small">
           <input type="checkbox" checked={schedOn} onChange={(e) => setSchedOn(e.target.checked)} />
-          {t('session.new.schedLabel')}
+          {t(kind === 'chat' ? 'session.new.schedLabelChat' : 'session.new.schedLabel')}
         </label>
         {/* initial={schedule} restores the previous input when this is toggled off and back on —
             ScheduleFields loses its internal state on unmount, so the parent holds the last value that
             was valid (schedule) and feeds it back in. An intermediate input state with an empty command
             is not restored, because onChange emits null for it so it never reaches schedule — not a
             complete fix, but it covers the common case (toggling the checkbox). */}
-        {schedOn && <ScheduleFields initial={schedule} onChange={setSchedule} />}
+        {schedOn && <ScheduleFields initial={schedule} onChange={setSchedule} chat={kind === 'chat'} />}
         {/* Slack notifications work for every provider — claude detects turn completion through the
             statusLine hook, codex through rollout's task_complete */}
         <label className="row check-small">

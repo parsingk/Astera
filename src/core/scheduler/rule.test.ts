@@ -5,10 +5,63 @@ import { nextFireAt, isValidRule, isValidScheduleConfig, buildScheduleConfig, bu
 const at = (y: number, mo: number, d: number, h = 0, mi = 0): number =>
   new Date(y, mo - 1, d, h, mi, 0, 0).getTime()
 
+// 초까지 지정하는 헬퍼 — 정렬은 등록 시각의 초가 0이 아닐 때만 관찰된다
+const atSec = (y: number, mo: number, d: number, h: number, mi: number, s: number): number =>
+  new Date(y, mo - 1, d, h, mi, s, 0).getTime()
+
+// 발화 시각은 간격의 단위 경계에 맞춘다: 분 간격이면 목표 분의 :00 초, 시간 간격(60의 배수)이면
+// 목표 시의 :00 분 :00 초. 등록한 초가 그대로 따라붙어 매번 :33 에 발화하던 것을 고친다.
 describe('nextFireAt — interval', () => {
-  it('fromMs + N분', () => {
+  it('정각에 등록하면 fromMs + N분 그대로다', () => {
     expect(nextFireAt({ kind: 'interval', minutes: 30 }, at(2026, 7, 31, 10, 0))).toBe(
       at(2026, 7, 31, 10, 30)
+    )
+  })
+
+  it('분 간격: 등록 시각의 초를 버리고 목표 분의 :00 초에 발화한다', () => {
+    expect(nextFireAt({ kind: 'interval', minutes: 1 }, atSec(2026, 7, 31, 10, 47, 33))).toBe(
+      at(2026, 7, 31, 10, 48)
+    )
+    expect(nextFireAt({ kind: 'interval', minutes: 5 }, atSec(2026, 7, 31, 10, 47, 33))).toBe(
+      at(2026, 7, 31, 10, 52)
+    )
+  })
+
+  it('시간 간격(60의 배수): 목표 시의 :00 분 :00 초에 발화한다', () => {
+    expect(nextFireAt({ kind: 'interval', minutes: 60 }, atSec(2026, 7, 31, 10, 47, 33))).toBe(
+      at(2026, 7, 31, 11, 0)
+    )
+    expect(nextFireAt({ kind: 'interval', minutes: 120 }, atSec(2026, 7, 31, 10, 47, 33))).toBe(
+      at(2026, 7, 31, 12, 0)
+    )
+  })
+
+  it('60의 배수가 아니면 시간 단위가 아니다 — 90분은 분 경계에만 맞춘다', () => {
+    expect(nextFireAt({ kind: 'interval', minutes: 90 }, atSec(2026, 7, 31, 10, 47, 33))).toBe(
+      at(2026, 7, 31, 12, 17)
+    )
+  })
+
+  // 첫 주기는 간격보다 짧아질 수 있다 — 의도한 것이다("바로 발화"). 59초에 등록한 1분 간격은
+  // 1초 뒤 다음 분의 :00 에 발화한다.
+  it('첫 주기는 간격보다 짧아질 수 있다', () => {
+    expect(nextFireAt({ kind: 'interval', minutes: 1 }, atSec(2026, 7, 31, 10, 47, 59))).toBe(
+      at(2026, 7, 31, 10, 48)
+    )
+  })
+
+  // 위 두 경계 사례의 시간 분기 짝 — 분 분기는 setSeconds, 시간 분기는 setMinutes 로 서로 다른
+  // 코드를 타므로 따로 못박는다. 정각 등록은 온전한 한 주기를 기다리고(즉시 발화 아님), 정각
+  // 직전 등록은 첫 주기가 짧아진다.
+  it('시간 간격: 정각에 등록하면 온전히 한 시간 뒤다', () => {
+    expect(nextFireAt({ kind: 'interval', minutes: 60 }, at(2026, 7, 31, 10, 0))).toBe(
+      at(2026, 7, 31, 11, 0)
+    )
+  })
+
+  it('시간 간격: 정각 직전에 등록하면 첫 주기가 짧아진다', () => {
+    expect(nextFireAt({ kind: 'interval', minutes: 60 }, atSec(2026, 7, 31, 10, 59, 59))).toBe(
+      at(2026, 7, 31, 11, 0)
     )
   })
 })

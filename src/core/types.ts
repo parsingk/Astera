@@ -28,7 +28,8 @@ import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
 import type { GeneratorSettings } from './understanding/generatorSettings'
 import type { DesktopNotifySettings } from './notify/settings'
-import type { ModelListResult } from './models/types'
+import type { ModelDescriptor, ModelListResult } from './models/types'
+import type { ChatAnswer, ChatEvent, ChatState } from './chat/types'
 import type { ThemeId } from './theme/themes'
 import type { ConvTurn } from './history/convTypes'
 export type { ConvTurn } from './history/convTypes'
@@ -73,6 +74,8 @@ export interface CliStatus {
 
 export type SessionStatus = 'running' | 'exited'
 
+export type SessionKind = 'terminal' | 'chat'
+
 export interface SessionInfo {
   id: string
   accountId: string
@@ -82,10 +85,15 @@ export interface SessionInfo {
   title: string
   resumeSessionId?: string
   rollAccountIds?: string[] // rolling account order; [0] is the initial account. One element waits out the reset instead of switching (every Job worker is one)
-  rollPrompt?: string // the carry-on prompt sent when rolling (empty means the default). Only meaningful on the initial spawn
+  rollPrompt?: string // the carry-on prompt sent when rolling (empty means the default). It rides every roll, so the respawned session's note keeps the text the user typed rather than a default resolved in whatever language the app was in
   slackNotify?: boolean // Slack progress notifications — decides hook injection and notifier registration at spawn, and propagates through rolling respawns
   bypassPermissions?: boolean // start without permission prompts — passes --dangerously-skip-permissions at spawn, propagates through rolling and resume
   schedule?: ScheduleConfig // recurring command schedule — only meaningful on the initial spawn; the coordinator owns its lifetime afterwards
+  /** How the CLI runs. Absent means 'terminal' — every session before chat sessions, every Host note
+   *  already written, every fixture (chat-sessions design §5). Read it through sessionKindOf(). */
+  kind?: SessionKind
+  /** Chat only: the protocol's own thread id once known (Codex threadId). What resume needs. */
+  threadId?: string
 }
 
 /** The stored settings the resume modal reads to seed its checkboxes.
@@ -293,11 +301,11 @@ export interface SessionUsage {
   weekly: RateLimitWindow | null // the weekly (7-day) window
 }
 
-/** Rolling progress (main to renderer, for the terminal banner) */
+/** Rolling progress (main to renderer, for the banner both views wear — the terminal and the chat pane) */
 export interface RollStateEvent {
   sessionId: string
   // 'nudged' and 'stalled' are momentary events, not lasting states — the renderer leaves them out
-  // of the banner and only Slack is told (see TerminalView.rollBannerVisible)
+  // of the banner and only Slack is told (see SessionStateBanners.rollBannerVisible)
   // 'adopted' is a codex rolling chain that came back from the Host and could not be told whether
   // its account was already at its limit — asking is unsafe (see CodexRollingCoordinator.register),
   // so it will not roll until codex writes its next rate_limits record. It is a lasting state like
@@ -314,7 +322,7 @@ export interface RollStateEvent {
   scope?: 'session' | 'weekly' // which limit, when state='waiting' — selects the banner wording and time format
 }
 
-/** Schedule progress (main to renderer, for the terminal banner) */
+/** Schedule progress (main to renderer, for the banner both views wear — the terminal and the chat pane) */
 export interface SchedStateEvent {
   sessionId: string
   state: 'active' | 'off' // off covers turning it off, the session ending, and clearing the old id when rolling re-keys it
@@ -330,9 +338,21 @@ export interface SchedStateEvent {
  *  re-exports it rather than carrying a copy that would have to be kept in step by hand. */
 export type Attention = 'idle' | 'working' | 'waiting'
 
-/** Which of the terminal or the conversation a session tab shows (Task 10). Also the shape of the
- *  `conversationDefault` setting: the same two values, meaning "what a session tab starts on"
- *  there and "what it is showing right now" once it has one. */
+/** The tool call a session's Claude Code is waiting on, captured by the PreToolUse hook **before** the
+ *  CLI draws its dialog (main/pendingPrompt.ts). `input` is the model's own tool input, untouched — for
+ *  `AskUserQuestion` the questions the conversation view draws as a card. Gone once the matching
+ *  PostToolUse, or the turn's Stop, arrives. Only Claude sessions produce this: codex has no hooks. */
+export interface PendingToolPrompt {
+  toolUseId: string
+  tool: string
+  input: unknown
+  /** When the capture arrived, ms since epoch. */
+  at: number
+}
+
+/** Which of the terminal or the conversation a terminal session's tab is showing (Task 10). Chosen
+ *  per tab through the toggle in the tab bar; a tab starts on the terminal. A chat session has no
+ *  terminal and is not described by this at all. */
 export type SessionView = 'terminal' | 'conversation'
 
 /** One project terminal */
@@ -667,6 +687,12 @@ export interface CoreEvents {
    *  verdict the desktop notifier already reads, so it fires for every session regardless of which
    *  tab, if any, is showing its conversation. */
   'conversation:attention': { sessionId: string; value: Attention }
+  /** A session's waiting tool call changed (main/pendingPrompt.ts's `subscribe`): captured, replaced, or
+   *  cleared (`prompt: null`). Not gated on an open conversation, like 'conversation:attention'. */
+  'conversation:pendingPrompt': { sessionId: string; prompt: PendingToolPrompt | null }
+  /** A chat session's adapter reported something (main/chat/manager.ts's `subscribe`). Not gated on an
+   *  open conversation, like conversation:attention. */
+  'chat:event': { sessionId: string; event: ChatEvent }
 }
 export type CoreEventChannel = keyof CoreEvents
 
@@ -704,16 +730,19 @@ export interface HostStatus {
    *  tab offers to do it now (docs/superpowers/specs/2026-09-14-host-replacement-design.md). False
    *  whenever the version cannot be compared, and false for a Host *newer* than the app. */
   outdated: boolean
+  /** What the Host announced it can do (protocol.ts HOST_FEATURE_*); empty until a hello, and for a
+   *  Host that predates the field. */
+  features: string[]
 }
 
 /** How much of this app's work the Host is holding right now — the fact that makes the Info tab's
  *  Host row mean something, because it answers "will my work survive if I close this?".
  *
- *  **All three kinds of pty, and runs are not the afterthought they look like.** `RunManager`'s quit
- *  teardown (`stopAppOwned`) skips every pty that outlives the app, exactly as the session and
- *  terminal managers do, so a Host-held run survives the quit too. Leaving it out would tell someone
- *  whose held work is a long build or a dev server that nothing of theirs is protected. See
- *  `hostHoldings` for what is still left out and why.
+ *  **The three kinds of pty, the chat sessions' line processes, and runs are not the afterthought
+ *  they look like.** `RunManager`'s quit teardown (`stopAppOwned`) skips every pty that outlives the
+ *  app, exactly as the session and terminal managers do, so a Host-held run survives the quit too.
+ *  Leaving it out would tell someone whose held work is a long build or a dev server that nothing of
+ *  theirs is protected. See `hostHoldings` for what is still left out and why.
  *
  *  Asked separately from `HostStatus` rather than folded into it: the connection facts are known in
  *  the app the moment they are asked for, while this is a round trip to the Host, and a row that
@@ -722,6 +751,8 @@ export interface HostHoldings {
   sessions: number
   terminals: number
   runs: number
+  /** Chat sessions' line processes, alive. */
+  chats: number
 }
 
 /** The contract the renderer sees as window.api. The IPC adapter implements it. */
@@ -759,6 +790,8 @@ export interface CoreApi {
       slackNotify?: boolean
       bypassPermissions?: boolean // start without permission prompts
       schedule?: ScheduleConfig // recurring command schedule
+      kind?: SessionKind // default 'terminal'
+      resumeThreadId?: string // chat only: resume this protocol thread instead of starting one
     }): Promise<SessionInfo>
     write(id: string, data: string): void
     resize(id: string, cols: number, rows: number): void
@@ -890,6 +923,10 @@ export interface CoreApi {
   }
   scheduler: {
     disable(sessionId: string): Promise<void> // turn off the schedule of a running session — the banner button
+    // What the banner would say for this session right now, or null when it has no live schedule. The
+    // 'session:schedState' event is pushed on changes only, so a renderer that mounted after the
+    // schedule was registered (a reload) reads this once as it adopts the session.
+    state(sessionId: string): Promise<SchedStateEvent | null>
   }
   slack: {
     // Webhook, plus bot token and channel, plus app token, plus the allowed Member ID.
@@ -975,10 +1012,10 @@ export interface CoreApi {
     getFirstRunAsked(): Promise<boolean>
     /** It has been put to them. Answering and dismissing are the same thing here: it asks once. */
     markFirstRunAsked(): Promise<void>
-    // Task 10: what a new session tab opens as. Only ever seeds a tab's own remembered choice at the
-    // moment its tab first appears — changing this later never touches a tab that already exists.
-    getConversationDefault(): Promise<SessionView>
-    setConversationDefault(view: SessionView): Promise<void>
+    /** Which kind the new-session and resume dialogs open on. Seeds the dialog's selection only —
+     *  changing the kind inside the dialog is that session's business and is not written back. */
+    getDefaultSessionKind(): Promise<SessionKind>
+    setDefaultSessionKind(kind: SessionKind): Promise<void>
   }
   files: {
     // The file explorer. Every files.* IPC call goes through assertAllowedPath, which permits only
@@ -1231,10 +1268,13 @@ export interface UpdateApi {
   install(): Promise<void>
 }
 
-/** A rolling API for development only — packaged builds do not register the handler, so calls are
- *  rejected there (used for manual end-to-end checks) */
+/** The rolling coordinators' renderer surface. `forceRoll` is development only — packaged builds do not
+ *  register its handler, so calls are rejected there (used for manual end-to-end checks). `state` is
+ *  registered in every build: the roll banner's one-shot snapshot, read as the renderer adopts a session
+ *  (`session:rollState` is pushed on changes only). */
 export interface RollingApi {
   forceRoll(sessionId?: string): Promise<void>
+  state(sessionId: string): Promise<RollStateEvent | null>
 }
 
 /** Window controls (not core — the renderer/Electron layer, the same layer as system) */
@@ -1427,6 +1467,9 @@ export type RendererApi = CoreApi & {
      *  one ever does. Independent of `open`: a fresh session on a trust prompt is `waiting` while
      *  `open` still answers null. */
     attention(sessionId: string): Promise<Attention>
+    /** The tool call this session's CLI is waiting on, read once on mount — the push above fires only on
+     *  a change, so a question already up when the pane opens needs this. null when nothing is waiting. */
+    pendingPrompt(sessionId: string): Promise<PendingToolPrompt | null>
     /** The model and effort the CLI last reported for this session, or nulls when it has reported
      *  nothing yet. Read rather than pushed: it changes only when a person changes it, which they do
      *  through the CLI's own screen, and there is no event for that. */
@@ -1464,6 +1507,27 @@ export type RendererApi = CoreApi & {
     /** Project files matching what follows an `@`, best first, already capped. Root-relative with
      *  forward slashes. Empty for a session with no project, or one whose folder cannot be read. */
     files(sessionId: string, query: string): Promise<string[]>
+  }
+  /** A chat session's own IPC surface, the counterpart of `conversation` above for sessions whose kind
+   *  is 'chat'. Every method takes a session id and is a no-op (or null) for an id the chat manager
+   *  does not hold, so the renderer never has to check the kind before asking. */
+  chat: {
+    send(sessionId: string, text: string): Promise<void>
+    interrupt(sessionId: string): Promise<void>
+    answer(sessionId: string, requestId: string, answer: ChatAnswer): Promise<void>
+    setModel(sessionId: string, model: string, effort: string | null): Promise<void>
+    setPlanMode(sessionId: string, on: boolean): Promise<void>
+    listModels(sessionId: string): Promise<ModelDescriptor[]>
+    /** The model this session's own settings choose, or null when they choose none.
+     *
+     *  What the composer names before the first turn. A chat session is launched without `--model`, so
+     *  the CLI runs whatever its settings say, and nothing in the handshake reports which model that is
+     *  — `system/init` is the first word on it and it arrives with the first turn. Read on mount, the
+     *  same moment the model list is. Null for a session that is not a chat session, and for codex,
+     *  whose model comes back from the thread instead. */
+    configuredModel(sessionId: string): Promise<string | null>
+    /** One-shot on mount; null for a session that is not a chat session. */
+    state(sessionId: string): Promise<ChatState | null>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

@@ -17,14 +17,17 @@ import { registerPreviewEmulation } from './preview/emulation'
 import { registerPreviewCapture } from './preview/capture'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
+import { chatDriver, ptyDriver, routedDriver } from './sessionDriver'
 import { CodexRollingCoordinator } from './codexRolling'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
+import { memoiseLoginStatus } from '../core/accounts/loginStatusCache'
 import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
 import { fanOutHookEvent } from './hookFanOut'
 import { DesktopNotifier } from './desktopNotifier'
 import { createAttentionState } from './attention'
+import { createPendingPromptState } from './pendingPrompt'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
@@ -53,6 +56,11 @@ if (shouldForceWaylandOzone(process.platform, process.env['WAYLAND_DISPLAY'], ex
 // (96%, say) would reject a genuine limit 90 seconds later. The phrase re-matches on every chunk while
 // it is on screen, so this window doubles as the query throttle.
 const USAGE_GATE_MAX_AGE_MS = 10_000
+
+// The carriage return the rolling coordinators write to submit a prompt on a pty. The `write` routing
+// in their dep blocks below recognises it in order to drop it: a chat session is handed a whole
+// message rather than keystrokes, so the Enter that follows the text on a pty has nothing to do there.
+const ENTER = String.fromCharCode(13)
 
 let core: Core | null = null
 let codexRollingRef: CodexRollingCoordinator | null = null
@@ -405,6 +413,9 @@ app.whenReady().then(async () => {
   // Notification payload itself, and ipc.ts's session-exit path forgets a session's entry here too
   // (its own comment there explains the lost-sight exception).
   const attention = createAttentionState()
+  // The waiting tool call per session (main/pendingPrompt.ts): what the conversation view draws a
+  // question card from. Built here, beside attention, for the same two readers — the fan-out and ipc.
+  const pendingPrompt = createPendingPromptState()
   // The second outlet on the same pipe (design doc §6). Electron's Notification was unused in this
   // app until now — only Tray was.
   const desktop = new DesktopNotifier({
@@ -475,6 +486,12 @@ app.whenReady().then(async () => {
       isOwnMessage: (ts) => slack.isOwnMessage(ts),
       // On a choice prompt, turn the reply into a key sequence and carry it through Submit
       pendingChoiceShape: (sid) => slack.pendingChoiceShape(sid),
+      // A chat session has no pty to type into: its reply is read against the card it holds and goes
+      // out through the session driver or as the card's answer (slice 4 design §7.3).
+      isChat: (sid) => core!.chat.has(sid),
+      pendingRequest: (sid) => core!.chat.state(sid)?.request ?? null,
+      deliverChat: (sid, text) => sessionDriver.deliver(sid, text),
+      answerChat: (sid, requestId, answer) => core!.chat.answer(sid, requestId, answer),
       log: slackLog
     }),
     createClient: (appToken) => createSocketClient(appToken),
@@ -523,13 +540,23 @@ app.whenReady().then(async () => {
     // is not one of these taps: it no longer reads a hook payload directly, it subscribes to `attention`
     // instead (desktopNotifier.ts's constructor) — see hookFanOut.ts's own comment on why `attention`
     // still runs first regardless.
-    (sid, payload) => fanOutHookEvent({ attention, slack, rolling: rollingRef }, sid, payload),
+    (sid, payload) => fanOutHookEvent({ attention, pendingPrompt, slack, rolling: rollingRef }, sid, payload),
     slackLog
   )
   hookWatcher.start()
 
   // Account rolling: progress logs go to userData/rolling.log (same pattern as updater.log)
   const rollLog = path.join(app.getPath('userData'), 'rolling.log')
+  // Both coordinators' `log` dep, and the one their chat routing below writes its own refusals to — a
+  // named function rather than the two inline copies it replaces, because that routing is in the dep
+  // literal and cannot reach the `log` it is declaring.
+  const rollingLog = (m: string): void => {
+    try {
+      appendFileSync(rollLog, `${new Date().toISOString()} ${m}\n`)
+    } catch {
+      /* a logging failure must not block rolling */
+    }
+  }
   const schedLog = (m: string): void => {
     try {
       appendFileSync(rollLog, `${new Date().toISOString()} [sched] ${m}\n`)
@@ -548,15 +575,30 @@ app.whenReady().then(async () => {
     else if (dropped > 0 || pruned > 0)
       schedLog(`scheduler.json cleaned up (${dropped} invalid, ${pruned} expired) — .bak kept`)
   }
+  // One driver per session kind and a router that asks core which kind an id is, on every call — an id
+  // rolling has re-keyed is judged again (chat-sessions slice 4 design §5.4). Shared by the scheduler
+  // now; Slack (4b) and rolling (4c) send through it too.
+  const sessionDriver = routedDriver(
+    (id) => core!.chat.has(id),
+    ptyDriver({
+      write: (id, d) => {
+        core!.sessions.write(id, d) // a throw is the rejection the caller sees
+      }
+    }),
+    // The manager's `send` resolves for an id it does not know, and a silent resolve reads as "delivered"
+    // to everything on the other side of this seam — the scheduler zeroes its refusal count on it, and
+    // 4b's Slack notice and 4c's rolling prompt are both written against "a rejection means not sent".
+    // The driver's own contract says it rejects when the CLI refused the message **or the session is
+    // gone**, so the second half is kept here, at the seam, rather than left to the router's `isChat`
+    // check a microsecond earlier.
+    chatDriver({
+      send: (id, text) =>
+        core!.chat.has(id) ? core!.chat.send(id, text) : Promise.reject(new Error(`no chat session: ${id}`))
+    })
+  )
   // Session scheduler: runs periodic commands automatically. Logs share rolling.log ([sched] prefix)
   const scheduler = new SchedulerCoordinator({
-    write: (id, d) => {
-      try {
-        core!.sessions.write(id, d)
-      } catch {
-        /* a write failure must not block the schedule timer */
-      }
-    },
+    deliver: (id, text) => sessionDriver.deliver(id, text),
     readStatusPayload: (id) => core!.statusLinePayload(id),
     send: (channel, payload) => {
       try {
@@ -576,7 +618,10 @@ app.whenReady().then(async () => {
     // codex 세션의 scheduler.json 키. claude 가 statusLine 페이로드에서 얻는 것을 codex 는 여기서
     // 얻는다 — rollout 감시자는 모든 codex 세션에 붙고, 그 탐색이 경로와 세션 id 를 함께 낸다.
     // 이 배선이 없던 동안 codex 스케줄은 세션이 사는 동안만 돌고 아무 키로도 저장되지 않았다.
-    codexSessionId: (id) => codexRollout.codexSessionIdFor(id)
+    codexSessionId: (id) => codexRollout.codexSessionIdFor(id),
+    // A chat session's scheduler.json key: the protocol thread id the adapter reported (Codex at ready,
+    // Claude after the first turn); null until then, and the coordinator asks again next tick.
+    chatThreadId: (id) => core!.chat.info(id)?.threadId ?? null
   })
   schedulerRef = scheduler
   // Direct account-usage lookups. It carries its own call coalescing, backoff and 10-second timeout, so
@@ -588,10 +633,56 @@ app.whenReady().then(async () => {
   // One registry for both coordinators — the sharing is the feature (SPEC §11.2/6). Two instances
   // would compile and pass every test while sharing nothing.
   const blocks = new BlockRegistry()
+  // One memo for both coordinators, for the same reason (ruling 4e-5). Every chain asks this for every
+  // account in its roll chain on every 15-second tick, and chains overlap: four chains over three
+  // accounts asked twelve times for three answers. On win32 that is a file read each; on darwin
+  // claudeLoginProbe can fall through to the Keychain, which spawns a `security` process per ask. The
+  // TTL sits under the tick, so a login change is still picked up within a tick or two.
+  //
+  // `ipcMain.handle('accounts.loginStatus')` is deliberately NOT memoised: the renderer re-queries on
+  // window focus exactly because the person just went and logged in somewhere else, and a cached
+  // verdict would show them a stale marker. Two paths, two trades — the coordinators run a filter, the
+  // panel shows a fact.
+  const cachedLoginStatus = memoiseLoginStatus((id) => core!.accounts.loginStatus(id), {
+    ttlMs: 10_000
+  })
   const rolling = new RollingCoordinator({
-    spawn: (opts) => core!.sessions.spawn(opts),
-    write: (id, d) => core!.sessions.write(id, d),
-    kill: (id) => core!.sessions.kill(id),
+    // A chain's session may be a pty or a chat session (slice 4c); the coordinator says which through
+    // `kind` and the rest is routed here, so neither coordinator imports a manager. A chat respawn
+    // resumes by thread id — the same value a pty chain resumes by, under the chat manager's name for
+    // it — and carries the chain's carry-on prompt as its first turn.
+    spawn: (opts) =>
+      opts.kind === 'chat'
+        ? core!.chat.spawn({
+            account: opts.account,
+            cwd: opts.cwd,
+            resumeThreadId: opts.resumeSessionId,
+            initialPrompt: opts.initialPrompt,
+            rollAccountIds: opts.rollAccountIds,
+            rollPrompt: opts.rollPrompt,
+            slackNotify: opts.slackNotify,
+            bypassPermissions: opts.bypassPermissions,
+            title: opts.title,
+            model: opts.model
+          })
+        : core!.sessions.spawn(opts),
+    // What the roll above carries: the model the person picked, read off the session being rolled
+    // before it is killed. Terminal chains never reach this — the manager only knows chat sessions.
+    chosenModelOf: (id) => core!.chat.chosenModelOf(id),
+    // A chat session takes a turn, not keys: the text goes through the session driver and the Enter
+    // that follows it on a pty is a no-op here — the driver already sent the message. A refusal is
+    // logged rather than thrown, because every caller of this dep is a timer with nobody to tell.
+    write: (id, d) => {
+      if (!core!.chat.has(id)) {
+        core!.sessions.write(id, d)
+        return
+      }
+      if (d === ENTER) return
+      void sessionDriver
+        .deliver(id, d)
+        .catch((err) => rollingLog(`chat write refused session=${id}: ${String(err)}`))
+    },
+    kill: (id) => (core!.chat.has(id) ? core!.chat.kill(id) : core!.sessions.kill(id)),
     getAccount: (id) => {
       try {
         return core!.accounts.get(id)
@@ -599,7 +690,14 @@ app.whenReady().then(async () => {
         return null
       }
     },
-    readStatusPayload: (id) => core!.statusLinePayload(id),
+    // The same verdict the account panel and the resume dialog show. A chain asks it on its tick and
+    // skips an account that cannot authenticate (spec §15.2) — before this, a roll onto a logged-out
+    // account copied the transcript and respawned into a CLI that immediately failed. Memoised: see
+    // cachedLoginStatus above for why this path is and the IPC one is not.
+    loginStatus: cachedLoginStatus,
+    // A chat session writes no statusLine — it never calls the hook at all — so this would poll a file
+    // that is never written. ipc pushes the same two facts in through onChatMeta instead.
+    readStatusPayload: (id) => (core!.chat.has(id) ? Promise.resolve(null) : core!.statusLinePayload(id)),
     // What the limit evidence gate decides on. The screen phrase is only the trigger; whether to start a
     // roll or a wait is settled by asking the account for its usage — the statusLine snapshot freezes at
     // a stale value once a session halts on a limit, whereas this lookup is independent of session state.
@@ -692,13 +790,7 @@ app.whenReady().then(async () => {
         /* a desktop notification failure must not block rolling */
       }
     },
-    log: (m) => {
-      try {
-        appendFileSync(rollLog, `${new Date().toISOString()} ${m}\n`)
-      } catch {
-        /* a logging failure must not block rolling */
-      }
-    },
+    log: rollingLog,
     lang: () => core!.lang,
     blocks,
     persistConfig: (sid, cfg) => {
@@ -721,9 +813,39 @@ app.whenReady().then(async () => {
   // Codex account rolling. Uses the same log file and event channels as the Claude coordinator, but
   // does not depend on statusLine or Slack.
   const codexRolling = new CodexRollingCoordinator({
-    spawn: (opts) => core!.sessions.spawn(opts),
-    kill: (id) => core!.sessions.kill(id),
+    // Routed by kind exactly as the claude coordinator's is, and for the same reason — see its own
+    // comment. `resumePrompt` has no counterpart here: it is the argument behind `codex resume <id>`,
+    // and a chat session is not started from a command line, so a chat roll carries its prompt as
+    // `initialPrompt` (codexRolling.ts's roll() sends only that one for a chat chain).
+    spawn: (opts) =>
+      opts.kind === 'chat'
+        ? core!.chat.spawn({
+            account: opts.account,
+            cwd: opts.cwd,
+            resumeThreadId: opts.resumeSessionId,
+            initialPrompt: opts.initialPrompt,
+            rollAccountIds: opts.rollAccountIds,
+            rollPrompt: opts.rollPrompt,
+            slackNotify: opts.slackNotify,
+            bypassPermissions: opts.bypassPermissions,
+            title: opts.title
+          })
+        : core!.sessions.spawn(opts),
+    kill: (id) => (core!.chat.has(id) ? core!.chat.kill(id) : core!.sessions.kill(id)),
     write: (id, d) => {
+      if (core!.chat.has(id)) {
+        // A chat session takes a turn, not keys — the claude coordinator's write dep carries the whole
+        // argument. A chat chain reaches here from one place: `resumeInPlace`, the single-account path
+        // where a wait ends on the account the session is already on. Its carry-on text goes through the
+        // driver and the Enter that follows it on a pty is a no-op, because the driver has already sent
+        // the message. (The coordinator's other write is the answer to the model-switch prompt, which is
+        // a pty screen a chat session does not have.)
+        if (d === ENTER) return
+        void sessionDriver
+          .deliver(id, d)
+          .catch((err) => rollingLog(`[codex] chat write refused session=${id}: ${String(err)}`))
+        return
+      }
       try {
         core!.sessions.write(id, d)
       } catch {
@@ -737,6 +859,11 @@ app.whenReady().then(async () => {
         return null
       }
     },
+    // The same verdict the account panel and the resume dialog show. A chain asks it on its tick and
+    // skips an account that cannot authenticate (spec §15.2) — before this, a roll onto a logged-out
+    // account copied the transcript and respawned into a CLI that immediately failed. Memoised: see
+    // cachedLoginStatus above for why this path is and the IPC one is not.
+    loginStatus: cachedLoginStatus,
     send: (channel, payload) => {
       try {
         if (!win.isDestroyed()) win.webContents.send(channel, payload)
@@ -778,11 +905,37 @@ app.whenReady().then(async () => {
           // rollout file appears — without re-registering, both turn-completion notifications and the
           // usage chips stop for good after the switch. codexRolling is the codex-only coordinator
           // (ipc.ts's spawn branch already splits on provider), so every session reaching here is
-          // codex — re-checking the provider is unnecessary. Unconditional, matching the spawn path:
-          // the chips are needed whether or not this session asked for Slack, and the watcher gates
-          // the turn callback on info.slackNotify itself.
+          // codex — re-checking the provider is unnecessary. Unconditional for a pty session, matching
+          // the spawn path: the chips are needed whether or not this session asked for Slack, and the
+          // watcher gates the turn callback on info.slackNotify itself.
+          //
+          // **A chat session is registered here too, not just by its own `ready`.** A rolled chat
+          // session's `ready` only fires ~1–3s later, once the respawned CLI completes its handshake,
+          // and until then nothing in the watcher knows this session at all. What that costs is not
+          // notifications — they are off for a chat session (`{ notifyTurns: false }`, below: it
+          // announces its own turn ends from the protocol, so a watcher callback would make it two) —
+          // nor the usage chips, which `register` resets along with `limits`/`context` anyway. It is
+          // that `codexSessionIdFor` and `rolloutPathFor` have no answer for the new id during that
+          // window, and everything that asks them (the history-resume guard, the rollout lookups) is
+          // told this session does not exist. Registering here closes exactly that gap. `register`
+          // replaces the entry wholesale (codexRolloutWatcher.ts), so `ready`'s later re-register does
+          // not drift the flag back to its default; that is why the old Ruling 4c-6 skip is no longer
+          // needed here.
+          //
+          // The old registration's native id is read before it is dropped — `unregister` erases it —
+          // **and only when `p.dest` is there**, i.e. when this roll resumed the same thread onto a
+          // copied rollout. A blank-slate roll (Smart Resume) starts a *different* thread and
+          // codexRolling nulls `chain.codexSessionId` for it, so handing the old id over would have the
+          // watcher's own `findRollout` narrow its search to the dead thread and hide the new rollout
+          // for the whole handshake window.
+          const rolledChatId = core!.chat.has(p.info.id)
+            ? p.dest
+              ? codexRollout.codexSessionIdFor(p.oldSessionId) ?? undefined
+              : undefined
+            : null
           codexRollout.unregister(p.oldSessionId)
-          codexRollout.register(p.info, p.dest)
+          if (rolledChatId !== null) codexRollout.register(p.info, p.dest, rolledChatId, { notifyTurns: false })
+          else if (!core!.chat.has(p.info.id)) codexRollout.register(p.info, p.dest)
         } else if (channel === 'session:rollState') {
           // codex rolling sends session:rollState too (switching/waiting/adopted/none) — suppress the
           // resume window. 'adopted' is not one of the states that suppresses: it says a chain taken
@@ -831,13 +984,7 @@ app.whenReady().then(async () => {
         /* a desktop notification failure must not block rolling */
       }
     },
-    log: (m) => {
-      try {
-        appendFileSync(rollLog, `${new Date().toISOString()} [codex] ${m}\n`)
-      } catch {
-        /* a logging failure must not block rolling */
-      }
-    },
+    log: (m) => rollingLog(`[codex] ${m}`),
     lang: () => core!.lang,
     blocks,
     persistConfig: (sid, cfg) => {
@@ -882,6 +1029,7 @@ app.whenReady().then(async () => {
     core,
     win,
     attention, // required (ipc.ts's own comment says why it moved ahead of the optional parameters)
+    pendingPrompt,
     rolling,
     {
       notifier: slack,
@@ -1156,6 +1304,17 @@ app.on('will-quit', () => {
       core.sessions.kill(s.id)
     } catch {
       /* so one failed kill does not block cleanup of the remaining sessions */
+    }
+  }
+  // The chat sessions' line processes, on exactly the same terms. Their handles carry the same
+  // `outlivesApp` the router wrote onto the ptys, so the Host's are left running and the app's own
+  // children are ended — an orphaned `codex app-server` would otherwise sit there with nobody able to
+  // reach it, which is the same harm the loop above exists to prevent.
+  for (const s of core.chat.runningAppOwned()) {
+    try {
+      core.chat.kill(s.id)
+    } catch {
+      /* so one failed kill does not block cleanup of the remaining chat sessions */
     }
   }
   try {

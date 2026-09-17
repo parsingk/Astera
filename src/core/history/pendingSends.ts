@@ -60,6 +60,42 @@ export function unsettledSends(
 }
 
 /**
+ * Takes one copy back, by id.
+ *
+ * For the send that was refused rather than delayed. `unsettledSends` above lets a copy go on two
+ * grounds only — the transcript grew the turn, or it got old — and neither fits a send the CLI
+ * answered with a refusal: the turn will never be written, and the copy would sit there claiming the
+ * message went through for the whole minute it takes to age out, next to a toast saying it did not.
+ *
+ * The same list back when the id is not among them.
+ */
+export function dropPending(pending: readonly PendingSend[], id: string): PendingSend[] {
+  const next = pending.filter((p) => p.id !== id)
+  return next.length === pending.length ? (pending as PendingSend[]) : next
+}
+
+/**
+ * Whether the CLI is doing something right now, for the mark that says so.
+ *
+ * Deliberately broader than `isAwaitingReply` below, and separate from it because the two answer
+ * different questions. That one asks whether the person's own last word is still unanswered, and the
+ * composer's stop button hangs off it — widening it would take away the ability to type a message
+ * while the CLI works, which both CLIs accept and queue.
+ *
+ * This one asks only "is anything happening", which is what someone watching the conversation needs
+ * to know and could not tell: picking a choice and sending it leaves the transcript's last turn the
+ * assistant's, so the shape isAwaitingReply reads says "answered" while the CLI is busy acting on the
+ * answer just given. Nothing moved on screen for the whole of it.
+ *
+ * Two grounds, either of them enough. A copy of a send the transcript has not caught up with covers
+ * the gap before the CLI has started at all; `cliBusy` — the CLI's own word about itself, read off
+ * its screen or its status — covers everything after.
+ */
+export function isWorkingNow(pendingCount: number, cliBusy: boolean): boolean {
+  return pendingCount > 0 || cliBusy
+}
+
+/**
  * Whether the person's last word is still unanswered.
  *
  * True from the moment something is sent until an assistant turn follows it. What it is for is a

@@ -36,6 +36,20 @@ export function resumeAccountOptions(
 }
 
 /**
+ * Whether the resume modal may offer 대화 (a chat session) right now (pure function).
+ *
+ * Since slice 4c the chat spawn path copies the transcript into the chosen account's config dir
+ * exactly as the terminal path does (spec §8.4), so a 대화 no longer needs to stay on the transcript's
+ * own account — any logged-in account of the transcript's provider can continue it (Ruling S3-9
+ * superseded). `resumeAccountOptions` already narrows the picker to that set, so whatever is selected
+ * here is already an eligible account; the only things left to check are `chatEnabled` (the Host's own
+ * answer, from useChatAvailability) and that something is actually selected.
+ */
+export function resumeChatAllowed(a: { chatEnabled: boolean; selectedId: string }): boolean {
+  return a.chatEnabled && a.selectedId !== ''
+}
+
+/**
  * Computes the roll account order to restore on a history resume (pure function).
  * Removes accounts that no longer exist from the saved order and cyclically reorders it so the
  * resume target account comes first (because --resume has to run on the account that holds the
@@ -78,4 +92,15 @@ export function resumeRollAccountIds(
   const sameProvider = accounts.filter((a) => providerOf(a) === provider).map((a) => a.id)
   const chain = restoreRollAccountIds(savedIds, selectedId, sameProvider)
   return chain.length > 0 ? chain : [selectedId]
+}
+
+/** The roll-chain slots a dialog may offer: every account except one the login probe has answered
+ *  "no" for. An account the probe has not answered yet (undefined) is kept — the map is empty on the
+ *  first render, and hiding on unknown would blank the list before any answer arrives. Only the chain
+ *  slots use this; the primary account stays the user's own choice (spec §15.4). */
+export function rollChainCandidates(
+  ids: string[],
+  loginMap: Record<string, boolean | undefined>
+): string[] {
+  return ids.filter((id) => loginMap[id] !== false)
 }

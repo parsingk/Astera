@@ -30,6 +30,7 @@ import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
 import {
   PendingBanner,
+  ChatNotice,
   ExitedNotice,
   QueuedNotice,
   RunningNotice,
@@ -54,13 +55,16 @@ import {
 } from "../../../../core/commands/slashCommands";
 import { fileTokenAt } from "../../../../core/files/fileMatch";
 import { draftOf, forgetDraft, keepDraft } from "./drafts";
+import { rememberAskAnswers, recallAskAnswers, forgetOtherAskAnswers } from "./askDrafts";
 import { promptLinesOf, isFolderTrustPrompt, hasInputLine } from "../../../../core/history/promptLines";
 import { cliBusyOf } from "../../../../core/history/cliBusy";
 import { queuedMessagesOf } from "../../../../core/history/queuedMessages";
 import {
   isAwaitingReply,
+  isWorkingNow,
   sendPending,
   unsettledSends,
+  dropPending,
   type PendingSend
 } from "../../../../core/history/pendingSends";
 import {
@@ -68,10 +72,28 @@ import {
   stepToward,
   type PromptChoice
 } from "../../../../core/history/promptChoices";
+import {
+  parseAskUserQuestion,
+  emptyAnswers,
+  togglePick,
+  setOther,
+  allAnswered,
+  type Answer,
+  type AskForm
+} from "../../../../core/prompts/askUserQuestion";
+import { askStageOf, askCardStateOf, type AskStage } from "../../../../core/prompts/askScreen";
+import { describeToolRequest } from "../../../../core/prompts/toolRequest";
+import { driveAsk, type AskStopReason, type AskOutcome } from "./askDriver";
+import { QuestionCard } from "./QuestionCard";
+import { ChatRequestCard } from "./ChatRequestCard";
 import * as sessionBus from "../../lib/sessionBus";
+import { useChatState } from "../../hooks/useChatState";
+import { toast } from "../../lib/toast";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
-import type { Attention } from "../../../../core/types";
+import type { Attention, PendingToolPrompt, RollStateEvent, SchedStateEvent } from "../../../../core/types";
+import { chatBannerFor, composerLockedFor, type PaneTransport } from "./paneTransport";
+import { SessionStateBanners, stateBannerHeight } from "../SessionStateBanners";
 
 export interface ConversationPaneProps {
   sessionId: string;
@@ -87,6 +109,20 @@ export interface ConversationPaneProps {
    *  neighbouring conversation left the caret in the pane you came from — the marker said one session
    *  and the typing went to another. */
   active?: boolean;
+  /** Task 8: which protocol this pane's session speaks — PaneGrid passes `{ kind: 'chat' }` for a
+   *  chat session's slot (its only view) and otherwise leaves this at its terminal default.
+   *
+   *  `'chat'` is the whole of the difference below: nothing reads the CLI's screen (there is no
+   *  terminal to read), nothing writes a key to a pty, and everything a terminal session drives by
+   *  typing — the turn, the interrupt, the model, the answer to a waiting question — goes through
+   *  `window.api.chat.*` instead. Every branch is written `isChat ? … : <what a terminal does>`, so
+   *  a terminal session's path through this file is exactly what it was. */
+  transport?: PaneTransport;
+  /** The rolling and schedule banners (chat-sessions slice 4 §5.6): PaneGrid passes the per-session
+   *  events it already holds for TerminalView. Absent for a terminal session's conversation view — its
+   *  TerminalView shows them. */
+  rollState?: RollStateEvent | null;
+  schedState?: SchedStateEvent | null;
 }
 
 // ---- pure functions ------------------------------------------------------------------------
@@ -190,6 +226,18 @@ export function nextAttentionFor(
 }
 
 /**
+ * What this pane's waiting tool call becomes after a `conversation:pendingPrompt` event — `undefined`
+ * means "not mine", the caller's cue to leave it exactly as it is. Same rule as `nextAttentionFor`,
+ * for the same reason: the event fires for every session app-wide.
+ */
+export function nextPendingPromptFor(
+  paneSessionId: string,
+  event: { sessionId: string; prompt: PendingToolPrompt | null }
+): PendingToolPrompt | null | undefined {
+  return event.sessionId === paneSessionId ? event.prompt : undefined;
+}
+
+/**
  * One reading of the model layered onto what is already known.
  *
  * A null model is not "no model" — it is the CLI not having said. codex says it a turn at a time, so
@@ -272,6 +320,21 @@ export function shouldShowPrompt(attention: Attention, choiceCount: number, trus
 }
 
 /**
+ * Whether the question card, rather than the screen-quoting banner, takes the slot.
+ *
+ * The card is drawn from the hook's capture, which outlives the dialog when the question is declined
+ * on the terminal: Esc runs no tool, so no PostToolUse clears it, and Stop is a turn away. If the model
+ * then asks for an approval, the screen shows that prompt's rows while the capture still says
+ * "question". The card yields in exactly that case — the dialog is not on screen *and* the screen is
+ * offering choices of its own. With no choices on screen the card stays: that is the moment between
+ * the hook firing and the CLI drawing the dialog, when the card is right to say it is waiting.
+ */
+export function askCardShown(stage: AskStage | null, choiceCount: number): boolean {
+  if (stage === null) return false;
+  return stage.kind !== "none" || choiceCount === 0;
+}
+
+/**
  * Which rows to draw as buttons, given this tick's reading and the last one that had any.
  *
  * A CLI draws a dialog in pieces — the question first, its rows a moment later — so a poll that lands
@@ -351,17 +414,67 @@ export function isSlashCommand(text: string): boolean {
 }
 
 /**
+ * What to call the session's model before the CLI has said which one it is running.
+ *
+ * `configuredModel` is what the account's own settings choose (core/models/parse.ts's
+ * `configuredModelOf`), and it wins, because a chat session is launched without `--model` and the CLI
+ * therefore runs exactly that. It is resolved through the list rather than shown as written: the
+ * settings say `claude-fable-5-1[1m]` where `system/init` says `claude-fable-5-1`, both measured, so
+ * going through the list is what makes the label stop changing when the first turn finally reports it.
+ * A chosen model the list does not carry is still the right answer and is shown as written.
+ *
+ * The list's `default` entry is the fallback, and only that. It describes what the default *option*
+ * means, not what this session is set to, so naming it while the settings had chosen something else
+ * was simply wrong: on an account whose settings chose Fable the composer read "Default (recommended)"
+ * and the first turn came back Fable. With nothing chosen the CLI really does use the default, and
+ * then the entry is the right thing to name.
+ *
+ * Why any of this is needed: `system/init`, where a Claude chat session's model comes from, does not
+ * arrive at the handshake -- measured, a process sat 90 s without one while answering a `list_models`
+ * control request in 1.3 s. It arrives with the first turn. The model list carries no marker for the
+ * model in use and the initialize response carries no model at all, so the settings are the only
+ * source there is until then.
+ */
+export function pendingModelLabelOf(
+  models: readonly ModelDescriptor[],
+  configuredModel: string | null
+): string | null {
+  const entry = models.find((m) => (configuredModel === null ? m.isDefault : m.id === configuredModel))
+  if (entry === undefined) return configuredModel
+  return entry.resolvedModel ?? entry.name
+}
+
+/**
  * The one-line label for what the CLI is running under, or null when it has told us nothing worth
  * drawing. Effort alone is not worth a line: it means nothing without the model it belongs to.
+ *
+ * `fallbackModel` is what to draw while the CLI has reported no model at all — for a chat session,
+ * `pendingModelLabelOf` above, which names the model the account's settings choose.
+ * Without it a freshly opened chat pane sits on the bare "model" placeholder until someone sends
+ * something, because Claude names its model only on `system/init` and that arrives with the first
+ * turn. Drawn alone: an effort with no reported model still belongs to nothing.
  */
 export function modelLineOf(
   info: { model: string | null; effort: string | null },
-  format: (model: string, effort: string) => string
+  format: (model: string, effort: string) => string,
+  fallbackModel: string | null = null
 ): string | null {
-  if (info.model === null) return null;
-  if (info.effort === null) return info.model;
-  return format(info.model, info.effort);
+  if (info.model === null) return fallbackModel === null ? null : shortModelName(fallbackModel);
+  const model = shortModelName(info.model);
+  if (info.effort === null) return model;
+  return format(model, info.effort);
 }
+
+/** A model id as this app says it. Every Claude id carries the vendor's own name in front, and inside
+ *  this app that is never the question — a session belongs to one CLI or the other and the pane
+ *  already says which — so it is a third of a narrow button spent on nothing. Only that exact word and
+ *  only at the front: `my-claude-fork` and a model called `claude` are left alone, and codex's names
+ *  never had it. */
+function shortModelName(model: string): string {
+  return model.startsWith(VENDOR_PREFIX) ? model.slice(VENDOR_PREFIX.length) : model;
+}
+
+const VENDOR_PREFIX = "claude-";
 
 /** How long after the paste the return is sent. The two have to arrive as two chunks — together they
  *  reach the CLI as one, the return is swallowed into the paste, and nothing is submitted at all —
@@ -482,16 +595,50 @@ function ConversationBannerSlot(): ReactNode {
   return useContext(BannerSlotContext);
 }
 
+/** Whether the mark at the end of the output is up, and which state it names. Its own context for the
+ *  same reason the two above have one: the slot is a component *type* the Thread holds on to, so it is
+ *  fixed at module scope and everything that changes arrives through here. */
+const RunningSlotContext = createContext<{
+  show: boolean;
+  working: boolean;
+  onStop: () => void;
+}>({ show: false, working: false, onStop: () => {} });
+
+function ConversationRunningSlot(): ReactNode {
+  const { show, working, onStop } = useContext(RunningSlotContext);
+  if (!show) return null;
+  return <RunningNotice working={working} onStop={onStop} />;
+}
+
 function ComposerModelSlot(): ReactNode {
   const props = useContext(ModelSlotContext);
-  // Drawn as soon as the CLI is known, which is from the session's account rather than from anything
-  // it has said. What it is *set to* can genuinely be unknown for a while — codex reports its model a
-  // turn at a time, so a session that has not answered anything yet has none to report — and that is
-  // no reason to withhold the menu: the choices are the CLI's own either way, and the readout says it
-  // does not know yet. Nothing is drawn only when the account is gone and neither CLI can be told
-  // from the other, because the menus are not interchangeable.
+  // Drawn as soon as the CLI is known. For a terminal session that is the session's account; for a
+  // chat session it is the manager's word (`chat.provider`), which is null for the moment before
+  // `chat.state` answers. What the CLI is *set to* can genuinely be unknown for longer — codex
+  // reports its model a turn at a time, so a session that has not answered anything yet has none to
+  // report — and that is no reason to withhold the menu: the choices are the CLI's own either way,
+  // and the readout says it does not know yet. Nothing is drawn while `cli` is null — the account is
+  // gone, or the manager has not said yet — because the two CLIs' menus are not interchangeable and
+  // a placeholder would show one CLI's menu for the other.
   if (props === null || (props.cli !== 'claude' && props.cli !== 'codex')) return null;
   return <ModelControl {...props} />;
+}
+
+// ---- the chat transport's failures ------------------------------------------------------------
+
+/** What a rejected `window.api.chat.*` call reads as. An Error's own words when it has them, since
+ *  main puts the adapter's reason there, and the value itself otherwise. */
+function chatErrorText(err: unknown): string {
+  return String(err instanceof Error ? err.message : err);
+}
+
+/** Says so when a fire-and-forget `chat.*` call fails.
+ *
+ *  Every call the model menu makes is answered by an event rather than by its own promise, so there is
+ *  nothing waiting on the returned promise to notice a rejection — and a model that never changed,
+ *  with nothing said, looks exactly like a menu that ignored the press. */
+function sayIfFailed(call: Promise<void>): void {
+  void call.catch((err: unknown) => toast.error(chatErrorText(err)));
 }
 
 // ---- component ------------------------------------------------------------------------------
@@ -506,14 +653,42 @@ type Status = "loading" | "unavailable" | "ready";
  * lifecycle, the two event subscriptions, load-more's paging) or reads one of the pure functions
  * above. Nothing here decides what a tool row or the pending banner look like — those are Task 8's.
  */
-export function ConversationPane({ sessionId, onGoTerminal, active = false, exited = false }: ConversationPaneProps): ReactNode {
+export function ConversationPane({
+  sessionId,
+  onGoTerminal,
+  active = false,
+  exited = false,
+  transport = { kind: "terminal" },
+  rollState = null,
+  schedState = null
+}: ConversationPaneProps): ReactNode {
   const { t } = useI18n();
+  /** Read once and asked everywhere below, so the two transports can never be told apart two
+   *  different ways in the same render. */
+  const isChat = transport.kind === "chat";
+  /** A chat session's whole state — status, the request it is waiting on, its model, the last turn's
+   *  error — folded from `chat.state` and the `chat:event` stream (hooks/useChatState.ts). Null for a
+   *  terminal session, which subscribes to nothing. */
+  const chat = useChatState(sessionId, isChat);
+  /** `chat.status` without the optional chain, so the dependency arrays below stay plain reads. */
+  const chatStatus = chat === null ? null : chat.status;
   const [status, setStatus] = useState<Status>("loading");
   const [turns, setTurns] = useState<ConvTurn[]>([]);
   const [from, setFrom] = useState(0);
   const [more, setMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [attention, setAttention] = useState<Attention>("idle");
+  /** The tool call the CLI is waiting on, from the PreToolUse hook (main/pendingPrompt.ts). What the
+   *  question card is drawn from — never the screen (core/prompts/askUserQuestion.ts). */
+  const [pendingPrompt, setPendingPrompt] = useState<PendingToolPrompt | null>(null);
+  /** The answers being composed on the card, keyed by the call, so a card that re-renders *and
+   *  re-mounts* for the same question keeps them (askDrafts.ts) and a new question starts blank. */
+  const [askAnswers, setAskAnswers] = useState<{ toolUseId: string; answers: Answer[] } | null>(null);
+  /** The driver is sending keys. Stays true after a successful submit until PostToolUse clears the
+   *  capture — the card goes quiet rather than flickering into the "started on the terminal" state
+   *  while the review it just confirmed is still on screen. */
+  const [askAnswering, setAskAnswering] = useState(false);
+  const [askNotice, setAskNotice] = useState<AskStopReason | null>(null);
   // Set when a slash command is sent from here, cleared the moment anything comes back — see
   // SlashCommandNotice for what it says and why it is not the pending banner.
   const [slashSent, setSlashSent] = useState(false);
@@ -532,11 +707,27 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   const answeringRef = useRef(false);
   /** What this session's CLI says it can run. Asked once per session — see conversation.models. */
   const [models, setModels] = useState<readonly ModelDescriptor[]>([]);
-  const [modelInfo, setModelInfo] = useState<{
+  /** The model this session's own settings choose, for the composer to name before the first turn —
+   *  see pendingModelLabelOf. Asked once beside the model list, and null until the answer lands. */
+  const [configuredModel, setConfiguredModel] = useState<string | null>(null);
+  const [terminalModelInfo, setModelInfo] = useState<{
     model: string | null
     effort: string | null
     cli: 'claude' | 'codex' | null
   }>({ model: null, effort: null, cli: null });
+  /** What the model readout and its menu are looking at. A terminal session's comes from the rollout
+   *  and the CLI's own status bar, layered by the state above; a chat session's comes from the manager,
+   *  which is the only thing that knows — there is no screen to read and the rollout is a turn behind.
+   *  `cli` is the session's own provider once the manager has said (`chat.state`), and null until then:
+   *  the two CLIs' menus are not interchangeable, so the control is drawn only once it is known which
+   *  one this is (ComposerModelSlot), rather than guessed at for the moment before the answer lands. */
+  const modelInfo = isChat
+    ? {
+        model: chat === null ? null : chat.model.model,
+        effort: chat === null ? null : chat.model.effort,
+        cli: chat === null ? null : chat.provider
+      }
+    : terminalModelInfo;
 
   // Bumped by the mount effect on every run, and again in that same run's cleanup — so any callback
   // still holding a past run's captured `generation` value can tell, at any later point, whether the
@@ -603,6 +794,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     setFrom(0);
     setMore(false);
     setAttention("idle");
+    setPendingPrompt(null);
     setSlashSent(false);
     setModelInfo({ model: null, effort: null, cli: null });
     setComposerText("");
@@ -632,6 +824,25 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       })
       .catch(() => {});
 
+    // The waiting tool call, read once for the same reason attention is: the push fires only on a
+    // change, and a question already up when this pane mounts would otherwise not be drawn until the
+    // next one.
+    //
+    // Not for a chat session: that capture comes from a PreToolUse hook on a CLI holding a dialog on
+    // its own terminal, and a chat session has neither. What it is waiting on arrives as a
+    // `chat:event` request and is drawn by ChatRequestCard, so nothing here is asked for or
+    // subscribed to — `pendingPrompt` stays null, and with it `askForm`, `askStage` and `askCard`.
+    let sawLivePendingPrompt = false;
+    if (!isChat) {
+      void window.api.conversation
+        .pendingPrompt(sessionId)
+        .then((prompt) => {
+          if (!isCurrent() || sawLivePendingPrompt) return;
+          setPendingPrompt(prompt);
+        })
+        .catch(() => {});
+    }
+
     // Subscribed before `open()` resolves, on general principle rather than because a race is
     // plausible here: main starts following a session only from `open` (main/conversation.ts), and
     // its poll ticks no faster than once a second, so the first possible append is already far
@@ -641,6 +852,9 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     // Read once here and again on every turn, which is the one moment we know the CLI has just been
     // through a render and rewritten what we read this from.
     const readModel = (): void => {
+      // A chat session's model is the manager's to report (`chat:event` of type 'model'), and this
+      // one reads the rollout — a turn behind, and null until the first answer.
+      if (isChat) return;
       void window.api.conversation
         .model(sessionId)
         .then((info) => {
@@ -650,12 +864,17 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     };
     readModel();
 
-    void window.api.conversation
-      .commands(sessionId)
-      .then((list) => {
-        if (isCurrent()) setCommands(list);
-      })
-      .catch(() => {});
+    // What `/` offers, for the transport that can run it. A chat session is offered no `/` rows —
+    // those commands are the CLI's own, typed at a prompt it does not have (see `slashMatches`) — so
+    // the list is not asked for either.
+    if (!isChat) {
+      void window.api.conversation
+        .commands(sessionId)
+        .then((list) => {
+          if (isCurrent()) setCommands(list);
+        })
+        .catch(() => {});
+    }
 
     const offAppend = window.api.on("conversation:append", (e) => {
       if (!isCurrent()) return;
@@ -684,6 +903,16 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       sawLiveAttention = true;
       setAttention(next);
     });
+
+    const offPendingPrompt = isChat
+      ? (): void => {}
+      : window.api.on("conversation:pendingPrompt", (e) => {
+          if (!isCurrent()) return;
+          const next = nextPendingPromptFor(sessionId, e);
+          if (next === undefined) return;
+          sawLivePendingPrompt = true;
+          setPendingPrompt(next);
+        });
 
     void window.api.conversation
       .open(sessionId)
@@ -724,9 +953,10 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       slashSilenceRef.current = null;
       offAppend();
       offAttention();
+      offPendingPrompt();
       void window.api.conversation.close(sessionId);
     };
-  }, [sessionId]);
+  }, [sessionId, isChat]);
 
   // `open` answering null is a moment, not a verdict. A session that has only just started reports
   // its transcript path a beat after it comes up, and a session resumed from history does the same —
@@ -878,12 +1108,64 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   const sendTextRef = useRef<(text: string) => void | Promise<void>>(() => {});
 
   const interrupt = useCallback(async (): Promise<void> => {
+    // A chat session has no pty to press Escape on: the same stop is a request on the app-server, and
+    // the manager answers it with a status the pane hears back as an event.
+    //
+    // Said out loud when it fails, the way a send is: this is called as `void interruptRef.current()`
+    // and as the composer's own `onCancel`, so a rejection nobody catches is a stop that silently did
+    // not happen while the turn goes on running.
+    if (isChat) {
+      try {
+        await window.api.chat.interrupt(sessionId);
+      } catch (err) {
+        toast.error(chatErrorText(err));
+      }
+      return;
+    }
     window.api.sessions.write(sessionId, String.fromCharCode(27));
-  }, [sessionId]);
+  }, [isChat, sessionId]);
   interruptRef.current = interrupt;
 
   const sendText = useCallback(
     async (text: string) => {
+      // A chat session's turn goes to the app-server, and nothing here reads a screen on the way:
+      // there is none. `chat.send` rejects when the turn cannot start (a turn already running, the
+      // process gone), and that rejection is the only thing worth saying.
+      if (isChat) {
+        // Shown straight away, exactly as the terminal path below does it and for the same reason:
+        // the turn only really exists once the CLI writes it into the rollout, and until then the
+        // person's own words are nowhere on screen. The wait is not small. Claude flushes the user
+        // record within a moment, but codex writes it when the turn it started gets going — measured
+        // across this machine's last twelve rollouts, a median of 0.6 s and up to 3.8 s after the
+        // turn begins — and the view reads the file on a one-second poll on top of that. Someone
+        // watching several seconds of nothing after pressing Enter reads it as a send that failed,
+        // and reported it as one.
+        //
+        // The copy is set before the request rather than after it, because the request is itself part
+        // of the wait: codex's `turn/start` is awaited here. It lives exactly as long as it takes the
+        // real turn to arrive — pendingSends.ts settles it against the transcript, so the bubble is
+        // replaced by the record it was standing in for, never shown twice.
+        const echoId = crypto.randomUUID();
+        setPending((prev) => sendPending(prev, turns, text, echoId, Date.now()));
+        try {
+          await window.api.chat.send(sessionId, text);
+        } catch (err) {
+          // Refused, so nothing was sent and the copy has to go with the toast rather than sit there
+          // for a minute claiming otherwise. The text is still in the person's hands — the composer
+          // cleared, but the draft below was not thrown away, so leaving the tab and coming back
+          // offers it again to retry with.
+          setPending((prev) => dropPending(prev, echoId));
+          toast.error(chatErrorText(err));
+          return;
+        }
+        // It was sent; there is nothing left to put back. Without these two the pane's own cleanup
+        // writes the sent text back as this session's draft (`keepDraft`) and the next mount inserts
+        // it into the composer — a message already answered, sitting there ready to be sent twice.
+        // The same pair the terminal path runs below, and neither touches a screen.
+        forgetDraft(sessionId);
+        composerValueRef.current = null;
+        return;
+      }
       // The pty is the only channel there is — a person typing here and a person typing in the
       // terminal are doing the same thing. The typed turn is never pushed into `messages` locally:
       // it comes back through the transcript like every other turn, and adding it here would show
@@ -933,7 +1215,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       window.api.sessions.write(sessionId, paste);
       setTimeout(() => window.api.sessions.write(sessionId, submit), SUBMIT_GAP_MS);
     },
-    [sessionId, turns]
+    [isChat, sessionId, turns]
   );
   sendTextRef.current = sendText;
 
@@ -987,6 +1269,10 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     return () => clearTimeout(timer);
   }, [sessionId]);
   useEffect(() => {
+    // Nothing registers a screen for a chat session — there is no terminal beside it — so there is
+    // nothing to poll and no reading to wait for. `promptLines` stays empty, and with it `trustPrompt`
+    // false and `choices` none; the composer's lock comes from composerLockedFor instead.
+    if (isChat) return;
     if (!readPromptScreen) {
       setPromptLines([]);
       return;
@@ -1004,7 +1290,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     // the reader as it mounts, which is the same moment this pane is mounting beside it.
     const timer = setInterval(read, seenScreen ? PROMPT_POLL_MS : PROMPT_FIRST_POLL_MS);
     return () => clearInterval(timer);
-  }, [readPromptScreen, seenScreen, sessionId]);
+  }, [isChat, readPromptScreen, seenScreen, sessionId]);
 
   // The rows of that same quote, as something to press. They come out of the quote rather than
   // alongside it, so what the buttons say and what the banner shows can never be two different
@@ -1051,6 +1337,77 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   if (fresh.length > 0) heldChoices.current = fresh;
   else if (!trustPrompt) heldChoices.current = [];
   const [answering, setAnswering] = useState(false);
+
+  // ---- The question card (core/prompts/askUserQuestion.ts, askScreen.ts; ./askDriver.ts) ----
+  /** The question as a form, when the waiting call is an AskUserQuestion whose input reads in full.
+   *  null falls back to the banner below, which quotes the screen as it always has. */
+  const askForm = useMemo<AskForm | null>(
+    () =>
+      pendingPrompt !== null && pendingPrompt.tool === "AskUserQuestion"
+        ? parseAskUserQuestion(pendingPrompt.input)
+        : null,
+    [pendingPrompt]
+  );
+  /** Where the dialog is on the terminal right now — decides whether the card may drive it. */
+  const askStage = useMemo(() => (askForm === null ? null : askStageOf(screenLines, askForm)), [askForm, screenLines]);
+  // A new call starts with blank answers and a clean slate; the same call keeps what was composed.
+  useEffect(() => {
+    if (askForm === null || pendingPrompt === null) {
+      setAskAnswers(null);
+      setAskAnswering(false);
+      setAskNotice(null);
+      return;
+    }
+    const toolUseId = pendingPrompt.toolUseId;
+    forgetOtherAskAnswers(toolUseId);
+    setAskAnswers((prev) =>
+      prev !== null && prev.toolUseId === toolUseId
+        ? prev
+        : { toolUseId, answers: recallAskAnswers(toolUseId) ?? emptyAnswers(askForm) }
+    );
+    setAskAnswering(false);
+    setAskNotice(null);
+  }, [askForm, pendingPrompt]);
+
+  // Kept outside the component as well, so a toggle to the terminal and back finds them (askDrafts.ts).
+  useEffect(() => {
+    if (askAnswers !== null) rememberAskAnswers(askAnswers.toolUseId, askAnswers.answers);
+  }, [askAnswers]);
+
+  /**
+   * Sends the card's answers to the dialog. The driver reads the screen before every key and confirms
+   * only against a matching review (askDriver.ts). A stop keeps the answers and shows why; a submit
+   * leaves the card quiet until PostToolUse clears the capture (the effect above resets everything).
+   */
+  const submitAsk = useCallback(async (): Promise<void> => {
+    if (askForm === null || askAnswers === null || askAnswering) return;
+    if (!allAnswered(askForm, askAnswers.answers)) return;
+    setAskAnswering(true);
+    setAskNotice(null);
+    // Which mount this press belongs to. The pane resets everything on a sessionId change, and a
+    // result arriving after that must not write a stale notice onto the next session's card.
+    const generation = generationRef.current;
+    let result: AskOutcome;
+    try {
+      result = await driveAsk({
+        form: askForm,
+        answers: askAnswers.answers,
+        readScreen: () => sessionBus.screenOf(sessionId),
+        write: (keys) => window.api.sessions.write(sessionId, keys),
+        wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+      });
+    } catch {
+      // The driver only reads and writes through the two callbacks above; a throw here is a screen
+      // reader or a pty write failing. The dialog is untouched, so it is the same situation as `stuck`.
+      result = { outcome: "stopped", reason: "stuck", stage: { kind: "none" } };
+    }
+    if (generationRef.current !== generation) return;
+    if (result.outcome === "stopped") {
+      setAskNotice(result.reason);
+      setAskAnswering(false);
+    }
+    // 'submitted' keeps the card quiet until PostToolUse clears the capture (the effect above resets).
+  }, [askForm, askAnswers, askAnswering, sessionId]);
 
   /**
    * Answers one of those rows on the CLI's own screen.
@@ -1102,7 +1459,10 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   // which is what a person means by dismissing a suggestion rather than abandoning the command.
   // State, not a ref: the listener below sets it, and only a state change redraws the banner slot.
   const [slashDismissed, setSlashDismissed] = useState(false);
-  const slashMatches = slashDismissed ? null : filterSlashCommands(commands, composerText);
+  // A chat session is offered no `/` rows: those commands are the CLI's own, run by typing them at a
+  // prompt this session does not have. `@` file rows stay — they are only text, and the path they put
+  // in the message is read by whatever is on the other end either way.
+  const slashMatches = slashDismissed || isChat ? null : filterSlashCommands(commands, composerText);
 
   // `@` is looked for only when `/` is not answering: a line that starts a command is not also naming
   // a file, and two menus over one composer would have to fight over the same Enter.
@@ -1359,8 +1719,14 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     };
   }, [status]);
 
-  const modelLine = modelLineOf(modelInfo, (model, effort) =>
-    t("conversation.model.line", { model, effort })
+  // Before the first turn a chat session's CLI has said nothing about its model (see modelLineOf), but
+  // the model list it answered at the handshake names the account's default; a terminal session reads
+  // its model off the screen and needs no stand-in.
+  const defaultModelFallback = isChat ? pendingModelLabelOf(models, configuredModel) : null;
+  const modelLine = modelLineOf(
+    modelInfo,
+    (model, effort) => t("conversation.model.line", { model, effort }),
+    defaultModelFallback
   );
 
   // The same two writes the composer makes, for a command a control sends rather than a person types.
@@ -1397,6 +1763,9 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   // it rather than on a clock.
   const [queued, setQueued] = useState<readonly string[]>([]);
   useEffect(() => {
+    // A chat session queues nothing of its own — a turn is either running or it is not, and the pane
+    // will not take a second one while one is — and there is no screen to read a queue off anyway.
+    if (isChat) return;
     const read = (): void => {
       const screen = sessionBus.screenOf(sessionId);
       if (screen === null) return;
@@ -1415,7 +1784,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       clearTimeout(settle);
       stop();
     };
-  }, [sessionId]);
+  }, [isChat, sessionId]);
 
   // ...and put back when it comes back. The composer belongs to the Thread and appears a moment
   // after this pane does, so this waits for it rather than assuming it. `insertText` rather than a
@@ -1457,6 +1826,9 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   //
   // Claude needs none of this: it writes a statusline the app already receives.
   useEffect(() => {
+    // Neither CLI's chat session has a bar to read: there is no terminal at all. The manager says what
+    // the model is, on the event stream, the moment it changes (see `modelInfo` above).
+    if (isChat) return;
     if (modelInfo.cli !== "codex") return;
     const read = (): boolean => {
       const screen = sessionBus.screenOf(sessionId);
@@ -1485,7 +1857,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       clearTimeout(settle);
       stop();
     };
-  }, [modelInfo.cli, sessionId]);
+  }, [isChat, modelInfo.cli, sessionId]);
 
   // What this session's CLI offers. Asked once when the pane opens rather than watched: the answer
   // depends on the account's subscription and its organisation's policy, neither of which changes
@@ -1493,10 +1865,26 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   useEffect(() => {
     let current = true;
     setModels([]);
-    void window.api.conversation
-      .models(sessionId)
-      .then((result) => {
-        if (current) setModels(result.models);
+    setConfiguredModel(null);
+    // Asked beside the list because it is the other half of the same question — which model is this
+    // session on — and the list alone cannot answer it. Its own failure is silent for the same reason
+    // the list's is: the composer falls back to naming the list's default, which is what it did before
+    // this existed.
+    if (isChat)
+      void window.api.chat
+        .configuredModel(sessionId)
+        .then((model) => {
+          if (current) setConfiguredModel(model);
+        })
+        .catch(() => {});
+    // A chat session asks its own adapter, which has the app-server's answer for this thread; the
+    // `conversation.models` route reads an account's CLI and is not the same question.
+    const asked: Promise<readonly ModelDescriptor[]> = isChat
+      ? window.api.chat.listModels(sessionId)
+      : window.api.conversation.models(sessionId).then((result) => result.models);
+    void asked
+      .then((list) => {
+        if (current) setModels(list);
       })
       .catch(() => {
         // The menu offers no models; the CLI's own screen still does.
@@ -1504,7 +1892,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     return () => {
       current = false;
     };
-  }, [sessionId]);
+  }, [isChat, sessionId]);
 
   /**
    * Read the model back until `moved` says it has, and answer whether it did.
@@ -1636,55 +2024,94 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     [sendCommand, waitForCodexStep, goTerminal, sessionId]
   );
 
+  /** Whether this chat session is in plan mode right now. False for a terminal session, which has no
+   *  such switch — its `/plan` is a command on its own screen. */
+  const planMode = chat === null ? false : chat.model.planMode;
+
   const modelSlot = useMemo<ModelControlProps>(
-    () => ({
-      line: modelLine,
-      onPickModel: (key) => {
-        if (modelInfo.cli === 'codex') {
-          void pickCodexModel(key);
-          return;
-        }
-        const was = modelInfo.model;
-        setModelBusy(true);
-        sendCommand(`/model ${key}`);
-        // Switching to another family asks first, because the conversation is cached for the model it
-        // is on — and it asks on the CLI's own screen, which is not this one. Nothing here can tell in
-        // advance which switches ask, so the evidence is that the model never moved: either something
-        // is waiting over there, or it was already this model and the notice costs a glance. Cleared
-        // when it did move: a switch that went through has nothing to explain.
-        void rereadModelUntil((info) => info.model !== was).then((moved) => {
-          setModelBusy(false);
-          setSlashSent(!moved);
-        });
-      },
-      onPickEffort: (key) => {
-        if (modelInfo.cli === 'codex') {
-          void pickCodexEffort(key);
-          return;
-        }
-        // Claude's own screen is a slider, but the command takes the name outright, so there is
-        // nothing to drive (measured 2026-09-12: `/effort high` answered "Set effort level to high").
-        // It is saved as the default for new sessions, which is what that screen's Enter does too.
-        const was = modelInfo.effort;
-        setModelBusy(true);
-        sendCommand(`/effort ${key}`);
-        void rereadModelUntil((info) => info.effort !== was).then(() => setModelBusy(false));
-      },
-      onChangeEffort: () => {
-        // What the rows above do not cover: Claude's `s` (this session only) and codex's Max and
-        // Ultra, both of which live one screen further in. Open the CLI's own screen for those.
-        sendCommand(modelInfo.cli === 'codex' ? "/model" : "/effort");
-        goTerminal();
-      },
-      busy: modelBusy,
-      effortLabel: t("conversation.model.effortMore"),
-      cli: modelInfo.cli,
-      effortChoices: effortChoicesOf(models, modelInfo.model, modelInfo.cli),
-      choices: modelChoicesOf(models)
-    }),
+    () =>
+      isChat
+        ? {
+            // A chat session's menu asks the manager outright: no command is typed anywhere, no
+            // picker is walked, and the answer comes back as a `model` event — which is why nothing
+            // here has to say it is busy. Nothing is left over for `onChangeEffort` either: the
+            // levels this can set are the whole of what there is, and there is no screen to send
+            // anyone to for the rest — so the row is not offered at all (ModelControl.tsx).
+            line: modelLine,
+            cli: modelInfo.cli,
+            choices: modelChoicesOf(models),
+            onPickModel: (key) => sayIfFailed(window.api.chat.setModel(sessionId, key, modelInfo.effort)),
+            // Claude's chat protocol has no effort channel at all — its `set_model` control request
+            // carries only the model (claudeAdapter.ts's doSetModel) — so effortChoicesOf's rows
+            // (its models still report levels; only codex's own picker gets filtered) would offer a
+            // control that does nothing. Codex keeps the rows the terminal picker offers.
+            effortChoices: modelInfo.cli === "claude" ? [] : effortChoicesOf(models, modelInfo.model, "codex"),
+            onPickEffort: (level) => {
+              // setModel takes the pair, and an effort on its own is not a pair: the model it belongs
+              // to is whatever this thread is on, or the default the list marks when it has not said
+              // yet. With neither there is nothing honest to send.
+              const model = modelInfo.model ?? models.find((m) => m.isDefault)?.id ?? "";
+              if (model === "") return;
+              sayIfFailed(window.api.chat.setModel(sessionId, model, level));
+            },
+            busy: false,
+            planMode,
+            onTogglePlan: () => sayIfFailed(window.api.chat.setPlanMode(sessionId, !planMode))
+          }
+        : {
+            line: modelLine,
+            onPickModel: (key) => {
+              if (modelInfo.cli === 'codex') {
+                void pickCodexModel(key);
+                return;
+              }
+              const was = modelInfo.model;
+              setModelBusy(true);
+              sendCommand(`/model ${key}`);
+              // Switching to another family asks first, because the conversation is cached for the
+              // model it is on — and it asks on the CLI's own screen, which is not this one. Nothing
+              // here can tell in advance which switches ask, so the evidence is that the model never
+              // moved: either something is waiting over there, or it was already this model and the
+              // notice costs a glance. Cleared when it did move: a switch that went through has
+              // nothing to explain.
+              void rereadModelUntil((info) => info.model !== was).then((moved) => {
+                setModelBusy(false);
+                setSlashSent(!moved);
+              });
+            },
+            onPickEffort: (key) => {
+              if (modelInfo.cli === 'codex') {
+                void pickCodexEffort(key);
+                return;
+              }
+              // Claude's own screen is a slider, but the command takes the name outright, so there is
+              // nothing to drive (measured 2026-09-12: `/effort high` answered "Set effort level to
+              // high"). It is saved as the default for new sessions, which is what that screen's
+              // Enter does too.
+              const was = modelInfo.effort;
+              setModelBusy(true);
+              sendCommand(`/effort ${key}`);
+              void rereadModelUntil((info) => info.effort !== was).then(() => setModelBusy(false));
+            },
+            onChangeEffort: () => {
+              // What the rows above do not cover: Claude's `s` (this session only) and codex's Max
+              // and Ultra, both of which live one screen further in. Open the CLI's own screen for
+              // those.
+              sendCommand(modelInfo.cli === 'codex' ? "/model" : "/effort");
+              goTerminal();
+            },
+            busy: modelBusy,
+            effortLabel: t("conversation.model.effortMore"),
+            cli: modelInfo.cli,
+            effortChoices: effortChoicesOf(models, modelInfo.model, modelInfo.cli),
+            choices: modelChoicesOf(models)
+          },
     [
+      isChat,
+      planMode,
       modelLine,
       modelInfo.model,
+      modelInfo.effort,
       modelInfo.cli,
       modelBusy,
       models,
@@ -1701,15 +2128,106 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
   // An answer that is actually being waited on outranks everything; after that, a list being typed
   // into outranks a note about a command already sent.
   // Which of the two the prompt branch takes is shouldShowPrompt's rule, above.
+  // A parsed question outranks the banner: it is the same waiting decision, drawn from the model's own
+  // call rather than from the screen.
   /** A turn this pane sent is still unanswered. Drives the notice and, through `isRunning`, what the
    *  composer's own button is offering to do. */
   /** What the CLI says it is doing, read off its own screen — the authority on whether anything is
-   *  still in flight. See core/history/cliBusy.ts. */
-  const cliBusy = useMemo(() => cliBusyOf(screenLines), [screenLines]);
+   *  still in flight. See core/history/cliBusy.ts.
+   *
+   *  A chat session says it itself: the manager reports `working` for as long as a turn is running,
+   *  which is the same fact, arrived at without a screen to read it off. */
+  const cliBusy = useMemo(
+    () => (isChat ? chatStatus === "working" : cliBusyOf(screenLines)),
+    [isChat, chatStatus, screenLines]
+  );
   const awaitingReply = isAwaitingReply(turns, pending.length, cliBusy);
   isRunningRef.current = awaitingReply;
-  const banner: ReactNode = exited ? (
+  /** The mark at the end of the output. Broader than `awaitingReply` on purpose — see isWorkingNow's
+   *  own doc — because that one carries the composer's stop button and must not widen with it.
+   *
+   *  Memoised into one object because it is a context value the Thread's slot reads: a fresh object
+   *  every render would re-render that slot on every keystroke in the composer beside it. */
+  const runningSlot = useMemo(
+    () => ({
+      show: isWorkingNow(pending.length, cliBusy),
+      working: isChat ? chatStatus === "working" : attention === "working",
+      // Through the ref, so the memo does not rebuild — and so the button presses the very same stop
+      // Escape does, rather than a second path that could drift from it.
+      onStop: () => void interruptRef.current()
+    }),
+    [pending.length, cliBusy, isChat, chatStatus, attention]
+  );
+  const askCard: ReactNode =
+    askForm !== null &&
+    pendingPrompt !== null &&
+    askAnswers !== null &&
+    askAnswers.toolUseId === pendingPrompt.toolUseId &&
+    askCardShown(askStage, choices.length) ? (
+      <QuestionCard
+        form={askForm}
+        answers={askAnswers.answers}
+        state={askCardStateOf(askStage ?? { kind: "none" }, askAnswering)}
+        notice={askNotice}
+        canSubmit={allAnswered(askForm, askAnswers.answers)}
+        onToggle={(q, option) =>
+          setAskAnswers((prev) => (prev === null ? prev : { ...prev, answers: togglePick(askForm, prev.answers, q, option) }))
+        }
+        onOther={(q, text) =>
+          setAskAnswers((prev) => (prev === null ? prev : { ...prev, answers: setOther(askForm, prev.answers, q, text) }))
+        }
+        onSubmit={() => void submitAsk()}
+        onGoTerminal={goTerminal}
+      />
+    ) : null;
+  /** What an approval prompt is about, when the hook captured its call (Slack or rolling sessions carry
+   *  the full tool pair; others have no capture and the banner reads as before). */
+  const about =
+    pendingPrompt !== null && pendingPrompt.tool !== "AskUserQuestion"
+      ? describeToolRequest(pendingPrompt.tool, pendingPrompt.input)
+      : null;
+  /** The `@` menu, which both transports offer and neither changes. Built once so the two chains
+   *  below cannot come apart over it. */
+  const completionMenu: ReactNode = (
+    <CompletionMenu
+      rows={rows}
+      active={Math.min(slashActive, Math.max(rows.length - 1, 0))}
+      onPick={takeRow}
+      onHover={setSlashActive}
+    />
+  );
+  /** What a chat session's banner slot is for, in the order paneTransport.ts sets out. Null for a
+   *  terminal session, which does not ask: its chain below never reads this. */
+  const chatBanner = isChat ? chatBannerFor(chat) : null;
+  const banner: ReactNode = isChat ? (
+    // No PendingBanner and no ask card here: both are drawn from a terminal's screen and a hook's
+    // capture. A chat session's one waiting decision is `chat.request`, and ChatRequestCard draws it
+    // — the question through the very same QuestionCard, the approval with its own buttons.
+    exited ? (
+      <ExitedNotice onGoTerminal={null} />
+    ) : chatBanner?.kind === "request" ? (
+      // Keyed on the request so a new one gets a new card: the old one's `busy`/`submitting` state
+      // would otherwise survive into it, and the person would meet a card whose buttons are already
+      // disabled by an answer they gave to something else.
+      <ChatRequestCard
+        key={chatBanner.request.id}
+        sessionId={sessionId}
+        request={chatBanner.request}
+        provider={chat === null ? "codex" : chat.provider}
+      />
+    ) : chatBanner?.kind === "error" ? (
+      <ChatNotice text={t("chat.notice.error", { message: chatBanner.message })} />
+    ) : chatBanner?.kind === "checking" ? (
+      <ChatNotice text={t("chat.notice.checking")} />
+    ) : chatBanner?.kind === "endsWithApp" ? (
+      <ChatNotice text={t("chat.notice.endsWithApp")} />
+    ) : slashOpen ? (
+      completionMenu
+    ) : null
+  ) : exited ? (
       <ExitedNotice onGoTerminal={goTerminal} />
+    ) : askCard !== null ? (
+      askCard
     ) : shouldShowPrompt(attention, choices.length, trustPrompt) ? (
       <PendingBanner
         onGoTerminal={goTerminal}
@@ -1718,18 +2236,12 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
         onChoose={(choice) => void answerChoice(choice)}
         answering={answering}
         trust={trustPrompt}
+        about={about}
       />
     ) : slashOpen ? (
-      <CompletionMenu
-        rows={rows}
-        active={Math.min(slashActive, Math.max(rows.length - 1, 0))}
-        onPick={takeRow}
-        onHover={setSlashActive}
-      />
+      completionMenu
     ) : queued.length > 0 ? (
       <QueuedNotice messages={queued} onGoTerminal={goTerminal} />
-    ) : awaitingReply ? (
-      <RunningNotice working={attention === "working"} />
     ) : slashSent ? (
       <SlashCommandNotice onGoTerminal={goTerminal} />
     ) : null;
@@ -1740,6 +2252,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       ToolFallback: ToolRow,
       ToolGroup: ToolRowGroup,
       Banner: ConversationBannerSlot,
+      Running: ConversationRunningSlot,
       ComposerExtras: ComposerModelSlot,
     }),
     [Welcome]
@@ -1764,7 +2277,13 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     // line, and **discards typed text outright**. That is the bug this started from — a person typed
     // into an open composer, nothing was sent anywhere, and the session looked dead. Its two rows are
     // drawn as buttons right above, so nothing is lost by closing the box that cannot work.
-    isDisabled: exited || composerLocked(trustPrompt, cliTakesTyping, waitedForScreen),
+    //
+    // A chat session's lock is a different question with the same two answers, so composerLockedFor
+    // (paneTransport.ts) takes this one and decides: shut while a request is up — it is answered on
+    // the card above, not by typing — and shut until the state has arrived at all.
+    isDisabled:
+      exited ||
+      composerLockedFor(transport, chat, composerLocked(trustPrompt, cliTakesTyping, waitedForScreen)),
     // `isRunning` with a real `onCancel` behind it. The note that used to sit here said there was no
     // cancel path to give this adapter and so no honest way to set the flag; there is one now — the
     // CLI stops on Escape, which is how a person stops it in the terminal — and with it the composer's
@@ -1781,12 +2300,18 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
     return <div data-slot="conversation-pane-loading" className="h-full" />;
   }
 
+  // The banners are absolutely positioned, which over a terminal costs nothing — they float above
+  // scrollback. Here they would sit on top of the first message, so the strip gets a box of its own
+  // height at the head of the flex column and the thread starts below it. Zero, and no box at all, when
+  // nothing is showing.
+  const bannerStripHeight = isChat ? stateBannerHeight(rollState, schedState) : 0;
+
 
   return (
     <div
       ref={paneRef}
       data-slot="conversation-pane"
-      className="flex h-full min-h-0 flex-col"
+      className="relative flex h-full min-h-0 flex-col"
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files")) e.preventDefault();
       }}
@@ -1803,6 +2328,11 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
         onComposerFiles(files);
       }}
     >
+      {isChat && bannerStripHeight > 0 && (
+        <div className="relative shrink-0" style={{ height: bannerStripHeight }}>
+          <SessionStateBanners sessionId={sessionId} rollState={rollState} schedState={schedState} />
+        </div>
+      )}
       {more && (
         <div className="border-border/60 flex justify-center border-b py-1">
           <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>
@@ -1813,6 +2343,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
       )}
       <div className="min-h-0 flex-1">
         <BannerSlotContext.Provider value={banner}>
+          <RunningSlotContext.Provider value={runningSlot}>
           <ModelSlotContext.Provider value={modelSlot}>
           <AssistantRuntimeProvider runtime={runtime}>
               <MemoThread
@@ -1821,6 +2352,7 @@ export function ConversationPane({ sessionId, onGoTerminal, active = false, exit
             />
           </AssistantRuntimeProvider>
           </ModelSlotContext.Provider>
+          </RunningSlotContext.Provider>
         </BannerSlotContext.Provider>
       </div>
     </div>

@@ -1,5 +1,6 @@
-// Slack thread reply intake. Receives message events over Socket Mode and writes them into the PTY
-// of the matching session.
+// Slack thread reply intake. Receives message events over Socket Mode and routes them to the matching
+// session — a terminal session's reply is written into its PTY, a chat session's reply answers its open
+// card (a question's numbers, an approval's word) or becomes its next turn.
 //
 // Why Socket Mode: this is a desktop app on the user's PC, so it has no public URL. The Events API
 // is Slack calling us, which needs a public endpoint; Socket Mode instead has the app open an
@@ -13,10 +14,13 @@ import {
   classifyInbound,
   toSessionInput,
   buildChoiceKeys,
+  sanitizeChatText,
   MAX_INJECT_CHARS,
   type InboundMessage,
   type ChoiceShape
 } from '../core/slack/inbound'
+import { questionAnswerOf, approvalDecisionOf } from '../core/slack/chatRequest'
+import type { ChatRequest, ChatAnswer } from '../core/chat/types'
 import { botErrorReason } from './slackTransport'
 import { t, type Lang } from '../core/i18n'
 
@@ -59,6 +63,15 @@ export interface SlackInboxDeps {
   /** Is this ts a message we posted (SlackNotifier.isOwnMessage) — the second line of defense against
    *  an infinite loop. Even if some path leaves the bot_id check empty, a ts we wrote is filtered out. */
   isOwnMessage(ts: string): boolean
+  /** Whether this id is a chat session — the chat path below is taken only then (core.chat.has). Kept
+   *  optional so callers without chat wiring (tests included) keep taking the pty path. */
+  isChat?(sessionId: string): boolean
+  /** The card the chat session is showing, or null (core.chat.state(id)?.request). */
+  pendingRequest?(sessionId: string): ChatRequest | null
+  /** One turn to the chat session through the session driver; rejects when the CLI refused it. */
+  deliverChat?(sessionId: string, text: string): Promise<void>
+  /** The card's answer (core.chat.answer). */
+  answerChat?(sessionId: string, requestId: string, answer: ChatAnswer): Promise<void>
   log(message: string): void
 }
 
@@ -171,6 +184,10 @@ export class SlackInbox {
       await this.deps.postNote(decision.threadTs, t(this.deps.lang(), 'slack.inbox.sessionEnded'))
       return
     }
+    if (this.deps.isChat?.(sessionId)) {
+      await this.handleChatReply(sessionId, decision.text, decision.threadTs)
+      return
+    }
     // On a choice prompt, the text is not written as-is but converted into a key sequence. A
     // multi-select is not submitted by Enter alone (it has to go through the Submit tab), so the old
     // path could never finish the answer.
@@ -262,6 +279,56 @@ export class SlackInbox {
       if (i < keys.length) setTimeout(step, KEY_DELAY_MS)
     }
     step()
+  }
+
+  /** A reply for a chat session (chat-sessions slice 4 design §7.3). The session holds its own open
+   *  card, so the reply is read against it: a question's numbers become its answers, an approval's word
+   *  its decision, and with no card the text is one turn through the session driver. Nothing is typed —
+   *  there is no terminal — and nothing is posted on success: a resolved send on Claude means "written",
+   *  not "accepted" (§6.5), so only refusals are said out loud. */
+  private async handleChatReply(sessionId: string, text: string, threadTs: string): Promise<void> {
+    const lang = this.deps.lang()
+    const request = this.deps.pendingRequest?.(sessionId) ?? null
+    if (request?.kind === 'question') {
+      const built = questionAnswerOf(text, request.form)
+      if (!built.ok) {
+        this.deps.log(`slack chat question reply format mismatch session=${sessionId}: ${built.reason.key}`)
+        await this.deps.postNote(threadTs, `⚠️ ${t(lang, built.reason.key, built.reason.params)}`)
+        return
+      }
+      this.deps.log(`slack inbound -> answering question ${request.id} session=${sessionId}`)
+      await this.answerOrNote(sessionId, request.id, { kind: 'question', answers: built.answers }, threadTs)
+      return
+    }
+    if (request?.kind === 'approval') {
+      const decision = approvalDecisionOf(text, request.decisions)
+      if (decision === null) {
+        this.deps.log(`slack chat approval reply not understood session=${sessionId}`)
+        const key = request.decisions.includes('acceptForSession') ? 'slack.approval.unknownReplyAlways' : 'slack.approval.unknownReply'
+        await this.deps.postNote(threadTs, t(lang, key))
+        return
+      }
+      this.deps.log(`slack inbound -> deciding approval ${request.id} (${decision}) session=${sessionId}`)
+      await this.answerOrNote(sessionId, request.id, { kind: 'approval', decision }, threadTs)
+      return
+    }
+    try {
+      await this.deps.deliverChat?.(sessionId, sanitizeChatText(text))
+      this.deps.log(`slack inbound -> chat turn session=${sessionId} chars=${text.length}`)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      this.deps.log(`slack chat send refused session=${sessionId}: ${reason}`)
+      await this.deps.postNote(threadTs, t(lang, 'slack.chat.sendRefused', { reason }))
+    }
+  }
+
+  private async answerOrNote(sessionId: string, requestId: string, answer: ChatAnswer, threadTs: string): Promise<void> {
+    try {
+      await this.deps.answerChat?.(sessionId, requestId, answer)
+    } catch (err) {
+      this.deps.log(`slack chat answer failed session=${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
+      await this.deps.postNote(threadTs, t(this.deps.lang(), 'slack.inbox.injectFailed'))
+    }
   }
 
   private rememberTs(ts: string): void {

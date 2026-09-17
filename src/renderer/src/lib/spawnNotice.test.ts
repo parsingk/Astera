@@ -58,4 +58,18 @@ describe('spawnNotice — 세션 생성 뒤 사용자에게 알릴 것', () => {
       })
     ).toBe('resumeLiveIgnored')
   })
+
+  // 채팅 재개판 가드: 이미 그 스레드로 떠 있는 채팅 세션이 있으면 main(liveChatOnThread)이 새로
+  // 띄우지 않고 그 세션의 SessionInfo({ kind: 'chat', threadId: X, status: 'running' })를 그대로
+  // 돌려준다. 호출부는 requestedResumeSessionId 로 resumeThreadId 를, returnedResumeSessionId 로
+  // info.threadId ?? info.resumeSessionId 를 합쳐 넘기므로 — 둘 다 스레드 id 'th-X' 다.
+  it('이미 열려 있는 채팅 스레드가 돌아와도 옵션이 버려졌다고 알린다', () => {
+    expect(
+      spawnNotice({
+        requestedResumeSessionId: 'th-X',
+        returnedResumeSessionId: 'th-X', // info.threadId ?? info.resumeSessionId
+        returnedTabAlreadyOpen: true
+      })
+    ).toBe('resumeLiveIgnored')
+  })
 })

@@ -89,9 +89,16 @@ export function resolveNodePath(
   return 'node'
 }
 
-/** The tools whose calls the Pre/PostToolUse hooks watch. Both events share it so the capture and the
- *  invalidation cannot cover different sets — see the PostToolUse comment in init(). */
-const TOOL_MATCHER = 'AskUserQuestion|Bash|PowerShell|Write|Edit|NotebookEdit'
+/** The one tool whose PreToolUse/PostToolUse pair **every** session gets. Its `tool_input` is the question
+ *  the conversation view draws as a card (main/pendingPrompt.ts → core/prompts/askUserQuestion.ts), and
+ *  a question is minutes apart, so the cost is one node process per question — the same order as Stop. */
+const ASK_MATCHER = 'AskUserQuestion'
+
+/** The tools whose calls the Pre/PostToolUse hooks watch in a Slack-notifying or rolling session. A
+ *  superset of ASK_MATCHER on purpose: that file replaces the every-session file rather than layering on
+ *  it, so the question capture must be in here too or those sessions would lose it. Both events share it
+ *  so the capture and the invalidation cannot cover different sets — see the PostToolUse comment in init(). */
+const TOOL_MATCHER = `${ASK_MATCHER}|Bash|PowerShell|Write|Edit|NotebookEdit`
 
 export class StatusLineManager {
   private readonly capturePath: string
@@ -139,9 +146,15 @@ export class StatusLineManager {
     // composer locked the whole time (measured in the dev app, not reasoned about). It used to be
     // kept out of here on the grounds that nothing but slack.ts read it; attention.ts reads it now.
     // The cost is one node process at the end of a turn, which is minutes apart, not per keystroke.
-    const notificationHook = {
+    const everySessionHooks = {
       Notification: [{ hooks: [{ type: 'command', command: hookCmd }] }],
-      Stop: [{ hooks: [{ type: 'command', command: hookCmd }] }]
+      Stop: [{ hooks: [{ type: 'command', command: hookCmd }] }],
+      // The question capture. Every session: the conversation view draws AskUserQuestion as a form from
+      // this hook's tool_input, and nothing else carries it (the transcript is silent while the CLI
+      // waits). Matcher-limited to the one tool so ordinary tool calls pay nothing; the write/execute
+      // family stays in the gated file below for the reasons given there.
+      PreToolUse: [{ matcher: ASK_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }],
+      PostToolUse: [{ matcher: ASK_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }]
     }
     const settings = {
       // It is a JSON string, so no shell escaping. Paths are normalised to forward slashes (fine on Windows too).
@@ -150,17 +163,16 @@ export class StatusLineManager {
         command: `"${this.nodePath.replace(/\\/g, '/')}" "${this.capturePath.replace(/\\/g, '/')}"`,
         padding: 0
       },
-      hooks: notificationHook
+      hooks: everySessionHooks
     }
     await fs.writeFile(this.settingsFile, JSON.stringify(settings, null, 2), 'utf8')
-    // What only slack.ts reads, on top: the pending-question pair, which fires per tool call and is
-    // therefore matcher-limited. Only a Slack-notifying or rolling session pays for these. (Stop is
-    // in notificationHook above — slack.ts reads it for its turn summary, attention.ts for every
-    // session.)
+    // What only a Slack-notifying or rolling session pays for, on top: the write/execute family in the
+    // tool pair, which fires per tool call and is therefore matcher-limited. The pair itself is already
+    // in everySessionHooks for AskUserQuestion; this widens its matcher.
     const hooksSettings = {
       ...settings,
       hooks: {
-        ...notificationHook,
+        ...everySessionHooks,
         // Captures what the waiting screen shows (the question and its options, the tool awaiting approval and its
         // arguments) **before** the tool runs. The transcript cannot supply it — Claude Code does not flush assistant
         // messages while it waits for user interaction, so while a question or approval prompt is on screen that

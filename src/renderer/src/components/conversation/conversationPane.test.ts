@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import type { ModelDescriptor } from '../../../../core/models/types'
 import type { AppendMessage } from '@assistant-ui/react'
 import {
   toThreadMessages,
@@ -12,10 +13,13 @@ import {
   ptyWritesFor,
   isSlashCommand,
   modelLineOf,
+  pendingModelLabelOf,
   shouldReadPromptScreen,
   shouldShowPrompt,
+  askCardShown,
   choicesToShow,
-  composerLocked
+  composerLocked,
+  nextPendingPromptFor
 } from './ConversationPane'
 import type { ConvTurn } from '../../../../core/history/convTypes'
 
@@ -263,8 +267,79 @@ describe('isSlashCommand', () => {
   })
 })
 
+describe('pendingModelLabelOf', () => {
+  const m = (over: Partial<ModelDescriptor>): ModelDescriptor =>
+    ({ provider: 'claude', id: 'x', name: 'X', description: null, isDefault: false, ...over }) as ModelDescriptor
+  const claudeList = [
+    m({ id: 'default', name: 'Default (recommended)', isDefault: true, resolvedModel: 'claude-opus-5[1m]' }),
+    m({ id: 'opus[1m]', name: 'Opus (1M context)', resolvedModel: 'claude-opus-5[1m]' }),
+    m({ id: 'claude-fable-5-1[1m]', name: 'Fable', resolvedModel: 'claude-fable-5-1' })
+  ]
+
+  // The settings' model is the one the session will run, so it is the one to name. Resolved through
+  // the list rather than shown raw, because the settings say `claude-fable-5-1[1m]` and `system/init`
+  // says `claude-fable-5-1` -- both measured on this machine. Going through the list means the label
+  // does not change at all when the first turn finally reports it.
+  it('names the model the settings choose, as the CLI will report it', () => {
+    expect(pendingModelLabelOf(claudeList, 'claude-fable-5-1[1m]')).toBe('claude-fable-5-1')
+  })
+
+  // The earlier label named the list's `default` entry whenever it had one, which is a description of
+  // what the default option means and not a statement about this session. On an account whose settings
+  // chose Fable it read "Default (recommended) · claude-opus-5[1m]" and the first turn came back Fable.
+  it('does not fall back to the default entry when the settings have chosen', () => {
+    expect(pendingModelLabelOf(claudeList, 'opus[1m]')).toBe('claude-opus-5[1m]')
+  })
+
+  // Nothing chosen means the CLI really does use its default, so naming that entry is correct here --
+  // and its resolution is what `system/init` will report, measured on an account with no model set.
+  it('names the default entry when the settings choose nothing', () => {
+    expect(pendingModelLabelOf(claudeList, null)).toBe('claude-opus-5[1m]')
+  })
+
+  // codex's list carries no resolvedModel at all and its default entry is a model rather than an alias
+  // for one, so the entry's own name is both the shortest and the truest thing to show.
+  it('falls back to the entry name where there is nothing to resolve', () => {
+    expect(pendingModelLabelOf([m({ id: 'gpt-6-astra', name: 'GPT-6-Astra', isDefault: true })], null))
+      .toBe('GPT-6-Astra')
+  })
+
+  // A model the list does not carry is still what the settings say, so it is still better than naming
+  // a different one. It is shown as written.
+  it('shows a chosen model the list does not carry, as written', () => {
+    expect(pendingModelLabelOf(claudeList, 'some-model-the-list-never-heard-of'))
+      .toBe('some-model-the-list-never-heard-of')
+  })
+
+  it('is null when there is nothing to go on', () => {
+    expect(pendingModelLabelOf([], null)).toBeNull()
+    expect(pendingModelLabelOf([m({ id: 'sonnet', name: 'Sonnet' })], null)).toBeNull()
+  })
+})
+
 describe('modelLineOf', () => {
   const format = (model: string, effort: string): string => `${model} @ ${effort}`
+
+  // Every Claude model id carries the vendor's own name in front of it, and the composer sits inside
+  // this app where that is never in question -- a session is Claude's or codex's and the pane already
+  // says which. The prefix cost a third of a narrow button for nothing. Only at the front, and only
+  // that exact word: a model with it in the middle keeps it.
+  it("drops the vendor prefix a Claude model id carries", () => {
+    expect(modelLineOf({ model: 'claude-fable-5-1', effort: null }, format)).toBe('fable-5-1')
+    expect(modelLineOf({ model: 'claude-opus-5[1m]', effort: null }, format)).toBe('opus-5[1m]')
+    expect(modelLineOf({ model: 'claude-opus-5', effort: 'xhigh' }, format)).toBe('opus-5 @ xhigh')
+  })
+
+  it('drops it from the fallback too, which is the same name by another route', () => {
+    expect(modelLineOf({ model: null, effort: null }, format, 'claude-opus-5[1m]')).toBe('opus-5[1m]')
+  })
+
+  // codex's names have no such prefix, and nothing else may be trimmed off a name the CLI chose.
+  it('leaves every other name exactly as the CLI gave it', () => {
+    expect(modelLineOf({ model: 'gpt-6-astra', effort: null }, format)).toBe('gpt-6-astra')
+    expect(modelLineOf({ model: 'my-claude-fork', effort: null }, format)).toBe('my-claude-fork')
+    expect(modelLineOf({ model: 'claude', effort: null }, format)).toBe('claude')
+  })
 
   it('joins the model and the effort', () => {
     expect(modelLineOf({ model: 'Opus 5', effort: 'xhigh' }, format)).toBe('Opus 5 @ xhigh')
@@ -277,6 +352,22 @@ describe('modelLineOf', () => {
   it('draws nothing at all when the CLI has not said what it is running', () => {
     expect(modelLineOf({ model: null, effort: 'xhigh' }, format)).toBeNull()
     expect(modelLineOf({ model: null, effort: null }, format)).toBeNull()
+  })
+
+  // Before the first turn the CLI has said nothing (system/init arrives with the turn), but the model
+  // list it answered at the handshake names the account's default. That is worth drawing, alone —
+  // an effort with no reported model still belongs to nothing.
+  it('falls back to the given default model while the CLI has said nothing', () => {
+    expect(modelLineOf({ model: null, effort: null }, format, 'claude-opus-5[1m]')).toBe('opus-5[1m]')
+    expect(modelLineOf({ model: null, effort: 'xhigh' }, format, 'claude-opus-5[1m]')).toBe('opus-5[1m]')
+  })
+
+  it('the reported model wins over the fallback', () => {
+    expect(modelLineOf({ model: 'Opus 5', effort: null }, format, 'claude-opus-5[1m]')).toBe('Opus 5')
+  })
+
+  it('a null fallback changes nothing', () => {
+    expect(modelLineOf({ model: null, effort: null }, format, null)).toBeNull()
   })
 })
 
@@ -356,6 +447,25 @@ describe('shouldShowPrompt', () => {
   })
 })
 
+describe('askCardShown', () => {
+  const none = { kind: 'none' } as const
+  const question = { kind: 'question', index: 0, pristine: true, textRowFocused: false, submitRowFocused: false } as const
+  it('no form: never', () => {
+    expect(askCardShown(null, 0)).toBe(false)
+  })
+  it('the dialog on screen: the card, whatever else the screen shows', () => {
+    expect(askCardShown(question, 0)).toBe(true)
+    expect(askCardShown(question, 3)).toBe(true)
+  })
+  it('no dialog yet and nothing to press: the card, waiting', () => {
+    expect(askCardShown(none, 0)).toBe(true)
+  })
+  // The regression: a declined question's capture outliving its dialog while an approval prompt is up.
+  it('no dialog but the screen offers rows of its own: the banner', () => {
+    expect(askCardShown(none, 3)).toBe(false)
+  })
+})
+
 // A CLI draws a dialog in pieces, so a poll can land between the question and its rows. The trust
 // prompt is the one whose buttons are the only way through — the composer beside it is locked — so it
 // keeps the last reading that had any rather than flickering them away.
@@ -399,5 +509,16 @@ describe('composerLocked', () => {
   // A terminal that registers no reader at all must not cost a session its composer for good.
   it('opens once it has waited long enough, reading or no reading', () => {
     expect(composerLocked(false, false, true)).toBe(false)
+  })
+})
+
+describe('nextPendingPromptFor', () => {
+  const prompt = { toolUseId: 'call-1', tool: 'AskUserQuestion', input: { questions: [] }, at: 1 }
+  it("this pane's session: the event's prompt, null included", () => {
+    expect(nextPendingPromptFor('s1', { sessionId: 's1', prompt })).toBe(prompt)
+    expect(nextPendingPromptFor('s1', { sessionId: 's1', prompt: null })).toBeNull()
+  })
+  it('another session: undefined, the cue to leave the state alone', () => {
+    expect(nextPendingPromptFor('s1', { sessionId: 's2', prompt })).toBeUndefined()
   })
 })

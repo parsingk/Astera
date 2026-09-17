@@ -1941,3 +1941,143 @@ describe('SlackNotifier PreToolUse 대기 내용 캡처', () => {
     expect(h.sent[0]).toContain('뭐 드실래요?')
   })
 })
+
+describe('SlackNotifier chat events', () => {
+  const chatInfo = (over: Partial<SessionInfo> = {}): SessionInfo => info({ kind: 'chat', ...over })
+  const claudeAt = (path: string | null) => ({ provider: 'claude' as const, transcriptPath: () => path })
+  const questionForm = { questions: [{ header: 'Format', question: 'How?', multiSelect: false, options: [{ label: 'A', description: null }, { label: 'B', description: 'b' }] }] }
+  /** Resolves every injected wait at once — the re-read window is exercised by what readFileTail returns per call, not by real time. */
+  const instantWait = async (): Promise<void> => {}
+
+  it('a working→idle edge posts the turn summary with the transcript excerpt once', async () => {
+    const h = setup({ wait: instantWait, readFileTail: async () => assistantLine('DONE') })
+    h.notifier.register(chatInfo())
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'working' }, claudeAt('D:/t.jsonl'))
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, claudeAt('D:/t.jsonl'))
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, claudeAt('D:/t.jsonl')) // a repeated idle is not an edge
+    await flush(); await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ✅ 응답 완료\n> DONE'])
+  })
+
+  it('re-reads the transcript while it still shows the previous turn’s text, then posts the new one', async () => {
+    const reads: string[] = [assistantLine('OLD'), assistantLine('OLD'), assistantLine('NEW')]
+    let waits = 0
+    const h = setup({ wait: async () => { waits += 1 }, readFileTail: async () => reads.shift() ?? assistantLine('NEW') })
+    h.notifier.register(chatInfo())
+    const at = claudeAt('D:/t.jsonl')
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, at) // first turn: OLD is new here
+    await flush(); await flush()
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, at) // second turn: file still says OLD twice
+    await flush(); await flush(); await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ✅ 응답 완료\n> OLD', '[myproj · work1] ✅ 응답 완료\n> NEW'])
+    // Only 1 retry happens: the first turn's own lone read ('OLD') is accepted immediately (lastExcerpt
+    // starts null, so anything non-null already counts as new), leaving exactly 2 of the 3 mocked reads
+    // for the second turn — 'OLD' (a wait, since it still equals the first turn's excerpt) then 'NEW'.
+    expect(waits).toBe(1)
+  })
+
+  it('gives up after CHAT_EXCERPT_RETRIES re-reads and posts completion without an excerpt', async () => {
+    const h = setup({ wait: instantWait, readFileTail: async () => null })
+    h.notifier.register(chatInfo())
+    const at = claudeAt('D:/t.jsonl')
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, at)
+    for (let i = 0; i < 8; i++) await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ✅ 응답 완료'])
+  })
+
+  it('a request opening posts the card’s content; clearing it posts nothing', async () => {
+    const h = setup()
+    h.notifier.register(chatInfo())
+    h.notifier.onChatEvent('s-1', { type: 'request', request: { id: 'q1', kind: 'question', form: questionForm } }, claudeAt(null))
+    h.notifier.onChatEvent('s-1', { type: 'request', request: null }, claudeAt(null))
+    await flush()
+    expect(h.sent).toEqual(['[myproj · work1] 🙋 입력 필요\n❓ Format — How?\n1. A\n2. B — b'])
+  })
+
+  it('an approval request names the tool, the lines and the offered decisions', async () => {
+    const h = setup()
+    h.notifier.register(chatInfo())
+    h.notifier.onChatEvent('s-1', { type: 'request', request: { id: 'a1', kind: 'approval', about: { tool: 'Write', lines: ['D:/p.txt'] }, decisions: ['accept', 'decline'] } }, claudeAt(null))
+    await flush()
+    expect(h.sent).toEqual(['[myproj · work1] 🙋 입력 필요\n🔧 Write\nD:/p.txt\n💡 허용 또는 거절로 답장'])
+  })
+
+  it('an error event posts one line', async () => {
+    const h = setup()
+    h.notifier.register(chatInfo())
+    h.notifier.onChatEvent('s-1', { type: 'error', message: 'rate limited' }, claudeAt(null))
+    await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ⚠️ 턴 실패 — rate limited'])
+  })
+
+  it('a codex chat session’s summary reads the rollout with the codex extractor', async () => {
+    const agentLine = JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'CODEX DONE' }] } })
+    const h = setup({ wait: instantWait, readFileTail: async () => agentLine })
+    h.notifier.register(codexSession('c-1', { kind: 'chat' }))
+    const at = { provider: 'codex' as const, transcriptPath: () => 'D:/rollout.jsonl' }
+    h.notifier.onChatEvent('c-1', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('c-1', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush()
+    expect(h.sent).toEqual(['[myproj · codex1] ✅ 응답 완료\n> CODEX DONE'])
+  })
+
+  it('events for an unregistered session are ignored', async () => {
+    const h = setup()
+    h.notifier.onChatEvent('nobody', { type: 'status', status: 'idle' }, claudeAt(null))
+    await flush()
+    expect(h.sent).toEqual([])
+  })
+
+  it('exit, ready and model events post nothing (exit is handleExit’s, wired from onSessionExit)', async () => {
+    const h = setup()
+    h.notifier.register(chatInfo())
+    h.notifier.onChatEvent('s-1', { type: 'exit', code: 0 }, claudeAt(null))
+    h.notifier.onChatEvent('s-1', { type: 'ready', threadId: 't', rolloutPath: null }, claudeAt(null))
+    h.notifier.onChatEvent('s-1', { type: 'model', model: { model: null, effort: null, planMode: false } }, claudeAt(null))
+    await flush()
+    expect(h.sent).toEqual([])
+  })
+
+  it('a rolled chat record carries the previous excerpt, so a file that has not caught up is re-read', async () => {
+    // The roll hands the new account's process the same conversation, so the file still ends with the
+    // turn that was posted before the switch. Without the carried excerpt that stale text reads as the
+    // new session's own answer — and since the dedup history is carried, the identical line is then
+    // dropped and the first turn after a roll is announced not at all.
+    const reads: string[] = [assistantLine('OLD'), assistantLine('OLD')]
+    let waits = 0
+    const h = setup({ wait: async () => { waits += 1 }, readFileTail: async () => reads.shift() ?? assistantLine('NEW') })
+    h.notifier.register(chatInfo())
+    const at = claudeAt('D:/t.jsonl')
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush()
+    h.notifier.onRolled('s-1', chatInfo({ id: 's-2' }))
+    h.notifier.onChatEvent('s-2', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-2', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush(); await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ✅ 응답 완료\n> OLD', '[myproj · work1] ✅ 응답 완료\n> NEW'])
+    expect(waits).toBe(1)
+  })
+
+  it('a rolled chat record posts the new session’s first summary at once when the text is genuinely new', async () => {
+    // The carried excerpt is a memory of the previous turn, not a gate: a file that already holds this
+    // turn's answer is accepted on the first read, exactly as it is without a roll.
+    const reads: string[] = [assistantLine('FIRST')]
+    let waits = 0
+    const h = setup({ wait: async () => { waits += 1 }, readFileTail: async () => reads.shift() ?? assistantLine('SECOND') })
+    h.notifier.register(chatInfo())
+    const at = claudeAt('D:/t.jsonl')
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush()
+    h.notifier.onRolled('s-1', chatInfo({ id: 's-2' }))
+    h.notifier.onChatEvent('s-2', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-2', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush(); await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ✅ 응답 완료\n> FIRST', '[myproj · work1] ✅ 응답 완료\n> SECOND'])
+    expect(waits).toBe(0)
+  })
+})

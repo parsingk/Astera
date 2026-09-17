@@ -32,7 +32,6 @@ import {
   ActionBarPrimitive,
   AuiIf,
   type AssistantState,
-  BranchPickerPrimitive,
   ComposerPrimitive,
   ErrorPrimitive,
   groupPartByType,
@@ -48,8 +47,6 @@ import {
   ArrowDownIcon,
   ArrowUpIcon,
   CheckIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
   MicIcon,
@@ -80,6 +77,10 @@ export type ThreadComponents = {
   /** Astera's own: sits in the composer's action row, right of the attachment button. Its own slot
    *  rather than part of Banner because it belongs beside the controls, not above the input. */
   ComposerExtras?: ComponentType | undefined;
+  /** Astera's own: drawn after the last message, inside the scrolling output. For the mark that says
+   *  the CLI is working — it belongs where the answer is going to appear, which is where the person
+   *  is already looking, rather than above the input where it was competing with the composer. */
+  Running?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
   ToolGroup?:
     | ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>>
@@ -158,7 +159,7 @@ const ThreadRoot: FC<{
   autoFocus: boolean;
   composerPlaceholder: string | undefined;
 }> = ({ isEmpty, autoFocus, composerPlaceholder }) => {
-  const { Welcome = ThreadWelcome, Banner } = useContext(ThreadComponentsContext);
+  const { Welcome = ThreadWelcome, Banner, Running } = useContext(ThreadComponentsContext);
 
   return (
     <ThreadPrimitive.Root
@@ -195,6 +196,7 @@ const ThreadRoot: FC<{
             <ThreadPrimitive.Messages>
               {() => <ThreadMessage />}
             </ThreadPrimitive.Messages>
+            {Running && <Running />}
           </div>
 
           <ThreadPrimitive.ViewportFooter
@@ -427,6 +429,12 @@ const AssistantMessage: FC = () => {
         )}
       >
         <MessagePrimitive.GroupedParts
+          // Off: this view has its own mark for "the CLI is working" (the `Running` slot above), and
+          // upstream's would be a second dot on top of it the moment a message is last and running.
+          // Ours is the one that can cover the whole wait — upstream's hangs off the last *assistant*
+          // message, so it cannot show at all in the moment right after a message is sent, which is
+          // the moment someone most needs to see that something is happening.
+          indicator="never"
           groupBy={groupPartByType({
             reasoning: ["group-chainOfThought", "group-reasoning"],
             "tool-call": ["group-chainOfThought", "group-tool"],
@@ -508,7 +516,6 @@ const AssistantMessage: FC = () => {
         data-slot="aui_assistant-message-footer"
         className={cn("ms-2 flex items-center", ACTION_BAR_HEIGHT)}
       >
-        <BranchPicker />
         <AssistantActionBar />
       </div>
     </MessagePrimitive.Root>
@@ -593,10 +600,6 @@ const UserMessage: FC = () => {
         </div>
       </div>
 
-      <BranchPicker
-        data-slot="aui_user-branch-picker"
-        className="col-span-full col-start-1 row-start-3 -me-1 justify-end"
-      />
     </MessagePrimitive.Root>
   );
 };
@@ -637,32 +640,10 @@ const EditComposer: FC = () => {
   );
 };
 
-const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
-  className,
-  ...rest
-}) => {
-  return (
-    <BranchPickerPrimitive.Root
-      hideWhenSingleBranch
-      className={cn(
-        "aui-branch-picker-root text-muted-foreground -ms-2 me-2 inline-flex items-center text-xs",
-        className,
-      )}
-      {...rest}
-    >
-      <BranchPickerPrimitive.Previous asChild>
-        <TooltipIconButton tooltip="Previous">
-          <ChevronLeftIcon />
-        </TooltipIconButton>
-      </BranchPickerPrimitive.Previous>
-      <span className="aui-branch-picker-state font-medium">
-        <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
-      </span>
-      <BranchPickerPrimitive.Next asChild>
-        <TooltipIconButton tooltip="Next">
-          <ChevronRightIcon />
-        </TooltipIconButton>
-      </BranchPickerPrimitive.Next>
-    </BranchPickerPrimitive.Root>
-  );
-};
+/* No branch picker. assistant-ui offers one per message, and the runtime behind this view is an
+   external store with no `setMessages` -- it answers a switch with "Runtime does not support switching
+   branches", thrown, which is what the console was showing. The picker hides itself when a message has
+   a single branch, and these do not always: a message the store replaces in place (the local copy of a
+   sent message, once the transcript carries the real turn) registers as a second child of the same
+   parent, so the arrows appeared on a conversation that has no branches at all and pressing one threw.
+   Removed for the same reason Reload and Edit already were -- a control that cannot work. */

@@ -64,13 +64,24 @@ describe('StatusLineManager 훅 주입', () => {
   })
 
   // 원래 회귀 가드가 지키려던 것은 "훅이 없다"가 아니라 "읽는 사람이 없는 훅에 프로세스를 쓰지
-  // 않는다"였다. Notification 은 데스크톱 알림이 어느 세션에서든 읽으므로 값을 한다. 나머지
-  // 셋은 slack.ts 만 읽고, Slack 세션은 도구 훅 파일을 따로 받으므로 여기 있을 이유가 없다 —
-  // Stop 은 턴이 끝날 때마다, 도구 짝은 도구 호출마다 프로세스를 하나씩 띄운다.
-  it('기본 설정 파일은 Slack 만 읽는 훅을 갖지 않는다 (회귀 가드)', async () => {
+  // 않는다"였다. AskUserQuestion 짝은 이제 모든 세션이 읽는다 — 대화 뷰가 그 tool_input 으로 질문
+  // 카드를 그린다(main/pendingPrompt.ts). 질문은 몇 분에 한 번이라 Stop 과 같은 비용이다. 나머지
+  // 도구(Bash·Write·Edit…)는 호출마다 프로세스를 띄우므로 여전히 Slack·롤링 세션의 파일에만 있다.
+  it('기본 설정 파일의 도구 훅 짝은 AskUserQuestion 만 본다', async () => {
     const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-statusline-settings.json'), 'utf8'))
-    expect(settings.hooks.PreToolUse).toBeUndefined()
-    expect(settings.hooks.PostToolUse).toBeUndefined()
+    expect(settings.hooks.PreToolUse).toHaveLength(1)
+    expect(settings.hooks.PreToolUse[0].matcher).toBe('AskUserQuestion')
+    expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain('astera-hook-capture.cjs')
+    expect(settings.hooks.PostToolUse[0].matcher).toBe('AskUserQuestion')
+    expect(settings.hooks.PostToolUse[0].hooks[0].command).toContain('astera-hook-capture.cjs')
+  })
+
+  it('도구 캡처 파일의 matcher 는 기본 파일의 것을 포함하는 상위 집합이다', async () => {
+    const base = JSON.parse(await fs.readFile(path.join(dir, 'astera-statusline-settings.json'), 'utf8'))
+    const full = JSON.parse(await fs.readFile(path.join(dir, 'astera-hooks-settings.json'), 'utf8'))
+    const fullTools: string[] = full.hooks.PreToolUse[0].matcher.split('|')
+    expect(fullTools).toContain(base.hooks.PreToolUse[0].matcher)
+    expect(fullTools).toContain('Bash')
   })
 
   // Stop left the guard above deliberately, and the rule that guard states is why it could: it asks

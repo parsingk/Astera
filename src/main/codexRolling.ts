@@ -3,7 +3,14 @@
 // it is far shorter because none of the statusLine-specific problems (a stale snapshot, readiness
 // polling, auto-accepting trust) apply. Every side effect is injected through deps — it does not depend
 // on electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
-import type { Account, ResumeStrategy, RollStateEvent, SessionInfo } from '../core/types'
+import type {
+  Account,
+  Attention,
+  ResumeStrategy,
+  RollStateEvent,
+  SessionInfo,
+  SessionKind
+} from '../core/types'
 import type { RollConfig } from '../core/rolling/config'
 import { RollCycle } from '../core/rolling/cycle'
 import {
@@ -15,6 +22,7 @@ import {
 } from '../core/rolling/retry'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
+import { sessionKindOf } from '../core/sessions/kind'
 import { copyTranscript } from '../core/rolling/transcript'
 import { codexHistoryStrategy } from '../core/history/strategies/codex'
 import { findRollout } from '../core/rolling/codexLocate'
@@ -56,6 +64,11 @@ export interface CodexRollingDeps {
   spawn(opts: {
     account: Account
     cwd: string
+    /** Which kind of session to respawn — the chain's own kind, unchanged by the roll. The wiring
+     *  routes a `'chat'` spawn to the chat manager and everything else to the pty one (index.ts), so
+     *  this coordinator never has to know either manager. Absent means the pty spawn, which is what
+     *  every caller that predates chat chains means. */
+    kind?: SessionKind
     resumeSessionId?: string
     resumePrompt?: string
     /** 백지 재개(Smart Resume)로 새 세션을 띄울 때 실을 첫 프롬프트. `resumePrompt` 와 달리
@@ -64,6 +77,12 @@ export interface CodexRollingDeps {
      *  조용히 버려진다. orchestration 이 새 Job 워커를 띄울 때 첫 프롬프트를 싣는 것과 같은 경로
      *  (initialPrompt)를 백지 재개에도 그대로 쓴다. */
     initialPrompt?: string
+    /** The user's carry-on prompt as they typed it (empty/undefined means the default). Carried onto
+     *  every roll so the respawned session's note keeps it — without it a restart re-registers the
+     *  chain with the UI-language default. This is `liveInfo.rollPrompt`, not `chain.prompt`: the
+     *  latter has the default already resolved, and writing a resolved default into the note pins the
+     *  language it was resolved in. */
+    rollPrompt?: string
     rollAccountIds?: string[]
     slackNotify?: boolean
     bypassPermissions?: boolean
@@ -136,12 +155,22 @@ export interface CodexRollingDeps {
    *  `'smart'` 라고 곧바로 백지 재개가 되는 것은 아니다 — `resumeText` 가 브리핑을 만들어 줄 때만
    *  적용된다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다). `roll()` 을 보라. */
   resumeStrategy?(): ResumeStrategy
+  /** Is this account logged in right now. Optional: without it a chain behaves exactly as it did before
+   *  this was added — every account is treated as usable and only block records steer the choice. The
+   *  wiring passes `core.accounts.loginStatus`, the same verdict the account panel and the resume dialog
+   *  show (spec §15.2). It is asked on the tick rather than on the limit path: it is a file read per
+   *  account, and a filter that is one tick stale is worth more than a file read inside a limit verdict. */
+  loginStatus?: (accountId: string) => Promise<boolean>
 }
 
 interface Chain {
   accountIds: string[]
   prompt: string
   cycle: RollCycle
+  /** Whether this chain's session is a pty or a chat session. Read at registration (sessionKindOf)
+   *  and carried for the chain's whole life: a roll respawns the same kind, so the field is never
+   *  recomputed from the session the roll just created. */
+  kind: SessionKind
   liveId: string
   liveInfo: SessionInfo
   cwd: string
@@ -178,13 +207,48 @@ interface Chain {
   healthyTimer: ReturnType<typeof setTimeout> | null
   disposed: boolean
   recovery: (BlockRecord | null)[]
-  inPlaceUsed: boolean // whether an in-place resume was already used for this blocked episode (cleared by healthyTimer)
+  /** Accounts of this chain that answered "not logged in" on the most recent refresh. Per-chain on
+   *  purpose — a login is a fact about this machine's account folder, not a usage verdict to broadcast
+   *  through the shared BlockRegistry, and every chain learns it from the same source on its own tick. */
+  loggedOut: Set<string>
+  /** The in-flight latch of refreshLoginState. One round at a time per chain: the probes are I/O and the
+   *  tick is 15 seconds, so two overlapping rounds could resolve out of order and leave the older
+   *  verdict standing. */
+  loginRefreshing: boolean
+  // Whether an in-place resume was already used for this blocked episode. The health declaration
+  // releases it — the 60-second post-switch timer for a pty chain, a clean completed turn consumed on
+  // the tick for a chat chain (spec §14.6) — as does a successful in-place settle (settleInPlace).
+  inPlaceUsed: boolean
   // The state-publication generation counter, incremented on every pushState. The deferred 'none' of
   // resumeInPlace (its 150ms Enter timer) captures the generation at scheduling time; on firing it
   // publishes only if the generation is unchanged, and skips as stale if a 'waiting' or 'switching'
   // has published something more recent in the meantime. Same mechanism and same reason as the claude
   // side (rolling.ts) — codex got its first deferred publish with the in-place resume.
   stateSeq: number
+  // The last lasting rollState payload pushState published — null once it was 'none' (or nothing has
+  // published yet). Read back by stateOf for a renderer that mounts after the push already happened.
+  lastState: RollStateEvent | null
+  // A chat chain's health evidence (spec §14.6) — the pair of flags onChatStatus keeps and the tick
+  // consumes. chatTurnDone: a turn ended and no limit landed during it, so the account took the work;
+  // the tick clears it and declares health once its own limit verdicts have come up empty.
+  // chatLimitInTurn: a limit was judged inside the turn that is running now, which disqualifies its
+  // completion as evidence. Both are meaningless for a pty chain, which still declares health off the
+  // 60-second timer roll() arms.
+  chatTurnDone: boolean
+  chatLimitInTurn: boolean
+  // The previous status onChatStatus saw, so chatLimitInTurn is cleared on the idle→non-idle **edge**
+  // rather than on every non-idle status (Ruling 4d-6). A permission card opening mid-turn reports
+  // 'waiting' and then 'working' again without the turn ever having ended (adapterCore.ts's
+  // dropRequest); clearing on each of those wiped a disqualification the rollout tail had already
+  // recorded, and the 'idle' that closed that same turn then counted as health.
+  chatPrevStatus: Attention
+  // Whether this chain has already spent its **shared** registry clear on the account it is sitting on
+  // (Ruling 4d-7). A chat chain declares health off every clean turn, so without a latch the valve
+  // blockRegistry.clear documents as "armed once per arrival" would fire for the chain's whole life and
+  // erase every record another chain ever wrote about the account. It is reset at every arrival — a
+  // roll, and an in-place resume — and read only at the tick's chat consumption site, so the pty timer
+  // path is untouched. The per-chain half of a health declaration still runs on every clean turn.
+  chatValveSpent: boolean
 }
 
 /** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts).
@@ -203,12 +267,26 @@ interface Chain {
  *  weekly-exhausted first; a real weekly reset is days). That is correct when the record is right — a
  *  weekly-exhausted account is unusable whatever its session window says — and it is where a wrong
  *  record costs the most: the chain is now waiting rather than arriving, and only an arrival arms the
- *  healthy timer that would tear the record up (blockRegistry.clear). */
+ *  healthy timer that would tear the record up (blockRegistry.clear).
+ *
+ *  The merge also carries login state: a logged-out account (chain.loggedOut) is folded in as a
+ *  BlockRecord with `at: null` — unusable now, reset time unknown — exactly like a block record whose
+ *  reset could not be parsed (spec §15.2). */
 const retryState = (chain: Chain, blocks: BlockRegistry, now: number): RetryState => ({
   accountIds: chain.accountIds,
   currentIndex: chain.cycle.currentIndex,
   recovery: chain.accountIds.map((id, i) =>
-    laterBlock(chain.recovery[i] ?? null, blocks.get(id, now))
+    laterBlock(
+      laterBlock(chain.recovery[i] ?? null, blocks.get(id, now)),
+      // A logged-out account is unusable now with no known reset — exactly what an `at: null` record
+      // means to this layer, so `retry.ts` needs no new concept (spec §15.2). `pickAvailable` skips it;
+      // `planRetry` reads it as now + RETRY_FALLBACK_MS, which is the re-check cadence we want: if the
+      // person logs back in, the next tick drops the id and the account is a candidate again — the next
+      // tick **including while this chain is waiting**, since tick() refreshes login state before it
+      // skips a chain whose wait is armed (ruling 4e-3). Were that not so, this sentence would be false
+      // for exactly the chain that most needs it: one sitting in the logged-out reschedule loop.
+      chain.loggedOut.has(id) ? { at: null, weekly: false, since: now } : null
+    )
   )
 })
 
@@ -284,6 +362,7 @@ export class CodexRollingCoordinator {
       accountIds: ids,
       prompt: info.rollPrompt?.trim() || t(this.deps.lang(), 'rolling.continuePrompt'),
       cycle: new RollCycle(ids.length),
+      kind: sessionKindOf(info),
       liveId: info.id,
       liveInfo: info,
       cwd: info.cwd,
@@ -306,8 +385,15 @@ export class CodexRollingCoordinator {
       healthyTimer: null,
       disposed: false,
       recovery: ids.map(() => null),
+      loggedOut: new Set(),
+      loginRefreshing: false,
       inPlaceUsed: false,
-      stateSeq: 0
+      stateSeq: 0,
+      lastState: null,
+      chatTurnDone: false,
+      chatLimitInTurn: false,
+      chatPrevStatus: 'idle',
+      chatValveSpent: false
     }
     this.chains.set(info.id, chain)
     // **Where in the chain this session already is** — the same rule, and the same reasoning, as
@@ -389,6 +475,80 @@ export class CodexRollingCoordinator {
     this.deps.log(`codex chain registered session=${info.id} accounts=${ids.join(',')}`)
   }
 
+  /** A chat session's `ready` event: the thread id codex gave this conversation and, when it named
+   *  the file, the rollout it writes to. ipc's chat subscriber is the caller.
+   *
+   *  **A pty chain learns the same two facts, from somewhere else.** It is either handed them on a
+   *  resume (register's attach branch) or it scans the filesystem for a matching rollout
+   *  (startLocate/findRollout). A chat session is told them by the protocol, which is both earlier
+   *  and exact — so a path arriving here stops the poll register armed. Leaving it running is not
+   *  harmless: startLocate builds its tail **without** `startAtEnd`, so a poll that finds the same
+   *  file a second later re-anchors at the file's start and reads the records this conversation
+   *  ended on as this session's own verdict — the misjudgement attachRollout's `startAtEnd` exists
+   *  to prevent. A poll already awaiting findRollout when this lands still finishes; what it then
+   *  re-attaches is this same session's own new file, so it costs a re-read, not a wrong account.
+   *
+   *  **A null path is the ready event that only knows the thread id.** The id is recorded anyway —
+   *  it is what findLiveByCodexSession answers with and what the roll resumes — and the poll is left
+   *  to map the file, exactly as it does for a fresh pty session. Until it does, the chain is
+   *  unmapped and onLimit's own guard says so.
+   *
+   *  Unregistered or disposed ids do nothing: the subscriber calls this for every chat session, and
+   *  only those that were given a roll chain have a chain here. */
+  attachChat(sessionId: string, codexSessionId: string, rolloutPath: string | null): void {
+    const chain = this.chains.get(sessionId)
+    if (!chain || chain.disposed) return
+    if (!rolloutPath) {
+      // Reported the moment it is learned, like both mapping paths do — Job Continuity binds the
+      // native id here, and the locate that maps the file later sees the same id and stays quiet.
+      if (chain.codexSessionId !== codexSessionId)
+        this.deps.onNativeSession?.(chain.liveId, codexSessionId)
+      chain.codexSessionId = codexSessionId
+      this.deps.log(`codex chat thread id learned session=${sessionId} id=${codexSessionId}`)
+      return
+    }
+    if (chain.locateTimer) {
+      clearTimeout(chain.locateTimer)
+      chain.locateTimer = null
+    }
+    this.attachRollout(chain, codexSessionId, rolloutPath)
+    // The same write the other two mapping paths make on success (register's attach branch and
+    // startLocate): without it a chat conversation's roll config would live only as long as the
+    // session, and the next resume of it could not be prefilled.
+    this.deps.persistConfig?.(codexSessionId, {
+      accountIds: chain.accountIds,
+      prompt: chain.prompt
+    })
+    this.deps.log(`codex rollout attached from chat ready session=${sessionId} id=${codexSessionId}`)
+  }
+
+  /** ipc's chat subscriber: the adapter's turn status (`idle → working|waiting → idle`). A chat chain
+   *  declares its health off a turn that ended without a limit rather than off the pty's
+   *  60-seconds-with-no-limit timer — the protocol says outright when a turn ran, which a screen can
+   *  only infer (spec §14.6). Unregistered ids do nothing; the wiring calls both coordinators.
+   *
+   *  **Nothing is declared here.** This only sets the flag; the tick consumes it, after its own limit
+   *  verdicts have come up empty. That ordering matters more on this side than on claude's: codex has no
+   *  limit *event* at all — the refusal is a record in the rollout, read by the tick — so the status can
+   *  perfectly well flip back to idle before the tick reads the record that says the turn was refused. */
+  onChatStatus(sessionId: string, status: Attention): void {
+    const chain = this.chains.get(sessionId)
+    if (!chain || chain.disposed) return
+    // Harmless today — the wiring only emits this for a chat session — but it keeps the two flags'
+    // scope on the face of the code: they are a chat chain's health evidence and nothing else reads them.
+    if (chain.kind !== 'chat') return
+    if (status !== 'idle') {
+      // Only the idle→non-idle edge is a new turn beginning. A status change inside a turn — a
+      // permission card opening ('waiting') and closing again ('working') — is not, and treating it as
+      // one would clear a limit this turn has already been disqualified by.
+      if (chain.chatPrevStatus === 'idle') chain.chatLimitInTurn = false
+      chain.chatPrevStatus = status
+      return
+    }
+    chain.chatPrevStatus = 'idle'
+    if (!chain.chatLimitInTurn) chain.chatTurnDone = true
+  }
+
   /** Whether this conversation belongs to an active rolling chain — the history resume guard (mirrors findLiveByClaudeSession in rolling.ts) */
   findLiveByCodexSession(codexSessionId: string): SessionInfo | null {
     for (const chain of this.chains.values())
@@ -455,6 +615,16 @@ export class CodexRollingCoordinator {
     if (!chain || chain.disposed) throw new Error('no active codex rolling chain')
     await this.refresh(chain)
     this.onLimit(chain, 'force')
+  }
+
+  /** The roll banner's snapshot, read once as the renderer adopts a session — session:rollState is
+   *  pushed on changes only, so a renderer that mounted after the state was published (a reload) would
+   *  wear no banner. The payload is re-stamped with the chain's current liveId: the recorded one was
+   *  right when it was sent, but a later reattach moved the chain to a new id. */
+  stateOf(sessionId: string): RollStateEvent | null {
+    const chain = this.chains.get(sessionId)
+    if (!chain || chain.disposed || !chain.lastState) return null
+    return { ...chain.lastState, sessionId: chain.liveId }
   }
 
   /** App shutdown and test cleanup — clears every timer */
@@ -572,9 +742,14 @@ export class CodexRollingCoordinator {
         cwd: chain.cwd,
         since,
         now: this.now,
-        excludePaths: this.claimedRollouts(chain)
+        excludePaths: this.claimedRollouts(chain),
+        sessionId: chain.codexSessionId ?? undefined
       })
-      if (chain.disposed || chain.liveId !== liveId) return
+      // `rolloutPath` joins the guard here and not above: an `attachChat` that lands while findRollout is
+      // in flight clears the locate timer, and clearing a timer cannot stop a tick already running. Left
+      // out, that tick would attach again — and it builds its tail *without* startAtEnd, which is the
+      // re-anchoring attachChat's timer-clearing exists to prevent (see attachChat).
+      if (chain.disposed || chain.liveId !== liveId || chain.rolloutPath) return
       // When two chains poll side by side, the other one can bite first while the findRollout above is in
       // flight — re-checking after the await keeps one rollout to one chain. Both paths were produced by
       // findRollout, so the strings are identical.
@@ -757,6 +932,29 @@ export class CodexRollingCoordinator {
     return false
   }
 
+  /** What a switch's 60-seconds-with-no-limit window declares, made callable so a chat chain can declare
+   *  the same thing off a completed turn instead (spec §14.6, the tick). It is one function so the two
+   *  evidences cannot drift: what it clears is shared state — the cycle's streak, this chain's record,
+   *  the registry every other chain reads, and the in-place latch.
+   *
+   *  **What the evidence is worth differs by caller.** The timer says only that no limit was detected for
+   *  60 seconds; a chat chain's completed turn says the account actually took the work. The shared record
+   *  goes either way, because a false one keeps every other chain off the account until its recorded
+   *  reset time passes — the price being that a *true* record another chain wrote inside a pty chain's
+   *  window is erased by a session that has not produced any work of its own yet (blockRegistry.clear).
+   *
+   *  **`clearShared`** is how the once-per-arrival valve is kept (Ruling 4d-7). The pty callers leave it
+   *  at true: each of them fires once per arrival, so they are their own latch. The chat consumption
+   *  site in the tick fires on every clean turn, so it passes false after the first one — the two
+   *  per-chain statements below still run each time, only the registry every other chain reads is
+   *  spared. */
+  private declareHealthy(chain: Chain, clearShared = true): void {
+    chain.cycle.onHealthy()
+    chain.recovery[chain.cycle.currentIndex] = null
+    if (clearShared) this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
+    chain.inPlaceUsed = false
+  }
+
   private onLimit(chain: Chain, reason: LimitReason): void {
     if (chain.rolling || chain.waitTimer || chain.disposed) return
     if (!chain.codexSessionId || !chain.rolloutPath) {
@@ -771,6 +969,13 @@ export class CodexRollingCoordinator {
       clearTimeout(chain.healthyTimer)
       chain.healthyTimer = null
     }
+    // The chat chain's health evidence (spec §14.6). Both halves are set here rather than in an event
+    // handler because codex has no chat limit event: the refusal arrives from the rollout tail on the
+    // tick, so this is the one place that knows a limit landed. The turn that is running now is
+    // disqualified, and a turn that completed *before* this limit says nothing about the account we are
+    // about to leave or wait on, so it stops being evidence too.
+    if (chain.kind === 'chat') chain.chatLimitInTurn = true
+    chain.chatTurnDone = false
     chain.textHit = false
     const action = chain.cycle.onLimit()
     // One clock reading for the whole verdict. pickAvailable and planRetry below have to judge the same
@@ -797,9 +1002,11 @@ export class CodexRollingCoordinator {
       action.type === 'roll' &&
       !chain.recovery[action.toIndex] &&
       this.deps.blocks.get(chain.accountIds[action.toIndex], now) !== null
+    const skipLoggedOut =
+      action.type === 'roll' && chain.loggedOut.has(chain.accountIds[action.toIndex])
     const detour =
       action.type === 'roll' && target !== action.toIndex
-        ? ` blocked(${action.toIndex}${skipShared ? ',shared' : ''})→${target === null ? 'wait' : target}`
+        ? ` blocked(${action.toIndex}${skipShared ? ',shared' : ''}${skipLoggedOut ? ',loggedOut' : ''})→${target === null ? 'wait' : target}`
         : ''
     // reason and the raw reachedType are the only evidence for calibrating the assumptions we have not
     // measured yet (the limit phrase, the reachedType values, replay behaviour) on the first real hit — so
@@ -897,6 +1104,13 @@ export class CodexRollingCoordinator {
    *  tried to stack that verdict three ways and produced a fresh defect every time. */
   private resumeAfterWait(chain: Chain, toIndex: number): Promise<void> {
     if (chain.disposed || chain.rolling) return Promise.resolve()
+    // The wait was planned minutes ago; the target may have been logged out since. Rolling onto it
+    // would copy the transcript and respawn into a CLI that cannot authenticate, so the chain
+    // reschedules instead — the same path every other aborted roll takes (spec §15.3).
+    if (toIndex !== chain.cycle.currentIndex && chain.loggedOut.has(chain.accountIds[toIndex])) {
+      this.rescheduleAbortedRoll(chain, 'target logged out')
+      return Promise.resolve()
+    }
     if (toIndex !== chain.cycle.currentIndex) return this.roll(chain, toIndex) // the account changes
     if (chain.inPlaceUsed) {
       // The last in-place resume never reached the healthy window — that means the reset input line
@@ -954,6 +1168,11 @@ export class CodexRollingCoordinator {
       chain.scanner = new CodexLimitScanner()
       chain.lastOutputAt = this.now()
       chain.inPlaceUsed = true
+      // A resume in place is an arrival too — on the account the chain already holds — so the
+      // shared-clear valve re-opens here exactly as it does on a roll (Ruling 4d-7). Without this the
+      // chain would sit on a reset account for the rest of its life unable to tear up a false record
+      // another chain wrote about it.
+      chain.chatValveSpent = false
       // 'nudged' is the right state — this is a reset resume, not an account switch, the renderer
       // treats it as a momentary event, and the Slack mapping (slack.limitReset) already exists. Same
       // choice as the claude-side resumeInPlace.
@@ -1023,6 +1242,21 @@ export class CodexRollingCoordinator {
   ): Promise<void> {
     chain.healthyTimer = null
     if (chain.disposed || chain.liveId !== liveId) return
+    // A chat chain gets no verdict here (Ruling 4d-8, mirroring the claude side's Ruling 4c-6 gate).
+    // The size question is the wrong one for it: a refused turn appends to the rollout just as an
+    // accepted one does, so "it grew" would declare health on an account that has just said no — and
+    // that declaration resets the cycle's streak, drops this chain's record, releases inPlaceUsed and
+    // clears the **shared** registry entry every other chain reads. It has a better answer already: a
+    // turn that completes with no limit in it, consumed on the tick (spec §14.6). Nothing is scheduled
+    // in its place and nothing needs to be — the block record ages out at its own reset, the tick has
+    // the chain back now the wait timer is gone, and the next rollout record re-plans from scratch.
+    if (chain.kind === 'chat') {
+      this.deps.log(
+        `codex in-place resume on a chat chain: no verdict — health comes from a clean completed turn ` +
+          `session=${liveId}`
+      )
+      return
+    }
     const sizeAfter = chain.rolloutPath
       ? await this.rolloutSize(chain.rolloutPath).catch(() => null)
       : null
@@ -1038,15 +1272,13 @@ export class CodexRollingCoordinator {
       return
     }
     // A turn ran — what the plain healthy timer always did. Without this, recovery[current] stays set
-    // and the next limit is misread as a whole lap being blocked.
-    chain.cycle.onHealthy()
-    chain.recovery[chain.cycle.currentIndex] = null
-    // The rollout grew, so a turn actually ran on this account — of the four clear sites this is the only
-    // one holding evidence of work rather than 60 seconds of silence. So the account demonstrably works and
-    // the shared record must go too: otherwise one bad reading keeps every other chain off it until its
-    // recorded reset time passes (blockRegistry.clear).
-    this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
-    chain.inPlaceUsed = false
+    // and the next limit is misread as a whole lap being blocked. The rollout grew, so a turn actually
+    // ran on this account — of the pty clear sites this is the only one holding evidence of work rather
+    // than 60 seconds of silence — so the shared record goes too: otherwise one bad reading keeps every
+    // other chain off the account until its recorded reset time passes (blockRegistry.clear). Those are
+    // exactly declareHealthy's four statements, and writing them out again here is how the two drift
+    // (Ruling 4d-8). A pty-only site, so clearShared keeps its default.
+    this.declareHealthy(chain)
   }
 
   /** A roll gave up. Schedule the next attempt instead of leaving the chain idle.
@@ -1170,8 +1402,16 @@ export class CodexRollingCoordinator {
       // so a mangled path is mangled either way. What refusing the blank slate buys is that the
       // mangled hint then arrives alongside the full copied conversation and `--resume`, so it is a
       // minor loss instead of a session starting from nothing.
+      //
+      // **It is a pty concern, so a chat chain is not asked.** That whole argument is about an argv:
+      // a chat spawn has no command line, its briefing rides as `initialPrompt` and is sent unsanitized
+      // as the session's first turn (see the spawn below). So a briefing the sanitizer would alter is
+      // still a valid first turn, and refusing the blank slate over it would cost a chat chain a rollout
+      // copy and a `thread/resume` it did not need — and log a line naming a sanitizer that never ran.
       const sanitizedPrompt = sanitizeResumePrompt(prompt)
-      if (strategy === 'smart' && briefed && sanitizedPrompt !== prompt) {
+      const mangled =
+        chain.kind !== 'chat' && strategy === 'smart' && briefed && sanitizedPrompt !== prompt
+      if (mangled) {
         // fix wave 최종, F6: 이 거부는 로그가 없으면 조용히 영구화된다 — userData 경로 하나에
         // `["&|<>^%]` 나 연속된 공백이 있으면 이 설치본의 codex Smart Resume 은 롤마다 여기서
         // 거부되지만, 그때까지 rolling.log 에는 그 사실이 한 줄도 남지 않았다. "폐기된 브리핑은
@@ -1180,7 +1420,6 @@ export class CodexRollingCoordinator {
           `codex smart resume refused — the briefing pointer would be mangled by the argv sanitizer, falling back to --resume session=${chain.liveId}`
         )
       }
-      const mangled = strategy === 'smart' && briefed && sanitizedPrompt !== prompt
       const smart = strategy === 'smart' && briefed && !mangled
       // 거부된 포인터를 그대로 재개 프롬프트로 쓰지 않는다. F3 이 "설정이 꺼진 롤은 탭 브리핑을 아예
       // 만들지 않는다"로 사용자 문구(chain.prompt, NewSessionDialog 의 rollPrompt)를 지켰지만, 그
@@ -1219,21 +1458,38 @@ export class CodexRollingCoordinator {
       // true once the packet moved behind a pointer line (Task 7, resumePacket.ts) — folding a
       // mangled path through the sanitizer would have pointed it at a file that no longer exists,
       // not merely lost a character).
+      //
+      // **A chat chain carries the same prompt as its first turn.** A chat session is not started
+      // from a command line: the prompt is a message its manager sends once the handshake is done,
+      // so it rides as `initialPrompt` — the field the wiring routes into the chat spawn — and
+      // `resumePrompt`, which only ever exists as the argument behind `codex resume <id>`, is not
+      // passed at all. It is passed unsanitized for the same reason: sanitizeResumePrompt blanks
+      // the characters a Windows command line would eat, and there is no command line here. That
+      // makes `mangled` a pty concern from end to end, which is why the branch above does not ask it
+      // of a chat chain at all — neither the text nor the blank slate is decided by a sanitizer that
+      // never runs on this path.
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
+      const chat = chain.kind === 'chat'
       const info = this.deps.spawn({
         account: target,
         cwd: chain.cwd,
+        kind: chain.kind,
         resumeSessionId: smart ? undefined : codexSessionId,
-        resumePrompt: smart ? undefined : mangled ? chain.prompt : prompt,
-        initialPrompt: smart ? sanitizeResumePrompt(prompt) : undefined,
+        ...(chat
+          ? { initialPrompt: prompt }
+          : {
+              resumePrompt: smart ? undefined : mangled ? chain.prompt : prompt,
+              initialPrompt: smart ? sanitizeResumePrompt(prompt) : undefined
+            }),
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // the Slack notification is kept per chain (mirrors rolling.ts)
         bypassPermissions: chain.liveInfo.bypassPermissions,
         // Kept per chain, like the two above: a roll is the same work on another account, so a
         // name the person gave the tab survives it.
         title: chain.liveInfo.title,
-        orchEnv: this.deps.orchEnv?.()
+        orchEnv: this.deps.orchEnv?.(),
+        rollPrompt: chain.liveInfo.rollPrompt
       })
       this.chains.delete(oldId)
       chain.liveId = info.id
@@ -1279,19 +1535,27 @@ export class CodexRollingCoordinator {
       this.deps.send('session:rolled', { oldSessionId: oldId, info, dest })
       this.pushState(chain, 'switching', { accountLabel: target.label, reattach: true })
       this.deps.log(`codex rolled ${oldId} → ${info.id} account=${target.label}`)
-      // No limit detected for 60 seconds after the switch → reset the consecutive block count
-      chain.healthyTimer = setTimeout(() => {
-        chain.healthyTimer = null
-        chain.cycle.onHealthy()
-        chain.recovery[chain.cycle.currentIndex] = null
-        // What this timer observed is 60 seconds with **no limit detected** — not that a turn actually ran
-        // (settleInPlace is the only site with that evidence). The shared record goes with it because a
-        // false one keeps every other chain off the account until its recorded reset time passes; the price
-        // is that a *true* record another chain wrote inside this window is erased by a session that has
-        // not produced any work of its own yet (blockRegistry.clear).
-        this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
-        chain.inPlaceUsed = false
-      }, HEALTHY_MS)
+      if (!chat) {
+        // No limit detected for 60 seconds after the switch → reset the consecutive block count.
+        // What this timer observes is 60 seconds with **no limit detected** — not that a turn actually
+        // ran (settleInPlace is the only site with that evidence). A chat chain is not given it at all:
+        // it waits for the first turn that completes with no limit in it, which is the direct claim the
+        // timer can only approximate (spec §14.6, `onChatStatus` and the tick).
+        chain.healthyTimer = setTimeout(() => {
+          chain.healthyTimer = null
+          this.declareHealthy(chain)
+        }, HEALTHY_MS)
+      } else {
+        // The evidence starts clean on every arrival — no turn of the old session's, and no limit of
+        // its own, may be read as this account's. So does the status the edge is measured from (Ruling
+        // 4d-6): the new session has run no turn yet, so its first non-idle status is a turn beginning.
+        // And so does the shared-clear valve (Ruling 4d-7) — this is an arrival, which is what re-opens
+        // it.
+        chain.chatTurnDone = false
+        chain.chatLimitInTurn = false
+        chain.chatPrevStatus = 'idle'
+        chain.chatValveSpent = false
+      }
       this.pushState(chain, 'none')
     } catch (err) {
       this.deps.log(`codex roll failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1308,12 +1572,58 @@ export class CodexRollingCoordinator {
     }
   }
 
+  /** Refreshes `chain.loggedOut` from the login probe. Fire-and-forget from the tick: the verdict is a
+   *  filter, not a gate, so a refresh that lands a tick late costs one attempt at most — the same
+   *  attempt the chain made before this existed. Guarded across the await like every other tick worker:
+   *  a chain disposed or re-keyed while the probes were in flight must not have a stale set written back.
+   *
+   *  **It runs for a waiting chain too** (ruling 4e-3) — see tick(), which calls it above the waitTimer
+   *  guard. That is the only reason resumeAfterWait's check is worth anything: it reads a set refreshed
+   *  within the last tick rather than one frozen when the wait was planned, and it is what lets the
+   *  reschedule loop end when the person logs back in.
+   *
+   *  `loginRefreshing` latches one round at a time. The probes are I/O and the tick is 15 seconds; two
+   *  slow rounds overlapping could otherwise resolve out of order and write an older verdict last. */
+  private async refreshLoginState(chain: Chain): Promise<void> {
+    const probe = this.deps.loginStatus
+    if (!probe || chain.loginRefreshing) return
+    chain.loginRefreshing = true
+    const liveId = chain.liveId
+    try {
+      const pairs = await Promise.all(
+        chain.accountIds.map(async (id) => [id, await probe(id).catch(() => true)] as const)
+      )
+      if (chain.disposed || chain.liveId !== liveId) return
+      const out = new Set(pairs.filter(([, ok]) => !ok).map(([id]) => id))
+      if (out.size !== chain.loggedOut.size || [...out].some((id) => !chain.loggedOut.has(id)))
+        this.deps.log(
+          out.size === 0
+            ? `all accounts logged in session=${chain.liveId}`
+            : `logged-out accounts session=${chain.liveId} ids=${[...out].join(',')}`
+        )
+      chain.loggedOut = out
+    } finally {
+      chain.loginRefreshing = false
+    }
+  }
+
   /** The 15-second tick — refreshes the state, applies verdict ① (reachedType with no phrase), the
    *  recovered block of a session that has no snapshot yet (judgedByPriorBlock — the only place that
    *  verdict can fire without a phrase) and fallback ③ (100% plus 30 seconds of no output) */
   private tick(): void {
     for (const chain of this.chains.values()) {
-      if (chain.disposed || chain.rolling || chain.waitTimer || !chain.tail) continue
+      if (chain.disposed) continue
+      // Above the rolling/waitTimer guard, and above the tail check (ruling 4e-3). A waiting chain
+      // still relearns login state, because the wait's target is re-checked at fire time against
+      // **this** set: frozen for the wait's duration it would miss a target that logged out during the
+      // wait — the exact failure §15 exists to stop — and a chain already in the logged-out reschedule
+      // loop would never see the account come back, since rescheduleAbortedRoll re-arms waitTimer
+      // inside its own fire callback. An unmapped chain (no tail) learns its accounts' login state for
+      // the same reason. Nothing else may move up here: this call touches only chain.loggedOut, which
+      // no roll in flight reads.
+      void this.refreshLoginState(chain)
+      if (chain.rolling || chain.waitTimer) continue
+      if (!chain.tail) continue
       void this.refresh(chain).then(() => {
         if (chain.disposed || chain.rolling || chain.waitTimer) return
         if (this.judgedByPriorBlock(chain)) return
@@ -1325,6 +1635,21 @@ export class CodexRollingCoordinator {
         if (maxedOut(chain.state) && this.now() - chain.lastOutputAt > FALLBACK_SILENCE_MS) {
           this.recordRecovery(chain)
           this.onLimit(chain, 'maxed+silent')
+          return
+        }
+        // A chat chain's health evidence, consumed once every verdict above has come up empty (spec
+        // §14.6). Reading the rollout first is the point of the ordering: codex has no limit event, so
+        // the refusal that ended a turn is only known after `refresh` above has read the record, and a
+        // turn that ended in a limit must not be counted. The outer loop skips a chain with no tail, so
+        // an unmapped chat chain never declares health — correctly: nothing was read.
+        //
+        // The **shared** clear is passed only on the first clean turn after an arrival (Ruling 4d-7).
+        // It is latched here rather than inside declareHealthy so the pty timer path stays exactly what
+        // it was — that path arms its timer once per arrival and so is its own latch already.
+        if (chain.kind === 'chat' && chain.chatTurnDone) {
+          chain.chatTurnDone = false
+          this.declareHealthy(chain, !chain.chatValveSpent)
+          chain.chatValveSpent = true
         }
       })
     }
@@ -1336,7 +1661,13 @@ export class CodexRollingCoordinator {
     extra?: Partial<RollStateEvent>
   ): void {
     chain.stateSeq++ // the generation advances on every publication — the basis for deciding whether a deferred publication is stale
-    this.deps.send('session:rollState', { sessionId: chain.liveId, state, ...extra })
+    const payload: RollStateEvent = { sessionId: chain.liveId, state, ...extra }
+    // The lasting states are what a late-mounting renderer has to be able to read back; the momentary
+    // ones (nudged/stalled) the renderer never keeps as a banner, so they must not overwrite the last
+    // lasting one either. 'none' clears it.
+    if (state === 'none') chain.lastState = null
+    else if (state !== 'nudged' && state !== 'stalled') chain.lastState = payload
+    this.deps.send('session:rollState', payload)
   }
 
   private disposeChain(chain: Chain): void {

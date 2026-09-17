@@ -277,16 +277,16 @@ export const ko = {
   'settings.info.hostConnected': '연결됨 · 규약 {protocol} · {uptime} 전부터',
   // Appended to hostConnected, and **only after the Host answers what it holds** — until then the
   // row is the connection facts alone. This row exists to answer "does my work survive if I close
-  // this?", so it names all three kinds the Host can be holding: a run's pty outlives the app just
+  // this?", so it names all four kinds the Host can be holding: a run's pty outlives the app just
   // as a session's and a terminal's do (`RunManager.stopAppOwned`), and a row that left runs out
   // told someone whose work is a long build that none of it was protected.
   //
-  // The three figures are separated by commas, not the ' · ' the connected row joins its own parts
-  // with: nested inside that row, the same separator made one clause read as three.
+  // The four figures are separated by commas, not the ' · ' the connected row joins its own parts
+  // with: nested inside that row, the same separator made one clause read as four.
   //
   // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
   // still want real translations.
-  'settings.info.hostHolding': '세션 {sessions}개, 터미널 {terminals}개, 실행 {runs}개 유지 중',
+  'settings.info.hostHolding': '세션 {sessions}개, 대화 {chats}개, 터미널 {terminals}개, 실행 {runs}개 유지 중',
   // The Host outlived an update and still runs the previous version. Replaced on its own the first
   // moment it holds nothing; the button is for not waiting (host-replacement design §6).
   'settings.info.hostOutdated': 'Host {host} · 앱 {app} · 아무것도 유지하지 않게 되면 새 버전으로 바뀝니다',
@@ -294,7 +294,7 @@ export const ko = {
   'settings.info.hostRestarting': '재시작 중…',
   'settings.info.hostRestartConfirmTitle': 'Host 재시작',
   'settings.info.hostRestartConfirmBody':
-    'Host 를 지금 종료하고 새 버전으로 다시 시작합니다. 유지 중인 세션 {sessions}개, 터미널 {terminals}개, 실행 {runs}개가 함께 종료됩니다. 계속할까요?',
+    'Host 를 지금 종료하고 새 버전으로 다시 시작합니다. 유지 중인 세션 {sessions}개, 대화 {chats}개, 터미널 {terminals}개, 실행 {runs}개가 함께 종료됩니다. 계속할까요?',
   'settings.info.hostRestartConfirmBodyNone': 'Host 를 지금 종료하고 새 버전으로 다시 시작합니다. 유지 중인 것은 없습니다. 계속할까요?',
   'settings.info.hostNotConnected': '연결 안 됨',
   'settings.info.hostNotConnectedWhy': '연결 안 됨 · {detail}',
@@ -364,10 +364,12 @@ export const ko = {
   'settings.jobContinuity.turnOffSmartResume.confirm': '끄기',
   'settings.jobContinuity.saveFailed': '작업 이어가기 설정을 저장하지 못했습니다: {detail}',
   // Task 10 — the general settings tab's new-tab default, beside the language row
-  'settings.conversation.title': '새 세션의 기본 화면',
-  'settings.conversation.terminal': '터미널',
-  'settings.conversation.conversation': '대화',
-  'settings.conversation.saveFailed': '새 세션의 기본 화면 설정을 저장하지 못했습니다: {detail}',
+  'settings.defaultKind.title': '새 세션 기본 종류',
+  'settings.defaultKind.terminal': '터미널',
+  'settings.defaultKind.chat': '대화',
+  'settings.defaultKind.hint':
+    '새 세션과 이어하기 창이 이 종류로 열립니다. 창 안에서 바꾸면 그 세션에만 적용됩니다.',
+  'settings.defaultKind.saveFailed': '새 세션 기본 종류를 저장하지 못했습니다: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': '터미널 영문 폰트',
   'settings.font.hangul': '터미널 한글 폰트',
@@ -684,6 +686,13 @@ export const ko = {
   'session.new.cliMissingPost': '설치 후 다시 시도하세요.',
   'session.field.projectFolder': '프로젝트 폴더',
   'session.field.account': '계정',
+  // 세션 방식 선택(Task 7) — 터미널/대화 세그먼트 컨트롤. 대화는 Host 가 proc-* 를 말해야 켜진다
+  // (kindHostOld); 계정이 Codex 인지 Claude 인지는 더 이상 가리지 않는다.
+  'session.kind.terminal': '터미널',
+  'session.kind.chat': '대화',
+  'session.new.kindLabel': '세션 방식',
+  'session.new.kindChatHint': '대화 세션은 터미널 없이 대화창만 씁니다. 선택지와 권한 확인이 카드로 옵니다.',
+  'session.new.kindHostOld': 'Host 가 새 버전으로 바뀐 뒤 사용할 수 있습니다',
   'session.new.folderNotSelected': '(선택 안 됨)',
   'session.new.pickFolder': '선택…',
   'session.new.useWorktree': 'worktree로 분리해서 시작',
@@ -713,12 +722,12 @@ export const ko = {
   // command itself one click away for whoever wants it.
   // The one question a first run asks: what a new session opens on. Shown only on a machine with no
   // settings file at all — see main/appSettingsStore.ts's firstRunAsked for why an update never sees it.
-  'firstRun.title': '새 세션을 어떤 화면으로 시작할까요?',
-  'firstRun.body': '둘 다 같은 세션입니다. 보는 방식만 다르고 언제든 설정 또는 세션 우측 상단에서 변경하실 수 있습니다.',
+  'firstRun.title': '새 세션을 무엇으로 시작할까요?',
+  'firstRun.body': '언제든 설정에서 바꿀 수 있고, 세션을 만들 때 창에서 다른 쪽을 고를 수도 있습니다.',
   'firstRun.terminal': '터미널',
-  'firstRun.terminalWhat': 'CLI 화면 그대로',
-  'firstRun.conversation': '대화',
-  'firstRun.conversationWhat': '주고받은 대화로 읽기',
+  'firstRun.terminalWhat': 'CLI 를 터미널 그대로',
+  'firstRun.chat': '대화',
+  'firstRun.chatWhat': '터미널 없이 주고받기',
   'setup.title': '클로드와 코덱스 프로그램을 찾을 수 없습니다',
   'setup.body': '사용하시려는 프로그램을 아래 설치 버튼을 눌러 설치해 주세요',
   'setup.claudeWhat': 'Anthropic 의 코딩 에이전트',
@@ -752,6 +761,12 @@ export const ko = {
   'session.new.schedDaysUnit': '일',
   'session.new.schedCommandPlaceholder': '실행할 명령어 (필수)',
   'session.new.schedHint': '지정 주기마다 이 명령을 세션에 전송',
+  // 대화 session's scheduler — what it sends is a prompt, not a command, so the checkbox label, the
+  // field's placeholder and its hint all say so (chat-sessions slice 4a, Task 1: a slash command on
+  // codex 대화 lands as prompt text, not a command)
+  'session.new.schedLabelChat': '스케쥴러 — 주기적으로 프롬프트 자동 전송',
+  'session.new.schedCommandPlaceholderChat': '보낼 프롬프트 (필수)',
+  'session.new.schedHintChat': '지정 주기마다 이 프롬프트를 새 턴으로 전송',
   // Shared by NewSessionDialog.tsx and TerminalView.tsx — weekday button labels, weekday text in the schedule summary.
   // Index 0 = Sunday (matches the Date.getDay() convention)
   'session.sched.weekday.sun': '일',
@@ -800,8 +815,9 @@ export const ko = {
   'session.terminal.loadingContent': '내용 불러오는 중…',
   'session.terminal.exited': '종료됨 (코드 {code})',
   'session.terminal.restart': '다시 시작',
-  // TerminalView.tsx schedule banner — schedRuleSummary is a module-level pure function, so it takes t as an argument
-  // (the same convention as fmtTime/fmtDateTime). A merge from main brought in hardcoded text, later moved into this catalog
+  // The schedule banner SessionStateBanners.tsx draws, on the terminal and on the conversation pane alike
+  // — schedRuleSummary is a module-level pure function, so it takes t as an argument (the same convention
+  // as fmtTime/fmtDateTime beside it). A merge from main brought in hardcoded text, later moved into this catalog
   'session.terminal.schedFallback': '스케쥴',
   'session.terminal.schedSummary.interval': '{minutes}분마다',
   'session.terminal.schedSummary.daily': '매일 {time}',
@@ -1129,6 +1145,13 @@ export const ko = {
   'slack.inbox.tooLong': '⚠️ 답장이 너무 길어 전달하지 않았습니다 ({max}자 이하만 가능)',
   'slack.inbox.sessionEnded': '⚠️ 이 세션은 종료되어 입력을 전달하지 못했습니다',
   'slack.inbox.injectFailed': '⚠️ 입력을 전달하지 못했습니다',
+  // core/slack/chatRequest.ts — a chat session's open card as Slack text, and a thread reply's result.
+  'slack.approval.hint': '💡 허용 또는 거절로 답장',
+  'slack.approval.hintAlways': '💡 허용, 항상 허용 또는 거절로 답장',
+  'slack.approval.unknownReply': '⚠️ 허용 또는 거절로 답장해 주세요',
+  'slack.approval.unknownReplyAlways': '⚠️ 허용, 항상 허용 또는 거절로 답장해 주세요',
+  'slack.chat.sendRefused': '⚠️ CLI가 메시지를 받지 않았습니다 — {reason}',
+  'slack.chat.turnFailed': '⚠️ 턴 실패 — {message}',
   'slack.limitNoResume': '⛔ 한도 도달 — 자동 재개 없음',
   'slack.limitNoResumeAt': '⛔ 한도 도달 — 자동 재개 없음 (리셋 {at})',
   // Desktop notification bodies. They follow the app language, the same way Slack's already do. The
@@ -1440,6 +1463,19 @@ export const ko = {
   'conversation.pending.action': '선택지 보기',
   'conversation.pending.pick': '아래에서 고르면 그대로 전해집니다. 직접 입력해도 됩니다.',
   'conversation.pending.terminal': '터미널로 이동',
+  'conversation.pending.about': '요청 내용',
+  'conversation.ask.title': 'Claude 가 묻습니다',
+  'conversation.ask.other': '직접 입력',
+  'conversation.ask.otherPlaceholder': '여기에 입력합니다.',
+  'conversation.ask.submit': '답변 보내기',
+  'conversation.ask.answering': '보내는 중입니다.',
+  'conversation.ask.waiting': '터미널에 질문이 뜨기를 기다리고 있습니다.',
+  'conversation.ask.terminal': '터미널에서 답하기 시작했습니다. 거기서 마치세요.',
+  'conversation.ask.stopped.dialog-gone': '터미널의 질문 화면이 사라져 보내지 않았습니다.',
+  'conversation.ask.stopped.not-pristine': '터미널에서 답하기 시작했습니다. 거기서 마치세요.',
+  'conversation.ask.stopped.no-change': '터미널이 키에 반응하지 않아 멈췄습니다. 터미널에서 확인하세요.',
+  'conversation.ask.stopped.stuck': '터미널이 예상과 다르게 움직여 멈췄습니다. 터미널에서 확인하세요.',
+  'conversation.ask.stopped.review-mismatch': '터미널의 확인 화면이 고른 답과 달라 보내지 않았습니다. 터미널에서 확인하세요.',
   'conversation.running.thinking': '생각 중',
   'conversation.running.working': '실행 중',
   'conversation.exited.title': '이 세션은 종료되었습니다',
@@ -1463,5 +1499,17 @@ export const ko = {
   'conversation.loadMore': '이전 대화 더 보기',
   // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
   'conversation.toggle.terminal': '터미널',
-  'conversation.toggle.conversation': '대화'
+  'conversation.toggle.conversation': '대화',
+  // Task 9 — the chat pane's request card (ChatRequestCard.tsx) and the plan-mode pill (ModelControl.tsx)
+  'chat.ask.title': '{who} 가 묻습니다',
+  'chat.approval.title': '{who} 가 {tool} 실행 허가를 묻습니다',
+  'chat.approval.accept': '허용',
+  'chat.approval.acceptForSession': '이 세션에서는 항상 허용',
+  'chat.approval.decline': '거절',
+  'chat.notice.checking': '상태를 확인하는 중',
+  'chat.notice.endsWithApp': '이 세션은 앱을 끄면 끝납니다',
+  'chat.notice.error': '턴이 실패했습니다: {message}',
+  'chat.model.plan': 'Plan',
+  'chat.model.planOn': 'Plan 모드 켬',
+  'chat.model.planOff': 'Plan 모드 끔'
 } as const

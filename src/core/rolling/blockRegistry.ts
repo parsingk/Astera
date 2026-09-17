@@ -41,16 +41,21 @@ export class BlockRegistry {
 
   /** The account was observed working, so whatever was recorded about it is wrong or spent.
    *
-   *  **Exactly how far this valve reaches.** The coordinators call it from their healthy timers, and a
-   *  healthy timer is armed once per arrival on an account (a roll, or an in-place resume) and never
-   *  re-armed afterwards. So a false record is torn up only when it lands while some chain is inside its
-   *  ~60-second window right after arriving on that account. That is the window in which a replayed or
-   *  misread limit phrase actually fires, which is why the valve is placed there.
+   *  **Exactly how far this valve reaches.** The coordinators call it once per arrival on an account (a
+   *  roll, or an in-place resume) and never again until the next arrival. For a pty chain that is the
+   *  healthy timer, armed at the arrival and never re-armed. A chat chain has no such timer — it
+   *  declares health off every turn that completes with no limit in it (spec §14.6) — so the same rule
+   *  is kept by a latch at its consumption site: **a chat chain clears here on its first clean completed
+   *  turn after a roll or an in-place resume, and its later turns release only its own state** (the
+   *  cycle's streak, that chain's own record, its inPlaceUsed). Either way a false record is torn up
+   *  only when it lands while some chain is in the window right after arriving on that account, which is
+   *  the window in which a replayed or misread limit actually fires — which is why the valve is there.
    *
-   *  **What "observed working" is worth at each caller.** Only codex's settleInPlace checks evidence of
-   *  work (the rollout grew, so a turn ran). The other three fire after 60 seconds in which no limit was
-   *  detected, which is the weaker claim — so a *true* record can be erased by a chain that arrived on the
-   *  account and has not done anything on it yet, and the chains behind it each pay a respawn there.
+   *  **What "observed working" is worth at each caller.** codex's settleInPlace checks evidence of work
+   *  (the rollout grew, so a turn ran) and a chat chain's completed turn is that same direct claim. The
+   *  pty timers fire after 60 seconds in which no limit was detected, which is the weaker one — so a
+   *  *true* record can be erased by a chain that arrived on the account and has not done anything on it
+   *  yet, and the chains behind it each pay a respawn there.
    *
    *  **What it does not reach:** a chain that has been working on the account for an hour. Its healthy
    *  timer fired long ago, and once a false record stands, pickAvailable steers every chain away from the

@@ -138,7 +138,32 @@ export function buildScheduleConfig(input: ScheduleInput): ScheduleConfig | null
  * does not have (the 31st in February) skips ahead to a month that does have it.
  */
 export function nextFireAt(rule: ScheduleRule, fromMs: number): number {
-  if (rule.kind === 'interval') return fromMs + rule.minutes * 60_000
+  if (rule.kind === 'interval') {
+    // The fire time is aligned to the interval's own unit, so a schedule set at 10:47:33 fires at
+    // 10:48:00 rather than carrying that :33 through every round for the session's life. A whole
+    // number of hours is an hour-unit interval and lands on the top of the hour, at zero minutes and
+    // zero seconds; anything else is minute-unit and lands on the minute's zero second. Done through
+    // `Date` rather than by flooring the epoch, because an hour boundary is a *local* one — a zone
+    // offset by a half or quarter hour puts the local top of the hour nowhere near a UTC one.
+    //
+    // The first period is therefore shorter than the interval whenever the clock is mid-unit at
+    // registration (27 seconds, for the 10:47:33 case above). That is the intent: the first round
+    // should land on the next clean boundary rather than a unit later. Registering exactly on a
+    // boundary keeps the full interval, since flooring then changes nothing.
+    //
+    // The result is always strictly later than `fromMs`: flooring removes less than one unit, and the
+    // interval added is at least one unit in both branches (an hour-unit interval is 60 minutes or
+    // more). So no round can fire at or before the moment it was planned from, whatever the clock does
+    // — including across a DST change, which moves local labels but never runs epoch time backwards.
+    // What a DST change can cost is the alignment itself, and only in a zone whose shift is not a whole
+    // hour (Lord Howe Island's half hour): the top of an hour that the transition skipped is not a real
+    // local time, and where the engine puts it is its own business. Nothing in a whole-hour zone, and
+    // nothing at all in Asia/Seoul, which has no DST.
+    const d = new Date(fromMs)
+    if (rule.minutes % 60 === 0) d.setMinutes(0, 0, 0)
+    else d.setSeconds(0, 0)
+    return d.getTime() + rule.minutes * 60_000
+  }
   let accept: (d: Date) => boolean
   if (rule.kind === 'daily') accept = () => true
   else if (rule.kind === 'weekly') {

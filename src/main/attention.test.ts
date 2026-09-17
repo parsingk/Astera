@@ -168,6 +168,22 @@ describe('createAttentionState — forget', () => {
   })
 })
 
+describe('createAttentionState — set', () => {
+  it('set writes a value outright and notifies only on change', () => {
+    const s = createAttentionState()
+    const seen: Array<[string, string]> = []
+    s.subscribe((id, v) => seen.push([id, v]))
+    s.set('c1', 'working')
+    s.set('c1', 'working')
+    s.set('c1', 'waiting')
+    expect(s.get('c1')).toBe('waiting')
+    expect(seen).toEqual([
+      ['c1', 'working'],
+      ['c1', 'waiting']
+    ])
+  })
+})
+
 describe('createAttentionState — malformed input', () => {
   it('a non-object payload and an unrecognised hook_event_name are ignored rather than throwing', () => {
     const state = createAttentionState()

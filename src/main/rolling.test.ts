@@ -8,6 +8,7 @@ import { claudeHistoryStrategy } from '../core/history/strategies/claude'
 import { matchesLimitPhrase } from '../core/rolling/detect'
 import { parseResetTime } from '../core/rolling/resetTime'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
+import type { RollConfig } from '../core/rolling/config'
 import { RollingCoordinator, type RollingDeps } from './rolling'
 
 const acc = (id: string, label: string): Account => ({
@@ -38,6 +39,13 @@ function harness(overrides: Partial<RollingDeps> = {}): {
   sent: { channel: string; payload: Record<string, unknown> }[]
   copied: { src: string; dest: string }[]
   spawned: (SessionInfo & { orchEnv?: { cliPath: string; infoPath: string; skillsPath: string } })[]
+  /** The whole opts object each spawn was given. `spawned` only carries the fields the fake turns back
+   *  into a SessionInfo, and a chat roll is decided by two that it does not — kind and initialPrompt. */
+  spawnedOpts: Parameters<RollingDeps['spawn']>[0][]
+  persisted: { key: string; config: RollConfig }[]
+  /** Sessions whose statusLine is never read. A chat session writes none, so the real wiring answers
+   *  null for it — listing the id here makes the fake say the same thing. */
+  chatIds: Set<string>
   payloads: Map<string, unknown>
   info1: SessionInfo
 } {
@@ -51,6 +59,9 @@ function harness(overrides: Partial<RollingDeps> = {}): {
   const sent: { channel: string; payload: Record<string, unknown> }[] = []
   const copied: { src: string; dest: string }[] = []
   const spawned: (SessionInfo & { orchEnv?: { cliPath: string; infoPath: string; skillsPath: string } })[] = []
+  const spawnedOpts: Parameters<RollingDeps['spawn']>[0][] = []
+  const persisted: { key: string; config: RollConfig }[] = []
+  const chatIds = new Set<string>()
   const payloads = new Map<string, unknown>()
   let seq = 1
   const coord = new RollingCoordinator({
@@ -65,16 +76,20 @@ function harness(overrides: Partial<RollingDeps> = {}): {
         resumeSessionId: opts.resumeSessionId,
         rollAccountIds: opts.rollAccountIds,
         slackNotify: opts.slackNotify,
-        bypassPermissions: opts.bypassPermissions
+        bypassPermissions: opts.bypassPermissions,
+        rollPrompt: opts.rollPrompt
       }
       spawned.push({ ...info, orchEnv: opts.orchEnv })
+      spawnedOpts.push(opts)
+      if (opts.kind === 'chat') chatIds.add(info.id) // the respawned chat session has no statusLine either
       events.push(`spawn:${info.id}:${opts.account.id}`)
       return info
     },
     write: (id, data) => written.push({ id, data }),
     kill: (id) => events.push(`kill:${id}`),
     getAccount: (id) => accounts[id] ?? null,
-    readStatusPayload: (id) => Promise.resolve(payloads.get(id) ?? null),
+    readStatusPayload: (id) => Promise.resolve(chatIds.has(id) ? null : (payloads.get(id) ?? null)),
+    persistConfig: (key, config) => persisted.push({ key, config }),
     send: (channel, p) => sent.push({ channel, payload: p as Record<string, unknown> }),
     log: () => {},
     lang: () => 'ko', // 기존 한국어 기대값을 유지
@@ -97,7 +112,7 @@ function harness(overrides: Partial<RollingDeps> = {}): {
   // settleIo가 "아직 뭔가 도착하는 중인가"를 판단할 근거. 하네스가 스스로 등록하므로 호출부는
   // 그대로다 — 자세한 이유는 settleIo 위 주석에
   ioProbes.push(() => events.length + written.length + sent.length + copied.length + spawned.length)
-  return { coord, events, written, sent, copied, spawned, payloads, info1 }
+  return { coord, events, written, sent, copied, spawned, spawnedOpts, persisted, chatIds, payloads, info1 }
 }
 
 // 이 리터럴이 통짜면 이 테스트 파일 자체가 롤링 세션의 PTY로 흘러갈 때(예: cat/read) 스캐너가
@@ -989,6 +1004,35 @@ describe('RollingCoordinator 단일 계정 자동 재개', () => {
     await vi.advanceTimersByTimeAsync(15 * MIN + 2 * MIN)
     expect(h.spawned).toEqual([])
     expect(resumeCount(h)).toBe(1)
+  })
+
+  it('stateOf reflects a waiting state', async () => {
+    const h = harness()
+    const now = Date.now()
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(now + 10 * MIN).toISOString() }))
+    h.coord.register(infoSelf())
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }); await flush()
+    expect(h.coord.stateOf('s1')).toMatchObject({ state: 'waiting', scope: 'session' })
+  })
+
+  // The wait timer fires resumeInPlace, which publishes the momentary 'nudged' on its way to sending the
+  // carry-on prompt. That must not erase the recorded 'waiting' — the banner a late-mounting renderer
+  // reads back is only replaced by 'none' (after the Enter that follows the prompt), not by a nudge.
+  it('a nudge from resuming in place does not clobber the recorded waiting state', async () => {
+    const h = harness()
+    const now = Date.now()
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(now + 10 * MIN).toISOString() }))
+    h.coord.register(infoSelf())
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }); await flush()
+    const waiting = h.coord.stateOf('s1')
+    expect(waiting).toMatchObject({ state: 'waiting' })
+    const retryAt = Date.parse(String(waiting?.nextRetryAt))
+    await vi.advanceTimersByTimeAsync(retryAt - Date.now() + 10) // fires the wait timer, short of the 150ms Enter delay
+    expect(resumeCount(h)).toBe(1) // resumed in place — publishes the momentary 'nudged'
+    expect(h.sent.some((s) => s.payload.state === 'nudged')).toBe(true)
+    expect(h.coord.stateOf('s1')).toEqual(waiting) // the nudge left the recorded wait untouched
+    await vi.advanceTimersByTimeAsync(150) // the Enter delay — 'none' now clears it
+    expect(h.coord.stateOf('s1')).toBeNull()
   })
 })
 
@@ -2882,5 +2926,707 @@ describe('등록 시점의 재개 정보', () => {
     await flush()
     expect(h.copied.some((c) => c.src === DEST)).toBe(false)
     expect(h.sent.at(-1)?.payload.state).toBe('waiting') // "세션 메타 없음"으로 중단하고 재시도를 예약한다
+  })
+})
+
+// Chat sessions (slice 4c). A chat chain has no PTY of its own: the CLI session id and the transcript
+// path a PTY chain reads off the statusLine are pushed in by ipc (onChatMeta), the limit that a PTY
+// chain matches in its bytes arrives as a rateLimit event (onChatLimit), and the carry-on prompt a PTY
+// chain types into the screen after the respawn rides along with the spawn as the new process's first
+// turn. Everything between those ends — the evidence gate, the block records, the retry plan, the copy
+// and the re-key — is the same code.
+describe('chat chains', () => {
+  const chatInfo = (id: string, over: Partial<SessionInfo> = {}): SessionInfo => ({
+    id,
+    accountId: 'a1',
+    cwd: 'D:\\work\\p',
+    status: 'running',
+    title: 'p',
+    kind: 'chat',
+    rollAccountIds: ['a1', 'a2'],
+    ...over
+  })
+  const rejected = {
+    status: 'rejected',
+    resetsAt: null,
+    utilization: null,
+    window: null,
+    source: 'event'
+  } as const
+
+  it('a chat chain learns its id and transcript from onChatMeta, persisting the config once', () => {
+    const h = harness()
+    h.chatIds.add('c1') // a chat session writes no statusLine — the real wiring answers null for it
+    h.coord.register(chatInfo('c1'))
+    // Either half may arrive first, and each call applies what it has
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: null })
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    expect(h.persisted).toEqual([
+      { key: 'th-1', config: { accountIds: ['a1', 'a2'], prompt: expect.any(String) } }
+    ])
+    expect(h.coord.findLiveByClaudeSession('th-1')?.id).toBe('c1')
+  })
+
+  it('a rejected rateLimit rolls the chat chain: copy → kill → chat spawn with the carry-on prompt as its first turn, no write', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    expect(h.spawnedOpts[0]).toMatchObject({
+      kind: 'chat',
+      resumeSessionId: 'th-1',
+      initialPrompt: expect.any(String),
+      rollAccountIds: ['a1', 'a2']
+    })
+    expect(h.written).toEqual([]) // no typed prompt, no Enter — the prompt went with the spawn
+    const states = h.sent.filter((s) => s.channel === 'session:rollState').map((s) => s.payload.state)
+    // awaitingReady is released with the spawn, so 'none' follows at once — there is no readiness poll
+    expect(states.slice(-2)).toEqual(['switching', 'none'])
+  })
+
+  // Claude's model is argv and nothing about it survives the process — `--resume` restores the
+  // conversation, not a mid-session set_model. So a roll that respawns without it starts the next
+  // account's process on the CLI's own default, and a person who picked Opus watches it turn into
+  // whatever that account defaults to. Read before the kill, because the manager drops the session with
+  // the process and the choice goes with it.
+  it('a chat roll carries the model the person picked', async () => {
+    const killed = new Set<string>()
+    const h = harness({
+      readUsage: () => Promise.resolve(peak(100)),
+      // Mimics the manager: the session is gone once killed, and the choice goes with it. A read
+      // placed after the kill comes back null here exactly as it would in the app, so this catches
+      // the ordering and not just the plumbing.
+      chosenModelOf: (id) => (killed.has(id) ? null : 'opus'),
+      kill: (id) => void killed.add(id)
+    })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.spawnedOpts[0]).toMatchObject({ kind: 'chat', model: 'opus' })
+  })
+
+  it('stateOf returns the last lasting roll state and null after none', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    // rolled: the chain now lives under s2, and its banner is 'switching' (reattach) then 'none'
+    expect(h.coord.stateOf('s2')).toBeNull() // 'none' was published at the end of a chat roll
+    expect(h.coord.stateOf('c1')).toBeNull() // old id is gone
+  })
+
+  it('a rateLimit that is not rejected does nothing (logged once)', async () => {
+    const logs: string[] = []
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)), log: (m) => logs.push(m) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', {
+      status: 'allowed_warning',
+      resetsAt: null,
+      utilization: 0.99,
+      window: 'seven_day',
+      source: 'event'
+    })
+    h.coord.onChatLimit('c1', {
+      status: 'allowed_warning',
+      resetsAt: null,
+      utilization: 0.995,
+      window: 'seven_day',
+      source: 'event'
+    })
+    await flush()
+    expect(h.events).toEqual([])
+    expect(logs.filter((l) => l.includes('rate limit not rejected'))).toHaveLength(1)
+  })
+
+  // The post-switch cooldown is `awaitingReady`, and onChatLimit answers to it exactly as the PTY
+  // phrase path in handleData does. It cannot be demonstrated on a chat chain: a chat respawn releases
+  // the flag as it spawns (there is no readiness poll to wait for and nothing is replayed into a fresh
+  // process), so a chat chain's cooldown is already over. So the rule is pinned on a PTY chain, which
+  // holds the flag until its automatic prompt goes out.
+  //
+  // What is asserted is that the account is never asked. "No second roll" alone proves nothing here —
+  // the replay grace refuses a limit for the first 60 seconds after a roll, and onLimit guards the same
+  // flag again at the end — so the clock is moved past that grace and the observable is the lookup the
+  // cooldown skips. The trust dialog is what keeps the flag up that long: it blocks the 30-second
+  // no-statusline fallback, which would otherwise have released it.
+  it('a rejected rateLimit during the post-switch cooldown is ignored', async () => {
+    let usageCalls = 0
+    const h = harness({
+      readUsage: () => {
+        usageCalls++
+        return Promise.resolve(peak(100))
+      }
+    })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }) // → a2 (s2), awaitingReady = true
+    await flush()
+    expect(h.spawned).toHaveLength(1)
+    h.coord.handleData({ sessionId: 's2', data: 'Do you trust the files in this folder?' })
+    await vi.advanceTimersByTimeAsync(65_000) // past REPLAY_GRACE_MS, still short of the 120s deadline
+    const asked = usageCalls
+    h.coord.onChatLimit('s2', rejected)
+    await flush()
+    await flush()
+    expect(usageCalls).toBe(asked) // the account is not even asked — the cooldown refused it first
+    expect(h.spawned).toHaveLength(1) // and nothing rolled
+  })
+
+  it('an unknown session id is ignored by both entry points', () => {
+    const h = harness()
+    h.coord.onChatMeta('nobody', { claudeSessionId: 'x', transcriptPath: null })
+    h.coord.onChatLimit('nobody', rejected)
+    expect(h.events).toEqual([])
+  })
+
+  // Ruling 4c-6. The settle verdict asks one question — did the statusLine come back — and answers it
+  // by looking at claudeSessionId and transcriptPath. For a chat chain those two were pushed in by
+  // onChatMeta before the limit ever happened, so the verdict passed on evidence it had not gathered
+  // and cleared the block record every other chain in both coordinators reads.
+  //
+  // **What the assertion can see.** The wait runs until the record's own expiry, so by the time the
+  // in-place resume happens `blocks.get` answers null either way — an expired record is not a block.
+  // What the bug does is *delete the entry*, and `size` is what tells "aged out where it stands" from
+  // "torn up". The cross-chain cost of tearing it up is already pinned on the pty path (the shared
+  // record test above).
+  it('an in-place resume declares nothing — the block record is left to age out', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks, readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    // A single account is the whole in-place path: there is nowhere to roll to, so the limit becomes a
+    // wait and the wait resumes on the account it is already on.
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual([]) // no copy, no kill, no spawn — it waits
+    expect(blocks.size).toBe(1)
+    // The wait (15 minutes — the fallback when no reset time is known), then the in-place resume, then
+    // the settle verdict 60 seconds after it.
+    await vi.advanceTimersByTimeAsync(15 * 60_000 + 61_000)
+    await flush()
+    // The resume really happened — the routed text went out through `write`. (The Enter that follows it
+    // on a pty is dropped by the chat write dep in index.ts, so it is not this coordinator's concern.)
+    expect(h.written.filter((w) => w.id === 'c1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    expect(blocks.size).toBe(1)
+  })
+
+  // Ruling 4c-7 (spec §8.1's utilization clause). A chat session writes no statusLine, so the number
+  // the replay grace, the limit-evidence gate and the single-account blind-spot check all read can only
+  // arrive on the rateLimit event. Without it the grace is unconditional for the whole 60 seconds after
+  // a roll, and switching onto an account that is already exhausted is met with silence.
+  it('a rateLimit records the usage figure, so an exhausted account is not shielded by the replay grace', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1', 'a2', 'a3'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    // The new session, still inside the 60-second replay grace. An 'allowed_warning' rides along with
+    // an ordinary turn and rolls nothing — what it does is say this account is at 99%.
+    h.coord.onChatMeta('s2', { claudeSessionId: 'th-2', transcriptPath: 'D:/t/th-2.jsonl' })
+    h.coord.onChatLimit('s2', {
+      status: 'allowed_warning',
+      resetsAt: null,
+      utilization: 0.99,
+      window: 'seven_day',
+      source: 'event'
+    })
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    // …so the rejection that follows it, still inside the grace, is read the way the pty path reads a
+    // snapshot that already says exhausted: genuine, not an echo of the limit that caused the roll.
+    h.coord.onChatLimit('s2', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2', 'copy', 'kill:s2', 'spawn:s3:a3'])
+  })
+
+  // A `/clear` starts a new conversation under a new id, and the file the old one was written to is not
+  // this one's. Left in place, the next roll copies that dead conversation into the target account and
+  // resumes the new id against it.
+  it('a changed id drops the transcript the old conversation was written to', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-2', transcriptPath: null }) // the /clear's second ready
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.copied).toEqual([])
+    expect(h.events).toEqual([])
+    // The abort a chain that never learned a path takes today — a visible wait rather than silence.
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+  })
+
+  // The other half of Ruling 4c-7. A meta event is identity only — it carries no usage window at all —
+  // so the figure the rateLimit event recorded has to survive one. It did not: applyMeta's last act
+  // refreshes lastUsagePct from the payload it was handed, and a chat meta payload has nothing to give
+  // it, so every `/clear` (and every late transcript lookup) nulled the number and handed the replay
+  // grace back its blindfold.
+  it('a later meta does not wipe the usage figure the rateLimit recorded', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1', 'a2', 'a3'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    // The new session, inside the 60-second replay grace: it reports 99% on an ordinary turn…
+    h.coord.onChatMeta('s2', { claudeSessionId: 'th-2', transcriptPath: 'D:/t/th-2.jsonl' })
+    h.coord.onChatLimit('s2', {
+      status: 'allowed_warning',
+      resetsAt: null,
+      utilization: 0.99,
+      window: 'seven_day',
+      source: 'event'
+    })
+    // …and then a `/clear` starts a third conversation. The identity changes; the account's usage is a
+    // fact about the account, so it does not.
+    h.coord.onChatMeta('s2', { claudeSessionId: 'th-3', transcriptPath: 'D:/t/th-3.jsonl' })
+    h.coord.onChatLimit('s2', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2', 'copy', 'kill:s2', 'spawn:s3:a3'])
+  })
+
+  it('carries the user rollPrompt onto the roll spawn', async () => {
+    const h = harness()
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { rollPrompt: 'keep going in Korean' }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.spawnedOpts[0]).toMatchObject({ rollPrompt: 'keep going in Korean' })
+  })
+
+  // Spec §14.6. A pty chain declares itself healthy 60 seconds after a switch with no limit detected,
+  // which is the best evidence a screen can give. A chat session says outright when a turn ran, so the
+  // evidence is the turn itself — and it is the *tick* that consumes it, after the transcript tail has
+  // been read and found nothing, so a turn that ended in a limit is never counted.
+  //
+  // What the assertion can see is the shared registry: declareHealthy clears the account's entry there
+  // (and the chain's own record, and inPlaceUsed, which have no observable surface from outside).
+  it('a completed turn declares health — the shared record goes without the 60s timer', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks, readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2']) // rolled onto a2
+    // Another chain's block record on the account we have just arrived on. Its reset is far enough away
+    // that time alone cannot make it answer null — only a clear can.
+    blocks.record('a2', { at: Date.now() + 30 * 60_000, weekly: false, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatStatus('s2', 'idle') // a turn completed with no rejection in it
+    await advanceIo(15_000) // the tick reads the tail first, then consumes the completed turn
+    expect(blocks.get('a2', Date.now())).toBeNull()
+  })
+
+  // The other half of the same rule: with no turn there is no evidence, so nothing is declared — where
+  // the pty rule would have declared health on the clock alone.
+  it('a chat roll no longer arms the 60s healthy timer', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks, readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    blocks.record('a2', { at: Date.now() + 30 * 60_000, weekly: false, since: Date.now() }, Date.now())
+    await advanceIo(65_000) // 60s+ with no turn at all — the pty rule would have torn the record up
+    expect(blocks.get('a2', Date.now())).not.toBeNull()
+  })
+
+  // A rejection inside the 60-second replay grace is refused (the account's usage is unknown right
+  // after a roll), so nothing rolls and the chain stays on a2 — which is exactly what makes this
+  // observable: the turn that carried the rejection must not clear a2's record when it ends, and the
+  // *next* clean turn must. Asserting on the account the chain is sitting on is the only reading
+  // available; a rejection that did roll would leave the chain somewhere else entirely.
+  it('a turn that carried a rejected limit is not health evidence', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks, readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    blocks.record('a2', { at: Date.now() + 30 * 60_000, weekly: false, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatLimit('s2', rejected) // refused by the replay grace — but the turn is still a rejected turn
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2']) // nothing rolled: the grace held
+    h.coord.onChatStatus('s2', 'idle')
+    await advanceIo(15_000)
+    expect(blocks.get('a2', Date.now())).not.toBeNull()
+    // …and the flag is per-turn, so the turn after it is evidence again.
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatStatus('s2', 'idle')
+    await advanceIo(15_000)
+    expect(blocks.get('a2', Date.now())).toBeNull()
+  })
+
+  // Spec §14.6's seed clause. The seed describes the conversation the session was *opened* with, and
+  // after a `/clear` that is not this conversation any more. Left in place it is what roll() falls back
+  // to, so the roll would copy the dead file and resume the new id against it. Same shape as the
+  // transcript-drop test above: with nothing to copy, the roll takes the "no session metadata" path.
+  it('a changed id drops the resume seed the session was opened with', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { resumeSessionId: 'seed-1' }), 'D:/cfg/a1/seed-1.jsonl')
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-new', transcriptPath: null }) // the /clear's ready
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.copied).toEqual([])
+    expect(h.events).toEqual([])
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+  })
+
+  /** A rate_limit entry as the transcript records it. Split the same way LIMIT_TEXT is, and for the
+   *  same reason — a whole phrase in this source file fires the scanner when the file itself scrolls
+   *  through a rolling session. */
+  const limitRecord = (tsMs: number): string =>
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: "You've hit your " + 'weekly limit' }]
+      },
+      error: 'rate_limit',
+      apiErrorStatus: 429,
+      timestamp: new Date(tsMs).toISOString()
+    })
+
+  // The claude coordinator has a **second** live limit path besides the rateLimit event: the transcript
+  // tail on the tick. A limit that arrives that way (a subagent's rate_limit record, say — the main turn
+  // then completes normally and no rejected event ever fires) still has to disqualify the turn it landed
+  // in. It did not: `onLimit` cleared chatTurnDone but never set chatLimitInTurn, so the `idle` that
+  // followed set chatTurnDone again, the wait held the tick off, and the first tick after the in-place
+  // resume — whose re-anchored tail is past the record — consumed it and declared health on a genuinely
+  // blocked account. Nothing afterwards corrects that: it wipes the shared registry entry every other
+  // chain reads and releases inPlaceUsed, the latch Ruling 4c-6 deliberately withheld from chat chains.
+  it('a limit read off the transcript disqualifies the turn it landed in', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'astera-chat-tail-'))
+    const tPath = path.join(dir, 'th-1.jsonl')
+    await fsp.writeFile(tPath, '', 'utf8')
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    h.chatIds.add('c1')
+    // One account: the limit becomes a wait on the account the chain is already sitting on, so both the
+    // chain and the record are still there to be asked about afterwards.
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: tPath })
+    h.coord.onChatStatus('c1', 'working') // a turn begins
+    await fsp.writeFile(tPath, limitRecord(Date.now() + 1_000) + '\n', 'utf8')
+    await advanceIo(15_000) // the tick: ① reads the record → onLimit → the wait branch
+    expect(h.events).toEqual([]) // no copy, no kill, no spawn — it waits where it is
+    // Another chain's record on the same account, outliving the wait. The chain's own record carries no
+    // reset time, so it ages out at exactly the wait's length and `get` would answer null either way.
+    blocks.record('a1', { at: Date.now() + 20 * 60_000, weekly: true, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('c1', 'idle') // the turn ends — but a limit landed inside it
+    await advanceIo(15 * 60_000 + 1_000) // the wait expires → resume in place
+    expect(h.written.filter((w) => w.id === 'c1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    await advanceIo(15_000) // the first tick after the resume, its tail re-anchored past the record
+    expect(blocks.get('a1', Date.now())).not.toBeNull()
+    // The other half of what a health declaration would have released: inPlaceUsed. It is not readable
+    // from outside, so it is read through the behaviour it decides — a second limit's wait falls back to
+    // a respawn rather than resuming in place a second time.
+    await fsp.appendFile(tPath, limitRecord(Date.now() + 1_000) + '\n', 'utf8')
+    await advanceIo(15_000) // ① again → onLimit → a second wait
+    await advanceIo(20 * 60_000) // past that wait
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a1'])
+    expect(h.written.filter((w) => w.id === 'c1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    await fsp.rm(dir, { recursive: true, force: true })
+  })
+
+  // Ruling 4d-6, the same scenario with one thing added: a permission card opens in the middle of the
+  // turn. The adapter reports that as `waiting` and then `working` again (adapterCore.ts's dropRequest)
+  // — two non-idle statuses inside a turn that never ended. A level-triggered clear read each of them as
+  // "a new turn begins" and wiped the disqualification the tail-detected limit had just recorded, so the
+  // `idle` that closed that very turn counted as health again and the defect above came straight back.
+  // The flag is therefore cleared on the idle→non-idle **edge** only.
+  it('a card opening mid-turn does not re-qualify the turn a transcript limit landed in', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'astera-chat-card-'))
+    const tPath = path.join(dir, 'th-1.jsonl')
+    await fsp.writeFile(tPath, '', 'utf8')
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: tPath })
+    h.coord.onChatStatus('c1', 'working') // a turn begins
+    await fsp.writeFile(tPath, limitRecord(Date.now() + 1_000) + '\n', 'utf8')
+    await advanceIo(15_000) // the tick: ① reads the record → onLimit → the wait branch
+    expect(h.events).toEqual([]) // no copy, no kill, no spawn — it waits where it is
+    blocks.record('a1', { at: Date.now() + 20 * 60_000, weekly: true, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('c1', 'waiting') // a permission card opens — still the same turn
+    h.coord.onChatStatus('c1', 'working') // and closes again
+    h.coord.onChatStatus('c1', 'idle') // the turn ends — and a limit landed inside it
+    await advanceIo(15 * 60_000 + 1_000) // the wait expires → resume in place
+    expect(h.written.filter((w) => w.id === 'c1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    await advanceIo(15_000) // the first tick after the resume, its tail re-anchored past the record
+    expect(blocks.get('a1', Date.now())).not.toBeNull()
+    // inPlaceUsed is read through the behaviour it decides, as in the test above: a second limit's wait
+    // falls back to a respawn rather than resuming in place a second time.
+    await fsp.appendFile(tPath, limitRecord(Date.now() + 1_000) + '\n', 'utf8')
+    await advanceIo(15_000) // ① again → onLimit → a second wait
+    await advanceIo(20 * 60_000) // past that wait
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a1'])
+    expect(h.written.filter((w) => w.id === 'c1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    await fsp.rm(dir, { recursive: true, force: true })
+  })
+
+  // Ruling 4d-7. A chat chain declares health on every clean turn, but the **shared** registry clear is
+  // a once-per-arrival valve. blockRegistry.clear's safety argument is that a healthy timer is armed
+  // once per arrival and never re-armed, so the valve cannot reach a chain that has been working for an
+  // hour — declaring off turns instead would have had it fire for the chain's whole life, erasing every
+  // record any other chain ever wrote about the account it sits on. The per-chain half (the streak, this
+  // chain's own record, the inPlaceUsed latch) still runs on every clean turn; only the shared write is
+  // latched, and only an arrival re-opens it.
+  it('the shared record is cleared by the first clean turn after an arrival, not by later ones', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks, readUsage: () => Promise.resolve(peak(100)) })
+    // utilization is carried so lastUsagePct is 100: the second limit lands inside the 60-second replay
+    // grace of the first roll, and only a usage figure at or above the gate gets it past that.
+    const hot = { ...rejected, utilization: 1 }
+    const far = (): { at: number; weekly: boolean; since: number } => ({
+      at: Date.now() + 30 * 60_000,
+      weekly: false,
+      since: Date.now()
+    })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { rollAccountIds: ['a1', 'a2', 'a3'] }))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', hot)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    blocks.record('a2', far(), Date.now())
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatStatus('s2', 'idle')
+    await advanceIo(15_000)
+    expect(blocks.get('a2', Date.now())).toBeNull() // the first clean turn after the arrival spends it
+    blocks.record('a2', far(), Date.now())
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatStatus('s2', 'idle')
+    await advanceIo(15_000)
+    expect(blocks.get('a2', Date.now())).not.toBeNull() // the second releases only this chain's own state
+    h.coord.onChatLimit('s2', hot) // a new arrival re-opens the valve
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2', 'copy', 'kill:s2', 'spawn:s3:a3'])
+    blocks.record('a3', far(), Date.now())
+    h.coord.onChatStatus('s3', 'working')
+    h.coord.onChatStatus('s3', 'idle')
+    await advanceIo(15_000)
+    expect(blocks.get('a3', Date.now())).toBeNull()
+  })
+})
+
+// Task 1 of slice-4e (spec §15.1-§15.3): a chain learns login state on its own tick and folds it into
+// retryState as a block with an unknown reset (at: null) — pickAvailable skips a logged-out account and
+// planRetry re-checks it on the RETRY_FALLBACK_MS cadence, exactly as it already does for a usage block.
+describe('logged-out accounts', () => {
+  it('rolls past a logged-out account to the next live one', async () => {
+    const h = harness({ loginStatus: (id) => Promise.resolve(id !== 'a2') })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1) // a1, a2, a3 — on a1
+    await advanceIo(15_000) // one tick learns the login state
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.events).toContain('spawn:s2:a3') // a2 was skipped, not tried
+    expect(h.events).not.toContain('spawn:s2:a2')
+  })
+
+  it('waits instead of rolling when every other account is logged out', async () => {
+    const h = harness({ loginStatus: (id) => Promise.resolve(id === 'a1') })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    await advanceIo(15_000)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // nothing was spawned
+    const waiting = h.sent.filter((s) => s.channel === 'session:rollState' && s.payload.state === 'waiting')
+    expect(waiting.length).toBe(1) // the waiting banner, with a retry time ~15 minutes out
+    // …and that "~15 minutes" is asserted, not just claimed: a logged-out account is synthesised with
+    // an unknown reset, so planRetry's fallback (RETRY_FALLBACK_MS) is what the banner must carry —
+    // not the 60-second anti-hammering floor it would fall back to if the synthesis went missing.
+    expect(Date.parse(String(waiting[0].payload.nextRetryAt)) - Date.now()).toBeGreaterThanOrEqual(14 * 60_000)
+  })
+
+  // a2 carries a short, real block — recorded by another chain, say — so its blockedUntil looks sooner
+  // than a1's or a3's plain 15-minute (unknown reset) fallback, and planRetry aims the wait at it (spec
+  // §15.2: an unknown-reset account looks like it recovers soon). a2 is logged out from the very first
+  // tick, i.e. **before** the wait was ever planned — the refresh that runs while the chain waits
+  // (ruling 4e-3) therefore keeps answering the same thing, and what this test pins is only that
+  // resumeAfterWait reads chain.loggedOut for itself at fire time (spec §15.3) rather than trusting the
+  // plan it was handed minutes earlier. The genuine live→logged-out transition is the next test.
+  it('does not roll onto a target that was logged out before the wait was planned', async () => {
+    // a1's own hit needs a genuinely later reset than the flat 15-minute fallback every logged-out
+    // account gets from chain.loggedOut — otherwise a1 (an unknown-reset record, the same shape) ties
+    // with a2 and a3 in planRetry, and since ties keep the first index, the target would be a1 itself
+    // (the current account) and resumeAfterWait's toIndex !== currentIndex guard would never even be
+    // reached. The phrase's own reset time (resetTime.ts) gives a1 a ~2-hour block, comfortably losing
+    // that comparison; a2 and a3 are both logged out from the first tick, and a2 wins their remaining
+    // tie only because retryState/planRetry visit it first.
+    const T0 = Date.UTC(2026, 7, 3, 0, 0) // 11am(Asia/Seoul) = 02:00Z → +2h, inside the 5h session cap
+    vi.setSystemTime(new Date(T0))
+    const h = harness({ loginStatus: (id) => Promise.resolve(id === 'a1') })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    await advanceIo(15_000) // one tick learns a2 and a3 as logged out
+    // a1 blocked for ~2h (real reset) outweighs a2/a3's 15-minute fallback → waits, aimed at a2
+    h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '11am') })
+    await flush()
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // no roll yet — waiting
+    const at = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    await advanceIo(at - Date.now() + 1_000) // the wait timer fires, targeting a2
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // rescheduled, not spawned
+    // rescheduleAbortedRoll republishes 'waiting' — resumeInPlace would have published 'nudged' instead
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+  })
+
+  // The failure this slice exists to stop, in its real shape: every account is logged in when the wait
+  // is planned, and the target logs out **while the chain is waiting**. Only a refresh that runs for a
+  // waiting chain can see it — tick() refreshes login state before it skips a chain whose wait is armed
+  // (ruling 4e-3). With the refresh back under that guard the set is frozen for the wait's whole
+  // duration and the chain rolls straight onto the dead account.
+  it('does not roll onto a target that logged out during the wait', async () => {
+    const T0 = Date.UTC(2026, 7, 3, 0, 0) // 11am(Asia/Seoul) = 02:00Z → +2h, inside the 5h session cap
+    vi.setSystemTime(new Date(T0))
+    let a2LoggedIn = true // flipped once the wait is armed
+    const blocks = new BlockRegistry()
+    const h = harness({
+      blocks,
+      loginStatus: (id) => Promise.resolve(id === 'a2' ? a2LoggedIn : true)
+    })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    await advanceIo(15_000) // one tick — every account answers logged in
+    // a2 and a3 carry real blocks another chain recorded, so nothing is available and the chain waits.
+    // a2's reset is the earliest, so planRetry aims the wait at a2 — a LIVE account at planning time,
+    // which is what separates this test from the one above.
+    const t = Date.now()
+    blocks.record('a2', { at: t + 5 * 60_000, weekly: false, since: t }, t)
+    blocks.record('a3', { at: t + 45 * 60_000, weekly: false, since: t }, t)
+    h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '11am') })
+    await flush()
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // no roll yet — waiting
+    const at = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    a2LoggedIn = false // the person logs out of a2 mid-wait
+    await advanceIo(15_000) // one tick INSIDE the wait relearns it
+    await advanceIo(at - Date.now() + 1_000) // the wait timer fires, targeting a2
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // rescheduled, not spawned
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+  })
+
+  // The other direction of the same defect: once the guard has fired, rescheduleAbortedRoll re-arms the
+  // wait synchronously, so a chain that never refreshes while waiting can never see the account come
+  // back — it loops on a ~15-minute reschedule (one 'waiting' publication, i.e. one Slack message and
+  // one desktop toast, per round) for as long as the person stays logged out. The refresh that now runs
+  // for a waiting chain ends the loop on the first tick after the re-login.
+  it('rolls onto the target once it is logged back in during the reschedule loop', async () => {
+    const T0 = Date.UTC(2026, 7, 3, 0, 0)
+    vi.setSystemTime(new Date(T0))
+    let a2LoggedIn = false
+    const h = harness({
+      loginStatus: (id) => Promise.resolve(id === 'a1' || (id === 'a2' && a2LoggedIn))
+    })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    await advanceIo(15_000) // one tick learns a2 and a3 as logged out
+    h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '11am') })
+    await flush()
+    const at = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    await advanceIo(at - Date.now() + 1_000) // fires on a logged-out a2 → rescheduled, no roll
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([])
+    const next = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    a2LoggedIn = true // the person logs back in while the chain is waiting
+    await advanceIo(15_000) // the tick relearns it — this is exactly what the wait guard used to hide
+    await advanceIo(next - Date.now() + 1_000) // the next scheduled attempt
+    expect(h.events).toContain('spawn:s2:a2') // the chain rolled onto the account that came back
+  })
+
+  // Ruling 4e-5's second half: one refresh round at a time per chain. The probes are I/O (on darwin a
+  // `security` spawn), the tick is 15 seconds, and without the latch a slow round would be joined by a
+  // fresh one every tick — with the older verdict free to resolve last and overwrite the newer one.
+  it('does not start a second login refresh while one is still in flight', async () => {
+    const calls: string[] = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const h = harness({
+      loginStatus: (id) => {
+        calls.push(id)
+        return gate.then(() => true)
+      }
+    })
+    h.payloads.set('s1', payload(20))
+    h.coord.register(h.info1)
+    await advanceIo(15_000) // round 1 starts and stays in flight
+    expect(calls).toEqual(['a1', 'a2', 'a3'])
+    await advanceIo(15_000) // the next tick must not start a second round
+    expect(calls).toEqual(['a1', 'a2', 'a3'])
+    release()
+    await flush()
+    await advanceIo(15_000) // round 1 has settled, so the latch is clear and this tick probes again
+    expect(calls).toEqual(['a1', 'a2', 'a3', 'a1', 'a2', 'a3'])
+  })
+
+  // Ruling 4e-6: the transition back to "everybody is in" used to log an empty `ids=`, which reads as a
+  // truncated line rather than as good news.
+  it('logs that every account is logged in again rather than an empty id list', async () => {
+    const lines: string[] = []
+    let a2LoggedIn = false
+    const h = harness({
+      log: (m) => lines.push(m),
+      loginStatus: (id) => Promise.resolve(id !== 'a2' || a2LoggedIn)
+    })
+    h.payloads.set('s1', payload(20))
+    h.coord.register(h.info1)
+    await advanceIo(15_000)
+    expect(lines.some((l) => l.startsWith('logged-out accounts session=s1 ids=a2'))).toBe(true)
+    a2LoggedIn = true
+    await advanceIo(15_000)
+    expect(lines).toContain('all accounts logged in session=s1')
+    expect(lines.some((l) => l.endsWith('ids='))).toBe(false)
+  })
+
+  it('behaves as before when the dep is absent', async () => {
+    const h = harness() // no loginStatus
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    await advanceIo(15_000)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }) // ordinary roll to a2 still happens
+    await flush()
+    expect(h.events).toContain('spawn:s2:a2')
   })
 })

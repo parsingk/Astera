@@ -22,7 +22,11 @@ interface Snapshot {
   primary?: number
   secondary?: number
   reached?: string | null
-  primaryReset?: number // epoch 초
+  /** epoch 초. **null 은 0 과 다르다** — 0 은 1970년이라는 *실재하는* reset 시각이라
+   *  worstResetAt 이 그것을 그대로 블록 레코드의 at 으로 삼고, planRetry 는 이미 지난 시각으로
+   *  보아 60초 바닥으로 떨어진다. null 은 필드를 null 로 내보내 "reset 을 모른다"(at: null,
+   *  RETRY_FALLBACK_MS)가 되게 한다 — codex 의 한도 에러 레코드가 실제로 그렇다. */
+  primaryReset?: number | null
 }
 
 /** 실측 형태를 본뜬 token_count 한 줄 — rate_limits 는 payload 바로 아래다 (codexSignal.ts 의 rateLimitsOf 주석) */
@@ -34,7 +38,11 @@ const tokenCountLine = (opts: Snapshot): string =>
       type: 'token_count',
       info: { total_token_usage: { total_tokens: 100 } },
       rate_limits: {
-        primary: { used_percent: opts.primary ?? 0, window_minutes: 300, resets_at: opts.primaryReset ?? 0 },
+        primary: {
+          used_percent: opts.primary ?? 0,
+          window_minutes: 300,
+          resets_at: opts.primaryReset === null ? null : (opts.primaryReset ?? 0)
+        },
         secondary: { used_percent: opts.secondary ?? 0, window_minutes: 10080, resets_at: 0 },
         rate_limit_reached_type: opts.reached ?? null
       }
@@ -74,7 +82,7 @@ async function writeRollout(opts: {
   primary?: number
   secondary?: number
   reached?: string | null
-  primaryReset?: number // epoch 초
+  primaryReset?: number | null // epoch 초 — null 의 뜻은 Snapshot 의 같은 필드 주석에
 }): Promise<string> {
   const d = new Date()
   const pad = (n: number): string => String(n).padStart(2, '0')
@@ -109,6 +117,10 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     initialPrompt?: string
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }[]
+  /** The spawn opts exactly as the coordinator built them. `spawned` above copies four fields out by
+   *  hand, which cannot answer "is this field there at all" — and that is the question a chat roll
+   *  has to answer about `resumePrompt` (a chat session has no argv for one to ride on). */
+  spawnedOpts: Parameters<CodexRollingDeps['spawn']>[0][]
   written: [string, string][]
   info1: SessionInfo
 } {
@@ -123,6 +135,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     initialPrompt?: string
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }[] = []
+  const spawnedOpts: Parameters<CodexRollingDeps['spawn']>[0][] = []
   const written: [string, string][] = []
   let seq = 1
   const coord = new CodexRollingCoordinator({
@@ -137,7 +150,8 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
         resumeSessionId: opts.resumeSessionId,
         rollAccountIds: opts.rollAccountIds,
         slackNotify: opts.slackNotify,
-        bypassPermissions: opts.bypassPermissions
+        bypassPermissions: opts.bypassPermissions,
+        rollPrompt: opts.rollPrompt
       }
       spawned.push({
         info,
@@ -146,6 +160,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
         initialPrompt: opts.initialPrompt,
         orchEnv: opts.orchEnv
       })
+      spawnedOpts.push(opts)
       events.push(`spawn:${info.id}:${opts.account.id}`)
       return info
     },
@@ -175,7 +190,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
   }
   // settleIo가 "아직 뭔가 도착하는 중인가"를 판단할 근거 — 자세한 이유는 settleIo 위 주석에
   ioProbes.push(() => events.length + sent.length + copied.length + spawned.length + written.length)
-  return { coord, events, sent, copied, spawned, written, info1 }
+  return { coord, events, sent, copied, spawned, spawnedOpts, written, info1 }
 }
 
 // codex 0.146.0에서 관찰한 한도 문구.
@@ -1914,6 +1929,514 @@ describe('중단된 롤이 다음 시도를 예약한다', () => {
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
     const first = await jumpToRetry(h)
     expect(lastRetryAt(h)).toBeGreaterThan(first)
+    h.coord.stop()
+  })
+})
+
+// A chat session is the same chain on a different kind of process. Three things it does not have:
+// a PTY (no limit phrase ever reaches handleData, so the tick's structured verdict is the only
+// trigger), a filesystem search for its rollout (the protocol's ready event names it — attachChat),
+// and a command line (the carry-on prompt is its first turn, not an argv). Everything else — the
+// copy, the kill, the cycle position, the healthy timer — is the pty chain's path unchanged.
+describe('chat chains', () => {
+  /** The same chain as info1, on a chat session. `kind` is what register reads (sessionKindOf). */
+  const chatInfo = (info1: SessionInfo): SessionInfo => ({ ...info1, kind: 'chat' })
+
+  it('attaches its rollout from the ready event and rolls with the prompt as its first turn', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo(h.info1)) // no resume id and no path — register arms the locate poll
+    h.coord.attachChat('s1', 'cx-chat', file) // ready knows both, so the poll is pre-empted
+    await appendLimitError(file)
+    await advance(15_000) // the tick — a chat session prints no phrase, so this is the only trigger
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    expect(h.spawnedOpts[0]).toMatchObject({
+      kind: 'chat',
+      resumeSessionId: 'cx-chat',
+      initialPrompt: '이어서 작업 진행해 줘'
+    })
+    // Not merely undefined: the field is absent. `resumePrompt` is the argument codex appends behind
+    // `codex resume <id>`, and a chat session is not started from a command line at all.
+    expect(h.spawnedOpts[0]).not.toHaveProperty('resumePrompt')
+    expect(h.written).toEqual([]) // nothing is typed into a session that takes turns, not keys
+    // The banner ends on 'none' (chat chains skip the readiness poll), so both the old and the rolled-to
+    // id read back with no snapshot to hand a late-mounting renderer.
+    expect(h.coord.stateOf('s2')).toBeNull()
+    expect(h.coord.stateOf('s1')).toBeNull()
+    h.coord.stop()
+  })
+
+  it('leaves the chain unmapped when ready has no path yet, until the locate poll finds the file', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-late', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-late', null)
+    // The thread id is known from this moment — it is what the history-resume guard answers with and
+    // what the roll resumes — but nothing is mapped, so a limit could not be acted on yet.
+    expect(h.coord.findLiveByCodexSession('cx-chat-late')?.id).toBe('s1')
+    expect(h.coord.rolloutPathFor('s1')).toBeNull()
+    await advance(1_500) // the poll register armed, left running for exactly this
+    expect(h.coord.rolloutPathFor('s1')).toBe(file)
+    h.coord.stop()
+  })
+
+  // Why the poll has to be stopped, not merely overtaken: startLocate builds its tail *without*
+  // startAtEnd, so a poll that finds the same file a second after ready would re-anchor at the
+  // file's start and read the conversation's earlier records as this session's own verdict.
+  it('does not re-read the conversation from the start after ready has mapped it', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-seen', cwd: h.info1.cwd, primary: 95 })
+    await appendLimitError(file) // a block this conversation already ended on, before we attached
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-seen', file)
+    await advance(15_000) // past the locate poll and the first tick
+    await advance(15_000) // and past the tick after it, the one a re-anchored tail would fire on
+    expect(h.events).toEqual([])
+    expect(h.coord.rolloutPathFor('s1')).toBe(file)
+    h.coord.stop()
+  })
+
+  // The `mangled` refusal exists because a briefing that names a filesystem path is handed to codex as
+  // an argv, and the argv sanitizer would blank characters out of it. A chat spawn has no command line
+  // at all — the briefing is sent as the session's first turn, untouched — so a briefing the sanitizer
+  // would alter is still a perfectly good first turn, and refusing the blank slate over it costs a
+  // rollout copy and a `thread/resume` the chain did not need.
+  it('keeps its blank slate when the sanitizer would have changed the briefing', async () => {
+    const logs: string[] = []
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve('Fix the "quote" bug & the pipe | issue'),
+      log: (m) => logs.push(m)
+    })
+    const file = await writeRollout({
+      accountId: 'c1',
+      uuid: 'cx-chat-sanitize',
+      cwd: h.info1.cwd,
+      primary: 95
+    })
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-sanitize', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(h.events).toEqual(['kill:s1', 'spawn:s2:c2']) // no 'copy' — the new session starts blank
+    expect(h.spawnedOpts[0]).toMatchObject({
+      kind: 'chat',
+      initialPrompt: 'Fix the "quote" bug & the pipe | issue' // and it goes over unsanitized
+    })
+    expect(h.spawnedOpts[0].resumeSessionId).toBeUndefined()
+    // The refusal log would be a falsehood here — it says the argv sanitizer forced a `--resume`.
+    expect(logs.some((l) => l.includes('smart resume refused'))).toBe(false)
+    h.coord.stop()
+  })
+
+  it('carries the user rollPrompt onto the roll spawn', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-rp', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo({ ...h.info1, rollPrompt: 'keep going' }))
+    h.coord.attachChat('s1', 'cx-rp', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(h.spawnedOpts[0]).toMatchObject({ rollPrompt: 'keep going' })
+    h.coord.stop()
+  })
+
+  // Spec §14.6. A pty chain declares itself healthy 60 seconds after a switch with no limit detected; a
+  // chat session reports its turns, so the evidence is a turn that ended without a limit. The tick is
+  // what consumes it, after the rollout tail has been read and found nothing — on codex especially, the
+  // `status idle` can arrive before the tick reads the record that says the turn was refused.
+  //
+  // The shared registry is what the assertion can see: declareHealthy clears the account's entry there
+  // (the chain's own record and inPlaceUsed have no surface from outside).
+  it('a completed turn declares health — the shared record goes without the 60s timer', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-turn', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-turn', file)
+    await appendLimitError(file)
+    await advance(15_000) // the tick — a chat session prints no phrase, so this is the only trigger
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    // Another chain's record on the account we have just arrived on, with a reset far enough away that
+    // time alone cannot make it answer null.
+    blocks.record('c2', { at: Date.now() + 30 * 60_000, weekly: false, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatStatus('s2', 'idle') // a turn completed with no limit in it
+    await advance(15_000) // the tick reads the rollout first, then consumes the completed turn
+    expect(blocks.get('c2', Date.now())).toBeNull()
+    h.coord.stop()
+  })
+
+  it('a chat roll no longer arms the 60s healthy timer', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-notimer', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-notimer', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    blocks.record('c2', { at: Date.now() + 30 * 60_000, weekly: false, since: Date.now() }, Date.now())
+    await advance(65_000) // 60s+ with no turn at all — the pty rule would have torn the record up
+    expect(blocks.get('c2', Date.now())).not.toBeNull()
+    h.coord.stop()
+  })
+
+  // The codex analogue of the claude side's "a turn that carried a limit is not evidence". Here it is
+  // the only shape there is: codex has no rate-limit event, so every chat limit arrives from the rollout
+  // tail on the tick — which is exactly why `onLimit` is where the running turn is disqualified. A
+  // single account makes the limit a wait on the account the chain is already on, so the chain and the
+  // record are both still there to be asked about after the in-place resume.
+  it('a limit read off the rollout disqualifies the turn it landed in', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000) // 5분 뒤
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-chat-turnlimit', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(chatInfo(single))
+    h.coord.attachChat('s1', 'cx-chat-turnlimit', file)
+    h.coord.onChatStatus('s1', 'working') // a turn begins
+    await appendLimitError(file)
+    await advance(15_000) // the tick reads the record → onLimit → the wait branch
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    // Another chain's record on the same account, outliving this test's window. The chain's own expires
+    // at the very reset the wait is aimed at, so `get` would answer null either way.
+    blocks.record('c1', { at: Date.now() + 40 * 60_000, weekly: true, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('s1', 'idle') // the turn ends — but a limit landed inside it
+    await advanceIntoResume(400_000) // the wait expires (reset + 60s) → resume in place
+    expect(h.written.filter(([id, d]) => id === 's1' && d === '이어서 작업 진행해 줘')).toHaveLength(1)
+    await advance(15_000) // the first tick after the resume, its tail re-anchored past the record
+    // Still inside settleInPlace's own 60-second window (it is armed at the resume), so nothing but the
+    // tick has had a say yet — no respawn, and no verdict of its own.
+    expect(h.events).toEqual([])
+    expect(blocks.get('c1', Date.now())).not.toBeNull()
+    // Ruling 4d-8: and past that window too. settleInPlace used to judge a chat chain the pty way — the
+    // rollout grew, so a turn ran — which is the wrong question here (a refused turn grows the rollout
+    // as well) and reached the same four statements, shared registry clear included. It now logs and
+    // returns before the size verdict, so the chain is left exactly as the tick left it.
+    await advance(60_000)
+    expect(h.events).toEqual([])
+    expect(blocks.get('c1', Date.now())).not.toBeNull()
+    h.coord.stop()
+  })
+
+  // Ruling 4d-6, the same scenario with one thing added: a permission card opens in the middle of the
+  // turn. The adapter reports that as `waiting` and then `working` again (adapterCore.ts's dropRequest)
+  // — two non-idle statuses inside a turn that never ended. A level-triggered clear read each of them as
+  // "a new turn begins" and wiped the disqualification onLimit had just recorded, so the `idle` that
+  // closed that very turn counted as health again. The flag is cleared on the idle→non-idle edge only.
+  it('a card opening mid-turn does not re-qualify the turn a rollout limit landed in', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000) // 5분 뒤
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-chat-card', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(chatInfo(single))
+    h.coord.attachChat('s1', 'cx-chat-card', file)
+    h.coord.onChatStatus('s1', 'working') // a turn begins
+    await appendLimitError(file)
+    await advance(15_000) // the tick reads the record → onLimit → the wait branch
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    blocks.record('c1', { at: Date.now() + 40 * 60_000, weekly: true, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('s1', 'waiting') // a permission card opens — still the same turn
+    h.coord.onChatStatus('s1', 'working') // and closes again
+    h.coord.onChatStatus('s1', 'idle') // the turn ends — and a limit landed inside it
+    await advanceIntoResume(400_000) // the wait expires (reset + 60s) → resume in place
+    expect(h.written.filter(([id, d]) => id === 's1' && d === '이어서 작업 진행해 줘')).toHaveLength(1)
+    await advance(15_000) // the first tick after the resume, its tail re-anchored past the record
+    expect(h.events).toEqual([])
+    expect(blocks.get('c1', Date.now())).not.toBeNull()
+    h.coord.stop()
+  })
+
+  // Ruling 4d-7. A chat chain declares health on every clean turn, but the **shared** registry clear is
+  // a once-per-arrival valve. blockRegistry.clear's safety argument is that a healthy timer is armed
+  // once per arrival and never re-armed, so the valve cannot reach a chain that has been working for an
+  // hour — declaring off turns instead would have had it fire for the chain's whole life, erasing every
+  // record any other chain ever wrote about the account it sits on. Only the shared write is latched;
+  // the per-chain half still runs on every clean turn. An in-place resume is an arrival on the same
+  // account, so it re-opens the valve exactly as a roll does.
+  it('the shared record is cleared by the first clean turn after an arrival, not by later ones', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000) // 5분 뒤
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-chat-valve', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    const far = (): { at: number; weekly: boolean; since: number } => ({
+      at: Date.now() + 40 * 60_000,
+      weekly: true,
+      since: Date.now()
+    })
+    h.coord.register(chatInfo(single))
+    h.coord.attachChat('s1', 'cx-chat-valve', file)
+    blocks.record('c1', far(), Date.now())
+    h.coord.onChatStatus('s1', 'working')
+    h.coord.onChatStatus('s1', 'idle')
+    await advance(15_000)
+    expect(blocks.get('c1', Date.now())).toBeNull() // the first clean turn after the arrival spends it
+    blocks.record('c1', far(), Date.now())
+    h.coord.onChatStatus('s1', 'working')
+    h.coord.onChatStatus('s1', 'idle')
+    await advance(15_000)
+    expect(blocks.get('c1', Date.now())).not.toBeNull() // the second releases only this chain's own state
+    // That assertion is made, so the surviving record is dropped here: left standing, the retry plan
+    // below would merge its 40-minute reset over the rollout's own 5-minute one and the wait would be
+    // aimed 40 minutes out (laterBlock, core/rolling/retry.ts).
+    blocks.clear('c1')
+    // A limit, a wait and an in-place resume — an arrival on the same account.
+    h.coord.onChatStatus('s1', 'working')
+    await appendLimitError(file)
+    await advance(15_000) // the tick reads the record → onLimit → the wait branch
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    h.coord.onChatStatus('s1', 'idle') // that turn ends disqualified
+    await advanceIntoResume(400_000) // the wait expires (reset + 60s) → resume in place
+    expect(h.written.filter(([id, d]) => id === 's1' && d === '이어서 작업 진행해 줘')).toHaveLength(1)
+    blocks.record('c1', far(), Date.now())
+    h.coord.onChatStatus('s1', 'working')
+    h.coord.onChatStatus('s1', 'idle')
+    await advance(15_000)
+    expect(blocks.get('c1', Date.now())).toBeNull()
+    h.coord.stop()
+  })
+})
+
+// Mirrors the same-named describe block in rolling.ts (spec §15.1-§15.3) — the codex coordinator gets
+// the same login-aware filter, applied at the same three sites (retryState's merge, onLimit's detour
+// log and resumeAfterWait's guard).
+describe('logged-out accounts', () => {
+  it('rolls past a logged-out account to the next live one', async () => {
+    const accounts: Record<string, Account> = {
+      c1: acc('c1', 'Codex A'),
+      c2: acc('c2', 'Codex B'),
+      c3: acc('c3', 'Codex C')
+    }
+    const h = harness({
+      getAccount: (id) => accounts[id] ?? null,
+      loginStatus: (id) => Promise.resolve(id !== 'c2')
+    })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-lo-1', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...h.info1, rollAccountIds: ['c1', 'c2', 'c3'] })
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000) // one tick learns c2 as logged out
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toContain('spawn:s2:c3') // c2 was skipped, not tried
+    expect(h.events).not.toContain('spawn:s2:c2')
+    h.coord.stop()
+  })
+
+  it('waits instead of rolling when every other account is logged out', async () => {
+    const h = harness({ loginStatus: (id) => Promise.resolve(id === 'c1') })
+    // primaryReset null, not the fixture's default 0: with 0 the current account's own record claims a
+    // reset in 1970, planRetry aims at that and publishes the 60-second floor, and the banner this test
+    // is about would never be the 15-minute logged-out fallback it claims to be.
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-lo-2', cwd: h.info1.cwd, primary: 97, primaryReset: null
+    })
+    h.coord.register(h.info1)
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000) // one tick learns c2 as logged out
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // nothing was spawned
+    const waiting = h.sent.filter((s) => s.channel === 'session:rollState' && s.payload.state === 'waiting')
+    expect(waiting.length).toBe(1) // the waiting banner, with a retry time ~15 minutes out
+    // …and that "~15 minutes" is asserted, not just claimed: a logged-out account is synthesised with
+    // an unknown reset, so planRetry's fallback (RETRY_FALLBACK_MS) is what the banner must carry —
+    // not the 60-second anti-hammering floor it would fall back to if the synthesis went missing.
+    expect(Date.parse(String(waiting[0].payload.nextRetryAt)) - Date.now()).toBeGreaterThanOrEqual(14 * 60_000)
+    h.coord.stop()
+  })
+
+  // c2 and c3 are both logged out from the very first tick, i.e. **before** the wait was ever planned —
+  // the refresh that runs while the chain waits (ruling 4e-3) therefore keeps answering the same thing,
+  // and what this test pins is only that resumeAfterWait reads chain.loggedOut for itself at fire time
+  // (spec §15.3) rather than trusting the plan it was handed minutes earlier. The genuine
+  // live→logged-out transition is the next test.
+  it('does not roll onto a target that was logged out before the wait was planned', async () => {
+    const accounts: Record<string, Account> = {
+      c1: acc('c1', 'Codex A'),
+      c2: acc('c2', 'Codex B'),
+      c3: acc('c3', 'Codex C')
+    }
+    const h = harness({
+      getAccount: (id) => accounts[id] ?? null,
+      loginStatus: (id) => Promise.resolve(id === 'c1') // only the current account is logged in
+    })
+    // c1's own hit needs a genuinely later reset than the flat 15-minute fallback c2 and c3 both get
+    // from chain.loggedOut — otherwise c1 (an unknown-reset record, the same shape) ties with them in
+    // planRetry, and since ties keep the first index, the target would be c1 itself (the current
+    // account) and resumeAfterWait's toIndex !== currentIndex guard would never even be reached. A
+    // ~2h reset comfortably loses that comparison; c2 wins its remaining tie against c3 only because
+    // retryState/planRetry visit it first.
+    const resetSec = Math.floor((Date.now() + 2 * 60 * 60_000) / 1000)
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-lo-3', cwd: h.info1.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register({ ...h.info1, rollAccountIds: ['c1', 'c2', 'c3'] })
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000) // one tick learns c2 and c3 as logged out
+    await appendLimitError(file)
+    // c1 blocked for ~2h (real reset) outweighs c2/c3's 15-minute fallback → waits, aimed at c2
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // no roll yet — waiting
+    const at = Date.parse(String(h.sent.at(-1)?.payload.nextRetryAt))
+    await advance(at - Date.now() + 1_000) // the wait timer fires, targeting c2
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // rescheduled, not spawned
+    // rescheduleAbortedRoll republishes 'waiting' — a roll onto c2 would have moved past it instead
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    h.coord.stop()
+  })
+
+  // The failure this slice exists to stop, in its real shape: every account is logged in when the wait
+  // is planned, and the target logs out **while the chain is waiting**. Only a refresh that runs for a
+  // waiting chain can see it — tick() refreshes login state before it skips a chain whose wait is armed
+  // (ruling 4e-3). With the refresh back under that guard the set is frozen for the wait's whole
+  // duration and the chain rolls straight onto the dead account.
+  it('does not roll onto a target that logged out during the wait', async () => {
+    const accounts: Record<string, Account> = {
+      c1: acc('c1', 'Codex A'),
+      c2: acc('c2', 'Codex B'),
+      c3: acc('c3', 'Codex C')
+    }
+    let c2LoggedIn = true // flipped once the wait is armed
+    const blocks = new BlockRegistry()
+    const h = harness({
+      blocks,
+      getAccount: (id) => accounts[id] ?? null,
+      loginStatus: (id) => Promise.resolve(id === 'c2' ? c2LoggedIn : true)
+    })
+    const resetSec = Math.floor((Date.now() + 2 * 60 * 60_000) / 1000)
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-lo-5', cwd: h.info1.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register({ ...h.info1, rollAccountIds: ['c1', 'c2', 'c3'] })
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000) // one tick — every account answers logged in
+    // c2 and c3 carry real blocks another chain recorded, so nothing is available and the chain waits.
+    // c2's reset is the earliest, so planRetry aims the wait at c2 — a LIVE account at planning time,
+    // which is what separates this test from the one above.
+    const t = Date.now()
+    blocks.record('c2', { at: t + 5 * 60_000, weekly: false, since: t }, t)
+    blocks.record('c3', { at: t + 45 * 60_000, weekly: false, since: t }, t)
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // no roll yet — waiting
+    const at = Date.parse(String(h.sent.at(-1)?.payload.nextRetryAt))
+    c2LoggedIn = false // the person logs out of c2 mid-wait
+    await advance(15_000) // one tick INSIDE the wait relearns it
+    await advance(at - Date.now() + 1_000) // the wait timer fires, targeting c2
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // rescheduled, not spawned
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    h.coord.stop()
+  })
+
+  // The other direction of the same defect: once the guard has fired, rescheduleAbortedRoll re-arms the
+  // wait synchronously, so a chain that never refreshes while waiting can never see the account come
+  // back — it loops on a ~15-minute reschedule (one 'waiting' publication, i.e. one Slack message and
+  // one desktop toast, per round) for as long as the person stays logged out. The refresh that now runs
+  // for a waiting chain ends the loop on the first tick after the re-login.
+  it('rolls onto the target once it is logged back in during the reschedule loop', async () => {
+    const accounts: Record<string, Account> = {
+      c1: acc('c1', 'Codex A'),
+      c2: acc('c2', 'Codex B'),
+      c3: acc('c3', 'Codex C')
+    }
+    let c2LoggedIn = false
+    const h = harness({
+      getAccount: (id) => accounts[id] ?? null,
+      loginStatus: (id) => Promise.resolve(id === 'c1' || (id === 'c2' && c2LoggedIn))
+    })
+    const resetSec = Math.floor((Date.now() + 2 * 60 * 60_000) / 1000)
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-lo-6', cwd: h.info1.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register({ ...h.info1, rollAccountIds: ['c1', 'c2', 'c3'] })
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000) // one tick learns c2 and c3 as logged out
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    const at = Date.parse(String(h.sent.at(-1)?.payload.nextRetryAt))
+    await advance(at - Date.now() + 1_000) // fires on a logged-out c2 → rescheduled, no roll
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([])
+    const next = Date.parse(String(h.sent.at(-1)?.payload.nextRetryAt))
+    c2LoggedIn = true // the person logs back in while the chain is waiting
+    await advance(15_000) // the tick relearns it — this is exactly what the wait guard used to hide
+    await advance(next - Date.now() + 1_000) // the next scheduled attempt
+    expect(h.events).toContain('spawn:s2:c2') // the chain rolled onto the account that came back
+    h.coord.stop()
+  })
+
+  // Ruling 4e-5's second half: one refresh round at a time per chain. The probes are I/O (on darwin a
+  // `security` spawn), the tick is 15 seconds, and without the latch a slow round would be joined by a
+  // fresh one every tick — with the older verdict free to resolve last and overwrite the newer one.
+  it('does not start a second login refresh while one is still in flight', async () => {
+    const calls: string[] = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const h = harness({
+      loginStatus: (id) => {
+        calls.push(id)
+        return gate.then(() => true)
+      }
+    })
+    await writeRollout({ accountId: 'c1', uuid: 'cx-lo-8', cwd: h.info1.cwd, primary: 20 })
+    h.coord.register(h.info1)
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000) // round 1 starts and stays in flight
+    expect(calls).toEqual(['c1', 'c2'])
+    await advance(15_000) // the next tick must not start a second round
+    expect(calls).toEqual(['c1', 'c2'])
+    release()
+    await advance(0)
+    await advance(15_000) // round 1 has settled, so the latch is clear and this tick probes again
+    expect(calls).toEqual(['c1', 'c2', 'c1', 'c2'])
+    h.coord.stop()
+  })
+
+  // Ruling 4e-6: the transition back to "everybody is in" used to log an empty `ids=`, which reads as a
+  // truncated line rather than as good news.
+  it('logs that every account is logged in again rather than an empty id list', async () => {
+    const lines: string[] = []
+    let c2LoggedIn = false
+    const h = harness({
+      log: (m) => lines.push(m),
+      loginStatus: (id) => Promise.resolve(id !== 'c2' || c2LoggedIn)
+    })
+    await writeRollout({ accountId: 'c1', uuid: 'cx-lo-7', cwd: h.info1.cwd, primary: 20 })
+    h.coord.register(h.info1)
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000)
+    expect(lines.some((l) => l.startsWith('logged-out accounts session=s1 ids=c2'))).toBe(true)
+    c2LoggedIn = true
+    await advance(15_000)
+    expect(lines).toContain('all accounts logged in session=s1')
+    expect(lines.some((l) => l.endsWith('ids='))).toBe(false)
+    h.coord.stop()
+  })
+
+  it('behaves as before when the dep is absent', async () => {
+    const h = harness() // no loginStatus
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-lo-4', cwd: h.info1.cwd, primary: 97 })
+    h.coord.register(h.info1)
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000)
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }) // ordinary roll to c2 still happens
+    await advance(100)
+    expect(h.events).toContain('spawn:s2:c2')
     h.coord.stop()
   })
 })
