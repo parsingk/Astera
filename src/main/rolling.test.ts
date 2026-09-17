@@ -3461,23 +3461,28 @@ describe('logged-out accounts', () => {
   // called for it), so nothing relearns anything until the wait timer itself goes off. resumeAfterWait
   // has to check chain.loggedOut for itself at that moment (spec §15.3) — the roll must not be attempted.
   it('does not roll onto a target that went logged out during the wait', async () => {
-    const blocks = new BlockRegistry()
-    const t0 = Date.now()
-    blocks.record('a2', { at: t0 + 5 * MIN, weekly: false, since: t0 }, t0)
-    const h = harness({
-      blocks,
-      loginStatus: (id) => Promise.resolve(id === 'a1') // only the current account is logged in
-    })
+    // a1's own hit needs a genuinely later reset than the flat 15-minute fallback every logged-out
+    // account gets from chain.loggedOut — otherwise a1 (an unknown-reset record, the same shape) ties
+    // with a2 and a3 in planRetry, and since ties keep the first index, the target would be a1 itself
+    // (the current account) and resumeAfterWait's toIndex !== currentIndex guard would never even be
+    // reached. The phrase's own reset time (resetTime.ts) gives a1 a ~2-hour block, comfortably losing
+    // that comparison; a2 and a3 are both logged out from the first tick, and a2 wins their remaining
+    // tie only because retryState/planRetry visit it first.
+    const T0 = Date.UTC(2026, 7, 3, 0, 0) // 11am(Asia/Seoul) = 02:00Z → +2h, inside the 5h session cap
+    vi.setSystemTime(new Date(T0))
+    const h = harness({ loginStatus: (id) => Promise.resolve(id === 'a1') })
     h.payloads.set('s1', payload(97))
     h.coord.register(h.info1)
     await advanceIo(15_000) // one tick learns a2 and a3 as logged out
-    // a2 (blocked for 5 more minutes) and a3 (logged out) are both unavailable → waits, aimed at a2
-    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    // a1 blocked for ~2h (real reset) outweighs a2/a3's 15-minute fallback → waits, aimed at a2
+    h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '11am') })
     await flush()
     expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // no roll yet — waiting
     const at = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
-    await advanceIo(at - Date.now() + 1_000) // the wait timer fires
+    await advanceIo(at - Date.now() + 1_000) // the wait timer fires, targeting a2
     expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // rescheduled, not spawned
+    // rescheduleAbortedRoll republishes 'waiting' — resumeInPlace would have published 'nudged' instead
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
   })
 
   it('behaves as before when the dep is absent', async () => {

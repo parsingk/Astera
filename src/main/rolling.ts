@@ -1797,7 +1797,7 @@ export class RollingCoordinator {
     )
     if (chain.disposed || chain.liveId !== liveId) return
     const out = new Set(pairs.filter(([, ok]) => !ok).map(([id]) => id))
-    if (out.size > 0 && out.size !== chain.loggedOut.size)
+    if (out.size !== chain.loggedOut.size || [...out].some((id) => !chain.loggedOut.has(id)))
       this.deps.log(`logged-out accounts session=${chain.liveId} ids=${[...out].join(',')}`)
     chain.loggedOut = out
   }
