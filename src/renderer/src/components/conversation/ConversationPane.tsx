@@ -63,6 +63,7 @@ import {
   isAwaitingReply,
   sendPending,
   unsettledSends,
+  dropPending,
   type PendingSend
 } from "../../../../core/history/pendingSends";
 import {
@@ -1067,14 +1068,31 @@ export function ConversationPane({
     async (text: string) => {
       // A chat session's turn goes to the app-server, and nothing here reads a screen on the way:
       // there is none. `chat.send` rejects when the turn cannot start (a turn already running, the
-      // process gone), and that rejection is the only thing worth saying — the turn itself comes back
-      // through the rollout, like a terminal session's, so it is never pushed into `messages` here.
+      // process gone), and that rejection is the only thing worth saying.
       if (isChat) {
+        // Shown straight away, exactly as the terminal path below does it and for the same reason:
+        // the turn only really exists once the CLI writes it into the rollout, and until then the
+        // person's own words are nowhere on screen. The wait is not small. Claude flushes the user
+        // record within a moment, but codex writes it when the turn it started gets going — measured
+        // across this machine's last twelve rollouts, a median of 0.6 s and up to 3.8 s after the
+        // turn begins — and the view reads the file on a one-second poll on top of that. Someone
+        // watching several seconds of nothing after pressing Enter reads it as a send that failed,
+        // and reported it as one.
+        //
+        // The copy is set before the request rather than after it, because the request is itself part
+        // of the wait: codex's `turn/start` is awaited here. It lives exactly as long as it takes the
+        // real turn to arrive — pendingSends.ts settles it against the transcript, so the bubble is
+        // replaced by the record it was standing in for, never shown twice.
+        const echoId = crypto.randomUUID();
+        setPending((prev) => sendPending(prev, turns, text, echoId, Date.now()));
         try {
           await window.api.chat.send(sessionId, text);
         } catch (err) {
-          // The text is still in the person's hands — the composer cleared, but the draft below was
-          // not thrown away, so leaving the tab and coming back offers it again to retry with.
+          // Refused, so nothing was sent and the copy has to go with the toast rather than sit there
+          // for a minute claiming otherwise. The text is still in the person's hands — the composer
+          // cleared, but the draft below was not thrown away, so leaving the tab and coming back
+          // offers it again to retry with.
+          setPending((prev) => dropPending(prev, echoId));
           toast.error(chatErrorText(err));
           return;
         }

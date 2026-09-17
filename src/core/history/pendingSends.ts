@@ -60,6 +60,21 @@ export function unsettledSends(
 }
 
 /**
+ * Takes one copy back, by id.
+ *
+ * For the send that was refused rather than delayed. `unsettledSends` above lets a copy go on two
+ * grounds only — the transcript grew the turn, or it got old — and neither fits a send the CLI
+ * answered with a refusal: the turn will never be written, and the copy would sit there claiming the
+ * message went through for the whole minute it takes to age out, next to a toast saying it did not.
+ *
+ * The same list back when the id is not among them.
+ */
+export function dropPending(pending: readonly PendingSend[], id: string): PendingSend[] {
+  const next = pending.filter((p) => p.id !== id)
+  return next.length === pending.length ? (pending as PendingSend[]) : next
+}
+
+/**
  * Whether the person's last word is still unanswered.
  *
  * True from the moment something is sent until an assistant turn follows it. What it is for is a

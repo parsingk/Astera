@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sendPending, unsettledSends, isAwaitingReply } from './pendingSends'
+import { sendPending, unsettledSends, dropPending, isAwaitingReply } from './pendingSends'
 import type { ConvTurn } from './convTypes'
 
 const said = (id: string, role: 'user' | 'assistant', text: string): ConvTurn =>
@@ -45,6 +45,30 @@ describe('sendPending / unsettledSends', () => {
     let p = sendPending([], [], 'A', 'p1', 1000)
     p = sendPending(p, [], 'B', 'p2', 1100)
     expect(unsettledSends(p, [], 1200, MAX).map((x) => x.text)).toEqual(['A', 'B'])
+  })
+})
+
+describe('dropPending', () => {
+  // A chat session's send can be refused outright — a turn already running, the process gone — and
+  // the refusal comes back after the copy is already on screen. The copy claims the message was
+  // sent, so it goes in the same breath as the toast that says it was not. Waiting for the sweep to
+  // age it out would leave that claim standing for a minute.
+  it('takes back the copy of a send that was refused', () => {
+    const p = sendPending([], [], '보냄', 'p1', 1000)
+    expect(dropPending(p, 'p1')).toEqual([])
+  })
+
+  it('leaves the others alone', () => {
+    let p = sendPending([], [], '하나', 'p1', 1000)
+    p = sendPending(p, [], '둘', 'p2', 1100)
+    expect(dropPending(p, 'p2').map((x) => x.id)).toEqual(['p1'])
+  })
+
+  // Same reference back when there is nothing to take out, so a refusal for a copy the sweep already
+  // aged out costs nothing downstream — the bailout the other reducers here make.
+  it('gives the same list back when the id is not there', () => {
+    const p = sendPending([], [], '하나', 'p1', 1000)
+    expect(dropPending(p, 'p9')).toBe(p)
   })
 })
 
