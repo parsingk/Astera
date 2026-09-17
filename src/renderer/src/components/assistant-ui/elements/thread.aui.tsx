@@ -432,6 +432,12 @@ const AssistantMessage: FC = () => {
         )}
       >
         <MessagePrimitive.GroupedParts
+          // Off: this view has its own mark for "the CLI is working" (the `Running` slot above), and
+          // upstream's would be a second dot on top of it the moment a message is last and running.
+          // Ours is the one that can cover the whole wait — upstream's hangs off the last *assistant*
+          // message, so it cannot show at all in the moment right after a message is sent, which is
+          // the moment someone most needs to see that something is happening.
+          indicator="never"
           groupBy={groupPartByType({
             reasoning: ["group-chainOfThought", "group-reasoning"],
             "tool-call": ["group-chainOfThought", "group-tool"],

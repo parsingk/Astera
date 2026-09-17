@@ -169,12 +169,11 @@ export const ToolRow: ToolCallMessagePartComponent<{ target: string }, ConvToolO
         {target}
       </span>
       {result === undefined ? (
-        <span className="text-muted-foreground flex shrink-0 items-center gap-1.5">
-          <span aria-hidden className="animate-pulse">
-            {"●"}
-          </span>
-          {t("conversation.verb.running")}
-        </span>
+        // Words only. The pulsing dot that used to sit here said the same thing as the one the pane
+        // now keeps at the end of the output for the whole time the CLI is working, and the two
+        // together read as two separate things happening — reported as exactly that, "two white dots".
+        // One mark for "still going", in one place; a row that is still running says so in words.
+        <span className="text-muted-foreground shrink-0">{t("conversation.verb.running")}</span>
       ) : (
         <span
           className={cn(
