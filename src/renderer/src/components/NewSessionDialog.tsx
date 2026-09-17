@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Account, BranchRef, ScheduleConfig, SessionKind, Provider } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
+import { rollChainCandidates } from '../../../core/resume'
 import { isSlackReady } from '../../../core/slack/ready'
 import { useChatAvailability } from '../hooks/useChatAvailability'
+import { useAccountStatus } from '../hooks/useAccountStatus'
 import { orderBranchesForPicker, reconcileBaseRef } from '../../../core/worktrees/base'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
@@ -182,6 +184,9 @@ export function NewSessionDialog({
   // 대화 is available once the Host has announced the proc-* family — either provider's account can
   // open one. The poll lives in the hook, shared with ResumeDialog.
   const { enabled: chatEnabled } = useChatAvailability()
+  // The same login map the sidebar's account rows use — no new IPC. Only the roll slots consult it
+  // (spec §15.4): slot 0 is where the user chose to run, and that choice fails visibly on its own.
+  const { loginMap } = useAccountStatus(accounts)
   // A remembered 대화 falls back to 터미널 while it is unavailable — never write here, so the person's
   // actual choice survives a temporary gap (the Host still connecting) and chat is offered again once
   // the condition clears.
@@ -189,16 +194,25 @@ export function NewSessionDialog({
     if (kind === 'chat' && !chatEnabled) setKind('terminal')
   }, [kind, chatEnabled])
   // Per-slot options: this slot's current value plus any account no other slot uses (no duplicates).
-  // Rolling slots (1 and 2) only offer accounts with the same provider as the primary account.
-  const options = (slot: number): Account[] =>
-    accounts.filter(
+  // Rolling slots (1 and 2) only offer accounts with the same provider as the primary account, and
+  // drop any account the login probe has answered "logged out" for (spec §15.4) — a slot already
+  // holding an account keeps showing it regardless, so the control never renders with a value absent
+  // from its own option list.
+  const options = (slot: number): Account[] => {
+    const live = slot === 0 ? null : new Set(rollChainCandidates(accounts.map((a) => a.id), loginMap))
+    return accounts.filter(
       (a) =>
         (slot === 0 || provider(a) === primaryProvider) &&
-        (a.id === accountIds[slot] || !accountIds.includes(a.id))
+        (a.id === accountIds[slot] || !accountIds.includes(a.id)) &&
+        (live === null || a.id === accountIds[slot] || live.has(a.id))
     )
+  }
   const canAdd =
     accountIds.length < MAX_ROLL_ACCOUNTS &&
-    accounts.some((a) => provider(a) === primaryProvider && !accountIds.includes(a.id))
+    accounts.some(
+      (a) =>
+        provider(a) === primaryProvider && !accountIds.includes(a.id) && loginMap[a.id] !== false
+    )
   // Whether rolling is on — with multiple accounts (2+) it is always on (checkbox pinned and disabled), with a single account the user toggles it
   const multi = accountIds.length >= 2
   // The current branch leads, outside any group: forking from what you are on is the common case, and the

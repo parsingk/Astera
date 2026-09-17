@@ -93,3 +93,14 @@ export function resumeRollAccountIds(
   const chain = restoreRollAccountIds(savedIds, selectedId, sameProvider)
   return chain.length > 0 ? chain : [selectedId]
 }
+
+/** The roll-chain slots a dialog may offer: every account except one the login probe has answered
+ *  "no" for. An account the probe has not answered yet (undefined) is kept — the map is empty on the
+ *  first render, and hiding on unknown would blank the list before any answer arrives. Only the chain
+ *  slots use this; the primary account stays the user's own choice (spec §15.4). */
+export function rollChainCandidates(
+  ids: string[],
+  loginMap: Record<string, boolean | undefined>
+): string[] {
+  return ids.filter((id) => loginMap[id] !== false)
+}

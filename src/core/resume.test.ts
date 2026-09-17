@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { resumeAccountOptions, restoreRollAccountIds, resumeRollAccountIds, resumeChatAllowed } from './resume'
+import {
+  resumeAccountOptions,
+  restoreRollAccountIds,
+  resumeRollAccountIds,
+  resumeChatAllowed,
+  rollChainCandidates
+} from './resume'
 import type { Account } from './types'
 
 const acc = (id: string): Account => ({
@@ -145,5 +151,19 @@ describe('resumeChatAllowed', () => {
 
   it('is refused while the Host cannot open a chat session at all', () => {
     expect(resumeChatAllowed({ chatEnabled: false, selectedId: 'a' })).toBe(false)
+  })
+})
+
+describe('rollChainCandidates', () => {
+  it('로그아웃된 계정만 뺀다', () => {
+    expect(rollChainCandidates(['a', 'b', 'c'], { a: true, b: false, c: true })).toEqual(['a', 'c'])
+  })
+
+  it('아직 모르는 계정은 남긴다 — 첫 렌더에서 목록이 비지 않게', () => {
+    expect(rollChainCandidates(['a', 'b'], { a: true })).toEqual(['a', 'b'])
+  })
+
+  it('빈 맵이면 그대로 돌려준다', () => {
+    expect(rollChainCandidates(['a', 'b'], {})).toEqual(['a', 'b'])
   })
 })
