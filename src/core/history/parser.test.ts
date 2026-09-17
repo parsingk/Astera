@@ -63,19 +63,37 @@ describe('parseTranscriptMeta', () => {
     expect(meta.title).toBe('진짜 첫 요청')
   })
 
-  it('첫 줄이 queue-operation이면 isHelper=true (HUD 헬퍼 세션, 실측 91%)', async () => {
-    const file = await write('helper.jsonl', [
-      line({ type: 'queue-operation', sessionId: 'helper-1' }),
+  // 이 테스트는 이전에 반대를 못박고 있었다(queue-operation 이 첫 줄이면 isHelper=true, "실측 91%").
+  // 실측이 그것을 뒤집었다 — 2026-09-17 이 컴퓨터의 ~/.claude/projects 전수 조사: 첫 줄이 queue-operation
+  // 이면서 50줄 안에 user/assistant 가 있는 실제 대화 1343 개, 대화 기록이 하나도 없는 진짜 헬퍼 0 개.
+  // stream-json 으로 들어온 첫 메시지가 대기열을 거치면 queue-operation 이 첫 줄에 온다(대화 세션의
+  // 스케줄 명령이 정확히 그랬고, 그 세션은 목록과 대화창에서 통째로 사라졌다). ai-title 과 같은 오탐.
+  it('첫 줄이 queue-operation 이어도 대화가 있으면 isHelper=false (대기열을 거친 실제 세션)', async () => {
+    const file = await write('queued.jsonl', [
+      line({ type: 'queue-operation', sessionId: 'real-2' }),
+      line({ type: 'queue-operation', sessionId: 'real-2' }),
       line({
         type: 'user',
-        sessionId: 'helper-1',
+        sessionId: 'real-2',
         cwd: 'D:\\proj',
-        message: { role: 'user', content: '무시되어야 함' }
-      })
+        message: { role: 'user', content: '숫자 1 출력' }
+      }),
+      line({ type: 'assistant', sessionId: 'real-2', message: { role: 'assistant', content: '1' } })
+    ])
+    const meta = await parseTranscriptMeta(file)
+    expect(meta.isHelper).toBe(false)
+    expect(meta.isSidechain).toBe(false)
+    expect(meta.title).toBe('숫자 1 출력')
+  })
+
+  it('queue-operation 만 있고 대화 기록이 없으면 isHelper=true (HUD 헬퍼 파일)', async () => {
+    const file = await write('helper.jsonl', [
+      line({ type: 'queue-operation', sessionId: 'helper-1' }),
+      line({ type: 'queue-operation', sessionId: 'helper-1' }),
+      line({ type: 'queue-operation', sessionId: 'helper-1' })
     ])
     const meta = await parseTranscriptMeta(file)
     expect(meta.isHelper).toBe(true)
-    expect(meta.isSidechain).toBe(false)
   })
 
   it('첫 줄이 agent-name / bridge-session이면 isHelper=true (비대화 기록 파일)', async () => {
@@ -106,20 +124,6 @@ describe('parseTranscriptMeta', () => {
     expect(meta.isHelper).toBe(false)
     expect(meta.sessionId).toBe('real-1')
     expect(meta.title).toBe('이건 실제 대화다')
-  })
-
-  it('첫 줄이 queue-operation 이면 대화가 있어도 isHelper=true 그대로다', async () => {
-    const file = await write('hud.jsonl', [
-      line({ type: 'queue-operation', sessionId: 'hud-1' }),
-      line({
-        type: 'user',
-        sessionId: 'hud-1',
-        cwd: 'D:\\proj',
-        message: { role: 'user', content: '주제를 한 줄로' }
-      }),
-      line({ type: 'assistant', message: { role: 'assistant', content: '한 줄' } })
-    ])
-    expect((await parseTranscriptMeta(file)).isHelper).toBe(true)
   })
 
   it('isSidechain:true 줄이 있으면 isSidechain=true (레거시 사이드체인)', async () => {

@@ -9,7 +9,7 @@ export interface TranscriptMeta {
   title: string | null
   rootUuid: string | null // uuid of the first type:'user' line — used to judge fork (resume) identity
   isSidechain: boolean // legacy sidechain — excluded from the index
-  isHelper: boolean // non-conversation record file (first line queue-operation/ai-title/agent-name/bridge-session) — excluded from the index
+  isHelper: boolean // non-conversation record file: a helper-typed first line (queue-operation/agent-name/bridge-session) AND no user/assistant/summary record in the head — excluded from the index and from transcript lookup
 }
 
 export function extractText(message: unknown): string | null {
@@ -87,12 +87,19 @@ export function isMetaUserRecord(obj: Record<string, unknown>): boolean {
 }
 
 // Non-conversation record file: a session file holding only auxiliary records and no conversation
-// messages. Identified by the first line's type and excluded from the index.
-// queue-operation (HUD status line helper) · ai-title/agent-name (records of title and subagent name
-// generation) · bridge-session (remote bridge marker).
-// These have no cwd and no user/assistant messages, so if they show up in the list they are just
-// folder-slug (D--…) noise.
+// messages. A candidate is recognised by its first line's type, and **confirmed** by the head of the
+// file (the first maxLines) carrying no user/assistant/summary record at all — the first line alone is
+// not enough, see the queue-operation note below. Excluded from the index and from transcript lookup.
+// queue-operation (HUD status line helper) · agent-name (subagent name record) · bridge-session (remote
+// bridge marker). True helper files have no cwd and no user/assistant messages, so if they show up in
+// the list they are just folder-slug (D--…) noise.
 const NON_CONVERSATION_FIRST_TYPES = new Set([
+  // **A first line of queue-operation no longer decides on its own.** Measured 2026-09-17 across this
+  // machine's ~/.claude/projects: 1343 files start with queue-operation AND hold a real conversation
+  // within 50 lines, and 0 start with it and hold none. A stream-json user message that is queued
+  // before the CLI takes it writes queue-operation as the file's first records — a chat session's
+  // scheduled command did exactly that, and the whole session vanished from the history list and from
+  // its own pane (transcriptPathById → buildEntry → isHelper). Same false positive ai-title had.
   'queue-operation',
   // **'ai-title' 은 여기 있었고, 실측이 빼게 했다.** 이 저장소의 히스토리 디렉터리를 전수 조사한
   // 결과: queue-operation 이 첫 줄인 파일 834 개(20KB~151KB, HUD 플러그인이 만든다), last-prompt
@@ -121,6 +128,12 @@ export async function parseTranscriptMeta(filePath: string, maxLines = 50): Prom
   let n = 0
   let firstParsedLineSeen = false
   let firstUserLineSeen = false
+  // isHelper is a verdict about the whole head, not the first line: a helper-typed first line makes
+  // the file a candidate, and a conversation record anywhere in the head clears it. Decided after the
+  // loop, whichever way the loop ended (maxLines, EOF, or the early exit once sessionId/cwd/title are
+  // known — that exit is only reachable after a user record, which is itself a conversation record).
+  let helperCandidate = false
+  let sawConversationRecord = false
   try {
     for await (const raw of rl) {
       if (++n > maxLines) break
@@ -131,14 +144,14 @@ export async function parseTranscriptMeta(filePath: string, maxLines = 50): Prom
         continue // defensive parsing — ignore a broken line
       }
       if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) continue
-      // isHelper: decided from the first successfully parsed line only — the first line of an
-      // interactive session is of the summary/user family, so it cannot be queue-operation (verified
-      // by measurement). isSidechain: true if any line seen before the early exit carries the flag (a
-      // sidechain file has the flag on every message line, so it is caught near the start).
+      // isSidechain: true if any line seen before the early exit carries the flag (a sidechain file has
+      // the flag on every message line, so it is caught near the start).
       if (!firstParsedLineSeen) {
         firstParsedLineSeen = true
-        meta.isHelper = typeof obj.type === 'string' && NON_CONVERSATION_FIRST_TYPES.has(obj.type)
+        helperCandidate = typeof obj.type === 'string' && NON_CONVERSATION_FIRST_TYPES.has(obj.type)
       }
+      if (obj.type === 'user' || obj.type === 'assistant' || obj.type === 'summary')
+        sawConversationRecord = true
       if (obj.isSidechain === true) meta.isSidechain = true
       if (meta.sessionId === null && typeof obj.sessionId === 'string') meta.sessionId = obj.sessionId
       if (meta.cwd === null && typeof obj.cwd === 'string') meta.cwd = obj.cwd
@@ -157,6 +170,7 @@ export async function parseTranscriptMeta(filePath: string, maxLines = 50): Prom
     rl.close()
     stream.destroy()
   }
+  meta.isHelper = helperCandidate && !sawConversationRecord
   return meta
 }
 
