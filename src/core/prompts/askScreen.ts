@@ -170,3 +170,23 @@ export function askCardStateOf(stage: AskStage, answering: boolean): AskCardStat
   if (stage.kind === 'question' && stage.index === 0 && stage.pristine) return 'ready'
   return 'terminal'
 }
+
+/**
+ * Whether the card's own Submit can be pressed.
+ *
+ * The button is drawn whether or not this is true. It used to be drawn only when true, and a button
+ * that is not there reads as a feature that does not exist rather than one that is blocked — reported
+ * as exactly that, against a chat session's card, which always has one because it answers over the
+ * protocol and has no terminal screen to drive.
+ *
+ * Off for the two states that put the card here — the terminal's dialog is not the untouched one the
+ * driver starts from, or a drive already ran and gave up — and off while a drive is in flight or the
+ * dialog has not appeared yet. `canSubmit` is the form's own completeness, which is the caller's.
+ */
+export function askSubmitEnabled(
+  state: AskCardState,
+  notice: string | null,
+  canSubmit: boolean
+): boolean {
+  return state === 'ready' && notice === null && canSubmit
+}

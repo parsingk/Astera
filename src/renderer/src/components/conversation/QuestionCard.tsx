@@ -7,7 +7,7 @@ import { Button } from "../ui/button";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MessageKey } from "../../../../core/i18n";
 import { isAnswered, type AskForm, type Answer } from "../../../../core/prompts/askUserQuestion";
-import type { AskCardState } from "../../../../core/prompts/askScreen";
+import { askSubmitEnabled, type AskCardState } from "../../../../core/prompts/askScreen";
 import type { AskStopReason } from "./askDriver";
 
 export interface QuestionCardProps {
@@ -55,6 +55,11 @@ export function QuestionCard({
   const { t } = useI18n();
   const busy = state === "answering";
   const drivable = state === "ready" && notice === null;
+  // Drawn whether or not it can be pressed. Hiding it made a blocked answer look like a missing
+  // feature: a chat session's card always has this button (it answers over the protocol, with no
+  // terminal screen to drive), and beside that one a terminal session's card looked like it simply
+  // could not send. The status line to its left already says what the state is; nothing is added here.
+  const canPressSubmit = askSubmitEnabled(state, notice, canSubmit);
   const status: string | null =
     state === "answering"
       ? t("conversation.ask.answering")
@@ -142,11 +147,15 @@ export function QuestionCard({
           {busy && <Loader2Icon className="mr-1.5 inline size-3 animate-spin" aria-hidden="true" />}
           {status}
         </p>
-        {drivable && (
-          <Button size="sm" variant="default" className="shrink-0" disabled={!canSubmit} onClick={onSubmit}>
-            {t("conversation.ask.submit")}
-          </Button>
-        )}
+        <Button
+          size="sm"
+          variant="default"
+          className="shrink-0"
+          disabled={!canPressSubmit}
+          onClick={onSubmit}
+        >
+          {t("conversation.ask.submit")}
+        </Button>
       </div>
     </div>
   );

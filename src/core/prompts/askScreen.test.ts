@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { askStageOf, markedRowOf, reviewMatches, askCardStateOf, type AskStage } from './askScreen'
+import { askStageOf, markedRowOf, reviewMatches, askCardStateOf, askSubmitEnabled, type AskStage } from './askScreen'
 import { parseAskUserQuestion, emptyAnswers, togglePick, setOther, type AskForm } from './askUserQuestion'
 
 const form = parseAskUserQuestion({
@@ -257,5 +257,30 @@ describe('askCardStateOf', () => {
     expect(askCardStateOf(askStageOf(Q1_MOVED, form), false)).toBe('terminal')
     expect(askCardStateOf(askStageOf(Q2_FRESH, form), false)).toBe('terminal')
     expect(askCardStateOf(askStageOf(REVIEW, form), false)).toBe('terminal')
+  })
+})
+
+describe('askSubmitEnabled', () => {
+  // The button is always drawn now. It used to be hidden whenever the card could not drive the
+  // terminal, and a hidden button reads as a missing feature rather than a blocked one -- reported as
+  // exactly that, next to a chat session's card which always has one.
+  it('is on only when the card can drive the terminal and the form is complete', () => {
+    expect(askSubmitEnabled('ready', null, true)).toBe(true)
+  })
+
+  it('is off while the answer is being driven, or the dialog is not there yet', () => {
+    expect(askSubmitEnabled('answering', null, true)).toBe(false)
+    expect(askSubmitEnabled('waiting', null, true)).toBe(false)
+  })
+
+  // The two that put the card in this state in the first place: the terminal's dialog is not the
+  // untouched one the driver starts from, or a drive already ran and stopped.
+  it('is off when the terminal owns the answer, and after a drive gave up', () => {
+    expect(askSubmitEnabled('terminal', null, true)).toBe(false)
+    expect(askSubmitEnabled('ready', 'not-pristine', true)).toBe(false)
+  })
+
+  it('is off while the form still has an unanswered question', () => {
+    expect(askSubmitEnabled('ready', null, false)).toBe(false)
   })
 })
