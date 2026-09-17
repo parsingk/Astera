@@ -672,6 +672,10 @@ app.whenReady().then(async () => {
         return null
       }
     },
+    // The same verdict the account panel and the resume dialog show. A chain asks it on its tick and
+    // skips an account that cannot authenticate (spec §15.2) — before this, a roll onto a logged-out
+    // account copied the transcript and respawned into a CLI that immediately failed.
+    loginStatus: (accountId) => core!.accounts.loginStatus(accountId),
     // A chat session writes no statusLine — it never calls the hook at all — so this would poll a file
     // that is never written. ipc pushes the same two facts in through onChatMeta instead.
     readStatusPayload: (id) => (core!.chat.has(id) ? Promise.resolve(null) : core!.statusLinePayload(id)),
@@ -836,6 +840,10 @@ app.whenReady().then(async () => {
         return null
       }
     },
+    // The same verdict the account panel and the resume dialog show. A chain asks it on its tick and
+    // skips an account that cannot authenticate (spec §15.2) — before this, a roll onto a logged-out
+    // account copied the transcript and respawned into a CLI that immediately failed.
+    loginStatus: (accountId) => core!.accounts.loginStatus(accountId),
     send: (channel, payload) => {
       try {
         if (!win.isDestroyed()) win.webContents.send(channel, payload)
