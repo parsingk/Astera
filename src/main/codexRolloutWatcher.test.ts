@@ -128,6 +128,30 @@ describe('CodexRolloutWatcher', () => {
     w.stop()
   })
 
+  // The rolled-session tap (index.ts, session:rolled) registers a rolled codex chat session before its
+  // own `ready` registers it again. That is only safe if a second register on the same live id replaces
+  // the first entry wholesale — the later call's notifyTurns and codex session id must win, not merge
+  // with or lose to the earlier ones. This pins that contract at the public API.
+  it('a second register on the same live id replaces the first entry wholesale', async () => {
+    const cwd = path.join(dir, 'proj')
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd3', 'sess-b', cwd)
+    const onTurnComplete = vi.fn()
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete,
+      log: () => {},
+      now: () => now
+    })
+    w.register(session('live-2', cwd, true), p, 'cx-first', { notifyTurns: true })
+    w.register(session('live-2', cwd, true), p, 'cx-second', { notifyTurns: false })
+    expect(w.codexSessionIdFor('live-2')).toBe('cx-second')
+    await advance(TICK)
+    await appendFile(p, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n')
+    await advance(TICK)
+    expect(onTurnComplete).not.toHaveBeenCalled() // the second call's notifyTurns: false is what stands
+    w.stop()
+  })
+
   // 탐색은 경로와 세션 id 를 함께 돌려주는데(findRollout) 지금까지 경로만 남기고 id 는 버렸다.
   // 그 id 가 codex 에서 claude 의 statusLine session_id 에 해당하는 값이고, 스케줄러가 키를 배울
   // 유일한 출처다 — 이 감시자는 **모든** codex 세션에 붙으므로 롤링을 켜지 않은 세션도 답할 수 있다.
