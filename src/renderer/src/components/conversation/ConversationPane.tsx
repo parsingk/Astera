@@ -416,32 +416,32 @@ export function isSlashCommand(text: string): boolean {
 /**
  * What to call the session's model before the CLI has said which one it is running.
  *
- * The entry's **name** leads, and what it resolves to rides behind it. The order is the point. Claude's
- * `list_models` answers a default entry of `value: "default"`, `displayName: "Default (recommended)"`,
- * `resolvedModel: "claude-opus-5[1m]"`, and that resolution is decided when a turn runs, not at the
- * handshake -- a session whose Opus budget is spent opens its first turn on a different model. Leading
- * with the resolved name was a claim about which model would run, and it was wrong exactly when it
- * mattered: reported as "it said Opus, I said hello, it turned into Fable". Leading with the entry's
- * name states the choice, which is the part that is settled; the resolution follows it as what the
- * default currently stands for, which is what "default" on its own does not say.
+ * `configuredModel` is what the account's own settings choose (core/models/parse.ts's
+ * `configuredModelOf`), and it wins, because a chat session is launched without `--model` and the CLI
+ * therefore runs exactly that. It is resolved through the list rather than shown as written: the
+ * settings say `claude-fable-5-1[1m]` where `system/init` says `claude-fable-5-1`, both measured, so
+ * going through the list is what makes the label stop changing when the first turn finally reports it.
+ * A chosen model the list does not carry is still the right answer and is shown as written.
  *
- * Nothing is added when there is nothing to add: codex's default entry is a model rather than an alias
- * for one and carries no `resolvedModel` at all, and an entry whose name already is its resolution
- * would otherwise say it twice.
+ * The list's `default` entry is the fallback, and only that. It describes what the default *option*
+ * means, not what this session is set to, so naming it while the settings had chosen something else
+ * was simply wrong: on an account whose settings chose Fable the composer read "Default (recommended)"
+ * and the first turn came back Fable. With nothing chosen the CLI really does use the default, and
+ * then the entry is the right thing to name.
  *
- * Why this is needed at all: `system/init`, which is where a Claude chat session's model comes from,
- * does not arrive at the handshake -- measured, a process sat for 90 s without one and answered a
- * `list_models` control request in 1.3 s meanwhile. It arrives with the first turn. Everything before
- * that has only the list to go on.
+ * Why any of this is needed: `system/init`, where a Claude chat session's model comes from, does not
+ * arrive at the handshake -- measured, a process sat 90 s without one while answering a `list_models`
+ * control request in 1.3 s. It arrives with the first turn. The model list carries no marker for the
+ * model in use and the initialize response carries no model at all, so the settings are the only
+ * source there is until then.
  */
-export function defaultModelLabelOf(
+export function pendingModelLabelOf(
   models: readonly ModelDescriptor[],
-  format: (name: string, model: string) => string
+  configuredModel: string | null
 ): string | null {
-  const entry = models.find((m) => m.isDefault)
-  if (entry === undefined) return null
-  const resolved = entry.resolvedModel
-  return resolved !== undefined && resolved !== entry.name ? format(entry.name, resolved) : entry.name
+  const entry = models.find((m) => (configuredModel === null ? m.isDefault : m.id === configuredModel))
+  if (entry === undefined) return configuredModel
+  return entry.resolvedModel ?? entry.name
 }
 
 /**
@@ -449,7 +449,7 @@ export function defaultModelLabelOf(
  * drawing. Effort alone is not worth a line: it means nothing without the model it belongs to.
  *
  * `fallbackModel` is what to draw while the CLI has reported no model at all — for a chat session,
- * `defaultModelLabelOf` above, which names the default rather than guessing what it resolves to.
+ * `pendingModelLabelOf` above, which names the model the account's settings choose.
  * Without it a freshly opened chat pane sits on the bare "model" placeholder until someone sends
  * something, because Claude names its model only on `system/init` and that arrives with the first
  * turn. Drawn alone: an effort with no reported model still belongs to nothing.
@@ -695,6 +695,9 @@ export function ConversationPane({
   const answeringRef = useRef(false);
   /** What this session's CLI says it can run. Asked once per session — see conversation.models. */
   const [models, setModels] = useState<readonly ModelDescriptor[]>([]);
+  /** The model this session's own settings choose, for the composer to name before the first turn —
+   *  see pendingModelLabelOf. Asked once beside the model list, and null until the answer lands. */
+  const [configuredModel, setConfiguredModel] = useState<string | null>(null);
   const [terminalModelInfo, setModelInfo] = useState<{
     model: string | null
     effort: string | null
@@ -1707,11 +1710,7 @@ export function ConversationPane({
   // Before the first turn a chat session's CLI has said nothing about its model (see modelLineOf), but
   // the model list it answered at the handshake names the account's default; a terminal session reads
   // its model off the screen and needs no stand-in.
-  const defaultModelFallback = isChat
-    ? defaultModelLabelOf(models, (name, model) =>
-        t("conversation.model.defaultLine", { name, model })
-      )
-    : null;
+  const defaultModelFallback = isChat ? pendingModelLabelOf(models, configuredModel) : null;
   const modelLine = modelLineOf(
     modelInfo,
     (model, effort) => t("conversation.model.line", { model, effort }),
@@ -1854,6 +1853,18 @@ export function ConversationPane({
   useEffect(() => {
     let current = true;
     setModels([]);
+    setConfiguredModel(null);
+    // Asked beside the list because it is the other half of the same question — which model is this
+    // session on — and the list alone cannot answer it. Its own failure is silent for the same reason
+    // the list's is: the composer falls back to naming the list's default, which is what it did before
+    // this existed.
+    if (isChat)
+      void window.api.chat
+        .configuredModel(sessionId)
+        .then((model) => {
+          if (current) setConfiguredModel(model);
+        })
+        .catch(() => {});
     // A chat session asks its own adapter, which has the app-server's answer for this thread; the
     // `conversation.models` route reads an account's CLI and is not the same question.
     const asked: Promise<readonly ModelDescriptor[]> = isChat

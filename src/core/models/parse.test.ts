@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseClaudeModels, parseCodexModels } from './parse'
+import { configuredModelOf, parseClaudeModels, parseCodexModels } from './parse'
 
 // 실측 응답을 줄인 것 (2026-08-30, 이 컴퓨터)
 const claudeRaw = [
@@ -136,5 +136,32 @@ describe('parseCodexModels', () => {
   it('모양을 모르는 원소만 버린다', () => {
     const m = parseCodexModels([{ model: 'x', supportedReasoningEfforts: [{ nope: 1 }, 'high'] }])
     expect(m[0].effortLevels).toEqual(['high'])
+  })
+})
+
+describe('configuredModelOf', () => {
+  // Claude's own settings name a model, and a session started without `--model` runs that one. Measured
+  // on this machine (2026-09-17): an account whose settings.json carried
+  // `"model": "claude-fable-5-1[1m]"` opened `system/init` on `claude-fable-5-1`, while an account with
+  // no such key opened on `claude-opus-5[1m]` -- same CLI, same arguments, same folder. Nothing in the
+  // handshake reports this: the model list has no "this is the one in use" marker and the initialize
+  // response carries no model at all, so reading it is the only way to name the model before the first
+  // turn, and the first turn is when `system/init` finally says it.
+  it('takes the first source that names one', () => {
+    expect(configuredModelOf([{}, { model: 'claude-fable-5-1[1m]' }, { model: 'sonnet' }]))
+      .toBe('claude-fable-5-1[1m]')
+  })
+
+  // Claude reads local over project over user, so callers hand them over in that order and the first
+  // hit wins. A source that is missing is passed as null rather than skipped, so the order is the
+  // caller's and not an accident of which files happened to exist.
+  it('lets a nearer source win, and ignores one that is not there', () => {
+    expect(configuredModelOf([null, { model: 'sonnet' }, { model: 'opus' }])).toBe('sonnet')
+  })
+
+  it('is null when nothing names one, and for values that are not a model name', () => {
+    expect(configuredModelOf([])).toBeNull()
+    expect(configuredModelOf([{}, null, { permissions: {} }])).toBeNull()
+    expect(configuredModelOf([{ model: '' }, { model: 42 }, { model: null }])).toBeNull()
   })
 })

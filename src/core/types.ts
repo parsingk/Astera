@@ -1518,6 +1518,14 @@ export type RendererApi = CoreApi & {
     setModel(sessionId: string, model: string, effort: string | null): Promise<void>
     setPlanMode(sessionId: string, on: boolean): Promise<void>
     listModels(sessionId: string): Promise<ModelDescriptor[]>
+    /** The model this session's own settings choose, or null when they choose none.
+     *
+     *  What the composer names before the first turn. A chat session is launched without `--model`, so
+     *  the CLI runs whatever its settings say, and nothing in the handshake reports which model that is
+     *  — `system/init` is the first word on it and it arrives with the first turn. Read on mount, the
+     *  same moment the model list is. Null for a session that is not a chat session, and for codex,
+     *  whose model comes back from the thread instead. */
+    configuredModel(sessionId: string): Promise<string | null>
     /** One-shot on mount; null for a session that is not a chat session. */
     state(sessionId: string): Promise<ChatState | null>
   }

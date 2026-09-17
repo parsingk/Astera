@@ -85,3 +85,32 @@ export function parseCodexModels(raw: unknown): ModelDescriptor[] {
   }
   return out
 }
+
+/**
+ * The model an account's own settings name, read from the settings files in Claude's own precedence
+ * order, or null when none of them name one.
+ *
+ * Why this exists: a chat session is launched without `--model`, so the CLI runs whatever its settings
+ * say, and nothing in the handshake reports which model that is — the model list has no "this is the
+ * one in use" marker, and the initialize response carries no model at all. `system/init` is the first
+ * word on it and that arrives with the first turn. Until then this is the only way to name the model
+ * the session is actually going to run.
+ *
+ * Measured (2026-09-17, same CLI, same arguments, same folder): an account whose settings.json carried
+ * `"model": "claude-fable-5-1[1m]"` opened `system/init` on `claude-fable-5-1`; an account with no such
+ * key opened on `claude-opus-5[1m]`.
+ *
+ * `sources` are the parsed settings objects in the order the CLI resolves them — local, then project,
+ * then user — and the first that names a model wins. A file that is not there is passed as null rather
+ * than left out, so the order belongs to the caller instead of to whichever files happened to exist.
+ * Enterprise settings and environment overrides are not consulted: they are not where a person's own
+ * choice lives, and a label that is wrong for them is corrected by the first turn like any other.
+ */
+export function configuredModelOf(sources: readonly unknown[]): string | null {
+  for (const source of sources) {
+    if (!isObj(source)) continue
+    const model = str(source.model)
+    if (model) return model
+  }
+  return null
+}

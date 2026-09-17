@@ -13,7 +13,7 @@ import {
   ptyWritesFor,
   isSlashCommand,
   modelLineOf,
-  defaultModelLabelOf,
+  pendingModelLabelOf,
   shouldReadPromptScreen,
   shouldShowPrompt,
   askCardShown,
@@ -267,39 +267,53 @@ describe('isSlashCommand', () => {
   })
 })
 
-describe('defaultModelLabelOf', () => {
+describe('pendingModelLabelOf', () => {
   const m = (over: Partial<ModelDescriptor>): ModelDescriptor =>
     ({ provider: 'claude', id: 'x', name: 'X', description: null, isDefault: false, ...over }) as ModelDescriptor
-  const format = (name: string, model: string): string => `${name} · ${model}`
+  const claudeList = [
+    m({ id: 'default', name: 'Default (recommended)', isDefault: true, resolvedModel: 'claude-opus-5[1m]' }),
+    m({ id: 'opus[1m]', name: 'Opus (1M context)', resolvedModel: 'claude-opus-5[1m]' }),
+    m({ id: 'claude-fable-5-1[1m]', name: 'Fable', resolvedModel: 'claude-fable-5-1' })
+  ]
 
-  // The entry's own name leads, because the name is the choice and the choice is all that is settled
-  // before a turn runs: Claude's default resolves when the turn starts, so a session whose Opus budget
-  // is spent opens on something else. What the default *is* rides along behind it, which is what was
-  // asked for -- "default" alone says nothing about which model that is.
-  //
-  // Measured `list_models` (2026-09-17): the default entry is `value: "default"`, `displayName:
-  // "Default (recommended)"`, `resolvedModel: "claude-opus-5[1m]"`.
-  it('names the default entry and says what it resolves to', () => {
-    const models = [
-      m({ id: 'default', name: 'Default (recommended)', isDefault: true, resolvedModel: 'claude-opus-5[1m]' }),
-      m({ id: 'sonnet', name: 'Sonnet', resolvedModel: 'claude-sonnet-5' })
-    ]
-    expect(defaultModelLabelOf(models, format)).toBe('Default (recommended) · claude-opus-5[1m]')
+  // The settings' model is the one the session will run, so it is the one to name. Resolved through
+  // the list rather than shown raw, because the settings say `claude-fable-5-1[1m]` and `system/init`
+  // says `claude-fable-5-1` -- both measured on this machine. Going through the list means the label
+  // does not change at all when the first turn finally reports it.
+  it('names the model the settings choose, as the CLI will report it', () => {
+    expect(pendingModelLabelOf(claudeList, 'claude-fable-5-1[1m]')).toBe('claude-fable-5-1')
   })
 
-  // codex's default entry is a model, not an alias for one -- its list carries no resolvedModel at all
-  // -- so there is nothing to add and saying the name twice would be noise.
-  it('gives the name alone when there is nothing to resolve, or nothing new to say', () => {
-    expect(defaultModelLabelOf([m({ id: 'gpt-6-astra', name: 'GPT-6-Astra', isDefault: true })], format))
+  // The earlier label named the list's `default` entry whenever it had one, which is a description of
+  // what the default option means and not a statement about this session. On an account whose settings
+  // chose Fable it read "Default (recommended) · claude-opus-5[1m]" and the first turn came back Fable.
+  it('does not fall back to the default entry when the settings have chosen', () => {
+    expect(pendingModelLabelOf(claudeList, 'opus[1m]')).toBe('claude-opus-5[1m]')
+  })
+
+  // Nothing chosen means the CLI really does use its default, so naming that entry is correct here --
+  // and its resolution is what `system/init` will report, measured on an account with no model set.
+  it('names the default entry when the settings choose nothing', () => {
+    expect(pendingModelLabelOf(claudeList, null)).toBe('claude-opus-5[1m]')
+  })
+
+  // codex's list carries no resolvedModel at all and its default entry is a model rather than an alias
+  // for one, so the entry's own name is both the shortest and the truest thing to show.
+  it('falls back to the entry name where there is nothing to resolve', () => {
+    expect(pendingModelLabelOf([m({ id: 'gpt-6-astra', name: 'GPT-6-Astra', isDefault: true })], null))
       .toBe('GPT-6-Astra')
-    expect(
-      defaultModelLabelOf([m({ id: 'o', name: 'claude-opus-5', isDefault: true, resolvedModel: 'claude-opus-5' })], format)
-    ).toBe('claude-opus-5')
   })
 
-  it('is null when no entry is the default, and for an empty list', () => {
-    expect(defaultModelLabelOf([m({ id: 'sonnet', name: 'Sonnet' })], format)).toBeNull()
-    expect(defaultModelLabelOf([], format)).toBeNull()
+  // A model the list does not carry is still what the settings say, so it is still better than naming
+  // a different one. It is shown as written.
+  it('shows a chosen model the list does not carry, as written', () => {
+    expect(pendingModelLabelOf(claudeList, 'some-model-the-list-never-heard-of'))
+      .toBe('some-model-the-list-never-heard-of')
+  })
+
+  it('is null when there is nothing to go on', () => {
+    expect(pendingModelLabelOf([], null)).toBeNull()
+    expect(pendingModelLabelOf([m({ id: 'sonnet', name: 'Sonnet' })], null)).toBeNull()
   })
 })
 

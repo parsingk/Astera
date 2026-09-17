@@ -321,6 +321,7 @@ const api = {
     setModel: invoke('chat.setModel'),
     setPlanMode: invoke('chat.setPlanMode'),
     listModels: invoke('chat.listModels'),
+    configuredModel: invoke('chat.configuredModel'),
     state: invoke('chat.state')
   },
   platform: process.platform,

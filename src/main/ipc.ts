@@ -1,5 +1,6 @@
 import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, type WebContents } from 'electron'
 import { promises as fs, cpSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync } from 'node:fs'
+import { configuredModelOf } from '../core/models/parse'
 import path from 'node:path'
 import os from 'node:os'
 import net from 'node:net'
@@ -6738,6 +6739,37 @@ export function registerIpc(
     core.chat.setPlanMode(sessionId, on)
   )
   ipcMain.handle('chat.listModels', (_e, sessionId: string) => core.chat.listModels(sessionId))
+  // What the composer names before the first turn. A chat session is launched without `--model`, so
+  // Claude runs whatever its settings say, and nothing in the handshake reports which model that is:
+  // the model list carries no marker for the one in use and the initialize response carries no model at
+  // all. `system/init` is the first word on it and it arrives with the turn, so until then these files
+  // are the only source there is. Read in Claude's own order — local, then project, then user — and
+  // read fresh rather than cached, since a person changing it is exactly why they would reopen a pane.
+  // Never throws: a file that is missing or malformed is simply not a source.
+  ipcMain.handle('chat.configuredModel', (_e, sessionId: string) => {
+    const session = allSessions().find((x) => x.id === sessionId)
+    if (!session) return null
+    let account: { provider?: string; configDir: string } | null = null
+    try {
+      account = core.accounts.get(session.accountId)
+    } catch {
+      account = null
+    }
+    // codex keeps its model on the thread and reports it back at thread/start, so it never needs this.
+    if (!account || account.provider === 'codex') return null
+    const read = (file: string): unknown => {
+      try {
+        return JSON.parse(readFileSync(file, 'utf8'))
+      } catch {
+        return null
+      }
+    }
+    return configuredModelOf([
+      session.cwd ? read(path.join(session.cwd, '.claude', 'settings.local.json')) : null,
+      session.cwd ? read(path.join(session.cwd, '.claude', 'settings.json')) : null,
+      read(path.join(account.configDir, 'settings.json'))
+    ])
+  })
   // What the pane reads once on mount, so a tab reopened (or a renderer reloaded) mid-conversation
   // shows the state the adapter is actually in rather than waiting for the next event to arrive.
   ipcMain.handle('chat.state', (_e, sessionId: string) => core.chat.state(sessionId))
