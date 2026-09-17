@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, HistoryEntry, ProjectSummary, ScheduleConfig, TranscriptPreview } from '../../../core/types'
+import type { Account, HistoryEntry, ProjectSummary, ScheduleConfig, SessionKind, TranscriptPreview } from '../../../core/types'
 import { ResumeDialog } from './ResumeDialog'
 import { AccountSelect } from './AccountSelect'
 import { ProviderBadge } from './ProviderBadge'
@@ -230,12 +230,15 @@ export function ProjectRow({
 export function HistoryBrowser({
   accounts,
   ghostAccounts,
+  defaultSessionKind,
   onResume
 }: {
   accounts: Account[]
   /** Unregistered sources, for display only. Kept apart from `accounts` so nothing here can be picked as
    *  a spawn or rolling target; accountOf() looks through both so dots, badges and the filter keep working. */
   ghostAccounts: Account[]
+  /** Passed straight to ResumeDialog — the Settings default the kind picker opens on. */
+  defaultSessionKind: SessionKind
   onResume: (
     entry: HistoryEntry,
     cwd: string,
@@ -537,6 +540,7 @@ export function HistoryBrowser({
           entry={pendingResume.entry}
           cwd={pendingResume.cwd}
           accounts={accounts}
+          defaultSessionKind={defaultSessionKind}
           ghostAccounts={ghostAccounts}
           onConfirm={(opts) => {
             onResume(pendingResume.entry, pendingResume.cwd, opts)

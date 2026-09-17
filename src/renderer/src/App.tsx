@@ -438,10 +438,6 @@ export default function App(): React.JSX.Element {
   // sessions 조회가 판정하므로 여기서 따로 청소하지 않는다.
   const lastSessionIdRef = useRef<string | null>(null)
   if (activeSessionId) lastSessionIdRef.current = activeSessionId
-  /** What kind of session the active tab is — 'terminal' when the tab is not a session at all, which
-   *  is the right answer for the one reader below (the first-run question, which is about terminal
-   *  sessions and must not open over a chat tab). */
-  const activeSessionKind = sessionKindOf(sessions.find((s) => s.id === activeSessionId) ?? {})
   const [showNew, setShowNew] = useState(false)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null) // prefill for WorktreePanel's 'start session'
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
@@ -554,10 +550,9 @@ export default function App(): React.JSX.Element {
   orchEnabledRef.current = orchEnabled
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   const [agentBrowserEnabled, setAgentBrowserEnabled] = useState(false) // the agent browser toggle
-  // Task 10: what a new session tab opens as. Needed outside the settings modal too — PaneGrid reads
-  // it the moment a session tab first appears — so it is loaded at mount like orchEnabled above,
-  // not only while the modal is open.
-  const [conversationDefault, setConversationDefault] = useState<SessionView>('terminal')
+  // Which kind the new-session and resume dialogs open on. Needed outside the settings modal — both
+  // dialogs seed their own selection from it — so it is loaded at mount like orchEnabled above.
+  const [defaultSessionKind, setDefaultSessionKind] = useState<SessionKind>('terminal')
   /** Whether the one first-run question has been put to this person — null until main has said.
    *  False only on a machine with no settings file at all, so an update never sees the modal
    *  (main/appSettingsStore.ts's firstRunAsked carries the whole rule). */
@@ -839,10 +834,9 @@ export default function App(): React.JSX.Element {
     // from a cold start until someone opened settings once — not late, absent.
     void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
-    // PaneGrid seeds a session tab's remembered view from this the moment the tab first appears, so
-    // it has to be loaded before a session ever spawns — the same reason orchEnabled above is loaded
-    // at mount rather than only while the settings modal is open.
-    void window.api.settings.getConversationDefault().then(setConversationDefault)
+    // Both session dialogs seed their kind from this, so it has to be loaded before either can open —
+    // the same reason orchEnabled above is loaded at mount rather than only while the modal is open.
+    void window.api.settings.getDefaultSessionKind().then(setDefaultSessionKind)
     // Read here with the rest: the modal below is drawn from it, and it must not flash in front of
     // someone who has used the app for months while an answer is in flight.
     void window.api.settings
@@ -1059,8 +1053,8 @@ export default function App(): React.JSX.Element {
       .getAgentPermissionMode()
       .then((m) => setAgentYolo(m === 'yolo'))
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
-    // Re-syncs the new-tab default too, for the same reason as orchestration above.
-    void window.api.settings.getConversationDefault().then(setConversationDefault)
+    // Re-syncs the new-session default too, for the same reason as orchestration above.
+    void window.api.settings.getDefaultSessionKind().then(setDefaultSessionKind)
     // Astera Host slice 1: this value goes stale, and the row is only ever on screen while this
     // modal is open, so it is read here rather than at startup.
     void window.api.host.status().then(setHostStatus)
@@ -3862,6 +3856,7 @@ export default function App(): React.JSX.Element {
                 <HistoryBrowser
                   accounts={accounts}
                   ghostAccounts={ghostAccounts}
+                  defaultSessionKind={defaultSessionKind}
                   onResume={resumeFromHistory}
                 />
               </>
@@ -3944,7 +3939,6 @@ export default function App(): React.JSX.Element {
                 schedStates={schedStates}
                 busy={busy}
                 attention={attention}
-                conversationDefault={conversationDefault}
                 lastRoll={lastRoll}
                 draggingTabId={dragTabId}
                 newDisabled={!anyCliOk}
@@ -4110,6 +4104,7 @@ export default function App(): React.JSX.Element {
       {showNew && (
         <NewSessionDialog
           accounts={accounts}
+          defaultSessionKind={defaultSessionKind}
           runningCount={runningCount}
           initialCwd={newSessionCwd}
           // The promise is passed straight through — the dialog awaits it to show a start-pending state
@@ -4193,36 +4188,37 @@ export default function App(): React.JSX.Element {
                         ariaLabel={t('settings.general.language')}
                       />
                     </div>
-                    {/* Task 10: what a new session tab opens as. A plain enum with nothing coupled to
-                        it, so — unlike the resume-strategy pair below, which earns its own component
-                        exactly because setting one can flip the other — a settings-row beside the
-                        language row is all this needs. Only seeds a tab's own remembered choice the
-                        moment its tab first appears (core/panes/sessionView.ts), so changing this
-                        here never reaches into a tab that is already open. */}
+                    {/* Which kind the two session dialogs open on. A plain enum with nothing coupled
+                        to it, so — unlike the resume-strategy pair below, which earns its own
+                        component exactly because setting one can flip the other — a settings-row
+                        beside the language row is all this needs. It seeds each dialog's own
+                        selection and nothing else: picking the other kind inside the dialog belongs
+                        to that session and is not written back here. */}
                     <div className="settings-row">
-                      <span>{t('settings.conversation.title')}</span>
+                      <span>{t('settings.defaultKind.title')}</span>
                       <Select
                         items={[
-                          { value: 'terminal', label: t('settings.conversation.terminal') },
-                          { value: 'conversation', label: t('settings.conversation.conversation') }
+                          { value: 'terminal', label: t('settings.defaultKind.terminal') },
+                          { value: 'chat', label: t('settings.defaultKind.chat') }
                         ]}
-                        value={conversationDefault}
+                        value={defaultSessionKind}
                         onChange={(v) => {
-                          const next = v as SessionView
-                          const prev = conversationDefault
-                          setConversationDefault(next) // an optimistic update — reverted below on failure
-                          void window.api.settings.setConversationDefault(next).catch((err) => {
-                            setConversationDefault(prev)
+                          const next = v as SessionKind
+                          const prev = defaultSessionKind
+                          setDefaultSessionKind(next) // an optimistic update — reverted below on failure
+                          void window.api.settings.setDefaultSessionKind(next).catch((err) => {
+                            setDefaultSessionKind(prev)
                             toast.error(
-                              t('settings.conversation.saveFailed', {
+                              t('settings.defaultKind.saveFailed', {
                                 detail: err instanceof Error ? err.message : String(err)
                               })
                             )
                           })
                         }}
-                        ariaLabel={t('settings.conversation.title')}
+                        ariaLabel={t('settings.defaultKind.title')}
                       />
                     </div>
+                    <p className="settings-hint">{t('settings.defaultKind.hint')}</p>
                   </div>
                 )}
                 {settingsTab === 'agent' && (
@@ -4833,12 +4829,12 @@ export default function App(): React.JSX.Element {
           would settle a preference the tab underneath cannot honour — and dismissing is permanent, so
           it would burn the one asking. Deferred, not dismissed: the next time a terminal tab is
           active, the question is still waiting. */}
-      {firstRunAsked === false && accounts.length > 0 && activeSessionKind !== 'chat' && (
+      {firstRunAsked === false && accounts.length > 0 && (
         <FirstRunDialog
-          onPick={(view) => {
+          onPick={(kind) => {
             setFirstRunAsked(true)
-            setConversationDefault(view)
-            void window.api.settings.setConversationDefault(view)
+            setDefaultSessionKind(kind)
+            void window.api.settings.setDefaultSessionKind(kind)
             void window.api.settings.markFirstRunAsked()
           }}
           onDismiss={() => {

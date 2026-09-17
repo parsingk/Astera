@@ -5798,11 +5798,11 @@ export function registerIpc(
    *  file counts. */
   ipcMain.handle('settings.getFirstRunAsked', () => core.appSettings.getFirstRunAsked())
   ipcMain.handle('settings.markFirstRunAsked', () => core.appSettings.markFirstRunAsked())
-  ipcMain.handle('settings.getConversationDefault', () => core.appSettings.getConversationDefault())
-  ipcMain.handle('settings.setConversationDefault', async (_e, view: unknown) => {
-    if (view !== 'terminal' && view !== 'conversation')
-      throw new Error(`INVALID_CONVERSATION_DEFAULT: ${String(view)}`)
-    await core.appSettings.setConversationDefault(view)
+  ipcMain.handle('settings.getDefaultSessionKind', () => core.appSettings.getDefaultSessionKind())
+  ipcMain.handle('settings.setDefaultSessionKind', async (_e, kind: unknown) => {
+    if (kind !== 'terminal' && kind !== 'chat')
+      throw new Error(`INVALID_DEFAULT_SESSION_KIND: ${String(kind)}`)
+    await core.appSettings.setDefaultSessionKind(kind)
   })
 
   /**

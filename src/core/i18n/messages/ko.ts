@@ -364,10 +364,12 @@ export const ko = {
   'settings.jobContinuity.turnOffSmartResume.confirm': '끄기',
   'settings.jobContinuity.saveFailed': '작업 이어가기 설정을 저장하지 못했습니다: {detail}',
   // Task 10 — the general settings tab's new-tab default, beside the language row
-  'settings.conversation.title': '새 세션의 기본 화면',
-  'settings.conversation.terminal': '터미널',
-  'settings.conversation.conversation': '대화',
-  'settings.conversation.saveFailed': '새 세션의 기본 화면 설정을 저장하지 못했습니다: {detail}',
+  'settings.defaultKind.title': '새 세션 기본 종류',
+  'settings.defaultKind.terminal': '터미널',
+  'settings.defaultKind.chat': '대화',
+  'settings.defaultKind.hint':
+    '새 세션과 이어하기 창이 이 종류로 열립니다. 창 안에서 바꾸면 그 세션에만 적용됩니다.',
+  'settings.defaultKind.saveFailed': '새 세션 기본 종류를 저장하지 못했습니다: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': '터미널 영문 폰트',
   'settings.font.hangul': '터미널 한글 폰트',
@@ -720,12 +722,12 @@ export const ko = {
   // command itself one click away for whoever wants it.
   // The one question a first run asks: what a new session opens on. Shown only on a machine with no
   // settings file at all — see main/appSettingsStore.ts's firstRunAsked for why an update never sees it.
-  'firstRun.title': '새 세션을 어떤 화면으로 시작할까요?',
-  'firstRun.body': '둘 다 같은 세션입니다. 보는 방식만 다르고 언제든 설정 또는 세션 우측 상단에서 변경하실 수 있습니다.',
+  'firstRun.title': '새 세션을 무엇으로 시작할까요?',
+  'firstRun.body': '언제든 설정에서 바꿀 수 있고, 세션을 만들 때 창에서 다른 쪽을 고를 수도 있습니다.',
   'firstRun.terminal': '터미널',
-  'firstRun.terminalWhat': 'CLI 화면 그대로',
-  'firstRun.conversation': '대화',
-  'firstRun.conversationWhat': '주고받은 대화로 읽기',
+  'firstRun.terminalWhat': 'CLI 를 터미널 그대로',
+  'firstRun.chat': '대화',
+  'firstRun.chatWhat': '터미널 없이 주고받기',
   'setup.title': '클로드와 코덱스 프로그램을 찾을 수 없습니다',
   'setup.body': '사용하시려는 프로그램을 아래 설치 버튼을 눌러 설치해 주세요',
   'setup.claudeWhat': 'Anthropic 의 코딩 에이전트',

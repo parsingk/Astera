@@ -8,7 +8,6 @@ import { useAccountStatus } from '../hooks/useAccountStatus'
 import { orderBranchesForPicker, reconcileBaseRef } from '../../../core/worktrees/base'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
-import * as sessionKindPref from '../lib/sessionKindPref'
 import { AccountSelect } from './AccountSelect'
 import { BranchGlyph } from './BranchGlyph'
 import { Select, type SelectOption } from './Select'
@@ -23,11 +22,15 @@ export function NewSessionDialog({
   runningCount,
   initialCwd = null, // prefill from WorktreePanel's 'start session'
   onSpawn,
-  onCancel
+  onCancel,
+  defaultSessionKind
 }: {
   accounts: Account[]
   runningCount: number
   initialCwd?: string | null
+  /** Which kind the dialog opens on (the Settings default). Seeds the selection below and nothing
+   *  more — picking the other one here belongs to this session and is not written back. */
+  defaultSessionKind: SessionKind
   onSpawn: (opts: {
     accountIds: string[]
     cwd: string
@@ -50,10 +53,11 @@ export function NewSessionDialog({
   // Account slots — [0] is the primary account, slots 1 and 2 are the switch order once the limit is hit
   const [accountIds, setAccountIds] = useState<string[]>([accounts[0]?.id ?? ''])
   const [saveDefault, setSaveDefault] = useState(false)
-  // Session kind — terminal (pty) or chat (a Host-owned line process, no terminal at all). Remembered
-  // across dialog opens (sessionKindPref) and forced back to 'terminal' below whenever chat is not
-  // available, so the toggle never sticks on a choice the person cannot actually start.
-  const [kind, setKind] = useState<SessionKind>(sessionKindPref.read)
+  // Session kind — terminal (pty) or chat (a Host-owned line process, no terminal at all). Seeded
+  // from the Settings default and forced back to 'terminal' below whenever chat is not available, so
+  // the toggle never sticks on a choice the person cannot actually start. Changing it here is this
+  // session's business — it is not written back to the setting.
+  const [kind, setKind] = useState<SessionKind>(defaultSessionKind)
   const [rollMode, setRollMode] = useState(false) // auto-resume toggle for a single account
   const [rollPrompt, setRollPrompt] = useState('') // text to send on a rolling resume (empty means the default)
   const [slackNotify, setSlackNotify] = useState(false) // Slack progress notifications
@@ -306,7 +310,6 @@ export function NewSessionDialog({
               className={`segmented${kind === 'terminal' ? ' active' : ''}`}
               onClick={() => {
                 setKind('terminal')
-                sessionKindPref.write('terminal')
               }}
             >
               {t('session.kind.terminal')}
@@ -317,7 +320,6 @@ export function NewSessionDialog({
               disabled={!chatEnabled}
               onClick={() => {
                 setKind('chat')
-                sessionKindPref.write('chat')
               }}
             >
               {t('session.kind.chat')}

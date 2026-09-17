@@ -5,7 +5,6 @@ import { isSlackReady } from '../../../core/slack/ready'
 import { useI18n } from '../i18n/I18nProvider'
 import { useChatAvailability } from '../hooks/useChatAvailability'
 import { isGhostAccountId } from '../../../core/accounts/ghostId'
-import * as sessionKindPref from '../lib/sessionKindPref'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleFields } from './ScheduleFields'
 
@@ -23,6 +22,7 @@ export function ResumeDialog({
   cwd,
   accounts,
   ghostAccounts,
+  defaultSessionKind,
   onConfirm,
   onCancel
 }: {
@@ -32,6 +32,9 @@ export function ResumeDialog({
   /** Unregistered sources. Used only to identify the entry's owner — a ghost can never be a candidate,
    *  because resuming needs an account that can authenticate. */
   ghostAccounts: Account[]
+  /** Which kind the dialog opens on (the Settings default). Seeds the selection below and nothing
+   *  more — picking the other one here belongs to this session and is not written back. */
+  defaultSessionKind: SessionKind
   onConfirm: (opts: {
     accountIds: string[] // [0] = the account to continue on, with the chain after it when rolling is on
     kind: SessionKind
@@ -48,9 +51,9 @@ export function ResumeDialog({
   const [selectedId, setSelectedId] = useState<string>('')
   // Session kind — terminal (pty) or chat (a Host-owned line process resumed by its protocol thread
   // id — since slice 4c the transcript is copied into the chosen account first, same as terminal, so
-  // either kind can land on any candidate the picker offers). Same remembered-and-falls-back rule as
+  // either kind can land on any candidate the picker offers). Same seeded-and-falls-back rule as
   // NewSessionDialog.
-  const [kind, setKind] = useState<SessionKind>(sessionKindPref.read)
+  const [kind, setKind] = useState<SessionKind>(defaultSessionKind)
   // The saved settings — the source of the checkbox initial values and the input to the roll chain calculation
   const [savedRoll, setSavedRoll] = useState<RollConfig | null>(null)
   const [rollOn, setRollOn] = useState(false)
@@ -131,7 +134,7 @@ export function ResumeDialog({
   // A remembered 대화 falls back to 터미널 while it is unavailable — never persisted, so it is offered
   // again once the condition clears (same reasoning as NewSessionDialog's own fallback effect). Picking
   // another account is one of those conditions: the choice comes back the moment the owner is picked
-  // again, which is why nothing is written to sessionKindPref here.
+  // again, which is why the fallback is state here and never written back to the setting.
   useEffect(() => {
     if (kind === 'chat' && !chatAllowed) setKind('terminal')
   }, [kind, chatAllowed])
@@ -163,7 +166,6 @@ export function ResumeDialog({
               className={`segmented${kind === 'terminal' ? ' active' : ''}`}
               onClick={() => {
                 setKind('terminal')
-                sessionKindPref.write('terminal')
               }}
             >
               {t('session.kind.terminal')}
@@ -174,7 +176,6 @@ export function ResumeDialog({
               disabled={!chatAllowed}
               onClick={() => {
                 setKind('chat')
-                sessionKindPref.write('chat')
               }}
             >
               {t('session.kind.chat')}

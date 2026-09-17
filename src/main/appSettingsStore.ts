@@ -4,7 +4,7 @@ import { isLang, type Lang } from '../core/i18n'
 import { sanitizeFontFamily } from '../core/terminal/font'
 import type { TerminalFont } from '../core/terminal/font'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from '../core/theme/themes'
-import type { AgentPermissionMode, ResumeStrategy, SessionView } from '../core/types'
+import type { AgentPermissionMode, ResumeStrategy, SessionKind } from '../core/types'
 import { applyContinuityToggle } from '../core/continuity/settings'
 import {
   readGeneratorSettings,
@@ -20,7 +20,7 @@ import {
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, the
  *  orchestration toggle, the work unit tracking toggle, the agent browser toggle, the Job Continuity
- *  toggle, the resume strategy, the terminal font, the theme, the conversation-view default, and the
+ *  toggle, the resume strategy, the terminal font, the theme, the default session kind, and the
  *  desktop notification flags.
  *  A null lang means the user has never picked one explicitly — the caller derives it with
  *  pickInitialLang(app.getLocale()). The derived value is not stored. */
@@ -46,10 +46,16 @@ export class AppSettingsStore {
   private agentPermissionMode: AgentPermissionMode = 'yolo'
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID
-  /** Task 10: what a new session tab opens showing. Read once, at the moment a tab first appears —
-   *  see core/panes/sessionView.ts's openSessionView for why a later change here never reaches back
-   *  into a tab that already exists. */
-  private conversationDefault: SessionView = 'terminal'
+  /** Which kind the new-session and resume dialogs open on — a terminal session or a 대화 one. It
+   *  seeds the dialog's own selection and nothing more: changing the kind inside the dialog applies
+   *  to that session alone and is not written back here.
+   *
+   *  It replaces `conversationDefault`, which decided what a *terminal* session's tab showed first
+   *  (the terminal or the conversation view). Both were labelled with the same two words, and the
+   *  one people reached for when they wanted new sessions to be 대화 was this one — so the old key is
+   *  carried over on load rather than asked again, and the per-tab toggle in the tab bar is what now
+   *  chooses a terminal session's view. */
+  private defaultSessionKind: SessionKind = 'terminal'
   /**
    * Whether this person has already been asked, once, what a new session should open on.
    *
@@ -118,12 +124,19 @@ export class AppSettingsStore {
           : { latin: null, hangul: null }
       const theme = (parsed as { theme?: unknown }).theme
       this.theme = isThemeId(theme) ? theme : DEFAULT_THEME_ID
-      // Narrowed to === 'conversation' — the file is user-editable, so anything else reads as the
-      // default 'terminal', the same one-sided narrowing agentPermissionMode uses above.
-      this.conversationDefault =
-        (parsed as { conversationDefault?: unknown }).conversationDefault === 'conversation'
-          ? 'conversation'
-          : 'terminal'
+      // Narrowed to === 'chat' — the file is user-editable, so anything else reads as the default
+      // 'terminal', the same one-sided narrowing agentPermissionMode uses above. With the new key
+      // absent the old one it replaced is read instead: its 'conversation' meant "open on the
+      // conversation, not the terminal", which is what picking 대화 here now does.
+      const kindRaw = parsed as { defaultSessionKind?: unknown; conversationDefault?: unknown }
+      this.defaultSessionKind =
+        kindRaw.defaultSessionKind === undefined
+          ? kindRaw.conversationDefault === 'conversation'
+            ? 'chat'
+            : 'terminal'
+          : kindRaw.defaultSessionKind === 'chat'
+            ? 'chat'
+            : 'terminal'
       // A file that exists is an app that has been used before — unless it says outright that the
       // question is still open, which is what a first run that wrote settings before answering leaves
       // behind. See the field's own note for why the absence means the opposite here.
@@ -144,7 +157,7 @@ export class AppSettingsStore {
         this.agentPermissionMode = 'yolo'
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
-        this.conversationDefault = 'terminal'
+        this.defaultSessionKind = 'terminal'
         // No settings file at all: nobody has used this app on this machine yet. The one state the
         // first-run question is for.
         this.firstRunAsked = false
@@ -166,7 +179,7 @@ export class AppSettingsStore {
       this.agentPermissionMode = 'yolo'
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
-      this.conversationDefault = 'terminal'
+      this.defaultSessionKind = 'terminal'
       // A file that could not be read is still a file: this person has used the app before, and a
       // corrupt settings file is not a reason to put a first-run question in front of them.
       this.firstRunAsked = true
@@ -315,8 +328,8 @@ export class AppSettingsStore {
     await this.persist()
   }
 
-  getConversationDefault(): SessionView {
-    return this.conversationDefault
+  getDefaultSessionKind(): SessionKind {
+    return this.defaultSessionKind
   }
 
   /** Whether the first-run question has already been put to this person. */
@@ -331,8 +344,8 @@ export class AppSettingsStore {
     await this.persist()
   }
 
-  async setConversationDefault(view: SessionView): Promise<void> {
-    this.conversationDefault = view
+  async setDefaultSessionKind(kind: SessionKind): Promise<void> {
+    this.defaultSessionKind = kind
     await this.persist()
   }
 
@@ -355,7 +368,7 @@ export class AppSettingsStore {
       agentPermissionMode?: AgentPermissionMode
       terminalFont?: TerminalFont
       theme?: ThemeId
-      conversationDefault?: SessionView
+      defaultSessionKind?: SessionKind
       firstRunAsked?: false
     } = {}
     if (this.lang) data.lang = this.lang
@@ -382,7 +395,7 @@ export class AppSettingsStore {
     if (this.resumeStrategy === 'smart') data.resumeStrategy = 'smart'
     if (this.terminalFont.latin || this.terminalFont.hangul) data.terminalFont = this.terminalFont
     if (this.theme !== DEFAULT_THEME_ID) data.theme = this.theme
-    if (this.conversationDefault === 'conversation') data.conversationDefault = 'conversation'
+    if (this.defaultSessionKind === 'chat') data.defaultSessionKind = 'chat'
     await fs.mkdir(path.dirname(this.filePath), { recursive: true })
     await fs.writeFile(this.filePath, JSON.stringify(data, null, 2), 'utf8')
   }

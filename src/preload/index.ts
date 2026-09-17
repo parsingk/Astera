@@ -166,8 +166,8 @@ const api = {
     setTheme: invoke('settings.setTheme'),
     getFirstRunAsked: invoke('settings.getFirstRunAsked'),
     markFirstRunAsked: invoke('settings.markFirstRunAsked'),
-    getConversationDefault: invoke('settings.getConversationDefault'),
-    setConversationDefault: invoke('settings.setConversationDefault')
+    getDefaultSessionKind: invoke('settings.getDefaultSessionKind'),
+    setDefaultSessionKind: invoke('settings.setDefaultSessionKind')
   },
   files: {
     list: invoke('files.list'),

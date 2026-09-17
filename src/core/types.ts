@@ -350,9 +350,9 @@ export interface PendingToolPrompt {
   at: number
 }
 
-/** Which of the terminal or the conversation a session tab shows (Task 10). Also the shape of the
- *  `conversationDefault` setting: the same two values, meaning "what a session tab starts on"
- *  there and "what it is showing right now" once it has one. */
+/** Which of the terminal or the conversation a terminal session's tab is showing (Task 10). Chosen
+ *  per tab through the toggle in the tab bar; a tab starts on the terminal. A chat session has no
+ *  terminal and is not described by this at all. */
 export type SessionView = 'terminal' | 'conversation'
 
 /** One project terminal */
@@ -1012,10 +1012,10 @@ export interface CoreApi {
     getFirstRunAsked(): Promise<boolean>
     /** It has been put to them. Answering and dismissing are the same thing here: it asks once. */
     markFirstRunAsked(): Promise<void>
-    // Task 10: what a new session tab opens as. Only ever seeds a tab's own remembered choice at the
-    // moment its tab first appears — changing this later never touches a tab that already exists.
-    getConversationDefault(): Promise<SessionView>
-    setConversationDefault(view: SessionView): Promise<void>
+    /** Which kind the new-session and resume dialogs open on. Seeds the dialog's selection only —
+     *  changing the kind inside the dialog is that session's business and is not written back. */
+    getDefaultSessionKind(): Promise<SessionKind>
+    setDefaultSessionKind(kind: SessionKind): Promise<void>
   }
   files: {
     // The file explorer. Every files.* IPC call goes through assertAllowedPath, which permits only
