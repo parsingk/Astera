@@ -2031,4 +2031,45 @@ describe('chat chains', () => {
     expect(h.spawnedOpts[0]).toMatchObject({ rollPrompt: 'keep going' })
     h.coord.stop()
   })
+
+  // Spec §14.6. A pty chain declares itself healthy 60 seconds after a switch with no limit detected; a
+  // chat session reports its turns, so the evidence is a turn that ended without a limit. The tick is
+  // what consumes it, after the rollout tail has been read and found nothing — on codex especially, the
+  // `status idle` can arrive before the tick reads the record that says the turn was refused.
+  //
+  // The shared registry is what the assertion can see: declareHealthy clears the account's entry there
+  // (the chain's own record and inPlaceUsed have no surface from outside).
+  it('a completed turn declares health — the shared record goes without the 60s timer', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-turn', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-turn', file)
+    await appendLimitError(file)
+    await advance(15_000) // the tick — a chat session prints no phrase, so this is the only trigger
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    // Another chain's record on the account we have just arrived on, with a reset far enough away that
+    // time alone cannot make it answer null.
+    blocks.record('c2', { at: Date.now() + 30 * 60_000, weekly: false, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatStatus('s2', 'idle') // a turn completed with no limit in it
+    await advance(15_000) // the tick reads the rollout first, then consumes the completed turn
+    expect(blocks.get('c2', Date.now())).toBeNull()
+    h.coord.stop()
+  })
+
+  it('a chat roll no longer arms the 60s healthy timer', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-notimer', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-notimer', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    blocks.record('c2', { at: Date.now() + 30 * 60_000, weekly: false, since: Date.now() }, Date.now())
+    await advance(65_000) // 60s+ with no turn at all — the pty rule would have torn the record up
+    expect(blocks.get('c2', Date.now())).not.toBeNull()
+    h.coord.stop()
+  })
 })

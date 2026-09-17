@@ -3,7 +3,14 @@
 // it is far shorter because none of the statusLine-specific problems (a stale snapshot, readiness
 // polling, auto-accepting trust) apply. Every side effect is injected through deps — it does not depend
 // on electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
-import type { Account, ResumeStrategy, RollStateEvent, SessionInfo, SessionKind } from '../core/types'
+import type {
+  Account,
+  Attention,
+  ResumeStrategy,
+  RollStateEvent,
+  SessionInfo,
+  SessionKind
+} from '../core/types'
 import type { RollConfig } from '../core/rolling/config'
 import { RollCycle } from '../core/rolling/cycle'
 import {
@@ -204,6 +211,14 @@ interface Chain {
   // The last lasting rollState payload pushState published — null once it was 'none' (or nothing has
   // published yet). Read back by stateOf for a renderer that mounts after the push already happened.
   lastState: RollStateEvent | null
+  // A chat chain's health evidence (spec §14.6) — the pair of flags onChatStatus keeps and the tick
+  // consumes. chatTurnDone: a turn ended and no limit landed during it, so the account took the work;
+  // the tick clears it and declares health once its own limit verdicts have come up empty.
+  // chatLimitInTurn: a limit was judged inside the turn that is running now, which disqualifies its
+  // completion as evidence. Both are meaningless for a pty chain, which still declares health off the
+  // 60-second timer roll() arms.
+  chatTurnDone: boolean
+  chatLimitInTurn: boolean
 }
 
 /** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts).
@@ -328,7 +343,9 @@ export class CodexRollingCoordinator {
       recovery: ids.map(() => null),
       inPlaceUsed: false,
       stateSeq: 0,
-      lastState: null
+      lastState: null,
+      chatTurnDone: false,
+      chatLimitInTurn: false
     }
     this.chains.set(info.id, chain)
     // **Where in the chain this session already is** — the same rule, and the same reasoning, as
@@ -455,6 +472,25 @@ export class CodexRollingCoordinator {
       prompt: chain.prompt
     })
     this.deps.log(`codex rollout attached from chat ready session=${sessionId} id=${codexSessionId}`)
+  }
+
+  /** ipc's chat subscriber: the adapter's turn status (`idle → working|waiting → idle`). A chat chain
+   *  declares its health off a turn that ended without a limit rather than off the pty's
+   *  60-seconds-with-no-limit timer — the protocol says outright when a turn ran, which a screen can
+   *  only infer (spec §14.6). Unregistered ids do nothing; the wiring calls both coordinators.
+   *
+   *  **Nothing is declared here.** This only sets the flag; the tick consumes it, after its own limit
+   *  verdicts have come up empty. That ordering matters more on this side than on claude's: codex has no
+   *  limit *event* at all — the refusal is a record in the rollout, read by the tick — so the status can
+   *  perfectly well flip back to idle before the tick reads the record that says the turn was refused. */
+  onChatStatus(sessionId: string, status: Attention): void {
+    const chain = this.chains.get(sessionId)
+    if (!chain || chain.disposed) return
+    if (status !== 'idle') {
+      chain.chatLimitInTurn = false // a new turn begins; a limit judged inside it is recorded by onLimit
+      return
+    }
+    if (!chain.chatLimitInTurn) chain.chatTurnDone = true
   }
 
   /** Whether this conversation belongs to an active rolling chain — the history resume guard (mirrors findLiveByClaudeSession in rolling.ts) */
@@ -840,6 +876,23 @@ export class CodexRollingCoordinator {
     return false
   }
 
+  /** What a switch's 60-seconds-with-no-limit window declares, made callable so a chat chain can declare
+   *  the same thing off a completed turn instead (spec §14.6, the tick). It is one function so the two
+   *  evidences cannot drift: what it clears is shared state — the cycle's streak, this chain's record,
+   *  the registry every other chain reads, and the in-place latch.
+   *
+   *  **What the evidence is worth differs by caller.** The timer says only that no limit was detected for
+   *  60 seconds; a chat chain's completed turn says the account actually took the work. The shared record
+   *  goes either way, because a false one keeps every other chain off the account until its recorded
+   *  reset time passes — the price being that a *true* record another chain wrote inside a pty chain's
+   *  window is erased by a session that has not produced any work of its own yet (blockRegistry.clear). */
+  private declareHealthy(chain: Chain): void {
+    chain.cycle.onHealthy()
+    chain.recovery[chain.cycle.currentIndex] = null
+    this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
+    chain.inPlaceUsed = false
+  }
+
   private onLimit(chain: Chain, reason: LimitReason): void {
     if (chain.rolling || chain.waitTimer || chain.disposed) return
     if (!chain.codexSessionId || !chain.rolloutPath) {
@@ -854,6 +907,13 @@ export class CodexRollingCoordinator {
       clearTimeout(chain.healthyTimer)
       chain.healthyTimer = null
     }
+    // The chat chain's health evidence (spec §14.6). Both halves are set here rather than in an event
+    // handler because codex has no chat limit event: the refusal arrives from the rollout tail on the
+    // tick, so this is the one place that knows a limit landed. The turn that is running now is
+    // disqualified, and a turn that completed *before* this limit says nothing about the account we are
+    // about to leave or wait on, so it stops being evidence too.
+    if (chain.kind === 'chat') chain.chatLimitInTurn = true
+    chain.chatTurnDone = false
     chain.textHit = false
     const action = chain.cycle.onLimit()
     // One clock reading for the whole verdict. pickAvailable and planRetry below have to judge the same
@@ -1386,19 +1446,22 @@ export class CodexRollingCoordinator {
       this.deps.send('session:rolled', { oldSessionId: oldId, info, dest })
       this.pushState(chain, 'switching', { accountLabel: target.label, reattach: true })
       this.deps.log(`codex rolled ${oldId} → ${info.id} account=${target.label}`)
-      // No limit detected for 60 seconds after the switch → reset the consecutive block count
-      chain.healthyTimer = setTimeout(() => {
-        chain.healthyTimer = null
-        chain.cycle.onHealthy()
-        chain.recovery[chain.cycle.currentIndex] = null
-        // What this timer observed is 60 seconds with **no limit detected** — not that a turn actually ran
-        // (settleInPlace is the only site with that evidence). The shared record goes with it because a
-        // false one keeps every other chain off the account until its recorded reset time passes; the price
-        // is that a *true* record another chain wrote inside this window is erased by a session that has
-        // not produced any work of its own yet (blockRegistry.clear).
-        this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
-        chain.inPlaceUsed = false
-      }, HEALTHY_MS)
+      if (!chat) {
+        // No limit detected for 60 seconds after the switch → reset the consecutive block count.
+        // What this timer observes is 60 seconds with **no limit detected** — not that a turn actually
+        // ran (settleInPlace is the only site with that evidence). A chat chain is not given it at all:
+        // it waits for the first turn that completes with no limit in it, which is the direct claim the
+        // timer can only approximate (spec §14.6, `onChatStatus` and the tick).
+        chain.healthyTimer = setTimeout(() => {
+          chain.healthyTimer = null
+          this.declareHealthy(chain)
+        }, HEALTHY_MS)
+      } else {
+        // The evidence starts clean on every arrival — no turn of the old session's, and no limit of
+        // its own, may be read as this account's.
+        chain.chatTurnDone = false
+        chain.chatLimitInTurn = false
+      }
       this.pushState(chain, 'none')
     } catch (err) {
       this.deps.log(`codex roll failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1432,6 +1495,16 @@ export class CodexRollingCoordinator {
         if (maxedOut(chain.state) && this.now() - chain.lastOutputAt > FALLBACK_SILENCE_MS) {
           this.recordRecovery(chain)
           this.onLimit(chain, 'maxed+silent')
+          return
+        }
+        // A chat chain's health evidence, consumed once every verdict above has come up empty (spec
+        // §14.6). Reading the rollout first is the point of the ordering: codex has no limit event, so
+        // the refusal that ended a turn is only known after `refresh` above has read the record, and a
+        // turn that ended in a limit must not be counted. The outer loop skips a chain with no tail, so
+        // an unmapped chat chain never declares health — correctly: nothing was read.
+        if (chain.kind === 'chat' && chain.chatTurnDone) {
+          chain.chatTurnDone = false
+          this.declareHealthy(chain)
         }
       })
     }

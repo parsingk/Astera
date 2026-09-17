@@ -10,6 +10,7 @@
 // so no readiness poll, no trust dialog and no post-switch cooldown. See those three sites.
 import type {
   Account,
+  Attention,
   RateLimitPeak,
   ResumeStrategy,
   SessionInfo,
@@ -283,6 +284,14 @@ interface Chain {
   // above. A chat session reports its rate limit on every turn, so the warning-level statuses ('allowed',
   // 'allowed_warning') arrive continuously and logging each one would bury everything else.
   chatLimitIgnoredWarned: boolean
+  // A chat chain's health evidence (spec §14.6) — the pair of flags onChatStatus keeps and the tick
+  // consumes. chatTurnDone: a turn ended and no rejection landed during it, so the account took the
+  // work; the tick clears it and declares health once its own limit checks have come up empty.
+  // chatLimitInTurn: a rejection arrived inside the turn that is running now, which disqualifies its
+  // completion as evidence. Both are meaningless for a pty chain, which still declares health off the
+  // 60-second timer (armHealthy).
+  chatTurnDone: boolean
+  chatLimitInTurn: boolean
 }
 
 /** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts).
@@ -410,7 +419,9 @@ export class RollingCoordinator {
       lastUsagePct: null,
       limitTail: null,
       limitTailReadFailWarned: false,
-      chatLimitIgnoredWarned: false
+      chatLimitIgnoredWarned: false,
+      chatTurnDone: false,
+      chatLimitInTurn: false
     })
     this.ensureTicker()
     this.deps.log(`chain registered session=${info.id} accounts=${ids.join(',')}`)
@@ -560,6 +571,13 @@ export class RollingCoordinator {
     if (meta.claudeSessionId !== null && meta.claudeSessionId !== chain.claudeSessionId) {
       chain.transcriptPath = null
       chain.limitTail = null
+      // The seed goes with them (spec §14.6). It describes the conversation this session was *opened*
+      // with, and after a `/clear` that is not this conversation — but it is what roll() falls back to
+      // when the new file has not been found yet, so leaving it would have the roll copy the dead file
+      // and resume the new id against it. Cleared, that roll takes the "no session metadata" path and
+      // retries instead, which is the honest answer while the lookup is still in flight.
+      chain.resumeSeedSessionId = null
+      chain.resumeSeedTranscriptPath = null
     }
     // applyMeta ends by refreshing lastUsagePct out of the payload's usage windows, and this payload has
     // none — so the figure onChatLimit recorded is carried across rather than nulled by an identity update.
@@ -612,8 +630,30 @@ export class RollingCoordinator {
       }
       return
     }
+    // The turn this rejection landed in is disqualified as health evidence (spec §14.6), and that is
+    // recorded before the cooldown gate below: a rejection the replay grace or `awaitingReady` refuses
+    // to *act* on is still a turn the CLI refused, so its completion says nothing about the account.
+    chain.chatLimitInTurn = true
     if (chain.awaitingReady) return
     void this.onLimitCandidate(chain, undefined)
+  }
+
+  /** ipc's chat subscriber: the adapter's turn status (`idle → working|waiting → idle`). A chat chain
+   *  declares its health off a turn that ended without a rejected limit rather than off the pty's
+   *  60-seconds-with-no-limit timer — the protocol says outright when a turn ran, which a screen can
+   *  only infer (spec §14.6). Unregistered ids do nothing; the wiring calls both coordinators.
+   *
+   *  **Nothing is declared here.** This only sets the flag; `tickChain` consumes it, after its own limit
+   *  checks have come up empty. The tail can record a refusal a beat after the status flips back to
+   *  idle, so reading it first is what keeps a turn that ended in a limit from being counted. */
+  onChatStatus(sessionId: string, status: Attention): void {
+    const chain = this.chains.get(sessionId)
+    if (!chain || chain.disposed) return
+    if (status !== 'idle') {
+      chain.chatLimitInTurn = false // a new turn begins; a rejection inside it is recorded by onChatLimit
+      return
+    }
+    if (!chain.chatLimitInTurn) chain.chatTurnDone = true
   }
 
   /** Session exit — the chain is not disposed while a roll is in progress (roll() owns the old→new
@@ -950,6 +990,10 @@ export class RollingCoordinator {
       clearTimeout(chain.healthyTimer)
       chain.healthyTimer = null
     }
+    // The chat counterpart of clearing the healthy timer just above: a turn that completed before this
+    // limit says nothing about the account we are now about to leave or wait on, so it is not evidence
+    // any more (spec §14.6).
+    chain.chatTurnDone = false
     const action = chain.cycle.onLimit()
     // One clock reading for the whole verdict. pickAvailable and planRetry below have to judge the same
     // instant — if time moves between them, an account pickAvailable called unusable can look usable to
@@ -1480,9 +1524,14 @@ export class RollingCoordinator {
         //     refuses one that arrives inside it, because that grace is keyed off the roll rather than
         //     off this flag; an account that is already exhausted is then caught the way it is on a pty
         //     roll, by the transcript tail on the 15-second tick — see inReplayGrace.)
-        // What is shared is the healthy timer: 60 seconds with no limit means this account took the work.
+        // What is not shared is the healthy timer. A pty chain arms it here and declares itself healthy
+        // 60 seconds later if no limit was detected; a chat chain declares health off the first turn
+        // that completes without a rejection instead (spec §14.6), because the protocol says outright
+        // when a turn ran. So the two flags that carry that evidence start this arrival clean — no turn
+        // of the old session's, and no rejection of it, may be read as this account's.
+        chain.chatTurnDone = false
+        chain.chatLimitInTurn = false
         chain.awaitingReady = false
-        this.armHealthy(chain)
         this.pushState(chain, 'none')
       } else {
         // The briefing built above is passed down so sendPrompt does not ask resumeText a second time
@@ -1611,27 +1660,36 @@ export class RollingCoordinator {
   /** Arms the post-switch healthy timer: no limit detected for 60 seconds after a switch → reset the
    *  consecutive block count (the timer is cleared if onLimit arrives first).
    *
-   *  Both ends of a roll arm it — a pty chain once its automatic prompt has gone out (sendPrompt), a
-   *  chat chain as the spawn returns, because that is the moment each of them stops waiting and starts
-   *  working. It is one function so the two cannot drift: what the timer clears is shared state (the
-   *  cycle's streak, this chain's record, the registry every other chain reads). */
+   *  A pty chain arms it once its automatic prompt has gone out (sendPrompt), because that is the moment
+   *  it stops waiting and starts working. A chat chain no longer arms it at all — it has a better answer
+   *  to the same question, the first turn that completes with no rejection in it (spec §14.6). */
   private armHealthy(chain: Chain): void {
     chain.healthyTimer = setTimeout(() => {
       chain.healthyTimer = null
-      chain.cycle.onHealthy()
-      // The only account this timer says anything about is the current one — the block records of other accounts (a weekly exhaustion, say) are kept
-      chain.recovery[chain.cycle.currentIndex] = null
-      // And what it says is that 60 seconds passed with **no limit detected** — not that a turn actually
-      // ran (codex's settleInPlace is the only site with that evidence; the claude-side settleInPlace
-      // asks a weaker question — whether the statusLine came back). The shared record goes with it
-      // because a false one keeps every other chain off the account until its recorded reset time passes;
-      // the price is that a *true* record another chain wrote inside this window is erased by a session
-      // that has not produced any work of its own yet (blockRegistry.clear).
-      this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
-      // 플래그는 *이전* 계정의 차단 에피소드를 가리킨다. 남겨 두면 새 계정에서의 첫 대기가
-      // 제자리 재개를 건너뛰고 쓸데없이 respawn 한다. codex 쪽도 같은 자리에서 무조건 해제한다.
-      chain.inPlaceUsed = false
+      this.declareHealthy(chain)
     }, HEALTHY_MS)
+  }
+
+  /** What the timer above declares, made callable so a chat chain can declare the same thing off a
+   *  completed turn instead (spec §14.6, `tickChain`). It is one function so the two evidences cannot
+   *  drift: what it clears is shared state — the cycle's streak, this chain's record, the registry every
+   *  other chain reads, and the in-place latch.
+   *
+   *  **What the evidence is worth differs by caller, and the pty side is the weaker one.** The timer says
+   *  60 seconds passed with **no limit detected** — not that a turn actually ran (codex's settleInPlace
+   *  is the only other site with that evidence; the claude-side settleInPlace asks a weaker question
+   *  still — whether the statusLine came back). A chat chain's turn is the direct claim. */
+  private declareHealthy(chain: Chain): void {
+    chain.cycle.onHealthy()
+    // The only account this says anything about is the current one — the block records of other accounts (a weekly exhaustion, say) are kept
+    chain.recovery[chain.cycle.currentIndex] = null
+    // The shared record goes with it because a false one keeps every other chain off the account until
+    // its recorded reset time passes; the price is that a *true* record another chain wrote inside this
+    // window is erased by a session that has not produced any work of its own yet (blockRegistry.clear).
+    this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
+    // 플래그는 *이전* 계정의 차단 에피소드를 가리킨다. 남겨 두면 새 계정에서의 첫 대기가
+    // 제자리 재개를 건너뛰고 쓸데없이 respawn 한다. codex 쪽도 같은 자리에서 무조건 해제한다.
+    chain.inPlaceUsed = false
   }
 
   /** The 15-second tick — refreshes session metadata, evaluates the fallback trigger (five_hour or
@@ -1665,6 +1723,17 @@ export class RollingCoordinator {
     // wait (waitTimer). onLimit sets those fields synchronously on that path, so if ① fired we skip the
     // fallback and the idle nudge here — which is precisely the point of this restructuring.
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
+    // A chat chain's health evidence (spec §14.6), consumed **here** and not lower down. The rule is
+    // "after this chain's own limit check found nothing", and ① — the transcript tail — is the only
+    // limit check a chat chain has: everything below this line hangs off `readStatusPayload`, which
+    // answers null for a chat session forever, so the method returns two lines further on and anything
+    // placed after that is unreachable for this kind. Reading the tail first is the point of the
+    // ordering: a rejection can be recorded a beat after the status flips back to idle, and a turn that
+    // ended in a limit must not be counted. The guard above has already established that ① did not fire.
+    if (chain.kind === 'chat' && chain.chatTurnDone) {
+      chain.chatTurnDone = false
+      this.declareHealthy(chain)
+    }
     void this.idleNudgeCheck(chain) // independent of statusLine — does not wait for a payload
     const payload = await this.deps.readStatusPayload(chain.liveId)
     if (!payload || chain.disposed) return

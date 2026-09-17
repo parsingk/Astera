@@ -3193,4 +3193,95 @@ describe('chat chains', () => {
     await flush()
     expect(h.spawnedOpts[0]).toMatchObject({ rollPrompt: 'keep going in Korean' })
   })
+
+  // Spec §14.6. A pty chain declares itself healthy 60 seconds after a switch with no limit detected,
+  // which is the best evidence a screen can give. A chat session says outright when a turn ran, so the
+  // evidence is the turn itself — and it is the *tick* that consumes it, after the transcript tail has
+  // been read and found nothing, so a turn that ended in a limit is never counted.
+  //
+  // What the assertion can see is the shared registry: declareHealthy clears the account's entry there
+  // (and the chain's own record, and inPlaceUsed, which have no observable surface from outside).
+  it('a completed turn declares health — the shared record goes without the 60s timer', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks, readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2']) // rolled onto a2
+    // Another chain's block record on the account we have just arrived on. Its reset is far enough away
+    // that time alone cannot make it answer null — only a clear can.
+    blocks.record('a2', { at: Date.now() + 30 * 60_000, weekly: false, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatStatus('s2', 'idle') // a turn completed with no rejection in it
+    await advanceIo(15_000) // the tick reads the tail first, then consumes the completed turn
+    expect(blocks.get('a2', Date.now())).toBeNull()
+  })
+
+  // The other half of the same rule: with no turn there is no evidence, so nothing is declared — where
+  // the pty rule would have declared health on the clock alone.
+  it('a chat roll no longer arms the 60s healthy timer', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks, readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    blocks.record('a2', { at: Date.now() + 30 * 60_000, weekly: false, since: Date.now() }, Date.now())
+    await advanceIo(65_000) // 60s+ with no turn at all — the pty rule would have torn the record up
+    expect(blocks.get('a2', Date.now())).not.toBeNull()
+  })
+
+  // A rejection inside the 60-second replay grace is refused (the account's usage is unknown right
+  // after a roll), so nothing rolls and the chain stays on a2 — which is exactly what makes this
+  // observable: the turn that carried the rejection must not clear a2's record when it ends, and the
+  // *next* clean turn must. Asserting on the account the chain is sitting on is the only reading
+  // available; a rejection that did roll would leave the chain somewhere else entirely.
+  it('a turn that carried a rejected limit is not health evidence', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks, readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2'])
+    blocks.record('a2', { at: Date.now() + 30 * 60_000, weekly: false, since: Date.now() }, Date.now())
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatLimit('s2', rejected) // refused by the replay grace — but the turn is still a rejected turn
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:c1', 'spawn:s2:a2']) // nothing rolled: the grace held
+    h.coord.onChatStatus('s2', 'idle')
+    await advanceIo(15_000)
+    expect(blocks.get('a2', Date.now())).not.toBeNull()
+    // …and the flag is per-turn, so the turn after it is evidence again.
+    h.coord.onChatStatus('s2', 'working')
+    h.coord.onChatStatus('s2', 'idle')
+    await advanceIo(15_000)
+    expect(blocks.get('a2', Date.now())).toBeNull()
+  })
+
+  // Spec §14.6's seed clause. The seed describes the conversation the session was *opened* with, and
+  // after a `/clear` that is not this conversation any more. Left in place it is what roll() falls back
+  // to, so the roll would copy the dead file and resume the new id against it. Same shape as the
+  // transcript-drop test above: with nothing to copy, the roll takes the "no session metadata" path.
+  it('a changed id drops the resume seed the session was opened with', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1', { resumeSessionId: 'seed-1' }), 'D:/cfg/a1/seed-1.jsonl')
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-new', transcriptPath: null }) // the /clear's ready
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.copied).toEqual([])
+    expect(h.events).toEqual([])
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+  })
 })

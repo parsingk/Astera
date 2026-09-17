@@ -1397,6 +1397,10 @@ export function registerIpc(
       // The scheduler's busy signal for a chat session (slice 4 design §5.5): a pty's comes from the
       // OSC scanner, a chat session's from the protocol itself. `waiting` (a card is open) is busy too.
       scheduler?.handleBusy(sessionId, event.status !== 'idle')
+      // A chat chain reads its health off a completed turn (spec §14.6), so both coordinators hear the
+      // status; the one without a chain for this session returns at onChatStatus's first line.
+      rolling?.onChatStatus(sessionId, event.status)
+      codexRolling?.onChatStatus(sessionId, event.status)
       if (!chatTranscripts.has(sessionId) && core.chat.state(sessionId)?.provider === 'claude') {
         const info = core.chat.info(sessionId)
         if (info?.threadId) findClaudeChatTranscript(sessionId, info.accountId, info.threadId)
