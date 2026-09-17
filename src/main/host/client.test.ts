@@ -82,6 +82,11 @@ describe('HostClient', () => {
   // An older Host's hello carries no `features` at all — absent means none, not a parse failure.
   it('defaults to no features for a hello that does not name any', async () => {
     const addr = addressFor('no-features')
+    // The same line the two silent servers below carry. A raw listener does not go through
+    // startHostServer, which is what creates this directory, and on posix the address is a socket
+    // inside it — so without this the listen fails and the test times out waiting to connect. Windows
+    // passed regardless: its address is a named pipe and `dirToPrepare` is null there.
+    if (addr.dirToPrepare) await fs.mkdir(addr.dirToPrepare, { recursive: true, mode: 0o700 })
     const raw = net.createServer((sock) => {
       sock.setEncoding('utf8')
       const read = createLineReader({
