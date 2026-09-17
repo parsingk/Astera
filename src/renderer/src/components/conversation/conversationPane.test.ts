@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import type { ModelDescriptor } from '../../../../core/models/types'
 import type { AppendMessage } from '@assistant-ui/react'
 import {
   toThreadMessages,
@@ -12,6 +13,7 @@ import {
   ptyWritesFor,
   isSlashCommand,
   modelLineOf,
+  defaultModelLabelOf,
   shouldReadPromptScreen,
   shouldShowPrompt,
   askCardShown,
@@ -262,6 +264,31 @@ describe('isSlashCommand', () => {
     expect(isSlashCommand('src/main/ipc.ts 를 봐줘')).toBe(false)
     expect(isSlashCommand('2026/09/11 에 뭐 했지')).toBe(false)
     expect(isSlashCommand('')).toBe(false)
+  })
+})
+
+describe('defaultModelLabelOf', () => {
+  const m = (over: Partial<ModelDescriptor>): ModelDescriptor =>
+    ({ provider: 'claude', id: 'x', name: 'X', description: null, isDefault: false, ...over }) as ModelDescriptor
+
+  // What the CLI calls its own default, not what that default resolves to. Measured against a real
+  // `list_models` (2026-09-17): Claude's default entry is `value: "default"`, `displayName: "Default
+  // (recommended)"`, `resolvedModel: "claude-opus-5[1m]"` -- and a session whose Opus budget is spent
+  // opens its first turn on another model entirely. Drawing the resolved name was a claim about which
+  // model would run, and it was wrong exactly when it mattered: reported as "it said Opus, I said 안녕,
+  // it turned into Fable". The entry's own name cannot be wrong, because it names the choice rather
+  // than its outcome.
+  it("names the default entry, not the model that entry resolves to", () => {
+    const models = [
+      m({ id: 'default', name: 'Default (recommended)', isDefault: true, resolvedModel: 'claude-opus-5[1m]' }),
+      m({ id: 'sonnet', name: 'Sonnet', resolvedModel: 'claude-sonnet-5' })
+    ]
+    expect(defaultModelLabelOf(models)).toBe('Default (recommended)')
+  })
+
+  it('is null when no entry is the default, and for an empty list', () => {
+    expect(defaultModelLabelOf([m({ id: 'sonnet', name: 'Sonnet' })])).toBeNull()
+    expect(defaultModelLabelOf([])).toBeNull()
   })
 })
 

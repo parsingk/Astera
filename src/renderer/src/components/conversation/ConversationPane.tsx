@@ -414,14 +414,34 @@ export function isSlashCommand(text: string): boolean {
 }
 
 /**
+ * What to call the session's model before the CLI has said which one it is running.
+ *
+ * The entry's **name**, never what it resolves to. Claude's `list_models` answers a default entry of
+ * `value: "default"`, `displayName: "Default (recommended)"`, `resolvedModel: "claude-opus-5[1m]"` --
+ * and that resolution is decided when a turn runs, not at the handshake, so a session whose Opus
+ * budget is spent opens its first turn on a different model. Drawing the resolved name was a claim
+ * about which model would run, and it was wrong exactly when it mattered: reported as "it said Opus,
+ * I said hello, it turned into Fable". The entry's own name names the choice rather than its outcome,
+ * so it cannot come out false.
+ *
+ * Why this is needed at all: `system/init`, which is where a Claude chat session's model comes from,
+ * does not arrive at the handshake -- measured, a process sat for 90 s without one and answered a
+ * `list_models` control request in 1.3 s meanwhile. It arrives with the first turn. Everything before
+ * that has only the list to go on.
+ */
+export function defaultModelLabelOf(models: readonly ModelDescriptor[]): string | null {
+  return models.find((m) => m.isDefault)?.name ?? null
+}
+
+/**
  * The one-line label for what the CLI is running under, or null when it has told us nothing worth
  * drawing. Effort alone is not worth a line: it means nothing without the model it belongs to.
  *
- * `fallbackModel` is what to draw while the CLI has reported no model at all — a chat session's
- * default model from the list it answered at the handshake (the `resolvedModel` of the `default`
- * entry). Claude names its current model only on `system/init`, which arrives with the first turn, so
- * a freshly opened chat pane otherwise sits on the "model" placeholder until someone sends something.
- * Drawn alone: an effort with no reported model still belongs to nothing.
+ * `fallbackModel` is what to draw while the CLI has reported no model at all — for a chat session,
+ * `defaultModelLabelOf` above, which names the default rather than guessing what it resolves to.
+ * Without it a freshly opened chat pane sits on the bare "model" placeholder until someone sends
+ * something, because Claude names its model only on `system/init` and that arrives with the first
+ * turn. Drawn alone: an effort with no reported model still belongs to nothing.
  */
 export function modelLineOf(
   info: { model: string | null; effort: string | null },
@@ -1676,7 +1696,7 @@ export function ConversationPane({
   // Before the first turn a chat session's CLI has said nothing about its model (see modelLineOf), but
   // the model list it answered at the handshake names the account's default; a terminal session reads
   // its model off the screen and needs no stand-in.
-  const defaultModelFallback = isChat ? (models.find((m) => m.isDefault)?.resolvedModel ?? null) : null;
+  const defaultModelFallback = isChat ? defaultModelLabelOf(models) : null;
   const modelLine = modelLineOf(
     modelInfo,
     (model, effort) => t("conversation.model.line", { model, effort }),
