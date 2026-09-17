@@ -253,11 +253,15 @@ export class SchedulerCoordinator {
       try {
         if (!entry.sessionKey && !entry.learning && entry.learnable) void this.learnKey(entry)
         if (this.now() >= entry.nextAt) {
-          // Interval mode is recomputed from the current time too — the simple rule is that however late
-          // we are, the next round just slides back by that much. register() has already let through only
-          // valid rules and nobody mutates this object afterwards, so there is no path to NaN here — the
-          // recomputation itself needs no defending. Even so, if an unexpected exception does come out,
-          // the catch below isolates this entry alone and does not starve the rest of the tick.
+          // Interval mode is recomputed from the current time too, and nextFireAt aligns it to the
+          // interval's unit (rule.ts), so a round that fires late does not drag that lateness through
+          // every round after it — the next one lands on the following clean boundary. A delay longer
+          // than the interval still skips the rounds it covered rather than replaying them, which is
+          // the same "a missed round is ignored" policy the rekey below states. register() has already
+          // let through only valid rules and nobody mutates this object afterwards, so there is no path
+          // to NaN here — the recomputation itself needs no defending. Even so, if an unexpected
+          // exception does come out, the catch below isolates this entry alone and does not starve the
+          // rest of the tick.
           entry.nextAt = nextFireAt(entry.config.rule, this.now())
           entry.pending = true // set even while suppressed — the round is not lost and is sent once after suppression lifts
           // A fresh round gets the full three-attempt budget. This branch runs exactly once per round, so
