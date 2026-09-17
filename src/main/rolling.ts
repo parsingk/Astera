@@ -192,6 +192,12 @@ export interface RollingDeps {
    *  적용된다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다). `roll()` 을 보라.
    *  codexRolling.ts 의 같은 이름 dep 과 같은 계약이다. */
   resumeStrategy?(): ResumeStrategy
+  /** Is this account logged in right now. Optional: without it a chain behaves exactly as it did before
+   *  this was added — every account is treated as usable and only block records steer the choice. The
+   *  wiring passes `core.accounts.loginStatus`, the same verdict the account panel and the resume dialog
+   *  show (spec §15.2). It is asked on the tick rather than on the limit path: it is a file read per
+   *  account, and a filter that is one tick stale is worth more than a file read inside a limit verdict. */
+  loginStatus?: (accountId: string) => Promise<boolean>
 }
 
 interface Chain {
@@ -239,6 +245,10 @@ interface Chain {
   // the lot per lap would forget a weekly exhaustion (valid for days) after one 60-second healthy period
   // or one wait firing, and switch back to that account.
   recovery: (BlockRecord | null)[]
+  /** Accounts of this chain that answered "not logged in" on the most recent refresh. Per-chain on
+   *  purpose — a login is a fact about this machine's account folder, not a usage verdict to broadcast
+   *  through the shared BlockRegistry, and every chain learns it from the same source on its own tick. */
+  loggedOut: Set<string>
   lastBlindProbeAt: number // the file-tree stat throttle — used by idleNudgeCheck (it survived the removal of 3-a)
   resetCheckAt: number | null // the scheduled time (ms) of the single-account reset anchor — prevents rescheduling the same time (3-b)
   resetTimer: ReturnType<typeof setTimeout> | null
@@ -327,12 +337,23 @@ interface Chain {
  *  days). That is correct when the record is right — a weekly-exhausted account is unusable whatever
  *  its session window says — and it is where a wrong record costs the most: the chain is now waiting
  *  rather than arriving, and only an arrival arms the healthy timer that would tear the record up
- *  (blockRegistry.clear). */
+ *  (blockRegistry.clear).
+ *
+ *  The merge also carries login state: a logged-out account (chain.loggedOut) is folded in as a
+ *  BlockRecord with `at: null` — unusable now, reset time unknown — exactly like a block record whose
+ *  reset could not be parsed (spec §15.2). */
 const retryState = (chain: Chain, blocks: BlockRegistry, now: number): RetryState => ({
   accountIds: chain.accountIds,
   currentIndex: chain.cycle.currentIndex,
   recovery: chain.accountIds.map((id, i) =>
-    laterBlock(chain.recovery[i] ?? null, blocks.get(id, now))
+    laterBlock(
+      laterBlock(chain.recovery[i] ?? null, blocks.get(id, now)),
+      // A logged-out account is unusable now with no known reset — exactly what an `at: null` record
+      // means to this layer, so `retry.ts` needs no new concept (spec §15.2). `pickAvailable` skips it;
+      // `planRetry` reads it as now + RETRY_FALLBACK_MS, which is the re-check cadence we want: if the
+      // person logs back in, the next tick drops the id and the account is a candidate again.
+      chain.loggedOut.has(id) ? { at: null, weekly: false, since: now } : null
+    )
   )
 })
 
@@ -420,6 +441,7 @@ export class RollingCoordinator {
       trustTimer: null,
       disposed: false,
       recovery: ids.map(() => null),
+      loggedOut: new Set(),
       lastBlindProbeAt: 0,
       resetCheckAt: null,
       resetTimer: null,
@@ -1058,9 +1080,11 @@ export class RollingCoordinator {
       action.type === 'roll' &&
       !chain.recovery[action.toIndex] &&
       this.deps.blocks.get(chain.accountIds[action.toIndex], now) !== null
+    const skipLoggedOut =
+      action.type === 'roll' && chain.loggedOut.has(chain.accountIds[action.toIndex])
     const detour =
       action.type === 'roll' && target !== action.toIndex
-        ? ` blocked(${action.toIndex}${skipShared ? ',shared' : ''})→${target === null ? 'wait' : target}`
+        ? ` blocked(${action.toIndex}${skipShared ? ',shared' : ''}${skipLoggedOut ? ',loggedOut' : ''})→${target === null ? 'wait' : target}`
         : ''
     this.deps.log(`limit detected session=${chain.liveId} action=${JSON.stringify(action)}${detour}`)
     if (target === null) {
@@ -1102,6 +1126,13 @@ export class RollingCoordinator {
   private resumeAfterWait(chain: Chain, toIndex: number): Promise<void> {
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady)
       return Promise.resolve()
+    // The wait was planned minutes ago; the target may have been logged out since. Rolling onto it
+    // would copy the transcript and respawn into a CLI that cannot authenticate, so the chain
+    // reschedules instead — the same path every other aborted roll takes (spec §15.3).
+    if (toIndex !== chain.cycle.currentIndex && chain.loggedOut.has(chain.accountIds[toIndex])) {
+      this.rescheduleAbortedRoll(chain, 'target logged out')
+      return Promise.resolve()
+    }
     if (toIndex !== chain.cycle.currentIndex) return this.roll(chain, toIndex) // the account changes — a new process is unavoidable
     if (chain.inPlaceUsed) {
       // 지난 제자리 재개가 정착 판정에 닿지 못했다 = 그 줄이 세션을 되살리지 못했다. 그래서 이번에는
@@ -1753,6 +1784,24 @@ export class RollingCoordinator {
     }
   }
 
+  /** Refreshes `chain.loggedOut` from the login probe. Fire-and-forget from the tick: the verdict is a
+   *  filter, not a gate, so a refresh that lands a tick late costs one attempt at most — the same
+   *  attempt the chain made before this existed. Guarded across the await like every other tick worker:
+   *  a chain disposed or re-keyed while the probes were in flight must not have a stale set written back. */
+  private async refreshLoginState(chain: Chain): Promise<void> {
+    const probe = this.deps.loginStatus
+    if (!probe) return
+    const liveId = chain.liveId
+    const pairs = await Promise.all(
+      chain.accountIds.map(async (id) => [id, await probe(id).catch(() => true)] as const)
+    )
+    if (chain.disposed || chain.liveId !== liveId) return
+    const out = new Set(pairs.filter(([, ok]) => !ok).map(([id]) => id))
+    if (out.size > 0 && out.size !== chain.loggedOut.size)
+      this.deps.log(`logged-out accounts session=${chain.liveId} ids=${[...out].join(',')}`)
+    chain.loggedOut = out
+  }
+
   /** The processing order for a single chain's tick. It used to throw limitTailCheck (①) and the fallback
    *  (②) side by side as fire-and-forget — `void limitTailCheck(...); void readStatusPayload(...).then(...)`.
    *  ① comes first in the text, but since neither is awaited, call order does not guarantee completion
@@ -1766,6 +1815,7 @@ export class RollingCoordinator {
    *  completed. Chains remain independent of each other — tick()'s for loop calls each chain's tickChain
    *  fire-and-forget, so one chain's slow I/O does not hold up another's tick. */
   private async tickChain(chain: Chain): Promise<void> {
+    void this.refreshLoginState(chain) // independent of everything below; the set is read by retryState on the next verdict
     await this.limitTailCheck(chain) // independent of statusLine — completes ① before the fallback
     // The across-await state guard — ① may have caught a hit and already started a roll (rolling) or set a
     // wait (waitTimer). onLimit sets those fields synchronously on that path, so if ① fired we skip the
