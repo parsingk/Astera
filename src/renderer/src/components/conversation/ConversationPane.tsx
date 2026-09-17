@@ -61,6 +61,7 @@ import { cliBusyOf } from "../../../../core/history/cliBusy";
 import { queuedMessagesOf } from "../../../../core/history/queuedMessages";
 import {
   isAwaitingReply,
+  isWorkingNow,
   sendPending,
   unsettledSends,
   dropPending,
@@ -549,6 +550,20 @@ const BannerSlotContext = createContext<ReactNode>(null);
  *  exact instant a character is arriving in it. */
 function ConversationBannerSlot(): ReactNode {
   return useContext(BannerSlotContext);
+}
+
+/** Whether the mark at the end of the output is up, and which state it names. Its own context for the
+ *  same reason the two above have one: the slot is a component *type* the Thread holds on to, so it is
+ *  fixed at module scope and everything that changes arrives through here. */
+const RunningSlotContext = createContext<{ show: boolean; working: boolean }>({
+  show: false,
+  working: false
+});
+
+function ConversationRunningSlot(): ReactNode {
+  const { show, working } = useContext(RunningSlotContext);
+  if (!show) return null;
+  return <RunningNotice working={working} />;
 }
 
 function ComposerModelSlot(): ReactNode {
@@ -2069,6 +2084,18 @@ export function ConversationPane({
   );
   const awaitingReply = isAwaitingReply(turns, pending.length, cliBusy);
   isRunningRef.current = awaitingReply;
+  /** The mark at the end of the output. Broader than `awaitingReply` on purpose — see isWorkingNow's
+   *  own doc — because that one carries the composer's stop button and must not widen with it.
+   *
+   *  Memoised into one object because it is a context value the Thread's slot reads: a fresh object
+   *  every render would re-render that slot on every keystroke in the composer beside it. */
+  const runningSlot = useMemo(
+    () => ({
+      show: isWorkingNow(pending.length, cliBusy),
+      working: isChat ? chatStatus === "working" : attention === "working"
+    }),
+    [pending.length, cliBusy, isChat, chatStatus, attention]
+  );
   const askCard: ReactNode =
     askForm !== null &&
     pendingPrompt !== null &&
@@ -2134,8 +2161,6 @@ export function ConversationPane({
       <ChatNotice text={t("chat.notice.endsWithApp")} />
     ) : slashOpen ? (
       completionMenu
-    ) : awaitingReply ? (
-      <RunningNotice working={chatStatus === "working"} />
     ) : null
   ) : exited ? (
       <ExitedNotice onGoTerminal={goTerminal} />
@@ -2155,8 +2180,6 @@ export function ConversationPane({
       completionMenu
     ) : queued.length > 0 ? (
       <QueuedNotice messages={queued} onGoTerminal={goTerminal} />
-    ) : awaitingReply ? (
-      <RunningNotice working={attention === "working"} />
     ) : slashSent ? (
       <SlashCommandNotice onGoTerminal={goTerminal} />
     ) : null;
@@ -2167,6 +2190,7 @@ export function ConversationPane({
       ToolFallback: ToolRow,
       ToolGroup: ToolRowGroup,
       Banner: ConversationBannerSlot,
+      Running: ConversationRunningSlot,
       ComposerExtras: ComposerModelSlot,
     }),
     [Welcome]
@@ -2257,6 +2281,7 @@ export function ConversationPane({
       )}
       <div className="min-h-0 flex-1">
         <BannerSlotContext.Provider value={banner}>
+          <RunningSlotContext.Provider value={runningSlot}>
           <ModelSlotContext.Provider value={modelSlot}>
           <AssistantRuntimeProvider runtime={runtime}>
               <MemoThread
@@ -2265,6 +2290,7 @@ export function ConversationPane({
             />
           </AssistantRuntimeProvider>
           </ModelSlotContext.Provider>
+          </RunningSlotContext.Provider>
         </BannerSlotContext.Provider>
       </div>
     </div>

@@ -80,6 +80,10 @@ export type ThreadComponents = {
   /** Astera's own: sits in the composer's action row, right of the attachment button. Its own slot
    *  rather than part of Banner because it belongs beside the controls, not above the input. */
   ComposerExtras?: ComponentType | undefined;
+  /** Astera's own: drawn after the last message, inside the scrolling output. For the mark that says
+   *  the CLI is working — it belongs where the answer is going to appear, which is where the person
+   *  is already looking, rather than above the input where it was competing with the composer. */
+  Running?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
   ToolGroup?:
     | ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>>
@@ -158,7 +162,7 @@ const ThreadRoot: FC<{
   autoFocus: boolean;
   composerPlaceholder: string | undefined;
 }> = ({ isEmpty, autoFocus, composerPlaceholder }) => {
-  const { Welcome = ThreadWelcome, Banner } = useContext(ThreadComponentsContext);
+  const { Welcome = ThreadWelcome, Banner, Running } = useContext(ThreadComponentsContext);
 
   return (
     <ThreadPrimitive.Root
@@ -195,6 +199,7 @@ const ThreadRoot: FC<{
             <ThreadPrimitive.Messages>
               {() => <ThreadMessage />}
             </ThreadPrimitive.Messages>
+            {Running && <Running />}
           </div>
 
           <ThreadPrimitive.ViewportFooter

@@ -1,7 +1,6 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Loader2Icon } from "lucide-react";
 import { Button } from "../ui/button";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { PromptChoice } from "../../../../core/history/promptChoices";
@@ -184,10 +183,17 @@ export function QueuedNotice({
   );
 }
 
-/** The CLI has the person's last message and has not answered it yet.
+/** The mark that says the CLI is doing something.
  *
- *  Quiet, and it says which of the two it is when the app can tell them apart: `working` means a tool
- *  is running, which only Claude reports (it has hooks; codex has none), and everything else is the
+ *  Drawn at the end of the output, under the last message, rather than above the composer where it
+ *  used to be. It goes where the answer itself is about to appear, which is where the person is
+ *  already looking, and it leaves the slot above the input for the things that need an answer.
+ *
+ *  The same pulsing dot a running tool row shows on its right (ToolRow.tsx), on purpose: this view
+ *  already says "still going" that way, and one shape for one meaning is worth more here than a
+ *  second, wordier one. `working` no longer changes what is drawn — the dot is the same either way —
+ *  but it still names the state for anything reading the page out loud: `working` means a tool is
+ *  running, which only Claude reports (it has hooks; codex has none), and everything else is the
  *  wait before the first words arrive.
  */
 export function RunningNotice({ working }: { working: boolean }): ReactNode {
@@ -197,10 +203,12 @@ export function RunningNotice({ working }: { working: boolean }): ReactNode {
     <div
       role="status"
       data-slot="conversation-running"
-      className="text-muted-foreground flex items-center gap-2 px-4 py-1.5 text-sm"
+      aria-label={t(working ? "conversation.running.working" : "conversation.running.thinking")}
+      className="text-muted-foreground py-0.5 text-sm"
     >
-      <Loader2Icon className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
-      <span>{t(working ? "conversation.running.working" : "conversation.running.thinking")}</span>
+      <span aria-hidden className="animate-pulse">
+        {"●"}
+      </span>
     </div>
   );
 }
