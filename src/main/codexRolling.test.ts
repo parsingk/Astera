@@ -2196,3 +2196,98 @@ describe('chat chains', () => {
     h.coord.stop()
   })
 })
+
+// Mirrors the same-named describe block in rolling.ts (spec §15.1-§15.3) — the codex coordinator gets
+// the same login-aware filter, applied at the same three sites (retryState's merge, onLimit's detour
+// log and resumeAfterWait's guard).
+describe('logged-out accounts', () => {
+  it('rolls past a logged-out account to the next live one', async () => {
+    const accounts: Record<string, Account> = {
+      c1: acc('c1', 'Codex A'),
+      c2: acc('c2', 'Codex B'),
+      c3: acc('c3', 'Codex C')
+    }
+    const h = harness({
+      getAccount: (id) => accounts[id] ?? null,
+      loginStatus: (id) => Promise.resolve(id !== 'c2')
+    })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-lo-1', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...h.info1, rollAccountIds: ['c1', 'c2', 'c3'] })
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000) // one tick learns c2 as logged out
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toContain('spawn:s2:c3') // c2 was skipped, not tried
+    expect(h.events).not.toContain('spawn:s2:c2')
+    h.coord.stop()
+  })
+
+  it('waits instead of rolling when every other account is logged out', async () => {
+    const h = harness({ loginStatus: (id) => Promise.resolve(id === 'c1') })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-lo-2', cwd: h.info1.cwd, primary: 97 })
+    h.coord.register(h.info1)
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000) // one tick learns c2 as logged out
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // nothing was spawned
+    const waiting = h.sent.filter((s) => s.channel === 'session:rollState' && s.payload.state === 'waiting')
+    expect(waiting.length).toBe(1) // the waiting banner, with a retry time ~15 minutes out
+    h.coord.stop()
+  })
+
+  // c2 and c3 are both logged out from the very first tick, but that is not read again before the wait
+  // fires: chain.loggedOut only refreshes on a tick, and tick() skips a chain whose wait is armed, so
+  // nothing relearns anything until the wait timer itself goes off. resumeAfterWait has to check
+  // chain.loggedOut for itself at that moment (spec §15.3) — the roll must not be attempted.
+  it('does not roll onto a target that went logged out during the wait', async () => {
+    const accounts: Record<string, Account> = {
+      c1: acc('c1', 'Codex A'),
+      c2: acc('c2', 'Codex B'),
+      c3: acc('c3', 'Codex C')
+    }
+    const h = harness({
+      getAccount: (id) => accounts[id] ?? null,
+      loginStatus: (id) => Promise.resolve(id === 'c1') // only the current account is logged in
+    })
+    // c1's own hit needs a genuinely later reset than the flat 15-minute fallback c2 and c3 both get
+    // from chain.loggedOut — otherwise c1 (an unknown-reset record, the same shape) ties with them in
+    // planRetry, and since ties keep the first index, the target would be c1 itself (the current
+    // account) and resumeAfterWait's toIndex !== currentIndex guard would never even be reached. A
+    // ~2h reset comfortably loses that comparison; c2 wins its remaining tie against c3 only because
+    // retryState/planRetry visit it first.
+    const resetSec = Math.floor((Date.now() + 2 * 60 * 60_000) / 1000)
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-lo-3', cwd: h.info1.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register({ ...h.info1, rollAccountIds: ['c1', 'c2', 'c3'] })
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000) // one tick learns c2 and c3 as logged out
+    await appendLimitError(file)
+    // c1 blocked for ~2h (real reset) outweighs c2/c3's 15-minute fallback → waits, aimed at c2
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // no roll yet — waiting
+    const at = Date.parse(String(h.sent.at(-1)?.payload.nextRetryAt))
+    await advance(at - Date.now() + 1_000) // the wait timer fires, targeting c2
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual([]) // rescheduled, not spawned
+    // rescheduleAbortedRoll republishes 'waiting' — a roll onto c2 would have moved past it instead
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    h.coord.stop()
+  })
+
+  it('behaves as before when the dep is absent', async () => {
+    const h = harness() // no loginStatus
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-lo-4', cwd: h.info1.cwd, primary: 97 })
+    h.coord.register(h.info1)
+    await advance(1_500) // mapping poll attaches the tail
+    await advance(15_000)
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }) // ordinary roll to c2 still happens
+    await advance(100)
+    expect(h.events).toContain('spawn:s2:c2')
+    h.coord.stop()
+  })
+})
