@@ -459,10 +459,22 @@ export function modelLineOf(
   format: (model: string, effort: string) => string,
   fallbackModel: string | null = null
 ): string | null {
-  if (info.model === null) return fallbackModel;
-  if (info.effort === null) return info.model;
-  return format(info.model, info.effort);
+  if (info.model === null) return fallbackModel === null ? null : shortModelName(fallbackModel);
+  const model = shortModelName(info.model);
+  if (info.effort === null) return model;
+  return format(model, info.effort);
 }
+
+/** A model id as this app says it. Every Claude id carries the vendor's own name in front, and inside
+ *  this app that is never the question — a session belongs to one CLI or the other and the pane
+ *  already says which — so it is a third of a narrow button spent on nothing. Only that exact word and
+ *  only at the front: `my-claude-fork` and a model called `claude` are left alone, and codex's names
+ *  never had it. */
+function shortModelName(model: string): string {
+  return model.startsWith(VENDOR_PREFIX) ? model.slice(VENDOR_PREFIX.length) : model;
+}
+
+const VENDOR_PREFIX = "claude-";
 
 /** How long after the paste the return is sent. The two have to arrive as two chunks — together they
  *  reach the CLI as one, the return is swallowed into the paste, and nothing is submitted at all —

@@ -320,6 +320,27 @@ describe('pendingModelLabelOf', () => {
 describe('modelLineOf', () => {
   const format = (model: string, effort: string): string => `${model} @ ${effort}`
 
+  // Every Claude model id carries the vendor's own name in front of it, and the composer sits inside
+  // this app where that is never in question -- a session is Claude's or codex's and the pane already
+  // says which. The prefix cost a third of a narrow button for nothing. Only at the front, and only
+  // that exact word: a model with it in the middle keeps it.
+  it("drops the vendor prefix a Claude model id carries", () => {
+    expect(modelLineOf({ model: 'claude-fable-5-1', effort: null }, format)).toBe('fable-5-1')
+    expect(modelLineOf({ model: 'claude-opus-5[1m]', effort: null }, format)).toBe('opus-5[1m]')
+    expect(modelLineOf({ model: 'claude-opus-5', effort: 'xhigh' }, format)).toBe('opus-5 @ xhigh')
+  })
+
+  it('drops it from the fallback too, which is the same name by another route', () => {
+    expect(modelLineOf({ model: null, effort: null }, format, 'claude-opus-5[1m]')).toBe('opus-5[1m]')
+  })
+
+  // codex's names have no such prefix, and nothing else may be trimmed off a name the CLI chose.
+  it('leaves every other name exactly as the CLI gave it', () => {
+    expect(modelLineOf({ model: 'gpt-6-astra', effort: null }, format)).toBe('gpt-6-astra')
+    expect(modelLineOf({ model: 'my-claude-fork', effort: null }, format)).toBe('my-claude-fork')
+    expect(modelLineOf({ model: 'claude', effort: null }, format)).toBe('claude')
+  })
+
   it('joins the model and the effort', () => {
     expect(modelLineOf({ model: 'Opus 5', effort: 'xhigh' }, format)).toBe('Opus 5 @ xhigh')
   })
@@ -337,8 +358,8 @@ describe('modelLineOf', () => {
   // list it answered at the handshake names the account's default. That is worth drawing, alone —
   // an effort with no reported model still belongs to nothing.
   it('falls back to the given default model while the CLI has said nothing', () => {
-    expect(modelLineOf({ model: null, effort: null }, format, 'claude-opus-5[1m]')).toBe('claude-opus-5[1m]')
-    expect(modelLineOf({ model: null, effort: 'xhigh' }, format, 'claude-opus-5[1m]')).toBe('claude-opus-5[1m]')
+    expect(modelLineOf({ model: null, effort: null }, format, 'claude-opus-5[1m]')).toBe('opus-5[1m]')
+    expect(modelLineOf({ model: null, effort: 'xhigh' }, format, 'claude-opus-5[1m]')).toBe('opus-5[1m]')
   })
 
   it('the reported model wins over the fallback', () => {
