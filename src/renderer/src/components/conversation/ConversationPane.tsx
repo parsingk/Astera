@@ -416,21 +416,32 @@ export function isSlashCommand(text: string): boolean {
 /**
  * What to call the session's model before the CLI has said which one it is running.
  *
- * The entry's **name**, never what it resolves to. Claude's `list_models` answers a default entry of
- * `value: "default"`, `displayName: "Default (recommended)"`, `resolvedModel: "claude-opus-5[1m]"` --
- * and that resolution is decided when a turn runs, not at the handshake, so a session whose Opus
- * budget is spent opens its first turn on a different model. Drawing the resolved name was a claim
- * about which model would run, and it was wrong exactly when it mattered: reported as "it said Opus,
- * I said hello, it turned into Fable". The entry's own name names the choice rather than its outcome,
- * so it cannot come out false.
+ * The entry's **name** leads, and what it resolves to rides behind it. The order is the point. Claude's
+ * `list_models` answers a default entry of `value: "default"`, `displayName: "Default (recommended)"`,
+ * `resolvedModel: "claude-opus-5[1m]"`, and that resolution is decided when a turn runs, not at the
+ * handshake -- a session whose Opus budget is spent opens its first turn on a different model. Leading
+ * with the resolved name was a claim about which model would run, and it was wrong exactly when it
+ * mattered: reported as "it said Opus, I said hello, it turned into Fable". Leading with the entry's
+ * name states the choice, which is the part that is settled; the resolution follows it as what the
+ * default currently stands for, which is what "default" on its own does not say.
+ *
+ * Nothing is added when there is nothing to add: codex's default entry is a model rather than an alias
+ * for one and carries no `resolvedModel` at all, and an entry whose name already is its resolution
+ * would otherwise say it twice.
  *
  * Why this is needed at all: `system/init`, which is where a Claude chat session's model comes from,
  * does not arrive at the handshake -- measured, a process sat for 90 s without one and answered a
  * `list_models` control request in 1.3 s meanwhile. It arrives with the first turn. Everything before
  * that has only the list to go on.
  */
-export function defaultModelLabelOf(models: readonly ModelDescriptor[]): string | null {
-  return models.find((m) => m.isDefault)?.name ?? null
+export function defaultModelLabelOf(
+  models: readonly ModelDescriptor[],
+  format: (name: string, model: string) => string
+): string | null {
+  const entry = models.find((m) => m.isDefault)
+  if (entry === undefined) return null
+  const resolved = entry.resolvedModel
+  return resolved !== undefined && resolved !== entry.name ? format(entry.name, resolved) : entry.name
 }
 
 /**
@@ -1696,7 +1707,11 @@ export function ConversationPane({
   // Before the first turn a chat session's CLI has said nothing about its model (see modelLineOf), but
   // the model list it answered at the handshake names the account's default; a terminal session reads
   // its model off the screen and needs no stand-in.
-  const defaultModelFallback = isChat ? defaultModelLabelOf(models) : null;
+  const defaultModelFallback = isChat
+    ? defaultModelLabelOf(models, (name, model) =>
+        t("conversation.model.defaultLine", { name, model })
+      )
+    : null;
   const modelLine = modelLineOf(
     modelInfo,
     (model, effort) => t("conversation.model.line", { model, effort }),

@@ -270,25 +270,36 @@ describe('isSlashCommand', () => {
 describe('defaultModelLabelOf', () => {
   const m = (over: Partial<ModelDescriptor>): ModelDescriptor =>
     ({ provider: 'claude', id: 'x', name: 'X', description: null, isDefault: false, ...over }) as ModelDescriptor
+  const format = (name: string, model: string): string => `${name} · ${model}`
 
-  // What the CLI calls its own default, not what that default resolves to. Measured against a real
-  // `list_models` (2026-09-17): Claude's default entry is `value: "default"`, `displayName: "Default
-  // (recommended)"`, `resolvedModel: "claude-opus-5[1m]"` -- and a session whose Opus budget is spent
-  // opens its first turn on another model entirely. Drawing the resolved name was a claim about which
-  // model would run, and it was wrong exactly when it mattered: reported as "it said Opus, I said 안녕,
-  // it turned into Fable". The entry's own name cannot be wrong, because it names the choice rather
-  // than its outcome.
-  it("names the default entry, not the model that entry resolves to", () => {
+  // The entry's own name leads, because the name is the choice and the choice is all that is settled
+  // before a turn runs: Claude's default resolves when the turn starts, so a session whose Opus budget
+  // is spent opens on something else. What the default *is* rides along behind it, which is what was
+  // asked for -- "default" alone says nothing about which model that is.
+  //
+  // Measured `list_models` (2026-09-17): the default entry is `value: "default"`, `displayName:
+  // "Default (recommended)"`, `resolvedModel: "claude-opus-5[1m]"`.
+  it('names the default entry and says what it resolves to', () => {
     const models = [
       m({ id: 'default', name: 'Default (recommended)', isDefault: true, resolvedModel: 'claude-opus-5[1m]' }),
       m({ id: 'sonnet', name: 'Sonnet', resolvedModel: 'claude-sonnet-5' })
     ]
-    expect(defaultModelLabelOf(models)).toBe('Default (recommended)')
+    expect(defaultModelLabelOf(models, format)).toBe('Default (recommended) · claude-opus-5[1m]')
+  })
+
+  // codex's default entry is a model, not an alias for one -- its list carries no resolvedModel at all
+  // -- so there is nothing to add and saying the name twice would be noise.
+  it('gives the name alone when there is nothing to resolve, or nothing new to say', () => {
+    expect(defaultModelLabelOf([m({ id: 'gpt-6-astra', name: 'GPT-6-Astra', isDefault: true })], format))
+      .toBe('GPT-6-Astra')
+    expect(
+      defaultModelLabelOf([m({ id: 'o', name: 'claude-opus-5', isDefault: true, resolvedModel: 'claude-opus-5' })], format)
+    ).toBe('claude-opus-5')
   })
 
   it('is null when no entry is the default, and for an empty list', () => {
-    expect(defaultModelLabelOf([m({ id: 'sonnet', name: 'Sonnet' })])).toBeNull()
-    expect(defaultModelLabelOf([])).toBeNull()
+    expect(defaultModelLabelOf([m({ id: 'sonnet', name: 'Sonnet' })], format)).toBeNull()
+    expect(defaultModelLabelOf([], format)).toBeNull()
   })
 })
 

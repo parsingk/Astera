@@ -1485,6 +1485,7 @@ export const ko = {
   'conversation.slash.title': '슬래시 명령은 터미널에서 진행됩니다',
   'conversation.slash.body': '명령이 여는 창은 터미널에 있어서 여기서는 보이지 않습니다.',
   'conversation.slash.action': '터미널로 이동',
+  'conversation.model.defaultLine': '{name} · {model}',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effortRow': 'effort: {level}',
   'conversation.model.effortMore': '더 보기 (터미널)',
