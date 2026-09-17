@@ -881,13 +881,24 @@ app.whenReady().then(async () => {
           // the spawn path: the chips are needed whether or not this session asked for Slack, and the
           // watcher gates the turn callback on info.slackNotify itself.
           //
-          // **A chat session registers itself instead.** Its `ready` event names the thread and the
-          // rollout and registers them with `{ notifyTurns: false }` (ipc.ts) — a chat session announces
-          // its own turn ends from the protocol, so a watcher callback would make it two. Registering
-          // here would set that flag back to its default and double every notification for the rest of
-          // the chain. The old id is still dropped: that session is dead either way.
+          // **A chat session is registered here too, not just by its own `ready`.** A rolled chat
+          // session resumes the same codex thread, but `ready` only fires ~1–3s later once the respawned
+          // CLI completes its handshake — until then this session would otherwise sit unwatched, missing
+          // usage chips and turn notifications. Its `ready` event names the thread and the rollout and
+          // registers them with `{ notifyTurns: false }` (ipc.ts) — a chat session announces its own turn
+          // ends from the protocol, so a watcher callback would make it two — and passing the same flag
+          // here closes that gap without double-announcing anything. `register` replaces the entry
+          // wholesale (codexRolloutWatcher.ts), so `ready`'s later re-register does not drift the flag
+          // back to its default; that is why the old Ruling 4c-6 skip is no longer needed here.
+          //
+          // The old registration's native id must be read before it is dropped — `unregister` erases it,
+          // and only this session's own resumed thread should carry it forward.
+          const rolledChatId = core!.chat.has(p.info.id)
+            ? codexRollout.codexSessionIdFor(p.oldSessionId) ?? undefined
+            : null
           codexRollout.unregister(p.oldSessionId)
-          if (!core!.chat.has(p.info.id)) codexRollout.register(p.info, p.dest)
+          if (rolledChatId !== null) codexRollout.register(p.info, p.dest, rolledChatId, { notifyTurns: false })
+          else if (!core!.chat.has(p.info.id)) codexRollout.register(p.info, p.dest)
         } else if (channel === 'session:rollState') {
           // codex rolling sends session:rollState too (switching/waiting/adopted/none) — suppress the
           // resume window. 'adopted' is not one of the states that suppresses: it says a chain taken
