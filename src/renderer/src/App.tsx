@@ -611,6 +611,13 @@ export default function App(): React.JSX.Element {
   // Every session id ever asked about with the one-shot attention read below — read once per
   // session, ever, not on every render or every sessions-list change.
   const requestedAttentionRef = useRef<Set<string>>(new Set())
+  // Every session whose roll-state / schedule push listener has fired at least once. A seed reply is
+  // dropped for a session already in the set: an invoke reply and a push have no order between them, so
+  // a push — including an 'off'/'none' that removed the banner — is always the fresher fact. This
+  // replaces the old "already in state" presence guard, which could not tell a removal from a
+  // never-seeded session and so let a just-disabled banner be re-seeded.
+  const heardRollRef = useRef<Set<string>>(new Set())
+  const heardSchedRef = useRef<Set<string>>(new Set())
   // Fix round 1: the most recent session:rolled, for PaneGrid to carry a rolled session's remembered
   // terminal/conversation choice to its new id (PaneGrid's own `lastRoll` prop comment has the full
   // reasoning). Deliberately never reset back to null — see that comment.
@@ -848,17 +855,25 @@ export default function App(): React.JSX.Element {
       void window.api.scheduler
         .state(sessionId)
         .then((ev) => {
-          // Presence guard, the same one the attention seeding below uses and for the same reason: an
-          // invoke reply and a session:schedState push have no order between them, so an entry that is
-          // already here came from the live listener and is the fresher of the two.
-          if (ev) setSchedStates((prev) => (sessionId in prev ? prev : { ...prev, [sessionId]: ev }))
+          if (ev && !heardSchedRef.current.has(sessionId))
+            setSchedStates((prev) => ({ ...prev, [sessionId]: ev }))
+        })
+        .catch(() => {})
+    }
+    // The roll banner's own one-shot read, same reasoning as the schedule seed just above.
+    const seedRollState = (sessionId: string): void => {
+      void window.api.rolling
+        .state(sessionId)
+        .then((ev) => {
+          if (ev && !heardRollRef.current.has(sessionId))
+            setRollStates((prev) => ({ ...prev, [sessionId]: ev }))
         })
         .catch(() => {})
     }
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
     void window.api.sessions.list().then((list) => {
       setSessions(list)
-      for (const s of list) if (s.status === 'running') seedSchedState(s.id)
+      for (const s of list) if (s.status === 'running') { seedSchedState(s.id); seedRollState(s.id) }
       if (list.length === 0) return
       // Every session belongs to exactly one group (invariant 1) — all re-adopted sessions go into the
       // first group, and a running session (or the first one, if none) becomes the active tab
@@ -917,6 +932,7 @@ export default function App(): React.JSX.Element {
       // A session main made on its own can already carry a schedule — the reattach sweep re-arms one
       // from the stored config as it hands the session back.
       seedSchedState(info.id)
+      seedRollState(info.id)
     })
     // The campaign verdict comes after the policy lookup — it can arrive later or earlier than the mount, so both paths are taken
     const offCampaign = window.api.update.onCampaign((c) => {
@@ -1313,6 +1329,7 @@ export default function App(): React.JSX.Element {
       setAttention((prev) => (prev[e.sessionId] === e.value ? prev : { ...prev, [e.sessionId]: e.value }))
     )
     const offRollState = window.api.on('session:rollState', (ev) => {
+      heardRollRef.current.add(ev.sessionId)
       // A failed auto-resume is announced with a toast. Why not a banner: a banner only disappears once
       // 'none' arrives, and nothing publishes that after stalled, so it would stay forever. And a
       // rolling session with Slack turned off has no record in SlackNotifier (see register in
@@ -1335,6 +1352,7 @@ export default function App(): React.JSX.Element {
       })
     })
     const offSchedState = window.api.on('session:schedState', (ev) => {
+      heardSchedRef.current.add(ev.sessionId)
       setSchedStates((prev) => {
         if (ev.state === 'off') {
           const { [ev.sessionId]: _dropped, ...rest } = prev
