@@ -5,8 +5,7 @@ import type { Account, Provider } from '../types'
 import { isProvider, providerOf } from '../providers/meta'
 import { descriptorOf, makeDescriptors, type ProviderDescriptor } from '../providers/descriptor'
 import { DEFAULT_ACCOUNT_PLACEHOLDER_LABEL } from './detect'
-
-const COLORS = ['#4f9cf9', '#f97316', '#22c55e', '#e879f9', '#facc15', '#ef4444']
+import { nextAccountColor } from './colors'
 
 /** Same rule as detect.ts's own normalize (and descriptor.ts's normalizePath) — kept local because those
  *  are too, and it must stay in step with them: detect.ts is what compares these paths for the exclusion.
@@ -80,6 +79,13 @@ export class AccountRegistry {
       this.dismissed = Array.isArray(parsed.dismissedDirs)
         ? parsed.dismissedDirs.filter((d: unknown): d is string => typeof d === 'string')
         : []
+      // Colours were once handed out by counting accounts, which repeated one whenever an account was
+      // removed, so a file written back then can hold the same colour twice. Nothing else would ever fix
+      // it: a colour is only chosen when an account is added, and these accounts already have one.
+      // The write is swallowed on purpose. Reaching the catch below would read a failed save as a corrupt
+      // file and empty the account list over a cosmetic repair; the fix stands in memory either way, and
+      // the next save() carries it to disk.
+      if (this.resolveColorCollisions()) await this.save().catch(() => {})
       return { recovered: false }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -128,6 +134,22 @@ export class AccountRegistry {
     await this.save()
   }
 
+  /** Gives a fresh colour to every account whose colour an earlier one already holds, and answers whether
+   *  it changed anything. The earlier account keeps what it has: accounts.json is in registration order,
+   *  so the account that has worn the colour longest is the one that keeps it. */
+  private resolveColorCollisions(): boolean {
+    const seen = new Set<string>()
+    let changed = false
+    for (const account of this.accounts) {
+      if (seen.has(account.color.trim().toLowerCase())) {
+        account.color = nextAccountColor(seen)
+        changed = true
+      }
+      seen.add(account.color.trim().toLowerCase())
+    }
+    return changed
+  }
+
   /** The unregistered configDirs, for detection to exclude. Raw paths — detect.ts normalizes them itself. */
   dismissedDirs(): string[] {
     return [...this.dismissed]
@@ -174,7 +196,7 @@ export class AccountRegistry {
       label,
       configDir,
       provider,
-      color: color ?? COLORS[this.accounts.length % COLORS.length],
+      color: color ?? nextAccountColor(this.accounts.map((a) => a.color)),
       createdAt: new Date().toISOString()
     }
     this.accounts.push(account)
