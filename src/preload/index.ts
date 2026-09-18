@@ -319,7 +319,8 @@ const api = {
     interrupt: invoke('chat.interrupt'),
     answer: invoke('chat.answer'),
     setModel: invoke('chat.setModel'),
-    setPlanMode: invoke('chat.setPlanMode'),
+    setPermissionMode: invoke('chat.setPermissionMode'),
+    listPermissionModes: invoke('chat.listPermissionModes'),
     listModels: invoke('chat.listModels'),
     configuredModel: invoke('chat.configuredModel'),
     state: invoke('chat.state')

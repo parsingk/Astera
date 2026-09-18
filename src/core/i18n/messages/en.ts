@@ -1281,7 +1281,8 @@ export const en: Record<keyof typeof ko, string> = {
   'chat.notice.checking': 'Checking where the session stands',
   'chat.notice.endsWithApp': 'This session ends when the app quits',
   'chat.notice.error': 'The turn failed: {message}',
-  'chat.model.plan': 'Plan',
-  'chat.model.planOn': 'Plan mode on',
-  'chat.model.planOff': 'Plan mode off'
+  'chat.mode.aria': 'Permission mode',
+  'chat.mode.default': 'Default',
+  'chat.mode.acceptEdits': 'Accept edits',
+  'chat.mode.plan': 'Plan'
 }

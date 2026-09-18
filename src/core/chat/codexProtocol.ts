@@ -6,7 +6,8 @@
 // kebab-case strings, plan mode is a per-turn struct whose `settings.model` is required, and
 // `availableDecisions` is an experimental field the generated types don't carry — read defensively.
 
-import type { ChatRequest, ChatAnswer, ChatEvent, ApprovalDecision, RateLimitInfo } from './types'
+import type { ChatRequest, ChatAnswer, ChatEvent, ApprovalDecision, RateLimitInfo, PermissionMode, PermissionModeChoice } from './types'
+import { isPermissionMode } from './types'
 import type { AskForm } from '../prompts/askUserQuestion'
 import { expectedAnswers } from '../prompts/askUserQuestion'
 import type { ModelDescriptor } from '../models/types'
@@ -99,6 +100,22 @@ export function planEffortOf(modesResult: unknown): string | null {
     if (e && e.mode === 'plan') return str(e.reasoning_effort)
   }
   return null
+}
+
+/** The modes codex offers, off the same `collaborationMode/list` result `planEffortOf` reads. Entries
+ *  this app has no mode for are dropped rather than passed through: the control can only ask for the
+ *  three it knows, and a row that cannot be honoured is worse than one that is not there. An absent
+ *  or refused list answers empty, which leaves the control unpressable instead of guessing. */
+export function permissionModesOf(modesResult: unknown): PermissionModeChoice[] {
+  const data = arr(obj(modesResult)?.data ?? null)
+  if (!data) return []
+  const out: PermissionModeChoice[] = []
+  for (const entry of data) {
+    const e = obj(entry)
+    if (!e || !isPermissionMode(e.mode)) continue
+    out.push({ key: e.mode, label: str(e.name) || e.mode })
+  }
+  return out
 }
 
 export function modelsOf(modelListResult: unknown): ModelDescriptor[] {
@@ -233,8 +250,8 @@ export type ProtocolEffect =
   | { type: 'resolvedTool'; toolUseId: string }
   /** Claude only: `system/status`'s `permissionMode` is a partial update — it says nothing about the
    *  model, so it cannot be folded into a full `model` event without inventing one. The adapter
-   *  patches `state.model.planMode` in place and leaves the rest of the model alone. */
-  | { type: 'planMode'; on: boolean }
+   *  patches `state.model.permissionMode` in place and leaves the rest of the model alone. */
+  | { type: 'permissionMode'; mode: PermissionMode }
   /** Claude only, for now: a rate-limit signal, straight through to a ChatEvent of the same shape —
    *  see RateLimitInfo (core/chat/types.ts) for where each field comes from. */
   | { type: 'rateLimit'; info: RateLimitInfo }
@@ -269,7 +286,11 @@ export function effectsOf(frame: Extract<CodexFrame, { kind: 'notification' }>):
     case 'thread/settings/updated': {
       const ts = obj(p.threadSettings) ?? {}
       const collab = obj(ts.collaborationMode)
-      const model = { model: str(ts.model), effort: str(ts.effort), planMode: collab?.mode === 'plan' }
+      const model = {
+        model: str(ts.model),
+        effort: str(ts.effort),
+        permissionMode: isPermissionMode(collab?.mode) ? collab.mode : 'default'
+      }
       return [{ type: 'event', event: { type: 'model', model } }]
     }
     case 'serverRequest/resolved': {

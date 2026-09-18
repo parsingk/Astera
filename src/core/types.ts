@@ -29,7 +29,7 @@ import type { TerminalFont } from './terminal/font'
 import type { GeneratorSettings } from './understanding/generatorSettings'
 import type { DesktopNotifySettings } from './notify/settings'
 import type { ModelDescriptor, ModelListResult } from './models/types'
-import type { ChatAnswer, ChatEvent, ChatState } from './chat/types'
+import type { ChatAnswer, ChatEvent, ChatState, PermissionMode, PermissionModeChoice } from './chat/types'
 import type { ThemeId } from './theme/themes'
 import type { ConvTurn } from './history/convTypes'
 export type { ConvTurn } from './history/convTypes'
@@ -1511,7 +1511,11 @@ export type RendererApi = CoreApi & {
     interrupt(sessionId: string): Promise<void>
     answer(sessionId: string, requestId: string, answer: ChatAnswer): Promise<void>
     setModel(sessionId: string, model: string, effort: string | null): Promise<void>
-    setPlanMode(sessionId: string, on: boolean): Promise<void>
+    setPermissionMode(sessionId: string, mode: PermissionMode): Promise<void>
+    /** The rows the composer's mode menu draws for this session. Empty for a session whose CLI never
+     *  answered a list (codex, when `collaborationMode/list` was refused) — the control then has
+     *  nothing to open. */
+    listPermissionModes(sessionId: string): Promise<PermissionModeChoice[]>
     listModels(sessionId: string): Promise<ModelDescriptor[]>
     /** The model this session's own settings choose, or null when they choose none.
      *

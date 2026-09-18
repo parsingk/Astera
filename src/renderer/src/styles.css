@@ -1904,12 +1904,17 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* The chat composer's Plan pill (ModelControl.tsx, chat sessions only). Same three variables as
    .kind-segmented's active state, so "on" reads the way every other pressed toggle in the app reads:
    accent border, lifted background, full text colour. Off is muted. */
+/* Sized to the model readout it sits beside (ModelControl.tsx's own button: text-xs, px-1.5 py-0.5),
+   so the two read as one row of controls rather than a control and a tag. It was a small uppercase
+   pill back when it said one word, Plan, and was a toggle; it now carries a mode name that can be
+   several words long and opens a menu, which is the same kind of thing the readout is. */
 .plan-pill {
-  flex: none; display: inline-flex; align-items: center; padding: 2px 6px;
-  font-size: 10px; line-height: 1; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase;
+  flex: none; display: inline-flex; align-items: center; padding: 3px 9px;
+  font-size: 12px; line-height: 16px; font-weight: 500;
   color: var(--text-dim); background: none; border: 1px solid var(--line); border-radius: 999px;
   cursor: pointer; transition: color 120ms, border-color 120ms, background 120ms;
 }
+.plan-pill:disabled { cursor: default; opacity: 0.6; }
 .plan-pill:hover { color: var(--text); }
 /* On reads as on from across the room: accent text and border on the lifted background, and bolder —
    a 1px accent border alone was the whole difference and it did not register (measured). */

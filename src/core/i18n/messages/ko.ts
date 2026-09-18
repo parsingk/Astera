@@ -1487,7 +1487,8 @@ export const ko = {
   'chat.notice.checking': '상태를 확인하는 중',
   'chat.notice.endsWithApp': '이 세션은 앱을 끄면 끝납니다',
   'chat.notice.error': '턴이 실패했습니다: {message}',
-  'chat.model.plan': 'Plan',
-  'chat.model.planOn': 'Plan 모드 켬',
-  'chat.model.planOff': 'Plan 모드 끔'
+  'chat.mode.aria': '권한 모드',
+  'chat.mode.default': '기본',
+  'chat.mode.acceptEdits': '편집 자동 승인',
+  'chat.mode.plan': '플랜'
 } as const

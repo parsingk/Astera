@@ -43,6 +43,8 @@ import {
   type PendingSend
 } from "../../../../core/history/pendingSends";
 import { ChatRequestCard } from "./ChatRequestCard";
+import type { PermissionModeChoice } from "../../../../core/chat/types";
+import type { MessageKey } from "../../../../core/i18n";
 import { useChatState } from "../../hooks/useChatState";
 import { toast } from "../../lib/toast";
 import { useI18n } from "../../i18n/I18nProvider";
@@ -1137,8 +1139,45 @@ export function ConversationPane({
     };
   }, [sessionId]);
 
-  /** Whether this session is in plan mode right now. */
-  const planMode = chat === null ? false : chat.model.planMode;
+  /** How much this session's CLI may do without asking, right now. */
+  const permissionMode = chat === null ? "default" : chat.model.permissionMode;
+  /** The rows its mode menu offers. Asked once per session beside the model list — Claude answers a
+   *  fixed three without a round trip, codex answers what it listed at startup, and neither changes
+   *  while a session runs. */
+  const [permissionModes, setPermissionModes] = useState<readonly PermissionModeChoice[]>([]);
+  useEffect(() => {
+    let current = true;
+    setPermissionModes([]);
+    // An empty answer is never written over a full one. Two asks can be in flight at once (the one on
+    // mount and the one on `ready`), they resolve in no guaranteed order, and the mount's empty answer
+    // landing second would undo the good one. A CLI that really offers none leaves the state at the
+    // `[]` set just above, so nothing is lost by ignoring empties here.
+    const ask = (): void => {
+      void window.api.chat
+        .listPermissionModes(sessionId)
+        .then((list) => {
+          if (current && list.length > 0) setPermissionModes(list);
+        })
+        // Silent, like the model list's own failure beside it: the button falls back to naming the
+        // mode by its key and stays unpressable, which is the same as a CLI that offers none.
+        .catch(() => {});
+    };
+    ask();
+    // Asked again when the session says it is ready, because for codex the answer is not there yet at
+    // mount: its rows come from the `collaborationMode/list` reply, which lands about 300ms after
+    // `sessions.spawn` has already returned (measured). A pane that asked once, on mount, read an
+    // empty list and never asked again — the control then sat disabled, labelled with the bare mode
+    // key, for the session's whole life. `ready` is emitted after that reply (pinned by codexAdapter's
+    // own test), so it is the first moment the answer is certain. Claude needs none of this: its list
+    // is a constant its adapter answers without a round trip.
+    const off = window.api.on("chat:event", (e) => {
+      if (e.sessionId === sessionId && e.event.type === "ready") ask();
+    });
+    return () => {
+      current = false;
+      off();
+    };
+  }, [sessionId]);
 
   const modelSlot = useMemo<ModelControlProps>(
     () => ({
@@ -1165,10 +1204,16 @@ export function ConversationPane({
               sayIfFailed(window.api.chat.setModel(sessionId, model, level));
             },
             busy: false,
-            planMode,
-            onTogglePlan: () => sayIfFailed(window.api.chat.setPlanMode(sessionId, !planMode))
+            permissionMode,
+            // An empty label means the CLI named the mode nothing (Claude), so this app's word is used.
+            // codex's own names come through untouched.
+            permissionModes: permissionModes.map((choice) => ({
+              ...choice,
+              label: choice.label === "" ? t(`chat.mode.${choice.key}` as MessageKey) : choice.label
+            })),
+            onPickPermissionMode: (mode) => sayIfFailed(window.api.chat.setPermissionMode(sessionId, mode))
           }),
-    [planMode, modelLine, modelInfo.model, modelInfo.effort, modelInfo.cli, models, sessionId]
+    [permissionMode, permissionModes, modelLine, modelInfo.model, modelInfo.effort, modelInfo.cli, models, sessionId, t]
   );
 
   // An answer that is actually being waited on outranks everything; after that, a list being typed

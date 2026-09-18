@@ -170,18 +170,18 @@ describe('encodeClaudeAnswer', () => {
 })
 
 describe('claudeEffectsOf', () => {
-  it('system/init announces the thread, the model, plan mode, the turn and working -- in that order', () => {
+  it('system/init announces the thread, the model, the permission mode, the turn and working -- in that order', () => {
     expect(claudeEffectsOf(message(F.SYSTEM_INIT))).toEqual([
       { type: 'thread', threadId: '04c490a7-0ab2-419a-8c55-fdb8aea99ae0', rolloutPath: null },
-      { type: 'event', event: { type: 'model', model: { model: 'claude-fable-5-1', effort: null, planMode: false } } },
-      { type: 'planMode', on: false },
+      { type: 'event', event: { type: 'model', model: { model: 'claude-fable-5-1', effort: null, permissionMode: 'default' } } },
+      { type: 'permissionMode', mode: 'default' },
       { type: 'turn', turnId: '04c490a7-0ab2-419a-8c55-fdb8aea99ae0' },
       { type: 'event', event: { type: 'status', status: 'working' } }
     ])
   })
 
-  it('system/status is only a planMode marker', () => {
-    expect(claudeEffectsOf(message(F.SYSTEM_STATUS_PLAN))).toEqual([{ type: 'planMode', on: true }])
+  it('system/status is only a permission-mode marker', () => {
+    expect(claudeEffectsOf(message(F.SYSTEM_STATUS_PLAN))).toEqual([{ type: 'permissionMode', mode: 'plan' }])
   })
 
   it('a successful result ends the turn and goes idle without an error', () => {
@@ -316,5 +316,43 @@ describe('claudeEffectsOf — what the usage chips need', () => {
     const line = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: limitText, session_id: 's' })
     const effects = claudeEffectsOf(message(line))
     expect(effects.find((e) => e.type === 'rateLimit')).toMatchObject({ info: { windows: null } })
+  })
+})
+
+// The composer's mode control offers three, so the wire's own value is carried rather than reduced to
+// "is it plan". A boolean could not tell acceptEdits from default.
+describe('claudeEffectsOf — the permission mode', () => {
+  const statusWith = (mode: string): string =>
+    F.SYSTEM_STATUS_PLAN.replace('"permissionMode":"plan"', `"permissionMode":"${mode}"`)
+
+  it('carries acceptEdits through as itself', () => {
+    expect(claudeEffectsOf(message(statusWith('acceptEdits')))).toEqual([
+      { type: 'permissionMode', mode: 'acceptEdits' }
+    ])
+  })
+
+  it('carries plan and default through as themselves', () => {
+    expect(claudeEffectsOf(message(statusWith('plan')))).toEqual([{ type: 'permissionMode', mode: 'plan' }])
+    expect(claudeEffectsOf(message(statusWith('default')))).toEqual([{ type: 'permissionMode', mode: 'default' }])
+  })
+
+  it('folds a mode the control does not offer onto default', () => {
+    // bypassPermissions is a real mode the CLI can be started in (the spawn dialog's own checkbox) and
+    // not one of the three offered here. Naming it as one of the three would be a lie about what the
+    // button is showing; default is the honest neutral, and picking it really does step the CLI down.
+    expect(claudeEffectsOf(message(statusWith('bypassPermissions')))).toEqual([
+      { type: 'permissionMode', mode: 'default' }
+    ])
+    expect(claudeEffectsOf(message(statusWith('something-new')))).toEqual([
+      { type: 'permissionMode', mode: 'default' }
+    ])
+  })
+
+  it('reports the mode on the init frame beside the model', () => {
+    const effects = claudeEffectsOf(message(F.SYSTEM_INIT))
+    expect(effects).toContainEqual({ type: 'permissionMode', mode: 'default' })
+    expect(effects.find((e) => e.type === 'event' && e.event.type === 'model')).toMatchObject({
+      event: { model: { permissionMode: 'default' } }
+    })
   })
 })

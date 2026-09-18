@@ -107,6 +107,7 @@ import { detachCoordinator } from '../core/orchestration/state'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import type { ChatAnswer, ChatContextUsage, RateLimitInfo } from '../core/chat/types'
 import { chatSessionUsage } from '../core/usage/chatSession'
+import { isPermissionMode } from '../core/chat/types'
 import { firesDue } from '../core/orchestration/fire'
 import { reapableChildRuns } from '../core/orchestration/reap'
 import {
@@ -6781,8 +6782,14 @@ export function registerIpc(
   ipcMain.handle('chat.setModel', (_e, sessionId: string, model: string, effort: string | null) =>
     core.chat.setModel(sessionId, model, effort)
   )
-  ipcMain.handle('chat.setPlanMode', (_e, sessionId: string, on: boolean) =>
-    core.chat.setPlanMode(sessionId, on)
+  ipcMain.handle('chat.setPermissionMode', (_e, sessionId: string, mode: unknown) => {
+    // The renderer can only pick a row the adapter itself handed it, so a value that is not one of the
+    // three is a bug rather than a choice — refused here rather than forwarded to the CLI.
+    if (!isPermissionMode(mode)) throw new Error(`INVALID_PERMISSION_MODE: ${String(mode)}`)
+    return core.chat.setPermissionMode(sessionId, mode)
+  })
+  ipcMain.handle('chat.listPermissionModes', (_e, sessionId: string) =>
+    core.chat.listPermissionModes(sessionId)
   )
   ipcMain.handle('chat.listModels', (_e, sessionId: string) => core.chat.listModels(sessionId))
   // What the composer names before the first turn. A chat session is launched without `--model`, so

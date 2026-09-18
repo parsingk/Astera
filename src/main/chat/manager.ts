@@ -19,7 +19,7 @@ import type { ProcFactory, ProcLike } from '../../core/sessions/proc'
 import { cliEnvFor } from '../../core/sessions/cliEnv'
 import { buildCodexAppServerCommand, buildClaudeChatCommand } from '../../core/sessions/commands'
 import type { PtyMeta } from '../../core/host/protocol'
-import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState } from '../../core/chat/types'
+import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState, PermissionMode, PermissionModeChoice } from '../../core/chat/types'
 import type { ModelDescriptor } from '../../core/models/types'
 import { createCodexAdapter, type AdapterMode } from './codexAdapter'
 import { createClaudeAdapter } from './claudeAdapter'
@@ -284,9 +284,14 @@ export class ChatSessionManager {
     return live.adapter.setModel(model, effort)
   }
 
-  setPlanMode(id: string, on: boolean): Promise<void> {
+  setPermissionMode(id: string, mode: PermissionMode): Promise<void> {
     const live = this.sessions.get(id)
-    return live ? live.adapter.setPlanMode(on) : Promise.resolve()
+    return live ? live.adapter.setPermissionMode(mode) : Promise.resolve()
+  }
+
+  listPermissionModes(id: string): Promise<PermissionModeChoice[]> {
+    const live = this.sessions.get(id)
+    return live ? live.adapter.listPermissionModes() : Promise.resolve([])
   }
 
   listModels(id: string): Promise<ModelDescriptor[]> {

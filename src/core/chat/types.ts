@@ -16,10 +16,33 @@ export type ChatAnswer =
   | { kind: 'approval'; decision: ApprovalDecision }
   | { kind: 'question'; answers: Answer[] }
 
+/** How much the CLI may do without asking. Claude calls it a permission mode and codex a
+ *  collaboration mode; the three here are the ones both the composer's control offers and this app
+ *  knows how to ask for. Claude's own `bypassPermissions` is deliberately not among them — it is
+ *  chosen when the session is made, and a live switch into it belongs to that decision, not to a
+ *  menu beside the composer. A session already running in it reads as `default`, which is the
+ *  honest neutral: picking `default` there really does step the CLI down. */
+export type PermissionMode = 'default' | 'acceptEdits' | 'plan'
+
+/** One row of the composer's mode menu.
+ *
+ *  `label` is the CLI's own word for the mode — codex answers `name` on its list — and **empty when
+ *  it has none**, which is Claude's case: its set is fixed and unnamed on the wire. An empty label is
+ *  the cue to use this app's translated word instead, so the button never shows `acceptEdits` to
+ *  someone reading Korean. */
+export interface PermissionModeChoice {
+  key: PermissionMode
+  label: string
+}
+
+export function isPermissionMode(v: unknown): v is PermissionMode {
+  return v === 'default' || v === 'acceptEdits' || v === 'plan'
+}
+
 export interface ChatModel {
   model: string | null
   effort: string | null
-  planMode: boolean
+  permissionMode: PermissionMode
 }
 
 export interface ChatState {
@@ -90,7 +113,10 @@ export interface ChatAdapter {
   interrupt(): Promise<void>
   answer(requestId: string, answer: ChatAnswer): Promise<void>
   setModel(model: string, effort: string | null): Promise<void>
-  setPlanMode(on: boolean): Promise<void>
+  setPermissionMode(mode: PermissionMode): Promise<void>
+  /** The rows the composer's mode menu draws. Claude answers a fixed three without a round trip;
+   *  codex answers what it listed at startup, which may be empty when that list was refused. */
+  listPermissionModes(): Promise<PermissionModeChoice[]>
   listModels(): Promise<ModelDescriptor[]>
   state(): ChatState
   on(fn: (e: ChatEvent) => void): () => void

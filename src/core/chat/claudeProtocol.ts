@@ -9,7 +9,8 @@
 // `system/status` carries only `permissionMode` -- never enough to build a full `model` event without
 // inventing `model: null`, hence the dedicated `planMode` effect (see `claudeEffectsOf` below).
 
-import type { ChatAnswer, ApprovalDecision, RateLimitInfo } from './types'
+import type { ChatAnswer, ApprovalDecision, RateLimitInfo, PermissionMode } from './types'
+import { isPermissionMode } from './types'
 import type { RateLimitWindow } from '../types'
 import { parseAskUserQuestion, expectedAnswers } from '../prompts/askUserQuestion'
 import { describeToolRequest } from '../prompts/toolRequest'
@@ -160,6 +161,13 @@ export function encodeClaudeAnswer(frame: Extract<ClaudeFrame, { kind: 'control_
   return encodeControlSuccess(frame.requestId, { behavior: 'allow', updatedInput: input })
 }
 
+/** The wire's `permissionMode`, narrowed to the three the composer's control offers. Anything else —
+ *  `bypassPermissions`, or a mode a later CLI adds — reads as `default`: see PermissionMode's own doc
+ *  for why that is the honest answer rather than a fourth name nobody can pick. */
+function modeOf(raw: unknown): PermissionMode {
+  return isPermissionMode(raw) ? raw : 'default'
+}
+
 const working: ProtocolEffect = { type: 'event', event: { type: 'status', status: 'working' } }
 const idle: ProtocolEffect = { type: 'event', event: { type: 'status', status: 'idle' } }
 
@@ -230,18 +238,18 @@ export function claudeEffectsOf(frame: Extract<ClaudeFrame, { kind: 'message' }>
   if (frame.type === 'system' && frame.subtype === 'init') {
     const sessionId = str(b.session_id)
     if (!sessionId) return []
-    const planMode = b.permissionMode === 'plan'
+    const permissionMode = modeOf(b.permissionMode)
     return [
       { type: 'thread', threadId: sessionId, rolloutPath: null },
-      { type: 'event', event: { type: 'model', model: { model: str(b.model), effort: str(b.effort), planMode } } },
-      { type: 'planMode', on: planMode },
+      { type: 'event', event: { type: 'model', model: { model: str(b.model), effort: str(b.effort), permissionMode } } },
+      { type: 'permissionMode', mode: permissionMode },
       { type: 'turn', turnId: sessionId },
       working
     ]
   }
 
   if (frame.type === 'system' && frame.subtype === 'status') {
-    return [{ type: 'planMode', on: b.permissionMode === 'plan' }]
+    return [{ type: 'permissionMode', mode: modeOf(b.permissionMode) }]
   }
 
   // An assistant frame that failed for a rate limit still means the CLI is working (it retries), so

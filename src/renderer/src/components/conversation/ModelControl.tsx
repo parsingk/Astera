@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import { Loader2Icon } from "lucide-react";
 import { ContextMenu, type MenuItem } from "../ContextMenu";
 import { useI18n } from "../../i18n/I18nProvider";
+import type { PermissionMode, PermissionModeChoice } from "../../../../core/chat/types";
 
 /** One row of the model menu. `key` is whatever the pane needs to act on it — an alias for Claude, a
  *  position in the CLI's own picker for codex — and this component never looks inside it. */
@@ -41,12 +42,22 @@ export interface ModelControlProps {
    *  driven and then read back — and without a sign of it the button looks like it ignored the
    *  press. */
   busy?: boolean;
-  /** Chat sessions only: whether plan mode is on right now. Ignored when `onTogglePlan` is absent. */
-  planMode?: boolean;
-  /** Chat sessions only: a small **Plan** pill is drawn beside the line when this is given, filled
-   *  when `planMode`. Absent for every existing caller (Claude, codex terminal sessions), which have
-   *  no such toggle. */
-  onTogglePlan?: () => void;
+  /** The mode this session is in right now, named for the button. */
+  permissionMode?: PermissionMode;
+  /** The rows the mode menu draws. Empty leaves the button drawn but unpressable — the same rule the
+   *  model menu follows when its own list has not answered. */
+  permissionModes?: readonly PermissionModeChoice[];
+  /** A small mode button is drawn beside the line when this is given. Absent for a caller with no mode
+   *  to offer, and then the button is not drawn at all. */
+  onPickPermissionMode?: (mode: PermissionMode) => void;
+}
+
+/** What to write on the mode button: the same word its own row carries, so the two never disagree. A
+ *  mode with no row — the moment before the list answers, or one the CLI reports but does not offer —
+ *  falls back to the key, which is the only thing known about it. */
+function labelOf(choices: readonly PermissionModeChoice[], mode: PermissionMode): string {
+  const label = choices.find((c) => c.key === mode)?.label;
+  return label === undefined || label === "" ? mode : label;
 }
 
 /** The model and effort readout that sits in the composer, right of the attachment button. */
@@ -59,11 +70,13 @@ export function ModelControl({
   onChangeEffort,
   effortLabel,
   busy = false,
-  planMode = false,
-  onTogglePlan
+  permissionMode = "default",
+  permissionModes = [],
+  onPickPermissionMode
 }: ModelControlProps): ReactNode {
   const { t } = useI18n();
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const [modeAt, setModeAt] = useState<{ x: number; y: number } | null>(null);
 
   // The last row, and the rule above it, only for a caller that has somewhere further to go — see
   // `onChangeEffort`. Without it the rule would close the menu on nothing.
@@ -108,23 +121,39 @@ export function ModelControl({
           {busy && <Loader2Icon className="size-3 shrink-0 animate-spin" aria-hidden="true" />}
           <span className="truncate">{line ?? t("conversation.model.unknown")}</span>
         </button>
-        {onTogglePlan && (
+        {onPickPermissionMode && (
           <button
             type="button"
-            aria-pressed={planMode}
-            title={t(planMode ? "chat.model.planOn" : "chat.model.planOff")}
-            onClick={onTogglePlan}
-            // Styled in styles.css (.plan-pill), keyed on aria-pressed: this project has no Tailwind
-            // colour tokens (bg-foreground and friends compile to nothing — measured: the pill looked
-            // the same on and off), and its active toggle (.kind-segmented .segmented.active) is plain
-            // CSS on the same three variables, so the pill follows it.
+            // `default` is the CLI asking before it acts, which is the quiet baseline — the button is
+            // muted there and lit for the two that widen what it may do on its own. Keyed on
+            // aria-pressed because this project has no Tailwind colour tokens (bg-foreground and
+            // friends compile to nothing — measured), so .plan-pill in styles.css does the work.
+            aria-pressed={permissionMode !== "default"}
+            aria-label={t("chat.mode.aria")}
+            title={t("chat.mode.aria")}
+            disabled={permissionModes.length === 0}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setModeAt({ x: Math.round(r.left), y: Math.round(r.top) });
+            }}
             className="plan-pill"
           >
-            {t("chat.model.plan")}
+            {labelOf(permissionModes, permissionMode)}
           </button>
         )}
       </div>
       {at && openable && <ContextMenu x={at.x} y={at.y} items={items} onClose={() => setAt(null)} />}
+      {modeAt && onPickPermissionMode && permissionModes.length > 0 && (
+        <ContextMenu
+          x={modeAt.x}
+          y={modeAt.y}
+          items={permissionModes.map((choice): MenuItem => ({
+            label: choice.key === permissionMode ? `✓ ${choice.label}` : choice.label,
+            onSelect: () => onPickPermissionMode(choice.key)
+          }))}
+          onClose={() => setModeAt(null)}
+        />
+      )}
     </>
   );
 }

@@ -59,8 +59,8 @@ describe('createCodexAdapter — handshake', () => {
     expect((await a.listModels()).length).toBe(5)
     expect(a.state().status).toBe('idle')
     // Seeded from thread/start itself, not left blank until the first thread/settings/updated.
-    expect(a.state().model).toEqual({ model: 'gpt-6-astra', effort: 'xhigh', planMode: false })
-    expect(events).toContainEqual({ type: 'model', model: { model: 'gpt-6-astra', effort: 'xhigh', planMode: false } })
+    expect(a.state().model).toEqual({ model: 'gpt-6-astra', effort: 'xhigh', permissionMode: 'default' })
+    expect(events).toContainEqual({ type: 'model', model: { model: 'gpt-6-astra', effort: 'xhigh', permissionMode: 'default' } })
   })
   // Reported as "the model keeps changing during a conversation". thread/start seeds the effort
   // (xhigh, above), and a later thread/settings/updated carrying none replaced the whole model object
@@ -73,7 +73,7 @@ describe('createCodexAdapter — handshake', () => {
     const { p, a } = await started()
     p.feed(F.THREAD_SETTINGS_UPDATED_PLAN.replace('"effort":"medium"', '"effort":null'))
     await tick()
-    expect(a.state().model).toEqual({ model: 'gpt-6-astra', effort: 'xhigh', planMode: true })
+    expect(a.state().model).toEqual({ model: 'gpt-6-astra', effort: 'xhigh', permissionMode: 'plan' })
   })
 
   it('state() hands out a copy of the model, so a caller cannot write into the session', async () => {
@@ -110,7 +110,7 @@ describe('createCodexAdapter — handshake', () => {
     p.feed(replyWith(p, 'thread/start', F.THREAD_START_RESULT))
     await starting
     expect(events[0]).toMatchObject({ type: 'ready' })
-    await a.setPlanMode(true)
+    await a.setPermissionMode('plan')
     void a.send('ask me')
     await tick()
     expect(JSON.parse(p.written.at(-1) as string).params.collaborationMode).toEqual({ mode: 'plan', settings: { model: 'gpt-6-astra' } })
@@ -132,7 +132,7 @@ describe('createCodexAdapter — handshake', () => {
 describe('createCodexAdapter — a turn with a question', () => {
   it('sends the plan struct, shows the question, answers it by id, and comes back to idle', async () => {
     const { p, a, events } = await started()
-    await a.setPlanMode(true)
+    await a.setPermissionMode('plan')
     void a.send('ask me')
     await tick()
     // Nothing picked — the thread's own model/effort (seeded from thread/start, F2) shows in the pane
@@ -151,7 +151,7 @@ describe('createCodexAdapter — a turn with a question', () => {
     const s = a.state()
     expect(s.status).toBe('waiting')
     expect(s.request).toMatchObject({ id: '0', kind: 'question' })
-    expect(s.model).toEqual({ model: 'gpt-6-astra', effort: 'medium', planMode: true })
+    expect(s.model).toEqual({ model: 'gpt-6-astra', effort: 'medium', permissionMode: 'plan' })
     if (s.request?.kind !== 'question') throw new Error()
     await a.answer('0', { kind: 'question', answers: [{ picks: [1], other: '' }, { picks: [1], other: '' }] })
     expect(JSON.parse(p.written.at(-1) as string)).toEqual({ id: 0, result: { answers: { format: { answers: ['Detailed'] }, sections: { answers: ['Methods'] } } } })
@@ -313,5 +313,111 @@ describe('createCodexAdapter — replay after adoption', () => {
     p.exit(PTY_LOST_SIGHT_EXIT_CODE)
     await expect(sending).rejects.toThrow()
     expect(events.at(-1)).toEqual({ type: 'exit', code: PTY_LOST_SIGHT_EXIT_CODE })
+  })
+})
+
+describe('createCodexAdapter — the mode menu', () => {
+  it('offers the modes codex listed at startup, with the names it gave them', async () => {
+    // The same `collaborationMode/list` reply the plan effort is read from. It was read for that one
+    // number and thrown away; the composer's control draws the rest of it.
+    const { a } = await started()
+    expect(await a.listPermissionModes()).toEqual([
+      { key: 'plan', label: 'Plan' },
+      { key: 'default', label: 'Default' }
+    ])
+  })
+
+  it('offers nothing when the list was refused, and still starts', async () => {
+    // A refusal is already survivable (its own test above); the control must not invent rows for it.
+    const p = fakeProc()
+    const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 30_000 })
+    const starting = a.start({ cwd: 'D:/x', bypass: false })
+    await tick()
+    p.feed(replyWith(p, 'initialize', F.INITIALIZE_RESULT))
+    await tick()
+    const collabReq = p.written.map((w) => JSON.parse(w) as { id?: string; method?: string }).find((w) => w.method === 'collaborationMode/list')
+    if (!collabReq) throw new Error('no request collaborationMode/list')
+    p.feed(JSON.stringify({ id: collabReq.id, error: { code: -32600, message: 'unknown method' } }))
+    p.feed(replyWith(p, 'model/list', F.MODEL_LIST_RESULT))
+    await tick()
+    p.feed(replyWith(p, 'thread/start', F.THREAD_START_RESULT))
+    await starting
+    expect(await a.listPermissionModes()).toEqual([])
+  })
+
+  it('keeps the chosen mode locally — codex takes it with the next turn, not as a call of its own', async () => {
+    const { p, a } = await started()
+    const before = p.written.length
+    await a.setPermissionMode('plan')
+    expect(a.state().model.permissionMode).toBe('plan')
+    expect(p.written.length).toBe(before) // nothing was sent
+  })
+})
+
+// What the composer's mode control leans on. It asks once, when the pane hears this session is ready,
+// and does not ask again — so a list that fills in after that event would leave the control empty for
+// the session's whole life. Measured before this was pinned: `collaborationMode/list` answers ~300ms
+// after spawn returns, which is late enough for a pane that asks on mount to miss it entirely.
+describe('createCodexAdapter — the mode list is ready before `ready` is', () => {
+  it('answers the modes already, at the moment the ready event fires', async () => {
+    const p = fakeProc()
+    const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 30_000 })
+    let modesAtReady: unknown = 'never fired'
+    a.on((e) => {
+      if (e.type === 'ready') modesAtReady = a.listPermissionModes()
+    })
+    const starting = a.start({ cwd: 'D:/x', bypass: false })
+    await tick()
+    p.feed(replyWith(p, 'initialize', F.INITIALIZE_RESULT))
+    await tick()
+    p.feed(replyWith(p, 'collaborationMode/list', F.COLLAB_MODES_RESULT))
+    p.feed(replyWith(p, 'model/list', F.MODEL_LIST_RESULT))
+    await tick()
+    p.feed(replyWith(p, 'thread/start', F.THREAD_START_RESULT))
+    await starting
+    expect(await modesAtReady).toEqual([
+      { key: 'plan', label: 'Plan' },
+      { key: 'default', label: 'Default' }
+    ])
+  })
+})
+
+describe('createCodexAdapter — the mode list after adoption', () => {
+  it('asks for the list on demand, because adoption runs no handshake to fill it', async () => {
+    // A session the Host already had gets no handshake at all (`no handshake on adoption`, above), so
+    // the startup list never ran for it. The model menu already recovers this way; the mode menu was
+    // left empty for the session's whole life instead.
+    const p = fakeProc()
+    const a = createCodexAdapter({
+      proc: p,
+      mode: { mode: 'adopt', threadId: '01a0a6cb-43a2-7d71-994f-72e53764fbc1', rolloutPath: null, truncated: false },
+      version: '1', log: () => {}, requestTimeoutMs: 30_000
+    })
+    await a.start({ cwd: 'D:/x', bypass: false })
+    expect(p.written).toEqual([]) // still silent until something is actually asked for
+
+    const asking = a.listPermissionModes()
+    await tick()
+    p.feed(replyWith(p, 'collaborationMode/list', F.COLLAB_MODES_RESULT))
+    expect(await asking).toEqual([
+      { key: 'plan', label: 'Plan' },
+      { key: 'default', label: 'Default' }
+    ])
+  })
+
+  it('answers empty, and does not keep asking, when the list is refused', async () => {
+    const p = fakeProc()
+    const a = createCodexAdapter({
+      proc: p,
+      mode: { mode: 'adopt', threadId: '01a0a6cb-43a2-7d71-994f-72e53764fbc1', rolloutPath: null, truncated: false },
+      version: '1', log: () => {}, requestTimeoutMs: 30_000
+    })
+    await a.start({ cwd: 'D:/x', bypass: false })
+    const asking = a.listPermissionModes()
+    await tick()
+    const req = p.written.map((w) => JSON.parse(w) as { id?: string; method?: string }).find((w) => w.method === 'collaborationMode/list')
+    if (!req) throw new Error('no request collaborationMode/list')
+    p.feed(JSON.stringify({ id: req.id, error: { code: -32600, message: 'unknown method' } }))
+    expect(await asking).toEqual([])
   })
 })
