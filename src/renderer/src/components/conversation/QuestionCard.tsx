@@ -5,19 +5,17 @@ import type { ReactNode } from "react";
 import { CheckIcon, Loader2Icon } from "lucide-react";
 import { Button } from "../ui/button";
 import { useI18n } from "../../i18n/I18nProvider";
-import type { MessageKey } from "../../../../core/i18n";
 import { isAnswered, type AskForm, type Answer } from "../../../../core/prompts/askUserQuestion";
-import { askSubmitEnabled, type AskCardState } from "../../../../core/prompts/askScreen";
-import type { AskStopReason } from "./askDriver";
+
+/** What the card offers right now. `ready` takes an answer; `answering` is one already on its way. */
+export type AskCardState = "ready" | "answering";
 
 export interface QuestionCardProps {
   /** The question as the model wrote it — from the PreToolUse hook, never from the screen. */
   form: AskForm;
   answers: Answer[];
-  /** What the card offers right now (core/prompts/askScreen.ts's askCardStateOf). */
   state: AskCardState;
   /** Why the last attempt stopped, if it did. The answers are kept; the terminal button becomes primary. */
-  notice: AskStopReason | null;
   canSubmit: boolean;
   /** Who is asking, written out. Defaults to the Claude wording every terminal caller wants; a chat
    *  session passes its own, because the asker there is Codex. */
@@ -44,7 +42,6 @@ export function QuestionCard({
   form,
   answers,
   state,
-  notice,
   canSubmit,
   title,
   onToggle,
@@ -54,22 +51,13 @@ export function QuestionCard({
 }: QuestionCardProps): ReactNode {
   const { t } = useI18n();
   const busy = state === "answering";
-  const drivable = state === "ready" && notice === null;
+  const drivable = state === "ready";
   // Drawn whether or not it can be pressed. Hiding it made a blocked answer look like a missing
   // feature: a chat session's card always has this button (it answers over the protocol, with no
   // terminal screen to drive), and beside that one a terminal session's card looked like it simply
   // could not send. The status line to its left already says what the state is; nothing is added here.
-  const canPressSubmit = askSubmitEnabled(state, notice, canSubmit);
-  const status: string | null =
-    state === "answering"
-      ? t("conversation.ask.answering")
-      : notice !== null
-        ? t(`conversation.ask.stopped.${notice}` as MessageKey)
-        : state === "waiting"
-          ? t("conversation.ask.waiting")
-          : state === "terminal"
-            ? t("conversation.ask.terminal")
-            : null;
+  const canPressSubmit = state === "ready" && canSubmit;
+  const status: string | null = state === "answering" ? t("conversation.ask.answering") : null;
 
   return (
     <div

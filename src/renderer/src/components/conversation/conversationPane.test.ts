@@ -4,24 +4,14 @@ import type { AppendMessage } from '@assistant-ui/react'
 import {
   toThreadMessages,
   mergeTurns,
-  keepWhatIsKnown,
   nextTurnsFor,
   shouldResetPaging,
-  nextAttentionFor,
   composerTextOf,
   shouldCloseStaleOpen,
   shouldLoadEarlier,
   LOAD_EARLIER_MARGIN_PX,
-  ptyWritesFor,
-  isSlashCommand,
   modelLineOf,
-  pendingModelLabelOf,
-  shouldReadPromptScreen,
-  shouldShowPrompt,
-  askCardShown,
-  choicesToShow,
-  composerLocked,
-  nextPendingPromptFor
+  pendingModelLabelOf
 } from './ConversationPane'
 import type { ConvTurn } from '../../../../core/history/convTypes'
 
@@ -185,18 +175,6 @@ describe('shouldResetPaging', () => {
   })
 })
 
-describe('nextAttentionFor', () => {
-  it('reads the value for this pane\'s own session', () => {
-    expect(nextAttentionFor('s1', { sessionId: 's1', value: 'waiting' })).toBe('waiting')
-  })
-
-  // Same shape as nextTurnsFor's and shouldResetPaging's own foreign-session case: this event also
-  // fires for every session app-wide, and a firing for a session this pane is not showing must be a
-  // complete no-op — undefined is the caller's cue to leave attention exactly as it is.
-  it('is undefined for a foreign session', () => {
-    expect(nextAttentionFor('s1', { sessionId: 's2', value: 'waiting' })).toBeUndefined()
-  })
-})
 
 describe('composerTextOf', () => {
   it('joins only the text parts and ignores the rest', () => {
@@ -233,41 +211,7 @@ describe('shouldCloseStaleOpen', () => {
   })
 })
 
-// Measured in the dev app: sent as plain typed characters, `/status` opened the model picker and
-// saved a default, because the CLI's own autocomplete had read the slash key by key and the return
-// took the highlighted entry. Bracketed paste is what tells it the text is pasted.
-describe('ptyWritesFor', () => {
-  it('wraps the text in the bracketed-paste markers', () => {
-    const [paste] = ptyWritesFor('/status')
-    expect(paste).toBe('\u001b[200~/status\u001b[201~')
-  })
 
-  it('keeps the return out of the paste, so the two can be written separately', () => {
-    const [paste, submit] = ptyWritesFor('hello')
-    expect(submit).toBe('\r')
-    expect(paste).not.toContain('\r')
-  })
-
-  it('leaves a newline inside the message where it was', () => {
-    const [paste] = ptyWritesFor('first\nsecond')
-    expect(paste).toBe('\u001b[200~first\nsecond\u001b[201~')
-  })
-})
-
-describe('isSlashCommand', () => {
-  it('is true for a command, with or without leading spaces', () => {
-    expect(isSlashCommand('/model')).toBe(true)
-    expect(isSlashCommand('   /status arg')).toBe(true)
-  })
-
-  // The interesting half: a slash inside a sentence is not a command, and raising the notice for one
-  // would tell a person their perfectly ordinary message went somewhere it did not.
-  it('is false for a message that merely contains a slash', () => {
-    expect(isSlashCommand('src/main/ipc.ts 를 봐줘')).toBe(false)
-    expect(isSlashCommand('2026/09/11 에 뭐 했지')).toBe(false)
-    expect(isSlashCommand('')).toBe(false)
-  })
-})
 
 describe('pendingModelLabelOf', () => {
   const m = (over: Partial<ModelDescriptor>): ModelDescriptor =>
@@ -373,157 +317,12 @@ describe('modelLineOf', () => {
   })
 })
 
-describe('keepWhatIsKnown', () => {
-  type Reading = { model: string | null; effort: string | null; cli: 'claude' | 'codex' | null }
-  const codex = (model: string | null, effort: string | null): Reading => ({
-    model,
-    effort,
-    cli: 'codex'
-  })
 
-  // The one this exists for: codex records its model a turn at a time, so between turns the reading
-  // that goes through IPC is a pair of nulls while its own screen says the model plainly. Letting the
-  // silence through erased the screen's reading every time the transcript ticked.
-  it('keeps what is known when the new reading says nothing', () => {
-    expect(keepWhatIsKnown(codex('gpt-5.6-sol', 'low'), codex(null, null))).toEqual(
-      codex('gpt-5.6-sol', 'low')
-    )
-  })
 
-  it('takes a reading that does say something', () => {
-    expect(keepWhatIsKnown(codex('gpt-5.6-sol', 'low'), codex('gpt-5.6-terra', 'medium'))).toEqual(
-      codex('gpt-5.6-terra', 'medium')
-    )
-  })
 
-  it('fills in one field without losing the other', () => {
-    expect(keepWhatIsKnown(codex('gpt-5.6-sol', 'low'), codex('gpt-5.6-terra', null))).toEqual(
-      codex('gpt-5.6-terra', 'low')
-    )
-  })
 
-  // A different CLI is a different session's answer arriving, not a quieter one.
-  it('replaces everything when the CLI itself is different', () => {
-    const claude: Reading = { model: null, effort: null, cli: 'claude' }
-    expect(keepWhatIsKnown(codex('gpt-5.6-sol', 'low'), claude)).toEqual(claude)
-  })
-})
 
-// A CLI puts its first question up before any hook can fire and before there is a transcript to read
-// it off — Claude Code's folder-trust prompt, codex's numbered one, a theme picker on a fresh config
-// dir. `attention` is built from hook events, so it says `idle` throughout, and the pane used to show
-// an empty thread with a composer whose keystrokes went into a dialog that ignores them.
-describe('shouldReadPromptScreen', () => {
-  // Three things read the screen now — the prompt no hook reported, the composer lock, and whether
-  // the CLI is still working — and the last two are wanted for a session's whole life, not just its
-  // first moment. Reading is not showing; what the pane draws is shouldShowPrompt's business.
-  it('reads for any session, in any state', () => {
-    expect(shouldReadPromptScreen('waiting', 12)).toBe(true)
-    expect(shouldReadPromptScreen('idle', 0)).toBe(true)
-    expect(shouldReadPromptScreen('working', 0)).toBe(true)
-    expect(shouldReadPromptScreen('idle', 1)).toBe(true)
-    expect(shouldReadPromptScreen('working', 3)).toBe(true)
-  })
-})
 
-describe('shouldShowPrompt', () => {
-  it('shows while a hook says the session is waiting, even with nothing to pick', () => {
-    expect(shouldShowPrompt('waiting', 0)).toBe(true)
-  })
-
-  it('shows a question nobody reported, on the strength of its choices alone', () => {
-    expect(shouldShowPrompt('idle', 2)).toBe(true)
-  })
-
-  it('stays out of the way of a session merely sitting at its own composer', () => {
-    expect(shouldShowPrompt('idle', 0)).toBe(false)
-    expect(shouldShowPrompt('working', 0)).toBe(false)
-  })
-
-  // The composer lock is driven by the same flag, so these two cannot come apart. They did: a screen
-  // that read back far enough to name the trust question but not far enough to carry its marker gave
-  // choices of 0, and the pane locked the box while drawing nothing to say why.
-  it('shows the trust step even when the screen gave up no rows to press', () => {
-    expect(shouldShowPrompt('idle', 0, true)).toBe(true)
-    expect(shouldShowPrompt('working', 0, true)).toBe(true)
-  })
-})
-
-describe('askCardShown', () => {
-  const none = { kind: 'none' } as const
-  const question = { kind: 'question', index: 0, pristine: true, textRowFocused: false, submitRowFocused: false } as const
-  it('no form: never', () => {
-    expect(askCardShown(null, 0)).toBe(false)
-  })
-  it('the dialog on screen: the card, whatever else the screen shows', () => {
-    expect(askCardShown(question, 0)).toBe(true)
-    expect(askCardShown(question, 3)).toBe(true)
-  })
-  it('no dialog yet and nothing to press: the card, waiting', () => {
-    expect(askCardShown(none, 0)).toBe(true)
-  })
-  // The regression: a declined question's capture outliving its dialog while an approval prompt is up.
-  it('no dialog but the screen offers rows of its own: the banner', () => {
-    expect(askCardShown(none, 3)).toBe(false)
-  })
-})
-
-// A CLI draws a dialog in pieces, so a poll can land between the question and its rows. The trust
-// prompt is the one whose buttons are the only way through — the composer beside it is locked — so it
-// keeps the last reading that had any rather than flickering them away.
-describe('choicesToShow', () => {
-  const rows = [
-    { label: 'No, exit', number: null, selected: true },
-    { label: 'Yes, I trust this folder', number: null, selected: false }
-  ]
-
-  it('draws the rows this tick read, whenever it read any', () => {
-    expect(choicesToShow(rows, [], false)).toEqual(rows)
-    expect(choicesToShow(rows, [], true)).toEqual(rows)
-  })
-
-  it('keeps the last rows through a tick that read none, while the trust prompt is up', () => {
-    expect(choicesToShow([], rows, true)).toEqual(rows)
-  })
-
-  it('draws nothing for any other prompt that read none', () => {
-    expect(choicesToShow([], rows, false)).toEqual([])
-    expect(choicesToShow([], [], true)).toEqual([])
-  })
-})
-
-// The composer used to open the moment a pane did, and shut half a second later when the first reading
-// of the screen landed on a folder-trust dialog. Everything typed in between went into a dialog that
-// discards typing — the failure this view exists to prevent.
-describe('composerLocked', () => {
-  it('is shut while the CLI is offering no line to type on', () => {
-    expect(composerLocked(false, false, false)).toBe(true)
-  })
-
-  it('opens once the CLI shows its own input line', () => {
-    expect(composerLocked(false, true, false)).toBe(false)
-  })
-
-  it('stays shut for the trust prompt however much it knows', () => {
-    expect(composerLocked(true, true, true)).toBe(true)
-  })
-
-  // A terminal that registers no reader at all must not cost a session its composer for good.
-  it('opens once it has waited long enough, reading or no reading', () => {
-    expect(composerLocked(false, false, true)).toBe(false)
-  })
-})
-
-describe('nextPendingPromptFor', () => {
-  const prompt = { toolUseId: 'call-1', tool: 'AskUserQuestion', input: { questions: [] }, at: 1 }
-  it("this pane's session: the event's prompt, null included", () => {
-    expect(nextPendingPromptFor('s1', { sessionId: 's1', prompt })).toBe(prompt)
-    expect(nextPendingPromptFor('s1', { sessionId: 's1', prompt: null })).toBeNull()
-  })
-  it('another session: undefined, the cue to leave the state alone', () => {
-    expect(nextPendingPromptFor('s1', { sessionId: 's2', prompt })).toBeUndefined()
-  })
-})
 
 // Infinite-scroll paging for earlier turns. The 'nothing to scroll' branch is not a nicety: the
 // load-earlier button is gone, so a window shorter than the viewport leaves the reader with no way

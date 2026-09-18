@@ -98,7 +98,6 @@ function QuestionRequestCard({
       form={request.form}
       answers={answers}
       state={submitting ? "answering" : "ready"}
-      notice={null}
       title={t("chat.ask.title", { who })}
       canSubmit={allAnswered(request.form, answers) && !submitting}
       onToggle={(q, option) => update(togglePick(request.form, answers, q, option))}
