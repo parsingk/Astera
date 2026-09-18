@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { chatSessionUsage } from './chatSession'
+import { claudeEffectsOf } from '../chat/claudeProtocol'
 import type { AccountUsage, RateLimitWindow } from '../types'
 
 const win = (usedPercent: number): RateLimitWindow => ({ usedPercent, resetsAt: null })
@@ -71,5 +72,48 @@ describe('chatSessionUsage', () => {
 
   it('answers null when there is not one usable figure', () => {
     expect(chatSessionUsage({ context: null, model: null, limits: null, account: null })).toBeNull()
+  })
+})
+
+// Not a second copy of the parser's own tests: this pins the whole path, frame to chip, on numbers
+// taken off a live turn rather than a recorded fixture, and on the model pair a real session actually
+// produces — the conversation's own 1M window beside a sub-agent's 200k.
+describe('a turn captured from a live session (2026-09-18)', () => {
+  const RESULT_FRAME = {
+    kind: 'message' as const,
+    type: 'result',
+    subtype: 'success',
+    body: {
+      type: 'result',
+      subtype: 'success',
+      session_id: 'captured',
+      usage: {
+        input_tokens: 2,
+        cache_creation_input_tokens: 15_981,
+        cache_read_input_tokens: 17_114,
+        output_tokens: 4
+      },
+      modelUsage: {
+        'claude-haiku-4-5-20251001': { contextWindow: 200_000 },
+        'claude-opus-5[1m]': { contextWindow: 1_000_000 }
+      }
+    }
+  }
+
+  it('reaches the context chip as a percentage of the session model window', () => {
+    const effect = claudeEffectsOf(RESULT_FRAME as never).find((e) => e.type === 'usage')
+    expect(effect).toEqual({
+      type: 'usage',
+      usedTokens: 33_101,
+      windowByModel: { 'claude-haiku-4-5-20251001': 200_000, 'claude-opus-5[1m]': 1_000_000 }
+    })
+    const chip = chatSessionUsage({
+      context: { usedTokens: 33_101, windowByModel: { 'claude-haiku-4-5-20251001': 200_000, 'claude-opus-5[1m]': 1_000_000 } },
+      model: 'claude-opus-5[1m]',
+      limits: null,
+      account: null
+    })
+    // The sub-agent's 200k would have read 17%. Naming the model is what keeps it honest.
+    expect(chip?.context).toEqual({ usedPercent: 3, usedTokens: 33_101, windowSize: 1_000_000 })
   })
 })
