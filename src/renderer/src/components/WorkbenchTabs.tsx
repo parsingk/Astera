@@ -372,7 +372,7 @@ export function WorkbenchTabs({
         }}
       >
         {activeSession.kind === 'chat' ? (
-          <span className="view-toggle-badge" title={t('session.new.kindChatHint')}>
+          <span className="view-toggle-badge">
             <MessageSquare size={13} aria-hidden="true" />
             {t('session.kind.chat')}
           </span>

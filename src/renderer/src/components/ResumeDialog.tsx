@@ -189,9 +189,6 @@ export function ResumeDialog({
           {!chatEnabled && !chatChecking && (
             <span className="kind-note">{t('session.new.kindHostOld')}</span>
           )}
-          {chatAllowed && kind === 'chat' && (
-            <span className="kind-note">{t('session.new.kindChatHint')}</span>
-          )}
         </div>
         <div className="field">
           <label>{t('session.resume.conversationLabel')}</label>

@@ -600,7 +600,6 @@ export const en: Record<keyof typeof ko, string> = {
   'session.kind.terminal': 'Terminal',
   'session.kind.chat': 'Chat',
   'session.new.kindLabel': 'Session type',
-  'session.new.kindChatHint': 'A chat session has no terminal — only the conversation view. Questions and approvals arrive as cards.',
   'session.new.kindHostOld': 'Available once the Host has been replaced by the new version',
   'session.new.folderNotSelected': '(Not selected)',
   'session.new.pickFolder': 'Select…',

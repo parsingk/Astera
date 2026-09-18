@@ -691,7 +691,6 @@ export const ko = {
   'session.kind.terminal': '터미널',
   'session.kind.chat': '대화',
   'session.new.kindLabel': '세션 방식',
-  'session.new.kindChatHint': '대화 세션은 터미널 없이 대화창만 씁니다. 선택지와 권한 확인이 카드로 옵니다.',
   'session.new.kindHostOld': 'Host 가 새 버전으로 바뀐 뒤 사용할 수 있습니다',
   'session.new.folderNotSelected': '(선택 안 됨)',
   'session.new.pickFolder': '선택…',

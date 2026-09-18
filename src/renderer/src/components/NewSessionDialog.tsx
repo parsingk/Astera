@@ -332,9 +332,6 @@ export function NewSessionDialog({
           {!chatEnabled && !chatChecking && (
             <span className="kind-note">{t('session.new.kindHostOld')}</span>
           )}
-          {chatEnabled && kind === 'chat' && (
-            <span className="kind-note">{t('session.new.kindChatHint')}</span>
-          )}
         </div>
         <div className="field">
           <label>{t('session.field.projectFolder')}</label>
