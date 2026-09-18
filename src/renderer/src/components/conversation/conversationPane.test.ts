@@ -10,6 +10,8 @@ import {
   nextAttentionFor,
   composerTextOf,
   shouldCloseStaleOpen,
+  shouldLoadEarlier,
+  LOAD_EARLIER_MARGIN_PX,
   ptyWritesFor,
   isSlashCommand,
   modelLineOf,
@@ -520,5 +522,50 @@ describe('nextPendingPromptFor', () => {
   })
   it('another session: undefined, the cue to leave the state alone', () => {
     expect(nextPendingPromptFor('s1', { sessionId: 's2', prompt })).toBeUndefined()
+  })
+})
+
+// Infinite-scroll paging for earlier turns. The 'nothing to scroll' branch is not a nicety: the
+// load-earlier button is gone, so a window shorter than the viewport leaves the reader with no way
+// to reach what came before.
+describe('shouldLoadEarlier', () => {
+  /** A viewport with a scrollbar, parked wherever the reader left it. */
+  const scrolled = (scrollTop: number): { scrollTop: number; scrollHeight: number; clientHeight: number } => ({
+    scrollTop,
+    scrollHeight: 4000,
+    clientHeight: 800
+  })
+
+  it('loads when the reader comes within the margin of the top', () => {
+    expect(shouldLoadEarlier({ ...scrolled(LOAD_EARLIER_MARGIN_PX), more: true, loadingMore: false })).toBe(true)
+  })
+
+  it('loads at the very top', () => {
+    expect(shouldLoadEarlier({ ...scrolled(0), more: true, loadingMore: false })).toBe(true)
+  })
+
+  it('leaves a reader further down alone', () => {
+    expect(
+      shouldLoadEarlier({ ...scrolled(LOAD_EARLIER_MARGIN_PX + 1), more: true, loadingMore: false })
+    ).toBe(false)
+  })
+
+  it('does not stack a second request on the one in flight', () => {
+    expect(shouldLoadEarlier({ ...scrolled(0), more: true, loadingMore: true })).toBe(false)
+  })
+
+  it('does nothing once the start of the file has been reached', () => {
+    expect(shouldLoadEarlier({ ...scrolled(0), more: false, loadingMore: false })).toBe(false)
+  })
+
+  it('loads when there is nothing to scroll, wherever the viewport claims to be', () => {
+    // No scrollbar: no scroll event will ever arrive, so this is the only thing that keeps paging.
+    const unscrollable = { scrollTop: 0, scrollHeight: 500, clientHeight: 800 }
+    expect(shouldLoadEarlier({ ...unscrollable, more: true, loadingMore: false })).toBe(true)
+  })
+
+  it('still respects a request in flight when there is nothing to scroll', () => {
+    const unscrollable = { scrollTop: 0, scrollHeight: 500, clientHeight: 800 }
+    expect(shouldLoadEarlier({ ...unscrollable, more: true, loadingMore: true })).toBe(false)
   })
 })

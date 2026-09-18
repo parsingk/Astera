@@ -1496,7 +1496,7 @@ export const ko = {
   'conversation.unavailable': '이 세션은 아직 기록이 없습니다',
   'conversation.empty': '아직 주고받은 것이 없습니다',
   'conversation.composer.placeholder': '무엇을 시킬까요',
-  'conversation.loadMore': '이전 대화 더 보기',
+  'conversation.loadingEarlier': '이전 대화 불러오는 중',
   // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
   'conversation.toggle.terminal': '터미널',
   'conversation.toggle.conversation': '대화',

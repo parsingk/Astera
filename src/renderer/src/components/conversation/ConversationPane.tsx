@@ -18,7 +18,7 @@ import {
   type AppendMessage,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import { ChevronUpIcon } from "lucide-react";
+import { Loader2Icon } from "lucide-react";
 import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.aui";
 
 /** The composer belongs to this subtree, and a controlled input that re-renders while a character is
@@ -26,7 +26,6 @@ import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.a
  *  menu below changes on every key, so the menu must not be able to re-render this: its rows travel
  *  by context to a slot inside, and everything else this takes is stable. */
 const MemoThread = memo(Thread);
-import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
 import {
   PendingBanner,
@@ -400,6 +399,36 @@ export function composerTextOf(parts: AppendMessage["content"]): string {
  */
 export function shouldCloseStaleOpen(mountedFor: string | null, sessionId: string): boolean {
   return mountedFor !== sessionId;
+}
+
+/** How near the top counts as having arrived there. The same allowance HistoryBrowser's own infinite
+ *  scroll gives its sentinel, so the earlier window is on its way before the reader runs out of page
+ *  rather than after. */
+export const LOAD_EARLIER_MARGIN_PX = 120;
+
+/**
+ * Whether the earlier window should be fetched now.
+ *
+ * The second branch is what replaces the button rather than merely automating it. A window shorter
+ * than the viewport has no scrollbar, so no scroll event can ever arrive and the reader has nothing
+ * to drag: with the button gone that is a conversation whose start cannot be reached at all. Paging
+ * on that condition fills the viewport and then stops, because once there is a scrollbar the first
+ * branch takes over.
+ *
+ * It also settles the frame between a pane rendering its first window and the thread scrolling to the
+ * bottom. The viewport reads as scrolled to the top for that frame, but it already overflows, so the
+ * first branch is the one consulted and it says no.
+ */
+export function shouldLoadEarlier(v: {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  more: boolean;
+  loadingMore: boolean;
+}): boolean {
+  if (!v.more || v.loadingMore) return false;
+  if (v.scrollHeight <= v.clientHeight) return true;
+  return v.scrollTop <= LOAD_EARLIER_MARGIN_PX;
 }
 
 /**
@@ -1062,6 +1091,33 @@ export function ConversationPane({
     observer.observe(content);
     return () => observer.disconnect();
   }, [status]);
+
+  // Paging upward, the way the history list pages downward. The scroll listener covers the ordinary
+  // case; the call on attach covers the one no scroll event can reach, where the window on screen is
+  // shorter than the viewport (see shouldLoadEarlier). `turns` is in the dependencies for the same
+  // reason — a prepend that still does not fill the viewport has to ask again, or paging stalls one
+  // window short of the start.
+  useEffect(() => {
+    const viewport = threadViewport(paneRef.current);
+    if (!viewport) return;
+    const check = (): void => {
+      if (
+        shouldLoadEarlier({
+          scrollTop: viewport.scrollTop,
+          scrollHeight: viewport.scrollHeight,
+          clientHeight: viewport.clientHeight,
+          more,
+          loadingMore
+        })
+      ) {
+        loadMore();
+      }
+    };
+    check();
+    // Passive: this only reads the viewport, and saying so keeps it off the scrolling path.
+    viewport.addEventListener("scroll", check, { passive: true });
+    return () => viewport.removeEventListener("scroll", check);
+  }, [status, turns, more, loadingMore, loadMore]);
 
   /** Sent, and not yet seen come back in the transcript — see core/history/pendingSends.ts. */
   const [pending, setPending] = useState<readonly PendingSend[]>([]);
@@ -2333,12 +2389,12 @@ export function ConversationPane({
           <SessionStateBanners sessionId={sessionId} rollState={rollState} schedState={schedState} />
         </div>
       )}
-      {more && (
-        <div className="border-border/60 flex justify-center border-b py-1">
-          <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>
-            <ChevronUpIcon />
-            {t("conversation.loadMore")}
-          </Button>
+      {/* Only while a window is on its way. There is nothing to press any more, and a bar that sat
+          there whenever earlier turns existed would be a button that has stopped being one. */}
+      {loadingMore && (
+        <div className="border-border/60 text-muted-foreground flex items-center justify-center gap-1.5 border-b py-1.5 text-xs">
+          <Loader2Icon className="size-3 animate-spin" aria-hidden="true" />
+          {t("conversation.loadingEarlier")}
         </div>
       )}
       <div className="min-h-0 flex-1">

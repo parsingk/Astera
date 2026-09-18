@@ -1290,7 +1290,7 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.unavailable': 'This session has no transcript yet',
   'conversation.empty': 'Nothing has been said yet',
   'conversation.composer.placeholder': 'What should it do',
-  'conversation.loadMore': 'Load earlier',
+  'conversation.loadingEarlier': 'Loading earlier messages',
   // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
   'conversation.toggle.terminal': 'Terminal',
   'conversation.toggle.conversation': 'Conversation',
