@@ -116,8 +116,8 @@ export function ModelControl({
             onClick={onTogglePlan}
             // Styled in styles.css (.plan-pill), keyed on aria-pressed: this project has no Tailwind
             // colour tokens (bg-foreground and friends compile to nothing — measured: the pill looked
-            // the same on and off), and its active toggles (.sv-seg.active, .kind-segmented .segmented.active)
-            // are plain CSS on the same three variables, so the pill follows them.
+            // the same on and off), and its active toggle (.kind-segmented .segmented.active) is plain
+            // CSS on the same three variables, so the pill follows it.
             className="plan-pill"
           >
             {t("chat.model.plan")}

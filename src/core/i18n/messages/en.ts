@@ -1292,8 +1292,6 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.composer.placeholder': 'What should it do',
   'conversation.loadingEarlier': 'Loading earlier messages',
   // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
-  'conversation.toggle.terminal': 'Terminal',
-  'conversation.toggle.conversation': 'Conversation',
   // Task 9 — the chat pane's request card (ChatRequestCard.tsx) and the plan-mode pill (ModelControl.tsx)
   'chat.ask.title': '{who} asks',
   'chat.approval.title': '{who} asks to run {tool}',

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Attention, SessionKind, SessionView } from '../../../core/types'
+import type { SessionKind } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
@@ -126,8 +126,7 @@ export function WorkbenchTabs({
   renamingTabId,
   onRenameStart,
   onRenameEnd,
-  activeSession,
-  onSetSessionView
+  activeSession
 }: {
   tabs: WorkbenchTab[]
   activeTabId: string | null
@@ -152,13 +151,10 @@ export function WorkbenchTabs({
   onRenameStart: (tabId: string) => void
   /** 끝났다. title이 null이면 취소, 아니면 그 값으로 확정한다 */
   onRenameEnd: (tabId: string, title: string | null) => void
-  /** Task 10: the terminal/conversation toggle's own data, present only when this pane's active tab
-   *  is a session — null for a file, browser, or record tab, which is what keeps the toggle off
-   *  screen there. PaneGrid computes it (parseTab, its sessionViews and its attention record are
-   *  all its own); this component only draws what it is handed. */
-  activeSession: { sessionId: string; view: SessionView; attention: Attention; kind: SessionKind } | null
-  /** The toggle's own write. */
-  onSetSessionView: (sessionId: string, view: SessionView) => void
+  /** Which kind of session this pane's active tab is, or null for a file, browser or record tab —
+   *  which is what keeps the badge off screen there. PaneGrid computes it (parseTab is its own);
+   *  this component only draws what it is handed. */
+  activeSession: { kind: SessionKind } | null
 }): React.JSX.Element {
   const { t } = useI18n()
   // 드래그 중인 탭과 드롭 표시 위치(insertBefore ∈ [0, n]) — 드래그하는 동안만 쓰는 상태
@@ -345,23 +341,22 @@ export function WorkbenchTabs({
         +
       </button>
     </div>
-    {/* The terminal/conversation toggle (Task 10) — a sibling of .tabs, not a child of it: .tabs
-        scrolls and clips (overflow-x: auto) once there are enough tabs to need it, and the toggle
-        has to stay reachable regardless, the same reason .new-tab above is pinned with
-        position: sticky rather than living past the scroll. Only for a pane whose active tab is a
-        session (activeSession is null otherwise) — a file, browser, or record tab has no terminal
-        or conversation to switch between.
-        Fix round 1: icon-only, not the two words. At words this ran to ~170px in English and was
-        flex:none beside a shrinking .tabs — at MAX_PANES's four columns on a modest window that left
-        less room than one tab's own min-width, squeezing every tab bar in the app to fit a control
-        used far less often than a tab is clicked. The words still exist, in `title`/`aria-label` and
-        in the setting's own row in Settings.
-        Its own onDragOver/onDrop/onDragLeave mirror .tabs's (below): before this toggle existed,
-        .tabs was this bar's sole child and its own handlers covered the whole width, including the
-        empty space past the last tab — dropAt(tabs.length) there means "insert after the last tab",
-        the same target this strip now sits over. Without its own copy, that same drop would land on
-        no element with a handler at all, and a session pane's bar would refuse a tab dropped on its
-        right third. */}
+    {/* What kind of session the active tab is. A sibling of .tabs, not a child of it: .tabs scrolls
+        and clips (overflow-x: auto) once there are enough tabs to need it, and this has to stay
+        readable regardless, the same reason .new-tab above is pinned with position: sticky rather
+        than living past the scroll. Only for a pane whose active tab is a session (activeSession is
+        null otherwise).
+        This was a terminal/conversation toggle. A terminal session's conversation view could not
+        show what a chat session's does — it had no protocol to read, so its questions, its choices
+        and its model menu were all reconstructed by scraping the CLI's screen, and the two views of
+        the same feature disagreed. The kind is now fixed when the session is made, and this says
+        which one it is.
+        Its own onDragOver/onDrop/onDragLeave mirror .tabs's (below), and outlive the toggle: .tabs
+        was once this bar's sole child and its handlers covered the whole width, including the empty
+        space past the last tab — dropAt(tabs.length) there means "insert after the last tab", the
+        same target this strip sits over. Without its own copy, that drop would land on no element
+        with a handler at all, and a session pane's bar would refuse a tab dropped on its right
+        third. */}
     {activeSession && (
       <div
         className="session-view-toggle"
@@ -377,42 +372,15 @@ export function WorkbenchTabs({
         }}
       >
         {activeSession.kind === 'chat' ? (
-          // A chat session has no terminal to switch to — the toggle would offer a choice that does
-          // nothing, so this badge stands in its place instead (Task 8's brief).
           <span className="view-toggle-badge" title={t('session.new.kindChatHint')}>
+            <MessageSquare size={13} aria-hidden="true" />
             {t('session.kind.chat')}
           </span>
         ) : (
-          <>
-            <button
-              type="button"
-              className={`sv-seg${activeSession.view === 'terminal' ? ' active' : ''}`}
-              aria-pressed={activeSession.view === 'terminal'}
-              title={t('conversation.toggle.terminal')}
-              aria-label={t('conversation.toggle.terminal')}
-              onClick={() => onSetSessionView(activeSession.sessionId, 'terminal')}
-            >
-              <Terminal size={13} aria-hidden="true" />
-              {/* The marker sits on the segment the person is NOT looking at — it is the one telling
-                  them where to look, not the one they are already on. */}
-              {activeSession.attention === 'waiting' && activeSession.view === 'conversation' && (
-                <span className="sv-seg-marker" aria-hidden="true" />
-              )}
-            </button>
-            <button
-              type="button"
-              className={`sv-seg${activeSession.view === 'conversation' ? ' active' : ''}`}
-              aria-pressed={activeSession.view === 'conversation'}
-              title={t('conversation.toggle.conversation')}
-              aria-label={t('conversation.toggle.conversation')}
-              onClick={() => onSetSessionView(activeSession.sessionId, 'conversation')}
-            >
-              <MessageSquare size={13} aria-hidden="true" />
-              {activeSession.attention === 'waiting' && activeSession.view === 'terminal' && (
-                <span className="sv-seg-marker" aria-hidden="true" />
-              )}
-            </button>
-          </>
+          <span className="view-toggle-badge">
+            <Terminal size={13} aria-hidden="true" />
+            {t('session.kind.terminal')}
+          </span>
         )}
       </div>
     )}

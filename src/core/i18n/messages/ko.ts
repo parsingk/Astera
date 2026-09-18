@@ -1498,8 +1498,6 @@ export const ko = {
   'conversation.composer.placeholder': '무엇을 시킬까요',
   'conversation.loadingEarlier': '이전 대화 불러오는 중',
   // Task 10 — the terminal/conversation toggle in the session tab's own tab bar
-  'conversation.toggle.terminal': '터미널',
-  'conversation.toggle.conversation': '대화',
   // Task 9 — the chat pane's request card (ChatRequestCard.tsx) and the plan-mode pill (ModelControl.tsx)
   'chat.ask.title': '{who} 가 묻습니다',
   'chat.approval.title': '{who} 가 {tool} 실행 허가를 묻습니다',

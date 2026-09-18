@@ -350,11 +350,6 @@ export interface PendingToolPrompt {
   at: number
 }
 
-/** Which of the terminal or the conversation a terminal session's tab is showing (Task 10). Chosen
- *  per tab through the toggle in the tab bar; a tab starts on the terminal. A chat session has no
- *  terminal and is not described by this at all. */
-export type SessionView = 'terminal' | 'conversation'
-
 /** One project terminal */
 export interface TerminalInfo {
   id: string

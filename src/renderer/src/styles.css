@@ -1886,27 +1886,24 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    It is sticky above the tabs, so its background has to be the same opaque colour as the bar or the tabs
    passing underneath show through */
 .pane-tabbar .new-tab { padding: 0 10px; align-self: stretch; position: sticky; right: 0; z-index: 1; background: var(--panel); }
-/* The terminal/conversation toggle (Task 10) — a sibling of .tabs inside .pane-tabbar, pinned at the
-   right the same way .new-tab is, but as a flex sibling rather than position:sticky: unlike the tabs
-   row this one never scrolls, so there is nothing to stay pinned against.
-   Fix round 1: icon-only (~46px total for the pair), not two words (~170px) — a flex:none control at
-   word-width left less than one tab's own min-width once MAX_PANES's four columns narrowed every
-   bar; the words survive as title/aria-label on each button and as the setting's own row label. */
+/* The session-kind badge's slot — a sibling of .tabs inside .pane-tabbar, pinned at the right the
+   same way .new-tab is, but as a flex sibling rather than position:sticky: unlike the tabs row this
+   one never scrolls, so there is nothing to stay pinned against. The class name is the one the
+   terminal/conversation toggle left behind; the slot outlived it because .tabs's drop handling ends
+   where this begins (WorkbenchTabs.tsx has that story). */
 .session-view-toggle { display: flex; align-items: center; gap: 3px; padding: 0 6px; flex: none; }
-/* Task 8: a chat session has no terminal to switch to, so its pane wears this instead of the two
-   .sv-seg buttons above — same slot (inside .session-view-toggle), sized to match their height
-   (.sv-seg's 4px padding + 1px border around a 13px icon) rather than the toggle's own tighter 3px
-   gap, so the tab bar's right edge does not visibly resize between a terminal and a chat tab. Muted
-   and non-interactive on purpose — it names the session's kind, it does not offer a choice. */
+/* Which kind of session the active tab is. Muted and non-interactive on purpose — it names the kind,
+   it does not offer a choice, because the kind is fixed when the session is made. Both kinds wear the
+   same box, so the tab bar's right edge does not resize as tabs of the two kinds are clicked. */
 .view-toggle-badge {
-  display: inline-flex; align-items: center; justify-content: center;
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
   height: 21px; padding: 0 8px; font-size: 11px; line-height: 1;
   color: var(--text-dim); background: var(--elevated); border: 1px solid var(--line);
   border-radius: var(--radius-sm); white-space: nowrap; cursor: default;
 }
-/* The chat composer's Plan pill (ModelControl.tsx, chat sessions only). Same three variables as the
-   active states of .sv-seg and .kind-segmented, so "on" reads the way every other pressed toggle in
-   the app reads: accent border, lifted background, full text colour. Off is muted, like .sv-seg. */
+/* The chat composer's Plan pill (ModelControl.tsx, chat sessions only). Same three variables as
+   .kind-segmented's active state, so "on" reads the way every other pressed toggle in the app reads:
+   accent border, lifted background, full text colour. Off is muted. */
 .plan-pill {
   flex: none; display: inline-flex; align-items: center; padding: 2px 6px;
   font-size: 10px; line-height: 1; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase;
@@ -1917,17 +1914,6 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* On reads as on from across the room: accent text and border on the lifted background, and bolder —
    a 1px accent border alone was the whole difference and it did not register (measured). */
 .plan-pill[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--elevated); font-weight: 700; }
-.sv-seg {
-  position: relative; display: flex; align-items: center; justify-content: center; padding: 4px;
-  color: var(--text-dim); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-.sv-seg.active { color: var(--text); border-color: var(--accent); background: var(--elevated); }
-/* A corner badge, not an inline dot beside the icon — the button's own box stays the same small size
-   whether or not it is marked, which an inline dot (with its own gap) would not. The colour is the
-   same --warn-ink the in-pane pending banner uses (PendingBanner.tsx's --warn-bg/--warn-ink), so the
-   two read as the one signal rather than two different ones. */
-.sv-seg-marker { position: absolute; top: -2px; right: -2px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn-ink); }
 
 /* ---------- status bar ---------- */
 .statusbar {

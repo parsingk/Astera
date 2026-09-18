@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, Attention, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, SessionView, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
+import type { Account, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -600,12 +600,6 @@ export default function App(): React.JSX.Element {
   const [rollStates, setRollStates] = useState<Record<string, RollStateEvent>>({})
   const [schedStates, setSchedStates] = useState<Record<string, SchedStateEvent>>({}) // the schedule banner
   const [busy, setBusy] = useState<Record<string, boolean>>({}) // whether each session is working — the tab spinner
-  // Task 10's tab-bar marker (PaneGrid.tsx's own comment on the prop has the full reasoning). Same
-  // shape and the same subscription convention as rollStates/schedStates/busy above.
-  const [attention, setAttention] = useState<Record<string, Attention>>({})
-  // Every session id ever asked about with the one-shot attention read below — read once per
-  // session, ever, not on every render or every sessions-list change.
-  const requestedAttentionRef = useRef<Set<string>>(new Set())
   // Every session whose roll-state / schedule push listener has decided banner state at least once. A
   // seed reply is dropped for a session already in the set: an invoke reply and a push have no order
   // between them, so a push — including an 'off'/'none' that removed the banner — is always the fresher
@@ -615,17 +609,6 @@ export default function App(): React.JSX.Element {
   // seed that is still the only thing that knows what the banner should say.
   const heardRollRef = useRef<Set<string>>(new Set())
   const heardSchedRef = useRef<Set<string>>(new Set())
-  // Fix round 1: the most recent session:rolled, for PaneGrid to carry a rolled session's remembered
-  // terminal/conversation choice to its new id (PaneGrid's own `lastRoll` prop comment has the full
-  // reasoning). Deliberately never reset back to null — see that comment.
-  // One slot, deliberately: if two different sessions ever rolled inside a single React commit, the
-  // second value would overwrite the first and that tab's choice would fall back to the setting.
-  // Nobody has seen that happen (each roll reaches here as its own IPC message, after its own file
-  // I/O), and the cost when it does is one tab showing the default until someone clicks the toggle,
-  // so a queue and the pruning it would need buy less than they cost.
-  const [lastRoll, setLastRoll] = useState<{ oldSessionId: string; newSessionId: string } | null>(
-    null
-  )
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]) // file viewer tabs
   // How It Works record detail tabs. Kept in a separate list for the same reason as file tabs — a
   // `record:<id>` tab id carries neither the project nor the title, so this tab could not be drawn,
@@ -1303,26 +1286,9 @@ export default function App(): React.JSX.Element {
         const { [oldSessionId]: _dropped, ...rest } = prev
         return rest
       })
-      // Same drop, same reason: main's attention tracking (src/main/attention.ts) is per session id
-      // and starts fresh for the new one, so the old id's verdict is stale the instant it rolls.
-      setAttention((prev) => {
-        const { [oldSessionId]: _dropped, ...rest } = prev
-        return rest
-      })
-      // Fix round 1: the opposite of the three drops above — the terminal/conversation choice is not
-      // a verdict about the process, it is a property of the tab, and the tab is the same one. Tells
-      // PaneGrid to carry it to the new id instead of reading a rename as an unrelated close+open.
-      setLastRoll({ oldSessionId, newSessionId: info.id })
     })
     const offBusy = window.api.on('session:busy', ({ sessionId, busy: b }) =>
       setBusy((prev) => (prev[sessionId] === b ? prev : { ...prev, [sessionId]: b }))
-    )
-    // Task 10's tab-bar marker. Fires app-wide on every attention change regardless of whether any
-    // conversation pane happens to be open (core/types.ts's own doc on the event) — this is a second,
-    // independent listener from ConversationPane's own, not something threaded down from it; see the
-    // `attention` prop's own comment in PaneGrid.tsx for why that duplication is deliberate.
-    const offAttention = window.api.on('conversation:attention', (e) =>
-      setAttention((prev) => (prev[e.sessionId] === e.value ? prev : { ...prev, [e.sessionId]: e.value }))
     )
     const offRollState = window.api.on('session:rollState', (ev) => {
       // A failed auto-resume is announced with a toast. Why not a banner: a banner only disappears once
@@ -1362,33 +1328,10 @@ export default function App(): React.JSX.Element {
     return () => {
       offRolled()
       offBusy()
-      offAttention()
       offRollState()
       offSchedState()
     }
   }, [])
-
-  // The one-shot half of Task 10's attention tracking, same pattern ConversationPane's own mount
-  // effect uses and for the same reason: 'conversation:attention' above only fires on a change, so a
-  // session already `waiting` before this ever asked about it would read as unmarked until its next
-  // change — which, for a session stuck on the very prompt the marker exists to surface, may not
-  // come. No sawLiveAttention-style ordering flag is needed the way ConversationPane's has one:
-  // `attention` starts with no entry for a session rather than seeding it to 'idle', so "already has
-  // an entry by the time this resolves" can only mean the live listener above beat it there — the
-  // one and only other writer of this id — so checking presence is enough to stop a late read from
-  // clobbering a newer value.
-  useEffect(() => {
-    for (const s of sessions) {
-      if (requestedAttentionRef.current.has(s.id)) continue
-      requestedAttentionRef.current.add(s.id)
-      void window.api.conversation
-        .attention(s.id)
-        .then((value) => {
-          setAttention((prev) => (s.id in prev ? prev : { ...prev, [s.id]: value }))
-        })
-        .catch(() => {})
-    }
-  }, [sessions])
 
   // When a shell dies on its own (the user typed exit) its tab is removed — a dead shell tab is noise.
   // If it was the active tab, we go back to Run (the panel itself stays).
@@ -3938,8 +3881,6 @@ export default function App(): React.JSX.Element {
                 rollStates={rollStates}
                 schedStates={schedStates}
                 busy={busy}
-                attention={attention}
-                lastRoll={lastRoll}
                 draggingTabId={dragTabId}
                 newDisabled={!anyCliOk}
                 onFocusPane={setActivePaneId}
