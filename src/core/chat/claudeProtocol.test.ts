@@ -187,6 +187,8 @@ describe('claudeEffectsOf', () => {
   it('a successful result ends the turn and goes idle without an error', () => {
     expect(claudeEffectsOf(message(F.RESULT_SUCCESS_ASK))).toEqual([
       { type: 'turn', turnId: null },
+      // The same frame also reports what the turn left in the context; its own test is further down.
+      { type: 'usage', usedTokens: 57059, windowByModel: { 'claude-haiku-4-5-20251001': 200000, 'claude-fable-5-1': 1000000 } },
       { type: 'event', event: { type: 'status', status: 'idle' } }
     ])
   })
@@ -221,7 +223,21 @@ describe('claudeEffectsOf', () => {
   it('a rate_limit_event becomes a rateLimit effect with the wire fields normalised', () => {
     const effects = claudeEffectsOf(message(F.RATE_LIMIT_EVENT))
     expect(effects).toEqual([
-      { type: 'rateLimit', info: { status: 'allowed_warning', resetsAt: 1789552800 * 1000, utilization: 0.99, window: 'seven_day', source: 'event' } }
+      {
+        type: 'rateLimit',
+        info: {
+          status: 'allowed_warning',
+          resetsAt: 1789552800 * 1000,
+          utilization: 0.99,
+          window: 'seven_day',
+          source: 'event',
+          // Both windows ride along for the status bar; the fields above name only the one that fired.
+          windows: {
+            session: { usedPercent: 42, resetsAt: new Date(1789539600 * 1000).toISOString() },
+            weekly: { usedPercent: 99, resetsAt: new Date(1789552800 * 1000).toISOString() }
+          }
+        }
+      }
     ])
   })
 
@@ -252,5 +268,53 @@ describe('claudeEffectsOf', () => {
     const effects = claudeEffectsOf(message(line))
     expect(effects.map((e) => e.type)).toEqual(['event', 'rateLimit'])
     expect(effects[1]).toMatchObject({ type: 'rateLimit', info: { status: 'rejected', source: 'assistant' } })
+  })
+})
+
+// The status bar's three chips have no statusLine to read in a chat session: that capture is planted
+// by the pty manager alone. What the pty reads off the statusLine, a chat session gets here instead.
+describe('claudeEffectsOf — what the usage chips need', () => {
+  it('a result frame reports the tokens the turn left in the context, and every window offered', () => {
+    const effects = claudeEffectsOf(message(F.RESULT_SUCCESS_ASK))
+    expect(effects).toContainEqual({
+      type: 'usage',
+      // input + cache_creation + cache_read + output. Checked against four real statusLine payloads:
+      // this sum over context_window_size reproduces the used_percentage the CLI writes itself.
+      usedTokens: 34 + 0 + 56764 + 261,
+      // Every model in the frame, the sub-agent's included. Which one the conversation is on is a
+      // question this frame cannot answer, and the adapter can.
+      windowByModel: { 'claude-haiku-4-5-20251001': 200000, 'claude-fable-5-1': 1000000 }
+    })
+  })
+
+  it('a result frame with no usage of its own reports nothing', () => {
+    const line = JSON.stringify({ type: 'result', subtype: 'success', session_id: 's' })
+    expect(claudeEffectsOf(message(line)).map((e) => e.type)).toEqual(['turn', 'event'])
+  })
+
+  it('an aborted turn, whose usage is all zeros, reports nothing', () => {
+    // Blanking a chip that was reading correctly a moment ago is worse than leaving it.
+    expect(claudeEffectsOf(message(F.RESULT_ABORTED)).map((e) => e.type)).not.toContain('usage')
+  })
+
+  it('a rate_limit_event carries both windows, not only the one that fired', () => {
+    const effects = claudeEffectsOf(message(F.RATE_LIMIT_EVENT))
+    expect(effects[0]).toMatchObject({
+      type: 'rateLimit',
+      info: {
+        // utilization on this wire is 0..1, where the statusLine's own field is already a percentage
+        windows: {
+          session: { usedPercent: 42, resetsAt: new Date(1789539600 * 1000).toISOString() },
+          weekly: { usedPercent: 99, resetsAt: new Date(1789552800 * 1000).toISOString() }
+        }
+      }
+    })
+  })
+
+  it('a rate limit inferred from a rejected turn has no windows to carry', () => {
+    const limitText = "You've hit your " + 'session limit · resets 3pm'
+    const line = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: limitText, session_id: 's' })
+    const effects = claudeEffectsOf(message(line))
+    expect(effects.find((e) => e.type === 'rateLimit')).toMatchObject({ info: { windows: null } })
   })
 })

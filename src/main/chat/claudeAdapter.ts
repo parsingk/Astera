@@ -154,6 +154,11 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
         // pane draws nothing from it, so there is no state field for `patch` to coalesce it into.
         core.emit({ type: 'rateLimit', info: effect.info })
         break
+      case 'usage':
+        // Same arrangement, and for the same reason: the status bar reads it off the stream and the
+        // pane draws nothing from it.
+        core.emit({ type: 'usage', context: { usedTokens: effect.usedTokens, windowByModel: effect.windowByModel } })
+        break
       default:
         // 'resolved' and 'fileChange' are Codex-only; claudeEffectsOf never emits them.
         break

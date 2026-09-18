@@ -404,7 +404,22 @@ describe('createClaudeAdapter — rate limit', () => {
     p.feed(F.RATE_LIMIT_EVENT)
     await tick()
     expect(events.filter((e) => e.type === 'rateLimit')).toEqual([
-      { type: 'rateLimit', info: { status: 'allowed_warning', resetsAt: 1789552800 * 1000, utilization: 0.99, window: 'seven_day', source: 'event' } }
+      {
+        type: 'rateLimit',
+        info: {
+          status: 'allowed_warning',
+          resetsAt: 1789552800 * 1000,
+          utilization: 0.99,
+          window: 'seven_day',
+          source: 'event',
+          // Both windows ride along for the status bar, which draws a chip for each; the fields above
+          // name only the one that fired.
+          windows: {
+            session: { usedPercent: 42, resetsAt: new Date(1789539600 * 1000).toISOString() },
+            weekly: { usedPercent: 99, resetsAt: new Date(1789552800 * 1000).toISOString() }
+          }
+        }
+      }
     ])
     expect(a.state()).toEqual(before)
   })

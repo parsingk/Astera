@@ -238,6 +238,11 @@ export type ProtocolEffect =
   /** Claude only, for now: a rate-limit signal, straight through to a ChatEvent of the same shape —
    *  see RateLimitInfo (core/chat/types.ts) for where each field comes from. */
   | { type: 'rateLimit'; info: RateLimitInfo }
+  /** Claude only: what a completed turn left sitting in the context. `windowByModel` is every model
+   *  the frame accounted for, the sub-agent's included, because the frame does not say which one the
+   *  conversation is on and the adapter does. Emitted only when the figures are usable, so an aborted
+   *  turn's row of zeros cannot blank a chip that was reading correctly a moment ago. */
+  | { type: 'usage'; usedTokens: number; windowByModel: Record<string, number> }
 
 export function effectsOf(frame: Extract<CodexFrame, { kind: 'notification' }>): ProtocolEffect[] {
   const p = obj(frame.params) ?? {}

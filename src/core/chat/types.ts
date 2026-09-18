@@ -1,4 +1,4 @@
-import type { Attention } from '../types'
+import type { Attention, RateLimitWindow } from '../types'
 import type { AskForm, Answer } from '../prompts/askUserQuestion'
 import type { ToolRequestSummary } from '../prompts/toolRequest'
 import type { ModelDescriptor } from '../models/types'
@@ -37,8 +37,8 @@ export interface ChatState {
 }
 
 /** A Claude rate-limit signal, however it arrived — the dedicated event, a rejected turn's result
- *  text, or an assistant frame's error. Consumed by rolling and Slack; the pane draws none of it, so
- *  ChatState carries no field for it. */
+ *  text, or an assistant frame's error. Consumed by rolling and Slack, and by the status bar's two
+ *  limit chips through `windows`; the pane itself draws none of it. */
 export interface RateLimitInfo {
   /** 'allowed' | 'allowed_warning' | 'rejected' as the CLI says it; anything else is passed through for the log. */
   status: string
@@ -50,6 +50,21 @@ export interface RateLimitInfo {
   window: string | null
   /** Where the signal came from — the event itself, a rejected turn's result text, or an assistant frame's error. */
   source: 'event' | 'result' | 'assistant'
+  /** Both limit windows as the event's `unifiedWindows` gives them, already turned into percentages.
+   *  `window` and `utilization` above name only the one that fired, which is a warning, not a reading:
+   *  the status bar draws both chips and a signal about the weekly one says nothing about the 5-hour.
+   *  null when the signal was inferred rather than received (a rejected turn, an assistant error),
+   *  because those carry no figures at all. Optional so the many places that build this value for a
+   *  test of something else stay as they are: every consumer treats absent and null alike. */
+  windows?: { session: RateLimitWindow | null; weekly: RateLimitWindow | null } | null
+}
+
+/** What a finished turn left sitting in the context, off the CLI's own accounting for that turn.
+ *  `windowByModel` holds every model the turn accounted for, the sub-agent's included: the frame does
+ *  not say which one the conversation is on, and the reader of this does. */
+export interface ChatContextUsage {
+  usedTokens: number
+  windowByModel: Record<string, number>
 }
 
 export type ChatEvent =
@@ -64,6 +79,9 @@ export type ChatEvent =
   | { type: 'error'; message: string }
   /** Claude only, for now. */
   | { type: 'rateLimit'; info: RateLimitInfo }
+  /** Claude only: what the turn that just finished left in the context. A pty session reads the same
+   *  figure off its statusLine; a chat session has no statusLine, so it is reported here. */
+  | { type: 'usage'; context: ChatContextUsage }
   | { type: 'exit'; code: number }
 
 export interface ChatAdapter {
