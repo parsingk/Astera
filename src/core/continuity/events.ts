@@ -2,8 +2,9 @@
 // a write (P0 design §5). Derived rather than emitted at each command so no command can forget one —
 // the same reason core/orchestration/timeline.ts derives the Timeline. Pure: no fs, no clock; `now`
 // is an argument. Main-side (view.ts pulls node:path in): not for tsconfig.web.json.
+import { repairCountOf, reviewRoundOf } from '../orchestration/convergence'
 import type { OrchState } from '../orchestration/state'
-import type { Dispatch, Gate, Run, TaskStatus } from '../orchestration/types'
+import type { Dispatch, Gate, GateKind, Run, TaskStatus } from '../orchestration/types'
 import { outcomeOf } from '../orchestration/view'
 
 export type ContinuityEventType =
@@ -124,24 +125,30 @@ function runEndEvents(prev: OrchState, next: OrchState, now: string): Continuity
   return out
 }
 
-/** Which events a Task transition is. A check's verdict (validating → a state other than blocked,
- *  unless the Gate that sent it there is a convergence exhaustion) comes first; blocked out of
- *  validating is ordinarily a question about an interrupted check, not a verdict — but a Gate opened
- *  because repair ran out of attempts is a verdict's result, so exhausted overrides the exclusion.
- *  A passed check leaves validating for completed, or for reviewing when a reviewer is queued
- *  (applyValidationResult) — both are TASK_CHECK_PASSED.
+/** Which events a Task transition is. A check's verdict (validating → a state other than blocked)
+ *  comes first; blocked out of validating is ordinarily a question about an interrupted check, not a
+ *  verdict — but a Gate of **either** convergence kind opened out of validating/reviewing is a
+ *  verdict's result, not an interruption: `routeFailure` writes the failing `checks`/`reviewIssues`
+ *  and *then* opens the Gate, whether that Gate is `'convergence-blocked'` (the owner stopped
+ *  auto-fix, the Run is paused, or a repair Dispatch could not be opened) or `'convergence-exhausted'`
+ *  (the repair/review budget ran out). So `gateKind` — not just "was it exhaustion" — decides whether
+ *  a verdict fires; `exhausted` (derived from it) only decides whether TASK_CONVERGENCE_EXHAUSTED
+ *  additionally fires on top of that verdict. A passed check leaves validating for completed, or for
+ *  reviewing when a reviewer is queued (applyValidationResult) — both are TASK_CHECK_PASSED.
  *
  *  A review's verdict (design §12): passing leaves reviewing for completed (TASK_REVIEW_PASSED);
  *  changes requested either opens a repair Dispatch (reviewing → dispatched) or, once review rounds
- *  are exhausted, lands on blocked with a convergence-exhausted Gate — both are
- *  TASK_REVIEW_CHANGES_REQUESTED. TASK_CONVERGENCE_EXHAUSTED always follows the verdict that
- *  triggered it and precedes the main event, whichever verdict it was. */
-function taskTransitionEvents(from: TaskStatus, to: TaskStatus, exhausted: boolean): ContinuityEventType[] {
+ *  are exhausted or blocked, lands on blocked with a Gate — both are TASK_REVIEW_CHANGES_REQUESTED.
+ *  TASK_CONVERGENCE_EXHAUSTED always follows the verdict that triggered it and precedes the main
+ *  event, whichever verdict it was. */
+function taskTransitionEvents(from: TaskStatus, to: TaskStatus, gateKind: GateKind | undefined): ContinuityEventType[] {
+  const verdictGated = gateKind !== undefined
+  const exhausted = gateKind === 'convergence-exhausted'
   const verdicts: ContinuityEventType[] = []
-  if (from === 'validating' && (to !== 'blocked' || exhausted))
+  if (from === 'validating' && (to !== 'blocked' || verdictGated))
     verdicts.push(to === 'completed' || to === 'reviewing' ? 'TASK_CHECK_PASSED' : 'TASK_CHECK_FAILED')
   if (from === 'reviewing' && to === 'completed') verdicts.push('TASK_REVIEW_PASSED')
-  if (from === 'reviewing' && (to === 'dispatched' || (to === 'blocked' && exhausted)))
+  if (from === 'reviewing' && (to === 'dispatched' || (to === 'blocked' && verdictGated)))
     verdicts.push('TASK_REVIEW_CHANGES_REQUESTED')
   if (to === 'blocked' && exhausted) verdicts.push('TASK_CONVERGENCE_EXHAUSTED')
   const main: ContinuityEventType =
@@ -180,14 +187,31 @@ function taskEvents(prev: OrchState, next: OrchState, now: string): ContinuityEv
     if (from === to) continue
     const payload: Record<string, unknown> = { from, to }
     const openGate = to === 'blocked' ? latestGate(next.gates, task.id, 'open') : undefined
-    const exhausted = openGate?.kind === 'convergence-exhausted'
+    const gateKind = openGate?.kind
+    const verdictGated = gateKind !== undefined
+    const exhausted = gateKind === 'convergence-exhausted'
     if (to === 'blocked') payload.question = openGate?.question ?? null
     if (from === 'blocked') payload.resolution = latestGate(next.gates, task.id, 'resolved')?.resolution ?? null
-    if (from === 'validating' && task.checks)
+    // Attach checks/issues only when *this* transition is the verdict that produced them — the same
+    // condition taskTransitionEvents uses to decide whether a verdict fires. Without it, a Task
+    // interrupted by blockForValidation/blockForReview (no Gate kind — the check/review itself could
+    // not run) on its second-or-later round would report the previous round's stale results as if
+    // this transition had just produced them.
+    const validatingVerdict = from === 'validating' && (to !== 'blocked' || verdictGated)
+    const reviewingVerdict =
+      from === 'reviewing' && (to === 'completed' || to === 'dispatched' || (to === 'blocked' && verdictGated))
+    if (validatingVerdict && task.checks)
       payload.checks = task.checks.map((c) => ({ configId: c.configId, status: c.status, exitCode: c.exitCode ?? null }))
-    if (from === 'reviewing' && task.reviewIssues)
+    if (reviewingVerdict && task.reviewIssues)
       payload.issues = task.reviewIssues.map((i) => ({ severity: i.severity, title: i.title, blocking: i.blocking }))
-    for (const type of taskTransitionEvents(from, to, exhausted))
+    // The design's TASK_CONVERGENCE_EXHAUSTED row (§12) asks for facts, not the prose `question`
+    // alone: how many repairs and review rounds this Task used before the budget ran out. checks/
+    // issues above (when present) already carry the remaining failure as structured data.
+    if (to === 'blocked' && exhausted) {
+      payload.repairs = repairCountOf(next, task.id)
+      payload.reviewRounds = reviewRoundOf(next, task.id)
+    }
+    for (const type of taskTransitionEvents(from, to, gateKind))
       out.push(
         ev({ runId: task.runId, taskId: task.id }, type, now, `${type}:${task.id}:${from}->${to}:${now}`, payload)
       )
