@@ -24,9 +24,10 @@
 - Una terminal por proyecto
 
 **Vista de conversación**
-- Una sesión puede verse como la terminal en la que corre, o como una interfaz de chat normal. Es la
-  misma sesión en ambos casos: se cambia desde la parte superior derecha de cualquier sesión, y el
-  valor por defecto está en **Ajustes → General**
+- Una sesión se abre como terminal o como una interfaz de chat normal. Cuál de las dos queda decidido
+  al crearla y no cambia después. Con qué se abre una sesión nueva se elige en **Ajustes → General**
+- En una sesión de chat las preguntas y las aprobaciones llegan como tarjetas. El modelo y el modo de
+  permisos se eligen junto al cuadro de redacción
 - Arrastra un archivo o pega una imagen y su ruta entra en el mensaje
 
 <div align="center">
