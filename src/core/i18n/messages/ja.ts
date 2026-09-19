@@ -1051,6 +1051,13 @@ export const ja: Catalog = {
   'jobs.recovery.gate.reviewFirst': '回答する前にワークツリーを確認してください。',
   'jobs.recovery.gate.unsafeNote': 'ワークツリーには何も手を加えていません。',
   'jobs.recovery.gate.restart': '新しいワーカーで再開',
+  'jobs.convergence.gate.exhausted':
+    '完了チェックは{repairs}回の修正後も収束しませんでした。まだ失敗: {failures}',
+  'jobs.convergence.gate.stopped': 'このTaskの自動修正は停止しており、チェックはまだ失敗しています: {failures}',
+  'jobs.convergence.gate.paused': '完了チェックの実行中にこのRunが一時停止され、チェックはまだ失敗しています: {failures}',
+  'jobs.convergence.gate.repairFailed': '修正ワーカーを起動できませんでした: {reason}',
+  'jobs.convergence.gate.retryOnce': 'もう一度修正',
+  'jobs.convergence.gate.markFailed': '失敗として記録',
   'jobs.event.status': '状況',
   'jobs.event.workerDone': 'ワーカー報告',
   'jobs.event.question': '質問',

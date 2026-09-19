@@ -119,7 +119,7 @@ import {
   workingInRunRoot,
   worktreeDepsOf
 } from '../core/orchestration/integrate'
-import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
+import { DEFAULT_CONCURRENCY, type CheckResult } from '../core/orchestration/types'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject, outcomeOf } from '../core/orchestration/view'
 import { justFinished } from '../core/orchestration/runRecord'
@@ -2481,10 +2481,17 @@ export function registerIpc(
         output: (runId) => core.run.recentOutput(runId).slice(-4000)
       },
       onSettled: async ({ taskId, exitCode, output }) => {
+        // validator.ts 는 아직 옛 계약(exitCode/output 하나)이다 — check 목록 실행은 별도 작업이 한다.
+        // 그때까지는 여기서 단일 CheckResult 로 감싼다: 이 Run 에는 아직 convergence 가 없으므로
+        // applyValidationResult 는 옛 경로(policyOf === null)를 그대로 타고, 문구도 지금과 같다.
+        const configId = store.get().tasks.find((t) => t.id === taskId)?.validateConfigId ?? taskId
+        const results: CheckResult[] = [
+          { configId, name: configId, status: exitCode === 0 ? 'passed' : 'failed', exitCode, outputTail: output }
+        ]
         const r = applyValidationResult(
           store.get(),
           // 서버가 applyWorkerDone 에 넘기는 것과 같은 값이다 — 이 배선에는 startReview 가 있다.
-          { taskId, exitCode, output, canReview: true },
+          { taskId, results, canReview: true },
           new Date().toISOString()
         )
         if (!r.ok) {

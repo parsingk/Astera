@@ -1066,6 +1066,13 @@ export const es: Catalog = {
   'jobs.recovery.gate.reviewFirst': 'Revisa el worktree antes de responder.',
   'jobs.recovery.gate.unsafeNote': 'No se ha tocado nada del worktree.',
   'jobs.recovery.gate.restart': 'Reiniciar con un worker nuevo',
+  'jobs.convergence.gate.exhausted':
+    'Las comprobaciones de finalización no convergieron tras {repairs} reparación(es). Siguen fallando: {failures}',
+  'jobs.convergence.gate.stopped': 'La corrección automática está detenida para esta tarea y sus comprobaciones siguen fallando: {failures}',
+  'jobs.convergence.gate.paused': 'Esta ejecución se pausó mientras corrían sus comprobaciones, y siguen fallando: {failures}',
+  'jobs.convergence.gate.repairFailed': 'La aplicación no pudo iniciar un worker de reparación: {reason}',
+  'jobs.convergence.gate.retryOnce': 'Reparar una vez más',
+  'jobs.convergence.gate.markFailed': 'Marcar como fallida',
   'jobs.event.status': 'estado',
   'jobs.event.workerDone': 'informe del worker',
   'jobs.event.question': 'pregunta',

@@ -133,8 +133,11 @@ interface Dispatch {
   repair?: 'check-failure' | 'review-failure'
 }
 interface Gate {
-  /** 앱이 특별히 다루는 Gate. 소진 Gate의 해소가 retry-once/mark-failed로 갈라진다 */
-  kind?: 'convergence-exhausted' | 'convergence-paused' | 'convergence-stopped'
+  /** 앱이 특별히 다루는 Gate. 소진 Gate의 해소가 retry-once/mark-failed로 갈라진다.
+   *  값은 둘뿐이다 — 소진(exhausted)과 멈춤(blocked). 사람이 멈췄는지 Run이 멈췄는지는 kind가
+   *  아니라 Gate.question의 문구가 말한다: 셋을 가르는 것은 해소 방식이 아니라 질문 문구이고,
+   *  해소가 다른 것은 exhausted 하나뿐이기 때문이다 */
+  kind?: 'convergence-exhausted' | 'convergence-blocked'
 }
 ```
 
@@ -203,8 +206,8 @@ applyValidationResult(s, {
 | 조건 | 결과 |
 |---|---|
 | `policyOf(...) === null` (convergence가 없는 Run) | 지금과 같다: `failed`, `consecutiveFailures+1`, "Retry with worker-start --retry-of" 메시지 |
-| `task.convergenceOff` | `blocked` + Gate(kind `'convergence-stopped'`), `consecutiveFailures+1`. 사람이 자동 수정을 멈춘 뒤의 실패는 사람에게 |
-| `run.paused` | `blocked` + Gate(kind `'convergence-paused'`). 멈춘 회차는 이어지지 않으므로(jobs.md §7) repair를 열지 않는다 |
+| `task.convergenceOff` | `blocked` + Gate(kind `'convergence-blocked'`, question이 "자동 수정이 멈췼다"고 말한다), `consecutiveFailures+1`. 사람이 자동 수정을 멈춘 뒤의 실패는 사람에게 |
+| `run.paused` | `blocked` + Gate(kind `'convergence-blocked'`, question이 "Run이 멈췄다"고 말한다). 멈춘 회차는 이어지지 않으므로(jobs.md §7) repair를 열지 않는다 |
 | `consecutiveFailures + 1 > policy.maxFixAttempts` | **소진**: `blocked` + Gate(kind `'convergence-exhausted'`, options `['retry-once', 'mark-failed']`), `consecutiveFailures+1`. Gate 질문은 §13의 모양 — 몇 번 고쳤고 무엇이 아직 실패하는지 |
 | 그 외 | `openRepairDispatch(reason: 'check-failure', target)`, `consecutiveFailures+1`, status 메시지 "The app is repairing this Task (repair k of N)…" |
 
@@ -258,7 +261,8 @@ openRepairDispatch(s, {
 - 그 밖의 답(자유 텍스트) → 지금의 `resolveGate` 그대로(`pending`으로 돌아가 코디네이터/사람이 다시
   띄운다).
 
-`'convergence-paused'`·`'convergence-stopped'` Gate는 보통 Gate처럼 풀린다.
+`'convergence-blocked'` Gate(자동 수정 멈춤·Run 멈춤 둘 다 이 kind다 — question 문구로 구별한다)는
+보통 Gate처럼 풀린다.
 
 ### 5.3 바뀌지 않는 것
 
@@ -538,7 +542,7 @@ outputTail 전체는 싣지 않는다 — 스냅숏은 사이드바 푸시마다
   "검토 라운드 1 / 2", blocking 이슈(severity · 제목 · file:line), non-blocking 개수, unstable·의심 파일 칩,
   마지막 실패 요약(펼치면 outputTail — `task-show`).
 - 버튼(§29): **자동 수정 중지** → `task-update --convergence off`. 도는 repair는 끝까지 가고 그 판정은
-  `'convergence-stopped'` Gate. **다시 시도** = 기존 띄우기/다시 띄우기. **실패 보기** = 블록 펼침 + 워커
+  `'convergence-blocked'` Gate. **다시 시도** = 기존 띄우기/다시 띄우기. **실패 보기** = 블록 펼침 + 워커
   세션 탭 점프(기존 jump). 소진 Gate의 retry-once / mark-failed는 기존 **답하기**가 `gate.options`를
   버튼으로 그린다 — 새 UI 없음.
 

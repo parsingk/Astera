@@ -32,7 +32,8 @@ import {
   writeOffDispatch,
   type OrchState
 } from './state'
-import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate } from './types'
+import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate, type Dispatch, type CheckResult } from './types'
+import type { RepairTarget } from './state'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 const LATER = '2026-08-04T01:00:00.000Z'
@@ -42,6 +43,11 @@ const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchS
   if (!r.ok) throw new Error(`expected ok, got ${String(r.error)}`)
   return { state: r.state as OrchState, value: r.value as T }
 }
+/** 옛 단일 검증의 모양 — check 하나, exit code 하나 */
+const one = (exitCode: number, output = ''): CheckResult[] => [
+  { configId: 'cfg1', name: 'cfg1', status: exitCode === 0 ? 'passed' : 'failed', exitCode, outputTail: output }
+]
+const SAME: RepairTarget = { kind: 'same-session', sessionId: 'sess1', cwd: 'D:/p', provider: 'codex', accountId: 'acc1' }
 
 /** run + task + dispatch가 준비된 상태를 만든다 */
 const seed = (): { s: OrchState; runId: string; taskId: string; dispatchId: string } => {
@@ -935,14 +941,14 @@ describe('applyValidationResult', () => {
 
   it('종료 코드 0 이면 completed 이고 카운터를 초기화한다', () => {
     const { s, taskId } = validating({ consecutiveFailures: 2 })
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 0, output: 'ok' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(0, 'ok') }, NOW) as never)
     expect(r.state.tasks[0].status).toBe('completed')
     expect(r.state.tasks[0].consecutiveFailures).toBe(0)
   })
 
   it('종료 코드가 0 이 아니면 failed 이고 카운터가 오른다', () => {
     const { s, taskId } = validating({ consecutiveFailures: 1 })
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 1, output: '실패 로그' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(1, '실패 로그') }, NOW) as never)
     expect(r.state.tasks[0].status).toBe('failed')
     expect(r.state.tasks[0].consecutiveFailures).toBe(2)
   })
@@ -950,7 +956,7 @@ describe('applyValidationResult', () => {
   // 재시도하는 워커가 무엇이 틀렸는지 읽을 수 있어야 한다
   it('실패하면 출력을 result 에 담는다', () => {
     const { s, taskId } = validating()
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 1, output: '실패 로그' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(1, '실패 로그') }, NOW) as never)
     expect(r.state.tasks[0].result).toContain('실패 로그')
   })
 
@@ -961,7 +967,7 @@ describe('applyValidationResult', () => {
       createTask(s, { runId: s.runs[0].id, title: 'next', spec: 'x', deps: [taskId] }, NOW) as never
     )
     expect(next.state.tasks[1].status).toBe('pending')
-    const done = unwrap(applyValidationResult(next.state, { taskId, exitCode: 0, output: '' }, NOW) as never)
+    const done = unwrap(applyValidationResult(next.state, { taskId, results: one(0, '') }, NOW) as never)
     expect(done.state.tasks[1].status).toBe('ready')
   })
 
@@ -970,7 +976,7 @@ describe('applyValidationResult', () => {
   // 도착하지 않는다. 그 코디네이터가 받은 마지막 소식은 "워커가 성공했다"다.
   it('실패하면 종료 코드와 출력을 담은 status 메시지를 붙인다', () => {
     const { s, taskId } = validating()
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 2, output: '실패 로그' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(2, '실패 로그') }, NOW) as never)
     const m = r.state.messages[r.state.messages.length - 1]
     expect(m.type).toBe('status')
     expect(m.taskId).toBe(taskId)
@@ -983,7 +989,7 @@ describe('applyValidationResult', () => {
   // 통과도 알려야 한다 — 의존 Task 가 풀린 것을 모르면 코디네이터는 다음 Task 를 띄우지 않는다
   it('통과해도 status 메시지를 붙인다', () => {
     const { s, taskId } = validating()
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 0, output: 'ok' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(0, 'ok') }, NOW) as never)
     const m = r.state.messages[r.state.messages.length - 1]
     expect(m.type).toBe('status')
     expect(m.subject).toBe('validation passed')
@@ -994,7 +1000,7 @@ describe('applyValidationResult', () => {
   // check 가 그것을 건너뛰고 코디네이터는 그대로 잠들어 있는다
   it('붙은 메시지는 nextDelivery 의 배치에 들어간다', () => {
     const { s, taskId } = validating()
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 1, output: 'x' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(1, 'x') }, NOW) as never)
     const d = unwrap<{ messages: { subject: string }[] }>(
       nextDelivery(r.state, { runId: s.runs[0].id, types: ['status'] }, NOW) as never
     )
@@ -1003,24 +1009,185 @@ describe('applyValidationResult', () => {
 
   it('validating 이 아닌 Task 는 거절한다', () => {
     const { s, taskId } = seed()
-    const r = applyValidationResult(s, { taskId, exitCode: 0, output: '' }, NOW)
+    const r = applyValidationResult(s, { taskId, results: one(0, '') }, NOW)
     expect(r.ok).toBe(false)
   })
 
   // 거절된 호출은 메시지도 남기지 않는다 — 거절인데 코디네이터를 깨우면 안 된다
   it('거절되면 메시지도 붙지 않는다', () => {
     const { s, taskId } = validating()
-    const settled = unwrap(applyValidationResult(s, { taskId, exitCode: 0, output: '' }, NOW) as never)
+    const settled = unwrap(applyValidationResult(s, { taskId, results: one(0, '') }, NOW) as never)
     const before = settled.state.messages.length
-    const again = applyValidationResult(settled.state, { taskId, exitCode: 1, output: '' }, NOW)
+    const again = applyValidationResult(settled.state, { taskId, results: one(1, '') }, NOW)
     expect(again.ok).toBe(false)
     expect(settled.state.messages).toHaveLength(before)
   })
 
   it('없는 Task 는 거절한다', () => {
     const { s } = validating()
-    const r = applyValidationResult(s, { taskId: 'nope', exitCode: 0, output: '' }, NOW)
+    const r = applyValidationResult(s, { taskId: 'nope', results: one(0, '') }, NOW)
     expect(r.ok).toBe(false)
+  })
+})
+
+describe('applyValidationResult — convergence', () => {
+  /** convergence Run 에 check 둘이 걸린 Task 를 validating 까지 보낸 상태 */
+  const armed = (
+    extra: Partial<Task> = {},
+    runExtra: Partial<import('./types').Run> = {}
+  ): { s: OrchState; taskId: string; dispatchId: string } => {
+    const { s, taskId, dispatchId } = seed()
+    const on: OrchState = {
+      ...s,
+      runs: s.runs.map((r) => ({ ...r, convergence: {}, ...runExtra })),
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1', 'cfg2'], ...extra } : t))
+    }
+    const r = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    return { s: r.state, taskId, dispatchId }
+  }
+  const two = (a: 0 | 1, b: 0 | 1 | null): CheckResult[] => [
+    { configId: 'cfg1', name: 'Typecheck', status: a === 0 ? 'passed' : 'failed', exitCode: a, outputTail: a ? 'TS2322' : '' },
+    b === null
+      ? { configId: 'cfg2', name: 'Tests', status: 'not-run' }
+      : { configId: 'cfg2', name: 'Tests', status: b === 0 ? 'passed' : 'failed', exitCode: b, outputTail: b ? '2 failed' : '' }
+  ]
+
+  it('전부 통과하면 completed 이고 checks 를 기록한다', () => {
+    const { s, taskId } = armed()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 0), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('completed')
+    expect(r.value.checks?.map((c) => c.status)).toEqual(['passed', 'passed'])
+    expect(r.value.checkHistory).toEqual({ cfg1: ['passed'], cfg2: ['passed'] })
+    expect(r.state.messages.at(-1)?.subject).toBe('All 2 checks passed')
+  })
+
+  it('하나가 실패하면 같은 세션에 repair Dispatch 를 열고 Task 는 dispatched 다 — failed 를 거치지 않는다', () => {
+    const { s, taskId, dispatchId } = armed()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(1, null), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('dispatched')
+    expect(r.value.consecutiveFailures).toBe(1)
+    const repair = r.state.dispatches.find((d) => d.repair)
+    expect(repair).toMatchObject({ taskId, repair: 'check-failure', retryOf: dispatchId, sessionId: 'sess1', cwd: 'D:/p', provider: 'codex', accountId: 'acc1', workerState: 'ready' })
+    expect(repair?.endedAt).toBeUndefined()
+    const msg = r.state.messages.at(-1)!
+    expect(msg.subject).toBe('Checks failed: Typecheck (1 of 2 ran)')
+    expect(msg.body).toContain('repair 1 of 3')
+    expect(msg.body).toContain('Do not start a worker for it')
+    expect(msg.body).not.toContain('--retry-of')
+  })
+
+  it('fresh 대상이면 placeholder 세션으로 연다', () => {
+    const { s, taskId } = armed()
+    const r = unwrap<Task>(
+      applyValidationResult(s, { taskId, results: two(1, null), repair: { kind: 'fresh', cwd: 'D:/p', provider: 'codex', accountId: 'acc1' } }, NOW) as never
+    )
+    expect(r.state.dispatches.find((d) => d.repair)?.sessionId).toMatch(/^pending:/)
+  })
+
+  it('k 번째 실패가 maxFixAttempts 를 넘으면 소진 Gate 다 — 기본 3 이면 네 번째 실패', () => {
+    const { s, taskId } = armed({ consecutiveFailures: 3 })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('blocked')
+    expect(r.value.consecutiveFailures).toBe(4)
+    const gate = r.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-exhausted')
+    expect(gate.options).toEqual(['retry-once', 'mark-failed'])
+    expect(gate.question).toContain('3')
+    expect(gate.question).toContain('Tests')
+    expect(r.state.dispatches.some((d) => d.repair)).toBe(false)
+  })
+
+  it('세 번째 실패까지는 repair 를 연다', () => {
+    const { s, taskId } = armed({ consecutiveFailures: 2 })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('dispatched')
+    expect(r.state.messages.at(-1)?.body).toContain('repair 3 of 3')
+  })
+
+  it('convergenceOff 인 Task 의 실패는 Gate(convergence-blocked)다', () => {
+    const { s, taskId } = armed({ convergenceOff: true })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(1, null), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('blocked')
+    expect(r.state.gates.at(-1)?.kind).toBe('convergence-blocked')
+    expect(r.state.dispatches.some((d) => d.repair)).toBe(false)
+  })
+
+  it('멈춘 Run 의 실패는 repair 를 열지 않고 Gate 다', () => {
+    const { s, taskId } = armed({}, { paused: true })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(1, null), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('blocked')
+    expect(r.state.gates.at(-1)?.kind).toBe('convergence-blocked')
+  })
+
+  it('정책이 켜졌는데 repair 대상이 없으면 거절한다 — 조용히 옛 경로로 떨어지지 않는다', () => {
+    const { s, taskId } = armed()
+    const r = applyValidationResult(s, { taskId, results: two(1, null) }, NOW)
+    expect(r.ok).toBe(false)
+  })
+
+  it('통과 뒤 검토가 걸려 있으면 reviewing 이고 카운터는 보존된다', () => {
+    const { s, taskId } = armed({ reviewRequested: true, consecutiveFailures: 1 })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 0), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('reviewing')
+    expect(r.value.consecutiveFailures).toBe(1)
+  })
+
+  it('fail→pass→fail 인 check 에 unstable 을 찍는다', () => {
+    const { s, taskId } = armed({ checkHistory: { cfg2: ['failed', 'passed'] } })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, NOW) as never)
+    expect(r.value.checks?.find((c) => c.configId === 'cfg2')?.unstable).toBe(true)
+    expect(r.value.checks?.find((c) => c.configId === 'cfg1')?.unstable).toBeUndefined()
+  })
+
+  it('꺼진 Run 은 문구까지 지금과 같다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const old: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t)) }
+    const v = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const r = unwrap<Task>(applyValidationResult(v.state, { taskId, results: one(1, '실패 로그') }, NOW) as never)
+    expect(r.value.status).toBe('failed')
+    expect(r.value.result).toBe('validation failed (exit 1)\n실패 로그')
+    expect(r.state.messages.at(-1)?.subject).toBe('validation failed')
+    expect(r.state.messages.at(-1)?.body).toContain('Retry with worker-start --retry-of')
+  })
+})
+
+describe('openDispatch — repair 와 ignoreCircuit', () => {
+  it('repair 표시를 싣고, ignoreCircuit 이면 회로가 끊긴 Task 도 연다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const done = unwrap(applyWorkerDone(s, { taskId, dispatchId, outcome: 'failed', subject: 's', body: 'b' }, NOW) as never)
+    const tripped: OrchState = { ...done.state, tasks: done.state.tasks.map((t) => ({ ...t, consecutiveFailures: FAILURE_LIMIT })) }
+    const refused = openDispatch(tripped, { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '', retryOf: dispatchId, repair: 'check-failure' }, LATER)
+    expect(refused.ok).toBe(false)
+    const r = unwrap<Dispatch>(
+      openDispatch(tripped, { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '', retryOf: dispatchId, repair: 'check-failure', ignoreCircuit: true }, LATER) as never
+    )
+    expect(r.value.repair).toBe('check-failure')
+  })
+})
+
+describe('createRun / createTask / spawnScheduledRun — convergence 칸', () => {
+  it('createRun 은 convergence 를 싣고, 없으면 칸 자체가 없다', () => {
+    const a = unwrap<import('./types').Run>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p', convergence: { maxFixAttempts: 2 } }, NOW) as never)
+    expect(a.value.convergence).toEqual({ maxFixAttempts: 2 })
+    const b = unwrap<import('./types').Run>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never)
+    expect(b.value).not.toHaveProperty('convergence')
+  })
+  it('createTask 는 validateConfigIds 를 싣고 빈 배열은 싣지 않는다', () => {
+    const { s, runId } = seed()
+    const a = unwrap<Task>(createTask(s, { runId, title: 't', spec: 's', deps: [], validateConfigIds: ['x', 'y'] }, NOW) as never)
+    expect(a.value.validateConfigIds).toEqual(['x', 'y'])
+    const b = unwrap<Task>(createTask(s, { runId, title: 't', spec: 's', deps: [], validateConfigIds: [] }, NOW) as never)
+    expect(b.value).not.toHaveProperty('validateConfigIds')
+  })
+  it('회차는 validateConfigIds 와 Run 의 convergence 를 물려받는다', () => {
+    let { state: s } = unwrap<import('./types').Run>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } as never, convergence: {} }, NOW) as never
+    )
+    const tmpl = s.runs[0]
+    s = unwrap<Task>(createTask(s, { runId: tmpl.id, title: 't', spec: 's', deps: [], validateConfigIds: ['x'] }, NOW) as never).state
+    const fired = unwrap<import('./types').Run>(spawnScheduledRun(s, tmpl.id, LATER) as never)
+    expect(fired.value.convergence).toEqual({})
+    expect(fired.state.tasks.find((t) => t.runId === fired.value.id)?.validateConfigIds).toEqual(['x'])
   })
 })
 
@@ -1087,7 +1254,7 @@ describe('reviewing', () => {
     const r = unwrap(
       applyValidationResult(
         toValidating.state,
-        { taskId, exitCode: 0, output: 'ok', canReview: true },
+        { taskId, results: one(0, 'ok'), canReview: true },
         NOW
       ) as never
     )
@@ -1113,7 +1280,7 @@ describe('reviewing', () => {
       applyWorkerDone(armed, done(taskId, dispatchId, 'succeeded'), NOW) as never
     )
     const r = unwrap(
-      applyValidationResult(toValidating.state, { taskId, exitCode: 0, output: 'ok' }, NOW) as never
+      applyValidationResult(toValidating.state, { taskId, results: one(0, 'ok') }, NOW) as never
     )
     expect(r.state.tasks[0].status).toBe('reviewing')
     expect(r.state.tasks[0].consecutiveFailures).toBe(2)
@@ -1132,7 +1299,7 @@ describe('reviewing', () => {
       applyWorkerDone(armed, done(taskId, dispatchId, 'succeeded'), NOW) as never
     )
     const r = unwrap(
-      applyValidationResult(toValidating.state, { taskId, exitCode: 0, output: 'ok' }, NOW) as never
+      applyValidationResult(toValidating.state, { taskId, results: one(0, 'ok') }, NOW) as never
     )
     expect(r.state.tasks[0].status).toBe('completed')
     expect(r.state.tasks[0].consecutiveFailures).toBe(0)

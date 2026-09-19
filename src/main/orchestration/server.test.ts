@@ -15,7 +15,7 @@ import {
   type OrchState
 } from '../../core/orchestration/state'
 import { TaskValidator } from './validator'
-import { FAILURE_LIMIT } from '../../core/orchestration/types'
+import { FAILURE_LIMIT, type CheckResult } from '../../core/orchestration/types'
 import { parseArgs } from '../../core/orchestration/cliArgs'
 import { isQueueableReport } from '../../core/orchestration/pendingReports'
 
@@ -2723,7 +2723,13 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
         output: () => '빌드 로그 꼬리'
       },
       onSettled: async ({ taskId, exitCode, output }) => {
-        const r = applyValidationResult(deps.getState(), { taskId, exitCode, output }, NOW)
+        // validator.ts 의 옛 계약(exitCode/output 하나)을 새 계약(results)으로 감싼다 — 이 Run 에는
+        // convergence 가 없으므로 applyValidationResult 는 옛 경로를 그대로 타고 문구도 같다.
+        const configId = deps.getState().tasks.find((t) => t.id === taskId)?.validateConfigId ?? taskId
+        const results: CheckResult[] = [
+          { configId, name: configId, status: exitCode === 0 ? 'passed' : 'failed', exitCode, outputTail: output }
+        ]
+        const r = applyValidationResult(deps.getState(), { taskId, results }, NOW)
         if (r.ok) await deps.setState(r.state)
       },
       onCannotRun: async ({ taskId, reason }) => {

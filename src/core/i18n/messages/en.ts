@@ -1106,6 +1106,13 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.recovery.gate.reviewFirst': 'Review the worktree before answering.',
   'jobs.recovery.gate.unsafeNote': 'Nothing in the worktree has been touched.',
   'jobs.recovery.gate.restart': 'Restart with a new worker',
+  'jobs.convergence.gate.exhausted':
+    'The completion checks did not converge after {repairs} repair(s). Still failing: {failures}',
+  'jobs.convergence.gate.stopped': 'Auto-fix is stopped for this Task and its checks still fail: {failures}',
+  'jobs.convergence.gate.paused': 'This Run was paused while its completion checks ran, and they still fail: {failures}',
+  'jobs.convergence.gate.repairFailed': 'The app could not start a repair worker: {reason}',
+  'jobs.convergence.gate.retryOnce': 'Repair once more',
+  'jobs.convergence.gate.markFailed': 'Mark failed',
   'jobs.event.status': 'status',
   'jobs.event.workerDone': 'worker report',
   'jobs.event.question': 'question',
