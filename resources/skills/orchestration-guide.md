@@ -128,11 +128,19 @@ Task in a Run.
   spec, so nothing a previous attempt produced — neither the validation output nor the earlier
   worker's report — reaches the next one. If the next attempt needs to know what failed, write it into
   the spec yourself.
-- **Either outcome arrives in your inbox as a `status` message**: `validation passed` or `validation
-  failed`, with the exit code and the output tail in the body. That message is what wakes `check`, so
-  a validated Task is **not** settled when `worker_done` comes back — wait for its validation message
-  before you decide what to dispatch next. (A validation that cannot run announces itself the same
-  way, as the Gate's `decision_gate` message.)
+- **Either outcome arrives in your inbox as a `status` message, whose exact subject depends on whether
+  the Run has convergence on.** **On a Run with no convergence policy** it is `validation passed` or
+  `validation failed`, with the exit code and the output tail in the body. **On a convergence Run**
+  (section 11) a pass reads `All <n> checks passed` instead, and a failure that is about to become a
+  repair reads `Checks failed: <name(s)> (<ran> of <total> ran)` (or `Checks failed (<ran> of <total>
+  ran)` if none are named) — never the literal words `validation passed`/`validation failed`, so do not
+  match on those on a convergence Run. That convergence-branch body carries only the exit code, not the
+  output tail — read the failed check's own tail off the Task's `checks` field (`task-list --json`)
+  instead. Either way, that message is what wakes `check`, so a validated
+  Task is **not** settled when `worker_done` comes back — wait for its validation message before you
+  decide what to dispatch next. (A validation that cannot run at all announces itself differently again,
+  and the same way on every Run regardless of convergence: as a Gate's `decision_gate` message, never a
+  `status` one.)
 - **If the validation cannot run at all** — no such configuration, a required field empty, the
   directory gone, the app restarted mid-run, or the user stopping the validation run from the app's
   Run panel — the Task goes to `blocked` behind a Gate whose question says why. A stopped run is not
@@ -747,9 +755,10 @@ run-create --objective <s> --convergence [--max-fix-attempts <n>] [--max-review-
 
 **What ends a repair loop.** Two ways, and only one of them is yours to act on:
 - **It converges.** The checks all pass, or the review comes back with nothing blocking. You get a
-  `status` message (`All <n> checks passed` or `Review approved`, with any non-blocking notes named),
-  and the Task reaches `completed` (or `reviewing` first, if both are attached — section 2's order is
-  unchanged). Nothing further needed.
+  `status` message — subject `All <n> checks passed`, or `Review approved` (`Review approved (<n>
+  non-blocking note(s))` if the reviewer left any, with the notes themselves in the body, not the
+  subject) — and the Task reaches `completed` (or `reviewing` first, if both are attached — section 2's
+  order is unchanged). Nothing further needed.
 - **It exhausts its budget.** More than `--max-fix-attempts` consecutive check failures, or more than
   `--max-review-rounds` review rounds. This opens a Gate with `kind: "convergence-exhausted"` and
   `options: ["retry-once", "mark-failed"]` on `gate-list`/`gate-create`'s response shape — **read the
