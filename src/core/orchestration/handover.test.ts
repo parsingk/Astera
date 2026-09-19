@@ -75,6 +75,14 @@ describe('buildHandoverPrompt', () => {
     expect(p).toContain('숫자를 센다')
     expect(p).toContain('tasks already defined: 7')
   })
+
+  it('convergence Run 의 브리핑은 재시도가 앱의 일이라고 말한다', () => {
+    const p = buildHandoverPrompt({ runId: 'run_1', objective: 'o', concurrency: 1, taskCount: 2, convergence: true })
+    expect(p).toContain('COMPLETION CONVERGENCE IS ON')
+    expect(p).toContain('do not start a worker for it')
+    expect(p).toContain('worker-release')
+    expect(buildHandoverPrompt({ runId: 'run_1', objective: 'o', concurrency: 1, taskCount: 2 })).not.toContain('CONVERGENCE')
+  })
 })
 
 // **이 계약이 깨지면 코디네이터는 빈 화면으로 선다.** 이 문구는 세션의 argv 로 가고 win32 에서

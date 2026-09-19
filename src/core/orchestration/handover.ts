@@ -54,6 +54,12 @@ export function buildHandoverPrompt(a: {
    *  여기서 기본값을 넣지 않는 이유는 JobRun 과 같다: 기본값을 두 곳에서 알면 갈라진다. */
   concurrency: number
   taskCount: number
+  /** 이 Run 에 완료 수렴이 걸려 있는가(`run.convergence !== undefined`) — 부르는 쪽이 이미 판정해
+   *  넘긴다. 켜져 있으면 이 인계문에 별도 절이 붙는다: 검증·검토가 딸린 Task 는 실패해도 재시도가
+   *  코디네이터의 일이 아니게 되고, `worker-start`·`worker-release` 가 그 Task 를 거절하기
+   *  시작한다 — 그 규칙을 모르는 코디네이터는 거절을 받고서야, 혹은 최악의 경우 `task-update` 로
+   *  앱의 repair 를 밟고서야 알아챈다. */
+  convergence?: boolean
 }): string {
   const sequential = a.concurrency <= 1
   return [
@@ -107,6 +113,23 @@ export function buildHandoverPrompt(a: {
       : `- This Run is parallel (limit ${a.concurrency}): pass \`--worktree new --name <short-name>\`. Each worker gets its own worktree.`,
     '- Why: merging the work back requires a clean tree, so parallel workers must not share one',
     '  folder — they would overwrite each other. `worker-start` rejects that combination.',
+    ...(a.convergence
+      ? [
+          '',
+          'COMPLETION CONVERGENCE IS ON',
+          'A Task that carries `--validate` or `--review` is not finished when its worker reports done.',
+          'The app runs the checks itself, and when one fails it sends the failure back to the same',
+          'worker and reruns them; a review that finds a blocking issue gets the same treatment. You',
+          'will see this as a status message that says "repair k of N" — that is the app working, not a',
+          'dropped report. While a Task is converging (its status reads `validating`, `reviewing`, or',
+          '`dispatched` again with a repair running), do not start a worker for it — `worker-start`',
+          'refuses it — and do not `worker-release` its Dispatch — the app refuses that too, 409, until',
+          'the repair ends. Do not `task-update` it either: nothing stops that call from succeeding, but',
+          'it would move the Task out from under a repair the app still thinks is running. When the Task',
+          'converges you get a status message and it reaches `completed`. When it exhausts its budget, a',
+          'Gate opens with `retry-once` / `mark-failed` — a person answers that one, not you.'
+        ]
+      : []),
     '',
     'YOU ARE THE INBOX',
     '`astera check --wait --json` blocks until a worker reports, asks or escalates. Keep calling it.',

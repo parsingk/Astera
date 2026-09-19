@@ -774,7 +774,8 @@ export async function handleCommand(
             runId: id,
             objective: target.objective,
             concurrency: target.concurrency ?? DEFAULT_CONCURRENCY,
-            taskCount: s.tasks.filter((t) => t.runId === id).length
+            taskCount: s.tasks.filter((t) => t.runId === id).length,
+            convergence: target.convergence !== undefined
           })
         })
         sessionId = spawned.sessionId

@@ -22,6 +22,10 @@ cannot drift from the installed version.
    `"$ASTERA_CLI"` in bash or zsh, `$env:ASTERA_CLI` in PowerShell (there `$ASTERA_CLI` alone is an
    unrelated, empty PowerShell variable).
 
+   **If the Run you were handed has completion convergence on, that reference has a whole section on
+   it** — read it before your first `worker-start`; the app repairs a checked or reviewed Task itself,
+   and refuses commands you would otherwise reach for while that is happening.
+
 ## When not to use this
 
 If the user only said "hand this off" / "give it to another agent" (or "넘겨라" / "handoff" /
