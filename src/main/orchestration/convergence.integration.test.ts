@@ -80,7 +80,18 @@ function rig(initial: OrchState = emptyState()) {
 
   // 모든 커밋이 지나는 한 자리 — property 1(커밋이 부수 효과보다 먼저다)을 순서로 확인하는 데 쓴다.
   const commits: OrchState[] = []
+  // ipc.ts 의 진짜 setState 는 실제 디스크 쓰기(OrchestrationStore.save, libuv 스레드풀의 fs 콜백)를
+  // 기다린다 — 완전히 동기인 가짜는 그 틈을 지운다. 틈이 없으면 Promise 를 돌려주는 훅을(fix-1
+  // 라운드가 고친 바로 그 결함처럼) `void` 로 끊어도 같은 호출 안에서 이미 커밋돼 있어, 끊었는지
+  // 기다렸는지를 어떤 동기 단언도 가르지 못한다.
+  //
+  // **microtask 하나로는 부족하다** — `await Promise.resolve()` 만 넣으면 fire-and-forget 쪽이
+  // 그 microtask 를 먼저 큐에 얹어 두고(넘기는 호출 자체가 그 지점까지는 동기다), 부르는 쪽이
+  // `void` 로 끊어도 자신의 반환값이 풀리는 시점보다 그 microtask 가 먼저 돈다 — 직접 격리된
+  // 재현으로 확인했다(둘 다 mutated=true). 실제 디스크 쓰기처럼 **macrotask** 경계를 하나 두어야
+  // "기다린 쪽만 그 경계를 실제로 건넌다"가 성립한다.
   const setState = async (n: OrchState): Promise<void> => {
+    await new Promise<void>((resolve) => setImmediate(resolve))
     box.state = n
     commits.push(n)
   }
@@ -233,13 +244,22 @@ function rig(initial: OrchState = emptyState()) {
     // ipc.ts 는 convergence Run 에서만 suspiciousFiles 를 계산한다(policyOf === null 이면
     // 건너뛴다) — 진짜 계산은 git diff 를 훑지만(changedFilesSince), 이 가짜는 그 결과를
     // suspiciousFilesFor 로 대신하고 **같은 가드**를 지킨다. property 5 가 확인하는 것이 그 가드다.
+    //
+    // **공유 setState 를 거치지 않고 바로 적는다.** setState 는 이제(finding 2) 진짜 디스크 쓰기처럼
+    // macrotask 하나만큼 늦게 풀린다 — repairOnce 경로의 구분을 살리는 데 필요한 지연이다. 이 자리는
+    // 그 지연이 필요 없을 뿐 아니라, 걸면 해를 끼친다: 이 fire-and-forget 쓰기가 늦게 풀리는 동안
+    // onSettled 가 (그때는 아직 이 값이 없는) 낡은 스냅숏으로 커밋하면, 그 커밋이 tasks 배열을
+    // 통째로 새로 써서 이 값을 영영 덮어써 버린다 — 실제로 겪은 결함이다(vi.waitFor 로 몇 초를 더
+    // 기다려도 나타나지 않았다). 실제 git diff 는 보통 이 경합이 드러나지 않을 만큼 빠르지만, 이
+    // 가짜의 check 는 사실상 순간이라 오히려 경합이 거의 매번 일어난다 — 이 가짜가 만든 인공물이지
+    // property 5 가 확인하려는 것(그 가드 자체)과는 무관하다.
     if (!task || policyOf(box.state, task) === null) return
     const suspicious = suspiciousFilesFor.get(taskId)
     if (!suspicious?.length) return
-    void setState({
+    box.state = {
       ...box.state,
       tasks: box.state.tasks.map((t) => (t.id === taskId ? { ...t, suspiciousFiles: suspicious } : t))
-    })
+    }
   }
   const startReviewHook: NonNullable<OrchServerDeps['startReview']> = ({ taskId }) => {
     void startReview({ taskId }).catch((e) => logs.push(`deps.startReview: ${String(e)}`))
@@ -271,7 +291,10 @@ function rig(initial: OrchState = emptyState()) {
     repairTargetFor: repairTargetForHook,
     startRepair: startRepairHook,
     repairOnce: repairOnceHook,
-    lang: () => 'en'
+    lang: () => 'en',
+    // server.ts 자신이 이 훅으로 남기는 것들(검토 판정 분기의 "review.json malformed"·"could not be
+    // read" 등) — 빠뜨리면 property 2 가 잡아야 할 바로 그 부류의 실패가 로그 없이 사라진다.
+    log: (m) => logs.push(m)
   }
 
   // ipc.ts 의 validator — onSettled 는 repairTargetFor → applyValidationResult → 커밋 → (reviewing
@@ -420,13 +443,13 @@ describe('convergence — §51', () => {
     r.exits.set('tests', 1)
     await r.done(taskId, dispatchId, sessionId)
     expect(r.box.state.tasks[0].status).toBe('validating')
-    // property 5 (positive half): a convergence Run's suspiciousFiles is written when the wiring has
-    // something to flag — the regression test below is the negative half (never written).
-    expect(r.box.state.tasks[0].suspiciousFiles).toEqual(['package.json'])
     await r.drainChecks()
 
     // round 1: typecheck passes, tests fails -> repair goes to the same session
     const task1 = r.box.state.tasks[0]
+    // property 5 (positive half): a convergence Run's suspiciousFiles is written when the wiring has
+    // something to flag — the regression test below is the negative half (never written).
+    expect(task1.suspiciousFiles).toEqual(['package.json'])
     expect(task1.status).toBe('dispatched')
     expect(task1.checks?.map((c) => c.status)).toEqual(['passed', 'failed'])
     const repair = await r.awaitOpenRepair(taskId)
@@ -672,11 +695,14 @@ describe('convergence — §51', () => {
     // fire-and-forget performRepair call, which may still be in flight after the await above returns.
     const openedAt = r.commits.findIndex((s) => s.dispatches.some((d) => d.id === repair3.id && d.specPath === ''))
     expect(openedAt).toBeGreaterThanOrEqual(0)
-    const repair3Call = await vi.waitFor(() => {
-      const call = r.started.find((s) => s.dispatchId === repair3.id)
-      expect(call).toBeTruthy()
-      return call!
-    })
+    const repair3Call = await vi.waitFor(
+      () => {
+        const call = r.started.find((s) => s.dispatchId === repair3.id)
+        expect(call).toBeTruthy()
+        return call!
+      },
+      { timeout: 2000, interval: 5 }
+    )
     expect(repair3Call.commitsAtCall).toBeGreaterThan(openedAt)
 
     // another failure -> gated again, with no automatic repeat
