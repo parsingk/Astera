@@ -1088,7 +1088,17 @@ describe('applyValidationResult — convergence', () => {
 
   it('k 번째 실패가 maxFixAttempts 를 넘으면 소진 Gate 다 — 기본 3 이면 네 번째 실패', () => {
     const { s, taskId } = armed({ consecutiveFailures: 3 })
-    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, NOW) as never)
+    // repairCountOf 가 세는 것은 실제로 연 repair Dispatch 다(Important 수정) — 이 테스트가 뜻있게
+    // "예산까지 세 번 고쳤다" 를 확인하도록, consecutiveFailures=3 에 맞춰 실제로 repair Dispatch
+    // 셋을 만들어 둔다.
+    const withHistory: OrchState = {
+      ...s,
+      dispatches: [
+        ...s.dispatches,
+        ...[1, 2, 3].map((n) => ({ ...s.dispatches[0], id: `dsp_r${n}`, repair: 'check-failure' as const, outcome: 'failed' as const, endedAt: NOW }))
+      ]
+    }
+    const r = unwrap<Task>(applyValidationResult(withHistory, { taskId, results: two(0, 1), repair: SAME }, NOW) as never)
     expect(r.value.status).toBe('blocked')
     expect(r.value.consecutiveFailures).toBe(4)
     const gate = r.state.gates.at(-1)!
@@ -1096,7 +1106,7 @@ describe('applyValidationResult — convergence', () => {
     expect(gate.options).toEqual(['retry-once', 'mark-failed'])
     expect(gate.question).toContain('3')
     expect(gate.question).toContain('Tests')
-    expect(r.state.dispatches.some((d) => d.repair)).toBe(false)
+    expect(r.state.dispatches.filter((d) => d.repair)).toHaveLength(3)
   })
 
   it('세 번째 실패까지는 repair 를 연다', () => {
@@ -3003,6 +3013,38 @@ describe('applyReviewResult — convergence', () => {
     expect(r.state.messages.at(-1)?.subject).toBe('claude review found 1 blocking issue')
   })
 
+  // repair 메시지 본문은 repair 하는 워커에게 전해지는 유일한 기록이다 — 그 모양을 아무도
+  // 확인하지 않고 있었다. 하나는 file:line 이 있는 경우, 하나는 없는 경우다.
+  it('repair 메시지 본문에 blocking 이슈를 번호를 매겨 나열한다', () => {
+    const { s, taskId, reviewId } = reviewing()
+    const high2 = { severity: 'high' as const, title: 'Missing null check' }
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'see file', issues: [high, high2], repair: SAME }, LATER) as never)
+    const body = r.state.messages.at(-1)?.body ?? ''
+    // 리터럴로 이어 붙이지 않는다 — "파일명.ts:숫자" 모양은 lineNumberCitations 테스트가 (이 코드
+    // 자신을 줄 번호로 인용한 주석으로 오인해) 위반으로 잡는다. 여기서는 그런 주석이 아니라 리뷰
+    // 이슈의 file:line 표시이므로, 조립해서 그 모양을 피한다.
+    expect(body).toContain(`1. HIGH — ${high.title} — ${high.file}:${high.line}`)
+    expect(body).toContain('2. HIGH — Missing null check')
+  })
+
+  // normalizeIssues 의 규칙(파일 없음 -> outcome 만으로 정한다) 을 이 경로에서도 확인한다
+  it('issues 가 undefined 면(판정 파일 없음) outcome 만으로 정한다 — failed 는 blocking 이슈 하나를 만든다', () => {
+    const { s, taskId, implId, reviewId } = reviewing()
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'no good', body: 'missing tests', repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('dispatched')
+    expect(task.reviewIssues).toHaveLength(1)
+    expect(task.reviewIssues?.[0]).toMatchObject({ severity: 'high', blocking: true, title: 'no good', description: 'missing tests' })
+    expect(r.state.dispatches.find((d) => d.repair)?.retryOf).toBe(implId)
+  })
+
+  // routeFailure 의 가드다 — convergence Run 은 repair 대상 없이 조용히 다른 경로로 떨어지지 않는다
+  it('convergence Run 인데 repair 대상이 없으면 거절한다', () => {
+    const { s, taskId, reviewId } = reviewing()
+    const r = applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b', issues: [high] }, LATER)
+    expect(r.ok).toBe(false)
+  })
+
   it('succeeded 라고 해도 high 이슈가 있으면 repair 다 — 승인이 발견을 덮지 못한다', () => {
     const { s, taskId, reviewId } = reviewing()
     const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'b', issues: [high], repair: SAME }, LATER) as never)
@@ -3030,7 +3072,49 @@ describe('applyReviewResult — convergence', () => {
     const task = r.state.tasks.find((x) => x.id === taskId)!
     expect(task.status).toBe('blocked')
     expect(r.state.gates.at(-1)?.kind).toBe('convergence-exhausted')
+    expect(r.state.gates.at(-1)?.options).toEqual(['retry-once', 'mark-failed'])
     expect(r.state.gates.at(-1)?.question).toContain('HIGH Session race')
+  })
+
+  // Important 수정: 소진 Gate 가 말하는 repair 수는 repairCountOf(실제로 연 repair Dispatch) 다 —
+  // maxFixAttempts(기본 3) 가 아니다. 한 번만 고친 뒤 두 번째 라운드에서 다시 막히면 "1" 이어야
+  // 한다, "3" 이 아니다.
+  it('review 라운드 소진은 실제로 연 repair 수를 말한다 — 한 번 고친 뒤라면 1 이다, 3 이 아니다', () => {
+    const { s, taskId, reviewId } = reviewing() // 기본 정책: maxReviewRounds 2, maxFixAttempts 3
+    // 1라운드: blocking, repair 하나를 연다
+    const r1 = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'r1', body: 'b', issues: [high], repair: SAME }, LATER) as never)
+    const repair1 = r1.state.dispatches.find((d) => d.repair)!
+    expect(repair1.repair).toBe('review-failure')
+    // repair 가 보고하고(같은 세션) 다시 검토로 간다
+    const backToReview = unwrap(
+      applyWorkerDone(r1.state, { taskId, dispatchId: repair1.id, outcome: 'succeeded', subject: 's2', body: 'b2' }, LATER) as never
+    )
+    expect(backToReview.state.tasks.find((t) => t.id === taskId)?.status).toBe('reviewing')
+    const opened2 = unwrap<Dispatch>(
+      openReviewDispatch(backToReview.state, { taskId, provider: 'claude', accountId: 'accC', sessionId: 'rev2', cwd: 'D:/p', specPath: '' }, LATER) as never
+    )
+    // 2라운드: 다시 blocking — 기본 maxReviewRounds(2) 에 닿는다
+    const r2 = unwrap(
+      applyReviewResult(opened2.state, { taskId, dispatchId: opened2.value.id, outcome: 'failed', subject: 'r2', body: 'b', issues: [high], repair: SAME }, EVEN_LATER) as never
+    )
+    const task = r2.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('blocked')
+    const gate = r2.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-exhausted')
+    expect(gate.options).toEqual(['retry-once', 'mark-failed'])
+    expect(gate.question).toContain('after 1 repair(s)')
+  })
+
+  // Minor 수정: 표(설계 §5.1)에서 멈춤이 소진보다 위다 — 라운드 상한에 닿았어도 convergenceOff 면
+  // 소진 Gate 가 아니라 멈춤 Gate 다. check 경로는 routeFailure 에 전부 맡겨 이미 이 순서를 지킨다;
+  // 검토 경로는 라운드 상한을 자체로 보므로 여기서 같은 순서를 확인한다.
+  it('convergenceOff 인 Task 는 라운드 상한에 닿았어도 소진이 아니라 멈춤 Gate 다', () => {
+    const { s, taskId, reviewId } = reviewing({ convergenceOff: true }, { convergence: { maxReviewRounds: 1 } })
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b', issues: [high], repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('blocked')
+    expect(r.state.gates.at(-1)?.kind).toBe('convergence-blocked')
+    expect(r.state.gates.at(-1)?.question).toContain('Auto-fix is stopped')
   })
 
   it('check 예산이 다했어도 소진 Gate 다', () => {
@@ -3083,6 +3167,15 @@ describe('interruptStalledTask — convergence Run 은 다시 돌린다', () => 
     const v = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
     const r = interruptStalledTask(v.state, { taskId }, LATER)
     expect(r).toMatchObject({ interrupted: 'validation', resume: null })
+    expect(r.state.gates).toHaveLength(1)
+  })
+  // 위 테스트는 꺼진 Run 의 validating 쪽만 본다 — reviewing 쪽도 같은 resume: null 이어야 한다
+  it('꺼진 Run 의 reviewing Task 도 Gate 를 열고 resume 은 null 이다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const old: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true } : t)) }
+    const v = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const r = interruptStalledTask(v.state, { taskId }, LATER)
+    expect(r).toMatchObject({ interrupted: 'review', resume: null })
     expect(r.state.gates).toHaveLength(1)
   })
 })

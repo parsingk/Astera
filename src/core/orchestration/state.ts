@@ -28,6 +28,7 @@ import {
   checkConfigIdsOf,
   latestImplDispatch,
   policyOf,
+  repairCountOf,
   reviewRoundOf,
   unstableChecks,
   type ResolvedPolicy
@@ -759,7 +760,11 @@ function routeFailure(
   if (run?.paused)
     return gateOnFailure(s, { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.paused', repairs, lang: a.lang }, now)
   if (repairs > a.policy.maxFixAttempts)
-    return gateOnFailure(s, { task: a.task, kind: 'convergence-exhausted', key: 'jobs.convergence.gate.exhausted', repairs: a.policy.maxFixAttempts, lang: a.lang }, now)
+    // repairs 는 이 실패까지의 "k 번째 연속 실패" 이고, k-1 개의 repair 만 실제로 열렸다(이번 것은
+    // 예산 밖이라 열리지 않는다) — repairCountOf 로 실제로 연 repair 수를 센다. a.policy.maxFixAttempts
+    // 를 그대로 쓰면 check 경로에서는 우연히 같은 값이지만 review 경로에서는 거짓말이 된다(라운드
+    // 상한과 repair 예산이 서로 다른 수를 세기 때문).
+    return gateOnFailure(s, { task: a.task, kind: 'convergence-exhausted', key: 'jobs.convergence.gate.exhausted', repairs: repairCountOf(s, a.task.id), lang: a.lang }, now)
   if (!a.repair) return err('repair target is required for a convergence Run')
   const withTask: OrchState = { ...s, tasks: replace(s.tasks, a.task) }
   const opened = openRepairDispatch(withTask, { taskId: a.task.id, reason: a.reason, target: a.repair }, now)
@@ -982,8 +987,15 @@ export function applyReviewResult(
   }
   const failed: Task = { ...recorded, consecutiveFailures: task.consecutiveFailures + 1, result: a.body }
   // 라운드 상한(설계 §8.4). 지금 닫은 검토가 이미 outcome 을 가지므로 reviewRoundOf 가 그것을 센다.
-  if (reviewRoundOf(closed, task.id) >= policy.maxReviewRounds) {
-    const g = gateOnFailure(closed, { task: failed, kind: 'convergence-exhausted', key: 'jobs.convergence.gate.exhausted', repairs: policy.maxFixAttempts, lang }, now)
+  // repairs 는 실제로 연 repair 수다(repairCountOf) — maxFixAttempts 는 다른 예산(§5.1)이고, 라운드
+  // 상한에 닿았다고 그 값과 같지 않다.
+  //
+  // **convergenceOff·paused 가 이 상한보다 위다**(설계 §5.1의 표: 멈춤 > 소진). 그래서 그 둘이면
+  // 여기서 소진 Gate 를 내지 않고 routeFailure 에 넘긴다 — routeFailure 가 그 표의 나머지를 그대로
+  // 본다(convergenceOff -> stopped, run.paused -> paused, 그다음에야 maxFixAttempts 소진).
+  const run = s.runs.find((r) => r.id === task.runId)
+  if (!failed.convergenceOff && !run?.paused && reviewRoundOf(closed, task.id) >= policy.maxReviewRounds) {
+    const g = gateOnFailure(closed, { task: failed, kind: 'convergence-exhausted', key: 'jobs.convergence.gate.exhausted', repairs: repairCountOf(closed, task.id), lang }, now)
     if (!g.ok) return err(g.error)
     return ok(g.state, 'accepted')
   }
@@ -1214,16 +1226,19 @@ export function writeOffDispatch(
   state: OrchState
   closed: boolean
   interrupted: 'validation' | 'review' | null
+  /** interruptStalledTask 의 resume 을 그대로 들려 보낸다 — convergence Run 의 Task 라면 이 자리가
+   *  "Gate 대신 다시 돌려라" 를 부르는 쪽에 전하는 유일한 신호다. */
+  resume: 'validation' | 'review' | null
   stuck: boolean
 } {
   const dispatch = s.dispatches.find((d) => d.id === a.dispatchId && !d.endedAt)
-  if (!dispatch) return { state: s, closed: false, interrupted: null, stuck: false }
+  if (!dispatch) return { state: s, closed: false, interrupted: null, resume: null, stuck: false }
   const ended: OrchState = {
     ...s,
     dispatches: replace(s.dispatches, endedUnproven(dispatch, now))
   }
   const r = interruptStalledTask(ended, { taskId: dispatch.taskId }, now)
-  return { state: r.state, closed: true, interrupted: r.interrupted, stuck: r.stuck }
+  return { state: r.state, closed: true, interrupted: r.interrupted, resume: r.resume, stuck: r.stuck }
 }
 
 /** 롤링이 세션을 갈아탈 때 열린 Dispatch 를 새 세션 id·계정으로 옮긴다.
