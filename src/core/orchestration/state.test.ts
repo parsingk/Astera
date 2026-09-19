@@ -31,6 +31,7 @@ import {
   beginValidation,
   writeOffDispatch,
   openRepairDispatch,
+  interruptStalledTask,
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate, type Dispatch, type CheckResult } from './types'
@@ -2959,5 +2960,129 @@ describe('writeOffDispatch', () => {
     const never = writeOffDispatch(s, { dispatchId: 'dsp_nope' }, LATER)
     expect(never.closed).toBe(false)
     expect(never.state).toBe(s)
+  })
+})
+
+describe('applyReviewResult — convergence', () => {
+  /** convergence Run, 검토 걸린 Task 를 reviewing 까지 보내고 검토 Dispatch 를 연 상태 */
+  const reviewing = (extra: Partial<Task> = {}, runExtra: Partial<import('./types').Run> = {}) => {
+    const { s, taskId, dispatchId } = seed()
+    const on: OrchState = {
+      ...s,
+      runs: s.runs.map((r) => ({ ...r, convergence: {}, ...runExtra })),
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true, ...extra } : t))
+    }
+    const done = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const opened = unwrap<Dispatch>(
+      openReviewDispatch(done.state, { taskId, provider: 'claude', accountId: 'accC', sessionId: 'rev1', cwd: 'D:/p', specPath: '' }, NOW) as never
+    )
+    return { s: opened.state, taskId, implId: dispatchId, reviewId: opened.value.id }
+  }
+  const high = { severity: 'high' as const, title: 'Session race', file: 'src/a.ts', line: 3 }
+  const low = { severity: 'low' as const, title: 'naming' }
+
+  it('blocking 이슈가 없으면 completed 이고 이슈는 reviewIssues 에 남는다', () => {
+    const { s, taskId, reviewId } = reviewing()
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'fine', issues: [low], repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('completed')
+    expect(task.consecutiveFailures).toBe(0)
+    expect(task.reviewIssues?.map((i) => [i.severity, i.blocking])).toEqual([['low', false]])
+    expect(r.state.messages.at(-1)?.subject).toBe('Review approved (1 non-blocking note)')
+  })
+
+  it('blocking 이슈가 있으면 같은 구현 세션에 review-failure repair 를 연다', () => {
+    const { s, taskId, implId, reviewId } = reviewing()
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'see file', issues: [high, low], repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('dispatched')
+    expect(task.consecutiveFailures).toBe(1)
+    const repair = r.state.dispatches.find((d) => d.repair)!
+    expect(repair).toMatchObject({ repair: 'review-failure', retryOf: implId, sessionId: 'sess1' })
+    expect(r.state.dispatches.find((d) => d.id === reviewId)?.outcome).toBe('failed')
+    expect(r.state.messages.at(-1)?.subject).toBe('claude review found 1 blocking issue')
+  })
+
+  it('succeeded 라고 해도 high 이슈가 있으면 repair 다 — 승인이 발견을 덮지 못한다', () => {
+    const { s, taskId, reviewId } = reviewing()
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'b', issues: [high], repair: SAME }, LATER) as never)
+    expect(r.state.tasks.find((x) => x.id === taskId)?.status).toBe('dispatched')
+  })
+
+  it('medium 임계값이면 medium 도 막는다', () => {
+    const { s, taskId, reviewId } = reviewing({}, { convergence: { blockingSeverity: 'medium' } })
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'b', issues: [{ severity: 'medium', title: 'm' }], repair: SAME }, LATER) as never)
+    expect(r.state.tasks.find((x) => x.id === taskId)?.status).toBe('dispatched')
+  })
+
+  it('깨진 파일은 검토 Dispatch 를 닫고 Gate 다', () => {
+    const { s, taskId, reviewId } = reviewing()
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'b', issues: 'malformed', repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('blocked')
+    expect(r.state.dispatches.find((d) => d.id === reviewId)?.endedAt).toBe(LATER)
+    expect(r.state.gates.at(-1)?.question).toContain('could not be parsed')
+  })
+
+  it('라운드 상한에 닿았는데 아직 blocking 이면 소진 Gate 다', () => {
+    const { s, taskId, reviewId } = reviewing({}, { convergence: { maxReviewRounds: 1 } })
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b', issues: [high], repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('blocked')
+    expect(r.state.gates.at(-1)?.kind).toBe('convergence-exhausted')
+    expect(r.state.gates.at(-1)?.question).toContain('HIGH Session race')
+  })
+
+  it('check 예산이 다했어도 소진 Gate 다', () => {
+    const { s, taskId, reviewId } = reviewing({ consecutiveFailures: 3 })
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b', issues: [high], repair: SAME }, LATER) as never)
+    expect(r.state.gates.at(-1)?.kind).toBe('convergence-exhausted')
+  })
+
+  it('꺼진 Run 은 이슈를 무시하고 지금과 같다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const old: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true } : t)) }
+    const done = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const opened = unwrap<Dispatch>(openReviewDispatch(done.state, { taskId, provider: 'claude', accountId: 'accC', sessionId: 'rev1', cwd: 'D:/p', specPath: '' }, NOW) as never)
+    const r = unwrap(applyReviewResult(opened.state, { taskId, dispatchId: opened.value.id, outcome: 'failed', subject: 'nope', body: 'why', issues: [low] }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('failed')
+    expect(task.reviewIssues).toBeUndefined()
+    expect(r.state.messages.at(-1)?.subject).toBe('review failed')
+    expect(r.state.messages.at(-1)?.body).toContain('Retry with worker-start --retry-of')
+  })
+})
+
+describe('interruptStalledTask — convergence Run 은 다시 돌린다', () => {
+  it('validating 이면 resume: validation 이고 Gate 를 열지 않는다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const on: OrchState = {
+      ...s,
+      runs: s.runs.map((r) => ({ ...r, convergence: {} })),
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t))
+    }
+    const v = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const r = interruptStalledTask(v.state, { taskId }, LATER)
+    expect(r).toMatchObject({ interrupted: null, resume: 'validation', stuck: false })
+    expect(r.state.gates).toHaveLength(0)
+    expect(r.state.tasks.find((x) => x.id === taskId)?.status).toBe('validating')
+  })
+  it('reviewing 이면 resume: review 다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const on: OrchState = {
+      ...s,
+      runs: s.runs.map((r) => ({ ...r, convergence: {} })),
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true } : t))
+    }
+    const v = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    expect(interruptStalledTask(v.state, { taskId }, LATER)).toMatchObject({ interrupted: null, resume: 'review' })
+  })
+  it('꺼진 Run 은 지금처럼 Gate 를 연다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const old: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t)) }
+    const v = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const r = interruptStalledTask(v.state, { taskId }, LATER)
+    expect(r).toMatchObject({ interrupted: 'validation', resume: null })
+    expect(r.state.gates).toHaveLength(1)
   })
 })
