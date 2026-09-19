@@ -28,6 +28,7 @@ import {
   resumeSchedule,
   setRunWorktree,
   type OrchState,
+  type RepairTarget,
   type Res
 } from '../../core/orchestration/state'
 import { workerDoneFieldError } from '../../core/orchestration/sendArgs'
@@ -38,6 +39,7 @@ import {
   FAILURE_LIMIT,
   canTransition,
   recomputeReady,
+  type ConvergencePolicy,
   type Dispatch,
   type MessageType,
   type Task,
@@ -45,6 +47,7 @@ import {
 } from '../../core/orchestration/types'
 import { runWorktrees } from '../../core/orchestration/integrate'
 import { buildHandoverPrompt } from '../../core/orchestration/handover'
+import { parseReviewFile, type ReviewIssueInput } from '../../core/orchestration/review'
 import { nameForRun } from '../../core/worktrees/naming'
 import type { Provider } from '../../core/providers/meta'
 import { isValidRule, type ScheduleRule } from '../../core/scheduler/rule'
@@ -54,6 +57,7 @@ import type { SessionCheck } from '../../core/workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { parseHandoffBody } from '../../core/handoff/parse'
 import type { HandoffBody } from '../../core/handoff/types'
+import type { Lang } from '../../core/i18n'
 
 export interface OrchServerDeps {
   getState(): OrchState
@@ -237,6 +241,29 @@ export interface OrchServerDeps {
    *  그 Dispatch 가 cwd 를 들고 있다. 여기서 넘기면 두 호출자(이 서버와 검증 통과 경로)가 같은 값을
    *  서로 다른 방법으로 구하게 되고, 그 둘은 갈라진다. */
   startReview?(a: { taskId: string }): void
+  /** `<specPath>.review.json` 의 본문 — **완성된 경로를 받는다.** suffix(`.review.json`)는 이 파일의
+   *  호출부(아래 send worker_done 의 검토 분기)가 붙인다, 한 곳에서만. 여기서 또 붙이면
+   *  `….md.review.json.review.json` 을 찾다가 조용히 못 찾아, 구조화된 판정 기능 자체가 죽은 채로
+   *  아무 신호도 내지 않는다.
+   *  없으면 null(outcome 으로 해석). 읽기 실패는 **던진다** — 서버가 잡아 'malformed' 로 다룬다
+   *  (조용히 삼키면 "이슈 없음" 으로 읽혀 깨진 판정이 통과가 된다, 설계 §8.2). convergence 가 없는
+   *  Run 에서는 이 함수가 있어도 부르지 않는다 — 그 경로는 오늘과 바이트 단위로 같아야 한다. */
+  readReviewFile?(path: string): Promise<string | null>
+  /** 판정 직전의 repair 대상(repair.ts 의 repairTargetFor 를 배선이 감싼다) — 마지막 구현·수리
+   *  세션이 살아 있으면 그 세션, 아니면 새 워커(설계 D3). applyValidationResult/applyReviewResult 의
+   *  `repair` 로 그대로 넘긴다; 주입되지 않으면 넘기지 않고, convergence Run 에서 repair 를 열어야
+   *  하는 판정은 그 순수 층에서 거절된다("repair target is required for a convergence Run"). */
+  repairTargetFor?(taskId: string): RepairTarget | null
+  /** 판정이 새로 연 repair Dispatch 의 부수 효과(repair.ts 의 performRepair) — spec 파일을 쓰고
+   *  살아 있는 세션에 넣거나 새 워커를 띄운다. **커밋 뒤에만 부른다** — 이 파일의 다른 모든 부수
+   *  효과와 같은 순서(Dispatch 먼저, 세션은 그다음)다. */
+  startRepair?(a: { dispatchId: string }): void
+  /** 소진 Gate(kind: 'convergence-exhausted')의 retry-once 답(repair.ts 의 repairOnce) — 예산 밖의
+   *  repair 를 정확히 하나 연다. gate-resolve 가 그 kind 의 Gate 를 이 답으로 풀 때만 부른다. */
+  repairOnce?(a: { taskId: string }): void
+  /** Gate 문구의 언어. 배선이 앱 언어를 넘긴다(applyValidationResult/applyReviewResult 의 `lang`
+   *  으로 그대로 간다); 주입되지 않으면 영어다. */
+  lang?(): Lang
   /** Audit log left behind when task-update bypasses the transition table (canTransition) — the same
    *  shape as log(message: string) in coordinator.ts. The wiring decides where it goes. If it is not
    *  injected (existing tests and the like) logging is skipped — optional for the same reason as
@@ -469,6 +496,31 @@ export async function handleCommand(
       const concurrency = args.concurrency === undefined ? null : posInt(args.concurrency)
       if (args.concurrency !== undefined && concurrency === null)
         return bad('--concurrency must be an integer >= 1')
+      // 완료 수렴(설계 D12). --convergence 만 주면 빈 정책(기본값). 숫자 셋은 --convergence 없이는
+      // 거절한다 — 조용히 받으면 "정책을 줬는데 꺼져 있다" 가 된다.
+      let convergence: ConvergencePolicy | undefined
+      const wantsConvergence = args.convergence === true
+      const hasKnob = args.maxFixAttempts !== undefined || args.maxReviewRounds !== undefined || args.blockingSeverity !== undefined
+      if (hasKnob && !wantsConvergence)
+        return bad('--max-fix-attempts, --max-review-rounds and --blocking-severity require --convergence')
+      if (wantsConvergence) {
+        convergence = {}
+        if (args.maxFixAttempts !== undefined) {
+          const n = posInt(args.maxFixAttempts)
+          if (n === null) return bad('--max-fix-attempts must be an integer >= 1')
+          convergence.maxFixAttempts = n
+        }
+        if (args.maxReviewRounds !== undefined) {
+          const n = posInt(args.maxReviewRounds)
+          if (n === null) return bad('--max-review-rounds must be an integer >= 1')
+          convergence.maxReviewRounds = n
+        }
+        if (args.blockingSeverity !== undefined) {
+          if (args.blockingSeverity !== 'high' && args.blockingSeverity !== 'medium')
+            return bad('--blocking-severity must be high|medium')
+          convergence.blockingSeverity = args.blockingSeverity
+        }
+      }
       // 이 Run 을 관리할 코디네이터 세션의 계정. **하나다** — 목록이 아닌 이유는 Run.coordinatorAccountId
       // 의 주석에 있다(갈아타는 대신 같은 세션에서 기다린다). 없으면 코디네이터를 띄우지 않고 앱이
       // 돌린다(옛 동작). 사이드바는 그 상태를 만들지 않지만 CLI 와 옛 Run 이 그 갈래다.
@@ -546,7 +598,8 @@ export async function handleCommand(
             // **예약도 이 게이트를 쓴다.** 템플릿 자신은 돌지 않지만 발화는 시작이고, Task 를 다 짜기
             // 전에 첫 회차가 도는 것은 보통 Run 에서 없앤 바로 그 문제다. 게이트가 걷히는 순간부터
             // 무장하므로(firesDue), '실행' 을 누른 뒤의 첫 예약 시각이 첫 회차가 된다.
-            ...(args.auto === true ? { pendingStart: true } : {})
+            ...(args.auto === true ? { pendingStart: true } : {}),
+            ...(convergence ? { convergence } : {})
           },
           now
         )
@@ -856,6 +909,15 @@ export async function handleCommand(
       const parsedAccounts = parseAccountList(accountArg, deps.listAccounts(), '--account')
       if (!parsedAccounts.ok) return bad(parsedAccounts.reason)
       const accountIds: string[] = parsedAccounts.ids
+      // `--validate` 는 쉼표 목록이다(설계 D8) — `--account` 와 같은 규약. 옛 단일 값도 한 칸짜리
+      // 목록으로 저장한다; validateConfigId 는 더 쓰지 않는다(읽기는 checkConfigIdsOf 가 합친다).
+      const validateArg = str(args.validate)
+      let validateIds: string[] | undefined
+      if (validateArg !== null) {
+        const parts = validateArg.split(',').map((x) => x.trim())
+        if (parts.some((x) => x === '')) return bad('--validate must not contain an empty entry')
+        validateIds = parts
+      }
       return commit(
         createTask(
           s,
@@ -866,7 +928,7 @@ export async function handleCommand(
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
             parentId: str(args.parent) ?? undefined,
             ...(accountIds ? { accountIds } : {}),
-            validateConfigId: str(args.validate) ?? undefined,
+            ...(validateIds ? { validateConfigIds: validateIds } : {}),
             // `--review` 는 값이 없는 플래그다(task-list --ready 와 같은 모양). 어느 provider 가
             // 읽을지는 앱이 고른다 — 계정 풀을 아는 것은 앱이다.
             reviewRequested: args.review === true ? true : undefined
@@ -892,8 +954,26 @@ export async function handleCommand(
     }
     case 'task-update': {
       const id = str(args.id)
-      const status = str(args.status)
       if (!id) return bad('--id is required')
+      // --convergence off: 사람이 이 Task 의 자동 수정을 멈춘다(설계 §13.4 의 Stop Auto-Fix). **먼저
+      // 처리하고 곧바로 돌아간다** — status 와는 독립인 칸이고, 도는 repair 는 끝까지 가고 그 판정이
+      // Gate 로 간다(state.ts 의 routeFailure). 한 호출에 --status 와 함께 오면 거절한다: 둘을 한
+      // 쓰기로 섞으면 "멈췄다" 와 "옮겼다" 중 어느 것이 실제로 커밋됐는지 응답만으로 알 수 없다 —
+      // 두 호출로 나누면 각각의 결과가 뚜렷하다.
+      if (args.convergence !== undefined) {
+        if (args.convergence !== 'off')
+          return bad('--convergence takes only off (there is no on: a Task follows its Run)')
+        if (str(args.status))
+          return bad('--convergence and --status cannot be combined — pass them as two calls')
+        const target = s.tasks.find((t) => t.id === id)
+        if (!target) return bad(`unknown task: ${id}`)
+        await deps.setState({
+          ...s,
+          tasks: s.tasks.map((t) => (t.id === id ? { ...t, convergenceOff: true as const, updatedAt: now } : t))
+        })
+        return okBody({ id, convergenceOff: true })
+      }
+      const status = str(args.status)
       if (!status) return bad('--status is required')
       if (!isTaskStatus(status))
         return bad(`--status must be one of ${TASK_STATUSES.join('|')}`)
@@ -1223,6 +1303,23 @@ export async function handleCommand(
       // and if that is not reported the orchestrator reads the call as "cleaned up" — cleanup is
       // never skipped silently.
       const d = s.dispatches.find((x) => x.id === id)
+      // 수렴 중인 Task 의 세션은 repair 를 받을 자리다(설계 §9). 지금 닫으면 same-session 이 fresh 로
+      // 바뀌어 워커가 자기가 무엇을 했는지 잊는다 — 닫는 세션이 바로 그 세션이라 다음 워커는 다시
+      // 처음부터다. **Dispatch 자신이 이미 끝났어도(outcome+endedAt) 세션은 살아 있을 수 있다** — 워커는
+      // 보고 뒤에도 일부러 기다리는 것이 규칙이다(가이드 8절). 그래서 `d.outcome` 이 아니라 그
+      // Dispatch 가 가리키는 **Task 의 지금 상태**로 판정한다. 수렴이 끝난 뒤(completed·failed·blocked)
+      // 에는 지금처럼 닫는다.
+      if (d) {
+        const task = s.tasks.find((t) => t.id === d.taskId)
+        const run = task && s.runs.find((r) => r.id === task.runId)
+        const converging =
+          !!run?.convergence &&
+          !!task &&
+          (task.status === 'validating' ||
+            task.status === 'reviewing' ||
+            s.dispatches.some((x) => x.taskId === task.id && x.repair !== undefined && !x.endedAt))
+        if (converging) return conflict(`task ${task!.id} is still converging — release after it completes`)
+      }
       await deps.releaseWorker({ dispatchId: id })
       return okBody(d?.retained === true ? { released: id, skipped: 'retained' } : { released: id })
     }
@@ -1391,8 +1488,38 @@ export async function handleCommand(
         // 검토 Dispatch 의 보고는 다른 판정으로 간다. applyWorkerDone 으로 보내면 dispatched 에서만
         // 나가는 전이를 reviewing 인 Task 에 적용하려다 거절되고, 검토 결과가 어디에도 반영되지 않는다.
         if (reporting?.review) {
-          // 진입 스냅숏(s)이 아니라 지금 상태를 읽는다 — 위 탐침의 await 동안 다른 흐름이 커밋했을 수
-          // 있고, 낡은 스냅숏으로 부르면 setState 가 그것을 덮어 잃는다(아래 구현 경로와 같은 이유).
+          // 구조화된 판정(설계 §8.2). 파일이 없으면 undefined(outcome 으로 해석), 깨졌거나 읽을 수
+          // 없으면 'malformed'(Gate) — 조용히 "이슈 없음" 으로 읽지 않는다. **convergence 가 없는
+          // Run 은 읽지 않는다** — applyReviewResult 는 issues 를 그 경로에서 무시하므로 읽어도
+          // 헛돌고, 그 Run 의 동작은 오늘과 바이트 단위로 같아야 한다(이 파일의 다른 규율과 같다).
+          //
+          // **suffix(`.review.json`)를 붙이는 자리는 여기 하나뿐이다.** deps.readReviewFile 은
+          // 완성된 경로를 받는다 — 배선이 또 붙이면 `….md.review.json.review.json` 을 찾다가
+          // 조용히 못 찾고, 구조화된 판정 기능이 죽은 채로 아무 신호도 내지 않는다.
+          const beforeReview = deps.getState()
+          const reviewTask = beforeReview.tasks.find((t) => t.id === taskId)
+          const reviewRun = reviewTask && beforeReview.runs.find((r) => r.id === reviewTask.runId)
+          let issues: ReviewIssueInput[] | 'malformed' | undefined
+          if (reviewRun?.convergence && deps.readReviewFile && reporting.specPath) {
+            try {
+              const text = await deps.readReviewFile(`${reporting.specPath}.review.json`)
+              if (text !== null) {
+                const parsed = parseReviewFile(text)
+                if (parsed.ok) {
+                  issues = parsed.issues
+                } else {
+                  issues = 'malformed'
+                  deps.log?.(`review.json for dispatch=${dispatchId} is malformed: ${parsed.error}`)
+                }
+              }
+            } catch (e) {
+              issues = 'malformed'
+              deps.log?.(`review.json for dispatch=${dispatchId} could not be read: ${String(e)}`)
+            }
+          }
+          // 진입 스냅숏(s)이 아니라 지금 상태를 읽는다 — 위 탐침과 방금 파일 읽기의 await 동안 다른
+          // 흐름이 커밋했을 수 있고, 낡은 스냅숏으로 부르면 setState 가 그것을 덮어 잃는다(아래 구현
+          // 경로와 같은 이유).
           const r = applyReviewResult(
             deps.getState(),
             {
@@ -1400,7 +1527,10 @@ export async function handleCommand(
               dispatchId,
               outcome,
               subject: str(args.subject) ?? '',
-              body: str(args.body) ?? ''
+              body: str(args.body) ?? '',
+              ...(issues !== undefined ? { issues } : {}),
+              ...(deps.repairTargetFor ? { repair: deps.repairTargetFor(taskId) ?? undefined } : {}),
+              lang: deps.lang?.() ?? 'en'
             },
             now
           )
@@ -1408,6 +1538,15 @@ export async function handleCommand(
           await deps.setState(withLimit(r.state))
           // 'alreadyReported' 는 아무것도 닫지 않았다(재전송) — 그때 이미 걷혔다
           if (r.value === 'accepted') dropRollingChain()
+          // 판정이 repair Dispatch 를 새로 열었으면 그 부수 효과를 시작한다(repair.ts). **커밋 뒤에만
+          // 부른다** — worker-start 의 서버 분기와 같은 순서(Dispatch 먼저, 세션은 그다음)다.
+          if (r.value === 'accepted') {
+            const afterReview = deps.getState()
+            const repairOpen = afterReview.dispatches.find(
+              (x) => x.taskId === taskId && x.repair !== undefined && !x.endedAt && !x.specPath
+            )
+            if (repairOpen) deps.startRepair?.({ dispatchId: repairOpen.id })
+          }
           return okBody(r.value)
         }
         // getState is read again here — the state may have changed during the probeLimit await
@@ -1661,7 +1800,30 @@ export async function handleCommand(
       const resolution = str(args.resolution)
       if (!gateId) return bad('--id is required')
       if (!resolution) return bad('--resolution is required')
-      return commit(resolveGate(s, { gateId, resolution }, now))
+      const gate = s.gates.find((g) => g.id === gateId)
+      const r = resolveGate(s, { gateId, resolution }, now)
+      if (!r.ok) return bad(r.error)
+      await deps.setState(r.state)
+      // 소진 Gate 의 두 답(설계 §5.2), **커밋 뒤에만**. retry-once 는 예산 밖의 repair 를 정확히
+      // 하나 여는 것(repair.ts 의 repairOnce), mark-failed 는 task-update 와 같은 전이표 우회다 —
+      // 회로 카운터(consecutiveFailures)는 그대로 둔다: 이것은 구제가 아니라 포기이기 때문이다.
+      // **다른 모든 Gate·다른 모든 resolution 은 지금처럼 풀린다** — 이 갈래는 kind 가
+      // 'convergence-exhausted' 이고 이번 호출이 실제로 그 Gate 를 닫았을 때만 탄다(위 snapshot 의
+      // `gate.status === 'open'`; resolveGate 는 이미 resolved 인 Gate 를 다시 부르면 no-op 이다).
+      if (gate?.kind === 'convergence-exhausted' && gate.status === 'open') {
+        if (resolution === 'retry-once') {
+          deps.repairOnce?.({ taskId: gate.taskId })
+        } else if (resolution === 'mark-failed') {
+          const latest = deps.getState()
+          await deps.setState({
+            ...latest,
+            tasks: latest.tasks.map((t) =>
+              t.id === gate.taskId ? { ...t, status: 'failed' as const, updatedAt: now } : t
+            )
+          })
+        }
+      }
+      return okBody(r.value)
     }
     case 'gate-list': {
       let gates = s.gates
