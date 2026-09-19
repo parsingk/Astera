@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -92,9 +92,16 @@ describe('HookEventWatcher', () => {
     watcher.start()
     const file = path.join(dir, 'sess-9.jsonl')
     await fs.appendFile(file, '{"live":1}\n', 'utf8')
-    // fs.watch 이벤트는 비동기 — 최대 3초 폴링 대기
-    const deadline = Date.now() + 3_000
-    while (events.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+    // fs.watch 이벤트는 비동기다. 기다리는 방식은 core/history/index.test.ts 가 같은 파일 감시를
+    // 기다리는 방식과 같다 — 손으로 만든 폴링 루프는 실패했을 때 "빈 배열이 기대값과 다르다" 라고만
+    // 말해서, 이벤트가 안 온 건지 늦게 온 건지를 가리지 못한다.
+    //
+    // 3초로 박아두었던 것을 8초로 늘렸다. macOS 의 fs.watch 는 FSEvents 라 자체 지연이 있고,
+    // 러너가 붐비면 3초를 넘긴다 — `git push main --tags` 가 CI 와 릴리스 워크플로를 동시에
+    // 출발시켜 같은 러너를 둘이 잡는 순간이 그렇다(v1.3.24 태그에서 실측). 이 테스트 자체의
+    // 타임아웃은 10초(vitest.config.ts)이니, 그보다 짧게 다시 좀히는 숫자는 느린 러너를 빨간
+    // 빌드로 바꾸는 일 말고는 하는 일이 없다.
+    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 8_000, interval: 50 })
     expect(events).toEqual([{ sessionId: 'sess-9', payload: { live: 1 } }])
   })
 })
