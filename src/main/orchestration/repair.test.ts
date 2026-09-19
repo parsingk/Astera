@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './repair'
 import {
-  applyValidationResult, applyWorkerDone, createRun, createTask, emptyState, openDispatch, resolveGate, type OrchState
+  applyValidationResult, applyWorkerDone, createGate, createRun, createTask, emptyState, openDispatch, resolveGate, type OrchState
 } from '../../core/orchestration/state'
 import type { CheckResult, Dispatch, Task } from '../../core/orchestration/types'
 
@@ -206,7 +206,8 @@ describe('repairOnce', () => {
     // 부수 효과(startWorker 호출)는 백그라운드에서 돈다(설계: gate-resolve 가 그 창을 닫으려고
     // 필요한 것은 커밋뿐이다). 그래서 커밋은 await 뒤에 바로 보이지만 deps.started 는 vi.waitFor
     // 로 기다려야 한다.
-    await repairOnce(deps, { taskId })
+    const result = await repairOnce(deps, { taskId })
+    expect(result).toEqual({ ok: true })
     const repair = deps.box.state.dispatches.find((d) => d.repair)!
     expect(repair).toMatchObject({ repair: 'check-failure', retryOf: implId, sessionId: 'sess1' })
     expect(deps.box.state.tasks.find((t) => t.id === taskId)?.status).toBe('dispatched')
@@ -225,10 +226,35 @@ describe('repairOnce', () => {
     // 흐름이 어떻게 열었는지와는 무관하다 — 여기서는 그저 "이미 열려 있다"만 필요하다).
     const already = unwrap<{ id: string }>(openDispatch(resolved.state, { taskId, provider: 'claude', accountId: 'accA', sessionId: 'sess2', cwd: 'D:/wt', specPath: '', ignoreCircuit: true }, NOW) as never)
     const deps = makeDeps(already.state)
-    await repairOnce(deps, { taskId })
+    // 전체 브랜치 리뷰, Finding 5 — repairOnce 는 이제 이 거절을 돌려준다. void 였을 때는 부르는 쪽이
+    // "아무것도 안 열렸다" 는 사실을 알 방법이 없었다.
+    const result = await repairOnce(deps, { taskId })
+    expect(result.ok).toBe(false)
     expect(deps.started).toHaveLength(0)
     const open = deps.box.state.dispatches.filter((d) => d.taskId === taskId && !d.outcome && !d.endedAt)
     expect(open).toHaveLength(1)
     expect(open[0].id).toBe(already.value.id) // openDispatch 가 거절했다 — 새 Dispatch 는 없다
+  })
+
+  // 전체 브랜치 리뷰, Finding 5 — 이 Task 를 막는 두 번째 Gate 가 아직 열려 있으면 resolveGate 는
+  // blocked 를 그대로 둔다(stillBlocked). 그 상태로 repairOnce 가 openDispatch 를 부르면 "task is
+  // blocked by an open gate" 로 거절되고, 사람의 retry-once 는 아무것도 열지 못한다 — 그 사실이
+  // 반환값에 남아야 한다.
+  it('두 번째 열린 Gate 가 여전히 막으면 openDispatch 가 거절하고, 그 거절이 반환값에 남는다', async () => {
+    const { s, taskId } = validating()
+    const tripped: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, consecutiveFailures: 3 } : t)) }
+    const judged = unwrap<Task>(applyValidationResult(tripped, { taskId, results: failing, repair: repairTargetFor(s, taskId, () => true)! }, NOW) as never)
+    const gate = judged.state.gates.at(-1)!
+    // 같은 Task 에 두 번째 Gate 를 하나 더 연다 — createGate 는 이미 blocked 인 Task 도 받아 준다
+    // (moveTask 의 자기 자신으로의 전이는 그대로 통과한다).
+    const second = unwrap(createGate(judged.state, { taskId, question: 'another question' }, NOW) as never)
+    const resolved = unwrap(resolveGate(second.state, { gateId: gate.id, resolution: 'retry-once' }, NOW) as never)
+    // 두 번째 Gate 가 아직 열려 있으므로 Task 는 여전히 blocked 다.
+    expect(resolved.state.tasks.find((t) => t.id === taskId)?.status).toBe('blocked')
+    const deps = makeDeps(resolved.state)
+    const result = await repairOnce(deps, { taskId })
+    expect(result).toMatchObject({ ok: false })
+    if (!result.ok) expect(result.error).toContain('blocked by an open gate')
+    expect(deps.started).toHaveLength(0)
   })
 })

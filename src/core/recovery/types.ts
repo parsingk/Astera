@@ -32,6 +32,11 @@ export interface LostAttempt {
   appDriven: boolean
   /** 유실된 attempt 가 repair 였다면 그 사유(설계 §10). 새 attempt 도 repair 다 — 그 Task 는 아직 수렴 중이다 */
   repair?: RepairReason
+  /** 유실된 Dispatch 가 소진 Gate 의 retry-once 로, 예산 밖에 사람이 열어 준 것이었는가
+   *  (`Dispatch.grantedExtra`). recovery 가 재시작한 새 Dispatch 로 그대로 옮겨 적는다 — 잃은 것과
+   *  새로 연 것을 둘 다 세는 repairCountOf 로 이 사실을 다시 계산하면(전체 브랜치 리뷰, Finding 3)
+   *  예산을 실제로 넘지 않은 재시작에도 "사람이 허락했다" 는 말이 우연히 붙는다. */
+  grantedExtra?: true
 }
 
 export interface GitFacts {

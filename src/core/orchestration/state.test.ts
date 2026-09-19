@@ -1200,10 +1200,20 @@ describe('applyValidationResult — convergence', () => {
     expect(r.state.gates.at(-1)?.kind).toBe('convergence-blocked')
   })
 
-  it('정책이 켜졌는데 repair 대상이 없으면 거절한다 — 조용히 옛 경로로 떨어지지 않는다', () => {
+  // 전체 브랜치 리뷰, Finding 4 — routeFailure 의 나머지 세 갈래(convergenceOff, paused, exhausted)와
+  // openRepairDispatch 실패 갈래가 전부 Gate 를 여는데, repair 대상 자체가 없는 이 갈래만 err 로
+  // 조용히 버렸었다. 그러면 부르는 쪽(server.ts)은 로그만 남기고 Task 는 validating 에 갇힌 채
+  // 아무도 다시 보러 오지 않는다 — §18(4)가 닫으려 한 것과 같은 구멍이다. 오늘의 배선은 항상
+  // `repair` 를 채워 넘기므로 이 갈래는 이제 닿지 않지만(순수 층은 배선을 믿지 않는다), 그래도
+  // 나머지와 같은 모양으로 닫아 둔다.
+  it('정책이 켜졌는데 repair 대상이 없으면 조용히 버리지 않고 Gate(repairFailed) 로 보낸다', () => {
     const { s, taskId } = armed()
-    const r = applyValidationResult(s, { taskId, results: two(1, null) }, NOW)
-    expect(r.ok).toBe(false)
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(1, null) }, NOW) as never)
+    expect(r.value.status).toBe('blocked')
+    const gate = r.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-blocked')
+    expect(gate.question).toContain('no repair target was supplied')
+    expect(r.state.dispatches.some((d) => d.repair)).toBe(false)
   })
 
   it('통과 뒤 검토가 걸려 있으면 reviewing 이고 카운터는 보존된다', () => {
@@ -3107,11 +3117,17 @@ describe('applyReviewResult — convergence', () => {
     expect(r.state.dispatches.find((d) => d.repair)?.retryOf).toBe(implId)
   })
 
-  // routeFailure 의 가드다 — convergence Run 은 repair 대상 없이 조용히 다른 경로로 떨어지지 않는다
-  it('convergence Run 인데 repair 대상이 없으면 거절한다', () => {
+  // routeFailure 의 가드다 — convergence Run 은 repair 대상 없이 조용히 다른 경로로 떨어지지 않는다.
+  // **err 가 아니라 Gate 다(전체 브랜치 리뷰, Finding 4)** — state.test.ts 의 같은 이름 테스트
+  // (applyValidationResult 쪽)와 같은 이유.
+  it('convergence Run 인데 repair 대상이 없으면 조용히 버리지 않고 Gate(repairFailed) 로 보낸다', () => {
     const { s, taskId, reviewId } = reviewing()
-    const r = applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b', issues: [high] }, LATER)
-    expect(r.ok).toBe(false)
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b', issues: [high] }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('blocked')
+    const gate = r.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-blocked')
+    expect(gate.question).toContain('no repair target was supplied')
   })
 
   it('succeeded 라고 해도 high 이슈가 있으면 repair 다 — 승인이 발견을 덮지 못한다', () => {

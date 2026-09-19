@@ -154,10 +154,15 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
         maxFixAttempts,
         checks: task.checks,
         issues: task.reviewIssues,
-        // repairs 가 maxFixAttempts 를 넘는 것은 retry-once(main/orchestration/repair.ts 의 repairOnce)
-        // 가 소진 Gate 를 예산 밖에 열었을 때뿐이다 — repairSpec 과 같은 판정으로 그 사실을 spec
-        // 문구에 넘긴다("repair 4 of 3" 대신 "예산이 다 쓰인 뒤 허락됐다").
-        ...(repairs > maxFixAttempts ? { extra: true } : {})
+        // **repairs > maxFixAttempts 로 판정하지 않는다(전체 브랜치 리뷰, Finding 3).** 그 되짚기는
+        // repair.ts 의 repairSpec 에서만 안전하다 — 거기서는 이 라운드가 연 Dispatch 가 정확히
+        // 하나다. 여기서는 잃은 Dispatch 를 recovery 가 재시작하면서 새 Dispatch 를 하나 더
+        // 커밋했으므로, 잃은 것과 새로 연 것 둘 다 repairCountOf 에 잡혀 예산을 안 넘긴 재시작도
+        // "넘었다" 고 잘못 판정한다. 대신 잃은 Dispatch 자신이 열릴 때 이미 적어 둔 사실
+        // (Dispatch.grantedExtra, reconciler.ts 가 LostAttempt 로 그대로 옮긴다) 을 읽는다 — 사람이
+        // 실제로 retry-once 를 눌렀을 때만 참이고, recovery 가 다시 세는 것과 무관하게 크래시를
+        // 넘어 살아남는다.
+        ...(attempt.grantedExtra ? { extra: true } : {})
       }
     })
   }

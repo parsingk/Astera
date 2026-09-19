@@ -161,7 +161,8 @@ export class RecoveryReconciler {
       // !== undefined 로는 정책이 있다고 잘못 읽히지만, policyOf 는 falsy 한 convergence 를 그대로
       // "정책 없음" 으로 읽는다(이 파일이 손으로 고쳐질 수 있다는 전제는 곳곳에 이미 있다).
       appDriven: run.autoDispatch === true || (policyOf(state, task) !== null && dispatch.repair !== undefined),
-      ...(dispatch.repair ? { repair: dispatch.repair } : {})
+      ...(dispatch.repair ? { repair: dispatch.repair } : {}),
+      ...(dispatch.grantedExtra ? { grantedExtra: true } : {})
     }
 
     const git = await this.deps.readGitFacts(dispatch.cwd)

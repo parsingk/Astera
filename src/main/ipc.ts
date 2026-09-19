@@ -2701,7 +2701,15 @@ export function registerIpc(
           // 독립된 리터럴은 오늘은 우연히 같아도 한쪽만 바뀌는 날 조용히 갈라진다(검토자는 아무도
           // 읽지 않는 파일에 쓰고, server.ts 는 그 파일을 찾지 못한다 — malformed 도 "이슈 없음"도
           // 아니다).
-          resultPath: path.join(specsDir, `${specFileName(taskId, opened.value.id)}.review.json`)
+          //
+          // **convergence Run 에서만 넘긴다(전체 브랜치 리뷰, Important 1).** server.ts 는
+          // policyOf(...) !== null 일 때만 이 파일을 읽는다(applyReviewResult) — 없는 Run 에도 항상
+          // 넘기면 그 Run 의 검토자가 아무도 읽지 않는 파일에 쓰고, "구조화된 판정" 절이 "파싱 실패는
+          // 사람에게 간다"는 거짓을 말하게 된다. **raw 필드가 아니라 policyOf 다** — 나머지 모든
+          // 관문과 같은 판별식(reconciler.ts 의 주석, ipc.ts 의 startValidation 가드와 같은 이유).
+          ...(policyOf(fresh, task) !== null
+            ? { resultPath: path.join(specsDir, `${specFileName(taskId, opened.value.id)}.review.json`) }
+            : {})
         })
         let started: { sessionId: string; cwd: string; specPath: string }
         try {

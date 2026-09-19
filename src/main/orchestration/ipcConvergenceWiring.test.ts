@@ -89,4 +89,35 @@ describe('ipc.ts convergence wiring (source guard)', () => {
     // must return out of this wrapper before the line that writes suspiciousFiles is ever reached.
     expect(policyAt).toBeLessThan(writeAt)
   })
+
+  // 전체 브랜치 리뷰, Finding 1 — 이 브랜치의 유일한 무방비 진입점이었다: buildReviewSpecFile 에
+  // resultPath 를 넘기는 이 한 자리가 policyOf(...) !== null 로 가려지지 않으면, convergence 가 없는
+  // Run 의 검토자도 "구조화된 판정" 절을 받고 아무도 읽지 않는 .review.json 에 쓰라는 말을 듣는다.
+  // coordinator.test.ts 는 buildReviewSpecFile 자신이 resultPath 없이 그 절을 붙이지 않는 것만
+  // 확인한다 — 이 자리는 ipc.ts 가 실제로 그 값을 조건부로 넘기는지를 확인한다(ipc.ts 자신에는 다른
+  // 유닛 테스트가 닿지 않는다, 파일 머리말 참고).
+  it('the startReview wrapper only passes resultPath when policyOf(...) says this Run converges (Finding 1)', () => {
+    const wrapper = stripLineComments(
+      sliceBetween(
+        ipcSource,
+        'const startReview = async ({ taskId }: { taskId: string }): Promise<void> => {',
+        'let started: { sessionId: string; cwd: string; specPath: string }'
+      )
+    )
+    const buildAt = wrapper.indexOf('buildReviewSpecFile(')
+    expect(buildAt, 'buildReviewSpecFile(...) not found in the startReview wrapper').toBeGreaterThanOrEqual(0)
+    const resultPathAt = wrapper.indexOf('resultPath:')
+    expect(resultPathAt, 'a resultPath: property not found in the startReview wrapper').toBeGreaterThanOrEqual(0)
+    const policyAt = wrapper.indexOf('policyOf(')
+    expect(policyAt, 'policyOf(...) not found in the startReview wrapper').toBeGreaterThanOrEqual(0)
+    // policyOf(...) must gate resultPath itself, not just appear somewhere earlier in the function —
+    // so it has to sit immediately before the resultPath: property, not merely before
+    // buildReviewSpecFile(...)'s own call site (resultPath is one of that call's arguments).
+    expect(policyAt).toBeLessThan(resultPathAt)
+    expect(resultPathAt - policyAt).toBeLessThan(300)
+    // and it must be the same predicate the rest of the branch uses — not a raw field test that a
+    // hand-edited "convergence": null would fool (server.ts's run-start handover made exactly this
+    // mistake before this fix).
+    expect(wrapper.slice(policyAt, resultPathAt)).not.toMatch(/\.convergence\s*!==\s*undefined/)
+  })
 })

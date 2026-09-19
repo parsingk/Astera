@@ -431,7 +431,10 @@ export function openDispatch(
     startedAt: now,
     workerState: 'ready',
     retained: false,
-    ...(a.repair ? { repair: a.repair } : {})
+    ...(a.repair ? { repair: a.repair } : {}),
+    // 열 때 한 번만 적는다 — 나중에 카운트로 되짚지 않는다(Dispatch.grantedExtra 의 주석, 전체 브랜치
+    // 리뷰 Finding 3).
+    ...(a.ignoreCircuit ? { grantedExtra: true } : {})
   }
   return ok(
     { ...s, tasks: replace(s.tasks, moved), dispatches: [...s.dispatches, dispatch] },
@@ -754,10 +757,12 @@ function gateOnFailure(
 /** 실패한 판정이 갈 길(설계 §5.1의 표). 위에서부터 첫 행이 이긴다. 통과가 아닌 결과를 받았을 때만 부른다.
  *  `task` 는 checks·history·consecutiveFailures(+1) 가 이미 반영된 것이다.
  *
- *  **repair Dispatch 를 열지 못해도 이 판정을 버리지 않는다.** 세션이 다른 Task 에 재사용되는
- *  경우(`--terminal`) 등으로 `openRepairDispatch` 가 거절하면, checks·history·+1 을 실은 `task` 를
- *  그대로 Gate(convergence-blocked, jobs.convergence.gate.repairFailed)에 넘긴다 — 조용히 버리면
- *  Task 가 validating 에 멈춘 채 아무도 다시 보러 오지 않는다. */
+ *  **repair Dispatch 를 열지 못해도, 열 대상 자체가 없어도 이 판정을 버리지 않는다.** 세션이 다른
+ *  Task 에 재사용되는 경우(`--terminal`) 등으로 `openRepairDispatch` 가 거절하거나, 배선이 `repair`
+ *  자체를 넘기지 않았을 때도(오늘의 배선은 항상 넘긴다 — §18(4)) checks·history·+1 이 실린 `task`
+ *  를 그대로 Gate(convergence-blocked, jobs.convergence.gate.repairFailed)에 넘긴다 — 조용히
+ *  버리면(err) Task 가 validating 에 갇힌 채 아무도 다시 보러 오지 않는다(전체 브랜치 리뷰,
+ *  Finding 4). */
 function routeFailure(
   s: OrchState,
   a: { task: Task; policy: ResolvedPolicy; reason: RepairReason; repair: RepairTarget | undefined; lang: Lang; message: { subject: string; detail: string } },
@@ -775,7 +780,17 @@ function routeFailure(
     // 를 그대로 쓰면 check 경로에서는 우연히 같은 값이지만 review 경로에서는 거짓말이 된다(라운드
     // 상한과 repair 예산이 서로 다른 수를 세기 때문).
     return gateOnFailure(s, { task: a.task, kind: 'convergence-exhausted', key: 'jobs.convergence.gate.exhausted', repairs: repairCountOf(s, a.task.id), lang: a.lang }, now)
-  if (!a.repair) return err('repair target is required for a convergence Run')
+  // **err 로 조용히 버리지 않는다(전체 브랜치 리뷰, Finding 4).** 이 위의 세 갈래와 아래
+  // openRepairDispatch 실패 갈래가 전부 Gate 를 여는데, 여기만 err 를 돌려주면 그 값을 부르는 쪽이
+  // 로그만 남기고 마는(server.ts) 이 파일 유일의 자리가 되어 Task 가 validating 에 갇힌 채 아무도
+  // 다시 보러 오지 않는다 — 오늘의 배선은 항상 repair 를 채워 넘겨 닿지 않지만, §18(4)가 닫으려 한
+  // 것과 똑같은 구멍을 새로 열어 두는 것은 다음 사람이 이 자리를 믿게 만든다.
+  if (!a.repair)
+    return gateOnFailure(
+      s,
+      { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.repairFailed', reason: 'no repair target was supplied', lang: a.lang },
+      now
+    )
   const withTask: OrchState = { ...s, tasks: replace(s.tasks, a.task) }
   const opened = openRepairDispatch(withTask, { taskId: a.task.id, reason: a.reason, target: a.repair }, now)
   if (!opened.ok)

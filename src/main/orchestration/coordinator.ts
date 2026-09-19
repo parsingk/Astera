@@ -479,8 +479,12 @@ export function buildReviewSpecFile(a: {
   previousIssues?: ReviewIssue[]
   /** check 의 동작을 바꾸는 파일들(설계 §8.3) */
   suspiciousFiles?: string[]
-  /** 구조화된 판정을 쓸 파일. `<specPath>.review.json` — 서버가 같은 규칙으로 읽는다(server.ts) */
-  resultPath: string
+  /** 구조화된 판정을 쓸 파일. `<specPath>.review.json` — 서버가 같은 규칙으로 읽는다(server.ts).
+   *  **convergence Run에서만 있다.** 그 파일을 읽는 것은 server.ts 가 policyOf(...) !== null 일
+   *  때뿐이므로(applyReviewResult 로 넘어가는 그 한 경로), 없는 Run 에 이 절을 실으면 "파싱 실패는
+   *  사람에게 간다"는 거짓말을 하게 된다(전체 브랜치 리뷰, Important 1) — 그래서 없으면 절 자체가
+   *  붙지 않는다. */
+  resultPath?: string
 }): string {
   // 구현자용 문구를 그대로 쓰지 않는다. 구현자는 "고치기 전에 읽어라"를 받고, 검토자는 "다시 열린
   // 결정은 구체적 결함이다"를 받아야 한다 — 같은 글을 두 번 실으면 이 자리가 값을 못 낸다.
@@ -544,7 +548,12 @@ ${a.suspiciousFiles.map((f) => `- ${f}`).join('\n')}
   // "The one question you answer" 뒤에 온다(리뷰 fix 1차, Important 3) — 무엇이 결함인지 먼저 읽은
   // 다음에야 "판단을 어디에 적을지"가 뜻을 갖는다. 순서를 뒤집으면 리뷰어가 "어떤 심각도로 적을지"를
   // "무엇이 결함으로 치는지" 보다 먼저 듣는다.
-  const verdictSection = `
+  //
+  // **resultPath 가 없으면 절 자체가 붙지 않는다(전체 브랜치 리뷰, Important 1).** convergence 가
+  // 없는 Run 에서는 server.ts 가 이 파일을 절대 읽지 않으므로, 여기서 "파싱 실패는 사람에게 간다"고
+  // 말하면 그 Run 에는 거짓이다 — 없는 정책의 흔적을 검토자에게 심지 않는다.
+  const verdictSection = a.resultPath
+    ? `
 ## Structured verdict
 
 Before you report, write your findings to this file (create it; the directory exists). The file
@@ -561,6 +570,7 @@ Every finding goes in, at the severity you judge. \`title\` is required; \`descr
 which severities block; you decide the severity.
 Then report as below — \`--outcome failed\` when the requirement is not satisfied.
 `
+    : ''
 
   return `# Review: ${a.title}
 

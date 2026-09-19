@@ -3268,6 +3268,31 @@ describe('run-start — 코디네이터 인계', () => {
     expect(brief).toContain('tasks already defined: 1')
   })
 
+  // 전체 브랜치 리뷰, Finding 2 — target.convergence !== undefined 는 손으로 고친 "convergence": null
+  // 을 "정책이 있다" 로 잘못 읽는다. 이 자리는 이 브랜치가 reconciler.ts·ipc.ts 에서 이미 고친 것과
+  // 똑같은 실수였다 — policyOf 로 판정해야 손으로 고친 orchestration.json 에도 다른 모든 관문과 같은
+  // 답을 낸다.
+  it('run.convergence 를 손으로 null 로 고쳐도 인계문에 수렴 절이 붙지 않는다 — policyOf 로 판정한다', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    const s = deps.getState()
+    await deps.setState({
+      ...s,
+      runs: s.runs.map((r) => (r.id === runId ? { ...r, convergence: null as never } : r))
+    })
+    const r = await call(deps, 'run-start', { run: runId })
+    expect(r.status).toBe(200)
+    expect(deps.spawned[0].brief).not.toContain('COMPLETION CONVERGENCE IS ON')
+  })
+
+  it('실제로 정책이 걸린 Run 은 인계문에 수렴 절이 붙는다', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1', convergence: true })
+    const r = await call(deps, 'run-start', { run: runId })
+    expect(r.status).toBe(200)
+    expect(deps.spawned[0].brief).toContain('COMPLETION CONVERGENCE IS ON')
+  })
+
   // 인계하면 앱이 그 Run 의 슬롯을 더 채우지 않으므로, 게으르게 만들던 워크트리를 만들어 줄
   // 사람이 없어진다 — 한도 1 인 Run 의 코디네이터는 "생략하라"는 배치 규칙을 따를 자리가 없다
   it('인계 시점에 Run 워크트리를 만들어 기록한다', async () => {
@@ -4266,14 +4291,29 @@ describe('handleCommand — convergence', () => {
     { id: 'accA', label: 'A', provider: 'claude' as const },
     { id: 'accC', label: 'C', provider: 'codex' as const }
   ]
-  const convDeps = (): ReturnType<typeof makeDeps> & { repairs: string[]; onces: string[]; reviewFile: string | null | Error } => {
+  const convDeps = (): ReturnType<typeof makeDeps> & {
+    repairs: string[]
+    onces: string[]
+    reviewFile: string | null | Error
+    onceResult: { ok: true } | { ok: false; error: string }
+  } => {
     const base = makeDeps()
-    const box = { repairs: [] as string[], onces: [] as string[], reviewFile: null as string | null | Error }
+    const box = {
+      repairs: [] as string[],
+      onces: [] as string[],
+      reviewFile: null as string | null | Error,
+      // Finding 5 의 repairOnce 반환값 — 기본은 성공. 두 번째 열린 Gate 가 여전히 막는 경우를
+      // 흉내 내려는 테스트가 { ok: false, error } 로 갈아 끼운다.
+      onceResult: { ok: true } as { ok: true } | { ok: false; error: string }
+    }
     const deps = Object.assign(base, {
       listAccounts: () => accounts,
       repairTargetFor: () => ({ kind: 'same-session' as const, sessionId: 'sess1', cwd: 'D:/p', provider: 'claude' as const, accountId: 'accA' }),
       startRepair: (a: { dispatchId: string }) => void box.repairs.push(a.dispatchId),
-      repairOnce: async (a: { taskId: string }) => void box.onces.push(a.taskId),
+      repairOnce: async (a: { taskId: string }) => {
+        box.onces.push(a.taskId)
+        return box.onceResult
+      },
       readReviewFile: async () => {
         if (box.reviewFile instanceof Error) throw box.reviewFile
         return box.reviewFile
@@ -4295,9 +4335,21 @@ describe('handleCommand — convergence', () => {
           box.reviewFile = v
         },
         enumerable: true
+      },
+      onceResult: {
+        get: () => box.onceResult,
+        set: (v: { ok: true } | { ok: false; error: string }) => {
+          box.onceResult = v
+        },
+        enumerable: true
       }
     })
-    return deps as unknown as ReturnType<typeof makeDeps> & { repairs: string[]; onces: string[]; reviewFile: string | null | Error }
+    return deps as unknown as ReturnType<typeof makeDeps> & {
+      repairs: string[]
+      onces: string[]
+      reviewFile: string | null | Error
+      onceResult: { ok: true } | { ok: false; error: string }
+    }
   }
 
   it('run-create --convergence 가 정책을 싣는다 — 값 없이는 빈 객체', async () => {
@@ -4571,6 +4623,35 @@ describe('handleCommand — convergence', () => {
     await call(deps2, 'gate-resolve', { id: g2.value.id, resolution: 'mark-failed' })
     expect(deps2.getState().tasks[0].status).toBe('failed')
     expect(deps2.onces).toEqual([])
+  })
+  // 전체 브랜치 리뷰, Finding 5 — 이 Gate 를 retry-once 로 풀어도, 같은 Task 를 막는 두 번째 Gate가
+  // 여전히 열려 있으면(resolveGate 의 stillBlocked) repairOnce 의 openDispatch 는 "task is blocked
+  // by an open gate" 로 거절된다. 그 답이 조용히 사라지지 않고 200 응답에 남는다.
+  it('gate-resolve retry-once 는 두 번째 열린 Gate 가 여전히 막으면 그 사실을 응답에 남긴다', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const taskId = deps.getState().tasks[0].id
+    const s = deps.getState()
+    const exhausted = createGate(
+      { ...s, tasks: s.tasks.map((t) => ({ ...t, status: 'validating' as const })) },
+      { taskId, question: 'q1', kind: 'convergence-exhausted', options: ['retry-once', 'mark-failed'] },
+      NOW
+    )
+    if (!exhausted.ok) throw new Error(exhausted.error)
+    // 같은 Task 에 또 다른 Gate 를 하나 더 연다 — createGate 는 Task 가 이미 blocked 여도 이 자리에서
+    // 거절하지 않는다(Gate 는 taskId 로만 매인다); resolveGate 가 stillBlocked 로 두 번째 것을 본다.
+    const second = createGate(exhausted.state, { taskId, question: 'q2', kind: 'convergence-blocked' }, NOW)
+    if (!second.ok) throw new Error(second.error)
+    await deps.setState(second.state)
+    // repairOnce 자신은 real production 코드가 아니라 mock 이지만, 이 상황에서 실제 repairOnce 가
+    // 내는 답과 같은 모양(ok:false, error 포함)을 흉내 낸다 — server.ts 가 그 답을 어떻게 다루는지가
+    // 이 테스트의 관심사다.
+    deps.onceResult = { ok: false, error: 'task is blocked by an open gate: dsp_x' }
+    const r = await call(deps, 'gate-resolve', { id: exhausted.value.id, resolution: 'retry-once' })
+    expect(r.status).toBe(200)
+    expect(deps.onces).toEqual([taskId])
+    expect((r.body as { retryOnceFailed?: string }).retryOnceFailed).toContain('blocked by an open gate')
   })
   it('gate-resolve mark-failed 는 한 번의 커밋으로 끝난다 — resolveGate 가 남긴 ready 가 별도 커밋으로 보이지 않는다', async () => {
     const deps = convDeps()

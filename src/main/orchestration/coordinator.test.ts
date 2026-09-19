@@ -1055,6 +1055,25 @@ describe('buildReviewSpecFile — 수렴 절', () => {
     expect(spec.indexOf('## The one question you answer')).toBeLessThan(spec.indexOf('## Structured verdict'))
     expect(spec.indexOf('## Structured verdict')).toBeLessThan(spec.indexOf('## Reporting obligation'))
   })
+
+  // 전체 브랜치 리뷰, Finding 1 — resultPath 는 convergence Run 에서만 넘어온다(ipc.ts 의 startReview,
+  // policyOf(...) !== null). 없는 Run 의 검토자에게 이 절을 실으면 아무도 읽지 않는 .review.json 을
+  // 쓰라고 시키고, "파싱 실패는 사람에게 간다" 는 거짓을 말하게 된다 — 이 브랜치가 만드는 유일한
+  // 무방비 진입점이었다.
+  it('resultPath 가 없으면(convergence 가 없는 Run) Structured verdict 절 자체가 붙지 않는다', () => {
+    const { resultPath: _drop, ...withoutResultPath } = base
+    const spec = buildReviewSpecFile(withoutResultPath)
+    expect(spec).not.toContain('## Structured verdict')
+    expect(spec).not.toContain('a parse failure sends this Run')
+    // 나머지 보고 의무는 그대로 남는다 — --outcome failed 안내가 이 절 하나에만 있던 것이 아니다.
+    expect(spec).toContain('--outcome failed')
+  })
+
+  it('resultPath 가 있으면(convergence Run) Structured verdict 절이 그대로 남는다', () => {
+    const spec = buildReviewSpecFile(base)
+    expect(spec).toContain('## Structured verdict')
+    expect(spec).toContain(base.resultPath)
+  })
 })
 
 // 리뷰 fix 1차, Important 6 — launchPhrase 는 지금까지 어떤 테스트도 exercising 하지 않았다. 브리핑이

@@ -330,6 +330,14 @@ export interface Dispatch {
   /** 이 Dispatch 가 구현이 아니라 수리인가, 그리고 왜. review 와 배타적이다. 직전 시도는 retryOf 가
    *  가리킨다 — attempt = Dispatch 라는 기존 모델 그대로다(설계 D4) */
   repair?: RepairReason
+  /** 이 Dispatch 가 소진 Gate 의 retry-once(설계 §5.2)로, 사람이 예산 밖에 열어 준 것인가
+   *  (`openDispatch` 의 `ignoreCircuit`). **연 시점에 한 번 적어 두는 사실**이다 — repairCountOf 로
+   *  "지금 몇 번째인가" 를 나중에 되짚어 판정하지 않는다: 이 Dispatch 를 잃고 recovery 가 재시작하면
+   *  잃은 것과 새로 연 것 둘 다 repairCountOf 에 잡혀 그 되짚기가 예산을 넘겼다고 잘못 말한다(전체
+   *  브랜치 리뷰, Finding 3). 여기 적어 두면 recovery 가 재시작한 Dispatch 로 이 값을 그대로 옮겨
+   *  적을 수 있어(`LostAttempt.grantedExtra`), "사람이 허락했다" 는 문구가 재시작을 거쳐도 참으로
+   *  남는다. */
+  grantedExtra?: true
 }
 
 export interface Message {

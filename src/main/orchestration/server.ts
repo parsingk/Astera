@@ -58,6 +58,7 @@ import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { parseHandoffBody } from '../../core/handoff/parse'
 import type { HandoffBody } from '../../core/handoff/types'
 import type { Lang } from '../../core/i18n'
+import { policyOf } from '../../core/orchestration/convergence'
 
 export interface OrchServerDeps {
   getState(): OrchState
@@ -252,7 +253,8 @@ export interface OrchServerDeps {
   /** 판정 직전의 repair 대상(repair.ts 의 repairTargetFor 를 배선이 감싼다) — 마지막 구현·수리
    *  세션이 살아 있으면 그 세션, 아니면 새 워커(설계 D3). applyValidationResult/applyReviewResult 의
    *  `repair` 로 그대로 넘긴다; 주입되지 않으면 넘기지 않고, convergence Run 에서 repair 를 열어야
-   *  하는 판정은 그 순수 층에서 거절된다("repair target is required for a convergence Run"). */
+   *  하는 판정은 그 순수 층이 Gate 로 보낸다(routeFailure, jobs.convergence.gate.repairFailed) —
+   *  오늘의 배선은 항상 넘기므로 닿지 않지만, 닿았을 때도 Task 가 validating 에 갇히지 않는다. */
   repairTargetFor?(taskId: string): RepairTarget | null
   /** 판정이 새로 연 repair Dispatch 의 부수 효과(repair.ts 의 performRepair) — spec 파일을 쓰고
    *  살아 있는 세션에 넣거나 새 워커를 띄운다. **커밋 뒤에만 부른다** — 이 파일의 다른 모든 부수
@@ -265,8 +267,13 @@ export interface OrchServerDeps {
    *  이것을 기다리는 것은 "그 Dispatch 가 이미 커밋됐다" 까지만 기다리는 것이다. 기다리지 않으면
    *  gate-resolve 응답이 먼저 나가고, 그 사이 Task 는 ready 에 Dispatch 없이 있어
    *  worker-release·worker-start 가 그 창으로 same-session repair 가 노리는 세션에 슬쩍 들어올 수
-   *  있다. */
-  repairOnce?(a: { taskId: string }): Promise<void>
+   *  있다.
+   *
+   *  **결과를 돌려준다(전체 브랜치 리뷰, Finding 5).** 사람의 "한 번 더" 가 실제로 아무것도 열지
+   *  못했을 때(예: 이 Task 를 막는 다른 Gate 가 이미 열려 있다) gate-resolve 의 200 응답이 그 사실을
+   *  담을 수 있게 한다 — repairOnce 자신은 실패를 이미 로그하므로(그 함수의 주석) 이 반환값은 응답에
+   *  싣는 용도이지, 여기서 또 로그할 것이 있어서가 아니다. */
+  repairOnce?(a: { taskId: string }): Promise<{ ok: true } | { ok: false; error: string }>
   /** Gate 문구의 언어. 배선이 앱 언어를 넘긴다(applyValidationResult/applyReviewResult 의 `lang`
    *  으로 그대로 간다); 주입되지 않으면 영어다. */
   lang?(): Lang
@@ -775,7 +782,12 @@ export async function handleCommand(
             objective: target.objective,
             concurrency: target.concurrency ?? DEFAULT_CONCURRENCY,
             taskCount: s.tasks.filter((t) => t.runId === id).length,
-            convergence: target.convergence !== undefined
+            // policyOf 로 판정한다, target.convergence !== undefined 가 아니다 — 손으로 고친
+            // "convergence": null 은 !== undefined 로는 정책이 있다고 잘못 읽혀 코디네이터 브리핑이
+            // "수렴 중인 Task 는 건드리지 말라"는 문단을 얻는데, 다른 모든 관문(reconciler.ts,
+            // ipc.ts 의 startValidation)은 이미 이 실수를 policyOf 로 고쳐 두었다 — 여기만 남아
+            // 있었다(전체 브랜치 리뷰, Finding 2).
+            convergence: policyOf(s, { runId: id }) !== null
           })
         })
         sessionId = spawned.sessionId
@@ -1848,7 +1860,14 @@ export async function handleCommand(
       // 백그라운드로 넘긴다(repair.ts 의 주석). 여기서 기다리지 않으면 이 응답이 먼저 나가고, 그
       // 사이 Task 는 ready 에 Dispatch 없이 있어 worker-release·worker-start 가 그 창으로 같은
       // 세션(same-session repair 가 노리는 바로 그 세션)에 슬쩍 들어올 수 있다.
-      if (exhaustedOpen && resolution === 'retry-once') await deps.repairOnce?.({ taskId: gate!.taskId })
+      //
+      // **실패를 응답에 싣는다(전체 브랜치 리뷰, Finding 5).** 이 Task 를 막는 다른 Gate 가 이미
+      // 열려 있으면(openDispatch 의 "task is blocked by an open gate") repairOnce 는 아무것도 열지
+      // 못한 채 그 사실을 로그만 하고 돌아온다 — 이 Gate 자체는 정상적으로 풀렸으니 200 이 맞지만,
+      // 사람의 "한 번 더" 가 조용히 무효가 된 사실까지 감추면 안 된다.
+      const retried = exhaustedOpen && resolution === 'retry-once' ? await deps.repairOnce?.({ taskId: gate!.taskId }) : undefined
+      if (retried && !retried.ok)
+        return okBody({ ...r.value, retryOnceFailed: retried.error })
       return okBody(r.value)
     }
     case 'gate-list': {

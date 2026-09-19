@@ -173,18 +173,29 @@ export async function performRepair(deps: RepairDeps, a: { dispatchId: string })
   }
 }
 
-/** 소진 Gate 의 retry-once(설계 §5.2): ready 로 풀린 Task 에 예산 밖의 repair 를 **정확히 하나** 연다. */
-export async function repairOnce(deps: RepairDeps, a: { taskId: string }): Promise<void> {
+/** 소진 Gate 의 retry-once(설계 §5.2): ready 로 풀린 Task 에 예산 밖의 repair 를 **정확히 하나** 연다.
+ *
+ *  **결과를 돌려준다(전체 브랜치 리뷰, Finding 5).** 사람이 이 Gate 를 "한 번 더" 로 풀었는데, 이
+ *  Task 를 다시 막는 두 번째 Gate 가 이미 열려 있으면(예: 다른 이슈로 동시에 blocked 됐다면)
+ *  openDispatch 가 "task is blocked by an open gate" 로 거절한다 — 그 답은 조용히 사라지고 서버는
+ *  그래도 200 을 돌려준다. void 로는 부르는 쪽이 이것을 알 방법이 없었다. 지금은 코디네이터 재시도로
+ *  자연히 저하하므로 급하지 않지만, 사람의 답이 말없이 사라지는 것은 이 브랜치가 스무 번 고쳐 없앤
+ *  바로 그 실패 종류다. */
+export async function repairOnce(
+  deps: RepairDeps,
+  a: { taskId: string }
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const s = deps.getState()
   const task = s.tasks.find((x) => x.id === a.taskId)
-  if (!task) return
+  if (!task) return { ok: false, error: `unknown task: ${a.taskId}` }
   const prior = latestImplDispatch(s, a.taskId)
   const target = repairTargetFor(s, a.taskId, deps.isAlive)
   // target 이 null 인 것은 정확히 prior 가 없을 때뿐이다(repairTargetFor 의 유일한 null 갈래) —
   // 같은 s·taskId 로 부른 같은 판정이라 prior 만 다시 확인하지 않는다.
   if (!target) {
-    deps.log(`repair: retry-once has no implementation dispatch to repair for task=${a.taskId}`)
-    return
+    const error = `no implementation dispatch to repair for task=${a.taskId}`
+    deps.log(`repair: retry-once has ${error}`)
+    return { ok: false, error }
   }
   const reason = prior!.repair ?? (task.reviewIssues?.some((i) => i.blocking) ? 'review-failure' : 'check-failure')
   const opened = openDispatch(
@@ -204,7 +215,7 @@ export async function repairOnce(deps: RepairDeps, a: { taskId: string }): Promi
   )
   if (!opened.ok) {
     deps.log(`repair: retry-once could not open a dispatch for task=${a.taskId}: ${opened.error}`)
-    return
+    return { ok: false, error: opened.error }
   }
   await deps.setState(opened.state)
   // **여기서 resolve 한다 — performRepair 를 기다리지 않는다.** Dispatch 는 이미 커밋됐고(Task 는
@@ -218,4 +229,5 @@ export async function repairOnce(deps: RepairDeps, a: { taskId: string }): Promi
   void performRepair(deps, { dispatchId: opened.value.id }).catch((e) =>
     deps.log(`repair: retry-once's performRepair failed for task=${a.taskId}: ${String(e)}`)
   )
+  return { ok: true }
 }

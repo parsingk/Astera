@@ -111,10 +111,27 @@ describe('executeRecovery', () => {
     expect(started.resume.briefing.length).toBeGreaterThan(0)
   })
 
-  // repairSpec(main/orchestration/repair.ts)이 하는 것과 같다 — repairCountOf 가 maxFixAttempts 를
-  // 넘는 것은 retry-once 가 소진 Gate 를 예산 밖에 열었을 때뿐이고, 그 사실을 spec 문구에 넘겨야
-  // "repair 4 of 3" 같은, 예산보다 큰 번호가 나가지 않는다.
-  it('예산을 넘겨 연 repair 는 spec 에 extra 문구를 싣는다', async () => {
+  // 전체 브랜치 리뷰, Finding 3 — extra 문구는 이제 repairCountOf 를 되짚어 판정하지 않는다. 사람이
+  // 실제로 retry-once 를 눌러 연 Dispatch 만 Dispatch.grantedExtra 를 지니고, recovery 는 그것을
+  // LostAttempt.grantedExtra 로 그대로 옮겨 받는다 — 이 attempt 가 그 값을 지녔을 때만 spec 에
+  // "사람이 허락했다" 는 문구를 싣는다.
+  it('사람이 retry-once 로 예산 밖에 연 repair 가 유실되면, 재시작해도 spec 에 extra 문구를 싣는다', async () => {
+    const t = task({ checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] })
+    const h = deps({}, t)
+    const r = await executeRecovery(
+      { attempt: attempt({ repair: 'check-failure', grantedExtra: true }), decision: decision(), state: h.state, now: NOW },
+      h.d as never
+    )
+    expect(r.ok).toBe(true)
+    const spec = (h.started[0] as { specFileContent: string }).specFileContent
+    expect(spec).toContain('This is an extra repair, granted by a person after the budget of 3 was already spent.')
+  })
+
+  // 이 테스트가 지키는 바로 그 회귀 — recovery 자신이 재시작하며 새 Dispatch 를 하나 더 커밋하면
+  // repairCountOf 가 예산을 넘는 값을 낼 수 있지만(잃은 것과 새로 연 것을 둘 다 세므로), 그것은
+  // "사람이 허락했다" 는 뜻이 아니다. grantedExtra 가 없으면, 세는 값이 우연히 예산을 넘어도
+  // extra 문구를 싣지 않는다.
+  it('recovery 가 재시작만 했을 뿐인 repair 는, 카운트가 예산을 넘어도 사람이 허락했다고 말하지 않는다', async () => {
     const t = task({ checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] })
     const h = deps({}, t)
     const extra = (n: number): Dispatch =>
@@ -126,8 +143,7 @@ describe('executeRecovery', () => {
     )
     expect(r.ok).toBe(true)
     const spec = (h.started[0] as { specFileContent: string }).specFileContent
-    expect(spec).toContain('This is an extra repair, granted by a person after the budget of 3 was already spent.')
-    expect(spec).not.toContain('repair 4 of 3')
+    expect(spec).not.toContain('granted by a person')
   })
 
   // Important 2 — 재조립된 repair spec 도 원래 repair·평범한 redispatch 와 똑같이 지식 절을 실어야
