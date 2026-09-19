@@ -395,10 +395,25 @@ normalizeIssues(a: { outcome; subject; body; issues?: ReviewIssueInput[]; policy
 
 ### 8.3 의심 파일 (§38)
 
-repair 또는 구현 Dispatch의 `worker_done`을 받을 때 배선이 `git diff --name-only <baseHead> HEAD`를
-그 cwd에서 돈다. `baseHead`는 그 Task의 첫 구현 Dispatch의 체크포인트 HEAD(`CHECKPOINT_CREATED`
-row / `stopSnapshot.headCommit`)이고, 없으면 워커가 보고한 `filesModified`를 쓴다. `suspiciousCheckFiles`가
-걸러 `Task.suspiciousFiles`에 싣는다. 실패 사유가 아니다 — 리뷰어 spec과 UI 칩과 status 메시지에만 간다.
+**convergence 가 걸린 Run 에서만** 계산한다 — 다른 모든 convergence 전용 자리(§8.1의 checks 기록,
+§8.2의 review.json 읽기)와 같은 이유로, convergence 가 없는 Run 은 이 기능 전체에서 오늘과 바이트
+단위로 같아야 한다(Task 10 fix round 1, Important 1 — 처음 배선했을 때 이 가드가 빠졌었다).
+
+검증이 시작될 때(startValidation) 배선이 `git diff --name-only <baseHead> HEAD`를 그 cwd에서 돈다.
+`baseHead`는 그 Task의 **첫** 구현 Dispatch(수리가 아니라 가장 먼저 시작한 것)의 continuity journal
+**첫 체크포인트**(`firstCheckpointFor` — `checkpointPolicy.ts`의 `'attempt-started'`, Dispatch가
+열릴 때 기록된다)의 git HEAD다.
+
+**`Dispatch.stopSnapshot.headCommit`은 기준점이 아니다** (Task 10 fix round 1, Important 2 — 최초
+배선은 이 값을 우선했고 틀렸다). 그것은 그 Dispatch의 **마지막** 사용량 한도 정지 시점의 HEAD이고
+정지마다 덮어써서, 이미 일부 작업이 반영된 뒤의 — 기준점보다 나중인 — 값이다. 그것을 기준으로 잡으면
+diff가 실제보다 좁아져, 계정을 갈아타며 오래 일한 바로 그 경우(이 기능이 광고하는 사례)에 의심 파일을
+놓친다. 같은 이유로 기준은 **첫** 구현 Dispatch여야 한다 — 마지막(수리를 포함한) 시도만이 아니라 이
+Task가 시작한 이래 전부의 diff가 목적이다.
+
+기준점이 없으면(continuity가 꺼져 있거나 체크포인트가 없다) git을 부르지 않고 워커가 보고한
+`filesModified`를 쓴다. `suspiciousCheckFiles`가 걸러 `Task.suspiciousFiles`에 싣는다. 실패 사유가
+아니다 — 리뷰어 spec과 UI 칩과 status 메시지에만 간다.
 
 Completion policy 자체(RunConfig의 내용, `validateConfigIds`)는 앱 store에 있어 워커가 손댈 수 없다.
 명세 §37의 snapshot은 구조적으로 이미 만족된다 — 사람이 RunConfig를 Run 도중 고치는 것은 막지 않는다.

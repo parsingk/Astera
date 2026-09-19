@@ -121,7 +121,7 @@ import {
   worktreeDepsOf
 } from '../core/orchestration/integrate'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../core/orchestration/types'
-import { checkConfigIdsOf, latestImplDispatch, suspiciousCheckFiles } from '../core/orchestration/convergence'
+import { checkConfigIdsOf, policyOf, suspiciousCheckFiles } from '../core/orchestration/convergence'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './orchestration/repair'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject, outcomeOf } from '../core/orchestration/view'
@@ -2497,7 +2497,21 @@ export function registerIpc(
         // 표시해 두었으므로, 여기서 markStopped 까지 걸면 한 exit 에 stopped 와 timedOut 이 겹치고
         // onRunExit 은 stopped 를 먼저 보므로(그 순서의 주석) 이 exit 가 "사용자가 정지했다"로 읽혀
         // timeout 의 재시도·기록이 사라진다. core.run.stop 을 바로 부르면 PTY 만 죽고 그 겹침이 없다.
-        stop: (runId) => core.run.stop(runId)
+        //
+        // **던지지 않는다 — 이 자리는 바로 setTimeout 콜백이다(validator.ts).** 여기서 던지면 잡을
+        // 것이 없는 uncaught exception 으로 main 프로세스가 죽는다(리뷰 fix 1차, Minor). status 확인
+        // (RunManager.stop 은 status !== 'running' 이면 no-op)이 있어도, POSIX 에서는 그 확인과 실제
+        // pty.kill() 사이에 그 프로세스가 스스로 막 끝나는 창이 있을 수 있다 — node-pty 는 죽은 pid 에
+        // kill 을 던질 수 있고, write/resize 를 감싸는 withExitedPtyGuard 는 stop 을 감싸지 않는다.
+        // 잡아서 로그만 남긴다: 그 경우 프로세스는 이미 스스로 끝났으므로 pty 의 자연스러운 exit 가
+        // 뒤따라 오고, head.timedOut 은 그대로 남아 있어 그 exit 를 여전히 timeout 으로 정산한다.
+        stop: (runId) => {
+          try {
+            core.run.stop(runId)
+          } catch (e) {
+            orchLog(`validator: run.stop failed for run=${runId}: ${String(e)}`)
+          }
+        }
       },
       onSettled: async ({ taskId, results }) => {
         const before = store.get()
@@ -2530,10 +2544,14 @@ export function registerIpc(
           )
         // 판정이 repair Dispatch 를 새로 열었으면(routeFailure) 그 부수 효과(spec 파일을 쓰고 살아
         // 있는 세션에 넣거나 새 워커를 띄운다)를 시작한다 — **커밋(위 setState) 뒤에만** 부른다.
-        // 방금 커밋한 r.state 에서 찾는다: openRepairDispatch 가 채우는 specPath 는 '' 이므로
-        // !d.specPath 는 그것도 "아직 시작되지 않았다"로 읽는다(performRepair 의 liveRepairDispatch
-        // 와 같은 조건).
-        const opened = r.state.dispatches.find(
+        // **여기서도 getState() 를 다시 읽는다** — r.state 를 그대로 뒤지지 않는다. 서버의 검토
+        // 판정 분기(server.ts)가 자신의 setState 뒤에 afterReview = deps.getState() 로 다시 읽는
+        // 것과 같은 모양이다 — 지금은 둘이 갈라질 수 없지만(그 사이에 await 가 없다), 한쪽이 나중에
+        // await 를 얻어도 이 자리가 조용히 낡은 채로 남지 않는다. openRepairDispatch 가 채우는
+        // specPath 는 '' 이므로 !d.specPath 는 그것도 "아직 시작되지 않았다"로 읽는다(performRepair
+        // 의 liveRepairDispatch 와 같은 조건).
+        const afterValidation = deps.getState()
+        const opened = afterValidation.dispatches.find(
           (d) => d.taskId === taskId && d.repair !== undefined && !d.endedAt && !d.specPath
         )
         if (opened)
@@ -2630,7 +2648,8 @@ export function registerIpc(
         // 그 창에서 옮겨졌을 상태도 여기서 다시 본다. 입구의 검사는 이제 너무 이르다 — 그것은
         // 로그인 조회를 아끼는 값싼 선검사로 남는다.
         const fresh = store.get()
-        if (fresh.tasks.find((t) => t.id === taskId)?.status !== 'reviewing') return
+        const freshTask = fresh.tasks.find((t) => t.id === taskId)
+        if (freshTask?.status !== 'reviewing') return
         const opened = openReviewDispatch(
           fresh,
           {
@@ -2666,9 +2685,15 @@ export function registerIpc(
           // 라운드의 check 별 결과, previousIssues 는 직전 검토 라운드의 이슈(buildReviewSpecFile
           // 이 그중 blocking 만 추린다), suspiciousFiles 는 startValidation 이 검증을 큐에 넣을 때
           // best-effort 로 채워 둔 것이다.
+          //
+          // **suspiciousFiles 만 freshTask 에서 읽는다, task 가 아니다(리뷰 fix 1차, Minor).**
+          // startValidation 의 그 계산은 이 흐름과 동시에 도는 별개의 비동기 흐름이라, 맨 위의 st
+          // 를 읽은 뒤 이 자리에 오기까지의 그 어떤 await(로그인 조회 등) 사이에도 끝나 커밋될 수
+          // 있다 — checks·previousIssues 는 이 판정이 reviewing 으로 넘어오기 전에 이미 끝난
+          // 값이라 그런 창이 없다.
           checks: task.checks,
           previousIssues: task.reviewIssues,
-          suspiciousFiles: task.suspiciousFiles,
+          suspiciousFiles: freshTask.suspiciousFiles,
           // review.ts·state.ts 가 이미 기대하는 이름과 같은 규칙이다 — 이 Dispatch 의 spec 파일
           // 이름(coordinator.ts 의 specFileName, startWorker 가 실제로 쓰는 그 이름)에
           // `.review.json` 을 붙인 것. **리터럴을 다시 적지 않는다** — 여기서 조립하는 시점에는
@@ -3574,21 +3599,39 @@ export function registerIpc(
     // fresh app start needs (see the null fallback in setState below).
     let prevOrchState: OrchState | null = null
 
+    /** 이 Task 의 **첫** 구현 Dispatch(검토가 아닌 것 중 가장 먼저 시작한 것) — convergence.ts 의
+     *  latestImplDispatch 의 반대쪽 끝이다. changedFilesSince(아래)의 기준점은 이 Dispatch 여야
+     *  한다: 이 Task 가 일을 시작한 지점부터의 diff 가 목적이고, 마지막(수리를 포함한) 시도만의
+     *  diff 가 아니다(리뷰 fix 1차, Important 2b). */
+    const firstImplDispatch = (s: OrchState, taskId: string): Dispatch | undefined =>
+      s.dispatches
+        .filter((d) => d.taskId === taskId && !d.review)
+        .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+        .at(0)
+
     /** startValidation(아래)이 검증을 큐에 넣기 전에 부르는 최선노력 계산(설계 §8.3) — 이 시도가
-     *  check 의 동작을 바꾸는 파일을 건드렸는지. **기준점이 있을 때만 git 을 묻는다**: 정지 스냅숏의
-     *  headCommit(Dispatch.stopSnapshot — 롤이 있었을 때만 채워진다) 또는 continuity journal 의 첫
-     *  체크포인트 head(재시작을 넘긴 attempt). 둘 다 없는 보통의 시도에서는 git 을 부르지 않고 Task
-     *  가 이미 보고한 filesModified 로 물러난다 — 이 계산의 실패가 검증 자체를 막아서는 안 되므로
-     *  (호출부의 주석), git 이 실패해도 같은 자리로 물러난다.
+     *  check 의 동작을 바꾸는 파일을 건드렸는지. **기준점은 continuity journal 의, 이 Task 의 첫
+     *  구현 Dispatch 에 대한 첫 체크포인트 head 뿐이다.**
+     *
+     *  **`Dispatch.stopSnapshot.headCommit` 을 쓰지 않는다(리뷰 fix 1차, Important 2a).** 그것은
+     *  그 Dispatch 의 **마지막** 사용량 한도 정지 시점의 HEAD 이고 정지마다 덮어써서, 이미 일부
+     *  작업이 반영된 뒤의(기준점보다 나중인) 값이다 — 그것을 기준으로 잡으면 diff 가 실제보다
+     *  좁아져, 계정을 갈아타며 일한 바로 그 경우에 의심 파일을 놓친다. `firstCheckpointFor` 가
+     *  주는 'attempt-started' 체크포인트(core/continuity/checkpointPolicy.ts 의 KIND_OF — Dispatch
+     *  가 열릴 때 기록된다)가 그 Dispatch 가 일을 시작하기 **전**의 HEAD 다.
+     *
+     *  기준점이 없으면(continuity 가 꺼져 있거나 체크포인트가 없다) git 을 부르지 않고 Task 가 이미
+     *  보고한 filesModified 로 물러난다 — 이 계산의 실패가 검증 자체를 막아서는 안 되므로(호출부의
+     *  주석), git 이 실패해도 같은 자리로 물러난다.
      *
      *  **Task 의 filesModified 를 쓴다, Dispatch 의 것이 아니다** — Dispatch 에는 그런 칸이 없다. */
-    const changedFilesSince = async (impl: Dispatch, cwd: string): Promise<string[]> => {
-      const head = impl.stopSnapshot?.headCommit ?? continuityJournal?.firstCheckpointFor(impl.id)?.gitHead ?? null
+    const changedFilesSince = async (first: Dispatch, cwd: string): Promise<string[]> => {
+      const head = continuityJournal?.firstCheckpointFor(first.id)?.gitHead ?? null
       if (head) {
         const r = await git(['diff', '--name-only', head, 'HEAD'], { cwd })
         if (r.ok) return r.stdout.split('\n').map((line) => line.trim()).filter(Boolean)
       }
-      return store.get().tasks.find((t) => t.id === impl.taskId)?.filesModified ?? []
+      return store.get().tasks.find((t) => t.id === first.taskId)?.filesModified ?? []
     }
 
     const deps: OrchServerDeps = {
@@ -3999,13 +4042,20 @@ export function registerIpc(
       startValidation: ({ taskId, cwd }) => {
         const task = store.get().tasks.find((t) => t.id === taskId)
         validator.enqueue({ taskId, cwd, configIds: task ? checkConfigIdsOf(task) : [] })
-        // 의심 파일(설계 §8.3) — 검증을 늦추지 않도록 큐에 넣은 뒤 옆에서 계산한다. 구현 Dispatch 가
-        // 없거나 의심 파일이 없으면 아무것도 쓰지 않는다(빈 배열을 Task 에 남기지 않는다). 실패해도
-        // 검증 자체는 이미 큐에 들어가 그대로 돈다 — 그래서 종단 .catch 는 로그만 남긴다.
+        // 의심 파일(설계 §8.3) — **convergence Run 에서만** 계산한다(리뷰 fix 1차, Important 1).
+        // 이 계산은 Task 에 suspiciousFiles 를 써서 리뷰어 spec 에 새 절을 만드는데, 다른 모든
+        // convergence 전용 자리(state.ts 의 checks 기록, server.ts 의 readReviewFile 가드)가
+        // "convergence 가 없으면 오늘과 바이트 단위로 같다"를 지키므로 여기도 그래야 한다.
+        // policyOf 로 판정한다 — run.convergence !== undefined 가 아니라: 손으로 고친
+        // "convergence": null 을 정책 있음으로 잘못 읽지 않는다(Task 11 의 같은 판단).
+        // 검증을 늦추지 않도록 큐에 넣은 뒤 옆에서 계산한다. 구현 Dispatch 가 없거나 의심 파일이
+        // 없으면 아무것도 쓰지 않는다(빈 배열을 Task 에 남기지 않는다). 실패해도 검증 자체는 이미
+        // 큐에 들어가 그대로 돈다 — 그래서 종단 .catch 는 로그만 남긴다.
+        if (!task || policyOf(store.get(), task) === null) return
         void (async () => {
-          const impl = latestImplDispatch(store.get(), taskId)
-          if (!impl) return
-          const suspicious = suspiciousCheckFiles(await changedFilesSince(impl, cwd))
+          const first = firstImplDispatch(store.get(), taskId)
+          if (!first) return
+          const suspicious = suspiciousCheckFiles(await changedFilesSince(first, cwd))
           if (suspicious.length === 0) return
           const st = store.get()
           await deps.setState({
@@ -4261,12 +4311,23 @@ export function registerIpc(
     // 게이트(일시 중지·예약 템플릿·pendingStart)와 열린 Dispatch 로 store.load 에서 걸러져
     // 왔으므로 여기서 다시 거르지 않는다. runScheduler·recovery.reconcileAll 과 같은 이유로
     // deps.enabled() 로 가드한다 — 꺼져 있으면 서버가 모든 보고를 409 로 거절해 시작해도 끝을 볼
-    // 수 없다. 소비하지 않으면 이 Task 들은 아무것도 재실행하지 않은 채 조용히 멈춘다(store.ts 의
-    // 주석) — 그 창을 여기서 닫는다.
+    // 수 없다.
+    //
+    // **가드가 막았을 때 조용히 있지 않는다(리뷰 fix 1차, Minor→promoted).** `bootOrch` 는
+    // orchestration 자체가 꺼진 채로도(continuity·tracking 만 켜져 있어도) 돈다 — 그때 이 두
+    // 목록을 그냥 버리면, 나중에 orchestration 을 다시 켜도(재시작 없이 설정만 바꿔서는)
+    // `store.load()` 가 다시 불리지 않으므로 이 목록은 영영 되살아나지 않는다. 이 branch 가
+    // 열 번의 fix round 를 들여 없앤 것과 같은 부류의 결함 — "조용히 버려지는 복구 대상" —
+    // 이므로 로그로 그 사실을 남긴다. 다음 정상 재시작(orchestration 이 켜진 채)의
+    // store.load() 는 이 Task 들이 여전히 validating·reviewing 이고 열린 Dispatch 가 없으므로
+    // 같은 목록을 다시 채운다 — "재시작하면 잡힌다"는 문장은 그래서 참이다.
     if (deps.enabled()) {
       for (const r of loaded.revalidate) deps.startValidation?.({ taskId: r.taskId, cwd: r.cwd })
       for (const taskId of loaded.rereview) deps.startReview?.({ taskId })
-    }
+    } else if (loaded.revalidate.length > 0 || loaded.rereview.length > 0)
+      orchLog(
+        `restart cleanup — orchestration is off, so ${loaded.revalidate.length} interrupted validation(s) and ${loaded.rereview.length} interrupted review(s) were not restarted; turning it on without restarting does not retry them — a restart with it already on will`
+      )
     // 예약 템플릿의 발화. **첫 바퀴는 무장만 한다**(firesDue) — 앱을 켤 때마다 한 회차가 도는
     // 것을 막는 장치가 그것이고, 그래서 여기서 즉시 한 번 부르지 않는다.
     /** 코디네이터 세션이 사라졌을 때 그 Run 의 관리자 칸을 비운다. **다시 띄우지는 않는다.**
