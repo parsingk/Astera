@@ -2627,7 +2627,12 @@ export function registerIpc(
           // 구현자와 **같은 목록**을 받는다 — 검토자의 일이 "닫힌 결정이 다시 열렸는지"를 잡는 것인데
           // 그 목록을 안 주면 그 자리가 빈다. 훑는 뿌리도 같다: 검토자는 구현자가 일한 트리에서
           // 돈다(바로 아래 worktree 'current' + runCwd = 그 cwd).
-          knowledge: await knowledgeIn(cwd, orchLog)
+          knowledge: await knowledgeIn(cwd, orchLog),
+          // checks·previousIssues·suspiciousFiles 는 나중 태스크(수렴 배선)의 몫이다 — 지금은
+          // 트리가 계속 컴파일되도록 resultPath 만 채운다. review.ts·state.ts 가 이미 기대하는
+          // 이름과 같은 규칙이다 — 이 Dispatch 의 spec 경로(`${taskId}-${opened.value.id}.md`)에
+          // `.review.json` 을 붙인 것.
+          resultPath: path.join(specsDir, `${taskId}-${opened.value.id}.md.review.json`)
         })
         let started: { sessionId: string; cwd: string; specPath: string }
         try {

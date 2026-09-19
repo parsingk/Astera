@@ -7,10 +7,12 @@ import {
   buildSpecFile,
   buildReviewSpecFile,
   launchPrompt,
+  repairWorkerPrompt,
   knowledgeIn,
   LAUNCH_FORBIDDEN,
   type CoordinatorDeps
 } from './coordinator'
+import type { CheckResult, ReviewIssue } from '../../core/orchestration/types'
 
 let dir: string
 /** spec 디렉토리는 **워커 cwd 밖**이다 — 배선이 `<userData>/orch/specs`를 주입한다.
@@ -205,6 +207,7 @@ describe('buildReviewSpecFile', () => {
   // 다시 열렸는지 잡는 것이 바로 검토자의 일**이다. 검토자에게만 그 목록을 주지 않으면 그 자리가 빈다
   it('프로젝트의 결정 목록을 싣는다', () => {
     const md = buildReviewSpecFile({
+      resultPath: 'C:/u/dsp.md.review.json',
       title: 'T',
       spec: 's',
       taskId: 'tsk_1',
@@ -220,6 +223,7 @@ describe('buildReviewSpecFile', () => {
   // 다시 열었으면 그것이 결함이다"를 받아야 한다 — 같은 글을 두 번 쓰면 이 자리의 값이 사라진다
   it('검토자에게는 구현자와 다른 지시를 준다', () => {
     const md = buildReviewSpecFile({
+      resultPath: 'C:/u/dsp.md.review.json',
       title: 'T',
       spec: 's',
       taskId: 'tsk_1',
@@ -234,17 +238,18 @@ describe('buildReviewSpecFile', () => {
   // 절 제목으로 본다 — 'project' 같은 흔한 낱말로 보면 다른 문장이 그것을 담게 되는 날 조용히
   // 통과한다(이 파일의 validated 분기가 이미 "The project's own build/test configuration" 을 적는다)
   it('지식이 없으면 그 절이 아예 없다', () => {
-    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
+    const md = buildReviewSpecFile({ resultPath: 'C:/u/dsp.md.review.json', title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
     expect(md).not.toContain("## The project's own decisions")
   })
 
   it('원래 Task 의 요구를 판정 기준으로 싣는다', () => {
-    const md = buildReviewSpecFile({ title: 'T', spec: '요구 본문', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
+    const md = buildReviewSpecFile({ resultPath: 'C:/u/dsp.md.review.json', title: 'T', spec: '요구 본문', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
     expect(md).toContain('요구 본문')
   })
 
   it('구현자가 보고한 것과 바꾼 파일을 싣는다', () => {
     const md = buildReviewSpecFile({
+      resultPath: 'C:/u/dsp.md.review.json',
       title: 'T',
       spec: 's',
       taskId: 'tsk_1',
@@ -260,13 +265,13 @@ describe('buildReviewSpecFile', () => {
 
   it('검증이 통과했으면 그 사실을 싣는다', () => {
     // 검토자가 컴파일·테스트를 다시 판정하지 않게 하는 근거다
-    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: true })
+    const md = buildReviewSpecFile({ resultPath: 'C:/u/dsp.md.review.json', title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: true })
     expect(md).toContain('it passed')
     expect(md).toContain('is settled')
   })
 
   it('검증이 없었으면 통과했다고 말하지 않는다', () => {
-    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
+    const md = buildReviewSpecFile({ resultPath: 'C:/u/dsp.md.review.json', title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
     expect(md).toContain('No automated validation was attached')
     expect(md).not.toContain('is settled')
     expect(md).not.toContain('it passed')
@@ -274,17 +279,17 @@ describe('buildReviewSpecFile', () => {
 
   // 이 둘이 이 파일의 존재 이유다
   it('볼 것이 "요구가 충족됐는가" 하나임을 못박는다', () => {
-    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
+    const md = buildReviewSpecFile({ resultPath: 'C:/u/dsp.md.review.json', title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
     expect(md).toContain('Was the requirement above satisfied?')
     expect(md).toContain('not grounds for rejecting the work')
   })
   it('코드를 바꾸지 말라고 못박는다', () => {
-    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
+    const md = buildReviewSpecFile({ resultPath: 'C:/u/dsp.md.review.json', title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
     expect(md).toContain('Do not change any code.')
   })
 
   it('자기 dispatch id 로 보고하게 한다', () => {
-    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_review', validated: false })
+    const md = buildReviewSpecFile({ resultPath: 'C:/u/dsp.md.review.json', title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_review', validated: false })
     expect(md).toContain('dsp_review')
     expect(md).toContain('--task-id tsk_1')
   })
@@ -368,6 +373,7 @@ describe('OrchCoordinator.startWorker', () => {
     const deps = makeDeps()
     const co = new OrchCoordinator(deps)
     const file = buildReviewSpecFile({
+      resultPath: 'C:/u/dsp.md.review.json',
       title: '인증 리팩터',
       spec: '설계하고 반영하라',
       taskId: 'tsk_1',
@@ -851,5 +857,89 @@ describe('OrchCoordinator.releaseWorker', () => {
     const co = new OrchCoordinator(deps)
     await co.releaseWorker({ sessionId: 'sess1', retained: false, isLatestOwner: false })
     expect(deps.killed).toEqual([])
+  })
+})
+
+describe('buildSpecFile — repair 절', () => {
+  const checks: CheckResult[] = [
+    { configId: 'c1', name: 'Typecheck', status: 'passed', exitCode: 0 },
+    { configId: 'c2', name: 'Unit tests', status: 'failed', exitCode: 1, outputTail: 'FAIL logout.test.ts\n  ● should invalidate' },
+    { configId: 'c3', name: 'Build', status: 'not-run' }
+  ]
+  const issues: ReviewIssue[] = [
+    { id: 'rvw_1', severity: 'high', blocking: true, title: 'Session race', description: 'two writers', file: 'src/auth/session.ts', line: 42, suggestedFix: 'lock' },
+    { id: 'rvw_2', severity: 'low', blocking: false, title: 'naming', description: 'nit' }
+  ]
+  it('check 실패를 이름·exit·출력 꼬리와 함께 싣고 not-run 을 말한다', () => {
+    const spec = buildSpecFile({ title: 'T', spec: 'do', taskId: 'tsk_1', dispatchId: 'dsp_2', repair: { reason: 'check-failure', repair: 1, maxFixAttempts: 3, checks } })
+    expect(spec).toContain('## Repair request (assembled by the app — do not delete)')
+    expect(spec).toContain('This is repair 1 of 3')
+    expect(spec).toContain('"Unit tests" — exit 1')
+    expect(spec).toContain('● should invalidate')
+    expect(spec).toContain('"Build" — not run')
+    expect(spec).not.toContain('"Typecheck" — exit')
+    expect(spec.indexOf('## Repair request')).toBeLessThan(spec.indexOf('## Reporting obligation'))
+    expect(spec).toContain('--dispatch-id dsp_2')
+  })
+  it('blocking 이슈만 싣고 non-blocking 은 싣지 않는다', () => {
+    const spec = buildSpecFile({ title: 'T', spec: 'do', taskId: 'tsk_1', dispatchId: 'dsp_3', repair: { reason: 'review-failure', repair: 2, maxFixAttempts: 3, issues } })
+    // 줄 번호 인용 금지 가드(lineNumberCitations.test.ts) 를 피하려고 템플릿 보간으로 짓는다 —
+    // 리터럴로 쓰면 파일명 뒤에 콜론과 줄 번호가 곧바로 붙는 모양이 소스에 그대로 남는다.
+    expect(spec).toContain(`1. HIGH — Session race — ${issues[0].file}:${issues[0].line}`)
+    expect(spec).toContain('Suggested fix: lock')
+    expect(spec).not.toContain('naming')
+  })
+  it('계약 문구를 싣는다 — 테스트를 지우거나 약화하지 말고 완료를 선언하지 말라', () => {
+    const spec = buildSpecFile({ title: 'T', spec: 'do', taskId: 'tsk_1', dispatchId: 'dsp_2', repair: { reason: 'check-failure', repair: 1, maxFixAttempts: 3, checks } })
+    expect(spec).toContain('Do not remove, skip or weaken failing tests')
+    expect(spec).toContain('Astera, not you, decides whether the completion conditions are met')
+    expect(spec).toContain('smallest correct change')
+  })
+  it('repair 가 없으면 파일이 지금과 같다', () => {
+    const a = buildSpecFile({ title: 'T', spec: 'do', taskId: 'tsk_1', dispatchId: 'dsp_1' })
+    expect(a).not.toContain('Repair request')
+  })
+})
+
+describe('repairWorkerPrompt', () => {
+  it('spec 경로를 가리키고 금지 문자를 쓰지 않는다', () => {
+    const p = repairWorkerPrompt('C:/u/specs/tsk_1-dsp_2.md')
+    expect(p).toContain('C:/u/specs/tsk_1-dsp_2.md')
+    expect(p.match(LAUNCH_FORBIDDEN)).toBeNull()
+  })
+})
+
+describe('buildReviewSpecFile — 수렴 절', () => {
+  const base = { title: 'T', spec: 'req', taskId: 'tsk_1', dispatchId: 'dsp_r', validated: true, resultPath: 'C:/u/specs/tsk_1-dsp_r.md.review.json' }
+  it('결과 파일 경로와 JSON 모양을 말한다', () => {
+    const spec = buildReviewSpecFile(base)
+    expect(spec).toContain('## Structured verdict')
+    expect(spec).toContain(base.resultPath)
+    expect(spec).toContain('"severity"')
+    expect(spec).toContain('critical|high|medium|low|info')
+  })
+  it('통과한 check 이름을 싣는다', () => {
+    const spec = buildReviewSpecFile({ ...base, checks: [{ configId: 'c1', name: 'Typecheck', status: 'passed' }, { configId: 'c2', name: 'Tests', status: 'passed' }] })
+    expect(spec).toContain('## Checks that ran')
+    expect(spec).toContain('- Typecheck')
+    expect(spec).toContain('- Tests')
+  })
+  it('직전 라운드의 blocking 이슈를 "addressed 인지 확인하라" 고 싣는다', () => {
+    const spec = buildReviewSpecFile({ ...base, previousIssues: [{ id: 'rvw_1', severity: 'high', blocking: true, title: 'Session race', description: 'd' }, { id: 'rvw_2', severity: 'low', blocking: false, title: 'nit', description: '' }] })
+    expect(spec).toContain('## Previous review round')
+    expect(spec).toContain('HIGH — Session race')
+    expect(spec).not.toContain('nit')
+    expect(spec).toContain('verified as addressed')
+  })
+  it('의심 파일을 먼저 보라고 싣는다', () => {
+    const spec = buildReviewSpecFile({ ...base, suspiciousFiles: ['package.json', 'vitest.config.ts'] })
+    expect(spec).toContain('## Files that change how the checks run')
+    expect(spec).toContain('- package.json')
+  })
+  it('없는 절은 붙지 않는다', () => {
+    const spec = buildReviewSpecFile(base)
+    expect(spec).not.toContain('## Checks that ran')
+    expect(spec).not.toContain('## Previous review round')
+    expect(spec).not.toContain('## Files that change how the checks run')
   })
 })

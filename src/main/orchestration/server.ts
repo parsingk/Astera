@@ -86,6 +86,9 @@ export interface OrchServerDeps {
      *  to OrchCoordinator.startWorker, where the reason it exists is documented. Nothing else in this
      *  file reads it. */
     resume?: { nativeSessionId?: string; briefing?: string }
+    /** Forwarded straight through to OrchCoordinator.startWorker, where the reason it exists is
+     *  documented. Type-only pass-through here — this file adds no behaviour for it. */
+    launchPhrase?: string
   }): Promise<{ sessionId: string; cwd: string; specPath: string }>
   releaseWorker(a: { dispatchId: string }): Promise<void>
   /** 그 세션의 롤링 체인을 버린다 — **세션은 죽이지 않는다**(releaseWorker 와 그 점이 다르다).
