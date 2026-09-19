@@ -15,7 +15,7 @@ import {
   type OrchState
 } from '../../core/orchestration/state'
 import { TaskValidator } from './validator'
-import { FAILURE_LIMIT, type CheckResult } from '../../core/orchestration/types'
+import { FAILURE_LIMIT } from '../../core/orchestration/types'
 import { parseArgs } from '../../core/orchestration/cliArgs'
 import { isQueueableReport } from '../../core/orchestration/pendingReports'
 
@@ -2707,28 +2707,23 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
   const wire = async (): Promise<{
     deps: OrchServerDeps
     validator: TaskValidator
-    started: { cwd: string; taskId: string; runId: string }[]
+    started: { cwd: string; taskId: string; configId: string; runId: string }[]
     taskId: string
     cwd: string
   }> => {
     const deps = makeDeps()
-    const started: { cwd: string; taskId: string; runId: string }[] = []
+    const started: { cwd: string; taskId: string; configId: string; runId: string }[] = []
     const validator = new TaskValidator({
       runner: {
         start: async (a) => {
           const runId = `run_${started.length + 1}`
           started.push({ ...a, runId })
-          return { runId }
+          return { runId, name: a.configId }
         },
-        output: () => '빌드 로그 꼬리'
+        output: () => '빌드 로그 꼬리',
+        stop: () => {}
       },
-      onSettled: async ({ taskId, exitCode, output }) => {
-        // validator.ts 의 옛 계약(exitCode/output 하나)을 새 계약(results)으로 감싼다 — 이 Run 에는
-        // convergence 가 없으므로 applyValidationResult 는 옛 경로를 그대로 타고 문구도 같다.
-        const configId = deps.getState().tasks.find((t) => t.id === taskId)?.validateConfigId ?? taskId
-        const results: CheckResult[] = [
-          { configId, name: configId, status: exitCode === 0 ? 'passed' : 'failed', exitCode, outputTail: output }
-        ]
+      onSettled: async ({ taskId, results }) => {
         const r = applyValidationResult(deps.getState(), { taskId, results }, NOW)
         if (r.ok) await deps.setState(r.state)
       },
@@ -2737,7 +2732,10 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
         if (r.ok) await deps.setState(r.state)
       }
     })
-    deps.startValidation = (a) => validator.enqueue(a)
+    deps.startValidation = ({ taskId, cwd }) => {
+      const configId = deps.getState().tasks.find((t) => t.id === taskId)?.validateConfigId
+      validator.enqueue({ taskId, cwd, configIds: configId ? [configId] : [] })
+    }
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
     await call(deps, 'task-create', { account: 'acc1', spec: '작업', validate: 'cfg1' })
     const taskId = deps.getState().tasks[0].id
@@ -2760,7 +2758,7 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
   it('worker_done 성공은 Task 를 validating 으로 보내고 그 cwd 에서 검증을 시작한다', async () => {
     const { deps, started, taskId, cwd } = await wire()
     expect(deps.getState().tasks[0].status).toBe('validating')
-    expect(started).toEqual([{ taskId, cwd, runId: 'run_1' }])
+    expect(started).toEqual([{ taskId, cwd, configId: 'cfg1', runId: 'run_1' }])
   })
 
   it('검증 실패는 Task 를 failed 로 보내고 status 메시지를 코디네이터에게 배달한다', async () => {
@@ -2796,7 +2794,8 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
         start: async () => {
           throw new Error('NO_CONFIG: cfg1')
         },
-        output: () => ''
+        output: () => '',
+        stop: () => {}
       },
       onSettled: async () => {},
       onCannotRun: async ({ taskId, reason }) => {
@@ -2804,7 +2803,10 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
         if (r.ok) await deps.setState(r.state)
       }
     })
-    deps.startValidation = (a) => validator.enqueue(a)
+    deps.startValidation = ({ taskId, cwd }) => {
+      const configId = deps.getState().tasks.find((t) => t.id === taskId)?.validateConfigId
+      validator.enqueue({ taskId, cwd, configIds: configId ? [configId] : [] })
+    }
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
     await call(deps, 'task-create', { account: 'acc1', spec: '작업', validate: 'cfg1' })
     const taskId = deps.getState().tasks[0].id

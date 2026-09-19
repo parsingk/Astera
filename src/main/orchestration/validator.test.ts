@@ -2,26 +2,33 @@ import { describe, it, expect, vi } from 'vitest'
 import { TaskValidator, type ValidatorRunner } from './validator'
 import { absPath } from '../../core/testPaths'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
+import { CHECK_TIMEOUT_MS, type CheckResult } from '../../core/orchestration/types'
 
 const settledCalls = (): {
-  onSettled: (a: { taskId: string; exitCode: number; output: string }) => Promise<void>
-  calls: { taskId: string; exitCode: number; output: string }[]
+  onSettled: (a: { taskId: string; results: CheckResult[] }) => Promise<void>
+  calls: { taskId: string; results: CheckResult[] }[]
 } => {
-  const calls: { taskId: string; exitCode: number; output: string }[] = []
+  const calls: { taskId: string; results: CheckResult[] }[] = []
   return { onSettled: async (a) => void calls.push(a), calls }
 }
 
 /** Records start requests and hands each a runId. Exits are made by the test through onRunExit. */
-const fakeRunner = (): ValidatorRunner & { started: { cwd: string; taskId: string; runId: string }[] } => {
-  const started: { cwd: string; taskId: string; runId: string }[] = []
+const fakeRunner = (): ValidatorRunner & {
+  started: { cwd: string; taskId: string; configId: string; runId: string }[]
+  stopped: string[]
+} => {
+  const started: { cwd: string; taskId: string; configId: string; runId: string }[] = []
+  const stopped: string[] = []
   return {
     started,
+    stopped,
     start: async (a) => {
       const runId = `run_${started.length + 1}`
       started.push({ ...a, runId })
-      return { runId }
+      return { runId, name: a.configId.toUpperCase() }
     },
-    output: () => '출력'
+    output: () => '출력',
+    stop: (runId) => void stopped.push(runId)
   }
 }
 
@@ -30,36 +37,39 @@ describe('TaskValidator', () => {
     const runner = fakeRunner()
     const { onSettled } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
-    expect(runner.started[0]).toEqual({ cwd: 'D:/w1', taskId: 'tsk_1', runId: 'run_1' })
+    expect(runner.started[0]).toEqual({ cwd: 'D:/w1', taskId: 'tsk_1', configId: 'cfg1', runId: 'run_1' })
   })
 
   it('종료 코드를 onSettled 로 넘긴다', async () => {
     const runner = fakeRunner()
     const { onSettled, calls } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
     v.onRunExit({ runId: runner.started[0].runId, exitCode: 0 })
     await vi.waitFor(() => expect(calls).toHaveLength(1))
-    expect(calls[0]).toEqual({ taskId: 'tsk_1', exitCode: 0, output: '출력' })
+    expect(calls[0].results).toEqual([
+      { configId: 'cfg1', name: 'CFG1', status: 'passed', exitCode: 0, outputTail: '출력', startedAt: expect.any(String), endedAt: expect.any(String) }
+    ])
   })
 
   // 검증 출력은 PTY 원문이라 이스케이프가 섞인다. 이 값은 Task.result 와 status 메시지 본문으로
   // 들어가고 코디네이터 LLM 이 그것을 읽어 재시도를 판단하므로, 화면이 아니라 여기서 지운다
   it('출력의 ANSI 이스케이프를 지운다', async () => {
     const runner: ValidatorRunner = {
-      start: async () => ({ runId: 'run_x' }),
-      output: () => '\u001b[32mPASS\u001b[0m\r\n\u001b]0;title\u0007done\r\n'
+      start: async () => ({ runId: 'run_x', name: 'CFG1' }),
+      output: () => '\u001b[32mPASS\u001b[0m\r\n\u001b]0;title\u0007done\r\n',
+      stop: () => {}
     }
     const { onSettled, calls } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(calls).toHaveLength(0))
     v.onRunExit({ runId: 'run_x', exitCode: 0 })
     await vi.waitFor(() => expect(calls).toHaveLength(1))
-    expect(calls[0].output).toBe('PASS\r\ndone\r\n')
+    expect(calls[0].results[0].outputTail).toBe('PASS\r\ndone\r\n')
   })
 
   // Same-cwd validations are serialised as a policy — two in one tree share a build directory and
@@ -68,8 +78,8 @@ describe('TaskValidator', () => {
     const runner = fakeRunner()
     const { onSettled } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
     v.onRunExit({ runId: runner.started[0].runId, exitCode: 0 })
     await vi.waitFor(() => expect(runner.started).toHaveLength(2))
@@ -81,8 +91,8 @@ describe('TaskValidator', () => {
     const runner = fakeRunner()
     const { onSettled } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w2' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w2', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(2))
   })
 
@@ -91,7 +101,8 @@ describe('TaskValidator', () => {
       start: async () => {
         throw new Error('NO_CONFIG: cfg1')
       },
-      output: () => ''
+      output: () => '',
+      stop: () => {}
     }
     const reasons: { taskId: string; reason: string }[] = []
     const v = new TaskValidator({
@@ -99,7 +110,7 @@ describe('TaskValidator', () => {
       onSettled: async () => {},
       onCannotRun: async (a) => void reasons.push(a)
     })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(reasons).toHaveLength(1))
     expect(reasons[0].reason).toContain('NO_CONFIG')
   })
@@ -115,13 +126,14 @@ describe('TaskValidator', () => {
           throw new Error('NO_CONFIG')
         }
         started.push(a.taskId)
-        return { runId: 'run_2' }
+        return { runId: 'run_2', name: 'CFG1' }
       },
-      output: () => ''
+      output: () => '',
+      stop: () => {}
     }
     const v = new TaskValidator({ runner, onSettled: async () => {}, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(started).toEqual(['tsk_2']))
   })
 
@@ -131,7 +143,7 @@ describe('TaskValidator', () => {
     const runner = fakeRunner()
     const { onSettled, calls } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
     v.onRunExit({ runId: 'somebody-elses', exitCode: 0 })
     await new Promise((r) => setTimeout(r, 10))
@@ -149,8 +161,8 @@ describe('TaskValidator', () => {
       },
       onCannotRun: async () => {}
     })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
     v.onRunExit({ runId: runner.started[0].runId, exitCode: 0 })
     await vi.waitFor(() => expect(runner.started).toHaveLength(2))
@@ -169,9 +181,10 @@ describe('TaskValidator', () => {
           throw new Error('NO_CONFIG')
         }
         started.push(a.taskId)
-        return { runId: 'run_2' }
+        return { runId: 'run_2', name: 'CFG1' }
       },
-      output: () => ''
+      output: () => '',
+      stop: () => {}
     }
     const v = new TaskValidator({
       runner,
@@ -180,8 +193,8 @@ describe('TaskValidator', () => {
         throw new Error('commit failed')
       }
     })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(started).toEqual(['tsk_2']))
   })
 })
@@ -209,9 +222,9 @@ describe('TaskValidator — 큐 항목 유실 방지', () => {
       },
       onCannotRun: async () => {}
     })
-    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
-    v.enqueue({ taskId: 'tsk_2', cwd: CWD })
-    v.enqueue({ taskId: 'tsk_3', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD, configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_2', cwd: CWD, configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_3', cwd: CWD, configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
     v.onRunExit({ runId: runner.started[0].runId, exitCode: 0 })
     await vi.waitFor(() => expect(settled).toEqual(['tsk_1']))
@@ -235,7 +248,7 @@ describe('TaskValidator — markStopped', () => {
     const { onSettled, calls } = settledCalls()
     const reasons: { taskId: string; reason: string }[] = []
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async (a) => void reasons.push(a) })
-    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD, configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
     v.markStopped(runner.started[0].runId)
     v.onRunExit({ runId: runner.started[0].runId, exitCode: 1 })
@@ -249,8 +262,8 @@ describe('TaskValidator — markStopped', () => {
     const runner = fakeRunner()
     const { onSettled } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
-    v.enqueue({ taskId: 'tsk_2', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD, configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_2', cwd: CWD, configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
     v.markStopped(runner.started[0].runId)
     v.onRunExit({ runId: runner.started[0].runId, exitCode: 1 })
@@ -263,8 +276,8 @@ describe('TaskValidator — markStopped', () => {
     const runner = fakeRunner()
     const { onSettled, calls } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
-    v.enqueue({ taskId: 'tsk_2', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD, configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_2', cwd: CWD, configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
     v.markStopped(runner.started[0].runId)
     v.onRunExit({ runId: runner.started[0].runId, exitCode: 1 })
@@ -297,7 +310,8 @@ describe('TaskValidator — 없어진 할 일', () => {
         attempts.push(a.taskId)
         return 'skip'
       },
-      output: () => '출력'
+      output: () => '출력',
+      stop: () => {}
     }
     const { onSettled, calls } = settledCalls()
     const reasons: string[] = []
@@ -306,7 +320,7 @@ describe('TaskValidator — 없어진 할 일', () => {
       onSettled,
       onCannotRun: async (a) => void reasons.push(a.reason)
     })
-    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD, configIds: ['cfg1'] })
     await vi.waitFor(() => expect(attempts).toEqual(['tsk_1']))
     await new Promise((r) => setTimeout(r, 10))
     expect(reasons).toHaveLength(0) // Gate 가 열리지 않았다 — 사람의 결정을 되돌리지 않는다
@@ -326,9 +340,10 @@ describe('TaskValidator — 없어진 할 일', () => {
       start: async (a) => {
         attempts.push(a.taskId)
         if (a.taskId === 'tsk_1') return 'skip'
-        return { runId: `run_${a.taskId}` }
+        return { runId: `run_${a.taskId}`, name: 'CFG1' }
       },
-      output: () => '출력'
+      output: () => '출력',
+      stop: () => {}
     }
     const { onSettled, calls } = settledCalls()
     const reasons: string[] = []
@@ -337,9 +352,9 @@ describe('TaskValidator — 없어진 할 일', () => {
       onSettled,
       onCannotRun: async (a) => void reasons.push(a.reason)
     })
-    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
-    v.enqueue({ taskId: 'tsk_2', cwd: CWD })
-    v.enqueue({ taskId: 'tsk_3', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD, configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_2', cwd: CWD, configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_3', cwd: CWD, configIds: ['cfg1'] })
     await vi.waitFor(() => expect(attempts).toEqual(['tsk_1', 'tsk_2']))
     // tsk_2 actually started, so this exit is its own — the plain shift in advance already removed the
     // skipped entry (the identity check only permitted it), so this settlement must not also push out
@@ -362,8 +377,8 @@ describe('TaskValidator — an exit that only means the app lost sight of the ru
     const { onSettled, calls } = settledCalls()
     const reasons: string[] = []
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async (a) => void reasons.push(a.reason) })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
+    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
     v.onRunExit({ runId: 'run_1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
     await new Promise((r) => setTimeout(r, 20))
@@ -378,11 +393,108 @@ describe('TaskValidator — an exit that only means the app lost sight of the ru
     const runner = fakeRunner()
     const { onSettled, calls } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['cfg1'] })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
     v.onRunExit({ runId: 'run_1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
     v.onRunExit({ runId: 'run_1', exitCode: 0 })
     await vi.waitFor(() => expect(calls).toHaveLength(1))
-    expect(calls[0]).toEqual({ taskId: 'tsk_1', exitCode: 0, output: '출력' })
+    expect(calls[0].results[0]).toMatchObject({ configId: 'cfg1', name: 'CFG1', status: 'passed', exitCode: 0, outputTail: '출력' })
+  })
+})
+
+// ── TaskValidator — 여러 check ────────────────────────────────────────────
+describe('TaskValidator — 여러 check', () => {
+  it('순서대로 돌리고 전부 통과하면 한 번 settle 한다', async () => {
+    const runner = fakeRunner()
+    const { onSettled, calls } = settledCalls()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['a', 'b'] })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    expect(runner.started[0].configId).toBe('a')
+    v.onRunExit({ runId: 'run_1', exitCode: 0 })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(2))
+    expect(runner.started[1].configId).toBe('b')
+    v.onRunExit({ runId: 'run_2', exitCode: 0 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].results.map((r) => [r.configId, r.status])).toEqual([['a', 'passed'], ['b', 'passed']])
+  })
+
+  it('첫 실패에서 멈추고 뒤는 not-run 이다', async () => {
+    const runner = fakeRunner()
+    const { onSettled, calls } = settledCalls()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['a', 'b', 'c'] })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.onRunExit({ runId: 'run_1', exitCode: 2 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(runner.started).toHaveLength(1)
+    expect(calls[0].results.map((r) => [r.configId, r.status, r.exitCode])).toEqual([
+      ['a', 'failed', 2], ['b', 'not-run', undefined], ['c', 'not-run', undefined]
+    ])
+    expect(calls[0].results[1].outputTail).toBeUndefined()
+  })
+
+  it('첫 timeout 은 그 check 를 한 번 다시 띄운다', async () => {
+    const runner = fakeRunner()
+    const { onSettled, calls } = settledCalls()
+    const cannot: string[] = []
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async (a) => void cannot.push(a.reason), timeoutMs: 20 })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['a'] })
+    await vi.waitFor(() => expect(runner.stopped).toEqual(['run_1']))
+    v.onRunExit({ runId: 'run_1', exitCode: 137 }) // stop 이 만든 exit
+    await vi.waitFor(() => expect(runner.started).toHaveLength(2))
+    expect(runner.started[1].configId).toBe('a')
+    expect(calls).toHaveLength(0)
+    expect(cannot).toHaveLength(0)
+    v.onRunExit({ runId: 'run_2', exitCode: 0 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].results[0].status).toBe('passed')
+  })
+
+  it('같은 check 가 두 번 timeout 이면 onCannotRun 이다 — 워커에게 코드 실패로 가지 않는다', async () => {
+    const runner = fakeRunner()
+    const { onSettled, calls } = settledCalls()
+    const cannot: string[] = []
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async (a) => void cannot.push(a.reason), timeoutMs: 20 })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['a'] })
+    await vi.waitFor(() => expect(runner.stopped).toEqual(['run_1']))
+    v.onRunExit({ runId: 'run_1', exitCode: 137 })
+    await vi.waitFor(() => expect(runner.stopped).toEqual(['run_1', 'run_2']))
+    v.onRunExit({ runId: 'run_2', exitCode: 137 })
+    await vi.waitFor(() => expect(cannot).toHaveLength(1))
+    expect(cannot[0]).toContain('timed out twice')
+    expect(cannot[0]).toContain('A')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('timeout 뒤에는 그 cwd 의 다음 항목이 시작한다', async () => {
+    const runner = fakeRunner()
+    const { onSettled } = settledCalls()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {}, timeoutMs: 20 })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['a'] })
+    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1', configIds: ['b'] })
+    await vi.waitFor(() => expect(runner.stopped).toEqual(['run_1']))
+    v.onRunExit({ runId: 'run_1', exitCode: 137 })
+    await vi.waitFor(() => expect(runner.stopped).toEqual(['run_1', 'run_2']))
+    v.onRunExit({ runId: 'run_2', exitCode: 137 })
+    await vi.waitFor(() => expect(runner.started.map((s) => s.taskId)).toEqual(['tsk_1', 'tsk_1', 'tsk_2']))
+  })
+
+  it('사용자 정지는 timeout 보다 먼저다', async () => {
+    const runner = fakeRunner()
+    const { onSettled } = settledCalls()
+    const cannot: string[] = []
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async (a) => void cannot.push(a.reason), timeoutMs: 20 })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['a'] })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.markStopped('run_1')
+    v.onRunExit({ runId: 'run_1', exitCode: 1 })
+    await vi.waitFor(() => expect(cannot).toHaveLength(1))
+    expect(cannot[0]).toContain('정지')
+    expect(runner.started).toHaveLength(1)
+  })
+
+  it('기본 타임아웃은 CHECK_TIMEOUT_MS 다', () => {
+    expect(CHECK_TIMEOUT_MS).toBe(30 * 60_000)
   })
 })

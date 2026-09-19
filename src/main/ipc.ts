@@ -119,7 +119,7 @@ import {
   workingInRunRoot,
   worktreeDepsOf
 } from '../core/orchestration/integrate'
-import { DEFAULT_CONCURRENCY, type CheckResult } from '../core/orchestration/types'
+import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject, outcomeOf } from '../core/orchestration/view'
 import { justFinished } from '../core/orchestration/runRecord'
@@ -2446,10 +2446,10 @@ export function registerIpc(
     // dispatchOf 로 cwd 에서 Task 를 되찾지 않는 이유: TaskValidator 가 taskId 를 들고 있다.
     const validator = new TaskValidator({
       runner: {
-        start: async ({ cwd, taskId }) => {
+        start: async ({ cwd, taskId, configId }) => {
           const st = store.get()
           const task = st.tasks.find((t) => t.id === taskId)
-          if (!task?.validateConfigId) throw new Error(`no validateConfigId on task ${taskId}`)
+          if (!task) throw new Error(`unknown task ${taskId}`)
           // 큐에서 기다리는 동안 Task 가 validating 을 떠났을 수 있다(task-update). 그대로 두면
           // 빌드 전체가 돌고 실행 패널을 차지한 뒤에야 applyValidationResult 가
           // 결과를 거절한다. 던지지 않고 'skip' 을 돌려주는 이유는 ValidatorRunner.start 의 주석에
@@ -2462,10 +2462,11 @@ export function registerIpc(
           // 실패하면 그것이 그대로 Gate 가 되므로(onCannotRun) 여기가 올바른 자리다.
           await assertAllowedPath(cwd)
           // 구성은 Run 의 프로젝트에서, 실행은 Dispatch 의 cwd 에서. ignoreConfigCwd 는 구성에 박힌
-          // 경로가 워커의 트리가 아닌 곳을 가리키기 때문이다(spec 2절).
+          // 경로가 워커의 트리가 아닌 곳을 가리키기 때문이다(spec 2절). configId 는 TaskValidator 가
+          // enqueue 의 configIds 목록에서 지금 도는 자리를 골라 넘긴 것이다.
           const { config, command, projectName } = await prepareRun({
             projectPath: run.cwd,
-            configId: task.validateConfigId,
+            configId,
             stored: core.runConfig.get(run.cwd),
             ignoreConfigCwd: true,
             assertAllowedPath,
@@ -2476,18 +2477,16 @@ export function registerIpc(
           // own runs any more — a validation starts beside them; same-tree validations are serialised
           // by TaskValidator's own queue.
           const started = core.run.start({ projectPath: cwd, projectName, config, command, validation: true })
-          return { runId: started.runId }
+          return { runId: started.runId, name: config.name }
         },
-        output: (runId) => core.run.recentOutput(runId).slice(-4000)
+        output: (runId) => core.run.recentOutput(runId).slice(-4000),
+        // TODO(Task 10): wire this to core.run.stop so a timed-out check's PTY actually stops — left as
+        // a no-op here because the proper wiring also has to fold in run.stop's existing markStopped
+        // routing (RunStatus.validation) without double-marking. Until then a real timeout logs and
+        // moves the queue on, but the PTY it gave up on keeps running to completion in the background.
+        stop: () => {}
       },
-      onSettled: async ({ taskId, exitCode, output }) => {
-        // validator.ts 는 아직 옛 계약(exitCode/output 하나)이다 — check 목록 실행은 별도 작업이 한다.
-        // 그때까지는 여기서 단일 CheckResult 로 감싼다: 이 Run 에는 아직 convergence 가 없으므로
-        // applyValidationResult 는 옛 경로(policyOf === null)를 그대로 타고, 문구도 지금과 같다.
-        const configId = store.get().tasks.find((t) => t.id === taskId)?.validateConfigId ?? taskId
-        const results: CheckResult[] = [
-          { configId, name: configId, status: exitCode === 0 ? 'passed' : 'failed', exitCode, outputTail: output }
-        ]
+      onSettled: async ({ taskId, results }) => {
         const r = applyValidationResult(
           store.get(),
           // 서버가 applyWorkerDone 에 넘기는 것과 같은 값이다 — 이 배선에는 startReview 가 있다.
@@ -3927,7 +3926,12 @@ export function registerIpc(
         })
         return configs.map((c) => ({ id: c.id, name: c.name, type: c.type }))
       },
-      startValidation: ({ taskId, cwd }) => validator.enqueue({ taskId, cwd }),
+      // Task 10 이 checkConfigIdsOf 로 Task 의 check 목록 전체를 읽는다. 지금은 옛 필드
+      // 하나만(있으면) 넘긴다 — validateConfigIds 는 아직 이 배선까지 닿지 않은 새 칸이다.
+      startValidation: ({ taskId, cwd }) => {
+        const configId = store.get().tasks.find((t) => t.id === taskId)?.validateConfigId
+        validator.enqueue({ taskId, cwd, configIds: configId ? [configId] : [] })
+      },
       // 검토를 시작한다. 검증과 달리 **세션을 띄운다** — 그래서 provider·계정을 고르고, 검토
       // Dispatch 를 커밋하고, deps.startWorker 를 부르는 세 걸음이다. 동기 서명이므로
       // 비동기 작업은 안에서 흘려보낸다(startValidation 이 큐에 넣기만 하는 것과 같은 이유:
