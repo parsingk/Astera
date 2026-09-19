@@ -33,7 +33,9 @@ export interface ConvergencePolicy {
   blockingSeverity?: 'high' | 'medium'
 }
 export const MAX_REVIEW_ROUNDS = 2
-/** check 하나의 타임아웃. RunConfig 에 타임아웃 칸이 없어 P0 는 상수다 (설계 §7) */
+/** check 하나의 타임아웃. RunConfig 에 타임아웃 칸이 없어 P0 는 상수다 (설계 §7). 이름이 비슷한
+ *  DEFAULT_CHECK_TIMEOUT_MS(아래) 와는 다른 값이다 — 그것은 `check --wait` 롱폴의 5분 마감이고,
+ *  이것은 완료 수렴 check 하나가 돌 수 있는 30분 상한이다. */
 export const CHECK_TIMEOUT_MS = 30 * 60_000
 /** checkHistory 가 configId 마다 들고 있는 라운드 수의 상한 */
 export const HISTORY_MAX = 8
@@ -398,16 +400,17 @@ const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
   // dispatched -> reviewing: 검증이 걸리지 않고 검토만 걸린 Task 의 성공 보고.
   dispatched: ['completed', 'failed', 'validating', 'reviewing', 'blocked'],
   // validating -> blocked 는 검증을 아예 돌릴 수 없을 때다(구성이 없다, cwd 가 사라졌다). 그 판단은
-  // 사람의 것이므로 Gate 를 연다. validating -> dispatched 는 없다 — 검증 결과가 도착할 자리가
-  // 사라지기 때문이다.
+  // 사람의 것이므로 Gate 를 연다. validating -> dispatched 는 검증이 도는 동안에는 없다 — 그 사이에는
+  // 판정이 도착할 자리가 없기 때문이다. 그 금지는 판정이 도착하기 전까지다: 판정이 도착한 뒤에는 앱이
+  // repair Dispatch 를 여는 전이로 이 칸에 들어오고, 그 유일한 문은 state.ts 의 openRepairDispatch 다
+  // (설계 §5).
   // validating -> reviewing: 검증이 통과했고 검토가 걸려 있다. 순서는 검증 -> 검토다.
-  // validating -> dispatched, reviewing -> dispatched: 판정이 **도착한 뒤** 앱이 repair Dispatch 를 여는
-  // 전이다(설계 §5). 예전 주석은 이 둘을 "결과가 도착할 자리가 사라진다"고 금지했는데, 그것은 검증이
-  // 도는 중의 이야기다 — 판정이 끝난 뒤에는 성립하지 않는다. 진입은 state.ts 의 openRepairDispatch 만이다.
   validating: ['completed', 'failed', 'blocked', 'reviewing', 'dispatched'],
   // reviewing -> blocked 는 검토를 아예 돌릴 수 없을 때다(쓸 수 있는 다른 provider 계정이 없다,
   // 검토자가 보고 없이 죽었다). 그 판단은 사람의 것이므로 Gate 를 연다. reviewing -> dispatched 는
-  // 없다 — 검토 결과가 도착할 자리가 사라진다(validating 과 같은 이유).
+  // 검토가 도는 동안에는 없다 — validating 과 같은 이유로 판정이 도착할 자리가 없다. 그 금지도 판정이
+  // 도착하기 전까지다: 판정이 도착한 뒤에는 앱이 repair Dispatch 를 여는 전이로 이 칸에 들어오고, 그
+  // 유일한 문은 state.ts 의 openRepairDispatch 다(설계 §5).
   reviewing: ['completed', 'failed', 'blocked', 'dispatched'],
   completed: [],
   // failed -> blocked is allowed: failed is by definition a state with no open dispatch
