@@ -21,6 +21,10 @@ export type ContinuityEventType =
   | 'TASK_CHECK_FAILED'
   | 'TASK_COMPLETED'
   | 'TASK_FAILED'
+  | 'TASK_REVIEW_STARTED'
+  | 'TASK_REVIEW_PASSED'
+  | 'TASK_REVIEW_CHANGES_REQUESTED'
+  | 'TASK_CONVERGENCE_EXHAUSTED'
   | 'ATTEMPT_START_REQUESTED'
   | 'ATTEMPT_STARTED'
   | 'ATTEMPT_WAITING'
@@ -92,7 +96,8 @@ function runStartEvents(prev: OrchState, next: OrchState, now: string): Continui
           objective: run.objective,
           cwd: run.cwd,
           worktree: run.worktree ?? null,
-          templateId: run.templateId ?? null
+          templateId: run.templateId ?? null,
+          convergence: run.convergence ?? null
         })
       )
   }
@@ -119,15 +124,26 @@ function runEndEvents(prev: OrchState, next: OrchState, now: string): Continuity
   return out
 }
 
-/** Which events a Task transition is. A check's verdict (validating → a state other than blocked)
- *  comes first; blocked out of validating is a question about an interrupted check, not a verdict.
+/** Which events a Task transition is. A check's verdict (validating → a state other than blocked,
+ *  unless the Gate that sent it there is a convergence exhaustion) comes first; blocked out of
+ *  validating is ordinarily a question about an interrupted check, not a verdict — but a Gate opened
+ *  because repair ran out of attempts is a verdict's result, so exhausted overrides the exclusion.
  *  A passed check leaves validating for completed, or for reviewing when a reviewer is queued
- *  (applyValidationResult) — both are TASK_CHECK_PASSED. */
-function taskTransitionEvents(from: TaskStatus, to: TaskStatus): ContinuityEventType[] {
-  const check: ContinuityEventType[] =
-    from === 'validating' && to !== 'blocked'
-      ? [to === 'completed' || to === 'reviewing' ? 'TASK_CHECK_PASSED' : 'TASK_CHECK_FAILED']
-      : []
+ *  (applyValidationResult) — both are TASK_CHECK_PASSED.
+ *
+ *  A review's verdict (design §12): passing leaves reviewing for completed (TASK_REVIEW_PASSED);
+ *  changes requested either opens a repair Dispatch (reviewing → dispatched) or, once review rounds
+ *  are exhausted, lands on blocked with a convergence-exhausted Gate — both are
+ *  TASK_REVIEW_CHANGES_REQUESTED. TASK_CONVERGENCE_EXHAUSTED always follows the verdict that
+ *  triggered it and precedes the main event, whichever verdict it was. */
+function taskTransitionEvents(from: TaskStatus, to: TaskStatus, exhausted: boolean): ContinuityEventType[] {
+  const verdicts: ContinuityEventType[] = []
+  if (from === 'validating' && (to !== 'blocked' || exhausted))
+    verdicts.push(to === 'completed' || to === 'reviewing' ? 'TASK_CHECK_PASSED' : 'TASK_CHECK_FAILED')
+  if (from === 'reviewing' && to === 'completed') verdicts.push('TASK_REVIEW_PASSED')
+  if (from === 'reviewing' && (to === 'dispatched' || (to === 'blocked' && exhausted)))
+    verdicts.push('TASK_REVIEW_CHANGES_REQUESTED')
+  if (to === 'blocked' && exhausted) verdicts.push('TASK_CONVERGENCE_EXHAUSTED')
   const main: ContinuityEventType =
     to === 'ready' && from === 'pending'
       ? 'TASK_BECAME_READY'
@@ -135,15 +151,17 @@ function taskTransitionEvents(from: TaskStatus, to: TaskStatus): ContinuityEvent
         ? 'TASK_STARTED'
         : to === 'validating'
           ? 'TASK_CHECK_STARTED'
-          : to === 'blocked'
-            ? 'TASK_WAITING_INPUT'
-            : to === 'completed'
-              ? 'TASK_COMPLETED'
-              : to === 'failed'
-                ? 'TASK_FAILED'
-                : 'TASK_STATE_CHANGED'
+          : to === 'reviewing'
+            ? 'TASK_REVIEW_STARTED'
+            : to === 'blocked'
+              ? 'TASK_WAITING_INPUT'
+              : to === 'completed'
+                ? 'TASK_COMPLETED'
+                : to === 'failed'
+                  ? 'TASK_FAILED'
+                  : 'TASK_STATE_CHANGED'
   // validating → ready (a retry after a failed check): the verdict says it all
-  return main === 'TASK_STATE_CHANGED' && check.length > 0 ? check : [...check, main]
+  return main === 'TASK_STATE_CHANGED' && verdicts.length > 0 ? verdicts : [...verdicts, main]
 }
 
 const latestGate = (gates: Gate[], taskId: string, status: Gate['status']): Gate | undefined =>
@@ -161,9 +179,15 @@ function taskEvents(prev: OrchState, next: OrchState, now: string): ContinuityEv
     const to = task.status
     if (from === to) continue
     const payload: Record<string, unknown> = { from, to }
-    if (to === 'blocked') payload.question = latestGate(next.gates, task.id, 'open')?.question ?? null
+    const openGate = to === 'blocked' ? latestGate(next.gates, task.id, 'open') : undefined
+    const exhausted = openGate?.kind === 'convergence-exhausted'
+    if (to === 'blocked') payload.question = openGate?.question ?? null
     if (from === 'blocked') payload.resolution = latestGate(next.gates, task.id, 'resolved')?.resolution ?? null
-    for (const type of taskTransitionEvents(from, to))
+    if (from === 'validating' && task.checks)
+      payload.checks = task.checks.map((c) => ({ configId: c.configId, status: c.status, exitCode: c.exitCode ?? null }))
+    if (from === 'reviewing' && task.reviewIssues)
+      payload.issues = task.reviewIssues.map((i) => ({ severity: i.severity, title: i.title, blocking: i.blocking }))
+    for (const type of taskTransitionEvents(from, to, exhausted))
       out.push(
         ev({ runId: task.runId, taskId: task.id }, type, now, `${type}:${task.id}:${from}->${to}:${now}`, payload)
       )
@@ -207,7 +231,8 @@ function dispatchEvents(prev: OrchState, next: OrchState, now: string): Continui
           provider: d.provider,
           accountId: d.accountId,
           retryOf: d.retryOf ?? null,
-          review: d.review === true
+          review: d.review === true,
+          repair: d.repair ?? null
         })
       )
       if (!isPlaceholder(d.sessionId)) out.push(started())
