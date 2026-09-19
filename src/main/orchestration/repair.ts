@@ -207,5 +207,15 @@ export async function repairOnce(deps: RepairDeps, a: { taskId: string }): Promi
     return
   }
   await deps.setState(opened.state)
-  await performRepair(deps, { dispatchId: opened.value.id })
+  // **여기서 resolve 한다 — performRepair 를 기다리지 않는다.** Dispatch 는 이미 커밋됐고(Task 는
+  // 이미 dispatched 다), 그것으로 이 함수의 호출자(server.ts 의 gate-resolve)가 필요로 하는 창은
+  // 닫힌다: worker-release·worker-start 의 "수렴 중" 가드가 이제 이 Dispatch 를 본다. 실제 부수
+  // 효과(spec 파일 쓰기, 세션 띄우기)는 startRepair 의 다른 모든 호출자(server.ts 의 검토 분기)와
+  // 같은 자격으로 백그라운드에서 돈다 — performRepair 자신이 실패를 Gate 나 failed 로 이미 다
+  // 처리하므로(그 함수의 주석) 여기서 기다려서 얻을 것이 없다. `.catch` 는 안전망이다: 두 함수 다
+  // 오늘은 던지지 않지만, 던지는 코드로 바뀌어도 이 fire-and-forget 호출이 처리되지 않은 거부로
+  // Electron 메인 프로세스를 죽이지는 않게 한다.
+  void performRepair(deps, { dispatchId: opened.value.id }).catch((e) =>
+    deps.log(`repair: retry-once's performRepair failed for task=${a.taskId}: ${String(e)}`)
+  )
 }

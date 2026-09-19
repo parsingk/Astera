@@ -840,6 +840,75 @@ describe('openDispatch — retryOf·sessionId 검증', () => {
   })
 })
 
+// 회귀: ALLOWED.validating·ALLOWED.reviewing 에 'dispatched' 가 더해진 뒤(openRepairDispatch 를
+// 위해서다), moveTask/canTransition 만으로는 이 거절을 더 지키지 못한다 — validating·reviewing 인
+// Task 에는 열린 Dispatch 가 없으므로 그 검사도 통과한다. openDispatch(worker-start 가 쓰는 문)가
+// 이제 명시적으로 거절한다. openRepairDispatch 는 이 검사를 아예 갖지 않는다 — 그것이 바로 그 판정
+// 도착 뒤의 유일한 문이다.
+describe('openDispatch — validating·reviewing 은 거절한다(회귀)', () => {
+  const asAwaitingVerdict = (status: 'validating' | 'reviewing') => {
+    const { s, taskId, dispatchId } = seed()
+    const state: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status } : t)),
+      dispatches: s.dispatches.map((d) =>
+        d.id === dispatchId ? { ...d, outcome: 'succeeded' as const, endedAt: NOW } : d
+      )
+    }
+    return { state, taskId }
+  }
+  it('validating 인 Task 에는 새 Dispatch 를 열 수 없다', () => {
+    const { state, taskId } = asAwaitingVerdict('validating')
+    const r = openDispatch(
+      state,
+      { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '' },
+      LATER
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('awaiting a verdict')
+  })
+  it('reviewing 인 Task 도 같다', () => {
+    const { state, taskId } = asAwaitingVerdict('reviewing')
+    const r = openDispatch(
+      state,
+      { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '' },
+      LATER
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('awaiting a verdict')
+  })
+  // seed() 의 Run 은 convergence 를 켜지 않는다 — 이 거절이 지키는 것은 검증·검토 자체(D12 이전부터
+  // 있었다)이지 완료 수렴이 아니다. 이 테스트가 바로 그 회귀를 막는다: convergence 없는 Run 에서도
+  // 코디네이터가 검사 중인 Task 에 두 번째 워커를 얹지 못해야 한다.
+  it('convergence 가 없는 Run 에서도 거절한다 — 이 문은 완료 수렴보다 먼저부터 있었다', () => {
+    const { state, taskId } = asAwaitingVerdict('validating')
+    expect(state.runs[0].convergence).toBeUndefined()
+    const r = openDispatch(
+      state,
+      { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '' },
+      LATER
+    )
+    expect(r.ok).toBe(false)
+  })
+  // repair.ts 의 repairOnce 가 이 openDispatch 를 부르는 것은 gate-resolve 가 이미 blocked ->
+  // pending(또는 ready) 으로 풀어 둔 Task 에서다 — validating·reviewing 이 아니므로 이 거절과
+  // 무관하다는 것을 확인한다(가정하지 않는다).
+  it('pending·ready 인 Task 는 영향받지 않는다 — repairOnce 가 여는 자리', () => {
+    const { s, taskId } = seed()
+    const pending: OrchState = {
+      ...s,
+      dispatches: [],
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'pending' as const } : t))
+    }
+    const r = openDispatch(
+      pending,
+      { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '', ignoreCircuit: true },
+      LATER
+    )
+    expect(r.ok).toBe(true)
+  })
+})
+
 describe('검증을 거치는 전이', () => {
   /** seed() 가 만드는 Task 에 검증 구성을 달아 준다 — seed 자체는 건드리지 않는다 */
   const withValidate = (s: OrchState, taskId: string, extra: Partial<Task> = {}): OrchState => ({

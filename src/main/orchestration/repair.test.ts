@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './repair'
 import {
   applyValidationResult, applyWorkerDone, createRun, createTask, emptyState, openDispatch, resolveGate, type OrchState
@@ -202,11 +202,15 @@ describe('repairOnce', () => {
     const gate = judged.state.gates.at(-1)!
     const resolved = unwrap(resolveGate(judged.state, { gateId: gate.id, resolution: 'retry-once' }, NOW) as never)
     const deps = makeDeps(resolved.state)
+    // repairOnce 는 이제 Dispatch 커밋까지만 기다리고 곧바로 resolve 한다 — performRepair 의 실제
+    // 부수 효과(startWorker 호출)는 백그라운드에서 돈다(설계: gate-resolve 가 그 창을 닫으려고
+    // 필요한 것은 커밋뿐이다). 그래서 커밋은 await 뒤에 바로 보이지만 deps.started 는 vi.waitFor
+    // 로 기다려야 한다.
     await repairOnce(deps, { taskId })
     const repair = deps.box.state.dispatches.find((d) => d.repair)!
     expect(repair).toMatchObject({ repair: 'check-failure', retryOf: implId, sessionId: 'sess1' })
     expect(deps.box.state.tasks.find((t) => t.id === taskId)?.status).toBe('dispatched')
-    expect(deps.started).toHaveLength(1)
+    await vi.waitFor(() => expect(deps.started).toHaveLength(1))
     // 이 시나리오는 repair 를 한 번도 열지 못한 채 소진됐다(카운터만 3 이었다) — 그래서 첫 repair 다.
     // 번호는 repair Dispatch 수에서 오고 카운터에서 오지 않는다(convergence.ts 의 repairCountOf).
     expect(deps.started[0].specFileContent).toContain('This is repair 1 of 3')

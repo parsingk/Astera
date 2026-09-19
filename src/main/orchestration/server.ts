@@ -259,8 +259,14 @@ export interface OrchServerDeps {
    *  효과와 같은 순서(Dispatch 먼저, 세션은 그다음)다. */
   startRepair?(a: { dispatchId: string }): void
   /** 소진 Gate(kind: 'convergence-exhausted')의 retry-once 답(repair.ts 의 repairOnce) — 예산 밖의
-   *  repair 를 정확히 하나 연다. gate-resolve 가 그 kind 의 Gate 를 이 답으로 풀 때만 부른다. */
-  repairOnce?(a: { taskId: string }): void
+   *  repair 를 정확히 하나 연다. gate-resolve 가 그 kind 의 Gate 를 이 답으로 풀 때만 부른다.
+   *  **비동기다 — gate-resolve 가 그 반환을 기다린다.** repairOnce 자신은 Dispatch 를 열어 커밋한
+   *  뒤에야 resolve 하고 실제 부수 효과(spec 파일 쓰기, 세션 띄우기)는 백그라운드로 넘긴다 — 그래서
+   *  이것을 기다리는 것은 "그 Dispatch 가 이미 커밋됐다" 까지만 기다리는 것이다. 기다리지 않으면
+   *  gate-resolve 응답이 먼저 나가고, 그 사이 Task 는 ready 에 Dispatch 없이 있어
+   *  worker-release·worker-start 가 그 창으로 same-session repair 가 노리는 세션에 슬쩍 들어올 수
+   *  있다. */
+  repairOnce?(a: { taskId: string }): Promise<void>
   /** Gate 문구의 언어. 배선이 앱 언어를 넘긴다(applyValidationResult/applyReviewResult 의 `lang`
    *  으로 그대로 간다); 주입되지 않으면 영어다. */
   lang?(): Lang
@@ -1090,6 +1096,12 @@ export async function handleCommand(
       const task = s.tasks.find((t) => t.id === taskId)
       if (!task) return bad(`unknown task: ${taskId}`)
       if (task.status === 'blocked') return bad('task is blocked by an open gate')
+      // openDispatch(state.ts) 도 이것을 거절한다 — 여기서 앞질러 보는 이유는 이 함수의 다른 앞선
+      // 검사들과 같다: 코디네이터에게 더 뚜렷한 에러를 준다("전이 거절" 문구가 아니라). validating·
+      // reviewing 인 Task 에 두 번째 워커를 얹지 못하게 하는 것이 이 자리다 — Run 이 convergence 를
+      // 켰는지와 무관하다.
+      if (task.status === 'validating' || task.status === 'reviewing')
+        return bad(`task is awaiting a verdict: ${task.status}`)
       if (task.consecutiveFailures >= FAILURE_LIMIT)
         return bad(`circuit break: ${FAILURE_LIMIT} consecutive failures`)
       const openForTask = s.dispatches.find((d) => d.taskId === taskId && !d.outcome && !d.endedAt)
@@ -1803,26 +1815,39 @@ export async function handleCommand(
       const gate = s.gates.find((g) => g.id === gateId)
       const r = resolveGate(s, { gateId, resolution }, now)
       if (!r.ok) return bad(r.error)
-      await deps.setState(r.state)
-      // 소진 Gate 의 두 답(설계 §5.2), **커밋 뒤에만**. retry-once 는 예산 밖의 repair 를 정확히
-      // 하나 여는 것(repair.ts 의 repairOnce), mark-failed 는 task-update 와 같은 전이표 우회다 —
-      // 회로 카운터(consecutiveFailures)는 그대로 둔다: 이것은 구제가 아니라 포기이기 때문이다.
-      // **다른 모든 Gate·다른 모든 resolution 은 지금처럼 풀린다** — 이 갈래는 kind 가
-      // 'convergence-exhausted' 이고 이번 호출이 실제로 그 Gate 를 닫았을 때만 탄다(위 snapshot 의
-      // `gate.status === 'open'`; resolveGate 는 이미 resolved 인 Gate 를 다시 부르면 no-op 이다).
-      if (gate?.kind === 'convergence-exhausted' && gate.status === 'open') {
-        if (resolution === 'retry-once') {
-          deps.repairOnce?.({ taskId: gate.taskId })
-        } else if (resolution === 'mark-failed') {
-          const latest = deps.getState()
-          await deps.setState({
-            ...latest,
-            tasks: latest.tasks.map((t) =>
-              t.id === gate.taskId ? { ...t, status: 'failed' as const, updatedAt: now } : t
-            )
-          })
+      // 소진 Gate 의 두 답(설계 §5.2). **다른 모든 Gate·다른 모든 resolution 은 지금처럼 풀린다** —
+      // 이 갈래는 kind 가 'convergence-exhausted' 이고 이번 호출이 실제로 그 Gate 를 닫았을 때만
+      // 탄다(위 snapshot 의 `gate.status === 'open'`; resolveGate 는 이미 resolved 인 Gate 를 다시
+      // 부르면 no-op 이다). gate 가 있으면 r.ok 이므로(resolveGate 도 같은 gateId 로 같은 s 를
+      // 찾는다) 아래 `gate!` 는 안전하다.
+      const exhaustedOpen = gate?.kind === 'convergence-exhausted' && gate.status === 'open'
+      // mark-failed 는 task-update 와 같은 전이표 우회다(회로 카운터는 그대로 둔다 — 이것은 구제가
+      // 아니라 포기다) — **resolveGate 의 커밋과 한 번에 묶는다.** resolveGate 는 이미 blocked ->
+      // pending(그리고 recomputeReady 가 deps 없는 Task 를 ready 로) 을 정했다; 그 상태를 먼저
+      // 커밋하고 나중에 failed 로 또 한 번 덮어쓰면, 그 사이 창에서 Task 가 ready 로 보인다 —
+      // autoDispatch 를 켠 Run 의 스케줄러(slotsToFill)가 사람이 방금 포기한 Task 에 워커를 띄울 수
+      // 있는 창이다.
+      let finalState = r.state
+      if (exhaustedOpen && resolution === 'mark-failed') {
+        const before = r.state.tasks.find((t) => t.id === gate!.taskId)?.status
+        const allowedByTable = before !== undefined && (before === 'failed' || canTransition(before, 'failed'))
+        deps.log?.(
+          `gate-resolve: task=${gate!.taskId} ${before ?? '?'} -> failed (mark-failed on an exhausted Gate, table-allowed=${allowedByTable})`
+        )
+        finalState = {
+          ...finalState,
+          tasks: finalState.tasks.map((t) =>
+            t.id === gate!.taskId ? { ...t, status: 'failed' as const, updatedAt: now } : t
+          )
         }
       }
+      await deps.setState(finalState)
+      // retry-once 는 repair.ts 의 repairOnce — **그 Dispatch 커밋까지만 기다린다.** repairOnce 는
+      // Dispatch 를 열어 커밋한 뒤에야 resolve 하고, 부수 효과(spec 파일 쓰기, 세션 띄우기)는
+      // 백그라운드로 넘긴다(repair.ts 의 주석). 여기서 기다리지 않으면 이 응답이 먼저 나가고, 그
+      // 사이 Task 는 ready 에 Dispatch 없이 있어 worker-release·worker-start 가 그 창으로 같은
+      // 세션(same-session repair 가 노리는 바로 그 세션)에 슬쩍 들어올 수 있다.
+      if (exhaustedOpen && resolution === 'retry-once') await deps.repairOnce?.({ taskId: gate!.taskId })
       return okBody(r.value)
     }
     case 'gate-list': {
@@ -1926,11 +1951,12 @@ export async function handleExit(
   // 검토 Dispatch 가 보고 없이 닫혔으면 Gate 를 연다. closeDispatch 는 **Task 의 상태를 일부러
   // 건드리지 않는다** — 증명할 수 없는 결과를 주장하지 않는다는 규칙이고, 구현 Dispatch 에는 그것이
   // 맞다: Task 는 dispatched 에 남고 worker-start --retry-of 가 집어 간다. 검토 Dispatch 에는 그 길이
-  // 없다. 검토자를 띄운 것은 앱이고 코디네이터에게는 그것을 다시 띄우는 명령이 없으며,
-  // reviewing -> dispatched 전이 자체가 없어서 --retry-of 도 거절된다(ALLOWED.reviewing). 그대로 두면
-  // Task 는 세션도 Gate 도 없이 영원히 reviewing 이고, recomputeReady 는 completed 에서만 의존
-  // Task 를 풀어 주므로 그 아래 서브트리 전체가 pending 에 멈춘다. 가이드 2절의 표가 이 Gate 를
-  // 이미 약속하고 있다.
+  // 없다. 검토자를 띄운 것은 앱이고 코디네이터에게는 그것을 다시 띄우는 명령이 없으며, worker-start
+  // --retry-of 가 여는 openDispatch(state.ts) 는 reviewing 인 Task 를 명시적으로 거절한다("task is
+  // awaiting a verdict") — ALLOWED.reviewing 이 dispatched 로 가는 칸을 열어 두는 것은
+  // openRepairDispatch 하나만을 위해서지 이 문을 위해서가 아니다. 그대로 두면 Task 는 세션도 Gate 도
+  // 없이 영원히 reviewing 이고, recomputeReady 는 completed 에서만 의존 Task 를 풀어 주므로 그 아래
+  // 서브트리 전체가 pending 에 멈춘다. 가이드 2절의 표가 이 Gate 를 이미 약속하고 있다.
   if (!closed.review || task?.status !== 'reviewing') {
     await deps.setState(r.state)
     // `closedBy` is always absent here today: closeDispatch only matches a Dispatch with no

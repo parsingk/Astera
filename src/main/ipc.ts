@@ -71,7 +71,8 @@ import {
   OrchCoordinator,
   LAUNCH_FORBIDDEN,
   buildReviewSpecFile,
-  knowledgeIn
+  knowledgeIn,
+  specFileName
 } from './orchestration/coordinator'
 import {
   handleCommand as orchHandleCommand,
@@ -2630,9 +2631,13 @@ export function registerIpc(
           knowledge: await knowledgeIn(cwd, orchLog),
           // checks·previousIssues·suspiciousFiles 는 나중 태스크(수렴 배선)의 몫이다 — 지금은
           // 트리가 계속 컴파일되도록 resultPath 만 채운다. review.ts·state.ts 가 이미 기대하는
-          // 이름과 같은 규칙이다 — 이 Dispatch 의 spec 경로(`${taskId}-${opened.value.id}.md`)에
-          // `.review.json` 을 붙인 것.
-          resultPath: path.join(specsDir, `${taskId}-${opened.value.id}.md.review.json`)
+          // 이름과 같은 규칙이다 — 이 Dispatch 의 spec 파일 이름(coordinator.ts 의 specFileName,
+          // startWorker 가 실제로 쓰는 그 이름)에 `.review.json` 을 붙인 것. **리터럴을 다시 적지
+          // 않는다** — 여기서 조립하는 시점에는 코디네이터가 아직 돌지 않아 진짜 specPath 를 모르므로
+          // 같은 함수로 미리 계산해야 하고, 독립된 리터럴은 오늘은 우연히 같아도 한쪽만 바뀌는 날
+          // 조용히 갈라진다(검토자는 아무도 읽지 않는 파일에 쓰고, server.ts 는 그 파일을 찾지
+          // 못한다 — malformed 도 "이슈 없음" 도 아니다).
+          resultPath: path.join(specsDir, `${specFileName(taskId, opened.value.id)}.review.json`)
         })
         let started: { sessionId: string; cwd: string; specPath: string }
         try {

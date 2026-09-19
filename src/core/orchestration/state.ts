@@ -382,6 +382,16 @@ export function openDispatch(
   const task = s.tasks.find((t) => t.id === a.taskId)
   if (!task) return err(`unknown task: ${a.taskId}`)
   if (task.status === 'blocked') return err('task is blocked by an open gate')
+  // validating·reviewing 은 판정을 기다리는 중이다 — moveTask/canTransition 만으로는 이제 이것을
+  // 막지 못한다: ALLOWED.validating·ALLOWED.reviewing 이 'dispatched' 를 허용하는 것은
+  // openRepairDispatch(그 판정이 도착한 뒤에만 여는 문) 하나를 위해서이지, 이 문(worker-start 가
+  // 쓰는 바로 그 openDispatch) 을 위해서가 아니다. 여기서 명시적으로 거절하지 않으면 코디네이터가
+  // 앱이 검사하는 중인 Task 에 두 번째 워커를 얹을 수 있다 — 설계의 코디네이터-격리 논거 전체가
+  // 이 거절 하나에 서 있다. convergence 가 없는 Run 도 예외가 아니다: validating·reviewing 은 그
+  // Run 에도 있고(검증·검토 기능 자체는 D12 이전부터 있었다), 그 Run 에서도 판정을 기다리는 동안
+  // 두 번째 워커가 뜨면 안 된다.
+  if (task.status === 'validating' || task.status === 'reviewing')
+    return err(`task is awaiting a verdict: ${task.status}`)
   if (!a.ignoreCircuit && task.consecutiveFailures >= FAILURE_LIMIT)
     return err(`circuit break: ${FAILURE_LIMIT} consecutive failures`)
   // An open dispatch is rejected unconditionally even with retryOf — retryOf has to mean "the

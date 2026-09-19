@@ -128,6 +128,14 @@ const KNOWLEDGE_SCAN_TIMEOUT_MS = 2_000
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/** taskId 와 dispatchId 만으로 이미 고유하다 — startWorker 가 spec 파일을 이 이름으로 쓴다.
+ *  **두 자리가 이 이름에 동의해야 한다**: 여기서 쓰고, ipc.ts 의 검토 Dispatch 배선은 코디네이터가
+ *  돌기(그래서 진짜 specPath 를 알기) 전에 판정 파일 경로(`<이 이름>.review.json`)를 먼저 정해서
+ *  검토자의 spec 에 실어야 한다 — 그 자리가 각자 리터럴을 다시 적으면 오늘은 우연히 같아도 한쪽만
+ *  바뀌는 날 조용히 갈라진다: 검토자는 아무도 읽지 않는 파일에 쓰고, 서버는 malformed 도 아니고
+ *  "이슈 없음"도 아닌 채 그냥 아무것도 읽지 못한다. */
+export const specFileName = (taskId: string, dispatchId: string): string => `${taskId}-${dispatchId}.md`
+
 /** specPath is an absolute path normalized to forward slashes (see startWorker below) */
 export const launchPrompt = (specPath: string): string =>
   `Read ${specPath} and follow the instructions in it`
@@ -723,7 +731,7 @@ export class OrchCoordinator {
     // and that path contains the username (a Windows username may contain `&` or `^`). So the error
     // has to point at the cause, and the wiring runs the same check at boot to leave a warning
     // (ipc.ts bootOrch).
-    const specName = `${a.taskId}-${a.dispatchId}.md`
+    const specName = specFileName(a.taskId, a.dispatchId)
     const specPath = path.join(this.deps.specsDir, specName)
     // Backslashes become forward slashes: the worker also handles this path through its Bash tool,
     // and `\` is the shell's escape character (the lesson the sh shuttle taught — the same rule as
