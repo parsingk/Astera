@@ -18,7 +18,8 @@
 //    answer by the tool's run time. A request answered inside that window has no echo behind it in the
 //    replay, so it is skipped by id instead (`answered` below, ruling S3-7).
 import type { ProcLike } from '../../core/sessions/proc'
-import type { ChatAdapter, ChatAnswer } from '../../core/chat/types'
+import type { ChatAdapter, ChatAnswer, PermissionMode } from '../../core/chat/types'
+import { isPermissionMode } from '../../core/chat/types'
 import type { ModelDescriptor } from '../../core/models/types'
 import type { ClaudeFrame } from '../../core/chat/claudeProtocol'
 import type { ProtocolEffect } from '../../core/chat/codexProtocol'
@@ -47,6 +48,10 @@ const PENDING_TURN = 'pending'
  *  output, so a handful would do; this is small enough to write on every answer and long enough that
  *  the window can never outrun it. */
 const ANSWERED_KEPT = 32
+
+/** The three the composer's mode menu offers, in the order it draws them. `bypassPermissions` is
+ *  deliberately absent — see PermissionMode (core/chat/types.ts). */
+const CLAUDE_PERMISSION_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan']
 
 export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
   const { proc, mode, log } = deps
@@ -129,9 +134,9 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
         core.resolveByToolUse(effect.toolUseId)
         break
       }
-      case 'planMode':
+      case 'permissionMode':
         // A field patch, never a model replace: `system/status` says nothing about the model.
-        core.patch({ model: { ...core.state.model, planMode: effect.on } })
+        core.patch({ model: { ...core.state.model, permissionMode: effect.mode } })
         break
       case 'event':
         if (effect.event.type === 'status') {
@@ -143,16 +148,21 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
           if (effect.event.status === 'working' && core.state.request !== null) core.patch({ truncated: false })
           else core.patch({ status: effect.event.status, truncated: false })
         } else if (effect.event.type === 'model') {
-          // `system/init` repeats every turn with the model in force but no effort, and its plan mode
-          // arrives as the `planMode` effect right behind this one — so neither is taken from here: an
-          // absent effort keeps the one already known rather than blanking the pill.
-          core.patch({ model: { ...effect.event.model, effort: effect.event.model.effort ?? core.state.model.effort, planMode: core.state.model.planMode } })
+          // `system/init` repeats every turn with the model in force but no effort, and its permission
+          // mode arrives as the `permissionMode` effect right behind this one — so neither is taken from
+          // here: an absent effort keeps the one already known rather than blanking the readout.
+          core.patch({ model: { ...effect.event.model, effort: effect.event.model.effort ?? core.state.model.effort, permissionMode: core.state.model.permissionMode } })
         } else if (effect.event.type === 'error') core.fail(effect.event.message)
         break
       case 'rateLimit':
         // Immediate, not folded into ChatState: rolling and Slack read it off the event stream, and the
         // pane draws nothing from it, so there is no state field for `patch` to coalesce it into.
         core.emit({ type: 'rateLimit', info: effect.info })
+        break
+      case 'usage':
+        // Same arrangement, and for the same reason: the status bar reads it off the stream and the
+        // pane draws nothing from it.
+        core.emit({ type: 'usage', context: { usedTokens: effect.usedTokens, windowByModel: effect.windowByModel } })
         break
       default:
         // 'resolved' and 'fileChange' are Codex-only; claudeEffectsOf never emits them.
@@ -235,7 +245,16 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
     try {
       const response = await control({ subtype: 'initialize' })
       models = claudeModelsOf(response)
-      core.patch({ model: { ...core.state.model, planMode: response.current_permission_mode === 'plan' } })
+      core.patch({
+        model: {
+          ...core.state.model,
+          // Same narrowing the wire's own frames get (modeOf, core/chat/claudeProtocol.ts): a session
+          // started in bypassPermissions reads as default rather than as a mode the menu cannot show.
+          permissionMode: isPermissionMode(response.current_permission_mode)
+            ? response.current_permission_mode
+            : 'default'
+        }
+      })
       if (a.resumeThreadId !== undefined) {
         threadId = a.resumeThreadId
         core.emitReady(threadId, null)
@@ -279,11 +298,11 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
     core.patch({ model: { ...core.state.model, model } })
   }
 
-  async function doSetPlanMode(on: boolean): Promise<void> {
-    await control({ subtype: 'set_permission_mode', mode: on ? 'plan' : 'default' })
+  async function doSetPermissionMode(mode: PermissionMode): Promise<void> {
+    await control({ subtype: 'set_permission_mode', mode })
     // The `system/status` that follows says the same thing; setting it on the acknowledgement means the
-    // pill turns on when the CLI agrees rather than a frame later.
-    core.patch({ model: { ...core.state.model, planMode: on } })
+    // control moves when the CLI agrees rather than a frame later.
+    core.patch({ model: { ...core.state.model, permissionMode: mode } })
   }
 
   async function doListModels(): Promise<ModelDescriptor[]> {
@@ -322,7 +341,12 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
     // The effort pick is dropped: this build has no control request that sets one (it only advertises
     // `supportedEffortLevels`), so half-applying it would leave the pane claiming something untrue.
     setModel: (model) => safe(doSetModel(model)),
-    setPlanMode: (on) => safe(doSetPlanMode(on)),
+    setPermissionMode: (mode) => safe(doSetPermissionMode(mode)),
+    // No round trip: Claude's set is fixed and it names none of them on the wire. The empty label is
+    // the contract's own cue for that (PermissionModeChoice) — the composer supplies a translated word.
+    // Least permissive first, plan last: it is the one people reach for deliberately.
+    listPermissionModes: () =>
+      Promise.resolve(CLAUDE_PERMISSION_MODES.map((key) => ({ key, label: '' }))),
     listModels: () => safe(doListModels()),
     state: () => core.snapshot(),
     on: (fn) => core.on(fn),

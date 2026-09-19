@@ -24,9 +24,11 @@
 - A terminal per project
 
 **Conversation view**
-- A session can be read as the terminal it runs in, or as an ordinary chat interface. It is the same
-  session either way — switch it from the top right of any session, and set the default in
+- A session opens either as a terminal or as an ordinary chat interface. Which one is settled when
+  the session is made and does not change afterwards. What a new session opens as is set in
   **Settings → General**
+- A chat session's questions and approvals arrive as cards. Its model and permission mode are picked
+  beside the composer
 - Drop a file or paste an image and its path goes into the message
 
 <div align="center">

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, Attention, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, SessionView, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
+import type { Account, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -344,6 +344,11 @@ function formatResetHud(resetsAt: string | null | undefined): string | null {
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
 }
 
+/** How often the Host's status is re-read. Slow on purpose: the only thing that changes without anyone
+ *  asking is the Host replacing itself, which happens the first moment it holds nothing, and a notice
+ *  that clears within half a minute of that is prompt enough for something nobody is waiting on. */
+const HOST_STATUS_POLL_MS = 30_000
+
 /** "7m", "2h" — a coarse uptime is all this row needs; it is a sign of life, not a metric, which is
  *  also why the unit is not translated. */
 const hostUptime = (startedAt: string | null): string => {
@@ -449,6 +454,31 @@ export default function App(): React.JSX.Element {
    *  once this is filled: zeros would be a claim that nothing of the person's survives closing the
    *  app, and that is the one wrong answer worth avoiding here. */
   const [hostHolding, setHostHolding] = useState<HostHoldings | null>(null)
+  // Read from the app's startup and kept current, not only while the Settings modal is open. It used
+  // to be read on that open alone, on the reasoning that the Info row was the only thing that drew it
+  // — true until the status bar started drawing the "Host update" notice, which is on screen the whole
+  // time and would otherwise have stayed hidden until someone visited the very tab it exists to save
+  // them a trip to. Polled rather than pushed because the fact changes without anyone asking: the Host
+  // replaces itself the first moment it holds nothing (host-replacement design §4), and the notice has
+  // to go away when it does. The call answers from inside this app — no round trip to the Host — so
+  // the interval is cheap; the Host's own holdings, which are a round trip, stay where they were.
+  useEffect(() => {
+    let current = true
+    const read = (): void => {
+      void window.api.host
+        .status()
+        .then((s) => {
+          if (current) setHostStatus(s)
+        })
+        .catch(() => {})
+    }
+    read()
+    const timer = setInterval(read, HOST_STATUS_POLL_MS)
+    return () => {
+      current = false
+      clearInterval(timer)
+    }
+  }, [])
   const [hostRestarting, setHostRestarting] = useState(false)
   /** The Info tab's *Restart now*: confirm with what ends, replace, then re-read the row. */
   const restartHost = async (): Promise<void> => {
@@ -600,12 +630,6 @@ export default function App(): React.JSX.Element {
   const [rollStates, setRollStates] = useState<Record<string, RollStateEvent>>({})
   const [schedStates, setSchedStates] = useState<Record<string, SchedStateEvent>>({}) // the schedule banner
   const [busy, setBusy] = useState<Record<string, boolean>>({}) // whether each session is working — the tab spinner
-  // Task 10's tab-bar marker (PaneGrid.tsx's own comment on the prop has the full reasoning). Same
-  // shape and the same subscription convention as rollStates/schedStates/busy above.
-  const [attention, setAttention] = useState<Record<string, Attention>>({})
-  // Every session id ever asked about with the one-shot attention read below — read once per
-  // session, ever, not on every render or every sessions-list change.
-  const requestedAttentionRef = useRef<Set<string>>(new Set())
   // Every session whose roll-state / schedule push listener has decided banner state at least once. A
   // seed reply is dropped for a session already in the set: an invoke reply and a push have no order
   // between them, so a push — including an 'off'/'none' that removed the banner — is always the fresher
@@ -615,17 +639,6 @@ export default function App(): React.JSX.Element {
   // seed that is still the only thing that knows what the banner should say.
   const heardRollRef = useRef<Set<string>>(new Set())
   const heardSchedRef = useRef<Set<string>>(new Set())
-  // Fix round 1: the most recent session:rolled, for PaneGrid to carry a rolled session's remembered
-  // terminal/conversation choice to its new id (PaneGrid's own `lastRoll` prop comment has the full
-  // reasoning). Deliberately never reset back to null — see that comment.
-  // One slot, deliberately: if two different sessions ever rolled inside a single React commit, the
-  // second value would overwrite the first and that tab's choice would fall back to the setting.
-  // Nobody has seen that happen (each roll reaches here as its own IPC message, after its own file
-  // I/O), and the cost when it does is one tab showing the default until someone clicks the toggle,
-  // so a queue and the pruning it would need buy less than they cost.
-  const [lastRoll, setLastRoll] = useState<{ oldSessionId: string; newSessionId: string } | null>(
-    null
-  )
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]) // file viewer tabs
   // How It Works record detail tabs. Kept in a separate list for the same reason as file tabs — a
   // `record:<id>` tab id carries neither the project nor the title, so this tab could not be drawn,
@@ -1055,8 +1068,8 @@ export default function App(): React.JSX.Element {
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
     // Re-syncs the new-session default too, for the same reason as orchestration above.
     void window.api.settings.getDefaultSessionKind().then(setDefaultSessionKind)
-    // Astera Host slice 1: this value goes stale, and the row is only ever on screen while this
-    // modal is open, so it is read here rather than at startup.
+    // Re-read on open beside the effect below, which is what keeps it current the rest of the time:
+    // the Info row wants the freshest answer at the moment it is drawn, and this costs nothing.
     void window.api.host.status().then(setHostStatus)
     // What it is holding is a round trip to the Host, so it is asked beside the status rather than
     // through it: the status answers from inside this app and must not be made to wait on a process
@@ -1303,26 +1316,9 @@ export default function App(): React.JSX.Element {
         const { [oldSessionId]: _dropped, ...rest } = prev
         return rest
       })
-      // Same drop, same reason: main's attention tracking (src/main/attention.ts) is per session id
-      // and starts fresh for the new one, so the old id's verdict is stale the instant it rolls.
-      setAttention((prev) => {
-        const { [oldSessionId]: _dropped, ...rest } = prev
-        return rest
-      })
-      // Fix round 1: the opposite of the three drops above — the terminal/conversation choice is not
-      // a verdict about the process, it is a property of the tab, and the tab is the same one. Tells
-      // PaneGrid to carry it to the new id instead of reading a rename as an unrelated close+open.
-      setLastRoll({ oldSessionId, newSessionId: info.id })
     })
     const offBusy = window.api.on('session:busy', ({ sessionId, busy: b }) =>
       setBusy((prev) => (prev[sessionId] === b ? prev : { ...prev, [sessionId]: b }))
-    )
-    // Task 10's tab-bar marker. Fires app-wide on every attention change regardless of whether any
-    // conversation pane happens to be open (core/types.ts's own doc on the event) — this is a second,
-    // independent listener from ConversationPane's own, not something threaded down from it; see the
-    // `attention` prop's own comment in PaneGrid.tsx for why that duplication is deliberate.
-    const offAttention = window.api.on('conversation:attention', (e) =>
-      setAttention((prev) => (prev[e.sessionId] === e.value ? prev : { ...prev, [e.sessionId]: e.value }))
     )
     const offRollState = window.api.on('session:rollState', (ev) => {
       // A failed auto-resume is announced with a toast. Why not a banner: a banner only disappears once
@@ -1362,33 +1358,10 @@ export default function App(): React.JSX.Element {
     return () => {
       offRolled()
       offBusy()
-      offAttention()
       offRollState()
       offSchedState()
     }
   }, [])
-
-  // The one-shot half of Task 10's attention tracking, same pattern ConversationPane's own mount
-  // effect uses and for the same reason: 'conversation:attention' above only fires on a change, so a
-  // session already `waiting` before this ever asked about it would read as unmarked until its next
-  // change — which, for a session stuck on the very prompt the marker exists to surface, may not
-  // come. No sawLiveAttention-style ordering flag is needed the way ConversationPane's has one:
-  // `attention` starts with no entry for a session rather than seeding it to 'idle', so "already has
-  // an entry by the time this resolves" can only mean the live listener above beat it there — the
-  // one and only other writer of this id — so checking presence is enough to stop a late read from
-  // clobbering a newer value.
-  useEffect(() => {
-    for (const s of sessions) {
-      if (requestedAttentionRef.current.has(s.id)) continue
-      requestedAttentionRef.current.add(s.id)
-      void window.api.conversation
-        .attention(s.id)
-        .then((value) => {
-          setAttention((prev) => (s.id in prev ? prev : { ...prev, [s.id]: value }))
-        })
-        .catch(() => {})
-    }
-  }, [sessions])
 
   // When a shell dies on its own (the user typed exit) its tab is removed — a dead shell tab is noise.
   // If it was the active tab, we go back to Run (the panel itself stays).
@@ -3938,8 +3911,6 @@ export default function App(): React.JSX.Element {
                 rollStates={rollStates}
                 schedStates={schedStates}
                 busy={busy}
-                attention={attention}
-                lastRoll={lastRoll}
                 draggingTabId={dragTabId}
                 newDisabled={!anyCliOk}
                 onFocusPane={setActivePaneId}
@@ -4099,6 +4070,28 @@ export default function App(): React.JSX.Element {
             <span>{t('session.statusbar.none')}</span>
             <span className="sp">{t('session.statusbar.accountCount', { count: accounts.length })}</span>
           </>
+        )}
+        {/* The Host outlived an update and still runs the previous build. It replaces itself the first
+            moment it holds nothing (host-replacement design §4), which for someone who keeps sessions
+            open never comes — and until then 대화 sessions cannot be started at all, because the old
+            Host does not speak proc-*. That was only ever said in Settings > Info, a place nobody
+            visits to find out why a feature they were not told about is missing.
+
+            Outside the `active` branches above on purpose: the Host's state is the same fact whether or
+            not a session is showing, and the two branches would otherwise each need their own copy. */}
+        {hostStatus?.connected && hostStatus.outdated && (
+          <button
+            type="button"
+            className="status-host-outdated"
+            disabled={hostRestarting}
+            onClick={() => void restartHost()}
+            title={t('status.hostOutdatedTitle', {
+              host: hostStatus.hostVersion ?? '?',
+              app: appVersion
+            })}
+          >
+            {hostRestarting ? t('settings.info.hostRestarting') : t('status.hostOutdated')}
+          </button>
         )}
       </div>
       {showNew && (
@@ -4371,49 +4364,64 @@ export default function App(): React.JSX.Element {
                     </div>
                     <div className="settings-row">
                       <span>{t('settings.info.host')}</span>
-                      <span>
-                        {hostStatus?.connected
-                          ? t('settings.info.hostConnected', {
-                              protocol: hostStatus.protocol ?? 0,
-                              uptime: hostUptime(hostStatus.startedAt)
-                            }) +
-                            // The Host outlived an update and still runs the previous version. Said
-                            // here because this row is the one place its version is on screen, and
-                            // the automatic replacement (host-replacement design §4) is otherwise
-                            // invisible until it happens.
-                            (hostStatus.outdated
-                              ? ` · ${t('settings.info.hostOutdated', {
+                      {/* Three separate lines rather than one string joined with separators. Each of
+                          them varies in length on its own, and while they were one run of text the
+                          restart button sat at the end of it — so where the button appeared depended on
+                          how much the Host happened to be holding, which is not something a person
+                          should have to read past to find it. */}
+                      <span className="host-row-detail">
+                        {hostStatus?.connected ? (
+                          <>
+                            <span>
+                              {t('settings.info.hostConnected', {
+                                protocol: hostStatus.protocol ?? 0,
+                                uptime: hostUptime(hostStatus.startedAt)
+                              })}
+                            </span>
+                            {/* The Host outlived an update and still runs the previous version. Said
+                                here because this row is the one place its version is on screen, and
+                                the automatic replacement (host-replacement design §4) is otherwise
+                                invisible until it happens. The same amber the status bar's own notice
+                                uses, so the two read as one fact rather than two. */}
+                            {hostStatus.outdated && (
+                              <span className="host-row-outdated">
+                                {t('settings.info.hostOutdated', {
                                   host: hostStatus.hostVersion ?? '?',
                                   app: appVersion
-                                })}`
-                              : '') +
-                            // Appended only once the Host has answered. Until then the row is the
-                            // connection facts alone, which is the whole truth it has: a count here
-                            // before the answer would be an invented one.
-                            (hostHolding
-                              ? ` · ${t('settings.info.hostHolding', {
+                                })}
+                              </span>
+                            )}
+                            {/* Drawn only once the Host has answered. Until then the row is the
+                                connection facts alone, which is the whole truth it has: a count here
+                                before the answer would be an invented one. */}
+                            {hostHolding && (
+                              <span>
+                                {t('settings.info.hostHolding', {
                                   sessions: hostHolding.sessions,
                                   chats: hostHolding.chats,
                                   terminals: hostHolding.terminals,
                                   runs: hostHolding.runs
-                                })}`
-                              : '')
-                          : hostStatus?.problem
-                            ? t('settings.info.hostNotConnectedWhy', { detail: hostStatus.problem })
-                            : t('settings.info.hostNotConnected')}
-                        {/* Not waiting for the automatic replacement. Confirms with the holdings,
-                            because the count is the only honest part of the offer (design §6). */}
-                        {hostStatus?.connected && hostStatus.outdated && (
-                          <button
-                            type="button"
-                            disabled={hostRestarting}
-                            onClick={() => void restartHost()}
-                            style={{ marginLeft: 8 }}
-                          >
-                            {hostRestarting ? t('settings.info.hostRestarting') : t('settings.info.hostRestartNow')}
-                          </button>
+                                })}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span>
+                            {hostStatus?.problem
+                              ? t('settings.info.hostNotConnectedWhy', { detail: hostStatus.problem })
+                              : t('settings.info.hostNotConnected')}
+                          </span>
                         )}
                       </span>
+                      {/* A sibling of the text, not its tail — .settings-row's space-between then keeps
+                          it at the row's right edge whether the text above it runs to one line or
+                          three. Not waiting for the automatic replacement; confirms with the holdings,
+                          because the count is the only honest part of the offer (design §6). */}
+                      {hostStatus?.connected && hostStatus.outdated && (
+                        <button type="button" disabled={hostRestarting} onClick={() => void restartHost()}>
+                          {hostRestarting ? t('settings.info.hostRestarting') : t('settings.info.hostRestartNow')}
+                        </button>
+                      )}
                     </div>
                     <div className="settings-row">
                       <span>{t('settings.info.registeredAccounts')}</span>

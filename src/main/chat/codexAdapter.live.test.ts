@@ -249,7 +249,7 @@ suite('codexAdapter against a real codex app-server', () => {
       expect(a.state().model.model).not.toBeNull()
 
       // 2 — a plan-mode turn that asks, and our answer to it.
-      await a.setPlanMode(true)
+      await a.setPermissionMode('plan')
       await a.send(QUESTION_PROMPT)
       await until('a question request', 120_000, () => a.state().request?.kind === 'question')
       const question = a.state().request as Extract<ChatRequest, { kind: 'question' }>
@@ -263,13 +263,13 @@ suite('codexAdapter against a real codex app-server', () => {
         ]
       })
       await until('idle after the answer', 120_000, () => a.state().status === 'idle')
-      expect(a.state().model.planMode).toBe(true)
+      expect(a.state().model.permissionMode).toBe('plan')
       expect(a.state().request).toBeNull()
 
       // 3 — a shell command the execpolicy rule in the temporary home makes Codex ask about before
       // running it. There is no "or the turn finished without asking" branch: the home this test built
       // is precisely what makes being asked the only legitimate outcome (see the header).
-      await a.setPlanMode(false)
+      await a.setPermissionMode('default')
       await a.send(SHELL_PROMPT)
       await until('an approval request', 120_000, () => a.state().request?.kind === 'approval')
       const approval = a.state().request as Extract<ChatRequest, { kind: 'approval' }>

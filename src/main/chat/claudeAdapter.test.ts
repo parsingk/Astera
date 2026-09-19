@@ -76,7 +76,7 @@ describe('createClaudeAdapter — handshake', () => {
     expect((await a.listModels()).length).toBe(5)
     expect(wrote(p).map((w) => w.request?.subtype)).toEqual(['initialize'])
     expect(a.state().status).toBe('idle')
-    expect(a.state().model).toEqual({ model: null, effort: null, planMode: false })
+    expect(a.state().model).toEqual({ model: null, effort: null, permissionMode: 'default' })
     // A fresh session has no id until its first turn's system/init — nothing to be ready with yet.
     expect(events.filter((e) => e.type === 'ready')).toEqual([])
   })
@@ -108,7 +108,7 @@ describe('createClaudeAdapter — handshake', () => {
     const recorded = (JSON.parse(F.INITIALIZE_RESPONSE) as { response: { response: Record<string, unknown> } }).response.response
     p.feed(okReply(p, 'initialize', { ...recorded, current_permission_mode: 'plan' }))
     await starting
-    expect(a.state().model.planMode).toBe(true)
+    expect(a.state().model.permissionMode).toBe('plan')
   })
 
   it('state() hands out a copy of the model, so a caller cannot write into the session', async () => {
@@ -133,7 +133,7 @@ describe('createClaudeAdapter — a turn with a question', () => {
     await tick()
     expect(events).toContainEqual({ type: 'ready', threadId: SESSION_ID, rolloutPath: null })
     expect(p.notes[0]).toEqual({ threadId: SESSION_ID })
-    expect(a.state().model).toEqual({ model: 'claude-fable-5-1', effort: null, planMode: false })
+    expect(a.state().model).toEqual({ model: 'claude-fable-5-1', effort: null, permissionMode: 'default' })
     expect(a.state().status).toBe('working')
 
     p.feed(F.ASSISTANT_ASK_TOOL_USE)
@@ -363,15 +363,15 @@ describe('createClaudeAdapter — a turn with a question', () => {
 describe('createClaudeAdapter — the model and the permission mode', () => {
   it('sets the permission mode and the status message that follows agrees', async () => {
     const { p, a } = await started()
-    const planning = a.setPlanMode(true)
+    const planning = a.setPermissionMode('plan')
     await tick()
     expect(lastWrote(p)).toMatchObject({ type: 'control_request', request: { subtype: 'set_permission_mode', mode: 'plan' } })
     p.feed(replyWith(p, 'set_permission_mode', F.SET_MODE_RESPONSE))
     await planning
-    expect(a.state().model.planMode).toBe(true)
+    expect(a.state().model.permissionMode).toBe('plan')
     p.feed(F.SYSTEM_STATUS_PLAN)
     await tick()
-    expect(a.state().model.planMode).toBe(true)
+    expect(a.state().model.permissionMode).toBe('plan')
   })
 
   it('sets the model on acknowledgement, and leaves the effort alone — this build has no request for it', async () => {
@@ -381,7 +381,7 @@ describe('createClaudeAdapter — the model and the permission mode', () => {
     expect(lastWrote(p)).toMatchObject({ type: 'control_request', request: { subtype: 'set_model', model: 'sonnet' } })
     p.feed(okReply(p, 'set_model', {}))
     await picking
-    expect(a.state().model).toEqual({ model: 'sonnet', effort: null, planMode: false })
+    expect(a.state().model).toEqual({ model: 'sonnet', effort: null, permissionMode: 'default' })
   })
 
   it('a later init keeps an effort it does not carry and follows the permission mode it does', async () => {
@@ -389,11 +389,11 @@ describe('createClaudeAdapter — the model and the permission mode', () => {
     const init = JSON.parse(F.SYSTEM_INIT) as Record<string, unknown>
     p.feed(JSON.stringify({ ...init, effort: 'high', permissionMode: 'plan' }))
     await tick()
-    expect(a.state().model).toEqual({ model: 'claude-fable-5-1', effort: 'high', planMode: true })
+    expect(a.state().model).toEqual({ model: 'claude-fable-5-1', effort: 'high', permissionMode: 'plan' })
     // The next turn's init: same session, no effort field at all, and the mode back to default.
     p.feed(F.SYSTEM_INIT)
     await tick()
-    expect(a.state().model).toEqual({ model: 'claude-fable-5-1', effort: 'high', planMode: false })
+    expect(a.state().model).toEqual({ model: 'claude-fable-5-1', effort: 'high', permissionMode: 'default' })
   })
 })
 
@@ -404,7 +404,22 @@ describe('createClaudeAdapter — rate limit', () => {
     p.feed(F.RATE_LIMIT_EVENT)
     await tick()
     expect(events.filter((e) => e.type === 'rateLimit')).toEqual([
-      { type: 'rateLimit', info: { status: 'allowed_warning', resetsAt: 1789552800 * 1000, utilization: 0.99, window: 'seven_day', source: 'event' } }
+      {
+        type: 'rateLimit',
+        info: {
+          status: 'allowed_warning',
+          resetsAt: 1789552800 * 1000,
+          utilization: 0.99,
+          window: 'seven_day',
+          source: 'event',
+          // Both windows ride along for the status bar, which draws a chip for each; the fields above
+          // name only the one that fired.
+          windows: {
+            session: { usedPercent: 42, resetsAt: new Date(1789539600 * 1000).toISOString() },
+            weekly: { usedPercent: 99, resetsAt: new Date(1789552800 * 1000).toISOString() }
+          }
+        }
+      }
     ])
     expect(a.state()).toEqual(before)
   })
@@ -524,5 +539,37 @@ describe('createClaudeAdapter — exit', () => {
     p.exit(PTY_LOST_SIGHT_EXIT_CODE)
     await expect(listing).rejects.toThrow()
     expect(events.at(-1)).toEqual({ type: 'exit', code: PTY_LOST_SIGHT_EXIT_CODE })
+  })
+})
+
+describe('createClaudeAdapter — the mode menu', () => {
+  it('offers the three modes this app can ask for, without asking the CLI', async () => {
+    // Claude names none of them on the wire — its set is fixed and the labels are this app's — so the
+    // list costs no round trip. Order is the menu's: least permissive to most, plan last because it is
+    // the one people reach for deliberately.
+    const { p, a } = await started()
+    const before = p.written.length
+    // No label: Claude names none of them on the wire, and an empty one is the cue for the composer to
+    // use this app's own translated word. Repeating the key here would have shipped `acceptEdits` as
+    // the button's text in every language.
+    expect(await a.listPermissionModes()).toEqual([
+      { key: 'default', label: '' },
+      { key: 'acceptEdits', label: '' },
+      { key: 'plan', label: '' }
+    ])
+    expect(p.written.length).toBe(before) // nothing was sent
+  })
+
+  it('sends acceptEdits as itself, not as a plan/default pair', async () => {
+    const { p, a } = await started()
+    const setting = a.setPermissionMode('acceptEdits')
+    await tick()
+    expect(lastWrote(p)).toMatchObject({
+      type: 'control_request',
+      request: { subtype: 'set_permission_mode', mode: 'acceptEdits' }
+    })
+    p.feed(replyWith(p, 'set_permission_mode', F.SET_MODE_RESPONSE))
+    await setting
+    expect(a.state().model.permissionMode).toBe('acceptEdits')
   })
 })

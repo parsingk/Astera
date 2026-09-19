@@ -4,8 +4,9 @@ import type { DetectCandidate } from './detect'
 import { GHOST_ID_PREFIX } from './ghostId'
 
 
-/** One fixed grey, not a slot in the registry's COLORS palette. Ghosts have to be distinguishable from
- *  real accounts at a glance, and a per-ghost colour would just look like another registered account. */
+/** One fixed grey, deliberately outside ACCOUNT_COLORS (accounts/colors.ts). Ghosts have to be
+ *  distinguishable from real accounts at a glance, and a per-ghost colour would just look like another
+ *  registered account. Keeping it out of the palette also keeps it from colliding with one. */
 const GHOST_COLOR = '#6b7280'
 
 /** Ghosts are not registered, so they have no registration time. A fixed epoch keeps the mapping pure

@@ -83,12 +83,13 @@ function makeAdapterFactory(startRejects = false, sendRejects = false): {
       interrupt: () => Promise.resolve(),
       answer: () => Promise.resolve(),
       setModel: () => Promise.resolve(),
-      setPlanMode: () => Promise.resolve(),
+      setPermissionMode: () => Promise.resolve(),
+      listPermissionModes: () => Promise.resolve([]),
       listModels: () => Promise.resolve([]),
       state: (): ChatState => ({
         status: 'idle',
         request: null,
-        model: { model: null, effort: null, planMode: false },
+        model: { model: null, effort: null, permissionMode: 'default' },
         error: null,
         outlivesApp: a.proc.outlivesApp === true,
         truncated: a.mode.mode === 'adopt' ? a.mode.truncated : false,
@@ -589,7 +590,8 @@ describe('command delegation', () => {
     const answer: ChatAnswer = { kind: 'approval', decision: 'accept' }
     await expect(manager.answer(info.id, 'req-1', answer)).resolves.toBeUndefined()
     await expect(manager.setModel(info.id, 'gpt-5', null)).resolves.toBeUndefined()
-    await expect(manager.setPlanMode(info.id, true)).resolves.toBeUndefined()
+    await expect(manager.setPermissionMode(info.id, 'plan')).resolves.toBeUndefined()
+    await expect(manager.listPermissionModes(info.id)).resolves.toEqual([])
     await expect(manager.listModels(info.id)).resolves.toEqual([])
   })
 

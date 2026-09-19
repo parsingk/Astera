@@ -41,7 +41,7 @@ import { reattachSessions, type ReattachResult } from './host/reattach'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
+import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchSnapshot, Provider, RateLimitWindow, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { markCodexProjectTrusted } from '../core/accounts/codexTrust'
 import { descriptorOf } from '../core/providers/descriptor'
@@ -105,7 +105,9 @@ import {
 import { coordinatorLaunchPrompt } from '../core/orchestration/handover'
 import { detachCoordinator } from '../core/orchestration/state'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
-import type { ChatAnswer } from '../core/chat/types'
+import type { ChatAnswer, ChatContextUsage, RateLimitInfo } from '../core/chat/types'
+import { chatSessionUsage } from '../core/usage/chatSession'
+import { isPermissionMode } from '../core/chat/types'
 import { firesDue } from '../core/orchestration/fire'
 import { reapableChildRuns } from '../core/orchestration/reap'
 import {
@@ -783,6 +785,22 @@ export function registerIpc(
   // a chat session's transcript lives", just registered through a different mechanism per CLI (codex
   // names its own rollout path on `ready`; claude's file is found by session id instead).
   const chatTranscripts = new Map<string, string>()
+  /** The status-bar figures a claude chat session has reported about itself. A pty session has a
+   *  statusLine capture to read these off; the chat transport never plants one (`ASTERA_STATUSLINE_OUT`
+   *  is set by the pty manager alone), so they are kept here as the events carry them. Held beside
+   *  `chatTranscripts` and dropped with it on exit, for the same reason: both are per-session facts that
+   *  arrive on the event stream and are asked for later, by a handler that cannot wait for an event. */
+  const chatUsage = new Map<
+    string,
+    { context: ChatContextUsage | null; limits: RateLimitInfo['windows'] }
+  >()
+  const rememberChatUsage = (
+    sessionId: string,
+    patch: Partial<{ context: ChatContextUsage | null; limits: RateLimitInfo['windows'] }>
+  ): void => {
+    const prev = chatUsage.get(sessionId) ?? { context: null, limits: null }
+    chatUsage.set(sessionId, { ...prev, ...patch })
+  }
   const conversationSessions = createConversationSessions({
     // A claude chat session's transcript first — it is already known by the time this is asked, so no
     // disk probe is needed here. Then claude's statusline-based route (a terminal claude session, or a
@@ -1413,10 +1431,16 @@ export function registerIpc(
       // and `effectsOf` emits none — so asking which provider it is could not change the outcome. A
       // session with no chain returns at onChatLimit's first line.
       rolling?.onChatLimit(sessionId, event.info)
+      // Only a signal that carried both windows is kept. One inferred from a rejected turn has no
+      // figures at all, and storing its nulls would drop the pair a warning had just delivered.
+      if (event.info.windows) rememberChatUsage(sessionId, { limits: event.info.windows })
+    } else if (event.type === 'usage') {
+      rememberChatUsage(sessionId, { context: event.context })
     } else if (event.type === 'exit') {
       attention.forget(sessionId)
       codexRollout?.unregister(sessionId)
       chatTranscripts.delete(sessionId)
+      chatUsage.delete(sessionId)
     }
   })
   // run output and status to the renderer
@@ -4499,8 +4523,31 @@ export function registerIpc(
   ipcMain.handle('usage.session', (_e, sessionId: string) => {
     const provider = providerOfSession(sessionId, allSessions(), (id) => core.accounts.get(id))
     if (provider === 'codex') return codexRollout?.usage(sessionId) ?? null
-    if (provider === 'claude') return core.usageSession(sessionId)
-    return null
+    if (provider !== 'claude') return null
+    // A claude chat session has no statusLine to read, so it assembles the same three figures from what
+    // it does have. Codex needs no equivalent: its chat sessions are registered with the rollout watcher
+    // at `ready`, which is what already answers for them above.
+    if (core.chat.state(sessionId)?.provider === 'claude') {
+      const held = chatUsage.get(sessionId)
+      const accountId = core.chat.info(sessionId)?.accountId
+      let account: { session: RateLimitWindow | null; weekly: RateLimitWindow | null } | null = null
+      if (accountId !== undefined) {
+        // get() throws for an id it does not know, and an account removed under a live session is
+        // exactly that case. A missing figure costs a blank chip; it must not cost the other two.
+        try {
+          account = core.accountUsage.get(core.accounts.get(accountId).configDir)
+        } catch {
+          account = null
+        }
+      }
+      return chatSessionUsage({
+        context: held?.context ?? null,
+        model: core.chat.state(sessionId)?.model.model ?? null,
+        limits: held?.limits ?? null,
+        account
+      })
+    }
+    return core.usageSession(sessionId)
   })
 
   // File explorer: only paths under a registered session cwd are accessible, which keeps arbitrary
@@ -6735,8 +6782,14 @@ export function registerIpc(
   ipcMain.handle('chat.setModel', (_e, sessionId: string, model: string, effort: string | null) =>
     core.chat.setModel(sessionId, model, effort)
   )
-  ipcMain.handle('chat.setPlanMode', (_e, sessionId: string, on: boolean) =>
-    core.chat.setPlanMode(sessionId, on)
+  ipcMain.handle('chat.setPermissionMode', (_e, sessionId: string, mode: unknown) => {
+    // The renderer can only pick a row the adapter itself handed it, so a value that is not one of the
+    // three is a bug rather than a choice — refused here rather than forwarded to the CLI.
+    if (!isPermissionMode(mode)) throw new Error(`INVALID_PERMISSION_MODE: ${String(mode)}`)
+    return core.chat.setPermissionMode(sessionId, mode)
+  })
+  ipcMain.handle('chat.listPermissionModes', (_e, sessionId: string) =>
+    core.chat.listPermissionModes(sessionId)
   )
   ipcMain.handle('chat.listModels', (_e, sessionId: string) => core.chat.listModels(sessionId))
   // What the composer names before the first turn. A chat session is launched without `--model`, so

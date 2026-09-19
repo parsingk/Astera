@@ -5,7 +5,7 @@ import type { ChatState } from '../../../core/chat/types'
 const base: ChatState = {
   status: 'idle',
   request: null,
-  model: { model: null, effort: null, planMode: false },
+  model: { model: null, effort: null, permissionMode: 'default' },
   error: null,
   outlivesApp: true,
   truncated: true,

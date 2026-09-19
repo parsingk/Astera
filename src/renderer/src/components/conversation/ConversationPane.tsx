@@ -18,7 +18,7 @@ import {
   type AppendMessage,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import { ChevronUpIcon } from "lucide-react";
+import { Loader2Icon } from "lucide-react";
 import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.aui";
 
 /** The composer belongs to this subtree, and a controlled input that re-renders while a character is
@@ -26,39 +26,14 @@ import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.a
  *  menu below changes on every key, so the menu must not be able to re-render this: its rows travel
  *  by context to a slot inside, and everything else this takes is stable. */
 const MemoThread = memo(Thread);
-import { Button } from "../ui/button";
 import { ToolRow, ToolRowGroup } from "./ToolRow";
-import {
-  PendingBanner,
-  ChatNotice,
-  ExitedNotice,
-  QueuedNotice,
-  RunningNotice,
-  SlashCommandNotice
-} from "./PendingBanner";
+import { ChatNotice, ExitedNotice, RunningNotice } from "./PendingBanner";
 import { ModelControl, type ModelControlProps } from "./ModelControl";
-import {
-  CODEX_EFFORT_ROWS,
-  effortChoicesOf,
-  modelChoicesOf
-} from "../../../../core/models/cliModels";
+import { effortChoicesOf, modelChoicesOf } from "../../../../core/models/cliModels";
 import type { ModelDescriptor } from "../../../../core/models/types";
-import {
-  codexDigitFor,
-  codexPickerStep,
-  codexStatusModel
-} from "../../../../core/models/codexPicker";
 import { CompletionMenu, type CompletionRow } from "./CompletionMenu";
-import {
-  filterSlashCommands,
-  type SlashCommand
-} from "../../../../core/commands/slashCommands";
 import { fileTokenAt } from "../../../../core/files/fileMatch";
 import { draftOf, forgetDraft, keepDraft } from "./drafts";
-import { rememberAskAnswers, recallAskAnswers, forgetOtherAskAnswers } from "./askDrafts";
-import { promptLinesOf, isFolderTrustPrompt, hasInputLine } from "../../../../core/history/promptLines";
-import { cliBusyOf } from "../../../../core/history/cliBusy";
-import { queuedMessagesOf } from "../../../../core/history/queuedMessages";
 import {
   isAwaitingReply,
   isWorkingNow,
@@ -67,39 +42,19 @@ import {
   dropPending,
   type PendingSend
 } from "../../../../core/history/pendingSends";
-import {
-  promptChoicesOf,
-  stepToward,
-  type PromptChoice
-} from "../../../../core/history/promptChoices";
-import {
-  parseAskUserQuestion,
-  emptyAnswers,
-  togglePick,
-  setOther,
-  allAnswered,
-  type Answer,
-  type AskForm
-} from "../../../../core/prompts/askUserQuestion";
-import { askStageOf, askCardStateOf, type AskStage } from "../../../../core/prompts/askScreen";
-import { describeToolRequest } from "../../../../core/prompts/toolRequest";
-import { driveAsk, type AskStopReason, type AskOutcome } from "./askDriver";
-import { QuestionCard } from "./QuestionCard";
 import { ChatRequestCard } from "./ChatRequestCard";
-import * as sessionBus from "../../lib/sessionBus";
+import type { PermissionModeChoice } from "../../../../core/chat/types";
+import type { MessageKey } from "../../../../core/i18n";
 import { useChatState } from "../../hooks/useChatState";
 import { toast } from "../../lib/toast";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
-import type { Attention, PendingToolPrompt, RollStateEvent, SchedStateEvent } from "../../../../core/types";
-import { chatBannerFor, composerLockedFor, type PaneTransport } from "./paneTransport";
+import type { RollStateEvent, SchedStateEvent } from "../../../../core/types";
+import { chatBannerFor, composerLockedFor } from "./paneTransport";
 import { SessionStateBanners, stateBannerHeight } from "../SessionStateBanners";
 
 export interface ConversationPaneProps {
   sessionId: string;
-  /** Task 10 wires this to focus the session's terminal — the same contract as PendingBanner.tsx's own
-   *  prop of this name. This pane only threads it through to the banner. */
-  onGoTerminal: () => void;
   /** The session has ended. Its pty is gone, so the composer is shut and the pane says so rather than
    *  taking words for a process that cannot hear them — the terminal beside it has the restart. */
   exited?: boolean;
@@ -109,15 +64,6 @@ export interface ConversationPaneProps {
    *  neighbouring conversation left the caret in the pane you came from — the marker said one session
    *  and the typing went to another. */
   active?: boolean;
-  /** Task 8: which protocol this pane's session speaks — PaneGrid passes `{ kind: 'chat' }` for a
-   *  chat session's slot (its only view) and otherwise leaves this at its terminal default.
-   *
-   *  `'chat'` is the whole of the difference below: nothing reads the CLI's screen (there is no
-   *  terminal to read), nothing writes a key to a pty, and everything a terminal session drives by
-   *  typing — the turn, the interrupt, the model, the answer to a waiting question — goes through
-   *  `window.api.chat.*` instead. Every branch is written `isChat ? … : <what a terminal does>`, so
-   *  a terminal session's path through this file is exactly what it was. */
-  transport?: PaneTransport;
   /** The rolling and schedule banners (chat-sessions slice 4 §5.6): PaneGrid passes the per-session
    *  events it already holds for TerminalView. Absent for a terminal session's conversation view — its
    *  TerminalView shows them. */
@@ -212,173 +158,8 @@ export function shouldResetPaging(
   return event.sessionId === paneSessionId && event.restarted;
 }
 
-/**
- * What this pane's attention becomes after a `conversation:attention` event, given which session it
- * is showing — `undefined` means "not mine", the caller's cue to leave attention exactly as it is.
- * Same reasoning as `nextTurnsFor`: this event fires for every session app-wide, and a firing for a
- * foreign session must be a complete no-op here.
- */
-export function nextAttentionFor(
-  paneSessionId: string,
-  event: { sessionId: string; value: Attention }
-): Attention | undefined {
-  return event.sessionId === paneSessionId ? event.value : undefined;
-}
-
-/**
- * What this pane's waiting tool call becomes after a `conversation:pendingPrompt` event — `undefined`
- * means "not mine", the caller's cue to leave it exactly as it is. Same rule as `nextAttentionFor`,
- * for the same reason: the event fires for every session app-wide.
- */
-export function nextPendingPromptFor(
-  paneSessionId: string,
-  event: { sessionId: string; prompt: PendingToolPrompt | null }
-): PendingToolPrompt | null | undefined {
-  return event.sessionId === paneSessionId ? event.prompt : undefined;
-}
-
-/**
- * One reading of the model layered onto what is already known.
- *
- * A null model is not "no model" — it is the CLI not having said. codex says it a turn at a time, so
- * a session that has not answered anything reports nulls while its own screen is showing the model
- * plainly, and the screen is read separately (codexStatusModel). Letting the silence through would
- * erase that reading every time the transcript ticks, which is exactly what it did.
- *
- * A reading for a different CLI replaces everything: that is a different session's answer arriving,
- * not a quieter one.
- */
-export function keepWhatIsKnown<T extends { model: string | null; effort: string | null; cli: unknown }>(
-  prev: T,
-  next: T
-): T {
-  if (next.cli !== prev.cli) return next
-  return {
-    ...next,
-    model: next.model ?? prev.model,
-    effort: next.effort ?? prev.effort
-  };
-}
-
 function isTextPart(part: { type: string; text?: string }): part is { type: "text"; text: string } {
   return part.type === "text";
-}
-
-/** What the composer's `onNew` writes to the pty: the typed text, and nothing else. An attachment or
- *  any other part kind that might ride along in `AppendMessage.content` is silently dropped — there
- *  is no pty-shaped thing to send for it. */
-/**
- * What the composer puts on the pty for one message: the text as a bracketed paste, then the return
- * that submits it. Two strings because they have to arrive as two chunks — see `onNew`.
- *
- * The markers are how a terminal says "this is pasted, not typed". Without them the CLI reads the
- * text key by key through its own autocomplete, so a line beginning with `/` opens its command menu
- * and the return picks whatever that menu has highlighted instead of running what was typed: sending
- * `/status` this way opened the model picker and saved a default (measured in the dev app). They also
- * keep a newline inside a message from submitting it halfway through.
- */
-/**
- * Whether to keep reading the CLI's screen.
- *
- * Always, while the pane is open. It used to be only while a session had written nothing, when the
- * screen was wanted for one thing — a prompt no hook had reported. Three things read it now: that, the
- * composer lock, and whether the CLI is still working, and the last two are wanted for the whole life
- * of a session, not just its first moment. A read is a slice of a buffer already in memory.
- *
- * The old rule is kept below as the parameters it took, so what it answers stays honest for the
- * tests that pin it: reading is not showing, and what the pane draws from the reading is decided
- * elsewhere (shouldShowPrompt).
- *
- * Older note, on why the screen is read at all:
- *
- * `waiting` is the ordinary answer: a hook told us a prompt is up. The second case is the window no
- * hook can speak for — a session that has written nothing yet. The prompts a CLI puts up before a
- * session exists (Claude Code's "do you trust this folder", codex's numbered one, a theme picker on a
- * fresh config dir) come before any hook fires and leave no transcript, so without this the pane shows
- * an empty thread and a composer whose every keystroke goes into a dialog that ignores it.
- *
- * It closes as soon as the session writes its first turn, so an ordinary conversation pays nothing.
- */
-export function shouldReadPromptScreen(_attention: Attention, _turnCount: number): boolean {
-  return true
-}
-
-/**
- * Whether the pane shows the question rather than its ordinary notices.
- *
- * Choices are the narrow half of the rule on purpose: promptChoicesOf answers with rows only for a
- * screen that is offering a marked list to pick from, so a session merely sitting at its own composer
- * — the usual state of one with nothing written yet — produces none and nothing is shown.
- *
- * `trust` is here so that it cannot come apart from the composer lock, which is driven by the same
- * flag. It did come apart: the lock read the quoted lines while this read the parsed rows, and a
- * screen that gave up its words but not its marker — the shape a partially readable terminal produces
- * — locked the box and drew nothing to explain why. One flag, one outcome.
- */
-export function shouldShowPrompt(attention: Attention, choiceCount: number, trust = false): boolean {
-  return attention === 'waiting' || choiceCount > 0 || trust
-}
-
-/**
- * Whether the question card, rather than the screen-quoting banner, takes the slot.
- *
- * The card is drawn from the hook's capture, which outlives the dialog when the question is declined
- * on the terminal: Esc runs no tool, so no PostToolUse clears it, and Stop is a turn away. If the model
- * then asks for an approval, the screen shows that prompt's rows while the capture still says
- * "question". The card yields in exactly that case — the dialog is not on screen *and* the screen is
- * offering choices of its own. With no choices on screen the card stays: that is the moment between
- * the hook firing and the CLI drawing the dialog, when the card is right to say it is waiting.
- */
-export function askCardShown(stage: AskStage | null, choiceCount: number): boolean {
-  if (stage === null) return false;
-  return stage.kind !== "none" || choiceCount === 0;
-}
-
-/**
- * Which rows to draw as buttons, given this tick's reading and the last one that had any.
- *
- * A CLI draws a dialog in pieces — the question first, its rows a moment later — so a poll that lands
- * in between reads a screen with words but no marked row, and promptChoicesOf rightly answers none.
- * Dropping the buttons for that tick makes them flicker, and a person mid-reach presses nothing.
- *
- * `hold` is the caller's answer to "is the same question still up", and it is passed true only for the
- * folder-trust prompt. That prompt earns it where others do not: its two rows are fixed for its whole
- * life, so a held reading cannot go stale, and it is the one prompt whose buttons are the only way
- * through — the composer beside it is locked. An ordinary prompt keeps today's behaviour, where what
- * is drawn is only ever what was last read.
- *
- * Holding is safe to press either way: answerChoice re-reads the screen before every key it sends
- * (see stepToward), and a numbered row is answered by its number, which is absolute.
- */
-/**
- * Whether the composer is shut.
- *
- * Two reasons, and they are the same reason at different moments: the CLI is holding a dialog that
- * discards typing, or it is not offering a line to type on at all.
- *
- * The second is the one that bit. Waiting to be *told* it is a dialog cannot work, because for the
- * first second of a session there is no dialog on the screen to see — the CLI has not drawn it yet
- * (measured: composer open and the screen readable at 440ms, the trust dialog only at ~980ms), and
- * everything typed into that window went nowhere. So the test is the other way round and positive:
- * the composer opens when the CLI's own input line is on the screen, and not before. A CLI that is
- * still starting, or holding any dialog, is offering no such line. `waited` lifts it regardless if no
- * reading ever comes, so a terminal that registers no reader cannot cost a session its composer.
- */
-export function composerLocked(trust: boolean, cliTakesTyping: boolean, waited: boolean): boolean {
-  return trust || !(cliTakesTyping || waited)
-}
-
-export function choicesToShow(
-  fresh: readonly PromptChoice[],
-  held: readonly PromptChoice[],
-  hold: boolean
-): readonly PromptChoice[] {
-  if (fresh.length > 0) return fresh
-  return hold ? held : []
-}
-
-export function ptyWritesFor(text: string): [paste: string, submit: string] {
-  return ["\u001b[200~" + text + "\u001b[201~", "\r"];
 }
 
 export function composerTextOf(parts: AppendMessage["content"]): string {
@@ -402,16 +183,36 @@ export function shouldCloseStaleOpen(mountedFor: string | null, sessionId: strin
   return mountedFor !== sessionId;
 }
 
+/** How near the top counts as having arrived there. The same allowance HistoryBrowser's own infinite
+ *  scroll gives its sentinel, so the earlier window is on its way before the reader runs out of page
+ *  rather than after. */
+export const LOAD_EARLIER_MARGIN_PX = 120;
+
 /**
- * Whether what a person just sent is a slash command rather than a message.
+ * Whether the earlier window should be fetched now.
  *
- * Leading whitespace only, deliberately: `/` anywhere else is a path or a date, and a message that
- * merely mentions one is not a command. Nothing is inferred about which command it is — every one of
- * them draws on the CLI's own screen, and that is the whole point of the notice this decides.
+ * The second branch is what replaces the button rather than merely automating it. A window shorter
+ * than the viewport has no scrollbar, so no scroll event can ever arrive and the reader has nothing
+ * to drag: with the button gone that is a conversation whose start cannot be reached at all. Paging
+ * on that condition fills the viewport and then stops, because once there is a scrollbar the first
+ * branch takes over.
+ *
+ * It also settles the frame between a pane rendering its first window and the thread scrolling to the
+ * bottom. The viewport reads as scrolled to the top for that frame, but it already overflows, so the
+ * first branch is the one consulted and it says no.
  */
-export function isSlashCommand(text: string): boolean {
-  return text.trimStart().startsWith("/");
+export function shouldLoadEarlier(v: {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  more: boolean;
+  loadingMore: boolean;
+}): boolean {
+  if (!v.more || v.loadingMore) return false;
+  if (v.scrollHeight <= v.clientHeight) return true;
+  return v.scrollTop <= LOAD_EARLIER_MARGIN_PX;
 }
+
 
 /**
  * What to call the session's model before the CLI has said which one it is running.
@@ -476,64 +277,6 @@ function shortModelName(model: string): string {
 
 const VENDOR_PREFIX = "claude-";
 
-/** How long after the paste the return is sent. The two have to arrive as two chunks — together they
- *  reach the CLI as one, the return is swallowed into the paste, and nothing is submitted at all —
- *  and how much separation is enough turns out to differ by CLI: Claude's took every gap tried,
- *  codex's dropped some of the short ones (measured on both, 2026-09-12). A quarter second is far
- *  above where the failures were and is nothing a person waits on, since the composer has already
- *  cleared by then. */
-const SUBMIT_GAP_MS = 250
-
-/** How much of the CLI's screen the waiting banner quotes, and how often it re-reads it. A prompt is
- *  a handful of lines, and it moves while it is up — an arrow shifts, a second question follows.
- *  Sixteen because that is what the longest real prompt measured needs: Claude Code's trust prompt for
- *  a new folder runs fifteen lines from its rule down to `Enter to confirm`. */
-const PROMPT_LINES_MAX = 16
-const PROMPT_POLL_MS = 500
-
-/** How fast the screen is asked for before it has answered once. The composer stays shut while the
- *  pane cannot tell what the CLI is showing, so this is the length of that shut moment — short
- *  enough not to be felt, and it ends the first time a reading lands. */
-const PROMPT_FIRST_POLL_MS = 60
-
-/** How long the pane waits for a first reading before opening the composer anyway. A terminal that
- *  never registers a reader must not cost a session its composer for good. */
-const SCREEN_WAIT_MAX_MS = 3_000
-
-/** How an unnumbered choice is answered: one arrow key, then a fresh look at the screen, and never
- *  more than this many of them before giving up. The gap is what lets the CLI redraw before the next
- *  look — below it the walk reads its own stale screen and takes a second step it did not need. The
- *  cap ends a walk that is not converging (a list longer than it, a highlight that will not move)
- *  without ever pressing return on a row nobody asked for. */
-const ARROW_STEP_MS = 120
-const ARROW_STEPS_MAX = 12
-
-/** How long a slash command is given to show up in the conversation before the pane says where it
- *  went. A command that becomes a prompt — every skill command — writes its user turn as soon as the
- *  CLI takes it, and main notices within its own second; one that opens the CLI's own screen never
- *  writes anything at all. So silence for this long is the evidence, and nothing needs to know in
- *  advance which kind a command was. */
-const SLASH_SILENCE_MS = 4_000
-
-/** How long to wait for one of codex's two picker screens to be the one on screen. Generous, because
- *  the cost of giving up early is only that the person finishes on the terminal, while the cost of
- *  pressing into a screen that has not arrived is a keystroke landing somewhere nobody chose. */
-const CODEX_STEP_WAIT_MS = 4_000
-/** How long between looks while stepping through codex's picker. One buffer read and one match, so
- *  it can be this short — and it is most of what a person waits through, since every key in that walk
- *  waits for its screen. */
-const CODEX_STEP_POLL_MS = 120
-
-/** How long after a session stops producing output its status bar is read. Not a polling interval —
- *  the read is triggered by the output itself — but a settle: a TUI redraws in several chunks, and
- *  reading between two of them can catch the bar half-rewritten. Short enough to be imperceptible. */
-const MODEL_SETTLE_MS = 60
-
-/** A bar that is already drawn produces no output, so nothing would trigger a first read if this pane
- *  opened before the terminal it reads from had registered its reader. These are that first read's
- *  retries — they stop the moment one succeeds, and never run again. */
-const MODEL_OPENING_MS = 200
-const MODEL_OPENING_TRIES = 10
 
 /** How long to keep looking for the composer to put an unsent draft back into. It is a child of the
  *  Thread, which mounts a moment after this pane does. */
@@ -551,11 +294,6 @@ const PENDING_SWEEP_MS = 5_000
  *  and short enough that a change the CLI quietly refused stops pretending. */
 const MODEL_BUSY_MAX_MS = 6_000
 
-/** When to look again for a model the CLI was asked to switch to, in order. Several tries rather than
- *  one long wait: the CLI rewrites its statusline as it goes, and how long that takes is not something
- *  to guess at once — the answer usually arrives inside the first step, and stopping the moment it
- *  does is what keeps the button from sitting there after the change already happened. */
-const MODEL_REREAD_STEPS_MS = [250, 350, 500, 900, 1_500];
 
 /** How often a pane with nothing to show asks again whether a transcript has appeared. */
 const UNAVAILABLE_RETRY_MS = 2_000;
@@ -655,21 +393,16 @@ type Status = "loading" | "unavailable" | "ready";
  */
 export function ConversationPane({
   sessionId,
-  onGoTerminal,
   active = false,
   exited = false,
-  transport = { kind: "terminal" },
   rollState = null,
   schedState = null
 }: ConversationPaneProps): ReactNode {
   const { t } = useI18n();
-  /** Read once and asked everywhere below, so the two transports can never be told apart two
-   *  different ways in the same render. */
-  const isChat = transport.kind === "chat";
-  /** A chat session's whole state — status, the request it is waiting on, its model, the last turn's
-   *  error — folded from `chat.state` and the `chat:event` stream (hooks/useChatState.ts). Null for a
-   *  terminal session, which subscribes to nothing. */
-  const chat = useChatState(sessionId, isChat);
+  /** This session's whole state — status, the request it is waiting on, its model, the last turn's
+   *  error — folded from `chat.state` and the `chat:event` stream (hooks/useChatState.ts). Null until
+   *  that first answer lands. */
+  const chat = useChatState(sessionId, true);
   /** `chat.status` without the optional chain, so the dependency arrays below stay plain reads. */
   const chatStatus = chat === null ? null : chat.status;
   const [status, setStatus] = useState<Status>("loading");
@@ -677,57 +410,27 @@ export function ConversationPane({
   const [from, setFrom] = useState(0);
   const [more, setMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [attention, setAttention] = useState<Attention>("idle");
-  /** The tool call the CLI is waiting on, from the PreToolUse hook (main/pendingPrompt.ts). What the
-   *  question card is drawn from — never the screen (core/prompts/askUserQuestion.ts). */
-  const [pendingPrompt, setPendingPrompt] = useState<PendingToolPrompt | null>(null);
-  /** The answers being composed on the card, keyed by the call, so a card that re-renders *and
-   *  re-mounts* for the same question keeps them (askDrafts.ts) and a new question starts blank. */
-  const [askAnswers, setAskAnswers] = useState<{ toolUseId: string; answers: Answer[] } | null>(null);
-  /** The driver is sending keys. Stays true after a successful submit until PostToolUse clears the
-   *  capture — the card goes quiet rather than flickering into the "started on the terminal" state
-   *  while the review it just confirmed is still on screen. */
-  const [askAnswering, setAskAnswering] = useState(false);
-  const [askNotice, setAskNotice] = useState<AskStopReason | null>(null);
-  // Set when a slash command is sent from here, cleared the moment anything comes back — see
-  // SlashCommandNotice for what it says and why it is not the pending banner.
-  const [slashSent, setSlashSent] = useState(false);
-  // What `/` offers, read once when the pane opens, and what the composer holds right now. The text
-  // is tracked by listening to the composer rather than asking the runtime for it: the input is
-  // assistant-ui's, `input` events bubble to this pane's own root, and that is the whole of it.
-  const [commands, setCommands] = useState<readonly SlashCommand[]>([]);
+  // What the composer holds right now, tracked by listening to it rather than asking the runtime: the
+  // input is assistant-ui's, `input` events bubble to this pane's own root, and that is the whole of it.
   const [composerText, setComposerText] = useState("");
   const [composerCaret, setComposerCaret] = useState(0);
   const [fileMatches, setFileMatches] = useState<readonly string[]>([]);
   const [slashActive, setSlashActive] = useState(0);
-  /** The question the CLI is showing, while it is showing one. */
-  const [promptLines, setPromptLines] = useState<readonly string[]>([]);
-  /** A walk across an unnumbered list is in flight. A ref as well as the state below it: the walk
-   *  reads this between its own awaits, where a state value would still be the one it started with. */
-  const answeringRef = useRef(false);
   /** What this session's CLI says it can run. Asked once per session — see conversation.models. */
   const [models, setModels] = useState<readonly ModelDescriptor[]>([]);
   /** The model this session's own settings choose, for the composer to name before the first turn —
    *  see pendingModelLabelOf. Asked once beside the model list, and null until the answer lands. */
   const [configuredModel, setConfiguredModel] = useState<string | null>(null);
-  const [terminalModelInfo, setModelInfo] = useState<{
-    model: string | null
-    effort: string | null
-    cli: 'claude' | 'codex' | null
-  }>({ model: null, effort: null, cli: null });
-  /** What the model readout and its menu are looking at. A terminal session's comes from the rollout
-   *  and the CLI's own status bar, layered by the state above; a chat session's comes from the manager,
-   *  which is the only thing that knows — there is no screen to read and the rollout is a turn behind.
-   *  `cli` is the session's own provider once the manager has said (`chat.state`), and null until then:
-   *  the two CLIs' menus are not interchangeable, so the control is drawn only once it is known which
-   *  one this is (ComposerModelSlot), rather than guessed at for the moment before the answer lands. */
-  const modelInfo = isChat
-    ? {
-        model: chat === null ? null : chat.model.model,
-        effort: chat === null ? null : chat.model.effort,
-        cli: chat === null ? null : chat.provider
-      }
-    : terminalModelInfo;
+  /** What the model readout and its menu are looking at. It comes from the manager, which is the only
+   *  thing that knows — there is no screen to read and the rollout is a turn behind. `cli` is the
+   *  session's own provider once the manager has said (`chat.state`), and null until then: the two
+   *  CLIs' menus are not interchangeable, so the control is drawn only once it is known which one this
+   *  is (ComposerModelSlot), rather than guessed at for the moment before the answer lands. */
+  const modelInfo = {
+    model: chat === null ? null : chat.model.model,
+    effort: chat === null ? null : chat.model.effort,
+    cli: chat === null ? null : chat.provider
+  };
 
   // Bumped by the mount effect on every run, and again in that same run's cleanup — so any callback
   // still holding a past run's captured `generation` value can tell, at any later point, whether the
@@ -793,127 +496,26 @@ export function ConversationPane({
     setTurns([]);
     setFrom(0);
     setMore(false);
-    setAttention("idle");
-    setPendingPrompt(null);
-    setSlashSent(false);
-    setModelInfo({ model: null, effort: null, cli: null });
     setComposerText("");
     composerValueRef.current = null;
     setComposerCaret(0);
-    setPromptLines([]);
     setFileMatches([]);
     setSlashActive(0);
     setSlashDismissed(false);
-
-    // Set once a live push arrives, so the one-shot attention read below (which can resolve after a
-    // push that overtook it) never clobbers a value that is already newer than the one it fetched.
-    // Which of the two arrived first is an ordering fact about this mount's own event stream, not
-    // something either side alone carries, so it stays a plain closure flag rather than folding
-    // into `isCurrent`.
-    let sawLiveAttention = false;
-
-    // `conversation:attention` only fires on a change, so a session already `waiting` (or
-    // `working`) when this pane mounts would otherwise read `idle` until the next change — and for
-    // a `waiting` session, blocked on the very prompt this pane exists to surface, that next change
-    // may never come (main/ipc.ts's `conversationAttentionOf` doc says the same).
-    void window.api.conversation
-      .attention(sessionId)
-      .then((value) => {
-        if (!isCurrent() || sawLiveAttention) return;
-        setAttention(value);
-      })
-      .catch(() => {});
-
-    // The waiting tool call, read once for the same reason attention is: the push fires only on a
-    // change, and a question already up when this pane mounts would otherwise not be drawn until the
-    // next one.
-    //
-    // Not for a chat session: that capture comes from a PreToolUse hook on a CLI holding a dialog on
-    // its own terminal, and a chat session has neither. What it is waiting on arrives as a
-    // `chat:event` request and is drawn by ChatRequestCard, so nothing here is asked for or
-    // subscribed to — `pendingPrompt` stays null, and with it `askForm`, `askStage` and `askCard`.
-    let sawLivePendingPrompt = false;
-    if (!isChat) {
-      void window.api.conversation
-        .pendingPrompt(sessionId)
-        .then((prompt) => {
-          if (!isCurrent() || sawLivePendingPrompt) return;
-          setPendingPrompt(prompt);
-        })
-        .catch(() => {});
-    }
 
     // Subscribed before `open()` resolves, on general principle rather than because a race is
     // plausible here: main starts following a session only from `open` (main/conversation.ts), and
     // its poll ticks no faster than once a second, so the first possible append is already far
     // behind this synchronous subscribe. Registering first just means that guarantee is never the
     // reason this is safe.
-    // Nothing pushes the model: it changes only when a person changes it, on the CLI's own screen.
-    // Read once here and again on every turn, which is the one moment we know the CLI has just been
-    // through a render and rewritten what we read this from.
-    const readModel = (): void => {
-      // A chat session's model is the manager's to report (`chat:event` of type 'model'), and this
-      // one reads the rollout — a turn behind, and null until the first answer.
-      if (isChat) return;
-      void window.api.conversation
-        .model(sessionId)
-        .then((info) => {
-          if (isCurrent()) setModelInfo((prev) => keepWhatIsKnown(prev, info));
-        })
-        .catch(() => {});
-    };
-    readModel();
-
-    // What `/` offers, for the transport that can run it. A chat session is offered no `/` rows —
-    // those commands are the CLI's own, typed at a prompt it does not have (see `slashMatches`) — so
-    // the list is not asked for either.
-    if (!isChat) {
-      void window.api.conversation
-        .commands(sessionId)
-        .then((list) => {
-          if (isCurrent()) setCommands(list);
-        })
-        .catch(() => {});
-    }
-
     const offAppend = window.api.on("conversation:append", (e) => {
       if (!isCurrent()) return;
-      if (e.sessionId === sessionId) {
-        // Something came back, so the command landed in the conversation after all and there is
-        // nothing to explain.
-        if (slashSilenceRef.current !== null) clearTimeout(slashSilenceRef.current);
-        slashSilenceRef.current = null;
-        setSlashSent(false);
-        readModel();
-      }
       setTurns((prev) => nextTurnsFor(sessionId, prev, e));
       if (shouldResetPaging(sessionId, e)) {
         setFrom(0);
         setMore(false);
       }
     });
-    // Not gated on this pane being open at all (core/types.ts's own doc on the event) —
-    // `nextAttentionFor` is what decides whether a given firing is this pane's own session, the
-    // same reason `nextTurnsFor` above is: this pane can be mounted for one session while another
-    // session's conversation is open elsewhere.
-    const offAttention = window.api.on("conversation:attention", (e) => {
-      if (!isCurrent()) return;
-      const next = nextAttentionFor(sessionId, e);
-      if (next === undefined) return;
-      sawLiveAttention = true;
-      setAttention(next);
-    });
-
-    const offPendingPrompt = isChat
-      ? (): void => {}
-      : window.api.on("conversation:pendingPrompt", (e) => {
-          if (!isCurrent()) return;
-          const next = nextPendingPromptFor(sessionId, e);
-          if (next === undefined) return;
-          sawLivePendingPrompt = true;
-          setPendingPrompt(next);
-        });
-
     void window.api.conversation
       .open(sessionId)
       .then((res) => {
@@ -952,11 +554,9 @@ export function ConversationPane({
       if (slashSilenceRef.current !== null) clearTimeout(slashSilenceRef.current);
       slashSilenceRef.current = null;
       offAppend();
-      offAttention();
-      offPendingPrompt();
       void window.api.conversation.close(sessionId);
     };
-  }, [sessionId, isChat]);
+  }, [sessionId]);
 
   // `open` answering null is a moment, not a verdict. A session that has only just started reports
   // its transcript path a beat after it comes up, and a session resumed from history does the same —
@@ -1063,6 +663,33 @@ export function ConversationPane({
     return () => observer.disconnect();
   }, [status]);
 
+  // Paging upward, the way the history list pages downward. The scroll listener covers the ordinary
+  // case; the call on attach covers the one no scroll event can reach, where the window on screen is
+  // shorter than the viewport (see shouldLoadEarlier). `turns` is in the dependencies for the same
+  // reason — a prepend that still does not fill the viewport has to ask again, or paging stalls one
+  // window short of the start.
+  useEffect(() => {
+    const viewport = threadViewport(paneRef.current);
+    if (!viewport) return;
+    const check = (): void => {
+      if (
+        shouldLoadEarlier({
+          scrollTop: viewport.scrollTop,
+          scrollHeight: viewport.scrollHeight,
+          clientHeight: viewport.clientHeight,
+          more,
+          loadingMore
+        })
+      ) {
+        loadMore();
+      }
+    };
+    check();
+    // Passive: this only reads the viewport, and saying so keeps it off the scrolling path.
+    viewport.addEventListener("scroll", check, { passive: true });
+    return () => viewport.removeEventListener("scroll", check);
+  }, [status, turns, more, loadingMore, loadMore]);
+
   /** Sent, and not yet seen come back in the transcript — see core/history/pendingSends.ts. */
   const [pending, setPending] = useState<readonly PendingSend[]>([]);
 
@@ -1108,114 +735,58 @@ export function ConversationPane({
   const sendTextRef = useRef<(text: string) => void | Promise<void>>(() => {});
 
   const interrupt = useCallback(async (): Promise<void> => {
-    // A chat session has no pty to press Escape on: the same stop is a request on the app-server, and
-    // the manager answers it with a status the pane hears back as an event.
+    // The stop is a request on the app-server, and the manager answers it with a status the pane
+    // hears back as an event.
     //
     // Said out loud when it fails, the way a send is: this is called as `void interruptRef.current()`
     // and as the composer's own `onCancel`, so a rejection nobody catches is a stop that silently did
     // not happen while the turn goes on running.
-    if (isChat) {
-      try {
-        await window.api.chat.interrupt(sessionId);
-      } catch (err) {
-        toast.error(chatErrorText(err));
-      }
-      return;
+    try {
+      await window.api.chat.interrupt(sessionId);
+    } catch (err) {
+      toast.error(chatErrorText(err));
     }
-    window.api.sessions.write(sessionId, String.fromCharCode(27));
-  }, [isChat, sessionId]);
+  }, [sessionId]);
   interruptRef.current = interrupt;
 
   const sendText = useCallback(
     async (text: string) => {
-      // A chat session's turn goes to the app-server, and nothing here reads a screen on the way:
-      // there is none. `chat.send` rejects when the turn cannot start (a turn already running, the
-      // process gone), and that rejection is the only thing worth saying.
-      if (isChat) {
-        // Shown straight away, exactly as the terminal path below does it and for the same reason:
-        // the turn only really exists once the CLI writes it into the rollout, and until then the
-        // person's own words are nowhere on screen. The wait is not small. Claude flushes the user
-        // record within a moment, but codex writes it when the turn it started gets going — measured
-        // across this machine's last twelve rollouts, a median of 0.6 s and up to 3.8 s after the
-        // turn begins — and the view reads the file on a one-second poll on top of that. Someone
-        // watching several seconds of nothing after pressing Enter reads it as a send that failed,
-        // and reported it as one.
-        //
-        // The copy is set before the request rather than after it, because the request is itself part
-        // of the wait: codex's `turn/start` is awaited here. It lives exactly as long as it takes the
-        // real turn to arrive — pendingSends.ts settles it against the transcript, so the bubble is
-        // replaced by the record it was standing in for, never shown twice.
-        const echoId = crypto.randomUUID();
-        setPending((prev) => sendPending(prev, turns, text, echoId, Date.now()));
-        try {
-          await window.api.chat.send(sessionId, text);
-        } catch (err) {
-          // Refused, so nothing was sent and the copy has to go with the toast rather than sit there
-          // for a minute claiming otherwise. The text is still in the person's hands — the composer
-          // cleared, but the draft below was not thrown away, so leaving the tab and coming back
-          // offers it again to retry with.
-          setPending((prev) => dropPending(prev, echoId));
-          toast.error(chatErrorText(err));
-          return;
-        }
-        // It was sent; there is nothing left to put back. Without these two the pane's own cleanup
-        // writes the sent text back as this session's draft (`keepDraft`) and the next mount inserts
-        // it into the composer — a message already answered, sitting there ready to be sent twice.
-        // The same pair the terminal path runs below, and neither touches a screen.
-        forgetDraft(sessionId);
-        composerValueRef.current = null;
+      // The turn goes to the app-server, and nothing here reads a screen on the way: there is none.
+      // `chat.send` rejects when the turn cannot start (a turn already running, the process gone),
+      // and that rejection is the only thing worth saying.
+      //
+      // The person's own words are shown straight away. The turn only really exists once the CLI
+      // writes it into the rollout, and until then they are nowhere on screen. The wait is not small.
+      // Claude flushes the user record within a moment, but codex writes it when the turn it started
+      // gets going — measured across this machine's last twelve rollouts, a median of 0.6 s and up to
+      // 3.8 s after the turn begins — and the view reads the file on a one-second poll on top of
+      // that. Someone watching several seconds of nothing after pressing Enter reads it as a send
+      // that failed, and reported it as one.
+      //
+      // The copy is set before the request rather than after it, because the request is itself part
+      // of the wait: codex's `turn/start` is awaited here. It lives exactly as long as it takes the
+      // real turn to arrive — pendingSends.ts settles it against the transcript, so the bubble is
+      // replaced by the record it was standing in for, never shown twice.
+      const echoId = crypto.randomUUID();
+      setPending((prev) => sendPending(prev, turns, text, echoId, Date.now()));
+      try {
+        await window.api.chat.send(sessionId, text);
+      } catch (err) {
+        // Refused, so nothing was sent and the copy has to go with the toast rather than sit there
+        // for a minute claiming otherwise. The text is still in the person's hands — the composer
+        // cleared, but the draft below was not thrown away, so leaving the tab and coming back
+        // offers it again to retry with.
+        setPending((prev) => dropPending(prev, echoId));
+        toast.error(chatErrorText(err));
         return;
       }
-      // The pty is the only channel there is — a person typing here and a person typing in the
-      // terminal are doing the same thing. The typed turn is never pushed into `messages` locally:
-      // it comes back through the transcript like every other turn, and adding it here would show
-      // it twice.
-      // Nothing leaves this box into a dialog that throws typing away.
-      //
-      // The lock below cannot be the whole guarantee, because it can only shut once the pane has seen
-      // the dialog, and for the first second of a session there is no dialog on the screen to see —
-      // the CLI has not drawn it yet (measured: the composer is open and the screen readable at 440ms,
-      // and the folder-trust dialog only appears at ~980ms). A person typing into that window had
-      // every keystroke swallowed, which is the failure this whole view exists to prevent.
-      //
-      // So the screen is read once more here, at the only moment that settles it: the instant before
-      // anything is written. If a trust dialog is up, the send does not happen, the text stays where
-      // it is, and the banner — which the same reading raises — says what is being asked instead.
-      const screenNow = sessionBus.screenOf(sessionId);
-      if (screenNow !== null) {
-        const linesNow = promptLinesOf(screenNow.split(String.fromCharCode(10)), PROMPT_LINES_MAX);
-        if (isFolderTrustPrompt(linesNow)) {
-          setPromptLines(linesNow); // raises the banner on the same reading that refused the send
-          // assistant-ui empties its composer on submit whatever this handler does, so the text is put
-          // back by hand — the same execCommand path the `@` and slash menus already use to write into
-          // that controlled input. Nothing a person typed is lost to a dialog that would not have taken
-          // it anyway.
-          requestAnimationFrame(() => {
-            const box = paneRef.current?.querySelector("textarea");
-            if (!box || box.value !== "") return;
-            box.focus();
-            document.execCommand("insertText", false, text);
-          });
-          return;
-        }
-      }
-      // Shown straight away. Without this the message is nowhere until the CLI writes it down — a
-      // moment for Claude, not until the turn produces something for codex — and the only honest
-      // reading of that gap is that the send did not work.
-      setPending((prev) => sendPending(prev, turns, text, crypto.randomUUID(), Date.now()));
-      forgetDraft(sessionId); // it was sent; there is nothing left to put back
+      // It was sent; there is nothing left to put back. Without these two the pane's own cleanup
+      // writes the sent text back as this session's draft (`keepDraft`) and the next mount inserts
+      // it into the composer — a message already answered, sitting there ready to be sent twice.
+      forgetDraft(sessionId);
       composerValueRef.current = null;
-      if (slashSilenceRef.current !== null) clearTimeout(slashSilenceRef.current);
-      slashSilenceRef.current = null;
-      setSlashSent(false);
-      if (isSlashCommand(text)) {
-        slashSilenceRef.current = setTimeout(() => setSlashSent(true), SLASH_SILENCE_MS);
-      }
-      const [paste, submit] = ptyWritesFor(text);
-      window.api.sessions.write(sessionId, paste);
-      setTimeout(() => window.api.sessions.write(sessionId, submit), SUBMIT_GAP_MS);
     },
-    [isChat, sessionId, turns]
+    [sessionId, turns]
   );
   sendTextRef.current = sendText;
 
@@ -1238,236 +809,14 @@ export function ConversationPane({
     [t, status]
   );
 
-  // What the CLI is waiting on, read from the terminal's own buffer.
-  //
-  // The buffer, not the rendered rows: while the conversation is the one showing, that terminal is
-  // hidden and xterm stops *painting* it, so its DOM holds whatever was on screen when it was last
-  // visible. Quoting that put a question from minutes ago next to an invitation to answer — worse
-  // than showing nothing. `write` keeps the buffer current regardless of painting, and sessionBus
-  // hands out a reader for exactly that (registered by TerminalView, which already needed it).
-  //
-  // Polled, because a screen is not an event: the highlighted choice moves, a second question
-  // follows the first. Only while something is actually being asked.
-  //
-  // When to read at all is shouldReadPromptScreen's rule, above — a prompt the hooks never reported is
-  // the case it exists for.
-  const readPromptScreen = shouldReadPromptScreen(attention, turns.length);
-  // Whether this session's screen has been read even once. Until it has, the pane does not know
-  // whether the CLI is at a prompt that takes typing or holding a dialog that throws typing away —
-  // `seenScreen: false` is what says so, and composerLocked reads it.
-  const [seenScreen, setSeenScreen] = useState(false);
-  // The screen as it came, beside the window promptLinesOf cut out of it. Only the trust prompt reads
-  // it, and only when that window came back without rows — see `fresh` below.
-  const [screenLines, setScreenLines] = useState<readonly string[]>([]);
-  // ...but never shut for long. A session whose terminal registers no reader at all must not keep its
-  // composer shut for the rest of its life over a question nobody is asking.
-  const [waitedForScreen, setWaitedForScreen] = useState(false);
-  useEffect(() => {
-    setSeenScreen(false);
-    setWaitedForScreen(false);
-    const timer = setTimeout(() => setWaitedForScreen(true), SCREEN_WAIT_MAX_MS);
-    return () => clearTimeout(timer);
-  }, [sessionId]);
-  useEffect(() => {
-    // Nothing registers a screen for a chat session — there is no terminal beside it — so there is
-    // nothing to poll and no reading to wait for. `promptLines` stays empty, and with it `trustPrompt`
-    // false and `choices` none; the composer's lock comes from composerLockedFor instead.
-    if (isChat) return;
-    if (!readPromptScreen) {
-      setPromptLines([]);
-      return;
-    }
-    const read = (): void => {
-      const screen = sessionBus.screenOf(sessionId);
-      if (screen === null) return; // no terminal registered — cannot tell, so leave what is there
-      setSeenScreen(true);
-      setScreenLines(screen.split(String.fromCharCode(10)));
-      setPromptLines(promptLinesOf(screen.split("\n"), PROMPT_LINES_MAX));
-    };
-    read();
-    // Quickly until the first reading lands, then at the ordinary pace. The first one is what a person
-    // waits behind, and it is late for a reason that clears in a tick or two: TerminalView registers
-    // the reader as it mounts, which is the same moment this pane is mounting beside it.
-    const timer = setInterval(read, seenScreen ? PROMPT_POLL_MS : PROMPT_FIRST_POLL_MS);
-    return () => clearInterval(timer);
-  }, [isChat, readPromptScreen, seenScreen, sessionId]);
-
-  // The rows of that same quote, as something to press. They come out of the quote rather than
-  // alongside it, so what the buttons say and what the banner shows can never be two different
-  // readings of the screen.
-  // promptLinesOf keeps the last PROMPT_LINES_MAX lines of the screen, which is a quote's worth and not
-  // a promise to have kept any particular row. How many lines a dialog takes depends on the folder's
-  // path, the window's width and how much of it wraps — none of which this can hold an opinion about —
-  // so on some screens the rows to press fall outside that window and the banner came up with nothing
-  // to press, which is exactly what it exists to offer.
-  //
-  // So when the window yields none, the whole screen is asked instead. Gated on the trust prompt on
-  // purpose: an ordinary screen's own composer line starts with the very marker promptChoicesOf looks
-  // for, and asking the whole screen there would draw a button for the input box. A trust dialog has no
-  // composer on it — the only marked row is the one being offered.
-  // Only a screen that could be a question is read as one. The screen itself is read at all times now
-  // — the composer lock and the running notice both want it — but a working CLI's screen is full of
-  // lines that look like rows to a parser and are not: a queued message sits under the same `>` a
-  // choice is marked with, and reading those as choices put a question on screen that nobody asked.
-  //
-  // A hook saying the session is waiting, a session that has written nothing yet (where no hook can
-  // speak for it), or the trust prompt itself. Everything else is the CLI getting on with its work.
-  /** The folder-trust question, which takes one of its rows and nothing else — typing into it is
-   *  discarded by the CLI. It gets its own heading, and it is the one prompt that locks the composer
-   *  (see `isDisabled` below). */
-  const trustPrompt = useMemo(() => isFolderTrustPrompt(promptLines), [promptLines]);
-  const promptCandidate = attention === "waiting" || turns.length === 0 || trustPrompt;
-  const fresh = useMemo(() => {
-    if (!promptCandidate) return [];
-    const windowed = promptChoicesOf(promptLines)
-    if (windowed.length > 0 || !isFolderTrustPrompt(promptLines)) return windowed
-    return promptChoicesOf(screenLines)
-  }, [promptCandidate, promptLines, screenLines]);
-  // Whether the CLI is showing a line to type on. A session that has already written turns is past
-  // all of this and is never held back by it.
-  const cliTakesTyping = useMemo(
-    () => turns.length > 0 || hasInputLine(screenLines),
-    [turns.length, screenLines]
-  );
-  // The last reading that had rows in it. A ref rather than state: it is written during the render that
-  // consumes it, and re-rendering for it would only re-run this block to the same answer. Cleared the
-  // moment the trust prompt is gone, so nothing is held across two different questions.
-  const heldChoices = useRef<readonly PromptChoice[]>([]);
-  const choices = choicesToShow(fresh, heldChoices.current, trustPrompt);
-  if (fresh.length > 0) heldChoices.current = fresh;
-  else if (!trustPrompt) heldChoices.current = [];
-  const [answering, setAnswering] = useState(false);
-
-  // ---- The question card (core/prompts/askUserQuestion.ts, askScreen.ts; ./askDriver.ts) ----
-  /** The question as a form, when the waiting call is an AskUserQuestion whose input reads in full.
-   *  null falls back to the banner below, which quotes the screen as it always has. */
-  const askForm = useMemo<AskForm | null>(
-    () =>
-      pendingPrompt !== null && pendingPrompt.tool === "AskUserQuestion"
-        ? parseAskUserQuestion(pendingPrompt.input)
-        : null,
-    [pendingPrompt]
-  );
-  /** Where the dialog is on the terminal right now — decides whether the card may drive it. */
-  const askStage = useMemo(() => (askForm === null ? null : askStageOf(screenLines, askForm)), [askForm, screenLines]);
-  // A new call starts with blank answers and a clean slate; the same call keeps what was composed.
-  useEffect(() => {
-    if (askForm === null || pendingPrompt === null) {
-      setAskAnswers(null);
-      setAskAnswering(false);
-      setAskNotice(null);
-      return;
-    }
-    const toolUseId = pendingPrompt.toolUseId;
-    forgetOtherAskAnswers(toolUseId);
-    setAskAnswers((prev) =>
-      prev !== null && prev.toolUseId === toolUseId
-        ? prev
-        : { toolUseId, answers: recallAskAnswers(toolUseId) ?? emptyAnswers(askForm) }
-    );
-    setAskAnswering(false);
-    setAskNotice(null);
-  }, [askForm, pendingPrompt]);
-
-  // Kept outside the component as well, so a toggle to the terminal and back finds them (askDrafts.ts).
-  useEffect(() => {
-    if (askAnswers !== null) rememberAskAnswers(askAnswers.toolUseId, askAnswers.answers);
-  }, [askAnswers]);
-
-  /**
-   * Sends the card's answers to the dialog. The driver reads the screen before every key and confirms
-   * only against a matching review (askDriver.ts). A stop keeps the answers and shows why; a submit
-   * leaves the card quiet until PostToolUse clears the capture (the effect above resets everything).
-   */
-  const submitAsk = useCallback(async (): Promise<void> => {
-    if (askForm === null || askAnswers === null || askAnswering) return;
-    if (!allAnswered(askForm, askAnswers.answers)) return;
-    setAskAnswering(true);
-    setAskNotice(null);
-    // Which mount this press belongs to. The pane resets everything on a sessionId change, and a
-    // result arriving after that must not write a stale notice onto the next session's card.
-    const generation = generationRef.current;
-    let result: AskOutcome;
-    try {
-      result = await driveAsk({
-        form: askForm,
-        answers: askAnswers.answers,
-        readScreen: () => sessionBus.screenOf(sessionId),
-        write: (keys) => window.api.sessions.write(sessionId, keys),
-        wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-      });
-    } catch {
-      // The driver only reads and writes through the two callbacks above; a throw here is a screen
-      // reader or a pty write failing. The dialog is untouched, so it is the same situation as `stuck`.
-      result = { outcome: "stopped", reason: "stuck", stage: { kind: "none" } };
-    }
-    if (generationRef.current !== generation) return;
-    if (result.outcome === "stopped") {
-      setAskNotice(result.reason);
-      setAskAnswering(false);
-    }
-    // 'submitted' keeps the card quiet until PostToolUse clears the capture (the effect above resets).
-  }, [askForm, askAnswers, askAnswering, sessionId]);
-
-  /**
-   * Answers one of those rows on the CLI's own screen.
-   *
-   * A numbered row is sent as its number: that is an answer the CLI takes whole, and it does not
-   * depend on where the highlight happens to be.
-   *
-   * An unnumbered one has to be walked to, and the walk asks the screen again before every key it
-   * sends (stepToward in core/history/promptChoices.ts explains why in full). The short of it: the
-   * last key of a walk is a return, and a return pressed against a screen that moved confirms
-   * something nobody chose, with no way back. Re-reading costs a buffer read per step.
-   *
-   * Nothing is pressed when the row is no longer there — the prompt was answered on the terminal, or
-   * a different one replaced it. The button goes quiet for the length of the walk so a second press
-   * cannot interleave its own arrows with this one's.
-   */
-  const answerChoice = useCallback(
-    async (choice: PromptChoice): Promise<void> => {
-      if (answeringRef.current) return;
-      answeringRef.current = true;
-      setAnswering(true);
-      try {
-        if (choice.number !== null) {
-          window.api.sessions.write(sessionId, String(choice.number));
-          return;
-        }
-        for (let step = 0; step < ARROW_STEPS_MAX; step++) {
-          const screen = sessionBus.screenOf(sessionId);
-          if (screen === null) return; // no terminal registered — nothing to read, so nothing to press
-          const now = promptChoicesOf(promptLinesOf(screen.split("\n"), PROMPT_LINES_MAX));
-          const key = stepToward(now, choice.label);
-          if (key === null) return; // the row is gone: the prompt was answered or replaced
-          if (key === "enter") {
-            window.api.sessions.write(sessionId, "\r");
-            return;
-          }
-          window.api.sessions.write(sessionId, key === "down" ? "\u001b[B" : "\u001b[A");
-          await new Promise((resolve) => setTimeout(resolve, ARROW_STEP_MS));
-        }
-      } finally {
-        answeringRef.current = false;
-        setAnswering(false);
-      }
-    },
-    [sessionId]
-  );
-
   // Escape closes the menu without closing anything else; it reopens the moment the text changes,
   // which is what a person means by dismissing a suggestion rather than abandoning the command.
   // State, not a ref: the listener below sets it, and only a state change redraws the banner slot.
   const [slashDismissed, setSlashDismissed] = useState(false);
-  // A chat session is offered no `/` rows: those commands are the CLI's own, run by typing them at a
-  // prompt this session does not have. `@` file rows stay — they are only text, and the path they put
-  // in the message is read by whatever is on the other end either way.
-  const slashMatches = slashDismissed || isChat ? null : filterSlashCommands(commands, composerText);
-
-  // `@` is looked for only when `/` is not answering: a line that starts a command is not also naming
-  // a file, and two menus over one composer would have to fight over the same Enter.
-  const fileToken =
-    slashDismissed || slashMatches !== null ? null : fileTokenAt(composerText, composerCaret);
+  // No `/` rows here: those commands are the CLI's own, run by typing them at a prompt this session
+  // does not have. `@` file rows stay — they are only text, and the path they put in the message is
+  // read by whatever is on the other end either way.
+  const fileToken = slashDismissed ? null : fileTokenAt(composerText, composerCaret);
   const fileQuery = fileToken === null ? null : fileToken.query;
 
   // What `@` is asking for, fetched per keystroke. Cheap after the first one: main walks the project
@@ -1492,16 +841,7 @@ export function ConversationPane({
   }, [sessionId, fileQuery]);
 
   const rows: CompletionRow[] =
-    slashMatches !== null
-      ? slashMatches.map((c) => ({
-          key: `${c.source}:${c.name}`,
-          label: `/${c.name}`,
-          hint: c.description,
-          right: c.source
-        }))
-      : fileToken === null
-        ? []
-        : fileMatches.map((p) => ({ key: p, label: p }));
+    fileToken === null ? [] : fileMatches.map((p) => ({ key: p, label: p }));
   const slashOpen = rows.length > 0;
   const slashOpenRef = useRef(slashOpen);
   slashOpenRef.current = slashOpen;
@@ -1719,30 +1059,14 @@ export function ConversationPane({
     };
   }, [status]);
 
-  // Before the first turn a chat session's CLI has said nothing about its model (see modelLineOf), but
-  // the model list it answered at the handshake names the account's default; a terminal session reads
-  // its model off the screen and needs no stand-in.
-  const defaultModelFallback = isChat ? pendingModelLabelOf(models, configuredModel) : null;
+  // Before the first turn the CLI has said nothing about its model (see modelLineOf), but the model
+  // list it answered at the handshake names the account's default.
+  const defaultModelFallback = pendingModelLabelOf(models, configuredModel);
   const modelLine = modelLineOf(
     modelInfo,
     (model, effort) => t("conversation.model.line", { model, effort }),
     defaultModelFallback
   );
-
-  // The same two writes the composer makes, for a command a control sends rather than a person types.
-  const sendCommand = useCallback(
-    (text: string): void => {
-      const [paste, submit] = ptyWritesFor(text);
-      window.api.sessions.write(sessionId, paste);
-      setTimeout(() => window.api.sessions.write(sessionId, submit), SUBMIT_GAP_MS);
-    },
-    [sessionId]
-  );
-
-  const goTerminal = useCallback((): void => {
-    setSlashSent(false);
-    onGoTerminal();
-  }, [onGoTerminal]);
 
   /** A change is on its way and the readout has not caught up — the button says so, because driving a
    *  CLI and reading it back takes long enough that a silent button looks like a missed press. */
@@ -1757,34 +1081,6 @@ export function ConversationPane({
     const timer = setTimeout(() => setModelBusy(false), MODEL_BUSY_MAX_MS);
     return () => clearTimeout(timer);
   }, [modelBusy]);
-
-  // What the CLI is holding until the turn it is on finishes. Its queue, not ours — read off its
-  // screen the same way and for the same reason as everything else here, on the output that changes
-  // it rather than on a clock.
-  const [queued, setQueued] = useState<readonly string[]>([]);
-  useEffect(() => {
-    // A chat session queues nothing of its own — a turn is either running or it is not, and the pane
-    // will not take a second one while one is — and there is no screen to read a queue off anyway.
-    if (isChat) return;
-    const read = (): void => {
-      const screen = sessionBus.screenOf(sessionId);
-      if (screen === null) return;
-      const now = queuedMessagesOf(screen.split("\n"));
-      setQueued((prev) =>
-        prev.length === now.length && prev.every((text, i) => text === now[i]) ? prev : now
-      );
-    };
-    read();
-    let settle: ReturnType<typeof setTimeout> | undefined;
-    const stop = sessionBus.observe(sessionId, () => {
-      clearTimeout(settle);
-      settle = setTimeout(read, MODEL_SETTLE_MS);
-    });
-    return () => {
-      clearTimeout(settle);
-      stop();
-    };
-  }, [isChat, sessionId]);
 
   // ...and put back when it comes back. The composer belongs to the Thread and appears a moment
   // after this pane does, so this waits for it rather than assuming it. `insertText` rather than a
@@ -1811,54 +1107,6 @@ export function ConversationPane({
     return () => clearInterval(timer);
   }, [sessionId]);
 
-  // What codex is running, read off the bar it keeps at the bottom of its own screen.
-  //
-  // The app's other source is the rollout, and it records this a turn at a time: a session that has
-  // not answered anything reports no model at all, and one whose model was just changed from this
-  // very menu goes on reporting the old one until the next turn. Neither is what the person who just
-  // changed it is looking at. The screen is, and the buffer behind it keeps taking writes whether or
-  // not this view is the one showing (the same reading the waiting banner is built on).
-  //
-  // Read when the screen changes, not on a clock. The output that redraws that bar already arrives
-  // here — sessionBus carries it to the terminal — so this listens in on it. A timer would be a
-  // choice between a readout that lags and work done every tick forever; this is neither, and it
-  // answers a change made on the terminal just as promptly as one made from this menu.
-  //
-  // Claude needs none of this: it writes a statusline the app already receives.
-  useEffect(() => {
-    // Neither CLI's chat session has a bar to read: there is no terminal at all. The manager says what
-    // the model is, on the event stream, the moment it changes (see `modelInfo` above).
-    if (isChat) return;
-    if (modelInfo.cli !== "codex") return;
-    const read = (): boolean => {
-      const screen = sessionBus.screenOf(sessionId);
-      if (screen === null) return false; // no terminal registered for this session yet
-      const now = codexStatusModel(screen.split("\n"));
-      if (now === null) return false; // a picker is up over the bar, or codex is still starting
-      setModelInfo((prev) =>
-        prev.model === now.model && prev.effort === now.effort ? prev : { ...prev, ...now }
-      );
-      return true;
-    };
-    // The bar is already there — this pane may have opened long after it was drawn, and a drawn bar
-    // sends nothing that would wake the listener below.
-    let left = MODEL_OPENING_TRIES;
-    const opening = setInterval(() => {
-      if (read() || --left <= 0) clearInterval(opening);
-    }, MODEL_OPENING_MS);
-    if (read()) clearInterval(opening);
-    let settle: ReturnType<typeof setTimeout> | undefined;
-    const stop = sessionBus.observe(sessionId, () => {
-      clearTimeout(settle);
-      settle = setTimeout(read, MODEL_SETTLE_MS);
-    });
-    return () => {
-      clearInterval(opening);
-      clearTimeout(settle);
-      stop();
-    };
-  }, [isChat, modelInfo.cli, sessionId]);
-
   // What this session's CLI offers. Asked once when the pane opens rather than watched: the answer
   // depends on the account's subscription and its organisation's policy, neither of which changes
   // while someone is looking at a menu, and main keeps it cached per account for the app's life.
@@ -1870,19 +1118,16 @@ export function ConversationPane({
     // session on — and the list alone cannot answer it. Its own failure is silent for the same reason
     // the list's is: the composer falls back to naming the list's default, which is what it did before
     // this existed.
-    if (isChat)
-      void window.api.chat
-        .configuredModel(sessionId)
-        .then((model) => {
-          if (current) setConfiguredModel(model);
-        })
-        .catch(() => {});
-    // A chat session asks its own adapter, which has the app-server's answer for this thread; the
-    // `conversation.models` route reads an account's CLI and is not the same question.
-    const asked: Promise<readonly ModelDescriptor[]> = isChat
-      ? window.api.chat.listModels(sessionId)
-      : window.api.conversation.models(sessionId).then((result) => result.models);
-    void asked
+    void window.api.chat
+      .configuredModel(sessionId)
+      .then((model) => {
+        if (current) setConfiguredModel(model);
+      })
+      .catch(() => {});
+    // The session's own adapter has the app-server's answer for this thread; the `conversation.models`
+    // route reads an account's CLI and is not the same question.
+    void window.api.chat
+      .listModels(sessionId)
       .then((list) => {
         if (current) setModels(list);
       })
@@ -1892,151 +1137,55 @@ export function ConversationPane({
     return () => {
       current = false;
     };
-  }, [isChat, sessionId]);
+  }, [sessionId]);
 
-  /**
-   * Read the model back until `moved` says it has, and answer whether it did.
-   *
-   * Each read is applied as it comes, so the readout follows the first one that carries the change
-   * rather than the last one in the ladder. False means every look still showed the old value, which
-   * is the only evidence available that a switch is waiting on the CLI's own screen instead.
-   */
-  const rereadModelUntil = useCallback(
-    async (moved: (info: { model: string | null; effort: string | null }) => boolean) => {
-      for (const delay of MODEL_REREAD_STEPS_MS) {
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        let info: Awaited<ReturnType<typeof window.api.conversation.model>>;
-        try {
-          info = await window.api.conversation.model(sessionId);
-        } catch {
-          continue; // the readout keeps what it had; nothing here is worth interrupting a person for
-        }
-        setModelInfo((prev) => keepWhatIsKnown(prev, info));
-        if (moved(info)) return true;
-      }
-      return false;
-    },
-    [sessionId]
-  );
-
-  /** Wait until the screen codex is showing is the one named, and answer with its lines. Null when it
-   *  never arrives — the caller's cue to stop pressing keys and hand over to the terminal. */
-  const waitForCodexStep = useCallback(
-    async (which: "model" | "effort"): Promise<string[] | null> => {
-      const deadline = Date.now() + CODEX_STEP_WAIT_MS;
-      for (;;) {
-        const screen = sessionBus.screenOf(sessionId);
-        if (screen !== null) {
-          const rows = screen.split("\n");
-          if (codexPickerStep(rows) === which) return rows;
-        }
-        if (Date.now() >= deadline) return null;
-        await new Promise((resolve) => setTimeout(resolve, CODEX_STEP_POLL_MS));
-      }
-    },
-    [sessionId]
-  );
-
-  /**
-   * Set codex's reasoning level from here.
-   *
-   * codex has no `/effort`. `/model` asks two questions on one command — the model, then the
-   * reasoning level — so reaching the second means answering the first, and the answer that changes
-   * nothing is Enter on the model it is already on.
-   *
-   * Every key waits for the screen it is meant for and is chosen from that screen's own rows. A
-   * counted sequence would be three guesses about a terminal this cannot see, and the key it would
-   * guess wrong about is the one that confirms. When a screen does not arrive, or the level is not
-   * among its rows, nothing further is pressed and the question is left up for a person.
-   */
-  const pickCodexEffort = useCallback(
-    async (level: string): Promise<void> => {
-      const row = CODEX_EFFORT_ROWS[level];
-      setModelBusy(true);
-      if (row === undefined) {
-        // `max` and `ultra` sit behind codex's own `More reasoning…` row, a screen further in.
-        setModelBusy(false);
-        sendCommand("/model");
-        goTerminal();
-        return;
-      }
-      sendCommand("/model");
-      if ((await waitForCodexStep("model")) === null) {
-        setModelBusy(false);
-        goTerminal();
-        return;
-      }
-      window.api.sessions.write(sessionId, "\r"); // keep the model it is on
-      const rows = await waitForCodexStep("effort");
-      if (rows === null) {
-        setModelBusy(false);
-        goTerminal();
-        return;
-      }
-      const digit = codexDigitFor(rows, row);
-      if (digit === null) {
-        setModelBusy(false);
-        goTerminal(); // codex renamed its rows; its own screen is still up and readable
-        return;
-      }
-      // The readout follows from codex's own status bar (the poll above), not from a re-read of the
-      // rollout — that is a turn behind and would put the old level back.
-      window.api.sessions.write(sessionId, digit); // a digit selects and confirms in one keystroke
-    },
-    [sendCommand, waitForCodexStep, goTerminal, sessionId]
-  );
-
-  /**
-   * Switch codex's model from here.
-   *
-   * Its picker is answered by position, and the row a name sits at is codex's to change — so the
-   * digit is read off the screen that is up rather than counted from a list this app keeps
-   * (codexDigitFor). A name that is no longer listed presses nothing.
-   *
-   * codex asks for the reasoning level straight after, and Enter there keeps the level it is already
-   * pointing at: the person asked for a model, not a level, so that is the answer that changes only
-   * what was asked for.
-   */
-  const pickCodexModel = useCallback(
-    async (id: string): Promise<void> => {
-      setModelBusy(true);
-      sendCommand("/model");
-      const rows = await waitForCodexStep("model");
-      if (rows === null) {
-        setModelBusy(false);
-        goTerminal();
-        return;
-      }
-      const digit = codexDigitFor(rows, id);
-      if (digit === null) {
-        setModelBusy(false);
-        goTerminal();
-        return;
-      }
-      window.api.sessions.write(sessionId, digit);
-      if ((await waitForCodexStep("effort")) === null) {
-        setModelBusy(false);
-        goTerminal();
-        return;
-      }
-      window.api.sessions.write(sessionId, "\r"); // keep the level it is pointing at
-    },
-    [sendCommand, waitForCodexStep, goTerminal, sessionId]
-  );
-
-  /** Whether this chat session is in plan mode right now. False for a terminal session, which has no
-   *  such switch — its `/plan` is a command on its own screen. */
-  const planMode = chat === null ? false : chat.model.planMode;
+  /** How much this session's CLI may do without asking, right now. */
+  const permissionMode = chat === null ? "default" : chat.model.permissionMode;
+  /** The rows its mode menu offers. Asked once per session beside the model list — Claude answers a
+   *  fixed three without a round trip, codex answers what it listed at startup, and neither changes
+   *  while a session runs. */
+  const [permissionModes, setPermissionModes] = useState<readonly PermissionModeChoice[]>([]);
+  useEffect(() => {
+    let current = true;
+    setPermissionModes([]);
+    // An empty answer is never written over a full one. Two asks can be in flight at once (the one on
+    // mount and the one on `ready`), they resolve in no guaranteed order, and the mount's empty answer
+    // landing second would undo the good one. A CLI that really offers none leaves the state at the
+    // `[]` set just above, so nothing is lost by ignoring empties here.
+    const ask = (): void => {
+      void window.api.chat
+        .listPermissionModes(sessionId)
+        .then((list) => {
+          if (current && list.length > 0) setPermissionModes(list);
+        })
+        // Silent, like the model list's own failure beside it: the button falls back to naming the
+        // mode by its key and stays unpressable, which is the same as a CLI that offers none.
+        .catch(() => {});
+    };
+    ask();
+    // Asked again when the session says it is ready, because for codex the answer is not there yet at
+    // mount: its rows come from the `collaborationMode/list` reply, which lands about 300ms after
+    // `sessions.spawn` has already returned (measured). A pane that asked once, on mount, read an
+    // empty list and never asked again — the control then sat disabled, labelled with the bare mode
+    // key, for the session's whole life. `ready` is emitted after that reply (pinned by codexAdapter's
+    // own test), so it is the first moment the answer is certain. Claude needs none of this: its list
+    // is a constant its adapter answers without a round trip.
+    const off = window.api.on("chat:event", (e) => {
+      if (e.sessionId === sessionId && e.event.type === "ready") ask();
+    });
+    return () => {
+      current = false;
+      off();
+    };
+  }, [sessionId]);
 
   const modelSlot = useMemo<ModelControlProps>(
-    () =>
-      isChat
-        ? {
-            // A chat session's menu asks the manager outright: no command is typed anywhere, no
-            // picker is walked, and the answer comes back as a `model` event — which is why nothing
-            // here has to say it is busy. Nothing is left over for `onChangeEffort` either: the
-            // levels this can set are the whole of what there is, and there is no screen to send
-            // anyone to for the rest — so the row is not offered at all (ModelControl.tsx).
+    () => ({
+            // The menu asks the manager outright: no command is typed anywhere, no picker is walked,
+            // and the answer comes back as a `model` event — which is why nothing here has to say it
+            // is busy. Nothing is left over for `onChangeEffort` either: the levels this can set are
+            // the whole of what there is, and there is no screen to send anyone to for the rest — so
+            // the row is not offered at all (ModelControl.tsx).
             line: modelLine,
             cli: modelInfo.cli,
             choices: modelChoicesOf(models),
@@ -2055,74 +1204,16 @@ export function ConversationPane({
               sayIfFailed(window.api.chat.setModel(sessionId, model, level));
             },
             busy: false,
-            planMode,
-            onTogglePlan: () => sayIfFailed(window.api.chat.setPlanMode(sessionId, !planMode))
-          }
-        : {
-            line: modelLine,
-            onPickModel: (key) => {
-              if (modelInfo.cli === 'codex') {
-                void pickCodexModel(key);
-                return;
-              }
-              const was = modelInfo.model;
-              setModelBusy(true);
-              sendCommand(`/model ${key}`);
-              // Switching to another family asks first, because the conversation is cached for the
-              // model it is on — and it asks on the CLI's own screen, which is not this one. Nothing
-              // here can tell in advance which switches ask, so the evidence is that the model never
-              // moved: either something is waiting over there, or it was already this model and the
-              // notice costs a glance. Cleared when it did move: a switch that went through has
-              // nothing to explain.
-              void rereadModelUntil((info) => info.model !== was).then((moved) => {
-                setModelBusy(false);
-                setSlashSent(!moved);
-              });
-            },
-            onPickEffort: (key) => {
-              if (modelInfo.cli === 'codex') {
-                void pickCodexEffort(key);
-                return;
-              }
-              // Claude's own screen is a slider, but the command takes the name outright, so there is
-              // nothing to drive (measured 2026-09-12: `/effort high` answered "Set effort level to
-              // high"). It is saved as the default for new sessions, which is what that screen's
-              // Enter does too.
-              const was = modelInfo.effort;
-              setModelBusy(true);
-              sendCommand(`/effort ${key}`);
-              void rereadModelUntil((info) => info.effort !== was).then(() => setModelBusy(false));
-            },
-            onChangeEffort: () => {
-              // What the rows above do not cover: Claude's `s` (this session only) and codex's Max
-              // and Ultra, both of which live one screen further in. Open the CLI's own screen for
-              // those.
-              sendCommand(modelInfo.cli === 'codex' ? "/model" : "/effort");
-              goTerminal();
-            },
-            busy: modelBusy,
-            effortLabel: t("conversation.model.effortMore"),
-            cli: modelInfo.cli,
-            effortChoices: effortChoicesOf(models, modelInfo.model, modelInfo.cli),
-            choices: modelChoicesOf(models)
-          },
-    [
-      isChat,
-      planMode,
-      modelLine,
-      modelInfo.model,
-      modelInfo.effort,
-      modelInfo.cli,
-      modelBusy,
-      models,
-      sendCommand,
-      goTerminal,
-      pickCodexModel,
-      pickCodexEffort,
-      rereadModelUntil,
-      sessionId,
-      t
-    ]
+            permissionMode,
+            // An empty label means the CLI named the mode nothing (Claude), so this app's word is used.
+            // codex's own names come through untouched.
+            permissionModes: permissionModes.map((choice) => ({
+              ...choice,
+              label: choice.label === "" ? t(`chat.mode.${choice.key}` as MessageKey) : choice.label
+            })),
+            onPickPermissionMode: (mode) => sayIfFailed(window.api.chat.setPermissionMode(sessionId, mode))
+          }),
+    [permissionMode, permissionModes, modelLine, modelInfo.model, modelInfo.effort, modelInfo.cli, models, sessionId, t]
   );
 
   // An answer that is actually being waited on outranks everything; after that, a list being typed
@@ -2132,15 +1223,9 @@ export function ConversationPane({
   // call rather than from the screen.
   /** A turn this pane sent is still unanswered. Drives the notice and, through `isRunning`, what the
    *  composer's own button is offering to do. */
-  /** What the CLI says it is doing, read off its own screen — the authority on whether anything is
-   *  still in flight. See core/history/cliBusy.ts.
-   *
-   *  A chat session says it itself: the manager reports `working` for as long as a turn is running,
-   *  which is the same fact, arrived at without a screen to read it off. */
-  const cliBusy = useMemo(
-    () => (isChat ? chatStatus === "working" : cliBusyOf(screenLines)),
-    [isChat, chatStatus, screenLines]
-  );
+  /** Whether anything is still in flight. The manager says it itself: it reports `working` for as
+   *  long as a turn is running. */
+  const cliBusy = chatStatus === "working";
   const awaitingReply = isAwaitingReply(turns, pending.length, cliBusy);
   isRunningRef.current = awaitingReply;
   /** The mark at the end of the output. Broader than `awaitingReply` on purpose — see isWorkingNow's
@@ -2151,43 +1236,14 @@ export function ConversationPane({
   const runningSlot = useMemo(
     () => ({
       show: isWorkingNow(pending.length, cliBusy),
-      working: isChat ? chatStatus === "working" : attention === "working",
+      working: chatStatus === "working",
       // Through the ref, so the memo does not rebuild — and so the button presses the very same stop
       // Escape does, rather than a second path that could drift from it.
       onStop: () => void interruptRef.current()
     }),
-    [pending.length, cliBusy, isChat, chatStatus, attention]
+    [pending.length, cliBusy, chatStatus]
   );
-  const askCard: ReactNode =
-    askForm !== null &&
-    pendingPrompt !== null &&
-    askAnswers !== null &&
-    askAnswers.toolUseId === pendingPrompt.toolUseId &&
-    askCardShown(askStage, choices.length) ? (
-      <QuestionCard
-        form={askForm}
-        answers={askAnswers.answers}
-        state={askCardStateOf(askStage ?? { kind: "none" }, askAnswering)}
-        notice={askNotice}
-        canSubmit={allAnswered(askForm, askAnswers.answers)}
-        onToggle={(q, option) =>
-          setAskAnswers((prev) => (prev === null ? prev : { ...prev, answers: togglePick(askForm, prev.answers, q, option) }))
-        }
-        onOther={(q, text) =>
-          setAskAnswers((prev) => (prev === null ? prev : { ...prev, answers: setOther(askForm, prev.answers, q, text) }))
-        }
-        onSubmit={() => void submitAsk()}
-        onGoTerminal={goTerminal}
-      />
-    ) : null;
-  /** What an approval prompt is about, when the hook captured its call (Slack or rolling sessions carry
-   *  the full tool pair; others have no capture and the banner reads as before). */
-  const about =
-    pendingPrompt !== null && pendingPrompt.tool !== "AskUserQuestion"
-      ? describeToolRequest(pendingPrompt.tool, pendingPrompt.input)
-      : null;
-  /** The `@` menu, which both transports offer and neither changes. Built once so the two chains
-   *  below cannot come apart over it. */
+  /** The `@` menu. */
   const completionMenu: ReactNode = (
     <CompletionMenu
       rows={rows}
@@ -2196,55 +1252,29 @@ export function ConversationPane({
       onHover={setSlashActive}
     />
   );
-  /** What a chat session's banner slot is for, in the order paneTransport.ts sets out. Null for a
-   *  terminal session, which does not ask: its chain below never reads this. */
-  const chatBanner = isChat ? chatBannerFor(chat) : null;
-  const banner: ReactNode = isChat ? (
-    // No PendingBanner and no ask card here: both are drawn from a terminal's screen and a hook's
-    // capture. A chat session's one waiting decision is `chat.request`, and ChatRequestCard draws it
-    // — the question through the very same QuestionCard, the approval with its own buttons.
-    exited ? (
-      <ExitedNotice onGoTerminal={null} />
-    ) : chatBanner?.kind === "request" ? (
-      // Keyed on the request so a new one gets a new card: the old one's `busy`/`submitting` state
-      // would otherwise survive into it, and the person would meet a card whose buttons are already
-      // disabled by an answer they gave to something else.
-      <ChatRequestCard
-        key={chatBanner.request.id}
-        sessionId={sessionId}
-        request={chatBanner.request}
-        provider={chat === null ? "codex" : chat.provider}
-      />
-    ) : chatBanner?.kind === "error" ? (
-      <ChatNotice text={t("chat.notice.error", { message: chatBanner.message })} />
-    ) : chatBanner?.kind === "checking" ? (
-      <ChatNotice text={t("chat.notice.checking")} />
-    ) : chatBanner?.kind === "endsWithApp" ? (
-      <ChatNotice text={t("chat.notice.endsWithApp")} />
-    ) : slashOpen ? (
-      completionMenu
-    ) : null
-  ) : exited ? (
-      <ExitedNotice onGoTerminal={goTerminal} />
-    ) : askCard !== null ? (
-      askCard
-    ) : shouldShowPrompt(attention, choices.length, trustPrompt) ? (
-      <PendingBanner
-        onGoTerminal={goTerminal}
-        lines={promptLines}
-        choices={choices}
-        onChoose={(choice) => void answerChoice(choice)}
-        answering={answering}
-        trust={trustPrompt}
-        about={about}
-      />
-    ) : slashOpen ? (
-      completionMenu
-    ) : queued.length > 0 ? (
-      <QueuedNotice messages={queued} onGoTerminal={goTerminal} />
-    ) : slashSent ? (
-      <SlashCommandNotice onGoTerminal={goTerminal} />
-    ) : null;
+  /** What the banner slot is for, in the order paneTransport.ts sets out. */
+  const chatBanner = chatBannerFor(chat);
+  const banner: ReactNode = exited ? (
+    <ExitedNotice onGoTerminal={null} />
+  ) : chatBanner.kind === "request" ? (
+    // Keyed on the request so a new one gets a new card: the old one's `busy`/`submitting` state
+    // would otherwise survive into it, and the person would meet a card whose buttons are already
+    // disabled by an answer they gave to something else.
+    <ChatRequestCard
+      key={chatBanner.request.id}
+      sessionId={sessionId}
+      request={chatBanner.request}
+      provider={chat === null ? "codex" : chat.provider}
+    />
+  ) : chatBanner.kind === "error" ? (
+    <ChatNotice text={t("chat.notice.error", { message: chatBanner.message })} />
+  ) : chatBanner.kind === "checking" ? (
+    <ChatNotice text={t("chat.notice.checking")} />
+  ) : chatBanner.kind === "endsWithApp" ? (
+    <ChatNotice text={t("chat.notice.endsWithApp")} />
+  ) : slashOpen ? (
+    completionMenu
+  ) : null;
 
   const components = useMemo<ThreadComponents>(
     () => ({
@@ -2265,25 +1295,9 @@ export function ConversationPane({
     // Required even though `messages` are already ThreadMessageLike: without it the runtime reads
     // `metadata` off a raw message and throws on the first render. Measured, not folklore.
     convertMessage: (m: ThreadMessageLike) => m,
-    // `isDisabled` does reach the composer's actual <textarea> — assistant-ui's
-    // useComposerInputDisabled (useComposerInputState.js) ORs it with a `disabled` prop, and
-    // ComposerInput.js applies the result — so this is the real lock, not a stand-in for one.
-    //
-    // Open for every prompt but one. The composer writes to the very pty the CLI's prompt is on, so
-    // for anything that reads a line — a permission question, a free-text answer — typing here is
-    // answering it, and locking would take that away.
-    //
-    // The folder-trust question is the exception, and the only one so far: it reads a keypress, not a
-    // line, and **discards typed text outright**. That is the bug this started from — a person typed
-    // into an open composer, nothing was sent anywhere, and the session looked dead. Its two rows are
-    // drawn as buttons right above, so nothing is lost by closing the box that cannot work.
-    //
-    // A chat session's lock is a different question with the same two answers, so composerLockedFor
-    // (paneTransport.ts) takes this one and decides: shut while a request is up — it is answered on
-    // the card above, not by typing — and shut until the state has arrived at all.
-    isDisabled:
-      exited ||
-      composerLockedFor(transport, chat, composerLocked(trustPrompt, cliTakesTyping, waitedForScreen)),
+    // Shut while a request is up — it is answered on the card above, not by typing — and shut until
+    // the session's state has arrived at all (composerLockedFor, paneTransport.ts).
+    isDisabled: exited || composerLockedFor({ kind: "chat" }, chat, false),
     // `isRunning` with a real `onCancel` behind it. The note that used to sit here said there was no
     // cancel path to give this adapter and so no honest way to set the flag; there is one now — the
     // CLI stops on Escape, which is how a person stops it in the terminal — and with it the composer's
@@ -2304,7 +1318,7 @@ export function ConversationPane({
   // scrollback. Here they would sit on top of the first message, so the strip gets a box of its own
   // height at the head of the flex column and the thread starts below it. Zero, and no box at all, when
   // nothing is showing.
-  const bannerStripHeight = isChat ? stateBannerHeight(rollState, schedState) : 0;
+  const bannerStripHeight = stateBannerHeight(rollState, schedState);
 
 
   return (
@@ -2328,17 +1342,17 @@ export function ConversationPane({
         onComposerFiles(files);
       }}
     >
-      {isChat && bannerStripHeight > 0 && (
+      {bannerStripHeight > 0 && (
         <div className="relative shrink-0" style={{ height: bannerStripHeight }}>
           <SessionStateBanners sessionId={sessionId} rollState={rollState} schedState={schedState} />
         </div>
       )}
-      {more && (
-        <div className="border-border/60 flex justify-center border-b py-1">
-          <Button variant="ghost" size="sm" onClick={loadMore} disabled={loadingMore}>
-            <ChevronUpIcon />
-            {t("conversation.loadMore")}
-          </Button>
+      {/* Only while a window is on its way. There is nothing to press any more, and a bar that sat
+          there whenever earlier turns existed would be a button that has stopped being one. */}
+      {loadingMore && (
+        <div className="border-border/60 text-muted-foreground flex items-center justify-center gap-1.5 border-b py-1.5 text-xs">
+          <Loader2Icon className="size-3 animate-spin" aria-hidden="true" />
+          {t("conversation.loadingEarlier")}
         </div>
       )}
       <div className="min-h-0 flex-1">

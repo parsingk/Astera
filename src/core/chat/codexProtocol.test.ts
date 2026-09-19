@@ -3,6 +3,7 @@ import * as F from './codexFixtures'
 import {
   decodeFrame, encodeRequest, encodeResponse, encodeError, UNSUPPORTED_REQUEST,
   initializeParams, threadStartParams, threadResumeParams, threadOf, planEffortOf, modelsOf,
+  permissionModesOf,
   turnStartParams, decodeServerRequest, encodeAnswer, effectsOf, askFormOf
 } from './codexProtocol'
 import { emptyAnswers, togglePick, setOther } from '../prompts/askUserQuestion'
@@ -172,7 +173,7 @@ describe('effectsOf', () => {
     ])
   })
   it('thread/settings/updated reports the model, the effort and whether plan mode is on', () => {
-    expect(effectsOf(note(F.THREAD_SETTINGS_UPDATED_PLAN))).toEqual([{ type: 'event', event: { type: 'model', model: { model: 'gpt-6-astra', effort: 'medium', planMode: true } } }])
+    expect(effectsOf(note(F.THREAD_SETTINGS_UPDATED_PLAN))).toEqual([{ type: 'event', event: { type: 'model', model: { model: 'gpt-6-astra', effort: 'medium', permissionMode: 'plan' } } }])
   })
   it('serverRequest/resolved and thread/started carry their ids', () => {
     expect(effectsOf(note(F.SERVER_REQUEST_RESOLVED))).toEqual([{ type: 'resolved', requestId: 0 }])
@@ -180,5 +181,34 @@ describe('effectsOf', () => {
   })
   it('everything else is nothing', () => {
     expect(effectsOf(note(JSON.stringify({ method: 'account/rateLimits/updated', params: {} })))).toEqual([])
+  })
+})
+
+// The same control the claude sessions get, filled from the list codex already answers at startup —
+// which until now was read for the plan mode's effort and otherwise thrown away.
+describe('permissionModesOf', () => {
+  it('reads the modes codex offers, keeping the names it gave them', () => {
+    expect(permissionModesOf(result(F.COLLAB_MODES_RESULT))).toEqual([
+      { key: 'plan', label: 'Plan' },
+      { key: 'default', label: 'Default' }
+    ])
+  })
+
+  it('falls back to the mode key when an entry carries no name', () => {
+    const raw = { data: [{ mode: 'plan' }, { mode: 'default', name: '' }] }
+    expect(permissionModesOf(raw)).toEqual([
+      { key: 'plan', label: 'plan' },
+      { key: 'default', label: 'default' }
+    ])
+  })
+
+  it('drops an entry whose mode this app does not offer, and answers empty for a refused list', () => {
+    // A refusal is not fatal at startup (the adapter logs and carries on), so this has to answer
+    // something the control can draw: nothing, which leaves the button unpressable rather than lying.
+    expect(permissionModesOf({ data: [{ mode: 'plan', name: 'Plan' }, { mode: 'yolo', name: 'Yolo' }] })).toEqual([
+      { key: 'plan', label: 'Plan' }
+    ])
+    expect(permissionModesOf(null)).toEqual([])
+    expect(permissionModesOf({})).toEqual([])
   })
 })

@@ -2036,7 +2036,7 @@ describe('SlackNotifier chat events', () => {
     h.notifier.register(chatInfo())
     h.notifier.onChatEvent('s-1', { type: 'exit', code: 0 }, claudeAt(null))
     h.notifier.onChatEvent('s-1', { type: 'ready', threadId: 't', rolloutPath: null }, claudeAt(null))
-    h.notifier.onChatEvent('s-1', { type: 'model', model: { model: null, effort: null, planMode: false } }, claudeAt(null))
+    h.notifier.onChatEvent('s-1', { type: 'model', model: { model: null, effort: null, permissionMode: 'default' } }, claudeAt(null))
     await flush()
     expect(h.sent).toEqual([])
   })

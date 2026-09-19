@@ -209,18 +209,18 @@ describe('createAdapterCore — emission', () => {
   it('coalesces one flush into request, then status, then model, with truncated riding on the status', async () => {
     const { c, events } = made({ mode: 'adopt', threadId: 't', rolloutPath: null, truncated: true })
     expect(c.state.truncated).toBe(true)
-    c.patch({ request: approval('0', 'git log').request, status: 'working', model: { model: 'm', effort: 'high', planMode: false }, truncated: false })
+    c.patch({ request: approval('0', 'git log').request, status: 'working', model: { model: 'm', effort: 'high', permissionMode: 'default' }, truncated: false })
     await tick()
     expect(events.map((e) => e.type)).toEqual(['request', 'status', 'model'])
     expect(events[1]).toEqual({ type: 'status', status: 'working', truncated: false })
-    expect(events[2]).toEqual({ type: 'model', model: { model: 'm', effort: 'high', planMode: false } })
+    expect(events[2]).toEqual({ type: 'model', model: { model: 'm', effort: 'high', permissionMode: 'default' } })
   })
   it('emits only what changed, by value — a field patched back to what was already emitted says nothing', async () => {
     const { c, events } = made()
     c.patch({ status: 'working' })
     await tick()
     expect(events).toEqual([{ type: 'status', status: 'working', truncated: false }])
-    c.patch({ status: 'working', model: { model: null, effort: null, planMode: false }, request: null })
+    c.patch({ status: 'working', model: { model: null, effort: null, permissionMode: 'default' }, request: null })
     await tick()
     expect(events.length).toBe(1)
   })
@@ -281,7 +281,7 @@ describe('createAdapterCore — emission', () => {
 describe('createAdapterCore — the state it hands out', () => {
   it('snapshot copies the model, so a caller cannot write into the live session', () => {
     const { c } = made()
-    c.patch({ model: { model: 'gpt-6-astra', effort: 'xhigh', planMode: false } })
+    c.patch({ model: { model: 'gpt-6-astra', effort: 'xhigh', permissionMode: 'default' } })
     const first = c.snapshot()
     first.model.model = 'tampered'
     expect(c.snapshot().model.model).toBe('gpt-6-astra')

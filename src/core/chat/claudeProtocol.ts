@@ -9,7 +9,9 @@
 // `system/status` carries only `permissionMode` -- never enough to build a full `model` event without
 // inventing `model: null`, hence the dedicated `planMode` effect (see `claudeEffectsOf` below).
 
-import type { ChatAnswer, ApprovalDecision, RateLimitInfo } from './types'
+import type { ChatAnswer, ApprovalDecision, RateLimitInfo, PermissionMode } from './types'
+import { isPermissionMode } from './types'
+import type { RateLimitWindow } from '../types'
 import { parseAskUserQuestion, expectedAnswers } from '../prompts/askUserQuestion'
 import { describeToolRequest } from '../prompts/toolRequest'
 import type { ModelDescriptor } from '../models/types'
@@ -159,8 +161,28 @@ export function encodeClaudeAnswer(frame: Extract<ClaudeFrame, { kind: 'control_
   return encodeControlSuccess(frame.requestId, { behavior: 'allow', updatedInput: input })
 }
 
+/** The wire's `permissionMode`, narrowed to the three the composer's control offers. Anything else —
+ *  `bypassPermissions`, or a mode a later CLI adds — reads as `default`: see PermissionMode's own doc
+ *  for why that is the honest answer rather than a fourth name nobody can pick. */
+function modeOf(raw: unknown): PermissionMode {
+  return isPermissionMode(raw) ? raw : 'default'
+}
+
 const working: ProtocolEffect = { type: 'event', event: { type: 'status', status: 'working' } }
 const idle: ProtocolEffect = { type: 'event', event: { type: 'status', status: 'idle' } }
+
+/** One entry of the event's `unifiedWindows`. `utilization` here is 0..1, where the statusLine payload's
+ *  same-named field is already a percentage, so this is the one place the two wires differ. */
+function windowOf(raw: unknown): RateLimitWindow | null {
+  const w = obj(raw)
+  const utilization = num(w?.utilization)
+  if (utilization === null) return null
+  const seconds = num(w?.resetsAt)
+  return {
+    usedPercent: Math.max(0, Math.min(100, Math.round(utilization * 100))),
+    resetsAt: seconds === null ? null : new Date(seconds * 1000).toISOString()
+  }
+}
 
 /** Builds the rateLimit effect for all three sources (see the slice 4 records' `rate-limit-shapes.md`
  *  for the measured wire shapes). `info` is the dedicated event's own `rate_limit_info` object for
@@ -169,6 +191,7 @@ const idle: ProtocolEffect = { type: 'event', event: { type: 'status', status: '
  *  milliseconds, converted here so nothing downstream has to remember which unit it started in. */
 function rateLimitOf(info: Record<string, unknown> | null, source: RateLimitInfo['source']): ProtocolEffect {
   const seconds = num(info?.resetsAt)
+  const unified = obj(info?.unifiedWindows)
   return {
     type: 'rateLimit',
     info: {
@@ -176,9 +199,37 @@ function rateLimitOf(info: Record<string, unknown> | null, source: RateLimitInfo
       resetsAt: seconds === null ? null : seconds * 1000,
       utilization: num(info?.utilization),
       window: str(info?.rateLimitType),
-      source
+      source,
+      windows: unified
+        ? { session: windowOf(unified.five_hour), weekly: windowOf(unified.seven_day) }
+        : null
     }
   }
+}
+
+/** What a finished turn leaves in the context, off the `result` frame's own accounting.
+ *
+ *  The four token fields are summed rather than `input_tokens` alone: measured against four real
+ *  statusLine payloads, that sum over the context window reproduces the `used_percentage` Claude Code
+ *  writes for itself, and matching what the terminal shows for the same conversation is the point.
+ *
+ *  null rather than zeros when there is nothing to report. An aborted turn still sends a `result` with
+ *  every figure at zero, and reporting that would blank a chip that had a correct reading. */
+function usageOf(b: Record<string, unknown>): ProtocolEffect | null {
+  const u = obj(b.usage)
+  if (!u) return null
+  const usedTokens =
+    (num(u.input_tokens) ?? 0) +
+    (num(u.cache_creation_input_tokens) ?? 0) +
+    (num(u.cache_read_input_tokens) ?? 0) +
+    (num(u.output_tokens) ?? 0)
+  if (usedTokens <= 0) return null
+  const windowByModel: Record<string, number> = {}
+  for (const [model, raw] of Object.entries(obj(b.modelUsage) ?? {})) {
+    const size = num(obj(raw)?.contextWindow)
+    if (size !== null && size > 0) windowByModel[model] = size
+  }
+  return { type: 'usage', usedTokens, windowByModel }
 }
 
 export function claudeEffectsOf(frame: Extract<ClaudeFrame, { kind: 'message' }>): ProtocolEffect[] {
@@ -187,18 +238,18 @@ export function claudeEffectsOf(frame: Extract<ClaudeFrame, { kind: 'message' }>
   if (frame.type === 'system' && frame.subtype === 'init') {
     const sessionId = str(b.session_id)
     if (!sessionId) return []
-    const planMode = b.permissionMode === 'plan'
+    const permissionMode = modeOf(b.permissionMode)
     return [
       { type: 'thread', threadId: sessionId, rolloutPath: null },
-      { type: 'event', event: { type: 'model', model: { model: str(b.model), effort: str(b.effort), planMode } } },
-      { type: 'planMode', on: planMode },
+      { type: 'event', event: { type: 'model', model: { model: str(b.model), effort: str(b.effort), permissionMode } } },
+      { type: 'permissionMode', mode: permissionMode },
       { type: 'turn', turnId: sessionId },
       working
     ]
   }
 
   if (frame.type === 'system' && frame.subtype === 'status') {
-    return [{ type: 'planMode', on: b.permissionMode === 'plan' }]
+    return [{ type: 'permissionMode', mode: modeOf(b.permissionMode) }]
   }
 
   // An assistant frame that failed for a rate limit still means the CLI is working (it retries), so
@@ -231,6 +282,8 @@ export function claudeEffectsOf(frame: Extract<ClaudeFrame, { kind: 'message' }>
     // limit phrase the rolling scanner watches for on screen, so the phrase test is reused rather
     // than duplicated.
     if (isError && matchesLimitPhrase(str(b.result) ?? '')) out.push(rateLimitOf(null, 'result'))
+    const usage = usageOf(b)
+    if (usage) out.push(usage)
     out.push(idle)
     return out
   }

@@ -5,12 +5,13 @@
 // waiting for a reply, the queue of open server requests, exit) lives in ./adapterCore.ts, which the
 // Claude adapter shares; read that file for why those pieces are shaped the way they are.
 import type { ProcLike } from '../../core/sessions/proc'
-import type { ChatAdapter, ChatAnswer } from '../../core/chat/types'
+import type { ChatAdapter, ChatAnswer, PermissionModeChoice } from '../../core/chat/types'
 import type { ModelDescriptor } from '../../core/models/types'
 import type { CodexFrame, FileChange, ProtocolEffect } from '../../core/chat/codexProtocol'
 import {
   decodeFrame, encodeRequest, encodeNotification, encodeError, encodeAnswer, UNSUPPORTED_REQUEST,
   initializeParams, threadStartParams, threadResumeParams, threadOf, planEffortOf, modelsOf,
+  permissionModesOf,
   turnStartParams, decodeServerRequest, effectsOf
 } from '../../core/chat/codexProtocol'
 import { createAdapterCore, safe, type AdapterMode } from './adapterCore'
@@ -44,6 +45,13 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
   let rolloutPath: string | null = mode.mode === 'adopt' ? mode.rolloutPath : null
   let threadModel: string | null = null
   let planEffort: string | null = null
+  /** What `collaborationMode/list` answered, for the composer's mode menu. Filled at startup, or on
+   *  first use for a session that had no startup to fill it (see doListPermissionModes). */
+  let permissionModes: PermissionModeChoice[] = []
+  /** Whether that list has been asked for and answered — however it answered. Separate from the array
+   *  being empty, because empty is also the honest answer for a CLI that refuses the call, and without
+   *  this the menu would ask again on every open for the rest of the session. */
+  let permissionModesAsked = false
   let models: ModelDescriptor[] = []
   // The person's own explicit picks, kept apart from `state.model` (which also carries the thread's own
   // model/effort, seeded from thread/start purely for display — F2). A fresh session where the person
@@ -170,6 +178,8 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
       })
       const [collabResult, modelResult] = await Promise.all([collabP, modelP])
       planEffort = collabResult === null ? null : planEffortOf(collabResult)
+      permissionModes = collabResult === null ? [] : permissionModesOf(collabResult)
+      permissionModesAsked = true
       models = modelResult === null ? [] : modelsOf(modelResult)
       const threadResult = a.resumeThreadId
         ? await request('thread/resume', threadResumeParams({ threadId: a.resumeThreadId, cwd: a.cwd, bypass: a.bypass }))
@@ -182,8 +192,8 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
       // Seeded from the thread itself rather than left blank until the first thread/settings/updated:
       // the pane's model pill would otherwise read "unknown" for a fresh session, and picking an
       // effort off it would send the list's default model instead of the one the thread is on.
-      // planMode stays false — a resumed thread's collaboration mode arrives with that first update.
-      core.patch({ model: { model: info.model, effort: info.effort, planMode: false } })
+      // The mode stays at default — a resumed thread's collaboration mode arrives with that first update.
+      core.patch({ model: { model: info.model, effort: info.effort, permissionMode: 'default' } })
       core.emitReady(threadId, rolloutPath)
       proc.remember?.({ threadId, rolloutPath })
     } catch (e) {
@@ -201,7 +211,7 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
       'turn/start',
       turnStartParams({
         threadId, text, model: picked.model, effort: picked.effort,
-        planMode: core.state.model.planMode, planEffort, threadModel
+        planMode: core.state.model.permissionMode === 'plan', planEffort, threadModel
       })
     )
     const tid = turnIdOf(result)
@@ -214,6 +224,22 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     // takeRequest's own doc. Nothing is left to do here once it has returned.
     const entry = core.takeRequest(requestId, (e) => proc.write(encodeAnswer(e.wireId, e.decoded, answer)))
     if (!entry) throw new Error(`no open request: ${requestId}`)
+  }
+
+  /** The modes, asked for on first use when the startup list never ran. A session the Host already had
+   *  is adopted without a handshake (doStart's own branch), so its startup never happened and this is
+   *  the only thing that fills the menu — the same shape `doListModels` beside it already uses, and for
+   *  the same reason. A refusal answers empty and is not asked again. */
+  async function doListPermissionModes(): Promise<PermissionModeChoice[]> {
+    if (!permissionModesAsked) {
+      permissionModesAsked = true
+      try {
+        permissionModes = permissionModesOf(await request('collaborationMode/list', {}))
+      } catch (e) {
+        log(`collaborationMode/list failed: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+    return permissionModes
   }
 
   async function doListModels(): Promise<ModelDescriptor[]> {
@@ -252,7 +278,11 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
       picked = { model, effort }
       return safe(Promise.resolve(core.patch({ model: { ...core.state.model, model, effort } })))
     },
-    setPlanMode: (on) => safe(Promise.resolve(core.patch({ model: { ...core.state.model, planMode: on } }))),
+    // Kept locally: codex takes the mode with the next turn's `collaborationMode`, not as a call of
+    // its own (turnStartParams, core/chat/codexProtocol.ts).
+    setPermissionMode: (mode) =>
+      safe(Promise.resolve(core.patch({ model: { ...core.state.model, permissionMode: mode } }))),
+    listPermissionModes: () => safe(doListPermissionModes()),
     listModels: () => safe(doListModels()),
     state: () => core.snapshot(),
     on: (fn) => core.on(fn),

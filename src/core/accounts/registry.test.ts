@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { AccountRegistry } from './registry'
+import { ACCOUNT_COLORS } from './colors'
 
 let tmp: string
 let registry: AccountRegistry
@@ -237,5 +238,85 @@ describe('AccountRegistry', () => {
     expect(await registry.loginStatus(account.id)).toBe(false)
     await fs.writeFile(path.join(account.configDir, 'auth.json'), '{}', 'utf8')
     expect(await registry.loginStatus(account.id)).toBe(true)
+  })
+
+  describe('colour assignment', () => {
+    /** A stored account carrying nothing but the colour under test, filled just enough for isValidAccount. */
+    const stored = (id: string, color: string): Record<string, string> => ({
+      id,
+      label: id,
+      configDir: path.join(tmp, id),
+      color,
+      createdAt: '2026-01-01T00:00:00Z'
+    })
+
+    const registryFor = (file: string): AccountRegistry =>
+      new AccountRegistry(file, path.join(tmp, 'accounts-root'), path.join(tmp, 'codex-root'))
+
+    it('gives every account its own colour, past the length of the palette', async () => {
+      for (let i = 0; i < ACCOUNT_COLORS.length + 2; i++) {
+        await registry.create({ label: `acct-${i}` })
+      }
+      const colors = registry.list().map((a) => a.color)
+      expect(new Set(colors).size).toBe(colors.length)
+    })
+
+    it('does not reuse a live account’s colour after one is removed', async () => {
+      const first = await registry.create({ label: 'first' })
+      await registry.create({ label: 'second' })
+      await registry.create({ label: 'third' })
+      await registry.remove(first.id)
+      const fresh = await registry.create({ label: 'fourth' })
+      // The freed colour is the one to reuse; the colours still on screen are not.
+      expect(fresh.color).toBe(first.color)
+      expect(registry.list().filter((a) => a.color === fresh.color)).toHaveLength(1)
+      expect(new Set(registry.list().map((a) => a.color)).size).toBe(3)
+    })
+
+    it('gives a detected account arriving through import a colour of its own', async () => {
+      const first = await registry.create({ label: 'first' })
+      await registry.create({ label: 'second' })
+      await registry.create({ label: 'third' })
+      await registry.remove(first.id)
+      const dir = path.join(tmp, 'imported')
+      await fs.mkdir(dir)
+      const imported = await registry.import({ label: 'imported', configDir: dir })
+      expect(registry.list().filter((a) => a.color === imported.color)).toHaveLength(1)
+    })
+
+    it('repairs a stored duplicate by recolouring only the later account', async () => {
+      const file = path.join(tmp, 'dup.json')
+      await fs.writeFile(
+        file,
+        JSON.stringify({
+          version: 1,
+          accounts: [stored('a1', '#4f9cf9'), stored('a2', '#f97316'), stored('a3', '#4f9cf9')]
+        }),
+        'utf8'
+      )
+      const reg = registryFor(file)
+      expect((await reg.load()).recovered).toBe(false)
+      const colors = reg.list().map((a) => a.color)
+      expect(colors[0]).toBe('#4f9cf9') // the one registered first keeps what it had
+      expect(colors[1]).toBe('#f97316')
+      expect(new Set(colors).size).toBe(3)
+
+      // The repair has to reach disk, or it runs again on every launch.
+      const again = registryFor(file)
+      await again.load()
+      expect(again.list().map((a) => a.color)).toEqual(colors)
+    })
+
+    it('leaves the file alone on load when no colour is duplicated', async () => {
+      const file = path.join(tmp, 'nodup.json')
+      // save() rewrites the file indented by two, so a one-line original surviving means no write.
+      const original = JSON.stringify({
+        version: 1,
+        accounts: [stored('a1', '#4f9cf9'), stored('a2', '#f97316')]
+      })
+      await fs.writeFile(file, original, 'utf8')
+      await registryFor(file).load()
+      expect(await fs.readFile(file, 'utf8')).toBe(original)
+    })
   })
 })

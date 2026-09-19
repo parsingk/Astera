@@ -129,7 +129,7 @@ function same(a: unknown, b: unknown): boolean {
 /** The model is three known fields, so it is compared as three known fields rather than by serialising
  *  it — same answer, no allocation, and no dependence on key order. */
 function sameModel(a: ChatModel, b: ChatModel): boolean {
-  return a.model === b.model && a.effort === b.effort && a.planMode === b.planMode
+  return a.model === b.model && a.effort === b.effort && a.permissionMode === b.permissionMode
 }
 
 interface Pending {
@@ -157,7 +157,7 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
   const state: ChatState = {
     status: 'idle',
     request: null,
-    model: { model: null, effort: null, planMode: false },
+    model: { model: null, effort: null, permissionMode: 'default' },
     error: null,
     outlivesApp: false, // placeholder — snapshot() below reads the live value off `proc` instead
     truncated: mode.mode === 'adopt' ? mode.truncated : false,
