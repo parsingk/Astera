@@ -159,15 +159,28 @@ export interface RepairSection {
 
 /** spec 파일의 "## Repair request" 절(설계 §6.1, 명세 §9·§16·§35·§39). 보고 의무 앞에 선다 — 무엇이 틀렸는지
  *  읽은 다음에 어떻게 보고할지가 온다. check 는 실패한 것과 돌지 않은 것만 말한다: 통과한 것은 고칠 일이
- *  없고, 목록이 길면 실패가 묻힌다. 이슈는 blocking 만 — non-blocking 은 고치라고 보낸 것이 아니다. */
+ *  없고, 목록이 길면 실패가 묻힌다. 이슈는 blocking 만 — non-blocking 은 고치라고 보낸 것이 아니다.
+ *
+ *  **이름 것이 없으면 절 자체를 붙이지 않는다** — checks 가 전부 통과했고 issues 가 전부 non-blocking
+ *  이면 `### What failed` 가 비게 되는데, 아무것도 이름 없는 "무엇이 실패했다" 절은 절이 없는 것보다
+ *  나쁘다(리뷰 fix 1차, Minor). */
 function repairSection(a: RepairSection): string {
   const lines: string[] = []
   for (const c of a.checks ?? []) {
     if (c.status === 'passed') continue
     if (c.status === 'not-run') lines.push(`- Check "${c.name}" — not run (stopped at the first failure).`)
     else {
-      lines.push(`- Check "${c.name}" — exit ${c.exitCode ?? '?'}${c.status === 'timed-out' ? ' (timed out)' : ''}. Output tail:`)
-      for (const l of (c.outputTail ?? '').split('\n').slice(-40)) lines.push(`    ${l}`)
+      lines.push(`- Check "${c.name}" — exit ${c.exitCode ?? '?'}${c.status === 'timed-out' ? ' (timed out)' : ''}.`)
+      // outputTail 이 없거나 빈 문자열이면 아무것도 싣지 않는다 — 예전에는 "Output tail:" 뒤에 빈
+      // 들여쓰기 줄 하나가 남았다. 40줄로 자를 때는 몇 줄이 잘렸는지도 남긴다 — 안 그러면 잘린
+      // 사실 자체가 안 보인다.
+      if (c.outputTail) {
+        const tail = c.outputTail.split('\n')
+        const kept = tail.slice(-40)
+        lines.push('  Output tail:')
+        if (kept.length < tail.length) lines.push(`    … (${tail.length - kept.length} earlier line(s) cut)`)
+        for (const l of kept) lines.push(`    ${l}`)
+      }
     }
   }
   const blocking = (a.issues ?? []).filter((i) => i.blocking)
@@ -179,11 +192,13 @@ function repairSection(a: RepairSection): string {
       if (i.suggestedFix) lines.push(`     Suggested fix: ${i.suggestedFix}`)
     })
   }
+  if (!lines.length) return ''
+  const reasonText = a.reason === 'review-failure' ? 'review found blocking issues' : 'a completion check failed'
   return `
 ---
 ## Repair request (assembled by the app — do not delete)
 
-Your previous report for this task did not satisfy the completion checks. This is repair ${a.repair} of ${a.maxFixAttempts}.
+Your previous report for this task did not satisfy the completion checks — ${reasonText}. This is repair ${a.repair} of ${a.maxFixAttempts}.
 
 ### What failed
 ${lines.join('\n')}
@@ -193,7 +208,11 @@ Do not redefine the objective. Do not remove, skip or weaken failing tests unles
 explicitly requires it. Do not disable lint rules, bypass the build, or change how the checks run.
 Fix the failing completion conditions with the smallest correct change — correctness before size.
 Astera, not you, decides whether the completion conditions are met: after your fix it re-runs every
-check, then review. Do not declare the task complete in your report.
+check, then review. Report \`--outcome succeeded\` for this repair attempt once you have made the fix
+— that reports the attempt, not the task. Do not declare the task complete in your report: whether the
+task itself is done is still Astera's call, decided only once the checks and review have run again. A
+repair reported as \`--outcome failed\` ends the task without ever re-running them, so use it only when
+you cannot make the fix at all.
 `
 }
 
@@ -468,13 +487,18 @@ ${a.knowledge.paths.map((p) => `  ${p}`).join('\n')}
 ${a.knowledge.more > 0 ? `\n  … and ${a.knowledge.more} more file(s) in the project's knowledge directories.\n` : ''}`
       : ''
 
-  const checksSection = a.checks?.some((c) => c.status === 'passed')
+  // 아래 "## What is already decided" 의 validated:false 문장과 공유한다 — 그 문장은 "빌드·테스트에
+  // 대해 아무것도 증명되지 않았다"고 말하는데, checks 에 통과한 것이 있으면 같은 파일 안에서 그
+  // 말과 이 절이 서로 부딪힌다(리뷰 fix 1차, Important 1). 그래서 그 문장은 이 목록이 비어 있을
+  // 때만 나온다.
+  const passedChecks = a.checks?.filter((c) => c.status === 'passed') ?? []
+  const checksSection = passedChecks.length
     ? `
 ## Checks that ran
 
 The project's own configurations below were run against this work and passed. Do not re-judge them.
 
-${a.checks.filter((c) => c.status === 'passed').map((c) => `- ${c.name}`).join('\n')}
+${passedChecks.map((c) => `- ${c.name}`).join('\n')}
 `
     : ''
   const previous = (a.previousIssues ?? []).filter((i) => i.blocking)
@@ -498,18 +522,24 @@ a check pass without making the work correct.
 ${a.suspiciousFiles.map((f) => `- ${f}`).join('\n')}
 `
     : ''
+  // "The one question you answer" 뒤에 온다(리뷰 fix 1차, Important 3) — 무엇이 결함인지 먼저 읽은
+  // 다음에야 "판단을 어디에 적을지"가 뜻을 갖는다. 순서를 뒤집으면 리뷰어가 "어떤 심각도로 적을지"를
+  // "무엇이 결함으로 치는지" 보다 먼저 듣는다.
   const verdictSection = `
 ## Structured verdict
 
-Before you report, write your findings to this file (create it; the directory exists):
+Before you report, write your findings to this file (create it; the directory exists). The file
+contains that JSON object and nothing else — no fences, no commentary: a parse failure sends this Run
+to a human, so anything you put around the JSON breaks it.
 
   ${a.resultPath.replace(/\\/g, '/')}
 
   { "issues": [ { "severity": "critical|high|medium|low|info", "title": "…", "description": "…",
                   "file": "src/x.ts", "line": 42, "suggestedFix": "…" } ] }
 
-Every finding goes in, at the severity you judge. \`file\`, \`line\` and \`suggestedFix\` are optional.
-An empty list means you found nothing. The app decides which severities block; you decide the severity.
+Every finding goes in, at the severity you judge. \`title\` is required; \`description\`, \`file\`,
+\`line\` and \`suggestedFix\` are optional. An empty list means you found nothing. The app decides
+which severities block; you decide the severity.
 Then report as below — \`--outcome failed\` when the requirement is not satisfied.
 `
 
@@ -534,10 +564,12 @@ ${a.filesModified?.length ? a.filesModified.map((f) => `- ${f}`).join('\n') : '(
 ${
   a.validated
     ? 'The project\'s own build/test configuration was run against this work and it passed. Whether the code compiles and the tests run is settled.'
-    : 'No automated validation was attached to this task, so nothing has been proven about the build or the tests. Say so in your report if that matters for the requirement, but do not run the build yourself — that is not what you were started for.'
+    : passedChecks.length
+      ? ''
+      : 'No automated validation was attached to this task, so nothing has been proven about the build or the tests. Say so in your report if that matters for the requirement, but do not run the build yourself — that is not what you were started for.'
 }
 
-${knowledgeSection}${checksSection}${previousSection}${suspiciousSection}${verdictSection}
+${knowledgeSection}${checksSection}${previousSection}${suspiciousSection}
 ## The one question you answer
 
 **Was the requirement above satisfied?** Not "is this the code I would have written", not "could this be
@@ -548,7 +580,7 @@ subtree behind it.
 Reject when the work does not do what was asked: a missing case, a requirement addressed in name only, a
 change that contradicts the spec. Say concretely what is missing, because your body text is the only
 record the next attempt gets.
-
+${verdictSection}
 ---
 ## Reporting obligation (assembled by the app — do not delete)
 
@@ -691,10 +723,14 @@ export class OrchCoordinator {
     // below, so that check runs against whichever one is actually used. It carries the same specPath
     // as the launch prompt, so the same win32 cmd.exe /c risk applies to it.
     const resumeSessionId = a.resume?.nativeSessionId
+    // launchPhrase.split(...).join(...) rather than .replace('{specPath}', specPath) — replace's
+    // string-replacement form parses $&, $`, $', $$ and $<name> out of the *replacement* argument,
+    // and specPath is an arbitrary filesystem path that can legally contain any of those sequences
+    // (none of them are in LAUNCH_FORBIDDEN). split/join treats the replacement as inert text.
     const prompt = resumeSessionId
       ? resumeWorkerPrompt(specPath.replace(/\\/g, '/'), a.taskId, a.dispatchId)
       : a.launchPhrase
-        ? a.launchPhrase.replace('{specPath}', specPath.replace(/\\/g, '/'))
+        ? a.launchPhrase.split('{specPath}').join(specPath.replace(/\\/g, '/'))
         : launchPrompt(specPath.replace(/\\/g, '/'))
     const forbidden = prompt.match(LAUNCH_FORBIDDEN)
     if (forbidden)

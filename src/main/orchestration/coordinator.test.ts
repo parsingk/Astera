@@ -880,6 +880,8 @@ describe('buildSpecFile — repair 절', () => {
     expect(spec).not.toContain('"Typecheck" — exit')
     expect(spec.indexOf('## Repair request')).toBeLessThan(spec.indexOf('## Reporting obligation'))
     expect(spec).toContain('--dispatch-id dsp_2')
+    // reason 이 실제로 쓰인다 — 필드만 받고 버려지지 않는다
+    expect(spec).toContain('a completion check failed')
   })
   it('blocking 이슈만 싣고 non-blocking 은 싣지 않는다', () => {
     const spec = buildSpecFile({ title: 'T', spec: 'do', taskId: 'tsk_1', dispatchId: 'dsp_3', repair: { reason: 'review-failure', repair: 2, maxFixAttempts: 3, issues } })
@@ -888,16 +890,81 @@ describe('buildSpecFile — repair 절', () => {
     expect(spec).toContain(`1. HIGH — Session race — ${issues[0].file}:${issues[0].line}`)
     expect(spec).toContain('Suggested fix: lock')
     expect(spec).not.toContain('naming')
+    // review-failure 는 check-failure 와 다른 문구를 받는다
+    expect(spec).toContain('review found blocking issues')
   })
   it('계약 문구를 싣는다 — 테스트를 지우거나 약화하지 말고 완료를 선언하지 말라', () => {
     const spec = buildSpecFile({ title: 'T', spec: 'do', taskId: 'tsk_1', dispatchId: 'dsp_2', repair: { reason: 'check-failure', repair: 1, maxFixAttempts: 3, checks } })
     expect(spec).toContain('Do not remove, skip or weaken failing tests')
     expect(spec).toContain('Astera, not you, decides whether the completion conditions are met')
     expect(spec).toContain('smallest correct change')
+    // 리뷰 fix 1차, Important 5 — 전에 빠졌던 두 anti-gaming 문구와, 그 문구의 이름이 약속하는
+    // "완료를 선언하지 말라"는 리터럴 문장
+    expect(spec).toContain('Do not disable lint rules')
+    expect(spec).toContain('change how the checks run')
+    expect(spec).toContain('Do not declare the task complete in your report')
+    // Important 4 — "이 수리 시도는 succeeded 로 보고하라"와 "task 자체는 완료가 아니다"를
+    // 갈라 놓는 절. 안 그러면 fix를 했어도 --outcome failed 로 보고해 재검증을 건너뛰고 task 가
+    // 그대로 실패로 끝난다.
+    expect(spec).toContain('Report `--outcome succeeded` for this repair attempt')
   })
   it('repair 가 없으면 파일이 지금과 같다', () => {
     const a = buildSpecFile({ title: 'T', spec: 'do', taskId: 'tsk_1', dispatchId: 'dsp_1' })
     expect(a).not.toContain('Repair request')
+  })
+  // Minor: 이름 것이 없으면(check 전부 통과, issue 전부 non-blocking) "무엇이 실패했다" 절 자체가
+  // 아무것도 이름 없이 뜨는 것보다, 절이 없는 것이 낫다.
+  it('실패한 check 도 blocking 이슈도 없으면 절 자체를 붙이지 않는다', () => {
+    const spec = buildSpecFile({
+      title: 'T',
+      spec: 'do',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_9',
+      repair: {
+        reason: 'check-failure',
+        repair: 1,
+        maxFixAttempts: 3,
+        checks: [{ configId: 'c1', name: 'Typecheck', status: 'passed' }],
+        issues: [{ id: 'rvw_9', severity: 'low', blocking: false, title: 'naming', description: 'nit' }]
+      }
+    })
+    expect(spec).not.toContain('Repair request')
+  })
+  // Minor: outputTail 이 없으면 "Output tail:" 뒤에 빈 들여쓰기 줄이 남지 않는다
+  it('outputTail 이 없는 실패 check 는 빈 Output tail 줄을 만들지 않는다', () => {
+    const spec = buildSpecFile({
+      title: 'T',
+      spec: 'do',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_9',
+      repair: {
+        reason: 'check-failure',
+        repair: 1,
+        maxFixAttempts: 3,
+        checks: [{ configId: 'c9', name: 'Lint', status: 'failed', exitCode: 2 }]
+      }
+    })
+    expect(spec).toContain('"Lint" — exit 2')
+    expect(spec).not.toContain('Output tail:')
+  })
+  // Minor: 40줄로 자르면 몇 줄이 잘렸는지 표시한다 — 안 그러면 잘린 사실 자체가 안 보인다
+  it('출력이 40줄을 넘으면 몇 줄이 잘렸는지 적는다', () => {
+    const many = Array.from({ length: 45 }, (_, i) => `line${i}`).join('\n')
+    const spec = buildSpecFile({
+      title: 'T',
+      spec: 'do',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_9',
+      repair: {
+        reason: 'check-failure',
+        repair: 1,
+        maxFixAttempts: 3,
+        checks: [{ configId: 'c9', name: 'Lint', status: 'failed', exitCode: 2, outputTail: many }]
+      }
+    })
+    expect(spec).toContain('(5 earlier line(s) cut)')
+    expect(spec).toContain('line44')
+    expect(spec).not.toContain('line0')
   })
 })
 
@@ -941,5 +1008,99 @@ describe('buildReviewSpecFile — 수렴 절', () => {
     expect(spec).not.toContain('## Checks that ran')
     expect(spec).not.toContain('## Previous review round')
     expect(spec).not.toContain('## Files that change how the checks run')
+  })
+
+  // 리뷰 fix 1차, Important 1 — validated:false 는 "빌드·테스트에 대해 아무것도 증명되지 않았다"고
+  // 말하는데, checks 에 통과한 것이 있으면 같은 파일 안에서 그 말과 "## Checks that ran" 이 서로
+  // 부딪힌다. 그 문장은 checks 가 비었을 때만 나와야 한다 — 호출자가 낡은 validated 값을 줄 수도
+  // 있다는 전제(그 자체를 고치는 것은 다른 task 의 일이다).
+  it('checks 에 통과한 것이 있으면 validated:false 문장을 억누른다 — 자기 모순을 막는다', () => {
+    const spec = buildReviewSpecFile({
+      ...base,
+      validated: false,
+      checks: [{ configId: 'c1', name: 'Typecheck', status: 'passed' }]
+    })
+    expect(spec).toContain('## Checks that ran')
+    expect(spec).not.toContain('No automated validation was attached')
+  })
+  it('checks 가 없으면 validated:false 문장이 그대로 남는다', () => {
+    const spec = buildReviewSpecFile({ ...base, validated: false })
+    expect(spec).toContain('No automated validation was attached')
+  })
+  it('checks 가 전부 not-run/failed 면(통과한 것이 없다) validated:false 문장이 그대로 남는다', () => {
+    const spec = buildReviewSpecFile({
+      ...base,
+      validated: false,
+      checks: [{ configId: 'c1', name: 'Typecheck', status: 'failed', exitCode: 1 }]
+    })
+    expect(spec).not.toContain('## Checks that ran')
+    expect(spec).toContain('No automated validation was attached')
+  })
+
+  // 리뷰 fix 1차, Important 2 — 파서는 텍스트 전체에 바로 JSON.parse 를 돌린다. 펜스나 산문을
+  // 두르면 파싱이 깨지고 Run 이 사람에게 넘어간다. optional 목록도 실제와 맞춘다: title 은
+  // parser 가 필수로 요구하고, description 은 optional 이다(review.ts).
+  it('결과 파일에는 JSON 만 담으라고 못박고 title 필수·description 선택을 정확히 말한다', () => {
+    const spec = buildReviewSpecFile(base)
+    expect(spec).toContain('nothing else')
+    expect(spec).toContain('no fences, no commentary')
+    expect(spec).toContain('`title` is required')
+    expect(spec).toContain('`description`')
+  })
+
+  // 리뷰 fix 1차, Important 3 — "무엇이 결함으로 치는가"를 먼저 읽어야 "어디에, 어떤 심각도로
+  // 적을지"가 뜻을 갖는다. 순서가 뒤집히면 리뷰어가 판정 기준보다 먼저 판정 형식을 듣는다.
+  it('Structured verdict 는 "The one question you answer" 뒤에 온다', () => {
+    const spec = buildReviewSpecFile(base)
+    expect(spec.indexOf('## The one question you answer')).toBeLessThan(spec.indexOf('## Structured verdict'))
+    expect(spec.indexOf('## Structured verdict')).toBeLessThan(spec.indexOf('## Reporting obligation'))
+  })
+})
+
+// 리뷰 fix 1차, Important 6 — launchPhrase 는 지금까지 어떤 테스트도 exercising 하지 않았다. 브리핑이
+// 짚은 세 성질: {specPath} 치환, provider-native resume 이 항상 이긴다, LAUNCH_FORBIDDEN 이 치환된
+// 문자열을 본다(치환 전 원문이 아니다).
+describe('OrchCoordinator.startWorker — launchPhrase', () => {
+  it('{specPath} 를 실제 spec 경로로 치환해 쓴다', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    const r = await co.startWorker({ ...baseArgs(), runCwd: dir, launchPhrase: 'Fix it — read {specPath} now' })
+    const spawned = deps.spawned[0] as { initialPrompt: string }
+    expect(spawned.initialPrompt).toContain(posix(r.specPath))
+    expect(spawned.initialPrompt).not.toContain('{specPath}')
+    expect(spawned.initialPrompt).toContain('Fix it — read')
+  })
+  it('provider-native resume 이 항상 launchPhrase 를 이긴다', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({
+      ...baseArgs(),
+      runCwd: dir,
+      launchPhrase: 'Fix it — read {specPath} now',
+      resume: { nativeSessionId: 'native-uuid' }
+    })
+    // baseArgs()의 provider는 codex다 — codex는 재개 문구를 resumePrompt로 받는다
+    const spawned = deps.spawned[0] as { resumePrompt?: string; initialPrompt?: string }
+    expect(spawned.resumePrompt).toContain('tsk_1')
+    expect(spawned.resumePrompt).not.toContain('Fix it')
+    expect(spawned.resumePrompt).not.toContain('{specPath}')
+  })
+  it('LAUNCH_FORBIDDEN 은 치환 전 원문이 아니라 실제로 보내는(치환된) 문자열을 본다', async () => {
+    const deps = { ...makeDeps(), specsDir: path.join(dir, 'A&B', 'specs') }
+    const co = new OrchCoordinator(deps)
+    // launchPhrase 원문 자체에는 금지 문자가 없다 — {specPath} 치환 뒤에야 specsDir의 '&'가 실린다
+    await expect(
+      co.startWorker({ ...baseArgs(), runCwd: dir, launchPhrase: 'Read {specPath} and fix it' })
+    ).rejects.toThrow(/forbidden/)
+  })
+  // Minor — .replace('{specPath}', specPath) 의 문자열 치환 형태는 replacement 문자열 안의 $&·$`·$'
+  // 를 특수 패턴으로 해석해 결과를 깨뜨린다. specPath 는 임의의 파일시스템 경로이고 그 문자들은
+  // LAUNCH_FORBIDDEN 에 없다 — split/join 처럼 치환 특수문자를 타지 않는 형태를 써야 한다.
+  it('specPath 에 $\' 같은 교체 특수문자가 있어도 깨지지 않는다', async () => {
+    const deps = { ...makeDeps(), specsDir: path.join(dir, "$'weird", 'specs') }
+    const co = new OrchCoordinator(deps)
+    const r = await co.startWorker({ ...baseArgs(), runCwd: dir, launchPhrase: 'Read {specPath} and fix it' })
+    const spawned = deps.spawned[0] as { initialPrompt: string }
+    expect(spawned.initialPrompt).toBe(`Read ${posix(r.specPath)} and fix it`)
   })
 })
