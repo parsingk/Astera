@@ -20,6 +20,65 @@ export type MessageType =
 /** 한 Run 이 동시에 열어 둘 Dispatch 수의 기본값. 사람이 Run 을 만들 때 바꾼다. */
 export const DEFAULT_CONCURRENCY = 3
 
+/** Run 수준 완료 수렴 정책. **있으면 켜진 것이다** — 빈 객체도 켜진 것이고, 비운 칸은 아래 상수를 쓴다
+ *  (core/orchestration/convergence.ts 의 policyOf). 없는 Run 은 지금까지의 동작이다: 검증·검토 실패가
+ *  failed 가 되고 코디네이터가 --retry-of 로 다시 띄운다. 설계 D12. */
+export interface ConvergencePolicy {
+  /** repair 를 몇 번까지 여는가. 기본 FAILURE_LIMIT. k 번째 연속 실패가 k ≤ 이 값이면 k 번째 repair 를 열고,
+   *  이 값+1 번째 실패가 소진이다(설계 §5.1) */
+  maxFixAttempts?: number
+  /** 검토 라운드 상한. 기본 MAX_REVIEW_ROUNDS */
+  maxReviewRounds?: number
+  /** 이 severity 이상이 blocking. 기본 'high' — critical·high 가 막고, 'medium' 으로 낮추면 medium 도 막는다 */
+  blockingSeverity?: 'high' | 'medium'
+}
+export const MAX_REVIEW_ROUNDS = 2
+/** check 하나의 타임아웃. RunConfig 에 타임아웃 칸이 없어 P0 는 상수다 (설계 §7) */
+export const CHECK_TIMEOUT_MS = 30 * 60_000
+/** checkHistory 가 configId 마다 들고 있는 라운드 수의 상한 */
+export const HISTORY_MAX = 8
+
+export interface CheckResult {
+  configId: string
+  /** RunConfig.name 을 찍어 둔다 — 구성이 뒤에 지워져도 화면과 fix 요청이 이름을 부를 수 있게 */
+  name: string
+  /** not-run: 앞의 check 가 실패해 돌지 않았다(설계 D9). timed-out: validator 가 두 번 타임아웃을 내면
+   *  Gate 로 가므로 판정 함수에는 도달하지 않지만, 화면과 Journal 을 위해 값이 있다 */
+  status: 'passed' | 'failed' | 'timed-out' | 'not-run'
+  exitCode?: number
+  /** ANSI 를 벗긴 마지막 4000자. not-run 에는 없다 */
+  outputTail?: string
+  startedAt?: string
+  endedAt?: string
+  /** 라운드 사이에서 fail→pass→fail 로 흔들렸다(설계 §7). 자동으로 무시되지 않는다 — 표시만이다 */
+  unstable?: true
+}
+
+export type ReviewSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
+export interface ReviewIssue {
+  id: string
+  severity: ReviewSeverity
+  /** 앱이 정책으로 계산한다(convergence.ts 의 isBlocking). 리뷰어가 쓴 값이 아니다 */
+  blocking: boolean
+  title: string
+  description: string
+  file?: string
+  line?: number
+  suggestedFix?: string
+}
+
+/** 왜 이 Dispatch 가 열렸는가 — check 가 실패했거나 검토가 blocking 이슈를 냈다 */
+export type RepairReason = 'check-failure' | 'review-failure'
+/** 앱이 특별히 다루는 Gate. exhausted 의 해소는 retry-once / mark-failed 로 갈라지고(server.ts 의
+ *  gate-resolve), blocked 는 보통 Gate 처럼 풀린다 — 질문이 왜 막혔는지 말한다 */
+export type GateKind = 'convergence-exhausted' | 'convergence-blocked'
+
+/** worker-start 가 세션을 띄우기 전에 Dispatch 에 적어 두는 자리표시자와 같은 모양(server.ts 의
+ *  pendingSessionId). 순수 층은 node:crypto 를 못 쓰므로 newId 의 hex 를 빌린다 — 어떤 세션도 가리키지
+ *  않으면 되는 값이다. continuity/events.ts 의 isPlaceholder 가 같은 접두사를 본다. */
+export const placeholderSessionId = (): string => `pending:${newId('p').slice(2, 10)}`
+export const isPlaceholderSessionId = (id: string): boolean => id.startsWith('pending:')
+
 export interface Run {
   id: string
   objective: string
@@ -108,6 +167,8 @@ export interface Run {
    *
    *  **schedule 과 배타적이다.** 자식에 schedule 을 복사하면 자식이 또 발화해 무한히 증식한다. */
   templateId?: string
+  /** 완료 수렴 정책. 있으면 이 Run 의 검증·검토 실패는 앱이 repair 로 되돌린다(설계 D2·D12) */
+  convergence?: ConvergencePolicy
 }
 
 export interface Task {
@@ -148,6 +209,20 @@ export interface Task {
   /** 이 Task 를 완료로 판정할 실행 구성의 id. 없으면 worker_done 을 그대로 믿는다 —
    *  "문서를 고친다" 같은 Task 에 빌드를 거는 것은 틀린 판정이므로 검증 없음이 기본이다. */
   validateConfigId?: string
+  /** 순서대로 도는 check 들 — 각각 RunConfig id 다. **validateConfigId 는 이 칸이 생기기 전의 Task 를
+   *  읽을 때만 쓴다**(convergence.ts 의 checkConfigIdsOf 가 둘을 합친다); 새 Task 는 이 칸에 쓴다 */
+  validateConfigIds?: string[]
+  /** 마지막 검증 라운드의 check 별 결과. 라운드마다 덮어쓴다 — 이력은 Journal 과 status 메시지에 */
+  checks?: CheckResult[]
+  /** configId → 라운드별 판정. unstable 판정의 근거(convergence.ts 의 unstableChecks) */
+  checkHistory?: Record<string, ('passed' | 'failed')[]>
+  /** 마지막 검토의 이슈 전부, blocking 여부 포함 */
+  reviewIssues?: ReviewIssue[]
+  /** 사람이 이 Task 의 자동 수정을 멈췼다(task-update --convergence off). 도는 repair 는 끝까지 가고 그
+   *  판정은 Gate 다(설계 §5.1) */
+  convergenceOff?: true
+  /** 이 attempt 가 check 의 동작을 바꾸는 파일을 건드렸다(설계 §8.3). 실패 사유가 아니라 표시다 */
+  suspiciousFiles?: string[]
   /** 이 Task 를 **다른 provider** 가 읽어 "요구가 충족됐는가"를 판정할지. task-create --review 가
    *  켠다. 검증(validateConfigId)과 독립이고, 둘 다 걸리면 검증이 먼저다 — 컴파일도 안 되는 코드를
    *  읽으라고 에이전트 세션을 태우는 것은 낭비다. */
@@ -250,6 +325,9 @@ export interface Dispatch {
   /** 이 Dispatch 가 구현이 아니라 검토인가. 한 Task 에 구현 Dispatch 와 검토 Dispatch 가 함께
    *  붙으므로, worker_done 이 도착했을 때 어느 쪽인지 아는 유일한 방법이다. */
   review?: boolean
+  /** 이 Dispatch 가 구현이 아니라 수리인가, 그리고 왜. review 와 배타적이다. 직전 시도는 retryOf 가
+   *  가리킨다 — attempt = Dispatch 라는 기존 모델 그대로다(설계 D4) */
+  repair?: RepairReason
 }
 
 export interface Message {
@@ -286,6 +364,7 @@ export interface Gate {
   taskId: string
   question: string
   options?: string[]
+  kind?: GateKind
   status: 'open' | 'resolved'
   resolution?: string
   createdAt: string
@@ -322,11 +401,14 @@ const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
   // 사람의 것이므로 Gate 를 연다. validating -> dispatched 는 없다 — 검증 결과가 도착할 자리가
   // 사라지기 때문이다.
   // validating -> reviewing: 검증이 통과했고 검토가 걸려 있다. 순서는 검증 -> 검토다.
-  validating: ['completed', 'failed', 'blocked', 'reviewing'],
+  // validating -> dispatched, reviewing -> dispatched: 판정이 **도착한 뒤** 앱이 repair Dispatch 를 여는
+  // 전이다(설계 §5). 예전 주석은 이 둘을 "결과가 도착할 자리가 사라진다"고 금지했는데, 그것은 검증이
+  // 도는 중의 이야기다 — 판정이 끝난 뒤에는 성립하지 않는다. 진입은 state.ts 의 openRepairDispatch 만이다.
+  validating: ['completed', 'failed', 'blocked', 'reviewing', 'dispatched'],
   // reviewing -> blocked 는 검토를 아예 돌릴 수 없을 때다(쓸 수 있는 다른 provider 계정이 없다,
   // 검토자가 보고 없이 죽었다). 그 판단은 사람의 것이므로 Gate 를 연다. reviewing -> dispatched 는
   // 없다 — 검토 결과가 도착할 자리가 사라진다(validating 과 같은 이유).
-  reviewing: ['completed', 'failed', 'blocked'],
+  reviewing: ['completed', 'failed', 'blocked', 'dispatched'],
   completed: [],
   // failed -> blocked is allowed: failed is by definition a state with no open dispatch
   // (applyWorkerDone sets outcome and endedAt together) — so there is no reason to block the flow

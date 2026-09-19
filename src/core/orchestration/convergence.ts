@@ -1,0 +1,95 @@
+// 완료 수렴의 순수 판별들. state.ts 의 판정 함수와 main 의 배선이 함께 쓴다 — 규칙을 한 곳에 두어
+// "몇 번째 repair 인가" 를 두 곳에서 다르게 세는 일이 없게 한다. 저장하지 않고 센다: Dispatch 가
+// durable 하므로 카운트도 durable 하다(명세 §55-5).
+import type { OrchState } from './state'
+import {
+  FAILURE_LIMIT,
+  HISTORY_MAX,
+  MAX_REVIEW_ROUNDS,
+  type CheckResult,
+  type Dispatch,
+  type ReviewSeverity,
+  type Task
+} from './types'
+
+export interface ResolvedPolicy {
+  maxFixAttempts: number
+  maxReviewRounds: number
+  blockingSeverity: 'high' | 'medium'
+}
+
+/** 옛 Task 의 validateConfigId 까지 합친 check 목록. 없으면 빈 배열 */
+export function checkConfigIdsOf(task: Pick<Task, 'validateConfigIds' | 'validateConfigId'>): string[] {
+  if (task.validateConfigIds?.length) return task.validateConfigIds
+  return task.validateConfigId ? [task.validateConfigId] : []
+}
+
+/** 이 Task 의 Run 에 걸린 정책, 기본값을 채워서. Run 에 없으면 null — null 이면 지금 동작이다.
+ *  **Task.convergenceOff 는 여기서 보지 않는다**: 그것은 "정책이 없다" 가 아니라 "사람이 멈췼다" 이고,
+ *  판정 함수가 따로 읽어 Gate 로 보낸다(설계 §5.1). */
+export function policyOf(s: OrchState, task: Pick<Task, 'runId'>): ResolvedPolicy | null {
+  const run = s.runs.find((r) => r.id === task.runId)
+  if (!run?.convergence) return null
+  return {
+    maxFixAttempts: run.convergence.maxFixAttempts ?? FAILURE_LIMIT,
+    maxReviewRounds: run.convergence.maxReviewRounds ?? MAX_REVIEW_ROUNDS,
+    blockingSeverity: run.convergence.blockingSeverity ?? 'high'
+  }
+}
+
+/** 지금까지 연 repair 수 */
+export const repairCountOf = (s: OrchState, taskId: string): number =>
+  s.dispatches.filter((d) => d.taskId === taskId && d.repair !== undefined).length
+
+/** 보고를 낸(outcome 있는) 검토 Dispatch 수. 유실된 검토는 라운드를 먹지 않는다 */
+export const reviewRoundOf = (s: OrchState, taskId: string): number =>
+  s.dispatches.filter((d) => d.taskId === taskId && d.review === true && d.outcome !== undefined).length
+
+/** 검토가 아닌 것 중 가장 늦게 시작한 Dispatch — repair 가 이어받을 세션과 retryOf 의 출처 */
+export const latestImplDispatch = (s: OrchState, taskId: string): Dispatch | undefined =>
+  s.dispatches
+    .filter((d) => d.taskId === taskId && !d.review)
+    .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+    .at(-1)
+
+const RANK: Record<ReviewSeverity, number> = { info: 0, low: 1, medium: 2, high: 3, critical: 4 }
+
+export const isBlocking = (severity: ReviewSeverity, policy: ResolvedPolicy): boolean =>
+  RANK[severity] >= RANK[policy.blockingSeverity]
+
+/** 라운드 결과를 이력에 붙인다. passed·failed 만 판정이다 — not-run 과 timed-out 은 그 check 에 대해
+ *  아무것도 말하지 않는다. 길이는 HISTORY_MAX 를 넘지 않는다. */
+export function appendHistory(
+  history: Record<string, ('passed' | 'failed')[]> | undefined,
+  results: CheckResult[]
+): Record<string, ('passed' | 'failed')[]> {
+  const next: Record<string, ('passed' | 'failed')[]> = { ...(history ?? {}) }
+  for (const r of results) {
+    if (r.status !== 'passed' && r.status !== 'failed') continue
+    next[r.configId] = [...(next[r.configId] ?? []), r.status].slice(-HISTORY_MAX)
+  }
+  return next
+}
+
+/** fail→pass→fail 또는 pass→fail→pass 가 한 번이라도 보이는 check 들(명세 §18). 자동으로 무시하지 않는다 */
+export function unstableChecks(history: Record<string, ('passed' | 'failed')[]>): string[] {
+  return Object.entries(history)
+    .filter(([, h]) => h.some((v, i) => i >= 2 && h[i - 2] === v && h[i - 1] !== v))
+    .map(([id]) => id)
+}
+
+/** check 의 동작을 바꿀 수 있는 파일들(명세 §38). 실패 사유가 아니라 리뷰어와 화면에 보내는 표시다 */
+const SUSPICIOUS: RegExp[] = [
+  /(^|\/)package\.json$/,
+  /(^|\/)vitest\.config\.[cm]?[jt]s$/,
+  /(^|\/)jest\.config\.[cm]?[jt]s$/,
+  /(^|\/)tsconfig[^/]*\.json$/,
+  /(^|\/)\.?eslint[^/]*$/,
+  /(^|\/)biome\.json$/,
+  /(^|\/)\.github\/workflows\//
+]
+export const suspiciousCheckFiles = (paths: string[]): string[] =>
+  paths.filter((p) => {
+    const posix = p.replace(/\\/g, '/')
+    return SUSPICIOUS.some((re) => re.test(posix))
+  })
