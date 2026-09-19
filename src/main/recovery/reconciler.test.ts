@@ -302,6 +302,20 @@ describe('reconciler — repair Dispatch 는 앱의 것', () => {
     expect(seen[0]).toMatchObject({ appDriven: false })
     expect(seen[0].repair).toBeUndefined()
   })
+
+  // 이 셀이 넓힌 범위 전체의 경계다 — repair 만으로는 부족하다, convergence Run 이어야 한다.
+  // autoDispatch 도 convergence 도 없는 Run 의 repair Dispatch 는 여전히 코디네이터의 dispatch
+  // 권한 아래에 있다.
+  it('repair Dispatch 라도 convergence 도 autoDispatch 도 없는 Run 이면 appDriven 은 false 다', async () => {
+    const current = state({
+      runs: [run({ autoDispatch: undefined })],
+      tasks: [task()],
+      dispatches: [dispatch({ repair: 'check-failure' })]
+    })
+    const { r, seen } = harnessWith(current)
+    await r.reconcileAll()
+    expect(seen[0]).toMatchObject({ appDriven: false, repair: 'check-failure' })
+  })
 })
 
 describe('the seam with the real store', () => {

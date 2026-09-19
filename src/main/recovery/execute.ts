@@ -11,6 +11,7 @@ import { isSamePath } from '../../core/files/tree'
 import { t, type Lang } from '../../core/i18n'
 import type { LostAttempt, RecoveryDecision } from '../../core/recovery/types'
 import type { Provider } from '../../core/providers/meta'
+import type { KnowledgeFiles } from '../../core/knowledge/detect'
 import { buildSpecFile } from '../orchestration/coordinator'
 
 export type ExecuteResult = { ok: true; newDispatchId?: string } | { ok: false; error: string }
@@ -39,6 +40,12 @@ export interface ExecuteDeps {
   startValidation?(a: { taskId: string; cwd: string }): void
   /** Not injected = the smart-resume briefing is built with `git: null` (buildCheckpoint accepts that). */
   readGitSummary?(cwd: string): Promise<GitSummary | null>
+  /** Same shape as `RepairDeps.knowledge` (main/orchestration/repair.ts) — a repair's rebuilt spec
+   *  file (below) carries a project-knowledge section exactly as the original repair and a plain
+   *  redispatch do. Not injected = the rebuilt spec has no knowledge section, exactly as
+   *  `buildSpecFile` behaves when `knowledge` is omitted — the same degrade-safe shape
+   *  `readGitSummary` above already uses. */
+  knowledge?(cwd: string): Promise<KnowledgeFiles | undefined>
   /** The app's language, read per Gate rather than captured, so a language change reaches the next
    *  question. Required, not optional: a Gate nobody can read is worse than no Gate. */
   lang(): Lang
@@ -124,25 +131,36 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
         : undefined
 
   // repair 는 spec 파일을 통째로 새로 쓴다 — 대화를 잃은 워커라도 무엇이 실패했는지 다시 읽어야
-  // 하기 때문이다(main/orchestration/repair.ts 의 repairSpec 과 같은 조립). repairCountOf·policyOf
-  // 는 방금 커밋한 새 Dispatch(위 openDispatch)를 포함한 최신 state 로 센다 — repairSpec 이 하는
-  // 것과 같다.
-  const specFileContent = attempt.repair
-    ? buildSpecFile({
-        title: task.title,
-        spec: task.spec,
-        taskId: task.id,
-        dispatchId,
-        committing: !isSamePath(attempt.cwd, run.cwd),
-        repair: {
-          reason: attempt.repair,
-          repair: repairCountOf(deps.getState(), task.id),
-          maxFixAttempts: policyOf(deps.getState(), task)?.maxFixAttempts ?? FAILURE_LIMIT,
-          checks: task.checks,
-          issues: task.reviewIssues
-        }
-      })
-    : undefined
+  // 하기 때문이다(main/orchestration/repair.ts 의 repairSpec 과 같은 조립, 설계 §10). repairCountOf·
+  // policyOf 는 방금 커밋한 새 Dispatch(위 openDispatch)를 포함한 최신 state 로 센다 — repairSpec 이
+  // 하는 것과 같다.
+  let specFileContent: string | undefined
+  if (attempt.repair) {
+    const repairs = repairCountOf(deps.getState(), task.id)
+    const maxFixAttempts = policyOf(deps.getState(), task)?.maxFixAttempts ?? FAILURE_LIMIT
+    // repair.ts 의 performRepair 와 같은 안전망 — 지식 스캔 하나가 실패한다고 repair 자체를 막을 이유는
+    // 아니다. 주입되지 않았으면(knowledge 미주입) buildSpecFile 이 지식 없는 저장소와 똑같이 다룬다.
+    const knowledge = deps.knowledge ? await deps.knowledge(attempt.cwd).catch(() => undefined) : undefined
+    specFileContent = buildSpecFile({
+      title: task.title,
+      spec: task.spec,
+      taskId: task.id,
+      dispatchId,
+      committing: !isSamePath(attempt.cwd, run.cwd),
+      knowledge,
+      repair: {
+        reason: attempt.repair,
+        repair: repairs,
+        maxFixAttempts,
+        checks: task.checks,
+        issues: task.reviewIssues,
+        // repairs 가 maxFixAttempts 를 넘는 것은 retry-once(main/orchestration/repair.ts 의 repairOnce)
+        // 가 소진 Gate 를 예산 밖에 열었을 때뿐이다 — repairSpec 과 같은 판정으로 그 사실을 spec
+        // 문구에 넘긴다("repair 4 of 3" 대신 "예산이 다 쓰인 뒤 허락됐다").
+        ...(repairs > maxFixAttempts ? { extra: true } : {})
+      }
+    })
+  }
 
   let started: { sessionId: string; cwd: string; specPath: string }
   try {

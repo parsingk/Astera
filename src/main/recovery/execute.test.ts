@@ -70,6 +70,82 @@ describe('executeRecovery', () => {
     const spec = (h.started[0] as { specFileContent: string }).specFileContent
     expect(spec).toContain('## Repair request')
     expect(spec).toContain('"Tests" — exit 1')
+    // knowledge 의존이 주입되지 않았으면 buildSpecFile 이 지식 없는 저장소와 똑같이 다룬다 — 절 자체가
+    // 붙지 않는다.
+    expect(spec).not.toContain('## Project knowledge')
+  })
+
+  it('repair attempt 의 resume-native 도 repair 표시를 잇고 repair spec 을 넘긴다', async () => {
+    const h = deps({}, task({ checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] }))
+    await executeRecovery(
+      {
+        attempt: attempt({ repair: 'check-failure', nativeSessionId: 'native-uuid' }),
+        decision: decision({ strategy: 'resume-native' }),
+        state: h.state,
+        now: NOW
+      },
+      h.d as never
+    )
+    expect(h.started[0]).toMatchObject({ resume: { nativeSessionId: 'native-uuid' } })
+    const spec = (h.started[0] as { specFileContent: string }).specFileContent
+    expect(spec).toContain('## Repair request')
+    expect(spec).toContain('"Tests" — exit 1')
+  })
+
+  // repair 절과 Smart Resume 의 이어받기 briefing 은 서로 다른 자리에 실린다(하나가 다른 하나를
+  // 지우지 않는다) — repair 절은 specFileContent 안에, briefing 은 startWorker 의 resume.briefing
+  // 으로 따로 건너간다(coordinator.ts 가 spec 파일 뒤에 붙인다).
+  it('repair attempt 의 smart-resume 은 repair spec 과 이어받기 briefing 을 함께 넘긴다', async () => {
+    const h = deps(
+      { readGitSummary: async () => ({ branch: 'main', head: 'aaa', changed: ['a.ts'], diffstat: null }) },
+      task({ checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] })
+    )
+    await executeRecovery(
+      { attempt: attempt({ repair: 'check-failure' }), decision: decision({ strategy: 'smart-resume' }), state: h.state, now: NOW },
+      h.d as never
+    )
+    const started = h.started[0] as { specFileContent: string; resume: { briefing: string } }
+    expect(started.specFileContent).toContain('## Repair request')
+    expect(started.specFileContent).toContain('"Tests" — exit 1')
+    expect(started.resume.briefing).toContain('do the thing') // the Task spec is in the checkpoint
+    expect(started.resume.briefing.length).toBeGreaterThan(0)
+  })
+
+  // repairSpec(main/orchestration/repair.ts)이 하는 것과 같다 — repairCountOf 가 maxFixAttempts 를
+  // 넘는 것은 retry-once 가 소진 Gate 를 예산 밖에 열었을 때뿐이고, 그 사실을 spec 문구에 넘겨야
+  // "repair 4 of 3" 같은, 예산보다 큰 번호가 나가지 않는다.
+  it('예산을 넘겨 연 repair 는 spec 에 extra 문구를 싣는다', async () => {
+    const t = task({ checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] })
+    const h = deps({}, t)
+    const extra = (n: number): Dispatch =>
+      lost({ id: `dsp_extra_${n}`, sessionId: `sess-extra-${n}`, repair: 'check-failure' })
+    await h.d.setState({ ...h.state, dispatches: [...h.state.dispatches, extra(1), extra(2), extra(3)] })
+    const r = await executeRecovery(
+      { attempt: attempt({ repair: 'check-failure' }), decision: decision(), state: h.state, now: NOW },
+      h.d as never
+    )
+    expect(r.ok).toBe(true)
+    const spec = (h.started[0] as { specFileContent: string }).specFileContent
+    expect(spec).toContain('This is an extra repair, granted by a person after the budget of 3 was already spent.')
+    expect(spec).not.toContain('repair 4 of 3')
+  })
+
+  // Important 2 — 재조립된 repair spec 도 원래 repair·평범한 redispatch 와 똑같이 지식 절을 실어야
+  // 한다(main/orchestration/repair.ts 의 repairSpec, main/orchestration/coordinator.ts 의
+  // startWorker 기본 경로). specFileContent 를 통째로 넘기면 코디네이터 자신의 스캔을 건너뛰므로,
+  // 여기서 주입된 knowledge 의존으로 대신 실어야 한다.
+  it('knowledge 의존이 있으면 재조립된 repair spec 에도 지식 절이 실린다', async () => {
+    const h = deps(
+      { knowledge: async () => ({ paths: ['knowledge/README.md'], more: 0 }) },
+      task({ checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] })
+    )
+    await executeRecovery(
+      { attempt: attempt({ repair: 'check-failure' }), decision: decision(), state: h.state, now: NOW },
+      h.d as never
+    )
+    const spec = (h.started[0] as { specFileContent: string }).specFileContent
+    expect(spec).toContain('## Project knowledge')
+    expect(spec).toContain('knowledge/README.md')
   })
 
   it('passes the native session id through on a resume', async () => {

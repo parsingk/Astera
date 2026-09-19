@@ -431,13 +431,22 @@ in use`로 막힌다. 바꾸는 것:
 repair Dispatch는 평범한 Dispatch이므로 `candidates`·`decideRecovery`·`executeRecovery`가 그대로
 적용된다. 손대는 곳:
 
-- `LostAttempt.appDriven = run.autoDispatch === true || (run.convergence !== undefined && dispatch.repair !== undefined)`.
-  repair에 대해서는 앱이 dispatch 권한을 갖는다 — `redispatch`·`smart-resume`가 열린다. 코디네이터 Run의
-  첫 구현 attempt는 지금처럼 review Gate다.
+- `LostAttempt.appDriven = run.autoDispatch === true || (policyOf(state, task) !== null && dispatch.repair !== undefined)`.
+  `run.convergence !== undefined`가 아니라 `policyOf`로 본다 — 손으로 고친 `"convergence": null`은
+  `!== undefined`로는 정책이 있다고 잘못 읽히지만 `policyOf`는 falsy한 `convergence`를 그대로 "정책 없음"
+  으로 읽는다(파일 전체가 손으로 고쳐질 수 있다는 이 설계 다른 곳의 전제와 같다). repair에 대해서는 앱이
+  dispatch 권한을 갖는다 — `redispatch`·`smart-resume`가 열린다. 코디네이터 Run의 첫 구현 attempt는
+  지금처럼 review Gate다.
 - `LostAttempt.hasValidateConfig = checkConfigIdsOf(task).length > 0`.
 - `executeRecovery`의 `startWorker`가 `retryOf`와 함께 `repair` 표시를 이어받는다(유실된 repair의 재시도도
-  repair다). fix 요청은 `retryOf` Dispatch의 spec 파일에 이미 있으므로 다시 만들지 않고 그 파일을 쓴다 —
-  `resume-native`는 그 대화가 이어지고, `smart-resume`의 briefing은 그 spec 뒤에 붙는다.
+  repair다). **fix 요청은 옛 spec 파일을 재사용하지 않고 다시 조립한다.** 처음 이 설계는 `retryOf` Dispatch의
+  파일을 그대로 쓰자고 했는데 그것은 틀렸다 — 그 파일의 Reporting obligation은 유실된(이제는 닫힌)
+  dispatchId를 그대로 부르고, 닫힌 Dispatch를 향한 보고는 `astera send`가 거절하므로, 그 파일을 받은 워커는
+  끝내 보고할 방법이 없다. 새 Dispatch를 열었으니 새 dispatchId를 부르는 새 spec 파일이 필요하고,
+  `repairSpec`(`main/orchestration/repair.ts`)과 같은 재료로 다시 조립한다: `task.checks`·`task.reviewIssues`를
+  옮기고, `repairCountOf`·`policyOf`로 라운드와 상한을 다시 세어 예산을 넘겼으면(retry-once로 예산 밖에 연
+  repair가 유실된 경우) `extra: true`를 싣고, 지식 파일도 다시 스캔해 붙인다. `resume-native`는 그 대화가
+  이어지고, `smart-resume`의 briefing은 그 새 spec 뒤에 붙는다.
 - same-session 쓰기 경로도 `onPromptWrite`로 `PROMPT_WRITE_REQUESTED/CONFIRMED`를 남긴다(`via:
   'terminal'`). "repair Dispatch를 열었는데 프롬프트를 쓰기 전에 죽었다"가 결정표의 "the prompt never
   left the app → redispatch(safe)" 행에 걸린다.
