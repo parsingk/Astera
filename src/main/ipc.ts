@@ -120,8 +120,9 @@ import {
   workingInRunRoot,
   worktreeDepsOf
 } from '../core/orchestration/integrate'
-import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
-import { checkConfigIdsOf } from '../core/orchestration/convergence'
+import { DEFAULT_CONCURRENCY, type Dispatch } from '../core/orchestration/types'
+import { checkConfigIdsOf, latestImplDispatch, suspiciousCheckFiles } from '../core/orchestration/convergence'
+import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './orchestration/repair'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject, outcomeOf } from '../core/orchestration/view'
 import { justFinished } from '../core/orchestration/runRecord'
@@ -2444,6 +2445,13 @@ export function registerIpc(
       }
     })
 
+    // performRepair/repairOnce(repair.ts)가 받는 의존 묶음. 판정이 검증에서 왔든(onSettled, 아래)
+    // 검토에서 왔든(서버의 startRepair·repairOnce, 아래 deps 정의부) 같은 것을 쓴다 — repair 의
+    // 부수 효과는 판정의 출처에 상관없이 한 규칙이어야 한다. **선언과 대입이 갈린다**: 서버
+    // deps.startWorker(코디네이터를 직접 부르지 않는 이 앱의 래퍼)가 있어야 채울 수 있는데, 그
+    // deps 는 이 validator 뒤에 정의되기 때문이다. onSettled 는 이것을 클로저로만 참조하고 지금
+    // 당장 읽지 않으므로, deps 정의가 끝난 뒤 대입해도 안전하다(그 자리의 주석 참고).
+    let repairDeps: RepairDeps
     // 검증 실행. runner 는 prepareRun + RunManager 이고, 결과는 서버의 setState 로 되돌아간다.
     // dispatchOf 로 cwd 에서 Task 를 되찾지 않는 이유: TaskValidator 가 taskId 를 들고 있다.
     const validator = new TaskValidator({
@@ -2482,17 +2490,28 @@ export function registerIpc(
           return { runId: started.runId, name: config.name }
         },
         output: (runId) => core.run.recentOutput(runId).slice(-4000),
-        // TODO(Task 10): wire this to core.run.stop so a timed-out check's PTY actually stops — left as
-        // a no-op here because the proper wiring also has to fold in run.stop's existing markStopped
-        // routing (RunStatus.validation) without double-marking. Until then a real timeout logs and
-        // moves the queue on, but the PTY it gave up on keeps running to completion in the background.
-        stop: () => {}
+        // 타임아웃이 이 PTY 를 두 번째로 멈춘다(validator.ts 의 startCheck 타이머). **core.run.stop 을
+        // 직접 부른다 — `ipcMain.handle('run.stop', ...)` 을 거치지 않는다.** 그 핸들러는 사용자가
+        // 화면에서 직접 멈춘 검증 실행에 `orchValidator.markStopped` 까지 얹어 "실패가 아니라 증명
+        // 못 함"으로 읽는다(그 핸들러의 주석). 이 stop 은 이미 validator.ts 자신이 head.timedOut 으로
+        // 표시해 두었으므로, 여기서 markStopped 까지 걸면 한 exit 에 stopped 와 timedOut 이 겹치고
+        // onRunExit 은 stopped 를 먼저 보므로(그 순서의 주석) 이 exit 가 "사용자가 정지했다"로 읽혀
+        // timeout 의 재시도·기록이 사라진다. core.run.stop 을 바로 부르면 PTY 만 죽고 그 겹침이 없다.
+        stop: (runId) => core.run.stop(runId)
       },
       onSettled: async ({ taskId, results }) => {
+        const before = store.get()
+        // 판정 직전에 repair 대상을 정한다(설계 §6.2) — 순수 층(state.ts)은 세션이 살아 있는지 모른다.
+        // 서버가 검토 판정에서 하는 것과 같은 판정이다(아래 deps.repairTargetFor).
+        const repair = repairTargetFor(before, taskId, (id) =>
+          core.sessions.list().some((s) => s.id === id && s.status === 'running')
+        )
         const r = applyValidationResult(
-          store.get(),
-          // 서버가 applyWorkerDone 에 넘기는 것과 같은 값이다 — 이 배선에는 startReview 가 있다.
-          { taskId, results, canReview: true },
+          before,
+          // 서버가 applyWorkerDone 에 넘기는 것과 같은 값들이다 — 이 배선에는 startReview 가 있다.
+          // repair 는 convergence Run 에서 필수다(없으면 순수 층이 거절한다); lang 은 Gate 문구의
+          // 언어다.
+          { taskId, results, canReview: true, ...(repair ? { repair } : {}), lang: core.lang },
           new Date().toISOString()
         )
         if (!r.ok) {
@@ -2508,6 +2527,18 @@ export function registerIpc(
         if (r.value.status === 'reviewing')
           void startReview({ taskId }).catch((e) =>
             orchLog(`startReview failed task=${taskId}: ${String(e)}`)
+          )
+        // 판정이 repair Dispatch 를 새로 열었으면(routeFailure) 그 부수 효과(spec 파일을 쓰고 살아
+        // 있는 세션에 넣거나 새 워커를 띄운다)를 시작한다 — **커밋(위 setState) 뒤에만** 부른다.
+        // 방금 커밋한 r.state 에서 찾는다: openRepairDispatch 가 채우는 specPath 는 '' 이므로
+        // !d.specPath 는 그것도 "아직 시작되지 않았다"로 읽는다(performRepair 의 liveRepairDispatch
+        // 와 같은 조건).
+        const opened = r.state.dispatches.find(
+          (d) => d.taskId === taskId && d.repair !== undefined && !d.endedAt && !d.specPath
+        )
+        if (opened)
+          void performRepair(repairDeps, { dispatchId: opened.id }).catch((e) =>
+            orchLog(`repair failed task=${taskId}: ${String(e)}`)
           )
       },
       onCannotRun: async ({ taskId, reason }) => {
@@ -2624,19 +2655,27 @@ export function registerIpc(
           dispatchId: opened.value.id,
           implReport: task.result,
           filesModified: task.filesModified,
-          validated: !!task.validateConfigId,
+          // checkConfigIdsOf 는 옛 validateConfigId 와 새 validateConfigIds 를 함께 읽는다 — 이 칸만
+          // 보면 새 필드만 쓰는 Task 는 "검증 없음"으로 잘못 읽힌다.
+          validated: checkConfigIdsOf(task).length > 0,
           // 구현자와 **같은 목록**을 받는다 — 검토자의 일이 "닫힌 결정이 다시 열렸는지"를 잡는 것인데
           // 그 목록을 안 주면 그 자리가 빈다. 훑는 뿌리도 같다: 검토자는 구현자가 일한 트리에서
           // 돈다(바로 아래 worktree 'current' + runCwd = 그 cwd).
           knowledge: await knowledgeIn(cwd, orchLog),
-          // checks·previousIssues·suspiciousFiles 는 나중 태스크(수렴 배선)의 몫이다 — 지금은
-          // 트리가 계속 컴파일되도록 resultPath 만 채운다. review.ts·state.ts 가 이미 기대하는
-          // 이름과 같은 규칙이다 — 이 Dispatch 의 spec 파일 이름(coordinator.ts 의 specFileName,
-          // startWorker 가 실제로 쓰는 그 이름)에 `.review.json` 을 붙인 것. **리터럴을 다시 적지
-          // 않는다** — 여기서 조립하는 시점에는 코디네이터가 아직 돌지 않아 진짜 specPath 를 모르므로
-          // 같은 함수로 미리 계산해야 하고, 독립된 리터럴은 오늘은 우연히 같아도 한쪽만 바뀌는 날
-          // 조용히 갈라진다(검토자는 아무도 읽지 않는 파일에 쓰고, server.ts 는 그 파일을 찾지
-          // 못한다 — malformed 도 "이슈 없음" 도 아니다).
+          // 이 Task 가 이미 들고 있는 값을 그대로 옮긴다(설계 §8.1·§8.3) — checks 는 마지막 검증
+          // 라운드의 check 별 결과, previousIssues 는 직전 검토 라운드의 이슈(buildReviewSpecFile
+          // 이 그중 blocking 만 추린다), suspiciousFiles 는 startValidation 이 검증을 큐에 넣을 때
+          // best-effort 로 채워 둔 것이다.
+          checks: task.checks,
+          previousIssues: task.reviewIssues,
+          suspiciousFiles: task.suspiciousFiles,
+          // review.ts·state.ts 가 이미 기대하는 이름과 같은 규칙이다 — 이 Dispatch 의 spec 파일
+          // 이름(coordinator.ts 의 specFileName, startWorker 가 실제로 쓰는 그 이름)에
+          // `.review.json` 을 붙인 것. **리터럴을 다시 적지 않는다** — 여기서 조립하는 시점에는
+          // 코디네이터가 아직 돌지 않아 진짜 specPath 를 모르므로 같은 함수로 미리 계산해야 하고,
+          // 독립된 리터럴은 오늘은 우연히 같아도 한쪽만 바뀌는 날 조용히 갈라진다(검토자는 아무도
+          // 읽지 않는 파일에 쓰고, server.ts 는 그 파일을 찾지 못한다 — malformed 도 "이슈 없음"도
+          // 아니다).
           resultPath: path.join(specsDir, `${specFileName(taskId, opened.value.id)}.review.json`)
         })
         let started: { sessionId: string; cwd: string; specPath: string }
@@ -3534,6 +3573,24 @@ export function registerIpc(
     // last task lands. Local to this boot: a restart has no previous state either, the same rule a
     // fresh app start needs (see the null fallback in setState below).
     let prevOrchState: OrchState | null = null
+
+    /** startValidation(아래)이 검증을 큐에 넣기 전에 부르는 최선노력 계산(설계 §8.3) — 이 시도가
+     *  check 의 동작을 바꾸는 파일을 건드렸는지. **기준점이 있을 때만 git 을 묻는다**: 정지 스냅숏의
+     *  headCommit(Dispatch.stopSnapshot — 롤이 있었을 때만 채워진다) 또는 continuity journal 의 첫
+     *  체크포인트 head(재시작을 넘긴 attempt). 둘 다 없는 보통의 시도에서는 git 을 부르지 않고 Task
+     *  가 이미 보고한 filesModified 로 물러난다 — 이 계산의 실패가 검증 자체를 막아서는 안 되므로
+     *  (호출부의 주석), git 이 실패해도 같은 자리로 물러난다.
+     *
+     *  **Task 의 filesModified 를 쓴다, Dispatch 의 것이 아니다** — Dispatch 에는 그런 칸이 없다. */
+    const changedFilesSince = async (impl: Dispatch, cwd: string): Promise<string[]> => {
+      const head = impl.stopSnapshot?.headCommit ?? continuityJournal?.firstCheckpointFor(impl.id)?.gitHead ?? null
+      if (head) {
+        const r = await git(['diff', '--name-only', head, 'HEAD'], { cwd })
+        if (r.ok) return r.stdout.split('\n').map((line) => line.trim()).filter(Boolean)
+      }
+      return store.get().tasks.find((t) => t.id === impl.taskId)?.filesModified ?? []
+    }
+
     const deps: OrchServerDeps = {
       getState: () => store.get(),
       // Passed in a form that is definitely awaited — the caller's await contract stays. save() itself
@@ -3938,11 +3995,24 @@ export function registerIpc(
         return configs.map((c) => ({ id: c.id, name: c.name, type: c.type }))
       },
       // checkConfigIdsOf 는 옛 validateConfigId 와 새 validateConfigIds 를 함께 읽으므로, 지금
-      // 존재할 수 있는 모든 Task 에 대해 이것으로 충분하다 — Task 10 이 남길 일은 stop 의
-      // core.run.stop 배선과 언어뿐이다.
+      // 존재할 수 있는 모든 Task 에 대해 이것으로 충분하다.
       startValidation: ({ taskId, cwd }) => {
         const task = store.get().tasks.find((t) => t.id === taskId)
         validator.enqueue({ taskId, cwd, configIds: task ? checkConfigIdsOf(task) : [] })
+        // 의심 파일(설계 §8.3) — 검증을 늦추지 않도록 큐에 넣은 뒤 옆에서 계산한다. 구현 Dispatch 가
+        // 없거나 의심 파일이 없으면 아무것도 쓰지 않는다(빈 배열을 Task 에 남기지 않는다). 실패해도
+        // 검증 자체는 이미 큐에 들어가 그대로 돈다 — 그래서 종단 .catch 는 로그만 남긴다.
+        void (async () => {
+          const impl = latestImplDispatch(store.get(), taskId)
+          if (!impl) return
+          const suspicious = suspiciousCheckFiles(await changedFilesSince(impl, cwd))
+          if (suspicious.length === 0) return
+          const st = store.get()
+          await deps.setState({
+            ...st,
+            tasks: st.tasks.map((t) => (t.id === taskId ? { ...t, suspiciousFiles: suspicious } : t))
+          })
+        })().catch((e) => orchLog(`suspicious files task=${taskId}: ${String(e)}`))
       },
       // 검토를 시작한다. 검증과 달리 **세션을 띄운다** — 그래서 provider·계정을 고르고, 검토
       // Dispatch 를 커밋하고, deps.startWorker 를 부르는 세 걸음이다. 동기 서명이므로
@@ -3958,6 +4028,44 @@ export function registerIpc(
           orchLog(`startReview failed task=${taskId}: ${String(e)}`)
         )
       },
+      // 검토 판정이 읽는 구조화된 결과(server.ts 의 send worker_done, 검토 분기). **완성된 경로를
+      // 받는다** — suffix(`.review.json`)를 붙이는 자리는 그 호출부 하나뿐이다(그쪽 주석). 여기서
+      // 또 붙이면 `….md.review.json.review.json` 을 찾다가 조용히 못 찾아 구조화된 판정 기능이
+      // 죽은 채로 아무 신호도 내지 않는다. 없으면 null(outcome 으로 해석); 읽기 실패는 던진다 —
+      // 서버가 그것을 잡아 'malformed' 로 다룬다(조용히 삼키면 "이슈 없음"이 되어 깨진 판정이
+      // 통과가 된다).
+      readReviewFile: async (specPath) => {
+        try {
+          return await fs.readFile(specPath, 'utf8')
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
+          throw e
+        }
+      },
+      // 판정 직전의 repair 대상(repair.ts) — 마지막 구현·수리 세션이 살아 있으면 그 세션, 아니면
+      // 새 워커(설계 D3). validator 의 onSettled 가 검증 판정에서 하는 것과 같은 판정을, 여기서는
+      // 검토 판정을 위해 서버가 부른다.
+      repairTargetFor: (taskId) =>
+        repairTargetFor(store.get(), taskId, (id) =>
+          core.sessions.list().some((s) => s.id === id && s.status === 'running')
+        ),
+      // 판정이 새로 연 repair Dispatch 의 부수 효과(repair.ts 의 performRepair). **커밋 뒤에만
+      // 부른다** — server.ts 가 그 순서를 지킨다(호출부의 주석). fire-and-forget 이다:
+      // OrchServerDeps.startRepair 는 void 를 돌려주고 호출자도 기다리지 않으므로, 종단 .catch 가
+      // 필요하다(startReview 와 같은 이유 — 붙이지 않으면 main 프로세스가 죽는다).
+      startRepair: ({ dispatchId }) =>
+        void performRepair(repairDeps, { dispatchId }).catch((e) =>
+          orchLog(`repair failed dispatch=${dispatchId}: ${String(e)}`)
+        ),
+      // 소진 Gate(kind: 'convergence-exhausted')의 retry-once 답(repair.ts 의 repairOnce). **그
+      // 함수 자신의 Promise 를 그대로 돌려준다 — void·catch 로 끊지 않는다.** gate-resolve
+      // (server.ts)가 이 반환을 기다려 "Dispatch 가 이미 커밋됐다"까지만 기다린다(그 호출부의
+      // 주석); 여기서 끊으면 그 await 가 곧바로 풀려 응답이 Dispatch 커밋보다 먼저 나가고, 그
+      // 창으로 worker-release·worker-start 가 same-session repair 가 노리는 세션에 슬쩍 들어올 수
+      // 있다. repairOnce 자신이 실패를 이미 로그하므로(그 함수의 주석) 여기서 또 잡을 것이 없다.
+      repairOnce: ({ taskId }) => repairOnce(repairDeps, { taskId }),
+      // Gate 문구의 언어. 배선이 앱 언어를 넘긴다 — 이 파일의 다른 모든 lang 자리와 같다.
+      lang: () => core.lang,
       log: orchLog,
       // Job Continuity P1: a worker Dispatch just closed without an outcome, so its Task is
       // stranded. Always injected — the wiring always sets this property — but a no-op whenever
@@ -3971,6 +4079,20 @@ export function registerIpc(
           deps.enabled() &&
           recovery.reconcileOne(a.dispatchId).catch((e) => orchLog(`recovery: reconcileOne failed: ${String(e)}`))
         )
+    }
+
+    // 위에서 선언한 repairDeps 를 이제 채운다 — deps.startWorker(방금 끝난 정의)가 있어야 한다.
+    // RepairDeps.startWorker 는 이 앱의 래퍼다(코디네이터를 직접 부르지 않는다 — 그 이유는
+    // RepairDeps 의 JSDoc, startReview 의 주석과 같다: 래퍼가 롤링 체인과 출력 tail 을 붙인다).
+    repairDeps = {
+      getState: () => store.get(),
+      setState: (n) => deps.setState(n),
+      startWorker: (a) => deps.startWorker(a),
+      isAlive: (id) => core.sessions.list().some((s) => s.id === id && s.status === 'running'),
+      knowledge: (cwd) => knowledgeIn(cwd, orchLog),
+      lang: () => core.lang,
+      log: orchLog,
+      now: () => new Date().toISOString()
     }
 
     // Job Continuity P1's reconciler needs the store and the deps above, both local to this closure —
@@ -4007,6 +4129,10 @@ export function registerIpc(
             startWorker: deps.startWorker,
             startValidation: deps.startValidation,
             readGitSummary,
+            // 크래시로 재시작된 repair 가 다시 조립하는 spec 파일도 원래 repair·평범한 재배치와 같은
+            // project-knowledge 절을 싣는다 — 이 seam 은 execute.ts 가 이미 갖고 있었고(Task 11),
+            // 주입은 이 배선의 몫이었다. repairDeps.knowledge 와 같은 값이다(repair.ts 와 같은 이유).
+            knowledge: (cwd) => knowledgeIn(cwd, orchLog),
             // Read at the moment the Gate is written, not captured here: the settings handler
             // reassigns core.lang, and a Gate opened after that should be in the new language.
             lang: () => core.lang,
@@ -4129,6 +4255,18 @@ export function registerIpc(
     // never report. Same guard, same reasoning as runScheduler's `if (!orch.deps.enabled()) return`.
     if (recovery && deps.enabled())
       void recovery.reconcileAll().catch((e) => orchLog(`recovery: boot sweep failed: ${String(e)}`))
+    // 완료 수렴 Run 이 재시작으로 멈춘 validating·reviewing Task(store.load 가 위에서 채운
+    // loaded.revalidate·loaded.rereview) — store.load 는 아무것도 시작하지 않고 목록만 돌려주는
+    // 계약이므로(store.ts), 시작은 deps 가 다 갖춰지고 orch 가 선 뒤인 여기다. 이미 Run
+    // 게이트(일시 중지·예약 템플릿·pendingStart)와 열린 Dispatch 로 store.load 에서 걸러져
+    // 왔으므로 여기서 다시 거르지 않는다. runScheduler·recovery.reconcileAll 과 같은 이유로
+    // deps.enabled() 로 가드한다 — 꺼져 있으면 서버가 모든 보고를 409 로 거절해 시작해도 끝을 볼
+    // 수 없다. 소비하지 않으면 이 Task 들은 아무것도 재실행하지 않은 채 조용히 멈춘다(store.ts 의
+    // 주석) — 그 창을 여기서 닫는다.
+    if (deps.enabled()) {
+      for (const r of loaded.revalidate) deps.startValidation?.({ taskId: r.taskId, cwd: r.cwd })
+      for (const taskId of loaded.rereview) deps.startReview?.({ taskId })
+    }
     // 예약 템플릿의 발화. **첫 바퀴는 무장만 한다**(firesDue) — 앱을 켤 때마다 한 회차가 도는
     // 것을 막는 장치가 그것이고, 그래서 여기서 즉시 한 번 부르지 않는다.
     /** 코디네이터 세션이 사라졌을 때 그 Run 의 관리자 칸을 비운다. **다시 띄우지는 않는다.**
