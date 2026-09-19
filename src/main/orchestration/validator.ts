@@ -82,8 +82,11 @@ export class TaskValidator {
   }
 
   enqueue(a: { taskId: string; cwd: string; configIds: string[] }): void {
+    // 중복 configId 를 지운다(첫 자리만 남긴다) — timedOutOnce 는 configId 로 키를 잡으므로, 같은
+    // id 가 두 번 있으면 둘째 자리의 *첫* timeout 이 이미 "두 번째"로 읽혀 곧장 onCannotRun 으로 간다.
+    const configIds = [...new Set(a.configIds)]
     const entry: Pending = {
-      taskId: a.taskId, cwd: a.cwd, configIds: a.configIds, index: 0, results: [],
+      taskId: a.taskId, cwd: a.cwd, configIds, index: 0, results: [],
       runId: null, name: null, startedAt: null, settling: false, stopped: false,
       timedOut: false, timedOutOnce: new Set(), timer: null
     }
@@ -137,13 +140,24 @@ export class TaskValidator {
     if (head.timedOut) {
       head.timedOut = false
       if (!head.timedOutOnce.has(configId)) {
-        // 첫 timeout: 같은 check 를 한 번 다시(명세 §19). 결과는 기록하지 않는다 — 이 라운드의 판정이 아니다
+        // 첫 timeout: 같은 check 를 한 번 다시(명세 §19). 결과는 기록하지 않는다 — 이 라운드의 판정이 아니다.
+        // runId·name 을 먼저 지운다 — settling 을 내리기 전에 지우지 않으면, startCheck 의
+        // await runner.start(...) 가 끝나기 전에(실제 배선에서는 파일시스템 I/O 다) 방금 끝난 run 의
+        // 중복 exit 가 도착했을 때 headFor 가 옛 runId 로 이 head 를 다시 찾아 settling=false 를
+        // 통과하고, timedOut 도 이미 꺼져 있으니 이 exit 를 코드 실패로 정산해 버린다 — timeout 이
+        // 명세가 금지하는 코드 실패로 워커에게 가는 경로다.
+        head.runId = null
+        head.name = null
         head.timedOutOnce.add(configId)
         head.settling = false
         this.deps.log?.(`check "${name}" timed out once task=${head.taskId} — retrying it`)
         void this.startCheck(cwd, head)
         return
       }
+      // 'timed-out' 은 여기서 기록되지만 onCannotRun 은 {taskId, reason} 만 나른다 — 이 결과와 그
+      // 앞에 이미 통과한 check 들의 결과는 지금 onCannotRun 을 처리하는 쪽(Gate)에는 닿지 않는다.
+      // CheckResult.status 의 주석이 말하는 "화면과 Journal" 은 아직 이 값을 읽는 자리가 없다 —
+      // Gate 가 열릴 때 head.results 를 함께 넘기는 자리가 생기면 그때 쓴다.
       head.results.push({ configId, name, status: 'timed-out', startedAt: head.startedAt ?? undefined, endedAt: now })
       void this.deps
         .onCannotRun({ taskId: head.taskId, reason: `check "${name}" timed out twice (${this.timeoutMs}ms each)` })
@@ -162,12 +176,22 @@ export class TaskValidator {
       startedAt: head.startedAt ?? undefined, endedAt: now
     })
     if (passed && head.index + 1 < head.configIds.length) {
+      // 같은 이유로 runId·name 을 먼저 지운다(위 첫 timeout 자리와 같은 창) — 지우지 않으면 다음
+      // check 의 시작이 끝나기 전에 이 check 의 중복 exit 가 도착했을 때 그것이 다음 check 의 결과로
+      // (틀린 configId·이름으로) 기록되고, 0 exit 면 index 가 다시 올라 그 다음 check 를 통째로
+      // 건너뛴다. advance 가 이 entry 를 큐에서 내보낸 뒤에도 늦게 끝나는 startCheck 가 runId·timer
+      // 를 그 entry 에 얹으면, 이미 다음 entry 가 돌기 시작한 그 cwd 에 PTY 가 하나 더 도는 것과
+      // 같다 — 이 클래스가 막으려는 바로 그 것.
+      head.runId = null
+      head.name = null
       head.index += 1
       head.settling = false
       void this.startCheck(cwd, head)
       return
     }
     if (!passed)
+      // RunConfig 를 다시 조회하지 않으므로 이름을 모른다 — configId 를 이름 대신 쓴다. 화면에는
+      // 아이디가 이름 대신 보인다는 뜻이고, 조회를 들이는 비용을 아직 치르지 않았다.
       for (const rest of head.configIds.slice(head.index + 1))
         head.results.push({ configId: rest, name: rest, status: 'not-run' })
     void this.deps
@@ -207,9 +231,14 @@ export class TaskValidator {
   private async startCheck(cwd: string, head: Pending): Promise<void> {
     const configId = head.configIds[head.index]
     if (configId === undefined) {
-      // 빈 목록 — 검증할 것이 없으면 통과다. 배선은 checkConfigIdsOf 가 비면 enqueue 하지 않으므로
-      // 방어적이다.
-      void this.deps.onSettled({ taskId: head.taskId, results: [] }).finally(() => this.advance(cwd, head))
+      // 빈 목록은 onSettled 로 보내지 않는다 — results: [] 는 위쪽에서 [].every(...) 로 통과로
+      // 읽혀 "검증할 것이 없다"가 "검증 통과"가 된다. 이것은 그 자체로 배선 결함이다: 배선은
+      // checkConfigIdsOf 가 비면 아예 enqueue 하지 않아야 하므로, 여기 닿았다는 것은 그 규칙이
+      // 깨졌다는 뜻이고 onCannotRun 이 그 신호를 사람에게(Gate) 넘기는 자리다.
+      void this.deps
+        .onCannotRun({ taskId: head.taskId, reason: '검증할 check 목록이 비어 있습니다' })
+        .catch((e) => this.deps.log?.(`onCannotRun failed task=${head.taskId}: ${String(e)}`))
+        .finally(() => this.advance(cwd, head))
       return
     }
     // Carried out of the try so advance is called after it, not inside

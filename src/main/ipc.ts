@@ -120,6 +120,7 @@ import {
   worktreeDepsOf
 } from '../core/orchestration/integrate'
 import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
+import { checkConfigIdsOf } from '../core/orchestration/convergence'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject, outcomeOf } from '../core/orchestration/view'
 import { justFinished } from '../core/orchestration/runRecord'
@@ -3926,11 +3927,12 @@ export function registerIpc(
         })
         return configs.map((c) => ({ id: c.id, name: c.name, type: c.type }))
       },
-      // Task 10 이 checkConfigIdsOf 로 Task 의 check 목록 전체를 읽는다. 지금은 옛 필드
-      // 하나만(있으면) 넘긴다 — validateConfigIds 는 아직 이 배선까지 닿지 않은 새 칸이다.
+      // checkConfigIdsOf 는 옛 validateConfigId 와 새 validateConfigIds 를 함께 읽으므로, 지금
+      // 존재할 수 있는 모든 Task 에 대해 이것으로 충분하다 — Task 10 이 남길 일은 stop 의
+      // core.run.stop 배선과 언어뿐이다.
       startValidation: ({ taskId, cwd }) => {
-        const configId = store.get().tasks.find((t) => t.id === taskId)?.validateConfigId
-        validator.enqueue({ taskId, cwd, configIds: configId ? [configId] : [] })
+        const task = store.get().tasks.find((t) => t.id === taskId)
+        validator.enqueue({ taskId, cwd, configIds: task ? checkConfigIdsOf(task) : [] })
       },
       // 검토를 시작한다. 검증과 달리 **세션을 띄운다** — 그래서 provider·계정을 고르고, 검토
       // Dispatch 를 커밋하고, deps.startWorker 를 부르는 세 걸음이다. 동기 서명이므로
