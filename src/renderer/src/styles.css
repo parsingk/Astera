@@ -1942,6 +1942,23 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
   overflow: hidden;
 }
 .statusbar .sp { margin-left: auto; flex-shrink: 0; }
+/* The Host-needs-replacing notice. It sits after .sp, so the session count keeps the right edge it has
+   always had and this lands beyond it rather than shoving it left when it appears.
+   Amber, not red: nothing is broken. The Host is waiting for a quiet moment to replace itself, and for
+   someone who never opens a 대화 session it costs nothing at all. --warn-ink is the same colour the
+   usage chips and the pending banner warn in, so the bar has one colour for "worth a look". */
+.statusbar .status-host-outdated {
+  flex: none; margin-left: 12px; display: inline-flex; align-items: center;
+  padding: 2px 8px; font: inherit; line-height: 1.4;
+  color: var(--warn-ink); background: none; border: 1px solid var(--warn-ink); border-radius: 999px;
+  cursor: pointer; transition: background 120ms;
+}
+.statusbar .status-host-outdated:hover { background: var(--warn-bg); }
+.statusbar .status-host-outdated:disabled { cursor: default; opacity: 0.6; }
+/* The Host row's three facts, stacked. Right-aligned so their ragged left edges do not read as three
+   unrelated things, and so the restart button beside them keeps one place whatever they say. */
+.host-row-detail { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; }
+.host-row-outdated { color: var(--warn-ink); }
 .status-account { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .status-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

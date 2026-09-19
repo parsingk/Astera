@@ -234,6 +234,8 @@ export const ko = {
   'duration.minutes': '{n}분',
   'duration.hours': '{n}시간',
   'duration.days': '{n}일',
+  'status.hostOutdated': '호스트 업데이트',
+  'status.hostOutdatedTitle': 'Host {host} · 앱 {app} — 눌러서 지금 재시작합니다. 그 전까지 대화 세션을 시작할 수 없습니다.',
   'session.statusbar.count': '세션 {count}',
   'session.statusbar.none': '세션 없음',
   'session.statusbar.accountCount': '계정 {count}',
@@ -289,7 +291,8 @@ export const ko = {
   'settings.info.hostHolding': '세션 {sessions}개, 대화 {chats}개, 터미널 {terminals}개, 실행 {runs}개 유지 중',
   // The Host outlived an update and still runs the previous version. Replaced on its own the first
   // moment it holds nothing; the button is for not waiting (host-replacement design §6).
-  'settings.info.hostOutdated': 'Host {host} · 앱 {app} · 아무것도 유지하지 않게 되면 새 버전으로 바뀝니다',
+  'settings.info.hostOutdated':
+    'Host {host} · 앱 {app} — 모든 세션을 종료하면 자동으로 새 버전의 호스트로 업데이트 됩니다. 지금 재시작 버튼으로 바로 업데이트도 가능합니다.',
   'settings.info.hostRestartNow': '지금 재시작',
   'settings.info.hostRestarting': '재시작 중…',
   'settings.info.hostRestartConfirmTitle': 'Host 재시작',

@@ -344,6 +344,11 @@ function formatResetHud(resetsAt: string | null | undefined): string | null {
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
 }
 
+/** How often the Host's status is re-read. Slow on purpose: the only thing that changes without anyone
+ *  asking is the Host replacing itself, which happens the first moment it holds nothing, and a notice
+ *  that clears within half a minute of that is prompt enough for something nobody is waiting on. */
+const HOST_STATUS_POLL_MS = 30_000
+
 /** "7m", "2h" — a coarse uptime is all this row needs; it is a sign of life, not a metric, which is
  *  also why the unit is not translated. */
 const hostUptime = (startedAt: string | null): string => {
@@ -449,6 +454,31 @@ export default function App(): React.JSX.Element {
    *  once this is filled: zeros would be a claim that nothing of the person's survives closing the
    *  app, and that is the one wrong answer worth avoiding here. */
   const [hostHolding, setHostHolding] = useState<HostHoldings | null>(null)
+  // Read from the app's startup and kept current, not only while the Settings modal is open. It used
+  // to be read on that open alone, on the reasoning that the Info row was the only thing that drew it
+  // — true until the status bar started drawing the "Host update" notice, which is on screen the whole
+  // time and would otherwise have stayed hidden until someone visited the very tab it exists to save
+  // them a trip to. Polled rather than pushed because the fact changes without anyone asking: the Host
+  // replaces itself the first moment it holds nothing (host-replacement design §4), and the notice has
+  // to go away when it does. The call answers from inside this app — no round trip to the Host — so
+  // the interval is cheap; the Host's own holdings, which are a round trip, stay where they were.
+  useEffect(() => {
+    let current = true
+    const read = (): void => {
+      void window.api.host
+        .status()
+        .then((s) => {
+          if (current) setHostStatus(s)
+        })
+        .catch(() => {})
+    }
+    read()
+    const timer = setInterval(read, HOST_STATUS_POLL_MS)
+    return () => {
+      current = false
+      clearInterval(timer)
+    }
+  }, [])
   const [hostRestarting, setHostRestarting] = useState(false)
   /** The Info tab's *Restart now*: confirm with what ends, replace, then re-read the row. */
   const restartHost = async (): Promise<void> => {
@@ -1038,8 +1068,8 @@ export default function App(): React.JSX.Element {
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
     // Re-syncs the new-session default too, for the same reason as orchestration above.
     void window.api.settings.getDefaultSessionKind().then(setDefaultSessionKind)
-    // Astera Host slice 1: this value goes stale, and the row is only ever on screen while this
-    // modal is open, so it is read here rather than at startup.
+    // Re-read on open beside the effect below, which is what keeps it current the rest of the time:
+    // the Info row wants the freshest answer at the moment it is drawn, and this costs nothing.
     void window.api.host.status().then(setHostStatus)
     // What it is holding is a round trip to the Host, so it is asked beside the status rather than
     // through it: the status answers from inside this app and must not be made to wait on a process
@@ -4041,6 +4071,28 @@ export default function App(): React.JSX.Element {
             <span className="sp">{t('session.statusbar.accountCount', { count: accounts.length })}</span>
           </>
         )}
+        {/* The Host outlived an update and still runs the previous build. It replaces itself the first
+            moment it holds nothing (host-replacement design §4), which for someone who keeps sessions
+            open never comes — and until then 대화 sessions cannot be started at all, because the old
+            Host does not speak proc-*. That was only ever said in Settings > Info, a place nobody
+            visits to find out why a feature they were not told about is missing.
+
+            Outside the `active` branches above on purpose: the Host's state is the same fact whether or
+            not a session is showing, and the two branches would otherwise each need their own copy. */}
+        {hostStatus?.connected && hostStatus.outdated && (
+          <button
+            type="button"
+            className="status-host-outdated"
+            disabled={hostRestarting}
+            onClick={() => void restartHost()}
+            title={t('status.hostOutdatedTitle', {
+              host: hostStatus.hostVersion ?? '?',
+              app: appVersion
+            })}
+          >
+            {hostRestarting ? t('settings.info.hostRestarting') : t('status.hostOutdated')}
+          </button>
+        )}
       </div>
       {showNew && (
         <NewSessionDialog
@@ -4312,49 +4364,64 @@ export default function App(): React.JSX.Element {
                     </div>
                     <div className="settings-row">
                       <span>{t('settings.info.host')}</span>
-                      <span>
-                        {hostStatus?.connected
-                          ? t('settings.info.hostConnected', {
-                              protocol: hostStatus.protocol ?? 0,
-                              uptime: hostUptime(hostStatus.startedAt)
-                            }) +
-                            // The Host outlived an update and still runs the previous version. Said
-                            // here because this row is the one place its version is on screen, and
-                            // the automatic replacement (host-replacement design §4) is otherwise
-                            // invisible until it happens.
-                            (hostStatus.outdated
-                              ? ` · ${t('settings.info.hostOutdated', {
+                      {/* Three separate lines rather than one string joined with separators. Each of
+                          them varies in length on its own, and while they were one run of text the
+                          restart button sat at the end of it — so where the button appeared depended on
+                          how much the Host happened to be holding, which is not something a person
+                          should have to read past to find it. */}
+                      <span className="host-row-detail">
+                        {hostStatus?.connected ? (
+                          <>
+                            <span>
+                              {t('settings.info.hostConnected', {
+                                protocol: hostStatus.protocol ?? 0,
+                                uptime: hostUptime(hostStatus.startedAt)
+                              })}
+                            </span>
+                            {/* The Host outlived an update and still runs the previous version. Said
+                                here because this row is the one place its version is on screen, and
+                                the automatic replacement (host-replacement design §4) is otherwise
+                                invisible until it happens. The same amber the status bar's own notice
+                                uses, so the two read as one fact rather than two. */}
+                            {hostStatus.outdated && (
+                              <span className="host-row-outdated">
+                                {t('settings.info.hostOutdated', {
                                   host: hostStatus.hostVersion ?? '?',
                                   app: appVersion
-                                })}`
-                              : '') +
-                            // Appended only once the Host has answered. Until then the row is the
-                            // connection facts alone, which is the whole truth it has: a count here
-                            // before the answer would be an invented one.
-                            (hostHolding
-                              ? ` · ${t('settings.info.hostHolding', {
+                                })}
+                              </span>
+                            )}
+                            {/* Drawn only once the Host has answered. Until then the row is the
+                                connection facts alone, which is the whole truth it has: a count here
+                                before the answer would be an invented one. */}
+                            {hostHolding && (
+                              <span>
+                                {t('settings.info.hostHolding', {
                                   sessions: hostHolding.sessions,
                                   chats: hostHolding.chats,
                                   terminals: hostHolding.terminals,
                                   runs: hostHolding.runs
-                                })}`
-                              : '')
-                          : hostStatus?.problem
-                            ? t('settings.info.hostNotConnectedWhy', { detail: hostStatus.problem })
-                            : t('settings.info.hostNotConnected')}
-                        {/* Not waiting for the automatic replacement. Confirms with the holdings,
-                            because the count is the only honest part of the offer (design §6). */}
-                        {hostStatus?.connected && hostStatus.outdated && (
-                          <button
-                            type="button"
-                            disabled={hostRestarting}
-                            onClick={() => void restartHost()}
-                            style={{ marginLeft: 8 }}
-                          >
-                            {hostRestarting ? t('settings.info.hostRestarting') : t('settings.info.hostRestartNow')}
-                          </button>
+                                })}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span>
+                            {hostStatus?.problem
+                              ? t('settings.info.hostNotConnectedWhy', { detail: hostStatus.problem })
+                              : t('settings.info.hostNotConnected')}
+                          </span>
                         )}
                       </span>
+                      {/* A sibling of the text, not its tail — .settings-row's space-between then keeps
+                          it at the row's right edge whether the text above it runs to one line or
+                          three. Not waiting for the automatic replacement; confirms with the holdings,
+                          because the count is the only honest part of the offer (design §6). */}
+                      {hostStatus?.connected && hostStatus.outdated && (
+                        <button type="button" disabled={hostRestarting} onClick={() => void restartHost()}>
+                          {hostRestarting ? t('settings.info.hostRestarting') : t('settings.info.hostRestartNow')}
+                        </button>
+                      )}
                     </div>
                     <div className="settings-row">
                       <span>{t('settings.info.registeredAccounts')}</span>

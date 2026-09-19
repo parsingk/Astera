@@ -210,6 +210,8 @@ export const en: Record<keyof typeof ko, string> = {
   'duration.minutes': '{n}m',
   'duration.hours': '{n}h',
   'duration.days': '{n}d',
+  'status.hostOutdated': 'Host update',
+  'status.hostOutdatedTitle': 'Host {host} · app {app} — press to restart it now. Until then a chat session cannot be started.',
   'session.statusbar.count': '{count} sessions',
   'session.statusbar.none': 'No sessions',
   'session.statusbar.accountCount': '{count} accounts',
@@ -249,7 +251,8 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.info.hostConnected': 'Connected · protocol {protocol} · up {uptime}',
   'settings.info.hostHolding':
     'holding {sessions} session(s), {chats} chat(s), {terminals} terminal(s), {runs} run(s)',
-  'settings.info.hostOutdated': 'Host {host} · app {app} · replaced with the new version once it holds nothing',
+  'settings.info.hostOutdated':
+    'Host {host} · app {app} — closing every session updates it to the new version on its own. Restart now updates it straight away.',
   'settings.info.hostRestartNow': 'Restart now',
   'settings.info.hostRestarting': 'Restarting…',
   'settings.info.hostRestartConfirmTitle': 'Restart the Host',
