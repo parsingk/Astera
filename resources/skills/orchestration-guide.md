@@ -70,15 +70,16 @@ different provider judges it.
 | `pending`, `ready` | `dispatched` | `worker-start` |
 | `pending`, `ready`, `failed` | `blocked` | `gate-create` (rejected if a Dispatch is open) |
 | `blocked` | `ready` | `gate-resolve` (if the Task has more open Gates, all of them must be resolved too) |
+| `blocked` | `failed` | **not in `ALLOWED['blocked']` — reached only by a table bypass**, the same kind `task-update` uses (section 8): `gate-resolve --resolution mark-failed` on an exhausted convergence Gate (`kind: "convergence-exhausted"`, section 11) writes `failed` directly, in the same commit that would otherwise have unblocked the Task to `pending`/`ready`. A coordinator watching Task status only ever observes the jump straight from `blocked` to `failed` |
 | `dispatched` | `completed` | `worker_done --outcome succeeded`, when the Task has neither `--validate` nor `--review` (4.2) |
 | `dispatched` | `validating` | `worker_done --outcome succeeded`, when the Task has `--validate` (4.2) |
 | `dispatched` | `reviewing` | `worker_done --outcome succeeded`, when the Task has `--review` but no `--validate` (4.2) |
 | `dispatched` | `failed` | `worker_done --outcome failed`, or the session dies without reporting |
 | `validating` | `completed` | the validation run exits `0`, and the Task has no `--review` |
 | `validating` | `reviewing` | the validation run exits `0`, and the Task has `--review` (4.2) |
-| `validating` | `failed` | the validation run exits non-zero, **on a Run with no convergence policy** — the same retry path as any other failure. On a convergence Run (section 11) a failure never lands here on its own; it takes this edge only through a person's `mark-failed` on an exhausted Gate, or through `task-update` |
+| `validating` | `failed` | the validation run exits non-zero, **on a Run with no convergence policy** — the same retry path as any other failure. On a convergence Run (section 11) a failure is never routed here directly: it reaches `blocked` (an exhausted or unopenable repair, as a Gate) or back to `dispatched` (a repair) instead, and the only way this exact edge is taken is `task-update` — never `gate-resolve mark-failed`, whose own edge is `blocked` → `failed` below |
 | `validating` | `dispatched` | **convergence Runs only** (section 11) — a check failed and the app opened a repair Dispatch on the same worker, through `openRepairDispatch`. You did nothing to cause this edge and there is nothing to do about it but wait |
-| `validating` | `blocked` | the validation cannot run at all — a Gate opens automatically. On a convergence Run this edge also covers a paused Run, a Task with `--convergence off`, and a repair the app could not start (section 11) |
+| `validating` | `blocked` | the validation cannot run at all — a Gate opens automatically. On a convergence Run this edge also covers a paused Run, a Task with `--convergence off`, a repair the app could not start, and the repair budget running out (section 11) |
 | `reviewing` | `completed` | the reviewer reports `worker_done --outcome succeeded` |
 | `reviewing` | `failed` | the reviewer reports `worker_done --outcome failed`, **on a Run with no convergence policy** — the same retry path as any other failure. On a convergence Run (section 11) this edge is reached the same restricted way as `validating` → `failed` above |
 | `reviewing` | `dispatched` | **convergence Runs only** (section 11) — the review found a blocking issue and the app opened a repair Dispatch, through `openRepairDispatch` |
@@ -118,11 +119,15 @@ Task in a Run.
 - **Dependents wait.** A Task whose dependency is `validating` stays `pending`; only a passing
   validation releases it, never the worker's own report.
 - **Exit code `0` completes the Task; non-zero fails it** the same way a failed worker would —
-  `consecutiveFailures` climbs and the circuit still breaks at 3. The output tail is stored in the
-  Task's `result`, but **a retry worker never sees it**: the spec file the app assembles for a worker
-  carries only that Task's title and spec, so nothing a previous attempt produced — neither the
-  validation output nor the earlier worker's report — reaches the next one. If the next attempt needs
-  to know what failed, write it into the spec yourself.
+  `consecutiveFailures` climbs and the circuit still breaks at 3 — **on a Run with no convergence
+  policy.** On a convergence Run (section 11) a non-zero exit never reaches `failed` directly: it goes
+  back to `dispatched` (the app repairing it on the same worker, which does get the failure detail as a
+  spec section) or to `blocked` (a Gate); `worker-start --retry-of` from you never enters into it. On
+  the non-convergence path, the output tail is stored in the Task's `result`, but **a retry worker
+  never sees it**: the spec file the app assembles for a worker carries only that Task's title and
+  spec, so nothing a previous attempt produced — neither the validation output nor the earlier
+  worker's report — reaches the next one. If the next attempt needs to know what failed, write it into
+  the spec yourself.
 - **Either outcome arrives in your inbox as a `status` message**: `validation passed` or `validation
   failed`, with the exit code and the output tail in the body. That message is what wakes `check`, so
   a validated Task is **not** settled when `worker_done` comes back — wait for its validation message
@@ -149,9 +154,12 @@ spends quota** — attaching it to a Task like a one-line documentation fix is t
   the validation has passed (section 2's table) — the reviewer is not asked to re-judge whether the code
   compiles or the tests run.
 - **A review failure rides the normal retry flow** — `worker-start --retry-of`, exactly like a validation
-  or a worker failure. The `review failed` status message's body is the **only** record of what was
-  missing; a retry worker's spec file does not carry it (the same limitation as validation, above), so
-  pass on whatever the next attempt needs.
+  or a worker failure — **on a Run with no convergence policy.** On a convergence Run (section 11) this
+  never happens: `applyReviewResult`'s convergence branch routes a blocking review straight to a repair
+  (`dispatched`, same worker) or a Gate (`blocked`), and the Task never reaches `failed` this way, so
+  there is no `--retry-of` for you to call. On the non-convergence path, the `review failed` status
+  message's body is the **only** record of what was missing; a retry worker's spec file does not carry
+  it (the same limitation as validation, above), so pass on whatever the next attempt needs.
 - **A review passing moves the Task straight to `completed`** and releases its dependents, the same as
   any other route to that state.
 
@@ -541,7 +549,7 @@ worker-show --dispatch <dsp> --json
 | `workerState` | Meaning | What the orchestrator does |
 |---|---|---|
 | `ready` | Alive and working | Keep waiting (`check --wait`), or read output sparingly with `worker-read` |
-| `failed` | Proven dead (abnormal exit or `outcome:failed`) | Retry with `worker-start --task <t> --retry-of <dsp> --agent … --account … --worktree …` |
+| `failed` | Proven dead (abnormal exit or `outcome:failed`) | Retry with `worker-start --task <t> --retry-of <dsp> --agent … --account … --worktree …` — **unless this is a repair Dispatch** (`dispatch-show --task <tsk>` shows `repair` on it). A dead repair Dispatch, on a convergence Run, is the app's own recovery reconciler's to restart, not yours — that is the whole point of the app driving the loop (section 11). Retrying it yourself races the reconciler for the same worktree |
 | `stopped` | Exited normally (code 0) or was halted by `worker-stop` | Retry the same way if needed, otherwise `worker-release` |
 | `outcome_unknown` | Unprovable (the session died along with an app restart, or `worker-abandon`) | Run `worker-stop` and look again, or accept "resources may still be alive" with `worker-abandon` |
 
@@ -767,6 +775,12 @@ so the two commands that would pull that worker or its Dispatch out from under t
   releasing now would close the very session the next repair is about to reuse, and the worker on the
   other end would lose the context of what it just tried. Wait for the Task to leave that state, then
   release as usual (section 8).
+- **A repair Dispatch that dies is not yours to retry either.** `worker-show` on it reads `failed` the
+  same as any dead session (section 7), but the app's own recovery reconciler already treats a
+  convergence Run's repair Dispatches as its own to redispatch — retrying it yourself with
+  `worker-start --retry-of` races the reconciler for the same worktree. Check `dispatch-show --task
+  <tsk>` for a `repair` field before retrying anything that came back `failed`; if it is set, leave it
+  to the app.
 - **`task-update` on the Task is not refused, but do not use it anyway.** Nothing in the server checks
   convergence before applying a `task-update --status` — it still bypasses the transition table the
   way section 8 already describes. Using it on a converging Task moves the Task out from under a
