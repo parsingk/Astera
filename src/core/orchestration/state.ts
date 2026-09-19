@@ -174,7 +174,7 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
       : {}),
     ...(t.accountIds !== undefined ? { accountIds: [...t.accountIds] } : {}),
     ...(t.validateConfigId !== undefined ? { validateConfigId: t.validateConfigId } : {}),
-    ...(t.validateConfigIds !== undefined ? { validateConfigIds: [...t.validateConfigIds] } : {}),
+    ...(t.validateConfigIds?.length ? { validateConfigIds: [...t.validateConfigIds] } : {}),
     ...(t.reviewRequested ? { reviewRequested: true } : {}),
     status: 'pending',
     consecutiveFailures: 0,
@@ -532,8 +532,9 @@ export function applyWorkerDone(
  *
  *  **convergence 가 없는 Run 은 지금까지와 문구까지 같다**(설계 §5.3): 실패는 failed 가 되고 consecutiveFailures
  *  가 오르며 status 메시지가 코디네이터에게 --retry-of 를 말한다. 그 문구가 결과를 전하는 유일한 길인
- *  이유는 아래 옛 주석 그대로다 — 코디네이터를 깨우는 수단은 메시지뿐이고, 재시도 워커의 spec 파일은
- *  결과를 싣지 않는다.
+ *  이유는 코디네이터를 깨우는 수단이 메시지뿐이고, 재시도 워커의 spec 파일은 결과를 싣지 않기 때문이다.
+ *  그 호환에는 `Task.checks`·`checkHistory` 가 자라지 않는 것도 들어간다 — 이 기능을 쓰지 않는 Run 의
+ *  `orchestration.json` 이 이 변경으로 커지면 안 된다.
  *
  *  **convergence 가 있는 Run 에서는 실패가 repair 를 연다**(설계 §5.1): 같은 쓰기에서 Task 가 dispatched 로
  *  가고 repair Dispatch 가 열린다. failed 를 경유하지 않는다 — Task 하나인 Run 이 순간 failed 가 되어
@@ -558,10 +559,6 @@ export function applyValidationResult(
   if (task.status !== 'validating') return err(`task is not validating: ${task.status}`)
   const lang: Lang = a.lang ?? 'en'
   const passed = a.results.every((r) => r.status === 'passed')
-  const history = appendHistory(task.checkHistory, a.results)
-  const unstable = new Set(unstableChecks(history))
-  const checks: CheckResult[] = a.results.map((r) => (unstable.has(r.configId) ? { ...r, unstable: true } : r))
-  const recorded: Task = { ...task, checks, checkHistory: history }
   const policy = policyOf(s, task)
   const total = a.results.length
   const ran = a.results.filter((r) => r.status !== 'not-run').length
@@ -575,9 +572,9 @@ export function applyValidationResult(
   const reviewing = passed && !!task.reviewRequested && a.canReview !== false
 
   if (policy === null) {
-    // ---- 지금까지의 경로. 문구까지 그대로다 ----
+    // ---- 지금까지의 경로. 문구까지 그대로다 ---- checks·checkHistory 는 여기서 기록하지 않는다.
     const to = reviewing ? 'reviewing' : passed ? 'completed' : 'failed'
-    const moved = moveTask(recorded, to, now)
+    const moved = moveTask(task, to, now)
     if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
     const next: Task = {
       ...moved,
@@ -601,7 +598,12 @@ export function applyValidationResult(
     return ok(state, next)
   }
 
-  // ---- convergence Run ----
+  // ---- convergence Run ---- 여기서부터만 checks·checkHistory 를 Task 에 싣는다.
+  const history = appendHistory(task.checkHistory, a.results)
+  const unstable = new Set(unstableChecks(history))
+  const checks: CheckResult[] = a.results.map((r) => (unstable.has(r.configId) ? { ...r, unstable: true } : r))
+  const recorded: Task = { ...task, checks, checkHistory: history }
+
   if (passed) {
     const to = reviewing ? 'reviewing' : 'completed'
     const moved = moveTask(recorded, to, now)
@@ -621,7 +623,9 @@ export function applyValidationResult(
     ).state
     return ok(state, next)
   }
-  const failed: Task = {
+  // repair 후보로 넘길 Task — 절대 'failed' 상태를 거치지 않는다(그것이 이 브랜치의 계약이다), 그래서
+  // 이름도 그 상태를 닮지 않게 짓는다.
+  const pendingRepair: Task = {
     ...recorded,
     consecutiveFailures: task.consecutiveFailures + 1,
     result: `validation failed (exit ${exitCode})\n${output}`
@@ -629,13 +633,18 @@ export function applyValidationResult(
   return routeFailure(
     s,
     {
-      task: failed,
+      task: pendingRepair,
       policy,
       reason: 'check-failure',
       repair: a.repair,
       lang,
       message: {
-        subject: `Checks failed: ${failedNames.join(', ')} (${ran} of ${total} ran)`,
+        // failedNames 가 비면(예: 결과 전부가 not-run) 콜론 뒤에 구멍이 남지 않게 문구를 가른다 —
+        // 오늘의 validator 로는 닿지 않지만 CheckResult[] 를 직접 짜는 다른 호출자는 닿을 수 있다.
+        subject:
+          failedNames.length > 0
+            ? `Checks failed: ${failedNames.join(', ')} (${ran} of ${total} ran)`
+            : `Checks failed (${ran} of ${total} ran)`,
         detail: `exitCode=${exitCode}.`
       }
     },
@@ -698,14 +707,27 @@ function failureSummary(task: Task): string {
   return [...checks, ...issues].join(', ') || '(no record)'
 }
 
-/** 판정이 repair 대신 사람에게 가는 세 갈래를 한 함수로 — 소진, 멈춘 Task, 멈춘 Run.
- *  consecutiveFailures 는 부르는 쪽이 이미 올렸다. */
+/** 판정이 repair 대신 사람에게 가는 네 갈래를 한 함수로 — 소진, 멈춘 Task, 멈춘 Run, repair 를 열 수
+ *  없음(세션 충돌 등, routeFailure 참고). consecutiveFailures 는 부르는 쪽이 이미 올렸다.
+ *
+ *  질문의 모양이 갈래마다 다르다 — 세 갈래는 "몇 번 고쳤고 무엇이 아직 실패하는가"({repairs},
+ *  {failures}), 나머지 하나(repairFailed)는 "왜 못 열었는가"({reason})다. 그래서 `key` 로 그 둘을
+ *  판별식 유니언으로 가른다: 쓰는 쪽이 엉뚱한 파라미터를 건네면 여기서 타입 오류가 난다. */
 function gateOnFailure(
   s: OrchState,
-  a: { task: Task; kind: GateKind; key: 'jobs.convergence.gate.exhausted' | 'jobs.convergence.gate.stopped' | 'jobs.convergence.gate.paused'; repairs: number; lang: Lang },
+  a: { task: Task; kind: GateKind; lang: Lang } & (
+    | {
+        key: 'jobs.convergence.gate.exhausted' | 'jobs.convergence.gate.stopped' | 'jobs.convergence.gate.paused'
+        repairs: number
+      }
+    | { key: 'jobs.convergence.gate.repairFailed'; reason: string }
+  ),
   now: string
 ): Res<Task> {
-  const question = t(a.lang, a.key, { repairs: a.repairs, failures: failureSummary(a.task) })
+  const question =
+    a.key === 'jobs.convergence.gate.repairFailed'
+      ? t(a.lang, a.key, { reason: a.reason })
+      : t(a.lang, a.key, { repairs: a.repairs, failures: failureSummary(a.task) })
   const withTask: OrchState = { ...s, tasks: replace(s.tasks, a.task) }
   const g = createGate(
     withTask,
@@ -717,7 +739,12 @@ function gateOnFailure(
 }
 
 /** 실패한 판정이 갈 길(설계 §5.1의 표). 위에서부터 첫 행이 이긴다. 통과가 아닌 결과를 받았을 때만 부른다.
- *  `task` 는 checks·history·consecutiveFailures(+1) 가 이미 반영된 것이다. */
+ *  `task` 는 checks·history·consecutiveFailures(+1) 가 이미 반영된 것이다.
+ *
+ *  **repair Dispatch 를 열지 못해도 이 판정을 버리지 않는다.** 세션이 다른 Task 에 재사용되는
+ *  경우(`--terminal`) 등으로 `openRepairDispatch` 가 거절하면, checks·history·+1 을 실은 `task` 를
+ *  그대로 Gate(convergence-blocked, jobs.convergence.gate.repairFailed)에 넘긴다 — 조용히 버리면
+ *  Task 가 validating 에 멈춘 채 아무도 다시 보러 오지 않는다. */
 function routeFailure(
   s: OrchState,
   a: { task: Task; policy: ResolvedPolicy; reason: RepairReason; repair: RepairTarget | undefined; lang: Lang; message: { subject: string; detail: string } },
@@ -734,7 +761,12 @@ function routeFailure(
   if (!a.repair) return err('repair target is required for a convergence Run')
   const withTask: OrchState = { ...s, tasks: replace(s.tasks, a.task) }
   const opened = openRepairDispatch(withTask, { taskId: a.task.id, reason: a.reason, target: a.repair }, now)
-  if (!opened.ok) return err(opened.error)
+  if (!opened.ok)
+    return gateOnFailure(
+      s,
+      { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.repairFailed', reason: opened.error, lang: a.lang },
+      now
+    )
   const state = pushMessage(
     opened.state,
     {

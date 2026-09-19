@@ -30,6 +30,7 @@ import {
   bindNativeSession,
   beginValidation,
   writeOffDispatch,
+  openRepairDispatch,
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate, type Dispatch, type CheckResult } from './types'
@@ -1148,6 +1149,201 @@ describe('applyValidationResult — convergence', () => {
     expect(r.value.result).toBe('validation failed (exit 1)\n실패 로그')
     expect(r.state.messages.at(-1)?.subject).toBe('validation failed')
     expect(r.state.messages.at(-1)?.body).toContain('Retry with worker-start --retry-of')
+  })
+
+  // **꺼진 Run 도 checks/checkHistory 를 얻지 않는다** — 이 기능을 쓰지 않으면 orchestration.json 이
+  // 이 변경으로 커지지 않는다는 호환 보장의 일부다.
+  it('꺼진 Run 은 checks·checkHistory 를 기록하지 않는다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const old: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t)) }
+    const v = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const r = unwrap<Task>(applyValidationResult(v.state, { taskId, results: one(1, '실패 로그') }, NOW) as never)
+    expect(r.value).not.toHaveProperty('checks')
+    expect(r.value).not.toHaveProperty('checkHistory')
+  })
+
+  // **Important #1 — repair Dispatch 를 열지 못해도 판정을 버리지 않는다.** 다른 Task 가 --terminal 로
+  // 같은 sessionId 를 재사용하면 openRepairDispatch 의 sessionId 검사가 걸린다. 그때도 checks 와
+  // consecutiveFailures+1 은 Task 에 남고, 판정은 조용히 사라지지 않고 Gate 가 된다.
+  it('repair Dispatch 를 열 수 없으면 판정을 버리지 않고 Gate(repairFailed) 로 보낸다 — checks 는 남는다', () => {
+    const { s, taskId } = armed()
+    const runId = s.runs[0].id
+    const other = unwrap<Task>(createTask(s, { runId, title: 'other', spec: 'x', deps: [] }, NOW) as never)
+    // 다른 Task 가 같은 sessionId 로 이미 열린 Dispatch 를 쥐고 있다 — repair 가 재사용하려는 세션이다
+    const elsewhere: Dispatch = {
+      id: 'dsp_elsewhere',
+      taskId: other.value.id,
+      provider: 'codex',
+      accountId: 'acc1',
+      sessionId: 'sess1',
+      cwd: 'D:/p',
+      specPath: '',
+      startedAt: NOW,
+      workerState: 'ready',
+      retained: false
+    }
+    const clashed: OrchState = { ...other.state, dispatches: [...other.state.dispatches, elsewhere] }
+    const r = unwrap<Task>(applyValidationResult(clashed, { taskId, results: two(1, null), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('blocked')
+    expect(r.value.consecutiveFailures).toBe(1)
+    expect(r.value.checks?.map((c) => c.status)).toEqual(['failed', 'not-run'])
+    const gate = r.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-blocked')
+    expect(gate.question).toContain('sessionId already in use')
+    expect(r.state.dispatches.some((d) => d.repair)).toBe(false)
+  })
+
+  // Minor — Gate 질문은 앱 언어로 그려진다
+  it('lang 을 주면 Gate 질문이 그 언어로 그려진다', () => {
+    const { s, taskId } = armed({ consecutiveFailures: 3 })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME, lang: 'ko' }, NOW) as never)
+    const gate = r.state.gates.at(-1)!
+    expect(gate.question).toContain('완료 검사가')
+    expect(gate.question).toContain('수렴하지')
+  })
+
+  // Minor — failureSummary 의 나머지 두 갈래: timed-out check, blocking reviewIssue
+  it('failureSummary 는 timed-out check 와 blocking reviewIssue 도 요약에 싣는다', () => {
+    const { s, taskId } = armed({
+      consecutiveFailures: 3,
+      reviewIssues: [{ id: 'rvw1', severity: 'high', blocking: true, title: 'Session race', description: '' }]
+    })
+    const results: CheckResult[] = [
+      { configId: 'cfg1', name: 'Typecheck', status: 'timed-out' },
+      { configId: 'cfg2', name: 'Tests', status: 'not-run' }
+    ]
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results, repair: SAME }, NOW) as never)
+    const gate = r.state.gates.at(-1)!
+    expect(gate.question).toContain('Typecheck')
+    expect(gate.question).toContain('HIGH Session race')
+  })
+
+  // Minor — 요약할 것이 아무것도 없으면(failed·timed-out check 도, blocking 이슈도 없으면) '(no record)'
+  it('요약할 실패가 없으면 (no record) 로 남는다', () => {
+    const { s, taskId } = armed({ consecutiveFailures: 3 })
+    const results: CheckResult[] = [
+      { configId: 'cfg1', name: 'Typecheck', status: 'not-run' },
+      { configId: 'cfg2', name: 'Tests', status: 'not-run' }
+    ]
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results, repair: SAME }, NOW) as never)
+    const gate = r.state.gates.at(-1)!
+    expect(gate.question).toContain('(no record)')
+  })
+
+  // Minor — failedNames 가 비면(전부 not-run) 제목에 구멍이 남지 않는다
+  it('실패한 check 이름이 없으면 제목이 콜론 구멍 없이 내려간다', () => {
+    const { s, taskId } = armed({ consecutiveFailures: 0 })
+    const results: CheckResult[] = [
+      { configId: 'cfg1', name: 'Typecheck', status: 'not-run' },
+      { configId: 'cfg2', name: 'Tests', status: 'not-run' }
+    ]
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results, repair: SAME }, NOW) as never)
+    expect(r.state.messages.at(-1)?.subject).toBe('Checks failed (0 of 2 ran)')
+  })
+})
+
+// **Important #2 — openRepairDispatch 는 지금까지 행복한 경로로만 간접 테스트됐다.** 다섯 개의 가드
+// 조항을 각각 따로 고정한다. 예산·회로를 보지 않는다는 것이 그중 가장 중요하다 — 그것은 부르는
+// 판정 함수의 일이고, 여기서 다시 보면 규칙이 두 곳에 있게 된다.
+describe('openRepairDispatch', () => {
+  /** seed() 의 Task 를 검증 대기로 보낸다. Dispatch 이력은 seed() 의 구현 Dispatch 하나뿐이고, 그것은
+   *  applyWorkerDone 이 닫아 둔다 — retryOf 와 same-session 재사용의 근거다 */
+  const toValidating = (): { s: OrchState; taskId: string; dispatchId: string } => {
+    const { s, taskId, dispatchId } = seed()
+    const armed: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t))
+    }
+    const r = unwrap(applyWorkerDone(armed, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    return { s: r.state, taskId, dispatchId }
+  }
+
+  it('validating·reviewing 이 아니면 거절한다', () => {
+    const { s, taskId } = seed() // seed() 의 Task 는 아직 dispatched 다
+    const r = openRepairDispatch(s, { taskId, reason: 'check-failure', target: SAME }, NOW)
+    expect(r.ok).toBe(false)
+  })
+
+  it('이 Task 에 이미 열린 Dispatch 가 있으면 거절한다', () => {
+    const { s, taskId } = toValidating()
+    const extra: Dispatch = {
+      id: 'dsp_extra',
+      taskId,
+      provider: 'codex',
+      accountId: 'acc1',
+      sessionId: 'sess2',
+      cwd: 'D:/p',
+      specPath: '',
+      startedAt: NOW,
+      workerState: 'ready',
+      retained: false
+    }
+    const withOpen: OrchState = { ...s, dispatches: [...s.dispatches, extra] }
+    const r = openRepairDispatch(withOpen, { taskId, reason: 'check-failure', target: SAME }, NOW)
+    expect(r.ok).toBe(false)
+  })
+
+  it('대상 sessionId 를 다른 열린 Dispatch 가 쓰고 있으면 거절한다', () => {
+    const { s, taskId } = toValidating()
+    const elsewhere: Dispatch = {
+      id: 'dsp_elsewhere',
+      taskId: 'tsk_other',
+      provider: 'codex',
+      accountId: 'acc1',
+      sessionId: 'sess1',
+      cwd: 'D:/p',
+      specPath: '',
+      startedAt: NOW,
+      workerState: 'ready',
+      retained: false
+    }
+    const withTaken: OrchState = { ...s, dispatches: [...s.dispatches, elsewhere] }
+    const r = openRepairDispatch(withTaken, { taskId, reason: 'check-failure', target: SAME }, NOW)
+    expect(r.ok).toBe(false)
+  })
+
+  it('구현 Dispatch 가 아예 없으면 거절한다', () => {
+    const { s, runId } = seed()
+    const created = unwrap<Task>(createTask(s, { runId, title: 't2', spec: 's2', deps: [] }, NOW) as never)
+    const forced: OrchState = {
+      ...created.state,
+      tasks: created.state.tasks.map((t) => (t.id === created.value.id ? { ...t, status: 'validating' as const } : t))
+    }
+    const r = openRepairDispatch(forced, { taskId: created.value.id, reason: 'check-failure', target: SAME }, NOW)
+    expect(r.ok).toBe(false)
+  })
+
+  it('same-session 대상이면 그 세션을 그대로 재사용한다', () => {
+    const { s, taskId, dispatchId } = toValidating()
+    const r = unwrap<Dispatch>(openRepairDispatch(s, { taskId, reason: 'check-failure', target: SAME }, NOW) as never)
+    expect(r.value.sessionId).toBe('sess1')
+    expect(r.value.retryOf).toBe(dispatchId)
+    expect(r.value.repair).toBe('check-failure')
+    expect(r.value.workerState).toBe('ready')
+  })
+
+  it('fresh 대상이면 placeholder 세션을 새로 만든다', () => {
+    const { s, taskId } = toValidating()
+    const r = unwrap<Dispatch>(
+      openRepairDispatch(
+        s,
+        { taskId, reason: 'check-failure', target: { kind: 'fresh', cwd: 'D:/p', provider: 'codex', accountId: 'acc1' } },
+        NOW
+      ) as never
+    )
+    expect(r.value.sessionId).toMatch(/^pending:/)
+  })
+
+  // 이것이 가장 중요하다 — 예산은 부르는 판정 함수가 이미 정했다. 여기서 다시 보면 규칙이 두 곳에
+  // 있게 되고, 언젠가 갈라진다.
+  it('consecutiveFailures 나 FAILURE_LIMIT 을 보지 않는다 — 예산은 부르는 쪽의 일이다', () => {
+    const { s, taskId } = toValidating()
+    const atLimit: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, consecutiveFailures: FAILURE_LIMIT + 5 } : t))
+    }
+    const r = unwrap<Dispatch>(openRepairDispatch(atLimit, { taskId, reason: 'check-failure', target: SAME }, NOW) as never)
+    expect(r.value.taskId).toBe(taskId)
   })
 })
 
