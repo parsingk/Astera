@@ -155,6 +155,12 @@ export interface RepairSection {
   maxFixAttempts: number
   checks?: CheckResult[]
   issues?: ReviewIssue[]
+  /** 소진 Gate 를 retry-once 로 풀어 예산 **밖에** 연 repair 다(설계 §5.2, repair.ts 의
+   *  repairOnce). 이 Dispatch 를 세면 repairCountOf 가 이미 maxFixAttempts 를 넘어 있으므로,
+   *  "repair {repair} of {maxFixAttempts}" 로 적으면 예산보다 큰 번호("4 of 3")가 나가 워커가
+   *  그것을 오류로 읽는다. true 면 그 대신 "사람이 예산이 다 쓰인 뒤 하나 더 허락했다" 로 적는다 —
+   *  숫자를 지우는 것이 아니라 그 숫자가 뜻하는 것을 바꾸는 것이다. */
+  extra?: true
 }
 
 /** spec 파일의 "## Repair request" 절(설계 §6.1, 명세 §9·§16·§35·§39). 보고 의무 앞에 선다 — 무엇이 틀렸는지
@@ -194,11 +200,16 @@ function repairSection(a: RepairSection): string {
   }
   if (!lines.length) return ''
   const reasonText = a.reason === 'review-failure' ? 'review found blocking issues' : 'a completion check failed'
+  // extra 는 소진된 뒤 사람이 하나 더 허락한 repair 다 — repairCountOf 는 이미 maxFixAttempts 를
+  // 넘은 값을 낸다("4 of 3"), 그래서 분수 대신 "예산이 다 쓰인 뒤 허락됐다" 로 적는다.
+  const roundText = a.extra
+    ? `This is an extra repair, granted by a person after the budget of ${a.maxFixAttempts} was already spent.`
+    : `This is repair ${a.repair} of ${a.maxFixAttempts}.`
   return `
 ---
 ## Repair request (assembled by the app — do not delete)
 
-Your previous report for this task did not satisfy the completion checks — ${reasonText}. This is repair ${a.repair} of ${a.maxFixAttempts}.
+Your previous report for this task did not satisfy the completion checks — ${reasonText}. ${roundText}
 
 ### What failed
 ${lines.join('\n')}

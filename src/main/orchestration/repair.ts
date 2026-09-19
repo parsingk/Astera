@@ -6,7 +6,14 @@ import { isSamePath } from '../../core/files/tree'
 import { t, type Lang } from '../../core/i18n'
 import { latestImplDispatch, policyOf, repairCountOf } from '../../core/orchestration/convergence'
 import { createGate, openDispatch, type OrchState, type RepairTarget } from '../../core/orchestration/state'
-import { isPlaceholderSessionId, placeholderSessionId, type Dispatch, type Task } from '../../core/orchestration/types'
+import {
+  canTransition,
+  FAILURE_LIMIT,
+  isPlaceholderSessionId,
+  placeholderSessionId,
+  type Dispatch,
+  type Task
+} from '../../core/orchestration/types'
 import type { KnowledgeFiles } from '../../core/knowledge/detect'
 import { buildSpecFile, repairWorkerPrompt } from './coordinator'
 import type { OrchServerDeps } from './server'
@@ -34,8 +41,13 @@ export function repairTargetFor(s: OrchState, taskId: string, isAlive: (id: stri
     : { kind: 'fresh', ...base }
 }
 
+/** spec 의 "## Repair request" 절 재료. **인자 넷 모두 같은 state 조각에서 읽어야 한다** — repairCountOf 와
+ *  policyOf 가 그 state 기준으로 세고, task.checks·task.reviewIssues 가 다른 스냅샷의 것이면 숫자와 본문이
+ *  서로 다른 시점을 말하게 된다(리뷰 fix 1차, Important 3 인접). */
 function repairSpec(s: OrchState, task: Task, d: Dispatch, run: { cwd: string }, knowledge: KnowledgeFiles | undefined): string {
   const policy = policyOf(s, task)
+  const maxFixAttempts = policy?.maxFixAttempts ?? FAILURE_LIMIT
+  const repairs = repairCountOf(s, task.id)
   return buildSpecFile({
     title: task.title,
     spec: task.spec,
@@ -46,26 +58,57 @@ function repairSpec(s: OrchState, task: Task, d: Dispatch, run: { cwd: string },
     knowledge,
     repair: {
       reason: d.repair!,
-      repair: repairCountOf(s, task.id),
-      maxFixAttempts: policy?.maxFixAttempts ?? 3,
+      repair: repairs,
+      maxFixAttempts,
       checks: task.checks,
-      issues: task.reviewIssues
+      issues: task.reviewIssues,
+      // repairs 가 maxFixAttempts 를 넘는 것은 정상 경로로는 나오지 않는다 — 유일한 문은
+      // repairOnce 가 ignoreCircuit 으로 예산 밖에 여는 것뿐이다(그 Dispatch 도 repairCountOf 에
+      // 잡힌다). 그때 "repair {repairs} of {maxFixAttempts}" 는 예산보다 큰 번호를 내므로
+      // repairSection(coordinator.ts)에게 그 사실을 넘긴다.
+      ...(repairs > maxFixAttempts ? { extra: true } : {})
     }
   })
 }
 
-/** 이미 열린 repair Dispatch 의 부수 효과. 실패하면 Dispatch 를 지우고 Gate 를 연다 — 판정은 끝났고 워커만
- *  못 띄운 것이므로 되돌릴 상태가 없다: 사람에게 간다. */
-export async function performRepair(deps: RepairDeps, a: { dispatchId: string }): Promise<void> {
-  const s = deps.getState()
-  const d = s.dispatches.find((x) => x.id === a.dispatchId)
-  if (!d || !d.repair || d.endedAt) return
+/** 주어진 state 조각에서 이 repair Dispatch 를 다시 찾는다. **부수 효과 앞뒤로 두 번 부른다** — 한 번은
+ *  knowledge 스캔이 끝난 뒤(그 사이 값이 바뀌었을 수 있다), 한 번은 이미 수행됐는지 보려고. 두 자리 모두
+ *  같은 조건이라 함수로 뽑았다: Dispatch 가 없거나, repair 가 아니거나, 이미 끝났거나, specPath 가 이미
+ *  채워져 있으면(=이미 한 번 수행됐다, Important 3) 더 할 일이 없다. */
+function liveRepairDispatch(s: OrchState, dispatchId: string): { task: Task; d: Dispatch; run: { cwd: string } } | null {
+  const d = s.dispatches.find((x) => x.id === dispatchId)
+  if (!d || !d.repair || d.endedAt || d.specPath) return null
   const task = s.tasks.find((x) => x.id === d.taskId)
   const run = task && s.runs.find((r) => r.id === task.runId)
-  if (!task || !run) return
-  const knowledge = await deps.knowledge(d.cwd).catch(() => undefined)
-  const specFileContent = repairSpec(deps.getState(), task, d, run, knowledge)
-  const same = !isPlaceholderSessionId(d.sessionId)
+  if (!task || !run) return null
+  return { task, d, run }
+}
+
+/** 이미 열린 repair Dispatch 의 부수 효과. 실패하면 Dispatch 를 지우고 Gate 를 연다 — 판정은 끝났고 워커만
+ *  못 띄운 것이므로 되돌릴 상태가 없다: 사람에게 간다.
+ *
+ *  **결과를 돌려준다.** void 였을 때는 startWorker 도 createGate 도 실패한 자리를 아무도 알 방법이
+ *  없었다 — 부르는 쪽(repairOnce, 그리고 앞으로의 배선)이 실패를 보고 에스컬레이션할 수 있어야 한다. */
+export async function performRepair(deps: RepairDeps, a: { dispatchId: string }): Promise<{ ok: true } | { ok: false; error: string }> {
+  const live0 = liveRepairDispatch(deps.getState(), a.dispatchId)
+  if (!live0) return { ok: true } // 이미 수행됐거나, repair 가 아니거나, 이미 끝났다 — 할 일이 없다
+  const knowledge = await deps.knowledge(live0.d.cwd).catch(() => undefined)
+
+  // knowledge 스캔은 fs 를 훑는 await 하나다 — 그 사이 다른 흐름이 이 Dispatch 를 건드렸을 수
+  // 있으므로(다른 요청의 performRepair 재호출, 혹은 이 Dispatch 를 닫은 무언가) 다시 읽는다.
+  // task·d·run 을 이 최신 조각 하나에서 다시 뽑는다 — 이전 읽기에서 잡은 task·d 를 이 시점의 s 와
+  // 섞어 쓰면 서로 다른 시점의 값이 한 spec 에 들어간다(리뷰 fix 1차, Important 3 인접 이슈).
+  const s = deps.getState()
+  const live = liveRepairDispatch(s, a.dispatchId)
+  if (!live) return { ok: true }
+  const { task, d, run } = live
+
+  const specFileContent = repairSpec(s, task, d, run, knowledge)
+  // 세션이 살아 있는지는 **지금** 본다, 판정 시점의 sessionId 만으로 정하지 않는다 — 판정과 이
+  // 부수 효과 사이에 재시도·재시작·복구 스윕처럼 시간이 벌어질 수 있고, 그 사이 세션이 죽었으면
+  // --terminal 주입이 코디네이터의 "terminal session is not alive" 로 실패해 Gate 로 가버린다.
+  // 설계가 말하는 낙방(fresh 로 내려가는 것)은 여기서, 이 시점의 값으로 정해야 한다.
+  const same = !isPlaceholderSessionId(d.sessionId) && deps.isAlive(d.sessionId)
   try {
     const started = await deps.startWorker({
       dispatchId: d.id,
@@ -81,6 +124,9 @@ export async function performRepair(deps: RepairDeps, a: { dispatchId: string })
         ? { terminal: d.sessionId, terminalCwd: d.cwd, terminalProvider: d.provider, terminalAccountId: d.accountId, launchPhrase: repairWorkerPrompt('{specPath}') }
         : {})
     })
+    // 다시 읽고, 세 자리(sessionId·cwd·specPath)만 patch 한다 — startWorker 를 기다리는 동안 다른
+    // 흐름(예: 이례적으로 빨리 도착한 worker_done)이 이 Dispatch 를 이미 닫았을 수 있고, 그 결과를
+    // 덮어써서는 안 된다. worker-start 의 서버 분기와 같은 규율이다.
     const latest = deps.getState()
     await deps.setState({
       ...latest,
@@ -88,6 +134,7 @@ export async function performRepair(deps: RepairDeps, a: { dispatchId: string })
         x.id === d.id ? { ...x, sessionId: started.sessionId, cwd: started.cwd, specPath: started.specPath } : x
       )
     })
+    return { ok: true }
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e)
     deps.log(`repair: could not start worker for task=${task.id} dispatch=${d.id}: ${reason}`)
@@ -98,8 +145,31 @@ export async function performRepair(deps: RepairDeps, a: { dispatchId: string })
       { taskId: task.id, question: t(deps.lang(), 'jobs.convergence.gate.repairFailed', { reason }), kind: 'convergence-blocked' },
       deps.now()
     )
-    await deps.setState(g.ok ? g.state : without)
-    if (!g.ok) deps.log(`repair: could not gate task=${task.id}: ${g.error}`)
+    if (g.ok) {
+      await deps.setState(g.state)
+      return { ok: false, error: reason }
+    }
+    // createGate 마저 거절했다(다른 Dispatch 가 이미 열려 있는 등) — Dispatch 는 지웠지만 Task 는
+    // 아직 openRepairDispatch 가 남긴 dispatched 다. task-list --ready 는 dispatched 를 보여주지
+    // 않으므로, 여기서 멈추면 아무도 이 Task 를 다시 보러 오지 않는다 — worker-start(server.ts)가
+    // previousStatus 로 되돌려 피하는 것과 같은 모양의 함정이다. dispatched -> failed 는 허용된
+    // 전이이고(types.ts 의 ALLOWED) 사람이 보고 재시도할 수 있는 상태다 — 안 보이는 것보다는 낫다.
+    // 제거와 이 전이를 한 번의 setState 로 묶는다 — Gate 가 성공했을 때와 같은 단일 쓰기 규율이다.
+    deps.log(`repair: could not gate task=${task.id} (${g.error}) — marking it failed instead of leaving it stuck`)
+    const failedTask = without.tasks.find((x) => x.id === task.id)
+    const forced: OrchState =
+      failedTask && canTransition(failedTask.status, 'failed')
+        ? {
+            ...without,
+            tasks: without.tasks.map((x) =>
+              x.id === task.id
+                ? { ...x, status: 'failed', result: `repair could not be started: ${reason}`, updatedAt: deps.now() }
+                : x
+            )
+          }
+        : without
+    await deps.setState(forced)
+    return { ok: false, error: reason }
   }
 }
 
@@ -110,11 +180,13 @@ export async function repairOnce(deps: RepairDeps, a: { taskId: string }): Promi
   if (!task) return
   const prior = latestImplDispatch(s, a.taskId)
   const target = repairTargetFor(s, a.taskId, deps.isAlive)
-  if (!prior || !target) {
+  // target 이 null 인 것은 정확히 prior 가 없을 때뿐이다(repairTargetFor 의 유일한 null 갈래) —
+  // 같은 s·taskId 로 부른 같은 판정이라 prior 만 다시 확인하지 않는다.
+  if (!target) {
     deps.log(`repair: retry-once has no implementation dispatch to repair for task=${a.taskId}`)
     return
   }
-  const reason = prior.repair ?? (task.reviewIssues?.some((i) => i.blocking) ? 'review-failure' : 'check-failure')
+  const reason = prior!.repair ?? (task.reviewIssues?.some((i) => i.blocking) ? 'review-failure' : 'check-failure')
   const opened = openDispatch(
     s,
     {
@@ -124,7 +196,7 @@ export async function repairOnce(deps: RepairDeps, a: { taskId: string }): Promi
       sessionId: target.kind === 'same-session' ? target.sessionId : placeholderSessionId(),
       cwd: target.cwd,
       specPath: '',
-      retryOf: prior.id,
+      retryOf: prior!.id,
       repair: reason,
       ignoreCircuit: true
     },
