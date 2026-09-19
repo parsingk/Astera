@@ -5,9 +5,13 @@ import { randomBytes } from 'node:crypto'
 import { openDispatch, beginValidation, createGate, type OrchState } from '../../core/orchestration/state'
 import { buildCheckpoint, type GitSummary } from '../../core/orchestration/checkpoint'
 import { formatResumeSection } from '../../core/orchestration/resumeSection'
+import { policyOf, repairCountOf } from '../../core/orchestration/convergence'
+import { FAILURE_LIMIT } from '../../core/orchestration/types'
+import { isSamePath } from '../../core/files/tree'
 import { t, type Lang } from '../../core/i18n'
 import type { LostAttempt, RecoveryDecision } from '../../core/recovery/types'
 import type { Provider } from '../../core/providers/meta'
+import { buildSpecFile } from '../orchestration/coordinator'
 
 export type ExecuteResult = { ok: true; newDispatchId?: string } | { ok: false; error: string }
 
@@ -21,6 +25,9 @@ export interface ExecuteDeps {
     taskId: string
     title: string
     spec: string
+    /** The whole spec file, assembled here when the attempt is a repair — see startAttempt below.
+     *  Absent otherwise, so the coordinator builds the plain implementer template as it always has. */
+    specFileContent?: string
     provider: Provider
     accountId: string
     runCwd: string
@@ -95,7 +102,10 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
       sessionId: `pending:${randomBytes(4).toString('hex')}`,
       cwd: run.cwd,
       specPath: '',
-      retryOf: attempt.dispatchId
+      retryOf: attempt.dispatchId,
+      // 유실된 attempt 가 repair 였다면 새 attempt 도 repair 다 — 그 Task 는 아직 수렴 중이고, 세션을
+      // 잃은 워커에게도 무엇이 실패했는지 다시 말해야 한다(아래 specFileContent).
+      ...(attempt.repair ? { repair: attempt.repair } : {})
     },
     now
   )
@@ -113,6 +123,27 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
         ? { briefing }
         : undefined
 
+  // repair 는 spec 파일을 통째로 새로 쓴다 — 대화를 잃은 워커라도 무엇이 실패했는지 다시 읽어야
+  // 하기 때문이다(main/orchestration/repair.ts 의 repairSpec 과 같은 조립). repairCountOf·policyOf
+  // 는 방금 커밋한 새 Dispatch(위 openDispatch)를 포함한 최신 state 로 센다 — repairSpec 이 하는
+  // 것과 같다.
+  const specFileContent = attempt.repair
+    ? buildSpecFile({
+        title: task.title,
+        spec: task.spec,
+        taskId: task.id,
+        dispatchId,
+        committing: !isSamePath(attempt.cwd, run.cwd),
+        repair: {
+          reason: attempt.repair,
+          repair: repairCountOf(deps.getState(), task.id),
+          maxFixAttempts: policyOf(deps.getState(), task)?.maxFixAttempts ?? FAILURE_LIMIT,
+          checks: task.checks,
+          issues: task.reviewIssues
+        }
+      })
+    : undefined
+
   let started: { sessionId: string; cwd: string; specPath: string }
   try {
     started = await deps.startWorker({
@@ -120,6 +151,7 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
       taskId: attempt.taskId,
       title: task.title,
       spec: task.spec,
+      ...(specFileContent ? { specFileContent } : {}),
       provider: attempt.provider,
       accountId: attempt.accountId,
       runCwd: run.cwd,

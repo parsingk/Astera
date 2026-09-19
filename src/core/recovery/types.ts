@@ -2,6 +2,7 @@
 // worktree and the settings are read by main and arrive here as plain values (P1 design §4).
 import type { Message } from '../i18n'
 import type { Provider } from '../providers/meta'
+import type { RepairReason } from '../orchestration/types'
 
 export type RecoveryStrategy = 'resume-native' | 'redispatch' | 'recheck' | 'smart-resume' | 'review'
 
@@ -29,6 +30,8 @@ export interface LostAttempt {
   hasValidateConfig: boolean
   /** The app drives this Run (`Run.autoDispatch`). When it does not, a coordinator owns dispatching. */
   appDriven: boolean
+  /** 유실된 attempt 가 repair 였다면 그 사유(설계 §10). 새 attempt 도 repair 다 — 그 Task 는 아직 수렴 중이다 */
+  repair?: RepairReason
 }
 
 export interface GitFacts {

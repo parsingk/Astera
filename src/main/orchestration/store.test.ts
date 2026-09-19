@@ -658,6 +658,61 @@ describe('OrchestrationStore', () => {
     await fs.writeFile(file, '{ not json', 'utf8')
     expect((await new OrchestrationStore(file).load()).before).toBeNull()
   })
+
+  // convergence Run 은 재시작으로 끊긴 validating·reviewing 을 Gate 로 묻지 않는다(interruptStalledTask
+  // 의 resume, 설계 §10) — 대신 다시 돌릴 목록에 싣는다. load() 는 아무것도 시작하지 않으므로 목록만
+  // 확인한다.
+  it('convergence Run 의 validating·reviewing Task 는 Gate 없이 재실행 목록에 실린다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s: OrchState = {
+      ...emptyState(),
+      runs: [{ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, convergence: {} }],
+      tasks: [
+        {
+          id: 'tsk_v', runId: 'run_1', title: 't', spec: 's', deps: [], status: 'validating',
+          validateConfigIds: ['c1'], consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW
+        },
+        {
+          id: 'tsk_r', runId: 'run_1', title: 't', spec: 's', deps: [], status: 'reviewing',
+          consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW
+        }
+      ],
+      dispatches: [
+        {
+          id: 'dsp_v', taskId: 'tsk_v', provider: 'codex', accountId: 'acc1', sessionId: 'sess_v',
+          cwd: 'D:/wt', specPath: 'D:/p/orch/specs/v.md', startedAt: NOW, endedAt: NOW,
+          outcome: 'succeeded', workerState: 'ready', retained: false
+        },
+        {
+          id: 'dsp_r', taskId: 'tsk_r', provider: 'codex', accountId: 'acc1', sessionId: 'sess_r',
+          cwd: 'D:/wt', specPath: 'D:/p/orch/specs/r.md', startedAt: NOW, endedAt: NOW,
+          outcome: 'succeeded', workerState: 'ready', retained: false
+        }
+      ]
+    }
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const loaded = await store.load({ aliveSessionIds: new Set() })
+    expect(loaded.staleValidations).toBe(0)
+    expect(loaded.staleReviews).toBe(0)
+    expect(loaded.revalidate).toEqual([{ taskId: 'tsk_v', cwd: 'D:/wt' }])
+    expect(loaded.rereview).toEqual(['tsk_r'])
+    expect(store.get().gates).toHaveLength(0)
+  })
+
+  // convergence 가 없는 Run 은 지금과 똑같이 Gate 를 연다 — 재실행 목록은 그 Run 몫이 아니므로 비어
+  // 있다.
+  it('꺼진 Run 은 지금처럼 Gate 를 열고 목록은 비어 있다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0] = { ...s.tasks[0], status: 'validating' }
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const loaded = await store.load()
+    expect(loaded.staleValidations).toBe(1)
+    expect(loaded.revalidate).toEqual([])
+    expect(store.get().gates).toHaveLength(1)
+  })
 })
 
 // One stale field disables both ways back. `inbox.ts` only nets Runs whose coordinatorSessionId is

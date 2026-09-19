@@ -25,8 +25,8 @@ const decision = (over: Partial<RecoveryDecision> = {}): RecoveryDecision => ({
   reasonMessage: { key: 'jobs.recovery.reason.producedNothing' }, ...over
 })
 
-function deps(over: Partial<Parameters<typeof executeRecovery>[1]> = {}) {
-  let state = stateWith(lost())
+function deps(over: Partial<Parameters<typeof executeRecovery>[1]> = {}, t: Task = task()) {
+  let state = stateWith(lost(), t)
   const started: unknown[] = []
   const validated: unknown[] = []
   const logs: string[] = []
@@ -56,6 +56,20 @@ describe('executeRecovery', () => {
     expect(h.started).toHaveLength(1)
     expect(h.started[0]).toMatchObject({ taskId: 'tsk_1', worktree: 'D:/wt' })
     expect((h.started[0] as { resume?: unknown }).resume).toBeUndefined()
+  })
+
+  it('repair attempt 의 redispatch 는 repair 표시를 잇고 repair spec 을 넘긴다', async () => {
+    const h = deps({}, task({ checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] }))
+    const r = await executeRecovery(
+      { attempt: attempt({ repair: 'check-failure' }), decision: decision(), state: h.state, now: NOW },
+      h.d as never
+    )
+    expect(r.ok).toBe(true)
+    const d = h.state.dispatches.find((x) => x.id === (r as { newDispatchId: string }).newDispatchId)!
+    expect(d.repair).toBe('check-failure')
+    const spec = (h.started[0] as { specFileContent: string }).specFileContent
+    expect(spec).toContain('## Repair request')
+    expect(spec).toContain('"Tests" — exit 1')
   })
 
   it('passes the native session id through on a resume', async () => {
