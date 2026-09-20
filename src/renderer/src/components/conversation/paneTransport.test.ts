@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { composerLockedFor, chatBannerFor } from './paneTransport'
 import type { ChatState } from '../../../../core/chat/types'
 
-const base: ChatState = { status: 'idle', request: null, model: { model: null, effort: null, permissionMode: 'default' }, error: null, outlivesApp: true, truncated: false, provider: 'codex' }
+const base: ChatState = { status: 'idle', request: null, model: { model: null, effort: null, permissionMode: 'default' }, error: null, exitCode: null, errorDetail: null, outlivesApp: true, truncated: false, provider: 'codex' }
 const approval = { id: '0', kind: 'approval' as const, about: { tool: 'shell', lines: ['ls'] }, decisions: ['accept' as const, 'decline' as const] }
 
 describe('composerLockedFor', () => {

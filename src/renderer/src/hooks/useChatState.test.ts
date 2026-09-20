@@ -7,6 +7,8 @@ const base: ChatState = {
   request: null,
   model: { model: null, effort: null, permissionMode: 'default' },
   error: null,
+  exitCode: null,
+  errorDetail: null,
   outlivesApp: true,
   truncated: true,
   provider: 'codex'

@@ -91,6 +91,8 @@ function makeAdapterFactory(startRejects = false, sendRejects = false): {
         request: null,
         model: { model: null, effort: null, permissionMode: 'default' },
         error: null,
+        exitCode: null,
+        errorDetail: null,
         outlivesApp: a.proc.outlivesApp === true,
         truncated: a.mode.mode === 'adopt' ? a.mode.truncated : false,
         provider: a.provider

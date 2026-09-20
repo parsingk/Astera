@@ -51,6 +51,13 @@ export interface ChatState {
   model: ChatModel
   /** The last turn's failure, cleared by the next turn. */
   error: string | null
+  /** The exit code, once the process has gone. Null while it is alive. The pane shows it beside the
+   *  exit notice — the terminal has always shown one and the chat pane never did (design D2). */
+  exitCode: number | null
+  /** The process's last words on stderr. `error` above is the one line a person reads; this is the
+   *  whole tail, which the pane folds away. Kept apart rather than concatenated: joining them would
+   *  make the screen split the string again to draw either one. */
+  errorDetail: string | null
   /** Whether the process survives the app quitting (Host-owned) — the fallback's tab says it does not. */
   outlivesApp: boolean
   /** The replay this state was rebuilt from had lost its head, so `status` is a guess until the next event. */

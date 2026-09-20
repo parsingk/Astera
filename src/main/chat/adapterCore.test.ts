@@ -299,3 +299,25 @@ describe('createAdapterCore — the state it hands out', () => {
     expect(createAdapterCore({ proc: p, log: () => {} }, { mode: 'fresh' }, 'claude').provider).toBe('claude')
   })
 })
+
+describe('createAdapterCore — onExit 이 넘겨받는 프로세스의 마지막 말', () => {
+  it('꼬리가 있으면 그 첫 비어 있지 않은 줄이 error 가 되고 전문은 errorDetail 에 남는다', () => {
+    const { c } = made()
+    c.onExit(8, '\nerror: Could not parse project manifest\nat C:\\p\\package.json\n')
+    expect(c.state.error).toBe('error: Could not parse project manifest')
+    expect(c.state.errorDetail).toContain('at C:\\p\\package.json')
+    expect(c.state.exitCode).toBe(8)
+  })
+  // 꼬리가 없으면 지어내지 않는다 — 옛 Host 이거나 정말 아무 말 없이 죽은 것이고, 둘 다 우리가 모른다
+  it('꼬리가 없으면 error 는 종전대로이고 errorDetail 은 null 이다', () => {
+    const { c } = made()
+    c.onExit(8)
+    expect(c.state.error).toBeNull()
+    expect(c.state.errorDetail).toBeNull()
+    expect(c.state.exitCode).toBe(8)
+  })
+  it('살아 있는 동안 exitCode 는 null 이다', () => {
+    const { c } = made()
+    expect(c.state.exitCode).toBeNull()
+  })
+})
