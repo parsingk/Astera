@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { installCommandFor, type InstallableCli } from '../../../core/install/cliInstall'
 import { CATALOGS, LANGS } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
-import type { CliStatus } from '../../../core/types'
 
 /** The two programs, in the order they are offered. Neither is recommended over the other: the app
  *  runs both, and picking for someone is a claim this screen has no business making. */
@@ -40,8 +39,14 @@ export function CliMissingScreen({
   onFound
 }: {
   /** A fresh CLI check, once an install has made one appear. Handing it up is what takes this screen
-   *  off the screen: App renders the workbench as soon as either one is present. */
-  onFound: (cli: { claude: CliStatus; codex: CliStatus }) => void
+   *  off the screen: App renders the workbench as soon as either one is present.
+   *
+   *  Existence, not runnability — the same question the gate in App.tsx that draws this screen asks,
+   *  and it has to be the same one. Asked as "does `--version` succeed here", a CLI that installed
+   *  perfectly well but that a toolchain manager refuses to run in the app's working directory would
+   *  report back as still missing, and this screen would sit there offering to install what is
+   *  already installed. */
+  onFound: (installed: { claude: boolean; codex: boolean }) => void
 }): React.JSX.Element {
   const { t, lang, setLang } = useI18n()
   const [phase, setPhase] = useState<Phase>({ state: 'idle' })
@@ -78,8 +83,8 @@ export function CliMissingScreen({
         }
         // Main has already put what it found on its own PATH (adoptInstalledCli), so this check can
         // see it and the app carries straight on. No restart, no second screen saying it worked.
-        const next = await window.api.system.checkCli().catch(() => null)
-        if (next && (next.claude.ok || next.codex.ok)) {
+        const next = await window.api.system.checkCliInstalled().catch(() => null)
+        if (next && (next.claude || next.codex)) {
           onFound(next)
           return
         }

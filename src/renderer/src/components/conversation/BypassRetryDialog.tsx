@@ -78,8 +78,22 @@ export function BypassRetryDialog({
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal bypass-retry" onClick={(e) => e.stopPropagation()}>
-        <h2>{t("conversation.exited.bypassConfirm.title")}</h2>
+      {/* Announced as a dialog, not as an unlabelled box of paragraphs. This one earns the attributes
+          more than most: it is a consent prompt whose whole point is that the person read what they
+          are giving up before pressing, and a screen reader that walks past it as plain text buries
+          exactly that. `aria-modal` tells the reader the rest of the page is inert while it is up,
+          which matches what the backdrop already does visually and what Escape does on the keyboard.
+          `aria-labelledby` points at the question itself, so the announcement is the question.
+          UpdateGate.tsx is the app's only other marked-up dialog (`role="alertdialog"`, for a thing
+          that interrupts); this one is a choice, not an alert, so it takes the plain `dialog` role. */}
+      <div
+        className="modal bypass-retry"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bypass-retry-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 id="bypass-retry-title">{t("conversation.exited.bypassConfirm.title")}</h2>
         {section("conversation.exited.bypassConfirm.whatBlockedLabel", whatBlockedKey, lineSuffix)}
         {section("conversation.exited.bypassConfirm.ifSkippedLabel", "conversation.exited.bypassConfirm.ifSkipped")}
         {section("conversation.exited.bypassConfirm.givesUpLabel", "conversation.exited.bypassConfirm.givesUp")}

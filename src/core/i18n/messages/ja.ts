@@ -650,7 +650,7 @@ export const ja: Catalog = {
   'conversation.exited.bypassConfirm.ifSkipped': 'バージョン判定を省略し、デフォルトの CLI をそのまま実行します。セッションは起動します。',
   'conversation.exited.bypassConfirm.givesUpLabel': '何を諦めるか',
   'conversation.exited.bypassConfirm.givesUp':
-    'このプロジェクトに固定したツールバージョンです。このセッションだけでなく、このセッションが実行するすべてのコマンド(エージェントが実行する npm test、npm run build、node …)が固定バージョンではなくデフォルトバージョンで動きます。同じコマンドでも、あなたのターミナルとは異なる結果になることがあります。',
+    'このプロジェクトに固定したツールバージョンです。このセッションだけでなく、このセッションが実行するすべてのコマンド(エージェントが実行する npm test、npm run build、node …)が固定バージョンではなくデフォルトバージョンで動きます。同じコマンドでも、あなたのターミナルとは異なる結果になることがあります。利用上限で別アカウントに切り替わったとき、引き継ぐセッションも同じです。',
   'conversation.exited.bypassConfirm.properFixLabel': '本当の解決',
   'conversation.exited.bypassConfirm.properFix': 'package.json を修正すれば、このダイアログは再び表示されません。',
   'conversation.exited.bypassConfirm.confirm': 'スキップして再試行',
