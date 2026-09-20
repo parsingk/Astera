@@ -40,7 +40,7 @@
 | D1 | 단위는 Task | check와 워커가 걸리는 단위가 Task다. Run의 완료는 지금처럼 `outcomeOf`가 Task들에서 계산한다. 명세의 "Run 완료"는 여기서 Task 완료다 (§11·§12의 attempt 예시가 Task 단위다) |
 | D2 | 앱이 루프를 소유한다 | convergence Run의 Task는 첫 `worker_done` 이후 수렴 또는 소진까지 앱이 책임진다. 코디네이터는 status 메시지로 진행을 읽기만 한다 (§1·§6·§43·§55) |
 | D3 | 같은 워커가 고친다 | 구현 Dispatch의 세션이 살아 있으면 그 세션에 fix 요청을 써넣는다. 죽었으면 새 워커에 fix 요청을 spec 절로 붙인다. 문구 생성기는 하나다 (§10) |
-| D4 | attempt = Dispatch, 새 상태 없음 | 수리 시도는 `Dispatch.repair`로 표시한 평범한 Dispatch다. 전이 둘(`validating→dispatched`, `reviewing→dispatched`)을 열되 repair Dispatch를 여는 쓰기에서만 허용한다 (§11·§12) |
+| D4 | attempt = Dispatch, 새 상태 없음 | 수정 시도는 `Dispatch.repair`로 표시한 평범한 Dispatch다. 전이 둘(`validating→dispatched`, `reviewing→dispatched`)을 열되 repair Dispatch를 여는 쓰기에서만 허용한다 (§11·§12) |
 | D5 | 판정과 repair는 한 번의 쓰기 | 검증 실패가 `failed`를 경유하면 Task 하나인 Run이 순간 `failed`가 되어 `JOB_RUN_FAILED`가 Journal에 박힌다. 그래서 판정과 repair Dispatch 열기는 같은 setState다 |
 | D6 | 예산은 `consecutiveFailures` | 새 카운터를 두지 않는다. 검증→검토 경로에서 0으로 되돌리지 않는 기존 규칙이 그대로 예산이다. `maxFixAttempts`는 그 카운터에 대한 **repair 경로의 한도**다 (§13·§55-5) |
 | D7 | 소진은 `failed`가 아니라 Gate | 명세 §13의 "[Retry Once] [Mark Failed]"는 Astera에서 Gate options다. jobs.md §6 "실패는 전부 Gate로 보인다"와 같은 규칙 |
@@ -55,7 +55,7 @@
 
 ## 3. 범위
 
-P0 = 명세 §54의 Phase 1(결정론적 수리 루프) + Phase 2(검토 수렴) + Phase 3(신뢰성). 명세 §3의
+P0 = 명세 §54의 Phase 1(결정론적 수정 루프) + Phase 2(검토 수렴) + Phase 3(신뢰성). 명세 §3의
 non-goals를 그대로 지킨다 — Agent가 정책을 재정의하지 않고, AI가 임의 shell command를 check로
 만들지 않고, merge를 완료 조건에 섞지 않고(§31), human approval을 AI가 대신하지 않는다.
 
@@ -129,7 +129,7 @@ interface Task {
   suspiciousFiles?: string[]
 }
 interface Dispatch {
-  /** 이 Dispatch가 구현이 아니라 수리인가, 그리고 왜. review와 배타적이다 */
+  /** 이 Dispatch가 구현이 아니라 수정인가, 그리고 왜. review와 배타적이다 */
   repair?: 'check-failure' | 'review-failure'
 }
 interface Gate {
@@ -224,7 +224,7 @@ applyValidationResult(s, {
 | 그 외 | `openRepairDispatch(reason: 'check-failure', target)`, `consecutiveFailures+1`, status 메시지 "The app is repairing this Task (repair k of N)…" |
 
 k번째 연속 실패가 k ≤ maxFixAttempts이면 k번째 repair를 열고, maxFixAttempts+1번째 실패가 소진이다.
-명세 §44의 pseudocode(`attempt ≤ maxFixAttempts + 1`)와 같은 셈이다. 기본 3이면 구현 1회 + 수리 3회.
+명세 §44의 pseudocode(`attempt ≤ maxFixAttempts + 1`)와 같은 셈이다. 기본 3이면 구현 1회 + 수정 3회.
 
 **`openRepairDispatch`가 거절해도 판정을 버리지 않는다.** 위 표의 마지막 행이 골랐어도 실제로 여는
 쓰기는 거절될 수 있다 — 세션이 `--terminal`로 다른 Task에 재사용돼 `sessionId already in use`가 나는
@@ -258,7 +258,7 @@ applyReviewResult(s, {
 /** validating·reviewing에서 repair Dispatch를 여는 유일한 자리 */
 openRepairDispatch(s, {
   taskId, reason, target,
-  /** 직전 구현·수리 Dispatch — retryOf로 잇는다 */
+  /** 직전 구현·수정 Dispatch — retryOf로 잇는다 */
   retryOf: string
 }, now): Res<Dispatch>
 ```
@@ -349,7 +349,7 @@ check와 리뷰가 둘 다 있으면 둘 다 싣는다(review-failure repair 뒤
   재조립된 spec 파일 자체에 이미 repair 절이 실려 있으므로 그 문구가 "spec 파일을 읽어라"만 말해도
   충분하다. 서버의 `worker-start`가 하는 placeholder → 실제 세션 커밋과 rollback을 같은 헬퍼로 쓴다.
 
-배선(`ipc.ts`)이 판정 직전에 `RepairTarget`을 계산한다: 마지막 구현·수리 Dispatch를 찾아
+배선(`ipc.ts`)이 판정 직전에 `RepairTarget`을 계산한다: 마지막 구현·수정 Dispatch를 찾아
 `isAlive(sessionId)`면 `same-session`, 아니면 `fresh`. 계정은 그 Dispatch의 것이다 — Task의 체인은
 세션 시작 때 정해졌고(가이드 4.3), 같은 Task이므로 같은 체인이다.
 
@@ -431,7 +431,7 @@ normalizeIssues(a: { outcome; subject; body; issues?: ReviewIssueInput[]; policy
 단위로 같아야 한다(Task 10 fix round 1, Important 1 — 처음 배선했을 때 이 가드가 빠졌었다).
 
 검증이 시작될 때(startValidation) 배선이 `git diff --name-only <baseHead> HEAD`를 그 cwd에서 돈다.
-`baseHead`는 그 Task의 **첫** 구현 Dispatch(수리가 아니라 가장 먼저 시작한 것)의 continuity journal
+`baseHead`는 그 Task의 **첫** 구현 Dispatch(수정가 아니라 가장 먼저 시작한 것)의 continuity journal
 **첫 체크포인트**(`firstCheckpointFor` — `checkpointPolicy.ts`의 `'attempt-started'`, Dispatch가
 열릴 때 기록된다)의 git HEAD다.
 
@@ -439,7 +439,7 @@ normalizeIssues(a: { outcome; subject; body; issues?: ReviewIssueInput[]; policy
 배선은 이 값을 우선했고 틀렸다). 그것은 그 Dispatch의 **마지막** 사용량 한도 정지 시점의 HEAD이고
 정지마다 덮어써서, 이미 일부 작업이 반영된 뒤의 — 기준점보다 나중인 — 값이다. 그것을 기준으로 잡으면
 diff가 실제보다 좁아져, 계정을 갈아타며 오래 일한 바로 그 경우(이 기능이 광고하는 사례)에 의심 파일을
-놓친다. 같은 이유로 기준은 **첫** 구현 Dispatch여야 한다 — 마지막(수리를 포함한) 시도만이 아니라 이
+놓친다. 같은 이유로 기준은 **첫** 구현 Dispatch여야 한다 — 마지막(수정를 포함한) 시도만이 아니라 이
 Task가 시작한 이래 전부의 diff가 목적이다.
 
 기준점이 없으면(continuity가 꺼져 있거나 체크포인트가 없다) git을 부르지 않고 워커가 보고한
@@ -574,7 +574,7 @@ Review approved
 Completion loop exhausted after 3 repairs
 ```
 
-repair Dispatch의 `dispatch-started` 이벤트는 `JobEvent`에 `repair` 표시를 실어 렌더러가 "수리 시작"으로
+repair Dispatch의 `dispatch-started` 이벤트는 `JobEvent`에 `repair` 표시를 실어 렌더러가 "수정 시작"으로
 구별해 그린다. 코디네이터가 읽는 body는 기계적 줄을 유지한다.
 
 §49 metrics는 Journal에서 센다. telemetry는 보내지 않는다.
@@ -583,7 +583,7 @@ repair Dispatch의 `dispatch-started` 이벤트는 `JobEvent`에 `repair` 표시
 
 ### 13.1 켜기 — `NewRunModal`
 
-동시성·코디네이터 계정·예약 옆에 체크박스 "완료 수렴 — 검사가 실패하면 앱이 같은 워커에게 고치게 하고
+동시성·코디네이터 계정·예약 옆에 체크박스 "통과할 때까지 자동 수정 — 검사가 실패하면 앱이 같은 워커에게 고치게 하고
 다시 검사합니다". 기본 꺼짐(§42). `run-create --convergence`. 숫자 셋은 CLI 플래그만(`--max-fix-attempts`,
 `--max-review-rounds`, `--blocking-severity`).
 
@@ -615,10 +615,10 @@ outputTail 전체는 싣지 않는다 — 스냅숏은 사이드바 푸시마다
 
 ### 13.4 Job 상세 — `RunDetail`
 
-- 노드 `meta` 줄: repair 중 "수리 2/3 · Claude", `validating` "검사 중", `reviewing` "검토 라운드 1/2".
+- 노드 `meta` 줄: repair 중 "수정 2/3 · Claude", `validating` "검사 중", `reviewing` "검토 라운드 1/2".
 - 노드 아래 check 칩 한 줄: ✓ ✗ ● ○ (passed / failed·timed-out / 도는 중 / not-run). 툴팁 = 이름과 summary.
   unstable은 칩에 `~`.
-- 노드를 고르면 `.detail-events` 위에 **Completion 블록**(§27): check 목록과 상태, "수리 2 / 3",
+- 노드를 고르면 `.detail-events` 위에 **Completion 블록**(§27): check 목록과 상태, "수정 2 / 3",
   "검토 라운드 1 / 2", blocking 이슈(severity · 제목 · file:line), non-blocking 개수, unstable·의심 파일 칩,
   마지막 실패 요약(펼치면 outputTail — `task-show`).
 - 버튼(§29): **자동 수정 중지** → `task-update --convergence off`. 도는 repair는 끝까지 가고 그 판정은
@@ -628,7 +628,7 @@ outputTail 전체는 싣지 않는다 — 스냅숏은 사이드바 푸시마다
 
 ### 13.5 사이드바 — `JobsView`
 
-repair 중인 Task는 열린 Dispatch가 있어 이미 줄이다. "수리 2/3" 칩만 더한다. `validating`은 지금처럼
+repair 중인 Task는 열린 Dispatch가 있어 이미 줄이다. "수정 2/3" 칩만 더한다. `validating`은 지금처럼
 접힌 수에만.
 
 ### 13.6 문구
@@ -668,7 +668,7 @@ en/es/ja/ko 넷.
 | `store.test.ts` | 부팅 시 convergence Run의 중단 검증은 Gate 없이 재실행, 중단 검토는 새 검토 Dispatch |
 | `view.test.ts` / `timeline.test.ts` | `JobTask.convergence` 투영, repair 시작 이벤트의 요약 문장 |
 | `coordinator.test.ts` | `buildRepairSpecFile`의 절 구성(check·리뷰·둘 다), `buildReviewSpecFile`의 새 절 넷 |
-| **`convergence.integration.test.ts`** | §51 — A 검사 실패→수리→통과→검토→완료 · B 검토 blocking→수리→검사→검토→완료 · C 수리 중 한도 → `rekeyDispatch` → 같은 Dispatch가 이어짐 · D 검증 중 크래시 → `store.load` → 재실행, repair 중복 없음 · E 소진 → Gate, 더 이상 dispatch 없음. 서버 층에서 가짜 `ValidatorRunner`·가짜 코디네이터(`server.test.ts`의 가짜 재사용) |
+| **`convergence.integration.test.ts`** | §51 — A 검사 실패→수정→통과→검토→완료 · B 검토 blocking→수정→검사→검토→완료 · C 수정 중 한도 → `rekeyDispatch` → 같은 Dispatch가 이어짐 · D 검증 중 크래시 → `store.load` → 재실행, repair 중복 없음 · E 소진 → Gate, 더 이상 dispatch 없음. 서버 층에서 가짜 `ValidatorRunner`·가짜 코디네이터(`server.test.ts`의 가짜 재사용) |
 
 회귀(§52): 기존 스위트 전부 그대로 통과. `convergence`가 없는 Run의 결과가 문구까지 지금과 같다는
 명시적 테스트. 완료 판정은 `npm run typecheck`·`npm test`·`npm run build`.
@@ -725,7 +725,7 @@ convergence·repair 관련 테스트가 하나도 없다는 것으로 확인했�
    기준으로 쓰자고 했다. 그것은 그 Dispatch의 **마지막** 사용량 한도 정지 시점의 HEAD이고 정지마다
    덮어써서 이미 일부 작업이 반영된, 기준점보다 나중인 값이다 — 그대로 쓰면 diff가 실제보다 좁아져
    계정을 갈아타며 오래 일한 바로 그 경우(이 기능이 광고하는 사례)에 의심 파일을 놓친다. 같은
-   이유로 대상도 그 Task의 **마지막**(수리 포함) Dispatch가 아니라 **첫** 구현 Dispatch여야 했다.
+   이유로 대상도 그 Task의 **마지막**(수정 포함) Dispatch가 아니라 **첫** 구현 Dispatch여야 했다.
    고친 것: continuity journal의 첫 체크포인트(`'attempt-started'`, Dispatch가 열릴 때 기록)를
    기준으로 첫 구현 Dispatch부터의 diff를 본다 — `main/ipc.ts`의 `changedFilesSince`/`firstImplDispatch`,
    `core/continuity/journal.ts`의 `firstCheckpointFor`. 지금 §8.3 본문이 그 결과다.
