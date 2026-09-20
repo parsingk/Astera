@@ -21,10 +21,15 @@ export function nodeProcSpawn(a: { log(m: string): void; platform: NodeJS.Platfo
     let onData: (chunk: string) => void = () => {}
     let onExit: (e: { exitCode: number; stderrTail?: string }) => void = () => {}
     let ended = false
+    let exitTimer: NodeJS.Timeout | null = null
     const tail = createStderrTail()
     const end = (code: number): void => {
       if (ended) return
       ended = true
+      if (exitTimer) {
+        clearTimeout(exitTimer)
+        exitTimer = null
+      }
       onExit({ exitCode: code, ...(tail.value() !== undefined ? { stderrTail: tail.value() } : {}) })
     }
     child.stdout?.setEncoding('utf8')
@@ -42,7 +47,18 @@ export function nodeProcSpawn(a: { log(m: string): void; platform: NodeJS.Platfo
     child.stdin?.on('error', (err) => a.log(`proc pid ${child.pid ?? '?'} stdin: ${String(err)}`))
     child.stdout?.on('error', (err) => a.log(`proc pid ${child.pid ?? '?'} stdout: ${String(err)}`))
     child.stderr?.on('error', (err) => a.log(`proc pid ${child.pid ?? '?'} stderr: ${String(err)}`))
-    child.on('exit', (code, signal) => end(code ?? (signal ? 1 : 0)))
+    // Node only guarantees stdio has been fully delivered at 'close', not 'exit' — this tail exists to
+    // catch a process's *last* write, so a write racing 'exit' is the case it is for, not a corner
+    // case to shrug off; losing that race means the line lands in the Host's own log (above) and
+    // never on the screen it was supposed to reach. 'close' is the real trigger; 'exit' only arms a
+    // short grace timer that reports the same end if 'close' still has not come — a grandchild that
+    // inherited a pipe (or otherwise keeps one open) can make 'close' wait far longer than this, or
+    // never fire at all, and a session must not go on reading as alive because of a process that is
+    // not even this one's child any more.
+    child.on('close', (code, signal) => end(code ?? (signal ? 1 : 0)))
+    child.on('exit', (code, signal) => {
+      exitTimer = setTimeout(() => end(code ?? (signal ? 1 : 0)), 150)
+    })
     // ENOENT and its kind arrive here, asynchronously, with no pid — the registry sees a process that
     // started and ended at once with code 1 and a log line saying why.
     child.on('error', (err) => {

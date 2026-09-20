@@ -27,4 +27,13 @@ describe('createStderrTail', () => {
     t.push('x'.repeat(5000))
     expect(t.value()?.length).toBe(4000)
   })
+
+  // 최종 리뷰 파동(finding 6): 빈 청크가 undefined 를 '' 로 뒤집으면 "아무도 안 모았다"가
+  // "프로세스가 말이 없었다"로 바뀐다 — Node 의 'data' 는 빈 청크를 안 내놓아 오늘은 닿지 않는
+  // 경로지만, 지켜서 잃을 것이 없다
+  it('빈 청크는 undefined 를 뒤집지 않는다', () => {
+    const t = createStderrTail()
+    t.push('')
+    expect(t.value()).toBeUndefined()
+  })
 })

@@ -13,6 +13,12 @@ export function createStderrTail(max: number = STDERR_TAIL_MAX): {
   let buf: string | undefined
   return {
     push(chunk) {
+      // A zero-length chunk must not flip buf from undefined to '' — that would turn "nobody
+      // collected it" into "the process said nothing", which is the exact distinction the whole
+      // Host-compatibility story (design S4) rests on. Node's 'data' never emits an empty chunk, so
+      // this is unreachable today; the guard costs nothing and removes the trap for whatever emits
+      // next.
+      if (chunk.length === 0) return
       buf = ((buf ?? '') + chunk).slice(-max)
     },
     // undefined, not '' — the caller has to tell "stderr was empty" from "nobody collected it", which

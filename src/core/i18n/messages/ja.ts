@@ -603,9 +603,6 @@ export const ja: Catalog = {
   'session.new.blocked.cliMissing': 'このアカウントの CLI が見つかりません',
   'session.new.blocked.noSchedule': '予約時刻を決めてください',
   'session.new.blocked.checkingFolder': 'フォルダーを確認しています',
-  // フォルダーごとの CLI 検査(最大10秒) — git 検査(checkingFolder)より長引くことがあるので分ける
-  // (設計 D3 の競合修正)。
-  'session.new.blocked.checkingCli': 'このフォルダーで CLI を確認しています',
   'session.new.starting': 'セッションを開始しています…',
   'session.new.startingWorktree': 'worktree を作成しています…',
   // NewSessionDialog.tsx scheduler UI

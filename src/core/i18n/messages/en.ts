@@ -662,9 +662,6 @@ export const en: Record<keyof typeof ko, string> = {
   'session.new.blocked.cliMissing': "This account's CLI was not found",
   'session.new.blocked.noSchedule': 'Set a schedule time',
   'session.new.blocked.checkingFolder': 'Checking the folder',
-  // The per-folder CLI check, up to 10s — kept separate from checkingFolder because it can outlast
-  // the git check by a wide margin (design D3's race fix).
-  'session.new.blocked.checkingCli': 'Checking the CLI in this folder',
   'session.new.starting': 'Starting session…',
   'session.new.startingWorktree': 'Creating worktree…',
   'session.new.schedLabel': 'Scheduler — run a command periodically',

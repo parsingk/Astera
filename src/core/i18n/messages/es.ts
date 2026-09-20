@@ -610,9 +610,6 @@ export const es: Catalog = {
   'session.new.blocked.cliMissing': 'No se encontró la CLI de esta cuenta',
   'session.new.blocked.noSchedule': 'Fija una hora programada',
   'session.new.blocked.checkingFolder': 'Comprobando la carpeta',
-  // La comprobación de la CLI por carpeta (hasta 10s) — aparte porque puede tardar mucho más que la
-  // comprobación de git (checkingFolder) (corrección de la carrera del diseño D3).
-  'session.new.blocked.checkingCli': 'Comprobando la CLI en esta carpeta',
   'session.new.starting': 'Iniciando la sesión…',
   'session.new.startingWorktree': 'Creando el worktree…',
   // NewSessionDialog.tsx scheduler UI

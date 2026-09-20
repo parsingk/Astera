@@ -92,6 +92,9 @@ describe('createHostProcFactory', () => {
     p.onExit((e) => { seen = e })
     t.deliver({ t: 'proc-exit', id, exitCode: 1 })
     expect(seen).toEqual({ exitCode: 1 })
+    // toEqual above passes whether stderrTail is absent or explicitly undefined — the sibling hops
+    // (nodeProc.test.ts, nodeProcFactory.test.ts) pin the real distinction with this, so this hop does too
+    expect(seen).not.toHaveProperty('stderrTail')
   })
   it('a refused spawn ends the handle with code 1', () => {
     const t = transport()

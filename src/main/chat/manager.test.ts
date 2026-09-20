@@ -57,13 +57,26 @@ interface FakeAdapterHandle {
 /** `startRejectsOnce` rejects only the *first* handle's `start()` (matching what a real adapter does
  *  when a process dies before its handshake completes — `doStart`'s own catch rejects the outer
  *  promise) while later handles (a bypass retry) resolve normally — for tests that need attempt 0 to
- *  genuinely fail its handshake without also failing the retry that follows it. */
-function makeAdapterFactory(startRejects = false, sendRejects = false, startRejectsOnce = false): {
+ *  genuinely fail its handshake without also failing the retry that follows it.
+ *
+ *  `throwOnAdapterCall` throws synchronously on the Nth call (1-based) instead of building a handle —
+ *  the counterpart to `setup`'s `throwOnSpawnCall`, but for `makeAdapter` throwing *after* the
+ *  factory already spawned a real child (finding 4: the bypass retry's factory call succeeds, then
+ *  `makeAdapter` throws, and the already-spawned child must not be left with no handle to kill it). */
+function makeAdapterFactory(
+  startRejects = false,
+  sendRejects = false,
+  startRejectsOnce = false,
+  throwOnAdapterCall?: number
+): {
   createAdapter: NonNullable<ChatManagerDeps['createAdapter']>
   handles: FakeAdapterHandle[]
 } {
   const handles: FakeAdapterHandle[] = []
   const createAdapter: NonNullable<ChatManagerDeps['createAdapter']> = (a) => {
+    if (throwOnAdapterCall !== undefined && handles.length + 1 === throwOnAdapterCall) {
+      throw new Error('adapter blew up')
+    }
     const listeners: Array<(e: ChatEvent) => void> = []
     const handleIndex = handles.length
     const handle: FakeAdapterHandle = {
@@ -154,7 +167,8 @@ function setup(
   startRejects = false,
   sendRejects = false,
   throwOnSpawnCall?: number,
-  startRejectsOnce = false
+  startRejectsOnce = false,
+  throwOnAdapterCall?: number
 ) {
   const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
   const factory: ProcFactory = (file, args, opts) => {
@@ -165,7 +179,7 @@ function setup(
     spawned.push({ file, args, opts, proc })
     return proc
   }
-  const { createAdapter, handles } = makeAdapterFactory(startRejects, sendRejects, startRejectsOnce)
+  const { createAdapter, handles } = makeAdapterFactory(startRejects, sendRejects, startRejectsOnce, throwOnAdapterCall)
   const descriptors = makeDescriptors(platform)
   const logged: string[] = []
   const manager = new ChatSessionManager({
@@ -487,6 +501,27 @@ describe('ChatSessionManager — toolchain 우회 재시도', () => {
     ])
   })
 
+  // Fix round 2 (finding 2): live.adapter is attempt 2's alone, and its own state() only ever knew
+  // about attempt 2's raw tail — the merge above was applied to the *event*, forwarded once. A pane
+  // that pulls state() fresh (every mount, every tab switch — useChatState.ts) used to get that
+  // unmerged, often-empty attempt back, losing the one attempt that actually named the refusal.
+  it('두 시도 모두 죽은 뒤 state() 를 다시 불러도 병합된 사유가 그대로 있다', () => {
+    const { manager, handles, spawned } = setup('win32', true)
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'volta: could not parse package.json' })
+    expect(spawned).toHaveLength(2)
+    handles[1].emit({ type: 'exit', code: 1, errorDetail: null })
+
+    // 이벤트를 한 번도 못 들은 것처럼, 나중에 다시 state() 를 부른다 — 탭을 전환해 pane 이
+    // remount 되는 것과 같은 모양이다
+    const state = manager.state(info.id)
+    expect(state?.exitCode).toBe(1)
+    expect(state?.errorDetail).toBe(
+      '[attempt 1, no bypass] volta: could not parse package.json\n---\n[attempt 2, with bypass] (no output)'
+    )
+  })
+
   // fix round 1: 한쪽이 비어 있어도 라벨은 둘 다 붙는다 — "관리자가 거절, 맨 실행은 조용히 죽음" 이
   // 흔한 모양인데, 예전 방식(둘 다 있을 때만 이어붙임)은 이때 한쪽의 말을 다른 쪽 것처럼 보이게 했다.
   it('한쪽 stderr 가 없어도 라벨은 둘 다 붙는다', () => {
@@ -615,6 +650,22 @@ describe('ChatSessionManager — toolchain 우회 재시도', () => {
     expect(logged.some((m) => m.includes('bypass retry failed to start'))).toBe(true)
   })
 
+  // Finding 4 (final review): the factory call above succeeds — a real (fake) child is spawned —
+  // before makeAdapter throws. Without a kill in between, that child has no map entry and no handle:
+  // the exact orphan the kill-detection work (C3) exists to prevent, reached through a different door.
+  it('재시도의 makeAdapter 가 던지면, 이미 뜬 우회 자식이 고아로 남지 않는다', () => {
+    const { manager, handles, spawned, logged } = setup('win32', false, false, undefined, false, 2) // 2번째 adapter(재시도)가 던진다
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+
+    expect(() => handles[0].emit({ type: 'exit', code: 8, errorDetail: 'first tail' })).not.toThrow()
+
+    expect(spawned).toHaveLength(2) // 재시도의 factory 호출은 실제로 자식을 띄웠다
+    expect(spawned[1].proc.killed).toBe(true) // ...하지만 makeAdapter 가 던졌으니 죽여서 고아로 안 남긴다
+    expect(manager.info(info.id)?.status).toBe('exited')
+    expect(manager.info(info.id)?.exitCode).toBe(8)
+    expect(logged.some((m) => m.includes('bypass retry failed to start'))).toBe(true)
+  })
+
   // C4: 1차 어댑터의 doStart 는 진짜로는 exit 이 삼켜진 뒤 한 틱 늦게 core.fail() 을 부른다
   // (codexAdapter.ts / claudeAdapter.ts 의 doStart catch). 구독을 끊지 않으면 그 늦은 error 가 재시도
   // 세션 밑에서 나온다 — chatBannerFor 는 error 를 notice 보다 위에 두므로, 멀쩡히 뜬 세션이 "턴이
@@ -653,6 +704,25 @@ describe('ChatSessionManager — toolchain 우회 재시도', () => {
 
     // 다음 턴이 시작되면(send) 알림도 error 와 같은 자리에서 걷힌다
     await manager.send(info.id, 'hi')
+    expect(manager.state(info.id)?.notice).toBeNull()
+  })
+
+  // Finding 7 (final review): 롤링 재시작의 첫 프롬프트는 respawnWithBypass 가 adapter.send 를
+  // 직접 부른다 — manager.send() 를 거치지 않는다. 그 경로에서 시작된 턴이 working 으로 넘어가는
+  // 것은 CLI 자신의 status 이벤트로 오므로, manager.send() 가 하는 것과 같은 지움을 handleEvent
+  // 자신이 status:'working' 에서 해야 한다 — 렌더러의 foldChatEvent 가 하는 것과 같은 규칙.
+  it('working 상태가 되면(send() 를 거치지 않고도) 알림이 걷힌다', async () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
+    expect(spawned).toHaveLength(2)
+    await flushPromises()
+    expect(manager.state(info.id)?.notice).toBe('bypassed')
+
+    // manager.send() 가 아니라, CLI 자신이 낸 status 이벤트가 여기 온다 — respawnWithBypass 의
+    // initialPrompt 전송이 바로 이 모양이다(adapter.send 를 직접 부른다)
+    handles[1].emit({ type: 'status', status: 'working' })
     expect(manager.state(info.id)?.notice).toBeNull()
   })
 })

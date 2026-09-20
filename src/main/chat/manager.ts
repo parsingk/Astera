@@ -35,11 +35,7 @@ type ExitEvent = Extract<ChatEvent, { type: 'exit' }>
  *  exit with no manager in front of it to say anything at all. Fix round 1 / C-review: both sides are
  *  labelled **even when one is empty** — the old join-only-if-both-present shape silently presented
  *  whichever side had content as if it were the *other* attempt's last words. `error` prefers the
- *  second attempt's one-line reason (the freshest), falling back to the first's. Re-capped to
- *  `STDERR_TAIL_MAX` after joining rather than left unbounded (design S3: one number, reused, not a
- *  second one for the joined case) — `.slice(-n)` keeps the tail end, the same direction
- *  `createStderrTail` already truncates in, which is why the second (later) attempt survives a cut
- *  more often than the first when both are long. */
+ *  second attempt's one-line reason (the freshest), falling back to the first's. */
 function mergeFailedRetry(first: ExitEvent, second: ExitEvent): ExitEvent {
   const error = second.error ?? first.error
   let errorDetail: string | null = null
@@ -137,6 +133,17 @@ interface LiveChatSession {
    *  just announced). Cleared on the next `send()`, mirroring the adapters' own `patch({ error: null })`
    *  on a fresh turn. */
   notice: 'bypassed' | null
+  /** Fix round 2 (final review, finding 2): the exit `handleEvent` actually forwarded — after
+   *  `mergeFailedRetry` when both attempts died, or the adapter's own raw event otherwise. `state()`
+   *  reads straight off `live.adapter.state()`, and that adapter is attempt 1's alone: its own
+   *  `core.onExit` only ever saw attempt 1's tail, never the merged one. The merge was applied to the
+   *  *event* and forwarded once, so a pane open at that moment sees it — but `useChatState` re-pulls
+   *  `state()` on every mount and every time the pane is re-enabled (a tab switch), and that re-pull
+   *  used to hand back attempt 1's unmerged, often-empty tail, losing the one attempt that actually
+   *  named the refusal. Held here and overlaid in `state()`, the same way `notice` already is, so a
+   *  re-pull matches what the event already told an open pane. Null until this session's exit is
+   *  actually reported (never for a still-running session, and untouched by a retry in flight). */
+  finalExit: ExitEvent | null
 }
 
 export class ChatSessionManager {
@@ -419,11 +426,23 @@ export class ChatSessionManager {
    *  `notice` is forced the same way, for the same reason: the adapter's own state knows nothing
    *  about a bypass retry, so a pane that mounts after the notice already fired — always true for a
    *  rolling respawn, where main emits while the renderer is still building the tab — needs it from
-   *  here, not just from the event stream. */
+   *  here, not just from the event stream.
+   *
+   *  `finalExit` overlays last, for the same reason again: `live.adapter` is whichever attempt
+   *  actually ended the session, and its own `core.state` only ever held *that* attempt's raw
+   *  code/error/errorDetail — `mergeFailedRetry`'s joined values live solely on the event
+   *  `handleEvent` forwarded once. Without this overlay, a re-pull (every mount, every tab switch)
+   *  hands back the unmerged attempt and the labelled tail that actually named the refusal is gone. */
   state(id: string): ChatState | null {
     const live = this.sessions.get(id)
     if (!live) return null
-    return { ...live.adapter.state(), outlivesApp: live.proc.outlivesApp === true, notice: live.notice }
+    const final = live.finalExit
+    return {
+      ...live.adapter.state(),
+      outlivesApp: live.proc.outlivesApp === true,
+      notice: live.notice,
+      ...(final ? { exitCode: final.code, errorDetail: final.errorDetail, ...(final.error !== undefined ? { error: final.error } : {}) } : {})
+    }
   }
 
   subscribe(fn: (sessionId: string, e: ChatEvent) => void): () => void {
@@ -460,6 +479,7 @@ export class ChatSessionManager {
       off,
       killRequested: false,
       notice: null,
+      finalExit: null,
       attempt: retryState?.attempt ?? 1,
       spawnAt: retryState?.spawnAt ?? Date.now(),
       sawLine: retryState?.sawLine ?? (() => true),
@@ -514,9 +534,23 @@ export class ChatSessionManager {
       const final: ExitEvent = live.firstFailure ? mergeFailedRetry(live.firstFailure, e) : e
       live.info.status = 'exited'
       live.info.exitCode = final.code
+      // Fix round 2 (finding 2): held on the session, not just forwarded, so state()'s later re-pulls
+      // (every mount, every tab switch — useChatState.ts) see the same merged values this event just
+      // carried, instead of falling back to live.adapter's own state, which only ever knew about
+      // whichever single attempt it is.
+      live.finalExit = final
       this.onExit?.({ sessionId: id, exitCode: final.code })
       for (const fn of this.listeners) fn(id, final)
       return
+    } else if (e.type === 'status' && e.status === 'working') {
+      // Fix round 2 (finding 7): mirrors the renderer's own fold (useChatState.ts's foldChatEvent),
+      // which clears `notice` on the first `working` after it fires — a fresh turn is where the
+      // bypass notice has said what it had to say. `manager.send()` already clears main's copy the
+      // same way, but a rolling respawn's carry-on prompt goes straight through `adapter.send`
+      // (`respawnWithBypass` below), never through `send()`, so that path left main's copy standing
+      // forever: `state()` overlays it on every re-pull, so a pane that remounts hours later kept
+      // re-showing "started with the toolchain skipped" for a session that has long since moved on.
+      live.notice = null
     }
     for (const fn of this.listeners) fn(id, e)
   }
@@ -542,7 +576,20 @@ export class ChatSessionManager {
     const spawnAt = Date.now()
     const watched = watchFirstLine(this.deps.factory(materials.file, materials.args, { cwd: materials.cwd, env, meta: materials.meta }))
     const proc = watched.proc
-    const adapter = this.makeAdapter(proc, { mode: 'fresh' }, materials.provider)
+    let adapter: ChatAdapter
+    try {
+      adapter = this.makeAdapter(proc, { mode: 'fresh' }, materials.provider)
+    } catch (err) {
+      // Finding 4 (final review): the factory above already spawned the bypassed child — a real
+      // process — before this threw. The caller's own try/catch (handleEvent) still reports the
+      // original exit and marks the session exited, which is correct, but nothing about *this* child
+      // ever reaches a map entry or a handle: it is the exact orphan the kill-detection work (C3)
+      // exists to prevent, reached through a different door. Killed here, before the rethrow, so the
+      // failure this produces is "the retry could not start" and not "a process nothing can reach any
+      // more, still running".
+      proc.kill()
+      throw err
+    }
     this.track(id, live.info, proc, adapter, live.chosenModel, {
       attempt: 1,
       spawnAt,

@@ -79,4 +79,23 @@ describe('nodeProcSpawn', () => {
     const exit = await new Promise<{ exitCode: number; stderrTail?: string }>((r) => p.onExit(r))
     expect(exit).not.toHaveProperty('stderrTail')
   })
+
+  // 최종 리뷰 파동(finding 3): 'close' 만 기다리면, 파이프를 쥔 그랜드차일드가 살아 있는 동안 종료가
+  // 영영 안 온다(설계가 경고하는 회귀) — 'exit' 이 짧은 유예 타이머를 걸어 그 경우에도 보고한다.
+  // 자식은 그랜드차일드를 'inherit' 로 띄우고 곧바로 자기 자신은 종료해, 파이프의 쓰기 쪽을
+  // 그랜드차일드가 계속 쥐고 있게 만든다 — 그랜드차일드는 1.5초 뒤 스스로 끝나 뒤처리가 필요 없다.
+  it("그랜드차일드가 파이프를 쥐고 있어도 유예 시간 뒤엔 종료를 보고한다 — 'close' 만 기다리면 안 온다", async () => {
+    const logs: string[] = []
+    const spawn = nodeProcSpawn({ log: (m) => logs.push(m), platform: process.platform })
+    const script =
+      "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 1500)'], { stdio: 'inherit' }); process.exit(6)"
+    const t0 = Date.now()
+    let exit: number | null = null
+    const p = spawn(process.execPath, ['-e', script], { cwd: process.cwd(), env: process.env })
+    p.onExit((e) => { exit = e.exitCode })
+    const code = await until(() => (exit === null ? undefined : exit))
+    // 유예 타이머(100~200ms) 뒤에 온다 — 그랜드차일드가 파이프를 쥐고 있는 1.5초를 다 기다리지 않는다
+    expect(Date.now() - t0).toBeLessThan(1200)
+    expect(code).toBe(6)
+  })
 })

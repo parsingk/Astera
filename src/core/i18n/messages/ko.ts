@@ -760,9 +760,6 @@ export const ko = {
   'session.new.blocked.cliMissing': '이 계정의 CLI 를 찾지 못했습니다',
   'session.new.blocked.noSchedule': '예약 시각을 정하세요',
   'session.new.blocked.checkingFolder': '폴더를 확인하는 중입니다',
-  // 폴더를 고른 직후 최대 10초까지 걸리는 이 폴더의 CLI 검사 — git 검사(checkingFolder)보다 오래
-  // 갈 수 있어 따로 둔다. 아직 답이 없다는 것뿐이라 "기다리세요" 부류에 둔다(설계 D3 의 경주 수정).
-  'session.new.blocked.checkingCli': '이 폴더에서 CLI 를 확인하는 중입니다',
   // Waiting text between pressing Start and the tab opening. Splitting off a worktree chains fetch, worktree add and
   // the include copy, taking several seconds, so what is in progress is announced separately.
   'session.new.starting': '세션을 시작하는 중…',

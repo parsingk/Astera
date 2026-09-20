@@ -86,11 +86,6 @@ export function NewSessionDialog({
   // has actually failed with something to say (a passing check, one that hasn't run yet for this
   // folder, or one that died silently inside its own timeout all leave nothing to show)
   const [cliError, setCliError] = useState<{ claude?: string; codex?: string }>({})
-  // True while the per-folder check above is outstanding for the *current* cwd. Fed into
-  // startBlockedBy so Start stays dead on a folder whose CLI verdict has not come back yet — without
-  // this, picking a folder whose check is slow (or hangs, up to its 10s timeout) left cliOk holding
-  // the *previous* folder's answer, and nothing said the new one was still unknown.
-  const [checkingCli, setCheckingCli] = useState(false)
   const [repoRoot, setRepoRoot] = useState<string | null>(null) // result of the git repo check
   const [resolvingRepo, setResolvingRepo] = useState(false) // blocks start while the check runs — stops a spawn with the previous repoRoot
   const [useWorktree, setUseWorktree] = useState(false)
@@ -165,14 +160,14 @@ export function NewSessionDialog({
   // 세션이 돌 폴더에서 검사한다 — 앱의 cwd 에서 돌리면 toolchain 관리자가 읽을 manifest 가 없어
   // 무조건 통과하고, 그 통과를 믿은 채 세션만 죽는다(설계 D3). 폴더가 바뀌면 다시 묻는다.
   //
-  // checkingCli 는 이 cwd 의 답이 아직 안 왔다는 뜻이다 — 최대 10초까지 걸릴 수 있는데(매달린
-  // shell:true 셔틀), 그동안 cliOk 는 여전히 이전 폴더의 답을 들고 있다. 이 플래그가 없으면 그
-  // 이전 답이 "괜찮다"였던 경우 시작 버튼이 눌리는 채로 남아, 아직 검사하지 않은 새 폴더에서
-  // 세션이 죽는다 — 이 태스크가 막으려던 바로 그 경주(수정 2회차).
+  // 이 결과(cliOk/cliError)는 아래 cliFailsHere 경고에만 쓰인다 — 최종 리뷰 파동(F1) 전에는 시작
+  // 버튼도 이 답을 기다렸고(checkingCli), 그래서 검사가 끝나기 전 최대 10초 동안 폴더를 고르고도
+  // 버튼이 죽어 있었다. cliMissing 이 이제 "설치돼 있는지" 만 묻고 "이 폴더에서 도는지"는 F5 의
+  // 우회 재시도가 살아서 처리하므로, 이 검사의 답은 더 이상 버튼을 막을 이유가 없다 — 그래서
+  // checkingCli 플래그는 없앴다: 아무것도 결정하지 않는 불을 들고 있을 이유가 없다.
   useEffect(() => {
     if (!cwd) return
     let cancelled = false
-    setCheckingCli(true)
     void window.api.system
       .checkCli(cwd)
       .then((c) => {
@@ -180,12 +175,8 @@ export function NewSessionDialog({
         setCliOk({ claude: c.claude.ok, codex: c.codex.ok })
         setCliError({ claude: c.claude.error, codex: c.codex.error })
       })
-      .finally(() => {
-        if (!cancelled) setCheckingCli(false)
-      })
     return () => {
       cancelled = true
-      setCheckingCli(false) // discarded — the new cwd's own run of this effect sets it back to true
     }
   }, [cwd])
 
@@ -236,10 +227,19 @@ export function NewSessionDialog({
   // above for why one probe cannot safely answer both.
   const primaryInstalled = cliInstalled[primaryProvider]
   const primaryRunsHere = cliOk[primaryProvider]
-  // Whether the CLI this account needs is missing, either way — the only thing that gates starting.
-  // Rolling supports codex too (codexRolling.ts) and so do Slack notifications (turn completion is
-  // detected from rollout's task_complete), so this flag must not hide either of those.
-  const primaryCliMissing = !primaryInstalled || !primaryRunsHere
+  // Whether the CLI this account needs is missing from this machine at all — the only thing that
+  // gates starting. primaryRunsHere (does it run in *this* folder) used to be folded in here too
+  // (fix round 2), and that was the bug the final review wave found: a CLI a toolchain manager
+  // refuses to run for this folder (Volta rejecting a broken package.json — the reviewer's own
+  // machine) is exactly the case F5's one-shot bypass retry exists to survive, and gating Start on it
+  // made that retry unreachable for the one machine it was built for — the shim was found, the
+  // per-folder probe failed, Start stayed dead, nothing ever spawned, so the fix never ran. Kept out
+  // of this flag on purpose now: primaryRunsHere still drives the cliFailsHere warning below (the
+  // true, more specific statement) and F5 gets its chance. Still checked broadly, not just for a
+  // plain single-account session — rolling supports codex too (codexRolling.ts) and so do Slack
+  // notifications (turn completion is detected from rollout's task_complete), so this flag must not
+  // hide either of those.
+  const primaryCliMissing = !primaryInstalled
   // 대화 is available once the Host has announced the proc-* family — either provider's account can
   // open one. The poll lives in the hook, shared with ResumeDialog.
   const { enabled: chatEnabled, checking: chatChecking } = useChatAvailability()
@@ -334,16 +334,14 @@ export function NewSessionDialog({
     accountIds,
     cliMissing: primaryCliMissing,
     schedOn,
-    hasSchedule: schedule !== null,
-    checkingCli
+    hasSchedule: schedule !== null
   })
   const BLOCKED_KEY: Record<StartBlocked, MessageKey> = {
     'no-cwd': 'session.new.blocked.noCwd',
     'no-account': 'session.new.blocked.noAccount',
     'cli-missing': 'session.new.blocked.cliMissing',
     'no-schedule': 'session.new.blocked.noSchedule',
-    'checking-folder': 'session.new.blocked.checkingFolder',
-    'checking-cli': 'session.new.blocked.checkingCli'
+    'checking-folder': 'session.new.blocked.checkingFolder'
   }
 
   return (

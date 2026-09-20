@@ -12,11 +12,16 @@ export const nodeProcFactory: ProcFactory = (file, args, opts): ProcLike => {
   let onLine: (line: string) => void = () => {}
   let onExit: (e: { exitCode: number; stderrTail?: string }) => void = () => {}
   let ended = false
+  let exitTimer: NodeJS.Timeout | null = null
   const splitter = createLineSplitter((line) => onLine(line))
   const tail = createStderrTail()
   const end = (code: number): void => {
     if (ended) return
     ended = true
+    if (exitTimer) {
+      clearTimeout(exitTimer)
+      exitTimer = null
+    }
     splitter.flush()
     onExit({ exitCode: code, ...(tail.value() !== undefined ? { stderrTail: tail.value() } : {}) })
   }
@@ -27,7 +32,15 @@ export const nodeProcFactory: ProcFactory = (file, args, opts): ProcLike => {
   // 4000 characters are kept now. When the CLI dies at birth this is the only account of why, and the
   // chat pane had none (design D1).
   child.stderr?.on('data', (c: string) => tail.push(c))
-  child.on('exit', (code, signal) => end(code ?? (signal ? 1 : 0)))
+  // Node only guarantees stdio has been fully delivered at 'close', not 'exit' — this tail exists to
+  // catch a process's *last* write, so a write racing 'exit' is the case it is for, not a corner case.
+  // 'close' is the real trigger; 'exit' only arms a short grace timer that reports the same end if
+  // 'close' still has not arrived — a grandchild holding a pipe open would otherwise mean 'close'
+  // never fires at all, and this session would never be reported as ended.
+  child.on('close', (code, signal) => end(code ?? (signal ? 1 : 0)))
+  child.on('exit', (code, signal) => {
+    exitTimer = setTimeout(() => end(code ?? (signal ? 1 : 0)), 150)
+  })
   child.on('error', () => end(1))
   // A stream failing under a write or read is the child going away; `exit`/`error` on the child
   // already report that — these must not throw.
