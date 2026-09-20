@@ -1509,6 +1509,11 @@ export const ko = {
   'conversation.running.thinking': '생각 중',
   'conversation.running.working': '실행 중',
   'conversation.exited.title': '이 세션은 종료되었습니다',
+  // 터미널은 언제나 종료 코드를 보여 줬고 대화 창은 보여 주지 않았다(설계 D2). 코드만으로는 아무것도
+  // 말해 주지 않으므로 프로세스가 stderr 에 남긴 첫 줄을 같이 싣는다 — 전문은 접어 둔다.
+  'conversation.exited.withCode': '이 세션은 종료되었습니다 (코드 {code})',
+  'conversation.exited.detail': '자세히',
+  'conversation.exited.restart': '다시 시작',
   'conversation.running.interrupt': '중단 (Esc)',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effortRow': 'effort: {level}',

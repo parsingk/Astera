@@ -619,6 +619,11 @@ export const ja: Catalog = {
   'session.pane.splitDown': '下に分割',
   'session.pane.unsplit': '分割を解除',
   'session.pane.maxReached': 'パネルは最大4つまで分割できます',
+  // ConversationPane.tsx — exited banner (session-failure-visibility design D2/F2). この部分カタログには
+  // 他の conversation.* キーがまだ無く(en/ko で代替される)、この3つだけを先に入れる。
+  'conversation.exited.withCode': 'このセッションは終了しました (コード {code})',
+  'conversation.exited.detail': '詳細',
+  'conversation.exited.restart': '再開',
   // ResumeDialog.tsx
   'session.resume.title': 'セッションを再開',
   'session.resume.conversationLabel': '会話',

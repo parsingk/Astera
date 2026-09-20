@@ -1254,8 +1254,16 @@ export function ConversationPane({
   );
   /** What the banner slot is for, in the order paneTransport.ts sets out. */
   const chatBanner = chatBannerFor(chat);
+  // 종료가 에러 배너를 가로채던 자리다. 사유를 배너 안으로 접어 넣어 한 곳에서 말한다 — 둘을 나란히
+  // 세우면 같은 사건을 두 번 말하게 되고, 가로채면 어렵게 실어 온 이유가 화면에 닿지 못한다(설계 D2).
   const banner: ReactNode = exited ? (
-    <ExitedNotice onGoTerminal={null} />
+    <ExitedNotice
+      onGoTerminal={null}
+      exitCode={chat?.exitCode ?? null}
+      reason={chat?.error ?? null}
+      detail={chat?.errorDetail ?? null}
+      onRestart={null}
+    />
   ) : chatBanner.kind === "request" ? (
     // Keyed on the request so a new one gets a new card: the old one's `busy`/`submitting` state
     // would otherwise survive into it, and the person would meet a card whose buttons are already

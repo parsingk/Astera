@@ -1294,6 +1294,11 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.running.thinking': 'Thinking',
   'conversation.running.working': 'Working',
   'conversation.exited.title': 'This session has ended',
+  // The terminal always showed an exit code, and the chat pane never did (design D2). A code alone
+  // says nothing, so the first line the process left on stderr rides along — the tail folds away.
+  'conversation.exited.withCode': 'This session has ended (code {code})',
+  'conversation.exited.detail': 'Details',
+  'conversation.exited.restart': 'Restart',
   'conversation.running.interrupt': 'Stop (Esc)',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effortRow': 'effort: {level}',

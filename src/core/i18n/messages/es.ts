@@ -626,6 +626,12 @@ export const es: Catalog = {
   'session.pane.splitDown': 'Dividir abajo',
   'session.pane.unsplit': 'Quitar división',
   'session.pane.maxReached': 'Se puede dividir en 4 paneles como máximo',
+  // ConversationPane.tsx — exited banner (session-failure-visibility design D2/F2). Este catálogo
+  // parcial aún no tiene el resto de las claves conversation.* (se sustituyen por en/ko); estas tres
+  // se añaden antes que las demás.
+  'conversation.exited.withCode': 'Esta sesión ha terminado (código {code})',
+  'conversation.exited.detail': 'Detalles',
+  'conversation.exited.restart': 'Reiniciar',
   // ResumeDialog.tsx
   'session.resume.title': 'Reanudar la sesión',
   'session.resume.conversationLabel': 'Conversación',
