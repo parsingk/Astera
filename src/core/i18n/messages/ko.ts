@@ -687,6 +687,9 @@ export const ko = {
   'session.new.codexMissingPre': 'Codex CLI를 찾을 수 없습니다.',
   'session.new.claudeMissingPre': 'Claude Code CLI를 찾을 수 없습니다.',
   'session.new.cliMissingPost': '설치 후 다시 시도하세요.',
+  // "설치돼 있지 않다"와 "이 폴더에서는 실행되지 않는다"는 사람이 할 일이 다르다 — 앞은 설치,
+  // 뒤는 폴더나 toolchain 설정이다. 그 차이를 문구가 말한다(설계 D3).
+  'session.new.cliFailsHere': '{cli} 가 이 폴더에서 실행되지 않습니다 — {reason}',
   'session.field.projectFolder': '프로젝트 폴더',
   'session.field.account': '계정',
   // 세션 방식 선택(Task 7) — 터미널/대화 세그먼트 컨트롤. 대화는 Host 가 proc-* 를 말해야 켜진다

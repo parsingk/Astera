@@ -566,6 +566,9 @@ export const ja: Catalog = {
   'session.new.codexMissingPre': 'Codex CLI が見つかりません。',
   'session.new.claudeMissingPre': 'Claude Code CLI が見つかりません。',
   'session.new.cliMissingPost': 'インストール後に再試行してください。',
+  // 「インストールされていない」と「このフォルダーでは実行できない」は対処が違う — 前者はインストール、
+  // 後者はフォルダーや toolchain 設定の問題。その違いを文言で分ける(設計 D3)。
+  'session.new.cliFailsHere': '{cli} はこのフォルダーで実行できません — {reason}',
   'session.field.projectFolder': 'プロジェクトフォルダ',
   'session.field.account': 'アカウント',
   'session.new.folderNotSelected': '(未選択)',

@@ -573,6 +573,9 @@ export const es: Catalog = {
   'session.new.codexMissingPre': 'No se encontró el CLI de Codex.',
   'session.new.claudeMissingPre': 'No se encontró el CLI de Claude Code.',
   'session.new.cliMissingPost': 'Instálelo y vuelva a intentarlo.',
+  // "No instalado" y "no se ejecuta en esta carpeta" requieren arreglos distintos — el primero es una
+  // instalación, el segundo es la carpeta o la configuración del toolchain. El texto marca esa diferencia (diseño D3).
+  'session.new.cliFailsHere': '{cli} no se ejecuta en esta carpeta — {reason}',
   'session.field.projectFolder': 'Carpeta del proyecto',
   'session.field.account': 'Cuenta',
   'session.new.folderNotSelected': '(Sin seleccionar)',

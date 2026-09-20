@@ -69,6 +69,9 @@ export function NewSessionDialog({
   const [slackReady, setSlackReady] = useState(false) // whether a webhook URL is configured — the checkbox is disabled when it is not
   // Both CLIs, because either one can be the missing one — the app opens with just one installed
   const [cliOk, setCliOk] = useState({ claude: true, codex: true })
+  // stderr's first line per CLI, from the same check as cliOk — undefined until a check has actually
+  // failed (a passing check, or one that hasn't run yet for this folder, leaves nothing to show)
+  const [cliError, setCliError] = useState<{ claude?: string; codex?: string }>({})
   const [repoRoot, setRepoRoot] = useState<string | null>(null) // result of the git repo check
   const [resolvingRepo, setResolvingRepo] = useState(false) // blocks start while the check runs — stops a spawn with the previous repoRoot
   const [useWorktree, setUseWorktree] = useState(false)
@@ -98,7 +101,6 @@ export function NewSessionDialog({
     // src/main/slack.ts — under the old condition that only looked at webhookUrl, a user who had set
     // only botToken + channelId could not tick the checkbox even though the bot path was actually on.
     void window.api.slack.getConfig().then((c) => setSlackReady(isSlackReady(c)))
-    void window.api.system.checkCli().then((c) => setCliOk({ claude: c.claude.ok, codex: c.codex.ok }))
     void window.api.settings
       .getAgentPermissionMode()
       .then((m) => setBypassPermissions(m === 'yolo'))
@@ -137,6 +139,21 @@ export function NewSessionDialog({
       cancelled = true
     }
   }, [useWorktree, repoRoot])
+
+  // 세션이 돌 폴더에서 검사한다 — 앱의 cwd 에서 돌리면 toolchain 관리자가 읽을 manifest 가 없어
+  // 무조건 통과하고, 그 통과를 믿은 채 세션만 죽는다(설계 D3). 폴더가 바뀌면 다시 묻는다.
+  useEffect(() => {
+    if (!cwd) return
+    let cancelled = false
+    void window.api.system.checkCli(cwd).then((c) => {
+      if (cancelled) return
+      setCliOk({ claude: c.claude.ok, codex: c.codex.ok })
+      setCliError({ claude: c.claude.error, codex: c.codex.error })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [cwd])
 
   useEffect(() => {
     // git repo check plus the default-account preselect. A worktree session uses the mapping keyed by the original repo too
@@ -495,6 +512,18 @@ export function NewSessionDialog({
           />
           {t('session.new.bypassPermissions')}
         </label>
+        {/* checkCli now runs in the chosen folder, not the app's own cwd, so a toolchain manager that
+            refuses this folder's manifest gets caught here instead of killing the session after Start
+            (design D3). Gated on cliError having a line at all — a failure with empty stderr has
+            nothing worth quoting, and the warning above already says the CLI looks unavailable. */}
+        {primaryCliMissing && cliError[primaryProvider] !== undefined && (
+          <p className="warn-text">
+            {t('session.new.cliFailsHere', {
+              cli: primaryProvider,
+              reason: cliError[primaryProvider] as string
+            })}
+          </p>
+        )}
         <div className="row right">
           <button onClick={onCancel} disabled={starting}>
             {t('common.cancel')}

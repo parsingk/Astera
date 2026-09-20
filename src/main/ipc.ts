@@ -7083,12 +7083,27 @@ export function registerIpc(
   })
   // Checks both CLIs in parallel. The renderer only blocks entry to the app when both are missing, and
   // then gates starting a session on the CLI that the chosen account's provider needs.
-  ipcMain.handle('system.checkCli', async () => {
-    const check = (cli: string): Promise<{ ok: boolean; version?: string }> =>
+  //
+  // `cwd` 를 받는 이유: 이 검사는 세션이 실제로 돌 자리에서 돌아야 한다. PATH 앞의 toolchain 관리자
+  // (Volta 등)는 그 폴더의 프로젝트 manifest 를 읽어 도구 버전을 정하므로, 앱의 cwd 에서 검사하면
+  // 읽을 manifest 가 없어 무조건 통과하고 세션만 죽는다(설계 D3). 실패의 첫 줄을 함께 돌려준다 —
+  // "없음"과 "이 폴더에서는 안 돎"은 사람이 할 일이 다르다.
+  ipcMain.handle('system.checkCli', async (_e, cwd?: string) => {
+    const check = (cli: string): Promise<{ ok: boolean; version?: string; error?: string }> =>
       new Promise((resolve) => {
-        execFile(cli, ['--version'], { shell: true, timeout: 10_000, windowsHide: true }, (err, stdout) => {
-          resolve(err ? { ok: false } : { ok: true, version: stdout.trim() })
-        })
+        execFile(
+          cli,
+          ['--version'],
+          { shell: true, timeout: 10_000, windowsHide: true, ...(cwd ? { cwd } : {}) },
+          (err, stdout, stderr) => {
+            if (!err) return resolve({ ok: true, version: stdout.trim() })
+            const line = String(stderr)
+              .split('\n')
+              .map((l) => l.trim())
+              .find((l) => l.length > 0)
+            resolve({ ok: false, ...(line ? { error: line.slice(0, 200) } : {}) })
+          }
+        )
       })
     const [claude, codex] = await Promise.all([check('claude'), check('codex')])
     return { claude, codex }

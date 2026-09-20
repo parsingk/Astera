@@ -598,6 +598,9 @@ export const en: Record<keyof typeof ko, string> = {
   'session.new.codexMissingPre': 'Codex CLI was not found.',
   'session.new.claudeMissingPre': 'Claude Code CLI was not found.',
   'session.new.cliMissingPost': 'Install it, then try again.',
+  // "Not installed" and "does not run in this folder" call for different fixes — the former is an
+  // install, the latter is the folder or a toolchain config. The copy keeps that distinction (design D3).
+  'session.new.cliFailsHere': '{cli} does not run in this folder — {reason}',
   'session.field.projectFolder': 'Project folder',
   'session.field.account': 'Account',
   'session.kind.terminal': 'Terminal',

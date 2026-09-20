@@ -70,6 +70,10 @@ export interface DetectCandidate {
 export interface CliStatus {
   ok: boolean
   version?: string
+  // First non-empty line of stderr when the check failed, capped at 200 chars. Absent when the CLI
+  // failed silently (no stderr at all) — distinct from `ok: false` alone, which only says "not this
+  // folder" without saying why (design D3).
+  error?: string
 }
 
 export type SessionStatus = 'running' | 'exited'
@@ -1213,7 +1217,10 @@ export interface SystemApi {
   // share this instead of each inventing its own.
   pickFile(defaultPath?: string): Promise<string | null>
   pathExists(p: string): Promise<boolean>
-  checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>
+  // `cwd` lets the check run where the session actually will — the toolchain manager ahead of the
+  // CLI on PATH reads that folder's own manifest, so checking from the app's own cwd (omitting this)
+  // can pass while the same CLI refuses to run in the chosen project (design D3).
+  checkCli(cwd?: string): Promise<{ claude: CliStatus; codex: CliStatus }>
   /** Installs one CLI with the command its vendor documents for this platform. Reached only from the
    *  screen shown when neither is present. Output arrives as `cli:install` events while it runs; this
    *  resolves when the installer exits. `error` names why nothing ran at all — an unmeasured platform,
