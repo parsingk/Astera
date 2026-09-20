@@ -602,6 +602,11 @@ export const es: Catalog = {
   'session.new.saveDefaultAccount': 'Recordar esta cuenta para este proyecto',
   'session.new.bypassPermissions': 'Ejecutar sin comprobar permisos (bypass permissions)',
   'session.new.start': 'Iniciar',
+  'session.new.blocked.noCwd': 'Elige una carpeta',
+  'session.new.blocked.noAccount': 'Elige una cuenta',
+  'session.new.blocked.cliMissing': 'No se encontró la CLI de esta cuenta',
+  'session.new.blocked.noSchedule': 'Fija una hora programada',
+  'session.new.blocked.checkingFolder': 'Comprobando la carpeta',
   'session.new.starting': 'Iniciando la sesión…',
   'session.new.startingWorktree': 'Creando el worktree…',
   // NewSessionDialog.tsx scheduler UI

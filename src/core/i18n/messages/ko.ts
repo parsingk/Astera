@@ -752,6 +752,11 @@ export const ko = {
   'setup.language': '언어',
   'session.new.bypassPermissions': '권한 확인 없이 실행 (bypass permissions)',
   'session.new.start': '시작',
+  'session.new.blocked.noCwd': '폴더를 고르세요',
+  'session.new.blocked.noAccount': '계정을 고르세요',
+  'session.new.blocked.cliMissing': '이 계정의 CLI 를 찾지 못했습니다',
+  'session.new.blocked.noSchedule': '예약 시각을 정하세요',
+  'session.new.blocked.checkingFolder': '폴더를 확인하는 중입니다',
   // Waiting text between pressing Start and the tab opening. Splitting off a worktree chains fetch, worktree add and
   // the include copy, taking several seconds, so what is in progress is announced separately.
   'session.new.starting': '세션을 시작하는 중…',

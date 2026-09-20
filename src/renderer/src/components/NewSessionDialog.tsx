@@ -6,6 +6,8 @@ import { isSlackReady } from '../../../core/slack/ready'
 import { useChatAvailability } from '../hooks/useChatAvailability'
 import { useAccountStatus } from '../hooks/useAccountStatus'
 import { orderBranchesForPicker, reconcileBaseRef } from '../../../core/worktrees/base'
+import { startBlockedBy, type StartBlocked } from '../../../core/sessions/startBlocked'
+import type { MessageKey } from '../../../core/i18n'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
@@ -289,6 +291,23 @@ export function NewSessionDialog({
     }
   }
 
+  const blocked = startBlockedBy({
+    cwd: cwd ?? '',
+    starting,
+    resolvingRepo,
+    accountIds,
+    cliMissing: primaryCliMissing,
+    schedOn,
+    hasSchedule: schedule !== null
+  })
+  const BLOCKED_KEY: Record<StartBlocked, MessageKey> = {
+    'no-cwd': 'session.new.blocked.noCwd',
+    'no-account': 'session.new.blocked.noAccount',
+    'cli-missing': 'session.new.blocked.cliMissing',
+    'no-schedule': 'session.new.blocked.noSchedule',
+    'checking-folder': 'session.new.blocked.checkingFolder'
+  }
+
   return (
     // While starting, an outside click does not close this — the worktree creation and spawn already
     // under way are not cancelled, so if only the modal disappears the user mistakes it for a cancel
@@ -533,21 +552,13 @@ export function NewSessionDialog({
           <button onClick={onCancel} disabled={starting}>
             {t('common.cancel')}
           </button>
-          <button
-            className="primary"
-            disabled={
-              !cwd ||
-              starting ||
-              resolvingRepo ||
-              accountIds.some((id) => !id) ||
-              primaryCliMissing ||
-              (schedOn && !schedule)
-            }
-            onClick={() => void start()}
-          >
+          <button className="primary" disabled={starting || blocked !== null} onClick={() => void start()}>
             {t('session.new.start')}
           </button>
         </div>
+        {/* 왜 못 누르는지 말한다. 다섯 조건 중 둘은 비동기로 늦게 풀려서, 다 골라 놓고도 버튼이 죽어
+            있다가 갑자기 살아나는 것처럼 보였다(설계 D4) */}
+        {blocked !== null && <p className="modal-hint">{t(BLOCKED_KEY[blocked])}</p>}
       </div>
     </div>
   )

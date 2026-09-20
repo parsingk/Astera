@@ -595,6 +595,11 @@ export const ja: Catalog = {
   'session.new.saveDefaultAccount': 'このプロジェクトでこのアカウントを記憶',
   'session.new.bypassPermissions': '権限確認なしで実行 (bypass permissions)',
   'session.new.start': '開始',
+  'session.new.blocked.noCwd': 'フォルダーを選んでください',
+  'session.new.blocked.noAccount': 'アカウントを選んでください',
+  'session.new.blocked.cliMissing': 'このアカウントの CLI が見つかりません',
+  'session.new.blocked.noSchedule': '予約時刻を決めてください',
+  'session.new.blocked.checkingFolder': 'フォルダーを確認しています',
   'session.new.starting': 'セッションを開始しています…',
   'session.new.startingWorktree': 'worktree を作成しています…',
   // NewSessionDialog.tsx scheduler UI
