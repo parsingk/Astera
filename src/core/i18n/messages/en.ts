@@ -247,6 +247,8 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.info.registeredAccounts': 'Registered accounts',
   'settings.info.update': 'Update',
   'settings.info.cliNotDetected': 'Not detected',
+  'settings.info.cliReinstall': 'Reinstall',
+  'settings.info.cliInstallDone': 'Installed.',
   'settings.info.host': 'Background host',
   'settings.info.hostConnected': 'Connected · protocol {protocol} · up {uptime}',
   'settings.info.hostHolding':

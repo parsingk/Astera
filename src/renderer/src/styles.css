@@ -993,6 +993,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .warn { color: var(--warn); font-size: 13px; }
 .settings-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13.5px; }
 .settings-row span:first-child { color: var(--text-dim); }
+/* CLI rows in Settings -> Info: the version (or "not detected") with an install button beside it.
+   Right-aligned like every other value in this panel, and a row of its own for the notes the
+   installer leaves, so a long sentence never pushes the button off the edge. */
+.settings-cli-value { display: flex; align-items: center; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+/* The note rows carry no label, so the empty first cell must not claim half the width */
+.settings-row.settings-cli-note span:first-child { flex: 0 0 0; }
+.settings-cli-failed { color: var(--danger); }
+.settings-cli-log { max-height: 180px; overflow: auto; text-align: left; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; background: var(--elevated); border-radius: var(--radius-sm); padding: 8px 10px; margin: 0; }
 /* language selection — unified with .slack-url-input's palette and sizing */
 /* the language picker in settings — width, plus the 13px it has always used. That size is deliberate:
    it pairs with .slack-url-input in the same panel (see the note there), so it does not follow .sel's 12px */

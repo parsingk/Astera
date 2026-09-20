@@ -204,6 +204,8 @@ export const ja: Catalog = {
   'settings.info.registeredAccounts': '登録アカウント',
   'settings.info.update': 'アップデート',
   'settings.info.cliNotDetected': '未検出',
+  'settings.info.cliReinstall': '再インストール',
+  'settings.info.cliInstallDone': 'インストールしました。',
   'settings.info.host': 'バックグラウンドホスト',
   'settings.info.hostConnected': '接続済み · プロトコル {protocol} · {uptime} 前から',
   'settings.info.hostNotConnected': '未接続',
