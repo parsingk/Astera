@@ -92,6 +92,7 @@ manifest 가 없어 그냥 통과한다.** 앱은 "codex 정상"이라 믿고 �
 | S3 | 상한 4000자 | `CheckResult.outputTail` 과 같은 값·같은 이유. 새 숫자를 만들지 않는다 |
 | S4 | 프로토콜은 새 메시지가 아니라 **기존 `proc-exit` 에 칸 하나** | Host 와 앱은 버전이 어긋날 수 있다. optional 한 칸은 옛 Host 가 안 보내도 그냥 없는 것이고, 새 메시지 타입은 옛 앱이 모르는 것이 된다 |
 | S5 | `cmd.exe /c claude` 의 PATH 해석은 **그대로 둔다** | 그의 도구가 Volta 로 설치돼 있다. 셤을 우회하는 것이 오히려 틀린 동작이다 |
+| S7 | toolchain 우회는 **기본값이 아니라 즉사 시 1회 재시도** | 그 변수는 세션의 모든 자식에게 상속된다. 기본으로 켜면 사용자가 의도한 버전 핀을 조용히 무시하게 되고, 그것이 고치려던 것보다 큰 고장이다 |
 | S6 | 시작 막힘 사유 판정은 **core 에 순수 함수로** | 렌더러에는 테스트가 없다(`vitest` 가 `environment: 'node'`). `orchestration/nodeMeta.ts` 와 같은 이유·같은 방식 |
 
 ## 4. 고치는 것
@@ -130,10 +131,31 @@ manifest 가 없어 그냥 통과한다.** 앱은 "codex 정상"이라 믿고 �
 - `NewSessionDialog` 이 버튼 아래 한 줄로 그린다. `resolvingRepo` 는 "폴더를 확인하는 중"이라
   기다리면 되는 것이고, 나머지 셋은 사람이 할 일이 있는 것이다 — 문구가 그 차이를 말한다.
 
+### F5 — 프로젝트의 manifest 가 세션을 막지 못하게 한다
+
+**`package.json` 이 깨진 것과 에이전트 CLI 가 뜨는 것은 상관이 없어야 한다.** 그 파일은 사용자의
+프로젝트 것이지 codex 를 어떻게 띄울지를 정하는 것이 아닌데, PATH 앞의 toolchain 관리자가 둘을
+묶어 버린다. Volta 는 `VOLTA_BYPASS` 가 있으면 버전 해석과 프로젝트 탐지를 건너뛰고 실행 파일로
+바로 통과시킨다([volta-core/src/run](https://github.com/volta-cli/volta/blob/main/crates/volta-core/src/run/mod.rs)).
+
+**항상 켜지는 않는다.** 그 변수는 세션이 띄우는 모든 자식에게 상속되므로, 에이전트가 세션 안에서
+`npm test` 를 돌릴 때 사용자가 의도한 Node 핀까지 무시하게 된다. 그것은 우리가 고치려던 것보다 큰
+피해다.
+
+**대신 즉사했을 때 한 번만 다시 띄운다.** 조건은 문자열 매칭이 아니라 행동이다 — CLI 가 프로토콜을
+**한 줄도 말하지 않고** 짧은 시간 안에 죽었다면, 그 앞의 무언가가 실행 자체를 거절한 것이다. 그때
+`VOLTA_BYPASS=1` 을 얹어 한 번 재시도하고, **성공하면 그 사실을 사람에게 말한다** — 우회는 사용자가
+핀해 둔 것과 다른 버전을 띄웠을 수 있고, 조용히 그러면 안 된다. 재시도도 실패하면 두 시도의 stderr 를
+함께 보여준다(F1·F2).
+
+행동 신호라 Volta 에만 매이지 않는다. 다른 관리자(asdf·mise 등)의 우회 변수가 필요해지면 같은 자리에
+더한다 — 지금은 증거가 있는 것 하나만 넣는다.
+
 ## 5. 고치지 않는 것
 
-Volta 자체, 리뷰어의 `package.json`, `cmd.exe /c` 의 PATH 해석(S5). 그리고 살아 있는 동안의 stderr
-스트리밍(S2) — 필요해지면 그때 프로토콜에 더한다.
+Volta 자체, 리뷰어의 `package.json`, `cmd.exe /c` 의 PATH 해석(S5). 살아 있는 동안의 stderr
+스트리밍(S2) — 필요해지면 그때 프로토콜에 더한다. 그리고 **우회를 기본값으로 켜는 것**(F5) —
+사용자의 의도적인 버전 핀을 조용히 무시하는 쪽이 더 나쁜 고장이다.
 
 ## 6. 테스트
 
@@ -144,6 +166,7 @@ Volta 자체, 리뷰어의 `package.json`, `cmd.exe /c` 의 PATH 해석(S5). 그
 | `codexAdapter.test.ts` / `claudeAdapter.test.ts` | 두 provider 모두 같은 실패 모양을 낸다 |
 | `startBlocked.test.ts` (신규) | 다섯 조건의 우선순위, 아무것도 안 막으면 null |
 | `paneTransport.test.ts` | 종료와 에러가 함께 있을 때 한 배너로 접힌다 |
+| `retryBypass.test.ts` (신규) | 프로토콜을 한 줄이라도 말했으면 재시도하지 않는다; 말없이 즉사하면 한 번만 재시도한다; 두 번은 없다; 재시도 성공은 사람에게 알린다 |
 | `catalog.test.ts` | 네 로케일 키 동등성 (기존) |
 
 렌더러는 `npm run typecheck` 와 `npm run build`. 수동 확인: PATH 앞에 즉시 `exit 8` 하며 stderr 를
