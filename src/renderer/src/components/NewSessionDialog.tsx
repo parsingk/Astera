@@ -304,7 +304,11 @@ export function NewSessionDialog({
         {runningCount >= SOFT_LIMIT && (
           <p className="warn">{t('session.new.runningWarning', { count: runningCount })}</p>
         )}
-        {primaryCliMissing && (
+        {/* "Not found, here's how to install it" is only a guess — the check failed and said nothing,
+            which is what a missing binary looks like. When it said something (cliError below is set),
+            that something is a better answer than this guess, so this warning steps aside for that one
+            instead of the two stacking and telling the person to install a CLI they already have. */}
+        {primaryCliMissing && cliError[primaryProvider] === undefined && (
           <p className="warn">
             {t(
               primaryProvider === 'codex'
@@ -514,8 +518,9 @@ export function NewSessionDialog({
         </label>
         {/* checkCli now runs in the chosen folder, not the app's own cwd, so a toolchain manager that
             refuses this folder's manifest gets caught here instead of killing the session after Start
-            (design D3). Gated on cliError having a line at all — a failure with empty stderr has
-            nothing worth quoting, and the warning above already says the CLI looks unavailable. */}
+            (design D3). Mutually exclusive with the "not found, install it" warning above by design —
+            the tool's own complaint is a better answer than our guess at "not installed", so once it
+            has spoken this replaces that guess instead of standing next to it and contradicting it. */}
         {primaryCliMissing && cliError[primaryProvider] !== undefined && (
           <p className="warn-text">
             {t('session.new.cliFailsHere', {
