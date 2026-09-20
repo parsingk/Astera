@@ -16,6 +16,7 @@ import { repoPathOf } from '../worktrees/repo'
 import type { OrchState } from './state'
 import { eventCountFor } from './timeline'
 import { FAILURE_LIMIT } from './types'
+import { policyOf, repairCountOf, reviewRoundOf } from './convergence'
 import type { Run, Task } from './types'
 
 /** 한 프로젝트에 속한 Run 들, 최신순.
@@ -153,6 +154,9 @@ function jobTaskOf(
       ? entries[entries.length - 1]
       : null
   const done = entries.filter((e) => e.resumedAt !== undefined).length
+  // 수렴 판정은 policyOf 다 — `convergence !== undefined` 가 아니다(Plan 1 설계 §18): 손으로 null 을 적어 둔 Run 이
+  // "켜진 것" 으로 읽히면 안 된다. 기본값이 채워진 정책이라 화면이 3/2 를 지어내지 않는다.
+  const policy = policyOf(state, task)
   return {
     id: task.id,
     title: task.title,
@@ -168,7 +172,9 @@ function jobTaskOf(
           gate: {
             id: open[0].id,
             question: open[0].question,
-            ...(open[0].options ? { options: open[0].options } : {})
+            ...(open[0].options ? { options: open[0].options } : {}),
+            // 사이드바 "소진" 칩의 유일한 근거 — JobTask.gate 의 주석
+            ...(open[0].kind ? { kind: open[0].kind } : {})
           }
         }
       : {}),
@@ -185,7 +191,35 @@ function jobTaskOf(
           }
         }
       : {}),
-    ...(done > 0 ? { resumes: done } : {})
+    ...(done > 0 ? { resumes: done } : {}),
+    // 검사 결과는 **검사가 걸린 모든 Task** 에 — 자동 수정을 켠 Run 만이 아니다(UI 설계 U2). 칩이 그리는 것만
+    // 싣는다: 출력 꼬리는 이 스냅숏이 사이드바 푸시마다 나가는 것이라 빼고(U4), 시간은 ISO 둘이 아니라 뺄셈
+    // 결과 하나로 — 렌더러가 계산하면 테스트할 자리가 없다.
+    ...(task.checks?.length
+      ? {
+          checks: task.checks.map((c) => ({
+            configId: c.configId,
+            name: c.name,
+            status: c.status,
+            ...(c.exitCode !== undefined ? { exitCode: c.exitCode } : {}),
+            ...(c.startedAt && c.endedAt ? { durationMs: Date.parse(c.endedAt) - Date.parse(c.startedAt) } : {}),
+            ...(c.unstable ? { unstable: true as const } : {})
+          }))
+        }
+      : {}),
+    // 예산과 진행은 정책 있는 Run 에만(U3)
+    ...(policy
+      ? {
+          convergence: {
+            repairs: repairCountOf(state, task.id),
+            maxFixAttempts: policy.maxFixAttempts,
+            reviewRound: reviewRoundOf(state, task.id),
+            maxReviewRounds: policy.maxReviewRounds,
+            repairing: running?.repair ?? null,
+            stopped: task.convergenceOff === true
+          }
+        }
+      : {})
   }
 }
 

@@ -42,7 +42,7 @@ export type { ConvTurn } from './history/convTypes'
 // (the server owns OrchState), so importing it from here would make that reliance direct rather than
 // incidental. Either way the wrong fix for a genuinely missing import is "types": ["node"] — it hands
 // the renderer typecheck every Node global, which is the guard this note stands to protect.
-import type { MessageType, Outcome, TaskStatus } from './orchestration/types'
+import type { CheckResult, GateKind, MessageType, Outcome, RepairReason, TaskStatus } from './orchestration/types'
 export type { MessageType, TaskStatus } from './orchestration/types'
 
 // providers/meta.ts owns Provider. It is re-exported here so that the files which already imported
@@ -362,6 +362,29 @@ export interface TerminalBuffer {
   buffer: string
 }
 
+/** JobTask.checks 의 한 칸 — CheckResult 에서 칩이 그릴 것만. outputTail·startedAt·endedAt 은 싣지 않는다
+ *  (UI 설계 U4): 이 스냅숏은 사이드바가 바뀔 때마다 나가고, 칩이 그리는 것은 기호 하나다. */
+export interface JobCheck {
+  configId: string
+  name: string
+  status: CheckResult['status']
+  /** 툴팁의 "실패 (exit N)". 값이 있으면 그대로 옮긴다 */
+  exitCode?: number
+  /** 밀리초. CheckResult 의 startedAt·endedAt 둘 다 있을 때만 — 툴팁의 "지난 라운드 실제 시간" */
+  durationMs?: number
+  unstable?: true
+}
+/** JobTask.convergence — 자동 수정의 예산과 지금 자리. 정책 있는 Run 의 Task 만 갖는다(UI 설계 U3) */
+export interface JobConvergence {
+  repairs: number
+  maxFixAttempts: number
+  reviewRound: number
+  maxReviewRounds: number
+  /** 지금 열린 Dispatch 가 repair 면 그 사유. 아니면 null */
+  repairing: RepairReason | null
+  /** 사람이 자동 수정을 멈춰 뒀다(Task.convergenceOff) */
+  stopped: boolean
+}
 /** One Task row of the Jobs sidebar. A projection of the orchestration Task, folded in main —
  *  OrchState itself never crosses the bridge (it carries messages, deliveries and dispatch records
  *  the view has no use for, and it would make the renderer re-derive what main already computed). */
@@ -387,8 +410,11 @@ export interface JobTask {
    *  질문을 보여 주고 B 를 푼다. 묶어 두면 "열린 Gate 가 있나"도 검사 하나가 된다.
    *
    *  나머지 열린 Gate 는 아래 openGates 가 개수로만 말한다 — 한 번에 하나씩 답하는 자리이고,
-   *  답하면 그다음 것이 이 자리로 올라온다. */
-  gate?: { id: string; question: string; options?: string[] }
+   *  답하면 그다음 것이 이 자리로 올라온다.
+   *
+   *  `kind` 는 앱이 특별히 다루는 Gate 의 종류(Gate.kind) — 사이드바가 "소진" 칩을 그릴 근거가 이것뿐이다.
+   *  repairs >= maxFixAttempts 로 되짚으면 사람이 한 번 더 허락한 수정(grantedExtra)이 그 셈을 깨뜨린다. */
+  gate?: { id: string; question: string; options?: string[]; kind?: GateKind }
   openGates: number
   /** The provider of the Dispatch that is **running this Task right now**. A Dispatch that has ended
    *  does not count — the sidebar's rows are the running ones, and this is the field that badge draws
@@ -413,6 +439,13 @@ export interface JobTask {
    *  돌아가고, 그때도 앞선 Dispatch 의 정지·재개는 상세 창의 타임라인에 그대로 남는다
    *  (core/orchestration/timeline.ts 는 Dispatch 마다 이력을 편다). */
   resumes?: number
+  /** 이 Task 의 마지막 검증 라운드. **검사가 걸린 모든 Task 가 갖는다** — 자동 수정을 켠 Run 만이 아니다
+   *  (UI 설계 U2). 없으면 검사가 없는 Task 이고, 그때 노드는 칩 줄 자체를 그리지 않는다. */
+  checks?: JobCheck[]
+  /** 자동 수정 정책이 있는 Run 의 Task 만 갖는다(`policyOf !== null`). 검사가 없는 Task 도 Run 에 정책이 있으면
+   *  갖는다 — 검토만 걸린 Task 의 라운드를 그리기 위해서다. 없는 Run 에 실으면 의미 없는 3/2 가 모든 카드를
+   *  따라다닌다. */
+  convergence?: JobConvergence
 }
 
 export type JobEventKind =

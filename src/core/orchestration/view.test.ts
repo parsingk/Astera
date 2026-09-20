@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { runsForProject, progressOf, outcomeOf, snapshotFor, sameSnapshot } from './view'
 import { emptyState } from './state'
 import type { OrchState } from './state'
-import type { Dispatch, Gate, Message, ResumeEntry, Run, Task } from './types'
-import { FAILURE_LIMIT } from './types'
+import type { CheckResult, Dispatch, Gate, Message, ResumeEntry, Run, Task } from './types'
+import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS } from './types'
 import type { JobTask, WorktreeInfo } from '../types'
 import { absPath } from '../testPaths'
 
@@ -848,5 +848,78 @@ describe('snapshotFor — 기다리는 중과 재개 횟수', () => {
       ]
     }
     expect(taskOf(s).waiting).toBeUndefined()
+  })
+})
+
+describe('snapshotFor — 검사 결과와 자동 수정 진행', () => {
+  const taskOf = (s: OrchState): JobTask =>
+    snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
+  const checks: CheckResult[] = [
+    { configId: 'c1', name: 'Typecheck', status: 'passed', exitCode: 0, startedAt: '2026-08-18T01:00:00.000Z', endedAt: '2026-08-18T01:00:18.000Z' },
+    { configId: 'c2', name: 'Tests', status: 'failed', exitCode: 1, outputTail: '2 failed', startedAt: '2026-08-18T01:00:18.000Z', unstable: true }
+  ]
+
+  // 검사 결과는 정책이 없는 Run 에도 있다(U2). 칩이 그리는 것만 싣고 outputTail 은 싣지 않는다(U4) — 이 스냅숏은
+  // 사이드바 푸시마다 나간다. 시간은 ISO 둘이 아니라 뺄셈 결과 하나로: 렌더러가 계산하면 테스트할 자리가 없다.
+  it('checks 는 정책 없는 Run 에도 싣되 기호를 그릴 것만 — durationMs 는 둘 다 있을 때만', () => {
+    const s = withRuns([run('r1', absPath('p'))], [{ ...task('t1', 'r1', 'failed'), checks }])
+    expect(taskOf(s).checks).toEqual([
+      { configId: 'c1', name: 'Typecheck', status: 'passed', exitCode: 0, durationMs: 18_000 },
+      { configId: 'c2', name: 'Tests', status: 'failed', exitCode: 1, unstable: true }
+    ])
+    expect(taskOf(s).convergence).toBeUndefined()
+  })
+
+  it('checks 가 없는 Task 는 칸 자체가 없다', () => {
+    const s = withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'completed')])
+    expect(taskOf(s)).not.toHaveProperty('checks')
+  })
+
+  // policyOf 가 수렴 판정이다 — convergence: {} 도 켜진 것이고 기본값 셋이 채워진다(Plan 1 설계 §18: `!== undefined` 는 틀린 검사)
+  it('convergence 는 정책 있는 Run 에만 — 기본값과 repair 수·검토 라운드를 센다', () => {
+    const s: OrchState = {
+      ...withRuns([{ ...run('r1', absPath('p')), convergence: {} }], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [
+        { ...dispatch('d0', 't1', 's0', '2026-08-18T00:00:00.000Z'), endedAt: '2026-08-18T00:30:00.000Z', outcome: 'succeeded' },
+        { ...dispatch('d1', 't1', 's1', '2026-08-18T01:00:00.000Z'), repair: 'check-failure', retryOf: 'd0' }
+      ]
+    }
+    expect(taskOf(s).convergence).toEqual({
+      repairs: 1, maxFixAttempts: FAILURE_LIMIT, reviewRound: 0, maxReviewRounds: MAX_REVIEW_ROUNDS,
+      repairing: 'check-failure', stopped: false
+    })
+  })
+
+  it('repair 가 아닌 Dispatch 가 도는 중이면 repairing 은 null, 사람이 껐으면 stopped', () => {
+    const s: OrchState = {
+      ...withRuns(
+        [{ ...run('r1', absPath('p')), convergence: { maxFixAttempts: 1 } }],
+        [{ ...task('t1', 'r1', 'dispatched'), convergenceOff: true }]
+      ),
+      dispatches: [dispatch('d1', 't1', 's1', '2026-08-18T01:00:00.000Z')]
+    }
+    expect(taskOf(s).convergence).toMatchObject({ repairing: null, stopped: true, maxFixAttempts: 1 })
+  })
+
+  // 보고를 낸 검토만 라운드다(reviewRoundOf) — 유실된 검토는 세지 않는다
+  it('reviewRound 는 outcome 있는 검토 Dispatch 수다', () => {
+    const s: OrchState = {
+      ...withRuns([{ ...run('r1', absPath('p')), convergence: {} }], [task('t1', 'r1', 'reviewing')]),
+      dispatches: [
+        { ...dispatch('v1', 't1', 'sv1', '2026-08-18T01:00:00.000Z'), review: true, endedAt: '2026-08-18T01:10:00.000Z', outcome: 'failed' },
+        { ...dispatch('v2', 't1', 'sv2', '2026-08-18T01:20:00.000Z'), review: true }
+      ]
+    }
+    expect(taskOf(s).convergence?.reviewRound).toBe(1)
+  })
+
+  // 사이드바 "소진" 칩의 유일한 근거 — repairs >= maxFixAttempts 로 되짚으면 사람이 한 번 더 허락한
+  // 수정(grantedExtra)이 그 셈을 깨뜨린다. 다음 조각의 retry-once/mark-failed 버튼도 이 값을 본다.
+  it('gate.kind 를 그대로 옮긴다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'blocked')]),
+      gates: [{ ...gate('g1', 't1', 'q', '2026-08-18T01:00:00.000Z'), kind: 'convergence-exhausted' }]
+    }
+    expect(taskOf(s).gate).toEqual({ id: 'g1', question: 'q', kind: 'convergence-exhausted' })
   })
 })
