@@ -661,7 +661,7 @@ export const en: Record<keyof typeof ko, string> = {
   'session.new.blocked.noAccount': 'Choose an account',
   'session.new.blocked.cliMissing': "This account's CLI was not found",
   'session.new.blocked.noSchedule': 'Set a schedule time',
-  'session.new.blocked.checkingFolder': 'Checking the folder',
+  'session.new.blocked.checkingFolder': 'Checking the project folder',
   'session.new.starting': 'Starting session…',
   'session.new.startingWorktree': 'Creating worktree…',
   'session.new.schedLabel': 'Scheduler — run a command periodically',

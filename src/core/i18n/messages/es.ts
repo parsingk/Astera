@@ -609,7 +609,7 @@ export const es: Catalog = {
   'session.new.blocked.noAccount': 'Elige una cuenta',
   'session.new.blocked.cliMissing': 'No se encontró la CLI de esta cuenta',
   'session.new.blocked.noSchedule': 'Fija una hora programada',
-  'session.new.blocked.checkingFolder': 'Comprobando la carpeta',
+  'session.new.blocked.checkingFolder': 'Comprobando la carpeta del proyecto',
   'session.new.starting': 'Iniciando la sesión…',
   'session.new.startingWorktree': 'Creando el worktree…',
   // NewSessionDialog.tsx scheduler UI
