@@ -1099,6 +1099,7 @@ export const ja: Catalog = {
   'jobs.convergence.gate.repairFailed': '修正ワーカーを起動できませんでした: {reason}',
   'jobs.convergence.gate.retryOnce': 'もう一度修正',
   'jobs.convergence.gate.markFailed': '失敗として記録',
+  'jobs.convergence.retryOnceFailed': 'ゲートは解除しましたが、修正を開始できませんでした: {reason}',
   'jobs.convergence.node.repairing': '修正 {repairs}/{max} · {failed} 失敗',
   'jobs.convergence.node.repairingNoCheck': '修正 {repairs}/{max}',
   'jobs.convergence.node.rechecking': '再検査中 · {name}',

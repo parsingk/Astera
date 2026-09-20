@@ -704,8 +704,22 @@ export function RunDetail({
         setGateError(t('jobs.node.failed'))
         return
       }
+      // 설계 §5(V4): 소진 Gate 에 "한 번 더 수정" 으로 답했는데 그 수정을 열지 못하는 경우가 있다 —
+      // 이 Task 를 막는 다른 Gate 가 이미 열려 있으면 repairOnce 는 아무것도 열지 못한다. 서버는 이
+      // Gate 자체는 정상적으로 풀렸으므로 200 을 주고, 그 사실을 본문에만 싣는다(server.ts 의
+      // gate-resolve). 그 본문을 여기서 버리던 동안, 사람이 누른 버튼은 아무 일도 하지 않은 채
+      // 성공한 것처럼 보였다 — 이 화면이 지금 하는 유일한 거짓말이었다.
+      //
+      // Gate 는 실제로 풀렸으므로 answering 은 닫는다. 남기면 이미 없는 Gate 에 다시 답하라고
+      // 내미는 꼴이 된다. 실패는 그 옆에 남는 줄로 말한다.
+      const body = reply.body as { retryOnceFailed?: unknown } | null
+      const retryFailed = typeof body?.retryOnceFailed === 'string' ? body.retryOnceFailed : null
       setAnswering(null)
       setAnswer('')
+      if (retryFailed !== null) {
+        setGateError(t('jobs.convergence.retryOnceFailed', { reason: retryFailed }))
+        return
+      }
     } catch {
       setGateError(t('jobs.node.failed'))
     } finally {

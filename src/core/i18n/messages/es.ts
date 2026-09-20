@@ -1115,6 +1115,7 @@ export const es: Catalog = {
   'jobs.convergence.gate.repairFailed': 'La aplicación no pudo iniciar un worker de reparación: {reason}',
   'jobs.convergence.gate.retryOnce': 'Reparar una vez más',
   'jobs.convergence.gate.markFailed': 'Marcar como fallida',
+  'jobs.convergence.retryOnceFailed': 'La compuerta se resolvió, pero la reparación no pudo iniciarse: {reason}',
   'jobs.convergence.node.repairing': 'Corrección {repairs}/{max} · {failed} falla',
   'jobs.convergence.node.repairingNoCheck': 'Corrección {repairs}/{max}',
   'jobs.convergence.node.rechecking': 'Comprobando de nuevo · {name}',

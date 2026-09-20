@@ -1316,6 +1316,9 @@ export const ko = {
   'jobs.convergence.gate.repairFailed': '수정할 워커를 띄울 수 없었습니다: {reason}',
   'jobs.convergence.gate.retryOnce': '한 번 더 수정',
   'jobs.convergence.gate.markFailed': '실패로 표시',
+  // 설계 §5(V4). Gate 는 풀렸는데 수리는 안 열린 경우다 — 사람이 누른 것이 아무 일도 하지
+  // 않았다는 사실만큼은 말해야 한다. 서버가 준 사유를 그대로 옮긴다.
+  'jobs.convergence.retryOnceFailed': '잠금은 풀렸지만 수정을 시작하지 못했습니다: {reason}',
   // 노드 meta 줄(RunDetail, nodeMetaOf 의 kind 별). 문장은 결과가 아니라 지금 무슨 일이 벌어지는지 말한다 —
   // "수정 2/3 · Unit tests 실패" 는 두 번 고쳤고 아직 그 검사가 막고 있다는 뜻이다
   'jobs.convergence.node.repairing': '수정 {repairs}/{max} · {failed} 실패',
