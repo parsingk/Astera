@@ -39,6 +39,9 @@ export const nodeProcFactory: ProcFactory = (file, args, opts): ProcLike => {
   // never fires at all, and this session would never be reported as ended.
   child.on('close', (code, signal) => end(code ?? (signal ? 1 : 0)))
   child.on('exit', (code, signal) => {
+    // 'close' 가 먼저 왔거나 'error' 가 이미 끝냈으면 걸 것이 없다. end() 가 idempotent 라 해는
+    // 없지만, 아무도 지우지 않는 타이머가 150ms 동안 이벤트 루프를 붙들어 테스트에서 열린 핸들로 보인다.
+    if (ended) return
     exitTimer = setTimeout(() => end(code ?? (signal ? 1 : 0)), 150)
   })
   child.on('error', () => end(1))
