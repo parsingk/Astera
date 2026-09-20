@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type {
   Account,
+  JobCheck,
   JobEvent,
   JobRun,
   JobTask,
@@ -9,12 +10,14 @@ import type {
   RunDetail as RunDetailData,
   TaskStatus
 } from '../../../core/types'
-import type { MessageKey } from '../../../core/i18n'
+import type { MessageKey, MessageParams } from '../../../core/i18n'
 import { accountToDispatchOn } from '../../../core/accounts/dispatchAccount'
 import { providerOf } from '../../../core/providers/meta'
 import { chainOf } from '../../../core/orchestration/graph'
 import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
+import { firstBlockedCheck, nodeMetaOf, type NodeMeta } from '../../../core/orchestration/nodeMeta'
+import { formatRunDuration } from '../../../core/run/duration'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
 import { runningCount } from '../../../core/orchestration/running'
 import { useI18n } from '../i18n/I18nProvider'
@@ -148,6 +151,54 @@ const RUN_START = 'run:start'
 
 /** 병합 버튼의 busy 센티넬. RUN_START 와 같은 이유로 Task id 와 겹칠 수 없는 값이다 */
 const RUN_MERGE = 'run:merge'
+
+type Translate = (key: MessageKey, params?: MessageParams) => string
+
+/** nodeMetaOf 의 판정을 문장으로. 우선순위는 그쪽에 있다 — 여기는 kind 마다 문구 하나다. undefined 면 줄을 그리지 않는다 */
+function metaText(m: NodeMeta, t: Translate): string | undefined {
+  switch (m.kind) {
+    case 'gate':
+      return m.question
+    case 'repairing':
+      return m.failed === null
+        ? t('jobs.convergence.node.repairingNoCheck', { repairs: m.repairs, max: m.max })
+        : t('jobs.convergence.node.repairing', { repairs: m.repairs, max: m.max, failed: m.failed })
+    case 'checking':
+      return m.retrying === null ? t('jobs.convergence.node.checking') : t('jobs.convergence.node.rechecking', { name: m.retrying })
+    case 'reviewing':
+      return t('jobs.convergence.node.reviewing', { round: m.round, max: m.max })
+    case 'failed':
+      return t('jobs.convergence.node.failed', { name: m.name })
+    case 'provider':
+      return m.provider
+    case 'none':
+      return undefined
+  }
+}
+
+/** 칩 기호의 종류 — CheckResult.status 넷에 그리기 위한 다섯째 `retrying` 이 더해진다: validating 인 Task 에서
+ *  지난 라운드에 막혔던 검사는 지금 다시 도는 중이라는 뜻이다(UI 설계 U12 — validator 는 라운드 끝에만 결과를
+ *  주므로 "지금 도는 검사" 는 그렇게밖에 알 수 없다). */
+type GlyphKind = JobCheck['status'] | 'retrying'
+const GLYPH: Record<GlyphKind, string> = { passed: '✓', failed: '✗', 'timed-out': '✗', 'not-run': '○', retrying: '●' }
+
+/** "{이름} — {결과} ({지난 라운드 실제 시간}), {흔들림}". 시간은 formatRunDuration 을 빌린다 — {startedAt, exitedAt}
+ *  과 now 를 받는 함수라 0·durationMs·0 을 넘긴다(어댑터 한 줄). */
+function checkTooltip(c: JobCheck, glyph: GlyphKind, t: Translate): string {
+  const verdict =
+    glyph === 'retrying'
+      ? t('jobs.convergence.check.retrying')
+      : c.status === 'passed'
+        ? t('jobs.convergence.check.passed')
+        : c.status === 'failed'
+          ? t('jobs.convergence.check.failed', { code: c.exitCode ?? '?' })
+          : c.status === 'timed-out'
+            ? t('jobs.convergence.check.timedOut')
+            : t('jobs.convergence.check.notRun')
+  const time = c.durationMs !== undefined ? ` (${formatRunDuration({ startedAt: 0, exitedAt: c.durationMs }, 0)})` : ''
+  const flip = c.unstable ? `, ${t('jobs.convergence.check.unstable')}` : ''
+  return `${c.name} — ${verdict}${time}${flip}`
+}
 
 export function RunDetail({
   run,
@@ -1137,9 +1188,12 @@ function Graph({
     const showAnswer = task.status === 'blocked' && task.gate !== undefined
     // 제목 아래 한 줄. **없으면 줄을 그리지 않는다** — 스냅숏이 이 값을 주지 않는 Task 가 더
     // 많고(끝난 것, 아직 안 뜬 것), 빈 줄을 두면 그 카드들의 제목이 가운데에서 위로 밀려 한
-    // 그래프 안에서 제목의 높이가 두 가지가 된다. 열린 Gate 가 있으면 그 질문이 provider 보다
-    // 먼저다: 사람이 읽어야 하는 것이 그쪽이다.
-    const meta = task.gate?.question ?? task.provider
+    // 그래프 안에서 제목의 높이가 두 가지가 된다. 무엇을 쓰는지는 core 의 nodeMetaOf 가 정한다 —
+    // Gate 질문 → 막힌 검사 → 도는 검사 → 검토 라운드 → provider. 여기서는 kind 를 문장으로 바꾸기만
+    // 한다(렌더러에는 테스트가 없다).
+    const meta = metaText(nodeMetaOf(task), t)
+    // validating 이면 지난 라운드에 막힌 검사 하나를 ● 로 그린다 — 그것이 다시 도는 중이라는 뜻(checkTooltip 의 주석)
+    const retrying = task.status === 'validating' ? firstBlockedCheck(task) : null
     // 고른 Task 와 의존으로 닿지 않는 것. 이 Task 를 멈춰도 저것은 멈추지 않는다는 뜻이다
     const away = chain !== undefined && !chain.has(task.id)
     const cls = ['detail-node', `detail-node--${task.status}`, away ? 'away' : '']
@@ -1171,6 +1225,23 @@ function Graph({
         </span>
         <span className="detail-node-title">{task.title}</span>
         {meta !== undefined && <span className="detail-node-meta">{meta}</span>}
+        {/* 검사 칩 한 줄 — 검사가 걸린 Task 만(없으면 요소도 없다: NODE_H 안에서 제목·meta 두 줄이 가운데 서는
+            지금 모양을 그대로 두려면 빈 줄을 세우면 안 된다). meta 줄과 따로인 이유는 Gate 질문이 meta 를 차지해도
+            무엇이 깨졌는지 보여야 하기 때문이다(UI 설계 U5). 통과한 것까지 전부 그린다 — 몇 개 중 어디서 멈췼는지
+            한눈에(U6). */}
+        {task.checks && task.checks.length > 0 && (
+          <span className="detail-checks">
+            {task.checks.map((c) => {
+              const glyph: GlyphKind = retrying !== null && c.configId === retrying.configId ? 'retrying' : c.status
+              return (
+                <span key={c.configId} className={`detail-check detail-check--${glyph}`} title={checkTooltip(c, glyph, t)}>
+                  {GLYPH[glyph]}
+                  {c.unstable && <sub>~</sub>}
+                </span>
+              )
+            })}
+          </span>
+        )}
         {/* 세션 열기·띄우기·멈추기·물어보기·다시 띄우기 — 노드 안의 버튼들. formOpen 인 동안은
             전부 숨긴다: Task 짓기·질문 쓰기 폼이 열려 있거나 다른 명령이 도는 동안 이 버튼 중
             하나를 누르면 그 폼이나 그 명령의 결과를 조용히 버리게 된다(RunDetail.formOpen 의
