@@ -68,6 +68,8 @@ checks?: {
   configId: string
   name: string
   status: CheckResult['status']
+  /** 툴팁의 "실패 (exit N)" — 실패한 검사에만 뜻이 있지만 값이 있으면 그대로 옮긴다 */
+  exitCode?: number
   /** 밀리초. startedAt·endedAt 둘 다 있을 때만 — 툴팁의 "지난 라운드 실제 시간" */
   durationMs?: number
   unstable?: true
