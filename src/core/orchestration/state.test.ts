@@ -36,6 +36,7 @@ import {
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate, type Dispatch, type CheckResult } from './types'
 import type { RepairTarget } from './state'
+import { t } from '../i18n'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 const LATER = '2026-08-04T01:00:00.000Z'
@@ -1312,12 +1313,20 @@ describe('applyValidationResult — convergence', () => {
   })
 
   // Minor — Gate 질문은 앱 언어로 그려진다
+  // **문구가 아니라 언어를 고정한다.** 한때 이 테스트는 한국어 문장의 조각("완료 검사가", "수렴하지")을
+  // 직접 적어 두었는데, 그 문구를 다듬은 커밋 하나에 그대로 깨졌다(1c63d9d — "수렴하지 않았습니다" 가
+  // "통과하지 못했습니다" 가 된 자리다). 이 테스트가 지키려는 것은 특정 낱말이 아니라 lang 이 실제로
+  // 카탈로그 선택에 쓰인다는 것이므로, 같은 키를 같은 인자로 렌더한 것과 비교하고 영어와 다름을 함께 본다.
   it('lang 을 주면 Gate 질문이 그 언어로 그려진다', () => {
     const { s, taskId } = armed({ consecutiveFailures: 3 })
     const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME, lang: 'ko' }, NOW) as never)
     const gate = r.state.gates.at(-1)!
-    expect(gate.question).toContain('완료 검사가')
-    expect(gate.question).toContain('수렴하지')
+    // 'Tests' 는 이 fixture 가 실패시킨 check 의 이름이다(two(0, 1) 의 cfg2), repairs 0 은 예산 밖이라
+    // 이번 실패로는 repair 가 열리지 않았다는 뜻이다 — 둘 다 세 줄 위에서 읽히는 값이다.
+    const rendered = (lang: 'ko' | 'en'): string =>
+      t(lang, 'jobs.convergence.gate.exhausted', { repairs: 0, failures: 'Tests' })
+    expect(gate.question).toBe(rendered('ko'))
+    expect(gate.question).not.toBe(rendered('en'))
   })
 
   // Minor — failureSummary 의 나머지 두 갈래: timed-out check, blocking reviewIssue
