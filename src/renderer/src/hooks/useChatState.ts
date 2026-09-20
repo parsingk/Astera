@@ -48,7 +48,21 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
       // the other three). Left standing, `chatBannerFor` would keep ranking that stale `error` over
       // this very `notice` (it checks `error` first) and the pane would go on showing a session that
       // is, in fact, running fine as if it had just failed.
-      return { ...state, notice: event.key, error: null, errorDetail: null, exitCode: null, bypassOffer: false }
+      //
+      // `bypassed: true` (fix round 1 / Critical 2) is the durable counterpart: unlike everything else
+      // this fold touches, nothing ever clears it back to `false` afterward — not this same case
+      // (there is only ever one `'bypassed'` key), not a turn's `status: 'working'`, not a remount
+      // (main's `state()` overlays the same fact). It is what lets someone reading this session's
+      // results later still see that it did not run on the version pinned for this folder.
+      return {
+        ...state,
+        notice: event.key,
+        error: null,
+        errorDetail: null,
+        exitCode: null,
+        bypassOffer: false,
+        bypassed: true
+      }
     case 'exit':
       // exitCode/errorDetail always come from the event, even when errorDetail is null — that null is
       // itself the fact "no tail", not "nothing to say". `error` is different: absent means the event
@@ -56,7 +70,11 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
       // guessing one (a pane already open when the process dies has no other source for any of this).
       // `bypassOffer` mirrors `error`'s own rule — absent means the manager decided against it, not
       // "unchanged" (a session that already had a stale `true` from an earlier death must not keep it
-      // through a plain, unrelated exit that offers no button at all).
+      // through a plain, unrelated exit that offers no button at all). `bypassSignal` follows
+      // `bypassOffer`'s own verdict rather than the event's presence alone, for the same reason: it
+      // means nothing without the offer it explains. `bypassed` is deliberately untouched here — it is
+      // the durable fact (fix round 1 / Critical 2), and an ordinary exit is not the event that sets
+      // or clears it either way.
       return {
         ...state,
         status: 'idle',
@@ -64,6 +82,7 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
         exitCode: event.code,
         errorDetail: event.errorDetail,
         bypassOffer: event.bypassOffer === true,
+        bypassSignal: event.bypassOffer === true ? event.bypassSignal : undefined,
         ...(event.error === undefined ? {} : { error: event.error })
       }
   }

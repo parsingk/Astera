@@ -14,6 +14,7 @@ import {
   providerOfSession,
   liveWorkersFor,
   rollCoordinatorForSession,
+  retryRegistrationsFor,
   scheduleForAdoptedSession,
   sessionsTakenBackOnFailure,
   staleSpecFiles
@@ -91,6 +92,53 @@ describe('rollCoordinatorForSession', () => {
       throw new Error('no such account')
     }
     expect(rollCoordinatorForSession('s1', list, get)).toBeNull()
+  })
+})
+
+// design F5 fix round 1 (Critical 1): what chat.retryWithBypass's handler has to re-register, since
+// the first exit — no longer swallowed — already ran onSessionExit (disposing the rolling chain, the
+// scheduler entry, Slack's record) long before a person finishes reading the confirm dialog. Pure for
+// the same reason rollCoordinatorForSession is one: the handler itself is an Electron-only closure.
+describe('retryRegistrationsFor', () => {
+  const info = (over: Partial<SessionInfo> = {}): SessionInfo => ({
+    id: 's1',
+    accountId: 'acc1',
+    cwd: 'C:\\p',
+    title: 't',
+    status: 'running',
+    ...over
+  })
+
+  it('a session with none of the three features needs none of the three re-registered', () => {
+    expect(retryRegistrationsFor(info(), 'codex')).toEqual({ schedule: false, slack: false, rolling: null })
+  })
+
+  it('schedule needs a provider — refused when the account could not be resolved', () => {
+    const withSchedule = info({ schedule: { rule: { kind: 'interval', minutes: 5 }, command: 'status' } })
+    expect(retryRegistrationsFor(withSchedule, 'claude')).toMatchObject({ schedule: true })
+    expect(retryRegistrationsFor(withSchedule, null)).toMatchObject({ schedule: false })
+  })
+
+  it('slack is judged from info alone — the account does not gate it', () => {
+    expect(retryRegistrationsFor(info({ slackNotify: true }), null)).toMatchObject({ slack: true })
+    expect(retryRegistrationsFor(info({ slackNotify: false }), 'claude')).toMatchObject({ slack: false })
+  })
+
+  it('rolling picks the coordinator by provider, and only when the chain has at least one account', () => {
+    const chained = info({ rollAccountIds: ['acc1', 'acc2'] })
+    expect(retryRegistrationsFor(chained, 'codex')).toMatchObject({ rolling: 'codexRolling' })
+    expect(retryRegistrationsFor(chained, 'claude')).toMatchObject({ rolling: 'rolling' })
+    expect(retryRegistrationsFor(chained, null)).toMatchObject({ rolling: null }) // no account to route by
+    expect(retryRegistrationsFor(info({ rollAccountIds: [] }), 'codex')).toMatchObject({ rolling: null })
+  })
+
+  it('a fully-featured session needs all three, together', () => {
+    const full = info({
+      schedule: { rule: { kind: 'interval', minutes: 5 }, command: 'status' },
+      slackNotify: true,
+      rollAccountIds: ['acc1', 'acc2']
+    })
+    expect(retryRegistrationsFor(full, 'claude')).toEqual({ schedule: true, slack: true, rolling: 'rolling' })
   })
 })
 

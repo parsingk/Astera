@@ -18,13 +18,22 @@ import type { MessageKey } from "../../../../core/i18n";
  *  ResumeDialog, …) so it reads as the same kind of dialog, not a one-off. */
 export function BypassRetryDialog({
   line,
+  signal,
   onCancel,
   onConfirm
 }: {
   /** The CLI's first line on stderr (`ChatState.error`) — already capped at construction
    *  (adapterCore.ts's `firstLineOf`). Quoted verbatim in "what blocked it", because the person is
-   *  being asked to trust a tool's own words, not this app's paraphrase of them. */
+   *  being asked to trust a tool's own words, not this app's paraphrase of them. Empty when the exit
+   *  carried none (fix round 1 / Important 4): appended below only when non-empty, so the sentence
+   *  never ends on a dangling colon with nothing after it. */
   line: string;
+  /** Which detection signal backed the offer (`ChatState.bypassSignal`) — fix round 1 / Important 4.
+   *  `'path'` is confident and gets the plain "Volta refused to run" wording; `'voltaHome'` is
+   *  weaker (Volta is installed and active on this machine, not proven to have gated *this* launch)
+   *  and gets the softened wording instead, so the dialog never states a refusal as fact it cannot
+   *  back up. */
+  signal: "path" | "voltaHome";
   onCancel: () => void;
   onConfirm: () => void;
 }): ReactNode {
@@ -44,19 +53,27 @@ export function BypassRetryDialog({
     return () => document.removeEventListener("keydown", onKey, true);
   }, []);
 
-  const section = (labelKey: MessageKey, bodyKey: MessageKey, params?: Record<string, string>): ReactNode => (
+  const section = (labelKey: MessageKey, bodyKey: MessageKey, suffix?: string): ReactNode => (
     <p className="confirm-text">
       <strong>{t(labelKey)}</strong>
       {" — "}
-      {t(bodyKey, params)}
+      {t(bodyKey)}
+      {suffix ?? ""}
     </p>
   );
+
+  // fix round 1 / Important 4: the CLI's own line is appended here, outside the translated template,
+  // so an empty one drops the whole ": <line>" tail instead of leaving a dangling colon — no per-
+  // language placeholder logic needed, and no locale can forget the guard.
+  const whatBlockedKey =
+    signal === "path" ? "conversation.exited.bypassConfirm.whatBlocked" : "conversation.exited.bypassConfirm.whatBlockedSoft";
+  const lineSuffix = line.trim() === "" ? undefined : `: ${line}`;
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal bypass-retry" onClick={(e) => e.stopPropagation()}>
         <h2>{t("conversation.exited.bypassConfirm.title")}</h2>
-        {section("conversation.exited.bypassConfirm.whatBlockedLabel", "conversation.exited.bypassConfirm.whatBlocked", { line })}
+        {section("conversation.exited.bypassConfirm.whatBlockedLabel", whatBlockedKey, lineSuffix)}
         {section("conversation.exited.bypassConfirm.ifSkippedLabel", "conversation.exited.bypassConfirm.ifSkipped")}
         {section("conversation.exited.bypassConfirm.givesUpLabel", "conversation.exited.bypassConfirm.givesUp")}
         {section("conversation.exited.bypassConfirm.scopeLabel", "conversation.exited.bypassConfirm.scope")}

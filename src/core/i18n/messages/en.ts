@@ -1312,24 +1312,38 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.exited.restart': 'Restart',
   // design §4 F5's five-part confirmation. An exception to S1 (one or two lines) — the person is
   // making a judgement nobody else can, and stripping the facts would leave only a button.
+  // whatBlocked's sentence ends without the CLI's own stderr line — the component appends ": <line>"
+  // itself, and omits it entirely when there is none (fix round 1 / Important 4).
   'conversation.exited.bypassConfirm.title': "Skip this folder's toolchain setup and retry?",
   'conversation.exited.bypassConfirm.whatBlockedLabel': 'What blocked it',
   'conversation.exited.bypassConfirm.whatBlocked':
-    "Not the CLI — the tool version manager ahead of it on PATH (Volta) refused to run. It needs to read this folder's package.json to pick a version, and could not: {line}",
+    "Not the CLI — the tool version manager ahead of it on PATH (Volta) refused to run. It needs to read this folder's package.json to pick a version, and could not",
+  // fix round 1 / Important 4: used when only the weaker signal (VOLTA_HOME) matched. Volta being
+  // installed on this machine is certain; that it gated *this* CLI is not — Volta can be managing
+  // Node while this CLI is a separate install an antivirus blocked — so this avoids stating a refusal
+  // as fact.
+  'conversation.exited.bypassConfirm.whatBlockedSoft':
+    "Not necessarily the CLI itself — a tool version manager (Volta) installed on this machine may be the cause. If this CLI is one it manages, Volta ahead on PATH may have refused to run while trying to read this folder's package.json to pick a version. What the CLI left",
   'conversation.exited.bypassConfirm.ifSkippedLabel': 'If you skip it',
   'conversation.exited.bypassConfirm.ifSkipped': 'Version resolution is skipped and the CLI on the default PATH runs as-is. The session comes up.',
   'conversation.exited.bypassConfirm.givesUpLabel': 'What you give up',
   'conversation.exited.bypassConfirm.givesUp':
     "The tool version pinned for this project. Not just this session — every command it runs (the agent's own npm test, npm run build, node …) runs on the default version instead of the pinned one. The same command can behave differently than it does in your terminal.",
   'conversation.exited.bypassConfirm.scopeLabel': 'How long / what changes',
+  // fix round 1 (Important 3, roll inheritance): a session this one rolls into on a usage limit
+  // inherits the same bypass — leaving that out here would make the dialog say "this session only"
+  // while the inheritance happens silently underneath it.
   'conversation.exited.bypassConfirm.scope':
-    'Only for as long as this session lives. Other sessions and terminals are unaffected, and no file or setting is touched. To undo it, close this session and start a new one.',
+    'For as long as this session lives — and for the session it rolls into if a usage limit switches accounts. Other sessions and terminals are unaffected, and no file or setting is touched. To undo it, close this session (and whatever it rolled into) and start a new one.',
   'conversation.exited.bypassConfirm.properFixLabel': 'The real fix',
   'conversation.exited.bypassConfirm.properFix': 'Fixing package.json means this dialog will not appear again.',
   'conversation.exited.bypassConfirm.confirm': 'Skip and retry',
   // The button is pressed, but a race (another exit re-decided the offer in between) means it no
   // longer applies.
   'conversation.exited.bypassConfirm.failed': 'Could not retry',
+  // fix round 1 (Critical 2): the durable mark — unlike `notice`, never cleared, always shown as its
+  // own line for as long as this session (and later, its history) is open.
+  'conversation.bypassed.badge': "This session started by skipping this project's pinned toolchain version",
   'conversation.running.interrupt': 'Stop (Esc)',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effortRow': 'effort: {level}',

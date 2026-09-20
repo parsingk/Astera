@@ -61,6 +61,30 @@ describe('foldChatEvent — exit', () => {
     const stale = { ...base, bypassOffer: true }
     expect(foldChatEvent(stale, { type: 'exit', code: 0, errorDetail: null }).bypassOffer).toBe(false)
   })
+
+  // fix round 1 / Important 4: bypassSignal 은 bypassOffer 의 판정을 그대로 따른다 — 이벤트에
+  // 실려 있어도 bypassOffer 가 거짓이면 화면은 그것을 쓸 일이 없으니 지운다.
+  it('bypassSignal 은 bypassOffer 가 참일 때만 옮겨온다', () => {
+    const withSignal = foldChatEvent(base, {
+      type: 'exit',
+      code: 8,
+      errorDetail: null,
+      bypassOffer: true,
+      bypassSignal: 'voltaHome'
+    })
+    expect(withSignal.bypassSignal).toBe('voltaHome')
+
+    const stale = { ...base, bypassOffer: true, bypassSignal: 'path' as const }
+    expect(foldChatEvent(stale, { type: 'exit', code: 0, errorDetail: null }).bypassSignal).toBeUndefined()
+  })
+
+  // fix round 1 / Critical 2: bypassed 는 durable 이다 — 평범한 exit 이벤트가 그것을 지우거나
+  // 만들어내지 않는다. 오직 notice 만 세운다.
+  it('bypassed 는 exit 이벤트가 손대지 않는다', () => {
+    const wasBypassed = { ...base, bypassed: true }
+    expect(foldChatEvent(wasBypassed, { type: 'exit', code: 0, errorDetail: null }).bypassed).toBe(true)
+    expect(foldChatEvent(base, { type: 'exit', code: 8, errorDetail: null }).bypassed).toBeUndefined()
+  })
 })
 
 // Task 7 (design F5): 우회 재시도가 성공했다는 것을 그 자신의 칸에 싣는다 — error 에 실으면 종료
@@ -94,5 +118,14 @@ describe('foldChatEvent — notice', () => {
     expect(next.errorDetail).toBeNull()
     expect(next.exitCode).toBeNull()
     expect(next.bypassOffer).toBe(false)
+  })
+
+  // fix round 1 (Critical 2): the durable mark. Unlike everything else this fold clears, nothing ever
+  // clears this back to false — not a later turn, not a later ordinary exit (covered above).
+  it('알림은 durable bypassed 마크를 세우고, 이후 턴이 지나도 지워지지 않는다', () => {
+    const noticed = foldChatEvent(base, { type: 'notice', key: 'bypassed' })
+    expect(noticed.bypassed).toBe(true)
+    const afterTurn = foldChatEvent(noticed, { type: 'status', status: 'working', truncated: false })
+    expect(afterTurn.bypassed).toBe(true)
   })
 })

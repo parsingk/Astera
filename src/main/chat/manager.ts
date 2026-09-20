@@ -21,7 +21,7 @@ import { buildCodexAppServerCommand, buildClaudeChatCommand } from '../../core/s
 import type { PtyMeta } from '../../core/host/protocol'
 import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState, PermissionMode, PermissionModeChoice } from '../../core/chat/types'
 import type { ModelDescriptor } from '../../core/models/types'
-import { BYPASS_ENV, looksLikeRefusal, watchFirstLine } from '../../core/sessions/retryBypass'
+import { BYPASS_ENV, looksLikeRefusal, watchFirstLine, type BypassSignal } from '../../core/sessions/retryBypass'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { createCodexAdapter, type AdapterMode } from './codexAdapter'
 import { createClaudeAdapter } from './claudeAdapter'
@@ -78,13 +78,27 @@ interface LiveChatSession {
   spawnAt: number
   sawLine: () => boolean
   retry: RetryMaterials | null
-  /** design F5, detection signal: positive evidence (checked in main before `spawn()`/the retry —
-   *  ipc.ts's own detection) that a bypassable toolchain manager is actually in the way of this CLI.
+  /** design F5, detection signal: positive evidence (`core.bypassSignalFor`, checked once at startup —
+   *  see core.ts) that a bypassable toolchain manager is in the way of this CLI, and *which* of the
+   *  two signals matched (fix round 1 / Important 4 — `VOLTA_HOME` alone proves Volta is installed,
+   *  not that it gated *this* CLI, so a caller has to know which one it is to soften what it says).
    *  Carried alongside `retry` rather than recomputed at exit time for the same reason `retry` itself
    *  is: the probe this comes from is not free, and running it on every exit (most of which are not
-   *  refusals at all) would be work spent on sessions that never needed it. False for an adopted
+   *  refusals at all) would be work spent on sessions that never needed it. `null` for an adopted
    *  session, same as `retry` being null — nothing was checked for one. */
-  managerDetected: boolean
+  managerSignal: BypassSignal
+  /** design F5 fix round 1 (Critical 2): durable, unlike `notice` — set the moment a bypassed process
+   *  is spawned (`spawn()`'s own `startWithBypass`, or `respawnWithBypass`) and never cleared by
+   *  anything afterward, so `state()`'s overlay and `ChatState.bypassed` still read `true` after a
+   *  remount and after however many turns follow. `notice` alone disappeared at the exact moment the
+   *  off-pin harm began (both main and the renderer clear it on the first `status: 'working'`, which
+   *  for a retry carrying an `initialPrompt` can be within a second) — this is the fact that has to
+   *  survive past that, for someone reading this session's results later. Also doubles as the guard
+   *  against offering the button a second time (fix round 1 / Important 1, `handleEvent`'s own
+   *  comment): a session that already started under the bypass dying again in silence is not a
+   *  Volta refusal any more — the bypass is already on — and offering the same fix again would be
+   *  lying about what pressing it would do. */
+  bypassed: boolean
   /** C3 / fix round 1: "we asked for this" — set by `kill()` before `handleEvent` ever sees the exit it
    *  causes. Without it, closing a slow-starting tab within the five-second window reads exactly like a
    *  toolchain refusal and offers a bypass button for a death nobody refused — the person asked for it
@@ -137,12 +151,19 @@ export class ChatSessionManager {
     /** Claude only: start the CLI on this model (`--model`). A roll passes the chain's remembered
      *  choice here, which is the only way it survives — see LiveChatSession.chosenModel. */
     model?: string | null
-    /** design F5: whether main found positive evidence a bypassable toolchain manager is in the way of
-     *  this CLI — checked once, before this call (ipc.ts's own detection), never here: the probe is not
-     *  free, and this method has to stay synchronous. Absent/false is the honest default for a test
-     *  fixture that does not care and for every call site that has not checked — the offer button only
-     *  ever appears when this was explicitly found true. */
-    bypassManagerDetected?: boolean
+    /** design F5: which detection signal main found for this CLI (`core.bypassSignalFor`, checked once
+     *  at startup — never here, this method has to stay synchronous). `null`/absent is the honest
+     *  default for a test fixture that does not care and for every call site that has not checked —
+     *  the offer button only ever appears when this was explicitly found non-null. */
+    bypassSignal?: BypassSignal
+    /** design F5 fix round 1 (Important 3, the roll-inheritance fix): start this process with the
+     *  toolchain bypass already applied. Never set by a fresh, first-time spawn — S7 still holds for
+     *  that case. The one caller that ever passes `true` is a rolling respawn whose *chain* had
+     *  already been granted the bypass by a person's confirmed click on an earlier session in it
+     *  (index.ts's roll spawn callbacks, reading `bypassedOf(oldId)` before the kill) — dropping that
+     *  consent at the roll boundary is the same silent-override harm S7 forbids, just at a different
+     *  door, and the person already said yes once for this chain. */
+    startWithBypass?: boolean
   }): SessionInfo {
     const provider = providerOf(opts.account)
     const descriptor = descriptorOf(this.deps.descriptors, opts.account)
@@ -155,7 +176,14 @@ export class ChatSessionManager {
     const { schedule, slackNotify, rollAccountIds, rollPrompt } = opts
     const initialPrompt = opts.initialPrompt
 
-    const env = cliEnvFor({ base: process.env, account: opts.account, descriptor, homeDir: this.deps.homeDir })
+    // design F5 fix round 1: BYPASS_ENV rides here, not just on a manual retry's respawn — a rolling
+    // respawn whose chain was already granted the bypass has to keep it (opts.startWithBypass, set by
+    // index.ts's roll callbacks from `bypassedOf(oldId)`). Still never on a fresh, first spawn: that
+    // path never passes `startWithBypass` at all, so S7's default holds exactly as before.
+    const env = {
+      ...cliEnvFor({ base: process.env, account: opts.account, descriptor, homeDir: this.deps.homeDir }),
+      ...(opts.startWithBypass ? BYPASS_ENV : {})
+    }
     // Codex resumes over the app-server protocol (thread/resume, sent by the adapter once the process is
     // up); Claude has no such call, so its resume id is argv (--resume=<id>) instead — buildClaudeChatCommand
     // takes it directly.
@@ -178,7 +206,10 @@ export class ChatSessionManager {
         // scheduler's own store is the truth for it (chat-sessions slice 4 design §5.1).
         ...(slackNotify === undefined ? {} : { slackNotify }),
         ...(rollAccountIds === undefined ? {} : { rollAccountIds }),
-        ...(rollPrompt === undefined ? {} : { rollPrompt })
+        ...(rollPrompt === undefined ? {} : { rollPrompt }),
+        // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
+        // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
+        ...(opts.startWithBypass ? { bypassedToolchain: true } : {})
       }
     }
     // Wrapped before the adapter ever sees it (design F5 / Task 7): `onLine` takes one subscriber, so
@@ -211,7 +242,8 @@ export class ChatSessionManager {
       spawnAt,
       sawLine: watched.sawLine,
       retry: { file, args, cwd: opts.cwd, env, meta, provider, startArgs, ...(initialPrompt === undefined ? {} : { initialPrompt }) },
-      managerDetected: opts.bypassManagerDetected === true
+      managerSignal: opts.bypassSignal ?? null,
+      bypassed: opts.startWithBypass === true
     })
     void adapter
       .start(startArgs)
@@ -284,7 +316,21 @@ export class ChatSessionManager {
     // Null, not a guess: an adopted session is one the app found already running after a restart, and
     // nothing it left behind says which model a person picked in it. A roll from here starts the next
     // process on the CLI's default, which is what it did for every session before this existed.
-    this.track(a.id, info, a.proc, adapter, null)
+    //
+    // design F5 fix round 1 (Critical 2): `bypassedToolchain` is read back the same defensive way
+    // every other note field on this method is — a note is whatever a Host wrote, possibly an older
+    // build's that never had this key at all, and an absent key must read as `false`, never a guess.
+    // `managerSignal` stays `null` and `retry` stays absent regardless: an adopted process was already
+    // running when this app found it, so the offer's own preconditions (§ its own doc) can never hold
+    // for it either way — there is nothing here for the durable mark to interact with beyond staying
+    // visible to someone reading this session's results later.
+    this.track(a.id, info, a.proc, adapter, null, {
+      spawnAt: Date.now(),
+      sawLine: () => true,
+      retry: null,
+      managerSignal: null,
+      bypassed: r.bypassedToolchain === true
+    })
     // Adopt mode's start() resolves at once (see codexAdapter.ts's doStart) — bypass is meaningless
     // here (a running thread was not just started with a bypass flag) so a neutral false is passed.
     void adapter.start({ cwd, bypass: false }).catch((err: unknown) => {
@@ -400,10 +446,15 @@ export class ChatSessionManager {
    *  rolling respawn, where main emits while the renderer is still building the tab — needs it from
    *  here, not just from the event stream.
    *
-   *  `bypassOffer` is overlaid the same way, for the same reason: it is `handleEvent`'s own verdict
-   *  about *this* exit, not something `live.adapter`'s own state carries — a fresh adapter after a
-   *  confirmed retry starts this back at `false` (see `track()`), which is exactly what a re-pull
-   *  should see once the session is running again. */
+   *  `bypassOffer`/`bypassSignal` are overlaid the same way, for the same reason: they are
+   *  `handleEvent`'s own verdict about *this* exit, not something `live.adapter`'s own state carries —
+   *  a fresh adapter after a confirmed retry starts `bypassOffer` back at `false` (see `track()`),
+   *  which is exactly what a re-pull should see once the session is running again.
+   *
+   *  `bypassed` (fix round 1 / Critical 2) is overlaid unconditionally, never gated on `bypassOffer` —
+   *  it is the durable fact, set once at the moment a bypassed process spawned and never cleared, so a
+   *  re-pull sees it for as long as this session's own `LiveChatSession` does (which outlives the
+   *  process itself: nothing removes the map entry on exit). */
   state(id: string): ChatState | null {
     const live = this.sessions.get(id)
     if (!live) return null
@@ -411,7 +462,8 @@ export class ChatSessionManager {
       ...live.adapter.state(),
       outlivesApp: live.proc.outlivesApp === true,
       notice: live.notice,
-      ...(live.bypassOffer ? { bypassOffer: true } : {})
+      ...(live.bypassed ? { bypassed: true } : {}),
+      ...(live.bypassOffer ? { bypassOffer: true, ...(live.managerSignal ? { bypassSignal: live.managerSignal } : {}) } : {})
     }
   }
 
@@ -429,18 +481,24 @@ export class ChatSessionManager {
     return provider === 'claude' ? createClaudeAdapter(args) : createCodexAdapter(args)
   }
 
-  /** `retryState` is absent for `adopt()` — an adopted process was already running when this app found
-   *  it, so there is nothing to refuse and nothing to retry, and `retry`/`managerDetected` default to
-   *  "nothing here" the same way `sawLine` defaults to "assume it spoke" (an adopted session's process
-   *  has already been talking for however long the app was gone; a fresh `false` would tell the offer
-   *  logic it just died in silence, which is backwards). */
+  /** `retryState` is absent only for a call this file no longer makes on its own — every caller now
+   *  passes one, `adopt()` included (fix round 1 / Critical 2: it has a durable `bypassed` fact of its
+   *  own to seed from the note). Kept optional anyway, defaulting exactly the way an absent one always
+   *  did — `sawLine` to "assume it spoke", `retry`/`managerSignal` to "nothing here" — so a test
+   *  fixture that builds a `LiveChatSession` for something else entirely need not learn every field. */
   private track(
     id: string,
     info: SessionInfo,
     proc: ProcLike,
     adapter: ChatAdapter,
     chosenModel: string | null,
-    retryState?: { spawnAt: number; sawLine: () => boolean; retry: RetryMaterials | null; managerDetected: boolean }
+    retryState?: {
+      spawnAt: number
+      sawLine: () => boolean
+      retry: RetryMaterials | null
+      managerSignal: BypassSignal
+      bypassed: boolean
+    }
   ): void {
     const off = adapter.on((e) => this.handleEvent(id, e))
     this.sessions.set(id, {
@@ -455,7 +513,8 @@ export class ChatSessionManager {
       spawnAt: retryState?.spawnAt ?? Date.now(),
       sawLine: retryState?.sawLine ?? (() => true),
       retry: retryState?.retry ?? null,
-      managerDetected: retryState?.managerDetected ?? false
+      managerSignal: retryState?.managerSignal ?? null,
+      bypassed: retryState?.bypassed ?? false
     })
   }
 
@@ -463,6 +522,15 @@ export class ChatSessionManager {
    *  have picked none, and for a session that is not here. */
   chosenModelOf(id: string): string | null {
     return this.sessions.get(id)?.chosenModel ?? null
+  }
+
+  /** design F5 fix round 1 (Important 3): whether this session's chain was already granted the
+   *  toolchain bypass — read by a roll (index.ts's spawn callbacks) *before* it kills this session, the
+   *  same "read before the kill" rule `chosenModelOf` above follows and for the same reason: the
+   *  manager drops the session together with its process, and the fact lives only here. False for a
+   *  session that is not here, mirroring `chosenModelOf`'s own null. */
+  bypassedOf(id: string): boolean {
+    return this.sessions.get(id)?.bypassed ?? false
   }
 
   private handleEvent(id: string, e: ChatEvent): void {
@@ -483,23 +551,35 @@ export class ChatSessionManager {
       //  - not `PTY_LOST_SIGHT_EXIT_CODE` — the app losing sight of a still-live Host process is not
       //    the process ending (procFactory.ts), and a respawn here would run a second CLI while the
       //    first may still be alive, under the same id.
+      //  - not `live.bypassed` (fix round 1 / Important 1) — a process that started *with* the bypass
+      //    already on and still died this way was not refused by anything the bypass could have
+      //    fixed. Without this, `respawnWithBypass`'s fresh `sawLine`/`spawnAt` would let the dialog
+      //    come back after the bypassed attempt itself dies in silence, now claiming that skipping
+      //    will let it start — when skipping demonstrably did not. This is also what bounds the offer
+      //    to at most once per session: the deleted `두 번은 없다` test used to be the only thing that
+      //    did, via an attempt counter this rewrite dropped along with the automatic retry it gated.
       //  - `looksLikeRefusal` — the death shape a toolchain refusal actually has (no protocol line,
       //    immediate).
-      //  - `managerDetected` — positive evidence, checked in main before this session ever spawned,
-      //    that a bypassable manager is actually in the way. Without this alone, a DLL that is
-      //    missing, an antivirus block, an ordinary crash all look exactly like a refusal from here,
-      //    and the confirm dialog would name Volta with no basis and a press would do nothing at all
-      //    (design F5's own reasoning for requiring both signals).
+      //  - `managerSignal !== null` — positive evidence, checked once at startup (core.ts), that a
+      //    bypassable manager is actually in the way. Without this alone, a DLL that is missing, an
+      //    antivirus block, an ordinary crash all look exactly like a refusal from here, and the
+      //    confirm dialog would name Volta with no basis and a press would do nothing at all (design
+      //    F5's own reasoning for requiring both signals).
       const bypassOffer =
         live.retry !== null &&
         !live.killRequested &&
+        !live.bypassed &&
         e.code !== PTY_LOST_SIGHT_EXIT_CODE &&
-        live.managerDetected &&
+        live.managerSignal !== null &&
         looksLikeRefusal({ sawProtocolLine: live.sawLine(), elapsedMs: Date.now() - live.spawnAt })
       live.bypassOffer = bypassOffer
       // Rides the event itself, not just `state()` — a pane already open when the process dies never
       // re-reads main's state, it only hears this (ChatEvent's own doc on the `exit` variant).
-      const final: ExitEvent = bypassOffer ? { ...e, bypassOffer: true } : e
+      // `bypassSignal` rides with it (fix round 1 / Important 4): the dialog needs to know *which*
+      // signal matched to soften what it says when only the weaker one (`VOLTA_HOME`) did.
+      const final: ExitEvent = bypassOffer
+        ? { ...e, bypassOffer: true, ...(live.managerSignal ? { bypassSignal: live.managerSignal } : {}) }
+        : e
       this.onExit?.({ sessionId: id, exitCode: e.code })
       for (const fn of this.listeners) fn(id, final)
       return
@@ -557,8 +637,13 @@ export class ChatSessionManager {
     live.proc.onLine(() => {})
 
     const env = { ...materials.env, ...BYPASS_ENV }
+    // design F5 fix round 1 (Critical 2): the durable mark goes into the note itself, not only the
+    // in-memory `bypassed` flag `track()` sets below — the same reasoning `spawn()`'s own
+    // `startWithBypass` branch gives. `materials.meta` is the *original* attempt's meta, built before
+    // the bypass was ever a question, so it is copied here rather than mutated in place.
+    const meta: PtyMeta = { ...materials.meta, restore: { ...materials.meta.restore, bypassedToolchain: true } }
     const spawnAt = Date.now()
-    const watched = watchFirstLine(this.deps.factory(materials.file, materials.args, { cwd: materials.cwd, env, meta: materials.meta }))
+    const watched = watchFirstLine(this.deps.factory(materials.file, materials.args, { cwd: materials.cwd, env, meta }))
     const proc = watched.proc
     let adapter: ChatAdapter
     try {
@@ -579,7 +664,12 @@ export class ChatSessionManager {
       spawnAt,
       sawLine: watched.sawLine,
       retry: materials,
-      managerDetected: live.managerDetected
+      managerSignal: live.managerSignal,
+      // design F5 fix round 1 (Critical 2 / Important 1): set the instant this process is spawned,
+      // not once `adapter.start()` resolves below — `bypassedOf()` and a remount both have to see it
+      // immediately, and it is what stops this same attempt from offering the button again if it too
+      // dies in silence (`handleEvent`'s own comment on the `bypassOffer` computation).
+      bypassed: true
     })
     void adapter
       .start(materials.startArgs)

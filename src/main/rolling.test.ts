@@ -3012,6 +3012,41 @@ describe('chat chains', () => {
     expect(h.spawnedOpts[0]).toMatchObject({ kind: 'chat', model: 'opus' })
   })
 
+  // design F5 fix round 1 (Important 3): a chain a person already granted the toolchain bypass to
+  // (design §4 F5's confirm dialog) must not silently lose it at a roll — dropping consent already
+  // given at the roll boundary is the same silent-override harm S7 forbids, at a different door. Read
+  // before the kill, the same rule and the same reason chosenModelOf follows: the manager drops the
+  // session together with its process, and the fact lives only there.
+  it('a chat roll inherits the toolchain bypass the chain had already been granted', async () => {
+    const killed = new Set<string>()
+    const h = harness({
+      readUsage: () => Promise.resolve(peak(100)),
+      bypassedOf: (id) => !killed.has(id),
+      kill: (id) => void killed.add(id)
+    })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.spawnedOpts[0]).toMatchObject({ kind: 'chat', startWithBypass: true })
+  })
+
+  it('a chat roll does not invent the bypass for a chain that was never granted it', async () => {
+    const h = harness({
+      readUsage: () => Promise.resolve(peak(100)),
+      bypassedOf: () => false
+    })
+    h.chatIds.add('c1')
+    h.coord.register(chatInfo('c1'))
+    h.coord.onChatMeta('c1', { claudeSessionId: 'th-1', transcriptPath: 'D:/t/th-1.jsonl' })
+    h.coord.onChatLimit('c1', rejected)
+    await flush()
+    await flush()
+    expect(h.spawnedOpts[0]).toMatchObject({ kind: 'chat', startWithBypass: false })
+  })
+
   it('stateOf returns the last lasting roll state and null after none', async () => {
     const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
     h.chatIds.add('c1')

@@ -1966,6 +1966,31 @@ describe('chat chains', () => {
     h.coord.stop()
   })
 
+  // design F5 fix round 1 (Important 3): a chain a person already granted the toolchain bypass to
+  // must not silently lose it at a roll — read before the kill (rolling.ts's own dep, same contract),
+  // since the manager drops the session together with its process and the fact lives only there.
+  it('inherits the toolchain bypass the chain had already been granted', async () => {
+    const h = harness({ bypassedOf: () => true })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-bp', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-bp', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(h.spawnedOpts[0]).toMatchObject({ kind: 'chat', startWithBypass: true })
+    h.coord.stop()
+  })
+
+  it('does not invent the bypass for a chain that was never granted it', async () => {
+    const h = harness({ bypassedOf: () => false })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-nobp', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(chatInfo(h.info1))
+    h.coord.attachChat('s1', 'cx-chat-nobp', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(h.spawnedOpts[0]).toMatchObject({ kind: 'chat', startWithBypass: false })
+    h.coord.stop()
+  })
+
   it('leaves the chain unmapped when ready has no path yet, until the locate poll finds the file', async () => {
     const h = harness()
     const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-late', cwd: h.info1.cwd, primary: 95 })

@@ -1526,24 +1526,37 @@ export const ko = {
   'conversation.exited.detail': '자세히',
   'conversation.exited.restart': '다시 시작',
   // design §4 F5의 확인 창 다섯 문단. S1(한두 줄)의 예외다 — 사람이 대신할 수 없는 판단이라 사실을
-  // 빼면 버튼만 남는다. whatBlocked 의 {line} 은 CLI 가 stderr 에 남긴 첫 줄(ChatState.error) 그대로다.
+  // 빼면 버튼만 남는다. whatBlocked 뒤에 CLI 가 stderr 에 남긴 첫 줄(ChatState.error)이 ": <줄>" 로
+  // 붙는데, 그 줄 자체는 컴포넌트가 붙인다(없으면 콜론째 생략 — fix round 1 / Important 4) — 카탈로그
+  // 문구 자체는 그 줄 없이도 문장이 끝난다.
   'conversation.exited.bypassConfirm.title': '이 폴더의 toolchain 설정을 건너뛰고 다시 시도할까요?',
   'conversation.exited.bypassConfirm.whatBlockedLabel': '무엇이 막았나',
   'conversation.exited.bypassConfirm.whatBlocked':
-    'CLI 가 아니라 PATH 앞의 도구 버전 관리자(Volta)가 실행을 거절했습니다. 이 폴더의 package.json 을 읽어 어느 버전을 쓸지 정해야 하는데, 그 파일을 읽지 못했습니다: {line}',
+    'CLI 가 아니라 PATH 앞의 도구 버전 관리자(Volta)가 실행을 거절했습니다. 이 폴더의 package.json 을 읽어 어느 버전을 쓸지 정해야 하는데, 그 파일을 읽지 못했습니다',
+  // fix round 1 / Important 4: VOLTA_HOME 만 맞았을 때 쓰는 문구. Volta 가 이 기기에 설치돼 있다는
+  // 것은 확실하지만, 그것이 *이* CLI 를 막았다는 확증은 아니다 — Volta 는 Node 를 관리하고 있고
+  // codex 는 백신이 막은 별개의 설치일 수 있다. 그래서 "거절했습니다"라는 확정 서술을 쓰지 않는다.
+  'conversation.exited.bypassConfirm.whatBlockedSoft':
+    '이 CLI 자신이 아니라, 이 기기에 설치된 도구 버전 관리자(Volta)가 원인일 수 있습니다. Volta 가 관리하는 도구라면 PATH 앞에서 이 폴더의 package.json 을 읽어 버전을 정하려다 실행을 거절했을 수 있습니다. CLI 가 남긴 줄입니다',
   'conversation.exited.bypassConfirm.ifSkippedLabel': '건너뛰면',
   'conversation.exited.bypassConfirm.ifSkipped': '버전 판단을 생략하고 기본으로 잡히는 CLI 를 그대로 실행합니다. 세션은 뜹니다.',
   'conversation.exited.bypassConfirm.givesUpLabel': '무엇을 포기하나',
   'conversation.exited.bypassConfirm.givesUp':
     '이 프로젝트에 핀해 둔 도구 버전입니다. 이 세션뿐 아니라 이 세션이 실행하는 모든 명령(에이전트가 돌리는 npm test, npm run build, node …)이 핀된 버전이 아니라 기본 버전으로 돕니다. 같은 명령이 당신 터미널에서와 다른 결과를 낼 수 있습니다.',
   'conversation.exited.bypassConfirm.scopeLabel': '얼마나 / 무엇이 바뀌나',
+  // fix round 1 (Important 3, 롤 승계): 사용량 한도로 다른 계정으로 넘어갈 때 이어받는 세션도
+  // 같은 우회를 물려받는다 — 그 사실이 여기 빠지면, 승계 자체는 조용히 일어나는데 이 창은 "이
+  // 세션뿐"이라 말한 게 된다. 그래서 승계 문장을 더했다.
   'conversation.exited.bypassConfirm.scope':
-    '이 세션이 사는 동안만입니다. 다른 세션과 터미널은 그대로이고, 파일도 설정도 건드리지 않습니다. 되돌리려면 이 세션을 닫고 새로 시작하면 됩니다.',
+    '이 세션이 사는 동안입니다. 이 세션이 사용량 한도에 걸려 다른 계정으로 넘어갈 때 이어받는 세션에도 같이 적용됩니다. 다른 세션과 터미널은 그대로이고, 파일도 설정도 건드리지 않습니다. 되돌리려면 이 세션(과 그 뒤를 잇는 세션)을 닫고 새로 시작하면 됩니다.',
   'conversation.exited.bypassConfirm.properFixLabel': '제대로 된 해결',
   'conversation.exited.bypassConfirm.properFix': 'package.json 을 고치면 이 창은 다시 뜨지 않습니다.',
   'conversation.exited.bypassConfirm.confirm': '건너뛰고 다시 시도',
   // 확인을 누른 뒤, 그 사이 다른 종료가 그 판정을 다시 내려 버튼이 더는 서 있지 않을 때(레이스)
   'conversation.exited.bypassConfirm.failed': '다시 시도하지 못했습니다',
+  // fix round 1 (Critical 2): durable 마크. notice 와 달리 첫 턴에 걷히지 않고, 세션이 사는 동안(그
+  // 리고 죽은 뒤에도) 계속 보인다 — 언제나, 배너 우선순위와 무관하게 뜨는 별도 줄이다.
+  'conversation.bypassed.badge': '이 세션은 이 프로젝트의 toolchain 버전 설정을 건너뛰고 시작되었습니다',
   'conversation.running.interrupt': '중단 (Esc)',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effortRow': 'effort: {level}',

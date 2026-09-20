@@ -91,6 +91,12 @@ export interface CodexRollingDeps {
     title?: string
     /** astera CLI 환경. 배선이 넘긴다 — 없으면 세션은 CLI 없이 뜬다 */
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
+    /** design F5 fix round 1 (Important 3, the roll-inheritance fix): start the respawned process
+     *  with the toolchain bypass already applied, because the chain being rolled had already been
+     *  granted it (rolling.ts's own field, same contract). `bypassSignal` is not threaded through
+     *  here either, for the same reason rolling.ts's own comment gives: the wiring's `spawn` callback
+     *  computes it itself from `core.bypassSignalFor`. */
+    startWithBypass?: boolean
   }): SessionInfo
   kill(sessionId: string): void
   /** Writes into a live session's PTY. Used only to dismiss the model-switch prompt (answerModelChoice). */
@@ -161,6 +167,11 @@ export interface CodexRollingDeps {
    *  show (spec §15.2). It is asked on the tick rather than on the limit path: it is a file read per
    *  account, and a filter that is one tick stale is worth more than a file read inside a limit verdict. */
   loginStatus?: (accountId: string) => Promise<boolean>
+  /** design F5 fix round 1 (Important 3): whether the session being rolled away from had already
+   *  been granted the toolchain bypass — rolling.ts's own dep, same contract ("read before the kill,
+   *  not after": the manager drops the session together with its process). Optional so a wiring that
+   *  predates this behaves exactly as before (no bypass ever inherited). */
+  bypassedOf?(sessionId: string): boolean
 }
 
 interface Chain {
@@ -1468,6 +1479,9 @@ export class CodexRollingCoordinator {
       // makes `mangled` a pty concern from end to end, which is why the branch above does not ask it
       // of a chat chain at all — neither the text nor the blank slate is decided by a sanitizer that
       // never runs on this path.
+      // design F5 fix round 1 (Important 3): same "read before the kill" rule rolling.ts's own
+      // comment gives — the manager drops the session together with its process.
+      const wasBypassed = this.deps.bypassedOf?.(chain.liveId) ?? false
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const chat = chain.kind === 'chat'
@@ -1489,7 +1503,8 @@ export class CodexRollingCoordinator {
         // name the person gave the tab survives it.
         title: chain.liveInfo.title,
         orchEnv: this.deps.orchEnv?.(),
-        rollPrompt: chain.liveInfo.rollPrompt
+        rollPrompt: chain.liveInfo.rollPrompt,
+        startWithBypass: wasBypassed
       })
       this.chains.delete(oldId)
       chain.liveId = info.id

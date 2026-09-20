@@ -1374,6 +1374,16 @@ export function ConversationPane({
           <SessionStateBanners sessionId={sessionId} rollState={rollState} schedState={schedState} />
         </div>
       )}
+      {/* design F5 fix round 1 (Critical 2): the durable mark. Deliberately outside the single
+          priority banner slot (paneTransport.ts's chatBannerFor) — `notice` already lives there and
+          is meant to retire itself, but this fact must not compete with (or lose to) a request, an
+          error, or the exit banner for the one slot; it stays visible alongside whatever else the
+          pane is showing, for as long as chat?.bypassed says the session started this way. */}
+      {chat?.bypassed && (
+        <div className="border-border/60 text-muted-foreground flex items-center gap-1.5 border-b px-3 py-1 text-xs">
+          {t("conversation.bypassed.badge")}
+        </div>
+      )}
       {/* Only while a window is on its way. There is nothing to press any more, and a bar that sat
           there whenever earlier turns existed would be a button that has stopped being one. */}
       {loadingMore && (
@@ -1399,6 +1409,10 @@ export function ConversationPane({
       {bypassConfirmOpen && (
         <BypassRetryDialog
           line={chat?.error ?? ""}
+          // fix round 1 / Important 4: falls back to the confident wording only because the dialog
+          // can only ever open when `bypassOffer` is true, which requires `bypassSignal` to be set —
+          // this default is never actually reached, kept only so the prop stays required and honest.
+          signal={chat?.bypassSignal ?? "path"}
           onCancel={() => setBypassConfirmOpen(false)}
           onConfirm={confirmBypassRetry}
         />

@@ -48,8 +48,8 @@ import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
 import { attachmentNameOf } from '../core/files/attachmentName'
-import { installCommandFor, locateCommandFor } from '../core/install/cliInstall'
-import { isVoltaManagedPath } from '../core/sessions/retryBypass'
+import { installCommandFor } from '../core/install/cliInstall'
+import { locateCli } from './cliLocate'
 import { prependToPath } from '../core/sessions/manager'
 import { listClaudeModels, listCodexModels } from './models/discover'
 import { UnderstandingPipeline } from './understanding/pipeline'
@@ -364,6 +364,35 @@ export function rollCoordinatorForSession(
   const provider = providerOfSession(sessionId, sessions, getAccount)
   if (provider === null) return null
   return provider === 'codex' ? 'codexRolling' : 'rolling'
+}
+
+/**
+ * design F5 fix round 1 (Critical 1): what a confirmed bypass retry has to re-register, now that the
+ * first exit — no longer swallowed — has already run `onSessionExit` in full by the time a person
+ * finishes reading the confirm dialog: the rolling chain disposed, the scheduler entry disposed,
+ * Slack's delayed exit notice posted and its record deleted. The retry brings the session's *id* back
+ * alive; nothing re-arms any of the three on its own.
+ *
+ * Pure, for the same reason `rollCoordinatorForSession` is: `chat.retryWithBypass`'s handler is an
+ * Electron-only closure `registerIpc` cannot be exercised without, so the decision has to be
+ * extractable to be testable at all. `provider` is `null` when the account could not be resolved (it
+ * was removed while the dialog sat open) — schedule and rolling both need it and are refused; Slack
+ * does not, and is judged from `info` alone.
+ */
+export function retryRegistrationsFor(
+  info: Pick<SessionInfo, 'schedule' | 'slackNotify' | 'rollAccountIds'>,
+  provider: Provider | null
+): { schedule: boolean; slack: boolean; rolling: 'rolling' | 'codexRolling' | null } {
+  return {
+    schedule: info.schedule !== undefined && provider !== null,
+    slack: info.slackNotify === true,
+    rolling:
+      provider !== null && (info.rollAccountIds?.length ?? 0) >= 1
+        ? provider === 'codex'
+          ? 'codexRolling'
+          : 'rolling'
+        : null
+  }
 }
 
 /** What the Host could be got to say about the sessions that outlived the app. Three answers, and
@@ -1690,10 +1719,12 @@ export function registerIpc(
       // separate implementations and a chain cannot be half of each.
       if (rollProviders && rollProviders.length > 0 && rollProviders.some((p: Provider) => p !== rollProviders[0]))
         throw new Error('ROLL_MIXED_PROVIDER: cannot roll a mix of Claude and Codex accounts')
-      // design F5: checked here, once, before the process ever spawns — not inside the manager, which
-      // has to stay synchronous, and not lazily at exit time, since the probe this runs is not free
-      // and most exits are not toolchain refusals at all.
-      const bypassManagerDetected = await detectBypassableManager(providerOf(account))
+      // design F5 fix round 1 (Important 2): read from `core.bypassSignalFor`, a synchronous cache
+      // `createCore` warms once at startup — never a fresh probe here. The probe itself spawns a shell
+      // (`cliLocate.ts`'s `locateCli`, up to a 15s timeout on a hung one) and this is the path
+      // "왜 시작 버튼이 안 눌리나" exists to keep fast; paying that cost on every chat spawn was fix
+      // round 1's own Critical finding.
+      const bypassSignal = core.bypassSignalFor(providerOf(account))
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
@@ -1703,7 +1734,7 @@ export function registerIpc(
         slackNotify: opts.slackNotify === true,
         rollAccountIds: opts.rollAccountIds,
         rollPrompt: opts.rollPrompt,
-        bypassManagerDetected
+        bypassSignal
       })
       // The schedule is the one feature this slice attaches to a chat session (chat-sessions slice 4
       // design §5.2 / §6). Same call, same provider argument as the pty branch below.
@@ -7068,10 +7099,56 @@ export function registerIpc(
   // conditions no longer hold, or a second click raced the first. `session:created` on success puts
   // the tab back the same way a Host reconnect does — the fresh `SessionInfo` this hands back has
   // `status: 'running'` again, which is what clears the exit banner in PaneGrid.
+  //
+  // Fix round 1 (Critical 1): the id comes back alive, but nothing that was watching it does on its
+  // own. The first exit is no longer swallowed (F1/F2 report it immediately), so by the time a person
+  // finishes reading the five-part confirm dialog, `onSessionExit` has already run in full — the
+  // rolling chain disposed, the scheduler entry disposed, Slack's delayed exit notice long since
+  // posted and its record deleted. The automatic retry this replaces never had this problem, because
+  // it swallowed the exit before any of that ran. The precedent fix is the Host-reattach path just
+  // above (`chat: (a) => { … }`), which re-registers the same three for exactly the same "the same id
+  // comes back alive" reason; this follows it, treating the retry as what it actually is — a fresh
+  // spawn that happens to keep its old id.
   ipcMain.handle('chat.retryWithBypass', (_e, sessionId: string) => {
     const info = core.chat.retryWithBypass(sessionId)
-    if (info) send('session:created', info)
-    return info !== null
+    if (!info) return false
+    let account: Account | null = null
+    try {
+      account = core.accounts.get(info.accountId)
+    } catch {
+      account = null // the account was removed while the dialog sat open — schedule/rolling need it, Slack does not
+    }
+    const provider = account ? providerOf(account) : null
+    const need = retryRegistrationsFor(info, provider)
+    if (need.schedule && provider) {
+      try {
+        scheduler?.register(info, provider)
+      } catch {
+        /* A failed schedule re-registration does not block the retry */
+      }
+    }
+    if (need.slack) {
+      try {
+        slack?.notifier.register(info)
+      } catch {
+        /* A failed Slack re-registration does not block the retry */
+      }
+    }
+    if (need.rolling === 'codexRolling') {
+      try {
+        codexRolling?.register(info)
+      } catch {
+        /* A failed rolling re-registration does not block the retry */
+      }
+    } else if (need.rolling === 'rolling') {
+      try {
+        rolling?.register(info)
+      } catch {
+        /* A failed rolling re-registration does not block the retry */
+      }
+    }
+    send('session:created', info)
+    return true
   })
 
   // system (Electron extras)
@@ -7137,56 +7214,8 @@ export function registerIpc(
    * One at a time. Two installers writing to the same `~/.local/bin` at once is not a state worth
    * reasoning about, and nobody needs both this second.
    */
-  /**
-   * Where the machine says a CLI is, asked fresh rather than inferred from a `--version` run.
-   *
-   * `system.checkCli` answers "does it run in *this* folder", which is only meaningful once a folder
-   * is chosen and can be muddied by whatever sits ahead of the CLI on PATH (design D3). "Is it
-   * installed at all" is a different, cwd-independent question, and running `--version` through a
-   * shell to answer it inherits the same muddying — a shell that cannot find the binary still writes
-   * its own "not recognized"/"not found" to stderr, which reads exactly like the binary itself
-   * complaining once it exists but refuses to run (this is what round 1 of this fix got wrong).
-   * `locateCommandFor` asks the machine directly instead (`Get-Command` / `command -v`), so a missing
-   * binary comes back as nothing found rather than as text that looks like an answer.
-   *
-   * Read-only on purpose — no PATH mutation here. `adoptInstalledCli` below is the same probe plus
-   * that mutation, kept for its one call site (right after an install); running the mutation here too
-   * would prepend the same directory to PATH every time this dialog opens, and PATH does not shrink
-   * back down on its own.
-   */
-  const locateCli = async (cli: 'claude' | 'codex'): Promise<string | null> => {
-    const plan = locateCommandFor(cli, process.platform, process.env.SHELL ?? '/bin/sh')
-    if (plan === null) return null
-    const found = await new Promise<string | null>((resolve) => {
-      execFile(plan.command, plan.args, { timeout: 15_000, windowsHide: true }, (err, stdout) => {
-        if (err) return resolve(null)
-        const line = stdout
-          .split('\n')
-          .map((l) => l.trim())
-          .find((l) => l !== '')
-        resolve(line ?? null)
-      })
-    })
-    // Checked on disk before it is believed: a shell that answers with something that is not there
-    // would put a directory on PATH that hides nothing and helps nobody.
-    return found !== null && existsSync(found) ? found : null
-  }
-
-  /**
-   * design F5: whether a bypassable toolchain manager is actually in the way of this CLI — checked
-   * once, before a chat session spawns, so a death this fast without a word of protocol can offer a
-   * button backed by real evidence rather than a guess. Either signal is enough:
-   *  - `locateCli`'s own resolved path answers the first door directly: Volta's shim (and the tool
-   *    image one level under it) lives under a `Volta` directory (`isVoltaManagedPath`, core — pure,
-   *    tested there).
-   *  - `VOLTA_HOME` being set at all answers the second door, where the CLI's own wrapper is not
-   *    itself the shim but the `node` it execs is (`codex.cmd` calling `node`, and `node` is what
-   *    Volta actually gates) — the environment read stays here, in main.
-   */
-  const detectBypassableManager = async (cli: Provider): Promise<boolean> => {
-    const resolved = await locateCli(cli)
-    return (resolved !== null && isVoltaManagedPath(resolved)) || process.env.VOLTA_HOME !== undefined
-  }
+  // locateCli (design D3's own comment on it, unchanged) lives in cliLocate.ts now — createCore
+  // (core.ts) needs it too, for design F5's bypass detection, well before registerIpc ever runs.
 
   // Whether each CLI is installed on this machine at all — independent of any folder, so the renderer
   // asks this once (on mount) instead of on every folder pick, unlike `system.checkCli` above.

@@ -48,6 +48,14 @@ export function isVoltaManagedPath(resolvedPath: string): boolean {
     .some((segment) => segment.toLowerCase() === 'volta' || segment.toLowerCase() === '.volta')
 }
 
+/** design F5 fix round 1 (Important 4 / review finding 3): *which* of the two detection signals
+ *  matched, not just whether one did. `VOLTA_HOME` being set proves Volta is installed and active on
+ *  this machine, not that it gated *this* CLI's launch — Volta can be managing Node while `codex` is a
+ *  wholly separate install an antivirus blocked. `'path'` is the confident signal (the resolved
+ *  executable is itself under a Volta directory); `'voltaHome'` is the weaker one, and a caller has to
+ *  soften what it tells the person when this is the only signal it has. `null` is neither. */
+export type BypassSignal = 'path' | 'voltaHome' | null
+
 /** `ProcLike.onLine` takes a single subscriber — it is a setter, not an emitter — so a caller that
  *  wants to know whether anything arrived cannot just listen as well; it would take the adapter's
  *  place. This wraps the process and counts on the way past.

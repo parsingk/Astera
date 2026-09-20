@@ -32,6 +32,7 @@ import { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
 import type { SessionInfo, RollStateEvent, UpdateCampaignInfo } from '../core/types'
+import { providerOf } from '../core/providers/meta'
 
 // The dev (unpackaged) app uses a different userData folder than the installed one. The installer
 // writes to %APPDATA%\Astera, and because Windows is case-insensitive the dev build (app name
@@ -663,12 +664,21 @@ app.whenReady().then(async () => {
             slackNotify: opts.slackNotify,
             bypassPermissions: opts.bypassPermissions,
             title: opts.title,
-            model: opts.model
+            model: opts.model,
+            // design F5 fix round 1 (Important 2/3): computed here, the same way ipc.ts's own
+            // spawnSession does — synchronously, off the cache core.ts warms once at startup — rather
+            // than threaded through RollingDeps.spawn's opts: this is a fact about the *target*
+            // account's CLI on this machine's PATH, not about the chain rolling.ts is tracking.
+            bypassSignal: core!.bypassSignalFor(providerOf(opts.account)),
+            startWithBypass: opts.startWithBypass
           })
         : core!.sessions.spawn(opts),
     // What the roll above carries: the model the person picked, read off the session being rolled
     // before it is killed. Terminal chains never reach this — the manager only knows chat sessions.
     chosenModelOf: (id) => core!.chat.chosenModelOf(id),
+    // design F5 fix round 1 (Important 3): same "read before the kill" shape as chosenModelOf, for
+    // the toolchain bypass a person already consented to for this chain.
+    bypassedOf: (id) => core!.chat.bypassedOf(id),
     // A chat session takes a turn, not keys: the text goes through the session driver and the Enter
     // that follows it on a pty is a no-op here — the driver already sent the message. A refusal is
     // logged rather than thrown, because every caller of this dep is a timer with nobody to tell.
@@ -828,9 +838,14 @@ app.whenReady().then(async () => {
             rollPrompt: opts.rollPrompt,
             slackNotify: opts.slackNotify,
             bypassPermissions: opts.bypassPermissions,
-            title: opts.title
+            title: opts.title,
+            // design F5 fix round 1 (Important 2/3) — same as the claude coordinator's own callback.
+            bypassSignal: core!.bypassSignalFor(providerOf(opts.account)),
+            startWithBypass: opts.startWithBypass
           })
         : core!.sessions.spawn(opts),
+    // design F5 fix round 1 (Important 3): rolling.ts's own dep, same contract.
+    bypassedOf: (id) => core!.chat.bypassedOf(id),
     kill: (id) => (core!.chat.has(id) ? core!.chat.kill(id) : core!.sessions.kill(id)),
     write: (id, d) => {
       if (core!.chat.has(id)) {

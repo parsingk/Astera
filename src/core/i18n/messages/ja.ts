@@ -640,19 +640,30 @@ export const ja: Catalog = {
   'conversation.exited.bypassConfirm.title': 'このフォルダの toolchain 設定をスキップして再試行しますか?',
   'conversation.exited.bypassConfirm.whatBlockedLabel': '何が止めたか',
   'conversation.exited.bypassConfirm.whatBlocked':
-    'CLI ではなく、PATH の手前にあるツールバージョン管理ツール(Volta)が実行を拒否しました。このフォルダの package.json を読んでどのバージョンを使うか決める必要がありますが、そのファイルを読めませんでした: {line}',
+    'CLI ではなく、PATH の手前にあるツールバージョン管理ツール(Volta)が実行を拒否しました。このフォルダの package.json を読んでどのバージョンを使うか決める必要がありますが、そのファイルを読めませんでした',
+  // fix round 1 / Important 4: VOLTA_HOME しか一致しなかったときの文言。Volta がこの端末に入っている
+  // ことは確かだが、それが*この* CLI を止めたという確証ではない — Volta は Node を管理していて、
+  // codex は別にアンチウイルスが止めた単独インストールという可能性がある。
+  'conversation.exited.bypassConfirm.whatBlockedSoft':
+    'この CLI 自体ではなく、この端末に入っているツールバージョン管理ツール(Volta)が原因かもしれません。Volta が管理する対象なら、PATH 手前の Volta がこのフォルダの package.json を読んでバージョンを決めようとして実行を拒否した可能性があります。CLI が残した行は',
   'conversation.exited.bypassConfirm.ifSkippedLabel': 'スキップすると',
   'conversation.exited.bypassConfirm.ifSkipped': 'バージョン判定を省略し、デフォルトの CLI をそのまま実行します。セッションは起動します。',
   'conversation.exited.bypassConfirm.givesUpLabel': '何を諦めるか',
   'conversation.exited.bypassConfirm.givesUp':
     'このプロジェクトに固定したツールバージョンです。このセッションだけでなく、このセッションが実行するすべてのコマンド(エージェントが実行する npm test、npm run build、node …)が固定バージョンではなくデフォルトバージョンで動きます。同じコマンドでも、あなたのターミナルとは異なる結果になることがあります。',
   'conversation.exited.bypassConfirm.scopeLabel': 'どれくらい/何が変わるか',
+  // fix round 1(Important 3、ロール継承): 利用上限で別アカウントに切り替わるとき、引き継ぐ
+  // セッションにも同じバイパスが適用される — この一文がないと、継承自体は裏で静かに起きるのに
+  // このダイアログは「このセッションだけ」と言ってしまう。
   'conversation.exited.bypassConfirm.scope':
-    'このセッションが生きている間だけです。他のセッションやターミナルはそのままで、ファイルも設定も変更しません。元に戻すには、このセッションを閉じて新しく始めてください。',
+    'このセッションが生きている間、そして利用上限で別アカウントに切り替わって引き継ぐセッションにも適用されます。他のセッションやターミナルはそのままで、ファイルも設定も変更しません。元に戻すには、このセッション(と引き継いだセッション)を閉じて新しく始めてください。',
   'conversation.exited.bypassConfirm.properFixLabel': '本当の解決',
   'conversation.exited.bypassConfirm.properFix': 'package.json を修正すれば、このダイアログは再び表示されません。',
   'conversation.exited.bypassConfirm.confirm': 'スキップして再試行',
   'conversation.exited.bypassConfirm.failed': '再試行できませんでした',
+  // fix round 1 (Critical 2): 消えない印。notice と違い最初のターンで消えず、このセッションが
+  // (そして終わった後も)存在する限り、常にその事実だけを言う一行として残る。
+  'conversation.bypassed.badge': 'このセッションはこのプロジェクトに固定した toolchain のバージョンをスキップして開始されました',
   // ResumeDialog.tsx
   'session.resume.title': 'セッションを再開',
   'session.resume.conversationLabel': '会話',
