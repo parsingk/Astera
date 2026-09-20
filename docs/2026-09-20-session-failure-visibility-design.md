@@ -161,13 +161,17 @@ Volta 자체, 리뷰어의 `package.json`, `cmd.exe /c` 의 PATH 해석(S5). 살
 
 | 파일 | 고정하는 것 |
 |---|---|
-| `nodeProcFactory.test.ts` | stderr 가 드레인되면서도 꼬리가 남는다; 4000자를 넘으면 뒤에서 자른다; stderr 가 없으면 칸이 없다 |
-| `adapterCore.test.ts` | 핸드셰이크 전에 죽으면 사유가 `"process ended"` 가 아니라 코드와 꼬리를 싣는다 |
-| `codexAdapter.test.ts` / `claudeAdapter.test.ts` | 두 provider 모두 같은 실패 모양을 낸다 |
-| `startBlocked.test.ts` (신규) | 다섯 조건의 우선순위, 아무것도 안 막으면 null |
-| `paneTransport.test.ts` | 종료와 에러가 함께 있을 때 한 배너로 접힌다 |
-| `retryBypass.test.ts` (신규) | 프로토콜을 한 줄이라도 말했으면 재시도하지 않는다; 말없이 즉사하면 한 번만 재시도한다; 두 번은 없다; 재시도 성공은 사람에게 알린다 |
-| `catalog.test.ts` | 네 로케일 키 동등성 (기존) |
+| `stderrTail.test.ts` (신규) | 아무것도 안 들어오면 `undefined`(빈 문자열과 다르다); 상한을 넘으면 **뒤**를 남긴다; 기본 상한이 `CheckResult.outputTail` 과 같은 4000 |
+| `nodeProcFactory.test.ts` | 실제 자식이 stderr 에 찍고 죽으면 꼬리가 종료 이벤트에 실린다; 아무것도 안 찍으면 **키 자체가 없다** |
+| `nodeProc.test.ts`·`procHost.test.ts`·`procFactory.test.ts` | Host 의 다섯 hop 이 꼬리를 나르고, 옛 Host 의 필드 없는 `proc-exit` 도 그대로 통과한다 |
+| `adapterCore.test.ts` | 꼬리의 첫 줄이 `error`, 전문이 `errorDetail`, 코드가 `exitCode`; 꼬리가 없으면 지어내지 않고 이전 `error` 를 건드리지 않는다; 그 셋이 `exit` **이벤트**에도 실린다 |
+| `codexAdapter.test.ts` / `claudeAdapter.test.ts` | 두 provider 가 같은 실패 모양을 낸다 |
+| `useChatState.test.ts` | `foldChatEvent` 의 `exit` 갈래가 셋을 적용한다 — 이미 열린 pane 이 값을 받는 유일한 통로다 |
+| `startBlocked.test.ts` (신규) | 여섯 사유의 우선순위(사람이 할 일 먼저, 대기 사유가 뒤), 아무것도 안 막으면 null, `starting` 중에는 사유가 없다 |
+| `retryBypass.test.ts` (신규) | 말없이 즉사하면 한 번만 재시도; 한 줄이라도 말했으면 안 함; 오래 살았으면 안 함; `watchFirstLine` 이 줄을 흘려보내며 센다 |
+| `manager.test.ts` | 재시도의 네 시퀀스를 **실제로 재현한다** — `kill()` 을 불러 생긴 종료는 재시도하지 않는다; 죽은 어댑터의 늦은 `error` 가 새 세션으로 새지 않는다; 성공한 재시도 뒤의 평범한 종료가 옛 실패를 사인으로 말하지 않는다; `initialPrompt` 를 0번은 안 보내고 재시도가 정확히 한 번 보낸다 |
+| `paneTransport.test.ts` | 배너 우선순위 — 알림이 요청·에러 아래, 나머지 위 |
+| `catalog.test.ts` | 네 카탈로그의 자리표시자·비어 있지 않음 (기존) |
 
 렌더러는 `npm run typecheck` 와 `npm run build`. 수동 확인: PATH 앞에 즉시 `exit 8` 하며 stderr 를
 뱉는 가짜 `codex` 를 놓고 대화 세션을 띄워, 배너가 코드와 그 문장을 말하는지 본다.
