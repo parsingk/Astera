@@ -41,9 +41,20 @@ export function policyOf(s: OrchState, task: Pick<Task, 'runId'>): ResolvedPolic
   }
 }
 
-/** 지금까지 연 repair 수 */
+/** 예산을 먹은 repair 수 — **판정을 냈거나 아직 도는 것만** (설계 G1, 명세 §47·§22).
+ *
+ *  바로 아래 `reviewRoundOf` 가 이미 이 규칙이다("유실된 검토는 라운드를 먹지 않는다"). 이 함수만
+ *  그것을 어기고 있었다: 일시정지가 닫은 수리도(`closedBy: 'pause'`), 사람이 멈춘 수리도(`'stop'`),
+ *  앱이 죽어 판정 없이 끝난 수리도 예산을 한 칸씩 먹었다. 그 시도들은 **판정을 낼 기회를 받지
+ *  못했다** — 고칠 수 있었는지 없었는지를 아무도 모르는데 "고쳐 봤다" 로 세는 것은 거짓이고, 소진
+ *  Gate 의 "N 번 고쳤습니다" 도 같이 거짓이 된다.
+ *
+ *  **아직 도는 수리는 판정이 없어도 센다.** 빼면 앱이 그 옆에 두 번째 수리를 연다 — 이 수가 "지금
+ *  열어도 되는가" 를 정하는 데 쓰이기 때문이다(`routeFailure`). */
 export const repairCountOf = (s: OrchState, taskId: string): number =>
-  s.dispatches.filter((d) => d.taskId === taskId && d.repair !== undefined).length
+  s.dispatches.filter(
+    (d) => d.taskId === taskId && d.repair !== undefined && (d.outcome !== undefined || d.endedAt === undefined)
+  ).length
 
 /** 보고를 낸(outcome 있는) 검토 Dispatch 수. 유실된 검토는 라운드를 먹지 않는다 */
 export const reviewRoundOf = (s: OrchState, taskId: string): number =>

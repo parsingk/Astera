@@ -63,7 +63,8 @@ describe('repairCountOf / reviewRoundOf / latestImplDispatch', () => {
       dispatch({ id: 'dsp_r2', review: true, outcome: undefined, workerState: 'outcome_unknown', startedAt: '2026-09-19T00:04:00.000Z' })
     ]
   })
-  it('repair 표시가 있는 Dispatch 를 센다', () => {
+  it('판정을 낸 수리와 아직 도는 수리를 센다', () => {
+    // dsp_2 는 판정을 냈고(outcome), dsp_3 은 아직 돈다(endedAt 없음)
     expect(repairCountOf(s, 'tsk_1')).toBe(2)
   })
   it('보고를 낸 검토 Dispatch 만 라운드로 센다 — 유실된 검토는 라운드를 먹지 않는다', () => {
@@ -126,5 +127,46 @@ describe('suspiciousCheckFiles', () => {
   })
   it('역슬래시 경로도 같은 규칙으로 본다', () => {
     expect(suspiciousCheckFiles(['.github\\workflows\\ci.yml'])).toEqual(['.github\\workflows\\ci.yml'])
+  })
+})
+
+// 설계 G1(§47/§22). 바로 위 reviewRoundOf 가 "유실된 검토는 라운드를 먹지 않는다" 인데, repairCountOf
+// 만 그 규칙을 어기고 있었다 — 일시정지가 닫은 수리도, 사람이 멈춘 수리도, 앱이 죽어 잃은 수리도
+// 예산을 한 칸 먹었다. 그 시도는 판정을 낼 기회를 못 받았다.
+describe('repairCountOf — 중단된 수리는 예산을 먹지 않는다', () => {
+  const ended = (over: Partial<Dispatch>): Dispatch =>
+    dispatch({ repair: 'check-failure', outcome: undefined, workerState: 'stopped', endedAt: T, ...over })
+
+  it('일시정지가 닫은 수리는 세지 않는다', () => {
+    const s = state({ dispatches: [ended({ id: 'd1', closedBy: 'pause' })] })
+    expect(repairCountOf(s, 'tsk_1')).toBe(0)
+  })
+
+  it('사람이 멈춘 수리도, 포기한 수리도 세지 않는다', () => {
+    const s = state({
+      dispatches: [ended({ id: 'd1', closedBy: 'stop' }), ended({ id: 'd2', closedBy: 'abandon' })]
+    })
+    expect(repairCountOf(s, 'tsk_1')).toBe(0)
+  })
+
+  // 크래시로 잃은 수리 — 닫은 주체가 없어 closedBy 가 없다. 판정이 없다는 사실은 같다
+  it('앱이 죽어 판정 없이 끝난 수리도 세지 않는다', () => {
+    const s = state({ dispatches: [ended({ id: 'd1', workerState: 'outcome_unknown' })] })
+    expect(repairCountOf(s, 'tsk_1')).toBe(0)
+  })
+
+  it('판정을 낸 수리는 실패여도 센다 — 기회를 받았다', () => {
+    const s = state({
+      dispatches: [dispatch({ id: 'd1', repair: 'check-failure', outcome: 'failed', endedAt: T })]
+    })
+    expect(repairCountOf(s, 'tsk_1')).toBe(1)
+  })
+
+  // 지금 도는 수리를 빼면 앱이 그 옆에 두 번째 수리를 연다
+  it('아직 도는 수리는 판정이 없어도 센다', () => {
+    const s = state({
+      dispatches: [dispatch({ id: 'd1', repair: 'check-failure', outcome: undefined, endedAt: undefined, workerState: 'ready' })]
+    })
+    expect(repairCountOf(s, 'tsk_1')).toBe(1)
   })
 })
