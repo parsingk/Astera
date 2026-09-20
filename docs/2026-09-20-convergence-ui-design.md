@@ -296,8 +296,8 @@ en/ja/es는 같은 뜻으로; `catalog.test.ts`가 네 로케일의 키 동등�
 |---|---|
 | `state.test.ts` | `꺼진 Run 도 checks·checkHistory 를 기록한다` · `통과한 검사의 outputTail 은 키를 빼고, 실패한 검사의 것은 남긴다` · `통과해도 status 메시지 body 는 출력을 싣는다 — 벗기는 것은 기록에서만` |
 | `events.test.ts` | `정책 없는 Run 의 validating → failed 도 check 요약을 싣는다` — Journal 이 함께 바뀐 것을 고정 |
-| `view.test.ts` | describe `snapshotFor — 검사 결과와 자동 수정 진행` 여섯: checks 는 모든 Task 에·durationMs 는 둘 다 있을 때만, checks 없는 Task 는 칸 없음, convergence 는 정책 있는 Run 에만·기본값·repairs·reviewRound, repairing null·stopped, reviewRound 는 outcome 있는 검토만, gate.kind 전달 |
-| `nodeMeta.test.ts` (신규) | `nodeMetaOf` 우선순위 여섯(Gate → repairing → validating → reviewing → failed → provider/none) · `convergenceChipOf` 셋(없으면 null, 소진은 gate.kind 로만, repairing/reviewing/null) · `firstBlocked` |
+| `view.test.ts` | describe `snapshotFor — 검사 결과와 자동 수정 진행` 일곱: checks 는 모든 Task 에·durationMs 는 둘 다 있을 때만, checks 없는 Task 는 칸 없음, convergence 는 정책 있는 Run 에만·기본값·repairs·reviewRound, repairing null·stopped, reviewRound 는 outcome 있는 검토만, gate.kind 전달, **repairs 는 예산으로 clamp** |
+| `nodeMeta.test.ts` (신규) | `nodeMetaOf` 우선순위 여섯(Gate → repairing → validating → reviewing → failed → provider/none) · `convergenceChipOf` 셋(없으면 null, 소진은 gate.kind 로만, repairing/reviewing/null) · `firstBlocked` · `retryingCheckOf` 다섯(막힌 것이 있으면 그것, 지난 라운드가 전부 통과했으면 첫 검사, validating 이 아니면 null, 검사가 없으면 null, `nodeMetaOf` 의 `checking` 과 같은 것을 가리킴) |
 | `convergence.test.ts` | `빈 정책은 기본값 셋 — 심각도 기본은 DEFAULT_BLOCKING_SEVERITY 다` |
 | `catalog.test.ts` | 네 로케일 키 동등성 (기존) — 새 키 25개, 지운 키 1개 |
 | `server.test.ts` | 변경 없음 — `--convergence`·`--validate a,b`는 Plan 1이 고정했다 |
