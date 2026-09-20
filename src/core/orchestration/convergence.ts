@@ -18,6 +18,10 @@ export interface ResolvedPolicy {
   blockingSeverity: 'high' | 'medium'
 }
 
+/** 정책이 심각도를 정하지 않았을 때의 기본 — policyOf 와 새 Run 모달의 기본값 표시가 같은 값을 읽는다.
+ *  리터럴 'high' 를 두 곳에 박으면 상수가 바뀌는 날 화면이 거짓말한다. */
+export const DEFAULT_BLOCKING_SEVERITY: ResolvedPolicy['blockingSeverity'] = 'high'
+
 /** 옛 Task 의 validateConfigId 까지 합친 check 목록. 없으면 빈 배열 */
 export function checkConfigIdsOf(task: Pick<Task, 'validateConfigIds' | 'validateConfigId'>): string[] {
   if (task.validateConfigIds?.length) return task.validateConfigIds
@@ -33,7 +37,7 @@ export function policyOf(s: OrchState, task: Pick<Task, 'runId'>): ResolvedPolic
   return {
     maxFixAttempts: run.convergence.maxFixAttempts ?? FAILURE_LIMIT,
     maxReviewRounds: run.convergence.maxReviewRounds ?? MAX_REVIEW_ROUNDS,
-    blockingSeverity: run.convergence.blockingSeverity ?? 'high'
+    blockingSeverity: run.convergence.blockingSeverity ?? DEFAULT_BLOCKING_SEVERITY
   }
 }
 

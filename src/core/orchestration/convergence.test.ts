@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  DEFAULT_BLOCKING_SEVERITY,
   appendHistory,
   checkConfigIdsOf,
   isBlocking,
@@ -11,7 +12,7 @@ import {
   unstableChecks
 } from './convergence'
 import { emptyState, type OrchState } from './state'
-import type { CheckResult, Dispatch, Run, Task } from './types'
+import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS, type CheckResult, type Dispatch, type Run, type Task } from './types'
 
 const T = '2026-09-19T00:00:00.000Z'
 const run = (over: Partial<Run> = {}): Run => ({ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: T, ...over })
@@ -39,10 +40,12 @@ describe('policyOf', () => {
   it('Run 에 convergence 가 없으면 null 이다', () => {
     expect(policyOf(state(), task())).toBeNull()
   })
-  it('빈 정책은 기본값 3 / 2 / high 로 채운다', () => {
+  // 새 Run 모달이 기본값 셋을 회색 줄로 보여 준다 — 셋 다 상수에서 읽어야 상수가 바뀌는 날 화면이 거짓말하지 않는다
+  it('빈 정책은 기본값 셋 — 심각도 기본은 DEFAULT_BLOCKING_SEVERITY 다', () => {
     expect(policyOf(state({ runs: [run({ convergence: {} })] }), task())).toEqual({
-      maxFixAttempts: 3, maxReviewRounds: 2, blockingSeverity: 'high'
+      maxFixAttempts: FAILURE_LIMIT, maxReviewRounds: MAX_REVIEW_ROUNDS, blockingSeverity: DEFAULT_BLOCKING_SEVERITY
     })
+    expect(DEFAULT_BLOCKING_SEVERITY).toBe('high')
   })
   it('적힌 값은 그대로 쓴다', () => {
     const s = state({ runs: [run({ convergence: { maxFixAttempts: 1, maxReviewRounds: 5, blockingSeverity: 'medium' } })] })
