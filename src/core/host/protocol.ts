@@ -122,5 +122,8 @@ export type HostMessage =
   /** The answer to proc-attach: every buffered line, oldest first, with the seq each was sent with.
    *  One message, so the receiver knows where the replay ends; empty for an unknown or ended id. */
   | { t: 'proc-attached'; id: string; lines: Array<{ seq: number; line: string }> }
-  | { t: 'proc-exit'; id: string; exitCode: number }
+  /** `stderrTail` is absent from an older Host — the app treats that as "nobody collected it", not as
+   *  "the process said nothing". Added to this message rather than as a new one so the protocol version
+   *  does not have to move: bumping it retires a Host that is running perfectly well (design S4). */
+  | { t: 'proc-exit'; id: string; exitCode: number; stderrTail?: string }
   | { t: 'proc-listed'; entries: PtyEntry[] }

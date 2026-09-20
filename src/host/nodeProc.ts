@@ -5,6 +5,7 @@
 // rather than imported from core/run/kill.ts — the same two lines.
 import { spawn } from 'node:child_process'
 import type { ProcOpenOptions } from '../core/host/protocol'
+import { createStderrTail } from '../core/sessions/stderrTail'
 import type { RegistryProc, RegistryProcSpawn } from './procRegistry'
 
 export function nodeProcSpawn(a: { log(m: string): void; platform: NodeJS.Platform }): RegistryProcSpawn {
@@ -18,18 +19,23 @@ export function nodeProcSpawn(a: { log(m: string): void; platform: NodeJS.Platfo
       windowsHide: true
     })
     let onData: (chunk: string) => void = () => {}
-    let onExit: (e: { exitCode: number }) => void = () => {}
+    let onExit: (e: { exitCode: number; stderrTail?: string }) => void = () => {}
     let ended = false
+    const tail = createStderrTail()
     const end = (code: number): void => {
       if (ended) return
       ended = true
-      onExit({ exitCode: code })
+      onExit({ exitCode: code, ...(tail.value() !== undefined ? { stderrTail: tail.value() } : {}) })
     }
     child.stdout?.setEncoding('utf8')
     child.stdout?.on('data', (c: string) => onData(c))
     child.stderr?.setEncoding('utf8')
-    // stderr is not protocol; it is the process complaining. The Host's log is where that belongs.
-    child.stderr?.on('data', (c: string) => a.log(`proc pid ${child.pid ?? '?'} stderr: ${c.trim().slice(0, 400)}`))
+    child.stderr?.on('data', (c: string) => {
+      // The log stays: it is where someone digging into a Host that outlived its app looks. The tail is
+      // the same words on their way to the screen, which the log could never reach (design D1).
+      tail.push(c)
+      a.log(`proc pid ${child.pid ?? '?'} stderr: ${c.trim().slice(0, 400)}`)
+    })
     // A stream whose pipe closes under it (the process exiting while a write or read is in flight)
     // emits 'error' on that stream alone. With zero listeners Node treats that as unhandled and
     // throws, crashing the whole Host over one line process's ordinary teardown race — logged instead.

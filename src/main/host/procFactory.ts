@@ -12,7 +12,7 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
   let pid = startPid
   const queue: string[] = []
   let onLine: (line: string) => void = () => {}
-  let onExit: (e: { exitCode: number }) => void = () => {}
+  let onExit: (e: { exitCode: number; stderrTail?: string }) => void = () => {}
 
   // Ordering the replay against the lines arriving live meanwhile (chat-sessions design §6.5): while
   // replaying, a live proc-line is held rather than delivered, so the batch from proc-attached always
@@ -27,13 +27,13 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     onLine(line)
   }
 
-  const end = (exitCode: number): void => {
+  const end = (exitCode: number, stderrTail?: string): void => {
     state = 'exited'
     queue.length = 0
     held.length = 0
     unsubscribe()
     unsubscribeGone()
-    onExit({ exitCode })
+    onExit({ exitCode, ...(stderrTail !== undefined ? { stderrTail } : {}) })
   }
 
   // The app losing sight of the process, not the process ending — the same named code ptyFactory
@@ -66,7 +66,8 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
       held.length = 0
       return
     }
-    if ((m.t === 'proc-failed' || m.t === 'proc-exit') && state !== 'exited') end(m.t === 'proc-exit' ? m.exitCode : 1)
+    if ((m.t === 'proc-failed' || m.t === 'proc-exit') && state !== 'exited')
+      end(m.t === 'proc-exit' ? m.exitCode : 1, m.t === 'proc-exit' ? m.stderrTail : undefined)
   })
 
   if (startDead) {

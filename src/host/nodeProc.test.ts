@@ -58,4 +58,25 @@ describe('nodeProcSpawn', () => {
     }).not.toThrow()
     await new Promise((r) => setTimeout(r, 50))
   })
+
+  it('stderr 에 찍고 죽으면 꼬리가 종료 이벤트에 실린다 — 로그에도 그대로 남는다', async () => {
+    const logs: string[] = []
+    const spawn = nodeProcSpawn({ log: (m) => logs.push(m), platform: process.platform })
+    const p = spawn(
+      process.execPath,
+      ['-e', 'process.stderr.write("volta: could not parse manifest\\n"); process.exit(8)'],
+      { cwd: process.cwd(), env: process.env as Record<string, string | undefined> }
+    )
+    const exit = await new Promise<{ exitCode: number; stderrTail?: string }>((r) => p.onExit(r))
+    expect(exit.exitCode).toBe(8)
+    expect(exit.stderrTail).toContain('could not parse manifest')
+    expect(logs.some((l) => l.includes('could not parse manifest'))).toBe(true)
+  })
+
+  it('stderr 에 아무것도 안 찍으면 칸 자체가 없다', async () => {
+    const spawn = nodeProcSpawn({ log: () => {}, platform: process.platform })
+    const p = spawn(process.execPath, ['-e', 'process.exit(0)'], { cwd: process.cwd(), env: process.env as Record<string, string | undefined> })
+    const exit = await new Promise<{ exitCode: number; stderrTail?: string }>((r) => p.onExit(r))
+    expect(exit).not.toHaveProperty('stderrTail')
+  })
 })

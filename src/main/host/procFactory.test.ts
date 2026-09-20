@@ -74,6 +74,25 @@ describe('createHostProcFactory', () => {
     p.write('after')
     expect(t.sent.some((m) => m.t === 'proc-write' && m.line === 'after')).toBe(false)
   })
+  it('Host 가 보낸 stderr 꼬리를 종료 이벤트로 넘긴다', () => {
+    const t = transport()
+    const p = createHostProcFactory(t).factory('codex', [], opts)
+    const id = spawnedId(t)
+    let seen: { exitCode: number; stderrTail?: string } | null = null
+    p.onExit((e) => { seen = e })
+    t.deliver({ t: 'proc-exit', id, exitCode: 8, stderrTail: 'volta: nope' })
+    expect(seen).toEqual({ exitCode: 8, stderrTail: 'volta: nope' })
+  })
+  // 옛 Host 는 이 칸을 모른다 — 그때는 "아무도 모으지 않았다"이지 "프로세스가 말이 없었다"가 아니다
+  it('꼬리 없는 옛 Host 의 종료도 그대로 통과한다', () => {
+    const t = transport()
+    const p = createHostProcFactory(t).factory('codex', [], opts)
+    const id = spawnedId(t)
+    let seen: { exitCode: number; stderrTail?: string } | null = null
+    p.onExit((e) => { seen = e })
+    t.deliver({ t: 'proc-exit', id, exitCode: 1 })
+    expect(seen).toEqual({ exitCode: 1 })
+  })
   it('a refused spawn ends the handle with code 1', () => {
     const t = transport()
     const p = createHostProcFactory(t).factory('codex', [], opts)
