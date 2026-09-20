@@ -25,6 +25,8 @@ docs/*
 # Published deliberately, for the same reason as the file above: the completion convergence loop is
 # built from this design in another worktree, where an ignored file does not exist.
 !docs/2026-09-19-completion-convergence-design.md
+# Published deliberately, same reason: the convergence UI is built from this design in another worktree.
+!docs/2026-09-20-convergence-ui-design.md
 # Published deliberately: the SignPath Foundation requires the code signing policy to be reachable at
 # a public URL, and the README links to it.
 !docs/code-signing.md

@@ -581,55 +581,10 @@ repair Dispatch의 `dispatch-started` 이벤트는 `JobEvent`에 `repair` 표시
 
 ## 13. UI (§27–§29)
 
-### 13.1 켜기 — `NewRunModal`
-
-동시성·코디네이터 계정·예약 옆에 체크박스 "통과할 때까지 자동 수정 — 검사가 실패하면 앱이 같은 워커에게 고치게 하고
-다시 검사합니다". 기본 꺼짐(§42). `run-create --convergence`. 숫자 셋은 CLI 플래그만(`--max-fix-attempts`,
-`--max-review-rounds`, `--blocking-severity`).
-
-### 13.2 check 목록 — `NewTaskModal`
-
-단일 셀렉트를 체크 목록으로. 고른 순서를 번호 칩으로 보여 주고 그 순서가 실행 순서다.
-`task-create --validate a,b,c`(쉼표 목록 — `--files-modified`·`--options`의 규약).
-
-### 13.3 투영 — `JobTask.convergence?` (`view.ts`의 `jobTaskOf`, convergence Run에서만)
-
-```ts
-convergence?: {
-  repairs: number; maxFixAttempts: number
-  reviewRound: number; maxReviewRounds: number
-  /** 지금 열린 Dispatch가 repair면 그 사유 */
-  repairing: 'check-failure' | 'review-failure' | null
-  checks: { configId; name; status; exitCode?; summary /* outputTail 마지막 3줄 */; unstable?: true }[]
-  blockingIssues: { severity; title; file?; line? }[]
-  nonBlockingCount: number
-  suspiciousFiles: string[]
-  /** 소진 Gate가 열려 있으면 그 요약 */
-  exhausted?: string
-  stopped: boolean  // convergenceOff
-}
-```
-
-outputTail 전체는 싣지 않는다 — 스냅숏은 사이드바 푸시마다 간다. 펼쳐 볼 때는 `orch.command(...,
-'task-show')`로 받는다.
-
-### 13.4 Job 상세 — `RunDetail`
-
-- 노드 `meta` 줄: repair 중 "수정 2/3 · Claude", `validating` "검사 중", `reviewing` "검토 라운드 1/2".
-- 노드 아래 check 칩 한 줄: ✓ ✗ ● ○ (passed / failed·timed-out / 도는 중 / not-run). 툴팁 = 이름과 summary.
-  unstable은 칩에 `~`.
-- 노드를 고르면 `.detail-events` 위에 **Completion 블록**(§27): check 목록과 상태, "수정 2 / 3",
-  "검토 라운드 1 / 2", blocking 이슈(severity · 제목 · file:line), non-blocking 개수, unstable·의심 파일 칩,
-  마지막 실패 요약(펼치면 outputTail — `task-show`).
-- 버튼(§29): **자동 수정 중지** → `task-update --convergence off`. 도는 repair는 끝까지 가고 그 판정은
-  `'convergence-blocked'` Gate. **다시 시도** = 기존 띄우기/다시 띄우기. **실패 보기** = 블록 펼침 + 워커
-  세션 탭 점프(기존 jump). 소진 Gate의 retry-once / mark-failed는 기존 **답하기**가 `gate.options`를
-  버튼으로 그린다 — 새 UI 없음.
-
-### 13.5 사이드바 — `JobsView`
-
-repair 중인 Task는 열린 Dispatch가 있어 이미 줄이다. "수정 2/3" 칩만 더한다. `validating`은 지금처럼
-접힌 수에만.
+§13.1–§13.5의 첫 스케치(켜기 체크박스, check 목록, `JobTask.convergence?` 투영, 노드 meta·칩, 사이드바 칩)는
+`2026-09-20-convergence-ui-design.md`가 대체한다 — 거기서 결정된 것 중 이 문서와 다른 것은 §18-11 하나다(검사
+결과를 모든 Run에 기록). Completion 블록·버튼 셋(자동 수정 중지 → `task-update --convergence off`, 다시 시도,
+실패 보기)·소진 Gate의 `gate.options` 버튼은 그 문서 §8이 다음 조각으로 남겼다.
 
 ### 13.6 문구
 
@@ -818,6 +773,14 @@ convergence·repair 관련 테스트가 하나도 없다는 것으로 확인했�
     아직 쓰이지 않은 그 UI 계획이 물려받을 첫 항목으로 남긴다: `resolveGate`가 `reply.body`의
     `retryOnceFailed`를 읽어 `setGateError`(이미 있는 실패-표시 경로)로 보여 주는 것이 그 계획의
     첫 줄이어야 한다.
+
+11. **Task 4의 "수렴 Run에만 기록" 판정을 UI 조각이 뒤집었다.** 처음 구현은 `applyValidationResult`의
+    `policy === null` 갈래가 `checks`·`checkHistory`를 쓰지 않게 해 비수렴 Run의 상태 파일이 커지지 않게
+    했다. 그런데 `--validate`만 쓰는 Run의 Task도 어느 검사가 깨졌는지 노드에 보여야 하고(UI 설계 U2),
+    그 정보가 상태에 없으면 그릴 수 없다. 고친 것: 모든 Run에 `checks`·`checkHistory`를 기록하고, 통과한
+    검사의 `outputTail`은 키를 뺀다 — 툴팁에 쓸모없고 용량의 대부분이다. status 메시지 문구는 그대로다
+    (스트립은 기록 직전, validator가 아니라). 비수렴 Run의 상태 파일은 검사별 한 줄만큼 커진다.
+    `2026-09-20-convergence-ui-design.md` §2.1.
 
 **바뀌지 않은 것도 확인해 둔다.** §8.3(diff 기준점을 뺀 나머지)·§8.2(`.review.json`의 suffix를 붙이는
 자리가 서버 한 곳뿐이라는 것)·§10의 `appDriven`/`hasValidateConfig` 조건은 처음 적은 그대로 구현됐다
