@@ -1299,6 +1299,27 @@ export const ko = {
   'jobs.convergence.gate.repairFailed': '수정할 워커를 띄울 수 없었습니다: {reason}',
   'jobs.convergence.gate.retryOnce': '한 번 더 수정',
   'jobs.convergence.gate.markFailed': '실패로 표시',
+  // 노드 meta 줄(RunDetail, nodeMetaOf 의 kind 별). 문장은 결과가 아니라 지금 무슨 일이 벌어지는지 말한다 —
+  // "수정 2/3 · Unit tests 실패" 는 두 번 고쳤고 아직 그 검사가 막고 있다는 뜻이다
+  'jobs.convergence.node.repairing': '수정 {repairs}/{max} · {failed} 실패',
+  'jobs.convergence.node.repairingNoCheck': '수정 {repairs}/{max}',
+  // validator 는 라운드 끝에 한 번 결과를 주므로 도는 동안 아는 것은 지난 라운드뿐이다 — "지금 도는 검사" 를
+  // 지어내지 않고 지난 라운드에 막힌 검사를 가리킨다(UI 설계 U12)
+  'jobs.convergence.node.rechecking': '다시 검사 중 · {name}',
+  'jobs.convergence.node.checking': '검사 중',
+  'jobs.convergence.node.reviewing': '검토 라운드 {round}/{max}',
+  'jobs.convergence.node.failed': '{name} 실패',
+  // 사이드바 도는 줄·Gate 줄의 칩(JobsView, convergenceChipOf)
+  'jobs.convergence.chip.repairing': '수정 {repairs}/{max}',
+  'jobs.convergence.chip.reviewing': '검토 {round}/{max}',
+  'jobs.convergence.chip.exhausted': '소진',
+  // 검사 칩 툴팁 — "{이름} — {결과} ({지난 라운드 실제 시간})"
+  'jobs.convergence.check.passed': '통과',
+  'jobs.convergence.check.failed': '실패 (exit {code})',
+  'jobs.convergence.check.timedOut': '타임아웃',
+  'jobs.convergence.check.notRun': '돌지 않음',
+  'jobs.convergence.check.retrying': '다시 도는 중',
+  'jobs.convergence.check.unstable': '라운드 사이에 판정이 흔들림',
   'jobs.event.status': '소식',
   'jobs.event.workerDone': '워커 보고',
   'jobs.event.question': '질문',
@@ -1338,6 +1359,13 @@ export const ko = {
   'jobs.new.scheduleHint': '정한 시각마다 이 작업의 회차를 하나 만들어 돌린다',
   // 겹침을 막지 않기로 한 결정을 사람에게 알리는 자리 — 도는 워커 수가 상한을 넘을 수 있다
   'jobs.new.scheduleOverlapHint': '이전 회차가 돌고 있어도 새 회차를 띄운다 — 워커가 겹칠 수 있다',
+  // 통과할 때까지 자동 수정(Plan 1 설계 D12, UI 설계 U10). 이름표는 결과("통과")가 아니라 켜면 무슨 일이 생기는지
+  // 말한다. 숫자 셋은 CLI 플래그만이고 여기서는 기본값을 보여만 준다 — 안 보이면 "얼마나 시도하는 건데?" 에 답이 없다
+  'jobs.new.convergence': '통과할 때까지 자동 수정',
+  'jobs.new.convergenceHint':
+    '검사가 실패하면 앱이 같은 워커에게 무엇이 틀렸는지 돌려주고, 고친 뒤 다시 검사합니다. 정해진 횟수 안에 통과하지 못하면 멈추고 물어봅니다.',
+  'jobs.new.convergenceDefaults': '수정 최대 {fix}회 · 검토 라운드 {review}회 · 막는 심각도 {severity}',
+  'jobs.new.convergenceCliOnly': '이 값들은 CLI 로만 바꿉니다',
   'jobs.new.create': '만들기',
   // 동시 실행 1 을 골랐는데 그 폴더에 이미 워커가 있을 때. 막지 않고 알려만 준다 —
   // 파일을 안 건드리는 워커끼리는 충돌할 것이 없고 앱은 그것을 알 수 없다
@@ -1373,8 +1401,16 @@ export const ko = {
   // 고른 계정이 이 폴더를 처음 쓰면 CLI 가 신뢰 확인을 띄우고 **거기서 멈춘다** — 앱은 그것을
   // 모르고 노드는 도는 모양 그대로라, 미리 말해 두지 않으면 왜 아무 일도 없는지 알 길이 없다
   'jobs.task.accountTrust': '고른 계정이 이 폴더를 처음 쓰면 세션 탭에 폴더 신뢰 확인이 뜹니다 — 승인해야 워커가 일을 시작합니다',
-  'jobs.task.validate': '완료를 검증할 실행 구성',
+  'jobs.task.validate': '완료 검사',
   'jobs.task.validateNone': '검증 없음',
+  // 검사는 고른 순서대로 돌고 첫 실패에서 멈춘다(Plan 1 설계 D9) — 순서가 비용을 좌우하므로 힌트가 그것을 말한다
+  'jobs.task.checksHint': '빠른 검사를 앞에 두세요 — 첫 실패에서 멈추므로, 느린 검사가 앞에 있으면 매 수정마다 그 시간을 버립니다.',
+  'jobs.task.checksUnpicked': '고르지 않은 것',
+  'jobs.task.checksNone': '검사로 쓸 실행 구성이 없습니다',
+  // ↑ ↓ ✕ — 아이콘만 있는 버튼의 aria-label·title
+  'jobs.task.checkUp': '위로',
+  'jobs.task.checkDown': '아래로',
+  'jobs.task.checkRemove': '빼기',
   'jobs.task.review': '다른 에이전트가 검토',
   'jobs.task.create': '추가',
   'jobs.task.failed': 'Task 를 만들지 못했습니다',
