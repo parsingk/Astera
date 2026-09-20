@@ -513,9 +513,15 @@ export async function handleCommand(
       // 거절한다 — 조용히 받으면 "정책을 줬는데 꺼져 있다" 가 된다.
       let convergence: ConvergencePolicy | undefined
       const wantsConvergence = args.convergence === true
-      const hasKnob = args.maxFixAttempts !== undefined || args.maxReviewRounds !== undefined || args.blockingSeverity !== undefined
+      const hasKnob =
+        args.maxFixAttempts !== undefined ||
+        args.maxReviewRounds !== undefined ||
+        args.blockingSeverity !== undefined ||
+        args.maxTotalMinutes !== undefined
       if (hasKnob && !wantsConvergence)
-        return bad('--max-fix-attempts, --max-review-rounds and --blocking-severity require --convergence')
+        return bad(
+          '--max-fix-attempts, --max-review-rounds, --max-total-minutes and --blocking-severity require --convergence'
+        )
       if (wantsConvergence) {
         convergence = {}
         if (args.maxFixAttempts !== undefined) {
@@ -532,6 +538,13 @@ export async function handleCommand(
           if (args.blockingSeverity !== 'high' && args.blockingSeverity !== 'medium')
             return bad('--blocking-severity must be high|medium')
           convergence.blockingSeverity = args.blockingSeverity
+        }
+        // 시간 예산(명세 §40). 나머지 셋과 같은 모양으로 받는다 — 이 칸만 명령으로 줄 길이 없으면
+        // 정책에 있어도 손으로 orchestration.json 을 고치는 것 말고는 켤 방법이 없다.
+        if (args.maxTotalMinutes !== undefined) {
+          const n = posInt(args.maxTotalMinutes)
+          if (n === null) return bad('--max-total-minutes must be an integer >= 1')
+          convergence.maxTotalMinutes = n
         }
       }
       // 이 Run 을 관리할 코디네이터 세션의 계정. **하나다** — 목록이 아닌 이유는 Run.coordinatorAccountId

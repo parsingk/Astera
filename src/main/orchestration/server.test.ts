@@ -1202,6 +1202,20 @@ describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
     return (task.body as { id: string }).id
   }
 
+  it('--max-total-minutes 가 정책에 실린다', async () => {
+    const deps = makeDeps()
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true, maxTotalMinutes: 45 })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs[0].convergence).toEqual({ maxTotalMinutes: 45 })
+  })
+
+  it('--max-total-minutes 는 --convergence 없이는 거절된다 — 나머지 셋과 같은 규칙', async () => {
+    const deps = makeDeps()
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', maxTotalMinutes: 45 })
+    expect(r.status).toBe(400)
+    expect(String((r.body as { error: string }).error)).toContain('--max-total-minutes')
+  })
+
   it('수렴하지 않은 Task 를 완료로 옮기려면 --reason 이 필요하다', async () => {
     const deps = makeDeps()
     const taskId = await seedConvergingTask(deps)

@@ -596,7 +596,7 @@ en/es/ja/ko 넷.
 
 | 명령 | 변경 |
 |---|---|
-| `run-create` | `--convergence`, `--max-fix-attempts N`, `--max-review-rounds N`, `--blocking-severity high\|medium` → `Run.convergence` |
+| `run-create` | `--convergence`, `--max-fix-attempts N`, `--max-review-rounds N`, `--max-total-minutes N`(명세 §40, 2026-09-21 백엔드 조각), `--blocking-severity high\|medium` → `Run.convergence` |
 | `task-create` | `--validate` 쉼표 목록 → `validateConfigIds`. 단일 값도 목록으로 저장 |
 | `task-update` | `--convergence off` → `Task.convergenceOff` |
 | `task-show` / `task-list --json` | `checks`, `reviewIssues`, `suspiciousFiles`, `convergenceOff` 노출 |
