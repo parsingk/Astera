@@ -789,6 +789,36 @@ convergence·repair 관련 테스트가 하나도 없다는 것으로 확인했�
    다운그레이드를 지원 범위로 두지 않았으므로, 눈에 보이게 잃는 쪽을 택하고 조용히 약하게 통과하는
    쪽을 버렸다.
 
+9. **`Dispatch.grantedExtra`는 두 번째 크래시를 건너 살아남지 못한다 — 확인했고, 병합 전 마지막
+   커밋에서 고치지 않기로 했다.** 사람이 retry-once로 예산 밖에 연 repair가 크래시로 유실되면,
+   `main/recovery/reconciler.ts`가 그 Dispatch의 `grantedExtra`를 `LostAttempt.grantedExtra`로 옮기고
+   `main/recovery/execute.ts`가 그것을 읽어 재시작한 spec에도 "사람이 허락했다"는 문구를 정확히
+   싣는다(§18(3)의 위 항목). 그런데 execute.ts가 여는 replacement Dispatch 자신에게는 그 사실을 다시
+   적어 두지 않는다 — `openDispatch`가 `grantedExtra`를 쓰는 유일한 조건은 `ignoreCircuit: true`이고,
+   execute.ts는 그 replacement를 절대 `ignoreCircuit`으로 열지 않는다(회로 차단을 건너뛰는 것은
+   `repairOnce`만의 권한이고, 재시작에 그 권한을 넘기면 정말로 예산을 넘겨 소진 Gate로 갔어야 할
+   Task가 조용히 계속 돌게 된다 — 다른 실수를 만들 뿐이다). 그래서 그 replacement가 **또** 크래시로
+   유실되고 다시 recovery가 열리면(세 번째 시도), 세 번째 Dispatch는 `grantedExtra`가 없는 채로
+   열리고, 그 spec은 예산 안의 평범한 repair처럼 "repair {repairs} of {maxFixAttempts}" 를 낸다 —
+   실제로는 사람이 허락한 연장선인데도. 이것이 실제로 닿는 자리는 좁다: 정책의 `maxFixAttempts`가
+   기본 회로 한도(`FAILURE_LIMIT`)보다 작을 때만 겹쳐 일어난다(그렇지 않으면 애초에
+   `openDispatch`(`ignoreCircuit` 없이)가 회로 차단으로 거절해 두 번째 크래시까지 가지 못한다). 고치지
+   않는 이유는 이 실수의 방향이다 — 사람이 안 시킨 일을 시켰다고 말하는 §5(execute.ts)나 §18(3-두
+   번째 자리, repair.ts)의 거짓 주장과 달리, 이것은 **침묵**이다: 세 번째 시도가 "예산 안"이라고
+   말해도 그 반대(사람이 실제로 허락했다는 사실)를 말하지 않을 뿐, 거짓을 말하지는 않는다. 병합
+   전 마지막 커밋에서 다룰 성질의 문제가 아니라고 판단해 여기 기록만 해 둔다.
+
+10. **`gate-resolve`의 `retryOnceFailed`는 CLI·에이전트 호출자에게만 닿는다 — 앱의 Job 상세 화면은
+    이 응답 바디를 버린다.** `src/renderer/src/components/RunDetail.tsx`의 `resolveGate`(사람이 Gate
+    선택지 버튼이나 자유 답변으로 "한 번 더"를 누르는 자리)는 `reply.status >= 400`만 보고 200이면
+    본문을 읽지 않고 폼을 닫는다 — 그래서 사람이 앱에서 retry-once를 눌렀는데 두 번째 열린 Gate가
+    여전히 막아 아무것도 안 열렸을 때도, 화면에는 실패하지 않은 것처럼 보인다(§5, "Two things to
+    record" 항목). 이것은 `main/orchestration/server.ts`가 아니라 렌더러 UI의 문제이고, 이 기능은
+    지금까지 UI를 코드로 건드리지 않고 계획만 남겨 왔다(§13, Plan 2) — 그래서 여기서 고치지 않고,
+    아직 쓰이지 않은 그 UI 계획이 물려받을 첫 항목으로 남긴다: `resolveGate`가 `reply.body`의
+    `retryOnceFailed`를 읽어 `setGateError`(이미 있는 실패-표시 경로)로 보여 주는 것이 그 계획의
+    첫 줄이어야 한다.
+
 **바뀌지 않은 것도 확인해 둔다.** §8.3(diff 기준점을 뺀 나머지)·§8.2(`.review.json`의 suffix를 붙이는
 자리가 서버 한 곳뿐이라는 것)·§10의 `appDriven`/`hasValidateConfig` 조건은 처음 적은 그대로 구현됐다
 — 구현 중 리뷰가 다른 모양을 제안했다가 원래 설계가 맞다고 되돌린 자리들이다(`main/orchestration/

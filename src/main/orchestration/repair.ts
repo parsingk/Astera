@@ -62,11 +62,15 @@ function repairSpec(s: OrchState, task: Task, d: Dispatch, run: { cwd: string },
       maxFixAttempts,
       checks: task.checks,
       issues: task.reviewIssues,
-      // repairs 가 maxFixAttempts 를 넘는 것은 정상 경로로는 나오지 않는다 — 유일한 문은
-      // repairOnce 가 ignoreCircuit 으로 예산 밖에 여는 것뿐이다(그 Dispatch 도 repairCountOf 에
-      // 잡힌다). 그때 "repair {repairs} of {maxFixAttempts}" 는 예산보다 큰 번호를 내므로
-      // repairSection(coordinator.ts)에게 그 사실을 넘긴다.
-      ...(repairs > maxFixAttempts ? { extra: true } : {})
+      // **repairs > maxFixAttempts 로 판정하지 않는다(전체 브랜치 리뷰, Finding 3 — 두 번째 자리).**
+      // repairCountOf 는 크래시로 잃은 repair Dispatch 와 그것을 잇는 recovery 의 replacement 를
+      // 둘 다 센다(둘 다 `.repair` 가 있다) — 그 유령들은 이전 라운드에서 와서 영영 남으므로, 세
+      // 번 중 두 번만 실제로 열렸어도 네 번째 Dispatch 를 열 때는 count 가 4 로, 진짜 예산
+      // 소진(§5.1의 exhausted Gate) 없이도 우연히 maxFixAttempts 를 넘을 수 있다 — 아무도 허락하지
+      // 않았는데 "사람이 허락했다" 고 말하게 된다(execute.ts 에서 고친 것과 같은 거짓말). 대신 이
+      // Dispatch 자신이 열릴 때 이미 적어 둔 사실(Dispatch.grantedExtra — repairOnce 가 ignoreCircuit
+      // 으로 열 때만 참이다)을 읽는다.
+      ...(d.grantedExtra ? { extra: true } : {})
     }
   })
 }

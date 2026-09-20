@@ -191,6 +191,32 @@ describe('performRepair', () => {
     expect(patched.sessionId).toBe('sess1') // same-session 경로 — 실제 세션 id 그대로
     expect(patched.specPath).toBe(`C:/specs/${taskId}-${repair.id}.md`) // 세 자리는 그래도 patch 된다
   })
+
+  // 전체 브랜치 리뷰, Finding 3 — 두 번째 자리. repairCountOf 는 크래시로 잃은 repair Dispatch 와
+  // 그것을 recovery 가 다시 연 replacement 를 둘 다 센다(둘 다 `.repair` 를 지닌다). 그 유령들은
+  // 이전 라운드에서 와서 영영 남으므로, 실제로 열린 repair 가 예산 안에서 정상적으로(퇴근·재시도
+  // 없이) 이어져도 count 는 우연히 예산을 넘을 수 있다 — 그때도 "사람이 허락했다" 고 말하면 안
+  // 된다. grantedExtra 가 없는 한(=repairOnce 로 열리지 않은 한) extra 문구는 절대 붙지 않아야 한다.
+  it('repairCountOf 가 유령 Dispatch 때문에 예산을 넘어도, 사람이 허락하지 않았으면 그렇게 말하지 않는다', async () => {
+    const { s, taskId } = validating()
+    const judged = unwrap<Task>(applyValidationResult(s, { taskId, results: failing, repair: repairTargetFor(s, taskId, () => true)! }, NOW) as never)
+    const live = judged.state.dispatches.find((d) => d.repair && !d.endedAt)!
+    // 이전 라운드에서 잃고 recovery 가 다시 연 repair Dispatch 셋을 흉내 낸다 — 전부 끝났고, 전부
+    // grantedExtra 가 없다(사람이 연 것이 아니다). 이 셋만으로도 repairCountOf(=4, live 포함)가
+    // maxFixAttempts(3)를 넘는다.
+    const ghost = (n: number): Dispatch => ({
+      id: `dsp_ghost_${n}`, taskId, provider: 'claude', accountId: 'accA', sessionId: `sess-ghost-${n}`,
+      cwd: 'D:/wt', specPath: 'x', startedAt: NOW, endedAt: NOW, outcome: 'failed', workerState: 'failed',
+      retained: false, repair: 'check-failure'
+    })
+    const rigged: OrchState = { ...judged.state, dispatches: [...judged.state.dispatches, ghost(1), ghost(2), ghost(3)] }
+    expect(rigged.dispatches.filter((d) => d.repair)).toHaveLength(4) // count 가 예산 3 을 넘는다
+    expect(live.grantedExtra).toBeUndefined() // 이 repair 는 사람이 연 것이 아니다
+    const deps = makeDeps(rigged)
+    await performRepair(deps, { dispatchId: live.id })
+    expect(deps.started).toHaveLength(1)
+    expect(deps.started[0].specFileContent).not.toContain('granted by a person')
+  })
 })
 
 describe('repairOnce', () => {
@@ -210,11 +236,19 @@ describe('repairOnce', () => {
     expect(result).toEqual({ ok: true })
     const repair = deps.box.state.dispatches.find((d) => d.repair)!
     expect(repair).toMatchObject({ repair: 'check-failure', retryOf: implId, sessionId: 'sess1' })
+    // repairOnce 는 ignoreCircuit 으로 열므로 이 Dispatch 는 grantedExtra 를 durable 하게 지닌다
+    // (전체 브랜치 리뷰, Finding 3 — 두 번째 자리) — repairSpec 이 이것을 읽어야 한다, count 를
+    // 다시 세지 않는다.
+    expect(repair.grantedExtra).toBe(true)
     expect(deps.box.state.tasks.find((t) => t.id === taskId)?.status).toBe('dispatched')
     await vi.waitFor(() => expect(deps.started).toHaveLength(1))
-    // 이 시나리오는 repair 를 한 번도 열지 못한 채 소진됐다(카운터만 3 이었다) — 그래서 첫 repair 다.
-    // 번호는 repair Dispatch 수에서 오고 카운터에서 오지 않는다(convergence.ts 의 repairCountOf).
-    expect(deps.started[0].specFileContent).toContain('This is repair 1 of 3')
+    // 이 시나리오는 repair 를 한 번도 열지 못한 채(카운터만 3이었다) 소진 Gate 로 갔고, 사람이
+    // retry-once 로 그 Gate 를 풀어 예산 밖에 이 repair 를 열었다 — repairCountOf 로는 "1 of 3"
+    // 처럼 예산 안으로 보이더라도, 이것은 진짜로 사람이 자동 예산을 넘어 허락한 repair 다. 그래서
+    // count 비교가 아니라 grantedExtra 로 판정해야 이 경우를 "extra" 로 정확히 부른다.
+    expect(deps.started[0].specFileContent).toContain(
+      'This is an extra repair, granted by a person after the budget of 3 was already spent.'
+    )
   })
   it('이미 열린 Dispatch 가 있으면 새 Dispatch 를 열지 않는다', async () => {
     const { s, taskId } = validating()
