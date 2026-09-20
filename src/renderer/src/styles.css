@@ -1781,6 +1781,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* 검토 Dispatch 표시. 색은 JobIcons 의 STATUS_COLOR.reviewing 과 같은 --fi-purple 이다 — 같은 뜻이
    화면에서 다른 색이면 안 된다 */
 .detail-chip.review { color: var(--fi-purple); }
+/* 수리 줄 — 재시도(retry)와 같은 계열이되 구분되게. 무엇이 다시 도는지가 아니라 왜 다시 도는지를 말한다 */
+.detail-chip.repair { color: var(--warn-ink); }
 /* worker_done 의 결과. 색은 STATUS_COLOR 가 completed/failed 에 쓰는 둘과 같다 */
 .detail-outcome { font-size: 11px; }
 .detail-outcome.o-succeeded { color: var(--ok); }
@@ -2299,6 +2301,35 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .jobs-conv.jobs-conv--repairing { color: var(--git-modified); background: color-mix(in srgb, var(--git-modified) 14%, var(--elevated)); }
 .jobs-conv.jobs-conv--reviewing { color: var(--fi-purple); background: color-mix(in srgb, var(--fi-purple) 14%, var(--elevated)); }
 .jobs-conv.jobs-conv--exhausted { color: var(--git-conflict); background: color-mix(in srgb, var(--git-conflict) 14%, var(--elevated)); }
+/* 멈춤 — 도는 것도 막힌 것도 아니다. 경고색도 위험색도 아닌 가라앉은 색이 그 뜻이다 */
+.jobs-conv.jobs-conv--stopped { color: var(--text-dim); background: color-mix(in srgb, var(--text-dim) 12%, var(--elevated)); }
+
+/* 완료 상세 블록 — 고른 Task 가 왜 정책을 못 넘었는지(2조각 설계 §2.3). 필터 줄과 이벤트 목록
+   사이에 접힌 채로 앉는다. 펼쳐도 이벤트를 화면 밖으로 밀지 않도록 자기 높이를 제한한다 —
+   꼬리 하나가 4000자까지 온다. */
+.detail-completion { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
+.detail-completion-head { align-self: flex-start; background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; cursor: pointer; }
+.detail-completion-head:hover { text-decoration: underline; background: none; }
+.detail-completion-checks, .detail-completion-issues, .detail-completion-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.detail-completion-checks > li, .detail-completion-issues > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.detail-completion-name { font-weight: 600; }
+/* 통과한 것은 가라앉히고 막은 것만 눈에 든다 — 칩 줄과 같은 규칙이다 */
+.detail-completion-name--passed { color: var(--text-dim); font-weight: 400; }
+.detail-completion-name--failed, .detail-completion-name--timed-out { color: var(--git-conflict); }
+.detail-completion-name--not-run { color: var(--text-faint); font-weight: 400; }
+.detail-completion-verdict { color: var(--text-dim); }
+.detail-completion-more { background: none; border: 0; padding: 0; color: var(--accent); font-size: 11px; cursor: pointer; }
+.detail-completion-more:hover { text-decoration: underline; background: none; }
+/* 한 검사의 출력 꼬리. flex-basis 100% 로 제 줄을 차지한다 — 이름 옆에 붙으면 줄이 깨진다 */
+.detail-completion-tail { flex: 0 0 100%; max-height: 160px; overflow: auto; margin: 2px 0 0; padding: 6px 8px; background: var(--elevated); border-radius: var(--radius-sm); font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+.detail-completion-label { margin: 2px 0 0; font-size: 12px; color: var(--text-dim); }
+.detail-completion-sev { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: .02em; }
+.detail-completion-sev.sev-critical, .detail-completion-sev.sev-high { color: var(--git-conflict); }
+.detail-completion-sev.sev-medium { color: var(--warn-ink); }
+.detail-completion-sev.sev-low, .detail-completion-sev.sev-info { color: var(--text-dim); }
+.detail-completion-issue-title { min-width: 0; }
+.detail-completion-where { color: var(--text-faint); font-size: 11px; }
+.detail-completion-files > li { color: var(--text-dim); font-size: 12px; }
 .jobs-gate .jobs-conv { margin-top: 1px; }
 /* 회차는 평범한 Run 카드다. 한 단 들여써서 부모에 속한 것으로 읽히게 하고, 자기 테두리는 지운다 —
    부모의 테두리 안에 또 테두리가 겹치면 어느 것이 묶음의 끝인지 읽을 수 없다(.jobs-run 의 주석과

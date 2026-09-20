@@ -479,6 +479,9 @@ export function buildReviewSpecFile(a: {
   previousIssues?: ReviewIssue[]
   /** check 의 동작을 바꾸는 파일들(설계 §8.3) */
   suspiciousFiles?: string[]
+  /** 완료 정책의 지문이 라운드 사이에 달라졌다(2조각 설계 G3, 명세 §36·§37). 의심 파일과 같은 자리,
+   *  같은 이유로 실린다 — 앱은 표시만 하고 판정은 리뷰어의 몫이다 */
+  policyChanged?: boolean
   /** 구조화된 판정을 쓸 파일. `<specPath>.review.json` — 서버가 같은 규칙으로 읽는다(server.ts).
    *  **convergence Run에서만 있다.** 그 파일을 읽는 것은 server.ts 가 policyOf(...) !== null 일
    *  때뿐이므로(applyReviewResult 로 넘어가는 그 한 경로), 없는 Run 에 이 절을 실으면 "파싱 실패는
@@ -545,6 +548,18 @@ a check pass without making the work correct.
 ${a.suspiciousFiles.map((f) => `- ${f}`).join('\n')}
 `
     : ''
+  const policySection = a.policyChanged
+    ? `
+## The completion policy changed while this task was being repaired
+
+What the checks are, or what they run, is not what it was when this task started. That is allowed — a
+person may have fixed a broken check on purpose — but it is also how a task gets "finished" without
+being correct.
+
+Judge the change itself: did it make a check ask for less? If it did, say so as a finding. If it fixed
+a check that was wrong, say that too, so the record shows it was looked at.
+`
+    : ''
   // "The one question you answer" 뒤에 온다(리뷰 fix 1차, Important 3) — 무엇이 결함인지 먼저 읽은
   // 다음에야 "판단을 어디에 적을지"가 뜻을 갖는다. 순서를 뒤집으면 리뷰어가 "어떤 심각도로 적을지"를
   // "무엇이 결함으로 치는지" 보다 먼저 듣는다.
@@ -598,7 +613,7 @@ ${
       : 'No automated validation was attached to this task, so nothing has been proven about the build or the tests. Say so in your report if that matters for the requirement, but do not run the build yourself — that is not what you were started for.'
 }
 
-${knowledgeSection}${checksSection}${previousSection}${suspiciousSection}
+${knowledgeSection}${checksSection}${previousSection}${suspiciousSection}${policySection}
 ## The one question you answer
 
 **Was the requirement above satisfied?** Not "is this the code I would have written", not "could this be

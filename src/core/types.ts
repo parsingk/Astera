@@ -43,6 +43,8 @@ export type { ConvTurn } from './history/convTypes'
 // incidental. Either way the wrong fix for a genuinely missing import is "types": ["node"] — it hands
 // the renderer typecheck every Node global, which is the guard this note stands to protect.
 import type { CheckResult, GateKind, MessageType, Outcome, RepairReason, TaskStatus } from './orchestration/types'
+import type { CompletionDetail } from './orchestration/completion'
+export type { CompletionDetail, CompletionCheckDetail } from './orchestration/completion'
 export type { MessageType, TaskStatus } from './orchestration/types'
 
 // providers/meta.ts owns Provider. It is re-exported here so that the files which already imported
@@ -492,6 +494,14 @@ export interface JobEvent {
   /** 검토 Dispatch 인가 (Dispatch.review). 한 Task 에 구현과 검토의 dispatch-started 가 둘 나오므로,
    *  구별하지 않으면 같은 Task 를 두 번 시작한 것처럼 보인다 */
   review?: boolean
+  /** 수리 Dispatch 인가, 그리고 왜 (Dispatch.repair). `review` 와 배타적이다 — 같은 이유로 있다:
+   *  자동 수정이 도는 Task 는 구현 하나에 수리 여럿의 dispatch-started 를 내는데, 구별하지 않으면
+   *  타임라인이 "같은 Task 를 네 번 시작했다" 로만 읽힌다. 명세 §28 이 원하는 흐름의 절반이다.
+   *
+   *  나머지 절반(검사 회차마다 "2 tests failed", "Re-running checks")은 여기 없다. 그 시각이 상태에
+   *  없기 때문이다 — `Task.checks` 는 **마지막 라운드**만 갖고 `checkHistory` 는 통과/실패 수열만
+   *  가진다. 지어내지 않는다(설계 §3 의 W4, 그리고 그 대가를 §6 에 적어 두었다). */
+  repair?: RepairReason
   /** 이 앱이 아직 아는 세션이면 그 id — 클릭하면 그 탭으로 간다. view.ts 의 jobTaskOf 와 같은
    *  판정이고 같은 이유로 주입받는다 */
   sessionId?: string
@@ -1381,6 +1391,13 @@ export interface OrchApi {
   /** 한 Run 의 이벤트와 의존 그래프. 스냅샷과 달리 **요청할 때만** 온다 — Message.body 에는
    *  검증 출력 꼬리가 실리므로 매 쓰기마다 밀 수 있는 크기가 아니다. */
   runDetail(projectPath: string, runId: string): Promise<RunDetail>
+  /** 한 Task 가 왜 완료 정책을 못 넘었는가 — 실패한 검사의 출력 꼬리, 막는 리뷰 이슈, 의심
+   *  파일. 이것도 **펼칠 때만** 온다: 스냅숏이 이 셋을 싣지 않는 이유(변경마다 푸시된다)가
+   *  한 번 가져가는 이 호출에는 걸리지 않는다(UI 2조각 설계 W1).
+   *
+   *  `null` 은 둘 중 하나다 — 보여 줄 것이 없거나, 이 프로젝트가 볼 수 없는 Run·Task 다.
+   *  구분해 주지 않는 것이 의도다(ipc.ts 의 orch.completion). */
+  completion(projectPath: string, runId: string, taskId: string): Promise<CompletionDetail | null>
   /** UI 가 오케스트레이션 상태를 바꾸는 유일한 통로 — server.ts 의 명령 표면을 그대로 부른다.
    *  cmd 는 CLI 와 같은 이름이고(`task-create`, `worker-start`, …) args 도 같은 키를 쓴다.
    *

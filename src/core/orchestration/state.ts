@@ -29,6 +29,7 @@ import {
   latestImplDispatch,
   policyOf,
   repairCountOf,
+  timeBudgetExceeded,
   reviewRoundOf,
   unstableChecks,
   type ResolvedPolicy
@@ -500,7 +501,9 @@ export function applyWorkerDone(
   const moved = moveTask(task, to, now)
   if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
   const nextTask: Task = {
-    ...moved,
+    // 처음 validating 이 되는 순간이 시간 예산의 시작이다(설계 G2). 여기와 beginValidation 둘이
+    // validating 으로 가는 전부다.
+    ...(validating ? withConvergenceClock(moved, now) : moved),
     result: a.body,
     filesModified: a.filesModified,
     // **validating 이나 reviewing 으로 갈 때는 그대로 넘긴다.** 여기서 0 으로 되돌리면 이어진
@@ -750,6 +753,8 @@ function gateOnFailure(
         key: 'jobs.convergence.gate.exhausted' | 'jobs.convergence.gate.stopped' | 'jobs.convergence.gate.paused'
         repairs: number
       }
+    // 시간 소진만 분(minutes)을 더 쓴다 — "무엇을 넘겼나" 가 이 갈래의 이유 자체라서다
+    | { key: 'jobs.convergence.gate.timeExhausted'; repairs: number; minutes: number }
     | { key: 'jobs.convergence.gate.repairFailed'; reason: string }
   ),
   now: string
@@ -757,7 +762,9 @@ function gateOnFailure(
   const question =
     a.key === 'jobs.convergence.gate.repairFailed'
       ? t(a.lang, a.key, { reason: a.reason })
-      : t(a.lang, a.key, { repairs: a.repairs, failures: failureSummary(a.task) })
+      : a.key === 'jobs.convergence.gate.timeExhausted'
+        ? t(a.lang, a.key, { minutes: a.minutes, repairs: a.repairs, failures: failureSummary(a.task) })
+        : t(a.lang, a.key, { repairs: a.repairs, failures: failureSummary(a.task) })
   const withTask: OrchState = { ...s, tasks: replace(s.tasks, a.task) }
   const g = createGate(
     withTask,
@@ -788,6 +795,22 @@ function routeFailure(
     return gateOnFailure(s, { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.stopped', repairs, lang: a.lang }, now)
   if (run?.paused)
     return gateOnFailure(s, { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.paused', repairs, lang: a.lang }, now)
+  // **시간이 횟수보다 앞이다**(설계 G2). 둘 다 소진이지만 사람에게 보여 줄 이유가 다르고, 시간이
+  // 넘었으면 횟수가 남아 있어도 새 수리를 열지 않는다. Gate 의 종류는 같다 — 사람이 고를 것("한 번
+  // 더 수정" / "실패로 표시")이 같으므로 갈래를 하나 더 만들지 않는다.
+  if (timeBudgetExceeded(a.task, a.policy, Date.parse(now)))
+    return gateOnFailure(
+      s,
+      {
+        task: a.task,
+        kind: 'convergence-exhausted',
+        key: 'jobs.convergence.gate.timeExhausted',
+        repairs: repairCountOf(s, a.task.id),
+        minutes: a.policy.maxTotalMinutes ?? 0,
+        lang: a.lang
+      },
+      now
+    )
   if (repairs > a.policy.maxFixAttempts)
     // repairs 는 이 실패까지의 "k 번째 연속 실패" 이고, k-1 개의 repair 만 실제로 열렸다(이번 것은
     // 예산 밖이라 열리지 않는다) — repairCountOf 로 실제로 연 repair 수를 센다. a.policy.maxFixAttempts
@@ -835,12 +858,39 @@ function routeFailure(
  *  Recovery uses it for the one case where the work survived but the report did not: the worker
  *  committed and was then lost, so the check is what can judge the result (spec §16 Example E).
  *  Deliberately not `applyWorkerDone`: that records a report this app never received. */
+/** 시간 예산의 시계를 켠다 (설계 G2, 명세 §40) — **처음 validating 이 될 때 한 번만.**
+ *
+ *  이미 찍혀 있으면 덮지 않는다. 라운드마다 다시 찍으면 예산이 라운드마다 리셋되어 상한이 아니게
+ *  된다. 정책에 시간 예산이 없어도 찍는다: 예산은 Run 의 칸이라 도중에 켤 수 있고, 그때 시계가
+ *  없으면 그 Task 만 영원히 예산 밖에 남는다. */
+const withConvergenceClock = (task: Task, now: string): Task =>
+  task.convergenceStartedAt === undefined ? { ...task, convergenceStartedAt: now } : task
+
+/** 완료 정책의 지문을 찍거나, 달라졌으면 표시한다 (설계 G3, 명세 §37·§36).
+ *
+ *  라운드가 시작될 때마다 부른다. 처음이면 찍고, 이미 있는데 값이 다르면 `policyChanged` 를 세운다 —
+ *  **막지 않는다**(B7): 사람이 라운드 사이에 검사를 정당하게 고쳤을 수 있고, 그 판단은 리뷰어와
+ *  사람의 몫이다. 앱이 할 일은 그 사실이 눈에 띄게 하는 것이다.
+ *
+ *  한 번 세운 표시는 내리지 않는다. 되돌려 놓아도 "그 사이에 바뀌어 있었다" 는 사실은 남는다.
+ *
+ *  지문 계산은 부르는 쪽이 한다 — 검사 구성은 main 의 저장소에 있고 core 는 그것을 모른다. */
+export function stampPolicySnapshot(s: OrchState, a: { taskId: string; key: string }, now: string): OrchState {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return s
+  if (task.policySnapshot === undefined)
+    return { ...s, tasks: replace(s.tasks, { ...task, policySnapshot: { key: a.key, capturedAt: now } }) }
+  if (task.policySnapshot.key === a.key || task.policyChanged === true) return s
+  return { ...s, tasks: replace(s.tasks, { ...task, policyChanged: true as const }) }
+}
+
 export function beginValidation(s: OrchState, a: { taskId: string }, now: string): Res<Task> {
   const task = s.tasks.find((t) => t.id === a.taskId)
   if (!task) return err(`unknown task: ${a.taskId}`)
   const moved = moveTask(task, 'validating', now)
   if (!moved) return err(`cannot begin validation from status: ${task.status}`)
-  return ok({ ...s, tasks: replace(s.tasks, moved) }, moved)
+  const stamped = withConvergenceClock(moved, now)
+  return ok({ ...s, tasks: replace(s.tasks, stamped) }, stamped)
 }
 
 /** 검증을 아예 돌릴 수 없을 때. 조용히 통과시키면 "검증됨"과 "검증 못 함"이 화면에서 같아지고,

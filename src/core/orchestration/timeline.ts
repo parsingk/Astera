@@ -78,6 +78,10 @@ function collect(
       provider: d.provider,
       ...(d.retryOf ? { retry: true } : {}),
       ...(d.review ? { review: true } : {}),
+      // 설계 §3(V2). `review` 와 나란히, 같은 이유로 — 자동 수정이 도는 Task 는 구현 하나에 수리
+      // 여럿의 dispatch-started 를 내고, 구별하지 않으면 타임라인이 "같은 Task 를 네 번 시작했다"
+      // 로만 읽힌다. `Dispatch.repair` 는 이미 저장돼 있었고 파생만 안 하고 있었다.
+      ...(d.repair ? { repair: d.repair } : {}),
       ...(isKnownSession(d.sessionId) ? { sessionId: d.sessionId } : {})
     })
     // 정지와 재개를 한 항목에 담는 Dispatch.resumes(ResumeEntry)를 이벤트 둘로 편다 — 화면은

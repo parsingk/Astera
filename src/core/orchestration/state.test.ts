@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   emptyState,
+  stampPolicySnapshot,
   createRun,
   createTask,
   openDispatch,
@@ -1164,6 +1165,47 @@ describe('applyValidationResult — convergence', () => {
       applyValidationResult(s, { taskId, results: two(1, null), repair: { kind: 'fresh', cwd: 'D:/p', provider: 'codex', accountId: 'acc1' } }, NOW) as never
     )
     expect(r.state.dispatches.find((d) => d.repair)?.sessionId).toMatch(/^pending:/)
+  })
+
+  // 설계 G2(명세 §40). 시간이 횟수보다 앞이다 — 넘었으면 횟수가 남아 있어도 새 수리를 열지 않는다
+  it('시간 예산을 넘기면 횟수가 남아 있어도 소진 Gate 다', () => {
+    const { s, taskId } = armed({}, { convergence: { maxTotalMinutes: 30 } })
+    // 시계는 validating 이 된 NOW 에 찍혔다. 그로부터 31분 뒤의 판정.
+    const late = new Date(Date.parse(NOW) + 31 * 60_000).toISOString()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, late) as never)
+    expect(r.value.status).toBe('blocked')
+    const gate = r.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-exhausted')
+    expect(gate.options).toEqual(['retry-once', 'mark-failed'])
+    expect(gate.question).toContain('30')
+    // 예산이 남아 있는데도 수리를 열지 않았다
+    expect(r.state.dispatches.filter((d) => d.repair)).toHaveLength(0)
+  })
+
+  it('시간 예산 안이면 평소대로 수리를 연다', () => {
+    const { s, taskId } = armed({}, { convergence: { maxTotalMinutes: 30 } })
+    const soon = new Date(Date.parse(NOW) + 5 * 60_000).toISOString()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, soon) as never)
+    expect(r.value.status).toBe('dispatched')
+    expect(r.state.dispatches.filter((d) => d.repair)).toHaveLength(1)
+  })
+
+  // 멈춤은 시간 소진보다도 앞이다 — 사람이 끈 것이 예산 이야기보다 먼저다
+  it('사람이 멈췄으면 시간을 넘겼어도 멈춤 Gate 다', () => {
+    const { s, taskId } = armed({ convergenceOff: true }, { convergence: { maxTotalMinutes: 1 } })
+    const late = new Date(Date.parse(NOW) + 99 * 60_000).toISOString()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, late) as never)
+    expect(r.state.gates.at(-1)!.kind).toBe('convergence-blocked')
+  })
+
+  it('시계는 처음 validating 이 될 때 한 번만 찍힌다', () => {
+    const { s, taskId } = armed()
+    const first = s.tasks.find((t) => t.id === taskId)!.convergenceStartedAt
+    expect(first).toBe(NOW)
+    // 한 라운드 실패 뒤 다시 validating 이 되어도 그대로여야 한다
+    const later = new Date(Date.parse(NOW) + 10 * 60_000).toISOString()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, later) as never)
+    expect(r.state.tasks.find((t) => t.id === taskId)!.convergenceStartedAt).toBe(first)
   })
 
   it('k 번째 실패가 maxFixAttempts 를 넘으면 소진 Gate 다 — 기본 3 이면 네 번째 실패', () => {
@@ -3299,5 +3341,55 @@ describe('interruptStalledTask — convergence Run 은 다시 돌린다', () => 
     const r = interruptStalledTask(v.state, { taskId }, LATER)
     expect(r).toMatchObject({ interrupted: 'review', resume: null })
     expect(r.state.gates).toHaveLength(1)
+  })
+})
+
+// 설계 G3(명세 §37·§36)
+describe('stampPolicySnapshot', () => {
+  /** seed() 는 부를 때마다 새 id 를 만든다 — 하나를 잡아 두고 쓴다 */
+  const armed = (): { s: OrchState; id: string } => {
+    const { s, taskId } = seed()
+    return { s, id: taskId }
+  }
+
+  it('처음이면 지문을 찍는다', () => {
+    const { s, id } = armed()
+    const next = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const t = next.tasks.find((x) => x.id === id)!
+    expect(t.policySnapshot).toEqual({ key: 'K1', capturedAt: NOW })
+    expect(t.policyChanged).toBeUndefined()
+  })
+
+  it('같은 지문이면 아무것도 바뀌지 않는다', () => {
+    const { s, id } = armed()
+    const first = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const again = stampPolicySnapshot(first, { taskId: id, key: 'K1' }, '2026-09-20T00:00:00.000Z')
+    const t = again.tasks.find((x) => x.id === id)!
+    expect(t.policySnapshot!.capturedAt).toBe(NOW)
+    expect(t.policyChanged).toBeUndefined()
+  })
+
+  // 막지 않는다 — 표시만 한다(설계 B7)
+  it('지문이 달라지면 표시를 세운다. 스냅숏은 처음 것 그대로다', () => {
+    const { s, id } = armed()
+    const first = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const changed = stampPolicySnapshot(first, { taskId: id, key: 'K2' }, '2026-09-20T00:00:00.000Z')
+    const t = changed.tasks.find((x) => x.id === id)!
+    expect(t.policyChanged).toBe(true)
+    expect(t.policySnapshot).toEqual({ key: 'K1', capturedAt: NOW })
+  })
+
+  // 되돌려 놓아도 "그 사이에 바뀌어 있었다" 는 사실은 남는다
+  it('한 번 세운 표시는 원래 지문으로 돌아와도 내리지 않는다', () => {
+    const { s, id } = armed()
+    const first = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const changed = stampPolicySnapshot(first, { taskId: id, key: 'K2' }, NOW)
+    const back = stampPolicySnapshot(changed, { taskId: id, key: 'K1' }, NOW)
+    expect(back.tasks.find((x) => x.id === id)!.policyChanged).toBe(true)
+  })
+
+  it('없는 Task 면 그대로 돌려준다', () => {
+    const { s } = armed()
+    expect(stampPolicySnapshot(s, { taskId: 'nope', key: 'K1' }, NOW)).toBe(s)
   })
 })

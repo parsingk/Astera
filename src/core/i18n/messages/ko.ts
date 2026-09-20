@@ -1311,11 +1311,17 @@ export const ko = {
   'jobs.recovery.gate.restart': '새 워커로 다시 시작',
   'jobs.convergence.gate.exhausted':
     '{repairs}번 수정한 뒤에도 완료 검사를 통과하지 못했습니다. 아직 실패: {failures}',
+  // 설계 G2(명세 §40). 횟수 소진과 같은 Gate 지만 이유가 다르다 — 얼마를 넘겼는지가 그 이유다.
+  'jobs.convergence.gate.timeExhausted':
+    '이 Task 의 자동 수정이 시간 예산({minutes}분)을 넘겼습니다. {repairs}번 고쳤고 아직 실패합니다: {failures}',
   'jobs.convergence.gate.stopped': '이 Task 의 자동 수정이 멈춰 있고 검사는 아직 실패합니다: {failures}',
   'jobs.convergence.gate.paused': '완료 검사가 도는 동안 이 Run 이 멈췄고, 검사는 아직 실패합니다: {failures}',
   'jobs.convergence.gate.repairFailed': '수정할 워커를 띄울 수 없었습니다: {reason}',
   'jobs.convergence.gate.retryOnce': '한 번 더 수정',
   'jobs.convergence.gate.markFailed': '실패로 표시',
+  // 설계 §5(V4). Gate 는 풀렸는데 수리는 안 열린 경우다 — 사람이 누른 것이 아무 일도 하지
+  // 않았다는 사실만큼은 말해야 한다. 서버가 준 사유를 그대로 옮긴다.
+  'jobs.convergence.retryOnceFailed': '잠금은 풀렸지만 수정을 시작하지 못했습니다: {reason}',
   // 노드 meta 줄(RunDetail, nodeMetaOf 의 kind 별). 문장은 결과가 아니라 지금 무슨 일이 벌어지는지 말한다 —
   // "수정 2/3 · Unit tests 실패" 는 두 번 고쳤고 아직 그 검사가 막고 있다는 뜻이다
   'jobs.convergence.node.repairing': '수정 {repairs}/{max} · {failed} 실패',
@@ -1330,6 +1336,16 @@ export const ko = {
   'jobs.convergence.chip.repairing': '수정 {repairs}/{max}',
   'jobs.convergence.chip.reviewing': '검토 {round}/{max}',
   'jobs.convergence.chip.exhausted': '소진',
+  // 설계 §4(V3). 멈춘 Task 는 도는 Task 와 같은 줄을 달고 있으면 안 된다.
+  'jobs.convergence.chip.stopped': '수정 멈춤',
+  'jobs.convergence.node.stopped': '자동 수정 멈춤',
+  'jobs.convergence.node.stoppedWithCheck': '자동 수정 멈춤 · {failed} 실패',
+  'jobs.convergence.stop': '자동 수정 중지',
+  'jobs.convergence.stopConfirmTitle': '이 Task 의 자동 수정을 멈출까요?',
+  // 두 가지를 말한다. 되돌릴 수 없다는 것(서버에 --convergence on 이 없다)과, 지금 도는
+  // 수리는 죽지 않는다는 것 — 누르는 순간 워커가 사라진다고 읽히면 안 된다.
+  'jobs.convergence.stopConfirmBody':
+    '검사가 실패해도 더는 자동으로 고치지 않고 사람에게 넘깁니다. 지금 도는 수정은 끝까지 가고 그 판정은 그대로 옵니다. 다시 켜는 것은 앱에서 할 수 없습니다 — 이 Task 는 새로 만들어야 합니다.',
   // 검사 칩 툴팁 — "{이름} — {결과} ({지난 라운드 실제 시간})"
   'jobs.convergence.check.passed': '통과',
   'jobs.convergence.check.failed': '실패 (exit {code})',
@@ -1337,6 +1353,17 @@ export const ko = {
   'jobs.convergence.check.notRun': '돌지 않음',
   'jobs.convergence.check.retrying': '다시 도는 중',
   'jobs.convergence.check.unstable': '라운드 사이에 판정이 흔들림',
+  // 설계 §2(V1). 칩은 '무엇이 어디서 멈췄나' 까지고, 이 블록이 '그래서 뭐가 틀렸나' 를 맡는다.
+  'jobs.completion.show': '왜 실패했는지 보기',
+  'jobs.completion.hide': '접기',
+  'jobs.completion.empty': '이 Task 에는 아직 검사 결과도 검토 지적도 없습니다.',
+  'jobs.completion.showTail': '출력 보기',
+  'jobs.completion.hideTail': '출력 접기',
+  'jobs.completion.blocking': '막는 검토 지적 {n}',
+  // 막지 않는 이슈는 개수만 말한다 — 없는 것과 다르다는 사실까지가 필요한 전부다.
+  'jobs.completion.other': '그 밖의 지적 {n}',
+  'jobs.completion.suspicious': '검사 설정이 바뀐 파일',
+  'jobs.completion.policyChanged': '이 Task 가 도는 동안 완료 검사 설정 자체가 달라졌습니다. 리뷰어에게도 알렸습니다.',
   'jobs.event.status': '소식',
   'jobs.event.workerDone': '워커 보고',
   'jobs.event.question': '질문',
@@ -1345,6 +1372,9 @@ export const ko = {
   'jobs.event.decisionGate': '결정 요청',
   // retry 와 같은 자리(dispatch-started 의 요약 옆)에, 이 Dispatch 가 검토용(Dispatch.review)일 때만 붙는다
   'jobs.event.review': '검토',
+  // 설계 §3(V2). 앞의 구현 줄과 같은 모양으로 서면 안 되는 줄이라, 왜 다시 띄웠는지를 칩이 말한다.
+  'jobs.event.repairCheck': '검사 실패 수정',
+  'jobs.event.repairReview': '검토 지적 수정',
   // worker_done 의 결과. jobs.state.completed/failed 를 쓰지 않는다 — 그 둘은 Task 의 상태를
   // 가리키는 말이고, 한 Task 에는 워커 보고가 여럿 있을 수 있다. 같은 낱말을 두 층에 쓰면 어느
   // 쪽 주장인지 사라진다

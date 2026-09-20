@@ -1187,6 +1187,53 @@ describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
     return taskId
   }
 
+  // 설계 G4(명세 §30). 완료 강제는 그 사실과 이유가 남아야 한다 — 이 앱은 버튼을 따로 두지 않고
+  // task-update 가 그 자리를 겸하므로, 요구도 기록도 여기 붙는다.
+  const seedConvergingTask = async (deps: OrchServerDeps): Promise<string> => {
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', {
+      account: 'acc1',
+      runId,
+      title: 't',
+      spec: 's',
+      validate: 'cfg1'
+    })
+    return (task.body as { id: string }).id
+  }
+
+  it('수렴하지 않은 Task 를 완료로 옮기려면 --reason 이 필요하다', async () => {
+    const deps = makeDeps()
+    const taskId = await seedConvergingTask(deps)
+    const r = await call(deps, 'task-update', { id: taskId, status: 'completed' })
+    expect(r.status).toBe(400)
+    expect(String((r.body as { error: string }).error)).toContain('--reason')
+    expect(deps.getState().tasks.find((t) => t.id === taskId)!.status).not.toBe('completed')
+  })
+
+  it('--reason 을 주면 완료되고 그 이유가 Task 에 남는다', async () => {
+    const deps = makeDeps()
+    const taskId = await seedConvergingTask(deps)
+    const r = await call(deps, 'task-update', {
+      id: taskId,
+      status: 'completed',
+      reason: '검사 환경이 이 기계에 없어 손으로 확인했다'
+    })
+    expect(r.status).toBe(200)
+    const t = deps.getState().tasks.find((x) => x.id === taskId)!
+    expect(t.status).toBe('completed')
+    expect(t.completionOverride?.reason).toBe('검사 환경이 이 기계에 없어 손으로 확인했다')
+  })
+
+  // 요구는 강제인 경우에만 — 평범한 손보기까지 막으면 이 명령을 쓰던 구조 경로가 한 번에 막힌다
+  it('자동 수정 없는 Run 의 완료는 이유를 묻지 않는다', async () => {
+    const deps = makeDeps()
+    const taskId = await seedTask(deps)
+    const r = await call(deps, 'task-update', { id: taskId, status: 'completed' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks.find((t) => t.id === taskId)!.completionOverride).toBeUndefined()
+  })
+
   it('200이고 Task 상태가 바뀐다', async () => {
     const deps = makeDeps()
     const taskId = await seedTask(deps)

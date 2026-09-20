@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { convergenceChipOf, firstBlocked, firstBlockedCheck, nodeMetaOf, retryingCheckOf } from './nodeMeta'
+import { canStopConvergence, convergenceChipOf, firstBlocked, firstBlockedCheck, nodeMetaOf, retryingCheckOf } from './nodeMeta'
 import type { JobCheck, JobConvergence, JobTask } from '../types'
 
 const check = (name: string, status: JobCheck['status']): JobCheck => ({ configId: name.toLowerCase(), name, status })
@@ -118,5 +118,55 @@ describe('convergenceChipOf', () => {
     expect(convergenceChipOf(task({ convergence: conv({ repairs: 2, repairing: 'check-failure' }) }))).toEqual({ kind: 'repairing', repairs: 2, max: 3 })
     expect(convergenceChipOf(task({ status: 'reviewing', convergence: conv() }))).toEqual({ kind: 'reviewing', round: 1, max: 2 })
     expect(convergenceChipOf(task({ convergence: conv() }))).toBeNull()
+  })
+})
+
+// 설계 §4(V3). 첫 조각은 stopped 를 투영에 싣고 아무도 읽지 않아, 사람이 꺼 둔 Task 가 도는 Task 와
+// 똑같은 `수정 2/3` 을 달고 서 있었다.
+describe('멈춘 자동 수정', () => {
+  it('멈춘 Task 의 meta 는 stopped 이고 막힌 검사를 함께 부른다', () => {
+    const m = nodeMetaOf(task({ convergence: conv({ stopped: true }), checks: failing }))
+    expect(m).toEqual({ kind: 'stopped', failed: 'Tests' })
+  })
+
+  // 멈춤을 눌러도 이미 뜬 수리는 끝까지 간다(server.ts 의 task-update --convergence off) — 그 사이에
+  // "멈춤" 이라고 쓰면 지금 도는 워커가 없는 것처럼 읽힌다
+  it('도는 수리가 멈춤보다 앞선다', () => {
+    const m = nodeMetaOf(task({ convergence: conv({ stopped: true, repairing: 'check-failure', repairs: 2 }), checks: failing }))
+    expect(m.kind).toBe('repairing')
+  })
+
+  it('사이드바 칩도 같은 순서를 쓴다', () => {
+    expect(convergenceChipOf(task({ convergence: conv({ stopped: true }) }))).toEqual({ kind: 'stopped' })
+    expect(convergenceChipOf(task({ convergence: conv({ stopped: true, repairing: 'check-failure' }) }))?.kind).toBe('repairing')
+  })
+
+  // 소진 Gate 는 멈춤보다도 앞이다 — 사람이 답해야 하는 것이 먼저다
+  it('소진 Gate 가 멈춤보다 앞선다', () => {
+    const t = task({
+      status: 'blocked',
+      gate: { id: 'g1', question: 'q', kind: 'convergence-exhausted' },
+      convergence: conv({ stopped: true })
+    })
+    expect(convergenceChipOf(t)).toEqual({ kind: 'exhausted' })
+  })
+})
+
+describe('canStopConvergence', () => {
+  it('자동 수정이 있고, 아직 안 멈췄고, 끝나지 않은 Task 에만', () => {
+    expect(canStopConvergence(task({ convergence: conv() }))).toBe(true)
+    expect(canStopConvergence(task({ convergence: conv(), status: 'validating' }))).toBe(true)
+    // blocked 는 끝난 것이 아니다 — 소진 Gate 에 "한 번 더" 로 답하면 다시 돈다
+    expect(canStopConvergence(task({ convergence: conv(), status: 'blocked' }))).toBe(true)
+  })
+
+  it('자동 수정이 없거나 이미 멈췄으면 안 된다', () => {
+    expect(canStopConvergence(task({}))).toBe(false)
+    expect(canStopConvergence(task({ convergence: conv({ stopped: true }) }))).toBe(false)
+  })
+
+  it('끝난 Task 에는 내밀지 않는다 — 되돌릴 수 없는 버튼이 아무것도 바꾸지 못한다', () => {
+    expect(canStopConvergence(task({ convergence: conv(), status: 'completed' }))).toBe(false)
+    expect(canStopConvergence(task({ convergence: conv(), status: 'failed' }))).toBe(false)
   })
 })

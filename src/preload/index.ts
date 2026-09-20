@@ -282,6 +282,7 @@ const api = {
   orch: {
     list: invoke('orch.list'),
     runDetail: invoke('orch.runDetail'),
+    completion: invoke('orch.completion'),
     command: invoke('orch.command'),
     unwatch: invoke('orch.unwatch')
   },

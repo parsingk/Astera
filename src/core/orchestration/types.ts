@@ -31,6 +31,14 @@ export interface ConvergencePolicy {
   maxReviewRounds?: number
   /** 이 severity 이상이 blocking. 기본 'high' — critical·high 가 막고, 'medium' 으로 낮추면 medium 도 막는다 */
   blockingSeverity?: 'high' | 'medium'
+  /** 시간 예산, 분 (명세 §40). 없으면 시간 예산이 없다 — 시도 횟수만이 상한이다.
+   *
+   *  시계는 이 Task 가 **처음 validating 이 된 때**부터 돈다(`Task.convergenceStartedAt`). Task 를
+   *  만든 때가 아닌 이유: 의존 Task 를 기다린 시간이 수렴 예산에 들어가면 안 된다.
+   *
+   *  넘겨도 **도는 수리를 죽이지 않는다** — 명세 §13 의 "자동 무한 재실행 금지" 는 새로 띄우지
+   *  말라는 것이고, 돌고 있는 워커를 끊으면 그 시도의 결과를 잃는다. */
+  maxTotalMinutes?: number
 }
 export const MAX_REVIEW_ROUNDS = 2
 /** check 하나의 타임아웃. RunConfig 에 타임아웃 칸이 없어 P0 는 상수다 (설계 §7). 이름이 비슷한
@@ -220,6 +228,20 @@ export interface Task {
   checkHistory?: Record<string, ('passed' | 'failed')[]>
   /** 마지막 검토의 이슈 전부, blocking 여부 포함 */
   reviewIssues?: ReviewIssue[]
+  /** 이 Task 가 처음 validating 이 될 때 찍은 완료 정책의 지문(설계 G3, 명세 §37).
+   *  `completionPolicyHash` 의 값이다 — 해시가 아니라 읽을 수 있는 정규 문자열이다. */
+  policySnapshot?: { key: string; capturedAt: string }
+  /** 그 지문이 라운드 사이에 달라졌다(명세 §36). **막지 않고 표시한다** — 사람이 검사를 정당하게
+   *  고쳤을 수 있고, 판정은 리뷰어와 사람의 몫이다(§38 이 의심 파일에 대해 하는 것과 같다).
+   *  한 번 참이면 그 Task 가 끝날 때까지 참이다: 되돌려 놓아도 "그 사이에 바뀌어 있었다" 는 사실은
+   *  남는다. */
+  policyChanged?: true
+  /** 완료 정책을 만족하지 않은 채 사람이 완료로 옮겼다 (설계 G4, 명세 §30). 이유는 사람이 적은 것
+   *  그대로다 — 저널의 TASK_COMPLETED_WITH_OVERRIDE 가 이 칸을 읽는다. */
+  completionOverride?: { reason: string; at: string }
+  /** 이 Task 가 **처음 validating 이 된** 때 — 시간 예산의 시계(ConvergencePolicy.maxTotalMinutes).
+   *  한 번만 찍고 덮지 않는다: 라운드마다 다시 찍으면 예산이 영원히 리셋된다. */
+  convergenceStartedAt?: string
   /** 사람이 이 Task 의 자동 수정을 멈췼다(task-update --convergence off). 도는 repair 는 끝까지 가고 그
    *  판정은 Gate 다(설계 §5.1) */
   convergenceOff?: true
