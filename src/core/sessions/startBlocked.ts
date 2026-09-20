@@ -41,3 +41,15 @@ export function startBlockedBy(a: {
   if (a.resolvingRepo) return 'checking-folder'
   return null
 }
+
+/** Whether this reason clears itself, so the screen should show motion rather than an instruction.
+ *
+ *  The reasons split in two, and the split is the whole point of telling people why at all: four of
+ *  them are work the person has to do, and one is work the app is doing. A line of grey text reads
+ *  the same either way — the reviewer whose report started this sat in front of "폴더를 확인하는 중"
+ *  wondering what he had failed to fill in — so the waiting one gets a spinner beside it and the
+ *  others do not. Kept here rather than in the component for the reason the predicate above is: this
+ *  is a judgement about the reasons, and the renderer has no test environment. */
+export function isWaitingReason(r: StartBlocked): boolean {
+  return r === 'checking-folder'
+}

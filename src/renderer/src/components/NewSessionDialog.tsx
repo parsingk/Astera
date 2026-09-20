@@ -6,7 +6,7 @@ import { isSlackReady } from '../../../core/slack/ready'
 import { useChatAvailability } from '../hooks/useChatAvailability'
 import { useAccountStatus } from '../hooks/useAccountStatus'
 import { orderBranchesForPicker, reconcileBaseRef } from '../../../core/worktrees/base'
-import { startBlockedBy, type StartBlocked } from '../../../core/sessions/startBlocked'
+import { isWaitingReason, startBlockedBy, type StartBlocked } from '../../../core/sessions/startBlocked'
 import type { MessageKey } from '../../../core/i18n'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
@@ -601,7 +601,14 @@ export function NewSessionDialog({
         </div>
         {/* 왜 못 누르는지 말한다. 다섯 조건 중 둘은 비동기로 늦게 풀려서, 다 골라 놓고도 버튼이 죽어
             있다가 갑자기 살아나는 것처럼 보였다(설계 D4) */}
-        {blocked !== null && <p className="modal-hint">{t(BLOCKED_KEY[blocked])}</p>}
+        {blocked !== null && (
+          // 기다리면 풀리는 사유에만 스피너가 붙는다. 글씨만으로는 "내가 뭘 안 했나" 와 "앱이 일하는
+          // 중" 이 똑같이 읽히고, 회색 버튼 앞에서 사람이 찾는 답이 바로 그 둘 중 어느 쪽이냐다.
+          <p className="modal-hint start-blocked">
+            {isWaitingReason(blocked) && <span className="loading-spinner small" aria-hidden="true" />}
+            {t(BLOCKED_KEY[blocked])}
+          </p>
+        )}
       </div>
     </div>
   )

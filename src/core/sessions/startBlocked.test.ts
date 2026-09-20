@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { startBlockedBy } from './startBlocked'
+import { isWaitingReason, startBlockedBy, type StartBlocked } from './startBlocked'
 
 const ok = {
   cwd: 'D:/p', starting: false, resolvingRepo: false,
@@ -31,5 +31,15 @@ describe('startBlockedBy', () => {
 
   it('계정 칸이 하나라도 비어 있으면 막힌다', () => {
     expect(startBlockedBy({ ...ok, accountIds: ['acc1', ''] })).toBe('no-account')
+  })
+})
+
+describe('isWaitingReason', () => {
+  // 사유를 말하는 이유가 곧 이 구분이다 — 넷은 사람이 할 일이고 하나는 앱이 하는 일인데, 회색 글씨
+  // 한 줄로는 둘이 똑같이 읽힌다(리뷰어가 "폴더를 확인하는 중" 앞에서 자기가 뭘 빠뜨렸나 찾았다).
+  it('폴더 확인만 기다리면 풀리는 것이고 나머지 넷은 사람이 할 일이다', () => {
+    expect(isWaitingReason('checking-folder')).toBe(true)
+    const actionable: StartBlocked[] = ['no-cwd', 'no-account', 'cli-missing', 'no-schedule']
+    for (const r of actionable) expect(isWaitingReason(r)).toBe(false)
   })
 })
