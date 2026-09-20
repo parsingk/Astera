@@ -31,6 +31,14 @@ export interface ConvergencePolicy {
   maxReviewRounds?: number
   /** 이 severity 이상이 blocking. 기본 'high' — critical·high 가 막고, 'medium' 으로 낮추면 medium 도 막는다 */
   blockingSeverity?: 'high' | 'medium'
+  /** 시간 예산, 분 (명세 §40). 없으면 시간 예산이 없다 — 시도 횟수만이 상한이다.
+   *
+   *  시계는 이 Task 가 **처음 validating 이 된 때**부터 돈다(`Task.convergenceStartedAt`). Task 를
+   *  만든 때가 아닌 이유: 의존 Task 를 기다린 시간이 수렴 예산에 들어가면 안 된다.
+   *
+   *  넘겨도 **도는 수리를 죽이지 않는다** — 명세 §13 의 "자동 무한 재실행 금지" 는 새로 띄우지
+   *  말라는 것이고, 돌고 있는 워커를 끊으면 그 시도의 결과를 잃는다. */
+  maxTotalMinutes?: number
 }
 export const MAX_REVIEW_ROUNDS = 2
 /** check 하나의 타임아웃. RunConfig 에 타임아웃 칸이 없어 P0 는 상수다 (설계 §7). 이름이 비슷한
@@ -220,6 +228,9 @@ export interface Task {
   checkHistory?: Record<string, ('passed' | 'failed')[]>
   /** 마지막 검토의 이슈 전부, blocking 여부 포함 */
   reviewIssues?: ReviewIssue[]
+  /** 이 Task 가 **처음 validating 이 된** 때 — 시간 예산의 시계(ConvergencePolicy.maxTotalMinutes).
+   *  한 번만 찍고 덮지 않는다: 라운드마다 다시 찍으면 예산이 영원히 리셋된다. */
+  convergenceStartedAt?: string
   /** 사람이 이 Task 의 자동 수정을 멈췼다(task-update --convergence off). 도는 repair 는 끝까지 가고 그
    *  판정은 Gate 다(설계 §5.1) */
   convergenceOff?: true

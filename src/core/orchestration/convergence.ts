@@ -16,6 +16,9 @@ export interface ResolvedPolicy {
   maxFixAttempts: number
   maxReviewRounds: number
   blockingSeverity: 'high' | 'medium'
+  /** 없으면 시간 예산이 없다. 기본값을 두지 않는 유일한 칸 — 나머지 셋은 정책이 말하지 않아도
+   *  앱의 기본이 있지만, 시간 상한은 "말하지 않았으면 없다" 가 맞다(명세 §40 은 optional 이다). */
+  maxTotalMinutes?: number
 }
 
 /** 정책이 심각도를 정하지 않았을 때의 기본 — policyOf 와 새 Run 모달의 기본값 표시가 같은 값을 읽는다.
@@ -37,7 +40,8 @@ export function policyOf(s: OrchState, task: Pick<Task, 'runId'>): ResolvedPolic
   return {
     maxFixAttempts: run.convergence.maxFixAttempts ?? FAILURE_LIMIT,
     maxReviewRounds: run.convergence.maxReviewRounds ?? MAX_REVIEW_ROUNDS,
-    blockingSeverity: run.convergence.blockingSeverity ?? DEFAULT_BLOCKING_SEVERITY
+    blockingSeverity: run.convergence.blockingSeverity ?? DEFAULT_BLOCKING_SEVERITY,
+    ...(run.convergence.maxTotalMinutes !== undefined ? { maxTotalMinutes: run.convergence.maxTotalMinutes } : {})
   }
 }
 
@@ -108,3 +112,22 @@ export const suspiciousCheckFiles = (paths: string[]): string[] =>
     const posix = p.replace(/\\/g, '/')
     return SUSPICIOUS.some((re) => re.test(posix))
   })
+
+/** 시간 예산을 넘겼는가 (설계 G2, 명세 §40).
+ *
+ *  예산이 없거나 시계가 아직 시작하지 않았으면 언제나 거짓 — 둘 다 "잴 것이 없다" 이고, 그것을
+ *  넘김으로 읽으면 예산을 켠 적 없는 Run 이 첫 실패에서 소진된다.
+ *
+ *  경계는 **넘었을 때**다(`>`). 정확히 예산만큼 걸린 수리는 예산 안이다. */
+export function timeBudgetExceeded(
+  task: Pick<Task, 'convergenceStartedAt'>,
+  policy: ResolvedPolicy,
+  nowMs: number
+): boolean {
+  if (policy.maxTotalMinutes === undefined) return false
+  if (task.convergenceStartedAt === undefined) return false
+  const started = Date.parse(task.convergenceStartedAt)
+  // 손으로 고친 orchestration.json 에서만 나온다. 못 읽는 시각으로 예산을 끊지 않는다.
+  if (Number.isNaN(started)) return false
+  return nowMs - started > policy.maxTotalMinutes * 60_000
+}

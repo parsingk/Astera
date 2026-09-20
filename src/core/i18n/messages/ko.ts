@@ -1311,6 +1311,9 @@ export const ko = {
   'jobs.recovery.gate.restart': '새 워커로 다시 시작',
   'jobs.convergence.gate.exhausted':
     '{repairs}번 수정한 뒤에도 완료 검사를 통과하지 못했습니다. 아직 실패: {failures}',
+  // 설계 G2(명세 §40). 횟수 소진과 같은 Gate 지만 이유가 다르다 — 얼마를 넘겼는지가 그 이유다.
+  'jobs.convergence.gate.timeExhausted':
+    '이 Task 의 자동 수정이 시간 예산({minutes}분)을 넘겼습니다. {repairs}번 고쳤고 아직 실패합니다: {failures}',
   'jobs.convergence.gate.stopped': '이 Task 의 자동 수정이 멈춰 있고 검사는 아직 실패합니다: {failures}',
   'jobs.convergence.gate.paused': '완료 검사가 도는 동안 이 Run 이 멈췄고, 검사는 아직 실패합니다: {failures}',
   'jobs.convergence.gate.repairFailed': '수정할 워커를 띄울 수 없었습니다: {reason}',

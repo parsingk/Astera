@@ -1110,6 +1110,8 @@ export const es: Catalog = {
   'jobs.recovery.gate.restart': 'Reiniciar con un worker nuevo',
   'jobs.convergence.gate.exhausted':
     'Las comprobaciones de finalización no convergieron tras {repairs} reparación(es). Siguen fallando: {failures}',
+  'jobs.convergence.gate.timeExhausted':
+    'La auto-reparación de esta tarea superó su presupuesto de tiempo ({minutes} min). Se reparó {repairs} vez/veces y sigue fallando: {failures}',
   'jobs.convergence.gate.stopped': 'La corrección automática está detenida para esta tarea y sus comprobaciones siguen fallando: {failures}',
   'jobs.convergence.gate.paused': 'Esta ejecución se pausó mientras corrían sus comprobaciones, y siguen fallando: {failures}',
   'jobs.convergence.gate.repairFailed': 'La aplicación no pudo iniciar un worker de reparación: {reason}',

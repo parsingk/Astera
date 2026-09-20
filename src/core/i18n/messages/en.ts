@@ -1121,6 +1121,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.recovery.gate.restart': 'Restart with a new worker',
   'jobs.convergence.gate.exhausted':
     'The completion checks did not converge after {repairs} repair(s). Still failing: {failures}',
+  'jobs.convergence.gate.timeExhausted':
+    "This task's auto-fix ran past its time budget ({minutes} min). It was repaired {repairs} time(s) and still fails: {failures}",
   'jobs.convergence.gate.stopped': 'Auto-fix is stopped for this Task and its checks still fail: {failures}',
   'jobs.convergence.gate.paused': 'This Run was paused while its completion checks ran, and they still fail: {failures}',
   'jobs.convergence.gate.repairFailed': 'The app could not start a repair worker: {reason}',

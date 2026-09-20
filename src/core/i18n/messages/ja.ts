@@ -1094,6 +1094,8 @@ export const ja: Catalog = {
   'jobs.recovery.gate.restart': '新しいワーカーで再開',
   'jobs.convergence.gate.exhausted':
     '完了チェックは{repairs}回の修正後も収束しませんでした。まだ失敗: {failures}',
+  'jobs.convergence.gate.timeExhausted':
+    'このタスクの自動修正が時間予算({minutes}分)を超えました。{repairs}回修正しましたが、まだ失敗します: {failures}',
   'jobs.convergence.gate.stopped': 'このTaskの自動修正は停止しており、チェックはまだ失敗しています: {failures}',
   'jobs.convergence.gate.paused': '完了チェックの実行中にこのRunが一時停止され、チェックはまだ失敗しています: {failures}',
   'jobs.convergence.gate.repairFailed': '修正ワーカーを起動できませんでした: {reason}',

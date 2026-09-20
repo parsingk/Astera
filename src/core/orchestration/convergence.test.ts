@@ -8,8 +8,10 @@ import {
   policyOf,
   repairCountOf,
   reviewRoundOf,
+  timeBudgetExceeded,
   suspiciousCheckFiles,
-  unstableChecks
+  unstableChecks,
+  type ResolvedPolicy
 } from './convergence'
 import { emptyState, type OrchState } from './state'
 import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS, type CheckResult, type Dispatch, type Run, type Task } from './types'
@@ -168,5 +170,38 @@ describe('repairCountOf — 중단된 수리는 예산을 먹지 않는다', () 
       dispatches: [dispatch({ id: 'd1', repair: 'check-failure', outcome: undefined, endedAt: undefined, workerState: 'ready' })]
     })
     expect(repairCountOf(s, 'tsk_1')).toBe(1)
+  })
+})
+
+// 설계 G2(명세 §40)
+describe('timeBudgetExceeded', () => {
+  const pol = (over: Partial<ResolvedPolicy> = {}): ResolvedPolicy => ({
+    maxFixAttempts: 3, maxReviewRounds: 2, blockingSeverity: 'high', ...over
+  })
+  const started = '2026-09-19T00:00:00.000Z'
+  const at = (min: number): number => Date.parse(started) + min * 60_000
+
+  it('예산이 없으면 아무리 오래 돌아도 거짓 — 켠 적 없는 Run 이 첫 실패에 소진되면 안 된다', () => {
+    expect(timeBudgetExceeded({ convergenceStartedAt: started }, pol(), at(10_000))).toBe(false)
+  })
+
+  it('시계가 아직 시작하지 않았으면 거짓', () => {
+    expect(timeBudgetExceeded({}, pol({ maxTotalMinutes: 1 }), at(10_000))).toBe(false)
+  })
+
+  it('예산 안이면 거짓, 넘으면 참', () => {
+    const p = pol({ maxTotalMinutes: 30 })
+    expect(timeBudgetExceeded({ convergenceStartedAt: started }, p, at(29))).toBe(false)
+    expect(timeBudgetExceeded({ convergenceStartedAt: started }, p, at(31))).toBe(true)
+  })
+
+  // 경계는 넘었을 때다 — 정확히 예산만큼 걸린 수리는 예산 안이다
+  it('정확히 예산만큼은 넘긴 것이 아니다', () => {
+    expect(timeBudgetExceeded({ convergenceStartedAt: started }, pol({ maxTotalMinutes: 30 }), at(30))).toBe(false)
+  })
+
+  // 손으로 고친 orchestration.json 에서만 나온다. 못 읽는 시각으로 예산을 끊지 않는다
+  it('읽을 수 없는 시각이면 거짓', () => {
+    expect(timeBudgetExceeded({ convergenceStartedAt: 'not-a-date' }, pol({ maxTotalMinutes: 1 }), at(9999))).toBe(false)
   })
 })
