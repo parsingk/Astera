@@ -1123,6 +1123,8 @@ export const ja: Catalog = {
   'jobs.event.decisionGate': '判断要求',
   // retry と同じ位置(dispatch-started の要約の横)。この Dispatch がレビュー用(Dispatch.review)のときだけ付く
   'jobs.event.review': 'レビュー',
+  'jobs.event.repairCheck': '検査失敗の修正',
+  'jobs.event.repairReview': 'レビュー指摘の修正',
   // worker_done の結果。jobs.state.completed/failed は Task の状態を指す語なので使わない
   // (1 つの Task に複数のワーカー報告があり得る)
   'jobs.event.succeeded': '成功',

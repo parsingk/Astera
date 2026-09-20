@@ -1348,6 +1348,9 @@ export const ko = {
   'jobs.event.decisionGate': '결정 요청',
   // retry 와 같은 자리(dispatch-started 의 요약 옆)에, 이 Dispatch 가 검토용(Dispatch.review)일 때만 붙는다
   'jobs.event.review': '검토',
+  // 설계 §3(V2). 앞의 구현 줄과 같은 모양으로 서면 안 되는 줄이라, 왜 다시 띄웠는지를 칩이 말한다.
+  'jobs.event.repairCheck': '검사 실패 수정',
+  'jobs.event.repairReview': '검토 지적 수정',
   // worker_done 의 결과. jobs.state.completed/failed 를 쓰지 않는다 — 그 둘은 Task 의 상태를
   // 가리키는 말이고, 한 Task 에는 워커 보고가 여럿 있을 수 있다. 같은 낱말을 두 층에 쓰면 어느
   // 쪽 주장인지 사라진다

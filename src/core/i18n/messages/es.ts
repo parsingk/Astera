@@ -1139,6 +1139,8 @@ export const es: Catalog = {
   'jobs.event.decisionGate': 'decisión',
   // Mismo lugar que retry (junto al resumen de dispatch-started), solo cuando el Dispatch es de revisión (Dispatch.review)
   'jobs.event.review': 'revisión',
+  'jobs.event.repairCheck': 'reparando fallo de comprobación',
+  'jobs.event.repairReview': 'reparando problema de revisión',
   // El resultado de worker_done — no jobs.state.completed/failed, que etiquetan una Task (y una Task
   // puede tener varios informes de worker)
   'jobs.event.succeeded': 'correcto',

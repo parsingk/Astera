@@ -1060,6 +1060,17 @@ export function RunDetail({
                               {e.review && (
                                 <span className="detail-chip review">{t('jobs.event.review')}</span>
                               )}
+                              {/* 설계 §3(V2): 왜 다시 띄웠는지. 검사가 실패해서인지 검토가 지적해서인지를
+                                  말하지 않으면 이 줄은 앞의 구현 줄과 구별되지 않는다 */}
+                              {e.repair && (
+                                <span className="detail-chip repair">
+                                  {t(
+                                    e.repair === 'check-failure'
+                                      ? 'jobs.event.repairCheck'
+                                      : 'jobs.event.repairReview'
+                                  )}
+                                </span>
+                              )}
                               {/* 결과가 실린 메시지에만 나온다. **이 줄이 워커가 실패를 보고했다는
                                   사실의 유일한 기록이다** — applyWorkerDone 은 두 번째 메시지를
                                   만들지 않고, 타임라인에는 Task 상태 변화 이벤트가 없다 */}

@@ -1150,6 +1150,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.event.decisionGate': 'decision',
   // Same spot as retry (next to dispatch-started's summary), shown only when the Dispatch is a review (Dispatch.review)
   'jobs.event.review': 'review',
+  'jobs.event.repairCheck': 'repairing check failure',
+  'jobs.event.repairReview': 'repairing review issue',
   // worker_done's outcome — deliberately not jobs.state.completed/failed, which label a Task (and one
   // Task can have several worker reports). The same word on two layers hides which one is being claimed
   'jobs.event.succeeded': 'succeeded',

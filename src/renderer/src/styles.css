@@ -1781,6 +1781,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* 검토 Dispatch 표시. 색은 JobIcons 의 STATUS_COLOR.reviewing 과 같은 --fi-purple 이다 — 같은 뜻이
    화면에서 다른 색이면 안 된다 */
 .detail-chip.review { color: var(--fi-purple); }
+/* 수리 줄 — 재시도(retry)와 같은 계열이되 구분되게. 무엇이 다시 도는지가 아니라 왜 다시 도는지를 말한다 */
+.detail-chip.repair { color: var(--warn-ink); }
 /* worker_done 의 결과. 색은 STATUS_COLOR 가 completed/failed 에 쓰는 둘과 같다 */
 .detail-outcome { font-size: 11px; }
 .detail-outcome.o-succeeded { color: var(--ok); }

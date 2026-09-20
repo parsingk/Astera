@@ -492,6 +492,14 @@ export interface JobEvent {
   /** 검토 Dispatch 인가 (Dispatch.review). 한 Task 에 구현과 검토의 dispatch-started 가 둘 나오므로,
    *  구별하지 않으면 같은 Task 를 두 번 시작한 것처럼 보인다 */
   review?: boolean
+  /** 수리 Dispatch 인가, 그리고 왜 (Dispatch.repair). `review` 와 배타적이다 — 같은 이유로 있다:
+   *  자동 수정이 도는 Task 는 구현 하나에 수리 여럿의 dispatch-started 를 내는데, 구별하지 않으면
+   *  타임라인이 "같은 Task 를 네 번 시작했다" 로만 읽힌다. 명세 §28 이 원하는 흐름의 절반이다.
+   *
+   *  나머지 절반(검사 회차마다 "2 tests failed", "Re-running checks")은 여기 없다. 그 시각이 상태에
+   *  없기 때문이다 — `Task.checks` 는 **마지막 라운드**만 갖고 `checkHistory` 는 통과/실패 수열만
+   *  가진다. 지어내지 않는다(설계 §3 의 W4, 그리고 그 대가를 §6 에 적어 두었다). */
+  repair?: RepairReason
   /** 이 앱이 아직 아는 세션이면 그 id — 클릭하면 그 탭으로 간다. view.ts 의 jobTaskOf 와 같은
    *  판정이고 같은 이유로 주입받는다 */
   sessionId?: string

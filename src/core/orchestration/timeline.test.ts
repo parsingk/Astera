@@ -74,6 +74,32 @@ describe('timelineFor', () => {
     expect(e?.review).toBe(true)
   })
 
+  // 설계 §3(V2). 구별하지 않으면 자동 수정이 도는 Task 의 타임라인은 같은 줄의 반복이 된다
+  it('수리 Dispatch 는 왜 수리인지까지 싣는다', () => {
+    const s = state({
+      runs: [run('r1')], tasks: [task('t1', 'r1')],
+      dispatches: [{ ...dispatch('d1', 't1'), repair: 'check-failure' as const }]
+    })
+    const e = timelineFor(s, 'r1', anySession).find((x) => x.kind === 'dispatch-started')
+    expect(e?.repair).toBe('check-failure')
+  })
+
+  it('검토 지적을 고치는 수리는 review-failure 로 온다', () => {
+    const s = state({
+      runs: [run('r1')], tasks: [task('t1', 'r1')],
+      dispatches: [{ ...dispatch('d1', 't1'), repair: 'review-failure' as const }]
+    })
+    const e = timelineFor(s, 'r1', anySession).find((x) => x.kind === 'dispatch-started')
+    expect(e?.repair).toBe('review-failure')
+  })
+
+  // 없는 칸은 없어야 한다 — 구현 Dispatch 에 repair 가 달리면 모든 줄이 수리로 읽힌다
+  it('구현 Dispatch 에는 repair 칸 자체가 없다', () => {
+    const s = state({ runs: [run('r1')], tasks: [task('t1', 'r1')], dispatches: [dispatch('d1', 't1')] })
+    const e = timelineFor(s, 'r1', anySession).find((x) => x.kind === 'dispatch-started')
+    expect(e).not.toHaveProperty('repair')
+  })
+
   // Dispatch.resumes 의 한 항목(정지+재개)이 이벤트 둘로 펼쳐진다
   it('정지와 재개가 타임라인에 각각 한 줄이 된다', () => {
     const resumes: ResumeEntry[] = [
