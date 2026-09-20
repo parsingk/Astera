@@ -131,3 +131,30 @@ export function timeBudgetExceeded(
   if (Number.isNaN(started)) return false
   return nowMs - started > policy.maxTotalMinutes * 60_000
 }
+
+/** 이 Task 를 completed 로 옮기는 것이 **완료 강제**인가 (설계 G4, 명세 §30).
+ *
+ *  강제란 "완료 정책이 걸려 있는데 그것을 만족하지 않은 채 완료로 옮기는 것" 이다. 이 앱은 그 버튼을
+ *  따로 두지 않고 `task-update --status completed` 를 그 자리로 쓴다(백엔드 설계 §3) — 비어 있던 것은
+ *  버튼이 아니라 **기록**이었다. 그래서 이 판정이 필요하다: 평범한 손보기와 강제를 가르는 선.
+ *
+ *  정책이 없으면 강제가 아니다. 걸린 검사도 검토도 없으면 만족할 것이 없으니 역시 아니다. 검사가 아직
+ *  한 번도 돌지 않았으면 **강제다** — 통과를 본 적이 없다는 점에서 실패와 같다. */
+export function isOverrideCompletion(
+  task: Pick<Task, 'checks' | 'reviewIssues' | 'validateConfigIds' | 'validateConfigId' | 'reviewRequested'>,
+  policy: ResolvedPolicy | null
+): boolean {
+  if (policy === null) return false
+  const wantsChecks = checkConfigIdsOf(task).length > 0
+  const wantsReview = task.reviewRequested === true
+  if (!wantsChecks && !wantsReview) return false
+  if (wantsChecks) {
+    // 한 번도 안 돌았거나, 마지막 라운드에 통과 아닌 것이 있으면 수렴하지 않았다
+    if (!task.checks || task.checks.length === 0) return true
+    if (task.checks.some((c) => c.status !== 'passed')) return true
+  }
+  if (wantsReview && (task.reviewIssues ?? []).some((i) => i.blocking)) return true
+  // 검토를 요구했는데 아직 한 번도 받지 않았다 — 검사만 통과한 상태다
+  if (wantsReview && task.reviewIssues === undefined) return true
+  return false
+}

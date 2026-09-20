@@ -58,7 +58,7 @@ import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { parseHandoffBody } from '../../core/handoff/parse'
 import type { HandoffBody } from '../../core/handoff/types'
 import type { Lang } from '../../core/i18n'
-import { policyOf } from '../../core/orchestration/convergence'
+import { isOverrideCompletion, policyOf } from '../../core/orchestration/convergence'
 
 export interface OrchServerDeps {
   getState(): OrchState
@@ -1009,10 +1009,23 @@ export async function handleCommand(
         `task-update: task=${id} ${task.status} -> ${status} (table-allowed=${allowedByTable})`
       )
       const result = str(args.result)
+      // 설계 G4(명세 §30). 완료 정책을 만족하지 않은 채 완료로 옮기는 것이 이 앱의 "완료 강제" 다 —
+      // 버튼을 따로 두지 않고 이 명령이 그 자리를 겸한다(백엔드 설계 §3). 비어 있던 것은 버튼이
+      // 아니라 기록이었다: 명세는 "사용 시 반드시 reason 을 Journal 에 남긴다" 고 한다.
+      //
+      // **요구는 이 한 경우에만 건다.** 평범한 손보기(ready 로 되돌리기, 회로 차단 풀기)는 그대로다 —
+      // 거기까지 이유를 받으면 이 명령이 쓰이던 모든 구조 경로가 한 번에 막힌다.
+      const override = status === 'completed' && isOverrideCompletion(task, policyOf(s, task))
+      const reason = str(args.reason)
+      if (override && !reason)
+        return bad(
+          'this task has not satisfied its completion policy — pass --reason to record why it is being completed anyway'
+        )
       const nextTask: Task = {
         ...task,
         status,
         updatedAt: now,
+        ...(override && reason ? { completionOverride: { reason, at: now } } : {}),
         // **The circuit counter is reset along with the status.** Section 8 of the orchestration
         // guide already advertises task-update as the way to rescue a Task stranded by a circuit
         // break (3 failures), but while the counter stayed put only the status changed and

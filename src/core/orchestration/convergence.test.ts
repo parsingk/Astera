@@ -4,6 +4,7 @@ import {
   appendHistory,
   checkConfigIdsOf,
   isBlocking,
+  isOverrideCompletion,
   latestImplDispatch,
   policyOf,
   repairCountOf,
@@ -203,5 +204,58 @@ describe('timeBudgetExceeded', () => {
   // 손으로 고친 orchestration.json 에서만 나온다. 못 읽는 시각으로 예산을 끊지 않는다
   it('읽을 수 없는 시각이면 거짓', () => {
     expect(timeBudgetExceeded({ convergenceStartedAt: 'not-a-date' }, pol({ maxTotalMinutes: 1 }), at(9999))).toBe(false)
+  })
+})
+
+// 설계 G4(명세 §30)
+describe('isOverrideCompletion', () => {
+  const pol: ResolvedPolicy = { maxFixAttempts: 3, maxReviewRounds: 2, blockingSeverity: 'high' }
+  const chk = (status: CheckResult['status']): CheckResult => ({ configId: 'cfg1', name: 'Tests', status })
+
+  it('자동 수정 없는 Run 이면 강제가 아니다 — 평범한 손보기다', () => {
+    expect(isOverrideCompletion({ validateConfigIds: ['cfg1'] }, null)).toBe(false)
+  })
+
+  it('걸린 검사도 검토도 없으면 강제가 아니다 — 만족할 것이 없다', () => {
+    expect(isOverrideCompletion({}, pol)).toBe(false)
+  })
+
+  // 통과를 본 적이 없다는 점에서 실패와 같다
+  it('검사가 한 번도 돌지 않았으면 강제다', () => {
+    expect(isOverrideCompletion({ validateConfigIds: ['cfg1'] }, pol)).toBe(true)
+  })
+
+  it('마지막 라운드에 통과 아닌 검사가 있으면 강제다', () => {
+    expect(isOverrideCompletion({ validateConfigIds: ['cfg1'], checks: [chk('failed')] }, pol)).toBe(true)
+    expect(isOverrideCompletion({ validateConfigIds: ['cfg1'], checks: [chk('timed-out')] }, pol)).toBe(true)
+    expect(isOverrideCompletion({ validateConfigIds: ['cfg1'], checks: [chk('not-run')] }, pol)).toBe(true)
+  })
+
+  it('검사가 전부 통과했고 검토를 요구하지 않았으면 강제가 아니다', () => {
+    expect(isOverrideCompletion({ validateConfigIds: ['cfg1'], checks: [chk('passed')] }, pol)).toBe(false)
+  })
+
+  it('막는 검토 지적이 남아 있으면 강제다', () => {
+    const t = {
+      validateConfigIds: ['cfg1'],
+      checks: [chk('passed')],
+      reviewRequested: true,
+      reviewIssues: [{ id: 'i1', severity: 'high' as const, blocking: true, title: 't', description: 'd' }]
+    }
+    expect(isOverrideCompletion(t, pol)).toBe(true)
+  })
+
+  it('검토를 요구했는데 아직 받지 않았으면 강제다', () => {
+    expect(isOverrideCompletion({ validateConfigIds: ['cfg1'], checks: [chk('passed')], reviewRequested: true }, pol)).toBe(true)
+  })
+
+  it('검사 통과 + 검토가 막지 않으면 강제가 아니다 — 수렴한 것이다', () => {
+    const t = {
+      validateConfigIds: ['cfg1'],
+      checks: [chk('passed')],
+      reviewRequested: true,
+      reviewIssues: [{ id: 'i1', severity: 'low' as const, blocking: false, title: 't', description: 'd' }]
+    }
+    expect(isOverrideCompletion(t, pol)).toBe(false)
   })
 })

@@ -26,6 +26,8 @@ export type ContinuityEventType =
   | 'TASK_REVIEW_PASSED'
   | 'TASK_REVIEW_CHANGES_REQUESTED'
   | 'TASK_CONVERGENCE_EXHAUSTED'
+  /** 완료 정책을 만족하지 않은 채 사람이 완료로 옮겼다 (명세 §30). reason 이 함께 실린다 */
+  | 'TASK_COMPLETED_WITH_OVERRIDE'
   | 'ATTEMPT_START_REQUESTED'
   | 'ATTEMPT_STARTED'
   | 'ATTEMPT_WAITING'
@@ -141,7 +143,12 @@ function runEndEvents(prev: OrchState, next: OrchState, now: string): Continuity
  *  are exhausted or blocked, lands on blocked with a Gate — both are TASK_REVIEW_CHANGES_REQUESTED.
  *  TASK_CONVERGENCE_EXHAUSTED always follows the verdict that triggered it and precedes the main
  *  event, whichever verdict it was. */
-function taskTransitionEvents(from: TaskStatus, to: TaskStatus, gateKind: GateKind | undefined): ContinuityEventType[] {
+function taskTransitionEvents(
+  from: TaskStatus,
+  to: TaskStatus,
+  gateKind: GateKind | undefined,
+  override: boolean
+): ContinuityEventType[] {
   const verdictGated = gateKind !== undefined
   const exhausted = gateKind === 'convergence-exhausted'
   const verdicts: ContinuityEventType[] = []
@@ -151,6 +158,9 @@ function taskTransitionEvents(from: TaskStatus, to: TaskStatus, gateKind: GateKi
   if (from === 'reviewing' && (to === 'dispatched' || (to === 'blocked' && verdictGated)))
     verdicts.push('TASK_REVIEW_CHANGES_REQUESTED')
   if (to === 'blocked' && exhausted) verdicts.push('TASK_CONVERGENCE_EXHAUSTED')
+  // 강제 완료는 TASK_COMPLETED 앞에 선다 — 소진이 그 판정 앞에 서는 것과 같은 이유다: 뒤따르는
+  // 주 이벤트가 무엇의 결과인지를 그 앞 줄이 말한다.
+  if (to === 'completed' && override) verdicts.push('TASK_COMPLETED_WITH_OVERRIDE')
   const main: ContinuityEventType =
     to === 'ready' && from === 'pending'
       ? 'TASK_BECAME_READY'
@@ -211,7 +221,15 @@ function taskEvents(prev: OrchState, next: OrchState, now: string): ContinuityEv
       payload.repairs = repairCountOf(next, task.id)
       payload.reviewRounds = reviewRoundOf(next, task.id)
     }
-    for (const type of taskTransitionEvents(from, to, gateKind))
+    // 설계 G4(명세 §30): 완료 강제는 그 사실과 **이유**가 남아야 한다. 이유는 서버가 Task 에 적어
+    // 두었고(`completionOverride`), 여기서는 그것을 저널로 옮기기만 한다 — 무엇이 강제인지를 판정한
+    // 것은 `isOverrideCompletion` 이고 그 판정은 쓰기 시점에 이미 끝났다.
+    if (to === 'completed' && task.completionOverride) {
+      payload.overrideReason = task.completionOverride.reason
+      if (task.checks)
+        payload.checks = task.checks.map((c) => ({ configId: c.configId, status: c.status, exitCode: c.exitCode ?? null }))
+    }
+    for (const type of taskTransitionEvents(from, to, gateKind, task.completionOverride !== undefined))
       out.push(
         ev({ runId: task.runId, taskId: task.id }, type, now, `${type}:${task.id}:${from}->${to}:${now}`, payload)
       )

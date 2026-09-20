@@ -228,6 +228,9 @@ export interface Task {
   checkHistory?: Record<string, ('passed' | 'failed')[]>
   /** 마지막 검토의 이슈 전부, blocking 여부 포함 */
   reviewIssues?: ReviewIssue[]
+  /** 완료 정책을 만족하지 않은 채 사람이 완료로 옮겼다 (설계 G4, 명세 §30). 이유는 사람이 적은 것
+   *  그대로다 — 저널의 TASK_COMPLETED_WITH_OVERRIDE 가 이 칸을 읽는다. */
+  completionOverride?: { reason: string; at: string }
   /** 이 Task 가 **처음 validating 이 된** 때 — 시간 예산의 시계(ConvergencePolicy.maxTotalMinutes).
    *  한 번만 찍고 덮지 않는다: 라운드마다 다시 찍으면 예산이 영원히 리셋된다. */
   convergenceStartedAt?: string
