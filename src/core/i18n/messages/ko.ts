@@ -1525,6 +1525,25 @@ export const ko = {
   'conversation.exited.withCode': '이 세션은 종료되었습니다 (코드 {code})',
   'conversation.exited.detail': '자세히',
   'conversation.exited.restart': '다시 시작',
+  // design §4 F5의 확인 창 다섯 문단. S1(한두 줄)의 예외다 — 사람이 대신할 수 없는 판단이라 사실을
+  // 빼면 버튼만 남는다. whatBlocked 의 {line} 은 CLI 가 stderr 에 남긴 첫 줄(ChatState.error) 그대로다.
+  'conversation.exited.bypassConfirm.title': '이 폴더의 toolchain 설정을 건너뛰고 다시 시도할까요?',
+  'conversation.exited.bypassConfirm.whatBlockedLabel': '무엇이 막았나',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    'CLI 가 아니라 PATH 앞의 도구 버전 관리자(Volta)가 실행을 거절했습니다. 이 폴더의 package.json 을 읽어 어느 버전을 쓸지 정해야 하는데, 그 파일을 읽지 못했습니다: {line}',
+  'conversation.exited.bypassConfirm.ifSkippedLabel': '건너뛰면',
+  'conversation.exited.bypassConfirm.ifSkipped': '버전 판단을 생략하고 기본으로 잡히는 CLI 를 그대로 실행합니다. 세션은 뜹니다.',
+  'conversation.exited.bypassConfirm.givesUpLabel': '무엇을 포기하나',
+  'conversation.exited.bypassConfirm.givesUp':
+    '이 프로젝트에 핀해 둔 도구 버전입니다. 이 세션뿐 아니라 이 세션이 실행하는 모든 명령(에이전트가 돌리는 npm test, npm run build, node …)이 핀된 버전이 아니라 기본 버전으로 돕니다. 같은 명령이 당신 터미널에서와 다른 결과를 낼 수 있습니다.',
+  'conversation.exited.bypassConfirm.scopeLabel': '얼마나 / 무엇이 바뀌나',
+  'conversation.exited.bypassConfirm.scope':
+    '이 세션이 사는 동안만입니다. 다른 세션과 터미널은 그대로이고, 파일도 설정도 건드리지 않습니다. 되돌리려면 이 세션을 닫고 새로 시작하면 됩니다.',
+  'conversation.exited.bypassConfirm.properFixLabel': '제대로 된 해결',
+  'conversation.exited.bypassConfirm.properFix': 'package.json 을 고치면 이 창은 다시 뜨지 않습니다.',
+  'conversation.exited.bypassConfirm.confirm': '건너뛰고 다시 시도',
+  // 확인을 누른 뒤, 그 사이 다른 종료가 그 판정을 다시 내려 버튼이 더는 서 있지 않을 때(레이스)
+  'conversation.exited.bypassConfirm.failed': '다시 시도하지 못했습니다',
   'conversation.running.interrupt': '중단 (Esc)',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effortRow': 'effort: {level}',

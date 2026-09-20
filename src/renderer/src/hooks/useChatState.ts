@@ -38,20 +38,32 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
       // Same arrangement: main keeps it for the status bar to ask about, and the pane draws none of it.
       return state
     case 'notice':
-      // Task 7 (design F5): told once, through its own field — never `error`, or the exit banner (T4)
-      // would read the bypass as the reason the session died, when the retry is in fact why it did not.
-      return { ...state, notice: event.key }
+      // design F5: told once, through its own field — never `error`, or the exit banner (T4) would
+      // read the bypass as the reason the session died, when the retry is in fact why it did not.
+      //
+      // It also retires the exit it is news about: this fires only after a confirmed retry actually
+      // started the CLI again, and a pane that was already open when the first death happened is
+      // still sitting on that death's `error`/`errorDetail`/`exitCode`/`bypassOffer` — nothing else
+      // ever clears them (a fresh turn's `status: 'working'` below clears `error`/`notice`, but not
+      // the other three). Left standing, `chatBannerFor` would keep ranking that stale `error` over
+      // this very `notice` (it checks `error` first) and the pane would go on showing a session that
+      // is, in fact, running fine as if it had just failed.
+      return { ...state, notice: event.key, error: null, errorDetail: null, exitCode: null, bypassOffer: false }
     case 'exit':
       // exitCode/errorDetail always come from the event, even when errorDetail is null — that null is
       // itself the fact "no tail", not "nothing to say". `error` is different: absent means the event
       // has no reason to report, and the fold must leave whatever error already sat there rather than
       // guessing one (a pane already open when the process dies has no other source for any of this).
+      // `bypassOffer` mirrors `error`'s own rule — absent means the manager decided against it, not
+      // "unchanged" (a session that already had a stale `true` from an earlier death must not keep it
+      // through a plain, unrelated exit that offers no button at all).
       return {
         ...state,
         status: 'idle',
         request: null,
         exitCode: event.code,
         errorDetail: event.errorDetail,
+        bypassOffer: event.bypassOffer === true,
         ...(event.error === undefined ? {} : { error: event.error })
       }
   }

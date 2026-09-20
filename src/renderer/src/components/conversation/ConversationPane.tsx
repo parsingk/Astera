@@ -28,6 +28,7 @@ import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.a
 const MemoThread = memo(Thread);
 import { ToolRow, ToolRowGroup } from "./ToolRow";
 import { ChatNotice, ExitedNotice, RunningNotice } from "./PendingBanner";
+import { BypassRetryDialog } from "./BypassRetryDialog";
 import { ModelControl, type ModelControlProps } from "./ModelControl";
 import { effortChoicesOf, modelChoicesOf } from "../../../../core/models/cliModels";
 import type { ModelDescriptor } from "../../../../core/models/types";
@@ -405,6 +406,19 @@ export function ConversationPane({
   const chat = useChatState(sessionId, true);
   /** `chat.status` without the optional chain, so the dependency arrays below stay plain reads. */
   const chatStatus = chat === null ? null : chat.status;
+  /** design F5: whether the confirm dialog for skipping this folder's toolchain is up. The button
+   *  that opens it never retries anything itself — see PendingBanner.tsx's own comment on
+   *  `ExitedNotice`'s `onRestart` for why that has to be a separate step. */
+  const [bypassConfirmOpen, setBypassConfirmOpen] = useState(false);
+  const confirmBypassRetry = useCallback((): void => {
+    setBypassConfirmOpen(false);
+    void window.api.chat.retryWithBypass(sessionId).then((ok) => {
+      // A false answer means the offer's own conditions no longer held by the time this ran (a race
+      // with a second exit, or the button pressed twice) — not a crash, so a quiet toast is enough;
+      // the banner itself already reflects whatever actually happened by then.
+      if (!ok) toast.error(t("conversation.exited.bypassConfirm.failed"));
+    });
+  }, [sessionId, t]);
   const [status, setStatus] = useState<Status>("loading");
   const [turns, setTurns] = useState<ConvTurn[]>([]);
   const [from, setFrom] = useState(0);
@@ -1262,7 +1276,10 @@ export function ConversationPane({
       exitCode={chat?.exitCode ?? null}
       reason={chat?.error ?? null}
       detail={chat?.errorDetail ?? null}
-      onRestart={null}
+      // design F5: null unless the manager actually found both signals (a refusal-shaped death *and*
+      // a manager detected) — never a guess. Pressing it does not retry anything by itself; it opens
+      // the confirm dialog below, which is the only thing that can (PendingBanner.tsx's own comment).
+      onRestart={chat?.bypassOffer ? () => setBypassConfirmOpen(true) : null}
     />
   ) : chatBanner.kind === "request" ? (
     // Keyed on the request so a new one gets a new card: the old one's `busy`/`submitting` state
@@ -1379,6 +1396,13 @@ export function ConversationPane({
           </RunningSlotContext.Provider>
         </BannerSlotContext.Provider>
       </div>
+      {bypassConfirmOpen && (
+        <BypassRetryDialog
+          line={chat?.error ?? ""}
+          onCancel={() => setBypassConfirmOpen(false)}
+          onConfirm={confirmBypassRetry}
+        />
+      )}
     </div>
   );
 }

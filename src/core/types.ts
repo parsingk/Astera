@@ -1573,6 +1573,12 @@ export type RendererApi = CoreApi & {
     configuredModel(sessionId: string): Promise<string | null>
     /** One-shot on mount; null for a session that is not a chat session. */
     state(sessionId: string): Promise<ChatState | null>
+    /** design F5: the person confirmed, in the renderer's own dialog, that they want to skip this
+     *  folder's toolchain and retry. `true` when the retry actually started (a fresh `SessionInfo`
+     *  also arrives as `session:created`, the same way a Host reconnect delivers one); `false` for a
+     *  session that is not currently offering the button — unknown id, or its own conditions no
+     *  longer hold (a race with a second exit, or a second click). */
+    retryWithBypass(sessionId: string): Promise<boolean>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

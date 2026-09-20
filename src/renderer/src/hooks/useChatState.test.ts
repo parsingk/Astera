@@ -53,6 +53,14 @@ describe('foldChatEvent — exit', () => {
     expect(next.errorDetail).toBeNull()
     expect(next.error).toBe('rate limited')
   })
+
+  // design F5: bypassOffer 는 매번 이 이벤트가 새로 정한다 — error 와 달리 "칸이 없으면 그대로 둔다"
+  // 가 아니다. 지난 죽음의 true 가 이번의, 버튼을 낼 이유가 없는 죽음까지 물려받으면 안 된다.
+  it('bypassOffer 는 이벤트가 실은 값 그대로 옮겨오고, 없으면 false 다', () => {
+    expect(foldChatEvent(base, { type: 'exit', code: 8, errorDetail: null, bypassOffer: true }).bypassOffer).toBe(true)
+    const stale = { ...base, bypassOffer: true }
+    expect(foldChatEvent(stale, { type: 'exit', code: 0, errorDetail: null }).bypassOffer).toBe(false)
+  })
 })
 
 // Task 7 (design F5): 우회 재시도가 성공했다는 것을 그 자신의 칸에 싣는다 — error 에 실으면 종료
@@ -68,5 +76,23 @@ describe('foldChatEvent — notice', () => {
     const noticed = { ...base, notice: 'bypassed' as const }
     expect(foldChatEvent(noticed, { type: 'status', status: 'working', truncated: false }).notice).toBeNull()
     expect(foldChatEvent(noticed, { type: 'status', status: 'idle', truncated: false }).notice).toBe('bypassed')
+  })
+
+  // design F5: 알림이 뜬다는 것은 재시도가 실제로 성공해 세션이 다시 산다는 뜻이다 — 방금 전 실패의
+  // 자국(error·errorDetail·exitCode·bypassOffer)을 그대로 두면, chatBannerFor 가 그 error 를 이
+  // notice 보다 위에 두므로(request·error·notice 순) 다시 산 세션이 죽은 시도의 사유를 계속 보인다.
+  it('알림은 방금 전 실패의 흔적(error·errorDetail·exitCode·bypassOffer)도 함께 지운다', () => {
+    const failed = {
+      ...base,
+      error: 'error: Could not parse project manifest',
+      errorDetail: 'tail',
+      exitCode: 8,
+      bypassOffer: true
+    }
+    const next = foldChatEvent(failed, { type: 'notice', key: 'bypassed' })
+    expect(next.error).toBeNull()
+    expect(next.errorDetail).toBeNull()
+    expect(next.exitCode).toBeNull()
+    expect(next.bypassOffer).toBe(false)
   })
 })

@@ -49,6 +49,7 @@ import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
 import { attachmentNameOf } from '../core/files/attachmentName'
 import { installCommandFor, locateCommandFor } from '../core/install/cliInstall'
+import { isVoltaManagedPath } from '../core/sessions/retryBypass'
 import { prependToPath } from '../core/sessions/manager'
 import { listClaudeModels, listCodexModels } from './models/discover'
 import { UnderstandingPipeline } from './understanding/pipeline'
@@ -1689,6 +1690,10 @@ export function registerIpc(
       // separate implementations and a chain cannot be half of each.
       if (rollProviders && rollProviders.length > 0 && rollProviders.some((p: Provider) => p !== rollProviders[0]))
         throw new Error('ROLL_MIXED_PROVIDER: cannot roll a mix of Claude and Codex accounts')
+      // design F5: checked here, once, before the process ever spawns — not inside the manager, which
+      // has to stay synchronous, and not lazily at exit time, since the probe this runs is not free
+      // and most exits are not toolchain refusals at all.
+      const bypassManagerDetected = await detectBypassableManager(providerOf(account))
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
@@ -1697,7 +1702,8 @@ export function registerIpc(
         schedule: opts.schedule,
         slackNotify: opts.slackNotify === true,
         rollAccountIds: opts.rollAccountIds,
-        rollPrompt: opts.rollPrompt
+        rollPrompt: opts.rollPrompt,
+        bypassManagerDetected
       })
       // The schedule is the one feature this slice attaches to a chat session (chat-sessions slice 4
       // design §5.2 / §6). Same call, same provider argument as the pty branch below.
@@ -7056,6 +7062,17 @@ export function registerIpc(
   // What the pane reads once on mount, so a tab reopened (or a renderer reloaded) mid-conversation
   // shows the state the adapter is actually in rather than waiting for the next event to arrive.
   ipcMain.handle('chat.state', (_e, sessionId: string) => core.chat.state(sessionId))
+  // design F5: the person pressed the offered "skip the toolchain and retry" button and confirmed, in
+  // the renderer's own dialog, what that gives up — this is the only place that ever calls it (main
+  // never chooses this on its own, per S7). `false` is a no-op: the id is unknown, the offer's own
+  // conditions no longer hold, or a second click raced the first. `session:created` on success puts
+  // the tab back the same way a Host reconnect does — the fresh `SessionInfo` this hands back has
+  // `status: 'running'` again, which is what clears the exit banner in PaneGrid.
+  ipcMain.handle('chat.retryWithBypass', (_e, sessionId: string) => {
+    const info = core.chat.retryWithBypass(sessionId)
+    if (info) send('session:created', info)
+    return info !== null
+  })
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
@@ -7153,6 +7170,22 @@ export function registerIpc(
     // Checked on disk before it is believed: a shell that answers with something that is not there
     // would put a directory on PATH that hides nothing and helps nobody.
     return found !== null && existsSync(found) ? found : null
+  }
+
+  /**
+   * design F5: whether a bypassable toolchain manager is actually in the way of this CLI — checked
+   * once, before a chat session spawns, so a death this fast without a word of protocol can offer a
+   * button backed by real evidence rather than a guess. Either signal is enough:
+   *  - `locateCli`'s own resolved path answers the first door directly: Volta's shim (and the tool
+   *    image one level under it) lives under a `Volta` directory (`isVoltaManagedPath`, core — pure,
+   *    tested there).
+   *  - `VOLTA_HOME` being set at all answers the second door, where the CLI's own wrapper is not
+   *    itself the shim but the `node` it execs is (`codex.cmd` calling `node`, and `node` is what
+   *    Volta actually gates) — the environment read stays here, in main.
+   */
+  const detectBypassableManager = async (cli: Provider): Promise<boolean> => {
+    const resolved = await locateCli(cli)
+    return (resolved !== null && isVoltaManagedPath(resolved)) || process.env.VOLTA_HOME !== undefined
   }
 
   // Whether each CLI is installed on this machine at all — independent of any folder, so the renderer

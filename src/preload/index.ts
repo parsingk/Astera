@@ -324,7 +324,8 @@ const api = {
     listPermissionModes: invoke('chat.listPermissionModes'),
     listModels: invoke('chat.listModels'),
     configuredModel: invoke('chat.configuredModel'),
-    state: invoke('chat.state')
+    state: invoke('chat.state'),
+    retryWithBypass: invoke('chat.retryWithBypass')
   },
   platform: process.platform,
   win: {

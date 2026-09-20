@@ -643,6 +643,24 @@ export const es: Catalog = {
   'conversation.exited.withCode': 'Esta sesión ha terminado (código {code})',
   'conversation.exited.detail': 'Detalles',
   'conversation.exited.restart': 'Reiniciar',
+  // Los cinco puntos de la confirmación de design §4 F5. Una excepción a S1 (una o dos líneas) — la
+  // persona está tomando una decisión que nadie más puede tomar, y quitar los hechos dejaría solo un botón.
+  'conversation.exited.bypassConfirm.title': '¿Omitir la configuración de toolchain de esta carpeta y reintentar?',
+  'conversation.exited.bypassConfirm.whatBlockedLabel': 'Qué lo bloqueó',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    'No fue la CLI — el gestor de versiones de herramientas por delante en el PATH (Volta) se negó a ejecutarse. Necesita leer el package.json de esta carpeta para elegir una versión, y no pudo: {line}',
+  'conversation.exited.bypassConfirm.ifSkippedLabel': 'Si lo omites',
+  'conversation.exited.bypassConfirm.ifSkipped': 'Se omite la resolución de versión y se ejecuta la CLI que quede por defecto en el PATH. La sesión se inicia.',
+  'conversation.exited.bypassConfirm.givesUpLabel': 'Qué se pierde',
+  'conversation.exited.bypassConfirm.givesUp':
+    'La versión de la herramienta fijada para este proyecto. No solo esta sesión — todos los comandos que ejecute (el propio npm test, npm run build, node … del agente) se ejecutarán con la versión por defecto, no con la fijada. El mismo comando puede dar un resultado distinto al de tu terminal.',
+  'conversation.exited.bypassConfirm.scopeLabel': 'Cuánto dura / qué cambia',
+  'conversation.exited.bypassConfirm.scope':
+    'Solo mientras viva esta sesión. Las demás sesiones y terminales quedan igual, y no se toca ningún archivo ni configuración. Para revertirlo, cierra esta sesión e inicia una nueva.',
+  'conversation.exited.bypassConfirm.properFixLabel': 'La solución real',
+  'conversation.exited.bypassConfirm.properFix': 'Si arreglas el package.json, este cuadro no volverá a aparecer.',
+  'conversation.exited.bypassConfirm.confirm': 'Omitir y reintentar',
+  'conversation.exited.bypassConfirm.failed': 'No se pudo reintentar',
   // ResumeDialog.tsx
   'session.resume.title': 'Reanudar la sesión',
   'session.resume.conversationLabel': 'Conversación',

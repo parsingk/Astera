@@ -2,6 +2,14 @@
 // manager sitting in front of it on PATH ties the two together: it reads the manifest of the working
 // directory to pick a tool version, and refuses to run anything when it cannot parse it. A reviewer's
 // whole evaluation was lost to exactly that (design F5).
+//
+// This used to decide an *automatic* retry — the app quietly added a bypass and respawned once on its
+// own. Design S7 said why that default is wrong (the variable rides every command the session ever
+// spawns, so it silently overrides a version the person pinned on purpose) and F5's rewrite found that
+// the automatic retry path did the exact thing S7 forbade, just one door over. What is here now answers
+// a narrower question — does this death *look like* a refusal? — and the app no longer acts on that
+// answer by itself: `ChatSessionManager` uses it only to decide whether to *offer* the person a button,
+// and the respawn itself only ever runs after they press it (manager.ts's `retryWithBypass`).
 import type { ProcLike } from './proc'
 
 /** A process that never said a word and was gone this fast did not fail — it was never run. Five
@@ -9,24 +17,35 @@ import type { ProcLike } from './proc'
  *  did start and then crash is not mistaken for one that was refused. */
 export const IMMEDIATE_EXIT_MS = 5000
 
-/** What we add for the one retry. Volta reads this and passes straight through to the executable,
- *  skipping version resolution and project detection. **Never set on the first attempt** (design S7):
- *  the variable is inherited by everything the session spawns, so leaving it on would silently ignore
- *  the version the person pinned for their own project's commands — a worse fault than the one being
- *  fixed. Only Volta is here because only Volta is what the evidence showed; another manager's bypass
- *  goes in this same object when there is a case for it. */
+/** What the person's confirmed retry adds (manager.ts's `retryWithBypass`, never the exit handler on
+ *  its own — S7). Volta reads this and passes straight through to the executable, skipping version
+ *  resolution and project detection. Only Volta is here because only Volta is what the evidence showed;
+ *  another manager's bypass goes in this same object when there is a case for it. */
 export const BYPASS_ENV: Readonly<Record<string, string>> = { VOLTA_BYPASS: '1' }
 
-export function shouldRetryWithBypass(a: {
-  attempt: number
-  sawProtocolLine: boolean
-  elapsedMs: number
-}): boolean {
-  if (a.attempt !== 0) return false
+/** Whether a death *looks like* a refusal to run at all, rather than a CLI that started and then failed
+ *  on its own: no line of its protocol ever arrived, and it was gone within `IMMEDIATE_EXIT_MS`. This
+ *  alone is not enough to offer the bypass button — a DLL that is missing, an antivirus block, an
+ *  ordinary crash all look the same from here — `ChatSessionManager` also requires positive evidence a
+ *  bypassable manager is actually in the way (main's detection) before it sets `ChatState.bypassOffer`. */
+export function looksLikeRefusal(a: { sawProtocolLine: boolean; elapsedMs: number }): boolean {
   // One line of protocol means the CLI ran. Whatever killed it after that is its own business, and a
   // bypass would only change which version died.
   if (a.sawProtocolLine) return false
   return a.elapsedMs < IMMEDIATE_EXIT_MS
+}
+
+/** design F5, detection signal 1: whether a resolved executable path is one a version manager rewired
+ *  PATH to point at, rather than the tool's own install. Volta's shims (and the tool image one level
+ *  under them) live under a `Volta` directory — `~/.volta/bin/<tool>` on macOS/Linux,
+ *  `%LOCALAPPDATA%\Volta\bin\<tool>.exe` on Windows — so this checks for a path *segment* named
+ *  `volta`/`.volta`, not a suffix, and case-insensitively (Windows paths). The environment read that
+ *  supplies the path (`locateCli`) and the second signal (`VOLTA_HOME`) both stay in main — this is
+ *  only the judgement on a path already in hand, which is why it can be pure and tested here. */
+export function isVoltaManagedPath(resolvedPath: string): boolean {
+  return resolvedPath
+    .split(/[\\/]+/)
+    .some((segment) => segment.toLowerCase() === 'volta' || segment.toLowerCase() === '.volta')
 }
 
 /** `ProcLike.onLine` takes a single subscriber — it is a setter, not an emitter — so a caller that

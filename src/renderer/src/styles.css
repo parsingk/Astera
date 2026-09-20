@@ -1432,6 +1432,10 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .detect-path { font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* the Local History modal — list-style modals follow the .detect-list convention (body plus metadata within a row) */
 .modal.local-history { width: 560px; max-height: 80vh; }
+/* BypassRetryDialog.tsx (session-failure-visibility design F5) — five labelled paragraphs plus the
+   CLI's own quoted stderr line, wider than the 460px default so that prose does not wrap into a
+   ladder, and scrollable for a stderr line long enough to push the buttons off a short window. */
+.modal.bypass-retry { width: 520px; max-height: 80vh; overflow-y: auto; }
 /* The resume modal — with rolling, schedule, Slack, and permission checkboxes plus the conditional
    schedule inputs stacked up, it can overflow in a narrow window. The same convention as its sibling modals. */
 .modal.resume { max-height: 80vh; overflow-y: auto; }

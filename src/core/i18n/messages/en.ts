@@ -1310,6 +1310,26 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.exited.withCode': 'This session has ended (code {code})',
   'conversation.exited.detail': 'Details',
   'conversation.exited.restart': 'Restart',
+  // design §4 F5's five-part confirmation. An exception to S1 (one or two lines) — the person is
+  // making a judgement nobody else can, and stripping the facts would leave only a button.
+  'conversation.exited.bypassConfirm.title': "Skip this folder's toolchain setup and retry?",
+  'conversation.exited.bypassConfirm.whatBlockedLabel': 'What blocked it',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    "Not the CLI — the tool version manager ahead of it on PATH (Volta) refused to run. It needs to read this folder's package.json to pick a version, and could not: {line}",
+  'conversation.exited.bypassConfirm.ifSkippedLabel': 'If you skip it',
+  'conversation.exited.bypassConfirm.ifSkipped': 'Version resolution is skipped and the CLI on the default PATH runs as-is. The session comes up.',
+  'conversation.exited.bypassConfirm.givesUpLabel': 'What you give up',
+  'conversation.exited.bypassConfirm.givesUp':
+    "The tool version pinned for this project. Not just this session — every command it runs (the agent's own npm test, npm run build, node …) runs on the default version instead of the pinned one. The same command can behave differently than it does in your terminal.",
+  'conversation.exited.bypassConfirm.scopeLabel': 'How long / what changes',
+  'conversation.exited.bypassConfirm.scope':
+    'Only for as long as this session lives. Other sessions and terminals are unaffected, and no file or setting is touched. To undo it, close this session and start a new one.',
+  'conversation.exited.bypassConfirm.properFixLabel': 'The real fix',
+  'conversation.exited.bypassConfirm.properFix': 'Fixing package.json means this dialog will not appear again.',
+  'conversation.exited.bypassConfirm.confirm': 'Skip and retry',
+  // The button is pressed, but a race (another exit re-decided the offer in between) means it no
+  // longer applies.
+  'conversation.exited.bypassConfirm.failed': 'Could not retry',
   'conversation.running.interrupt': 'Stop (Esc)',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effortRow': 'effort: {level}',

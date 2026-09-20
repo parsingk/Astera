@@ -635,6 +635,24 @@ export const ja: Catalog = {
   'conversation.exited.withCode': 'このセッションは終了しました (コード {code})',
   'conversation.exited.detail': '詳細',
   'conversation.exited.restart': '再開',
+  // design §4 F5 の確認ダイアログの5つの項目。S1(1〜2行)の例外 — 本人にしかできない判断なので、
+  // 事実を削るとボタンだけが残る。
+  'conversation.exited.bypassConfirm.title': 'このフォルダの toolchain 設定をスキップして再試行しますか?',
+  'conversation.exited.bypassConfirm.whatBlockedLabel': '何が止めたか',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    'CLI ではなく、PATH の手前にあるツールバージョン管理ツール(Volta)が実行を拒否しました。このフォルダの package.json を読んでどのバージョンを使うか決める必要がありますが、そのファイルを読めませんでした: {line}',
+  'conversation.exited.bypassConfirm.ifSkippedLabel': 'スキップすると',
+  'conversation.exited.bypassConfirm.ifSkipped': 'バージョン判定を省略し、デフォルトの CLI をそのまま実行します。セッションは起動します。',
+  'conversation.exited.bypassConfirm.givesUpLabel': '何を諦めるか',
+  'conversation.exited.bypassConfirm.givesUp':
+    'このプロジェクトに固定したツールバージョンです。このセッションだけでなく、このセッションが実行するすべてのコマンド(エージェントが実行する npm test、npm run build、node …)が固定バージョンではなくデフォルトバージョンで動きます。同じコマンドでも、あなたのターミナルとは異なる結果になることがあります。',
+  'conversation.exited.bypassConfirm.scopeLabel': 'どれくらい/何が変わるか',
+  'conversation.exited.bypassConfirm.scope':
+    'このセッションが生きている間だけです。他のセッションやターミナルはそのままで、ファイルも設定も変更しません。元に戻すには、このセッションを閉じて新しく始めてください。',
+  'conversation.exited.bypassConfirm.properFixLabel': '本当の解決',
+  'conversation.exited.bypassConfirm.properFix': 'package.json を修正すれば、このダイアログは再び表示されません。',
+  'conversation.exited.bypassConfirm.confirm': 'スキップして再試行',
+  'conversation.exited.bypassConfirm.failed': '再試行できませんでした',
   // ResumeDialog.tsx
   'session.resume.title': 'セッションを再開',
   'session.resume.conversationLabel': '会話',

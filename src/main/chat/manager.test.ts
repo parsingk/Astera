@@ -425,279 +425,232 @@ describe('event wiring', () => {
   })
 })
 
-// Task 7 (design F5): a project's package.json has nothing to do with whether the CLI starts, but a
-// toolchain manager on PATH ties the two together and refuses to run anything it cannot version-pick.
-// One bypass retry, only after a death that shows the CLI never ran — never on the first attempt (S7).
-describe('ChatSessionManager — toolchain 우회 재시도', () => {
-  it('말없이 즉사하면 우회를 얹어 한 번 다시 띄운다', async () => {
-    const { manager, handles, spawned } = setup()
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+// design F5: the automatic retry above is gone. The app no longer bypasses a toolchain manager on its
+// own — S7 named the harm (the bypass variable rides every command the session ever spawns) and the
+// automatic retry did the exact thing S7 forbade, one door over: it always set the variable on the
+// second attempt, no matter what actually killed the first. What remains is narrower: the manager
+// decides only whether the death *looks like* a refusal a person could choose to retry past, and the
+// respawn itself never runs until they press the button and confirm (`retryWithBypass`, only ever
+// called from ipc.ts's own handler for the renderer's confirmed click).
+describe('ChatSessionManager — bypassOffer (design F5)', () => {
+  // 두 조건이 모두 참일 때만 선다: 죽은 모양이 거절처럼 보이고(말없이 즉사), 우회할 관리자가 실제로
+  // 있다는 증거가 있다(main 이 spawn 전에 확인해 넘긴 bypassManagerDetected).
+  it('말없이 즉사 + 관리자 탐지 → bypassOffer 가 서고, exit 이벤트에도 실린다', () => {
+    const { manager, handles } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true })
+    const seen: ChatEvent[] = []
+    manager.subscribe((_id, e) => seen.push(e))
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'error: Could not parse project manifest' })
+
+    expect(manager.info(info.id)?.status).toBe('exited')
+    expect(seen).toEqual([
+      { type: 'exit', code: 8, errorDetail: 'error: Could not parse project manifest', bypassOffer: true }
+    ])
+    // state() 를 다시 불러도 — 탭을 전환해 pane 이 remount 되는 것과 같은 모양 — 같은 판정이 있다
+    expect(manager.state(info.id)?.bypassOffer).toBe(true)
+  })
+
+  // 근거 없이 짐작하지 않는다 — 죽은 모양이 같아도 관리자를 못 찾았으면 버튼을 내지 않는다. 눌러도
+  // 아무 일도 안 나는 버튼을, 확신에 찬 문구와 함께 내는 것이 이 조건이 막는 것이다.
+  it('죽은 모양은 같아도 관리자를 못 찾았으면 버튼을 내지 않는다', () => {
+    const { manager, handles } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' }) // bypassManagerDetected 없음
     const seen: ChatEvent[] = []
     manager.subscribe((_id, e) => seen.push(e))
 
     handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
 
-    // 두 번째 spawn 이 우회 env 를 지고 나간다 — 첫 번째는 그대로 둔다(S7: 항상 켜지는 않는다)
-    expect(spawned).toHaveLength(2)
-    expect(spawned[0].opts.env.VOLTA_BYPASS).toBeUndefined()
-    expect(spawned[1].opts.env.VOLTA_BYPASS).toBe('1')
-    // 같은 cwd·meta·provider 로, 같은 세션 id 에 다시 건다 — 새 id 를 만들면 탭·스케줄러·Slack·
-    // 롤 체인이 전부 고아가 된다
-    expect(spawned[1].opts.cwd).toBe(spawned[0].opts.cwd)
-    expect(spawned[1].opts.meta).toEqual(spawned[0].opts.meta)
-    expect(handles[1].provider).toBe(handles[0].provider)
-    expect(handles[1].startCalls).toEqual(handles[0].startCalls)
-
-    // 첫 exit 은 구독자에게 닿지 않는다 — 죽었다가 되살아난 게 아니라 뜨는 데 한 순간 더 걸린 것이다
-    expect(seen).toEqual([])
-    expect(manager.info(info.id)?.status).toBe('running')
-
-    await flushPromises()
-    // 재시도가 성공했다는 것은 반드시 말한다 — 우회가 사용자가 핀해 둔 것과 다른 버전을 띄웠을 수
-    // 있어서다. error 가 아니라 그 자신의 이벤트로: 종료 배너가 이것을 사유로 오해하면 안 된다
-    expect(seen).toEqual([{ type: 'notice', key: 'bypassed' }])
+    expect(seen).toEqual([{ type: 'exit', code: 8, errorDetail: null }]) // bypassOffer 칸 자체가 없다
+    expect(manager.state(info.id)?.bypassOffer).toBeUndefined()
   })
 
-  // 한 줄이라도 말했으면 실행은 된 것이다. 그 뒤의 죽음은 CLI 자신의 사정이고 우회가 고칠 것이 아니다
-  it('한 줄이라도 말한 뒤 죽으면 다시 띄우지 않는다', () => {
+  // 한 줄이라도 말했으면 실행은 된 것이다 — 관리자가 있어도 그 뒤의 죽음은 CLI 자신의 사정이다
+  it('한 줄이라도 말한 뒤 죽으면 관리자가 있어도 버튼을 내지 않는다', () => {
     const { manager, handles, spawned } = setup()
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true })
     spawned[0].proc.feed('{"jsonrpc":"2.0"}')
 
     handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
 
-    expect(spawned).toHaveLength(1)
-    expect(manager.info(info.id)?.status).toBe('exited')
+    expect(manager.state(info.id)?.bypassOffer).toBeUndefined()
   })
 
-  it('재시도도 죽으면 두 번째는 없다', async () => {
-    // startRejects: true — 두 시도 모두 handshake 가 끝내 완성되지 않는다. false 로 두면 가짜
-    // adapter 의 start() 가 (실제와 달리) exit 과 무관하게 성공해 버려 재시도가 "성공했다" 는 알림까지
-    // 동시에 나가는, 이 테스트가 보이려는 것과 다른 모양이 된다.
-    const { manager, handles, spawned } = setup('win32', true)
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
-    const exits: Array<{ sessionId: string; exitCode: number }> = []
-    manager.onExit = (e) => exits.push(e)
-    const seen: ChatEvent[] = []
-    manager.subscribe((_id, e) => seen.push(e))
-
-    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'first attempt tail' })
-    expect(spawned).toHaveLength(2) // the one retry
-
-    handles[1].emit({ type: 'exit', code: 9, errorDetail: 'second attempt tail' })
-    expect(spawned).toHaveLength(2) // and no third spawn
-
-    expect(manager.info(info.id)?.status).toBe('exited')
-    expect(manager.info(info.id)?.exitCode).toBe(9)
-    expect(exits).toEqual([{ sessionId: info.id, exitCode: 9 }])
-    // 재시도도 실패하면 두 시도의 stderr 를 함께 보여준다(design F5) — 라벨을 붙여서, 둘 다: 라벨이
-    // 없으면 한쪽의 말이 다른 쪽의 마지막 말인 것처럼 보인다(fix round 1, C 리뷰)
-    expect(seen).toEqual([
-      {
-        type: 'exit',
-        code: 9,
-        errorDetail: '[attempt 1, no bypass] first attempt tail\n---\n[attempt 2, with bypass] second attempt tail'
-      }
-    ])
-  })
-
-  // Fix round 2 (finding 2): live.adapter is attempt 2's alone, and its own state() only ever knew
-  // about attempt 2's raw tail — the merge above was applied to the *event*, forwarded once. A pane
-  // that pulls state() fresh (every mount, every tab switch — useChatState.ts) used to get that
-  // unmerged, often-empty attempt back, losing the one attempt that actually named the refusal.
-  it('두 시도 모두 죽은 뒤 state() 를 다시 불러도 병합된 사유가 그대로 있다', () => {
-    const { manager, handles, spawned } = setup('win32', true)
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
-
-    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'volta: could not parse package.json' })
-    expect(spawned).toHaveLength(2)
-    handles[1].emit({ type: 'exit', code: 1, errorDetail: null })
-
-    // 이벤트를 한 번도 못 들은 것처럼, 나중에 다시 state() 를 부른다 — 탭을 전환해 pane 이
-    // remount 되는 것과 같은 모양이다
-    const state = manager.state(info.id)
-    expect(state?.exitCode).toBe(1)
-    expect(state?.errorDetail).toBe(
-      '[attempt 1, no bypass] volta: could not parse package.json\n---\n[attempt 2, with bypass] (no output)'
-    )
-  })
-
-  // fix round 1: 한쪽이 비어 있어도 라벨은 둘 다 붙는다 — "관리자가 거절, 맨 실행은 조용히 죽음" 이
-  // 흔한 모양인데, 예전 방식(둘 다 있을 때만 이어붙임)은 이때 한쪽의 말을 다른 쪽 것처럼 보이게 했다.
-  it('한쪽 stderr 가 없어도 라벨은 둘 다 붙는다', () => {
-    const { manager, handles, spawned } = setup('win32', true)
-    manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
-    const seen: ChatEvent[] = []
-    manager.subscribe((_id, e) => seen.push(e))
-
-    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'volta: could not parse package.json' })
-    expect(spawned).toHaveLength(2)
-    handles[1].emit({ type: 'exit', code: 1, errorDetail: null })
-
-    expect(seen).toEqual([
-      {
-        type: 'exit',
-        code: 1,
-        errorDetail: '[attempt 1, no bypass] volta: could not parse package.json\n---\n[attempt 2, with bypass] (no output)'
-      }
-    ])
-  })
-
-  // fix round 1: 둘 다 4000자 가까이 길면, 통째로 뒤에서 자르는 방식은 2차 라벨까지 통째로 날려버릴
-  // 수 있다(계산해 보면 둘 다 4000자일 때 정확히 그렇게 된다) — 그래서 절반씩(2000자) 나눠 갖는다.
-  it('둘 다 길면 각자 절반(2000자)만 남고, 라벨은 둘 다 살아남는다', () => {
-    const { manager, handles, spawned } = setup('win32', true)
-    manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
-    const seen: ChatEvent[] = []
-    manager.subscribe((_id, e) => seen.push(e))
-
-    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'a'.repeat(5000) })
-    expect(spawned).toHaveLength(2)
-    handles[1].emit({ type: 'exit', code: 1, errorDetail: 'b'.repeat(5000) })
-
-    const detail = (seen[0] as { errorDetail: string }).errorDetail
-    expect(detail).toContain('[attempt 1, no bypass]')
-    expect(detail).toContain('[attempt 2, with bypass]')
-    // STDERR_TAIL_MAX(4000) 하나를 둘로 나눈 것 — 새 숫자를 만들지 않는다(설계 S3)
-    expect(detail).toContain('a'.repeat(2000))
-    expect(detail).not.toContain('a'.repeat(2001))
-    // 각 쪽에서도 꼬리(더 최근 것)가 남는다 — createStderrTail 과 같은 방향
-    expect(detail.endsWith('b'.repeat(2000))).toBe(true)
-  })
-
-  // C1: rolling.ts / codexRolling.ts 는 채팅 세션엔 자기 auto-prompt 를 안 보낸다 — "spawn 이 실어
-  // 준다" 고 믿기 때문이다. 1차 시도의 adapter.start() 는 reject 되므로(핸드셰이크가 못 끝났으니) 그
-  // .then() 은 끝내 안 돈다 — initialPrompt 를 보낼 자리 자체가 없다. 재시도가 유일한 전달 채널이다.
-  it('말없이 즉사해도 재시도가 성공하면 initialPrompt 를 그 재시도가 보낸다', async () => {
-    const { manager, handles, spawned } = setup('win32', false, false, undefined, true)
-    manager.spawn({ account: codexAccount, cwd: 'D:/proj', initialPrompt: 'carry on' })
-
-    handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
-    expect(spawned).toHaveLength(2)
-
-    await flushPromises()
-    expect(handles[0].sent).toEqual([]) // 죽은 1차는 보낸 적이 없다 — "아직 필요 없음"이 아니라 파괴된 것
-    expect(handles[1].sent).toEqual(['carry on']) // 재시도가 유일한 전달 채널
-  })
-
-  // C2: 재시도가 성공하고 한참 지나 평범하게(예: 코드 0, stderr 없이) 끝나는 죽음까지도
-  // firstFailure 를 들고 있으면 그 평범한 종료의 사유를 옛 toolchain 거절로 오염시킨다(설계 D2/T4
-  // 배너가 그것을 사유로 오해한다).
-  it('재시도가 성공하면 firstFailure 가 지워져 다음 종료를 오염시키지 않는다', async () => {
-    const { manager, handles, spawned } = setup()
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
-    const seen: ChatEvent[] = []
-    manager.subscribe((_id, e) => seen.push(e))
-
-    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'volta: could not parse package.json' })
-    expect(spawned).toHaveLength(2)
-    await flushPromises() // 재시도의 start() 가 리졸브 — notice 가 나가고 firstFailure 가 지워진다
-    expect(seen).toEqual([{ type: 'notice', key: 'bypassed' }])
-
-    // 두 시간 뒤, 이 세션은 평범하게 끝난다 — 옛 실패와는 무관하다
-    handles[1].emit({ type: 'exit', code: 0, errorDetail: null })
-    expect(manager.info(info.id)?.exitCode).toBe(0)
-    expect(seen.at(-1)).toEqual({ type: 'exit', code: 0, errorDetail: null }) // 병합되지 않은 그대로
-  })
-
-  // C3: 뜨는 데 시간이 걸리는 탭을 그 오 초 창 안에서 닫으면(kill), 그 죽음은 거절이 아니라 요청한
-  // 것이다 — 재시도가 걸리면 닫힌 탭 뒤에서 우회를 얹은 새 CLI 가 조용히 떠 버린다.
-  it('kill() 로 인한 죽음은 그 창 안이어도 재시도하지 않는다', () => {
-    const { manager, handles, spawned } = setup()
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+  // C3 의 이유가 여전히 맞다: 사람이 닫은 탭은 거절이 아니다 — 버튼을 내밀 이유가 없다
+  it('kill() 로 인한 죽음은 관리자가 있어도 버튼을 내지 않는다', () => {
+    const { manager, handles } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true })
 
     manager.kill(info.id)
-    expect(handles[0].killCalls).toBe(1)
     handles[0].emit({ type: 'exit', code: 8, errorDetail: null }) // kill() 이 부른 그 죽음
 
-    expect(spawned).toHaveLength(1) // 재시도 없음
     expect(manager.info(info.id)?.status).toBe('exited')
-    expect(manager.info(info.id)?.exitCode).toBe(8)
+    expect(manager.state(info.id)?.bypassOffer).toBeUndefined()
   })
 
-  // 중요: PTY_LOST_SIGHT_EXIT_CODE 는 "이 앱이 그 프로세스를 놓쳤다"이지 "그 프로세스가 끝났다"가
-  // 아니다(procFactory.ts) — Host 재연결 창 안에서 이 코드를 즉사로 읽으면, 첫 프로세스가 아직 살아
-  // 있는 채로 같은 id 아래 두 번째 CLI 가 뜬다.
-  it('PTY_LOST_SIGHT_EXIT_CODE 는 즉사로 읽지 않는다', () => {
-    const { manager, handles, spawned } = setup()
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+  // PTY_LOST_SIGHT_EXIT_CODE 는 "이 앱이 그 프로세스를 놓쳤다"이지 "그 프로세스가 끝났다"가 아니다
+  // (procFactory.ts) — 버튼을 눌러 다시 띄우면 아직 살아 있을 수도 있는 첫 프로세스 옆에 두 번째가 뜬다
+  it('PTY_LOST_SIGHT_EXIT_CODE 는 관리자가 있어도 버튼을 내지 않는다', () => {
+    const { manager, handles } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true })
 
     handles[0].emit({ type: 'exit', code: PTY_LOST_SIGHT_EXIT_CODE, errorDetail: null })
 
-    expect(spawned).toHaveLength(1) // 재시도 없음
-    expect(manager.info(info.id)?.status).toBe('exited')
-    expect(manager.info(info.id)?.exitCode).toBe(PTY_LOST_SIGHT_EXIT_CODE)
+    expect(manager.state(info.id)?.bypassOffer).toBeUndefined()
   })
 
-  // 중요: factory 나 makeAdapter 가 던지면, 이미 삼키기로 한 1차 exit 을 대신할 것이 없어진다 —
-  // 세션은 죽은 프로세스를 붙들고 'running'에 영영 머문다. respawnWithBypass 호출을 감싸서, 던지면
-  // 삼키려던 그 원래 exit 을 그대로 보고한다.
-  it('재시도 자체가 던지면 삼키려던 원래 exit 을 그대로 보고한다', () => {
-    const { manager, handles, spawned, logged } = setup('win32', false, false, 2) // 2번째 spawn(재시도)이 던진다
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
-    const exits: Array<{ sessionId: string; exitCode: number }> = []
-    manager.onExit = (e) => exits.push(e)
+  // adopt() 된 세션은 다시 지을 재료(retry)가 없다 — 이미 떠 있던 프로세스를 이 앱이 나중에 찾은
+  // 것뿐이라, 거절이라는 개념 자체가 성립하지 않는다
+  it('adopt 된 세션은 죽은 모양이 같아도 버튼을 내지 않는다', () => {
+    const { manager, handles } = setup()
+    const info = manager.adopt({
+      id: 'sess-adopted',
+      proc: new FakeProc(),
+      restore: { accountId: codexAccount.id, cwd: 'D:/proj', title: 'proj', provider: 'codex' },
+      truncated: false
+    })!
+
+    handles.at(-1)!.emit({ type: 'exit', code: 8, errorDetail: null })
+
+    expect(manager.state(info.id)?.bypassOffer).toBeUndefined()
+  })
+})
+
+describe('ChatSessionManager.retryWithBypass (design F5)', () => {
+  // 확인 창을 지나 사람이 누른 뒤에야 돈다 — 같은 세션 id 아래, 우회 env 를 얹어 다시 띄운다
+  it('버튼이 서 있는 세션에서 부르면, 같은 id·cwd·meta·provider 로 우회 env 를 얹어 다시 띄운다', async () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true })
     const seen: ChatEvent[] = []
     manager.subscribe((_id, e) => seen.push(e))
 
-    expect(() => handles[0].emit({ type: 'exit', code: 8, errorDetail: 'first tail' })).not.toThrow()
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'error: Could not parse project manifest' })
+    expect(manager.info(info.id)?.status).toBe('exited')
 
+    const retried = manager.retryWithBypass(info.id)
+
+    expect(spawned).toHaveLength(2)
+    expect(spawned[0].opts.env.VOLTA_BYPASS).toBeUndefined() // 첫 시도는 그대로 둔다 (S7)
+    expect(spawned[1].opts.env.VOLTA_BYPASS).toBe('1')
+    expect(spawned[1].opts.cwd).toBe(spawned[0].opts.cwd)
+    expect(spawned[1].opts.meta).toEqual(spawned[0].opts.meta) // 같은 id — 탭·스케줄러·Slack·롤이 고아가 안 된다
+    expect(handles[1].provider).toBe(handles[0].provider)
+
+    // 세션은 다시 산다 — 탭이 옛 종료 배너를 계속 보이면 안 된다
+    expect(retried?.status).toBe('running')
+    expect(retried).not.toHaveProperty('exitCode')
+    expect(manager.info(info.id)?.status).toBe('running')
+    expect(manager.state(info.id)?.bypassOffer).toBeUndefined() // 새 시도엔 아직 아무 판정도 없다
+
+    await flushPromises()
+    // 재시도가 성공했다는 것은 반드시 말한다 — 우회가 사용자가 핀해 둔 것과 다른 버전을 띄웠을 수
+    // 있어서다. error 가 아니라 그 자신의 이벤트로: 종료 배너가 이것을 사유로 오해하면 안 된다
+    expect(seen.at(-1)).toEqual({ type: 'notice', key: 'bypassed' })
+  })
+
+  it('말없이 즉사해도 재시도가 성공하면 initialPrompt 를 그 재시도가 보낸다', async () => {
+    // startRejectsOnce: 첫 시도의 handshake 가 끝내 완성되지 않는다 — 실제로 거절당한 CLI 의 모양과
+    // 같다. false 로 두면 가짜 adapter 의 start() 가 (실제와 달리) exit 과 무관하게 성공해 버려
+    // spawn() 자신의 이어달리기가 첫 시도에도 initialPrompt 를 보내 버린다.
+    const { manager, handles, spawned } = setup('win32', false, false, undefined, true)
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true, initialPrompt: 'carry on' })
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
+    manager.retryWithBypass(info.id)
+    expect(spawned).toHaveLength(2)
+
+    await flushPromises()
+    expect(handles[0].sent).toEqual([]) // 죽은 시도는 보낸 적이 없다
+    expect(handles[1].sent).toEqual(['carry on']) // 재시도가 유일한 전달 채널
+  })
+
+  // 버튼이 서 있지 않은 세션(평범한 종료, 아직 exit 이 없는 세션, 모르는 id)에 부르면 아무 일도
+  // 안 한다 — 확인 창을 지나지 않은 클릭이나 이미 재시도된 세션에 두 번째 우회를 얹으면 안 된다
+  it('버튼이 서 있지 않으면 아무 일도 하지 않는다', () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' }) // 관리자 미탐지
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
+
+    expect(manager.retryWithBypass(info.id)).toBeNull()
+    expect(spawned).toHaveLength(1) // 재시도 spawn 없음
+  })
+
+  it('모르는 id 에는 아무 일도 하지 않는다', () => {
+    const { manager, spawned } = setup()
+    expect(manager.retryWithBypass('nope')).toBeNull()
+    expect(spawned).toHaveLength(0)
+  })
+
+  // 성공한 재시도는 자신의 판정을 처음부터 다시 시작한다 — 재시도를 시작한 것 자체로 이미 새 시도가
+  // 열렸고, 그 시도가 어떻게 죽을지는 아직 아무도 모른다
+  it('재시도 자체는 즉시 bypassOffer 를 다시 false 로 돌린다', () => {
+    const { manager, handles } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true })
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
+    expect(manager.state(info.id)?.bypassOffer).toBe(true)
+
+    manager.retryWithBypass(info.id)
+    expect(manager.state(info.id)?.bypassOffer).toBeUndefined()
+  })
+
+  // 재시도 자체가 던지면(factory 가 실패하면), 이미 보고된 원래 exit 을 대신할 것이 필요 없다 — F1/F2
+  // 가 그 죽음을 즉시, 온전히 보고했으므로, 남는 일은 이 시도 자신의 실패를 로그하는 것뿐이다
+  it('재시도의 factory 가 던지면 로그만 하고 세션은 exited 로 남는다', () => {
+    const { manager, handles, spawned, logged } = setup('win32', false, false, 2) // 2번째 spawn(재시도)이 던진다
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true })
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'first tail' })
+
+    expect(manager.retryWithBypass(info.id)).toBeNull()
     expect(spawned).toHaveLength(1) // 재시도 spawn 은 던졌으니 배열에 없다
     expect(manager.info(info.id)?.status).toBe('exited')
     expect(manager.info(info.id)?.exitCode).toBe(8)
-    expect(exits).toEqual([{ sessionId: info.id, exitCode: 8 }])
-    expect(seen).toEqual([{ type: 'exit', code: 8, errorDetail: 'first tail' }])
-    expect(logged.some((m) => m.includes('bypass retry failed to start'))).toBe(true)
+    expect(logged.some((m) => m.includes('chat bypass retry failed to start'))).toBe(true)
   })
 
-  // Finding 4 (final review): the factory call above succeeds — a real (fake) child is spawned —
-  // before makeAdapter throws. Without a kill in between, that child has no map entry and no handle:
-  // the exact orphan the kill-detection work (C3) exists to prevent, reached through a different door.
+  // Finding 4 (final review, carried over): factory 호출은 실제로 자식을 띄운 뒤에 makeAdapter 가
+  // 던진다 — 그 자식이 맵에도 핸들에도 닿지 않는 고아로 남으면 안 된다
   it('재시도의 makeAdapter 가 던지면, 이미 뜬 우회 자식이 고아로 남지 않는다', () => {
     const { manager, handles, spawned, logged } = setup('win32', false, false, undefined, false, 2) // 2번째 adapter(재시도)가 던진다
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true })
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'first tail' })
 
-    expect(() => handles[0].emit({ type: 'exit', code: 8, errorDetail: 'first tail' })).not.toThrow()
-
+    expect(manager.retryWithBypass(info.id)).toBeNull()
     expect(spawned).toHaveLength(2) // 재시도의 factory 호출은 실제로 자식을 띄웠다
     expect(spawned[1].proc.killed).toBe(true) // ...하지만 makeAdapter 가 던졌으니 죽여서 고아로 안 남긴다
     expect(manager.info(info.id)?.status).toBe('exited')
-    expect(manager.info(info.id)?.exitCode).toBe(8)
-    expect(logged.some((m) => m.includes('bypass retry failed to start'))).toBe(true)
+    expect(logged.some((m) => m.includes('chat bypass retry failed to start'))).toBe(true)
   })
 
-  // C4: 1차 어댑터의 doStart 는 진짜로는 exit 이 삼켜진 뒤 한 틱 늦게 core.fail() 을 부른다
-  // (codexAdapter.ts / claudeAdapter.ts 의 doStart catch). 구독을 끊지 않으면 그 늦은 error 가 재시도
-  // 세션 밑에서 나온다 — chatBannerFor 는 error 를 notice 보다 위에 두므로, 멀쩡히 뜬 세션이 "턴이
-  // 실패했습니다"를 보인다.
-  it('1차 어댑터가 죽은 뒤 늦게 emit 해도 재시도 세션으로 새지 않는다', async () => {
-    const { manager, handles, spawned } = setup()
-    manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+  // 죽은 시도의 구독을 끊지 않으면, 그 시도의 늦은(한 틱 뒤) emit 이 재시도 세션 아래에서 나온다 —
+  // 실제 어댑터의 doStart catch 가 하는 일이 바로 이 모양이다(codexAdapter.ts / claudeAdapter.ts)
+  it('재시도 뒤에는 죽은 시도의 늦은 emit 이 새 세션으로 새지 않는다', async () => {
+    const { manager, handles } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true })
     const seen: ChatEvent[] = []
     manager.subscribe((_id, e) => seen.push(e))
 
     handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
-    expect(spawned).toHaveLength(2)
+    manager.retryWithBypass(info.id)
 
-    await Promise.resolve() // doStart 의 catch 가 실제로 core.fail() 을 부르는 그 한 틱 늦은 시점처럼
-    handles[0].emit({ type: 'error', message: 'stale: process ended' }) // 죽은 1차 어댑터의 뒤늦은 말
+    await Promise.resolve() // 죽은 어댑터의 doStart catch 가 실제로 core.fail() 을 부르는 그 한 틱 늦은 시점처럼
+    handles[0].emit({ type: 'error', message: 'stale: process ended' }) // 죽은 시도의 뒤늦은 말
 
     expect(seen.some((e) => e.type === 'error')).toBe(false) // 구독이 끊겨 아무 데도 안 닿는다
 
-    // 그 사이 재시도(handles[1]) 자신의 이벤트는 여전히 정상적으로 닿는다 — 끊은 건 1차뿐이다
+    // 그 사이 재시도(handles[1]) 자신의 이벤트는 여전히 정상적으로 닿는다 — 끊은 건 죽은 시도뿐이다
     handles[1].emit({ type: 'status', status: 'working' })
     expect(seen.some((e) => e.type === 'status')).toBe(true)
   })
 
-  // "말했다는 것"을 알려면 pane 이 열려 있어야 하는데, 롤링 재시작에서는 main 이 알림을 낼 때
-  // renderer 가 아직 탭을 만드는 중이다 — 이벤트 스트림만으론 늦게 뜬 pane 이 못 본다. state() 가
-  // 그 알림을 들고 있어야 한다(adapterCore.fail() 이 세우는 것과 같은 규칙: 알리는 게 아니라 기억).
+  // "말했다는 것"을 알려면 pane 이 열려 있어야 하는데, 롤링 재시작에서는 main 이 알림을 낼 때 renderer
+  // 가 아직 탭을 만드는 중이다 — 이벤트 스트림만으론 늦게 뜬 pane 이 못 본다. state() 가 그 알림을
+  // 들고 있어야 한다(adapterCore.fail() 이 세우는 것과 같은 규칙: 알리는 게 아니라 기억).
   it('알림은 state() 에도 남아 늦게 뜬 pane 에도 닿는다', async () => {
-    const { manager, handles, spawned } = setup()
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const { manager, handles } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true })
 
     handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
-    expect(spawned).toHaveLength(2)
+    manager.retryWithBypass(info.id)
     await flushPromises()
 
     expect(manager.state(info.id)?.notice).toBe('bypassed')
@@ -707,16 +660,16 @@ describe('ChatSessionManager — toolchain 우회 재시도', () => {
     expect(manager.state(info.id)?.notice).toBeNull()
   })
 
-  // Finding 7 (final review): 롤링 재시작의 첫 프롬프트는 respawnWithBypass 가 adapter.send 를
-  // 직접 부른다 — manager.send() 를 거치지 않는다. 그 경로에서 시작된 턴이 working 으로 넘어가는
-  // 것은 CLI 자신의 status 이벤트로 오므로, manager.send() 가 하는 것과 같은 지움을 handleEvent
-  // 자신이 status:'working' 에서 해야 한다 — 렌더러의 foldChatEvent 가 하는 것과 같은 규칙.
+  // Finding 7 (final review, carried over): 재시도의 첫 프롬프트는 respawnWithBypass 가 adapter.send 를
+  // 직접 부른다 — manager.send() 를 거치지 않는다. 그 경로에서 시작된 턴이 working 으로 넘어가는 것은
+  // CLI 자신의 status 이벤트로 오므로, manager.send() 가 하는 것과 같은 지움을 handleEvent 자신이
+  // status:'working' 에서 해야 한다 — 렌더러의 foldChatEvent 가 하는 것과 같은 규칙.
   it('working 상태가 되면(send() 를 거치지 않고도) 알림이 걷힌다', async () => {
-    const { manager, handles, spawned } = setup()
-    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const { manager, handles } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassManagerDetected: true })
 
     handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
-    expect(spawned).toHaveLength(2)
+    manager.retryWithBypass(info.id)
     await flushPromises()
     expect(manager.state(info.id)?.notice).toBe('bypassed')
 

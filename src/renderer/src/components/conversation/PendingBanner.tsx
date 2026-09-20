@@ -67,9 +67,13 @@ export function RunningNotice({
  *  `exitCode === null` keeps the old bare title), the one-line reason sits under it, and the rest of
  *  what the process said waits behind `detail`'s fold rather than spilling into the banner body.
  *
- *  `onRestart` gets a slot but no wiring here — starting a session over is its own path (a fresh
- *  spawn, not a click handler this component can reach), and pressing a button that silently drops the
- *  request is worse than not having one. */
+ *  `onRestart` is null unless design F5's own condition holds — a death that looks like a toolchain
+ *  refusal *and* a manager main actually found (`ChatState.bypassOffer`). ConversationPane.tsx is the
+ *  only caller that ever passes a function, and what it passes does not itself retry anything: it
+ *  opens the confirm dialog (BypassRetryDialog.tsx) that has to run first, because skipping a folder's
+ *  pinned toolchain is a judgement nobody but the person can make (design §4 F5's five-part copy).
+ *  A button that pressed straight through to the retry, with no chance to read what it gives up,
+ *  would be the same silent override S7 exists to forbid — just moved one click later. */
 export function ExitedNotice({
   onGoTerminal,
   exitCode = null,
