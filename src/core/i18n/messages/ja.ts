@@ -1109,6 +1109,13 @@ export const ja: Catalog = {
   'jobs.convergence.chip.repairing': '修正 {repairs}/{max}',
   'jobs.convergence.chip.reviewing': 'レビュー {round}/{max}',
   'jobs.convergence.chip.exhausted': '上限到達',
+  'jobs.convergence.chip.stopped': '修正停止',
+  'jobs.convergence.node.stopped': '自動修正を停止',
+  'jobs.convergence.node.stoppedWithCheck': '自動修正を停止 · {failed} 失敗',
+  'jobs.convergence.stop': '自動修正を停止',
+  'jobs.convergence.stopConfirmTitle': 'このタスクの自動修正を停止しますか?',
+  'jobs.convergence.stopConfirmBody':
+    '検査が失敗しても自動では修正せず、人に渡します。実行中の修正は最後まで進み、その判定はそのまま届きます。アプリから再開することはできません — このタスクを作り直す必要があります。',
   'jobs.convergence.check.passed': '通過',
   'jobs.convergence.check.failed': '失敗 (exit {code})',
   'jobs.convergence.check.timedOut': 'タイムアウト',

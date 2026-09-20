@@ -1136,6 +1136,13 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.convergence.chip.repairing': 'Fix {repairs}/{max}',
   'jobs.convergence.chip.reviewing': 'Review {round}/{max}',
   'jobs.convergence.chip.exhausted': 'Exhausted',
+  'jobs.convergence.chip.stopped': 'auto-fix off',
+  'jobs.convergence.node.stopped': 'auto-fix stopped',
+  'jobs.convergence.node.stoppedWithCheck': 'auto-fix stopped · {failed} failed',
+  'jobs.convergence.stop': 'Stop auto-fix',
+  'jobs.convergence.stopConfirmTitle': 'Stop auto-fix for this task?',
+  'jobs.convergence.stopConfirmBody':
+    'Failing checks will no longer be repaired automatically; they come to you instead. A repair already running finishes and its verdict still arrives. This cannot be turned back on from the app — the task would have to be created again.',
   'jobs.convergence.check.passed': 'passed',
   'jobs.convergence.check.failed': 'failed (exit {code})',
   'jobs.convergence.check.timedOut': 'timed out',

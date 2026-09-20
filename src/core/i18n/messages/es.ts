@@ -1125,6 +1125,13 @@ export const es: Catalog = {
   'jobs.convergence.chip.repairing': 'Corrección {repairs}/{max}',
   'jobs.convergence.chip.reviewing': 'Revisión {round}/{max}',
   'jobs.convergence.chip.exhausted': 'Agotado',
+  'jobs.convergence.chip.stopped': 'auto-reparación detenida',
+  'jobs.convergence.node.stopped': 'auto-reparación detenida',
+  'jobs.convergence.node.stoppedWithCheck': 'auto-reparación detenida · {failed} falló',
+  'jobs.convergence.stop': 'Detener auto-reparación',
+  'jobs.convergence.stopConfirmTitle': '¿Detener la auto-reparación de esta tarea?',
+  'jobs.convergence.stopConfirmBody':
+    'Las comprobaciones que fallen ya no se repararán automáticamente; pasarán a ti. Una reparación ya en curso llega hasta el final y su veredicto sigue llegando. Esto no se puede volver a activar desde la aplicación — habría que crear la tarea de nuevo.',
   'jobs.convergence.check.passed': 'superada',
   'jobs.convergence.check.failed': 'fallida (exit {code})',
   'jobs.convergence.check.timedOut': 'tiempo agotado',

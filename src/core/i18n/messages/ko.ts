@@ -1333,6 +1333,16 @@ export const ko = {
   'jobs.convergence.chip.repairing': '수정 {repairs}/{max}',
   'jobs.convergence.chip.reviewing': '검토 {round}/{max}',
   'jobs.convergence.chip.exhausted': '소진',
+  // 설계 §4(V3). 멈춘 Task 는 도는 Task 와 같은 줄을 달고 있으면 안 된다.
+  'jobs.convergence.chip.stopped': '수정 멈춤',
+  'jobs.convergence.node.stopped': '자동 수정 멈춤',
+  'jobs.convergence.node.stoppedWithCheck': '자동 수정 멈춤 · {failed} 실패',
+  'jobs.convergence.stop': '자동 수정 중지',
+  'jobs.convergence.stopConfirmTitle': '이 Task 의 자동 수정을 멈출까요?',
+  // 두 가지를 말한다. 되돌릴 수 없다는 것(서버에 --convergence on 이 없다)과, 지금 도는
+  // 수리는 죽지 않는다는 것 — 누르는 순간 워커가 사라진다고 읽히면 안 된다.
+  'jobs.convergence.stopConfirmBody':
+    '검사가 실패해도 더는 자동으로 고치지 않고 사람에게 넘깁니다. 지금 도는 수정은 끝까지 가고 그 판정은 그대로 옵니다. 다시 켜는 것은 앱에서 할 수 없습니다 — 이 Task 는 새로 만들어야 합니다.',
   // 검사 칩 툴팁 — "{이름} — {결과} ({지난 라운드 실제 시간})"
   'jobs.convergence.check.passed': '통과',
   'jobs.convergence.check.failed': '실패 (exit {code})',

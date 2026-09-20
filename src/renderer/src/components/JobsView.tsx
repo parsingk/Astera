@@ -120,7 +120,9 @@ function ConvergenceChipView({
       ? t('jobs.convergence.chip.repairing', { repairs: chip.repairs, max: chip.max })
       : chip.kind === 'reviewing'
         ? t('jobs.convergence.chip.reviewing', { round: chip.round, max: chip.max })
-        : t('jobs.convergence.chip.exhausted')
+        : chip.kind === 'stopped'
+          ? t('jobs.convergence.chip.stopped')
+          : t('jobs.convergence.chip.exhausted')
   return <span className={`jobs-ordinal jobs-conv jobs-conv--${chip.kind}`}>{text}</span>
 }
 

@@ -16,7 +16,7 @@ import { providerOf } from '../../../core/providers/meta'
 import { chainOf } from '../../../core/orchestration/graph'
 import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
-import { nodeMetaOf, retryingCheckOf, type NodeMeta } from '../../../core/orchestration/nodeMeta'
+import { canStopConvergence, nodeMetaOf, retryingCheckOf, type NodeMeta } from '../../../core/orchestration/nodeMeta'
 import { formatRunDuration } from '../../../core/run/duration'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
 import { runningCount } from '../../../core/orchestration/running'
@@ -33,7 +33,7 @@ import {
   UnlockIcon
 } from './JobIcons'
 import { NewTaskModal } from './NewTaskModal'
-import { ArrowUpRight, Play, Square, X } from 'lucide-react'
+import { ArrowUpRight, Play, Square, WrenchOff, X } from 'lucide-react'
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
  *  heartbeat 과 decision_gate 는 timeline.ts 의 SKIP 이 걸러 지금은 도달하지 않지만, 맵을
@@ -159,6 +159,10 @@ function metaText(m: NodeMeta, t: Translate): string | undefined {
   switch (m.kind) {
     case 'gate':
       return m.question
+    case 'stopped':
+      return m.failed === null
+        ? t('jobs.convergence.node.stopped')
+        : t('jobs.convergence.node.stoppedWithCheck', { failed: m.failed })
     case 'repairing':
       return m.failed === null
         ? t('jobs.convergence.node.repairingNoCheck', { repairs: m.repairs, max: m.max })
@@ -626,6 +630,35 @@ export function RunDetail({
     }
   }
 
+  /** 자동 수정 중지 (설계 §4.1 의 V3). 명세 §29 의 `Stop Auto-Fix` 다.
+   *
+   *  **묻고 나서 멈춘다.** 되돌릴 수 없다 — 서버에 `--convergence on` 이 없다("Task 는 Run 을
+   *  따른다"). 되돌릴 수 없는 버튼을 클릭 한 번 거리에 두지 않는 것은 위 mergeRunNow 와 같은
+   *  규칙이고, 확인 창이 그 사실을 말하는 것이 이 창이 있는 이유다. 함께 말하는 둘째: 지금 도는
+   *  수리는 끝까지 가고 그 판정이 Gate 로 온다 — 누르는 순간 워커가 죽는 것이 아니다. */
+  const stopConvergence = async (taskId: string): Promise<void> => {
+    if (
+      !(await confirmModal({
+        title: t('jobs.convergence.stopConfirmTitle'),
+        body: t('jobs.convergence.stopConfirmBody'),
+        confirmLabel: t('jobs.convergence.stop')
+      }))
+    )
+      return
+    setBusy(taskId)
+    try {
+      const reply = await window.api.orch.command(projectPath, 'task-update', {
+        id: taskId,
+        convergence: 'off'
+      })
+      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
+    } catch {
+      toast.error(t('jobs.node.failed'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   /** 다시 띄우기. task-update 로 상태를 ready 로 되돌린다 — 전이표(dispatched 에는 dispatched 가
    *  없다)를 일부러 우회하는 사람의 손보기 명령이다. **대가:** consecutiveFailures 도 함께 0 으로
    *  돌아간다 — task-update 가 회로 차단을 여는 유일한 길이라 그렇게 만들어져 있다. 실패 횟수를
@@ -857,6 +890,7 @@ export function RunDetail({
                 setGateError(null)
               }}
               onRestart={(taskId) => void restartTask(taskId)}
+              onStopConvergence={(taskId) => void stopConvergence(taskId)}
             />
           </div>
           <div className="detail-events">
@@ -1152,7 +1186,8 @@ function Graph({
   onStop,
   onGate,
   onAnswer,
-  onRestart
+  onRestart,
+  onStopConvergence
 }: {
   tasks: JobTask[]
   layers: string[][]
@@ -1182,6 +1217,9 @@ function Graph({
   /** 답하기 버튼을 누른 결과 — onGate 와 같은 관례로 명령을 보내지 않고 답을 쓸 폼을 연다 */
   onAnswer: (taskId: string) => void
   onRestart: (taskId: string) => void
+  /** 자동 수정 중지 (설계 §4.1). 누르면 확인 창을 먼저 띄운다 — 이 컴포넌트는 그것을 모르고,
+   *  onGate·onAnswer 와 같은 관례로 결과만 위로 올린다 */
+  onStopConvergence: (taskId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const byId = new Map(tasks.map((tk) => [tk.id, tk]))
@@ -1366,6 +1404,22 @@ function Graph({
                 }}
               >
                 <Play size={12} fill="currentColor" strokeWidth={0} />
+              </button>
+            )}
+            {/* 자동 수정 중지 (설계 §4.1, 명세 §29 의 Stop Auto-Fix). 보일 조건은 core 가 정한다 —
+                자동 수정이 걸려 있고, 아직 안 멈췄고, 끝나지 않은 Task 만. 되돌릴 수 없는 버튼이라
+                확인 창이 먼저 뜬다(RunDetail 의 stopConvergence). */}
+            {canStopConvergence(task) && (
+              <button
+                className="detail-node-btn"
+                title={t('jobs.convergence.stop')}
+                aria-label={t('jobs.convergence.stop')}
+                onClick={(ev) => {
+                  ev.stopPropagation()
+                  onStopConvergence(task.id)
+                }}
+              >
+                <WrenchOff size={12} strokeWidth={2} />
               </button>
             )}
           </span>
