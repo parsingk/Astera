@@ -158,3 +158,34 @@ export function isOverrideCompletion(
   if (wantsReview && task.reviewIssues === undefined) return true
   return false
 }
+
+/** 완료 정책의 지문 (설계 G3, 명세 §37).
+ *
+ *  **해시가 아니라 정규 문자열이다.** 설계는 `policyHash` 라고 적었지만 해시로 줄이면 충돌이 곧
+ *  "정책이 바뀌었는데 못 봤다" 가 되고, 그 실패는 조용하다. 검사 두세 개짜리 정책의 문자열은 200자
+ *  남짓이라 줄여서 얻을 것이 없고, 대신 저널에 남은 값을 사람이 읽을 수 있다.
+ *
+ *  담는 것은 **판정을 바꿀 수 있는 것만**이다(B6). 검사 구성은 `seedKeyOf` 로 찍는다 — 그 함수가
+ *  이미 "타입 + 이 구성을 그것이게 하는 핵심 값" 이고 이름·폴더처럼 판정과 무관한 칸을 뺀다. 이름만
+ *  고쳐도 "정책이 바뀌었다" 가 뜨면 이 표시는 곧 무시된다.
+ *
+ *  검사 목록은 **순서 그대로**다. 검사는 고른 순서로 돌고 첫 실패에서 멈추므로 순서가 판정을 바꾼다.
+ *
+ *  `keyOf` 가 null 을 주는 구성(지워졌다)은 `?` 로 남긴다 — 지워진 것과 바뀐 것을 구별하지 않는다:
+ *  둘 다 "그 라운드에 돌던 것이 지금 없다" 이고 사람이 볼 이유도 같다. */
+export function completionPolicyHash(
+  task: Pick<Task, 'validateConfigIds' | 'validateConfigId' | 'reviewRequested'>,
+  policy: ResolvedPolicy,
+  keyOf: (configId: string) => string | null
+): string {
+  const budget = [
+    policy.maxFixAttempts,
+    policy.maxReviewRounds,
+    policy.blockingSeverity,
+    policy.maxTotalMinutes ?? '-'
+  ].join('/')
+  const checks = checkConfigIdsOf(task)
+    .map((id) => `${id}=${keyOf(id) ?? '?'}`)
+    .join(',')
+  return `${budget}|${task.reviewRequested === true ? 'review' : 'no-review'}|${checks}`
+}

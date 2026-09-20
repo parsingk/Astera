@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   emptyState,
+  stampPolicySnapshot,
   createRun,
   createTask,
   openDispatch,
@@ -3340,5 +3341,55 @@ describe('interruptStalledTask — convergence Run 은 다시 돌린다', () => 
     const r = interruptStalledTask(v.state, { taskId }, LATER)
     expect(r).toMatchObject({ interrupted: 'review', resume: null })
     expect(r.state.gates).toHaveLength(1)
+  })
+})
+
+// 설계 G3(명세 §37·§36)
+describe('stampPolicySnapshot', () => {
+  /** seed() 는 부를 때마다 새 id 를 만든다 — 하나를 잡아 두고 쓴다 */
+  const armed = (): { s: OrchState; id: string } => {
+    const { s, taskId } = seed()
+    return { s, id: taskId }
+  }
+
+  it('처음이면 지문을 찍는다', () => {
+    const { s, id } = armed()
+    const next = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const t = next.tasks.find((x) => x.id === id)!
+    expect(t.policySnapshot).toEqual({ key: 'K1', capturedAt: NOW })
+    expect(t.policyChanged).toBeUndefined()
+  })
+
+  it('같은 지문이면 아무것도 바뀌지 않는다', () => {
+    const { s, id } = armed()
+    const first = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const again = stampPolicySnapshot(first, { taskId: id, key: 'K1' }, '2026-09-20T00:00:00.000Z')
+    const t = again.tasks.find((x) => x.id === id)!
+    expect(t.policySnapshot!.capturedAt).toBe(NOW)
+    expect(t.policyChanged).toBeUndefined()
+  })
+
+  // 막지 않는다 — 표시만 한다(설계 B7)
+  it('지문이 달라지면 표시를 세운다. 스냅숏은 처음 것 그대로다', () => {
+    const { s, id } = armed()
+    const first = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const changed = stampPolicySnapshot(first, { taskId: id, key: 'K2' }, '2026-09-20T00:00:00.000Z')
+    const t = changed.tasks.find((x) => x.id === id)!
+    expect(t.policyChanged).toBe(true)
+    expect(t.policySnapshot).toEqual({ key: 'K1', capturedAt: NOW })
+  })
+
+  // 되돌려 놓아도 "그 사이에 바뀌어 있었다" 는 사실은 남는다
+  it('한 번 세운 표시는 원래 지문으로 돌아와도 내리지 않는다', () => {
+    const { s, id } = armed()
+    const first = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const changed = stampPolicySnapshot(first, { taskId: id, key: 'K2' }, NOW)
+    const back = stampPolicySnapshot(changed, { taskId: id, key: 'K1' }, NOW)
+    expect(back.tasks.find((x) => x.id === id)!.policyChanged).toBe(true)
+  })
+
+  it('없는 Task 면 그대로 돌려준다', () => {
+    const { s } = armed()
+    expect(stampPolicySnapshot(s, { taskId: 'nope', key: 'K1' }, NOW)).toBe(s)
   })
 })

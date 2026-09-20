@@ -228,6 +228,14 @@ export interface Task {
   checkHistory?: Record<string, ('passed' | 'failed')[]>
   /** 마지막 검토의 이슈 전부, blocking 여부 포함 */
   reviewIssues?: ReviewIssue[]
+  /** 이 Task 가 처음 validating 이 될 때 찍은 완료 정책의 지문(설계 G3, 명세 §37).
+   *  `completionPolicyHash` 의 값이다 — 해시가 아니라 읽을 수 있는 정규 문자열이다. */
+  policySnapshot?: { key: string; capturedAt: string }
+  /** 그 지문이 라운드 사이에 달라졌다(명세 §36). **막지 않고 표시한다** — 사람이 검사를 정당하게
+   *  고쳤을 수 있고, 판정은 리뷰어와 사람의 몫이다(§38 이 의심 파일에 대해 하는 것과 같다).
+   *  한 번 참이면 그 Task 가 끝날 때까지 참이다: 되돌려 놓아도 "그 사이에 바뀌어 있었다" 는 사실은
+   *  남는다. */
+  policyChanged?: true
   /** 완료 정책을 만족하지 않은 채 사람이 완료로 옮겼다 (설계 G4, 명세 §30). 이유는 사람이 적은 것
    *  그대로다 — 저널의 TASK_COMPLETED_WITH_OVERRIDE 가 이 칸을 읽는다. */
   completionOverride?: { reason: string; at: string }

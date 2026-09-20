@@ -65,8 +65,12 @@ Gate 의 종류는 `convergence-exhausted` 그대로다 — 사람이 고를 것
 
 ## 4. G3 — 정책 스냅숏
 
-`Task.policySnapshot?: { hash: string; capturedAt: string }`. Task 가 처음 validating 이 될 때 찍는다
+`Task.policySnapshot?: { key: string; capturedAt: string }`. Task 가 처음 validating 이 될 때 찍는다
 (G2 의 시계와 같은 자리, 같은 이유).
+
+**`hash` 가 아니라 `key` 다 — 구현하면서 바꿨다.** 해시로 줄이면 충돌이 곧 "정책이 바뀌었는데 못
+봤다" 가 되고 그 실패는 조용하다. 검사 두세 개짜리 정책의 정규 문자열은 200자 남짓이라 줄여서 얻을
+것이 없고, 대신 저널에 남은 값을 사람이 읽을 수 있다.
 
 해시의 재료(`completionPolicyHash`, 순수 함수):
 
@@ -80,11 +84,16 @@ reviewRequested
 검사 정의를 어떻게 받는가: 해시 함수는 `(configId) => string | null` 하나를 받는다. core 는 RunConfig
 저장소를 모르고(그것은 main 의 것), 이 함수는 순수해야 테스트가 붙는다.
 
-라운드가 시작될 때 다시 계산해 스냅숏과 다르면 `Task.policyChanged = true`. 그 뒤로:
+라운드가 시작될 때 다시 계산해 스냅숏과 다르면 `Task.policyChanged = true`. 계산은 main 이 한다
+(`ipc.ts` 의 `startValidation`) — 검사 구성이 main 의 저장소에 있고 core 는 그것을 모른다. 그 자리는
+의심 파일 계산과 같다: 검증을 늦추지 않도록 큐에 넣은 뒤 옆에서 돈다. 그 뒤로:
 
 - 리뷰어 spec 에 한 줄이 더해진다 — 의심 파일 목록과 같은 자리, 같은 이유(명세 §38).
 - 완료 상세 블록이 그것을 말한다(`jobs.completion.policyChanged`).
-- 저널에 `TASK_POLICY_CHANGED`.
+- **저널 이벤트는 넣지 않았다.** 이 저장소의 저널은 Task 의 **상태 전이**에서 파생된다
+  (`continuity/events.ts` 의 `taskEvents`) — 정책이 바뀐 것은 전이가 아니라 칸 하나가 세워지는
+  것이고, 그것 하나를 위해 전이 없는 이벤트 경로를 새로 내는 것은 이 조각이 얻는 것보다 크다.
+  리뷰어 spec 과 화면 둘이 그 사실을 말하고, `Task.policyChanged` 자체가 durable 하다.
 
 **막지 않는다**(B7). 한 번 참이 되면 그 Task 가 끝날 때까지 참이다 — 되돌려 놓아도 "그 사이에 바뀌어
 있었다" 는 사실은 남는다.

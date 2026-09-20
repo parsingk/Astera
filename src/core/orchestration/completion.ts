@@ -31,6 +31,8 @@ export interface CompletionDetail {
   otherIssueCount: number
   /** 검사 설정을 건드린 파일(명세 §38). 리뷰어에게 넘어간 그 목록을 사람도 본다 */
   suspiciousFiles: string[]
+  /** 완료 정책의 지문이 라운드 사이에 달라졌다(설계 G3, 명세 §36·§37). 막지 않고 말하기만 한다 */
+  policyChanged: boolean
 }
 
 /**
@@ -51,13 +53,15 @@ export function completionDetailOf(task: Task): CompletionDetail | null {
   const issues = task.reviewIssues ?? []
   const blockingIssues = issues.filter((i) => i.blocking)
   const suspiciousFiles = task.suspiciousFiles ?? []
-  if (checks.length === 0 && issues.length === 0 && suspiciousFiles.length === 0) return null
+  const policyChanged = task.policyChanged === true
+  if (checks.length === 0 && issues.length === 0 && suspiciousFiles.length === 0 && !policyChanged) return null
   return {
     taskId: task.id,
     checks,
     blockingIssues,
     otherIssueCount: issues.length - blockingIssues.length,
-    suspiciousFiles
+    suspiciousFiles,
+    policyChanged
   }
 }
 

@@ -866,6 +866,24 @@ function routeFailure(
 const withConvergenceClock = (task: Task, now: string): Task =>
   task.convergenceStartedAt === undefined ? { ...task, convergenceStartedAt: now } : task
 
+/** 완료 정책의 지문을 찍거나, 달라졌으면 표시한다 (설계 G3, 명세 §37·§36).
+ *
+ *  라운드가 시작될 때마다 부른다. 처음이면 찍고, 이미 있는데 값이 다르면 `policyChanged` 를 세운다 —
+ *  **막지 않는다**(B7): 사람이 라운드 사이에 검사를 정당하게 고쳤을 수 있고, 그 판단은 리뷰어와
+ *  사람의 몫이다. 앱이 할 일은 그 사실이 눈에 띄게 하는 것이다.
+ *
+ *  한 번 세운 표시는 내리지 않는다. 되돌려 놓아도 "그 사이에 바뀌어 있었다" 는 사실은 남는다.
+ *
+ *  지문 계산은 부르는 쪽이 한다 — 검사 구성은 main 의 저장소에 있고 core 는 그것을 모른다. */
+export function stampPolicySnapshot(s: OrchState, a: { taskId: string; key: string }, now: string): OrchState {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return s
+  if (task.policySnapshot === undefined)
+    return { ...s, tasks: replace(s.tasks, { ...task, policySnapshot: { key: a.key, capturedAt: now } }) }
+  if (task.policySnapshot.key === a.key || task.policyChanged === true) return s
+  return { ...s, tasks: replace(s.tasks, { ...task, policyChanged: true as const }) }
+}
+
 export function beginValidation(s: OrchState, a: { taskId: string }, now: string): Res<Task> {
   const task = s.tasks.find((t) => t.id === a.taskId)
   if (!task) return err(`unknown task: ${a.taskId}`)

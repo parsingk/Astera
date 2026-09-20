@@ -3,6 +3,7 @@ import {
   DEFAULT_BLOCKING_SEVERITY,
   appendHistory,
   checkConfigIdsOf,
+  completionPolicyHash,
   isBlocking,
   isOverrideCompletion,
   latestImplDispatch,
@@ -257,5 +258,49 @@ describe('isOverrideCompletion', () => {
       reviewIssues: [{ id: 'i1', severity: 'low' as const, blocking: false, title: 't', description: 'd' }]
     }
     expect(isOverrideCompletion(t, pol)).toBe(false)
+  })
+})
+
+// 설계 G3(명세 §37)
+describe('completionPolicyHash', () => {
+  const pol: ResolvedPolicy = { maxFixAttempts: 3, maxReviewRounds: 2, blockingSeverity: 'high' }
+  const keys: Record<string, string> = { a: 'shell:npm test', b: 'shell:tsc --noEmit' }
+  const keyOf = (id: string): string | null => keys[id] ?? null
+  const h = (t: Parameters<typeof completionPolicyHash>[0], p = pol): string => completionPolicyHash(t, p, keyOf)
+
+  it('같은 정책이면 같다', () => {
+    expect(h({ validateConfigIds: ['a', 'b'] })).toBe(h({ validateConfigIds: ['a', 'b'] }))
+  })
+
+  // 검사는 고른 순서로 돌고 첫 실패에서 멈춘다 — 순서가 판정을 바꾼다
+  it('검사 순서가 다르면 다르다', () => {
+    expect(h({ validateConfigIds: ['a', 'b'] })).not.toBe(h({ validateConfigIds: ['b', 'a'] }))
+  })
+
+  it('검사가 실행하는 것이 바뀌면 다르다', () => {
+    const before = h({ validateConfigIds: ['a'] })
+    keys.a = 'shell:npm test -- --passWithNoTests'
+    expect(h({ validateConfigIds: ['a'] })).not.toBe(before)
+    keys.a = 'shell:npm test'
+  })
+
+  // 이름만 고쳐도 "정책이 바뀌었다" 가 뜨면 이 표시는 곧 무시된다. seedKeyOf 가 이름을 빼므로
+  // 이 함수는 그 성질을 물려받는다 — 같은 seedKey 면 같은 지문이다
+  it('구성이 같은 것을 가리키면 이름이 달라도 같다', () => {
+    expect(h({ validateConfigIds: ['a'] })).toBe(h({ validateConfigIds: ['a'] }))
+  })
+
+  it('예산 숫자가 바뀌면 다르다', () => {
+    expect(h({ validateConfigIds: ['a'] })).not.toBe(h({ validateConfigIds: ['a'] }, { ...pol, maxFixAttempts: 5 }))
+    expect(h({ validateConfigIds: ['a'] })).not.toBe(h({ validateConfigIds: ['a'] }, { ...pol, maxTotalMinutes: 30 }))
+  })
+
+  it('검토 요구 여부가 바뀌면 다르다', () => {
+    expect(h({ validateConfigIds: ['a'] })).not.toBe(h({ validateConfigIds: ['a'], reviewRequested: true }))
+  })
+
+  // 지워진 것과 바뀐 것을 구별하지 않는다 — 둘 다 "그 라운드에 돌던 것이 지금 없다" 이다
+  it('지워진 구성은 ? 로 남는다', () => {
+    expect(h({ validateConfigIds: ['gone'] })).toContain('gone=?')
   })
 })

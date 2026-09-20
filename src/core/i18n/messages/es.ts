@@ -1148,6 +1148,7 @@ export const es: Catalog = {
   'jobs.completion.blocking': '{n} hallazgos de revisión que bloquean',
   'jobs.completion.other': '{n} hallazgos más',
   'jobs.completion.suspicious': 'Archivos que cambiaron la configuración de comprobación',
+  'jobs.completion.policyChanged': 'La configuración de las comprobaciones cambió mientras esta tarea se ejecutaba. También se le avisó a la revisión.',
   'jobs.event.status': 'estado',
   'jobs.event.workerDone': 'informe del worker',
   'jobs.event.question': 'pregunta',

@@ -105,7 +105,7 @@ import {
   unreadUpwardMail
 } from '../core/orchestration/inbox'
 import { coordinatorLaunchPrompt } from '../core/orchestration/handover'
-import { detachCoordinator } from '../core/orchestration/state'
+import { detachCoordinator, stampPolicySnapshot } from '../core/orchestration/state'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import type { ChatAnswer, ChatContextUsage, RateLimitInfo } from '../core/chat/types'
 import { chatSessionUsage } from '../core/usage/chatSession'
@@ -122,7 +122,12 @@ import {
   worktreeDepsOf
 } from '../core/orchestration/integrate'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../core/orchestration/types'
-import { checkConfigIdsOf, policyOf, suspiciousCheckFiles } from '../core/orchestration/convergence'
+import {
+  checkConfigIdsOf,
+  completionPolicyHash,
+  policyOf,
+  suspiciousCheckFiles
+} from '../core/orchestration/convergence'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './orchestration/repair'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject, outcomeOf } from '../core/orchestration/view'
@@ -181,6 +186,7 @@ import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun, prepareLaunch } from './run/prepare'
+import { seedKeyOf } from '../core/run/config'
 import { executeLaunch } from './run/launch'
 import { resolveConsolePath } from './run/resolveLink'
 import { saveConfigsBatch } from './run/saveConfigs'
@@ -2732,6 +2738,7 @@ export function registerIpc(
           checks: task.checks,
           previousIssues: task.reviewIssues,
           suspiciousFiles: freshTask.suspiciousFiles,
+          policyChanged: freshTask.policyChanged === true,
           // review.ts·state.ts 가 이미 기대하는 이름과 같은 규칙이다 — 이 Dispatch 의 spec 파일
           // 이름(coordinator.ts 의 specFileName, startWorker 가 실제로 쓰는 그 이름)에
           // `.review.json` 을 붙인 것. **리터럴을 다시 적지 않는다** — 여기서 조립하는 시점에는
@@ -4097,7 +4104,26 @@ export function registerIpc(
         // 검증을 늦추지 않도록 큐에 넣은 뒤 옆에서 계산한다. 구현 Dispatch 가 없거나 의심 파일이
         // 없으면 아무것도 쓰지 않는다(빈 배열을 Task 에 남기지 않는다). 실패해도 검증 자체는 이미
         // 큐에 들어가 그대로 돈다 — 그래서 종단 .catch 는 로그만 남긴다.
-        if (!task || policyOf(store.get(), task) === null) return
+        const pol = task ? policyOf(store.get(), task) : null
+        if (!task || pol === null) return
+        // 설계 G3(명세 §37·§36): 이 라운드가 쓰는 완료 정책의 지문을 찍는다. 처음이면 스냅숏이 되고,
+        // 이미 있는데 달라졌으면 `policyChanged` 가 선다 — 막지 않고 표시한다.
+        //
+        // 구성 조회가 비동기라(loadRunConfigs) 의심 파일과 같은 자리에서, 검증을 늦추지 않도록 큐에
+        // 넣은 뒤 옆에서 한다. 실패해도 검증은 그대로 돈다 — 지문이 없으면 다음 라운드에 다시 찍는다.
+        void (async () => {
+          const { configs } = await loadRunConfigs({
+            projectPath: cwd,
+            stored: core.runConfig.get(cwd),
+            assertAllowedPath
+          })
+          const byId = new Map(configs.map((c) => [c.id, c]))
+          const key = completionPolicyHash(task, pol, (id) => {
+            const c = byId.get(id)
+            return c ? seedKeyOf(c) : null
+          })
+          await deps.setState(stampPolicySnapshot(store.get(), { taskId, key }, new Date().toISOString()))
+        })().catch((e) => orchLog(`policy snapshot task=${taskId}: ${String(e)}`))
         void (async () => {
           const first = firstImplDispatch(store.get(), taskId)
           if (!first) return

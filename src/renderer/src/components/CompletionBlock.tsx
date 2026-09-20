@@ -127,6 +127,12 @@ export function CompletionBlock({
             <p className="modal-hint">{t('jobs.completion.other', { n: detail.otherIssueCount })}</p>
           )}
 
+          {/* 설계 G3(명세 §36·§37) — 이 Task 가 도는 동안 완료 정책 자체가 달라졌다. 막지 않고
+              말하기만 한다: 정당한 수정일 수 있고, 판정은 리뷰어와 사람의 몫이다 */}
+          {detail.policyChanged && (
+            <p className="settings-cli-failed">{t('jobs.completion.policyChanged')}</p>
+          )}
+
           {/* 명세 §38 — 검사 설정을 건드린 파일. 리뷰어에게 넘어간 그 목록을 사람도 본다 */}
           {detail.suspiciousFiles.length > 0 && (
             <>
