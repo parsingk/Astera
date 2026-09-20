@@ -689,8 +689,8 @@ export const ko = {
   'session.new.cliMissingPost': '설치 후 다시 시도하세요.',
   // "설치돼 있지 않다"와 "이 폴더에서는 실행되지 않는다"는 사람이 할 일이 다르다 — 앞은 설치,
   // 뒤는 폴더나 toolchain 설정이다. 그 차이를 문구가 말한다(설계 D3).
-  'session.new.cliFailsHere': '{cli} 가 이 폴더에서 실행되지 않습니다 — {reason}',
-  // 검사가 10초 동안 아무 말 없이 죽었을 때(shell:true 셔틀이 매달림) — 사유가 없다고 "undefined"
+  'session.new.cliFailsHere': '{cli} 가 이 폴더에서 실행되지 않습니다: {reason}',
+  // 검사가 10초 동안 아무 말 없이 죽었을 때(shell:true 셔틀이 매달림) — 사유가 없다고 ": undefined"
   // 를 보여줄 수는 없으니, 이유 없이도 말이 되는 문장을 따로 둔다.
   'session.new.cliFailsHereUnknown': '{cli} 가 이 폴더에서 실행되지 않습니다.',
   'session.field.projectFolder': '프로젝트 폴더',
@@ -1543,12 +1543,6 @@ export const ko = {
   'conversation.exited.bypassConfirm.givesUpLabel': '무엇을 포기하나',
   'conversation.exited.bypassConfirm.givesUp':
     '이 프로젝트에 핀해 둔 도구 버전입니다. 이 세션뿐 아니라 이 세션이 실행하는 모든 명령(에이전트가 돌리는 npm test, npm run build, node …)이 핀된 버전이 아니라 기본 버전으로 돕니다. 같은 명령이 당신 터미널에서와 다른 결과를 낼 수 있습니다.',
-  'conversation.exited.bypassConfirm.scopeLabel': '얼마나 / 무엇이 바뀌나',
-  // fix round 1 (Important 3, 롤 승계): 사용량 한도로 다른 계정으로 넘어갈 때 이어받는 세션도
-  // 같은 우회를 물려받는다 — 그 사실이 여기 빠지면, 승계 자체는 조용히 일어나는데 이 창은 "이
-  // 세션뿐"이라 말한 게 된다. 그래서 승계 문장을 더했다.
-  'conversation.exited.bypassConfirm.scope':
-    '이 세션이 사는 동안입니다. 이 세션이 사용량 한도에 걸려 다른 계정으로 넘어갈 때 이어받는 세션에도 같이 적용됩니다. 다른 세션과 터미널은 그대로이고, 파일도 설정도 건드리지 않습니다. 되돌리려면 이 세션(과 그 뒤를 잇는 세션)을 닫고 새로 시작하면 됩니다.',
   'conversation.exited.bypassConfirm.properFixLabel': '제대로 된 해결',
   'conversation.exited.bypassConfirm.properFix': 'package.json 을 고치면 이 창은 다시 뜨지 않습니다.',
   'conversation.exited.bypassConfirm.confirm': '건너뛰고 다시 시도',

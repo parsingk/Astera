@@ -7,9 +7,15 @@ import type { MessageKey } from "../../../../core/i18n";
 /** design §4 F5's confirmation — the one deliberate exception to this branch's one-or-two-line rule
  *  (S1). Pressing the exit banner's button never retries anything by itself; it opens this, because
  *  skipping a folder's pinned toolchain is a judgement nobody but the person can make, and stripping
- *  the facts down to a button would leave them nothing to judge with. The five things it has to say
- *  are the spec's own list, in the spec's own order: what blocked the CLI, what skipping does, what
- *  it costs, how long that lasts, and the fix that makes this dialog stop appearing.
+ *  the facts down to a button would leave them nothing to judge with. What it says is the spec's own
+ *  list, in the spec's own order: what blocked the CLI, what skipping does, what it costs, and the
+ *  fix that makes this dialog stop appearing.
+ *
+ *  The spec's fifth section ("how long / what changes") was dropped at the user's request after they
+ *  read the rendered dialog. Its two load-bearing facts are not lost: "what it costs" already says the
+ *  bypass reaches every command the session runs, and the durable `notice` on the session says the
+ *  session came up bypassed for as long as it lives. What went with it is the sentence about a rolled
+ *  session inheriting the bypass — worth putting back somewhere shorter if anyone is surprised by it.
  *
  *  Built as its own small modal rather than through `lib/confirm.ts` (ConfirmHost.tsx): that store's
  *  `body` is one plain string rendered in one `<p>`, with no room for five labelled sections or the
@@ -56,7 +62,8 @@ export function BypassRetryDialog({
   const section = (labelKey: MessageKey, bodyKey: MessageKey, suffix?: string): ReactNode => (
     <p className="confirm-text">
       <strong>{t(labelKey)}</strong>
-      {" — "}
+      {/* 라벨과 본문 사이는 굵기만으로 가른다. 대시를 쓰지 않는다 — 사용자 요청. */}
+      {" "}
       {t(bodyKey)}
       {suffix ?? ""}
     </p>
@@ -76,7 +83,6 @@ export function BypassRetryDialog({
         {section("conversation.exited.bypassConfirm.whatBlockedLabel", whatBlockedKey, lineSuffix)}
         {section("conversation.exited.bypassConfirm.ifSkippedLabel", "conversation.exited.bypassConfirm.ifSkipped")}
         {section("conversation.exited.bypassConfirm.givesUpLabel", "conversation.exited.bypassConfirm.givesUp")}
-        {section("conversation.exited.bypassConfirm.scopeLabel", "conversation.exited.bypassConfirm.scope")}
         {section("conversation.exited.bypassConfirm.properFixLabel", "conversation.exited.bypassConfirm.properFix")}
         <div className="row right">
           <button type="button" onClick={onCancel}>

@@ -575,9 +575,9 @@ export const es: Catalog = {
   'session.new.cliMissingPost': 'Instálelo y vuelva a intentarlo.',
   // "No instalado" y "no se ejecuta en esta carpeta" requieren arreglos distintos — el primero es una
   // instalación, el segundo es la carpeta o la configuración del toolchain. El texto marca esa diferencia (diseño D3).
-  'session.new.cliFailsHere': '{cli} no se ejecuta en esta carpeta — {reason}',
+  'session.new.cliFailsHere': '{cli} no se ejecuta en esta carpeta: {reason}',
   // Para cuando la comprobación muere en su límite de 10s sin decir nada (un shim de shell:true
-  // colgado) — "no se ejecuta en esta carpeta" es honesto por sí solo; añadir "— undefined" no lo es.
+  // colgado) — "no se ejecuta en esta carpeta" es honesto por sí solo; añadir ": undefined" no lo es.
   'session.new.cliFailsHereUnknown': '{cli} no se ejecuta en esta carpeta.',
   'session.field.projectFolder': 'Carpeta del proyecto',
   'session.field.account': 'Cuenta',
@@ -648,23 +648,17 @@ export const es: Catalog = {
   'conversation.exited.bypassConfirm.title': '¿Omitir la configuración de toolchain de esta carpeta y reintentar?',
   'conversation.exited.bypassConfirm.whatBlockedLabel': 'Qué lo bloqueó',
   'conversation.exited.bypassConfirm.whatBlocked':
-    'No fue la CLI — el gestor de versiones de herramientas por delante en el PATH (Volta) se negó a ejecutarse. Necesita leer el package.json de esta carpeta para elegir una versión, y no pudo',
+    'No fue la CLI. El gestor de versiones de herramientas por delante en el PATH (Volta) se negó a ejecutarse. Necesita leer el package.json de esta carpeta para elegir una versión, y no pudo',
   // fix round 1 / Important 4: usada cuando solo coincidió la señal más débil (VOLTA_HOME). Que
   // Volta esté instalado en esta máquina es un hecho; que haya bloqueado *esta* CLI no lo es — Volta
   // puede estar gestionando Node mientras esta CLI es una instalación aparte que bloqueó un antivirus.
   'conversation.exited.bypassConfirm.whatBlockedSoft':
-    'No necesariamente la CLI misma — un gestor de versiones de herramientas (Volta) instalado en esta máquina podría ser la causa. Si esta CLI es una de las que gestiona, Volta por delante en el PATH pudo haberse negado a ejecutarse al intentar leer el package.json de esta carpeta para elegir una versión',
+    'No necesariamente la CLI misma. Un gestor de versiones de herramientas (Volta) instalado en esta máquina podría ser la causa. Si esta CLI es una de las que gestiona, Volta por delante en el PATH pudo haberse negado a ejecutarse al intentar leer el package.json de esta carpeta para elegir una versión',
   'conversation.exited.bypassConfirm.ifSkippedLabel': 'Si lo omites',
   'conversation.exited.bypassConfirm.ifSkipped': 'Se omite la resolución de versión y se ejecuta la CLI que quede por defecto en el PATH. La sesión se inicia.',
   'conversation.exited.bypassConfirm.givesUpLabel': 'Qué se pierde',
   'conversation.exited.bypassConfirm.givesUp':
-    'La versión de la herramienta fijada para este proyecto. No solo esta sesión — todos los comandos que ejecute (el propio npm test, npm run build, node … del agente) se ejecutarán con la versión por defecto, no con la fijada. El mismo comando puede dar un resultado distinto al de tu terminal.',
-  'conversation.exited.bypassConfirm.scopeLabel': 'Cuánto dura / qué cambia',
-  // fix round 1 (Important 3, herencia en el roll): una sesión a la que esta pasa el testigo por un
-  // límite de uso hereda el mismo bypass — omitir esto haría que el cuadro dijera "solo esta sesión"
-  // mientras la herencia ocurre en silencio por debajo.
-  'conversation.exited.bypassConfirm.scope':
-    'Mientras viva esta sesión, y también en la sesión a la que pase el testigo si un límite de uso cambia de cuenta. Las demás sesiones y terminales quedan igual, y no se toca ningún archivo ni configuración. Para revertirlo, cierra esta sesión (y la que haya heredado el testigo) e inicia una nueva.',
+    'La versión de la herramienta fijada para este proyecto. No solo esta sesión: todos los comandos que ejecute (el propio npm test, npm run build, node … del agente) se ejecutarán con la versión por defecto, no con la fijada. El mismo comando puede dar un resultado distinto al de tu terminal.',
   'conversation.exited.bypassConfirm.properFixLabel': 'La solución real',
   'conversation.exited.bypassConfirm.properFix': 'Si arreglas el package.json, este cuadro no volverá a aparecer.',
   'conversation.exited.bypassConfirm.confirm': 'Omitir y reintentar',

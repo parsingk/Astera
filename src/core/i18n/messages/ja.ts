@@ -568,9 +568,9 @@ export const ja: Catalog = {
   'session.new.cliMissingPost': 'インストール後に再試行してください。',
   // 「インストールされていない」と「このフォルダーでは実行できない」は対処が違う — 前者はインストール、
   // 後者はフォルダーや toolchain 設定の問題。その違いを文言で分ける(設計 D3)。
-  'session.new.cliFailsHere': '{cli} はこのフォルダーで実行できません — {reason}',
+  'session.new.cliFailsHere': '{cli} はこのフォルダーで実行できません: {reason}',
   // 10秒のタイムアウトまで何も言わずに死んだとき用(shell:true のシムがハングした場合) —
-  // 理由なしでも文になる文言を別に用意する。「— undefined」は文にならない。
+  // 理由なしでも文になる文言を別に用意する。「: undefined」は文にならない。
   'session.new.cliFailsHereUnknown': '{cli} はこのフォルダーで実行できません。',
   'session.field.projectFolder': 'プロジェクトフォルダ',
   'session.field.account': 'アカウント',
@@ -651,12 +651,6 @@ export const ja: Catalog = {
   'conversation.exited.bypassConfirm.givesUpLabel': '何を諦めるか',
   'conversation.exited.bypassConfirm.givesUp':
     'このプロジェクトに固定したツールバージョンです。このセッションだけでなく、このセッションが実行するすべてのコマンド(エージェントが実行する npm test、npm run build、node …)が固定バージョンではなくデフォルトバージョンで動きます。同じコマンドでも、あなたのターミナルとは異なる結果になることがあります。',
-  'conversation.exited.bypassConfirm.scopeLabel': 'どれくらい/何が変わるか',
-  // fix round 1(Important 3、ロール継承): 利用上限で別アカウントに切り替わるとき、引き継ぐ
-  // セッションにも同じバイパスが適用される — この一文がないと、継承自体は裏で静かに起きるのに
-  // このダイアログは「このセッションだけ」と言ってしまう。
-  'conversation.exited.bypassConfirm.scope':
-    'このセッションが生きている間、そして利用上限で別アカウントに切り替わって引き継ぐセッションにも適用されます。他のセッションやターミナルはそのままで、ファイルも設定も変更しません。元に戻すには、このセッション(と引き継いだセッション)を閉じて新しく始めてください。',
   'conversation.exited.bypassConfirm.properFixLabel': '本当の解決',
   'conversation.exited.bypassConfirm.properFix': 'package.json を修正すれば、このダイアログは再び表示されません。',
   'conversation.exited.bypassConfirm.confirm': 'スキップして再試行',
