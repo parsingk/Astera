@@ -890,6 +890,22 @@ describe('snapshotFor — 검사 결과와 자동 수정 진행', () => {
     })
   })
 
+  // repairCountOf 는 예산을 넘겨 셀 수 있다 — grantedExtra 로 연 여분의 repair, 혹은 크래시로 잃은 repair 와
+  // 그 recovery 의 replacement 를 둘 다 세는 경우(repair.ts 의 repairSpec 주석과 같은 셈). 분모는 예산이므로
+  // 화면은 "수정 4/3" 을 보이면 안 된다 — 클램프한다
+  it('repairs 는 maxFixAttempts 를 넘지 않는다 — 예산을 넘겨 셀 수 있어도 클램프한다', () => {
+    const s: OrchState = {
+      ...withRuns([{ ...run('r1', absPath('p')), convergence: { maxFixAttempts: 3 } }], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [
+        { ...dispatch('d1', 't1', 's1', '2026-08-18T01:00:00.000Z'), endedAt: '2026-08-18T01:10:00.000Z', outcome: 'failed', repair: 'check-failure' },
+        { ...dispatch('d2', 't1', 's2', '2026-08-18T01:10:00.000Z'), endedAt: '2026-08-18T01:20:00.000Z', outcome: 'failed', repair: 'check-failure' },
+        { ...dispatch('d3', 't1', 's3', '2026-08-18T01:20:00.000Z'), endedAt: '2026-08-18T01:30:00.000Z', outcome: 'failed', repair: 'check-failure' },
+        { ...dispatch('d4', 't1', 's4', '2026-08-18T01:30:00.000Z'), repair: 'check-failure' }
+      ]
+    }
+    expect(taskOf(s).convergence).toMatchObject({ repairs: 3, maxFixAttempts: 3 })
+  })
+
   it('repair 가 아닌 Dispatch 가 도는 중이면 repairing 은 null, 사람이 껐으면 stopped', () => {
     const s: OrchState = {
       ...withRuns(

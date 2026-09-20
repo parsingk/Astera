@@ -21,6 +21,19 @@ export const firstBlockedCheck = (task: Pick<JobTask, 'checks'>): JobCheck | nul
 /** 그 검사의 이름 — meta 줄이 부르는 것 */
 export const firstBlocked = (task: Pick<JobTask, 'checks'>): string | null => firstBlockedCheck(task)?.name ?? null
 
+/** validating 인 Task 에서 **지금 다시 도는 검사**. 검사는 고른 순서로 돌고 첫 실패에서 멈추므로(validator),
+ *  다시 도는 순간 화면이 아는 것은 지난 라운드에 어디서 멈췼는가뿐이다(U12) — 그 검사가 다시 도는 중이라는
+ *  뜻이라 firstBlockedCheck 를 그대로 가리킨다. **지난 라운드가 막힌 데 없이 전부 통과했을 때**(검토 실패로
+ *  되돌아와 다시 validating 이 된 Task — 검토까지 갔다는 것 자체가 지난 라운드는 다 통과했다는 뜻이다)는
+ *  firstBlockedCheck 가 null 을 주는데, 거기서 그대로 null 을 돌려주면 칩 줄이 전부 ✓ 로 서서 "지금 도는
+ *  검사가 없다"고 거짓말한다 — 실제로는 처음부터 다시 돈다. 그 라운드가 도는 순서는 고른 순서 그대로이므로
+ *  가리킬 것은 그 순서의 첫 검사다. validating 이 아니거나 검사 자체가 없으면(첫 라운드) null. */
+export const retryingCheckOf = (task: Pick<JobTask, 'status' | 'checks'>): JobCheck | null => {
+  if (task.status !== 'validating') return null
+  if (!task.checks || task.checks.length === 0) return null
+  return firstBlockedCheck(task) ?? task.checks[0]
+}
+
 /** 제목 아래 한 줄. 위에서부터 첫 규칙이 이긴다 — Gate 질문 → 막힌 검사 → 도는 검사 → 검토 라운드 → provider.
  *  앞의 셋은 자동 수정 Run 이 아니어도 나온다(U2): 사람이 알아야 할 것은 provider 보다 어느 검사가 막혔는가다(U7). */
 export function nodeMetaOf(task: JobTask): NodeMeta {
@@ -28,8 +41,10 @@ export function nodeMetaOf(task: JobTask): NodeMeta {
   const conv = task.convergence
   if (conv?.repairing) return { kind: 'repairing', repairs: conv.repairs, max: conv.maxFixAttempts, failed: firstBlocked(task) }
   // validator 는 라운드 끝에 한 번 결과를 준다 — 도는 동안 화면이 아는 것은 지난 라운드뿐이다(U12). "지금 도는
-  // 검사" 를 지어내지 않고 지난 라운드에 막힌 것을 가리킨다: 그것이 다시 도는 중이라는 뜻이다.
-  if (task.status === 'validating') return { kind: 'checking', retrying: firstBlocked(task) }
+  // 검사" 를 지어내지 않고 지난 라운드에 막힌 것을 가리킨다: 그것이 다시 도는 중이라는 뜻이다. retryingCheckOf
+  // 를 그대로 쓴다 — ● 로 그릴 칩과 여기 문구가 서로 다른 검사를 가리키면 안 되므로 판정을 두 곳에 따로 적지
+  // 않는다(RunDetail 이 같은 함수를 쓴다).
+  if (task.status === 'validating') return { kind: 'checking', retrying: retryingCheckOf(task)?.name ?? null }
   // reviewRound 는 끝난 라운드 수 — 진행 중인 것은 그다음 번호다. 첫 검토 중에 "0/2" 라고 쓰면 시작도 안 한 것처럼 읽힌다
   if (task.status === 'reviewing' && conv) return { kind: 'reviewing', round: conv.reviewRound + 1, max: conv.maxReviewRounds }
   // failed 상태에만 — --retry-of 로 다시 띄운 dispatched Task 도 지난 라운드의 실패를 들고 있는데, 그 줄이 "실패"

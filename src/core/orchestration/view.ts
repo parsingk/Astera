@@ -211,7 +211,15 @@ function jobTaskOf(
     ...(policy
       ? {
           convergence: {
-            repairs: repairCountOf(state, task.id),
+            // repairCountOf 는 실제로 연 repair Dispatch 수를 세는데, 그 수가 maxFixAttempts 를 넘을 수 있다 —
+            // (1) 사람이 소진된 Gate 에 "한 번 더 수정"으로 답하면 예산 밖의 repair 가 열리고(Dispatch.grantedExtra),
+            // (2) 크래시로 repair Dispatch 를 잃으면 그것과 복구가 새로 여는 replacement 가 둘 다 `.repair` 를 달고
+            // 남는다(repair.ts 의 repairSpec 주석 — 유령이 영영 세어진다). 두 경우 다 Task 는 dispatched 에 repair
+            // 가 열려 있어 칩이 그려지고, 클램프 없이는 "수정 4/3" 처럼 분모를 넘는 값을 그대로 보였다.
+            // 분모는 예산이므로 여기서 맞춘다: 크래시 쪽은 유령이 부풀린 값이라 셀 것이 아니고, grantedExtra 쪽은
+            // 예산을 실제로 다 썼으므로 3/3 이 진행을 속이는 거짓말이 아니다. grantedExtra 를 스냅숏에 실어
+            // "3/3 (+1 허락)" 같은 별도 문구를 쓰는 것이 더 나은 답이지만 다음 조각의 Completion 블록 몫이다.
+            repairs: Math.min(repairCountOf(state, task.id), policy.maxFixAttempts),
             maxFixAttempts: policy.maxFixAttempts,
             reviewRound: reviewRoundOf(state, task.id),
             maxReviewRounds: policy.maxReviewRounds,

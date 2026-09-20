@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { convergenceChipOf, firstBlocked, firstBlockedCheck, nodeMetaOf } from './nodeMeta'
+import { convergenceChipOf, firstBlocked, firstBlockedCheck, nodeMetaOf, retryingCheckOf } from './nodeMeta'
 import type { JobCheck, JobConvergence, JobTask } from '../types'
 
 const check = (name: string, status: JobCheck['status']): JobCheck => ({ configId: name.toLowerCase(), name, status })
@@ -17,6 +17,43 @@ describe('firstBlocked', () => {
     expect(firstBlocked({ checks: [check('A', 'passed')] })).toBeNull()
     expect(firstBlocked({})).toBeNull()
     expect(firstBlockedCheck({ checks: failing })?.configId).toBe('tests')
+  })
+})
+
+describe('retryingCheckOf', () => {
+  // 검토 실패로 되돌아온 Task 는 지난 라운드가 전부 통과했으니 검토까지 간 것이다 — firstBlockedCheck 는
+  // null 을 주지만, 그 라운드는 다시 처음부터 돈다(고른 순서대로, 첫 실패에서 멈추는 validator 의 규칙)
+  it('지난 라운드에 막힌 것이 없으면(검토 실패로 되돌아온 라운드) 첫 검사를 가리킨다', () => {
+    const passedAll = [check('Typecheck', 'passed'), check('Tests', 'passed')]
+    expect(retryingCheckOf(task({ status: 'validating', checks: passedAll }))?.name).toBe('Typecheck')
+  })
+
+  it('지난 라운드에 막힌 것이 있으면 그 검사를 가리킨다', () => {
+    expect(retryingCheckOf(task({ status: 'validating', checks: failing }))?.name).toBe('Tests')
+  })
+
+  it('validating 이 아니면 null', () => {
+    expect(retryingCheckOf(task({ status: 'dispatched', checks: failing }))).toBeNull()
+  })
+
+  it('검사 자체가 없으면(첫 라운드) null', () => {
+    expect(retryingCheckOf(task({ status: 'validating' }))).toBeNull()
+  })
+
+  // ● 칩(RunDetail)과 meta 문구(nodeMetaOf)가 서로 다른 검사를 가리키면 안 된다 — checking.retrying 은 이
+  // 함수를 그대로 쓴다
+  it('nodeMetaOf 의 checking.retrying 과 항상 일치한다', () => {
+    const passedAll = [check('Typecheck', 'passed'), check('Tests', 'passed')]
+    const rerunningFromReview = task({ status: 'validating', checks: passedAll })
+    const rerunningBlocked = task({ status: 'validating', checks: failing })
+    expect(nodeMetaOf(rerunningFromReview)).toEqual({
+      kind: 'checking',
+      retrying: retryingCheckOf(rerunningFromReview)?.name ?? null
+    })
+    expect(nodeMetaOf(rerunningBlocked)).toEqual({
+      kind: 'checking',
+      retrying: retryingCheckOf(rerunningBlocked)?.name ?? null
+    })
   })
 })
 

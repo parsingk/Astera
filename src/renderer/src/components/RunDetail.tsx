@@ -16,7 +16,7 @@ import { providerOf } from '../../../core/providers/meta'
 import { chainOf } from '../../../core/orchestration/graph'
 import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
-import { firstBlockedCheck, nodeMetaOf, type NodeMeta } from '../../../core/orchestration/nodeMeta'
+import { nodeMetaOf, retryingCheckOf, type NodeMeta } from '../../../core/orchestration/nodeMeta'
 import { formatRunDuration } from '../../../core/run/duration'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
 import { runningCount } from '../../../core/orchestration/running'
@@ -1201,8 +1201,10 @@ function Graph({
     // Gate 질문 → 막힌 검사 → 도는 검사 → 검토 라운드 → provider. 여기서는 kind 를 문장으로 바꾸기만
     // 한다(렌더러에는 테스트가 없다).
     const meta = metaText(nodeMetaOf(task), t)
-    // validating 이면 지난 라운드에 막힌 검사 하나를 ● 로 그린다 — 그것이 다시 도는 중이라는 뜻(checkTooltip 의 주석)
-    const retrying = task.status === 'validating' ? firstBlockedCheck(task) : null
+    // validating 이면 지금 다시 도는 검사 하나를 ● 로 그린다 — 지난 라운드에 막힌 것, 지난 라운드가 다 통과했으면
+    // (검토 실패로 되돌아온 라운드) 첫 검사(checkTooltip 의 주석). nodeMetaOf 의 checking.retrying 과 같은 함수를
+    // 써서 meta 문구와 이 칩이 서로 다른 검사를 가리키는 일이 없게 한다.
+    const retrying = retryingCheckOf(task)
     // 고른 Task 와 의존으로 닿지 않는 것. 이 Task 를 멈춰도 저것은 멈추지 않는다는 뜻이다
     const away = chain !== undefined && !chain.has(task.id)
     const cls = ['detail-node', `detail-node--${task.status}`, away ? 'away' : '']

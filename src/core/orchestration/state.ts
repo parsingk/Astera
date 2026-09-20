@@ -546,11 +546,15 @@ export function applyWorkerDone(
 
 /** 검증 결과를 Task 에 반영한다. check 별 결과가 판정이다.
  *
- *  **convergence 가 없는 Run 은 지금까지와 문구까지 같다**(설계 §5.3): 실패는 failed 가 되고 consecutiveFailures
+ *  **convergence 가 없는 Run 도 문구는 지금까지와 같다**(설계 §5.3): 실패는 failed 가 되고 consecutiveFailures
  *  가 오르며 status 메시지가 코디네이터에게 --retry-of 를 말한다. 그 문구가 결과를 전하는 유일한 길인
  *  이유는 코디네이터를 깨우는 수단이 메시지뿐이고, 재시도 워커의 spec 파일은 결과를 싣지 않기 때문이다.
- *  그 호환에는 `Task.checks`·`checkHistory` 가 자라지 않는 것도 들어간다 — 이 기능을 쓰지 않는 Run 의
- *  `orchestration.json` 이 이 변경으로 커지면 안 된다.
+ *
+ *  **모든 Run 이 `Task.checks`·`checkHistory` 를 기록한다 — convergence 가 없어도**(UI 설계 U2; 이 브랜치의
+ *  첫 커밋이 Plan 1 설계 §18 의 "수렴 Run 에만 기록" 판정을 뒤집은 자리다). `--validate` 만 쓰는 기존 Run 의
+ *  화면도 어느 검사가 깨졌는지 이름을 대야 하고, 그 정보가 상태에 없으면 노드도 사이드바도 그릴 수 없다.
+ *  이 자리에서 실제로 지키는 호환은 둘뿐이다 — status 메시지의 문구(위 문단), 그리고 통과한 검사의
+ *  `outputTail` 을 싣지 않는 것(툴팁에 쓸모없고 용량의 대부분이다 — recorded 를 만드는 아래 자리의 주석).
  *
  *  **convergence 가 있는 Run 에서는 실패가 repair 를 연다**(설계 §5.1): 같은 쓰기에서 Task 가 dispatched 로
  *  가고 repair Dispatch 가 열린다. failed 를 경유하지 않는다 — Task 하나인 Run 이 순간 failed 가 되어

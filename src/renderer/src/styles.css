@@ -1658,7 +1658,11 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* 검사 칩 줄 — 2열의 셋째 줄. NODE_H(52) 안에 제목(11.5px×1.25)·meta(9px×1.3)·이 줄(9.5px)이 든다; 요소가 없는
    Task 는 지금 그대로 두 줄이다(RunDetail). 색은 노드 배경이 쓰는 같은 토큰 — 상세 창과 사이드바가 같은 색으로 같은
    상태를 부른다. ~ 는 라운드 사이에 판정이 흔들린 검사(unstable) */
-.detail-checks { grid-column: 2; display: flex; gap: 5px; font-size: 9.5px; line-height: 1.2; }
+/* min-width: 0 + overflow: hidden — 이 줄은 2열(1fr)을 .detail-node-title 과 나눠 쓰는데, flex: none 칩들의
+   nowrap 행이라 min-content 폭이 칩 전부를 늘어놓은 폭이다. 그 min-content 가 1fr 칼럼의 자동 최소값이 되어
+   검사가 여덟 개쯤을 넘으면 고정폭 NODE_W 카드를 뚫고 나간다 — 이 규칙이 없으면 .detail-node 에도
+   overflow: hidden 이 없어 칩 줄만이 아니라 같은 칼럼을 쓰는 제목까지 옆 노드 위로 흘러나온다 */
+.detail-checks { grid-column: 2; display: flex; gap: 5px; font-size: 9.5px; line-height: 1.2; min-width: 0; overflow: hidden; }
 .detail-check { flex: none; cursor: default; }
 .detail-check sub { font-size: 7px; color: var(--git-modified); vertical-align: baseline; }
 .detail-check--passed { color: var(--ok); }
@@ -2269,10 +2273,14 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    온다. .jobs-shared 와 같은 크기·모양이지만 경고가 아니라 이름표라 톤은 중립이다 */
 .jobs-ordinal { flex: none; font-size: 10px; padding: 1px 5px; border-radius: var(--radius-sm); background: var(--elevated); color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* 자동 수정 칩 — .jobs-ordinal 의 모양에 kind 별 색. 노드 배경(.detail-node--validating 등)과 같은 토큰이라 상세
-   창과 사이드바가 같은 색으로 같은 상태를 부른다. Gate 줄에서는 아이콘과 같은 높이에 선다 */
-.jobs-conv--repairing { color: var(--git-modified); background: color-mix(in srgb, var(--git-modified) 14%, var(--elevated)); }
-.jobs-conv--reviewing { color: var(--fi-purple); background: color-mix(in srgb, var(--fi-purple) 14%, var(--elevated)); }
-.jobs-conv--exhausted { color: var(--git-conflict); background: color-mix(in srgb, var(--git-conflict) 14%, var(--elevated)); }
+   창과 사이드바가 같은 색으로 같은 상태를 부른다. Gate 줄에서는 아이콘과 같은 높이에 선다.
+   셀렉터를 .jobs-conv.jobs-conv--<kind> 로 겹쳐 쓰는 이유: 이 규칙이 덮는 .jobs-ordinal 과 단일 클래스
+   셀렉터끼리는 우선순위가 같아서, 지금 이기는 것은 이 규칙이 파일에서 더 뒤에 있기 때문일 뿐이다 —
+   JobsView.tsx 가 이미 요소에 jobs-conv 를 붙여 두므로(`jobs-ordinal jobs-conv jobs-conv--${kind}`) 두 클래스를
+   같이 걸면 순서와 무관하게 이긴다 */
+.jobs-conv.jobs-conv--repairing { color: var(--git-modified); background: color-mix(in srgb, var(--git-modified) 14%, var(--elevated)); }
+.jobs-conv.jobs-conv--reviewing { color: var(--fi-purple); background: color-mix(in srgb, var(--fi-purple) 14%, var(--elevated)); }
+.jobs-conv.jobs-conv--exhausted { color: var(--git-conflict); background: color-mix(in srgb, var(--git-conflict) 14%, var(--elevated)); }
 .jobs-gate .jobs-conv { margin-top: 1px; }
 /* 회차는 평범한 Run 카드다. 한 단 들여써서 부모에 속한 것으로 읽히게 하고, 자기 테두리는 지운다 —
    부모의 테두리 안에 또 테두리가 겹치면 어느 것이 묶음의 끝인지 읽을 수 없다(.jobs-run 의 주석과
