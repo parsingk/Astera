@@ -734,10 +734,14 @@ describe('convergence — §51', () => {
     // guard in startValidation (policyOf(...) === null) returns before it is ever reached, the same
     // guard ipc.ts's own startValidation uses.
     expect(r.box.state.tasks[0].suspiciousFiles).toBeUndefined()
-    // and checks/checkHistory both never grow — this Run's file has to stay byte-for-byte what it
-    // always was (state.ts's own compatibility rule for a non-convergence Run).
-    expect(r.box.state.tasks[0].checks).toBeUndefined()
-    expect(r.box.state.tasks[0].checkHistory).toBeUndefined()
+    // checks/checkHistory 는 이제 정책 없는 Run 에서도 자란다(state.ts, UI 설계 U2) — 얼마 전까지의
+    // "정책 없는 Run 의 orchestration.json 은 커지지 않는다" 보장이 여기서 뒤집혔다. 화면이 어느 검사가
+    // 깨졌는지 그리려면 이 Task 에도 checks 가 있어야 한다. outputTail 은 실패한 검사의 것이라 키가
+    // 남는다 — 통과한 검사만 벗겨진다.
+    expect(r.box.state.tasks[0].checks).toEqual([
+      expect.objectContaining({ configId: 'tests', status: 'failed', exitCode: 1, outputTail: 'tail' })
+    ])
+    expect(r.box.state.tasks[0].checkHistory).toEqual({ tests: ['failed'] })
     expect(r.logs).toEqual([])
   })
 })

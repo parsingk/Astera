@@ -274,6 +274,18 @@ describe('deriveEvents — convergence', () => {
     expect(ev.map((e) => e.type)).toEqual(['TASK_CHECK_FAILED', 'TASK_STARTED'])
     expect(ev[0].payload.checks).toEqual([{ configId: 'c1', status: 'failed', exitCode: 1 }])
   })
+  // 정책 없는 Run 도 이제 checks 를 기록하므로(state.ts, UI 설계 U2) 그 Run 의 validating → failed 도 check
+  // 요약을 싣는다 — validatingVerdict 는 Task 에 checks 가 있는지로만 가리고, 그것이 맞다: Journal 을 읽는
+  // 쪽에 "이 Run 은 자동 수정 Run 이었나" 를 따로 물릴 이유가 없다.
+  it('정책 없는 Run 의 validating → failed 도 check 요약을 싣는다', () => {
+    const ev = deriveEvents(
+      withRun(run(), [task({ status: 'validating' })]),
+      withRun(run(), [task({ status: 'failed', checks })]),
+      NOW
+    )
+    expect(ev.map((e) => e.type)).toEqual(['TASK_CHECK_FAILED', 'TASK_FAILED'])
+    expect(ev[0].payload.checks).toEqual([{ configId: 'c1', status: 'failed', exitCode: 1 }])
+  })
   it('→ reviewing 은 TASK_REVIEW_STARTED 다(검증에서 왔으면 TASK_CHECK_PASSED 가 먼저)', () => {
     expect(deriveEvents(withRun(run(), [task({ status: 'validating' })]), withRun(run(), [task({ status: 'reviewing' })]), NOW).map((e) => e.type)).toEqual(['TASK_CHECK_PASSED', 'TASK_REVIEW_STARTED'])
     expect(deriveEvents(withRun(run(), [task({ status: 'dispatched' })]), withRun(run(), [task({ status: 'reviewing' })]), NOW).map((e) => e.type)).toEqual(['TASK_REVIEW_STARTED'])

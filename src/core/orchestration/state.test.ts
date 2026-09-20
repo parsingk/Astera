@@ -1031,6 +1031,16 @@ describe('applyValidationResult', () => {
     expect(r.state.tasks[0].result).toContain('실패 로그')
   })
 
+  // 호환성 — 코디네이터가 읽는 status 메시지는 validator 가 잡은 출력을 그대로 싣는다. 출력 꼬리를 벗기는
+  // 자리가 validator 가 아니라 **기록 직전**인 이유가 이것이다: validator 에서 빼면 이 문구가 바뀐다.
+  it('통과해도 status 메시지 body 는 출력을 싣는다 — 벗기는 것은 기록에서만', () => {
+    const { s, taskId } = validating()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: one(0, '통과 로그') }, NOW) as never)
+    expect(r.state.messages.at(-1)?.subject).toBe('validation passed')
+    expect(r.state.messages.at(-1)?.body).toContain('통과 로그')
+    expect(r.value.checks?.[0]).not.toHaveProperty('outputTail')
+  })
+
   // **이것이 요점이다** — 검증되지 않은 결과 위에 다음 작업이 쌓이면 안 된다
   it('의존 Task 는 검증이 통과해야 ready 가 된다', () => {
     const { s, taskId } = validating()
@@ -1241,15 +1251,33 @@ describe('applyValidationResult — convergence', () => {
     expect(r.state.messages.at(-1)?.body).toContain('Retry with worker-start --retry-of')
   })
 
-  // **꺼진 Run 도 checks/checkHistory 를 얻지 않는다** — 이 기능을 쓰지 않으면 orchestration.json 이
-  // 이 변경으로 커지지 않는다는 호환 보장의 일부다.
-  it('꺼진 Run 은 checks·checkHistory 를 기록하지 않는다', () => {
+  // **꺼진 Run 도 checks·checkHistory 를 기록한다**(UI 설계 U2, Plan 1 설계 §18-11) — `--validate` 만 쓰는
+  // Run 의 Task 도 어느 검사가 깨졌는지 노드에 보여야 하고, 그 정보가 상태에 없으면 그릴 수 없다. 한때
+  // "꺼진 Run 의 orchestration.json 은 커지지 않는다" 가 보장이었는데, 지금은 검사별 한 줄만큼 커지는 것을
+  // 받아들이고 그 대신 통과한 검사의 출력 꼬리를 뺀다(아래 테스트).
+  it('꺼진 Run 도 checks·checkHistory 를 기록한다', () => {
     const { s, taskId, dispatchId } = seed()
     const old: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t)) }
     const v = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
     const r = unwrap<Task>(applyValidationResult(v.state, { taskId, results: one(1, '실패 로그') }, NOW) as never)
-    expect(r.value).not.toHaveProperty('checks')
-    expect(r.value).not.toHaveProperty('checkHistory')
+    expect(r.value.status).toBe('failed')
+    expect(r.value.checks?.map((c) => c.status)).toEqual(['failed'])
+    expect(r.value.checks?.[0].outputTail).toBe('실패 로그')
+    expect(r.value.checkHistory).toEqual({ cfg1: ['failed'] })
+  })
+
+  // 통과한 검사의 출력은 툴팁에 쓸모없고 상태 파일 용량의 대부분이다 — **키 자체를 뺀다**. `{ ...r, outputTail:
+  // undefined }` 도 JSON 에는 안 남지만 메모리의 Task 와 toEqual 비교에 거짓 차이를 만든다. 실패한 검사의 것은
+  // repair spec(coordinator.ts 의 repairSection)이 읽으므로 남는다.
+  it('통과한 검사의 outputTail 은 키를 빼고, 실패한 검사의 것은 남긴다', () => {
+    const { s, taskId } = armed()
+    const results: CheckResult[] = [
+      { configId: 'cfg1', name: 'Typecheck', status: 'passed', exitCode: 0, outputTail: '긴 통과 로그' },
+      { configId: 'cfg2', name: 'Tests', status: 'failed', exitCode: 1, outputTail: '2 failed' }
+    ]
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results, repair: SAME }, NOW) as never)
+    expect(r.value.checks?.[0]).not.toHaveProperty('outputTail')
+    expect(r.value.checks?.[1].outputTail).toBe('2 failed')
   })
 
   // **Important #1 — repair Dispatch 를 열지 못해도 판정을 버리지 않는다.** 다른 Task 가 --terminal 로

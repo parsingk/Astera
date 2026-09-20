@@ -587,10 +587,25 @@ export function applyValidationResult(
   // 여기에 없으면 검증이 걸린 Task 만 검토를 건너뛴다.
   const reviewing = passed && !!task.reviewRequested && a.canReview !== false
 
+  // ---- 기록 — 정책이 있든 없든 ---- 화면이 어느 검사가 깨졌는지 그리려면 상태에 있어야 한다(UI 설계 U2; Plan 1
+  // 설계 §18-11 이 "수렴 Run 에만 기록" 을 뒤집은 자리다). 통과한 검사의 outputTail 은 싣지 않는다: 툴팁에 쓸모없고
+  // 용량의 대부분이다. **여기서 벗긴다, validator 가 아니라** — 아래 status 메시지의 body 는 a.results 에서 앞서
+  // 계산한 output 을 그대로 실어 코디네이터가 읽던 문구가 바뀌지 않는다. checkHistory 는 판정('passed'|'failed')만
+  // 들고 있어 손댈 것이 없다. 키를 아예 빼는 이유: undefined 값은 JSON 에 안 남지만 메모리의 Task 비교에 남는다.
+  const history = appendHistory(task.checkHistory, a.results)
+  const unstable = new Set(unstableChecks(history))
+  const checks: CheckResult[] = a.results.map((r) => {
+    const { outputTail, ...rest } = r
+    const kept: CheckResult =
+      r.status === 'passed' ? rest : { ...rest, ...(outputTail !== undefined ? { outputTail } : {}) }
+    return unstable.has(r.configId) ? { ...kept, unstable: true } : kept
+  })
+  const recorded: Task = { ...task, checks, checkHistory: history }
+
   if (policy === null) {
-    // ---- 지금까지의 경로. 문구까지 그대로다 ---- checks·checkHistory 는 여기서 기록하지 않는다.
+    // ---- 지금까지의 경로. 문구까지 그대로다 ---- 달라진 것은 task 가 아니라 recorded 를 옮긴다는 것 하나다.
     const to = reviewing ? 'reviewing' : passed ? 'completed' : 'failed'
-    const moved = moveTask(task, to, now)
+    const moved = moveTask(recorded, to, now)
     if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
     const next: Task = {
       ...moved,
@@ -614,12 +629,7 @@ export function applyValidationResult(
     return ok(state, next)
   }
 
-  // ---- convergence Run ---- 여기서부터만 checks·checkHistory 를 Task 에 싣는다.
-  const history = appendHistory(task.checkHistory, a.results)
-  const unstable = new Set(unstableChecks(history))
-  const checks: CheckResult[] = a.results.map((r) => (unstable.has(r.configId) ? { ...r, unstable: true } : r))
-  const recorded: Task = { ...task, checks, checkHistory: history }
-
+  // ---- convergence Run ---- 실패는 failed 를 거치지 않고 repair 로 간다(설계 §5.1).
   if (passed) {
     const to = reviewing ? 'reviewing' : 'completed'
     const moved = moveTask(recorded, to, now)
