@@ -1323,7 +1323,7 @@ export const en: Record<keyof typeof ko, string> = {
   // Node while this CLI is a separate install an antivirus blocked — so this avoids stating a refusal
   // as fact.
   'conversation.exited.bypassConfirm.whatBlockedSoft':
-    "Not necessarily the CLI itself — a tool version manager (Volta) installed on this machine may be the cause. If this CLI is one it manages, Volta ahead on PATH may have refused to run while trying to read this folder's package.json to pick a version. What the CLI left",
+    "Not necessarily the CLI itself — a tool version manager (Volta) installed on this machine may be the cause. If this CLI is one it manages, Volta ahead on PATH may have refused to run while trying to read this folder's package.json to pick a version",
   'conversation.exited.bypassConfirm.ifSkippedLabel': 'If you skip it',
   'conversation.exited.bypassConfirm.ifSkipped': 'Version resolution is skipped and the CLI on the default PATH runs as-is. The session comes up.',
   'conversation.exited.bypassConfirm.givesUpLabel': 'What you give up',

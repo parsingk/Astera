@@ -1537,7 +1537,7 @@ export const ko = {
   // 것은 확실하지만, 그것이 *이* CLI 를 막았다는 확증은 아니다 — Volta 는 Node 를 관리하고 있고
   // codex 는 백신이 막은 별개의 설치일 수 있다. 그래서 "거절했습니다"라는 확정 서술을 쓰지 않는다.
   'conversation.exited.bypassConfirm.whatBlockedSoft':
-    '이 CLI 자신이 아니라, 이 기기에 설치된 도구 버전 관리자(Volta)가 원인일 수 있습니다. Volta 가 관리하는 도구라면 PATH 앞에서 이 폴더의 package.json 을 읽어 버전을 정하려다 실행을 거절했을 수 있습니다. CLI 가 남긴 줄입니다',
+    '이 CLI 자신이 아니라, 이 기기에 설치된 도구 버전 관리자(Volta)가 원인일 수 있습니다. Volta 가 관리하는 도구라면 PATH 앞에서 이 폴더의 package.json 을 읽어 버전을 정하려다 실행을 거절했을 수 있습니다',
   'conversation.exited.bypassConfirm.ifSkippedLabel': '건너뛰면',
   'conversation.exited.bypassConfirm.ifSkipped': '버전 판단을 생략하고 기본으로 잡히는 CLI 를 그대로 실행합니다. 세션은 뜹니다.',
   'conversation.exited.bypassConfirm.givesUpLabel': '무엇을 포기하나',

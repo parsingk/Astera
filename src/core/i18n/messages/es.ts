@@ -653,7 +653,7 @@ export const es: Catalog = {
   // Volta esté instalado en esta máquina es un hecho; que haya bloqueado *esta* CLI no lo es — Volta
   // puede estar gestionando Node mientras esta CLI es una instalación aparte que bloqueó un antivirus.
   'conversation.exited.bypassConfirm.whatBlockedSoft':
-    'No necesariamente la CLI misma — un gestor de versiones de herramientas (Volta) instalado en esta máquina podría ser la causa. Si esta CLI es una de las que gestiona, Volta por delante en el PATH pudo haberse negado a ejecutarse al intentar leer el package.json de esta carpeta para elegir una versión. Lo que dejó la CLI',
+    'No necesariamente la CLI misma — un gestor de versiones de herramientas (Volta) instalado en esta máquina podría ser la causa. Si esta CLI es una de las que gestiona, Volta por delante en el PATH pudo haberse negado a ejecutarse al intentar leer el package.json de esta carpeta para elegir una versión',
   'conversation.exited.bypassConfirm.ifSkippedLabel': 'Si lo omites',
   'conversation.exited.bypassConfirm.ifSkipped': 'Se omite la resolución de versión y se ejecuta la CLI que quede por defecto en el PATH. La sesión se inicia.',
   'conversation.exited.bypassConfirm.givesUpLabel': 'Qué se pierde',

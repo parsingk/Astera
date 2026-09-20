@@ -1412,7 +1412,9 @@ export function ConversationPane({
           // fix round 1 / Important 4: falls back to the confident wording only because the dialog
           // can only ever open when `bypassOffer` is true, which requires `bypassSignal` to be set —
           // this default is never actually reached, kept only so the prop stays required and honest.
-          signal={chat?.bypassSignal ?? "path"}
+          // 기본값은 약한 쪽이다. 도달할 일이 없어야 하지만, 도달한다면 근거 없이 확정 서술을 내놓는
+          // 쪽으로 기우는 것이 이 다이얼로그가 막으려던 바로 그 실수다.
+          signal={chat?.bypassSignal ?? "voltaHome"}
           onCancel={() => setBypassConfirmOpen(false)}
           onConfirm={confirmBypassRetry}
         />

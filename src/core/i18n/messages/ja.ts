@@ -645,7 +645,7 @@ export const ja: Catalog = {
   // ことは確かだが、それが*この* CLI を止めたという確証ではない — Volta は Node を管理していて、
   // codex は別にアンチウイルスが止めた単独インストールという可能性がある。
   'conversation.exited.bypassConfirm.whatBlockedSoft':
-    'この CLI 自体ではなく、この端末に入っているツールバージョン管理ツール(Volta)が原因かもしれません。Volta が管理する対象なら、PATH 手前の Volta がこのフォルダの package.json を読んでバージョンを決めようとして実行を拒否した可能性があります。CLI が残した行は',
+    'この CLI 自体ではなく、この端末に入っているツールバージョン管理ツール(Volta)が原因かもしれません。Volta が管理する対象なら、PATH 手前の Volta がこのフォルダの package.json を読んでバージョンを決めようとして実行を拒否した可能性があります',
   'conversation.exited.bypassConfirm.ifSkippedLabel': 'スキップすると',
   'conversation.exited.bypassConfirm.ifSkipped': 'バージョン判定を省略し、デフォルトの CLI をそのまま実行します。セッションは起動します。',
   'conversation.exited.bypassConfirm.givesUpLabel': '何を諦めるか',
