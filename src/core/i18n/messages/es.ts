@@ -1153,7 +1153,6 @@ export const es: Catalog = {
   'jobs.task.accountTrust':
     'La primera vez que una cuenta elegida abre esta carpeta, la pestaña de sesión pide confirmar que confías en ella — el worker no empieza hasta que respondas',
   'jobs.task.validate': 'Comprobaciones de finalización',
-  'jobs.task.validateNone': 'Sin validación',
   'jobs.task.checksHint': 'Pon primero las comprobaciones rápidas: se detiene en el primer fallo, así que una lenta al principio cuesta todo su tiempo en cada corrección.',
   'jobs.task.checksUnpicked': 'Sin elegir',
   'jobs.task.checksNone': 'No hay configuración de ejecución que usar como comprobación',

@@ -1202,7 +1202,6 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.task.accountTrust':
     'The first time a chosen account opens this folder the session tab asks you to trust it — the worker starts only once you answer',
   'jobs.task.validate': 'Completion checks',
-  'jobs.task.validateNone': 'No validation',
   'jobs.task.checksHint': 'Put fast checks first — the run stops at the first failure, so a slow check up front costs its full time on every fix.',
   'jobs.task.checksUnpicked': 'Not picked',
   'jobs.task.checksNone': 'No run configuration to use as a check',

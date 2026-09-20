@@ -51,8 +51,6 @@ export function NewTaskModal({
   /** 고른 의존. **이 폼이 소유한다** — 예전에는 그래프가 들고 있었다(고르는 자리가 그래프였다).
    *  셀렉트로 옮기면서 값과 그 값을 고치는 화면이 같은 자리에 있게 됐다. */
   const [deps, setDeps] = useState<string[]>([])
-  // '검증 없음'을 값 '' 으로 표현한다 — RunConfig.id 는 seed:* 접두사이거나 저장된 uuid라 절대 빈
-  // 문자열이 될 수 없으므로 이 값과 겹칠 일이 없다.
   /** 이 Task 를 띄울 계정들, 순서대로. **하나는 반드시 있어야 한다** — 이 목록이 provider 의 유일한
    *  출처이므로(Task.accountIds), 비면 어느 에이전트로 띄울지 알 방법이 없다. 예전에는 빈 배열이
    *  "지정 안 함"이었고 그때는 Run 이 정한 provider 의 기본 계정으로 갔다.
@@ -60,15 +58,26 @@ export function NewTaskModal({
    *  첫 계정으로 띄우고 나머지는 한도에 걸렸을 때 갈아탈 순서다. **첫 칸을 비우면 뒤 칸도 함께
    *  사라진다** — 첫 계정이 provider 를 정하므로 그것 없이 "두 번째 계정" 만 있는 상태는 뜻이 없다. */
   const [accountIds, setAccountIds] = useState<string[]>([])
-  const [validateConfigId, setValidateConfigId] = useState('')
+  /** 완료 검사 — 고른 RunConfig id, **이 순서가 실행 순서다**(Plan 1 설계 D9: 첫 실패에서 멈춘다). 그래서 Set 이
+   *  아니라 배열이고, 순서를 바꾸는 손잡이(↑↓)가 있다. */
+  const [checks, setChecks] = useState<string[]>([])
   const [review, setReview] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const validateItems: SelectOption[] = [
-    { value: '', label: t('jobs.task.validateNone') },
-    ...(runConfigs ?? []).map((c) => ({ value: c.id, label: c.name }))
-  ]
+  /** 검사 목록의 도우미. runConfigs 가 null(아직 안 온 것)이면 칸 자체를 접으므로(아래 마크업) 여기서는 빈 배열로 본다 */
+  const configs = runConfigs ?? []
+  const checkNameOf = (id: string): string => configs.find((c) => c.id === id)?.name ?? id
+  const unpicked = configs.filter((c) => !checks.includes(c.id))
+  const addCheck = (id: string): void => setChecks((xs) => [...xs, id])
+  const removeCheck = (id: string): void => setChecks((xs) => xs.filter((x) => x !== id))
+  /** 이웃과 자리를 바꾼다. 끝에서는 부르는 쪽 버튼이 disabled 라 범위 밖으로 가지 않는다 */
+  const moveCheck = (i: number, dir: -1 | 1): void =>
+    setChecks((xs) => {
+      const ys = [...xs]
+      ;[ys[i], ys[i + dir]] = [ys[i + dir], ys[i]]
+      return ys
+    })
 
   /** 아직 안 고른 Task 만 항목으로 낸다 — 고른 것을 다시 고르면 deps 에 같은 id 가 둘 들어가고
    *  그래프가 같은 선을 두 번 긋는다. 이 셀렉트는 값을 들고 있지 않고(value 는 늘 '') 고르는 순간
@@ -123,7 +132,9 @@ export function NewTaskModal({
         // 쉼표로 보낸다 — task-create 의 문법이다(server.ts). **언제나 보낸다** — 아래 버튼이
         // 빈 목록으로는 눌리지 않으므로 이 자리에 빈 값이 오지 않는다.
         account: accountIds.join(','),
-        ...(validateConfigId ? { validate: validateConfigId } : {}),
+        // 쉼표 목록 — task-create 의 문법이다(server.ts, `--account` 와 같은 규약). 고른 순서가 실행 순서다.
+        // 하나도 안 골랐으면 키를 보내지 않는다: 빈 문자열은 서버가 400 으로 거절한다.
+        ...(checks.length > 0 ? { validate: checks.join(',') } : {}),
         ...(review ? { review: true } : {})
         // parent 는 보내지 않는다 — parentId 는 통합(integration) Task 의 표식이라, 이 폼에서 보내면
         // 스케줄러가 이 Task 를 병합 단계 없이 프로젝트 폴더에서 돌리는 통합 Task 로 취급하게 된다.
@@ -246,15 +257,69 @@ export function NewTaskModal({
             {accountIds.length > 0 && <p className="warn-text">{t('jobs.task.accountTrust')}</p>}
           </div>
         )}
-        <div className="field">
-          <label>{t('jobs.task.validate')}</label>
-          <Select
-            items={validateItems}
-            value={validateConfigId}
-            onChange={setValidateConfigId}
-            ariaLabel={t('jobs.task.validate')}
-          />
-        </div>
+        {/* 완료 검사. 고른 순서가 실행 순서라 번호를 세우고 ↑↓ 로 바꾼다 — 첫 실패에서 멈추므로 순서가 비용을
+            좌우한다. 드래그가 아닌 이유: 이 모달에 드래그 선례가 없고 셋 안팎의 목록에는 버튼이 더 빠르다. 아이콘만
+            있는 버튼이라 aria-label 을 단다; 첫 항목의 ↑ 와 마지막의 ↓ 는 갈 곳이 없어 disabled. null 은 아직 안 온
+            것이라 계정 칸과 같은 규칙으로 접는다. */}
+        {runConfigs !== null && (
+          <div className="field">
+            <label>{t('jobs.task.validate')}</label>
+            {checks.length > 0 && (
+              <ol className="detail-check-list">
+                {checks.map((id, i) => (
+                  <li key={id} className="detail-check-row">
+                    <span className="detail-check-no">{i + 1}</span>
+                    <span className="detail-check-name">{checkNameOf(id)}</span>
+                    <button
+                      type="button"
+                      title={t('jobs.task.checkUp')}
+                      aria-label={`${checkNameOf(id)} — ${t('jobs.task.checkUp')}`}
+                      disabled={i === 0}
+                      onClick={() => moveCheck(i, -1)}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      title={t('jobs.task.checkDown')}
+                      aria-label={`${checkNameOf(id)} — ${t('jobs.task.checkDown')}`}
+                      disabled={i === checks.length - 1}
+                      onClick={() => moveCheck(i, 1)}
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      title={t('jobs.task.checkRemove')}
+                      aria-label={`${checkNameOf(id)} — ${t('jobs.task.checkRemove')}`}
+                      onClick={() => removeCheck(id)}
+                    >
+                      <X size={12} />
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {configs.length === 0 ? (
+              <p className="modal-hint">{t('jobs.task.checksNone')}</p>
+            ) : (
+              <>
+                <p className="modal-hint">{t('jobs.task.checksHint')}</p>
+                {/* 다 골랐으면 이 줄이 빠진다 — 빈 "고르지 않은 것" 은 죽은 칸이다(의존 셀렉트와 같은 판단) */}
+                {unpicked.length > 0 && (
+                  <div className="detail-check-pick">
+                    <span className="modal-hint">{t('jobs.task.checksUnpicked')}</span>
+                    {unpicked.map((c) => (
+                      <button key={c.id} type="button" className="detail-check-add" onClick={() => addCheck(c.id)}>
+                        + {c.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
         <label className="row check-small">
           <input type="checkbox" checked={review} onChange={(e) => setReview(e.target.checked)} />
           {t('jobs.task.review')}

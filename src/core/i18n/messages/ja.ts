@@ -1136,7 +1136,6 @@ export const ja: Catalog = {
   'jobs.task.accountTrust':
     '選んだアカウントがこのフォルダを初めて使うとき、セッションタブにフォルダの信頼確認が出ます — 承認するまでワーカーは始まりません',
   'jobs.task.validate': '完了検査',
-  'jobs.task.validateNone': '検証なし',
   'jobs.task.checksHint': '速い検査を前に置いてください — 最初の失敗で止まるので、遅い検査が前にあると修正のたびにその時間を失います。',
   'jobs.task.checksUnpicked': '未選択',
   'jobs.task.checksNone': '検査に使える実行構成がありません',
