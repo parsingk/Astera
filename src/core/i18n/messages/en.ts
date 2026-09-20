@@ -1328,7 +1328,7 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.exited.bypassConfirm.ifSkipped': 'Version resolution is skipped and the CLI on the default PATH runs as-is. The session comes up.',
   'conversation.exited.bypassConfirm.givesUpLabel': 'What you give up',
   'conversation.exited.bypassConfirm.givesUp':
-    "The tool version pinned for this project. Not just this session: every command it runs (the agent's own npm test, npm run build, node …) runs on the default version instead of the pinned one. The same command can behave differently than it does in your terminal.",
+    "The tool version pinned for this project. Not just this session: every command it runs (the agent's own npm test, npm run build, node …) runs on the default version instead of the pinned one. The same command can behave differently than it does in your terminal. So does the session this one rolls into if a usage limit switches accounts.",
   'conversation.exited.bypassConfirm.properFixLabel': 'The real fix',
   'conversation.exited.bypassConfirm.properFix': 'Fixing package.json means this dialog will not appear again.',
   'conversation.exited.bypassConfirm.confirm': 'Skip and retry',

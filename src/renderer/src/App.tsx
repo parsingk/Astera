@@ -445,7 +445,13 @@ export default function App(): React.JSX.Element {
   if (activeSessionId) lastSessionIdRef.current = activeSessionId
   const [showNew, setShowNew] = useState(false)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null) // prefill for WorktreePanel's 'start session'
+  // Two different questions, deliberately kept apart (the same split session/startBlocked.ts explains
+  // for the new-session dialog). `cli` is runnability — `claude --version` actually ran and printed
+  // this — and it is asked with no folder, so it answers for the app's own working directory and
+  // nothing else. It feeds the version lines in Settings, where that is exactly the right answer.
+  // `cliInstalled` is existence, asked of the machine's PATH and independent of any folder.
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
+  const [cliInstalled, setCliInstalled] = useState<{ claude: boolean; codex: boolean } | null>(null)
   const [appVersion, setAppVersion] = useState('')
   const [hostStatus, setHostStatus] = useState<HostStatus | null>(null)
   /** What the Host says it is holding, or null while it has not said — which is the state this
@@ -841,6 +847,7 @@ export default function App(): React.JSX.Element {
     void window.api.accounts.list().then(setAccounts)
     void window.api.accounts.ghosts().then(setGhostAccounts)
     void window.api.system.checkCli().then(setCli)
+    void window.api.system.checkCliInstalled().then(setCliInstalled)
     void window.api.system.appVersion().then(setAppVersion)
     // The rail draws the Jobs button only while this is on, so it has to be read at startup. Reading it
     // only when the settings modal opens (the showSettings effect below) meant the button was missing
@@ -1981,13 +1988,18 @@ export default function App(): React.JSX.Element {
   // Either CLI is enough to work with the app — someone who only uses Codex has no reason to install
   // Claude Code. Which of the two an individual session needs depends on its account's provider, and
   // that call belongs to the new-session dialog, which knows the account.
-  const anyCliOk = cli?.claude.ok === true || cli?.codex.ok === true
+  //
+  // Installation, not runnability. This used to read `cli` (a `--version` run in the app's own working
+  // directory), which made a CLI that a toolchain manager refuses to run *there* look like a CLI that
+  // is not on the machine: the + button went dead and no folder could be picked to prove otherwise.
+  // That is the same mistake the new-session dialog's Start gate was caught making, one screen up.
+  const anyCliInstalled = cliInstalled?.claude === true || cliInstalled?.codex === true
 
   /** A group's + button — moves the active group there first so the new session becomes that group's tab.
    *  spawn's placement reads activePaneIdRef, so this one line is enough. */
   const newInGroup = (paneId: string): void => {
     setActivePaneId(paneId)
-    if (anyCliOk) setShowNew(true)
+    if (anyCliInstalled) setShowNew(true)
   }
 
   /** A drop on the tab bar — reorder within the same group, or move to that position in another group */
@@ -3444,15 +3456,30 @@ export default function App(): React.JSX.Element {
   // Only when neither CLI is present is there nothing to launch. With one of the two installed the app
   // opens as usual, and the new-session dialog blocks the accounts whose CLI is missing.
   //
+  // "Present" means installed, which is why this reads `cliInstalled` and not `cli`. A CLI a toolchain
+  // manager refuses to run in the app's own working directory is installed; answering "neither CLI is
+  // here" to that locks a person out of the entire app over a file in a folder they never chose, and
+  // the install button this screen offers cannot fix it because nothing is missing. Asked of the
+  // machine's PATH instead, that person gets the workbench, and the per-folder truth is told where it
+  // belongs — in the new-session dialog, about the folder they actually picked.
+  //
   // The screen itself — what it offers, how it installs, and why it is English-only — lives in
   // CliMissingScreen.tsx.
-  if (cli && !cli.claude.ok && !cli.codex.ok) {
+  if (cliInstalled && !cliInstalled.claude && !cliInstalled.codex) {
     return (
       <div className="app">
         {/* 0, not runningCount: this screen renders no ConfirmHost, so a close confirmation would
             never be answered and the close button would stop working entirely. */}
         <Titlebar isMax={isMax} update={update} runningCount={0} onInstall={() => void installUpdate()} />
-        <CliMissingScreen onFound={setCli} />
+        {/* The gate above reads `cliInstalled`, so that is what the screen hands back. `cli` is
+            refreshed alongside it: Settings reads the version strings off it, and leaving it on the
+            pre-install answer would have it still saying "not detected" for a CLI now installed. */}
+        <CliMissingScreen
+          onFound={(installed) => {
+            setCliInstalled(installed)
+            void window.api.system.checkCli().then(setCli)
+          }}
+        />
       </div>
     )
   }
@@ -3912,7 +3939,7 @@ export default function App(): React.JSX.Element {
                 schedStates={schedStates}
                 busy={busy}
                 draggingTabId={dragTabId}
-                newDisabled={!anyCliOk}
+                newDisabled={!anyCliInstalled}
                 onFocusPane={setActivePaneId}
                 onSetRatio={(splitId, ratio) =>
                   setLayout((cur) => (cur ? setRatio(cur, splitId, ratio) : cur))
@@ -3934,9 +3961,9 @@ export default function App(): React.JSX.Element {
               {!layout && (
                 <button
                   className="placeholder primary"
-                  disabled={!anyCliOk}
+                  disabled={!anyCliInstalled}
                   onClick={() => {
-                    if (anyCliOk) setShowNew(true)
+                    if (anyCliInstalled) setShowNew(true)
                   }}
                 >
                   {t('session.placeholder.start')}

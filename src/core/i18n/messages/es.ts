@@ -658,7 +658,7 @@ export const es: Catalog = {
   'conversation.exited.bypassConfirm.ifSkipped': 'Se omite la resolución de versión y se ejecuta la CLI que quede por defecto en el PATH. La sesión se inicia.',
   'conversation.exited.bypassConfirm.givesUpLabel': 'Qué se pierde',
   'conversation.exited.bypassConfirm.givesUp':
-    'La versión de la herramienta fijada para este proyecto. No solo esta sesión: todos los comandos que ejecute (el propio npm test, npm run build, node … del agente) se ejecutarán con la versión por defecto, no con la fijada. El mismo comando puede dar un resultado distinto al de tu terminal.',
+    'La versión de la herramienta fijada para este proyecto. No solo esta sesión: todos los comandos que ejecute (el propio npm test, npm run build, node … del agente) se ejecutarán con la versión por defecto, no con la fijada. El mismo comando puede dar un resultado distinto al de tu terminal. Lo mismo vale para la sesión que tome el relevo si un límite de uso cambia de cuenta.',
   'conversation.exited.bypassConfirm.properFixLabel': 'La solución real',
   'conversation.exited.bypassConfirm.properFix': 'Si arreglas el package.json, este cuadro no volverá a aparecer.',
   'conversation.exited.bypassConfirm.confirm': 'Omitir y reintentar',

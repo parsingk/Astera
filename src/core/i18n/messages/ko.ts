@@ -1541,8 +1541,11 @@ export const ko = {
   'conversation.exited.bypassConfirm.ifSkippedLabel': '건너뛰면',
   'conversation.exited.bypassConfirm.ifSkipped': '버전 판단을 생략하고 기본으로 잡히는 CLI 를 그대로 실행합니다. 세션은 뜹니다.',
   'conversation.exited.bypassConfirm.givesUpLabel': '무엇을 포기하나',
+  // 마지막 문장(롤 승계)은 "얼마나 / 무엇이 바뀌나" 절이 지고 있던 것이다. 그 절을 통째로 뺐을 때
+  // 같이 사라졌는데, 승계는 사람이 보는 데서 일어나지 않으므로 어디에도 안 적히면 아무도 모른다.
+  // 그래서 문단 하나가 아니라 문장 하나로, 대가를 말하는 자리에 붙였다 — 승계되는 것이 바로 이 대가다.
   'conversation.exited.bypassConfirm.givesUp':
-    '이 프로젝트에 핀해 둔 도구 버전입니다. 이 세션뿐 아니라 이 세션이 실행하는 모든 명령(에이전트가 돌리는 npm test, npm run build, node …)이 핀된 버전이 아니라 기본 버전으로 돕니다. 같은 명령이 당신 터미널에서와 다른 결과를 낼 수 있습니다.',
+    '이 프로젝트에 핀해 둔 도구 버전입니다. 이 세션뿐 아니라 이 세션이 실행하는 모든 명령(에이전트가 돌리는 npm test, npm run build, node …)이 핀된 버전이 아니라 기본 버전으로 돕니다. 같은 명령이 당신 터미널에서와 다른 결과를 낼 수 있습니다. 사용량 한도로 다른 계정에 넘어갈 때 이어받는 세션도 같습니다.',
   'conversation.exited.bypassConfirm.properFixLabel': '제대로 된 해결',
   'conversation.exited.bypassConfirm.properFix': 'package.json 을 고치면 이 창은 다시 뜨지 않습니다.',
   'conversation.exited.bypassConfirm.confirm': '건너뛰고 다시 시도',
