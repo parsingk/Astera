@@ -39,6 +39,7 @@ import { GithubSettings } from './components/GithubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import { CliMissingScreen } from './components/CliMissingScreen'
+import { CliInstallRows } from './components/CliInstallRows'
 import { FirstRunDialog } from './components/FirstRunDialog'
 import type {
   OpenSessionTask,
@@ -3463,8 +3464,10 @@ export default function App(): React.JSX.Element {
   // machine's PATH instead, that person gets the workbench, and the per-folder truth is told where it
   // belongs — in the new-session dialog, about the folder they actually picked.
   //
-  // The screen itself — what it offers, how it installs, and why it is English-only — lives in
-  // CliMissingScreen.tsx.
+  // The screen itself — what it offers, how it installs, and why it carries its own language switch
+  // — lives in CliMissingScreen.tsx. (That line used to say "why it is English-only", which the
+  // screen has not been for some time: it follows the stored language and offers a switch, because
+  // the rail that normally holds one is not drawn here.)
   if (cliInstalled && !cliInstalled.claude && !cliInstalled.codex) {
     return (
       <div className="app">
@@ -4381,14 +4384,16 @@ export default function App(): React.JSX.Element {
                       <span>{t('settings.info.version')}</span>
                       <span>{appVersion || '…'}</span>
                     </div>
-                    <div className="settings-row">
-                      <span>Claude CLI</span>
-                      <span>{cli?.claude.version ?? t('settings.info.cliNotDetected')}</span>
-                    </div>
-                    <div className="settings-row">
-                      <span>Codex CLI</span>
-                      <span>{cli?.codex.version ?? t('settings.info.cliNotDetected')}</span>
-                    </div>
+                    {/* The two CLI rows, now with an install button each. Both answers are refreshed
+                        after one succeeds: the entry gate above reads existence, these rows read the
+                        version off the runnability check. */}
+                    <CliInstallRows
+                      cli={cli}
+                      onInstalled={(installed) => {
+                        setCliInstalled(installed)
+                        void window.api.system.checkCli().then(setCli)
+                      }}
+                    />
                     <div className="settings-row">
                       <span>{t('settings.info.host')}</span>
                       {/* Three separate lines rather than one string joined with separators. Each of

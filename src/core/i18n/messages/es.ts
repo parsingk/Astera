@@ -205,6 +205,8 @@ export const es: Catalog = {
   'settings.info.registeredAccounts': 'Cuentas registradas',
   'settings.info.update': 'Actualización',
   'settings.info.cliNotDetected': 'No detectado',
+  'settings.info.cliReinstall': 'Reinstalar',
+  'settings.info.cliInstallDone': 'Instalado.',
   'settings.info.host': 'Host en segundo plano',
   'settings.info.hostConnected': 'Conectado · protocolo {protocol} · desde hace {uptime}',
   'settings.info.hostNotConnected': 'Sin conexión',

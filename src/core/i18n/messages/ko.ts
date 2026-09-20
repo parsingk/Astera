@@ -275,6 +275,12 @@ export const ko = {
   'settings.info.registeredAccounts': '등록 계정',
   'settings.info.update': '업데이트',
   'settings.info.cliNotDetected': '감지 안 됨',
+  // 설정 화면의 CLI 줄에 붙는 버튼. 이미 잡히는 CLI 에도 낸다 — 벤더의 설치 명령이 곧 업그레이드
+  // 명령이라, 같은 버튼이 이미 있는 것에 하는 일을 정직하게 부른 이름이다.
+  'settings.info.cliReinstall': '다시 설치',
+  // 성공을 말로 해야 하는 이유: 잘 되던 CLI 를 다시 설치하면 버전 문자열이 그대로일 수 있고,
+  // 그러면 안 바뀐 줄이 '눌렀는데 아무 일도 안 났다'로 읽힌다.
+  'settings.info.cliInstallDone': '설치했습니다.',
   'settings.info.host': '백그라운드 호스트',
   'settings.info.hostConnected': '연결됨 · 규약 {protocol} · {uptime} 전부터',
   // Appended to hostConnected, and **only after the Host answers what it holds** — until then the
