@@ -28,3 +28,29 @@ describe('foldChatEvent', () => {
     expect(foldChatEvent(failed, { type: 'status', status: 'idle', truncated: false }).error).toBe('rate limited')
   })
 })
+
+// A pane already mounted when the process dies hears only the event — it never re-reads main's
+// ChatState — so exitCode/errorDetail/error have to travel on `exit` itself, not just sit in state.
+describe('foldChatEvent — exit', () => {
+  it('꼬리가 있으면 exitCode·errorDetail·error 셋 다 이벤트에서 그대로 옮겨온다', () => {
+    const next = foldChatEvent(base, {
+      type: 'exit',
+      code: 8,
+      error: 'error: Could not parse project manifest',
+      errorDetail: '\nerror: Could not parse project manifest\nat C:\\p\\package.json\n'
+    })
+    expect(next.exitCode).toBe(8)
+    expect(next.error).toBe('error: Could not parse project manifest')
+    expect(next.errorDetail).toBe('\nerror: Could not parse project manifest\nat C:\\p\\package.json\n')
+    expect(next.status).toBe('idle')
+    expect(next.request).toBeNull()
+  })
+  // error 칸이 없는 이벤트는 "이유 없음"이다 — 지어내지 않고, 그 직전 error 를 그대로 둔다.
+  it('꼬리가 없으면 errorDetail 은 null 이 되지만 error 는 지어내지 않고 그대로 둔다', () => {
+    const failed = { ...base, error: 'rate limited' }
+    const next = foldChatEvent(failed, { type: 'exit', code: 8, errorDetail: null })
+    expect(next.exitCode).toBe(8)
+    expect(next.errorDetail).toBeNull()
+    expect(next.error).toBe('rate limited')
+  })
+})

@@ -325,7 +325,7 @@ describe('createCodexAdapter — replay after adoption', () => {
     await tick()
     p.exit(PTY_LOST_SIGHT_EXIT_CODE)
     await expect(sending).rejects.toThrow()
-    expect(events.at(-1)).toEqual({ type: 'exit', code: PTY_LOST_SIGHT_EXIT_CODE })
+    expect(events.at(-1)).toEqual({ type: 'exit', code: PTY_LOST_SIGHT_EXIT_CODE, errorDetail: null })
   })
 })
 

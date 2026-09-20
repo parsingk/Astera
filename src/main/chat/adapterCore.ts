@@ -355,7 +355,10 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
     state.exitCode = code
     state.errorDetail = stderrTail ?? null
     if (reason !== null) state.error = reason
-    emit({ type: 'exit', code })
+    // A pane that was already open when the process died only ever hears this — it does not re-read
+    // `state` on exit — so the same values that just went onto `state` have to ride the event too, or
+    // an already-mounted pane keeps showing the nulls it mounted with (see ChatEvent's exit variant).
+    emit({ type: 'exit', code, errorDetail: state.errorDetail, ...(reason !== null ? { error: reason } : {}) })
   }
 
   return {

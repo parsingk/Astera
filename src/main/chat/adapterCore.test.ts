@@ -95,7 +95,7 @@ describe('createAdapterCore — client requests', () => {
     c.onExit(3)
     await expect(asked).rejects.toThrow('process ended')
     expect(c.ended).toBe(true)
-    expect(events.at(-1)).toEqual({ type: 'exit', code: 3 })
+    expect(events.at(-1)).toEqual({ type: 'exit', code: 3, errorDetail: null })
     const after = c.request('x-2', () => p.write('b'))
     await expect(after).rejects.toThrow('process ended')
     expect(p.written).toEqual(['a'])   // nothing was written to a process that has gone
@@ -319,5 +319,25 @@ describe('createAdapterCore — onExit 이 넘겨받는 프로세스의 마지�
   it('살아 있는 동안 exitCode 는 null 이다', () => {
     const { c } = made()
     expect(c.state.exitCode).toBeNull()
+  })
+  // state 뿐 아니라 exit 이벤트 자체에도 실어야 한다 — 이미 마운트된 pane 은 state 를 다시 읽지
+  // 않고 이 이벤트만 듣는다(useChatState.ts 의 foldChatEvent).
+  it('꼬리가 있으면 exit 이벤트에도 error 와 errorDetail 이 함께 실린다', () => {
+    const { c, events } = made()
+    c.onExit(8, '\nerror: Could not parse project manifest\nat C:\\p\\package.json\n')
+    expect(events.at(-1)).toEqual({
+      type: 'exit',
+      code: 8,
+      error: 'error: Could not parse project manifest',
+      errorDetail: '\nerror: Could not parse project manifest\nat C:\\p\\package.json\n'
+    })
+  })
+  // 꼬리가 없으면 exit 이벤트에 error 칸 자체가 없다 — fold 쪽이 지어내지 않고 기존 error 를
+  // 그대로 두려면, "이유 없음" 이 빈 문자열이 아니라 칸의 부재로 와야 한다.
+  it('꼬리가 없으면 exit 이벤트에 error 칸이 없고 errorDetail 은 null 이다', () => {
+    const { c, events } = made()
+    c.onExit(8)
+    expect(events.at(-1)).toEqual({ type: 'exit', code: 8, errorDetail: null })
+    expect(events.at(-1)).not.toHaveProperty('error')
   })
 })

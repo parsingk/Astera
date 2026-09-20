@@ -358,7 +358,7 @@ describe('event wiring', () => {
     // A second ready with another id is a claude session whose `/clear` started a new one, and the
     // session's identity has to move with it — everything keyed by the id reads it from here.
     handles[0].emit({ type: 'ready', threadId: 'th-2', rolloutPath: null })
-    handles[0].emit({ type: 'exit', code: 7 })
+    handles[0].emit({ type: 'exit', code: 7, errorDetail: null })
 
     const after = manager.info(info.id)
     expect(after?.threadId).toBe('th-2')
@@ -369,7 +369,7 @@ describe('event wiring', () => {
     expect(seen).toEqual([
       [info.id, { type: 'ready', threadId: 'th-1', rolloutPath: null }],
       [info.id, { type: 'ready', threadId: 'th-2', rolloutPath: null }],
-      [info.id, { type: 'exit', code: 7 }]
+      [info.id, { type: 'exit', code: 7, errorDetail: null }]
     ])
   })
 
@@ -534,7 +534,7 @@ describe('runningAppOwned / runningOutlivingApp', () => {
   it('excludes exited sessions from both', () => {
     const { manager, handles } = setup()
     const a = manager.spawn({ account: codexAccount, cwd: 'D:/a' })
-    handles[0].emit({ type: 'exit', code: 0 })
+    handles[0].emit({ type: 'exit', code: 0, errorDetail: null })
     expect(manager.runningAppOwned().map((s) => s.id)).not.toContain(a.id)
     expect(manager.runningOutlivingApp().map((s) => s.id)).not.toContain(a.id)
   })

@@ -35,7 +35,18 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
       // Same arrangement: main keeps it for the status bar to ask about, and the pane draws none of it.
       return state
     case 'exit':
-      return { ...state, status: 'idle', request: null }
+      // exitCode/errorDetail always come from the event, even when errorDetail is null — that null is
+      // itself the fact "no tail", not "nothing to say". `error` is different: absent means the event
+      // has no reason to report, and the fold must leave whatever error already sat there rather than
+      // guessing one (a pane already open when the process dies has no other source for any of this).
+      return {
+        ...state,
+        status: 'idle',
+        request: null,
+        exitCode: event.code,
+        errorDetail: event.errorDetail,
+        ...(event.error === undefined ? {} : { error: event.error })
+      }
   }
 }
 

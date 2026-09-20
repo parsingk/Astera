@@ -112,7 +112,14 @@ export type ChatEvent =
   /** Claude only: what the turn that just finished left in the context. A pty session reads the same
    *  figure off its statusLine; a chat session has no statusLine, so it is reported here. */
   | { type: 'usage'; context: ChatContextUsage }
-  | { type: 'exit'; code: number }
+  /** The process's last words ride with the code, not only in main's `ChatState` — this app folds
+   *  renderer state out of events (see `foldChatEvent`), so a pane already open when the process dies
+   *  hears only what this carries; a value left solely on `ChatState` never reaches it. `errorDetail`
+   *  is always here, the tail or null: an absent tail is itself the fact "we do not know", which is
+   *  different from `truncated` above having nothing to say. `error` is optional — present only when
+   *  the tail gave a reason a person should read — so the fold can leave whatever `error` already
+   *  held rather than inventing one. */
+  | { type: 'exit'; code: number; errorDetail: string | null; error?: string }
 
 export interface ChatAdapter {
   start(a: { cwd: string; resumeThreadId?: string; bypass: boolean }): Promise<void>

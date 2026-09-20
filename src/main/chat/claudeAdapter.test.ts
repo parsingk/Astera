@@ -551,7 +551,7 @@ describe('createClaudeAdapter — exit', () => {
     await tick()
     p.exit(PTY_LOST_SIGHT_EXIT_CODE)
     await expect(listing).rejects.toThrow()
-    expect(events.at(-1)).toEqual({ type: 'exit', code: PTY_LOST_SIGHT_EXIT_CODE })
+    expect(events.at(-1)).toEqual({ type: 'exit', code: PTY_LOST_SIGHT_EXIT_CODE, errorDetail: null })
   })
 })
 
