@@ -59,6 +59,12 @@
 - If a checkpoint cannot be built the switch falls back to the ordinary resume, so turning this on
   never leaves a roll worse off than before
 
+**Completion convergence**
+- A job's failed builds and tests, and blocking review findings, are sent back to the worker for
+  repair and then checked again — until the completion policy passes or the retry limit is reached
+- The loop survives account rolling, pauses and app restarts, so a job keeps moving toward
+  completion instead of starting over
+
 **Scheduling and remote control**
 - Schedule sessions to start at a given time
 - Slack notifications when a turn finishes or a limit is hit, and Slack-side replies back into a
@@ -179,8 +185,10 @@ dependency graph whose tasks can run under either vendor, and there are two ways
 1. Make sure the project is a git repository with a branch checked out.
 2. Click **New job**, enter the **Objective**, choose a **Coordinator account**, set **Run at once**,
    and optionally add a schedule.
-3. Add tasks with instructions, one or more worker accounts, and any dependencies. Builds, tests and
-   cross-vendor reviews can be attached as completion checks.
+3. Add tasks with instructions, one or more worker accounts, and any dependencies. Attach builds,
+   tests and cross-vendor reviews as completion checks. With **Auto-fix until the checks pass** on,
+   a failed check or a blocking review finding is sent back to the worker for repair and verified
+   again, until the completion policy passes or the retry limit is reached.
 4. Click **Run**. A normal job opens its coordinator; a scheduled job activates its schedule.
 
 The Jobs view shows the dependency graph, active workers, questions and timeline. Parallel tasks can
