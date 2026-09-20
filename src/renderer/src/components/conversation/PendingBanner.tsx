@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "../ui/button";
 import { useI18n } from "../../i18n/I18nProvider";
 
@@ -58,21 +58,73 @@ export function RunningNotice({
  *  is restarted.
  *
  *  `onGoTerminal` null (or absent) hides that way back, for the same reason QuestionCard's own prop
- *  takes null: a chat session has no terminal beside it to go to (ConversationPane.tsx, Task 10). */
-export function ExitedNotice({ onGoTerminal }: { onGoTerminal?: (() => void) | null }): ReactNode {
+ *  takes null: a chat session has no terminal beside it to go to (ConversationPane.tsx, Task 10).
+ *
+ *  This used to be a bare title. The terminal pane has always said "종료됨 (코드 8)"; this one said
+ *  only "이 세션은 종료되었습니다" and, worse, drew instead of the error banner rather than beside it —
+ *  so the reason a dying CLI left on stderr never reached the screen (design D2/F2). `exitCode` and
+ *  `reason` fold that story back in: the code goes in the title (numberless code says nothing, so
+ *  `exitCode === null` keeps the old bare title), the one-line reason sits under it, and the rest of
+ *  what the process said waits behind `detail`'s fold rather than spilling into the banner body.
+ *
+ *  `onRestart` is null unless design F5's own condition holds — a death that looks like a toolchain
+ *  refusal *and* a manager main actually found (`ChatState.bypassOffer`). ConversationPane.tsx is the
+ *  only caller that ever passes a function, and what it passes does not itself retry anything: it
+ *  opens the confirm dialog (BypassRetryDialog.tsx) that has to run first, because skipping a folder's
+ *  pinned toolchain is a judgement nobody but the person can make (design §4 F5's five-part copy).
+ *  A button that pressed straight through to the retry, with no chance to read what it gives up,
+ *  would be the same silent override S7 exists to forbid — just moved one click later. */
+export function ExitedNotice({
+  onGoTerminal,
+  exitCode = null,
+  reason = null,
+  detail = null,
+  onRestart = null
+}: {
+  onGoTerminal?: (() => void) | null;
+  /** The process's exit code, when the session had one. Null keeps the old bare title. */
+  exitCode?: number | null;
+  /** One line — the first thing the process said on stderr as it went (design S1). */
+  reason?: string | null;
+  /** The whole stderr tail, folded away: a person needs the line above, and only sometimes the rest. */
+  detail?: string | null;
+  onRestart?: (() => void) | null;
+}): ReactNode {
   const { t } = useI18n();
-
+  const [open, setOpen] = useState(false);
   return (
     <div
       role="status"
       data-slot="conversation-exited"
-      className="flex items-center justify-between gap-3 rounded-(--composer-radius) border border-[var(--warn-line)] bg-[var(--warn-bg)] px-4 py-2.5 text-sm text-[var(--warn-ink)]"
+      className="flex flex-col gap-1.5 rounded-(--composer-radius) border border-[var(--warn-line)] bg-[var(--warn-bg)] px-4 py-2.5 text-sm text-[var(--warn-ink)]"
     >
-      <p className="font-medium">{t("conversation.exited.title")}</p>
-      {onGoTerminal !== null && onGoTerminal !== undefined && (
-        <Button size="sm" variant="default" className="shrink-0" onClick={onGoTerminal}>
-          {t("conversation.pending.terminal")}
-        </Button>
+      <div className="flex items-center justify-between gap-3">
+        <p className="font-medium">
+          {exitCode === null
+            ? t("conversation.exited.title")
+            : t("conversation.exited.withCode", { code: exitCode })}
+        </p>
+        <div className="flex shrink-0 items-center gap-2">
+          {detail !== null && detail.trim() !== "" && (
+            <Button size="sm" variant="ghost" onClick={() => setOpen((v) => !v)}>
+              {t("conversation.exited.detail")}
+            </Button>
+          )}
+          {onRestart !== null && (
+            <Button size="sm" variant="default" onClick={onRestart}>
+              {t("conversation.exited.restart")}
+            </Button>
+          )}
+          {onGoTerminal !== null && onGoTerminal !== undefined && (
+            <Button size="sm" variant="default" onClick={onGoTerminal}>
+              {t("conversation.pending.terminal")}
+            </Button>
+          )}
+        </div>
+      </div>
+      {reason !== null && <p className="text-xs opacity-90">{reason}</p>}
+      {open && detail !== null && (
+        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all text-xs opacity-80">{detail}</pre>
       )}
     </div>
   );

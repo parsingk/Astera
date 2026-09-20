@@ -70,6 +70,10 @@ export interface DetectCandidate {
 export interface CliStatus {
   ok: boolean
   version?: string
+  // First non-empty line of stderr when the check failed, capped at 200 chars. Absent when the CLI
+  // failed silently (no stderr at all) — distinct from `ok: false` alone, which only says "not this
+  // folder" without saying why (design D3).
+  error?: string
 }
 
 export type SessionStatus = 'running' | 'exited'
@@ -1213,7 +1217,16 @@ export interface SystemApi {
   // share this instead of each inventing its own.
   pickFile(defaultPath?: string): Promise<string | null>
   pathExists(p: string): Promise<boolean>
-  checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>
+  // `cwd` lets the check run where the session actually will — the toolchain manager ahead of the
+  // CLI on PATH reads that folder's own manifest, so checking from the app's own cwd (omitting this)
+  // can pass while the same CLI refuses to run in the chosen project (design D3).
+  checkCli(cwd?: string): Promise<{ claude: CliStatus; codex: CliStatus }>
+  // "Is it installed at all" — asked directly of the machine (locateCommandFor), not inferred from a
+  // `--version` run. That run goes through a shell, and a shell that cannot find the binary still
+  // writes its own "not recognized"/"not found" to stderr — indistinguishable from the binary itself
+  // complaining once installed, so it cannot answer this question (design D3). Cwd-independent, so
+  // the renderer asks this once rather than per folder, unlike checkCli above.
+  checkCliInstalled(): Promise<{ claude: boolean; codex: boolean }>
   /** Installs one CLI with the command its vendor documents for this platform. Reached only from the
    *  screen shown when neither is present. Output arrives as `cli:install` events while it runs; this
    *  resolves when the installer exits. `error` names why nothing ran at all — an unmeasured platform,
@@ -1560,6 +1573,12 @@ export type RendererApi = CoreApi & {
     configuredModel(sessionId: string): Promise<string | null>
     /** One-shot on mount; null for a session that is not a chat session. */
     state(sessionId: string): Promise<ChatState | null>
+    /** design F5: the person confirmed, in the renderer's own dialog, that they want to skip this
+     *  folder's toolchain and retry. `true` when the retry actually started (a fresh `SessionInfo`
+     *  also arrives as `session:created`, the same way a Host reconnect delivers one); `false` for a
+     *  session that is not currently offering the button — unknown id, or its own conditions no
+     *  longer hold (a race with a second exit, or a second click). */
+    retryWithBypass(sessionId: string): Promise<boolean>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

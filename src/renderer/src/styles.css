@@ -807,6 +807,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* the resume loading overlay — shown in the centre of the terminal until the first output. No pointer-events, so terminal focus is unaffected */
 .loading-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-dim); font-size: 13px; background: var(--term-bg); pointer-events: none; }
 .loading-spinner { width: 14px; height: 14px; border: 2px solid var(--line-soft); border-top-color: var(--accent); border-radius: 50%; animation: cm-spin .8s linear infinite; }
+/* 힌트 줄 옆에 서는 작은 변형. 14px 링은 오버레이나 버튼의 크기라 11.5px 글자 옆에서는 글줄보다
+   커져 줄 높이를 밀어낸다 — 같은 링을 글자에 맞춰 줄인 것이고 색과 속도는 그대로 쓴다. */
+.loading-spinner.small { width: 10px; height: 10px; border-width: 1.5px; }
+/* 사유 한 줄. 스피너가 붙는 경우와 아닌 경우의 글머리가 같은 자리에서 시작하도록 flex 로 세운다 —
+   gap 만으로 맞추면 스피너 없는 줄이 왼쪽으로 튄다. */
+.modal-hint.start-blocked { display: flex; align-items: center; gap: 6px; }
 @keyframes cm-spin { to { transform: rotate(360deg); } }
 .exit-overlay { position: absolute; inset: 0; background: rgba(0,0,0,.7); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text); }
 .exit-overlay button { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-ink); font-weight: 600; }
@@ -1426,6 +1432,10 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .detect-path { font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* the Local History modal — list-style modals follow the .detect-list convention (body plus metadata within a row) */
 .modal.local-history { width: 560px; max-height: 80vh; }
+/* BypassRetryDialog.tsx (session-failure-visibility design F5) — five labelled paragraphs plus the
+   CLI's own quoted stderr line, wider than the 460px default so that prose does not wrap into a
+   ladder, and scrollable for a stderr line long enough to push the buttons off a short window. */
+.modal.bypass-retry { width: 520px; max-height: 80vh; overflow-y: auto; }
 /* The resume modal — with rolling, schedule, Slack, and permission checkboxes plus the conditional
    schedule inputs stacked up, it can overflow in a narrow window. The same convention as its sibling modals. */
 .modal.resume { max-height: 80vh; overflow-y: auto; }

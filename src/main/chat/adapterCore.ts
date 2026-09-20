@@ -86,7 +86,10 @@ export interface AdapterCore {
   turnId(): string | null
   /** A copy safe to hand out, with `outlivesApp` read live off the process. */
   snapshot(): ChatState
-  onExit(code: number): void
+  /** `stderrTail` is absent — not empty — when nobody collected it (an older Host, or the fallback
+   *  child process before T1/T2): that is "we do not know", not "the process said nothing", so it
+   *  must never be defaulted to a message. */
+  onExit(code: number, stderrTail?: string): void
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -132,6 +135,14 @@ function sameModel(a: ChatModel, b: ChatModel): boolean {
   return a.model === b.model && a.effort === b.effort && a.permissionMode === b.permissionMode
 }
 
+/** The one line a person reads out of a process's last words. Blank lines are skipped — a CLI that dies
+ *  often prints a leading newline — and it is capped so a CLI without newlines cannot push the banner
+ *  off the screen; the whole tail is still there in `errorDetail`. */
+function firstLineOf(tail: string | undefined): string | null {
+  const line = (tail ?? '').split('\n').map((l) => l.trim()).find((l) => l.length > 0)
+  return line === undefined ? null : line.slice(0, 200)
+}
+
 interface Pending {
   resolve(v: unknown): void
   reject(e: Error): void
@@ -159,6 +170,8 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
     request: null,
     model: { model: null, effort: null, permissionMode: 'default' },
     error: null,
+    exitCode: null,
+    errorDetail: null,
     outlivesApp: false, // placeholder — snapshot() below reads the live value off `proc` instead
     truncated: mode.mode === 'adopt' ? mode.truncated : false,
     provider
@@ -326,13 +339,26 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
     return ids.length > 0
   }
 
-  function onExit(code: number): void {
+  function onExit(code: number, stderrTail?: string): void {
     ended = true
-    for (const entry of pending.values()) entry.reject(requestError('exit', 'process ended'))
+    // The reason the in-flight requests get is the process's own, when it left one. They used to all
+    // read 'process ended', which told the person nothing about a CLI that a version manager refused
+    // to run (design D1).
+    const reason = firstLineOf(stderrTail)
+    for (const entry of pending.values()) entry.reject(requestError('exit', reason ?? 'process ended'))
     pending.clear()
     open.clear()
     queue.length = 0
-    emit({ type: 'exit', code })
+    // Bypasses patch()/flush() the same way fail() does (see the file banner) — exit is not a value a
+    // late-mounting pane can afford to miss a coalesced tick of, and exitCode/errorDetail take no part
+    // in the request/status/model diffing patch() exists for.
+    state.exitCode = code
+    state.errorDetail = stderrTail ?? null
+    if (reason !== null) state.error = reason
+    // A pane that was already open when the process died only ever hears this — it does not re-read
+    // `state` on exit — so the same values that just went onto `state` have to ride the event too, or
+    // an already-mounted pane keeps showing the nulls it mounted with (see ChatEvent's exit variant).
+    emit({ type: 'exit', code, errorDetail: state.errorDetail, ...(reason !== null ? { error: reason } : {}) })
   }
 
   return {

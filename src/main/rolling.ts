@@ -117,6 +117,14 @@ export interface RollingDeps {
     rollPrompt?: string
     /** Chat only, Claude only: start the next process on this model. See `chosenModelOf` below. */
     model?: string | null
+    /** design F5 fix round 1 (Important 3, the roll-inheritance fix): start the respawned process
+     *  with the toolchain bypass already applied, because the chain being rolled had already been
+     *  granted it. See `bypassedOf` below for the read and why it has to happen before the kill.
+     *  `bypassSignal` itself (which detection signal main found) is not threaded through here — the
+     *  wiring's own `spawn` callback (index.ts) computes it the same way ipc.ts's `spawnSession` does,
+     *  straight off `core.bypassSignalFor`, since it already has the target account in hand and that
+     *  fact is about this machine's PATH, not about the chain. */
+    startWithBypass?: boolean
   }): SessionInfo
   /** The model the person picked in this session, or null when they picked none.
    *
@@ -129,6 +137,15 @@ export interface RollingDeps {
    *  Optional, so a wiring that predates this (and every terminal chain, which has no such choice to
    *  make) behaves exactly as before. */
   chosenModelOf?(sessionId: string): string | null
+  /** design F5 fix round 1 (Important 3): whether the session being rolled away from had already been
+   *  granted the toolchain bypass — read the same way `chosenModelOf` is, and for the same reason:
+   *  "read before the kill, not after" (the manager drops the session together with its process, and
+   *  the fact lives only there). Dropping consent already given at the roll boundary is the same
+   *  silent-override harm design S7 exists to forbid, just moved to a different door — a chain is one
+   *  thing to the person, and a roll that silently drops what they agreed to is the same silence this
+   *  whole branch exists to remove. Optional so a wiring that predates this behaves exactly as before
+   *  (no bypass ever inherited, which is what every terminal chain and every wiring before F5 did). */
+  bypassedOf?(sessionId: string): boolean
   write(sessionId: string, data: string): void
   kill(sessionId: string): void
   getAccount(id: string): Account | null
@@ -1534,6 +1551,9 @@ export class RollingCoordinator {
       // Read before the kill, not after: the manager drops the session together with its process, and
       // the person's model choice is held there. Reading it afterwards returns null every time.
       const chosenModel = this.deps.chosenModelOf?.(chain.liveId) ?? null
+      // design F5 fix round 1 (Important 3): same "read before the kill" rule, for the toolchain
+      // bypass a person already consented to for this chain.
+      const wasBypassed = this.deps.bypassedOf?.(chain.liveId) ?? false
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const info = this.deps.spawn({
@@ -1556,7 +1576,8 @@ export class RollingCoordinator {
         rollPrompt: chain.liveInfo.rollPrompt,
         // Carried so the chain keeps running on what the person chose. The respawned session records it
         // as its own choice, so the roll after this one reads it back the same way.
-        model: chosenModel
+        model: chosenModel,
+        startWithBypass: wasBypassed
       })
       this.chains.delete(oldId)
       chain.liveId = info.id

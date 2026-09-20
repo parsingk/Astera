@@ -220,6 +220,7 @@ const api = {
     pickFile: invoke('system.pickFile'),
     pathExists: invoke('system.pathExists'),
     checkCli: invoke('system.checkCli'),
+    checkCliInstalled: invoke('system.checkCliInstalled'),
     installCli: invoke('system.installCli'),
     relaunch: invoke('system.relaunch'),
     appVersion: invoke('system.appVersion'),
@@ -323,7 +324,8 @@ const api = {
     listPermissionModes: invoke('chat.listPermissionModes'),
     listModels: invoke('chat.listModels'),
     configuredModel: invoke('chat.configuredModel'),
-    state: invoke('chat.state')
+    state: invoke('chat.state'),
+    retryWithBypass: invoke('chat.retryWithBypass')
   },
   platform: process.platform,
   win: {

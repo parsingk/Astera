@@ -231,7 +231,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
   }
 
   proc.onLine(handleLine)
-  proc.onExit(({ exitCode }) => core.onExit(exitCode))
+  proc.onExit(({ exitCode, stderrTail }) => core.onExit(exitCode, stderrTail))
 
   // ---- the public surface ----
 

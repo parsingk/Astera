@@ -573,6 +573,12 @@ export const es: Catalog = {
   'session.new.codexMissingPre': 'No se encontró el CLI de Codex.',
   'session.new.claudeMissingPre': 'No se encontró el CLI de Claude Code.',
   'session.new.cliMissingPost': 'Instálelo y vuelva a intentarlo.',
+  // "No instalado" y "no se ejecuta en esta carpeta" requieren arreglos distintos — el primero es una
+  // instalación, el segundo es la carpeta o la configuración del toolchain. El texto marca esa diferencia (diseño D3).
+  'session.new.cliFailsHere': '{cli} no se ejecuta en esta carpeta: {reason}',
+  // Para cuando la comprobación muere en su límite de 10s sin decir nada (un shim de shell:true
+  // colgado) — "no se ejecuta en esta carpeta" es honesto por sí solo; añadir ": undefined" no lo es.
+  'session.new.cliFailsHereUnknown': '{cli} no se ejecuta en esta carpeta.',
   'session.field.projectFolder': 'Carpeta del proyecto',
   'session.field.account': 'Cuenta',
   'session.new.folderNotSelected': '(Sin seleccionar)',
@@ -599,6 +605,11 @@ export const es: Catalog = {
   'session.new.saveDefaultAccount': 'Recordar esta cuenta para este proyecto',
   'session.new.bypassPermissions': 'Ejecutar sin comprobar permisos (bypass permissions)',
   'session.new.start': 'Iniciar',
+  'session.new.blocked.noCwd': 'Elige una carpeta',
+  'session.new.blocked.noAccount': 'Elige una cuenta',
+  'session.new.blocked.cliMissing': 'No se encontró la CLI de esta cuenta',
+  'session.new.blocked.noSchedule': 'Fija una hora programada',
+  'session.new.blocked.checkingFolder': 'Comprobando la carpeta del proyecto',
   'session.new.starting': 'Iniciando la sesión…',
   'session.new.startingWorktree': 'Creando el worktree…',
   // NewSessionDialog.tsx scheduler UI
@@ -626,6 +637,35 @@ export const es: Catalog = {
   'session.pane.splitDown': 'Dividir abajo',
   'session.pane.unsplit': 'Quitar división',
   'session.pane.maxReached': 'Se puede dividir en 4 paneles como máximo',
+  // ConversationPane.tsx — exited banner (session-failure-visibility design D2/F2). Este catálogo
+  // parcial aún no tiene el resto de las claves conversation.* (se sustituyen por en/ko); estas tres
+  // se añaden antes que las demás.
+  'conversation.exited.withCode': 'Esta sesión ha terminado (código {code})',
+  'conversation.exited.detail': 'Detalles',
+  'conversation.exited.restart': 'Reiniciar',
+  // Los cinco puntos de la confirmación de design §4 F5. Una excepción a S1 (una o dos líneas) — la
+  // persona está tomando una decisión que nadie más puede tomar, y quitar los hechos dejaría solo un botón.
+  'conversation.exited.bypassConfirm.title': '¿Omitir la configuración de toolchain de esta carpeta y reintentar?',
+  'conversation.exited.bypassConfirm.whatBlockedLabel': 'Qué lo bloqueó',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    'No fue la CLI. El gestor de versiones de herramientas por delante en el PATH (Volta) se negó a ejecutarse. Necesita leer el package.json de esta carpeta para elegir una versión, y no pudo',
+  // fix round 1 / Important 4: usada cuando solo coincidió la señal más débil (VOLTA_HOME). Que
+  // Volta esté instalado en esta máquina es un hecho; que haya bloqueado *esta* CLI no lo es — Volta
+  // puede estar gestionando Node mientras esta CLI es una instalación aparte que bloqueó un antivirus.
+  'conversation.exited.bypassConfirm.whatBlockedSoft':
+    'No necesariamente la CLI misma. Un gestor de versiones de herramientas (Volta) instalado en esta máquina podría ser la causa. Si esta CLI es una de las que gestiona, Volta por delante en el PATH pudo haberse negado a ejecutarse al intentar leer el package.json de esta carpeta para elegir una versión',
+  'conversation.exited.bypassConfirm.ifSkippedLabel': 'Si lo omites',
+  'conversation.exited.bypassConfirm.ifSkipped': 'Se omite la resolución de versión y se ejecuta la CLI que quede por defecto en el PATH. La sesión se inicia.',
+  'conversation.exited.bypassConfirm.givesUpLabel': 'Qué se pierde',
+  'conversation.exited.bypassConfirm.givesUp':
+    'La versión de la herramienta fijada para este proyecto. No solo esta sesión: todos los comandos que ejecute (el propio npm test, npm run build, node … del agente) se ejecutarán con la versión por defecto, no con la fijada. El mismo comando puede dar un resultado distinto al de tu terminal.',
+  'conversation.exited.bypassConfirm.properFixLabel': 'La solución real',
+  'conversation.exited.bypassConfirm.properFix': 'Si arreglas el package.json, este cuadro no volverá a aparecer.',
+  'conversation.exited.bypassConfirm.confirm': 'Omitir y reintentar',
+  'conversation.exited.bypassConfirm.failed': 'No se pudo reintentar',
+  // fix round 1 (Critical 2): la marca duradera — a diferencia de `notice`, nunca se borra y se
+  // muestra siempre como su propia línea mientras esta sesión (y luego su historial) esté abierta.
+  'conversation.bypassed.badge': 'Esta sesión se inició omitiendo la versión de toolchain fijada para este proyecto',
   // ResumeDialog.tsx
   'session.resume.title': 'Reanudar la sesión',
   'session.resume.conversationLabel': 'Conversación',
@@ -1227,5 +1267,8 @@ export const es: Catalog = {
   'hiw.verify.partial': 'Solo se comprobó una parte',
   'hiw.verify.unverified': 'No se comprobó nada',
   'hiw.verify.failed': 'Una comprobación reportada falló',
-  'hiw.verify.reported': 'Lo reportó el agente — la aplicación no lo ejecutó por su cuenta'
+  'hiw.verify.reported': 'Lo reportó el agente — la aplicación no lo ejecutó por su cuenta',
+  // Tarea 7 — hay que decir siempre que se usó el bypass de toolchain (diseño F5); no es un estado
+  // estable, así que se traduce aunque el resto de chat.notice.* todavía no esté aquí
+  'chat.notice.bypassed': 'Iniciada omitiendo la configuración de toolchain de esta carpeta — puede no ser la versión que fijaste'
 }

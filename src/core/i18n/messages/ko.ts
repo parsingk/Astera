@@ -687,6 +687,12 @@ export const ko = {
   'session.new.codexMissingPre': 'Codex CLI를 찾을 수 없습니다.',
   'session.new.claudeMissingPre': 'Claude Code CLI를 찾을 수 없습니다.',
   'session.new.cliMissingPost': '설치 후 다시 시도하세요.',
+  // "설치돼 있지 않다"와 "이 폴더에서는 실행되지 않는다"는 사람이 할 일이 다르다 — 앞은 설치,
+  // 뒤는 폴더나 toolchain 설정이다. 그 차이를 문구가 말한다(설계 D3).
+  'session.new.cliFailsHere': '{cli} 가 이 폴더에서 실행되지 않습니다: {reason}',
+  // 검사가 10초 동안 아무 말 없이 죽었을 때(shell:true 셔틀이 매달림) — 사유가 없다고 ": undefined"
+  // 를 보여줄 수는 없으니, 이유 없이도 말이 되는 문장을 따로 둔다.
+  'session.new.cliFailsHereUnknown': '{cli} 가 이 폴더에서 실행되지 않습니다.',
   'session.field.projectFolder': '프로젝트 폴더',
   'session.field.account': '계정',
   // 세션 방식 선택(Task 7) — 터미널/대화 세그먼트 컨트롤. 대화는 Host 가 proc-* 를 말해야 켜진다
@@ -749,6 +755,11 @@ export const ko = {
   'setup.language': '언어',
   'session.new.bypassPermissions': '권한 확인 없이 실행 (bypass permissions)',
   'session.new.start': '시작',
+  'session.new.blocked.noCwd': '폴더를 고르세요',
+  'session.new.blocked.noAccount': '계정을 고르세요',
+  'session.new.blocked.cliMissing': '이 계정의 CLI 를 찾지 못했습니다',
+  'session.new.blocked.noSchedule': '예약 시각을 정하세요',
+  'session.new.blocked.checkingFolder': '프로젝트 폴더를 확인하는 중입니다',
   // Waiting text between pressing Start and the tab opening. Splitting off a worktree chains fetch, worktree add and
   // the include copy, taking several seconds, so what is in progress is announced separately.
   'session.new.starting': '세션을 시작하는 중…',
@@ -1509,6 +1520,37 @@ export const ko = {
   'conversation.running.thinking': '생각 중',
   'conversation.running.working': '실행 중',
   'conversation.exited.title': '이 세션은 종료되었습니다',
+  // 터미널은 언제나 종료 코드를 보여 줬고 대화 창은 보여 주지 않았다(설계 D2). 코드만으로는 아무것도
+  // 말해 주지 않으므로 프로세스가 stderr 에 남긴 첫 줄을 같이 싣는다 — 전문은 접어 둔다.
+  'conversation.exited.withCode': '이 세션은 종료되었습니다 (코드 {code})',
+  'conversation.exited.detail': '자세히',
+  'conversation.exited.restart': '다시 시작',
+  // design §4 F5의 확인 창 다섯 문단. S1(한두 줄)의 예외다 — 사람이 대신할 수 없는 판단이라 사실을
+  // 빼면 버튼만 남는다. whatBlocked 뒤에 CLI 가 stderr 에 남긴 첫 줄(ChatState.error)이 ": <줄>" 로
+  // 붙는데, 그 줄 자체는 컴포넌트가 붙인다(없으면 콜론째 생략 — fix round 1 / Important 4) — 카탈로그
+  // 문구 자체는 그 줄 없이도 문장이 끝난다.
+  'conversation.exited.bypassConfirm.title': '이 폴더의 toolchain 설정을 건너뛰고 다시 시도할까요?',
+  'conversation.exited.bypassConfirm.whatBlockedLabel': '무엇이 막았나',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    'CLI 가 아니라 PATH 앞의 도구 버전 관리자(Volta)가 실행을 거절했습니다. 이 폴더의 package.json 을 읽어 어느 버전을 쓸지 정해야 하는데, 그 파일을 읽지 못했습니다',
+  // fix round 1 / Important 4: VOLTA_HOME 만 맞았을 때 쓰는 문구. Volta 가 이 기기에 설치돼 있다는
+  // 것은 확실하지만, 그것이 *이* CLI 를 막았다는 확증은 아니다 — Volta 는 Node 를 관리하고 있고
+  // codex 는 백신이 막은 별개의 설치일 수 있다. 그래서 "거절했습니다"라는 확정 서술을 쓰지 않는다.
+  'conversation.exited.bypassConfirm.whatBlockedSoft':
+    '이 CLI 자신이 아니라, 이 기기에 설치된 도구 버전 관리자(Volta)가 원인일 수 있습니다. Volta 가 관리하는 도구라면 PATH 앞에서 이 폴더의 package.json 을 읽어 버전을 정하려다 실행을 거절했을 수 있습니다',
+  'conversation.exited.bypassConfirm.ifSkippedLabel': '건너뛰면',
+  'conversation.exited.bypassConfirm.ifSkipped': '버전 판단을 생략하고 기본으로 잡히는 CLI 를 그대로 실행합니다. 세션은 뜹니다.',
+  'conversation.exited.bypassConfirm.givesUpLabel': '무엇을 포기하나',
+  'conversation.exited.bypassConfirm.givesUp':
+    '이 프로젝트에 핀해 둔 도구 버전입니다. 이 세션뿐 아니라 이 세션이 실행하는 모든 명령(에이전트가 돌리는 npm test, npm run build, node …)이 핀된 버전이 아니라 기본 버전으로 돕니다. 같은 명령이 당신 터미널에서와 다른 결과를 낼 수 있습니다.',
+  'conversation.exited.bypassConfirm.properFixLabel': '제대로 된 해결',
+  'conversation.exited.bypassConfirm.properFix': 'package.json 을 고치면 이 창은 다시 뜨지 않습니다.',
+  'conversation.exited.bypassConfirm.confirm': '건너뛰고 다시 시도',
+  // 확인을 누른 뒤, 그 사이 다른 종료가 그 판정을 다시 내려 버튼이 더는 서 있지 않을 때(레이스)
+  'conversation.exited.bypassConfirm.failed': '다시 시도하지 못했습니다',
+  // fix round 1 (Critical 2): durable 마크. notice 와 달리 첫 턴에 걷히지 않고, 세션이 사는 동안(그
+  // 리고 죽은 뒤에도) 계속 보인다 — 언제나, 배너 우선순위와 무관하게 뜨는 별도 줄이다.
+  'conversation.bypassed.badge': '이 세션은 이 프로젝트의 toolchain 버전 설정을 건너뛰고 시작되었습니다',
   'conversation.running.interrupt': '중단 (Esc)',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effortRow': 'effort: {level}',
@@ -1532,6 +1574,9 @@ export const ko = {
   'chat.notice.checking': '상태를 확인하는 중',
   'chat.notice.endsWithApp': '이 세션은 앱을 끄면 끝납니다',
   'chat.notice.error': '턴이 실패했습니다: {message}',
+  // 우회로 띄웠다는 것을 반드시 말한다 — 사용자가 이 폴더에 핀해 둔 것과 다른 버전이 떴을 수 있고,
+  // 조용히 그러면 안 된다(설계 F5)
+  'chat.notice.bypassed': '이 폴더의 toolchain 설정을 건너뛰고 띄웠습니다 — 핀해 둔 것과 다른 버전일 수 있습니다',
   'chat.mode.aria': '권한 모드',
   'chat.mode.default': '기본',
   'chat.mode.acceptEdits': '편집 자동 승인',

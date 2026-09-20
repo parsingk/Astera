@@ -39,6 +39,8 @@ import type { Lang, Message } from '../core/i18n'
 import type { Account, DetectCandidate, Provider, SessionUsage } from '../core/types'
 import type { PtyFactory } from '../core/sessions/pty'
 import type { ProcFactory } from '../core/sessions/proc'
+import type { BypassSignal } from '../core/sessions/retryBypass'
+import { detectBypassableManager } from './cliLocate'
 
 export interface Core {
   accounts: AccountRegistry
@@ -117,6 +119,24 @@ export interface Core {
    *  attached by registerIpc once the Host answers, the fallback is child_process (chat-sessions
    *  design §6.5). `factory` is exposed because the chat manager (slice 2) is built later than createCore. */
   procRouter: { factory: ProcFactory; use(f: ProcFactory | null): void }
+  /** design F5 fix round 1 (Important 2 / 3): whether a bypassable toolchain manager is in the way of
+   *  this CLI — `cliLocate.ts`'s `detectBypassableManager`, probed once in the background as this
+   *  function starts (fired, not awaited — see below for why) and read synchronously ever after.
+   *
+   *  **Why synchronous.** The probe spawns a real shell (`locateCli`: `Get-Command`/`where` on
+   *  Windows, a login shell on posix) with up to a 15s timeout on a hung one. Before this existed,
+   *  ipc.ts's `spawnSession` awaited it on every chat spawn — the exact path "왜 시작 버튼이 안
+   *  눌리나" exists to keep fast — and the rolling coordinators' respawn callbacks (index.ts) call
+   *  `core.chat.spawn` synchronously and cannot await anything at all. One probe per CLI, ever, read
+   *  the same way by both.
+   *
+   *  **Why fired rather than awaited here.** `createCore` blocks the whole app's startup on its own
+   *  return; awaiting a shell that can take fifteen seconds on this line would trade a 15s spawn delay
+   *  for a 15s *launch* delay, which is worse. The one cost is a narrow window right at startup: a
+   *  chat session spawned before the probe resolves reads `null` (no manager found) for that one
+   *  spawn, same as a machine with no manager at all — never wrong in a way that shows a false Volta
+   *  story, only in a way that can, for a moment, decline to offer a true one. */
+  bypassSignalFor: (cli: Provider) => BypassSignal
 }
 
 // An alias narrowed to just the shape accountLogout actually uses — node:child_process's execFile has so many
@@ -370,6 +390,22 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     const payload = await statusLine.read(sessionId)
     return payload ? parseStatusLinePayload(payload) : null
   }
+  // design F5 fix round 1 (Important 2): fired here, once, rather than awaited — see bypassSignalFor's
+  // own doc on the `Core` interface for why blocking createCore's return on a probe that can take up
+  // to 15 seconds would only move the delay from "a chat spawn" to "the whole app's launch".
+  const bypassSignalCache: Partial<Record<Provider, BypassSignal>> = {}
+  void Promise.all(
+    (['claude', 'codex'] as const).map((cli) =>
+      detectBypassableManager(cli).then(
+        (signal) => {
+          bypassSignalCache[cli] = signal
+        },
+        () => {
+          bypassSignalCache[cli] = null
+        }
+      )
+    )
+  )
   return {
     accounts,
     sessions,
@@ -403,6 +439,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     keybindings,
     lang: appSettings.getLang() ?? pickInitialLang(osLocale),
     ptyRouter,
-    procRouter
+    procRouter,
+    bypassSignalFor: (cli: Provider) => bypassSignalCache[cli] ?? null
   }
 }

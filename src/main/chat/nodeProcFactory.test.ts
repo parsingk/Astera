@@ -39,3 +39,45 @@ describe('nodeProcFactory', () => {
     expect(await until(() => (exit === null ? undefined : exit))).toBe(1)
   })
 })
+
+describe('nodeProcFactory — 마지막 말', () => {
+  it('stderr 에 찍고 죽으면 그 꼬리가 종료 이벤트에 실린다', async () => {
+    const proc = nodeProcFactory(process.execPath, ['-e', 'process.stderr.write("error: Could not parse project manifest\\n"); process.exit(8)'], {
+      cwd: process.cwd(),
+      env: process.env as Record<string, string | undefined>
+    })
+    const exit = await new Promise<{ exitCode: number; stderrTail?: string }>((r) => proc.onExit(r))
+    expect(exit.exitCode).toBe(8)
+    expect(exit.stderrTail).toContain('Could not parse project manifest')
+  })
+
+  it('stderr 에 아무것도 안 찍으면 칸 자체가 없다', async () => {
+    const proc = nodeProcFactory(process.execPath, ['-e', 'process.exit(0)'], {
+      cwd: process.cwd(),
+      env: process.env as Record<string, string | undefined>
+    })
+    const exit = await new Promise<{ exitCode: number; stderrTail?: string }>((r) => proc.onExit(r))
+    expect(exit).not.toHaveProperty('stderrTail')
+  })
+
+  // 최종 리뷰 파동(finding 3): 'close' 만 기다리면, 파이프를 쥔 그랜드차일드가 살아 있는 동안 종료가
+  // 영영 안 온다(설계가 경고하는 회귀) — 'exit' 이 짧은 유예 타이머를 걸어 그 경우에도 보고한다.
+  // 자식은 그랜드차일드를 'inherit' 로 띄우고 곧바로 자기 자신은 종료해, 파이프의 쓰기 쪽을
+  // 그랜드차일드가 계속 쥐고 있게 만든다 — 그랜드차일드는 10초 뒤 스스로 끝나 뒤처리가 필요 없다.
+  it("그랜드차일드가 파이프를 쥐고 있어도 유예 시간 뒤엔 종료를 보고한다 — 'close' 만 기다리면 안 온다", async () => {
+    const script =
+      "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 10000)'], { stdio: 'inherit' }); process.exit(6)"
+    const t0 = Date.now()
+    const proc = nodeProcFactory(process.execPath, ['-e', script], {
+      cwd: process.cwd(),
+      env: process.env as Record<string, string | undefined>
+    })
+    const exit = await new Promise<{ exitCode: number; stderrTail?: string }>((r) => proc.onExit(r))
+    // 유예 타이머(150ms) 뒤에 온다. 상한을 그랜드차일드 수명(10초)의 절반으로 크게 잡는 이유: 이 단언이
+    // 재는 것은 '유예 타이머가 쟀느냐 close 를 끝까지 기다렸느냐' 라는 **둘 중 하나**이고, 둘의 간격이
+    // 66배라 정밀한 상한이 필요 없다. 이 저장소는 CI 와 Release 가 러너를 함께 잡을 때 빡빡한 시간
+    // 단언이 반복해서 빨개진 이력이 있다 — 여유가 곧 이 테스트가 말하는 것을 지키는 방법이다.
+    expect(Date.now() - t0).toBeLessThan(5000)
+    expect(exit.exitCode).toBe(6)
+  })
+})

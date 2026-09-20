@@ -598,6 +598,12 @@ export const en: Record<keyof typeof ko, string> = {
   'session.new.codexMissingPre': 'Codex CLI was not found.',
   'session.new.claudeMissingPre': 'Claude Code CLI was not found.',
   'session.new.cliMissingPost': 'Install it, then try again.',
+  // "Not installed" and "does not run in this folder" call for different fixes — the former is an
+  // install, the latter is the folder or a toolchain config. The copy keeps that distinction (design D3).
+  'session.new.cliFailsHere': '{cli} does not run in this folder: {reason}',
+  // For when the check died within its 10s timeout without saying anything (a hung shell:true
+  // shim) — "does not run in this folder" is honest on its own; appending ": undefined" is not.
+  'session.new.cliFailsHereUnknown': '{cli} does not run in this folder.',
   'session.field.projectFolder': 'Project folder',
   'session.field.account': 'Account',
   'session.kind.terminal': 'Terminal',
@@ -651,6 +657,11 @@ export const en: Record<keyof typeof ko, string> = {
   'setup.language': 'Language',
   'session.new.bypassPermissions': 'Run without permission checks (bypass permissions)',
   'session.new.start': 'Start',
+  'session.new.blocked.noCwd': 'Choose a folder',
+  'session.new.blocked.noAccount': 'Choose an account',
+  'session.new.blocked.cliMissing': "This account's CLI was not found",
+  'session.new.blocked.noSchedule': 'Set a schedule time',
+  'session.new.blocked.checkingFolder': 'Checking the project folder',
   'session.new.starting': 'Starting session…',
   'session.new.startingWorktree': 'Creating worktree…',
   'session.new.schedLabel': 'Scheduler — run a command periodically',
@@ -1294,6 +1305,39 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.running.thinking': 'Thinking',
   'conversation.running.working': 'Working',
   'conversation.exited.title': 'This session has ended',
+  // The terminal always showed an exit code, and the chat pane never did (design D2). A code alone
+  // says nothing, so the first line the process left on stderr rides along — the tail folds away.
+  'conversation.exited.withCode': 'This session has ended (code {code})',
+  'conversation.exited.detail': 'Details',
+  'conversation.exited.restart': 'Restart',
+  // design §4 F5's five-part confirmation. An exception to S1 (one or two lines) — the person is
+  // making a judgement nobody else can, and stripping the facts would leave only a button.
+  // whatBlocked's sentence ends without the CLI's own stderr line — the component appends ": <line>"
+  // itself, and omits it entirely when there is none (fix round 1 / Important 4).
+  'conversation.exited.bypassConfirm.title': "Skip this folder's toolchain setup and retry?",
+  'conversation.exited.bypassConfirm.whatBlockedLabel': 'What blocked it',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    "Not the CLI. The tool version manager ahead of it on PATH (Volta) refused to run. It needs to read this folder's package.json to pick a version, and could not",
+  // fix round 1 / Important 4: used when only the weaker signal (VOLTA_HOME) matched. Volta being
+  // installed on this machine is certain; that it gated *this* CLI is not — Volta can be managing
+  // Node while this CLI is a separate install an antivirus blocked — so this avoids stating a refusal
+  // as fact.
+  'conversation.exited.bypassConfirm.whatBlockedSoft':
+    "Not necessarily the CLI itself. A tool version manager (Volta) installed on this machine may be the cause. If this CLI is one it manages, Volta ahead on PATH may have refused to run while trying to read this folder's package.json to pick a version",
+  'conversation.exited.bypassConfirm.ifSkippedLabel': 'If you skip it',
+  'conversation.exited.bypassConfirm.ifSkipped': 'Version resolution is skipped and the CLI on the default PATH runs as-is. The session comes up.',
+  'conversation.exited.bypassConfirm.givesUpLabel': 'What you give up',
+  'conversation.exited.bypassConfirm.givesUp':
+    "The tool version pinned for this project. Not just this session: every command it runs (the agent's own npm test, npm run build, node …) runs on the default version instead of the pinned one. The same command can behave differently than it does in your terminal.",
+  'conversation.exited.bypassConfirm.properFixLabel': 'The real fix',
+  'conversation.exited.bypassConfirm.properFix': 'Fixing package.json means this dialog will not appear again.',
+  'conversation.exited.bypassConfirm.confirm': 'Skip and retry',
+  // The button is pressed, but a race (another exit re-decided the offer in between) means it no
+  // longer applies.
+  'conversation.exited.bypassConfirm.failed': 'Could not retry',
+  // fix round 1 (Critical 2): the durable mark — unlike `notice`, never cleared, always shown as its
+  // own line for as long as this session (and later, its history) is open.
+  'conversation.bypassed.badge': "This session started by skipping this project's pinned toolchain version",
   'conversation.running.interrupt': 'Stop (Esc)',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effortRow': 'effort: {level}',
@@ -1316,6 +1360,7 @@ export const en: Record<keyof typeof ko, string> = {
   'chat.notice.checking': 'Checking where the session stands',
   'chat.notice.endsWithApp': 'This session ends when the app quits',
   'chat.notice.error': 'The turn failed: {message}',
+  'chat.notice.bypassed': "Started with this folder's toolchain settings skipped — this may not be the version you pinned",
   'chat.mode.aria': 'Permission mode',
   'chat.mode.default': 'Default',
   'chat.mode.acceptEdits': 'Accept edits',

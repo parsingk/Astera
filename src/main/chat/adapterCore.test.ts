@@ -95,7 +95,7 @@ describe('createAdapterCore — client requests', () => {
     c.onExit(3)
     await expect(asked).rejects.toThrow('process ended')
     expect(c.ended).toBe(true)
-    expect(events.at(-1)).toEqual({ type: 'exit', code: 3 })
+    expect(events.at(-1)).toEqual({ type: 'exit', code: 3, errorDetail: null })
     const after = c.request('x-2', () => p.write('b'))
     await expect(after).rejects.toThrow('process ended')
     expect(p.written).toEqual(['a'])   // nothing was written to a process that has gone
@@ -297,5 +297,47 @@ describe('createAdapterCore — the state it hands out', () => {
     expect(made().c.provider).toBe('codex')
     const p = fakeProc()
     expect(createAdapterCore({ proc: p, log: () => {} }, { mode: 'fresh' }, 'claude').provider).toBe('claude')
+  })
+})
+
+describe('createAdapterCore — onExit 이 넘겨받는 프로세스의 마지막 말', () => {
+  it('꼬리가 있으면 그 첫 비어 있지 않은 줄이 error 가 되고 전문은 errorDetail 에 남는다', () => {
+    const { c } = made()
+    c.onExit(8, '\nerror: Could not parse project manifest\nat C:\\p\\package.json\n')
+    expect(c.state.error).toBe('error: Could not parse project manifest')
+    expect(c.state.errorDetail).toContain('at C:\\p\\package.json')
+    expect(c.state.exitCode).toBe(8)
+  })
+  // 꼬리가 없으면 지어내지 않는다 — 옛 Host 이거나 정말 아무 말 없이 죽은 것이고, 둘 다 우리가 모른다
+  it('꼬리가 없으면 error 는 종전대로이고 errorDetail 은 null 이다', () => {
+    const { c } = made()
+    c.onExit(8)
+    expect(c.state.error).toBeNull()
+    expect(c.state.errorDetail).toBeNull()
+    expect(c.state.exitCode).toBe(8)
+  })
+  it('살아 있는 동안 exitCode 는 null 이다', () => {
+    const { c } = made()
+    expect(c.state.exitCode).toBeNull()
+  })
+  // state 뿐 아니라 exit 이벤트 자체에도 실어야 한다 — 이미 마운트된 pane 은 state 를 다시 읽지
+  // 않고 이 이벤트만 듣는다(useChatState.ts 의 foldChatEvent).
+  it('꼬리가 있으면 exit 이벤트에도 error 와 errorDetail 이 함께 실린다', () => {
+    const { c, events } = made()
+    c.onExit(8, '\nerror: Could not parse project manifest\nat C:\\p\\package.json\n')
+    expect(events.at(-1)).toEqual({
+      type: 'exit',
+      code: 8,
+      error: 'error: Could not parse project manifest',
+      errorDetail: '\nerror: Could not parse project manifest\nat C:\\p\\package.json\n'
+    })
+  })
+  // 꼬리가 없으면 exit 이벤트에 error 칸 자체가 없다 — fold 쪽이 지어내지 않고 기존 error 를
+  // 그대로 두려면, "이유 없음" 이 빈 문자열이 아니라 칸의 부재로 와야 한다.
+  it('꼬리가 없으면 exit 이벤트에 error 칸이 없고 errorDetail 은 null 이다', () => {
+    const { c, events } = made()
+    c.onExit(8)
+    expect(events.at(-1)).toEqual({ type: 'exit', code: 8, errorDetail: null })
+    expect(events.at(-1)).not.toHaveProperty('error')
   })
 })

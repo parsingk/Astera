@@ -5,23 +5,45 @@ import { spawn } from 'node:child_process'
 import { createLineSplitter } from '../../core/host/lines'
 import { treeKillCommand } from '../../core/run/kill'
 import type { ProcFactory, ProcLike } from '../../core/sessions/proc'
+import { createStderrTail } from '../../core/sessions/stderrTail'
 
 export const nodeProcFactory: ProcFactory = (file, args, opts): ProcLike => {
   const child = spawn(file, args, { cwd: opts.cwd, env: opts.env as NodeJS.ProcessEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
   let onLine: (line: string) => void = () => {}
-  let onExit: (e: { exitCode: number }) => void = () => {}
+  let onExit: (e: { exitCode: number; stderrTail?: string }) => void = () => {}
   let ended = false
+  let exitTimer: NodeJS.Timeout | null = null
   const splitter = createLineSplitter((line) => onLine(line))
+  const tail = createStderrTail()
   const end = (code: number): void => {
     if (ended) return
     ended = true
+    if (exitTimer) {
+      clearTimeout(exitTimer)
+      exitTimer = null
+    }
     splitter.flush()
-    onExit({ exitCode: code })
+    onExit({ exitCode: code, ...(tail.value() !== undefined ? { stderrTail: tail.value() } : {}) })
   }
   child.stdout?.setEncoding('utf8')
   child.stdout?.on('data', (c: string) => splitter.push(c))
-  child.stderr?.resume() // not protocol; drained so the child cannot block on it
-  child.on('exit', (code, signal) => end(code ?? (signal ? 1 : 0)))
+  child.stderr?.setEncoding('utf8')
+  // Still drained — a child blocked on stderr was the original reason this line existed — but the last
+  // 4000 characters are kept now. When the CLI dies at birth this is the only account of why, and the
+  // chat pane had none (design D1).
+  child.stderr?.on('data', (c: string) => tail.push(c))
+  // Node only guarantees stdio has been fully delivered at 'close', not 'exit' — this tail exists to
+  // catch a process's *last* write, so a write racing 'exit' is the case it is for, not a corner case.
+  // 'close' is the real trigger; 'exit' only arms a short grace timer that reports the same end if
+  // 'close' still has not arrived — a grandchild holding a pipe open would otherwise mean 'close'
+  // never fires at all, and this session would never be reported as ended.
+  child.on('close', (code, signal) => end(code ?? (signal ? 1 : 0)))
+  child.on('exit', (code, signal) => {
+    // 'close' 가 먼저 왔거나 'error' 가 이미 끝냈으면 걸 것이 없다. end() 가 idempotent 라 해는
+    // 없지만, 아무도 지우지 않는 타이머가 150ms 동안 이벤트 루프를 붙들어 테스트에서 열린 핸들로 보인다.
+    if (ended) return
+    exitTimer = setTimeout(() => end(code ?? (signal ? 1 : 0)), 150)
+  })
   child.on('error', () => end(1))
   // A stream failing under a write or read is the child going away; `exit`/`error` on the child
   // already report that — these must not throw.

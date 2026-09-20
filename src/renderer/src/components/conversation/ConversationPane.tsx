@@ -28,6 +28,7 @@ import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.a
 const MemoThread = memo(Thread);
 import { ToolRow, ToolRowGroup } from "./ToolRow";
 import { ChatNotice, ExitedNotice, RunningNotice } from "./PendingBanner";
+import { BypassRetryDialog } from "./BypassRetryDialog";
 import { ModelControl, type ModelControlProps } from "./ModelControl";
 import { effortChoicesOf, modelChoicesOf } from "../../../../core/models/cliModels";
 import type { ModelDescriptor } from "../../../../core/models/types";
@@ -405,6 +406,19 @@ export function ConversationPane({
   const chat = useChatState(sessionId, true);
   /** `chat.status` without the optional chain, so the dependency arrays below stay plain reads. */
   const chatStatus = chat === null ? null : chat.status;
+  /** design F5: whether the confirm dialog for skipping this folder's toolchain is up. The button
+   *  that opens it never retries anything itself — see PendingBanner.tsx's own comment on
+   *  `ExitedNotice`'s `onRestart` for why that has to be a separate step. */
+  const [bypassConfirmOpen, setBypassConfirmOpen] = useState(false);
+  const confirmBypassRetry = useCallback((): void => {
+    setBypassConfirmOpen(false);
+    void window.api.chat.retryWithBypass(sessionId).then((ok) => {
+      // A false answer means the offer's own conditions no longer held by the time this ran (a race
+      // with a second exit, or the button pressed twice) — not a crash, so a quiet toast is enough;
+      // the banner itself already reflects whatever actually happened by then.
+      if (!ok) toast.error(t("conversation.exited.bypassConfirm.failed"));
+    });
+  }, [sessionId, t]);
   const [status, setStatus] = useState<Status>("loading");
   const [turns, setTurns] = useState<ConvTurn[]>([]);
   const [from, setFrom] = useState(0);
@@ -1254,8 +1268,19 @@ export function ConversationPane({
   );
   /** What the banner slot is for, in the order paneTransport.ts sets out. */
   const chatBanner = chatBannerFor(chat);
+  // 종료가 에러 배너를 가로채던 자리다. 사유를 배너 안으로 접어 넣어 한 곳에서 말한다 — 둘을 나란히
+  // 세우면 같은 사건을 두 번 말하게 되고, 가로채면 어렵게 실어 온 이유가 화면에 닿지 못한다(설계 D2).
   const banner: ReactNode = exited ? (
-    <ExitedNotice onGoTerminal={null} />
+    <ExitedNotice
+      onGoTerminal={null}
+      exitCode={chat?.exitCode ?? null}
+      reason={chat?.error ?? null}
+      detail={chat?.errorDetail ?? null}
+      // design F5: null unless the manager actually found both signals (a refusal-shaped death *and*
+      // a manager detected) — never a guess. Pressing it does not retry anything by itself; it opens
+      // the confirm dialog below, which is the only thing that can (PendingBanner.tsx's own comment).
+      onRestart={chat?.bypassOffer ? () => setBypassConfirmOpen(true) : null}
+    />
   ) : chatBanner.kind === "request" ? (
     // Keyed on the request so a new one gets a new card: the old one's `busy`/`submitting` state
     // would otherwise survive into it, and the person would meet a card whose buttons are already
@@ -1268,6 +1293,8 @@ export function ConversationPane({
     />
   ) : chatBanner.kind === "error" ? (
     <ChatNotice text={t("chat.notice.error", { message: chatBanner.message })} />
+  ) : chatBanner.kind === "notice" ? (
+    <ChatNotice text={t(`chat.notice.${chatBanner.key}` as MessageKey)} />
   ) : chatBanner.kind === "checking" ? (
     <ChatNotice text={t("chat.notice.checking")} />
   ) : chatBanner.kind === "endsWithApp" ? (
@@ -1347,6 +1374,16 @@ export function ConversationPane({
           <SessionStateBanners sessionId={sessionId} rollState={rollState} schedState={schedState} />
         </div>
       )}
+      {/* design F5 fix round 1 (Critical 2): the durable mark. Deliberately outside the single
+          priority banner slot (paneTransport.ts's chatBannerFor) — `notice` already lives there and
+          is meant to retire itself, but this fact must not compete with (or lose to) a request, an
+          error, or the exit banner for the one slot; it stays visible alongside whatever else the
+          pane is showing, for as long as chat?.bypassed says the session started this way. */}
+      {chat?.bypassed && (
+        <div className="border-border/60 text-muted-foreground flex items-center gap-1.5 border-b px-3 py-1 text-xs">
+          {t("conversation.bypassed.badge")}
+        </div>
+      )}
       {/* Only while a window is on its way. There is nothing to press any more, and a bar that sat
           there whenever earlier turns existed would be a button that has stopped being one. */}
       {loadingMore && (
@@ -1369,6 +1406,19 @@ export function ConversationPane({
           </RunningSlotContext.Provider>
         </BannerSlotContext.Provider>
       </div>
+      {bypassConfirmOpen && (
+        <BypassRetryDialog
+          line={chat?.error ?? ""}
+          // fix round 1 / Important 4: falls back to the confident wording only because the dialog
+          // can only ever open when `bypassOffer` is true, which requires `bypassSignal` to be set —
+          // this default is never actually reached, kept only so the prop stays required and honest.
+          // 기본값은 약한 쪽이다. 도달할 일이 없어야 하지만, 도달한다면 근거 없이 확정 서술을 내놓는
+          // 쪽으로 기우는 것이 이 다이얼로그가 막으려던 바로 그 실수다.
+          signal={chat?.bypassSignal ?? "voltaHome"}
+          onCancel={() => setBypassConfirmOpen(false)}
+          onConfirm={confirmBypassRetry}
+        />
+      )}
     </div>
   );
 }

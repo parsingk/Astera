@@ -566,6 +566,12 @@ export const ja: Catalog = {
   'session.new.codexMissingPre': 'Codex CLI が見つかりません。',
   'session.new.claudeMissingPre': 'Claude Code CLI が見つかりません。',
   'session.new.cliMissingPost': 'インストール後に再試行してください。',
+  // 「インストールされていない」と「このフォルダーでは実行できない」は対処が違う — 前者はインストール、
+  // 後者はフォルダーや toolchain 設定の問題。その違いを文言で分ける(設計 D3)。
+  'session.new.cliFailsHere': '{cli} はこのフォルダーで実行できません: {reason}',
+  // 10秒のタイムアウトまで何も言わずに死んだとき用(shell:true のシムがハングした場合) —
+  // 理由なしでも文になる文言を別に用意する。「: undefined」は文にならない。
+  'session.new.cliFailsHereUnknown': '{cli} はこのフォルダーで実行できません。',
   'session.field.projectFolder': 'プロジェクトフォルダ',
   'session.field.account': 'アカウント',
   'session.new.folderNotSelected': '(未選択)',
@@ -592,6 +598,11 @@ export const ja: Catalog = {
   'session.new.saveDefaultAccount': 'このプロジェクトでこのアカウントを記憶',
   'session.new.bypassPermissions': '権限確認なしで実行 (bypass permissions)',
   'session.new.start': '開始',
+  'session.new.blocked.noCwd': 'フォルダーを選んでください',
+  'session.new.blocked.noAccount': 'アカウントを選んでください',
+  'session.new.blocked.cliMissing': 'このアカウントの CLI が見つかりません',
+  'session.new.blocked.noSchedule': '予約時刻を決めてください',
+  'session.new.blocked.checkingFolder': 'プロジェクトフォルダを確認しています',
   'session.new.starting': 'セッションを開始しています…',
   'session.new.startingWorktree': 'worktree を作成しています…',
   // NewSessionDialog.tsx scheduler UI
@@ -619,6 +630,34 @@ export const ja: Catalog = {
   'session.pane.splitDown': '下に分割',
   'session.pane.unsplit': '分割を解除',
   'session.pane.maxReached': 'パネルは最大4つまで分割できます',
+  // ConversationPane.tsx — exited banner (session-failure-visibility design D2/F2). この部分カタログには
+  // 他の conversation.* キーがまだ無く(en/ko で代替される)、この3つだけを先に入れる。
+  'conversation.exited.withCode': 'このセッションは終了しました (コード {code})',
+  'conversation.exited.detail': '詳細',
+  'conversation.exited.restart': '再開',
+  // design §4 F5 の確認ダイアログの5つの項目。S1(1〜2行)の例外 — 本人にしかできない判断なので、
+  // 事実を削るとボタンだけが残る。
+  'conversation.exited.bypassConfirm.title': 'このフォルダの toolchain 設定をスキップして再試行しますか?',
+  'conversation.exited.bypassConfirm.whatBlockedLabel': '何が止めたか',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    'CLI ではなく、PATH の手前にあるツールバージョン管理ツール(Volta)が実行を拒否しました。このフォルダの package.json を読んでどのバージョンを使うか決める必要がありますが、そのファイルを読めませんでした',
+  // fix round 1 / Important 4: VOLTA_HOME しか一致しなかったときの文言。Volta がこの端末に入っている
+  // ことは確かだが、それが*この* CLI を止めたという確証ではない — Volta は Node を管理していて、
+  // codex は別にアンチウイルスが止めた単独インストールという可能性がある。
+  'conversation.exited.bypassConfirm.whatBlockedSoft':
+    'この CLI 自体ではなく、この端末に入っているツールバージョン管理ツール(Volta)が原因かもしれません。Volta が管理する対象なら、PATH 手前の Volta がこのフォルダの package.json を読んでバージョンを決めようとして実行を拒否した可能性があります',
+  'conversation.exited.bypassConfirm.ifSkippedLabel': 'スキップすると',
+  'conversation.exited.bypassConfirm.ifSkipped': 'バージョン判定を省略し、デフォルトの CLI をそのまま実行します。セッションは起動します。',
+  'conversation.exited.bypassConfirm.givesUpLabel': '何を諦めるか',
+  'conversation.exited.bypassConfirm.givesUp':
+    'このプロジェクトに固定したツールバージョンです。このセッションだけでなく、このセッションが実行するすべてのコマンド(エージェントが実行する npm test、npm run build、node …)が固定バージョンではなくデフォルトバージョンで動きます。同じコマンドでも、あなたのターミナルとは異なる結果になることがあります。',
+  'conversation.exited.bypassConfirm.properFixLabel': '本当の解決',
+  'conversation.exited.bypassConfirm.properFix': 'package.json を修正すれば、このダイアログは再び表示されません。',
+  'conversation.exited.bypassConfirm.confirm': 'スキップして再試行',
+  'conversation.exited.bypassConfirm.failed': '再試行できませんでした',
+  // fix round 1 (Critical 2): 消えない印。notice と違い最初のターンで消えず、このセッションが
+  // (そして終わった後も)存在する限り、常にその事実だけを言う一行として残る。
+  'conversation.bypassed.badge': 'このセッションはこのプロジェクトに固定した toolchain のバージョンをスキップして開始されました',
   // ResumeDialog.tsx
   'session.resume.title': 'セッションを再開',
   'session.resume.conversationLabel': '会話',
@@ -1206,5 +1245,8 @@ export const ja: Catalog = {
   'hiw.verify.partial': '一部しか確認されていません',
   'hiw.verify.unverified': '確認されたものはありません',
   'hiw.verify.failed': '報告された検査が失敗しました',
-  'hiw.verify.reported': 'エージェントが報告した内容です — アプリ自身が実行したわけではありません'
+  'hiw.verify.reported': 'エージェントが報告した内容です — アプリ自身が実行したわけではありません',
+  // Task 7 — toolchain バイパスで再起動したことは必ず伝える(design F5)。落ち着いた状態ではなく
+  // 新しい知らせなので、他の chat.notice.* キーがまだここに無くても訳す
+  'chat.notice.bypassed': 'このフォルダーの toolchain 設定を飛ばして起動しました — 固定したバージョンと違う可能性があります'
 }

@@ -25,6 +25,10 @@ export function composerLockedFor(t: PaneTransport, chat: ChatPaneState, termina
 export type ChatBanner =
   | { kind: 'request'; request: ChatRequest }
   | { kind: 'error'; message: string }
+  /** Task 7 (design F5): the bypass retry started the CLI. Ranked under a request or error — those
+   *  need the person's attention now — but over the two quiet notices below: this one is new
+   *  information, not a steady state. */
+  | { kind: 'notice'; key: 'bypassed' }
   /** Truncated replay and no event yet. */
   | { kind: 'checking' }
   /** The fallback process: not Host-owned. */
@@ -35,6 +39,7 @@ export function chatBannerFor(chat: ChatPaneState): ChatBanner {
   if (chat === null) return { kind: 'none' }
   if (chat.request !== null) return { kind: 'request', request: chat.request }
   if (chat.error !== null) return { kind: 'error', message: chat.error }
+  if (chat.notice) return { kind: 'notice', key: chat.notice }
   if (chat.truncated && chat.status === 'idle') return { kind: 'checking' }
   if (!chat.outlivesApp && chat.status === 'idle') return { kind: 'endsWithApp' }
   return { kind: 'none' }
