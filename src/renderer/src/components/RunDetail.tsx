@@ -173,6 +173,15 @@ function metaText(m: NodeMeta, t: Translate): string | undefined {
       return m.provider
     case 'none':
       return undefined
+    default: {
+      // 반환형이 string | undefined 라 case 를 하나 빼먹어도 "값을 안 준다"는 undefined 로도
+      // 읽혀 tsc 가 조용히 통과한다(noImplicitReturns 는 이 저장소 세 tsconfig 어디에도 없다) —
+      // 이 default 가 그 구멍을 막는다. NodeMeta 에 여덟째 kind 가 생기고 위 case 들이 그걸
+      // 못 따라가면 m 이 여기서 never 가 아니게 되어 아래 대입이 타입 에러가 난다. 지금 일곱
+      // kind 모두 위에서 처리되므로 이 분기는 실행되지 않는다.
+      const exhaustive: never = m
+      return exhaustive
+    }
   }
 }
 
