@@ -22,6 +22,7 @@ import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/
 import { runningCount } from '../../../core/orchestration/running'
 import { useI18n } from '../i18n/I18nProvider'
 import { confirmModal } from '../lib/confirm'
+import { CompletionBlock } from './CompletionBlock'
 import { toast } from '../lib/toast'
 import {
   LockIcon,
@@ -1045,6 +1046,12 @@ export function RunDetail({
                       <X size={12} />
                     </button>
                   </div>
+                )}
+                {/* 고른 Task 의 완료 상세 — 왜 못 넘었는가(설계 §2). 필터 줄 바로 아래, 이벤트
+                    목록 위다: 이벤트는 "무슨 일이 있었나" 이고 이것은 "지금 무엇이 막고 있나" 라,
+                    찾는 사람이 스크롤하지 않고 만나야 하는 쪽이 이것이다. */}
+                {selectedTask && (
+                  <CompletionBlock projectPath={projectPath} runId={runId} taskId={selectedTask.id} />
                 )}
                 <div className="detail-list">
                   {events !== null && shown.length === 0 && (

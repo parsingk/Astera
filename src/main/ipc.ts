@@ -129,6 +129,7 @@ import { sameSnapshot, snapshotFor, runsForProject, outcomeOf } from '../core/or
 import { justFinished } from '../core/orchestration/runRecord'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
+import { completionForTaskOf } from '../core/orchestration/completion'
 import { repoPathOf } from '../core/worktrees/repo'
 import type { OrchState } from '../core/orchestration/state'
 import { makeLimitProbe } from './orchestration/limitProbe'
@@ -5033,6 +5034,23 @@ export function registerIpc(
       ...(continuity?.recoveryEventsFor(runId, state) ?? [])
     ].sort((a, b) => a.at.localeCompare(b.at))
     return { events, layers, deps, cyclic }
+  })
+  /** 한 Task 가 왜 완료 정책을 못 넘었는가 — 화면이 블록을 펼칠 때 한 번 부른다(설계 §2.2).
+   *
+   *  `orch.runDetail` 과 같은 소유 가드를, 같은 이유로, 같은 함수(runsForProject)로 쓴다. 그리고
+   *  **Task 가 그 Run 의 것인지 한 번 더 본다** — Run 소유만 보고 taskId 를 믿으면 이 문이 남의
+   *  Run 의 Task 를 읽는 우회로가 된다. 두 판정 중 하나라도 어긋나면 null 이다: 이유를 구분해 돌려
+   *  주면 그 차이가 "그 Task 는 있다" 를 알려 주는 신호가 된다. */
+  ipcMain.handle('orch.completion', async (_e, projectPath: string, runId: string, taskId: string) => {
+    await assertAllowedPath(projectPath)
+    if (!orch) return null
+    const project = repoPathOf(core.worktrees.list(), projectPath)
+    const state = orch.deps.getState()
+    if (!runsForProject(state, project, core.worktrees.list()).some((r) => r.id === runId)) {
+      orchLog(`orch.completion: run ${runId} does not belong to ${project}`)
+      return null
+    }
+    return completionForTaskOf(state.tasks, runId, taskId)
   })
   // orch.command 의 args 에서 Run id·Task id·Dispatch id 를 읽는 키 — 명령마다 다르고, 짐작이 아니라
   // server.ts 의 switch 를 다시 열어 확인한 값만 적었다: task-create 는 args.runId, run-start·

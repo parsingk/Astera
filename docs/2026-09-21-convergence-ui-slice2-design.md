@@ -151,7 +151,7 @@ export function canStopConvergence(t: JobTask): boolean
 | `completion.test.ts` (신규) | 통과한 검사에는 꼬리가 없다; 막는 이슈만 싣고 나머지는 개수; 보여 줄 것이 없으면 null |
 | `nodeMeta.test.ts` | 멈춘 Task 의 meta 와 칩이 도는 Task 와 다르다; `canStopConvergence` 의 세 조건 |
 | `timeline.test.ts` | 수리 Dispatch 가 `repair` 를 달고 나온다; 구현·검토 Dispatch 는 안 단다 |
-| `ipc.test.ts` | `orch.completion` 이 남의 Run·남의 Task 에 null 을 준다 |
+| `completion.test.ts` | `completionForTaskOf` 가 남의 Run 의 Task 에 null 을 준다 — 핸들러의 판정을 순수 함수로 내려서 고정한다. 이 저장소에는 orch 의 ipcMain 핸들러를 부르는 테스트가 없다 |
 | `catalog.test.ts` | 네 카탈로그 (기존) |
 
 렌더러는 `npm run typecheck` 와 `npm run build`.

@@ -1350,6 +1350,16 @@ export const ko = {
   'jobs.convergence.check.notRun': '돌지 않음',
   'jobs.convergence.check.retrying': '다시 도는 중',
   'jobs.convergence.check.unstable': '라운드 사이에 판정이 흔들림',
+  // 설계 §2(V1). 칩은 '무엇이 어디서 멈췄나' 까지고, 이 블록이 '그래서 뭐가 틀렸나' 를 맡는다.
+  'jobs.completion.show': '왜 실패했는지 보기',
+  'jobs.completion.hide': '접기',
+  'jobs.completion.empty': '이 Task 에는 아직 검사 결과도 검토 지적도 없습니다.',
+  'jobs.completion.showTail': '출력 보기',
+  'jobs.completion.hideTail': '출력 접기',
+  'jobs.completion.blocking': '막는 검토 지적 {n}',
+  // 막지 않는 이슈는 개수만 말한다 — 없는 것과 다르다는 사실까지가 필요한 전부다.
+  'jobs.completion.other': '그 밖의 지적 {n}',
+  'jobs.completion.suspicious': '검사 설정이 바뀐 파일',
   'jobs.event.status': '소식',
   'jobs.event.workerDone': '워커 보고',
   'jobs.event.question': '질문',
