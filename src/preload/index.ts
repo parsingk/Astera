@@ -220,6 +220,7 @@ const api = {
     pickFile: invoke('system.pickFile'),
     pathExists: invoke('system.pathExists'),
     checkCli: invoke('system.checkCli'),
+    checkCliInstalled: invoke('system.checkCliInstalled'),
     installCli: invoke('system.installCli'),
     relaunch: invoke('system.relaunch'),
     appVersion: invoke('system.appVersion'),

@@ -690,6 +690,9 @@ export const ko = {
   // "설치돼 있지 않다"와 "이 폴더에서는 실행되지 않는다"는 사람이 할 일이 다르다 — 앞은 설치,
   // 뒤는 폴더나 toolchain 설정이다. 그 차이를 문구가 말한다(설계 D3).
   'session.new.cliFailsHere': '{cli} 가 이 폴더에서 실행되지 않습니다 — {reason}',
+  // 검사가 10초 동안 아무 말 없이 죽었을 때(shell:true 셔틀이 매달림) — 사유가 없다고 "undefined"
+  // 를 보여줄 수는 없으니, 이유 없이도 말이 되는 문장을 따로 둔다.
+  'session.new.cliFailsHereUnknown': '{cli} 가 이 폴더에서 실행되지 않습니다.',
   'session.field.projectFolder': '프로젝트 폴더',
   'session.field.account': '계정',
   // 세션 방식 선택(Task 7) — 터미널/대화 세그먼트 컨트롤. 대화는 Host 가 proc-* 를 말해야 켜진다
@@ -757,6 +760,9 @@ export const ko = {
   'session.new.blocked.cliMissing': '이 계정의 CLI 를 찾지 못했습니다',
   'session.new.blocked.noSchedule': '예약 시각을 정하세요',
   'session.new.blocked.checkingFolder': '폴더를 확인하는 중입니다',
+  // 폴더를 고른 직후 최대 10초까지 걸리는 이 폴더의 CLI 검사 — git 검사(checkingFolder)보다 오래
+  // 갈 수 있어 따로 둔다. 아직 답이 없다는 것뿐이라 "기다리세요" 부류에 둔다(설계 D3 의 경주 수정).
+  'session.new.blocked.checkingCli': '이 폴더에서 CLI 를 확인하는 중입니다',
   // Waiting text between pressing Start and the tab opening. Splitting off a worktree chains fetch, worktree add and
   // the include copy, taking several seconds, so what is in progress is announced separately.
   'session.new.starting': '세션을 시작하는 중…',

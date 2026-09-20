@@ -18,6 +18,10 @@ import { X } from 'lucide-react'
 
 const SOFT_LIMIT = 12
 const MAX_ROLL_ACCOUNTS = 3
+// The full product names the two neighbouring warnings already use (codexMissingPre/claudeMissingPre)
+// — cliFailsHere/cliFailsHereUnknown fill their own {cli} placeholder with this instead of the raw
+// provider id, so all three lines name the tool the same way.
+const CLI_LABEL: Record<Provider, string> = { claude: 'Claude Code CLI', codex: 'Codex CLI' }
 
 export function NewSessionDialog({
   accounts,
@@ -69,11 +73,24 @@ export function NewSessionDialog({
   // 설정은 그대로다: 이 체크박스는 언제나 "이번 세션"을 말한다.
   const [bypassPermissions, setBypassPermissions] = useState(true) // start without permission prompts
   const [slackReady, setSlackReady] = useState(false) // whether a webhook URL is configured — the checkbox is disabled when it is not
-  // Both CLIs, because either one can be the missing one — the app opens with just one installed
+  // Both CLIs, because either one can be the missing one — the app opens with just one installed.
+  // Two different questions live here, asked two different ways (design D3, fix round 2):
+  // cliInstalled is cwd-independent ("is it on this machine at all", asked once on mount below) and
+  // cliOk is per-folder ("does it run here", re-asked on every cwd change further down) — conflating
+  // them into one `--version` call was round 1's mistake: a shell that cannot find a binary writes its
+  // own "not recognized"/"not found" to stderr, which reads exactly like the binary itself refusing to
+  // run once it exists, so a genuinely missing CLI took the wrong branch and hid the install prompt.
+  const [cliInstalled, setCliInstalled] = useState({ claude: true, codex: true })
   const [cliOk, setCliOk] = useState({ claude: true, codex: true })
-  // stderr's first line per CLI, from the same check as cliOk — undefined until a check has actually
-  // failed (a passing check, or one that hasn't run yet for this folder, leaves nothing to show)
+  // stderr's first line per CLI, from the same per-folder check as cliOk — undefined until a check
+  // has actually failed with something to say (a passing check, one that hasn't run yet for this
+  // folder, or one that died silently inside its own timeout all leave nothing to show)
   const [cliError, setCliError] = useState<{ claude?: string; codex?: string }>({})
+  // True while the per-folder check above is outstanding for the *current* cwd. Fed into
+  // startBlockedBy so Start stays dead on a folder whose CLI verdict has not come back yet — without
+  // this, picking a folder whose check is slow (or hangs, up to its 10s timeout) left cliOk holding
+  // the *previous* folder's answer, and nothing said the new one was still unknown.
+  const [checkingCli, setCheckingCli] = useState(false)
   const [repoRoot, setRepoRoot] = useState<string | null>(null) // result of the git repo check
   const [resolvingRepo, setResolvingRepo] = useState(false) // blocks start while the check runs — stops a spawn with the previous repoRoot
   const [useWorktree, setUseWorktree] = useState(false)
@@ -106,6 +123,9 @@ export function NewSessionDialog({
     void window.api.settings
       .getAgentPermissionMode()
       .then((m) => setBypassPermissions(m === 'yolo'))
+    // Existence, not runnability — asked once here because it does not depend on which folder gets
+    // picked (design D3, fix round 2). The per-folder question below has its own effect on [cwd].
+    void window.api.system.checkCliInstalled().then(setCliInstalled)
   }, [])
 
   useEffect(() => {
@@ -144,16 +164,28 @@ export function NewSessionDialog({
 
   // 세션이 돌 폴더에서 검사한다 — 앱의 cwd 에서 돌리면 toolchain 관리자가 읽을 manifest 가 없어
   // 무조건 통과하고, 그 통과를 믿은 채 세션만 죽는다(설계 D3). 폴더가 바뀌면 다시 묻는다.
+  //
+  // checkingCli 는 이 cwd 의 답이 아직 안 왔다는 뜻이다 — 최대 10초까지 걸릴 수 있는데(매달린
+  // shell:true 셔틀), 그동안 cliOk 는 여전히 이전 폴더의 답을 들고 있다. 이 플래그가 없으면 그
+  // 이전 답이 "괜찮다"였던 경우 시작 버튼이 눌리는 채로 남아, 아직 검사하지 않은 새 폴더에서
+  // 세션이 죽는다 — 이 태스크가 막으려던 바로 그 경주(수정 2회차).
   useEffect(() => {
     if (!cwd) return
     let cancelled = false
-    void window.api.system.checkCli(cwd).then((c) => {
-      if (cancelled) return
-      setCliOk({ claude: c.claude.ok, codex: c.codex.ok })
-      setCliError({ claude: c.claude.error, codex: c.codex.error })
-    })
+    setCheckingCli(true)
+    void window.api.system
+      .checkCli(cwd)
+      .then((c) => {
+        if (cancelled) return
+        setCliOk({ claude: c.claude.ok, codex: c.codex.ok })
+        setCliError({ claude: c.claude.error, codex: c.codex.error })
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingCli(false)
+      })
     return () => {
       cancelled = true
+      setCheckingCli(false) // discarded — the new cwd's own run of this effect sets it back to true
     }
   }, [cwd])
 
@@ -200,10 +232,14 @@ export function NewSessionDialog({
   // Only the undefined-tolerant wrapper is local to this file, the decision itself is delegated to providerOf
   const provider = (a: Account | undefined): Provider => (a ? providerOf(a) : 'claude')
   const primaryProvider = provider(accounts.find((a) => a.id === accountIds[0]))
-  // Whether the CLI this account needs is missing — the only thing that gates starting. Rolling
-  // supports codex too (codexRolling.ts) and so do Slack notifications (turn completion is detected
-  // from rollout's task_complete), so this flag must not hide either of those.
-  const primaryCliMissing = !cliOk[primaryProvider]
+  // The two questions kept apart (design D3, fix round 2) — see the cliInstalled/cliOk declarations
+  // above for why one probe cannot safely answer both.
+  const primaryInstalled = cliInstalled[primaryProvider]
+  const primaryRunsHere = cliOk[primaryProvider]
+  // Whether the CLI this account needs is missing, either way — the only thing that gates starting.
+  // Rolling supports codex too (codexRolling.ts) and so do Slack notifications (turn completion is
+  // detected from rollout's task_complete), so this flag must not hide either of those.
+  const primaryCliMissing = !primaryInstalled || !primaryRunsHere
   // 대화 is available once the Host has announced the proc-* family — either provider's account can
   // open one. The poll lives in the hook, shared with ResumeDialog.
   const { enabled: chatEnabled, checking: chatChecking } = useChatAvailability()
@@ -298,14 +334,16 @@ export function NewSessionDialog({
     accountIds,
     cliMissing: primaryCliMissing,
     schedOn,
-    hasSchedule: schedule !== null
+    hasSchedule: schedule !== null,
+    checkingCli
   })
   const BLOCKED_KEY: Record<StartBlocked, MessageKey> = {
     'no-cwd': 'session.new.blocked.noCwd',
     'no-account': 'session.new.blocked.noAccount',
     'cli-missing': 'session.new.blocked.cliMissing',
     'no-schedule': 'session.new.blocked.noSchedule',
-    'checking-folder': 'session.new.blocked.checkingFolder'
+    'checking-folder': 'session.new.blocked.checkingFolder',
+    'checking-cli': 'session.new.blocked.checkingCli'
   }
 
   return (
@@ -323,11 +361,13 @@ export function NewSessionDialog({
         {runningCount >= SOFT_LIMIT && (
           <p className="warn">{t('session.new.runningWarning', { count: runningCount })}</p>
         )}
-        {/* "Not found, here's how to install it" is only a guess — the check failed and said nothing,
-            which is what a missing binary looks like. When it said something (cliError below is set),
-            that something is a better answer than this guess, so this warning steps aside for that one
-            instead of the two stacking and telling the person to install a CLI they already have. */}
-        {primaryCliMissing && cliError[primaryProvider] === undefined && (
+        {/* Gated on the dedicated existence probe (cliInstalled), not on whether the per-folder check
+            said anything — round 1 tried inferring "not installed" from an absent stderr line, but a
+            shell running a binary it cannot find still writes its own "not recognized"/"not found",
+            which reads exactly like the binary complaining once installed. That made a genuinely
+            missing CLI take the "does not run in this folder" branch below instead of this one,
+            hiding the install prompt for the one case that most needs it (design D3). */}
+        {!primaryInstalled && (
           <p className="warn">
             {t(
               primaryProvider === 'codex'
@@ -537,15 +577,20 @@ export function NewSessionDialog({
         </label>
         {/* checkCli now runs in the chosen folder, not the app's own cwd, so a toolchain manager that
             refuses this folder's manifest gets caught here instead of killing the session after Start
-            (design D3). Mutually exclusive with the "not found, install it" warning above by design —
-            the tool's own complaint is a better answer than our guess at "not installed", so once it
-            has spoken this replaces that guess instead of standing next to it and contradicting it. */}
-        {primaryCliMissing && cliError[primaryProvider] !== undefined && (
+            (design D3). Gated on primaryInstalled — the dedicated existence probe above — rather than
+            on whether the per-folder check said anything, so this and the "not found" warning above
+            are strictly mutually exclusive and neither can show for the wrong reason (fix round 2).
+            When the per-folder check died inside its own timeout with nothing to say (a hung shell
+            shim), there is no reason to quote — cliFailsHereUnknown reads sensibly without one instead
+            of interpolating "undefined" into the sentence. */}
+        {primaryInstalled && !primaryRunsHere && (
           <p className="warn-text">
-            {t('session.new.cliFailsHere', {
-              cli: primaryProvider,
-              reason: cliError[primaryProvider] as string
-            })}
+            {cliError[primaryProvider] !== undefined
+              ? t('session.new.cliFailsHere', {
+                  cli: CLI_LABEL[primaryProvider],
+                  reason: cliError[primaryProvider] as string
+                })
+              : t('session.new.cliFailsHereUnknown', { cli: CLI_LABEL[primaryProvider] })}
           </p>
         )}
         <div className="row right">

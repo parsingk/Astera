@@ -576,6 +576,9 @@ export const es: Catalog = {
   // "No instalado" y "no se ejecuta en esta carpeta" requieren arreglos distintos — el primero es una
   // instalación, el segundo es la carpeta o la configuración del toolchain. El texto marca esa diferencia (diseño D3).
   'session.new.cliFailsHere': '{cli} no se ejecuta en esta carpeta — {reason}',
+  // Para cuando la comprobación muere en su límite de 10s sin decir nada (un shim de shell:true
+  // colgado) — "no se ejecuta en esta carpeta" es honesto por sí solo; añadir "— undefined" no lo es.
+  'session.new.cliFailsHereUnknown': '{cli} no se ejecuta en esta carpeta.',
   'session.field.projectFolder': 'Carpeta del proyecto',
   'session.field.account': 'Cuenta',
   'session.new.folderNotSelected': '(Sin seleccionar)',
@@ -607,6 +610,9 @@ export const es: Catalog = {
   'session.new.blocked.cliMissing': 'No se encontró la CLI de esta cuenta',
   'session.new.blocked.noSchedule': 'Fija una hora programada',
   'session.new.blocked.checkingFolder': 'Comprobando la carpeta',
+  // La comprobación de la CLI por carpeta (hasta 10s) — aparte porque puede tardar mucho más que la
+  // comprobación de git (checkingFolder) (corrección de la carrera del diseño D3).
+  'session.new.blocked.checkingCli': 'Comprobando la CLI en esta carpeta',
   'session.new.starting': 'Iniciando la sesión…',
   'session.new.startingWorktree': 'Creando el worktree…',
   // NewSessionDialog.tsx scheduler UI

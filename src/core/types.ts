@@ -1221,6 +1221,12 @@ export interface SystemApi {
   // CLI on PATH reads that folder's own manifest, so checking from the app's own cwd (omitting this)
   // can pass while the same CLI refuses to run in the chosen project (design D3).
   checkCli(cwd?: string): Promise<{ claude: CliStatus; codex: CliStatus }>
+  // "Is it installed at all" — asked directly of the machine (locateCommandFor), not inferred from a
+  // `--version` run. That run goes through a shell, and a shell that cannot find the binary still
+  // writes its own "not recognized"/"not found" to stderr — indistinguishable from the binary itself
+  // complaining once installed, so it cannot answer this question (design D3). Cwd-independent, so
+  // the renderer asks this once rather than per folder, unlike checkCli above.
+  checkCliInstalled(): Promise<{ claude: boolean; codex: boolean }>
   /** Installs one CLI with the command its vendor documents for this platform. Reached only from the
    *  screen shown when neither is present. Output arrives as `cli:install` events while it runs; this
    *  resolves when the installer exits. `error` names why nothing ran at all — an unmeasured platform,

@@ -7121,20 +7121,23 @@ export function registerIpc(
    * reasoning about, and nobody needs both this second.
    */
   /**
-   * Where the machine says a CLI is now, with this process's PATH updated to match — or null when it
-   * still cannot be found.
+   * Where the machine says a CLI is, asked fresh rather than inferred from a `--version` run.
    *
-   * An installer writes the new directory into the environment the operating system keeps. It cannot
-   * reach into a program that is already running: this app's environment was copied when it started,
-   * and **a relaunch inherits that same copy**, so restarting does not fix it either (measured — the
-   * app came back and still found neither CLI). Left there, someone would install, restart, be told
-   * again that nothing is installed, and have no way to tell which part had failed.
+   * `system.checkCli` answers "does it run in *this* folder", which is only meaningful once a folder
+   * is chosen and can be muddied by whatever sits ahead of the CLI on PATH (design D3). "Is it
+   * installed at all" is a different, cwd-independent question, and running `--version` through a
+   * shell to answer it inherits the same muddying — a shell that cannot find the binary still writes
+   * its own "not recognized"/"not found" to stderr, which reads exactly like the binary itself
+   * complaining once it exists but refuses to run (this is what round 1 of this fix got wrong).
+   * `locateCommandFor` asks the machine directly instead (`Get-Command` / `command -v`), so a missing
+   * binary comes back as nothing found rather than as text that looks like an answer.
    *
-   * So the machine is asked (locateCommandFor), and what it answers is put in front of this process's
-   * own PATH. That is enough for everything downstream: `system.checkCli` runs through PATH, and a
-   * spawned session copies this process's environment (core/sessions/manager.ts).
+   * Read-only on purpose — no PATH mutation here. `adoptInstalledCli` below is the same probe plus
+   * that mutation, kept for its one call site (right after an install); running the mutation here too
+   * would prepend the same directory to PATH every time this dialog opens, and PATH does not shrink
+   * back down on its own.
    */
-  const adoptInstalledCli = async (cli: 'claude' | 'codex'): Promise<string | null> => {
+  const locateCli = async (cli: 'claude' | 'codex'): Promise<string | null> => {
     const plan = locateCommandFor(cli, process.platform, process.env.SHELL ?? '/bin/sh')
     if (plan === null) return null
     const found = await new Promise<string | null>((resolve) => {
@@ -7149,7 +7152,33 @@ export function registerIpc(
     })
     // Checked on disk before it is believed: a shell that answers with something that is not there
     // would put a directory on PATH that hides nothing and helps nobody.
-    if (found === null || !existsSync(found)) return null
+    return found !== null && existsSync(found) ? found : null
+  }
+
+  // Whether each CLI is installed on this machine at all — independent of any folder, so the renderer
+  // asks this once (on mount) instead of on every folder pick, unlike `system.checkCli` above.
+  ipcMain.handle('system.checkCliInstalled', async () => {
+    const [claude, codex] = await Promise.all([locateCli('claude'), locateCli('codex')])
+    return { claude: claude !== null, codex: codex !== null }
+  })
+
+  /**
+   * Where the machine says a CLI is now, with this process's PATH updated to match — or null when it
+   * still cannot be found.
+   *
+   * An installer writes the new directory into the environment the operating system keeps. It cannot
+   * reach into a program that is already running: this app's environment was copied when it started,
+   * and **a relaunch inherits that same copy**, so restarting does not fix it either (measured — the
+   * app came back and still found neither CLI). Left there, someone would install, restart, be told
+   * again that nothing is installed, and have no way to tell which part had failed.
+   *
+   * So the machine is asked (locateCli, i.e. locateCommandFor), and what it answers is put in front of
+   * this process's own PATH. That is enough for everything downstream: `system.checkCli` runs through
+   * PATH, and a spawned session copies this process's environment (core/sessions/manager.ts).
+   */
+  const adoptInstalledCli = async (cli: 'claude' | 'codex'): Promise<string | null> => {
+    const found = await locateCli(cli)
+    if (found === null) return null
     prependToPath(process.env as Record<string, string | undefined>, path.dirname(found))
     return found
   }

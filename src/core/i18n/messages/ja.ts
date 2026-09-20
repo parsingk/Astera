@@ -569,6 +569,9 @@ export const ja: Catalog = {
   // 「インストールされていない」と「このフォルダーでは実行できない」は対処が違う — 前者はインストール、
   // 後者はフォルダーや toolchain 設定の問題。その違いを文言で分ける(設計 D3)。
   'session.new.cliFailsHere': '{cli} はこのフォルダーで実行できません — {reason}',
+  // 10秒のタイムアウトまで何も言わずに死んだとき用(shell:true のシムがハングした場合) —
+  // 理由なしでも文になる文言を別に用意する。「— undefined」は文にならない。
+  'session.new.cliFailsHereUnknown': '{cli} はこのフォルダーで実行できません。',
   'session.field.projectFolder': 'プロジェクトフォルダ',
   'session.field.account': 'アカウント',
   'session.new.folderNotSelected': '(未選択)',
@@ -600,6 +603,9 @@ export const ja: Catalog = {
   'session.new.blocked.cliMissing': 'このアカウントの CLI が見つかりません',
   'session.new.blocked.noSchedule': '予約時刻を決めてください',
   'session.new.blocked.checkingFolder': 'フォルダーを確認しています',
+  // フォルダーごとの CLI 検査(最大10秒) — git 検査(checkingFolder)より長引くことがあるので分ける
+  // (設計 D3 の競合修正)。
+  'session.new.blocked.checkingCli': 'このフォルダーで CLI を確認しています',
   'session.new.starting': 'セッションを開始しています…',
   'session.new.startingWorktree': 'worktree を作成しています…',
   // NewSessionDialog.tsx scheduler UI

@@ -601,6 +601,9 @@ export const en: Record<keyof typeof ko, string> = {
   // "Not installed" and "does not run in this folder" call for different fixes — the former is an
   // install, the latter is the folder or a toolchain config. The copy keeps that distinction (design D3).
   'session.new.cliFailsHere': '{cli} does not run in this folder — {reason}',
+  // For when the check died within its 10s timeout without saying anything (a hung shell:true
+  // shim) — "does not run in this folder" is honest on its own; appending "— undefined" is not.
+  'session.new.cliFailsHereUnknown': '{cli} does not run in this folder.',
   'session.field.projectFolder': 'Project folder',
   'session.field.account': 'Account',
   'session.kind.terminal': 'Terminal',
@@ -659,6 +662,9 @@ export const en: Record<keyof typeof ko, string> = {
   'session.new.blocked.cliMissing': "This account's CLI was not found",
   'session.new.blocked.noSchedule': 'Set a schedule time',
   'session.new.blocked.checkingFolder': 'Checking the folder',
+  // The per-folder CLI check, up to 10s — kept separate from checkingFolder because it can outlast
+  // the git check by a wide margin (design D3's race fix).
+  'session.new.blocked.checkingCli': 'Checking the CLI in this folder',
   'session.new.starting': 'Starting session…',
   'session.new.startingWorktree': 'Creating worktree…',
   'session.new.schedLabel': 'Scheduler — run a command periodically',
