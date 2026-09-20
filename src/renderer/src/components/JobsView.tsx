@@ -4,6 +4,7 @@ import type { MessageKey, MessageParams } from '../../../core/i18n'
 import { formatElapsed, formatRemaining } from '../../../core/orchestration/elapsed'
 import { isStoppedWorker, runningCount } from '../../../core/orchestration/running'
 import { schedRuleSummary } from '../../../core/scheduler/summary'
+import { convergenceChipOf, type ConvergenceChip } from '../../../core/orchestration/nodeMeta'
 import { useI18n } from '../i18n/I18nProvider'
 import { PauseIcon, PlayIcon, RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon, TrashIcon } from './JobIcons'
 import type { RunIconKind } from './JobIcons'
@@ -103,6 +104,24 @@ function taskMeta(
       : t('jobs.task.waitingNoTime')
     : formatElapsed(task.startedAt, nowMs)
   return task.resumes ? `${base} · ${t('jobs.task.resumedCount', { n: task.resumes })}` : base
+}
+
+/** 도는 줄과 Gate 줄의 자동 수정 칩. 무엇을 그릴지는 core 의 convergenceChipOf 가 정한다 — 여기는 문장과 색만.
+ *  .jobs-ordinal 의 모양(회차 번호 칩)을 빌리고 kind 별 색은 노드 배경과 같은 토큰이다(styles.css) */
+function ConvergenceChipView({
+  chip,
+  t
+}: {
+  chip: ConvergenceChip
+  t: (key: MessageKey, params?: MessageParams) => string
+}): React.JSX.Element {
+  const text =
+    chip.kind === 'repairing'
+      ? t('jobs.convergence.chip.repairing', { repairs: chip.repairs, max: chip.max })
+      : chip.kind === 'reviewing'
+        ? t('jobs.convergence.chip.reviewing', { round: chip.round, max: chip.max })
+        : t('jobs.convergence.chip.exhausted')
+  return <span className={`jobs-ordinal jobs-conv jobs-conv--${chip.kind}`}>{text}</span>
 }
 
 /** Run 하나의 카드 — 머리말·띠·도는 줄·Gate 줄·아래 한 줄. **JobsView 에서 뽑아낸 것이고 그리는
@@ -254,6 +273,7 @@ function RunCard({
             // decided by the same value, or it looks clickable and silently does nothing.
             const sessionId =
               task.sessionId && canOpenSession(task.sessionId) ? task.sessionId : undefined
+            const chip = convergenceChipOf(task)
             return (
               <div
                 key={task.id}
@@ -269,6 +289,7 @@ function RunCard({
                     {task.provider} · {taskMeta(task, nowMs, t)}
                   </span>
                 </span>
+                {chip && <ConvergenceChipView chip={chip} t={t} />}
                 <TaskGlyph task={task} />
                 {sessionId ? (
                   <span className="jobs-jump" aria-hidden="true">
@@ -291,17 +312,23 @@ function RunCard({
       )}
       {/* Gate 는 접힌 Run 에서도 남는다 — 사람을 기다리는 줄이고, 접혀서 안 보이면 그 Run 은
           아무도 모르는 채로 선다. 접기는 세로를 아끼는 장치이지 알림을 끄는 장치가 아니다 */}
-      {gates.map((task) => (
-        <div key={task.id} className="jobs-gate">
-          <TaskIcon status="blocked" label={t(STATE_KEY.blocked)} />
-          <span>
-            {task.gate?.question}
-            {task.openGates > 1
-              ? ` ${t('jobs.gates.more', { count: task.openGates - 1 })}`
-              : ''}
-          </span>
-        </div>
-      ))}
+      {gates.map((task) => {
+        // 소진된 Task 는 blocked 라 도는 줄에 서지 않는다 — 소진 칩은 여기 Gate 줄에 붙는다(convergenceChipOf 는
+        // gate.kind 로 그것을 안다)
+        const chip = convergenceChipOf(task)
+        return (
+          <div key={task.id} className="jobs-gate">
+            <TaskIcon status="blocked" label={t(STATE_KEY.blocked)} />
+            {chip && <ConvergenceChipView chip={chip} t={t} />}
+            <span>
+              {task.gate?.question}
+              {task.openGates > 1
+                ? ` ${t('jobs.gates.more', { count: task.openGates - 1 })}`
+                : ''}
+            </span>
+          </div>
+        )
+      })}
       {open && (
         <div className="jobs-foot">
           {counts.map(([status, n]) => (
