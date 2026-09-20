@@ -54,3 +54,19 @@ describe('foldChatEvent — exit', () => {
     expect(next.error).toBe('rate limited')
   })
 })
+
+// Task 7 (design F5): 우회 재시도가 성공했다는 것을 그 자신의 칸에 싣는다 — error 에 실으면 종료
+// 배너가 그것을 사유로 오해한다.
+describe('foldChatEvent — notice', () => {
+  it('bypassed 알림은 notice 칸에만 실린다', () => {
+    const next = foldChatEvent(base, { type: 'notice', key: 'bypassed' })
+    expect(next.notice).toBe('bypassed')
+    expect(next.error).toBeNull()
+  })
+
+  it('새 턴이 시작되면 알림도 error 와 함께 걷힌다', () => {
+    const noticed = { ...base, notice: 'bypassed' as const }
+    expect(foldChatEvent(noticed, { type: 'status', status: 'working', truncated: false }).notice).toBeNull()
+    expect(foldChatEvent(noticed, { type: 'status', status: 'idle', truncated: false }).notice).toBe('bypassed')
+  })
+})

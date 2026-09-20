@@ -1551,6 +1551,9 @@ export const ko = {
   'chat.notice.checking': '상태를 확인하는 중',
   'chat.notice.endsWithApp': '이 세션은 앱을 끄면 끝납니다',
   'chat.notice.error': '턴이 실패했습니다: {message}',
+  // 우회로 띄웠다는 것을 반드시 말한다 — 사용자가 이 폴더에 핀해 둔 것과 다른 버전이 떴을 수 있고,
+  // 조용히 그러면 안 된다(설계 F5)
+  'chat.notice.bypassed': '이 폴더의 toolchain 설정을 건너뛰고 띄웠습니다 — 핀해 둔 것과 다른 버전일 수 있습니다',
   'chat.mode.aria': '권한 모드',
   'chat.mode.default': '기본',
   'chat.mode.acceptEdits': '편집 자동 승인',

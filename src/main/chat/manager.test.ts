@@ -71,6 +71,11 @@ function makeAdapterFactory(startRejects = false, sendRejects = false): {
       }
     }
     handles.push(handle)
+    // Every real adapter subscribes to the proc's one line at construction (codexAdapter.ts,
+    // claudeAdapter.ts both call `proc.onLine(handleLine)` up front) — this is what `watchFirstLine`'s
+    // wrapper actually counts through. A fake that skipped this would leave `sawLine()` permanently
+    // false, which is a different lie than the one any of these tests are about.
+    a.proc.onLine(() => {})
     const adapter: ChatAdapter = {
       start: (o) => {
         handle.startCalls.push(o)
@@ -346,7 +351,7 @@ describe('ChatSessionManager.spawn — initialPrompt', () => {
 
 describe('event wiring', () => {
   it('ready sets threadId/resumeSessionId; exit marks exited and fires onExit; subscribe sees both in order', () => {
-    const { manager, handles } = setup()
+    const { manager, handles, spawned } = setup()
     const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
     const exits: Array<{ sessionId: string; exitCode: number }> = []
     manager.onExit = (e) => exits.push(e)
@@ -358,6 +363,9 @@ describe('event wiring', () => {
     // A second ready with another id is a claude session whose `/clear` started a new one, and the
     // session's identity has to move with it — everything keyed by the id reads it from here.
     handles[0].emit({ type: 'ready', threadId: 'th-2', rolloutPath: null })
+    // A line first, so this plain exit is not read as the silent, line-less death Task 7's bypass
+    // retry is for — this test is about ready/exit bookkeeping, not that.
+    spawned[0].proc.feed('{"jsonrpc":"2.0"}')
     handles[0].emit({ type: 'exit', code: 7, errorDetail: null })
 
     const after = manager.info(info.id)
@@ -381,6 +389,74 @@ describe('event wiring', () => {
     unsubscribe()
     handles[0].emit({ type: 'status', status: 'working' })
     expect(seen).toEqual([])
+  })
+})
+
+// Task 7 (design F5): a project's package.json has nothing to do with whether the CLI starts, but a
+// toolchain manager on PATH ties the two together and refuses to run anything it cannot version-pick.
+// One bypass retry, only after a death that shows the CLI never ran — never on the first attempt (S7).
+describe('ChatSessionManager — toolchain 우회 재시도', () => {
+  it('말없이 즉사하면 우회를 얹어 한 번 다시 띄운다', async () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const seen: ChatEvent[] = []
+    manager.subscribe((_id, e) => seen.push(e))
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
+
+    // 두 번째 spawn 이 우회 env 를 지고 나간다 — 첫 번째는 그대로 둔다(S7: 항상 켜지는 않는다)
+    expect(spawned).toHaveLength(2)
+    expect(spawned[0].opts.env.VOLTA_BYPASS).toBeUndefined()
+    expect(spawned[1].opts.env.VOLTA_BYPASS).toBe('1')
+    // 같은 cwd·meta·provider 로, 같은 세션 id 에 다시 건다 — 새 id 를 만들면 탭·스케줄러·Slack·
+    // 롤 체인이 전부 고아가 된다
+    expect(spawned[1].opts.cwd).toBe(spawned[0].opts.cwd)
+    expect(spawned[1].opts.meta).toEqual(spawned[0].opts.meta)
+    expect(handles[1].provider).toBe(handles[0].provider)
+    expect(handles[1].startCalls).toEqual(handles[0].startCalls)
+
+    // 첫 exit 은 구독자에게 닿지 않는다 — 죽었다가 되살아난 게 아니라 뜨는 데 한 순간 더 걸린 것이다
+    expect(seen).toEqual([])
+    expect(manager.info(info.id)?.status).toBe('running')
+
+    await flushPromises()
+    // 재시도가 성공했다는 것은 반드시 말한다 — 우회가 사용자가 핀해 둔 것과 다른 버전을 띄웠을 수
+    // 있어서다. error 가 아니라 그 자신의 이벤트로: 종료 배너가 이것을 사유로 오해하면 안 된다
+    expect(seen).toEqual([{ type: 'notice', key: 'bypassed' }])
+  })
+
+  // 한 줄이라도 말했으면 실행은 된 것이다. 그 뒤의 죽음은 CLI 자신의 사정이고 우회가 고칠 것이 아니다
+  it('한 줄이라도 말한 뒤 죽으면 다시 띄우지 않는다', () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    spawned[0].proc.feed('{"jsonrpc":"2.0"}')
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
+
+    expect(spawned).toHaveLength(1)
+    expect(manager.info(info.id)?.status).toBe('exited')
+  })
+
+  it('재시도도 죽으면 두 번째는 없다', async () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const exits: Array<{ sessionId: string; exitCode: number }> = []
+    manager.onExit = (e) => exits.push(e)
+    const seen: ChatEvent[] = []
+    manager.subscribe((_id, e) => seen.push(e))
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'first attempt tail' })
+    expect(spawned).toHaveLength(2) // the one retry
+
+    handles[1].emit({ type: 'exit', code: 9, errorDetail: 'second attempt tail' })
+    expect(spawned).toHaveLength(2) // and no third spawn
+
+    expect(manager.info(info.id)?.status).toBe('exited')
+    expect(manager.info(info.id)?.exitCode).toBe(9)
+    expect(exits).toEqual([{ sessionId: info.id, exitCode: 9 }])
+    // 재시도도 실패하면 두 시도의 stderr 를 함께 보여준다(design F5) — 두 번째 것만 남으면 대개
+    // 진짜 사유를 담은 첫 시도의 것이 사라진다
+    expect(seen).toEqual([{ type: 'exit', code: 9, errorDetail: 'first attempt tail\n---\nsecond attempt tail' }])
   })
 })
 
@@ -532,8 +608,11 @@ describe('runningAppOwned / runningOutlivingApp', () => {
   })
 
   it('excludes exited sessions from both', () => {
-    const { manager, handles } = setup()
+    const { manager, handles, spawned } = setup()
     const a = manager.spawn({ account: codexAccount, cwd: 'D:/a' })
+    // A line first — a line-less exit this fast is the death Task 7's bypass retry is for, and this
+    // test is about running/exited bookkeeping, not that.
+    spawned[0].proc.feed('{"jsonrpc":"2.0"}')
     handles[0].emit({ type: 'exit', code: 0, errorDetail: null })
     expect(manager.runningAppOwned().map((s) => s.id)).not.toContain(a.id)
     expect(manager.runningOutlivingApp().map((s) => s.id)).not.toContain(a.id)

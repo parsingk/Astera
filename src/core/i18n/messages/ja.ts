@@ -1225,5 +1225,8 @@ export const ja: Catalog = {
   'hiw.verify.partial': '一部しか確認されていません',
   'hiw.verify.unverified': '確認されたものはありません',
   'hiw.verify.failed': '報告された検査が失敗しました',
-  'hiw.verify.reported': 'エージェントが報告した内容です — アプリ自身が実行したわけではありません'
+  'hiw.verify.reported': 'エージェントが報告した内容です — アプリ自身が実行したわけではありません',
+  // Task 7 — toolchain バイパスで再起動したことは必ず伝える(design F5)。落ち着いた状態ではなく
+  // 新しい知らせなので、他の chat.notice.* キーがまだここに無くても訳す
+  'chat.notice.bypassed': 'このフォルダーの toolchain 設定を飛ばして起動しました — 固定したバージョンと違う可能性があります'
 }

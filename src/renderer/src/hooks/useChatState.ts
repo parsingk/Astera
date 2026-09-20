@@ -15,10 +15,13 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
       // outliving the failure it described. `truncated` rides on this event (core/chat/types.ts):
       // the adapter clears its guess the moment something definite about the turn arrives, and this
       // is where the pane stops saying "확인하는 중". Absent means "nothing to say", not false.
+      // A fresh turn starting is also where the bypass notice (Task 7) has said what it had to say —
+      // it is a one-time "here is what just happened", not a steady state to keep repeating.
       return {
         ...state,
         status: event.status,
         error: event.status === 'working' ? null : state.error,
+        notice: event.status === 'working' ? null : state.notice,
         ...(event.truncated === undefined ? {} : { truncated: event.truncated })
       }
     case 'request':
@@ -34,6 +37,10 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
     case 'usage':
       // Same arrangement: main keeps it for the status bar to ask about, and the pane draws none of it.
       return state
+    case 'notice':
+      // Task 7 (design F5): told once, through its own field — never `error`, or the exit banner (T4)
+      // would read the bypass as the reason the session died, when the retry is in fact why it did not.
+      return { ...state, notice: event.key }
     case 'exit':
       // exitCode/errorDetail always come from the event, even when errorDetail is null — that null is
       // itself the fact "no tail", not "nothing to say". `error` is different: absent means the event

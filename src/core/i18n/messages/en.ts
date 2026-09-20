@@ -1335,6 +1335,7 @@ export const en: Record<keyof typeof ko, string> = {
   'chat.notice.checking': 'Checking where the session stands',
   'chat.notice.endsWithApp': 'This session ends when the app quits',
   'chat.notice.error': 'The turn failed: {message}',
+  'chat.notice.bypassed': "Started with this folder's toolchain settings skipped — this may not be the version you pinned",
   'chat.mode.aria': 'Permission mode',
   'chat.mode.default': 'Default',
   'chat.mode.acceptEdits': 'Accept edits',

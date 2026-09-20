@@ -1247,5 +1247,8 @@ export const es: Catalog = {
   'hiw.verify.partial': 'Solo se comprobó una parte',
   'hiw.verify.unverified': 'No se comprobó nada',
   'hiw.verify.failed': 'Una comprobación reportada falló',
-  'hiw.verify.reported': 'Lo reportó el agente — la aplicación no lo ejecutó por su cuenta'
+  'hiw.verify.reported': 'Lo reportó el agente — la aplicación no lo ejecutó por su cuenta',
+  // Tarea 7 — hay que decir siempre que se usó el bypass de toolchain (diseño F5); no es un estado
+  // estable, así que se traduce aunque el resto de chat.notice.* todavía no esté aquí
+  'chat.notice.bypassed': 'Iniciada omitiendo la configuración de toolchain de esta carpeta — puede no ser la versión que fijaste'
 }

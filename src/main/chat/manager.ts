@@ -21,8 +21,27 @@ import { buildCodexAppServerCommand, buildClaudeChatCommand } from '../../core/s
 import type { PtyMeta } from '../../core/host/protocol'
 import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState, PermissionMode, PermissionModeChoice } from '../../core/chat/types'
 import type { ModelDescriptor } from '../../core/models/types'
+import { BYPASS_ENV, shouldRetryWithBypass, watchFirstLine } from '../../core/sessions/retryBypass'
 import { createCodexAdapter, type AdapterMode } from './codexAdapter'
 import { createClaudeAdapter } from './claudeAdapter'
+
+type ExitEvent = Extract<ChatEvent, { type: 'exit' }>
+
+/** design F5's last line: a bypass retry that also dies with nothing said loses the *first* attempt's
+ *  stderr the moment the second one's overwrites it, and the first is usually the one that actually
+ *  names the refusal (a toolchain manager's own complaint) — the second is often just the same bare
+ *  exit with no manager in front of it to say anything at all. Both tails travel together instead;
+ *  `error` prefers the second attempt's one-line reason (the freshest), falling back to the first's. */
+function mergeFailedRetry(first: ExitEvent, second: ExitEvent): ExitEvent {
+  const detail = [first.errorDetail, second.errorDetail].filter((s): s is string => s !== null).join('\n---\n')
+  const error = second.error ?? first.error
+  return {
+    type: 'exit',
+    code: second.code,
+    errorDetail: detail.length > 0 ? detail : null,
+    ...(error !== undefined ? { error } : {})
+  }
+}
 
 export interface ChatManagerDeps {
   factory: ProcFactory
@@ -33,6 +52,20 @@ export interface ChatManagerDeps {
   log(m: string): void
   /** Test injection; default createClaudeAdapter / createCodexAdapter, picked by provider. */
   createAdapter?(a: { proc: ProcLike; mode: AdapterMode; version: string; log(m: string): void; provider: Provider }): ChatAdapter
+}
+
+/** What `respawnWithBypass` needs to spawn the exact same session again — everything `spawn()` built
+ *  from its `opts` before those went out of scope, plus the arguments `adapter.start` was called with.
+ *  Carried on the tracked session rather than recomputed, because the second attempt has no `opts` to
+ *  recompute it from: by the time an `exit` event arrives, `spawn()` has long since returned. */
+interface RetryMaterials {
+  file: string
+  args: string[]
+  cwd: string
+  env: Record<string, string | undefined>
+  meta: PtyMeta
+  provider: Provider
+  startArgs: { cwd: string; resumeThreadId?: string; bypass: boolean }
 }
 
 interface LiveChatSession {
@@ -47,6 +80,17 @@ interface LiveChatSession {
    *  mid-session `set_model`. codex does not: its model lives on the thread, and `thread/resume`
    *  reports it back (codexAdapter seeds its state from that same result). */
   chosenModel: string | null
+  /** Task 7 (design F5) — the retry-once bookkeeping for a CLI a toolchain manager silently refused to
+   *  run. `attempt`/`spawnAt`/`sawLine` are exactly what `shouldRetryWithBypass` asks for; `retry` is
+   *  null for an adopted session (nothing to respawn with, and there is nothing to refuse — the process
+   *  was already running when this app found it) and `attempt` starts at 1 for one, so the check never
+   *  even asks. `firstFailure` is attempt 0's exit, held only so a second, still-bypassed failure can
+   *  show both attempts' last words together (design F5's own last line) instead of losing the first's. */
+  attempt: number
+  spawnAt: number
+  sawLine: () => boolean
+  retry: RetryMaterials | null
+  firstFailure: ExitEvent | null
 }
 
 export class ChatSessionManager {
@@ -112,7 +156,13 @@ export class ChatSessionManager {
         ...(rollPrompt === undefined ? {} : { rollPrompt })
       }
     }
-    const proc = this.deps.factory(file, args, { cwd: opts.cwd, env, meta })
+    // Wrapped before the adapter ever sees it (design F5 / Task 7): `onLine` takes one subscriber, so
+    // counting has to ride the adapter's own subscription rather than add a second one that would take
+    // its place. `spawnAt` is taken here, not inside `track`, so it times the process's own life, not
+    // however long `makeAdapter`/`track` below happen to take.
+    const spawnAt = Date.now()
+    const watched = watchFirstLine(this.deps.factory(file, args, { cwd: opts.cwd, env, meta }))
+    const proc = watched.proc
 
     const info: SessionInfo = {
       id,
@@ -131,9 +181,15 @@ export class ChatSessionManager {
     }
 
     const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)
-    this.track(id, info, proc, adapter, opts.model ?? null)
+    const startArgs = { cwd: opts.cwd, resumeThreadId, bypass }
+    this.track(id, info, proc, adapter, opts.model ?? null, {
+      attempt: 0,
+      spawnAt,
+      sawLine: watched.sawLine,
+      retry: { file, args, cwd: opts.cwd, env, meta, provider, startArgs }
+    })
     void adapter
-      .start({ cwd: opts.cwd, resumeThreadId, bypass })
+      .start(startArgs)
       .then(() => {
         // A rolling respawn's carry-on prompt (spec §8.2): the first turn, sent only once the handshake
         // has settled — Claude's `initialize`, Codex's `thread/start` or `thread/resume` — because
@@ -321,15 +377,29 @@ export class ChatSessionManager {
     return provider === 'claude' ? createClaudeAdapter(args) : createCodexAdapter(args)
   }
 
+  /** `retryState` is absent for `adopt()` — an adopted process was already running when this app found
+   *  it, so there is nothing to refuse and nothing to retry; `attempt` then defaults to 1, which is
+   *  past the one retry `shouldRetryWithBypass` allows, so the check downstream never has to know why. */
   private track(
     id: string,
     info: SessionInfo,
     proc: ProcLike,
     adapter: ChatAdapter,
-    chosenModel: string | null
+    chosenModel: string | null,
+    retryState?: { attempt: number; spawnAt: number; sawLine: () => boolean; retry: RetryMaterials | null; firstFailure?: ExitEvent | null }
   ): void {
     adapter.on((e) => this.handleEvent(id, e))
-    this.sessions.set(id, { info, proc, adapter, chosenModel })
+    this.sessions.set(id, {
+      info,
+      proc,
+      adapter,
+      chosenModel,
+      attempt: retryState?.attempt ?? 1,
+      spawnAt: retryState?.spawnAt ?? Date.now(),
+      sawLine: retryState?.sawLine ?? (() => true),
+      retry: retryState?.retry ?? null,
+      firstFailure: retryState?.firstFailure ?? null
+    })
   }
 
   /** The model the person picked for this session, for the roll that has to carry it. Null when they
@@ -345,10 +415,58 @@ export class ChatSessionManager {
       live.info.threadId = e.threadId
       live.info.resumeSessionId = e.threadId
     } else if (e.type === 'exit') {
+      // A process that never spoke a line of protocol and was gone this fast was not run at all —
+      // something in front of it on PATH refused (design F5). One retry, with the toolchain bypass;
+      // this event is swallowed rather than forwarded — from everything watching, the session just took
+      // a moment longer to come up, not that it died and came back.
+      if (
+        live.retry &&
+        shouldRetryWithBypass({ attempt: live.attempt, sawProtocolLine: live.sawLine(), elapsedMs: Date.now() - live.spawnAt })
+      ) {
+        this.respawnWithBypass(id, live, e)
+        return
+      }
+      // The retry also died with nothing to show for it: both attempts' last words travel together, or
+      // the one that actually explains the refusal (attempt 0's, usually) is lost behind attempt 1's.
+      const final: ExitEvent = live.firstFailure ? mergeFailedRetry(live.firstFailure, e) : e
       live.info.status = 'exited'
-      live.info.exitCode = e.code
-      this.onExit?.({ sessionId: id, exitCode: e.code })
+      live.info.exitCode = final.code
+      this.onExit?.({ sessionId: id, exitCode: final.code })
+      for (const fn of this.listeners) fn(id, final)
+      return
     }
     for (const fn of this.listeners) fn(id, e)
+  }
+
+  /** design F5 / Task 7: the one bypass retry, after a CLI that spoke no protocol died at once. Same
+   *  session id throughout — every one of its owners (the tab, the scheduler, Slack, the roll) holds
+   *  it, and a fresh one would orphan them all — rebuilt from `live.retry`, the materials the first
+   *  attempt used, since `spawn()`'s own `opts` is long gone by the time an `exit` event reaches here. */
+  private respawnWithBypass(id: string, live: LiveChatSession, firstExit: ExitEvent): void {
+    const materials = live.retry
+    if (!materials) return // narrowed by the caller; kept so this compiles as its own method
+    const env = { ...materials.env, ...BYPASS_ENV }
+    const spawnAt = Date.now()
+    const watched = watchFirstLine(this.deps.factory(materials.file, materials.args, { cwd: materials.cwd, env, meta: materials.meta }))
+    const proc = watched.proc
+    const adapter = this.makeAdapter(proc, { mode: 'fresh' }, materials.provider)
+    this.track(id, live.info, proc, adapter, live.chosenModel, {
+      attempt: 1,
+      spawnAt,
+      sawLine: watched.sawLine,
+      retry: materials,
+      firstFailure: firstExit
+    })
+    void adapter
+      .start(materials.startArgs)
+      .then(() => {
+        // Not a failure — telling it through `ChatState.error` would have the exit banner (T4) read the
+        // bypass as the reason the session died, when the session is in fact up. Told once, and only
+        // because it worked: the bypass may have started a version other than the one pinned here (S7).
+        this.handleEvent(id, { type: 'notice', key: 'bypassed' })
+      })
+      .catch((err: unknown) => {
+        this.deps.log(`chat adapter bypass retry failed: ${err instanceof Error ? err.message : String(err)}`)
+      })
   }
 }

@@ -60,6 +60,12 @@ export interface ChatState {
   errorDetail: string | null
   /** Whether the process survives the app quitting (Host-owned) — the fallback's tab says it does not. */
   outlivesApp: boolean
+  /** Task 7 (design F5): the one bypass retry succeeded, which may have started a version other than
+   *  the one the person pinned for this folder — never silent about that. Optional, not required-and-
+   *  null, so the many `ChatState` literals a test builds for something else stay as they are; absent
+   *  reads the same as null. Not folded into `error`: the exit banner (T4) would mistake it for the
+   *  reason the session died, and this is the opposite of a failure. */
+  notice?: 'bypassed' | null
   /** The replay this state was rebuilt from had lost its head, so `status` is a guess until the next event. */
   truncated: boolean
   /** Which CLI this session is — set once at construction (adapterCore.ts), never patched. */
@@ -120,6 +126,11 @@ export type ChatEvent =
    *  the tail gave a reason a person should read — so the fold can leave whatever `error` already
    *  held rather than inventing one. */
   | { type: 'exit'; code: number; errorDetail: string | null; error?: string }
+  /** Task 7 (design F5): the bypass retry started the CLI. Its own event, not a value folded onto
+   *  `exit` or `error` — it is not a failure, and routing it through either would have some reader
+   *  mistake it for one. `key` names which notice, the same shape `chat.notice.*` i18n keys use, so a
+   *  second cause (a different toolchain manager's bypass) is a second key rather than a new field. */
+  | { type: 'notice'; key: 'bypassed' }
 
 export interface ChatAdapter {
   start(a: { cwd: string; resumeThreadId?: string; bypass: boolean }): Promise<void>

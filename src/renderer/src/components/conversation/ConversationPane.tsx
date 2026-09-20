@@ -1276,6 +1276,8 @@ export function ConversationPane({
     />
   ) : chatBanner.kind === "error" ? (
     <ChatNotice text={t("chat.notice.error", { message: chatBanner.message })} />
+  ) : chatBanner.kind === "notice" ? (
+    <ChatNotice text={t(`chat.notice.${chatBanner.key}` as MessageKey)} />
   ) : chatBanner.kind === "checking" ? (
     <ChatNotice text={t("chat.notice.checking")} />
   ) : chatBanner.kind === "endsWithApp" ? (
