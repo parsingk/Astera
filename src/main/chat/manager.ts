@@ -22,6 +22,8 @@ import type { PtyMeta } from '../../core/host/protocol'
 import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState, PermissionMode, PermissionModeChoice } from '../../core/chat/types'
 import type { ModelDescriptor } from '../../core/models/types'
 import { BYPASS_ENV, shouldRetryWithBypass, watchFirstLine } from '../../core/sessions/retryBypass'
+import { STDERR_TAIL_MAX } from '../../core/sessions/stderrTail'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { createCodexAdapter, type AdapterMode } from './codexAdapter'
 import { createClaudeAdapter } from './claudeAdapter'
 
@@ -30,15 +32,32 @@ type ExitEvent = Extract<ChatEvent, { type: 'exit' }>
 /** design F5's last line: a bypass retry that also dies with nothing said loses the *first* attempt's
  *  stderr the moment the second one's overwrites it, and the first is usually the one that actually
  *  names the refusal (a toolchain manager's own complaint) — the second is often just the same bare
- *  exit with no manager in front of it to say anything at all. Both tails travel together instead;
- *  `error` prefers the second attempt's one-line reason (the freshest), falling back to the first's. */
+ *  exit with no manager in front of it to say anything at all. Fix round 1 / C-review: both sides are
+ *  labelled **even when one is empty** — the old join-only-if-both-present shape silently presented
+ *  whichever side had content as if it were the *other* attempt's last words. `error` prefers the
+ *  second attempt's one-line reason (the freshest), falling back to the first's. Re-capped to
+ *  `STDERR_TAIL_MAX` after joining rather than left unbounded (design S3: one number, reused, not a
+ *  second one for the joined case) — `.slice(-n)` keeps the tail end, the same direction
+ *  `createStderrTail` already truncates in, which is why the second (later) attempt survives a cut
+ *  more often than the first when both are long. */
 function mergeFailedRetry(first: ExitEvent, second: ExitEvent): ExitEvent {
-  const detail = [first.errorDetail, second.errorDetail].filter((s): s is string => s !== null).join('\n---\n')
   const error = second.error ?? first.error
+  let errorDetail: string | null = null
+  if (first.errorDetail !== null || second.errorDetail !== null) {
+    // Each side keeps its own half of the one shared budget (S3: still the single number, just split,
+    // not a second one invented for the joined case) rather than joining first and re-capping the
+    // whole string — a whole-string cap, once both tails are near the max, can crop the *second*
+    // label off entirely along with all of the first attempt's content: backwards, since the second
+    // attempt is the fresher one and the one a reader has the least other context for.
+    const perSide = Math.floor(STDERR_TAIL_MAX / 2)
+    const label = (n: 1 | 2, tag: string, tail: string | null): string =>
+      `[attempt ${n}, ${tag}] ${(tail ?? '(no output)').slice(-perSide)}`
+    errorDetail = `${label(1, 'no bypass', first.errorDetail)}\n---\n${label(2, 'with bypass', second.errorDetail)}`
+  }
   return {
     type: 'exit',
     code: second.code,
-    errorDetail: detail.length > 0 ? detail : null,
+    errorDetail,
     ...(error !== undefined ? { error } : {})
   }
 }
@@ -66,6 +85,13 @@ interface RetryMaterials {
   meta: PtyMeta
   provider: Provider
   startArgs: { cwd: string; resumeThreadId?: string; bypass: boolean }
+  /** C1 / fix round 1: the handover briefing a rolling respawn carries — for a chat chain it is the
+   *  *only* delivery channel (rolling.ts / codexRolling.ts both skip their own auto-prompt for chat,
+   *  saying the spawn carries it). Attempt 0's own `spawn()` continuation only sends this once its
+   *  `adapter.start` resolves; a silent death means that promise rejects instead, so the send never
+   *  ran and the prompt would otherwise be lost, not merely deferred. Carried here so the retry's own
+   *  success continuation can send it once, for the one attempt that actually gets a live thread. */
+  initialPrompt?: string
 }
 
 interface LiveChatSession {
@@ -85,12 +111,32 @@ interface LiveChatSession {
    *  null for an adopted session (nothing to respawn with, and there is nothing to refuse — the process
    *  was already running when this app found it) and `attempt` starts at 1 for one, so the check never
    *  even asks. `firstFailure` is attempt 0's exit, held only so a second, still-bypassed failure can
-   *  show both attempts' last words together (design F5's own last line) instead of losing the first's. */
+   *  show both attempts' last words together (design F5's own last line) instead of losing the first's
+   *  — and cleared the moment a retry actually succeeds (C2 / fix round 1), or it goes on sitting here
+   *  and poisons whatever ordinary exit this session eventually has, hours later, with none of it. */
   attempt: number
   spawnAt: number
   sawLine: () => boolean
   retry: RetryMaterials | null
   firstFailure: ExitEvent | null
+  /** C3 / fix round 1: "we asked for this" — set by `kill()` before `handleEvent` ever sees the exit it
+   *  causes. Without it, closing a slow-starting tab within the five-second window reads exactly like a
+   *  toolchain refusal: a fresh CLI spawns behind the closed tab, with the bypass on, and `info.status`
+   *  stays `'running'` for a process nothing now holds a handle to. The quit sweep (`index.ts`'s
+   *  `will-quit`) already calls this same `kill()`, so it needs no separate flag or wiring. */
+  killRequested: boolean
+  /** C4 / fix round 1: the unsubscribe `adapter.on(...)` returned, called when tearing this attempt
+   *  down for a retry. Without it, attempt 0's own async tail — `doStart`'s catch calling `core.fail()`
+   *  a microtask after the exit that already got swallowed — goes on reaching `handleEvent` under the
+   *  id the *replacement* now owns, and `chatBannerFor` ranks that stray `error` over the retry's own
+   *  `notice`, so the feature's happy path shows a live, healthy session as if its turn had failed. */
+  off: () => void
+  /** "Told once" needs a home besides the event stream, or a pane that mounts after the retry already
+   *  succeeded — always true for a rolling respawn, where main emits while the renderer is still
+   *  building the tab — never sees it (adapterCore's own `fail()` states the same rule: remembered, not
+   *  just announced). Cleared on the next `send()`, mirroring the adapters' own `patch({ error: null })`
+   *  on a fresh turn. */
+  notice: 'bypassed' | null
 }
 
 export class ChatSessionManager {
@@ -186,7 +232,7 @@ export class ChatSessionManager {
       attempt: 0,
       spawnAt,
       sawLine: watched.sawLine,
-      retry: { file, args, cwd: opts.cwd, env, meta, provider, startArgs }
+      retry: { file, args, cwd: opts.cwd, env, meta, provider, startArgs, ...(initialPrompt === undefined ? {} : { initialPrompt }) }
     })
     void adapter
       .start(startArgs)
@@ -282,9 +328,17 @@ export class ChatSessionManager {
   }
 
   /** The exit event does the bookkeeping (status/exitCode/onExit) — this only asks the adapter to end
-   *  the process. Unknown id: no-op, the same convention SessionManager.kill uses. */
+   *  the process. Unknown id: no-op, the same convention SessionManager.kill uses.
+   *
+   *  C3 / fix round 1: marks the exit this causes as requested *before* asking for it, so the death
+   *  this produces is never read as the CLI having been refused — closing a slow-starting tab must not
+   *  spawn a fresh, bypassed CLI behind the closed tab. The quit sweep (`index.ts`'s `will-quit`) calls
+   *  this same method for every app-owned chat session, so it needs nothing of its own. */
   kill(id: string): void {
-    this.sessions.get(id)?.adapter.kill()
+    const live = this.sessions.get(id)
+    if (!live) return
+    live.killRequested = true
+    live.adapter.kill()
   }
 
   /** Writes info.title and the process's own note, returning the stored title — or null for an
@@ -317,7 +371,12 @@ export class ChatSessionManager {
 
   send(id: string, text: string): Promise<void> {
     const live = this.sessions.get(id)
-    return live ? live.adapter.send(text) : Promise.resolve()
+    if (!live) return Promise.resolve()
+    // A fresh turn starting is where the bypass notice (Task 7) has said what it had to say — mirrors
+    // the adapters' own `patch({ error: null })` on send (codexAdapter.ts/claudeAdapter.ts), which is
+    // the same "a new turn retires the last one's news" rule, one level up.
+    live.notice = null
+    return live.adapter.send(text)
   }
 
   interrupt(id: string): Promise<void> {
@@ -356,11 +415,15 @@ export class ChatSessionManager {
   }
 
   /** adapter.state() with outlivesApp forced to the proc's live value — the adapter's own state()
-   *  already does this (see codexAdapter.ts), but the manager owns the contract, not the adapter. */
+   *  already does this (see codexAdapter.ts), but the manager owns the contract, not the adapter.
+   *  `notice` is forced the same way, for the same reason: the adapter's own state knows nothing
+   *  about a bypass retry, so a pane that mounts after the notice already fired — always true for a
+   *  rolling respawn, where main emits while the renderer is still building the tab — needs it from
+   *  here, not just from the event stream. */
   state(id: string): ChatState | null {
     const live = this.sessions.get(id)
     if (!live) return null
-    return { ...live.adapter.state(), outlivesApp: live.proc.outlivesApp === true }
+    return { ...live.adapter.state(), outlivesApp: live.proc.outlivesApp === true, notice: live.notice }
   }
 
   subscribe(fn: (sessionId: string, e: ChatEvent) => void): () => void {
@@ -388,12 +451,15 @@ export class ChatSessionManager {
     chosenModel: string | null,
     retryState?: { attempt: number; spawnAt: number; sawLine: () => boolean; retry: RetryMaterials | null; firstFailure?: ExitEvent | null }
   ): void {
-    adapter.on((e) => this.handleEvent(id, e))
+    const off = adapter.on((e) => this.handleEvent(id, e))
     this.sessions.set(id, {
       info,
       proc,
       adapter,
       chosenModel,
+      off,
+      killRequested: false,
+      notice: null,
       attempt: retryState?.attempt ?? 1,
       spawnAt: retryState?.spawnAt ?? Date.now(),
       sawLine: retryState?.sawLine ?? (() => true),
@@ -416,15 +482,32 @@ export class ChatSessionManager {
       live.info.resumeSessionId = e.threadId
     } else if (e.type === 'exit') {
       // A process that never spoke a line of protocol and was gone this fast was not run at all —
-      // something in front of it on PATH refused (design F5). One retry, with the toolchain bypass;
-      // this event is swallowed rather than forwarded — from everything watching, the session just took
-      // a moment longer to come up, not that it died and came back.
-      if (
-        live.retry &&
+      // something in front of it on PATH refused (design F5). Three more things must all be true
+      // first, or the retry is either pointless or actively harmful (fix round 1):
+      //  - not `killRequested` (C3) — a person closing a slow-starting tab, or the quit sweep, must
+      //    not spawn a fresh, bypassed CLI behind a death they asked for themselves.
+      //  - not `PTY_LOST_SIGHT_EXIT_CODE` — the app losing sight of a still-live Host process is not
+      //    the process ending (procFactory.ts), and treating it as a refusal would spawn a second CLI
+      //    while the first may still be running, under the same id.
+      //  - `shouldRetryWithBypass` itself (attempt/line/timing).
+      // On a match this event is swallowed rather than forwarded — from everything watching, the
+      // session just took a moment longer to come up, not that it died and came back.
+      const eligible =
+        live.retry !== null &&
+        !live.killRequested &&
+        e.code !== PTY_LOST_SIGHT_EXIT_CODE &&
         shouldRetryWithBypass({ attempt: live.attempt, sawProtocolLine: live.sawLine(), elapsedMs: Date.now() - live.spawnAt })
-      ) {
-        this.respawnWithBypass(id, live, e)
-        return
+      if (eligible) {
+        try {
+          this.respawnWithBypass(id, live, e)
+          return
+        } catch (err) {
+          // The factory or makeAdapter threw before anything was tracked in place of attempt 0 — this
+          // event, already about to be swallowed, is the only account of the process ending that will
+          // ever exist; falling through and reporting it now is the difference between an honest exit
+          // and a session stuck `'running'` forever with a dead process behind it.
+          this.deps.log(`chat bypass retry failed to start, reporting the original exit instead: ${err instanceof Error ? err.message : String(err)}`)
+        }
       }
       // The retry also died with nothing to show for it: both attempts' last words travel together, or
       // the one that actually explains the refusal (attempt 0's, usually) is lost behind attempt 1's.
@@ -441,10 +524,20 @@ export class ChatSessionManager {
   /** design F5 / Task 7: the one bypass retry, after a CLI that spoke no protocol died at once. Same
    *  session id throughout — every one of its owners (the tab, the scheduler, Slack, the roll) holds
    *  it, and a fresh one would orphan them all — rebuilt from `live.retry`, the materials the first
-   *  attempt used, since `spawn()`'s own `opts` is long gone by the time an `exit` event reaches here. */
+   *  attempt used, since `spawn()`'s own `opts` is long gone by the time an `exit` event reaches here.
+   *
+   *  C4 / fix round 1: attempt 0 is torn down — its `adapter.on` subscription cut, its proc callbacks
+   *  reset — *before* anything about the replacement exists. The exit that got us here already ran
+   *  synchronously inside attempt 0's own `onExit`; a microtask later, `doStart`'s catch calls
+   *  `core.fail()` on that same dead adapter (codexAdapter.ts / claudeAdapter.ts), and without cutting
+   *  the subscription first, that stray `error` fans out under the id the replacement now owns. */
   private respawnWithBypass(id: string, live: LiveChatSession, firstExit: ExitEvent): void {
     const materials = live.retry
     if (!materials) return // narrowed by the caller; kept so this compiles as its own method
+    live.off()
+    live.proc.onExit(() => {})
+    live.proc.onLine(() => {})
+
     const env = { ...materials.env, ...BYPASS_ENV }
     const spawnAt = Date.now()
     const watched = watchFirstLine(this.deps.factory(materials.file, materials.args, { cwd: materials.cwd, env, meta: materials.meta }))
@@ -460,10 +553,27 @@ export class ChatSessionManager {
     void adapter
       .start(materials.startArgs)
       .then(() => {
+        const now = this.sessions.get(id)
+        if (now) {
+          // C2 / fix round 1: a successful retry is not the reason some later, unrelated exit happens.
+          // Left set, this would go on merging attempt 0's toolchain refusal into an ordinary close
+          // hours from now, presenting it through `errorDetail` as if it explained *that* death — the
+          // exact banner-poisoning constraint 4 forbids.
+          now.firstFailure = null
+          now.notice = 'bypassed'
+        }
         // Not a failure — telling it through `ChatState.error` would have the exit banner (T4) read the
         // bypass as the reason the session died, when the session is in fact up. Told once, and only
         // because it worked: the bypass may have started a version other than the one pinned here (S7).
         this.handleEvent(id, { type: 'notice', key: 'bypassed' })
+        if (materials.initialPrompt === undefined) return
+        // C1 / fix round 1: the only delivery channel a chat chain's handover briefing has (rolling.ts /
+        // codexRolling.ts both skip their own auto-prompt for chat, saying the spawn carries it).
+        // Attempt 0's own `spawn()` continuation never ran this — its `adapter.start` rejected instead
+        // of resolving — so this is not a re-send, it is the only send.
+        return adapter.send(materials.initialPrompt).catch((err: unknown) => {
+          this.deps.log(`chat initial prompt failed session=${id}: ${err instanceof Error ? err.message : String(err)}`)
+        })
       })
       .catch((err: unknown) => {
         this.deps.log(`chat adapter bypass retry failed: ${err instanceof Error ? err.message : String(err)}`)

@@ -6,6 +6,7 @@ import type { ProcFactory, ProcLike, ProcSpawnOptions } from '../../core/session
 import { makeDescriptors } from '../../core/providers/descriptor'
 import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState } from '../../core/chat/types'
 import { claudeLaunchArgs } from '../../core/chat/claudeProtocol'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import type { AdapterMode } from './codexAdapter'
 import { ChatSessionManager, type ChatManagerDeps } from './manager'
 
@@ -53,13 +54,18 @@ interface FakeAdapterHandle {
  *  `startRejects` makes every adapter's start() reject, which is what a refused handshake looks like
  *  to the manager. `sendRejects` makes every adapter's send() reject, which is what Codex's
  *  "no active thread" refusal looks like before its handshake has settled. */
-function makeAdapterFactory(startRejects = false, sendRejects = false): {
+/** `startRejectsOnce` rejects only the *first* handle's `start()` (matching what a real adapter does
+ *  when a process dies before its handshake completes — `doStart`'s own catch rejects the outer
+ *  promise) while later handles (a bypass retry) resolve normally — for tests that need attempt 0 to
+ *  genuinely fail its handshake without also failing the retry that follows it. */
+function makeAdapterFactory(startRejects = false, sendRejects = false, startRejectsOnce = false): {
   createAdapter: NonNullable<ChatManagerDeps['createAdapter']>
   handles: FakeAdapterHandle[]
 } {
   const handles: FakeAdapterHandle[] = []
   const createAdapter: NonNullable<ChatManagerDeps['createAdapter']> = (a) => {
     const listeners: Array<(e: ChatEvent) => void> = []
+    const handleIndex = handles.length
     const handle: FakeAdapterHandle = {
       mode: a.mode,
       provider: a.provider,
@@ -79,7 +85,8 @@ function makeAdapterFactory(startRejects = false, sendRejects = false): {
     const adapter: ChatAdapter = {
       start: (o) => {
         handle.startCalls.push(o)
-        return startRejects ? Promise.reject(new Error('too old')) : Promise.resolve()
+        const rejects = startRejects || (startRejectsOnce && handleIndex === 0)
+        return rejects ? Promise.reject(new Error('too old')) : Promise.resolve()
       },
       send: (text) => {
         handle.sent.push(text)
@@ -139,14 +146,26 @@ const claudeAccount: Account = {
   createdAt: '2026-07-29T00:00:00Z'
 }
 
-function setup(platform: NodeJS.Platform = 'win32', startRejects = false, sendRejects = false) {
+/** `throwOnSpawnCall` makes the factory throw synchronously on its Nth call (1-based) instead of
+ *  spawning — for testing that a broken `respawnWithBypass` (the factory or `makeAdapter` throwing)
+ *  falls through to reporting the exit it was about to swallow, rather than losing it. */
+function setup(
+  platform: NodeJS.Platform = 'win32',
+  startRejects = false,
+  sendRejects = false,
+  throwOnSpawnCall?: number,
+  startRejectsOnce = false
+) {
   const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
   const factory: ProcFactory = (file, args, opts) => {
+    if (throwOnSpawnCall !== undefined && spawned.length + 1 === throwOnSpawnCall) {
+      throw new Error('factory exploded')
+    }
     const proc = new FakeProc()
     spawned.push({ file, args, opts, proc })
     return proc
   }
-  const { createAdapter, handles } = makeAdapterFactory(startRejects, sendRejects)
+  const { createAdapter, handles } = makeAdapterFactory(startRejects, sendRejects, startRejectsOnce)
   const descriptors = makeDescriptors(platform)
   const logged: string[] = []
   const manager = new ChatSessionManager({
@@ -438,7 +457,10 @@ describe('ChatSessionManager — toolchain 우회 재시도', () => {
   })
 
   it('재시도도 죽으면 두 번째는 없다', async () => {
-    const { manager, handles, spawned } = setup()
+    // startRejects: true — 두 시도 모두 handshake 가 끝내 완성되지 않는다. false 로 두면 가짜
+    // adapter 의 start() 가 (실제와 달리) exit 과 무관하게 성공해 버려 재시도가 "성공했다" 는 알림까지
+    // 동시에 나가는, 이 테스트가 보이려는 것과 다른 모양이 된다.
+    const { manager, handles, spawned } = setup('win32', true)
     const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
     const exits: Array<{ sessionId: string; exitCode: number }> = []
     manager.onExit = (e) => exits.push(e)
@@ -454,9 +476,184 @@ describe('ChatSessionManager — toolchain 우회 재시도', () => {
     expect(manager.info(info.id)?.status).toBe('exited')
     expect(manager.info(info.id)?.exitCode).toBe(9)
     expect(exits).toEqual([{ sessionId: info.id, exitCode: 9 }])
-    // 재시도도 실패하면 두 시도의 stderr 를 함께 보여준다(design F5) — 두 번째 것만 남으면 대개
-    // 진짜 사유를 담은 첫 시도의 것이 사라진다
-    expect(seen).toEqual([{ type: 'exit', code: 9, errorDetail: 'first attempt tail\n---\nsecond attempt tail' }])
+    // 재시도도 실패하면 두 시도의 stderr 를 함께 보여준다(design F5) — 라벨을 붙여서, 둘 다: 라벨이
+    // 없으면 한쪽의 말이 다른 쪽의 마지막 말인 것처럼 보인다(fix round 1, C 리뷰)
+    expect(seen).toEqual([
+      {
+        type: 'exit',
+        code: 9,
+        errorDetail: '[attempt 1, no bypass] first attempt tail\n---\n[attempt 2, with bypass] second attempt tail'
+      }
+    ])
+  })
+
+  // fix round 1: 한쪽이 비어 있어도 라벨은 둘 다 붙는다 — "관리자가 거절, 맨 실행은 조용히 죽음" 이
+  // 흔한 모양인데, 예전 방식(둘 다 있을 때만 이어붙임)은 이때 한쪽의 말을 다른 쪽 것처럼 보이게 했다.
+  it('한쪽 stderr 가 없어도 라벨은 둘 다 붙는다', () => {
+    const { manager, handles, spawned } = setup('win32', true)
+    manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const seen: ChatEvent[] = []
+    manager.subscribe((_id, e) => seen.push(e))
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'volta: could not parse package.json' })
+    expect(spawned).toHaveLength(2)
+    handles[1].emit({ type: 'exit', code: 1, errorDetail: null })
+
+    expect(seen).toEqual([
+      {
+        type: 'exit',
+        code: 1,
+        errorDetail: '[attempt 1, no bypass] volta: could not parse package.json\n---\n[attempt 2, with bypass] (no output)'
+      }
+    ])
+  })
+
+  // fix round 1: 둘 다 4000자 가까이 길면, 통째로 뒤에서 자르는 방식은 2차 라벨까지 통째로 날려버릴
+  // 수 있다(계산해 보면 둘 다 4000자일 때 정확히 그렇게 된다) — 그래서 절반씩(2000자) 나눠 갖는다.
+  it('둘 다 길면 각자 절반(2000자)만 남고, 라벨은 둘 다 살아남는다', () => {
+    const { manager, handles, spawned } = setup('win32', true)
+    manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const seen: ChatEvent[] = []
+    manager.subscribe((_id, e) => seen.push(e))
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'a'.repeat(5000) })
+    expect(spawned).toHaveLength(2)
+    handles[1].emit({ type: 'exit', code: 1, errorDetail: 'b'.repeat(5000) })
+
+    const detail = (seen[0] as { errorDetail: string }).errorDetail
+    expect(detail).toContain('[attempt 1, no bypass]')
+    expect(detail).toContain('[attempt 2, with bypass]')
+    // STDERR_TAIL_MAX(4000) 하나를 둘로 나눈 것 — 새 숫자를 만들지 않는다(설계 S3)
+    expect(detail).toContain('a'.repeat(2000))
+    expect(detail).not.toContain('a'.repeat(2001))
+    // 각 쪽에서도 꼬리(더 최근 것)가 남는다 — createStderrTail 과 같은 방향
+    expect(detail.endsWith('b'.repeat(2000))).toBe(true)
+  })
+
+  // C1: rolling.ts / codexRolling.ts 는 채팅 세션엔 자기 auto-prompt 를 안 보낸다 — "spawn 이 실어
+  // 준다" 고 믿기 때문이다. 1차 시도의 adapter.start() 는 reject 되므로(핸드셰이크가 못 끝났으니) 그
+  // .then() 은 끝내 안 돈다 — initialPrompt 를 보낼 자리 자체가 없다. 재시도가 유일한 전달 채널이다.
+  it('말없이 즉사해도 재시도가 성공하면 initialPrompt 를 그 재시도가 보낸다', async () => {
+    const { manager, handles, spawned } = setup('win32', false, false, undefined, true)
+    manager.spawn({ account: codexAccount, cwd: 'D:/proj', initialPrompt: 'carry on' })
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
+    expect(spawned).toHaveLength(2)
+
+    await flushPromises()
+    expect(handles[0].sent).toEqual([]) // 죽은 1차는 보낸 적이 없다 — "아직 필요 없음"이 아니라 파괴된 것
+    expect(handles[1].sent).toEqual(['carry on']) // 재시도가 유일한 전달 채널
+  })
+
+  // C2: 재시도가 성공하고 한참 지나 평범하게(예: 코드 0, stderr 없이) 끝나는 죽음까지도
+  // firstFailure 를 들고 있으면 그 평범한 종료의 사유를 옛 toolchain 거절로 오염시킨다(설계 D2/T4
+  // 배너가 그것을 사유로 오해한다).
+  it('재시도가 성공하면 firstFailure 가 지워져 다음 종료를 오염시키지 않는다', async () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const seen: ChatEvent[] = []
+    manager.subscribe((_id, e) => seen.push(e))
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'volta: could not parse package.json' })
+    expect(spawned).toHaveLength(2)
+    await flushPromises() // 재시도의 start() 가 리졸브 — notice 가 나가고 firstFailure 가 지워진다
+    expect(seen).toEqual([{ type: 'notice', key: 'bypassed' }])
+
+    // 두 시간 뒤, 이 세션은 평범하게 끝난다 — 옛 실패와는 무관하다
+    handles[1].emit({ type: 'exit', code: 0, errorDetail: null })
+    expect(manager.info(info.id)?.exitCode).toBe(0)
+    expect(seen.at(-1)).toEqual({ type: 'exit', code: 0, errorDetail: null }) // 병합되지 않은 그대로
+  })
+
+  // C3: 뜨는 데 시간이 걸리는 탭을 그 오 초 창 안에서 닫으면(kill), 그 죽음은 거절이 아니라 요청한
+  // 것이다 — 재시도가 걸리면 닫힌 탭 뒤에서 우회를 얹은 새 CLI 가 조용히 떠 버린다.
+  it('kill() 로 인한 죽음은 그 창 안이어도 재시도하지 않는다', () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+
+    manager.kill(info.id)
+    expect(handles[0].killCalls).toBe(1)
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: null }) // kill() 이 부른 그 죽음
+
+    expect(spawned).toHaveLength(1) // 재시도 없음
+    expect(manager.info(info.id)?.status).toBe('exited')
+    expect(manager.info(info.id)?.exitCode).toBe(8)
+  })
+
+  // 중요: PTY_LOST_SIGHT_EXIT_CODE 는 "이 앱이 그 프로세스를 놓쳤다"이지 "그 프로세스가 끝났다"가
+  // 아니다(procFactory.ts) — Host 재연결 창 안에서 이 코드를 즉사로 읽으면, 첫 프로세스가 아직 살아
+  // 있는 채로 같은 id 아래 두 번째 CLI 가 뜬다.
+  it('PTY_LOST_SIGHT_EXIT_CODE 는 즉사로 읽지 않는다', () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+
+    handles[0].emit({ type: 'exit', code: PTY_LOST_SIGHT_EXIT_CODE, errorDetail: null })
+
+    expect(spawned).toHaveLength(1) // 재시도 없음
+    expect(manager.info(info.id)?.status).toBe('exited')
+    expect(manager.info(info.id)?.exitCode).toBe(PTY_LOST_SIGHT_EXIT_CODE)
+  })
+
+  // 중요: factory 나 makeAdapter 가 던지면, 이미 삼키기로 한 1차 exit 을 대신할 것이 없어진다 —
+  // 세션은 죽은 프로세스를 붙들고 'running'에 영영 머문다. respawnWithBypass 호출을 감싸서, 던지면
+  // 삼키려던 그 원래 exit 을 그대로 보고한다.
+  it('재시도 자체가 던지면 삼키려던 원래 exit 을 그대로 보고한다', () => {
+    const { manager, handles, spawned, logged } = setup('win32', false, false, 2) // 2번째 spawn(재시도)이 던진다
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const exits: Array<{ sessionId: string; exitCode: number }> = []
+    manager.onExit = (e) => exits.push(e)
+    const seen: ChatEvent[] = []
+    manager.subscribe((_id, e) => seen.push(e))
+
+    expect(() => handles[0].emit({ type: 'exit', code: 8, errorDetail: 'first tail' })).not.toThrow()
+
+    expect(spawned).toHaveLength(1) // 재시도 spawn 은 던졌으니 배열에 없다
+    expect(manager.info(info.id)?.status).toBe('exited')
+    expect(manager.info(info.id)?.exitCode).toBe(8)
+    expect(exits).toEqual([{ sessionId: info.id, exitCode: 8 }])
+    expect(seen).toEqual([{ type: 'exit', code: 8, errorDetail: 'first tail' }])
+    expect(logged.some((m) => m.includes('bypass retry failed to start'))).toBe(true)
+  })
+
+  // C4: 1차 어댑터의 doStart 는 진짜로는 exit 이 삼켜진 뒤 한 틱 늦게 core.fail() 을 부른다
+  // (codexAdapter.ts / claudeAdapter.ts 의 doStart catch). 구독을 끊지 않으면 그 늦은 error 가 재시도
+  // 세션 밑에서 나온다 — chatBannerFor 는 error 를 notice 보다 위에 두므로, 멀쩡히 뜬 세션이 "턴이
+  // 실패했습니다"를 보인다.
+  it('1차 어댑터가 죽은 뒤 늦게 emit 해도 재시도 세션으로 새지 않는다', async () => {
+    const { manager, handles, spawned } = setup()
+    manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const seen: ChatEvent[] = []
+    manager.subscribe((_id, e) => seen.push(e))
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
+    expect(spawned).toHaveLength(2)
+
+    await Promise.resolve() // doStart 의 catch 가 실제로 core.fail() 을 부르는 그 한 틱 늦은 시점처럼
+    handles[0].emit({ type: 'error', message: 'stale: process ended' }) // 죽은 1차 어댑터의 뒤늦은 말
+
+    expect(seen.some((e) => e.type === 'error')).toBe(false) // 구독이 끊겨 아무 데도 안 닿는다
+
+    // 그 사이 재시도(handles[1]) 자신의 이벤트는 여전히 정상적으로 닿는다 — 끊은 건 1차뿐이다
+    handles[1].emit({ type: 'status', status: 'working' })
+    expect(seen.some((e) => e.type === 'status')).toBe(true)
+  })
+
+  // "말했다는 것"을 알려면 pane 이 열려 있어야 하는데, 롤링 재시작에서는 main 이 알림을 낼 때
+  // renderer 가 아직 탭을 만드는 중이다 — 이벤트 스트림만으론 늦게 뜬 pane 이 못 본다. state() 가
+  // 그 알림을 들고 있어야 한다(adapterCore.fail() 이 세우는 것과 같은 규칙: 알리는 게 아니라 기억).
+  it('알림은 state() 에도 남아 늦게 뜬 pane 에도 닿는다', async () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
+    expect(spawned).toHaveLength(2)
+    await flushPromises()
+
+    expect(manager.state(info.id)?.notice).toBe('bypassed')
+
+    // 다음 턴이 시작되면(send) 알림도 error 와 같은 자리에서 걷힌다
+    await manager.send(info.id, 'hi')
+    expect(manager.state(info.id)?.notice).toBeNull()
   })
 })
 

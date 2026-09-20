@@ -47,8 +47,18 @@ export function watchFirstLine(proc: ProcLike): { proc: ProcLike; sawLine: () =>
       get pid() {
         return proc.pid
       },
+      // Fix round 1: a getter with no setter throws on assignment (strict mode, which ESM always is) —
+      // loud, not quiet, but still not the contract `ProcLike` promises. Nothing writes through the
+      // wrapper today (createProcRouter stamps `outlivesApp` on the raw proc *before* this wraps it),
+      // but the two fields are declared as plain, writable properties, so the wrapper honours that.
+      set pid(v) {
+        proc.pid = v
+      },
       get outlivesApp() {
         return proc.outlivesApp
+      },
+      set outlivesApp(v) {
+        proc.outlivesApp = v
       },
       onLine: (cb) =>
         proc.onLine((line) => {
