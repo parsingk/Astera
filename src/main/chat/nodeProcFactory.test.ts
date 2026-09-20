@@ -39,3 +39,24 @@ describe('nodeProcFactory', () => {
     expect(await until(() => (exit === null ? undefined : exit))).toBe(1)
   })
 })
+
+describe('nodeProcFactory — 마지막 말', () => {
+  it('stderr 에 찍고 죽으면 그 꼬리가 종료 이벤트에 실린다', async () => {
+    const proc = nodeProcFactory(process.execPath, ['-e', 'process.stderr.write("error: Could not parse project manifest\\n"); process.exit(8)'], {
+      cwd: process.cwd(),
+      env: process.env as Record<string, string | undefined>
+    })
+    const exit = await new Promise<{ exitCode: number; stderrTail?: string }>((r) => proc.onExit(r))
+    expect(exit.exitCode).toBe(8)
+    expect(exit.stderrTail).toContain('Could not parse project manifest')
+  })
+
+  it('stderr 에 아무것도 안 찍으면 칸 자체가 없다', async () => {
+    const proc = nodeProcFactory(process.execPath, ['-e', 'process.exit(0)'], {
+      cwd: process.cwd(),
+      env: process.env as Record<string, string | undefined>
+    })
+    const exit = await new Promise<{ exitCode: number; stderrTail?: string }>((r) => proc.onExit(r))
+    expect(exit).not.toHaveProperty('stderrTail')
+  })
+})
