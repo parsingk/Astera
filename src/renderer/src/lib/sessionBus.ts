@@ -55,6 +55,16 @@ export function init(): void {
       }
     }
   })
+  // 귀가 열렸다고 메인에 알린다 — **리스너를 건 바로 다음 줄이어야 한다.** 메인은 이 신고를
+  // 받고서야 붙잡아 둔 재생 데이터를 흘리고, 그 전에 흘리면 위의 `window.api.on` 이 아직 없어
+  // 그대로 사라진다. 그것이 업데이트 뒤 재시작에서 탭만 남고 속은 검은 터미널이 되던 경로다
+  // (main/rendererGate.ts 에 그 경로와 측정이 적혀 있다).
+  //
+  // 위 버퍼가 있으므로 TerminalView 의 마운트까지 기다릴 필요는 없다: 흘러온 출력은 탭이 아직
+  // 없으면 `buffers` 에 앉았다가 `attach` 가 그대로 받아 간다. 이 버퍼가 세션 스크롤백이 머무는
+  // 유일한 곳이기도 하다 — 터미널과 달리 메인은 세션의 출력을 보관하지 않으므로, 여기서 놓치면
+  // 되물을 데가 없다.
+  window.api.system.rendererReady()
 }
 
 export function attach(sessionId: string, listener: Listener): () => void {

@@ -211,6 +211,29 @@ describe('TerminalManager', () => {
       expect(pty.written).toEqual(['echo hi\r'])
     })
 
+    // **이것이 프로젝트 터미널에는 rendererGate 가 필요 없는 이유다.** 재부착이 끝나면 Host 는
+    // 보관하던 스크롤백을 평범한 출력으로 단 한 번 돌려주는데, 그것이 도착할 때 이 매니저의
+    // onData 는 이미 걸려 있어 live.buffer 로 들어간다. 그래서 그 사이 렌더러가 아직 없어
+    // terminal:data 이벤트를 놓치더라도, 패널이 열릴 때 list() 가 같은 내용을 통째로 돌려준다 —
+    // 되물을 곳이 있는 것이다. 세션에는 이 보관이 없어서(core/sessions/manager.ts 는 backpressure
+    // 만 한다) 놓치면 그것으로 끝이고, 게이트는 그쪽에만 선다.
+    it('입양한 뒤 도착한 Host 의 재생을 버퍼에 담아 list 로 돌려준다', () => {
+      const { mgr } = setup()
+      const pty = new FakePty()
+      mgr.adopt({ kind: 'terminal', id: 'term-from-host', pty, restore: { projectPath: 'D:/p' } })
+
+      // 입양 직후의 버퍼는 비어 있다 — 앱이 재시작 동안 본 것이 없다.
+      expect(mgr.list('D:/p')).toEqual([{ id: 'term-from-host', buffer: '' }])
+
+      // sendAttach 에 Host 가 답한 ring buffer 가 평범한 출력으로 들어온다.
+      pty.dataCb('$ npm run dev\r\n')
+      pty.dataCb('ready in 300ms\r\n')
+
+      expect(mgr.list('D:/p')).toEqual([
+        { id: 'term-from-host', buffer: '$ npm run dev\r\nready in 300ms\r\n' }
+      ])
+    })
+
     // A run's note is readable as a terminal's — projectPath is a strict subset of it — so without the
     // kind, try-each-manager routing would quietly rebuild a run as a terminal.
     it("refuses a run's note, readable though it is", () => {

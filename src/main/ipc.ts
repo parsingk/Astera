@@ -16,6 +16,7 @@ import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
 import type { AttentionState, Attention } from './attention'
+import { createRendererGate } from './rendererGate'
 import type { PendingPromptState } from './pendingPrompt'
 import {
   createConversationSessions,
@@ -797,9 +798,38 @@ export function registerIpc(
   hostWiring?: HostWiring
 ): void {
   const agentGuests = agentGuestsIn ?? new AgentGuestRegistry<WebContents>((id) => webContents.fromId(id))
-  const send = (channel: string, payload: unknown): void => {
+  // 재생 데이터는 렌더러가 귀를 열 때까지 게이트가 붙잡는다. `webContents.send` 는 들을 사람이
+  // 없으면 그냥 버리고, 하필 그 순간이 부팅 직후다 — Host 에서 세션을 되찾아 ring buffer 를
+  // 돌려받는 일이 앱이 켜진 지 130ms 만에 끝난다(rendererGate.ts 가 그 측정과 증상을 적어 둔다).
+  const gate = createRendererGate((channel, payload) => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
+  })
+  const send = (channel: string, payload: unknown): void => gate.send(channel, payload)
+  // 렌더러가 `sessionBus.init()` 으로 채널에 리스너를 건 직후 보내 온다. 페이지 로드 이벤트가
+  // 아니라 렌더러 자신의 신고인 것은, 붙잡은 것을 푸는 조건이 "문서가 다 떴다" 가 아니라
+  // "이 출력을 받을 리스너가 실제로 걸렸다" 이기 때문이다. 리로드하면 다시 온다.
+  //
+  // **신고가 끝내 오지 않아도 게이트는 열린다.** 이것이 없으면 이 수정은 고치려던 것보다 나쁜
+  // 것을 만든다: 렌더러가 번들을 못 읽거나 죽어서 신고를 못 하면 세션 출력이 통째로, 영구히
+  // 막힌다. 시간이 지나면 스스로 열어 최악의 경우에도 고치기 전의 동작 — 그 구간만큼의 유실 —
+  // 으로 돌아가게 한다. 15초는 TerminalView 의 로딩 오버레이가 쓰는 것과 같은 값이고, 이유도
+  // 같다: 그 안에 렌더러가 뜨지 못했다면 기다려서 나아질 상황이 아니다.
+  //
+  // 푼 양은 붙잡은 것이 있을 때만 남긴다. 평소 실행에서는 0 이라 로그가 늘 비어 있고, 줄이
+  // 하나 찍혔다는 것 자체가 "이번 부팅은 Host 에서 세션을 되찾아 왔고 그 재생을 건져 냈다" 는
+  // 뜻이 된다 — 이 경로가 실제로 일했는지 확인할 곳이 그 줄 말고는 없다.
+  const openGate = (why: string): void => {
+    const { count, chars } = gate.open()
+    if (count > 0) hostWiring?.log(`renderer gate: released ${count} held chunk(s), ${chars} chars (${why})`)
   }
+  const readyFailsafe = setTimeout(() => {
+    hostWiring?.log('renderer never reported ready — releasing the held session output')
+    openGate('failsafe')
+  }, 15_000)
+  ipcMain.on('system.rendererReady', () => {
+    clearTimeout(readyFailsafe)
+    openGate('renderer ready')
+  })
   /** Every session this app holds, pty and chat alike. A chat session lives in its own manager
    *  (core.chat) but is a SessionInfo with a real accountId and cwd like any other, so every lookup
    *  that resolves a session id to its account, provider or folder has to look in both — otherwise a

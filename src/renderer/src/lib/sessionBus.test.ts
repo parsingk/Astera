@@ -8,15 +8,26 @@ type DataEvent = { sessionId: string; data: string }
 /** init()이 window.api.on('session:data')로 등록한 핸들러. main이 보내는 이벤트를 흉내내려면
  *  이것을 직접 부른다 — init의 계약(인자 없음·중복 호출 무해)은 바꾸지 않았다. */
 let emit: (e: DataEvent) => void = () => {}
+/** `rendererReady` 가 불린 순간 이미 리스너가 걸려 있었는지. 이 신고를 받은 메인이 붙잡아 둔
+ *  재생 데이터를 흘리므로, 순서가 뒤집히면 그 출력이 갈 곳 없이 사라진다. */
+let listenerWasSetAtReady: boolean | null = null
 
 beforeEach(async () => {
   emit = () => {}
+  listenerWasSetAtReady = null
+  let listening = false
   // 테스트 환경은 node라 window가 없다. init()이 의존하는 최소한만 세운다.
   vi.stubGlobal('window', {
     api: {
       on: (_channel: string, cb: (e: DataEvent) => void) => {
         emit = cb
+        listening = true
         return () => {}
+      },
+      system: {
+        rendererReady: () => {
+          listenerWasSetAtReady = listening
+        }
       }
     }
   })
@@ -104,5 +115,14 @@ describe('sessionBus', () => {
     mod.attach('s1', (d) => second.push(d))
     expect(first).toEqual(['a']) // detach 뒤의 'b'는 오지 않았다
     expect(second).toEqual(['b'])
+  })
+})
+
+// 이 수정의 계약이다. 메인은 이 신고를 받고서야 붙잡아 둔 재생 데이터를 흘리므로(main/rendererGate.ts),
+// 신고가 리스너보다 먼저 나가면 Host 가 돌려준 스크롤백이 갈 곳 없이 사라진다 — 업데이트 뒤
+// 재시작에서 탭만 남고 속은 검은 터미널이 되던 바로 그 경로다.
+describe('init 의 준비 신고', () => {
+  it('리스너를 건 뒤에 메인에 신고한다', () => {
+    expect(listenerWasSetAtReady).toBe(true)
   })
 })

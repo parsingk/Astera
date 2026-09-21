@@ -1255,6 +1255,14 @@ export interface SystemApi {
    *  process cannot be told about it. The Host keeps the sessions. */
   relaunch(): Promise<void>
   appVersion(): Promise<string>
+  /** 세션 출력을 받을 리스너가 걸렸다고 메인에 알린다 — `sessionBus.init()` 이 부른다.
+   *
+   *  메인의 `send` 는 `webContents.send` 라 들을 사람이 없으면 그대로 버린다. 평소에는 드러나지
+   *  않지만 Host 에서 세션을 되찾을 때는 다르다: 재부착이 끝나면 Host 가 보관하던 스크롤백을
+   *  단 한 번 돌려주는데, 그 일이 앱이 켜진 지 130ms 만에 끝나 렌더러가 아직 번들을 실행하기도
+   *  전이다. 놓치면 되물을 길이 없어 탭만 남고 속은 빈 터미널이 된다. 이 신고가 올 때까지
+   *  메인이 그 출력을 붙잡아 둔다(main/rendererGate.ts). */
+  rendererReady(): void
   /** 프로젝트가 지정되지 않았을 때 아래쪽 패널의 터미널이 열릴 자리 — 셸을 직접 띄웠을 때와 같은 곳 */
   homeDir(): Promise<string>
   /** 기본 브라우저로 링크를 연다. http/https/mailto 만 통과한다 — 렌더러도 같은 검사를 하지만

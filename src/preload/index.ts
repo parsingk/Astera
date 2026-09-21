@@ -224,6 +224,8 @@ const api = {
     installCli: invoke('system.installCli'),
     relaunch: invoke('system.relaunch'),
     appVersion: invoke('system.appVersion'),
+    // fire — 메인이 답할 것이 없고, 렌더러도 기다릴 것이 없다. 한 방향의 신고다.
+    rendererReady: fire('system.rendererReady'),
     homeDir: invoke('system.homeDir'),
     openExternal: invoke('system.openExternal')
   },
