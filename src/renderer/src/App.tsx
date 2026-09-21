@@ -114,7 +114,7 @@ import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '.
 import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
-import { PanelLeft, Settings, Users, X } from 'lucide-react'
+import { House, PanelLeft, Settings, X } from 'lucide-react'
 
 sessionBus.init()
 
@@ -3559,7 +3559,7 @@ export default function App(): React.JSX.Element {
             title={t('session.rail.openSessions')}
             onClick={toggleSessions}
           >
-            <Users size={16} />
+            <House size={16} />
           </button>
           {/* 탐색기 토글. 폴더 아이콘과 컨텍스트 메뉴 항목을 걷어내면서 탐색기로 들어가는 길이 단축키
               하나만 남았는데, 처음 쓰는 사람은 그 키를 알 수 없다. 툴팁에 실제 바인딩을 함께 띄우므로
