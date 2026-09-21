@@ -36,6 +36,8 @@ docs/*
 # Published deliberately, same reason: the Job/Run split and the projects registry are built from this
 # design over several sessions, and the public CLI is designed on top of the model it settles.
 !docs/2026-09-21-job-run-split-and-projects-design.md
+# Published deliberately, same reason: the public CLI is built from this design over several sessions.
+!docs/2026-09-22-public-cli-design.md
 # Published deliberately: the SignPath Foundation requires the code signing policy to be reachable at
 # a public URL, and the README links to it.
 !docs/code-signing.md
