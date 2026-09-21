@@ -421,27 +421,38 @@ function ScheduleCard({
         <span className="jobs-objective" title={run.objective}>
           {run.objective}
         </span>
-        <span className="jobs-tmpl-badge" title={t('jobs.new.scheduleHint')}>
-          {t('jobs.run.scheduled')}
-        </span>
+        {/* 예약에만 붙는다 — 손으로 다시 돌린 Job 도 이 카드를 쓰지만 예약은 아니다.
+            그 Job 이 무엇인지는 아래 "N회 실행" 과 회차 목록이 이미 말한다. */}
+        {run.schedule && (
+          <span className="jobs-tmpl-badge" title={t('jobs.new.scheduleHint')}>
+            {t('jobs.run.scheduled')}
+          </span>
+        )}
         {/* **멈추고 싶어지는 순간은 이 줄에서 온다** — 회차가 쌓이는 것도, 워커가 계정 한도를 먹는
             것도 여기서 보인다. 상세 창을 열어야 멈출 수 있다면 정확히 급한 순간에 마찰이 생긴다.
             휴지통이 이미 이 줄에 있으므로(그보다 파괴적이다) 밀도의 문제는 아니고, 오클릭은 확인
             창이 받는다. 회차 줄에는 두지 않는다: 회차는 읽기 전용 기록이고, 거기 두면 "이 회차만
             멈추나, 예약 전체가 멈추나" 가 모호해진다.
-            stopPropagation: 이 줄 자체가 접기·펴기다 */}
-        <button
-          className="jobs-more"
-          title={run.paused ? t('jobs.run.resumeHint') : t('jobs.run.pauseHint')}
-          aria-label={run.paused ? t('jobs.run.resume') : t('jobs.run.pause')}
-          onClick={(e) => {
-            e.stopPropagation()
-            if (run.paused) onResumeRun(run.id)
-            else onPauseRun(run.id)
-          }}
-        >
-          {run.paused ? <PlayIcon /> : <PauseIcon />}
-        </button>
+            stopPropagation: 이 줄 자체가 접기·펴기다
+
+            **예약에만 둔다.** 멈출 것이 있는 쪽은 발화다 — 손으로 다시 돌린 Job 에는 멈출 다음
+            회차가 없고, `run-pause` 가 "예약이 아니다" 로 거절한다(server.ts). 누를 수 있는데
+            아무 일도 일어나지 않는 버튼을 두지 않는다. 그 Job 의 워커를 멈추는 것은 회차 안에서
+            Dispatch 하나씩 하는 일이다. */}
+        {run.schedule && (
+          <button
+            className="jobs-more"
+            title={run.paused ? t('jobs.run.resumeHint') : t('jobs.run.pauseHint')}
+            aria-label={run.paused ? t('jobs.run.resume') : t('jobs.run.pause')}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (run.paused) onResumeRun(run.id)
+              else onPauseRun(run.id)
+            }}
+          >
+            {run.paused ? <PlayIcon /> : <PauseIcon />}
+          </button>
+        )}
         {/* 상세 창으로 가는 입구 — 템플릿에서는 **Task 를 짜는 자리**다. 정의를 고치는 곳이
             여기뿐이라(회차는 읽기 전용 기록) 이 버튼이 회차보다 더 중요하다.
             stopPropagation: 이 줄 자체가 접기·펴기라서, 없으면 창을 열면서 동시에 접는다 */}
@@ -457,8 +468,10 @@ function ScheduleCard({
           ›
         </button>
       </div>
+      {/* 규칙과 다음 발화 시각은 예약의 것이다 — 손으로 다시 돌린 Job 에는 그것이 없다.
+          "N회 실행" 은 둘 다에 뜻이 있다(몇 번 돌았나). */}
       <div className="jobs-tmpl-meta">
-        <span>{schedRuleSummary(t, run.schedule)}</span>
+        {run.schedule && <span>{schedRuleSummary(t, run.schedule)}</span>}
         {/* **멈춘 것이 보여야 한다.** 일시 중지하면 무장하지 않으므로(firesDue) '다음 …' 줄이 그냥
             사라진다 — 그러면 멈춘 예약과 도는 예약이 화면에서 거의 같아 보이고, 멈춘 것을 잊은
             사람이 "왜 안 도는지" 를 찾게 된다. 한 번도 돌리지 않은 것도 같은 자리에 선다: 둘 다
@@ -673,8 +686,11 @@ export function JobsView({
       <button className="jobs-new" onClick={onNewRun}>
         + {t('jobs.new.open')}
       </button>
+      {/* **회차가 여럿이면 예약이 아니어도 펼치는 카드다.** 접히는 카드를 예약에만 쓰던 것은 회차가
+          예약에서만 생겼기 때문이고, 이제는 끝난 Job 을 다시 돌려도 생긴다 — 조건을 `schedule` 로
+          두면 그 회차들이 화면에서 통째로 사라진다(상태에는 있는데 그리는 곳이 없다). */}
       {snapshot.runs.map((run) =>
-        run.schedule ? (
+        run.schedule || (run.children?.length ?? 0) > 0 ? (
           <ScheduleCard
             key={run.id}
             run={run}
