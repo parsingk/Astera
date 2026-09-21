@@ -64,7 +64,15 @@ function client(address: string): Promise<{ send(m: ClientMessage): void; got: H
 describe('proc-* over the Host server', () => {
   it('spawns, echoes, lists, replays to a late client, kills', async () => {
     const logs: string[] = []
-    const addr = hostAddress({ profileDir: path.join(dir, 'profile'), platform: process.platform, tmpDir: dir, protocol: HOST_PROTOCOL })
+    // tmpDir is os.tmpdir(), as the app passes it, rather than the fixture directory — nesting the
+    // socket one level deeper than the app ever does overran sun_path (104 bytes) on macOS and
+    // failed this with `listen EINVAL`. See the same note in src/main/host/client.test.ts.
+    const addr = hostAddress({
+      profileDir: path.join(dir, 'profile'),
+      platform: process.platform,
+      tmpDir: os.tmpdir(),
+      protocol: HOST_PROTOCOL
+    })
     const procs = new ProcRegistry({ spawn: nodeProcSpawn({ log: (m) => logs.push(m), platform: process.platform }), log: (m) => logs.push(m) })
     let handle: ReturnType<typeof attachProcHost> | null = null
     const s = await startHostServer({

@@ -20,8 +20,24 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
+// **tmpDir is os.tmpdir(), the same value the app passes (host/index.ts, main/ipc.ts) — not the
+// fixture directory.** A posix socket path has to fit in sun_path, 104 bytes on macOS, and
+// address.ts picks KEY_LENGTH to stay well inside it. Putting the socket under the fixture adds a
+// layer the app never has, and on macOS, where os.tmpdir() is already 48 bytes, that pushed the
+// path to 107 and every test in this file died on `listen EINVAL` — a failure about the fixture,
+// not the client. (Measured on this machine: 104 binds, 105 does not. Linux CI never saw it,
+// because os.tmpdir() there is /tmp.)
+//
+// Nothing is leaked by moving it out: the directory is named from a hash of profileDir, which is
+// still under the fixture and so still unique per test, and it starts with `astera-`, which is what
+// vitest.globalSetup.ts sweeps at the end of the run.
 const addressFor = (name: string): ReturnType<typeof hostAddress> =>
-  hostAddress({ profileDir: path.join(dir, name), platform: process.platform, tmpDir: dir, protocol: HOST_PROTOCOL })
+  hostAddress({
+    profileDir: path.join(dir, name),
+    platform: process.platform,
+    tmpDir: os.tmpdir(),
+    protocol: HOST_PROTOCOL
+  })
 
 const serveAt = async (
   addr: ReturnType<typeof hostAddress>,

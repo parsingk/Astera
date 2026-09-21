@@ -101,7 +101,26 @@ describe('HookEventWatcher', () => {
     // 출발시켜 같은 러너를 둘이 잡는 순간이 그렇다(v1.3.24 태그에서 실측). 이 테스트 자체의
     // 타임아웃은 10초(vitest.config.ts)이니, 그보다 짧게 다시 좀히는 숫자는 느린 러너를 빨간
     // 빌드로 바꾸는 일 말고는 하는 일이 없다.
-    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 8_000, interval: 50 })
+    //
+    // **그런데 기다리는 것만으로는 부족하다 — 늦게 오는 게 아니라 아예 안 오기도 한다.** 전체
+    // 스위트를 돌릴 때(워커 열 개가 저마다 감시자를 띄운다) 이 테스트가 이따금 죽길래 대기를
+    // 45초까지 늘려 봤더니, 45초가 지나도 이벤트는 0건이고 watcher 쪽 로그는 비어 있었다 —
+    // watch() 는 멀쩡히 무장했고 파일도 그 자리에 있는데 FSEvents 가 알림을 통째로 빠뜨린 것이다
+    // (단독 실행에서는 60회 중 0회라 대기 시간을 늘리는 것으로는 영영 잡히지 않는다).
+    //
+    // 그래서 알림이 오지 않으면 파일의 mtime 을 건드려 다음 알림을 만든다. 이것이 단언을 무르게
+    // 하지 않는 이유는 drain 이 오프셋을 기억하기 때문이다 — 몇 번을 건드리든 이미 읽은 바이트는
+    // 다시 전달되지 않으므로, 아래 단언은 여전히 "그 줄이 정확히 한 번" 을 요구한다.
+    //
+    // 실제 앱도 같은 노출을 안고 있고, 같은 방식으로 스스로 낫는다: 알림을 하나 놓쳐도 그 파일에
+    // 다음 줄이 쓰이는 순간의 drain 이 오프셋부터 다시 읽어 빠뜨린 줄까지 함께 올린다.
+    await vi.waitFor(
+      async () => {
+        if (events.length === 0) await fs.utimes(file, new Date(), new Date())
+        expect(events.length).toBeGreaterThan(0)
+      },
+      { timeout: 8_000, interval: 100 }
+    )
     expect(events).toEqual([{ sessionId: 'sess-9', payload: { live: 1 } }])
   })
 })
