@@ -5,8 +5,20 @@ import { watch, type FSWatcher } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
+/**
+ * How often the reconciliation sweep runs. See `sweep` for why there is one at all.
+ *
+ * Ten seconds is picked against what the sweep is for: the delivery it rescues is "this session has
+ * finished" — a Slack message and an idle badge. Ten seconds late reads as a message that arrived a
+ * moment later; a minute late reads as a session that hung. Going the other way costs more than it
+ * buys: the normal path is `fs.watch`, which is immediate, so a shorter period only adds `readdir`
+ * calls to an app that sits open all day.
+ */
+export const HOOK_SWEEP_MS = 10_000
+
 export class HookEventWatcher {
   private watcher: FSWatcher | null = null
+  private sweeper: NodeJS.Timeout | null = null
   private offsets = new Map<string, number>() // filePath → byte offset already processed (stable because the file is append-only)
   private draining = new Set<string>() // Per-file re-entrancy guard
   private pending = new Set<string>() // Marks a new event that arrived mid-drain → drain again once this one finishes
@@ -14,7 +26,9 @@ export class HookEventWatcher {
   constructor(
     private dir: string,
     private cb: (sessionId: string, payload: unknown) => void,
-    private log: (message: string) => void
+    private log: (message: string) => void,
+    /** Injectable so a test can use a period it can wait out. */
+    private sweepMs: number = HOOK_SWEEP_MS
   ) {}
 
   start(): void {
@@ -26,11 +40,53 @@ export class HookEventWatcher {
     } catch (err) {
       this.log(`hook watcher start failed: ${err instanceof Error ? err.message : String(err)}`)
     }
+    // unref: a timer whose only job is to catch up must never be the reason the process stays alive.
+    this.sweeper = setInterval(() => void this.sweep(), this.sweepMs)
+    this.sweeper.unref?.()
   }
 
   stop(): void {
     this.watcher?.close()
     this.watcher = null
+    if (this.sweeper) clearInterval(this.sweeper)
+    this.sweeper = null
+  }
+
+  /**
+   * Drains every session file, whether or not `fs.watch` said anything about it.
+   *
+   * **Why a sweep exists at all.** `fs.watch` does not merely deliver late, it sometimes does not
+   * deliver: measured on macOS, with ten processes each holding a watcher, a file was created and
+   * appended to and no callback arrived in 45 seconds — `watch()` had armed without error and the
+   * file was there. Nothing else calls `drain`, so a dropped notification means those bytes wait for
+   * the *next* write to that file to carry them up.
+   *
+   * Usually that next write comes and the loss is only lateness. The case that does not heal is the
+   * last line a session ever writes — its `Stop`, the hook that says the turn is over. There is no
+   * `SessionEnd` hook installed (statusline.ts), so nothing follows it: attention keeps the session
+   * on `working` and Slack never posts the summary. The app shows a session still running that
+   * finished minutes ago. This sweep is the path that closes that.
+   *
+   * It cannot double-report: `drain` reads from each file's stored offset and advances it, so a file
+   * with nothing new costs one `open`+`stat` and returns. That is also why the sweep can be blunt —
+   * every file, every time — rather than trying to work out which file was missed.
+   *
+   * Never rejects, for the same reason `drain` never does: it is called from a timer with no one to
+   * catch it, so a throw here would be an unhandled rejection in the main process.
+   */
+  async sweep(): Promise<void> {
+    let names: string[]
+    try {
+      names = await fs.readdir(this.dir)
+    } catch (err) {
+      // The directory is recreated on every launch (StatusLineManager.init), so a miss here is a
+      // real oddity rather than a normal state — worth a line, not worth throwing over.
+      this.log(`hook sweep failed to read ${this.dir}: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    // Sequential on purpose: opening every session's file at once buys nothing on a path that is
+    // already the slow fallback, and keeps the sweep from competing with the session doing the work.
+    for (const name of names) if (name.endsWith('.jsonl')) await this.drain(path.join(this.dir, name))
   }
 
   /** positional-reads only the newly appended bytes, then parses and calls cb for complete lines only. Anything after

@@ -123,4 +123,64 @@ describe('HookEventWatcher', () => {
     )
     expect(events).toEqual([{ sessionId: 'sess-9', payload: { live: 1 } }])
   })
+
+  // 주기적 훑기. fs.watch 의 알림은 오지 않을 수 있고(위 테스트의 주석에 실측이 있다), 알림이
+  // 오지 않으면 drain 을 부르는 것이 세상에 하나도 없다 — 그 파일에 다음 줄이 쓰이기 전까지는.
+  // 세션의 마지막 Stop 이 바로 그 자리다: 뒤이을 쓰기가 없어서 영영 올라오지 않고, 그러면 앱은
+  // 끝난 세션을 계속 '작업 중' 으로 두고 Slack 완료 알림도 보내지 않는다.
+  describe('sweep — 알림을 놓쳐도 건져 올리는 재조정', () => {
+    it('fs.watch 알림이 하나도 없어도 새 줄을 올린다', async () => {
+      const file = path.join(dir, 'sess-s.jsonl')
+      await fs.appendFile(file, '{"swept":1}\n', 'utf8')
+      await watcher.sweep() // start() 도 하지 않았다 — 감시자는 아무 알림도 받지 못했다
+      expect(events).toEqual([{ sessionId: 'sess-s', payload: { swept: 1 } }])
+    })
+
+    it('이미 올린 줄은 두 번 올리지 않는다 — 훑기가 중복 알림이 되지 않는 이유', async () => {
+      const file = path.join(dir, 'sess-s.jsonl')
+      await fs.appendFile(file, '{"swept":1}\n', 'utf8')
+      await watcher.sweep()
+      await watcher.sweep()
+      await watcher.sweep()
+      expect(events).toEqual([{ sessionId: 'sess-s', payload: { swept: 1 } }])
+    })
+
+    it('.jsonl 이 아닌 파일은 건드리지 않는다', async () => {
+      await fs.writeFile(path.join(dir, 'notes.txt'), '{"n":1}\n', 'utf8')
+      await watcher.sweep()
+      expect(events).toEqual([])
+    })
+
+    it('디렉터리가 사라져도 reject 하지 않는다 — fire-and-forget 이라 unhandled rejection 이 된다', async () => {
+      await fs.rm(dir, { recursive: true, force: true })
+      await expect(watcher.sweep()).resolves.toBeUndefined()
+      expect(events).toEqual([])
+    })
+
+    // 아래 둘은 훑기가 *걸리고 풀리는지* 만 본다. 훑기가 실제로 줄을 올린다는 것은 위의 테스트들이
+    // 이미 증명했다. 여기서 파일을 두고 기다리는 방식을 쓰지 않는 이유는 그것이 결정적이지 않기
+    // 때문이다 — start() 직전에 만든 파일을 macOS 의 FSEvents 가 합쳐서 알려 주는 것을 측정했고,
+    // 그러면 훑기가 죽어 있어도 테스트는 초록이 된다(실제로 그렇게 통과하는 것을 보고 고쳤다).
+    it('start 가 훑기를 주기적으로 부른다', async () => {
+      const w = new HookEventWatcher(dir, () => {}, (m) => logs.push(m), 20)
+      const spy = vi.spyOn(w, 'sweep')
+      try {
+        w.start()
+        await vi.waitFor(() => expect(spy.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 5_000, interval: 20 })
+      } finally {
+        w.stop()
+      }
+    })
+
+    it('stop 이 훑기를 멈춘다', async () => {
+      const w = new HookEventWatcher(dir, () => {}, (m) => logs.push(m), 20)
+      const spy = vi.spyOn(w, 'sweep')
+      w.start()
+      await vi.waitFor(() => expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1), { timeout: 5_000, interval: 20 })
+      w.stop()
+      const afterStop = spy.mock.calls.length
+      await new Promise((r) => setTimeout(r, 200)) // 주기의 열 배
+      expect(spy.mock.calls.length).toBe(afterStop)
+    })
+  })
 })
