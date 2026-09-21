@@ -20,6 +20,13 @@ describe('parseArgs', () => {
     expect(r).toMatchObject({ cmd: 'run-create', json: true })
     expect((r as { args: Record<string, unknown> }).args.objective).toBe('인증 리팩터')
   })
+
+  // 값이 아니라 모드다 — args 에 둘어가면 앱에게 보내는 인자가 된다
+  it('--quiet 은 모드지 인자가 아니다', () => {
+    const r = parseArgs(['jobs', 'list', '--quiet'])
+    expect(r).toMatchObject({ cmd: 'jobs-list', quiet: true })
+    expect((r as { args: Record<string, unknown> }).args.quiet).toBeUndefined()
+  })
   it('값이 없는 플래그는 true다', () => {
     const r = parseArgs(['check', '--wait', '--json']) as { args: Record<string, unknown> }
     expect(r.args.wait).toBe(true)

@@ -110,10 +110,25 @@ WAITING   job_91bc  Payment migration            1 question
 COMPLETE  job_2d80  Rename the run config store  5/5
 ```
 
-**Machine** — `--json`, and then the envelope below is the whole contract.
+**Machine** — the default, and then the envelope below is the whole contract.
 
 `--quiet` prints ids only, one per line, so `for j in $(astera jobs list --quiet)` works without `jq`.
-`--no-color` and `NO_COLOR` both disable styling; a non-TTY stdout disables it anyway.
+
+**Human is `--human`, not the default, and the reason is measured.** The plan was the usual one: human
+when stdout is a terminal, machine when it is piped. It cannot work here. This CLI runs as
+`electron.exe` under `ELECTRON_RUN_AS_NODE`, and Electron on Windows is a GUI-subsystem binary, so
+`process.stdout.isTTY` is `undefined` even inside a real console — plain `node` in that same console
+reports `true`. The shim cannot switch binaries either: a packaged app cannot assume `node` is
+installed, which is why it ships Electron's.
+
+So the choice was between a flag and making human the default. Human-by-default would change what the
+coordinator reads: the guide writes `[--json]` as optional on every command, so `tasks list` without
+it would return a table with no `spec` and no `checks`. A flag costs a person eight characters; the
+default costs an agent the fields it works from. If this turns out to be the wrong trade, it is one
+line here and two in the guide.
+
+No styling yet, so there is nothing for `NO_COLOR` to turn off. When colour lands it reads `NO_COLOR`
+and `--no-color`; a flag that does nothing today would be worse than no flag.
 
 ## 7. The JSON envelope
 

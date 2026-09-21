@@ -13,6 +13,9 @@ import {
   resolveGuidePath,
   readGuide,
   readInfo,
+  outputMode,
+  renderErr,
+  renderOk,
   writePendingReport
 } from './run'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
@@ -344,5 +347,54 @@ describe('닿지 못했을 때의 코드', () => {
     const e = JSON.parse(errorOutput('cannot read …', 'HOST_NOT_RUNNING'))
     expect(e.error.code).toBe('HOST_NOT_RUNNING')
     expect(exitCodeFor('HOST_NOT_RUNNING')).toBe(3)
+  })
+})
+
+describe('출력 모드', () => {
+  // **TTY 로 고를 수가 없다.** 이 CLI 는 ELECTRON_RUN_AS_NODE 로 도는 electron.exe 이고,
+  // 진짜 콘솔에서도 isTTY 가 undefined 다(같은 콘솔에서 node 는 true). 그래서 기본은 JSON 이다.
+  it('기본은 JSON 이고 사람용은 켜는 것이다', () => {
+    expect(outputMode({ json: false, human: false, quiet: false })).toBe('json')
+    expect(outputMode({ json: false, human: true, quiet: false })).toBe('human')
+    expect(outputMode({ json: false, human: false, quiet: true })).toBe('quiet')
+    expect(outputMode({ json: true, human: false, quiet: false })).toBe('json')
+  })
+
+  // 한쪽을 조용히 무시하면 사람은 자기가 친 것이 들었다고 믿는다
+  it('모드를 둘 이상 주면 거절하고 무엇을 줘는지 말한다', () => {
+    const r = outputMode({ json: true, human: false, quiet: true })
+    expect(typeof r).toBe('object')
+    expect((r as { error: string }).error).toBe('--json and --quiet ask for different things; pick one')
+    expect(typeof outputMode({ json: false, human: true, quiet: true })).toBe('object')
+  })
+})
+
+describe('renderOk / renderErr', () => {
+  const jobs = [{ id: 'job_1', objective: 'o', outcome: 'running', progress: { done: 1, total: 2 } }]
+
+  it('json 은 봉투다', () => {
+    expect(JSON.parse(renderOk('jobs-list', jobs, 'json'))).toEqual({
+      ok: true,
+      data: { jobs }
+    })
+  })
+
+  it('human 은 칸을 맞춘 표다', () => {
+    expect(renderOk('jobs-list', jobs, 'human')).toBe('RUNNING  job_1  o  1/2')
+  })
+
+  it('quiet 은 id 만 낸다', () => {
+    expect(renderOk('jobs-list', jobs, 'quiet')).toBe('job_1')
+  })
+
+  // 사람용이 없는 명령은 JSON 으로 되돌린다 — 억지로 표를 씨우면 가이드가 시키는 것을 못 읽는다
+  it('사람용이 없는 명령은 human 에서도 JSON 이다', () => {
+    const out = renderOk('dispatch-show', { id: 'd1' }, 'human')
+    expect(JSON.parse(out)).toEqual({ ok: true, data: { id: 'd1' } })
+  })
+
+  it('사람에게는 봉투가 아니라 문장이다', () => {
+    expect(renderErr('unknown run: nope', 'NOT_FOUND', 'human')).toBe('error: unknown run: nope')
+    expect(JSON.parse(renderErr('x', 'NOT_FOUND', 'json')).error.code).toBe('NOT_FOUND')
   })
 })

@@ -27,7 +27,16 @@ type NothingLeft<T extends never> = T
 const PROJECT = ['id', 'path', 'name', 'addedAt'] as const
 type _project = NothingLeft<Unlisted<Project, typeof PROJECT, []>>
 
-const JOB = [
+/**
+ * 계획과 회차가 **상태를 말하는 칸 셋**. 저장된 칸이 아니라 서버가 매번 파생시킨다
+ * (server.ts 의 derivedFor) — Job 에도 JobRun 에도 상태 칸은 없고, 상태는 그것이 거느린 Task 에 있다.
+ *
+ * 그래서 `keyof Job` 에 없고, 아래 빠짐 검사에도 들지 않는다 — 검사가 지키는 것은 "개체의 칸을
+ * 빠뜨리지 않았는가" 이고, 이것들은 개체의 칸이 아니다.
+ */
+const DERIVED = ['outcome', 'progress', 'questionsOpen'] as const
+
+const JOB_FIELDS = [
   'id',
   'objective',
   'cwd',
@@ -42,9 +51,10 @@ const JOB = [
   'paused',
   'convergence'
 ] as const
-type _job = NothingLeft<Unlisted<Job, typeof JOB, []>>
+type _job = NothingLeft<Unlisted<Job, typeof JOB_FIELDS, []>>
+const JOB = [...JOB_FIELDS, ...DERIVED]
 
-const RUN = [
+const RUN_FIELDS = [
   'id',
   'jobId',
   'ordinal',
@@ -53,7 +63,8 @@ const RUN = [
   'worktree',
   'paused'
 ] as const
-type _run = NothingLeft<Unlisted<JobRun, typeof RUN, []>>
+type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, []>>
+const RUN = [...RUN_FIELDS, ...DERIVED]
 
 const TASK_FIELDS = [
   'id',

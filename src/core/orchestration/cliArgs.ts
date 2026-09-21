@@ -8,6 +8,11 @@ export interface ParsedArgs {
   /** Flags whose value was '-'. The caller reads stdin and fills them in */
   wantsStdin: string[]
   json: boolean
+  /** `--human` — 칸을 맞춘 표(공개 CLI 설계 §6). 기본이 아니라 켜는 것인 이유는
+   *  run.ts 의 outputMode 에 있다 — 이 CLI 는 TTY 를 볼 수 없다. */
+  human: boolean
+  /** `--quiet` — ids only, one per line. */
+  quiet: boolean
 }
 
 export const camel = (flag: string): string =>
@@ -92,6 +97,8 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   const args: Record<string, unknown> = {}
   const wantsStdin: string[] = []
   let json = false
+  let human = false
+  let quiet = false
 
   for (let i = first; i < argv.length; i++) {
     const tok = argv[i]
@@ -101,6 +108,14 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
     const hasValue = next !== undefined && !next.startsWith('--')
     if (key === 'json') {
       json = true
+      continue
+    }
+    if (key === 'human') {
+      human = true
+      continue
+    }
+    if (key === 'quiet') {
+      quiet = true
       continue
     }
     if (!hasValue) {
@@ -145,5 +160,5 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
     // Only when neither --script nor --file was given; `--script -` already asked.
     if (!hasScript && !hasFile) wantsStdin.push('script')
   }
-  return { cmd, args, wantsStdin, json }
+  return { cmd, args, wantsStdin, json, human, quiet }
 }

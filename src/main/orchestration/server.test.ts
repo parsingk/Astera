@@ -4902,6 +4902,51 @@ describe('projects / runs / questions — 공개 읽기 표면', () => {
     expect((await call(deps, 'runs-get')).status).toBe(400)
   })
 
+  // **상태는 저장된 칸이 아니다** — Job 에도 JobRun 에도 없고, 그것이 거느린 Task 에 있다.
+  // 화면이 쓰는 함수를 그대로 쓴다 — 앱에서 보는 것과 셸에서 보는 것이 다르면 둘 중 하나는 거짓이다.
+  it('jobs list 와 runs list 는 상태와 진행을 싣는다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const a = await call(deps, 'task-create', { run: runId, title: 'a', spec: 's', account: 'acc1' })
+    await call(deps, 'task-create', { run: runId, title: 'b', spec: 's', account: 'acc1' })
+    await call(deps, 'task-update', { id: (a.body as { id: string }).id, status: 'completed' })
+
+    const jobs = (await call(deps, 'jobs-list')).body as Record<string, unknown>[]
+    expect(jobs[0]).toMatchObject({ outcome: 'running', progress: { done: 1, total: 2 }, questionsOpen: 0 })
+    const runs = (await call(deps, 'runs-list')).body as Record<string, unknown>[]
+    expect(runs[0]).toMatchObject({ outcome: 'running', progress: { done: 1, total: 2 } })
+  })
+
+  // 그것만이 사람을 기다리는 수이다 — 나머지 상태와 달리 사람이 답해야 움직인다
+  it('열린 질문을 그 회차의 것으로 센다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    await call(deps, 'gate-create', { task: (t.body as { id: string }).id, question: 'q' })
+    const jobs = (await call(deps, 'jobs-list')).body as Record<string, unknown>[]
+    expect(jobs[0].questionsOpen).toBe(1)
+    const runs = (await call(deps, 'runs-list')).body as Record<string, unknown>[]
+    expect(runs[0].questionsOpen).toBe(1)
+  })
+
+  // 한 응답 안에서 계획의 숫자와 접어 실은 회차가 다른 것을 말하면 안 된다
+  it('jobs get 은 접어 실은 그 회차의 숫자를 말한다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const jobId = deps.getState().jobs[0].id
+    const first = deps.getState().runs[0].id
+    await call(deps, 'task-create', { run: first, title: 'a', spec: 's', account: 'acc1' })
+    await call(deps, 'run-spawn', { run: jobId })
+
+    const r = await call(deps, 'jobs-get', { id: first })
+    const body = r.body as { progress: { total: number }; run: { id: string; progress: { total: number } } }
+    expect(body.run.id).toBe(first)
+    expect(body.progress.total).toBe(1)
+    expect(body.run.progress.total).toBe(1)
+  })
+
   it('questions get 은 id 로 질문 하나를 낸다', async () => {
     const deps = makeDeps()
     const created = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })

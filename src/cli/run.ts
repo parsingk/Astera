@@ -10,9 +10,11 @@ import { homedir } from 'node:os'
 import { parseArgs } from '../core/orchestration/cliArgs'
 import { infoPathFor } from '../core/orchestration/cliDiscovery'
 import { publicFor } from '../core/orchestration/cliPublic'
+import { humanFor, quietFor } from '../core/orchestration/cliHuman'
 import {
   CLI_PROTOCOL,
   codeForStatus,
+  dataFor,
   errEnvelope,
   exitCodeFor,
   messageFrom,
@@ -40,10 +42,54 @@ export function errorOutput(msg: string, code: CliErrorCode = 'FAILED'): string 
   return errEnvelope({ code, message: msg })
 }
 
+export type OutputMode = 'json' | 'human' | 'quiet'
+
+/**
+ * 어떤 모양으로 낼 것인가 (공개 CLI 설계 §6).
+ *
+ * **TTY 를 보고 고를 수가 없다.** 설계는 그렇게 쓰려 했고, 재 보니 모두 아니었다 — 이 CLI 는
+ * `ELECTRON_RUN_AS_NODE` 로 도는 electron.exe 이고, 그것은 진짜 콘솔에서도 `process.stdout.isTTY` 가
+ * `undefined` 다(같은 콘솔에서 순수 node 는 `true`). Windows 에서 Electron 이 GUI 서브시스템
+ * 바이너리라 그렇고, 셀틀이 띄우는 바이너리를 바꿀 수는 없다 — 패키지된 앱은 node 가 깔렸다고
+ * 가정할 수 없어서 번들된 electron 을 쓴다.
+ *
+ * 그래서 **기본은 JSON 이고 사람용은 `--human` 으로 켜는다.** 있지도 않는 신호를 짐작하는 것보다
+ * 물어보는 편이 낫고, 반대로 사람용을 기본으로 두면 지금 앴을 부르는 코디네이터가 `--json` 을 생략한
+ * 자리에서(가이드가 전부 선택으로 적어 둔다) `tasks list` 의 spec·checks 를 잃는다.
+ *
+ * **둘을 함께 주면 거절한다.** 한쪽을 조용히 무시하면 사람은 자기가 친 것이 들었다고 믿는다.
+ */
+export function outputMode(a: {
+  json: boolean
+  human: boolean
+  quiet: boolean
+}): OutputMode | { error: string } {
+  const asked = [a.json && 'json', a.human && 'human', a.quiet && 'quiet'].filter(Boolean)
+  if (asked.length > 1)
+    return { error: `${asked.map((x) => `--${String(x)}`).join(' and ')} ask for different things; pick one` }
+  if (a.human) return 'human'
+  if (a.quiet) return 'quiet'
+  return 'json'
+}
+
 /** 앱의 응답 상태에서 종료 코드로. 2xx 는 0 이다 — ask --wait 의 타임아웃 응답도 200 이고, 이
  *  설계의 계약은 "타임아웃은 오류가 아니라 정보" 다(오케스트레이션 가이드 4.7절). */
 export function exitCodeForStatus(status: number): number {
   return status >= 200 && status < 300 ? 0 : exitCodeFor(codeForStatus(status))
+}
+
+/** 모드에 맞춘 성공 출력. **사람용이 없는 명령은 JSON 으로 되돌린다** — 코디네이터의
+ *  명령들에 억지로 표를 씨우면 가이드가 시키는 것을 못 읽게 된다. */
+export function renderOk(cmd: string, body: unknown, mode: OutputMode): string {
+  if (mode === 'json') return okEnvelope(cmd, body)
+  const data = dataFor(cmd, body)
+  if (mode === 'quiet') return quietFor(data)
+  return humanFor(cmd, data) ?? okEnvelope(cmd, body)
+}
+
+/** 모드에 맞춘 오류 출력. 사람에게는 봉투가 아니라 문장이다 — 코드는 종료 코드로 이미 간다. */
+export function renderErr(msg: string, code: CliErrorCode, mode: OutputMode): string {
+  return mode === 'json' ? errorOutput(msg, code) : `error: ${msg}`
 }
 
 export function ensureTrailingNewline(text: string): string {
@@ -240,6 +286,12 @@ export async function main(): Promise<void> {
     process.exit(exitCodeFor('INVALID_ARGUMENTS'))
   }
 
+  const mode = outputMode({ json: parsed.json, human: parsed.human, quiet: parsed.quiet })
+  if (typeof mode !== 'string') {
+    out(errorOutput(mode.error, 'INVALID_ARGUMENTS'))
+    process.exit(exitCodeFor('INVALID_ARGUMENTS'))
+  }
+
   // help has to work without a server connection — handle it before reading ASTERA_INFO.
   if (parsed.cmd === 'help') {
     const resolved = resolveGuidePath({ args: parsed.args, env: process.env })
@@ -286,7 +338,7 @@ export async function main(): Promise<void> {
   if (parsed.cmd === 'version') {
     const info = readInfo(infoPath)
     if (!info.ok) {
-      out(okEnvelope('version', { cli: CLI_VERSION, app: null, protocol: CLI_PROTOCOL }))
+      out(renderOk('version', { cli: CLI_VERSION, app: null, protocol: CLI_PROTOCOL }, mode))
       process.exit(0)
     }
   }
@@ -390,7 +442,7 @@ export async function main(): Promise<void> {
           : // 공개 읽기 명령은 허용된 칸만 내보낸다(설계 §11). 앱이 아니라 여기서 가리는 이유는
             // 봉투와 같다 — 화면도 같은 서버를 쓰고, 그쪽은 온전한 개체가 필요하다.
             publicFor(parsed.cmd, parsedBody)
-      out(okEnvelope(parsed.cmd, body))
+      out(renderOk(parsed.cmd, body, mode))
       process.exit(0)
     }
     // **`version` 은 앱이 답하지 못해도 답한다.** 이 명령이 있는 이유가 "둘이 갈렸는가" 를
@@ -398,11 +450,11 @@ export async function main(): Promise<void> {
     // 이후의 앱은 501 로 답한다. 토큰이 상해 403 이 와도 마찬가지다: 앱 쪽 칸만 비고 CLI 가 확실히
     // 아는 것은 그대로 나간다. 무엇이 잘못됐는지는 다음 명령이 제 코드로 분명하게 말한다.
     if (parsed.cmd === 'version') {
-      out(okEnvelope('version', { cli: CLI_VERSION, app: null, protocol: CLI_PROTOCOL }))
+      out(renderOk('version', { cli: CLI_VERSION, app: null, protocol: CLI_PROTOCOL }, mode))
       process.exit(0)
     }
     const code = codeForStatus(res.status)
-    out(errorOutput(messageFrom(parsedBody, `the app answered ${res.status}`), code))
+    out(renderErr(messageFrom(parsedBody, `the app answered ${res.status}`), code, mode))
     process.exit(exitCodeFor(code))
   } catch (e) {
     // **A timeout is not an unreachable server.** The deadline above is minutes long; reaching it

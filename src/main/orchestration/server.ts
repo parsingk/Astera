@@ -47,6 +47,8 @@ import {
   recomputeReady,
   type ConvergencePolicy,
   type Dispatch,
+  type Job,
+  type JobRun,
   type MessageType,
   type Task,
   type TaskStatus
@@ -58,7 +60,8 @@ import { nameForRun } from '../../core/worktrees/naming'
 import type { Provider } from '../../core/providers/meta'
 import { isValidRule, type ScheduleRule } from '../../core/scheduler/rule'
 import { parseCheckFlag } from '../../core/workUnit/verification'
-import { outcomeOf } from '../../core/orchestration/view'
+import { outcomeOf, progressOf } from '../../core/orchestration/view'
+import type { RunOutcome } from '../../core/types'
 import type { SessionCheck } from '../../core/workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { parseHandoffBody } from '../../core/handoff/parse'
@@ -315,6 +318,42 @@ const bad = (msg: string): Reply => ({ status: 400, body: { error: msg } })
 const notFound = (msg: string): Reply => ({ status: 404, body: { error: msg } })
 const denied = (msg: string): Reply => ({ status: 403, body: { error: msg } })
 const conflict = (msg: string): Reply => ({ status: 409, body: { error: msg } })
+
+/**
+ * 계획과 회차에 붙는 파생값 — 공개 읽기 표면이 상태를 말하는 방식(공개 CLI 설계 §6).
+ *
+ * **저장된 칸이 아니다.** Job 에도 JobRun 에도 상태 칸은 없고, 상태는 그것이 거느린 Task 에 있다.
+ * 화면이 쓰는 함수를 그대로 쓴다(view.ts 의 outcomeOf·progressOf) — 같은 Job 을 앱에서 보는 것과
+ * 셸에서 보는 것이 다르면 둘 중 하나는 거짓이다.
+ *
+ * `questionsOpen` 을 따로 세는 이유는 status 명령과 같다: 그것만이 **사람을 기다리는** 수이고,
+ * 나머지 상태와 달리 사람이 답해야 움직인다.
+ */
+const derivedFor = (
+  s: OrchState,
+  ownerId: string,
+  runIds: readonly string[]
+): { outcome: RunOutcome; progress: { done: number; total: number }; questionsOpen: number } => ({
+  outcome: outcomeOf(s, ownerId),
+  progress: progressOf(s, ownerId),
+  questionsOpen: s.gates.filter((g) => g.status === 'open' && runIds.includes(g.runId)).length
+})
+
+/** 그 계획의 마지막 회차. 번호로 고른다 — 배열의 순서가 곧 시간순이 아니다(앞 회차를 지워도
+ *  남은 번호는 그대로다). */
+const latestRunOf = (s: OrchState, job: Job): JobRun | undefined =>
+  s.runs.filter((r) => r.jobId === job.id).sort((a, b) => a.ordinal - b.ordinal).at(-1)
+
+/** 회차가 없으면 계획의 정의 Task 를 센다 — tasksOwnedBy 가 두 id 를 다 받는다(view.ts). */
+const jobView = (s: OrchState, job: Job, run: JobRun | undefined): Record<string, unknown> => ({
+  ...job,
+  ...derivedFor(s, run?.id ?? job.id, run ? [run.id] : [])
+})
+
+const runView = (s: OrchState, run: JobRun): Record<string, unknown> => ({
+  ...run,
+  ...derivedFor(s, run.id, [run.id])
+})
 
 /** Commands only the orchestrator may call. Workers do not need check (the worker preamble uses only
  *  send and ask) — and on top of that the single unacknowledged Delivery is shared per Run with the
@@ -689,18 +728,18 @@ export async function handleCommand(
     case 'runs-list': {
       const job = str(args.job)
       const runs = job ? s.runs.filter((r) => r.jobId === job) : s.runs
-      return okBody([...runs].sort((a, b) => a.ordinal - b.ordinal))
+      return okBody([...runs].sort((a, b) => a.ordinal - b.ordinal).map((r) => runView(s, r)))
     }
     case 'runs-get': {
       const id = str(args.id)
       if (!id) return bad('--id is required')
       const run = s.runs.find((r) => r.id === id)
-      return run ? okBody(run) : notFound(`unknown run: ${id}`)
+      return run ? okBody(runView(s, run)) : notFound(`unknown run: ${id}`)
     }
     // **계획을 낸다, 회차가 아니라.** 공개 표면의 `jobs list` 가 뜻하는 것이 계획이고, 회차는
     // `runs list` 의 것이다(공개 CLI 설계 §5). 옛 `run-list` 는 한 배열밖에 없어서 둘을 함께 냈다.
     case 'jobs-list':
-      return okBody(s.jobs)
+      return okBody(s.jobs.map((j) => jobView(s, j, latestRunOf(s, j))))
     // 코디네이터가 --validate 에 넣을 id 를 알아야 한다. 상태를 바꾸지 않으므로 COORDINATOR_ONLY
     // 가 아니다 — 워커도 자기가 무엇으로 검증될지 볼 수 있어야 한다.
     case 'run-configs': {
@@ -721,8 +760,10 @@ export async function handleCommand(
       const named = s.runs.find((r) => r.id === id)
       const job = s.jobs.find((j) => j.id === id) ?? (named && jobOf(s, named))
       if (!job) return notFound(`unknown job or run: ${String(id)}`)
-      const run = named ?? s.runs.filter((r) => r.jobId === job.id).sort((a, b) => a.ordinal - b.ordinal).at(-1)
-      return okBody({ ...job, ...(run ? { run } : {}) })
+      const run = named ?? latestRunOf(s, job)
+      // **파생값은 접어 실은 그 회차의 것이다.** 회차를 지목해 물었는데 계획의 숫자가 다른
+      // 회차를 말하면 한 응답 안에서 두 가지를 말하는 셈이 된다.
+      return okBody({ ...jobView(s, job, run), ...(run ? { run: runView(s, run) } : {}) })
     }
     // 사람이 사이드바에서 Run 을 물러나게 한다. **되돌릴 수 없다.**
     //
