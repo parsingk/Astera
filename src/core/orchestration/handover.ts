@@ -51,7 +51,7 @@ export function buildHandoverPrompt(a: {
   runId: string
   objective: string
   /** 이미 풀린 값 — 부르는 쪽이 `run.concurrency ?? DEFAULT_CONCURRENCY` 를 계산해 넘긴다.
-   *  여기서 기본값을 넣지 않는 이유는 JobRun 과 같다: 기본값을 두 곳에서 알면 갈라진다. */
+   *  여기서 기본값을 넣지 않는 이유는 JobRow 과 같다: 기본값을 두 곳에서 알면 갈라진다. */
   concurrency: number
   taskCount: number
   /** 이 Run 에 완료 수렴이 걸려 있는가(`policyOf(...) !== null` — `run.convergence !== undefined` 가

@@ -116,7 +116,7 @@ export interface Run {
    *
    *  **사라진 코디네이터를 앱이 다시 띄우지는 않는다.** 탭을 닫는 것은 사람의 결정이고, 곧바로
    *  다시 열면 그 결정을 무시하는 것이다 — 크래시와 구별할 방법도 없다(`kill` 은 표시를 남기지
-   *  않는다). 대신 사이드바의 Run 줄에 다시 띄우는 버튼이 나온다(JobRun.coordinatorMissing).
+   *  않는다). 대신 사이드바의 Run 줄에 다시 띄우는 버튼이 나온다(JobRow.coordinatorMissing).
    *  그동안 워커의 질문은 앱의 그물이 풀어 준다(inbox.ts). */
   coordinatorSessionId?: string
   /** 앱이 이 Run 을 스스로 돌리는가. **UI 가 만든 Run 에만 참이다** — 코디네이터가 만든 Run 을

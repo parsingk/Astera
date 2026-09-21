@@ -381,9 +381,9 @@ describe('snapshotFor', () => {
   })
 
   // concurrency 는 Run 이 들고 있는 값을 그대로 옮긴 것이다 — 계산도 기본값도 여기서 넣지
-  // 않는다(JobRun 의 주석과 같다). 기본값(DEFAULT_CONCURRENCY)을 적용하는 것은 이 값을 읽는
+  // 않는다(JobRow 의 주석과 같다). 기본값(DEFAULT_CONCURRENCY)을 적용하는 것은 이 값을 읽는
   // 렌더러의 일이다. **provider 는 이 자리에 없다** — Run 이 아니라 Task 의 계정이 정하므로
-  // 한 Run 에 실을 하나의 값이 없다(JobRun 의 주석).
+  // 한 Run 에 실을 하나의 값이 없다(JobRow 의 주석).
   it('Run 의 concurrency 를 그대로 싣는다', () => {
     const s = withRuns([{ ...run('r1', absPath('p')), concurrency: 2 }])
     const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
@@ -421,7 +421,7 @@ describe('snapshotFor', () => {
 
   // Run 에서 provider 를 지운 변경이 이 뷰에도 닿았는지 — 칸이 남아 있으면 사이드바가 한 Run 을
   // 하나의 에이전트로 그리는 옛 화면으로 조용히 돌아간다
-  it('JobRun 에 provider 칸이 없다', () => {
+  it('JobRow 에 provider 칸이 없다', () => {
     const s = withRuns([run('r1', absPath('p'))])
     const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
     expect('provider' in r).toBe(false)

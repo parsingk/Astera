@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { JobRun, JobTask, OrchSnapshot, Provider, TaskStatus } from '../../../core/types'
+import type { JobRow, JobTask, OrchSnapshot, Provider, TaskStatus } from '../../../core/types'
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import { formatElapsed, formatRemaining } from '../../../core/orchestration/elapsed'
 import { isStoppedWorker, runningCount } from '../../../core/orchestration/running'
@@ -63,7 +63,7 @@ const ROUNDS_PAGE = 5
  *  "도는 Task 가 있으면 running" 을 startedAt 으로 여기서 다시 계산하지 않는 이유: 아직 아무것도
  *  뜨지 않은 Run(모든 Task 가 pending)에는 도는 것도 실패한 것도 없어서 done 으로 떨어지고, 시작도
  *  하지 않은 Run 에 체크 표시가 붙는다. */
-function runKind(run: JobRun): RunIconKind {
+function runKind(run: JobRow): RunIconKind {
   if (run.tasks.some((t) => t.status === 'blocked')) return 'blocked'
   if (run.outcome === 'running') return 'running'
   return run.outcome === 'failed' ? 'failed' : 'done'
@@ -141,7 +141,7 @@ function RunCard({
   onDeleteRun,
   onRestartCoordinator
 }: {
-  run: JobRun
+  run: JobRow
   open: boolean
   onToggle: () => void
   /** 예약 회차라면 그 번호. 평범한 Run 에는 없다 */
@@ -364,7 +364,7 @@ function RunCard({
 }
 
 /** 다음 발화 시각. TerminalView 의 fmtDateTime 과 같은 형식이다 — 주는 값이 epoch ms 라
- *  (JobRun.nextFireAt) 그쪽처럼 ISO 를 받지 않는다. */
+ *  (JobRow.nextFireAt) 그쪽처럼 ISO 를 받지 않는다. */
 const fmtNext = (ms: number): string =>
   new Date(ms).toLocaleString([], {
     month: 'numeric',
@@ -394,7 +394,7 @@ function ScheduleCard({
   onDeleteRun,
   onRestartCoordinator
 }: {
-  run: JobRun
+  run: JobRow
   open: boolean
   onToggle: () => void
   collapsed: Set<string>

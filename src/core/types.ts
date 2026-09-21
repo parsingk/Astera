@@ -523,11 +523,19 @@ export interface RunDetail {
 
 /** Run 이 끝났는지 — Task 상태에서 계산된다. 저장되지 않는다.
  *
- *  여기(web 포함 파일)에 선언하는 이유: JobRun 이 이 타입을 필드로 갖고, 그것을 계산하는
+ *  여기(web 포함 파일)에 선언하는 이유: JobRow 이 이 타입을 필드로 갖고, 그것을 계산하는
  *  core/orchestration/view.ts 는 node:path 를 끌고 와서 tsconfig.web.json 에 넣을 수 없다.
  *  그래서 타입은 이쪽이 선언하고 view.ts 가 가져간다 — TaskStatus 와 같은 방향이다. */
 export type RunOutcome = 'running' | 'completed' | 'failed'
-export interface JobRun {
+
+/** Jobs 목록의 한 줄. **도메인 타입이 아니라 화면이 읽는 모양이다** — view.ts 가 OrchState 에서
+ *  계산해 내려보내고 저장되지 않는다.
+ *
+ *  **이름이 JobRun 이 아닌 이유.** 그 이름은 도메인의 "한 Job 의 한 회차" 가 가져간다
+ *  (docs/2026-09-21-job-run-split-and-projects-design.md §4.2). 그리고 `Run`,
+ *  `RunConfig`, `RunStatus`, `runId` 는 실행 구성(core/run/)의 것이라 도메인이 쓸 수 없다. 한
+ *  단어를 세 가지가 두고 부딪히므로, 화면의 것은 화면의 말로 부른다. */
+export interface JobRow {
   id: string
   objective: string
   /** 관리자가 있어야 하는데 없다 — 코디네이터 계정이 지정돼 있지만 붙어 있는 세션이 없다.
@@ -600,11 +608,11 @@ export interface JobRun {
    *
    *  **예약이 아닌 Run 에는 이 칸이 아예 없다.** 빈 배열을 달면 sameSnapshot 의 문자열이 이유
    *  없이 길어지고, 화면에서 "회차가 아직 없는 템플릿"과 "템플릿이 아님"이 같아 보인다. */
-  children?: JobRun[]
+  children?: JobRow[]
   tasks: JobTask[]
 }
 export interface OrchSnapshot {
-  runs: JobRun[]
+  runs: JobRow[]
   /** 이 프로젝트 폴더에서 지금 일하는 워커가 하나라도 있는가. **새 Run 을 만드는 창이 읽는다.**
    *
    *  위의 Run 별 값으로는 이 질문에 답할 수 없다 — 만들 때 그 Run 은 아직 없고, 기존 Run 하나가

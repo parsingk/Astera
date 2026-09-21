@@ -3,7 +3,7 @@ import type {
   Account,
   JobCheck,
   JobEvent,
-  JobRun,
+  JobRow,
   JobTask,
   MessageType,
   Provider,
@@ -225,7 +225,7 @@ export function RunDetail({
 }: {
   /** 스냅샷에 있는 그 Run. 노드의 제목·상태·세션은 전부 여기서 온다(detail 은 id 만 준다).
    *  스냅샷과 detail 은 서로 다른 호출이라 어긋날 수 있으므로, 한쪽에만 있는 Task 는 그리지 않는다. */
-  run: JobRun | undefined
+  run: JobRow | undefined
   /** null 은 아직 도착하지 않았다는 뜻 — 빈 상태와 구분한다(JobsView 의 snapshot === null 과 같다) */
   detail: RunDetailData | null
   /** Task 짓기(task-create)와 그 검증 구성 조회(run.list)가 쓴다. App.tsx 의 openRun 이 이미 이
@@ -363,7 +363,7 @@ export function RunDetail({
   /** 띄우기 버튼을 보일 조건 — **넷 다** 참이어야 한다. 한 자리에 모아 두는 것은 하나만
    *  보고 고치면 나머지 조건을 깨뜨리기 쉬워서다.
    *
-   *  1) 이 Run 의 동시 실행 한도(없으면 DEFAULT_CONCURRENCY, JobRun 의 주석과 같다)가 1 이하다.
+   *  1) 이 Run 의 동시 실행 한도(없으면 DEFAULT_CONCURRENCY, JobRow 의 주석과 같다)가 1 이하다.
    *     한도가 2 이상인 Run 은 모든 워커가 각자의 워크트리에서 돌고, 사람이 여기서 하나를 띄우면
    *     그것은 Run 워크트리로 간다(worker-start 의 기본값) — 통합 Task 가 도는 바로 그 폴더다.
    *     "병렬인데 한 폴더"라는 금지된 조합이 되고(coordinator/runScheduler 주석), 그 워커가 합칠

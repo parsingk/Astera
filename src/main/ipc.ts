@@ -4436,7 +4436,7 @@ export function registerIpc(
      *
      *  사람이 탭을 닫은 것인지 크래시인지 구별할 방법이 없고(`SessionManager.kill` 은 표시를 남기지
      *  않는다), 닫은 쪽이라면 곧바로 다시 여는 것은 그 결정을 무시하는 일이다. 대신 사이드바의
-     *  Run 줄에 다시 띄우는 버튼이 나온다(JobRun.coordinatorMissing) — 언제 되돌릴지는 사람이
+     *  Run 줄에 다시 띄우는 버튼이 나온다(JobRow.coordinatorMissing) — 언제 되돌릴지는 사람이
      *  정한다. 그동안 워커의 질문은 앱의 그물이 풀어 준다(inbox.ts).
      *
      *  **앱 재시작은 이 경로가 아니다.** 그때는 세션이 프로세스와 함께 사라지고 exit 이 오지 않는다.

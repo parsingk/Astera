@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { findRun } from './snapshot'
-import type { JobRun, OrchSnapshot } from '../types'
+import type { JobRow, OrchSnapshot } from '../types'
 
-const jobRun = (id: string, over: Partial<JobRun> = {}): JobRun => ({
+const jobRun = (id: string, over: Partial<JobRow> = {}): JobRow => ({
   id,
   objective: `objective ${id}`,
   outcome: 'running',
@@ -14,7 +14,7 @@ const jobRun = (id: string, over: Partial<JobRun> = {}): JobRun => ({
   ...over
 })
 
-const snap = (runs: JobRun[]): OrchSnapshot => ({ runs, projectFolderBusy: false })
+const snap = (runs: JobRow[]): OrchSnapshot => ({ runs, projectFolderBusy: false })
 
 describe('findRun', () => {
   it('최상위 Run 을 찾는다', () => {
@@ -36,7 +36,7 @@ describe('findRun', () => {
     expect(findRun(s, 'nope')).toBeUndefined()
   })
 
-  // 예약이 아닌 Run 에는 children 칸이 **아예 없다**(JobRun 의 주석) — 그 모양에서도 던지지 않아야
+  // 예약이 아닌 Run 에는 children 칸이 **아예 없다**(JobRow 의 주석) — 그 모양에서도 던지지 않아야
   // 한다. 스냅샷 대부분이 이 모양이다.
   it('children 칸이 없는 스냅샷에서도 동작한다', () => {
     const s = snap([jobRun('r1'), jobRun('r2')])

@@ -8,7 +8,7 @@
 // **이 파일이 view.ts 와 갈라져 있는 이유**는 그쪽이 node:path 를 끌고 와(isSamePath, repoPathOf)
 // tsconfig.web.json 에 들어갈 수 없다는 것이다. 여기는 ../types 의 타입만 import 하므로 렌더러가
 // 그대로 쓴다 — core/scheduler/summary.ts 가 같은 이유로 같은 자리에 있다.
-import type { JobRun, OrchSnapshot } from '../types'
+import type { JobRow, OrchSnapshot } from '../types'
 
 /** 최상위 Run 을 먼저 보고, 없으면 각 Run 의 회차를 본다. 없으면 undefined — "스냅샷에 없다"를
  *  부르는 쪽이 그대로 다루게 한다(App.tsx 의 네 자리가 각자 다르게 다룬다: 조회를 미루고, 창을
@@ -16,7 +16,7 @@ import type { JobRun, OrchSnapshot } from '../types'
  *
  *  회차의 회차는 찾지 않는다 — 한 단계뿐인 것이 자료 모형이다(자식에는 schedule 을 넣지 않으므로
  *  자식이 다시 템플릿이 되지 않는다, spawnScheduledRun). */
-export function findRun(snapshot: OrchSnapshot, runId: string): JobRun | undefined {
+export function findRun(snapshot: OrchSnapshot, runId: string): JobRow | undefined {
   const top = snapshot.runs.find((r) => r.id === runId)
   if (top) return top
   for (const run of snapshot.runs) {

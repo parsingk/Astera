@@ -11,7 +11,7 @@
 // "types": ["node"], which loosens the guard that keeps Node globals out of the renderer typecheck.
 import { isSamePath } from '../files/tree'
 import { runsWorkingIn, runWorktrees } from './integrate'
-import type { JobRun, JobTask, OrchSnapshot, RunOutcome, WorktreeInfo } from '../types'
+import type { JobRow, JobTask, OrchSnapshot, RunOutcome, WorktreeInfo } from '../types'
 import { repoPathOf } from '../worktrees/repo'
 import type { OrchState } from './state'
 import { eventCountFor } from './timeline'
@@ -263,16 +263,16 @@ export function snapshotFor(
   // 폴더 사실을 **한 번만** 센다 — Run 마다 다시 세면 같은 순회가 Run 수만큼 돌고, 그보다 나쁜
   // 것은 두 값(폴더 수준과 Run 수준)이 다른 순간의 상태를 볼 수 있다는 것이다.
   const workingHere = runsWorkingIn(state, projectPath)
-  const runs = runsForProject(state, projectPath, worktrees).map((run): JobRun => {
+  const runs = runsForProject(state, projectPath, worktrees).map((run): JobRow => {
     const { done, total } = progressOf(state, run.id)
     const worktreesOf = runWorktrees(state, run.id).filter(exists)
     return {
       id: run.id,
       objective: run.objective,
-      // Run 이 그대로 들고 있는 값을 그대로 옮긴다 — 계산도 기본값도 여기서 넣지 않는다(JobRun
+      // Run 이 그대로 들고 있는 값을 그대로 옮긴다 — 계산도 기본값도 여기서 넣지 않는다(JobRow
       // 의 주석과 같다). 워크트리 배치 규칙(동시 실행 한도가 1 이하일 때만 프로젝트 폴더)의
       // 판단은 이 값을 받은 렌더러가 한다. **provider 는 여기 없다** — Task 의 계정이 정하므로
-      // 한 Run 에 하나의 값이 없다(JobRun 의 주석).
+      // 한 Run 에 하나의 값이 없다(JobRow 의 주석).
       // 빈 값은 싣지 않는다 — 거짓을 실으면 sameSnapshot 의 문자열을 이유 없이 늘린다(아래
       // worktrees·pendingStart 와 같은 관례)
       ...(run.coordinatorAccountId !== undefined && run.coordinatorSessionId === undefined
@@ -288,7 +288,7 @@ export function snapshotFor(
       ...(run.pendingStart ? { pendingStart: true } : {}),
       ...(run.paused ? { paused: true } : {}),
       // 빈 배열은 싣지 않는다 — sameSnapshot 의 문자열을 이유 없이 늘리고, "워크트리를 안 썼다" 와
-      // "이 칸이 없다" 가 화면에서 같은 뜻이다(JobRun.children 과 같은 판단)
+      // "이 칸이 없다" 가 화면에서 같은 뜻이다(JobRow.children 과 같은 판단)
       ...(worktreesOf.length > 0 ? { worktrees: worktreesOf } : {}),
       ...(run.schedule ? { schedule: run.schedule } : {}),
       ...(run.fireCount !== undefined ? { fireCount: run.fireCount } : {}),
@@ -343,7 +343,7 @@ export function snapshotFor(
  *  so without this the sidebar is re-sent constantly with an identical payload. Comparing the result
  *  instead of debouncing the trigger kills the whole class and has nothing to tune.
  *
- *  **A status message is deliberately no longer in that list.** JobRun.eventCount counts the
+ *  **A status message is deliberately no longer in that list.** JobRow.eventCount counts the
  *  timeline's events, so any message that becomes an event changes this fold and lets the push
  *  through — that is the point of the field (see there), because a question or a progress report
  *  moves no Task status and would otherwise never reach the renderer. heartbeat is excluded from the

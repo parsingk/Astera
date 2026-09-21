@@ -2405,7 +2405,7 @@ export default function App(): React.JSX.Element {
   // 잡지 못한다).
   //
   // orchSnapshot 을 의존성에 두는 것이 요점이다: 그 값이 바뀌는 것이 곧 "이 프로젝트의 오케스트레이션
-  // 상태가 움직였다"이고, JobRun.eventCount 가 스냅샷에 실려 있으므로 Task 상태를 하나도 옮기지 않는
+  // 상태가 움직였다"이고, JobRow.eventCount 가 스냅샷에 실려 있으므로 Task 상태를 하나도 옮기지 않는
   // 메시지도 그 신호에 포함된다. 폴링을 두지 않는 이유가 그것이다.
   useEffect(() => {
     // 짝이 맞지 않으면 부르지 않는다 — 프로젝트 A→B 커밋에서 이 효과는 아직 A 의 runId 를 들고
@@ -3799,7 +3799,7 @@ export default function App(): React.JSX.Element {
                     // 집합으로 지우므로(server.ts), 템플릿 자신의 total·eventCount 만 적으면
                     // 확인 창의 숫자가 실제로 사라지는 것보다 적다 — 되돌릴 수 없는 동작에서
                     // 축소해 말하는 것이 가장 나쁜 방향이다. 예약이 아닌 Run 에는 children 이
-                    // 아예 없어 합이 그대로다(JobRun 의 주석).
+                    // 아예 없어 합이 그대로다(JobRow 의 주석).
                     const kids = run.children ?? []
                     const tasks = kids.reduce((n, k) => n + k.total, run.total)
                     const events = kids.reduce((n, k) => n + k.eventCount, run.eventCount)
