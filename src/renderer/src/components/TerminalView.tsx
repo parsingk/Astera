@@ -11,6 +11,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
 import { attachConsoleLinks } from '../terminalLinks'
+import { copyTextFor } from '../../../core/terminal/copy'
 import { SessionStateBanners } from './SessionStateBanners'
 
 export function TerminalView({
@@ -80,6 +81,14 @@ export function TerminalView({
     // On macOS, terminal copy/paste is Cmd. Ctrl+C must always flow through as an interrupt — swallowing
     // it just because a selection is active is, to a mac user, simply a 'Ctrl+C doesn't work' bug.
     const isMac = window.api.platform === 'darwin'
+    // 선택이 만들어지던 순간의 글자. xterm 의 선택은 좌표만 가리키고 글자를 붙잡지 않으므로,
+    // claude 처럼 화면을 매 프레임 다시 그리는 TUI 위에서는 Cmd+C 를 누를 때 그 좌표에서 읽히는
+    // 것이 이미 다른 것 — 대개 공백 — 이다. 고를 때 붙잡아 두는 것이 유일한 방법이다.
+    // (core/terminal/copy.ts 가 그 판단과 측정을 적어 둔다.)
+    let latchedSelection = ''
+    const selectionLatch = term.onSelectionChange(() => {
+      latchedSelection = term.getSelection()
+    })
     /** Was the modifier that opens copy/paste on this platform pressed? */
     const clipMod = (e: KeyboardEvent): boolean => (isMac ? e.metaKey : e.ctrlKey)
     /** The opposite modifier — if it's held too, this is a different combo and not ours. */
@@ -110,12 +119,15 @@ export function TerminalView({
         !otherMod(e) &&
         !e.shiftKey
       ) {
-        const sel = term.getSelection()
-        if (sel) {
-          window.api.clipboard.writeText(sel)
+        const text = copyTextFor(latchedSelection, term.getSelection())
+        if (text !== null) {
+          window.api.clipboard.writeText(text)
           term.clearSelection()
+          latchedSelection = ''
           return false
         }
+        // 쓸 것이 없으면 클립보드를 건드리지 않고 키도 삼키지 않는다 — 고른 것이 없는 것과
+        // 같은 상태이므로, 예전처럼 이 키가 제 갈 길을 가게 둔다.
         return true
       }
       // Paste: read the clipboard directly and feed it in via term.paste (bracketed paste → onData → pty).
@@ -192,6 +204,7 @@ export function TerminalView({
 
     return () => {
       disposeLinks()
+      selectionLatch.dispose()
       detach()
       blinkGuard.dispose()
       input.dispose()

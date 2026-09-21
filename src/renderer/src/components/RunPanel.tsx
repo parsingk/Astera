@@ -10,6 +10,7 @@ import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
 import { attachConsoleLinks } from '../terminalLinks'
+import { copyTextFor } from '../../../core/terminal/copy'
 import { RunFindBar } from './RunFindBar'
 
 /** The app's amber, which both the find highlights and the console's selection colour are built from.
@@ -109,6 +110,13 @@ export function RunPanel({
     // — for the two keys this console claims. F opens this run's find bar instead of sending the key
     // to the process; bound on the terminal, not the window, so the editor's own find is untouched.
     const isMac = window.api.platform === 'darwin'
+    // 고른 순간의 글자를 붙잡아 둔다 — TerminalView 와 같은 이유이고 같은 방식이다. xterm 의
+    // 선택은 좌표만 가리키므로, 실행된 명령이 화면을 다시 그리면(TUI 를 띄우는 명령이 그렇다)
+    // 그 좌표에서 읽히는 것은 이미 다른 것이다. core/terminal/copy.ts 에 그 측정이 있다.
+    let latchedSelection = ''
+    const selectionLatch = term.onSelectionChange(() => {
+      latchedSelection = term.getSelection()
+    })
     const keyMod = (e: KeyboardEvent): boolean => (isMac ? e.metaKey : e.ctrlKey)
     const otherMod = (e: KeyboardEvent): boolean => (isMac ? e.ctrlKey : e.metaKey)
     term.attachCustomKeyEventHandler((e) => {
@@ -135,12 +143,15 @@ export function RunPanel({
         !e.altKey &&
         !e.shiftKey
       ) {
-        const sel = term.getSelection()
-        if (sel) {
-          window.api.clipboard.writeText(sel)
+        const text = copyTextFor(latchedSelection, term.getSelection())
+        if (text !== null) {
+          window.api.clipboard.writeText(text)
           term.clearSelection()
+          latchedSelection = ''
           return false
         }
+        // 쓸 것이 없으면 클립보드를 그대로 둔다 — 다시 그려진 자리의 공백으로 덮어쓰면 복사한
+        // 사람은 붙여넣기가 고장 난 것으로 본다.
         return true
       }
       return true
@@ -173,6 +184,7 @@ export function RunPanel({
       cancelled = true
       off()
       disposeLinks()
+      selectionLatch.dispose()
       onResults.dispose()
       blinkGuard.dispose()
       input.dispose()
