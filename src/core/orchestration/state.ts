@@ -17,6 +17,7 @@ import {
   type MessageType,
   type Outcome,
   type RepairReason,
+  type Project,
   type Run,
   type Task
 } from './types'
@@ -43,6 +44,11 @@ export interface OrchState {
   messages: Message[]
   deliveries: Delivery[]
   gates: Gate[]
+  /** The registered repositories. Here rather than in a file of its own so one write, one recovery
+   *  policy and one snapshot cover both a Job and the project it belongs to — the public CLI reads
+   *  them together and must not see them disagree. Operations on it live in ./projects.ts, which
+   *  compares paths and so cannot be in this web-safe module. */
+  projects: Project[]
 }
 
 export const emptyState = (): OrchState => ({
@@ -51,7 +57,8 @@ export const emptyState = (): OrchState => ({
   dispatches: [],
   messages: [],
   deliveries: [],
-  gates: []
+  gates: [],
+  projects: []
 })
 
 export type Res<T> = { ok: true; state: OrchState; value: T } | { ok: false; error: string }
@@ -88,6 +95,10 @@ export function createRun(
   a: {
     objective: string
     cwd: string
+    /** 이 Run 이 속한 프로젝트. **여기서 확인하지 않는다** — 등록은 앱의 것이고(ipc.ts 의
+     *  orch.list 가 활성 탭의 폴더를 저장소로 되돌려 등록한다), 부르는 쪽이 그 id 를 준다.
+     *  coordinatorAccountId 와 같은 관례다. */
+    projectId?: string
     concurrency?: number
     /** 이 Run 의 코디네이터 세션을 띄울 계정. **여기서 확인하지 않는다** — 계정 목록은 앱이
      *  아는 것이고, 부르는 쪽(server.ts 의 run-create)이 실재하는 계정인지 본다.
@@ -109,6 +120,9 @@ export function createRun(
     id: newId('run'),
     objective: a.objective,
     cwd: a.cwd,
+    // 빈 문자열은 싣지 않는다 — coordinatorAccountId 아래 줄과 같은 이유다: 없는 것과 값이
+    // 갈라져야 runsForProject 가 옛 Run 에만 경로 유도를 쓴다
+    ...(a.projectId ? { projectId: a.projectId } : {}),
     createdAt: now,
     ...(a.concurrency !== undefined ? { concurrency: a.concurrency } : {}),
     // 빈 문자열은 싣지 않는다 — "지정 없음" 과 값이 갈라지고, 그 구분으로 코디네이터를 띄울지
@@ -1758,7 +1772,11 @@ export function deleteRuns(s: OrchState, runIds: ReadonlySet<string>): OrchState
     dispatches: s.dispatches.filter((d) => keptTaskIds.has(d.taskId)),
     messages: s.messages.filter((m) => !runIds.has(m.runId)),
     deliveries: s.deliveries.filter((d) => !runIds.has(d.runId)),
-    gates: s.gates.filter((g) => !runIds.has(g.runId))
+    gates: s.gates.filter((g) => !runIds.has(g.runId)),
+    // 프로젝트는 Run 을 지워도 남는다 — Job 이 하나도 없는 저장소도 프로젝트다. 칸을 열거하는
+    // 이 모양을 유지하는 것은 위 주석의 이유와 같다: 새 칸이 생기면 타입이 여기서 걸려, 지울지
+    // 남길지 사람이 정하게 된다(스프레드로 덮으면 조용히 남는다).
+    projects: s.projects
   }
 }
 

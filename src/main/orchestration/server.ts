@@ -31,6 +31,7 @@ import {
   type RepairTarget,
   type Res
 } from '../../core/orchestration/state'
+import { findProjectByPath } from '../../core/orchestration/projects'
 import { workerDoneFieldError } from '../../core/orchestration/sendArgs'
 import {
   DEFAULT_ASK_TIMEOUT_MS,
@@ -605,12 +606,20 @@ export async function handleCommand(
       // button makes a person creating a second Run while workers are running ordinary, not rare —
       // so the window this await always had is now one this app hits in normal use.
       const latest = deps.getState()
+      // **등록되어 있으면 그 프로젝트에 매단다.** 등록은 여기서 하지 않는다 — 프로젝트 목록을
+      // 채우는 것은 사람이 프로젝트를 여는 일이고(ipc.ts 의 orch.list), 이 명령은 CLI 로도
+      // 불린다: 코디네이터가 워크트리 안에서 부른 run-create 가 그 워크트리를 프로젝트로
+      // 등록해 버리면 목록이 작업 폴더로 오염된다. 위에서 cwd 는 이미 프로젝트 루트로
+      // 정규화됐으므로(resolveProjectRoot), 앱이 아는 저장소라면 여기서 맞는다.
+      // 못 맞으면 칸이 비고, 그 Run 은 옛 Run 과 같은 경로 유도로 목록에 든다.
+      const project = findProjectByPath(latest, cwd)
       return commit(
         createRun(
           latest,
           {
             objective,
             cwd,
+            ...(project ? { projectId: project.id } : {}),
             ...(concurrency !== null ? { concurrency } : {}),
             ...(coordinatorAccountId ? { coordinatorAccountId } : {}),
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지

@@ -176,6 +176,13 @@ export class OrchestrationStore {
     // 빠지고 디스패치 시점에 Gate 를 연다 — 조용히 멈추지 않으므로 사람이 계정을 넣으면 곧바로 돈다.
     for (const r of st.runs as unknown as Record<string, unknown>[]) delete r.provider
 
+    // **프로젝트 배열이 없는 파일을 받는다.** 이 칸이 생기기 전의 파일에는 없고, isValidState 에
+    // 넣지 않은 것도 그 때문이다 — 넣었으면 기존 파일이 전부 손상으로 읽혀 통째로 버려진다.
+    // 채워 넣지는 않는다: 어느 Run 이 어느 저장소의 것인지는 워크트리 레지스트리를 봐야 알 수 있고
+    // (view.ts 의 repoPathOf) 그것은 이 층이 모르는 것이다. 빈 채로 두면 옛 Run 은 경로 유도로
+    // 그대로 보이고(Run.projectId 의 주석), 목록은 사람이 프로젝트를 열 때 ipc.ts 가 채운다.
+    if (!Array.isArray((st as unknown as Record<string, unknown>).projects)) st.projects = []
+
     // Captured here: the migrations above are in place, the cleanup below builds new objects
     const before: OrchState = st
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { runsForProject, progressOf, outcomeOf, snapshotFor, sameSnapshot } from './view'
 import { emptyState } from './state'
+import { ensureProject } from './projects'
 import type { OrchState } from './state'
 import type { CheckResult, Dispatch, Gate, Message, ResumeEntry, Run, Task } from './types'
 import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS } from './types'
@@ -62,6 +63,31 @@ describe('runsForProject', () => {
     const s = withRuns([run('r1', absPath('wt', 'app', 'feature'))])
     const list = [wt(absPath('repos', 'app'), absPath('wt', 'app', 'feature'))]
     expect(runsForProject(s, absPath('repos', 'app'), list).map((r) => r.id)).toEqual(['r1'])
+  })
+
+  // projectId 가 있으면 경로를 보지 않는다. 워크트리에서 만들어진 Run 이든 하위 디렉터리에서
+  // 만들어진 Run 이든, 어느 프로젝트의 것인지는 이미 정해져 있다
+  it('projectId 가 있으면 경로가 어긋나도 그 프로젝트의 것으로 센다', () => {
+    const reg = ensureProject(emptyState(), { path: absPath('proj'), now: 'T0' })
+    const r1 = { ...run('r1', absPath('somewhere', 'else')), projectId: reg.project.id }
+    const s = { ...reg.state, runs: [r1] }
+    expect(runsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual(['r1'])
+  })
+
+  it('projectId 가 다른 프로젝트를 가리키면 경로가 맞아도 고르지 않는다', () => {
+    const a = ensureProject(emptyState(), { path: absPath('proj'), now: 'T0' })
+    const b = ensureProject(a.state, { path: absPath('other'), now: 'T1' })
+    const r1 = { ...run('r1', absPath('proj')), projectId: b.project.id }
+    const s = { ...b.state, runs: [r1] }
+    expect(runsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual([])
+  })
+
+  // **매달린 id 는 Job 을 숨기지 않는다.** 프로젝트 기록이 사라진 Run 은 경로 유도로 물러난다 —
+  // 그것이 이 칸이 생기기 전 모든 Run 이 쓰던 답이고, 목록에서 사라지는 것보다 낫다
+  it('projectId 가 없는 프로젝트를 가리키면 경로로 물러난다', () => {
+    const r1 = { ...run('r1', absPath('proj')), projectId: 'proj_gone' }
+    const s = withRuns([r1])
+    expect(runsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual(['r1'])
   })
 
   // repoPathOf 는 등록되지 않은 경로를 그대로 통과시킨다 — 이 정규화가 소유 판정을 넓히지 않는다

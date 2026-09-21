@@ -89,10 +89,33 @@ export type GateKind = 'convergence-exhausted' | 'convergence-blocked'
 export const placeholderSessionId = (): string => `pending:${newId('p').slice(2, 10)}`
 export const isPlaceholderSessionId = (id: string): boolean => id.startsWith('pending:')
 
+/** A repository this app has been used in. **The project is a registered thing now, not a path the
+ *  app infers every time** (docs/2026-09-21-job-run-split-and-projects-design.md §6): the public CLI
+ *  has to name one in a way that survives being typed into a script, and a path is not that.
+ *
+ *  Registered where the app already decides what the project is — `orch.list` maps the active tab's
+ *  folder back to its repository — so the list is the repositories a person has actually opened Jobs
+ *  for, and it fills without anyone being asked to add anything. */
+export interface Project {
+  id: string
+  /** The repository root, in the spelling it was registered with. Compared with `isSamePath`, never
+   *  with `===`: win32 ignores case and the same root arrives spelled several ways. */
+  path: string
+  /** What to show. Defaults to the last segment of `path`; kept as a field rather than derived so a
+   *  person can change it later without the name moving when a folder does. */
+  name: string
+  addedAt: string
+}
+
 export interface Run {
   id: string
   objective: string
   cwd: string
+  /** The project this Run belongs to. **Authoritative when present**; `runsForProject` falls back to
+   *  deriving it from `cwd` for every Run made before this field existed. That fallback is a read
+   *  path for old rows only — nothing is created without this field, so the two never compete as
+   *  sources of truth (the `accountId` migration in store.ts records what happens when they do). */
+  projectId?: string
   createdAt: string
   /** 동시에 열어 둘 Dispatch 수. 없으면 DEFAULT_CONCURRENCY. */
   concurrency?: number

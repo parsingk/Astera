@@ -132,6 +132,7 @@ import {
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './orchestration/repair'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject, outcomeOf } from '../core/orchestration/view'
+import { ensureProject } from '../core/orchestration/projects'
 import { justFinished } from '../core/orchestration/runRecord'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
@@ -5053,6 +5054,18 @@ export function registerIpc(
     // renderer because the registry is main's (core.worktrees), and applied to orchProject as well
     // so the push path folds for the same project this reply did.
     const project = repoPathOf(core.worktrees.list(), projectPath)
+    // **여기가 프로젝트가 등록되는 자리다.** 이 핸들러는 사람이 프로젝트를 열 때마다 불리고, 그
+    // 경로는 방금 저장소로 되돌려졌다 — 앱이 "프로젝트" 라고 부르는 값 그 자체다. 따로 등록 화면을
+    // 두지 않는 이유가 이것이다: 사람에게 이미 한 일을 다시 시키지 않는다.
+    //
+    // **읽기 핸들러가 쓰기를 한다.** 그래도 되는 것은 ensureProject 가 이미 있는 프로젝트에는
+    // 같은 state 를 그대로 돌려주기 때문이다 — 그래서 저장은 저장소마다 딱 한 번이고, 그 뒤로는
+    // 이 줄이 배열 조회 하나로 끝난다.
+    if (orch) {
+      const before = orch.deps.getState()
+      const { state } = ensureProject(before, { path: project, now: new Date().toISOString() })
+      if (state !== before) await orch.deps.setState(state)
+    }
     const snapshot = orch
       ? orchSnapshotOf(orch.deps.getState(), project)
       : { runs: [], projectFolderBusy: false }

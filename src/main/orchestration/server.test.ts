@@ -3,6 +3,8 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { handleCommand, handleExit, type OrchServerDeps } from './server'
+import { ensureProject } from '../../core/orchestration/projects'
+import { absPath } from '../../core/testPaths'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { OrchCoordinator, type CoordinatorDeps } from './coordinator'
 import { OrchestrationStore } from './store'
@@ -83,6 +85,22 @@ describe('handleCommand — 기본', () => {
   it('필수 인자가 없으면 400을 낸다', async () => {
     const r = await call(makeDeps(), 'run-create', {})
     expect(r.status).toBe(400)
+  })
+  it('run-create 가 등록된 프로젝트에 Run 을 매단다', async () => {
+    const reg = ensureProject(emptyState(), { path: absPath('proj'), now: NOW })
+    const deps = makeDeps(reg.state)
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: absPath('proj') })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs[0].projectId).toBe(reg.project.id)
+  })
+  // **등록은 여기서 하지 않는다.** 이 명령은 CLI 로도 불리고, 코디네이터가 워크트리 안에서 부른
+  // run-create 가 그 워크트리를 프로젝트로 등록해 버리면 목록이 작업 폴더로 오염된다
+  it('run-create 는 모르는 경로를 프로젝트로 등록하지 않는다', async () => {
+    const deps = makeDeps()
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: absPath('nowhere') })
+    expect(r.status).toBe(200)
+    expect(deps.getState().projects).toEqual([])
+    expect(deps.getState().runs[0].projectId).toBeUndefined()
   })
   it('run-create 가 concurrency·auto 를 Run 에 싣는다', async () => {
     const r = await call(makeDeps(), 'run-create', {

@@ -10,6 +10,7 @@
 // either fails (files/tree.ts's node:path import has no declarations there) or "succeeds" by adding
 // "types": ["node"], which loosens the guard that keeps Node globals out of the renderer typecheck.
 import { isSamePath } from '../files/tree'
+import { findProject, findProjectByPath } from './projects'
 import { runsWorkingIn, runWorktrees } from './integrate'
 import type { JobRow, JobTask, OrchSnapshot, RunOutcome, WorktreeInfo } from '../types'
 import { repoPathOf } from '../worktrees/repo'
@@ -48,8 +49,19 @@ export function runsForProject(
   projectPath: string,
   worktrees: WorktreeInfo[]
 ): Run[] {
+  const project = findProjectByPath(state, projectPath)
   return state.runs
-    .filter((r) => isSamePath(projectPath, repoPathOf(worktrees, r.cwd)))
+    .filter((r) => {
+      // **`projectId` wins, but only when it resolves.** A Run made since projects were registered
+      // names one, and an id compare is exactly right for it — no path shape can change the answer.
+      // A dangling id (the project record is gone) falls through to the path instead of hiding the
+      // Run: the derivation below is what every Run made before this field used, so it is the answer
+      // that was already correct rather than a guess, and a Job that vanishes from the list is worse
+      // than one listed by its folder.
+      if (r.projectId !== undefined && findProject(state, r.projectId))
+        return r.projectId === project?.id
+      return isSamePath(projectPath, repoPathOf(worktrees, r.cwd))
+    })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 

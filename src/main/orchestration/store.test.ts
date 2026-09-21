@@ -221,6 +221,31 @@ describe('OrchestrationStore', () => {
     expect((store.get().runs[0] as unknown as Record<string, unknown>).provider).toBeUndefined()
   })
 
+  // 프로젝트 배열이 생기기 전의 파일에는 그 칸이 없다. isValidState 에 넣지 않은 것이 이것 때문이고
+  // (넣었으면 기존 파일이 전부 손상으로 읽혀 통째로 버려진다) 여기서 빈 배열로 받는다.
+  it('프로젝트 칸이 없는 파일을 손상으로 읽지 않는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    delete (s as unknown as Record<string, unknown>).projects
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const r = await store.load()
+    expect(r.recovered).toBe(false)
+    expect(store.get().projects).toEqual([])
+    // 같이 실린 Run 이 살아남았는지 — 통째로 버려졌다면 여기서 드러난다
+    expect(store.get().runs.map((x) => x.id)).toEqual(['run_1'])
+  })
+
+  // 채워 넣지 않는 이유는 아래 provider 이행과 같다: 어느 Run 이 어느 저장소의 것인지는 워크트리
+  // 레지스트리를 봐야 알 수 있고 이 층은 그것을 모른다. 옛 Run 은 경로 유도로 그대로 보인다
+  it('옛 Run 에 projectId 를 지어 넣지 않는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().runs[0].projectId).toBeUndefined()
+  })
+
   // **계정을 대신 채워 넣지 않는다.** 옛 provider 로 기본 계정을 찾아 넣으면 사람이 아끼려던
   // 계정에 일이 갈 수 있고, 무엇이 기본 계정인지 이 자리에서는 알 수도 없다. 계정 없는 Task 는
   // 자동 배치에서 빠지고 디스패치 시점에 Gate 를 연다.
