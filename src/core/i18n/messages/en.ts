@@ -192,6 +192,7 @@ export const en: Record<keyof typeof ko, string> = {
   'common.trayQuit': 'Quit',
   'common.trayQuitEnding': 'Quit and end sessions',
   'session.rail.toggleSidebar': 'Toggle sidebar',
+  'session.rail.openSessions': 'Accounts and history',
   'session.spawn.failed': 'Failed to start session: {message}',
   'session.spawn.failedWorktreeKept':
     'Failed to start session: {message} (the worktree “{name}” was kept — delete it from the Worktrees panel)',

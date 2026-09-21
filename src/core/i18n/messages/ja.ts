@@ -148,6 +148,7 @@ export const ja: Catalog = {
   'common.trayQuitEnding': 'セッションをすべて終えて終了',
   // App.tsx — rail, session spawn failure, placeholder, status bar usage
   'session.rail.toggleSidebar': 'サイドバーの折りたたみ/展開',
+  'session.rail.openSessions': 'アカウントと履歴',
   'session.spawn.failed': 'セッションの開始に失敗しました: {message}',
   'session.spawn.failedWorktreeKept':
     'セッションの開始に失敗しました: {message} (worktree "{name}" は残っているので Worktrees パネルから削除してください)',

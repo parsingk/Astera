@@ -114,7 +114,7 @@ import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '.
 import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
-import { PanelLeft, Settings, X } from 'lucide-react'
+import { PanelLeft, Settings, Users, X } from 'lucide-react'
 
 sessionBus.init()
 
@@ -1900,6 +1900,7 @@ export default function App(): React.JSX.Element {
     setJobsOpen(next.jobs)
     setHiwOpen(next.understanding)
   }
+  const toggleSessions = (): void => toggleSidebar('sessions')
   const toggleExplorer = (): void => toggleSidebar('explorer')
   const toggleJobs = (): void => toggleSidebar('jobs')
   const toggleHiw = (): void => toggleSidebar('understanding')
@@ -3547,6 +3548,18 @@ export default function App(): React.JSX.Element {
             onClick={() => setSidebarOpen((v) => !v)}
           >
             <PanelLeft size={16} />
+          </button>
+          {/* 계정·히스토리 토글. 다른 셋과 달리 "아무 뷰도 안 켠 상태" 라 버튼이 없었고, 그래서 탐색기나
+              Jobs 를 한 번 열면 한 번의 누름으로는 돌아올 수 없었다 — 그 뷰를 끄면 사이드바가 함께
+              접히므로(core/ui/sidebar.ts), 펴기 버튼을 한 번 더 눌러야 비로소 이 화면이었다.
+              자리는 탐색기 위다: 이것이 사이드바의 기본 화면이고, 레일은 위에서부터 기본을 먼저 둔다 */}
+          <button
+            className={sidebarOpen && sidebarPane === 'sessions' ? 'rail-btn on' : 'rail-btn'}
+            aria-label={t('session.rail.openSessions')}
+            title={t('session.rail.openSessions')}
+            onClick={toggleSessions}
+          >
+            <Users size={16} />
           </button>
           {/* 탐색기 토글. 폴더 아이콘과 컨텍스트 메뉴 항목을 걷어내면서 탐색기로 들어가는 길이 단축키
               하나만 남았는데, 처음 쓰는 사람은 그 키를 알 수 없다. 툴팁에 실제 바인딩을 함께 띄우므로

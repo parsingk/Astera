@@ -150,6 +150,7 @@ export const es: Catalog = {
   'common.trayQuitEnding': 'Salir y terminar las sesiones',
   // App.tsx — rail, session spawn failure, placeholder, status bar usage
   'session.rail.toggleSidebar': 'Contraer o expandir la barra lateral',
+  'session.rail.openSessions': 'Cuentas e historial',
   'session.spawn.failed': 'No se pudo iniciar la sesión: {message}',
   'session.spawn.failedWorktreeKept':
     'No se pudo iniciar la sesión: {message} (el worktree "{name}" se conservó; elimínelo desde el panel Worktrees)',

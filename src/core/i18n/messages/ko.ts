@@ -214,6 +214,9 @@ export const ko = {
   'common.trayQuitEnding': '세션 모두 끝내고 종료',
   // App.tsx — rail, session spawn failure, placeholder, status bar usage
   'session.rail.toggleSidebar': '사이드바 접기/펼치기',
+  // 사이드바의 기본 화면. 다른 셋과 달리 뷰 플래그가 아니라 "아무것도 안 켠 상태" 라 버튼이
+  // 없었고, 그래서 한 번 다른 뷰를 열면 한 번의 누름으로는 돌아올 수 없었다.
+  'session.rail.openSessions': '계정과 히스토리',
   'session.spawn.failed': '세션 시작 실패: {message}',
   'session.spawn.failedWorktreeKept':
     '세션 시작 실패: {message} (worktree "{name}"는 남아 있으니 Worktrees 패널에서 삭제하세요)',

@@ -53,6 +53,40 @@ describe('toggleSidebarView', () => {
     })
   })
 
+  // 계정·히스토리 화면. 다른 셋과 같은 규칙을 따르되, 켜진 상태란 "아무 플래그도 없음" 이다
+  it('sessions 를 고르면 세 뷰를 끄고 사이드바를 편다', () => {
+    const explorer = toggleSidebarView(closed, 'explorer')
+    expect(toggleSidebarView(explorer, 'sessions')).toEqual({
+      open: true,
+      explorer: false,
+      jobs: false,
+      understanding: false
+    })
+  })
+
+  it('보고 있는 sessions 를 다시 누르면 접는다', () => {
+    const shown: SidebarState = { open: true, explorer: false, jobs: false, understanding: false }
+    expect(toggleSidebarView(shown, 'sessions')).toEqual(closed)
+  })
+
+  // 접힌 채로는 "보고 있는" 것이 아니다 — 눌러서 접는 것이 아니라 펴야 한다
+  it('접혀 있으면 sessions 는 접는 것이 아니라 편다', () => {
+    expect(toggleSidebarView(closed, 'sessions')).toEqual({
+      open: true,
+      explorer: false,
+      jobs: false,
+      understanding: false
+    })
+  })
+
+  // 이 버튼이 생긴 이유: 한 번에 돌아올 수 없었다
+  it('탐색기를 보다가 한 번에 계정·히스토리로 돌아온다', () => {
+    const explorer = toggleSidebarView(closed, 'explorer')
+    const back = toggleSidebarView(explorer, 'sessions')
+    expect(back.open).toBe(true)
+    expect(back.explorer).toBe(false)
+  })
+
   it('leaves the other views alone when it collapses', () => {
     const jobs = toggleSidebarView(closed, 'jobs')
     const off = toggleSidebarView(jobs, 'jobs')
