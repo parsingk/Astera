@@ -4131,6 +4131,10 @@ export function registerIpc(
       },
       // 코디네이터가 --validate 에 넣을 목록. 조립은 하지 않으므로
       // loadRunConfigs 만 부른다.
+      // `astera status` 가 세는 값 둘. 세션은 SessionManager 의 것이고 버전은 Electron 의
+      // 것이라, 둘 다 OrchState 만 보는 층에는 없다.
+      runningSessions: () => core.sessions.runningAppOwned().length,
+      appVersion: () => app.getVersion(),
       listRunConfigs: async (projectPath) => {
         const { configs } = await loadRunConfigs({
           projectPath,

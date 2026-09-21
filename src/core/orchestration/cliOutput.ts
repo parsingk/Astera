@@ -40,15 +40,21 @@ export const exitCodeFor = (code: CliErrorCode): number => EXIT[code]
 /**
  * 앱이 돌려준 HTTP 상태를 오류 코드로.
  *
- * 서버는 이미 400·403·404·409 를 가려 답한다(server.ts 의 bad·denied·notFound·conflict). 그래서
- * 이 표는 그 넷을 옮기는 일이고, 나머지는 전부 일반 실패다 — **모르는 상태를 그럴듯한 코드로
- * 넘겨짚지 않는다.** 스크립트가 그 코드로 분기할 텐데, 짐작이 그 분기를 조용히 틀리게 만든다.
+ * 서버는 이미 400·403·404·409·501 로 가려 답한다(server.ts 의 bad·denied·notFound·conflict 와
+ * 기본 분기). 그래서 이 표는 그 다섯을 옮기는 일이고, 나머지는 전부 일반 실패다 — **모르는 상태를
+ * 그럴듯한 코드로 넘겨짚지 않는다.** 스크립트가 그 코드로 분기할 텐데, 짐작이 그 분기를 조용히 틀리게 만든다.
+ *
+ * **501 은 없는 id 가 아니라 없는 명령이다.** 앱이 그 명령을 모른다는 것은 이 CLI 가 앱보다 새
+ * 빌드라는 뜻이고(셀틀이 가리키는 바이너리가 갈렸다), 스크립트가 보아야 하는 것은 "오타" 가 아니라 "버전이
+ * 갈렸다" 다. 이미 나간 앱은 같은 경우에 404 를 준다 — 그쪽은 NOT_FOUND 로 떨어지고, 문구가
+ * 무슨 일인지 말한다. 문구를 읽어 코드를 고르지는 않는다 — 계약을 문자열에 얹어 매는 일이다.
  */
 export function codeForStatus(status: number): CliErrorCode {
   if (status === 400) return 'INVALID_ARGUMENTS'
   if (status === 403) return 'PERMISSION_DENIED'
   if (status === 404) return 'NOT_FOUND'
   if (status === 409) return 'CONFLICT'
+  if (status === 501) return 'VERSION_MISMATCH'
   return 'FAILED'
 }
 
@@ -100,3 +106,12 @@ export function messageFrom(body: unknown, fallback: string): string {
     return (body as { error: string }).error
   return fallback
 }
+
+/**
+ * CLI 와 앱이 주고받는 말의 판. **Host 의 프로토콜과 다른 것이다** — 그쪽은 앱과 Host 사이의
+ * 것이고(core/host/protocol.ts), 이것은 사람이 치는 명령과 앱 사이의 것이다.
+ *
+ * 1 은 이 계약(봉투·종료 코드·이름)이 처음 서는 판이다. 올리는 때는 **읽는 쪽이 고쳐야 하는**
+ * 변화가 있을 때뿐이다 — 칸을 더하는 것은 올리지 않는다(명세 §43: additive 를 선호한다).
+ */
+export const CLI_PROTOCOL = 1

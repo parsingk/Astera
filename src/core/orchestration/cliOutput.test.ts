@@ -26,11 +26,18 @@ describe('exitCodeFor', () => {
 })
 
 describe('codeForStatus', () => {
-  it('서버가 이미 가려 답하는 넷을 옮긴다', () => {
+  it('서버가 이미 가려 답하는 것을 옮긴다', () => {
     expect(codeForStatus(400)).toBe('INVALID_ARGUMENTS')
     expect(codeForStatus(403)).toBe('PERMISSION_DENIED')
     expect(codeForStatus(404)).toBe('NOT_FOUND')
     expect(codeForStatus(409)).toBe('CONFLICT')
+  })
+
+  // 없는 id(404) 와 없는 명령(501) 은 스크립트에게 다른 사건이다 — 뒤의 것은 앱과
+  // CLI 의 버전이 갈렸다는 뜻이고, 고칠 사람도 고칠 곳도 다르다.
+  it('모르는 명령의 501 은 버전 불일치다', () => {
+    expect(codeForStatus(501)).toBe('VERSION_MISMATCH')
+    expect(exitCodeFor(codeForStatus(501))).toBe(9)
   })
 
   // 짐작이 스크립트의 분기를 조용히 틀리게 만든다

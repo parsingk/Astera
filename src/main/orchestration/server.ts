@@ -35,6 +35,7 @@ import {
   type RepairTarget,
   type Res
 } from '../../core/orchestration/state'
+import { CLI_PROTOCOL } from '../../core/orchestration/cliOutput'
 import { findProjectByPath } from '../../core/orchestration/projects'
 import { workerDoneFieldError } from '../../core/orchestration/sendArgs'
 import {
@@ -231,6 +232,12 @@ export interface OrchServerDeps {
   /** Run 의 프로젝트에 저장된 실행 구성 목록. 주입되지 않으면 빈 목록이다 —
    *  now?/log?/backup?/probeLimit? 와 같은 관례다. */
   listRunConfigs?(projectPath: string): Promise<{ id: string; name: string; type: string }[]>
+  /** 지금 도는 세션 수. **상태에 없는 값이라 주입된다** — 세션은 SessionManager 의 것이고
+   *  (core.sessions) 이 층은 OrchState 만 본다. `status` 하나가 쓴다. */
+  runningSessions?(): number
+  /** 앱의 버전. 주입되지 않으면 `version` 이 그 칸을 비워 답한다 — CLI 는 자기 버전을 빌드에서
+   *  받으므로, 앱 쪽 값이 없다고 명령이 실패할 이유는 없다. */
+  appVersion?(): string
   /** 검증을 시작한다. **동기다** — 검증은 몇 분이 걸리므로 기다리면 worker_done 응답이 그만큼
    *  늦어지고, 워커 세션이 그 자리에서 멈춘다. 결과는 배선이 나중에 setState 로 커밋한다.
    *  주입되지 않으면 검증이 없는 것으로 동작한다 — validateConfigId 가 걸린 Task 도 worker_done
@@ -940,8 +947,6 @@ export async function handleCommand(
     case 'run-merge': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
-      // 없는 Run 은 400 이다 — 이 파일에 notFound 는 없고 404 는 알 수 없는 명령의 자리다
-      // (run-worktree-set 과 같은 이유).
       const run = s.runs.find((r) => r.id === id)
       if (!run) return notFound(`unknown run: ${id}`)
       // **run-delete 의 병합과 같은 호출이다.** 대상은 `run.cwd`(프로젝트 폴더)이고 재료는
@@ -1972,6 +1977,32 @@ export async function handleCommand(
       if (str(args.status)) gates = gates.filter((g) => g.status === args.status)
       return okBody(gates)
     }
+    // **앱이 거기 있는가, 그리고 무엇이 돌고 있는가**(공개 CLI 설계 §5). 이 명령에 닿았다는 것이
+    // 이미 "앱이 있다" 의 답이다 — 없으면 CLI 가 접속 정보 파일에서 걸린다(HOST_NOT_RUNNING).
+    //
+    // 세는 것은 사람이 한 화면에서 보고 싶은 넷이다. 질문을 따로 세는 이유는 그것만이 **사람을
+    // 기다리는** 수이기 때문이다 — CI 가 분기하는 값이고(명세 §19), 그래서 `wait` 의 종료 코드
+    // 8 과 같은 것을 센다.
+    case 'status': {
+      const openGates = s.gates.filter((g) => g.status === 'open')
+      const waiting = new Set(openGates.map((g) => g.runId))
+      return okBody({
+        running: true,
+        pid: process.pid,
+        version: deps.appVersion?.() ?? null,
+        protocol: CLI_PROTOCOL,
+        projects: s.projects.length,
+        jobs: s.jobs.length,
+        // 도는 회차 — 끝나지 않은 것. outcomeOf 가 Task 에서 파생한다(view.ts), 저장된 값이 아니다.
+        runsRunning: s.runs.filter((r) => outcomeOf(s, r.id) === 'running').length,
+        runsWaitingForInput: waiting.size,
+        questionsOpen: openGates.length,
+        sessionsRunning: deps.runningSessions?.() ?? null
+      })
+    }
+    // CLI 는 자기 버전을 빌드에서 받아 알고 있다(§4) — 여기서 답하는 것은 앱 쪽 값이다.
+    case 'version':
+      return okBody({ version: deps.appVersion?.() ?? null, protocol: CLI_PROTOCOL })
     case 'accounts': {
       const agent = str(args.agent)
       return okBody(deps.listAccounts(agent === 'claude' || agent === 'codex' ? agent : undefined))
@@ -2009,7 +2040,10 @@ export async function handleCommand(
       return okBody({ reset: true })
     }
     default:
-      return { status: 404, body: { error: `unknown command: ${cmd}` } }
+      // **모르는 명령은 501 이지 404 가 아니다**(공개 CLI 설계 §8). 404 는 없는 id 의 자리다 — 둘을
+      // 같은 것으로 두면 스크립트가 \"그 Job 이 없다\" 와 \"이 앱은 그 명령을 모른다\" 를 가르지
+      // 못한다. 뒤의 것은 앱과 CLI 의 버전이 갈렸다는 뜻이고, 그것이 VERSION_MISMATCH(9) 의 뜻이다.
+      return { status: 501, body: { error: `unknown command: ${cmd}` } }
   }
 }
 

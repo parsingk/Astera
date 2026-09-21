@@ -72,9 +72,12 @@ describe('handleCommand — 기본', () => {
     expect(r.status).toBe(409)
     expect(JSON.stringify(r.body)).toContain('disabled')
   })
-  it('알 수 없는 명령은 404를 낸다', async () => {
+  // **없는 명령과 없는 id 는 다른 일이다**(공개 CLI 설계 §8). 501 은 CLI 쪽에서
+  // VERSION_MISMATCH(9) 로 떨어지고, 404 는 NOT_FOUND(4) 로 떨어진다.
+  it('알 수 없는 명령은 501 이다 — 없는 id 의 404 와 가른다', async () => {
     const r = await call(makeDeps(), 'no-such-command')
-    expect(r.status).toBe(404)
+    expect(r.status).toBe(501)
+    expect((await call(makeDeps(), 'jobs-get', { id: 'nope' })).status).toBe(404)
   })
   it('run-create가 Run을 만들고 id를 돌려준다', async () => {
     const deps = makeDeps()
@@ -4828,5 +4831,53 @@ describe('jobs list / jobs get — 공개 표면이 내는 것', () => {
   it('없는 id 는 404 다', async () => {
     const { deps } = await twoRuns()
     expect((await call(deps, 'jobs-get', { id: 'nope' })).status).toBe(404)
+  })
+})
+
+describe('version / status — 공개 표면의 두 읽기', () => {
+  it('version 은 앱 버전과 프로토콜을 낸다', async () => {
+    const deps = { ...makeDeps(), appVersion: () => '1.2.3' }
+    const r = await call(deps, 'version')
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ version: '1.2.3', protocol: 1 })
+  })
+
+  // 앱 쪽 값이 없다고 명령이 실패할 이유는 없다 — CLI 는 자기 버전을 빌드에서 받는다
+  it('앱 버전을 주입하지 않으면 그 칸만 비운다', async () => {
+    expect((await call(makeDeps(), 'version')).body).toEqual({ version: null, protocol: 1 })
+  })
+
+  it('status 는 지금 무엇이 있는지 센다', async () => {
+    const deps = { ...makeDeps(), runningSessions: () => 2, appVersion: () => '1.2.3' }
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    expect(r.status).toBe(200)
+    const s = await call(deps, 'status')
+    expect(s.status).toBe(200)
+    expect(s.body).toMatchObject({
+      running: true,
+      version: '1.2.3',
+      protocol: 1,
+      jobs: 1,
+      runsRunning: 1,
+      runsWaitingForInput: 0,
+      questionsOpen: 0,
+      sessionsRunning: 2
+    })
+  })
+
+  // **질문만 따로 센다.** 그것만이 사람을 기다리는 수이고, CI 가 분기하는 값이다(명세 §19).
+  it('열린 질문이 있으면 그 회차를 기다리는 것으로 센다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await call(deps, 'gate-create', { task: taskId, question: '어느 DB 를 쓸까요' })
+    const s = await call(deps, 'status')
+    expect(s.body).toMatchObject({ runsWaitingForInput: 1, questionsOpen: 1 })
+  })
+
+  it('세션 수를 주입하지 않으면 그 칸만 비운다', async () => {
+    expect((await call(makeDeps(), 'status')).body).toMatchObject({ sessionsRunning: null })
   })
 })

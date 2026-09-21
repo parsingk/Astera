@@ -152,6 +152,17 @@ The server already answers 400/403/404/409, so the mapping is mostly a table. **
 that matter for CI**: a script needs to tell "it finished badly" from "it is waiting for a person",
 and both are legitimate non-zero ends of `wait`.
 
+**9 comes from an unknown command, not from comparing numbers.** The server answers 501 for a command
+it does not have; the CLI maps that to 9. The two halves ship as one build, so a command this CLI
+knows and that app does not means the shim points at a different binary than the one running, which
+is the only mismatch worth a code of its own. 404 stays what the table says it is: an id that is not
+there. Apps released before this change answer 404 for an unknown command too, and those fall out as
+4 with a message that says which it was; the CLI does not read messages to pick a code.
+
+**`version` never fails.** It exists to say whether the two halves agree, so it answers 0 with what
+it knows whatever the app does: no app, an app too old for the command, even a stale token. `app` is
+null when the app did not say, and the next command reports the real problem with its own code.
+
 ## 9. Removed names
 
 `unknown command: run-list` becomes:

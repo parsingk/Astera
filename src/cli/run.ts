@@ -6,8 +6,11 @@
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { homedir } from 'node:os'
 import { parseArgs } from '../core/orchestration/cliArgs'
+import { infoPathFor } from '../core/orchestration/cliDiscovery'
 import {
+  CLI_PROTOCOL,
   codeForStatus,
   errEnvelope,
   exitCodeFor,
@@ -15,6 +18,10 @@ import {
   okEnvelope,
   type CliErrorCode
 } from '../core/orchestration/cliOutput'
+
+/** 빌드가 박아 넣은 이 프로그램의 버전(electron.vite.config.ts). 앱과 CLI 는 한 프로그램이므로
+ *  값이 하나이고, 그래서 둘이 갈라질 수가 없다. */
+const CLI_VERSION = typeof __ASTERA_VERSION__ === 'string' ? __ASTERA_VERSION__ : '0.0.0'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
 import { SCRIPT_TIMEOUT_MS } from '../core/agentBrowser/script'
 import {
@@ -264,11 +271,23 @@ export async function main(): Promise<void> {
     process.exit(0)
   }
 
-  const infoPath = process.env.ASTERA_INFO
+  // **세션 밖에서도 앱을 찾는다**(설계 §4). 세션 안이면 `ASTERA_INFO` 가 있고 그것이 언제나
+  // 이긴다 — 그 세션은 자기를 띄운 앱과 말해야 한다. 없으면 설치본의 것을 본다.
+  const infoPath = infoPathFor({
+    platform: process.platform,
+    env: process.env,
+    home: homedir()
+  })
   const sessionId = process.env.ASTERA_SESSION ?? ''
-  if (!infoPath) {
-    out(errorOutput('ASTERA_INFO is not set — is this session started by the app?', 'HOST_NOT_RUNNING'))
-    process.exit(exitCodeFor('HOST_NOT_RUNNING'))
+
+  // **`version` 은 앱이 없어도 답한다**(명세 §11). CLI 는 자기 버전을 빌드에서 받아 알고 있고,
+  // 앱 쪽 값은 붙으면 붙는 대로 싣는다 — 앱이 없다고 버전을 못 말할 이유가 없다.
+  if (parsed.cmd === 'version') {
+    const info = readInfo(infoPath)
+    if (!info.ok) {
+      out(okEnvelope('version', { cli: CLI_VERSION, app: null, protocol: CLI_PROTOCOL }))
+      process.exit(0)
+    }
   }
   // **stdin is read before the info file, not after.** A report's body arrives on stdin, and the
   // report has to be complete before either unreachable path below can write it down — the app
@@ -358,7 +377,25 @@ export async function main(): Promise<void> {
       process.exit(exitCodeFor('FAILED'))
     }
     if (res.status >= 200 && res.status < 300) {
-      out(okEnvelope(parsed.cmd, parsedBody))
+      // `version` 만 앱의 답에 이쪽 값을 더한다. 둘은 한 프로그램이라 같은 값이어야 하고, 다르면
+      // 그 자체가 사람이 봐야 할 사실이다 — 셔틀이 가리키는 바이너리가 갈렸다는 뜻이다.
+      const body =
+        parsed.cmd === 'version'
+          ? {
+              cli: CLI_VERSION,
+              app: (parsedBody as { version?: string | null } | null)?.version ?? null,
+              protocol: (parsedBody as { protocol?: number } | null)?.protocol ?? CLI_PROTOCOL
+            }
+          : parsedBody
+      out(okEnvelope(parsed.cmd, body))
+      process.exit(0)
+    }
+    // **`version` 은 앱이 답하지 못해도 답한다.** 이 명령이 있는 이유가 "둘이 갈렸는가" 를
+    // 말하는 것인데, 갈라서 앱이 이 명령을 모를 때 침못하면 쓸 데가 없다 — 이미 나간 앱은 404,
+    // 이후의 앱은 501 로 답한다. 토큰이 상해 403 이 와도 마찬가지다: 앱 쪽 칸만 비고 CLI 가 확실히
+    // 아는 것은 그대로 나간다. 무엇이 잘못됐는지는 다음 명령이 제 코드로 분명하게 말한다.
+    if (parsed.cmd === 'version') {
+      out(okEnvelope('version', { cli: CLI_VERSION, app: null, protocol: CLI_PROTOCOL }))
       process.exit(0)
     }
     const code = codeForStatus(res.status)
