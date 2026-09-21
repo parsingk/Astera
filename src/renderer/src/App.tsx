@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
+import type { Account, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo, InstallOutcome } from '../../core/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -68,6 +68,7 @@ import {
   shouldNotifyDownloaded,
   showChecking
 } from '../../core/update/checkFeedback'
+import { installOutcomeNotice } from '../../core/update/manualInstallNotice'
 import { applyEol, classifyExternalChange, detectEol, toLf, type Eol } from '../../core/files/edit'
 import { isSubPath, rebasePath } from '../../core/files/ops'
 import { parentDir } from '../../core/files/paths'
@@ -194,6 +195,15 @@ function UpdateIndicator({
     return (
       <button className="tb-update-btn" onClick={onInstall}>
         {t('update.tb.restartInstallVersion', { version: update.version ?? '' })}
+      </button>
+    )
+  // The same build, and the same button, but restarting will not install it — so the titlebar must
+  // not say it will. Without this branch 'manual' falls through to the error text below, which is
+  // both wrong and unactionable.
+  if (update.state === 'manual')
+    return (
+      <button className="tb-update-btn" onClick={onInstall}>
+        {t('update.tb.manualInstallVersion', { version: update.version ?? '' })}
       </button>
     )
   const text =
@@ -829,7 +839,38 @@ export default function App(): React.JSX.Element {
       })
       if (!ok) return
     }
-    await window.api.update.install()
+
+    // **The outcome is read now, because on macOS the app does not always leave.** Squirrel.Mac
+    // refuses a build whose signature it cannot match against the running app's, and on an
+    // ad-hoc-signed release that refusal is permanent (src/main/manualInstall.ts). Before this,
+    // main answered nothing and the renderer waited for a quit that never came: the button was
+    // indistinguishable from a dead one. A rejection is folded into the same shape rather than
+    // thrown away — an updater that failed to load never registers this handler at all.
+    let outcome: InstallOutcome
+    try {
+      outcome = await window.api.update.install()
+    } catch (e) {
+      outcome = { mode: 'failed', message: (e as Error)?.message ?? String(e) }
+    }
+    const notice = installOutcomeNotice(outcome)
+    if (!notice) return // the automatic path — the app is already on its way out
+
+    if (outcome.mode === 'failed') {
+      await confirmModal({
+        title: tRef.current('update.manual.title'),
+        body: tRef.current(notice.key, notice.params),
+        confirmLabel: tRef.current('common.close')
+      })
+      return
+    }
+    // Quitting is confirmed rather than done: the new app is sitting in Finder, and a window that
+    // vanished on its own would take the only explanation of what to do next with it.
+    const move = await confirmModal({
+      title: tRef.current('update.manual.title'),
+      body: tRef.current(notice.key, notice.params),
+      confirmLabel: tRef.current('update.manual.quit')
+    })
+    if (move) window.api.app.quit()
   }
   // When Ctrl+\ had no spare session and opened the new-session dialog instead, the split goes in this
   // direction once creation succeeds. Cancelling the dialog discards it, so no empty pane is left.
@@ -4498,6 +4539,19 @@ export default function App(): React.JSX.Element {
                               <button onClick={() => void installUpdate()}>
                                 {t('update.info.restartInstallVersion', { version: update.version ?? '' })}
                               </button>
+                            )}
+                            {/* 'manual' follows 'downloaded' on macOS when Squirrel turns the build
+                                down. The label has to change with it: offering "restart and install"
+                                for something restarting cannot install is what made this look broken
+                                — and the reason goes next to it, because a button that quietly does
+                                something else than it says is no better than one that does nothing. */}
+                            {update?.state === 'manual' && (
+                              <>
+                                <button onClick={() => void installUpdate()}>
+                                  {t('update.info.manualInstallVersion', { version: update.version ?? '' })}
+                                </button>
+                                <span className="update-note">{t('update.info.manualWhy')}</span>
+                              </>
                             )}
                             <button
                               disabled={updateChecking}

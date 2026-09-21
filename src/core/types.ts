@@ -1285,11 +1285,38 @@ export interface ClipboardApi {
 
 /** Auto-update progress (main to renderer, for the title bar) */
 export interface UpdateStatus {
-  state: 'init' | 'checking' | 'available' | 'uptodate' | 'downloading' | 'downloaded' | 'error'
+  /**
+   * `manual` is macOS-only and follows `downloaded`: the build arrived and passed its checksum, but
+   * Squirrel.Mac refused to stage it, so restarting cannot install it and the person has to drag the
+   * new app in themselves. See src/main/manualInstall.ts for why that refusal is permanent on an
+   * ad-hoc-signed release rather than something a retry fixes.
+   */
+  state:
+    | 'init'
+    | 'checking'
+    | 'available'
+    | 'uptodate'
+    | 'downloading'
+    | 'downloaded'
+    | 'manual'
+    | 'error'
   version?: string
   percent?: number
   message?: string
 }
+
+/**
+ * What pressing the install button actually did.
+ *
+ * `auto` means the app is quitting to let the installer run — there is nothing more to say, because
+ * the window is about to disappear. The other two exist because on macOS it may not: see
+ * src/main/manualInstall.ts.
+ */
+export type InstallOutcome =
+  | { mode: 'auto' }
+  /** The new app was unpacked and revealed in Finder; the person drags it into /Applications. */
+  | { mode: 'manual'; appPath: string }
+  | { mode: 'failed'; message: string }
 
 /**
  * An update campaign. A value is present only when this app falls inside the target version range
@@ -1316,7 +1343,8 @@ export interface UpdateApi {
   check(): Promise<void>
   /** autoDownload starts the download on its own — this is the manual fallback */
   download(): Promise<void>
-  install(): Promise<void>
+  /** Resolves with what actually happened — on macOS the app does not always quit. See InstallOutcome. */
+  install(): Promise<InstallOutcome>
 }
 
 /** The rolling coordinators' renderer surface. `forceRoll` is development only — packaged builds do not

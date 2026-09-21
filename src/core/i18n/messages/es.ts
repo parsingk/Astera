@@ -295,6 +295,7 @@ export const es: Catalog = {
   'settings.font.loadingList': 'leyendo las fuentes instaladas…',
   // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)
   'update.tb.restartInstallVersion': 'Reiniciar e instalar v{version}',
+  'update.tb.manualInstallVersion': 'Instalar v{version} a mano',
   'update.tb.checking': 'Comprobando actualizaciones…',
   'update.tb.available': 'Nueva versión {version} encontrada',
   'update.tb.downloading': 'Descargando {percent}%',
@@ -310,6 +311,14 @@ export const es: Catalog = {
   'update.info.available': 'Nueva versión {version} disponible',
   'update.info.downloadVersion': 'Descargar {version}',
   'update.info.checkFailed': 'Error al comprobar',
+  'update.info.manualInstallVersion': 'Instalar v{version} a mano',
+  'update.info.manualWhy': 'Esta versión no puede instalarse sola: hay que moverla a mano',
+  'update.manual.title': 'Instalar a mano',
+  'update.manual.done':
+    'La nueva versión está abierta en el Finder. Arrastra Astera a la carpeta Aplicaciones y vuelve a abrirla.\n\n{path}',
+  'update.manual.failed': 'No se pudo preparar el instalador: {message}',
+  'update.manual.noFile': 'No hay ningún instalador descargado',
+  'update.manual.quit': 'Salir y moverla',
   // App.tsx — the toast for a downloaded new version, and the session-kill confirmation when installing now
   'update.toast.available': 'Ya está disponible la versión v{version}',
   'update.toast.download': 'Descargar',

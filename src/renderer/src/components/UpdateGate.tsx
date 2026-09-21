@@ -23,7 +23,11 @@ export function UpdateGate({
   onRetry: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
-  const ready = update?.state === 'downloaded'
+  // 'manual' counts as ready here. It means the build is on disk and installable — just by hand
+  // rather than by restarting, which is what onInstall works out for itself. Leaving it out would
+  // strand a person the campaign has already blocked on "preparing…" with no button that does
+  // anything, which is the one screen in the app with no way around it.
+  const ready = update?.state === 'downloaded' || update?.state === 'manual'
   const downloading = update?.state === 'downloading'
   const available = update?.state === 'available'
   const version = update?.version

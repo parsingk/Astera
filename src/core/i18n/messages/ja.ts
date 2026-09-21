@@ -290,6 +290,7 @@ export const ja: Catalog = {
   'settings.font.loadingList': 'インストール済みフォントを読み込み中…',
   // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)
   'update.tb.restartInstallVersion': '再起動して v{version} をインストール',
+  'update.tb.manualInstallVersion': 'v{version} を手動でインストール',
   'update.tb.checking': 'アップデートを確認中…',
   'update.tb.available': '新しいバージョン {version} を検出',
   'update.tb.downloading': 'ダウンロード中 {percent}%',
@@ -305,6 +306,14 @@ export const ja: Catalog = {
   'update.info.available': '新しいバージョン {version} があります',
   'update.info.downloadVersion': '{version} をダウンロード',
   'update.info.checkFailed': '確認に失敗',
+  'update.info.manualInstallVersion': 'v{version} を手動でインストール',
+  'update.info.manualWhy': 'このビルドは自動インストールできないため、手動で移動してください',
+  'update.manual.title': '手動インストール',
+  'update.manual.done':
+    '新しいバージョンを Finder で開きました。Astera をアプリケーションフォルダにドラッグしてから、もう一度起動してください。\n\n{path}',
+  'update.manual.failed': 'インストーラーを準備できませんでした: {message}',
+  'update.manual.noFile': 'ダウンロード済みのインストーラーがありません',
+  'update.manual.quit': '終了して移動する',
   // App.tsx — the toast for a downloaded new version, and the session-kill confirmation when installing now
   'update.toast.available': '新しいバージョン v{version} が公開されました',
   'update.toast.download': 'ダウンロード',

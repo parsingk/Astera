@@ -1,4 +1,17 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, webContents, Notification } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  Tray,
+  Menu,
+  nativeImage,
+  ipcMain,
+  shell,
+  webContents,
+  Notification,
+  // Squirrel.Mac itself, not electron-updater's wrapper around it. Only listened to — see the
+  // staging block below for why its verdict has to be read separately from electron-updater's.
+  autoUpdater as squirrel
+} from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
@@ -31,7 +44,15 @@ import { createPendingPromptState } from './pendingPrompt'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
-import type { SessionInfo, RollStateEvent, UpdateCampaignInfo } from '../core/types'
+import {
+  NOTHING_STAGED,
+  extractForManualInstall,
+  installRoute,
+  reduceStaging,
+  type StagingEvent,
+  type StagingState
+} from './manualInstall'
+import type { SessionInfo, RollStateEvent, UpdateCampaignInfo, InstallOutcome } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 
 // The dev (unpackaged) app uses a different userData folder than the installed one. The installer
@@ -1168,7 +1189,36 @@ app.whenReady().then(async () => {
         const settleCheck = (): void => {
           userInitiatedCheck = false
         }
-        autoUpdater.on('checking-for-update', () => push({ state: 'checking' }))
+
+        // **Downloaded is not the same as installable on macOS.** electron-updater announces
+        // 'update-downloaded' before Squirrel.Mac has looked at the build at all, and on an
+        // ad-hoc-signed release Squirrel then refuses it every time — permanently, for the reason
+        // manualInstall.ts sets out. Left at that, the app offers "restart and install" for a build
+        // that cannot be installed, and pressing it does nothing whatsoever.
+        //
+        // So the native updater is watched directly for the verdict electron-updater does not pass
+        // on. It is the same object electron-updater drives internally, so this only listens; it
+        // never drives it. Guarded to darwin because Squirrel.Mac is the only updater with this
+        // split, and electron's autoUpdater has no meaning on Linux.
+        let staging: StagingState = NOTHING_STAGED
+        let downloaded: { version: string; file: string } | null = null
+        const advanceStaging = (e: StagingEvent): void => {
+          const before = staging
+          staging = reduceStaging(staging, e)
+          // Announced once, on the edge. The refusal arrives about a second after the download, so
+          // without this the person is looking at an install button that already cannot work.
+          if (staging.refused && !before.refused)
+            push({ state: 'manual', version: downloaded?.version, message: staging.refused })
+        }
+        if (process.platform === 'darwin') {
+          squirrel.on('update-downloaded', () => advanceStaging({ type: 'staged' }))
+          squirrel.on('error', (e) => advanceStaging({ type: 'error', message: e?.message ?? String(e) }))
+        }
+
+        autoUpdater.on('checking-for-update', () => {
+          advanceStaging({ type: 'check' }) // a newer version would replace whatever was judged before
+          push({ state: 'checking' })
+        })
         autoUpdater.on('update-available', (i) => {
           push({ state: 'available', version: i.version })
           settleCheck()
@@ -1180,7 +1230,14 @@ app.whenReady().then(async () => {
         autoUpdater.on('download-progress', (p) =>
           push({ state: 'downloading', percent: Math.round(p.percent) })
         )
-        autoUpdater.on('update-downloaded', (i) => push({ state: 'downloaded', version: i.version }))
+        autoUpdater.on('update-downloaded', (i) => {
+          // The file itself, straight from the event, rather than a guess at electron-updater's
+          // cache layout — it is what the manual path unpacks, and it has already been checked
+          // against the sha512 in the feed by the time this fires.
+          downloaded = { version: i.version, file: i.downloadedFile }
+          advanceStaging({ type: 'downloaded' })
+          push({ state: 'downloaded', version: i.version })
+        })
         autoUpdater.on('error', (e) => {
           const message = e?.message ?? String(e)
           if (userInitiatedCheck) push({ state: 'error', message })
@@ -1226,7 +1283,35 @@ app.whenReady().then(async () => {
             /* the state is delivered through the error event */
           }
         })
-        ipcMain.handle('update:install', async () => {
+        ipcMain.handle('update:install', async (): Promise<InstallOutcome> => {
+          // The macOS fallback, taken only once Squirrel has actually refused this build. Nothing is
+          // downloaded here: autoDownload already fetched and checksummed the zip, so this unpacks
+          // what is on disk, strips the quarantine attribute that would otherwise make Gatekeeper
+          // block the new app, and shows it to the person in Finder to drag into /Applications.
+          // The app does not quit itself on this path — the renderer asks first, then quits, so the
+          // Finder window is not the only thing left explaining what just happened.
+          if (installRoute(process.platform, staging) === 'manual') {
+            if (!downloaded) {
+              // Refused with nothing on disk to offer. Not reachable through the button (the button
+              // only appears after a download) but a handler must not lie about what it did.
+              flog('ERROR manual install requested with no downloaded file')
+              return { mode: 'failed', message: t(core!.lang, 'update.manual.noFile') }
+            }
+            try {
+              const appPath = await extractForManualInstall({
+                downloadedFile: downloaded.file,
+                version: downloaded.version
+              })
+              flog(`manual install prepared: ${appPath}`)
+              shell.showItemInFolder(appPath)
+              return { mode: 'manual', appPath }
+            } catch (e) {
+              const message = (e as Error)?.message ?? String(e)
+              flog(`ERROR manual install failed: ${message}`)
+              return { mode: 'failed', message }
+            }
+          }
+
           // **The Host is left running wherever it can be.** That is the point of having one: its
           // sessions carry on through the install and the new version takes them back. macOS and
           // Linux replace a running binary without complaint, so this was always true there.
@@ -1250,6 +1335,7 @@ app.whenReady().then(async () => {
             }
           }
           autoUpdater.quitAndInstall()
+          return { mode: 'auto' }
         })
 
         // Update campaign. The policy is fetched from the same address with the same token as the

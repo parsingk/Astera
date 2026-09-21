@@ -398,6 +398,7 @@ export const ko = {
   // and the language switch on it are gone — it is hardcoded English in App.tsx instead.
   // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)
   'update.tb.restartInstallVersion': '재시작하여 v{version} 설치',
+  'update.tb.manualInstallVersion': 'v{version} 직접 설치',
   'update.tb.checking': '업데이트 확인 중…',
   'update.tb.available': '새 버전 {version} 발견',
   'update.tb.downloading': '다운로드 중 {percent}%',
@@ -414,6 +415,17 @@ export const ko = {
   'update.info.available': '새 버전 {version} 있음',
   'update.info.downloadVersion': '{version} 다운로드',
   'update.info.checkFailed': '확인 실패',
+  // macOS 전용. Squirrel 이 받은 빌드를 거부해 재시작으로는 설치되지 않는 상태 — 왜 되돌릴 수
+  // 없는 거부인지는 src/main/manualInstall.ts 에 있다. 이유를 한 줄 붙이는 것이 핵심이다:
+  // 예전에는 이 실패가 로그에만 남아서, 사람 눈에는 버튼이 죽은 것과 구별되지 않았다.
+  'update.info.manualInstallVersion': 'v{version} 직접 설치',
+  'update.info.manualWhy': '이 빌드는 자동 설치가 되지 않아 직접 옮겨야 합니다',
+  'update.manual.title': '직접 설치',
+  'update.manual.done':
+    '새 버전을 Finder 에 열었습니다. Astera 를 응용 프로그램 폴더로 끌어다 놓고 다시 실행하세요.\n\n{path}',
+  'update.manual.failed': '설치 파일을 준비하지 못했습니다: {message}',
+  'update.manual.noFile': '내려받은 설치 파일이 없습니다',
+  'update.manual.quit': '종료하고 옮기기',
   // App.tsx — the toast for a downloaded new version, and the session-kill confirmation when installing now
   'update.toast.available': '새 버전 v{version}이 나왔습니다',
   'update.toast.download': '다운로드',
