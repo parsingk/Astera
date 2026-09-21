@@ -171,6 +171,72 @@ describe('startHostServer', () => {
     expect(h.logs.some((l) => l.includes('did not say hello'))).toBe(false)
   })
 
+  // **Measured on win32, 2026-09-21**: a pipe created the way this server creates one carries the
+  // default security descriptor, and that grants FILE_GENERIC_READ to Everyone and to ANONYMOUS
+  // LOGON — `D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;<user>)(A;;FR;;;WD)(A;;FR;;;AN)`. So any local user
+  // can open the address and be handed a socket. They cannot write, so they can never say hello, and
+  // what the Host broadcasts is every terminal's output. Nothing may go to a peer that has not
+  // completed the handshake.
+  it('does not broadcast to a peer that has not said hello', async () => {
+    // Well past the length of this test, so what keeps the peer from hearing anything is the
+    // broadcast rule and not the handshake deadline hanging up on it first.
+    const h = await server({ helloMs: 60_000 })
+    const got: unknown[] = []
+    const sock = net.connect(h.address)
+    const read = createLineReader({ onMessage: (v) => got.push(v), onBadLine: () => {}, onHandlerError: () => {} })
+    sock.setEncoding('utf8')
+    sock.on('data', read)
+    await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
+    // The client's own `connect` fires before the server has necessarily run its connection handler,
+    // and a broadcast sent in that gap goes out to an empty set — which makes this pass for a reason
+    // that has nothing to do with the rule under test. Wait for the server to have the peer.
+    for (let i = 0; i < 100 && h.s.clients() === 0; i++) await new Promise((r) => setTimeout(r, 10))
+    expect(h.s.clients()).toBe(1)
+    h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'what somebody else is typing' })
+    await new Promise((r) => setTimeout(r, 100))
+    sock.destroy()
+    expect(got).toEqual([])
+  })
+
+  // The other half of the rule above: filtering must not become "broadcast to nobody".
+  it('broadcasts to a peer that has said hello', async () => {
+    const h = await server()
+    const got: unknown[] = []
+    const sock = net.connect(h.address)
+    const read = createLineReader({ onMessage: (v) => got.push(v), onBadLine: () => {}, onHandlerError: () => {} })
+    sock.setEncoding('utf8')
+    sock.on('data', read)
+    await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
+    sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }))
+    // The handshake has to be answered before the broadcast goes out, or a pass here proves nothing.
+    await new Promise((r) => setTimeout(r, 100))
+    expect(got).toHaveLength(1)
+    h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'output' })
+    await new Promise((r) => setTimeout(r, 100))
+    sock.destroy()
+    expect(got[1]).toEqual({ t: 'pty-data', id: 'p1', data: 'output' })
+  })
+
+  // A client on another protocol is told so and nothing else. The same rule the address's version
+  // suffix exists for (core/host/protocol.ts): an app that cannot speak this protocol must not be
+  // handed this protocol's messages.
+  it('does not broadcast to a client that answered with the wrong protocol', async () => {
+    const h = await server({ helloMs: 60_000 })
+    const got: unknown[] = []
+    const sock = net.connect(h.address)
+    const read = createLineReader({ onMessage: (v) => got.push(v), onBadLine: () => {}, onHandlerError: () => {} })
+    sock.setEncoding('utf8')
+    sock.on('data', read)
+    await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
+    sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL + 1, app: '1.0.0' }))
+    await new Promise((r) => setTimeout(r, 100))
+    expect(got).toEqual([{ t: 'protocol-mismatch', protocol: HOST_PROTOCOL }])
+    h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'output' })
+    await new Promise((r) => setTimeout(r, 100))
+    sock.destroy()
+    expect(got).toHaveLength(1)
+  })
+
   it('a line that is not JSON is logged and the connection survives it', async () => {
     const h = await server()
     const got = await new Promise<unknown[]>((resolve) => {

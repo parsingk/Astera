@@ -15,8 +15,15 @@ export interface HostAddress {
   address: string
   /** posix only: the directory to create with mode 0700 *before* binding, so the socket is never
    *  briefly world-reachable. Locking the directory rather than the socket file is what removes that
-   *  window — a socket created and then chmoded has one. null on win32, where the pipe's own default
-   *  security descriptor already admits only this user and administrators. */
+   *  window — a socket created and then chmoded has one.
+   *
+   *  **null on win32, and that is not the same as "the pipe is private".** An earlier note here said
+   *  the default security descriptor admits only this user and administrators. Measured 2026-09-21,
+   *  it does not: `D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;<user>)(A;;FR;;;WD)(A;;FR;;;AN)` — Everyone and
+   *  ANONYMOUS LOGON both get FILE_GENERIC_READ. Node's `net` has no way to set a pipe's ACL, so
+   *  there is nothing to return here. What keeps another local user from hearing anything is that
+   *  read access alone cannot complete the handshake, and the Host broadcasts only to peers that
+   *  have (`greetedSockets` in server.ts). */
   dirToPrepare: string | null
 }
 

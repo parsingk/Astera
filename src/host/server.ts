@@ -89,6 +89,21 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   let live = 0
   let idleTimer: ReturnType<typeof setTimeout> | null = null
   const sockets = new Set<net.Socket>()
+  /**
+   * The peers that have completed the handshake. **Broadcasts go here, never to `sockets`.**
+   *
+   * On win32 the pipe carries the default security descriptor, and that is not what design §5
+   * assumed: measured 2026-09-21, it is
+   * `D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;<user>)(A;;FR;;;WD)(A;;FR;;;AN)` — FILE_GENERIC_READ for
+   * Everyone and for ANONYMOUS LOGON. Any local user can open the address and be handed a socket, and
+   * what this server broadcasts is every terminal's output. Node's `net` cannot set a pipe's ACL, so
+   * the operating system is not going to keep them out.
+   *
+   * What does keep them out is that read access is all they have: without FILE_WRITE_DATA they cannot
+   * send `hello`, so they never enter this set and never hear a thing. `sockets` stays the whole set
+   * because `close()` has to destroy every connection, greeted or not.
+   */
+  const greetedSockets = new Set<net.Socket>()
   // Set at the top of close(), before any socket is destroyed. A destroyed socket's 'close' event
   // arrives asynchronously, after close() has already returned — without this flag that deferred
   // event would re-arm the idle timer on a server that is already gone, and onIdle() would fire again.
@@ -144,6 +159,11 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
             return
           }
           deps.log.write(`client ${String(m.app)} connected`)
+          // Only here, past the protocol check: a client on another protocol has been told so and is
+          // owed nothing else. The address's version suffix exists to keep this protocol's messages
+          // away from an app that cannot read them (core/host/protocol.ts), and broadcasting to one
+          // that just announced a different number would walk around that.
+          greetedSockets.add(socket)
           send({ t: 'hello', protocol: HOST_PROTOCOL, host: deps.version, pid: process.pid, startedAt, features: [HOST_FEATURE_PROC] })
           return
         }
@@ -165,6 +185,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       // logged against it after it has already gone.
       greeted()
       sockets.delete(socket)
+      greetedSockets.delete(socket)
       live = Math.max(0, live - 1)
       if (live === 0) armIdle()
     }
@@ -206,7 +227,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     clients: () => live,
     broadcast: (m) => {
       const line = encodeLine(m)
-      for (const s of sockets) if (!s.destroyed) s.write(line)
+      for (const s of greetedSockets) if (!s.destroyed) s.write(line)
     },
     close: () =>
       new Promise<void>((resolve) => {
@@ -220,6 +241,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         // a close that hangs on it is worse than a connection dropped a moment early.
         for (const s of sockets) s.destroy()
         sockets.clear()
+        greetedSockets.clear()
         server.close(() => resolve())
       })
   }
