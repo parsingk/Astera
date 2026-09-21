@@ -7,6 +7,14 @@ import { randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from '../core/orchestration/cliArgs'
+import {
+  codeForStatus,
+  errEnvelope,
+  exitCodeFor,
+  messageFrom,
+  okEnvelope,
+  type CliErrorCode
+} from '../core/orchestration/cliOutput'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
 import { SCRIPT_TIMEOUT_MS } from '../core/agentBrowser/script'
 import {
@@ -18,15 +26,16 @@ import {
   undeliveredReportNotice
 } from '../core/orchestration/pendingReports'
 
-export function errorOutput(msg: string): string {
-  return JSON.stringify({ error: msg })
+/** 오류 하나를 봉투에 담아 그 종료 코드와 함께 돌려준다 — 부르는 쪽이 둘을 따로 고르지 않도록.
+ *  코드와 종료 코드의 표는 core/orchestration/cliOutput.ts 한 곳에만 있다(설계 §8). */
+export function errorOutput(msg: string, code: CliErrorCode = 'FAILED'): string {
+  return errEnvelope({ code, message: msg })
 }
 
-/** 0 if the server answered 2xx, otherwise 1. A timeout response from ask --wait is also 200 —
- *  this design's contract is that a timeout is information, not an error (section 4.7 of the
- *  orchestration guide). */
-export function exitCodeFor(status: number): number {
-  return status >= 200 && status < 300 ? 0 : 1
+/** 앱의 응답 상태에서 종료 코드로. 2xx 는 0 이다 — ask --wait 의 타임아웃 응답도 200 이고, 이
+ *  설계의 계약은 "타임아웃은 오류가 아니라 정보" 다(오케스트레이션 가이드 4.7절). */
+export function exitCodeForStatus(status: number): number {
+  return status >= 200 && status < 300 ? 0 : exitCodeFor(codeForStatus(status))
 }
 
 export function ensureTrailingNewline(text: string): string {
@@ -219,8 +228,8 @@ function out(text: string): void {
 export async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2))
   if ('error' in parsed) {
-    out(errorOutput(parsed.error))
-    process.exit(2)
+    out(errorOutput(parsed.error, 'INVALID_ARGUMENTS'))
+    process.exit(exitCodeFor('INVALID_ARGUMENTS'))
   }
 
   // help has to work without a server connection — handle it before reading ASTERA_INFO.
@@ -258,8 +267,8 @@ export async function main(): Promise<void> {
   const infoPath = process.env.ASTERA_INFO
   const sessionId = process.env.ASTERA_SESSION ?? ''
   if (!infoPath) {
-    out(errorOutput('ASTERA_INFO is not set — is this session started by the app?'))
-    process.exit(1)
+    out(errorOutput('ASTERA_INFO is not set — is this session started by the app?', 'HOST_NOT_RUNNING'))
+    process.exit(exitCodeFor('HOST_NOT_RUNNING'))
   }
   // **stdin is read before the info file, not after.** A report's body arrives on stdin, and the
   // report has to be complete before either unreachable path below can write it down — the app
@@ -285,8 +294,12 @@ export async function main(): Promise<void> {
     if (problem !== null) {
       // A report one flag short of being recordable is told which flag, not that the app is away:
       // the second is true and useless, and the agent could fix the first itself.
-      out(errorOutput(problem === 'not a report' ? reason : `${problem} (the app is not running)`))
-      process.exit(1)
+      //
+      // **닿지 못한 것은 HOST_NOT_RUNNING(3) 이다.** 스크립트가 "앱이 없다" 와 "명령이 실패했다" 를
+      // 가를 수 있어야 한다(설계 §8) — 인자가 모자란 보고만 그 갈래가 아니라 잘못된 인자다.
+      const code = problem === 'not a report' ? 'HOST_NOT_RUNNING' : 'INVALID_ARGUMENTS'
+      out(errorOutput(problem === 'not a report' ? reason : `${problem} (the app is not running)`, code))
+      process.exit(exitCodeFor(code))
     }
     const written = writePendingReport({
       infoPath,
@@ -297,8 +310,13 @@ export async function main(): Promise<void> {
       nonce: randomBytes(4).toString('hex')
     })
     if (!written.ok) {
-      out(errorOutput(`${reason} — and the report could not be recorded either: ${written.error}`))
-      process.exit(1)
+      out(
+        errorOutput(
+          `${reason} — and the report could not be recorded either: ${written.error}`,
+          'HOST_NOT_RUNNING'
+        )
+      )
+      process.exit(exitCodeFor('HOST_NOT_RUNNING'))
     }
     out(undeliveredReportNotice({ path: written.path }))
     process.exit(0)
@@ -329,9 +347,23 @@ export async function main(): Promise<void> {
       cwd: process.cwd()
     })
     const res = await fetch(url, { ...init, signal: ctl.signal })
-    const body = await res.text()
-    out(body)
-    process.exit(exitCodeFor(res.status))
+    const text = await res.text()
+    // 앱이 JSON 이 아닌 것을 돌려주는 경로는 없지만, 읽을 수 없는 답을 그대로 흘리면 계약이
+    // 깨진 채 스크립트에 닿는다 — 읽을 수 없다는 사실 자체를 봉투에 담는다.
+    let parsedBody: unknown
+    try {
+      parsedBody = JSON.parse(text)
+    } catch {
+      out(errorOutput(`the app answered something that is not JSON: ${text.slice(0, 200)}`))
+      process.exit(exitCodeFor('FAILED'))
+    }
+    if (res.status >= 200 && res.status < 300) {
+      out(okEnvelope(parsed.cmd, parsedBody))
+      process.exit(0)
+    }
+    const code = codeForStatus(res.status)
+    out(errorOutput(messageFrom(parsedBody, `the app answered ${res.status}`), code))
+    process.exit(exitCodeFor(code))
   } catch (e) {
     // **A timeout is not an unreachable server.** The deadline above is minutes long; reaching it
     // means the connection was made and something on the other side is stuck, so the report may

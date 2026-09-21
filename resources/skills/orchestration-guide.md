@@ -28,7 +28,7 @@ is off — in which case it has to be enabled in settings and a new session star
 In practice there is one Run — `task-create` and `check` use the most recent Run automatically unless
 told otherwise. `run-use --id <run>` only checks that the Run exists and returns success; it binds
 nothing to the session (the current implementation is a no-op). If you plan to keep several Runs going
-at once, pass `--run <run>` explicitly on every command (`task-create`, `task-list` and `check`
+at once, pass `--run <run>` explicitly on every command (`task-create`, `tasks list` and `check`
 accept it).
 
 **Passing `--run` on `task-create` is worth doing even with one Run of your own.** The default is
@@ -135,7 +135,7 @@ Task in a Run.
   repair reads `Checks failed: <name(s)> (<ran> of <total> ran)` (or `Checks failed (<ran> of <total>
   ran)` if none are named) — never the literal words `validation passed`/`validation failed`, so do not
   match on those on a convergence Run. That convergence-branch body carries only the exit code, not the
-  output tail — read the failed check's own tail off the Task's `checks` field (`task-list --json`)
+  output tail — read the failed check's own tail off the Task's `checks` field (`tasks list --json`)
   instead. Either way, that message is what wakes `check`, so a validated
   Task is **not** settled when `worker_done` comes back — wait for its validation message before you
   decide what to dispatch next. (A validation that cannot run at all announces itself differently again,
@@ -220,8 +220,8 @@ difference to the output.
 run-create --objective <s> [--cwd <p>]
            [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>]]
            [--json]
-run-list [--json]
-run-show --id <run> [--json]
+jobs list [--json]
+jobs get --id <run> [--json]
 run-use --id <run> [--json]        # confirms existence only; binds nothing (see section 1)
 run-configs [--json]               # that Run's project's run configurations, [{ id, name, type }]
 ```
@@ -239,7 +239,7 @@ repository, pass that repository's root and open your session there.
 
 `run-configs` returns the Run's project's run configurations as `[{ id, name, type }]` — the ids
 `task-create --validate` accepts (4.2). It always reads the **most recently created** Run and takes no
-`--run` flag, unlike `task-list` and `check` (section 1). It changes no state, and unlike most commands
+`--run` flag, unlike `tasks list` and `check` (section 1). It changes no state, and unlike most commands
 here it is **not** coordinator-only — a worker may call it to see what it will be judged by before it
 starts.
 
@@ -253,18 +253,18 @@ and several commands you would otherwise reach for are refused while that is hap
 
 ```
 task-create --title <s> --spec <s|-> --account <id,…> [--run <run>] [--deps <json_array>] [--validate <configId,…>] [--review] [--json]
-task-list [--run <run>] [--status <s>] [--ready] [--brief] [--json]
+tasks list [--run <run>] [--status <s>] [--ready] [--brief] [--json]
 task-update --id <tsk> --status <s> [--result <s|->] [--json]   # bypasses the transition table — see section 8
 task-update --id <tsk> --convergence off [--json]                # stops the app's own repairs on this Task — section 11
 dispatch-show --task <tsk> [--json]        # that Task's Dispatch history as an array (retries and the app's review Dispatch included)
 
 gate-create --task <tsk> --question <s|-> [--options <json_array>] [--json]
 gate-resolve --id <gat> --resolution <s> [--json]
-gate-list [--task <tsk>] [--status <s>] [--json]
+questions list [--task <tsk>] [--status <s>] [--json]
 ```
 
 - What the server blocks for workers is `task-create`, `task-update`, `gate-create`, and
-  `gate-resolve` (section 6, `COORDINATOR_ONLY`). `task-list`, `dispatch-show`, and `gate-list` are
+  `gate-resolve` (section 6, `COORDINATOR_ONLY`). `tasks list`, `dispatch-show`, and `questions list` are
   not rejected for workers, but a worker follows section 6 and only uses `send` and `ask`, so it never
   needs them.
 - The target flag for `task-update` is **`--id`**, not `--task` — passing `--task` yields
@@ -312,7 +312,7 @@ gate-list [--task <tsk>] [--status <s>] [--json]
   the first failure stops it** — later configurations in the list report `not-run`, not `failed`; they
   never got the chance to say either way.
 - **`--review` makes this Task's completion depend on another agent's judgement** — a value-less flag,
-  the same shape as `task-list --ready`. Omit it and nothing changes. With it, a successful report (and
+  the same shape as `tasks list --ready`. Omit it and nothing changes. With it, a successful report (and
   a passing validation, if `--validate` is also attached) moves the Task to `reviewing` instead of
   `completed` (section 2, which covers what happens next, when it is worth attaching, and what the
   reviewer sees).
@@ -353,7 +353,7 @@ accounts [--agent <claude|codex>] [--json]
   new worktree. Without it the request is rejected with `400 --name is required for --worktree new`.
   It is unused (ignored) with `--worktree current` or an explicit path.
 - **The placement rule.** Referred to elsewhere in this guide and defined here. A Run's concurrency
-  (`run-show --id <run>`, defaulting to 3) decides where its workers belong:
+  (`jobs get --id <run>`, defaulting to 3) decides where its workers belong:
   - **1 or less — sequential.** Omit `--worktree`. Every worker runs where that Run works, one after
     another.
   - **2 or more — parallel.** Pass `--worktree new --name <short-name>` so each worker gets its own
@@ -750,7 +750,7 @@ run-create --objective <s> --convergence [--max-fix-attempts <n>] [--max-review-
   "I configured it" when nothing was configured.
 - It cannot be turned on for a Run that already exists, and there is no `run-update` for it — decide at
   `run-create` time.
-- `run-show --id <run> --json` echoes the policy back as `.convergence` (absent means off) if you need
+- `jobs get --id <run> --json` echoes the policy back as `.convergence` (absent means off) if you need
   to check what a Run you did not create was given.
 
 **What ends a repair loop.** Two ways, and only one of them is yours to act on:
@@ -761,7 +761,7 @@ run-create --objective <s> --convergence [--max-fix-attempts <n>] [--max-review-
   order is unchanged). Nothing further needed.
 - **It exhausts its budget.** More than `--max-fix-attempts` consecutive check failures, or more than
   `--max-review-rounds` review rounds. This opens a Gate with `kind: "convergence-exhausted"` and
-  `options: ["retry-once", "mark-failed"]` on `gate-list`/`gate-create`'s response shape — **read the
+  `options: ["retry-once", "mark-failed"]` on `questions list`/`gate-create`'s response shape — **read the
   `kind` and `options` fields, not the Gate's `question` text**, which is written in whatever language
   the app is set to. **This is a person's decision, not yours.** `retry-once` opens exactly one more
   repair outside the normal budget; `mark-failed` moves the Task to `failed` the way `task-update`

@@ -302,6 +302,10 @@ export interface OrchServer {
 type Reply = { status: number; body: unknown }
 const okBody = (body: unknown): Reply => ({ status: 200, body })
 const bad = (msg: string): Reply => ({ status: 400, body: { error: msg } })
+/** 지목한 것이 없다. **400 과 가르는 이유는 CLI 다** — 스크립트가 "인자를 잘못 줬다"(exit 2)와
+ *  "그런 id 가 없다"(exit 4)를 구별할 수 있어야 한다(공개 CLI 설계 §8). 그 전에는 둘 다 400 이라
+ *  부르는 쪽이 문구를 읽어야 알 수 있었다. */
+const notFound = (msg: string): Reply => ({ status: 404, body: { error: msg } })
 const denied = (msg: string): Reply => ({ status: 403, body: { error: msg } })
 const conflict = (msg: string): Reply => ({ status: 409, body: { error: msg } })
 
@@ -315,7 +319,7 @@ const conflict = (msg: string): Reply => ({ status: 409, body: { error: msg } })
  *  unfiltered and so bypasses that guard — a single `inbox --limit 200` lets a worker read another
  *  worker's question, the body of the coordinator's reply (applyReply puts the answer straight into
  *  the body of a status message), and the spec and results of other Tasks. The remaining read
- *  commands (worker-show, worker-read, task-list, gate-list, accounts, run-list, run-show,
+ *  commands (worker-show, worker-read, tasks-list, questions-list, accounts, jobs-list, jobs-get,
  *  dispatch-show) do not carry another worker's private conversation, so they are not blocked. */
 const COORDINATOR_ONLY = new Set([
   'run-create',
@@ -494,7 +498,10 @@ export async function handleCommand(
   )
 
   const commit = async <T>(r: Res<T>): Promise<Reply> => {
-    if (!r.ok) return bad(r.error)
+    // **순수 층의 "unknown …" 도 404 다.** state.ts 는 지목한 것이 없을 때 언제나 이 접두사로
+    // 말한다(err(`unknown run: …`) 서른 곳). 문구로 가르는 것이 좋아서가 아니라, 갈래를 여기
+    // 한 곳에만 두기 위해서다 — 서른 곳의 반환 타입을 바꾸는 것은 이 구분이 살 값이 아니다.
+    if (!r.ok) return r.error.startsWith('unknown ') ? notFound(r.error) : bad(r.error)
     await deps.setState(r.state)
     return okBody(r.value)
   }
@@ -563,7 +570,7 @@ export async function handleCommand(
         if (coordArg.includes(','))
           return bad('--coordinator-account takes one account, not a list')
         if (!deps.listAccounts().some((k) => k.id === coordArg))
-          return bad(`unknown account: ${coordArg}`)
+          return notFound(`unknown account: ${coordArg}`)
         coordinatorAccountId = coordArg
       }
       // 예약. **규칙만 받는다**(command 없는 반쪽) — Job 에는 타이핑할 명령이 없다(Run.schedule).
@@ -651,8 +658,10 @@ export async function handleCommand(
       if (args.auto === true || schedule !== undefined) return commit(created)
       return commit(startJobRun(created.state, created.value.id, now))
     }
-    case 'run-list':
-      return okBody(s.runs)
+    // **계획을 낸다, 회차가 아니라.** 공개 표면의 `jobs list` 가 뜻하는 것이 계획이고, 회차는
+    // `runs list` 의 것이다(공개 CLI 설계 §5). 옛 `run-list` 는 한 배열밖에 없어서 둘을 함께 냈다.
+    case 'jobs-list':
+      return okBody(s.jobs)
     // 코디네이터가 --validate 에 넣을 id 를 알아야 한다. 상태를 바꾸지 않으므로 COORDINATOR_ONLY
     // 가 아니다 — 워커도 자기가 무엇으로 검증될지 볼 수 있어야 한다.
     case 'run-configs': {
@@ -662,10 +671,19 @@ export async function handleCommand(
       if (!job) return bad(`no run exists`)
       return okBody(await deps.listRunConfigs(job.cwd))
     }
-    case 'run-show': {
+    // **id 는 계획일 수도 회차일 수도 있다.** 사람은 목록에서 본 Job 의 id 를 주고, 코디네이터는
+    // 자기가 받은 회차의 id 를 준다. 어느 쪽이든 돌려주는 것은 계획이다 — 코디네이터가 여기서
+    // 읽는 것(동시 실행 한도, 수렴 정책)이 전부 계획의 칸이기 때문이다(가이드 4·8절).
+    //
+    // 회차를 지목했으면 그 회차를, 아니면 가장 최근 회차를 `run` 에 접어 싣는다. 두 단계를 평소에는
+    // 안 보이게 한다는 설계 §5 의 접기가 이 자리다.
+    case 'jobs-get': {
       const id = str(args.id)
-      const run = s.runs.find((r) => r.id === id)
-      return run ? okBody(run) : bad(`unknown run: ${String(id)}`)
+      const named = s.runs.find((r) => r.id === id)
+      const job = s.jobs.find((j) => j.id === id) ?? (named && jobOf(s, named))
+      if (!job) return notFound(`unknown job or run: ${String(id)}`)
+      const run = named ?? s.runs.filter((r) => r.jobId === job.id).sort((a, b) => a.ordinal - b.ordinal).at(-1)
+      return okBody({ ...job, ...(run ? { run } : {}) })
     }
     // 사람이 사이드바에서 Run 을 물러나게 한다. **되돌릴 수 없다.**
     //
@@ -686,7 +704,7 @@ export async function handleCommand(
       // 회차 하나를 지워도 다음 회차가 베낄 것이 남는다.
       const job = s.jobs.find((j) => j.id === id)
       const run = s.runs.find((r) => r.id === id)
-      if (!job && !run) return bad(`unknown job or run: ${String(id)}`)
+      if (!job && !run) return notFound(`unknown job or run: ${String(id)}`)
       const doomed = job
         ? new Set(s.runs.filter((r) => r.jobId === job.id).map((r) => r.id))
         : new Set([id])
@@ -777,7 +795,7 @@ export async function handleCommand(
       if (!id) return bad('--run is required')
       // **id 는 Job 이다.** '실행' 은 계획을 푸는 일이고, 회차는 그 결과로 생긴다.
       const job = s.jobs.find((j) => j.id === id)
-      if (!job) return bad(`unknown job: ${id}`)
+      if (!job) return notFound(`unknown job: ${id}`)
       const released = releaseJob(s, id)
       if (!released.ok) return bad(released.error)
       // 예약 Job 은 여기서 회차를 만들지 않는다 — 발화가 만든다. 게이트만 걷힌다.
@@ -870,7 +888,7 @@ export async function handleCommand(
       const id = str(args.run)
       if (!id) return bad('--run is required')
       const target = s.jobs.find((j) => j.id === id)
-      if (!target) return bad(`unknown job: ${id}`)
+      if (!target) return notFound(`unknown job: ${id}`)
       // 일시 중지는 예약에만 있다. 보통 Job 에는 멈출 발화가 없고, 그 Job 의 워커를 멈추는 것은
       // worker-stop 이 Dispatch 하나씩 하는 일이다 — 같은 일을 두 이름으로 두지 않는다.
       if (!target.schedule) return conflict(`job ${id} is not scheduled`)
@@ -925,7 +943,7 @@ export async function handleCommand(
       // 없는 Run 은 400 이다 — 이 파일에 notFound 는 없고 404 는 알 수 없는 명령의 자리다
       // (run-worktree-set 과 같은 이유).
       const run = s.runs.find((r) => r.id === id)
-      if (!run) return bad(`unknown run: ${id}`)
+      if (!run) return notFound(`unknown run: ${id}`)
       // **run-delete 의 병합과 같은 호출이다.** 대상은 `run.cwd`(프로젝트 폴더)이고 재료는
       // runWorktrees — Run 워크트리와 아직 합쳐지지 않은 Task 워크트리들이 함께 온다. Task 가
       // 하나뿐인 병렬 Run(Run 워크트리는 비고 그 Task 워크트리에만 일이 있다)까지 이 한 호출로
@@ -1019,7 +1037,7 @@ export async function handleCommand(
         )
       )
     }
-    case 'task-list': {
+    case 'tasks-list': {
       let tasks = s.tasks
       if (str(args.run)) tasks = tasks.filter((t) => t.runId === args.run)
       if (str(args.status)) tasks = tasks.filter((t) => t.status === args.status)
@@ -1048,7 +1066,7 @@ export async function handleCommand(
         if (str(args.status))
           return bad('--convergence and --status cannot be combined — pass them as two calls')
         const target = s.tasks.find((t) => t.id === id)
-        if (!target) return bad(`unknown task: ${id}`)
+        if (!target) return notFound(`unknown task: ${id}`)
         await deps.setState({
           ...s,
           tasks: s.tasks.map((t) => (t.id === id ? { ...t, convergenceOff: true as const, updatedAt: now } : t))
@@ -1060,7 +1078,7 @@ export async function handleCommand(
       if (!isTaskStatus(status))
         return bad(`--status must be one of ${TASK_STATUSES.join('|')}`)
       const task = s.tasks.find((t) => t.id === id)
-      if (!task) return bad(`unknown task: ${id}`)
+      if (!task) return notFound(`unknown task: ${id}`)
       // Deliberately bypasses the transition table (canTransition): task-update --status is allowed
       // to bypass that table because the orchestrator needs a way to correct things by hand — but
       // the bypass is written to the log. state.ts (moveTask/canTransition) owns the normal
@@ -1183,7 +1201,7 @@ export async function handleCommand(
       // session came up but openDispatch rejected it and there is no way to clean up" — is now
       // structurally impossible: if openDispatch is rejected the coordinator is never called at all.
       const task = s.tasks.find((t) => t.id === taskId)
-      if (!task) return bad(`unknown task: ${taskId}`)
+      if (!task) return notFound(`unknown task: ${taskId}`)
       if (task.status === 'blocked') return bad('task is blocked by an open gate')
       // openDispatch(state.ts) 도 이것을 거절한다 — 여기서 앞질러 보는 이유는 이 함수의 다른 앞선
       // 검사들과 같다: 코디네이터에게 더 뚜렷한 에러를 준다("전이 거절" 문구가 아니라). validating·
@@ -1198,7 +1216,7 @@ export async function handleCommand(
 
       const run = s.runs.find((r) => r.id === task.runId)
       const runJob = run && jobOf(s, run)
-      if (!run) return bad(`unknown run for task: ${taskId}`)
+      if (!run) return notFound(`unknown run for task: ${taskId}`)
       // **템플릿은 자신의 Task 를 배치하지 않는다.** slotsToFill 이 이미 같은 판단을 하지만 그쪽은
       // 자동 배치 경로뿐이고, 이 명령은 사람과 코디네이터가 직접 부르는 두 번째 문이다. 여기를
       // 열어 두면 템플릿의 Task 가 completed 로 끝나고, 그러면 TTL 정리의 조건(`own.length > 0 &&
@@ -1294,7 +1312,7 @@ export async function handleCommand(
       let terminalAccountId: string | undefined
       if (terminal) {
         const prev = s.dispatches.find((d) => d.sessionId === terminal)
-        if (!prev) return bad(`unknown terminal: ${terminal}`)
+        if (!prev) return notFound(`unknown terminal: ${terminal}`)
         terminalCwd = prev.cwd
         terminalProvider = prev.provider
         terminalAccountId = prev.accountId
@@ -1384,7 +1402,7 @@ export async function handleCommand(
     case 'worker-show': {
       const id = str(args.dispatch)
       const d = s.dispatches.find((x) => x.id === id)
-      return d ? okBody(d) : bad(`unknown dispatch: ${String(id)}`)
+      return d ? okBody(d) : notFound(`unknown dispatch: ${String(id)}`)
     }
     case 'worker-read': {
       const id = str(args.dispatch)
@@ -1428,7 +1446,7 @@ export async function handleCommand(
     case 'worker-retain': {
       const id = str(args.dispatch)
       const d = s.dispatches.find((x) => x.id === id)
-      if (!d) return bad(`unknown dispatch: ${String(id)}`)
+      if (!d) return notFound(`unknown dispatch: ${String(id)}`)
       await deps.setState({
         ...s,
         dispatches: s.dispatches.map((x) => (x.id === d.id ? { ...x, retained: true } : x))
@@ -1440,7 +1458,7 @@ export async function handleCommand(
       // the orchestrator looks at worker-show and decides for itself.
       const id = str(args.dispatch)
       const d = s.dispatches.find((x) => x.id === id)
-      if (!d) return bad(`unknown dispatch: ${String(id)}`)
+      if (!d) return notFound(`unknown dispatch: ${String(id)}`)
       // A retained dispatch is rejected with 409. releaseWorker sees retained and skips killSession
       // (coordinator.releaseWorker), but this used to set workerState:'stopped' plus endedAt without
       // looking at that outcome — the session stays alive and keeps working while the orchestrator
@@ -1469,7 +1487,7 @@ export async function handleCommand(
       // It accepts that the resources may still be live and only gives up tracking them.
       const id = str(args.dispatch)
       const d = s.dispatches.find((x) => x.id === id)
-      if (!d) return bad(`unknown dispatch: ${String(id)}`)
+      if (!d) return notFound(`unknown dispatch: ${String(id)}`)
       await deps.setState({
         ...s,
         dispatches: s.dispatches.map((x) =>
@@ -1496,7 +1514,7 @@ export async function handleCommand(
       // is here so the next reader does not carry the old "the result is the same" any further
       // than it now reaches.
       const id = str(args.id)
-      if (!s.runs.some((r) => r.id === id)) return bad(`unknown run: ${String(id)}`)
+      if (!s.runs.some((r) => r.id === id)) return notFound(`unknown run: ${String(id)}`)
       return okBody({ bound: id })
     }
     case 'send': {
@@ -1813,7 +1831,7 @@ export async function handleCommand(
         // myDispatchIds boundary as the send and ask creation paths — otherwise a worker could peek
         // at the coordinator's answer to another worker's question).
         const q = s.messages.find((m) => m.id === questionId)
-        if (!q) return bad(`unknown question: ${questionId}`)
+        if (!q) return notFound(`unknown question: ${questionId}`)
         if (q.type !== 'question') return bad(`not a question: ${questionId}`)
         if (isWorker && !myDispatchIds.has(q.dispatchId ?? ''))
           return denied('cannot resume a question for another dispatch')
@@ -1948,7 +1966,7 @@ export async function handleCommand(
         return okBody({ ...r.value, retryOnceFailed: retried.error })
       return okBody(r.value)
     }
-    case 'gate-list': {
+    case 'questions-list': {
       let gates = s.gates
       if (str(args.task)) gates = gates.filter((g) => g.taskId === args.task)
       if (str(args.status)) gates = gates.filter((g) => g.status === args.status)

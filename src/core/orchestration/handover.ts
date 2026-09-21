@@ -25,7 +25,7 @@
  *  비어 있다. 두 갈래 문구를 두면 어느 쪽이 최신인지 갈리고, "지금은 처음인가" 를 앱이 잘못
  *  판단하는 순간 코디네이터가 틀린 전제로 시작한다.
  *
- *  **3·4 를 문구로 주는 이유.** 값은 `run-show` 로 읽을 수 있었지만 **지키라고 말한 적이 없었고**,
+ *  **3·4 를 문구로 주는 이유.** 값은 `jobs get` 으로 읽을 수 있었지만 **지키라고 말한 적이 없었고**,
  *  배치 규칙은 가이드가 이름만 부르고 정의를 어디에도 두지 않았다. 읽을 수 있는 것과 알려 준 것은
  *  다르다. 서버도 둘을 거절하지만(worker-start), 거절만 있으면 코디네이터가 시행착오로 규칙을
  *  알아내며 턴을 쓴다 — 문구가 1차이고 거절이 2차다.
@@ -80,14 +80,14 @@ export function buildHandoverPrompt(a: {
     'TAKE STOCK BEFORE YOU START ANYTHING',
     'You may be joining this Run part-way through: a person can restart a coordinator from the Jobs',
     'list, and the one before you may have left workers running. Four questions, in this order:',
-    `- \`astera task-list --run ${a.runId} --json\` — what is completed, ready, dispatched or blocked.`,
+    `- \`astera tasks list --run ${a.runId} --json\` — what is completed, ready, dispatched or blocked.`,
     '- For every Task that says `dispatched`: `astera dispatch-show --task <tsk> --json`. An open',
     '  dispatch means a worker outlived your predecessor and is still working — leave it alone and',
     '  wait for its report. A closed one with no outcome means that attempt died; that Task needs a',
     '  new worker (`worker-start --retry-of <dsp>`), not a duplicate.',
     '- `astera check --json` — mail already waiting. **Answer it before starting new work**: a worker',
     '  that asked a question is stopped until you reply, and no amount of new dispatching moves it.',
-    '- `astera gate-list --status open --json` — what a person still owes you. Those Tasks are blocked',
+    '- `astera questions list --status open --json` — what a person still owes you. Those Tasks are blocked',
     '  and will not move until the answer arrives; do not try to start them.',
     'On a Run that has only just been created all four come back nearly empty, and that is the answer.',
     '',

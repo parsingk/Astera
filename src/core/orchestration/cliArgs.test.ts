@@ -122,3 +122,60 @@ describe('반복되는 플래그', () => {
     expect(parseArgs(['browser', 'fly'])).toEqual({ error: 'unknown browser subcommand: fly (expected js or help)' })
   })
 })
+
+describe('공개 표면 — 두 낱말 명령', () => {
+  it('명사와 동사를 한 토큰으로 잇는다', () => {
+    expect(parseArgs(['jobs', 'list'])).toMatchObject({ cmd: 'jobs-list' })
+    expect(parseArgs(['jobs', 'get', '--id', 'job_1'])).toMatchObject({
+      cmd: 'jobs-get',
+      args: { id: 'job_1' }
+    })
+  })
+
+  it('동사가 없으면 무엇을 칠 수 있는지 말한다', () => {
+    expect(parseArgs(['jobs'])).toEqual({ error: 'jobs needs one of: list, get' })
+  })
+
+  it('모르는 동사는 거절하고 목록을 보여 준다', () => {
+    expect(parseArgs(['jobs', 'fly'])).toEqual({
+      error: 'unknown jobs subcommand: fly (expected list, get)'
+    })
+  })
+
+  // 플래그가 동사 자리에 오면 동사를 안 준 것이다 — `--json` 을 동사로 읽으면 엉뚱한 오류가 난다
+  it('플래그를 동사로 읽지 않는다', () => {
+    expect(parseArgs(['tasks', '--json'])).toEqual({
+      error: 'tasks needs one of: list'
+    })
+  })
+
+  // 코디네이터 전용 명령은 한 낱말 그대로다 — 개명이 가이드 재작성만 사고 아무것도 주지 않는다
+  it('한 낱말 명령은 그대로 지나간다', () => {
+    expect(parseArgs(['worker-start', '--task', 'tsk_1'])).toMatchObject({ cmd: 'worker-start' })
+    expect(parseArgs(['task-create', '--spec', 's'])).toMatchObject({ cmd: 'task-create' })
+  })
+})
+
+describe('없어진 이름', () => {
+  // **별칭이 아니다 — 명령은 돌지 않는다.** 대신 무엇을 치면 되는지 말한다. 옛 이름을 쓰던 것은
+  // 매번 astera help 를 읽고 시작하는 에이전트이고, 그쪽은 이 한 줄로 스스로 고친다.
+  it('대신 칠 이름을 말한다', () => {
+    expect(parseArgs(['run-list'])).toEqual({
+      error: 'run-list was renamed to `jobs list` (astera help)'
+    })
+    expect(parseArgs(['gate-list', '--status', 'open'])).toEqual({
+      error: 'gate-list was renamed to `questions list` (astera help)'
+    })
+  })
+
+  it('옛 이름은 실행되지 않는다 — 인자를 붙여도 같다', () => {
+    const r = parseArgs(['run-show', '--id', 'run_1'])
+    expect('error' in r).toBe(true)
+  })
+
+  // 아직 공개 동사가 없는 명령은 표에 없다 — 안내가 404 를 가리키면 오타와 구별되지 않는다
+  it('공개 이름이 아직 없는 명령은 그대로 돈다', () => {
+    expect(parseArgs(['run-start', '--run', 'run_1'])).toMatchObject({ cmd: 'run-start' })
+    expect(parseArgs(['gate-resolve', '--id', 'g1'])).toMatchObject({ cmd: 'gate-resolve' })
+  })
+})

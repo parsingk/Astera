@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { exitCodeFor } from '../core/orchestration/cliOutput'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
   errorOutput,
-  exitCodeFor,
+  exitCodeForStatus,
   ensureTrailingNewline,
   applyStdin,
   clientTimeoutMs,
@@ -23,24 +24,38 @@ import {
 } from '../core/orchestration/pendingReports'
 
 describe('errorOutput', () => {
-  it('메시지를 {error} JSON 한 줄로 감싼다', () => {
-    expect(JSON.parse(errorOutput('boom'))).toEqual({ error: 'boom' })
+  // 스크립트가 기대는 것은 봉투다(설계 §7) — 코드는 기계의 것이고 문구는 사람의 것이다.
+  it('오류를 봉투 한 줄로 감싼다', () => {
+    expect(JSON.parse(errorOutput('boom'))).toEqual({
+      ok: false,
+      error: { code: 'FAILED', message: 'boom', details: {} }
+    })
+  })
+  it('코드를 주면 그것이 실린다', () => {
+    expect(JSON.parse(errorOutput('nope', 'NOT_FOUND')).error.code).toBe('NOT_FOUND')
   })
 })
 
-describe('exitCodeFor', () => {
+describe('exitCodeForStatus', () => {
   it('2xx는 0이다', () => {
-    expect(exitCodeFor(200)).toBe(0)
-    expect(exitCodeFor(299)).toBe(0)
+    expect(exitCodeForStatus(200)).toBe(0)
+    expect(exitCodeForStatus(299)).toBe(0)
   })
-  it('2xx가 아니면 1이다', () => {
-    expect(exitCodeFor(400)).toBe(1)
-    expect(exitCodeFor(500)).toBe(1)
-    expect(exitCodeFor(199)).toBe(1)
+  // 스크립트가 분기할 수 있어야 한다 — 인자를 잘못 준 것과 그런 id 가 없는 것은 다른 일이다
+  it('상태마다 다른 종료 코드를 준다 (설계 §8)', () => {
+    expect(exitCodeForStatus(400)).toBe(2)
+    expect(exitCodeForStatus(403)).toBe(5)
+    expect(exitCodeForStatus(404)).toBe(4)
+    expect(exitCodeForStatus(409)).toBe(6)
+  })
+  // 모르는 상태를 그럴듯한 코드로 넘겨짚지 않는다 — 짐작이 스크립트의 분기를 조용히 틀리게 한다
+  it('모르는 상태는 일반 실패다', () => {
+    expect(exitCodeForStatus(500)).toBe(1)
+    expect(exitCodeForStatus(199)).toBe(1)
   })
   it('ask의 타임아웃 응답은 200이므로 0이다 (타임아웃은 오류가 아니라 정보)', () => {
     // 서버는 ask --wait 타임아웃을 {answered:false, timedOut:true} 본문 + 200으로 응답한다.
-    expect(exitCodeFor(200)).toBe(0)
+    expect(exitCodeForStatus(200)).toBe(0)
   })
 })
 
@@ -319,5 +334,15 @@ describe('writePendingReport — the report a closed app could not take', () => 
     const r = writePendingReport({ infoPath, ...report })
     expect(r.ok).toBe(false)
     expect((r as { ok: false; error: string }).error).toContain(pendingReportsDirFrom(infoPath))
+  })
+})
+
+describe('닿지 못했을 때의 코드', () => {
+  // 스크립트가 "앱이 없다"(3)와 "명령이 실패했다"(1)를 가를 수 있어야 한다. 실제 CLI 로 돌려
+  // 보고서야 나왔다 — 그 전에는 둘 다 1 이었다.
+  it('앱을 찾지 못한 것은 HOST_NOT_RUNNING 이고 종료 코드 3 이다', () => {
+    const e = JSON.parse(errorOutput('cannot read …', 'HOST_NOT_RUNNING'))
+    expect(e.error.code).toBe('HOST_NOT_RUNNING')
+    expect(exitCodeFor('HOST_NOT_RUNNING')).toBe(3)
   })
 })

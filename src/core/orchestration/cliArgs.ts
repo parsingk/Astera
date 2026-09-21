@@ -23,6 +23,42 @@ const REPEATABLE = new Set(['check'])
 
 const BROWSER_SUBCOMMANDS = new Set(['js', 'help'])
 
+/**
+ * 두 낱말로 치는 명령들 — `astera jobs list`. **공개 표면은 전부 이 모양이다**(공개 CLI 설계 §5).
+ *
+ * 서버가 보는 것은 여전히 한 토큰(`jobs-list`)이다. 사람이 읽는 모양과 전선 위의 이름을 가른
+ * 것은 `browser js` 가 이미 하던 일이고, 그 관례를 넓혔을 뿐이다.
+ *
+ * 코디네이터 전용 명령(worker-start, send, check, ask, gate-create, task-create…)은 여기 없다. 앱
+ * 밖에서 치는 사람이 없으므로 개명이 가이드 재작성만 사고 아무것도 주지 않는다.
+ *
+ * **표면은 자란다.** 여기 적힌 것은 지금 앱이 답할 수 있는 것뿐이다 — `projects`·`runs` 와 쓰기
+ * 동사(`jobs run`, `questions answer`)는 그것을 구현하는 단계에서 들어온다. 없는 동사를 미리
+ * 적어 두면 사람이 친 것이 404 로 떨어지고, 그것은 오타와 구별되지 않는다.
+ */
+const NOUNS: Record<string, readonly string[]> = {
+  jobs: ['list', 'get'],
+  tasks: ['list'],
+  questions: ['list']
+}
+
+/**
+ * 없어진 이름과 그것을 대신하는 이름.
+ *
+ * **아직 없는 이름을 가리키지 않는다.** 여기 적을 수 있는 것은 새 이름이 실제로 도는 것뿐이다 —
+ * "jobs run 으로 바뀌었다" 고 말해 놓고 그것이 404 면 안내가 아니라 거짓말이다.
+ *
+ * **별칭이 아니다 — 명령은 돌지 않는다.** 대신 무엇을 치면 되는지 말한다. 옛 이름을 쓰던 것은
+ * 사람이 아니라 매번 `astera help` 를 읽고 시작하는 에이전트이고(handover.ts), 그쪽은 이 한 줄로
+ * 스스로 고친다. 별칭을 두면 가이드를 끝까지 읽는 에이전트의 머릿속에 어휘가 둘 남는다.
+ */
+export const RENAMED: Record<string, string> = {
+  'run-list': 'jobs list',
+  'run-show': 'jobs get',
+  'task-list': 'tasks list',
+  'gate-list': 'questions list'
+}
+
 export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   if (argv.length === 0) return { error: 'a command is required (try: help)' }
   let cmd = argv[0]
@@ -31,11 +67,22 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   // into `browser-js` / `browser-help` so the server and the tests see one token, like every other
   // command. The rest of the line parses as flags from the third word on.
   let first = 1
+  const renamed = RENAMED[cmd]
+  if (renamed !== undefined) return { error: `${cmd} was renamed to \`${renamed}\` (astera help)` }
   if (cmd === 'browser') {
     const sub = argv[1]
     if (sub === undefined || sub.startsWith('-')) return { error: 'browser needs a subcommand: js or help' }
     if (!BROWSER_SUBCOMMANDS.has(sub)) return { error: `unknown browser subcommand: ${sub} (expected js or help)` }
     cmd = `browser-${sub}`
+    first = 2
+  } else if (NOUNS[cmd] !== undefined) {
+    const verbs = NOUNS[cmd]
+    const sub = argv[1]
+    if (sub === undefined || sub.startsWith('-'))
+      return { error: `${cmd} needs one of: ${verbs.join(', ')}` }
+    if (!verbs.includes(sub))
+      return { error: `unknown ${cmd} subcommand: ${sub} (expected ${verbs.join(', ')})` }
+    cmd = `${cmd}-${sub}`
     first = 2
   }
 

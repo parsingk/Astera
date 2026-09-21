@@ -240,7 +240,7 @@ describe('handleCommand — 역할 인가', () => {
   })
   it('오케스트레이터 세션은 모든 명령을 부를 수 있다', async () => {
     const deps = await seedWorker()
-    expect((await call(deps, 'task-list', {})).status).toBe(200)
+    expect((await call(deps, 'tasks-list', {})).status).toBe(200)
     expect((await call(deps, 'accounts', {})).status).toBe(200)
   })
 })
@@ -758,7 +758,7 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
       account: 'acc1',
       worktree: 'current'
     })
-    expect(r.status).toBe(400)
+    expect(r.status).toBe(404)
     expect(startWorkerCalls).toBe(0)
   })
 
@@ -848,7 +848,7 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
       account: 'acc1',
       worktree: 'current'
     })
-    expect(r.status).toBe(400)
+    expect(r.status).toBe(404)
     expect(JSON.stringify(r.body)).toContain('unknown run')
     expect(startWorkerCalls).toBe(0)
   })
@@ -1447,7 +1447,7 @@ describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
 
   it('존재하지 않는 --id는 400을 낸다', async () => {
     const r = await call(makeDeps(), 'task-update', { id: 'tsk_missing', status: 'ready' })
-    expect(r.status).toBe(400)
+    expect(r.status).toBe(404)
   })
 
   it('워커 세션이 부르면 403이다', async () => {
@@ -1464,7 +1464,7 @@ describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
   })
 })
 
-describe('handleCommand — task-list --ready', () => {
+describe('handleCommand — tasks list --ready', () => {
   it('ready 상태만 걸러 준다', async () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
@@ -1477,7 +1477,7 @@ describe('handleCommand — task-list --ready', () => {
       spec: 's',
       deps: [(a.body as { id: string }).id]
     })
-    const r = await call(deps, 'task-list', { ready: true })
+    const r = await call(deps, 'tasks-list', { ready: true })
     const list = r.body as { id: string; title: string }[]
     expect(list.map((t) => t.title)).toEqual(['a'])
   })
@@ -1487,7 +1487,7 @@ describe('handleCommand — task-list --ready', () => {
     await call(deps, 'task-create', { account: 'acc1', runId: (run.body as { id: string }).id,
       title: 't',
       spec: 'x'.repeat(300) })
-    const r = await call(deps, 'task-list', { brief: true })
+    const r = await call(deps, 'tasks-list', { brief: true })
     const list = r.body as { spec: string; spec_truncated: boolean }[]
     expect(list[0].spec.length).toBe(160)
     expect(list[0].spec_truncated).toBe(true)
@@ -2931,7 +2931,7 @@ describe('run-delete', () => {
   it('없는 Run 은 거절한다', async () => {
     const deps = makeDeps()
     const r = await call(deps, 'run-delete', { id: 'run_nope' })
-    expect(r.status).toBe(400)
+    expect(r.status).toBe(404)
   })
 
   it('--id 가 없으면 거절한다', async () => {
@@ -3045,11 +3045,13 @@ describe('run-spawn — 예약 회차', () => {
     expect((await call(deps, 'run-spawn', {})).status).toBe(400)
   })
 
-  it('예약이 아닌 Run 은 400', async () => {
+  // run-spawn 은 **계획**을 받는다 — 회차 id 를 주면 그런 Job 이 없다(404). 계획을 주면 회차가
+  // 하나 더 생기는 것이 이제 정상이다(다시 돌리기).
+  it('회차 id 를 주면 404 다 — run-spawn 은 계획을 받는다', async () => {
     const deps = makeDeps()
     const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const plain = (r.body as { id: string }).id
-    expect((await call(deps, 'run-spawn', { run: plain })).status).toBe(400)
+    expect((await call(deps, 'run-spawn', { run: plain })).status).toBe(404)
   })
 
   // 워커가 회차를 만들 수 있으면 워커가 자기 일을 무한히 복제할 수 있다
@@ -3507,7 +3509,7 @@ describe('run-start — 코디네이터 인계', () => {
       cwd: 'D:/p',
       coordinatorAccount: 'nope'
     })
-    expect(r.status).toBe(400)
+    expect(r.status).toBe(404)
   })
 })
 
@@ -3595,7 +3597,8 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
 
   it('없는 Run 은 400, --run 이 없으면 400', async () => {
     const deps = makeDeps()
-    expect((await call(deps, 'run-start', { run: 'run_nope' })).status).toBe(400)
+    // 없는 id 는 404, 인자를 안 준 것은 400 — 스크립트가 둘을 가를 수 있어야 한다(설계 §8)
+    expect((await call(deps, 'run-start', { run: 'run_nope' })).status).toBe(404)
     expect((await call(deps, 'run-start', {})).status).toBe(400)
   })
 
@@ -3974,7 +3977,7 @@ describe('run-pause', () => {
 
   it('없는 Run 은 400, --run 이 없으면 400', async () => {
     const deps = makeDeps()
-    expect((await call(deps, 'run-pause', { run: 'run_nope' })).status).toBe(400)
+    expect((await call(deps, 'run-pause', { run: 'run_nope' })).status).toBe(404)
     expect((await call(deps, 'run-pause', {})).status).toBe(400)
   })
 
@@ -4072,7 +4075,7 @@ describe('run-merge', () => {
   })
 
   it('없는 Run 은 400 이다', async () => {
-    expect((await call(makeDeps(), 'run-merge', { run: 'run_nope' })).status).toBe(400)
+    expect((await call(makeDeps(), 'run-merge', { run: 'run_nope' })).status).toBe(404)
   })
 
   it('병합이 이 빌드에 없으면 400 이다', async () => {
@@ -4113,7 +4116,7 @@ describe('run-worktree-set', () => {
       run: 'run_nope',
       worktree: 'D:/wt/a'
     })
-    expect(r.status).toBe(400)
+    expect(r.status).toBe(404)
   })
 
   it('--worktree 가 없으면 400 이다', async () => {
@@ -4777,5 +4780,53 @@ describe('handleCommand — convergence', () => {
     }
     await call(deps, 'gate-resolve', { id: g.value.id, resolution: 'mark-failed' })
     expect(seen).toEqual(['failed'])
+  })
+})
+
+describe('jobs list / jobs get — 공개 표면이 내는 것', () => {
+  /** 계획 하나와 그 회차 둘 */
+  const twoRuns = async (): Promise<{ deps: OrchServerDeps & { state: OrchState }; jobId: string }> => {
+    const deps = makeDeps()
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true })
+    const jobId = (r.body as { id: string }).id
+    await call(deps, 'run-start', { run: jobId })
+    await call(deps, 'run-spawn', { run: jobId })
+    return { deps, jobId }
+  }
+
+  // **실제 CLI 로 돌려 보고서야 나온 것이다.** 옛 run-list 의 본문을 그대로 두고 이름만 바꾸면
+  // `jobs list` 가 회차를 낸다 — 공개 계약이 말하는 것과 다른 것이 나간다.
+  it('jobs list 는 계획을 낸다, 회차가 아니라', async () => {
+    const { deps, jobId } = await twoRuns()
+    const r = await call(deps, 'jobs-list')
+    expect(r.status).toBe(200)
+    expect((r.body as { id: string }[]).map((x) => x.id)).toEqual([jobId])
+  })
+
+  it('jobs get 은 계획을 내고 가장 최근 회차를 접어 싣는다', async () => {
+    const { deps, jobId } = await twoRuns()
+    const r = await call(deps, 'jobs-get', { id: jobId })
+    expect(r.status).toBe(200)
+    const body = r.body as { id: string; objective: string; run?: { ordinal: number } }
+    expect(body.id).toBe(jobId)
+    expect(body.objective).toBe('o')
+    expect(body.run?.ordinal).toBe(2)
+  })
+
+  // 코디네이터는 자기가 받은 회차의 id 를 준다 — 그때도 읽고 싶은 값(한도·수렴 정책)은 계획의 것이다
+  it('회차 id 를 줘도 그 계획을 내고, 지목한 회차를 싣는다', async () => {
+    const { deps, jobId } = await twoRuns()
+    const first = deps.getState().runs.find((x) => x.ordinal === 1)!
+    const r = await call(deps, 'jobs-get', { id: first.id })
+    expect(r.status).toBe(200)
+    const body = r.body as { id: string; run?: { id: string; ordinal: number } }
+    expect(body.id).toBe(jobId)
+    expect(body.run?.id).toBe(first.id)
+    expect(body.run?.ordinal).toBe(1)
+  })
+
+  it('없는 id 는 404 다', async () => {
+    const { deps } = await twoRuns()
+    expect((await call(deps, 'jobs-get', { id: 'nope' })).status).toBe(404)
   })
 })

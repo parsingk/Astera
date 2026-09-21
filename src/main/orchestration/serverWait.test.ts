@@ -170,7 +170,8 @@ describe('ask --resume 검증', () => {
       resume: 'msg_doesnotexist',
       timeoutMs: 100
     })
-    expect(r.status).toBe(400)
+    // 없는 id 는 404 다 — 인자를 잘못 준 것(400)과 가른다(공개 CLI 설계 §8)
+    expect(r.status).toBe(404)
     expect(r.body).not.toMatchObject({ answered: true })
   })
 
