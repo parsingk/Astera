@@ -132,7 +132,24 @@ describe('공개 표면 — 두 낱말 명령', () => {
     })
   })
 
+  it('읽기 표면의 다섯 명사를 전부 잇는다', () => {
+    expect(parseArgs(['projects', 'list'])).toMatchObject({ cmd: 'projects-list' })
+    expect(parseArgs(['projects', 'find', '--path', 'D:/p'])).toMatchObject({
+      cmd: 'projects-find',
+      args: { path: 'D:/p' }
+    })
+    expect(parseArgs(['runs', 'list', '--job', 'job_1'])).toMatchObject({
+      cmd: 'runs-list',
+      args: { job: 'job_1' }
+    })
+    expect(parseArgs(['runs', 'get', '--id', 'run_1'])).toMatchObject({ cmd: 'runs-get' })
+    expect(parseArgs(['questions', 'get', '--id', 'gate_1'])).toMatchObject({
+      cmd: 'questions-get'
+    })
+  })
+
   it('동사가 없으면 무엇을 칠 수 있는지 말한다', () => {
+    expect(parseArgs(['projects'])).toEqual({ error: 'projects needs one of: list, get, find' })
     expect(parseArgs(['jobs'])).toEqual({ error: 'jobs needs one of: list, get' })
   })
 

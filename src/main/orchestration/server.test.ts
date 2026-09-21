@@ -19,7 +19,7 @@ import {
   type OrchState
 } from '../../core/orchestration/state'
 import { TaskValidator } from './validator'
-import { FAILURE_LIMIT, type CheckResult } from '../../core/orchestration/types'
+import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project } from '../../core/orchestration/types'
 import { parseArgs } from '../../core/orchestration/cliArgs'
 import { isQueueableReport } from '../../core/orchestration/pendingReports'
 import { checkConfigIdsOf } from '../../core/orchestration/convergence'
@@ -4831,6 +4831,96 @@ describe('jobs list / jobs get — 공개 표면이 내는 것', () => {
   it('없는 id 는 404 다', async () => {
     const { deps } = await twoRuns()
     expect((await call(deps, 'jobs-get', { id: 'nope' })).status).toBe(404)
+  })
+})
+
+describe('projects / runs / questions — 공개 읽기 표면', () => {
+  const withProject = (): OrchServerDeps & { state: OrchState } => {
+    const { state, project } = ensureProject(emptyState(), { path: 'D:/work/proj', now: NOW })
+    return { ...makeDeps(state), project } as OrchServerDeps & { state: OrchState; project: Project }
+  }
+
+  it('projects list 는 등록된 저장소를 낸다', async () => {
+    const deps = withProject()
+    const r = await call(deps, 'projects-list')
+    expect(r.status).toBe(200)
+    expect((r.body as Project[]).map((p) => p.name)).toEqual(['proj'])
+  })
+
+  it('projects get 은 id 로 하나를 낸다', async () => {
+    const deps = withProject()
+    const id = deps.getState().projects[0].id
+    expect(((await call(deps, 'projects-get', { id })).body as Project).path).toBe('D:/work/proj')
+    expect((await call(deps, 'projects-get', { id: 'nope' })).status).toBe(404)
+    expect((await call(deps, 'projects-get')).status).toBe(400)
+  })
+
+  // **셸에서 치는 쪽은 id 를 모르고 자기가 선 폴더를 안다.** win32 은 대소문자를 가리지 않고,
+  // 같은 저장소가 여러 철자로 들어온다 — 그래서 비교가 isSamePath 여야 한다.
+  it('projects find 는 경로로 찾고, 철자가 달라도 같은 것으로 본다', async () => {
+    const deps = withProject()
+    const r = await call(deps, 'projects-find', { path: 'd:\\work\\proj' })
+    expect(r.status).toBe(200)
+    expect((r.body as Project).name).toBe('proj')
+    expect((await call(deps, 'projects-find', { path: 'D:/other' })).status).toBe(404)
+    expect((await call(deps, 'projects-find')).status).toBe(400)
+  })
+
+  const twoRuns = async (): Promise<{ deps: OrchServerDeps & { state: OrchState }; jobId: string }> => {
+    const deps = makeDeps()
+    // **run-create 는 예약이 아닐 때 회차를 돌려준다** — 옛 이름이 그랬고 코디네이터가 그 id 로
+    // 이어서 일한다. 계획의 id 는 상태에서 집는다.
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const jobId = deps.getState().jobs[0].id
+    await call(deps, 'run-spawn', { run: jobId })
+    return { deps, jobId }
+  }
+
+  // jobs list 가 계획을 내므로 회차를 볼 자리가 따로 있어야 한다 — 그 둘을 한 배열로 내던 것이
+  // 옛 run-list 다(공개 CLI 설계 §5).
+  it('runs list 는 회차를 번호순으로 낸다', async () => {
+    const { deps, jobId } = await twoRuns()
+    const r = await call(deps, 'runs-list')
+    expect(r.status).toBe(200)
+    expect((r.body as JobRun[]).map((x) => x.ordinal)).toEqual([1, 2])
+    expect((r.body as JobRun[]).every((x) => x.jobId === jobId)).toBe(true)
+  })
+
+  it('runs list --job 은 그 계획의 회차만 낸다', async () => {
+    const { deps } = await twoRuns()
+    await call(deps, 'run-create', { objective: 'other', cwd: 'D:/p' })
+    const otherId = deps.getState().jobs[1].id
+    const r = await call(deps, 'runs-list', { job: otherId })
+    expect((r.body as JobRun[]).map((x) => x.jobId)).toEqual([otherId])
+  })
+
+  it('runs get 은 id 로 회차 하나를 낸다', async () => {
+    const { deps } = await twoRuns()
+    const first = deps.getState().runs.find((x) => x.ordinal === 1)!
+    expect(((await call(deps, 'runs-get', { id: first.id })).body as JobRun).id).toBe(first.id)
+    expect((await call(deps, 'runs-get', { id: 'nope' })).status).toBe(404)
+    expect((await call(deps, 'runs-get')).status).toBe(400)
+  })
+
+  it('questions get 은 id 로 질문 하나를 낸다', async () => {
+    const deps = makeDeps()
+    const created = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    expect(created.status).toBe(200)
+    const task = await call(deps, 'task-create', {
+      run: runId,
+      title: 't',
+      spec: 's',
+      account: 'acc1'
+    })
+    const taskId = (task.body as { id: string }).id
+    const gate = await call(deps, 'gate-create', { task: taskId, question: '어느 쪽인가' })
+    const gateId = (gate.body as { id: string }).id
+    const r = await call(deps, 'questions-get', { id: gateId })
+    expect(r.status).toBe(200)
+    expect((r.body as { question: string }).question).toBe('어느 쪽인가')
+    expect((await call(deps, 'questions-get', { id: 'nope' })).status).toBe(404)
+    expect((await call(deps, 'questions-get')).status).toBe(400)
   })
 })
 

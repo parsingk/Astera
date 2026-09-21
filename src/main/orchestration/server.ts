@@ -36,7 +36,7 @@ import {
   type Res
 } from '../../core/orchestration/state'
 import { CLI_PROTOCOL } from '../../core/orchestration/cliOutput'
-import { findProjectByPath } from '../../core/orchestration/projects'
+import { findProject, findProjectByPath } from '../../core/orchestration/projects'
 import { workerDoneFieldError } from '../../core/orchestration/sendArgs'
 import {
   DEFAULT_ASK_TIMEOUT_MS,
@@ -664,6 +664,38 @@ export async function handleCommand(
       // 여기서 하나 만들면 예약 시각이 되기도 전에 1회차가 도는 일이 된다.
       if (args.auto === true || schedule !== undefined) return commit(created)
       return commit(startJobRun(created.state, created.value.id, now))
+    }
+    // **등록된 저장소들.** 만들지 않는다 — 프로젝트는 사람이 폴더를 여는 순간 등록되고
+    // (ipc.ts 의 orch.list), CLI 가 그것을 흉내 내면 워커의 워크트리가 목록에 섞인다.
+    case 'projects-list':
+      return okBody(s.projects)
+    case 'projects-get': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const project = findProject(s, id)
+      return project ? okBody(project) : notFound(`unknown project: ${id}`)
+    }
+    // **경로로 찾는다.** 셸에서 치는 쪽은 id 를 모르고 자기가 선 폴더를 안다. 비교는 isSamePath 다
+    // — win32 은 대소문자를 가리지 않고 같은 저장소가 여러 철자로 들어온다.
+    case 'projects-find': {
+      const p = str(args.path)
+      if (!p) return bad('--path is required')
+      const project = findProjectByPath(s, p)
+      return project ? okBody(project) : notFound(`no project registered for: ${p}`)
+    }
+    // **회차를 낸다, 계획이 아니라.** `--job` 은 한 계획의 회차만 추린다. 번호순으로 내보내는
+    // 것은 배열에 들어간 순서가 곧 시간순이 아니기 때문이다 — 예약은 발화마다 뒤에 붙지만
+    // 사람이 앞 회차를 지우면 그 자리가 메워지지 않는다.
+    case 'runs-list': {
+      const job = str(args.job)
+      const runs = job ? s.runs.filter((r) => r.jobId === job) : s.runs
+      return okBody([...runs].sort((a, b) => a.ordinal - b.ordinal))
+    }
+    case 'runs-get': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const run = s.runs.find((r) => r.id === id)
+      return run ? okBody(run) : notFound(`unknown run: ${id}`)
     }
     // **계획을 낸다, 회차가 아니라.** 공개 표면의 `jobs list` 가 뜻하는 것이 계획이고, 회차는
     // `runs list` 의 것이다(공개 CLI 설계 §5). 옛 `run-list` 는 한 배열밖에 없어서 둘을 함께 냈다.
@@ -1970,6 +2002,12 @@ export async function handleCommand(
       if (retried && !retried.ok)
         return okBody({ ...r.value, retryOnceFailed: retried.error })
       return okBody(r.value)
+    }
+    case 'questions-get': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const gate = s.gates.find((g) => g.id === id)
+      return gate ? okBody(gate) : notFound(`unknown question: ${id}`)
     }
     case 'questions-list': {
       let gates = s.gates

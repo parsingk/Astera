@@ -9,6 +9,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { parseArgs } from '../core/orchestration/cliArgs'
 import { infoPathFor } from '../core/orchestration/cliDiscovery'
+import { publicFor } from '../core/orchestration/cliPublic'
 import {
   CLI_PROTOCOL,
   codeForStatus,
@@ -386,7 +387,9 @@ export async function main(): Promise<void> {
               app: (parsedBody as { version?: string | null } | null)?.version ?? null,
               protocol: (parsedBody as { protocol?: number } | null)?.protocol ?? CLI_PROTOCOL
             }
-          : parsedBody
+          : // 공개 읽기 명령은 허용된 칸만 내보낸다(설계 §11). 앱이 아니라 여기서 가리는 이유는
+            // 봉투와 같다 — 화면도 같은 서버를 쓰고, 그쪽은 온전한 개체가 필요하다.
+            publicFor(parsed.cmd, parsedBody)
       out(okEnvelope(parsed.cmd, body))
       process.exit(0)
     }

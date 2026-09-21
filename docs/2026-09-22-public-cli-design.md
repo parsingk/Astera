@@ -215,8 +215,36 @@ already exist.
 
 **What this design adds is redaction on the way out.** The commands below return objects the app
 holds, and those objects carry things the CLI spec says must never be printed (§38): account config
-directories, session auth material, the token itself. One allowlist per command shapes the reply —
-never a blocklist, because a blocklist is a list of the leaks somebody already thought of.
+directories, session auth material, the token itself. An allowlist shapes the reply — never a
+blocklist, because a blocklist is a list of the leaks somebody already thought of.
+
+**Built, and measured while building it.** None of the five objects a public read command returns
+(project, job, run, task, question) holds any of the three. The one place a config directory could
+have reached the wire is the account list, and the app already narrows that to `{id, label,
+provider}` before the server sees it (`listAccounts` in ipc.ts). So what the allowlist does today is
+not hide secrets. **It fixes the public API surface**: without it, a field added to `OrchState`
+becomes public the moment it is added, and removing one breaks somebody's script.
+
+**One list per object, not per command**, because the same object is returned by several commands and
+two copies of a list drift. `jobs get` folds a run into the job (§5), and the fold is shaped with the
+run's own list — a redaction that leaks one level in is not a redaction.
+
+**The compiler keeps the lists current.** Each object's fields are partitioned into shown and
+withheld, and a type-level check fails the build naming any field in neither. An allowlist's only
+failure mode is going stale, and this is the cheap way to make that loud instead of silent.
+
+**Seven Task fields are withheld**, all of them the app's convergence ledger (`checkHistory`,
+`policySnapshot`, `policyChanged`, `convergenceStartedAt`, `convergenceOff`, `suspiciousFiles`,
+`reviewRequested`). Publishing them would make how the app drives convergence part of the contract,
+so changing the policy would break other people's scripts. `completionOverride` stays: it is a
+person's decision, not a ledger, and a watcher asking "why did this pass" needs it.
+
+**`tasks list` is also the coordinator's command**, so the withheld seven vanish from what a
+coordinator sees too. The guide never names them (it reads `checks`, `consecutiveFailures`,
+`parentId`), but this is the change §14's step 6 regression run has to confirm on a real Job.
+Coordinator-only commands — `dispatch-show`, `worker-read`, `inbox`, `ask`, `check` — are not shaped
+at all; they are outside this contract, and shaping them would only hide what the guide tells the
+coordinator to read.
 
 ## 12. What this does not do
 
