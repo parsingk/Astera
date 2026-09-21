@@ -135,8 +135,8 @@ Task in a Run.
   repair reads `Checks failed: <name(s)> (<ran> of <total> ran)` (or `Checks failed (<ran> of <total>
   ran)` if none are named) — never the literal words `validation passed`/`validation failed`, so do not
   match on those on a convergence Run. That convergence-branch body carries only the exit code, not the
-  output tail — read the failed check's own tail off the Task's `checks` field (`tasks list --json`)
-  instead. Either way, that message is what wakes `check`, so a validated
+  output tail — read the failed check's own tail off the Task's `checks` field (`tasks list`, in
+  `data.tasks[].checks`) instead. Either way, that message is what wakes `check`, so a validated
   Task is **not** settled when `worker_done` comes back — wait for its validation message before you
   decide what to dispatch next. (A validation that cannot run at all announces itself differently again,
   and the same way on every Run regardless of convergence: as a Gate's `decision_gate` message, never a
@@ -256,7 +256,7 @@ task-create --title <s> --spec <s|-> --account <id,…> [--run <run>] [--deps <j
 tasks list [--run <run>] [--status <s>] [--ready] [--brief] [--json]
 task-update --id <tsk> --status <s> [--result <s|->] [--json]   # bypasses the transition table — see section 8
 task-update --id <tsk> --convergence off [--json]                # stops the app's own repairs on this Task — section 11
-dispatch-show --task <tsk> [--json]        # that Task's Dispatch history as an array (retries and the app's review Dispatch included)
+dispatch-show --task <tsk> [--json]        # that Task's Dispatch history in data.dispatches (retries and the app's review Dispatch included)
 
 gate-create --task <tsk> --question <s|-> [--options <json_array>] [--json]
 gate-resolve --id <gat> --resolution <s> [--json]
@@ -385,11 +385,11 @@ accounts [--agent <claude|codex>] [--json]
   session was started with can be moved onto an account it was never given — or have nowhere to move
   when the session was started on a single account. Per-Task account lists and `--terminal` do not
   mix: reuse a session only for Tasks that carry the same account list it was started with.
-- A successful `worker-start` responds with `{ sessionId, cwd, specPath, dispatchId }`. That is where
-  the `dispatchId` used by later commands comes from — record it.
+- A successful `worker-start` responds with `data` = `{ sessionId, cwd, specPath, dispatchId }`. That
+  is where the `dispatchId` used by later commands comes from — record it (`.data.dispatchId`).
 - **The app does not close a Dispatch that has been `worker-retain`ed.** After that, `worker-stop` is
   rejected with **409 `dispatch is retained`** (and the state does not change), and `worker-release`
-  returns 200 but with **`"skipped": "retained"`** in the response — meaning the session is still
+  returns 200 but with **`"skipped": "retained"`** in `data` — meaning the session is still
   alive. **There is no command that undoes retention.** If that session really has to end, the user
   must close the tab themselves (at which point the app closes the Dispatch); to give up only the
   tracking, use `worker-abandon`. Mistaking a live session for a dead one and starting a new worker in
@@ -398,7 +398,7 @@ accounts [--agent <claude|codex>] [--json]
 - **On a convergence Run, `worker-release` refuses a Dispatch whose Task is still converging** —
   `409 task <tsk> is still converging — release after it completes`. Section 11 has the exact
   condition; do not read a 409 here as "retry the release," read it as "wait."
-- `accounts` returns `{ id, label, provider }[]`. **Looking the accounts up first and then choosing
+- `accounts` returns `data.accounts`, a list of `{ id, label, provider }`. **Looking the accounts up first and then choosing
   `--account`** is the core of what this app adds to orchestration — never guess, always confirm a
   real id with `accounts` before passing it to `worker-start`. **Usage and remaining quota are not
   included** — they cannot be known at lookup time. Quota only becomes known through a failed
@@ -465,20 +465,65 @@ EOF
 Do not pass long text directly as a command-line argument — quoting and special characters break
 differently from shell to shell.
 
-### 4.7 Exit codes
+### 4.7 What comes back
+
+**Every reply is an envelope.** One line of JSON, always one of these two shapes:
+
+```json
+{"ok":true,"data":{ … }}
+{"ok":false,"error":{"code":"NOT_FOUND","message":"unknown run: run_x","details":{}}}
+```
+
+**Everything this guide describes lives inside `data`.** Where a section says a command "responds
+with `{sessionId, cwd, …}`", that object is `data`. Read `.data.sessionId`, not `.sessionId`.
+
+**A list arrives under a name, not as a bare array.** The name is the noun:
+
+| Command | Where the list is |
+|---|---|
+| `tasks list` | `data.tasks` |
+| `questions list` | `data.questions` |
+| `dispatch-show` | `data.dispatches` |
+| `inbox` | `data.messages` |
+| `run-configs` | `data.configs` |
+| `accounts` | `data.accounts` |
+| `jobs list` / `runs list` / `projects list` | `data.jobs` / `data.runs` / `data.projects` |
+
+Anything else that returns a list gives `data.items`. A bare top-level array can never grow a field
+without breaking every reader, which is why there are none.
+
+`error.code` is for branching and `error.message` is for a person. The codes are the closed set in
+the table below.
+
+### 4.8 Exit codes
 
 The exit code of `astera` is the only sound basis for deciding success or failure from `$?` in a
-shell:
+shell. Each `error.code` maps to exactly one of these:
 
-| Exit code | Meaning |
-|---|---|
-| `0` | The server responded 2xx |
-| `1` | The server responded with a non-2xx status (400/403/404/409/500, …) |
-| `2` | Argument parsing itself failed (e.g. an unknown flag) — the request never reached the server |
+| Exit code | `error.code` | Meaning |
+|---|---|---|
+| `0` | — | The command succeeded (`ok: true`) |
+| `1` | `FAILED` | Something failed that none of the codes below describes |
+| `2` | `INVALID_ARGUMENTS` | The parser refused, or the app rejected the arguments (400) |
+| `3` | `HOST_NOT_RUNNING` | No connection info file, or the connection failed — the app is not running |
+| `4` | `NOT_FOUND` | No such id (404) |
+| `5` | `PERMISSION_DENIED` | Refused for this session (403) — e.g. a worker calling a coordinator command |
+| `6` | `CONFLICT` | Rejected because of current state (409) — e.g. a Task that already has an open Dispatch |
+| `7` | `TIMEOUT` | The client's own deadline elapsed |
+| `9` | `VERSION_MISMATCH` | This app does not have that command — the CLI and the app are different builds |
+| `10` | `RUN_FAILED` | A Job or run finished in failure |
+
+`8` (`WAITING_FOR_INPUT`) belongs to commands that wait for a Job, which do not exist yet.
+
+**`3` and `4` are different questions.** `3` means the app is not there at all; `4` means it is there
+and does not know that id. Do not retry a `4`.
+
+**`9` is not your mistake.** It means the `astera` on the PATH and the running app came from
+different builds. Report it rather than working around it.
 
 **A timeout response from `check --wait` or `ask` is also HTTP 200, so the exit code is `0`.** What
 sections 5 and 6 say about "a timeout is not a failure" is carried directly by this rule — do not
-treat a timeout as an error based on `$?`; check the `timedOut` field in the response body.
+treat a timeout as an error based on `$?`; read `data.timedOut`.
 
 ## 5. The Delivery contract of `check`
 
@@ -491,11 +536,11 @@ treat a timeout as an error based on `$?`; check the `timedOut` field in the res
   every undelivered message. And **if an unacknowledged batch already exists, it is returned as-is
   regardless of `--types`** — you have to work through the backlog before the next `--types` filter
   means anything.
-- A timeout from `check --wait` (`{count:0, messages:[], timedOut:true}`) or an immediate
+- A timeout from `check --wait` (`data` = `{count:0, messages:[], timedOut:true}`) or an immediate
   `{count:0, messages:[]}` is **a checkpoint, not a worker failure.** Real coding work takes 15–60
   minutes. Keep waiting — just call `check --wait` again — unless you receive `worker_done` or
   `escalation`, the session is gone (confirm with `worker-show`), or the user tells you to stop. A
-  timeout response also exits `0` (4.7), so do not misread `$?` as failure.
+  timeout response also exits `0` (4.8), so do not misread `$?` as failure.
 
 ## 6. Worker obligations
 
@@ -524,7 +569,7 @@ server blocks `check` and `inbox` as coordinator-only (403).
   ```bash
   astera ask --task-id <tsk> --dispatch-id <dsp> --question - --options "choice1,choice2" --json
   ```
-  On `{"answered":true,"answer":"…"}`, proceed accordingly.
+  On `data` = `{"answered":true,"answer":"…"}`, proceed accordingly.
 - **If `ask` times out, do not ask again — keep waiting with `--resume`.** The question stays pending,
   and re-asking is rejected (one unanswered question per Dispatch):
   ```bash
@@ -539,7 +584,9 @@ server blocks `check` and `inbox` as coordinator-only (403).
 - **A report the app cannot take is written down, not lost.** The app can be closed while a worker
   the Host keeps running finishes its Task. When the server cannot be reached at all, `worker_done`
   and `escalation` — and only those two — are appended to a queue in the app's profile, and the
-  answer is `{"queued":true,"applied":false,"path":"…"}` with exit code `0`. Read both halves: the
+  answer is `ok: true` with `data` = `{"queued":true,"applied":false,"path":"…"}` and exit code `0`.
+  **`ok` there means the command ran, not that the report arrived** — `applied: false` is the half
+  that says it did not. Read both halves: the
   report is safe and the app applies it at the next start that has orchestration on, and nothing in
   the Job has moved yet. Do not send it again and do not read it as the work having failed. Every
   other command still fails the way it always did — a file cannot answer an `ask`. A report the
@@ -671,7 +718,7 @@ meaningless and repeats the same failure indefinitely.
 
 ## 9. Do not — summary
 
-- Do not conclude a worker failed from a `check --wait` timeout or `{count:0}` (section 5).
+- Do not conclude a worker failed from a `check --wait` timeout or `data.count === 0` (section 5).
 - Do not kill a worker over heartbeats, terminal activity, or an idle TUI (section 7).
 - Do not try to move state by hand after `worker_done` (section 8).
 - If `ask` times out, do not re-ask — keep waiting with `--resume <questionId>` (section 6).

@@ -275,9 +275,16 @@ export function dispatchesHeldOnlyByReport(a: {
  *  is on is not something the worker can see. And the reason not to re-send is that the app
  *  already has the report, not that a re-send would fail — once the app is back a re-send works
  *  perfectly well, and an agent that tries it and finds the notice wrong has no reason to believe
- *  the rest of it. */
-export function undeliveredReportNotice(a: { path: string }): string {
-  return JSON.stringify({
+ *
+ *  **객체를 돌려준다, 글자가 아니라.** 부르는 쪽이 다른 모든 응답과 같은 봉투에 담아야 하기
+ *  때문이다(공개 CLI 설계 §7). 이것만 봉투 밖으로 나가면 `jq .ok` 가 이 한 경우에만 null 이 된다. */
+export function undeliveredReportNotice(a: { path: string }): {
+  queued: true
+  applied: false
+  path: string
+  note: string
+} {
+  return {
     queued: true,
     applied: false,
     path: a.path,
@@ -286,5 +293,5 @@ export function undeliveredReportNotice(a: { path: string }): string {
       'named above, and the app applies it at the next start that has orchestration on. Nothing in ' +
       'the job has changed yet, so do not act as if this report had taken effect. Do not send it ' +
       'again either: the app already has it, and a second copy is only a second copy.'
-  })
+  }
 }

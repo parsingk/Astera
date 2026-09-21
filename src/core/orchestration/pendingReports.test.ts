@@ -281,7 +281,7 @@ describe('reportedDispatchIdsOf — which Dispatches a queued report speaks for'
 })
 
 describe('undeliveredReportNotice — what the agent is told', () => {
-  const notice = JSON.parse(undeliveredReportNotice({ path: 'C:\\u\\orch\\pending-reports\\a.json' }))
+  const notice = undeliveredReportNotice({ path: 'C:\\u\\orch\\pending-reports\\a.json' })
   it('says it was recorded', () => {
     expect(notice.queued).toBe(true)
     expect(notice.path).toBe('C:\\u\\orch\\pending-reports\\a.json')
@@ -289,10 +289,10 @@ describe('undeliveredReportNotice — what the agent is told', () => {
   it('says it was not applied — the other half an agent has to read', () => {
     expect(notice.applied).toBe(false)
   })
-  it('is not an ok: nothing in it claims the report went through', () => {
-    expect(notice.ok).toBeUndefined()
-    expect(notice.sent).toBeUndefined()
-    expect(notice.error).toBeUndefined()
+  // 봉투의 `ok` 는 "명령이 돌았다" 이지 "보고가 닿았다" 가 아니다(공개 CLI 설계 §7).
+  // 닿았는지를 말하는 것은 `applied` 하나고, 그래서 이 객체는 성공처럼 읽힐 칸을 지어내지 않는다.
+  it('성공을 뜻하는 칸을 지어내지 않는다', () => {
+    expect(Object.keys(notice).sort()).toEqual(['applied', 'note', 'path', 'queued'])
   })
   it('tells the agent not to send it again', () => {
     expect(String(notice.note)).toMatch(/again/)

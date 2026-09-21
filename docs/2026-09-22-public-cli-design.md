@@ -121,7 +121,8 @@ when stdout is a terminal, machine when it is piped. It cannot work here. This C
 reports `true`. The shim cannot switch binaries either: a packaged app cannot assume `node` is
 installed, which is why it ships Electron's.
 
-So the choice was between a flag and making human the default. Human-by-default would change what the
+Confirmed with the user on 2026-09-22: the flag stays. So the choice was between a flag and making
+human the default. Human-by-default would change what the
 coordinator reads: the guide writes `[--json]` as optional on every command, so `tasks list` without
 it would return a table with no `spec` and no `checks`. A flag costs a person eight characters; the
 default costs an agent the fields it works from. If this turns out to be the wrong trade, it is one
@@ -310,6 +311,22 @@ coordinator to read.
 4. Human output.
 5. The Settings button and the bin directory.
 6. The guide rewritten onto the new names, and the orchestration regression run.
+
+**Done, and the guide needed more than names.** The names had already moved in step 1. What was stale
+was the shape: §4.7 promised three exit codes (0/1/2) where there are now ten, and every place that
+said "read the `timedOut` field in the response body" was a level off, because the envelope had put
+that body inside `data`. A coordinator following the old text would look for `.timedOut` and find
+nothing. The guide now states the envelope once, names where each list arrives, and carries the full
+code table.
+
+Three lists a coordinator reads — `dispatch-show`, `inbox`, `run-configs` — were falling into the
+`items` bucket meant for commands outside the contract. Being outside the contract means the shape may
+change, not that the reader deserves a name that says nothing; they are now `dispatches`, `messages`
+and `configs`.
+
+The queued-report notice was the one reply that went out without an envelope, so `jq .ok` was null for
+exactly that case. It is wrapped now, and the guide says what `ok` means there: the command ran, not
+that the report arrived. `applied: false` is still the half that says it did not.
 
 ## 15. Open questions
 

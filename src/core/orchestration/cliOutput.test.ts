@@ -56,7 +56,15 @@ describe('dataFor', () => {
     expect(dataFor('questions-list', [])).toEqual({ questions: [] })
   })
 
-  // 공개 표면이 아닌 명령들 — 이 계약의 약속 밖이라 한 이름으로 떨어진다
+  // 공개 표면은 아니지만 코디네이터가 읽는다 — 세을 items 한 이름으로 묶으면 가이드가 그
+  // 자리마다 "어떤 items 인가" 를 다시 설명해야 한다
+  it('코디네이터가 읽는 목록도 제 이름을 가진다', () => {
+    expect(dataFor('dispatch-show', [{ id: 'dsp_1' }])).toEqual({ dispatches: [{ id: 'dsp_1' }] })
+    expect(dataFor('inbox', [])).toEqual({ messages: [] })
+    expect(dataFor('run-configs', [])).toEqual({ configs: [] })
+  })
+
+  // 그 밖의 것은 한 이름으로 떨어진다
   it('표에 없는 명령의 배열은 items 다', () => {
     expect(dataFor('worker-read', ['a'])).toEqual({ items: ['a'] })
   })

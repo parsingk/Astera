@@ -390,7 +390,8 @@ export async function main(): Promise<void> {
       )
       process.exit(exitCodeFor('HOST_NOT_RUNNING'))
     }
-    out(undeliveredReportNotice({ path: written.path }))
+    // 다른 모든 응답과 같은 봉투로 나간다 — 이것만 예외면 `jq .ok` 가 이 한 경우에만 null 이 된다.
+    out(renderOk(parsed.cmd, undeliveredReportNotice({ path: written.path }), mode))
     process.exit(0)
   }
 
