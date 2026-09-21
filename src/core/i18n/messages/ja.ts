@@ -369,6 +369,7 @@ export const ja: Catalog = {
   'shortcut.explorer.closeFileTab': 'ファイルタブを閉じる',
   'shortcut.explorer.cyclePreview': 'マークダウンプレビューモードの切り替え',
   'shortcut.sidebar.jobs': 'Jobs サイドバーの開閉',
+  'shortcut.sidebar.home': 'アカウントと履歴の表示/非表示',
   'shortcut.sidebar.howItWorks': 'How It Works サイドバーの開閉',
   'shortcut.explorer.rename': '名前の変更',
   'shortcut.explorer.delete': '削除',

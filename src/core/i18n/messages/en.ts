@@ -417,6 +417,7 @@ export const en: Record<keyof typeof ko, string> = {
   'shortcut.explorer.closeFileTab': 'Close file tab',
   'shortcut.explorer.cyclePreview': 'Cycle markdown preview mode',
   'shortcut.sidebar.jobs': 'Toggle the Jobs sidebar',
+  'shortcut.sidebar.home': 'Show or hide accounts and history',
   'shortcut.sidebar.howItWorks': 'Toggle the How It Works sidebar',
   'shortcut.explorer.rename': 'Rename',
   'shortcut.explorer.delete': 'Delete',

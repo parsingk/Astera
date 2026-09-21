@@ -374,6 +374,7 @@ export const es: Catalog = {
   'shortcut.explorer.closeFileTab': 'Cerrar la pestaña de archivo',
   'shortcut.explorer.cyclePreview': 'Cambiar el modo de vista previa de markdown',
   'shortcut.sidebar.jobs': 'Mostrar u ocultar la barra lateral de Jobs',
+  'shortcut.sidebar.home': 'Mostrar u ocultar cuentas e historial',
   'shortcut.sidebar.howItWorks': 'Mostrar u ocultar la barra lateral de How It Works',
   'shortcut.explorer.rename': 'Cambiar nombre',
   'shortcut.explorer.delete': 'Eliminar',

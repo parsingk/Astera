@@ -19,6 +19,7 @@ export type ActionId =
   | 'explorer.toggleMode'
   | 'explorer.closeFileTab'
   | 'explorer.cyclePreview'
+  | 'sidebar.home'
   | 'sidebar.jobs'
   | 'sidebar.howItWorks'
   | 'sessionTab.prev'
@@ -96,6 +97,15 @@ export function makeActions(platform: string): readonly ActionSpec[] {
     // The two sidebar views the rail can open. There is no explorer entry beside them: Ctrl+Shift+E
     // switches the explorer's mode rather than opening it, so the file tree has no "open me" key and
     // adding one was left out of this change.
+    {
+      id: 'sidebar.home',
+      // 같은 Ctrl+Shift+<글자> 가족. A 는 Accounts 이고, 이 화면이 담는 것이 계정과 히스토리다.
+      // DevTools 가 잡는 Ctrl+Shift+I·F12 와도, 이미 쓰는 E·J·H·V 와도 겹치지 않는다.
+      defaults: [`${M}+Shift+A`],
+      descKey: 'shortcut.sidebar.home',
+      // 사이드바 뷰를 여는 것은 셸이 읽는 무엇과도 다투지 않는다 — 나머지 셋과 같은 판단.
+      yieldsToTerminal: false
+    },
     {
       id: 'sidebar.jobs',
       // Ctrl+Shift+<letter> is the family this app already uses for sidebar work (Ctrl+Shift+E), and

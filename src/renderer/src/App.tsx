@@ -530,6 +530,12 @@ export default function App(): React.JSX.Element {
   const explorerShortcutLabel = explorerChord
     ? `${t('explorer.rail.toggle')} (${formatChord(explorerChord)})`
     : t('explorer.rail.toggle')
+  /** 레일의 홈 버튼 툴팁. 탐색기와 같은 이유·같은 방식이다 — 이 화면으로 돌아오는 길이 버튼
+   *  하나뿐이었으므로, 키가 있다는 사실도 그 버튼에서 알게 한다. */
+  const homeChord = bindingsRef.current['sidebar.home']?.[0]
+  const homeShortcutLabel = homeChord
+    ? `${t('session.rail.openSessions')} (${formatChord(homeChord)})`
+    : t('session.rail.openSessions')
   /** The run configuration pill's shortcut, for its title — run.selectConfig opens the pill's menu, so
    *  the hint belongs there, not on the "Manage run configurations…" footer row (that opens the
    *  manager instead). Same derivation as explorerChord: read the resolved binding, not the default,
@@ -1165,12 +1171,13 @@ export default function App(): React.JSX.Element {
       // Both toggles are recreated on every render and this listener holds the first one, but their
       // bodies are all refs and setters, so a stale closure still acts on the latest state — the same
       // convention toggleExplorer and closeFileTab already rely on.
-      if (action === 'sidebar.jobs' || action === 'sidebar.howItWorks') {
+      if (action === 'sidebar.home' || action === 'sidebar.jobs' || action === 'sidebar.howItWorks') {
         if (action === 'sidebar.jobs' && !orchEnabledRef.current) return
         e.preventDefault()
         e.stopPropagation()
         if (e.repeat) return // holding the key would flap the sidebar
-        if (action === 'sidebar.jobs') toggleJobs()
+        if (action === 'sidebar.home') toggleSessions()
+        else if (action === 'sidebar.jobs') toggleJobs()
         else toggleHiw()
         return
       }
@@ -3555,8 +3562,8 @@ export default function App(): React.JSX.Element {
               자리는 탐색기 위다: 이것이 사이드바의 기본 화면이고, 레일은 위에서부터 기본을 먼저 둔다 */}
           <button
             className={sidebarOpen && sidebarPane === 'sessions' ? 'rail-btn on' : 'rail-btn'}
-            aria-label={t('session.rail.openSessions')}
-            title={t('session.rail.openSessions')}
+            aria-label={homeShortcutLabel}
+            title={homeShortcutLabel}
             onClick={toggleSessions}
           >
             <House size={16} />
