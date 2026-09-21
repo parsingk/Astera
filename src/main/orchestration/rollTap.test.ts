@@ -5,12 +5,21 @@ import type { RollStateEvent } from '../../core/types'
 import type { git } from '../../core/worktrees/git'
 import { buildCheckpoint } from '../../core/orchestration/checkpoint'
 import {
-  createRun,
+
+  createJob,
+  startJobRun,
   createTask,
   openDispatch,
   emptyState,
   type OrchState
 } from '../../core/orchestration/state'
+
+/** 예전의 createRun 한 번 — 이제 계획을 만들고 그 1회차를 시작하는 두 걸음이다. */
+const seedRun = (over: Parameters<typeof createJob>[1], now: string) => {
+  const planned = unwrap<{ id: string }>(createJob(emptyState(), over, now) as never)
+  return unwrap<{ id: string }>(startJobRun(planned.state, planned.value.id, now) as never)
+}
+
 
 const NOW = '2026-08-25T00:00:00.000Z'
 
@@ -21,9 +30,7 @@ const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchS
 
 /** run + task + 열린 Dispatch(sessionId 'sess1', accountId 'acc1') */
 const seed = (): { s: OrchState; taskId: string; dispatchId: string } => {
-  const run = unwrap<{ id: string }>(
-    createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-  )
+  const run = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
   const t = unwrap<{ id: string }>(
     createTask(run.state, { runId: run.value.id, title: 't', spec: 'do it', deps: [] }, NOW) as never
   )
@@ -47,9 +54,7 @@ const seed = (): { s: OrchState; taskId: string; dispatchId: string } => {
 /** run + 두 Task + 두 열린 Dispatch: dispatch1(sessionId 'sess1'), dispatch2(sessionId 'sess2').
  *  rekeyDispatch 의 "대상 세션 id 가 이미 다른 열린 Dispatch 의 것" 거절 경로를 만드는 데 쓴다. */
 const seedTwoOpen = (): { s: OrchState; dispatchId: string } => {
-  const run = unwrap<{ id: string }>(
-    createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-  )
+  const run = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
   const t1 = unwrap<{ id: string }>(
     createTask(run.state, { runId: run.value.id, title: 't1', spec: 'do it', deps: [] }, NOW) as never
   )

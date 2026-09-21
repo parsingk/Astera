@@ -1,21 +1,23 @@
 import { describe, it, expect } from 'vitest'
-import { runsForProject, progressOf, outcomeOf, snapshotFor, sameSnapshot } from './view'
+import { jobsForProject, progressOf, outcomeOf, snapshotFor, sameSnapshot } from './view'
 import { emptyState } from './state'
 import { ensureProject } from './projects'
 import type { OrchState } from './state'
-import type { CheckResult, Dispatch, Gate, Message, ResumeEntry, Run, Task } from './types'
+import type { CheckResult, Dispatch, Gate, Message, ResumeEntry, Task } from './types'
+import { stateFromLegacy } from './legacyState'
+import type { LegacyRun } from './legacy'
 import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS } from './types'
 import type { JobTask, WorktreeInfo } from '../types'
 import { absPath } from '../testPaths'
 
-const run = (id: string, cwd: string): Run => ({
+const run = (id: string, cwd: string): LegacyRun => ({
   id, objective: `objective ${id}`, cwd, createdAt: '2026-08-18T00:00:00.000Z'
 })
 const task = (id: string, runId: string, status: Task['status']): Task => ({
   id, runId, title: `task ${id}`, spec: '', deps: [], status,
   consecutiveFailures: 0, createdAt: '2026-08-18T00:00:00.000Z', updatedAt: '2026-08-18T00:00:00.000Z'
 })
-const withRuns = (runs: Run[], tasks: Task[] = []): OrchState => ({ ...emptyState(), runs, tasks })
+const withRuns = (runs: LegacyRun[], tasks: Task[] = []): OrchState => stateFromLegacy({ runs, tasks })
 const dispatch = (id: string, taskId: string, sessionId: string, startedAt: string): Dispatch => ({
   id, taskId, sessionId, startedAt, provider: 'claude', accountId: 'acc',
   cwd: absPath('p'), specPath: '', workerState: 'ready', retained: false
@@ -46,14 +48,14 @@ const allExist = (): boolean => true
 describe('runsForProject', () => {
   it('그 프로젝트의 Run 만 고른다', () => {
     const s = withRuns([run('r1', absPath('proj')), run('r2', absPath('other'))])
-    expect(runsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual(['r1'])
+    expect(jobsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual(['job_r1'])
   })
 
   // orchestration.json 은 앱 전역 저장소라 --cwd 에 제약이 없다. cwd 가 프로젝트 루트 아래(중첩
   // 저장소)인 Run 은 그 중첩 프로젝트의 것이지 이 프로젝트의 것이 아니다 — "포함"이 아니라 "동일"이어야 한다
   it('프로젝트 루트 아래(중첩 디렉터리)의 Run 은 고르지 않는다', () => {
     const s = withRuns([run('r1', absPath('proj', 'nested'))])
-    expect(runsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual([])
+    expect(jobsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual([])
   })
 
   // 워크트리는 레지스트리 루트 아래, 저장소 밖에 있어서 저장 시점의 정규화가 닿지 않는다.
@@ -62,7 +64,7 @@ describe('runsForProject', () => {
   it('등록된 워크트리 안에서 만들어진 Run 은 그 저장소의 것으로 센다', () => {
     const s = withRuns([run('r1', absPath('wt', 'app', 'feature'))])
     const list = [wt(absPath('repos', 'app'), absPath('wt', 'app', 'feature'))]
-    expect(runsForProject(s, absPath('repos', 'app'), list).map((r) => r.id)).toEqual(['r1'])
+    expect(jobsForProject(s, absPath('repos', 'app'), list).map((r) => r.id)).toEqual(['job_r1'])
   })
 
   // projectId 가 있으면 경로를 보지 않는다. 워크트리에서 만들어진 Run 이든 하위 디렉터리에서
@@ -70,16 +72,16 @@ describe('runsForProject', () => {
   it('projectId 가 있으면 경로가 어긋나도 그 프로젝트의 것으로 센다', () => {
     const reg = ensureProject(emptyState(), { path: absPath('proj'), now: 'T0' })
     const r1 = { ...run('r1', absPath('somewhere', 'else')), projectId: reg.project.id }
-    const s = { ...reg.state, runs: [r1] }
-    expect(runsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual(['r1'])
+    const s = { ...stateFromLegacy({ runs: [r1] }), projects: reg.state.projects }
+    expect(jobsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual(['job_r1'])
   })
 
   it('projectId 가 다른 프로젝트를 가리키면 경로가 맞아도 고르지 않는다', () => {
     const a = ensureProject(emptyState(), { path: absPath('proj'), now: 'T0' })
     const b = ensureProject(a.state, { path: absPath('other'), now: 'T1' })
     const r1 = { ...run('r1', absPath('proj')), projectId: b.project.id }
-    const s = { ...b.state, runs: [r1] }
-    expect(runsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual([])
+    const s = { ...stateFromLegacy({ runs: [r1] }), projects: b.state.projects }
+    expect(jobsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual([])
   })
 
   // **매달린 id 는 Job 을 숨기지 않는다.** 프로젝트 기록이 사라진 Run 은 경로 유도로 물러난다 —
@@ -87,27 +89,27 @@ describe('runsForProject', () => {
   it('projectId 가 없는 프로젝트를 가리키면 경로로 물러난다', () => {
     const r1 = { ...run('r1', absPath('proj')), projectId: 'proj_gone' }
     const s = withRuns([r1])
-    expect(runsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual(['r1'])
+    expect(jobsForProject(s, absPath('proj'), noWorktrees).map((r) => r.id)).toEqual(['job_r1'])
   })
 
   // repoPathOf 는 등록되지 않은 경로를 그대로 통과시킨다 — 이 정규화가 소유 판정을 넓히지 않는다
   it('등록되지 않은 경로는 매핑하지 않는다', () => {
     const s = withRuns([run('r1', absPath('other'))])
     const list = [wt(absPath('repos', 'app'), absPath('wt', 'app', 'feature'))]
-    expect(runsForProject(s, absPath('repos', 'app'), list).map((r) => r.id)).toEqual([])
+    expect(jobsForProject(s, absPath('repos', 'app'), list).map((r) => r.id)).toEqual([])
   })
 
   // Run.cwd 는 프로젝트 루트지만, 같은 경로가 대소문자만 달리 도착할 수 있다(win32).
   // 문자열 === 로 비교하면 그 Run 이 목록에서 사라진다
   it.runIf(process.platform === 'win32')('win32 에서는 대소문자 차이를 무시한다', () => {
     const s = withRuns([run('r1', 'D:\\Proj')])
-    expect(runsForProject(s, 'd:\\proj', noWorktrees).map((r) => r.id)).toEqual(['r1'])
+    expect(jobsForProject(s, 'd:\\proj', noWorktrees).map((r) => r.id)).toEqual(['job_r1'])
   })
 
   it('최신순으로 정렬한다', () => {
     const older = { ...run('a', absPath('p')), createdAt: '2026-08-01T00:00:00.000Z' }
     const newer = { ...run('b', absPath('p')), createdAt: '2026-08-18T00:00:00.000Z' }
-    expect(runsForProject(withRuns([older, newer]), absPath('p'), noWorktrees).map((r) => r.id)).toEqual(['b', 'a'])
+    expect(jobsForProject(withRuns([older, newer]), absPath('p'), noWorktrees).map((r) => r.id)).toEqual(['job_b', 'job_a'])
   })
 })
 
@@ -213,7 +215,8 @@ describe('snapshotFor', () => {
     ])
     expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs).toEqual([
       {
-        id: 'r1', objective: 'objective r1', outcome: 'running', done: 1, total: 2, eventCount: 3,
+        // 줄의 id 는 계획의 것이고, fireOrdinal 은 그 줄이 보여 주는 회차의 번호다
+        id: 'job_r1', fireOrdinal: 1, objective: 'objective r1', outcome: 'running', done: 1, total: 2, eventCount: 3,
         concurrency: undefined, sharesProjectFolder: false,
         tasks: [
           { id: 't1', title: 'task t1', status: 'completed', sessionId: undefined, gateQuestion: undefined, openGates: 0 },
@@ -230,7 +233,7 @@ describe('snapshotFor', () => {
     const newer = { ...run('b', absPath('p')), createdAt: '2026-08-18T00:00:00.000Z' }
     const done = { ...run('c', absPath('p')), createdAt: '2026-08-19T00:00:00.000Z' }
     const s = withRuns([older, done, newer], [task('t1', 'c', 'completed')])
-    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs.map((r) => r.id)).toEqual(['b', 'a', 'c'])
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs.map((r) => r.id)).toEqual(['job_b', 'job_a', 'job_c'])
   })
 
   it('각 Run 에 outcome 을 실어 보낸다', () => {
@@ -239,8 +242,8 @@ describe('snapshotFor', () => {
       [task('t1', 'r1', 'completed'), exhausted(task('t2', 'r2', 'failed'))]
     )
     const byId = new Map(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs.map((r) => [r.id, r.outcome]))
-    expect(byId.get('r1')).toBe('completed')
-    expect(byId.get('r2')).toBe('failed')
+    expect(byId.get('job_r1')).toBe('completed')
+    expect(byId.get('job_r2')).toBe('failed')
   })
 
   // 오케스트레이터가 Task 를 선언한 순서 = 의존 사슬을 읽는 순서. deps 는 전순서가 아니라 정렬 기준이 못 된다
@@ -564,7 +567,10 @@ describe('sameSnapshot', () => {
 
   it('Run 이 늘면 다르다고 본다', () => {
     const s = base()
-    const more: OrchState = { ...s, runs: [...s.runs, run('r2', absPath('p'))] }
+    const more: OrchState = stateFromLegacy({
+      runs: [run('r1', absPath('p')), run('r2', absPath('p'))],
+      tasks: s.tasks
+    })
     expect(sameSnapshot(fold(s), fold(more))).toBe(false)
   })
 
@@ -596,11 +602,11 @@ describe('sameSnapshot', () => {
   })
 })
 
-const scheduled = (id: string, cwd: string): Run => ({
+const scheduled = (id: string, cwd: string): LegacyRun => ({
   ...run(id, cwd),
   schedule: { kind: 'daily', time: '09:00' }
 })
-const child = (id: string, cwd: string, templateId: string): Run => ({
+const child = (id: string, cwd: string, templateId: string): LegacyRun => ({
   ...run(id, cwd),
   templateId,
   createdAt: '2026-08-19T00:00:00.000Z'
@@ -624,8 +630,8 @@ describe('snapshotFor — 이 Run 이 쓴 워크트리', () => {
     s.dispatches[1] = { ...s.dispatches[1], cwd: absPath('proj') }
     const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
     const byId = new Map(snap.runs.map((r) => [r.id, r]))
-    expect(byId.get('r1')!.worktrees).toEqual([wtPath])
-    expect('worktrees' in byId.get('r2')!).toBe(false)
+    expect(byId.get('job_r1')!.worktrees).toEqual([wtPath])
+    expect('worktrees' in byId.get('job_r2')!).toBe(false)
   })
 
   // **이 테스트가 실제 결함을 고정한다.** Dispatch 의 cwd 는 워크트리를 지운 뒤에도 상태에 남으므로
@@ -674,8 +680,8 @@ describe('snapshotFor — 실행 대기', () => {
       allExist
     )
     const byId = new Map(snap.runs.map((r) => [r.id, r]))
-    expect(byId.get('r1')!.pendingStart).toBe(true)
-    expect('pendingStart' in byId.get('r2')!).toBe(false)
+    expect(byId.get('job_r1')!.pendingStart).toBe(true)
+    expect('pendingStart' in byId.get('job_r2')!).toBe(false)
   })
 })
 
@@ -683,7 +689,7 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
   it('회차는 템플릿 밑으로 접히고 최상위에서 빠진다', () => {
     const s = withRuns([scheduled('t1', absPath('proj')), child('c1', absPath('proj'), 't1')])
     const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
-    expect(snap.runs.map((r) => r.id)).toEqual(['t1'])
+    expect(snap.runs.map((r) => r.id)).toEqual(['job_t1'])
     expect(snap.runs[0].children?.map((r) => r.id)).toEqual(['c1'])
   })
 
@@ -729,7 +735,7 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
       absPath('proj'),
       anySession,
       noWorktrees,
-      (id) => (id === 't1' ? 1_800_000_000_000 : null),
+      (id) => (id === 'job_t1' ? 1_800_000_000_000 : null),
       allExist
     )
     expect(snap.runs[0].nextFireAt).toBe(1_800_000_000_000)
@@ -758,7 +764,7 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
   it('이 프로젝트에 부모가 없는 회차는 최상위에 남는다', () => {
     const s = withRuns([child('c1', absPath('proj'), 'gone')])
     const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
-    expect(snap.runs.map((r) => r.id)).toEqual(['c1'])
+    expect(snap.runs.map((r) => r.id)).toEqual(['job_c1'])
   })
 })
 

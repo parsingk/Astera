@@ -371,7 +371,8 @@ describe('applyPendingReports', () => {
 describe('a report that arrived while the app was away, from the boot the app then has', () => {
   const stored = (): OrchState => ({
     ...emptyState(),
-    runs: [{ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: '2026-09-10T00:00:00.000Z' }],
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: '2026-09-10T00:00:00.000Z' }],
+    runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: '2026-09-10T00:00:00.000Z' }],
     tasks: [
       {
         id: 'tsk_1',

@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { timelineFor, eventCountFor } from './timeline'
 import { emptyState } from './state'
 import type { OrchState } from './state'
-import type { Dispatch, Gate, Message, ResumeEntry, Run, Task } from './types'
+import type { Dispatch, Gate, Message, ResumeEntry, Task } from './types'
+import { stateFromLegacy } from './legacyState'
+import type { LegacyRun } from './legacy'
 import { absPath } from '../testPaths'
 
 const T = (n: number): string => `2026-08-18T00:0${n}:00.000Z`
-const run = (id: string): Run => ({
+const run = (id: string): LegacyRun => ({
   id, objective: `objective ${id}`, cwd: absPath('p'), createdAt: T(0)
 })
 const task = (id: string, runId: string, createdAt = T(1)): Task => ({
@@ -23,7 +25,7 @@ const message = (id: string, runId: string, type: Message['type'], createdAt = T
 const gate = (id: string, taskId: string, createdAt = T(4)): Gate => ({
   id, runId: 'r1', taskId, question: 'first line\nsecond line', status: 'open', createdAt
 })
-const state = (p: Partial<OrchState>): OrchState => ({ ...emptyState(), ...p })
+const state = (p: Parameters<typeof stateFromLegacy>[0]): OrchState => stateFromLegacy(p)
 const anySession = (): boolean => true
 const noSession = (): boolean => false
 

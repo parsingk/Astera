@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { chainOf, layersOf } from './graph'
 import { emptyState } from './state'
 import type { OrchState } from './state'
-import type { Run, Task } from './types'
+import type { Task } from './types'
+import { stateFromLegacy } from './legacyState'
+import type { LegacyRun } from './legacy'
 import { absPath } from '../testPaths'
 
 const T = (n: number): string => `2026-08-18T00:0${n}:00.000Z`
-const run = (id: string): Run => ({
+const run = (id: string): LegacyRun => ({
   id, objective: `objective ${id}`, cwd: absPath('p'), createdAt: T(0)
 })
 // timeline.test.ts 의 task() 와 같은 모양이되, deps 를 받는 인자가 하나 더 있다 — 고정된
@@ -15,7 +17,7 @@ const task = (id: string, runId: string, deps: string[] = [], createdAt = T(1)):
   id, runId, title: `task ${id}`, spec: '', deps, status: 'pending',
   consecutiveFailures: 0, createdAt, updatedAt: createdAt
 })
-const state = (p: Partial<OrchState>): OrchState => ({ ...emptyState(), ...p })
+const state = (p: Parameters<typeof stateFromLegacy>[0]): OrchState => stateFromLegacy(p)
 
 describe('layersOf', () => {
   it('deps 가 없는 Task 는 0층이다', () => {

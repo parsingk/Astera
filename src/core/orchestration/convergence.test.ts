@@ -16,10 +16,12 @@ import {
   type ResolvedPolicy
 } from './convergence'
 import { emptyState, type OrchState } from './state'
-import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS, type CheckResult, type Dispatch, type Run, type Task } from './types'
+import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS, type CheckResult, type Dispatch, type Task } from './types'
+import { stateFromLegacy } from './legacyState'
+import type { LegacyRun } from './legacy'
 
 const T = '2026-09-19T00:00:00.000Z'
-const run = (over: Partial<Run> = {}): Run => ({ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: T, ...over })
+const run = (over: Partial<LegacyRun> = {}): LegacyRun => ({ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: T, ...over })
 const task = (over: Partial<Task> = {}): Task => ({
   id: 'tsk_1', runId: 'run_1', title: 't', spec: 's', deps: [], status: 'validating',
   consecutiveFailures: 0, createdAt: T, updatedAt: T, ...over
@@ -28,7 +30,8 @@ const dispatch = (over: Partial<Dispatch> = {}): Dispatch => ({
   id: 'dsp_1', taskId: 'tsk_1', provider: 'claude', accountId: 'acc1', sessionId: 'sess1', cwd: 'D:/p',
   specPath: '', startedAt: T, workerState: 'stopped', retained: false, endedAt: T, outcome: 'succeeded', ...over
 })
-const state = (over: Partial<OrchState> = {}): OrchState => ({ ...emptyState(), runs: [run()], tasks: [task()], ...over })
+const state = (over: Parameters<typeof stateFromLegacy>[0] = {}): OrchState =>
+  stateFromLegacy({ runs: [run()], tasks: [task()], ...over })
 const result = (configId: string, status: CheckResult['status']): CheckResult => ({ configId, name: configId, status })
 
 describe('checkConfigIdsOf', () => {

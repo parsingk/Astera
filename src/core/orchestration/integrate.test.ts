@@ -11,13 +11,15 @@ import {
   worktreeDepsOf
 } from './integrate'
 import { emptyState, type OrchState } from './state'
-import type { Dispatch, Run, Task } from './types'
+import type { Dispatch, Task } from './types'
+import { stateFromLegacy } from './legacyState'
+import type { LegacyRun } from './legacy'
 
 const RUN_CWD = '/p'
 const WT_A = '/p-worktrees/a'
 const WT_B = '/p-worktrees/b'
 
-const run = (over: Partial<Run> = {}): Run => ({
+const run = (over: Partial<LegacyRun> = {}): LegacyRun => ({
   id: 'run_1',
   objective: 'o',
   cwd: RUN_CWD,
@@ -59,11 +61,8 @@ const dispatch = (id: string, over: Partial<Dispatch> = {}): Dispatch => ({
 
 // **emptyState() 위에 얹는다** — schedule.test.ts 와 같은 이유로, OrchState 에 칸이 늘어도 이 헬퍼는
 // 그대로 산다
-const state = (over: Partial<OrchState> = {}): OrchState => ({
-  ...emptyState(),
-  runs: [run()],
-  ...over
-})
+const state = (over: Parameters<typeof stateFromLegacy>[0] = {}): OrchState =>
+  stateFromLegacy({ runs: [run()], ...over })
 
 describe('pendingMerges', () => {
   it('의존이 프로젝트 폴더에서 돌았으면 합칠 것이 없다', () => {
@@ -419,11 +418,13 @@ describe('runWorktrees', () => {
 
 describe('runRootOf', () => {
   it('워크트리가 없으면 프로젝트 폴더다', () => {
-    expect(runRootOf(run())).toBe(RUN_CWD)
+    const s = state()
+    expect(runRootOf(s.runs[0], s.jobs[0])).toBe(RUN_CWD)
   })
 
   it('워크트리가 있으면 그것이다', () => {
-    expect(runRootOf(run({ worktree: WT_A }))).toBe(WT_A)
+    const s = state({ runs: [run({ worktree: WT_A })] })
+    expect(runRootOf(s.runs[0], s.jobs[0])).toBe(WT_A)
   })
 })
 
@@ -431,8 +432,8 @@ describe('runRootOf', () => {
 // 없다 — 기준을 run.cwd 로 두면 그 폴더가 run.cwd 와 달라서 매번 병합 대상으로 잡힌다.
 describe('Run 워크트리 안에서의 병합 판정', () => {
   /** t1 → t2 로 이어지는 순차 Run. 둘 다 Run 워크트리(WT_A)에서 돌았다 */
-  const sequential = (): OrchState => ({
-    ...emptyState(),
+  const sequential = (): OrchState =>
+    stateFromLegacy({
     runs: [run({ worktree: WT_A, concurrency: 1 })],
     tasks: [task('t1', { status: 'completed' }), task('t2', { deps: ['t1'] })],
     dispatches: [dispatch('d1', { taskId: 't1', cwd: WT_A })]
@@ -447,33 +448,31 @@ describe('Run 워크트리 안에서의 병합 판정', () => {
   })
 
   it('Task 별 워크트리는 Run 워크트리와 달라 여전히 합칠 대상이다', () => {
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [run({ worktree: WT_A, concurrency: 2 })],
       tasks: [task('t1', { status: 'completed' }), task('t2', { deps: ['t1'] })],
       dispatches: [dispatch('d1', { taskId: 't1', cwd: WT_B })]
-    }
+    })
     expect(pendingMerges(s, 't2')).toEqual([WT_B])
   })
 
   it('프로젝트 폴더에서 돈 의존도 합칠 대상이다 — Run 뿌리가 아니다', () => {
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [run({ worktree: WT_A })],
       tasks: [task('t1', { status: 'completed' }), task('t2', { deps: ['t1'] })],
       dispatches: [dispatch('d1', { taskId: 't1', cwd: RUN_CWD })]
-    }
+    })
     expect(pendingMerges(s, 't2')).toEqual([RUN_CWD])
   })
 })
 
 describe('workingInRunRoot', () => {
-  const openIn = (cwd: string): OrchState => ({
-    ...emptyState(),
-    runs: [run({ worktree: WT_A })],
-    tasks: [task('t1')],
-    dispatches: [dispatch('d1', { cwd, outcome: undefined, endedAt: undefined })]
-  })
+  const openIn = (cwd: string): OrchState =>
+    stateFromLegacy({
+      runs: [run({ worktree: WT_A })],
+      tasks: [task('t1')],
+      dispatches: [dispatch('d1', { cwd, outcome: undefined, endedAt: undefined })]
+    })
 
   it('Run 워크트리에서 도는 워커를 본다', () => {
     expect(workingInRunRoot(openIn(WT_A), 'run_1')).toBe(true)
@@ -484,12 +483,11 @@ describe('workingInRunRoot', () => {
   })
 
   it('워크트리가 없으면 프로젝트 폴더를 본다', () => {
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [run()],
       tasks: [task('t1')],
       dispatches: [dispatch('d1', { cwd: RUN_CWD, outcome: undefined, endedAt: undefined })]
-    }
+    })
     expect(workingInRunRoot(s, 'run_1')).toBe(true)
   })
 })
@@ -498,12 +496,11 @@ describe('workingInRunRoot', () => {
 // 병합 버튼과 삭제 모달이 함께 기대므로, 바꾸지 않았다는 것을 여기서 고정한다.
 describe('runWorktrees 와 Run 워크트리', () => {
   it('Run 워크트리도 이 Run 이 쓴 폴더다', () => {
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [run({ worktree: WT_A })],
       tasks: [task('t1')],
       dispatches: [dispatch('d1', { cwd: WT_A })]
-    }
+    })
     expect(runWorktrees(s, 'run_1')).toEqual([WT_A])
   })
 
@@ -511,48 +508,44 @@ describe('runWorktrees 와 Run 워크트리', () => {
   // 워커가 하나도 없다 — Dispatch 의 cwd 만 보면 그 폴더가 목록에서 빠지고, 삭제가 Task 워크트리만
   // 지우고 Run 워크트리를 남긴다. 로그에서 "만든 것과 지운 것이 매번 어긋난다"로 나타났다.
   it('Run 워크트리에서 돈 Dispatch 가 없어도 그 폴더는 이 Run 의 것이다', () => {
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [run({ worktree: WT_A, concurrency: 2 })],
       tasks: [task('t1')],
       dispatches: [dispatch('d1', { taskId: 't1', cwd: WT_B })]
-    }
+    })
     expect(runWorktrees(s, 'run_1')).toEqual([WT_B, WT_A])
   })
 
   it('같은 폴더를 두 번 내지 않는다 — 동시 실행 1 은 Dispatch 가 그 안에서 돈다', () => {
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [run({ worktree: WT_A, concurrency: 1 })],
       tasks: [task('t1'), task('t2')],
       dispatches: [
         dispatch('d1', { taskId: 't1', cwd: WT_A }),
         dispatch('d2', { taskId: 't2', cwd: WT_A })
       ]
-    }
+    })
     expect(runWorktrees(s, 'run_1')).toEqual([WT_A])
   })
 
   it('Run 워크트리가 프로젝트 폴더면 넣지 않는다 — 그 목록은 지울 폴더의 목록이다', () => {
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [run({ worktree: RUN_CWD })],
       tasks: [task('t1')],
       dispatches: [dispatch('d1', { taskId: 't1', cwd: RUN_CWD })]
-    }
+    })
     expect(runWorktrees(s, 'run_1')).toEqual([])
   })
 
   it('Run 워크트리와 Task 워크트리가 함께 온다 — 병합이 둘 다 필요하다', () => {
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [run({ worktree: WT_A, concurrency: 2 })],
       tasks: [task('t1'), task('t2')],
       dispatches: [
         dispatch('d1', { taskId: 't1', cwd: WT_B }),
         dispatch('d2', { taskId: 't2', cwd: WT_A })
       ]
-    }
+    })
     expect(runWorktrees(s, 'run_1')).toEqual([WT_B, WT_A])
   })
 })

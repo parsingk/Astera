@@ -8,8 +8,8 @@
 // 두세 번 부르면 상태를 쓰는 모든 명령이 그만큼 느려진다(같은 이유로 그 루프는 슬롯이 없을 때 계정
 // 조회 앞에서 빠진다).
 import { isSamePath } from '../files/tree'
-import type { OrchState } from './state'
-import type { Run, Task } from './types'
+import { jobOf, type OrchState } from './state'
+import type { Job, JobRun, Task } from './types'
 
 /** 의존 하나가 남긴 워크트리 — 그 의존 Task 의 id 와 그것이 돌았던 폴더 */
 interface WorktreeDep {
@@ -54,7 +54,7 @@ function worktreeDeps(s: OrchState, taskId: string): WorktreeDep[] {
       // "아직 열려 있다"의 판정은 이 저장소의 것을 그대로 쓴다(schedule.ts 의 slotsToFill,
       // server.ts 의 worker-start). 두 번째 정의를 만들면 둘이 갈라진다.
       if (!d.outcome && !d.endedAt) continue
-      if (isSamePath(d.cwd, runRootOf(run))) continue
+      if (isSamePath(d.cwd, runRootOf(run, jobOf(s, run)))) continue
       found.push({ taskId: depId, cwd: d.cwd })
     }
   }
@@ -70,8 +70,8 @@ function worktreeDeps(s: OrchState, taskId: string): WorktreeDep[] {
  *  한 줄짜리 함수를 두는 이유는 부르는 곳이 넷이라서다(병합 판정·병합 가능 판정·배치·통합 대상).
  *  `run.worktree ?? run.cwd` 를 네 번 적으면 다섯 번째 자리가 생겼을 때 그것만 빠질 수 있고,
  *  그 실패는 "워커가 프로젝트 폴더에서 돈다"로 나타나 이 변경 전과 똑같이 보인다. */
-export function runRootOf(run: Run): string {
-  return run.worktree ?? run.cwd
+export function runRootOf(run: JobRun, job: Pick<Job, 'cwd'> | undefined): string {
+  return run.worktree ?? job?.cwd ?? ''
 }
 
 /** 이 Run 의 Dispatch 가 쓴 워크트리 경로들, 중복 없이 — 만난 순서 그대로.
@@ -91,10 +91,14 @@ export function runWorktrees(s: OrchState, runId: string): string[] {
   const taskIds = new Set(s.tasks.filter((t) => t.runId === runId).map((t) => t.id))
   const run = s.runs.find((r) => r.id === runId)
   if (!run) return []
+  // 프로젝트 폴더는 계획의 것이다. **없을 수도 있는 값으로 다룬다** — 고아 회차(Job 기록이 사라진
+  // 것)에 빈 문자열을 쓰면 isSamePath 가 path.resolve('') 로 프로세스의 cwd 를 집어, 엉뚱한 폴더가
+  // 이 목록에서 빠진다.
+  const jobCwd = jobOf(s, run)?.cwd
   const out: string[] = []
   for (const d of s.dispatches) {
     if (!taskIds.has(d.taskId)) continue
-    if (isSamePath(d.cwd, run.cwd)) continue
+    if (jobCwd !== undefined && isSamePath(d.cwd, jobCwd)) continue
     if (!out.some((p) => isSamePath(p, d.cwd))) out.push(d.cwd)
   }
   // **Run 워크트리는 Dispatch 가 아니라 Run 이 들고 있다.** Dispatch 의 cwd 만 보면 그 폴더가 목록에서
@@ -112,7 +116,7 @@ export function runWorktrees(s: OrchState, runId: string): string[] {
   // 프로세스보다 오래 살고 손으로 고쳐진다 — 그 값이 프로젝트 폴더면 이 목록이 곧 "지울 폴더" 이므로
   // 사용자의 프로젝트를 지우라는 뜻이 된다(removeWorktree 의 위험 경로 검사가 막기는 하지만, 막히는
   // 것에 기대는 것과 애초에 넘기지 않는 것은 다르다).
-  if (run.worktree !== undefined && !isSamePath(run.worktree, run.cwd)) {
+  if (run.worktree !== undefined && (jobCwd === undefined || !isSamePath(run.worktree, jobCwd))) {
     if (!out.some((p) => isSamePath(p, run.worktree as string))) out.push(run.worktree)
   }
   return out
@@ -219,7 +223,7 @@ export function runsWorkingIn(s: OrchState, cwd: string): Set<string> {
 export function workingInRunRoot(s: OrchState, runId: string): boolean {
   const run = s.runs.find((r) => r.id === runId)
   if (!run) return false
-  return runsWorkingIn(s, runRootOf(run)).size > 0
+  return runsWorkingIn(s, runRootOf(run, jobOf(s, run))).size > 0
 }
 
 /** 통합 Task 의 spec 본문. **영어다** — 이것을 읽는 것은 사람이 아니라 에이전트이고, 같은 이유로

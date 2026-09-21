@@ -9,6 +9,7 @@
 import { runWorktrees } from './integrate'
 import type { OrchState } from './state'
 import { outcomeOf } from './view'
+import { jobOf } from './state'
 
 /** 워크트리를 걷어도 되는 예약 회차들과 그 폴더들.
  *
@@ -42,7 +43,9 @@ export function reapableChildRuns(
 ): Array<{ runId: string; worktrees: string[] }> {
   const out: Array<{ runId: string; worktrees: string[] }> = []
   for (const run of s.runs) {
-    if (run.templateId === undefined) continue
+    // 예약이 만든 회차만 걷는다. 손으로 다시 돌린 회차의 워크트리는 보통 Job 의 것과 같이 남긴다 —
+    // 쌓이는 것은 5분마다 도는 예약이지 사람이 한 번 더 누른 것이 아니다.
+    if (!jobOf(s, run)?.schedule) continue
     if (outcomeOf(s, run.id) !== 'completed') continue
     const taskIds = new Set(s.tasks.filter((t) => t.runId === run.id).map((t) => t.id))
     const open = s.dispatches.some((d) => taskIds.has(d.taskId) && !d.outcome && !d.endedAt)

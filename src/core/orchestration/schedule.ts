@@ -1,5 +1,5 @@
-import { DEFAULT_CONCURRENCY, FAILURE_LIMIT } from './types'
-import type { OrchState } from './state'
+import { DEFAULT_CONCURRENCY, FAILURE_LIMIT, type JobRun } from './types'
+import { jobOf, type OrchState } from './state'
 
 /** 지금 워커를 띄워야 할 자리 하나.
  *
@@ -19,12 +19,34 @@ export interface Slot {
   accountIds: string[]
 }
 
+/**
+ * 앱이 스스로 돌리는 회차인가.
+ *
+ * **아래 두 함수가 이 하나를 쓴다.** 예전에는 같은 네 줄이 두 곳에 복사되어 있었고 그 옆에
+ * "하나라도 어긋나면 앱이 돌리지 않는 Run 의 Task 에 Gate 가 열린다" 는 경고가 적혀 있었다 —
+ * 어긋날 수 없게 하는 편이 경고보다 낫다.
+ *
+ * 세 가지는 계획의 것이고 하나는 회차의 것이다. `autoDispatch` 는 "누가 이 계획을 운전하는가",
+ * `pendingStart` 는 "아직 시작하지 않았다", `Job.paused` 는 "예약을 세워 뒀다", `run.paused` 는
+ * "세울 때 함께 멈춘 회차" 다.
+ */
+function appDriven(s: OrchState, run: JobRun): boolean {
+  const job = jobOf(s, run)
+  if (!job?.autoDispatch) return false
+  if (job.pendingStart) return false
+  if (job.paused) return false
+  // **세워 둔 회차도 배치하지 않는다.** 일시 중지가 도는 워커를 닫아도, 그 자리에 그 회차의 다음
+  // ready Task 가 곧바로 뜨면 "일시 중지" 가 "지금 도는 Task 하나만 멈춤" 이 된다.
+  if (run.paused) return false
+  return true
+}
+
 /** 지금 띄워야 할 것들. **부수 효과가 없고 같은 입력에 같은 답을 준다** — 이 판정이 순수해야
  *  하는 이유는 이것이 이 슬라이스에서 기계가 검사할 수 있는 유일한 부분이기 때문이다(스케줄러를
  *  매다는 자리는 main 의 배선이라 테스트가 없다).
  *
- *  **autoDispatch 인 Run 만 본다.** 코디네이터가 만든 Run 을 함께 돌리면 둘이 같은 ready Task 를
- *  두고 경합한다(Run.autoDispatch 의 주석 참고).
+ *  **앱이 운전하는 회차만 본다**(appDriven). 코디네이터가 만든 Job 을 앱이 함께 돌리면 둘이 같은
+ *  ready Task 를 두고 경합한다(Job.autoDispatch 의 주석 참고).
  *
  *  **계정이 없는 Task 는 건너뛴다.** 계정이 provider 의 유일한 출처이므로(Task.accountIds), 계정이
  *  없으면 어느 CLI 로 띄울지 알 수 없다. 만드는 두 자리가 모두 계정을 요구하지만 입력은 명령이
@@ -36,25 +58,13 @@ export interface Slot {
 export function slotsToFill(s: OrchState): Slot[] {
   const slots: Slot[] = []
   for (const run of s.runs) {
-    if (!run.autoDispatch) continue
-    // 템플릿은 자신이 돌지 않는다 — 발화마다 자식 Run 이 생기고 그것이 돈다. 위의 autoDispatch
-    // 검사가 이미 걸러내지만(run-create 가 예약이면 켜지 않는다) 그 사실에 기대지 않는다:
-    // orchestration.json 은 프로세스보다 오래 살고 손으로 고쳐진다 — 이 파일 머리말이 계정 없는
-    // Task 를 건너뛰는 것과 같은 이유다.
-    if (run.schedule) continue
-    // 사람이 '실행' 을 누르기 전까지는 돌지 않는다. autoDispatch 와 따로 두는 이유는
-    // Run.pendingStart 의 주석에 있다 — 그것을 끄는 방식으로는 코디네이터 Run 과 구별되지 않는다.
-    if (run.pendingStart) continue
-    // **세워 둔 것도 배치하지 않는다.** 일시 중지가 도는 워커를 닫아도, 그 자리에 그 Run 의 다음
-    // ready Task 가 곧바로 뜨면 "일시 중지" 가 "지금 도는 Task 하나만 멈춤" 이 된다. 예약을 세우면
-    // 그 회차들에도 이 칸이 붙는다(state.ts 의 pauseSchedule).
-    if (run.paused) continue
+    if (!appDriven(s, run)) continue
     const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt)
     const openHere = open.filter((d) => {
       const t = s.tasks.find((x) => x.id === d.taskId)
       return t?.runId === run.id
     }).length
-    const room = (run.concurrency ?? DEFAULT_CONCURRENCY) - openHere
+    const room = (jobOf(s, run)?.concurrency ?? DEFAULT_CONCURRENCY) - openHere
     if (room <= 0) continue
     const candidates = s.tasks.filter(
       (t) =>
@@ -94,12 +104,9 @@ export function tasksMissingAccounts(s: OrchState): { runId: string; taskId: str
   const out: { runId: string; taskId: string }[] = []
   const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt)
   for (const run of s.runs) {
-    // slotsToFill 과 **같은** Run 필터다. 하나라도 어긋나면 앱이 돌리지 않는 Run 의 Task 에
+    // slotsToFill 과 **같은** 판정을 쓴다(appDriven). 어긋나면 앱이 돌리지 않는 회차의 Task 에
     // Gate 가 열린다 — 코디네이터가 계정 없이 만든 Task 는 그가 worker-start 로 직접 띄운다.
-    if (!run.autoDispatch) continue
-    if (run.schedule) continue
-    if (run.pendingStart) continue
-    if (run.paused) continue
+    if (!appDriven(s, run)) continue
     for (const t of s.tasks) {
       if (t.runId !== run.id) continue
       if (t.status !== 'ready') continue

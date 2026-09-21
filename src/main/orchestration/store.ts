@@ -14,9 +14,11 @@ import {
   emptyState,
   endedUnproven,
   interruptStalledTask,
+  jobOf,
   type OrchState
 } from '../../core/orchestration/state'
 import { latestImplDispatch } from '../../core/orchestration/convergence'
+import { splitLegacyRuns, type LegacyRun } from '../../core/orchestration/legacy'
 
 /** Cutoff for discarding a finished Run. The same 30 days as SchedulerConfigStore's ENTRY_TTL_MS */
 export const RUN_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -176,6 +178,17 @@ export class OrchestrationStore {
     // 빠지고 디스패치 시점에 Gate 를 연다 — 조용히 멈추지 않으므로 사람이 계정을 넣으면 곧바로 돈다.
     for (const r of st.runs as unknown as Record<string, unknown>[]) delete r.provider
 
+    // **Job 과 회차를 가른다** (docs/2026-09-21-job-run-split-and-projects-design.md §5).
+    //
+    // 이 칸이 없으면 분리 이전의 파일이다. 판정 자체는 순수 층에 있다(core/orchestration/legacy.ts) —
+    // 배열을 받아 배열을 내는 일이라 파일 읽기와 섞을 이유가 없고, 그래야 fs 없이 테스트된다.
+    if (!Array.isArray((st as unknown as Record<string, unknown>).jobs)) {
+      const split = splitLegacyRuns(st.runs as unknown as LegacyRun[], st.tasks)
+      st.jobs = split.jobs
+      st.runs = split.runs
+      st.tasks = split.tasks
+    }
+
     // **프로젝트 배열이 없는 파일을 받는다.** 이 칸이 생기기 전의 파일에는 없고, isValidState 에
     // 넣지 않은 것도 그 때문이다 — 넣었으면 기존 파일이 전부 손상으로 읽혀 통째로 버려진다.
     // 채워 넣지는 않는다: 어느 Run 이 어느 저장소의 것인지는 워크트리 레지스트리를 봐야 알 수 있고
@@ -253,7 +266,14 @@ export class OrchestrationStore {
         // schedule template·pendingStart) — 이 목록에는 runId 가 없어 받는 쪽이 다시 판정할 길이
         // 없으므로, 아직 없는 소비자에게 요구사항을 적어 두기보다 원천에서 거른다.
         const owner = withGates.runs.find((x) => x.id === t.runId)
-        const runGated = !owner || owner.paused === true || owner.schedule !== undefined || owner.pendingStart === true
+        const ownerJob = owner && jobOf(withGates, owner)
+        const runGated =
+          !owner ||
+          !ownerJob ||
+          owner.paused === true ||
+          ownerJob.paused === true ||
+          ownerJob.schedule !== undefined ||
+          ownerJob.pendingStart === true
         // Host 가 이 Task 의 세션을 되돌려 받았으면(reattach) 그 워커는 지금도 돌고 있다 — 다시
         // 돌리라고 이 목록에 실으면 받는 쪽(재검증 큐·openReviewDispatch)이 "dispatch already open"
         // 으로 거절한다. interruptStalledTask 는 convergence Run 에서 이것을 보지 않는다(Dispatch 를

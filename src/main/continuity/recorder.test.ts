@@ -5,10 +5,12 @@ import path from 'node:path'
 import { ContinuityJournal } from './journal'
 import { ContinuityRecorder, type ContinuityJournalPort } from './recorder'
 import { emptyState, type OrchState } from '../../core/orchestration/state'
-import type { Dispatch, Run, Task } from '../../core/orchestration/types'
+import type { Dispatch, Task } from '../../core/orchestration/types'
 import type { Lang } from '../../core/i18n'
 import type { HandoffLookup } from '../../core/handoff/types'
 import { makeRepo, gitSync } from '../../core/worktrees/testRepo'
+import { stateFromLegacy } from '../../core/orchestration/legacyState'
+import type { LegacyRun } from '../../core/orchestration/legacy'
 
 let dir: string
 let repo: string
@@ -35,14 +37,15 @@ afterEach(async () => {
 })
 
 const NOW = '2026-09-08T10:00:00.000Z'
-const run = (): Run => ({ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: NOW })
+const run = (): LegacyRun => ({ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: NOW })
 const task = (status: Task['status'] = 'dispatched'): Task => ({
   id: 'tsk_1', runId: 'run_1', title: 'Auth refactor', spec: 's', deps: [], status, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW
 })
 const dispatch = (over: Partial<Dispatch> = {}): Dispatch => ({
   id: 'dsp_1', taskId: 'tsk_1', provider: 'claude', accountId: 'acc', sessionId: 'sess-1', cwd: repo, specPath: 's', startedAt: NOW, workerState: 'ready', retained: false, ...over
 })
-const state = (d: Dispatch | null, t: Task = task()): OrchState => ({ ...emptyState(), runs: [run()], tasks: [t], dispatches: d ? [d] : [] })
+const state = (d: Dispatch | null, t: Task = task()): OrchState =>
+  stateFromLegacy({ runs: [run()], tasks: [t], dispatches: d ? [d] : [] })
 
 let files = 0
 /** `journal` in the result is always the real one (for assertions); `over.journal` replaces what the
@@ -162,8 +165,7 @@ describe('ContinuityRecorder.checkpoint', () => {
 describe('ContinuityRecorder.enable', () => {
   it('writes one baseline per open real dispatch and one CONTINUITY_ENABLED per run', async () => {
     const { r, journal } = recorder()
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [run(), { id: 'run_2', objective: 'o2', cwd: 'D:/q', createdAt: NOW }],
       tasks: [task(), { ...task(), id: 'tsk_2', runId: 'run_2' }, { ...task(), id: 'tsk_3', runId: 'run_2' }],
       dispatches: [
@@ -172,7 +174,7 @@ describe('ContinuityRecorder.enable', () => {
         dispatch({ id: 'dsp_3', taskId: 'tsk_3', sessionId: 'pending:zz' }),
         dispatch({ id: 'dsp_4', taskId: 'tsk_1', sessionId: 'sess-old', endedAt: NOW, outcome: 'succeeded' })
       ]
-    }
+    })
     await r.enable(s)
     expect(journal.eventsFor('run_1').map((e) => e.type)).toEqual(['CONTINUITY_ENABLED', 'CHECKPOINT_CREATED'])
     expect(journal.eventsFor('run_2').map((e) => e.type)).toEqual(['CONTINUITY_ENABLED', 'CHECKPOINT_CREATED'])

@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { OrchestrationStore, RUN_TTL_MS } from './store'
 import { emptyState, type OrchState } from '../../core/orchestration/state'
+import { stateFromLegacy } from '../../core/orchestration/legacyState'
 
 let dir: string
 beforeEach(async () => {
@@ -18,8 +19,8 @@ afterEach(async () => {
 // 조용히 만료되어 이 파일의 여러 테스트가 한꺼번에 깨진다(실제로 2026-09-03 에 그렇게 깨졌다).
 // 과거를 만드는 테스트들이 이미 쓰는 `Date.now() - RUN_TTL_MS` 와 같은 기준으로 맞춘다.
 const NOW = new Date().toISOString()
-const withOpenDispatch = (): OrchState => ({
-  ...emptyState(),
+const withOpenDispatch = (): OrchState =>
+  stateFromLegacy({
   runs: [{ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
   tasks: [
     {
@@ -243,7 +244,7 @@ describe('OrchestrationStore', () => {
     await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
     const store = new OrchestrationStore(file)
     await store.load()
-    expect(store.get().runs[0].projectId).toBeUndefined()
+    expect(store.get().jobs[0].projectId).toBeUndefined()
   })
 
   // **계정을 대신 채워 넣지 않는다.** 옛 provider 로 기본 계정을 찾아 넣으면 사람이 아끼려던
@@ -388,11 +389,10 @@ describe('OrchestrationStore', () => {
 
   // 예약이 30일 뒤 조용히 사라지면 안 된다. 템플릿의 Task 는 배치되지 않아 terminal 이 되지
   // 않으므로 지금은 저절로 남지만, 그 성질이 우연히 깨지는 것을 여기서 잡는다
-  it('30일이 지나도 예약 템플릿은 남기고 그 회차만 지운다', async () => {
+  it('30일이 지나도 예약 계획은 남기고 그 회차만 지운다', async () => {
     const file = path.join(dir, 'orchestration.json')
     const old = new Date(Date.now() - RUN_TTL_MS - 1000).toISOString()
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [
         { id: 'tmpl', objective: '매일', cwd: 'D:/p', createdAt: old, schedule: { kind: 'daily', time: '09:00' } },
         { id: 'kid', objective: '매일', cwd: 'D:/p', createdAt: old, templateId: 'tmpl', autoDispatch: true }
@@ -401,12 +401,15 @@ describe('OrchestrationStore', () => {
         { id: 't_tmpl', runId: 'tmpl', title: 'A', spec: 's', deps: [], status: 'ready', consecutiveFailures: 0, createdAt: old, updatedAt: old },
         { id: 't_kid', runId: 'kid', title: 'A', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: old, updatedAt: old }
       ]
-    }
+    })
     await fs.writeFile(file, JSON.stringify(s), 'utf8')
     const store = new OrchestrationStore(file)
     const r = await store.load()
     expect(r.pruned).toBe(1)
-    expect(store.get().runs.map((x) => x.id)).toEqual(['tmpl'])
+    // 계획은 회차와 함께 지워지지 않는다 — 다음 발화가 베낄 정의가 거기 있다
+    expect(store.get().runs).toEqual([])
+    expect(store.get().jobs).toHaveLength(1)
+    expect(store.get().tasks.map((t) => t.id)).toEqual(['t_tmpl'])
   })
 
   it('원자 쓰기 — tmp 파일을 남기지 않는다', async () => {
@@ -481,8 +484,8 @@ describe('OrchestrationStore', () => {
   })
 
   describe('save 직렬화', () => {
-    const runState = (id: string): OrchState => ({
-      ...emptyState(),
+    const runState = (id: string): OrchState =>
+  stateFromLegacy({
       runs: [{ id, objective: id, cwd: 'D:/p', createdAt: NOW }]
     })
 
@@ -689,8 +692,7 @@ describe('OrchestrationStore', () => {
   // 확인한다.
   it('convergence Run 의 validating·reviewing Task 는 Gate 없이 재실행 목록에 실린다', async () => {
     const file = path.join(dir, 'orchestration.json')
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [{ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, convergence: {} }],
       tasks: [
         {
@@ -714,7 +716,7 @@ describe('OrchestrationStore', () => {
           outcome: 'succeeded', workerState: 'ready', retained: false
         }
       ]
-    }
+    })
     await fs.writeFile(file, JSON.stringify(s), 'utf8')
     const store = new OrchestrationStore(file)
     const loaded = await store.load({ aliveSessionIds: new Set() })
@@ -731,8 +733,7 @@ describe('OrchestrationStore', () => {
   // 하려고 있다.
   it('구현 Dispatch 가 없는 validating Task 는 stuckInterruptions 로 센다', async () => {
     const file = path.join(dir, 'orchestration.json')
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [{ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, convergence: {} }],
       tasks: [
         {
@@ -741,7 +742,7 @@ describe('OrchestrationStore', () => {
         }
       ],
       dispatches: []
-    }
+    })
     await fs.writeFile(file, JSON.stringify(s), 'utf8')
     const store = new OrchestrationStore(file)
     const loaded = await store.load({ aliveSessionIds: new Set() })
@@ -754,8 +755,7 @@ describe('OrchestrationStore', () => {
   // 목록도 지켜야 한다 — 이 목록에는 runId 가 없어 받는 쪽이 다시 판정할 길이 없으므로 원천에서 거른다.
   it('일시 중지된 Run 의 validating Task 는 재실행 목록에 실리지 않는다', async () => {
     const file = path.join(dir, 'orchestration.json')
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [{ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, convergence: {}, paused: true }],
       tasks: [
         {
@@ -770,7 +770,7 @@ describe('OrchestrationStore', () => {
           outcome: 'succeeded', workerState: 'ready', retained: false
         }
       ]
-    }
+    })
     await fs.writeFile(file, JSON.stringify(s), 'utf8')
     const store = new OrchestrationStore(file)
     const loaded = await store.load({ aliveSessionIds: new Set() })
@@ -783,8 +783,7 @@ describe('OrchestrationStore', () => {
   // 목록에 실으면 그 목록을 받는 쪽(openReviewDispatch)이 "dispatch already open" 으로 거절한다.
   it('세션이 아직 살아 있는 reviewing Task 는 재검토 목록에서 빠진다', async () => {
     const file = path.join(dir, 'orchestration.json')
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [{ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, convergence: {} }],
       tasks: [
         {
@@ -799,7 +798,7 @@ describe('OrchestrationStore', () => {
           workerState: 'ready', retained: false
         }
       ]
-    }
+    })
     await fs.writeFile(file, JSON.stringify(s), 'utf8')
     const store = new OrchestrationStore(file)
     // 그 세션이 Host 에 아직 살아 있다고 답하면, 재시작 정리는 위 Dispatch 를 열어 둔 채 둔다.
@@ -830,8 +829,8 @@ describe('OrchestrationStore', () => {
 // died with its Host leaves a Job with no one to answer its workers and no button to fix it. Measured:
 // a worker asked a question and nothing answered it until a person ran the CLI by hand.
 describe('a coordinator that did not survive the restart', () => {
-  const withCoordinator = (): OrchState => ({
-    ...emptyState(),
+  const withCoordinator = (): OrchState =>
+    stateFromLegacy({
     runs: [
       {
         id: 'run_1',
@@ -852,7 +851,7 @@ describe('a coordinator that did not survive the restart', () => {
     expect(res.coordinatorsLost).toBe(1)
     expect(store.get().runs[0].coordinatorSessionId).toBeUndefined()
     // The account is what the restart button starts the next one on — losing it loses the button too.
-    expect(store.get().runs[0].coordinatorAccountId).toBe('acc1')
+    expect(store.get().jobs[0].coordinatorAccountId).toBe('acc1')
   })
 
   it('keeps the slot when the Host handed that session back', async () => {

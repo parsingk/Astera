@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   emptyState,
   stampPolicySnapshot,
-  createRun,
+  createJob,
+  startJobRun,
   createTask,
   openDispatch,
   applyWorkerDone,
@@ -22,9 +23,8 @@ import {
   createGate,
   resolveGate,
   deleteRuns,
-  spawnScheduledRun,
   pauseSchedule,
-  latestOrdinaryRun,
+  latestRun,
   setRunWorktree,
   attachCoordinator,
   detachCoordinator,
@@ -51,13 +51,21 @@ const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchS
 const one = (exitCode: number, output = ''): CheckResult[] => [
   { configId: 'cfg1', name: 'cfg1', status: exitCode === 0 ? 'passed' : 'failed', exitCode, outputTail: output }
 ]
+/** 예전의 createRun 한 번 — 이제 계획을 만들고 그 1회차를 시작하는 두 걸음이다.
+ *  이 파일의 테스트들은 대부분 "Task 가 달린 회차 하나" 만 있으면 되므로 그 둘을 여기서 묶는다. */
+const seedRun = (
+  over: Parameters<typeof createJob>[1],
+  now: string
+): { state: OrchState; value: { id: string } } => {
+  const planned = unwrap<{ id: string }>(createJob(emptyState(), over, now) as never)
+  return unwrap<{ id: string }>(startJobRun(planned.state, planned.value.id, now) as never)
+}
+
 const SAME: RepairTarget = { kind: 'same-session', sessionId: 'sess1', cwd: 'D:/p', provider: 'codex', accountId: 'acc1' }
 
 /** run + task + dispatch가 준비된 상태를 만든다 */
 const seed = (): { s: OrchState; runId: string; taskId: string; dispatchId: string } => {
-  let { state: s, value: run } = unwrap<{ id: string }>(
-    createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-  )
+  let { state: s, value: run } = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
   const t = unwrap<{ id: string }>(
     createTask(s, { runId: run.id, title: 't', spec: 'do it', deps: [] }, NOW) as never
   )
@@ -562,9 +570,7 @@ describe('Gate', () => {
   it('Gate를 만들면 Task가 blocked가 되고 dispatch를 막는다', () => {
     // 열린 dispatch가 있으면 Gate 자체가 거부되므로(위 테스트), 아직 dispatch되지 않은
     // (ready) Task로 준비한다 — seed()는 쓸 수 없다.
-    const run = unwrap<{ id: string }>(
-      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-    )
+    const run = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
     const t = unwrap<{ id: string }>(
       createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW) as never
     )
@@ -591,9 +597,7 @@ describe('Gate', () => {
     expect(blocked.ok).toBe(false)
   })
   it('gate-resolve가 Task를 ready로 되돌린다', () => {
-    const run = unwrap<{ id: string }>(
-      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-    )
+    const run = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
     const t = unwrap<{ id: string }>(
       createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW) as never
     )
@@ -644,9 +648,7 @@ describe('Gate', () => {
   describe('gate-resolve가 deps를 뛰어넘지 않는다', () => {
     /** A(pending) ← B(deps:[A]) 를 만들고 B에 Gate를 걸어 blocked로 둔다 */
     const blockedWithPendingDep = (): { s: OrchState; gateId: string; a: string; b: string } => {
-      const run = unwrap<{ id: string }>(
-        createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-      )
+      const run = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
       const a = unwrap<{ id: string }>(
         createTask(run.state, { runId: run.value.id, title: 'A', spec: 's', deps: [] }, NOW) as never
       )
@@ -705,9 +707,7 @@ describe('Gate', () => {
 
 describe('createTask — deps 검증', () => {
   it('존재하지 않는 dep을 거부한다', () => {
-    const run = unwrap<{ id: string }>(
-      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-    )
+    const run = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
     const r = createTask(
       run.state,
       { runId: run.value.id, title: 't', spec: 's', deps: ['tsk_nope'] },
@@ -716,9 +716,7 @@ describe('createTask — deps 검증', () => {
     expect(r.ok).toBe(false)
   })
   it('자기 자신을 dep으로 두는 순환을 거부한다', () => {
-    const run = unwrap<{ id: string }>(
-      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-    )
+    const run = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
     const a = unwrap<{ id: string }>(
       createTask(run.state, { runId: run.value.id, title: 'a', spec: 's', deps: [] }, NOW) as never
     )
@@ -735,9 +733,7 @@ describe('createTask — deps 검증', () => {
     expect(b.value.deps).toEqual([a.value.id])
   })
   it('validateConfigId 를 그대로 저장한다', () => {
-    const run = unwrap<{ id: string }>(
-      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-    )
+    const run = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
     const r = createTask(
       run.state,
       { runId: run.value.id, title: 't', spec: 's', deps: [], validateConfigId: 'cfg1' },
@@ -746,9 +742,7 @@ describe('createTask — deps 검증', () => {
     expect(r.ok && r.value.validateConfigId).toBe('cfg1')
   })
   it('validateConfigId 가 없으면 필드 자체가 없다', () => {
-    const run = unwrap<{ id: string }>(
-      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-    )
+    const run = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
     const r = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
     expect(r.ok && 'validateConfigId' in r.value).toBe(false)
   })
@@ -794,9 +788,8 @@ describe('openDispatch — retryOf·sessionId 검증', () => {
   })
   it('retryOf가 다른 Task 소속 dispatch를 가리키면 거부한다', () => {
     const { s, dispatchId } = seed()
-    const run2 = unwrap<{ id: string }>(
-      createRun(s, { objective: 'o2', cwd: 'D:/p' }, NOW) as never
-    )
+    const plan2 = unwrap<{ id: string }>(createJob(s, { objective: 'o2', cwd: 'D:/p' }, NOW) as never)
+    const run2 = unwrap<{ id: string }>(startJobRun(plan2.state, plan2.value.id, NOW) as never)
     const t2 = unwrap<{ id: string }>(
       createTask(run2.state, { runId: run2.value.id, title: 't2', spec: 's', deps: [] }, NOW) as never
     )
@@ -817,9 +810,8 @@ describe('openDispatch — retryOf·sessionId 검증', () => {
   })
   it('sessionId가 이미 열린 dispatch에 쓰이고 있으면 거부한다', () => {
     const { s, taskId } = seed() // sessionId 'sess1'이 이미 열려 있다
-    const run2 = unwrap<{ id: string }>(
-      createRun(s, { objective: 'o2', cwd: 'D:/p' }, NOW) as never
-    )
+    const plan2 = unwrap<{ id: string }>(createJob(s, { objective: 'o2', cwd: 'D:/p' }, NOW) as never)
+    const run2 = unwrap<{ id: string }>(startJobRun(plan2.state, plan2.value.id, NOW) as never)
     const t2 = unwrap<{ id: string }>(
       createTask(run2.state, { runId: run2.value.id, title: 't2', spec: 's', deps: [] }, NOW) as never
     )
@@ -884,7 +876,7 @@ describe('openDispatch — validating·reviewing 은 거절한다(회귀)', () =
   // 코디네이터가 검사 중인 Task 에 두 번째 워커를 얹지 못해야 한다.
   it('convergence 가 없는 Run 에서도 거절한다 — 이 문은 완료 수렴보다 먼저부터 있었다', () => {
     const { state, taskId } = asAwaitingVerdict('validating')
-    expect(state.runs[0].convergence).toBeUndefined()
+    expect(state.jobs[0].convergence).toBeUndefined()
     const r = openDispatch(
       state,
       { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '' },
@@ -1117,12 +1109,13 @@ describe('applyValidationResult — convergence', () => {
   /** convergence Run 에 check 둘이 걸린 Task 를 validating 까지 보낸 상태 */
   const armed = (
     extra: Partial<Task> = {},
-    runExtra: Partial<import('./types').Run> = {}
+    runExtra: Partial<import('./types').Job> = {}
   ): { s: OrchState; taskId: string; dispatchId: string } => {
     const { s, taskId, dispatchId } = seed()
+    // 수렴 정책은 계획의 것이다 — 회차에 얹으면 policyOf 가 보지 못한다
     const on: OrchState = {
       ...s,
-      runs: s.runs.map((r) => ({ ...r, convergence: {}, ...runExtra })),
+      jobs: s.jobs.map((j) => ({ ...j, convergence: {}, ...runExtra })),
       tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1', 'cfg2'], ...extra } : t))
     }
     const r = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
@@ -1530,11 +1523,11 @@ describe('openDispatch — repair 와 ignoreCircuit', () => {
   })
 })
 
-describe('createRun / createTask / spawnScheduledRun — convergence 칸', () => {
-  it('createRun 은 convergence 를 싣고, 없으면 칸 자체가 없다', () => {
-    const a = unwrap<import('./types').Run>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p', convergence: { maxFixAttempts: 2 } }, NOW) as never)
+describe('createJob / createTask / startJobRun — convergence 칸', () => {
+  it('createJob 은 convergence 를 싣고, 없으면 칸 자체가 없다', () => {
+    const a = unwrap<import('./types').Job>(createJob(emptyState(), { objective: 'o', cwd: 'D:/p', convergence: { maxFixAttempts: 2 } }, NOW) as never)
     expect(a.value.convergence).toEqual({ maxFixAttempts: 2 })
-    const b = unwrap<import('./types').Run>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never)
+    const b = unwrap<import('./types').Job>(createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never)
     expect(b.value).not.toHaveProperty('convergence')
   })
   it('createTask 는 validateConfigIds 를 싣고 빈 배열은 싣지 않는다', () => {
@@ -1544,14 +1537,16 @@ describe('createRun / createTask / spawnScheduledRun — convergence 칸', () =>
     const b = unwrap<Task>(createTask(s, { runId, title: 't', spec: 's', deps: [], validateConfigIds: [] }, NOW) as never)
     expect(b.value).not.toHaveProperty('validateConfigIds')
   })
-  it('회차는 validateConfigIds 와 Run 의 convergence 를 물려받는다', () => {
-    let { state: s } = unwrap<import('./types').Run>(
-      createRun(emptyState(), { objective: 'o', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } as never, convergence: {} }, NOW) as never
+  // 회차는 이제 정책을 복사하지 않는다 — 계획에 한 벌만 있고 policyOf 가 그것을 읽는다. 물려받는
+  // 것은 Task 의 정의뿐이다.
+  it('회차는 계획의 정의 Task 를 그대로 베낀다', () => {
+    let { state: s } = unwrap<import('./types').Job>(
+      createJob(emptyState(), { objective: 'o', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } as never, convergence: {} }, NOW) as never
     )
-    const tmpl = s.runs[0]
-    s = unwrap<Task>(createTask(s, { runId: tmpl.id, title: 't', spec: 's', deps: [], validateConfigIds: ['x'] }, NOW) as never).state
-    const fired = unwrap<import('./types').Run>(spawnScheduledRun(s, tmpl.id, LATER) as never)
-    expect(fired.value.convergence).toEqual({})
+    const job = s.jobs[0]
+    s = unwrap<Task>(createTask(s, { jobId: job.id, title: 't', spec: 's', deps: [], validateConfigIds: ['x'] }, NOW) as never).state
+    const fired = unwrap<import('./types').JobRun>(startJobRun(s, job.id, LATER) as never)
+    expect(fired.state.jobs[0].convergence).toEqual({})
     expect(fired.state.tasks.find((t) => t.runId === fired.value.id)?.validateConfigIds).toEqual(['x'])
   })
 })
@@ -2084,8 +2079,9 @@ describe('deleteRuns', () => {
 
   it('다른 Run 은 건드리지 않는다', () => {
     const { s: s1, runId: keep } = seed()
+    const plan2 = unwrap<{ id: string }>(createJob(s1, { objective: 'o2', cwd: 'D:/q' }, NOW) as never)
     const { state: s2, value: gone } = unwrap<{ id: string }>(
-      createRun(s1, { objective: 'o2', cwd: 'D:/q' }, NOW) as never
+      startJobRun(plan2.state, plan2.value.id, NOW) as never
     )
     const withTask = unwrap<{ id: string }>(
       createTask(s2, { runId: gone.id, title: 't2', spec: 's2', deps: [] }, NOW) as never
@@ -2109,10 +2105,10 @@ describe('deleteRuns', () => {
 
 const FIRE = '2026-08-21T09:00:00.000Z'
 
-/** Task 둘(A, 그리고 A 에 의존하는 B)을 가진 예약 템플릿 */
+/** Task 둘(A, 그리고 A 에 의존하는 B)을 정의로 가진 예약 Job */
 const template = (): { s: OrchState; templateId: string; aId: string; bId: string } => {
   const r = unwrap<{ id: string }>(
-    createRun(
+    createJob(
       emptyState(),
       {
         objective: '매일 점검',
@@ -2124,38 +2120,41 @@ const template = (): { s: OrchState; templateId: string; aId: string; bId: strin
     ) as never
   )
   const a = unwrap<{ id: string }>(
-    createTask(r.state, { runId: r.value.id, title: 'A', spec: 'do a', deps: [] }, NOW) as never
+    createTask(r.state, { jobId: r.value.id, title: 'A', spec: 'do a', deps: [] }, NOW) as never
   )
   const b = unwrap<{ id: string }>(
     createTask(
       a.state,
-      { runId: r.value.id, title: 'B', spec: 'do b', deps: [a.value.id] },
+      { jobId: r.value.id, title: 'B', spec: 'do b', deps: [a.value.id] },
       NOW
     ) as never
   )
   return { s: b.state, templateId: r.value.id, aId: a.value.id, bId: b.value.id }
 }
 
-describe('spawnScheduledRun', () => {
-  it('템플릿의 값을 물려받은 자식 Run 을 만든다', () => {
+describe('startJobRun', () => {
+  // 회차는 계획의 값을 **복사하지 않는다** — 계획을 가리킬 뿐이다. 그것이 이 분리로 얻은 것이고,
+  // 예전에는 목표·cwd·동시 실행 수가 회차마다 한 벌씩 더 있었다.
+  it('계획을 가리키는 회차를 만든다', () => {
     const { s, templateId } = template()
     const { state, value: child } = unwrap<{ id: string }>(
-      spawnScheduledRun(s, templateId, FIRE) as never
+      startJobRun(s, templateId, FIRE) as never
     )
     const saved = state.runs.find((r) => r.id === child.id)!
-    expect(saved.objective).toBe('매일 점검')
-    expect(saved.cwd).toBe('D:/p')
-    expect(saved.concurrency).toBe(2)
-    expect(saved.autoDispatch).toBe(true)
-    expect(saved.templateId).toBe(templateId)
+    expect(saved.jobId).toBe(templateId)
+    expect(saved.ordinal).toBe(1)
     expect(saved.createdAt).toBe(FIRE)
+    const job = state.jobs.find((j) => j.id === templateId)!
+    expect(job.objective).toBe('매일 점검')
+    expect(job.concurrency).toBe(2)
+    expect(job.fireCount).toBe(1)
   })
 
-  // 자식이 schedule 을 물려받으면 자식이 또 발화해 회차가 무한히 증식한다
-  it('자식에는 schedule 이 없다', () => {
+  // 회차가 schedule 을 가지면 회차가 또 발화해 무한히 증식한다. 이제 타입이 그것을 막는다.
+  it('회차에는 schedule 칸 자체가 없다', () => {
     const { s, templateId } = template()
     const { value: child } = unwrap<{ id: string; schedule?: unknown }>(
-      spawnScheduledRun(s, templateId, FIRE) as never
+      startJobRun(s, templateId, FIRE) as never
     )
     expect(child.schedule).toBeUndefined()
   })
@@ -2165,7 +2164,7 @@ describe('spawnScheduledRun', () => {
   it('deps 를 자식의 새 id 로 다시 매핑한다', () => {
     const { s, templateId, aId } = template()
     const { state, value: child } = unwrap<{ id: string }>(
-      spawnScheduledRun(s, templateId, FIRE) as never
+      startJobRun(s, templateId, FIRE) as never
     )
     const copies = state.tasks.filter((t) => t.runId === child.id)
     const copyA = copies.find((t) => t.title === 'A')!
@@ -2177,7 +2176,7 @@ describe('spawnScheduledRun', () => {
   it('deps 없는 사본은 ready, deps 있는 사본은 pending', () => {
     const { s, templateId } = template()
     const { state, value: child } = unwrap<{ id: string }>(
-      spawnScheduledRun(s, templateId, FIRE) as never
+      startJobRun(s, templateId, FIRE) as never
     )
     const copies = state.tasks.filter((t) => t.runId === child.id)
     expect(copies.find((t) => t.title === 'A')!.status).toBe('ready')
@@ -2196,7 +2195,7 @@ describe('spawnScheduledRun', () => {
       )
     }
     const { state, value: child } = unwrap<{ id: string }>(
-      spawnScheduledRun(dirty, templateId, FIRE) as never
+      startJobRun(dirty, templateId, FIRE) as never
     )
     const copyA = state.tasks.find((t) => t.runId === child.id && t.title === 'A')!
     expect(copyA.result).toBeUndefined()
@@ -2206,14 +2205,14 @@ describe('spawnScheduledRun', () => {
 
   // 템플릿에서 **fireCount 하나만** 움직인다. 발화 횟수는 템플릿에 새기는 값이라 여기서 늘어나는
   // 것이 맞고, 나머지는 그대로여야 한다 — 특히 Task 는 정의이므로 손대면 다음 회차가 달라진다.
-  it('템플릿은 fireCount 만 늘고 나머지와 Task 는 그대로다', () => {
+  it('계획은 fireCount 만 늘고 정의 Task 는 그대로다', () => {
     const { s, templateId } = template()
-    const before = s.runs.find((r) => r.id === templateId)!
-    const { state } = unwrap<{ id: string }>(spawnScheduledRun(s, templateId, FIRE) as never)
-    const after = state.runs.find((r) => r.id === templateId)!
+    const before = s.jobs.find((j) => j.id === templateId)!
+    const { state } = unwrap<{ id: string }>(startJobRun(s, templateId, FIRE) as never)
+    const after = state.jobs.find((j) => j.id === templateId)!
     expect(after).toEqual({ ...before, fireCount: 1 })
-    expect(state.tasks.filter((t) => t.runId === templateId)).toEqual(
-      s.tasks.filter((t) => t.runId === templateId)
+    expect(state.tasks.filter((t) => t.jobId === templateId)).toEqual(
+      s.tasks.filter((t) => t.jobId === templateId)
     )
   })
 
@@ -2224,14 +2223,14 @@ describe('spawnScheduledRun', () => {
     let st = s
     const ordinals: (number | undefined)[] = []
     for (let i = 0; i < 3; i++) {
-      const r = unwrap<{ id: string; fireOrdinal?: number }>(
-        spawnScheduledRun(st, templateId, FIRE) as never
+      const r = unwrap<{ id: string; ordinal?: number }>(
+        startJobRun(st, templateId, FIRE) as never
       )
       st = r.state
-      ordinals.push(r.value.fireOrdinal)
+      ordinals.push(r.value.ordinal)
     }
     expect(ordinals).toEqual([1, 2, 3])
-    expect(st.runs.find((r) => r.id === templateId)!.fireCount).toBe(3)
+    expect(st.jobs.find((j) => j.id === templateId)!.fireCount).toBe(3)
   })
 
   // 이 필드가 생기기 전에 만들어진 템플릿 — fireCount 가 없다. 1 부터 세기 시작해야 한다
@@ -2239,17 +2238,17 @@ describe('spawnScheduledRun', () => {
     const { s, templateId } = template()
     const stripped: OrchState = {
       ...s,
-      runs: s.runs.map((r) => {
-        if (r.id !== templateId) return r
-        const { fireCount: _drop, ...rest } = r
+      jobs: s.jobs.map((j) => {
+        if (j.id !== templateId) return j
+        const { fireCount: _drop, ...rest } = j
         return rest
       })
     }
-    const { state, value: child } = unwrap<{ id: string; fireOrdinal?: number }>(
-      spawnScheduledRun(stripped, templateId, FIRE) as never
+    const { state, value: child } = unwrap<{ id: string; ordinal?: number }>(
+      startJobRun(stripped, templateId, FIRE) as never
     )
-    expect(child.fireOrdinal).toBe(1)
-    expect(state.runs.find((r) => r.id === templateId)!.fireCount).toBe(1)
+    expect(child.ordinal).toBe(1)
+    expect(state.jobs.find((j) => j.id === templateId)!.fireCount).toBe(1)
   })
 
   // 회차를 지워도 발화 횟수는 그대로여야 한다 — 이 결함의 재현이다
@@ -2258,25 +2257,23 @@ describe('spawnScheduledRun', () => {
     let st = s
     const kids: string[] = []
     for (let i = 0; i < 3; i++) {
-      const r = unwrap<{ id: string }>(spawnScheduledRun(st, templateId, FIRE) as never)
+      const r = unwrap<{ id: string }>(startJobRun(st, templateId, FIRE) as never)
       st = r.state
       kids.push(r.value.id)
     }
     const pruned = deleteRuns(st, new Set(kids.slice(0, 2)))
-    expect(pruned.runs.filter((r) => r.templateId === templateId)).toHaveLength(1)
-    expect(pruned.runs.find((r) => r.id === templateId)!.fireCount).toBe(3)
+    expect(pruned.runs.filter((r) => r.jobId === templateId)).toHaveLength(1)
+    expect(pruned.jobs.find((j) => j.id === templateId)!.fireCount).toBe(3)
   })
 
   it('예약이 아닌 Run 은 거절한다', () => {
-    const r = unwrap<{ id: string }>(
-      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-    )
-    const res = spawnScheduledRun(r.state, r.value.id, FIRE)
+    const r = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
+    const res = startJobRun(r.state, r.value.id, FIRE)
     expect(res.ok).toBe(false)
   })
 
   it('없는 Run 은 거절한다', () => {
-    expect(spawnScheduledRun(emptyState(), 'run_nope', FIRE).ok).toBe(false)
+    expect(startJobRun(emptyState(), 'run_nope', FIRE).ok).toBe(false)
   })
 
   // deps 의 id 가 템플릿 밖을 가리키면(손으로 고친 값) 떨어뜨린다
@@ -2288,7 +2285,7 @@ describe('spawnScheduledRun', () => {
       tasks: s.tasks.map((t) => (t.id === bId ? { ...t, deps: [t.deps[0], outsideId] } : t))
     }
     const { state, value: child } = unwrap<{ id: string }>(
-      spawnScheduledRun(dirty, templateId, FIRE) as never
+      startJobRun(dirty, templateId, FIRE) as never
     )
     const copyB = state.tasks.find((t) => t.runId === child.id && t.title === 'B')!
     expect(copyB.deps.length).toBe(1)
@@ -2304,7 +2301,7 @@ describe('spawnScheduledRun', () => {
       tasks: s.tasks.map((t) => (t.id === bTask.id ? { ...t, parentId: aId } : t))
     }
     const { state, value: child } = unwrap<{ id: string }>(
-      spawnScheduledRun(dirty, templateId, FIRE) as never
+      startJobRun(dirty, templateId, FIRE) as never
     )
     const copies = state.tasks.filter((t) => t.runId === child.id)
     const copyA = copies.find((t) => t.title === 'A')!
@@ -2323,7 +2320,7 @@ describe('spawnScheduledRun', () => {
       tasks: s.tasks.map((t) => (t.id === bTask.id ? { ...t, parentId: outsideParentId } : t))
     }
     const { state, value: child } = unwrap<{ id: string }>(
-      spawnScheduledRun(dirty, templateId, FIRE) as never
+      startJobRun(dirty, templateId, FIRE) as never
     )
     const copyB = state.tasks.find((t) => t.runId === child.id && t.title === 'B')!
     expect('parentId' in copyB).toBe(false)
@@ -2333,7 +2330,7 @@ describe('spawnScheduledRun', () => {
 describe('pauseSchedule', () => {
   it('pausing a schedule records that the person closed the dispatches', () => {
     const { s, templateId } = template()
-    const fired = unwrap<{ id: string }>(spawnScheduledRun(s, templateId, FIRE) as never)
+    const fired = unwrap<{ id: string }>(startJobRun(s, templateId, FIRE) as never)
     const readyTask = fired.state.tasks.find((t) => t.runId === fired.value.id && t.status === 'ready')!
     const opened = unwrap<{ id: string }>(
       openDispatch(
@@ -2354,73 +2351,51 @@ describe('pauseSchedule', () => {
   })
 })
 
-describe('latestOrdinaryRun', () => {
+describe('latestRun', () => {
   const plain = (state: OrchState, objective: string): { state: OrchState; id: string } => {
-    const r = unwrap<{ id: string }>(
-      createRun(state, { objective, cwd: 'D:/p' }, NOW) as never
-    )
+    const r = seedRun({ objective, cwd: 'D:/p' }, NOW)
     return { state: r.state, id: r.value.id }
   }
 
-  it('평범한 Run 중 가장 나중에 만든 것을 준다', () => {
+  it('가장 나중에 만든 회차를 준다', () => {
     const first = plain(emptyState(), 'A')
     const second = plain(first.state, 'B')
-    expect(latestOrdinaryRun(second.state)?.id).toBe(second.id)
+    expect(latestRun(second.state)?.id).toBe(second.id)
   })
 
-  // 템플릿은 정의를 담는 그릇이고 그 편집은 지목해서만 되어야 한다 — 여기서 집히면 --run 없는
-  // task-create 가 템플릿에 떨어져 그 뒤 모든 회차로 복사된다
-  it('예약 템플릿은 건너뛴다', () => {
+  // 예전에는 이 함수가 한 배열에서 "템플릿도 회차도 아닌 것" 을 골라내야 했고, 그것을 놓치면
+  // --run 없는 task-create 가 템플릿에 떨어져 그 뒤 모든 회차로 복사됐다. 이제 계획은 이 배열에
+  // 오지 않으므로 고를 것이 없다 — 예약 Job 을 만들어도 회차 목록은 움직이지 않는다.
+  it('예약 계획은 이 배열에 오지 않는다', () => {
     const first = plain(emptyState(), 'A')
     const tmpl = unwrap<{ id: string }>(
-      createRun(
+      createJob(
         first.state,
         { objective: '매일 점검', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } },
         NOW
       ) as never
     )
-    expect(latestOrdinaryRun(tmpl.state)?.id).toBe(first.id)
+    expect(latestRun(tmpl.state)?.id).toBe(first.id)
   })
 
-  // 회차는 15초 ticker 가 만들고 배열의 끝에 붙는다 — 사람의 동작 없이 이 답이 움직이면
-  // check --wait 가 방금 생긴 회차의 배달을 기다리며 영원히 선다
-  it('예약 회차는 건너뛴다', () => {
+  it('예약이 발화하면 그 회차가 가장 최근이다', () => {
     const first = plain(emptyState(), 'A')
     const tmpl = unwrap<{ id: string }>(
-      createRun(
+      createJob(
         first.state,
         { objective: '매일 점검', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } },
         NOW
       ) as never
     )
-    const spawned = unwrap<{ id: string }>(
-      spawnScheduledRun(tmpl.state, tmpl.value.id, FIRE) as never
-    )
-    expect(latestOrdinaryRun(spawned.state)?.id).toBe(first.id)
+    const fired = unwrap<{ id: string }>(startJobRun(tmpl.state, tmpl.value.id, FIRE) as never)
+    expect(latestRun(fired.state)?.id).toBe(fired.value.id)
   })
 
-  // 부르는 쪽의 "Run 이 없다" 오류 경로가 그대로 살아 있어야 한다
-  it('템플릿과 회차뿐이면 undefined', () => {
-    const tmpl = unwrap<{ id: string }>(
-      createRun(
-        emptyState(),
-        { objective: '매일 점검', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } },
-        NOW
-      ) as never
-    )
-    const spawned = unwrap<{ id: string }>(
-      spawnScheduledRun(tmpl.state, tmpl.value.id, FIRE) as never
-    )
-    expect(latestOrdinaryRun(spawned.state)).toBeUndefined()
-    expect(latestOrdinaryRun(emptyState())).toBeUndefined()
-  })
 })
 
 describe('setRunWorktree', () => {
   const withRun = (): { s: OrchState; id: string } => {
-    const { state, value } = unwrap<{ id: string }>(
-      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
-    )
+    const { state, value } = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
     return { s: state, id: value.id }
   }
 
@@ -2826,15 +2801,13 @@ describe('recordResume — 정지 이력의 마지막 항목을 닫는다', () =
 
 describe('코디네이터 세션 붙이기·떼기', () => {
   const withRun = (over: Record<string, unknown> = {}): { s: OrchState; runId: string } => {
-    const r = unwrap<{ id: string }>(
-      createRun(emptyState(), { objective: 'o', cwd: 'D:/p', ...over }, NOW) as never
-    )
+    const r = seedRun({ objective: 'o', cwd: 'D:/p', ...over }, NOW)
     return { s: r.state, runId: r.value.id }
   }
 
-  it('run-create 가 코디네이터 계정을 싣는다', () => {
-    const { s, runId } = withRun({ coordinatorAccountId: 'acc1' })
-    expect(s.runs.find((r) => r.id === runId)?.coordinatorAccountId).toBe('acc1')
+  it('run-create 가 코디네이터 계정을 계획에 싣는다', () => {
+    const { s } = withRun({ coordinatorAccountId: 'acc1' })
+    expect(s.jobs[0]?.coordinatorAccountId).toBe('acc1')
   })
 
   // 빈 문자열이 "지정 없음" 과 갈라지면, 그 구분으로 코디네이터를 띄울지 정하는 자리가 흔들린다
@@ -2881,9 +2854,11 @@ describe('코디네이터 세션 붙이기·떼기', () => {
 
   // 회차는 자신이 도는 Run 이므로 관리자가 필요하고, 누구로 할지는 템플릿을 만든 사람이 정했다.
   // 세션 id 와 실패 횟수는 정의가 아니라 지난 회차의 결과라 물려주지 않는다
-  it('예약 회차가 코디네이터 계정을 물려받고 세션·실패는 물려받지 않는다', () => {
+  // 계정은 이제 계획에 한 벌만 있다 — 회차가 물려받을 것이 없고, 읽는 쪽이 계획을 본다.
+  // 세션 id 는 회차의 것이라 새 회차에는 없다.
+  it('회차는 계정을 복사하지 않고, 세션도 물려받지 않는다', () => {
     const t = unwrap<{ id: string }>(
-      createRun(
+      createJob(
         emptyState(),
         {
           objective: '매일',
@@ -2894,21 +2869,24 @@ describe('코디네이터 세션 붙이기·떼기', () => {
         NOW
       ) as never
     )
+    // 1회차에 관리자를 붙였다가 뗀다 — 세션은 회차의 것이므로 계획에는 붙일 자리가 없다.
+    const first = unwrap<{ id: string }>(startJobRun(t.state, t.value.id, FIRE) as never)
     let st = unwrap<{ id: string }>(
-      attachCoordinator(t.state, { runId: t.value.id, sessionId: 'sess-template' }) as never
+      attachCoordinator(first.state, { runId: first.value.id, sessionId: 'sess-1' }) as never
     ).state
-    st = unwrap<{ id: string }>(detachCoordinator(st, { runId: t.value.id }) as never).state
-    const child = unwrap<{ id: string }>(spawnScheduledRun(st, t.value.id, FIRE) as never)
+    st = unwrap<{ id: string }>(detachCoordinator(st, { runId: first.value.id }) as never).state
+    // 2회차는 1회차의 세션을 물려받지 않는다.
+    const child = unwrap<{ id: string }>(startJobRun(st, t.value.id, LATER) as never)
     const saved = child.state.runs.find((r) => r.id === child.value.id)!
-    expect(saved.coordinatorAccountId).toBe('acc1')
+    expect(child.state.jobs[0].coordinatorAccountId).toBe('acc1')
+    expect(saved).not.toHaveProperty('coordinatorAccountId')
     expect(saved).not.toHaveProperty('coordinatorSessionId')
-    expect(saved).not.toHaveProperty('coordinatorFailures')
   })
 })
 
 describe('bindNativeSession', () => {
   const opened = (): OrchState => {
-    const r0 = unwrap<{ id: string }>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW))
+    const r0 = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
     const r1 = unwrap<Task>(
       createTask(r0.state, { runId: r0.value.id, title: 't', spec: 's', deps: [] }, NOW)
     )
@@ -2976,7 +2954,7 @@ describe('bindNativeSession', () => {
 
 describe('beginValidation', () => {
   const taskDispatchedFixture = (): OrchState => {
-    const r0 = unwrap<{ id: string }>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW))
+    const r0 = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
     const r1 = unwrap<Task>(
       createTask(r0.state, { runId: r0.value.id, title: 't', spec: 'do it', deps: [] }, NOW)
     )
@@ -3019,7 +2997,7 @@ describe('beginValidation', () => {
 
 describe('a recovery Gate on a dispatched Task', () => {
   const taskDispatchedFixture = (): OrchState => {
-    const r0 = unwrap<{ id: string }>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW))
+    const r0 = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
     const r1 = unwrap<Task>(
       createTask(r0.state, { runId: r0.value.id, title: 't', spec: 'do it', deps: [] }, NOW)
     )
@@ -3133,11 +3111,11 @@ describe('writeOffDispatch', () => {
 
 describe('applyReviewResult — convergence', () => {
   /** convergence Run, 검토 걸린 Task 를 reviewing 까지 보내고 검토 Dispatch 를 연 상태 */
-  const reviewing = (extra: Partial<Task> = {}, runExtra: Partial<import('./types').Run> = {}) => {
+  const reviewing = (extra: Partial<Task> = {}, runExtra: Partial<import('./types').Job> = {}) => {
     const { s, taskId, dispatchId } = seed()
     const on: OrchState = {
       ...s,
-      runs: s.runs.map((r) => ({ ...r, convergence: {}, ...runExtra })),
+      jobs: s.jobs.map((j) => ({ ...j, convergence: {}, ...runExtra })),
       tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true, ...extra } : t))
     }
     const done = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
@@ -3306,7 +3284,7 @@ describe('interruptStalledTask — convergence Run 은 다시 돌린다', () => 
     const { s, taskId, dispatchId } = seed()
     const on: OrchState = {
       ...s,
-      runs: s.runs.map((r) => ({ ...r, convergence: {} })),
+      jobs: s.jobs.map((j) => ({ ...j, convergence: {} })),
       tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t))
     }
     const v = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
@@ -3319,7 +3297,7 @@ describe('interruptStalledTask — convergence Run 은 다시 돌린다', () => 
     const { s, taskId, dispatchId } = seed()
     const on: OrchState = {
       ...s,
-      runs: s.runs.map((r) => ({ ...r, convergence: {} })),
+      jobs: s.jobs.map((j) => ({ ...j, convergence: {} })),
       tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true } : t))
     }
     const v = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)

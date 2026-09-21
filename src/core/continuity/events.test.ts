@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { deriveEvents } from './events'
 import { emptyState, type OrchState } from '../orchestration/state'
-import { FAILURE_LIMIT, type Run, type Task, type Dispatch } from '../orchestration/types'
+import { FAILURE_LIMIT, type Task, type Dispatch } from '../orchestration/types'
+import { stateFromLegacy } from '../orchestration/legacyState'
+import type { LegacyRun } from '../orchestration/legacy'
 
 const NOW = '2026-09-08T10:00:00.000Z'
 const T1 = '2026-09-08T09:00:00.000Z'
 
-const run = (over: Partial<Run> = {}): Run => ({
+const run = (over: Partial<LegacyRun> = {}): LegacyRun => ({
   id: 'run_1',
   objective: 'o',
   cwd: 'D:/p',
@@ -25,7 +27,8 @@ const task = (over: Partial<Task> = {}): Task => ({
   updatedAt: T1,
   ...over
 })
-const withRun = (r: Run, tasks: Task[] = []): OrchState => ({ ...emptyState(), runs: [r], tasks })
+const withRun = (r: LegacyRun, tasks: Task[] = []): OrchState => stateFromLegacy({ runs: [r], tasks })
+const withRuns = (rs: LegacyRun[], tasks: Task[] = []): OrchState => stateFromLegacy({ runs: rs, tasks })
 
 describe('deriveEvents — runs', () => {
   it('a run appearing without pendingStart has started', () => {
@@ -44,9 +47,9 @@ describe('deriveEvents — runs', () => {
     const template = run({ schedule: { kind: 'daily', at: '09:00' } as never })
     expect(deriveEvents(emptyState(), withRun(template), NOW)).toEqual([])
     const fire = run({ id: 'run_2', templateId: 'run_1', fireOrdinal: 1 })
-    expect(deriveEvents(withRun(template), { ...withRun(template), runs: [template, fire] }, NOW).map((e) => e.type)).toEqual([
-      'JOB_RUN_STARTED'
-    ])
+    expect(
+      deriveEvents(withRun(template), withRuns([template, fire]), NOW).map((e) => e.type)
+    ).toEqual(['JOB_RUN_STARTED'])
   })
 
   it('paused and resumed follow the flag', () => {
@@ -244,7 +247,10 @@ describe('deriveEvents — dispatches', () => {
   })
 
   it('a dispatch whose task is gone derives nothing rather than throwing', () => {
-    const orphan: OrchState = { ...emptyState(), runs: [run()], dispatches: [dispatch({ sessionId: 'sess-1' })] }
+    const orphan: OrchState = stateFromLegacy({
+      runs: [run()],
+      dispatches: [dispatch({ sessionId: 'sess-1' })]
+    })
     expect(deriveEvents(emptyState(), orphan, NOW).filter((e) => e.dispatchId)).toEqual([])
   })
 

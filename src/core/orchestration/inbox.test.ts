@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { NO_COORDINATOR_ANSWER, unattendedQuestions, unreadUpwardMail } from './inbox'
 import { emptyState, type OrchState } from './state'
-import type { Dispatch, Message, Run } from './types'
+import type { Dispatch, Message } from './types'
+import { stateFromLegacy } from './legacyState'
+import type { LegacyRun } from './legacy'
 
 const NOW = '2026-08-28T00:00:00.000Z'
 
-const run = (over: Partial<Run> = {}): Run => ({
+const run = (over: Partial<LegacyRun> = {}): LegacyRun => ({
   id: 'run_1',
   objective: 'o',
   cwd: '/p',
@@ -41,13 +43,13 @@ const question = (over: Partial<Message> = {}): Message => ({
   ...over
 })
 
-const state = (over: Partial<OrchState> = {}): OrchState => ({
-  ...emptyState(),
-  runs: [run()],
-  dispatches: [dispatch()],
-  messages: [question()],
-  ...over
-})
+const state = (over: Parameters<typeof stateFromLegacy>[0] = {}): OrchState =>
+  stateFromLegacy({
+    runs: [run()],
+    dispatches: [dispatch()],
+    messages: [question()],
+    ...over
+  })
 
 describe('NO_COORDINATOR_ANSWER', () => {
   // 워커가 읽는 문구다 — 무엇을 하라는 것인지와, 그래도 막히면 어디로 가라는 것까지 있어야
@@ -131,7 +133,7 @@ describe('unattendedQuestions', () => {
 describe('unreadUpwardMail', () => {
   const T0 = Date.parse(NOW)
   const STALE = 60_000
-  const withCoord = (over: Partial<Run> = {}): Run =>
+  const withCoord = (over: Partial<LegacyRun> = {}): LegacyRun =>
     run({ coordinatorSessionId: 'coord1', ...over })
 
   const mail = (over: Partial<Message> = {}): Message =>

@@ -3,7 +3,9 @@ import { runningCount, isStoppedWorker } from './running'
 import { snapshotFor } from './view'
 import { emptyState } from './state'
 import type { OrchState } from './state'
-import type { Dispatch, Run, Task } from './types'
+import type { Dispatch, Task } from './types'
+import { stateFromLegacy } from './legacyState'
+import type { LegacyRun } from './legacy'
 import { absPath } from '../testPaths'
 
 // 이 테스트는 JobTask 를 손으로 짓지 않고 **실제 투영(snapshotFor)을 거쳐** 만든다. 세는 규칙이
@@ -11,7 +13,7 @@ import { absPath } from '../testPaths'
 // 자리(OrchState)에서 출발해야 재현이 된다. JobTask 를 직접 지으면 그 어긋남 자체를 테스트가
 // 가정해 버려서, 투영이 바뀌는 날 조용히 통과한다.
 const PROJ = absPath('proj')
-const run = (id: string): Run => ({
+const run = (id: string): LegacyRun => ({
   id,
   objective: `objective ${id}`,
   cwd: PROJ,
@@ -51,13 +53,13 @@ const stopped = (d: Dispatch): Dispatch => ({
 
 /** 상태를 투영까지 돌려 그 Run 의 JobTask 들을 얻는다 */
 const countOf = (tasks: Task[], dispatches: Dispatch[]): number => {
-  const s: OrchState = { ...emptyState(), runs: [run('r1')], tasks, dispatches }
+  const s: OrchState = stateFromLegacy({ runs: [run('r1')], tasks, dispatches })
   return runningCount(snapshotFor(s, PROJ, () => true, [], () => null, () => true).runs[0].tasks)
 }
 
 /** 상태를 투영까지 돌려 그 Run 의 JobTask 하나를 얻는다 */
 const taskOf = (tasks: Task[], dispatches: Dispatch[], id: string) => {
-  const s: OrchState = { ...emptyState(), runs: [run('r1')], tasks, dispatches }
+  const s: OrchState = stateFromLegacy({ runs: [run('r1')], tasks, dispatches })
   const t = snapshotFor(s, PROJ, () => true, [], () => null, () => true).runs[0].tasks.find((x) => x.id === id)
   if (!t) throw new Error(`no such task in snapshot: ${id}`)
   return t

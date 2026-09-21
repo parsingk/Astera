@@ -2,7 +2,7 @@
 // here decides a strategy — it just runs the one it is handed, the same split the orchestration
 // guide draws between "what to do" and "doing it".
 import { randomBytes } from 'node:crypto'
-import { openDispatch, beginValidation, createGate, type OrchState } from '../../core/orchestration/state'
+import { openDispatch, beginValidation, createGate, jobOf, type OrchState } from '../../core/orchestration/state'
 import { buildCheckpoint, type GitSummary } from '../../core/orchestration/checkpoint'
 import { formatResumeSection } from '../../core/orchestration/resumeSection'
 import { policyOf, repairCountOf } from '../../core/orchestration/convergence'
@@ -107,7 +107,7 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
       provider: attempt.provider,
       accountId: attempt.accountId,
       sessionId: `pending:${randomBytes(4).toString('hex')}`,
-      cwd: run.cwd,
+      cwd: jobOf(state, run)?.cwd ?? '',
       specPath: '',
       retryOf: attempt.dispatchId,
       // 유실된 attempt 가 repair 였다면 새 attempt 도 repair 다 — 그 Task 는 아직 수렴 중이고, 세션을
@@ -146,7 +146,7 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
       spec: task.spec,
       taskId: task.id,
       dispatchId,
-      committing: !isSamePath(attempt.cwd, run.cwd),
+      committing: !isSamePath(attempt.cwd, jobOf(state, run)?.cwd ?? ''),
       knowledge,
       repair: {
         reason: attempt.repair,
@@ -177,7 +177,7 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
       ...(specFileContent ? { specFileContent } : {}),
       provider: attempt.provider,
       accountId: attempt.accountId,
-      runCwd: run.cwd,
+      runCwd: jobOf(state, run)?.cwd ?? '',
       worktree: attempt.cwd,
       ...(resume ? { resume } : {})
     })

@@ -18,7 +18,8 @@ import {
   type Outcome,
   type RepairReason,
   type Project,
-  type Run,
+  type Job,
+  type JobRun,
   type Task
 } from './types'
 import type { Provider } from '../providers/meta'
@@ -38,7 +39,9 @@ import {
 import { normalizeIssues, type ReviewIssueInput } from './review'
 
 export interface OrchState {
-  runs: Run[]
+  /** 계획. 설계 §4 — 여기 있는 것이 "무엇을 시킬 것인가" 이고, 아래 runs 가 "실제로 돈 것" 이다. */
+  jobs: Job[]
+  runs: JobRun[]
   tasks: Task[]
   dispatches: Dispatch[]
   messages: Message[]
@@ -52,6 +55,7 @@ export interface OrchState {
 }
 
 export const emptyState = (): OrchState => ({
+  jobs: [],
   runs: [],
   tasks: [],
   dispatches: [],
@@ -62,6 +66,55 @@ export const emptyState = (): OrchState => ({
 })
 
 export type Res<T> = { ok: true; state: OrchState; value: T } | { ok: false; error: string }
+
+/**
+ * 이 Task 가 속한 회차의 id.
+ *
+ * **정의 Task 는 이 함수가 불리는 자리에 오지 않는다.** 정의는 배치되지도, 검증되지도, 검토되지도,
+ * 보고되지도 않는다 — startJobRun 이 회차를 시작할 때 베껴 가는 것이 정의가 쓰이는 전부다. 그래서
+ * 아래의 모든 호출부는 이미 인스턴스를 들고 있다.
+ *
+ * 그래도 타입이 optional 인 것은 두 소유가 한 배열에 섞이기 때문이고(Task.runId 의 주석), 이 함수는
+ * 그 간극을 한 자리에 모아 둔다. 없으면 빈 문자열을 준다 — **어떤 회차와도 매치되지 않는 값**이라,
+ * 있어서는 안 될 정의가 여기까지 왔을 때 남의 회차에 붙는 대신 아무 데도 붙지 않는다.
+ */
+export const runIdOf = (t: Task): string => t.runId ?? ''
+
+/** 이 회차가 실행하고 있는 계획. 회차를 들고 목표·cwd·동시 실행 수 같은 **계획의 값**을 물을 때
+ *  쓴다 — 그 값들은 회차마다 달라지지 않으므로 회차에 복사해 두지 않는다(설계 §4). */
+/** 이 Task 가 멈춘 것 아래에 있는가 — **회차가 세워졌거나, 그 계획이 세워졌거나.**
+ *  일시 중지는 계획에 걸리고 그 순간 그 계획의 회차에도 붙는다(pauseSchedule). 둘 중 하나만 보면
+ *  손으로 고친 파일이나 나중에 생긴 회차에서 판정이 갈린다. */
+export function pausedForTask(s: OrchState, task: Pick<Task, 'runId'>): boolean {
+  const run = s.runs.find((r) => r.id === task.runId)
+  if (run === undefined) return false
+  return run.paused === true || jobOf(s, run)?.paused === true
+}
+
+export const jobOf = (s: OrchState, run: JobRun): Job | undefined =>
+  s.jobs.find((j) => j.id === run.jobId)
+
+/**
+ * 화면이 건네는 id 를 **회차 id 로** 푼다.
+ *
+ * Jobs 목록의 Job 줄은 Job 의 id 를 싣고(view.ts 의 rowFor), 펼쳐진 회차 줄은 회차의 id 를 싣는다.
+ * 그런데 상세(타임라인·그래프·완료 기록)는 언제나 한 회차의 것이다 — Job 을 지목받으면 그 계획의
+ * **가장 최근 회차**를 뜻한다. 아직 한 번도 돌지 않은 Job 이면 답이 없다.
+ */
+export function resolveRunId(s: OrchState, id: string): string | undefined {
+  if (s.runs.some((r) => r.id === id)) return id
+  if (!s.jobs.some((j) => j.id === id)) return undefined
+  return s.runs
+    .filter((r) => r.jobId === id)
+    .sort((a, b) => a.ordinal - b.ordinal)
+    .at(-1)?.id
+}
+
+/** 같은 질문을 회차 id 로. 회차를 이미 찾아 둔 자리가 아니면 이쪽이 짧다. */
+export function jobOfRunId(s: OrchState, runId: string): Job | undefined {
+  const run = s.runs.find((r) => r.id === runId)
+  return run ? jobOf(s, run) : undefined
+}
 
 const ok = <T>(state: OrchState, value: T): Res<T> => ({ ok: true, state, value })
 const err = <T>(error: string): Res<T> => ({ ok: false, error })
@@ -90,12 +143,15 @@ function pushMessage(
   return { state: { ...s, messages: [...s.messages, message] }, message }
 }
 
-export function createRun(
+/** 계획을 만든다. **회차는 만들지 않는다** — 회차가 없는 Job 이 "아직 실행을 안 눌렀다" 이고,
+ *  그래서 pendingStart 라는 칸이 없어졌다(설계 §4). 부르는 쪽이 이어서 startJobRun 을 부르면
+ *  1회차가 생긴다. */
+export function createJob(
   s: OrchState,
   a: {
     objective: string
     cwd: string
-    /** 이 Run 이 속한 프로젝트. **여기서 확인하지 않는다** — 등록은 앱의 것이고(ipc.ts 의
+    /** 이 Job 이 속한 프로젝트. **여기서 확인하지 않는다** — 등록은 앱의 것이고(ipc.ts 의
      *  orch.list 가 활성 탭의 폴더를 저장소로 되돌려 등록한다), 부르는 쪽이 그 id 를 준다.
      *  coordinatorAccountId 와 같은 관례다. */
     projectId?: string
@@ -105,23 +161,23 @@ export function createRun(
      *  Task.accountIds 와 같은 관례다. */
     coordinatorAccountId?: string
     autoDispatch?: boolean
-    /** 사용자가 '실행' 을 누르기 전까지 돌지 않게 한다 — Run.pendingStart 의 주석을 보라 */
+    /** 사용자가 '실행' 을 누르기 전까지 아무것도 시작하지 않게 한다 — Job.pendingStart 의 주석 */
     pendingStart?: boolean
-    /** 있으면 이 Run 은 템플릿이다 — Run.schedule 의 주석을 보라. 규칙의 유효성은 부르는
+    /** 있으면 이 Job 은 예약이다 — Job.schedule 의 주석을 보라. 규칙의 유효성은 부르는
      *  쪽(server.ts 의 run-create)이 isValidRule 로 본다, 계정 목록과 같은 관례다 */
     schedule?: ScheduleRule
-    /** 완료 수렴 정책. 있으면 이 Run 의 검증·검토 실패는 앱이 repair 로 되돌린다(설계 D2·D12) */
+    /** 완료 수렴 정책. 있으면 이 Job 의 검증·검토 실패는 앱이 repair 로 되돌린다(설계 D2·D12) */
     convergence?: ConvergencePolicy
   },
   now: string
-): Res<Run> {
+): Res<Job> {
   if (!a.objective.trim()) return err('objective is required')
-  const run: Run = {
-    id: newId('run'),
+  const job: Job = {
+    id: newId('job'),
     objective: a.objective,
     cwd: a.cwd,
     // 빈 문자열은 싣지 않는다 — coordinatorAccountId 아래 줄과 같은 이유다: 없는 것과 값이
-    // 갈라져야 runsForProject 가 옛 Run 에만 경로 유도를 쓴다
+    // 갈라져야 runsForProject 가 옛 Job 에만 경로 유도를 쓴다
     ...(a.projectId ? { projectId: a.projectId } : {}),
     createdAt: now,
     ...(a.concurrency !== undefined ? { concurrency: a.concurrency } : {}),
@@ -133,57 +189,78 @@ export function createRun(
     ...(a.pendingStart ? { pendingStart: true } : {}),
     ...(a.convergence ? { convergence: a.convergence } : {})
   }
-  return ok({ ...s, runs: [...s.runs, run] }, run)
+  return ok({ ...s, jobs: [...s.jobs, job] }, job)
 }
 
 /**
- * 템플릿의 한 회차를 만든다 — 자식 Run 하나와 그 Task 사본들.
+ * 사람이 '실행' 을 눌렀다 — pendingStart 를 걷는다. 회차를 만드는 것은 부르는 쪽이 이어서 부르는
+ * startJobRun 이고(예약 Job 은 부르지 않는다: 회차는 발화가 만든다), 이 함수는 게이트만 연다.
+ *
+ * **이미 걷힌 Job 에 다시 불러도 성공이다.** 버튼이 사라지기 전에 두 번 눌릴 수 있고, 그때 사람이
+ * 손쓸 수 없는 실패 문구를 띄우는 것은 이 명령이 하려는 일과 무관하다 — 요청한 끝 상태는 이미
+ * 그것이다.
+ */
+export function releaseJob(s: OrchState, jobId: string): Res<Job> {
+  const job = s.jobs.find((j) => j.id === jobId)
+  if (!job) return err(`unknown job: ${jobId}`)
+  if (!job.pendingStart) return ok(s, job)
+  // pendingStart 를 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이 코드베이스는
+  // 해당 없는 칸을 아예 두지 않는 관례다
+  const { pendingStart: _drop, ...released } = job
+  return ok({ ...s, jobs: s.jobs.map((j) => (j.id === jobId ? released : j)) }, released)
+}
+
+/**
+ * 이 Job 의 다음 회차를 만든다 — JobRun 하나와 그 Task 사본들.
+ *
+ * **세 자리가 이 함수 하나를 부른다**: 사람이 '실행' 을 누를 때, 예약이 발화할 때, 끝난 Job 을
+ * 다시 돌릴 때. 셋이 같은 일이라는 것이 이 분리로 얻은 것이다 — 예전에는 앞의 둘이 서로 다른
+ * 함수였고(startRun 은 칸 하나를 걷었고 spawnScheduledRun 은 Run 을 복제했다) 셋째는 아예 없었다.
+ *
+ * **Task 를 어디서 베끼는가.** Job 에 정의가 있으면 그것을, 없으면 마지막 회차의 것을 베낀다.
+ * 정의는 사람이 화면에서 짠 Task 이고(아직 회차가 없을 때 만든 것), 정의가 없는 Job 은 코디네이터가
+ * 만든 것이다 — 그쪽은 회차 안에서 Task 를 만들어 가므로 베낄 것이 마지막 회차에 있다.
  *
  * **정의는 옮기고 결과는 옮기지 않는다.** result·filesModified·consecutiveFailures 를 물려주면
  * 지난 회차의 결과가 새 회차의 진행률과 회로 차단에 섞인다.
  *
- * **deps 와 parentId 는 새 id 로 다시 매핑한다.** 옛 id 를 그대로 두면 자식의 의존이 템플릿의
- * Task 를 가리키는데, 템플릿의 Task 는 배치되지 않으므로 영원히 completed 가 되지 않는다 — 자식의
- * Task 전부가 pending 에 갇히고, graph.ts 는 그 의존을 Run 밖의 id 로 보게 된다. 표에 없는
- * id(템플릿 밖을 가리키는, 손으로 고친 값)는 떨어뜨린다: 자식이 무엇을 기다리는지 모르는 채로
- * 두는 것보다 낫다.
+ * **deps 와 parentId 는 새 id 로 다시 매핑한다.** 옛 id 를 그대로 두면 새 회차의 의존이 베껴 온
+ * 자리의 Task 를 가리키는데, 그쪽은 이 회차에서 돌지 않으므로 영원히 completed 가 되지 않는다 —
+ * 새 회차의 Task 전부가 pending 에 갇히고, graph.ts 는 그 의존을 회차 밖의 id 로 보게 된다. 표에
+ * 없는 id(손으로 고친 값)는 떨어뜨린다: 무엇을 기다리는지 모르는 채로 두는 것보다 낫다.
  *
  * status 는 createTask 와 **같은 방식**으로 정한다 — 전부 pending 으로 만든 뒤 recomputeReady 에
- * 맡긴다. 그래야 "deps 없는 Task 가 ready" 라는 규칙이 한 곳에만 있다. 템플릿의 Task 는 이 호출로
- * 바뀌지 않는다: 이미 recomputeReady 를 지난 상태라 다시 통과시켜도 같은 값이다.
+ * 맡긴다. 그래야 "deps 없는 Task 가 ready" 라는 규칙이 한 곳에만 있다.
  */
-export function spawnScheduledRun(s: OrchState, templateId: string, now: string): Res<Run> {
-  const template = s.runs.find((r) => r.id === templateId)
-  if (!template) return err(`unknown run: ${templateId}`)
-  if (!template.schedule) return err(`run is not scheduled: ${templateId}`)
-  // 몇 번째 발화인가. **자식 개수가 아니라 템플릿에 새긴 카운터에서 온다** — 개수로 세면 회차를
-  // 지우거나 TTL 이 정리할 때 번호가 뒤로 간다(Run.fireCount 의 주석).
-  const ordinal = (template.fireCount ?? 0) + 1
-  const child: Run = {
+export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRun> {
+  const job = s.jobs.find((j) => j.id === jobId)
+  if (!job) return err(`unknown job: ${jobId}`)
+  // 몇 번째 회차인가. **회차 개수가 아니라 Job 에 새긴 카운터에서 온다** — 개수로 세면 회차를
+  // 지우거나 TTL 이 정리할 때 번호가 뒤로 간다(Job.fireCount 의 주석).
+  const ordinal = (job.fireCount ?? 0) + 1
+  const run: JobRun = {
     id: newId('run'),
-    objective: template.objective,
-    cwd: template.cwd,
-    createdAt: now,
-    ...(template.concurrency !== undefined ? { concurrency: template.concurrency } : {}),
-    // **회차는 물려받는다.** 회차는 자신이 도는 Run 이므로 관리자가 필요하고, 그 관리자를 누구로
-    // 할지는 템플릿을 만든 사람이 이미 정했다. 세션 id 와 실패 횟수는 물려주지 않는다 — 그것은
-    // 정의가 아니라 지난 회차의 결과다(result·consecutiveFailures 를 물려주지 않는 것과 같다).
-    ...(template.coordinatorAccountId
-      ? { coordinatorAccountId: template.coordinatorAccountId }
-      : {}),
-    ...(template.convergence ? { convergence: template.convergence } : {}),
-    autoDispatch: true,
-    templateId,
-    fireOrdinal: ordinal
+    jobId,
+    ordinal,
+    createdAt: now
   }
   // createdAt 오름차순 — snapshotFor 가 쓰는 순서이고, 의존 사슬을 읽는 순서다
-  const source = s.tasks
-    .filter((t) => t.runId === templateId)
+  const byCreated = (a: Task, b: Task): number => a.createdAt.localeCompare(b.createdAt)
+  const defs = s.tasks.filter((t) => t.jobId === jobId).sort(byCreated)
+  const previous = s.runs
+    .filter((r) => r.jobId === jobId)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .at(-1)
+  const source =
+    defs.length > 0
+      ? defs
+      : previous
+        ? s.tasks.filter((t) => t.runId === previous.id).sort(byCreated)
+        : []
   const idMap = new Map(source.map((t) => [t.id, newId('tsk')]))
   const copies: Task[] = source.map((t) => ({
     id: idMap.get(t.id)!,
-    runId: child.id,
+    runId: run.id,
     title: t.title,
     spec: t.spec,
     deps: t.deps.map((d) => idMap.get(d)).filter((d): d is string => d !== undefined),
@@ -202,48 +279,26 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
   return ok(
     {
       ...s,
-      // 템플릿에서 움직이는 것은 이 카운터 하나다 — Task 는 정의이므로 손대면 다음 회차가 달라진다
-      runs: [...s.runs.map((r) => (r.id === templateId ? { ...r, fireCount: ordinal } : r)), child],
+      // Job 에서 움직이는 것은 이 카운터 하나다 — 정의 Task 는 계획이므로 손대면 다음 회차가 달라진다
+      jobs: s.jobs.map((j) => (j.id === jobId ? { ...j, fireCount: ordinal } : j)),
+      runs: [...s.runs, run],
       tasks: recomputeReady([...s.tasks, ...copies])
     },
-    child
+    run
   )
 }
 
 /**
- * 인자로 Run 을 지목하지 않은 명령이 뜻하는 "가장 최근 Run" — **템플릿도 회차도 아닌 것 중에서**
- * 가장 나중에 만들어진 것. 없으면 undefined 이고, 그때 부르는 쪽은 자기 "Run 이 없다" 오류를 낸다.
+ * 인자로 아무것도 지목하지 않은 명령이 뜻하는 "지금 그 회차" — 가장 나중에 만들어진 JobRun.
+ * 없으면 undefined 이고, 그때 부르는 쪽은 자기 "Run 이 없다" 오류를 낸다.
  *
- * 이 함수가 필요한 이유는 위의 두 함수다. `s.runs[s.runs.length - 1]` 은 **사람의 동작 없이도
- * 움직이는 값**이 되었다 — createRun 이 만든 템플릿과 spawnScheduledRun 이 15초 ticker 에서 만드는
- * 회차가 둘 다 이 배열의 끝에 붙는다. 그러면 Run A 를 몰던 코디네이터의 `check --wait` 가 조용히
- * 방금 생긴 회차의 배달을 기다리며 영원히 서고, `--run` 없는 task-create 는 템플릿에 떨어져 그 뒤
- * 모든 회차로 복사된다.
- *
- * 템플릿을 빼는 것은 "템플릿은 정의를 담는 그릇이고 그 편집은 명시적이어야 한다"이고, 회차를 빼는
- * 것은 "회차는 읽기 전용 실행 기록"이다(설계 2절). 둘 다 지목해서만 닿게 한다 — `--run` 을 주면
- * 그대로 된다.
+ * **예전의 latestOrdinaryRun 이 하던 걸러내기가 없어졌다.** 그 함수는 한 배열에 섞인 템플릿·회차·
+ * 보통 Run 중에서 "템플릿도 회차도 아닌 것" 을 골라야 했다. 이제 계획은 jobs 에 있고 이 배열에는
+ * 회차만 있으므로, 고를 것이 없다 — 그 섞임이 코디네이터의 `check --wait` 를 방금 생긴 회차 앞에
+ * 세워 두던 버그의 원인이었다.
  */
-export function latestOrdinaryRun(s: OrchState): Run | undefined {
-  return [...s.runs].reverse().find((r) => r.schedule === undefined && r.templateId === undefined)
-}
-
-/**
- * 사람이 '실행' 을 눌렀다 — pendingStart 를 걷는다. 이 커밋의 setState 가 자동 배치 펌프를 깨우고
- * (src/main/ipc.ts) 그때부터 이 Run 의 ready Task 가 돈다.
- *
- * **이미 걷힌 Run 에 다시 불러도 성공이다.** 버튼이 사라지기 전에 두 번 눌릴 수 있고, 그때 사람이
- * 손쓸 수 없는 실패 문구를 띄우는 것은 이 명령이 하려는 일과 무관하다 — 요청한 끝 상태는 이미
- * 그것이다. 예약 템플릿에는 이 칸이 없으므로 여기서 따로 거절하지 않아도 아무 일도 일어나지 않는다.
- */
-export function startRun(s: OrchState, id: string): Res<Run> {
-  const run = s.runs.find((r) => r.id === id)
-  if (!run) return err(`unknown run: ${id}`)
-  if (!run.pendingStart) return ok(s, run)
-  // pendingStart 를 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이 코드베이스는
-  // 해당 없는 칸을 아예 두지 않는 관례다
-  const { pendingStart: _drop, ...started } = run
-  return ok({ ...s, runs: s.runs.map((r) => (r.id === id ? started : r)) }, started)
+export function latestRun(s: OrchState): JobRun | undefined {
+  return s.runs.at(-1)
 }
 
 /**
@@ -272,17 +327,20 @@ export function startRun(s: OrchState, id: string): Res<Run> {
  * **멈춘 회차는 이어지지 않는다.** resumeSchedule 은 부른 템플릿의 칸만 걷으므로 그 회차의 남은
  * Task 는 다시 돌지 않는다. 재개가 만드는 것은 다음 예약 시각의 **새 회차**다.
  */
-export function pauseSchedule(s: OrchState, templateId: string, now: string): Res<Run> {
-  const template = s.runs.find((r) => r.id === templateId)
-  if (!template) return err(`unknown run: ${templateId}`)
-  if (!template.schedule) return err(`run is not scheduled: ${templateId}`)
-  const family = new Set([templateId, ...s.runs.filter((r) => r.templateId === templateId).map((r) => r.id)])
-  const taskIds = new Set(s.tasks.filter((t) => family.has(t.runId)).map((t) => t.id))
-  const held = { ...template, paused: true as const }
+export function pauseSchedule(s: OrchState, jobId: string, now: string): Res<Job> {
+  const job = s.jobs.find((j) => j.id === jobId)
+  if (!job) return err(`unknown job: ${jobId}`)
+  if (!job.schedule) return err(`job is not scheduled: ${jobId}`)
+  const runIds = new Set(s.runs.filter((r) => r.jobId === jobId).map((r) => r.id))
+  const taskIds = new Set(
+    s.tasks.filter((t) => t.runId !== undefined && runIds.has(t.runId)).map((t) => t.id)
+  )
+  const held: Job = { ...job, paused: true }
   return ok(
     {
       ...s,
-      runs: s.runs.map((r) => (family.has(r.id) ? { ...r, paused: true } : r)),
+      jobs: s.jobs.map((j) => (j.id === jobId ? held : j)),
+      runs: s.runs.map((r) => (runIds.has(r.id) ? { ...r, paused: true } : r)),
       // 닫는 방식은 worker-stop 과 같다 — workerState 를 stopped 로, endedAt 을 찍는다. outcome 은
       // 넣지 않는다: 이 워커는 결과를 보고하지 않았고, 보고하지 않은 것을 성공이나 실패로 적으면
       // 그래프가 거짓말을 한다(재시작 정리가 그런 Dispatch 를 outcome_unknown 으로 읽는다).
@@ -306,18 +364,18 @@ export function pauseSchedule(s: OrchState, templateId: string, now: string): Re
  * **세워 두지 않은 Run 에 불러도 성공이다.** 버튼이 사라지기 전에 두 번 눌릴 수 있고, 요청한 끝
  * 상태는 이미 그것이다(startRun 이 같은 이유로 같은 선택을 한다).
  */
-export function resumeSchedule(s: OrchState, templateId: string): Res<Run> {
-  const template = s.runs.find((r) => r.id === templateId)
-  if (!template) return err(`unknown run: ${templateId}`)
-  if (!template.schedule) return err(`run is not scheduled: ${templateId}`)
-  if (!template.paused) return ok(s, template)
+export function resumeSchedule(s: OrchState, jobId: string): Res<Job> {
+  const job = s.jobs.find((j) => j.id === jobId)
+  if (!job) return err(`unknown job: ${jobId}`)
+  if (!job.schedule) return err(`job is not scheduled: ${jobId}`)
+  if (!job.paused) return ok(s, job)
   // paused 를 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이 코드베이스는
-  // 해당 없는 칸을 아예 두지 않는 관례다(startRun 과 같다)
-  const { paused: _drop, ...resumed } = template
-  return ok({ ...s, runs: s.runs.map((r) => (r.id === templateId ? resumed : r)) }, resumed)
+  // 해당 없는 칸을 아예 두지 않는 관례다
+  const { paused: _drop, ...resumed } = job
+  return ok({ ...s, jobs: s.jobs.map((j) => (j.id === jobId ? resumed : j)) }, resumed)
 }
 
-export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<Run> {
+export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<JobRun> {
   const run = s.runs.find((r) => r.id === id)
   if (!run) return err(`unknown run: ${id}`)
   if (run.worktree !== undefined)
@@ -329,7 +387,11 @@ export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<
 export function createTask(
   s: OrchState,
   a: {
-    runId: string
+    /** 어느 회차의 Task 인가. **jobId 와 둘 중 하나만 준다** — 회차에 붙으면 인스턴스, 계획에
+     *  붙으면 정의다(설계 §4.1). */
+    runId?: string
+    /** 어느 계획의 정의인가. 정의는 배치되지 않는다 — 회차가 시작될 때 베껴질 뿐이다. */
+    jobId?: string
     title: string
     spec: string
     deps: string[]
@@ -349,7 +411,14 @@ export function createTask(
   },
   now: string
 ): Res<Task> {
-  if (!s.runs.some((r) => r.id === a.runId)) return err(`unknown run: ${a.runId}`)
+  // **둘 중 하나여야 한다.** 둘 다 주면 어느 쪽이 소유자인지 코드마다 달라지고, 그 모호함이 이
+  // 분리가 없애려던 바로 그것이다.
+  if ((a.runId === undefined) === (a.jobId === undefined))
+    return err('exactly one of runId or jobId is required')
+  if (a.runId !== undefined && !s.runs.some((r) => r.id === a.runId))
+    return err(`unknown run: ${a.runId}`)
+  if (a.jobId !== undefined && !s.jobs.some((j) => j.id === a.jobId))
+    return err(`unknown job: ${a.jobId}`)
   if (!a.spec.trim()) return err('spec is required')
   const known = new Set(s.tasks.map((t) => t.id))
   const missing = a.deps.filter((d) => !known.has(d))
@@ -357,7 +426,9 @@ export function createTask(
   if (a.parentId && !known.has(a.parentId)) return err(`unknown parent: ${a.parentId}`)
   const task: Task = {
     id: newId('tsk'),
-    runId: a.runId,
+    // 없는 칸은 싣지 않는다 — 소유가 둘 중 하나라는 것이 값으로도 보여야 한다
+    ...(a.runId !== undefined ? { runId: a.runId } : {}),
+    ...(a.jobId !== undefined ? { jobId: a.jobId } : {}),
     title: a.title,
     spec: a.spec,
     deps: a.deps,
@@ -637,7 +708,7 @@ export function applyValidationResult(
     state = pushMessage(
       state,
       {
-        runId: task.runId,
+        runId: runIdOf(task),
         type: 'status',
         taskId: task.id,
         subject: passed ? 'validation passed' : 'validation failed',
@@ -660,7 +731,7 @@ export function applyValidationResult(
     state = pushMessage(
       state,
       {
-        runId: task.runId,
+        runId: runIdOf(task),
         type: 'status',
         taskId: task.id,
         subject: `All ${total} checks passed`,
@@ -803,11 +874,10 @@ function routeFailure(
   a: { task: Task; policy: ResolvedPolicy; reason: RepairReason; repair: RepairTarget | undefined; lang: Lang; message: { subject: string; detail: string } },
   now: string
 ): Res<Task> {
-  const run = s.runs.find((r) => r.id === a.task.runId)
   const repairs = a.task.consecutiveFailures // k 번째 연속 실패 = k 번째 repair 후보
   if (a.task.convergenceOff)
     return gateOnFailure(s, { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.stopped', repairs, lang: a.lang }, now)
-  if (run?.paused)
+  if (pausedForTask(s, a.task))
     return gateOnFailure(s, { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.paused', repairs, lang: a.lang }, now)
   // **시간이 횟수보다 앞이다**(설계 G2). 둘 다 소진이지만 사람에게 보여 줄 이유가 다르고, 시간이
   // 넘었으면 횟수가 남아 있어도 새 수리를 열지 않는다. Gate 의 종류는 같다 — 사람이 고를 것("한 번
@@ -853,7 +923,7 @@ function routeFailure(
   const state = pushMessage(
     opened.state,
     {
-      runId: a.task.runId,
+      runId: runIdOf(a.task),
       type: 'status',
       taskId: a.task.id,
       subject: a.message.subject,
@@ -1036,7 +1106,7 @@ export function applyReviewResult(
     state = pushMessage(
       state,
       {
-        runId: task.runId,
+        runId: runIdOf(task),
         type: 'status',
         taskId: task.id,
         dispatchId: dispatch.id,
@@ -1077,7 +1147,7 @@ export function applyReviewResult(
     state = pushMessage(
       state,
       {
-        runId: task.runId,
+        runId: runIdOf(task),
         type: 'status',
         taskId: task.id,
         dispatchId: dispatch.id,
@@ -1096,8 +1166,7 @@ export function applyReviewResult(
   // **convergenceOff·paused 가 이 상한보다 위다**(설계 §5.1의 표: 멈춤 > 소진). 그래서 그 둘이면
   // 여기서 소진 Gate 를 내지 않고 routeFailure 에 넘긴다 — routeFailure 가 그 표의 나머지를 그대로
   // 본다(convergenceOff -> stopped, run.paused -> paused, 그다음에야 maxFixAttempts 소진).
-  const run = s.runs.find((r) => r.id === task.runId)
-  if (!failed.convergenceOff && !run?.paused && reviewRoundOf(closed, task.id) >= policy.maxReviewRounds) {
+  if (!failed.convergenceOff && !pausedForTask(s, task) && reviewRoundOf(closed, task.id) >= policy.maxReviewRounds) {
     const g = gateOnFailure(closed, { task: failed, kind: 'convergence-exhausted', key: 'jobs.convergence.gate.exhausted', repairs: repairCountOf(closed, task.id), lang }, now)
     if (!g.ok) return err(g.error)
     return ok(g.state, 'accepted')
@@ -1199,7 +1268,7 @@ export function closeDispatch(
     state,
     a.limitResetsAt !== undefined
       ? {
-          runId: task.runId,
+          runId: runIdOf(task),
           type: 'status',
           taskId: task.id,
           dispatchId: dispatch.id,
@@ -1207,7 +1276,7 @@ export function closeDispatch(
           body: `exitCode=${a.exitCode}. limitResetsAt=${new Date(a.limitResetsAt).toISOString()}. After that time, a --retry-of on the same account can proceed.`
         }
       : {
-          runId: task.runId,
+          runId: runIdOf(task),
           type: 'status',
           taskId: task.id,
           dispatchId: dispatch.id,
@@ -1632,7 +1701,7 @@ export function createQuestion(
   const { state, message } = pushMessage(
     s,
     {
-      runId: task.runId,
+      runId: runIdOf(task),
       type: 'question',
       taskId: a.taskId,
       dispatchId: a.dispatchId,
@@ -1687,7 +1756,7 @@ export function createGate(
   if (!moved) return err(`cannot block from status: ${task.status}`)
   const gate: Gate = {
     id: newId('gat'),
-    runId: task.runId,
+    runId: runIdOf(task),
     taskId: a.taskId,
     question: a.question,
     options: a.options,
@@ -1703,7 +1772,7 @@ export function createGate(
   state = pushMessage(
     state,
     {
-      runId: task.runId,
+      runId: runIdOf(task),
       type: 'decision_gate',
       taskId: a.taskId,
       subject: a.question.split('\n')[0].slice(0, 120),
@@ -1764,9 +1833,12 @@ export function resolveGate(
  *  모든 Task 가 terminal 인 Run 만 고른다. 순수 층에 그 검사를 두면 TTL 쪽이 두 번 검사하게 된다. */
 export function deleteRuns(s: OrchState, runIds: ReadonlySet<string>): OrchState {
   if (runIds.size === 0) return s
-  const tasks = s.tasks.filter((t) => !runIds.has(t.runId))
+  // 정의 Task(runId 가 없는 것)는 회차를 지워도 남는다 — 그것은 계획이고, 계획은 Job 과 함께
+  // 지워진다(deleteJobs). 여기서 함께 지우면 회차 하나를 버린 Job 이 다음 회차에 베낄 것을 잃는다.
+  const tasks = s.tasks.filter((t) => t.runId === undefined || !runIds.has(t.runId))
   const keptTaskIds = new Set(tasks.map((t) => t.id))
   return {
+    jobs: s.jobs,
     runs: s.runs.filter((r) => !runIds.has(r.id)),
     tasks,
     dispatches: s.dispatches.filter((d) => keptTaskIds.has(d.taskId)),
@@ -1780,24 +1852,42 @@ export function deleteRuns(s: OrchState, runIds: ReadonlySet<string>): OrchState
   }
 }
 
+/**
+ * Job 들과 그에 딸린 모든 것을 지운다 — 회차, 정의 Task, 그 아래 Dispatch·Message·Delivery·Gate.
+ *
+ * **계획을 지우는 것과 기록 하나를 버리는 것은 다르다.** 회차 하나만 지우는 것은 deleteRuns 이고
+ * 그쪽은 정의를 남긴다(그래야 다음 회차가 베낄 것이 있다). 이 함수는 계획째 버린다.
+ */
+export function deleteJobs(s: OrchState, jobIds: ReadonlySet<string>): OrchState {
+  if (jobIds.size === 0) return s
+  const runIds = new Set(s.runs.filter((r) => jobIds.has(r.jobId)).map((r) => r.id))
+  const afterRuns = deleteRuns(s, runIds)
+  return {
+    ...afterRuns,
+    jobs: afterRuns.jobs.filter((j) => !jobIds.has(j.id)),
+    // 정의 Task 는 deleteRuns 가 일부러 남긴다 — 여기서 걷는다
+    tasks: afterRuns.tasks.filter((t) => t.jobId === undefined || !jobIds.has(t.jobId))
+  }
+}
+
 /** 이 Run 을 관리하는 코디네이터 세션을 붙인다. */
 export function attachCoordinator(
   s: OrchState,
   a: { runId: string; sessionId: string }
-): Res<Run> {
+): Res<JobRun> {
   const run = s.runs.find((r) => r.id === a.runId)
   if (!run) return err(`unknown run: ${a.runId}`)
-  const next: Run = { ...run, coordinatorSessionId: a.sessionId }
+  const next: JobRun = { ...run, coordinatorSessionId: a.sessionId }
   return ok({ ...s, runs: replace(s.runs, next) }, next)
 }
 
 /** 코디네이터 세션을 뗀다. **왜 사라졌는지 묻지 않는다** — 사람이 닫았는지 크래시인지 구별할
  *  방법이 없고(`SessionManager.kill` 은 표시를 남기지 않는다), 어느 쪽이든 앱이 하는 일은 같다:
  *  이 칸을 지우고 사람이 다시 띄울 버튼을 내보인다(Run.coordinatorSessionId 의 주석). */
-export function detachCoordinator(s: OrchState, a: { runId: string }): Res<Run> {
+export function detachCoordinator(s: OrchState, a: { runId: string }): Res<JobRun> {
   const run = s.runs.find((r) => r.id === a.runId)
   if (!run) return err(`unknown run: ${a.runId}`)
-  const next: Run = { ...run }
+  const next: JobRun = { ...run }
   delete next.coordinatorSessionId
   return ok({ ...s, runs: replace(s.runs, next) }, next)
 }

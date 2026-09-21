@@ -10,7 +10,7 @@
 // 7.2 가 그 자리를 Run.id·Run.cwd(경로)·기존 Provider 타입·Dispatch.retryOf 체인으로 고쳐 부르거나
 // 아예 필요 없다고 지운 것들이다.
 import type { Gate, Message, TaskStatus, WorkerState } from './types'
-import type { OrchState } from './state'
+import { jobOf, type OrchState } from './state'
 import { checkConfigIdsOf } from './convergence'
 
 /** git 요약. 이 모듈은 fs 를 만지지 않으므로 main 이 읽어서 인자로 넣어 준다. 읽기 자체가 실패하면
@@ -184,7 +184,7 @@ export function buildCheckpoint(
     version: 1,
     createdAt: a.now,
     runId: run.id,
-    objective: run.objective,
+    objective: jobOf(s, run)?.objective ?? '',
     taskId: task.id,
     taskTitle: task.title,
     taskSpec: task.spec,

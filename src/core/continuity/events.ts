@@ -3,8 +3,8 @@
 // the same reason core/orchestration/timeline.ts derives the Timeline. Pure: no fs, no clock; `now`
 // is an argument. Main-side (view.ts pulls node:path in): not for tsconfig.web.json.
 import { repairCountOf, reviewRoundOf } from '../orchestration/convergence'
-import type { OrchState } from '../orchestration/state'
-import type { Dispatch, Gate, GateKind, Run, TaskStatus } from '../orchestration/types'
+import { jobOf, runIdOf, type OrchState } from '../orchestration/state'
+import type { Dispatch, Gate, GateKind, TaskStatus } from '../orchestration/types'
 import { outcomeOf } from '../orchestration/view'
 
 export type ContinuityEventType =
@@ -83,26 +83,31 @@ const ev = (
   payload: Record<string, unknown>
 ): ContinuityEvent => ({ ...ids, type, at, idempotencyKey, payload })
 
-/** A Run with `schedule` is a template and never runs (docs/jobs.md §7); its fires are ordinary Runs. */
-const isTemplate = (r: Run): boolean => r.schedule !== undefined
-
+/**
+ * 회차가 시작됐다 = **회차가 생겼다.**
+ *
+ * 예전에는 이 판정이 `pendingStart` 가 걷혔는가를 두 상태 사이에서 비교하는 것이었고, 그 위에
+ * "예약 템플릿은 스스로 돌지 않으므로 빼야 한다" 는 예외가 하나 더 있었다. 둘 다 없어졌다 —
+ * 계획은 jobs 에 있어 이 배열에 오지 않고, 회차는 만들어지는 순간이 곧 시작이다(설계 §8).
+ */
 function runStartEvents(prev: OrchState, next: OrchState, now: string): ContinuityEvent[] {
-  const before = new Map(prev.runs.map((r) => [r.id, r]))
+  const before = new Set(prev.runs.map((r) => r.id))
   const out: ContinuityEvent[] = []
   for (const run of next.runs) {
-    if (isTemplate(run)) continue
-    const was = before.get(run.id)
-    const wasPending = was === undefined || was.pendingStart === true
-    if (wasPending && run.pendingStart !== true)
-      out.push(
-        ev({ runId: run.id }, 'JOB_RUN_STARTED', now, `JOB_RUN_STARTED:${run.id}:${now}`, {
-          objective: run.objective,
-          cwd: run.cwd,
-          worktree: run.worktree ?? null,
-          templateId: run.templateId ?? null,
-          convergence: run.convergence ?? null
-        })
-      )
+    if (before.has(run.id)) continue
+    const job = jobOf(next, run)
+    out.push(
+      ev({ runId: run.id }, 'JOB_RUN_STARTED', now, `JOB_RUN_STARTED:${run.id}:${now}`, {
+        objective: job?.objective ?? '',
+        cwd: job?.cwd ?? '',
+        worktree: run.worktree ?? null,
+        // 옛 행에는 `templateId` 가 실려 있다 — 예약 회차면 템플릿 Run 의 id, 아니면 null.
+        // 이제는 모든 회차가 Job 을 가리키므로 이름도 그것이다.
+        jobId: run.jobId,
+        ordinal: run.ordinal,
+        convergence: job?.convergence ?? null
+      })
+    )
   }
   return out
 }
@@ -111,7 +116,6 @@ function runEndEvents(prev: OrchState, next: OrchState, now: string): Continuity
   const before = new Map(prev.runs.map((r) => [r.id, r]))
   const out: ContinuityEvent[] = []
   for (const run of next.runs) {
-    if (isTemplate(run)) continue
     const was = before.get(run.id)
     if (was && was.paused !== true && run.paused === true)
       out.push(ev({ runId: run.id }, 'JOB_RUN_PAUSED', now, `JOB_RUN_PAUSED:${run.id}:${now}`, {}))
@@ -231,7 +235,7 @@ function taskEvents(prev: OrchState, next: OrchState, now: string): ContinuityEv
     }
     for (const type of taskTransitionEvents(from, to, gateKind, task.completionOverride !== undefined))
       out.push(
-        ev({ runId: task.runId, taskId: task.id }, type, now, `${type}:${task.id}:${from}->${to}:${now}`, payload)
+        ev({ runId: runIdOf(task), taskId: task.id }, type, now, `${type}:${task.id}:${from}->${to}:${now}`, payload)
       )
   }
   return out

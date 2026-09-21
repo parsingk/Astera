@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { candidates, RecoveryReconciler } from './reconciler'
 import { emptyState, type OrchState } from '../../core/orchestration/state'
-import type { Dispatch, Run, Task } from '../../core/orchestration/types'
+import type { Dispatch, Task } from '../../core/orchestration/types'
 import type { GitFacts, LostAttempt } from '../../core/recovery/types'
+import { stateFromLegacy } from '../../core/orchestration/legacyState'
+import type { LegacyRun } from '../../core/orchestration/legacy'
 
 const NOW = '2026-09-09T10:00:00.000Z'
 const EARLIER = '2026-09-09T09:00:00.000Z'
-const run = (over: Partial<Run> = {}): Run => ({ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: EARLIER, autoDispatch: true, ...over })
+const run = (over: Partial<LegacyRun> = {}): LegacyRun => ({ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: EARLIER, autoDispatch: true, ...over })
 const task = (over: Partial<Task> = {}): Task => ({
   id: 'tsk_1', runId: 'run_1', title: 't', spec: 's', deps: [], status: 'dispatched',
   accountIds: ['acc_1'], consecutiveFailures: 0, createdAt: EARLIER, updatedAt: EARLIER, ...over
@@ -16,9 +18,8 @@ const dispatch = (over: Partial<Dispatch> = {}): Dispatch => ({
   cwd: 'D:/wt', specPath: 'D:/spec.md', startedAt: EARLIER, workerState: 'outcome_unknown',
   endedAt: NOW, retained: false, ...over
 })
-const state = (over: Partial<OrchState> = {}): OrchState => ({
-  ...emptyState(), runs: [run()], tasks: [task()], dispatches: [dispatch()], ...over
-})
+const state = (over: Parameters<typeof stateFromLegacy>[0] = {}): OrchState =>
+  stateFromLegacy({ runs: [run()], tasks: [task()], dispatches: [dispatch()], ...over })
 
 describe('candidates', () => {
   it('picks a dispatched Task whose last attempt was lost', () => {
@@ -328,11 +329,15 @@ describe('the seam with the real store', () => {
     const path = await import('node:path')
     const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'astera-recovery-seam-'))
     const file = path.join(dir, 'orchestration.json')
-    const crashed: OrchState = {
-      ...emptyState(),
+    // **일부러 옛 모양 그대로 쓴다** — 이 테스트가 확인하는 것은 저장된 파일을 다시 읽는 경로이고,
+    // 그 경로에는 이제 Job/회차 이행이 들어 있다. 옛 파일이 그대로 살아나는지까지 함께 본다.
+    const crashed = {
       runs: [run()],
       tasks: [task()],
-      dispatches: [dispatch({ endedAt: undefined, workerState: 'ready' })]
+      dispatches: [dispatch({ endedAt: undefined, workerState: 'ready' })],
+      messages: [],
+      deliveries: [],
+      gates: []
     }
     await fs.promises.writeFile(file, JSON.stringify(crashed), 'utf8')
     const store = new OrchestrationStore(file)

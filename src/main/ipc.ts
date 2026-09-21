@@ -131,8 +131,22 @@ import {
 } from '../core/orchestration/convergence'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './orchestration/repair'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
-import { sameSnapshot, snapshotFor, runsForProject, outcomeOf } from '../core/orchestration/view'
+import { sameSnapshot, snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
 import { ensureProject } from '../core/orchestration/projects'
+import { jobOf, resolveRunId, runIdOf } from '../core/orchestration/state'
+import type { WorktreeInfo } from '../core/types'
+
+/** 이 프로젝트의 것인 id 전부 — Job 과 그 회차. **한 집합으로 묻는 이유**는 명령이 둘 중 무엇이든
+ *  지목할 수 있기 때문이다: 사이드바의 Job 줄은 Job 의 id 를, 펼친 회차 줄은 회차의 id 를 보낸다. */
+function idsOfProject(
+  state: OrchState,
+  project: string,
+  worktrees: WorktreeInfo[]
+): ReadonlySet<string> {
+  const ids = new Set(jobsForProject(state, project, worktrees).map((j) => j.id))
+  for (const r of state.runs) if (ids.has(r.jobId)) ids.add(r.id)
+  return ids
+}
 import { justFinished } from '../core/orchestration/runRecord'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
@@ -2509,7 +2523,7 @@ export function registerIpc(
         if (!task) return
         const type = e.phase === 'requested' ? 'PROMPT_WRITE_REQUESTED' : 'PROMPT_WRITE_CONFIRMED'
         continuity.note({
-          runId: task.runId,
+          runId: runIdOf(task),
           taskId: task.id,
           dispatchId: e.dispatchId,
           type,
@@ -2549,10 +2563,11 @@ export function registerIpc(
           // 구성은 Run 의 프로젝트에서, 실행은 Dispatch 의 cwd 에서. ignoreConfigCwd 는 구성에 박힌
           // 경로가 워커의 트리가 아닌 곳을 가리키기 때문이다(spec 2절). configId 는 TaskValidator 가
           // enqueue 의 configIds 목록에서 지금 도는 자리를 골라 넘긴 것이다.
+          const runJobCwd = jobOf(st, run)?.cwd ?? ''
           const { config, command, projectName } = await prepareRun({
-            projectPath: run.cwd,
+            projectPath: runJobCwd,
             configId,
-            stored: core.runConfig.get(run.cwd),
+            stored: core.runConfig.get(runJobCwd),
             ignoreConfigCwd: true,
             assertAllowedPath,
             t: (key, params) => t(core.lang, key as MessageKey, params)
@@ -3384,9 +3399,10 @@ export function registerIpc(
                   // forkWorktree(위)가 프로젝트가 **서 있는 브랜치**에서 갈라 준다. raw
                   // createWorktree 를 부르면 origin/HEAD 에서 갈라져 최종 병합이 엉뚱한 조상을 끌고
                   // 온다 — 그 판단은 한 곳에만 있어야 한다.
+                  const runJob = jobOf(state, run)
                   const created = await forkWorktree({
-                    repoPath: run.cwd,
-                    name: nameForRun(run)
+                    repoPath: runJob?.cwd ?? '',
+                    name: nameForRun({ id: run.jobId, objective: runJob?.objective ?? '' })
                   })
                   const set = await orchHandleCommand(
                     orch.deps,
@@ -3439,7 +3455,7 @@ export function registerIpc(
               // 바뀌지 않는 것들(title·deps)이라 오늘은 무해하지만, 그 논증이 필요 없는 자리로
               // 옮기는 것이 전제를 지키는 값싼 방법이다.
               const task = state.tasks.find((t) => t.id === slot.taskId)!
-              const runRoot = runRootOf(run)
+              const runRoot = runRootOf(run, jobOf(state, run))
 
               // **통합 단계 — worker-start 앞이다.** 의존이 자기 워크트리에서 돌았다면 그 브랜치의
               // 커밋을 Run 뿌리로 먼저 합친다. 앱이 직접 합치고 **충돌할 때만 에이전트에게**
@@ -3547,7 +3563,7 @@ export function registerIpc(
                 continue
               }
 
-              const limit = run.concurrency ?? DEFAULT_CONCURRENCY
+              const limit = jobOf(state, run)?.concurrency ?? DEFAULT_CONCURRENCY
               // **통합 Task 는 Run 워크트리에서 돈다 — Task 별 워크트리 규칙의 예외다.** 예외인
               // 이유는 그 Task 의 일 자체가 "이 뿌리로 합치는 것" 이라서다: 자기 워크트리에서 돌면
               // origin 기준으로 갈라진 다른 브랜치에 합치게 되어 아무 값이 없고, buildSpecFile 이
@@ -3756,10 +3772,12 @@ export function registerIpc(
             const run = next.runs.find((r) => r.id === runId)
             if (!run) continue
             const tasks = next.tasks.filter((t) => t.runId === runId)
-            void understandingPipeline.onRunFinished(understandingKeyOf(run.cwd), {
+            const finishedJob = jobOf(next, run)
+            if (!finishedJob) continue
+            void understandingPipeline.onRunFinished(understandingKeyOf(finishedJob.cwd), {
               runId,
-              jobName: run.objective.slice(0, 60),
-              objective: run.objective,
+              jobName: finishedJob.objective.slice(0, 60),
+              objective: finishedJob.objective,
               at: new Date().toISOString(),
               taskIds: tasks.map((t) => t.id),
               tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
@@ -5089,18 +5107,22 @@ export function registerIpc(
     const state = orch.deps.getState()
     // **소유 판정을 복제하지 않는다.** 이 프로젝트의 Run 목록에 없는 id 는 읽지 않는다 — 규칙을
     // 다시 쓰면 orch.list 가 막는 Run 을 이 핸들러가 통과시키는 우회로가 된다.
-    if (!runsForProject(state, project, core.worktrees.list()).some((r) => r.id === runId)) {
+    if (!idsOfProject(state, project, core.worktrees.list()).has(runId)) {
       orchLog(`orch.runDetail: run ${runId} does not belong to ${project}`)
       return { events: [], layers: [], deps: {}, cyclic: [] }
     }
+    // 사이드바의 Job 줄은 계획의 id 를 보낸다 — 상세는 언제나 한 회차의 것이므로 가장 최근 회차로
+    // 푼다(resolveRunId). 아직 돌지 않은 Job 이면 보여 줄 기록이 없다.
+    const detailRunId = resolveRunId(state, runId)
+    if (detailRunId === undefined) return { events: [], layers: [], deps: {}, cyclic: [] }
     const known = new Set(core.sessions.list().map((s) => s.id))
-    const { layers, deps, cyclic } = layersOf(state, runId)
+    const { layers, deps, cyclic } = layersOf(state, detailRunId)
     // The journal's losses are merged in rather than derived: an attempt the restart could not find
     // leaves nothing in the projection to read it back from — only the journal remembers it happened.
     const events = [
-      ...timelineFor(state, runId, (id) => known.has(id)),
-      ...(continuity?.lostEventsFor(runId, state) ?? []),
-      ...(continuity?.recoveryEventsFor(runId, state) ?? [])
+      ...timelineFor(state, detailRunId, (id) => known.has(id)),
+      ...(continuity?.lostEventsFor(detailRunId, state) ?? []),
+      ...(continuity?.recoveryEventsFor(detailRunId, state) ?? [])
     ].sort((a, b) => a.at.localeCompare(b.at))
     return { events, layers, deps, cyclic }
   })
@@ -5115,11 +5137,13 @@ export function registerIpc(
     if (!orch) return null
     const project = repoPathOf(core.worktrees.list(), projectPath)
     const state = orch.deps.getState()
-    if (!runsForProject(state, project, core.worktrees.list()).some((r) => r.id === runId)) {
+    if (!idsOfProject(state, project, core.worktrees.list()).has(runId)) {
       orchLog(`orch.completion: run ${runId} does not belong to ${project}`)
       return null
     }
-    return completionForTaskOf(state.tasks, runId, taskId)
+    const completionRunId = resolveRunId(state, runId)
+    if (completionRunId === undefined) return null
+    return completionForTaskOf(state.tasks, completionRunId, taskId)
   })
   // orch.command 의 args 에서 Run id·Task id·Dispatch id 를 읽는 키 — 명령마다 다르고, 짐작이 아니라
   // server.ts 의 switch 를 다시 열어 확인한 값만 적었다: task-create 는 args.runId, run-start·
@@ -5174,8 +5198,8 @@ export function registerIpc(
       const v = args[key]
       return typeof v === 'string' && v.length > 0 ? v : null
     }
-    const runBelongs = (runId: string): boolean =>
-      runsForProject(state, project, core.worktrees.list()).some((r) => r.id === runId)
+    const owned = idsOfProject(state, project, core.worktrees.list())
+    const runBelongs = (id: string): boolean => owned.has(id)
 
     const runKey = RUN_ID_ARG[cmd]
     const runId = runKey ? strArg(runKey) : null
@@ -5189,7 +5213,7 @@ export function registerIpc(
     if (taskId) {
       const task = state.tasks.find((t) => t.id === taskId)
       if (!task) return null
-      return runBelongs(task.runId) ? null : `task ${taskId} does not belong to ${project}`
+      return runBelongs(task.runId ?? task.jobId ?? '') ? null : `task ${taskId} does not belong to ${project}`
     }
 
     const dispatchKey = DISPATCH_ID_ARG[cmd]
@@ -5198,7 +5222,9 @@ export function registerIpc(
       const dispatch = state.dispatches.find((d) => d.id === dispatchId)
       const task = dispatch ? state.tasks.find((t) => t.id === dispatch.taskId) : undefined
       if (!task) return null
-      return runBelongs(task.runId) ? null : `dispatch ${dispatchId} does not belong to ${project}`
+      return runBelongs(task.runId ?? task.jobId ?? '')
+        ? null
+        : `dispatch ${dispatchId} does not belong to ${project}`
     }
 
     return null

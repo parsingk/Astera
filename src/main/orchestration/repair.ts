@@ -5,7 +5,7 @@
 import { isSamePath } from '../../core/files/tree'
 import { t, type Lang } from '../../core/i18n'
 import { latestImplDispatch, policyOf, repairCountOf } from '../../core/orchestration/convergence'
-import { createGate, openDispatch, type OrchState, type RepairTarget } from '../../core/orchestration/state'
+import { createGate, jobOf, openDispatch, type OrchState, type RepairTarget } from '../../core/orchestration/state'
 import {
   canTransition,
   FAILURE_LIMIT,
@@ -83,9 +83,11 @@ function liveRepairDispatch(s: OrchState, dispatchId: string): { task: Task; d: 
   const d = s.dispatches.find((x) => x.id === dispatchId)
   if (!d || !d.repair || d.endedAt || d.specPath) return null
   const task = s.tasks.find((x) => x.id === d.taskId)
+  // 프로젝트 폴더는 계획의 것이다 — 회차에서 Job 으로 한 번 더 건너간다
   const run = task && s.runs.find((r) => r.id === task.runId)
-  if (!task || !run) return null
-  return { task, d, run }
+  const job = run && jobOf(s, run)
+  if (!task || !job) return null
+  return { task, d, run: job }
 }
 
 /** 이미 열린 repair Dispatch 의 부수 효과. 실패하면 Dispatch 를 지우고 Gate 를 연다 — 판정은 끝났고 워커만

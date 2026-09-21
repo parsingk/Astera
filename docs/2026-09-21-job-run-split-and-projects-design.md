@@ -84,12 +84,15 @@ Fields move by the question "is this the plan, or is this what happened".
 
 **To `JobRun`:** `coordinatorSessionId`, `autoDispatch`, `ordinal`, `startedAt`, `result`.
 
-**Gone:** `Run.pendingStart` and `Run.templateId`/`Run.fireOrdinal`.
+**Gone:** `Run.templateId` and `Run.fireOrdinal` — replaced by `JobRun.jobId` and `JobRun.ordinal`,
+which every run has.
 
-`pendingStart` exists today to say "the person has not pressed 실행 yet". In the new model a Job that
-has not been started has **no runs**, which says the same thing without a flag two other flags are
-already confused with (its own JSDoc explains that `autoDispatch` cannot express it). `templateId` is
-replaced by `JobRun.jobId`, and `fireOrdinal` by `JobRun.ordinal`, which every run has.
+**`pendingStart` moves to the Job; it does not disappear** (corrected during implementation). The
+first draft of this design said a Job with no runs says the same thing. That holds for an ordinary
+Job and fails for a scheduled one: a scheduled Job's runs are made by firing, so "no runs yet" and
+"not armed yet" are different states, and arming before the person has finished writing the Tasks is
+exactly the bug the flag was added for. One flag on the plan covers both kinds — pressing 실행 clears
+it, and for an ordinary Job the same command also starts run 1.
 
 ### 4.1 Task ownership
 
@@ -147,8 +150,10 @@ fresh id (`job_…`). Doing it the other way round means rewriting the journal.
 | Run with `pendingStart` | Job with **no** runs; its tasks become definitions |
 
 **Where it runs:** `OrchestrationStore.load`, in the same place as the two field migrations already
-there (`store.ts:140-175`), which mutate the parsed object in place *before* `before` is captured
-(`store.ts:180`). That ordering matters: the journal diffs `before` against the post-load state, so a
+there, which mutate the parsed object in place *before* `before` is captured. The split itself is a
+pure function in `core/orchestration/legacy.ts` — it takes arrays and returns arrays, so it has no
+business inside a file reader, it is unit-testable without fs, and the tests written before the split
+use it to keep writing the old shape (`core/orchestration/legacyState.ts`). That ordering matters: the journal diffs `before` against the post-load state, so a
 migration that ran after the capture would be journaled as though a person had done it.
 
 `isValidState` gains `jobs` and `projects` to the arrays it checks. A file from before this change has
@@ -282,7 +287,18 @@ that has to land whole.
    halved — the app does not run with half a model — so it is sliced by test surface rather than by
    shippability: pure model, then migration, then wiring, then screens.
 
-## 13. Open questions
+## 13. Settled during implementation
+
+1. **A Job row carries the Job's id, a child row the run's.** The detail views (timeline, graph,
+   completion) are always about one run, so the IPC handlers resolve an incoming id through
+   `resolveRunId` — a Job means its latest run. Without that the Jobs list would open nothing.
+2. **`startJobRun` replaced three things**: pressing 실행, a schedule firing, and the new re-run.
+   They were two different functions and a missing one; they are one now.
+3. **Two staleness bugs surfaced in the coordinator handover** and are fixed: the brief's convergence
+   clause and its task count were both read from the command's entry snapshot, which does not yet
+   contain the run `run-start` has just created.
+
+## 14. Open questions
 
 1. **Does a person see runs before there are two?** The Jobs list already nests children for
    scheduled Jobs. For an ordinary Job with one run, showing a single "1회차" row would be noise; the

@@ -4,7 +4,7 @@
 // a broken journal must never stop a Job (design §6).
 import { CATALOGS, t, type Lang, type MessageKey, type MessageParams } from '../../core/i18n'
 import type { JobEvent } from '../../core/types'
-import type { OrchState } from '../../core/orchestration/state'
+import { runIdOf, type OrchState } from '../../core/orchestration/state'
 import { buildCheckpoint } from '../../core/orchestration/checkpoint'
 import { deriveEvents, type ContinuityEvent, type ContinuityEventType } from '../../core/continuity/events'
 import { checkpointsFor, type CheckpointKind } from '../../core/continuity/checkpointPolicy'
@@ -222,7 +222,7 @@ export class ContinuityRecorder {
           ? dispatch.sessionId
           : null
       const row = this.deps.journal.saveCheckpoint({
-        runId: task.runId,
+        runId: runIdOf(task),
         taskId: task.id,
         dispatchId,
         kind,
@@ -235,7 +235,7 @@ export class ContinuityRecorder {
       })
       this.deps.journal.append([
         {
-          runId: task.runId,
+          runId: runIdOf(task),
           taskId: task.id,
           dispatchId,
           type: 'CHECKPOINT_CREATED',

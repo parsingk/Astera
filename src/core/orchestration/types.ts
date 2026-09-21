@@ -107,12 +107,18 @@ export interface Project {
   addedAt: string
 }
 
-export interface Run {
+/** 계획. **무엇을 시킬 것인가이고, 그것이 실제로 돈 기록은 JobRun 이다**
+ *  (docs/2026-09-21-job-run-split-and-projects-design.md §4).
+ *
+ *  두 층은 예약 Job 에 이미 있었다 — 예약이 걸린 Run 이 템플릿이고 발화마다 자식 Run 이 생겼다.
+ *  이름이 없어서 셋(템플릿·회차·보통 Run)이 한 배열에 섞였고, `--run` 없는 task-create 가 템플릿에
+ *  떨어져 모든 회차로 복사되는 일이 실제로 있었다. 이제 배열이 둘이라 그 코드를 쓸 수 없다. */
+export interface Job {
   id: string
   objective: string
   cwd: string
-  /** The project this Run belongs to. **Authoritative when present**; `runsForProject` falls back to
-   *  deriving it from `cwd` for every Run made before this field existed. That fallback is a read
+  /** The project this Job belongs to. **Authoritative when present**; `runsForProject` falls back to
+   *  deriving it from `cwd` for every Job made before this field existed. That fallback is a read
    *  path for old rows only — nothing is created without this field, so the two never compete as
    *  sources of truth (the `accountId` migration in store.ts records what happens when they do). */
   projectId?: string
@@ -134,79 +140,91 @@ export interface Run {
    *  생기기 전에 만든 Run 과 CLI 로 만든 Run 이 그 갈래다 — UI 가 만들지 못하는 것과 코드가 다루지
    *  못하는 것은 다르다. 그때 워커의 질문을 풀어 주는 것은 앱의 그물이다(inbox.ts). */
   coordinatorAccountId?: string
-  /** 지금 이 Run 을 관리하고 있는 세션. **깨우기와 안전망이 이 칸의 유무로 판단한다** — "답할
+  /** 앱이 이 Job 을 스스로 돌리는가. **UI 가 만든 Job 에만 참이다** — 코디네이터가 만든 Job 을
+   *  앱이 함께 돌리면 둘이 같은 ready Task 를 두고 경합하고, 진 쪽(대개 코디네이터)의
+   *  worker-start 가 `dispatch already open` 을 받는다. 코디네이터 LLM 에게는 자기 명령이 이유
+   *  없이 실패하기 시작하는 일이고, 그것을 어떻게 다룰지는 우리가 통제할 수 없다.
+   *
+   *  **회차가 아니라 계획의 칸이다** — "누가 이 계획을 운전하는가" 는 회차마다 달라지지 않는다.
+   *  예전에는 회차마다 복사됐다(spawnScheduledRun 이 `autoDispatch: true` 를 찍었다). */
+  autoDispatch?: boolean
+  /** 발화 시각마다 이 Job 의 한 회차를 돌리는 규칙. **있으면 이 Job 은 예약이다** — 계획 자체는
+   *  한 번도 돌지 않고 발화마다 회차를 하나 만든다. 세션 예약의 ScheduleConfig 가 아니라 그 규칙
+   *  부분만인 이유: ScheduleConfig 는 command 를 필수로 요구하는데(isValidScheduleConfig) Job 에는
+   *  타이핑할 명령이 없다 — Task 가 곧 일이다. */
+  schedule?: ScheduleRule
+  /** 이 Job 이 지금까지 만든 회차의 수. **번호를 여기서 뽑는다.**
+   *
+   *  회차 개수로 세지 않는 이유가 이 필드의 존재 이유다 — 회차 기록은 사람이 지우고 30일 TTL 도
+   *  지우므로(store.ts), 개수로 세면 "N회차"가 뒤로 간다. 실제로 그렇게 보고됐다.
+   *  없으면 0 으로 읽는다(이 필드가 생기기 전에 만들어진 Job). */
+  fireCount?: number
+  /** 사람이 아직 '실행' 을 누르지 않았다. **있으면 이 Job 은 아무것도 시작하지 않는다.**
+   *
+   *  **회차가 0개인 것으로는 대신할 수 없다.** 보통 Job 이라면 그것으로 충분하지만, 예약 Job 의
+   *  회차는 발화가 만드는 것이라 "아직 회차가 없다" 와 "아직 무장하지 않았다" 가 같은 말이 아니다.
+   *  무장하지 않은 채로 두는 것이 요점이다 — 여기서 무장해 두면 사람이 Task 를 짜는 동안 지나간
+   *  시각이 그대로 첫 발화가 되어, 버튼을 누르는 순간 이미 밀린 회차가 돈다.
+   *
+   *  **paused 와 다른 칸인 이유.** 둘 다 "돌지 않는다" 를 만들지만 사람에게는 다른 상황이고 다른
+   *  버튼이다: 이것은 "아직 시작하지 않았다"(초안이고 '실행' 이 한 번 걷는다), paused 는 "돌던 것을
+   *  세워 뒀다"('⏸' 와 '▶' 가 오간다). 한 칸으로 겸하게 했더니 세운 뒤에 '실행' 버튼과 '▶' 가
+   *  **같은 일을 하는 두 버튼**으로 나란히 떴다. */
+  pendingStart?: boolean
+  /** 사람이 이 예약을 세워 뒀다. **있으면 발화하지 않는다.**
+   *
+   *  돌던 회차를 함께 세우는 것은 JobRun.paused 다 — 세우는 순간 그 Job 의 회차 전부에 붙는다.
+   *  이 칸 하나로 겸할 수 없는 이유는 그쪽 주석에 있다. */
+  paused?: boolean
+  /** 완료 수렴 정책. 있으면 이 Job 의 검증·검토 실패는 앱이 repair 로 되돌린다(설계 D2·D12) */
+  convergence?: ConvergencePolicy
+}
+
+/** 한 번의 실행. **계획이 실제로 돈 기록이고, 계획 자체는 Job 이다.**
+ *
+ *  **id 는 옛 Run 의 것을 그대로 물려받는다** — Task.runId, 그 아래 Dispatch, 저널에 이미 적힌
+ *  runId 가 전부 이것을 가리키고 있었다. 새 id 를 받는 것은 Job 쪽이다(설계 §5). */
+export interface JobRun {
+  id: string
+  jobId: string
+  /** 몇 번째 회차인가. **1 부터.** 만드는 순간 Job.fireCount 에서 찍어 두므로 앞 회차를 지워도
+   *  남은 번호가 바뀌지 않는다. */
+  ordinal: number
+  createdAt: string
+  /** 지금 이 회차를 관리하고 있는 세션. **깨우기와 안전망이 이 칸의 유무로 판단한다** — "답할
    *  사람이 있는가" 를 묻는 유일한 자리다. 세션이 사라지면 배선이 이 칸을 지운다.
    *
    *  **사라진 코디네이터를 앱이 다시 띄우지는 않는다.** 탭을 닫는 것은 사람의 결정이고, 곧바로
    *  다시 열면 그 결정을 무시하는 것이다 — 크래시와 구별할 방법도 없다(`kill` 은 표시를 남기지
-   *  않는다). 대신 사이드바의 Run 줄에 다시 띄우는 버튼이 나온다(JobRow.coordinatorMissing).
+   *  않는다). 대신 사이드바의 Job 줄에 다시 띄우는 버튼이 나온다(JobRow.coordinatorMissing).
    *  그동안 워커의 질문은 앱의 그물이 풀어 준다(inbox.ts). */
   coordinatorSessionId?: string
-  /** 앱이 이 Run 을 스스로 돌리는가. **UI 가 만든 Run 에만 참이다** — 코디네이터가 만든 Run 을
-   *  앱이 함께 돌리면 둘이 같은 ready Task 를 두고 경합하고, 진 쪽(대개 코디네이터)의
-   *  worker-start 가 `dispatch already open` 을 받는다. 코디네이터 LLM 에게는 자기 명령이 이유
-   *  없이 실패하기 시작하는 일이고, 그것을 어떻게 다룰지는 우리가 통제할 수 없다. */
-  autoDispatch?: boolean
-  /** 사용자가 아직 '실행' 을 누르지 않았다. **있으면 이 Run 은 돌지 않는다** — 사이드바로 만든
-   *  Run 은 Task 를 다 짜고 사람이 실행을 눌러야 시작한다(그 전에는 Task 하나를 만드는 순간
-   *  돌기 시작했다).
+  /** 이 회차의 워커들이 일하는 워크트리. **없으면 아직 만들어지지 않았다** — 첫 워커를 띄우기
+   *  직전에 배선이 만들고 `run-worktree-set` 으로 기록한다(src/main/ipc.ts).
    *
-   *  **autoDispatch 를 끄는 것으로는 이것을 표현할 수 없다.** 그러면 "아직 시작 안 한 UI Run" 과
-   *  "코디네이터가 돌리는 Run" 이 구별되지 않고(둘 다 autoDispatch 가 없다), 실행 버튼이 코디네이터
-   *  Run 에도 나타나 앱과 코디네이터가 같은 ready Task 를 두고 경합한다(autoDispatch 의 주석).
-   *  그래서 게이트를 따로 둔다: autoDispatch 는 "누가 돌리는가", 이것은 "시작했는가" 다.
-   *
-   *  **예약은 이 칸을 쓰지 않는다.** 템플릿은 애초에 돌지 않고, 발화가 만든 회차는 예약 시각이
-   *  곧 시작 신호이므로 즉시 돌아야 한다. */
-  pendingStart?: boolean
-  /** 발화 시각마다 이 Run 의 한 회차를 돌리는 규칙. **있으면 이 Run 은 템플릿이다** — 자신은
-   *  한 번도 돌지 않고(run-create 가 autoDispatch 를 켜지 않는다), 발화마다 자식 Run 을 하나
-   *  만든다. 세션 예약의 ScheduleConfig 가 아니라 그 규칙 부분만인 이유: ScheduleConfig 는
-   *  command 를 필수로 요구하는데(isValidScheduleConfig) Job 에는 타이핑할 명령이 없다 —
-   *  Task 가 곧 일이다. */
-  schedule?: ScheduleRule
-  /** 이 템플릿이 지금까지 발화한 횟수. **템플릿만 갖는다.**
-   *
-   *  자식 개수로 세지 않는 이유가 이 필드의 존재 이유다 — 회차 기록은 사람이 지우고 30일 TTL 도
-   *  지우므로(store.ts), 개수로 세면 "N회차"가 뒤로 간다. 실제로 그렇게 보고됐다.
-   *  없으면 0 으로 읽는다(이 필드가 생기기 전에 만들어진 템플릿). */
-  fireCount?: number
-  /** 이 회차가 몇 번째 발화인가. **자식만 갖는다.** 위 fireCount 를 발화 시점에 찍어 둔 값이라
-   *  기록을 지워도 남은 회차의 번호가 바뀌지 않는다. */
-  fireOrdinal?: number
-  /** 이 Run 의 워커들이 일하는 워크트리. **없으면 아직 만들어지지 않았다** — 첫 워커를 띄우기
-   *  직전에 배선이 만들고 `run-worktree-set` 으로 기록한다(src/main/ipc.ts). 예약 템플릿은 한 번도
-   *  돌지 않으므로 끝까지 이 칸이 없다.
-   *
-   *  **`cwd` 를 덮어쓰지 않고 따로 두는 이유가 이 칸의 존재 이유다.** `cwd` 는 이 Run 이 어느
-   *  프로젝트의 것인가를 정하고(runsForProject → repoPathOf, view.ts), 그 판정은 워크트리
-   *  레지스트리 항목이 살아 있을 때만 워크트리를 저장소로 되돌린다. 예약 회차의 워크트리를 걷으면
-   *  그 항목이 사라지므로, `cwd` 가 워크트리였다면 그 회차 Run 이 프로젝트 목록에서 사라진다 —
-   *  지울 문까지 함께. 그래서 `cwd` 는 "속한 프로젝트이자 최종 병합 대상", 이 칸은 "일하는 자리" 다.
+   *  **Job.cwd 를 덮어쓰지 않고 따로 두는 이유가 이 칸의 존재 이유다.** `cwd` 는 어느 프로젝트의
+   *  것인가를 정하고(runsForProject → repoPathOf, view.ts), 그 판정은 워크트리 레지스트리 항목이
+   *  살아 있을 때만 워크트리를 저장소로 되돌린다. 회차의 워크트리를 걷으면 그 항목이 사라지므로,
+   *  `cwd` 가 워크트리였다면 그 회차가 프로젝트 목록에서 사라진다 — 지울 문까지 함께. 그래서
+   *  `cwd` 는 "속한 프로젝트이자 최종 병합 대상", 이 칸은 "일하는 자리" 다.
    *  둘을 함께 읽는 자리는 runRootOf(integrate.ts) 하나다. */
   worktree?: string
-  /** 사람이 이 예약을 세워 뒀다. **있으면 발화하지 않고, 회차의 Task 도 배치되지 않는다.**
+  /** 예약을 세울 때 이 회차도 함께 멈췄다.
    *
-   *  **pendingStart 와 다른 칸인 이유가 이 필드의 존재 이유다.** 둘 다 "돌지 않는다" 를 만들지만
-   *  사람에게는 다른 상황이고 다른 버튼이다: pendingStart 는 "아직 시작하지 않았다"(초안이고,
-   *  '실행' 이 한 번 걷는다), 이것은 "돌던 것을 세워 뒀다"('⏸' 와 '▶' 가 오간다). 한 칸으로
-   *  겸하게 했더니 세운 뒤에 '실행' 버튼과 '▶' 가 **같은 일을 하는 두 버튼**으로 나란히 떴다.
-   *
-   *  회차에도 붙는다 — 세우는 순간 그 예약에 딸린 회차 전부에. Dispatch 를 닫는 것만으로는 그 회차가
-   *  멈추지 않는다: 닫힌 자리에 그 회차의 다음 ready Task 가 곧바로 뜬다(회차는 autoDispatch 가
-   *  켜져 있다). 재개는 템플릿의 것만 걷으므로 멈춘 회차는 이어지지 않는다. */
+   *  **Job.paused 하나로 겸할 수 없다.** Dispatch 를 닫는 것만으로는 회차가 멈추지 않는다 — 닫힌
+   *  자리에 그 회차의 다음 ready Task 가 곧바로 뜬다. 재개는 Job 의 것만 걷으므로 멈춘 회차는
+   *  이어지지 않는다. */
   paused?: boolean
-  /** 이 Run 이 어느 템플릿의 한 회차인가. 있으면 실행 기록이다.
-   *
-   *  **schedule 과 배타적이다.** 자식에 schedule 을 복사하면 자식이 또 발화해 무한히 증식한다. */
-  templateId?: string
-  /** 완료 수렴 정책. 있으면 이 Run 의 검증·검토 실패는 앱이 repair 로 되돌린다(설계 D2·D12) */
-  convergence?: ConvergencePolicy
 }
 
 export interface Task {
   id: string
-  runId: string
+  /** 이 Task 가 어느 회차의 것인가. **정의 Task 에는 없다** — 그쪽은 jobId 를 든다. 둘 중 하나만
+   *  있다(설계 §4.1). */
+  runId?: string
+  /** 이 Task 가 어느 Job 의 정의인가. **회차에 속한 Task 에는 없다.** 정의는 배치되지 않는다 —
+   *  회차가 시작될 때 베껴질 뿐이다. */
+  jobId?: string
   title: string
   spec: string
   deps: string[]

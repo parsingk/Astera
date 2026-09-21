@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   emptyState,
-  createRun,
+  createJob,
+  startJobRun,
   createTask,
   openDispatch,
   applyWorkerDone,
@@ -29,8 +30,12 @@ const CREDENTIAL_BODY =
  *  이 파일 전용 시나리오를 조립한다: 선행 Task 하나 -> 본 Task -> 첫 Dispatch 가 실패로 보고 ->
  *  재시도 Dispatch 가 usage limit 으로 멈춘다(closeDispatch) -> stopSnapshot 기록. */
 function seed() {
+  // 계획을 만들고 그 1회차를 시작한다 — 예전의 createRun 한 번이 이제 두 걸음이다.
+  const planned = unwrap<{ id: string }>(
+    createJob(emptyState(), { objective: 'Implement OAuth login', cwd: 'D:/p' }, NOW) as never
+  )
   let { state: s, value: run } = unwrap<{ id: string }>(
-    createRun(emptyState(), { objective: 'Implement OAuth login', cwd: 'D:/p' }, NOW) as never
+    startJobRun(planned.state, planned.value.id, NOW) as never
   )
   const dep = unwrap<{ id: string }>(
     createTask(
@@ -126,9 +131,10 @@ function seed() {
 /** 보고 body 하나만 다른, 위 seed() 와 같은 조립. redaction 이 그 body 를 어떻게 다루는지만
  *  보려는 테스트가 쓴다 — seed() 는 이미 CREDENTIAL_BODY 를 심어 두므로 재사용할 수 없다. */
 function seedWithReport(body: string): { s: OrchState; dispatchId: string } {
-  const run = unwrap<{ id: string }>(
-    createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+  const planned = unwrap<{ id: string }>(
+    createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
   )
+  const run = unwrap<{ id: string }>(startJobRun(planned.state, planned.value.id, NOW) as never)
   const t = unwrap<{ id: string }>(
     createTask(run.state, { runId: run.value.id, title: 't', spec: 'do it', deps: [] }, NOW) as never
   )
@@ -294,8 +300,11 @@ describe('buildCheckpoint', () => {
   })
 
   it('carries a resolved human decision from Gate.question/Gate.resolution', () => {
+    const planned = unwrap<{ id: string }>(
+      createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+    )
     let { state: s, value: run } = unwrap<{ id: string }>(
-      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+      startJobRun(planned.state, planned.value.id, NOW) as never
     )
     const t = unwrap<{ id: string }>(
       createTask(s, { runId: run.id, title: 't', spec: 'do it', deps: [] }, NOW) as never

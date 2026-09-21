@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { pendingMerges } from './integrate'
 import { slotsToFill, tasksMissingAccounts } from './schedule'
 import { emptyState, type OrchState } from './state'
-import type { Run, Task } from './types'
+import type { Task } from './types'
+import { stateFromLegacy } from './legacyState'
+import type { LegacyRun } from './legacy'
 
-const run = (over: Partial<Run> = {}): Run => ({
+const run = (over: Partial<LegacyRun> = {}): LegacyRun => ({
   id: 'run_1',
   objective: 'o',
   cwd: '/p',
@@ -31,11 +33,8 @@ const task = (id: string, over: Partial<Task> = {}): Task => ({
 
 // **emptyState() 위에 얹는다** — OrchState 에는 여기서 안 쓰는 칸도 있고(messages, deliveries,
 // gates) 손으로 세면 하나 빠뜨려 타입체크가 깨진다. 칸이 늘어도 이 헬퍼는 그대로 산다
-const state = (over: Partial<OrchState> = {}): OrchState => ({
-  ...emptyState(),
-  runs: [run()],
-  ...over
-})
+const state = (over: Parameters<typeof stateFromLegacy>[0] = {}): OrchState =>
+  stateFromLegacy({ runs: [run()], ...over })
 
 describe('slotsToFill — 계정 지정', () => {
   // Slot 이 계정을 실어 보내는 이유: 고르는 판정은 core 의 accountToDispatchOn 이 하지만, 그것은

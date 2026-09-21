@@ -91,7 +91,7 @@ describe('handleCommand — 기본', () => {
     const deps = makeDeps(reg.state)
     const r = await call(deps, 'run-create', { objective: 'o', cwd: absPath('proj') })
     expect(r.status).toBe(200)
-    expect(deps.getState().runs[0].projectId).toBe(reg.project.id)
+    expect(deps.getState().jobs[0].projectId).toBe(reg.project.id)
   })
   // **등록은 여기서 하지 않는다.** 이 명령은 CLI 로도 불리고, 코디네이터가 워크트리 안에서 부른
   // run-create 가 그 워크트리를 프로젝트로 등록해 버리면 목록이 작업 폴더로 오염된다
@@ -100,7 +100,7 @@ describe('handleCommand — 기본', () => {
     const r = await call(deps, 'run-create', { objective: 'o', cwd: absPath('nowhere') })
     expect(r.status).toBe(200)
     expect(deps.getState().projects).toEqual([])
-    expect(deps.getState().runs[0].projectId).toBeUndefined()
+    expect(deps.getState().jobs[0].projectId).toBeUndefined()
   })
   it('run-create 가 concurrency·auto 를 Run 에 싣는다', async () => {
     const r = await call(makeDeps(), 'run-create', {
@@ -142,7 +142,7 @@ describe('handleCommand — 기본', () => {
       schedule: { kind: 'daily', time: '09:00' }
     })
     expect(r.status).toBe(200)
-    expect(deps.getState().runs[0].schedule).toEqual({ kind: 'daily', time: '09:00' })
+    expect(deps.getState().jobs[0].schedule).toEqual({ kind: 'daily', time: '09:00' })
   })
 
   // 예약은 자신이 돌지 않는다. auto 를 함께 받았더라도 템플릿에는 켜지 않는다 — 켜면
@@ -155,7 +155,7 @@ describe('handleCommand — 기본', () => {
       auto: true,
       schedule: { kind: 'daily', time: '09:00' }
     })
-    expect(deps.getState().runs[0].autoDispatch).toBeUndefined()
+    expect(deps.getState().jobs[0].autoDispatch).toBeUndefined()
   })
 
   it('잘못된 schedule 은 400 으로 거절한다', async () => {
@@ -170,8 +170,8 @@ describe('handleCommand — 기본', () => {
   it('schedule 이 없으면 평범한 Run 이다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true })
-    expect(deps.getState().runs[0].schedule).toBeUndefined()
-    expect(deps.getState().runs[0].autoDispatch).toBe(true)
+    expect(deps.getState().jobs[0].schedule).toBeUndefined()
+    expect(deps.getState().jobs[0].autoDispatch).toBe(true)
   })
 })
 
@@ -837,6 +837,10 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
     })
     const runId = (run.body as { id: string }).id
     const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    expect(task.status).toBe(200)
+    // 계획에 붙인 Task 는 **정의**다 — 회차가 없으므로 배치할 자리가 없다
+    expect(deps.getState().tasks[0].jobId).toBe(runId)
+    expect(deps.getState().tasks[0].runId).toBeUndefined()
     const taskId = (task.body as { id: string }).id
     const r = await call(deps, 'worker-start', {
       taskId,
@@ -845,7 +849,7 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
       worktree: 'current'
     })
     expect(r.status).toBe(400)
-    expect(JSON.stringify(r.body)).toContain('template')
+    expect(JSON.stringify(r.body)).toContain('unknown run')
     expect(startWorkerCalls).toBe(0)
   })
 
@@ -880,7 +884,10 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
       cwd: 'D:/p',
       auto: true
     })
-    const runId = (run.body as { id: string }).id
+    const jobId = (run.body as { id: string }).id
+    // `--auto` 인 Job 은 '실행' 을 눌러야 회차가 생긴다 — Task 를 배치하려면 그 회차가 있어야 한다
+    await call(deps, 'run-start', { run: jobId })
+    const runId = deps.getState().runs.find((r) => r.jobId === jobId)!.id
     const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     const r = await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1' })
@@ -896,7 +903,9 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
       cwd: 'D:/p',
       auto: true
     })
-    const runId = (run.body as { id: string }).id
+    const jobId = (run.body as { id: string }).id
+    await call(deps, 'run-start', { run: jobId })
+    const runId = deps.getState().runs.find((r) => r.jobId === jobId)!.id
     const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     const r = await call(deps, 'worker-start', {
@@ -981,7 +990,7 @@ describe('handleCommand — reset', () => {
       expect((await call(deps, 'reset', { all: true })).status).toBe(200)
       const bak = JSON.parse(await fs.readFile(file + '.bak', 'utf8')) as OrchState
       expect(bak.runs).toHaveLength(1)
-      expect(bak.runs[0].objective).toBe('지워질 Run')
+      expect(bak.jobs[0].objective).toBe('지워질 Run')
       expect((JSON.parse(await fs.readFile(file, 'utf8')) as OrchState).runs).toHaveLength(0)
     })
 
@@ -1224,7 +1233,7 @@ describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
     const deps = makeDeps()
     const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true, maxTotalMinutes: 45 })
     expect(r.status).toBe(200)
-    expect(deps.getState().runs[0].convergence).toEqual({ maxTotalMinutes: 45 })
+    expect(deps.getState().jobs[0].convergence).toEqual({ maxTotalMinutes: 45 })
   })
 
   it('--max-total-minutes 는 --convergence 없이는 거절된다 — 나머지 셋과 같은 규칙', async () => {
@@ -2045,7 +2054,7 @@ describe('run-create — cwd 정규화', () => {
     deps.resolveProjectRoot = async () => 'D:/proj'
     const r = await call(deps, 'run-create', { objective: '목표', cwd: 'D:/proj/src/main' })
     expect(r.status).toBe(200)
-    expect(deps.getState().runs[0].cwd).toBe('D:/proj')
+    expect(deps.getState().jobs[0].cwd).toBe('D:/proj')
   })
 
   it('해석기에 주어진 --cwd 를 그대로 넘긴다', async () => {
@@ -2064,7 +2073,7 @@ describe('run-create — cwd 정규화', () => {
     const deps = makeDeps()
     const r = await call(deps, 'run-create', { objective: '목표', cwd: 'D:/proj/src/main' })
     expect(r.status).toBe(200)
-    expect(deps.getState().runs[0].cwd).toBe('D:/proj/src/main')
+    expect(deps.getState().jobs[0].cwd).toBe('D:/proj/src/main')
   })
 
   // 배선(ipc.ts)은 계정마다 파일시스템을 훑고 git 까지 부른다. 거기서 난 실패가 Run 생성을
@@ -2078,7 +2087,7 @@ describe('run-create — cwd 정규화', () => {
     }
     const r = await call(deps, 'run-create', { objective: '목표', cwd: 'D:/proj/src/main' })
     expect(r.status).toBe(200)
-    expect(deps.getState().runs[0].cwd).toBe('D:/proj/src/main')
+    expect(deps.getState().jobs[0].cwd).toBe('D:/proj/src/main')
     expect(logged.some((m) => m.includes('EACCES'))).toBe(true)
   })
 
@@ -3020,14 +3029,15 @@ describe('run-spawn — 예약 회차', () => {
     return { deps, templateId: (r.body as { id: string }).id }
   }
 
-  it('템플릿의 회차를 만들고 자식 Run 을 돌려준다', async () => {
+  it('예약의 회차를 만들고 그 회차를 돌려준다', async () => {
     const { deps, templateId } = await withTemplate()
     const r = await call(deps, 'run-spawn', { run: templateId })
     expect(r.status).toBe(200)
-    const child = r.body as { id: string; templateId?: string; autoDispatch?: boolean }
-    expect(child.templateId).toBe(templateId)
-    expect(child.autoDispatch).toBe(true)
-    expect(deps.getState().runs).toHaveLength(2)
+    const child = r.body as { id: string; jobId?: string; ordinal?: number }
+    expect(child.jobId).toBe(templateId)
+    expect(child.ordinal).toBe(1)
+    // 계획은 jobs 에 있으므로 이 배열에는 회차 하나뿐이다
+    expect(deps.getState().runs).toHaveLength(1)
   })
 
   it('--run 이 없으면 400', async () => {
@@ -3071,10 +3081,11 @@ describe('run-spawn — 예약 회차', () => {
     const { deps, templateId } = await withTemplate()
     await call(deps, 'run-spawn', { run: templateId })
     await call(deps, 'run-spawn', { run: templateId })
-    expect(deps.getState().runs).toHaveLength(3)
+    expect(deps.getState().runs).toHaveLength(2)
     const r = await call(deps, 'run-delete', { id: templateId })
     expect(r.status).toBe(200)
     expect(deps.getState().runs).toHaveLength(0)
+    expect(deps.getState().jobs).toHaveLength(0)
   })
 
   // 정의는 템플릿에 있으므로 회차 하나를 버리는 것은 기록 하나를 버리는 일이다
@@ -3084,9 +3095,9 @@ describe('run-spawn — 예약 회차', () => {
     await call(deps, 'run-spawn', { run: templateId })
     await call(deps, 'run-delete', { id: child.id })
     const ids = deps.getState().runs.map((x) => x.id)
-    expect(ids).toContain(templateId)
+    expect(deps.getState().jobs.map((j) => j.id)).toContain(templateId)
     expect(ids).not.toContain(child.id)
-    expect(ids).toHaveLength(2)
+    expect(ids).toHaveLength(1)
   })
 
   /** 회차 하나에 열린 Dispatch 를 심는다. retained 를 바꿔 붙잡아 둔 세션도 만든다 */
@@ -3158,15 +3169,15 @@ describe('run-spawn — 예약 회차', () => {
     expect(r.status).toBe(409)
     expect(JSON.stringify(r.body)).toContain('retain')
     expect(released).toEqual([])
-    expect(deps.getState().runs).toHaveLength(2)
+    expect(deps.getState().runs).toHaveLength(1)
   })
 
-  it('예약이 아닌 Run 은 여전히 거절한다 — 그쪽은 멈추면 다시 뜨지 않는다', async () => {
+  it('회차 하나를 지우는 것은 여전히 거절한다 — 그쪽은 멈추면 다시 뜨지 않는다', async () => {
     const { deps, childId, released } = await withRunningChild()
     const r = await call(deps, 'run-delete', { id: childId })
     expect(r.status).toBe(409)
     expect(released).toEqual([])
-    expect(deps.getState().runs).toHaveLength(2)
+    expect(deps.getState().runs).toHaveLength(1)
   })
 
 })
@@ -3182,17 +3193,21 @@ describe('worker-start — 인계된 Run 의 워크트리', () => {
       auto: true,
       coordinatorAccount: 'acc1'
     })
-    const runId = (run.body as { id: string }).id
+    const jobId = (run.body as { id: string }).id
+    await call(deps, 'run-start', { run: jobId })
+    const runId = deps.getState().runs.find((r) => r.jobId === jobId)!.id
     const t = await call(deps, 'task-create', { account: 'acc1', runId, spec: 's' })
     const taskId = (t.body as { id: string }).id
     // 넘긴 상태를 흉내 낸다 — run-start 가 하는 그대로(autoDispatch 를 지운다)
     await deps.setState({
       ...deps.getState(),
-      runs: deps.getState().runs.map((r) => {
-        if (r.id !== runId) return r
-        const { autoDispatch: _drop, pendingStart: _drop2, ...rest } = r
-        return { ...rest, coordinatorSessionId: 'coord1' }
-      })
+      jobs: deps.getState().jobs.map((j) => {
+        const { autoDispatch: _drop, pendingStart: _drop2, ...rest } = j
+        return rest
+      }),
+      runs: deps.getState().runs.map((r) =>
+        r.id === runId ? { ...r, coordinatorSessionId: 'coord1' } : r
+      )
     })
     const r = await call(deps, 'worker-start', { task: taskId, agent: 'codex', account: 'acc1' })
     expect(r.status).toBe(409)
@@ -3321,19 +3336,24 @@ describe('run-start — 코디네이터 인계', () => {
     const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, ...args })
     return (r.body as { id: string }).id
   }
+  /** '실행' 이 만든 회차. 계획의 id 로 만들고, 코디네이터는 그 회차에 붙는다. */
+  const runOf = (deps: OrchServerDeps, jobId: string) =>
+    deps.getState().runs.find((r) => r.jobId === jobId)!
 
   it('코디네이터 계정이 있으면 실행이 코디네이터를 띄우고 운전자를 넘긴다', async () => {
     const deps = coordDeps()
     const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
     const r = await call(deps, 'run-start', { run: runId })
     expect(r.status).toBe(200)
-    expect(deps.spawned.map((x) => x.runId)).toEqual([runId])
-    const run = deps.getState().runs.find((x) => x.id === runId)!
+    const run = runOf(deps, runId)
+    // 코디네이터는 **회차**에 붙는다 — 운전할 것이 계획이 아니라 그 실행이다
+    expect(deps.spawned.map((x) => x.runId)).toEqual([run.id])
     expect(run.coordinatorSessionId).toBe('coord-sess')
     // **운전자를 넘기는 방식이 autoDispatch 를 지우는 것이다** — 켜 둔 채로 코디네이터를 붙이면
-    // 둘이 같은 ready Task 를 두고 경합한다(Run.autoDispatch 의 주석)
-    expect(run).not.toHaveProperty('autoDispatch')
-    expect(run).not.toHaveProperty('pendingStart')
+    // 둘이 같은 ready Task 를 두고 경합한다(Job.autoDispatch 의 주석). 계획의 칸이므로 계획에서 빠진다
+    const job = deps.getState().jobs.find((j) => j.id === runId)!
+    expect(job).not.toHaveProperty('autoDispatch')
+    expect(job).not.toHaveProperty('pendingStart')
   })
 
   it('인수 프롬프트에 그 Run 의 한도와 Task 수가 실린다', async () => {
@@ -3342,7 +3362,8 @@ describe('run-start — 코디네이터 인계', () => {
     await call(deps, 'task-create', { account: 'cl1', runId, spec: 'a' })
     await call(deps, 'run-start', { run: runId })
     const brief = deps.spawned[0].brief
-    expect(brief).toContain(runId)
+    // 브리핑이 가리키는 것은 회차다 — 코디네이터가 `--run` 에 넣을 값이 그것이다
+    expect(brief).toContain(runOf(deps, runId).id)
     expect(brief).toContain('CONCURRENCY IS 2')
     expect(brief).toContain('tasks already defined: 1')
   })
@@ -3357,7 +3378,7 @@ describe('run-start — 코디네이터 인계', () => {
     const s = deps.getState()
     await deps.setState({
       ...s,
-      runs: s.runs.map((r) => (r.id === runId ? { ...r, convergence: null as never } : r))
+      jobs: s.jobs.map((j) => (j.id === runId ? { ...j, convergence: null as never } : j))
     })
     const r = await call(deps, 'run-start', { run: runId })
     expect(r.status).toBe(200)
@@ -3379,16 +3400,19 @@ describe('run-start — 코디네이터 인계', () => {
     const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
     expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
     expect(deps.made).toHaveLength(1)
-    expect(deps.getState().runs.find((r) => r.id === runId)?.worktree).toBe(`D:/wt/${deps.made[0]}`)
+    expect(runOf(deps, runId).worktree).toBe(`D:/wt/${deps.made[0]}`)
   })
 
   it('이미 워크트리가 있으면 다시 만들지 않는다', async () => {
     const deps = coordDeps()
     const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
-    await call(deps, 'run-worktree-set', { run: runId, worktree: 'D:/existing' })
+    // 회차가 있어야 워크트리를 기록할 자리가 있다 — '실행' 이 그것을 만든다
     await call(deps, 'run-start', { run: runId })
-    expect(deps.made).toEqual([])
-    expect(deps.getState().runs.find((r) => r.id === runId)?.worktree).toBe('D:/existing')
+    const made = deps.made.length
+    await call(deps, 'run-worktree-set', { run: runOf(deps, runId).id, worktree: 'D:/existing' })
+    await call(deps, 'run-start', { run: runId })
+    expect(deps.made).toHaveLength(made)
+    expect(runOf(deps, runId).worktree).toBe(`D:/wt/${deps.made[0]}`)
   })
 
   // 코디네이터를 띄운 뒤에 만들면 그 세션이 첫 명령을 부르는 사이 워크트리 없는 Run 을 본다
@@ -3402,17 +3426,17 @@ describe('run-start — 코디네이터 인계', () => {
     const r = await call(deps, 'run-start', { run: runId })
     expect(r.status).toBe(400)
     expect(deps.spawned).toEqual([])
-    const run = deps.getState().runs.find((x) => x.id === runId)!
-    expect(run.pendingStart).toBe(true)
-    expect(run).not.toHaveProperty('worktree')
-    expect(run).not.toHaveProperty('coordinatorSessionId')
+    const job = deps.getState().jobs[0]
+    expect(job.pendingStart).toBe(true)
+    // 회차도 만들어지지 않았다 — 실패는 아무것도 바꾸지 않는다
+    expect(deps.getState().runs).toEqual([])
   })
 
   it('배선이 그 기능을 주입하지 않으면 워크트리 없이 넘긴다 — worker-start 가 소리 내어 거절한다', async () => {
     const deps = coordDeps({ makeRunWorktree: undefined })
     const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
     expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
-    expect(deps.getState().runs.find((r) => r.id === runId)).not.toHaveProperty('worktree')
+    expect(runOf(deps, runId)).not.toHaveProperty('worktree')
     expect(deps.spawned).toHaveLength(1)
   })
 
@@ -3436,16 +3460,15 @@ describe('run-start — 코디네이터 인계', () => {
     const runId = await mkRun(deps)
     expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
     expect(deps.spawned).toEqual([])
-    const run = deps.getState().runs.find((x) => x.id === runId)!
-    expect(run.autoDispatch).toBe(true)
-    expect(run).not.toHaveProperty('coordinatorSessionId')
+    expect(deps.getState().jobs[0].autoDispatch).toBe(true)
+    expect(runOf(deps, runId)).not.toHaveProperty('coordinatorSessionId')
   })
 
   it('배선이 그 기능을 주입하지 않으면 띄우지 않는다', async () => {
     const deps = coordDeps({ startCoordinator: undefined })
     const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
     expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
-    expect(deps.getState().runs[0].autoDispatch).toBe(true)
+    expect(deps.getState().jobs[0].autoDispatch).toBe(true)
   })
 
   // 걷어 버리면 실행 버튼이 사라져 사람이 다시 누를 수 없고, 운전자도 없는 Run 이 남는다
@@ -3458,10 +3481,11 @@ describe('run-start — 코디네이터 인계', () => {
     const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
     const r = await call(deps, 'run-start', { run: runId })
     expect(r.status).toBe(400)
-    const run = deps.getState().runs.find((x) => x.id === runId)!
-    expect(run.pendingStart).toBe(true)
-    expect(run.autoDispatch).toBe(true)
-    expect(run).not.toHaveProperty('coordinatorSessionId')
+    const job = deps.getState().jobs[0]
+    const run = deps.getState().runs.find((x) => x.id === runId)
+    expect(job.pendingStart).toBe(true)
+    expect(job.autoDispatch).toBe(true)
+    expect(run).toBeUndefined()
   })
 
   // 조용히 첫 칸만 쓰면 사람이 적은 것과 도는 것이 달라지고, 그 사실을 알 방법이 화면에 없다
@@ -3491,9 +3515,11 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
   it('run-create --auto 는 pendingStart 를 함께 켠다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true })
-    const run = deps.getState().runs[0]
-    expect(run.autoDispatch).toBe(true)
-    expect(run.pendingStart).toBe(true)
+    const job = deps.getState().jobs[0]
+    expect(job.autoDispatch).toBe(true)
+    expect(job.pendingStart).toBe(true)
+    // 회차는 '실행' 을 누를 때 생긴다
+    expect(deps.getState().runs).toEqual([])
   })
 
   // **예약도 이 게이트를 쓴다.** 템플릿 자신은 돌지 않지만 발화는 시작이고, Task 를 다 짜기 전에
@@ -3507,7 +3533,7 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
       auto: true,
       schedule: { kind: 'daily', time: '09:00' }
     })
-    expect(deps.getState().runs[0].pendingStart).toBe(true)
+    expect(deps.getState().jobs[0].pendingStart).toBe(true)
   })
 
   // autoDispatch 는 여전히 켜지 않는다 — 템플릿이 스스로 배치되면 자기 Task 를 자기가 돌린다.
@@ -3520,7 +3546,7 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
       auto: true,
       schedule: { kind: 'daily', time: '09:00' }
     })
-    expect(deps.getState().runs[0].autoDispatch).toBeUndefined()
+    expect(deps.getState().jobs[0].autoDispatch).toBeUndefined()
   })
 
   // 게이트를 걷는 명령은 템플릿에도 그대로 듣는다 — startRun 은 Run 종류를 가리지 않는다
@@ -3534,7 +3560,7 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
     })
     const id = (c.body as { id: string }).id
     expect((await call(deps, 'run-start', { run: id })).status).toBe(200)
-    expect(deps.getState().runs[0].pendingStart).toBeUndefined()
+    expect(deps.getState().jobs[0].pendingStart).toBeUndefined()
   })
 
   it('run-spawn 이 만든 회차에는 pendingStart 가 없다', async () => {
@@ -3554,7 +3580,7 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
     const id = (c.body as { id: string }).id
     const r = await call(deps, 'run-start', { run: id })
     expect(r.status).toBe(200)
-    expect(deps.getState().runs[0].pendingStart).toBeUndefined()
+    expect(deps.getState().jobs[0].pendingStart).toBeUndefined()
   })
 
   // 두 번 눌리는 것을 오류로 만들지 않는다 — 버튼이 사라지기 전에 두 번 눌릴 수 있고, 그때
@@ -3756,12 +3782,9 @@ describe('run-delete — 예약 템플릿의 회차 워크트리', () => {
         ...deps.getState().runs,
         {
           id: 'run_kid',
-          objective: 'o',
-          cwd: 'D:/p',
-          createdAt: NOW,
-          autoDispatch: true,
-          templateId,
-          fireOrdinal: 1
+          jobId: templateId,
+          ordinal: 1,
+          createdAt: NOW
         }
       ],
       tasks: [
@@ -3847,12 +3870,9 @@ describe('run-pause', () => {
         ...deps.getState().runs,
         {
           id: 'run_kid',
-          objective: 'o',
-          cwd: 'D:/p',
-          createdAt: NOW,
-          autoDispatch: true,
-          templateId,
-          fireOrdinal: 1
+          jobId: templateId,
+          ordinal: 1,
+          createdAt: NOW
         }
       ],
       tasks: [
@@ -3902,9 +3922,9 @@ describe('run-pause', () => {
   it('템플릿과 회차 모두에 paused 를 세운다', async () => {
     const { deps, templateId } = await runningSchedule()
     await call(deps, 'run-pause', { run: templateId })
-    const byId = new Map(deps.getState().runs.map((r) => [r.id, r]))
-    expect(byId.get(templateId)!.paused).toBe(true)
-    expect(byId.get('run_kid')!.paused).toBe(true)
+    // 계획이 세워지고, 그 회차도 함께 멈춘다
+    expect(deps.getState().jobs.find((j) => j.id === templateId)!.paused).toBe(true)
+    expect(deps.getState().runs.find((r) => r.id === 'run_kid')!.paused).toBe(true)
   })
 
   // **pendingStart 를 건드리지 않는다.** 그 칸은 '실행' 의 것이다 — 일시 중지가 그것을 다시 세우면
@@ -3912,7 +3932,7 @@ describe('run-pause', () => {
   it('pendingStart 는 건드리지 않는다', async () => {
     const { deps, templateId } = await runningSchedule()
     await call(deps, 'run-pause', { run: templateId })
-    expect(deps.getState().runs.find((r) => r.id === templateId)!.pendingStart).toBeUndefined()
+    expect(deps.getState().jobs.find((j) => j.id === templateId)!.pendingStart).toBeUndefined()
   })
 
   // 재개는 템플릿의 것만 걷는다 — 멈춘 회차는 이어지지 않는다
@@ -3920,9 +3940,8 @@ describe('run-pause', () => {
     const { deps, templateId } = await runningSchedule()
     await call(deps, 'run-pause', { run: templateId })
     expect((await call(deps, 'run-resume', { run: templateId })).status).toBe(200)
-    const byId = new Map(deps.getState().runs.map((r) => [r.id, r]))
-    expect(byId.get(templateId)!.paused).toBeUndefined()
-    expect(byId.get('run_kid')!.paused).toBe(true)
+    expect(deps.getState().jobs.find((j) => j.id === templateId)!.paused).toBeUndefined()
+    expect(deps.getState().runs.find((r) => r.id === 'run_kid')!.paused).toBe(true)
   })
 
   // 버튼이 사라지기 전에 두 번 눌릴 수 있다 — 요청한 끝 상태는 이미 그것이다
@@ -3943,7 +3962,7 @@ describe('run-pause', () => {
     expect(r.status).toBe(409)
     expect(JSON.stringify(r.body)).toContain('worker-retain')
     expect(released).toEqual([])
-    expect(deps.getState().runs.find((x) => x.id === templateId)!.pendingStart).toBeUndefined()
+    expect(deps.getState().jobs.find((x) => x.id === templateId)!.pendingStart).toBeUndefined()
   })
 
   it('예약이 아닌 Run 은 409 다', async () => {
@@ -4435,10 +4454,10 @@ describe('handleCommand — convergence', () => {
     const deps = convDeps()
     const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
     expect(r.status).toBe(200)
-    expect(deps.getState().runs[0].convergence).toEqual({})
+    expect(deps.getState().jobs[0].convergence).toEqual({})
     const r2 = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true, maxFixAttempts: 2, maxReviewRounds: 1, blockingSeverity: 'medium' })
     expect(r2.status).toBe(200)
-    expect(deps.getState().runs[1].convergence).toEqual({ maxFixAttempts: 2, maxReviewRounds: 1, blockingSeverity: 'medium' })
+    expect(deps.getState().jobs[1].convergence).toEqual({ maxFixAttempts: 2, maxReviewRounds: 1, blockingSeverity: 'medium' })
   })
   it('run-create 없이 숫자만 주면, 또는 값이 틀리면 거절한다', async () => {
     const deps = convDeps()

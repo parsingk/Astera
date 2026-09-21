@@ -13,16 +13,20 @@ import {
   closeDispatch,
   createGate,
   createQuestion,
-  createRun,
+  createJob,
   createTask,
   emptyState,
-  latestOrdinaryRun,
+  latestRun,
   nextDelivery,
   openDispatch,
   resolveGate,
   deleteRuns,
-  spawnScheduledRun,
-  startRun,
+  deleteJobs,
+  startJobRun,
+  releaseJob,
+  jobOf,
+  jobOfRunId,
+  runIdOf,
   attachCoordinator,
   pauseSchedule,
   resumeSchedule,
@@ -613,9 +617,8 @@ export async function handleCommand(
       // 정규화됐으므로(resolveProjectRoot), 앱이 아는 저장소라면 여기서 맞는다.
       // 못 맞으면 칸이 비고, 그 Run 은 옛 Run 과 같은 경로 유도로 목록에 든다.
       const project = findProjectByPath(latest, cwd)
-      return commit(
-        createRun(
-          latest,
+      const created = createJob(
+        latest,
           {
             objective,
             cwd,
@@ -636,9 +639,17 @@ export async function handleCommand(
             ...(args.auto === true ? { pendingStart: true } : {}),
             ...(convergence ? { convergence } : {})
           },
-          now
-        )
+        now
       )
+      if (!created.ok) return commit(created)
+      // **코디네이터에게는 곧바로 회차를 준다.** 계획만 만들고 끝내면 `--run` 에 넣을 id 가 없고,
+      // 코디네이터는 Task 를 만들어 가며 일하므로 붙일 자리가 그 자리에 있어야 한다.
+      //
+      // 회차를 만들지 않는 두 경우는 **아직 돌 때가 아닌 계획**이다. 사람이 화면에서 만든 Job 은
+      // '실행' 을 누를 때까지 기다리고(`--auto` + pendingStart), 예약 Job 의 회차는 발화가 만든다 —
+      // 여기서 하나 만들면 예약 시각이 되기도 전에 1회차가 도는 일이 된다.
+      if (args.auto === true || schedule !== undefined) return commit(created)
+      return commit(startJobRun(created.state, created.value.id, now))
     }
     case 'run-list':
       return okBody(s.runs)
@@ -646,9 +657,10 @@ export async function handleCommand(
     // 가 아니다 — 워커도 자기가 무엇으로 검증될지 볼 수 있어야 한다.
     case 'run-configs': {
       if (!deps.listRunConfigs) return okBody([])
-      const run = latestOrdinaryRun(s)
-      if (!run) return bad('no run exists')
-      return okBody(await deps.listRunConfigs(run.cwd))
+      const run = latestRun(s)
+      const job = run && jobOf(s, run)
+      if (!job) return bad(`no run exists`)
+      return okBody(await deps.listRunConfigs(job.cwd))
     }
     case 'run-show': {
       const id = str(args.id)
@@ -669,13 +681,15 @@ export async function handleCommand(
     case 'run-delete': {
       const id = str(args.id)
       if (!id) return bad('--id is required')
-      if (!s.runs.some((r) => r.id === id)) return bad(`unknown run: ${String(id)}`)
-      // **템플릿을 지우면 그 회차도 함께 지운다.** 자식만 남기면 정의가 사라진 회차 기록이
-      // 프로젝트 목록에 떠돌고, 사이드바에서 접을 부모가 없다. 자식 하나만 지우는 것은 그대로
-      // 된다 — 그것은 기록 하나를 버리는 일이고 정의는 템플릿에 있다.
+      // **id 는 Job 일 수도 회차일 수도 있다.** 사이드바의 Job 줄은 Job 의 id 를 보내고(계획째
+      // 지운다), 펼쳐진 회차 줄은 그 회차의 id 를 보낸다(기록 하나를 버린다). 정의는 Job 에 있으므로
+      // 회차 하나를 지워도 다음 회차가 베낄 것이 남는다.
+      const job = s.jobs.find((j) => j.id === id)
       const run = s.runs.find((r) => r.id === id)
-      if (!run) return bad(`unknown run: ${String(id)}`)
-      const doomed = new Set([id, ...s.runs.filter((r) => r.templateId === id).map((r) => r.id)])
+      if (!job && !run) return bad(`unknown job or run: ${String(id)}`)
+      const doomed = job
+        ? new Set(s.runs.filter((r) => r.jobId === job.id).map((r) => r.id))
+        : new Set([id])
       // 도는 워커가 있으면 거절한다 — reset 이 같은 판정을 한다. 삭제는 되돌릴 수 없으므로 도는
       // 상태에서 다룰 것을 하나 더 만들지 않는다. 세션을 죽이는 일까지 이 명령이 하게 하면, 커밋
       // 안 된 작업을 워크트리에 남긴 워커가 조용히 사라진다.
@@ -690,8 +704,8 @@ export async function handleCommand(
         // 자리에 다음 발화가 또 워커를 띄우므로, 사람은 예약을 영원히 지울 수 없다(실제로 그렇게
         // 보고됐다). 그 고리를 끊는 자리가 여기다. 비대칭에는 이 이유가 있고, 그래서 자식 회차를
         // 직접 지울 때는 아래 옛 거절이 그대로 남는다.
-        const target = s.runs.find((r) => r.id === id)
-        if (!target?.schedule)
+        // 예약 Job 만 스스로 정리한다(아래 주석). 회차 하나를 지우는 것은 옛 거절이 그대로다.
+        if (!job?.schedule)
           return conflict(
             `refusing to delete while ${open.length} dispatch(es) are open — stop them first`
           )
@@ -719,7 +733,9 @@ export async function handleCommand(
       const worktrees = [...doomed].flatMap((r) => runWorktrees(s, r))
       if (args.merge === true && worktrees.length > 0) {
         if (!deps.mergeWorktrees) return bad('merging is not available in this build')
-        const merged = await deps.mergeWorktrees(run.cwd, worktrees)
+        const cwd = job?.cwd ?? (run && jobOf(s, run)?.cwd)
+        if (cwd === undefined) return bad(`no project folder for ${String(id)}`)
+        const merged = await deps.mergeWorktrees(cwd, worktrees)
         if (!merged.ok) return conflict(merged.reason)
       }
       // 백업은 지우기 전에. reset 과 같은 관례이고 같은 이유다 — 되돌릴 수 없는 삭제에 .bak 하나는
@@ -740,8 +756,11 @@ export async function handleCommand(
           `run-delete ${id}: asked to remove worktrees but did not — ` +
             `worktrees=${worktrees.length} wired=${deps.removeWorktrees !== undefined}`
         )
-      const before = s.tasks.filter((t) => doomed.has(t.runId)).length
-      await deps.setState(deleteRuns(deps.getState(), doomed))
+      const before = s.tasks.filter((t) => t.runId !== undefined && doomed.has(t.runId)).length
+      // Job 을 지목했으면 계획째, 회차를 지목했으면 그 기록만.
+      await deps.setState(
+        job ? deleteJobs(deps.getState(), new Set([job.id])) : deleteRuns(deps.getState(), doomed)
+      )
       return okBody({
         deleted: id,
         tasks: before,
@@ -756,10 +775,21 @@ export async function handleCommand(
     case 'run-start': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
-      const target = s.runs.find((r) => r.id === id)
-      if (!target) return bad(`unknown run: ${id}`)
-      const started = startRun(s, id)
-      if (!started.ok) return bad(started.error)
+      // **id 는 Job 이다.** '실행' 은 계획을 푸는 일이고, 회차는 그 결과로 생긴다.
+      const job = s.jobs.find((j) => j.id === id)
+      if (!job) return bad(`unknown job: ${id}`)
+      const released = releaseJob(s, id)
+      if (!released.ok) return bad(released.error)
+      // 예약 Job 은 여기서 회차를 만들지 않는다 — 발화가 만든다. 게이트만 걷힌다.
+      let started = released
+      let target = released.state.runs.filter((r) => r.jobId === id).at(-1)
+      if (job.schedule === undefined && target === undefined) {
+        const first = startJobRun(released.state, id, now)
+        if (!first.ok) return bad(first.error)
+        started = { ok: true, state: first.state, value: job }
+        target = first.value
+      }
+      if (target === undefined) return commit(started)
       // **코디네이터를 띄울 수 있으면 띄우고, 이 Run 의 운전자를 그에게 넘긴다.** 넘기는 방식이
       // `autoDispatch` 를 끄는 것이다 — 한 Run 에 운전자는 하나이고, 켜 둔 채로 코디네이터를
       // 붙이면 둘이 같은 ready Task 를 두고 경합한다(Run.autoDispatch 의 주석).
@@ -774,7 +804,7 @@ export async function handleCommand(
       // 다시 띄우는 버튼이 함께 쓴다 — 뜻은 "이 Run 에 관리자가 있게 하라" 이고, 두 번 눌러도 두
       // 세션이 뜨지 않아야 한다.
       if (target.coordinatorSessionId) return commit(started)
-      const accountId = target.schedule ? undefined : target.coordinatorAccountId
+      const accountId = job.schedule ? undefined : job.coordinatorAccountId
       if (!accountId || !deps.startCoordinator) return commit(started)
       // **워크트리를 먼저 만든다.** 코디네이터를 띄운 뒤에 만들면 그 세션이 첫 명령을 부르는 사이에
       // 워크트리 없는 Run 을 보게 된다. 실패하면 아래 spawn 실패와 같은 처리다 — 아무것도 바꾸지
@@ -783,10 +813,10 @@ export async function handleCommand(
       if (!target.worktree && deps.makeRunWorktree) {
         try {
           const created = await deps.makeRunWorktree({
-            repoPath: target.cwd,
-            name: nameForRun(target)
+            repoPath: job.cwd,
+            name: nameForRun({ id: job.id, objective: job.objective })
           })
-          const recorded = setRunWorktree(withWorktree, id, created)
+          const recorded = setRunWorktree(withWorktree, target.id, created)
           if (!recorded.ok) return bad(recorded.error)
           withWorktree = recorded.state
         } catch (e) {
@@ -796,20 +826,24 @@ export async function handleCommand(
       let sessionId: string
       try {
         const spawned = await deps.startCoordinator({
-          runId: id,
-          cwd: target.cwd,
+          runId: target.id,
+          cwd: job.cwd,
           accountId,
           brief: buildHandoverPrompt({
-            runId: id,
-            objective: target.objective,
-            concurrency: target.concurrency ?? DEFAULT_CONCURRENCY,
-            taskCount: s.tasks.filter((t) => t.runId === id).length,
+            runId: target.id,
+            objective: job.objective,
+            concurrency: job.concurrency ?? DEFAULT_CONCURRENCY,
+            // 같은 이유로 `s` 가 아니다 — '실행' 이 방금 베껴 넣은 Task 들이 그 스냅샷에는 없다.
+            taskCount: started.state.tasks.filter((t) => t.runId === target.id).length,
             // policyOf 로 판정한다, target.convergence !== undefined 가 아니다 — 손으로 고친
             // "convergence": null 은 !== undefined 로는 정책이 있다고 잘못 읽혀 코디네이터 브리핑이
             // "수렴 중인 Task 는 건드리지 말라"는 문단을 얻는데, 다른 모든 관문(reconciler.ts,
             // ipc.ts 의 startValidation)은 이미 이 실수를 policyOf 로 고쳐 두었다 — 여기만 남아
             // 있었다(전체 브랜치 리뷰, Finding 2).
-            convergence: policyOf(s, { runId: id }) !== null
+            // **`s` 가 아니라 방금 만든 회차가 들어 있는 상태로 묻는다.** `s` 는 명령 진입 시점의
+            // 스냅샷이라 이 회차가 없고, 그러면 policyOf 가 회차를 찾지 못해 정책이 걸린 Job 도
+            // "정책 없음" 으로 읽힌다 — 코디네이터가 수렴 절 없는 브리핑을 받는다.
+            convergence: policyOf(started.state, { runId: target.id }) !== null
           })
         })
         sessionId = spawned.sessionId
@@ -821,24 +855,27 @@ export async function handleCommand(
       }
       // autoDispatch 는 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이
       // 코드베이스는 해당 없는 칸을 두지 않는다(startRun 이 pendingStart 를 지우는 것과 같다).
-      const handed = withWorktree.runs.map((r) => {
-        if (r.id !== id) return r
-        const { autoDispatch: _drop, ...rest } = r
+      // autoDispatch 는 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이
+      // 코드베이스는 해당 없는 칸을 두지 않는다. 계획의 칸이므로 Job 에서 지운다.
+      const handed = withWorktree.jobs.map((j) => {
+        if (j.id !== id) return j
+        const { autoDispatch: _drop, ...rest } = j
         return rest
       })
-      return commit(attachCoordinator({ ...withWorktree, runs: handed }, { runId: id, sessionId }))
+      return commit(
+        attachCoordinator({ ...withWorktree, jobs: handed }, { runId: target.id, sessionId })
+      )
     }
     case 'run-pause': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
-      const target = s.runs.find((r) => r.id === id)
-      if (!target) return bad(`unknown run: ${id}`)
-      // 일시 중지는 예약에만 있다. 보통 Run 에는 멈출 발화가 없고, 그 Run 의 워커를 멈추는 것은
+      const target = s.jobs.find((j) => j.id === id)
+      if (!target) return bad(`unknown job: ${id}`)
+      // 일시 중지는 예약에만 있다. 보통 Job 에는 멈출 발화가 없고, 그 Job 의 워커를 멈추는 것은
       // worker-stop 이 Dispatch 하나씩 하는 일이다 — 같은 일을 두 이름으로 두지 않는다.
-      if (!target.schedule) return conflict(`run ${id} is not scheduled`)
-      // 템플릿과 회차 전부. run-delete 의 doomed 와 같은 집합이다 — 일시 중지도 삭제도 "이 예약에
-      // 딸린 것 전부" 를 대상으로 하므로 같은 방식으로 모은다.
-      const family = new Set([id, ...s.runs.filter((r) => r.templateId === id).map((r) => r.id)])
+      if (!target.schedule) return conflict(`job ${id} is not scheduled`)
+      // 이 Job 의 회차 전부. run-delete 의 doomed 와 같은 집합이다.
+      const family = new Set(s.runs.filter((r) => r.jobId === id).map((r) => r.id))
       const open = s.dispatches.filter((d) => {
         if (d.outcome || d.endedAt) return false
         const runId = s.tasks.find((t) => t.id === d.taskId)?.runId
@@ -896,7 +933,9 @@ export async function handleCommand(
       const worktrees = runWorktrees(s, id)
       if (worktrees.length === 0) return okBody({ merged: [] })
       if (!deps.mergeWorktrees) return bad('merging is not available in this build')
-      const merged = await deps.mergeWorktrees(run.cwd, worktrees)
+      const mergeCwd = jobOf(s, run)?.cwd
+      if (mergeCwd === undefined) return bad(`no project folder for ${id}`)
+      const merged = await deps.mergeWorktrees(mergeCwd, worktrees)
       if (!merged.ok) return conflict(merged.reason)
       // **워크트리를 걷지 않는다.** 사람이 결과를 보고 다시 합칠 수도 있고, 폴더 정리는 삭제
       // 모달의 체크박스가 이미 하는 일이다 — 이 명령이 그것까지 하면 "합치기" 가 "합치고 지우기" 가
@@ -912,7 +951,7 @@ export async function handleCommand(
     case 'run-spawn': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
-      return commit(spawnScheduledRun(s, id, now))
+      return commit(startJobRun(s, id, now))
     }
     case 'task-create': {
       // `--run` 이 없으면 "가장 최근 Run" 이다. **그 뜻을 latestOrdinaryRun 이 정한다** — 예약
@@ -924,7 +963,7 @@ export async function handleCommand(
       // — 다른 여덟 자리는 전부 `args.run` 이다 — CLI 의 `--run` 이 조용히 무시되고 언제나 아래
       // 기본값으로 흘렀다. 오류도 나지 않으므로, 코디네이터가 만든 Task 가 사람이 방금 만든 Job 에
       // 섞여도 알아챌 방법이 없었다.
-      const runId = str(args.runId) ?? str(args.run) ?? latestOrdinaryRun(s)?.id
+      const runId = str(args.runId) ?? str(args.run) ?? latestRun(s)?.id
       const spec = str(args.spec)
       if (!runId) return bad('--run is required (no run exists)')
       if (!spec) return bad('--spec is required')
@@ -963,7 +1002,9 @@ export async function handleCommand(
         createTask(
           s,
           {
-            runId,
+            // **Job 을 지목하면 정의 Task 다.** 화면은 아직 돌지 않은 Job 에 Task 를 짜 넣고('실행'
+            // 전), 코디네이터는 자기가 받은 회차에 붙인다. 두 id 는 접두사가 달라 섞이지 않는다.
+            ...(s.jobs.some((j) => j.id === runId) ? { jobId: runId } : { runId }),
             title: str(args.title) ?? spec.split('\n')[0].slice(0, 80),
             spec,
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
@@ -1156,16 +1197,17 @@ export async function handleCommand(
       if (openForTask) return bad(`dispatch already open: ${openForTask.id}`)
 
       const run = s.runs.find((r) => r.id === task.runId)
+      const runJob = run && jobOf(s, run)
       if (!run) return bad(`unknown run for task: ${taskId}`)
       // **템플릿은 자신의 Task 를 배치하지 않는다.** slotsToFill 이 이미 같은 판단을 하지만 그쪽은
       // 자동 배치 경로뿐이고, 이 명령은 사람과 코디네이터가 직접 부르는 두 번째 문이다. 여기를
       // 열어 두면 템플릿의 Task 가 completed 로 끝나고, 그러면 TTL 정리의 조건(`own.length > 0 &&
       // own.every(terminal)`, store.ts)이 템플릿에서 참이 되어 **30일 뒤 예약과 모든 회차가 조용히
       // 사라진다** — 설계 10절이 일어나지 않는다고 적어 둔 바로 그것이다.
-      if (run.schedule)
-        return bad(
-          `run ${run.id} is a schedule template — it does not dispatch its own Tasks; its executions do`
-        )
+      // 예약 Job 의 정의 Task 는 애초에 이 자리에 오지 않는다 — 정의는 runId 가 없어 Task 조회가
+      // 회차를 찾지 못한다. 그래도 남겨 둔다: orchestration.json 은 손으로 고쳐진다.
+      if (runJob?.schedule && run.ordinal === 0)
+        return bad(`job ${run.jobId} is a schedule — it does not dispatch its own Tasks; its runs do`)
 
       // **동시 실행 한도.** 지금까지 이 값을 지키는 곳은 앱의 스케줄러뿐이었다(schedule.ts 의
       // slotsToFill) — 앱이 유일한 배치자였으므로 그것으로 충분했다. Run 을 코디네이터에게 넘기는
@@ -1178,7 +1220,7 @@ export async function handleCommand(
       //
       // **`--retry-of` 는 예외가 아니다.** 재시도도 새 Dispatch 를 열고 그 워커도 같은 폴더들에서
       // 돈다 — 한도를 넘겨도 되는 이유가 없다.
-      const limit = run.concurrency ?? DEFAULT_CONCURRENCY
+      const limit = runJob?.concurrency ?? DEFAULT_CONCURRENCY
       const openHere = s.dispatches.filter((d) => {
         if (d.outcome || d.endedAt) return false
         return s.tasks.find((x) => x.id === d.taskId)?.runId === run.id
@@ -1222,7 +1264,7 @@ export async function handleCommand(
       // 워크트리를 미리 만들어 두는 것이고, 그것은 별개 작업이다.
       if (
         str(args.worktree) === null &&
-        (run.autoDispatch || run.coordinatorAccountId !== undefined) &&
+        (runJob?.autoDispatch || runJob?.coordinatorAccountId !== undefined) &&
         !run.worktree
       )
         return conflict(
@@ -1272,7 +1314,7 @@ export async function handleCommand(
           provider: agent,
           accountId: account,
           sessionId: pendingSessionId,
-          cwd: run.cwd,
+          cwd: runJob?.cwd ?? '',
           specPath: '',
           retryOf
         },
@@ -1292,7 +1334,7 @@ export async function handleCommand(
           spec: task.spec,
           provider: agent,
           accountId: account,
-          runCwd: run.cwd,
+          runCwd: runJob?.cwd ?? '',
           worktree,
           name,
           terminal,
@@ -1373,7 +1415,7 @@ export async function handleCommand(
         const task = s.tasks.find((t) => t.id === d.taskId)
         const run = task && s.runs.find((r) => r.id === task.runId)
         const converging =
-          !!run?.convergence &&
+          !!(run && jobOf(s, run)?.convergence) &&
           !!task &&
           (task.status === 'validating' ||
             task.status === 'reviewing' ||
@@ -1445,7 +1487,7 @@ export async function handleCommand(
     }
     case 'run-use': {
       // Run binding. For now this assumes real use has exactly one Run and is left as a no-op
-      // success — check falls back to latestOrdinaryRun(s) anyway, so for an ordinary Run the
+      // success — check falls back to latestRun(s) anyway, so for an ordinary Run the
       // result is the same.
       //
       // **That equivalence stopped being unconditional once schedules existed.** Bind a template
@@ -1520,7 +1562,7 @@ export async function handleCommand(
                     // collision probability of ≈1.2% over 10,000 messages, and on a collision reply
                     // answers the wrong question.
                     id: `msg_${randomBytes(8).toString('hex')}`,
-                    runId: task.runId,
+                    runId: runIdOf(task),
                     type: 'status' as MessageType,
                     taskId,
                     dispatchId,
@@ -1559,8 +1601,9 @@ export async function handleCommand(
           const beforeReview = deps.getState()
           const reviewTask = beforeReview.tasks.find((t) => t.id === taskId)
           const reviewRun = reviewTask && beforeReview.runs.find((r) => r.id === reviewTask.runId)
+          const reviewJob = reviewRun && jobOf(beforeReview, reviewRun)
           let issues: ReviewIssueInput[] | 'malformed' | undefined
-          if (reviewRun?.convergence && deps.readReviewFile && reporting.specPath) {
+          if (reviewJob?.convergence && deps.readReviewFile && reporting.specPath) {
             try {
               const text = await deps.readReviewFile(`${reporting.specPath}.review.json`)
               if (text !== null) {
@@ -1672,7 +1715,7 @@ export async function handleCommand(
           return denied('cannot send for another task')
       }
       const task = s.tasks.find((t) => t.id === str(args.taskId))
-      const runId = task?.runId ?? latestOrdinaryRun(s)?.id
+      const runId = task?.runId ?? latestRun(s)?.id
       if (!runId) return bad('no run to post into')
       const next: OrchState = {
         ...s,
@@ -1703,7 +1746,7 @@ export async function handleCommand(
       return commit(applyReply(s, { messageId: id, body }, now))
     }
     case 'check': {
-      const runId = str(args.run) ?? latestOrdinaryRun(s)?.id
+      const runId = str(args.run) ?? latestRun(s)?.id
       if (!runId) return bad('no run exists')
       if (str(args.ack)) {
         const acked = ackDelivery(s, { deliveryId: str(args.ack)! }, now)

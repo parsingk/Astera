@@ -1,6 +1,7 @@
 // 완료 수렴의 순수 판별들. state.ts 의 판정 함수와 main 의 배선이 함께 쓴다 — 규칙을 한 곳에 두어
 // "몇 번째 repair 인가" 를 두 곳에서 다르게 세는 일이 없게 한다. 저장하지 않고 센다: Dispatch 가
 // durable 하므로 카운트도 durable 하다(명세 §55-5).
+import { jobOfRunId } from './state'
 import type { OrchState } from './state'
 import {
   FAILURE_LIMIT,
@@ -31,17 +32,20 @@ export function checkConfigIdsOf(task: Pick<Task, 'validateConfigIds' | 'validat
   return task.validateConfigId ? [task.validateConfigId] : []
 }
 
-/** 이 Task 의 Run 에 걸린 정책, 기본값을 채워서. Run 에 없으면 null — null 이면 지금 동작이다.
+/** 이 Task 의 Job 에 걸린 정책, 기본값을 채워서. 없으면 null — null 이면 지금 동작이다.
  *  **Task.convergenceOff 는 여기서 보지 않는다**: 그것은 "정책이 없다" 가 아니라 "사람이 멈췼다" 이고,
- *  판정 함수가 따로 읽어 Gate 로 보낸다(설계 §5.1). */
+ *  판정 함수가 따로 읽어 Gate 로 보낸다(설계 §5.1).
+ *
+ *  정책은 계획의 것이라 회차가 아니라 Job 에서 읽는다 — 같은 Job 의 두 회차가 다른 수렴 정책으로
+ *  도는 일은 없다. */
 export function policyOf(s: OrchState, task: Pick<Task, 'runId'>): ResolvedPolicy | null {
-  const run = s.runs.find((r) => r.id === task.runId)
-  if (!run?.convergence) return null
+  const job = task.runId === undefined ? undefined : jobOfRunId(s, task.runId)
+  if (!job?.convergence) return null
   return {
-    maxFixAttempts: run.convergence.maxFixAttempts ?? FAILURE_LIMIT,
-    maxReviewRounds: run.convergence.maxReviewRounds ?? MAX_REVIEW_ROUNDS,
-    blockingSeverity: run.convergence.blockingSeverity ?? DEFAULT_BLOCKING_SEVERITY,
-    ...(run.convergence.maxTotalMinutes !== undefined ? { maxTotalMinutes: run.convergence.maxTotalMinutes } : {})
+    maxFixAttempts: job.convergence.maxFixAttempts ?? FAILURE_LIMIT,
+    maxReviewRounds: job.convergence.maxReviewRounds ?? MAX_REVIEW_ROUNDS,
+    blockingSeverity: job.convergence.blockingSeverity ?? DEFAULT_BLOCKING_SEVERITY,
+    ...(job.convergence.maxTotalMinutes !== undefined ? { maxTotalMinutes: job.convergence.maxTotalMinutes } : {})
   }
 }
 

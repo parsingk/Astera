@@ -7,10 +7,19 @@ import type { TranscriptResumeMaterial } from '../../core/history/parser'
 import type { Handoff } from '../../core/handoff/types'
 import { LAUNCH_FORBIDDEN } from './coordinator'
 import * as checkpointModule from '../../core/orchestration/checkpoint'
-import { emptyState, createRun, createTask, openDispatch } from '../../core/orchestration/state'
+import { emptyState, createJob,
+  startJobRun, createTask, openDispatch } from '../../core/orchestration/state'
 import type { OrchState } from '../../core/orchestration/state'
 import type { GitResult } from '../../core/worktrees/git'
 import { git } from '../../core/worktrees/git'
+
+/** 예전의 createRun 한 번 — 이제 계획을 만들고 그 1회차를 시작하는 두 걸음이다. */
+const seedRun = (over: Parameters<typeof createJob>[1], now: string) => {
+  const planned = unwrap<{ id: string }>(createJob(emptyState(), over, now) as never)
+  return unwrap<{ id: string }>(startJobRun(planned.state, planned.value.id, now) as never)
+}
+
+
 
 const NOW = '2026-08-26T00:00:00.000Z'
 
@@ -31,9 +40,7 @@ const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchS
 /** run + task + 열린 dispatch 하나가 준비된 상태. specPath 는 호출자가 넘긴 실제 파일 경로다—
  *  state.test.ts 의 seed() 와 같은 모양이고, cwd/specPath 만 이 파일의 필요에 맞춘다. */
 function seed(specPath: string): { s: OrchState; taskId: string; dispatchId: string } {
-  const run = unwrap<{ id: string }>(
-    createRun(emptyState(), { objective: 'ship the feature', cwd: specDir }, NOW) as never
-  )
+  const run = seedRun({ objective: 'ship the feature', cwd: specDir }, NOW)
   const t = unwrap<{ id: string }>(
     createTask(run.state, { runId: run.value.id, title: 'do the thing', spec: 'implement it', deps: [] }, NOW) as never
   )

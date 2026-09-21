@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { reapableChildRuns } from './reap'
 import { emptyState, type OrchState } from './state'
 import { FAILURE_LIMIT } from './types'
-import type { Dispatch, Run, Task } from './types'
+import type { Dispatch, Task } from './types'
+import { stateFromLegacy } from './legacyState'
+import type { LegacyRun } from './legacy'
 
 const WT = '/p-worktrees/a'
 
-const run = (over: Partial<Run> = {}): Run => ({
+const run = (over: Partial<LegacyRun> = {}): LegacyRun => ({
   id: 'run_1',
   objective: 'o',
   cwd: '/p',
@@ -44,12 +46,16 @@ const dispatch = (over: Partial<Dispatch> = {}): Dispatch => ({
 })
 
 /** 완료된 회차 하나. 기본형이고, 아래 테스트들이 한 군데씩 바꿔 가며 거절을 확인한다 */
-const completedChild = (over: Partial<Run> = {}): OrchState => ({
-  ...emptyState(),
-  runs: [run({ templateId: 'run_tmpl', worktree: WT, ...over })],
-  tasks: [task('t1')],
-  dispatches: [dispatch()]
-})
+const completedChild = (over: Partial<LegacyRun> = {}): OrchState =>
+  stateFromLegacy({
+    // 부모 예약과 그 회차 하나. 예약이 만든 회차만 걷는 규칙이라 부모가 있어야 한다.
+    runs: [
+      { id: 'run_tmpl', objective: 'o', cwd: 'D:/p', createdAt: '2026-08-21T00:00:00.000Z', schedule: { kind: 'daily', time: '09:00' } },
+      run({ templateId: 'run_tmpl', worktree: WT, ...over })
+    ],
+    tasks: [task('t1')],
+    dispatches: [dispatch()]
+  })
 
 /** 레지스트리에 다 있다고 보는 판정. 걷힌 뒤를 보는 테스트만 이것을 바꾼다 */
 const always = (): boolean => true
@@ -62,22 +68,20 @@ describe('reapableChildRuns', () => {
   })
 
   it('평범한 Run 은 걷지 않는다 — 사람이 결과를 보러 온다', () => {
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [run({ worktree: WT })],
       tasks: [task('t1')],
       dispatches: [dispatch()]
-    }
+    })
     expect(reapableChildRuns(s, always)).toEqual([])
   })
 
   it('예약 템플릿 자신은 걷지 않는다', () => {
-    const s: OrchState = {
-      ...emptyState(),
+    const s: OrchState = stateFromLegacy({
       runs: [run({ schedule: { kind: 'daily', time: '09:00' }, worktree: WT })],
       tasks: [task('t1')],
       dispatches: [dispatch()]
-    }
+    })
     expect(reapableChildRuns(s, always)).toEqual([])
   })
 
@@ -115,22 +119,20 @@ describe('reapableChildRuns', () => {
   })
 
   it('레지스트리에 있는 것만 낸다', () => {
-    const s: OrchState = {
-      ...emptyState(),
-      runs: [run({ templateId: 'run_tmpl', worktree: WT })],
+    const s: OrchState = stateFromLegacy({
+      runs: [{ id: 'run_tmpl', objective: 'o', cwd: 'D:/p', createdAt: '2026-08-21T00:00:00.000Z', schedule: { kind: 'daily' as const, time: '09:00' } }, run({ templateId: 'run_tmpl', worktree: WT })],
       tasks: [task('t1'), task('t2')],
       dispatches: [dispatch({ cwd: WT }), dispatch({ id: 'd2', taskId: 't2', cwd: '/gone' })]
-    }
+    })
     expect(reapableChildRuns(s, (p) => p === WT)).toEqual([{ runId: 'run_1', worktrees: [WT] }])
   })
 
   it('쓴 워크트리가 없으면 낼 것이 없다', () => {
-    const s: OrchState = {
-      ...emptyState(),
-      runs: [run({ templateId: 'run_tmpl' })],
+    const s: OrchState = stateFromLegacy({
+      runs: [{ id: 'run_tmpl', objective: 'o', cwd: 'D:/p', createdAt: '2026-08-21T00:00:00.000Z', schedule: { kind: 'daily' as const, time: '09:00' } }, run({ templateId: 'run_tmpl' })],
       tasks: [task('t1')],
       dispatches: [dispatch({ cwd: '/p' })]
-    }
+    })
     expect(reapableChildRuns(s, always)).toEqual([])
   })
 })

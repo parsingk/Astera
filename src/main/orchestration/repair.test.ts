@@ -1,9 +1,18 @@
 import { describe, it, expect, vi } from 'vitest'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './repair'
 import {
-  applyValidationResult, applyWorkerDone, createGate, createRun, createTask, emptyState, openDispatch, resolveGate, type OrchState
+  applyValidationResult, applyWorkerDone, createGate, createJob,
+  startJobRun, createTask, emptyState, openDispatch, resolveGate, type OrchState
 } from '../../core/orchestration/state'
 import type { CheckResult, Dispatch, Task } from '../../core/orchestration/types'
+
+/** 예전의 createRun 한 번 — 이제 계획을 만들고 그 1회차를 시작하는 두 걸음이다. */
+const seedRun = (over: Parameters<typeof createJob>[1], now: string) => {
+  const planned = unwrap<{ id: string }>(createJob(emptyState(), over, now) as never)
+  return unwrap<{ id: string }>(startJobRun(planned.state, planned.value.id, now) as never)
+}
+
+
 
 const NOW = '2026-09-19T00:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
@@ -17,7 +26,7 @@ const failing: CheckResult[] = [
 
 /** convergence Run, check 걸린 Task, sess1 에서 구현이 끝나 validating 인 상태 */
 const validating = (): { s: OrchState; taskId: string; implId: string } => {
-  let { state: s, value: run } = unwrap<{ id: string }>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p', convergence: {} }, NOW) as never)
+  let { state: s, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', convergence: {} }, NOW)
   const t = unwrap<{ id: string }>(createTask(s, { runId: run.id, title: 'Auth', spec: 'do auth', deps: [], validateConfigIds: ['c1', 'c2'] }, NOW) as never)
   s = t.state
   const d = unwrap<{ id: string }>(openDispatch(s, { taskId: t.value.id, provider: 'claude', accountId: 'accA', sessionId: 'sess1', cwd: 'D:/wt', specPath: 'C:/specs/a.md' }, NOW) as never)
@@ -134,7 +143,7 @@ describe('performRepair', () => {
     expect(deps.box.state.dispatches.find((d) => d.id === repair.id)?.sessionId).toBe('sess-new')
   })
   it('워커가 프로젝트 폴더에 그대로 있으면(committing:false) 커밋 의무 절이 붙지 않는다', async () => {
-    let { state: s, value: run } = unwrap<{ id: string }>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p', convergence: {} }, NOW) as never)
+    let { state: s, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', convergence: {} }, NOW)
     const t = unwrap<{ id: string }>(createTask(s, { runId: run.id, title: 'Auth', spec: 'do auth', deps: [], validateConfigIds: ['c1', 'c2'] }, NOW) as never)
     s = t.state
     // cwd 를 run.cwd 와 같게 둔다 — 워커가 워크트리가 아니라 프로젝트 폴더에서 곧바로 돈 경우다.

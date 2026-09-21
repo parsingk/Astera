@@ -23,12 +23,12 @@ export function firesDue(
 ): Fires {
   const fire: string[] = []
   const arm = new Map<string, number>()
-  for (const run of s.runs) {
+  // **계획을 본다.** 예전에는 한 배열에서 "schedule 이 있고 자신은 회차가 아닌 Run" 을 골라내야
+  // 했고, 손으로 고친 파일에서 둘 다 가진 Run 이 스스로 회차를 낳는 일까지 막아야 했다. 이제
+  // 회차는 schedule 을 가질 수 없다 — 타입이 그렇다.
+  for (const run of s.jobs) {
     const rule = run.schedule
-    // 템플릿만 본다: schedule 이 있고 자신은 회차가 아닌 Run. 자식에는 schedule 을 넣지 않으므로
-    // (spawnScheduledRun) 앞의 검사로 충분하지만, 손으로 고친 파일에서 둘 다 가진 Run 이
-    // 스스로 회차를 낳는 일은 막는다.
-    if (rule === undefined || run.templateId !== undefined) continue
+    if (rule === undefined) continue
     // **'실행' 을 누르기 전에는 발화하지 않는다.** 무장도 하지 않는 것이 요점이다 — 여기서 무장해
     // 두면 사람이 Task 를 짜는 동안 지나간 시각이 그대로 첫 발화가 되어, 버튼을 누르는 순간 이미
     // 밀린 회차가 돈다. 건너뛰면 arm 맵에서 빠지고(부르는 쪽이 그 맵으로 교체한다), 게이트가 걷힌

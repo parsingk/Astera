@@ -18,7 +18,7 @@ import type { OrchState } from './state'
 import { eventCountFor } from './timeline'
 import { FAILURE_LIMIT } from './types'
 import { policyOf, repairCountOf, reviewRoundOf } from './convergence'
-import type { Run, Task } from './types'
+import type { Job, JobRun, Task } from './types'
 
 /** 한 프로젝트에 속한 Run 들, 최신순.
  *
@@ -44,13 +44,13 @@ import type { Run, Task } from './types'
  *
  *  worktrees 를 주입받는 이유는 snapshotFor 의 isKnownSession 과 같다 — 레지스트리는 main 의
  *  것이고(core.worktrees) 이 층은 프레임워크에 의존하지 않는다. */
-export function runsForProject(
+export function jobsForProject(
   state: OrchState,
   projectPath: string,
   worktrees: WorktreeInfo[]
-): Run[] {
+): Job[] {
   const project = findProjectByPath(state, projectPath)
-  return state.runs
+  return state.jobs
     .filter((r) => {
       // **`projectId` wins, but only when it resolves.** A Run made since projects were registered
       // names one, and an id compare is exactly right for it — no path shape can change the answer.
@@ -71,8 +71,13 @@ export function runsForProject(
  *  FAILURE_LIMIT, and counting it would make the bar run ahead and then fall back on the next
  *  attempt. (The direction document's mock reads "5/7 … 78%"; 5/7 is 71% — the ratio here is the
  *  plain one, not that figure.) */
+/** ownerId 는 회차의 id 이거나, 아직 회차가 없는 Job 의 id 다 — 뒤쪽이면 정의 Task 를 센다.
+ *  두 id 는 접두사가 달라(`job_`·`run_`) 섞일 수 없다. */
+const tasksOwnedBy = (state: OrchState, ownerId: string): Task[] =>
+  state.tasks.filter((t) => t.runId === ownerId || t.jobId === ownerId)
+
 export function progressOf(state: OrchState, runId: string): { done: number; total: number } {
-  const tasks = state.tasks.filter((t) => t.runId === runId)
+  const tasks = tasksOwnedBy(state, runId)
   return { done: tasks.filter((t) => t.status === 'completed').length, total: tasks.length }
 }
 
@@ -104,7 +109,7 @@ const isTerminal = (t: Task): boolean =>
  *  대가: 모두 끝난 뒤 Task 가 추가되면 completed 가 running 으로 되돌아간다. 진행률 숫자도 같은
  *  방식으로 움직이므로 정직한 표시라고 본다. */
 export function outcomeOf(state: OrchState, runId: string): RunOutcome {
-  const tasks = state.tasks.filter((t) => t.runId === runId)
+  const tasks = tasksOwnedBy(state, runId)
   if (tasks.length === 0) return 'running'
   if (!tasks.every(isTerminal)) return 'running'
   return tasks.some((t) => t.status === 'failed') ? 'failed' : 'completed'
@@ -275,66 +280,93 @@ export function snapshotFor(
   // 폴더 사실을 **한 번만** 센다 — Run 마다 다시 세면 같은 순회가 Run 수만큼 돌고, 그보다 나쁜
   // 것은 두 값(폴더 수준과 Run 수준)이 다른 순간의 상태를 볼 수 있다는 것이다.
   const workingHere = runsWorkingIn(state, projectPath)
-  const runs = runsForProject(state, projectPath, worktrees).map((run): JobRow => {
-    const { done, total } = progressOf(state, run.id)
-    const worktreesOf = runWorktrees(state, run.id).filter(exists)
+
+  /**
+   * 한 줄을 만든다. **Job 줄과 회차 줄이 같은 함수에서 나온다** — 화면에서 둘은 같은 모양이고,
+   * 다른 것은 어느 id 로 Task 를 세는가뿐이다.
+   *
+   * `ownerId` 가 Job 의 id 이면 정의 Task 를, 회차의 id 이면 그 회차의 Task 를 센다. 두 id 는
+   * 접두사가 달라(`job_`·`run_`) 섞일 수 없다.
+   */
+  const rowFor = (job: Job, run: JobRun | undefined, asJob: boolean): JobRow => {
+    // Task 를 어느 id 로 세는가. 회차가 있으면 그 회차의 것, 없으면 Job 의 정의다.
+    const ownerId = run?.id ?? job.id
+    // **줄의 id 는 다르다.** Job 줄은 언제나 Job 의 id 다 — 사람이 그 줄에서 여는 것도 지우는 것도
+    // 계획이지 한 회차가 아니다. 회차 줄만 회차의 id 를 쓴다.
+    const rowId = asJob ? job.id : (run?.id ?? job.id)
+    const { done, total } = progressOf(state, ownerId)
+    const worktreesOf = (run ? runWorktrees(state, run.id) : []).filter(exists)
     return {
-      id: run.id,
-      objective: run.objective,
+      id: rowId,
+      objective: job.objective,
       // Run 이 그대로 들고 있는 값을 그대로 옮긴다 — 계산도 기본값도 여기서 넣지 않는다(JobRow
       // 의 주석과 같다). 워크트리 배치 규칙(동시 실행 한도가 1 이하일 때만 프로젝트 폴더)의
       // 판단은 이 값을 받은 렌더러가 한다. **provider 는 여기 없다** — Task 의 계정이 정하므로
       // 한 Run 에 하나의 값이 없다(JobRow 의 주석).
       // 빈 값은 싣지 않는다 — 거짓을 실으면 sameSnapshot 의 문자열을 이유 없이 늘린다(아래
       // worktrees·pendingStart 와 같은 관례)
-      ...(run.coordinatorAccountId !== undefined && run.coordinatorSessionId === undefined
+      ...(job.coordinatorAccountId !== undefined &&
+      run !== undefined &&
+      run.coordinatorSessionId === undefined
         ? { coordinatorMissing: true }
         : {}),
-      concurrency: run.concurrency,
-      outcome: outcomeOf(state, run.id),
+      concurrency: job.concurrency,
+      outcome: outcomeOf(state, ownerId),
       done,
       total,
-      eventCount: eventCountFor(state, run.id),
+      eventCount: eventCountFor(state, ownerId),
       // 내가 그 폴더에 있고, 나 말고도 있는가. 크기만 보면 남의 얽힘까지 내 줄에 그리게 된다
-      sharesProjectFolder: workingHere.has(run.id) && workingHere.size > 1,
-      ...(run.pendingStart ? { pendingStart: true } : {}),
-      ...(run.paused ? { paused: true } : {}),
+      sharesProjectFolder: workingHere.has(ownerId) && workingHere.size > 1,
+      ...(job.pendingStart ? { pendingStart: true } : {}),
+      ...(job.paused || run?.paused ? { paused: true } : {}),
       // 빈 배열은 싣지 않는다 — sameSnapshot 의 문자열을 이유 없이 늘리고, "워크트리를 안 썼다" 와
       // "이 칸이 없다" 가 화면에서 같은 뜻이다(JobRow.children 과 같은 판단)
       ...(worktreesOf.length > 0 ? { worktrees: worktreesOf } : {}),
-      ...(run.schedule ? { schedule: run.schedule } : {}),
-      ...(run.fireCount !== undefined ? { fireCount: run.fireCount } : {}),
-      ...(run.fireOrdinal !== undefined ? { fireOrdinal: run.fireOrdinal } : {}),
-      ...(run.schedule && nextFireOf(run.id) !== null
-        ? { nextFireAt: nextFireOf(run.id) as number }
+      // 예약은 계획의 것이라 Job 줄에만 싣는다 — 회차 줄에 실으면 화면이 그 회차를 또 하나의
+      // 예약으로 읽는다
+      ...(run === undefined && job.schedule ? { schedule: job.schedule } : {}),
+      ...(run === undefined && job.fireCount !== undefined ? { fireCount: job.fireCount } : {}),
+      ...(run !== undefined ? { fireOrdinal: run.ordinal } : {}),
+      ...(run === undefined && job.schedule && nextFireOf(job.id) !== null
+        ? { nextFireAt: nextFireOf(job.id) as number }
         : {}),
       // createdAt ascending — the order the orchestrator declared the Tasks in, which is the order
       // the dependency chain reads in. Task.deps is not a total order, so it cannot sort this.
       tasks: state.tasks
-        .filter((t) => t.runId === run.id)
+        .filter((t) => (run ? t.runId === run.id : t.jobId === job.id))
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
         .map((t) => jobTaskOf(state, t, isKnownSession))
     }
-  })
-  // 회차를 템플릿 밑으로 접는다. **최상위에서 빠지지만 사라지지는 않는다** — 이 프로젝트에 부모가
-  // 없는 회차(템플릿의 cwd 가 바뀌었거나 손으로 고친 파일)는 그대로 최상위에 남는다: 삼키면
-  // 목록에서 사라지고, 그 Run 을 지울 문도 없어진다.
-  const byId = new Map(runs.map((r) => [r.id, r]))
-  const parented = new Set<string>()
-  for (const r of runs) {
-    const parentId = state.runs.find((x) => x.id === r.id)?.templateId
-    if (parentId === undefined) continue
-    const parent = byId.get(parentId)
-    if (!parent) continue
-    // runsForProject 가 이미 최신순으로 정렬해 두었으므로 순서대로 밀어 넣으면 최신순이 된다
-    parent.children = [...(parent.children ?? []), r]
-    parented.add(r.id)
   }
-  const top = runs.filter((r) => !parented.has(r.id))
-  // 도는 Run 이 먼저. runsForProject 가 이미 최신순으로 정렬해 두었고 Array.prototype.sort 는
+
+  // 최신 회차가 먼저. 번호가 같으면(옛 파일에서 온 회차는 번호가 없어 1 로 읽힌다) 만든 시각으로
+  // 가른다 — 목록의 순서가 입력 순서에 기대면 안 된다.
+  const runsOf = (job: Job): JobRun[] =>
+    state.runs
+      .filter((r) => r.jobId === job.id)
+      .sort((a, b) => b.ordinal - a.ordinal || b.createdAt.localeCompare(a.createdAt))
+
+  const runs = jobsForProject(state, projectPath, worktrees).map((job): JobRow => {
+    const mine = runsOf(job)
+    // **회차를 언제 펼치는가.** 예약은 언제나 펼친다 — 계획과 발화는 사람에게 다른 것이고, 오늘도
+    // 그렇게 보였다. 예약이 아닌 Job 은 회차가 둘 이상일 때만 펼친다: 한 번 돌린 Job 에 "1회차"
+    // 한 줄을 매다는 것은 접는 것도 펴는 것도 아무 뜻이 없다(설계 §13.1).
+    const nested = job.schedule !== undefined || mine.length > 1
+    // 펼치지 않는 Job 의 줄은 **그 한 회차의 진행률**을 그대로 보여 준다 — 목표와 진행이 한 줄에
+    // 같이 보여야 한다. 그래도 줄의 id 는 Job 의 것이다(rowFor 의 주석).
+    const row = rowFor(job, nested ? undefined : mine[0], true)
+    if (!nested) return row
+    const children = mine.map((r) => rowFor(job, r, false))
+    return children.length > 0 ? { ...row, children } : row
+  })
+  // **접는 단계가 없어졌다.** 예전에는 한 배열에 섞인 Run 들을 templateId 로 되짚어 부모를 찾고,
+  // 부모가 이 프로젝트에 없는 고아 회차를 최상위에 남겨 두는 처리까지 해야 했다. 이제 회차는 Job 에
+  // 매달려 있으므로 위에서 이미 제자리에 들어간다 — 고아가 생길 자리가 없다.
+  const top = runs
+  // 도는 Job 이 먼저. jobsForProject 가 이미 최신순으로 정렬해 두었고 Array.prototype.sort 는
   // 안정 정렬이라, 같은 그룹 안의 최신순은 이 단계에서 보존된다.
   //
-  // 템플릿은 언제나 이 앞 묶음에 들어간다 — outcomeOf 가 배치되지 않는 Task 를 terminal 로 보지
+  // 예약은 언제나 이 앞 묶음에 들어간다 — outcomeOf 가 배치되지 않는 정의 Task 를 terminal 로 보지
   // 않아 늘 'running' 을 준다. 우연이지만 원하는 자리다: 예약은 지금 도는 것과 함께 위에 있어야
   // 하고, 아래로 내려가면 회차가 쌓일수록 정의를 찾기 어려워진다.
   return {

@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { firesDue } from './fire'
 import { emptyState, type OrchState } from './state'
-import type { Run } from './types'
+import type { Job } from './types'
 
 // 로컬 타임존 기준 시각 헬퍼 — core/scheduler/rule.test.ts 와 같은 모양이다. 규칙의 시각은
 // 로컬 시계이므로(ScheduleRule 의 주석) UTC 리터럴로 쓰면 타임존마다 답이 달라진다
 const at = (y: number, mo: number, d: number, h = 0, mi = 0): number =>
   new Date(y, mo - 1, d, h, mi, 0, 0).getTime()
 
-const tmpl = (id: string, over: Partial<Run> = {}): Run => ({
+// 예약은 계획의 것이다 — firesDue 는 jobs 를 본다. id 를 'r1' 로 두는 것은 이 파일의 기존 기대값을
+// 그대로 살리기 위해서다(무엇을 검사하는 테스트인지가 id 로 바뀌면 안 된다).
+const tmpl = (id: string, over: Partial<Job> = {}): Job => ({
   id,
   objective: `objective ${id}`,
   cwd: '/p',
@@ -17,7 +19,7 @@ const tmpl = (id: string, over: Partial<Run> = {}): Run => ({
   ...over
 })
 
-const withRuns = (runs: Run[]): OrchState => ({ ...emptyState(), runs })
+const withRuns = (jobs: Job[]): OrchState => ({ ...emptyState(), jobs })
 
 describe('firesDue', () => {
   // **'실행' 을 누르기 전에는 무장조차 하지 않는다.** 무장해 두면 사람이 Task 를 짜는 동안 지나간
@@ -104,12 +106,19 @@ describe('firesDue', () => {
     expect(r.arm.has('gone')).toBe(false)
   })
 
-  it('자식 Run 은 보지 않는다 — 회차는 스스로 발화하지 않는다', () => {
-    const s = withRuns([tmpl('c1', { templateId: 'r1' })])
-    const armed = new Map([['c1', at(2026, 8, 21, 9, 0)]])
+  // 예전에는 "자식 Run 은 보지 않는다" 를 여기서 확인했다 — 한 배열에 템플릿과 회차가 섞여 있어서
+  // 손으로 고친 파일의 회차가 스스로 발화할 수 있었기 때문이다. 이제 회차는 schedule 을 가질 수
+  // 없다(타입이 그렇다). 대신 **발화가 회차가 아니라 계획을 가리키는지**를 확인한다.
+  it('회차가 있어도 무장과 발화는 계획의 id 로 한다', () => {
+    const s: OrchState = {
+      ...emptyState(),
+      jobs: [tmpl('r1')],
+      runs: [{ id: 'run_1', jobId: 'r1', ordinal: 1, createdAt: '2026-08-21T00:00:00.000Z' }]
+    }
+    const armed = new Map([['r1', at(2026, 8, 21, 9, 0)]])
     const r = firesDue(s, armed, at(2026, 8, 21, 10, 0))
-    expect(r.fire).toEqual([])
-    expect(r.arm.has('c1')).toBe(false)
+    expect(r.fire).toEqual(['r1'])
+    expect(r.arm.has('run_1')).toBe(false)
   })
 
   it('schedule 없는 평범한 Run 은 보지 않는다', () => {
