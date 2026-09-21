@@ -10,14 +10,17 @@ import {
   applyValidationResult,
   attachCoordinator,
   blockForValidation,
+  createGate,
   emptyState,
+  openReviewDispatch,
   rekeyDispatch,
   type OrchState
 } from '../../core/orchestration/state'
 import { TaskValidator } from './validator'
-import { FAILURE_LIMIT } from '../../core/orchestration/types'
+import { FAILURE_LIMIT, type CheckResult } from '../../core/orchestration/types'
 import { parseArgs } from '../../core/orchestration/cliArgs'
 import { isQueueableReport } from '../../core/orchestration/pendingReports'
+import { checkConfigIdsOf } from '../../core/orchestration/convergence'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -1184,6 +1187,67 @@ describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
     return taskId
   }
 
+  // 설계 G4(명세 §30). 완료 강제는 그 사실과 이유가 남아야 한다 — 이 앱은 버튼을 따로 두지 않고
+  // task-update 가 그 자리를 겸하므로, 요구도 기록도 여기 붙는다.
+  const seedConvergingTask = async (deps: OrchServerDeps): Promise<string> => {
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', {
+      account: 'acc1',
+      runId,
+      title: 't',
+      spec: 's',
+      validate: 'cfg1'
+    })
+    return (task.body as { id: string }).id
+  }
+
+  it('--max-total-minutes 가 정책에 실린다', async () => {
+    const deps = makeDeps()
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true, maxTotalMinutes: 45 })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs[0].convergence).toEqual({ maxTotalMinutes: 45 })
+  })
+
+  it('--max-total-minutes 는 --convergence 없이는 거절된다 — 나머지 셋과 같은 규칙', async () => {
+    const deps = makeDeps()
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', maxTotalMinutes: 45 })
+    expect(r.status).toBe(400)
+    expect(String((r.body as { error: string }).error)).toContain('--max-total-minutes')
+  })
+
+  it('수렴하지 않은 Task 를 완료로 옮기려면 --reason 이 필요하다', async () => {
+    const deps = makeDeps()
+    const taskId = await seedConvergingTask(deps)
+    const r = await call(deps, 'task-update', { id: taskId, status: 'completed' })
+    expect(r.status).toBe(400)
+    expect(String((r.body as { error: string }).error)).toContain('--reason')
+    expect(deps.getState().tasks.find((t) => t.id === taskId)!.status).not.toBe('completed')
+  })
+
+  it('--reason 을 주면 완료되고 그 이유가 Task 에 남는다', async () => {
+    const deps = makeDeps()
+    const taskId = await seedConvergingTask(deps)
+    const r = await call(deps, 'task-update', {
+      id: taskId,
+      status: 'completed',
+      reason: '검사 환경이 이 기계에 없어 손으로 확인했다'
+    })
+    expect(r.status).toBe(200)
+    const t = deps.getState().tasks.find((x) => x.id === taskId)!
+    expect(t.status).toBe('completed')
+    expect(t.completionOverride?.reason).toBe('검사 환경이 이 기계에 없어 손으로 확인했다')
+  })
+
+  // 요구는 강제인 경우에만 — 평범한 손보기까지 막으면 이 명령을 쓰던 구조 경로가 한 번에 막힌다
+  it('자동 수정 없는 Run 의 완료는 이유를 묻지 않는다', async () => {
+    const deps = makeDeps()
+    const taskId = await seedTask(deps)
+    const r = await call(deps, 'task-update', { id: taskId, status: 'completed' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks.find((t) => t.id === taskId)!.completionOverride).toBeUndefined()
+  })
+
   it('200이고 Task 상태가 바뀐다', async () => {
     const deps = makeDeps()
     const taskId = await seedTask(deps)
@@ -2019,14 +2083,17 @@ describe('task-create --validate 와 run-configs', () => {
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
     const r = await call(deps, 'task-create', { account: 'acc1', spec: '작업', validate: 'cfg1' })
     expect(r.status).toBe(200)
-    expect(deps.getState().tasks[0].validateConfigId).toBe('cfg1')
+    // validateConfigId(단수)는 더 쓰지 않는다 — 옛 단일 값도 한 칸짜리 목록으로 저장한다
+    // (server.ts task-create, 설계 D8).
+    expect(deps.getState().tasks[0].validateConfigIds).toEqual(['cfg1'])
+    expect(deps.getState().tasks[0]).not.toHaveProperty('validateConfigId')
   })
 
   it('--validate 없이 만든 Task 에는 그 필드가 없다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
     await call(deps, 'task-create', { account: 'acc1', spec: '작업' })
-    expect(deps.getState().tasks[0].validateConfigId).toBeUndefined()
+    expect(deps.getState().tasks[0].validateConfigIds).toBeUndefined()
   })
 
   it('run-configs 는 주입된 목록을 그대로 돌려준다', async () => {
@@ -2707,23 +2774,24 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
   const wire = async (): Promise<{
     deps: OrchServerDeps
     validator: TaskValidator
-    started: { cwd: string; taskId: string; runId: string }[]
+    started: { cwd: string; taskId: string; configId: string; runId: string }[]
     taskId: string
     cwd: string
   }> => {
     const deps = makeDeps()
-    const started: { cwd: string; taskId: string; runId: string }[] = []
+    const started: { cwd: string; taskId: string; configId: string; runId: string }[] = []
     const validator = new TaskValidator({
       runner: {
         start: async (a) => {
           const runId = `run_${started.length + 1}`
           started.push({ ...a, runId })
-          return { runId }
+          return { runId, name: a.configId }
         },
-        output: () => '빌드 로그 꼬리'
+        output: () => '빌드 로그 꼬리',
+        stop: () => {}
       },
-      onSettled: async ({ taskId, exitCode, output }) => {
-        const r = applyValidationResult(deps.getState(), { taskId, exitCode, output }, NOW)
+      onSettled: async ({ taskId, results }) => {
+        const r = applyValidationResult(deps.getState(), { taskId, results }, NOW)
         if (r.ok) await deps.setState(r.state)
       },
       onCannotRun: async ({ taskId, reason }) => {
@@ -2731,7 +2799,13 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
         if (r.ok) await deps.setState(r.state)
       }
     })
-    deps.startValidation = (a) => validator.enqueue(a)
+    deps.startValidation = ({ taskId, cwd }) => {
+      // ipc.ts 의 실제 배선과 같은 모양 — checkConfigIdsOf 가 옛 단일 값(validateConfigId)과 새
+      // 목록(validateConfigIds)을 함께 본다(convergence.ts). 이 shim 이 단수만 읽던 채로 남아 있으면
+      // task-create 가 목록만 싣는 지금 배선과 갈라진 채 계속 통과한다.
+      const task = deps.getState().tasks.find((t) => t.id === taskId)
+      validator.enqueue({ taskId, cwd, configIds: task ? checkConfigIdsOf(task) : [] })
+    }
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
     await call(deps, 'task-create', { account: 'acc1', spec: '작업', validate: 'cfg1' })
     const taskId = deps.getState().tasks[0].id
@@ -2754,7 +2828,7 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
   it('worker_done 성공은 Task 를 validating 으로 보내고 그 cwd 에서 검증을 시작한다', async () => {
     const { deps, started, taskId, cwd } = await wire()
     expect(deps.getState().tasks[0].status).toBe('validating')
-    expect(started).toEqual([{ taskId, cwd, runId: 'run_1' }])
+    expect(started).toEqual([{ taskId, cwd, configId: 'cfg1', runId: 'run_1' }])
   })
 
   it('검증 실패는 Task 를 failed 로 보내고 status 메시지를 코디네이터에게 배달한다', async () => {
@@ -2790,7 +2864,8 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
         start: async () => {
           throw new Error('NO_CONFIG: cfg1')
         },
-        output: () => ''
+        output: () => '',
+        stop: () => {}
       },
       onSettled: async () => {},
       onCannotRun: async ({ taskId, reason }) => {
@@ -2798,7 +2873,13 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
         if (r.ok) await deps.setState(r.state)
       }
     })
-    deps.startValidation = (a) => validator.enqueue(a)
+    deps.startValidation = ({ taskId, cwd }) => {
+      // ipc.ts 의 실제 배선과 같은 모양 — checkConfigIdsOf 가 옛 단일 값(validateConfigId)과 새
+      // 목록(validateConfigIds)을 함께 본다(convergence.ts). 이 shim 이 단수만 읽던 채로 남아 있으면
+      // task-create 가 목록만 싣는 지금 배선과 갈라진 채 계속 통과한다.
+      const task = deps.getState().tasks.find((t) => t.id === taskId)
+      validator.enqueue({ taskId, cwd, configIds: task ? checkConfigIdsOf(task) : [] })
+    }
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
     await call(deps, 'task-create', { account: 'acc1', spec: '작업', validate: 'cfg1' })
     const taskId = deps.getState().tasks[0].id
@@ -3246,6 +3327,31 @@ describe('run-start — 코디네이터 인계', () => {
     expect(brief).toContain(runId)
     expect(brief).toContain('CONCURRENCY IS 2')
     expect(brief).toContain('tasks already defined: 1')
+  })
+
+  // 전체 브랜치 리뷰, Finding 2 — target.convergence !== undefined 는 손으로 고친 "convergence": null
+  // 을 "정책이 있다" 로 잘못 읽는다. 이 자리는 이 브랜치가 reconciler.ts·ipc.ts 에서 이미 고친 것과
+  // 똑같은 실수였다 — policyOf 로 판정해야 손으로 고친 orchestration.json 에도 다른 모든 관문과 같은
+  // 답을 낸다.
+  it('run.convergence 를 손으로 null 로 고쳐도 인계문에 수렴 절이 붙지 않는다 — policyOf 로 판정한다', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    const s = deps.getState()
+    await deps.setState({
+      ...s,
+      runs: s.runs.map((r) => (r.id === runId ? { ...r, convergence: null as never } : r))
+    })
+    const r = await call(deps, 'run-start', { run: runId })
+    expect(r.status).toBe(200)
+    expect(deps.spawned[0].brief).not.toContain('COMPLETION CONVERGENCE IS ON')
+  })
+
+  it('실제로 정책이 걸린 Run 은 인계문에 수렴 절이 붙는다', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1', convergence: true })
+    const r = await call(deps, 'run-start', { run: runId })
+    expect(r.status).toBe(200)
+    expect(deps.spawned[0].brief).toContain('COMPLETION CONVERGENCE IS ON')
   })
 
   // 인계하면 앱이 그 Run 의 슬롯을 더 채우지 않으므로, 게으르게 만들던 워크트리를 만들어 줄
@@ -4238,5 +4344,401 @@ describe('the queue and the server ask for the same fields of a worker_done', ()
         queued: !refusedForFields
       })
     }
+  })
+})
+
+describe('handleCommand — convergence', () => {
+  const accounts = [
+    { id: 'accA', label: 'A', provider: 'claude' as const },
+    { id: 'accC', label: 'C', provider: 'codex' as const }
+  ]
+  const convDeps = (): ReturnType<typeof makeDeps> & {
+    repairs: string[]
+    onces: string[]
+    reviewFile: string | null | Error
+    onceResult: { ok: true } | { ok: false; error: string }
+  } => {
+    const base = makeDeps()
+    const box = {
+      repairs: [] as string[],
+      onces: [] as string[],
+      reviewFile: null as string | null | Error,
+      // Finding 5 의 repairOnce 반환값 — 기본은 성공. 두 번째 열린 Gate 가 여전히 막는 경우를
+      // 흉내 내려는 테스트가 { ok: false, error } 로 갈아 끼운다.
+      onceResult: { ok: true } as { ok: true } | { ok: false; error: string }
+    }
+    const deps = Object.assign(base, {
+      listAccounts: () => accounts,
+      repairTargetFor: () => ({ kind: 'same-session' as const, sessionId: 'sess1', cwd: 'D:/p', provider: 'claude' as const, accountId: 'accA' }),
+      startRepair: (a: { dispatchId: string }) => void box.repairs.push(a.dispatchId),
+      repairOnce: async (a: { taskId: string }) => {
+        box.onces.push(a.taskId)
+        return box.onceResult
+      },
+      readReviewFile: async () => {
+        if (box.reviewFile instanceof Error) throw box.reviewFile
+        return box.reviewFile
+      },
+      startValidation: () => {},
+      startReview: () => {},
+      lang: () => 'en' as const
+    })
+    // Object.assign 은 접근자를 값으로 굳혀 버린다 — get/set 을 그 안에 나란히 넣으면 대상에
+    // "지금 값"만 복사되는 평범한 데이터 속성이 되고, 그 뒤 `deps.reviewFile = x` 는 box 를 건드리지
+    // 못한 채 그 복사본만 바꾼다. 그러면 readReviewFile 은 항상 최초값(null)을 읽어 malformed 검증이
+    // 조용히 outcome 만으로 판정된 것처럼 통과해 버린다 — defineProperties 로 실제 접근자를 심는다.
+    Object.defineProperties(deps, {
+      repairs: { get: () => box.repairs, enumerable: true },
+      onces: { get: () => box.onces, enumerable: true },
+      reviewFile: {
+        get: () => box.reviewFile,
+        set: (v: string | null | Error) => {
+          box.reviewFile = v
+        },
+        enumerable: true
+      },
+      onceResult: {
+        get: () => box.onceResult,
+        set: (v: { ok: true } | { ok: false; error: string }) => {
+          box.onceResult = v
+        },
+        enumerable: true
+      }
+    })
+    return deps as unknown as ReturnType<typeof makeDeps> & {
+      repairs: string[]
+      onces: string[]
+      reviewFile: string | null | Error
+      onceResult: { ok: true } | { ok: false; error: string }
+    }
+  }
+
+  it('run-create --convergence 가 정책을 싣는다 — 값 없이는 빈 객체', async () => {
+    const deps = convDeps()
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs[0].convergence).toEqual({})
+    const r2 = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true, maxFixAttempts: 2, maxReviewRounds: 1, blockingSeverity: 'medium' })
+    expect(r2.status).toBe(200)
+    expect(deps.getState().runs[1].convergence).toEqual({ maxFixAttempts: 2, maxReviewRounds: 1, blockingSeverity: 'medium' })
+  })
+  it('run-create 없이 숫자만 주면, 또는 값이 틀리면 거절한다', async () => {
+    const deps = convDeps()
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', maxFixAttempts: 2 })).status).toBe(400)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true, maxFixAttempts: 0 })).status).toBe(400)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true, blockingSeverity: 'low' })).status).toBe(400)
+  })
+  it('task-create --validate 는 쉼표 목록을 validateConfigIds 로 싣는다', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const r = await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1, c2' })
+    expect(r.status).toBe(200)
+    const task = deps.getState().tasks[0]
+    expect(task.validateConfigIds).toEqual(['c1', 'c2'])
+    expect(task).not.toHaveProperty('validateConfigId')
+    expect((await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1,,c2' })).status).toBe(400)
+  })
+  it('task-update --convergence off 는 convergenceOff 를 찍고 status 를 요구하지 않는다', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps, 'task-create', { spec: 's', account: 'accA' })
+    const id = deps.getState().tasks[0].id
+    const r = await call(deps, 'task-update', { id, convergence: 'off' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks[0].convergenceOff).toBe(true)
+    expect(deps.getState().tasks[0].status).toBe('ready')
+    expect((await call(deps, 'task-update', { id, convergence: 'on' })).status).toBe(400)
+  })
+
+  /** convergence Run 에서 검토 걸린 Task 를 reviewing + 검토 Dispatch 열림까지 */
+  const reviewingRun = async (deps: ReturnType<typeof convDeps>, runExtra: Record<string, unknown> = {}) => {
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true, ...runExtra })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', review: true })
+    const taskId = deps.getState().tasks[0].id
+    const ws = await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'accA', worktree: 'current' })
+    const dispatchId = (ws.body as { dispatchId: string }).dispatchId
+    await call(deps, 'send', { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, 'sess1')
+    expect(deps.getState().tasks[0].status).toBe('reviewing')
+    const opened = openReviewDispatch(deps.getState(), { taskId, provider: 'codex', accountId: 'accC', sessionId: 'rev1', cwd: 'D:/p', specPath: 'C:/specs/r.md' }, NOW)
+    if (!opened.ok) throw new Error(opened.error)
+    await deps.setState(opened.state)
+    return { taskId, implId: dispatchId, reviewId: opened.value.id }
+  }
+
+  it('검토 보고가 오면 review.json 을 읽어 blocking 이면 repair 를 시작한다', async () => {
+    const deps = convDeps()
+    const { taskId, reviewId } = await reviewingRun(deps)
+    deps.reviewFile = '{"issues":[{"severity":"high","title":"race"}]}'
+    const r = await call(deps, 'send', { type: 'worker_done', taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b' }, 'rev1')
+    expect(r.status).toBe(200)
+    const task = deps.getState().tasks[0]
+    expect(task.status).toBe('dispatched')
+    expect(task.reviewIssues?.[0]).toMatchObject({ severity: 'high', blocking: true })
+    const repair = deps.getState().dispatches.find((d) => d.repair)!
+    expect(deps.repairs).toEqual([repair.id])
+  })
+  it('review.json 이 없으면 outcome 으로 해석한다', async () => {
+    const deps = convDeps()
+    const { taskId, reviewId } = await reviewingRun(deps)
+    deps.reviewFile = null
+    await call(deps, 'send', { type: 'worker_done', taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'b' }, 'rev1')
+    expect(deps.getState().tasks[0].status).toBe('completed')
+  })
+  it('review.json 이 깨졌거나 읽을 수 없으면 Gate 다', async () => {
+    for (const file of ['{oops', new Error('EACCES')]) {
+      const deps = convDeps()
+      const { taskId, reviewId } = await reviewingRun(deps)
+      deps.reviewFile = file
+      await call(deps, 'send', { type: 'worker_done', taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'b' }, 'rev1')
+      expect(deps.getState().tasks[0].status).toBe('blocked')
+      expect(deps.repairs).toEqual([])
+    }
+  })
+  it('worker-release 는 수렴 중인 Task 의 Dispatch 를 거절한다', async () => {
+    const deps = convDeps()
+    const { implId } = await reviewingRun(deps)
+    const r = await call(deps, 'worker-release', { dispatch: implId })
+    expect(r.status).toBe(409)
+    expect(String((r.body as { error: string }).error)).toContain('still converging')
+  })
+  it('worker-release 는 꺼진 Run 에서는 지금처럼 통과한다', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', review: true })
+    const taskId = deps.getState().tasks[0].id
+    const ws = await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'accA', worktree: 'current' })
+    const dispatchId = (ws.body as { dispatchId: string }).dispatchId
+    await call(deps, 'send', { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, 'sess1')
+    expect((await call(deps, 'worker-release', { dispatch: dispatchId })).status).toBe(200)
+  })
+  it('worker-release 는 validating 인 Task 의 Dispatch 도 거절한다', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const taskId = deps.getState().tasks[0].id
+    const ws = await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'accA', worktree: 'current' })
+    const dispatchId = (ws.body as { dispatchId: string }).dispatchId
+    await call(deps, 'send', { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, 'sess1')
+    expect(deps.getState().tasks[0].status).toBe('validating')
+    const r = await call(deps, 'worker-release', { dispatch: dispatchId })
+    expect(r.status).toBe(409)
+    expect(String((r.body as { error: string }).error)).toContain('still converging')
+  })
+  it('worker-release 는 열린 repair Dispatch 가 있는 Task 도 거절한다 — Task 상태가 이미 dispatched 로 넘어갔어도', async () => {
+    const deps = convDeps()
+    const { taskId, implId, reviewId } = await reviewingRun(deps)
+    deps.reviewFile = '{"issues":[{"severity":"high","title":"race"}]}'
+    await call(deps, 'send', { type: 'worker_done', taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b' }, 'rev1')
+    // repair Dispatch 가 열렸다 — Task 는 이미 validating/reviewing 이 아니라 dispatched 다. 그래도
+    // 수렴 중이다: repair Dispatch 가 열려 있는 동안은 원래 구현 세션(implId, 이미 닫혔다)을 놓아 줄
+    // 수 없다.
+    expect(deps.getState().tasks[0].status).toBe('dispatched')
+    const r = await call(deps, 'worker-release', { dispatch: implId })
+    expect(r.status).toBe(409)
+    expect(String((r.body as { error: string }).error)).toContain('still converging')
+  })
+  it('worker-start 는 validating·reviewing 인 Task 를 거절한다 — convergence 와 무관 (회귀)', async () => {
+    // 회귀: ALLOWED.validating/.reviewing 에 'dispatched' 가 더해진 뒤(openRepairDispatch 를
+    // 위해서다), openDispatch 의 상태 검사가 moveTask/canTransition 뿐이면 이 거절이 조용히
+    // 사라진다 — convergence 를 켜지 않은 Run 에서도. 여기서는 그 Run 으로 확인한다.
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const taskId = deps.getState().tasks[0].id
+    const ws = await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'accA', worktree: 'current' })
+    const dispatchId = (ws.body as { dispatchId: string }).dispatchId
+    await call(deps, 'send', { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, 'sess1')
+    expect(deps.getState().tasks[0].status).toBe('validating')
+    const r = await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'accA', worktree: 'current' })
+    expect(r.status).toBe(400)
+    expect(String((r.body as { error: string }).error)).toContain('awaiting a verdict')
+
+    const deps2 = convDeps()
+    await call(deps2, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    await call(deps2, 'task-create', { spec: 's', account: 'accA', review: true })
+    const taskId2 = deps2.getState().tasks[0].id
+    const ws2 = await call(deps2, 'worker-start', { task: taskId2, agent: 'claude', account: 'accA', worktree: 'current' })
+    const dispatchId2 = (ws2.body as { dispatchId: string }).dispatchId
+    await call(deps2, 'send', { type: 'worker_done', taskId: taskId2, dispatchId: dispatchId2, outcome: 'succeeded', subject: 's', body: 'b' }, 'sess1')
+    expect(deps2.getState().tasks[0].status).toBe('reviewing')
+    const r2 = await call(deps2, 'worker-start', { task: taskId2, agent: 'claude', account: 'accA', worktree: 'current' })
+    expect(r2.status).toBe(400)
+    expect(String((r2.body as { error: string }).error)).toContain('awaiting a verdict')
+  })
+  it('convergence 가 없는 Run 은 review.json 을 읽지 않는다 — 이 경로는 오늘과 바이트 단위로 같아야 한다', async () => {
+    const deps = convDeps()
+    const calls: string[] = []
+    deps.readReviewFile = async (path: string) => {
+      calls.push(path)
+      return null
+    }
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', review: true })
+    const taskId = deps.getState().tasks[0].id
+    const ws = await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'accA', worktree: 'current' })
+    const dispatchId = (ws.body as { dispatchId: string }).dispatchId
+    await call(deps, 'send', { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, 'sess1')
+    expect(deps.getState().tasks[0].status).toBe('reviewing')
+    const opened = openReviewDispatch(
+      deps.getState(),
+      { taskId, provider: 'codex', accountId: 'accC', sessionId: 'rev1', cwd: 'D:/p', specPath: 'C:/specs/r.md' },
+      NOW
+    )
+    if (!opened.ok) throw new Error(opened.error)
+    await deps.setState(opened.state)
+    await call(deps, 'send', { type: 'worker_done', taskId, dispatchId: opened.value.id, outcome: 'succeeded', subject: 'ok', body: 'b' }, 'rev1')
+    expect(deps.getState().tasks[0].status).toBe('completed')
+    // 이 assertion 이 없으면 guard(`reviewRun?.convergence &&`)를 지워도 248 개 테스트가 그대로
+    // 통과한다 — 옛 deps 들이 readReviewFile 을 주입하지 않아 optional chaining 이 알아서 걸러
+    // 주기 때문이다. 이 테스트만이 그 guard 가 실제로 하는 일을 pin 한다.
+    expect(calls).toEqual([])
+  })
+  it('--convergence off 와 --status 를 함께 주면 두 호출로 나누라며 거절한다', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps, 'task-create', { spec: 's', account: 'accA' })
+    const id = deps.getState().tasks[0].id
+    const r = await call(deps, 'task-update', { id, convergence: 'off', status: 'ready' })
+    expect(r.status).toBe(400)
+    expect(String((r.body as { error: string }).error)).toContain('two calls')
+    expect(deps.getState().tasks[0].convergenceOff).toBeUndefined()
+  })
+  it('일반 Gate 에서는 retry-once 가 그냥 문자열 resolution 이다 — repairOnce 를 부르지 않는다', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const created = await call(deps, 'task-create', { spec: 's', account: 'accA' })
+    const taskId = (created.body as { id: string }).id
+    const g = await call(deps, 'gate-create', { task: taskId, question: 'q?' })
+    const gateId = (g.body as { id: string }).id
+    const r = await call(deps, 'gate-resolve', { id: gateId, resolution: 'retry-once' })
+    expect(r.status).toBe(200)
+    expect(deps.onces).toEqual([])
+  })
+  it('소진 Gate 에 임의의 resolution 을 주면 Gate 만 풀리고 retry-once·mark-failed 어느 쪽도 타지 않는다', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const taskId = deps.getState().tasks[0].id
+    const s = deps.getState()
+    const g = createGate(
+      { ...s, tasks: s.tasks.map((t) => ({ ...t, status: 'validating' as const })) },
+      { taskId, question: 'q', kind: 'convergence-exhausted', options: ['retry-once', 'mark-failed'] },
+      NOW
+    )
+    if (!g.ok) throw new Error(g.error)
+    await deps.setState(g.state)
+    const r = await call(deps, 'gate-resolve', { id: g.value.id, resolution: 'give-up-for-now' })
+    expect(r.status).toBe(200)
+    expect(deps.onces).toEqual([])
+    expect(deps.getState().tasks[0].status).toBe('ready')
+  })
+  it('convergence Run 의 검증 실패 메시지는 --retry-of 를 말하지 않는다 (status 문구는 순수 층이 정한다)', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const taskId = deps.getState().tasks[0].id
+    const ws = await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'accA', worktree: 'current' })
+    const dispatchId = (ws.body as { dispatchId: string }).dispatchId
+    await call(deps, 'send', { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, 'sess1')
+    expect(deps.getState().tasks[0].status).toBe('validating')
+    // 검증 결과를 적용하는 것은 배선(ipc.ts 의 TaskValidator.onSettled)의 일이지 server.ts 의
+    // send 가 아니다 — 그 배선이 하는 것과 같은 단일 커밋(applyValidationResult -> setState)을
+    // 여기서 흉내내어, 실패가 실제로 메시지를 낸다는 것과 그 문구가 --retry-of 를 말하지 않는다는
+    // 것을 읽는다(순수 층 routeFailure 의 문구는 state.test.ts 가 다시 본다 — 이 테스트가 없으면
+    // "validating 에 도달했다" 만 확인하고 아무 메시지도 읽지 않은 채 통과해, 그 확인이 실제로는
+    // 아무것도 pin 하지 않았다).
+    const failing: CheckResult[] = [{ configId: 'c1', name: 'cfg', status: 'failed', exitCode: 1, outputTail: 'boom' }]
+    const repair = deps.repairTargetFor?.(taskId) ?? undefined
+    const applied = applyValidationResult(deps.getState(), { taskId, results: failing, repair }, NOW)
+    if (!applied.ok) throw new Error(applied.error)
+    await deps.setState(applied.state)
+    const checked = await call(deps, 'check', {})
+    const body = checked.body as { messages: { subject: string; body: string }[] }
+    const msg = body.messages.find((m) => m.subject.startsWith('Checks failed'))
+    expect(msg).toBeDefined()
+    expect(msg!.body).not.toContain('--retry-of')
+    expect(msg!.body).toContain('The app is repairing this Task')
+  })
+  it('gate-resolve retry-once 는 repairOnce 를 부르고 mark-failed 는 failed 로 보낸다', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const taskId = deps.getState().tasks[0].id
+    // 소진 Gate 를 손으로 만든다 — 순수 층의 판정은 state.test.ts 가 본다
+    const s = deps.getState()
+    const g = createGate({ ...s, tasks: s.tasks.map((t) => ({ ...t, status: 'validating' as const, consecutiveFailures: 4 })) }, { taskId, question: 'q', kind: 'convergence-exhausted', options: ['retry-once', 'mark-failed'] }, NOW)
+    if (!g.ok) throw new Error(g.error)
+    await deps.setState(g.state)
+    const r = await call(deps, 'gate-resolve', { id: g.value.id, resolution: 'retry-once' })
+    expect(r.status).toBe(200)
+    expect(deps.onces).toEqual([taskId])
+
+    const deps2 = convDeps()
+    await call(deps2, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps2, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const taskId2 = deps2.getState().tasks[0].id
+    const s2 = deps2.getState()
+    const g2 = createGate({ ...s2, tasks: s2.tasks.map((t) => ({ ...t, status: 'validating' as const })) }, { taskId: taskId2, question: 'q', kind: 'convergence-exhausted', options: ['retry-once', 'mark-failed'] }, NOW)
+    if (!g2.ok) throw new Error(g2.error)
+    await deps2.setState(g2.state)
+    await call(deps2, 'gate-resolve', { id: g2.value.id, resolution: 'mark-failed' })
+    expect(deps2.getState().tasks[0].status).toBe('failed')
+    expect(deps2.onces).toEqual([])
+  })
+  // 전체 브랜치 리뷰, Finding 5 — 이 Gate 를 retry-once 로 풀어도, 같은 Task 를 막는 두 번째 Gate가
+  // 여전히 열려 있으면(resolveGate 의 stillBlocked) repairOnce 의 openDispatch 는 "task is blocked
+  // by an open gate" 로 거절된다. 그 답이 조용히 사라지지 않고 200 응답에 남는다.
+  it('gate-resolve retry-once 는 두 번째 열린 Gate 가 여전히 막으면 그 사실을 응답에 남긴다', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const taskId = deps.getState().tasks[0].id
+    const s = deps.getState()
+    const exhausted = createGate(
+      { ...s, tasks: s.tasks.map((t) => ({ ...t, status: 'validating' as const })) },
+      { taskId, question: 'q1', kind: 'convergence-exhausted', options: ['retry-once', 'mark-failed'] },
+      NOW
+    )
+    if (!exhausted.ok) throw new Error(exhausted.error)
+    // 같은 Task 에 또 다른 Gate 를 하나 더 연다 — createGate 는 Task 가 이미 blocked 여도 이 자리에서
+    // 거절하지 않는다(Gate 는 taskId 로만 매인다); resolveGate 가 stillBlocked 로 두 번째 것을 본다.
+    const second = createGate(exhausted.state, { taskId, question: 'q2', kind: 'convergence-blocked' }, NOW)
+    if (!second.ok) throw new Error(second.error)
+    await deps.setState(second.state)
+    // repairOnce 자신은 real production 코드가 아니라 mock 이지만, 이 상황에서 실제 repairOnce 가
+    // 내는 답과 같은 모양(ok:false, error 포함)을 흉내 낸다 — server.ts 가 그 답을 어떻게 다루는지가
+    // 이 테스트의 관심사다.
+    deps.onceResult = { ok: false, error: 'task is blocked by an open gate: dsp_x' }
+    const r = await call(deps, 'gate-resolve', { id: exhausted.value.id, resolution: 'retry-once' })
+    expect(r.status).toBe(200)
+    expect(deps.onces).toEqual([taskId])
+    expect((r.body as { retryOnceFailed?: string }).retryOnceFailed).toContain('blocked by an open gate')
+  })
+  it('gate-resolve mark-failed 는 한 번의 커밋으로 끝난다 — resolveGate 가 남긴 ready 가 별도 커밋으로 보이지 않는다', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const taskId = deps.getState().tasks[0].id
+    const s = deps.getState()
+    const g = createGate(
+      { ...s, tasks: s.tasks.map((t) => ({ ...t, status: 'validating' as const })) },
+      { taskId, question: 'q', kind: 'convergence-exhausted', options: ['retry-once', 'mark-failed'] },
+      NOW
+    )
+    if (!g.ok) throw new Error(g.error)
+    await deps.setState(g.state)
+    // resolveGate 는 blocked -> pending(그리고 deps 가 없으니 recomputeReady 가 ready 로) 을 이미
+    // 정한다 — mark-failed 가 그것을 별도의 setState 로 다시 덮으면, 그 사이 창에서 이 Task 가
+    // ready 로 한 번 보인다(autoDispatch Run 의 스케줄러가 집어 갈 수 있는 창). 이 테스트는 그
+    // 창이 실제로 없다는 것을 setState 호출을 가로채 확인한다.
+    const seen: string[] = []
+    const commit = deps.setState.bind(deps)
+    deps.setState = async (next) => {
+      const t = next.tasks.find((x) => x.id === taskId)
+      if (t) seen.push(t.status)
+      await commit(next)
+    }
+    await call(deps, 'gate-resolve', { id: g.value.id, resolution: 'mark-failed' })
+    expect(seen).toEqual(['failed'])
   })
 })

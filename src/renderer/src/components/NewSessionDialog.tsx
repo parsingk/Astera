@@ -6,6 +6,8 @@ import { isSlackReady } from '../../../core/slack/ready'
 import { useChatAvailability } from '../hooks/useChatAvailability'
 import { useAccountStatus } from '../hooks/useAccountStatus'
 import { orderBranchesForPicker, reconcileBaseRef } from '../../../core/worktrees/base'
+import { isWaitingReason, startBlockedBy, type StartBlocked } from '../../../core/sessions/startBlocked'
+import type { MessageKey } from '../../../core/i18n'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
@@ -16,6 +18,10 @@ import { X } from 'lucide-react'
 
 const SOFT_LIMIT = 12
 const MAX_ROLL_ACCOUNTS = 3
+// The full product names the two neighbouring warnings already use (codexMissingPre/claudeMissingPre)
+// — cliFailsHere/cliFailsHereUnknown fill their own {cli} placeholder with this instead of the raw
+// provider id, so all three lines name the tool the same way.
+const CLI_LABEL: Record<Provider, string> = { claude: 'Claude Code CLI', codex: 'Codex CLI' }
 
 export function NewSessionDialog({
   accounts,
@@ -67,8 +73,19 @@ export function NewSessionDialog({
   // 설정은 그대로다: 이 체크박스는 언제나 "이번 세션"을 말한다.
   const [bypassPermissions, setBypassPermissions] = useState(true) // start without permission prompts
   const [slackReady, setSlackReady] = useState(false) // whether a webhook URL is configured — the checkbox is disabled when it is not
-  // Both CLIs, because either one can be the missing one — the app opens with just one installed
+  // Both CLIs, because either one can be the missing one — the app opens with just one installed.
+  // Two different questions live here, asked two different ways (design D3, fix round 2):
+  // cliInstalled is cwd-independent ("is it on this machine at all", asked once on mount below) and
+  // cliOk is per-folder ("does it run here", re-asked on every cwd change further down) — conflating
+  // them into one `--version` call was round 1's mistake: a shell that cannot find a binary writes its
+  // own "not recognized"/"not found" to stderr, which reads exactly like the binary itself refusing to
+  // run once it exists, so a genuinely missing CLI took the wrong branch and hid the install prompt.
+  const [cliInstalled, setCliInstalled] = useState({ claude: true, codex: true })
   const [cliOk, setCliOk] = useState({ claude: true, codex: true })
+  // stderr's first line per CLI, from the same per-folder check as cliOk — undefined until a check
+  // has actually failed with something to say (a passing check, one that hasn't run yet for this
+  // folder, or one that died silently inside its own timeout all leave nothing to show)
+  const [cliError, setCliError] = useState<{ claude?: string; codex?: string }>({})
   const [repoRoot, setRepoRoot] = useState<string | null>(null) // result of the git repo check
   const [resolvingRepo, setResolvingRepo] = useState(false) // blocks start while the check runs — stops a spawn with the previous repoRoot
   const [useWorktree, setUseWorktree] = useState(false)
@@ -98,10 +115,12 @@ export function NewSessionDialog({
     // src/main/slack.ts — under the old condition that only looked at webhookUrl, a user who had set
     // only botToken + channelId could not tick the checkbox even though the bot path was actually on.
     void window.api.slack.getConfig().then((c) => setSlackReady(isSlackReady(c)))
-    void window.api.system.checkCli().then((c) => setCliOk({ claude: c.claude.ok, codex: c.codex.ok }))
     void window.api.settings
       .getAgentPermissionMode()
       .then((m) => setBypassPermissions(m === 'yolo'))
+    // Existence, not runnability — asked once here because it does not depend on which folder gets
+    // picked (design D3, fix round 2). The per-folder question below has its own effect on [cwd].
+    void window.api.system.checkCliInstalled().then(setCliInstalled)
   }, [])
 
   useEffect(() => {
@@ -137,6 +156,29 @@ export function NewSessionDialog({
       cancelled = true
     }
   }, [useWorktree, repoRoot])
+
+  // 세션이 돌 폴더에서 검사한다 — 앱의 cwd 에서 돌리면 toolchain 관리자가 읽을 manifest 가 없어
+  // 무조건 통과하고, 그 통과를 믿은 채 세션만 죽는다(설계 D3). 폴더가 바뀌면 다시 묻는다.
+  //
+  // 이 결과(cliOk/cliError)는 아래 cliFailsHere 경고에만 쓰인다 — 최종 리뷰 파동(F1) 전에는 시작
+  // 버튼도 이 답을 기다렸고(checkingCli), 그래서 검사가 끝나기 전 최대 10초 동안 폴더를 고르고도
+  // 버튼이 죽어 있었다. cliMissing 이 이제 "설치돼 있는지" 만 묻고 "이 폴더에서 도는지"는 F5 의
+  // 우회 재시도가 살아서 처리하므로, 이 검사의 답은 더 이상 버튼을 막을 이유가 없다 — 그래서
+  // checkingCli 플래그는 없앴다: 아무것도 결정하지 않는 불을 들고 있을 이유가 없다.
+  useEffect(() => {
+    if (!cwd) return
+    let cancelled = false
+    void window.api.system
+      .checkCli(cwd)
+      .then((c) => {
+        if (cancelled) return
+        setCliOk({ claude: c.claude.ok, codex: c.codex.ok })
+        setCliError({ claude: c.claude.error, codex: c.codex.error })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [cwd])
 
   useEffect(() => {
     // git repo check plus the default-account preselect. A worktree session uses the mapping keyed by the original repo too
@@ -181,10 +223,23 @@ export function NewSessionDialog({
   // Only the undefined-tolerant wrapper is local to this file, the decision itself is delegated to providerOf
   const provider = (a: Account | undefined): Provider => (a ? providerOf(a) : 'claude')
   const primaryProvider = provider(accounts.find((a) => a.id === accountIds[0]))
-  // Whether the CLI this account needs is missing — the only thing that gates starting. Rolling
-  // supports codex too (codexRolling.ts) and so do Slack notifications (turn completion is detected
-  // from rollout's task_complete), so this flag must not hide either of those.
-  const primaryCliMissing = !cliOk[primaryProvider]
+  // The two questions kept apart (design D3, fix round 2) — see the cliInstalled/cliOk declarations
+  // above for why one probe cannot safely answer both.
+  const primaryInstalled = cliInstalled[primaryProvider]
+  const primaryRunsHere = cliOk[primaryProvider]
+  // Whether the CLI this account needs is missing from this machine at all — the only thing that
+  // gates starting. primaryRunsHere (does it run in *this* folder) used to be folded in here too
+  // (fix round 2), and that was the bug the final review wave found: a CLI a toolchain manager
+  // refuses to run for this folder (Volta rejecting a broken package.json — the reviewer's own
+  // machine) is exactly the case F5's one-shot bypass retry exists to survive, and gating Start on it
+  // made that retry unreachable for the one machine it was built for — the shim was found, the
+  // per-folder probe failed, Start stayed dead, nothing ever spawned, so the fix never ran. Kept out
+  // of this flag on purpose now: primaryRunsHere still drives the cliFailsHere warning below (the
+  // true, more specific statement) and F5 gets its chance. Still checked broadly, not just for a
+  // plain single-account session — rolling supports codex too (codexRolling.ts) and so do Slack
+  // notifications (turn completion is detected from rollout's task_complete), so this flag must not
+  // hide either of those.
+  const primaryCliMissing = !primaryInstalled
   // 대화 is available once the Host has announced the proc-* family — either provider's account can
   // open one. The poll lives in the hook, shared with ResumeDialog.
   const { enabled: chatEnabled, checking: chatChecking } = useChatAvailability()
@@ -272,6 +327,23 @@ export function NewSessionDialog({
     }
   }
 
+  const blocked = startBlockedBy({
+    cwd: cwd ?? '',
+    starting,
+    resolvingRepo,
+    accountIds,
+    cliMissing: primaryCliMissing,
+    schedOn,
+    hasSchedule: schedule !== null
+  })
+  const BLOCKED_KEY: Record<StartBlocked, MessageKey> = {
+    'no-cwd': 'session.new.blocked.noCwd',
+    'no-account': 'session.new.blocked.noAccount',
+    'cli-missing': 'session.new.blocked.cliMissing',
+    'no-schedule': 'session.new.blocked.noSchedule',
+    'checking-folder': 'session.new.blocked.checkingFolder'
+  }
+
   return (
     // While starting, an outside click does not close this — the worktree creation and spawn already
     // under way are not cancelled, so if only the modal disappears the user mistakes it for a cancel
@@ -287,7 +359,13 @@ export function NewSessionDialog({
         {runningCount >= SOFT_LIMIT && (
           <p className="warn">{t('session.new.runningWarning', { count: runningCount })}</p>
         )}
-        {primaryCliMissing && (
+        {/* Gated on the dedicated existence probe (cliInstalled), not on whether the per-folder check
+            said anything — round 1 tried inferring "not installed" from an absent stderr line, but a
+            shell running a binary it cannot find still writes its own "not recognized"/"not found",
+            which reads exactly like the binary complaining once installed. That made a genuinely
+            missing CLI take the "does not run in this folder" branch below instead of this one,
+            hiding the install prompt for the one case that most needs it (design D3). */}
+        {!primaryInstalled && (
           <p className="warn">
             {t(
               primaryProvider === 'codex'
@@ -495,25 +573,42 @@ export function NewSessionDialog({
           />
           {t('session.new.bypassPermissions')}
         </label>
+        {/* checkCli now runs in the chosen folder, not the app's own cwd, so a toolchain manager that
+            refuses this folder's manifest gets caught here instead of killing the session after Start
+            (design D3). Gated on primaryInstalled — the dedicated existence probe above — rather than
+            on whether the per-folder check said anything, so this and the "not found" warning above
+            are strictly mutually exclusive and neither can show for the wrong reason (fix round 2).
+            When the per-folder check died inside its own timeout with nothing to say (a hung shell
+            shim), there is no reason to quote — cliFailsHereUnknown reads sensibly without one instead
+            of interpolating "undefined" into the sentence. */}
+        {primaryInstalled && !primaryRunsHere && (
+          <p className="warn-text">
+            {cliError[primaryProvider] !== undefined
+              ? t('session.new.cliFailsHere', {
+                  cli: CLI_LABEL[primaryProvider],
+                  reason: cliError[primaryProvider] as string
+                })
+              : t('session.new.cliFailsHereUnknown', { cli: CLI_LABEL[primaryProvider] })}
+          </p>
+        )}
         <div className="row right">
           <button onClick={onCancel} disabled={starting}>
             {t('common.cancel')}
           </button>
-          <button
-            className="primary"
-            disabled={
-              !cwd ||
-              starting ||
-              resolvingRepo ||
-              accountIds.some((id) => !id) ||
-              primaryCliMissing ||
-              (schedOn && !schedule)
-            }
-            onClick={() => void start()}
-          >
+          <button className="primary" disabled={starting || blocked !== null} onClick={() => void start()}>
             {t('session.new.start')}
           </button>
         </div>
+        {/* 왜 못 누르는지 말한다. 다섯 조건 중 둘은 비동기로 늦게 풀려서, 다 골라 놓고도 버튼이 죽어
+            있다가 갑자기 살아나는 것처럼 보였다(설계 D4) */}
+        {blocked !== null && (
+          // 기다리면 풀리는 사유에만 스피너가 붙는다. 글씨만으로는 "내가 뭘 안 했나" 와 "앱이 일하는
+          // 중" 이 똑같이 읽히고, 회색 버튼 앞에서 사람이 찾는 답이 바로 그 둘 중 어느 쪽이냐다.
+          <p className="modal-hint start-blocked">
+            {isWaitingReason(blocked) && <span className="loading-spinner small" aria-hidden="true" />}
+            {t(BLOCKED_KEY[blocked])}
+          </p>
+        )}
       </div>
     </div>
   )

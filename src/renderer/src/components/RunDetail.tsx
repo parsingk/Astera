@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type {
   Account,
+  JobCheck,
   JobEvent,
   JobRun,
   JobTask,
@@ -9,16 +10,19 @@ import type {
   RunDetail as RunDetailData,
   TaskStatus
 } from '../../../core/types'
-import type { MessageKey } from '../../../core/i18n'
+import type { MessageKey, MessageParams } from '../../../core/i18n'
 import { accountToDispatchOn } from '../../../core/accounts/dispatchAccount'
 import { providerOf } from '../../../core/providers/meta'
 import { chainOf } from '../../../core/orchestration/graph'
 import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
+import { canStopConvergence, nodeMetaOf, retryingCheckOf, type NodeMeta } from '../../../core/orchestration/nodeMeta'
+import { formatRunDuration } from '../../../core/run/duration'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
 import { runningCount } from '../../../core/orchestration/running'
 import { useI18n } from '../i18n/I18nProvider'
 import { confirmModal } from '../lib/confirm'
+import { CompletionBlock } from './CompletionBlock'
 import { toast } from '../lib/toast'
 import {
   LockIcon,
@@ -30,7 +34,7 @@ import {
   UnlockIcon
 } from './JobIcons'
 import { NewTaskModal } from './NewTaskModal'
-import { ArrowUpRight, Play, Square, X } from 'lucide-react'
+import { ArrowUpRight, Play, Square, WrenchOff, X } from 'lucide-react'
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
  *  heartbeat 과 decision_gate 는 timeline.ts 의 SKIP 이 걸러 지금은 도달하지 않지만, 맵을
@@ -148,6 +152,67 @@ const RUN_START = 'run:start'
 
 /** 병합 버튼의 busy 센티넬. RUN_START 와 같은 이유로 Task id 와 겹칠 수 없는 값이다 */
 const RUN_MERGE = 'run:merge'
+
+type Translate = (key: MessageKey, params?: MessageParams) => string
+
+/** nodeMetaOf 의 판정을 문장으로. 우선순위는 그쪽에 있다 — 여기는 kind 마다 문구 하나다. undefined 면 줄을 그리지 않는다 */
+function metaText(m: NodeMeta, t: Translate): string | undefined {
+  switch (m.kind) {
+    case 'gate':
+      return m.question
+    case 'stopped':
+      return m.failed === null
+        ? t('jobs.convergence.node.stopped')
+        : t('jobs.convergence.node.stoppedWithCheck', { failed: m.failed })
+    case 'repairing':
+      return m.failed === null
+        ? t('jobs.convergence.node.repairingNoCheck', { repairs: m.repairs, max: m.max })
+        : t('jobs.convergence.node.repairing', { repairs: m.repairs, max: m.max, failed: m.failed })
+    case 'checking':
+      return m.retrying === null ? t('jobs.convergence.node.checking') : t('jobs.convergence.node.rechecking', { name: m.retrying })
+    case 'reviewing':
+      return t('jobs.convergence.node.reviewing', { round: m.round, max: m.max })
+    case 'failed':
+      return t('jobs.convergence.node.failed', { name: m.name })
+    case 'provider':
+      return m.provider
+    case 'none':
+      return undefined
+    default: {
+      // 반환형이 string | undefined 라 case 를 하나 빼먹어도 "값을 안 준다"는 undefined 로도
+      // 읽혀 tsc 가 조용히 통과한다(noImplicitReturns 는 이 저장소 세 tsconfig 어디에도 없다) —
+      // 이 default 가 그 구멍을 막는다. NodeMeta 에 여덟째 kind 가 생기고 위 case 들이 그걸
+      // 못 따라가면 m 이 여기서 never 가 아니게 되어 아래 대입이 타입 에러가 난다. 지금 일곱
+      // kind 모두 위에서 처리되므로 이 분기는 실행되지 않는다.
+      const exhaustive: never = m
+      return exhaustive
+    }
+  }
+}
+
+/** 칩 기호의 종류 — CheckResult.status 넷에 그리기 위한 다섯째 `retrying` 이 더해진다: validating 인 Task 에서
+ *  지난 라운드에 막혔던 검사는 지금 다시 도는 중이라는 뜻이다(UI 설계 U12 — validator 는 라운드 끝에만 결과를
+ *  주므로 "지금 도는 검사" 는 그렇게밖에 알 수 없다). */
+type GlyphKind = JobCheck['status'] | 'retrying'
+const GLYPH: Record<GlyphKind, string> = { passed: '✓', failed: '✗', 'timed-out': '✗', 'not-run': '○', retrying: '●' }
+
+/** "{이름} — {결과} ({지난 라운드 실제 시간}), {흔들림}". 시간은 formatRunDuration 을 빌린다 — {startedAt, exitedAt}
+ *  과 now 를 받는 함수라 0·durationMs·0 을 넘긴다(어댑터 한 줄). */
+function checkTooltip(c: JobCheck, glyph: GlyphKind, t: Translate): string {
+  const verdict =
+    glyph === 'retrying'
+      ? t('jobs.convergence.check.retrying')
+      : c.status === 'passed'
+        ? t('jobs.convergence.check.passed')
+        : c.status === 'failed'
+          ? t('jobs.convergence.check.failed', { code: c.exitCode ?? '?' })
+          : c.status === 'timed-out'
+            ? t('jobs.convergence.check.timedOut')
+            : t('jobs.convergence.check.notRun')
+  const time = c.durationMs !== undefined ? ` (${formatRunDuration({ startedAt: 0, exitedAt: c.durationMs }, 0)})` : ''
+  const flip = c.unstable ? `, ${t('jobs.convergence.check.unstable')}` : ''
+  return `${c.name} — ${verdict}${time}${flip}`
+}
 
 export function RunDetail({
   run,
@@ -566,6 +631,35 @@ export function RunDetail({
     }
   }
 
+  /** 자동 수정 중지 (설계 §4.1 의 V3). 명세 §29 의 `Stop Auto-Fix` 다.
+   *
+   *  **묻고 나서 멈춘다.** 되돌릴 수 없다 — 서버에 `--convergence on` 이 없다("Task 는 Run 을
+   *  따른다"). 되돌릴 수 없는 버튼을 클릭 한 번 거리에 두지 않는 것은 위 mergeRunNow 와 같은
+   *  규칙이고, 확인 창이 그 사실을 말하는 것이 이 창이 있는 이유다. 함께 말하는 둘째: 지금 도는
+   *  수리는 끝까지 가고 그 판정이 Gate 로 온다 — 누르는 순간 워커가 죽는 것이 아니다. */
+  const stopConvergence = async (taskId: string): Promise<void> => {
+    if (
+      !(await confirmModal({
+        title: t('jobs.convergence.stopConfirmTitle'),
+        body: t('jobs.convergence.stopConfirmBody'),
+        confirmLabel: t('jobs.convergence.stop')
+      }))
+    )
+      return
+    setBusy(taskId)
+    try {
+      const reply = await window.api.orch.command(projectPath, 'task-update', {
+        id: taskId,
+        convergence: 'off'
+      })
+      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
+    } catch {
+      toast.error(t('jobs.node.failed'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   /** 다시 띄우기. task-update 로 상태를 ready 로 되돌린다 — 전이표(dispatched 에는 dispatched 가
    *  없다)를 일부러 우회하는 사람의 손보기 명령이다. **대가:** consecutiveFailures 도 함께 0 으로
    *  돌아간다 — task-update 가 회로 차단을 여는 유일한 길이라 그렇게 만들어져 있다. 실패 횟수를
@@ -644,8 +738,22 @@ export function RunDetail({
         setGateError(t('jobs.node.failed'))
         return
       }
+      // 설계 §5(V4): 소진 Gate 에 "한 번 더 수정" 으로 답했는데 그 수정을 열지 못하는 경우가 있다 —
+      // 이 Task 를 막는 다른 Gate 가 이미 열려 있으면 repairOnce 는 아무것도 열지 못한다. 서버는 이
+      // Gate 자체는 정상적으로 풀렸으므로 200 을 주고, 그 사실을 본문에만 싣는다(server.ts 의
+      // gate-resolve). 그 본문을 여기서 버리던 동안, 사람이 누른 버튼은 아무 일도 하지 않은 채
+      // 성공한 것처럼 보였다 — 이 화면이 지금 하는 유일한 거짓말이었다.
+      //
+      // Gate 는 실제로 풀렸으므로 answering 은 닫는다. 남기면 이미 없는 Gate 에 다시 답하라고
+      // 내미는 꼴이 된다. 실패는 그 옆에 남는 줄로 말한다.
+      const body = reply.body as { retryOnceFailed?: unknown } | null
+      const retryFailed = typeof body?.retryOnceFailed === 'string' ? body.retryOnceFailed : null
       setAnswering(null)
       setAnswer('')
+      if (retryFailed !== null) {
+        setGateError(t('jobs.convergence.retryOnceFailed', { reason: retryFailed }))
+        return
+      }
     } catch {
       setGateError(t('jobs.node.failed'))
     } finally {
@@ -783,6 +891,7 @@ export function RunDetail({
                 setGateError(null)
               }}
               onRestart={(taskId) => void restartTask(taskId)}
+              onStopConvergence={(taskId) => void stopConvergence(taskId)}
             />
           </div>
           <div className="detail-events">
@@ -938,6 +1047,12 @@ export function RunDetail({
                     </button>
                   </div>
                 )}
+                {/* 고른 Task 의 완료 상세 — 왜 못 넘었는가(설계 §2). 필터 줄 바로 아래, 이벤트
+                    목록 위다: 이벤트는 "무슨 일이 있었나" 이고 이것은 "지금 무엇이 막고 있나" 라,
+                    찾는 사람이 스크롤하지 않고 만나야 하는 쪽이 이것이다. */}
+                {selectedTask && (
+                  <CompletionBlock projectPath={projectPath} runId={runId} taskId={selectedTask.id} />
+                )}
                 <div className="detail-list">
                   {events !== null && shown.length === 0 && (
                     <p className="modal-hint">{t('jobs.timeline.empty')}</p>
@@ -985,6 +1100,17 @@ export function RunDetail({
                               )}
                               {e.review && (
                                 <span className="detail-chip review">{t('jobs.event.review')}</span>
+                              )}
+                              {/* 설계 §3(V2): 왜 다시 띄웠는지. 검사가 실패해서인지 검토가 지적해서인지를
+                                  말하지 않으면 이 줄은 앞의 구현 줄과 구별되지 않는다 */}
+                              {e.repair && (
+                                <span className="detail-chip repair">
+                                  {t(
+                                    e.repair === 'check-failure'
+                                      ? 'jobs.event.repairCheck'
+                                      : 'jobs.event.repairReview'
+                                  )}
+                                </span>
                               )}
                               {/* 결과가 실린 메시지에만 나온다. **이 줄이 워커가 실패를 보고했다는
                                   사실의 유일한 기록이다** — applyWorkerDone 은 두 번째 메시지를
@@ -1067,7 +1193,8 @@ function Graph({
   onStop,
   onGate,
   onAnswer,
-  onRestart
+  onRestart,
+  onStopConvergence
 }: {
   tasks: JobTask[]
   layers: string[][]
@@ -1097,6 +1224,9 @@ function Graph({
   /** 답하기 버튼을 누른 결과 — onGate 와 같은 관례로 명령을 보내지 않고 답을 쓸 폼을 연다 */
   onAnswer: (taskId: string) => void
   onRestart: (taskId: string) => void
+  /** 자동 수정 중지 (설계 §4.1). 누르면 확인 창을 먼저 띄운다 — 이 컴포넌트는 그것을 모르고,
+   *  onGate·onAnswer 와 같은 관례로 결과만 위로 올린다 */
+  onStopConvergence: (taskId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const byId = new Map(tasks.map((tk) => [tk.id, tk]))
@@ -1137,9 +1267,14 @@ function Graph({
     const showAnswer = task.status === 'blocked' && task.gate !== undefined
     // 제목 아래 한 줄. **없으면 줄을 그리지 않는다** — 스냅숏이 이 값을 주지 않는 Task 가 더
     // 많고(끝난 것, 아직 안 뜬 것), 빈 줄을 두면 그 카드들의 제목이 가운데에서 위로 밀려 한
-    // 그래프 안에서 제목의 높이가 두 가지가 된다. 열린 Gate 가 있으면 그 질문이 provider 보다
-    // 먼저다: 사람이 읽어야 하는 것이 그쪽이다.
-    const meta = task.gate?.question ?? task.provider
+    // 그래프 안에서 제목의 높이가 두 가지가 된다. 무엇을 쓰는지는 core 의 nodeMetaOf 가 정한다 —
+    // Gate 질문 → 막힌 검사 → 도는 검사 → 검토 라운드 → provider. 여기서는 kind 를 문장으로 바꾸기만
+    // 한다(렌더러에는 테스트가 없다).
+    const meta = metaText(nodeMetaOf(task), t)
+    // validating 이면 지금 다시 도는 검사 하나를 ● 로 그린다 — 지난 라운드에 막힌 것, 지난 라운드가 다 통과했으면
+    // (검토 실패로 되돌아온 라운드) 첫 검사(checkTooltip 의 주석). nodeMetaOf 의 checking.retrying 과 같은 함수를
+    // 써서 meta 문구와 이 칩이 서로 다른 검사를 가리키는 일이 없게 한다.
+    const retrying = retryingCheckOf(task)
     // 고른 Task 와 의존으로 닿지 않는 것. 이 Task 를 멈춰도 저것은 멈추지 않는다는 뜻이다
     const away = chain !== undefined && !chain.has(task.id)
     const cls = ['detail-node', `detail-node--${task.status}`, away ? 'away' : '']
@@ -1171,6 +1306,23 @@ function Graph({
         </span>
         <span className="detail-node-title">{task.title}</span>
         {meta !== undefined && <span className="detail-node-meta">{meta}</span>}
+        {/* 검사 칩 한 줄 — 검사가 걸린 Task 만(없으면 요소도 없다: NODE_H 안에서 제목·meta 두 줄이 가운데 서는
+            지금 모양을 그대로 두려면 빈 줄을 세우면 안 된다). meta 줄과 따로인 이유는 Gate 질문이 meta 를 차지해도
+            무엇이 깨졌는지 보여야 하기 때문이다(UI 설계 U5). 통과한 것까지 전부 그린다 — 몇 개 중 어디서 멈췼는지
+            한눈에(U6). */}
+        {task.checks && task.checks.length > 0 && (
+          <span className="detail-checks">
+            {task.checks.map((c) => {
+              const glyph: GlyphKind = retrying !== null && c.configId === retrying.configId ? 'retrying' : c.status
+              return (
+                <span key={c.configId} className={`detail-check detail-check--${glyph}`} title={checkTooltip(c, glyph, t)}>
+                  {GLYPH[glyph]}
+                  {c.unstable && <sub>~</sub>}
+                </span>
+              )
+            })}
+          </span>
+        )}
         {/* 세션 열기·띄우기·멈추기·물어보기·다시 띄우기 — 노드 안의 버튼들. formOpen 인 동안은
             전부 숨긴다: Task 짓기·질문 쓰기 폼이 열려 있거나 다른 명령이 도는 동안 이 버튼 중
             하나를 누르면 그 폼이나 그 명령의 결과를 조용히 버리게 된다(RunDetail.formOpen 의
@@ -1259,6 +1411,22 @@ function Graph({
                 }}
               >
                 <Play size={12} fill="currentColor" strokeWidth={0} />
+              </button>
+            )}
+            {/* 자동 수정 중지 (설계 §4.1, 명세 §29 의 Stop Auto-Fix). 보일 조건은 core 가 정한다 —
+                자동 수정이 걸려 있고, 아직 안 멈췄고, 끝나지 않은 Task 만. 되돌릴 수 없는 버튼이라
+                확인 창이 먼저 뜬다(RunDetail 의 stopConvergence). */}
+            {canStopConvergence(task) && (
+              <button
+                className="detail-node-btn"
+                title={t('jobs.convergence.stop')}
+                aria-label={t('jobs.convergence.stop')}
+                onClick={(ev) => {
+                  ev.stopPropagation()
+                  onStopConvergence(task.id)
+                }}
+              >
+                <WrenchOff size={12} strokeWidth={2} />
               </button>
             )}
           </span>

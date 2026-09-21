@@ -153,7 +153,7 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
   }
 
   proc.onLine(handleLine)
-  proc.onExit(({ exitCode }) => core.onExit(exitCode))
+  proc.onExit(({ exitCode, stderrTail }) => core.onExit(exitCode, stderrTail))
 
   // ---- the public surface ----
 

@@ -5,18 +5,20 @@ import type { ProcLike } from '../../core/sessions/proc'
 import type { ChatEvent } from '../../core/chat/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 
-function fakeProc(): ProcLike & { written: string[]; feed(line: string): void; exit(code: number): void; notes: Record<string, unknown>[]; outlivesApp?: boolean } {
+function fakeProc(): ProcLike & { written: string[]; feed(line: string): void; exit(code: number): void; exitWith(code: number, stderrTail?: string): void; notes: Record<string, unknown>[]; outlivesApp?: boolean } {
   let onLine: (l: string) => void = () => {}
-  let onExit: (e: { exitCode: number }) => void = () => {}
+  let onExit: (e: { exitCode: number; stderrTail?: string }) => void = () => {}
   const p = {
     pid: 42, written: [] as string[], notes: [] as Record<string, unknown>[], outlivesApp: undefined as boolean | undefined,
     onLine: (cb: (l: string) => void) => { onLine = cb },
-    onExit: (cb: (e: { exitCode: number }) => void) => { onExit = cb },
+    onExit: (cb: (e: { exitCode: number; stderrTail?: string }) => void) => { onExit = cb },
     write: (line: string) => { p.written.push(line) },
     kill: vi.fn(),
     remember: (patch: Record<string, unknown>) => { p.notes.push(patch) },
     feed: (line: string) => onLine(line),
-    exit: (code: number) => onExit({ exitCode: code })
+    exit: (code: number) => onExit({ exitCode: code }),
+    // 기존 exit()은 꼬리 없는 경로(옛 Host, 정말 아무 말 없이 죽은 경우)를 계속 테스트하도록 그대로 둔다.
+    exitWith: (code: number, stderrTail?: string) => onExit({ exitCode: code, stderrTail })
   }
   return p
 }
@@ -99,6 +101,17 @@ describe('createClaudeAdapter — handshake', () => {
     await expect(starting).rejects.toThrow('unknown option')
     expect(events).toContainEqual({ type: 'error', message: 'unknown option --output-format' })
     expect(p.kill).toHaveBeenCalled()
+  })
+
+  it('핸드셰이크 전에 죽으면 프로세스의 마지막 말이 사유가 된다', async () => {
+    const { p, a } = fresh()
+    const starting = a.start({ cwd: 'D:/x', bypass: false })
+    await tick()
+    p.exitWith(8, 'error: Could not parse project manifest\n')
+    await starting.catch(() => {})
+    await tick()
+    expect(a.state().exitCode).toBe(8)
+    expect(a.state().error).toBe('error: Could not parse project manifest')
   })
 
   it('a handshake answered in plan mode starts the session in plan mode', async () => {
@@ -538,7 +551,7 @@ describe('createClaudeAdapter — exit', () => {
     await tick()
     p.exit(PTY_LOST_SIGHT_EXIT_CODE)
     await expect(listing).rejects.toThrow()
-    expect(events.at(-1)).toEqual({ type: 'exit', code: PTY_LOST_SIGHT_EXIT_CODE })
+    expect(events.at(-1)).toEqual({ type: 'exit', code: PTY_LOST_SIGHT_EXIT_CODE, errorDetail: null })
   })
 })
 

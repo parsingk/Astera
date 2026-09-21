@@ -15,10 +15,13 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
       // outliving the failure it described. `truncated` rides on this event (core/chat/types.ts):
       // the adapter clears its guess the moment something definite about the turn arrives, and this
       // is where the pane stops saying "확인하는 중". Absent means "nothing to say", not false.
+      // A fresh turn starting is also where the bypass notice (Task 7) has said what it had to say —
+      // it is a one-time "here is what just happened", not a steady state to keep repeating.
       return {
         ...state,
         status: event.status,
         error: event.status === 'working' ? null : state.error,
+        notice: event.status === 'working' ? null : state.notice,
         ...(event.truncated === undefined ? {} : { truncated: event.truncated })
       }
     case 'request':
@@ -34,8 +37,54 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
     case 'usage':
       // Same arrangement: main keeps it for the status bar to ask about, and the pane draws none of it.
       return state
+    case 'notice':
+      // design F5: told once, through its own field — never `error`, or the exit banner (T4) would
+      // read the bypass as the reason the session died, when the retry is in fact why it did not.
+      //
+      // It also retires the exit it is news about: this fires only after a confirmed retry actually
+      // started the CLI again, and a pane that was already open when the first death happened is
+      // still sitting on that death's `error`/`errorDetail`/`exitCode`/`bypassOffer` — nothing else
+      // ever clears them (a fresh turn's `status: 'working'` below clears `error`/`notice`, but not
+      // the other three). Left standing, `chatBannerFor` would keep ranking that stale `error` over
+      // this very `notice` (it checks `error` first) and the pane would go on showing a session that
+      // is, in fact, running fine as if it had just failed.
+      //
+      // `bypassed: true` (fix round 1 / Critical 2) is the durable counterpart: unlike everything else
+      // this fold touches, nothing ever clears it back to `false` afterward — not this same case
+      // (there is only ever one `'bypassed'` key), not a turn's `status: 'working'`, not a remount
+      // (main's `state()` overlays the same fact). It is what lets someone reading this session's
+      // results later still see that it did not run on the version pinned for this folder.
+      return {
+        ...state,
+        notice: event.key,
+        error: null,
+        errorDetail: null,
+        exitCode: null,
+        bypassOffer: false,
+        bypassed: true
+      }
     case 'exit':
-      return { ...state, status: 'idle', request: null }
+      // exitCode/errorDetail always come from the event, even when errorDetail is null — that null is
+      // itself the fact "no tail", not "nothing to say". `error` is different: absent means the event
+      // has no reason to report, and the fold must leave whatever error already sat there rather than
+      // guessing one (a pane already open when the process dies has no other source for any of this).
+      // `bypassOffer` mirrors `error`'s own rule — absent means the manager decided against it, not
+      // "unchanged" (a session that already had a stale `true` from an earlier death must not keep it
+      // through a plain, unrelated exit that offers no button at all). `bypassSignal` follows
+      // `bypassOffer`'s own verdict rather than the event's presence alone, for the same reason: it
+      // means nothing without the offer it explains. `bypassed` is deliberately untouched here — it is
+      // the durable fact (fix round 1 / Critical 2), and an ordinary exit is not the event that sets
+      // or clears it either way.
+      return {
+        ...state,
+        status: 'idle',
+        request: null,
+        exitCode: event.code,
+        errorDetail: event.errorDetail,
+        bypassOffer: event.bypassOffer === true,
+        bypassSignal: event.bypassOffer === true ? event.bypassSignal : undefined,
+        ...(event.error === undefined ? {} : { error: event.error })
+      }
   }
 }
 

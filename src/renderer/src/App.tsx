@@ -39,6 +39,7 @@ import { GithubSettings } from './components/GithubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import { CliMissingScreen } from './components/CliMissingScreen'
+import { CliInstallRows } from './components/CliInstallRows'
 import { FirstRunDialog } from './components/FirstRunDialog'
 import type {
   OpenSessionTask,
@@ -113,7 +114,7 @@ import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '.
 import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
-import { PanelLeft, Settings, X } from 'lucide-react'
+import { House, PanelLeft, Settings, X } from 'lucide-react'
 
 sessionBus.init()
 
@@ -445,7 +446,13 @@ export default function App(): React.JSX.Element {
   if (activeSessionId) lastSessionIdRef.current = activeSessionId
   const [showNew, setShowNew] = useState(false)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null) // prefill for WorktreePanel's 'start session'
+  // Two different questions, deliberately kept apart (the same split session/startBlocked.ts explains
+  // for the new-session dialog). `cli` is runnability — `claude --version` actually ran and printed
+  // this — and it is asked with no folder, so it answers for the app's own working directory and
+  // nothing else. It feeds the version lines in Settings, where that is exactly the right answer.
+  // `cliInstalled` is existence, asked of the machine's PATH and independent of any folder.
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
+  const [cliInstalled, setCliInstalled] = useState<{ claude: boolean; codex: boolean } | null>(null)
   const [appVersion, setAppVersion] = useState('')
   const [hostStatus, setHostStatus] = useState<HostStatus | null>(null)
   /** What the Host says it is holding, or null while it has not said — which is the state this
@@ -523,6 +530,12 @@ export default function App(): React.JSX.Element {
   const explorerShortcutLabel = explorerChord
     ? `${t('explorer.rail.toggle')} (${formatChord(explorerChord)})`
     : t('explorer.rail.toggle')
+  /** 레일의 홈 버튼 툴팁. 탐색기와 같은 이유·같은 방식이다 — 이 화면으로 돌아오는 길이 버튼
+   *  하나뿐이었으므로, 키가 있다는 사실도 그 버튼에서 알게 한다. */
+  const homeChord = bindingsRef.current['sidebar.home']?.[0]
+  const homeShortcutLabel = homeChord
+    ? `${t('session.rail.openSessions')} (${formatChord(homeChord)})`
+    : t('session.rail.openSessions')
   /** The run configuration pill's shortcut, for its title — run.selectConfig opens the pill's menu, so
    *  the hint belongs there, not on the "Manage run configurations…" footer row (that opens the
    *  manager instead). Same derivation as explorerChord: read the resolved binding, not the default,
@@ -841,6 +854,7 @@ export default function App(): React.JSX.Element {
     void window.api.accounts.list().then(setAccounts)
     void window.api.accounts.ghosts().then(setGhostAccounts)
     void window.api.system.checkCli().then(setCli)
+    void window.api.system.checkCliInstalled().then(setCliInstalled)
     void window.api.system.appVersion().then(setAppVersion)
     // The rail draws the Jobs button only while this is on, so it has to be read at startup. Reading it
     // only when the settings modal opens (the showSettings effect below) meant the button was missing
@@ -1157,12 +1171,13 @@ export default function App(): React.JSX.Element {
       // Both toggles are recreated on every render and this listener holds the first one, but their
       // bodies are all refs and setters, so a stale closure still acts on the latest state — the same
       // convention toggleExplorer and closeFileTab already rely on.
-      if (action === 'sidebar.jobs' || action === 'sidebar.howItWorks') {
+      if (action === 'sidebar.home' || action === 'sidebar.jobs' || action === 'sidebar.howItWorks') {
         if (action === 'sidebar.jobs' && !orchEnabledRef.current) return
         e.preventDefault()
         e.stopPropagation()
         if (e.repeat) return // holding the key would flap the sidebar
-        if (action === 'sidebar.jobs') toggleJobs()
+        if (action === 'sidebar.home') toggleSessions()
+        else if (action === 'sidebar.jobs') toggleJobs()
         else toggleHiw()
         return
       }
@@ -1892,6 +1907,7 @@ export default function App(): React.JSX.Element {
     setJobsOpen(next.jobs)
     setHiwOpen(next.understanding)
   }
+  const toggleSessions = (): void => toggleSidebar('sessions')
   const toggleExplorer = (): void => toggleSidebar('explorer')
   const toggleJobs = (): void => toggleSidebar('jobs')
   const toggleHiw = (): void => toggleSidebar('understanding')
@@ -1981,13 +1997,18 @@ export default function App(): React.JSX.Element {
   // Either CLI is enough to work with the app — someone who only uses Codex has no reason to install
   // Claude Code. Which of the two an individual session needs depends on its account's provider, and
   // that call belongs to the new-session dialog, which knows the account.
-  const anyCliOk = cli?.claude.ok === true || cli?.codex.ok === true
+  //
+  // Installation, not runnability. This used to read `cli` (a `--version` run in the app's own working
+  // directory), which made a CLI that a toolchain manager refuses to run *there* look like a CLI that
+  // is not on the machine: the + button went dead and no folder could be picked to prove otherwise.
+  // That is the same mistake the new-session dialog's Start gate was caught making, one screen up.
+  const anyCliInstalled = cliInstalled?.claude === true || cliInstalled?.codex === true
 
   /** A group's + button — moves the active group there first so the new session becomes that group's tab.
    *  spawn's placement reads activePaneIdRef, so this one line is enough. */
   const newInGroup = (paneId: string): void => {
     setActivePaneId(paneId)
-    if (anyCliOk) setShowNew(true)
+    if (anyCliInstalled) setShowNew(true)
   }
 
   /** A drop on the tab bar — reorder within the same group, or move to that position in another group */
@@ -3444,15 +3465,32 @@ export default function App(): React.JSX.Element {
   // Only when neither CLI is present is there nothing to launch. With one of the two installed the app
   // opens as usual, and the new-session dialog blocks the accounts whose CLI is missing.
   //
-  // The screen itself — what it offers, how it installs, and why it is English-only — lives in
-  // CliMissingScreen.tsx.
-  if (cli && !cli.claude.ok && !cli.codex.ok) {
+  // "Present" means installed, which is why this reads `cliInstalled` and not `cli`. A CLI a toolchain
+  // manager refuses to run in the app's own working directory is installed; answering "neither CLI is
+  // here" to that locks a person out of the entire app over a file in a folder they never chose, and
+  // the install button this screen offers cannot fix it because nothing is missing. Asked of the
+  // machine's PATH instead, that person gets the workbench, and the per-folder truth is told where it
+  // belongs — in the new-session dialog, about the folder they actually picked.
+  //
+  // The screen itself — what it offers, how it installs, and why it carries its own language switch
+  // — lives in CliMissingScreen.tsx. (That line used to say "why it is English-only", which the
+  // screen has not been for some time: it follows the stored language and offers a switch, because
+  // the rail that normally holds one is not drawn here.)
+  if (cliInstalled && !cliInstalled.claude && !cliInstalled.codex) {
     return (
       <div className="app">
         {/* 0, not runningCount: this screen renders no ConfirmHost, so a close confirmation would
             never be answered and the close button would stop working entirely. */}
         <Titlebar isMax={isMax} update={update} runningCount={0} onInstall={() => void installUpdate()} />
-        <CliMissingScreen onFound={setCli} />
+        {/* The gate above reads `cliInstalled`, so that is what the screen hands back. `cli` is
+            refreshed alongside it: Settings reads the version strings off it, and leaving it on the
+            pre-install answer would have it still saying "not detected" for a CLI now installed. */}
+        <CliMissingScreen
+          onFound={(installed) => {
+            setCliInstalled(installed)
+            void window.api.system.checkCli().then(setCli)
+          }}
+        />
       </div>
     )
   }
@@ -3517,6 +3555,18 @@ export default function App(): React.JSX.Element {
             onClick={() => setSidebarOpen((v) => !v)}
           >
             <PanelLeft size={16} />
+          </button>
+          {/* 계정·히스토리 토글. 다른 셋과 달리 "아무 뷰도 안 켠 상태" 라 버튼이 없었고, 그래서 탐색기나
+              Jobs 를 한 번 열면 한 번의 누름으로는 돌아올 수 없었다 — 그 뷰를 끄면 사이드바가 함께
+              접히므로(core/ui/sidebar.ts), 펴기 버튼을 한 번 더 눌러야 비로소 이 화면이었다.
+              자리는 탐색기 위다: 이것이 사이드바의 기본 화면이고, 레일은 위에서부터 기본을 먼저 둔다 */}
+          <button
+            className={sidebarOpen && sidebarPane === 'sessions' ? 'rail-btn on' : 'rail-btn'}
+            aria-label={homeShortcutLabel}
+            title={homeShortcutLabel}
+            onClick={toggleSessions}
+          >
+            <House size={16} />
           </button>
           {/* 탐색기 토글. 폴더 아이콘과 컨텍스트 메뉴 항목을 걷어내면서 탐색기로 들어가는 길이 단축키
               하나만 남았는데, 처음 쓰는 사람은 그 키를 알 수 없다. 툴팁에 실제 바인딩을 함께 띄우므로
@@ -3912,7 +3962,7 @@ export default function App(): React.JSX.Element {
                 schedStates={schedStates}
                 busy={busy}
                 draggingTabId={dragTabId}
-                newDisabled={!anyCliOk}
+                newDisabled={!anyCliInstalled}
                 onFocusPane={setActivePaneId}
                 onSetRatio={(splitId, ratio) =>
                   setLayout((cur) => (cur ? setRatio(cur, splitId, ratio) : cur))
@@ -3934,9 +3984,9 @@ export default function App(): React.JSX.Element {
               {!layout && (
                 <button
                   className="placeholder primary"
-                  disabled={!anyCliOk}
+                  disabled={!anyCliInstalled}
                   onClick={() => {
-                    if (anyCliOk) setShowNew(true)
+                    if (anyCliInstalled) setShowNew(true)
                   }}
                 >
                   {t('session.placeholder.start')}
@@ -4354,14 +4404,16 @@ export default function App(): React.JSX.Element {
                       <span>{t('settings.info.version')}</span>
                       <span>{appVersion || '…'}</span>
                     </div>
-                    <div className="settings-row">
-                      <span>Claude CLI</span>
-                      <span>{cli?.claude.version ?? t('settings.info.cliNotDetected')}</span>
-                    </div>
-                    <div className="settings-row">
-                      <span>Codex CLI</span>
-                      <span>{cli?.codex.version ?? t('settings.info.cliNotDetected')}</span>
-                    </div>
+                    {/* The two CLI rows, now with an install button each. Both answers are refreshed
+                        after one succeeds: the entry gate above reads existence, these rows read the
+                        version off the runnability check. */}
+                    <CliInstallRows
+                      cli={cli}
+                      onInstalled={(installed) => {
+                        setCliInstalled(installed)
+                        void window.api.system.checkCli().then(setCli)
+                      }}
+                    />
                     <div className="settings-row">
                       <span>{t('settings.info.host')}</span>
                       {/* Three separate lines rather than one string joined with separators. Each of

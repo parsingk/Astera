@@ -88,13 +88,18 @@ describe('deriveEvents — tasks', () => {
     expect(move('ready', 'dispatched')).toEqual(['TASK_STARTED'])
     expect(move('dispatched', 'validating')).toEqual(['TASK_CHECK_STARTED'])
     expect(move('validating', 'completed')).toEqual(['TASK_CHECK_PASSED', 'TASK_COMPLETED'])
-    expect(move('validating', 'reviewing')).toEqual(['TASK_CHECK_PASSED'])
+    // validating → reviewing now has its own main event (TASK_REVIEW_STARTED) instead of falling
+    // back to TASK_STATE_CHANGED, so the collapsing rule no longer swallows it — the check verdict
+    // and the review's start are both real, distinct facts.
+    expect(move('validating', 'reviewing')).toEqual(['TASK_CHECK_PASSED', 'TASK_REVIEW_STARTED'])
     expect(move('validating', 'failed')).toEqual(['TASK_CHECK_FAILED', 'TASK_FAILED'])
     expect(move('validating', 'ready')).toEqual(['TASK_CHECK_FAILED'])
     expect(move('dispatched', 'blocked')).toEqual(['TASK_WAITING_INPUT'])
     expect(move('dispatched', 'completed')).toEqual(['TASK_COMPLETED'])
     expect(move('dispatched', 'failed')).toEqual(['TASK_FAILED'])
-    expect(move('dispatched', 'reviewing')).toEqual(['TASK_STATE_CHANGED'])
+    // dispatched → reviewing (no checks configured): no verdict precedes it, just the review's own
+    // start — no longer the meaningless TASK_STATE_CHANGED.
+    expect(move('dispatched', 'reviewing')).toEqual(['TASK_REVIEW_STARTED'])
   })
 
   it('an interrupted check that becomes a question is waiting for input, not a failed check', () => {
@@ -257,5 +262,133 @@ describe('deriveEvents — dispatches', () => {
       expect(
         types(live, withDispatch(dispatch({ sessionId: 'sess-1', endedAt: NOW, workerState: 'stopped', closedBy })))
       ).toEqual(['ATTEMPT_EXITED'])
+  })
+})
+
+describe('deriveEvents — convergence', () => {
+  const checks = [{ configId: 'c1', name: 'T', status: 'failed' as const, exitCode: 1, outputTail: 'x' }]
+  it('validating → dispatched 는 TASK_CHECK_FAILED + TASK_STARTED 이고 check 요약을 싣는다', () => {
+    const prev = withRun(run(), [task({ status: 'validating' })])
+    const next = withRun(run(), [task({ status: 'dispatched', checks })])
+    const ev = deriveEvents(prev, next, NOW)
+    expect(ev.map((e) => e.type)).toEqual(['TASK_CHECK_FAILED', 'TASK_STARTED'])
+    expect(ev[0].payload.checks).toEqual([{ configId: 'c1', status: 'failed', exitCode: 1 }])
+  })
+  // 정책 없는 Run 도 이제 checks 를 기록하므로(state.ts, UI 설계 U2) 그 Run 의 validating → failed 도 check
+  // 요약을 싣는다 — validatingVerdict 는 Task 에 checks 가 있는지로만 가리고, 그것이 맞다: Journal 을 읽는
+  // 쪽에 "이 Run 은 자동 수정 Run 이었나" 를 따로 물릴 이유가 없다.
+  it('정책 없는 Run 의 validating → failed 도 check 요약을 싣는다', () => {
+    const ev = deriveEvents(
+      withRun(run(), [task({ status: 'validating' })]),
+      withRun(run(), [task({ status: 'failed', checks })]),
+      NOW
+    )
+    expect(ev.map((e) => e.type)).toEqual(['TASK_CHECK_FAILED', 'TASK_FAILED'])
+    expect(ev[0].payload.checks).toEqual([{ configId: 'c1', status: 'failed', exitCode: 1 }])
+  })
+  it('→ reviewing 은 TASK_REVIEW_STARTED 다(검증에서 왔으면 TASK_CHECK_PASSED 가 먼저)', () => {
+    expect(deriveEvents(withRun(run(), [task({ status: 'validating' })]), withRun(run(), [task({ status: 'reviewing' })]), NOW).map((e) => e.type)).toEqual(['TASK_CHECK_PASSED', 'TASK_REVIEW_STARTED'])
+    expect(deriveEvents(withRun(run(), [task({ status: 'dispatched' })]), withRun(run(), [task({ status: 'reviewing' })]), NOW).map((e) => e.type)).toEqual(['TASK_REVIEW_STARTED'])
+  })
+  it('reviewing → completed 는 TASK_REVIEW_PASSED + TASK_COMPLETED', () => {
+    // filtered to TASK_ events: this Task is its Run's only one, so completing it also ends the Run
+    // (outcomeOf) and derives a trailing JOB_RUN_COMPLETED — correct, and orthogonal to this task
+    // transition, which "the run completes or fails..." (deriveEvents — runs) already covers.
+    expect(
+      deriveEvents(withRun(run(), [task({ status: 'reviewing' })]), withRun(run(), [task({ status: 'completed' })]), NOW)
+        .filter((e) => e.type.startsWith('TASK_'))
+        .map((e) => e.type)
+    ).toEqual(['TASK_REVIEW_PASSED', 'TASK_COMPLETED'])
+  })
+  it('reviewing → dispatched 는 TASK_REVIEW_CHANGES_REQUESTED 이고 이슈 요약을 싣는다', () => {
+    const issues = [{ id: 'r1', severity: 'high' as const, blocking: true, title: 'race', description: 'd' }]
+    const ev = deriveEvents(withRun(run(), [task({ status: 'reviewing' })]), withRun(run(), [task({ status: 'dispatched', reviewIssues: issues })]), NOW)
+    expect(ev.map((e) => e.type)).toEqual(['TASK_REVIEW_CHANGES_REQUESTED', 'TASK_STARTED'])
+    expect(ev[0].payload.issues).toEqual([{ severity: 'high', title: 'race', blocking: true }])
+  })
+  it('소진 Gate 로 blocked 되면 TASK_CONVERGENCE_EXHAUSTED 가 TASK_WAITING_INPUT 앞에 오고, repairs·reviewRounds 를 싣는다', () => {
+    const gate = { id: 'g1', runId: 'run_1', taskId: 'tsk_1', question: 'exhausted', status: 'open' as const, createdAt: NOW, kind: 'convergence-exhausted' as const, options: ['retry-once', 'mark-failed'] }
+    const repairs = [
+      { id: 'dsp_r1', taskId: 'tsk_1', provider: 'claude' as const, accountId: 'a', sessionId: 's1', cwd: 'D:/p', specPath: '', startedAt: T1, workerState: 'ready' as const, retained: false, repair: 'check-failure' as const, outcome: 'failed' as const, endedAt: T1 },
+      { id: 'dsp_r2', taskId: 'tsk_1', provider: 'claude' as const, accountId: 'a', sessionId: 's2', cwd: 'D:/p', specPath: '', startedAt: T1, workerState: 'ready' as const, retained: false, repair: 'check-failure' as const, outcome: 'failed' as const, endedAt: T1 }
+    ]
+    // the repair Dispatches already existed before this write (unchanged in prev/next) — this test
+    // is about the task transition, not about deriving dispatch events for them
+    const prev = { ...withRun(run(), [task({ status: 'validating' })]), dispatches: repairs }
+    const next = { ...withRun(run(), [task({ status: 'blocked' })]), gates: [gate], dispatches: repairs }
+    const ev = deriveEvents(prev, next, NOW)
+    expect(ev.map((e) => e.type)).toEqual(['TASK_CHECK_FAILED', 'TASK_CONVERGENCE_EXHAUSTED', 'TASK_WAITING_INPUT'])
+    // Facts, not the prose `question` alone (design §12): how much of the repair/review budget this
+    // Task used before the app gave up.
+    const exhausted = ev.find((e) => e.type === 'TASK_CONVERGENCE_EXHAUSTED')!
+    expect(exhausted.payload.repairs).toBe(2)
+    expect(exhausted.payload.reviewRounds).toBe(0)
+    expect(exhausted.payload.question).toBe('exhausted')
+  })
+  it('reviewing → blocked exhausted 도 같은 모양이다(검토 라운드 소진)', () => {
+    const gate = { id: 'g1', runId: 'run_1', taskId: 'tsk_1', question: 'review exhausted', status: 'open' as const, createdAt: NOW, kind: 'convergence-exhausted' as const, options: ['retry-once', 'mark-failed'] }
+    const issues = [{ id: 'r1', severity: 'high' as const, blocking: true, title: 'race', description: 'd' }]
+    const prev = withRun(run(), [task({ status: 'reviewing' })])
+    const next = { ...withRun(run(), [task({ status: 'blocked', reviewIssues: issues })]), gates: [gate] }
+    const ev = deriveEvents(prev, next, NOW)
+    expect(ev.map((e) => e.type)).toEqual(['TASK_REVIEW_CHANGES_REQUESTED', 'TASK_CONVERGENCE_EXHAUSTED', 'TASK_WAITING_INPUT'])
+    expect(ev[0].payload.issues).toEqual([{ severity: 'high', title: 'race', blocking: true }])
+    expect(ev.find((e) => e.type === 'TASK_CONVERGENCE_EXHAUSTED')!.payload.reviewRounds).toBe(0)
+  })
+  it("'convergence-blocked' Gate 도 검증/검토의 판정이다(소진 이벤트만 없다) — 사람이 껐거나, Run 이 멈췄거나, repair 를 열 수 없었을 때", () => {
+    const blockedGate = (question: string) => ({ id: 'g1', runId: 'run_1', taskId: 'tsk_1', question, status: 'open' as const, createdAt: NOW, kind: 'convergence-blocked' as const })
+    const fromValidating = deriveEvents(
+      withRun(run(), [task({ status: 'validating' })]),
+      { ...withRun(run(), [task({ status: 'blocked', checks })]), gates: [blockedGate('stopped')] },
+      NOW
+    )
+    expect(fromValidating.map((e) => e.type)).toEqual(['TASK_CHECK_FAILED', 'TASK_WAITING_INPUT'])
+    expect(fromValidating[0].payload.checks).toEqual([{ configId: 'c1', status: 'failed', exitCode: 1 }])
+    const issues = [{ id: 'r1', severity: 'high' as const, blocking: true, title: 'race', description: 'd' }]
+    const fromReviewing = deriveEvents(
+      withRun(run(), [task({ status: 'reviewing' })]),
+      { ...withRun(run(), [task({ status: 'blocked', reviewIssues: issues })]), gates: [blockedGate('paused')] },
+      NOW
+    )
+    expect(fromReviewing.map((e) => e.type)).toEqual(['TASK_REVIEW_CHANGES_REQUESTED', 'TASK_WAITING_INPUT'])
+    expect(fromReviewing[0].payload.issues).toEqual([{ severity: 'high', title: 'race', blocking: true }])
+  })
+  it('Gate 없는 interrupted block 은 판정이 아니라 이전 라운드의 checks 를 새것처럼 싣지 않는다', () => {
+    // A second-round Task still carries round 1's checks (the field is overwritten only when a new
+    // round finishes) when blockForValidation interrupts round 2 before any check ran — no Gate kind,
+    // because this isn't a verdict.
+    const prev = withRun(run(), [task({ status: 'validating', checks })])
+    const next = { ...withRun(run(), [task({ status: 'blocked', checks })]), gates: [{ id: 'g1', runId: 'run_1', taskId: 'tsk_1', question: 'cwd missing', status: 'open' as const, createdAt: NOW }] }
+    const ev = deriveEvents(prev, next, NOW)
+    expect(ev.map((e) => e.type)).toEqual(['TASK_WAITING_INPUT'])
+    expect(ev[0].payload.checks).toBeUndefined()
+  })
+  it('repair Dispatch 의 ATTEMPT_START_REQUESTED 는 repair 를 싣고, JOB_RUN_STARTED 는 convergence 를 싣는다', () => {
+    const d = { id: 'dsp_2', taskId: 'tsk_1', provider: 'claude' as const, accountId: 'a', sessionId: 'sess1', cwd: 'D:/p', specPath: '', startedAt: NOW, workerState: 'ready' as const, retained: false, repair: 'check-failure' as const, retryOf: 'dsp_1' }
+    const prev = withRun(run({ convergence: {} }), [task({ status: 'validating' })])
+    const next = { ...withRun(run({ convergence: {} }), [task({ status: 'dispatched' })]), dispatches: [d] }
+    const ev = deriveEvents(prev, next, NOW)
+    expect(ev.find((e) => e.type === 'ATTEMPT_START_REQUESTED')?.payload.repair).toBe('check-failure')
+    const started = deriveEvents(emptyState(), withRun(run({ convergence: { maxFixAttempts: 2 } })), NOW)[0]
+    expect(started.payload.convergence).toEqual({ maxFixAttempts: 2 })
+  })
+  it('one-shot 키(dispatch id로 끝난다)는 다른 now 에 다시 관찰해도 그대로다; repeatable 키(now 로 끝난다)는 아니다', () => {
+    // This is what the journal's `OR IGNORE` insert actually depends on (design §5 "Dedupe"), not
+    // "the same call twice returns the same thing" (true of any pure function, and proves nothing).
+    const LATER = '2026-09-08T11:00:00.000Z'
+    // repeatable: a task transition's key ends in `now` — re-deriving the *same* diff as though it
+    // were observed at a different write time is, by the key's own design, a different observation.
+    const prev = withRun(run(), [task({ status: 'reviewing' })])
+    const next = withRun(run(), [task({ status: 'dispatched' })])
+    const repeatableAt = (now: string) => deriveEvents(prev, next, now).find((e) => e.type === 'TASK_STARTED')!.idempotencyKey
+    expect(repeatableAt(NOW)).not.toBe(repeatableAt(LATER))
+    // one-shot: an attempt event's key ends in the dispatch id — a boot sweep re-deriving this same
+    // repair Dispatch at whatever wall-clock time it happens to run must still dedupe against the
+    // row the first derivation (at NOW) already inserted.
+    const d = { id: 'dsp_2', taskId: 'tsk_1', provider: 'claude' as const, accountId: 'a', sessionId: 'pending:abcd', cwd: 'D:/p', specPath: '', startedAt: NOW, workerState: 'ready' as const, retained: false, repair: 'check-failure' as const }
+    const withDispatch = { ...withRun(run(), [task({ status: 'dispatched' })]), dispatches: [d] }
+    const oneShotAt = (now: string) =>
+      deriveEvents(withRun(run(), [task({ status: 'ready' })]), withDispatch, now).find((e) => e.type === 'ATTEMPT_START_REQUESTED')!.idempotencyKey
+    expect(oneShotAt(NOW)).toBe(oneShotAt(LATER))
   })
 })

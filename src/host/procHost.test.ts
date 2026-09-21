@@ -3,9 +3,9 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry, type RegistryProc } from './procRegistry'
 import type { ClientMessage, HostMessage } from '../core/host/protocol'
 
-function fakeProc(pid = 11): RegistryProc & { sent: string[]; killed: boolean; emit(d: string): void; exit(c: number): void } {
+function fakeProc(pid = 11): RegistryProc & { sent: string[]; killed: boolean; emit(d: string): void; exit(c: number, stderrTail?: string): void } {
   let onData: (d: string) => void = () => {}
-  let onExit: (e: { exitCode: number }) => void = () => {}
+  let onExit: (e: { exitCode: number; stderrTail?: string }) => void = () => {}
   return {
     pid,
     sent: [],
@@ -15,7 +15,7 @@ function fakeProc(pid = 11): RegistryProc & { sent: string[]; killed: boolean; e
     write(d) { this.sent.push(d) },
     kill() { this.killed = true },
     emit: (d) => onData(d),
-    exit: (c) => onExit({ exitCode: c })
+    exit: (c, stderrTail) => onExit({ exitCode: c, ...(stderrTail !== undefined ? { stderrTail } : {}) })
   }
 }
 
@@ -53,6 +53,17 @@ describe('attachProcHost', () => {
       { t: 'proc-line', id: 'p1', seq: 2, line: 'two' },
       { t: 'proc-exit', id: 'p1', exitCode: 0 }
     ])
+  })
+  it('꼬리가 있으면 종료 브로드캐스트에 실리고, 없으면 칸 자체가 없다', () => {
+    const h = harness()
+    h.spawn()
+    h.proc.exit(8, 'volta: could not parse manifest')
+    expect(h.broadcast.at(-1)).toEqual({ t: 'proc-exit', id: 'p1', exitCode: 8, stderrTail: 'volta: could not parse manifest' })
+
+    const h2 = harness()
+    h2.spawn()
+    h2.proc.exit(0)
+    expect(h2.broadcast.at(-1)).not.toHaveProperty('stderrTail')
   })
   it('proc-write reaches stdin with a newline; proc-kill kills; proc-note merges', () => {
     const h = harness()

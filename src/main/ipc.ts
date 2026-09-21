@@ -48,7 +48,8 @@ import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
 import { attachmentNameOf } from '../core/files/attachmentName'
-import { installCommandFor, locateCommandFor } from '../core/install/cliInstall'
+import { installCommandFor } from '../core/install/cliInstall'
+import { locateCli } from './cliLocate'
 import { prependToPath } from '../core/sessions/manager'
 import { listClaudeModels, listCodexModels } from './models/discover'
 import { UnderstandingPipeline } from './understanding/pipeline'
@@ -71,7 +72,8 @@ import {
   OrchCoordinator,
   LAUNCH_FORBIDDEN,
   buildReviewSpecFile,
-  knowledgeIn
+  knowledgeIn,
+  specFileName
 } from './orchestration/coordinator'
 import {
   handleCommand as orchHandleCommand,
@@ -103,7 +105,7 @@ import {
   unreadUpwardMail
 } from '../core/orchestration/inbox'
 import { coordinatorLaunchPrompt } from '../core/orchestration/handover'
-import { detachCoordinator } from '../core/orchestration/state'
+import { detachCoordinator, stampPolicySnapshot } from '../core/orchestration/state'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import type { ChatAnswer, ChatContextUsage, RateLimitInfo } from '../core/chat/types'
 import { chatSessionUsage } from '../core/usage/chatSession'
@@ -119,12 +121,20 @@ import {
   workingInRunRoot,
   worktreeDepsOf
 } from '../core/orchestration/integrate'
-import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
+import { DEFAULT_CONCURRENCY, type Dispatch } from '../core/orchestration/types'
+import {
+  checkConfigIdsOf,
+  completionPolicyHash,
+  policyOf,
+  suspiciousCheckFiles
+} from '../core/orchestration/convergence'
+import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './orchestration/repair'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject, outcomeOf } from '../core/orchestration/view'
 import { justFinished } from '../core/orchestration/runRecord'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
+import { completionForTaskOf } from '../core/orchestration/completion'
 import { repoPathOf } from '../core/worktrees/repo'
 import type { OrchState } from '../core/orchestration/state'
 import { makeLimitProbe } from './orchestration/limitProbe'
@@ -176,6 +186,7 @@ import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun, prepareLaunch } from './run/prepare'
+import { seedKeyOf } from '../core/run/config'
 import { executeLaunch } from './run/launch'
 import { resolveConsolePath } from './run/resolveLink'
 import { saveConfigsBatch } from './run/saveConfigs'
@@ -360,6 +371,35 @@ export function rollCoordinatorForSession(
   const provider = providerOfSession(sessionId, sessions, getAccount)
   if (provider === null) return null
   return provider === 'codex' ? 'codexRolling' : 'rolling'
+}
+
+/**
+ * design F5 fix round 1 (Critical 1): what a confirmed bypass retry has to re-register, now that the
+ * first exit — no longer swallowed — has already run `onSessionExit` in full by the time a person
+ * finishes reading the confirm dialog: the rolling chain disposed, the scheduler entry disposed,
+ * Slack's delayed exit notice posted and its record deleted. The retry brings the session's *id* back
+ * alive; nothing re-arms any of the three on its own.
+ *
+ * Pure, for the same reason `rollCoordinatorForSession` is: `chat.retryWithBypass`'s handler is an
+ * Electron-only closure `registerIpc` cannot be exercised without, so the decision has to be
+ * extractable to be testable at all. `provider` is `null` when the account could not be resolved (it
+ * was removed while the dialog sat open) — schedule and rolling both need it and are refused; Slack
+ * does not, and is judged from `info` alone.
+ */
+export function retryRegistrationsFor(
+  info: Pick<SessionInfo, 'schedule' | 'slackNotify' | 'rollAccountIds'>,
+  provider: Provider | null
+): { schedule: boolean; slack: boolean; rolling: 'rolling' | 'codexRolling' | null } {
+  return {
+    schedule: info.schedule !== undefined && provider !== null,
+    slack: info.slackNotify === true,
+    rolling:
+      provider !== null && (info.rollAccountIds?.length ?? 0) >= 1
+        ? provider === 'codex'
+          ? 'codexRolling'
+          : 'rolling'
+        : null
+  }
 }
 
 /** What the Host could be got to say about the sessions that outlived the app. Three answers, and
@@ -1686,6 +1726,12 @@ export function registerIpc(
       // separate implementations and a chain cannot be half of each.
       if (rollProviders && rollProviders.length > 0 && rollProviders.some((p: Provider) => p !== rollProviders[0]))
         throw new Error('ROLL_MIXED_PROVIDER: cannot roll a mix of Claude and Codex accounts')
+      // design F5 fix round 1 (Important 2): read from `core.bypassSignalFor`, a synchronous cache
+      // `createCore` warms once at startup — never a fresh probe here. The probe itself spawns a shell
+      // (`cliLocate.ts`'s `locateCli`, up to a 15s timeout on a hung one) and this is the path
+      // "왜 시작 버튼이 안 눌리나" exists to keep fast; paying that cost on every chat spawn was fix
+      // round 1's own Critical finding.
+      const bypassSignal = core.bypassSignalFor(providerOf(account))
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
@@ -1694,7 +1740,8 @@ export function registerIpc(
         schedule: opts.schedule,
         slackNotify: opts.slackNotify === true,
         rollAccountIds: opts.rollAccountIds,
-        rollPrompt: opts.rollPrompt
+        rollPrompt: opts.rollPrompt,
+        bypassSignal
       })
       // The schedule is the one feature this slice attaches to a chat session (chat-sessions slice 4
       // design §5.2 / §6). Same call, same provider argument as the pty branch below.
@@ -2442,14 +2489,21 @@ export function registerIpc(
       }
     })
 
+    // performRepair/repairOnce(repair.ts)가 받는 의존 묶음. 판정이 검증에서 왔든(onSettled, 아래)
+    // 검토에서 왔든(서버의 startRepair·repairOnce, 아래 deps 정의부) 같은 것을 쓴다 — repair 의
+    // 부수 효과는 판정의 출처에 상관없이 한 규칙이어야 한다. **선언과 대입이 갈린다**: 서버
+    // deps.startWorker(코디네이터를 직접 부르지 않는 이 앱의 래퍼)가 있어야 채울 수 있는데, 그
+    // deps 는 이 validator 뒤에 정의되기 때문이다. onSettled 는 이것을 클로저로만 참조하고 지금
+    // 당장 읽지 않으므로, deps 정의가 끝난 뒤 대입해도 안전하다(그 자리의 주석 참고).
+    let repairDeps: RepairDeps
     // 검증 실행. runner 는 prepareRun + RunManager 이고, 결과는 서버의 setState 로 되돌아간다.
     // dispatchOf 로 cwd 에서 Task 를 되찾지 않는 이유: TaskValidator 가 taskId 를 들고 있다.
     const validator = new TaskValidator({
       runner: {
-        start: async ({ cwd, taskId }) => {
+        start: async ({ cwd, taskId, configId }) => {
           const st = store.get()
           const task = st.tasks.find((t) => t.id === taskId)
-          if (!task?.validateConfigId) throw new Error(`no validateConfigId on task ${taskId}`)
+          if (!task) throw new Error(`unknown task ${taskId}`)
           // 큐에서 기다리는 동안 Task 가 validating 을 떠났을 수 있다(task-update). 그대로 두면
           // 빌드 전체가 돌고 실행 패널을 차지한 뒤에야 applyValidationResult 가
           // 결과를 거절한다. 던지지 않고 'skip' 을 돌려주는 이유는 ValidatorRunner.start 의 주석에
@@ -2462,10 +2516,11 @@ export function registerIpc(
           // 실패하면 그것이 그대로 Gate 가 되므로(onCannotRun) 여기가 올바른 자리다.
           await assertAllowedPath(cwd)
           // 구성은 Run 의 프로젝트에서, 실행은 Dispatch 의 cwd 에서. ignoreConfigCwd 는 구성에 박힌
-          // 경로가 워커의 트리가 아닌 곳을 가리키기 때문이다(spec 2절).
+          // 경로가 워커의 트리가 아닌 곳을 가리키기 때문이다(spec 2절). configId 는 TaskValidator 가
+          // enqueue 의 configIds 목록에서 지금 도는 자리를 골라 넘긴 것이다.
           const { config, command, projectName } = await prepareRun({
             projectPath: run.cwd,
-            configId: task.validateConfigId,
+            configId,
             stored: core.runConfig.get(run.cwd),
             ignoreConfigCwd: true,
             assertAllowedPath,
@@ -2476,15 +2531,45 @@ export function registerIpc(
           // own runs any more — a validation starts beside them; same-tree validations are serialised
           // by TaskValidator's own queue.
           const started = core.run.start({ projectPath: cwd, projectName, config, command, validation: true })
-          return { runId: started.runId }
+          return { runId: started.runId, name: config.name }
         },
-        output: (runId) => core.run.recentOutput(runId).slice(-4000)
+        output: (runId) => core.run.recentOutput(runId).slice(-4000),
+        // 타임아웃이 이 PTY 를 두 번째로 멈춘다(validator.ts 의 startCheck 타이머). **core.run.stop 을
+        // 직접 부른다 — `ipcMain.handle('run.stop', ...)` 을 거치지 않는다.** 그 핸들러는 사용자가
+        // 화면에서 직접 멈춘 검증 실행에 `orchValidator.markStopped` 까지 얹어 "실패가 아니라 증명
+        // 못 함"으로 읽는다(그 핸들러의 주석). 이 stop 은 이미 validator.ts 자신이 head.timedOut 으로
+        // 표시해 두었으므로, 여기서 markStopped 까지 걸면 한 exit 에 stopped 와 timedOut 이 겹치고
+        // onRunExit 은 stopped 를 먼저 보므로(그 순서의 주석) 이 exit 가 "사용자가 정지했다"로 읽혀
+        // timeout 의 재시도·기록이 사라진다. core.run.stop 을 바로 부르면 PTY 만 죽고 그 겹침이 없다.
+        //
+        // **던지지 않는다 — 이 자리는 바로 setTimeout 콜백이다(validator.ts).** 여기서 던지면 잡을
+        // 것이 없는 uncaught exception 으로 main 프로세스가 죽는다(리뷰 fix 1차, Minor). status 확인
+        // (RunManager.stop 은 status !== 'running' 이면 no-op)이 있어도, POSIX 에서는 그 확인과 실제
+        // pty.kill() 사이에 그 프로세스가 스스로 막 끝나는 창이 있을 수 있다 — node-pty 는 죽은 pid 에
+        // kill 을 던질 수 있고, write/resize 를 감싸는 withExitedPtyGuard 는 stop 을 감싸지 않는다.
+        // 잡아서 로그만 남긴다: 그 경우 프로세스는 이미 스스로 끝났으므로 pty 의 자연스러운 exit 가
+        // 뒤따라 오고, head.timedOut 은 그대로 남아 있어 그 exit 를 여전히 timeout 으로 정산한다.
+        stop: (runId) => {
+          try {
+            core.run.stop(runId)
+          } catch (e) {
+            orchLog(`validator: run.stop failed for run=${runId}: ${String(e)}`)
+          }
+        }
       },
-      onSettled: async ({ taskId, exitCode, output }) => {
+      onSettled: async ({ taskId, results }) => {
+        const before = store.get()
+        // 판정 직전에 repair 대상을 정한다(설계 §6.2) — 순수 층(state.ts)은 세션이 살아 있는지 모른다.
+        // 서버가 검토 판정에서 하는 것과 같은 판정이다(아래 deps.repairTargetFor).
+        const repair = repairTargetFor(before, taskId, (id) =>
+          core.sessions.list().some((s) => s.id === id && s.status === 'running')
+        )
         const r = applyValidationResult(
-          store.get(),
-          // 서버가 applyWorkerDone 에 넘기는 것과 같은 값이다 — 이 배선에는 startReview 가 있다.
-          { taskId, exitCode, output, canReview: true },
+          before,
+          // 서버가 applyWorkerDone 에 넘기는 것과 같은 값들이다 — 이 배선에는 startReview 가 있다.
+          // repair 는 convergence Run 에서 필수다(없으면 순수 층이 거절한다); lang 은 Gate 문구의
+          // 언어다.
+          { taskId, results, canReview: true, ...(repair ? { repair } : {}), lang: core.lang },
           new Date().toISOString()
         )
         if (!r.ok) {
@@ -2500,6 +2585,22 @@ export function registerIpc(
         if (r.value.status === 'reviewing')
           void startReview({ taskId }).catch((e) =>
             orchLog(`startReview failed task=${taskId}: ${String(e)}`)
+          )
+        // 판정이 repair Dispatch 를 새로 열었으면(routeFailure) 그 부수 효과(spec 파일을 쓰고 살아
+        // 있는 세션에 넣거나 새 워커를 띄운다)를 시작한다 — **커밋(위 setState) 뒤에만** 부른다.
+        // **여기서도 getState() 를 다시 읽는다** — r.state 를 그대로 뒤지지 않는다. 서버의 검토
+        // 판정 분기(server.ts)가 자신의 setState 뒤에 afterReview = deps.getState() 로 다시 읽는
+        // 것과 같은 모양이다 — 지금은 둘이 갈라질 수 없지만(그 사이에 await 가 없다), 한쪽이 나중에
+        // await 를 얻어도 이 자리가 조용히 낡은 채로 남지 않는다. openRepairDispatch 가 채우는
+        // specPath 는 '' 이므로 !d.specPath 는 그것도 "아직 시작되지 않았다"로 읽는다(performRepair
+        // 의 liveRepairDispatch 와 같은 조건).
+        const afterValidation = deps.getState()
+        const opened = afterValidation.dispatches.find(
+          (d) => d.taskId === taskId && d.repair !== undefined && !d.endedAt && !d.specPath
+        )
+        if (opened)
+          void performRepair(repairDeps, { dispatchId: opened.id }).catch((e) =>
+            orchLog(`repair failed task=${taskId}: ${String(e)}`)
           )
       },
       onCannotRun: async ({ taskId, reason }) => {
@@ -2591,7 +2692,8 @@ export function registerIpc(
         // 그 창에서 옮겨졌을 상태도 여기서 다시 본다. 입구의 검사는 이제 너무 이르다 — 그것은
         // 로그인 조회를 아끼는 값싼 선검사로 남는다.
         const fresh = store.get()
-        if (fresh.tasks.find((t) => t.id === taskId)?.status !== 'reviewing') return
+        const freshTask = fresh.tasks.find((t) => t.id === taskId)
+        if (freshTask?.status !== 'reviewing') return
         const opened = openReviewDispatch(
           fresh,
           {
@@ -2616,11 +2718,43 @@ export function registerIpc(
           dispatchId: opened.value.id,
           implReport: task.result,
           filesModified: task.filesModified,
-          validated: !!task.validateConfigId,
+          // checkConfigIdsOf 는 옛 validateConfigId 와 새 validateConfigIds 를 함께 읽는다 — 이 칸만
+          // 보면 새 필드만 쓰는 Task 는 "검증 없음"으로 잘못 읽힌다.
+          validated: checkConfigIdsOf(task).length > 0,
           // 구현자와 **같은 목록**을 받는다 — 검토자의 일이 "닫힌 결정이 다시 열렸는지"를 잡는 것인데
           // 그 목록을 안 주면 그 자리가 빈다. 훑는 뿌리도 같다: 검토자는 구현자가 일한 트리에서
           // 돈다(바로 아래 worktree 'current' + runCwd = 그 cwd).
-          knowledge: await knowledgeIn(cwd, orchLog)
+          knowledge: await knowledgeIn(cwd, orchLog),
+          // 이 Task 가 이미 들고 있는 값을 그대로 옮긴다(설계 §8.1·§8.3) — checks 는 마지막 검증
+          // 라운드의 check 별 결과, previousIssues 는 직전 검토 라운드의 이슈(buildReviewSpecFile
+          // 이 그중 blocking 만 추린다), suspiciousFiles 는 startValidation 이 검증을 큐에 넣을 때
+          // best-effort 로 채워 둔 것이다.
+          //
+          // **suspiciousFiles 만 freshTask 에서 읽는다, task 가 아니다(리뷰 fix 1차, Minor).**
+          // startValidation 의 그 계산은 이 흐름과 동시에 도는 별개의 비동기 흐름이라, 맨 위의 st
+          // 를 읽은 뒤 이 자리에 오기까지의 그 어떤 await(로그인 조회 등) 사이에도 끝나 커밋될 수
+          // 있다 — checks·previousIssues 는 이 판정이 reviewing 으로 넘어오기 전에 이미 끝난
+          // 값이라 그런 창이 없다.
+          checks: task.checks,
+          previousIssues: task.reviewIssues,
+          suspiciousFiles: freshTask.suspiciousFiles,
+          policyChanged: freshTask.policyChanged === true,
+          // review.ts·state.ts 가 이미 기대하는 이름과 같은 규칙이다 — 이 Dispatch 의 spec 파일
+          // 이름(coordinator.ts 의 specFileName, startWorker 가 실제로 쓰는 그 이름)에
+          // `.review.json` 을 붙인 것. **리터럴을 다시 적지 않는다** — 여기서 조립하는 시점에는
+          // 코디네이터가 아직 돌지 않아 진짜 specPath 를 모르므로 같은 함수로 미리 계산해야 하고,
+          // 독립된 리터럴은 오늘은 우연히 같아도 한쪽만 바뀌는 날 조용히 갈라진다(검토자는 아무도
+          // 읽지 않는 파일에 쓰고, server.ts 는 그 파일을 찾지 못한다 — malformed 도 "이슈 없음"도
+          // 아니다).
+          //
+          // **convergence Run 에서만 넘긴다(전체 브랜치 리뷰, Important 1).** server.ts 는
+          // policyOf(...) !== null 일 때만 이 파일을 읽는다(applyReviewResult) — 없는 Run 에도 항상
+          // 넘기면 그 Run 의 검토자가 아무도 읽지 않는 파일에 쓰고, "구조화된 판정" 절이 "파싱 실패는
+          // 사람에게 간다"는 거짓을 말하게 된다. **raw 필드가 아니라 policyOf 다** — 나머지 모든
+          // 관문과 같은 판별식(reconciler.ts 의 주석, ipc.ts 의 startValidation 가드와 같은 이유).
+          ...(policyOf(fresh, task) !== null
+            ? { resultPath: path.join(specsDir, `${specFileName(taskId, opened.value.id)}.review.json`) }
+            : {})
         })
         let started: { sessionId: string; cwd: string; specPath: string }
         try {
@@ -3517,6 +3651,42 @@ export function registerIpc(
     // last task lands. Local to this boot: a restart has no previous state either, the same rule a
     // fresh app start needs (see the null fallback in setState below).
     let prevOrchState: OrchState | null = null
+
+    /** 이 Task 의 **첫** 구현 Dispatch(검토가 아닌 것 중 가장 먼저 시작한 것) — convergence.ts 의
+     *  latestImplDispatch 의 반대쪽 끝이다. changedFilesSince(아래)의 기준점은 이 Dispatch 여야
+     *  한다: 이 Task 가 일을 시작한 지점부터의 diff 가 목적이고, 마지막(수리를 포함한) 시도만의
+     *  diff 가 아니다(리뷰 fix 1차, Important 2b). */
+    const firstImplDispatch = (s: OrchState, taskId: string): Dispatch | undefined =>
+      s.dispatches
+        .filter((d) => d.taskId === taskId && !d.review)
+        .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+        .at(0)
+
+    /** startValidation(아래)이 검증을 큐에 넣기 전에 부르는 최선노력 계산(설계 §8.3) — 이 시도가
+     *  check 의 동작을 바꾸는 파일을 건드렸는지. **기준점은 continuity journal 의, 이 Task 의 첫
+     *  구현 Dispatch 에 대한 첫 체크포인트 head 뿐이다.**
+     *
+     *  **`Dispatch.stopSnapshot.headCommit` 을 쓰지 않는다(리뷰 fix 1차, Important 2a).** 그것은
+     *  그 Dispatch 의 **마지막** 사용량 한도 정지 시점의 HEAD 이고 정지마다 덮어써서, 이미 일부
+     *  작업이 반영된 뒤의(기준점보다 나중인) 값이다 — 그것을 기준으로 잡으면 diff 가 실제보다
+     *  좁아져, 계정을 갈아타며 일한 바로 그 경우에 의심 파일을 놓친다. `firstCheckpointFor` 가
+     *  주는 'attempt-started' 체크포인트(core/continuity/checkpointPolicy.ts 의 KIND_OF — Dispatch
+     *  가 열릴 때 기록된다)가 그 Dispatch 가 일을 시작하기 **전**의 HEAD 다.
+     *
+     *  기준점이 없으면(continuity 가 꺼져 있거나 체크포인트가 없다) git 을 부르지 않고 Task 가 이미
+     *  보고한 filesModified 로 물러난다 — 이 계산의 실패가 검증 자체를 막아서는 안 되므로(호출부의
+     *  주석), git 이 실패해도 같은 자리로 물러난다.
+     *
+     *  **Task 의 filesModified 를 쓴다, Dispatch 의 것이 아니다** — Dispatch 에는 그런 칸이 없다. */
+    const changedFilesSince = async (first: Dispatch, cwd: string): Promise<string[]> => {
+      const head = continuityJournal?.firstCheckpointFor(first.id)?.gitHead ?? null
+      if (head) {
+        const r = await git(['diff', '--name-only', head, 'HEAD'], { cwd })
+        if (r.ok) return r.stdout.split('\n').map((line) => line.trim()).filter(Boolean)
+      }
+      return store.get().tasks.find((t) => t.id === first.taskId)?.filesModified ?? []
+    }
+
     const deps: OrchServerDeps = {
       getState: () => store.get(),
       // Passed in a form that is definitely awaited — the caller's await contract stays. save() itself
@@ -3920,7 +4090,52 @@ export function registerIpc(
         })
         return configs.map((c) => ({ id: c.id, name: c.name, type: c.type }))
       },
-      startValidation: ({ taskId, cwd }) => validator.enqueue({ taskId, cwd }),
+      // checkConfigIdsOf 는 옛 validateConfigId 와 새 validateConfigIds 를 함께 읽으므로, 지금
+      // 존재할 수 있는 모든 Task 에 대해 이것으로 충분하다.
+      startValidation: ({ taskId, cwd }) => {
+        const task = store.get().tasks.find((t) => t.id === taskId)
+        validator.enqueue({ taskId, cwd, configIds: task ? checkConfigIdsOf(task) : [] })
+        // 의심 파일(설계 §8.3) — **convergence Run 에서만** 계산한다(리뷰 fix 1차, Important 1).
+        // 이 계산은 Task 에 suspiciousFiles 를 써서 리뷰어 spec 에 새 절을 만드는데, 다른 모든
+        // convergence 전용 자리(state.ts 의 checks 기록, server.ts 의 readReviewFile 가드)가
+        // "convergence 가 없으면 오늘과 바이트 단위로 같다"를 지키므로 여기도 그래야 한다.
+        // policyOf 로 판정한다 — run.convergence !== undefined 가 아니라: 손으로 고친
+        // "convergence": null 을 정책 있음으로 잘못 읽지 않는다(Task 11 의 같은 판단).
+        // 검증을 늦추지 않도록 큐에 넣은 뒤 옆에서 계산한다. 구현 Dispatch 가 없거나 의심 파일이
+        // 없으면 아무것도 쓰지 않는다(빈 배열을 Task 에 남기지 않는다). 실패해도 검증 자체는 이미
+        // 큐에 들어가 그대로 돈다 — 그래서 종단 .catch 는 로그만 남긴다.
+        const pol = task ? policyOf(store.get(), task) : null
+        if (!task || pol === null) return
+        // 설계 G3(명세 §37·§36): 이 라운드가 쓰는 완료 정책의 지문을 찍는다. 처음이면 스냅숏이 되고,
+        // 이미 있는데 달라졌으면 `policyChanged` 가 선다 — 막지 않고 표시한다.
+        //
+        // 구성 조회가 비동기라(loadRunConfigs) 의심 파일과 같은 자리에서, 검증을 늦추지 않도록 큐에
+        // 넣은 뒤 옆에서 한다. 실패해도 검증은 그대로 돈다 — 지문이 없으면 다음 라운드에 다시 찍는다.
+        void (async () => {
+          const { configs } = await loadRunConfigs({
+            projectPath: cwd,
+            stored: core.runConfig.get(cwd),
+            assertAllowedPath
+          })
+          const byId = new Map(configs.map((c) => [c.id, c]))
+          const key = completionPolicyHash(task, pol, (id) => {
+            const c = byId.get(id)
+            return c ? seedKeyOf(c) : null
+          })
+          await deps.setState(stampPolicySnapshot(store.get(), { taskId, key }, new Date().toISOString()))
+        })().catch((e) => orchLog(`policy snapshot task=${taskId}: ${String(e)}`))
+        void (async () => {
+          const first = firstImplDispatch(store.get(), taskId)
+          if (!first) return
+          const suspicious = suspiciousCheckFiles(await changedFilesSince(first, cwd))
+          if (suspicious.length === 0) return
+          const st = store.get()
+          await deps.setState({
+            ...st,
+            tasks: st.tasks.map((t) => (t.id === taskId ? { ...t, suspiciousFiles: suspicious } : t))
+          })
+        })().catch((e) => orchLog(`suspicious files task=${taskId}: ${String(e)}`))
+      },
       // 검토를 시작한다. 검증과 달리 **세션을 띄운다** — 그래서 provider·계정을 고르고, 검토
       // Dispatch 를 커밋하고, deps.startWorker 를 부르는 세 걸음이다. 동기 서명이므로
       // 비동기 작업은 안에서 흘려보낸다(startValidation 이 큐에 넣기만 하는 것과 같은 이유:
@@ -3935,6 +4150,44 @@ export function registerIpc(
           orchLog(`startReview failed task=${taskId}: ${String(e)}`)
         )
       },
+      // 검토 판정이 읽는 구조화된 결과(server.ts 의 send worker_done, 검토 분기). **완성된 경로를
+      // 받는다** — suffix(`.review.json`)를 붙이는 자리는 그 호출부 하나뿐이다(그쪽 주석). 여기서
+      // 또 붙이면 `….md.review.json.review.json` 을 찾다가 조용히 못 찾아 구조화된 판정 기능이
+      // 죽은 채로 아무 신호도 내지 않는다. 없으면 null(outcome 으로 해석); 읽기 실패는 던진다 —
+      // 서버가 그것을 잡아 'malformed' 로 다룬다(조용히 삼키면 "이슈 없음"이 되어 깨진 판정이
+      // 통과가 된다).
+      readReviewFile: async (specPath) => {
+        try {
+          return await fs.readFile(specPath, 'utf8')
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
+          throw e
+        }
+      },
+      // 판정 직전의 repair 대상(repair.ts) — 마지막 구현·수리 세션이 살아 있으면 그 세션, 아니면
+      // 새 워커(설계 D3). validator 의 onSettled 가 검증 판정에서 하는 것과 같은 판정을, 여기서는
+      // 검토 판정을 위해 서버가 부른다.
+      repairTargetFor: (taskId) =>
+        repairTargetFor(store.get(), taskId, (id) =>
+          core.sessions.list().some((s) => s.id === id && s.status === 'running')
+        ),
+      // 판정이 새로 연 repair Dispatch 의 부수 효과(repair.ts 의 performRepair). **커밋 뒤에만
+      // 부른다** — server.ts 가 그 순서를 지킨다(호출부의 주석). fire-and-forget 이다:
+      // OrchServerDeps.startRepair 는 void 를 돌려주고 호출자도 기다리지 않으므로, 종단 .catch 가
+      // 필요하다(startReview 와 같은 이유 — 붙이지 않으면 main 프로세스가 죽는다).
+      startRepair: ({ dispatchId }) =>
+        void performRepair(repairDeps, { dispatchId }).catch((e) =>
+          orchLog(`repair failed dispatch=${dispatchId}: ${String(e)}`)
+        ),
+      // 소진 Gate(kind: 'convergence-exhausted')의 retry-once 답(repair.ts 의 repairOnce). **그
+      // 함수 자신의 Promise 를 그대로 돌려준다 — void·catch 로 끊지 않는다.** gate-resolve
+      // (server.ts)가 이 반환을 기다려 "Dispatch 가 이미 커밋됐다"까지만 기다린다(그 호출부의
+      // 주석); 여기서 끊으면 그 await 가 곧바로 풀려 응답이 Dispatch 커밋보다 먼저 나가고, 그
+      // 창으로 worker-release·worker-start 가 same-session repair 가 노리는 세션에 슬쩍 들어올 수
+      // 있다. repairOnce 자신이 실패를 이미 로그하므로(그 함수의 주석) 여기서 또 잡을 것이 없다.
+      repairOnce: ({ taskId }) => repairOnce(repairDeps, { taskId }),
+      // Gate 문구의 언어. 배선이 앱 언어를 넘긴다 — 이 파일의 다른 모든 lang 자리와 같다.
+      lang: () => core.lang,
       log: orchLog,
       // Job Continuity P1: a worker Dispatch just closed without an outcome, so its Task is
       // stranded. Always injected — the wiring always sets this property — but a no-op whenever
@@ -3948,6 +4201,20 @@ export function registerIpc(
           deps.enabled() &&
           recovery.reconcileOne(a.dispatchId).catch((e) => orchLog(`recovery: reconcileOne failed: ${String(e)}`))
         )
+    }
+
+    // 위에서 선언한 repairDeps 를 이제 채운다 — deps.startWorker(방금 끝난 정의)가 있어야 한다.
+    // RepairDeps.startWorker 는 이 앱의 래퍼다(코디네이터를 직접 부르지 않는다 — 그 이유는
+    // RepairDeps 의 JSDoc, startReview 의 주석과 같다: 래퍼가 롤링 체인과 출력 tail 을 붙인다).
+    repairDeps = {
+      getState: () => store.get(),
+      setState: (n) => deps.setState(n),
+      startWorker: (a) => deps.startWorker(a),
+      isAlive: (id) => core.sessions.list().some((s) => s.id === id && s.status === 'running'),
+      knowledge: (cwd) => knowledgeIn(cwd, orchLog),
+      lang: () => core.lang,
+      log: orchLog,
+      now: () => new Date().toISOString()
     }
 
     // Job Continuity P1's reconciler needs the store and the deps above, both local to this closure —
@@ -3984,6 +4251,10 @@ export function registerIpc(
             startWorker: deps.startWorker,
             startValidation: deps.startValidation,
             readGitSummary,
+            // 크래시로 재시작된 repair 가 다시 조립하는 spec 파일도 원래 repair·평범한 재배치와 같은
+            // project-knowledge 절을 싣는다 — 이 seam 은 execute.ts 가 이미 갖고 있었고(Task 11),
+            // 주입은 이 배선의 몫이었다. repairDeps.knowledge 와 같은 값이다(repair.ts 와 같은 이유).
+            knowledge: (cwd) => knowledgeIn(cwd, orchLog),
             // Read at the moment the Gate is written, not captured here: the settings handler
             // reassigns core.lang, and a Gate opened after that should be in the new language.
             lang: () => core.lang,
@@ -4106,6 +4377,29 @@ export function registerIpc(
     // never report. Same guard, same reasoning as runScheduler's `if (!orch.deps.enabled()) return`.
     if (recovery && deps.enabled())
       void recovery.reconcileAll().catch((e) => orchLog(`recovery: boot sweep failed: ${String(e)}`))
+    // 완료 수렴 Run 이 재시작으로 멈춘 validating·reviewing Task(store.load 가 위에서 채운
+    // loaded.revalidate·loaded.rereview) — store.load 는 아무것도 시작하지 않고 목록만 돌려주는
+    // 계약이므로(store.ts), 시작은 deps 가 다 갖춰지고 orch 가 선 뒤인 여기다. 이미 Run
+    // 게이트(일시 중지·예약 템플릿·pendingStart)와 열린 Dispatch 로 store.load 에서 걸러져
+    // 왔으므로 여기서 다시 거르지 않는다. runScheduler·recovery.reconcileAll 과 같은 이유로
+    // deps.enabled() 로 가드한다 — 꺼져 있으면 서버가 모든 보고를 409 로 거절해 시작해도 끝을 볼
+    // 수 없다.
+    //
+    // **가드가 막았을 때 조용히 있지 않는다(리뷰 fix 1차, Minor→promoted).** `bootOrch` 는
+    // orchestration 자체가 꺼진 채로도(continuity·tracking 만 켜져 있어도) 돈다 — 그때 이 두
+    // 목록을 그냥 버리면, 나중에 orchestration 을 다시 켜도(재시작 없이 설정만 바꿔서는)
+    // `store.load()` 가 다시 불리지 않으므로 이 목록은 영영 되살아나지 않는다. 이 branch 가
+    // 열 번의 fix round 를 들여 없앤 것과 같은 부류의 결함 — "조용히 버려지는 복구 대상" —
+    // 이므로 로그로 그 사실을 남긴다. 다음 정상 재시작(orchestration 이 켜진 채)의
+    // store.load() 는 이 Task 들이 여전히 validating·reviewing 이고 열린 Dispatch 가 없으므로
+    // 같은 목록을 다시 채운다 — "재시작하면 잡힌다"는 문장은 그래서 참이다.
+    if (deps.enabled()) {
+      for (const r of loaded.revalidate) deps.startValidation?.({ taskId: r.taskId, cwd: r.cwd })
+      for (const taskId of loaded.rereview) deps.startReview?.({ taskId })
+    } else if (loaded.revalidate.length > 0 || loaded.rereview.length > 0)
+      orchLog(
+        `restart cleanup — orchestration is off, so ${loaded.revalidate.length} interrupted validation(s) and ${loaded.rereview.length} interrupted review(s) were not restarted; turning it on without restarting does not retry them — a restart with it already on will`
+      )
     // 예약 템플릿의 발화. **첫 바퀴는 무장만 한다**(firesDue) — 앱을 켤 때마다 한 회차가 도는
     // 것을 막는 장치가 그것이고, 그래서 여기서 즉시 한 번 부르지 않는다.
     /** 코디네이터 세션이 사라졌을 때 그 Run 의 관리자 칸을 비운다. **다시 띄우지는 않는다.**
@@ -4766,6 +5060,23 @@ export function registerIpc(
       ...(continuity?.recoveryEventsFor(runId, state) ?? [])
     ].sort((a, b) => a.at.localeCompare(b.at))
     return { events, layers, deps, cyclic }
+  })
+  /** 한 Task 가 왜 완료 정책을 못 넘었는가 — 화면이 블록을 펼칠 때 한 번 부른다(설계 §2.2).
+   *
+   *  `orch.runDetail` 과 같은 소유 가드를, 같은 이유로, 같은 함수(runsForProject)로 쓴다. 그리고
+   *  **Task 가 그 Run 의 것인지 한 번 더 본다** — Run 소유만 보고 taskId 를 믿으면 이 문이 남의
+   *  Run 의 Task 를 읽는 우회로가 된다. 두 판정 중 하나라도 어긋나면 null 이다: 이유를 구분해 돌려
+   *  주면 그 차이가 "그 Task 는 있다" 를 알려 주는 신호가 된다. */
+  ipcMain.handle('orch.completion', async (_e, projectPath: string, runId: string, taskId: string) => {
+    await assertAllowedPath(projectPath)
+    if (!orch) return null
+    const project = repoPathOf(core.worktrees.list(), projectPath)
+    const state = orch.deps.getState()
+    if (!runsForProject(state, project, core.worktrees.list()).some((r) => r.id === runId)) {
+      orchLog(`orch.completion: run ${runId} does not belong to ${project}`)
+      return null
+    }
+    return completionForTaskOf(state.tasks, runId, taskId)
   })
   // orch.command 의 args 에서 Run id·Task id·Dispatch id 를 읽는 키 — 명령마다 다르고, 짐작이 아니라
   // server.ts 의 switch 를 다시 열어 확인한 값만 적었다: task-create 는 args.runId, run-start·
@@ -6826,6 +7137,63 @@ export function registerIpc(
   // What the pane reads once on mount, so a tab reopened (or a renderer reloaded) mid-conversation
   // shows the state the adapter is actually in rather than waiting for the next event to arrive.
   ipcMain.handle('chat.state', (_e, sessionId: string) => core.chat.state(sessionId))
+  // design F5: the person pressed the offered "skip the toolchain and retry" button and confirmed, in
+  // the renderer's own dialog, what that gives up — this is the only place that ever calls it (main
+  // never chooses this on its own, per S7). `false` is a no-op: the id is unknown, the offer's own
+  // conditions no longer hold, or a second click raced the first. `session:created` on success puts
+  // the tab back the same way a Host reconnect does — the fresh `SessionInfo` this hands back has
+  // `status: 'running'` again, which is what clears the exit banner in PaneGrid.
+  //
+  // Fix round 1 (Critical 1): the id comes back alive, but nothing that was watching it does on its
+  // own. The first exit is no longer swallowed (F1/F2 report it immediately), so by the time a person
+  // finishes reading the five-part confirm dialog, `onSessionExit` has already run in full — the
+  // rolling chain disposed, the scheduler entry disposed, Slack's delayed exit notice long since
+  // posted and its record deleted. The automatic retry this replaces never had this problem, because
+  // it swallowed the exit before any of that ran. The precedent fix is the Host-reattach path just
+  // above (`chat: (a) => { … }`), which re-registers the same three for exactly the same "the same id
+  // comes back alive" reason; this follows it, treating the retry as what it actually is — a fresh
+  // spawn that happens to keep its old id.
+  ipcMain.handle('chat.retryWithBypass', (_e, sessionId: string) => {
+    const info = core.chat.retryWithBypass(sessionId)
+    if (!info) return false
+    let account: Account | null = null
+    try {
+      account = core.accounts.get(info.accountId)
+    } catch {
+      account = null // the account was removed while the dialog sat open — schedule/rolling need it, Slack does not
+    }
+    const provider = account ? providerOf(account) : null
+    const need = retryRegistrationsFor(info, provider)
+    if (need.schedule && provider) {
+      try {
+        scheduler?.register(info, provider)
+      } catch {
+        /* A failed schedule re-registration does not block the retry */
+      }
+    }
+    if (need.slack) {
+      try {
+        slack?.notifier.register(info)
+      } catch {
+        /* A failed Slack re-registration does not block the retry */
+      }
+    }
+    if (need.rolling === 'codexRolling') {
+      try {
+        codexRolling?.register(info)
+      } catch {
+        /* A failed rolling re-registration does not block the retry */
+      }
+    } else if (need.rolling === 'rolling') {
+      try {
+        rolling?.register(info)
+      } catch {
+        /* A failed rolling re-registration does not block the retry */
+      }
+    }
+    send('session:created', info)
+    return true
+  })
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
@@ -6853,12 +7221,27 @@ export function registerIpc(
   })
   // Checks both CLIs in parallel. The renderer only blocks entry to the app when both are missing, and
   // then gates starting a session on the CLI that the chosen account's provider needs.
-  ipcMain.handle('system.checkCli', async () => {
-    const check = (cli: string): Promise<{ ok: boolean; version?: string }> =>
+  //
+  // `cwd` 를 받는 이유: 이 검사는 세션이 실제로 돌 자리에서 돌아야 한다. PATH 앞의 toolchain 관리자
+  // (Volta 등)는 그 폴더의 프로젝트 manifest 를 읽어 도구 버전을 정하므로, 앱의 cwd 에서 검사하면
+  // 읽을 manifest 가 없어 무조건 통과하고 세션만 죽는다(설계 D3). 실패의 첫 줄을 함께 돌려준다 —
+  // "없음"과 "이 폴더에서는 안 돎"은 사람이 할 일이 다르다.
+  ipcMain.handle('system.checkCli', async (_e, cwd?: string) => {
+    const check = (cli: string): Promise<{ ok: boolean; version?: string; error?: string }> =>
       new Promise((resolve) => {
-        execFile(cli, ['--version'], { shell: true, timeout: 10_000, windowsHide: true }, (err, stdout) => {
-          resolve(err ? { ok: false } : { ok: true, version: stdout.trim() })
-        })
+        execFile(
+          cli,
+          ['--version'],
+          { shell: true, timeout: 10_000, windowsHide: true, ...(cwd ? { cwd } : {}) },
+          (err, stdout, stderr) => {
+            if (!err) return resolve({ ok: true, version: stdout.trim() })
+            const line = String(stderr)
+              .split('\n')
+              .map((l) => l.trim())
+              .find((l) => l.length > 0)
+            resolve({ ok: false, ...(line ? { error: line.slice(0, 200) } : {}) })
+          }
+        )
       })
     const [claude, codex] = await Promise.all([check('claude'), check('codex')])
     return { claude, codex }
@@ -6875,6 +7258,16 @@ export function registerIpc(
    * One at a time. Two installers writing to the same `~/.local/bin` at once is not a state worth
    * reasoning about, and nobody needs both this second.
    */
+  // locateCli (design D3's own comment on it, unchanged) lives in cliLocate.ts now — createCore
+  // (core.ts) needs it too, for design F5's bypass detection, well before registerIpc ever runs.
+
+  // Whether each CLI is installed on this machine at all — independent of any folder, so the renderer
+  // asks this once (on mount) instead of on every folder pick, unlike `system.checkCli` above.
+  ipcMain.handle('system.checkCliInstalled', async () => {
+    const [claude, codex] = await Promise.all([locateCli('claude'), locateCli('codex')])
+    return { claude: claude !== null, codex: codex !== null }
+  })
+
   /**
    * Where the machine says a CLI is now, with this process's PATH updated to match — or null when it
    * still cannot be found.
@@ -6885,26 +7278,13 @@ export function registerIpc(
    * app came back and still found neither CLI). Left there, someone would install, restart, be told
    * again that nothing is installed, and have no way to tell which part had failed.
    *
-   * So the machine is asked (locateCommandFor), and what it answers is put in front of this process's
-   * own PATH. That is enough for everything downstream: `system.checkCli` runs through PATH, and a
-   * spawned session copies this process's environment (core/sessions/manager.ts).
+   * So the machine is asked (locateCli, i.e. locateCommandFor), and what it answers is put in front of
+   * this process's own PATH. That is enough for everything downstream: `system.checkCli` runs through
+   * PATH, and a spawned session copies this process's environment (core/sessions/manager.ts).
    */
   const adoptInstalledCli = async (cli: 'claude' | 'codex'): Promise<string | null> => {
-    const plan = locateCommandFor(cli, process.platform, process.env.SHELL ?? '/bin/sh')
-    if (plan === null) return null
-    const found = await new Promise<string | null>((resolve) => {
-      execFile(plan.command, plan.args, { timeout: 15_000, windowsHide: true }, (err, stdout) => {
-        if (err) return resolve(null)
-        const line = stdout
-          .split('\n')
-          .map((l) => l.trim())
-          .find((l) => l !== '')
-        resolve(line ?? null)
-      })
-    })
-    // Checked on disk before it is believed: a shell that answers with something that is not there
-    // would put a directory on PATH that hides nothing and helps nobody.
-    if (found === null || !existsSync(found)) return null
+    const found = await locateCli(cli)
+    if (found === null) return null
     prependToPath(process.env as Record<string, string | undefined>, path.dirname(found))
     return found
   }

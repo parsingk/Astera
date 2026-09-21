@@ -211,11 +211,12 @@ describe('sidebar view actions', () => {
 
   it('both views are bindable actions', () => {
     expect(ACTIONS.map((a) => a.id)).toEqual(
-      expect.arrayContaining(['sidebar.jobs', 'sidebar.howItWorks'])
+      expect.arrayContaining(['sidebar.home', 'sidebar.jobs', 'sidebar.howItWorks'])
     )
   })
 
   it('defaults follow the Ctrl+Shift+<letter> family the sidebar already uses', () => {
+    expect(ACTIONS.find((a) => a.id === 'sidebar.home')?.defaults).toEqual(['Ctrl+Shift+A'])
     expect(ACTIONS.find((a) => a.id === 'sidebar.jobs')?.defaults).toEqual(['Ctrl+Shift+J'])
     expect(ACTIONS.find((a) => a.id === 'sidebar.howItWorks')?.defaults).toEqual(['Ctrl+Shift+H'])
   })
@@ -223,6 +224,7 @@ describe('sidebar view actions', () => {
   // Cmd rather than Ctrl on mac, for the reason makeActions gives: Ctrl combos have to reach the
   // shell through xterm, Cmd never does
   it('mac binds them to Cmd', () => {
+    expect(mac.find((a) => a.id === 'sidebar.home')?.defaults).toEqual(['Cmd+Shift+A'])
     expect(mac.find((a) => a.id === 'sidebar.jobs')?.defaults).toEqual(['Cmd+Shift+J'])
     expect(mac.find((a) => a.id === 'sidebar.howItWorks')?.defaults).toEqual(['Cmd+Shift+H'])
   })
@@ -230,12 +232,15 @@ describe('sidebar view actions', () => {
   // Opening a sidebar view competes with nothing a shell reads, the same judgement
   // explorer.toggleMode makes for Ctrl+Shift+E
   it('they do not yield to the terminal', () => {
-    for (const id of ['sidebar.jobs', 'sidebar.howItWorks'] as const)
+    for (const id of ['sidebar.home', 'sidebar.jobs', 'sidebar.howItWorks'] as const)
       expect(ACTIONS.find((a) => a.id === id)?.yieldsToTerminal).toBe(false)
   })
 
   it('the events reach them', () => {
     const bindings = resolveBindings({}, ACTIONS)
+    expect(
+      findActionForEvent(bindings, ev({ code: 'KeyA', ctrlKey: true, shiftKey: true }), ACTIONS)
+    ).toBe('sidebar.home')
     expect(
       findActionForEvent(bindings, ev({ code: 'KeyJ', ctrlKey: true, shiftKey: true }), ACTIONS)
     ).toBe('sidebar.jobs')

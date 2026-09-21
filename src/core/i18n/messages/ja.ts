@@ -148,6 +148,7 @@ export const ja: Catalog = {
   'common.trayQuitEnding': 'セッションをすべて終えて終了',
   // App.tsx — rail, session spawn failure, placeholder, status bar usage
   'session.rail.toggleSidebar': 'サイドバーの折りたたみ/展開',
+  'session.rail.openSessions': 'アカウントと履歴',
   'session.spawn.failed': 'セッションの開始に失敗しました: {message}',
   'session.spawn.failedWorktreeKept':
     'セッションの開始に失敗しました: {message} (worktree "{name}" は残っているので Worktrees パネルから削除してください)',
@@ -204,6 +205,8 @@ export const ja: Catalog = {
   'settings.info.registeredAccounts': '登録アカウント',
   'settings.info.update': 'アップデート',
   'settings.info.cliNotDetected': '未検出',
+  'settings.info.cliReinstall': '再インストール',
+  'settings.info.cliInstallDone': 'インストールしました。',
   'settings.info.host': 'バックグラウンドホスト',
   'settings.info.hostConnected': '接続済み · プロトコル {protocol} · {uptime} 前から',
   'settings.info.hostNotConnected': '未接続',
@@ -366,6 +369,7 @@ export const ja: Catalog = {
   'shortcut.explorer.closeFileTab': 'ファイルタブを閉じる',
   'shortcut.explorer.cyclePreview': 'マークダウンプレビューモードの切り替え',
   'shortcut.sidebar.jobs': 'Jobs サイドバーの開閉',
+  'shortcut.sidebar.home': 'アカウントと履歴の表示/非表示',
   'shortcut.sidebar.howItWorks': 'How It Works サイドバーの開閉',
   'shortcut.explorer.rename': '名前の変更',
   'shortcut.explorer.delete': '削除',
@@ -566,6 +570,12 @@ export const ja: Catalog = {
   'session.new.codexMissingPre': 'Codex CLI が見つかりません。',
   'session.new.claudeMissingPre': 'Claude Code CLI が見つかりません。',
   'session.new.cliMissingPost': 'インストール後に再試行してください。',
+  // 「インストールされていない」と「このフォルダーでは実行できない」は対処が違う — 前者はインストール、
+  // 後者はフォルダーや toolchain 設定の問題。その違いを文言で分ける(設計 D3)。
+  'session.new.cliFailsHere': '{cli} はこのフォルダーで実行できません: {reason}',
+  // 10秒のタイムアウトまで何も言わずに死んだとき用(shell:true のシムがハングした場合) —
+  // 理由なしでも文になる文言を別に用意する。「: undefined」は文にならない。
+  'session.new.cliFailsHereUnknown': '{cli} はこのフォルダーで実行できません。',
   'session.field.projectFolder': 'プロジェクトフォルダ',
   'session.field.account': 'アカウント',
   'session.new.folderNotSelected': '(未選択)',
@@ -592,6 +602,11 @@ export const ja: Catalog = {
   'session.new.saveDefaultAccount': 'このプロジェクトでこのアカウントを記憶',
   'session.new.bypassPermissions': '権限確認なしで実行 (bypass permissions)',
   'session.new.start': '開始',
+  'session.new.blocked.noCwd': 'フォルダーを選んでください',
+  'session.new.blocked.noAccount': 'アカウントを選んでください',
+  'session.new.blocked.cliMissing': 'このアカウントの CLI が見つかりません',
+  'session.new.blocked.noSchedule': '予約時刻を決めてください',
+  'session.new.blocked.checkingFolder': 'プロジェクトフォルダを確認しています',
   'session.new.starting': 'セッションを開始しています…',
   'session.new.startingWorktree': 'worktree を作成しています…',
   // NewSessionDialog.tsx scheduler UI
@@ -619,6 +634,34 @@ export const ja: Catalog = {
   'session.pane.splitDown': '下に分割',
   'session.pane.unsplit': '分割を解除',
   'session.pane.maxReached': 'パネルは最大4つまで分割できます',
+  // ConversationPane.tsx — exited banner (session-failure-visibility design D2/F2). この部分カタログには
+  // 他の conversation.* キーがまだ無く(en/ko で代替される)、この3つだけを先に入れる。
+  'conversation.exited.withCode': 'このセッションは終了しました (コード {code})',
+  'conversation.exited.detail': '詳細',
+  'conversation.exited.restart': '再開',
+  // design §4 F5 の確認ダイアログの5つの項目。S1(1〜2行)の例外 — 本人にしかできない判断なので、
+  // 事実を削るとボタンだけが残る。
+  'conversation.exited.bypassConfirm.title': 'このフォルダの toolchain 設定をスキップして再試行しますか?',
+  'conversation.exited.bypassConfirm.whatBlockedLabel': '何が止めたか',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    'CLI ではなく、PATH の手前にあるツールバージョン管理ツール(Volta)が実行を拒否しました。このフォルダの package.json を読んでどのバージョンを使うか決める必要がありますが、そのファイルを読めませんでした',
+  // fix round 1 / Important 4: VOLTA_HOME しか一致しなかったときの文言。Volta がこの端末に入っている
+  // ことは確かだが、それが*この* CLI を止めたという確証ではない — Volta は Node を管理していて、
+  // codex は別にアンチウイルスが止めた単独インストールという可能性がある。
+  'conversation.exited.bypassConfirm.whatBlockedSoft':
+    'この CLI 自体ではなく、この端末に入っているツールバージョン管理ツール(Volta)が原因かもしれません。Volta が管理する対象なら、PATH 手前の Volta がこのフォルダの package.json を読んでバージョンを決めようとして実行を拒否した可能性があります',
+  'conversation.exited.bypassConfirm.ifSkippedLabel': 'スキップすると',
+  'conversation.exited.bypassConfirm.ifSkipped': 'バージョン判定を省略し、デフォルトの CLI をそのまま実行します。セッションは起動します。',
+  'conversation.exited.bypassConfirm.givesUpLabel': '何を諦めるか',
+  'conversation.exited.bypassConfirm.givesUp':
+    'このプロジェクトに固定したツールバージョンです。このセッションだけでなく、このセッションが実行するすべてのコマンド(エージェントが実行する npm test、npm run build、node …)が固定バージョンではなくデフォルトバージョンで動きます。同じコマンドでも、あなたのターミナルとは異なる結果になることがあります。利用上限で別アカウントに切り替わったとき、引き継ぐセッションも同じです。',
+  'conversation.exited.bypassConfirm.properFixLabel': '本当の解決',
+  'conversation.exited.bypassConfirm.properFix': 'package.json を修正すれば、このダイアログは再び表示されません。',
+  'conversation.exited.bypassConfirm.confirm': 'スキップして再試行',
+  'conversation.exited.bypassConfirm.failed': '再試行できませんでした',
+  // fix round 1 (Critical 2): 消えない印。notice と違い最初のターンで消えず、このセッションが
+  // (そして終わった後も)存在する限り、常にその事実だけを言う一行として残る。
+  'conversation.bypassed.badge': 'このセッションはこのプロジェクトに固定した toolchain のバージョンをスキップして開始されました',
   // ResumeDialog.tsx
   'session.resume.title': 'セッションを再開',
   'session.resume.conversationLabel': '会話',
@@ -1051,6 +1094,47 @@ export const ja: Catalog = {
   'jobs.recovery.gate.reviewFirst': '回答する前にワークツリーを確認してください。',
   'jobs.recovery.gate.unsafeNote': 'ワークツリーには何も手を加えていません。',
   'jobs.recovery.gate.restart': '新しいワーカーで再開',
+  'jobs.convergence.gate.exhausted':
+    '完了チェックは{repairs}回の修正後も収束しませんでした。まだ失敗: {failures}',
+  'jobs.convergence.gate.timeExhausted':
+    'このタスクの自動修正が時間予算({minutes}分)を超えました。{repairs}回修正しましたが、まだ失敗します: {failures}',
+  'jobs.convergence.gate.stopped': 'このTaskの自動修正は停止しており、チェックはまだ失敗しています: {failures}',
+  'jobs.convergence.gate.paused': '完了チェックの実行中にこのRunが一時停止され、チェックはまだ失敗しています: {failures}',
+  'jobs.convergence.gate.repairFailed': '修正ワーカーを起動できませんでした: {reason}',
+  'jobs.convergence.gate.retryOnce': 'もう一度修正',
+  'jobs.convergence.gate.markFailed': '失敗として記録',
+  'jobs.convergence.retryOnceFailed': 'ゲートは解除しましたが、修正を開始できませんでした: {reason}',
+  'jobs.convergence.node.repairing': '修正 {repairs}/{max} · {failed} 失敗',
+  'jobs.convergence.node.repairingNoCheck': '修正 {repairs}/{max}',
+  'jobs.convergence.node.rechecking': '再検査中 · {name}',
+  'jobs.convergence.node.checking': '検査中',
+  'jobs.convergence.node.reviewing': 'レビュー ラウンド {round}/{max}',
+  'jobs.convergence.node.failed': '{name} 失敗',
+  'jobs.convergence.chip.repairing': '修正 {repairs}/{max}',
+  'jobs.convergence.chip.reviewing': 'レビュー {round}/{max}',
+  'jobs.convergence.chip.exhausted': '上限到達',
+  'jobs.convergence.chip.stopped': '修正停止',
+  'jobs.convergence.node.stopped': '自動修正を停止',
+  'jobs.convergence.node.stoppedWithCheck': '自動修正を停止 · {failed} 失敗',
+  'jobs.convergence.stop': '自動修正を停止',
+  'jobs.convergence.stopConfirmTitle': 'このタスクの自動修正を停止しますか?',
+  'jobs.convergence.stopConfirmBody':
+    '検査が失敗しても自動では修正せず、人に渡します。実行中の修正は最後まで進み、その判定はそのまま届きます。アプリから再開することはできません — このタスクを作り直す必要があります。',
+  'jobs.convergence.check.passed': '通過',
+  'jobs.convergence.check.failed': '失敗 (exit {code})',
+  'jobs.convergence.check.timedOut': 'タイムアウト',
+  'jobs.convergence.check.notRun': '未実行',
+  'jobs.convergence.check.retrying': '再実行中',
+  'jobs.convergence.check.unstable': 'ラウンド間で判定が揺れた',
+  'jobs.completion.show': 'なぜ失敗したか',
+  'jobs.completion.hide': '折りたたむ',
+  'jobs.completion.empty': 'このタスクにはまだ検査結果もレビュー指摘もありません。',
+  'jobs.completion.showTail': '出力を表示',
+  'jobs.completion.hideTail': '出力を隠す',
+  'jobs.completion.blocking': 'ブロックするレビュー指摘 {n}',
+  'jobs.completion.other': 'その他の指摘 {n}',
+  'jobs.completion.suspicious': '検査設定を変更したファイル',
+  'jobs.completion.policyChanged': 'このタスクの実行中に完了検査の設定自体が変わりました。レビュアーにも伝えています。',
   'jobs.event.status': '状況',
   'jobs.event.workerDone': 'ワーカー報告',
   'jobs.event.question': '質問',
@@ -1059,6 +1143,8 @@ export const ja: Catalog = {
   'jobs.event.decisionGate': '判断要求',
   // retry と同じ位置(dispatch-started の要約の横)。この Dispatch がレビュー用(Dispatch.review)のときだけ付く
   'jobs.event.review': 'レビュー',
+  'jobs.event.repairCheck': '検査失敗の修正',
+  'jobs.event.repairReview': 'レビュー指摘の修正',
   // worker_done の結果。jobs.state.completed/failed は Task の状態を指す語なので使わない
   // (1 つの Task に複数のワーカー報告があり得る)
   'jobs.event.succeeded': '成功',
@@ -1084,6 +1170,11 @@ export const ja: Catalog = {
   'jobs.new.schedule': '予約実行',
   'jobs.new.scheduleHint': '指定時刻ごとにこの作業の回を 1 つ作って実行する',
   'jobs.new.scheduleOverlapHint': '前の回が実行中でも新しい回を開始する — ワーカーが重なることがある',
+  'jobs.new.convergence': '通過するまで自動修正',
+  'jobs.new.convergenceHint':
+    '検査が失敗すると、アプリが同じワーカーに何が違っていたかを返し、修正後にもう一度検査します。決めた回数内に通過しなければ止まって尋ねます。',
+  'jobs.new.convergenceDefaults': '修正 最大 {fix}回 · レビュー ラウンド {review}回 · ブロックする深刻度 {severity}',
+  'jobs.new.convergenceCliOnly': 'これらの値は CLI からのみ変更できます',
   'jobs.new.create': '作る',
   'jobs.new.folderBusy': 'このフォルダではすでにワーカーが動いています — 同時実行が 1 だとこの作業のワーカーも同じフォルダで回るため、互いの編集が混ざることがあります',
   'jobs.new.failed': '作業を作れませんでした',
@@ -1108,8 +1199,13 @@ export const ja: Catalog = {
     'この Task のワーカーを起動するアカウントです — 最初のアカウントがどのエージェントで動かすかを決めるので、必ず1つ選んでください。2つ以上選ぶと、利用上限に達したときに並べた順に切り替わります',
   'jobs.task.accountTrust':
     '選んだアカウントがこのフォルダを初めて使うとき、セッションタブにフォルダの信頼確認が出ます — 承認するまでワーカーは始まりません',
-  'jobs.task.validate': '完了を検証する実行構成',
-  'jobs.task.validateNone': '検証なし',
+  'jobs.task.validate': '完了検査',
+  'jobs.task.checksHint': '速い検査を前に置いてください — 最初の失敗で止まるので、遅い検査が前にあると修正のたびにその時間を失います。',
+  'jobs.task.checksUnpicked': '未選択',
+  'jobs.task.checksNone': '検査に使える実行構成がありません',
+  'jobs.task.checkUp': '上へ',
+  'jobs.task.checkDown': '下へ',
+  'jobs.task.checkRemove': '外す',
   'jobs.task.review': '別のエージェントが確認',
   'jobs.task.create': '追加',
   'jobs.task.failed': 'Task を作れませんでした',
@@ -1174,5 +1270,8 @@ export const ja: Catalog = {
   'hiw.verify.partial': '一部しか確認されていません',
   'hiw.verify.unverified': '確認されたものはありません',
   'hiw.verify.failed': '報告された検査が失敗しました',
-  'hiw.verify.reported': 'エージェントが報告した内容です — アプリ自身が実行したわけではありません'
+  'hiw.verify.reported': 'エージェントが報告した内容です — アプリ自身が実行したわけではありません',
+  // Task 7 — toolchain バイパスで再起動したことは必ず伝える(design F5)。落ち着いた状態ではなく
+  // 新しい知らせなので、他の chat.notice.* キーがまだここに無くても訳す
+  'chat.notice.bypassed': 'このフォルダーの toolchain 設定を飛ばして起動しました — 固定したバージョンと違う可能性があります'
 }

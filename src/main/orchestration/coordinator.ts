@@ -20,6 +20,7 @@ import path from 'node:path'
 import { isSamePath } from '../../core/files/tree'
 import type { Provider } from '../../core/providers/meta'
 import { KNOWLEDGE_DIRS, knowledgeFilesFrom, type KnowledgeFiles } from '../../core/knowledge/detect'
+import type { CheckResult, RepairReason, ReviewIssue } from '../../core/orchestration/types'
 
 /** Job Continuity's two prompt events (P0 design §5): 'requested' right before the prompt leaves
  *  the app, 'confirmed' once it has — the spawned process holds it as argv, or the typed prompt's
@@ -127,6 +128,14 @@ const KNOWLEDGE_SCAN_TIMEOUT_MS = 2_000
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/** taskId 와 dispatchId 만으로 이미 고유하다 — startWorker 가 spec 파일을 이 이름으로 쓴다.
+ *  **두 자리가 이 이름에 동의해야 한다**: 여기서 쓰고, ipc.ts 의 검토 Dispatch 배선은 코디네이터가
+ *  돌기(그래서 진짜 specPath 를 알기) 전에 판정 파일 경로(`<이 이름>.review.json`)를 먼저 정해서
+ *  검토자의 spec 에 실어야 한다 — 그 자리가 각자 리터럴을 다시 적으면 오늘은 우연히 같아도 한쪽만
+ *  바뀌는 날 조용히 갈라진다: 검토자는 아무도 읽지 않는 파일에 쓰고, 서버는 malformed 도 아니고
+ *  "이슈 없음"도 아닌 채 그냥 아무것도 읽지 못한다. */
+export const specFileName = (taskId: string, dispatchId: string): string => `${taskId}-${dispatchId}.md`
+
 /** specPath is an absolute path normalized to forward slashes (see startWorker below) */
 export const launchPrompt = (specPath: string): string =>
   `Read ${specPath} and follow the instructions in it`
@@ -141,6 +150,90 @@ export const resumeWorkerPrompt = (specPath: string, taskId: string, dispatchId:
   `Continue this task. Your instructions are at ${specPath} — read it again, including the resume ` +
   `briefing at the end if one is there. When the work is finished, report exactly once with ` +
   `astera send --type worker_done --task-id ${taskId} --dispatch-id ${dispatchId}.`
+
+/** 같은 세션에 fix 요청을 써넣을 때의 한 줄(설계 §6.2). 대화가 이어지므로 일을 다시 말하지 않고 파일을
+ *  가리킨다 — resumeWorkerPrompt 와 같은 모양이고, LAUNCH_FORBIDDEN 을 피한다(따옴표·&·|·<·>·^·% 없음). */
+export const repairWorkerPrompt = (specPath: string): string =>
+  `Your previous report did not satisfy the completion checks. Read ${specPath} — it says what failed and how to report`
+
+export interface RepairSection {
+  reason: RepairReason
+  /** 몇 번째 수리인가 / 상한 — "This is repair 2 of 3" */
+  repair: number
+  maxFixAttempts: number
+  checks?: CheckResult[]
+  issues?: ReviewIssue[]
+  /** 소진 Gate 를 retry-once 로 풀어 예산 **밖에** 연 repair 다(설계 §5.2, repair.ts 의
+   *  repairOnce). 이 Dispatch 를 세면 repairCountOf 가 이미 maxFixAttempts 를 넘어 있으므로,
+   *  "repair {repair} of {maxFixAttempts}" 로 적으면 예산보다 큰 번호("4 of 3")가 나가 워커가
+   *  그것을 오류로 읽는다. true 면 그 대신 "사람이 예산이 다 쓰인 뒤 하나 더 허락했다" 로 적는다 —
+   *  숫자를 지우는 것이 아니라 그 숫자가 뜻하는 것을 바꾸는 것이다. */
+  extra?: true
+}
+
+/** spec 파일의 "## Repair request" 절(설계 §6.1, 명세 §9·§16·§35·§39). 보고 의무 앞에 선다 — 무엇이 틀렸는지
+ *  읽은 다음에 어떻게 보고할지가 온다. check 는 실패한 것과 돌지 않은 것만 말한다: 통과한 것은 고칠 일이
+ *  없고, 목록이 길면 실패가 묻힌다. 이슈는 blocking 만 — non-blocking 은 고치라고 보낸 것이 아니다.
+ *
+ *  **이름 것이 없으면 절 자체를 붙이지 않는다** — checks 가 전부 통과했고 issues 가 전부 non-blocking
+ *  이면 `### What failed` 가 비게 되는데, 아무것도 이름 없는 "무엇이 실패했다" 절은 절이 없는 것보다
+ *  나쁘다(리뷰 fix 1차, Minor). */
+function repairSection(a: RepairSection): string {
+  const lines: string[] = []
+  for (const c of a.checks ?? []) {
+    if (c.status === 'passed') continue
+    if (c.status === 'not-run') lines.push(`- Check "${c.name}" — not run (stopped at the first failure).`)
+    else {
+      lines.push(`- Check "${c.name}" — exit ${c.exitCode ?? '?'}${c.status === 'timed-out' ? ' (timed out)' : ''}.`)
+      // outputTail 이 없거나 빈 문자열이면 아무것도 싣지 않는다 — 예전에는 "Output tail:" 뒤에 빈
+      // 들여쓰기 줄 하나가 남았다. 40줄로 자를 때는 몇 줄이 잘렸는지도 남긴다 — 안 그러면 잘린
+      // 사실 자체가 안 보인다.
+      if (c.outputTail) {
+        const tail = c.outputTail.split('\n')
+        const kept = tail.slice(-40)
+        lines.push('  Output tail:')
+        if (kept.length < tail.length) lines.push(`    … (${tail.length - kept.length} earlier line(s) cut)`)
+        for (const l of kept) lines.push(`    ${l}`)
+      }
+    }
+  }
+  const blocking = (a.issues ?? []).filter((i) => i.blocking)
+  if (blocking.length) {
+    lines.push(`- Review found ${blocking.length} blocking issue${blocking.length === 1 ? '' : 's'}:`)
+    blocking.forEach((i, n) => {
+      lines.push(`  ${n + 1}. ${i.severity.toUpperCase()} — ${i.title}${i.file ? ` — ${i.file}${i.line !== undefined ? `:${i.line}` : ''}` : ''}`)
+      if (i.description) lines.push(`     ${i.description}`)
+      if (i.suggestedFix) lines.push(`     Suggested fix: ${i.suggestedFix}`)
+    })
+  }
+  if (!lines.length) return ''
+  const reasonText = a.reason === 'review-failure' ? 'review found blocking issues' : 'a completion check failed'
+  // extra 는 소진된 뒤 사람이 하나 더 허락한 repair 다 — repairCountOf 는 이미 maxFixAttempts 를
+  // 넘은 값을 낸다("4 of 3"), 그래서 분수 대신 "예산이 다 쓰인 뒤 허락됐다" 로 적는다.
+  const roundText = a.extra
+    ? `This is an extra repair, granted by a person after the budget of ${a.maxFixAttempts} was already spent.`
+    : `This is repair ${a.repair} of ${a.maxFixAttempts}.`
+  return `
+---
+## Repair request (assembled by the app — do not delete)
+
+Your previous report for this task did not satisfy the completion checks — ${reasonText}. ${roundText}
+
+### What failed
+${lines.join('\n')}
+
+### Rules
+Do not redefine the objective. Do not remove, skip or weaken failing tests unless the objective
+explicitly requires it. Do not disable lint rules, bypass the build, or change how the checks run.
+Fix the failing completion conditions with the smallest correct change — correctness before size.
+Astera, not you, decides whether the completion conditions are met: after your fix it re-runs every
+check, then review. Report \`--outcome succeeded\` for this repair attempt once you have made the fix
+— that reports the attempt, not the task. Do not declare the task complete in your report: whether the
+task itself is done is still Astera's call, decided only once the checks and review have run again. A
+repair reported as \`--outcome failed\` ends the task without ever re-running them, so use it only when
+you cannot make the fix at all.
+`
+}
 
 /** 워커가 일할 폴더에서 지식 파일을 모은다.
  *
@@ -264,6 +357,9 @@ export function buildSpecFile(a: {
    *  본다 — 조용히 어긋나고 결과물에만 나타난다. 상대 경로로 만드는 일은 부르는 쪽(startWorker)이
    *  한다. */
   knowledge?: KnowledgeFiles
+  /** 이 Dispatch 가 수리(repair) 라운드일 때만 채워진다. state.ts 의 판정 함수가 연다 — 이 함수는
+   *  그것을 spec 파일의 절로 옮겨 적을 뿐이다. 없으면 파일은 지금까지와 같다. */
+  repair?: RepairSection
 }): string {
   // 커밋·보고 의무보다 앞에 둔다 — 그 둘은 일이 끝난 뒤의 의무이고 이것은 시작하기 전에 읽을
   // 것이다. spec 본문 뒤인 이유: 무엇을 하는 일인지 읽은 다음에야 "그 결정이 어디 있는지"가
@@ -311,7 +407,7 @@ Commit before you report below.
   return `# ${a.title}
 
 ${a.spec}
-${knowledgeSection}${commitObligation}
+${knowledgeSection}${commitObligation}${a.repair ? repairSection(a.repair) : ''}
 ---
 ## Reporting obligation (assembled by the app — do not delete)
 
@@ -377,6 +473,21 @@ export function buildReviewSpecFile(a: {
    *  열지 않게 하는 것이고, **다시 열렸는지 잡는 것이 검토자의 일**이다. 목록을 안 주면 그 자리가
    *  빈다. 없거나 비면 이 절이 붙지 않는다. */
   knowledge?: KnowledgeFiles
+  /** 통과한 check 들(설계 §8.1). 없거나 비면 절이 붙지 않는다 */
+  checks?: CheckResult[]
+  /** 직전 라운드의 이슈. blocking 만 싣는다 — 리뷰어가 "고쳐졌는지" 확인할 것들이다 */
+  previousIssues?: ReviewIssue[]
+  /** check 의 동작을 바꾸는 파일들(설계 §8.3) */
+  suspiciousFiles?: string[]
+  /** 완료 정책의 지문이 라운드 사이에 달라졌다(2조각 설계 G3, 명세 §36·§37). 의심 파일과 같은 자리,
+   *  같은 이유로 실린다 — 앱은 표시만 하고 판정은 리뷰어의 몫이다 */
+  policyChanged?: boolean
+  /** 구조화된 판정을 쓸 파일. `<specPath>.review.json` — 서버가 같은 규칙으로 읽는다(server.ts).
+   *  **convergence Run에서만 있다.** 그 파일을 읽는 것은 server.ts 가 policyOf(...) !== null 일
+   *  때뿐이므로(applyReviewResult 로 넘어가는 그 한 경로), 없는 Run 에 이 절을 실으면 "파싱 실패는
+   *  사람에게 간다"는 거짓말을 하게 된다(전체 브랜치 리뷰, Important 1) — 그래서 없으면 절 자체가
+   *  붙지 않는다. */
+  resultPath?: string
 }): string {
   // 구현자용 문구를 그대로 쓰지 않는다. 구현자는 "고치기 전에 읽어라"를 받고, 검토자는 "다시 열린
   // 결정은 구체적 결함이다"를 받아야 한다 — 같은 글을 두 번 실으면 이 자리가 값을 못 낸다.
@@ -402,6 +513,80 @@ ${a.knowledge.paths.map((p) => `  ${p}`).join('\n')}
 ${a.knowledge.more > 0 ? `\n  … and ${a.knowledge.more} more file(s) in the project's knowledge directories.\n` : ''}`
       : ''
 
+  // 아래 "## What is already decided" 의 validated:false 문장과 공유한다 — 그 문장은 "빌드·테스트에
+  // 대해 아무것도 증명되지 않았다"고 말하는데, checks 에 통과한 것이 있으면 같은 파일 안에서 그
+  // 말과 이 절이 서로 부딪힌다(리뷰 fix 1차, Important 1). 그래서 그 문장은 이 목록이 비어 있을
+  // 때만 나온다.
+  const passedChecks = a.checks?.filter((c) => c.status === 'passed') ?? []
+  const checksSection = passedChecks.length
+    ? `
+## Checks that ran
+
+The project's own configurations below were run against this work and passed. Do not re-judge them.
+
+${passedChecks.map((c) => `- ${c.name}`).join('\n')}
+`
+    : ''
+  const previous = (a.previousIssues ?? []).filter((i) => i.blocking)
+  const previousSection = previous.length
+    ? `
+## Previous review round
+
+A reviewer found these blocking issues in the last round and the implementer was sent back to fix them.
+Each one must be **verified as addressed** — an issue that is still there is a finding on its own.
+
+${previous.map((i, n) => `${n + 1}. ${i.severity.toUpperCase()} — ${i.title}${i.file ? ` — ${i.file}${i.line !== undefined ? `:${i.line}` : ''}` : ''}`).join('\n')}
+`
+    : ''
+  const suspiciousSection = a.suspiciousFiles?.length
+    ? `
+## Files that change how the checks run
+
+This attempt touched files that decide what the checks do. Scrutinise these first: a change here can make
+a check pass without making the work correct.
+
+${a.suspiciousFiles.map((f) => `- ${f}`).join('\n')}
+`
+    : ''
+  const policySection = a.policyChanged
+    ? `
+## The completion policy changed while this task was being repaired
+
+What the checks are, or what they run, is not what it was when this task started. That is allowed — a
+person may have fixed a broken check on purpose — but it is also how a task gets "finished" without
+being correct.
+
+Judge the change itself: did it make a check ask for less? If it did, say so as a finding. If it fixed
+a check that was wrong, say that too, so the record shows it was looked at.
+`
+    : ''
+  // "The one question you answer" 뒤에 온다(리뷰 fix 1차, Important 3) — 무엇이 결함인지 먼저 읽은
+  // 다음에야 "판단을 어디에 적을지"가 뜻을 갖는다. 순서를 뒤집으면 리뷰어가 "어떤 심각도로 적을지"를
+  // "무엇이 결함으로 치는지" 보다 먼저 듣는다.
+  //
+  // **resultPath 가 없으면 절 자체가 붙지 않는다(전체 브랜치 리뷰, Important 1).** convergence 가
+  // 없는 Run 에서는 server.ts 가 이 파일을 절대 읽지 않으므로, 여기서 "파싱 실패는 사람에게 간다"고
+  // 말하면 그 Run 에는 거짓이다 — 없는 정책의 흔적을 검토자에게 심지 않는다.
+  const verdictSection = a.resultPath
+    ? `
+## Structured verdict
+
+Before you report, write your findings to this file (create it; the directory exists). The file
+contains that JSON object and nothing else — no fences, no commentary: a parse failure sends this Run
+to a human, so anything you put around the JSON breaks it.
+
+  ${a.resultPath.replace(/\\/g, '/')}
+
+  { "issues": [ { "severity": "critical|high|medium|low|info", "title": "…", "description": "…",
+                  "file": "src/x.ts", "line": 42, "suggestedFix": "…" } ] }
+
+Every finding goes in, at the severity you judge. \`title\` is required; \`description\`, \`file\`,
+\`line\` and \`suggestedFix\` are optional. An empty list means you found nothing. The app decides
+which severities block; you decide the severity.
+Then report as below — \`--outcome failed\` when the requirement is not satisfied.
+`
+    : ''
+
   return `# Review: ${a.title}
 
 You are reviewing work another agent finished. **Do not change any code.** Read, judge, report.
@@ -423,10 +608,12 @@ ${a.filesModified?.length ? a.filesModified.map((f) => `- ${f}`).join('\n') : '(
 ${
   a.validated
     ? 'The project\'s own build/test configuration was run against this work and it passed. Whether the code compiles and the tests run is settled.'
-    : 'No automated validation was attached to this task, so nothing has been proven about the build or the tests. Say so in your report if that matters for the requirement, but do not run the build yourself — that is not what you were started for.'
+    : passedChecks.length
+      ? ''
+      : 'No automated validation was attached to this task, so nothing has been proven about the build or the tests. Say so in your report if that matters for the requirement, but do not run the build yourself — that is not what you were started for.'
 }
 
-${knowledgeSection}
+${knowledgeSection}${checksSection}${previousSection}${suspiciousSection}${policySection}
 ## The one question you answer
 
 **Was the requirement above satisfied?** Not "is this the code I would have written", not "could this be
@@ -437,7 +624,7 @@ subtree behind it.
 Reject when the work does not do what was asked: a missing case, a requirement addressed in name only, a
 change that contradicts the spec. Say concretely what is missing, because your body text is the only
 record the next attempt gets.
-
+${verdictSection}
 ---
 ## Reporting obligation (assembled by the app — do not delete)
 
@@ -532,6 +719,13 @@ export class OrchCoordinator {
      *  than a fresh conversation; `briefing` is appended to the spec file before the agent is
      *  launched, which is the Smart Resume path's whole difference from a plain re-dispatch. */
     resume?: { nativeSessionId?: string; briefing?: string }
+    /** launchPrompt 대신 쓸 문구 — resume 이 아닐 때만이다(provider-native resume 은 언제나
+     *  resumeWorkerPrompt 를 이긴다: 이어지는 대화에는 그 문구가 맞다). 부르는 쪽은 specPath 를
+     *  아직 모르므로(coordinator 가 정한다) 리터럴 토큰 `{specPath}` 를 넣어 넘기고, 여기서
+     *  실제 경로로 치환한다 — repairWorkerPrompt('{specPath}') 가 그렇게 쓰인다. 치환은
+     *  LAUNCH_FORBIDDEN 검사보다 먼저 끝나 있어야 한다: 그 검사는 실제로 보내는 문자열을 봐야
+     *  한다. */
+    launchPhrase?: string
   }): Promise<{ sessionId: string; cwd: string; specPath: string }> {
     const actual = this.deps.accountProvider(a.accountId)
     if (actual === null) throw new Error(`unknown account: ${a.accountId}`)
@@ -562,7 +756,7 @@ export class OrchCoordinator {
     // and that path contains the username (a Windows username may contain `&` or `^`). So the error
     // has to point at the cause, and the wiring runs the same check at boot to leave a warning
     // (ipc.ts bootOrch).
-    const specName = `${a.taskId}-${a.dispatchId}.md`
+    const specName = specFileName(a.taskId, a.dispatchId)
     const specPath = path.join(this.deps.specsDir, specName)
     // Backslashes become forward slashes: the worker also handles this path through its Bash tool,
     // and `\` is the shell's escape character (the lesson the sh shuttle taught — the same rule as
@@ -573,9 +767,15 @@ export class OrchCoordinator {
     // below, so that check runs against whichever one is actually used. It carries the same specPath
     // as the launch prompt, so the same win32 cmd.exe /c risk applies to it.
     const resumeSessionId = a.resume?.nativeSessionId
+    // launchPhrase.split(...).join(...) rather than .replace('{specPath}', specPath) — replace's
+    // string-replacement form parses $&, $`, $', $$ and $<name> out of the *replacement* argument,
+    // and specPath is an arbitrary filesystem path that can legally contain any of those sequences
+    // (none of them are in LAUNCH_FORBIDDEN). split/join treats the replacement as inert text.
     const prompt = resumeSessionId
       ? resumeWorkerPrompt(specPath.replace(/\\/g, '/'), a.taskId, a.dispatchId)
-      : launchPrompt(specPath.replace(/\\/g, '/'))
+      : a.launchPhrase
+        ? a.launchPhrase.split('{specPath}').join(specPath.replace(/\\/g, '/'))
+        : launchPrompt(specPath.replace(/\\/g, '/'))
     const forbidden = prompt.match(LAUNCH_FORBIDDEN)
     if (forbidden)
       throw new Error(

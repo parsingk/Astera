@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import type { Account, ScheduleRule } from '../../../core/types'
+import { DEFAULT_BLOCKING_SEVERITY } from '../../../core/orchestration/convergence'
+import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS } from '../../../core/orchestration/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleRuleFields } from './ScheduleRuleFields'
@@ -37,6 +39,9 @@ export function NewRunModal({
   const [coordinatorAccountId, setCoordinatorAccountId] = useState('')
   const [scheduled, setScheduled] = useState(false)
   const [schedule, setSchedule] = useState<ScheduleRule | null>(null)
+  /** 통과할 때까지 자동 수정(Plan 1 설계 D12). 기본 꺼짐 — 켜면 검사·검토 실패가 코디네이터가 아니라 앱의 손으로
+   *  같은 워커에게 돌아간다. 이 폼은 켜기만 하고 숫자 셋은 CLI 플래그(--max-fix-attempts 등)에 남긴다. */
+  const [convergence, setConvergence] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -68,6 +73,9 @@ export function NewRunModal({
         // `pendingStart`("아직 시작하지 않았다")도 같은 깃발을 타고 있어서, 보내지 않으면 예약
         // 템플릿에 **'실행' 버튼이 아예 붙지 않았다** — 실제로 그렇게 보고됐다.
         ...(scheduled && schedule ? { schedule } : {}),
+        // run-create 는 `convergence === true` 를 본다(server.ts). 안 켰으면 키 자체를 보내지 않는다 — false 를
+        // 보내면 서버가 "플래그가 왔다" 로 읽을 여지를 남긴다.
+        ...(convergence ? { convergence: true } : {}),
         auto: true
       })
       if (reply.status >= 400) {
@@ -167,6 +175,28 @@ export function NewRunModal({
               <p className="warn-text">{t('jobs.new.scheduleOverlapHint')}</p>
             </div>
           )}
+        </div>
+        {/* 숫자 셋은 CLI 플래그만이고 여기서는 기본값을 **보여만** 준다: 안 보이면 "얼마나 시도하는 건데?" 에 답이
+            없다. 값은 core 의 상수에서 읽는다 — 문자 그대로 박으면 상수가 바뀌는 날 화면이 거짓말한다. */}
+        <div className="field">
+          <label className="check-small">
+            <input
+              type="checkbox"
+              checked={convergence}
+              onChange={(e) => setConvergence(e.target.checked)}
+            />
+            {t('jobs.new.convergence')}
+          </label>
+          <p className="modal-hint">{t('jobs.new.convergenceHint')}</p>
+          <p className="modal-hint">
+            {t('jobs.new.convergenceDefaults', {
+              fix: FAILURE_LIMIT,
+              review: MAX_REVIEW_ROUNDS,
+              severity: DEFAULT_BLOCKING_SEVERITY
+            })}
+            {' — '}
+            {t('jobs.new.convergenceCliOnly')}
+          </p>
         </div>
         {error && <p className="warn">{error}</p>}
         <div className="row right">

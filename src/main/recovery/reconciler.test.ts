@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { candidates, RecoveryReconciler } from './reconciler'
 import { emptyState, type OrchState } from '../../core/orchestration/state'
 import type { Dispatch, Run, Task } from '../../core/orchestration/types'
-import type { GitFacts } from '../../core/recovery/types'
+import type { GitFacts, LostAttempt } from '../../core/recovery/types'
 
 const NOW = '2026-09-09T10:00:00.000Z'
 const EARLIER = '2026-09-09T09:00:00.000Z'
@@ -246,6 +246,75 @@ describe('RecoveryReconciler', () => {
     } as never)
     expect(await r.reconcileAll()).toBe(0)
     expect(executed).toEqual([])
+  })
+})
+
+describe('reconciler — repair Dispatch 는 앱의 것', () => {
+  /** harness() 는 고정된 state()를 쓰므로 여기서는 쓰지 않는다 — convergence Run·repair
+   *  Dispatch·checks 목록을 갖춘 상태가 필요해서, "재확인" 테스트가 하듯 RecoveryReconciler 를
+   *  직접 구성한다. execute 만 attempt 를 받아 적는다. */
+  function harnessWith(current: OrchState) {
+    const seen: LostAttempt[] = []
+    const journal = {
+      append: () => 0,
+      eventsFor: () => [{ type: 'PROMPT_WRITE_CONFIRMED', dispatchId: 'dsp_1' }] as never,
+      firstCheckpointFor: () => null,
+      startRecoveryAction: () => ({ recoveryActionId: 'rec_1' }) as never,
+      finishRecoveryAction: () => {}
+    }
+    const r = new RecoveryReconciler({
+      getState: () => current,
+      setState: async () => {},
+      journal: journal as never,
+      readGitFacts: async () => ({ exists: true, head: 'aaa', dirty: false, inProgress: null, conflicts: false, branch: 'main' }),
+      smartResume: () => false,
+      execute: async (a: { attempt: LostAttempt }) => {
+        seen.push(a.attempt)
+        return { ok: true as const }
+      },
+      log: () => {},
+      now: () => NOW
+    } as never)
+    return { r, seen }
+  }
+
+  it('convergence Run 의 유실된 repair 는 appDriven 이고 hasValidateConfig 는 목록을 읽는다', async () => {
+    const current = state({
+      runs: [run({ autoDispatch: undefined, convergence: {} })],
+      tasks: [task({ validateConfigIds: ['c1'] })],
+      dispatches: [dispatch({ repair: 'check-failure' })]
+    })
+    const { r, seen } = harnessWith(current)
+    await r.reconcileAll()
+    expect(seen[0]).toMatchObject({ appDriven: true, hasValidateConfig: true, repair: 'check-failure' })
+  })
+
+  it('convergence Run 의 유실된 첫 구현 attempt 는 여전히 코디네이터의 것이다', async () => {
+    const current = state({
+      runs: [run({ autoDispatch: undefined, convergence: {} })],
+      tasks: [task({ validateConfigIds: ['c1'] })],
+      dispatches: [dispatch()]
+    })
+    const { r, seen } = harnessWith(current)
+    await r.reconcileAll()
+    // toMatchObject 는 없는 키를 undefined 키와 같다고 보지 않는다(vitest/jest 의 알려진 동작) —
+    // reconciler.ts 가 dispatch.repair 가 없으면 attempt.repair 자체를 싣지 않으므로 따로 본다.
+    expect(seen[0]).toMatchObject({ appDriven: false })
+    expect(seen[0].repair).toBeUndefined()
+  })
+
+  // 이 셀이 넓힌 범위 전체의 경계다 — repair 만으로는 부족하다, convergence Run 이어야 한다.
+  // autoDispatch 도 convergence 도 없는 Run 의 repair Dispatch 는 여전히 코디네이터의 dispatch
+  // 권한 아래에 있다.
+  it('repair Dispatch 라도 convergence 도 autoDispatch 도 없는 Run 이면 appDriven 은 false 다', async () => {
+    const current = state({
+      runs: [run({ autoDispatch: undefined })],
+      tasks: [task()],
+      dispatches: [dispatch({ repair: 'check-failure' })]
+    })
+    const { r, seen } = harnessWith(current)
+    await r.reconcileAll()
+    expect(seen[0]).toMatchObject({ appDriven: false, repair: 'check-failure' })
   })
 })
 

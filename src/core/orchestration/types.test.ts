@@ -55,10 +55,9 @@ describe('validating 전이', () => {
     expect(canTransition('validating', 'blocked')).toBe(true)
   })
 
-  // 검증 중인 Task 에는 열린 Dispatch 가 없다(applyWorkerDone 이 먼저 닫는다). 그래도 새 워커를
-  // 붙이는 것은 막아야 한다 — 검증 결과가 도착할 자리가 사라진다
-  it('validating 에서 dispatched 로는 갈 수 없다', () => {
-    expect(canTransition('validating', 'dispatched')).toBe(false)
+  // validating -> dispatched: 판정이 도착한 뒤 앱이 repair Dispatch 를 여는 전이다(설계 §5).
+  it('validating 에서 dispatched 로 갈 수 있다 — 판정 후 repair Dispatch 가 여는 전이', () => {
+    expect(canTransition('validating', 'dispatched')).toBe(true)
   })
 
   it('validating 은 pending·ready 에서 바로 올 수 없다', () => {
@@ -77,9 +76,9 @@ describe('reviewing 전이', () => {
     expect(canTransition('reviewing', 'failed')).toBe(true)
     expect(canTransition('reviewing', 'blocked')).toBe(true)
   })
-  // 검토 결과가 도착할 자리가 사라진다 — validating 이 같은 이유로 없다
-  it('reviewing -> dispatched 는 허용되지 않는다', () => {
-    expect(canTransition('reviewing', 'dispatched')).toBe(false)
+  // reviewing -> dispatched: 판정이 도착한 뒤 앱이 repair Dispatch 를 여는 전이다 — validating 과 같은 이유로 허용된다
+  it('reviewing -> dispatched 가 허용된다 — 판정 후 repair Dispatch 가 여는 전이', () => {
+    expect(canTransition('reviewing', 'dispatched')).toBe(true)
   })
 })
 

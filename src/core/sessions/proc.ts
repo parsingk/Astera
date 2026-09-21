@@ -8,7 +8,10 @@ export interface ProcLike {
   pid: number
   /** One complete stdout line, newline removed. */
   onLine(cb: (line: string) => void): void
-  onExit(cb: (e: { exitCode: number }) => void): void
+  /** The exit, and the process's last words on stderr when anyone collected them. `stderrTail` is
+   *  absent when nothing was collected — an older Host does not send it (design S4) — and that is
+   *  different from a process that simply printed nothing. */
+  onExit(cb: (e: { exitCode: number; stderrTail?: string }) => void): void
   /** One line to stdin; the newline is added. */
   write(line: string): void
   kill(): void

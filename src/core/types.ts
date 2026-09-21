@@ -42,7 +42,9 @@ export type { ConvTurn } from './history/convTypes'
 // (the server owns OrchState), so importing it from here would make that reliance direct rather than
 // incidental. Either way the wrong fix for a genuinely missing import is "types": ["node"] — it hands
 // the renderer typecheck every Node global, which is the guard this note stands to protect.
-import type { MessageType, Outcome, TaskStatus } from './orchestration/types'
+import type { CheckResult, GateKind, MessageType, Outcome, RepairReason, TaskStatus } from './orchestration/types'
+import type { CompletionDetail } from './orchestration/completion'
+export type { CompletionDetail, CompletionCheckDetail } from './orchestration/completion'
 export type { MessageType, TaskStatus } from './orchestration/types'
 
 // providers/meta.ts owns Provider. It is re-exported here so that the files which already imported
@@ -70,6 +72,10 @@ export interface DetectCandidate {
 export interface CliStatus {
   ok: boolean
   version?: string
+  // First non-empty line of stderr when the check failed, capped at 200 chars. Absent when the CLI
+  // failed silently (no stderr at all) — distinct from `ok: false` alone, which only says "not this
+  // folder" without saying why (design D3).
+  error?: string
 }
 
 export type SessionStatus = 'running' | 'exited'
@@ -362,6 +368,29 @@ export interface TerminalBuffer {
   buffer: string
 }
 
+/** JobTask.checks 의 한 칸 — CheckResult 에서 칩이 그릴 것만. outputTail·startedAt·endedAt 은 싣지 않는다
+ *  (UI 설계 U4): 이 스냅숏은 사이드바가 바뀔 때마다 나가고, 칩이 그리는 것은 기호 하나다. */
+export interface JobCheck {
+  configId: string
+  name: string
+  status: CheckResult['status']
+  /** 툴팁의 "실패 (exit N)". 값이 있으면 그대로 옮긴다 */
+  exitCode?: number
+  /** 밀리초. CheckResult 의 startedAt·endedAt 둘 다 있을 때만 — 툴팁의 "지난 라운드 실제 시간" */
+  durationMs?: number
+  unstable?: true
+}
+/** JobTask.convergence — 자동 수정의 예산과 지금 자리. 정책 있는 Run 의 Task 만 갖는다(UI 설계 U3) */
+export interface JobConvergence {
+  repairs: number
+  maxFixAttempts: number
+  reviewRound: number
+  maxReviewRounds: number
+  /** 지금 열린 Dispatch 가 repair 면 그 사유. 아니면 null */
+  repairing: RepairReason | null
+  /** 사람이 자동 수정을 멈춰 뒀다(Task.convergenceOff) */
+  stopped: boolean
+}
 /** One Task row of the Jobs sidebar. A projection of the orchestration Task, folded in main —
  *  OrchState itself never crosses the bridge (it carries messages, deliveries and dispatch records
  *  the view has no use for, and it would make the renderer re-derive what main already computed). */
@@ -387,8 +416,11 @@ export interface JobTask {
    *  질문을 보여 주고 B 를 푼다. 묶어 두면 "열린 Gate 가 있나"도 검사 하나가 된다.
    *
    *  나머지 열린 Gate 는 아래 openGates 가 개수로만 말한다 — 한 번에 하나씩 답하는 자리이고,
-   *  답하면 그다음 것이 이 자리로 올라온다. */
-  gate?: { id: string; question: string; options?: string[] }
+   *  답하면 그다음 것이 이 자리로 올라온다.
+   *
+   *  `kind` 는 앱이 특별히 다루는 Gate 의 종류(Gate.kind) — 사이드바가 "소진" 칩을 그릴 근거가 이것뿐이다.
+   *  repairs >= maxFixAttempts 로 되짚으면 사람이 한 번 더 허락한 수정(grantedExtra)이 그 셈을 깨뜨린다. */
+  gate?: { id: string; question: string; options?: string[]; kind?: GateKind }
   openGates: number
   /** The provider of the Dispatch that is **running this Task right now**. A Dispatch that has ended
    *  does not count — the sidebar's rows are the running ones, and this is the field that badge draws
@@ -413,6 +445,13 @@ export interface JobTask {
    *  돌아가고, 그때도 앞선 Dispatch 의 정지·재개는 상세 창의 타임라인에 그대로 남는다
    *  (core/orchestration/timeline.ts 는 Dispatch 마다 이력을 편다). */
   resumes?: number
+  /** 이 Task 의 마지막 검증 라운드. **검사가 걸린 모든 Task 가 갖는다** — 자동 수정을 켠 Run 만이 아니다
+   *  (UI 설계 U2). 없으면 검사가 없는 Task 이고, 그때 노드는 칩 줄 자체를 그리지 않는다. */
+  checks?: JobCheck[]
+  /** 자동 수정 정책이 있는 Run 의 Task 만 갖는다(`policyOf !== null`). 검사가 없는 Task 도 Run 에 정책이 있으면
+   *  갖는다 — 검토만 걸린 Task 의 라운드를 그리기 위해서다. 없는 Run 에 실으면 의미 없는 3/2 가 모든 카드를
+   *  따라다닌다. */
+  convergence?: JobConvergence
 }
 
 export type JobEventKind =
@@ -455,6 +494,14 @@ export interface JobEvent {
   /** 검토 Dispatch 인가 (Dispatch.review). 한 Task 에 구현과 검토의 dispatch-started 가 둘 나오므로,
    *  구별하지 않으면 같은 Task 를 두 번 시작한 것처럼 보인다 */
   review?: boolean
+  /** 수리 Dispatch 인가, 그리고 왜 (Dispatch.repair). `review` 와 배타적이다 — 같은 이유로 있다:
+   *  자동 수정이 도는 Task 는 구현 하나에 수리 여럿의 dispatch-started 를 내는데, 구별하지 않으면
+   *  타임라인이 "같은 Task 를 네 번 시작했다" 로만 읽힌다. 명세 §28 이 원하는 흐름의 절반이다.
+   *
+   *  나머지 절반(검사 회차마다 "2 tests failed", "Re-running checks")은 여기 없다. 그 시각이 상태에
+   *  없기 때문이다 — `Task.checks` 는 **마지막 라운드**만 갖고 `checkHistory` 는 통과/실패 수열만
+   *  가진다. 지어내지 않는다(설계 §3 의 W4, 그리고 그 대가를 §6 에 적어 두었다). */
+  repair?: RepairReason
   /** 이 앱이 아직 아는 세션이면 그 id — 클릭하면 그 탭으로 간다. view.ts 의 jobTaskOf 와 같은
    *  판정이고 같은 이유로 주입받는다 */
   sessionId?: string
@@ -1180,7 +1227,16 @@ export interface SystemApi {
   // share this instead of each inventing its own.
   pickFile(defaultPath?: string): Promise<string | null>
   pathExists(p: string): Promise<boolean>
-  checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>
+  // `cwd` lets the check run where the session actually will — the toolchain manager ahead of the
+  // CLI on PATH reads that folder's own manifest, so checking from the app's own cwd (omitting this)
+  // can pass while the same CLI refuses to run in the chosen project (design D3).
+  checkCli(cwd?: string): Promise<{ claude: CliStatus; codex: CliStatus }>
+  // "Is it installed at all" — asked directly of the machine (locateCommandFor), not inferred from a
+  // `--version` run. That run goes through a shell, and a shell that cannot find the binary still
+  // writes its own "not recognized"/"not found" to stderr — indistinguishable from the binary itself
+  // complaining once installed, so it cannot answer this question (design D3). Cwd-independent, so
+  // the renderer asks this once rather than per folder, unlike checkCli above.
+  checkCliInstalled(): Promise<{ claude: boolean; codex: boolean }>
   /** Installs one CLI with the command its vendor documents for this platform. Reached only from the
    *  screen shown when neither is present. Output arrives as `cli:install` events while it runs; this
    *  resolves when the installer exits. `error` names why nothing ran at all — an unmeasured platform,
@@ -1335,6 +1391,13 @@ export interface OrchApi {
   /** 한 Run 의 이벤트와 의존 그래프. 스냅샷과 달리 **요청할 때만** 온다 — Message.body 에는
    *  검증 출력 꼬리가 실리므로 매 쓰기마다 밀 수 있는 크기가 아니다. */
   runDetail(projectPath: string, runId: string): Promise<RunDetail>
+  /** 한 Task 가 왜 완료 정책을 못 넘었는가 — 실패한 검사의 출력 꼬리, 막는 리뷰 이슈, 의심
+   *  파일. 이것도 **펼칠 때만** 온다: 스냅숏이 이 셋을 싣지 않는 이유(변경마다 푸시된다)가
+   *  한 번 가져가는 이 호출에는 걸리지 않는다(UI 2조각 설계 W1).
+   *
+   *  `null` 은 둘 중 하나다 — 보여 줄 것이 없거나, 이 프로젝트가 볼 수 없는 Run·Task 다.
+   *  구분해 주지 않는 것이 의도다(ipc.ts 의 orch.completion). */
+  completion(projectPath: string, runId: string, taskId: string): Promise<CompletionDetail | null>
   /** UI 가 오케스트레이션 상태를 바꾸는 유일한 통로 — server.ts 의 명령 표면을 그대로 부른다.
    *  cmd 는 CLI 와 같은 이름이고(`task-create`, `worker-start`, …) args 도 같은 키를 쓴다.
    *
@@ -1527,6 +1590,12 @@ export type RendererApi = CoreApi & {
     configuredModel(sessionId: string): Promise<string | null>
     /** One-shot on mount; null for a session that is not a chat session. */
     state(sessionId: string): Promise<ChatState | null>
+    /** design F5: the person confirmed, in the renderer's own dialog, that they want to skip this
+     *  folder's toolchain and retry. `true` when the retry actually started (a fresh `SessionInfo`
+     *  also arrives as `session:created`, the same way a Host reconnect delivers one); `false` for a
+     *  session that is not currently offering the button — unknown id, or its own conditions no
+     *  longer hold (a race with a second exit, or a second click). */
+    retryWithBypass(sessionId: string): Promise<boolean>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

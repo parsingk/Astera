@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   emptyState,
+  stampPolicySnapshot,
   createRun,
   createTask,
   openDispatch,
@@ -30,9 +31,13 @@ import {
   bindNativeSession,
   beginValidation,
   writeOffDispatch,
+  openRepairDispatch,
+  interruptStalledTask,
   type OrchState
 } from './state'
-import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate } from './types'
+import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate, type Dispatch, type CheckResult } from './types'
+import type { RepairTarget } from './state'
+import { t } from '../i18n'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 const LATER = '2026-08-04T01:00:00.000Z'
@@ -42,6 +47,11 @@ const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchS
   if (!r.ok) throw new Error(`expected ok, got ${String(r.error)}`)
   return { state: r.state as OrchState, value: r.value as T }
 }
+/** 옛 단일 검증의 모양 — check 하나, exit code 하나 */
+const one = (exitCode: number, output = ''): CheckResult[] => [
+  { configId: 'cfg1', name: 'cfg1', status: exitCode === 0 ? 'passed' : 'failed', exitCode, outputTail: output }
+]
+const SAME: RepairTarget = { kind: 'same-session', sessionId: 'sess1', cwd: 'D:/p', provider: 'codex', accountId: 'acc1' }
 
 /** run + task + dispatch가 준비된 상태를 만든다 */
 const seed = (): { s: OrchState; runId: string; taskId: string; dispatchId: string } => {
@@ -832,6 +842,75 @@ describe('openDispatch — retryOf·sessionId 검증', () => {
   })
 })
 
+// 회귀: ALLOWED.validating·ALLOWED.reviewing 에 'dispatched' 가 더해진 뒤(openRepairDispatch 를
+// 위해서다), moveTask/canTransition 만으로는 이 거절을 더 지키지 못한다 — validating·reviewing 인
+// Task 에는 열린 Dispatch 가 없으므로 그 검사도 통과한다. openDispatch(worker-start 가 쓰는 문)가
+// 이제 명시적으로 거절한다. openRepairDispatch 는 이 검사를 아예 갖지 않는다 — 그것이 바로 그 판정
+// 도착 뒤의 유일한 문이다.
+describe('openDispatch — validating·reviewing 은 거절한다(회귀)', () => {
+  const asAwaitingVerdict = (status: 'validating' | 'reviewing') => {
+    const { s, taskId, dispatchId } = seed()
+    const state: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status } : t)),
+      dispatches: s.dispatches.map((d) =>
+        d.id === dispatchId ? { ...d, outcome: 'succeeded' as const, endedAt: NOW } : d
+      )
+    }
+    return { state, taskId }
+  }
+  it('validating 인 Task 에는 새 Dispatch 를 열 수 없다', () => {
+    const { state, taskId } = asAwaitingVerdict('validating')
+    const r = openDispatch(
+      state,
+      { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '' },
+      LATER
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('awaiting a verdict')
+  })
+  it('reviewing 인 Task 도 같다', () => {
+    const { state, taskId } = asAwaitingVerdict('reviewing')
+    const r = openDispatch(
+      state,
+      { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '' },
+      LATER
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('awaiting a verdict')
+  })
+  // seed() 의 Run 은 convergence 를 켜지 않는다 — 이 거절이 지키는 것은 검증·검토 자체(D12 이전부터
+  // 있었다)이지 완료 수렴이 아니다. 이 테스트가 바로 그 회귀를 막는다: convergence 없는 Run 에서도
+  // 코디네이터가 검사 중인 Task 에 두 번째 워커를 얹지 못해야 한다.
+  it('convergence 가 없는 Run 에서도 거절한다 — 이 문은 완료 수렴보다 먼저부터 있었다', () => {
+    const { state, taskId } = asAwaitingVerdict('validating')
+    expect(state.runs[0].convergence).toBeUndefined()
+    const r = openDispatch(
+      state,
+      { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '' },
+      LATER
+    )
+    expect(r.ok).toBe(false)
+  })
+  // repair.ts 의 repairOnce 가 이 openDispatch 를 부르는 것은 gate-resolve 가 이미 blocked ->
+  // pending(또는 ready) 으로 풀어 둔 Task 에서다 — validating·reviewing 이 아니므로 이 거절과
+  // 무관하다는 것을 확인한다(가정하지 않는다).
+  it('pending·ready 인 Task 는 영향받지 않는다 — repairOnce 가 여는 자리', () => {
+    const { s, taskId } = seed()
+    const pending: OrchState = {
+      ...s,
+      dispatches: [],
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'pending' as const } : t))
+    }
+    const r = openDispatch(
+      pending,
+      { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '', ignoreCircuit: true },
+      LATER
+    )
+    expect(r.ok).toBe(true)
+  })
+})
+
 describe('검증을 거치는 전이', () => {
   /** seed() 가 만드는 Task 에 검증 구성을 달아 준다 — seed 자체는 건드리지 않는다 */
   const withValidate = (s: OrchState, taskId: string, extra: Partial<Task> = {}): OrchState => ({
@@ -935,14 +1014,14 @@ describe('applyValidationResult', () => {
 
   it('종료 코드 0 이면 completed 이고 카운터를 초기화한다', () => {
     const { s, taskId } = validating({ consecutiveFailures: 2 })
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 0, output: 'ok' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(0, 'ok') }, NOW) as never)
     expect(r.state.tasks[0].status).toBe('completed')
     expect(r.state.tasks[0].consecutiveFailures).toBe(0)
   })
 
   it('종료 코드가 0 이 아니면 failed 이고 카운터가 오른다', () => {
     const { s, taskId } = validating({ consecutiveFailures: 1 })
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 1, output: '실패 로그' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(1, '실패 로그') }, NOW) as never)
     expect(r.state.tasks[0].status).toBe('failed')
     expect(r.state.tasks[0].consecutiveFailures).toBe(2)
   })
@@ -950,8 +1029,18 @@ describe('applyValidationResult', () => {
   // 재시도하는 워커가 무엇이 틀렸는지 읽을 수 있어야 한다
   it('실패하면 출력을 result 에 담는다', () => {
     const { s, taskId } = validating()
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 1, output: '실패 로그' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(1, '실패 로그') }, NOW) as never)
     expect(r.state.tasks[0].result).toContain('실패 로그')
+  })
+
+  // 호환성 — 코디네이터가 읽는 status 메시지는 validator 가 잡은 출력을 그대로 싣는다. 출력 꼬리를 벗기는
+  // 자리가 validator 가 아니라 **기록 직전**인 이유가 이것이다: validator 에서 빼면 이 문구가 바뀐다.
+  it('통과해도 status 메시지 body 는 출력을 싣는다 — 벗기는 것은 기록에서만', () => {
+    const { s, taskId } = validating()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: one(0, '통과 로그') }, NOW) as never)
+    expect(r.state.messages.at(-1)?.subject).toBe('validation passed')
+    expect(r.state.messages.at(-1)?.body).toContain('통과 로그')
+    expect(r.value.checks?.[0]).not.toHaveProperty('outputTail')
   })
 
   // **이것이 요점이다** — 검증되지 않은 결과 위에 다음 작업이 쌓이면 안 된다
@@ -961,7 +1050,7 @@ describe('applyValidationResult', () => {
       createTask(s, { runId: s.runs[0].id, title: 'next', spec: 'x', deps: [taskId] }, NOW) as never
     )
     expect(next.state.tasks[1].status).toBe('pending')
-    const done = unwrap(applyValidationResult(next.state, { taskId, exitCode: 0, output: '' }, NOW) as never)
+    const done = unwrap(applyValidationResult(next.state, { taskId, results: one(0, '') }, NOW) as never)
     expect(done.state.tasks[1].status).toBe('ready')
   })
 
@@ -970,7 +1059,7 @@ describe('applyValidationResult', () => {
   // 도착하지 않는다. 그 코디네이터가 받은 마지막 소식은 "워커가 성공했다"다.
   it('실패하면 종료 코드와 출력을 담은 status 메시지를 붙인다', () => {
     const { s, taskId } = validating()
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 2, output: '실패 로그' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(2, '실패 로그') }, NOW) as never)
     const m = r.state.messages[r.state.messages.length - 1]
     expect(m.type).toBe('status')
     expect(m.taskId).toBe(taskId)
@@ -983,7 +1072,7 @@ describe('applyValidationResult', () => {
   // 통과도 알려야 한다 — 의존 Task 가 풀린 것을 모르면 코디네이터는 다음 Task 를 띄우지 않는다
   it('통과해도 status 메시지를 붙인다', () => {
     const { s, taskId } = validating()
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 0, output: 'ok' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(0, 'ok') }, NOW) as never)
     const m = r.state.messages[r.state.messages.length - 1]
     expect(m.type).toBe('status')
     expect(m.subject).toBe('validation passed')
@@ -994,7 +1083,7 @@ describe('applyValidationResult', () => {
   // check 가 그것을 건너뛰고 코디네이터는 그대로 잠들어 있는다
   it('붙은 메시지는 nextDelivery 의 배치에 들어간다', () => {
     const { s, taskId } = validating()
-    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 1, output: 'x' }, NOW) as never)
+    const r = unwrap(applyValidationResult(s, { taskId, results: one(1, 'x') }, NOW) as never)
     const d = unwrap<{ messages: { subject: string }[] }>(
       nextDelivery(r.state, { runId: s.runs[0].id, types: ['status'] }, NOW) as never
     )
@@ -1003,24 +1092,467 @@ describe('applyValidationResult', () => {
 
   it('validating 이 아닌 Task 는 거절한다', () => {
     const { s, taskId } = seed()
-    const r = applyValidationResult(s, { taskId, exitCode: 0, output: '' }, NOW)
+    const r = applyValidationResult(s, { taskId, results: one(0, '') }, NOW)
     expect(r.ok).toBe(false)
   })
 
   // 거절된 호출은 메시지도 남기지 않는다 — 거절인데 코디네이터를 깨우면 안 된다
   it('거절되면 메시지도 붙지 않는다', () => {
     const { s, taskId } = validating()
-    const settled = unwrap(applyValidationResult(s, { taskId, exitCode: 0, output: '' }, NOW) as never)
+    const settled = unwrap(applyValidationResult(s, { taskId, results: one(0, '') }, NOW) as never)
     const before = settled.state.messages.length
-    const again = applyValidationResult(settled.state, { taskId, exitCode: 1, output: '' }, NOW)
+    const again = applyValidationResult(settled.state, { taskId, results: one(1, '') }, NOW)
     expect(again.ok).toBe(false)
     expect(settled.state.messages).toHaveLength(before)
   })
 
   it('없는 Task 는 거절한다', () => {
     const { s } = validating()
-    const r = applyValidationResult(s, { taskId: 'nope', exitCode: 0, output: '' }, NOW)
+    const r = applyValidationResult(s, { taskId: 'nope', results: one(0, '') }, NOW)
     expect(r.ok).toBe(false)
+  })
+})
+
+describe('applyValidationResult — convergence', () => {
+  /** convergence Run 에 check 둘이 걸린 Task 를 validating 까지 보낸 상태 */
+  const armed = (
+    extra: Partial<Task> = {},
+    runExtra: Partial<import('./types').Run> = {}
+  ): { s: OrchState; taskId: string; dispatchId: string } => {
+    const { s, taskId, dispatchId } = seed()
+    const on: OrchState = {
+      ...s,
+      runs: s.runs.map((r) => ({ ...r, convergence: {}, ...runExtra })),
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1', 'cfg2'], ...extra } : t))
+    }
+    const r = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    return { s: r.state, taskId, dispatchId }
+  }
+  const two = (a: 0 | 1, b: 0 | 1 | null): CheckResult[] => [
+    { configId: 'cfg1', name: 'Typecheck', status: a === 0 ? 'passed' : 'failed', exitCode: a, outputTail: a ? 'TS2322' : '' },
+    b === null
+      ? { configId: 'cfg2', name: 'Tests', status: 'not-run' }
+      : { configId: 'cfg2', name: 'Tests', status: b === 0 ? 'passed' : 'failed', exitCode: b, outputTail: b ? '2 failed' : '' }
+  ]
+
+  it('전부 통과하면 completed 이고 checks 를 기록한다', () => {
+    const { s, taskId } = armed()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 0), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('completed')
+    expect(r.value.checks?.map((c) => c.status)).toEqual(['passed', 'passed'])
+    expect(r.value.checkHistory).toEqual({ cfg1: ['passed'], cfg2: ['passed'] })
+    expect(r.state.messages.at(-1)?.subject).toBe('All 2 checks passed')
+  })
+
+  it('하나가 실패하면 같은 세션에 repair Dispatch 를 열고 Task 는 dispatched 다 — failed 를 거치지 않는다', () => {
+    const { s, taskId, dispatchId } = armed()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(1, null), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('dispatched')
+    expect(r.value.consecutiveFailures).toBe(1)
+    const repair = r.state.dispatches.find((d) => d.repair)
+    expect(repair).toMatchObject({ taskId, repair: 'check-failure', retryOf: dispatchId, sessionId: 'sess1', cwd: 'D:/p', provider: 'codex', accountId: 'acc1', workerState: 'ready' })
+    expect(repair?.endedAt).toBeUndefined()
+    const msg = r.state.messages.at(-1)!
+    expect(msg.subject).toBe('Checks failed: Typecheck (1 of 2 ran)')
+    expect(msg.body).toContain('repair 1 of 3')
+    expect(msg.body).toContain('Do not start a worker for it')
+    expect(msg.body).not.toContain('--retry-of')
+  })
+
+  it('fresh 대상이면 placeholder 세션으로 연다', () => {
+    const { s, taskId } = armed()
+    const r = unwrap<Task>(
+      applyValidationResult(s, { taskId, results: two(1, null), repair: { kind: 'fresh', cwd: 'D:/p', provider: 'codex', accountId: 'acc1' } }, NOW) as never
+    )
+    expect(r.state.dispatches.find((d) => d.repair)?.sessionId).toMatch(/^pending:/)
+  })
+
+  // 설계 G2(명세 §40). 시간이 횟수보다 앞이다 — 넘었으면 횟수가 남아 있어도 새 수리를 열지 않는다
+  it('시간 예산을 넘기면 횟수가 남아 있어도 소진 Gate 다', () => {
+    const { s, taskId } = armed({}, { convergence: { maxTotalMinutes: 30 } })
+    // 시계는 validating 이 된 NOW 에 찍혔다. 그로부터 31분 뒤의 판정.
+    const late = new Date(Date.parse(NOW) + 31 * 60_000).toISOString()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, late) as never)
+    expect(r.value.status).toBe('blocked')
+    const gate = r.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-exhausted')
+    expect(gate.options).toEqual(['retry-once', 'mark-failed'])
+    expect(gate.question).toContain('30')
+    // 예산이 남아 있는데도 수리를 열지 않았다
+    expect(r.state.dispatches.filter((d) => d.repair)).toHaveLength(0)
+  })
+
+  it('시간 예산 안이면 평소대로 수리를 연다', () => {
+    const { s, taskId } = armed({}, { convergence: { maxTotalMinutes: 30 } })
+    const soon = new Date(Date.parse(NOW) + 5 * 60_000).toISOString()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, soon) as never)
+    expect(r.value.status).toBe('dispatched')
+    expect(r.state.dispatches.filter((d) => d.repair)).toHaveLength(1)
+  })
+
+  // 멈춤은 시간 소진보다도 앞이다 — 사람이 끈 것이 예산 이야기보다 먼저다
+  it('사람이 멈췄으면 시간을 넘겼어도 멈춤 Gate 다', () => {
+    const { s, taskId } = armed({ convergenceOff: true }, { convergence: { maxTotalMinutes: 1 } })
+    const late = new Date(Date.parse(NOW) + 99 * 60_000).toISOString()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, late) as never)
+    expect(r.state.gates.at(-1)!.kind).toBe('convergence-blocked')
+  })
+
+  it('시계는 처음 validating 이 될 때 한 번만 찍힌다', () => {
+    const { s, taskId } = armed()
+    const first = s.tasks.find((t) => t.id === taskId)!.convergenceStartedAt
+    expect(first).toBe(NOW)
+    // 한 라운드 실패 뒤 다시 validating 이 되어도 그대로여야 한다
+    const later = new Date(Date.parse(NOW) + 10 * 60_000).toISOString()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, later) as never)
+    expect(r.state.tasks.find((t) => t.id === taskId)!.convergenceStartedAt).toBe(first)
+  })
+
+  it('k 번째 실패가 maxFixAttempts 를 넘으면 소진 Gate 다 — 기본 3 이면 네 번째 실패', () => {
+    const { s, taskId } = armed({ consecutiveFailures: 3 })
+    // repairCountOf 가 세는 것은 실제로 연 repair Dispatch 다(Important 수정) — 이 테스트가 뜻있게
+    // "예산까지 세 번 고쳤다" 를 확인하도록, consecutiveFailures=3 에 맞춰 실제로 repair Dispatch
+    // 셋을 만들어 둔다.
+    const withHistory: OrchState = {
+      ...s,
+      dispatches: [
+        ...s.dispatches,
+        ...[1, 2, 3].map((n) => ({ ...s.dispatches[0], id: `dsp_r${n}`, repair: 'check-failure' as const, outcome: 'failed' as const, endedAt: NOW }))
+      ]
+    }
+    const r = unwrap<Task>(applyValidationResult(withHistory, { taskId, results: two(0, 1), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('blocked')
+    expect(r.value.consecutiveFailures).toBe(4)
+    const gate = r.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-exhausted')
+    expect(gate.options).toEqual(['retry-once', 'mark-failed'])
+    expect(gate.question).toContain('3')
+    expect(gate.question).toContain('Tests')
+    expect(r.state.dispatches.filter((d) => d.repair)).toHaveLength(3)
+  })
+
+  it('세 번째 실패까지는 repair 를 연다', () => {
+    const { s, taskId } = armed({ consecutiveFailures: 2 })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('dispatched')
+    expect(r.state.messages.at(-1)?.body).toContain('repair 3 of 3')
+  })
+
+  it('convergenceOff 인 Task 의 실패는 Gate(convergence-blocked)다', () => {
+    const { s, taskId } = armed({ convergenceOff: true })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(1, null), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('blocked')
+    expect(r.state.gates.at(-1)?.kind).toBe('convergence-blocked')
+    expect(r.state.dispatches.some((d) => d.repair)).toBe(false)
+  })
+
+  it('멈춘 Run 의 실패는 repair 를 열지 않고 Gate 다', () => {
+    const { s, taskId } = armed({}, { paused: true })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(1, null), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('blocked')
+    expect(r.state.gates.at(-1)?.kind).toBe('convergence-blocked')
+  })
+
+  // 전체 브랜치 리뷰, Finding 4 — routeFailure 의 나머지 세 갈래(convergenceOff, paused, exhausted)와
+  // openRepairDispatch 실패 갈래가 전부 Gate 를 여는데, repair 대상 자체가 없는 이 갈래만 err 로
+  // 조용히 버렸었다. 그러면 부르는 쪽(server.ts)은 로그만 남기고 Task 는 validating 에 갇힌 채
+  // 아무도 다시 보러 오지 않는다 — §18(4)가 닫으려 한 것과 같은 구멍이다. 오늘의 배선은 항상
+  // `repair` 를 채워 넘기므로 이 갈래는 이제 닿지 않지만(순수 층은 배선을 믿지 않는다), 그래도
+  // 나머지와 같은 모양으로 닫아 둔다.
+  it('정책이 켜졌는데 repair 대상이 없으면 조용히 버리지 않고 Gate(repairFailed) 로 보낸다', () => {
+    const { s, taskId } = armed()
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(1, null) }, NOW) as never)
+    expect(r.value.status).toBe('blocked')
+    const gate = r.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-blocked')
+    expect(gate.question).toContain('no repair target was supplied')
+    expect(r.state.dispatches.some((d) => d.repair)).toBe(false)
+  })
+
+  it('통과 뒤 검토가 걸려 있으면 reviewing 이고 카운터는 보존된다', () => {
+    const { s, taskId } = armed({ reviewRequested: true, consecutiveFailures: 1 })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 0), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('reviewing')
+    expect(r.value.consecutiveFailures).toBe(1)
+  })
+
+  it('fail→pass→fail 인 check 에 unstable 을 찍는다', () => {
+    const { s, taskId } = armed({ checkHistory: { cfg2: ['failed', 'passed'] } })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME }, NOW) as never)
+    expect(r.value.checks?.find((c) => c.configId === 'cfg2')?.unstable).toBe(true)
+    expect(r.value.checks?.find((c) => c.configId === 'cfg1')?.unstable).toBeUndefined()
+  })
+
+  it('꺼진 Run 은 문구까지 지금과 같다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const old: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t)) }
+    const v = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const r = unwrap<Task>(applyValidationResult(v.state, { taskId, results: one(1, '실패 로그') }, NOW) as never)
+    expect(r.value.status).toBe('failed')
+    expect(r.value.result).toBe('validation failed (exit 1)\n실패 로그')
+    expect(r.state.messages.at(-1)?.subject).toBe('validation failed')
+    expect(r.state.messages.at(-1)?.body).toContain('Retry with worker-start --retry-of')
+  })
+
+  // **꺼진 Run 도 checks·checkHistory 를 기록한다**(UI 설계 U2, Plan 1 설계 §18-11) — `--validate` 만 쓰는
+  // Run 의 Task 도 어느 검사가 깨졌는지 노드에 보여야 하고, 그 정보가 상태에 없으면 그릴 수 없다. 한때
+  // "꺼진 Run 의 orchestration.json 은 커지지 않는다" 가 보장이었는데, 지금은 검사별 한 줄만큼 커지는 것을
+  // 받아들이고 그 대신 통과한 검사의 출력 꼬리를 뺀다(아래 테스트).
+  it('꺼진 Run 도 checks·checkHistory 를 기록한다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const old: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t)) }
+    const v = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const r = unwrap<Task>(applyValidationResult(v.state, { taskId, results: one(1, '실패 로그') }, NOW) as never)
+    expect(r.value.status).toBe('failed')
+    expect(r.value.checks?.map((c) => c.status)).toEqual(['failed'])
+    expect(r.value.checks?.[0].outputTail).toBe('실패 로그')
+    expect(r.value.checkHistory).toEqual({ cfg1: ['failed'] })
+  })
+
+  // 통과한 검사의 출력은 툴팁에 쓸모없고 상태 파일 용량의 대부분이다 — **키 자체를 뺀다**. `{ ...r, outputTail:
+  // undefined }` 도 JSON 에는 안 남지만 메모리의 Task 와 toEqual 비교에 거짓 차이를 만든다. 실패한 검사의 것은
+  // repair spec(coordinator.ts 의 repairSection)이 읽으므로 남는다.
+  it('통과한 검사의 outputTail 은 키를 빼고, 실패한 검사의 것은 남긴다', () => {
+    const { s, taskId } = armed()
+    const results: CheckResult[] = [
+      { configId: 'cfg1', name: 'Typecheck', status: 'passed', exitCode: 0, outputTail: '긴 통과 로그' },
+      { configId: 'cfg2', name: 'Tests', status: 'failed', exitCode: 1, outputTail: '2 failed' }
+    ]
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results, repair: SAME }, NOW) as never)
+    expect(r.value.checks?.[0]).not.toHaveProperty('outputTail')
+    expect(r.value.checks?.[1].outputTail).toBe('2 failed')
+  })
+
+  // **Important #1 — repair Dispatch 를 열지 못해도 판정을 버리지 않는다.** 다른 Task 가 --terminal 로
+  // 같은 sessionId 를 재사용하면 openRepairDispatch 의 sessionId 검사가 걸린다. 그때도 checks 와
+  // consecutiveFailures+1 은 Task 에 남고, 판정은 조용히 사라지지 않고 Gate 가 된다.
+  it('repair Dispatch 를 열 수 없으면 판정을 버리지 않고 Gate(repairFailed) 로 보낸다 — checks 는 남는다', () => {
+    const { s, taskId } = armed()
+    const runId = s.runs[0].id
+    const other = unwrap<Task>(createTask(s, { runId, title: 'other', spec: 'x', deps: [] }, NOW) as never)
+    // 다른 Task 가 같은 sessionId 로 이미 열린 Dispatch 를 쥐고 있다 — repair 가 재사용하려는 세션이다
+    const elsewhere: Dispatch = {
+      id: 'dsp_elsewhere',
+      taskId: other.value.id,
+      provider: 'codex',
+      accountId: 'acc1',
+      sessionId: 'sess1',
+      cwd: 'D:/p',
+      specPath: '',
+      startedAt: NOW,
+      workerState: 'ready',
+      retained: false
+    }
+    const clashed: OrchState = { ...other.state, dispatches: [...other.state.dispatches, elsewhere] }
+    const r = unwrap<Task>(applyValidationResult(clashed, { taskId, results: two(1, null), repair: SAME }, NOW) as never)
+    expect(r.value.status).toBe('blocked')
+    expect(r.value.consecutiveFailures).toBe(1)
+    expect(r.value.checks?.map((c) => c.status)).toEqual(['failed', 'not-run'])
+    const gate = r.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-blocked')
+    expect(gate.question).toContain('sessionId already in use')
+    expect(r.state.dispatches.some((d) => d.repair)).toBe(false)
+  })
+
+  // Minor — Gate 질문은 앱 언어로 그려진다
+  // **문구가 아니라 언어를 고정한다.** 한때 이 테스트는 한국어 문장의 조각("완료 검사가", "수렴하지")을
+  // 직접 적어 두었는데, 그 문구를 다듬은 커밋 하나에 그대로 깨졌다(1c63d9d — "수렴하지 않았습니다" 가
+  // "통과하지 못했습니다" 가 된 자리다). 이 테스트가 지키려는 것은 특정 낱말이 아니라 lang 이 실제로
+  // 카탈로그 선택에 쓰인다는 것이므로, 같은 키를 같은 인자로 렌더한 것과 비교하고 영어와 다름을 함께 본다.
+  it('lang 을 주면 Gate 질문이 그 언어로 그려진다', () => {
+    const { s, taskId } = armed({ consecutiveFailures: 3 })
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results: two(0, 1), repair: SAME, lang: 'ko' }, NOW) as never)
+    const gate = r.state.gates.at(-1)!
+    // 'Tests' 는 이 fixture 가 실패시킨 check 의 이름이다(two(0, 1) 의 cfg2), repairs 0 은 예산 밖이라
+    // 이번 실패로는 repair 가 열리지 않았다는 뜻이다 — 둘 다 세 줄 위에서 읽히는 값이다.
+    const rendered = (lang: 'ko' | 'en'): string =>
+      t(lang, 'jobs.convergence.gate.exhausted', { repairs: 0, failures: 'Tests' })
+    expect(gate.question).toBe(rendered('ko'))
+    expect(gate.question).not.toBe(rendered('en'))
+  })
+
+  // Minor — failureSummary 의 나머지 두 갈래: timed-out check, blocking reviewIssue
+  it('failureSummary 는 timed-out check 와 blocking reviewIssue 도 요약에 싣는다', () => {
+    const { s, taskId } = armed({
+      consecutiveFailures: 3,
+      reviewIssues: [{ id: 'rvw1', severity: 'high', blocking: true, title: 'Session race', description: '' }]
+    })
+    const results: CheckResult[] = [
+      { configId: 'cfg1', name: 'Typecheck', status: 'timed-out' },
+      { configId: 'cfg2', name: 'Tests', status: 'not-run' }
+    ]
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results, repair: SAME }, NOW) as never)
+    const gate = r.state.gates.at(-1)!
+    expect(gate.question).toContain('Typecheck')
+    expect(gate.question).toContain('HIGH Session race')
+  })
+
+  // Minor — 요약할 것이 아무것도 없으면(failed·timed-out check 도, blocking 이슈도 없으면) '(no record)'
+  it('요약할 실패가 없으면 (no record) 로 남는다', () => {
+    const { s, taskId } = armed({ consecutiveFailures: 3 })
+    const results: CheckResult[] = [
+      { configId: 'cfg1', name: 'Typecheck', status: 'not-run' },
+      { configId: 'cfg2', name: 'Tests', status: 'not-run' }
+    ]
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results, repair: SAME }, NOW) as never)
+    const gate = r.state.gates.at(-1)!
+    expect(gate.question).toContain('(no record)')
+  })
+
+  // Minor — failedNames 가 비면(전부 not-run) 제목에 구멍이 남지 않는다
+  it('실패한 check 이름이 없으면 제목이 콜론 구멍 없이 내려간다', () => {
+    const { s, taskId } = armed({ consecutiveFailures: 0 })
+    const results: CheckResult[] = [
+      { configId: 'cfg1', name: 'Typecheck', status: 'not-run' },
+      { configId: 'cfg2', name: 'Tests', status: 'not-run' }
+    ]
+    const r = unwrap<Task>(applyValidationResult(s, { taskId, results, repair: SAME }, NOW) as never)
+    expect(r.state.messages.at(-1)?.subject).toBe('Checks failed (0 of 2 ran)')
+  })
+})
+
+// **Important #2 — openRepairDispatch 는 지금까지 행복한 경로로만 간접 테스트됐다.** 다섯 개의 가드
+// 조항을 각각 따로 고정한다. 예산·회로를 보지 않는다는 것이 그중 가장 중요하다 — 그것은 부르는
+// 판정 함수의 일이고, 여기서 다시 보면 규칙이 두 곳에 있게 된다.
+describe('openRepairDispatch', () => {
+  /** seed() 의 Task 를 검증 대기로 보낸다. Dispatch 이력은 seed() 의 구현 Dispatch 하나뿐이고, 그것은
+   *  applyWorkerDone 이 닫아 둔다 — retryOf 와 same-session 재사용의 근거다 */
+  const toValidating = (): { s: OrchState; taskId: string; dispatchId: string } => {
+    const { s, taskId, dispatchId } = seed()
+    const armed: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t))
+    }
+    const r = unwrap(applyWorkerDone(armed, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    return { s: r.state, taskId, dispatchId }
+  }
+
+  it('validating·reviewing 이 아니면 거절한다', () => {
+    const { s, taskId } = seed() // seed() 의 Task 는 아직 dispatched 다
+    const r = openRepairDispatch(s, { taskId, reason: 'check-failure', target: SAME }, NOW)
+    expect(r.ok).toBe(false)
+  })
+
+  it('이 Task 에 이미 열린 Dispatch 가 있으면 거절한다', () => {
+    const { s, taskId } = toValidating()
+    const extra: Dispatch = {
+      id: 'dsp_extra',
+      taskId,
+      provider: 'codex',
+      accountId: 'acc1',
+      sessionId: 'sess2',
+      cwd: 'D:/p',
+      specPath: '',
+      startedAt: NOW,
+      workerState: 'ready',
+      retained: false
+    }
+    const withOpen: OrchState = { ...s, dispatches: [...s.dispatches, extra] }
+    const r = openRepairDispatch(withOpen, { taskId, reason: 'check-failure', target: SAME }, NOW)
+    expect(r.ok).toBe(false)
+  })
+
+  it('대상 sessionId 를 다른 열린 Dispatch 가 쓰고 있으면 거절한다', () => {
+    const { s, taskId } = toValidating()
+    const elsewhere: Dispatch = {
+      id: 'dsp_elsewhere',
+      taskId: 'tsk_other',
+      provider: 'codex',
+      accountId: 'acc1',
+      sessionId: 'sess1',
+      cwd: 'D:/p',
+      specPath: '',
+      startedAt: NOW,
+      workerState: 'ready',
+      retained: false
+    }
+    const withTaken: OrchState = { ...s, dispatches: [...s.dispatches, elsewhere] }
+    const r = openRepairDispatch(withTaken, { taskId, reason: 'check-failure', target: SAME }, NOW)
+    expect(r.ok).toBe(false)
+  })
+
+  it('구현 Dispatch 가 아예 없으면 거절한다', () => {
+    const { s, runId } = seed()
+    const created = unwrap<Task>(createTask(s, { runId, title: 't2', spec: 's2', deps: [] }, NOW) as never)
+    const forced: OrchState = {
+      ...created.state,
+      tasks: created.state.tasks.map((t) => (t.id === created.value.id ? { ...t, status: 'validating' as const } : t))
+    }
+    const r = openRepairDispatch(forced, { taskId: created.value.id, reason: 'check-failure', target: SAME }, NOW)
+    expect(r.ok).toBe(false)
+  })
+
+  it('same-session 대상이면 그 세션을 그대로 재사용한다', () => {
+    const { s, taskId, dispatchId } = toValidating()
+    const r = unwrap<Dispatch>(openRepairDispatch(s, { taskId, reason: 'check-failure', target: SAME }, NOW) as never)
+    expect(r.value.sessionId).toBe('sess1')
+    expect(r.value.retryOf).toBe(dispatchId)
+    expect(r.value.repair).toBe('check-failure')
+    expect(r.value.workerState).toBe('ready')
+  })
+
+  it('fresh 대상이면 placeholder 세션을 새로 만든다', () => {
+    const { s, taskId } = toValidating()
+    const r = unwrap<Dispatch>(
+      openRepairDispatch(
+        s,
+        { taskId, reason: 'check-failure', target: { kind: 'fresh', cwd: 'D:/p', provider: 'codex', accountId: 'acc1' } },
+        NOW
+      ) as never
+    )
+    expect(r.value.sessionId).toMatch(/^pending:/)
+  })
+
+  // 이것이 가장 중요하다 — 예산은 부르는 판정 함수가 이미 정했다. 여기서 다시 보면 규칙이 두 곳에
+  // 있게 되고, 언젠가 갈라진다.
+  it('consecutiveFailures 나 FAILURE_LIMIT 을 보지 않는다 — 예산은 부르는 쪽의 일이다', () => {
+    const { s, taskId } = toValidating()
+    const atLimit: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, consecutiveFailures: FAILURE_LIMIT + 5 } : t))
+    }
+    const r = unwrap<Dispatch>(openRepairDispatch(atLimit, { taskId, reason: 'check-failure', target: SAME }, NOW) as never)
+    expect(r.value.taskId).toBe(taskId)
+  })
+})
+
+describe('openDispatch — repair 와 ignoreCircuit', () => {
+  it('repair 표시를 싣고, ignoreCircuit 이면 회로가 끊긴 Task 도 연다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const done = unwrap(applyWorkerDone(s, { taskId, dispatchId, outcome: 'failed', subject: 's', body: 'b' }, NOW) as never)
+    const tripped: OrchState = { ...done.state, tasks: done.state.tasks.map((t) => ({ ...t, consecutiveFailures: FAILURE_LIMIT })) }
+    const refused = openDispatch(tripped, { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '', retryOf: dispatchId, repair: 'check-failure' }, LATER)
+    expect(refused.ok).toBe(false)
+    const r = unwrap<Dispatch>(
+      openDispatch(tripped, { taskId, provider: 'codex', accountId: 'acc1', sessionId: 'sess2', cwd: 'D:/p', specPath: '', retryOf: dispatchId, repair: 'check-failure', ignoreCircuit: true }, LATER) as never
+    )
+    expect(r.value.repair).toBe('check-failure')
+  })
+})
+
+describe('createRun / createTask / spawnScheduledRun — convergence 칸', () => {
+  it('createRun 은 convergence 를 싣고, 없으면 칸 자체가 없다', () => {
+    const a = unwrap<import('./types').Run>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p', convergence: { maxFixAttempts: 2 } }, NOW) as never)
+    expect(a.value.convergence).toEqual({ maxFixAttempts: 2 })
+    const b = unwrap<import('./types').Run>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never)
+    expect(b.value).not.toHaveProperty('convergence')
+  })
+  it('createTask 는 validateConfigIds 를 싣고 빈 배열은 싣지 않는다', () => {
+    const { s, runId } = seed()
+    const a = unwrap<Task>(createTask(s, { runId, title: 't', spec: 's', deps: [], validateConfigIds: ['x', 'y'] }, NOW) as never)
+    expect(a.value.validateConfigIds).toEqual(['x', 'y'])
+    const b = unwrap<Task>(createTask(s, { runId, title: 't', spec: 's', deps: [], validateConfigIds: [] }, NOW) as never)
+    expect(b.value).not.toHaveProperty('validateConfigIds')
+  })
+  it('회차는 validateConfigIds 와 Run 의 convergence 를 물려받는다', () => {
+    let { state: s } = unwrap<import('./types').Run>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } as never, convergence: {} }, NOW) as never
+    )
+    const tmpl = s.runs[0]
+    s = unwrap<Task>(createTask(s, { runId: tmpl.id, title: 't', spec: 's', deps: [], validateConfigIds: ['x'] }, NOW) as never).state
+    const fired = unwrap<import('./types').Run>(spawnScheduledRun(s, tmpl.id, LATER) as never)
+    expect(fired.value.convergence).toEqual({})
+    expect(fired.state.tasks.find((t) => t.runId === fired.value.id)?.validateConfigIds).toEqual(['x'])
   })
 })
 
@@ -1087,7 +1619,7 @@ describe('reviewing', () => {
     const r = unwrap(
       applyValidationResult(
         toValidating.state,
-        { taskId, exitCode: 0, output: 'ok', canReview: true },
+        { taskId, results: one(0, 'ok'), canReview: true },
         NOW
       ) as never
     )
@@ -1113,7 +1645,7 @@ describe('reviewing', () => {
       applyWorkerDone(armed, done(taskId, dispatchId, 'succeeded'), NOW) as never
     )
     const r = unwrap(
-      applyValidationResult(toValidating.state, { taskId, exitCode: 0, output: 'ok' }, NOW) as never
+      applyValidationResult(toValidating.state, { taskId, results: one(0, 'ok') }, NOW) as never
     )
     expect(r.state.tasks[0].status).toBe('reviewing')
     expect(r.state.tasks[0].consecutiveFailures).toBe(2)
@@ -1132,7 +1664,7 @@ describe('reviewing', () => {
       applyWorkerDone(armed, done(taskId, dispatchId, 'succeeded'), NOW) as never
     )
     const r = unwrap(
-      applyValidationResult(toValidating.state, { taskId, exitCode: 0, output: 'ok' }, NOW) as never
+      applyValidationResult(toValidating.state, { taskId, results: one(0, 'ok') }, NOW) as never
     )
     expect(r.state.tasks[0].status).toBe('completed')
     expect(r.state.tasks[0].consecutiveFailures).toBe(0)
@@ -2596,5 +3128,268 @@ describe('writeOffDispatch', () => {
     const never = writeOffDispatch(s, { dispatchId: 'dsp_nope' }, LATER)
     expect(never.closed).toBe(false)
     expect(never.state).toBe(s)
+  })
+})
+
+describe('applyReviewResult — convergence', () => {
+  /** convergence Run, 검토 걸린 Task 를 reviewing 까지 보내고 검토 Dispatch 를 연 상태 */
+  const reviewing = (extra: Partial<Task> = {}, runExtra: Partial<import('./types').Run> = {}) => {
+    const { s, taskId, dispatchId } = seed()
+    const on: OrchState = {
+      ...s,
+      runs: s.runs.map((r) => ({ ...r, convergence: {}, ...runExtra })),
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true, ...extra } : t))
+    }
+    const done = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const opened = unwrap<Dispatch>(
+      openReviewDispatch(done.state, { taskId, provider: 'claude', accountId: 'accC', sessionId: 'rev1', cwd: 'D:/p', specPath: '' }, NOW) as never
+    )
+    return { s: opened.state, taskId, implId: dispatchId, reviewId: opened.value.id }
+  }
+  const high = { severity: 'high' as const, title: 'Session race', file: 'src/a.ts', line: 3 }
+  const low = { severity: 'low' as const, title: 'naming' }
+
+  it('blocking 이슈가 없으면 completed 이고 이슈는 reviewIssues 에 남는다', () => {
+    const { s, taskId, reviewId } = reviewing()
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'fine', issues: [low], repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('completed')
+    expect(task.consecutiveFailures).toBe(0)
+    expect(task.reviewIssues?.map((i) => [i.severity, i.blocking])).toEqual([['low', false]])
+    expect(r.state.messages.at(-1)?.subject).toBe('Review approved (1 non-blocking note)')
+  })
+
+  it('blocking 이슈가 있으면 같은 구현 세션에 review-failure repair 를 연다', () => {
+    const { s, taskId, implId, reviewId } = reviewing()
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'see file', issues: [high, low], repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('dispatched')
+    expect(task.consecutiveFailures).toBe(1)
+    const repair = r.state.dispatches.find((d) => d.repair)!
+    expect(repair).toMatchObject({ repair: 'review-failure', retryOf: implId, sessionId: 'sess1' })
+    expect(r.state.dispatches.find((d) => d.id === reviewId)?.outcome).toBe('failed')
+    expect(r.state.messages.at(-1)?.subject).toBe('claude review found 1 blocking issue')
+  })
+
+  // repair 메시지 본문은 repair 하는 워커에게 전해지는 유일한 기록이다 — 그 모양을 아무도
+  // 확인하지 않고 있었다. 하나는 file:line 이 있는 경우, 하나는 없는 경우다.
+  it('repair 메시지 본문에 blocking 이슈를 번호를 매겨 나열한다', () => {
+    const { s, taskId, reviewId } = reviewing()
+    const high2 = { severity: 'high' as const, title: 'Missing null check' }
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'see file', issues: [high, high2], repair: SAME }, LATER) as never)
+    const body = r.state.messages.at(-1)?.body ?? ''
+    // 리터럴로 이어 붙이지 않는다 — "파일명.ts:숫자" 모양은 lineNumberCitations 테스트가 (이 코드
+    // 자신을 줄 번호로 인용한 주석으로 오인해) 위반으로 잡는다. 여기서는 그런 주석이 아니라 리뷰
+    // 이슈의 file:line 표시이므로, 조립해서 그 모양을 피한다.
+    expect(body).toContain(`1. HIGH — ${high.title} — ${high.file}:${high.line}`)
+    expect(body).toContain('2. HIGH — Missing null check')
+  })
+
+  // normalizeIssues 의 규칙(파일 없음 -> outcome 만으로 정한다) 을 이 경로에서도 확인한다
+  it('issues 가 undefined 면(판정 파일 없음) outcome 만으로 정한다 — failed 는 blocking 이슈 하나를 만든다', () => {
+    const { s, taskId, implId, reviewId } = reviewing()
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'no good', body: 'missing tests', repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('dispatched')
+    expect(task.reviewIssues).toHaveLength(1)
+    expect(task.reviewIssues?.[0]).toMatchObject({ severity: 'high', blocking: true, title: 'no good', description: 'missing tests' })
+    expect(r.state.dispatches.find((d) => d.repair)?.retryOf).toBe(implId)
+  })
+
+  // routeFailure 의 가드다 — convergence Run 은 repair 대상 없이 조용히 다른 경로로 떨어지지 않는다.
+  // **err 가 아니라 Gate 다(전체 브랜치 리뷰, Finding 4)** — state.test.ts 의 같은 이름 테스트
+  // (applyValidationResult 쪽)와 같은 이유.
+  it('convergence Run 인데 repair 대상이 없으면 조용히 버리지 않고 Gate(repairFailed) 로 보낸다', () => {
+    const { s, taskId, reviewId } = reviewing()
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b', issues: [high] }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('blocked')
+    const gate = r.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-blocked')
+    expect(gate.question).toContain('no repair target was supplied')
+  })
+
+  it('succeeded 라고 해도 high 이슈가 있으면 repair 다 — 승인이 발견을 덮지 못한다', () => {
+    const { s, taskId, reviewId } = reviewing()
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'b', issues: [high], repair: SAME }, LATER) as never)
+    expect(r.state.tasks.find((x) => x.id === taskId)?.status).toBe('dispatched')
+  })
+
+  it('medium 임계값이면 medium 도 막는다', () => {
+    const { s, taskId, reviewId } = reviewing({}, { convergence: { blockingSeverity: 'medium' } })
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'b', issues: [{ severity: 'medium', title: 'm' }], repair: SAME }, LATER) as never)
+    expect(r.state.tasks.find((x) => x.id === taskId)?.status).toBe('dispatched')
+  })
+
+  it('깨진 파일은 검토 Dispatch 를 닫고 Gate 다', () => {
+    const { s, taskId, reviewId } = reviewing()
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'b', issues: 'malformed', repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('blocked')
+    expect(r.state.dispatches.find((d) => d.id === reviewId)?.endedAt).toBe(LATER)
+    expect(r.state.gates.at(-1)?.question).toContain('could not be parsed')
+  })
+
+  it('라운드 상한에 닿았는데 아직 blocking 이면 소진 Gate 다', () => {
+    const { s, taskId, reviewId } = reviewing({}, { convergence: { maxReviewRounds: 1 } })
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b', issues: [high], repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('blocked')
+    expect(r.state.gates.at(-1)?.kind).toBe('convergence-exhausted')
+    expect(r.state.gates.at(-1)?.options).toEqual(['retry-once', 'mark-failed'])
+    expect(r.state.gates.at(-1)?.question).toContain('HIGH Session race')
+  })
+
+  // Important 수정: 소진 Gate 가 말하는 repair 수는 repairCountOf(실제로 연 repair Dispatch) 다 —
+  // maxFixAttempts(기본 3) 가 아니다. 한 번만 고친 뒤 두 번째 라운드에서 다시 막히면 "1" 이어야
+  // 한다, "3" 이 아니다.
+  it('review 라운드 소진은 실제로 연 repair 수를 말한다 — 한 번 고친 뒤라면 1 이다, 3 이 아니다', () => {
+    const { s, taskId, reviewId } = reviewing() // 기본 정책: maxReviewRounds 2, maxFixAttempts 3
+    // 1라운드: blocking, repair 하나를 연다
+    const r1 = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'r1', body: 'b', issues: [high], repair: SAME }, LATER) as never)
+    const repair1 = r1.state.dispatches.find((d) => d.repair)!
+    expect(repair1.repair).toBe('review-failure')
+    // repair 가 보고하고(같은 세션) 다시 검토로 간다
+    const backToReview = unwrap(
+      applyWorkerDone(r1.state, { taskId, dispatchId: repair1.id, outcome: 'succeeded', subject: 's2', body: 'b2' }, LATER) as never
+    )
+    expect(backToReview.state.tasks.find((t) => t.id === taskId)?.status).toBe('reviewing')
+    const opened2 = unwrap<Dispatch>(
+      openReviewDispatch(backToReview.state, { taskId, provider: 'claude', accountId: 'accC', sessionId: 'rev2', cwd: 'D:/p', specPath: '' }, LATER) as never
+    )
+    // 2라운드: 다시 blocking — 기본 maxReviewRounds(2) 에 닿는다
+    const r2 = unwrap(
+      applyReviewResult(opened2.state, { taskId, dispatchId: opened2.value.id, outcome: 'failed', subject: 'r2', body: 'b', issues: [high], repair: SAME }, EVEN_LATER) as never
+    )
+    const task = r2.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('blocked')
+    const gate = r2.state.gates.at(-1)!
+    expect(gate.kind).toBe('convergence-exhausted')
+    expect(gate.options).toEqual(['retry-once', 'mark-failed'])
+    expect(gate.question).toContain('after 1 repair(s)')
+  })
+
+  // Minor 수정: 표(설계 §5.1)에서 멈춤이 소진보다 위다 — 라운드 상한에 닿았어도 convergenceOff 면
+  // 소진 Gate 가 아니라 멈춤 Gate 다. check 경로는 routeFailure 에 전부 맡겨 이미 이 순서를 지킨다;
+  // 검토 경로는 라운드 상한을 자체로 보므로 여기서 같은 순서를 확인한다.
+  it('convergenceOff 인 Task 는 라운드 상한에 닿았어도 소진이 아니라 멈춤 Gate 다', () => {
+    const { s, taskId, reviewId } = reviewing({ convergenceOff: true }, { convergence: { maxReviewRounds: 1 } })
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b', issues: [high], repair: SAME }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('blocked')
+    expect(r.state.gates.at(-1)?.kind).toBe('convergence-blocked')
+    expect(r.state.gates.at(-1)?.question).toContain('Auto-fix is stopped')
+  })
+
+  it('check 예산이 다했어도 소진 Gate 다', () => {
+    const { s, taskId, reviewId } = reviewing({ consecutiveFailures: 3 })
+    const r = unwrap(applyReviewResult(s, { taskId, dispatchId: reviewId, outcome: 'failed', subject: 'race', body: 'b', issues: [high], repair: SAME }, LATER) as never)
+    expect(r.state.gates.at(-1)?.kind).toBe('convergence-exhausted')
+  })
+
+  it('꺼진 Run 은 이슈를 무시하고 지금과 같다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const old: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true } : t)) }
+    const done = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const opened = unwrap<Dispatch>(openReviewDispatch(done.state, { taskId, provider: 'claude', accountId: 'accC', sessionId: 'rev1', cwd: 'D:/p', specPath: '' }, NOW) as never)
+    const r = unwrap(applyReviewResult(opened.state, { taskId, dispatchId: opened.value.id, outcome: 'failed', subject: 'nope', body: 'why', issues: [low] }, LATER) as never)
+    const task = r.state.tasks.find((x) => x.id === taskId)!
+    expect(task.status).toBe('failed')
+    expect(task.reviewIssues).toBeUndefined()
+    expect(r.state.messages.at(-1)?.subject).toBe('review failed')
+    expect(r.state.messages.at(-1)?.body).toContain('Retry with worker-start --retry-of')
+  })
+})
+
+describe('interruptStalledTask — convergence Run 은 다시 돌린다', () => {
+  it('validating 이면 resume: validation 이고 Gate 를 열지 않는다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const on: OrchState = {
+      ...s,
+      runs: s.runs.map((r) => ({ ...r, convergence: {} })),
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t))
+    }
+    const v = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const r = interruptStalledTask(v.state, { taskId }, LATER)
+    expect(r).toMatchObject({ interrupted: null, resume: 'validation', stuck: false })
+    expect(r.state.gates).toHaveLength(0)
+    expect(r.state.tasks.find((x) => x.id === taskId)?.status).toBe('validating')
+  })
+  it('reviewing 이면 resume: review 다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const on: OrchState = {
+      ...s,
+      runs: s.runs.map((r) => ({ ...r, convergence: {} })),
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true } : t))
+    }
+    const v = unwrap(applyWorkerDone(on, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    expect(interruptStalledTask(v.state, { taskId }, LATER)).toMatchObject({ interrupted: null, resume: 'review' })
+  })
+  it('꺼진 Run 은 지금처럼 Gate 를 연다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const old: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigIds: ['cfg1'] } : t)) }
+    const v = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const r = interruptStalledTask(v.state, { taskId }, LATER)
+    expect(r).toMatchObject({ interrupted: 'validation', resume: null })
+    expect(r.state.gates).toHaveLength(1)
+  })
+  // 위 테스트는 꺼진 Run 의 validating 쪽만 본다 — reviewing 쪽도 같은 resume: null 이어야 한다
+  it('꺼진 Run 의 reviewing Task 도 Gate 를 열고 resume 은 null 이다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const old: OrchState = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true } : t)) }
+    const v = unwrap(applyWorkerDone(old, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never)
+    const r = interruptStalledTask(v.state, { taskId }, LATER)
+    expect(r).toMatchObject({ interrupted: 'review', resume: null })
+    expect(r.state.gates).toHaveLength(1)
+  })
+})
+
+// 설계 G3(명세 §37·§36)
+describe('stampPolicySnapshot', () => {
+  /** seed() 는 부를 때마다 새 id 를 만든다 — 하나를 잡아 두고 쓴다 */
+  const armed = (): { s: OrchState; id: string } => {
+    const { s, taskId } = seed()
+    return { s, id: taskId }
+  }
+
+  it('처음이면 지문을 찍는다', () => {
+    const { s, id } = armed()
+    const next = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const t = next.tasks.find((x) => x.id === id)!
+    expect(t.policySnapshot).toEqual({ key: 'K1', capturedAt: NOW })
+    expect(t.policyChanged).toBeUndefined()
+  })
+
+  it('같은 지문이면 아무것도 바뀌지 않는다', () => {
+    const { s, id } = armed()
+    const first = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const again = stampPolicySnapshot(first, { taskId: id, key: 'K1' }, '2026-09-20T00:00:00.000Z')
+    const t = again.tasks.find((x) => x.id === id)!
+    expect(t.policySnapshot!.capturedAt).toBe(NOW)
+    expect(t.policyChanged).toBeUndefined()
+  })
+
+  // 막지 않는다 — 표시만 한다(설계 B7)
+  it('지문이 달라지면 표시를 세운다. 스냅숏은 처음 것 그대로다', () => {
+    const { s, id } = armed()
+    const first = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const changed = stampPolicySnapshot(first, { taskId: id, key: 'K2' }, '2026-09-20T00:00:00.000Z')
+    const t = changed.tasks.find((x) => x.id === id)!
+    expect(t.policyChanged).toBe(true)
+    expect(t.policySnapshot).toEqual({ key: 'K1', capturedAt: NOW })
+  })
+
+  // 되돌려 놓아도 "그 사이에 바뀌어 있었다" 는 사실은 남는다
+  it('한 번 세운 표시는 원래 지문으로 돌아와도 내리지 않는다', () => {
+    const { s, id } = armed()
+    const first = stampPolicySnapshot(s, { taskId: id, key: 'K1' }, NOW)
+    const changed = stampPolicySnapshot(first, { taskId: id, key: 'K2' }, NOW)
+    const back = stampPolicySnapshot(changed, { taskId: id, key: 'K1' }, NOW)
+    expect(back.tasks.find((x) => x.id === id)!.policyChanged).toBe(true)
+  })
+
+  it('없는 Task 면 그대로 돌려준다', () => {
+    const { s } = armed()
+    expect(stampPolicySnapshot(s, { taskId: 'nope', key: 'K1' }, NOW)).toBe(s)
   })
 })

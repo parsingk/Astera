@@ -16,6 +16,7 @@ import {
   interruptStalledTask,
   type OrchState
 } from '../../core/orchestration/state'
+import { latestImplDispatch } from '../../core/orchestration/convergence'
 
 /** Cutoff for discarding a finished Run. The same 30 days as SchedulerConfigStore's ENTRY_TTL_MS */
 export const RUN_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -104,6 +105,13 @@ export class OrchestrationStore {
      *  there was nothing to read. Job Continuity diffs this against get() so every worker the
      *  restart lost is journaled (P0 design §5). */
     before: OrchState | null
+    /** convergence Run 의 validating Task 들 — Gate 대신 여기 실려, caller 가 다시 check 를 돌린다
+     *  (interruptStalledTask 의 resume, 설계 §10). `load` 는 아무것도 시작하지 않는다 — 그 일은
+     *  이 목록을 받는 배선의 것이다. */
+    revalidate: { taskId: string; cwd: string }[]
+    /** 같은 자리의 reviewing Task 들 — 다시 검토를 돌릴 Task id 만으로 충분하다(검토는 checkpoint
+     *  가 아니라 마지막 구현 Dispatch 의 세션을 잇는다). */
+    rereview: string[]
   }> {
     let parsed: unknown
     try {
@@ -111,16 +119,16 @@ export class OrchestrationStore {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
         this.state = emptyState()
-        return { recovered: false, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null }
+        return { recovered: false, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null, revalidate: [], rereview: [] }
       }
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null, revalidate: [], rereview: [] }
     }
     if (!isValidState(parsed)) {
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, stuckInterruptions: 0, coordinatorsLost: 0, before: null, revalidate: [], rereview: [] }
     }
 
     // isValidState only checks that the arrays exist, so the elements of parsed's arrays are
@@ -219,6 +227,11 @@ export class OrchestrationStore {
     let staleValidations = 0
     let staleReviews = 0
     let stuckInterruptions = 0
+    // convergence Run 의 validating·reviewing Task 들 — interruptStalledTask 가 Gate 대신 resume 을
+    // 낸다(설계 §10). load() 는 아무것도 시작하지 않는다: 여기 쌓아 두고 그대로 돌려주면, 시작하는
+    // 일은 이 목록을 받는 배선의 것이다.
+    const revalidate: { taskId: string; cwd: string }[] = []
+    const rereview: string[] = []
     let withGates: OrchState = { ...st, dispatches }
     // **What is owed to one such Task lives in `interruptStalledTask`.** The pending-report drain
     // writes off a Dispatch of its own when it could not deliver the report that was holding it
@@ -228,6 +241,30 @@ export class OrchestrationStore {
     // about and what to count, which is this boot's business and not the rule's.
     for (const t of st.tasks) {
       const r = interruptStalledTask(withGates, { taskId: t.id }, now)
+      if (r.resume === 'validation' || r.resume === 'review') {
+        // recovery 의 candidates() 가 보는 세 가지 Run 게이트를 여기서도 그대로 적용한다(paused·
+        // schedule template·pendingStart) — 이 목록에는 runId 가 없어 받는 쪽이 다시 판정할 길이
+        // 없으므로, 아직 없는 소비자에게 요구사항을 적어 두기보다 원천에서 거른다.
+        const owner = withGates.runs.find((x) => x.id === t.runId)
+        const runGated = !owner || owner.paused === true || owner.schedule !== undefined || owner.pendingStart === true
+        // Host 가 이 Task 의 세션을 되돌려 받았으면(reattach) 그 워커는 지금도 돌고 있다 — 다시
+        // 돌리라고 이 목록에 실으면 받는 쪽(재검증 큐·openReviewDispatch)이 "dispatch already open"
+        // 으로 거절한다. interruptStalledTask 는 convergence Run 에서 이것을 보지 않는다(Dispatch 를
+        // 전혀 읽지 않는다) — 그래서 여기서 본다.
+        const openHere = withGates.dispatches.some((d) => d.taskId === t.id && !d.outcome && !d.endedAt)
+        if (runGated || openHere) continue
+        if (r.resume === 'validation') {
+          const impl = latestImplDispatch(withGates, t.id)
+          if (impl) revalidate.push({ taskId: t.id, cwd: impl.cwd })
+          // impl 이 없으면 이 Task 를 다시 검증할 길이 없다 — Gate 도 안 열리고 목록에도 안 실리면
+          // 아무도 모르게 멈춘다. stuckInterruptions 가 정확히 이 "묻지도 못하고 세지도 못한 채
+          // 멈췄다"를 들리게 하려고 있다(위 주석).
+          else stuckInterruptions++
+          continue
+        }
+        rereview.push(t.id)
+        continue
+      }
       if (r.stuck) {
         stuckInterruptions++
         continue
@@ -320,7 +357,9 @@ export class OrchestrationStore {
       staleReviews,
       stuckInterruptions,
       coordinatorsLost,
-      before
+      before,
+      revalidate,
+      rereview
     }
   }
 

@@ -11,6 +11,7 @@
 // 아예 필요 없다고 지운 것들이다.
 import type { Gate, Message, TaskStatus, WorkerState } from './types'
 import type { OrchState } from './state'
+import { checkConfigIdsOf } from './convergence'
 
 /** git 요약. 이 모듈은 fs 를 만지지 않으므로 main 이 읽어서 인자로 넣어 준다. 읽기 자체가 실패하면
  *  (worktree 가 없다, git 이 아니다) null 을 넘긴다 — 그 경우 Checkpoint 의 git 관련 칸은 전부
@@ -159,7 +160,11 @@ export function buildCheckpoint(
     ...(a.git?.changed ?? [])
   ])
 
-  const validation = findValidation(taskMessages, task.validateConfigId)
+  // checkConfigIdsOf 가 옛 단일 값과 새 목록을 함께 본다(convergence.ts) — task-create 는 더 이상
+  // validateConfigId(단수) 를 쓰지 않으므로, 그 필드만 읽던 채로 남으면 지금부터 만들어지는 모든
+  // Task 의 인계 패킷에서 검증 절이 조용히 사라진다. [0] 은 오늘의 findValidation 이 check 하나만
+  // 요약하기 때문이다 — 여러 check 요약은 다른 자리의 일이다.
+  const validation = findValidation(taskMessages, checkConfigIdsOf(task)[0])
 
   const decisions: CheckpointDecision[] = s.gates
     .filter((g) => g.taskId === task.id)

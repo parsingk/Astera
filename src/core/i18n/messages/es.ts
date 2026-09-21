@@ -150,6 +150,7 @@ export const es: Catalog = {
   'common.trayQuitEnding': 'Salir y terminar las sesiones',
   // App.tsx — rail, session spawn failure, placeholder, status bar usage
   'session.rail.toggleSidebar': 'Contraer o expandir la barra lateral',
+  'session.rail.openSessions': 'Cuentas e historial',
   'session.spawn.failed': 'No se pudo iniciar la sesión: {message}',
   'session.spawn.failedWorktreeKept':
     'No se pudo iniciar la sesión: {message} (el worktree "{name}" se conservó; elimínelo desde el panel Worktrees)',
@@ -205,6 +206,8 @@ export const es: Catalog = {
   'settings.info.registeredAccounts': 'Cuentas registradas',
   'settings.info.update': 'Actualización',
   'settings.info.cliNotDetected': 'No detectado',
+  'settings.info.cliReinstall': 'Reinstalar',
+  'settings.info.cliInstallDone': 'Instalado.',
   'settings.info.host': 'Host en segundo plano',
   'settings.info.hostConnected': 'Conectado · protocolo {protocol} · desde hace {uptime}',
   'settings.info.hostNotConnected': 'Sin conexión',
@@ -371,6 +374,7 @@ export const es: Catalog = {
   'shortcut.explorer.closeFileTab': 'Cerrar la pestaña de archivo',
   'shortcut.explorer.cyclePreview': 'Cambiar el modo de vista previa de markdown',
   'shortcut.sidebar.jobs': 'Mostrar u ocultar la barra lateral de Jobs',
+  'shortcut.sidebar.home': 'Mostrar u ocultar cuentas e historial',
   'shortcut.sidebar.howItWorks': 'Mostrar u ocultar la barra lateral de How It Works',
   'shortcut.explorer.rename': 'Cambiar nombre',
   'shortcut.explorer.delete': 'Eliminar',
@@ -573,6 +577,12 @@ export const es: Catalog = {
   'session.new.codexMissingPre': 'No se encontró el CLI de Codex.',
   'session.new.claudeMissingPre': 'No se encontró el CLI de Claude Code.',
   'session.new.cliMissingPost': 'Instálelo y vuelva a intentarlo.',
+  // "No instalado" y "no se ejecuta en esta carpeta" requieren arreglos distintos — el primero es una
+  // instalación, el segundo es la carpeta o la configuración del toolchain. El texto marca esa diferencia (diseño D3).
+  'session.new.cliFailsHere': '{cli} no se ejecuta en esta carpeta: {reason}',
+  // Para cuando la comprobación muere en su límite de 10s sin decir nada (un shim de shell:true
+  // colgado) — "no se ejecuta en esta carpeta" es honesto por sí solo; añadir ": undefined" no lo es.
+  'session.new.cliFailsHereUnknown': '{cli} no se ejecuta en esta carpeta.',
   'session.field.projectFolder': 'Carpeta del proyecto',
   'session.field.account': 'Cuenta',
   'session.new.folderNotSelected': '(Sin seleccionar)',
@@ -599,6 +609,11 @@ export const es: Catalog = {
   'session.new.saveDefaultAccount': 'Recordar esta cuenta para este proyecto',
   'session.new.bypassPermissions': 'Ejecutar sin comprobar permisos (bypass permissions)',
   'session.new.start': 'Iniciar',
+  'session.new.blocked.noCwd': 'Elige una carpeta',
+  'session.new.blocked.noAccount': 'Elige una cuenta',
+  'session.new.blocked.cliMissing': 'No se encontró la CLI de esta cuenta',
+  'session.new.blocked.noSchedule': 'Fija una hora programada',
+  'session.new.blocked.checkingFolder': 'Comprobando la carpeta del proyecto',
   'session.new.starting': 'Iniciando la sesión…',
   'session.new.startingWorktree': 'Creando el worktree…',
   // NewSessionDialog.tsx scheduler UI
@@ -626,6 +641,35 @@ export const es: Catalog = {
   'session.pane.splitDown': 'Dividir abajo',
   'session.pane.unsplit': 'Quitar división',
   'session.pane.maxReached': 'Se puede dividir en 4 paneles como máximo',
+  // ConversationPane.tsx — exited banner (session-failure-visibility design D2/F2). Este catálogo
+  // parcial aún no tiene el resto de las claves conversation.* (se sustituyen por en/ko); estas tres
+  // se añaden antes que las demás.
+  'conversation.exited.withCode': 'Esta sesión ha terminado (código {code})',
+  'conversation.exited.detail': 'Detalles',
+  'conversation.exited.restart': 'Reiniciar',
+  // Los cinco puntos de la confirmación de design §4 F5. Una excepción a S1 (una o dos líneas) — la
+  // persona está tomando una decisión que nadie más puede tomar, y quitar los hechos dejaría solo un botón.
+  'conversation.exited.bypassConfirm.title': '¿Omitir la configuración de toolchain de esta carpeta y reintentar?',
+  'conversation.exited.bypassConfirm.whatBlockedLabel': 'Qué lo bloqueó',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    'No fue la CLI. El gestor de versiones de herramientas por delante en el PATH (Volta) se negó a ejecutarse. Necesita leer el package.json de esta carpeta para elegir una versión, y no pudo',
+  // fix round 1 / Important 4: usada cuando solo coincidió la señal más débil (VOLTA_HOME). Que
+  // Volta esté instalado en esta máquina es un hecho; que haya bloqueado *esta* CLI no lo es — Volta
+  // puede estar gestionando Node mientras esta CLI es una instalación aparte que bloqueó un antivirus.
+  'conversation.exited.bypassConfirm.whatBlockedSoft':
+    'No necesariamente la CLI misma. Un gestor de versiones de herramientas (Volta) instalado en esta máquina podría ser la causa. Si esta CLI es una de las que gestiona, Volta por delante en el PATH pudo haberse negado a ejecutarse al intentar leer el package.json de esta carpeta para elegir una versión',
+  'conversation.exited.bypassConfirm.ifSkippedLabel': 'Si lo omites',
+  'conversation.exited.bypassConfirm.ifSkipped': 'Se omite la resolución de versión y se ejecuta la CLI que quede por defecto en el PATH. La sesión se inicia.',
+  'conversation.exited.bypassConfirm.givesUpLabel': 'Qué se pierde',
+  'conversation.exited.bypassConfirm.givesUp':
+    'La versión de la herramienta fijada para este proyecto. No solo esta sesión: todos los comandos que ejecute (el propio npm test, npm run build, node … del agente) se ejecutarán con la versión por defecto, no con la fijada. El mismo comando puede dar un resultado distinto al de tu terminal. Lo mismo vale para la sesión que tome el relevo si un límite de uso cambia de cuenta.',
+  'conversation.exited.bypassConfirm.properFixLabel': 'La solución real',
+  'conversation.exited.bypassConfirm.properFix': 'Si arreglas el package.json, este cuadro no volverá a aparecer.',
+  'conversation.exited.bypassConfirm.confirm': 'Omitir y reintentar',
+  'conversation.exited.bypassConfirm.failed': 'No se pudo reintentar',
+  // fix round 1 (Critical 2): la marca duradera — a diferencia de `notice`, nunca se borra y se
+  // muestra siempre como su propia línea mientras esta sesión (y luego su historial) esté abierta.
+  'conversation.bypassed.badge': 'Esta sesión se inició omitiendo la versión de toolchain fijada para este proyecto',
   // ResumeDialog.tsx
   'session.resume.title': 'Reanudar la sesión',
   'session.resume.conversationLabel': 'Conversación',
@@ -1066,6 +1110,47 @@ export const es: Catalog = {
   'jobs.recovery.gate.reviewFirst': 'Revisa el worktree antes de responder.',
   'jobs.recovery.gate.unsafeNote': 'No se ha tocado nada del worktree.',
   'jobs.recovery.gate.restart': 'Reiniciar con un worker nuevo',
+  'jobs.convergence.gate.exhausted':
+    'Las comprobaciones de finalización no convergieron tras {repairs} reparación(es). Siguen fallando: {failures}',
+  'jobs.convergence.gate.timeExhausted':
+    'La auto-reparación de esta tarea superó su presupuesto de tiempo ({minutes} min). Se reparó {repairs} vez/veces y sigue fallando: {failures}',
+  'jobs.convergence.gate.stopped': 'La corrección automática está detenida para esta tarea y sus comprobaciones siguen fallando: {failures}',
+  'jobs.convergence.gate.paused': 'Esta ejecución se pausó mientras corrían sus comprobaciones, y siguen fallando: {failures}',
+  'jobs.convergence.gate.repairFailed': 'La aplicación no pudo iniciar un worker de reparación: {reason}',
+  'jobs.convergence.gate.retryOnce': 'Reparar una vez más',
+  'jobs.convergence.gate.markFailed': 'Marcar como fallida',
+  'jobs.convergence.retryOnceFailed': 'La compuerta se resolvió, pero la reparación no pudo iniciarse: {reason}',
+  'jobs.convergence.node.repairing': 'Corrección {repairs}/{max} · {failed} falla',
+  'jobs.convergence.node.repairingNoCheck': 'Corrección {repairs}/{max}',
+  'jobs.convergence.node.rechecking': 'Comprobando de nuevo · {name}',
+  'jobs.convergence.node.checking': 'Comprobando',
+  'jobs.convergence.node.reviewing': 'Ronda de revisión {round}/{max}',
+  'jobs.convergence.node.failed': '{name} falló',
+  'jobs.convergence.chip.repairing': 'Corrección {repairs}/{max}',
+  'jobs.convergence.chip.reviewing': 'Revisión {round}/{max}',
+  'jobs.convergence.chip.exhausted': 'Agotado',
+  'jobs.convergence.chip.stopped': 'auto-reparación detenida',
+  'jobs.convergence.node.stopped': 'auto-reparación detenida',
+  'jobs.convergence.node.stoppedWithCheck': 'auto-reparación detenida · {failed} falló',
+  'jobs.convergence.stop': 'Detener auto-reparación',
+  'jobs.convergence.stopConfirmTitle': '¿Detener la auto-reparación de esta tarea?',
+  'jobs.convergence.stopConfirmBody':
+    'Las comprobaciones que fallen ya no se repararán automáticamente; pasarán a ti. Una reparación ya en curso llega hasta el final y su veredicto sigue llegando. Esto no se puede volver a activar desde la aplicación — habría que crear la tarea de nuevo.',
+  'jobs.convergence.check.passed': 'superada',
+  'jobs.convergence.check.failed': 'fallida (exit {code})',
+  'jobs.convergence.check.timedOut': 'tiempo agotado',
+  'jobs.convergence.check.notRun': 'no ejecutada',
+  'jobs.convergence.check.retrying': 'ejecutándose de nuevo',
+  'jobs.convergence.check.unstable': 'el veredicto cambió entre rondas',
+  'jobs.completion.show': 'Por qué falló',
+  'jobs.completion.hide': 'Contraer',
+  'jobs.completion.empty': 'Esta tarea aún no tiene resultados de comprobación ni hallazgos de revisión.',
+  'jobs.completion.showTail': 'Ver salida',
+  'jobs.completion.hideTail': 'Ocultar salida',
+  'jobs.completion.blocking': '{n} hallazgos de revisión que bloquean',
+  'jobs.completion.other': '{n} hallazgos más',
+  'jobs.completion.suspicious': 'Archivos que cambiaron la configuración de comprobación',
+  'jobs.completion.policyChanged': 'La configuración de las comprobaciones cambió mientras esta tarea se ejecutaba. También se le avisó a la revisión.',
   'jobs.event.status': 'estado',
   'jobs.event.workerDone': 'informe del worker',
   'jobs.event.question': 'pregunta',
@@ -1074,6 +1159,8 @@ export const es: Catalog = {
   'jobs.event.decisionGate': 'decisión',
   // Mismo lugar que retry (junto al resumen de dispatch-started), solo cuando el Dispatch es de revisión (Dispatch.review)
   'jobs.event.review': 'revisión',
+  'jobs.event.repairCheck': 'reparando fallo de comprobación',
+  'jobs.event.repairReview': 'reparando problema de revisión',
   // El resultado de worker_done — no jobs.state.completed/failed, que etiquetan una Task (y una Task
   // puede tener varios informes de worker)
   'jobs.event.succeeded': 'correcto',
@@ -1100,6 +1187,11 @@ export const es: Catalog = {
   'jobs.new.schedule': 'Ejecución programada',
   'jobs.new.scheduleHint': 'Inicia una ejecución de este trabajo en cada hora programada',
   'jobs.new.scheduleOverlapHint': 'Se inicia una nueva ejecución aunque la anterior siga en curso — los trabajadores pueden solaparse',
+  'jobs.new.convergence': 'Corregir automáticamente hasta superar las comprobaciones',
+  'jobs.new.convergenceHint':
+    'Cuando una comprobación falla, la app le dice al mismo trabajador qué salió mal, deja que lo corrija y vuelve a comprobar. Si no lo supera dentro del límite, se detiene y te pregunta.',
+  'jobs.new.convergenceDefaults': 'Hasta {fix} correcciones · {review} rondas de revisión · severidad bloqueante {severity}',
+  'jobs.new.convergenceCliOnly': 'Estos valores solo se cambian desde la CLI',
   'jobs.new.create': 'Crear',
   'jobs.new.folderBusy': 'Ya hay un worker trabajando en esta carpeta — con límite 1 el worker de este trabajo también corre ahí, así que sus ediciones pueden mezclarse',
   'jobs.new.failed': 'No se pudo crear el trabajo',
@@ -1125,8 +1217,13 @@ export const es: Catalog = {
     'Las cuentas en las que esta tarea ejecuta su worker — la primera decide qué agente la ejecuta, así que hace falta al menos una. Con más de una, al alcanzar el límite de uso el worker pasa a la siguiente en el orden indicado',
   'jobs.task.accountTrust':
     'La primera vez que una cuenta elegida abre esta carpeta, la pestaña de sesión pide confirmar que confías en ella — el worker no empieza hasta que respondas',
-  'jobs.task.validate': 'Configuración que prueba que terminó',
-  'jobs.task.validateNone': 'Sin validación',
+  'jobs.task.validate': 'Comprobaciones de finalización',
+  'jobs.task.checksHint': 'Pon primero las comprobaciones rápidas: se detiene en el primer fallo, así que una lenta al principio cuesta todo su tiempo en cada corrección.',
+  'jobs.task.checksUnpicked': 'Sin elegir',
+  'jobs.task.checksNone': 'No hay configuración de ejecución que usar como comprobación',
+  'jobs.task.checkUp': 'Subir',
+  'jobs.task.checkDown': 'Bajar',
+  'jobs.task.checkRemove': 'Quitar',
   'jobs.task.review': 'Revisión por otro agente',
   'jobs.task.create': 'Añadir',
   'jobs.task.failed': 'No se pudo crear la tarea',
@@ -1195,5 +1292,8 @@ export const es: Catalog = {
   'hiw.verify.partial': 'Solo se comprobó una parte',
   'hiw.verify.unverified': 'No se comprobó nada',
   'hiw.verify.failed': 'Una comprobación reportada falló',
-  'hiw.verify.reported': 'Lo reportó el agente — la aplicación no lo ejecutó por su cuenta'
+  'hiw.verify.reported': 'Lo reportó el agente — la aplicación no lo ejecutó por su cuenta',
+  // Tarea 7 — hay que decir siempre que se usó el bypass de toolchain (diseño F5); no es un estado
+  // estable, así que se traduce aunque el resto de chat.notice.* todavía no esté aquí
+  'chat.notice.bypassed': 'Iniciada omitiendo la configuración de toolchain de esta carpeta — puede no ser la versión que fijaste'
 }

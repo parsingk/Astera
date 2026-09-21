@@ -192,6 +192,7 @@ export const en: Record<keyof typeof ko, string> = {
   'common.trayQuit': 'Quit',
   'common.trayQuitEnding': 'Quit and end sessions',
   'session.rail.toggleSidebar': 'Toggle sidebar',
+  'session.rail.openSessions': 'Accounts and history',
   'session.spawn.failed': 'Failed to start session: {message}',
   'session.spawn.failedWorktreeKept':
     'Failed to start session: {message} (the worktree “{name}” was kept — delete it from the Worktrees panel)',
@@ -247,6 +248,8 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.info.registeredAccounts': 'Registered accounts',
   'settings.info.update': 'Update',
   'settings.info.cliNotDetected': 'Not detected',
+  'settings.info.cliReinstall': 'Reinstall',
+  'settings.info.cliInstallDone': 'Installed.',
   'settings.info.host': 'Background host',
   'settings.info.hostConnected': 'Connected · protocol {protocol} · up {uptime}',
   'settings.info.hostHolding':
@@ -414,6 +417,7 @@ export const en: Record<keyof typeof ko, string> = {
   'shortcut.explorer.closeFileTab': 'Close file tab',
   'shortcut.explorer.cyclePreview': 'Cycle markdown preview mode',
   'shortcut.sidebar.jobs': 'Toggle the Jobs sidebar',
+  'shortcut.sidebar.home': 'Show or hide accounts and history',
   'shortcut.sidebar.howItWorks': 'Toggle the How It Works sidebar',
   'shortcut.explorer.rename': 'Rename',
   'shortcut.explorer.delete': 'Delete',
@@ -598,6 +602,12 @@ export const en: Record<keyof typeof ko, string> = {
   'session.new.codexMissingPre': 'Codex CLI was not found.',
   'session.new.claudeMissingPre': 'Claude Code CLI was not found.',
   'session.new.cliMissingPost': 'Install it, then try again.',
+  // "Not installed" and "does not run in this folder" call for different fixes — the former is an
+  // install, the latter is the folder or a toolchain config. The copy keeps that distinction (design D3).
+  'session.new.cliFailsHere': '{cli} does not run in this folder: {reason}',
+  // For when the check died within its 10s timeout without saying anything (a hung shell:true
+  // shim) — "does not run in this folder" is honest on its own; appending ": undefined" is not.
+  'session.new.cliFailsHereUnknown': '{cli} does not run in this folder.',
   'session.field.projectFolder': 'Project folder',
   'session.field.account': 'Account',
   'session.kind.terminal': 'Terminal',
@@ -651,6 +661,11 @@ export const en: Record<keyof typeof ko, string> = {
   'setup.language': 'Language',
   'session.new.bypassPermissions': 'Run without permission checks (bypass permissions)',
   'session.new.start': 'Start',
+  'session.new.blocked.noCwd': 'Choose a folder',
+  'session.new.blocked.noAccount': 'Choose an account',
+  'session.new.blocked.cliMissing': "This account's CLI was not found",
+  'session.new.blocked.noSchedule': 'Set a schedule time',
+  'session.new.blocked.checkingFolder': 'Checking the project folder',
   'session.new.starting': 'Starting session…',
   'session.new.startingWorktree': 'Creating worktree…',
   'session.new.schedLabel': 'Scheduler — run a command periodically',
@@ -1106,6 +1121,47 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.recovery.gate.reviewFirst': 'Review the worktree before answering.',
   'jobs.recovery.gate.unsafeNote': 'Nothing in the worktree has been touched.',
   'jobs.recovery.gate.restart': 'Restart with a new worker',
+  'jobs.convergence.gate.exhausted':
+    'The completion checks did not converge after {repairs} repair(s). Still failing: {failures}',
+  'jobs.convergence.gate.timeExhausted':
+    "This task's auto-fix ran past its time budget ({minutes} min). It was repaired {repairs} time(s) and still fails: {failures}",
+  'jobs.convergence.gate.stopped': 'Auto-fix is stopped for this Task and its checks still fail: {failures}',
+  'jobs.convergence.gate.paused': 'This Run was paused while its completion checks ran, and they still fail: {failures}',
+  'jobs.convergence.gate.repairFailed': 'The app could not start a repair worker: {reason}',
+  'jobs.convergence.gate.retryOnce': 'Repair once more',
+  'jobs.convergence.gate.markFailed': 'Mark failed',
+  'jobs.convergence.retryOnceFailed': 'The gate was resolved, but the repair could not start: {reason}',
+  'jobs.convergence.node.repairing': 'Fix {repairs}/{max} · {failed} failing',
+  'jobs.convergence.node.repairingNoCheck': 'Fix {repairs}/{max}',
+  'jobs.convergence.node.rechecking': 'Re-checking · {name}',
+  'jobs.convergence.node.checking': 'Checking',
+  'jobs.convergence.node.reviewing': 'Review round {round}/{max}',
+  'jobs.convergence.node.failed': '{name} failed',
+  'jobs.convergence.chip.repairing': 'Fix {repairs}/{max}',
+  'jobs.convergence.chip.reviewing': 'Review {round}/{max}',
+  'jobs.convergence.chip.exhausted': 'Exhausted',
+  'jobs.convergence.chip.stopped': 'auto-fix off',
+  'jobs.convergence.node.stopped': 'auto-fix stopped',
+  'jobs.convergence.node.stoppedWithCheck': 'auto-fix stopped · {failed} failed',
+  'jobs.convergence.stop': 'Stop auto-fix',
+  'jobs.convergence.stopConfirmTitle': 'Stop auto-fix for this task?',
+  'jobs.convergence.stopConfirmBody':
+    'Failing checks will no longer be repaired automatically; they come to you instead. A repair already running finishes and its verdict still arrives. This cannot be turned back on from the app — the task would have to be created again.',
+  'jobs.convergence.check.passed': 'passed',
+  'jobs.convergence.check.failed': 'failed (exit {code})',
+  'jobs.convergence.check.timedOut': 'timed out',
+  'jobs.convergence.check.notRun': 'not run',
+  'jobs.convergence.check.retrying': 'running again',
+  'jobs.convergence.check.unstable': 'verdict flipped between rounds',
+  'jobs.completion.show': 'Why it failed',
+  'jobs.completion.hide': 'Collapse',
+  'jobs.completion.empty': 'No check results or review findings for this task yet.',
+  'jobs.completion.showTail': 'Show output',
+  'jobs.completion.hideTail': 'Hide output',
+  'jobs.completion.blocking': '{n} blocking review findings',
+  'jobs.completion.other': '{n} other findings',
+  'jobs.completion.suspicious': 'Files that changed check configuration',
+  'jobs.completion.policyChanged': "The completion checks themselves changed while this task was running. The reviewer was told as well.",
   'jobs.event.status': 'status',
   'jobs.event.workerDone': 'worker report',
   'jobs.event.question': 'question',
@@ -1114,6 +1170,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.event.decisionGate': 'decision',
   // Same spot as retry (next to dispatch-started's summary), shown only when the Dispatch is a review (Dispatch.review)
   'jobs.event.review': 'review',
+  'jobs.event.repairCheck': 'repairing check failure',
+  'jobs.event.repairReview': 'repairing review issue',
   // worker_done's outcome — deliberately not jobs.state.completed/failed, which label a Task (and one
   // Task can have several worker reports). The same word on two layers hides which one is being claimed
   'jobs.event.succeeded': 'succeeded',
@@ -1143,6 +1201,11 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.schedule': 'Scheduled run',
   'jobs.new.scheduleHint': 'Starts one run of this job at each scheduled time',
   'jobs.new.scheduleOverlapHint': 'A new run starts even if the previous one is still going — workers can overlap',
+  'jobs.new.convergence': 'Auto-fix until the checks pass',
+  'jobs.new.convergenceHint':
+    'When a check fails, the app tells the same worker what went wrong, lets it fix the work, and runs the checks again. If it does not pass within the budget, it stops and asks you.',
+  'jobs.new.convergenceDefaults': 'Up to {fix} fixes · {review} review rounds · blocking severity {severity}',
+  'jobs.new.convergenceCliOnly': 'These values change only from the CLI',
   'jobs.new.create': 'Create',
   'jobs.new.folderBusy': 'A worker is already running in this folder — at a limit of 1 this job runs its worker there too, so their edits can mix',
   'jobs.new.failed': 'Could not create the job',
@@ -1174,8 +1237,13 @@ export const en: Record<keyof typeof ko, string> = {
     'The accounts this Task runs its worker on — the first one decides which agent runs it, so one is required. With more than one, a usage limit moves the worker to the next in the order you list them',
   'jobs.task.accountTrust':
     'The first time a chosen account opens this folder the session tab asks you to trust it — the worker starts only once you answer',
-  'jobs.task.validate': 'Run configuration that proves it done',
-  'jobs.task.validateNone': 'No validation',
+  'jobs.task.validate': 'Completion checks',
+  'jobs.task.checksHint': 'Put fast checks first — the run stops at the first failure, so a slow check up front costs its full time on every fix.',
+  'jobs.task.checksUnpicked': 'Not picked',
+  'jobs.task.checksNone': 'No run configuration to use as a check',
+  'jobs.task.checkUp': 'Move up',
+  'jobs.task.checkDown': 'Move down',
+  'jobs.task.checkRemove': 'Remove',
   'jobs.task.review': 'Review by another agent',
   'jobs.task.create': 'Add',
   'jobs.task.failed': 'Could not create the task',
@@ -1262,6 +1330,39 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.running.thinking': 'Thinking',
   'conversation.running.working': 'Working',
   'conversation.exited.title': 'This session has ended',
+  // The terminal always showed an exit code, and the chat pane never did (design D2). A code alone
+  // says nothing, so the first line the process left on stderr rides along — the tail folds away.
+  'conversation.exited.withCode': 'This session has ended (code {code})',
+  'conversation.exited.detail': 'Details',
+  'conversation.exited.restart': 'Restart',
+  // design §4 F5's five-part confirmation. An exception to S1 (one or two lines) — the person is
+  // making a judgement nobody else can, and stripping the facts would leave only a button.
+  // whatBlocked's sentence ends without the CLI's own stderr line — the component appends ": <line>"
+  // itself, and omits it entirely when there is none (fix round 1 / Important 4).
+  'conversation.exited.bypassConfirm.title': "Skip this folder's toolchain setup and retry?",
+  'conversation.exited.bypassConfirm.whatBlockedLabel': 'What blocked it',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    "Not the CLI. The tool version manager ahead of it on PATH (Volta) refused to run. It needs to read this folder's package.json to pick a version, and could not",
+  // fix round 1 / Important 4: used when only the weaker signal (VOLTA_HOME) matched. Volta being
+  // installed on this machine is certain; that it gated *this* CLI is not — Volta can be managing
+  // Node while this CLI is a separate install an antivirus blocked — so this avoids stating a refusal
+  // as fact.
+  'conversation.exited.bypassConfirm.whatBlockedSoft':
+    "Not necessarily the CLI itself. A tool version manager (Volta) installed on this machine may be the cause. If this CLI is one it manages, Volta ahead on PATH may have refused to run while trying to read this folder's package.json to pick a version",
+  'conversation.exited.bypassConfirm.ifSkippedLabel': 'If you skip it',
+  'conversation.exited.bypassConfirm.ifSkipped': 'Version resolution is skipped and the CLI on the default PATH runs as-is. The session comes up.',
+  'conversation.exited.bypassConfirm.givesUpLabel': 'What you give up',
+  'conversation.exited.bypassConfirm.givesUp':
+    "The tool version pinned for this project. Not just this session: every command it runs (the agent's own npm test, npm run build, node …) runs on the default version instead of the pinned one. The same command can behave differently than it does in your terminal. So does the session this one rolls into if a usage limit switches accounts.",
+  'conversation.exited.bypassConfirm.properFixLabel': 'The real fix',
+  'conversation.exited.bypassConfirm.properFix': 'Fixing package.json means this dialog will not appear again.',
+  'conversation.exited.bypassConfirm.confirm': 'Skip and retry',
+  // The button is pressed, but a race (another exit re-decided the offer in between) means it no
+  // longer applies.
+  'conversation.exited.bypassConfirm.failed': 'Could not retry',
+  // fix round 1 (Critical 2): the durable mark — unlike `notice`, never cleared, always shown as its
+  // own line for as long as this session (and later, its history) is open.
+  'conversation.bypassed.badge': "This session started by skipping this project's pinned toolchain version",
   'conversation.running.interrupt': 'Stop (Esc)',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effortRow': 'effort: {level}',
@@ -1284,6 +1385,7 @@ export const en: Record<keyof typeof ko, string> = {
   'chat.notice.checking': 'Checking where the session stands',
   'chat.notice.endsWithApp': 'This session ends when the app quits',
   'chat.notice.error': 'The turn failed: {message}',
+  'chat.notice.bypassed': "Started with this folder's toolchain settings skipped — this may not be the version you pinned",
   'chat.mode.aria': 'Permission mode',
   'chat.mode.default': 'Default',
   'chat.mode.acceptEdits': 'Accept edits',

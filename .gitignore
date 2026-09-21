@@ -22,6 +22,17 @@ docs/*
 # it describes is picked up in another session and often another worktree, where an ignored file does
 # not exist. It says on its face that nothing in it is decided yet.
 !docs/agent-workspace-isolation.md
+# Published deliberately, for the same reason as the file above: the completion convergence loop is
+# built from this design in another worktree, where an ignored file does not exist.
+!docs/2026-09-19-completion-convergence-design.md
+# Published deliberately, same reason: the convergence UI is built from this design in another worktree.
+!docs/2026-09-20-convergence-ui-design.md
+# Published deliberately, same reason: the session-failure visibility fix is built from this design.
+!docs/2026-09-20-session-failure-visibility-design.md
+# Published deliberately, same reason: the convergence UI's second slice is built from this design.
+!docs/2026-09-21-convergence-ui-slice2-design.md
+# Published deliberately, same reason: the convergence backend gaps are built from this design.
+!docs/2026-09-21-convergence-backend-gaps-design.md
 # Published deliberately: the SignPath Foundation requires the code signing policy to be reachable at
 # a public URL, and the README links to it.
 !docs/code-signing.md

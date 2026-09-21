@@ -13,7 +13,7 @@ import { createLineSplitter, type LineSplitter } from '../core/host/lines'
 export interface RegistryProc {
   pid: number
   onData(cb: (chunk: string) => void): void
-  onExit(cb: (e: { exitCode: number }) => void): void
+  onExit(cb: (e: { exitCode: number; stderrTail?: string }) => void): void
   write(data: string): void
   kill(): void
 }
@@ -49,7 +49,7 @@ export interface ProcRegistryDeps {
 export class ProcRegistry {
   private readonly entries = new Map<string, Entry>()
   private lineCb: (id: string, seq: number, line: string) => void = () => {}
-  private exitCb: (id: string, exitCode: number) => void = () => {}
+  private exitCb: (id: string, exitCode: number, stderrTail?: string) => void = () => {}
   private readonly deps: ProcRegistryDeps
   private readonly cap: number
 
@@ -62,7 +62,7 @@ export class ProcRegistry {
     this.lineCb = cb
   }
 
-  onExit(cb: (id: string, exitCode: number) => void): void {
+  onExit(cb: (id: string, exitCode: number, stderrTail?: string) => void): void {
     this.exitCb = cb
   }
 
@@ -89,7 +89,7 @@ export class ProcRegistry {
     }
     this.entries.set(a.id, entry)
     proc.onData((chunk) => entry.splitter.push(chunk))
-    proc.onExit(({ exitCode }) => {
+    proc.onExit(({ exitCode, stderrTail }) => {
       // A last line that never got its newline is still a line the app may need — a JSON-RPC error
       // printed on the way out, say.
       entry.splitter.flush()
@@ -100,7 +100,7 @@ export class ProcRegistry {
       entry.lines = []
       entry.chars = 0
       this.deps.log(`proc ${a.id} exited ${exitCode}`)
-      this.exitCb(a.id, exitCode)
+      this.exitCb(a.id, exitCode, stderrTail)
     })
     this.deps.log(`proc ${a.id} started, pid ${proc.pid}`)
     return { ok: true, pid: proc.pid }

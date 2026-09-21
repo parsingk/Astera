@@ -214,6 +214,9 @@ export const ko = {
   'common.trayQuitEnding': '세션 모두 끝내고 종료',
   // App.tsx — rail, session spawn failure, placeholder, status bar usage
   'session.rail.toggleSidebar': '사이드바 접기/펼치기',
+  // 사이드바의 기본 화면. 다른 셋과 달리 뷰 플래그가 아니라 "아무것도 안 켠 상태" 라 버튼이
+  // 없었고, 그래서 한 번 다른 뷰를 열면 한 번의 누름으로는 돌아올 수 없었다.
+  'session.rail.openSessions': '계정과 히스토리',
   'session.spawn.failed': '세션 시작 실패: {message}',
   'session.spawn.failedWorktreeKept':
     '세션 시작 실패: {message} (worktree "{name}"는 남아 있으니 Worktrees 패널에서 삭제하세요)',
@@ -275,6 +278,12 @@ export const ko = {
   'settings.info.registeredAccounts': '등록 계정',
   'settings.info.update': '업데이트',
   'settings.info.cliNotDetected': '감지 안 됨',
+  // 설정 화면의 CLI 줄에 붙는 버튼. 이미 잡히는 CLI 에도 낸다 — 벤더의 설치 명령이 곧 업그레이드
+  // 명령이라, 같은 버튼이 이미 있는 것에 하는 일을 정직하게 부른 이름이다.
+  'settings.info.cliReinstall': '다시 설치',
+  // 성공을 말로 해야 하는 이유: 잘 되던 CLI 를 다시 설치하면 버전 문자열이 그대로일 수 있고,
+  // 그러면 안 바뀐 줄이 '눌렀는데 아무 일도 안 났다'로 읽힌다.
+  'settings.info.cliInstallDone': '설치했습니다.',
   'settings.info.host': '백그라운드 호스트',
   'settings.info.hostConnected': '연결됨 · 규약 {protocol} · {uptime} 전부터',
   // Appended to hostConnected, and **only after the Host answers what it holds** — until then the
@@ -476,6 +485,7 @@ export const ko = {
   'shortcut.explorer.closeFileTab': '파일 탭 닫기',
   'shortcut.explorer.cyclePreview': '마크다운 프리뷰 모드 전환',
   'shortcut.sidebar.jobs': 'Jobs 사이드바 열기/닫기',
+  'shortcut.sidebar.home': '계정과 히스토리 열기/닫기',
   'shortcut.sidebar.howItWorks': 'How It Works 사이드바 열기/닫기',
   'shortcut.explorer.rename': '이름 변경',
   'shortcut.explorer.delete': '삭제',
@@ -687,6 +697,12 @@ export const ko = {
   'session.new.codexMissingPre': 'Codex CLI를 찾을 수 없습니다.',
   'session.new.claudeMissingPre': 'Claude Code CLI를 찾을 수 없습니다.',
   'session.new.cliMissingPost': '설치 후 다시 시도하세요.',
+  // "설치돼 있지 않다"와 "이 폴더에서는 실행되지 않는다"는 사람이 할 일이 다르다 — 앞은 설치,
+  // 뒤는 폴더나 toolchain 설정이다. 그 차이를 문구가 말한다(설계 D3).
+  'session.new.cliFailsHere': '{cli} 가 이 폴더에서 실행되지 않습니다: {reason}',
+  // 검사가 10초 동안 아무 말 없이 죽었을 때(shell:true 셔틀이 매달림) — 사유가 없다고 ": undefined"
+  // 를 보여줄 수는 없으니, 이유 없이도 말이 되는 문장을 따로 둔다.
+  'session.new.cliFailsHereUnknown': '{cli} 가 이 폴더에서 실행되지 않습니다.',
   'session.field.projectFolder': '프로젝트 폴더',
   'session.field.account': '계정',
   // 세션 방식 선택(Task 7) — 터미널/대화 세그먼트 컨트롤. 대화는 Host 가 proc-* 를 말해야 켜진다
@@ -749,6 +765,11 @@ export const ko = {
   'setup.language': '언어',
   'session.new.bypassPermissions': '권한 확인 없이 실행 (bypass permissions)',
   'session.new.start': '시작',
+  'session.new.blocked.noCwd': '폴더를 고르세요',
+  'session.new.blocked.noAccount': '계정을 고르세요',
+  'session.new.blocked.cliMissing': '이 계정의 CLI 를 찾지 못했습니다',
+  'session.new.blocked.noSchedule': '예약 시각을 정하세요',
+  'session.new.blocked.checkingFolder': '프로젝트 폴더를 확인하는 중입니다',
   // Waiting text between pressing Start and the tab opening. Splitting off a worktree chains fetch, worktree add and
   // the include copy, taking several seconds, so what is in progress is announced separately.
   'session.new.starting': '세션을 시작하는 중…',
@@ -1292,6 +1313,61 @@ export const ko = {
   'jobs.recovery.gate.reviewFirst': '답하기 전에 워크트리를 확인하세요.',
   'jobs.recovery.gate.unsafeNote': '워크트리는 아무것도 건드리지 않았습니다.',
   'jobs.recovery.gate.restart': '새 워커로 다시 시작',
+  'jobs.convergence.gate.exhausted':
+    '{repairs}번 수정한 뒤에도 완료 검사를 통과하지 못했습니다. 아직 실패: {failures}',
+  // 설계 G2(명세 §40). 횟수 소진과 같은 Gate 지만 이유가 다르다 — 얼마를 넘겼는지가 그 이유다.
+  'jobs.convergence.gate.timeExhausted':
+    '이 Task 의 자동 수정이 시간 예산({minutes}분)을 넘겼습니다. {repairs}번 고쳤고 아직 실패합니다: {failures}',
+  'jobs.convergence.gate.stopped': '이 Task 의 자동 수정이 멈춰 있고 검사는 아직 실패합니다: {failures}',
+  'jobs.convergence.gate.paused': '완료 검사가 도는 동안 이 Run 이 멈췄고, 검사는 아직 실패합니다: {failures}',
+  'jobs.convergence.gate.repairFailed': '수정할 워커를 띄울 수 없었습니다: {reason}',
+  'jobs.convergence.gate.retryOnce': '한 번 더 수정',
+  'jobs.convergence.gate.markFailed': '실패로 표시',
+  // 설계 §5(V4). Gate 는 풀렸는데 수리는 안 열린 경우다 — 사람이 누른 것이 아무 일도 하지
+  // 않았다는 사실만큼은 말해야 한다. 서버가 준 사유를 그대로 옮긴다.
+  'jobs.convergence.retryOnceFailed': '잠금은 풀렸지만 수정을 시작하지 못했습니다: {reason}',
+  // 노드 meta 줄(RunDetail, nodeMetaOf 의 kind 별). 문장은 결과가 아니라 지금 무슨 일이 벌어지는지 말한다 —
+  // "수정 2/3 · Unit tests 실패" 는 두 번 고쳤고 아직 그 검사가 막고 있다는 뜻이다
+  'jobs.convergence.node.repairing': '수정 {repairs}/{max} · {failed} 실패',
+  'jobs.convergence.node.repairingNoCheck': '수정 {repairs}/{max}',
+  // validator 는 라운드 끝에 한 번 결과를 주므로 도는 동안 아는 것은 지난 라운드뿐이다 — "지금 도는 검사" 를
+  // 지어내지 않고 지난 라운드에 막힌 검사를 가리킨다(UI 설계 U12)
+  'jobs.convergence.node.rechecking': '다시 검사 중 · {name}',
+  'jobs.convergence.node.checking': '검사 중',
+  'jobs.convergence.node.reviewing': '검토 라운드 {round}/{max}',
+  'jobs.convergence.node.failed': '{name} 실패',
+  // 사이드바 도는 줄·Gate 줄의 칩(JobsView, convergenceChipOf)
+  'jobs.convergence.chip.repairing': '수정 {repairs}/{max}',
+  'jobs.convergence.chip.reviewing': '검토 {round}/{max}',
+  'jobs.convergence.chip.exhausted': '소진',
+  // 설계 §4(V3). 멈춘 Task 는 도는 Task 와 같은 줄을 달고 있으면 안 된다.
+  'jobs.convergence.chip.stopped': '수정 멈춤',
+  'jobs.convergence.node.stopped': '자동 수정 멈춤',
+  'jobs.convergence.node.stoppedWithCheck': '자동 수정 멈춤 · {failed} 실패',
+  'jobs.convergence.stop': '자동 수정 중지',
+  'jobs.convergence.stopConfirmTitle': '이 Task 의 자동 수정을 멈출까요?',
+  // 두 가지를 말한다. 되돌릴 수 없다는 것(서버에 --convergence on 이 없다)과, 지금 도는
+  // 수리는 죽지 않는다는 것 — 누르는 순간 워커가 사라진다고 읽히면 안 된다.
+  'jobs.convergence.stopConfirmBody':
+    '검사가 실패해도 더는 자동으로 고치지 않고 사람에게 넘깁니다. 지금 도는 수정은 끝까지 가고 그 판정은 그대로 옵니다. 다시 켜는 것은 앱에서 할 수 없습니다 — 이 Task 는 새로 만들어야 합니다.',
+  // 검사 칩 툴팁 — "{이름} — {결과} ({지난 라운드 실제 시간})"
+  'jobs.convergence.check.passed': '통과',
+  'jobs.convergence.check.failed': '실패 (exit {code})',
+  'jobs.convergence.check.timedOut': '타임아웃',
+  'jobs.convergence.check.notRun': '돌지 않음',
+  'jobs.convergence.check.retrying': '다시 도는 중',
+  'jobs.convergence.check.unstable': '라운드 사이에 판정이 흔들림',
+  // 설계 §2(V1). 칩은 '무엇이 어디서 멈췄나' 까지고, 이 블록이 '그래서 뭐가 틀렸나' 를 맡는다.
+  'jobs.completion.show': '왜 실패했는지 보기',
+  'jobs.completion.hide': '접기',
+  'jobs.completion.empty': '이 Task 에는 아직 검사 결과도 검토 지적도 없습니다.',
+  'jobs.completion.showTail': '출력 보기',
+  'jobs.completion.hideTail': '출력 접기',
+  'jobs.completion.blocking': '막는 검토 지적 {n}',
+  // 막지 않는 이슈는 개수만 말한다 — 없는 것과 다르다는 사실까지가 필요한 전부다.
+  'jobs.completion.other': '그 밖의 지적 {n}',
+  'jobs.completion.suspicious': '검사 설정이 바뀐 파일',
+  'jobs.completion.policyChanged': '이 Task 가 도는 동안 완료 검사 설정 자체가 달라졌습니다. 리뷰어에게도 알렸습니다.',
   'jobs.event.status': '소식',
   'jobs.event.workerDone': '워커 보고',
   'jobs.event.question': '질문',
@@ -1300,6 +1376,9 @@ export const ko = {
   'jobs.event.decisionGate': '결정 요청',
   // retry 와 같은 자리(dispatch-started 의 요약 옆)에, 이 Dispatch 가 검토용(Dispatch.review)일 때만 붙는다
   'jobs.event.review': '검토',
+  // 설계 §3(V2). 앞의 구현 줄과 같은 모양으로 서면 안 되는 줄이라, 왜 다시 띄웠는지를 칩이 말한다.
+  'jobs.event.repairCheck': '검사 실패 수정',
+  'jobs.event.repairReview': '검토 지적 수정',
   // worker_done 의 결과. jobs.state.completed/failed 를 쓰지 않는다 — 그 둘은 Task 의 상태를
   // 가리키는 말이고, 한 Task 에는 워커 보고가 여럿 있을 수 있다. 같은 낱말을 두 층에 쓰면 어느
   // 쪽 주장인지 사라진다
@@ -1331,6 +1410,13 @@ export const ko = {
   'jobs.new.scheduleHint': '정한 시각마다 이 작업의 회차를 하나 만들어 돌린다',
   // 겹침을 막지 않기로 한 결정을 사람에게 알리는 자리 — 도는 워커 수가 상한을 넘을 수 있다
   'jobs.new.scheduleOverlapHint': '이전 회차가 돌고 있어도 새 회차를 띄운다 — 워커가 겹칠 수 있다',
+  // 통과할 때까지 자동 수정(Plan 1 설계 D12, UI 설계 U10). 이름표는 결과("통과")가 아니라 켜면 무슨 일이 생기는지
+  // 말한다. 숫자 셋은 CLI 플래그만이고 여기서는 기본값을 보여만 준다 — 안 보이면 "얼마나 시도하는 건데?" 에 답이 없다
+  'jobs.new.convergence': '통과할 때까지 자동 수정',
+  'jobs.new.convergenceHint':
+    '검사가 실패하면 앱이 같은 워커에게 무엇이 틀렸는지 돌려주고, 고친 뒤 다시 검사합니다. 정해진 횟수 안에 통과하지 못하면 멈추고 물어봅니다.',
+  'jobs.new.convergenceDefaults': '수정 최대 {fix}회 · 검토 라운드 {review}회 · 막는 심각도 {severity}',
+  'jobs.new.convergenceCliOnly': '이 값들은 CLI 로만 바꿉니다',
   'jobs.new.create': '만들기',
   // 동시 실행 1 을 골랐는데 그 폴더에 이미 워커가 있을 때. 막지 않고 알려만 준다 —
   // 파일을 안 건드리는 워커끼리는 충돌할 것이 없고 앱은 그것을 알 수 없다
@@ -1366,8 +1452,15 @@ export const ko = {
   // 고른 계정이 이 폴더를 처음 쓰면 CLI 가 신뢰 확인을 띄우고 **거기서 멈춘다** — 앱은 그것을
   // 모르고 노드는 도는 모양 그대로라, 미리 말해 두지 않으면 왜 아무 일도 없는지 알 길이 없다
   'jobs.task.accountTrust': '고른 계정이 이 폴더를 처음 쓰면 세션 탭에 폴더 신뢰 확인이 뜹니다 — 승인해야 워커가 일을 시작합니다',
-  'jobs.task.validate': '완료를 검증할 실행 구성',
-  'jobs.task.validateNone': '검증 없음',
+  'jobs.task.validate': '완료 검사',
+  // 검사는 고른 순서대로 돌고 첫 실패에서 멈춘다(Plan 1 설계 D9) — 순서가 비용을 좌우하므로 힌트가 그것을 말한다
+  'jobs.task.checksHint': '빠른 검사를 앞에 두세요 — 첫 실패에서 멈추므로, 느린 검사가 앞에 있으면 매 수정마다 그 시간을 버립니다.',
+  'jobs.task.checksUnpicked': '고르지 않은 것',
+  'jobs.task.checksNone': '검사로 쓸 실행 구성이 없습니다',
+  // ↑ ↓ ✕ — 아이콘만 있는 버튼의 aria-label·title
+  'jobs.task.checkUp': '위로',
+  'jobs.task.checkDown': '아래로',
+  'jobs.task.checkRemove': '빼기',
   'jobs.task.review': '다른 에이전트가 검토',
   'jobs.task.create': '추가',
   'jobs.task.failed': 'Task 를 만들지 못했습니다',
@@ -1467,6 +1560,40 @@ export const ko = {
   'conversation.running.thinking': '생각 중',
   'conversation.running.working': '실행 중',
   'conversation.exited.title': '이 세션은 종료되었습니다',
+  // 터미널은 언제나 종료 코드를 보여 줬고 대화 창은 보여 주지 않았다(설계 D2). 코드만으로는 아무것도
+  // 말해 주지 않으므로 프로세스가 stderr 에 남긴 첫 줄을 같이 싣는다 — 전문은 접어 둔다.
+  'conversation.exited.withCode': '이 세션은 종료되었습니다 (코드 {code})',
+  'conversation.exited.detail': '자세히',
+  'conversation.exited.restart': '다시 시작',
+  // design §4 F5의 확인 창 다섯 문단. S1(한두 줄)의 예외다 — 사람이 대신할 수 없는 판단이라 사실을
+  // 빼면 버튼만 남는다. whatBlocked 뒤에 CLI 가 stderr 에 남긴 첫 줄(ChatState.error)이 ": <줄>" 로
+  // 붙는데, 그 줄 자체는 컴포넌트가 붙인다(없으면 콜론째 생략 — fix round 1 / Important 4) — 카탈로그
+  // 문구 자체는 그 줄 없이도 문장이 끝난다.
+  'conversation.exited.bypassConfirm.title': '이 폴더의 toolchain 설정을 건너뛰고 다시 시도할까요?',
+  'conversation.exited.bypassConfirm.whatBlockedLabel': '무엇이 막았나',
+  'conversation.exited.bypassConfirm.whatBlocked':
+    'CLI 가 아니라 PATH 앞의 도구 버전 관리자(Volta)가 실행을 거절했습니다. 이 폴더의 package.json 을 읽어 어느 버전을 쓸지 정해야 하는데, 그 파일을 읽지 못했습니다',
+  // fix round 1 / Important 4: VOLTA_HOME 만 맞았을 때 쓰는 문구. Volta 가 이 기기에 설치돼 있다는
+  // 것은 확실하지만, 그것이 *이* CLI 를 막았다는 확증은 아니다 — Volta 는 Node 를 관리하고 있고
+  // codex 는 백신이 막은 별개의 설치일 수 있다. 그래서 "거절했습니다"라는 확정 서술을 쓰지 않는다.
+  'conversation.exited.bypassConfirm.whatBlockedSoft':
+    '이 CLI 자신이 아니라, 이 기기에 설치된 도구 버전 관리자(Volta)가 원인일 수 있습니다. Volta 가 관리하는 도구라면 PATH 앞에서 이 폴더의 package.json 을 읽어 버전을 정하려다 실행을 거절했을 수 있습니다',
+  'conversation.exited.bypassConfirm.ifSkippedLabel': '건너뛰면',
+  'conversation.exited.bypassConfirm.ifSkipped': '버전 판단을 생략하고 기본으로 잡히는 CLI 를 그대로 실행합니다. 세션은 뜹니다.',
+  'conversation.exited.bypassConfirm.givesUpLabel': '무엇을 포기하나',
+  // 마지막 문장(롤 승계)은 "얼마나 / 무엇이 바뀌나" 절이 지고 있던 것이다. 그 절을 통째로 뺐을 때
+  // 같이 사라졌는데, 승계는 사람이 보는 데서 일어나지 않으므로 어디에도 안 적히면 아무도 모른다.
+  // 그래서 문단 하나가 아니라 문장 하나로, 대가를 말하는 자리에 붙였다 — 승계되는 것이 바로 이 대가다.
+  'conversation.exited.bypassConfirm.givesUp':
+    '이 프로젝트에 핀해 둔 도구 버전입니다. 이 세션뿐 아니라 이 세션이 실행하는 모든 명령(에이전트가 돌리는 npm test, npm run build, node …)이 핀된 버전이 아니라 기본 버전으로 돕니다. 같은 명령이 당신 터미널에서와 다른 결과를 낼 수 있습니다. 사용량 한도로 다른 계정에 넘어갈 때 이어받는 세션도 같습니다.',
+  'conversation.exited.bypassConfirm.properFixLabel': '제대로 된 해결',
+  'conversation.exited.bypassConfirm.properFix': 'package.json 을 고치면 이 창은 다시 뜨지 않습니다.',
+  'conversation.exited.bypassConfirm.confirm': '건너뛰고 다시 시도',
+  // 확인을 누른 뒤, 그 사이 다른 종료가 그 판정을 다시 내려 버튼이 더는 서 있지 않을 때(레이스)
+  'conversation.exited.bypassConfirm.failed': '다시 시도하지 못했습니다',
+  // fix round 1 (Critical 2): durable 마크. notice 와 달리 첫 턴에 걷히지 않고, 세션이 사는 동안(그
+  // 리고 죽은 뒤에도) 계속 보인다 — 언제나, 배너 우선순위와 무관하게 뜨는 별도 줄이다.
+  'conversation.bypassed.badge': '이 세션은 이 프로젝트의 toolchain 버전 설정을 건너뛰고 시작되었습니다',
   'conversation.running.interrupt': '중단 (Esc)',
   'conversation.model.line': '{model} · {effort}',
   'conversation.model.effortRow': 'effort: {level}',
@@ -1490,6 +1617,9 @@ export const ko = {
   'chat.notice.checking': '상태를 확인하는 중',
   'chat.notice.endsWithApp': '이 세션은 앱을 끄면 끝납니다',
   'chat.notice.error': '턴이 실패했습니다: {message}',
+  // 우회로 띄웠다는 것을 반드시 말한다 — 사용자가 이 폴더에 핀해 둔 것과 다른 버전이 떴을 수 있고,
+  // 조용히 그러면 안 된다(설계 F5)
+  'chat.notice.bypassed': '이 폴더의 toolchain 설정을 건너뛰고 띄웠습니다 — 핀해 둔 것과 다른 버전일 수 있습니다',
   'chat.mode.aria': '권한 모드',
   'chat.mode.default': '기본',
   'chat.mode.acceptEdits': '편집 자동 승인',

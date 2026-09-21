@@ -5,18 +5,36 @@ import {
   FAILURE_LIMIT,
   canTransition,
   newId,
+  placeholderSessionId,
   recomputeReady,
+  type CheckResult,
+  type ConvergencePolicy,
   type Delivery,
   type Dispatch,
   type Gate,
+  type GateKind,
   type Message,
   type MessageType,
   type Outcome,
+  type RepairReason,
   type Run,
   type Task
 } from './types'
 import type { Provider } from '../providers/meta'
 import type { ScheduleRule } from '../scheduler/rule'
+import { t, type Lang } from '../i18n'
+import {
+  appendHistory,
+  checkConfigIdsOf,
+  latestImplDispatch,
+  policyOf,
+  repairCountOf,
+  timeBudgetExceeded,
+  reviewRoundOf,
+  unstableChecks,
+  type ResolvedPolicy
+} from './convergence'
+import { normalizeIssues, type ReviewIssueInput } from './review'
 
 export interface OrchState {
   runs: Run[]
@@ -81,6 +99,8 @@ export function createRun(
     /** 있으면 이 Run 은 템플릿이다 — Run.schedule 의 주석을 보라. 규칙의 유효성은 부르는
      *  쪽(server.ts 의 run-create)이 isValidRule 로 본다, 계정 목록과 같은 관례다 */
     schedule?: ScheduleRule
+    /** 완료 수렴 정책. 있으면 이 Run 의 검증·검토 실패는 앱이 repair 로 되돌린다(설계 D2·D12) */
+    convergence?: ConvergencePolicy
   },
   now: string
 ): Res<Run> {
@@ -96,7 +116,8 @@ export function createRun(
     ...(a.coordinatorAccountId ? { coordinatorAccountId: a.coordinatorAccountId } : {}),
     ...(a.autoDispatch ? { autoDispatch: true } : {}),
     ...(a.schedule ? { schedule: a.schedule } : {}),
-    ...(a.pendingStart ? { pendingStart: true } : {})
+    ...(a.pendingStart ? { pendingStart: true } : {}),
+    ...(a.convergence ? { convergence: a.convergence } : {})
   }
   return ok({ ...s, runs: [...s.runs, run] }, run)
 }
@@ -136,6 +157,7 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
     ...(template.coordinatorAccountId
       ? { coordinatorAccountId: template.coordinatorAccountId }
       : {}),
+    ...(template.convergence ? { convergence: template.convergence } : {}),
     autoDispatch: true,
     templateId,
     fireOrdinal: ordinal
@@ -156,6 +178,7 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
       : {}),
     ...(t.accountIds !== undefined ? { accountIds: [...t.accountIds] } : {}),
     ...(t.validateConfigId !== undefined ? { validateConfigId: t.validateConfigId } : {}),
+    ...(t.validateConfigIds?.length ? { validateConfigIds: [...t.validateConfigIds] } : {}),
     ...(t.reviewRequested ? { reviewRequested: true } : {}),
     status: 'pending',
     consecutiveFailures: 0,
@@ -307,6 +330,7 @@ export function createTask(
      *  반쪽 검사는 어느 쪽이 정본인지 흐린다. */
     accountIds?: string[]
     validateConfigId?: string
+    validateConfigIds?: string[]
     reviewRequested?: boolean
   },
   now: string
@@ -328,6 +352,7 @@ export function createTask(
     // Task 와 갈라진다(조건부 전개를 쓰는 이유 그대로).
     ...(a.accountIds?.length ? { accountIds: a.accountIds } : {}),
     ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
+    ...(a.validateConfigIds?.length ? { validateConfigIds: a.validateConfigIds } : {}),
     ...(a.reviewRequested ? { reviewRequested: a.reviewRequested } : {}),
     status: 'pending',
     consecutiveFailures: 0,
@@ -348,13 +373,27 @@ export function openDispatch(
     cwd: string
     specPath: string
     retryOf?: string
+    repair?: RepairReason
+    /** 소진 Gate 의 retry-once 만 쓴다 — 사람이 "한 번 더" 라고 말한 자리이고, 그 한 번은
+     *  예산 밖이다(설계 §5.2). 그 밖의 모든 호출은 회로를 그대로 본다. */
+    ignoreCircuit?: boolean
   },
   now: string
 ): Res<Dispatch> {
   const task = s.tasks.find((t) => t.id === a.taskId)
   if (!task) return err(`unknown task: ${a.taskId}`)
   if (task.status === 'blocked') return err('task is blocked by an open gate')
-  if (task.consecutiveFailures >= FAILURE_LIMIT)
+  // validating·reviewing 은 판정을 기다리는 중이다 — moveTask/canTransition 만으로는 이제 이것을
+  // 막지 못한다: ALLOWED.validating·ALLOWED.reviewing 이 'dispatched' 를 허용하는 것은
+  // openRepairDispatch(그 판정이 도착한 뒤에만 여는 문) 하나를 위해서이지, 이 문(worker-start 가
+  // 쓰는 바로 그 openDispatch) 을 위해서가 아니다. 여기서 명시적으로 거절하지 않으면 코디네이터가
+  // 앱이 검사하는 중인 Task 에 두 번째 워커를 얹을 수 있다 — 설계의 코디네이터-격리 논거 전체가
+  // 이 거절 하나에 서 있다. convergence 가 없는 Run 도 예외가 아니다: validating·reviewing 은 그
+  // Run 에도 있고(검증·검토 기능 자체는 D12 이전부터 있었다), 그 Run 에서도 판정을 기다리는 동안
+  // 두 번째 워커가 뜨면 안 된다.
+  if (task.status === 'validating' || task.status === 'reviewing')
+    return err(`task is awaiting a verdict: ${task.status}`)
+  if (!a.ignoreCircuit && task.consecutiveFailures >= FAILURE_LIMIT)
     return err(`circuit break: ${FAILURE_LIMIT} consecutive failures`)
   // An open dispatch is rejected unconditionally even with retryOf — retryOf has to mean "the
   // previous attempt already finished", and an open dispatch breaks that premise by itself. This
@@ -392,7 +431,11 @@ export function openDispatch(
     retryOf: a.retryOf,
     startedAt: now,
     workerState: 'ready',
-    retained: false
+    retained: false,
+    ...(a.repair ? { repair: a.repair } : {}),
+    // 열 때 한 번만 적는다 — 나중에 카운트로 되짚지 않는다(Dispatch.grantedExtra 의 주석, 전체 브랜치
+    // 리뷰 Finding 3).
+    ...(a.ignoreCircuit ? { grantedExtra: true } : {})
   }
   return ok(
     { ...s, tasks: replace(s.tasks, moved), dispatches: [...s.dispatches, dispatch] },
@@ -440,8 +483,10 @@ export function applyWorkerDone(
   // 검증이 걸린 Task 는 성공 보고만으로 끝나지 않는다 — 실제로 돌려 본 결과가 정한다.
   // 워커가 실패를 보고했으면 검증하지 않는다. 워커 자신이 안 됐다고 하는데 확인할 이유가 없다.
   // canValidate === false 는 검증기가 없는 배선이다 — 그때는 검증이 없는 Task 와 똑같이 다룬다.
+  // checkConfigIdsOf 는 옛 validateConfigId 와 새 validateConfigIds 를 함께 본다 — 둘 중 하나만
+  // 있어도 검증이 걸린 Task 다.
   const validating =
-    a.outcome === 'succeeded' && !!task.validateConfigId && a.canValidate !== false
+    a.outcome === 'succeeded' && checkConfigIdsOf(task).length > 0 && a.canValidate !== false
   // 검증이 먼저다 — !validating 이 그것을 강제한다. 검증이 통과한 뒤의 검토는
   // applyValidationResult 가 같은 판단으로 넘긴다.
   const reviewing =
@@ -456,7 +501,9 @@ export function applyWorkerDone(
   const moved = moveTask(task, to, now)
   if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
   const nextTask: Task = {
-    ...moved,
+    // 처음 validating 이 되는 순간이 시간 예산의 시작이다(설계 G2). 여기와 beginValidation 둘이
+    // validating 으로 가는 전부다.
+    ...(validating ? withConvergenceClock(moved, now) : moved),
     result: a.body,
     filesModified: a.filesModified,
     // **validating 이나 reviewing 으로 갈 때는 그대로 넘긴다.** 여기서 0 으로 되돌리면 이어진
@@ -500,71 +547,310 @@ export function applyWorkerDone(
   return ok(state, 'accepted')
 }
 
-/** 검증 결과를 Task 에 반영한다. 종료 코드가 판정이다.
+/** 검증 결과를 Task 에 반영한다. check 별 결과가 판정이다.
  *
- *  실패는 기존 재시도 흐름을 그대로 탄다 — consecutiveFailures 가 오르고 FAILURE_LIMIT 에서
- *  회로가 끊긴다. 출력 꼬리는 result 와 아래 status 메시지 양쪽에 담는다. 재시도하는 워커가
- *  그것을 읽지는 못한다 — coordinator.ts 의 buildSpecFile 은 spec 파일에 title 과 spec 만
- *  싣는다 — 그래서 무엇이 틀렸는지 다음 시도에 전달하는 것은 이 메시지를 읽은 코디네이터의 일이다.
+ *  **convergence 가 없는 Run 도 문구는 지금까지와 같다**(설계 §5.3): 실패는 failed 가 되고 consecutiveFailures
+ *  가 오르며 status 메시지가 코디네이터에게 --retry-of 를 말한다. 그 문구가 결과를 전하는 유일한 길인
+ *  이유는 코디네이터를 깨우는 수단이 메시지뿐이고, 재시도 워커의 spec 파일은 결과를 싣지 않기 때문이다.
  *
- *  **결과는 반드시 메시지가 된다.** 코디네이터를 깨우는 수단은 메시지뿐이다(check 는
- *  nextDelivery 를 통해 s.messages 만 읽는다). 여기서 메시지를 붙이지 않으면 워커의 "성공했다"가
- *  코디네이터가 받은 마지막 소식으로 남고, 검증이 실패해 Task 가 failed 가 되어도 재시도 흐름을
- *  타는 사람이 아무도 없다 — check --wait 는 영원히 타임아웃만 돌려주고, 가이드는 타임아웃을
- *  실패의 신호로 보지 말라고 못박아 두었다. 통과도 알려야 한다: 의존 Task 가 풀린 것을 알지
- *  못하면 코디네이터는 다음 Task 를 띄우지 않는다. */
+ *  **모든 Run 이 `Task.checks`·`checkHistory` 를 기록한다 — convergence 가 없어도**(UI 설계 U2; 이 브랜치의
+ *  첫 커밋이 Plan 1 설계 §18 의 "수렴 Run 에만 기록" 판정을 뒤집은 자리다). `--validate` 만 쓰는 기존 Run 의
+ *  화면도 어느 검사가 깨졌는지 이름을 대야 하고, 그 정보가 상태에 없으면 노드도 사이드바도 그릴 수 없다.
+ *  이 자리에서 실제로 지키는 호환은 둘뿐이다 — status 메시지의 문구(위 문단), 그리고 통과한 검사의
+ *  `outputTail` 을 싣지 않는 것(툴팁에 쓸모없고 용량의 대부분이다 — recorded 를 만드는 아래 자리의 주석).
+ *
+ *  **convergence 가 있는 Run 에서는 실패가 repair 를 연다**(설계 §5.1): 같은 쓰기에서 Task 가 dispatched 로
+ *  가고 repair Dispatch 가 열린다. failed 를 경유하지 않는다 — Task 하나인 Run 이 순간 failed 가 되어
+ *  JOB_RUN_FAILED 가 Journal 에 박히기 때문이다(D5). 예산이 다했거나 사람이 멈췼으면 Gate 다. */
 export function applyValidationResult(
   s: OrchState,
   a: {
     taskId: string
-    exitCode: number
-    output: string
-    /** applyWorkerDone 의 canReview 와 같은 판정이다 — 배선이 검토기를 주입하지 않았으면 서버가
-     *  false 로 넘긴다. */
+    /** 순서대로. 첫 실패 뒤의 것은 not-run 이다(validator.ts) */
+    results: CheckResult[]
+    /** applyWorkerDone 의 canReview 와 같은 판정이다 — 배선이 검토기를 주입하지 않았으면 서버가 false 로 넘긴다 */
     canReview?: boolean
+    /** convergence Run 에서 필수. 없으면 거절한다 — 조용히 옛 경로로 떨어지지 않는다 */
+    repair?: RepairTarget
+    /** Gate 질문의 언어. 배선이 앱 언어를 넘긴다; 순수 호출자는 생략하면 영어다 */
+    lang?: Lang
   },
   now: string
 ): Res<Task> {
-  const task = s.tasks.find((t) => t.id === a.taskId)
+  const task = s.tasks.find((x) => x.id === a.taskId)
   if (!task) return err(`unknown task: ${a.taskId}`)
   if (task.status !== 'validating') return err(`task is not validating: ${task.status}`)
-  const passed = a.exitCode === 0
+  const lang: Lang = a.lang ?? 'en'
+  const passed = a.results.every((r) => r.status === 'passed')
+  const policy = policyOf(s, task)
+  const total = a.results.length
+  const ran = a.results.filter((r) => r.status !== 'not-run').length
+  const failedNames = a.results.filter((r) => r.status !== 'passed' && r.status !== 'not-run').map((r) => r.name)
+  const firstFailed = a.results.find((r) => r.status !== 'passed' && r.status !== 'not-run')
+  const exitCode = firstFailed?.exitCode ?? (passed ? 0 : 1)
+  const output = firstFailed?.outputTail ?? a.results.map((r) => r.outputTail ?? '').join('\n')
+
   // 검증이 통과했어도 검토가 걸려 있으면 아직 끝난 것이 아니다. applyWorkerDone 과 같은 판단이고,
   // 여기에 없으면 검증이 걸린 Task 만 검토를 건너뛴다.
   const reviewing = passed && !!task.reviewRequested && a.canReview !== false
-  const to = reviewing ? 'reviewing' : passed ? 'completed' : 'failed'
-  const moved = moveTask(task, to, now)
-  if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
-  const next: Task = {
-    ...moved,
-    // reviewing 으로 갈 때 0 으로 되돌리지 않는다 — 위 applyWorkerDone 의 주석과 같은 이유이고,
-    // 이쪽이 더 잡기 어렵다: 검증은 통과하고 검토는 실패하는 Task 가 매 시도마다 0 -> 1 을
-    // 반복해 회로가 영원히 끊기지 않는다.
-    consecutiveFailures: reviewing
-      ? task.consecutiveFailures
-      : passed
-        ? 0
-        : task.consecutiveFailures + 1,
-    ...(passed ? {} : { result: `validation failed (exit ${a.exitCode})\n${a.output}` })
+
+  // ---- 기록 — 정책이 있든 없든 ---- 화면이 어느 검사가 깨졌는지 그리려면 상태에 있어야 한다(UI 설계 U2; Plan 1
+  // 설계 §18-11 이 "수렴 Run 에만 기록" 을 뒤집은 자리다). 통과한 검사의 outputTail 은 싣지 않는다: 툴팁에 쓸모없고
+  // 용량의 대부분이다. **여기서 벗긴다, validator 가 아니라** — 아래 status 메시지의 body 는 a.results 에서 앞서
+  // 계산한 output 을 그대로 실어 코디네이터가 읽던 문구가 바뀌지 않는다. checkHistory 는 판정('passed'|'failed')만
+  // 들고 있어 손댈 것이 없다. 키를 아예 빼는 이유: undefined 값은 JSON 에 안 남지만 메모리의 Task 비교에 남는다.
+  const history = appendHistory(task.checkHistory, a.results)
+  const unstable = new Set(unstableChecks(history))
+  const checks: CheckResult[] = a.results.map((r) => {
+    const { outputTail, ...rest } = r
+    const kept: CheckResult =
+      r.status === 'passed' ? rest : { ...rest, ...(outputTail !== undefined ? { outputTail } : {}) }
+    return unstable.has(r.configId) ? { ...kept, unstable: true } : kept
+  })
+  const recorded: Task = { ...task, checks, checkHistory: history }
+
+  if (policy === null) {
+    // ---- 지금까지의 경로. 문구까지 그대로다 ---- 달라진 것은 task 가 아니라 recorded 를 옮긴다는 것 하나다.
+    const to = reviewing ? 'reviewing' : passed ? 'completed' : 'failed'
+    const moved = moveTask(recorded, to, now)
+    if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
+    const next: Task = {
+      ...moved,
+      consecutiveFailures: reviewing ? task.consecutiveFailures : passed ? 0 : task.consecutiveFailures + 1,
+      ...(passed ? {} : { result: `validation failed (exit ${exitCode})\n${output}` })
+    }
+    let state: OrchState = { ...s, tasks: recomputeReady(replace(s.tasks, next)) }
+    state = pushMessage(
+      state,
+      {
+        runId: task.runId,
+        type: 'status',
+        taskId: task.id,
+        subject: passed ? 'validation passed' : 'validation failed',
+        body: passed
+          ? `exitCode=0. ${reviewing ? 'The Task moved to reviewing — a reviewer on another provider now reads it.' : 'The Task moved to completed.'}\n${output}`
+          : `exitCode=${exitCode}. The Task moved to failed (consecutiveFailures=${next.consecutiveFailures}). Retry with worker-start --retry-of. The output tail below is the only record of what went wrong — a retry worker's spec file does not carry it, so pass on whatever it needs.\n${output}`
+      },
+      now
+    ).state
+    return ok(state, next)
   }
-  let state: OrchState = { ...s, tasks: recomputeReady(replace(s.tasks, next)) }
-  // closeDispatch 의 한도 감지 메시지와 같은 모양이다 — type: 'status', 제목이 결과를 말하고
-  // 본문이 종료 코드와 출력 꼬리를 담는다. dispatchId 는 붙이지 않는다: 검증은 Dispatch 가 끝난
-  // 뒤에 도는 것이므로 어떤 Dispatch 의 소식도 아니다. 앱이 만드는 오케스트레이션 문자열이라 영어다.
-  state = pushMessage(
-    state,
+
+  // ---- convergence Run ---- 실패는 failed 를 거치지 않고 repair 로 간다(설계 §5.1).
+  if (passed) {
+    const to = reviewing ? 'reviewing' : 'completed'
+    const moved = moveTask(recorded, to, now)
+    if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
+    const next: Task = { ...moved, consecutiveFailures: reviewing ? task.consecutiveFailures : 0 }
+    let state: OrchState = { ...s, tasks: recomputeReady(replace(s.tasks, next)) }
+    state = pushMessage(
+      state,
+      {
+        runId: task.runId,
+        type: 'status',
+        taskId: task.id,
+        subject: `All ${total} checks passed`,
+        body: `exitCode=0. ${reviewing ? 'The Task moved to reviewing — a reviewer on another provider now reads it.' : 'The Task moved to completed.'}`
+      },
+      now
+    ).state
+    return ok(state, next)
+  }
+  // repair 후보로 넘길 Task — 절대 'failed' 상태를 거치지 않는다(그것이 이 브랜치의 계약이다), 그래서
+  // 이름도 그 상태를 닮지 않게 짓는다.
+  const pendingRepair: Task = {
+    ...recorded,
+    consecutiveFailures: task.consecutiveFailures + 1,
+    result: `validation failed (exit ${exitCode})\n${output}`
+  }
+  return routeFailure(
+    s,
     {
-      runId: task.runId,
+      task: pendingRepair,
+      policy,
+      reason: 'check-failure',
+      repair: a.repair,
+      lang,
+      message: {
+        // failedNames 가 비면(예: 결과 전부가 not-run) 콜론 뒤에 구멍이 남지 않게 문구를 가른다 —
+        // 오늘의 validator 로는 닿지 않지만 CheckResult[] 를 직접 짜는 다른 호출자는 닿을 수 있다.
+        subject:
+          failedNames.length > 0
+            ? `Checks failed: ${failedNames.join(', ')} (${ran} of ${total} ran)`
+            : `Checks failed (${ran} of ${total} ran)`,
+        detail: `exitCode=${exitCode}.`
+      }
+    },
+    now
+  )
+}
+
+/** 배선이 판정 직전에 정해 넘기는 "repair 를 어디에 열 것인가". **할지**는 순수 층이 정한다(정책·예산·
+ *  멈춤), **어디에**는 배선이 안다(세션이 살아 있는가). same-session 은 그 세션에 fix 요청을 써넣고,
+ *  fresh 는 새 워커를 띄운다 — 설계 D3·§6.2. */
+export type RepairTarget =
+  | { kind: 'same-session'; sessionId: string; cwd: string; provider: Provider; accountId: string }
+  | { kind: 'fresh'; cwd: string; provider: Provider; accountId: string }
+
+/** validating·reviewing 에서 repair Dispatch 를 여는 **유일한** 자리(설계 §5.1). openDispatch 와 다른 점:
+ *  - Task 가 validating 또는 reviewing 이어야 한다 — 판정이 도착한 뒤다.
+ *  - 예산을 보지 않는다. 예산은 부르는 판정 함수가 consecutiveFailures 로 이미 정했고, 규칙이 두 곳에
+ *    있으면 갈라진다. FAILURE_LIMIT 회로도 보지 않는다 — 그것은 코디네이터 재시도의 예산이다.
+ *  - retryOf 는 마지막 구현·수리 Dispatch 다. 같은 sessionId 검사는 그대로다: 이전 Dispatch 는 닫혀 있으니
+ *    통과하고, 닫히지 않았다면 거절이 맞다. */
+export function openRepairDispatch(
+  s: OrchState,
+  a: { taskId: string; reason: RepairReason; target: RepairTarget },
+  now: string
+): Res<Dispatch> {
+  const task = s.tasks.find((x) => x.id === a.taskId)
+  if (!task) return err(`unknown task: ${a.taskId}`)
+  if (task.status !== 'validating' && task.status !== 'reviewing')
+    return err(`task is not awaiting a verdict: ${task.status}`)
+  const open = s.dispatches.find((d) => d.taskId === a.taskId && !d.outcome && !d.endedAt)
+  if (open) return err(`dispatch already open: ${open.id}`)
+  const prior = latestImplDispatch(s, a.taskId)
+  if (!prior) return err(`no implementation dispatch for task ${a.taskId}`)
+  const sessionId = a.target.kind === 'same-session' ? a.target.sessionId : placeholderSessionId()
+  const sessionOpen = s.dispatches.find((d) => d.sessionId === sessionId && !d.outcome && !d.endedAt)
+  if (sessionOpen) return err(`sessionId already in use by an open dispatch: ${sessionOpen.id}`)
+  const moved = moveTask(task, 'dispatched', now)
+  if (!moved) return err(`cannot dispatch from status: ${task.status}`)
+  const dispatch: Dispatch = {
+    id: newId('dsp'),
+    taskId: a.taskId,
+    provider: a.target.provider,
+    accountId: a.target.accountId,
+    sessionId,
+    cwd: a.target.cwd,
+    specPath: '',
+    retryOf: prior.id,
+    startedAt: now,
+    workerState: 'ready',
+    retained: false,
+    repair: a.reason
+  }
+  return ok({ ...s, tasks: replace(s.tasks, moved), dispatches: [...s.dispatches, dispatch] }, dispatch)
+}
+
+/** 소진·멈춤 Gate 의 "아직 실패" 요약 — check 이름과 blocking 이슈 제목을 한 줄로 */
+function failureSummary(task: Task): string {
+  const checks = (task.checks ?? []).filter((c) => c.status === 'failed' || c.status === 'timed-out').map((c) => c.name)
+  const issues = (task.reviewIssues ?? []).filter((i) => i.blocking).map((i) => `${i.severity.toUpperCase()} ${i.title}`)
+  return [...checks, ...issues].join(', ') || '(no record)'
+}
+
+/** 판정이 repair 대신 사람에게 가는 네 갈래를 한 함수로 — 소진, 멈춘 Task, 멈춘 Run, repair 를 열 수
+ *  없음(세션 충돌 등, routeFailure 참고). consecutiveFailures 는 부르는 쪽이 이미 올렸다.
+ *
+ *  질문의 모양이 갈래마다 다르다 — 세 갈래는 "몇 번 고쳤고 무엇이 아직 실패하는가"({repairs},
+ *  {failures}), 나머지 하나(repairFailed)는 "왜 못 열었는가"({reason})다. 그래서 `key` 로 그 둘을
+ *  판별식 유니언으로 가른다: 쓰는 쪽이 엉뚱한 파라미터를 건네면 여기서 타입 오류가 난다. */
+function gateOnFailure(
+  s: OrchState,
+  a: { task: Task; kind: GateKind; lang: Lang } & (
+    | {
+        key: 'jobs.convergence.gate.exhausted' | 'jobs.convergence.gate.stopped' | 'jobs.convergence.gate.paused'
+        repairs: number
+      }
+    // 시간 소진만 분(minutes)을 더 쓴다 — "무엇을 넘겼나" 가 이 갈래의 이유 자체라서다
+    | { key: 'jobs.convergence.gate.timeExhausted'; repairs: number; minutes: number }
+    | { key: 'jobs.convergence.gate.repairFailed'; reason: string }
+  ),
+  now: string
+): Res<Task> {
+  const question =
+    a.key === 'jobs.convergence.gate.repairFailed'
+      ? t(a.lang, a.key, { reason: a.reason })
+      : a.key === 'jobs.convergence.gate.timeExhausted'
+        ? t(a.lang, a.key, { minutes: a.minutes, repairs: a.repairs, failures: failureSummary(a.task) })
+        : t(a.lang, a.key, { repairs: a.repairs, failures: failureSummary(a.task) })
+  const withTask: OrchState = { ...s, tasks: replace(s.tasks, a.task) }
+  const g = createGate(
+    withTask,
+    { taskId: a.task.id, question, kind: a.kind, ...(a.kind === 'convergence-exhausted' ? { options: ['retry-once', 'mark-failed'] } : {}) },
+    now
+  )
+  if (!g.ok) return err(g.error)
+  return ok(g.state, g.state.tasks.find((x) => x.id === a.task.id)!)
+}
+
+/** 실패한 판정이 갈 길(설계 §5.1의 표). 위에서부터 첫 행이 이긴다. 통과가 아닌 결과를 받았을 때만 부른다.
+ *  `task` 는 checks·history·consecutiveFailures(+1) 가 이미 반영된 것이다.
+ *
+ *  **repair Dispatch 를 열지 못해도, 열 대상 자체가 없어도 이 판정을 버리지 않는다.** 세션이 다른
+ *  Task 에 재사용되는 경우(`--terminal`) 등으로 `openRepairDispatch` 가 거절하거나, 배선이 `repair`
+ *  자체를 넘기지 않았을 때도(오늘의 배선은 항상 넘긴다 — §18(4)) checks·history·+1 이 실린 `task`
+ *  를 그대로 Gate(convergence-blocked, jobs.convergence.gate.repairFailed)에 넘긴다 — 조용히
+ *  버리면(err) Task 가 validating 에 갇힌 채 아무도 다시 보러 오지 않는다(전체 브랜치 리뷰,
+ *  Finding 4). */
+function routeFailure(
+  s: OrchState,
+  a: { task: Task; policy: ResolvedPolicy; reason: RepairReason; repair: RepairTarget | undefined; lang: Lang; message: { subject: string; detail: string } },
+  now: string
+): Res<Task> {
+  const run = s.runs.find((r) => r.id === a.task.runId)
+  const repairs = a.task.consecutiveFailures // k 번째 연속 실패 = k 번째 repair 후보
+  if (a.task.convergenceOff)
+    return gateOnFailure(s, { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.stopped', repairs, lang: a.lang }, now)
+  if (run?.paused)
+    return gateOnFailure(s, { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.paused', repairs, lang: a.lang }, now)
+  // **시간이 횟수보다 앞이다**(설계 G2). 둘 다 소진이지만 사람에게 보여 줄 이유가 다르고, 시간이
+  // 넘었으면 횟수가 남아 있어도 새 수리를 열지 않는다. Gate 의 종류는 같다 — 사람이 고를 것("한 번
+  // 더 수정" / "실패로 표시")이 같으므로 갈래를 하나 더 만들지 않는다.
+  if (timeBudgetExceeded(a.task, a.policy, Date.parse(now)))
+    return gateOnFailure(
+      s,
+      {
+        task: a.task,
+        kind: 'convergence-exhausted',
+        key: 'jobs.convergence.gate.timeExhausted',
+        repairs: repairCountOf(s, a.task.id),
+        minutes: a.policy.maxTotalMinutes ?? 0,
+        lang: a.lang
+      },
+      now
+    )
+  if (repairs > a.policy.maxFixAttempts)
+    // repairs 는 이 실패까지의 "k 번째 연속 실패" 이고, k-1 개의 repair 만 실제로 열렸다(이번 것은
+    // 예산 밖이라 열리지 않는다) — repairCountOf 로 실제로 연 repair 수를 센다. a.policy.maxFixAttempts
+    // 를 그대로 쓰면 check 경로에서는 우연히 같은 값이지만 review 경로에서는 거짓말이 된다(라운드
+    // 상한과 repair 예산이 서로 다른 수를 세기 때문).
+    return gateOnFailure(s, { task: a.task, kind: 'convergence-exhausted', key: 'jobs.convergence.gate.exhausted', repairs: repairCountOf(s, a.task.id), lang: a.lang }, now)
+  // **err 로 조용히 버리지 않는다(전체 브랜치 리뷰, Finding 4).** 이 위의 세 갈래와 아래
+  // openRepairDispatch 실패 갈래가 전부 Gate 를 여는데, 여기만 err 를 돌려주면 그 값을 부르는 쪽이
+  // 로그만 남기고 마는(server.ts) 이 파일 유일의 자리가 되어 Task 가 validating 에 갇힌 채 아무도
+  // 다시 보러 오지 않는다 — 오늘의 배선은 항상 repair 를 채워 넘겨 닿지 않지만, §18(4)가 닫으려 한
+  // 것과 똑같은 구멍을 새로 열어 두는 것은 다음 사람이 이 자리를 믿게 만든다.
+  if (!a.repair)
+    return gateOnFailure(
+      s,
+      { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.repairFailed', reason: 'no repair target was supplied', lang: a.lang },
+      now
+    )
+  const withTask: OrchState = { ...s, tasks: replace(s.tasks, a.task) }
+  const opened = openRepairDispatch(withTask, { taskId: a.task.id, reason: a.reason, target: a.repair }, now)
+  if (!opened.ok)
+    return gateOnFailure(
+      s,
+      { task: a.task, kind: 'convergence-blocked', key: 'jobs.convergence.gate.repairFailed', reason: opened.error, lang: a.lang },
+      now
+    )
+  const state = pushMessage(
+    opened.state,
+    {
+      runId: a.task.runId,
       type: 'status',
-      taskId: task.id,
-      subject: passed ? 'validation passed' : 'validation failed',
-      body: passed
-        ? `exitCode=0. ${reviewing ? 'The Task moved to reviewing — a reviewer on another provider now reads it.' : 'The Task moved to completed.'}\n${a.output}`
-        : `exitCode=${a.exitCode}. The Task moved to failed (consecutiveFailures=${next.consecutiveFailures}). Retry with worker-start --retry-of. The output tail below is the only record of what went wrong — a retry worker's spec file does not carry it, so pass on whatever it needs.\n${a.output}`
+      taskId: a.task.id,
+      subject: a.message.subject,
+      // 코디네이터가 읽는 문구다(설계 §9). --retry-of 를 말하지 않는다 — 이 Task 의 재시도는 앱의 일이다.
+      body:
+        `${a.message.detail} repair ${repairs} of ${a.policy.maxFixAttempts}. The app is repairing this Task. ` +
+        `Do not start a worker for it — you will be told when it converges, or asked through a Gate when it cannot.`
     },
     now
   ).state
-  return ok(state, next)
+  return ok(state, state.tasks.find((x) => x.id === a.task.id)!)
 }
 
 /** Sends a Task that already produced output into its check without a worker report (P1 design §6).
@@ -572,12 +858,39 @@ export function applyValidationResult(
  *  Recovery uses it for the one case where the work survived but the report did not: the worker
  *  committed and was then lost, so the check is what can judge the result (spec §16 Example E).
  *  Deliberately not `applyWorkerDone`: that records a report this app never received. */
+/** 시간 예산의 시계를 켠다 (설계 G2, 명세 §40) — **처음 validating 이 될 때 한 번만.**
+ *
+ *  이미 찍혀 있으면 덮지 않는다. 라운드마다 다시 찍으면 예산이 라운드마다 리셋되어 상한이 아니게
+ *  된다. 정책에 시간 예산이 없어도 찍는다: 예산은 Run 의 칸이라 도중에 켤 수 있고, 그때 시계가
+ *  없으면 그 Task 만 영원히 예산 밖에 남는다. */
+const withConvergenceClock = (task: Task, now: string): Task =>
+  task.convergenceStartedAt === undefined ? { ...task, convergenceStartedAt: now } : task
+
+/** 완료 정책의 지문을 찍거나, 달라졌으면 표시한다 (설계 G3, 명세 §37·§36).
+ *
+ *  라운드가 시작될 때마다 부른다. 처음이면 찍고, 이미 있는데 값이 다르면 `policyChanged` 를 세운다 —
+ *  **막지 않는다**(B7): 사람이 라운드 사이에 검사를 정당하게 고쳤을 수 있고, 그 판단은 리뷰어와
+ *  사람의 몫이다. 앱이 할 일은 그 사실이 눈에 띄게 하는 것이다.
+ *
+ *  한 번 세운 표시는 내리지 않는다. 되돌려 놓아도 "그 사이에 바뀌어 있었다" 는 사실은 남는다.
+ *
+ *  지문 계산은 부르는 쪽이 한다 — 검사 구성은 main 의 저장소에 있고 core 는 그것을 모른다. */
+export function stampPolicySnapshot(s: OrchState, a: { taskId: string; key: string }, now: string): OrchState {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return s
+  if (task.policySnapshot === undefined)
+    return { ...s, tasks: replace(s.tasks, { ...task, policySnapshot: { key: a.key, capturedAt: now } }) }
+  if (task.policySnapshot.key === a.key || task.policyChanged === true) return s
+  return { ...s, tasks: replace(s.tasks, { ...task, policyChanged: true as const }) }
+}
+
 export function beginValidation(s: OrchState, a: { taskId: string }, now: string): Res<Task> {
   const task = s.tasks.find((t) => t.id === a.taskId)
   if (!task) return err(`unknown task: ${a.taskId}`)
   const moved = moveTask(task, 'validating', now)
   if (!moved) return err(`cannot begin validation from status: ${task.status}`)
-  return ok({ ...s, tasks: replace(s.tasks, moved) }, moved)
+  const stamped = withConvergenceClock(moved, now)
+  return ok({ ...s, tasks: replace(s.tasks, stamped) }, stamped)
 }
 
 /** 검증을 아예 돌릴 수 없을 때. 조용히 통과시키면 "검증됨"과 "검증 못 함"이 화면에서 같아지고,
@@ -640,9 +953,16 @@ export function openReviewDispatch(
 
 /** 검토자의 판정을 Task 에 반영한다.
  *
- *  실패는 기존 재시도 흐름을 그대로 탄다 — Gate 를 열지 않는다. 검토가 "부족하다"고 판정한 것은
- *  **정상 결과**이고, 정상 결과를 사람에게 넘기면 자동화가 아니다. Gate 는 검토를 **돌릴 수 없을**
- *  때만 쓴다(blockForReview).
+ *  **convergence 가 없는 Run 은 지금까지와 문구까지 같다**(설계 §5.3과 같은 호환 규칙): 실패는
+ *  기존 재시도 흐름을 그대로 탄다 — Gate 를 열지 않는다. 검토가 "부족하다"고 판정한 것은 **정상
+ *  결과**이고, 정상 결과를 사람에게 넘기면 자동화가 아니다. Gate 는 검토를 **돌릴 수 없을** 때만
+ *  쓴다(blockForReview). 그 호환에는 `Task.reviewIssues` 가 자라지 않는 것도 들어간다 — 이 기능을
+ *  쓰지 않는 Run 의 `orchestration.json` 이 이 변경으로 커지면 안 된다.
+ *
+ *  **convergence 가 있는 Run 에서는 blocking 이슈가 판정한다**(설계 §8) — 보고된 outcome 이 아니라.
+ *  승인(outcome: succeeded)이라도 파싱된 이슈 중 blocking 이 있으면 repair 로 간다: 승인이 자기
+ *  발견을 덮지 못한다(normalizeIssues 의 규칙). 깨진 판정 파일(`issues === 'malformed'`)은 "이슈
+ *  없음" 으로 읽지 않는다 — Gate 를 연다.
  *
  *  **결과는 반드시 메시지가 된다** — applyValidationResult 와 같은 이유다. 코디네이터를 깨우는
  *  수단은 메시지뿐이고(check 는 nextDelivery 를 통해 s.messages 만 읽는다), 통과도 알려야 한다:
@@ -652,7 +972,18 @@ export function openReviewDispatch(
  *  보고하는 것**이고 검증 결과와 같은 성격이다. worker_done 은 "내가 띄운 워커가 보고했다"로 남긴다. */
 export function applyReviewResult(
   s: OrchState,
-  a: { taskId: string; dispatchId: string; outcome: Outcome; subject: string; body: string },
+  a: {
+    taskId: string
+    dispatchId: string
+    outcome: Outcome
+    subject: string
+    body: string
+    /** `<specPath>.review.json` 에서 읽은 이슈. 파일이 없으면 undefined, 깨졌으면 'malformed'
+     *  (설계 §8.2). convergence 가 없는 Run 에서는 읽지 않는다 — 넘겨도 무시한다 */
+    issues?: ReviewIssueInput[] | 'malformed'
+    repair?: RepairTarget
+    lang?: Lang
+  },
   now: string
 ): Res<'accepted' | 'alreadyReported'> {
   const dispatch = s.dispatches.find((d) => d.id === a.dispatchId)
@@ -665,42 +996,116 @@ export function applyReviewResult(
   const task = s.tasks.find((t) => t.id === a.taskId)
   if (!task) return err(`unknown task: ${a.taskId}`)
   if (task.status !== 'reviewing') return err(`task is not reviewing: ${task.status}`)
-  const passed = a.outcome === 'succeeded'
-  const moved = moveTask(task, passed ? 'completed' : 'failed', now)
-  if (!moved) return err(`cannot move task ${task.status} -> ${passed ? 'completed' : 'failed'}`)
-  const next: Task = {
-    ...moved,
-    // 무엇이 부족했는지를 Task 에 남긴다. 재시도 워커가 이것을 읽지는 못한다 — buildSpecFile 은
-    // spec 파일에 title 과 spec 만 싣는다 — 그래서 전달은 아래 메시지를 읽은 코디네이터의 일이다.
-    ...(passed ? {} : { result: a.body }),
-    consecutiveFailures: passed ? 0 : task.consecutiveFailures + 1
-  }
+  const lang: Lang = a.lang ?? 'en'
   const nextDispatch: Dispatch = {
     ...dispatch,
     outcome: a.outcome,
     endedAt: now,
-    workerState: passed ? 'stopped' : 'failed'
+    workerState: a.outcome === 'succeeded' ? 'stopped' : 'failed'
   }
-  let state: OrchState = {
-    ...s,
-    tasks: recomputeReady(replace(s.tasks, next)),
-    dispatches: replace(s.dispatches, nextDispatch)
+  const closed: OrchState = { ...s, dispatches: replace(s.dispatches, nextDispatch) }
+  const policy = policyOf(s, task)
+
+  if (policy === null) {
+    // ---- 지금까지의 경로. 문구까지 그대로다 ----
+    const passed = a.outcome === 'succeeded'
+    const moved = moveTask(task, passed ? 'completed' : 'failed', now)
+    if (!moved) return err(`cannot move task ${task.status} -> ${passed ? 'completed' : 'failed'}`)
+    const next: Task = {
+      ...moved,
+      // 무엇이 부족했는지를 Task 에 남긴다. 재시도 워커가 이것을 읽지는 못한다 — buildSpecFile 은
+      // spec 파일에 title 과 spec 만 싣는다 — 그래서 전달은 아래 메시지를 읽은 코디네이터의 일이다.
+      ...(passed ? {} : { result: a.body }),
+      consecutiveFailures: passed ? 0 : task.consecutiveFailures + 1
+    }
+    let state: OrchState = { ...closed, tasks: recomputeReady(replace(closed.tasks, next)) }
+    state = pushMessage(
+      state,
+      {
+        runId: task.runId,
+        type: 'status',
+        taskId: task.id,
+        dispatchId: dispatch.id,
+        subject: passed ? 'review passed' : 'review failed',
+        body: passed
+          ? `The reviewer accepted the work. The Task moved to completed.\n${a.body}`
+          : `The reviewer rejected the work (consecutiveFailures=${next.consecutiveFailures}). Retry with worker-start --retry-of. The reason below is the only record of what was missing — a retry worker's spec file does not carry it, so pass on whatever it needs.\n${a.body}`
+      },
+      now
+    ).state
+    return ok(state, 'accepted')
   }
-  state = pushMessage(
-    state,
+
+  // ---- convergence Run ----
+  if (a.issues === 'malformed') {
+    // 검토 Dispatch 는 닫혔으므로 createGate 의 "열린 Dispatch" 검사를 지난다. 조용히 통과시키지
+    // 않는다 — 깨진 판정을 "이슈 없음" 으로 읽으면 검토가 통과한 것이 된다(설계 §8.2).
+    const g = blockForReview(closed, { taskId: task.id, reason: 'reviewer output could not be parsed (review.json)' }, now)
+    if (!g.ok) return err(g.error)
+    return ok(g.state, 'accepted')
+  }
+  const issues = normalizeIssues({
+    outcome: a.outcome,
+    subject: a.subject,
+    body: a.body,
+    issues: a.issues,
+    policy,
+    newId
+  })
+  const blocking = issues.filter((i) => i.blocking)
+  const recorded: Task = { ...task, reviewIssues: issues }
+  if (blocking.length === 0) {
+    const moved = moveTask(recorded, 'completed', now)
+    if (!moved) return err(`cannot move task ${task.status} -> completed`)
+    const next: Task = { ...moved, consecutiveFailures: 0 }
+    let state: OrchState = { ...closed, tasks: recomputeReady(replace(closed.tasks, next)) }
+    const notes = issues.length
+    state = pushMessage(
+      state,
+      {
+        runId: task.runId,
+        type: 'status',
+        taskId: task.id,
+        dispatchId: dispatch.id,
+        subject: notes === 0 ? 'Review approved' : `Review approved (${notes} non-blocking note${notes === 1 ? '' : 's'})`,
+        body: `The reviewer accepted the work. The Task moved to completed.\n${a.body}`
+      },
+      now
+    ).state
+    return ok(state, 'accepted')
+  }
+  const failed: Task = { ...recorded, consecutiveFailures: task.consecutiveFailures + 1, result: a.body }
+  // 라운드 상한(설계 §8.4). 지금 닫은 검토가 이미 outcome 을 가지므로 reviewRoundOf 가 그것을 센다.
+  // repairs 는 실제로 연 repair 수다(repairCountOf) — maxFixAttempts 는 다른 예산(§5.1)이고, 라운드
+  // 상한에 닿았다고 그 값과 같지 않다.
+  //
+  // **convergenceOff·paused 가 이 상한보다 위다**(설계 §5.1의 표: 멈춤 > 소진). 그래서 그 둘이면
+  // 여기서 소진 Gate 를 내지 않고 routeFailure 에 넘긴다 — routeFailure 가 그 표의 나머지를 그대로
+  // 본다(convergenceOff -> stopped, run.paused -> paused, 그다음에야 maxFixAttempts 소진).
+  const run = s.runs.find((r) => r.id === task.runId)
+  if (!failed.convergenceOff && !run?.paused && reviewRoundOf(closed, task.id) >= policy.maxReviewRounds) {
+    const g = gateOnFailure(closed, { task: failed, kind: 'convergence-exhausted', key: 'jobs.convergence.gate.exhausted', repairs: repairCountOf(closed, task.id), lang }, now)
+    if (!g.ok) return err(g.error)
+    return ok(g.state, 'accepted')
+  }
+  const list = blocking.map((i, n) => `${n + 1}. ${i.severity.toUpperCase()} — ${i.title}${i.file ? ` — ${i.file}${i.line !== undefined ? `:${i.line}` : ''}` : ''}`).join('\n')
+  const routed = routeFailure(
+    closed,
     {
-      runId: task.runId,
-      type: 'status',
-      taskId: task.id,
-      dispatchId: dispatch.id,
-      subject: passed ? 'review passed' : 'review failed',
-      body: passed
-        ? `The reviewer accepted the work. The Task moved to completed.\n${a.body}`
-        : `The reviewer rejected the work (consecutiveFailures=${next.consecutiveFailures}). Retry with worker-start --retry-of. The reason below is the only record of what was missing — a retry worker's spec file does not carry it, so pass on whatever it needs.\n${a.body}`
+      task: failed,
+      policy,
+      reason: 'review-failure',
+      repair: a.repair,
+      lang,
+      message: {
+        subject: `${dispatch.provider} review found ${blocking.length} blocking issue${blocking.length === 1 ? '' : 's'}`,
+        detail: `Blocking issues:\n${list}\n`
+      }
     },
     now
-  ).state
-  return ok(state, 'accepted')
+  )
+  if (!routed.ok) return err(routed.error)
+  return ok(routed.state, 'accepted')
 }
 
 /** 검토를 아예 돌릴 수 없을 때. blockForValidation 과 같은 판단이다 — 조용히 통과시키면 "검토됨"과
@@ -831,11 +1236,24 @@ export function interruptStalledTask(
   s: OrchState,
   a: { taskId: string },
   now: string
-): { state: OrchState; interrupted: 'validation' | 'review' | null; stuck: boolean } {
+): {
+  state: OrchState
+  interrupted: 'validation' | 'review' | null
+  /** convergence Run 의 validating/reviewing Task 에게, Gate 대신 "다시 돌려라" 를 말한다(설계
+   *  §10). 그때 `interrupted` 는 null 이고 state 는 그대로다 — 실제로 다시 돌리는 것은 부르는 쪽의
+   *  일이다(이 함수는 판정만 한다). */
+  resume: 'validation' | 'review' | null
+  stuck: boolean
+} {
   const task = s.tasks.find((t) => t.id === a.taskId)
-  if (!task) return { state: s, interrupted: null, stuck: false }
+  if (!task) return { state: s, interrupted: null, resume: null, stuck: false }
   if (task.status !== 'validating' && task.status !== 'reviewing')
-    return { state: s, interrupted: null, stuck: false }
+    return { state: s, interrupted: null, resume: null, stuck: false }
+  // convergence Run 은 묻지 않고 다시 돌린다(설계 §10) — check 는 멱등이고, 검토는 새 세션이면
+  // 된다. Gate 는 사람의 결정이 필요할 때의 것이고 여기에는 결정할 것이 없다. Task 와 state 는
+  // 건드리지 않는다 — 다시 돌리는 것은 이 함수를 부른 쪽의 일이다.
+  if (policyOf(s, task) !== null)
+    return { state: s, interrupted: null, resume: task.status === 'validating' ? 'validation' : 'review', stuck: false }
   // 검토는 질문을 손으로 쓰지 않고 blockForReview 에 맡긴다 — 그 질문에는 "끝난 일을 버리지 않고
   // 이 Task 를 닫으려면 task-update --status completed" 라는 탈출구가 붙어 있고, reviewing Task
   // 에는 그것이 꼭 필요하다: 구현이 끝나고 검증까지 통과했을 수 있는 일인데 resolveGate 는 Task 를
@@ -850,10 +1268,11 @@ export function interruptStalledTask(
         )
       : blockForReview(s, { taskId: task.id, reason: '앱이 재시작되어 검토가 중단되었습니다' }, now)
   // 전이가 막히면 그 Task 는 그대로 둔다 — 잃는 것보다 낫다
-  if (!r.ok) return { state: s, interrupted: null, stuck: true }
+  if (!r.ok) return { state: s, interrupted: null, resume: null, stuck: true }
   return {
     state: r.state,
     interrupted: task.status === 'validating' ? 'validation' : 'review',
+    resume: null,
     stuck: false
   }
 }
@@ -896,16 +1315,19 @@ export function writeOffDispatch(
   state: OrchState
   closed: boolean
   interrupted: 'validation' | 'review' | null
+  /** interruptStalledTask 의 resume 을 그대로 들려 보낸다 — convergence Run 의 Task 라면 이 자리가
+   *  "Gate 대신 다시 돌려라" 를 부르는 쪽에 전하는 유일한 신호다. */
+  resume: 'validation' | 'review' | null
   stuck: boolean
 } {
   const dispatch = s.dispatches.find((d) => d.id === a.dispatchId && !d.endedAt)
-  if (!dispatch) return { state: s, closed: false, interrupted: null, stuck: false }
+  if (!dispatch) return { state: s, closed: false, interrupted: null, resume: null, stuck: false }
   const ended: OrchState = {
     ...s,
     dispatches: replace(s.dispatches, endedUnproven(dispatch, now))
   }
   const r = interruptStalledTask(ended, { taskId: dispatch.taskId }, now)
-  return { state: r.state, closed: true, interrupted: r.interrupted, stuck: r.stuck }
+  return { state: r.state, closed: true, interrupted: r.interrupted, resume: r.resume, stuck: r.stuck }
 }
 
 /** 롤링이 세션을 갈아탈 때 열린 Dispatch 를 새 세션 id·계정으로 옮긴다.
@@ -1238,7 +1660,7 @@ export function applyReply(
 
 export function createGate(
   s: OrchState,
-  a: { taskId: string; question: string; options?: string[] },
+  a: { taskId: string; question: string; options?: string[]; kind?: GateKind },
   now: string
 ): Res<Gate> {
   const task = s.tasks.find((t) => t.id === a.taskId)
@@ -1255,6 +1677,7 @@ export function createGate(
     taskId: a.taskId,
     question: a.question,
     options: a.options,
+    ...(a.kind ? { kind: a.kind } : {}),
     status: 'open',
     createdAt: now
   }

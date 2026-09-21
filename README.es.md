@@ -59,6 +59,13 @@
 - Si no se puede construir un punto de control, el cambio recae en la reanudación normal, así que
   activarla nunca deja un relevo peor que antes
 
+**Corregir automáticamente hasta superar las comprobaciones**
+- Cuando una compilación o prueba de un Job falla, o una revisión encuentra un problema
+  que bloquea, eso vuelve a la cuenta trabajadora para que lo arregle y se comprueba de
+  nuevo, hasta que la política de finalización se cumpla o se alcance el límite de reintentos
+- El ciclo sobrevive al relevo de cuentas, a las pausas y a los reinicios de la aplicación,
+  así que un Job sigue avanzando en vez de empezar de cero
+
 **Programación y control remoto**
 - Programa sesiones para que empiecen a una hora determinada
 - Notificaciones de Slack cuando termina un turno o se alcanza un límite, y respuestas desde Slack
@@ -184,8 +191,12 @@ proveedores, y hay dos formas de ponerlo en marcha.
 1. Comprueba que el proyecto sea un repositorio git con una rama activa.
 2. Pulsa **Nuevo trabajo**, indica el **Objetivo**, elige una **Cuenta coordinadora**, fija
    **En paralelo** y añade una programación si la necesitas.
-3. Añade a cada tarea sus instrucciones, una o más cuentas trabajadoras y sus dependencias. También
-   puedes usar compilaciones, pruebas y revisiones del otro proveedor como comprobaciones finales.
+3. Añade a cada tarea sus instrucciones, una o más cuentas trabajadoras y sus dependencias. Usa
+   compilaciones, pruebas y revisiones del otro proveedor como comprobaciones finales. Con
+   **Corregir automáticamente hasta superar las comprobaciones** activado, una comprobación
+   fallida o un hallazgo que bloquea vuelve a la cuenta trabajadora para que lo arregle y se
+   verifica de nuevo, hasta que la política de finalización se cumpla o se alcance el límite
+   de reintentos.
 4. Pulsa **Ejecutar**. Un Job normal abre su coordinadora; uno programado activa su calendario.
 
 La vista de Jobs muestra el grafo de dependencias, las trabajadoras activas, las preguntas y la línea

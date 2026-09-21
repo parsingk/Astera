@@ -16,6 +16,7 @@ import { repoPathOf } from '../worktrees/repo'
 import type { OrchState } from './state'
 import { eventCountFor } from './timeline'
 import { FAILURE_LIMIT } from './types'
+import { policyOf, repairCountOf, reviewRoundOf } from './convergence'
 import type { Run, Task } from './types'
 
 /** 한 프로젝트에 속한 Run 들, 최신순.
@@ -153,6 +154,9 @@ function jobTaskOf(
       ? entries[entries.length - 1]
       : null
   const done = entries.filter((e) => e.resumedAt !== undefined).length
+  // 수렴 판정은 policyOf 다 — `convergence !== undefined` 가 아니다(Plan 1 설계 §18): 손으로 null 을 적어 둔 Run 이
+  // "켜진 것" 으로 읽히면 안 된다. 기본값이 채워진 정책이라 화면이 3/2 를 지어내지 않는다.
+  const policy = policyOf(state, task)
   return {
     id: task.id,
     title: task.title,
@@ -168,7 +172,9 @@ function jobTaskOf(
           gate: {
             id: open[0].id,
             question: open[0].question,
-            ...(open[0].options ? { options: open[0].options } : {})
+            ...(open[0].options ? { options: open[0].options } : {}),
+            // 사이드바 "소진" 칩의 유일한 근거 — JobTask.gate 의 주석
+            ...(open[0].kind ? { kind: open[0].kind } : {})
           }
         }
       : {}),
@@ -185,7 +191,43 @@ function jobTaskOf(
           }
         }
       : {}),
-    ...(done > 0 ? { resumes: done } : {})
+    ...(done > 0 ? { resumes: done } : {}),
+    // 검사 결과는 **검사가 걸린 모든 Task** 에 — 자동 수정을 켠 Run 만이 아니다(UI 설계 U2). 칩이 그리는 것만
+    // 싣는다: 출력 꼬리는 이 스냅숏이 사이드바 푸시마다 나가는 것이라 빼고(U4), 시간은 ISO 둘이 아니라 뺄셈
+    // 결과 하나로 — 렌더러가 계산하면 테스트할 자리가 없다.
+    ...(task.checks?.length
+      ? {
+          checks: task.checks.map((c) => ({
+            configId: c.configId,
+            name: c.name,
+            status: c.status,
+            ...(c.exitCode !== undefined ? { exitCode: c.exitCode } : {}),
+            ...(c.startedAt && c.endedAt ? { durationMs: Date.parse(c.endedAt) - Date.parse(c.startedAt) } : {}),
+            ...(c.unstable ? { unstable: true as const } : {})
+          }))
+        }
+      : {}),
+    // 예산과 진행은 정책 있는 Run 에만(U3)
+    ...(policy
+      ? {
+          convergence: {
+            // repairCountOf 는 실제로 연 repair Dispatch 수를 세는데, 그 수가 maxFixAttempts 를 넘을 수 있다 —
+            // (1) 사람이 소진된 Gate 에 "한 번 더 수정"으로 답하면 예산 밖의 repair 가 열리고(Dispatch.grantedExtra),
+            // (2) 크래시로 repair Dispatch 를 잃으면 그것과 복구가 새로 여는 replacement 가 둘 다 `.repair` 를 달고
+            // 남는다(repair.ts 의 repairSpec 주석 — 유령이 영영 세어진다). 두 경우 다 Task 는 dispatched 에 repair
+            // 가 열려 있어 칩이 그려지고, 클램프 없이는 "수정 4/3" 처럼 분모를 넘는 값을 그대로 보였다.
+            // 분모는 예산이므로 여기서 맞춘다: 크래시 쪽은 유령이 부풀린 값이라 셀 것이 아니고, grantedExtra 쪽은
+            // 예산을 실제로 다 썼으므로 3/3 이 진행을 속이는 거짓말이 아니다. grantedExtra 를 스냅숏에 실어
+            // "3/3 (+1 허락)" 같은 별도 문구를 쓰는 것이 더 나은 답이지만 다음 조각의 Completion 블록 몫이다.
+            repairs: Math.min(repairCountOf(state, task.id), policy.maxFixAttempts),
+            maxFixAttempts: policy.maxFixAttempts,
+            reviewRound: reviewRoundOf(state, task.id),
+            maxReviewRounds: policy.maxReviewRounds,
+            repairing: running?.repair ?? null,
+            stopped: task.convergenceOff === true
+          }
+        }
+      : {})
   }
 }
 

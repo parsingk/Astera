@@ -51,8 +51,41 @@ export interface ChatState {
   model: ChatModel
   /** The last turn's failure, cleared by the next turn. */
   error: string | null
+  /** The exit code, once the process has gone. Null while it is alive. The pane shows it beside the
+   *  exit notice — the terminal has always shown one and the chat pane never did (design D2). */
+  exitCode: number | null
+  /** The process's last words on stderr. `error` above is the one line a person reads; this is the
+   *  whole tail, which the pane folds away. Kept apart rather than concatenated: joining them would
+   *  make the screen split the string again to draw either one. */
+  errorDetail: string | null
   /** Whether the process survives the app quitting (Host-owned) — the fallback's tab says it does not. */
   outlivesApp: boolean
+  /** design F5: the person's confirmed toolchain-skip retry succeeded, which may have started a
+   *  version other than the one the person pinned for this folder — never silent about that. Optional,
+   *  not required-and-null, so the many `ChatState` literals a test builds for something else stay as
+   *  they are; absent reads the same as null. Not folded into `error`: the exit banner (T4) would
+   *  mistake it for the reason the session died, and this is the opposite of a failure. */
+  notice?: 'bypassed' | null
+  /** design F5: this death can be retried past a version manager's refusal, if the person chooses to.
+   *  True only when **both** the death looked like a refusal (no protocol line, immediate — S7's own
+   *  test, `looksLikeRefusal`) *and* main found positive evidence a bypassable manager is actually in
+   *  the way — never a guess. The exit banner renders a button only when this is set; when the death
+   *  looks like a refusal but no manager was found, F1/F2's explanation stands on its own and no button
+   *  appears. Optional for the same reason `notice` above is: absent reads the same as false. */
+  bypassOffer?: boolean
+  /** design F5 fix round 1 (Important 4): *which* detection signal backs `bypassOffer` — present only
+   *  when `bypassOffer` is `true`. `'path'` is confident (the resolved executable is itself under a
+   *  Volta directory); `'voltaHome'` is weaker (Volta is installed and active on this machine, not
+   *  proven to have gated *this* launch), and the confirm dialog has to soften what it says when this
+   *  is the only signal it has, rather than stating as fact that Volta refused the launch. */
+  bypassSignal?: 'path' | 'voltaHome'
+  /** design F5 fix round 1 (Critical 2): durable, unlike `notice` — set the moment a bypassed process
+   *  is spawned and never cleared by anything afterward (not a fresh turn, not a remount), so someone
+   *  reading this session's results later can still see that it did not run on the version pinned for
+   *  this folder. `notice` alone is not enough: both main and the renderer clear it on the first
+   *  `status: 'working'`, which for a retry carrying an `initialPrompt` can be within a second of the
+   *  fact it announces. Optional for the same reason every other flag here is: absent reads as `false`. */
+  bypassed?: boolean
   /** The replay this state was rebuilt from had lost its head, so `status` is a guess until the next event. */
   truncated: boolean
   /** Which CLI this session is — set once at construction (adapterCore.ts), never patched. */
@@ -105,7 +138,31 @@ export type ChatEvent =
   /** Claude only: what the turn that just finished left in the context. A pty session reads the same
    *  figure off its statusLine; a chat session has no statusLine, so it is reported here. */
   | { type: 'usage'; context: ChatContextUsage }
-  | { type: 'exit'; code: number }
+  /** The process's last words ride with the code, not only in main's `ChatState` — this app folds
+   *  renderer state out of events (see `foldChatEvent`), so a pane already open when the process dies
+   *  hears only what this carries; a value left solely on `ChatState` never reaches it. `errorDetail`
+   *  is always here, the tail or null: an absent tail is itself the fact "we do not know", which is
+   *  different from `truncated` above having nothing to say. `error` is optional — present only when
+   *  the tail gave a reason a person should read — so the fold can leave whatever `error` already
+   *  held rather than inventing one. */
+  /** `bypassOffer` mirrors `ChatState.bypassOffer` (design F5) — present and `true` only when the
+   *  manager decided this exit may be retried past the toolchain manager that refused it. It has to
+   *  ride the event, not just sit in `ChatState`: a pane already open when the process dies never
+   *  re-reads main's state, it only ever hears this. `bypassSignal` (fix round 1 / Important 4) rides
+   *  alongside it, present under the same condition, mirroring `ChatState.bypassSignal`. */
+  | {
+      type: 'exit'
+      code: number
+      errorDetail: string | null
+      error?: string
+      bypassOffer?: boolean
+      bypassSignal?: 'path' | 'voltaHome'
+    }
+  /** design F5: the person's confirmed retry started the CLI. Its own event, not a value folded onto
+   *  `exit` or `error` — it is not a failure, and routing it through either would have some reader
+   *  mistake it for one. `key` names which notice, the same shape `chat.notice.*` i18n keys use, so a
+   *  second cause (a different toolchain manager's bypass) is a second key rather than a new field. */
+  | { type: 'notice'; key: 'bypassed' }
 
 export interface ChatAdapter {
   start(a: { cwd: string; resumeThreadId?: string; bypass: boolean }): Promise<void>

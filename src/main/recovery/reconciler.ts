@@ -3,6 +3,7 @@
 // strategy — those live in core/recovery/decide.ts and main/recovery/execute.ts, the same split the
 // orchestration guide draws between "what happened", "what to do" and "doing it".
 import type { OrchState } from '../../core/orchestration/state'
+import { checkConfigIdsOf, policyOf } from '../../core/orchestration/convergence'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../../core/orchestration/types'
 import type { GitFacts, LostAttempt, RecoveryDecision } from '../../core/recovery/types'
 import { decideRecovery } from '../../core/recovery/decide'
@@ -153,8 +154,15 @@ export class RecoveryReconciler {
       nativeSessionId: dispatch.nativeSessionId ?? checkpoint?.nativeSessionId ?? undefined,
       promptConfirmed,
       baseHead,
-      hasValidateConfig: task.validateConfigId !== undefined,
-      appDriven: run.autoDispatch === true
+      hasValidateConfig: checkConfigIdsOf(task).length > 0,
+      // repair 에 대해서는 앱이 dispatch 권한을 갖는다(설계 §10) — 코디네이터 Run 이어도 redispatch·smart-resume
+      // 가 열린다. 첫 구현 attempt 는 지금처럼 코디네이터의 것이다.
+      // policyOf 로 본다, run.convergence !== undefined 가 아니다 — 손으로 고친 "convergence": null 은
+      // !== undefined 로는 정책이 있다고 잘못 읽히지만, policyOf 는 falsy 한 convergence 를 그대로
+      // "정책 없음" 으로 읽는다(이 파일이 손으로 고쳐질 수 있다는 전제는 곳곳에 이미 있다).
+      appDriven: run.autoDispatch === true || (policyOf(state, task) !== null && dispatch.repair !== undefined),
+      ...(dispatch.repair ? { repair: dispatch.repair } : {}),
+      ...(dispatch.grantedExtra ? { grantedExtra: true } : {})
     }
 
     const git = await this.deps.readGitFacts(dispatch.cwd)

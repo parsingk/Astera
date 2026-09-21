@@ -12,7 +12,9 @@ export function attachProcHost(a: {
   broadcast(m: HostMessage): void
 }): (m: ClientMessage, send: (h: HostMessage) => void) => boolean {
   a.registry.onLine((id, seq, line) => a.broadcast({ t: 'proc-line', id, seq, line }))
-  a.registry.onExit((id, exitCode) => a.broadcast({ t: 'proc-exit', id, exitCode }))
+  a.registry.onExit((id, exitCode, stderrTail) =>
+    a.broadcast({ t: 'proc-exit', id, exitCode, ...(stderrTail !== undefined ? { stderrTail } : {}) })
+  )
 
   return (m, send) => {
     switch (m.t) {

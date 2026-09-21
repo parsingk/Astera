@@ -70,17 +70,20 @@ different provider judges it.
 | `pending`, `ready` | `dispatched` | `worker-start` |
 | `pending`, `ready`, `failed` | `blocked` | `gate-create` (rejected if a Dispatch is open) |
 | `blocked` | `ready` | `gate-resolve` (if the Task has more open Gates, all of them must be resolved too) |
+| `blocked` | `failed` | **not in `ALLOWED['blocked']` — reached only by a table bypass**, the same kind `task-update` uses (section 8): `gate-resolve --resolution mark-failed` on an exhausted convergence Gate (`kind: "convergence-exhausted"`, section 11) writes `failed` directly, in the same commit that would otherwise have unblocked the Task to `pending`/`ready`. A coordinator watching Task status only ever observes the jump straight from `blocked` to `failed` |
 | `dispatched` | `completed` | `worker_done --outcome succeeded`, when the Task has neither `--validate` nor `--review` (4.2) |
 | `dispatched` | `validating` | `worker_done --outcome succeeded`, when the Task has `--validate` (4.2) |
 | `dispatched` | `reviewing` | `worker_done --outcome succeeded`, when the Task has `--review` but no `--validate` (4.2) |
 | `dispatched` | `failed` | `worker_done --outcome failed`, or the session dies without reporting |
 | `validating` | `completed` | the validation run exits `0`, and the Task has no `--review` |
 | `validating` | `reviewing` | the validation run exits `0`, and the Task has `--review` (4.2) |
-| `validating` | `failed` | the validation run exits non-zero — the same retry path as any other failure |
-| `validating` | `blocked` | the validation cannot run at all — a Gate opens automatically |
+| `validating` | `failed` | the validation run exits non-zero, **on a Run with no convergence policy** — the same retry path as any other failure. On a convergence Run (section 11) a failure is never routed here directly: it reaches `blocked` (an exhausted or unopenable repair, as a Gate) or back to `dispatched` (a repair) instead, and the only way this exact edge is taken is `task-update` — never `gate-resolve mark-failed`, whose own edge is `blocked` → `failed` below |
+| `validating` | `dispatched` | **convergence Runs only** (section 11) — a check failed and the app opened a repair Dispatch on the same worker, through `openRepairDispatch`. You did nothing to cause this edge and there is nothing to do about it but wait |
+| `validating` | `blocked` | the validation cannot run at all — a Gate opens automatically. On a convergence Run this edge also covers a paused Run, a Task with `--convergence off`, a repair the app could not start, and the repair budget running out (section 11) |
 | `reviewing` | `completed` | the reviewer reports `worker_done --outcome succeeded` |
-| `reviewing` | `failed` | the reviewer reports `worker_done --outcome failed` — the same retry path as any other failure |
-| `reviewing` | `blocked` | the review cannot run at all (no other provider has a usable account, or the reviewer dies without reporting) — a Gate opens automatically |
+| `reviewing` | `failed` | the reviewer reports `worker_done --outcome failed`, **on a Run with no convergence policy** — the same retry path as any other failure. On a convergence Run (section 11) this edge is reached the same restricted way as `validating` → `failed` above |
+| `reviewing` | `dispatched` | **convergence Runs only** (section 11) — the review found a blocking issue and the app opened a repair Dispatch, through `openRepairDispatch` |
+| `reviewing` | `blocked` | the review cannot run at all (no other provider has a usable account, or the reviewer dies without reporting) — a Gate opens automatically. Same convergence additions as `validating` → `blocked` above |
 | `failed` | `dispatched` | `worker-start --retry-of <dsp>` (fewer than 3 consecutive failures) |
 | `failed` | (terminal) | 3 consecutive failures — circuit break, no further retries |
 
@@ -89,6 +92,14 @@ There is no `dispatched → blocked`. Receiving `worker_done` puts the Dispatch 
 which case success moves it to `validating` or `reviewing` instead of `completed` (below, and "When a
 review is worth attaching"). Validation runs first: a Task with both only reaches `reviewing` once the
 validation has passed. Either way, do not add anything after it (see section 10).
+
+**There is also no second `worker-start` on a Task that is `validating` or `reviewing`.** This holds on
+every Run, convergence or not: the table above has no edge out of either state for a plain
+`worker-start`, and that Task has no open Dispatch to trip the usual "dispatch already open" check —
+so, until this was closed, nothing stopped a second worker from landing on a Task that already had a
+verdict pending. `worker-start` now refuses it by name, `400 task is awaiting a verdict: <status>`,
+rather than failing on an opaque transition rejection. A convergence Run reuses this same refusal
+(section 11) — it is not a new rule invented for convergence, just one convergence leans on.
 
 ### When a validation is worth attaching
 
@@ -108,16 +119,28 @@ Task in a Run.
 - **Dependents wait.** A Task whose dependency is `validating` stays `pending`; only a passing
   validation releases it, never the worker's own report.
 - **Exit code `0` completes the Task; non-zero fails it** the same way a failed worker would —
-  `consecutiveFailures` climbs and the circuit still breaks at 3. The output tail is stored in the
-  Task's `result`, but **a retry worker never sees it**: the spec file the app assembles for a worker
-  carries only that Task's title and spec, so nothing a previous attempt produced — neither the
-  validation output nor the earlier worker's report — reaches the next one. If the next attempt needs
-  to know what failed, write it into the spec yourself.
-- **Either outcome arrives in your inbox as a `status` message**: `validation passed` or `validation
-  failed`, with the exit code and the output tail in the body. That message is what wakes `check`, so
-  a validated Task is **not** settled when `worker_done` comes back — wait for its validation message
-  before you decide what to dispatch next. (A validation that cannot run announces itself the same
-  way, as the Gate's `decision_gate` message.)
+  `consecutiveFailures` climbs and the circuit still breaks at 3 — **on a Run with no convergence
+  policy.** On a convergence Run (section 11) a non-zero exit never reaches `failed` directly: it goes
+  back to `dispatched` (the app repairing it on the same worker, which does get the failure detail as a
+  spec section) or to `blocked` (a Gate); `worker-start --retry-of` from you never enters into it. On
+  the non-convergence path, the output tail is stored in the Task's `result`, but **a retry worker
+  never sees it**: the spec file the app assembles for a worker carries only that Task's title and
+  spec, so nothing a previous attempt produced — neither the validation output nor the earlier
+  worker's report — reaches the next one. If the next attempt needs to know what failed, write it into
+  the spec yourself.
+- **Either outcome arrives in your inbox as a `status` message, whose exact subject depends on whether
+  the Run has convergence on.** **On a Run with no convergence policy** it is `validation passed` or
+  `validation failed`, with the exit code and the output tail in the body. **On a convergence Run**
+  (section 11) a pass reads `All <n> checks passed` instead, and a failure that is about to become a
+  repair reads `Checks failed: <name(s)> (<ran> of <total> ran)` (or `Checks failed (<ran> of <total>
+  ran)` if none are named) — never the literal words `validation passed`/`validation failed`, so do not
+  match on those on a convergence Run. That convergence-branch body carries only the exit code, not the
+  output tail — read the failed check's own tail off the Task's `checks` field (`task-list --json`)
+  instead. Either way, that message is what wakes `check`, so a validated
+  Task is **not** settled when `worker_done` comes back — wait for its validation message before you
+  decide what to dispatch next. (A validation that cannot run at all announces itself differently again,
+  and the same way on every Run regardless of convergence: as a Gate's `decision_gate` message, never a
+  `status` one.)
 - **If the validation cannot run at all** — no such configuration, a required field empty, the
   directory gone, the app restarted mid-run, or the user stopping the validation run from the app's
   Run panel — the Task goes to `blocked` behind a Gate whose question says why. A stopped run is not
@@ -139,9 +162,12 @@ spends quota** — attaching it to a Task like a one-line documentation fix is t
   the validation has passed (section 2's table) — the reviewer is not asked to re-judge whether the code
   compiles or the tests run.
 - **A review failure rides the normal retry flow** — `worker-start --retry-of`, exactly like a validation
-  or a worker failure. The `review failed` status message's body is the **only** record of what was
-  missing; a retry worker's spec file does not carry it (the same limitation as validation, above), so
-  pass on whatever the next attempt needs.
+  or a worker failure — **on a Run with no convergence policy.** On a convergence Run (section 11) this
+  never happens: `applyReviewResult`'s convergence branch routes a blocking review straight to a repair
+  (`dispatched`, same worker) or a Gate (`blocked`), and the Task never reaches `failed` this way, so
+  there is no `--retry-of` for you to call. On the non-convergence path, the `review failed` status
+  message's body is the **only** record of what was missing; a retry worker's spec file does not carry
+  it (the same limitation as validation, above), so pass on whatever the next attempt needs.
 - **A review passing moves the Task straight to `completed`** and releases its dependents, the same as
   any other route to that state.
 
@@ -191,7 +217,9 @@ difference to the output.
 ### 4.1 Run
 
 ```
-run-create --objective <s> [--cwd <p>] [--json]
+run-create --objective <s> [--cwd <p>]
+           [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>]]
+           [--json]
 run-list [--json]
 run-show --id <run> [--json]
 run-use --id <run> [--json]        # confirms existence only; binds nothing (see section 1)
@@ -215,12 +243,19 @@ repository, pass that repository's root and open your session there.
 here it is **not** coordinator-only — a worker may call it to see what it will be judged by before it
 starts.
 
+**`--convergence` turns on completion convergence for this Run — read section 11 before using it.** In
+short: a Task with checks or a review is no longer yours to retry when one fails; the app repairs it,
+and several commands you would otherwise reach for are refused while that is happening.
+`--max-fix-attempts`, `--max-review-rounds`, and `--blocking-severity` tune it and are rejected without
+`--convergence` present — they do not imply it.
+
 ### 4.2 Task and Gate
 
 ```
-task-create --title <s> --spec <s|-> --account <id,…> [--run <run>] [--deps <json_array>] [--validate <configId>] [--review] [--json]
+task-create --title <s> --spec <s|-> --account <id,…> [--run <run>] [--deps <json_array>] [--validate <configId,…>] [--review] [--json]
 task-list [--run <run>] [--status <s>] [--ready] [--brief] [--json]
 task-update --id <tsk> --status <s> [--result <s|->] [--json]   # bypasses the transition table — see section 8
+task-update --id <tsk> --convergence off [--json]                # stops the app's own repairs on this Task — section 11
 dispatch-show --task <tsk> [--json]        # that Task's Dispatch history as an array (retries and the app's review Dispatch included)
 
 gate-create --task <tsk> --question <s|-> [--options <json_array>] [--json]
@@ -269,11 +304,13 @@ gate-list [--task <tsk>] [--status <s>] [--json]
   - anything else → **ask them, listing the accounts by label with their provider**, and wait. Do not
     create the Tasks first and fix the accounts afterwards: a Task's accounts decide which agent runs
     it, and picking on their behalf spends the quota they were saving.
-- **`--validate <configId>` makes this Task's completion depend on a run configuration**, not just the
-  worker's own report — the id comes from `run-configs` (4.1). Omit it and nothing changes:
-  `worker_done --outcome succeeded` completes the Task exactly as before. With it, that same report
-  instead moves the Task to `validating` (section 2, which covers what happens next and when it is
-  worth attaching).
+- **`--validate <configId>` or `--validate <configId>,<configId>,…` makes this Task's completion depend
+  on one or more run configurations**, not just the worker's own report — the ids come from
+  `run-configs` (4.1). Omit it and nothing changes: `worker_done --outcome succeeded` completes the
+  Task exactly as before. With it, that same report instead moves the Task to `validating` (section 2,
+  which covers what happens next and when it is worth attaching). **A list runs in the order given, and
+  the first failure stops it** — later configurations in the list report `not-run`, not `failed`; they
+  never got the chance to say either way.
 - **`--review` makes this Task's completion depend on another agent's judgement** — a value-less flag,
   the same shape as `task-list --ready`. Omit it and nothing changes. With it, a successful report (and
   a passing validation, if `--validate` is also attached) moves the Task to `reviewing` instead of
@@ -333,6 +370,14 @@ accounts [--agent <claude|codex>] [--json]
   is a step of a Task that has already run, not a new work item.
 - **`--retry-of <dsp>` does not inherit placement.** Pass `--worktree`, `--agent`, and `--account`
   again — omitting them can retry with a different combination than the original attempt.
+- **Convergence Runs (`run-create --convergence`, section 11).** In such a Run, a Task that carries
+  `--validate` or `--review` is repaired by the app, not by you: its failures go back to the same
+  worker as a spec section, its checks re-run, and `worker-start` on it is refused
+  (`400 task is awaiting a verdict: <status>`) for as long as its status reads `validating` or
+  `reviewing`; once the app's own repair Dispatch is open, the Task's status reads `dispatched` again
+  and `worker-start` is refused the ordinary way instead (`400 dispatch already open: <id>`) — either
+  way it is refused, only the message differs. Read section 11 in full before driving a convergence
+  Run; this bullet is the pointer, not the reference.
 - `--terminal <sessionId>` reuses an existing worker session. This is the only case where a new Task
   can be handed to the same session without `--retry-of` (see the example in section 5).
   **A Task placed into an existing session inherits that session's account chain, not its own.** The
@@ -350,6 +395,9 @@ accounts [--agent <claude|codex>] [--json]
   tracking, use `worker-abandon`. Mistaking a live session for a dead one and starting a new worker in
   the same directory with `--retry-of` puts two agents on the same files at once — hence the
   rejection.
+- **On a convergence Run, `worker-release` refuses a Dispatch whose Task is still converging** —
+  `409 task <tsk> is still converging — release after it completes`. Section 11 has the exact
+  condition; do not read a 409 here as "retry the release," read it as "wait."
 - `accounts` returns `{ id, label, provider }[]`. **Looking the accounts up first and then choosing
   `--account`** is the core of what this app adds to orchestration — never guess, always confirm a
   real id with `accounts` before passing it to `worker-start`. **Usage and remaining quota are not
@@ -509,7 +557,7 @@ worker-show --dispatch <dsp> --json
 | `workerState` | Meaning | What the orchestrator does |
 |---|---|---|
 | `ready` | Alive and working | Keep waiting (`check --wait`), or read output sparingly with `worker-read` |
-| `failed` | Proven dead (abnormal exit or `outcome:failed`) | Retry with `worker-start --task <t> --retry-of <dsp> --agent … --account … --worktree …` |
+| `failed` | Proven dead (abnormal exit or `outcome:failed`) | Retry with `worker-start --task <t> --retry-of <dsp> --agent … --account … --worktree …` — **unless this is a repair Dispatch** (`dispatch-show --task <tsk>` shows `repair` on it). A dead repair Dispatch, on a convergence Run, is the app's own recovery reconciler's to restart, not yours — that is the whole point of the app driving the loop (section 11). Retrying it yourself races the reconciler for the same worktree |
 | `stopped` | Exited normally (code 0) or was halted by `worker-stop` | Retry the same way if needed, otherwise `worker-release` |
 | `outcome_unknown` | Unprovable (the session died along with an app restart, or `worker-abandon`) | Run `worker-stop` and look again, or accept "resources may still be alive" with `worker-abandon` |
 
@@ -642,6 +690,10 @@ meaningless and repeats the same failure indefinitely.
   `limitResetsAt` (section 7).
 - Do not write, edit, or delete a worker's `## Resume briefing` section in its spec file — the app
   owns it (section 7).
+- On a convergence Run, do not `worker-start` or `worker-release` a Task while it converges — both are
+  refused — and do not `task-update` it either, even though that one is not refused (section 11).
+- Do not resolve a `convergence-exhausted` Gate yourself — `retry-once`/`mark-failed` is a person's call
+  (section 11).
 
 ## 10. Environment variables
 
@@ -668,3 +720,91 @@ accounts at `<configDir>/skills/astera-orchestration/SKILL.md`. `AGENTS.md` is a
 alone. **Both runtimes were verified to recognise this file as a skill** — it can also be invoked
 directly as `/astera-orchestration`. Skills load at session start, so it does not appear in sessions
 that were already open before installation.
+
+## 11. Convergence Runs
+
+**A Run without `--convergence` (4.1) is unchanged by everything in this section.** A validation or
+review failure still ends the Task at `failed`, `worker-start --retry-of` is still yours to call, and
+nothing here applies. Everything below is about a Run created with `--convergence` — and even there,
+a Task with neither `--validate` nor `--review` is unaffected too: convergence only changes what
+happens when a check or a review fails.
+
+**What it means.** On a convergence Run, a Task with `--validate` and/or `--review` does not settle
+its own failure — the app does. When a check fails, or a review finds a blocking issue, the app sends
+the failure back to the **same worker session** as a new section of its spec file and reruns the
+Task's checks; a `worker-start --retry-of` from you never happens for this Task. You see this as a
+`status` message whose body says `repair <k> of <maxFixAttempts>` — that is the app working, not a
+report going missing. **Do not start a worker for a converging Task, and do not try to retry it
+yourself** — there is nothing for you to retry; wait for the next message.
+
+**Turning it on.**
+```
+run-create --objective <s> --convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>]
+```
+- `--convergence` alone turns it on with defaults: `--max-fix-attempts 3`, `--max-review-rounds 2`,
+  `--blocking-severity high` (a `critical` or `high` review issue blocks; `medium` also blocks only if
+  you pass `--blocking-severity medium`).
+- The three knobs **require `--convergence` on the same call** — `run-create` rejects
+  `--max-fix-attempts`/`--max-review-rounds`/`--blocking-severity` with no `--convergence` (400):
+  passing a knob is not itself enough to turn convergence on, and a silent no-op here would read as
+  "I configured it" when nothing was configured.
+- It cannot be turned on for a Run that already exists, and there is no `run-update` for it — decide at
+  `run-create` time.
+- `run-show --id <run> --json` echoes the policy back as `.convergence` (absent means off) if you need
+  to check what a Run you did not create was given.
+
+**What ends a repair loop.** Two ways, and only one of them is yours to act on:
+- **It converges.** The checks all pass, or the review comes back with nothing blocking. You get a
+  `status` message — subject `All <n> checks passed`, or `Review approved` (`Review approved (<n>
+  non-blocking note(s))` if the reviewer left any, with the notes themselves in the body, not the
+  subject) — and the Task reaches `completed` (or `reviewing` first, if both are attached — section 2's
+  order is unchanged). Nothing further needed.
+- **It exhausts its budget.** More than `--max-fix-attempts` consecutive check failures, or more than
+  `--max-review-rounds` review rounds. This opens a Gate with `kind: "convergence-exhausted"` and
+  `options: ["retry-once", "mark-failed"]` on `gate-list`/`gate-create`'s response shape — **read the
+  `kind` and `options` fields, not the Gate's `question` text**, which is written in whatever language
+  the app is set to. **This is a person's decision, not yours.** `retry-once` opens exactly one more
+  repair outside the normal budget; `mark-failed` moves the Task to `failed` the way `task-update`
+  does, bypassing the transition table, without touching `consecutiveFailures` — it is being given up
+  on, not rescued. Do not call `gate-resolve` on this Gate yourself; let the person answer it in the
+  app, the same as any other Gate you would raise rather than decide (section 1).
+
+**What is refused while a Task is converging, and why.** A repair keeps the Task on the same worker on
+purpose — close that session now and the next one starts fresh, having forgotten what it just tried —
+so the two commands that would pull that worker or its Dispatch out from under the repair are refused:
+- **`worker-start` on the Task.** While its status reads `validating` or `reviewing`, it is refused
+  with `400 task is awaiting a verdict: <status>` (this refusal applies on every Run, convergence or
+  not — see section 2). Once the app has opened the repair Dispatch, the Task's status reads
+  `dispatched` again, and `worker-start` is refused the ordinary way instead —
+  `400 dispatch already open: <id>` — because that Dispatch is now open and belongs to the repair.
+  Either phrasing means the same thing here: leave this Task alone.
+- **`worker-release` on that Dispatch.** Refused with
+  `409 task <tsk> is still converging — release after it completes` whenever the Run has convergence on
+  and the Task is `validating`, `reviewing`, or has any not-yet-ended repair Dispatch open on it —
+  releasing now would close the very session the next repair is about to reuse, and the worker on the
+  other end would lose the context of what it just tried. Wait for the Task to leave that state, then
+  release as usual (section 8).
+- **A repair Dispatch that dies is not yours to retry either.** `worker-show` on it reads `failed` the
+  same as any dead session (section 7), but the app's own recovery reconciler already treats a
+  convergence Run's repair Dispatches as its own to redispatch — retrying it yourself with
+  `worker-start --retry-of` races the reconciler for the same worktree. Check `dispatch-show --task
+  <tsk>` for a `repair` field before retrying anything that came back `failed`; if it is set, leave it
+  to the app.
+- **`task-update` on the Task is not refused, but do not use it anyway.** Nothing in the server checks
+  convergence before applying a `task-update --status` — it still bypasses the transition table the
+  way section 8 already describes. Using it on a converging Task moves the Task out from under a
+  repair the app still believes is running, which is exactly the "escape hatch for a stranded Task"
+  section 8 warns against reaching for without checking the cause first — a converging Task is busy,
+  not stranded.
+
+**A person can turn convergence off for one Task**, with `task-update --id <tsk> --convergence off`
+(the only value accepted; there is no `on` — a Task otherwise follows its Run). This does not cancel a
+repair already running: that one finishes, and only its *next* failure changes course — instead of
+opening another repair it opens an ordinary Gate (`kind: "convergence-blocked"`) for a person, the same
+`blocked` state a validation or review that cannot run at all already uses (section 2). `--convergence`
+and `--status` are rejected together on one call (400) — issue them as two calls if you need both, so
+each result is unambiguous.
+
+**`--validate`'s comma list (4.2) is what convergence repairs run against.** The list runs in the order
+given, in every Run, and the first failure stops it; on a convergence Run that first failure is what
+gets sent back to the worker, named by its configuration's `name` — the ones after it never ran.

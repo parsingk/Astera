@@ -5,9 +5,14 @@ import { randomBytes } from 'node:crypto'
 import { openDispatch, beginValidation, createGate, type OrchState } from '../../core/orchestration/state'
 import { buildCheckpoint, type GitSummary } from '../../core/orchestration/checkpoint'
 import { formatResumeSection } from '../../core/orchestration/resumeSection'
+import { policyOf, repairCountOf } from '../../core/orchestration/convergence'
+import { FAILURE_LIMIT } from '../../core/orchestration/types'
+import { isSamePath } from '../../core/files/tree'
 import { t, type Lang } from '../../core/i18n'
 import type { LostAttempt, RecoveryDecision } from '../../core/recovery/types'
 import type { Provider } from '../../core/providers/meta'
+import type { KnowledgeFiles } from '../../core/knowledge/detect'
+import { buildSpecFile } from '../orchestration/coordinator'
 
 export type ExecuteResult = { ok: true; newDispatchId?: string } | { ok: false; error: string }
 
@@ -21,6 +26,9 @@ export interface ExecuteDeps {
     taskId: string
     title: string
     spec: string
+    /** The whole spec file, assembled here when the attempt is a repair — see startAttempt below.
+     *  Absent otherwise, so the coordinator builds the plain implementer template as it always has. */
+    specFileContent?: string
     provider: Provider
     accountId: string
     runCwd: string
@@ -32,6 +40,12 @@ export interface ExecuteDeps {
   startValidation?(a: { taskId: string; cwd: string }): void
   /** Not injected = the smart-resume briefing is built with `git: null` (buildCheckpoint accepts that). */
   readGitSummary?(cwd: string): Promise<GitSummary | null>
+  /** Same shape as `RepairDeps.knowledge` (main/orchestration/repair.ts) — a repair's rebuilt spec
+   *  file (below) carries a project-knowledge section exactly as the original repair and a plain
+   *  redispatch do. Not injected = the rebuilt spec has no knowledge section, exactly as
+   *  `buildSpecFile` behaves when `knowledge` is omitted — the same degrade-safe shape
+   *  `readGitSummary` above already uses. */
+  knowledge?(cwd: string): Promise<KnowledgeFiles | undefined>
   /** The app's language, read per Gate rather than captured, so a language change reaches the next
    *  question. Required, not optional: a Gate nobody can read is worse than no Gate. */
   lang(): Lang
@@ -95,7 +109,10 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
       sessionId: `pending:${randomBytes(4).toString('hex')}`,
       cwd: run.cwd,
       specPath: '',
-      retryOf: attempt.dispatchId
+      retryOf: attempt.dispatchId,
+      // 유실된 attempt 가 repair 였다면 새 attempt 도 repair 다 — 그 Task 는 아직 수렴 중이고, 세션을
+      // 잃은 워커에게도 무엇이 실패했는지 다시 말해야 한다(아래 specFileContent).
+      ...(attempt.repair ? { repair: attempt.repair } : {})
     },
     now
   )
@@ -113,6 +130,43 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
         ? { briefing }
         : undefined
 
+  // repair 는 spec 파일을 통째로 새로 쓴다 — 대화를 잃은 워커라도 무엇이 실패했는지 다시 읽어야
+  // 하기 때문이다(main/orchestration/repair.ts 의 repairSpec 과 같은 조립, 설계 §10). repairCountOf·
+  // policyOf 는 방금 커밋한 새 Dispatch(위 openDispatch)를 포함한 최신 state 로 센다 — repairSpec 이
+  // 하는 것과 같다.
+  let specFileContent: string | undefined
+  if (attempt.repair) {
+    const repairs = repairCountOf(deps.getState(), task.id)
+    const maxFixAttempts = policyOf(deps.getState(), task)?.maxFixAttempts ?? FAILURE_LIMIT
+    // repair.ts 의 performRepair 와 같은 안전망 — 지식 스캔 하나가 실패한다고 repair 자체를 막을 이유는
+    // 아니다. 주입되지 않았으면(knowledge 미주입) buildSpecFile 이 지식 없는 저장소와 똑같이 다룬다.
+    const knowledge = deps.knowledge ? await deps.knowledge(attempt.cwd).catch(() => undefined) : undefined
+    specFileContent = buildSpecFile({
+      title: task.title,
+      spec: task.spec,
+      taskId: task.id,
+      dispatchId,
+      committing: !isSamePath(attempt.cwd, run.cwd),
+      knowledge,
+      repair: {
+        reason: attempt.repair,
+        repair: repairs,
+        maxFixAttempts,
+        checks: task.checks,
+        issues: task.reviewIssues,
+        // **repairs > maxFixAttempts 로 판정하지 않는다(전체 브랜치 리뷰, Finding 3).** 그 되짚기는
+        // repair.ts 의 repairSpec 에서만 안전하다 — 거기서는 이 라운드가 연 Dispatch 가 정확히
+        // 하나다. 여기서는 잃은 Dispatch 를 recovery 가 재시작하면서 새 Dispatch 를 하나 더
+        // 커밋했으므로, 잃은 것과 새로 연 것 둘 다 repairCountOf 에 잡혀 예산을 안 넘긴 재시작도
+        // "넘었다" 고 잘못 판정한다. 대신 잃은 Dispatch 자신이 열릴 때 이미 적어 둔 사실
+        // (Dispatch.grantedExtra, reconciler.ts 가 LostAttempt 로 그대로 옮긴다) 을 읽는다 — 사람이
+        // 실제로 retry-once 를 눌렀을 때만 참이고, recovery 가 다시 세는 것과 무관하게 크래시를
+        // 넘어 살아남는다.
+        ...(attempt.grantedExtra ? { extra: true } : {})
+      }
+    })
+  }
+
   let started: { sessionId: string; cwd: string; specPath: string }
   try {
     started = await deps.startWorker({
@@ -120,6 +174,7 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
       taskId: attempt.taskId,
       title: task.title,
       spec: task.spec,
+      ...(specFileContent ? { specFileContent } : {}),
       provider: attempt.provider,
       accountId: attempt.accountId,
       runCwd: run.cwd,
