@@ -22,6 +22,23 @@ export const en: Record<keyof typeof ko, string> = {
     'It does not apply to sessions that are already open — only new sessions get it. ' +
     'Ask the session you want to orchestrate with to run astera help for the full usage guide.',
   'settings.orchestration.saveFailed': 'Could not save the orchestration setting: {detail}',
+  // The command line tool, directly under orchestration: this command reaches that server.
+  'settings.cli.label': 'Command line tool (astera)',
+  'settings.cli.hint':
+    'Installing it lets you type astera in an ordinary shell. ' +
+    'The app does not edit your shell profile — if the folder is not on PATH, it shows you the line to add.',
+  'settings.cli.installed': 'Installed',
+  'settings.cli.notInstalled': 'Not installed',
+  'settings.cli.install': 'Install the astera command',
+  'settings.cli.reinstall': 'Install again',
+  'settings.cli.installed.toast': 'The astera command is installed.',
+  'settings.cli.failed': 'Could not install the astera command: {detail}',
+  // The one line a person runs themselves is shown below
+  'settings.cli.pathMissing': 'This folder is not on PATH. Running the line below once adds it.',
+  'settings.cli.onPath': 'This folder is on PATH.',
+  'settings.cli.needsOrchestration':
+    'Agent orchestration is off. While it is off, astera cannot find the app.',
+  'settings.cli.copy': 'Copy',
   // Agent permission mode
   'settings.agentPermission.label': 'Run agents without permission checks',
   'settings.agentPermission.hint':

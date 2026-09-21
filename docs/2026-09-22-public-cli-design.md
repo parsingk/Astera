@@ -219,6 +219,17 @@ The shuttle runs the app's own binary with `ELECTRON_RUN_AS_NODE=1`, so **the CL
 drift**: there is one program. That also answers the spec's "app update 시 CLI 동기화" — an update
 replaces the binary the shuttle points at, and the shuttle is rewritten at every boot anyway.
 
+**Built, with two things worth recording.** `%LOCALAPPDATA%/astera` already exists on a machine that
+has run this app: the Host keeps its node runtime there. The bin directory sits beside it rather than
+inventing a new root. And the button is only for shells the app did not start — sessions the app
+spawns already have the shuttle's directory on their PATH, which is why an agent can call `astera`
+today and a person cannot.
+
+The status line names the directory, because an install that does not say where it put something is
+an install nobody can undo. The PATH line is shown, never run: on Windows it is the PowerShell
+two-call form, not `setx PATH "%PATH%;…"`, because `setx` truncates a value over 1024 characters and
+handing someone a command that can silently cut their PATH is not an instruction, it is a trap.
+
 ## 11. Security
 
 The boundary is the CLI spec's: same machine, same OS user (§6). Three things carry it, and all three

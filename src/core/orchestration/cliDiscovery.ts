@@ -3,6 +3,16 @@
 // **순수하다** — 플랫폼과 환경변수가 인자로 들어온다. 이 판정은 세 운영체제에서 다 맞아야 하는데
 // 테스트는 한 대에서만 돌기 때문이고, `core/host/address.ts` 가 같은 이유로 같은 모양이다.
 
+/**
+ * 그 플랫폼이 쓰는 구분자 하나로 맞춘다.
+ *
+ * **섞여 있어도 동작은 한다**(Windows API 는 둘 다 받는다). 맞추는 이유는 사람이다 — 이 경로들은
+ * 설정 화면과 오류 문구에 그대로 나가고, 구분자가 섞인 경로는 고장난 것처럼 보인다. 복사해
+ * 붙여 넣을 글이면 더 그렇다.
+ */
+export const nativePath = (p: string, platform: NodeJS.Platform): string =>
+  platform === 'win32' ? p.replace(/\//g, '\\') : p
+
 /** 앱이 접속 정보를 적어 두는 파일의 이름. `writeInfo`(main/orchestration/shuttle.ts)가 쓰고
  *  앱이 종료하며 지운다 — 그래서 "앱이 없다" 가 곧 "이 파일이 없다" 다. */
 export const INFO_FILE = 'orch-info.json'
@@ -27,7 +37,7 @@ export function userDataDir(a: {
   const name = a.dev === true ? 'astera-dev' : 'astera'
   if (a.platform === 'win32') {
     const appData = a.env.APPDATA ?? `${a.home}/AppData/Roaming`
-    return `${appData.replace(/[\\/]+$/, '')}/${name}`
+    return nativePath(`${appData.replace(/[\\/]+$/, '')}/${name}`, 'win32')
   }
   if (a.platform === 'darwin') return `${a.home}/Library/Application Support/${name}`
   const xdg = a.env.XDG_CONFIG_HOME

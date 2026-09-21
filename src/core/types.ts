@@ -1002,6 +1002,12 @@ export interface CoreApi {
       memberId?: string | null
     }): Promise<void>
   }
+  /** `astera` 명령을 사람의 PATH 에서 닿는 자리에 깔아 둔다(공개 CLI 설계 §10). */
+  cli: {
+    status(): Promise<CliInstallStatus>
+    /** 셔틀 파일을 그 자리에 쓰고 바뀜 상태를 돌려준다. */
+    install(): Promise<CliInstallStatus>
+  }
   settings: {
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.
     getLang(): Promise<LangPreference>
@@ -1492,6 +1498,19 @@ export interface SessionTaskApi {
    *  (`hiw.open.completeEmpty`). */
   complete(projectPath: string, id: string): Promise<{ recorded: boolean }>
   cancel(projectPath: string, id: string): Promise<void>
+}
+
+/** 명령줄 도구가 지금 어떤 상태인가 (공개 CLI 설계 §10). */
+export interface CliInstallStatus {
+  /** 셔틀을 둔 폴더. 화면이 사람에게 보여 준다 — 어디에 놓았는지 말하지 않는 설치는
+   *  되돌릴 수 없는 설치다. */
+  dir: string
+  installed: boolean
+  onPath: boolean
+  /** PATH 에 없을 때 사람이 직접 실행할 한 줄. 앱은 셸 프로필을 고치지 않는다. */
+  hint: string
+  /** 오케스트레이션이 꺼져 있으면 설치해도 앱을 찾지 못한다. */
+  orchestrationEnabled: boolean
 }
 
 export type RendererApi = CoreApi & {

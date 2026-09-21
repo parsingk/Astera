@@ -1,0 +1,74 @@
+import { useEffect, useState } from 'react'
+import type { CliInstallStatus } from '../../../core/types'
+import { useI18n } from '../i18n/I18nProvider'
+import { toast } from '../lib/toast'
+
+/** 설정 화면의 명령줄 도구 칸 (공개 CLI 설계 §10).
+ *
+ *  **설치 단계가 아니라 버튼인 이유**는 설계에 있다: 되돌릴 수 있고, 어디에 놓았는지 말할 수 있고,
+ *  앱을 까는 모든 사람에게 묻지도 않은 PATH 변경을 물리지 않는다.
+ *
+ *  같은 settings-row + settings-hint 모양을 쓴다(App.tsx 의 토글들). 상태를 스스로 읽고 쓴다 —
+ *  이 값을 읽는 곳이 여기뿐이다. */
+export function CliSettings(): React.JSX.Element {
+  const { t } = useI18n()
+  const [status, setStatus] = useState<CliInstallStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    void window.api.cli.status().then(setStatus)
+  }, [])
+
+  const install = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      setStatus(await window.api.cli.install())
+      toast.success(t('settings.cli.installed.toast'))
+    } catch (err) {
+      toast.error(
+        t('settings.cli.failed', { detail: err instanceof Error ? err.message : String(err) })
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="settings-group">
+      <div className="settings-row">
+        <span>{t('settings.cli.label')}</span>
+        <button disabled={busy} onClick={() => void install()}>
+          {status?.installed ? t('settings.cli.reinstall') : t('settings.cli.install')}
+        </button>
+      </div>
+      <span className="settings-hint">{t('settings.cli.hint')}</span>
+      {status !== null && (
+        <>
+          <span className="settings-hint">
+            {status.installed ? t('settings.cli.installed') : t('settings.cli.notInstalled')}
+            {' — '}
+            {status.dir}
+          </span>
+          {/* 설치되기 전에는 PATH 이야기를 하지 않는다 — 아직 넣을 것이 없는 폴더다. */}
+          {status.installed && (
+            <span className="settings-hint">
+              {status.onPath ? t('settings.cli.onPath') : t('settings.cli.pathMissing')}
+            </span>
+          )}
+          {status.installed && !status.onPath && (
+            <div className="cli-path-hint">
+              <code>{status.hint}</code>
+              <button onClick={() => void navigator.clipboard.writeText(status.hint)}>
+                {t('settings.cli.copy')}
+              </button>
+            </div>
+          )}
+          {/* 설치는 됐는데 서버가 없으면 astera 는 "앱이 없다" 로 끝난다. 그 사실을 여기서 말한다. */}
+          {!status.orchestrationEnabled && (
+            <span className="settings-hint">{t('settings.cli.needsOrchestration')}</span>
+          )}
+        </>
+      )}
+    </div>
+  )
+}

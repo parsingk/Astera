@@ -46,6 +46,11 @@ export function shuttleFiles(a: { execPath: string; entryPath: string }): Shuttl
   return [shShuttle(a)]
 }
 
+/** 이 플랫폼이 쓰는 셔틀 파일의 이름들. "설치되어 있는가" 를 묻는 자리가 이것만
+ *  필요하고, 그 자리에 가짜 경로를 넣어 shuttleFiles 를 부르게 하지 않는다. */
+export const shuttleNames = (): string[] =>
+  shuttleFiles({ execPath: '', entryPath: '' }).map((f) => f.name)
+
 export async function writeShuttle(a: {
   dir: string
   execPath: string

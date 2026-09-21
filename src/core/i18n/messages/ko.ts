@@ -27,6 +27,23 @@ export const ko = {
     '이미 열려 있는 세션에는 적용되지 않습니다. 새 세션부터 동작합니다. ' +
     '오케스트레이터로 쓸 세션에서 astera help 를 실행하게 하면 전체 사용법을 얻습니다.',
   'settings.orchestration.saveFailed': '오케스트레이션 설정을 저장하지 못했습니다: {detail}',
+  // 명령줄 도구 — 오케스트레이션 바로 아래에 둔다. 이 명령이 닿는 것이 그 서버라 순서가 그렇다.
+  'settings.cli.label': '명령줄 도구 (astera)',
+  'settings.cli.hint':
+    '설치하면 보통 셸에서도 astera 를 칠 수 있습니다. ' +
+    '앱이 셸 설정 파일을 고치지는 않습니다 — PATH 에 없으면 넣는 방법을 보여 드립니다.',
+  'settings.cli.installed': '설치됨',
+  'settings.cli.notInstalled': '설치되지 않음',
+  'settings.cli.install': 'astera 명령 설치',
+  'settings.cli.reinstall': '다시 설치',
+  'settings.cli.installed.toast': 'astera 명령을 설치했습니다.',
+  'settings.cli.failed': 'astera 명령을 설치하지 못했습니다: {detail}',
+  // 사람이 직접 실행할 한 줄을 아래에 보여 준다
+  'settings.cli.pathMissing': '이 폴더가 PATH 에 없습니다. 아래 한 줄을 한 번 실행하면 들어갑니다.',
+  'settings.cli.onPath': '이 폴더가 PATH 에 있습니다.',
+  'settings.cli.needsOrchestration':
+    '에이전트 오케스트레이션이 꺼져 있습니다. 꺼져 있는 동안에는 astera 가 앱을 찾지 못합니다.',
+  'settings.cli.copy': '복사',
   // 에이전트 권한 모드
   'settings.agentPermission.label': '권한 확인 없이 에이전트 실행',
   'settings.agentPermission.hint':

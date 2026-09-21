@@ -154,7 +154,8 @@ import { completionForTaskOf } from '../core/orchestration/completion'
 import { repoPathOf } from '../core/worktrees/repo'
 import type { OrchState } from '../core/orchestration/state'
 import { makeLimitProbe } from './orchestration/limitProbe'
-import { writeInfo, writeShuttle } from './orchestration/shuttle'
+import { shuttleNames, writeInfo, writeShuttle } from './orchestration/shuttle'
+import { binDirFor, isOnPath, pathHintFor } from '../core/orchestration/cliInstall'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
@@ -2148,6 +2149,13 @@ export function registerIpc(
       orchStarting = false
     }
   }
+  /** 셔틀이 띄우는 번들. 위 주석의 두 후보를 그대로 본다 — 설치 버튼도 같은 것을
+   *  가리켜야 하므로 계산을 두 군데 두지 않는다. */
+  const cliEntryPath = (): string | undefined =>
+    [path.join(app.getAppPath(), 'out', 'main', 'cli.js'), path.join(__dirname, 'cli.js')].find((p) =>
+      existsSync(p)
+    )
+
   const bootOrch = async (): Promise<void> => {
     // Pin down two paths first — the CLI entry point the shuttle (astera) runs, and the skills
     // directory help reads.
@@ -2165,10 +2173,7 @@ export function registerIpc(
     // skillsPath: extraResources in electron-builder.yml copies resources/skills to resources/skills —
     //   under process.resourcesPath when packaged, inside the repo in development. The CLI's help reads
     //   orchestration-guide.md from there (see resolveGuidePath in src/cli/run.ts).
-    const entryPath = [
-      path.join(app.getAppPath(), 'out', 'main', 'cli.js'),
-      path.join(__dirname, 'cli.js')
-    ].find((p) => existsSync(p))
+    const entryPath = cliEntryPath()
     const skillsPath = app.isPackaged
       ? path.join(process.resourcesPath, 'skills')
       : path.join(app.getAppPath(), 'resources', 'skills')
@@ -6061,6 +6066,46 @@ export function registerIpc(
     await core.appSettings.setLang(lang)
     core.lang = lang ?? pickInitialLang(app.getLocale())
     onLangChanged?.()
+  })
+
+  /**
+   * `astera` 를 보통 셸에서 부를 수 있게 만들기 (공개 CLI 설계 §10).
+   *
+   * **새로 만드는 것은 자리뿐이다.** 셔틀은 앱이 부팅마다 userData/orch 에 이미 쓴다. 이것은
+   * 같은 파일을 사람의 PATH 에서 닿는 자리에 한 벌 더 쓰고, 그 자리가 PATH 에 있는지 말해 준다.
+   *
+   * **셸 프로필을 고치지 않는다**(명세 §29). 한 줄을 건네고 실행하는 것은 사람이 한다 — 사람이
+   * 쓰지 않은 파일은 무언가 망가졌을 때 들여다볼 생각을 하지 않는 파일이다.
+   */
+  const cliBinDir = (): string =>
+    binDirFor({ platform: process.platform, env: process.env, home: app.getPath('home') })
+
+  const cliStatus = (): {
+    dir: string
+    installed: boolean
+    onPath: boolean
+    hint: string
+    orchestrationEnabled: boolean
+  } => {
+    const dir = cliBinDir()
+    return {
+      dir,
+      installed: shuttleNames().every((n) => existsSync(path.join(dir, n))),
+      onPath: isOnPath({ dir, pathVar: process.env.PATH ?? '', platform: process.platform }),
+      hint: pathHintFor({ dir, platform: process.platform }),
+      // **오케스트레이션이 꺼져 있으면 설치해도 쓸 수 없다.** 접속 정보 파일을 쓰는 것이 그
+      // 서버이고, 그것이 없으면 CLI 는 "앱이 없다"(HOST_NOT_RUNNING)로 끝난다.
+      orchestrationEnabled: core.appSettings.getOrchestrationEnabled()
+    }
+  }
+
+  ipcMain.handle('cli.status', () => cliStatus())
+  ipcMain.handle('cli.install', async () => {
+    const entryPath = cliEntryPath()
+    // 번들을 못 찾으면 쓰지 않는다 — 잘못된 경로를 가리키는 셔틀은 없는 셔틀보다 나쁘다.
+    if (!entryPath) throw new Error('CLI_ENTRY_MISSING')
+    await writeShuttle({ dir: cliBinDir(), execPath: process.execPath, entryPath })
+    return cliStatus()
   })
 
   // The agent orchestration toggle. The same trust-boundary check as setLang — the value the renderer

@@ -34,6 +34,7 @@ import { ShortcutSettings } from './components/ShortcutSettings'
 import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ThemeSettings } from './components/ThemeSettings'
 import { GeneratorSettings } from './components/GeneratorSettings'
+import { CliSettings } from './components/CliSettings'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
@@ -4336,6 +4337,9 @@ export default function App(): React.JSX.Element {
                       </label>
                       <span className="settings-hint">{t('settings.orchestration.hint')}</span>
                     </div>
+                    {/* 명령줄 도구 — 오케스트레이션 바로 아래다. 위 토글이 켜는 서버가 이 명령이
+                        닿는 곳이라, 꺼져 있으면 설치해도 앱을 찾지 못한다(그 사실은 그 칸이 말한다). */}
+                    <CliSettings />
                     {/* 권한 모드 — 오케스트레이션 바로 아래. 위 토글이 켜는 것이 워커를 띄우는 일이고,
                         이 토글이 정하는 것은 그 워커가 승인을 묻는가이기 때문이다. 같은
                         optimistic-update-then-revert 관례를 쓴다. */}
