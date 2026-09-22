@@ -3,9 +3,16 @@
 // createCore builds SessionManager, RunManager and TerminalManager, and it runs before registerIpc —
 // so before there is a Host client to talk to. Handing all three this router means the decision can be
 // made later: with no Host the fallback is node-pty and the app behaves exactly as it always has,
-// which is this slice's standing constraint. In practice it is made once and never unmade — `use(null)`
-// has no caller outside this module's test, and a dropped connection is not a reason to call it: the
-// Host's ptys survive a dropped socket, and are exactly what a reconnect takes back.
+// which is this slice's standing constraint.
+//
+// **The decision is unmade as well as made.** It used to be made once and never unmade, on the
+// reasoning that a dropped connection is no reason to route away from the Host: its ptys survive a
+// dropped socket and are exactly what a reconnect takes back. That is still true of a drop, and it is
+// not true of the case that turned up on 2026-09-22 — a Host still connected and no longer answering
+// anything. Routing to it then sends every new session into a twenty-second wait and a dead end, so
+// `use(null)` has a caller now: the status subscription in ipc.ts, which routes here whenever the Host
+// is not answering and back the moment it is
+// (docs/2026-09-22-host-unresponsive-recovery-design.md F1).
 //
 // The router used to answer "do the ptys outlive the app" for the whole app at once. It does not any
 // more, because the honest answer is per pty: the Host takes a moment to start, so ptys of both kinds

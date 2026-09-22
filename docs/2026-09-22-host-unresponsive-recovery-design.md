@@ -204,12 +204,21 @@ export const HOST_FEATURE_PING = 'ping'
 
 - `scripts/host-runtime.mjs` 가 `runtime.json` 에 자기가 쓴 파일 목록을 더한다.
   ```json
-  { "node": "24.15.0", "app": "1.3.25", "files": ["node.exe", "node_modules/node-pty/package.json", …] }
+  { "node": "24.15.0", "app": "1.3.25",
+    "files": { "node": ["node.exe", "node_modules\\node-pty\\lib\\worker\\conoutSocketWorker.js", …],
+               "build": ["host.js", "chunks\\stderrTail-….js"] } }
   ```
-  목록은 복사가 끝난 뒤 트리를 걸어 만든다. 손으로 유지하는 목록은 빠진다.
-- `prepareHostRuntime` 의 판단을 `exists(exePath)` 에서 `files` 전부 존재로 바꾼다. 하나라도 없으면
-  `rm(nodeDir)` 뒤 기존 staging + rename 으로 다시 깐다. `rm` 이 던지면(잠김: 그 폴더에서 Host 가
-  돈다) `{ ready: true, runtimeIncomplete: true }` 로 돌려준다. 그 Host 에는 그대로 붙는다.
+  목록은 복사가 끝난 뒤 트리를 걸어 만든다. 손으로 유지하는 목록은 빠진다. **구현하며 둘로 나눴다.**
+  `builds\<버전>` 아래가 없는 것은 앱 업데이트의 정상 상태이고 node 디렉터리 아래가 없는 것은 손상이라,
+  같은 "없음" 이 반대를 뜻하기 때문이다. 실제 크기는 node 48개 + build 3개, 3KB.
+- `prepareHostRuntime` 의 판단을 `exists(exePath)` 에서 목록 전부 존재로 바꾼다. node 쪽이 하나라도
+  없으면 `rm(nodeDir)` 뒤 기존 staging + rename 으로 다시 깐다. `rm` 이 던지면(잠김: 그 폴더에서 Host 가
+  돈다) `{ ready: true, incomplete: true }` 로 돌려준다. 그 Host 에는 그대로 붙는다. build 쪽이 없으면
+  그 빌드 폴더만 다시 쓴다 — `host.js` 만 남고 chunks 가 사라진 Host 는 첫 줄에서 죽는데, 기존
+  `exists(entryPath)` 검사는 그것을 "설치됨" 으로 읽는다.
+- **목록이 비어 있으면 검사하지 않는다.** 설계 초안에서는 빌드 결함이니 `ready: false` 로 보고한다고
+  했는데, 그러면 우리 쪽 패키징 실수가 "Host 없는 앱" 이 된다. 잴 수 없는 것은 실패가 아니다 —
+  F7 의 `nodePtyMissing` 과 같은 규칙으로 맞췄다.
 - 검사 시점을 **Host 를 띄우는 시점마다**로 옮긴다. 지금은 시작 때 한 번이고 결과를 `runtime` 변수에 담아
   `spawnHost` 가 쓴다(`ipc.ts:6390, 6440`). `spawnHost` 가 매번 `prepareHostRuntime` 을 부르게 하면,
   온전할 때는 `existsSync` 몇 번이고 반쪽일 때 다시 까는 일이 정확히 필요한 순간(옛 Host 가 끝나
@@ -267,9 +276,9 @@ is missing')` 를 던지고, 그것은 `registry.open` 이 잡아 `pty-failed` �
 - `ptyFactory.test.ts`·`procFactory.test.ts`(fake timers): `pending` 20초 → `onData` 한 줄 + `end(1)`.
   `pty-failed` 의 `error` 가 `onData` 로 보임. `pong` 가능 Host 에서는 스폰 기한이 상태를 바꾸지 않음.
 - `ptyRouter.test.ts`: 상태 구독으로 팩토리가 오가는지.
-- `runtime.test.ts`: `files` 중 하나 없음 → `rm` 후 재설치. `rm` 이 던짐 → `runtimeIncomplete`. 전부 있음
-  → 아무 것도 안 함. 목록은 설치본의 `resources\host-runtime\runtime.json` 에서 오므로(`ipc.ts:6316`)
-  이 빌드의 것이 항상 있다. `files` 가 비어 있으면 설치하지 않고 `ready: false` 로 보고한다(빌드 결함).
+- `runtime.test.ts`: node 목록 중 하나 없음 → `rm` 후 재설치. `rm` 이 던짐 → `incomplete`. build 목록 중
+  하나 없음 → 빌드 폴더만 다시. 전부 있음 → 아무 것도 안 함. 첫 설치와 앱 업데이트를 손상으로 읽지 않음.
+  목록이 비면 검사를 건너뜀.
 - `server.test.ts`: `ping` → 같은 `seq` 의 `pong`. `hello.features` 에 `ping`. 리슨 후 pid 파일, `leave`
   후 삭제.
 - Host 자가 점검: win32 + 없음 → 예외, 있음 → 통과, posix → 통과.

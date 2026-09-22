@@ -7087,13 +7087,19 @@ export function registerIpc(
             hostLog('host: no Host, so terminals stay in the app exactly as before')
             return null
           }
+          // Still not written off, and for the same reason: what that Host is running is unknown, and
+          // guessing "nothing" would close a live worker's Dispatch. What is new is that this is no
+          // longer where the story ends. The client has called it unresponsive, the routers have moved
+          // to the app's own factory so work can continue, and the Info tab offers to end it
+          // (docs/2026-09-22-host-unresponsive-recovery-design.md F1, F5). Before that, this line was
+          // the last thing that happened about it, for the rest of the app's life.
           hostLog(
             'host: a Host answered the address but never finished the handshake — what it is still running is unknown, so no worker is written off'
           )
           return 'unknown'
         }
-        // The router is already on the Host factory: `onConnect` above installs it the moment the
-        // handshake lands, which is what makes `status().connected` true here in the first place.
+        // The routers are already on the Host: `routeByStatus` moved them the moment the handshake
+        // landed, which is what makes `status().connected` true here in the first place.
         return takeSessionsBack('at startup')
       })
       // Settles rather than rejecting, so `bootOrch` can await this without a try and nothing from
