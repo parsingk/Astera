@@ -50,8 +50,15 @@ export async function answerOrchAct(a: {
       ok: false,
       error: `this app cannot do ${a.act}${a.deps ? '' : ': orchestration is not running in it'}`
     }
+  // **Refused rather than read as no arguments.** Anything but an array is a message this app cannot
+  // make sense of — a malformed one, or a Host old enough to have put the arguments on the wire some
+  // other way — and the quiet reading of it is `startWorker()` with nothing, which fails somewhere
+  // further in with a sentence about a missing task id. Said here, by name, where it is still the
+  // truth.
+  if (!Array.isArray(a.args))
+    return { ok: false, error: `${a.act} was asked for with arguments this app cannot read` }
   try {
-    return { ok: true, value: await fn(...(Array.isArray(a.args) ? a.args : [])) }
+    return { ok: true, value: await fn(...a.args) }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }

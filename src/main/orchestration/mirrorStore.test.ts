@@ -57,4 +57,39 @@ describe('createMirrorStore', () => {
     m.accept(emptyState())
     await expect(m.setState({ ...emptyState(), runs: [] })).rejects.toThrow(/403/)
   })
+
+  // **거절은 Host 가 안 썼다는 뜻이다** — 그 상태로 두면 main 의 모든 읽기가 없는 커밋을 보고하고,
+  // 소켓은 끊기지 않았으니 재연결의 re-mirror 도 오지 않는다.
+  it('Host 가 거절하면 거울을 되돌린다', async () => {
+    const first = emptyState()
+    const call = vi.fn().mockResolvedValue({ status: 500, body: { error: 'ENOSPC' } })
+    const m = createMirrorStore({ call })
+    m.accept(first)
+    await expect(m.setState({ ...emptyState(), runs: [] })).rejects.toThrow(/500/)
+    expect(m.getState()).toBe(first)
+  })
+
+  // 그 사이에 더 새로운 것이 들어왔으면 그것이 진실이다 — 거절은 그것에 대해 할 말이 없다.
+  it('되돌리는 사이에 새 상태가 들어왔으면 그것을 지우지 않는다', async () => {
+    let release: (v: { status: number; body: unknown }) => void = () => {}
+    const call = vi.fn().mockReturnValue(new Promise((r) => (release = r)))
+    const m = createMirrorStore({ call })
+    m.accept(emptyState())
+    const writing = m.setState({ ...emptyState(), runs: [] })
+    const pushed = { ...emptyState(), jobs: [{ id: 'job_9' }] } as never
+    m.accept(pushed)
+    release({ status: 500, body: {} })
+    await expect(writing).rejects.toThrow(/500/)
+    expect(m.getState()).toBe(pushed)
+  })
+
+  // 답이 아예 안 온 것은 Host 가 안 썼다는 뜻이 아니다 — 되돌리면 이미 디스크에 앉은 것을 지운다.
+  it('답이 오지 않은 쓰기는 되돌리지 않는다', async () => {
+    const call = vi.fn().mockRejectedValue(new Error('the Host did not answer state-put'))
+    const m = createMirrorStore({ call })
+    m.accept(emptyState())
+    const next = { ...emptyState(), jobs: [{ id: 'job_8' }] } as never
+    await expect(m.setState(next)).rejects.toThrow(/did not answer/)
+    expect(m.getState()).toBe(next)
+  })
 })

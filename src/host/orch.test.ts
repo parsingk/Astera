@@ -453,18 +453,45 @@ describe('createHostOrch', () => {
     it('load 가 찾은 것은 boot 를 물은 첫 번째에게만 간다', async () => {
       await seedOpenDispatch()
       const orch = orchOver({ aliveSessionIds: () => new Set<string>() })
-      const first = await orch.call({ cmd: 'state-get', args: { boot: true }, sessionId: '' })
+      const from: OrchCaller = { role: 'app', toOthers: () => {} }
+      const first = await orch.call({ cmd: 'state-get', args: { boot: true }, sessionId: '', from })
       expect((first.body as { boot: { unknownOutcomes: number } | null }).boot?.unknownOutcomes).toBe(1)
-      const second = await orch.call({ cmd: 'state-get', args: { boot: true }, sessionId: '' })
+      const second = await orch.call({ cmd: 'state-get', args: { boot: true }, sessionId: '', from })
       expect((second.body as { boot: unknown }).boot).toBeNull()
+    })
+
+    // **`boot: true` 는 읽기가 아니다** — 가져가면 없어진다. CLI 가 (실수로든 아니든) 그것을
+    // 집어 가면 앱은 boot 없이 뜨고, 재시작이 끊어 놓은 검증은 아무도 다시 시작하지 않는다.
+    it('CLI 는 boot 를 물어도 받지 못하고, 앱 몫을 축내지도 않는다', async () => {
+      await seedOpenDispatch()
+      const orch = orchOver({ aliveSessionIds: () => new Set<string>() })
+      const cli = await orch.call({
+        cmd: 'state-get',
+        args: { boot: true },
+        sessionId: '',
+        from: { role: 'cli', toOthers: () => {} }
+      })
+      expect(cli.status).toBe(200)
+      // 상태는 준다 — 그쪽은 진짜 읽기다.
+      expect((cli.body as { state: OrchState }).state.dispatches).toHaveLength(1)
+      expect((cli.body as { boot: unknown }).boot).toBeNull()
+      // 그리고 앱 몫은 그대로 남아 있다.
+      const app = await orch.call({
+        cmd: 'state-get',
+        args: { boot: true },
+        sessionId: '',
+        from: { role: 'app', toOthers: () => {} }
+      })
+      expect((app.body as { boot: { unknownOutcomes: number } | null }).boot?.unknownOutcomes).toBe(1)
     })
 
     it('boot 를 묻지 않은 호출은 그것을 가져가지 않는다', async () => {
       await seedOpenDispatch()
       const orch = orchOver({ aliveSessionIds: () => new Set<string>() })
-      const plain = await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })
+      const from: OrchCaller = { role: 'app', toOthers: () => {} }
+      const plain = await orch.call({ cmd: 'state-get', args: {}, sessionId: '', from })
       expect((plain.body as { boot: unknown }).boot).toBeNull()
-      const booting = await orch.call({ cmd: 'state-get', args: { boot: true }, sessionId: '' })
+      const booting = await orch.call({ cmd: 'state-get', args: { boot: true }, sessionId: '', from })
       expect((booting.body as { boot: { unknownOutcomes: number } | null }).boot?.unknownOutcomes).toBe(1)
     })
   })

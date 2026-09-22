@@ -51,6 +51,16 @@ describe('answerOrchAct', () => {
     expect(r).toEqual({ ok: false, error: 'no account' })
   })
 
+  // 배열이 아닌 것을 "인수 없음" 으로 읽으면 startWorker() 가 빈손으로 불린다 — 그 실패는 한참
+  // 뒤에서 엉뚱한 문장으로 나온다.
+  it('배열이 아닌 인수는 인수 없음으로 읽지 않고 거절한다', async () => {
+    const startWorker = vi.fn()
+    const r = await answerOrchAct({ deps: depsWith({ startWorker }), act: 'startWorker', args: { taskId: 't' } })
+    expect(startWorker).not.toHaveBeenCalled()
+    expect(r.ok).toBe(false)
+    expect((r as { error: string }).error).toContain('startWorker')
+  })
+
   it('이름이 없으면 그렇게 답한다', async () => {
     const r = await answerOrchAct({ deps: depsWith({}), act: 'noSuchThing', args: [] })
     expect(r.ok).toBe(false)

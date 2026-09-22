@@ -2300,10 +2300,25 @@ export function registerIpc(
     //
     // **The Host reads this same queue for its own reason**, and that half no longer happens here:
     // the cleanup that has to know which Dispatches an undelivered report speaks for now runs inside
-    // the Host's `store.load` (`src/host/orch.ts`). Reading it twice costs one `readdir` and nothing
-    // else — neither read changes a file, and the drain below is still the only thing that deletes
-    // one. This line cannot throw: `readPendingReports` swallows its own failures, a missing folder
-    // being the ordinary case rather than an error.
+    // the Host's `store.load` (`src/host/orch.ts`). So two processes read this folder at boot, and
+    // **reading it is not read-only** — `readPendingReports` also sweeps abandoned `.json.tmp` files
+    // and renames unreadable reports aside. That the two sweeps cannot destroy anything between them
+    // is a property worth writing down rather than assuming:
+    //
+    // - The swept set and the read set are disjoint by suffix: the sweep only touches
+    //   `<name>.json.tmp`, and only `.json` is ever read or applied.
+    // - A `.json.tmp` is swept only after an hour of not being touched (`WORKING_FILE_TTL_MS`), so a
+    //   write actually in flight in the other process is never the one swept.
+    // - Both the `rm` and the `rename` pass `force`/a catch, so the loser of a race between the two
+    //   sweeps does nothing rather than failing.
+    //
+    // **The one visible effect**, and it is cosmetic: the drain below deletes a `.json` once it has
+    // applied it, and if that lands between the Host's `readdir` and its `readFile` of the same name,
+    // the Host logs `setting aside … — it is not a report this app can read` about a report that
+    // applied perfectly well. Nothing is lost — the file it would set aside is already gone.
+    //
+    // This line cannot throw: `readPendingReports` swallows its own failures, a missing folder being
+    // the ordinary case rather than an error.
     const pendingReportsDir = path.join(app.getPath('userData'), 'orch', PENDING_REPORTS_DIR)
     const pendingReports = await readPendingReports({ dir: pendingReportsDir, log: orchLog })
 
@@ -2376,13 +2391,28 @@ export function registerIpc(
         })
         .catch((e) => orchLog(`could not refill the orchestration mirror after reconnecting: ${String(e)}`))
     }
+    // **Which of two silences this boot is, said out loud.** "The Host loaded and found nothing to
+    // clean up" and "the Host's findings went to an earlier app" leave exactly the same trace in the
+    // state, and every line below is conditional on `loaded` — so without this, a person looking for
+    // why an interrupted validation was not restarted has nothing at all to read.
+    if (!loaded)
+      orchLog(
+        'restart cleanup — the Host was already up and had already loaded, so there was no restart for this app to clean up after'
+      )
     if (aliveSessionIds === 'unknown')
       orchLog(
-        'restart cleanup — the Host could not be asked what it is still running, so no spec file was cleared on the strength of an empty list'
+        `restart cleanup — the Host could not be asked what it is still running, so no spec file was cleared on the strength of an empty list, and ${store.get().dispatches.filter((d) => !d.endedAt).length} open dispatch(es) were left where they are`
       )
     else if (aliveSessionIds && aliveSessionIds.size > 0)
       orchLog(
         `restart cleanup — the Host still runs ${aliveSessionIds.size} session(s); any open Dispatch of theirs was left open`
+      )
+    // What the Host's own load did, when this app is the one it happened for. Counted off the state
+    // it handed back rather than off the findings, so the number is Dispatches that are really open
+    // now — the same thing the line above counts, for the other reason.
+    else if (loaded)
+      orchLog(
+        `restart cleanup — the Host runs no session of ours; ${store.get().dispatches.filter((d) => !d.endedAt).length} open dispatch(es) survived it`
       )
     // Said out loud because emptying the slot is what turns the Run's safety net and its restart
     // button back on, and both are invisible until someone looks at the Jobs list. A person whose

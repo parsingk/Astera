@@ -61,9 +61,19 @@ export function createHostOrch(a: {
       //
       // Reading the queue cannot throw — `readPendingReports` swallows its own failures, a missing
       // folder being the ordinary case — and `reportedDispatchIdsOf` is pure. A queue that cannot be
-      // read costs the reports in it, never the load. **Reading is all that happens here**: applying
-      // a report reaches session spawning, which is the app's, and the app still drains the same
-      // queue at its own boot.
+      // read costs the reports in it, never the load.
+      //
+      // **Nothing is applied here**: applying a report reaches session spawning, which is the app's,
+      // and the app still reads and drains this same queue at its own boot. So two processes read
+      // this folder, and **reading it is not read-only** — `readPendingReports` also sweeps abandoned
+      // `.json.tmp` files and renames unreadable reports aside. Why the two sweeps cannot destroy
+      // anything between them: the swept set (`.json.tmp`) and the read set (`.json`) are disjoint by
+      // suffix; a working file is swept only after an hour untouched (`WORKING_FILE_TTL_MS`), so a
+      // write in flight in the other process is never the one swept; and both the `rm` and the
+      // `rename` are guarded, so the loser of a race does nothing rather than failing. The one
+      // visible effect is cosmetic and belongs to this side: if the app's drain deletes a `.json` it
+      // has just applied, between this `readdir` and its `readFile`, the log below says "setting
+      // aside … — it is not a report this app can read" about a report that applied perfectly well.
       const queued = await readPendingReports({ dir: path.join(a.profileDir, 'orch', PENDING_REPORTS_DIR), log: a.log })
       loadResult = await store.load({
         aliveSessionIds: a.aliveSessionIds(),
@@ -143,17 +153,27 @@ export function createHostOrch(a: {
    * was written off. The app used to have those findings because it was the process that loaded. Now
    * the Host loads, so they travel.
    *
-   * **Once, and only to a caller that asked for them.** Two rules, and they cover the two ways this
+   * **Once, and only to the app asking for them.** Three rules, and they cover the three ways this
    * could go wrong. Only `boot: true` is answered with them, so the app's re-mirror after a reconnect
-   * cannot consume findings that belong to the next app start. And only the first such caller gets
-   * them, because an app restarting against a Host that has been up for hours would otherwise be
-   * handed a cleanup that happened long ago — re-journalling a diff spanning everything since, and
-   * restarting validations for Tasks that have moved on. `null` is the honest answer there: nothing
-   * was lost, because the Host never went away.
+   * cannot consume findings that belong to the next app start. Only a client that called itself the
+   * app is answered with them at all — **`boot: true` is not a read**: taking these findings
+   * consumes them, so a CLI that asked for them, by mistake or otherwise, would leave the app booting
+   * with nothing and the restart's interrupted validations never restarted. The plain read stays open
+   * to anyone, because it really is one. And only the first such caller gets them, because an app
+   * restarting against a Host that has been up for hours would otherwise be handed a cleanup that
+   * happened long ago — re-journalling a diff spanning everything since, and restarting validations
+   * for Tasks that have moved on. `null` is the honest answer there: nothing was lost, because the
+   * Host never went away.
    */
-  const stateGet = async (args: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
+  const stateGet = async (
+    args: Record<string, unknown>,
+    from: OrchCaller | undefined
+  ): Promise<{ status: number; body: unknown }> => {
     await ready()
-    const wantsBoot = args.boot === true && !bootHandedOut
+    // Not a 403: asking for the state is allowed, and this caller is getting it. What it is not
+    // getting is the boot findings, and the honest way to say so is the same `boot: null` an app
+    // that arrived second is told — there is nothing here for you.
+    const wantsBoot = args.boot === true && from?.role === 'app' && !bootHandedOut
     if (wantsBoot) bootHandedOut = true
     return { status: 200, body: { state: store.get(), boot: wantsBoot ? loadResult : null } }
   }
@@ -171,9 +191,10 @@ export function createHostOrch(a: {
       const refused = { app: false }
       try {
         if (cmd === 'state-put') return await statePut(args, from)
-        // Not restricted to the app: it is a read, and every CLI client can already read all of this
-        // through `jobs-list` and its neighbours. A refusal here would be a new one nobody needs.
-        if (cmd === 'state-get') return await stateGet(args)
+        // Open to anyone: reading the state is something every CLI client can already do through
+        // `jobs-list` and its neighbours, so a refusal here would be a new one nobody needs. The half
+        // of it that is not a read — the boot findings — is the app's alone, inside.
+        if (cmd === 'state-get') return await stateGet(args, from)
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.
         await ready()
         const r = await handleCommand(depsFor(refused), { sessionId }, cmd, args)

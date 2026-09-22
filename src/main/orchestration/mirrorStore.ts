@@ -44,9 +44,23 @@ export function createMirrorStore(a: {
       // widen that window from a synchronous assignment to a whole socket round trip, in the one
       // release where the state stops being local. What the caller's `await` is for is unchanged: it
       // still means "this is on disk", and a refusal still reaches it as a throw.
+      const previous = state
       state = next
       const r = await a.call({ cmd: 'state-put', args: { state: next }, sessionId: '' })
-      if (r.status < 200 || r.status >= 300) throw new Error(`the Host refused a state write: ${r.status}`)
+      if (r.status < 200 || r.status >= 300) {
+        // **A refused write is put back; a write that timed out is not.** The difference is what the
+        // two say about the file. A non-2xx reply is the Host having decided not to write — its own
+        // memory did not move either — so leaving the mirror ahead would have every later read in
+        // main report a commit that does not exist, and nothing would correct it: a 500 from a
+        // failed disk write does not drop the socket, and only a handshake re-mirrors. A call that
+        // never came back says nothing at all about the file; the Host may have landed the write and
+        // lost the reply, and putting the mirror back there would be a guess that erases it.
+        //
+        // Unless something has moved on in the meantime — a later write, or a push from the Host.
+        // Then that is the newer truth and this reply has nothing to say about it.
+        if (state === next) state = previous
+        throw new Error(`the Host refused a state write: ${r.status}`)
+      }
     },
     accept: (s) => {
       state = s
