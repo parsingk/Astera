@@ -23,6 +23,13 @@ export const HOST_PROTOCOL = 3
  *  from before it sends no `features` at all. */
 export const HOST_FEATURE_PROC = 'proc'
 
+/** The heartbeat — `ping` answered with `pong`
+ *  (docs/2026-09-22-host-unresponsive-recovery-design.md F2). Announced the same way and for the same
+ *  reason as the feature above: a Host from before it treats a ping as an unknown message, logs it
+ *  and says nothing, and an app that pinged one anyway would read that silence as a Host that has
+ *  stopped answering — and end a Host that is running perfectly well. */
+export const HOST_FEATURE_PING = 'ping'
+
 /** What the app needs to rebuild its own record for a session after a restart. The Host stores it
  *  and hands it back untouched — only the manager that wrote it knows how to read it (slice 2
  *  design §4).
@@ -68,6 +75,10 @@ export type ClientMessage =
   /** Leave. Sent when the app finds a Host on another protocol; in slice 1 the Host holds nothing,
    *  so leaving costs nothing. This message's meaning is revisited in slice 2. */
   | { t: 'retire' }
+  /** The heartbeat. Sent only to a Host whose `hello` named HOST_FEATURE_PING, and answered with a
+   *  `pong` carrying the same `seq`. What it asks is not "are you there" — the socket answers that —
+   *  but "is your event loop still turning", which is the one thing a stuck pty spawn takes away. */
+  | { t: 'ping'; seq: number }
   /** node-pty's two argument forms are not interchangeable on win32: a string is a verbatim command
    *  line that skips argv quoting, while an array goes through it. The protocol carries whichever
    *  one the caller had rather than converting between them (see PtyFactory in core/sessions/pty.ts,
@@ -109,6 +120,7 @@ export type HostMessage =
       features?: string[]
     }
   | { t: 'protocol-mismatch'; protocol: number }
+  | { t: 'pong'; seq: number }
   | { t: 'pty-spawned'; id: string; pid: number }
   | { t: 'pty-failed'; id: string; error: string }
   | { t: 'pty-data'; id: string; data: string }

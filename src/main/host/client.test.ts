@@ -91,7 +91,7 @@ describe('HostClient', () => {
     const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
     c.start()
     await settled(c, (s) => s.connected)
-    expect(c.status().features).toEqual(['proc'])
+    expect(c.status().features).toEqual(['proc', 'ping'])
     await c.stop()
   })
 
