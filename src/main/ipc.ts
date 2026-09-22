@@ -243,7 +243,7 @@ export interface OrchHandle {
   stop: () => void
   onRolled: (oldSessionId: string, newInfo: { id: string; accountId: string }) => void
   onRollState: (e: RollStateEvent) => void
-  orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string } | undefined
+  orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string; profileDir: string } | undefined
   resumeText: (sessionId: string, form: 'handover' | 'update', tabFallback: boolean) => Promise<string | null>
   /** Job Continuity: binds the provider's session id to the open Dispatch of that app session. */
   onNativeSession: (sessionId: string, nativeSessionId: string) => void
@@ -1047,6 +1047,10 @@ export function registerIpc(
     cliPath: string
     infoPath: string
     skillsPath: string
+    /** This app's own userData folder — what a spawned session is told so its `astera` finds this
+     *  app's Host and this app's report queue rather than recomputing a profile it cannot know
+     *  (see the ASTERA_PROFILE_DIR note in core/sessions/manager.ts). */
+    profileDir: string
   } | null = null
   /** 롤링↔Dispatch 이음매. startOrchestration 이 만들고 stop 이 버린다. orch 와 생명주기가 같지만
    *  따로 두는 이유는 onExit 이 orch 대입보다 훨씬 먼저 배선되기 때문이다 — 그 콜백은 호출 시점에
@@ -1271,13 +1275,18 @@ export function registerIpc(
    *  is planted into a session that cannot reach the program it tells the agent to run. **And Smart
    *  Resume**: `astera handoff` is that same CLI, and the memo it stores is what the Smart Resume
    *  briefing reads back. */
-  const orchEnvOf = (): { cliPath: string; infoPath: string; skillsPath: string } | undefined =>
+  const orchEnvOf = (): { cliPath: string; infoPath: string; skillsPath: string; profileDir: string } | undefined =>
     orch &&
     (core.appSettings.getOrchestrationEnabled() ||
       core.appSettings.getWorkUnitTrackingEnabled() ||
       core.appSettings.getAgentBrowserEnabled() ||
       core.appSettings.getResumeStrategy() === 'smart')
-      ? { cliPath: orch.cliPath, infoPath: orch.infoPath, skillsPath: orch.skillsPath }
+      ? {
+          cliPath: orch.cliPath,
+          infoPath: orch.infoPath,
+          skillsPath: orch.skillsPath,
+          profileDir: orch.profileDir
+        }
       : undefined
   /** The project the Jobs sidebar is folded for. main is not otherwise told what the renderer has
    *  open, and the snapshot is per project, so orch.list doubles as the subscription: the last path
@@ -4593,7 +4602,10 @@ export function registerIpc(
     // on a full disk reaches this.
     let cliPath: string
     let infoPath: string
-    const dir = path.join(app.getPath('userData'), 'orch')
+    // The same string `startHost` hashes into the Host's address (`hostAddress`), so a session told
+    // this folder derives exactly this app's Host and no other.
+    const profileDir = app.getPath('userData')
+    const dir = path.join(profileDir, 'orch')
     try {
       cliPath = await writeShuttle({ dir, execPath: process.execPath, entryPath })
       infoPath = await writeInfo({ dir, port: server.port, token: server.token })
@@ -4601,7 +4613,7 @@ export function registerIpc(
       await server.close().catch(() => {}) // a failed close must not mask the original error
       throw err
     }
-    orch = { server, deps, cliPath, infoPath, skillsPath }
+    orch = { server, deps, cliPath, infoPath, skillsPath, profileDir }
     // Nobody is waiting on the Host any more, so the Jobs view goes back to meaning what it says.
     // Before `pushOrchState` below, which is what redraws it.
     setOrchHostGate(null)

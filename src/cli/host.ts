@@ -180,12 +180,17 @@ export function preparedRuntimeEntry(a: {
 /**
  * 이 실행이 말을 걸 Host — 그 주소와, 그 Host 가 쓰는 프로필 폴더.
  *
- * **`ASTERA_HOST` 가 언제나 이긴다.** 앱이 띄운 세션은 자기를 띄운 Host 와 말해야 하고, 설치본이
- * 함께 떠 있다고 해서 그쪽으로 새면 안 된다 — `ASTERA_INFO` 가 하던 일을 그대로 물려받는다(설계 §4).
- * 그 변수가 없으면 프로필에서 계산한다.
+ * **프로필이 먼저다.** 앱이 띄운 세션에는 그 앱의 프로필 폴더가 실려 온다(`ASTERA_PROFILE_DIR`,
+ * core/sessions/manager.ts) — 주소도 보고 큐도 거기서 나온다. 그 변수가 없으면(사람이 셀에서 직접
+ * 부른 경우) 플랫폼에서 계산한다.
  *
- * **`profileDir` 은 언제나 계산된 값이다.** 주소를 손으로 지정해도 그 Host 가 어느 프로필을 쓰는지는
- * 주소가 말해 주지 않는다 — 상태 파일과 보고 큐가 있는 곳은 `ASTERA_PROFILE` 이 정한다.
+ * **왜 주소가 아니라 폴더인가.** 개발본은 `-dev` 접미사를 `app.isPackaged` 로 붙이고(src/main/index.ts)
+ * 그 사실을 환경변수로 내보내는 곳이 없었다 — 그래서 개발본이 띄운 워커가 설치본의 Host 에 말을
+ * 걸었고, 못 보낸 보고를 설치본의 큐에 적었다(F43, 2026-09-22 실측). 주소만으로는 못 고친다:
+ * 상태 파일과 보고 큐가 있는 곳은 주소가 말해 주지 않는다.
+ *
+ * **`ASTERA_HOST` 는 주소만 이긴다.** 특정 Host 를 손으로 가리키는 장치이고, 그 Host 가 어느
+ * 프로필을 쓰는지는 여전히 주소가 말해 주지 않는다.
  *
  * `run.ts` 와 이 파일이 같은 값을 쓴다. 두 벌로 두면 `astera host status` 가 보는 Host 와
  * `astera jobs list` 가 묻는 Host 가 갈리는 날이 온다.
@@ -195,12 +200,16 @@ export function cliHostTarget(a: {
   platform: NodeJS.Platform
   home: string
 }): { address: string; profileDir: string } {
-  const profileDir = userDataDir({
-    platform: a.platform,
-    env: a.env,
-    home: a.home,
-    dev: a.env.ASTERA_PROFILE === 'dev'
-  })
+  const given = a.env.ASTERA_PROFILE_DIR
+  const profileDir =
+    given !== undefined && given.length > 0
+      ? given
+      : userDataDir({
+          platform: a.platform,
+          env: a.env,
+          home: a.home,
+          dev: a.env.ASTERA_PROFILE === 'dev'
+        })
   const explicit = a.env.ASTERA_HOST
   if (explicit !== undefined && explicit.length > 0) return { address: explicit, profileDir }
   return {

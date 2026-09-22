@@ -12,6 +12,7 @@ import {
   runHostCommand
 } from './host'
 import { userDataDir } from '../core/orchestration/cliDiscovery'
+import { pendingReportsDirIn } from '../core/orchestration/pendingReports'
 import { hostAddress } from '../host/address'
 import { startHostServer, type HostServerDeps } from '../host/server'
 import { HOST_PROTOCOL } from '../core/host/protocol'
@@ -286,6 +287,51 @@ describe('cliHostTarget', () => {
     const env = { APPDATA: path.join('C:', 'a'), ASTERA_HOST: '' } as NodeJS.ProcessEnv
     const computed = cliHostTarget({ env: { APPDATA: path.join('C:', 'a') }, platform: process.platform, home })
     expect(cliHostTarget({ env, platform: process.platform, home }).address).toBe(computed.address)
+  })
+
+  // **F43.** 개발본의 `-dev` 접미사는 `app.isPackaged` 에서 오고(src/main/index.ts) 그것을 내보내는
+  // 환경변수가 없었다 — 그래서 개발본이 띄운 워커가 설치본의 프로필을 계산해 설치본의 Host 에
+  // 말을 걸었다. 이제 앱이 자기 폴더를 실어 보내고(ASTERA_PROFILE_DIR), 주소는 그 폴더에서 나온다.
+  describe('ASTERA_PROFILE_DIR', () => {
+    const installed = userDataDir({ platform: 'win32', env: { APPDATA: path.join('C:', 'a') }, home })
+    const dev = userDataDir({ platform: 'win32', env: { APPDATA: path.join('C:', 'a') }, home, dev: true })
+
+    it('앱이 실어 보낸 프로필이 계산을 이긴다', () => {
+      const env = { APPDATA: path.join('C:', 'a'), ASTERA_PROFILE_DIR: dev } as NodeJS.ProcessEnv
+      expect(cliHostTarget({ env, platform: 'win32', home }).profileDir).toBe(dev)
+    })
+
+    // 주소도 그 폴더에서 나온다 — 설치본의 것과 같은 주소가 나오면 개발본 워커가 설치본 Host 에
+    // 그대로 닿는다.
+    it('주소가 그 프로필의 것이고 설치본의 것이 아니다', () => {
+      const env = { APPDATA: path.join('C:', 'a'), ASTERA_PROFILE_DIR: dev } as NodeJS.ProcessEnv
+      const addrFor = (profileDir: string): string =>
+        hostAddress({ profileDir, platform: 'win32', tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL }).address
+      expect(cliHostTarget({ env, platform: 'win32', home }).address).toBe(addrFor(dev))
+      expect(cliHostTarget({ env, platform: 'win32', home }).address).not.toBe(addrFor(installed))
+    })
+
+    // 못 보낸 보고가 적히는 곳도 이 폴더다(run.ts 의 writePendingReport). 개발본의 보고가 설치본
+    // 큐에 떨어지면 설치본 앱과 Host 가 그것을 빨아들인다 — 이것이 이 결함을 치명으로 만든 쪽이다.
+    it('보고 큐가 그 프로필 안이고 설치본 안이 아니다', () => {
+      const env = { APPDATA: path.join('C:', 'a'), ASTERA_PROFILE_DIR: dev } as NodeJS.ProcessEnv
+      const queue = pendingReportsDirIn(cliHostTarget({ env, platform: 'win32', home }).profileDir)
+      expect(queue.startsWith(dev)).toBe(true)
+      expect(queue.startsWith(pendingReportsDirIn(installed))).toBe(false)
+    })
+
+    // `ASTERA_HOST` 는 주소만 이긴다 — 상태 파일과 보고 큐는 여전히 프로필의 것이다.
+    it('ASTERA_HOST 가 있어도 프로필은 실어 보낸 것이다', () => {
+      const env = { APPDATA: path.join('C:', 'a'), ASTERA_PROFILE_DIR: dev, ASTERA_HOST: 'given' } as NodeJS.ProcessEnv
+      const t = cliHostTarget({ env, platform: 'win32', home })
+      expect(t.address).toBe('given')
+      expect(t.profileDir).toBe(dev)
+    })
+
+    it('빈 값은 없는 것과 같다', () => {
+      const env = { APPDATA: path.join('C:', 'a'), ASTERA_PROFILE_DIR: '' } as NodeJS.ProcessEnv
+      expect(cliHostTarget({ env, platform: 'win32', home }).profileDir).toBe(installed)
+    })
   })
 })
 

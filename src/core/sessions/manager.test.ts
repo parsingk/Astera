@@ -673,10 +673,11 @@ describe('SessionManager', () => {
     const orchEnv = {
       cliPath: 'C:/cli/astera.cmd',
       infoPath: 'C:/u/info.json',
-      skillsPath: 'C:/u/skills'
+      skillsPath: 'C:/u/skills',
+      profileDir: 'C:/u'
     }
 
-    it('ASTERA_* 네 개를 주입한다 (CLI·INFO·SKILLS·SESSION)', () => {
+    it('ASTERA_* 다섯 개를 주입한다 (CLI·INFO·PROFILE_DIR·SKILLS·SESSION)', () => {
       const { manager, spawned } = setup()
       manager.spawn({ account, cwd: process.cwd(), orchEnv })
       expect(spawned[0].opts.env.ASTERA_CLI).toBe('C:/cli/astera.cmd')
@@ -684,6 +685,20 @@ describe('SessionManager', () => {
       // help가 이 디렉토리에서 orchestration-guide.md를 읽는다 (src/cli/run.ts resolveGuidePath)
       expect(spawned[0].opts.env.ASTERA_SKILLS).toBe('C:/u/skills')
       expect(spawned[0].opts.env.ASTERA_SESSION).toBeTruthy()
+    })
+
+    // **F43.** 세션의 astera 는 이제 Host 와 말하고, Host 의 주소도 못 보낸 보고를 적는 큐도 전부
+    // 프로필 폴더에서 나온다. 그 폴더를 CLI 가 스스로 계산하면 개발본이 설치본으로 샌다 —
+    // `-dev` 접미사는 `app.isPackaged` 에서 오고 그것을 내보내는 환경변수가 없었다. 그래서 앱이
+    // 자기가 실제로 쓰고 있는 폴더를 실어 보낸다.
+    it('앱이 실제로 쓰는 프로필 폴더를 실어 보낸다', () => {
+      const { manager, spawned } = setup()
+      manager.spawn({
+        account,
+        cwd: process.cwd(),
+        orchEnv: { ...orchEnv, profileDir: 'C:/Users/x/AppData/Roaming/astera-dev' }
+      })
+      expect(spawned[0].opts.env.ASTERA_PROFILE_DIR).toBe('C:/Users/x/AppData/Roaming/astera-dev')
     })
 
     it('같은 orchEnv로 두 세션을 띄우면 ASTERA_SESSION만 서로 다르다', () => {
@@ -706,6 +721,9 @@ describe('SessionManager', () => {
     const INHERITED = {
       ASTERA_CLI: 'C:/other-instance/orch/astera.cmd',
       ASTERA_INFO: 'C:/other-instance/orch/orch-info.json',
+      // 남의 인스턴스의 프로필이 새면 이 세션의 워커가 남의 Host 에 보고하고 남의 큐에 적는다 —
+      // ASTERA_INFO 가 하던 누수를 그대로 물려받는 변수다.
+      ASTERA_PROFILE_DIR: 'C:/other-instance',
       ASTERA_SKILLS: 'C:/other-instance/skills',
       ASTERA_SESSION: 'inherited-session-id'
     }
@@ -757,6 +775,7 @@ describe('SessionManager', () => {
       const info = manager.spawn({ account, cwd: process.cwd(), orchEnv })
       expect(spawned[0].opts.env.ASTERA_CLI).toBe('C:/cli/astera.cmd')
       expect(spawned[0].opts.env.ASTERA_INFO).toBe('C:/u/info.json')
+      expect(spawned[0].opts.env.ASTERA_PROFILE_DIR).toBe('C:/u')
       expect(spawned[0].opts.env.ASTERA_SKILLS).toBe('C:/u/skills')
       expect(spawned[0].opts.env.ASTERA_SESSION).toBe(info.id) // 상속된 남의 세션 id가 아니다
     })

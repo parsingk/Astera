@@ -200,7 +200,12 @@ describe('RollingCoordinator', () => {
   })
 
   it('롤로 띄운 세션에 orchEnv를 실어 보낸다', async () => {
-    const env = { cliPath: 'C:/astera/cli.js', infoPath: 'C:/astera/info.json', skillsPath: 'C:/astera/skills' }
+    const env = {
+      cliPath: 'C:/astera/cli.js',
+      infoPath: 'C:/astera/info.json',
+      skillsPath: 'C:/astera/skills',
+      profileDir: 'C:/astera'
+    }
     const h = harness({ orchEnv: () => env })
     h.payloads.set('s1', payload(97))
     h.coord.register(h.info1)

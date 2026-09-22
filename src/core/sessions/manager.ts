@@ -110,8 +110,10 @@ export class SessionManager {
      *  Dispatch is a worker"; the environment variable would become a second source of truth, frozen
      *  at spawn time and stale as soon as the session is reused.
      *  skillsPath is the directory the CLI's help reads orchestration-guide.md from (resolveGuidePath
-     *  in src/cli/run.ts) — without it, help dies. */
-    orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
+     *  in src/cli/run.ts) — without it, help dies.
+     *  profileDir is this app's own userData folder; see where it is planted below for why the CLI
+     *  cannot work it out for itself. */
+    orchEnv?: { cliPath: string; infoPath: string; skillsPath: string; profileDir: string }
     /** Initial prompt for an interactive session. Carried as the command's last positional argument. */
     initialPrompt?: string
     /** Sets the tab title explicitly — orchestration worker tabs use task.title.
@@ -181,6 +183,19 @@ export class SessionManager {
       // resources/skills/task-stub.md, and resources/skills/browser-stub.md's step 1).
       env.ASTERA_CLI = opts.orchEnv.cliPath
       env.ASTERA_INFO = opts.orchEnv.infoPath
+      // **The profile, not the address.** The CLI now talks to the Host rather than to this process,
+      // and left to itself it recomputes the profile folder from the platform (`userDataDir`) — which
+      // answers `%APPDATA%\astera` for a dev build too, because the `-dev` suffix comes from
+      // `app.isPackaged` (src/main/index.ts) and no environment variable carries it. A worker spawned
+      // by the dev app then reached the *installed* Host, and wrote its undelivered reports into the
+      // installed profile's queue, where the installed app drained them. Measured 2026-09-22 (F43).
+      //
+      // An address alone could not fix that: `astera` needs the profile folder itself for the pending
+      // report queue and for the state file it falls back to, and an address does not say which
+      // profile the Host behind it uses. So the folder travels, and the CLI derives the address from
+      // it exactly as this app does (`hostAddress`). `ASTERA_HOST` stays what it was — an override for
+      // pointing at one specific Host.
+      env.ASTERA_PROFILE_DIR = opts.orchEnv.profileDir
       env.ASTERA_SKILLS = opts.orchEnv.skillsPath
       env.ASTERA_SESSION = id
       // Uses cliPath's directory rather than adding a new field — the shuttle file is already named

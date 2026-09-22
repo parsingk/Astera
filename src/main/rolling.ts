@@ -100,7 +100,7 @@ export interface RollingDeps {
      *  넘기지 않으면 spawn 이 폴더 이름으로 되돌린다 */
     title?: string
     /** astera CLI 환경. 배선이 넘긴다 — 없으면 세션은 CLI 없이 뜬다 */
-    orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
+    orchEnv?: { cliPath: string; infoPath: string; skillsPath: string; profileDir: string }
     /** Which kind of session to respawn — the chain's own kind, carried through every roll. The wiring
      *  routes on it (index.ts): 'chat' goes to the chat manager, anything else to the pty manager.
      *  Absent means 'terminal', so a caller that predates chat sessions keeps working. */
@@ -189,7 +189,7 @@ export interface RollingDeps {
    *  켜지고 꺼지며, 롤링 코디네이터는 그보다 먼저 만들어진다.
    *
    *  주입되지 않으면 아무것도 실리지 않는다(기존 동작) — now?/log? 와 같은 관례다. */
-  orchEnv?(): { cliPath: string; infoPath: string; skillsPath: string } | undefined
+  orchEnv?(): { cliPath: string; infoPath: string; skillsPath: string; profileDir: string } | undefined
   /** 재개 직전에 쓸 텍스트를 물어본다. **`chain.prompt` 가 정적이라서 필요하다** — 그 값은
    *  register 시점에 고정되는데, 재개 자료는 재개 직전의 상태(git·보고·결정)에서 조립해야
    *  정확하다.

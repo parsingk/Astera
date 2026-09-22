@@ -17,6 +17,7 @@ export const MANAGED_ENV_KEYS = [
   'ASTERA_HOOK_OUT',
   'ASTERA_CLI',
   'ASTERA_INFO',
+  'ASTERA_PROFILE_DIR',
   'ASTERA_SKILLS',
   'ASTERA_SESSION'
 ] as const
