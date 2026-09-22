@@ -178,6 +178,24 @@ export function preparedRuntimeEntry(a: {
 }
 
 /**
+ * 끝의 구분자를 걷는다 — `nativePath` 와 같은 이유로 같은 자리에서(바로 아래 `cliHostTarget`).
+ *
+ * `C:\astera-dev\` 는 `C:\astera-dev` 와 같은 폴더인데 sha256 이 달라 다른 Host 가 된다.
+ * `userDataDir` 은 이미 같은 것을 걷고 값을 실어 보내는 쪽은 끝에 구분자를 붙이지 않으므로,
+ * 이 줄도 지금 있는 주소를 하나도 바꾸지 않는다.
+ *
+ * **뿌리는 걷지 않는다.** `C:\` 를 `C:` 로 만들면 win32 에서 다른 것을 가리키고(그것은 그
+ * 드라이브의 현재 디렉터리다), posix 의 `/` 를 걷으면 빈 문자열이 된다. 둘 다 구분자 하나짜리
+ * 뿌리로 되돌린다 — 프로필이 뿌리일 리는 없지만, 그냥 두는 것과 망가뜨리는 것은 다른 일이다.
+ */
+const withoutTrailingSeparator = (p: string): string => {
+  const stripped = p.replace(/[\\/]+$/, '')
+  if (stripped === '') return p.slice(0, 1)
+  if (/^[A-Za-z]:$/.test(stripped)) return stripped + p.slice(-1)
+  return stripped
+}
+
+/**
  * 이 실행이 말을 걸 Host — 그 주소와, 그 Host 가 쓰는 프로필 폴더.
  *
  * **프로필이 먼저다.** 앱이 띄운 세션에는 그 앱의 프로필 폴더가 실려 온다(`ASTERA_PROFILE_DIR`,
@@ -193,12 +211,19 @@ export function preparedRuntimeEntry(a: {
  * 프로필을 쓰는지는 여전히 주소가 말해 주지 않는다.
  *
  * **실려 온 경로는 그 플랫폼의 철자로 맞춘다.** 주소는 이 문자열의 sha256 이라(host/address.ts)
- * 정슬래시로 적은 경로와 역슬래시로 적은 같은 경로가 서로 **다른** Host 를 가리킨다 — 손으로
- * 정슬래시로 적으면 살아 있는 Host 를 두고 `running: false` 라고 답하게 되고, 그것은 이 설계가
- * 가장 애써 피하는 거짓말이다(core/orchestration/stateFile.ts 의 머리말).
- * **지금 있는 주소는 하나도 바뀌지 않는다** — 값을 실어 보내는 쪽은 전부 이미 네이티브 철자다
- * (앱과 Host 는 `app.getPath('userData')` 를 그대로 싣고, `userDataDir` 은 win32 에서
- * `nativePath` 를 태운다). 사람이 직접 적은 값만 구제된다.
+ * 같은 폴더라도 철자가 다르면 **다른** Host 를 가리킨다 — 정슬래시로 적은 것과 역슬래시로 적은
+ * 것이 그렇고(`nativePath`), 끝에 구분자를 붙인 것과 안 붙인 것이 그렇다
+ * (`withoutTrailingSeparator`). 어느 쪽이든 손으로 그렇게 적으면 살아 있는 Host 를 두고
+ * `running: false` 라고 답하게 되고, 그것은 이 설계가 가장 애써 피하는 거짓말이다
+ * (core/orchestration/stateFile.ts 의 머리말).
+ * **지금 있는 주소는 하나도 바뀌지 않는다** — 값을 실어 보내는 쪽은 전부 이미 네이티브 철자이고
+ * 끝에 구분자를 붙이지 않는다(앱과 Host 는 `app.getPath('userData')` 를 그대로 싣고,
+ * `userDataDir` 은 win32 에서 `nativePath` 를 태우며 끝 구분자를 이미 걷는다). 사람이 직접 적은
+ * 값만 구제된다.
+ *
+ * **대소문자는 여기서 손대지 않는다.** win32 의 경로는 대소문자를 가리지 않으므로 그것도 같은
+ * 집안이지만, 맞추려면 지금 있는 주소가 전부 바뀐다 — 위 두 줄이 안전한 이유가 바로 "아무것도
+ * 안 바뀐다" 이고, 그 성질이 없다. 남겨 둔 채로 적어 둔다.
  *
  * `run.ts` 와 이 파일이 같은 값을 쓴다. 두 벌로 두면 `astera host status` 가 보는 Host 와
  * `astera jobs list` 가 묻는 Host 가 갈리는 날이 온다.
@@ -211,7 +236,7 @@ export function cliHostTarget(a: {
   const given = a.env.ASTERA_PROFILE_DIR
   const profileDir =
     given !== undefined && given.length > 0
-      ? nativePath(given, a.platform)
+      ? withoutTrailingSeparator(nativePath(given, a.platform))
       : userDataDir({
           platform: a.platform,
           env: a.env,

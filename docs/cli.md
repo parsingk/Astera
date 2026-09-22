@@ -79,9 +79,15 @@ derived from that profile.
 The profile travels rather than the address alone, because an address does not say which profile the
 Host behind it uses, and the report queue and the state file are both properties of the profile.
 
-If you set `ASTERA_PROFILE_DIR` by hand, spell the path the way your platform does. The address is
-derived from the text of the path, so on Windows `C:\Users\…` and `C:/Users/…` name two different
-Hosts. `astera host status` prints the profile it resolved, which is how to check.
+The Host's address is derived from the text of the profile path, so two spellings of one folder would
+name two Hosts. Separators are normalised for you before that happens: on Windows a forward slash
+becomes a backslash, and a trailing separator is dropped on every platform, so `C:/Users/…/astera`,
+`C:\Users\…\astera\` and `C:\Users\…\astera` all reach the same Host.
+
+**Letter case is not normalised**, and on Windows it is the one spelling that still matters:
+`c:\users\…` and `C:\Users\…` are the same folder to Windows but different Hosts to Astera. If you
+set `ASTERA_PROFILE_DIR` by hand, copy the path rather than typing it. `astera host status` prints
+the profile it resolved, which is how to check.
 
 Two more variables exist inside sessions Astera starts: `ASTERA_CLI` is the absolute path to this
 command, and `ASTERA_SKILLS` is the folder `astera help` reads its guide from.
@@ -284,10 +290,12 @@ No Host is running and the command needs one. Run `astera host start`. If it doe
 The state file could not be read either, which usually means this profile has never run a Job.
 `astera host status` prints the profile path it is using.
 
-**Commands reach the wrong Astera**
-You have both an installed build and a development build. `astera host status` prints the profile.
-Inside a session the app sets `ASTERA_PROFILE_DIR`, so a session's `astera` always reaches the app
-that started it. From a plain shell, `ASTERA_PROFILE=dev` selects the development profile.
+**Commands reach the wrong Astera, or `running: false` about a Host you can see**
+You have both an installed build and a development build, or a hand-set `ASTERA_PROFILE_DIR` whose
+letter case differs from the running Host's. `astera host status` prints the profile it resolved;
+compare it with the one the Host is on. Inside a session the app sets `ASTERA_PROFILE_DIR` itself, so
+a session's `astera` always reaches the app that started it. From a plain shell, `ASTERA_PROFILE=dev`
+selects the development profile.
 
 **Exit 6 from `astera host stop`**
 The Host still holds sessions or running Jobs. The message says how many. Stop the work first.

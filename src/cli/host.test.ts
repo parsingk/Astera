@@ -342,34 +342,47 @@ describe('cliHostTarget', () => {
       expect(cliHostTarget({ env, platform: 'win32', home }).profileDir).toBe(installed)
     })
 
-    // **F47.** 주소는 이 경로 문자열의 sha256 이다. 손으로 정슬래시로 적으면 살아 있는 Host 를
-    // 두고 `running: false` 라고 답하게 되는데, 그것이 이 설계가 가장 애써 피하는 거짓말이다.
-    // 실려 오는 값은 전부 이미 네이티브 철자라 이 맞춤은 기존 주소를 하나도 바꾸지 않는다.
-    it('정슬래시로 적은 경로가 역슬래시로 적은 같은 경로와 한 Host 를 가리킨다', () => {
-      const slashed = dev.replace(/\\/g, '/')
-      expect(slashed).not.toBe(dev) // 이 테스트가 무엇을 재는지 — 두 철자가 실제로 다르다
-      const of = (v: string): { address: string; profileDir: string } =>
-        cliHostTarget({
-          env: { APPDATA: path.join('C:', 'a'), ASTERA_PROFILE_DIR: v } as NodeJS.ProcessEnv,
-          platform: 'win32',
-          home
-        })
-      expect(of(slashed).address).toBe(of(dev).address)
-      expect(of(slashed).profileDir).toBe(dev)
+    // **F47·F51.** 주소는 이 경로 문자열의 sha256 이다. 같은 폴더를 다른 철자로 적으면 살아 있는
+    // Host 를 두고 `running: false` 라고 답하게 되는데, 그것이 이 설계가 가장 애써 피하는
+    // 거짓말이다. 실려 오는 값은 전부 이미 네이티브 철자이고 끝 구분자도 없으므로, 이 맞춤은
+    // 기존 주소를 하나도 바꾸지 않는다.
+    const of = (v: string, platform: NodeJS.Platform = 'win32'): { address: string; profileDir: string } =>
+      cliHostTarget({
+        env: { APPDATA: path.join('C:', 'a'), ASTERA_PROFILE_DIR: v } as NodeJS.ProcessEnv,
+        platform,
+        home
+      })
+
+    it.each([
+      ['정슬래시로 적은 것', dev.replace(/\\/g, '/')],
+      ['끝에 구분자를 붙인 것', `${dev}\\`],
+      ['둘 다', `${dev.replace(/\\/g, '/')}/`]
+    ])('%s 이 네이티브 철자와 한 Host·한 프로필·한 큐로 모인다', (_label, spelled) => {
+      // 이 테스트가 무엇을 재는지 — 두 철자가 실제로 다르다. 같아지면 단정이 공짜가 된다.
+      expect(spelled).not.toBe(dev)
+      expect(of(spelled).address).toBe(of(dev).address)
+      expect(of(spelled).profileDir).toBe(dev)
       // 보고 큐도 같은 값에서 나온다 — 철자가 갈리면 큐도 둘로 갈린다.
-      expect(pendingReportsDirIn(of(slashed).profileDir)).toBe(pendingReportsDirIn(dev))
+      expect(pendingReportsDirIn(of(spelled).profileDir)).toBe(pendingReportsDirIn(dev))
     })
 
-    // posix 에서는 아무것도 하지 않는다. 역슬래시는 그쪽에서 파일 이름에 쓸 수 있는 글자다.
-    it('posix 에서는 경로를 건드리지 않는다', () => {
+    // posix 에서는 슬래시 방향을 건드리지 않는다. 역슬래시는 그쪽에서 파일 이름에 쓸 수 있는
+    // 글자다. 끝 구분자는 거기서도 같은 문제라 걷는다.
+    it('posix 에서는 방향은 두고 끝 구분자만 걷는다', () => {
       const given = '/home/me/.config/astera-dev'
-      expect(
-        cliHostTarget({
-          env: { ASTERA_PROFILE_DIR: given } as NodeJS.ProcessEnv,
-          platform: 'linux',
-          home
-        }).profileDir
-      ).toBe(given)
+      expect(of(given, 'linux').profileDir).toBe(given)
+      expect(of(`${given}/`, 'linux').profileDir).toBe(given)
+      expect(of('/home/me/back\\slash', 'linux').profileDir).toBe('/home/me/back\\slash')
+    })
+
+    // **뿌리는 걷지 않는다.** `C:\` 를 `C:` 로 만들면 win32 에서 그 드라이브의 현재 디렉터리를
+    // 뜻하고, posix 의 `/` 를 걷으면 빈 문자열이 된다. 프로필이 뿌리일 리는 없지만, 그냥 두는
+    // 것과 망가뜨리는 것은 다른 일이다.
+    it('뿌리 하나짜리 경로를 망가뜨리지 않는다', () => {
+      expect(of('C:\\').profileDir).toBe('C:\\')
+      expect(of('C:/').profileDir).toBe('C:\\')
+      expect(of('/', 'linux').profileDir).toBe('/')
+      expect(of('//', 'linux').profileDir).toBe('/')
     })
   })
 })
