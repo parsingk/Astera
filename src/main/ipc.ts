@@ -90,7 +90,7 @@ import {
 } from '../core/orchestration/command'
 import { applyPendingReports, readPendingReports } from '../core/orchestration/pendingDrain'
 import {
-  PENDING_REPORTS_DIR,
+  pendingReportsDirIn,
   dispatchesHeldOnlyByReport,
   reportedDispatchIdsOf
 } from '../core/orchestration/pendingReports'
@@ -2383,7 +2383,7 @@ export function registerIpc(
     //
     // This line cannot throw: `readPendingReports` swallows its own failures, a missing folder being
     // the ordinary case rather than an error.
-    const pendingReportsDir = path.join(app.getPath('userData'), 'orch', PENDING_REPORTS_DIR)
+    const pendingReportsDir = pendingReportsDirIn(app.getPath('userData'))
     const pendingReports = await readPendingReports({ dir: pendingReportsDir, log: orchLog })
 
     // What the Host was still running when this app attached. **No longer the restart cleanup's

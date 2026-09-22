@@ -100,10 +100,11 @@ function jobCountFrom(profileDir: string): number {
 }
 
 /** `connectHost`'s signal for a broken line or a handler that threw. stdout is the one structured
- *  envelope this command prints (`run.ts` renders it), so this goes to stderr instead — the same
+ *  envelope a command prints (`run.ts` renders it), so this goes to stderr instead — the same
  *  channel `host/index.ts` uses for its own startup errors, and one a person running this directly
- *  still sees without it landing inside anything a script parses. */
-const logToStderr = (m: string): void => {
+ *  still sees without it landing inside anything a script parses. Exported because every other
+ *  command connects to the same Host and owes its stdout to the same envelope. */
+export const logToStderr = (m: string): void => {
   process.stderr.write(`astera: ${m}\n`)
 }
 
@@ -176,6 +177,43 @@ export function preparedRuntimeEntry(a: {
   }
 }
 
+/**
+ * 이 실행이 말을 걸 Host — 그 주소와, 그 Host 가 쓰는 프로필 폴더.
+ *
+ * **`ASTERA_HOST` 가 언제나 이긴다.** 앱이 띄운 세션은 자기를 띄운 Host 와 말해야 하고, 설치본이
+ * 함께 떠 있다고 해서 그쪽으로 새면 안 된다 — `ASTERA_INFO` 가 하던 일을 그대로 물려받는다(설계 §4).
+ * 그 변수가 없으면 프로필에서 계산한다.
+ *
+ * **`profileDir` 은 언제나 계산된 값이다.** 주소를 손으로 지정해도 그 Host 가 어느 프로필을 쓰는지는
+ * 주소가 말해 주지 않는다 — 상태 파일과 보고 큐가 있는 곳은 `ASTERA_PROFILE` 이 정한다.
+ *
+ * `run.ts` 와 이 파일이 같은 값을 쓴다. 두 벌로 두면 `astera host status` 가 보는 Host 와
+ * `astera jobs list` 가 묻는 Host 가 갈리는 날이 온다.
+ */
+export function cliHostTarget(a: {
+  env: NodeJS.ProcessEnv
+  platform: NodeJS.Platform
+  home: string
+}): { address: string; profileDir: string } {
+  const profileDir = userDataDir({
+    platform: a.platform,
+    env: a.env,
+    home: a.home,
+    dev: a.env.ASTERA_PROFILE === 'dev'
+  })
+  const explicit = a.env.ASTERA_HOST
+  if (explicit !== undefined && explicit.length > 0) return { address: explicit, profileDir }
+  return {
+    address: hostAddress({
+      profileDir,
+      platform: a.platform,
+      tmpDir: os.tmpdir(),
+      protocol: HOST_PROTOCOL
+    }).address,
+    profileDir
+  }
+}
+
 /** How long `host start` waits for a freshly spawned Host to answer its first `hello`, and how often
  *  it checks. Generous, not tuned: a cold start pays for requiring node-pty and opening the pipe, and
  *  there is nothing else this command is doing meanwhile. */
@@ -199,18 +237,7 @@ export async function runHostCommand(a: {
   if (a.cmd !== 'host-status' && a.cmd !== 'host-start' && a.cmd !== 'host-stop')
     return { body: { error: `${a.cmd} is not implemented yet` }, code: exitCodeFor('FAILED') }
 
-  const profileDir = userDataDir({
-    platform: a.platform,
-    env: a.env,
-    home: a.home,
-    dev: a.env.ASTERA_PROFILE === 'dev'
-  })
-  const address = hostAddress({
-    profileDir,
-    platform: a.platform,
-    tmpDir: os.tmpdir(),
-    protocol: HOST_PROTOCOL
-  }).address
+  const { address, profileDir } = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
 
   /** One connect attempt, turned into the pair `runHostCommand` returns — or null when nothing
    *  answered, which the two callers below read differently (a failed `status` and a `start` that

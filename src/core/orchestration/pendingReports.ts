@@ -17,10 +17,12 @@ import type { Dispatch } from './types'
  *  processes appending to one file can interleave into a line neither of them wrote. */
 export const PENDING_REPORTS_DIR = 'pending-reports'
 
-/** The queue lives beside `ASTERA_INFO`, which is the only path the CLI is given. The app reaches
- *  the same folder through `<userData>/orch`, where it writes that info file. */
-export function pendingReportsDirFrom(infoPath: string): string {
-  return path.join(path.dirname(infoPath), PENDING_REPORTS_DIR)
+/** The queue lives under the profile's `orch` folder — the one folder all three readers can name
+ *  without being told. **It used to be derived from `ASTERA_INFO`**, which was the only path the CLI
+ *  was given; the CLI now computes the Host's address from this same profile directory and never
+ *  reads that variable, so the rule is written once here instead of once per process. */
+export function pendingReportsDirIn(profileDir: string): string {
+  return path.join(profileDir, 'orch', PENDING_REPORTS_DIR)
 }
 
 /** Message types a worker may leave behind in a file.

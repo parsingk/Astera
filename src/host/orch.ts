@@ -5,7 +5,7 @@ import path from 'node:path'
 import { handleCommand, type OrchServerDeps } from '../core/orchestration/command'
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
 import { readPendingReports } from '../core/orchestration/pendingDrain'
-import { PENDING_REPORTS_DIR, reportedDispatchIdsOf } from '../core/orchestration/pendingReports'
+import { pendingReportsDirIn, reportedDispatchIdsOf } from '../core/orchestration/pendingReports'
 import type { OrchState } from '../core/orchestration/state'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { hostOrchDeps } from './orchDeps'
@@ -74,7 +74,7 @@ export function createHostOrch(a: {
       // visible effect is cosmetic and belongs to this side: if the app's drain deletes a `.json` it
       // has just applied, between this `readdir` and its `readFile`, the log below says "setting
       // aside … — it is not a report this app can read" about a report that applied perfectly well.
-      const queued = await readPendingReports({ dir: path.join(a.profileDir, 'orch', PENDING_REPORTS_DIR), log: a.log })
+      const queued = await readPendingReports({ dir: pendingReportsDirIn(a.profileDir), log: a.log })
       loadResult = await store.load({
         aliveSessionIds: a.aliveSessionIds(),
         reportedDispatchIds: reportedDispatchIdsOf(queued.map((q) => q.report))

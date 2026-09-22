@@ -161,6 +161,75 @@ export function interruptedResumes(
   return { revalidate, rereview, stuck }
 }
 
+/**
+ * 파일에서 읽은 상태에 필드 이행을 적용한다 — `load()` 가 재시작 정리에 들어가기 전에 하던 일
+ * 그대로다. 제자리에서 고쳐 같은 객체를 돌려준다(`load` 는 그 객체를 그대로 `before` 로 잡는다).
+ *
+ * **함수로 꺼낸 이유는 두 번째 독자다.** Host 가 없으면 CLI 가 이 파일을 직접 읽어 읽기 명령에
+ * 답한다(core/orchestration/stateFile.ts). 거기서 맨 `JSON.parse` 를 하면 같은 파일이 두 프로세스에
+ * 다르게 보인다 — Job 과 회차가 갈리기 전에 쓰인 파일에는 `jobs` 칸이 아예 없으므로 CLI 만 빈 Job
+ * 목록을 내고, 사람은 그것을 믿는다. 이행이 한 벌이어야 Host 의 답과 파일에서 꺼낸 답이 같다.
+ */
+export function migrateLoadedState(st: OrchState): OrchState {
+  // **이 칸이 목록이 되기 전에 만든 Task 를 옮긴다.** 이 파일은 프로세스보다 오래 살고, Run 은
+  // 30일(RUN_TTL_MS)까지 남는다 — 옮기지 않으면 앱을 올리는 순간 그 Task 들의 계정 지정이 조용히
+  // 사라지고, 사람이 아끼려던 계정에 일이 간다(dispatchAccount.ts 가 막으려는 바로 그것이다).
+  // 옛 칸은 지운다: 두 칸을 함께 두면 어느 쪽이 정본인지 코드마다 달라진다.
+  for (const t of st.tasks as unknown as Record<string, unknown>[]) {
+    const legacy = t.accountId
+    // **조건은 "새 칸이 없다"가 아니라 "새 칸이 비어 있다"다.** 손으로 고치다 만 파일에는 두 칸이
+    // 함께 있다(`{"accountId":"a","accountIds":[]}`) — 이 이행이 있는 이유가 바로 그런 편집이다.
+    // `undefined` 만 보면 그 파일은 빈 목록 그대로 돌아오고 옛 칸은 아래에서 지워져 지정이 통째로
+    // 사라진다. 빈 배열이 "지정 없음"이라는 것은 이 브랜치가 곳곳에서 못박은 규칙이므로
+    // (Task.accountIds 의 JSDoc, createTask, rollChainFor) 여기서도 그 규칙으로 읽는다.
+    if (!(t.accountIds as unknown[] | undefined)?.length) {
+      if (typeof legacy === 'string' && legacy !== '') t.accountIds = [legacy]
+      // **옛 이름 아래 목록이 들어 있으면 그것도 받는다** — 값은 맞고 이름만 옛것인, 있을 수 있는
+      // 손질이다(이 파일은 손으로 고쳐진다). 버리면 사람이 적어 둔 순서가 조용히 사라진다.
+      // **읽을 수 없는 원소는 그 원소만 버린다.** 전부 아니면 전무로 보면 `["a", 3]` 이 읽히는 "a"
+      // 까지 함께 버리는데, 그것도 사람이 아끼려던 계정을 지우는 일이다. 남는 것이 하나도 없으면
+      // (빈 배열, 숫자만, 빈 문자열만) 지정으로 읽을 수 없으므로 칸을 만들지 않는다 — 빈 배열을
+      // 실으면 "지정 없음"과 값이 갈라지고, 그것을 체인으로 넘기면 롤링이 계정 아닌 것으로
+      // 갈아타려 한다.
+      else if (Array.isArray(legacy)) {
+        const ids = legacy.filter((x): x is string => typeof x === 'string' && x !== '')
+        if (ids.length > 0) t.accountIds = ids
+      }
+    }
+    delete t.accountId
+  }
+
+  // **provider 가 Run 에서 Task 로 내려간 뒤 남는 칸을 지운다.** 이제 provider 는 Task 의 계정이
+  // 정하고(orchestration/types.ts 의 Task.accountIds), 한 Run 에 두 provider 의 Task 가 섞일 수
+  // 있다 — Run 에 그 값이 남아 있으면 어느 쪽이 정본인지 코드마다 달라진다. 위 accountId 이행이
+  // 옛 칸을 지우는 것과 같은 이유다.
+  //
+  // **계정을 대신 채워 넣지는 않는다.** 옛 Run 의 provider 로 기본 계정을 찾아 넣을 수도 있지만,
+  // 그 기본 계정은 지금 무엇인지 이 자리에서 알 수 없고(계정 목록은 core 도 store 도 보지 않는다)
+  // 사람이 아끼려던 계정에 일을 보내는 쪽으로 틀릴 수 있다. 계정 없는 Task 는 자동 배치에서
+  // 빠지고 디스패치 시점에 Gate 를 연다 — 조용히 멈추지 않으므로 사람이 계정을 넣으면 곧바로 돈다.
+  for (const r of st.runs as unknown as Record<string, unknown>[]) delete r.provider
+
+  // **Job 과 회차를 가른다** (docs/2026-09-21-job-run-split-and-projects-design.md §5).
+  //
+  // 이 칸이 없으면 분리 이전의 파일이다. 판정 자체는 순수 층에 있다(core/orchestration/legacy.ts) —
+  // 배열을 받아 배열을 내는 일이라 파일 읽기와 섞을 이유가 없고, 그래야 fs 없이 테스트된다.
+  if (!Array.isArray((st as unknown as Record<string, unknown>).jobs)) {
+    const split = splitLegacyRuns(st.runs as unknown as LegacyRun[], st.tasks)
+    st.jobs = split.jobs
+    st.runs = split.runs
+    st.tasks = split.tasks
+  }
+
+  // **프로젝트 배열이 없는 파일을 받는다.** 이 칸이 생기기 전의 파일에는 없고, isValidState 에
+  // 넣지 않은 것도 그 때문이다 — 넣었으면 기존 파일이 전부 손상으로 읽혀 통째로 버려진다.
+  // 채워 넣지는 않는다: 어느 Run 이 어느 저장소의 것인지는 워크트리 레지스트리를 봐야 알 수 있고
+  // (view.ts 의 repoPathOf) 그것은 이 층이 모르는 것이다. 빈 채로 두면 옛 Run 은 경로 유도로
+  // 그대로 보이고(Run.projectId 의 주석), 목록은 사람이 프로젝트를 열 때 ipc.ts 가 채운다.
+  if (!Array.isArray((st as unknown as Record<string, unknown>).projects)) st.projects = []
+  return st
+}
+
 export class OrchestrationStore {
   private state: OrchState = emptyState()
   /** Serialization queue for disk writes (see save) */
@@ -227,64 +296,7 @@ export class OrchestrationStore {
     // unknown. Why there is no per-element schema validation: this is log-like data the app writes
     // itself, and if the shape is off, whole-file recovery is the right answer. The policy differs
     // from files such as accounts.json, where a bad shape risks corrupting an account.
-    const st = parsed as OrchState
-
-    // **이 칸이 목록이 되기 전에 만든 Task 를 옮긴다.** 이 파일은 프로세스보다 오래 살고, Run 은
-    // 30일(RUN_TTL_MS)까지 남는다 — 옮기지 않으면 앱을 올리는 순간 그 Task 들의 계정 지정이 조용히
-    // 사라지고, 사람이 아끼려던 계정에 일이 간다(dispatchAccount.ts 가 막으려는 바로 그것이다).
-    // 옛 칸은 지운다: 두 칸을 함께 두면 어느 쪽이 정본인지 코드마다 달라진다.
-    for (const t of st.tasks as unknown as Record<string, unknown>[]) {
-      const legacy = t.accountId
-      // **조건은 "새 칸이 없다"가 아니라 "새 칸이 비어 있다"다.** 손으로 고치다 만 파일에는 두 칸이
-      // 함께 있다(`{"accountId":"a","accountIds":[]}`) — 이 이행이 있는 이유가 바로 그런 편집이다.
-      // `undefined` 만 보면 그 파일은 빈 목록 그대로 돌아오고 옛 칸은 아래에서 지워져 지정이 통째로
-      // 사라진다. 빈 배열이 "지정 없음"이라는 것은 이 브랜치가 곳곳에서 못박은 규칙이므로
-      // (Task.accountIds 의 JSDoc, createTask, rollChainFor) 여기서도 그 규칙으로 읽는다.
-      if (!(t.accountIds as unknown[] | undefined)?.length) {
-        if (typeof legacy === 'string' && legacy !== '') t.accountIds = [legacy]
-        // **옛 이름 아래 목록이 들어 있으면 그것도 받는다** — 값은 맞고 이름만 옛것인, 있을 수 있는
-        // 손질이다(이 파일은 손으로 고쳐진다). 버리면 사람이 적어 둔 순서가 조용히 사라진다.
-        // **읽을 수 없는 원소는 그 원소만 버린다.** 전부 아니면 전무로 보면 `["a", 3]` 이 읽히는 "a"
-        // 까지 함께 버리는데, 그것도 사람이 아끼려던 계정을 지우는 일이다. 남는 것이 하나도 없으면
-        // (빈 배열, 숫자만, 빈 문자열만) 지정으로 읽을 수 없으므로 칸을 만들지 않는다 — 빈 배열을
-        // 실으면 "지정 없음"과 값이 갈라지고, 그것을 체인으로 넘기면 롤링이 계정 아닌 것으로
-        // 갈아타려 한다.
-        else if (Array.isArray(legacy)) {
-          const ids = legacy.filter((x): x is string => typeof x === 'string' && x !== '')
-          if (ids.length > 0) t.accountIds = ids
-        }
-      }
-      delete t.accountId
-    }
-
-    // **provider 가 Run 에서 Task 로 내려간 뒤 남는 칸을 지운다.** 이제 provider 는 Task 의 계정이
-    // 정하고(orchestration/types.ts 의 Task.accountIds), 한 Run 에 두 provider 의 Task 가 섞일 수
-    // 있다 — Run 에 그 값이 남아 있으면 어느 쪽이 정본인지 코드마다 달라진다. 위 accountId 이행이
-    // 옛 칸을 지우는 것과 같은 이유다.
-    //
-    // **계정을 대신 채워 넣지는 않는다.** 옛 Run 의 provider 로 기본 계정을 찾아 넣을 수도 있지만,
-    // 그 기본 계정은 지금 무엇인지 이 자리에서 알 수 없고(계정 목록은 core 도 store 도 보지 않는다)
-    // 사람이 아끼려던 계정에 일을 보내는 쪽으로 틀릴 수 있다. 계정 없는 Task 는 자동 배치에서
-    // 빠지고 디스패치 시점에 Gate 를 연다 — 조용히 멈추지 않으므로 사람이 계정을 넣으면 곧바로 돈다.
-    for (const r of st.runs as unknown as Record<string, unknown>[]) delete r.provider
-
-    // **Job 과 회차를 가른다** (docs/2026-09-21-job-run-split-and-projects-design.md §5).
-    //
-    // 이 칸이 없으면 분리 이전의 파일이다. 판정 자체는 순수 층에 있다(core/orchestration/legacy.ts) —
-    // 배열을 받아 배열을 내는 일이라 파일 읽기와 섞을 이유가 없고, 그래야 fs 없이 테스트된다.
-    if (!Array.isArray((st as unknown as Record<string, unknown>).jobs)) {
-      const split = splitLegacyRuns(st.runs as unknown as LegacyRun[], st.tasks)
-      st.jobs = split.jobs
-      st.runs = split.runs
-      st.tasks = split.tasks
-    }
-
-    // **프로젝트 배열이 없는 파일을 받는다.** 이 칸이 생기기 전의 파일에는 없고, isValidState 에
-    // 넣지 않은 것도 그 때문이다 — 넣었으면 기존 파일이 전부 손상으로 읽혀 통째로 버려진다.
-    // 채워 넣지는 않는다: 어느 Run 이 어느 저장소의 것인지는 워크트리 레지스트리를 봐야 알 수 있고
-    // (view.ts 의 repoPathOf) 그것은 이 층이 모르는 것이다. 빈 채로 두면 옛 Run 은 경로 유도로
-    // 그대로 보이고(Run.projectId 의 주석), 목록은 사람이 프로젝트를 열 때 ipc.ts 가 채운다.
-    if (!Array.isArray((st as unknown as Record<string, unknown>).projects)) st.projects = []
+    const st = migrateLoadedState(parsed as OrchState)
 
     // Captured here: the migrations above are in place, the cleanup below builds new objects
     const before: OrchState = st

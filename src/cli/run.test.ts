@@ -9,21 +9,23 @@ import {
   ensureTrailingNewline,
   applyStdin,
   clientTimeoutMs,
-  buildRequest,
+  argsForCall,
+  callHost,
   resolveGuidePath,
   readGuide,
-  readInfo,
   outputMode,
   renderErr,
   renderOk,
   writePendingReport
 } from './run'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
+import type { HostConnection } from '../core/host/connect'
+import type { ClientMessage, HostMessage } from '../core/host/protocol'
 import {
   parsePendingReport,
   pendingReportFileName,
   pendingReportTempName,
-  pendingReportsDirFrom
+  pendingReportsDirIn
 } from '../core/orchestration/pendingReports'
 
 describe('errorOutput', () => {
@@ -104,76 +106,22 @@ describe('clientTimeoutMs', () => {
   })
 })
 
-describe('buildRequest', () => {
-  it('POST /에 Authorization·X-Astera-Session 헤더와 {cmd, args} 본문을 담는다', () => {
-    const { url, init } = buildRequest({
-      port: 5173,
-      token: 'tok',
-      sessionId: 'sess_1',
-      cmd: 'ask',
-      args: { question: 'q' },
-      cwd: 'D:/irrelevant'
-    })
-    expect(url).toBe('http://127.0.0.1:5173/')
-    expect(init.method).toBe('POST')
-    expect(init.headers.authorization).toBe('Bearer tok')
-    expect(init.headers['x-astera-session']).toBe('sess_1')
-    expect(JSON.parse(init.body)).toEqual({ cmd: 'ask', args: { question: 'q' } })
-  })
-  it('세션 id가 없어도(오케스트레이터 프리앰블 미주입) 빈 문자열로 보낸다', () => {
-    const { init } = buildRequest({
-      port: 1,
-      token: 't',
-      sessionId: '',
-      cmd: 'help',
-      args: {},
-      cwd: 'D:/irrelevant'
-    })
-    expect(init.headers['x-astera-session']).toBe('')
-  })
-})
-
-describe('buildRequest — run-create의 --cwd 기본값 (task-13a)', () => {
-  // server.ts의 run-create는 --cwd 생략 시 process.cwd()로 메꾸지만 그건 Electron 메인
-  // 프로세스의 cwd라 CLI 프로세스와 무관하다 — CLI가 자기 cwd를 채워 보내야 한다.
+describe('argsForCall — run-create의 --cwd 기본값 (task-13a)', () => {
+  // run-create 는 --cwd 생략 시 process.cwd() 로 메꾸지만 그건 답하는 프로세스(Host)의 cwd 라
+  // CLI 프로세스와 무관하다 — CLI 가 자기 cwd 를 채워 보내야 한다.
   it('--cwd 없이 run-create를 보내면 CLI의 cwd를 args에 채운다', () => {
-    const { init } = buildRequest({
-      port: 1,
-      token: 't',
-      sessionId: 's',
-      cmd: 'run-create',
-      args: { objective: 'o' },
+    expect(argsForCall({ cmd: 'run-create', args: { objective: 'o' }, cwd: 'D:/my-cwd' })).toEqual({
+      objective: 'o',
       cwd: 'D:/my-cwd'
-    })
-    expect(JSON.parse(init.body)).toEqual({
-      cmd: 'run-create',
-      args: { objective: 'o', cwd: 'D:/my-cwd' }
     })
   })
   it('--cwd가 명시되면 CLI의 cwd보다 그것이 이긴다', () => {
-    const { init } = buildRequest({
-      port: 1,
-      token: 't',
-      sessionId: 's',
-      cmd: 'run-create',
-      args: { objective: 'o', cwd: 'D:/explicit' },
-      cwd: 'D:/my-cwd'
-    })
-    expect(JSON.parse(init.body)).toEqual({
-      cmd: 'run-create',
-      args: { objective: 'o', cwd: 'D:/explicit' }
-    })
+    expect(
+      argsForCall({ cmd: 'run-create', args: { objective: 'o', cwd: 'D:/explicit' }, cwd: 'D:/my-cwd' })
+    ).toEqual({ objective: 'o', cwd: 'D:/explicit' })
   })
   it('run-create가 아닌 명령에는 CLI의 cwd를 채우지 않는다', () => {
-    const { init } = buildRequest({
-      port: 1,
-      token: 't',
-      sessionId: 's',
-      cmd: 'task-list',
-      args: {},
-      cwd: 'D:/my-cwd'
-    })
-    expect(JSON.parse(init.body)).toEqual({ cmd: 'task-list', args: {} })
+    expect(argsForCall({ cmd: 'tasks-list', args: {}, cwd: 'D:/my-cwd' })).toEqual({})
   })
 })
 
@@ -217,29 +165,6 @@ describe('readGuide', () => {
   })
 })
 
-describe('readInfo', () => {
-  let dir: string
-  beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cli-info-'))
-  })
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true })
-  })
-  it('port·token JSON을 읽는다', async () => {
-    const p = path.join(dir, 'orch-info.json')
-    await fs.writeFile(p, JSON.stringify({ port: 1234, token: 'abc' }), 'utf8')
-    expect(readInfo(p)).toEqual({ ok: true, info: { port: 1234, token: 'abc' } })
-  })
-  it('파일이 없으면 명확한 에러를 낸다', () => {
-    expect(readInfo(path.join(dir, 'missing.json')).ok).toBe(false)
-  })
-  it('JSON이 깨졌으면 명확한 에러를 낸다', async () => {
-    const broken = path.join(dir, 'broken.json')
-    await fs.writeFile(broken, '{not json', 'utf8')
-    expect(readInfo(broken).ok).toBe(false)
-  })
-})
-
 describe('browser commands', () => {
   it('resolveGuidePath picks the browser guide when asked', () => {
     const r = resolveGuidePath({ args: {}, env: { ASTERA_SKILLS: 'D:/skills' }, guide: 'browser' })
@@ -257,15 +182,13 @@ describe('browser commands', () => {
   })
 })
 
-describe('writePendingReport — the report a closed app could not take', () => {
-  let dir: string
-  let infoPath: string
+describe('writePendingReport — the report a closed Host could not take', () => {
+  let profileDir = ''
   beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cli-pending-'))
-    infoPath = path.join(dir, 'orch-info.json')
+    profileDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cli-pending-'))
   })
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true })
+    await fs.rm(profileDir, { recursive: true, force: true })
   })
 
   const report = {
@@ -283,10 +206,10 @@ describe('writePendingReport — the report a closed app could not take', () => 
   }
 
   it('writes the report where the app will look for it', async () => {
-    const r = writePendingReport({ infoPath, ...report })
+    const r = writePendingReport({ profileDir, ...report })
     expect(r.ok).toBe(true)
     const written = (r as { ok: true; path: string }).path
-    expect(path.dirname(written)).toBe(pendingReportsDirFrom(infoPath))
+    expect(path.dirname(written)).toBe(pendingReportsDirIn(profileDir))
     expect(parsePendingReport(await fs.readFile(written, 'utf8'))).toEqual({
       queuedAt: report.queuedAt,
       sessionId: report.sessionId,
@@ -300,9 +223,9 @@ describe('writePendingReport — the report a closed app could not take', () => 
   // the reader would find an unparseable file. So the report appears under its final name only once
   // it is whole -- the same temporary-name-then-rename the orchestration store already uses.
   it('leaves no working file beside the report it wrote', async () => {
-    const r = writePendingReport({ infoPath, ...report })
+    const r = writePendingReport({ profileDir, ...report })
     expect((r as { ok: true; path: string }).path.endsWith('.json')).toBe(true)
-    expect(await fs.readdir(pendingReportsDirFrom(infoPath))).toEqual([
+    expect(await fs.readdir(pendingReportsDirIn(profileDir))).toEqual([
       path.basename((r as { ok: true; path: string }).path)
     ])
   })
@@ -311,32 +234,33 @@ describe('writePendingReport — the report a closed app could not take', () => 
     const name = pendingReportFileName({ queuedAt: report.queuedAt, nonce: report.nonce })
     // A directory standing exactly where the report has to land: the write goes through and the
     // rename cannot.
-    await fs.mkdir(path.join(pendingReportsDirFrom(infoPath), name), { recursive: true })
-    const r = writePendingReport({ infoPath, ...report })
+    await fs.mkdir(path.join(pendingReportsDirIn(profileDir), name), { recursive: true })
+    const r = writePendingReport({ profileDir, ...report })
     expect(r.ok).toBe(false)
-    expect(await fs.readdir(pendingReportsDirFrom(infoPath))).not.toContain(
+    expect(await fs.readdir(pendingReportsDirIn(profileDir))).not.toContain(
       pendingReportTempName(name)
     )
   })
 
   it('makes the folder on the first report — nothing else creates it', async () => {
-    writePendingReport({ infoPath, ...report })
-    expect((await fs.stat(pendingReportsDirFrom(infoPath))).isDirectory()).toBe(true)
+    writePendingReport({ profileDir, ...report })
+    expect((await fs.stat(pendingReportsDirIn(profileDir))).isDirectory()).toBe(true)
   })
 
   it('keeps two reports queued in the same millisecond apart', async () => {
-    writePendingReport({ infoPath, ...report })
-    writePendingReport({ infoPath, ...report, nonce: 'ffff0000' })
-    expect((await fs.readdir(pendingReportsDirFrom(infoPath))).length).toBe(2)
+    writePendingReport({ profileDir, ...report })
+    writePendingReport({ profileDir, ...report, nonce: 'ffff0000' })
+    expect((await fs.readdir(pendingReportsDirIn(profileDir))).length).toBe(2)
   })
 
   it('answers with an error instead of throwing when the queue cannot be written', async () => {
     // A file where the folder has to go: the last line of defence failing, which the caller has to
     // be able to tell the agent about rather than crash on.
-    await fs.writeFile(pendingReportsDirFrom(infoPath), 'in the way', 'utf8')
-    const r = writePendingReport({ infoPath, ...report })
+    await fs.mkdir(path.dirname(pendingReportsDirIn(profileDir)), { recursive: true })
+    await fs.writeFile(pendingReportsDirIn(profileDir), 'in the way', 'utf8')
+    const r = writePendingReport({ profileDir, ...report })
     expect(r.ok).toBe(false)
-    expect((r as { ok: false; error: string }).error).toContain(pendingReportsDirFrom(infoPath))
+    expect((r as { ok: false; error: string }).error).toContain(pendingReportsDirIn(profileDir))
   })
 })
 
@@ -396,5 +320,95 @@ describe('renderOk / renderErr', () => {
   it('사람에게는 봉투가 아니라 문장이다', () => {
     expect(renderErr('unknown run: nope', 'NOT_FOUND', 'human')).toBe('error: unknown run: nope')
     expect(JSON.parse(renderErr('x', 'NOT_FOUND', 'json')).error.code).toBe('NOT_FOUND')
+  })
+})
+
+describe('callHost — 명령 하나를 Host 에 묻는다', () => {
+  /** `connectHost` 가 돌려주는 것 중 이 함수가 쓰는 것만. 소켓 없이 순서를 재기 위한 것이다. */
+  const fakeConn = (): {
+    conn: HostConnection
+    sent: ClientMessage[]
+    answer(m: HostMessage): void
+    drop(): void
+  } => {
+    const sent: ClientMessage[] = []
+    const listeners = new Set<(m: HostMessage) => void>()
+    const closers = new Set<() => void>()
+    return {
+      sent,
+      answer: (m) => {
+        for (const cb of [...listeners]) cb(m)
+      },
+      drop: () => {
+        for (const cb of [...closers]) cb()
+      },
+      conn: {
+        hello: { host: '1', pid: 1, startedAt: 'T', features: ['orch'] },
+        call: (m) => sent.push(m),
+        onMessage: (cb) => {
+          listeners.add(cb)
+          return () => listeners.delete(cb)
+        },
+        onClose: (cb) => {
+          closers.add(cb)
+          return () => closers.delete(cb)
+        },
+        close: () => {}
+      }
+    }
+  }
+
+  it('명령과 인자와 세션을 한 줄로 보내고 그 답을 돌려준다', async () => {
+    const f = fakeConn()
+    const p = callHost({
+      conn: f.conn,
+      cmd: 'jobs-list',
+      args: { limit: 5 },
+      sessionId: 'sess_1',
+      timeoutMs: 1000
+    })
+    expect(f.sent[0]).toMatchObject({
+      t: 'orch-call',
+      cmd: 'jobs-list',
+      args: { limit: 5 },
+      session: 'sess_1'
+    })
+    const call = (f.sent[0] as { call: string }).call
+    f.answer({ t: 'orch-result', call, status: 200, body: { jobs: [] } })
+    expect(await p).toEqual({ status: 200, body: { jobs: [] } })
+  })
+
+  // 답은 자기 call 을 이름으로 부른다 — 남의 것을 자기 답으로 읽으면 안 된다.
+  it('다른 call 의 답은 자기 답이 아니다', async () => {
+    const f = fakeConn()
+    const p = callHost({ conn: f.conn, cmd: 'status', args: {}, sessionId: '', timeoutMs: 50 })
+    f.answer({ t: 'orch-result', call: 'someone_else', status: 200, body: { running: true } })
+    expect(await p).toEqual({ stuck: expect.stringContaining('did not answer status') })
+  })
+
+  // 답 전에 끊긴 것은 Host 가 사라진 것이다 — 보고가 파일에 적히는 쪽으로 가야 한다.
+  it('답 전에 연결이 끊기면 닿지 못한 것이다', async () => {
+    const f = fakeConn()
+    const p = callHost({ conn: f.conn, cmd: 'send', args: {}, sessionId: '', timeoutMs: 1000 })
+    f.drop()
+    expect(await p).toEqual({ unreachable: expect.stringContaining('closed the connection') })
+  })
+
+  // 시한을 넘긴 것은 연결은 됐는데 저쪽이 멈춘 것이다 — 그냥 실패이고, 보고를 적어 두지 않는다.
+  it('시한을 넘기면 멈춘 것으로 답한다', async () => {
+    const f = fakeConn()
+    expect(
+      await callHost({ conn: f.conn, cmd: 'ask', args: {}, sessionId: '', timeoutMs: 10 })
+    ).toEqual({ stuck: expect.stringContaining('within 10ms') })
+  })
+
+  // 끊긴 뒤에 오는 답은 없지만, 두 번 답하는 Host 에 두 번 resolve 되면 안 된다.
+  it('한 번만 답한다', async () => {
+    const f = fakeConn()
+    const p = callHost({ conn: f.conn, cmd: 'status', args: {}, sessionId: '', timeoutMs: 1000 })
+    const call = (f.sent[0] as { call: string }).call
+    f.answer({ t: 'orch-result', call, status: 200, body: 1 })
+    f.answer({ t: 'orch-result', call, status: 500, body: 2 })
+    expect(await p).toEqual({ status: 200, body: 1 })
   })
 })

@@ -4,7 +4,7 @@ import {
   queueableReportProblem,
   PENDING_REPORTS_DIR,
   isQueueableReport,
-  pendingReportsDirFrom,
+  pendingReportsDirIn,
   pendingReportFileName,
   pendingReportTempName,
   isAbandonedWorkingFile,
@@ -99,10 +99,9 @@ describe('isQueueableReport — which commands a file can stand in for', () => {
   })
 })
 
-describe('pendingReportsDirFrom', () => {
-  it('is a folder beside the info file the CLI already reads', () => {
-    const info = path.join('C:', 'u', 'orch', 'orch-info.json')
-    expect(pendingReportsDirFrom(info)).toBe(path.join('C:', 'u', 'orch', PENDING_REPORTS_DIR))
+describe('pendingReportsDirIn', () => {
+  it('is a folder under the profile every reader can name', () => {
+    expect(pendingReportsDirIn(path.join('C:', 'u'))).toBe(path.join('C:', 'u', 'orch', PENDING_REPORTS_DIR))
   })
 })
 

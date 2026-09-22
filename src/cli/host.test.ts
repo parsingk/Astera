@@ -3,7 +3,14 @@ import { promises as fs } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { hostStatus, hostStopResult, hostStartTargets, preparedRuntimeEntry, runHostCommand } from './host'
+import {
+  cliHostTarget,
+  hostStatus,
+  hostStopResult,
+  hostStartTargets,
+  preparedRuntimeEntry,
+  runHostCommand
+} from './host'
 import { userDataDir } from '../core/orchestration/cliDiscovery'
 import { hostAddress } from '../host/address'
 import { startHostServer, type HostServerDeps } from '../host/server'
@@ -239,6 +246,46 @@ describe('runHostCommand — host status against a real Host', () => {
     } finally {
       await fs.rm(home, { recursive: true, force: true })
     }
+  })
+})
+
+describe('cliHostTarget', () => {
+  const home = path.join('C:', 'Users', 'x')
+
+  it('환경변수가 없으면 프로필에서 계산한 주소다', () => {
+    const env = { APPDATA: path.join('C:', 'a') } as NodeJS.ProcessEnv
+    const target = cliHostTarget({ env, platform: process.platform, home })
+    expect(target.profileDir).toBe(userDataDir({ platform: process.platform, env, home }))
+    expect(target.address).toBe(
+      hostAddress({
+        profileDir: target.profileDir,
+        platform: process.platform,
+        tmpDir: os.tmpdir(),
+        protocol: HOST_PROTOCOL
+      }).address
+    )
+  })
+
+  // 앱이 띄운 세션은 자기를 띄운 Host 와 말해야 한다 — 설치본이 함께 떠 있어도 그쪽으로 새면 안 된다.
+  it('ASTERA_HOST 는 계산한 주소를 이긴다', () => {
+    const env = { APPDATA: path.join('C:', 'a'), ASTERA_HOST: '\\\\.\\pipe\\given' } as NodeJS.ProcessEnv
+    expect(cliHostTarget({ env, platform: process.platform, home }).address).toBe('\\\\.\\pipe\\given')
+  })
+
+  // 주소는 그 Host 가 어느 프로필을 쓰는지 말해 주지 않는다. 상태 파일과 보고 큐가 있는 곳은
+  // 여전히 프로필이 정한다.
+  it('주소를 지정해도 프로필은 프로필에서 온다', () => {
+    const env = { APPDATA: path.join('C:', 'a'), ASTERA_HOST: 'given' } as NodeJS.ProcessEnv
+    expect(cliHostTarget({ env, platform: process.platform, home }).profileDir).toBe(
+      userDataDir({ platform: process.platform, env, home })
+    )
+  })
+
+  // 빈 값은 "지정하지 않았다"와 같다 — 셔틀이 빈 문자열을 넣는 날 CLI 가 빈 주소로 접속하면 안 된다.
+  it('빈 ASTERA_HOST 는 없는 것과 같다', () => {
+    const env = { APPDATA: path.join('C:', 'a'), ASTERA_HOST: '' } as NodeJS.ProcessEnv
+    const computed = cliHostTarget({ env: { APPDATA: path.join('C:', 'a') }, platform: process.platform, home })
+    expect(cliHostTarget({ env, platform: process.platform, home }).address).toBe(computed.address)
   })
 })
 
