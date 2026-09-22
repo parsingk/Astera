@@ -3,6 +3,7 @@ import type {
   RendererApi,
   CoreEventChannel,
   CoreEvents,
+  HostStatus,
   UpdateCampaignInfo,
   UpdateStatus
 } from '../core/types'
@@ -304,6 +305,17 @@ const api = {
   },
   host: {
     status: invoke('host.status'),
+    /** Every change of the Host's status, as it happens. The row also polls, but a Host that stops
+     *  answering is news a person is waiting for right then — they are looking at the screen because
+     *  a session did not open — and a poll would leave them reading a stale "connected" for up to
+     *  half a minute (docs/2026-09-22-host-unresponsive-recovery-design.md F1). */
+    onStatus: (cb: (s: HostStatus) => void) => {
+      const l = (_e: unknown, s: HostStatus): void => cb(s)
+      ipcRenderer.on('host:status', l)
+      return (): void => {
+        ipcRenderer.removeListener('host:status', l)
+      }
+    },
     sessionsOutlivingApp: invoke('host.sessionsOutlivingApp'),
     survivesUpdate: invoke('host.survivesUpdate'),
     replace: invoke('host.replace'),

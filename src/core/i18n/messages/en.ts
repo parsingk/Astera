@@ -281,6 +281,18 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.info.hostRestartConfirmBodyNone': 'The Host is ended now and started again on the new version. It is holding nothing. Continue?',
   'settings.info.hostNotConnected': 'Not connected',
   'settings.info.hostNotConnectedWhy': 'Not connected · {detail}',
+  'settings.info.hostUnresponsive': 'Not answering · {detail}',
+  'settings.info.hostUnresponsiveWhat': 'New sessions are opening inside the app. Those end when the app closes.',
+  'settings.info.hostRuntimeIncomplete':
+    'Some of the files this Host runs from are gone. Left alone it will stop answering at the next session. It is repaired on its own once it is holding nothing, and restarting now does the same.',
+  'settings.info.hostRestartUnresponsiveConfirmTitle': 'End the Host and start another',
+  'settings.info.hostRestartUnresponsiveConfirmBody':
+    'The Host that is not answering is ended and another is started. The {kept} session(s) it was holding end with it. Continue?',
+  'settings.info.hostRestartUnresponsiveConfirmBodyNone':
+    'The Host that is not answering is ended and another is started. It was holding nothing. Continue?',
+  'status.hostUnresponsive': 'Host not answering',
+  'status.hostUnresponsiveTitle':
+    'The Host is not answering. New sessions open inside the app and end when it closes. Press to restart the Host.',
   'settings.slack.save': 'Save',
   'settings.slack.saved': 'Saved',
   'settings.slack.saveFailed': 'Could not save the Slack settings: {detail}',

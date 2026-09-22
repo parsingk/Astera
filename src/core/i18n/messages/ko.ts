@@ -327,6 +327,25 @@ export const ko = {
   'settings.info.hostRestartConfirmBodyNone': 'Host 를 지금 종료하고 새 버전으로 다시 시작합니다. 유지 중인 것은 없습니다. 계속할까요?',
   'settings.info.hostNotConnected': '연결 안 됨',
   'settings.info.hostNotConnectedWhy': '연결 안 됨 · {detail}',
+  // 답을 멈춘 Host. 연결이 끊긴 것과 다르다 — 끊긴 연결은 다시 붙지만 이쪽은 스스로 풀리지 않는다.
+  // 그래서 이 줄은 상태만 말하지 않고 지금 무슨 일이 벌어지는지(새 세션은 앱 안에서 열린다)와
+  // 그 대가(앱을 끄면 함께 끝난다)를 함께 말한다. 2026-09-22 에 사람이 본 것은 "연결 안 됨" 한 줄뿐이었다.
+  'settings.info.hostUnresponsive': '응답 없음 · {detail}',
+  // 버튼을 가리키는 말은 넣지 않는다. 그 버튼이 Host 를 못 끝내는 경우가 있고(실행 파일이 우리 것이
+  // 아니면 손대지 않는다), 그때 이 줄이 "버튼으로 끝낼 수 있습니다" 라고 말하면 바로 윗줄과 모순된다.
+  // 버튼은 바로 옆에 있으므로 가리킬 필요도 없다.
+  'settings.info.hostUnresponsiveWhat': '새 세션은 앱 안에서 열리고 있습니다. 그 세션들은 앱을 끄면 함께 끝납니다.',
+  // 런타임 파일이 사라진 Host. 지금은 멀쩡해 보여도 다음 세션에서 멎는다.
+  'settings.info.hostRuntimeIncomplete':
+    'Host 가 쓰는 파일 일부가 사라졌습니다. 이대로 두면 다음 세션에서 응답이 멈춥니다. 유지 중인 것이 없어지면 자동으로 고쳐지고, 지금 재시작해도 됩니다.',
+  'settings.info.hostRestartUnresponsiveConfirmTitle': 'Host 끝내고 다시 시작',
+  // 몇 개가 끝나는지는 앱이 자기 기록으로 센다. 답하지 않는 Host 에게 물어볼 수는 없다.
+  'settings.info.hostRestartUnresponsiveConfirmBody':
+    '응답하지 않는 Host 를 강제로 끝내고 새로 시작합니다. 그 Host 가 들고 있던 세션 {kept}개가 함께 끝납니다. 계속할까요?',
+  'settings.info.hostRestartUnresponsiveConfirmBodyNone':
+    '응답하지 않는 Host 를 강제로 끝내고 새로 시작합니다. 그 Host 가 들고 있던 것은 없습니다. 계속할까요?',
+  'status.hostUnresponsive': '호스트 응답 없음',
+  'status.hostUnresponsiveTitle': 'Host 가 응답하지 않습니다. 새 세션은 앱 안에서 열리고 앱을 끄면 함께 끝납니다. 눌러서 Host 를 다시 시작합니다.',
   'settings.slack.save': '저장',
   'settings.slack.saved': '저장됨',
   'settings.slack.saveFailed': 'Slack 설정을 저장하지 못했습니다: {detail}',

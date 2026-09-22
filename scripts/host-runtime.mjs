@@ -123,10 +123,6 @@ async function main() {
 
   writeFileSync(join(tree, 'node.exe'), exe)
   writeFileSync(join(tree, 'LICENSE.node.txt'), license)
-  // Which directory to copy, read by the app from the directory rather than from a constant in its
-  // own code — so the two can never disagree about which Node was shipped. It sits outside the
-  // versioned tree because it is the thing that names the version.
-  writeFileSync(join(OUT, 'runtime.json'), JSON.stringify({ node: NODE.version, app: appVersion }, null, 2) + '\n')
 
   // package.json is required: node-pty's own entry point is read from it. lib/ is the JavaScript,
   // prebuilds/win32-x64 the native half. The .pdb files are debug symbols for someone else's build —
@@ -149,6 +145,42 @@ async function main() {
   if (existsSync(join(built, 'chunks'))) {
     cpSync(join(built, 'chunks'), join(buildOut, 'chunks'), { recursive: true })
   }
+
+  /** Every file under `dir`, relative to it, with the separator the app compares against. */
+  const filesUnder = (dir, prefix = '') => {
+    const out = []
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}\\${e.name}` : e.name
+      if (e.isDirectory()) out.push(...filesUnder(join(dir, e.name), rel))
+      else out.push(rel)
+    }
+    return out.sort()
+  }
+
+  // Which directory to copy, and what a whole copy of it contains. Both read by the app from the
+  // directory rather than from a constant in its own code — so the two can never disagree about what
+  // was shipped. It sits outside the versioned tree because it is the thing that names the version.
+  //
+  // **The file list is walked from what was actually written, never typed out here.** A hand-kept
+  // list is one that goes stale the first time this script copies something new, and a list that is
+  // missing an entry is a runtime the app will call whole while the Host cannot spawn from it — which
+  // is the exact failure this exists to catch (2026-09-22). The two halves are listed apart because
+  // they go missing for different reasons: see `RuntimeFiles` in src/main/host/runtime.ts.
+  writeFileSync(
+    join(OUT, 'runtime.json'),
+    JSON.stringify(
+      {
+        node: NODE.version,
+        app: appVersion,
+        files: {
+          node: filesUnder(tree).filter((f) => !f.startsWith('builds\\')),
+          build: filesUnder(buildOut)
+        }
+      },
+      null,
+      2
+    ) + '\n'
+  )
 
   const total = (dir) => {
     let n = 0

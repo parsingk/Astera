@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated, hostSpeaksProcs } from './outdated'
+import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing } from './outdated'
 
 describe('hostIsOutdated', () => {
   it('is true when the Host is strictly older than the app', () => {
@@ -37,5 +37,22 @@ describe('hostSpeaksProcs', () => {
   // Nothing to ask, whatever the last hello said: there is no connection to send proc-list on.
   it('is false while disconnected, even if the last hello named the feature', () => {
     expect(hostSpeaksProcs({ connected: false, features: ['proc'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksPing', () => {
+  it('is true for a connected Host that named the ping feature', () => {
+    expect(hostSpeaksPing({ connected: true, features: ['proc', 'ping'] })).toBe(true)
+  })
+
+  // A Host from before the heartbeat logs a ping as an unknown message and says nothing back. Sending
+  // one anyway and reading that silence as a fault would call a perfectly well Host unresponsive.
+  it('is false for a Host that predates the heartbeat', () => {
+    expect(hostSpeaksPing({ connected: true, features: ['proc'] })).toBe(false)
+    expect(hostSpeaksPing({ connected: true, features: [] })).toBe(false)
+  })
+
+  it('is false while disconnected — there is nothing to ping on', () => {
+    expect(hostSpeaksPing({ connected: false, features: ['ping'] })).toBe(false)
   })
 })

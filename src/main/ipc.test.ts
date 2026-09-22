@@ -707,7 +707,7 @@ describe('conversationAttentionOf — the pane\'s one-shot read on mount', () =>
 
 describe('hostReplaceDue - when an outdated Host is replaced', () => {
   const empty = { sessions: 0, terminals: 0, runs: 0, chats: 0 }
-  const base = { outdated: true, holdings: empty, inFlight: false, quitting: false }
+  const base = { outdated: true, runtimeIncomplete: false, holdings: empty, inFlight: false, quitting: false }
 
   it('is due only when every gate is open: outdated, holding nothing, nothing in flight, not quitting', () => {
     expect(hostReplaceDue(base)).toBe(true)
@@ -715,6 +715,14 @@ describe('hostReplaceDue - when an outdated Host is replaced', () => {
 
   it('never replaces a Host that is not outdated', () => {
     expect(hostReplaceDue({ ...base, outdated: false })).toBe(false)
+  })
+
+  // A Host running out of a runtime that is missing files is one spawn away from stalling for good
+  // (2026-09-22), so it earns the same treatment as an outdated one: replaced the first moment doing
+  // so costs nobody their work. The repair itself happens in the spawn that follows.
+  it('replaces a Host whose runtime is missing files, for the same reason', () => {
+    expect(hostReplaceDue({ ...base, outdated: false, runtimeIncomplete: true })).toBe(true)
+    expect(hostReplaceDue({ ...base, outdated: false, runtimeIncomplete: true, holdings: { ...empty, runs: 1 } })).toBe(false)
   })
 
   it('waits while the Host holds anything at all, of any kind', () => {

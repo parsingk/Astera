@@ -79,12 +79,22 @@ function shippedFs(): FakeFs {
   )
 }
 
-function prepare(fs: FakeFs): ReturnType<typeof prepareHostRuntime> {
+/** What the shipped `runtime.json` lists: the files under the node directory that every build shares,
+ *  and the files under one build directory. Two lists because the two are missing for different
+ *  reasons — a build that is not there yet is an ordinary app update, and a node_modules that is not
+ *  there is damage. */
+const FILES = {
+  node: ['node.exe', 'node_modules\\node-pty\\lib\\index.js'],
+  build: ['host.js', 'chunks\\framing-abc.js']
+}
+
+function prepare(fs: FakeFs, files: typeof FILES = FILES): ReturnType<typeof prepareHostRuntime> {
   return prepareHostRuntime({
     paths,
     shipped: SHIPPED,
     appVersion: '1.3.21',
     stamp: '7788',
+    files,
     fs,
     log: (m) => fs.log.push(`log ${m}`)
   })
@@ -163,13 +173,13 @@ describe('staleBuildDirs', () => {
 describe('prepareHostRuntime', () => {
   it('falls back when no runtime was shipped — a partial build must not stop the app', () => {
     const fs = new FakeFs()
-    expect(prepare(fs)).toEqual({ ready: false, did: 'nothing' })
+    expect(prepare(fs)).toMatchObject({ ready: false, did: 'nothing' })
     expect(fs.log.some((l) => l.startsWith('log no host runtime shipped'))).toBe(true)
   })
 
   it('installs the whole runtime on a machine that has none', () => {
     const fs = shippedFs()
-    expect(prepare(fs)).toEqual({ ready: true, did: 'node' })
+    expect(prepare(fs)).toMatchObject({ ready: true, did: 'node' })
     expect(fs.exists(paths.exePath)).toBe(true)
     expect(fs.exists(paths.entryPath)).toBe(true)
     expect(fs.exists(paths.nodeDir + '\\node_modules\\node-pty\\lib\\index.js')).toBe(true)
@@ -185,37 +195,105 @@ describe('prepareHostRuntime', () => {
 
   it('writes only the build directory when the Node is already there — the ordinary update', () => {
     const fs = shippedFs().add(paths.exePath, paths.nodeDir + '\\node_modules\\node-pty\\lib\\index.js')
-    expect(prepare(fs)).toEqual({ ready: true, did: 'build' })
+    expect(prepare(fs)).toMatchObject({ ready: true, did: 'build' })
     expect(fs.log.some((l) => l.startsWith(`copy ${SHIPPED} ->`))).toBe(false)
     expect(fs.exists(paths.entryPath)).toBe(true)
   })
 
   it('does nothing at all when this version has run before', () => {
-    const fs = shippedFs().add(paths.exePath, paths.entryPath)
-    expect(prepare(fs)).toEqual({ ready: true, did: 'nothing' })
+    const fs = shippedFs()
+      .add(...FILES.node.map((f) => `${paths.nodeDir}\\${f}`))
+      .add(...FILES.build.map((f) => `${paths.buildDir}\\${f}`))
+    expect(prepare(fs)).toMatchObject({ ready: true, did: 'nothing' })
     expect(fs.log.filter((l) => l.startsWith('copy'))).toEqual([])
   })
 
   it('accepts a lost race: another instance produced the same runtime while this one copied', () => {
     const fs = shippedFs()
     fs.throwOn.add(`rename:${paths.nodeDir}.staging-7788`)
-    // What the winner left behind.
-    fs.add(paths.exePath)
-    expect(prepare(fs)).toEqual({ ready: true, did: 'build' })
+    // What the winner left behind — a whole node directory, because it landed by one rename.
+    fs.add(...FILES.node.map((f) => `${paths.nodeDir}\\${f}`))
+    expect(prepare(fs)).toMatchObject({ ready: true, did: 'build' })
   })
 
   it('falls back when the copy fails and nothing appeared, leaving no staging directory behind', () => {
     const fs = shippedFs()
     fs.throwOn.add(`copy:${SHIPPED}`)
-    expect(prepare(fs)).toEqual({ ready: false, did: 'nothing' })
+    expect(prepare(fs)).toMatchObject({ ready: false, did: 'nothing' })
     expect(fs.exists(paths.nodeDir + '.staging-7788')).toBe(false)
     expect(fs.log.some((l) => l.includes('could not be installed'))).toBe(true)
   })
 
   it('falls back when the entry cannot be written, even though node.exe is in place', () => {
-    const fs = shippedFs().add(paths.exePath)
+    const fs = shippedFs().add(...FILES.node.map((f) => `${paths.nodeDir}\\${f}`))
     fs.throwOn.add(`copy:${SHIPPED}\\builds\\1.3.21`)
-    expect(prepare(fs)).toEqual({ ready: false, did: 'nothing' })
+    expect(prepare(fs)).toMatchObject({ ready: false, did: 'nothing' })
+  })
+})
+
+// **The 2026-09-22 repair.** A session deleted `%LOCALAPPDATA%\astera` to clear the CLI's `bin` beside
+// it; Windows kept the two files the running Host had open — `node.exe` and `conpty.node` — and took
+// the rest, including node-pty's JavaScript. `exists(exePath)` was the only question this module
+// asked, so the restart that followed believed the runtime was whole, wrote only the build directory,
+// and left the Host on a node-pty that could no longer spawn anything (design D5, F6).
+describe('prepareHostRuntime — a runtime that is missing files', () => {
+  /** A machine where this version has already run: the node directory whole, and this build in it. */
+  function installed(): FakeFs {
+    return shippedFs()
+      .add(...FILES.node.map((f) => `${paths.nodeDir}\\${f}`))
+      .add(...FILES.build.map((f) => `${paths.buildDir}\\${f}`))
+  }
+
+  it('does nothing when every file the manifest names is there', () => {
+    const fs = installed()
+    expect(prepare(fs)).toMatchObject({ ready: true, did: 'nothing', incomplete: false })
+    expect(fs.log.filter((l) => l.startsWith('copy'))).toEqual([])
+  })
+
+  it('reinstalls the whole node directory when one of its files is gone', () => {
+    const fs = installed()
+    fs.paths.delete(`${paths.nodeDir}\\node_modules\\node-pty\\lib\\index.js`)
+    expect(prepare(fs)).toMatchObject({ ready: true, did: 'node', incomplete: false })
+    expect(fs.exists(`${paths.nodeDir}\\node_modules\\node-pty\\lib\\index.js`)).toBe(true)
+    expect(fs.log.some((l) => l.includes('is missing'))).toBe(true)
+  })
+
+  // `host.js` present and a chunk it requires gone is a Host that dies on its first line, and the
+  // `exists(entryPath)` test alone reads that as a build already in place.
+  it('rewrites the build directory when a chunk is gone, even though host.js is there', () => {
+    const fs = installed()
+    fs.paths.delete(`${paths.buildDir}\\chunks\\framing-abc.js`)
+    expect(prepare(fs)).toMatchObject({ ready: true, did: 'build', incomplete: false })
+    expect(fs.exists(`${paths.buildDir}\\chunks\\framing-abc.js`)).toBe(true)
+  })
+
+  // The directory most worth replacing is the one a Host is still running out of, and Windows will not
+  // delete a locked `node.exe`. Saying so is the point: the caller puts it in the status, the Host is
+  // replaced the first moment it holds nothing, and the repair happens then (design F6).
+  it('reports the runtime as incomplete when the old Host still holds it', () => {
+    const fs = installed()
+    fs.paths.delete(`${paths.nodeDir}\\node_modules\\node-pty\\lib\\index.js`)
+    fs.throwOn.add(`rm:${paths.nodeDir}`)
+    expect(prepare(fs)).toMatchObject({ ready: true, incomplete: true })
+    expect(fs.log.some((l) => l.includes('could not be repaired'))).toBe(true)
+  })
+
+  // A check that cannot be made is not a failure — the same rule host/nodePtyCheck.ts follows. An
+  // empty manifest is a fault in our own packaging, and refusing to start a Host over it would turn
+  // that into an app with no Host at all.
+  it('skips the check when the manifest names nothing', () => {
+    const fs = installed()
+    fs.paths.delete(`${paths.nodeDir}\\node_modules\\node-pty\\lib\\index.js`)
+    expect(prepare(fs, { node: [], build: [] })).toMatchObject({ ready: true, did: 'nothing', incomplete: false })
+    expect(fs.log.some((l) => l.includes('lists no files'))).toBe(true)
+  })
+
+  // An ordinary first install, and an ordinary app update. Neither is damage, and calling either one
+  // incomplete would put a repair notice on screen for every new machine and every update.
+  it('does not call a first install or an update incomplete', () => {
+    expect(prepare(shippedFs())).toMatchObject({ ready: true, did: 'node', incomplete: false })
+    const updating = shippedFs().add(...FILES.node.map((f) => `${paths.nodeDir}\\${f}`))
+    expect(prepare(updating)).toMatchObject({ ready: true, did: 'build', incomplete: false })
   })
 })
 

@@ -5,7 +5,7 @@
 // idle — so this module can be started for real inside a test at an address of that test's own.
 import net from 'node:net'
 import { promises as fs } from 'node:fs'
-import { HOST_PROTOCOL, HOST_FEATURE_PROC, type ClientMessage, type HostMessage } from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_FEATURE_PROC, HOST_FEATURE_PING, type ClientMessage, type HostMessage } from '../core/host/protocol'
 import { encodeLine, createLineReader } from './framing'
 import type { HostLog } from './log'
 
@@ -41,6 +41,11 @@ export interface HostServerDeps {
 export interface HostServer {
   close(): Promise<void>
   clients(): number
+  /** When this Host began serving, the same string its `hello` carries. Exposed so the entry point can
+   *  write it where an app that never gets a `hello` can still read it
+   *  (docs/2026-09-22-host-unresponsive-recovery-design.md F3) — one Host, one answer to "which one
+   *  is this", whether it is answering or not. */
+  startedAt: string
   /** Sends to every connected client. Slice 2's pty output takes this rather than a reply, because
    *  the app that attaches after a restart is not the app that spawned. */
   broadcast(m: HostMessage): void
@@ -164,7 +169,15 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // away from an app that cannot read them (core/host/protocol.ts), and broadcasting to one
           // that just announced a different number would walk around that.
           greetedSockets.add(socket)
-          send({ t: 'hello', protocol: HOST_PROTOCOL, host: deps.version, pid: process.pid, startedAt, features: [HOST_FEATURE_PROC] })
+          send({ t: 'hello', protocol: HOST_PROTOCOL, host: deps.version, pid: process.pid, startedAt, features: [HOST_FEATURE_PROC, HOST_FEATURE_PING] })
+          return
+        }
+        if (m?.t === 'ping') {
+          // Answered here rather than through `onMessage`, and deliberately carrying nothing: what the
+          // app is asking is whether this event loop is still turning. A pty spawn stuck inside
+          // node-pty stops it (2026-09-22), and then this answer simply never comes — which is the
+          // signal (docs/2026-09-22-host-unresponsive-recovery-design.md F2).
+          send({ t: 'pong', seq: m.seq })
           return
         }
         if (m?.t === 'retire') {
@@ -224,6 +237,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   armIdle()
 
   return {
+    startedAt,
     clients: () => live,
     broadcast: (m) => {
       const line = encodeLine(m)

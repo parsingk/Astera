@@ -1,16 +1,20 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createHostProcFactory } from './procFactory'
-import type { HostPtyTransport } from './ptyFactory'
+import { SPAWN_DEADLINE_MS, type HostPtyTransport } from './ptyFactory'
 import type { ClientMessage, HostMessage } from '../../core/host/protocol'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 
-const transport = (): HostPtyTransport & { sent: ClientMessage[]; connected: boolean; logs: string[]; deliver(m: HostMessage): void; hostGone(): void } => {
+const transport = (): HostPtyTransport & { sent: ClientMessage[]; connected: boolean; logs: string[]; unansweredWith: string[]; deliver(m: HostMessage): void; hostGone(): void } => {
   const subs = new Set<(m: HostMessage) => void>()
   const gone = new Set<() => void>()
   return {
     sent: [],
     connected: true,
     logs: [],
+    unansweredWith: [],
+    unanswered(what) {
+      this.unansweredWith.push(what)
+    },
     send(m) {
       if (!this.connected) return false
       this.sent.push(m)
@@ -178,5 +182,52 @@ describe('createHostProcFactory', () => {
     expect(p.outlivesApp).toBe(true)
     p.write('x')
     expect(t.sent).toEqual([{ t: 'proc-write', id: 'p9', line: 'x' }])
+  })
+})
+
+// ptyFactory's deadline, for the handle with no screen to print on. A chat session that never starts
+// shows the exit notice instead, and that notice reads `stderrTail` (session-failure visibility design
+// F2) — so the reason travels there rather than being dropped (design F4).
+describe('createHostProcFactory — a spawn the Host never answers', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+
+  it('ends the chat session at the deadline, with the reason on the exit', () => {
+    const t = transport()
+    const p = createHostProcFactory(t).factory('claude', [], { cwd: 'D:/p', env: {} })
+    let exit: { exitCode: number; stderrTail?: string } | null = null
+    p.onExit((e) => { exit = e })
+
+    vi.advanceTimersByTime(SPAWN_DEADLINE_MS - 1)
+    expect(exit).toBeNull()
+    vi.advanceTimersByTime(1)
+
+    expect(exit).toMatchObject({ exitCode: 1 })
+    expect(exit!.stderrTail).toContain('did not answer')
+    expect(t.unansweredWith).toEqual([`a proc spawn went unanswered for ${SPAWN_DEADLINE_MS}ms`])
+  })
+
+  it('does nothing at the deadline for a spawn that was answered', () => {
+    const t = transport()
+    const p = createHostProcFactory(t).factory('claude', [], { cwd: 'D:/p', env: {} })
+    let exit: { exitCode: number } | null = null
+    p.onExit((e) => { exit = e })
+    t.deliver({ t: 'proc-spawned', id: spawnedId(t), pid: 42 })
+
+    vi.advanceTimersByTime(SPAWN_DEADLINE_MS * 2)
+    expect(exit).toBeNull()
+    expect(t.unansweredWith).toEqual([])
+  })
+
+  it('carries the reason the Host refused a spawn onto the exit', () => {
+    const t = transport()
+    const p = createHostProcFactory(t).factory('claude', [], { cwd: 'D:/p', env: {} })
+    let exit: { exitCode: number; stderrTail?: string } | null = null
+    p.onExit((e) => { exit = e })
+    t.deliver({ t: 'proc-failed', id: spawnedId(t), error: 'node-pty is incomplete: worker/conoutSocketWorker.js is missing' })
+
+    expect(exit).toMatchObject({ exitCode: 1 })
+    expect(exit!.stderrTail).toContain('conoutSocketWorker.js is missing')
   })
 })

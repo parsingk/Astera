@@ -4,10 +4,14 @@
 //
 // Everything it needs arrives in the environment, because it has no `app.getPath('userData')` to ask.
 import childProcess from 'node:child_process'
+import { existsSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import * as pty from 'node-pty'
 import { hostAddress } from './address'
+import { nodePtyMissing } from './nodePtyCheck'
+import { hostPidFilePath, serializeHostPidFile } from '../core/host/pidFile'
 import { hideForkedConsoleWindows } from './childWindows'
 import { openHostLog } from './log'
 import { startHostServer, ADDRESS_TAKEN } from './server'
@@ -46,11 +50,36 @@ async function main(): Promise<void> {
   const log = openHostLog({ path: process.env.ASTERA_HOST_LOG ?? path.join(profileDir, 'host', 'host.log') })
   const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
 
+  // Where node-pty's own JavaScript lives, for the check below. `createRequire(__filename)` rather
+  // than `require.resolve` written bare: this file is bundled, and the explicit form is the one no
+  // bundler rewrites. Null when it cannot be worked out, which `nodePtyMissing` treats as "do not
+  // check" rather than as a failure.
+  const ptyLibDir = ((): string | null => {
+    try {
+      return path.dirname(createRequire(__filename).resolve('node-pty'))
+    } catch (err) {
+      log.write(`could not locate node-pty to check it: ${String(err)}`)
+      return null
+    }
+  })()
+
   // The Host is where node-pty lives now. `withExitedPtyGuard`'s job — swallowing a write or resize
   // to a pty that has already gone — is the registry's `live` check here instead: it knows which
   // sessions have exited, and the app across the socket does not.
   const registry = new PtyRegistry({
-    spawn: (file, args, opts) => pty.spawn(file, args, { name: 'xterm-256color', ...opts }),
+    spawn: (file, args, opts) => {
+      // **Checked here, before every spawn, and not once at startup.** The file can go missing while
+      // this Host is running — that is exactly what happened on 2026-09-22 — and the Host would not
+      // notice, because it never reads it again until a spawn needs it. Which is the moment it stops
+      // being able to tell anyone anything (see nodePtyCheck.ts for the mechanism). Two `existsSync`
+      // calls per session is nothing beside what a spawn already costs.
+      const missing = nodePtyMissing({ platform: process.platform, libDir: ptyLibDir, exists: existsSync })
+      // Thrown rather than returned: `PtyRegistry.open` already catches a spawn that throws and
+      // answers `pty-failed` with the message, which is the path this wants — the app shows the
+      // sentence on the terminal (ptyFactory.ts) instead of a session that never appears.
+      if (missing) throw new Error(`node-pty is incomplete: ${missing} is missing — the app repairs this at the next Host start`)
+      return pty.spawn(file, args, { name: 'xterm-256color', ...opts })
+    },
     log: (m) => log.write(m)
   })
   let handlePty: ReturnType<typeof attachPtyHost> | null = null
@@ -74,6 +103,14 @@ async function main(): Promise<void> {
   const leave = (why?: string): void => {
     // The idle and retire paths have already said why in the server's own log line; a signal has not.
     if (why) log.write(`${why} — leaving`)
+    // Before the close, so a Host that is on its way out is not offered up as one to end. A failure
+    // here costs nothing: the app checks the executable behind the pid before acting on it, and a
+    // record this Host left behind names a pid that is about to stop existing.
+    try {
+      rmSync(hostPidFilePath(profileDir), { force: true })
+    } catch {
+      /* the app validates what it reads there anyway */
+    }
     void server
       .close()
       .catch((err) => log.write(`the server did not close cleanly: ${String(err)}`))
@@ -104,6 +141,19 @@ async function main(): Promise<void> {
     const taken = err instanceof Error && err.message === ADDRESS_TAKEN
     log.write(taken ? 'another Host already serves this profile — leaving' : `could not listen: ${String(err)}`)
     process.exit(0)
+  }
+
+  // Written only once the address is ours: a Host that lost the bind race has nothing to say about
+  // who serves this profile, and a record from it would name the wrong process. Never fatal — the
+  // file is a convenience for the one case the handshake cannot cover (design F3), and a Host that
+  // could not write it still serves every session perfectly well.
+  try {
+    writeFileSync(
+      hostPidFilePath(profileDir),
+      serializeHostPidFile({ pid: process.pid, startedAt: server.startedAt, exe: process.execPath })
+    )
+  } catch (err) {
+    log.write(`could not record which process this Host is: ${String(err)}`)
   }
 
   handlePty = attachPtyHost({ registry, broadcast: (m) => server.broadcast(m) })

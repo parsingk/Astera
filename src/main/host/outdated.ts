@@ -5,7 +5,7 @@
 // host.js until something ends it. This is the fact that tells the app there is a newer one to run,
 // so it can replace the old Host the first moment doing so costs nothing (§4).
 import { compareVersions } from '../updatePolicy'
-import { HOST_FEATURE_PROC } from '../../core/host/protocol'
+import { HOST_FEATURE_PROC, HOST_FEATURE_PING } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
  *  cannot be parsed is **not** outdated: replacing a Host on a guess about what it is would be worse
@@ -23,4 +23,14 @@ export function hostIsOutdated(hostVersion: string | null, appVersion: string): 
  *  check, not an age check (chat-sessions design §6.5). */
 export function hostSpeaksProcs(status: { connected: boolean; features: readonly string[] }): boolean {
   return status.connected && status.features.includes(HOST_FEATURE_PROC)
+}
+
+/** Whether the connected Host answers pings. The heartbeat in `client.ts` runs only against one that
+ *  said so, which is the same capability check `hostSpeaksProcs` is and not an age check: an older
+ *  Host never answers a ping, and treating that silence as a fault would call a Host that is holding
+ *  a person's sessions perfectly well "unresponsive" and offer to end it
+ *  (docs/2026-09-22-host-unresponsive-recovery-design.md F2). Such a Host is judged by the deadline on
+ *  a request that does have an answer instead. */
+export function hostSpeaksPing(status: { connected: boolean; features: readonly string[] }): boolean {
+  return status.connected && status.features.includes(HOST_FEATURE_PING)
 }
