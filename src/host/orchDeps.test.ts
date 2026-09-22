@@ -166,6 +166,35 @@ describe('hostOrchDeps', () => {
       expect(refused).toEqual([])
     })
 
+    // 거절하면 검토자의 판정이 아무 데도 안 남는다. null 은 이 의존이 이미 가진 말이고, 그때
+    // 순수 층이 Gate 를 연다는 것도 선언에 적혀 있다(F28).
+    it('물어볼 수 없는 repair 대상은 null 로 내려앉는다 — 던지지 않는다', async () => {
+      const refused: string[] = []
+      const logs: string[] = []
+      const deps = hostOrchDeps(
+        base({ hasApp: () => false, onAppRequired: (n) => refused.push(n), log: (m) => logs.push(m) })
+      )
+      await expect(deps.repairTargetFor?.('t1')).resolves.toBeNull()
+      expect(refused).toEqual([])
+      expect(logs.some((l) => l.includes('repairTargetFor') && l.includes('APP_REQUIRED'))).toBe(true)
+    })
+
+    // 앱이 없는 것과 앱이 답을 안 하는 것은 부르는 쪽에게 같은 사실이다 — 하나의 조건이다.
+    it('앱이 답하지 못해도 같은 값으로 내려앉는다', async () => {
+      const logs: string[] = []
+      const deps = hostOrchDeps(
+        base({ act: vi.fn().mockRejectedValue(new AppUnreachable('did not answer in time')), log: (m) => logs.push(m) })
+      )
+      await expect(deps.repairTargetFor?.('t1')).resolves.toBeNull()
+      expect(logs.some((l) => l.includes('did not answer in time'))).toBe(true)
+    })
+
+    // 앱이 **답한** 실패는 물어보지 못한 것이 아니다 — 그것까지 삼키면 진짜 고장이 조용해진다.
+    it('앱이 답한 실패는 내려앉지 않고 그대로 던진다', async () => {
+      const deps = hostOrchDeps(base({ act: vi.fn().mockRejectedValue(new Error('repair.ts threw')) }))
+      await expect(deps.repairTargetFor?.('t1')).rejects.toThrow(/repair.ts threw/)
+    })
+
     it('결과를 안 받는 의존은 던지지도, 앱 문제로 표시하지도 않는다', () => {
       const refused: string[] = []
       const logs: string[] = []

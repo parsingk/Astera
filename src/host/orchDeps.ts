@@ -18,9 +18,24 @@ const OWNED = ['getState', 'setState', 'now', 'log', 'enabled', 'runningSessions
  */
 const PROPAGATES = [
   'startWorker', 'releaseWorker', 'backup', 'mergeWorktrees', 'removeWorktrees', 'startCoordinator',
-  'makeRunWorktree', 'listAccounts', 'readWorker', 'listRunConfigs', 'browserRun', 'repairOnce',
-  'repairTargetFor'
+  'makeRunWorktree', 'listAccounts', 'readWorker', 'listRunConfigs', 'browserRun', 'repairOnce'
 ] as const
+
+/**
+ * **Forwarded, and when it cannot be asked it answers the value its own contract already has.**
+ *
+ * `repairTargetFor` is the one member where refusing costs more than degrading. A refusal makes a
+ * review report answer CONFLICT, and then the reviewer's verdict is recorded **nowhere** — the worker
+ * reported and nothing is left of it. `null` is this dependency's own word for "no repair target",
+ * and the pure layer's answer to it is documented where the dependency is declared: it opens the
+ * `repairFailed` Gate, which a person sees. A Gate beats a lost verdict.
+ *
+ * So this is the contract the call site was written against rather than a behaviour invented for the
+ * Host — and it is a group rather than a special case so it cannot drift back out of the guard. The
+ * value is the fallback each name degrades to. **Cannot-be-asked is one condition**: no app attached
+ * and an app that will not answer are the same fact here, and both are logged.
+ */
+const DEGRADES = { repairTargetFor: null } as const
 
 /**
  * **Forwarded, and the command layer deliberately swallows a failure.** `probeLimit` logs and carries
@@ -66,18 +81,27 @@ const FIRE_AND_FORGET = [
  */
 const NOT_SUPPLIED = ['lang', 'browserEnabled', 'handoffEnabled', 'trackingEnabled', 'handoffs', 'sessionTasks'] as const
 
-const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET] as const
-const CLASSIFIED = [...OWNED, ...REMOTE, ...NOT_SUPPLIED] as const
+const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
+const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING]
 
-/** Whatever the lists above do not name between them lands here. */
-type Unlisted<T, Listed extends readonly PropertyKey[]> = Exclude<keyof T, Listed[number]>
+/** Every name the groups above classify between them. */
+type Classified =
+  | (typeof OWNED)[number]
+  | (typeof PROPAGATES)[number]
+  | (typeof SWALLOWED)[number]
+  | (typeof FIRE_AND_FORGET)[number]
+  | (typeof NOT_SUPPLIED)[number]
+  | keyof typeof DEGRADES
+
+/** Whatever the groups above do not name between them lands here. */
+type Unlisted<T, Listed extends PropertyKey> = Exclude<keyof T, Listed>
 /** If anything is left, the compiler names it here and the build stops. An unused alias on purpose —
  *  what it produces is not a value but the check itself (the same pattern as
  *  `core/orchestration/cliPublic.ts`, for the same reason: the only way a list like this fails is by
  *  falling behind, and a dependency that quietly joins the unsupplied six is a Job that runs and
  *  never converges). */
 type NothingLeft<T extends never> = T
-type _everyDependencyIsClassified = NothingLeft<Unlisted<OrchServerDeps, typeof CLASSIFIED>>
+type _everyDependencyIsClassified = NothingLeft<Unlisted<OrchServerDeps, Classified>>
 
 export function hostOrchDeps(a: {
   getState: OrchServerDeps['getState']
@@ -129,6 +153,25 @@ export function hostOrchDeps(a: {
       }
     }
 
+  /** Same forwarding, but a question that could not be put to the app answers `fallback` instead of
+   *  rejecting — see DEGRADES for why that is this dependency's own contract and not a Host
+   *  invention. One condition, not two: "no app attached" and "the app did not answer" are the same
+   *  fact to the caller. An `ok: false` from an app that *did* answer is the action's own failure and
+   *  still throws — that is not a question we could not ask. */
+  const degrading = (name: string, fallback: unknown) =>
+    async (...args: unknown[]): Promise<unknown> => {
+      try {
+        if (!a.hasApp()) throw refusal(name)
+        return await a.act(name, args)
+      } catch (err) {
+        if (!(err instanceof AppUnreachable)) throw err
+        // Logged every time. A Gate that opened because the app was unreachable has to be traceable
+        // to that — otherwise it reads as a verdict about the work.
+        a.log(`${name} could not be asked (${err.message}) — answering ${JSON.stringify(fallback)}`)
+        return fallback
+      }
+    }
+
   /** Same forwarding, with the refusal caught and written down instead of thrown. Returns nothing:
    *  the declared signature is `void`, and handing back a promise is what made this dangerous. */
   const forgetful = (name: string) =>
@@ -141,12 +184,11 @@ export function hostOrchDeps(a: {
     }
 
   const remote = Object.fromEntries(
-    REMOTE.map((name) => [
-      name,
-      (FIRE_AND_FORGET as readonly string[]).includes(name)
-        ? forgetful(name)
-        : forward(name, (PROPAGATES as readonly string[]).includes(name))
-    ])
+    REMOTE.map((name) => {
+      if ((FIRE_AND_FORGET as readonly string[]).includes(name)) return [name, forgetful(name)]
+      if (name in DEGRADES) return [name, degrading(name, DEGRADES[name as keyof typeof DEGRADES])]
+      return [name, forward(name, (PROPAGATES as readonly string[]).includes(name))]
+    })
   )
   return {
     getState: a.getState,

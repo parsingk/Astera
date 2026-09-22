@@ -3,7 +3,16 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHostOrch } from './orch'
-import { createJob, createTask, emptyState, startJobRun, type OrchState } from '../core/orchestration/state'
+import {
+  applyWorkerDone,
+  createJob,
+  createTask,
+  emptyState,
+  openDispatch,
+  openReviewDispatch,
+  startJobRun,
+  type OrchState
+} from '../core/orchestration/state'
 import type { OrchCaller } from '../core/host/orchProtocol'
 import type { HostMessage } from '../core/host/protocol'
 
@@ -156,6 +165,70 @@ describe('createHostOrch', () => {
     expect(JSON.stringify(r.body)).toContain('does not match')
     // 탐침이 못 돈 사실은 조용히 지나가지 않는다.
     expect(logs.some((l) => l.includes('limit probe failed') && l.includes('APP_REQUIRED'))).toBe(true)
+  })
+
+  /**
+   * **앱에 못 물어본 repair 대상은 거절이 아니라 `null` 이다**(F28).
+   *
+   * 거절하면 검토자의 판정이 **아무 데도 기록되지 않는다** — 워커는 보고했는데 남는 것이 없다.
+   * `null` 은 이 의존이 이미 가진 말이고("repair 대상 없음"), 그때 순수 층이 무엇을 하는지도
+   * 문서에 적혀 있다: repairFailed Gate. 사람이 보는 Gate 가 사라진 판정보다 낫다.
+   */
+  it('앱이 없어도 검토 판정은 기록되고 Gate 가 열린다 — 409 가 아니다', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p', convergence: {} }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(
+      run.state,
+      { runId: run.value.id, title: 't', spec: 's', deps: [], accountIds: ['accA'], reviewRequested: true },
+      NOW
+    )
+    if (!task.ok) throw new Error(task.error)
+    const impl = openDispatch(
+      task.state,
+      { taskId: task.value.id, provider: 'claude', accountId: 'accA', sessionId: 'sess1', cwd: 'D:/p', specPath: 'D:/p/s.md' },
+      NOW
+    )
+    if (!impl.ok) throw new Error(impl.error)
+    const done = applyWorkerDone(
+      impl.state,
+      { taskId: task.value.id, dispatchId: impl.value.id, outcome: 'succeeded', subject: 's', body: 'b', canReview: true },
+      NOW
+    )
+    if (!done.ok) throw new Error(done.error)
+    // **이 검토 Dispatch 에는 spec 파일이 없다.** 그래서 review.json 을 읽으러 가지 않는다(그 분기의
+    // 조건) — 없는 것을 repair 대상 하나로 좁혀, 이 테스트가 재는 것이 그것 하나가 되게 한다.
+    const rev = openReviewDispatch(
+      done.state,
+      { taskId: task.value.id, provider: 'codex', accountId: 'accC', sessionId: 'rev1', cwd: 'D:/p', specPath: '' },
+      NOW
+    )
+    if (!rev.ok) throw new Error(rev.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(rev.state), 'utf8')
+
+    const orch = orchOver({ hasApp: () => false })
+    const r = await orch.call({
+      cmd: 'send',
+      args: {
+        type: 'worker_done',
+        taskId: task.value.id,
+        dispatchId: rev.value.id,
+        outcome: 'failed',
+        subject: 'race',
+        body: 'b'
+      },
+      sessionId: 'rev1'
+    })
+    expect(r.status).toBe(200)
+    const saved = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+    // 판정이 기록됐다: 검토 Dispatch 가 닫혔고, Task 는 사람을 기다린다.
+    expect(saved.dispatches.find((d) => d.id === rev.value.id)?.endedAt).toBe(NOW)
+    expect(saved.tasks.find((t) => t.id === task.value.id)?.status).toBe('blocked')
+    expect(saved.gates.at(-1)?.kind).toBe('convergence-blocked')
+    expect(saved.gates.at(-1)?.question).toContain('no repair target')
+    // 그 Gate 가 왜 열렸는지 추적할 수 있어야 한다.
+    expect(logs.some((l) => l.includes('repairTargetFor') && l.includes('APP_REQUIRED'))).toBe(true)
   })
 
   // 앱이 없어 거절한 것은 남기지 않아야 할 흔적도 남기지 않고, 로그는 남긴다.
