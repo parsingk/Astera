@@ -224,11 +224,19 @@ token in a 0600 file. Moving to a pipe replaces that with OS permissions, and on
 automatic.
 
 **Windows named pipes are created readable by Everyone and ANONYMOUS by default.** Measured on this
-machine earlier in this work, where `address.ts` carried a comment asserting the opposite; the comment
-was corrected then. Today the exposure is bounded because the Host holds only terminals. Once
-orchestration rides the same pipe it becomes a door that spawns agents with the user's credentials in
-the user's repositories. **An explicit pipe ACL is part of S1**, not a follow-up. It is what §6 means by
-"Windows named-pipe ACL".
+machine, `D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;<user>)(A;;FR;;;WD)(A;;FR;;;AN)`.
+
+**No ACL work is needed, and the reason is already written down.** `server.ts` records it at
+`greetedSockets`: the grant to Everyone is `FILE_GENERIC_READ`, which carries no `FILE_WRITE_DATA`, so
+such a peer cannot send `hello` — and a peer that has not said hello is never added to the set the Host
+writes to. Orchestration inherits that property unchanged, because every reply it adds is addressed:
+`orch-result` goes to the socket that asked, and `orch-state` goes to the app client. A read-only peer
+gets a socket and silence, before and after this design.
+
+So §6's "Windows named-pipe ACL" is satisfied by a property the code already has rather than by new
+code. What S1 owes is a test that pins it: a client that never says hello receives nothing, including
+no `orch-state`. Without that test the property is an accident that a later refactor can remove, and
+the first sign would be another local account reading a Job's state.
 
 The unix socket path keeps its directory-permission story, and the descriptor file is written 0600, like
 the token file it replaces.
@@ -258,7 +266,7 @@ justification for the move, and if it does not work nothing else in S1 is worth 
 ## 11. Order of work for S1
 
 1. `hostSpawnPlan` and `resolveHostEntry` move to `core/host/`; `astera host start|status|stop`.
-2. The pipe ACL on Windows, before anything rides the pipe.
+2. The no-hello-no-output property pinned by a test, before anything rides the pipe (§9).
 3. `orch-call`/`orch-result` and the call table; `features: ['orch']`.
 4. The store moves; the Host loads and owns it; the app stops constructing it.
 5. `orch-act`/`orch-acted` and the remote dependency shim.
