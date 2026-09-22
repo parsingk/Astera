@@ -139,6 +139,12 @@ describe('공개 표면 — 두 낱말 명령', () => {
     })
   })
 
+  it('host 의 세 동사를 읽는다', () => {
+    expect(parseArgs(['host', 'status'])).toMatchObject({ cmd: 'host-status' })
+    expect(parseArgs(['host', 'start'])).toMatchObject({ cmd: 'host-start' })
+    expect(parseArgs(['host', 'stop'])).toMatchObject({ cmd: 'host-stop' })
+  })
+
   it('읽기 표면의 다섯 명사를 전부 잇는다', () => {
     expect(parseArgs(['projects', 'list'])).toMatchObject({ cmd: 'projects-list' })
     expect(parseArgs(['projects', 'find', '--path', 'D:/p'])).toMatchObject({

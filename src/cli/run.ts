@@ -11,6 +11,7 @@ import { parseArgs } from '../core/orchestration/cliArgs'
 import { infoPathFor } from '../core/orchestration/cliDiscovery'
 import { publicFor } from '../core/orchestration/cliPublic'
 import { humanFor, quietFor } from '../core/orchestration/cliHuman'
+import { runHostCommand } from './host'
 import {
   CLI_PROTOCOL,
   codeForStatus,
@@ -407,6 +408,19 @@ export async function main(): Promise<void> {
     // 다른 모든 응답과 같은 봉투로 나간다 — 이것만 예외면 `jq .ok` 가 이 한 경우에만 null 이 된다.
     out(renderOk(parsed.cmd, undeliveredReportNotice({ path: written.path }), mode))
     process.exit(0)
+  }
+
+  // **host 명령은 앱의 접속 정보를 안 읽는다.** 그 정보가 없는 것이 이 명령이 답해야 할 사실이고,
+  // 읽으려다 실패하면 물어본 것에 답하지 못한 채 끝난다.
+  if (parsed.cmd.startsWith('host-')) {
+    const { body, code } = await runHostCommand({
+      cmd: parsed.cmd,
+      env: process.env,
+      platform: process.platform,
+      home: homedir()
+    })
+    out(renderOk(parsed.cmd, body, mode))
+    process.exit(code)
   }
 
   const info = readInfo(infoPath)

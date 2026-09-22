@@ -43,6 +43,7 @@ const BROWSER_SUBCOMMANDS = new Set(['js', 'help'])
  * 떨어진다 — 아직 안 만들어졌을 뿐인데 앱과 CLI 의 버전이 갈렸다고 말하는 셈이다.
  */
 const NOUNS: Record<string, readonly string[]> = {
+  host: ['start', 'status', 'stop'],
   projects: ['list', 'get', 'find'],
   jobs: ['list', 'get', 'wait', 'run'],
   runs: ['list', 'get', 'wait', 'stop', 'resume'],
