@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { handleCommand, type OrchServerDeps } from './server'
+import { handleCommand, type OrchServerDeps } from '../../core/orchestration/command'
 import { emptyState, type OrchState } from '../../core/orchestration/state'
 
 const makeDeps = (): OrchServerDeps => {

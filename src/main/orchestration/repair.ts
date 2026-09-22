@@ -16,7 +16,7 @@ import {
 } from '../../core/orchestration/types'
 import type { KnowledgeFiles } from '../../core/knowledge/detect'
 import { buildSpecFile, repairWorkerPrompt } from './coordinator'
-import type { OrchServerDeps } from './server'
+import type { OrchServerDeps } from '../../core/orchestration/command'
 
 export interface RepairDeps {
   getState(): OrchState

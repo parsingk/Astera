@@ -2,12 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { handleCommand, handleExit, type OrchServerDeps } from './server'
-import { ensureProject } from '../../core/orchestration/projects'
-import { absPath } from '../../core/testPaths'
-import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
-import { OrchCoordinator, type CoordinatorDeps } from './coordinator'
-import { OrchestrationStore } from './store'
+import { handleCommand, handleExit, type OrchServerDeps } from './command'
+import { ensureProject } from './projects'
+import { absPath } from '../testPaths'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
+import { OrchCoordinator, type CoordinatorDeps } from '../../main/orchestration/coordinator'
+import { OrchestrationStore } from '../../main/orchestration/store'
 import {
   applyValidationResult,
   attachCoordinator,
@@ -17,12 +17,12 @@ import {
   openReviewDispatch,
   rekeyDispatch,
   type OrchState
-} from '../../core/orchestration/state'
-import { TaskValidator } from './validator'
-import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project } from '../../core/orchestration/types'
-import { parseArgs } from '../../core/orchestration/cliArgs'
-import { isQueueableReport } from '../../core/orchestration/pendingReports'
-import { checkConfigIdsOf } from '../../core/orchestration/convergence'
+} from './state'
+import { TaskValidator } from '../../main/orchestration/validator'
+import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project } from './types'
+import { parseArgs } from './cliArgs'
+import { isQueueableReport } from './pendingReports'
+import { checkConfigIdsOf } from './convergence'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 

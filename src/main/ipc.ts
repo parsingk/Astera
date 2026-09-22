@@ -78,12 +78,11 @@ import {
   knowledgeIn,
   specFileName
 } from './orchestration/coordinator'
+import { startOrchServer, type OrchServer } from './orchestration/server'
 import {
   handleCommand as orchHandleCommand,
-  startOrchServer,
-  type OrchServer,
   type OrchServerDeps
-} from './orchestration/server'
+} from '../core/orchestration/command'
 import { applyPendingReports, readPendingReports } from './orchestration/pendingDrain'
 import {
   PENDING_REPORTS_DIR,

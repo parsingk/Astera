@@ -29,7 +29,7 @@ import {
 import type { Dispatch } from '../../core/orchestration/types'
 import type { RollStateEvent } from '../../core/types'
 import { git } from '../../core/worktrees/git'
-import { handleExit, type OrchServerDeps } from './server'
+import { handleExit, type OrchServerDeps } from '../../core/orchestration/command'
 
 /** exit 처리를 미뤄 두는 창.
  *

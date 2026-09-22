@@ -31,7 +31,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { handleCommand, type OrchServerDeps } from './server'
+import { handleCommand, type OrchServerDeps } from '../../core/orchestration/command'
 import { TaskValidator, type ValidatorRunner } from './validator'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './repair'
 import { OrchestrationStore } from './store'

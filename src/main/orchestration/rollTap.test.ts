@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { OrchRollTap, EXIT_DEFER_MS } from './rollTap'
-import type { OrchServerDeps } from './server'
+import type { OrchServerDeps } from '../../core/orchestration/command'
 import type { RollStateEvent } from '../../core/types'
 import type { git } from '../../core/worktrees/git'
 import { buildCheckpoint } from '../../core/orchestration/checkpoint'
