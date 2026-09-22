@@ -43,6 +43,9 @@ docs/*
 # Published deliberately, same reason: the Host's unresponsive-state detection and recovery are built
 # from this design, and it is also the record of the 2026-09-22 incident it answers.
 !docs/2026-09-22-host-unresponsive-recovery-design.md
+# Published deliberately, same reason: moving the orchestrator into the Host is six steps over
+# several sessions, and each one reads the decomposition and the boundary from this design.
+!docs/2026-09-22-host-control-plane-design.md
 # Published deliberately: the SignPath Foundation requires the code signing policy to be reachable at
 # a public URL, and the README links to it.
 !docs/code-signing.md
