@@ -163,15 +163,26 @@ async function main() {
   }
   const packages = new Set()
   for (const file of reachable(join(built, 'host.js')))
-    for (const m of readFileSync(file, 'utf8').matchAll(/require\("([^".][^"]*)"\)/g))
-      if (!isBuiltin(m[1]) && m[1] !== 'node-pty') packages.add(m[1])
+    // Both quote styles: which one the bundler emits is its own business, and a scan that sees only
+    // one of them fails silently — the package is simply never shipped.
+    for (const m of readFileSync(file, 'utf8').matchAll(/require\(\s*(?:"([^".][^"]*)"|'([^'.][^']*)')\s*\)/g)) {
+      const name = m[1] ?? m[2]
+      if (!isBuiltin(name) && name !== 'node-pty') packages.add(name)
+    }
   for (const name of [...packages].sort()) {
     const from = join(ROOT, 'node_modules', name)
     if (!existsSync(from)) throw new Error(`the Host bundle requires ${name}, which is not installed — run npm install`)
     // One level deep on purpose. A package with dependencies of its own needs a real resolver, and a
     // half-copied tree would fail the same way the missing package does — loudly here is the place to
-    // find that out, not on a user's machine.
-    const nested = Object.keys(JSON.parse(readFileSync(join(from, 'package.json'), 'utf8')).dependencies ?? {})
+    // find that out, not on a user's machine. **All three kinds count**: an optional or peer
+    // dependency that the package actually requires at runtime is not optional to the Host, and
+    // reading only `dependencies` lets exactly that one through the gate.
+    const manifest = JSON.parse(readFileSync(join(from, 'package.json'), 'utf8'))
+    const nested = [
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.optionalDependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {})
+    ]
     if (nested.length > 0)
       throw new Error(`the Host bundle requires ${name}, which depends on ${nested.join(', ')} — this script copies one level only`)
     cpSync(from, join(tree, 'node_modules', name), { recursive: true })
