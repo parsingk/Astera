@@ -4169,6 +4169,43 @@ describe('handleCommand — CLI 인자 경로', () => {
     return { deps, older: (a.body as { id: string }).id, newer: (b.body as { id: string }).id }
   }
 
+  /**
+   * **listAccounts 의 await 동안 착륙한 변경을 덮지 않는다 — 쓰기 역전 회귀.**
+   *
+   * 이 의존은 이제 배열이거나 그 약속이다(Host 에서는 소켓을 건넌다). 약속이면 그것이 이 명령의
+   * 첫 양보 지점이고, 진입 스냅숏으로 커밋하면 그 사이 착륙한 것이 옛 배열로 되돌려진다 —
+   * run-create 가 resolveProjectRoot 뒤에 다시 읽는 것과 같은 자리, 같은 이유다. 그때 사라지는 것이
+   * 도는 Dispatch 라면 세션은 계속 도는데 기록만 없어진다.
+   */
+  it('listAccounts 의 await 동안 착륙한 변경을 덮지 않는다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    deps.listAccounts = async () => {
+      const before = deps.getState()
+      await deps.setState({
+        ...before,
+        messages: [
+          ...before.messages,
+          {
+            id: 'msg_concurrent',
+            runId,
+            type: 'status',
+            subject: 'listAccounts await 동안 도착한 워커 메시지',
+            body: 'b',
+            answered: false,
+            createdAt: NOW
+          }
+        ]
+      })
+      return [{ id: 'acc1', label: '계정1', provider: 'codex' }]
+    }
+    const r = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().messages.some((m) => m.id === 'msg_concurrent')).toBe(true)
+    expect(deps.getState().tasks).toHaveLength(1) // 만들 것은 만들었다
+  })
+
   it('task-create 는 --run 이 가리키는 Run 에 붙는다', async () => {
     const { deps, older } = await twoRuns()
     const r = await call(
@@ -4691,7 +4728,7 @@ describe('handleCommand — convergence', () => {
     // "validating 에 도달했다" 만 확인하고 아무 메시지도 읽지 않은 채 통과해, 그 확인이 실제로는
     // 아무것도 pin 하지 않았다).
     const failing: CheckResult[] = [{ configId: 'c1', name: 'cfg', status: 'failed', exitCode: 1, outputTail: 'boom' }]
-    const repair = deps.repairTargetFor?.(taskId) ?? undefined
+    const repair = (await deps.repairTargetFor?.(taskId)) ?? undefined
     const applied = applyValidationResult(deps.getState(), { taskId, results: failing, repair }, NOW)
     if (!applied.ok) throw new Error(applied.error)
     await deps.setState(applied.state)

@@ -289,8 +289,12 @@ export interface OrchServerDeps {
    *  세션이 살아 있으면 그 세션, 아니면 새 워커(설계 D3). applyValidationResult/applyReviewResult 의
    *  `repair` 로 그대로 넘긴다; 주입되지 않으면 넘기지 않고, convergence Run 에서 repair 를 열어야
    *  하는 판정은 그 순수 층이 Gate 로 보낸다(routeFailure, jobs.convergence.gate.repairFailed) —
-   *  오늘의 배선은 항상 넘기므로 닿지 않지만, 닿았을 때도 Task 가 validating 에 갇히지 않는다. */
-  repairTargetFor?(taskId: string): RepairTarget | null
+   *  오늘의 배선은 항상 넘기므로 닿지 않지만, 닿았을 때도 Task 가 validating 에 갇히지 않는다.
+   *
+   *  **값이거나 그 약속이다 — `listAccounts` 와 같은 이유다**(host control plane 설계 §5). 앱
+   *  안에서는 그 자리에서 답하고 Host 에서는 소켓을 건너 답하며, 명령 층은 어느 쪽인지 몰라야
+   *  한다. 부르는 자리는 하나뿐이고 거기서 await 한다. */
+  repairTargetFor?(taskId: string): RepairTarget | null | Promise<RepairTarget | null>
   /** 판정이 새로 연 repair Dispatch 의 부수 효과(repair.ts 의 performRepair) — spec 파일을 쓰고
    *  살아 있는 세션에 넣거나 새 워커를 띄운다. **커밋 뒤에만 부른다** — 이 파일의 다른 모든 부수
    *  효과와 같은 순서(Dispatch 먼저, 세션은 그다음)다. */
@@ -1227,6 +1231,11 @@ export async function handleCommand(
       // — 다른 여덟 자리는 전부 `args.run` 이다 — CLI 의 `--run` 이 조용히 무시되고 언제나 아래
       // 기본값으로 흘렀다. 오류도 나지 않으므로, 코디네이터가 만든 Task 가 사람이 방금 만든 Job 에
       // 섞여도 알아챌 방법이 없었다.
+      // **기본값은 진입 스냅숏에서 고른다 — 아래 재읽기와 다른 점이 여기 있다.** 재읽기는 커밋이
+      // 덮지 않게 하는 것이고, 이 줄은 "가장 최근 Run" 이 무엇을 뜻하느냐다. `latest` 에서 고르면
+      // 계정을 묻는 사이에 생긴 Run 이 그 뜻이 되어, 부르는 사람이 명령을 낸 순간에는 있지도 않던
+      // 곳에 Task 가 붙는다. 그 사이에 지워진 Run 을 가리키게 되는 경우는 아래 createTask 가
+      // `latest` 로 검증해 "unknown run" 으로 거절한다 — 매달린 참조가 남지 않는다.
       const runId = str(args.runId) ?? str(args.run) ?? latestRun(s)?.id
       const spec = str(args.spec)
       if (!runId) return bad('--run is required (no run exists)')
@@ -1890,6 +1899,11 @@ export async function handleCommand(
               deps.log?.(`review.json for dispatch=${dispatchId} could not be read: ${String(e)}`)
             }
           }
+          // **상태를 읽기 전에 기다린다.** repairTargetFor 도 이제 소켓을 건널 수 있고(그 선언),
+          // 인자는 왼쪽부터 평가되므로 객체 리터럴 안에서 await 하면 그 await 는 위의
+          // `deps.getState()` **뒤에** 일어난다 — 그 사이에 커밋된 것을 아래 setState 가 덮는다.
+          // 먼저 받아 두면 그 창이 없다.
+          const repairTarget = deps.repairTargetFor ? (await deps.repairTargetFor(taskId)) ?? undefined : undefined
           // 진입 스냅숏(s)이 아니라 지금 상태를 읽는다 — 위 탐침과 방금 파일 읽기의 await 동안 다른
           // 흐름이 커밋했을 수 있고, 낡은 스냅숏으로 부르면 setState 가 그것을 덮어 잃는다(아래 구현
           // 경로와 같은 이유).
@@ -1902,7 +1916,7 @@ export async function handleCommand(
               subject: str(args.subject) ?? '',
               body: str(args.body) ?? '',
               ...(issues !== undefined ? { issues } : {}),
-              ...(deps.repairTargetFor ? { repair: deps.repairTargetFor(taskId) ?? undefined } : {}),
+              ...(deps.repairTargetFor ? { repair: repairTarget } : {}),
               lang: deps.lang?.() ?? 'en'
             },
             now
