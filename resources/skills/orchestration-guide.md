@@ -432,7 +432,7 @@ help [--skills-dir <p>]
   its own Dispatch.
 - `ask --resume <questionId>` keeps waiting on that question id alone, with no `--task-id`,
   `--dispatch-id`, or `--question` (section 8).
-- `help` takes no arguments. It works without a server connection (`ASTERA_INFO`), but `ASTERA_SKILLS`
+- `help` takes no arguments. It works with no Host running, but `ASTERA_SKILLS`
   (or `--skills-dir`) must be present for it to find this document.
 
 ### 4.5 Recovery (coordinator only)
@@ -505,11 +505,11 @@ shell. Each `error.code` maps to exactly one of these:
 | `0` | — | The command succeeded (`ok: true`) |
 | `1` | `FAILED` | Something failed that none of the codes below describes |
 | `2` | `INVALID_ARGUMENTS` | The parser refused, or the app rejected the arguments (400) |
-| `3` | `HOST_NOT_RUNNING` | No connection info file, or the connection failed — the app is not running |
+| `3` | `HOST_NOT_RUNNING` | The Host could not be reached, and this command is not one the state file can answer |
 | `4` | `NOT_FOUND` | No such id (404) |
 | `5` | `PERMISSION_DENIED` | Refused for this session (403) — e.g. a worker calling a coordinator command |
 | `6` | `CONFLICT` | Rejected because of current state (409) — e.g. a Task that already has an open Dispatch |
-| `7` | `TIMEOUT` | The client's own deadline elapsed |
+| `7` | `TIMEOUT` | A deadline elapsed — this client's own, or the Host's `wait`, or a Host that is running and not answering |
 | `9` | `VERSION_MISMATCH` | This app does not have that command — the CLI and the app are different builds |
 | `10` | `RUN_FAILED` | A Job or run finished in failure |
 
@@ -523,7 +523,7 @@ this command giving up on waiting, and `error.details.progress` says how far it 
 the run is paused — both mean nothing moves until a person acts. `error.details.state` says which,
 and for a question `details.questionId` is the one to answer.
 
-**`3` and `4` are different questions.** `3` means the app is not there at all; `4` means it is there
+**`3` and `4` are different questions.** `3` means the orchestrator is not reachable at all; `4` means it is there
 and does not know that id. Do not retry a `4`.
 
 **`9` is not your mistake.** It means the `astera` on the PATH and the running app came from
@@ -755,9 +755,17 @@ meaningless and repeats the same failure indefinitely.
 | Variable | Value | Applies to |
 |---|---|---|
 | `ASTERA_CLI` | Absolute path to the CLI executable. Its directory is prepended to this session's PATH, so `astera` works too | Orchestrator and workers alike |
-| `ASTERA_INFO` | Absolute path to the connection info JSON (`{port, token}`) | Everyone (except `help`, which does not need it) |
+| `ASTERA_PROFILE_DIR` | Absolute path to the Astera profile folder this app is running on. `astera` derives the Host's address from it, and writes a report it could not deliver into that profile's queue | Everyone (except `help`, which needs no Host) |
 | `ASTERA_SESSION` | This session's app session id — the caller's identity | Everyone |
 | `ASTERA_SKILLS` | Absolute path to the directory holding this document | Everyone (`help` reads it from there) |
+
+**Two more variables exist, and neither is set for you.** `ASTERA_HOST` points `astera` at one
+specific Host by address; it overrides the address derived from `ASTERA_PROFILE_DIR` and **nothing
+else** — the state file and the report queue still come from the profile. `ASTERA_PROFILE=dev`
+selects the development profile when neither of the other two is set. So the order is: the profile is
+`ASTERA_PROFILE_DIR` if set, otherwise the platform's folder for `ASTERA_PROFILE`'s app name; and the
+address is `ASTERA_HOST` if set, otherwise the one derived from that profile. Inside a session the app
+sets `ASTERA_PROFILE_DIR` and you should not override any of the three.
 
 **Only this session's PATH is modified** — the app does not touch the user or system PATH. So a shell
 the app did not start has no `astera`, and even if it did, it owns no Dispatch and can do nothing as a

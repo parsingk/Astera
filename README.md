@@ -303,6 +303,7 @@ and a full bundle build.
 
 ## Documentation
 
+- [The `astera` command](docs/cli.md) — driving Jobs from a shell or CI: install, commands, JSON, exit codes
 - [Slack bot setup](docs/slack-bot-setup.md) — creating the app, tokens, and permissions
 - [Releasing](docs/releasing.md) — how a version gets cut and published
 - [Code signing policy](docs/code-signing.md) — who signs the releases, what is signed, and privacy

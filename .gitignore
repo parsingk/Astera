@@ -20,6 +20,8 @@ docs/*
 !docs/jobs.md
 !docs/how-it-works.md
 !docs/usage-guide.md
+# Published deliberately: `astera` is a public interface, and the README links to this reference.
+!docs/cli.md
 # Published deliberately: a design brief that outlives the branch it was written on, because the work
 # it describes is picked up in another session and often another worktree, where an ignored file does
 # not exist. It says on its face that nothing in it is decided yet.

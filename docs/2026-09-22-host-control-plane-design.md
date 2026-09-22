@@ -187,9 +187,25 @@ working (§31). What goes is the plumbing underneath.
 - `orch-info.json` and `writeInfo`
 - `cliDiscovery.infoPathFor` (`userDataDir` stays: the profile is how the address is computed)
 
-`ASTERA_INFO` becomes **`ASTERA_HOST`**, whose value is one address — no file, no token. Absent, it is
-computed from the profile. The spec's §2 asks that internal and public invocation differ only in where
-the connection information comes from; this reduces that difference to one variable.
+`ASTERA_INFO` goes. **What replaced it is `ASTERA_PROFILE_DIR`, not `ASTERA_HOST`** — an absolute path
+to the app's `app.getPath('userData')`, from which both the Host's address and the pending-report
+queue are derived. `ASTERA_HOST` still exists, but only as an override naming one specific Host by
+address.
+
+**Amended after step 7 (2026-09-22).** The plan above was one address and nothing else, and it is not
+enough. The `-dev` suffix on a development profile comes from `app.isPackaged` (`src/main/index.ts`)
+and no variable carried it, so a CLI left to recompute the profile answered `%APPDATA%\astera` for a
+dev build too: a worker spawned by the dev app reached the *installed* Host and dropped its
+undelivered reports into the installed profile's queue, where the installed app drained them
+(measured, F43). An address alone cannot fix that, because the queue's directory and the state file
+the CLI falls back to are both properties of the profile and an address does not say which profile
+the Host behind it uses — the same reason §6 above gives for re-deriving the queue from the profile.
+So the folder travels and the address is computed from it, exactly as the app computes it
+(`hostAddress`).
+
+The spec's §2 asks that internal and public invocation differ only in where the connection information
+comes from. That still holds: the difference is one variable, and the variable names a profile rather
+than an address.
 
 ## 8. Errors
 
@@ -272,7 +288,9 @@ justification for the move, and if it does not work nothing else in S1 is worth 
 5. `orch-act`/`orch-acted` and the remote dependency shim.
 6. `orch-state` and the app's mirror; the Jobs view's two new states.
 7. The CLI switches from HTTP to the pipe; the file fallback for reads with no Host.
-8. Removal: the HTTP server, `orch-info.json`, and `ASTERA_INFO` becoming `ASTERA_HOST`.
+8. Removal: the HTTP server, `orch-info.json`, and `ASTERA_INFO` giving way to `ASTERA_PROFILE_DIR`
+   (§7's amendment — the plan said `ASTERA_HOST`, and step 7 showed an address cannot answer where
+   the report queue lives).
 9. The guide, and `docs/cli.md` (§51).
 
 ## 12. Open questions
