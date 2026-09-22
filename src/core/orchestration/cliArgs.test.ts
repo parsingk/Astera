@@ -212,6 +212,15 @@ describe('없어진 이름', () => {
     expect('error' in r).toBe(true)
   })
 
+  // 두 표 다 맨 객체라 Object.prototype 의 이름에 무언가를 답한다. 막기 전에는
+  // `constructor` 가 "function Object() {…} 로 개명됐다" 는 문장을 받았고, RENAMED 를 지나면
+  // NOUNS 쪽에서 verbs.join 이 함수 위에서 터졌다. 모르는 명령은 모르는 명령으로 지나가야 한다.
+  it('Object.prototype 의 이름을 표에 있는 것으로 읽지 않는다', () => {
+    expect(parseArgs(['constructor'])).toMatchObject({ cmd: 'constructor' })
+    expect(parseArgs(['toString', '--json'])).toMatchObject({ cmd: 'toString', json: true })
+    expect(parseArgs(['hasOwnProperty'])).toMatchObject({ cmd: 'hasOwnProperty' })
+  })
+
   // 아직 공개 동사가 없는 명령은 표에 없다 — 안내가 404 를 가리키면 오타와 구별되지 않는다
   it('공개 이름이 아직 없는 명령은 그대로 돈다', () => {
     expect(parseArgs(['run-start', '--run', 'run_1'])).toMatchObject({ cmd: 'run-start' })

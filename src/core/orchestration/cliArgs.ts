@@ -59,10 +59,14 @@ export const NOUNS = {
   questions: ['list', 'get', 'answer']
 } as const
 
-/** The same table, keyed by a word the person typed rather than by one of the literal keys above. */
-const NOUN_VERBS: Record<string, readonly string[] | undefined> = NOUNS
-
-export const verbsOf = (noun: string): readonly string[] | undefined => NOUN_VERBS[noun]
+/** The same table, keyed by a word the person typed rather than by one of the literal keys above.
+ *
+ *  **`Object.hasOwn`, not a plain lookup.** The key is whatever the person typed, and a plain object
+ *  answers `constructor`, `toString` and `valueOf` with something inherited from `Object.prototype`.
+ *  Unguarded, `astera constructor` reached `verbs.join(...)` on a function and died with a TypeError
+ *  instead of exiting 2. The same reason guards `RENAMED` below. */
+export const verbsOf = (noun: string): readonly string[] | undefined =>
+  Object.hasOwn(NOUNS, noun) ? (NOUNS as Record<string, readonly string[]>)[noun] : undefined
 
 /**
  * 없어진 이름과 그것을 대신하는 이름.
@@ -81,6 +85,15 @@ export const RENAMED: Record<string, string> = {
   'gate-list': 'questions list'
 }
 
+/** The new name for an old one, or `undefined`. **Both readers go through this**, because the fact
+ *  has to be the same in both places even though the sentence built from it is not: `parseArgs`
+ *  points at the guide, and the usage path points at that command's own `--help`.
+ *
+ *  Guarded the same way `verbsOf` is: `RENAMED['constructor']` is a function, and unguarded it told
+ *  the person that `constructor` had been renamed to `function Object() { … }`. */
+export const renamedTo = (cmd: string): string | undefined =>
+  Object.hasOwn(RENAMED, cmd) ? RENAMED[cmd] : undefined
+
 export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   if (argv.length === 0) return { error: 'a command is required (try: help)' }
   let cmd = argv[0]
@@ -89,7 +102,7 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   // into `browser-js` / `browser-help` so the server and the tests see one token, like every other
   // command. The rest of the line parses as flags from the third word on.
   let first = 1
-  const renamed = RENAMED[cmd]
+  const renamed = renamedTo(cmd)
   if (renamed !== undefined) return { error: `${cmd} was renamed to \`${renamed}\` (astera help)` }
   const verbs = verbsOf(cmd)
   if (cmd === 'browser') {

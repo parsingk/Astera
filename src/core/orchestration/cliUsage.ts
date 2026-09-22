@@ -1,12 +1,13 @@
 // `astera --help` — the three levels of usage text, and the one table they are printed from.
 //
 // **The table is hand-kept, and it cannot be derived.** The flags a command takes are declared
-// nowhere: `handleCommand` reads them ad hoc inside each `case` (`str(args.id)`,
-// `args.ready === true`, `typeof args.timeoutMs === 'number'`), and `parseArgs` only knows how to
-// turn a token into a value, never which command wanted it. There is no declaration to generate
-// from, so the flags below are written by hand. That is the risk this file has to manage, because a
-// usage table that has drifted from the real flags is worse than no usage table at all: a person
-// acts on it.
+// nowhere. Most are read ad hoc inside `handleCommand`'s `case` for that command (`str(args.id)`,
+// `args.ready === true`, `typeof args.timeoutMs === 'number'`), and the rest are read in the CLI
+// before the call is ever made: `browser js --file` is opened in run.ts, and `--skills-dir` is read
+// by `resolveGuidePath` there. `parseArgs` only knows how to turn a token into a value, never which
+// command wanted it. There is no declaration to generate from, so the flags below are written by
+// hand. That is the risk this file has to manage, because a usage table that has drifted from the
+// real flags is worse than no usage table at all: a person acts on it.
 //
 // **Two things hold it honest, and they hold different halves.**
 //
@@ -20,13 +21,22 @@
 //    takes a value, and which are required. Prose and placeholder names are not compared — the two
 //    are written for different readers.
 //
-// **What neither holds:** that a flag listed here is a flag `handleCommand` actually reads. A flag
+// **What neither holds, one:** that a flag listed here is a flag the program actually reads. A flag
 // added to a `case` and to this table but not to the document fails the test; added to none of the
-// three it stays invisible. Only review covers that gap.
+// three it stays invisible. Only review covers that gap. `help`'s `--skills-dir` is a live example,
+// deliberately (see its entry).
+//
+// **What neither holds, two:** that this set *is* the public surface. The compiler pins
+// `USAGE` to `NOUNS` plus `TOP` plus `BROWSER_VERBS`, but `TOP` is written by hand here, and
+// `parseArgs` passes any first token it does not recognise straight through to the server. So a
+// future one-word command — `astera doctor`, say — compiles clean with no usage at all, and the
+// only thing that would notice is the doc guard, and only once someone had added it to
+// `docs/cli.md`. A new *verb* cannot slip through, because `NOUNS` is where verbs are declared; a
+// new *noun-less command* can. If one is added, add it to `TOP`.
 //
 // The text is plain, not JSON, and no part of it needs a Host. `--help` is for a person, and a
 // person asking what the commands are must get an answer with nothing running.
-import { BROWSER_VERBS, NOUNS, verbsOf } from './cliArgs'
+import { BROWSER_VERBS, NOUNS, renamedTo, verbsOf } from './cliArgs'
 
 /** `jobs-wait`, `host-start`, … — every noun/verb pair `NOUNS` declares. */
 type NounCommand = {
@@ -75,9 +85,16 @@ const TIMEOUT: UsageFlag = {
 export const USAGE: Record<PublicCommand, CommandUsage> = {
   version: { summary: 'CLI, app and protocol versions' },
   status: { summary: 'is the orchestrator there, and what is running' },
+  // `--skills-dir <path>` is real and is left out on purpose. It relocates the folder the guide is
+  // read from, overriding ASTERA_SKILLS, and it exists for the app and for development rather than
+  // for a person at a prompt: outside a session there is no guide to point it at. The guide itself
+  // documents it, which is the right place, because the guide is where the non-public commands are
+  // documented and this flag is one of them. docs/cli.md makes the same call, documenting the
+  // ASTERA_SKILLS variable and not the flag, which is why the doc guard cannot see the difference.
   help: {
     summary: 'the orchestration guide, in full',
-    detail: 'The reference agents read. It is a long document, not usage text.'
+    detail:
+      'The reference agents read. It is a long document, not usage text. It comes from the folder ASTERA_SKILLS names, which a session Astera starts sets for you.'
   },
 
   'host-start': { summary: 'start a Host if none is running (already running is success)' },
@@ -299,12 +316,22 @@ export function commandUsage(cmd: PublicCommand): string {
 }
 
 /**
- * The two tokens that mean "print usage instead of running this".
+ * The two tokens that mean "print usage instead of running this". Either of them, anywhere on the
+ * line, wins over the command.
  *
  * `-h` is the only single-dash token this program understands; `parseArgs` rejects every other one.
- * Neither can be swallowed as a flag's value: `parseArgs` never takes a `--`-prefixed token as a
- * value, so `--help` always stands alone, and `-h` would only be taken as one in
- * `--some-flag -h`, which no documented flag has a use for.
+ *
+ * **The two are not equally safe, and the difference is on purpose.** `--help` can never be
+ * mistaken for a flag's value: `parseArgs` only consumes a following token as a value when it does
+ * not start with `--`. `-h` can be, because that test excludes nothing else — so
+ * `astera questions answer --id q --answer -h` prints usage instead of recording the answer `-h`.
+ *
+ * That case is given up knowingly rather than guarded. Guarding it means deciding here which tokens
+ * `parseArgs` would have eaten, which is a second copy of its value rule sitting in another file,
+ * and it would also stop `astera tasks list --ready -h` from working, which someone would type. The
+ * cost of being wrong is one flag whose literal value is the two characters `-h`, no documented flag
+ * takes such a value, and the failure is loud: usage text arrives where an envelope was expected.
+ * `--help` is unambiguous everywhere and is what the documentation tells people to use.
  */
 const HELP_TOKENS = new Set(['--help', '-h'])
 
@@ -326,6 +353,13 @@ export function usageFor(argv: string[]): { text: string } | { error: string } |
   const [first, second, ...rest] = words
   if (rest.length > 0) return { error: `unexpected argument: ${rest[0]}` }
   if (first === undefined) return { text: rootUsage() }
+  // **The rename hint is checked here too, and for the same reason it exists at all.** It is aimed
+  // at an agent carrying the old vocabulary, and an agent that reads `astera help` every time it
+  // starts is exactly the caller likely to ask for help on the name it remembers. Answering
+  // `no usage for run-list` would drop the hint on the one audience it was written for.
+  const renamed = renamedTo(first)
+  if (renamed !== undefined)
+    return { error: `${first} was renamed to \`${renamed}\` (try: astera ${renamed} --help)` }
   const verbs = first === 'browser' ? BROWSER_VERBS : verbsOf(first)
   if (verbs !== undefined) {
     if (second === undefined) return { text: nounUsage(first, verbs) }
@@ -337,7 +371,7 @@ export function usageFor(argv: string[]): { text: string } | { error: string } |
   // Not a public command. The coordinator's own commands land here, and pointing at the guide is
   // the true answer for them: it is where they are documented. A typo lands here too, and the
   // command table is one flag away.
-  if (!Object.prototype.hasOwnProperty.call(USAGE, first))
+  if (!Object.hasOwn(USAGE, first))
     return {
       error: `no usage for ${first} (astera --help lists the commands, astera help documents the ones agents use)`
     }

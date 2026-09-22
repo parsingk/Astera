@@ -91,6 +91,25 @@ describe('cliUsage — 세 층', () => {
       error: expect.stringContaining('no usage for worker-start')
     })
   })
+
+  // 옛 이름을 들고 오는 것은 사람이 아니라 매번 `astera help` 를 읽고 시작하는 에이전트이고
+  // (cliArgs 의 RENAMED), 그쪽이야말로 자기가 기억하는 이름에 --help 를 붙일 쪽이다.
+  // parseArgs 앞에서 답하는 바람에 그 힌트를 주는 자리를 한 번 잃었다.
+  it('개명된 옛 이름에는 사용법이 없다고 하지 않고 새 이름을 알려 준다', () => {
+    expect(usageFor(['run-list', '--help'])).toEqual({
+      error: 'run-list was renamed to `jobs list` (try: astera jobs list --help)'
+    })
+  })
+
+  // Object.prototype 의 이름들. 막지 않으면 verbsOf 가 함수를 돌려주고 verbs.map 에서 죽는다 —
+  // 종료 코드 2 가 아니라 처리되지 않은 예외가 된다.
+  it('constructor·toString 같은 이름도 조용히 2로 끝난다', () => {
+    for (const name of ['constructor', 'toString', 'valueOf', 'hasOwnProperty']) {
+      expect(usageFor([name, '--help']), name).toEqual({
+        error: expect.stringContaining(`no usage for ${name}`)
+      })
+    }
+  })
 })
 
 // 텍스트 가드 — docs/cli.md 의 `## Command reference` 블록. ipcConvergenceWiring.test.ts 와 같은
