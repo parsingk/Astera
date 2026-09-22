@@ -82,7 +82,7 @@ astera
 ├─ status                  is the app there, and what is running
 ├─ projects list|get|find
 ├─ jobs     list|get|run|wait
-├─ runs     list|get|wait|cancel
+├─ runs     list|get|wait|stop|resume
 ├─ tasks    list
 ├─ questions list|get|answer
 └─ help                    the orchestration guide, as today
@@ -91,11 +91,21 @@ astera
 Phase A of the rollout (§42) is everything above except `jobs run`, `runs cancel` and
 `questions answer`; those land in Phase B once the read surface has been lived with.
 
-**Built, except `runs cancel`.** `jobs wait` and `runs wait` hold one request open until the run
-reaches an ending, and `jobs run` and `questions answer` are new names over `run-start`/`run-spawn`
-and `gate-resolve`. `runs cancel` is not built: this model has no cancelled run, so the command
-cannot be written without first deciding what one is, and that is a domain decision rather than a
-naming one. §15 carries the question.
+**Built.** `jobs wait` and `runs wait` hold one request open until the run reaches an ending;
+`jobs run` and `questions answer` are new names over `run-start`/`run-spawn` and `gate-resolve`.
+
+**`runs cancel` became `runs stop`, and the name is the decision.** This model has no cancelled run,
+so the command had to be given a meaning first (§15). What it does — close the run's open Dispatches
+and set `JobRun.paused` — is reversible: `run-resume` clears exactly that. Calling a reversible thing
+`cancel` tells a person it is not. It refuses while a Dispatch is held by `worker-retain`, the same
+refusal `worker-stop`, `run-pause` and `run-delete` already make, and cleared the same way.
+
+**`runs resume` had to come with it.** Nothing else clears `JobRun.paused`: `run-resume` works on the
+Job's flag and rejects a Job that is not scheduled, so without a second command `stop` would have been
+a door that only opens one way — and reversibility was the whole argument for the name. The app's own
+dispatcher already honours the flag (`appDriven` in schedule.ts returns false for a paused run), so
+stopping really does stop; what it does not stop is a coordinator calling `worker-start` itself, which
+is a different lever.
 
 **`wait` has four endings, and two of them are a person.** `completed` and `failed` are the work
 finishing; `waiting` (a question is open) and `paused` are the run stopping until someone acts.
@@ -360,7 +370,13 @@ that the report arrived. `applied: false` is still the half that says it did not
 2. **`tasks list` under a public name while `task-create` keeps its old one** is a deliberate seam,
    not a tidy one. If it reads badly in use, the answer is to make the rest of the task commands
    public too rather than to hide this one.
-3. **What is a cancelled run?** §5 lists `runs cancel` and this model has nothing to map it onto.
+3. ~~**What is a cancelled run?**~~ **Answered 2026-09-22: it is `runs stop`, and it is reversible.**
+   The command closes the run's open Dispatches and sets `JobRun.paused`; `run-resume` undoes it. The
+   word `cancel` was dropped because it promises something the behaviour does not do. The reasoning
+   that led there is kept below, because the same question returns whenever a new verb is proposed
+   for something the domain has no state for.
+
+   §5 lists `runs cancel` and this model has nothing to map it onto.
    There is `run-pause`, which exists only for scheduled Jobs because an ordinary Job has no firing
    to pause; there is `worker-stop`, which ends one Dispatch; and there is `run-delete`, which throws
    the record away. None of them is "stop this run". The candidates:
@@ -371,5 +387,4 @@ that the report arrived. `applied: false` is still the half that says it did not
      domain that the screen, the TTL sweep and `outcomeOf` all have to learn.
    - **Leave it out.** `worker-stop` per Dispatch already does the expensive half, and a person who
      wants the Job gone has `run-delete`.
-   Until this is answered the command does not exist, and the parser does not list the verb — naming
-   a verb that answers 501 would tell a person their build is out of date.
+   The first was chosen, with the name changed to match it.

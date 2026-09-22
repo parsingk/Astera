@@ -375,6 +375,24 @@ export function resumeSchedule(s: OrchState, jobId: string): Res<Job> {
   return ok({ ...s, jobs: s.jobs.map((j) => (j.id === jobId ? resumed : j)) }, resumed)
 }
 
+/**
+ * 세워 둔 회차를 다시 돌게 한다 — `runs stop` 이 세운 것을 푼다.
+ *
+ * **`resumeSchedule` 과 다른 층이다.** 그쪽은 예약(계획)의 `paused` 를 걷고 예약이 아닌 Job 을
+ * 거절한다. 이쪽은 회차 하나의 `paused` 를 걷으며, 예약이든 아니든 회차에는 다 있다. 둘을
+ * 한 함수로 겸하게 하면 "예약이 아니다" 라는 거절이 보통 Job 의 회차를 푸는 길까지 막는다.
+ *
+ * paused 를 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이 코드베이스는
+ * 해당 없는 칸을 아예 두지 않는 관례다(resumeSchedule 과 같다).
+ */
+export function resumeRun(s: OrchState, runId: string): Res<JobRun> {
+  const run = s.runs.find((r) => r.id === runId)
+  if (!run) return err(`unknown run: ${runId}`)
+  if (!run.paused) return ok(s, run)
+  const { paused: _drop, ...resumed } = run
+  return ok({ ...s, runs: s.runs.map((r) => (r.id === runId ? resumed : r)) }, resumed)
+}
+
 export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<JobRun> {
   const run = s.runs.find((r) => r.id === id)
   if (!run) return err(`unknown run: ${id}`)

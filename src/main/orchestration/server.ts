@@ -30,6 +30,7 @@ import {
   attachCoordinator,
   pauseSchedule,
   resumeSchedule,
+  resumeRun,
   setRunWorktree,
   type OrchState,
   type RepairTarget,
@@ -820,6 +821,54 @@ export async function handleCommand(
         runId: run?.id ?? null,
         progress: run ? progressOf(cur, run.id) : { done: 0, total: 0 }
       })
+    }
+    /**
+     * 이 회차를 멈춘다 (공개 CLI 설계 §5·§15).
+     *
+     * **`cancel` 이 아니라 `stop` 인 이유.** 이 모델에는 "취소된 회차" 가 없고, 여기서 하는 일은
+     * 되돌릴 수 있다 — 워커를 닫고 회차를 세우며, `run-resume` 이 푸는 것과 같은 상태다.
+     * 되돌릴 수 있는 것을 취소라고 부르면 사람이 되돌릴 수 없다고 읽는다.
+     *
+     * **붙잡아 둔 세션은 죽이지 않는다.** worker-retain 은 사람이 "이 세션을 살려 두어라" 고 말한
+     * 것이다. worker-stop·run-pause·run-delete 가 같은 이유로 같은 거절을 하고, 푸는 법도
+     * 같다(worker-release).
+     *
+     * **세우는 것까지 해야 멈춘다.** Dispatch 만 닫으면 빈 자리에 그 회차의 다음 ready Task 가
+     * 곧바로 뜨고(JobRun.paused 의 주석), 멈췄다고 말해 놓고 계속 도는 것이 된다.
+     */
+    case 'runs-stop': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const run = s.runs.find((r) => r.id === id)
+      if (!run) return notFound(`unknown run: ${id}`)
+      const mine = new Set(s.tasks.filter((t) => t.runId === id).map((t) => t.id))
+      const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt && mine.has(d.taskId))
+      const retained = open.filter((d) => d.retained)
+      if (retained.length > 0)
+        return conflict(
+          `refusing to stop while ${retained.length} dispatch(es) are held by worker-retain — release them first`
+        )
+      for (const d of open) await deps.releaseWorker({ dispatchId: d.id })
+      const stopped = new Set(open.map((d) => d.id))
+      const latest = deps.getState()
+      await deps.setState({
+        ...latest,
+        dispatches: latest.dispatches.map((d) =>
+          stopped.has(d.id)
+            ? { ...d, workerState: 'stopped' as const, endedAt: now, closedBy: 'stop' as const }
+            : d
+        ),
+        runs: latest.runs.map((r) => (r.id === id ? { ...r, paused: true } : r))
+      })
+      return okBody({ runId: id, stopped: open.length, paused: true })
+    }
+    /** 세워 둔 회차를 다시 돌게 한다. **`runs stop` 이 만든 상태를 푸는 유일한 길이다** —
+     *  기존 `run-resume` 은 예약(계획)의 것만 걷고 예약이 아닌 Job 을 거절한다. 되돌릴 수 있다는
+     *  것이 `stop` 이라는 이름의 근거이므로, 푸는 길이 없으면 그 이름이 거짓이 된다. */
+    case 'runs-resume': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      return commit(resumeRun(s, id))
     }
     case 'runs-get': {
       const id = str(args.id)

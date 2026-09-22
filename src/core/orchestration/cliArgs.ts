@@ -45,7 +45,7 @@ const BROWSER_SUBCOMMANDS = new Set(['js', 'help'])
 const NOUNS: Record<string, readonly string[]> = {
   projects: ['list', 'get', 'find'],
   jobs: ['list', 'get', 'wait', 'run'],
-  runs: ['list', 'get', 'wait'],
+  runs: ['list', 'get', 'wait', 'stop', 'resume'],
   tasks: ['list'],
   questions: ['list', 'get', 'answer']
 }

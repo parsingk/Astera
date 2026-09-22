@@ -5072,6 +5072,94 @@ describe('jobs wait / runs wait', () => {
   })
 })
 
+describe('runs stop', () => {
+  const withWorker = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    runId: string
+    dispatchId: string
+  }> => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    const w = await call(deps, 'worker-start', {
+      task: (t.body as { id: string }).id,
+      agent: 'codex',
+      account: 'acc1'
+    })
+    return { deps, runId, dispatchId: (w.body as { dispatchId: string }).dispatchId }
+  }
+
+  // Dispatch 만 닫으면 빈 자리에 다음 ready Task 가 곧바로 뜬다 — 멈췄다고 말해 놓고 계속 돈다
+  it('열린 워커를 닫고 회차를 세운다', async () => {
+    const { deps, runId, dispatchId } = await withWorker()
+    const r = await call(deps, 'runs-stop', { id: runId })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ runId, stopped: 1, paused: true })
+    const after = deps.getState()
+    expect(after.dispatches.find((d) => d.id === dispatchId)?.workerState).toBe('stopped')
+    expect(after.runs.find((x) => x.id === runId)?.paused).toBe(true)
+  })
+
+  // 되돌릴 수 있는 것이 이 명령이 stop 인 이유다 — run-resume 이 같은 칸을 푼다
+  it('멈춘 회차는 wait 에서 끝으로 나온다', async () => {
+    const { deps, runId } = await withWorker()
+    await call(deps, 'runs-stop', { id: runId })
+    expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 120 })).body).toMatchObject({
+      state: 'paused'
+    })
+  })
+
+  // 사람이 "이 세션을 살려 두어라" 고 말한 것이다. worker-stop 과 run-delete 가 같은 거절을 한다
+  it('붙잡아 둔 세션이 있으면 거절하고 푸는 법을 말한다', async () => {
+    const { deps, runId, dispatchId } = await withWorker()
+    await call(deps, 'worker-retain', { dispatch: dispatchId })
+    const r = await call(deps, 'runs-stop', { id: runId })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain('worker-retain')
+    expect(deps.getState().runs.find((x) => x.id === runId)?.paused).toBeUndefined()
+  })
+
+  // **되돌릴 수 있다는 것이 stop 이라는 이름의 근거다.** 푸는 길이 없으면 그 이름이 거짓이 된다 —
+  // 기존 run-resume 은 예약(계획)의 것만 걷고 예약이 아닌 Job 을 거절한다.
+  it('runs resume 이 그것을 푸는 유일한 길이다', async () => {
+    const { deps, runId } = await withWorker()
+    await call(deps, 'runs-stop', { id: runId })
+    // 예약이 아니므로 계획 쪽 명령은 이것을 풀지 못한다
+    const jobId = deps.getState().runs.find((r) => r.id === runId)!.jobId
+    expect((await call(deps, 'run-resume', { run: jobId })).status).toBe(400)
+    expect(deps.getState().runs.find((r) => r.id === runId)?.paused).toBe(true)
+
+    expect((await call(deps, 'runs-resume', { id: runId })).status).toBe(200)
+    expect(deps.getState().runs.find((r) => r.id === runId)?.paused).toBeUndefined()
+    expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 120 })).body).toMatchObject({
+      state: 'timeout'
+    })
+  })
+
+  it('세우지 않은 것을 풀어도 말이 없다', async () => {
+    const { deps, runId } = await withWorker()
+    expect((await call(deps, 'runs-resume', { id: runId })).status).toBe(200)
+    // 순수 층의 `unknown …` 은 commit 이 404 로 가른다 — 없는 id 와 잘못된 인자는 다른 일이다
+    expect((await call(deps, 'runs-resume', { id: 'nope' })).status).toBe(404)
+    expect((await call(deps, 'runs-resume')).status).toBe(400)
+  })
+
+  it('열린 워커가 없어도 세운다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const r = await call(deps, 'runs-stop', { id: runId })
+    expect(r.body).toMatchObject({ runId, stopped: 0, paused: true })
+  })
+
+  it('없는 회차는 404, id 가 없으면 400 이다', async () => {
+    const deps = makeDeps()
+    expect((await call(deps, 'runs-stop', { id: 'nope' })).status).toBe(404)
+    expect((await call(deps, 'runs-stop')).status).toBe(400)
+  })
+})
+
 describe('jobs run / questions answer', () => {
   // 새 이름이지 새 동작이 아니다 — 사이드바의 '실행' 과 다시 돌리기를 한 명령으로 묶는다
   it('무장하지 않은 계획은 첫 회차를 만들며 시작한다', async () => {

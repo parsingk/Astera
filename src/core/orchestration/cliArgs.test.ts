@@ -156,6 +156,8 @@ describe('공개 표면 — 두 낱말 명령', () => {
     expect(parseArgs(['jobs', 'wait', '--id', 'job_1'])).toMatchObject({ cmd: 'jobs-wait' })
     expect(parseArgs(['jobs', 'run', '--id', 'job_1'])).toMatchObject({ cmd: 'jobs-run' })
     expect(parseArgs(['runs', 'wait', '--id', 'run_1'])).toMatchObject({ cmd: 'runs-wait' })
+    expect(parseArgs(['runs', 'stop', '--id', 'run_1'])).toMatchObject({ cmd: 'runs-stop' })
+    expect(parseArgs(['runs', 'resume', '--id', 'run_1'])).toMatchObject({ cmd: 'runs-resume' })
     expect(parseArgs(['questions', 'answer', '--id', 'g', '--answer', 'A'])).toMatchObject({
       cmd: 'questions-answer',
       args: { id: 'g', answer: 'A' }
