@@ -29,6 +29,40 @@ const hasControlChar = (s: string): boolean => {
   }
   return false
 }
+/** Why a request id cannot be used, or `null`. **Both ends of the store ask this and get the same
+ *  sentence**: the claim that writes a receipt, and `requests-show`, which reads one. Reading is not
+ *  the harmless half — the map key is the session id and the request id joined by a NUL, so a NUL in
+ *  the id read back could name a receipt belonging to a session whose own id carries one. */
+const badRequestId = (id: string): string | null =>
+  id.length === 0 || id.length > REQUEST_ID_MAX || hasControlChar(id)
+    ? `bad request id: it must be 1 to ${REQUEST_ID_MAX} characters with no control characters`
+    : null
+
+/**
+ * **The honest reading of each answer, shipped with the answer** (request receipts design §6). Copied
+ * from Orca, whose comment is the argument: `absent` is genuinely ambiguous, "so the honest reading
+ * ships with the row instead of being re-derived (and softened) by every caller".
+ *
+ * **And so the guide cannot drift from the runtime.** Orca's guide and Orca's runtime disagree about
+ * `pending` today — the guide says to replay it, the runtime refuses — because the sentence was
+ * written twice. Here it is written once, and the guide quotes it.
+ */
+const interpretationOf = {
+  completed: (id: string, cmd: string): string =>
+    `Request ${id} already took effect (${cmd}). The recorded response is what this Host answered the first time. ` +
+    `Treat it exactly as if you had received it then: the ids in it name things that exist. ` +
+    `Do not send the command again.`,
+  pending: (id: string, cmd: string): string =>
+    `Request ${id} is running on this Host right now (${cmd}). Nothing is lost and nothing is decided: wait and ask again. ` +
+    `Do not send the command again, because a second attempt while this one is in flight is refused with 409.`,
+  absent: (id: string): string =>
+    `This Host holds no receipt for request ${id} under your caller identity, and that is not proof that nothing happened. ` +
+    `There are four ways to see it and only one of them means nothing happened: the request never reached a Host, and retrying is correct; ` +
+    `it reached a Host that has since restarted, which comparing hostStartedAt with the time you sent it will tell you; ` +
+    `you are asking under a different session than the one that sent it; ` +
+    `or the command changed nothing, so there was nothing to record and retrying gets the same answer. ` +
+    `Before retrying, look at the state rather than at the receipt, because the state is the only record that survives everything.`
+}
 
 export interface HostOrch extends OrchCall {
   /** Loads the state, once. Lazy and memoized on purpose — see `createHostOrch`. */
@@ -55,6 +89,16 @@ export function createHostOrch(a: {
   /** The Host's own version (`ASTERA_HOST_VERSION`) — what `status` and `version` answer with. */
   version: string
   now(): string
+  /** When this Host began serving — **the same string its `hello` carries**, which is the whole point
+   *  of asking for it rather than taking one at construction (request receipts design §6). A receipt
+   *  lives only as long as the Host that holds it, so an `absent` is dangerous exactly when the Host
+   *  that took the request is gone; the caller tells those apart by comparing this against when it
+   *  sent the request, and the value it already holds is the handshake's. Two clocks here would be
+   *  two answers to one question.
+   *
+   *  A function because `host/index.ts` builds this before it has a server to ask — the same reason
+   *  `act` and `hasApp` are functions. */
+  hostStartedAt(): string
   runningSessions(): number
   /** The sessions this Host is still running, by the app's own id for each — its registry's live
    *  entries whose note says `kind: 'session'`, mapped to `meta.id`.
@@ -325,7 +369,16 @@ export function createHostOrch(a: {
    * the same room `COORDINATOR_ONLY` walls off. Guessing another session's request id must not be a
    * second door into it.
    */
-  const receipts = new Map<string, { state: 'pending' } | { state: 'completed'; reply: Reply }>()
+  const receipts = new Map<
+    string,
+    /** `cmd` and `at` are what `requests-show` answers with beside the state. `cmd` because a caller
+     *  that lost an answer is usually holding an id and not much else, and "this id was `run-create`"
+     *  is half of what it needs to know; `at` because it is the one fact that separates a claim taken
+     *  a moment ago from one a long poll has been holding for an hour. `at` moves when the state does:
+     *  it is when this receipt reached the state it is in, not when the call arrived. */
+    | { state: 'pending'; cmd: string; at: string }
+    | { state: 'completed'; cmd: string; at: string; reply: Reply }
+  >()
 
   /**
    * The reply to send **instead of** running the command, or the key this call now holds a claim on.
@@ -341,16 +394,9 @@ export function createHostOrch(a: {
    * from. 409 is the code that already means "the current state makes this impossible"; there is no
    * eleventh exit code.
    */
-  const holdRequest = (sessionId: string, requestId: string): { answer: Reply } | { key: string } => {
-    if (requestId.length === 0 || requestId.length > REQUEST_ID_MAX || hasControlChar(requestId))
-      return {
-        answer: {
-          status: 400,
-          body: {
-            error: `bad request id: it must be 1 to ${REQUEST_ID_MAX} characters with no control characters`
-          }
-        }
-      }
+  const holdRequest = (sessionId: string, requestId: string, cmd: string): { answer: Reply } | { key: string } => {
+    const bad = badRequestId(requestId)
+    if (bad) return { answer: { status: 400, body: { error: bad } } }
     const key = `${sessionId}\u0000${requestId}`
     const held = receipts.get(key)
     // Byte for byte what the first attempt answered, including its status — the point of a replay is
@@ -365,7 +411,7 @@ export function createHostOrch(a: {
           }
         }
       }
-    receipts.set(key, { state: 'pending' })
+    receipts.set(key, { state: 'pending', cmd, at: a.now() })
     return { key }
   }
 
@@ -379,10 +425,55 @@ export function createHostOrch(a: {
    * command answered, error envelope included, because a caller that lost that answer wants the
    * answer it lost.
    */
-  const settleRequest = (key: string, marks: CallMarks, reply: Reply): Reply => {
-    if (marks.committed || marks.acted) receipts.set(key, { state: 'completed', reply })
+  const settleRequest = (key: string, cmd: string, marks: CallMarks, reply: Reply): Reply => {
+    if (marks.committed || marks.acted) receipts.set(key, { state: 'completed', cmd, at: a.now(), reply })
     else receipts.delete(key)
     return reply
+  }
+
+  /**
+   * **The answer to "did my call land?"** (request receipts design §6). Three states, and 200 for all
+   * three: not finding a receipt is an answer, not a failure. Notably it is not a 404 — `NOT_FOUND`
+   * means "this Host is here and knows no such id", and the guide says not to retry a 404, which is
+   * the precise opposite of what a caller should conclude from `absent`.
+   *
+   * **Scoped by the asking session, and that is the whole of the access control** (§5). A replay hands
+   * back a recorded response, and a response can hold another worker's question or the body of the
+   * coordinator's reply — the room `COORDINATOR_ONLY` walls off. So a caller asking about an id that
+   * belongs to another session is told `absent`, the same as for an id nobody ever sent, because that
+   * is the truth *under its own identity* and anything more would be the second door into that room.
+   *
+   * **`hostStartedAt` rides on every answer, not only on `absent`.** It is a fact about this Host
+   * rather than about the receipt, and the caller that most needs it is the one being told `absent`:
+   * receipts live in memory, so a Host that started after the request was sent never saw it and the
+   * one that did is gone (§4).
+   */
+  const requestsShow = (args: Record<string, unknown>, sessionId: string): Reply => {
+    const id = args.id
+    // A missing id is the caller's mistake and is worth saying so, rather than answering `absent`
+    // about nothing: every answer below is about *some* id, and there is none here to be about.
+    if (typeof id !== 'string') return { status: 400, body: { error: 'requests-show needs a request id' } }
+    const bad = badRequestId(id)
+    if (bad) return { status: 400, body: { error: bad } }
+    const hostStartedAt = a.hostStartedAt()
+    const held = receipts.get(`${sessionId}\u0000${id}`)
+    if (!held)
+      return { status: 200, body: { id, state: 'absent', hostStartedAt, interpretation: interpretationOf.absent(id) } }
+    const head = { id, state: held.state, cmd: held.cmd, at: held.at, hostStartedAt }
+    if (held.state === 'pending')
+      return { status: 200, body: { ...head, interpretation: interpretationOf.pending(id, held.cmd) } }
+    return {
+      status: 200,
+      body: {
+        ...head,
+        interpretation: interpretationOf.completed(id, held.cmd),
+        // **The recorded reply whole, status and all** — what the command answered, error body
+        // included, because a caller that lost that answer wants the answer it lost. The status is
+        // half of it: a recorded 404 is a different fact from a recorded 200, and the CLI turns the
+        // one it is given into the envelope and the exit code the original would have had.
+        response: { status: held.reply.status, body: held.reply.body }
+      }
+    }
   }
 
   return {
@@ -426,9 +517,28 @@ export function createHostOrch(a: {
         // **A caller that sent no id skips all of it** and gets the same answer, the same exit code
         // and the same order as before this existed (§9).
         if (request !== undefined) {
-          const held = holdRequest(sessionId, request)
+          const held = holdRequest(sessionId, request, cmd)
           if ('answer' in held) return held.answer
           claimed = held.key
+        }
+        // **Answered by the Host, like the two above — but on *this* side of the receipt line.**
+        //
+        // Beside them in every other respect: nobody's `case` in `handleCommand` runs, and a Host too
+        // old to know it answers 501, which `codeForStatus` turns into exit 9 for free (§8).
+        //
+        // **Below the line because the CLI will one day put an id on every call** (§8's auto-minting).
+        // `state-put`/`state-get` refuse a presented id because the app never sends one and a key on
+        // them could only be accepted and ignored; do the same here and `requests show` becomes the
+        // one command that stops working the moment every command starts carrying an id. Below the
+        // line it needs no rule of its own: it reads, so it commits nothing and acts on nothing, the
+        // claim is discarded by `settleRequest`, and it leaves no receipt — exactly what §6's fourth
+        // cause says a keyed read should leave.
+        //
+        // **And the state is not loaded for it.** Receipts are not in the state file (§4), so a `ready()`
+        // here would read a file to answer a question the file has nothing to say about.
+        if (cmd === 'requests-show') {
+          const shown = requestsShow(args, sessionId)
+          return claimed === null ? shown : settleRequest(claimed, cmd, marks, shown)
         }
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.
         await ready()
@@ -436,11 +546,11 @@ export function createHostOrch(a: {
         // Only an error reply is rewritten: a command that carried on past a refusal it swallowed
         // (the fire-and-forget ones) succeeded, and a success is not a conflict.
         const reply = r.status >= 400 && marks.appRefused ? { status: 409, body: r.body } : r
-        return claimed === null ? reply : settleRequest(claimed, marks, reply)
+        return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         const reply = { status: marks.appRefused ? 409 : 500, body: { error: message } }
-        return claimed === null ? reply : settleRequest(claimed, marks, reply)
+        return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       }
     }
   }

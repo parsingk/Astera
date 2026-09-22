@@ -6,6 +6,7 @@ import path from 'node:path'
 import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
 import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer, type HostServerDeps } from './server'
+import { createHostOrch } from './orch'
 import { HOST_PROTOCOL, type ClientMessage } from '../core/host/protocol'
 import { versionOnlyOrchCall, AppUnreachable } from '../core/host/orchProtocol'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
@@ -119,7 +120,13 @@ const messageChannel = (sock: net.Socket): { send(m: ClientMessage): void; next(
  * that, which is the one thing every retire test otherwise repeats.
  */
 const start = async (
-  over: { holdsWork?: HostServerDeps['holdsWork']; liveCounts?: HostServerDeps['liveCounts'] } = {}
+  over: {
+    holdsWork?: HostServerDeps['holdsWork']
+    liveCounts?: HostServerDeps['liveCounts']
+    /** The default is the version-only stub, which is what almost every test here wants. Overridden
+     *  by the one test that has to talk to the real command layer over a real socket. */
+    orch?: HostServerDeps['orch']
+  } = {}
 ): Promise<{
   address: string
   stopped: boolean
@@ -483,6 +490,50 @@ describe('startHostServer', () => {
       const chan = messageChannel(raw)
       chan.send({ t: 'orch-call', call: 'c1', cmd: 'version', args: {} })
       expect(await chan.next(300)).toBeUndefined()
+    })
+
+    /**
+     * **`requests show` 를 Host 가 정말로 답한다**(요청 영수증 설계 §13 단계 4). 아직 CLI 쪽 표면이
+     * 없으므로, 그 명령이 도는지를 증명할 수 있는 곳은 여기 — 진짜 `orch-call` 이 지나가는 그 길 —
+     * 뿐이다. 이 묶음의 다른 시험들이 쓰는 version 스텁으로는 501 이 나온다.
+     *
+     * **그리고 hostStartedAt 이 hello 의 그것과 같은 문자열인지가 여기서만 증명된다.** 설계가 이
+     * 값을 싣는 이유가 "보낸 때보다 이 Host 가 늦게 섰다면 그 요청은 여기 온 적이 없다" 이고,
+     * 호출자가 견줄 값은 악수에서 받은 그 값이다(§6). Host 가 제 시계로 따로 하나를 만들었다면 한
+     * 질문에 답이 둘이 되고, 그 비교는 조용히 뜻을 잃는다.
+     */
+    it('requests-show 를 진짜 명령 층이 답하고, hostStartedAt 은 hello 의 그것이다', async () => {
+      // `host/index.ts` 가 하는 그대로다 — orch 는 서버보다 먼저 만들어지고, 물어볼 때는 이미 있다.
+      let live: HostServer | null = null
+      const orch = createHostOrch({
+        profileDir: path.join(dir, 'orch-profile'),
+        version: '9.9.9',
+        now: () => '2026-09-23T00:00:00.000Z',
+        hostStartedAt: () => live!.startedAt,
+        runningSessions: () => 0,
+        aliveSessionIds: () => new Set<string>(),
+        act: async () => ({}),
+        hasApp: () => false,
+        onState: () => {},
+        log: () => {}
+      })
+      const h = await start({ orch })
+      live = h.s
+      // connect() 는 hello 답을 삼킨다 — 여기서는 그 답 자체가 판정의 절반이므로 직접 인사한다.
+      const chan = messageChannel(await h.connectSilent())
+      chan.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' })
+      const hello = (await chan.next()) as { startedAt: string }
+      chan.send({ t: 'orch-call', call: 'c1', cmd: 'requests-show', args: { id: 'req-1' }, session: 'sesA' })
+      const got = (await chan.next()) as {
+        t: string
+        call: string
+        status: number
+        body: { state: string; hostStartedAt: string; interpretation: string }
+      }
+      expect(got).toMatchObject({ t: 'orch-result', call: 'c1', status: 200 })
+      expect(got.body.state).toBe('absent')
+      expect(got.body.hostStartedAt, '악수가 말한 시각과 다른 시각을 답했다').toBe(hello.startedAt)
+      expect(got.body.interpretation).toContain('not proof that nothing happened')
     })
   })
 

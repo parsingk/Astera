@@ -17,6 +17,10 @@ import type { OrchCaller } from '../core/host/orchProtocol'
 import type { HostMessage } from '../core/host/protocol'
 
 const NOW = '2026-09-22T00:00:00.000Z'
+/** 이 Host 가 선 시각. `now` 보다 **앞**이어야 하는 값이다 — `requests show` 가 이것을 실어 주는
+ *  이유가 "네가 보낸 때보다 이 Host 가 늦게 섰다면 그 요청은 여기 온 적이 없다" 이므로(설계 §6),
+ *  둘이 같은 문자열이면 그 비교가 시험에서 아무 말도 하지 않는다. */
+const HOST_STARTED_AT = '2026-09-21T23:00:00.000Z'
 
 let dir: string
 beforeEach(async () => {
@@ -46,6 +50,7 @@ const orchOver = (over: Partial<Parameters<typeof createHostOrch>[0]> = {}): Ret
     profileDir: dir,
     version: '9.9.9',
     now: () => NOW,
+    hostStartedAt: () => HOST_STARTED_AT,
     runningSessions: () => 2,
     aliveSessionIds: () => new Set<string>(),
     act: async () => ({}),
@@ -449,6 +454,7 @@ describe('createHostOrch', () => {
         profileDir: blocked,
         version: '9.9.9',
         now: () => NOW,
+        hostStartedAt: () => HOST_STARTED_AT,
         runningSessions: () => 0,
         aliveSessionIds: () => new Set<string>(),
         act: async () => ({}),
@@ -902,5 +908,143 @@ describe('요청 영수증', () => {
     expect(countOf(c.calls, 'startWorker'), '재생이 아니라 두 번째 실행이었다').toBe(0)
     // 첫 호출이 되돌렸으므로 Dispatch 는 없다 — 영수증은 남았지만 상태에는 아무것도 남지 않았다.
     expect((await savedState()).dispatches).toEqual([])
+  })
+
+  // === 4단계 — requests show ===
+  //
+  // **"내 호출이 닿았나"에 답하는 자리**(설계 §6). 세 상태 모두 200 이다 — 못 찾은 것은 실패가 아니라
+  // 답이다. 404 가 아닌 이유가 그것이다: NOT_FOUND 는 "여기 있고 그런 id 는 모른다" 이고 가이드는 4 를
+  // 재시도하지 말라고 하는데, `absent` 에서 내려야 할 결론은 정확히 그 반대다.
+
+  type Shown = {
+    id: string
+    state: 'completed' | 'pending' | 'absent'
+    cmd?: string
+    at?: string
+    hostStartedAt: string
+    interpretation: string
+    response?: { status: number; body: unknown }
+  }
+  /** 요청 id 하나를 물어본다. **부르는 쪽의 정체가 곧 범위이므로** 세션을 함께 준다(설계 §5). */
+  const show = async (
+    orch: ReturnType<typeof createHostOrch>,
+    sessionId: string,
+    id: string
+  ): Promise<{ status: number; body: Shown }> => {
+    const r = await orch.call({ cmd: 'requests-show', args: { id }, sessionId })
+    return { status: r.status, body: r.body as Shown }
+  }
+  const runArgs = { objective: '무언가', cwd: 'D:/p' }
+
+  it('기록이 있으면 completed 와 그때의 답을 그대로 돌려준다', async () => {
+    const c = counting()
+    const orch = orchOver({ act: c.act })
+    const made = await orch.call({ cmd: 'run-create', args: runArgs, sessionId: 'sesA', request: 'req-1' })
+    const r = await show(orch, 'sesA', 'req-1')
+    expect(r.status).toBe(200)
+    expect(r.body.state).toBe('completed')
+    // id 밖에 안 들고 있는 호출자에게 "이 id 는 run-create 였다" 는 알아야 할 것의 절반이다.
+    expect(r.body.cmd).toBe('run-create')
+    expect(r.body.at).toBe(NOW)
+    expect(r.body.hostStartedAt).toBe(HOST_STARTED_AT)
+    // 기록한 답은 상태까지 통째다 — 404 였는지 200 이었는지가 되찾은 답의 절반이고, CLI 는 그것으로
+    // 원래의 봉투와 종료 코드를 다시 만든다.
+    expect(r.body.response).toEqual({ status: made.status, body: made.body })
+    expect(r.body.interpretation).toContain('run-create')
+    expect(r.body.interpretation).toContain('Do not send the command again')
+  })
+
+  it('진행 중인 요청은 pending 이다 — 아무것도 잃지 않았고 아무것도 정해지지 않았다', async () => {
+    const { taskId } = await seed()
+    let release = (): void => {}
+    const blocked = new Promise<void>((r) => {
+      release = () => r()
+    })
+    const c = counting({
+      startWorker: async () => {
+        await blocked
+        return { sessionId: 'ses1', cwd: 'D:/wt', specPath: 'D:/wt/s.md' }
+      }
+    })
+    const orch = orchOver({ act: c.act })
+    const inFlight = orch.call({ cmd: 'worker-start', args: workerArgs(taskId), sessionId: 'sesA', request: 'req-1' })
+    while (countOf(c.calls, 'startWorker') === 0) await new Promise((r) => setImmediate(r))
+    const r = await show(orch, 'sesA', 'req-1')
+    expect(r.status).toBe(200)
+    expect(r.body.state).toBe('pending')
+    expect(r.body.cmd).toBe('worker-start')
+    expect(r.body.response, '아직 답이 없는 요청에 답을 실어 보냈다').toBeUndefined()
+    expect(r.body.interpretation).toContain('wait and ask again')
+    release()
+    expect((await inFlight).status).toBe(200)
+  })
+
+  /**
+   * **`absent` 는 "안전하게 재시도해도 된다" 로 읽히면 안 된다**(설계 §6). 그래서 hostStartedAt 이
+   * 함께 나간다 — 영수증은 메모리에 있으므로, 요청을 보낸 뒤에 선 Host 는 그 요청을 본 적이 없고 본
+   * 쪽은 이미 영수증과 함께 사라졌다. 그 한 줄이 침묵을 사실로 바꾼다.
+   */
+  it('없는 요청은 absent 이고, hostStartedAt 을 싣고, 재시도해도 된다고 말하지 않는다', async () => {
+    const r = await show(orchOver(), 'sesA', 'req-없는것')
+    expect(r.status, 'absent 를 실패로 답했다').toBe(200)
+    expect(r.body.state).toBe('absent')
+    expect(r.body.hostStartedAt).toBe(HOST_STARTED_AT)
+    expect(r.body.cmd).toBeUndefined()
+    expect(r.body.response).toBeUndefined()
+    expect(r.body.interpretation).toContain('not proof that nothing happened')
+    expect(r.body.interpretation, '무엇과 견주라는 말이 빠지면 hostStartedAt 은 그냥 숫자다').toContain('hostStartedAt')
+  })
+
+  /**
+   * **남의 세션 영수증은 absent 다**(설계 §5). 재생은 기록된 답을 그대로 돌려주는 일이고, 그 답에는
+   * 다른 워커의 질문이나 코디네이터가 보낸 답의 본문이 들어 있을 수 있다 — `COORDINATOR_ONLY` 가
+   * 막아 둔 그 방이다. 요청 id 를 맞히는 것이 그 방의 두 번째 문이 되어서는 안 된다.
+   */
+  it('다른 세션이 남긴 영수증은 absent 로 답한다', async () => {
+    const c = counting()
+    const orch = orchOver({ act: c.act })
+    await orch.call({ cmd: 'run-create', args: runArgs, sessionId: 'sesA', request: 'req-1' })
+    expect((await show(orch, 'sesA', 'req-1')).body.state).toBe('completed')
+    const other = await show(orch, 'sesB', 'req-1')
+    expect(other.status).toBe(200)
+    expect(other.body.state).toBe('absent')
+    expect(other.body.response, '남의 답이 새어 나왔다').toBeUndefined()
+  })
+
+  // **§6 의 네 번째 원인.** 키를 달아도 아무것도 바꾸지 않은 명령은 기록할 것이 없다. 이것이 없으면
+  // 읽기에 키를 단 호출자가 absent 를 보고 완벽히 잘 도는 Host 에 대해 무언가를 결론짓는다.
+  it('키를 단 읽기는 영수증을 남기지 않으므로 그 id 는 absent 다', async () => {
+    await seed()
+    const c = counting({ readWorker: () => '출력' })
+    const orch = orchOver({ act: c.act })
+    await orch.call({ cmd: 'worker-read', args: { dispatch: 'dsp_1' }, sessionId: 'sesA', request: 'req-1' })
+    expect((await show(orch, 'sesA', 'req-1')).body.state).toBe('absent')
+  })
+
+  /**
+   * **`requests-show` 는 영수증 선 **아래**에 있다.** 8단계가 오면 CLI 는 모든 명령에 id 를 싣는다.
+   * 그때 `state-put`·`state-get` 처럼 실린 id 를 400 으로 거절했다면, 모든 명령이 id 를 갖기 시작하는
+   * 바로 그 순간에 이 명령만 멈춘다 — 그리고 그 순간은 정확히 이 명령이 필요해지는 순간이다.
+   *
+   * 아래에 두면 따로 정할 규칙이 없다: 읽기라 커밋도 행동도 없으므로 자리는 반납되고 남는 것이 없다.
+   */
+  it('키를 단 requests-show 는 받아들여지고 자기 영수증을 남기지 않는다', async () => {
+    const orch = orchOver()
+    const r = await orch.call({ cmd: 'requests-show', args: { id: 'req-1' }, sessionId: 'sesA', request: 'req-2' })
+    expect(r.status, '실린 요청 id 때문에 거절당했다').toBe(200)
+    expect((await show(orch, 'sesA', 'req-2')).body.state, 'requests-show 가 자기 영수증을 남겼다').toBe('absent')
+  })
+
+  // **읽는 쪽에도 같은 울타리가 있다.** 지도의 열쇠가 `세션\0요청` 이므로, NUL 이 든 id 로 물어보면
+  // 자기 id 에 NUL 이 든 세션의 영수증을 가리킬 수 있다 — 쓰는 쪽만 막으면 읽는 쪽으로 넘어간다.
+  it('id 가 없거나 못 쓸 모양이면 400 이다', async () => {
+    const orch = orchOver()
+    const NUL = String.fromCharCode(0)
+    expect((await orch.call({ cmd: 'requests-show', args: {}, sessionId: 'sesA' })).status).toBe(400)
+    for (const wrong of ['', 'x'.repeat(201), `a${NUL}b`])
+      expect(
+        (await orch.call({ cmd: 'requests-show', args: { id: wrong }, sessionId: 'sesA' })).status,
+        JSON.stringify(wrong)
+      ).toBe(400)
   })
 })

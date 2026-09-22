@@ -142,6 +142,10 @@ async function main(): Promise<void> {
     profileDir,
     version: hostVersion,
     now: () => new Date().toISOString(),
+    // The handshake's own string, not a second one taken here: `requests show` answers with it so a
+    // caller can tell "this Host never saw my request" from "it never arrived" (request receipts
+    // design §6), and the value the caller compares it against is the one its `hello` gave it.
+    hostStartedAt: () => server.startedAt,
     // The same two registries `liveCounts` counts — this Host's own sessions, which `status` must be
     // able to answer with no app attached.
     runningSessions: () => registry.liveCount() + procs.liveCount(),
