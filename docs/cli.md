@@ -41,8 +41,12 @@ astera host stop       # ask the running Host to retire
 
 `astera host start` is idempotent. A Host that is already running is success, not an error.
 
-`astera host stop` refuses while the Host still holds sessions or running Jobs, and says how many.
+`astera host stop` refuses while the Host still holds sessions or running **runs**, and says how many.
 That refusal is the Host protecting work in progress. Stop the work first, then stop the Host.
+
+A run, not a Job: a Job with two runs going at once counts as two, because two things are running.
+`astera host status` reports `jobsInProfile`, which is a different number — how many Jobs the
+profile's file holds, running or not.
 
 **Some commands still answer with no Host running**, by reading the state file on disk, which is
 accurate precisely because no Host is writing it. It is a fixed list, and it is per verb, not per
@@ -298,7 +302,7 @@ a session's `astera` always reaches the app that started it. From a plain shell,
 selects the development profile.
 
 **Exit 6 from `astera host stop`**
-The Host still holds sessions or running Jobs. The message says how many. Stop the work first.
+The Host still holds sessions or running runs. The message says how many. Stop the work first.
 
 **Exit 7**
 Either a wait reached its deadline, which is not a failure of the Job, or the Host is running and

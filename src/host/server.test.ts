@@ -223,16 +223,16 @@ describe('startHostServer', () => {
 
   // 명세 §12: 사람이 요청한(reason: 'user') retire 는 일하는 것이 있으면 거절되고 그 수가 실린다.
   it('일하는 것이 있으면 사람의 retire 를 거절하고 수를 말한다', async () => {
-    const h = await start({ liveCounts: () => ({ sessions: 2, jobs: 1 }) })
+    const h = await start({ liveCounts: () => ({ sessions: 2, runs: 1 }) })
     const client = await h.connect()
     client.send({ t: 'retire', reason: 'user' })
     const m = await client.next()
-    expect(m).toEqual({ t: 'retire-refused', sessions: 2, jobs: 1 })
+    expect(m).toEqual({ t: 'retire-refused', sessions: 2, runs: 1 })
     expect(h.stopped).toBe(false)
   })
 
   it('일하는 것이 없으면 사람의 retire 를 그대로 받아들인다', async () => {
-    const h = await start({ liveCounts: () => ({ sessions: 0, jobs: 0 }) })
+    const h = await start({ liveCounts: () => ({ sessions: 0, runs: 0 }) })
     const client = await h.connect()
     client.send({ t: 'retire', reason: 'user' })
     await new Promise((r) => setTimeout(r, 100))
@@ -242,7 +242,7 @@ describe('startHostServer', () => {
   // ruling 3: `reason` 이 없는(=`'protocol'`) retire 는 이 거절을 받지 않는다 — 앱이 프로토콜이
   // 다른 Host 를 찾았을 때 보내는 것이 이 경우이고, 그 Host 의 세션은 이미 그 앱에게 닿지 않는다.
   it('reason 이 없는(protocol) retire 는 일하는 것이 있어도 거절하지 않는다', async () => {
-    const h = await start({ liveCounts: () => ({ sessions: 2, jobs: 1 }) })
+    const h = await start({ liveCounts: () => ({ sessions: 2, runs: 1 }) })
     const client = await h.connect()
     client.send({ t: 'retire' })
     await new Promise((r) => setTimeout(r, 100))

@@ -38,11 +38,16 @@ export interface HostServerDeps {
   /** Whether something is keeping the Host alive beyond its clients — a live terminal, from slice 2.
    *  The idle timer checks it rather than only the connection count. */
   holdsWork?(): boolean
-  /** Sessions and Jobs the Host is holding right now. One dep rather than two because a `retire`
-   *  refusal always needs both counts together, to name them (design §12: "2 sessions and 1 Job are
-   *  still running"). Both halves are answered for real — `jobs` counts the Runs with work in flight,
-   *  off the state the Host now owns (`runningRunCount`, ruling F57). */
-  liveCounts?(): { sessions: number; jobs: number }
+  /** Sessions and Runs the Host is holding right now. One dep rather than two because a `retire`
+   *  refusal always needs both counts together, to name them (design §12: "2 sessions and 1 run are
+   *  still running"). Both halves are answered for real — `runs` counts the Runs with work in flight,
+   *  off the state the Host now owns (`runningRunCount`, ruling F57).
+   *
+   *  **`runs`, not `jobs`.** It counted Runs under the other name, which made one Job with two
+   *  concurrent Runs report 2 and collided with `astera host status`'s own `jobs` (the number of Jobs
+   *  in the file). Runs is the right unit — a Run is the thing that runs — so the word follows it
+   *  here, in the refusal message and in docs/cli.md (ruling F57/e). */
+  liveCounts?(): { sessions: number; runs: number }
   /** Answers `orch-call` (design §5). Optional here only so a caller that never sends `orch-call`
    *  does not have to supply one; `host/index.ts` always does, because it always advertises
    *  HOST_FEATURE_ORCH below. */
@@ -240,10 +245,10 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // Host's sessions are unreachable to the app asking anyway, and refusing would strand it
           // there instead of letting a Host it can talk to take the address (design §12).
           if (m.reason === 'user') {
-            const counts = deps.liveCounts?.() ?? { sessions: 0, jobs: 0 }
-            if (counts.sessions > 0 || counts.jobs > 0) {
-              deps.log.write(`asked to retire but ${counts.sessions} session(s) and ${counts.jobs} Job(s) are still running — refusing`)
-              send({ t: 'retire-refused', sessions: counts.sessions, jobs: counts.jobs })
+            const counts = deps.liveCounts?.() ?? { sessions: 0, runs: 0 }
+            if (counts.sessions > 0 || counts.runs > 0) {
+              deps.log.write(`asked to retire but ${counts.sessions} session(s) and ${counts.runs} run(s) are still running — refusing`)
+              send({ t: 'retire-refused', sessions: counts.sessions, runs: counts.runs })
               return
             }
           }

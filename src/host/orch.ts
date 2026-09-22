@@ -15,8 +15,19 @@ export interface HostOrch extends OrchCall {
   /** Loads the state, once. Lazy and memoized on purpose — see `createHostOrch`. */
   ready(): Promise<void>
   /** Runs with work actually in flight — what `astera host stop` refuses over and names (ruling F57,
-   *  docs/cli.md). **Synchronous and never loads**: it is read while answering a `retire`, and a Host
-   *  that has not been asked anything yet cannot be holding a running Job. */
+   *  docs/cli.md).
+   *
+   *  **Synchronous, and it deliberately does not load.** Not merely to stay cheap: loading is not a
+   *  read. `store.load` runs the restart cleanup — it writes off open Dispatches, opens Gates and
+   *  saves — and triggering that from `host stop`, whose whole point is to disturb nothing, would be
+   *  worse than any answer it could produce.
+   *
+   *  **And 0 is the true answer for a Host that has not loaded**, not a convenient one. For a Run to
+   *  be running *here*, some command must have gone through `handleCommand`, which awaits `ready()` —
+   *  so a Host that has never loaded has never dispatched anything. A file that still says a Run is
+   *  `dispatched` is describing work from a process that is gone; refusing to stop over it would
+   *  leave `host stop` permanently refusing until somebody cleaned the file up by hand. Work this
+   *  Host really holds from before a load is a live pty, and that is counted as a session. */
   runningRuns(): number
 }
 

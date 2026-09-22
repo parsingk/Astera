@@ -307,11 +307,12 @@ export interface OrchServerDeps {
    *  효과와 같은 순서(Dispatch 먼저, 세션은 그다음)다.
    *
    *  **Host 가 앱 없이 이 명령을 받아도 안전한 이유는 이 칸이 아니라 `repairTargetFor` 다**
-   *  (ruling F58). 앱이 없으면 이 훅은 전달되지 못하고 조용히 빠지는데(host/orchDeps.ts 의 전달
-   *  표에 없다), 그때 열려 있을 repair Dispatch 자체가 없다: `repairTargetFor` 가 DEGRADES 로
-   *  `null` 을 답해 판정이 repair 를 열지 않고 `repairFailed` Gate 를 열기 때문이다. 즉 "부수 효과만
-   *  빠진 반쪽 repair" 는 지금 구조상 만들어지지 않는다 — **우연이 아니라 그 한 칸의 결과이고,
-   *  그 칸이 DEGRADES 에서 나가는 날 이 문장도 거짓이 된다.** */
+   *  (ruling F58). 이 훅은 전달된다 — host/orchDeps.ts 의 FIRE_AND_FORGET 에 있어서, 앱이 붙어
+   *  있으면 소켓으로 나가고 없으면 로그만 남기고 삼켜진다. 그러니 "앱이 없으면 부수 효과가 빠진
+   *  반쪽 repair 가 남는다" 가 될 수 있는데, 그렇게 되지 않는 이유는 그 위에 있다: `repairTargetFor`
+   *  가 DEGRADES 로 `null` 을 답해 판정이 애초에 repair Dispatch 를 열지 않고 `repairFailed` Gate 를
+   *  연다. **삼켜질 훅이 가리킬 Dispatch 가 존재하지 않는 것이지, 훅이 안 가는 것이 아니다 — 그
+   *  칸이 DEGRADES 에서 나가는 날 이 문장도 거짓이 된다.** */
   startRepair?(a: { dispatchId: string }): void
   /** 소진 Gate(kind: 'convergence-exhausted')의 retry-once 답(repair.ts 의 repairOnce) — 예산 밖의
    *  repair 를 정확히 하나 연다. gate-resolve 가 그 kind 의 Gate 를 이 답으로 풀 때만 부른다.

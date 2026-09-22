@@ -158,7 +158,15 @@ export type HostMessage =
    *  the Host (design §12) — `astera host stop` reports these counts and exits CONFLICT rather than
    *  quietly doing nothing. Additive: a Host old enough not to send it never refuses at all, which is
    *  the same "silently does less" an older Host already does for any message it does not know. */
-  | { t: 'retire-refused'; sessions: number; jobs: number }
+  | {
+      t: 'retire-refused'
+      sessions: number
+      /** **Runs with work in flight, and the word is `runs` because that is what is counted**
+       *  (ruling F57/e). It said `jobs` while counting Runs, so one Job with two concurrent Runs
+       *  reported 2 — and `astera host status` has a `jobs` of its own meaning a third thing (how
+       *  many Jobs the file holds). One unit, one word. */
+      runs: number
+    }
   | { t: 'pong'; seq: number }
   /** Answers one `orch-call`, carrying its `call` back so the asker can match the reply to the
    *  request that made it. `status`/`body` are today's HTTP status and body, unchanged. */

@@ -21,10 +21,13 @@ import { exitCodeFor } from '../core/orchestration/cliOutput'
 export function hostStatus(a: {
   conn: Pick<HostConnection, 'hello'> | null
   profileDir: string
-  jobs: number
+  /** How many Jobs this profile's file holds, running or not. **Reported as `jobsInProfile`, and the
+   *  name matters** (ruling F57/e): `host stop` refuses over a different number — the Runs with work
+   *  in flight — and both were called `jobs`, so a script could read one and act on the other. */
+  jobsInProfile: number
 }): Record<string, unknown> {
   if (!a.conn)
-    return { running: false, protocol: HOST_PROTOCOL, features: [], profile: a.profileDir, jobs: a.jobs }
+    return { running: false, protocol: HOST_PROTOCOL, features: [], profile: a.profileDir, jobsInProfile: a.jobsInProfile }
   return {
     running: true,
     pid: a.conn.hello.pid,
@@ -32,7 +35,7 @@ export function hostStatus(a: {
     protocol: HOST_PROTOCOL,
     features: a.conn.hello.features,
     profile: a.profileDir,
-    jobs: a.jobs
+    jobsInProfile: a.jobsInProfile
   }
 }
 
@@ -52,7 +55,7 @@ export function hostStopResult(
   a:
     | { outcome: 'absent' }
     | { outcome: 'stopped' }
-    | { outcome: 'refused'; sessions: number; jobs: number }
+    | { outcome: 'refused'; sessions: number; runs: number }
     | { outcome: 'timeout'; waitedMs: number }
 ): { body: Record<string, unknown>; code: number } {
   if (a.outcome === 'absent') return { body: { stopped: true, message: 'no Host was running' }, code: 0 }
@@ -70,8 +73,10 @@ export function hostStopResult(
     body: {
       stopped: false,
       sessions: a.sessions,
-      jobs: a.jobs,
-      message: `Cannot stop Host: ${plural(a.sessions, 'session')} and ${plural(a.jobs, 'Job')} are still running.`
+      runs: a.runs,
+      // **`run`, because Runs are what is counted** (ruling F57/e). It said "Job" while counting
+      // Runs, so one Job with two concurrent Runs read as two Jobs.
+      message: `Cannot stop Host: ${plural(a.sessions, 'session')} and ${plural(a.runs, 'run')} are still running.`
     },
     code: exitCodeFor('CONFLICT')
   }
@@ -296,7 +301,7 @@ export async function runHostCommand(a: {
   const tryStatus = async (): Promise<{ body: unknown; code: number } | null> => {
     const connected = await connectHost({ address, app: CLI_VERSION, log: logToStderr })
     if ('error' in connected) return null
-    const body = hostStatus({ conn: connected, profileDir, jobs: jobCountFrom(profileDir) })
+    const body = hostStatus({ conn: connected, profileDir, jobsInProfile: jobCountFrom(profileDir) })
     connected.close()
     return { body, code: 0 }
   }
@@ -304,7 +309,7 @@ export async function runHostCommand(a: {
   if (a.cmd === 'host-status') {
     return (
       (await tryStatus()) ?? {
-        body: hostStatus({ conn: null, profileDir, jobs: jobCountFrom(profileDir) }),
+        body: hostStatus({ conn: null, profileDir, jobsInProfile: jobCountFrom(profileDir) }),
         code: exitCodeFor('HOST_NOT_RUNNING')
       }
     )
@@ -330,7 +335,7 @@ export async function runHostCommand(a: {
       timer.unref?.()
       offMessage = connected.onMessage((m) => {
         if (m.t === 'retire-refused')
-          settle(hostStopResult({ outcome: 'refused', sessions: m.sessions, jobs: m.jobs }))
+          settle(hostStopResult({ outcome: 'refused', sessions: m.sessions, runs: m.runs }))
       })
       offClose = connected.onClose(() => settle(hostStopResult({ outcome: 'stopped' })))
       connected.call({ t: 'retire', reason: 'user' })

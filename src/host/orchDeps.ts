@@ -74,12 +74,13 @@ const NESTED = {
  *   beats a lost verdict.
  *
  *   **This entry is also what makes `startRepair` safe with no app, and that is not obvious**
- *   (ruling F58). `startRepair` is not forwarded at all — it is a fire-and-forget side effect, so it
- *   simply does not happen headless. What keeps that from leaving a half-opened repair (a Dispatch
- *   committed with no spec file and no worker) is this `null`: the verdict never opens a repair
- *   Dispatch in the first place, so there is nothing for the missing side effect to have finished.
- *   **Move `repairTargetFor` out of this group and that hole opens**, silently, at a call site that
- *   says nothing about it — which is why it is written down at both ends.
+ *   (ruling F58). `startRepair` *is* forwarded — it is in FIRE_AND_FORGET below, so with an app it
+ *   goes out over the socket and without one it is logged and swallowed. Swallowed is what would
+ *   leave a half-opened repair: a Dispatch committed with no spec file and no worker, which nothing
+ *   would ever finish. What stops that is this `null` one layer up — the verdict never opens a repair
+ *   Dispatch at all, so the swallowed call has no Dispatch to have abandoned. **Move
+ *   `repairTargetFor` out of this group and that hole opens**, silently, at a call site that says
+ *   nothing about it — which is why it is written down at both ends.
  * - `repairOnce`: `gate-resolve` commits the Gate resolution **before** calling it, so a refusal
  *   answers CONFLICT for a command whose main effect has already landed — a script reads "nothing
  *   happened" about something that did. `{ ok: false, error }` is this dependency's own way of saying

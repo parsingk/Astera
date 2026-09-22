@@ -22,13 +22,17 @@ import { hostRuntimePaths } from '../core/host/runtime'
 
 describe('hostStatus', () => {
   // Host 가 없을 때도 사람에게 할 말이 있어야 한다 — 어느 프로필을 봤는지와, 파일에 몇 개가 있는지.
+  //
+  // **이름이 `jobsInProfile` 인 이유**(ruling F57/e): host stop 이 거절하며 세는 것은 이것이 아니라
+  // 지금 일이 도는 Run 의 수다. 둘 다 `jobs` 이던 동안에는 스크립트가 하나를 읽고 다른 하나로 행동할
+  // 수 있었다.
   it('Host 가 없으면 running: false 와 프로필을 낸다', () => {
-    expect(hostStatus({ conn: null, profileDir: 'D:/p', jobs: 3 })).toEqual({
+    expect(hostStatus({ conn: null, profileDir: 'D:/p', jobsInProfile: 3 })).toEqual({
       running: false,
       protocol: 3,
       features: [],
       profile: 'D:/p',
-      jobs: 3
+      jobsInProfile: 3
     })
   })
 
@@ -36,14 +40,14 @@ describe('hostStatus', () => {
     const conn = {
       hello: { host: '1.3.25', pid: 42, startedAt: 'T', features: ['proc', 'orch'] }
     } as never
-    expect(hostStatus({ conn, profileDir: 'D:/p', jobs: 3 })).toEqual({
+    expect(hostStatus({ conn, profileDir: 'D:/p', jobsInProfile: 3 })).toEqual({
       running: true,
       pid: 42,
       version: '1.3.25',
       protocol: 3,
       features: ['proc', 'orch'],
       profile: 'D:/p',
-      jobs: 3
+      jobsInProfile: 3
     })
   })
 })
@@ -61,23 +65,24 @@ describe('hostStopResult', () => {
     expect(hostStopResult({ outcome: 'stopped' })).toEqual({ body: { stopped: true }, code: 0 })
   })
 
-  // 명세 §12 의 문구("2 sessions and 1 Job are still running")를 그대로 옮긴다. 종료 코드는
-  // CONFLICT(6) — host stop 이 거절하는 유일한 경우다.
+  // 명세 §12 의 문구를 옮기되 **단위는 세는 것을 따른다**(ruling F57/e): 세는 것은 Run 이고,
+  // "Job" 이라고 적으면 회차 둘짜리 Job 하나가 둘로 읽힌다. 종료 코드는 CONFLICT(6) — host stop 이
+  // 거절하는 유일한 경우다.
   it('거절되면 CONFLICT 로 끝나고 수를 문장에 담는다', () => {
-    expect(hostStopResult({ outcome: 'refused', sessions: 2, jobs: 1 })).toEqual({
+    expect(hostStopResult({ outcome: 'refused', sessions: 2, runs: 1 })).toEqual({
       body: {
         stopped: false,
         sessions: 2,
-        jobs: 1,
-        message: 'Cannot stop Host: 2 sessions and 1 Job are still running.'
+        runs: 1,
+        message: 'Cannot stop Host: 2 sessions and 1 run are still running.'
       },
       code: exitCodeFor('CONFLICT')
     })
   })
 
   it('하나씩이면 단수로 말한다', () => {
-    expect(hostStopResult({ outcome: 'refused', sessions: 1, jobs: 1 })).toMatchObject({
-      body: { message: 'Cannot stop Host: 1 session and 1 Job are still running.' }
+    expect(hostStopResult({ outcome: 'refused', sessions: 1, runs: 1 })).toMatchObject({
+      body: { message: 'Cannot stop Host: 1 session and 1 run are still running.' }
     })
   })
 
@@ -121,7 +126,7 @@ describe('runHostCommand — host stop against a real Host', () => {
         protocol: HOST_PROTOCOL
       })
       let sessions = 2
-      const liveCounts: HostServerDeps['liveCounts'] = () => ({ sessions, jobs: 0 })
+      const liveCounts: HostServerDeps['liveCounts'] = () => ({ sessions, runs: 0 })
       const server = await startHostServer({
         address: addr.address,
         dirToPrepare: addr.dirToPrepare,
@@ -134,7 +139,7 @@ describe('runHostCommand — host stop against a real Host', () => {
       try {
         const refused = await runHostCommand({ cmd: 'host-stop', env, platform: process.platform, home })
         expect(refused.code).toBe(exitCodeFor('CONFLICT'))
-        expect(refused.body).toMatchObject({ stopped: false, sessions: 2, jobs: 0 })
+        expect(refused.body).toMatchObject({ stopped: false, sessions: 2, runs: 0 })
 
         sessions = 0
         const stopped = await runHostCommand({ cmd: 'host-stop', env, platform: process.platform, home })
@@ -236,14 +241,14 @@ describe('runHostCommand — host status against a real Host', () => {
           version: '9.9.9',
           features: expect.arrayContaining(['proc']),
           profile: profileDir,
-          jobs: 3
+          jobsInProfile: 3
         })
       } finally {
         await server.close()
       }
       const down = await runHostCommand({ cmd: 'host-status', env, platform: process.platform, home })
       expect(down.code).toBe(exitCodeFor('HOST_NOT_RUNNING'))
-      expect(down.body).toMatchObject({ running: false, profile: profileDir, jobs: 3 })
+      expect(down.body).toMatchObject({ running: false, profile: profileDir, jobsInProfile: 3 })
     } finally {
       await fs.rm(home, { recursive: true, force: true })
     }

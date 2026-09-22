@@ -177,7 +177,7 @@ async function main(): Promise<void> {
       // worse half of two answers.
       liveCounts: () => ({
         sessions: registry.liveCount() + procs.liveCount(),
-        jobs: orch.runningRuns()
+        runs: orch.runningRuns()
       }),
       orch,
       log
