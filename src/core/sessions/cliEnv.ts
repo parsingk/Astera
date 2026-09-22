@@ -8,7 +8,7 @@ import { isAmbientDir, type ProviderDescriptor } from '../providers/descriptor'
  *  running.
  *
  *  PATH is not here: it is the shell's, not ours, and spawn only prepends to it. An inherited shuttle
- *  directory can therefore still leave `astera` resolvable in a session with orchestration off, but
+ *  directory can therefore still leave `astera` resolvable in a session this app did not start, but
  *  with ASTERA_CLI cleared the stub's tool check reads that as "not an app-spawned session" and says
  *  so, which is the diagnosis it expects.
  *

@@ -104,14 +104,29 @@ export const jobOf = (s: OrchState, run: JobRun): Job | undefined =>
  *
  * 네 갈래다. **회차나 계획을 찾을 수 없으면** 붙잡는다 — orchestration.json 은 프로세스보다 오래
  * 살고 손으로 고쳐지므로, 주인을 모르는 Task 에 워커를 띄우는 것은 아무도 책임지지 않는 지출이다.
+ * 정의 Task 도 이 갈래로 걸린다: 그것은 `jobId` 만 들고 `runId` 가 없으므로(`task-create` 가 Job 을
+ * 지목받았을 때) 위 조회가 회차를 찾지 못한다.
  * **`run.paused`·`job.paused`** 는 사람이 세운 것이고(`runs stop`·`pauseSchedule`), **`pendingStart`**
- * 는 아직 시작하지 않은 초안, **`job.schedule !== undefined`** 는 계획 자신(템플릿)이다 — 템플릿의
- * Task 는 회차가 대신 도는 것이지 템플릿에서 도는 것이 아니다.
+ * 는 아직 시작하지 않은 초안이다.
+ *
+ * **`job.schedule !== undefined` 가 실제로 거르는 것은 발화가 만든 자식 회차다**(ruling F65). 템플릿
+ * 자신이 아니다 — 템플릿의 Task 는 바로 위 "회차를 찾을 수 없다" 에서 이미 걸린다. 자식 회차는
+ * `jobId` 가 여전히 템플릿 Job 이므로 여기 `job` 이 그 템플릿이고, 이 줄이 그것을 붙잡는다.
+ *
+ * **오늘 그 줄은 아무것도 바꾸지 않는다.** `run-create` 가 예약이 있으면 `autoDispatch` 를 켜지
+ * 않고(`command.ts`), `appDriven` 이 그것을 요구하므로 예약의 회차는 애초에 앱이 배치하지 않는다 —
+ * 그래서 이 세 소비자에 닿는 예약 Task 가 없다. 의미를 바꾸지 않고 줄을 남겨 둔 이유는 그것이다:
+ * 아무도 지나지 않는 길에서 방금 하나로 모은 셋을 다시 갈라 놓는 값이 더 크다.
+ *
+ * **예약 Job 이 언젠가 `autoDispatch` 를 갖게 되면 이 줄이 살아난다**, 그리고 그때 `refuseIfRunGated`
+ * 가 여는 Gate 문구("paused, a schedule template, or not yet started")는 자식 회차에 대해 거짓이
+ * 된다 — 그 회차는 템플릿이 아니라 템플릿이 만든 회차다. 그 변경을 하는 사람이 이 사실을 만나도록
+ * `command.ts` 의 `autoDispatch` 를 켜는 자리에도 같은 말을 적어 두었다.
  *
  * **`schedule.ts` 의 `appDriven` 은 이것과 다른 물음이라 합치지 않았다.** 그쪽은 "이 회차를 누가
  * 운전하는가" 를 묻는다 — `autoDispatch` 를 요구하고(코디네이터가 끄는 회차는 앱이 배치하지
- * 않는다), `job.schedule` 은 **보지 않는다**(예약의 회차는 당연히 돌아야 한다). 두 조건이 겹치는
- * 것은 우연이 아니라 둘 다 "사람이 세운 것" 을 존중하기 때문이고, 다른 두 칸이 그 둘을 갈라 놓는다.
+ * 않는다), `job.schedule` 은 **보지 않는다**. 두 조건이 겹치는 것은 우연이 아니라 둘 다 "사람이
+ * 세운 것" 을 존중하기 때문이고, 다른 두 칸이 그 둘을 갈라 놓는다.
  */
 export function runGatedForTask(s: OrchState, task: Pick<Task, 'runId'>): boolean {
   const run = s.runs.find((r) => r.id === task.runId)

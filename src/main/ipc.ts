@@ -266,12 +266,11 @@ export interface OrchWiring {
   onStarted: (h: OrchHandle) => void
   /** fix wave 최종, F1: hands over the tab-briefing function (`tabResumeTextFor` below) once,
    *  unconditionally — called synchronously from inside `registerIpc`, not from `bootOrch`. That is the
-   *  whole point of a separate callback: `onStarted`/`OrchHandle` exist only once orchestration has
-   *  actually booted (the toggle is on), but a plain tab session's briefing has nothing to do with that
-   *  toggle — it reads a transcript and git, not `OrchState`. Before this, index.ts's two rolling
-   *  coordinators reached the tab fallback only through `orchRef?.resumeText`, so on a default install
-   *  (orchestration off) `orchRef` was always null and Smart Resume was inert regardless of its own
-   *  setting. index.ts stores the function this hands over separately from `orchRef` and calls it
+   *  whole point of a separate callback: `onStarted`/`OrchHandle` exist only once the orchestration
+   *  server has actually come up, but a plain tab session's briefing has nothing to do with that — it
+   *  reads a transcript and git, not `OrchState`. Before this, index.ts's two rolling coordinators
+   *  reached the tab fallback only through `orchRef?.resumeText`, so whenever the server was not up
+   *  `orchRef` was null and Smart Resume was inert regardless of its own setting. index.ts stores the function this hands over separately from `orchRef` and calls it
    *  directly when `orchRef` is null. */
   onTabResumeReady: (fn: (sessionId: string, form: 'handover' | 'update') => Promise<string | null>) => void
 }
@@ -4622,18 +4621,31 @@ export function registerIpc(
      *
      * **The marker is written last**, after the state write has landed, so a failed pause is retried
      * on the next launch rather than recorded as done.
+     *
+     * **And it is written even when nothing is paused** (ruling F64). The profiles that had the
+     * toggle *on* have nothing to stop, but they are the ones that most need the record: the old key
+     * has left `persist`, so their next ordinary settings write drops it, and a launch after that
+     * would read the absence as "it was off" and pause the very Runs this exists to protect. The
+     * `{ pause }` object rather than a boolean is what makes that hard to get wrong here — there is
+     * one branch to be inside, and the record is the last thing in it.
      */
-    const parkedByTheOldToggle = core.appSettings.orchAlwaysOnPauseDue()
-    if (parkedByTheOldToggle) {
-      const paused = pauseWorkParkedByTheToggle(store.get())
-      if (paused.runs.length > 0 || paused.jobs.length > 0) {
-        await deps.setState(paused.state)
+    const migration = core.appSettings.orchAlwaysOnMigration()
+    const parkedByTheOldToggle = migration?.pause === true
+    if (migration) {
+      if (migration.pause) {
+        const paused = pauseWorkParkedByTheToggle(store.get())
+        if (paused.runs.length > 0 || paused.jobs.length > 0) {
+          await deps.setState(paused.state)
+          orchLog(
+            `always-on migration — orchestration used to be off on this profile, so ${paused.runs.length} run(s) ` +
+              `[${paused.runs.join(', ')}] and ${paused.jobs.length} schedule(s) [${paused.jobs.join(', ')}] were ` +
+              `paused rather than restarted. Resume them from the Jobs list when you want them to go on.`
+          )
+        } else orchLog('always-on migration — nothing was parked on this profile, so nothing was paused')
+      } else
         orchLog(
-          `always-on migration — orchestration used to be off on this profile, so ${paused.runs.length} run(s) ` +
-            `[${paused.runs.join(', ')}] and ${paused.jobs.length} schedule(s) [${paused.jobs.join(', ')}] were ` +
-            `paused rather than restarted. Resume them from the Jobs list when you want them to go on.`
+          'always-on migration — orchestration was already on for this profile, so nothing was paused; recorded so a later settings write cannot make this look like an off profile'
         )
-      } else orchLog('always-on migration — nothing was parked on this profile, so nothing was paused')
       await core.appSettings.markOrchAlwaysOnMigrated()
     }
 
@@ -4683,10 +4695,14 @@ export function registerIpc(
     // non-2xx reads as a refusal, and `applyPendingReports` deletes a refused report's file — its
     // contract is that a refusal is permanent ("that answer will be the same at every future
     // start"). A 409 that means "not now" rather than "no" would therefore destroy a finished
-    // worker's only record. No such 409 is reachable for a queued report today: they are `send`
-    // alone (`isQueueableReport`), and `send` answers only 400 (`bad`) and 403 (`denied`) besides
-    // the `notFound` on an unknown run — all of them permanent. A new `conflict(…)` reachable from
-    // `send` would have to be weighed against that before it is added.
+    // worker's only record. No such 409 is reachable for a queued report today, and this is the
+    // third pass at saying so, so here it is exactly: a queued report is `send` and nothing else
+    // (`isQueueableReport`), and every exit of the `send` case is `okBody`, `bad` (400) or `denied`
+    // (403). It never reaches `conflict`, and it never goes through `commit` — so the pure layer's
+    // `unknown …` → 404 mapping is not on this path either. **400 and 403 are the whole set**, and
+    // both are permanent: the same report will be refused the same way at every future start, which
+    // is exactly what `applyPendingReports` deletes the file on the strength of. A new
+    // `conflict(…)` reachable from `send` would have to be weighed against that before it is added.
     if (pendingReports.length > 0 && parkedByTheOldToggle)
       orchLog(
         `pending reports — ${pendingReports.length} left untouched: this launch paused work the old ` +

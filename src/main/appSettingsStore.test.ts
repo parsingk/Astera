@@ -159,46 +159,80 @@ describe('lang — System은 null이다', () => {
 // 오케스트레이션이 설정이 아니게 된 첫 실행에서 한 번만 도는 일시 중지 (ruling F62).
 // **키는 옛 필드가 아니라 자기 표식이다** — 옛 필드는 켜져 있을 때만 파일에 적혔으므로, 없다는
 // 것이 곧 꺼져 있었다는 뜻이고 거기에 "했음" 을 적을 자리가 없다.
-describe('orchAlwaysOnPauseDue', () => {
-  it('토글이 켜져 있던 적 없는 프로필은 한 번 참이다', async () => {
+describe('orchAlwaysOnMigration', () => {
+  it('토글이 켜져 있던 적 없는 프로필은 한 번 세우라고 답한다', async () => {
     await fs.writeFile(file(), JSON.stringify({ lang: 'en' }), 'utf8')
     const store = new AppSettingsStore(file())
     await store.load()
-    expect(store.orchAlwaysOnPauseDue()).toBe(true)
+    expect(store.orchAlwaysOnMigration()).toEqual({ pause: true })
   })
 
-  it('토글이 켜져 있던 프로필은 거짓이다 — 그 일은 이미 돌고 있었다', async () => {
+  // **켜져 있던 프로필도 마이그레이션 대상이다 — 세울 것이 없을 뿐이다**(ruling F64).
+  it('토글이 켜져 있던 프로필은 세우지 말라고 답한다 — 그래도 null 은 아니다', async () => {
     await fs.writeFile(file(), JSON.stringify({ orchestrationEnabled: true }), 'utf8')
     const store = new AppSettingsStore(file())
     await store.load()
-    expect(store.orchAlwaysOnPauseDue()).toBe(false)
+    expect(store.orchAlwaysOnMigration()).toEqual({ pause: false })
   })
 
-  it('표식을 적고 나면 새 인스턴스에서도 다시 참이 되지 않는다', async () => {
+  it('표식을 적고 나면 새 인스턴스에서도 null 이다', async () => {
     await fs.writeFile(file(), JSON.stringify({ lang: 'en' }), 'utf8')
     const a = new AppSettingsStore(file())
     await a.load()
     await a.markOrchAlwaysOnMigrated()
-    expect(a.orchAlwaysOnPauseDue()).toBe(false)
+    expect(a.orchAlwaysOnMigration()).toBeNull()
     const b = new AppSettingsStore(file())
     await b.load()
-    expect(b.orchAlwaysOnPauseDue()).toBe(false)
+    expect(b.orchAlwaysOnMigration()).toBeNull()
     expect(JSON.parse(await fs.readFile(file(), 'utf8')).orchAlwaysOnMigrated).toBe(true)
   })
 
+  // **ruling F64 그 자체.** 켜져 있던 프로필이 첫 실행에서 표식을 적지 않으면, 그 뒤 아무 설정이나
+  // 한 번 저장하는 순간 persist 가 orchestrationEnabled 를 빼고 파일을 다시 쓴다 — 그러면 다음
+  // 실행은 그 없음을 "꺼져 있었다" 로 읽고, 정작 이 기능을 쓰던 사람의 회차를 세운다.
+  it('켜져 있던 프로필: 첫 실행에 표식을 적으면, 키가 빠진 뒤에도 되살아나지 않는다', async () => {
+    await fs.writeFile(file(), JSON.stringify({ orchestrationEnabled: true, lang: 'en' }), 'utf8')
+    const first = new AppSettingsStore(file())
+    await first.load()
+    const owed = first.orchAlwaysOnMigration()
+    expect(owed).toEqual({ pause: false })
+    await first.markOrchAlwaysOnMigrated()
+
+    // 평범한 설정 저장 하나 — 이것이 옛 키를 파일에서 떨어뜨린다.
+    await first.setTheme('umbra')
+    const onDisk = JSON.parse(await fs.readFile(file(), 'utf8'))
+    expect(onDisk.orchestrationEnabled, 'persist 가 옛 키를 다시 쓰고 있다면 이 테스트는 무의미하다').toBeUndefined()
+
+    // 그 파일을 다시 읽어도 마이그레이션은 끝난 상태다.
+    const later = new AppSettingsStore(file())
+    await later.load()
+    expect(later.orchAlwaysOnMigration()).toBeNull()
+  })
+
+  // 표식을 적지 않았다면 어떻게 되는지 — 위 테스트가 막고 있는 것이 무엇인지 말해 주는 대조다.
+  it('대조: 표식 없이 키만 빠지면 다음 실행은 세우라고 답한다', async () => {
+    await fs.writeFile(file(), JSON.stringify({ orchestrationEnabled: true, lang: 'en' }), 'utf8')
+    const first = new AppSettingsStore(file())
+    await first.load()
+    await first.setTheme('umbra') // 표식을 적지 않은 채 저장한다
+    const later = new AppSettingsStore(file())
+    await later.load()
+    expect(later.orchAlwaysOnMigration()).toEqual({ pause: true })
+  })
+
   // 설정 파일이 아예 없다 = 이 기계에서 앱을 쓴 적이 없다. 세울 것도 없고 세워서도 안 된다.
-  it('설정 파일이 없으면 거짓이다', async () => {
+  it('설정 파일이 없으면 세우지 말라고 답한다', async () => {
     const store = new AppSettingsStore(file())
     await store.load()
-    expect(store.orchAlwaysOnPauseDue()).toBe(false)
+    expect(store.orchAlwaysOnMigration()).toEqual({ pause: false })
   })
 
   // 읽지 못한 파일은 토글이 무엇이었는지 말해 주지 않는다. 짐작으로 Run 을 세우지 않는다.
-  it('손상 파일 복구 뒤에는 거짓이다 — 없는 근거로 세우지 않는다', async () => {
+  it('손상 파일 복구 뒤에는 세우지 말라고 답한다 — 없는 근거로 세우지 않는다', async () => {
     await fs.writeFile(file(), '{ not json', 'utf8')
     const store = new AppSettingsStore(file())
     await store.load()
-    expect(store.orchAlwaysOnPauseDue()).toBe(false)
+    expect(store.orchAlwaysOnMigration()).toEqual({ pause: false })
   })
 
   it('표식은 다른 설정을 지우지 않는다', async () => {

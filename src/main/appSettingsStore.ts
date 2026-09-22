@@ -236,26 +236,36 @@ export class AppSettingsStore {
     await this.persist()
   }
 
-  /** Ruling F62 — whether this launch owes the one-time pause for work the old orchestration toggle
-   *  was holding still. True exactly once, on the first launch of a build where orchestration is no
-   *  longer a setting, for a profile whose settings file did not say the toggle was on.
+  /** Ruling F62 — what this launch owes the one-time orchestration-always-on migration. `null` once
+   *  the profile has been through it; otherwise `pause` says whether there is parked work to stop.
    *
    *  **Keyed on a marker of its own, not on erasing the old field.** The old field was only ever
    *  written when the toggle was *on* (persist omits falsy values), so its absence is what says off —
    *  there is nothing to erase, and no way to record "done" in a key that was never there.
-   *  `orchAlwaysOnMigrated` is that record, and once written the answer is false forever.
+   *  `orchAlwaysOnMigrated` is that record, and once written this answers `null` forever.
    *
-   *  A profile that never used orchestration at all answers true once as well. That is deliberate
-   *  rather than tolerated: it has nothing parked, so the pause touches nothing and only writes the
-   *  marker. Narrowing further would mean asking the orchestration state a question here, before it
-   *  has been loaded. */
-  orchAlwaysOnPauseDue(): boolean {
-    return this.orchestrationWasOff && !this.orchAlwaysOnMigrated
+   *  **Every profile is owed the record, not only the ones that get paused** (ruling F64), and that
+   *  is why this answers an object rather than a boolean. `orchestrationEnabled` has left `persist`,
+   *  so the first ordinary settings write on a profile that had the toggle **on** — a language, a
+   *  theme, the first-run answer — drops the key from the file. Without a marker written on that
+   *  profile's first launch, the launch after that reads the same absence as "it was off" and pauses
+   *  the live Runs of exactly the people who used the feature, a launch or two after the upgrade so
+   *  that nothing connects it to the upgrade. The shape is deliberate: the caller cannot record the
+   *  one case and forget the other, because there is one branch to be inside.
+   *
+   *  A profile that never used orchestration at all answers `{ pause: true }` once. That is
+   *  deliberate rather than tolerated: it has nothing parked, so the pause touches nothing and only
+   *  writes the marker. Narrowing further would mean asking the orchestration state a question here,
+   *  before it has been loaded. */
+  orchAlwaysOnMigration(): { pause: boolean } | null {
+    if (this.orchAlwaysOnMigrated) return null
+    return { pause: this.orchestrationWasOff }
   }
 
-  /** Records that the pause has run, so it never runs twice. **Called only after the state write it
-   *  belongs to has landed** — writing this first and then failing to pause would leave the next
-   *  launch spending the person's accounts with nothing left to stop it. */
+  /** Records that the migration has run, so it never runs twice. **Called after the state write it
+   *  belongs to, when there is one** — writing this first and then failing to pause would leave the
+   *  next launch spending the person's accounts with nothing left to stop it. When nothing is paused
+   *  there is no state write to be after, and this is all the migration does. */
   async markOrchAlwaysOnMigrated(): Promise<void> {
     this.orchAlwaysOnMigrated = true
     await this.persist()

@@ -745,8 +745,20 @@ export async function handleCommand(
             ...(concurrency !== null ? { concurrency } : {}),
             ...(coordinatorAccountId ? { coordinatorAccountId } : {}),
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
-            // 않는다** — 템플릿은 자신이 돌지 않고, 발화가 만든 자식 Run 이 돈다(그 자식은
-            // spawnScheduledRun 이 autoDispatch 를 켠다).
+            // 않는다** — 템플릿 자신은 돌지 않기 때문이다.
+            //
+            // **자식 회차도 함께 못 돈다는 것이 이 줄의 오늘 결과다.** `autoDispatch` 는 이제 회차가
+            // 아니라 계획의 칸이고(types.ts — 회차마다 복사하던 `spawnScheduledRun` 은 없어졌다),
+            // 발화가 만든 회차는 이 템플릿 Job 을 그대로 쓰므로 `appDriven` 이 거짓이다. 이 주석은
+            // 한때 "자식은 spawnScheduledRun 이 켠다" 고 적고 있었는데, 그 함수와 함께 사실이 아니게
+            // 됐다.
+            //
+            // **여기를 바꾸려는 사람에게**(ruling F65): 예약 Job 에 `autoDispatch` 를 주면
+            // `state.ts` 의 `runGatedForTask` 에 있는 `job.schedule !== undefined` 가 그때부터 실제로
+            // 동작한다 — 그 줄이 거르는 것은 템플릿이 아니라 **발화가 만든 자식 회차**다(자식의
+            // `jobId` 가 템플릿의 것이므로). 그러면 그 회차의 검토가 `refuseIfRunGated` 로 가고,
+            // 사람이 읽는 Gate 문구는 "paused, a schedule template, or not yet started" 인데 셋 다
+            // 그 회차에 대해 거짓이다. 그 줄과 그 문구를 함께 손봐야 한다.
             ...(args.auto === true && schedule === undefined ? { autoDispatch: true } : {}),
             ...(schedule !== undefined ? { schedule } : {}),
             // `--auto` 는 "앱이 돌린다" 이고, 그 시작 시점은 사람이 정한다 — Task 를 하나 만드는
