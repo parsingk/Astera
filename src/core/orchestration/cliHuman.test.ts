@@ -129,6 +129,32 @@ describe('humanFor', () => {
     expect(out).toBe(['id        run_1', 'ordinal   2', 'progress  1/4'].join('\n'))
   })
 
+  // features 는 배열이다 — fields() 가 객체를 다루는 자리(단건 칸)를 그대로 타므로 [object
+  // Object] 가 아니라 읽을 수 있는 모양으로 나와야 한다.
+  it('host status 는 배열 칸(features)도 읽을 수 있게 편다', () => {
+    const out = humanFor('host-status', {
+      running: true,
+      pid: 42,
+      version: '1.3.25',
+      protocol: 3,
+      features: ['proc', 'orch'],
+      profile: 'D:/p',
+      jobs: 3
+    })
+    expect(out).not.toContain('[object Object]')
+    expect(out).toBe(
+      [
+        'running   true',
+        'pid       42',
+        'version   1.3.25',
+        'protocol  3',
+        'features  ["proc","orch"]',
+        'profile   D:/p',
+        'jobs      3'
+      ].join('\n')
+    )
+  })
+
   // 억지로 표를 씌우면 가이드가 시키는 것을 못 읽게 된다
   it('공개 표면이 아닌 명령은 null 이다', () => {
     expect(humanFor('dispatch-show', { id: 'd1' })).toBe(null)

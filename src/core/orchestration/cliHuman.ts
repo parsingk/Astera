@@ -194,6 +194,7 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
     case 'questions-get':
     case 'status':
     case 'version':
+    case 'host-status':
       return fields(data)
     default:
       return null

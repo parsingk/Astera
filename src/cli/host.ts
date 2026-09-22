@@ -54,6 +54,14 @@ function jobCountFrom(profileDir: string): number {
   }
 }
 
+/** `connectHost`'s signal for a broken line or a handler that threw. stdout is the one structured
+ *  envelope this command prints (`run.ts` renders it), so this goes to stderr instead — the same
+ *  channel `host/index.ts` uses for its own startup errors, and one a person running this directly
+ *  still sees without it landing inside anything a script parses. */
+const logToStderr = (m: string): void => {
+  process.stderr.write(`astera: ${m}\n`)
+}
+
 /** Runs a `host-*` command and hands back what happened, without printing anything (see the note at
  *  the top of this file) — `run.ts` renders `body` and exits with `code`. */
 export async function runHostCommand(a: {
@@ -79,7 +87,7 @@ export async function runHostCommand(a: {
     tmpDir: os.tmpdir(),
     protocol: HOST_PROTOCOL
   }).address
-  const connected = await connectHost({ address, app: CLI_VERSION })
+  const connected = await connectHost({ address, app: CLI_VERSION, log: logToStderr })
   const conn = 'error' in connected ? null : connected
   const jobs = jobCountFrom(profileDir)
   const body = hostStatus({ conn, profileDir, jobs })

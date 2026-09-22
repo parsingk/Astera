@@ -18,6 +18,12 @@ export async function connectHost(a: {
   address: string
   app: string
   timeoutMs?: number
+  /** Where a malformed line or a handler that threw gets reported. Every other real caller of
+   *  `createLineReader` in this repo — `main/host/client.ts`'s `attach()`, `host/server.ts`'s
+   *  connection handler — logs both rather than swallowing them; before this, `connectHost` did not,
+   *  and the only visible effect of a broken line was the generic `unreachable`/`timeout`, which
+   *  sends whoever is debugging it looking in the wrong place. */
+  log(m: string): void
 }): Promise<HostConnection | ConnectFailure> {
   return new Promise((resolve) => {
     const listeners = new Set<(m: HostMessage) => void>()
@@ -53,11 +59,11 @@ export async function connectHost(a: {
         }
         for (const cb of listeners) cb(m)
       },
-      // This connection has no logger of its own (unlike main/host/client.ts, which reports both of
-      // these to the app's log). A malformed line or a handler throw here is dropped rather than
-      // crashing the one command the CLI process is running.
-      onBadLine: () => {},
-      onHandlerError: () => {}
+      // Same wording as `main/host/client.ts`'s `attach()` — this is the same failure reported at the
+      // same seam, just without a persistent log file to write it to.
+      onBadLine: (raw) => a.log(`the Host sent a line that is not JSON: ${raw.slice(0, 200)}`),
+      onHandlerError: (v, err) =>
+        a.log(`a message from the Host failed: ${JSON.stringify(v).slice(0, 200)} — ${String(err)}`)
     })
     socket.on('data', (c: string) => read(c))
     socket.on('connect', () =>

@@ -43,7 +43,7 @@ describe('connectHost', () => {
         })
       )
     })
-    const conn = await connectHost({ address, app: 'test', timeoutMs: 2000 })
+    const conn = await connectHost({ address, app: 'test', timeoutMs: 2000, log: () => {} })
     expect('error' in conn).toBe(false)
     if ('error' in conn) return
     expect(conn.hello.features).toEqual(['orch'])
@@ -56,7 +56,7 @@ describe('connectHost', () => {
       process.platform === 'win32'
         ? '\\\\.\\pipe\\astera-test-nobody'
         : path.join(os.tmpdir(), 'astera-nobody', 'sock')
-    const r = await connectHost({ address, app: 'test', timeoutMs: 500 })
+    const r = await connectHost({ address, app: 'test', timeoutMs: 500, log: () => {} })
     expect(r).toEqual({ error: 'unreachable' })
   })
 
@@ -64,7 +64,46 @@ describe('connectHost', () => {
     const address = await listen((sock) => {
       sock.write(encodeLine({ t: 'protocol-mismatch', protocol: 99 }))
     })
-    const r = await connectHost({ address, app: 'test', timeoutMs: 2000 })
+    const r = await connectHost({ address, app: 'test', timeoutMs: 2000, log: () => {} })
     expect(r).toEqual({ error: 'protocol' })
+  })
+
+  // 이 둘은 main/host/client.ts 의 attach() 가 같은 자리에서 이미 지키는 규칙이다 — 깨진 줄이나
+  // 던진 핸들러가 아무 신호 없이 사라지면 실제로는 "Host 가 뭔가 잘못 말했다" 인 것이 "Host 가 없다"
+  // 로 읽힌다.
+  it('JSON 이 아닌 줄은 로그로 남고, 핸드셰이크는 그래도 끝난다', async () => {
+    const address = await listen((sock) => {
+      sock.write('not json\n')
+      sock.write(
+        encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, host: '1.3.25', pid: 7, startedAt: 'T', features: [] })
+      )
+    })
+    const logs: string[] = []
+    const conn = await connectHost({ address, app: 'test', timeoutMs: 2000, log: (m) => logs.push(m) })
+    expect('error' in conn).toBe(false)
+    if ('error' in conn) return
+    expect(logs.some((l) => l.includes('the Host sent a line that is not JSON'))).toBe(true)
+    conn.close()
+  })
+
+  it('onMessage 로 등록한 콜백이 던지면 로그로 남는다', async () => {
+    let serverSock: net.Socket | null = null
+    const address = await listen((sock) => {
+      serverSock = sock
+      sock.write(
+        encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, host: '1.3.25', pid: 7, startedAt: 'T', features: [] })
+      )
+    })
+    const logs: string[] = []
+    const conn = await connectHost({ address, app: 'test', timeoutMs: 2000, log: (m) => logs.push(m) })
+    expect('error' in conn).toBe(false)
+    if ('error' in conn) return
+    conn.onMessage(() => {
+      throw new Error('boom')
+    })
+    serverSock!.write(encodeLine({ t: 'pong', seq: 1 }))
+    await new Promise((r) => setTimeout(r, 100))
+    expect(logs.some((l) => l.includes('a message from the Host failed'))).toBe(true)
+    conn.close()
   })
 })
