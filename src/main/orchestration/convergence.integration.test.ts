@@ -34,7 +34,7 @@ import path from 'node:path'
 import { handleCommand, type OrchServerDeps } from '../../core/orchestration/command'
 import { TaskValidator, type ValidatorRunner } from './validator'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './repair'
-import { OrchestrationStore } from './store'
+import { OrchestrationStore } from '../../core/orchestration/store'
 import { buildReviewSpecFile, specFileName } from './coordinator'
 import {
   applyValidationResult,

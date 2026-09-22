@@ -11,7 +11,7 @@ import {
   serializePendingReport,
   type PendingReport
 } from '../../core/orchestration/pendingReports'
-import { OrchestrationStore } from './store'
+import { OrchestrationStore } from '../../core/orchestration/store'
 import {
   applyWorkerDone,
   emptyState,

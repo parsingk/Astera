@@ -323,7 +323,7 @@ describe('the seam with the real store', () => {
   it('a crafted orchestration.json boots into exactly one candidate', async () => {
     // The reconciler's input is whatever store.load() leaves behind, so craft the file the way a
     // crash leaves it (an open Dispatch) and let the real cleanup close it.
-    const { OrchestrationStore } = await import('../orchestration/store')
+    const { OrchestrationStore } = await import('../../core/orchestration/store')
     const fs = await import('node:fs')
     const os = await import('node:os')
     const path = await import('node:path')

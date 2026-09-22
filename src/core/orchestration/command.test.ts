@@ -7,7 +7,7 @@ import { ensureProject } from './projects'
 import { absPath } from '../testPaths'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { OrchCoordinator, type CoordinatorDeps } from '../../main/orchestration/coordinator'
-import { OrchestrationStore } from '../../main/orchestration/store'
+import { OrchestrationStore } from './store'
 import {
   applyValidationResult,
   attachCoordinator,

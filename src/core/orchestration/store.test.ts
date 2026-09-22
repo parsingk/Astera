@@ -3,8 +3,8 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { OrchestrationStore, RUN_TTL_MS } from './store'
-import { emptyState, type OrchState } from '../../core/orchestration/state'
-import { stateFromLegacy } from '../../core/orchestration/legacyState'
+import { emptyState, type OrchState } from './state'
+import { stateFromLegacy } from './legacyState'
 
 let dir: string
 beforeEach(async () => {

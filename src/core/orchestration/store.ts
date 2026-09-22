@@ -1,4 +1,6 @@
-// orchestration.json persistence. The RunConfigStore pattern —
+// orchestration.json persistence. **In core rather than main because the Host reads and writes this
+// file too** (host control plane design §6) — it uses only `node:fs`/`node:path`/`node:crypto` and the
+// pure state layer, so nothing about it ever needed Electron. The RunConfigStore pattern —
 // type guard → atomic tmp+rename write → on a parse failure, back up to .bak and start empty.
 //
 // Why the corruption policy is whole-file recovery: entries reference each other
@@ -16,9 +18,9 @@ import {
   interruptStalledTask,
   jobOf,
   type OrchState
-} from '../../core/orchestration/state'
-import { latestImplDispatch } from '../../core/orchestration/convergence'
-import { splitLegacyRuns, type LegacyRun } from '../../core/orchestration/legacy'
+} from './state'
+import { latestImplDispatch } from './convergence'
+import { splitLegacyRuns, type LegacyRun } from './legacy'
 
 /** Cutoff for discarding a finished Run. The same 30 days as SchedulerConfigStore's ENTRY_TTL_MS */
 export const RUN_TTL_MS = 30 * 24 * 60 * 60 * 1000
