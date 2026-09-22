@@ -75,6 +75,14 @@ import type { HandoffBody } from '../handoff/types'
 import type { Lang } from '../i18n'
 import { isOverrideCompletion, policyOf } from './convergence'
 
+/** One row of `listAccounts`. Named only because the declaration below is a union and repeating the
+ *  shape on both sides invites the two halves to drift. */
+export interface OrchAccount {
+  id: string
+  label: string
+  provider: Provider
+}
+
 export interface OrchServerDeps {
   getState(): OrchState
   setState(next: OrchState): Promise<void>
@@ -171,7 +179,13 @@ export interface OrchServerDeps {
    *  주입되지 않으면 만들지 않는다 — 그때는 worker-start 가 `--worktree` 없는 호출을 소리 내어
    *  거절하므로(아래) 코디네이터가 `--worktree new` 로 갈 수 있다. */
   makeRunWorktree?(a: { repoPath: string; name: string }): Promise<string>
-  listAccounts(provider?: Provider): { id: string; label: string; provider: Provider }[]
+  /** **Either an array or a promise of one, and the three call sites `await` it.**
+   *
+   *  It is answered locally in the app and across a socket in the Host, and the command layer must
+   *  not care which — that is the whole point of the split (host control plane design §5). The union
+   *  rather than `Promise<…>` outright: `await` on a plain array is already correct, so the app's
+   *  wiring and every test double that returns one stay exactly as they are. */
+  listAccounts(provider?: Provider): OrchAccount[] | Promise<OrchAccount[]>
   readWorker(a: { dispatchId: string; limit?: number }): Promise<string>
   enabled(): boolean
   /** Whether work-unit tracking is on — the toggle the three session-task-* commands answer to,
@@ -637,7 +651,11 @@ export async function handleCommand(
         // 알 방법이 화면에 없다 — `--account` 가 빈 칸을 거절하는 것과 같은 이유다.
         if (coordArg.includes(','))
           return bad('--coordinator-account takes one account, not a list')
-        if (!deps.listAccounts().some((k) => k.id === coordArg))
+        // Awaited: the account list may be answered across a socket now (listAccounts' own note).
+        // Nothing is committed from the entry snapshot on this path — the state this command writes
+        // is built from the `deps.getState()` re-read further down, which the `resolveProjectRoot`
+        // await below already made necessary.
+        if (!(await deps.listAccounts()).some((k) => k.id === coordArg))
           return notFound(`unknown account: ${coordArg}`)
         coordinatorAccountId = coordArg
       }
@@ -1232,7 +1250,7 @@ export async function handleCommand(
       if (accountArg === null) return bad('--account is required')
       // 검증은 parseAccountList 가 한다 — `run-create --coordinator-account` 와 **같은 규칙**이고,
       // 두 번 적으면 한쪽만 고쳐지는 날이 온다(그 함수의 주석).
-      const parsedAccounts = parseAccountList(accountArg, deps.listAccounts(), '--account')
+      const parsedAccounts = parseAccountList(accountArg, await deps.listAccounts(), '--account')
       if (!parsedAccounts.ok) return bad(parsedAccounts.reason)
       const accountIds: string[] = parsedAccounts.ids
       // `--validate` 는 쉼표 목록이다(설계 D8) — `--account` 와 같은 규약. 옛 단일 값도 한 칸짜리
@@ -1244,13 +1262,19 @@ export async function handleCommand(
         if (parts.some((x) => x === '')) return bad('--validate must not contain an empty entry')
         validateIds = parts
       }
+      // **getState is read again here, not the entry snapshot `s`.** `listAccounts` above is now
+      // awaited (it may be answered across a socket), and this command commits after it — building
+      // from `s` would overwrite whatever landed during that await. Exactly the inversion
+      // `run-create`'s re-read documents at length a few hundred lines up, arriving here for the
+      // same reason: a dependency that used to be a function call became a round trip.
+      const latest = deps.getState()
       return commit(
         createTask(
-          s,
+          latest,
           {
             // **Job 을 지목하면 정의 Task 다.** 화면은 아직 돌지 않은 Job 에 Task 를 짜 넣고('실행'
             // 전), 코디네이터는 자기가 받은 회차에 붙인다. 두 id 는 접두사가 달라 섞이지 않는다.
-            ...(s.jobs.some((j) => j.id === runId) ? { jobId: runId } : { runId }),
+            ...(latest.jobs.some((j) => j.id === runId) ? { jobId: runId } : { runId }),
             title: str(args.title) ?? spec.split('\n')[0].slice(0, 80),
             spec,
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
@@ -2242,7 +2266,7 @@ export async function handleCommand(
       return okBody({ version: deps.appVersion?.() ?? null, protocol: CLI_PROTOCOL })
     case 'accounts': {
       const agent = str(args.agent)
-      return okBody(deps.listAccounts(agent === 'claude' || agent === 'codex' ? agent : undefined))
+      return okBody(await deps.listAccounts(agent === 'claude' || agent === 'codex' ? agent : undefined))
     }
     case 'reset': {
       const open = s.dispatches.filter((d) => !d.endedAt)
