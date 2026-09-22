@@ -588,3 +588,259 @@ describe('createHostOrch', () => {
     })
   })
 })
+
+// === 요청 영수증 (docs/2026-09-23-request-receipts-design.md) ===
+//
+// **이 묶음이 세는 것은 답이 아니라 효과다.** 바이트가 같은 답을 돌려주면서 의존을 두 번 부른 재시도가
+// 이 설계가 막으려는 실패 그 자체이므로, 답만 보는 시험은 없는 것보다 나쁘다 — 앱으로 나간 행동의
+// 횟수와 상태에 남은 것을 함께 센다.
+describe('요청 영수증', () => {
+  /** 앱으로 나가는 행동을 이름별로 세는 대역. 어느 의존이 몇 번 불렸는지가 이 묶음의 판정 기준이다. */
+  const counting = (
+    over: Record<string, (args: unknown[], nth: number) => unknown> = {}
+  ): { act: (name: string, args: unknown[]) => Promise<unknown>; calls: string[] } => {
+    const calls: string[] = []
+    return {
+      calls,
+      act: async (name, args) => {
+        calls.push(name)
+        const nth = calls.filter((c) => c === name).length
+        if (over[name]) return over[name](args, nth)
+        if (name === 'startWorker')
+          return { sessionId: `ses${nth}`, cwd: 'D:/wt', specPath: 'D:/wt/s.md' }
+        // run-create 가 지나가며 부른다 — 준 경로를 그대로 돌려준다(앱의 정규화가 하는 일).
+        if (name === 'resolveProjectRoot') return args[0]
+        return {}
+      }
+    }
+  }
+  const countOf = (calls: string[], name: string): number => calls.filter((c) => c === name).length
+
+  const workerArgs = (taskId: string): Record<string, unknown> => ({
+    task: taskId,
+    agent: 'codex',
+    account: 'acc1',
+    worktree: 'current'
+  })
+
+  /** 파일에 있는 상태를 손으로 고쳐 다시 쓴다 — 아직 load 하지 않은 Host 만 이것을 본다. */
+  const patchFile = async (f: (s: OrchState) => OrchState): Promise<void> => {
+    const file = path.join(dir, 'orchestration.json')
+    const next = f(JSON.parse(await fs.readFile(file, 'utf8')) as OrchState)
+    await fs.writeFile(file, JSON.stringify(next), 'utf8')
+  }
+  const savedState = async (): Promise<OrchState> =>
+    JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+
+  // === 1단계 — 무엇이 영수증을 남기는가 ===
+
+  /**
+   * **설계 §3 의 논거 전체가 이 한 줄이다.** `run-merge` 는 git 병합을 돌리고 `setState` 는 한 번도
+   * 부르지 않는다 — 명령 이름으로 목록을 짰다면 놓쳤을 자리이고, 상태에는 두 번째 병합을 막을 것이
+   * 아무것도 없으므로 여기서 세는 횟수가 진짜 판정이다.
+   */
+  it('커밋하지 않고 움직인 run-merge 도 영수증을 남긴다', async () => {
+    await seed()
+    await patchFile((s) => ({ ...s, runs: s.runs.map((r) => ({ ...r, worktree: 'D:/wt-run' })) }))
+    const c = counting({ mergeWorktrees: () => ({ ok: true, merged: ['D:/wt-run'], uncommitted: 0 }) })
+    const orch = orchOver({ act: c.act })
+    const args = { run: (await savedState()).runs[0].id }
+    const first = await orch.call({ cmd: 'run-merge', args, sessionId: 'sesA', request: 'req-1' })
+    const second = await orch.call({ cmd: 'run-merge', args, sessionId: 'sesA', request: 'req-1' })
+    expect(first.status).toBe(200)
+    expect(countOf(c.calls, 'mergeWorktrees'), '재시도가 병합을 한 번 더 돌렸다').toBe(1)
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+  })
+
+  // 읽기는 아무것도 바꾸지 않으므로 남길 것이 없다 — 남기면 그 뒤의 읽기가 모두 낡은 답을 받는다
+  // (설계 §6 의 네 번째 원인).
+  it('읽기는 영수증을 남기지 않는다 — 두 번째도 지금을 읽는다', async () => {
+    await seed()
+    const c = counting({ readWorker: (_a, nth) => `출력 ${nth}` })
+    const orch = orchOver({ act: c.act })
+    const args = { dispatch: 'dsp_1' }
+    const first = await orch.call({ cmd: 'worker-read', args, sessionId: 'sesA', request: 'req-1' })
+    const second = await orch.call({ cmd: 'worker-read', args, sessionId: 'sesA', request: 'req-1' })
+    expect(countOf(c.calls, 'readWorker')).toBe(2)
+    expect((first.body as { output: string }).output).toBe('출력 1')
+    expect((second.body as { output: string }).output).toBe('출력 2')
+  })
+
+  /**
+   * **행동하기 전에 거절된 호출은 아무것도 남기지 않는다.** 거절은 결정적이라 되풀이해도 안전하고,
+   * 무엇보다 그 뒤에 세상이 바뀌면 같은 요청이 이번에는 되어야 한다 — 영수증을 남기면 그 재시도가
+   * 영영 옛 거절을 되받는다.
+   */
+  it('행동하기 전에 거절된 호출은 영수증을 남기지 않는다', async () => {
+    const { taskId } = await seed()
+    await patchFile((s) => ({ ...s, tasks: s.tasks.map((t) => ({ ...t, status: 'blocked' as const })) }))
+    const c = counting()
+    const orch = orchOver({ act: c.act })
+    const args = workerArgs(taskId)
+    const refused = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
+    expect(refused.status).toBe(400)
+    expect(countOf(c.calls, 'startWorker')).toBe(0)
+    // Gate 가 풀려 Task 가 다시 일할 수 있게 됐다 — 앱이 상태를 통째로 밀어 넣는 그 길로 재현한다.
+    const now = await savedState()
+    await orch.call({
+      cmd: 'state-put',
+      args: { state: { ...now, tasks: now.tasks.map((t) => ({ ...t, status: 'ready' as const })) } },
+      sessionId: '',
+      from: { role: 'app', toOthers: () => {} }
+    })
+    const retried = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
+    expect(retried.status, '거절이 영수증으로 남아 재시도를 막았다').toBe(200)
+    expect(countOf(c.calls, 'startWorker')).toBe(1)
+  })
+
+  // === 2단계 — 재생 ===
+
+  /**
+   * **설계의 인수 시험이다**(§13 단계 2). 같은 요청 id 로 두 번 부른 worker-start 는 워커를 한 번만
+   * 띄우고, 두 번째 답은 첫 번째와 바이트 단위로 같고, 상태에는 Dispatch 가 하나만 남는다.
+   *
+   * 오늘 이 자리를 지키는 것은 상태 자신이다 — 열린 Dispatch 가 있으면 worker-start 가 400 으로
+   * 거절한다. 그래서 재생이 없을 때 여기서 빨간 것은 **답**이고("dispatch already open"), 의존
+   * 횟수가 판정하는 자리는 위의 run-merge 와 아래 run-create 다. 셋을 함께 두는 이유가 그것이다.
+   */
+  it('같은 요청 id 의 worker-start 는 워커를 한 번만 띄운다', async () => {
+    const { taskId } = await seed()
+    const c = counting()
+    const orch = orchOver({ act: c.act })
+    const args = workerArgs(taskId)
+    const first = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
+    const second = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
+    expect(first.status).toBe(200)
+    expect(countOf(c.calls, 'startWorker'), '재시도가 워커를 한 번 더 띄웠다').toBe(1)
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+    expect((await savedState()).dispatches).toHaveLength(1)
+  })
+
+  // id 를 만드는 명령(§3 의 첫 번째 갈래). 두 번 커밋되면 계획이 둘이고, 그것이 여기서 세는 효과다.
+  it('같은 요청 id 의 run-create 는 계획을 하나만 만든다', async () => {
+    const c = counting()
+    const orch = orchOver({ act: c.act })
+    const args = { objective: '무언가', cwd: 'D:/p' }
+    const first = await orch.call({ cmd: 'run-create', args, sessionId: 'sesA', request: 'req-1' })
+    const second = await orch.call({ cmd: 'run-create', args, sessionId: 'sesA', request: 'req-1' })
+    expect((await savedState()).jobs, '재시도가 계획을 하나 더 만들었다').toHaveLength(1)
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+  })
+
+  // **우리 마음대로 합치지 않는다.** 두 호출이 한 요청이라는 말은 부르는 쪽만 할 수 있고, 그 말이
+  // 요청 id 다 — id 가 다르면 두 번 하는 것이 맞다.
+  it('요청 id 가 다르면 두 번 만든다', async () => {
+    const c = counting()
+    const orch = orchOver({ act: c.act })
+    const args = { objective: '무언가', cwd: 'D:/p' }
+    await orch.call({ cmd: 'run-create', args, sessionId: 'sesA', request: 'req-1' })
+    await orch.call({ cmd: 'run-create', args, sessionId: 'sesA', request: 'req-2' })
+    expect((await savedState()).jobs).toHaveLength(2)
+  })
+
+  // **범위는 세션이다**(설계 §5). 재생은 기록된 답을 그대로 돌려주는 일이라, 남의 요청 id 를 맞히는
+  // 것이 남의 답을 읽는 두 번째 문이 되어서는 안 된다.
+  it('세션이 다르면 같은 요청 id 라도 다른 요청이다', async () => {
+    const c = counting()
+    const orch = orchOver({ act: c.act })
+    const args = { objective: '무언가', cwd: 'D:/p' }
+    await orch.call({ cmd: 'run-create', args, sessionId: 'sesA', request: 'req-1' })
+    await orch.call({ cmd: 'run-create', args, sessionId: 'sesB', request: 'req-1' })
+    expect((await savedState()).jobs).toHaveLength(2)
+  })
+
+  /**
+   * `ask` 를 두 번 만들면 사람이 같은 것을 두 번 보고 하나에만 답하며, 워커는 다른 하나를 계속
+   * 기다린다(설계 §7).
+   *
+   * **여기서도 질문의 수를 지키는 것은 오늘 이미 상태다** — `createQuestion` 이 같은 Dispatch 의
+   * 두 번째 미답 질문을 거절한다. 그래서 재생이 없을 때 빨간 것은 답이다: 재시도가 400 "a pending
+   * question already exists" 를 받아 exit 2 로 떨어지고, 부르는 쪽은 자기 인자를 고치려 든다.
+   * 관찰해서 되돌려 주는 재생(`timedOut` 을 그대로 돌려주지 않는 것)은 9단계의 몫이다.
+   */
+  it('같은 요청 id 의 ask 는 질문을 하나만 만들고 같은 답을 돌려준다', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const dsp = openDispatch(
+      task.state,
+      { taskId: task.value.id, provider: 'codex', accountId: 'accA', sessionId: 'ses1', cwd: 'D:/p', specPath: 'D:/p/s.md' },
+      NOW
+    )
+    if (!dsp.ok) throw new Error(dsp.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(dsp.state), 'utf8')
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses1']) })
+    const args = { taskId: task.value.id, dispatchId: dsp.value.id, question: '이대로 갈까요?', timeoutMs: 1 }
+    const first = await orch.call({ cmd: 'ask', args, sessionId: 'ses1', request: 'req-1' })
+    const second = await orch.call({ cmd: 'ask', args, sessionId: 'ses1', request: 'req-1' })
+    expect(first.status).toBe(200)
+    expect(JSON.stringify(second), '재시도가 자기 인자를 탓하는 400 을 받았다').toBe(JSON.stringify(first))
+    expect((await savedState()).messages.filter((m) => m.type === 'question')).toHaveLength(1)
+  })
+
+  // === 3단계 — 진행 중인 요청 ===
+
+  /**
+   * **합류시키지 않고 거절한다**(설계 §7). `ask` 는 10분, `check --wait` 은 5분, `runs wait` 은 한
+   * 시간을 소켓에 매달려 있으므로, 이미 실패했다고 믿는 호출을 그만큼 더 붙잡아 두는 것이 회복하려던
+   * 실패보다 나쁘다. 409 는 이미 있는 뜻("지금 상태로는 못 한다")이고, 열한 번째 종료 코드는 없다.
+   */
+  it('진행 중인 요청의 재시도는 409 로 거절한다 — 합류시키지 않는다', async () => {
+    const { taskId } = await seed()
+    let release = (): void => {}
+    const blocked = new Promise<void>((r) => {
+      release = () => r()
+    })
+    const c = counting({
+      startWorker: async () => {
+        await blocked
+        return { sessionId: 'ses1', cwd: 'D:/wt', specPath: 'D:/wt/s.md' }
+      }
+    })
+    const orch = orchOver({ act: c.act })
+    const args = workerArgs(taskId)
+    const inFlight = orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
+    // 첫 호출이 startWorker 에 닿을 때까지 이벤트 루프를 돌린다.
+    while (countOf(c.calls, 'startWorker') === 0) await new Promise((r) => setImmediate(r))
+    const retry = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
+    expect(retry.status).toBe(409)
+    expect(JSON.stringify(retry.body)).toContain('req-1')
+    expect(countOf(c.calls, 'startWorker'), '거절이 의존을 한 번 더 건드렸다').toBe(1)
+    release()
+    expect((await inFlight).status).toBe(200)
+  })
+
+  /** 검사와 자리 잡기가 한 걸음이 아니면 둘 다 자리가 비어 있는 것을 본다 — `reserveVersion` 이 같은
+   *  이유로 지키는 규율이다(설계 §7). */
+  it('같은 틱에 온 두 호출 중 하나만 이긴다', async () => {
+    const c = counting()
+    const orch = orchOver({ act: c.act })
+    const args = { objective: '무언가', cwd: 'D:/p' }
+    const [a, b] = await Promise.all([
+      orch.call({ cmd: 'run-create', args, sessionId: 'sesA', request: 'req-1' }),
+      orch.call({ cmd: 'run-create', args, sessionId: 'sesA', request: 'req-1' })
+    ])
+    expect([a.status, b.status].sort()).toEqual([200, 409])
+    expect((await savedState()).jobs).toHaveLength(1)
+  })
+
+  // === 키의 생김새 ===
+  //
+  // 지도의 열쇠가 세션 id 와 요청 id 를 NUL 로 이은 것이라, id 안의 NUL 은 남의 범위를 위조한다.
+  // 나머지 둘은 저장이 무한히 자라지 않게 하는 최소한의 울타리다.
+  it('빈 id, 너무 긴 id, 제어문자가 든 id 는 400 이다', async () => {
+    const orch = orchOver()
+    const args = { objective: '무언가', cwd: 'D:/p' }
+    const NUL = String.fromCharCode(0)
+    const LF = String.fromCharCode(10)
+    for (const wrong of ['', 'x'.repeat(201), `a${NUL}b`, `a${LF}b`]) {
+      const r = await orch.call({ cmd: 'run-create', args, sessionId: 'sesA', request: wrong })
+      expect(r.status, JSON.stringify(wrong)).toBe(400)
+    }
+    // 그리고 아무것도 커밋되지 않았다 — 거절은 명령에 닿기 전이다.
+    expect((await orch.call({ cmd: 'jobs-list', args: {}, sessionId: '' })).body).toEqual([])
+  })
+})

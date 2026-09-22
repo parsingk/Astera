@@ -271,7 +271,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
             }
           }
           void deps.orch
-            .call({ cmd: m.cmd, args: m.args, sessionId: m.session ?? '', from })
+            .call({ cmd: m.cmd, args: m.args, sessionId: m.session ?? '', from, request: m.request })
             .then((r) => send({ t: 'orch-result', call: m.call, status: r.status, body: r.body }))
           return
         }

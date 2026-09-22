@@ -108,7 +108,14 @@ export type ClientMessage =
    *  names which one it answers. `args`/`session` are today's HTTP body and `x-astera-session`
    *  header, carried unchanged. Answered only for a socket that has said hello — the Host's
    *  `greetedSockets` guard (design §9) — the same rule every other reply already follows. */
-  | { t: 'orch-call'; call: string; cmd: string; args: Record<string, unknown>; session?: string }
+  /** `request` is the caller's own id for the *request*, as opposed to `call`, which is its id for
+   *  this attempt on this socket (request receipts design §8). It rides the envelope rather than
+   *  `args` because it is not an argument to any command: no `case` in `handleCommand` reads it, and
+   *  the Host decides from it alone whether this call is a first attempt or a retry of one it has
+   *  already answered. Additive, so HOST_PROTOCOL stays 3 — a Host from before it destructures
+   *  `{cmd, args, session}` and runs the command unprotected, which is why the CLI must not send a
+   *  *presented* id to a Host that has not announced the feature. */
+  | { t: 'orch-call'; call: string; cmd: string; args: Record<string, unknown>; session?: string; request?: string }
   /** The app's answer to one `orch-act` (design §5), carrying back the `call` the Host asked with.
    *  `ok: false` is the action's own failure and `error` is what the command layer puts in its reply,
    *  so a refusal reads to the caller exactly as it did when the action ran inside the app. */

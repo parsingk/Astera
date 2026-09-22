@@ -39,6 +39,10 @@ export interface OrchCall {
     /** Absent for a caller that has no socket behind it (tests, and the stub below). A command that
      *  needs to know who is asking refuses when it is missing rather than assuming the app. */
     from?: OrchCaller
+    /** The caller's own id for this *request* (request receipts design §5). Absent means the caller
+     *  did not ask for a receipt, and then nothing about this call changes: no lookup, no record,
+     *  and the same reply in the same order as before the mechanism existed (§9). */
+    request?: string
   }): Promise<{ status: number; body: unknown }>
 }
 

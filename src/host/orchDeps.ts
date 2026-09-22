@@ -21,7 +21,7 @@ const OWNED = ['getState', 'setState', 'now', 'log', 'runningSessions', 'appVers
 /**
  * **Forwarded, and a refusal reaches the caller.** `handleCommand` either awaits these and lets the
  * rejection out, or turns it into its own error reply — either way the command's outcome is decided
- * by the refusal, so the call is answered CONFLICT (`orch.ts`'s `refused` flag).
+ * by the refusal, so the call is answered CONFLICT (`orch.ts`'s `appRefused` mark).
  */
 const PROPAGATES = [
   'startWorker', 'releaseWorker', 'mergeWorktrees', 'removeWorktrees', 'startCoordinator',
@@ -146,6 +146,76 @@ type Classified =
   | keyof typeof NESTED
   | keyof typeof DEGRADES
 
+/**
+ * **Whether calling this dependency changes something outside the state** (request receipts design
+ * §3). A receipt is recorded when a command committed, or when it called one of the names below that
+ * is `true` — and the second half is what a list of command names would have got wrong: `run-merge`
+ * runs a git merge, `worker-release` kills a session, `handoff` writes a memo and `browser-js` runs a
+ * script in a real browser, none of them through `setState`.
+ *
+ * **Keyed by `Classified`, so the existing check below covers this too**: a dependency added later
+ * cannot compile until both its group and its effectfulness are declared. The entries for OWNED are
+ * declarations rather than lookups — those members never cross `a.act`, and `setState`'s half of the
+ * rule is the commit flag `orch.ts` sets in its own wrapper.
+ *
+ * The reading is "does a second call leave something a single call could not have left". So a probe,
+ * a file read and every toggle are `false` although they touch the disk; `unregisterRolling` is
+ * `true` although it returns nothing, because the rolling chain it drops does not come back.
+ */
+const EFFECTFUL: Record<Classified, boolean> = {
+  // OWNED — never forwarded; here for the compiler check and to state the rule in one place.
+  getState: false,
+  setState: true,
+  now: false,
+  log: false,
+  runningSessions: false,
+  appVersion: false,
+  backup: true,
+  // PROPAGATES.
+  startWorker: true,
+  releaseWorker: true,
+  mergeWorktrees: true,
+  removeWorktrees: true,
+  startCoordinator: true,
+  makeRunWorktree: true,
+  listAccounts: false,
+  readWorker: false,
+  listRunConfigs: false,
+  browserRun: true,
+  browserEnabled: false,
+  handoffEnabled: false,
+  trackingEnabled: false,
+  // SWALLOWED — all three are questions about what is already there.
+  probeLimit: false,
+  resolveProjectRoot: false,
+  readReviewFile: false,
+  // FIRE_AND_FORGET — every one of them starts or ends something, which is why nobody holds the
+  // result. That the caller does not wait for them does not make them free to do twice.
+  unregisterRolling: true,
+  startValidation: true,
+  startReview: true,
+  startRepair: true,
+  onDispatchLost: true,
+  // NESTED, by group: `handoffs.save` writes the memo, and the three `sessionTasks.*` each record a
+  // work unit.
+  handoffs: true,
+  sessionTasks: true,
+  // DEGRADES.
+  repairTargetFor: false,
+  repairOnce: true,
+  lang: false
+}
+
+/** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
+ *  expanded to the dotted names `a.act` is called with. Built once at module load: the funnel looks
+ *  a name up here, and the answer cannot depend on which call is running. */
+const EFFECTFUL_ACTS: ReadonlySet<string> = new Set<string>([
+  ...REMOTE.filter((name) => EFFECTFUL[name]),
+  ...Object.entries(NESTED).flatMap(([group, methods]) =>
+    EFFECTFUL[group as keyof typeof NESTED] ? methods.map((m) => `${group}.${m}`) : []
+  )
+])
+
 /** Whatever the groups above do not name between them lands here. */
 type Unlisted<T, Listed extends PropertyKey> = Exclude<keyof T, Listed>
 /** If anything is left, the compiler names it here and the build stops. An unused alias on purpose —
@@ -179,9 +249,27 @@ export function hostOrchDeps(a: {
    *  matching text in the reply. Never called for the other three groups — SWALLOWED, FIRE_AND_FORGET
    *  and DEGRADES: their refusal does not decide what the command answers. */
   onAppRequired(name: string, why: string): void
+  /** Called when this command is about to ask the app for something that **changes something outside
+   *  the state** — the other half of "did this call do anything", beside the commit flag (request
+   *  receipts design §3). Optional: a caller that does not record receipts leaves it out, and the
+   *  funnel below then costs one `Set` lookup on the acts that really go out.
+   *
+   *  **Before the action, not after it.** `a.act` rejects when the app goes away mid-question or
+   *  holds it past the deadline, and neither says the app did not do it — a request that may have
+   *  landed has to read as one that did. */
+  onEffect?(): void
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
+
+  /** **The one funnel every app-side action goes through**, and the reason the receipt rule can be
+   *  "did this call act" rather than a hand-kept list of command names: the three wrappers below all
+   *  end here, so a dependency cannot be forwarded without passing this line. A name that never
+   *  reaches it — the app is not attached, so `forward` throws first — really did not act. */
+  const act = (name: string, args: unknown[]): Promise<unknown> => {
+    if (EFFECTFUL_ACTS.has(name)) a.onEffect?.()
+    return a.act(name, args)
+  }
 
   // **Every argument travels, always, as the array it arrived in** (F21). Not "the one argument when
   // there is one": `removeWorktrees(paths)` takes a single argument that is itself an array, so a
@@ -197,7 +285,7 @@ export function hostOrchDeps(a: {
         throw err
       }
       try {
-        return await a.act(name, args)
+        return await act(name, args)
       } catch (err) {
         // The app was there a moment ago and the question still could not be put to it — it went
         // away mid-flight, or held the question past the deadline (`HostServer.act`). That is the
@@ -218,7 +306,7 @@ export function hostOrchDeps(a: {
     async (...args: unknown[]): Promise<unknown> => {
       try {
         if (!a.hasApp()) throw refusal(name)
-        return await a.act(name, args)
+        return await act(name, args)
       } catch (err) {
         if (!(err instanceof AppUnreachable)) throw err
         const value = fallback(err.message)
@@ -237,7 +325,7 @@ export function hostOrchDeps(a: {
         a.log(`${name} was not forwarded: ${refusal(name).message}`)
         return
       }
-      void a.act(name, args).catch((err) => a.log(`${name} failed in the app: ${String(err)}`))
+      void act(name, args).catch((err) => a.log(`${name} failed in the app: ${String(err)}`))
     }
 
   const remote = Object.fromEntries(

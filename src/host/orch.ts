@@ -11,6 +11,25 @@ import { runningRunCount } from '../core/orchestration/running'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { hostOrchDeps } from './orchDeps'
 
+/** One reply — today's HTTP status and body, the shape `OrchCall.call` already answers with. Named
+ *  only because the receipt store below holds one. */
+type Reply = { status: number; body: unknown }
+
+/** What a request id may look like (request receipts design §5). **Not a UUID**: Orca validates one
+ *  in its client and enforces nothing in its runtime, and its own federation code writes ids that
+ *  would fail that check — a rule that exists in one place and is broken in another. What is enforced
+ *  is only what the store needs to stay safe: the map key is the session id and the request id joined
+ *  by a NUL, so a NUL inside the id would forge another session's scope, and the rest of the control
+ *  characters go with it because an id is written into logs and into messages a person reads. */
+const REQUEST_ID_MAX = 200
+const hasControlChar = (s: string): boolean => {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c < 0x20 || c === 0x7f) return true
+  }
+  return false
+}
+
 export interface HostOrch extends OrchCall {
   /** Loads the state, once. Lazy and memoized on purpose — see `createHostOrch`. */
   ready(): Promise<void>
@@ -98,19 +117,26 @@ export function createHostOrch(a: {
       })
     })())
 
-  /** **Built per call, and that is what makes the CONFLICT decision honest.**
+  /** What one call did, filled in by the dependencies as it runs. Three flags, two questions.
    *
-   *  A forwarded action refuses by throwing, and each command turns a dependency failure into its own
-   *  status: `worker-start` rolls its Dispatch back and answers 400 ("failed to start worker: ..."),
-   *  which is right for a spawn that failed and wrong for this one — 400 tells a person their
-   *  arguments were bad, and they were fine. So the status is corrected on the way out, and what it
-   *  is corrected on is this flag, set by the forwarder itself. It used to be a substring match on
-   *  the reply body, which most error paths fill with ids and titles the caller supplied: an id with
-   *  APP_REQUIRED in it turned a 404 into a 409 and a script read exit 6 where exit 4 was the truth.
+   *  **`appRefused` is what makes the CONFLICT decision honest.** A forwarded action refuses by
+   *  throwing, and each command turns a dependency failure into its own status: `worker-start` rolls
+   *  its Dispatch back and answers 400 ("failed to start worker: ..."), which is right for a spawn
+   *  that failed and wrong for this one — 400 tells a person their arguments were bad, and they were
+   *  fine. So the status is corrected on the way out, and what it is corrected on is this flag, set
+   *  by the forwarder itself. It used to be a substring match on the reply body, which most error
+   *  paths fill with ids and titles the caller supplied: an id with APP_REQUIRED in it turned a 404
+   *  into a 409 and a script read exit 6 where exit 4 was the truth.
    *
-   *  One object literal per call costs nothing beside running a command, and a flag that lives no
-   *  longer than the call it belongs to cannot be read by the next one. */
-  const depsFor = (refused: { app: boolean }): OrchServerDeps =>
+   *  **`committed` and `acted` are the two halves of "did this call do anything"** (request receipts
+   *  design §3), and a receipt is kept only when one of them is set. They ride here rather than in a
+   *  second object because this one is already built per call, and a flag that lives no longer than
+   *  the call it belongs to cannot be read by the next one. */
+  type CallMarks = { appRefused: boolean; committed: boolean; acted: boolean }
+
+  /** **Built per call**, because the marks above are. One object literal per call costs nothing
+   *  beside running a command. */
+  const depsFor = (marks: CallMarks): OrchServerDeps =>
     hostOrchDeps({
       getState: () => store.get(),
       setState: async (next) => {
@@ -119,6 +145,11 @@ export function createHostOrch(a: {
         // pre-commit number, pass the check, and land a whole state that does not contain this
         // commit — the exact loss ruling F56 is about, with the Host as the losing side.
         const committed = reserveVersion()
+        // Marked here rather than after the write, in the same synchronous step as the number it
+        // takes: `store.save` moves memory before it queues the disk write, so this state is the one
+        // every later command reads even if the file write then fails. A receipt that said otherwise
+        // would let a retry re-run a command whose effect the next command can already see.
+        marks.committed = true
         await store.save(next)
         a.onState(next, committed)
       },
@@ -131,8 +162,11 @@ export function createHostOrch(a: {
       act: a.act,
       hasApp: a.hasApp,
       log: a.log,
+      onEffect: () => {
+        marks.acted = true
+      },
       onAppRequired: (name, why) => {
-        refused.app = true
+        marks.appRefused = true
         a.log(`${name} could not be put to the app: ${why}`)
       }
     })
@@ -274,10 +308,87 @@ export function createHostOrch(a: {
     return { status: 200, body: { state: store.get(), boot: wantsBoot ? loadResult : null, version } }
   }
 
+  /**
+   * **What this Host has been asked, by request id** (request receipts design §4). A claim while the
+   * command runs, the reply it produced once it is over — and nothing at all for a call that changed
+   * nothing, so what is stored is proportional to what was done rather than to how much was asked.
+   *
+   * **In memory, beside `version` and `loadResult`, and that costs a Host restart.** A durable
+   * receipt cannot be made atomic with the effect here: our commit is a whole-file rename and
+   * `worker-start` commits up to three times, so a durable record would be written *after* the
+   * effect, in a commit of its own — a promise of durability that is not kept, which is worse than no
+   * promise. The honest answer to a retry after a restart is that this Host never saw the request,
+   * and `hello.startedAt` is what lets a caller tell that apart from "it never arrived" (§6).
+   *
+   * **Scoped by session** (§5), because a replay hands back a recorded response and a response can
+   * hold another worker's question, the body of the coordinator's reply, the spec of another Task —
+   * the same room `COORDINATOR_ONLY` walls off. Guessing another session's request id must not be a
+   * second door into it.
+   */
+  const receipts = new Map<string, { state: 'pending' } | { state: 'completed'; reply: Reply }>()
+
+  /**
+   * The reply to send **instead of** running the command, or the key this call now holds a claim on.
+   *
+   * **Called in the same synchronous step as the lookup inside it** — `reserveVersion`'s discipline,
+   * for the same class of bug (§7). A claim taken after an `await` lets two `orch-call`s both find
+   * the key free, and then the thing the caller said was one request happens twice.
+   *
+   * **A retry that arrives mid-flight is refused, not joined**, and that is this design's largest
+   * departure from Orca. Three of our commands are long polls — `ask` holds for ten minutes,
+   * `check --wait` for five, `runs wait` for an hour — so joining would hold a caller for up to an
+   * hour on a call it already believes has failed, which is worse than the failure it was recovering
+   * from. 409 is the code that already means "the current state makes this impossible"; there is no
+   * eleventh exit code.
+   */
+  const holdRequest = (sessionId: string, requestId: string): { answer: Reply } | { key: string } => {
+    if (requestId.length === 0 || requestId.length > REQUEST_ID_MAX || hasControlChar(requestId))
+      return {
+        answer: {
+          status: 400,
+          body: {
+            error: `bad request id: it must be 1 to ${REQUEST_ID_MAX} characters with no control characters`
+          }
+        }
+      }
+    const key = `${sessionId}\u0000${requestId}`
+    const held = receipts.get(key)
+    // Byte for byte what the first attempt answered, including its status — the point of a replay is
+    // that it is indistinguishable from having received the first answer.
+    if (held?.state === 'completed') return { answer: held.reply }
+    if (held)
+      return {
+        answer: {
+          status: 409,
+          body: {
+            error: `request ${requestId} is already running — wait for that answer rather than sending it again`
+          }
+        }
+      }
+    receipts.set(key, { state: 'pending' })
+    return { key }
+  }
+
+  /**
+   * The end of a claimed call. **The claim is discarded, not completed, when the command turns out
+   * not to have acted** (§7): a keyed read that left a claim behind would answer `pending` forever
+   * about a command that finished, and a keyed rejection that left a receipt would hand the same
+   * refusal back to a retry the world has since made valid.
+   *
+   * A failure that *did* act is recorded like any other — the recorded response is whatever the
+   * command answered, error envelope included, because a caller that lost that answer wants the
+   * answer it lost.
+   */
+  const settleRequest = (key: string, marks: CallMarks, reply: Reply): Reply => {
+    if (marks.committed || marks.acted) receipts.set(key, { state: 'completed', reply })
+    else receipts.delete(key)
+    return reply
+  }
+
   return {
     ready,
     runningRuns: () => runningRunCount(store.get()),
-    call: async ({ cmd, args, sessionId, from }) => {
+    call: async ({ cmd, args, sessionId, from, request }) => {
       // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
       // `orch-call` from this promise and has no catch of its own, so anything that escapes here is
       // not a 500 — it is no `orch-result` at all, a caller waiting forever, and an unhandled
@@ -285,22 +396,42 @@ export function createHostOrch(a: {
       // could reject for real: `store.save` is an unguarded mkdir/writeFile/rename, and `state-put`
       // is the app's first message after it connects. The HTTP shell has always turned a throw into
       // a 500 the same way.
-      const refused = { app: false }
+      const marks: CallMarks = { appRefused: false, committed: false, acted: false }
+      /** The claim this call took, released on **every** way out below — including the catch, which
+       *  is why it is declared out here. A claim nobody releases is a request that answers `pending`
+       *  forever. */
+      let claimed: string | null = null
       try {
         if (cmd === 'state-put') return await statePut(args, from)
         // Open to anyone: reading the state is something every CLI client can already do through
         // `jobs-list` and its neighbours, so a refusal here would be a new one nobody needs. The half
         // of it that is not a read — the boot findings — is the app's alone, inside.
         if (cmd === 'state-get') return await stateGet(args, from)
+        // **Request receipts, and still the same synchronous step the call entered in** — nothing
+        // above has awaited on this path, so the lookup and the claim cannot be split by a second
+        // `orch-call` arriving in between (§7). The two commands above are deliberately on the other
+        // side of this line: neither goes through `handleCommand`, the app is the only client that
+        // sends them, and `state-put` has its own answer to the same problem in ruling F56's version
+        // check.
+        //
+        // **A caller that sent no id skips all of it** and gets the same answer, the same exit code
+        // and the same order as before this existed (§9).
+        if (request !== undefined) {
+          const held = holdRequest(sessionId, request)
+          if ('answer' in held) return held.answer
+          claimed = held.key
+        }
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.
         await ready()
-        const r = await handleCommand(depsFor(refused), { sessionId }, cmd, args)
+        const r = await handleCommand(depsFor(marks), { sessionId }, cmd, args)
         // Only an error reply is rewritten: a command that carried on past a refusal it swallowed
         // (the fire-and-forget ones) succeeded, and a success is not a conflict.
-        return r.status >= 400 && refused.app ? { status: 409, body: r.body } : r
+        const reply = r.status >= 400 && marks.appRefused ? { status: 409, body: r.body } : r
+        return claimed === null ? reply : settleRequest(claimed, marks, reply)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        return { status: refused.app ? 409 : 500, body: { error: message } }
+        const reply = { status: marks.appRefused ? 409 : 500, body: { error: message } }
+        return claimed === null ? reply : settleRequest(claimed, marks, reply)
       }
     }
   }

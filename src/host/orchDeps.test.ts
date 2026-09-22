@@ -244,4 +244,86 @@ describe('hostOrchDeps', () => {
         expect(typeof deps[name]).toBe('function')
     })
   })
+
+  /**
+   * === 무엇이 "움직였다" 인가 (요청 영수증 설계 §3) ===
+   *
+   * 영수증은 명령이 커밋했거나, **상태 밖의 무언가를 바꾸는 의존을 불렀을 때** 남는다. 뒤의 절반이
+   * 여기서 정해진다 — 세 래퍼가 모두 하나의 `act` 깔때기로 모이므로, 의존이 전달되면서 이 줄을 지나지
+   * 않을 방법이 없다.
+   */
+  describe('상태 밖을 바꾸는 의존', () => {
+    const marked = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): { deps: ReturnType<typeof hostOrchDeps>; acted: () => number } => {
+      let n = 0
+      return { deps: hostOrchDeps(base({ onEffect: () => n++, ...over })), acted: () => n }
+    }
+
+    it('세션을 띄우는 의존은 움직인 것으로 센다', async () => {
+      const m = marked({ act: vi.fn().mockResolvedValue({ sessionId: 's', cwd: 'c', specPath: 'p' }) })
+      await m.deps.startWorker({ dispatchId: 'd1' } as never)
+      expect(m.acted()).toBe(1)
+    })
+
+    // **명령 이름으로 목록을 짰다면 놓쳤을 자리다.** run-merge 는 git 병합을 돌리고 setState 는 한
+    // 번도 부르지 않는다.
+    it('커밋하지 않고 디스크를 건드리는 의존도 움직인 것으로 센다', async () => {
+      const m = marked({ act: vi.fn().mockResolvedValue({ ok: true, merged: [], uncommitted: 0 }) })
+      await m.deps.mergeWorktrees?.('D:/p', ['D:/wt'])
+      expect(m.acted()).toBe(1)
+    })
+
+    // 읽기와 토글은 두 번 물어도 세상이 달라지지 않는다 — 여기에 영수증을 남기면 그 뒤의 읽기가
+    // 모두 낡은 답을 받는다.
+    it('읽기·탐침·토글은 움직인 것이 아니다', async () => {
+      const m = marked({ act: vi.fn().mockResolvedValue([]) })
+      await m.deps.listAccounts()
+      await m.deps.readWorker({ dispatchId: 'd1' })
+      await m.deps.listRunConfigs?.('D:/p')
+      await m.deps.probeLimit?.({} as never)
+      await m.deps.resolveProjectRoot?.('D:/p')
+      await m.deps.trackingEnabled?.()
+      await m.deps.repairTargetFor?.('t1')
+      expect(m.acted()).toBe(0)
+    })
+
+    // 결과를 아무도 안 받는다고 공짜인 것은 아니다 — 이 넷은 모두 무언가를 시작하거나 끝낸다.
+    it('결과를 안 받는 의존도 움직인 것으로 센다', () => {
+      const m = marked({ act: vi.fn().mockResolvedValue(undefined) })
+      m.deps.startValidation?.({ taskId: 't1', cwd: 'D:/p' })
+      m.deps.unregisterRolling?.('ses1')
+      expect(m.acted()).toBe(2)
+    })
+
+    // 점 찍힌 이름도 같은 깔때기를 지난다 — 그룹 단위로 선언한 것이 실제로 나가는 이름에 닿아야 한다.
+    it('점 찍힌 이름도 같은 깔때기를 지난다', async () => {
+      const m = marked({ act: vi.fn().mockResolvedValue({ ok: true, savedAt: 'T' }) })
+      await m.deps.handoffs?.save('ses1', {} as never)
+      await m.deps.sessionTasks?.start('ses1', '무언가')
+      expect(m.acted()).toBe(2)
+    })
+
+    // **앱이 없으면 깔때기에 닿기도 전에 거절된다** — 물어보지 못한 것은 일어나지 않은 것이고, 그
+    // 호출은 영수증을 남기지 않아야 한다.
+    it('앱이 없어 거절된 전달은 움직인 것이 아니다', async () => {
+      const m = marked({ hasApp: () => false })
+      await expect(m.deps.startWorker({} as never)).rejects.toThrow(/APP_REQUIRED/)
+      expect(m.acted()).toBe(0)
+    })
+
+    // **묻고 답을 못 들은 것은 안 일어난 것이 아니다.** 앱이 도중에 사라지거나 마감을 넘겼을 때,
+    // 그 행동은 이미 일어났을 수 있다 — 일어났을 수 있는 요청은 일어난 것으로 읽어야 한다.
+    it('앱이 답하지 못해도 이미 물어본 것은 움직인 것으로 센다', async () => {
+      const m = marked({ act: vi.fn().mockRejectedValue(new AppUnreachable('APP_REQUIRED: gone')) })
+      await expect(m.deps.startWorker({} as never)).rejects.toThrow()
+      expect(m.acted()).toBe(1)
+    })
+
+    // 영수증을 남기지 않는 호출자는 이 기구를 아예 지나가지 않는다 — 함수가 없으면 아무 일도 없다.
+    it('onEffect 를 주지 않으면 아무것도 달라지지 않는다', async () => {
+      const act = vi.fn().mockResolvedValue({ sessionId: 's', cwd: 'c', specPath: 'p' })
+      const deps = hostOrchDeps(base({ act }))
+      await deps.startWorker({ dispatchId: 'd1' } as never)
+      expect(act).toHaveBeenCalledWith('startWorker', [{ dispatchId: 'd1' }])
+    })
+  })
 })
