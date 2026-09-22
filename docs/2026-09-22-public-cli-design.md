@@ -360,3 +360,16 @@ that the report arrived. `applied: false` is still the half that says it did not
 2. **`tasks list` under a public name while `task-create` keeps its old one** is a deliberate seam,
    not a tidy one. If it reads badly in use, the answer is to make the rest of the task commands
    public too rather than to hide this one.
+3. **What is a cancelled run?** §5 lists `runs cancel` and this model has nothing to map it onto.
+   There is `run-pause`, which exists only for scheduled Jobs because an ordinary Job has no firing
+   to pause; there is `worker-stop`, which ends one Dispatch; and there is `run-delete`, which throws
+   the record away. None of them is "stop this run". The candidates:
+   - **Stop its workers and hold it.** Close every open Dispatch of the run and set `JobRun.paused`,
+     so nothing new dispatches. Reversible, composed of what already exists, and then the word should
+     be `stop`, not `cancel` — a cancel that can be resumed misleads.
+   - **Stop its workers and mark the run cancelled.** Honest to the word, but it adds a state to the
+     domain that the screen, the TTL sweep and `outcomeOf` all have to learn.
+   - **Leave it out.** `worker-stop` per Dispatch already does the expensive half, and a person who
+     wants the Job gone has `run-delete`.
+   Until this is answered the command does not exist, and the parser does not list the verb — naming
+   a verb that answers 501 would tell a person their build is out of date.
