@@ -18,11 +18,9 @@ export function stateFromLegacy(
   } = {}
 ): OrchState {
   const { runs = [], tasks = [], ...rest } = over
-  // **job id 를 그 계획이 나온 옛 Run 의 id 에서 만든다** — `run_1` 이 `job_run_1` 이 된다. 실패한
-  // 기대값을 사람이 읽고 어느 입력에서 나온 것인지 바로 알 수 있어야 한다. splitLegacyRuns 는
-  // 순서대로 Job 을 만들므로(회차가 아닌 것 먼저, 그다음 고아 회차) 이 순서로 짚어 나가면 맞는다.
-  const order = [...runs.filter((r) => r.templateId === undefined), ...runs.filter((r) => r.templateId !== undefined)]
-  let n = 0
-  const split = splitLegacyRuns(runs, tasks, () => `job_${order[n++]?.id ?? n}`)
+  // **id 를 주입하지 않는다.** `run_1` 이 `job_run_1` 이 되는 것은 이제 splitLegacyRuns 의 기본값이고
+  // (legacy.ts 의 jobIdForLegacyRun), 여기서 한 벌 더 세면 그것이 곧 세는 자리가 된다 — 실제로
+  // 그랬다: 여기 있던 카운터는 부모를 찾은 회차까지 세어서, 고아 회차가 섞이면 남의 id 를 집었다.
+  const split = splitLegacyRuns(runs, tasks)
   return { ...emptyState(), ...rest, ...split }
 }

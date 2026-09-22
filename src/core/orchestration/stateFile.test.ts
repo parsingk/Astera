@@ -82,6 +82,50 @@ describe('readStateFile', () => {
     // projects 도 같은 이행이 채운다 — 없으면 projects-list 가 터진다.
     expect(state?.projects).toEqual([])
   })
+
+  // F42: 분리 이전 파일에는 `jobs` 칸이 없어서 읽을 때마다 이행이 Job 을 새로 만든다. 그 id 가
+  // 매번 새로 지어지면 `jobs get --id` 는 다음 읽기에서 없는 id 가 되고(Host 재시작, 앱 재시작,
+  // 그리고 CLI 는 호출 하나가 프로세스 하나라 매번), 사람은 같은 파일을 두 번 읽고 서로 다른 답을
+  // 받는다. 세 번 불러 본 것은 실제로 그렇게 발견했기 때문이다.
+  const writeLegacy = async (runs: unknown[]): Promise<string> => {
+    const p = path.join(dir, 'orchestration.json')
+    await fs.writeFile(
+      p,
+      JSON.stringify({ runs, tasks: [], dispatches: [], messages: [], deliveries: [], gates: [] }),
+      'utf8'
+    )
+    return p
+  }
+  const legacyRun = (id: string): Record<string, unknown> => ({
+    id,
+    objective: `${id} 의 목표`,
+    cwd: 'D:/p',
+    createdAt: '2026-01-01T00:00:00.000Z'
+  })
+
+  it('같은 파일을 여러 번 읽어도 Job id 가 같다', async () => {
+    const p = await writeLegacy([legacyRun('run_a'), legacyRun('run_b')])
+    const ids = (): (string | undefined)[] => readStateFile(p)?.jobs.map((j) => j.id) ?? []
+    expect(ids()).toHaveLength(2)
+    expect(ids()).toEqual(ids())
+    expect(ids()).toEqual(ids())
+  })
+
+  // 결정적이라는 것이 "다 같다" 로 무너지면 두 Job 이 한 id 를 나눠 갖는다.
+  it('서로 다른 옛 Run 은 서로 다른 Job id 를 받는다', async () => {
+    const p = await writeLegacy([legacyRun('run_a'), legacyRun('run_b')])
+    const jobs = readStateFile(p)?.jobs ?? []
+    expect(new Set(jobs.map((j) => j.id)).size).toBe(2)
+  })
+
+  // 회차는 옛 id 를 물려받고 Job 만 새 id 를 받는다 — 그 Job id 가 어디서 왔는지 사람이 읽을 수
+  // 있어야, 저널에 남은 runId 와 대조할 수 있다.
+  it('Job id 는 그 Job 을 정의한 옛 Run 의 id 에서 나온다', async () => {
+    const p = await writeLegacy([legacyRun('run_a')])
+    const state = readStateFile(p)
+    expect(state?.jobs[0].id).toBe('job_run_a')
+    expect(state?.runs[0].id).toBe('run_a')
+  })
 })
 
 describe('answerFromFile', () => {
