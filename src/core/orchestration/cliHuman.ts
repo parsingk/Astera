@@ -185,6 +185,9 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
         ? `${head}\n\nrun\n${indent(fields(run as Record<string, unknown>))}`
         : head
     }
+    // 잘 끝난 때만 여기까지 온다 — 나머지 끝은 종료 코드와 한 줄로 나간다(run.ts).
+    case 'jobs-wait':
+    case 'runs-wait':
     case 'projects-get':
     case 'projects-find':
     case 'runs-get':

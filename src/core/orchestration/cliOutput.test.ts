@@ -5,7 +5,8 @@ import {
   errEnvelope,
   exitCodeFor,
   messageFrom,
-  okEnvelope
+  okEnvelope,
+  waitEnd
 } from './cliOutput'
 
 describe('exitCodeFor', () => {
@@ -115,5 +116,37 @@ describe('messageFrom', () => {
     expect(messageFrom({}, 'fallback')).toBe('fallback')
     expect(messageFrom(null, 'fallback')).toBe('fallback')
     expect(messageFrom({ error: 42 }, 'fallback')).toBe('fallback')
+  })
+})
+
+describe('waitEnd', () => {
+  // 물어본 것이 "잘 끝날 때까지 기다려라" 이므로, 실패로 끝난 회차를 ok:true 로 내면
+  // 스크립트가 그것을 성공으로 읽는다
+  it('잘 끝난 것만 성공이다', () => {
+    expect(waitEnd({ state: 'completed', runId: 'run_1' })).toBe(null)
+    expect(waitEnd({ state: 'failed', runId: 'run_1' })?.code).toBe('RUN_FAILED')
+  })
+
+  // 사람이 손대기 전에는 움직이지 않는다 — 질문도 일시정지도 같은 종류의 끝이다
+  it('사람을 기다리는 두 끝은 같은 코드이고 본문이 가른다', () => {
+    const q = waitEnd({ state: 'waiting', questionId: 'gat_1', taskId: 'tsk_1', runId: 'run_1' })
+    expect(q?.code).toBe('WAITING_FOR_INPUT')
+    expect(q?.details?.questionId).toBe('gat_1')
+    const p = waitEnd({ state: 'paused', runId: 'run_1' })
+    expect(p?.code).toBe('WAITING_FOR_INPUT')
+    expect(p?.details?.state).toBe('paused')
+  })
+
+  it('마감은 TIMEOUT 이고, 어디까지 왔는지를 싣는다', () => {
+    const t = waitEnd({ state: 'timeout', runId: 'run_1', progress: { done: 2, total: 7 } })
+    expect(t?.code).toBe('TIMEOUT')
+    expect(t?.details?.progress).toEqual({ done: 2, total: 7 })
+  })
+
+  // 짐작해서 0 으로 내보내면 스크립트가 안 끝난 일을 끝난 것으로 읽는다
+  it('모르는 끝은 성공으로 넘기지 않는다', () => {
+    expect(waitEnd({ state: 'something-new' })?.code).toBe('FAILED')
+    expect(waitEnd({})?.code).toBe('FAILED')
+    expect(waitEnd(null)?.code).toBe('FAILED')
   })
 })

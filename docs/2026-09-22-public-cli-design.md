@@ -91,6 +91,30 @@ astera
 Phase A of the rollout (§42) is everything above except `jobs run`, `runs cancel` and
 `questions answer`; those land in Phase B once the read surface has been lived with.
 
+**Built, except `runs cancel`.** `jobs wait` and `runs wait` hold one request open until the run
+reaches an ending, and `jobs run` and `questions answer` are new names over `run-start`/`run-spawn`
+and `gate-resolve`. `runs cancel` is not built: this model has no cancelled run, so the command
+cannot be written without first deciding what one is, and that is a domain decision rather than a
+naming one. §15 carries the question.
+
+**`wait` has four endings, and two of them are a person.** `completed` and `failed` are the work
+finishing; `waiting` (a question is open) and `paused` are the run stopping until someone acts.
+Treating the last two as endings rather than continuing to poll is deliberate: a wait nobody is
+watching costs an hour of wall clock and tells the script nothing it can act on. The reply names
+which one it was, and `waiting` carries the question's id so the next command can be
+`questions answer --id <that>`.
+
+**A `wait` reply is 200 whatever happened**, and the CLI turns the ending into the exit code. There is
+no HTTP status for "the job you asked about failed", and picking one by feel would make 4 or 6 mean
+something different per command. This is the one place `ok` reports the outcome of waiting rather
+than the outcome of the call, because what was asked for was "wait until it finishes well".
+
+**The default deadline is an hour.** The guide's own figure for real coding work is 15 to 60 minutes,
+so anything in minutes would time out on ordinary use. Node's `server.requestTimeout` (5 minutes by
+default) governs how long the *request* may take to arrive, not how long a response may be held —
+measured with a 2-second `requestTimeout` against a 5-second response, and the 10-minute `ask` that
+already ships is the same evidence.
+
 **Coordinator-only commands keep their names.** `worker-start`, `dispatch-show`, `send`, `check`,
 `ask`, `gate-*`, `task-create`, `task-update` are not part of the public surface and are not renamed
 — renaming them would cost a guide rewrite and buy nothing, since nobody outside the app types them.

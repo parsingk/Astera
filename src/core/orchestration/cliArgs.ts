@@ -37,17 +37,17 @@ const BROWSER_SUBCOMMANDS = new Set(['js', 'help'])
  * 코디네이터 전용 명령(worker-start, send, check, ask, gate-create, task-create…)은 여기 없다. 앱
  * 밖에서 치는 사람이 없으므로 개명이 가이드 재작성만 사고 아무것도 주지 않는다.
  *
- * **표면은 자란다.** 여기 적힌 것은 지금 앱이 답할 수 있는 것뿐이다 — 쓰기 동사
- * (`jobs run`, `runs cancel`, `questions answer`)는 그것을 구현하는 단계에서 들어온다. 없는
- * 동사를 미리 적어 두면 사람이 친 것이 "모르는 명령"(501)으로 떨어진다 — 아직 안
- * 만들어졌을 뿐인데 앱과 CLI 의 버전이 갈렸다고 말하는 셈이다.
+ * **표면은 자란다.** 여기 적힌 것은 지금 앱이 답할 수 있는 것뿐이다 — `runs cancel` 은
+ * 모델에 "취소된 회차" 가 없어서 그것을 먼저 정해야 하고, 그 뒤의 쓰기 동사들도 각자 구현되는
+ * 단계에서 들어온다. 없는 동사를 미리 적어 두면 사람이 친 것이 "모르는 명령"(501)으로
+ * 떨어진다 — 아직 안 만들어졌을 뿐인데 앱과 CLI 의 버전이 갈렸다고 말하는 셈이다.
  */
 const NOUNS: Record<string, readonly string[]> = {
   projects: ['list', 'get', 'find'],
-  jobs: ['list', 'get'],
-  runs: ['list', 'get'],
+  jobs: ['list', 'get', 'wait', 'run'],
+  runs: ['list', 'get', 'wait'],
   tasks: ['list'],
-  questions: ['list', 'get']
+  questions: ['list', 'get', 'answer']
 }
 
 /**

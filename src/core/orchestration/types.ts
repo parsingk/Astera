@@ -453,6 +453,18 @@ export const FAILURE_LIMIT = 3
  *  from here — split into two copies, the client hangs up before the server does and the contract
  *  that a timeout is information rather than an error (section 4.7 of the orchestration guide)
  *  breaks. */
+/**
+ * `jobs wait` · `runs wait` 의 기본 마감.
+ *
+ * **다른 둘보다 훨씬 길다.** check 와 ask 는 코디네이터가 되풀이하는 루프의 한 바퀴이지만,
+ * 이것은 "끝날 때까지" 를 뜻한다 — 가이드가 말하는 실제 코딩 작업은 15~60분이라 분 단위 기본값은
+ * 쓸 때마다 타임아웃이 된다.
+ *
+ * Node 의 `server.requestTimeout`(기본 5분)은 **요청을 받는 시간**만 재고 응답을 붙잡아 두는
+ * 시간은 재지 않는다(2초 requestTimeout 으로 5초 응답을 돌려 확인했고, 이미 10분을 기다리는
+ * ask 가 그 증거다). 그래서 한 시간을 붙잡아도 끊기지 않는다.
+ */
+export const DEFAULT_WAIT_TIMEOUT_MS = 60 * 60_000
 export const DEFAULT_ASK_TIMEOUT_MS = 600_000
 /** Default long-poll deadline for check --wait. server.ts and the CLI share it for the same reason. */
 export const DEFAULT_CHECK_TIMEOUT_MS = 300_000

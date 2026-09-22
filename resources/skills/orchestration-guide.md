@@ -513,7 +513,15 @@ shell. Each `error.code` maps to exactly one of these:
 | `9` | `VERSION_MISMATCH` | This app does not have that command — the CLI and the app are different builds |
 | `10` | `RUN_FAILED` | A Job or run finished in failure |
 
-`8` (`WAITING_FOR_INPUT`) belongs to commands that wait for a Job, which do not exist yet.
+**`wait` is the only place `ok` reports the outcome rather than the call.** `jobs wait` and
+`runs wait` hold one request open until the run ends, and the ending decides the exit code: `0`
+finished well, `10` finished in failure, `8` stopped for a person, `7` the deadline passed. The
+default deadline is an hour; `--timeout-ms` changes it. A `7` is not a failure of the Job — it is
+this command giving up on waiting, and `error.details.progress` says how far it had got.
+
+`8` (`WAITING_FOR_INPUT`) is what `jobs wait` and `runs wait` answer when a question is open **or**
+the run is paused — both mean nothing moves until a person acts. `error.details.state` says which,
+and for a question `details.questionId` is the one to answer.
 
 **`3` and `4` are different questions.** `3` means the app is not there at all; `4` means it is there
 and does not know that id. Do not retry a `4`.

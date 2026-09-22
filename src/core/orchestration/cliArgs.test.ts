@@ -153,16 +153,23 @@ describe('공개 표면 — 두 낱말 명령', () => {
     expect(parseArgs(['questions', 'get', '--id', 'gate_1'])).toMatchObject({
       cmd: 'questions-get'
     })
+    expect(parseArgs(['jobs', 'wait', '--id', 'job_1'])).toMatchObject({ cmd: 'jobs-wait' })
+    expect(parseArgs(['jobs', 'run', '--id', 'job_1'])).toMatchObject({ cmd: 'jobs-run' })
+    expect(parseArgs(['runs', 'wait', '--id', 'run_1'])).toMatchObject({ cmd: 'runs-wait' })
+    expect(parseArgs(['questions', 'answer', '--id', 'g', '--answer', 'A'])).toMatchObject({
+      cmd: 'questions-answer',
+      args: { id: 'g', answer: 'A' }
+    })
   })
 
   it('동사가 없으면 무엇을 칠 수 있는지 말한다', () => {
     expect(parseArgs(['projects'])).toEqual({ error: 'projects needs one of: list, get, find' })
-    expect(parseArgs(['jobs'])).toEqual({ error: 'jobs needs one of: list, get' })
+    expect(parseArgs(['jobs'])).toEqual({ error: 'jobs needs one of: list, get, wait, run' })
   })
 
   it('모르는 동사는 거절하고 목록을 보여 준다', () => {
     expect(parseArgs(['jobs', 'fly'])).toEqual({
-      error: 'unknown jobs subcommand: fly (expected list, get)'
+      error: 'unknown jobs subcommand: fly (expected list, get, wait, run)'
     })
   })
 

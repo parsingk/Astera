@@ -4969,6 +4969,173 @@ describe('projects / runs / questions — 공개 읽기 표면', () => {
   })
 })
 
+describe('jobs wait / runs wait', () => {
+  const seeded = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    jobId: string
+    runId: string
+    taskId: string
+  }> => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const jobId = deps.getState().jobs[0].id
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    return { deps, jobId, runId, taskId: (t.body as { id: string }).id }
+  }
+
+  it('일이 끝나면 completed 를 낸다', async () => {
+    const { deps, runId, taskId } = await seeded()
+    await call(deps, 'task-update', { id: taskId, status: 'completed' })
+    const r = await call(deps, 'runs-wait', { id: runId, timeoutMs: 500 })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ state: 'completed', runId, progress: { done: 1, total: 1 } })
+  })
+
+  // 열린 질문은 Task 가 전부 terminal 이어도 먼저다 — 스크립트가 먼저 알아야 하는 사실이다
+  it('열린 질문이 있으면 waiting 이고 그 id 를 싣는다', async () => {
+    const { deps, runId, taskId } = await seeded()
+    const g = await call(deps, 'gate-create', { task: taskId, question: 'q' })
+    const r = await call(deps, 'runs-wait', { id: runId, timeoutMs: 500 })
+    expect(r.body).toMatchObject({
+      state: 'waiting',
+      questionId: (g.body as { id: string }).id,
+      taskId
+    })
+  })
+
+  // 세워 둔 회차를 계속 기다리면 CI 가 한 시간을 조용히 매달린다.
+  // 멈춤은 예약에만 있다 — 보통 Job 은 멈출 발화가 없고, 그 워커를 멈추는 것은 worker-stop 의 일이다.
+  it('멈춰 둔 것도 끝이다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const jobId = deps.getState().jobs[0].id
+    await call(deps, 'run-spawn', { run: jobId })
+    const runId = deps.getState().runs[0].id
+    await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    expect((await call(deps, 'run-pause', { run: jobId })).status).toBe(200)
+    const r = await call(deps, 'runs-wait', { id: runId, timeoutMs: 500 })
+    expect(r.body).toMatchObject({ state: 'paused' })
+  })
+
+  // **손으로는 만들 수 없는 갈래다.** `task-update` 는 회로 카운터를 0 으로 되돌리므로
+  // (가이드 8절), 재시도가 소진된 failed 는 진짜 워커가 세 번 죽어야 나온다 — 그래서 상태를
+  // 직접 세워 덤는다. 재시도가 남은 failed 는 아직 끝이 아니다 — 그것까지 함께 재는다.
+  it('재시도가 소진된 실패만 failed 로 끝난다', async () => {
+    const { deps, runId } = await seeded()
+    const failWith = async (n: number): Promise<void> => {
+      const cur = deps.getState()
+      await deps.setState({
+        ...cur,
+        tasks: cur.tasks.map((t) =>
+          t.runId === runId ? { ...t, status: 'failed' as const, consecutiveFailures: n } : t
+        )
+      })
+    }
+    await failWith(FAILURE_LIMIT - 1)
+    expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 120 })).body).toMatchObject({
+      state: 'timeout'
+    })
+    await failWith(FAILURE_LIMIT)
+    expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 120 })).body).toMatchObject({
+      state: 'failed',
+      runId
+    })
+  })
+
+  it('마감에 닿으면 timeout 이고, 어디까지 왔는지를 싣는다', async () => {
+    const { deps, runId } = await seeded()
+    const r = await call(deps, 'runs-wait', { id: runId, timeoutMs: 120 })
+    expect(r.body).toMatchObject({ state: 'timeout', runId, progress: { done: 0, total: 1 } })
+  })
+
+  // `jobs run` 으로 돌리고 이어서 기다리는 것과 예약이 만든 회차를 잡는 것이 둘 다 되어야 한다
+  it('jobs wait 은 매 번 최신 회차를 다시 고른다', async () => {
+    const { deps, jobId, runId, taskId } = await seeded()
+    await call(deps, 'task-update', { id: taskId, status: 'completed' })
+    // 두 번째 회차를 만들면 그쪽이 최신이다 — 끝난 첫 회차를 들고 돌아오면 안 된다
+    await call(deps, 'run-spawn', { run: jobId })
+    const second = deps.getState().runs.find((r) => r.id !== runId)!
+    const r = await call(deps, 'jobs-wait', { id: jobId, timeoutMs: 120 })
+    expect(r.body).toMatchObject({ state: 'timeout', runId: second.id })
+  })
+
+  it('없는 id 는 404 이고, id 가 없으면 400 이다', async () => {
+    const { deps } = await seeded()
+    expect((await call(deps, 'runs-wait', { id: 'nope' })).status).toBe(404)
+    expect((await call(deps, 'jobs-wait', { id: 'nope' })).status).toBe(404)
+    expect((await call(deps, 'runs-wait')).status).toBe(400)
+  })
+})
+
+describe('jobs run / questions answer', () => {
+  // 새 이름이지 새 동작이 아니다 — 사이드바의 '실행' 과 다시 돌리기를 한 명령으로 묶는다
+  it('무장하지 않은 계획은 첫 회차를 만들며 시작한다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true })
+    const jobId = deps.getState().jobs[0].id
+    expect(deps.getState().jobs[0].pendingStart).toBe(true)
+    expect(deps.getState().runs.length).toBe(0)
+    const r = await call(deps, 'jobs-run', { id: jobId })
+    expect(r.status).toBe(200)
+    expect(deps.getState().jobs[0].pendingStart).toBeUndefined()
+    expect(deps.getState().runs.length).toBe(1)
+  })
+
+  it('끝난 계획을 다시 돌리면 회차가 하나 늘어난다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const jobId = deps.getState().jobs[0].id
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    await call(deps, 'task-update', { id: (t.body as { id: string }).id, status: 'completed' })
+    expect((await call(deps, 'jobs-run', { id: jobId })).status).toBe(200)
+    expect(deps.getState().runs.filter((r) => r.jobId === jobId).length).toBe(2)
+  })
+
+  // 한 계획에 두 회차가 동시에 도는 것을 손이 미끄러져 만들지 않게 한다
+  it('돌고 있는 것은 거절하고 무엇이 도는지 말한다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const jobId = deps.getState().jobs[0].id
+    const runId = deps.getState().runs[0].id
+    await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    const r = await call(deps, 'jobs-run', { id: jobId })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain(runId)
+  })
+
+  it('없는 계획은 404, id 가 없으면 400 이다', async () => {
+    const deps = makeDeps()
+    expect((await call(deps, 'jobs-run', { id: 'nope' })).status).toBe(404)
+    expect((await call(deps, 'jobs-run')).status).toBe(400)
+  })
+
+  it('questions answer 는 gate-resolve 와 같은 일을 한다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    const g = await call(deps, 'gate-create', {
+      task: (t.body as { id: string }).id,
+      question: 'q'
+    })
+    const gateId = (g.body as { id: string }).id
+    const r = await call(deps, 'questions-answer', { id: gateId, answer: 'A 로' })
+    expect(r.status).toBe(200)
+    expect((r.body as { status: string; resolution: string }).status).toBe('resolved')
+    expect((r.body as { resolution: string }).resolution).toBe('A 로')
+  })
+
+  it('답이 없으면 거절한다', async () => {
+    expect((await call(makeDeps(), 'questions-answer', { id: 'gat_x' })).status).toBe(400)
+  })
+})
+
 describe('version / status — 공개 표면의 두 읽기', () => {
   it('version 은 앱 버전과 프로토콜을 낸다', async () => {
     const deps = { ...makeDeps(), appVersion: () => '1.2.3' }

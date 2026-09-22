@@ -15,6 +15,7 @@ import {
   CLI_PROTOCOL,
   codeForStatus,
   dataFor,
+  waitEnd,
   errEnvelope,
   exitCodeFor,
   messageFrom,
@@ -25,7 +26,11 @@ import {
 /** 빌드가 박아 넣은 이 프로그램의 버전(electron.vite.config.ts). 앱과 CLI 는 한 프로그램이므로
  *  값이 하나이고, 그래서 둘이 갈라질 수가 없다. */
 const CLI_VERSION = typeof __ASTERA_VERSION__ === 'string' ? __ASTERA_VERSION__ : '0.0.0'
-import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
+import {
+  DEFAULT_ASK_TIMEOUT_MS,
+  DEFAULT_CHECK_TIMEOUT_MS,
+  DEFAULT_WAIT_TIMEOUT_MS
+} from '../core/orchestration/types'
 import { SCRIPT_TIMEOUT_MS } from '../core/agentBrowser/script'
 import {
   queueableReportProblem,
@@ -123,7 +128,16 @@ const TIMEOUT_HEADROOM_MS = 30_000
  *  --timeout-ms was given, that value is used as is. */
 export function clientTimeoutMs(a: { cmd: string; args: Record<string, unknown> }): number {
   const defaultForCmd =
-    a.cmd === 'ask' ? DEFAULT_ASK_TIMEOUT_MS : a.cmd === 'browser-js' ? SCRIPT_TIMEOUT_MS : DEFAULT_CHECK_TIMEOUT_MS
+    a.cmd === 'ask'
+      ? DEFAULT_ASK_TIMEOUT_MS
+      : a.cmd === 'browser-js'
+        ? SCRIPT_TIMEOUT_MS
+        : // **기다리는 명령은 서버와 같은 마감을 써야 한다.** 짧은 값을 쓰면 서버가 답을
+          // 준비하는 사이에 클라이언트가 연결을 끊고, "타임아웃은 정보다" 는 계약이 깨진다
+          // (ask 의 기본값이 서버보다 짧아서 실제로 그러였다).
+          a.cmd === 'jobs-wait' || a.cmd === 'runs-wait'
+          ? DEFAULT_WAIT_TIMEOUT_MS
+          : DEFAULT_CHECK_TIMEOUT_MS
   const base = typeof a.args.timeoutMs === 'number' ? a.args.timeoutMs : defaultForCmd
   return base + TIMEOUT_HEADROOM_MS
 }
@@ -443,6 +457,15 @@ export async function main(): Promise<void> {
           : // 공개 읽기 명령은 허용된 칸만 내보낸다(설계 §11). 앱이 아니라 여기서 가리는 이유는
             // 봉투와 같다 — 화면도 같은 서버를 쓰고, 그쪽은 온전한 개체가 필요하다.
             publicFor(parsed.cmd, parsedBody)
+      // **`wait` 만 성공을 다시 판정한다.** 서버는 200 으로 무엇으로 끝났는지만 말하고,
+      // 그것을 종료 코드로 바꾸는 것은 이쪽의 일이다(cliOutput 의 waitEnd).
+      if (parsed.cmd === 'jobs-wait' || parsed.cmd === 'runs-wait') {
+        const end = waitEnd(body)
+        if (end !== null) {
+          out(mode === 'json' ? errEnvelope(end) : `error: ${end.message}`)
+          process.exit(exitCodeFor(end.code))
+        }
+      }
       out(renderOk(parsed.cmd, body, mode))
       process.exit(0)
     }

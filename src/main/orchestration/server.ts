@@ -41,6 +41,7 @@ import { workerDoneFieldError } from '../../core/orchestration/sendArgs'
 import {
   DEFAULT_ASK_TIMEOUT_MS,
   DEFAULT_CHECK_TIMEOUT_MS,
+  DEFAULT_WAIT_TIMEOUT_MS,
   DEFAULT_CONCURRENCY,
   FAILURE_LIMIT,
   canTransition,
@@ -349,6 +350,28 @@ const jobView = (s: OrchState, job: Job, run: JobRun | undefined): Record<string
   ...job,
   ...derivedFor(s, run?.id ?? job.id, run ? [run.id] : [])
 })
+
+/**
+ * `wait` 가 끝나는 자리. **아직 아니면 null 이고, 그때만 계속 기다린다.**
+ *
+ * 네 가지로 끝난다. 둘은 일이 끝난 것이고(completed·failed), 둘은 **사람이 손대야 움직이는
+ * 것**이다(waiting·paused). 뒤의 둘을 끝으로 치는 이유는 그렇게 안 하면 CI 가 한 시간을 조용히
+ * 매달리기 때문이다 — 아무도 안 보는 대기는 실패보다 나쁜 소식이다.
+ *
+ * 질문을 먼저 본다. 열린 질문이 있는 회차는 Task 가 전부 terminal 이어도 아직 사람을 기다리는
+ * 중이고, 그쪽이 스크립트가 먼저 알아야 하는 사실이다.
+ */
+const waitEndingFor = (s: OrchState, runId: string): Record<string, unknown> | null => {
+  const run = s.runs.find((r) => r.id === runId)
+  if (!run) return null
+  const job = s.jobs.find((j) => j.id === run.jobId)
+  const base = { runId, jobId: run.jobId, progress: progressOf(s, runId) }
+  const open = s.gates.find((g) => g.status === 'open' && g.runId === runId)
+  if (open) return { ...base, state: 'waiting', questionId: open.id, taskId: open.taskId }
+  if (run.paused === true || job?.paused === true) return { ...base, state: 'paused' }
+  const outcome = outcomeOf(s, runId)
+  return outcome === 'running' ? null : { ...base, state: outcome }
+}
 
 const runView = (s: OrchState, run: JobRun): Record<string, unknown> => ({
   ...run,
@@ -729,6 +752,74 @@ export async function handleCommand(
       const job = str(args.job)
       const runs = job ? s.runs.filter((r) => r.jobId === job) : s.runs
       return okBody([...runs].sort((a, b) => a.ordinal - b.ordinal).map((r) => runView(s, r)))
+    }
+    /**
+     * 끝날 때까지 기다린다 — CI 가 부르는 자리(공개 CLI 설계 §5·§8).
+     *
+     * **언제나 200 으로 답하고, 무엇으로 끝났는지를 본문이 말한다.** 종료 코드로 바꾸는 것은
+     * CLI 의 일이다(cliOutput 의 waitEnd) — "실패로 끝났다" 는 HTTP 상태로 말할 수 없고,
+     * 억지로 골라 쓰면 4나 6 이 뜻하는 것이 명령마다 달라진다.
+     *
+     * `jobs wait` 은 **매 번 최신 회차를 다시 고른다.** 그래야 `jobs run` 으로 돌리고 이어서
+     * 기다리는 것과, 예약이 발화해 만든 회차를 잡는 것이 둘 다 된다.
+     */
+    /**
+     * 이 계획을 지금 돌린다 (공개 CLI 설계 §5 Phase B).
+     *
+     * **새 이름이지 새 동작이 아니다.** 사이드바의 '실행' 과 다시 돌리기가 하던 일 둘을
+     * 한 명령으로 묶는다: 아직 무장하지 않았거나 회차가 하나도 없으면 `run-start`, 이미 돌았던
+     * 계획이면 `run-spawn`. 셸에서 치는 사람은 그 둘을 가를 이유가 없다 — 둘 다 "돌려라" 다.
+     *
+     * **돌고 있는 것을 또 돌리지 않는다.** 그러면 한 계획에 동시에 두 회차가 도는데, 그것을
+     * 원했다면 `--again` 같은 말을 츠을 것이다. 지금은 거절하고 무엇이 도는지 말해 준다.
+     */
+    case 'jobs-run': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const job = s.jobs.find((j) => j.id === id)
+      if (!job) return notFound(`unknown job: ${id}`)
+      const latest = latestRunOf(s, job)
+      if (latest && waitEndingFor(s, latest.id) === null)
+        return conflict(`job ${id} is already running (run ${latest.id}) — wait for it or cancel it first`)
+      const first = job.pendingStart === true || latest === undefined
+      return handleCommand(deps, caller, first ? 'run-start' : 'run-spawn', { run: id })
+    }
+    case 'jobs-wait':
+    case 'runs-wait': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const byJob = cmd === 'jobs-wait'
+      if (byJob) {
+        if (!s.jobs.some((j) => j.id === id)) return notFound(`unknown job: ${id}`)
+      } else if (!s.runs.some((r) => r.id === id)) {
+        return notFound(`unknown run: ${id}`)
+      }
+      const probe = (): Record<string, unknown> | null => {
+        const cur = deps.getState()
+        if (!byJob) return waitEndingFor(cur, id)
+        const job = cur.jobs.find((j) => j.id === id)
+        const run = job && latestRunOf(cur, job)
+        return run ? waitEndingFor(cur, run.id) : null
+      }
+      const timeoutMs =
+        typeof args.timeoutMs === 'number' ? args.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS
+      const waited = await pollUntil(probe, timeoutMs)
+      if ('value' in waited) return okBody(waited.value)
+      // 마감에 닿았을 때도 지금 어디까지 왔는지를 싣는다 — "안 끝났다" 만 들고 돌아가면
+      // 사람이 그 다음에 무엇을 볼지 모른다.
+      const cur = deps.getState()
+      const run = byJob
+        ? (() => {
+            const job = cur.jobs.find((j) => j.id === id)
+            return job && latestRunOf(cur, job)
+          })()
+        : cur.runs.find((r) => r.id === id)
+      return okBody({
+        state: 'timeout',
+        jobId: byJob ? id : run?.jobId,
+        runId: run?.id ?? null,
+        progress: run ? progressOf(cur, run.id) : { done: 0, total: 0 }
+      })
     }
     case 'runs-get': {
       const id = str(args.id)
@@ -2043,6 +2134,14 @@ export async function handleCommand(
       if (retried && !retried.ok)
         return okBody({ ...r.value, retryOnceFailed: retried.error })
       return okBody(r.value)
+    }
+    /** 질문에 답한다 — `gate-resolve` 의 공개 이름(공개 CLI 설계 §5 Phase B).
+     *  답을 받는 플래그 이름도 사람의 말로 바뀐다(`--answer`). 서버 안에서는 한 자리로 간다 —
+     *  같은 일을 두 번 적지 않는다. */
+    case 'questions-answer': {
+      const answer = str(args.answer) ?? str(args.resolution)
+      if (!answer) return bad('--answer is required')
+      return handleCommand(deps, caller, 'gate-resolve', { id: args.id, resolution: answer })
     }
     case 'questions-get': {
       const id = str(args.id)

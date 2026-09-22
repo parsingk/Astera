@@ -114,6 +114,47 @@ export function messageFrom(body: unknown, fallback: string): string {
 }
 
 /**
+ * `wait` 가 무엇으로 끝났는가 — 성공이면 `null`, 아니면 그 오류.
+ *
+ * **이 명령만 `ok` 가 HTTP 가 아니라 기다린 결과를 뜻한다.** 물어본 것이 "잘 끝날 때까지
+ * 기다려라" 이므로, 실패로 끝난 회차를 `ok: true` 로 내면 스크립트가 그것을 성공으로 읽는다.
+ * 서버가 200 으로 답하는 이유는 그쪽에 맞는 상태 코드가 없기 때문이고, 억지로 골라 쓰면
+ * 4나 6 이 뜻하는 것이 명령마다 달라진다.
+ *
+ * `paused` 가 8번인 이유. 설계 §8 은 8을 "질문이 열려 멈춘 것" 으로 적었지만, 세워 둔 회차도
+ * 같은 종류의 끝이다 — **사람이 손대기 전에는 움직이지 않는다.** 무엇이 막았는지는 본문의
+ * `state` 가 가른다.
+ */
+export function waitEnd(body: unknown): CliError | null {
+  const b = (body ?? {}) as { state?: unknown; questionId?: unknown; taskId?: unknown; runId?: unknown; progress?: unknown }
+  const at = (): Record<string, unknown> => ({ runId: b.runId ?? null, progress: b.progress ?? null })
+  switch (b.state) {
+    case 'completed':
+      return null
+    case 'failed':
+      return { code: 'RUN_FAILED', message: 'the run finished with failures', details: at() }
+    case 'waiting':
+      return {
+        code: 'WAITING_FOR_INPUT',
+        message: 'a question is open and nothing moves until it is answered',
+        details: { ...at(), questionId: b.questionId ?? null, taskId: b.taskId ?? null }
+      }
+    case 'paused':
+      return {
+        code: 'WAITING_FOR_INPUT',
+        message: 'it is paused and nothing moves until someone resumes it',
+        details: { ...at(), state: 'paused' }
+      }
+    case 'timeout':
+      return { code: 'TIMEOUT', message: 'it had not finished when the deadline passed', details: at() }
+    default:
+      // 서버가 모르는 끝을 내는 길은 없지만, 짐작해서 0 으로 내보내면 스크립트가 안 끝난
+      // 일을 끝난 것으로 읽는다.
+      return { code: 'FAILED', message: `the app answered with an ending this CLI does not know: ${String(b.state)}`, details: at() }
+  }
+}
+
+/**
  * CLI 와 앱이 주고받는 말의 판. **Host 의 프로토콜과 다른 것이다** — 그쪽은 앱과 Host 사이의
  * 것이고(core/host/protocol.ts), 이것은 사람이 치는 명령과 앱 사이의 것이다.
  *
