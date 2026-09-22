@@ -295,9 +295,16 @@ justification for the move, and if it does not work nothing else in S1 is worth 
 
 ## 12. Open questions
 
-1. **Does the file-read fallback cover every read command, or only the cheap ones?** `runs wait` and
+1. ~~**Does the file-read fallback cover every read command, or only the cheap ones?** `runs wait` and
    `check --wait` cannot be answered from a file nobody is writing. They should refuse with 3 rather
-   than wait forever on a static file, but that needs stating per command.
+   than wait forever on a static file, but that needs stating per command.~~
+
+   **Answered in step 7 (2026-09-22).** It is stated per command, as an allowlist: `FROM_FILE` in
+   `src/core/orchestration/stateFile.ts`, fourteen names, each a verb rather than a noun. The
+   allowlist is the answer to the "or only the cheap ones" half as well — the default is "needs a
+   Host", so a read command added later does not silently start answering from a stale file. The
+   waiting commands are not on it and end with 3, as this question said they should. `docs/cli.md`
+   publishes the same list for people.
 2. **What does the app do when it finds a Host that predates `orch`?** It cannot retire it without
    killing terminals, and it cannot show Jobs without it. Probably the same two-state Jobs view as §6,
    with a sentence naming the version. Needs deciding before S1 ships.

@@ -42,7 +42,7 @@ export const ko = {
   'settings.cli.pathMissing': '이 폴더가 PATH 에 없습니다. 아래 한 줄을 한 번 실행하면 들어갑니다.',
   'settings.cli.onPath': '이 폴더가 PATH 에 있습니다.',
   'settings.cli.needsOrchestration':
-    '에이전트 오케스트레이션이 꺼져 있습니다. 꺼져 있는 동안에는 astera 가 앱을 찾지 못합니다.',
+    '에이전트 오케스트레이션이 꺼져 있습니다. 꺼져 있는 동안에도 astera 는 도지만 Job 명령은 거절됩니다.',
   'settings.cli.copy': '복사',
   // 에이전트 권한 모드
   'settings.agentPermission.label': '권한 확인 없이 에이전트 실행',

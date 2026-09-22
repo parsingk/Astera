@@ -37,7 +37,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.cli.pathMissing': 'This folder is not on PATH. Running the line below once adds it.',
   'settings.cli.onPath': 'This folder is on PATH.',
   'settings.cli.needsOrchestration':
-    'Agent orchestration is off. While it is off, astera cannot find the app.',
+    'Agent orchestration is off. While it is off, astera runs but its Job commands are refused.',
   'settings.cli.copy': 'Copy',
   // Agent permission mode
   'settings.agentPermission.label': 'Run agents without permission checks',

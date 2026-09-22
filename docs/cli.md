@@ -44,10 +44,22 @@ astera host stop       # ask the running Host to retire
 `astera host stop` refuses while the Host still holds sessions or running Jobs, and says how many.
 That refusal is the Host protecting work in progress. Stop the work first, then stop the Host.
 
-**Read commands still answer with no Host running.** `jobs`, `runs`, `tasks`, `questions`,
-`projects` and `status` fall back to the state file on disk, which is accurate precisely because no
-Host is writing it. Commands that change something, and commands that wait, need a Host and exit 3
-without one.
+**Some commands still answer with no Host running**, by reading the state file on disk, which is
+accurate precisely because no Host is writing it. It is a fixed list, and it is per verb, not per
+noun:
+
+```text
+status
+projects list | get | find
+jobs     list | get
+runs     list | get
+tasks    list
+questions list | get
+```
+
+Everything else needs a Host and exits 3 without one. That includes every command that changes
+something (`jobs run`, `runs stop`, `runs resume`, `questions answer`) and both waiting commands
+(`jobs wait`, `runs wait`), which a static file cannot answer however long they wait.
 
 ### Which Host, and which profile
 
@@ -110,8 +122,12 @@ astera help                              the orchestration guide, in full
 astera browser help                      the agent browser guide
 ```
 
-`astera help` is the reference agents read. `astera --help` is not a command; the parser treats a
-leading flag as a missing command and exits 2.
+`astera help` is the reference agents read.
+
+**Known gap: there is no per-command help.** `astera --help`, `astera jobs --help` and
+`astera jobs list --help` all fail with exit 2, because the parser treats a leading flag as a missing
+command. What stands in for it today is the table above, `astera help`, and the fact that a noun with
+no verb names its verbs. Per-command usage text does not exist anywhere in the program yet.
 
 **`jobs get` takes either id.** Give it a Job and it folds in that Job's latest run; give it a run
 and it folds in that one. A Job is the plan, a run is one execution of it. Jobs that only ever run

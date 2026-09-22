@@ -510,6 +510,7 @@ shell. Each `error.code` maps to exactly one of these:
 | `5` | `PERMISSION_DENIED` | Refused for this session (403) — e.g. a worker calling a coordinator command |
 | `6` | `CONFLICT` | Rejected because of current state (409) — e.g. a Task that already has an open Dispatch |
 | `7` | `TIMEOUT` | A deadline elapsed — this client's own, or the Host's `wait`, or a Host that is running and not answering |
+| `8` | `WAITING_FOR_INPUT` | A `wait` stopped because a person is needed — a question is open, or the run is paused (see below) |
 | `9` | `VERSION_MISMATCH` | This app does not have that command — the CLI and the app are different builds |
 | `10` | `RUN_FAILED` | A Job or run finished in failure |
 
@@ -529,7 +530,7 @@ and does not know that id. Do not retry a `4`.
 **`9` is not your mistake.** It means the `astera` on the PATH and the running app came from
 different builds. Report it rather than working around it.
 
-**A timeout response from `check --wait` or `ask` is also HTTP 200, so the exit code is `0`.** What
+**A timeout response from `check --wait` or `ask` is a success, so the exit code is `0`.** What
 sections 5 and 6 say about "a timeout is not a failure" is carried directly by this rule — do not
 treat a timeout as an error based on `$?`; read `data.timedOut`.
 

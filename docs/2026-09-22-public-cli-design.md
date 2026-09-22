@@ -74,6 +74,30 @@ installed app.
 **Not the Host's pipe.** The Host does not serve orchestration yet — it holds terminals. When slice 3
 moves the command server into it, this function is the only place that changes (§12).
 
+**Amended after Host slice 3 shipped (2026-09-22).** Slice 3 landed, and it changed more than this
+one function. There is no info file and no token any more — both were deleted with the loopback
+server they belonged to (`docs/2026-09-22-host-control-plane-design.md` §7). The table above now
+reads:
+
+```text
+ASTERA_PROFILE_DIR set   → that profile (a session the app started)
+otherwise                → <userData>, with ASTERA_PROFILE=dev selecting the dev app
+then                     → the Host's address, derived from that profile
+ASTERA_HOST set          → that address instead, and nothing else
+```
+
+**A profile rather than an address, and that was the correction.** The host design had planned one
+address. It is not enough: the pending-report queue's directory and the state file the CLI falls back
+to are both properties of the profile, and an address does not say which profile the Host behind it
+uses. A dev-built worker recomputing `<userData>` answered `%APPDATA%/astera`, reached the *installed*
+Host and queued its undelivered reports into the installed profile (measured, F43). So the app sends
+the folder it is actually running on and the address is computed from it, exactly as the app computes
+it. The paragraph above about `ASTERA_PROFILE=dev` still holds for a shell the app did not start.
+
+"The app is not running" is no longer "that file is not there". It is "nothing answered at that
+address", and it no longer means the commands fail: read commands answer from `orchestration.json`,
+because with no Host nobody is writing it (§12's amendment).
+
 ## 5. The command surface
 
 ```text
@@ -274,6 +298,22 @@ already exist.
 - The token file is written with mode 0600, and the token never appears in a command line or a log.
 - The bearer token is required on every request.
 
+**Amended after Host slice 3 shipped (2026-09-22).** All three are gone, along with the server they
+protected. What carries the same boundary now:
+
+- The Host listens on a named pipe on win32 and a unix socket elsewhere, never on a network address.
+- The address is derived from the profile folder, so two profiles on one machine never meet.
+- On posix the socket's parent directory is created 0700 *before* the bind, so there is no window in
+  which it is world-reachable.
+- On win32 there is no equivalent, and the note in `src/host/address.ts` says so from measurement: a
+  named pipe's default descriptor grants `FILE_GENERIC_READ` to Everyone and ANONYMOUS LOGON, and
+  Node's `net` cannot set an ACL. What keeps another local account from hearing anything is that read
+  access alone cannot complete the handshake, and the Host sends only to peers that did. This is the
+  one place the boundary rests on the protocol rather than on file permissions, and `docs/cli.md`
+  says so to the reader rather than claiming more.
+
+Everything below about redaction is unchanged: it was never about the transport.
+
 **What this design adds is redaction on the way out.** The commands below return objects the app
 holds, and those objects carry things the CLI spec says must never be printed (§38): account config
 directories, session auth material, the token itself. An allowlist shapes the reply — never a
@@ -309,11 +349,17 @@ coordinator to read.
 
 ## 12. What this does not do
 
-- **It does not work with the app closed.** That is Host slice 3. §4's discovery function is the only
-  place that changes when it lands.
+- ~~**It does not work with the app closed.** That is Host slice 3. §4's discovery function is the
+  only place that changes when it lands.~~ **Done (2026-09-22).** It works with the app closed, and
+  the change was wider than §4: the orchestration state moved into the Host, and every command it
+  serves is answered there. With no Host either, a fixed list of read verbs is answered from
+  `orchestration.json` — `status`, `projects list|get|find`, `jobs list|get`, `runs list|get`,
+  `tasks list`, `questions list|get` — and everything else ends with 3.
 - **No write commands beyond Phase B's three.** `jobs create`, `tasks create/dispatch` and
   `validation run` are Phase C (§42).
-- **No `astera host start`.** Until the Host serves orchestration there is nothing to start it for.
+- ~~**No `astera host start`.** Until the Host serves orchestration there is nothing to start it
+  for.~~ **Shipped (2026-09-22)**, with `host status` and `host stop`, because there is now something
+  to start it for.
 - **No MCP.** The spec is explicit (§53), and the adapter seam this design leaves — parser →
   command → app RPC — is what makes it possible later.
 
@@ -324,6 +370,8 @@ coordinator to read.
 - the envelope: success and each error code
 - exit codes: one test per row of §8
 - discovery: `ASTERA_INFO` wins; missing file is code 3, not a crash
+  (amended 2026-09-22: `ASTERA_PROFILE_DIR` names the profile and `ASTERA_HOST` overrides only the
+  address; nothing answering is code 3 unless the state file can answer instead)
 - redaction: a reply carrying a config dir or a token prints neither, in both modes
 
 **Against a live app**
