@@ -155,6 +155,36 @@ describe('humanFor', () => {
     )
   })
 
+  // host-start 는 host-status 와 같은 몸을 낸다(runHostCommand 가 같은 hostStatus() 를 쓴다) — 표도
+  // 같아야 한다. Task 2 의 수정에서 host-status 만 이 목록에 들어가고 host-start 는 빠졌었다.
+  it('host start 도 host status 와 같은 표로 편다', () => {
+    const out = humanFor('host-start', {
+      running: true,
+      pid: 42,
+      version: '1.3.25',
+      protocol: 3,
+      features: ['proc', 'ping'],
+      profile: 'D:/p',
+      jobs: 0
+    })
+    expect(out).toBe(
+      [
+        'running   true',
+        'pid       42',
+        'version   1.3.25',
+        'protocol  3',
+        'features  ["proc","ping"]',
+        'profile   D:/p',
+        'jobs      0'
+      ].join('\n')
+    )
+  })
+
+  // host-stop 의 답도 평평한 칸이다(Task 4) — 세 host-* 명령을 나중에 갈라 넣을 이유가 없다.
+  it('host stop 도 평평한 칸이면 표로 편다', () => {
+    expect(humanFor('host-stop', { stopped: true, pid: 42 })).toBe(['stopped  true', 'pid      42'].join('\n'))
+  })
+
   // 억지로 표를 씌우면 가이드가 시키는 것을 못 읽게 된다
   it('공개 표면이 아닌 명령은 null 이다', () => {
     expect(humanFor('dispatch-show', { id: 'd1' })).toBe(null)

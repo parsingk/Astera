@@ -92,14 +92,22 @@ export function hostStartTargets(a: {
  *
  *  **Only ever looks.** Laying a runtime down is `prepareHostRuntime`'s job
  *  (`src/main/host/runtime.ts`) — 87MB of copying that the app alone owns; the CLI outlives the app
- *  by design, but it never lays anything down itself. In development `runtime.json` under
- *  `process.resourcesPath` does not exist (nothing is shipped outside a packaged build), and that
- *  absence reads the same as "no prepared runtime" rather than a failure — the same way
+ *  by design, but it never lays anything down itself.
+ *
+ *  **`resourcesPath` and `readFile` are parameters, not globals** — the same choice `resolveHostEntry`
+ *  makes with `exists` and `prepareHostRuntime` makes with the whole `RuntimeFs`. The one branch that
+ *  matters for a released build — a prepared runtime actually being there — can otherwise only be
+ *  exercised by a packaged install; injecting the read is what lets a test put a fake `runtime.json`
+ *  in front of it instead. In development `runtime.json` does not exist (nothing is shipped outside a
+ *  packaged build), and an unset `resourcesPath` (not a real Electron process at all) reads the same
+ *  way — both fall through to "no prepared runtime" rather than failing the command, the same way
  *  `src/main/ipc.ts`'s own read of this file treats it missing. */
-function preparedRuntimeEntry(a: {
+export function preparedRuntimeEntry(a: {
   profileDir: string
   platform: NodeJS.Platform
   env: NodeJS.ProcessEnv
+  resourcesPath: string | undefined
+  readFile(p: string): string
 }): string | undefined {
   // `userDataDir`'s last path segment is the app's own name (`astera` or `astera-dev`) — the CLI has
   // no `app.getName()` to ask, and this is the one place written down instead of hardcoding either
@@ -111,11 +119,11 @@ function preparedRuntimeEntry(a: {
     userData: a.profileDir,
     appName
   })
-  if (!base) return undefined
+  if (!base || !a.resourcesPath) return undefined
   try {
-    const manifest = JSON.parse(
-      readFileSync(path.join(process.resourcesPath, 'host-runtime', 'runtime.json'), 'utf8')
-    ) as { node?: unknown }
+    const manifest = JSON.parse(a.readFile(path.join(a.resourcesPath, 'host-runtime', 'runtime.json'))) as {
+      node?: unknown
+    }
     const nodeVersion = typeof manifest.node === 'string' ? manifest.node.trim() : ''
     if (!nodeVersion) return undefined
     return hostRuntimePaths({ base, nodeVersion, appVersion: CLI_VERSION }).entryPath
@@ -190,7 +198,13 @@ export async function runHostCommand(a: {
     execPath: process.execPath,
     profileDir,
     version: CLI_VERSION,
-    runtimeEntry: preparedRuntimeEntry({ profileDir, platform: a.platform, env: a.env })
+    runtimeEntry: preparedRuntimeEntry({
+      profileDir,
+      platform: a.platform,
+      env: a.env,
+      resourcesPath: process.resourcesPath,
+      readFile: (p) => readFileSync(p, 'utf8')
+    })
   })
   const entry = resolveHostEntry(targets.candidates, existsSync)
   if (!entry)

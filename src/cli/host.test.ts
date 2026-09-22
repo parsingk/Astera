@@ -2,12 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { hostStatus, hostStartTargets, runHostCommand } from './host'
+import { hostStatus, hostStartTargets, preparedRuntimeEntry, runHostCommand } from './host'
 import { userDataDir } from '../core/orchestration/cliDiscovery'
 import { hostAddress } from '../host/address'
 import { startHostServer } from '../host/server'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 import { exitCodeFor } from '../core/orchestration/cliOutput'
+import { hostRuntimePaths } from '../core/host/runtime'
 
 describe('hostStatus', () => {
   // Host 가 없을 때도 사람에게 할 말이 있어야 한다 — 어느 프로필을 봤는지와, 파일에 몇 개가 있는지.
@@ -113,5 +114,76 @@ describe('hostStartTargets', () => {
       version: '1.3.25'
     })
     expect(t.candidates).toEqual(['D:/repo/out/main/host.js'])
+  })
+})
+
+describe('preparedRuntimeEntry', () => {
+  // `resourcesPath`/`readFile` are parameters precisely so this — the branch every packaged install
+  // actually takes — does not need a real packaged build to test.
+  it('준비된 runtime.json 을 읽어 그 build 의 entryPath 를 낸다', () => {
+    const entry = preparedRuntimeEntry({
+      profileDir: 'C:\\Users\\x\\AppData\\Roaming\\astera',
+      platform: 'win32',
+      env: { LOCALAPPDATA: 'C:\\Users\\x\\AppData\\Local' },
+      resourcesPath: 'C:\\app\\resources',
+      readFile: (p) => {
+        expect(p).toBe('C:\\app\\resources\\host-runtime\\runtime.json')
+        return JSON.stringify({ node: '24.15.0' })
+      }
+    })
+    // CLI_VERSION falls back to '0.0.0' under vitest — __ASTERA_VERSION__ is a vite `define`, not set
+    // for the test runner (host.ts's own comment on CLI_VERSION says the same).
+    expect(entry).toBe(
+      hostRuntimePaths({
+        base: 'C:\\Users\\x\\AppData\\Local\\astera\\host-runtime',
+        nodeVersion: '24.15.0',
+        appVersion: '0.0.0'
+      }).entryPath
+    )
+  })
+
+  it('runtime.json 이 없으면(개발) undefined 다 — host start 를 실패시키지 않는다', () => {
+    const entry = preparedRuntimeEntry({
+      profileDir: 'C:\\Users\\x\\AppData\\Roaming\\astera',
+      platform: 'win32',
+      env: { LOCALAPPDATA: 'C:\\Users\\x\\AppData\\Local' },
+      resourcesPath: 'C:\\app\\resources',
+      readFile: () => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+      }
+    })
+    expect(entry).toBeUndefined()
+  })
+
+  it('resourcesPath 가 없으면(진짜 Electron 프로세스가 아니면) 읽어 보지도 않고 undefined 다', () => {
+    let readAttempted = false
+    const entry = preparedRuntimeEntry({
+      profileDir: 'C:\\Users\\x\\AppData\\Roaming\\astera',
+      platform: 'win32',
+      env: {},
+      resourcesPath: undefined,
+      readFile: () => {
+        readAttempted = true
+        return '{}'
+      }
+    })
+    expect(entry).toBeUndefined()
+    expect(readAttempted).toBe(false)
+  })
+
+  it('win32 가 아니면 읽어 보지도 않고 undefined 다', () => {
+    let readAttempted = false
+    const entry = preparedRuntimeEntry({
+      profileDir: '/home/x/.config/astera',
+      platform: 'linux',
+      env: {},
+      resourcesPath: '/app/resources',
+      readFile: () => {
+        readAttempted = true
+        return JSON.stringify({ node: '24.15.0' })
+      }
+    })
+    expect(entry).toBeUndefined()
+    expect(readAttempted).toBe(false)
   })
 })
