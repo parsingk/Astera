@@ -175,7 +175,11 @@ export class HostClient {
    * without ending anybody's sessions.
    */
   markUnresponsive(problem: string): void {
-    if (this.state.unresponsive) return
+    // **A later reason replaces an earlier one**, rather than the first one winning. The heartbeat
+    // reaches this first with the general fact, and what comes after it is more specific — a restart
+    // that could not end the Host, which is the only place a person learns why the button they just
+    // pressed did nothing. (The heartbeat does not keep calling: see where it is armed.)
+    if (this.state.unresponsive && this.state.problem === problem) return
     this.deps.log(problem)
     this.setState({ ...this.state, connected: false, unresponsive: true, problem })
     // A `ready()` caller waiting on this connection has its answer: there is a Host, and it is not
@@ -206,8 +210,15 @@ export class HostClient {
       // seconds after the first one went unanswered. **Pinging continues past it on purpose** — a late
       // pong reaching `alive()` is what takes the state back, and a heartbeat that stopped at the
       // verdict would make that recovery impossible.
-      if (this.pingsOutstanding >= misses) {
-        this.markUnresponsive(`the Host stopped answering (${this.pingsOutstanding} pings unanswered)`)
+      //
+      //
+      // **It says this once, and then stops saying it.** The verdict is reached every interval from
+      // here on, but the state it produces is already there, and something else may have added a more
+      // useful sentence to it since — a restart explaining that the Host could not be ended, which is
+      // the one thing that tells a person why the button did nothing. Repeating the generic reason
+      // overwrote that, four seconds later, every time (measured in the dev app, 2026-09-22).
+      if (this.pingsOutstanding >= misses && !this.state.unresponsive) {
+        this.markUnresponsive('the Host stopped answering')
       }
     }, this.deps.pingMs ?? PING_MS)
     // Nothing here should keep the app alive, the same reason the retry sleep and the handshake

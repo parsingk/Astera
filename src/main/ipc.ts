@@ -6635,11 +6635,23 @@ export function registerIpc(
       replacing = true
       const was = client.status()
       hostLog(`host: replacing the Host (${was.hostVersion ?? '?'}, pid ${was.pid ?? '?'}) ${why}`)
-      let killProblem: string | null = null
       try {
         // A Host that answers is asked to leave; one that does not is ended. Both paths then go
         // through `restart()` below, which is what puts a new Host at the address either way.
-        if (was.unresponsive) killProblem = await endUnresponsiveHost()
+        if (was.unresponsive) {
+          const killProblem = await endUnresponsiveHost()
+          if (killProblem) {
+            // **Nothing was ended, so there is nothing to reconnect to but the same silent process.**
+            // Reconnecting anyway is what the first version of this did, and it lies twice over: the
+            // peer answers the handshake, so the app reports "connected" and logs a replacement that
+            // did not happen, and fifteen seconds later the heartbeat puts it back exactly where it
+            // was — with no trace of why the button did nothing. Measured in the dev app against a
+            // stand-in Host running from another executable, 2026-09-22.
+            hostLog(`host: the replacement stopped here — ${killProblem}`)
+            client.markUnresponsive(killProblem)
+            return client.status()
+          }
+        }
         // retire() stops the client too, which is what keeps the reconnect loop from putting the
         // very same Host back the moment the socket drops (the 1.3.18 failure, in the other
         // direction). restart() brings the loop back once the retire has settled.
@@ -6656,9 +6668,7 @@ export function registerIpc(
             ? `host: replaced — now Host ${now.hostVersion} (pid ${now.pid})`
             : `host: the replacement did not come up: ${now.problem ?? 'no answer'}`
         )
-        // The refusal to end a process that is not ours is the reason the replacement failed, and it
-        // is more use on screen than "did not answer" — it names what a person has to go and do.
-        return killProblem && !now.connected ? { ...now, problem: killProblem } : now
+        return now
       } finally {
         replacing = false
       }
@@ -7022,7 +7032,19 @@ export function registerIpc(
       // answer until such a Host is replaced.
       core.procRouter.use(live && speaksProcs() ? procFactory.factory : null)
     }
-    client.onStatusChange(routeByStatus)
+    client.onStatusChange((s) => {
+      routeByStatus(s)
+      // **Pushed, not left to the Info tab's poll.** That poll runs every thirty seconds, which is
+      // fine for a Host that is merely outdated and wrong for one that has stopped answering: the
+      // person is looking at the screen at that exact moment, because a session did not open, and
+      // half a minute of a stale "연결됨" is the silence this whole change is about (measured in the
+      // dev app, 2026-09-22).
+      try {
+        send('host:status', s)
+      } catch (err) {
+        hostLog(`host: could not tell the window about a status change: ${String(err)}`)
+      }
+    })
 
     /** Which Host this app's ptys belong to, as `${pid}@${startedAt}` from the last `hello`, or null
      *  before the first one. The pair is what separates the two things a reconnect can mean. */

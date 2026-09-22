@@ -1557,6 +1557,14 @@ export type RendererApi = CoreApi & {
    *  open, so the slice can be checked by a person rather than only by tests. */
   host: {
     status(): Promise<HostStatus>
+    /** Every change of that status, pushed as it happens; returns an unsubscribe.
+     *
+     *  **The Info tab polls as well, and the poll is not enough on its own.** It runs every thirty
+     *  seconds, which suits a Host that is merely outdated and does not suit one that has stopped
+     *  answering: the person is looking at the screen at that exact moment, because a session did not
+     *  open, and half a minute of a stale "connected" is the silence this exists to end
+     *  (docs/2026-09-22-host-unresponsive-recovery-design.md F1). */
+    onStatus(cb: (s: HostStatus) => void): () => void
     /** How many of the running sessions would keep running if the app quit — the ones whose ptys the
      *  Host owns. Asked at the moment the window-close confirmation is about to tell the person what
      *  quitting costs them, because the answer changes during a run (the Host connects some

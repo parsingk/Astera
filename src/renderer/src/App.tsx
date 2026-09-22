@@ -492,9 +492,16 @@ export default function App(): React.JSX.Element {
     }
     read()
     const timer = setInterval(read, HOST_STATUS_POLL_MS)
+    // The poll is the floor, not the source. A Host that stops answering has to reach the screen at
+    // once — the person is already looking at it, waiting for a session that is not coming — so main
+    // pushes every transition and the poll is left in as a backstop for anything that never does.
+    const off = window.api.host.onStatus((s) => {
+      if (current) setHostStatus(s)
+    })
     return () => {
       current = false
       clearInterval(timer)
+      off()
     }
   }, [])
   const [hostRestarting, setHostRestarting] = useState(false)

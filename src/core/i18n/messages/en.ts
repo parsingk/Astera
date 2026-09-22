@@ -282,8 +282,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.info.hostNotConnected': 'Not connected',
   'settings.info.hostNotConnectedWhy': 'Not connected · {detail}',
   'settings.info.hostUnresponsive': 'Not answering · {detail}',
-  'settings.info.hostUnresponsiveWhat':
-    'New sessions are opening inside the app. Those end when the app closes. The button below ends this Host and starts another.',
+  'settings.info.hostUnresponsiveWhat': 'New sessions are opening inside the app. Those end when the app closes.',
   'settings.info.hostRuntimeIncomplete':
     'Some of the files this Host runs from are gone. Left alone it will stop answering at the next session. It is repaired on its own once it is holding nothing, and restarting now does the same.',
   'settings.info.hostRestartUnresponsiveConfirmTitle': 'End the Host and start another',

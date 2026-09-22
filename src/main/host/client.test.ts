@@ -339,6 +339,36 @@ describe('HostClient', () => {
     await c.stop()
   })
 
+  // **The heartbeat must not talk over what came after it.** It reaches the verdict every interval for
+  // as long as the silence lasts, and the sentence that matters by then is a later, more specific one:
+  // a restart that could not end the Host. Overwriting that four seconds later leaves a person with a
+  // button that appears to do nothing and no reason anywhere (measured in the dev app, 2026-09-22).
+  it('keeps a later reason for the silence, rather than restating the general one', async () => {
+    const addr = addressFor('later-reason')
+    const h = await rawHost(addr, ['proc', 'ping'])
+    try {
+      const c = new HostClient({
+        address: addr.address,
+        appVersion: '9.0.0',
+        spawnHost: () => {},
+        log: () => {},
+        pingMs: 20,
+        pingMisses: 3
+      })
+      c.start()
+      await settled(c, (s) => s.unresponsive)
+      const first = c.status().problem
+      c.markUnresponsive('pid 80052 is not this app’s Host, so it was not ended')
+      // Several heartbeat intervals: the verdict is reached again and again, and says nothing.
+      await new Promise((r) => setTimeout(r, 200))
+      expect(c.status().problem).toBe('pid 80052 is not this app’s Host, so it was not ended')
+      expect(first).not.toBe(c.status().problem)
+      await c.stop()
+    } finally {
+      await h.close()
+    }
+  })
+
   // Read at every hello rather than once: the answer belongs to the Host that just answered, and the
   // next one may be started from a runtime that has since been repaired.
   it('reports whether the runtime this Host runs from is incomplete', async () => {
