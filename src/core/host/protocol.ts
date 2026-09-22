@@ -4,6 +4,7 @@
 // Newline-delimited JSON, one object per line. Terminal data is not here yet — slice 2 adds it, and
 // JSON string escaping is what will carry it, the same way the app already ships PTY output to the
 // renderer.
+import type { OrchState } from '../orchestration/state'
 
 /** Bumped whenever a message changes shape. A Host and an app that disagree do not talk (design §6).
  *  2 added the pty-* messages: the Host owns the terminals now. 3 added pty-note — an older Host
@@ -78,7 +79,16 @@ export interface PtyEntry {
 }
 
 export type ClientMessage =
-  | { t: 'hello'; protocol: number; app: string }
+  /** `app` is a version string on both sides — `main/host/client.ts` sends the app's version and
+   *  `core/host/connect.ts` sends the CLI's, and the two can be the identical string — so it cannot
+   *  say *what* is connecting. `role` does.
+   *
+   *  **Absent means `'cli'`, and that default is the careful one.** The Host sends `orch-act` only to
+   *  a client that called itself the app; an older app that sends no role is therefore refused with
+   *  APP_REQUIRED rather than handed an `orch-act` it has never heard of and cannot answer, which
+   *  would leave the caller waiting for a reply that is never coming. Additive, so HOST_PROTOCOL
+   *  stays 3 — bumping it retires a running Host and takes its terminals with it. */
+  | { t: 'hello'; protocol: number; app: string; role?: 'app' | 'cli' }
   /** Leave. Sent when the app finds a Host on another protocol; in slice 1 the Host holds nothing,
    *  so leaving costs nothing. This message's meaning is revisited in slice 2.
    *
@@ -99,6 +109,10 @@ export type ClientMessage =
    *  header, carried unchanged. Answered only for a socket that has said hello — the Host's
    *  `greetedSockets` guard (design §9) — the same rule every other reply already follows. */
   | { t: 'orch-call'; call: string; cmd: string; args: Record<string, unknown>; session?: string }
+  /** The app's answer to one `orch-act` (design §5), carrying back the `call` the Host asked with.
+   *  `ok: false` is the action's own failure and `error` is what the command layer puts in its reply,
+   *  so a refusal reads to the caller exactly as it did when the action ran inside the app. */
+  | { t: 'orch-acted'; call: string; ok: boolean; value?: unknown; error?: string }
   /** node-pty's two argument forms are not interchangeable on win32: a string is a verbatim command
    *  line that skips argv quoting, while an array goes through it. The protocol carries whichever
    *  one the caller had rather than converting between them (see PtyFactory in core/sessions/pty.ts,
@@ -149,6 +163,14 @@ export type HostMessage =
   /** Answers one `orch-call`, carrying its `call` back so the asker can match the reply to the
    *  request that made it. `status`/`body` are today's HTTP status and body, unchanged. */
   | { t: 'orch-result'; call: string; status: number; body: unknown }
+  /** Asks the app to do one thing the Host cannot do itself — spawn a session, touch a worktree
+   *  (design §5). Sent only to a client whose `hello` said `role: 'app'`, and answered with
+   *  `orch-acted` carrying the same `call`. */
+  | { t: 'orch-act'; call: string; act: string; args: unknown }
+  /** The whole orchestration state, pushed after every commit so the app can swap its mirror and
+   *  derive its snapshot the way it does today (design §5). The whole state and not a patch because
+   *  deriving a snapshot needs all of it anyway. */
+  | { t: 'orch-state'; state: OrchState }
   | { t: 'pty-spawned'; id: string; pid: number }
   | { t: 'pty-failed'; id: string; error: string }
   | { t: 'pty-data'; id: string; data: string }

@@ -77,7 +77,7 @@ export async function connectHost(a: {
     })
     socket.on('data', (c: string) => read(c))
     socket.on('connect', () =>
-      socket.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: a.app }))
+      socket.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: a.app, role: 'cli' }))
     )
   })
 }

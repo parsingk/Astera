@@ -122,10 +122,18 @@ const start = async (
 ): Promise<{
   address: string
   stopped: boolean
+  /** The server itself — `act` and `hasApp` are asked of it directly, the way `host/index.ts` does. */
+  s: HostServer
   /** The version this Host was started with — the same one its `orch-call version` answers with. */
   version: string
-  /** Connects, completes the handshake, and hands back something to send with and read replies from. */
-  connect(): Promise<{ send(m: ClientMessage): void; next(waitMs?: number): Promise<unknown> }>
+  /** Connects, completes the handshake, and hands back something to send with and read replies from.
+   *  `role` is what the handshake announces — the Host sends `orch-act` only to `'app'`, and a hello
+   *  with no role at all is read as a CLI (design F12), which the default here leaves testable. */
+  connect(role?: 'app' | 'cli'): Promise<{
+    send(m: ClientMessage): void
+    next(waitMs?: number): Promise<unknown>
+    socket: net.Socket
+  }>
   /** Connects and says nothing — the peer the next task's tests need, that never says hello. */
   connectSilent(): Promise<net.Socket>
 }> => {
@@ -140,15 +148,16 @@ const start = async (
   return {
     address: h.address,
     version: h.version,
+    s: h.s,
     get stopped() {
       return state.stopped
     },
-    connect: async () => {
+    connect: async (role) => {
       const sock = await rawConnect()
       const chan = messageChannel(sock)
-      chan.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' })
+      chan.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', ...(role ? { role } : {}) })
       await chan.next() // the hello reply — consumed here so next() starts on whatever comes after it.
-      return chan
+      return { ...chan, socket: sock }
     },
     connectSilent: rawConnect
   }
@@ -473,6 +482,56 @@ describe('startHostServer', () => {
       const chan = messageChannel(raw)
       chan.send({ t: 'orch-call', call: 'c1', cmd: 'version', args: {} })
       expect(await chan.next(300)).toBeUndefined()
+    })
+  })
+
+  // 설계 §5: Host 가 못 하는 일은 앱에 맡긴다. 누가 앱인지는 hello 의 role 이 말한다 — `app` 칸은
+  // 양쪽 다 버전 문자열이라 구별에 쓸 수 없다(F12).
+  describe('orch-act', () => {
+    it('앱에게 묻고 그 답을 돌려준다', async () => {
+      const h = await start({})
+      const app = await h.connect('app')
+      const answer = h.s.act('startWorker', { dispatchId: 'd1' })
+      const asked = (await app.next()) as { t: string; call: string; act: string; args: unknown }
+      expect(asked).toMatchObject({ t: 'orch-act', act: 'startWorker', args: { dispatchId: 'd1' } })
+      app.send({ t: 'orch-acted', call: asked.call, ok: true, value: { sessionId: 's1' } })
+      expect(await answer).toEqual({ sessionId: 's1' })
+    })
+
+    it('앱이 실패로 답하면 그 이유로 거절한다', async () => {
+      const h = await start({})
+      const app = await h.connect('app')
+      const answer = h.s.act('startWorker', {})
+      const asked = (await app.next()) as { call: string }
+      app.send({ t: 'orch-acted', call: asked.call, ok: false, error: 'no account' })
+      await expect(answer).rejects.toThrow(/no account/)
+    })
+
+    // role 없는 hello 는 CLI 다. 앱이라고 가정하면, 그런 옛 앱은 답할 줄 모르는 orch-act 를 받고
+    // 부른 쪽은 영영 기다린다(F12).
+    it('role 을 안 밝힌 클라이언트는 앱이 아니다', async () => {
+      const h = await start({})
+      await h.connect() // role 없이
+      await h.connect('cli')
+      expect(h.s.hasApp()).toBe(false)
+      await expect(h.s.act('startWorker', {})).rejects.toThrow(/APP_REQUIRED/)
+    })
+
+    it('앱이 붙어 있으면 hasApp 이 참이다', async () => {
+      const h = await start({})
+      expect(h.s.hasApp()).toBe(false)
+      await h.connect('app')
+      expect(h.s.hasApp()).toBe(true)
+    })
+
+    // 답을 못 받는 약속을 남겨 두면 그 뒤의 CLI 호출이 Host 가 사는 내내 매달린다.
+    it('앱이 답하기 전에 끊으면 그 자리에서 거절한다', async () => {
+      const h = await start({})
+      const app = await h.connect('app')
+      const answer = h.s.act('startWorker', {})
+      await app.next() // orch-act 가 나간 것을 본 뒤에 끊는다
+      app.socket.destroy()
+      await expect(answer).rejects.toThrow(/disconnected/)
     })
   })
 })

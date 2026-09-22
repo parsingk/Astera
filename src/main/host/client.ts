@@ -502,7 +502,9 @@ export class HostClient {
       void sleep(wait).then(() => this.cycle())
     })
     socket.on('error', (err) => this.deps.log(`connection error: ${String(err)}`))
-    this.send({ t: 'hello', protocol: this.deps.protocol ?? HOST_PROTOCOL, app: this.deps.appVersion })
+    // `role` is what makes this client the one the Host sends `orch-act` to; `app` cannot say it,
+    // because the CLI's hello carries a version string in the same field (core/host/connect.ts).
+    this.send({ t: 'hello', protocol: this.deps.protocol ?? HOST_PROTOCOL, app: this.deps.appVersion, role: 'app' })
   }
 
   private handleHostMessage(m: HostMessage): void {

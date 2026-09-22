@@ -8,7 +8,7 @@ import { promises as fs } from 'node:fs'
 import { HOST_PROTOCOL, HOST_FEATURE_PROC, HOST_FEATURE_PING, HOST_FEATURE_ORCH, type ClientMessage, type HostMessage } from '../core/host/protocol'
 import { encodeLine, createLineReader } from './framing'
 import type { HostLog } from './log'
-import type { OrchCall } from '../core/host/orchProtocol'
+import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 
 /** Thrown by `startHostServer` when another Host already answers at this address. The entry point
  *  turns it into a quiet exit: losing the race is the normal outcome of two apps starting at once. */
@@ -59,6 +59,15 @@ export interface HostServer {
   /** Sends to every connected client. Slice 2's pty output takes this rather than a reply, because
    *  the app that attaches after a restart is not the app that spawned. */
   broadcast(m: HostMessage): void
+  /** Whether a client that announced `role: 'app'` is connected right now (design §5). The command
+   *  layer asks this before it forwards an action, so that a command that needs the app is refused
+   *  at once instead of waiting for one that may never come. */
+  hasApp(): boolean
+  /** Asks the app to do one thing the Host cannot (design §5) — one `orch-act` out, one `orch-acted`
+   *  back, matched by call id. Rejects when no app is attached, when the app answers `ok: false`,
+   *  and when the app disconnects with the question still open: a caller waiting on an answer that
+   *  cannot arrive is the one outcome worse than a refusal. */
+  act(name: string, args: unknown): Promise<unknown>
 }
 
 /** How long a peer that has connected but said nothing gets before the Host hangs up on it. */
@@ -119,6 +128,20 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
    * because `close()` has to destroy every connection, greeted or not.
    */
   const greetedSockets = new Set<net.Socket>()
+  /** What each greeted socket called itself. Kept beside `greetedSockets` rather than inside the
+   *  set's element because the set is what `broadcast` walks and that must not change shape.
+   *  A socket that is in `greetedSockets` is always in here too — both are written in one place. */
+  const roles = new Map<net.Socket, 'app' | 'cli'>()
+  /** The `orch-act`s that have gone out and not been answered, by call id. The socket is kept with
+   *  each one so that a disconnect can refuse exactly the questions it left unanswered. */
+  const pendingActs = new Map<string, { socket: net.Socket; settle(r: { ok: boolean; value?: unknown; error?: string }): void }>()
+  let actSeq = 0
+  /** The app among the greeted sockets, or null. The first one: one profile has one app (the
+   *  single-instance lock), and a second would be a second app for the same state anyway. */
+  const appSocket = (): net.Socket | null => {
+    for (const s of greetedSockets) if (roles.get(s) === 'app' && !s.destroyed) return s
+    return null
+  }
   // Set at the top of close(), before any socket is destroyed. A destroyed socket's 'close' event
   // arrives asynchronously, after close() has already returned — without this flag that deferred
   // event would re-arm the idle timer on a server that is already gone, and onIdle() would fire again.
@@ -179,6 +202,10 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // away from an app that cannot read them (core/host/protocol.ts), and broadcasting to one
           // that just announced a different number would walk around that.
           greetedSockets.add(socket)
+          // **No role means a CLI.** An app old enough not to send one is then refused with
+          // APP_REQUIRED instead of being sent an `orch-act` it cannot answer, which would leave the
+          // caller waiting forever (protocol.ts's `hello` has the whole reason).
+          roles.set(socket, m.role === 'app' ? 'app' : 'cli')
           send({
             t: 'hello',
             protocol: HOST_PROTOCOL,
@@ -224,9 +251,27 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // said hello must hear nothing, here the same as everywhere else `send` is used directly
           // instead of through `broadcast`.
           if (!greetedSockets.has(socket)) return
+          const from: OrchCaller = {
+            role: roles.get(socket) ?? 'cli',
+            toOthers: (msg) => {
+              const line = encodeLine(msg)
+              for (const s of greetedSockets) if (s !== socket && !s.destroyed) s.write(line)
+            }
+          }
           void deps.orch
-            .call({ cmd: m.cmd, args: m.args, sessionId: m.session ?? '' })
+            .call({ cmd: m.cmd, args: m.args, sessionId: m.session ?? '', from })
             .then((r) => send({ t: 'orch-result', call: m.call, status: r.status, body: r.body }))
+          return
+        }
+        if (m?.t === 'orch-acted') {
+          if (!greetedSockets.has(socket)) return
+          const waiting = pendingActs.get(m.call)
+          // An answer to a question this Host is not waiting on any more — the app disconnected and
+          // reconnected, or answered twice. Dropped rather than logged as unknown: the message is
+          // well formed and there is simply nobody left to hand it to.
+          if (!waiting) return
+          pendingActs.delete(m.call)
+          waiting.settle({ ok: m.ok, value: m.value, error: m.error })
           return
         }
         if (deps.onMessage?.(m, send) === true) return
@@ -243,6 +288,15 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       greeted()
       sockets.delete(socket)
       greetedSockets.delete(socket)
+      roles.delete(socket)
+      // Whatever this socket was asked and never answered is refused now. Left in the map it would
+      // be a promise nothing can ever settle, and the CLI call waiting behind it would hang for as
+      // long as the Host lives.
+      for (const [call, p] of pendingActs)
+        if (p.socket === socket) {
+          pendingActs.delete(call)
+          p.settle({ ok: false, error: 'the Astera app disconnected before it answered' })
+        }
       live = Math.max(0, live - 1)
       if (live === 0) armIdle()
     }
@@ -283,6 +337,20 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   return {
     startedAt,
     clients: () => live,
+    hasApp: () => appSocket() !== null,
+    act: (name, args) =>
+      new Promise((resolve, reject) => {
+        const sock = appSocket()
+        // The same sentence `orchDeps.ts` refuses with, so the reason reads the same however the
+        // caller got here — the app can go away between that check and this one.
+        if (!sock) return reject(new Error(`APP_REQUIRED: ${name} needs the Astera app running`))
+        const call = `act_${++actSeq}`
+        pendingActs.set(call, {
+          socket: sock,
+          settle: (r) => (r.ok ? resolve(r.value) : reject(new Error(r.error ?? `${name} failed`)))
+        })
+        sock.write(encodeLine({ t: 'orch-act', call, act: name, args }))
+      }),
     broadcast: (m) => {
       const line = encodeLine(m)
       for (const s of greetedSockets) if (!s.destroyed) s.write(line)
@@ -300,6 +368,14 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         for (const s of sockets) s.destroy()
         sockets.clear()
         greetedSockets.clear()
+        roles.clear()
+        // Destroying a socket fires its 'close' asynchronously, so the refusals `gone` sends would
+        // arrive after this Host has already gone. Refused here instead, while there is still
+        // somebody to tell.
+        for (const [call, p] of pendingActs) {
+          pendingActs.delete(call)
+          p.settle({ ok: false, error: 'the Host is shutting down' })
+        }
         server.close(() => resolve())
       })
   }

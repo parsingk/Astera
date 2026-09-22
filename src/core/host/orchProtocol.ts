@@ -6,13 +6,32 @@
 // orchestration state moves into the Host (design §11, step 3). A later task replaces
 // `versionOnlyOrchCall` with the real command layer; `server.ts` calls only `OrchCall.call` and does
 // not change when that happens.
-import { HOST_PROTOCOL } from './protocol'
+import { HOST_PROTOCOL, type HostMessage } from './protocol'
+
+/** The client behind one `orch-call`. Supplied by `server.ts`, which is the only place that knows
+ *  which socket asked — the command table cannot work it out from `{cmd, args}`. */
+export interface OrchCaller {
+  /** What this client called itself in its `hello`. Absent there means `'cli'` (protocol.ts's
+   *  `hello` says why the careful default is that one and not the other). */
+  role: 'app' | 'cli'
+  /** Pushes a message to every greeted socket **except this one**. What `state-put` answers with: the
+   *  state came from this client, so sending it back would be an echo — and the app that pushed it
+   *  would then write its own state back over itself. */
+  toOthers(m: HostMessage): void
+}
 
 /** What `orch-call` is answered by. `{cmd, args}` is today's HTTP body and `sessionId` is today's
  *  `x-astera-session` header (design §5) — the real command layer implements this exact shape, so
  *  `server.ts`'s wiring does not change when the stub below is swapped for it. */
 export interface OrchCall {
-  call(a: { cmd: string; args: Record<string, unknown>; sessionId: string }): Promise<{ status: number; body: unknown }>
+  call(a: {
+    cmd: string
+    args: Record<string, unknown>
+    sessionId: string
+    /** Absent for a caller that has no socket behind it (tests, and the stub below). A command that
+     *  needs to know who is asking refuses when it is missing rather than assuming the app. */
+    from?: OrchCaller
+  }): Promise<{ status: number; body: unknown }>
 }
 
 /** This slice's stub: one command, `version`, answering the Host's own version and protocol.
