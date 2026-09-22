@@ -122,6 +122,42 @@ describe('createHostOrch', () => {
     expect(JSON.stringify(r.body)).toContain('APP_REQUIRED')
   })
 
+  /**
+   * **삼켜진 거절은 상태 코드를 정하지 않는다**(F25).
+   *
+   * `send worker_done --outcome failed` 는 한도 탐침을 부르고, 그 실패는 명령 층이 일부러 삼킨다
+   * (로그하고 계속 간다). 앱이 없으면 그 탐침은 거절당하지만 명령은 계속 가고, 이어서 제 이유로
+   * 실패한다 — 여기서는 dispatch 와 taskId 가 안 맞는다. 그 400 이 409 로 바뀌면 스크립트는
+   * NOT_FOUND 도 아니고 잘못된 인자도 아닌, "앱이 없다" 를 읽는다.
+   */
+  it('삼켜진 탐침 거절은 뒤따르는 400 을 409 로 바꾸지 않는다', async () => {
+    const { taskId } = await seed()
+    const state = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+    state.dispatches = [
+      {
+        id: 'dsp_1',
+        taskId,
+        provider: 'codex',
+        accountId: 'acc1',
+        sessionId: 'sess1',
+        cwd: 'D:/p',
+        specPath: 'D:/p/s.md',
+        startedAt: NOW
+      } as OrchState['dispatches'][number]
+    ]
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(state), 'utf8')
+    const orch = orchOver({ hasApp: () => false })
+    const r = await orch.call({
+      cmd: 'send',
+      args: { type: 'worker_done', dispatchId: 'dsp_1', taskId: 'tsk_not_this_one', outcome: 'failed', subject: 's', body: 'b' },
+      sessionId: ''
+    })
+    expect(r.status).toBe(400)
+    expect(JSON.stringify(r.body)).toContain('does not match')
+    // 탐침이 못 돈 사실은 조용히 지나가지 않는다.
+    expect(logs.some((l) => l.includes('limit probe failed') && l.includes('APP_REQUIRED'))).toBe(true)
+  })
+
   // 앱이 없어 거절한 것은 남기지 않아야 할 흔적도 남기지 않고, 로그는 남긴다.
   it('앱이 없어 거절하면 그 사실이 로그에 남는다', async () => {
     const { taskId } = await seed()

@@ -141,4 +141,52 @@ describe('hostOrchDeps', () => {
     hostOrchDeps(base({ log: (m) => logs.push(m) })).log?.('무언가')
     expect(logs).toEqual(['무언가'])
   })
+
+  /**
+   * **세 갈래가 한 분류다.** 어느 의존이 상태 코드를 정하는지는 그 거절을 명령 층이 어떻게
+   * 다루느냐로 갈린다 — 삼키는 것이 답을 정하면, 그 뒤에 제 이유로 실패한 명령이 "앱이 없다"로
+   * 둔갑한다(F25).
+   */
+  describe('거절이 답을 정하는가', () => {
+    it('전달되는 의존의 거절만 앱 문제로 표시된다', async () => {
+      const refused: string[] = []
+      const deps = hostOrchDeps(base({ hasApp: () => false, onAppRequired: (n) => refused.push(n) }))
+      await expect(deps.startWorker({} as never)).rejects.toThrow(/APP_REQUIRED/)
+      await expect(deps.repairOnce?.({ taskId: 't1' })).rejects.toThrow(/APP_REQUIRED/)
+      expect(refused).toEqual(['startWorker', 'repairOnce'])
+    })
+
+    it('명령 층이 삼키는 의존은 거절해도 앱 문제로 표시하지 않는다', async () => {
+      const refused: string[] = []
+      const deps = hostOrchDeps(base({ hasApp: () => false, onAppRequired: (n) => refused.push(n) }))
+      // 셋 다 거절은 한다 — 그 거절을 부르는 쪽이 잡아 로그하고 계속 간다.
+      await expect(deps.probeLimit?.({} as never)).rejects.toThrow(/APP_REQUIRED/)
+      await expect(deps.resolveProjectRoot?.('D:/p')).rejects.toThrow(/APP_REQUIRED/)
+      await expect(deps.readReviewFile?.('D:/p/s.md.review.json')).rejects.toThrow(/APP_REQUIRED/)
+      expect(refused).toEqual([])
+    })
+
+    it('결과를 안 받는 의존은 던지지도, 앱 문제로 표시하지도 않는다', () => {
+      const refused: string[] = []
+      const logs: string[] = []
+      const deps = hostOrchDeps(
+        base({ hasApp: () => false, onAppRequired: (n) => refused.push(n), log: (m) => logs.push(m) })
+      )
+      expect(deps.startValidation?.({ taskId: 't1', cwd: 'D:/p' })).toBeUndefined()
+      expect(deps.startReview?.({ taskId: 't1' })).toBeUndefined()
+      expect(deps.startRepair?.({ dispatchId: 'd1' })).toBeUndefined()
+      expect(deps.onDispatchLost?.({ dispatchId: 'd1' })).toBeUndefined()
+      expect(refused).toEqual([])
+      expect(logs).toHaveLength(4)
+    })
+
+    // 이 넷이 **있다는 것 자체**가 applyWorkerDone 의 canValidate·canReview 를 참으로 만든다
+    // (command.ts 의 `!!deps.startValidation`). 없으면 Task 는 검증도 검토도 없이 completed 로
+    // 간다 — Host 로 돈 Job 이 수렴하지 않던 이유다.
+    it('검증·검토·수리 의존이 실제로 주입된다', () => {
+      const deps = hostOrchDeps(base())
+      for (const name of ['startValidation', 'startReview', 'startRepair', 'onDispatchLost', 'repairTargetFor'] as const)
+        expect(typeof deps[name]).toBe('function')
+    })
+  })
 })

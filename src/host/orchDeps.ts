@@ -1,4 +1,4 @@
-// The Host's OrchServerDeps: four members it owns, and the actions it forwards to the app.
+// The Host's OrchServerDeps: the members it owns, and the actions it forwards to the app.
 //
 // **The command layer never learns which is which.** That is the whole point of the split (host
 // control plane design §5) — when S2 makes startWorker local, this file changes and `handleCommand`
@@ -6,33 +6,78 @@
 import type { OrchServerDeps } from '../core/orchestration/command'
 import { AppUnreachable } from '../core/host/orchProtocol'
 
-/** The dependencies that are not questions about state but things somebody has to *do* — spawn a
- *  session, touch a worktree, read a log off disk. The Host has none of that; the app does.
- *
- *  **`runningSessions` and `appVersion` are NOT here.** They look like app questions and are not: the
- *  Host knows its own version and its own session registry, and `status` and `version` have to answer
- *  with no app attached — which is the first thing anyone will try. */
-const REMOTE = [
-  'startWorker', 'releaseWorker', 'unregisterRolling', 'backup', 'mergeWorktrees',
-  'removeWorktrees', 'startCoordinator', 'makeRunWorktree', 'listAccounts', 'readWorker',
-  'listRunConfigs', 'probeLimit', 'browserRun'
+/** What the Host answers out of itself. `runningSessions` and `appVersion` look like app questions
+ *  and are not: the Host knows its own version and its own session registry, and `status` and
+ *  `version` have to answer with no app attached — which is the first thing anyone will try. */
+const OWNED = ['getState', 'setState', 'now', 'log', 'enabled', 'runningSessions', 'appVersion'] as const
+
+/**
+ * **Forwarded, and a refusal reaches the caller.** `handleCommand` either awaits these and lets the
+ * rejection out, or turns it into its own error reply — either way the command's outcome is decided
+ * by the refusal, so the call is answered CONFLICT (`orch.ts`'s `refused` flag).
+ */
+const PROPAGATES = [
+  'startWorker', 'releaseWorker', 'backup', 'mergeWorktrees', 'removeWorktrees', 'startCoordinator',
+  'makeRunWorktree', 'listAccounts', 'readWorker', 'listRunConfigs', 'browserRun', 'repairOnce',
+  'repairTargetFor'
 ] as const
 
 /**
- * The ones `handleCommand` calls as a bare statement and never awaits.
+ * **Forwarded, and the command layer deliberately swallows a failure.** `probeLimit` logs and carries
+ * on with no limit detected; `resolveProjectRoot` logs and keeps the path it was given;
+ * `readReviewFile` records the verdict file as malformed.
  *
- * **A refusal from one of these has nobody to reject to.** `unregisterRolling` is declared
- * `(sessionId: string): void` and both of its call sites (`command.ts`'s dispatch-abandon, and
- * `dropRollingChain` on the two worker_done paths) drop the result on the floor. An `async` wrapper
- * there hands Node a rejected promise nobody holds, and there is no `unhandledRejection` handler in
- * the Host — so the default takes the whole process down, and every terminal it owns with it. It is
+ * **So these must not decide the status.** The command goes on to succeed or to fail for its own
+ * reasons, and rewriting that later failure as CONFLICT tells a script "the app is missing" when the
+ * truth was a bad id — the same lie the substring match used to tell, wearing a flag instead.
+ */
+const SWALLOWED = ['probeLimit', 'resolveProjectRoot', 'readReviewFile'] as const
+
+/**
+ * **Called as a bare statement — nobody holds the result.**
+ *
+ * `unregisterRolling` is declared `(sessionId: string): void`, and `startValidation`, `startReview`,
+ * `startRepair` and `onDispatchLost` are the same shape. An `async` wrapper on any of them hands Node
+ * a rejected promise nobody holds, and there is no `unhandledRejection` handler in the Host — so the
+ * default takes the whole process down, and every terminal it owns with it. `unregisterRolling` is
  * reached by `send worker_done`, the commonest worker path, in exactly the no-app case this design
  * exists to serve.
  *
- * Swallowing is the right answer for this one — with no app there is no rolling registration to
- * unregister — but it is logged, never silent.
+ * Swallowing is what these call sites already expect of an absent dependency, but it is logged here,
+ * never silent — and it does not decide the status either, for SWALLOWED's reason.
  */
-const FIRE_AND_FORGET: ReadonlySet<string> = new Set(['unregisterRolling'])
+const FIRE_AND_FORGET = [
+  'unregisterRolling', 'startValidation', 'startReview', 'startRepair', 'onDispatchLost'
+] as const
+
+/**
+ * **Not supplied, and each one needs a decision this task does not own.**
+ *
+ * - `lang`, `browserEnabled`, `handoffEnabled`, `trackingEnabled` are synchronous getters. Making
+ *   them remote needs the same sync/async answer `listAccounts` got, and their callers read them
+ *   inline in conditions rather than awaiting anything.
+ * - `handoffs` and `sessionTasks` are objects of methods, so each method needs its own entry in the
+ *   app's answer table rather than one name on the wire.
+ *
+ * Both belong with the task that writes the app's side of that table. Until then the commands that
+ * read them behave as they do with any dependency that is not injected: `browser-js`, `handoff` and
+ * the three `session-task-*` commands answer "that feature is off", which is visible rather than
+ * silent. **The guard below is what keeps this list from growing without anyone noticing.**
+ */
+const NOT_SUPPLIED = ['lang', 'browserEnabled', 'handoffEnabled', 'trackingEnabled', 'handoffs', 'sessionTasks'] as const
+
+const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET] as const
+const CLASSIFIED = [...OWNED, ...REMOTE, ...NOT_SUPPLIED] as const
+
+/** Whatever the lists above do not name between them lands here. */
+type Unlisted<T, Listed extends readonly PropertyKey[]> = Exclude<keyof T, Listed[number]>
+/** If anything is left, the compiler names it here and the build stops. An unused alias on purpose —
+ *  what it produces is not a value but the check itself (the same pattern as
+ *  `core/orchestration/cliPublic.ts`, for the same reason: the only way a list like this fails is by
+ *  falling behind, and a dependency that quietly joins the unsupplied six is a Job that runs and
+ *  never converges). */
+type NothingLeft<T extends never> = T
+type _everyDependencyIsClassified = NothingLeft<Unlisted<OrchServerDeps, typeof CLASSIFIED>>
 
 export function hostOrchDeps(a: {
   getState: OrchServerDeps['getState']
@@ -49,9 +94,10 @@ export function hostOrchDeps(a: {
    *  the transition table — lands somewhere a person can read it. Without it the Host's command layer
    *  degrades silently, which is the one thing a degradation must not do. */
   log(message: string): void
-  /** Called when a forwarded action could not be put to the app at all — none attached, or the one
-   *  that was did not answer. `orch.ts` answers that call CONFLICT on the strength of this, rather
-   *  than by matching text in the reply. */
+  /** Called when a **PROPAGATES** action could not be put to the app — none attached, or the one that
+   *  was did not answer. `orch.ts` answers that call CONFLICT on the strength of this, rather than by
+   *  matching text in the reply. Never called for the other two groups: their refusal does not decide
+   *  what the command answers. */
   onAppRequired(name: string, why: string): void
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
@@ -62,12 +108,12 @@ export function hostOrchDeps(a: {
   // conditional puts it on the wire byte-identically to a two-argument call and the far side cannot
   // tell them apart. One rule, no per-name table, and no room for a fourth argument shape to fall
   // off later — the app spreads what it is given. `backup()` travels as `[]`.
-  const forward = (name: string) =>
+  const forward = (name: string, flags: boolean) =>
     async (...args: unknown[]): Promise<unknown> => {
       // **여기서 바로 거절한다.** 앱이 올 때까지 기다리게 두면 워커가 영영 멈춘다.
       if (!a.hasApp()) {
         const err = refusal(name)
-        a.onAppRequired(name, err.message)
+        if (flags) a.onAppRequired(name, err.message)
         throw err
       }
       try {
@@ -78,7 +124,7 @@ export function hostOrchDeps(a: {
         // same class of fact as "no app attached" and gets the same answer: not now. An `ok: false`
         // from an app that did answer is the action's own failure and is not this — it arrives as a
         // plain Error and passes straight through.
-        if (err instanceof AppUnreachable) a.onAppRequired(name, err.message)
+        if (flags && err instanceof AppUnreachable) a.onAppRequired(name, err.message)
         throw err
       }
     }
@@ -95,7 +141,12 @@ export function hostOrchDeps(a: {
     }
 
   const remote = Object.fromEntries(
-    REMOTE.map((name) => [name, FIRE_AND_FORGET.has(name) ? forgetful(name) : forward(name)])
+    REMOTE.map((name) => [
+      name,
+      (FIRE_AND_FORGET as readonly string[]).includes(name)
+        ? forgetful(name)
+        : forward(name, (PROPAGATES as readonly string[]).includes(name))
+    ])
   )
   return {
     getState: a.getState,
