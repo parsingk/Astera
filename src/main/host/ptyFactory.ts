@@ -29,7 +29,20 @@ export interface HostPtyTransport {
    *  `end()` a failed `pty-spawn` schedules (see `startDead` below) runs outside that fan-out — this
    *  is what gives it the same containment. */
   log(m: string): void
+  /** A request the Host took and never answered. Optional because it is a judgement about the Host as
+   *  a whole and not about this handle: the wiring passes it on to `HostClient.markUnresponsive` for a
+   *  Host too old to answer pings, and drops it for one that does — see `hostSpeaksPing`
+   *  (docs/2026-09-22-host-unresponsive-recovery-design.md F4). */
+  unanswered?(what: string): void
 }
+
+/** How long a spawn may go unanswered before the session it was for is ended.
+ *
+ * **There was no deadline at all**, and on 2026-09-22 that is what a stuck Host looked like from the
+ * outside: a session tab that stayed blank, a Run that stayed yellow, and a stop button that did
+ * nothing, for as long as the app was left open. An initial value rather than a measured one; if a
+ * slow first spawn on a cold disk ever trips it, this is what moves (design §9). */
+export const SPAWN_DEADLINE_MS = 20_000
 
 type Queued = { t: 'pty-write'; data: string } | { t: 'pty-resize'; cols: number; rows: number }
 
@@ -43,9 +56,21 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
   const end = (exitCode: number): void => {
     state = 'exited'
     queue.length = 0
+    clearDeadline()
     unsubscribe()
     unsubscribeGone()
     onExit({ exitCode })
+  }
+
+  /** Written on the terminal itself, because that is where the person is looking. A session that ends
+   *  with nothing on its screen is the failure this whole file is about: it reads as the app being
+   *  broken rather than as something having gone wrong that has a name. */
+  const say = (line: string): void => onData(`\r\n[astera] ${line}\r\n`)
+
+  let deadline: ReturnType<typeof setTimeout> | null = null
+  const clearDeadline = (): void => {
+    if (deadline) clearTimeout(deadline)
+    deadline = null
   }
 
   // Not an ordinary code: the process may well still be alive, and this is the app losing sight of it
@@ -61,6 +86,7 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     if (m.t === 'pty-spawned') {
       state = 'live'
       pid = m.pid
+      clearDeadline()
       for (const q of queue) t.send(q.t === 'pty-write' ? { t: 'pty-write', id, data: q.data } : { t: 'pty-resize', id, cols: q.cols, rows: q.rows })
       queue.length = 0
       return
@@ -74,7 +100,13 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     // `onHostGone` guards its own end() so this does not rely on `unsubscribe()` (below) having
     // already taken the handle out of the transport's set — the two read alike, and neither depends
     // on the other's cleanup for its correctness.
-    if ((m.t === 'pty-failed' || m.t === 'pty-exit') && state !== 'exited') end(m.t === 'pty-exit' ? m.exitCode : 1)
+    if ((m.t === 'pty-failed' || m.t === 'pty-exit') && state !== 'exited') {
+      // A refusal carries a sentence saying why, and it used to be dropped here — the session ended
+      // with a bare code 1 and an empty screen. The Host says useful things there: a runtime whose
+      // node-pty is half deleted names the missing file (design F7).
+      if (m.t === 'pty-failed') say(m.error)
+      end(m.t === 'pty-exit' ? m.exitCode : 1)
+    }
   })
 
   if (startDead) {
@@ -94,6 +126,27 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
         t.log(`onExit threw ending a spawn that never reached the Host: ${String(err)}`)
       }
     })
+  } else if (state === 'pending') {
+    // The spawn did reach the Host. If no answer comes, nothing else in this file will ever end the
+    // handle: `onHostGone` fires on a dropped socket, and a Host stuck inside node-pty drops nothing
+    // (2026-09-22). Not armed for `startDead` above, whose handle is already on its way out, nor for
+    // an adopted one, which is live from the start.
+    deadline = setTimeout(() => {
+      deadline = null
+      if (state !== 'pending') return
+      say(`the Host did not answer within ${Math.round(SPAWN_DEADLINE_MS / 1000)}s — the session was not started`)
+      // Told before ending, so the wiring has the judgement while this handle is still the thing that
+      // produced it. What the wiring does with it depends on whether this Host answers pings at all.
+      t.unanswered?.(`a pty spawn went unanswered for ${SPAWN_DEADLINE_MS}ms`)
+      try {
+        end(1)
+      } catch (err) {
+        // Same containment as the microtask above: this runs on a timer, outside HostClient's
+        // per-subscriber try/catch, so a caller's onExit throwing here has nowhere else to be caught.
+        t.log(`onExit threw ending a spawn the Host never answered: ${String(err)}`)
+      }
+    }, SPAWN_DEADLINE_MS)
+    deadline.unref?.()
   }
 
   const forward = (q: Queued): void => {

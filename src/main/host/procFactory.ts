@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type { ClientMessage, HostMessage } from '../../core/host/protocol'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import type { ProcFactory, ProcLike, ProcSpawnOptions } from '../../core/sessions/proc'
-import type { HostPtyTransport } from './ptyFactory'
+import { SPAWN_DEADLINE_MS, type HostPtyTransport } from './ptyFactory'
 
 function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: number, startDead = false, startReplaying = false): ProcLike {
   let state: 'pending' | 'live' | 'exited' = startLive ? 'live' : 'pending'
@@ -31,9 +31,16 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     state = 'exited'
     queue.length = 0
     held.length = 0
+    clearDeadline()
     unsubscribe()
     unsubscribeGone()
     onExit({ exitCode, ...(stderrTail !== undefined ? { stderrTail } : {}) })
+  }
+
+  let deadline: ReturnType<typeof setTimeout> | null = null
+  const clearDeadline = (): void => {
+    if (deadline) clearTimeout(deadline)
+    deadline = null
   }
 
   // The app losing sight of the process, not the process ending — the same named code ptyFactory
@@ -47,6 +54,7 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     if (m.t === 'proc-spawned') {
       state = 'live'
       pid = m.pid
+      clearDeadline()
       for (const line of queue) t.send({ t: 'proc-write', id, line })
       queue.length = 0
       return
@@ -67,7 +75,11 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
       return
     }
     if ((m.t === 'proc-failed' || m.t === 'proc-exit') && state !== 'exited')
-      end(m.t === 'proc-exit' ? m.exitCode : 1, m.t === 'proc-exit' ? m.stderrTail : undefined)
+      // A refusal carries a sentence saying why, and this handle has no screen to print it on. It
+      // travels as the stderr tail instead, which is the field the exit notice already reads
+      // (session-failure visibility design F2) — otherwise a chat session that could not start shows
+      // the same blank "이 세션은 종료되었습니다" as one that ended normally.
+      end(m.t === 'proc-exit' ? m.exitCode : 1, m.t === 'proc-exit' ? m.stderrTail : `[astera] ${m.error}`)
   })
 
   if (startDead) {
@@ -80,6 +92,21 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
         t.log(`onExit threw ending a spawn that never reached the Host: ${String(err)}`)
       }
     })
+  } else if (state === 'pending') {
+    // ptyFactory's deadline, for the handle with no screen: without it a chat session whose Host has
+    // stopped answering sits pending forever, because `onHostGone` only fires on a dropped socket and
+    // a Host stuck inside node-pty drops nothing (2026-09-22, design F4).
+    deadline = setTimeout(() => {
+      deadline = null
+      if (state !== 'pending') return
+      t.unanswered?.(`a proc spawn went unanswered for ${SPAWN_DEADLINE_MS}ms`)
+      try {
+        end(1, `[astera] the Host did not answer within ${Math.round(SPAWN_DEADLINE_MS / 1000)}s — the session was not started`)
+      } catch (err) {
+        t.log(`onExit threw ending a spawn the Host never answered: ${String(err)}`)
+      }
+    }, SPAWN_DEADLINE_MS)
+    deadline.unref?.()
   }
 
   return {

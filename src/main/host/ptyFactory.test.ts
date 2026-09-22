@@ -1,16 +1,20 @@
-import { describe, it, expect } from 'vitest'
-import { createHostPtyFactory, type HostPtyTransport } from './ptyFactory'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { createHostPtyFactory, SPAWN_DEADLINE_MS, type HostPtyTransport } from './ptyFactory'
 import type { ClientMessage, HostMessage } from '../../core/host/protocol'
 
 /** A transport the test drives from both ends. `connected` starts true — set it false to make
  *  `send` behave the way `HostClient.send` does with no socket: refuse, and record nothing. */
-const transport = (): HostPtyTransport & { sent: ClientMessage[]; connected: boolean; logs: string[]; deliver(m: HostMessage): void; hostGone(): void } => {
+const transport = (): HostPtyTransport & { sent: ClientMessage[]; connected: boolean; logs: string[]; unansweredWith: string[]; deliver(m: HostMessage): void; hostGone(): void } => {
   const subs = new Set<(m: HostMessage) => void>()
   const gone = new Set<() => void>()
   return {
     sent: [],
     connected: true,
     logs: [],
+    unansweredWith: [],
+    unanswered(what) {
+      this.unansweredWith.push(what)
+    },
     send(m) {
       if (!this.connected) return false
       this.sent.push(m)
@@ -306,5 +310,75 @@ describe('createHostPtyFactory', () => {
     const { attach } = createHostPtyFactory(t)
     attach({ id: 'p9', pid: 555 }).remember?.({ title: 'renamed again' })
     expect(t.sent).toEqual([{ t: 'pty-note', id: 'p9', patch: { title: 'renamed again' } }])
+  })
+})
+
+// The 2026-09-22 symptom, at the one place that can end it: a Host whose event loop was stuck took the
+// pty-spawn and never answered, so the handle stayed pending. `onHostGone` never fired either, because
+// nothing about the socket had gone wrong. The session sat blank, the Run sat yellow, and stopping it
+// did nothing — the kill went to the same deaf Host, and the pid was still 0 so there was nothing to
+// tree-kill (design D2, F4).
+describe('createHostPtyFactory — a spawn the Host never answers', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('ends the session at the deadline, and says on the terminal why', () => {
+    const t = transport()
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('cmd.exe', [], opts)
+    const seen: string[] = []
+    let exit: number | null = null
+    p.onData((d) => seen.push(d))
+    p.onExit((e) => { exit = e.exitCode })
+
+    vi.advanceTimersByTime(SPAWN_DEADLINE_MS - 1)
+    expect(exit).toBeNull()
+    vi.advanceTimersByTime(1)
+
+    expect(exit).toBe(1)
+    expect(seen.join('')).toContain('did not answer')
+    expect(t.unansweredWith).toEqual([`a pty spawn went unanswered for ${SPAWN_DEADLINE_MS}ms`])
+  })
+
+  it('does nothing at the deadline for a spawn that was answered', () => {
+    const t = transport()
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('cmd.exe', [], opts)
+    let exit: number | null = null
+    p.onExit((e) => { exit = e.exitCode })
+    t.deliver({ t: 'pty-spawned', id: spawned(t), pid: 321 })
+
+    vi.advanceTimersByTime(SPAWN_DEADLINE_MS * 2)
+    expect(exit).toBeNull()
+    expect(p.pid).toBe(321)
+    expect(t.unansweredWith).toEqual([])
+  })
+
+  // The Host does say why when it can — `node-pty is incomplete: …` is what design F7 makes it say —
+  // and that sentence was being thrown away: `pty-failed` ended the handle with a bare exit code 1.
+  it('shows the reason the Host refused a spawn, rather than only ending', () => {
+    const t = transport()
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('cmd.exe', [], opts)
+    const seen: string[] = []
+    let exit: number | null = null
+    p.onData((d) => seen.push(d))
+    p.onExit((e) => { exit = e.exitCode })
+    t.deliver({ t: 'pty-failed', id: spawned(t), error: 'node-pty is incomplete: worker/conoutSocketWorker.js is missing' })
+
+    expect(exit).toBe(1)
+    expect(seen.join('')).toContain('conoutSocketWorker.js is missing')
+  })
+
+  it('does not fire for a spawn that never reached the Host — that handle has already ended', async () => {
+    const t = transport()
+    t.connected = false
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('cmd.exe', [], opts)
+    let exits = 0
+    p.onExit(() => { exits += 1 })
+    await vi.advanceTimersByTimeAsync(SPAWN_DEADLINE_MS * 2)
+    expect(exits).toBe(1)
+    expect(t.unansweredWith).toEqual([])
   })
 })
