@@ -501,11 +501,21 @@ export default function App(): React.JSX.Element {
   /** The Info tab's *Restart now*: confirm with what ends, replace, then re-read the row. */
   const restartHost = async (): Promise<void> => {
     const h = hostHolding
-    const body = h
-      ? t('settings.info.hostRestartConfirmBody', { sessions: h.sessions, chats: h.chats, terminals: h.terminals, runs: h.runs })
-      : t('settings.info.hostRestartConfirmBodyNone')
+    // **A Host that is not answering cannot be asked what it holds**, so `hostHolding` is null there
+    // and staying silent about it would be the wrong kind of quiet — something does end. The app's own
+    // count of sessions that outlive it is the honest answer: it is this app's record of what it
+    // handed to that Host, which is exactly what goes away with it.
+    const unresponsive = hostStatus?.unresponsive === true
+    const kept = unresponsive ? await window.api.host.sessionsOutlivingApp().catch(() => 0) : 0
+    const body = unresponsive
+      ? kept > 0
+        ? t('settings.info.hostRestartUnresponsiveConfirmBody', { kept })
+        : t('settings.info.hostRestartUnresponsiveConfirmBodyNone')
+      : h
+        ? t('settings.info.hostRestartConfirmBody', { sessions: h.sessions, chats: h.chats, terminals: h.terminals, runs: h.runs })
+        : t('settings.info.hostRestartConfirmBodyNone')
     const ok = await confirmModal({
-      title: t('settings.info.hostRestartConfirmTitle'),
+      title: t(unresponsive ? 'settings.info.hostRestartUnresponsiveConfirmTitle' : 'settings.info.hostRestartConfirmTitle'),
       body,
       confirmLabel: t('settings.info.hostRestartNow')
     })
@@ -4185,6 +4195,22 @@ export default function App(): React.JSX.Element {
             {hostRestarting ? t('settings.info.hostRestarting') : t('status.hostOutdated')}
           </button>
         )}
+        {/* The Host stopped answering. The same place and the same amber as the notice above, because
+            it is the same kind of fact and a person should not have to learn two — but it is the more
+            urgent of the two: sessions started from here on end with the app, and the only way back is
+            this button (docs/2026-09-22-host-unresponsive-recovery-design.md F5). Before this, the one
+            place that said anything was Settings > Info, and what it said was "연결 안 됨". */}
+        {hostStatus?.unresponsive && (
+          <button
+            type="button"
+            className="status-host-outdated"
+            disabled={hostRestarting}
+            onClick={() => void restartHost()}
+            title={t('status.hostUnresponsiveTitle')}
+          >
+            {hostRestarting ? t('settings.info.hostRestarting') : t('status.hostUnresponsive')}
+          </button>
+        )}
       </div>
       {showNew && (
         <NewSessionDialog
@@ -4488,6 +4514,13 @@ export default function App(): React.JSX.Element {
                                 })}
                               </span>
                             )}
+                            {/* The files this Host runs from are missing some of what it needs. It is
+                                running now and will stall at its next spawn, which is a state nobody
+                                could see before (2026-09-22) — so it is said here, in the same amber,
+                                beside the version it belongs to. */}
+                            {hostStatus.runtimeIncomplete && (
+                              <span className="host-row-outdated">{t('settings.info.hostRuntimeIncomplete')}</span>
+                            )}
                             {/* Drawn only once the Host has answered. Until then the row is the
                                 connection facts alone, which is the whole truth it has: a count here
                                 before the answer would be an invented one. */}
@@ -4502,6 +4535,17 @@ export default function App(): React.JSX.Element {
                               </span>
                             )}
                           </>
+                        ) : hostStatus?.unresponsive ? (
+                          <>
+                            {/* Two sentences, not one. The first is what is wrong and the second is
+                                what is happening about it — work is continuing inside the app, and it
+                                ends with the app. A person reading only "응답 없음" would not know
+                                either half, which is what the 2026-09-22 morning looked like. */}
+                            <span className="host-row-outdated">
+                              {t('settings.info.hostUnresponsive', { detail: hostStatus.problem ?? '' })}
+                            </span>
+                            <span>{t('settings.info.hostUnresponsiveWhat')}</span>
+                          </>
                         ) : (
                           <span>
                             {hostStatus?.problem
@@ -4513,8 +4557,13 @@ export default function App(): React.JSX.Element {
                       {/* A sibling of the text, not its tail — .settings-row's space-between then keeps
                           it at the row's right edge whether the text above it runs to one line or
                           three. Not waiting for the automatic replacement; confirms with the holdings,
-                          because the count is the only honest part of the offer (design §6). */}
-                      {hostStatus?.connected && hostStatus.outdated && (
+                          because the count is the only honest part of the offer.
+
+                          Three reasons to offer it now, and the third is the one that cannot wait:
+                          an unresponsive Host has no automatic replacement behind it, because every
+                          rule that would replace one needs the Host to answer what it is holding
+                          first (design F5). */}
+                      {((hostStatus?.connected && (hostStatus.outdated || hostStatus.runtimeIncomplete)) || hostStatus?.unresponsive) && (
                         <button type="button" disabled={hostRestarting} onClick={() => void restartHost()}>
                           {hostRestarting ? t('settings.info.hostRestarting') : t('settings.info.hostRestartNow')}
                         </button>
