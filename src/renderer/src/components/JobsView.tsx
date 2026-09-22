@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import type { JobRow, JobTask, OrchSnapshot, Provider, TaskStatus } from '../../../core/types'
+import type { JobRow, JobTask, OrchHostGate, OrchSnapshot, Provider, TaskStatus } from '../../../core/types'
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import { formatElapsed, formatRemaining } from '../../../core/orchestration/elapsed'
 import { isStoppedWorker, runningCount } from '../../../core/orchestration/running'
+import { jobsViewScreen } from '../../../core/orchestration/jobsView'
 import { schedRuleSummary } from '../../../core/scheduler/summary'
 import { convergenceChipOf, type ConvergenceChip } from '../../../core/orchestration/nodeMeta'
 import { useI18n } from '../i18n/I18nProvider'
@@ -577,6 +578,7 @@ function ScheduleCard({
  *  it has no test of its own because the renderer has no jsdom (vitest runs environment: 'node'). */
 export function JobsView({
   snapshot,
+  hostGate,
   hasProject,
   canOpenSession,
   onOpenSession,
@@ -588,6 +590,13 @@ export function JobsView({
   onRestartCoordinator
 }: {
   snapshot: OrchSnapshot | null
+  /** Why there is nothing to draw, when the Host is the reason — null in the ordinary case.
+   *
+   *  **A prop of its own, not a field on the snapshot** (ruling F41). It is one fact about the app's
+   *  Host, and a snapshot is per project: App substitutes a synthetic one whenever no project is open,
+   *  so a gate carried inside it disappeared in exactly the state most likely to meet it. App reads it
+   *  once (`orch.hostGate`) and listens on `orch:host` after that. */
+  hostGate: OrchHostGate | null
   /** Whether the caller currently has a project open. snapshot alone cannot answer that — with no
    *  project App.tsx deliberately still hands this component `{ runs: [] }` rather than null (its
    *  own comment: null would leave an unexplained blank sidebar for as long as the view stays open,
@@ -652,36 +661,43 @@ export function JobsView({
     return () => clearInterval(id)
   }, [anyRunning])
 
-  // Before the first orch.list response — nothing is known yet, so nothing is drawn (not even the
-  // empty state, which would otherwise flash "no jobs" for a frame on every project switch).
-  if (snapshot === null) return <></>
+  // 넷 중 어느 화면인가. **순서는 core 가 정한다**(jobsViewScreen) — 이 순서가 틀렸던 것을 어떤
+  // 테스트도 보지 못했고, 사람이 화면을 보고서야 잡았다(ruling F41).
+  const screen = jobsViewScreen({ hostGate, snapshot })
 
   // **The Host is why there is nothing, and saying so is the whole point of this state.** The app no
   // longer owns orchestration.json (host control plane design §6), so with no Host there is no state
   // — and the empty state below would tell a person with a dozen Jobs that they have none. The four
   // features that stop with it are named here rather than each growing a surface of its own (F35).
-  if (snapshot.host) {
-    const waiting = snapshot.host.state === 'waiting'
+  //
+  // **프로젝트가 열려 있든 아니든 그린다.** 열린 프로젝트가 없는 창이야말로 이 화면을 만날 가능성이
+  // 가장 높은 쪽이다(갓 설치한 앱, 아직 세션을 안 연 창) — 그래서 이 값은 스냅샷을 타고 오지 않는다.
+  if (screen === 'host' && hostGate) {
+    const waiting = hostGate.state === 'waiting'
     return (
       <div className="jobs-empty">
         <p>{t(waiting ? 'jobs.host.waiting' : 'jobs.host.unreachable')}</p>
         <p className="jobs-empty-hint">{t('jobs.host.features')}</p>
         {/* 못 붙은 뒤에만 사유와 기록을 적는다 — 아직 시도 중일 때는 적을 사유가 없고, 있지도
             않은 실패를 화면에 두면 기다리는 중을 실패로 읽는다. */}
-        {!waiting && snapshot.host.reason && (
-          <p className="jobs-empty-hint">{t('jobs.host.reason', { reason: snapshot.host.reason })}</p>
+        {!waiting && hostGate.reason && (
+          <p className="jobs-empty-hint">{t('jobs.host.reason', { reason: hostGate.reason })}</p>
         )}
         {!waiting && (
           <>
             <p className="jobs-empty-hint">{t('jobs.host.retry')}</p>
-            <p className="jobs-empty-hint">{t('jobs.host.log', { path: snapshot.host.logPath })}</p>
+            <p className="jobs-empty-hint">{t('jobs.host.log', { path: hostGate.logPath })}</p>
           </>
         )}
       </div>
     )
   }
 
-  if (snapshot.runs.length === 0) {
+  // Before the first orch.list response — nothing is known yet, so nothing is drawn (not even the
+  // empty state, which would otherwise flash "no jobs" for a frame on every project switch).
+  if (screen === 'blank' || snapshot === null) return <></>
+
+  if (screen === 'empty') {
     // **프로젝트가 없을 때와 있을 때가 다른 화면이다.** 이 빈 상태는 둘 다에서 그려진다(App.tsx 가
     // 프로젝트 없을 때 일부러 `{ runs: [] }` 를 넣는다 — 빈 사이드바보다 낫다는 판단). 그런데
     // '+ 새 작업' 버튼은 프로젝트가 없으면 그릴 수 없다(아래 가드): 그때 두 문구를 그대로 두면

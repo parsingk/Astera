@@ -1340,20 +1340,29 @@ export function registerIpc(
    *  whenever the snapshot's own emptiness is the honest answer: before `bootOrch` runs at all (every
    *  toggle off — nobody is waiting on anything), and again once it has succeeded. */
   let orchHostGate: OrchHostGate | null = null
-  /** Says it on screen. **Its own push rather than a field on the state push**, because the whole
-   *  point of these two states is that there is no state: `pushOrchState` needs an `OrchState` and
-   *  in this window the mirror has none. The channel is the same one the Jobs view already listens
-   *  on, so nothing new crosses the preload. */
+  /**
+   * Says it on screen, **on a channel of its own and with no project in it** (ruling F41).
+   *
+   * It used to ride `orch:state` as a field on `OrchSnapshot`, and that is what made it invisible in
+   * the one state that needs it most. A snapshot is per project: main only pushes one while
+   * `orchProject` is set, which `orch.list` sets and the renderer only calls with a project open —
+   * and with none open the renderer substitutes a synthetic empty snapshot of its own that no push
+   * ever replaces. So a fresh install, or any window that has not opened a session, met four dead
+   * features and a sidebar saying "no project is open". Measured on screen.
+   *
+   * This gate is not per project — it is one fact about this app's Host — so it is answered by
+   * `orch.hostGate` and pushed on `orch:host`, neither of which knows what a project is. The renderer
+   * reads once at mount and listens after that, which is also what closes the window between the two:
+   * a gate set before the window existed is still there to be read.
+   */
   const setOrchHostGate = (next: OrchHostGate | null): void => {
+    if (JSON.stringify(orchHostGate) === JSON.stringify(next)) return
     orchHostGate = next
-    if (orchProject === null) return // the renderer has not asked for a project, or it unwatched
-    const snapshot: OrchSnapshot = { runs: [], projectFolderBusy: false, ...(next ? { host: next } : {}) }
-    // Only while there is nothing else to draw. Once `orch` stands, the state push owns this channel
-    // and an empty snapshot from here would blank the sidebar.
-    if (orch) return
-    if (orchSent !== null && sameSnapshot(orchSent, snapshot)) return
-    orchSent = snapshot
-    send('orch:state', snapshot)
+    try {
+      send('orch:host', next)
+    } catch (err) {
+      orchLog(`orch:host push failed: ${String(err)}`)
+    }
   }
 
   // Events: core to renderer (session:data is batched at 16ms)
@@ -5309,10 +5318,11 @@ export function registerIpc(
   // The same assertAllowedPath as run.list: the path decides which Runs come back, so an arbitrary
   // one would let the renderer enumerate Runs created outside every registered project.
   // An empty snapshot before orchestration has started (toggle off, or startup still running or
-  // failed) — there is no state to read yet, and bootOrch pushes once as soon as there is. **With
-  // `host` set when the reason is the Host**, because "still running" and "failed" are two different
-  // screens and an empty sidebar says neither (see OrchHostGate). This reply races bootOrch either
-  // way, which is why `setOrchHostGate` also pushes.
+  // failed) — there is no state to read yet, and bootOrch pushes once as soon as there is. **Why the
+  // Host is not in it**: that is one fact about this app, not about this project, and a reply the
+  // renderer only asks for with a project open cannot carry it (ruling F41). `orch.hostGate` answers
+  // it instead, and is answered whether or not anything here has ever run.
+  ipcMain.handle('orch.hostGate', () => orchHostGate)
   ipcMain.handle('orch.list', async (_e, projectPath: string) => {
     const request = ++orchRequest
     // The guard runs on the path as sent — it decides what the renderer is allowed to name, and the
@@ -5339,7 +5349,7 @@ export function registerIpc(
     }
     const snapshot: OrchSnapshot = orch
       ? orchSnapshotOf(orch.deps.getState(), project)
-      : { runs: [], projectFolderBusy: false, ...(orchHostGate ? { host: orchHostGate } : {}) }
+      : { runs: [], projectFolderBusy: false }
     // Superseded while awaiting — by an unwatch, or by a later list for another project. The caller
     // still gets the project it asked for; what it does not get is the subscription, because
     // something more recent already decided what that should be.

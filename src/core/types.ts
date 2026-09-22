@@ -621,7 +621,13 @@ export interface JobRow {
  *  their own (ruling F35).
  *
  *  Absent once orchestration is up, which is the ordinary case — then the snapshot's own emptiness
- *  means what it always meant. */
+ *  means what it always meant.
+ *
+ *  **Not part of `OrchSnapshot`, and that is the whole of ruling F41.** A snapshot is per project and
+ *  is only ever asked for and pushed with one open; this is one fact about the app's Host. Carried in
+ *  the snapshot it vanished in exactly the state that needs it — a fresh install, or any window that
+ *  has not opened a session, where the renderer substitutes an empty snapshot of its own. It travels
+ *  on `orch.hostGate` / `orch:host` instead, neither of which knows what a project is. */
 export interface OrchHostGate {
   /** `waiting` — the app is still trying to reach the Host. `unreachable` — it has given up for now;
    *  a toggle change or an app restart tries again from the top. */
@@ -635,8 +641,6 @@ export interface OrchHostGate {
 
 export interface OrchSnapshot {
   runs: JobRow[]
-  /** Set only while there is no orchestration to draw and the Host is why — see OrchHostGate. */
-  host?: OrchHostGate
   /** 이 프로젝트 폴더에서 지금 일하는 워커가 하나라도 있는가. **새 Run 을 만드는 창이 읽는다.**
    *
    *  위의 Run 별 값으로는 이 질문에 답할 수 없다 — 만들 때 그 Run 은 아직 없고, 기존 Run 하나가
@@ -730,6 +734,10 @@ export interface CoreEvents {
   // main's worktree-to-repository resolution (see OrchApi) — that call is the only thing that tells
   // main what the renderer has open.
   'orch:state': OrchSnapshot
+  /** The Host gate changed, or was cleared (null). **Not scoped to a project and not conditional on
+   *  one** — see `OrchHostGate` for what carrying it in the snapshot cost. Sent whenever it moves;
+   *  `orch.hostGate` answers the same value for a window that mounts after the change. */
+  'orch:host': OrchHostGate | null
 
   /** How It Works 의 저장 파일이 바뀌었다. **실린 값은 프로젝트 키이고, 받는 쪽은 그것을 쓰지
    *  않는다** — main 은 그 키를 원 저장소로 접어 두는데(설계 D1) 렌더러는 그 접기를 모른다.
@@ -1479,6 +1487,12 @@ export interface AppControlApi {
  */
 export interface OrchApi {
   list(projectPath: string): Promise<OrchSnapshot>
+  /** Why the Jobs sidebar has nothing to draw, when the Host is the reason — null in the ordinary
+   *  case. **Its own call rather than a field on `list`** (ruling F41): `list` names a project and is
+   *  only ever made with one open, while this is one fact about the app's Host — and the window with
+   *  no project open is the one most likely to meet it. Read once per window; changes arrive on
+   *  `'orch:host'`. */
+  hostGate(): Promise<OrchHostGate | null>
   /** 한 Run 의 이벤트와 의존 그래프. 스냅샷과 달리 **요청할 때만** 온다 — Message.body 에는
    *  검증 출력 꼬리가 실리므로 매 쓰기마다 밀 수 있는 크기가 아니다. */
   runDetail(projectPath: string, runId: string): Promise<RunDetail>

@@ -44,6 +44,7 @@ import { CliInstallRows } from './components/CliInstallRows'
 import { FirstRunDialog } from './components/FirstRunDialog'
 import type {
   OpenSessionTask,
+  OrchHostGate,
   OrchSnapshot,
   RunConfig,
   RunContext,
@@ -2246,6 +2247,12 @@ export default function App(): React.JSX.Element {
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
+  /** Why the Jobs sidebar has nothing to draw, when the Host is the reason — null in the ordinary
+   *  case. **Kept apart from the snapshot above, and that separation is the fix for ruling F41.** The
+   *  snapshot is per project and this state deliberately substitutes an empty one whenever there is
+   *  none open; a gate carried inside it was therefore erased in exactly the window that needs it —
+   *  a fresh install, or any window before its first session. */
+  const [orchHostGate, setOrchHostGate] = useState<OrchHostGate | null>(null)
   /** 상세 창이 열려 있는 Run. null 이면 닫혀 있다.
    *
    *  **runId 만 들지 않고 프로젝트를 함께 든다.** 프로젝트가 바뀌는 커밋에서는 리셋 효과의
@@ -3006,6 +3013,27 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!orchEnabled) setJobsOpen(false)
   }, [orchEnabled])
+
+  // The Host gate, read once and then listened for. **Its own effect with no dependencies**, because
+  // it is one fact about the app rather than about a project (ruling F41): tying it to jobsOpen or to
+  // currentProject is what hid it, and the read is what covers a window that mounts after main had
+  // already given up on the Host. It costs one IPC call per window.
+  useEffect(() => {
+    let cancelled = false
+    void window.api.orch
+      .hostGate()
+      .then((gate) => {
+        if (!cancelled) setOrchHostGate(gate)
+      })
+      .catch(() => {})
+    const off = window.api.on('orch:host', (gate) => {
+      if (!cancelled) setOrchHostGate(gate)
+    })
+    return () => {
+      cancelled = true
+      off()
+    }
+  }, [])
 
   // Loads the Jobs sidebar snapshot and subscribes to further changes, the same shape as the run.list
   // effect above. orch.list doubles as the subscription (OrchApi's doc comment): its return value is
@@ -3772,6 +3800,7 @@ export default function App(): React.JSX.Element {
             ) : sidebarPane === 'jobs' ? (
               <JobsView
                 snapshot={orchSnapshot}
+                hostGate={orchHostGate}
                 // 빈 상태의 "+ 새 작업" 버튼을 가리는 신호 — snapshot 만으로는 프로젝트가 없는
                 // 경우와 프로젝트가 있는데 Run 이 없는 경우를 구별할 수 없다(JobsView 의
                 // hasProject 주석). onNewRun 의 가드(아래)와 함께 newRunOpen 이 프로젝트 없이
