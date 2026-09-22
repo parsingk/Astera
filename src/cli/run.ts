@@ -521,6 +521,10 @@ export async function main(): Promise<void> {
       home: homedir()
     })
     out(renderOk(parsed.cmd, body, mode))
+    // FAIL_SEAM:exempt — 이 자리만 0 이 아닌 값으로 끝나면서 `fail` 을 지나지 않는다. 내보내는
+    // 것이 실패가 아니라 **성공 모양의 답**이기 때문이다: `host stop` 이 일을 쥔 Host 를 두고
+    // 물러서면 본문은 `{stopped:false, sessions, runs}` 이고 종료 코드만 6 이다(cli/host.ts 의
+    // hostStopResult). 오류 문구로 바꾸면 그 수들을 잃는다. run.test.ts 가 이 면제를 하나로 센다.
     process.exit(code)
   }
 

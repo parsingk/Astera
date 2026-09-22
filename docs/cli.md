@@ -206,9 +206,10 @@ list` and a 4 from `runs get` offers `astera runs list`. Where a step needs an i
 carries, that id is filled in: a `runs wait` that ends in failure offers
 `astera tasks list --run run_9f8e --status failed`, ready to run.
 
-A placeholder still in angle brackets is one you supply. Where the value comes from another
-command, that command is the step before it, so the list is meant to be run in order rather than
-picked from.
+A placeholder still in angle brackets is one you supply. Two lines can mean two different things.
+Where the second needs a value the first produces, they are a sequence to run in order; where they
+are alternatives, such as the 8 that offers both `questions answer` and `runs resume`,
+`error.details` says which one applies.
 
 ```bash
 astera jobs run --id job_typo || astera jobs list

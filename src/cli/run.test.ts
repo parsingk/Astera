@@ -498,9 +498,31 @@ describe('run.ts — 모드가 정해진 뒤의 실패는 한 문으로만 나�
 
   // 실패를 내보내는 세 가지. 성공 쪽은 `renderOk` 한 곳으로 이미 모여 있고, `agent-context` 만
   // 일부러 `okEnvelope` 를 직접 쓴다 — 스키마는 모드와 무관하게 JSON 이다.
+  //
+  // **이 가드가 무엇을 잡는지 분명히 해 둔다: 사고이지 우회가 아니다.** 한 파일의 글자만 보므로,
+  // `main` 위나 다른 모듈에 찍는 함수를 두고 아래에서 부르면 지나가고, `process.stdout.write` 로
+  // 직접 써도 지나간다. 그것들은 가드를 알고 돌아가는 일이라 리뷰의 몫이다. 잡으려는 것은 실패
+  // 경로를 하나 더 붙이면서 `fail` 을 쓰지 않는, 그럴 법한 실수다.
   it('봉투를 짓는 실패 호출이 하나도 남아 있지 않다', () => {
     for (const call of ['errorOutput(', 'errEnvelope(', 'renderErr('])
       expect(afterSeam().split(call).length - 1, `${call} is called after the seam`).toBe(0)
+  })
+
+  // **아무것도 안 찍고 끝내는 것이 이 집안에서 가장 나쁘다.** 봉투를 잘못 찍는 것은 보이기라도
+  // 하는데, 맨 `process.exit(2)` 는 스크립트에게 코드만 주고 왜인지는 아무 데도 남기지 않는다.
+  // 그래서 0 이 아닌 종료는 전부 `fail` 을 지나야 하고, 지나지 않는 자리는 그 줄에서 그렇게 말해야
+  // 한다. 지금 면제는 하나이고(`host-*` 는 성공 모양의 본문에 0 아닌 코드를 붙인다) 그 수를 센다.
+  it('0 이 아닌 종료는 fail 을 지나거나, 그 자리에서 면제라고 말한다', () => {
+    const lines = afterSeam().split('\n')
+    const exits = lines.map((l, i) => ({ l, i })).filter(({ l }) => l.includes('process.exit('))
+    expect(exits.length).toBeGreaterThan(0)
+    const bare = exits.filter(({ l }) => !l.includes('process.exit(0)'))
+    for (const { l, i } of bare) {
+      // 바로 앞의 주석 덩이에 표식이 있으면 된다 — 한 줄짜리 표식을 강요하면 이유를 적을 자리가 없다
+      const preface = lines.slice(Math.max(0, i - 8), i).join('\n')
+      expect(preface.includes('FAIL_SEAM:exempt'), `unmarked non-zero exit: ${l.trim()}`).toBe(true)
+    }
+    expect(bare.length, 'the number of exemptions changed').toBe(1)
   })
 
   // 앞선 세 자리는 아직 모드가 없어서 봉투로 나간다 — 그것이 errorOutput 이 남아 있는 이유이고,

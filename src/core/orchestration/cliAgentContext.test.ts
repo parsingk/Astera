@@ -119,22 +119,21 @@ describe('agent-context — 명령 집합은 handleCommand 가 실제로 가르�
 
   // **`NOT_SWITCHED` 의 `satisfies` 는 이름이 스키마에 있다는 것만 증명한다.** 아홉 번째 이름을
   // 더하면 컴파일도 통과하고 위의 두 단언도 통과한 채, 실제로 치면 501 이 된다 — `case` 도 없고
-  // 답하는 가지도 없기 때문이다. 그 반쪽을 여기서 든다: 세 파일 중 한 곳이 그 이름을 실제로
-  // 비교하고 있어야 한다(run.ts 의 `parsed.cmd === …`, cli/host.ts 의 허용 목록, command.ts 의
-  // switch 앞 `if`). 글자를 보는 약한 증인이지만, 주장과 검사의 차이가 여기 있다.
-  it('CLI 가 직접 답한다는 여덟은 실제로 어딘가에서 비교된다', () => {
+  // 답하는 가지도 없기 때문이다.
+  //
+  // **이 단언이 드는 것은 그 반쪽의 일부다.** 확인하는 것은 "그 이름이 답을 만드는 세 파일
+  // 어딘가의 **코드에서 비교된다**" 이지, "그 비교가 그 명령에 답한다" 가 아니다 — 둘은 다르고,
+  // 글자로는 가를 수 없다. `run.ts` 의 `argsForCall` 이 `a.cmd === 'browser-js'` 로 stdin 모양만
+  // 정하는 자리가 그 예다. 주석은 지우고 보므로 주석에 이름을 적어 통과시킬 수는 없다.
+  it('CLI 가 직접 답한다는 여덟은 세 파일의 코드에서 비교된다', () => {
     const here = path.dirname(fileURLToPath(import.meta.url))
-    const answering = ['../../cli/run.ts', '../../cli/host.ts', './command.ts']
+    const stripped = ['../../cli/run.ts', '../../cli/host.ts', './command.ts']
       .map((rel) => readFileSync(path.resolve(here, rel), 'utf8'))
-      .map((src) =>
-        src
-          .split('\n')
-          .filter((l) => !l.trimStart().startsWith('//') && !l.trimStart().startsWith('*'))
-          .join('\n')
-      )
+      // 블록 주석을 먼저 걷고 줄 주석을 걷는다 — 줄 끝에 붙은 `// 'doctor'` 도 함께 사라진다.
+      .map((src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, ''))
       .join('\n')
     for (const cmd of NOT_SWITCHED)
-      expect(answering.includes(`'${cmd}'`), `nothing answers ${cmd}`).toBe(true)
+      expect(stripped.includes(`'${cmd}'`), `${cmd} is compared nowhere`).toBe(true)
   })
 })
 
@@ -145,20 +144,52 @@ describe('nextSteps 가 가리키는 것은 실재하는 명령이다', () => {
   const spoken = new Set(ctx.commands.map((c) => c.usage.split(' ').slice(1).join(' ')))
   const globals = new Set(ctx.globalFlags.map((f) => `--${f.name}`))
 
-  it('열 코드가 내놓는 모든 줄이 astera 의 실재하는 명령이다', () => {
-    const lines = new Set<string>()
+  /** 한 줄에서 명령 이름만. `astera jobs list --quiet` → `jobs-list`. */
+  const commandIn = (line: string): string | null => {
+    const tok = line.split(' ')
+    if (tok[0] !== 'astera' || globals.has(tok[1])) return null
+    const two = tok.slice(1, 3).join(' ')
+    const hit = ctx.commands.find((c) => {
+      const typed = c.usage.split(' ').slice(1).join(' ')
+      return typed === two || typed.startsWith(`${two} `) || typed === tok[1] || typed.startsWith(`${tok[1]} `)
+    })
+    return hit?.name ?? null
+  }
+
+  const everyStep = (): { cmd: string | undefined; line: string }[] => {
+    const out: { cmd: string | undefined; line: string }[] = []
     for (const code of CLI_ERROR_CODES)
-      for (const cmd of [undefined, ...names]) for (const s of nextStepsFor({ code, cmd })) lines.add(s)
-    expect(lines.size).toBeGreaterThan(0)
-    for (const line of lines) {
-      const tok = line.split(' ')
-      expect(tok[0], line).toBe('astera')
+      for (const cmd of [undefined, ...names]) for (const line of nextStepsFor({ code, cmd })) out.push({ cmd, line })
+    return out
+  }
+
+  it('열 코드가 내놓는 모든 줄이 astera 의 실재하는 명령이다', () => {
+    const steps = everyStep()
+    expect(steps.length).toBeGreaterThan(0)
+    for (const { line } of steps) {
+      expect(line.split(' ')[0], line).toBe('astera')
       // `astera --help` 는 명령이 아니라 전역 플래그다
-      if (globals.has(tok[1])) continue
-      const named = [tok.slice(1, 3).join(' '), tok[1]].some((candidate) =>
-        [...spoken].some((u) => u === candidate || u.startsWith(`${candidate} `))
+      if (globals.has(line.split(' ')[1])) continue
+      expect(commandIn(line), `${line} is not a command this CLI has`).not.toBeNull()
+    }
+  })
+
+  // **"도는 명령인가" 다음에 오는 질문: "이 오류를 만난 쪽이 그 명령을 부를 수 있는가."**
+  // `ask` 는 워커도 부르는데 `inbox` 는 코디네이터 전용이라, 워커가 그 줄을 따르면 403 으로 5 를
+  // 받았다. 줄이 틀린 것이 아니라 그 자리에서 아예 돌지 않는 것이고, 증상만 다른 같은 결함이다.
+  // 규칙은 "코디네이터 전용 명령을 권하지 마라" 가 아니다 — `reply` 는 자신이 코디네이터 전용
+  // 이므로 `inbox` 를 권해도 된다. 권하는 쪽이 전용이면 받는 쪽도 전용이어야 한다.
+  it('코디네이터 전용 명령은 코디네이터 전용 명령에만 권한다', () => {
+    const set = commandSource.match(/const COORDINATOR_ONLY = new Set\(\[([^\]]*)\]/)
+    if (!set) throw new Error('command.ts has no COORDINATOR_ONLY set')
+    const only = new Set([...set[1].matchAll(/'([a-z-]+)'/g)].map((m) => m[1]))
+    expect(only.size).toBeGreaterThan(0)
+    for (const { cmd, line } of everyStep()) {
+      const step = commandIn(line)
+      if (step === null || !only.has(step)) continue
+      expect(cmd !== undefined && only.has(cmd), `${cmd ?? '(none)'} → ${line}: the caller cannot run it`).toBe(
+        true
       )
-      expect(named, `${line} is not a command this CLI has`).toBe(true)
     }
   })
 })

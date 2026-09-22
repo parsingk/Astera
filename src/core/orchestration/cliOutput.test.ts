@@ -177,38 +177,58 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'projects-get' })).toEqual(['astera projects list'])
   })
 
-  // 세션 전용 명령은 무엇을 못 찾았다고 말하는지가 갈래다 — worker-start 가 못 찾는 것은
-  // Dispatch 가 아니라 Task 이고, run-create 가 못 찾는 것은 회차가 아니라 계정이다.
+  // 세션 전용 명령은 무엇을 못 찾았다고 말하는지가 갈래다 — run-create 가 못 찾는 것은
+  // 회차가 아니라 계정이다.
   it('세션 전용 명령은 그것이 못 찾은 것의 목록으로 이어진다', () => {
-    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'worker-start' })).toEqual(['astera tasks list'])
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'run-create' })).toEqual(['astera accounts'])
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'run-merge' })).toEqual(['astera runs list'])
-    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'gate-resolve' })).toEqual(['astera questions list'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'task-update' })).toEqual(['astera tasks list'])
   })
 
-  // **Gate 와 Message 는 다른 id 다.** ask --resume 과 reply 는 id 를 s.messages 에서 찾고
-  // (msg_…), questions list 는 s.gates 를 준다(gat_…) — 그 줄은 잘 돌지만 거기서 나온 id 는
-  // 전부 "not a question" 으로 2 가 된다. 도는 명령을 권하고도 거짓말이 되는 자리다.
-  it('메시지를 못 찾은 것은 questions list 가 아니라 inbox 로 간다', () => {
-    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'ask' })).toEqual(['astera inbox'])
-    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'reply' })).toEqual(['astera inbox'])
+  // **404 를 내지 않는 명령에 404 안내를 달아 두지 않는다.** 없는 id 가 세 갈래인데 한 갈래를
+  // 빼먹고 적었다: 순수 층의 `unknown …` 을 `bad()` 로 내보내는 명령은 400(2)으로 끝난다.
+  // check·send·gate-resolve 가 그쪽이고, worker-read·worker-release 는 존재 검사 자체가 없다.
+  it('404 를 낼 수 없는 명령에는 404 항목이 없다', () => {
+    for (const cmd of ['check', 'send', 'gate-resolve', 'worker-read', 'worker-release'])
+      expect(nextStepsFor({ code: 'NOT_FOUND', cmd }), cmd).toEqual(['astera help'])
   })
 
-  // Dispatch 를 통째로 세는 명령이 없으므로, 앞 줄이 뒷줄의 <taskId> 를 준다
-  it('찾을 값이 한 명령 앞에 있으면 두 줄로 준다', () => {
-    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'worker-show' })).toEqual([
-      'astera tasks list',
-      'astera dispatch-show --task <taskId>'
-    ])
+  // **`--run` 에 Job id 는 통한다 — 그래서 더 나쁘다.** 회차가 아니라 템플릿에 정의 Task 가 생기고
+  // 0 으로 끝난다. 실패하는 줄보다 조용히 다른 것을 만드는 줄이 나쁘다.
+  it('task-create 는 회차 목록으로 간다, Job 목록이 아니라', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'task-create' })).toEqual([
-      'astera jobs list',
+      'astera runs list',
       'astera tasks list'
     ])
   })
 
-  // 낡은 deliveryId 를 들고 있다는 뜻이고, 같은 batch 는 ack 될 때까지 다시 온다
-  it('check --ack 이 못 찾으면 check 자신이 답이다', () => {
-    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'check' })).toEqual(['astera check'])
+  // **`--id` 가 Job 도 회차도 받고 지우는 것이 다르다.** Job 목록만 주면 회차 하나를 지우려던
+  // 사람에게 계획째 지우는 id 를 건네는 셈이다.
+  it('run-delete 는 두 목록을 다 준다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'run-delete' })).toEqual([
+      'astera jobs list',
+      'astera runs list'
+    ])
+  })
+
+  // Dispatch 를 통째로 세는 명령이 없으므로, 앞 줄이 뒷줄의 <taskId> 를 준다. worker-start 의
+  // 두 번째 404 는 `--terminal` 의 sessionId 이고, 그것을 내놓는 것도 Dispatch 쪽이다.
+  it('찾을 값이 한 명령 앞에 있으면 두 줄로 준다', () => {
+    for (const cmd of ['worker-show', 'worker-start'])
+      expect(nextStepsFor({ code: 'NOT_FOUND', cmd }), cmd).toEqual([
+        'astera tasks list',
+        'astera dispatch-show --task <taskId>'
+      ])
+  })
+
+  // **부르는 쪽이 부를 수 있어야 한다.** ask 는 워커도 부르는데 inbox 는 코디네이터 전용이라,
+  // 워커가 그 줄을 따르면 403 으로 5 를 받는다. 메시지를 세는 명령을 워커는 못 부르므로, 워커가
+  // 실제로 할 수 있는 일은 다시 묻는 것이다. reply 는 자신이 코디네이터 전용이라 inbox 가 맞다.
+  it('워커가 만나는 404 는 워커가 칠 수 있는 줄로 간다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'ask' })).toEqual([
+      'astera ask --task-id <taskId> --question <text>'
+    ])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'reply' })).toEqual(['astera inbox'])
   })
 
   // 모르는 명령에 그럴듯한 목록 명령을 지어내지 않는다

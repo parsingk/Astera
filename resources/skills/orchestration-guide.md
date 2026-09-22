@@ -506,11 +506,16 @@ the table below.
 
 **`error.nextSteps` is for you.** It is always present, and its entries are command lines to run
 rather than sentences to interpret. The steps depend on the command as well as the code, so a `4`
-from `worker-show` offers `astera dispatch-show --task <taskId>` and a `4` from `worker-start`
-offers `astera tasks list`. Where an id is already in `details` it is filled in, so the line can be
-run as it stands. A placeholder still in angle brackets is one you supply, and where the value comes
-from another command that command is the step before it, so run the list in order rather than
-picking from it. An empty list means there is no one command that is right for this failure. Read
+from `worker-show` offers `astera tasks list` then `astera dispatch-show --task <taskId>`, while a
+`4` from `task-update` offers `astera tasks list` alone. Every step is one your session is allowed
+to call: a `4` from `ask`, which a worker reaches, never suggests a coordinator-only command.
+
+Where an id is already in `details` it is filled in, so the line can be run as it stands. A
+placeholder still in angle brackets is one you supply. **Two lines can mean two different things**,
+and the shape of the failure says which: where the second line needs a value the first produces, as
+with `tasks list` before `dispatch-show --task`, run them in order; where they are alternatives, as
+with the `8` that offers both `questions answer` and `runs resume`, `error.details.state` says which
+one applies. An empty list means there is no one command that is right for this failure. Read
 `message` and decide.
 
 ### 4.8 Exit codes
