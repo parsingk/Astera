@@ -6,7 +6,7 @@ import path from 'node:path'
 import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
 import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer, type HostServerDeps } from './server'
-import { HOST_PROTOCOL } from '../core/host/protocol'
+import { HOST_PROTOCOL, type ClientMessage } from '../core/host/protocol'
 
 let dir: string
 let open: HostServer[] = []
@@ -21,7 +21,15 @@ afterEach(async () => {
 
 /** A server at an address of this test's own, with everything injectable. */
 const server = async (
-  over: { idleMs?: number; helloMs?: number; onIdle?: () => void; profile?: string; onMessage?: HostServerDeps['onMessage']; holdsWork?: HostServerDeps['holdsWork'] } = {}
+  over: {
+    idleMs?: number
+    helloMs?: number
+    onIdle?: () => void
+    profile?: string
+    onMessage?: HostServerDeps['onMessage']
+    holdsWork?: HostServerDeps['holdsWork']
+    liveCounts?: HostServerDeps['liveCounts']
+  } = {}
 ): Promise<{
   s: HostServer
   address: string
@@ -43,6 +51,7 @@ const server = async (
     onIdle: over.onIdle ?? ((): void => {}),
     onMessage: over.onMessage,
     holdsWork: over.holdsWork,
+    liveCounts: over.liveCounts,
     log: { write: (m) => logs.push(m), close: () => {} }
   })
   open.push(s)
@@ -61,6 +70,81 @@ const talk = (address: string, lines: unknown[], waitFor = 1): Promise<unknown[]
     sock.on('connect', () => { for (const l of lines) sock.write(encodeLine(l)) })
     setTimeout(() => { sock.destroy(); resolve(got) }, 3000)
   })
+
+/** One socket's messages, queued for `next()` so a reply that arrives before anyone asked for it is
+ *  not lost — the same reason `talk()`'s `got` array exists, just not tied to a fixed message count. */
+const messageChannel = (sock: net.Socket): { send(m: ClientMessage): void; next(waitMs?: number): Promise<unknown> } => {
+  const queue: unknown[] = []
+  const waiters: Array<(v: unknown) => void> = []
+  const read = createLineReader({
+    onMessage: (v) => {
+      const w = waiters.shift()
+      if (w) w(v)
+      else queue.push(v)
+    },
+    onBadLine: () => {},
+    onHandlerError: () => {}
+  })
+  sock.setEncoding('utf8')
+  sock.on('data', read)
+  return {
+    send: (m) => sock.write(encodeLine(m)),
+    next: (waitMs = 2000) =>
+      new Promise((resolve) => {
+        if (queue.length > 0) {
+          resolve(queue.shift())
+          return
+        }
+        const timer = setTimeout(() => resolve(undefined), waitMs)
+        waiters.push((v) => {
+          clearTimeout(timer)
+          resolve(v)
+        })
+      })
+  }
+}
+
+/**
+ * The named harness the retire-refusal tests below need, built once here because the next task's
+ * tests need the same two pieces (task-4-brief.md's controller ruling 1): a server with its deps
+ * injected, and a way to tell whether it actually left.
+ *
+ * `stopped` is `true` once `onIdle` has fired — a caller does not have to wire its own flag for
+ * that, which is the one thing every retire test otherwise repeats.
+ */
+const start = async (
+  over: { holdsWork?: HostServerDeps['holdsWork']; liveCounts?: HostServerDeps['liveCounts'] } = {}
+): Promise<{
+  address: string
+  stopped: boolean
+  /** Connects, completes the handshake, and hands back something to send with and read replies from. */
+  connect(): Promise<{ send(m: ClientMessage): void; next(waitMs?: number): Promise<unknown> }>
+  /** Connects and says nothing — the peer the next task's tests need, that never says hello. */
+  connectSilent(): Promise<net.Socket>
+}> => {
+  const state = { stopped: false }
+  const h = await server({ ...over, onIdle: () => { state.stopped = true } })
+  const rawConnect = (): Promise<net.Socket> =>
+    new Promise((resolve, reject) => {
+      const sock = net.connect(h.address)
+      sock.once('connect', () => resolve(sock))
+      sock.once('error', reject)
+    })
+  return {
+    address: h.address,
+    get stopped() {
+      return state.stopped
+    },
+    connect: async () => {
+      const sock = await rawConnect()
+      const chan = messageChannel(sock)
+      chan.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' })
+      await chan.next() // the hello reply — consumed here so next() starts on whatever comes after it.
+      return chan
+    },
+    connectSilent: rawConnect
+  }
+}
 
 describe('startHostServer', () => {
   it('answers a hello on the same protocol with its own version and pid', async () => {
@@ -117,6 +201,34 @@ describe('startHostServer', () => {
     await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }, { t: 'retire' }])
     await new Promise((r) => setTimeout(r, 200))
     expect(retired).toBe(true)
+  })
+
+  // 명세 §12: 사람이 요청한(reason: 'user') retire 는 일하는 것이 있으면 거절되고 그 수가 실린다.
+  it('일하는 것이 있으면 사람의 retire 를 거절하고 수를 말한다', async () => {
+    const h = await start({ liveCounts: () => ({ sessions: 2, jobs: 1 }) })
+    const client = await h.connect()
+    client.send({ t: 'retire', reason: 'user' })
+    const m = await client.next()
+    expect(m).toEqual({ t: 'retire-refused', sessions: 2, jobs: 1 })
+    expect(h.stopped).toBe(false)
+  })
+
+  it('일하는 것이 없으면 사람의 retire 를 그대로 받아들인다', async () => {
+    const h = await start({ liveCounts: () => ({ sessions: 0, jobs: 0 }) })
+    const client = await h.connect()
+    client.send({ t: 'retire', reason: 'user' })
+    await new Promise((r) => setTimeout(r, 100))
+    expect(h.stopped).toBe(true)
+  })
+
+  // ruling 3: `reason` 이 없는(=`'protocol'`) retire 는 이 거절을 받지 않는다 — 앱이 프로토콜이
+  // 다른 Host 를 찾았을 때 보내는 것이 이 경우이고, 그 Host 의 세션은 이미 그 앱에게 닿지 않는다.
+  it('reason 이 없는(protocol) retire 는 일하는 것이 있어도 거절하지 않는다', async () => {
+    const h = await start({ liveCounts: () => ({ sessions: 2, jobs: 1 }) })
+    const client = await h.connect()
+    client.send({ t: 'retire' })
+    await new Promise((r) => setTimeout(r, 100))
+    expect(h.stopped).toBe(true)
   })
 
   // `close()` destroys the sockets it still holds, and each one's 'close' event arrives after

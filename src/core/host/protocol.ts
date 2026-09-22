@@ -73,8 +73,15 @@ export interface PtyEntry {
 export type ClientMessage =
   | { t: 'hello'; protocol: number; app: string }
   /** Leave. Sent when the app finds a Host on another protocol; in slice 1 the Host holds nothing,
-   *  so leaving costs nothing. This message's meaning is revisited in slice 2. */
-  | { t: 'retire' }
+   *  so leaving costs nothing. This message's meaning is revisited in slice 2.
+   *
+   *  **`reason` decides whether the Host may refuse (host control plane design §12).** `'user'` is
+   *  `astera host stop` asking on a person's behalf, and is refused while a session or a Job is live.
+   *  The default, `'protocol'`, is what the app already sends on finding a Host it cannot talk to
+   *  (`main/host/client.ts`'s protocol-mismatch handling, and `retireOlderHosts`) — that Host's
+   *  sessions are already unreachable to the app that is asking, so refusing would strand it there
+   *  forever instead of letting a Host it can talk to take the address. */
+  | { t: 'retire'; reason?: 'user' | 'protocol' }
   /** The heartbeat. Sent only to a Host whose `hello` named HOST_FEATURE_PING, and answered with a
    *  `pong` carrying the same `seq`. What it asks is not "are you there" — the socket answers that —
    *  but "is your event loop still turning", which is the one thing a stuck pty spawn takes away. */
@@ -120,6 +127,11 @@ export type HostMessage =
       features?: string[]
     }
   | { t: 'protocol-mismatch'; protocol: number }
+  /** Answered instead of leaving, to a `{ t: 'retire', reason: 'user' }` while something is holding
+   *  the Host (design §12) — `astera host stop` reports these counts and exits CONFLICT rather than
+   *  quietly doing nothing. Additive: a Host old enough not to send it never refuses at all, which is
+   *  the same "silently does less" an older Host already does for any message it does not know. */
+  | { t: 'retire-refused'; sessions: number; jobs: number }
   | { t: 'pong'; seq: number }
   | { t: 'pty-spawned'; id: string; pid: number }
   | { t: 'pty-failed'; id: string; error: string }

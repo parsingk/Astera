@@ -35,6 +35,31 @@ export function hostStatus(a: {
   }
 }
 
+/** What `astera host stop` reports for each of the three ways it can end (host control plane design
+ *  §12). Kept pure and separate from the connecting and waiting below, the same way `hostStatus` is,
+ *  so the three shapes can be checked without a socket.
+ *
+ *  **`'absent'` exits 0, not `HOST_NOT_RUNNING`.** Stopping something that is not there is not a
+ *  failure — the person asked for no Host to be running, and none is. **`'refused'` is the one exit
+ *  that is not 0**: `CONFLICT`, because a Host that is running and holding work is the one state this
+ *  command cannot leave the way it was asked to. */
+export function hostStopResult(
+  a: { outcome: 'absent' } | { outcome: 'stopped' } | { outcome: 'refused'; sessions: number; jobs: number }
+): { body: Record<string, unknown>; code: number } {
+  if (a.outcome === 'absent') return { body: { stopped: true, message: 'no Host was running' }, code: 0 }
+  if (a.outcome === 'stopped') return { body: { stopped: true }, code: 0 }
+  const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
+  return {
+    body: {
+      stopped: false,
+      sessions: a.sessions,
+      jobs: a.jobs,
+      message: `Cannot stop Host: ${plural(a.sessions, 'session')} and ${plural(a.jobs, 'Job')} are still running.`
+    },
+    code: exitCodeFor('CONFLICT')
+  }
+}
+
 /** This file's own copy of the build-time version. `run.ts` has one too (`CLI_VERSION`) but this file
  *  cannot import it (see the note at the top), so it reads the same injected global directly rather
  *  than going without an identity to hand the Host in `hello.app`. */
@@ -150,9 +175,7 @@ export async function runHostCommand(a: {
   platform: NodeJS.Platform
   home: string
 }): Promise<{ body: unknown; code: number }> {
-  if (a.cmd !== 'host-status' && a.cmd !== 'host-start')
-    // host-stop is the next task in this series; not reachable yet because cliArgs only just started
-    // accepting the word (task 2 added the noun).
+  if (a.cmd !== 'host-status' && a.cmd !== 'host-start' && a.cmd !== 'host-stop')
     return { body: { error: `${a.cmd} is not implemented yet` }, code: exitCodeFor('FAILED') }
 
   const profileDir = userDataDir({
@@ -186,6 +209,30 @@ export async function runHostCommand(a: {
         code: exitCodeFor('HOST_NOT_RUNNING')
       }
     )
+  }
+
+  if (a.cmd === 'host-stop') {
+    const connected = await connectHost({ address, app: CLI_VERSION, log: logToStderr })
+    if ('error' in connected) return hostStopResult({ outcome: 'absent' })
+    // A `retire` that is honoured gets no reply, only the connection ending — so this races the two
+    // outcomes a Host can answer with: `retire-refused`, or the socket closing on its own.
+    const outcome = await new Promise<{ body: unknown; code: number }>((resolve) => {
+      let offMessage: () => void = () => {}
+      let offClose: () => void = () => {}
+      const settle = (r: { body: unknown; code: number }): void => {
+        offMessage()
+        offClose()
+        resolve(r)
+      }
+      offMessage = connected.onMessage((m) => {
+        if (m.t === 'retire-refused')
+          settle(hostStopResult({ outcome: 'refused', sessions: m.sessions, jobs: m.jobs }))
+      })
+      offClose = connected.onClose(() => settle(hostStopResult({ outcome: 'stopped' })))
+      connected.call({ t: 'retire', reason: 'user' })
+    })
+    connected.close()
+    return outcome
   }
 
   // host-start: a Host that is already there is success, not an error — the person asked for a Host

@@ -9,6 +9,10 @@ export interface HostConnection {
   hello: { host: string; pid: number; startedAt: string; features: string[] }
   call(m: ClientMessage): void
   onMessage(cb: (m: HostMessage) => void): () => void
+  /** Fires once the connection ends, however that happens — including the Host closing its side,
+   *  which is what `astera host stop` (`src/cli/host.ts`) reads as "it left": a `retire` that is
+   *  honoured gets no reply, only a socket that goes away. */
+  onClose(cb: () => void): () => void
   close(): void
 }
 
@@ -27,9 +31,11 @@ export async function connectHost(a: {
 }): Promise<HostConnection | ConnectFailure> {
   return new Promise((resolve) => {
     const listeners = new Set<(m: HostMessage) => void>()
+    const closeListeners = new Set<() => void>()
     let settled = false
     const socket = net.connect(a.address)
     socket.setEncoding('utf8')
+    socket.on('close', () => { for (const cb of closeListeners) cb() })
     const done = (v: HostConnection | ConnectFailure): void => {
       if (settled) return
       settled = true
@@ -52,6 +58,10 @@ export async function connectHost(a: {
               onMessage: (cb) => {
                 listeners.add(cb)
                 return () => listeners.delete(cb)
+              },
+              onClose: (cb) => {
+                closeListeners.add(cb)
+                return () => closeListeners.delete(cb)
               },
               close: () => socket.destroy()
             })

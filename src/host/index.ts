@@ -133,6 +133,9 @@ async function main(): Promise<void> {
       onIdle: () => leave(),
       onMessage: (m, send) => (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false),
       holdsWork: () => registry.liveCount() + procs.liveCount() > 0,
+      // Jobs are not the Host's to count yet — a later task gives it a Job registry, and this literal
+      // 0 is what that task replaces (server.ts's own comment on `liveCounts` says the same).
+      liveCounts: () => ({ sessions: registry.liveCount() + procs.liveCount(), jobs: 0 }),
       log
     })
   } catch (err) {

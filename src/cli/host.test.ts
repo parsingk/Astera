@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { hostStatus, hostStartTargets, preparedRuntimeEntry, runHostCommand } from './host'
+import { hostStatus, hostStopResult, hostStartTargets, preparedRuntimeEntry, runHostCommand } from './host'
 import { userDataDir } from '../core/orchestration/cliDiscovery'
 import { hostAddress } from '../host/address'
-import { startHostServer } from '../host/server'
+import { startHostServer, type HostServerDeps } from '../host/server'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 import { exitCodeFor } from '../core/orchestration/cliOutput'
 import { hostRuntimePaths } from '../core/host/runtime'
@@ -35,6 +35,100 @@ describe('hostStatus', () => {
       profile: 'D:/p',
       jobs: 3
     })
+  })
+})
+
+describe('hostStopResult', () => {
+  // 없는 것을 멈추는 것은 실패가 아니다 — 0으로 끝난다.
+  it('Host 가 없으면 0 으로 끝나고 그렇다고 말한다', () => {
+    expect(hostStopResult({ outcome: 'absent' })).toEqual({
+      body: { stopped: true, message: 'no Host was running' },
+      code: 0
+    })
+  })
+
+  it('물러났으면 0 으로 끝난다', () => {
+    expect(hostStopResult({ outcome: 'stopped' })).toEqual({ body: { stopped: true }, code: 0 })
+  })
+
+  // 명세 §12 의 문구("2 sessions and 1 Job are still running")를 그대로 옮긴다. 종료 코드는
+  // CONFLICT(6) — host stop 이 거절하는 유일한 경우다.
+  it('거절되면 CONFLICT 로 끝나고 수를 문장에 담는다', () => {
+    expect(hostStopResult({ outcome: 'refused', sessions: 2, jobs: 1 })).toEqual({
+      body: {
+        stopped: false,
+        sessions: 2,
+        jobs: 1,
+        message: 'Cannot stop Host: 2 sessions and 1 Job are still running.'
+      },
+      code: exitCodeFor('CONFLICT')
+    })
+  })
+
+  it('하나씩이면 단수로 말한다', () => {
+    expect(hostStopResult({ outcome: 'refused', sessions: 1, jobs: 1 })).toMatchObject({
+      body: { message: 'Cannot stop Host: 1 session and 1 Job are still running.' }
+    })
+  })
+})
+
+describe('runHostCommand — host stop against a real Host', () => {
+  // 없으면 0 — 빈 profile 에는 Host 가 없다.
+  it('Host 가 없으면 0 으로 끝난다', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cli-home-'))
+    try {
+      const down = await runHostCommand({ cmd: 'host-stop', env: {}, platform: process.platform, home })
+      expect(down.code).toBe(0)
+      expect(down.body).toMatchObject({ stopped: true })
+    } finally {
+      await fs.rm(home, { recursive: true, force: true })
+    }
+  })
+
+  // 일하는 것이 있으면 거절되고(CONFLICT), 그것이 사라지면 이번에는 실제로 물러나고 주소가 빈다.
+  it('일하는 것이 있으면 거절하고, 없으면 물러나 주소를 비운다', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cli-home-'))
+    try {
+      const env = {} as NodeJS.ProcessEnv
+      const profileDir = userDataDir({ platform: process.platform, env, home })
+      await fs.mkdir(profileDir, { recursive: true })
+      const addr = hostAddress({
+        profileDir,
+        platform: process.platform,
+        tmpDir: os.tmpdir(),
+        protocol: HOST_PROTOCOL
+      })
+      let sessions = 2
+      const liveCounts: HostServerDeps['liveCounts'] = () => ({ sessions, jobs: 0 })
+      const server = await startHostServer({
+        address: addr.address,
+        dirToPrepare: addr.dirToPrepare,
+        version: '9.9.9',
+        idleMs: 60_000,
+        onIdle: () => void server.close(),
+        liveCounts,
+        log: { write: () => {}, close: () => {} }
+      })
+      try {
+        const refused = await runHostCommand({ cmd: 'host-stop', env, platform: process.platform, home })
+        expect(refused.code).toBe(exitCodeFor('CONFLICT'))
+        expect(refused.body).toMatchObject({ stopped: false, sessions: 2, jobs: 0 })
+
+        sessions = 0
+        const stopped = await runHostCommand({ cmd: 'host-stop', env, platform: process.platform, home })
+        expect(stopped.code).toBe(0)
+        expect(stopped.body).toEqual({ stopped: true })
+
+        // The address is free: a fresh connect finds nobody, the way it would after any Host leaves.
+        const after = await runHostCommand({ cmd: 'host-status', env, platform: process.platform, home })
+        expect(after.code).toBe(exitCodeFor('HOST_NOT_RUNNING'))
+        expect(after.body).toMatchObject({ running: false })
+      } finally {
+        await server.close().catch(() => {})
+      }
+    } finally {
+      await fs.rm(home, { recursive: true, force: true })
+    }
   })
 })
 

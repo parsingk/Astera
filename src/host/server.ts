@@ -36,6 +36,11 @@ export interface HostServerDeps {
   /** Whether something is keeping the Host alive beyond its clients — a live terminal, from slice 2.
    *  The idle timer checks it rather than only the connection count. */
   holdsWork?(): boolean
+  /** Sessions and Jobs the Host is holding right now. One dep rather than two because a `retire`
+   *  refusal always needs both counts together, to name them (design §12: "2 sessions and 1 Job are
+   *  still running"). `jobs` is always 0 until a later task gives the Host its own Job registry —
+   *  `host/index.ts` fills that half in place once it exists. */
+  liveCounts?(): { sessions: number; jobs: number }
 }
 
 export interface HostServer {
@@ -181,6 +186,18 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           return
         }
         if (m?.t === 'retire') {
+          // Only a person's own `astera host stop` (reason 'user') can be refused. The default,
+          // 'protocol', is what the app already sends on finding a Host it cannot talk to — that
+          // Host's sessions are unreachable to the app asking anyway, and refusing would strand it
+          // there instead of letting a Host it can talk to take the address (design §12).
+          if (m.reason === 'user') {
+            const counts = deps.liveCounts?.() ?? { sessions: 0, jobs: 0 }
+            if (counts.sessions > 0 || counts.jobs > 0) {
+              deps.log.write(`asked to retire but ${counts.sessions} session(s) and ${counts.jobs} Job(s) are still running — refusing`)
+              send({ t: 'retire-refused', sessions: counts.sessions, jobs: counts.jobs })
+              return
+            }
+          }
           deps.log.write('asked to retire — leaving')
           deps.onIdle()
           return
