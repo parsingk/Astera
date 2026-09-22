@@ -18,24 +18,42 @@ const OWNED = ['getState', 'setState', 'now', 'log', 'enabled', 'runningSessions
  */
 const PROPAGATES = [
   'startWorker', 'releaseWorker', 'backup', 'mergeWorktrees', 'removeWorktrees', 'startCoordinator',
-  'makeRunWorktree', 'listAccounts', 'readWorker', 'listRunConfigs', 'browserRun', 'repairOnce'
+  'makeRunWorktree', 'listAccounts', 'readWorker',
+  // **`listRunConfigs` stays here although `[]` is its documented absent value.** A coordinator told
+  // "there are no check configs" omits `--validate`, and that Run then completes with verification
+  // silently off, recorded nowhere. A refusal a person sees beats a Run that quietly skipped its
+  // checks — and unlike the DEGRADES pair below, nothing is lost by refusing: the caller asks again.
+  'listRunConfigs',
+  'browserRun'
 ] as const
 
 /**
  * **Forwarded, and when it cannot be asked it answers the value its own contract already has.**
  *
- * `repairTargetFor` is the one member where refusing costs more than degrading. A refusal makes a
- * review report answer CONFLICT, and then the reviewer's verdict is recorded **nowhere** — the worker
- * reported and nothing is left of it. `null` is this dependency's own word for "no repair target",
- * and the pure layer's answer to it is documented where the dependency is declared: it opens the
- * `repairFailed` Gate, which a person sees. A Gate beats a lost verdict.
+ * The two members where refusing costs more than degrading, because the command has already done
+ * something by the time they are called:
  *
- * So this is the contract the call site was written against rather than a behaviour invented for the
- * Host — and it is a group rather than a special case so it cannot drift back out of the guard. The
- * value is the fallback each name degrades to. **Cannot-be-asked is one condition**: no app attached
- * and an app that will not answer are the same fact here, and both are logged.
+ * - `repairTargetFor`: a refusal makes a review report answer CONFLICT, and then the reviewer's
+ *   verdict is recorded **nowhere** — the worker reported and nothing is left of it. `null` is this
+ *   dependency's own word for "no repair target", and the pure layer's answer to it is documented
+ *   where the dependency is declared: it opens the `repairFailed` Gate, which a person sees. A Gate
+ *   beats a lost verdict.
+ * - `repairOnce`: `gate-resolve` commits the Gate resolution **before** calling it, so a refusal
+ *   answers CONFLICT for a command whose main effect has already landed — a script reads "nothing
+ *   happened" about something that did. `{ ok: false, error }` is this dependency's own way of saying
+ *   the retry did not open, and the call site already carries it to the caller as `retryOnceFailed`
+ *   in a 200 body, for exactly this: the person's "one more try" quietly not happening.
+ *
+ * So these are the contracts the call sites were written against rather than behaviour invented for
+ * the Host — and a group rather than two special cases, so they cannot drift back out of the guard.
+ * The value is a function of the reason, so what a caller is handed says why. **Cannot-be-asked is
+ * one condition**: no app attached and an app that will not answer are the same fact here, and both
+ * are logged.
  */
-const DEGRADES = { repairTargetFor: null } as const
+const DEGRADES = {
+  repairTargetFor: () => null,
+  repairOnce: (why: string) => ({ ok: false as const, error: why })
+} as const
 
 /**
  * **Forwarded, and the command layer deliberately swallows a failure.** `probeLimit` logs and carries
@@ -158,17 +176,18 @@ export function hostOrchDeps(a: {
    *  invention. One condition, not two: "no app attached" and "the app did not answer" are the same
    *  fact to the caller. An `ok: false` from an app that *did* answer is the action's own failure and
    *  still throws — that is not a question we could not ask. */
-  const degrading = (name: string, fallback: unknown) =>
+  const degrading = (name: string, fallback: (why: string) => unknown) =>
     async (...args: unknown[]): Promise<unknown> => {
       try {
         if (!a.hasApp()) throw refusal(name)
         return await a.act(name, args)
       } catch (err) {
         if (!(err instanceof AppUnreachable)) throw err
-        // Logged every time. A Gate that opened because the app was unreachable has to be traceable
-        // to that — otherwise it reads as a verdict about the work.
-        a.log(`${name} could not be asked (${err.message}) — answering ${JSON.stringify(fallback)}`)
-        return fallback
+        const value = fallback(err.message)
+        // Logged every time. A Gate that opened, or a retry that did not happen, because the app was
+        // unreachable has to be traceable to that — otherwise it reads as a verdict about the work.
+        a.log(`${name} could not be asked (${err.message}) — answering ${JSON.stringify(value)}`)
+        return value
       }
     }
 

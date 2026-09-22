@@ -231,6 +231,49 @@ describe('createHostOrch', () => {
     expect(logs.some((l) => l.includes('repairTargetFor') && l.includes('APP_REQUIRED'))).toBe(true)
   })
 
+  /**
+   * **이미 일어난 일을 실패로 보고하지 않는다**(F29).
+   *
+   * `gate-resolve --resolution retry-once` 는 Gate 해제를 **먼저 커밋한 뒤에** repairOnce 를 부른다.
+   * 그것을 거절하면 응답은 409 인데 그 명령의 주된 효과는 이미 디스크에 남아 있다 — 스크립트는
+   * "아무 일도 없었다" 로 읽는다. 이 의존은 실패를 값으로 말할 줄 알고(`{ok:false,error}`), 호출부는
+   * 그것을 `retryOnceFailed` 로 200 본문에 실으려고 만들어져 있다.
+   */
+  it('앱이 없어도 Gate 는 풀리고, 못 한 재시도는 본문에 실린다 — 409 가 아니다', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p', convergence: {} }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const state: OrchState = {
+      ...task.state,
+      tasks: task.state.tasks.map((t) => ({ ...t, status: 'blocked' as const })),
+      gates: [
+        {
+          id: 'gat_1',
+          runId: run.value.id,
+          taskId: task.value.id,
+          question: '한 번 더 해 볼까요?',
+          kind: 'convergence-exhausted' as const,
+          status: 'open' as const,
+          createdAt: NOW
+        }
+      ]
+    }
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(state), 'utf8')
+
+    const orch = orchOver({ hasApp: () => false })
+    const r = await orch.call({ cmd: 'gate-resolve', args: { id: 'gat_1', resolution: 'retry-once' }, sessionId: '' })
+    expect(r.status).toBe(200)
+    // 못 한 것은 본문이 말한다 — 조용히 성공으로 넘어가지 않는다.
+    expect((r.body as { retryOnceFailed?: string }).retryOnceFailed).toMatch(/APP_REQUIRED/)
+    // 그리고 실제로 일어난 일(Gate 해제)은 남아 있다.
+    const saved = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+    expect(saved.gates[0].status).toBe('resolved')
+    expect(logs.some((l) => l.includes('repairOnce') && l.includes('APP_REQUIRED'))).toBe(true)
+  })
+
   // 앱이 없어 거절한 것은 남기지 않아야 할 흔적도 남기지 않고, 로그는 남긴다.
   it('앱이 없어 거절하면 그 사실이 로그에 남는다', async () => {
     const { taskId } = await seed()

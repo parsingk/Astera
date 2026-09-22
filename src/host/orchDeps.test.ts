@@ -152,8 +152,8 @@ describe('hostOrchDeps', () => {
       const refused: string[] = []
       const deps = hostOrchDeps(base({ hasApp: () => false, onAppRequired: (n) => refused.push(n) }))
       await expect(deps.startWorker({} as never)).rejects.toThrow(/APP_REQUIRED/)
-      await expect(deps.repairOnce?.({ taskId: 't1' })).rejects.toThrow(/APP_REQUIRED/)
-      expect(refused).toEqual(['startWorker', 'repairOnce'])
+      await expect(deps.listRunConfigs?.('D:/p')).rejects.toThrow(/APP_REQUIRED/)
+      expect(refused).toEqual(['startWorker', 'listRunConfigs'])
     })
 
     it('명령 층이 삼키는 의존은 거절해도 앱 문제로 표시하지 않는다', async () => {
@@ -177,6 +177,22 @@ describe('hostOrchDeps', () => {
       await expect(deps.repairTargetFor?.('t1')).resolves.toBeNull()
       expect(refused).toEqual([])
       expect(logs.some((l) => l.includes('repairTargetFor') && l.includes('APP_REQUIRED'))).toBe(true)
+    })
+
+    // gate-resolve 는 Gate 해제를 먼저 커밋한 뒤에 이것을 부른다 — 거절하면 이미 일어난 일이
+    // 실패로 보고된다. 이 의존은 실패를 값으로 말할 줄 알고, 그 값에 이유가 실린다(F29).
+    it('물어볼 수 없는 retry-once 는 이유를 실은 실패 값으로 내려앉는다', async () => {
+      const refused: string[] = []
+      const logs: string[] = []
+      const deps = hostOrchDeps(
+        base({ hasApp: () => false, onAppRequired: (n) => refused.push(n), log: (m) => logs.push(m) })
+      )
+      await expect(deps.repairOnce?.({ taskId: 't1' })).resolves.toEqual({
+        ok: false,
+        error: 'APP_REQUIRED: repairOnce needs the Astera app running'
+      })
+      expect(refused).toEqual([])
+      expect(logs.some((l) => l.includes('repairOnce') && l.includes('APP_REQUIRED'))).toBe(true)
     })
 
     // 앱이 없는 것과 앱이 답을 안 하는 것은 부르는 쪽에게 같은 사실이다 — 하나의 조건이다.
