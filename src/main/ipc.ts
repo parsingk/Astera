@@ -59,8 +59,9 @@ import { UnderstandingPipeline } from './understanding/pipeline'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
 import type { OrchLoadResult } from '../core/orchestration/store'
-import { createMirrorStore } from './orchestration/mirrorStore'
+import { createMirrorStore, OrchStateConflict } from './orchestration/mirrorStore'
 import { createResumeSweep, type ResumeSweep } from './orchestration/resumeSweep'
+import { createOrchCommitHook } from './orchestration/commitHook'
 import { createReviewGate } from './orchestration/reviewGate'
 import { answerOrchAct } from './orchestration/answerAct'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
@@ -151,7 +152,6 @@ function idsOfProject(
   for (const r of state.runs) if (ids.has(r.jobId)) ids.add(r.id)
   return ids
 }
-import { justFinished } from '../core/orchestration/runRecord'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
 import { completionForTaskOf } from '../core/orchestration/completion'
@@ -1111,6 +1111,14 @@ export function registerIpc(
    *  is not simply missed. Null until `bootOrch` has run — the first handshake needs no refill,
    *  because `bootOrch` fills the mirror itself and waits for that handshake to do it. */
   let remirrorOrchState: (() => void) | null = null
+  /** What this app owes a commit once it has landed — see `afterOrchCommit`, which this points at
+   *  once `bootOrch` has built the things it needs (the journal, the scheduler, `prevOrchState`).
+   *
+   *  **Held out here because the commits are no longer all this app's** (ruling F54): the `orch-state`
+   *  handler lives in `startHostClient`, outside `bootOrch`, and a commit the Host made owes the same
+   *  six things as one this app made. Null before orchestration has started, which is also when there
+   *  is nothing to owe: no journal, no scheduler, no sidebar subscription. */
+  let onOrchCommit: ((a: { prev: OrchState; next: OrchState }) => void) | null = null
   /** Re-drives the validations and reviews a restart interrupted, off the mirror (see
    *  `createResumeSweep`). **Run on every Host attachment, not once per Host lifetime** — the Host's
    *  `boot` findings go to one app only, and an app restarting against a surviving Host is handed
@@ -2434,8 +2442,10 @@ export function registerIpc(
     try {
       const answer = await orchCall({ cmd: 'state-get', args: { boot: true }, sessionId: '' })
       if (answer.status !== 200) throw new Error(`the Host answered state-get with ${answer.status}`)
-      const body = answer.body as { state: OrchState; boot: OrchLoadResult | null }
-      orchMirror.accept(body.state)
+      const body = answer.body as { state: OrchState; boot: OrchLoadResult | null; version?: number }
+      // The version rides along so this app's first write can quote something the Host really issued
+      // (ruling F56) — without it every write of this session would be unchecked.
+      orchMirror.accept(body.state, body.version)
       loaded = body.boot
     } catch (err) {
       // **Nothing below can run without the state**, and inventing an empty one here is the single
@@ -2466,8 +2476,9 @@ export function registerIpc(
       void orchCall({ cmd: 'state-get', args: {}, sessionId: '' })
         .then((r) => {
           if (r.status !== 200) throw new Error(`the Host answered state-get with ${r.status}`)
-          const state = (r.body as { state: OrchState }).state
-          orchMirror.accept(state)
+          const refill = r.body as { state: OrchState; version?: number }
+          const state = refill.state
+          orchMirror.accept(state, refill.version)
           pushOrchState(state)
           // **And here, on the refilled mirror, not on the one this handshake replaced.** A Host that
           // just came back may be a different Host holding the same file, and the Tasks a restart
@@ -3954,6 +3965,45 @@ export function registerIpc(
     // fresh app start needs (see the null fallback in setState below).
     let prevOrchState: OrchState | null = null
 
+    /**
+     * Everything this app owes a commit once it has landed — **whichever process made it** (ruling
+     * F54). The list, and why it is one function rather than two, is in `createOrchCommitHook`; what
+     * stays here is the wiring, because every one of these depends on something local to this boot.
+     */
+    const afterOrchCommit = createOrchCommitHook({
+      record: continuity ? (prev, next) => continuity?.record(prev, next) ?? [] : undefined,
+      checkpoint: (events, next) => continuity?.checkpoint(events, next) ?? Promise.resolve(),
+      push: pushOrchState,
+      // Assembling the record needs the project key and the understanding pipeline, so it stays on
+      // this side; which Runs finished is the hook's judgement (justFinished).
+      onRunFinished: ({ runId, outcome, state }) => {
+        const run = state.runs.find((r) => r.id === runId)
+        if (!run) return
+        const tasks = state.tasks.filter((t) => t.runId === runId)
+        const finishedJob = jobOf(state, run)
+        if (!finishedJob) return
+        void understandingPipeline.onRunFinished(understandingKeyOf(finishedJob.cwd), {
+          runId,
+          jobName: finishedJob.objective.slice(0, 60),
+          objective: finishedJob.objective,
+          at: new Date().toISOString(),
+          taskIds: tasks.map((t) => t.id),
+          tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
+          changedFiles: [...new Set(tasks.flatMap((t) => t.filesModified ?? []))],
+          validation: { status: outcome === 'completed' ? 'passed' : 'failed' }
+        })
+      },
+      previous: () => prevOrchState,
+      remember: (next) => {
+        prevOrchState = next
+      },
+      // 떠나 보내는 promise 에 **종단 .catch 가 있어야 한다**(startReview 와 같은 이유: 붙이지
+      // 않으면 unhandled rejection 이 main 프로세스를 죽인다).
+      schedule: () => void runScheduler().catch((e) => orchLog(`scheduler failed: ${String(e)}`)),
+      log: orchLog
+    })
+    onOrchCommit = afterOrchCommit
+
     /** 이 Task 의 **첫** 구현 Dispatch(검토가 아닌 것 중 가장 먼저 시작한 것) — convergence.ts 의
      *  latestImplDispatch 의 반대쪽 끝이다. changedFilesSince(아래)의 기준점은 이 Dispatch 여야
      *  한다: 이 Task 가 일을 시작한 지점부터의 diff 가 목적이고, 마지막(수리를 포함한) 시도만의
@@ -4005,49 +4055,14 @@ export function registerIpc(
       setState: async (next) => {
         // Job Continuity: the journal row lands before the projection does (spec §8 — intent first);
         // the spawn that follows a worker-start happens after both. A journal failure is logged
-        // inside record() and never reaches here.
+        // inside record() and never reaches here. **That ordering is why the rows are written here
+        // and handed to the hook** rather than left to it — see `afterOrchCommit`'s `journalled`.
         const prev = store.get()
         const events = continuity?.record(prev, next) ?? []
         await store.save(next)
-        if (continuity && events.length > 0)
-          void continuity.checkpoint(events, next).catch((e) => orchLog(`continuity: checkpoint failed: ${String(e)}`))
-        pushOrchState(next)
-        // A finished Run becomes a record. `prevOrchState ?? next` on the first write after boot
-        // treats "before" as "after" — justFinished(next, next) is always empty — so a Run that was
-        // already finished when the app started is not recorded (same rule as D2: the screen holds
-        // only what the app watched happen, not what it finds already done).
-        //
-        // Caught per Run, not around the loop. Several Runs can finish in one write (runRecord's
-        // own test pins that), and a throw while handling the first would silently drop the rest —
-        // the same per-item isolation orchFireTick uses below. The catch is needed at all for the
-        // reason pushOrchState's own comment gives: store.save has already committed by this
-        // point, so a throw here must not turn a successful write into a command that errors.
-        for (const { runId, outcome } of justFinished(prevOrchState ?? next, next)) {
-          try {
-            const run = next.runs.find((r) => r.id === runId)
-            if (!run) continue
-            const tasks = next.tasks.filter((t) => t.runId === runId)
-            const finishedJob = jobOf(next, run)
-            if (!finishedJob) continue
-            void understandingPipeline.onRunFinished(understandingKeyOf(finishedJob.cwd), {
-              runId,
-              jobName: finishedJob.objective.slice(0, 60),
-              objective: finishedJob.objective,
-              at: new Date().toISOString(),
-              taskIds: tasks.map((t) => t.id),
-              tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
-              changedFiles: [...new Set(tasks.flatMap((t) => t.filesModified ?? []))],
-              validation: { status: outcome === 'completed' ? 'passed' : 'failed' }
-            })
-          } catch (e) {
-            orchLog(`run-finished record failed for ${runId}: ${String(e)}`)
-          }
-        }
-        prevOrchState = next
-        // 저장이 끝난 뒤에 돈다 — 스케줄러가 읽는 것은 getState() 이고, 저장 전에 부르면 방금의
-        // 변경을 못 본다. 떠나 보내는 promise 에 **종단 .catch 가 있어야 한다**(startReview 와 같은
-        // 이유: 붙이지 않으면 unhandled rejection 이 main 프로세스를 죽인다).
-        void runScheduler().catch((e) => orchLog(`scheduler failed: ${String(e)}`))
+        // Everything else this commit owes is the hook's, and the Host's own commits owe exactly the
+        // same list (ruling F54).
+        afterOrchCommit({ prev, next, journalled: events })
       },
       // The .bak for reset — the one documented safety net for a destructive operation
       backup: () => store.backup(),
@@ -5528,7 +5543,23 @@ export function registerIpc(
         orchLog(`orch.command: rejected ${cmd} — ${mismatch}`)
         return { status: 403, body: { error: mismatch } }
       }
-      return orchHandleCommand(orch.deps, { sessionId: UI_CALLER }, cmd, args ?? {})
+      try {
+        return await orchHandleCommand(orch.deps, { sessionId: UI_CALLER }, cmd, args ?? {})
+      } catch (err) {
+        // **A write the Host refused because the state had moved on** (ruling F56). It must not
+        // vanish: this is a button the person pressed, the thing they pressed it for did not happen,
+        // and the screen they decided from was already stale. Answered as a 409 so every caller's
+        // existing failure branch says so out loud — the renderer's Jobs handlers all toast on
+        // `status >= 400` — and logged with the versions, which is the half a toast cannot carry.
+        //
+        // The mirror has already been put onto the Host's current state by the time this is caught
+        // (see `OrchStateConflict`), so the next thing the person does is decided from the truth.
+        if (err instanceof OrchStateConflict) {
+          orchLog(`orch.command: ${cmd} was refused — ${err.message}`)
+          return { status: 409, body: { error: err.message, conflict: 'state-moved-on' } }
+        }
+        throw err
+      }
     }
   )
   // The way out, the same as files.unwatch and git.unwatch: the Jobs view unmounts on a rail toggle,
@@ -6727,12 +6758,22 @@ export function registerIpc(
     hostClient = client
 
     client.onMessage((m) => {
-      // Every commit the Host made, pushed (design §5). The mirror swaps, and the Jobs sidebar is
-      // told — a Job a CLI created with this app open has to appear on the screen, and this is the
-      // only thing that says so.
+      // Every commit the Host made, pushed (design §5). The mirror swaps, and then this app pays the
+      // commit everything it owes — **the same list as for a commit it made itself** (ruling F54).
+      // Pushing the sidebar was only two of six; the missing four left a worker-driven Job that
+      // dispatched its first Task and then stopped, and every Host-committed transition unjournalled.
+      //
+      // `prev` is read before the mirror swaps, because that is what the journal and the finished-Run
+      // edge are diffed against. A mirror that holds nothing yet has no "before": `next` stands in,
+      // which makes both of those empty — the same rule the first write after boot uses.
       if (m.t === 'orch-state') {
-        orchMirror.accept(m.state)
-        pushOrchState(m.state)
+        const prev = orchMirror.loaded() ? orchMirror.getState() : m.state
+        orchMirror.accept(m.state, m.version)
+        // Null until orchestration has started. `pushOrchState` is inside the hook, so a push that
+        // arrives before then is simply held in the mirror — which is right: `bootOrch` pushes once
+        // as soon as there is anything to draw.
+        if (onOrchCommit) onOrchCommit({ prev, next: m.state })
+        else pushOrchState(m.state)
         return
       }
       if (m.t === 'orch-result') {
