@@ -11,6 +11,7 @@ import {
   clientTimeoutMs,
   argsForCall,
   callHost,
+  connectFailureEnd,
   resolveGuidePath,
   readGuide,
   outputMode,
@@ -271,6 +272,34 @@ describe('닿지 못했을 때의 코드', () => {
     const e = JSON.parse(errorOutput('cannot read …', 'HOST_NOT_RUNNING'))
     expect(e.error.code).toBe('HOST_NOT_RUNNING')
     expect(exitCodeFor('HOST_NOT_RUNNING')).toBe(3)
+  })
+})
+
+// F44: 파일로 답하는 길이 서 있는 전제는 "아무도 이 파일을 쓰고 있지 않다" 하나다. 접속 실패
+// 세 가지 중 그것을 뜻하는 것은 하나뿐인데, 셋 다 파일로 떨어지고 있었다.
+describe('connectFailureEnd — 접속 실패 셋을 가른다', () => {
+  const addr = '\\\\.\\pipe\\astera-host-x'
+
+  it('아무것도 없었을 때만 파일로 답한다', () => {
+    expect(connectFailureEnd({ error: 'unreachable', address: addr })).toEqual({ fallback: true })
+  })
+
+  // 판을 보고 거절한 Host 는 돌고 있고 파일을 쥐고 있다. `orch` 를 알리지 않는 Host 와 같은 자리다.
+  it('판이 갈린 것은 VERSION_MISMATCH 이고 파일을 읽지 않는다', () => {
+    const end = connectFailureEnd({ error: 'protocol', address: addr })
+    expect(end.fallback).toBe(false)
+    expect((end as { code: string }).code).toBe('VERSION_MISMATCH')
+    expect(exitCodeFor('VERSION_MISMATCH')).toBe(9)
+    expect((end as { message: string }).message).toContain(addr)
+  })
+
+  // 파이프는 열렸는데 hello 가 안 왔다 — 살아 있는데 답하지 않는 Host 이고, 이 저장소는 그것을
+  // 위한 회복 코드를 따로 두고 있다. 그 파일을 읽어 running: false 로 답하면 거짓말이다.
+  it('답하지 않는 것은 TIMEOUT 이고 파일을 읽지 않는다', () => {
+    const end = connectFailureEnd({ error: 'timeout', address: addr })
+    expect(end.fallback).toBe(false)
+    expect((end as { code: string }).code).toBe('TIMEOUT')
+    expect(exitCodeFor('TIMEOUT')).toBe(7)
   })
 })
 

@@ -11,7 +11,7 @@ import { parseArgs } from '../core/orchestration/cliArgs'
 import { publicFor } from '../core/orchestration/cliPublic'
 import { humanFor, quietFor } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
-import { connectHost, type HostConnection } from '../core/host/connect'
+import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
 import { HOST_FEATURE_ORCH } from '../core/host/protocol'
 import { cliHostTarget, logToStderr, runHostCommand } from './host'
 import {
@@ -86,6 +86,40 @@ export function exitCodeForStatus(status: number): number {
   return status >= 200 && status < 300 ? 0 : exitCodeFor(codeForStatus(status))
 }
 
+/**
+ * 접속이 실패한 세 가지 중 **무엇이 "이 파일을 쓰는 사람이 아무도 없다" 를 뜻하는가**
+ * (`ConnectFailure`, core/host/connect.ts).
+ *
+ * 파일로 답하는 길이 서 있는 전제가 그것 하나다(stateFile.ts 의 머리말). `'unreachable'` 만 그
+ * 전제를 만족한다 — 그 주소에 아무것도 없었다.
+ *
+ * **`'protocol'` 은 Host 가 답한 것이다.** 판을 보고 거절했다는 것은 그 Host 가 돌고 있고 파일을
+ * 쥐고 있다는 뜻이다. **`'timeout'` 은 파이프가 열렸는데 `hello` 가 안 온 것이다** — 이 저장소가
+ * 회복 코드를 따로 두고 있는 바로 그 "살아 있는데 답하지 않는 Host" 다
+ * (docs/2026-09-22-host-unresponsive-recovery-design.md). 둘 중 어느 쪽에서든 파일을 읽어 0 으로
+ * 답하면 `astera status` 가 돌고 있는 Host 를 두고 `running: false, pid: null` 이라고 말한다.
+ *
+ * 코드는 표에 이미 있는 것을 쓴다(설계 §8, 열 개뿐이다). 판이 갈린 것은 9 — `orch` 를 알리지 않는
+ * Host 에 붙었을 때와 같은 자리이고, 거기도 파일을 읽지 않고 9 로 끝낸다. 답하지 않는 것은 7 이다.
+ */
+export function connectFailureEnd(a: {
+  error: ConnectFailure['error']
+  address: string
+}): { fallback: true } | { fallback: false; code: CliErrorCode; message: string } {
+  if (a.error === 'unreachable') return { fallback: true }
+  if (a.error === 'protocol')
+    return {
+      fallback: false,
+      code: 'VERSION_MISMATCH',
+      message: `the Host at ${a.address} speaks a different protocol version — it is running, so its state was not read from the file`
+    }
+  return {
+    fallback: false,
+    code: 'TIMEOUT',
+    message: `the Host at ${a.address} accepted the connection but did not say hello — it is running and not answering, so its state was not read from the file`
+  }
+}
+
 /** 모드에 맞춘 성공 출력. **사람용이 없는 명령은 JSON 으로 되돌린다** — 코디네이터의
  *  명령들에 억지로 표를 씨우면 가이드가 시키는 것을 못 읽게 된다. */
 export function renderOk(cmd: string, body: unknown, mode: OutputMode): string {
@@ -116,11 +150,11 @@ export function applyStdin(a: {
   return next
 }
 
-/** Headroom stacked on top of the server's long-poll deadline so the client never hangs up before
- *  the server does. It absorbs the polling interval (POLL_MS) and event-loop delay the server takes
- *  to send its response once the deadline is reached — with headroom narrower than the server's
- *  deadline, the client's AbortController cuts the connection while the server is still preparing
- *  its response, and the contract that a timeout is information rather than an error breaks (this
+/** Headroom stacked on top of the Host's long-poll deadline so the client never gives up before the
+ *  Host does. It absorbs the polling interval (POLL_MS) and event-loop delay the Host takes to send
+ *  its response once the deadline is reached — with headroom narrower than the Host's deadline,
+ *  `callHost`'s own `setTimeout` fires while the Host is still preparing its response, the command
+ *  ends as `stuck`, and the contract that a timeout is information rather than an error breaks (this
  *  was the defect where ask's default was shorter than the server's default). */
 const TIMEOUT_HEADROOM_MS = 30_000
 
@@ -447,7 +481,10 @@ export async function main(): Promise<void> {
 
   /** Host 에 닿지 못했다. **보기만 하는 명령은 파일이 답한다**(stateFile.ts) — Host 가 없다는 것은
    *  그 파일을 아무도 쓰고 있지 않다는 뜻이므로, 거기 적힌 것이 곧 지금이다. 나머지는 예전과 똑같이
-   *  실패한다: 보고면 적어 두고, 아니면 3 으로 끝난다. */
+   *  실패한다: 보고면 적어 두고, 아니면 3 으로 끝난다.
+   *
+   *  **"없다" 를 가르는 것은 부르는 쪽이다** — `connectFailureEnd` 가 돌려보낸 실패만 여기 온다.
+   *  살아 있는 Host 는 여기 닿지 않는다. */
   const withoutHost = async (reason: string): Promise<{ status: number; body: unknown }> => {
     if (parsed.cmd === 'version') versionWithoutHost()
     if (!fileAnswerable(parsed.cmd)) unreachable(reason)
@@ -459,10 +496,20 @@ export async function main(): Promise<void> {
 
   const reply = await (async (): Promise<{ status: number; body: unknown }> => {
     const conn = await connectHost({ address, app: CLI_VERSION, log: logToStderr })
-    if ('error' in conn)
+    if ('error' in conn) {
+      // **셋 중 하나만 "아무도 없다" 다** (connectFailureEnd). 나머지 둘에서 파일을 읽으면 살아
+      // 있는 주인의 파일을 0 으로 답하게 된다 — 바로 아래 `orch` 없는 Host 를 9 로 끝내는 가지와
+      // 같은 판단이다.
+      const end = connectFailureEnd({ error: conn.error, address })
+      if (!end.fallback) {
+        if (parsed.cmd === 'version') versionWithoutHost()
+        out(renderErr(end.message, end.code, mode))
+        process.exit(exitCodeFor(end.code))
+      }
       return withoutHost(
         `cannot reach the Host at ${address} (${conn.error}) — start one with \`astera host start\``
       )
+    }
     // **말할 줄 아는지 먼저 본다.** 이 기능을 알리지 않은 Host 는 `orch-call` 을 모르는 메시지로
     // 흘려버리고 아무 답도 하지 않는다 — 물어보고 시한까지 기다리면 사람은 몇 분을 잃고 나서
     // 아무것도 알게 되지 않는다. 명령을 모르는 것과 같은 자리이므로 같은 코드(501 → 9)다.
