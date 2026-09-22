@@ -61,6 +61,7 @@ import { sanitizeResumePrompt } from '../core/sessions/commands'
 import type { OrchLoadResult } from '../core/orchestration/store'
 import { createMirrorStore } from './orchestration/mirrorStore'
 import { createResumeSweep, type ResumeSweep } from './orchestration/resumeSweep'
+import { createReviewGate } from './orchestration/reviewGate'
 import { answerOrchAct } from './orchestration/answerAct'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { UnderstandingStore } from './understanding/store'
@@ -99,7 +100,6 @@ import {
   applyValidationResult,
   bindNativeSession,
   blockForValidation,
-  blockForReview,
   openReviewDispatch,
   writeOffDispatch
 } from '../core/orchestration/state'
@@ -1114,7 +1114,13 @@ export function registerIpc(
    *  `createResumeSweep`). **Run on every Host attachment, not once per Host lifetime** — the Host's
    *  `boot` findings go to one app only, and an app restarting against a surviving Host is handed
    *  `boot: null`, so this is the only thing that finds a Task the kill left `validating`. Null until
-   *  `bootOrch` has built the dependencies it needs (`deps`, and `orch` for the spawn path). */
+   *  `bootOrch` has built the dependencies it needs (`deps`, and `orch` for the spawn path).
+   *
+   *  **"Every attachment" has one exception, and it is `remirrorOrchState`'s** (ruling F39). A boot
+   *  that could not read the state leaves that refill function null and returns, so a Host that comes
+   *  back an hour later is never picked up — there is no handshake handler to sweep from. Nothing
+   *  retries on its own: the next attempt is a toggle change or an app restart, which is what the
+   *  Jobs view's `cannot reach the Host` state says in as many words. */
   let resumeSweep: ResumeSweep | null = null
   /** Whether the Host this app is connected to keeps its sessions through an update being installed.
    *  True off win32, where a running binary can simply be replaced; on win32 it is true only once the
@@ -2245,6 +2251,17 @@ export function registerIpc(
     orchStarting = true
     try {
       await bootOrch()
+    } catch (err) {
+      // **The Jobs view must not blame the Host for something else** (ruling F38). `bootOrch` says
+      // "waiting for the Host" from the moment it commits to needing one, and it turns a real Host
+      // failure into `unreachable` with the reason before it returns — so anything that reaches here
+      // is a throw from the parts that have nothing to do with the Host: the `fs.mkdir` of the spec
+      // directory, `writeShuttle`, `writeInfo`. Left as it was, the screen would stay on "connecting"
+      // for the rest of the app's life and tell a person four features are waiting on a connection
+      // that is fine. Cleared rather than given a third state: saying nothing is honest here, and the
+      // failure is in the log with its real reason. The throw carries on to the caller's own catch.
+      setOrchHostGate(null)
+      throw err
     } finally {
       orchStarting = false
     }
@@ -2894,40 +2911,23 @@ export function registerIpc(
     })
     orchValidator = validator
 
+    /** 검토를 시작하지 못했을 때 Task 를 사람에게 넘기는 자리, 그리고 그중 넘기지 **않는** 하나의
+     *  거절(ruling F37). 둘 다 reviewGate.ts 에 있다 — `deps` 는 이 아래에서 정의되지만 여기의
+     *  화살표 함수는 부를 때 읽으므로 순서 문제는 없다(orchTails·repairDeps 와 같은 모양). */
+    const reviewGate = createReviewGate({
+      getState: () => store.get(),
+      setState: (next) => deps.setState(next),
+      now: () => new Date().toISOString(),
+      log: orchLog
+    })
+
     /** 검토 세션 하나를 띄운다. 실패하는 모든 경로가 Gate 로 간다 — 조용히 통과시키면 "검토됨"과
-     *  "검토 못 함"이 화면에서 같아진다. */
+     *  "검토 못 함"이 화면에서 같아진다. **한 갈래만 예외이고 그것은 실패가 아니다**: 이미 검토가
+     *  돌고 있다는 거절(reviewGate.onOpenRefused). */
     const startReview = async ({ taskId }: { taskId: string }): Promise<void> => {
-      /** Gate 로 넘긴다. **먼저 이 Task 의 열린 검토 Dispatch 를 지운다.** createGate 는 열린
-       *  Dispatch 가 있는 Task 를 거절하므로(state.ts), 이미 커밋한 검토 Dispatch 를 그대로 두고
-       *  Gate 를 열려 하면 그것도 실패하고 Task 는 reviewing 에 열린 Dispatch 와 함께 갇힌다 —
-       *  꺼내 줄 것이 아무것도 없다. worker-start 의 실패 롤백이 같은 일을 한다(server.ts): Dispatch
-       *  를 배열에서 아예 지운다. 다만 Task 의 상태는 되돌리지 않는다 — openReviewDispatch 는 상태를
-       *  옮기지 않았으므로 reviewing 그대로가 맞고, 그 자리에서 Gate 가 blocked 로 데려간다.
-       *
-       *  정리가 세션 시작 실패 자리가 아니라 여기 있는 이유: 커밋 뒤에 던지는 경로는 그 하나가
-       *  아니다(뒤의 setState, 그리고 밖의 catch 로 오는 모든 것). 두 자리에 같은 코드를 두면 한쪽만
-       *  고쳐지고, "실패하는 모든 경로가 Gate 로 간다"는 위의 문장이 거짓이 된다.
-       *
-       *  조건을 id 가 아니라 "이 Task 의 열려 있는 검토 Dispatch"로 쓴 것도 그래서다 — 아직 아무것도
-       *  열지 않은 경로는 지울 것이 없어 그대로 지나가고(그래서 두 번 불러도 같다), 구현 Dispatch 는
-       *  정당하게 남아 있는 닫힌 Dispatch 이므로 건드리지 않고, 이미 보고를 마친 검토 Dispatch 도
-       *  대상이 아니다. */
-      const gate = async (reason: string): Promise<void> => {
-        const before = store.get()
-        const kept = before.dispatches.filter(
-          (d) => !(d.taskId === taskId && d.review && !d.outcome && !d.endedAt)
-        )
-        if (kept.length !== before.dispatches.length)
-          await deps.setState({ ...before, dispatches: kept })
-        // 방금 쓴 것을 다시 읽는다 — 위 커밋이 메모리의 상태를 바꿨으므로 before 로 Gate 를 열면
-        // 지운 Dispatch 가 되살아난다.
-        const r = blockForReview(store.get(), { taskId, reason }, new Date().toISOString())
-        if (!r.ok) {
-          orchLog(`could not block task=${taskId} for review: ${r.error}`)
-          return
-        }
-        await deps.setState(r.state)
-      }
+      /** Gate 로 넘긴다. 규칙과 그 이유는 `createReviewGate` 에 있다(main/orchestration/reviewGate.ts)
+       *  — 이 자리에 있던 것을 그대로 옮겼고, 옮긴 이유는 그 파일의 머리말에 있다. */
+      const gate = (reason: string): Promise<void> => reviewGate.gate({ taskId, reason })
       try {
         const st = store.get()
         const task = st.tasks.find((t) => t.id === taskId)
@@ -2988,7 +2988,10 @@ export function registerIpc(
           },
           new Date().toISOString()
         )
-        if (!opened.ok) return void (await gate(opened.error))
+        // **모든 거절이 Gate 로 가지는 않는다** — `dispatch already open` 은 실패가 아니라 남이 먼저
+        // 시작했다는 뜻이고, 그것을 Gate 로 보내면 돌고 있는 검토가 무너진다(ruling F37). 판정은
+        // `onOpenRefused` 안에 있다.
+        if (!opened.ok) return void (await reviewGate.onOpenRefused({ taskId, error: opened.error }))
         await deps.setState(opened.state)
         const spec = buildReviewSpecFile({
           title: task.title,
@@ -4379,10 +4382,6 @@ export function registerIpc(
       // checkConfigIdsOf 는 옛 validateConfigId 와 새 validateConfigIds 를 함께 읽으므로, 지금
       // 존재할 수 있는 모든 Task 에 대해 이것으로 충분하다.
       startValidation: ({ taskId, cwd }) => {
-        // **A resume for this Task is under way, so the restart sweep must leave it alone.** A Task
-        // handed here looks identical to an interrupted one from the state (validating, no open
-        // Dispatch) until the validation settles — see ResumeSweep.markDriven.
-        resumeSweep?.markDriven(taskId)
         const task = store.get().tasks.find((t) => t.id === taskId)
         validator.enqueue({ taskId, cwd, configIds: task ? checkConfigIdsOf(task) : [] })
         // 의심 파일(설계 §8.3) — **convergence Run 에서만** 계산한다(리뷰 fix 1차, Important 1).
@@ -4431,11 +4430,6 @@ export function registerIpc(
       // 비동기 작업은 안에서 흘려보낸다(startValidation 이 큐에 넣기만 하는 것과 같은 이유:
       // 기다리면 worker_done 응답이 그만큼 늦어지고 워커 세션이 그 자리에서 멈춘다).
       startReview: ({ taskId }) => {
-        // **startValidation 과 같은 이유, 그리고 더 급한 이유다.** 이 함수는 계정을 고르고 나서야
-        // 검토 Dispatch 를 커밋하는데, 그전까지 이 Task 는 상태만 보면 끊긴 Task 와 구별되지 않는다.
-        // 그 창에 sweep 이 한 번 더 띄우면 openReviewDispatch 가 둘째를 거절하고, 그 거절을 받은
-        // gate() 가 첫째의 Dispatch 를 지우고 Task 를 막는다 — 살아 있는 검토가 무너진다.
-        resumeSweep?.markDriven(taskId)
         // 떠나 보내는 promise 에 **종단 .catch 가 있어야 한다.** 안의 catch 는 gate() 를 기다리고
         // gate() 는 store.save 를 기다리는데, 그 쓰기(tmp+rename)는 거부될 수 있다 — 디스크가 찼거나
         // Windows 에서 rename 이 잠겼을 때다. 붙이지 않으면 그 거부가 main 프로세스의 unhandled

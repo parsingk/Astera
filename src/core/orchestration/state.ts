@@ -1006,6 +1006,18 @@ export function blockForValidation(
   return createGate(s, { taskId: a.taskId, question: `검증을 실행할 수 없습니다: ${a.reason}` }, now)
 }
 
+/** `openReviewDispatch` 가 "이 Task 에는 이미 열린 Dispatch 가 있다" 를 말할 때의 머리말.
+ *
+ *  **읽는 쪽이 생겨서 이름이 붙었다.** `startReview` 의 실패 처리는 이 거절 하나만 다르게 다뤄야
+ *  한다(ruling F37, main/orchestration/reviewGate.ts) — 나머지는 사람에게 넘길 실패이고 이것은 남이
+ *  먼저 시작했다는 뜻이다. 그쪽이 문자열을 다시 적으면 이 문장을 고치는 날 조용히 갈라지고, 갈라진
+ *  결과는 "살아 있는 검토를 지운다" 이다. */
+const ALREADY_OPEN = 'dispatch already open'
+/** 위 머리말로 시작하는 거절인가. **다른 함수의 같은 문장까지 받아 주지는 않는다** — `openDispatch`
+ *  와 worker-start 도 같은 말을 하지만 그쪽 거절을 읽는 자리는 없고, 있다면 그 자리가 자기 판정을
+ *  가져야 한다. */
+export const isAlreadyOpenError = (error: string): boolean => error.startsWith(`${ALREADY_OPEN}: `)
+
 /** 검토 Dispatch 를 연다. openDispatch 와 다른 점 셋:
  *
  *  - **Task 를 dispatched 로 옮기지 않는다.** 이미 reviewing 이고, 그 상태가 의존 Task 를 막는
@@ -1030,7 +1042,7 @@ export function openReviewDispatch(
   if (!task) return err(`unknown task: ${a.taskId}`)
   if (task.status !== 'reviewing') return err(`task is not reviewing: ${task.status}`)
   const open = s.dispatches.find((d) => d.taskId === a.taskId && !d.outcome && !d.endedAt)
-  if (open) return err(`dispatch already open: ${open.id}`)
+  if (open) return err(`${ALREADY_OPEN}: ${open.id}`)
   // openDispatch 와 같은 이유 — 같은 sessionId 를 쓰는 열린 Dispatch 가 둘이면 closeDispatch 가
   // 어느 것을 닫을지 알 수 없다
   const sessionOpen = s.dispatches.find(

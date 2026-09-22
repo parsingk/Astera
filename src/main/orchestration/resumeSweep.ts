@@ -16,19 +16,19 @@ import { interruptedResumes } from '../../core/orchestration/store'
 import type { OrchState } from '../../core/orchestration/state'
 
 export interface ResumeSweep {
-  /** Re-drives whatever the state says a restart interrupted. `why` goes in the log line so the
-   *  reason this ran is readable beside what it did. Safe to call again — see `driven`. */
-  run(why: string): void
-  /** "A resume for this Task is already under way in this app."
+  /**
+   * Re-drives whatever the state says a restart interrupted. `why` goes in the log line so the reason
+   * this ran is readable beside what it did.
    *
-   *  **Called by the ordinary path too, not only by this sweep.** A Task that has just been handed to
-   *  the validator or the reviewer by `applyWorkerDone` looks exactly like an interrupted one from
-   *  the state: `validating` or `reviewing`, with no open Dispatch yet. A sweep landing in that window
-   *  would start a second one — wasteful for a validation (the runner answers `'skip'` once the Task
-   *  has moved) and destructive for a review (`openReviewDispatch` refuses the second with "dispatch
-   *  already open", and `startReview` answers that refusal by deleting the open review Dispatch and
-   *  gating the Task). The boot's pending-report drain is a real instance of that window. */
-  markDriven(taskId: string): void
+   * **Safe to call again, and both halves of that are somebody else's rule.** A Task whose Dispatch is
+   * open is not a candidate at all (`interruptedResumes`), so a re-driven review drops out as soon as
+   * it has committed one. Inside the window before that commit — and inside the same window after
+   * `applyWorkerDone` hands a Task straight to the reviewer — a second drive is refused by
+   * `openReviewDispatch` with `dispatch already open`, and `createReviewGate.onOpenRefused` answers
+   * that refusal by doing nothing (ruling F37). A validation driven twice is refused later and more
+   * cheaply: the runner answers `'skip'` once the Task has left `validating`.
+   */
+  run(why: string): void
 }
 
 export function createResumeSweep(a: {
@@ -44,47 +44,22 @@ export function createResumeSweep(a: {
   now(): string
   log(message: string): void
 }): ResumeSweep {
-  /** Tasks a resume is already under way for, whoever started it.
-   *
-   *  **The state alone cannot carry this.** A resume only marks the state once `startReview` has
-   *  picked an account and committed its Dispatch, which is several awaits later; anything looking in
-   *  that window sees the Task exactly as it was. See `markDriven` for what a second start costs.
-   *
-   *  **An entry is forgotten as soon as the state stops naming that Task**, so the set cannot grow
-   *  with the app's uptime and a Task that comes back round is not permanently ignored. */
-  const driven = new Set<string>()
-
   return {
-    markDriven: (taskId) => {
-      driven.add(taskId)
-    },
     run: (why) => {
       const state = a.getState()
       if (!state) return
       const { revalidate, rereview } = interruptedResumes(state, a.now())
-      const named = new Set<string>([...revalidate.map((r) => r.taskId), ...rereview])
-      for (const id of [...driven]) if (!named.has(id)) driven.delete(id)
-      const validations = revalidate.filter((r) => !driven.has(r.taskId))
-      const reviews = rereview.filter((id) => !driven.has(id))
-      if (validations.length === 0 && reviews.length === 0) return
+      if (revalidate.length === 0 && rereview.length === 0) return
       if (!a.enabled()) {
         a.log(
-          `restart cleanup (${why}) — orchestration is off, so ${validations.length} interrupted validation(s) and ${reviews.length} interrupted review(s) were not restarted; turning it on without restarting does not retry them — a restart with it already on will`
+          `restart cleanup (${why}) — orchestration is off, so ${revalidate.length} interrupted validation(s) and ${rereview.length} interrupted review(s) were not restarted; turning it on without restarting does not retry them — a restart with it already on will`
         )
         return
       }
-      // Marked before the call, not after: `startReview` is fire-and-forget inside and could reach
-      // back here through a synchronous callback.
-      for (const r of validations) {
-        driven.add(r.taskId)
-        a.startValidation(r)
-      }
-      for (const taskId of reviews) {
-        driven.add(taskId)
-        a.startReview({ taskId })
-      }
+      for (const r of revalidate) a.startValidation(r)
+      for (const taskId of rereview) a.startReview({ taskId })
       a.log(
-        `restart cleanup (${why}) — restarted ${validations.length} interrupted validation(s) and ${reviews.length} interrupted review(s)`
+        `restart cleanup (${why}) — restarted ${revalidate.length} interrupted validation(s) and ${rereview.length} interrupted review(s)`
       )
     }
   }

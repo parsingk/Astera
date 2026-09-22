@@ -52,7 +52,6 @@ const sweepOver = (
   over: { enabled?: boolean } = {}
 ): {
   run: (why: string) => void
-  markDriven: (taskId: string) => void
   startValidation: ReturnType<typeof vi.fn>
   startReview: ReturnType<typeof vi.fn>
   log: ReturnType<typeof vi.fn>
@@ -68,7 +67,7 @@ const sweepOver = (
     now: () => NOW,
     log
   })
-  return { run: sweep.run, markDriven: sweep.markDriven, startValidation, startReview, log }
+  return { run: sweep.run, startValidation, startReview, log }
 }
 
 describe('createResumeSweep', () => {
@@ -89,19 +88,9 @@ describe('createResumeSweep', () => {
     expect(startValidation).toHaveBeenCalledTimes(1)
   })
 
-  // **두 번 불러도 Dispatch 는 하나다.** 상태 판정만으로는 부족하다 — 다시 돌린 검토가 자기
-  // Dispatch 를 커밋하기까지는 몇 번의 await 가 있고, 그 창에 두 번째 sweep 이 들어오면 상태는
-  // 첫 번째가 본 것과 똑같이 보인다.
-  it('두 번 돌려도 같은 Task 를 두 번 시작하지 않는다', () => {
-    const s = interrupted()
-    const { run, startValidation, startReview } = sweepOver(() => s)
-    run('첫 붙음')
-    run('다시 붙음')
-    expect(startValidation).toHaveBeenCalledTimes(1)
-    expect(startReview).toHaveBeenCalledTimes(1)
-  })
-
-  // 검토가 Dispatch 를 열고 나면 상태 자체가 그 Task 를 빼 준다 — 기억에 기대지 않는 두 번째 방벽.
+  // **다시 돌린 검토가 Dispatch 를 열고 나면 상태 자체가 그 Task 를 뺀다.** 이것이 이 sweep 의
+  // 멱등성이고, 기억을 들고 있지 않은 이유다 — 커밋 전의 좁은 창은 reviewGate.onOpenRefused 가
+  // 받는다(ruling F37, reviewGate.test.ts).
   it('열린 Dispatch 가 생긴 Task 는 다음 sweep 의 후보가 아니다', () => {
     let s = interrupted()
     const { run, startReview } = sweepOver(() => s)
@@ -109,29 +98,6 @@ describe('createResumeSweep', () => {
     s = { ...s, dispatches: [...s.dispatches, dispatch({ id: 'dsp_r2', taskId: 'tsk_r', review: true })] }
     run('다시 붙음')
     expect(startReview).toHaveBeenCalledTimes(1)
-  })
-
-  // 기억이 영원하면 앱 수명 동안 자라기만 하고, 한 바퀴 돌아 다시 끊긴 Task 를 영영 못 살린다.
-  it('상태가 더 이상 그 Task 를 말하지 않으면 기억을 잊는다', () => {
-    let s = interrupted()
-    const { run, startValidation } = sweepOver(() => s)
-    run('첫 붙음')
-    s = { ...s, tasks: s.tasks.map((t) => (t.id === 'tsk_v' ? { ...t, status: 'ready' as const } : t)) }
-    run('검증이 끝난 뒤')
-    s = { ...s, tasks: s.tasks.map((t) => (t.id === 'tsk_v' ? { ...t, status: 'validating' as const } : t)) }
-    run('다시 끊긴 뒤')
-    expect(startValidation).toHaveBeenCalledTimes(2)
-  })
-
-  // 보고를 받아 막 검토를 띄운 Task 는 상태만 보면 끊긴 Task 와 똑같이 보인다(reviewing, 아직
-  // 열린 Dispatch 없음). 그 창에 sweep 이 들어와 한 번 더 띄우면 openReviewDispatch 가 둘째를
-  // 거절하고, 그 거절을 받은 startReview 가 첫째의 Dispatch 를 지우고 Task 를 막아 버린다.
-  it('앱이 이미 띄운 Task 는 sweep 이 다시 띄우지 않는다', () => {
-    const s = interrupted()
-    const { run, markDriven, startReview } = sweepOver(() => s)
-    markDriven('tsk_r')
-    run('첫 붙음')
-    expect(startReview).not.toHaveBeenCalled()
   })
 
   // 거울이 비어 있다는 것은 Host 가 아직 상태를 밀지 않았다는 뜻이다 — 빈 상태로 판정하면
