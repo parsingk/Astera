@@ -48,6 +48,10 @@ docs/*
 # Published deliberately, same reason: moving the orchestrator into the Host is six steps over
 # several sessions, and each one reads the decomposition and the boundary from this design.
 !docs/2026-09-22-host-control-plane-design.md
+# Published deliberately, same reason: request receipts are twelve steps over several sessions, and the
+# order of two of them is load-bearing — retention lands before auto-minting, or a long-lived Host keeps
+# one entry per acting call with no sweep. That constraint has to travel with the design.
+!docs/2026-09-23-request-receipts-design.md
 # Published deliberately: the SignPath Foundation requires the code signing policy to be reachable at
 # a public URL, and the README links to it.
 !docs/code-signing.md
