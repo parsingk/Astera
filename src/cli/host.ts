@@ -35,19 +35,35 @@ export function hostStatus(a: {
   }
 }
 
-/** What `astera host stop` reports for each of the three ways it can end (host control plane design
+/** What `astera host stop` reports for each of the four ways it can end (host control plane design
  *  §12). Kept pure and separate from the connecting and waiting below, the same way `hostStatus` is,
- *  so the three shapes can be checked without a socket.
+ *  so the four shapes can be checked without a socket.
  *
  *  **`'absent'` exits 0, not `HOST_NOT_RUNNING`.** Stopping something that is not there is not a
- *  failure — the person asked for no Host to be running, and none is. **`'refused'` is the one exit
- *  that is not 0**: `CONFLICT`, because a Host that is running and holding work is the one state this
- *  command cannot leave the way it was asked to. */
+ *  failure — the person asked for no Host to be running, and none is. **`'refused'` is `CONFLICT`**,
+ *  because a Host that is running and holding work is the one state this command cannot leave the way
+ *  it was asked to. **`'timeout'` is `TIMEOUT`, not `stopped: true` and not a guess at either.** A
+ *  Host whose event loop is wedged inside a synchronous call (measured 2026-09-22,
+ *  docs/2026-09-22-host-unresponsive-recovery-design.md) never answers `retire` and never closes its
+ *  socket either — silence here is a third outcome, not evidence for one of the other two, and the
+ *  body says so plainly because what a person does next differs from "it left". */
 export function hostStopResult(
-  a: { outcome: 'absent' } | { outcome: 'stopped' } | { outcome: 'refused'; sessions: number; jobs: number }
+  a:
+    | { outcome: 'absent' }
+    | { outcome: 'stopped' }
+    | { outcome: 'refused'; sessions: number; jobs: number }
+    | { outcome: 'timeout'; waitedMs: number }
 ): { body: Record<string, unknown>; code: number } {
   if (a.outcome === 'absent') return { body: { stopped: true, message: 'no Host was running' }, code: 0 }
   if (a.outcome === 'stopped') return { body: { stopped: true }, code: 0 }
+  if (a.outcome === 'timeout')
+    return {
+      body: {
+        stopped: false,
+        message: `retire was sent, but the Host did not answer within ${a.waitedMs}ms — it may still be running (and possibly stuck)`
+      },
+      code: exitCodeFor('TIMEOUT')
+    }
   const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
   return {
     body: {
@@ -165,6 +181,20 @@ export function preparedRuntimeEntry(a: {
 const START_TIMEOUT_MS = 5_000
 const START_POLL_MS = 200
 
+/** How long `host stop` waits, after sending `retire`, for either a `retire-refused` reply or the
+ *  connection ending, before concluding this Host is not going to answer at all.
+ *
+ *  **Copied from `src/main/host/client.ts`'s `PING_MS * PING_MISSES`, not imported** — this file
+ *  cannot depend on `src/main` (the CLI outlives the app and must not need it) any more than it can
+ *  import `CLI_VERSION` from `run.ts` (see that constant's own comment, just below). `PING_MS *
+ *  PING_MISSES` is that file's own threshold for calling a connected Host unresponsive — the same
+ *  15s judgment this command needs to make about a Host that answered `hello` and then went silent
+ *  (docs/2026-09-22-host-unresponsive-recovery-design.md's wedged event loop is exactly this case:
+ *  no reply, and no `close` either, because the Host's own code never runs again to send either
+ *  one). `RETIRE_SETTLE_MS` in that same file (2s) was considered and rejected: it is a blind grace
+ *  sleep client.ts gives a Host it already knows is exiting, not a "has this gone silent" verdict. */
+const STOP_TIMEOUT_MS = 15_000
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 /** Runs a `host-*` command and hands back what happened, without printing anything (see the note at
@@ -174,6 +204,10 @@ export async function runHostCommand(a: {
   env: NodeJS.ProcessEnv
   platform: NodeJS.Platform
   home: string
+  /** Overrides `STOP_TIMEOUT_MS` for `host-stop`. Test injection only, the same way `HostServerDeps`'
+   *  `idleMs`/`helloMs` and `HostClientDeps`'s `pingMs` are — nothing waits out a real 15s to prove a
+   *  silent Host resolves rather than hangs. */
+  stopTimeoutMs?: number
 }): Promise<{ body: unknown; code: number }> {
   if (a.cmd !== 'host-status' && a.cmd !== 'host-start' && a.cmd !== 'host-stop')
     return { body: { error: `${a.cmd} is not implemented yet` }, code: exitCodeFor('FAILED') }
@@ -214,16 +248,21 @@ export async function runHostCommand(a: {
   if (a.cmd === 'host-stop') {
     const connected = await connectHost({ address, app: CLI_VERSION, log: logToStderr })
     if ('error' in connected) return hostStopResult({ outcome: 'absent' })
-    // A `retire` that is honoured gets no reply, only the connection ending — so this races the two
-    // outcomes a Host can answer with: `retire-refused`, or the socket closing on its own.
+    // A `retire` that is honoured gets no reply, only the connection ending — so this races three
+    // outcomes: `retire-refused`, the socket closing on its own, or neither ever arriving because the
+    // Host's event loop is wedged and cannot run the code that would send either one.
     const outcome = await new Promise<{ body: unknown; code: number }>((resolve) => {
       let offMessage: () => void = () => {}
       let offClose: () => void = () => {}
       const settle = (r: { body: unknown; code: number }): void => {
+        clearTimeout(timer)
         offMessage()
         offClose()
         resolve(r)
       }
+      const waitedMs = a.stopTimeoutMs ?? STOP_TIMEOUT_MS
+      const timer = setTimeout(() => settle(hostStopResult({ outcome: 'timeout', waitedMs })), waitedMs)
+      timer.unref?.()
       offMessage = connected.onMessage((m) => {
         if (m.t === 'retire-refused')
           settle(hostStopResult({ outcome: 'refused', sessions: m.sessions, jobs: m.jobs }))

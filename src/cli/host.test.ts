@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { promises as fs } from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { hostStatus, hostStopResult, hostStartTargets, preparedRuntimeEntry, runHostCommand } from './host'
@@ -7,6 +8,7 @@ import { userDataDir } from '../core/orchestration/cliDiscovery'
 import { hostAddress } from '../host/address'
 import { startHostServer, type HostServerDeps } from '../host/server'
 import { HOST_PROTOCOL } from '../core/host/protocol'
+import { encodeLine } from '../host/framing'
 import { exitCodeFor } from '../core/orchestration/cliOutput'
 import { hostRuntimePaths } from '../core/host/runtime'
 
@@ -70,6 +72,18 @@ describe('hostStopResult', () => {
       body: { message: 'Cannot stop Host: 1 session and 1 Job are still running.' }
     })
   })
+
+  // Host 가 아예 없는 것(0)도 아니고 물러난 것(0)도 아니다 — 답이 없는 것은 셋째 결말이고, 사람이
+  // 다음에 할 일이 다르므로 그렇다고 말한다. TIMEOUT(7)은 열 개짜리 표에 이미 있는 코드다.
+  it('답이 없으면 TIMEOUT 으로 끝나고, 있었던 일을 그대로 말한다', () => {
+    expect(hostStopResult({ outcome: 'timeout', waitedMs: 15_000 })).toEqual({
+      body: {
+        stopped: false,
+        message: 'retire was sent, but the Host did not answer within 15000ms — it may still be running (and possibly stuck)'
+      },
+      code: exitCodeFor('TIMEOUT')
+    })
+  })
 })
 
 describe('runHostCommand — host stop against a real Host', () => {
@@ -127,6 +141,50 @@ describe('runHostCommand — host stop against a real Host', () => {
         await server.close().catch(() => {})
       }
     } finally {
+      await fs.rm(home, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('runHostCommand — host stop against a Host whose event loop is wedged', () => {
+  // 진짜 Host 는 손대지 않는다: handshake 만 답하고 그 뒤로는 아무 말도 하지 않는 raw 소켓 서버로,
+  // docs/2026-09-22-host-unresponsive-recovery-design.md 가 적어 둔 동기 호출에 묶여 이벤트 루프가
+  // 멎은 Host 를 흉내 낸다 — retire 에도, 그 무엇에도 답이 없다.
+  it('답이 없으면 매달리지 않고 TIMEOUT 으로 끝난다', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cli-home-'))
+    const server = net.createServer((sock) => {
+      sock.setEncoding('utf8')
+      let helloed = false
+      sock.on('data', () => {
+        if (helloed) return // wedged: hears `retire` land, never answers it
+        helloed = true
+        sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: 1, startedAt: 'T', features: [] }))
+      })
+    })
+    try {
+      const env = {} as NodeJS.ProcessEnv
+      const profileDir = userDataDir({ platform: process.platform, env, home })
+      await fs.mkdir(profileDir, { recursive: true })
+      const addr = hostAddress({
+        profileDir,
+        platform: process.platform,
+        tmpDir: os.tmpdir(),
+        protocol: HOST_PROTOCOL
+      })
+      if (addr.dirToPrepare) await fs.mkdir(addr.dirToPrepare, { recursive: true, mode: 0o700 })
+      await new Promise<void>((resolve) => server.listen(addr.address, resolve))
+
+      const result = await runHostCommand({
+        cmd: 'host-stop',
+        env,
+        platform: process.platform,
+        home,
+        stopTimeoutMs: 50
+      })
+      expect(result.code).toBe(exitCodeFor('TIMEOUT'))
+      expect(result.body).toMatchObject({ stopped: false })
+    } finally {
+      server.close()
       await fs.rm(home, { recursive: true, force: true })
     }
   })
