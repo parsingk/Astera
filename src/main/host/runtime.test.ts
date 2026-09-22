@@ -1,13 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import {
-  hostRuntimeBase,
-  hostRuntimePaths,
   prepareHostRuntime,
   staleBuildDirs,
   staleNodeDirs,
   sweepHostRuntime,
   type RuntimeFs
 } from './runtime'
+import { hostRuntimePaths } from '../../core/host/runtime'
 
 /** A filesystem as a set of absolute paths, where a directory is anything that is a prefix of
  *  something. Enough to answer the only three questions this module asks — does it exist, copy it,
@@ -100,52 +99,8 @@ function prepare(fs: FakeFs, files: typeof FILES = FILES): ReturnType<typeof pre
   })
 }
 
-describe('hostRuntimeBase', () => {
-  it('is under LOCALAPPDATA on win32 — never the roaming profile', () => {
-    const base = hostRuntimeBase({
-      platform: 'win32',
-      localAppData: 'C:\\Users\\x\\AppData\\Local',
-      userData: 'C:\\Users\\x\\AppData\\Roaming\\astera',
-      appName: 'astera'
-    })
-    expect(base).toBe('C:\\Users\\x\\AppData\\Local\\astera\\host-runtime')
-  })
-
-  it('falls back to userData when LOCALAPPDATA is unset', () => {
-    const base = hostRuntimeBase({
-      platform: 'win32',
-      localAppData: undefined,
-      userData: 'C:\\Users\\x\\AppData\\Roaming\\astera',
-      appName: 'astera'
-    })
-    expect(base).toBe('C:\\Users\\x\\AppData\\Roaming\\astera\\host-runtime')
-  })
-
-  it('and treats an empty LOCALAPPDATA as unset rather than joining onto nothing', () => {
-    const base = hostRuntimeBase({
-      platform: 'win32',
-      localAppData: '   ',
-      userData: 'C:\\p',
-      appName: 'astera'
-    })
-    expect(base).toBe('C:\\p\\host-runtime')
-  })
-
-  it('is null off win32 — those platforms replace a running binary and need none of this', () => {
-    for (const platform of ['darwin', 'linux'] as const) {
-      expect(hostRuntimeBase({ platform, localAppData: '/tmp', userData: '/home/x', appName: 'astera' })).toBeNull()
-    }
-  })
-})
-
-describe('hostRuntimePaths', () => {
-  it('nests builds inside the Node directory, so `require("node-pty")` resolves by walking up', () => {
-    expect(paths.nodeDir).toBe(BASE + '\\node-24.15.0')
-    expect(paths.exePath).toBe(BASE + '\\node-24.15.0\\node.exe')
-    expect(paths.buildDir).toBe(BASE + '\\node-24.15.0\\builds\\1.3.21')
-    expect(paths.entryPath).toBe(BASE + '\\node-24.15.0\\builds\\1.3.21\\host.js')
-  })
-})
+// `hostRuntimeBase` and `hostRuntimePaths` moved to `src/core/host/runtime.test.ts` along with the
+// functions themselves — this file keeps only what still lives here.
 
 describe('staleNodeDirs', () => {
   it('keeps the current Node and names every other one', () => {

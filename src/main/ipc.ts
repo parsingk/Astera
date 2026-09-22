@@ -26,12 +26,10 @@ import {
 } from './conversation'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from '../core/host/spawn'
+import { hostRuntimeBase, hostRuntimePaths, type HostRuntimePaths } from '../core/host/runtime'
 import {
-  hostRuntimeBase,
-  hostRuntimePaths,
   prepareHostRuntime,
   sweepHostRuntime,
-  type HostRuntimePaths,
   type RuntimeFs,
   type RuntimeFiles
 } from './host/runtime'
