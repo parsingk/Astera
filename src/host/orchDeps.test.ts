@@ -8,6 +8,7 @@ const base = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): Parameter
   now: () => 'T',
   runningSessions: () => 0,
   appVersion: () => '0.0.0',
+  backup: async () => {},
   act: vi.fn(),
   hasApp: () => true,
   log: () => {},
@@ -57,10 +58,20 @@ describe('hostOrchDeps', () => {
   })
 
   it('인자가 없는 의존은 빈 배열로 간다', async () => {
-    const act = vi.fn().mockResolvedValue(undefined)
+    const act = vi.fn().mockResolvedValue([])
     const deps = hostOrchDeps(base({ act }))
+    await deps.listAccounts()
+    expect(act).toHaveBeenCalledWith('listAccounts', [])
+  })
+
+  // 파일은 Host 의 것이다. 앱이 대신 복사하면 CLI 가 방금 쓴 것보다 한 커밋 옛 상태가 담길 수 있다.
+  it('reset 의 백업은 앱에 묻지 않는다', async () => {
+    const act = vi.fn()
+    const backup = vi.fn().mockResolvedValue(undefined)
+    const deps = hostOrchDeps(base({ act, backup, hasApp: () => false }))
     await deps.backup?.()
-    expect(act).toHaveBeenCalledWith('backup', [])
+    expect(backup).toHaveBeenCalled()
+    expect(act).not.toHaveBeenCalled()
   })
 
   /**

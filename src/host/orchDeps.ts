@@ -8,8 +8,15 @@ import { AppUnreachable } from '../core/host/orchProtocol'
 
 /** What the Host answers out of itself. `runningSessions` and `appVersion` look like app questions
  *  and are not: the Host knows its own version and its own session registry, and `status` and
- *  `version` have to answer with no app attached — which is the first thing anyone will try. */
-const OWNED = ['getState', 'setState', 'now', 'log', 'enabled', 'runningSessions', 'appVersion'] as const
+ *  `version` have to answer with no app attached — which is the first thing anyone will try.
+ *
+ *  **`backup` joined them when the CLI stopped going through the app.** It copies
+ *  `orchestration.json` aside before `reset` wipes it, and that file is the Host's — forwarding it
+ *  had the app copy a file another process owns. That was harmless while the app was the only writer;
+ *  with the CLI writing straight to the Host, a copy taken in the app can be a state one commit old,
+ *  which is the one thing a safety net must not be. Here it goes through the store's own write queue,
+ *  so the copy is of the state the command that asked for it just saw. */
+const OWNED = ['getState', 'setState', 'now', 'log', 'enabled', 'runningSessions', 'appVersion', 'backup'] as const
 
 /**
  * **Forwarded, and a refusal reaches the caller.** `handleCommand` either awaits these and lets the
@@ -17,7 +24,7 @@ const OWNED = ['getState', 'setState', 'now', 'log', 'enabled', 'runningSessions
  * by the refusal, so the call is answered CONFLICT (`orch.ts`'s `refused` flag).
  */
 const PROPAGATES = [
-  'startWorker', 'releaseWorker', 'backup', 'mergeWorktrees', 'removeWorktrees', 'startCoordinator',
+  'startWorker', 'releaseWorker', 'mergeWorktrees', 'removeWorktrees', 'startCoordinator',
   'makeRunWorktree', 'listAccounts', 'readWorker',
   // **`listRunConfigs` stays here although `[]` is its documented absent value.** A coordinator told
   // "there are no check configs" omits `--validate`, and that Run then completes with verification
@@ -140,6 +147,9 @@ export function hostOrchDeps(a: {
   runningSessions(): number
   /** The Host's own version, from `ASTERA_HOST_VERSION`. */
   appVersion(): string
+  /** `reset`'s one safety net: the state file copied aside before it is wiped. The Host's own store
+   *  does it — see OWNED for why it stopped being the app's. */
+  backup(): Promise<void>
   act(name: string, args: unknown[]): Promise<unknown>
   hasApp(): boolean
   /** The Host's log. Passed on as `OrchServerDeps.log` as well, so that every `deps.log?.()` the
@@ -239,6 +249,7 @@ export function hostOrchDeps(a: {
     enabled: () => true,
     runningSessions: a.runningSessions,
     appVersion: a.appVersion,
+    backup: a.backup,
     ...remote,
     ...nested
   } as unknown as OrchServerDeps

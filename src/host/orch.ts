@@ -103,6 +103,9 @@ export function createHostOrch(a: {
       now: a.now,
       runningSessions: a.runningSessions,
       appVersion: () => a.version,
+      // `reset` 이 지우기 전에 파일을 옆으로 복사한다. **store 의 쓰기 큐를 통과하므로** 아직 땅에
+      // 닿지 않은 저장을 앞지르지 않는다 — 앱이 이 복사를 대신하던 동안은 그 보장이 없었다.
+      backup: () => store.backup(),
       act: a.act,
       hasApp: a.hasApp,
       log: a.log,

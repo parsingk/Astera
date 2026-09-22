@@ -2344,14 +2344,19 @@ export function registerIpc(
     const store = {
       get: (): OrchState => orchMirror.getState(),
       save: (next: OrchState): Promise<void> => orchMirror.setState(next),
-      /** Copies the file aside before `reset` does something destructive. **Still the app's to
-       *  answer** — `src/host/orchDeps.ts` classifies `backup` as forwarded — although the file is
-       *  the Host's now, so this is the same path and the same `.bak` convention the store used, done
-       *  directly. Best effort for the store's own reason: blocking `reset` because the copy failed
-       *  leaves a person no way to discard a state they cannot use. What is lost with the store is
-       *  the write queue this used to go through, which no longer means anything across two
-       *  processes; the rename the Host writes with is atomic, so what lands here is one whole state
-       *  either way, just possibly the one from a moment ago. */
+      /** Copies the file aside before `reset` and `run-delete` do something destructive.
+       *
+       *  **Only for the commands this app answers itself** — the renderer's `orch.command`, which
+       *  still runs `handleCommand` here. Anything arriving through the Host is backed up by the Host
+       *  (`src/host/orchDeps.ts` classifies `backup` as OWNED since the CLI stopped going through the
+       *  app), so this is no longer asked for across the socket.
+       *
+       *  Same path and the same `.bak` convention the store used, done directly, and best effort for
+       *  the store's own reason: blocking the command because the copy failed leaves a person no way
+       *  to discard a state they cannot use. What is lost with the store is the write queue this used
+       *  to go through, which no longer means anything across two processes; the rename the Host
+       *  writes with is atomic, so what lands here is one whole state either way, just possibly the
+       *  one from a moment ago. */
       backup: async (): Promise<void> => {
         await fs.copyFile(orchFile, orchFile + '.bak').catch(() => {})
       }
