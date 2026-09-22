@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   CLI_ERROR_CODES,
+  askTimeoutBody,
   codeForStatus,
   dataFor,
   errEnvelope,
@@ -8,6 +9,7 @@ import {
   messageFrom,
   nextStepsFor,
   okEnvelope,
+  silentHostEnd,
   waitEnd
 } from './cliOutput'
 
@@ -281,5 +283,80 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
   it('409 는 지금 무엇이 도는가로, 그리고 host 명령은 Host 쪽으로 이어진다', () => {
     expect(nextStepsFor({ code: 'CONFLICT', cmd: 'jobs-run' })).toEqual(['astera status'])
     expect(nextStepsFor({ code: 'CONFLICT', cmd: 'host-stop' })).toEqual(['astera host status'])
+  })
+})
+
+// **시한을 넘긴 ask 는 실패가 아니다** — 질문은 여전히 열려 있고 여전히 사람을 기다린다. 그것을
+// 실패로 읽고 다시 묻는 워커는 같은 사람에게 질문을 둘 만든다. 그래서 그 답에 "다시 기다리는 법"
+// 이 실려야 하고, 실을 수 없으면 실을 수 없다고 말해야 한다.
+describe('askTimeoutBody — 시한이 지난 ask', () => {
+  it('질문 id 를 알면 그대로 칠 수 있는 줄을 싣는다', () => {
+    expect(
+      askTimeoutBody({ body: { answered: false, timedOut: true, questionId: 'msg_ab12cd34' }, args: {} })
+    ).toEqual({
+      answered: false,
+      timedOut: true,
+      questionId: 'msg_ab12cd34',
+      nextSteps: ['astera ask --resume msg_ab12cd34']
+    })
+  })
+
+  // 부르는 쪽이 고른 시한은 이 명령의 박자다. 그것을 잃은 줄은 같은 기다림이 아니다.
+  it('부르는 쪽이 정한 시한은 그 줄에 남는다', () => {
+    const r = askTimeoutBody({
+      body: { answered: false, timedOut: true, questionId: 'msg_1' },
+      args: { timeoutMs: 60000 }
+    }) as { nextSteps: string[] }
+    expect(r.nextSteps).toEqual(['astera ask --resume msg_1 --timeout-ms 60000'])
+  })
+
+  // **못 칠 줄을 주느니 못 준다고 말한다.** 자리표시자가 남은 `--resume <questionId>` 를 준 뒤에
+  // 워커가 할 수 있는 일은 짐작이고, 짐작한 id 는 2 로 끝나거나 남의 질문을 기다린다.
+  it('질문 id 가 없으면 명령 대신 그 사실을 말한다', () => {
+    const r = askTimeoutBody({ body: { answered: false, timedOut: true }, args: {} }) as {
+      nextSteps: string[]
+      cannotResume: string
+    }
+    expect(r.nextSteps).toEqual([])
+    expect(r.cannotResume).toContain('cannot be resumed safely')
+  })
+
+  // 답이 온 ask 와 다른 명령의 본문에는 손대지 않는다 — 기다림이 아닌 출력에 기다림의 안내를
+  // 붙이면 그 안내가 아무것도 뜻하지 않게 된다.
+  it('답이 온 ask 는 그대로 지나간다', () => {
+    const answered = { answered: true, answer: '그대로 가라', questionId: 'msg_1' }
+    expect(askTimeoutBody({ body: answered, args: {} })).toEqual(answered)
+    expect(askTimeoutBody({ body: null, args: {} })).toBeNull()
+  })
+})
+
+// 이쪽은 **답이 아예 오지 않은** 갈래다(run.ts 의 `stuck`). 질문은 만들어졌을 수도 있고 아닐
+// 수도 있는데, 어느 쪽이든 다시 묻는 것은 최악이다.
+describe('silentHostEnd — Host 가 답하지 않은 채 시한이 지났다', () => {
+  it('--resume 으로 기다리던 중이면 그 id 를 그대로 다시 준다', () => {
+    const end = silentHostEnd({ cmd: 'ask', args: { resume: 'msg_7' }, reason: '시한' })
+    expect(end.details).toEqual({ questionId: 'msg_7' })
+    expect(nextStepsFor({ code: 'TIMEOUT', cmd: 'ask', details: end.details })).toEqual([
+      'astera ask --resume msg_7',
+      'astera host status'
+    ])
+  })
+
+  it('새 질문이었으면 id 를 모른다고 말하고 명령을 지어내지 않는다', () => {
+    const end = silentHostEnd({ cmd: 'ask', args: { question: '어느 쪽인가' }, reason: '시한이 지났다' })
+    expect(end.message).toContain('시한이 지났다')
+    expect(end.message).toContain('cannot be resumed safely')
+    expect(end.details).toEqual({})
+    expect(nextStepsFor({ code: 'TIMEOUT', cmd: 'ask', details: end.details })).toEqual([
+      'astera host status'
+    ])
+  })
+
+  it('다른 명령은 이유 한 줄 그대로다', () => {
+    const end = silentHostEnd({ cmd: 'jobs-wait', args: { id: 'job_1' }, reason: '안 왔다' })
+    expect(end).toEqual({ message: '안 왔다', details: {} })
+    expect(nextStepsFor({ code: 'TIMEOUT', cmd: 'jobs-wait', details: end.details })).toEqual([
+      'astera host status'
+    ])
   })
 })

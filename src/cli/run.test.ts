@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { exitCodeFor } from '../core/orchestration/cliOutput'
 import { promises as fs, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -19,9 +19,11 @@ import {
   outputMode,
   renderErr,
   renderOk,
+  startKeepalive,
   writePendingReport
 } from './run'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
+import { KEEPALIVE_MS } from '../core/orchestration/cliKeepalive'
 import type { HostConnection } from '../core/host/connect'
 import type { ClientMessage, HostMessage } from '../core/host/protocol'
 import {
@@ -530,5 +532,135 @@ describe('run.ts — 모드가 정해진 뒤의 실패는 한 문으로만 나�
   it('모드 앞의 봉투는 셋뿐이다 — 사용법·파서·모드 자신', () => {
     const before = runSource.slice(0, runSource.indexOf('// FAIL_SEAM'))
     expect(before.split('out(errorOutput(').length - 1).toBe(3)
+  })
+})
+
+// **긴 기다림이 조용하면 멈춘 Host 와 구별되지 않는다.** 이 저장소는 그 침묵에 한 번 물렸고
+// (docs/2026-09-22-host-unresponsive-recovery-design.md), 그래서 기다리는 동안 살아 있다는 줄을
+// stderr 에 낸다 — stdout 은 결과 하나뿐이어야 하므로 거기 섞일 수 없다.
+describe('startKeepalive — 기다리는 동안 내는 줄', () => {
+  let clock = 0
+  const now = (): number => clock
+  /** 시계와 타이머를 **조금씩 함께** 민다. 한 번에 밀면 그 사이에 오갔어야 할 pong 이 전부
+   *  같은 순간에 몰려, 건강한 Host 도 한 간격 내내 조용했던 것으로 읽힌다. */
+  const pass = (ms: number): void => {
+    for (let i = 0; i < ms; i += 1000) {
+      clock += 1000
+      vi.advanceTimersByTime(1000)
+    }
+  }
+
+  /** `answers` 가 이 Host 의 상태다: ping 에 곧바로 pong 하는 Host 와, 받고도 아무 말이 없는
+   *  Host — 바로 그 둘을 이 줄이 갈라야 한다. */
+  const fakeConn = (
+    o: { features: string[]; answers: boolean }
+  ): {
+    conn: Pick<HostConnection, 'hello' | 'call' | 'onMessage'>
+    sent: ClientMessage[]
+  } => {
+    const sent: ClientMessage[] = []
+    const listeners = new Set<(m: HostMessage) => void>()
+    return {
+      sent,
+      conn: {
+        hello: { host: '1', pid: 1, startedAt: 'T', features: o.features },
+        call: (m) => {
+          sent.push(m)
+          if (o.answers && m.t === 'ping') for (const cb of [...listeners]) cb({ t: 'pong', seq: m.seq })
+        },
+        onMessage: (cb) => {
+          listeners.add(cb)
+          return () => listeners.delete(cb)
+        }
+      }
+    }
+  }
+
+  beforeEach(() => {
+    clock = 0
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const lines: string[] = []
+  const start = (o: {
+    cmd: string
+    args?: Record<string, unknown>
+    enabled?: boolean
+    features?: string[]
+    answers?: boolean
+  }): { conn: ReturnType<typeof fakeConn>; keepalive: { stop: () => void } } => {
+    lines.length = 0
+    const conn = fakeConn({ features: o.features ?? ['orch', 'ping'], answers: o.answers !== false })
+    const keepalive = startKeepalive({
+      conn: conn.conn,
+      cmd: o.cmd,
+      args: o.args ?? {},
+      enabled: o.enabled ?? true,
+      tickMs: 5_000,
+      lineMs: 15_000,
+      now,
+      write: (l) => lines.push(l)
+    })
+    return { conn, keepalive }
+  }
+
+  // 기다리지 않는 출력에 살아 있다는 줄이 붙으면 그 줄은 아무것도 뜻하지 않게 된다.
+  it('기다리지 않는 명령에는 아무것도 내지 않는다', () => {
+    const { conn } = start({ cmd: 'jobs-list' })
+    pass(60_000)
+    expect(lines).toEqual([])
+    expect(conn.sent).toEqual([])
+  })
+
+  it('--no-keepalive 는 한 줄도 내지 않고 묻지도 않는다', () => {
+    const { conn } = start({ cmd: 'runs-wait', enabled: false })
+    pass(60_000)
+    expect(lines).toEqual([])
+    expect(conn.sent).toEqual([])
+  })
+
+  it('기다리는 동안 한 줄씩 내고, 답이 오면 멈춘다', () => {
+    const { keepalive } = start({ cmd: 'runs-wait' })
+    pass(15_000)
+    expect(lines).toEqual(['waiting for runs wait, 15s so far; the Host answered 5s ago'])
+    pass(15_000)
+    expect(lines).toHaveLength(2)
+    keepalive.stop()
+    pass(60_000)
+    expect(lines).toHaveLength(2)
+  })
+
+  // 줄보다 자주 묻지 않으면, 건강한 Host 도 언제나 "한 간격 전에 답했다" 가 되어 그 칸이
+  // 아무것도 말하지 않는다.
+  it('ping 은 줄보다 자주 간다', () => {
+    const { conn } = start({ cmd: 'ask' })
+    pass(15_000)
+    expect(conn.sent).toEqual([
+      { t: 'ping', seq: 1 },
+      { t: 'ping', seq: 2 },
+      { t: 'ping', seq: 3 }
+    ])
+  })
+
+  // **이 줄이 있는 이유가 "멈춘 Host 인가" 다.** 이쪽이 살아 있다는 것만 찍으면 그 질문에
+  // 답하지 못한다.
+  it('Host 가 답을 그치면 줄이 그 사실을 말한다', () => {
+    const { conn } = start({ cmd: 'ask', answers: false })
+    pass(45_000)
+    // 받기는 받았다 — 답이 없을 뿐이고, 그것이 이 줄이 말해야 하는 사실이다
+    expect(conn.sent).toHaveLength(9)
+    expect(lines[0]).toContain('the Host has not answered a ping for 15s')
+    expect(lines[2]).toContain('the Host has not answered a ping for 45s')
+  })
+
+  // 모르는 메시지를 흘려버리는 Host 에 물으면 답이 영영 오지 않고, 그 침묵은 고장이 아니다
+  it('ping 을 모르는 Host 에는 묻지 않고, 아는 척도 하지 않는다', () => {
+    const { conn } = start({ cmd: 'check', args: { wait: true }, features: ['orch'], answers: false })
+    pass(15_000)
+    expect(conn.sent).toEqual([])
+    expect(lines).toEqual(['waiting for check, 15s so far'])
   })
 })

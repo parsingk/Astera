@@ -185,6 +185,35 @@ describe('humanFor', () => {
     expect(humanFor('host-stop', { stopped: true, pid: 42 })).toBe(['stopped  true', 'pid      42'].join('\n'))
   })
 
+  // 시한이 지난 ask 는 아무 일도 없이 돌아오므로 실패처럼 보인다 — 사람에게도 다음 수를 준다
+  it('시한이 지난 ask 는 다시 기다리라는 문장과 그 줄이다', () => {
+    expect(
+      humanFor('ask', {
+        answered: false,
+        timedOut: true,
+        questionId: 'msg_1',
+        nextSteps: ['astera ask --resume msg_1']
+      })
+    ).toBe(
+      [
+        'the deadline passed and the question is still open. Do not ask again; keep waiting:',
+        '  astera ask --resume msg_1'
+      ].join('\n')
+    )
+  })
+
+  // 칠 수 있는 줄이 없으면 그 사실이 문장이다 — 두 모드가 같은 칸에서 말한다
+  it('다시 기다릴 수 없으면 왜인지를 말한다', () => {
+    expect(
+      humanFor('ask', { answered: false, timedOut: true, nextSteps: [], cannotResume: '이유' })
+    ).toBe('the deadline passed and the question is still open. 이유')
+  })
+
+  // 답이 온 ask 를 읽는 것은 워커이고, 워커가 읽는 것은 JSON 이다
+  it('답이 온 ask 는 예전처럼 봉투로 되돌린다', () => {
+    expect(humanFor('ask', { answered: true, answer: '그대로', questionId: 'msg_1' })).toBe(null)
+  })
+
   // 억지로 표를 씌우면 가이드가 시키는 것을 못 읽게 된다
   it('공개 표면이 아닌 명령은 null 이다', () => {
     expect(humanFor('dispatch-show', { id: 'd1' })).toBe(null)

@@ -213,7 +213,10 @@ function usageCommandFor(cmd: string | undefined): string {
  * 어느 것도 아니다" 이기 때문이다 — 원인이 무엇인지 이쪽은 모르고, 아무 명령이나 얹으면 그것이
  * 맞는 경우보다 틀린 경우가 많다. 무엇이 있었는지는 `message` 가 앱의 문구를 그대로 싣는다.
  */
-const STEPS: Record<CliErrorCode, (cmd: string | undefined) => readonly string[]> = {
+const STEPS: Record<
+  CliErrorCode,
+  (cmd: string | undefined, details: Record<string, unknown>) => readonly string[]
+> = {
   FAILED: () => [],
   INVALID_ARGUMENTS: (cmd) => [usageCommandFor(cmd)],
   HOST_NOT_RUNNING: () => ['astera host start'],
@@ -225,7 +228,18 @@ const STEPS: Record<CliErrorCode, (cmd: string | undefined) => readonly string[]
   CONFLICT: (cmd) => [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
   // 시한을 넘긴 것과 Host 가 살아서 답하지 않는 것이 같은 코드다(run.ts 의 SILENT_HOST_CODE).
   // 둘을 가르는 명령이 이것이다 — 앞의 경우에는 답하고 뒤의 경우에는 답하지 않는다(docs/cli.md).
-  TIMEOUT: () => ['astera host status'],
+  //
+  // **`ask` 는 그 앞에 한 줄이 더 있다, 질문 id 를 알 때만.** 답이 오지 않은 채 끝난 `ask` 의
+  // 질문은 여전히 열려 있고, 그것을 실패로 읽고 다시 묻는 워커는 같은 사람에게 질문을 둘 만든다
+  // (`silentHostEnd` 가 이 `details` 를 채운다). 조건이 붙는 이유는 자리표시자다: 모르는 id 를
+  // `<questionId>` 로 남겨 주면 워커가 채울 수 있는 것은 짐작뿐이고, 짐작한 id 는 2 로 끝나거나
+  // 남의 질문을 기다린다. **여기서는 `--timeout-ms` 를 싣지 않는다** — 이 표가 보는 것은 코드와
+  // 명령 이름뿐이고 인자를 보지 못한다. 답이 온 쪽(`askTimeoutBody`)은 인자를 보므로 부르는 쪽이
+  // 정한 시한까지 그대로 옮긴다.
+  TIMEOUT: (cmd, details) =>
+    cmd === 'ask' && typeof details.questionId === 'string'
+      ? ['astera ask --resume <questionId>', 'astera host status']
+      : ['astera host status'],
   // 8 은 질문이 열린 것과 회차가 멈춘 것, 둘 다다. 어느 쪽인지는 `details.state` 가 말한다.
   WAITING_FOR_INPUT: () => [
     'astera questions list --status open',
@@ -251,7 +265,7 @@ export function nextStepsFor(a: {
   details?: Record<string, unknown>
 }): string[] {
   const details = a.details ?? {}
-  return STEPS[a.code](a.cmd).map((step) =>
+  return STEPS[a.code](a.cmd, details).map((step) =>
     step.replace(/<([A-Za-z]+)>/g, (whole, key: string) =>
       typeof details[key] === 'string' ? (details[key] as string) : whole
     )
@@ -320,6 +334,73 @@ export function waitEnd(body: unknown): CliError | null {
       // 일을 끝난 것으로 읽는다.
       return { code: 'FAILED', message: `the app answered with an ending this CLI does not know: ${String(b.state)}`, details: at() }
   }
+}
+
+/** 다시 기다리는 한 줄. `--json` 을 붙이지 않는 것은 다른 모든 `nextSteps` 줄과 같은 판단이다 —
+ *  JSON 이 이미 기본이고, 켜는 플래그를 권하면 그것이 기본이 아니라고 가르치게 된다. */
+const resumeCommand = (a: { questionId: string; args: Record<string, unknown> }): string =>
+  `astera ask --resume ${a.questionId}${typeof a.args.timeoutMs === 'number' ? ` --timeout-ms ${a.args.timeoutMs}` : ''}`
+
+/** 질문 id 없이 끝난 `ask` 에게 주는 문장. **명령 대신 사실이다** — 이 자리에서 줄 수 있는 명령은
+ *  자리표시자가 남은 줄뿐이고, 그것을 채우는 방법은 짐작밖에 없다. */
+const CANNOT_RESUME =
+  'the answer did not name the question, so this wait cannot be resumed safely; the question may still be pending, so do not ask again'
+
+/**
+ * 시한이 지난 `ask` 의 답에 **다시 기다리는 법**을 싣는다.
+ *
+ * **시한을 넘긴 것은 실패가 아니다** — 질문은 여전히 열려 있고 여전히 사람을 기다린다(가이드 4.8:
+ * 타임아웃 응답은 200 이고 종료 코드는 0 이다). 그런데 그것을 "실패했다" 로 읽고 다시 묻는 워커는
+ * 같은 사람에게 질문을 **둘** 만들고, 사람은 그중 하나에 답하고 워커는 다른 하나를 기다린다.
+ * 그래서 이 답이 스스로 다음 수를 말해야 한다.
+ *
+ * **`nextSteps` 라는 같은 이름을 쓴다.** 이 CLI 에는 "다음에 칠 명령 줄" 을 뜻하는 이름이 이미
+ * 하나 있고(`error.nextSteps`), 부르는 쪽이 대개 그 이름을 이미 읽을 줄 안다. 성공 본문에 다른
+ * 이름을 하나 더 만들면 같은 뜻의 낱말이 둘이 되고, 읽는 쪽은 자리마다 어느 것인지 물어야 한다.
+ * 종료 코드는 그대로 0 이다 — 여기서 코드를 하나 더 만들면 열한 번째가 된다.
+ *
+ * **CLI 층에서 씌운다, 서버가 아니라.** `astera …` 로 시작하는 줄은 명령 층의 어휘가 아니다 —
+ * 같은 `handleCommand` 를 화면(ipc.ts)도 부르고, 그쪽에는 칠 셀이 없다. 봉투를 이 파일이 씌우는
+ * 것과 같은 판단이다(머리말).
+ */
+export function askTimeoutBody(a: { body: unknown; args: Record<string, unknown> }): unknown {
+  const b = a.body
+  if (b === null || typeof b !== 'object') return b
+  const timed = b as { timedOut?: unknown; questionId?: unknown }
+  // 답이 온 ask 와 그 밖의 모든 것은 손대지 않는다 — 기다림이 아닌 출력에 기다림의 안내를 붙이면
+  // 그 안내가 아무것도 뜻하지 않게 된다.
+  if (timed.timedOut !== true) return b
+  const id = typeof timed.questionId === 'string' && timed.questionId.length > 0 ? timed.questionId : null
+  if (id === null) return { ...b, cannotResume: CANNOT_RESUME, nextSteps: [] }
+  return { ...b, nextSteps: [resumeCommand({ questionId: id, args: a.args })] }
+}
+
+/**
+ * Host 가 **답을 아예 주지 않은 채** 이쪽 시한이 지났을 때의 문구와 `details` (run.ts 의 `stuck`).
+ *
+ * 위의 `askTimeoutBody` 와 같은 사고를 다른 자리에서 막는다. 그쪽은 답이 온 갈래이고 이쪽은 답이
+ * 오지 않은 갈래인데, 워커가 읽는 결론은 똑같이 "실패했으니 다시 묻자" 가 되기 쉽다 — 그리고
+ * 이쪽이 더 나쁘다: 질문은 만들어졌을 수도 있고 아닐 수도 있어서, 다시 물으면 둘이 될 수도 있고
+ * 첫 질문이 영영 답 없이 남을 수도 있다.
+ *
+ * **아는 것과 모르는 것을 가른다.** `--resume` 으로 기다리던 중이었다면 id 는 이 프로세스가
+ * 보낸 값이므로 확실히 안다. 새 질문이었다면 id 를 돌려받지 못했으므로 모르고, 그때는 명령이
+ * 아니라 그 사실을 말한다.
+ */
+export function silentHostEnd(a: {
+  cmd: string
+  args: Record<string, unknown>
+  /** `callHost` 가 만든 "안 왔다" 한 줄. */
+  reason: string
+}): { message: string; details: Record<string, unknown> } {
+  if (a.cmd !== 'ask') return { message: a.reason, details: {} }
+  const resuming = typeof a.args.resume === 'string' && a.args.resume.length > 0 ? a.args.resume : null
+  if (resuming !== null)
+    return {
+      message: `${a.reason} — the question is still pending; resume waiting rather than asking again`,
+      details: { questionId: resuming }
+    }
+  return { message: `${a.reason} — ${CANNOT_RESUME}`, details: {} }
 }
 
 /**

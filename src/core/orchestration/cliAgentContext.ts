@@ -427,6 +427,14 @@ const GLOBAL: readonly AgentContextFlag[] = [
   { name: 'json', takesValue: false, required: false, about: 'the envelope — the default, so this changes nothing' },
   { name: 'human', takesValue: false, required: false, about: 'aligned columns for a person; never parse them' },
   { name: 'quiet', takesValue: false, required: false, about: 'ids only, one per line' },
+  // stdout is untouched by keepalives either way, so this is for a caller that wants stderr empty
+  // rather than for one that is parsing anything (cliKeepalive.ts).
+  {
+    name: 'no-keepalive',
+    takesValue: false,
+    required: false,
+    about: 'do not print the waiting line on stderr every 15s while a waiting command waits'
+  },
   { name: 'help', takesValue: false, required: false, about: 'print usage and exit 0 instead of running' }
 ]
 
@@ -467,7 +475,9 @@ export function agentContext(): AgentContext {
       notes: [
         'data is always an object. A list arrives under its own noun: data.jobs, data.tasks, data.questions, data.runs, data.projects; anything else is data.items.',
         'error.code is for branching, error.message is for a person, and error.nextSteps is a list of command lines to try — empty when there is nothing general to run.',
-        'A timeout from `check --wait` or `ask` is a success: exit 0, with data.timedOut set.'
+        'A timeout from `check --wait` or `ask` is a success: exit 0, with data.timedOut set.',
+        "A timed out `ask` leaves the question open. Its data carries nextSteps — the same kind of command lines as error.nextSteps — with the one command that waits again on that question; when the id is unknown the list is empty and data.cannotResume says why. Do not ask again either way: a second question for the same person is answered once and waited on twice.",
+        'While `ask`, `check --wait`, `jobs wait` or `runs wait` is waiting, a line goes to stderr every 15 seconds saying it is still waiting and when the Host last answered. stdout carries only the one result, so nothing has to be filtered out of it; --no-keepalive turns the lines off.'
       ]
     },
     globalFlags: GLOBAL,

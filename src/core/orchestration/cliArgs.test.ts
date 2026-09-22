@@ -27,6 +27,17 @@ describe('parseArgs', () => {
     expect(r).toMatchObject({ cmd: 'jobs-list', quiet: true })
     expect((r as { args: Record<string, unknown> }).args.quiet).toBeUndefined()
   })
+  // 모드지 인자가 아니다 — args 에 들어가면 앱에게 보내는 인자가 되고, 뒤의 토큰을 값으로 먹는다
+  it('--no-keepalive 도 모드다', () => {
+    const r = parseArgs(['runs', 'wait', '--no-keepalive', '--id', 'run_1'])
+    expect(r).toMatchObject({ cmd: 'runs-wait', noKeepalive: true })
+    const args = (r as { args: Record<string, unknown> }).args
+    expect(args.noKeepalive).toBeUndefined()
+    expect(args.id).toBe('run_1')
+  })
+  it('주지 않으면 켜져 있다 — 기다리는 동안 아무 말도 없는 것이 고쳐야 할 쪽이다', () => {
+    expect(parseArgs(['runs', 'wait', '--id', 'run_1'])).toMatchObject({ noKeepalive: false })
+  })
   it('값이 없는 플래그는 true다', () => {
     const r = parseArgs(['check', '--wait', '--json']) as { args: Record<string, unknown> }
     expect(r.args.wait).toBe(true)

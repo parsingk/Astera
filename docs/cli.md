@@ -244,6 +244,26 @@ try:
 for job in $(astera jobs list --quiet); do astera jobs get --id "$job"; done
 ```
 
+**A wait says on stderr that it is still waiting.** `jobs wait` and `runs wait` block for as long as
+the work takes, which can be an hour, and a command that prints nothing for an hour looks exactly
+like one talking to a Host that has stopped answering. So every 15 seconds a line goes to stderr:
+
+```text
+astera: waiting for runs wait, 45s so far; the Host answered 5s ago
+```
+
+The number at the end is not decoration. While it waits, the command asks the Host the same
+heartbeat question the app asks it, and reports how long ago the Host last answered. A Host whose
+event loop has stopped turning answers nothing, so that number grows, and past 15 seconds the line
+says so plainly instead of reassuring you. A Host too old to know the heartbeat gets no question and
+the line ends after `so far`.
+
+**Nothing of this reaches stdout**, which carries one result and nothing else, so there is nothing to
+filter out of a pipeline: `astera runs wait --id "$run" | jq .data` is unaffected. `--no-keepalive`
+turns the lines off for a caller that wants stderr empty; `2>/dev/null` does the same from the shell.
+`--quiet` does not turn them off, because it decides what stdout carries and this is the other
+channel.
+
 ## Exit codes
 
 | Code | Meaning |

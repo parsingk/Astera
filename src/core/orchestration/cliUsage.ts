@@ -296,6 +296,7 @@ export function rootUsage(): string {
     ...groups.flatMap((lines, i) => (i === 0 ? lines : ['', ...lines])),
     '',
     'output is JSON. --human prints aligned columns for reading, --quiet prints ids only.',
+    'while a wait is on, a line every 15s goes to stderr, never stdout. --no-keepalive stops them.',
     '',
     "astera <noun> --help lists that noun's verbs.",
     'astera <noun> <verb> --help describes one command and its flags.',

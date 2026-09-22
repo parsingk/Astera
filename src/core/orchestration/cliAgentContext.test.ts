@@ -60,7 +60,13 @@ describe('agent-context — 무엇이 실리는가', () => {
   it('판 번호와 봉투의 모양이 실린다', () => {
     expect(ctx.protocol).toBe(1)
     expect(ctx.output.error).toContain('nextSteps')
-    expect(ctx.globalFlags.map((f) => f.name)).toEqual(['json', 'human', 'quiet', 'help'])
+    expect(ctx.globalFlags.map((f) => f.name)).toEqual([
+      'json',
+      'human',
+      'quiet',
+      'no-keepalive',
+      'help'
+    ])
   })
 
   // 같은 이름이 둘이면 읽는 쪽이 어느 것을 믿을지 모른다

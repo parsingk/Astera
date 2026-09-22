@@ -557,6 +557,42 @@ different builds. Report it rather than working around it.
 sections 5 and 6 say about "a timeout is not a failure" is carried directly by this rule — do not
 treat a timeout as an error based on `$?`; read `data.timedOut`.
 
+**A timed-out `ask` carries its own recovery in `data.nextSteps`.** That is the same kind of list as
+`error.nextSteps` above — command lines to run, not advice — and for this answer it holds exactly one
+line, the one that waits again on the question you already asked:
+
+```json
+{"ok":true,"data":{"answered":false,"timedOut":true,"questionId":"msg_ab12cd34",
+                   "nextSteps":["astera ask --resume msg_ab12cd34"]}}
+```
+
+Run that line. Do not ask again: the question is still open and still in front of the same person, so
+a second one is answered once and waited on twice (section 6).
+
+**When the id is not there, the list is empty and `data.cannotResume` says why.** That happens when
+the answer came back without naming the question, and it is said out loud rather than papered over
+with a line you cannot run. The same sentence appears in the `message` of a `7` from `ask`, which is
+the other way this ends: the Host never answered at all, so this CLI cannot know whether the question
+exists. Either way, do not re-ask — tell your coordinator with `send --type escalation` if you are
+stuck without it.
+
+### 4.9 While you wait
+
+`ask`, `check --wait`, `jobs wait` and `runs wait` hold one request open for minutes at a time. While
+they do, a line goes to **stderr** every 15 seconds:
+
+```text
+astera: waiting for ask, 45s so far; the Host answered 5s ago
+```
+
+It is there because a long silence and a wedged Host look identical from outside. The tail of the
+line is the answer to that: the command asks the Host for a heartbeat while it waits and reports how
+long ago it last answered. Past 15 seconds of silence the line says that instead, and then what you
+are looking at is probably not a wait any more (`astera host status`).
+
+**stdout is untouched** — it carries the one result, so nothing has to be filtered out of it.
+`--no-keepalive` turns the lines off.
+
 ## 5. The Delivery contract of `check`
 
 - `check` returns **the oldest unacknowledged Delivery (up to 50 messages) as a batch**. **The same
@@ -603,11 +639,14 @@ server blocks `check` and `inbox` as coordinator-only (403).
   ```
   On `data` = `{"answered":true,"answer":"…"}`, proceed accordingly.
 - **If `ask` times out, do not ask again — keep waiting with `--resume`.** The question stays pending,
-  and re-asking is rejected (one unanswered question per Dispatch):
+  and re-asking is rejected (one unanswered question per Dispatch). The answer hands you the line:
   ```bash
+  astera ask --json | jq -r '.data.nextSteps[]'   # astera ask --resume msg_ab12cd34
   astera ask --resume <questionId> --json
   ```
-  Repeat as many times as needed.
+  Repeat as many times as needed. A timeout is not a failure — nothing about the question changed,
+  only this call gave up waiting on it. If `data.nextSteps` is empty, `data.cannotResume` says why
+  (section 4.8); guessing an id from there waits on somebody else's question.
 - **When ownership is still valid and the coordinator should step in but it is not blocking, use
   `escalation`** (non-blocking):
   ```bash
@@ -753,7 +792,8 @@ meaningless and repeats the same failure indefinitely.
 - Do not conclude a worker failed from a `check --wait` timeout or `data.count === 0` (section 5).
 - Do not kill a worker over heartbeats, terminal activity, or an idle TUI (section 7).
 - Do not try to move state by hand after `worker_done` (section 8).
-- If `ask` times out, do not re-ask — keep waiting with `--resume <questionId>` (section 6).
+- If `ask` times out, do not re-ask — run the line the answer hands you in `data.nextSteps`, which is
+  `--resume <questionId>` (sections 4.8 and 6).
 - `worker-start --retry-of` does not inherit placement — pass `--worktree`, `--agent`, and `--account`
   again (4.3).
 - Do not try to call `check` or `inbox` from a worker session — they are rejected. Use only `send` and

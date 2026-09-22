@@ -13,10 +13,11 @@ import { usageFor } from '../core/orchestration/cliUsage'
 import { humanFor, quietFor } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
-import { HOST_FEATURE_ORCH } from '../core/host/protocol'
+import { HOST_FEATURE_ORCH, HOST_FEATURE_PING } from '../core/host/protocol'
 import { cliHostTarget, logToStderr, runHostCommand } from './host'
 import {
   CLI_PROTOCOL,
+  askTimeoutBody,
   codeForStatus,
   dataFor,
   waitEnd,
@@ -25,9 +26,16 @@ import {
   messageFrom,
   nextStepsFor,
   okEnvelope,
+  silentHostEnd,
   type CliError,
   type CliErrorCode
 } from '../core/orchestration/cliOutput'
+import {
+  KEEPALIVE_MS,
+  KEEPALIVE_PING_MS,
+  keepaliveLine,
+  waitingCommand
+} from '../core/orchestration/cliKeepalive'
 import { agentContext } from '../core/orchestration/cliAgentContext'
 
 /** 빌드가 박아 넣은 이 프로그램의 버전(electron.vite.config.ts). 앱과 CLI 는 한 프로그램이므로
@@ -266,6 +274,81 @@ export function callHost(a: {
     )
     a.conn.call({ t: 'orch-call', call, cmd: a.cmd, args: a.args, session: a.sessionId })
   })
+}
+
+/**
+ * Says on **stderr**, every `KEEPALIVE_MS`, that a waiting command is still waiting — and whether the
+ * Host is still answering (cliKeepalive.ts has the why and the interval's argument).
+ *
+ * **stdout is never touched.** It carries one result and one envelope, so a caller needs no filter to
+ * remove these; `2>/dev/null` and `--no-keepalive` are both there for a caller that wants stderr
+ * empty. Nothing is written for a command that does not wait, because a liveness line on an answer
+ * that came back at once is noise that teaches the reader to ignore the line.
+ *
+ * **The ping is what makes the line worth printing.** A bare timer proves this process is alive,
+ * which was never in doubt; what a person watching a five-minute silence needs to know is whether the
+ * Host is. So each tick asks (`ping`, answered with `pong` — the same heartbeat the app runs, and the
+ * exact failure it was built for: an event loop wedged inside node-pty answers nothing at all), and
+ * each line carries how long ago the last answer came. A Host too old to know `ping` does not
+ * announce the feature, and then the line says only what it can honestly say.
+ *
+ * The timing arguments are parameters so this can be tested in milliseconds rather than minutes.
+ */
+export function startKeepalive(a: {
+  conn: Pick<HostConnection, 'hello' | 'call' | 'onMessage'>
+  cmd: string
+  args: Record<string, unknown>
+  /** False for `--no-keepalive`. */
+  enabled: boolean
+  /** How often to ping. */
+  tickMs?: number
+  /** How often to print. */
+  lineMs?: number
+  now?: () => number
+  write?: (line: string) => void
+}): { stop: () => void } {
+  if (!a.enabled || !waitingCommand({ cmd: a.cmd, args: a.args })) return { stop: () => {} }
+  const now = a.now ?? Date.now
+  const write = a.write ?? logToStderr
+  const lineMs = a.lineMs ?? KEEPALIVE_MS
+  // A Host that does not answer pings is not woken between lines — there is nothing to ask it.
+  const canPing = a.conn.hello.features.includes(HOST_FEATURE_PING)
+  const tickMs = a.tickMs ?? (canPing ? KEEPALIVE_PING_MS : lineMs)
+  const startedAt = now()
+  // The `hello` that opened this connection arrived a moment ago and is an answer like any other, so
+  // the first line has a real number to report rather than a gap that looks like silence.
+  let lastAnswerAt = startedAt
+  let lastLineAt = startedAt
+  let seq = 0
+  const off = canPing
+    ? a.conn.onMessage((m) => {
+        if (m.t === 'pong') lastAnswerAt = now()
+      })
+    : (): void => {}
+  const timer = setInterval(() => {
+    const at = now()
+    // Half a tick of slack: a timer that fires a hair early must not push the line a whole tick out.
+    if (at - lastLineAt >= lineMs - tickMs / 2) {
+      lastLineAt = at
+      write(
+        keepaliveLine({
+          cmd: a.cmd,
+          elapsedMs: at - startedAt,
+          silentMs: canPing ? at - lastAnswerAt : null
+        })
+      )
+    }
+    if (canPing) a.conn.call({ t: 'ping', seq: ++seq })
+  }, tickMs)
+  // Nothing should be held open by this: the socket already keeps the process alive for exactly as
+  // long as the call it is reporting on.
+  timer.unref?.()
+  return {
+    stop: () => {
+      clearInterval(timer)
+      off()
+    }
+  }
 }
 
 /** Absolute location of the guide document. Now that the CLI moved into a bundle artifact
@@ -583,6 +666,14 @@ export async function main(): Promise<void> {
       const code = codeForStatus(501)
       fail({ code, message: `the Host at ${address} does not answer orchestration commands` })
     }
+    // **기다리는 명령만, 그리고 stderr 에만**(cliKeepalive.ts). 여기서 시작하고 답이 오면 끄는
+    // 이유는 자리 하나다: 기다림은 이 한 줄이고, 그 밖의 모든 명령은 이 자리를 스쳐 지나간다.
+    const keepalive = startKeepalive({
+      conn,
+      cmd: parsed.cmd,
+      args,
+      enabled: !parsed.noKeepalive
+    })
     const r = await callHost({
       conn,
       cmd: parsed.cmd,
@@ -590,13 +681,18 @@ export async function main(): Promise<void> {
       sessionId,
       timeoutMs: clientTimeoutMs({ cmd: parsed.cmd, args })
     })
+    keepalive.stop()
     conn.close()
     // **시한을 넘긴 것은 닿지 못한 것이 아니다.** 위의 시한은 분 단위이고, 그것을 넘겼다는 것은
     // 연결은 됐는데 저쪽이 멈췄다는 뜻이다 — 보고는 이미 적용됐을 수 있으므로 적어 두지 않는다.
     // 연결이 선 뒤의 침묵도 hello 전의 침묵과 같은 코드로 끝난다(`SILENT_HOST_CODE`) —
     // 예전에는 이쪽만 1 이었고, 그것은 스크립트에게 같은 일을 두 번 분기하라는 말이었다.
     if ('stuck' in r) {
-      fail({ code: SILENT_HOST_CODE, message: r.stuck })
+      // **`ask` 는 이 자리에서 한 마디를 더 한다**(cliOutput 의 silentHostEnd). 답이 오지 않았다는
+      // 것은 질문이 사라졌다는 뜻이 아니다 — 열린 채로 남아 있을 수 있고, 그것을 실패로 읽고 다시
+      // 묻는 워커는 같은 사람에게 질문을 둘 만든다.
+      const end = silentHostEnd({ cmd: parsed.cmd, args, reason: r.stuck })
+      fail({ code: SILENT_HOST_CODE, message: end.message, details: end.details })
     }
     if ('unreachable' in r) return withoutHost(r.unreachable)
     return r
@@ -606,7 +702,7 @@ export async function main(): Promise<void> {
     // `version` 만 저쪽 답에 이쪽 값을 더한다. 둘은 한 프로그램이라 같은 값이어야 하고, 다르면
     // 그 자체가 사람이 봐야 할 사실이다 — 셔틀이 가리키는 바이너리가 갈렸다는 뜻이다. 칸 이름은
     // `app` 그대로다: 답하는 것은 이제 Host 이지만 그 둘은 한 빌드이고, 이름은 스크립트의 계약이다.
-    const body =
+    const answered =
       parsed.cmd === 'version'
         ? {
             cli: CLI_VERSION,
@@ -616,6 +712,10 @@ export async function main(): Promise<void> {
         : // 공개 읽기 명령은 허용된 칸만 내보낸다(설계 §11). 명령 층이 아니라 여기서 가리는 이유는
           // 봉투와 같다 — 화면도 같은 명령 층을 쓰고, 그쪽은 온전한 개체가 필요하다.
           publicFor(parsed.cmd, reply.body)
+    // **시한이 지난 `ask` 는 다시 기다리는 법을 싣고 나간다**(cliOutput 의 askTimeoutBody). 200 이고
+    // 0 으로 끝나는 것은 그대로다 — 시한을 넘긴 것은 실패가 아니라 정보이고, 열한 번째 종료 코드를
+    // 만들 일도 아니다. 답이 온 `ask` 와 그 밖의 명령은 이 함수를 그대로 지나간다.
+    const body = parsed.cmd === 'ask' ? askTimeoutBody({ body: answered, args }) : answered
     // **`wait` 만 성공을 다시 판정한다.** 저쪽은 200 으로 무엇으로 끝났는지만 말하고,
     // 그것을 종료 코드로 바꾸는 것은 이쪽의 일이다(cliOutput 의 waitEnd).
     if (parsed.cmd === 'jobs-wait' || parsed.cmd === 'runs-wait') {

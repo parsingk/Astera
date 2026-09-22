@@ -185,6 +185,31 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
         ? `${head}\n\nrun\n${indent(fields(run as Record<string, unknown>))}`
         : head
     }
+    /**
+     * **시한이 지난 `ask` 만 사람의 문장이 된다.**
+     *
+     * 답이 온 `ask` 는 `null` 로 떨어져 예전처럼 봉투로 나간다 — 그 답을 읽는 것은 워커이고,
+     * 워커가 읽는 것은 JSON 이다. 시한이 지난 쪽만 다른 이유는 그 답이 **실패처럼 보이기**
+     * 때문이다: 아무 일도 일어나지 않은 채 돌아온 명령을 사람도 에이전트도 "안 됐다" 로 읽고
+     * 다시 묻는다. 기계가 읽을 줄은 `data.nextSteps` 가 싣고(cliOutput 의 askTimeoutBody),
+     * 여기서는 같은 줄에 왜인지를 한 문장 붙인다 — 두 모드가 다른 말을 하지 않도록 문장도
+     * 그 칸에서 만든다.
+     */
+    case 'ask': {
+      if (data.timedOut !== true) return null
+      const steps = Array.isArray(data.nextSteps)
+        ? (data.nextSteps as unknown[]).filter((s): s is string => typeof s === 'string')
+        : []
+      const head = 'the deadline passed and the question is still open.'
+      if (steps.length === 0) {
+        const why =
+          typeof data.cannotResume === 'string'
+            ? data.cannotResume
+            : 'do not ask again while it may still be pending'
+        return `${head} ${why}`
+      }
+      return [`${head} Do not ask again; keep waiting:`, ...steps.map((s) => `  ${s}`)].join('\n')
+    }
     // 잘 끝난 때만 여기까지 온다 — 나머지 끝은 종료 코드와 한 줄로 나간다(run.ts).
     case 'jobs-wait':
     case 'runs-wait':

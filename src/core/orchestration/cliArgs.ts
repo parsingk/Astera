@@ -13,6 +13,13 @@ export interface ParsedArgs {
   human: boolean
   /** `--quiet` — ids only, one per line. */
   quiet: boolean
+  /** `--no-keepalive` — nothing on stderr while a waiting command waits (cliKeepalive.ts).
+   *
+   *  **It is its own flag rather than a reading of `--quiet`.** The two shape different channels:
+   *  `--quiet` decides what stdout carries, and a script that asked for ids on stdout has said
+   *  nothing about whether it wants to be told that a one-hour wait is still alive. Folding them
+   *  together would also leave no way to ask for one without the other. */
+  noKeepalive: boolean
 }
 
 export const camel = (flag: string): string =>
@@ -126,6 +133,7 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   let json = false
   let human = false
   let quiet = false
+  let noKeepalive = false
 
   for (let i = first; i < argv.length; i++) {
     const tok = argv[i]
@@ -143,6 +151,12 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
     }
     if (key === 'quiet') {
       quiet = true
+      continue
+    }
+    // Read here rather than left in `args` for the same reason the three above are: it is a mode of
+    // this process, not an argument to any command, and everything in `args` goes on the wire.
+    if (key === 'noKeepalive') {
+      noKeepalive = true
       continue
     }
     if (!hasValue) {
@@ -187,5 +201,5 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
     // Only when neither --script nor --file was given; `--script -` already asked.
     if (!hasScript && !hasFile) wantsStdin.push('script')
   }
-  return { cmd, args, wantsStdin, json, human, quiet }
+  return { cmd, args, wantsStdin, json, human, quiet, noKeepalive }
 }
