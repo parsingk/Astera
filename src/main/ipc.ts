@@ -32,7 +32,8 @@ import {
   prepareHostRuntime,
   sweepHostRuntime,
   type HostRuntimePaths,
-  type RuntimeFs
+  type RuntimeFs,
+  type RuntimeFiles
 } from './host/runtime'
 import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
@@ -6297,7 +6298,7 @@ export function registerIpc(
    * exactly today's behaviour — worse on update day, and completely fine otherwise — so there is no
    * failure in this function worth refusing to start a Host over.
    */
-  const prepareHostRuntimeFor = (profileDir: string, log: (m: string) => void): HostRuntimePaths | null => {
+  const prepareHostRuntimeFor = (profileDir: string, log: (m: string) => void): { paths: HostRuntimePaths; incomplete: boolean } | null => {
     const base = hostRuntimeBase({
       platform: process.platform,
       localAppData: process.env.LOCALAPPDATA,
@@ -6315,11 +6316,19 @@ export function registerIpc(
     // Which Node is actually in that directory is read from the directory, not from a constant in
     // this file: the two can then never disagree about what was shipped.
     let nodeVersion = ''
+    // What a whole copy of that directory contains, written by the same script that assembled it
+    // (scripts/host-runtime.mjs). Empty is not an error here: `prepareHostRuntime` treats it as "do
+    // not check", which is the right answer for an older shipped runtime and for a manifest this
+    // build could not parse.
+    let files: RuntimeFiles = { node: [], build: [] }
+    const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
     try {
       const manifest: unknown = JSON.parse(readFileSync(path.join(shippedRoot, 'runtime.json'), 'utf8'))
       if (manifest && typeof manifest === 'object' && typeof (manifest as { node?: unknown }).node === 'string') {
         nodeVersion = (manifest as { node: string }).node.trim()
       }
+      const listed = (manifest as { files?: { node?: unknown; build?: unknown } } | null)?.files
+      if (listed) files = { node: strings(listed.node), build: strings(listed.build) }
     } catch {
       /* nothing shipped, or unreadable — prepareHostRuntime says so below */
     }
@@ -6353,13 +6362,14 @@ export function registerIpc(
       // machine-wide directory — a second profile, or another user's install. The pid keeps their
       // staging directories apart; the rename decides who wins.
       stamp: String(process.pid),
+      files,
       fs: runtimeFs,
       log
     })
     if (!installed.ready) return null
     if (installed.did !== 'nothing') log(`host runtime installed (${installed.did}): ${paths.exePath}`)
     sweepHostRuntime({ paths, nodeVersion, appVersion, fs: runtimeFs, log })
-    return paths
+    return { paths, incomplete: installed.incomplete }
   }
 
   // Astera Host. Unconditional — the Host is not an orchestration feature, so this must not go inside
@@ -6387,7 +6397,12 @@ export function registerIpc(
     }
     // What the Host is actually started with. Null means `process.execPath` and the asar's host.js —
     // the arrangement every version before this one used, and the one a win32 installer has to fight.
-    const runtime = prepareHostRuntimeFor(profileDir, hostLog)
+    //
+    // **Reassigned before every spawn**, not settled once here. Putting the runtime in place is also
+    // what repairs one that is missing files, and the moment that repair can actually happen is the
+    // moment the Host holding those files has gone — which is exactly when the next spawn is about to
+    // run (design F6). Kept here as well so `hostSurvivesUpdate` and the first spawn have an answer.
+    let runtime = prepareHostRuntimeFor(profileDir, hostLog)
     hostSurvivesUpdate = process.platform !== 'win32' || runtime !== null
     // An update changes the protocol, and the Host from the previous version is still there holding
     // terminals this app cannot speak to. Ask it to leave first. A restart does not come through
@@ -6435,10 +6450,18 @@ export function registerIpc(
       address: addr.address,
       appVersion: app.getVersion(),
       log: hostLog,
+      // Read at every handshake, so the notice belongs to the Host that just answered rather than to
+      // whatever the runtime looked like when the app started.
+      runtimeIncomplete: () => runtime?.incomplete ?? false,
       spawnHost: () => {
+        // Checked and repaired again here, not reused from startup: the old Host held its `node.exe`
+        // and nothing could be replaced while it did. By the time a spawn is wanted that Host is gone,
+        // which is the first moment a missing file can actually be put back (design F6). Costs a
+        // handful of `existsSync` calls on a runtime that is whole.
+        runtime = prepareHostRuntimeFor(profileDir, hostLog)
         const plan = hostSpawnPlan({
-          execPath: runtime?.exePath ?? process.execPath,
-          entryPath: runtime?.entryPath ?? entry,
+          execPath: runtime?.paths.exePath ?? process.execPath,
+          entryPath: runtime?.paths.entryPath ?? entry,
           profileDir,
           logPath: path.join(profileDir, 'host', 'host.log'),
           version: app.getVersion()
