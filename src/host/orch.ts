@@ -114,8 +114,13 @@ export function createHostOrch(a: {
     hostOrchDeps({
       getState: () => store.get(),
       setState: async (next) => {
+        // Reserved before the write, for `reserveVersion`'s reason and for one that is this path's
+        // own: a `state-put` arriving while this commit is still writing would otherwise read the
+        // pre-commit number, pass the check, and land a whole state that does not contain this
+        // commit — the exact loss ruling F56 is about, with the Host as the losing side.
+        const committed = reserveVersion()
         await store.save(next)
-        a.onState(next, ++version)
+        a.onState(next, committed)
       },
       now: a.now,
       runningSessions: a.runningSessions,
@@ -146,6 +151,17 @@ export function createHostOrch(a: {
     // The same check the store uses on the file, for the same reason: what arrives here is written to
     // that file, and a malformed state saved over a good one costs every Job in it.
     if (!isValidState(state)) return { status: 400, body: { error: 'state-put needs a whole orchestration state' } }
+    // **The file is not read after this.** This is a whole state, so a load would be reading an older
+    // copy of what we were just given, and it would run the restart cleanup a second time. In the
+    // ordinary case the load has already happened — the app fills its mirror with `state-get` before
+    // it can write anything at all — and a load already in flight is waited for rather than raced:
+    // its own assignment would otherwise land after this one.
+    //
+    // **Ahead of the version check below, deliberately.** Everything from that check to the commit
+    // has to be one synchronous step (see `reserveVersion`), and this is the last thing in this
+    // function that can suspend.
+    if (loading) await loading
+    else loading = Promise.resolve()
     // **The write the app built is against a state this Host has since replaced** (ruling F56). It
     // carries a whole state, so landing it would erase every commit made in between — and the commit
     // most likely to be in between is a worker's `worker_done`, whose author has already exited.
@@ -168,18 +184,13 @@ export function createHostOrch(a: {
           version
         }
       }
-    // **The file is not read after this.** This is a whole state, so a load would be reading an older
-    // copy of what we were just given, and it would run the restart cleanup a second time. In the
-    // ordinary case the load has already happened — the app fills its mirror with `state-get` before
-    // it can write anything at all — and a load already in flight is waited for rather than raced:
-    // its own assignment would otherwise land after this one.
-    if (loading) await loading
-    else loading = Promise.resolve()
+    // Taken here, not after the write lands — the whole of `reserveVersion`'s note.
+    const committed = reserveVersion()
     await store.save(state)
     // To the others and not back to the sender: the state came from there, and an app that received
     // its own push would write its own state back over itself.
-    from.toOthers({ t: 'orch-state', state, version: ++version })
-    return { status: 200, body: { ok: true, version } }
+    from.toOthers({ t: 'orch-state', state, version: committed })
+    return { status: 200, body: { ok: true, version: committed } }
   }
 
   /** Whether the load's findings have already been handed to somebody. See `stateGet`. */
@@ -205,6 +216,26 @@ export function createHostOrch(a: {
    * always carries a version the Host has really issued.
    */
   let version = 0
+  /**
+   * Takes the next version. **Called at accept time, in the same synchronous step as the check that
+   * precedes it — never after the write has landed.**
+   *
+   * Raising it after `await store.save` looks equivalent and is not, because the app's mirror raises
+   * its own copy the moment it hands a write over (`mirrorStore`, ruling F56/d). Two overlapping app
+   * writes therefore arrive quoting N and N+1, and a Host still at N while the first is on disk
+   * refuses the second — a write that was built on the first and was never stale. That is the same
+   * lost commit this check exists to prevent, moved to the other end of the window.
+   *
+   * **Why this rather than serialising `state-put`.** A queue would make the second write wait out
+   * the first's disk write, so every app commit would pay the previous one's fsync before it could
+   * even be judged — and worse, a refusal would then be able to mean "somebody is still writing"
+   * instead of only ever meaning "somebody else committed". Ordering is not what is missing:
+   * `OrchestrationStore.save` already moves memory synchronously and serialises the disk writes
+   * behind its own queue, so the file lands in call order either way. What was missing is that the
+   * number and the memory move together, which is exactly what the mirror does at the other end. Two
+   * ends, one rule.
+   */
+  const reserveVersion = (): number => ++version
 
   /**
    * The app filling its mirror (design §5, §6). Not part of `handleCommand` for the same reasons

@@ -380,6 +380,45 @@ describe('createHostOrch', () => {
       expect(r.status).toBe(200)
     })
 
+    // === 겹쳐 들어온 두 쓰기 — 진짜 소켓 순서로, 가짜 call 없이 ===
+    //
+    // 앱의 거울은 상태와 함께 버전을 올리므로(mirrorStore), 겹치는 둘째 쓰기는 첫째의 **다음** 번호를
+    // 인용하며 나간다. Host 가 번호를 저장이 끝난 뒤에 올리면 그 둘째는 아직 옛 번호를 보고 거절당한다
+    // — 창이 앱에서 Host 로 옮겨졌을 뿐 잃는 쓰기는 그대로다.
+    it('겹쳐 들어온 두 쓰기가 둘 다 앉는다', async () => {
+      const from = appCaller()
+      const orch = orchOver()
+      const one = createJob(emptyState(), { objective: 'first', cwd: 'D:/p' }, NOW)
+      const s1 = one.ok ? one.state : emptyState()
+      const two = createJob(s1, { objective: 'second', cwd: 'D:/p' }, NOW)
+      const s2 = two.ok ? two.state : emptyState()
+      // 기다리지 않고 잇달아 보낸다 — server.ts 가 orch-call 을 `void` 로 띄우는 그 모양이다.
+      const a = orch.call({ cmd: 'state-put', args: { state: s1, version: 0 }, sessionId: '', from })
+      const b = orch.call({ cmd: 'state-put', args: { state: s2, version: 1 }, sessionId: '', from })
+      const [ra, rb] = await Promise.all([a, b])
+      expect(ra.status).toBe(200)
+      expect(rb.status, '둘째는 첫째 위에 지어졌다 — 낡은 쓰기가 아니다').toBe(200)
+      const saved = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+      expect(saved.jobs).toHaveLength(2)
+    })
+
+    // 그리고 정말 낡은 것은 겹쳐 들어와도 여전히 거절돼야 한다 — 검사와 올림이 한 걸음이 아니면
+    // 이 둘 중 하나는 반드시 틀린다.
+    it('같은 번호를 인용한 둘째는 겹쳐 들어와도 거절된다', async () => {
+      const from = appCaller()
+      const orch = orchOver()
+      const one = createJob(emptyState(), { objective: 'first', cwd: 'D:/p' }, NOW)
+      const s1 = one.ok ? one.state : emptyState()
+      const a = orch.call({ cmd: 'state-put', args: { state: s1, version: 0 }, sessionId: '', from })
+      // 첫째의 커밋을 모르는 쓰기 — 앉으면 first 가 사라진다.
+      const b = orch.call({ cmd: 'state-put', args: { state: emptyState(), version: 0 }, sessionId: '', from })
+      const [ra, rb] = await Promise.all([a, b])
+      expect(ra.status).toBe(200)
+      expect(rb.status).toBe(409)
+      const saved = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+      expect(saved.jobs, '거절당한 쓰기가 첫째를 지웠다').toHaveLength(1)
+    })
+
     // 소켓이 없는 호출자(테스트, 스텁)도 앱이 아니다 — 모르면 거절한다.
     it('누구인지 모르면 403 이다', async () => {
       const r = await orchOver().call({ cmd: 'state-put', args: { state: emptyState() }, sessionId: '' })
