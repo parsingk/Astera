@@ -116,6 +116,26 @@ describe('agent-context — 명령 집합은 handleCommand 가 실제로 가르�
       expect(cases.has(cmd), `${cmd} 에 case 가 생겼다`).toBe(false)
     }
   })
+
+  // **`NOT_SWITCHED` 의 `satisfies` 는 이름이 스키마에 있다는 것만 증명한다.** 아홉 번째 이름을
+  // 더하면 컴파일도 통과하고 위의 두 단언도 통과한 채, 실제로 치면 501 이 된다 — `case` 도 없고
+  // 답하는 가지도 없기 때문이다. 그 반쪽을 여기서 든다: 세 파일 중 한 곳이 그 이름을 실제로
+  // 비교하고 있어야 한다(run.ts 의 `parsed.cmd === …`, cli/host.ts 의 허용 목록, command.ts 의
+  // switch 앞 `if`). 글자를 보는 약한 증인이지만, 주장과 검사의 차이가 여기 있다.
+  it('CLI 가 직접 답한다는 여덟은 실제로 어딘가에서 비교된다', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url))
+    const answering = ['../../cli/run.ts', '../../cli/host.ts', './command.ts']
+      .map((rel) => readFileSync(path.resolve(here, rel), 'utf8'))
+      .map((src) =>
+        src
+          .split('\n')
+          .filter((l) => !l.trimStart().startsWith('//') && !l.trimStart().startsWith('*'))
+          .join('\n')
+      )
+      .join('\n')
+    for (const cmd of NOT_SWITCHED)
+      expect(answering.includes(`'${cmd}'`), `nothing answers ${cmd}`).toBe(true)
+  })
 })
 
 // `nextSteps` 는 실행 가능한 명령 줄이라고 약속한다(cliOutput.ts). 손으로 쓴 표가 없는 명령을

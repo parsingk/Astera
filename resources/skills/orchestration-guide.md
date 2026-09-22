@@ -508,8 +508,9 @@ the table below.
 rather than sentences to interpret. The steps depend on the command as well as the code, so a `4`
 from `worker-show` offers `astera dispatch-show --task <taskId>` and a `4` from `worker-start`
 offers `astera tasks list`. Where an id is already in `details` it is filled in, so the line can be
-run as it stands; a placeholder still in angle brackets is one the error could not fill, and you
-supply it. An empty list means there is no one command that is right for this failure. Read
+run as it stands. A placeholder still in angle brackets is one you supply, and where the value comes
+from another command that command is the step before it, so run the list in order rather than
+picking from it. An empty list means there is no one command that is right for this failure. Read
 `message` and decide.
 
 ### 4.8 Exit codes

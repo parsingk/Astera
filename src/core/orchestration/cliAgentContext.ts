@@ -144,7 +144,11 @@ const SESSION = {
     flags: [
       req('spec', '<text|->', 'the work, in full (a value of `-` reads it from stdin)'),
       req('account', '<id,…>', 'the accounts a worker for this Task may run on'),
-      { name: 'run', value: '<runId>', about: 'the run to add it to (default: the latest)' },
+      {
+        name: 'run',
+        value: '<runId|jobId>',
+        about: 'where it goes (default: the latest run); a Job id makes a definition Task'
+      },
       { name: 'title', value: '<text>', about: "a short name (default: the spec's first line)" },
       { name: 'deps', value: '<json array>', about: 'the Task ids this one waits for' },
       { name: 'validate', value: '<configId,…>', about: 'run configurations that must pass' },
@@ -179,7 +183,7 @@ const SESSION = {
       { name: 'outcome', value: '<succeeded|failed>', about: 'how it went (required for worker_done)' },
       { name: 'subject', value: '<text>', about: 'one line' },
       { name: 'body', value: '<text|->', about: 'the body (a value of `-` reads it from stdin)' },
-      { name: 'files-modified', value: '<a,b,c>', about: 'the files this Task changed' }
+      { name: 'files-modified', value: '<a,b,c>', about: 'the files this Task changed (worker_done only)' }
     ]
   },
   reply: {
@@ -333,7 +337,13 @@ export type AgentCommand = PublicCommand | SessionCommand
  * of the orchestration state the switch is built on, so `handleCommand` returns from an `if` above
  * it.
  *
- * `satisfies` keeps a typo here from quietly removing a command from the exhaustiveness check.
+ * **This is a hand-kept list, and `satisfies` is not the check it looks like.** It proves only that
+ * these eight names exist in the schema, which keeps a typo from quietly widening
+ * `SwitchedCommand`. It proves nothing about anything answering them: a ninth name added here would
+ * compile, would pass the exhaustiveness check, and would 501 at runtime with no `case` and no
+ * branch. cliAgentContext.test.ts carries the witness for that half — it asserts each name is
+ * mentioned in one of the three files that can answer it. A text witness is weak, but it is the
+ * difference between a claim and a check.
  */
 const NOT_SWITCHED = [
   'help',

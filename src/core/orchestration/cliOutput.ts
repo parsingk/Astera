@@ -115,52 +115,82 @@ export const okEnvelope = (cmd: string, body: unknown): string =>
  * 없는 id 를 들은 세션 전용 명령에게, **있는 것들이 어디 있는가**.
  *
  * 공개 명령은 표가 필요 없다 — `jobs-get` 의 명사에 `list` 동사가 있으면 그것이 답이다(아래
- * `listingFor`). 여기 적힌 것은 `NOUNS` 밖의 명령들뿐이고, **command.ts 의 `notFound(...)` 를
- * 하나씩 읽고 적었다**: 무엇을 못 찾았다고 말하는지가 갈래이기 때문이다 — `worker-start` 가 못
- * 찾는 것은 Dispatch 가 아니라 Task 이고, `run-create` 가 못 찾는 것은 회차가 아니라 계정이다.
+ * `listingFor`). 여기 적힌 것은 `NOUNS` 밖의 명령들뿐이고, **command.ts 의 `notFound(...)` 와,
+ * `commit()` 이 404 로 옮기는 state.ts 의 `unknown …` 을 하나씩 읽고 적었다.**
+ *
+ * **묻는 것은 하나다: 권하는 명령이 방금 실패한 명령과 같은 종류의 id 를 내놓는가.** 그것을 안
+ * 물으면 도는 명령을 권하고도 거짓말이 된다. 실제로 그랬다 — `ask --resume` 은 id 를
+ * `s.messages` 에서 찾는데(`msg_…`) `questions list` 는 `s.gates` 를 준다(`gat_…`). 그 줄은 잘
+ * 돌고, 거기서 나온 id 를 `--resume` 에 넣으면 전부 `not a question` 으로 2 가 된다. **Gate 와
+ * Message 의 갈림이 이 가지에서 무는 두 번째 자리**이므로, 새 항목은 무늬로 채우지 말고 그 명령이
+ * 무엇을 못 찾았다고 말하는지 읽고 적는다.
+ *
+ * 그 질문으로 다시 훑어 넷을 더 고쳤다: `reply` 도 메시지이고(`applyReply` 의
+ * `unknown question: <messageId>`), `check --ack` 이 못 찾는 것은 Delivery 여서 다시 `check` 하는
+ * 것이 답이며, `task-create`·`send`·`gate-create` 는 Task 를 못 찾는데 안내가 아예 없었다.
  *
  * 여기 없는 명령은 가이드로 떨어진다. 손으로 쓴 표이므로 낡을 수 있고, 낡는 방식은 "새 404 자리가
- * 안내를 못 받는 것" 하나다 — 틀린 명령을 가리키지는 않는다(cliAgentContext.test.ts 가 이 값들이
+ * 안내를 못 받는 것" 하나다 — 없는 명령을 가리키지는 않는다(cliAgentContext.test.ts 가 이 값들이
  * 실재하는 명령인지 본다).
  */
-const LISTING: Record<string, string> = {
-  'run-create': 'astera accounts',
-  'run-delete': 'astera jobs list',
-  'run-start': 'astera jobs list',
-  'run-pause': 'astera jobs list',
-  'run-resume': 'astera jobs list',
-  'run-spawn': 'astera jobs list',
-  'run-merge': 'astera runs list',
-  'run-worktree-set': 'astera runs list',
-  'run-use': 'astera runs list',
-  'task-update': 'astera tasks list',
-  'worker-start': 'astera tasks list',
-  'worker-show': 'astera dispatch-show --task <taskId>',
-  'worker-read': 'astera dispatch-show --task <taskId>',
-  'worker-release': 'astera dispatch-show --task <taskId>',
-  'worker-retain': 'astera dispatch-show --task <taskId>',
-  'worker-stop': 'astera dispatch-show --task <taskId>',
-  'worker-abandon': 'astera dispatch-show --task <taskId>',
-  ask: 'astera questions list',
-  'gate-resolve': 'astera questions list'
+const LISTING: Record<string, readonly string[]> = {
+  // 이 404 는 회차가 아니라 `--coordinator-account` 의 계정이다
+  'run-create': ['astera accounts'],
+  'run-delete': ['astera jobs list'],
+  'run-start': ['astera jobs list'],
+  'run-pause': ['astera jobs list'],
+  'run-resume': ['astera jobs list'],
+  'run-spawn': ['astera jobs list'],
+  'run-merge': ['astera runs list'],
+  'run-worktree-set': ['astera runs list'],
+  'run-use': ['astera runs list'],
+  // `--run` 은 회차도 Job 도 받고(Job 을 주면 정의 Task 다), `--deps`·`--parent` 는 Task 다
+  'task-create': ['astera jobs list', 'astera tasks list'],
+  'task-update': ['astera tasks list'],
+  // 못 찾는 것이 Dispatch 가 아니라 Task 다
+  'worker-start': ['astera tasks list'],
+  // **Dispatch 를 통째로 세는 명령은 없다** — `dispatch-show` 는 Task 하나의 것만 준다. 그래서 두
+  // 줄이고, 앞 줄이 뒷줄의 `<taskId>` 를 준다. 한 줄만 주면 채워질 길이 없는 자리표시자가 된다.
+  'worker-show': ['astera tasks list', 'astera dispatch-show --task <taskId>'],
+  'worker-read': ['astera tasks list', 'astera dispatch-show --task <taskId>'],
+  'worker-release': ['astera tasks list', 'astera dispatch-show --task <taskId>'],
+  'worker-retain': ['astera tasks list', 'astera dispatch-show --task <taskId>'],
+  'worker-stop': ['astera tasks list', 'astera dispatch-show --task <taskId>'],
+  'worker-abandon': ['astera tasks list', 'astera dispatch-show --task <taskId>'],
+  send: ['astera tasks list', 'astera dispatch-show --task <taskId>'],
+  // **메시지다, Gate 가 아니다.** 둘 다 id 를 `s.messages` 에서 찾는다
+  ask: ['astera inbox'],
+  reply: ['astera inbox'],
+  // 못 찾은 것은 `--ack` 의 Delivery 이고, 들고 있던 것이 낡았다는 뜻이다 — 같은 batch 가 ack 될
+  // 때까지 다시 오므로, 지금의 deliveryId 를 주는 것은 이 명령 자신이다
+  check: ['astera check'],
+  // Gate 는 Gate 다
+  'gate-create': ['astera tasks list'],
+  'gate-resolve': ['astera questions list']
 }
 
-/** 없는 id 를 말한 명령에게 줄 목록 명령 하나. */
-function listingFor(cmd: string | undefined): string {
-  if (cmd === undefined) return 'astera help'
+/** 없는 id 를 말한 명령에게 줄 목록 명령들. */
+function listingFor(cmd: string | undefined): readonly string[] {
+  if (cmd === undefined) return ['astera help']
   const dash = cmd.indexOf('-')
   const noun = dash < 0 ? cmd : cmd.slice(0, dash)
-  if (verbsOf(noun)?.includes('list') === true) return `astera ${noun} list`
+  if (verbsOf(noun)?.includes('list') === true) return [`astera ${noun} list`]
   if (Object.hasOwn(LISTING, cmd)) return LISTING[cmd]
   // 공개 표면 밖의 명령은 가이드가 유일한 문서다. `astera --help` 는 그것들을 적지 않는다.
-  return 'astera help'
+  return ['astera help']
 }
 
-/** 인자가 틀렸다고 들은 명령에게 줄 사용법 명령 하나. */
+/**
+ * 인자가 틀렸다고 들은 명령에게 줄 사용법 명령 하나.
+ *
+ * **공개 표면 밖의 명령은 `astera agent-context` 로 보낸다.** 가이드가 아니다 — 그 명령이 있는
+ * 이유가 산문 대신 기계가 읽을 표면을 주는 것인데, 자기가 대신하려는 문서를 권하면 앞뒤가 맞지
+ * 않는다. 플래그를 틀린 호출자에게 필요한 것도 설명이 아니라 그 명령의 플래그 목록이다.
+ */
 function usageCommandFor(cmd: string | undefined): string {
   if (cmd === undefined) return 'astera --help'
   if (Object.hasOwn(USAGE, cmd)) return `astera ${spelledCommand(cmd)} --help`
-  return 'astera help'
+  return 'astera agent-context'
 }
 
 /**
@@ -181,7 +211,7 @@ const STEPS: Record<CliErrorCode, (cmd: string | undefined) => readonly string[]
   FAILED: () => [],
   INVALID_ARGUMENTS: (cmd) => [usageCommandFor(cmd)],
   HOST_NOT_RUNNING: () => ['astera host start'],
-  NOT_FOUND: (cmd) => [listingFor(cmd)],
+  NOT_FOUND: (cmd) => listingFor(cmd),
   // 403 은 언제나 "이 세션은 그 명령을 부를 수 없다" 다(command.ts 의 COORDINATOR_ONLY). 누가
   // 무엇을 부를 수 있는지는 가이드에만 적혀 있고, 그것을 읽는 것 말고 칠 것이 없다.
   PERMISSION_DENIED: () => ['astera help'],

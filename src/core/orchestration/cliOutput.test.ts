@@ -181,11 +181,34 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
   // Dispatch 가 아니라 Task 이고, run-create 가 못 찾는 것은 회차가 아니라 계정이다.
   it('세션 전용 명령은 그것이 못 찾은 것의 목록으로 이어진다', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'worker-start' })).toEqual(['astera tasks list'])
-    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'worker-show' })).toEqual([
-      'astera dispatch-show --task <taskId>'
-    ])
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'run-create' })).toEqual(['astera accounts'])
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'run-merge' })).toEqual(['astera runs list'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'gate-resolve' })).toEqual(['astera questions list'])
+  })
+
+  // **Gate 와 Message 는 다른 id 다.** ask --resume 과 reply 는 id 를 s.messages 에서 찾고
+  // (msg_…), questions list 는 s.gates 를 준다(gat_…) — 그 줄은 잘 돌지만 거기서 나온 id 는
+  // 전부 "not a question" 으로 2 가 된다. 도는 명령을 권하고도 거짓말이 되는 자리다.
+  it('메시지를 못 찾은 것은 questions list 가 아니라 inbox 로 간다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'ask' })).toEqual(['astera inbox'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'reply' })).toEqual(['astera inbox'])
+  })
+
+  // Dispatch 를 통째로 세는 명령이 없으므로, 앞 줄이 뒷줄의 <taskId> 를 준다
+  it('찾을 값이 한 명령 앞에 있으면 두 줄로 준다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'worker-show' })).toEqual([
+      'astera tasks list',
+      'astera dispatch-show --task <taskId>'
+    ])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'task-create' })).toEqual([
+      'astera jobs list',
+      'astera tasks list'
+    ])
+  })
+
+  // 낡은 deliveryId 를 들고 있다는 뜻이고, 같은 batch 는 ack 될 때까지 다시 온다
+  it('check --ack 이 못 찾으면 check 자신이 답이다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'check' })).toEqual(['astera check'])
   })
 
   // 모르는 명령에 그럴듯한 목록 명령을 지어내지 않는다
@@ -202,8 +225,11 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'INVALID_ARGUMENTS', cmd: 'agent-context' })).toEqual([
       'astera agent-context --help'
     ])
-    // 공개 표면 밖의 명령에는 `--help` 가 없다
-    expect(nextStepsFor({ code: 'INVALID_ARGUMENTS', cmd: 'worker-start' })).toEqual(['astera help'])
+    // 공개 표면 밖의 명령에는 `--help` 가 없다. 산문 가이드가 아니라 스키마로 보낸다 —
+    // 그것을 대신하려고 만든 명령이 그것을 권하면 앞뒤가 맞지 않는다.
+    expect(nextStepsFor({ code: 'INVALID_ARGUMENTS', cmd: 'worker-start' })).toEqual([
+      'astera agent-context'
+    ])
     expect(nextStepsFor({ code: 'INVALID_ARGUMENTS' })).toEqual(['astera --help'])
   })
 

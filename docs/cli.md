@@ -204,8 +204,11 @@ failure, so nothing is known about the cause beyond the message.
 The steps depend on the command as well as the code, so a 4 from `jobs get` offers `astera jobs
 list` and a 4 from `runs get` offers `astera runs list`. Where a step needs an id the error already
 carries, that id is filled in: a `runs wait` that ends in failure offers
-`astera tasks list --run run_9f8e --status failed`, ready to run. A placeholder that is still in
-angle brackets is one the error could not fill.
+`astera tasks list --run run_9f8e --status failed`, ready to run.
+
+A placeholder still in angle brackets is one you supply. Where the value comes from another
+command, that command is the step before it, so the list is meant to be run in order rather than
+picked from.
 
 ```bash
 astera jobs run --id job_typo || astera jobs list
@@ -223,8 +226,10 @@ COMPLETE  job_2d80  Rename the run config store  5/5
 
 Never parse that. It has no contract, and columns will change.
 
-A failure in this mode is a sentence rather than an envelope, and the same steps follow it under
-`try:`, one per line. They are printed once, here or in the envelope, never both.
+Every failure this mode reaches is a sentence rather than an envelope, and the same steps follow it
+under `try:`, one per line. They are printed once, here or in the envelope, never both. The one
+exception is a bad `--json`/`--human`/`--quiet` combination, which is refused before the mode is
+settled and so has no mode to honour.
 
 ```text
 error: cannot reach the Host at \\.\pipe\astera-host-9f2a (unreachable)

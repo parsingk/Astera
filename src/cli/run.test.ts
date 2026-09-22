@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { exitCodeFor } from '../core/orchestration/cliOutput'
-import { promises as fs } from 'node:fs'
+import { promises as fs, readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -474,5 +475,38 @@ describe('callHost — 명령 하나를 Host 에 묻는다', () => {
     f.answer({ t: 'orch-result', call, status: 200, body: 1 })
     f.answer({ t: 'orch-result', call, status: 500, body: 2 })
     expect(await p).toEqual({ status: 200, body: 1 })
+  })
+})
+
+// 텍스트 가드. **이 가지에서 `--human` 이 봉투를 찍은 것이 네 번이고, 그때마다 고친 것은 그 자리
+// 하나였다** — help 의 두 자리, browser-help 의 두 자리, browser js --file, 그리고 Host 에 닿지
+// 못한 자리. 자리를 세는 한 다음에 또 잊는다. 그래서 잊을 수 없는 모양으로 바꾸고(main 의 `fail`),
+// 그 모양이 유지되는 것을 여기서 지킨다: 모드가 정해진 뒤로는 봉투를 짓는 호출이 하나도 없어야
+// 한다. 새 실패 경로를 더하는 사람이 기본값으로 얻는 것이 모드를 따르는 쪽이 된다.
+describe('run.ts — 모드가 정해진 뒤의 실패는 한 문으로만 나간다', () => {
+  const runSource = readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'run.ts'),
+    'utf8'
+  )
+
+  /** `fail` 이 세워진 자리 아래 전부. 표식이 사라졌으면 조용히 빈 것을 훑는 대신 여기서 던진다. */
+  function afterSeam(): string {
+    const at = runSource.indexOf('// FAIL_SEAM')
+    if (at < 0) throw new Error('run.ts has no FAIL_SEAM marker — did the fail() funnel move?')
+    return runSource.slice(at)
+  }
+
+  // 실패를 내보내는 세 가지. 성공 쪽은 `renderOk` 한 곳으로 이미 모여 있고, `agent-context` 만
+  // 일부러 `okEnvelope` 를 직접 쓴다 — 스키마는 모드와 무관하게 JSON 이다.
+  it('봉투를 짓는 실패 호출이 하나도 남아 있지 않다', () => {
+    for (const call of ['errorOutput(', 'errEnvelope(', 'renderErr('])
+      expect(afterSeam().split(call).length - 1, `${call} is called after the seam`).toBe(0)
+  })
+
+  // 앞선 세 자리는 아직 모드가 없어서 봉투로 나간다 — 그것이 errorOutput 이 남아 있는 이유이고,
+  // 그 수가 늘면 모드 뒤의 실패가 앞으로 새어 나온 것이다.
+  it('모드 앞의 봉투는 셋뿐이다 — 사용법·파서·모드 자신', () => {
+    const before = runSource.slice(0, runSource.indexOf('// FAIL_SEAM'))
+    expect(before.split('out(errorOutput(').length - 1).toBe(3)
   })
 })
