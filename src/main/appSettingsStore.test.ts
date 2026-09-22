@@ -187,37 +187,78 @@ describe('orchAlwaysOnMigration', () => {
     expect(JSON.parse(await fs.readFile(file(), 'utf8')).orchAlwaysOnMigrated).toBe(true)
   })
 
-  // **ruling F64 그 자체.** 켜져 있던 프로필이 첫 실행에서 표식을 적지 않으면, 그 뒤 아무 설정이나
-  // 한 번 저장하는 순간 persist 가 orchestrationEnabled 를 빼고 파일을 다시 쓴다 — 그러면 다음
-  // 실행은 그 없음을 "꺼져 있었다" 로 읽고, 정작 이 기능을 쓰던 사람의 회차를 세운다.
-  it('켜져 있던 프로필: 첫 실행에 표식을 적으면, 키가 빠진 뒤에도 되살아나지 않는다', async () => {
+  // **순서 하나: 마이그레이션이 끝나면 옛 키는 다시 쓰이지 않는다.** 표식과 키가 함께 움직인다는
+  // 말의 절반이고, 나머지 절반이 아래 테스트다.
+  it('켜져 있던 프로필: 표식을 적고 나면 옛 키는 파일에서 사라지고 돌아오지 않는다', async () => {
     await fs.writeFile(file(), JSON.stringify({ orchestrationEnabled: true, lang: 'en' }), 'utf8')
     const first = new AppSettingsStore(file())
     await first.load()
-    const owed = first.orchAlwaysOnMigration()
-    expect(owed).toEqual({ pause: false })
+    expect(first.orchAlwaysOnMigration()).toEqual({ pause: false })
     await first.markOrchAlwaysOnMigrated()
 
-    // 평범한 설정 저장 하나 — 이것이 옛 키를 파일에서 떨어뜨린다.
+    // 표식을 적는 persist 자신이 이미 키를 떨어뜨린다.
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).orchestrationEnabled).toBeUndefined()
+
+    // 그 뒤의 평범한 저장도 다시 쓰지 않는다.
     await first.setTheme('umbra')
     const onDisk = JSON.parse(await fs.readFile(file(), 'utf8'))
-    expect(onDisk.orchestrationEnabled, 'persist 가 옛 키를 다시 쓰고 있다면 이 테스트는 무의미하다').toBeUndefined()
+    expect(onDisk.orchestrationEnabled).toBeUndefined()
+    expect(onDisk.orchAlwaysOnMigrated).toBe(true)
 
-    // 그 파일을 다시 읽어도 마이그레이션은 끝난 상태다.
     const later = new AppSettingsStore(file())
     await later.load()
     expect(later.orchAlwaysOnMigration()).toBeNull()
   })
 
-  // 표식을 적지 않았다면 어떻게 되는지 — 위 테스트가 막고 있는 것이 무엇인지 말해 주는 대조다.
-  it('대조: 표식 없이 키만 빠지면 다음 실행은 세우라고 답한다', async () => {
+  // **순서 둘, ruling F67.** 마이그레이션에 닿지 못한 실행(Host 를 읽지 못해 bootOrch 가 일찍 돌아온
+  // 경우가 그것이다)에서 상관없는 설정 저장이 신호를 지우면, 다음 실행은 켜 두고 쓰던 사람의 회차를
+  // 세운다. 그래서 질문이 열려 있는 동안에는 키를 그대로 들고 간다. **디스크에서 확인한다** — 살아
+  // 남는지가 요점이므로 store 의 기억으로는 아무것도 증명되지 않는다.
+  it('켜져 있던 프로필: 표식을 적기 전에는 상관없는 저장이 옛 키를 지우지 못한다', async () => {
     await fs.writeFile(file(), JSON.stringify({ orchestrationEnabled: true, lang: 'en' }), 'utf8')
     const first = new AppSettingsStore(file())
     await first.load()
-    await first.setTheme('umbra') // 표식을 적지 않은 채 저장한다
+    await first.setTheme('umbra') // 마이그레이션에 닿지 못한 실행에서의 평범한 저장
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).orchestrationEnabled).toBe(true)
+
+    // 그래서 다음 실행도 여전히 "켜져 있었다" 를 읽는다 — 세우라고 답하지 않는다.
     const later = new AppSettingsStore(file())
     await later.load()
-    expect(later.orchAlwaysOnMigration()).toEqual({ pause: true })
+    expect(later.orchAlwaysOnMigration()).toEqual({ pause: false })
+  })
+
+  // 여러 번 반복해도 쌓이는 것이 없다 — 같은 키 하나가 다시 쓰일 뿐이다. 'vega' 를 쓰는 것은
+  // 기본 테마가 파일에 적히지 않기 때문이다: 기본값으로 저장하면 "상관없는 저장이 일어났다" 자체를
+  // 이 테스트가 보여 주지 못한다.
+  it('마이그레이션에 끝내 닿지 못해도 파일은 자라지 않는다', async () => {
+    await fs.writeFile(file(), JSON.stringify({ orchestrationEnabled: true, lang: 'en' }), 'utf8')
+    for (let i = 0; i < 3; i++) {
+      const s = new AppSettingsStore(file())
+      await s.load()
+      await s.setTheme('vega')
+    }
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).toEqual({
+      lang: 'en',
+      orchestrationEnabled: true,
+      theme: 'vega'
+    })
+  })
+
+  // 꺼져 있던 프로필에는 애초에 키가 없었다. 보존이 "없던 키를 만든다" 가 되어서는 안 된다 —
+  // false 를 적으면 그다음 load 가 그것을 읽고, 마이그레이션 판정은 같아도 파일이 거짓말을 한다.
+  it('꺼져 있던 프로필에는 옛 키를 만들어 넣지 않는다', async () => {
+    await fs.writeFile(file(), JSON.stringify({ lang: 'en' }), 'utf8')
+    const s = new AppSettingsStore(file())
+    await s.load()
+    await s.setTheme('vega')
+    expect('orchestrationEnabled' in JSON.parse(await fs.readFile(file(), 'utf8'))).toBe(false)
+  })
+
+  it('설정 파일이 없던 프로필에도 만들어 넣지 않는다', async () => {
+    const s = new AppSettingsStore(file())
+    await s.load()
+    await s.setTheme('vega')
+    expect('orchestrationEnabled' in JSON.parse(await fs.readFile(file(), 'utf8'))).toBe(false)
   })
 
   // 설정 파일이 아예 없다 = 이 기계에서 앱을 쓴 적이 없다. 세울 것도 없고 세워서도 안 된다.

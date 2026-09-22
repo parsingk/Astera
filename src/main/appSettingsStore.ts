@@ -31,14 +31,18 @@ export class AppSettingsStore {
   private workUnitTrackingEnabled = false
   private agentBrowserEnabled = false
   /** Ruling F62 — whether the one-time pause for work the old orchestration toggle had parked has
-   *  already run on this profile. Written once and never cleared; see `orchAlwaysOnPauseDue`. */
+   *  already run on this profile. Written once and never cleared; see `orchAlwaysOnMigration`. It is
+   *  also what tells `persist` to stop carrying `orchestrationEnabled` (ruling F67). */
   private orchAlwaysOnMigrated = false
-  /** **Not persisted — it is what the file said when it was last read.** True when the settings file
-   *  existed and did *not* carry `orchestrationEnabled: true`, which is how a profile that had
-   *  orchestration switched off is recognised now that nothing reads the field. False for a profile
-   *  with no settings file and for one recovered from corruption: neither can say what the toggle
-   *  was, and this codebase does not act on absent evidence. */
-  private orchestrationWasOff = false
+  /** **What the settings file said about the old orchestration toggle when it was last read** —
+   *  'on' when it carried `orchestrationEnabled: true`, 'off' when the file existed and did not, and
+   *  'unknown' for a profile with no settings file and for one recovered from corruption. Those last
+   *  two cannot say what the toggle was, and this codebase does not act on absent evidence, so they
+   *  are not 'off'.
+   *
+   *  Three values rather than a boolean because `persist` has to be able to write the key back
+   *  (ruling F67) and only 'on' was ever written. */
+  private oldOrchestrationToggle: 'on' | 'off' | 'unknown' = 'unknown'
   /** Job Continuity (spec §3). Off by default; enabling it can also set resumeStrategy — see
    *  setJobContinuityEnabled. */
   private jobContinuityEnabled = false
@@ -102,9 +106,10 @@ export class AppSettingsStore {
       // **The absence of the key is what says "off"**, not a stored `false`: `persist` omitted falsy
       // values, so `orchestrationEnabled` was only ever written when it was on. A profile that never
       // used the feature at all reads the same way, which costs nothing — the pause finds no parked
-      // work there and writes the marker.
-      this.orchestrationWasOff =
-        (parsed as { orchestrationEnabled?: unknown }).orchestrationEnabled !== true
+      // work there and writes the marker. Because that absence is the whole signal, `persist` carries
+      // the key back until the migration has run (ruling F67, and the comment at that line).
+      this.oldOrchestrationToggle =
+        (parsed as { orchestrationEnabled?: unknown }).orchestrationEnabled === true ? 'on' : 'off'
       this.orchAlwaysOnMigrated =
         (parsed as { orchAlwaysOnMigrated?: unknown }).orchAlwaysOnMigrated === true
       this.jobContinuityEnabled =
@@ -164,7 +169,7 @@ export class AppSettingsStore {
         this.agentBrowserEnabled = false
         // No file means no toggle to have been off, and no orchestration state to have parked —
         // this profile has never run anything. The F62 pause must not fire here.
-        this.orchestrationWasOff = false
+        this.oldOrchestrationToggle = 'unknown'
         this.orchAlwaysOnMigrated = false
         this.jobContinuityEnabled = false
         this.githubPolling = true
@@ -190,7 +195,7 @@ export class AppSettingsStore {
       // A file this could not read cannot say what the toggle was, and the F62 pause is not something
       // to do on a guess — it stops Runs the person may be watching. Both stay false, so a recovered
       // profile is left alone in either direction.
-      this.orchestrationWasOff = false
+      this.oldOrchestrationToggle = 'unknown'
       this.orchAlwaysOnMigrated = false
       this.jobContinuityEnabled = false
       this.githubPolling = true
@@ -245,13 +250,16 @@ export class AppSettingsStore {
    *  `orchAlwaysOnMigrated` is that record, and once written this answers `null` forever.
    *
    *  **Every profile is owed the record, not only the ones that get paused** (ruling F64), and that
-   *  is why this answers an object rather than a boolean. `orchestrationEnabled` has left `persist`,
-   *  so the first ordinary settings write on a profile that had the toggle **on** — a language, a
-   *  theme, the first-run answer — drops the key from the file. Without a marker written on that
-   *  profile's first launch, the launch after that reads the same absence as "it was off" and pauses
-   *  the live Runs of exactly the people who used the feature, a launch or two after the upgrade so
-   *  that nothing connects it to the upgrade. The shape is deliberate: the caller cannot record the
-   *  one case and forget the other, because there is one branch to be inside.
+   *  is why this answers an object rather than a boolean: the caller cannot record the one case and
+   *  forget the other, because there is one branch to be inside. A boolean is what let the record be
+   *  written in only the paused branch, and that left a profile whose toggle was **on** with no
+   *  marker at all.
+   *
+   *  **And the signal it reads is preserved rather than raced** (ruling F67). `persist` keeps writing
+   *  `orchestrationEnabled` for as long as this question is open, so an ordinary settings write — or
+   *  a whole launch that never reaches the migration, because the Host could not be read — cannot
+   *  quietly turn an "it was on" profile into an "it was off" one. The answer stays the same until
+   *  the migration actually happens, whenever that is.
    *
    *  A profile that never used orchestration at all answers `{ pause: true }` once. That is
    *  deliberate rather than tolerated: it has nothing parked, so the pause touches nothing and only
@@ -259,7 +267,7 @@ export class AppSettingsStore {
    *  before it has been loaded. */
   orchAlwaysOnMigration(): { pause: boolean } | null {
     if (this.orchAlwaysOnMigrated) return null
-    return { pause: this.orchestrationWasOff }
+    return { pause: this.oldOrchestrationToggle === 'off' }
   }
 
   /** Records that the migration has run, so it never runs twice. **Called after the state write it
@@ -407,6 +415,7 @@ export class AppSettingsStore {
       workUnitTrackingEnabled?: boolean
       agentBrowserEnabled?: boolean
       orchAlwaysOnMigrated?: boolean
+      orchestrationEnabled?: true
       jobContinuityEnabled?: boolean
       githubPolling?: boolean
       desktopNotify?: DesktopNotifySettings
@@ -423,6 +432,19 @@ export class AppSettingsStore {
     if (this.workUnitTrackingEnabled) data.workUnitTrackingEnabled = true
     if (this.agentBrowserEnabled) data.agentBrowserEnabled = true
     if (this.orchAlwaysOnMigrated) data.orchAlwaysOnMigrated = true
+    // **The one key here that is not a setting** (ruling F67). Orchestration stopped being a setting
+    // and nothing reads this as one any more — but until the migration has run, the *absence* of this
+    // key is the only thing that says the old toggle was off, and that signal is what decides whether
+    // a person's live Runs get paused. Dropping it on the first ordinary write — a language, a theme,
+    // the first-run answer — would let something entirely unrelated turn an "it was on" profile into
+    // an "it was off" one, a launch or two later, with nothing to connect the two.
+    //
+    // So it is carried, unchanged, for exactly as long as the question is open, and goes the moment
+    // the marker lands: the two facts move together rather than racing. Written only for 'on',
+    // because only 'on' was ever written (persist has always omitted falsy values) — an 'off' or
+    // 'unknown' profile accumulates nothing here, whether or not the migration has run.
+    if (!this.orchAlwaysOnMigrated && this.oldOrchestrationToggle === 'on')
+      data.orchestrationEnabled = true
     if (this.jobContinuityEnabled) data.jobContinuityEnabled = true
     if (this.githubPolling === false) data.githubPolling = false
     // Written only while the question is still open, which is the same one-sided rule as the two
