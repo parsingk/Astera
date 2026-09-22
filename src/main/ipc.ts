@@ -89,6 +89,7 @@ import {
   type OrchServerDeps
 } from '../core/orchestration/command'
 import { applyPendingReports, readPendingReports } from '../core/orchestration/pendingDrain'
+import { pauseWorkParkedByTheToggle } from '../core/orchestration/alwaysOn'
 import {
   pendingReportsDirIn,
   dispatchesHeldOnlyByReport,
@@ -1253,7 +1254,7 @@ export function registerIpc(
     continuityJournal = null
     recovery = null
   }
-  /** 검증기. startOrchestration 이 만들 때까지, 그리고 오케스트레이션이 꺼져 있으면 null 이다 */
+  /** 검증기. bootOrch 가 만들 때까지 null 이다 — 서버가 서지 못한 실행에서는 끝까지 null 로 남는다 */
   let orchValidator: TaskValidator | null = null
   /** 사라진 코디네이터의 자리를 비우는 함수. **bootOrch 안에서 대입한다** — 정의가 그 안에
    *  있어야 orch·deps 를 닫아 쓸 수 있고, 부르는 자리(core.sessions.onExit)는 그 밖이다.
@@ -2199,8 +2200,9 @@ export function registerIpc(
    * three follow their own toggles.
    *
    * Pulled out of bootOrch (which used to build and install this list inline, once) into a standalone
-   * function that settings.setWorkUnitTrackingEnabled, settings.setAgentBrowserEnabled and
-   * settings.setResumeStrategy also call directly — **not just bootOrch**.
+   * function that settings.setWorkUnitTrackingEnabled, settings.setAgentBrowserEnabled,
+   * settings.setResumeStrategy and settings.setJobContinuityEnabled also call directly — **not just
+   * bootOrch**.
    *
    * **Why bootOrch alone is not enough**: bootOrch only runs on the transition that actually starts
    * the server (see startOrch's `if (orch || orchStarting) return`), and the server is already up
@@ -2210,9 +2212,9 @@ export function registerIpc(
    * only discovery path for it matters most (see the header comment in stub.ts).
    *
    * No-ops when the server has never come up (`orch` is null — nothing has a skillsPath yet to install
-   * from). Safe to call redundantly — that is the point of calling it from four places: installStub
-   * already skips a write once content matches (see stub.ts), so the worst repeated cost is a
-   * per-account file read, not a per-account write.
+   * from). Safe to call redundantly — that is the point of calling it from five places (bootOrch and
+   * the four setters above): installStub already skips a write once content matches (see stub.ts),
+   * so the worst repeated cost is a per-account file read, not a per-account write.
    */
   const installStubsForCurrentToggles = (): void => {
     if (!orch) return
@@ -2446,8 +2448,8 @@ export function registerIpc(
       // So this start is abandoned. **Returned rather than thrown**, for two reasons: `startOrch`
       // is awaited from the settings handlers, where a throw becomes an error on a checkbox that
       // did in fact get saved; and `orch` staying null is a state this app already knows how to be
-      // in — it is what orchestration being switched off looks like — so flipping a toggle later
-      // tries again from the top. The person's half of this is the Jobs view's own two states.
+      // in — every guard below asks for it before acting — so flipping a toggle later tries again
+      // from the top. The person's half of this is the Jobs view's own two states.
       //
       // **The four features are named, here and on that surface** (ruling F35). `startOrch` serves
       // agent orchestration, work-unit tracking, the agent browser and Smart Resume, and before this
@@ -4598,6 +4600,38 @@ export function registerIpc(
     }
     if (continuity) buildRecovery()
 
+    /**
+     * **The one-time pause for work the old orchestration toggle had parked** (ruling F62).
+     *
+     * Turning that toggle off never tore anything down — it left five guards standing still, and
+     * this task removed all five and made the server start unconditionally. So a person who
+     * switched orchestration off mid-flight would, on their next launch, have the scheduler
+     * dispatch, the templates fire and the reconciler spawn replacements: their accounts spent and
+     * commits landed on the strength of a decision they made in the other direction. `paused` is
+     * what all four of those read, and one click in the Jobs list undoes it.
+     *
+     * **Above `orch = {…}` on purpose.** A throw here reaches `startOrch`'s catch with `orch` still
+     * null, so the drain, the scheduler, the recovery sweep and the resume sweep — everything below
+     * that could act on this state — do not run at all. Failing into "nothing happened" is the only
+     * acceptable direction for a guard whose job is to stop unasked-for spending.
+     *
+     * **The marker is written last**, after the state write has landed, so a failed pause is retried
+     * on the next launch rather than recorded as done.
+     */
+    const parkedByTheOldToggle = core.appSettings.orchAlwaysOnPauseDue()
+    if (parkedByTheOldToggle) {
+      const paused = pauseWorkParkedByTheToggle(store.get())
+      if (paused.runs.length > 0 || paused.jobs.length > 0) {
+        await deps.setState(paused.state)
+        orchLog(
+          `always-on migration — orchestration used to be off on this profile, so ${paused.runs.length} run(s) ` +
+            `[${paused.runs.join(', ')}] and ${paused.jobs.length} schedule(s) [${paused.jobs.join(', ')}] were ` +
+            `paused rather than restarted. Resume them from the Jobs list when you want them to go on.`
+        )
+      } else orchLog('always-on migration — nothing was parked on this profile, so nothing was paused')
+      await core.appSettings.markOrchAlwaysOnMigrated()
+    }
+
     // The same string `startHost` hashes into the Host's address (`hostAddress`), so a session told
     // this folder derives exactly this app's Host and no other.
     const profileDir = app.getPath('userData')
@@ -4626,21 +4660,35 @@ export function registerIpc(
     // same validation and review after it. Nothing here needs a separate copy of any of that, and a
     // copy would be the thing that drifts.
     //
-    // **There is no longer a state in which this must be skipped.** It used to be guarded on
+    // **The standing guard is gone, and a one-time one takes its place.** It used to be guarded on
     // orchestration being on, because `bootOrch` runs for any of the toggles and `handleCommand`
     // answered every queued report with a 409 while orchestration was off — which this drain reads
     // as "the app refused it" and clears the file for, deleting a finished worker's report because
-    // somebody happened to have the browser toggle on. With orchestration always on, that refusal
-    // cannot be produced and the guard has gone with it.
+    // somebody happened to have the browser toggle on. With orchestration always on that refusal
+    // cannot be produced, so the condition is no longer "is it off" but "is this the launch that
+    // just paused this profile's parked work" (ruling F62, the block above).
     //
-    // **What made that guard necessary is still here, and it is the line below.** Any non-2xx reads
-    // as a refusal, and `applyPendingReports` deletes a refused report's file — its contract is that
-    // a refusal is permanent ("that answer will be the same at every future start"). A 409 that
-    // means "not now" rather than "no" would therefore destroy a finished worker's only record. No
-    // such 409 is reachable for a queued report today: they are `send` alone (`isQueueableReport`),
-    // and what `send` can answer is 400, 403 and the pure layer's 404, all of them permanent. A new
-    // `conflict(…)` on this path would have to be weighed against that before it is added.
-    if (pendingReports.length > 0) {
+    // **Why the migrating launch skips it.** Applying a queued `worker_done` is recording work that
+    // already happened, which is harmless in itself — but on a convergence Run it hands the Task to
+    // the reviewer, and `startReview` spawns a session. That is spending, on a Run this launch has
+    // just decided the person did not ask to continue. Skipping loses nothing: an untouched queue
+    // file is read again at the next start, which is a start where they have seen the paused Runs.
+    //
+    // **What made the old guard necessary is still here, and it is the `ok:` line below.** Any
+    // non-2xx reads as a refusal, and `applyPendingReports` deletes a refused report's file — its
+    // contract is that a refusal is permanent ("that answer will be the same at every future
+    // start"). A 409 that means "not now" rather than "no" would therefore destroy a finished
+    // worker's only record. No such 409 is reachable for a queued report today: they are `send`
+    // alone (`isQueueableReport`), and `send` answers only 400 (`bad`) and 403 (`denied`) besides
+    // the `notFound` on an unknown run — all of them permanent. A new `conflict(…)` reachable from
+    // `send` would have to be weighed against that before it is added.
+    if (pendingReports.length > 0 && parkedByTheOldToggle)
+      orchLog(
+        `pending reports — ${pendingReports.length} left untouched: this launch paused work the old ` +
+          `orchestration setting had parked, and applying a report can open a review on it. The next ` +
+          `start takes them.`
+      )
+    else if (pendingReports.length > 0) {
       const drained = await applyPendingReports({
         queued: pendingReports,
         apply: async (r) => {

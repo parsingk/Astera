@@ -30,6 +30,15 @@ export class AppSettingsStore {
   private dismissedCampaignId: string | null = null
   private workUnitTrackingEnabled = false
   private agentBrowserEnabled = false
+  /** Ruling F62 — whether the one-time pause for work the old orchestration toggle had parked has
+   *  already run on this profile. Written once and never cleared; see `orchAlwaysOnPauseDue`. */
+  private orchAlwaysOnMigrated = false
+  /** **Not persisted — it is what the file said when it was last read.** True when the settings file
+   *  existed and did *not* carry `orchestrationEnabled: true`, which is how a profile that had
+   *  orchestration switched off is recognised now that nothing reads the field. False for a profile
+   *  with no settings file and for one recovered from corruption: neither can say what the toggle
+   *  was, and this codebase does not act on absent evidence. */
+  private orchestrationWasOff = false
   /** Job Continuity (spec §3). Off by default; enabling it can also set resumeStrategy — see
    *  setJobContinuityEnabled. */
   private jobContinuityEnabled = false
@@ -90,6 +99,14 @@ export class AppSettingsStore {
         (parsed as { workUnitTrackingEnabled?: unknown }).workUnitTrackingEnabled === true
       this.agentBrowserEnabled =
         (parsed as { agentBrowserEnabled?: unknown }).agentBrowserEnabled === true
+      // **The absence of the key is what says "off"**, not a stored `false`: `persist` omitted falsy
+      // values, so `orchestrationEnabled` was only ever written when it was on. A profile that never
+      // used the feature at all reads the same way, which costs nothing — the pause finds no parked
+      // work there and writes the marker.
+      this.orchestrationWasOff =
+        (parsed as { orchestrationEnabled?: unknown }).orchestrationEnabled !== true
+      this.orchAlwaysOnMigrated =
+        (parsed as { orchAlwaysOnMigrated?: unknown }).orchAlwaysOnMigrated === true
       this.jobContinuityEnabled =
         (parsed as { jobContinuityEnabled?: unknown }).jobContinuityEnabled === true
       this.githubPolling = (parsed as { githubPolling?: unknown }).githubPolling !== false
@@ -145,6 +162,10 @@ export class AppSettingsStore {
         this.dismissedCampaignId = null
         this.workUnitTrackingEnabled = false
         this.agentBrowserEnabled = false
+        // No file means no toggle to have been off, and no orchestration state to have parked —
+        // this profile has never run anything. The F62 pause must not fire here.
+        this.orchestrationWasOff = false
+        this.orchAlwaysOnMigrated = false
         this.jobContinuityEnabled = false
         this.githubPolling = true
         this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
@@ -166,6 +187,11 @@ export class AppSettingsStore {
       // survives the corrupt-file recovery and leaves a setting enabled that the file does not contain
       this.workUnitTrackingEnabled = false
       this.agentBrowserEnabled = false
+      // A file this could not read cannot say what the toggle was, and the F62 pause is not something
+      // to do on a guess — it stops Runs the person may be watching. Both stay false, so a recovered
+      // profile is left alone in either direction.
+      this.orchestrationWasOff = false
+      this.orchAlwaysOnMigrated = false
       this.jobContinuityEnabled = false
       this.githubPolling = true
       this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
@@ -207,6 +233,31 @@ export class AppSettingsStore {
 
   async setWorkUnitTrackingEnabled(enabled: boolean): Promise<void> {
     this.workUnitTrackingEnabled = enabled
+    await this.persist()
+  }
+
+  /** Ruling F62 — whether this launch owes the one-time pause for work the old orchestration toggle
+   *  was holding still. True exactly once, on the first launch of a build where orchestration is no
+   *  longer a setting, for a profile whose settings file did not say the toggle was on.
+   *
+   *  **Keyed on a marker of its own, not on erasing the old field.** The old field was only ever
+   *  written when the toggle was *on* (persist omits falsy values), so its absence is what says off —
+   *  there is nothing to erase, and no way to record "done" in a key that was never there.
+   *  `orchAlwaysOnMigrated` is that record, and once written the answer is false forever.
+   *
+   *  A profile that never used orchestration at all answers true once as well. That is deliberate
+   *  rather than tolerated: it has nothing parked, so the pause touches nothing and only writes the
+   *  marker. Narrowing further would mean asking the orchestration state a question here, before it
+   *  has been loaded. */
+  orchAlwaysOnPauseDue(): boolean {
+    return this.orchestrationWasOff && !this.orchAlwaysOnMigrated
+  }
+
+  /** Records that the pause has run, so it never runs twice. **Called only after the state write it
+   *  belongs to has landed** — writing this first and then failing to pause would leave the next
+   *  launch spending the person's accounts with nothing left to stop it. */
+  async markOrchAlwaysOnMigrated(): Promise<void> {
+    this.orchAlwaysOnMigrated = true
     await this.persist()
   }
 
@@ -345,6 +396,7 @@ export class AppSettingsStore {
       dismissedCampaignId?: string
       workUnitTrackingEnabled?: boolean
       agentBrowserEnabled?: boolean
+      orchAlwaysOnMigrated?: boolean
       jobContinuityEnabled?: boolean
       githubPolling?: boolean
       desktopNotify?: DesktopNotifySettings
@@ -360,6 +412,7 @@ export class AppSettingsStore {
     if (this.dismissedCampaignId) data.dismissedCampaignId = this.dismissedCampaignId
     if (this.workUnitTrackingEnabled) data.workUnitTrackingEnabled = true
     if (this.agentBrowserEnabled) data.agentBrowserEnabled = true
+    if (this.orchAlwaysOnMigrated) data.orchAlwaysOnMigrated = true
     if (this.jobContinuityEnabled) data.jobContinuityEnabled = true
     if (this.githubPolling === false) data.githubPolling = false
     // Written only while the question is still open, which is the same one-sided rule as the two

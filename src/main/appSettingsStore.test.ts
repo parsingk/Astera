@@ -156,6 +156,62 @@ describe('lang — System은 null이다', () => {
   })
 })
 
+// 오케스트레이션이 설정이 아니게 된 첫 실행에서 한 번만 도는 일시 중지 (ruling F62).
+// **키는 옛 필드가 아니라 자기 표식이다** — 옛 필드는 켜져 있을 때만 파일에 적혔으므로, 없다는
+// 것이 곧 꺼져 있었다는 뜻이고 거기에 "했음" 을 적을 자리가 없다.
+describe('orchAlwaysOnPauseDue', () => {
+  it('토글이 켜져 있던 적 없는 프로필은 한 번 참이다', async () => {
+    await fs.writeFile(file(), JSON.stringify({ lang: 'en' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.orchAlwaysOnPauseDue()).toBe(true)
+  })
+
+  it('토글이 켜져 있던 프로필은 거짓이다 — 그 일은 이미 돌고 있었다', async () => {
+    await fs.writeFile(file(), JSON.stringify({ orchestrationEnabled: true }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.orchAlwaysOnPauseDue()).toBe(false)
+  })
+
+  it('표식을 적고 나면 새 인스턴스에서도 다시 참이 되지 않는다', async () => {
+    await fs.writeFile(file(), JSON.stringify({ lang: 'en' }), 'utf8')
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.markOrchAlwaysOnMigrated()
+    expect(a.orchAlwaysOnPauseDue()).toBe(false)
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.orchAlwaysOnPauseDue()).toBe(false)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).orchAlwaysOnMigrated).toBe(true)
+  })
+
+  // 설정 파일이 아예 없다 = 이 기계에서 앱을 쓴 적이 없다. 세울 것도 없고 세워서도 안 된다.
+  it('설정 파일이 없으면 거짓이다', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.orchAlwaysOnPauseDue()).toBe(false)
+  })
+
+  // 읽지 못한 파일은 토글이 무엇이었는지 말해 주지 않는다. 짐작으로 Run 을 세우지 않는다.
+  it('손상 파일 복구 뒤에는 거짓이다 — 없는 근거로 세우지 않는다', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.orchAlwaysOnPauseDue()).toBe(false)
+  })
+
+  it('표식은 다른 설정을 지우지 않는다', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setLang('ko')
+    await a.markOrchAlwaysOnMigrated()
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getLang()).toBe('ko')
+  })
+})
+
 describe('agentBrowserEnabled', () => {
   it('lang과 함께 저장돼도 서로를 지우지 않는다', async () => {
     const store = new AppSettingsStore(file())
