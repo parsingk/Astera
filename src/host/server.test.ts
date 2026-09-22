@@ -416,6 +416,30 @@ describe('startHostServer', () => {
     expect(idle).toBe(true)
   })
 
+  // Advertising a feature and being able to serve it must be the same fact. `server()`'s default
+  // always supplies a working `orch`, which is right for the orch-call tests below but would hide
+  // this one — so this test goes straight to `startHostServer`, the way the address-taken and
+  // socket-file tests already do, with no `orch` in its deps at all.
+  it('orch 를 안 준 서버는 features 에 orch 를 넣지 않는다', async () => {
+    const addr = hostAddress({
+      profileDir: path.join(dir, 'no-orch'),
+      platform: process.platform,
+      tmpDir: dir,
+      protocol: HOST_PROTOCOL
+    })
+    const s = await startHostServer({
+      address: addr.address,
+      dirToPrepare: addr.dirToPrepare,
+      version: '9.9.9',
+      idleMs: 60_000,
+      onIdle: () => {},
+      log: { write: () => {}, close: () => {} }
+    })
+    open.push(s)
+    const [reply] = await talk(addr.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
+    expect((reply as { features: string[] }).features).not.toContain('orch')
+  })
+
   describe('orch-call', () => {
     it('orch-call 에 그 call 로 답한다', async () => {
       const h = await start({})

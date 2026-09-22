@@ -179,7 +179,19 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // away from an app that cannot read them (core/host/protocol.ts), and broadcasting to one
           // that just announced a different number would walk around that.
           greetedSockets.add(socket)
-          send({ t: 'hello', protocol: HOST_PROTOCOL, host: deps.version, pid: process.pid, startedAt, features: [HOST_FEATURE_PROC, HOST_FEATURE_PING, HOST_FEATURE_ORCH] })
+          send({
+            t: 'hello',
+            protocol: HOST_PROTOCOL,
+            host: deps.version,
+            pid: process.pid,
+            startedAt,
+            // HOST_FEATURE_ORCH is conditional on `deps.orch` — unlike the two features beside it —
+            // because advertising it and being able to serve it must be the same fact. Without this,
+            // a caller that supplies no `orch` (several test call sites do not) would claim a
+            // capability it cannot answer, and an `orch-call` sent to it would fall through to the
+            // "unknown message" log below and never get a reply at all.
+            features: [HOST_FEATURE_PROC, HOST_FEATURE_PING, ...(deps.orch ? [HOST_FEATURE_ORCH] : [])]
+          })
           return
         }
         if (m?.t === 'ping') {
