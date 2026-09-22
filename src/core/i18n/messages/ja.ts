@@ -15,15 +15,6 @@ export const ja: Catalog = {
   // {lang} is the language the OS locale resolves to
   'settings.general.language.system': 'システム設定 ({lang})',
   'settings.general.language.saveFailed': '言語設定を保存できませんでした: {detail}',
-  // Agent orchestration
-  'settings.orchestration.label': 'エージェントオーケストレーション (実験)',
-  'settings.orchestration.hint':
-    'オンにすると、アプリが起動したエージェントセッションが別ベンダーのワーカーセッションを起動できます。' +
-    'エージェントがアプリのどのアカウントでもセッションを作成できるようになるため、必要なときだけオンにしてください。' +
-    'git リポジトリのプロジェクトでのみ動作します。' +
-    'すでに開いているセッションには適用されません — 新しいセッションから有効になります。' +
-    'オーケストレーターとして使うセッションで astera help を実行させると、詳しい使い方が得られます。',
-  'settings.orchestration.saveFailed': 'オーケストレーション設定を保存できませんでした: {detail}',
   // エージェント権限モード
   'settings.agentPermission.label': '権限確認なしでエージェントを実行',
   'settings.agentPermission.hint':

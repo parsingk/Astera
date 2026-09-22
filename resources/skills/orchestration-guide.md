@@ -11,8 +11,8 @@ the environment variable first.** It is the same program. The variable is read t
 reads environment variables: `"$ASTERA_CLI"` in bash or zsh, `& $env:ASTERA_CLI` in PowerShell — in
 PowerShell `$ASTERA_CLI` alone is an unrelated, empty variable, so do not take it as the check. Read
 every example below with `astera` replaced that way if you need to. **Only** when the environment
-variable itself is empty does it mean this session was not started by the app, or that orchestration
-is off — in which case it has to be enabled in settings and a new session started.
+variable itself is empty does it mean this session was not started by the app — in which case a new
+session started by Astera is what gets you the command.
 
 ## 1. Six concepts
 
@@ -776,8 +776,8 @@ single extension-less `astera` file. Calling `astera` works from any shell, and 
 the path in the `ASTERA_CLI` environment variable always does — `"$ASTERA_CLI"` in bash or zsh,
 `& $env:ASTERA_CLI` in PowerShell.
 
-An empty `ASTERA_CLI` means this session was not started by the app, or orchestration is off — enable
-it in settings and start a new session. Use this value too whenever a script needs the absolute path.
+An empty `ASTERA_CLI` means this session was not started by the app — start one from Astera. Use this
+value too whenever a script needs the absolute path.
 
 **Stub installation**: at server startup the app installs the stub into **both claude and codex**
 accounts at `<configDir>/skills/astera-orchestration/SKILL.md`. `AGENTS.md` is a user file and is left

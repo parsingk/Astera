@@ -18,16 +18,7 @@ export const ko = {
   // visible before picking it
   'settings.general.language.system': '시스템 설정 ({lang})',
   'settings.general.language.saveFailed': '언어 설정을 저장하지 못했습니다: {detail}',
-  // Agent orchestration
-  'settings.orchestration.label': '에이전트 오케스트레이션 (실험)',
-  'settings.orchestration.hint':
-    '켜면 앱이 띄운 에이전트 세션이 다른 벤더의 워커 세션을 띄울 수 있습니다. ' +
-    '에이전트가 앱의 어느 계정으로든 세션을 만들 수 있게 되므로 필요할 때만 켜세요. ' +
-    'git 저장소인 프로젝트에서만 작동합니다. ' +
-    '이미 열려 있는 세션에는 적용되지 않습니다. 새 세션부터 동작합니다. ' +
-    '오케스트레이터로 쓸 세션에서 astera help 를 실행하게 하면 전체 사용법을 얻습니다.',
-  'settings.orchestration.saveFailed': '오케스트레이션 설정을 저장하지 못했습니다: {detail}',
-  // 명령줄 도구 — 오케스트레이션 바로 아래에 둔다. 이 명령이 닿는 것이 그 서버라 순서가 그렇다.
+  // 명령줄 도구
   'settings.cli.label': '명령줄 도구 (astera)',
   'settings.cli.hint':
     '설치하면 보통 셸에서도 astera 를 칠 수 있습니다. ' +
@@ -41,8 +32,6 @@ export const ko = {
   // 사람이 직접 실행할 한 줄을 아래에 보여 준다
   'settings.cli.pathMissing': '이 폴더가 PATH 에 없습니다. 아래 한 줄을 한 번 실행하면 들어갑니다.',
   'settings.cli.onPath': '이 폴더가 PATH 에 있습니다.',
-  'settings.cli.needsOrchestration':
-    '에이전트 오케스트레이션이 꺼져 있습니다. 꺼져 있는 동안에도 astera 는 도지만 Job 명령은 거절됩니다.',
   'settings.cli.copy': '복사',
   // 에이전트 권한 모드
   'settings.agentPermission.label': '권한 확인 없이 에이전트 실행',

@@ -67,7 +67,7 @@ describe('AppSettingsStore', () => {
     await store.load()
     await store.setLang('en')
     // persist는 falsy 값을 생략한다(정해진 관례) — load가 `=== true`로 읽으므로
-    // orchestrationEnabled:false를 파일에 남기지 않아도 결과가 같다.
+    // workUnitTrackingEnabled:false를 파일에 남기지 않아도 결과가 같다.
     // firstRunAsked 는 그 관례의 반대편이라 여기 남는다: 없는 키가 "이미 물었다"를 뜻하므로,
     // 아직 묻지 않았다는 사실은 파일이 직접 말해야 한다(필드 주석 참조)
     expect(JSON.parse(await fs.readFile(nested, 'utf8'))).toEqual({
@@ -153,59 +153,6 @@ describe('lang — System은 null이다', () => {
     const b = new AppSettingsStore(f)
     await b.load()
     expect(b.getLang()).toBeNull()
-  })
-})
-
-describe('orchestrationEnabled', () => {
-  it('기본값은 false다', async () => {
-    const store = new AppSettingsStore(file())
-    await store.load()
-    expect(store.getOrchestrationEnabled()).toBe(false)
-  })
-
-  it('설정하고 새 인스턴스가 다시 읽는다', async () => {
-    const a = new AppSettingsStore(file())
-    await a.load()
-    await a.setOrchestrationEnabled(true)
-    const b = new AppSettingsStore(file())
-    await b.load()
-    expect(b.getOrchestrationEnabled()).toBe(true)
-  })
-
-  it('lang과 함께 저장돼도 서로를 지우지 않는다', async () => {
-    const store = new AppSettingsStore(file())
-    await store.load()
-    await store.setLang('en')
-    await store.setOrchestrationEnabled(true)
-    const b = new AppSettingsStore(file())
-    await b.load()
-    expect(b.getLang()).toBe('en')
-    expect(b.getOrchestrationEnabled()).toBe(true)
-  })
-
-  it('불리언이 아닌 값은 false로 떨어진다', async () => {
-    await fs.writeFile(file(), JSON.stringify({ orchestrationEnabled: 'yes' }), 'utf8')
-    const store = new AppSettingsStore(file())
-    await store.load()
-    expect(store.getOrchestrationEnabled()).toBe(false)
-  })
-
-  it('손상 파일 복구 뒤에는 false로 기동한다 — 이전 인스턴스 값이 남지 않는다', async () => {
-    const a = new AppSettingsStore(file())
-    await a.load()
-    await a.setOrchestrationEnabled(true)
-    await fs.writeFile(file(), '{ not json', 'utf8')
-    await a.load()
-    expect(a.getOrchestrationEnabled()).toBe(false)
-  })
-
-  it('파일이 없으면(ENOENT) false로 기동한다', async () => {
-    const a = new AppSettingsStore(file())
-    await a.load()
-    await a.setOrchestrationEnabled(true)
-    await fs.rm(file())
-    await a.load()
-    expect(a.getOrchestrationEnabled()).toBe(false)
   })
 })
 

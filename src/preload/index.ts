@@ -148,8 +148,6 @@ const api = {
   settings: {
     getLang: invoke('settings.getLang'),
     setLang: invoke('settings.setLang'),
-    getOrchestrationEnabled: invoke('settings.getOrchestrationEnabled'),
-    setOrchestrationEnabled: invoke('settings.setOrchestrationEnabled'),
     getWorkUnitTrackingEnabled: invoke('settings.getWorkUnitTrackingEnabled'),
     setWorkUnitTrackingEnabled: invoke('settings.setWorkUnitTrackingEnabled'),
     getAgentBrowserEnabled: invoke('settings.getAgentBrowserEnabled'),

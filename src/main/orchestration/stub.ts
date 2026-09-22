@@ -47,7 +47,7 @@ export const LEGACY_STUB_MARKER = 'managed by claude-manager'
  *  carry the **same `description`**, so both load as skills and the agent picks one of the two. When
  *  it picks the old one it follows that file's first step — `echo "$CM_ORCH_CLI"` and `cm-orch help` —
  *  and both come back empty, because the app now plants `ASTERA_CLI` and names the shuttle `astera`.
- *  The agent then reports that orchestration is off while it is running perfectly. Renaming without
+ *  The agent then reports that it cannot orchestrate while everything is running perfectly. Renaming without
  *  removing turns a rename into a permanent misdiagnosis. */
 const LEGACY_STUB_DIRS = ['orchestration']
 

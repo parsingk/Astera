@@ -101,7 +101,6 @@ function rig(a: { wireCommitHook: boolean }): {
         box.state = n
         onPush(n)
       },
-      enabled: () => true,
       now: () => NOW,
       startWorker,
       listAccounts: async () => [{ id: 'accA', label: 'A', provider: 'claude' as const }],

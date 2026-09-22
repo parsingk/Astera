@@ -39,7 +39,6 @@ describe('hostOrchDeps', () => {
     const deps = hostOrchDeps(base({ act, hasApp: () => false, runningSessions: () => 3, appVersion: () => '1.2.3' }))
     expect(deps.runningSessions?.()).toBe(3)
     expect(deps.appVersion?.()).toBe('1.2.3')
-    expect(deps.enabled()).toBe(true)
     expect(act).not.toHaveBeenCalled()
   })
 

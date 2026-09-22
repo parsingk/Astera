@@ -188,11 +188,11 @@ export interface OrchServerDeps {
    *  wiring and every test double that returns one stay exactly as they are. */
   listAccounts(provider?: Provider): OrchAccount[] | Promise<OrchAccount[]>
   readWorker(a: { dispatchId: string; limit?: number }): Promise<string>
-  enabled(): boolean
-  /** Whether work-unit tracking is on — the toggle the three session-task-* commands answer to,
-   *  instead of `enabled()` (which gates Jobs). Optional so the existing test harnesses (and any
-   *  wiring that predates work-unit tracking) keep compiling; the session-task-* commands treat a
-   *  missing implementation the same as `false`.
+  /** Whether work-unit tracking is on — the toggle the three session-task-* commands answer to.
+   *  **Orchestration itself has no such toggle**: it is a thing Astera has, like sessions, so the
+   *  commands below it are never refused for being switched off. Optional so the existing test
+   *  harnesses (and any wiring that predates work-unit tracking) keep compiling; the session-task-*
+   *  commands treat a missing implementation the same as `false`.
    *
    *  **A value or a promise of one, and its one call site awaits it — the same union as
    *  `listAccounts` and `repairTargetFor`** (host control plane design §5). Inside the app it is the
@@ -200,8 +200,8 @@ export interface OrchServerDeps {
    *  not be able to tell which. `await` on a plain boolean is already correct, so every existing
    *  wiring and test double stays exactly as it is. */
   trackingEnabled?(): boolean | Promise<boolean>
-  /** The agent browser toggle — what `browser-js` answers to, instead of `enabled()`. Optional for
-   *  the same reason as trackingEnabled, and a value or a promise of one for the same reason. */
+  /** The agent browser toggle — what `browser-js` answers to. Optional for the same reason as
+   *  trackingEnabled, and a value or a promise of one for the same reason. */
   browserEnabled?(): boolean | Promise<boolean>
   /** Runs one script in the calling session's agent browser (main/agentBrowser/runs.ts). Optional:
    *  not injected, `browser-js` answers "agent browser is off". */
@@ -548,8 +548,8 @@ export async function handleCommand(
   }
   if (cmd === 'handoff') {
     // Its own toggle and none of the orchestration state below — the same footing as browser-js
-    // and the session-task-* commands: a plain tab session with orchestration off must be able to
-    // leave a memo, because that is the session Smart Resume is for.
+    // and the session-task-* commands: a plain tab session that has never seen a Job must be able
+    // to leave a memo, because that is the session Smart Resume is for.
     // browser-js 와 같다 — 이 await 앞에 읽은 상태도 쓴 상태도 없다.
     if (!(await deps.handoffEnabled?.()) || !deps.handoffs) return conflict('smart resume is off')
     const memo = args.memo
@@ -564,8 +564,6 @@ export async function handleCommand(
     // **이 await 도 상태 앞이다.** 바로 아래 `deps.getState()` 가 이 명령이 상태를 처음 읽는
     // 자리이고, 그 위에 커밋은 없다 — 여기서 멈춰도 읽고-쓰는 창이 열리지 않는다.
     if (!(await deps.trackingEnabled?.())) return conflict('work unit tracking is off')
-  } else if (!deps.enabled()) {
-    return conflict('orchestration disabled')
   }
   const now = deps.now?.() ?? new Date().toISOString()
   const s = deps.getState()

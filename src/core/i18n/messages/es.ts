@@ -15,16 +15,6 @@ export const es: Catalog = {
   // visible before picking it
   'settings.general.language.system': 'Configuración del sistema ({lang})',
   'settings.general.language.saveFailed': 'No se pudo guardar la configuración de idioma: {detail}',
-  // Agent orchestration
-  'settings.orchestration.label': 'Orquestación de agentes (experimental)',
-  'settings.orchestration.hint':
-    'Cuando está activada, las sesiones de agente que abre la aplicación pueden abrir sesiones de trabajador con otro proveedor. ' +
-    'Un agente podrá crear sesiones con cualquiera de las cuentas de la aplicación, así que actívela solo cuando la necesite. ' +
-    'Solo funciona en un proyecto que sea un repositorio de git. ' +
-    'No se aplica a las sesiones que ya están abiertas: funciona a partir de las sesiones nuevas. ' +
-    'Pida a la sesión que vaya a usar como orquestador que ejecute astera help para obtener la guía de uso completa.',
-  'settings.orchestration.saveFailed':
-    'No se pudo guardar la configuración de orquestación: {detail}',
   // Modo de permisos del agente
   'settings.agentPermission.label': 'Ejecutar agentes sin comprobar permisos',
   'settings.agentPermission.hint':

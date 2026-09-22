@@ -48,8 +48,7 @@ const interrupted = (): OrchState =>
   )
 
 const sweepOver = (
-  getState: () => OrchState | null,
-  over: { enabled?: boolean } = {}
+  getState: () => OrchState | null
 ): {
   run: (why: string) => void
   startValidation: ReturnType<typeof vi.fn>
@@ -61,7 +60,6 @@ const sweepOver = (
   const log = vi.fn()
   const sweep = createResumeSweep({
     getState,
-    enabled: () => over.enabled !== false,
     startValidation,
     startReview,
     now: () => NOW,
@@ -107,17 +105,6 @@ describe('createResumeSweep', () => {
     run('첫 붙음')
     expect(startValidation).not.toHaveBeenCalled()
     expect(startReview).not.toHaveBeenCalled()
-  })
-
-  // orchestration 이 꺼져 있으면 서버가 모든 보고를 409 로 거절하므로 시작해도 끝을 볼 수 없다.
-  // 조용히 버리지 않고 그 사실을 남긴다.
-  it('orchestration 이 꺼져 있으면 시작하지 않고 그 사실을 로그로 남긴다', () => {
-    const s = interrupted()
-    const { run, startValidation, startReview, log } = sweepOver(() => s, { enabled: false })
-    run('첫 붙음')
-    expect(startValidation).not.toHaveBeenCalled()
-    expect(startReview).not.toHaveBeenCalled()
-    expect(log.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/orchestration is off/)
   })
 
   it('다시 돌릴 것이 없으면 로그도 남기지 않는다', () => {

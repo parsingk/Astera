@@ -611,19 +611,14 @@ export default function App(): React.JSX.Element {
   // preserving undefined protected the rest; that is no longer the case.)
   const [slackLoaded, setSlackLoaded] = useState(false)
   const [wtRoot, setWtRoot] = useState('') // the worktree root in the settings modal
-  const [orchEnabled, setOrchEnabled] = useState(false) // the agent orchestration toggle
   // 에이전트 권한 모드. **기본이 yolo 라 초기값도 true 다** — false 로 두면 모달이 열리는 순간
   // 꺼진 체크박스가 잠깐 보였다가 켜지고, 그 깜빡임은 사용자가 끈 것으로 읽힌다.
   const [agentYolo, setAgentYolo] = useState(true)
-  // The rail button for Jobs is gated on this, so the shortcut must be too — a key that opens a view
-  // whose control is not on screen leaves the user somewhere they cannot get back from. Read through a
-  // ref for the same reason as jobsOpenRef.
-  const orchEnabledRef = useRef(orchEnabled)
-  orchEnabledRef.current = orchEnabled
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   const [agentBrowserEnabled, setAgentBrowserEnabled] = useState(false) // the agent browser toggle
   // Which kind the new-session and resume dialogs open on. Needed outside the settings modal — both
-  // dialogs seed their own selection from it — so it is loaded at mount like orchEnabled above.
+  // dialogs seed their own selection from it — so it is loaded at mount rather than only while the
+  // modal is open.
   const [defaultSessionKind, setDefaultSessionKind] = useState<SessionKind>('terminal')
   /** Whether the one first-run question has been put to this person — null until main has said.
    *  False only on a machine with no settings file at all, so an update never sees the modal
@@ -916,13 +911,9 @@ export default function App(): React.JSX.Element {
     void window.api.system.checkCli().then(setCli)
     void window.api.system.checkCliInstalled().then(setCliInstalled)
     void window.api.system.appVersion().then(setAppVersion)
-    // The rail draws the Jobs button only while this is on, so it has to be read at startup. Reading it
-    // only when the settings modal opens (the showSettings effect below) meant the button was missing
-    // from a cold start until someone opened settings once — not late, absent.
-    void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
     // Both session dialogs seed their kind from this, so it has to be loaded before either can open —
-    // the same reason orchEnabled above is loaded at mount rather than only while the modal is open.
+    // it cannot wait for the settings modal.
     void window.api.settings.getDefaultSessionKind().then(setDefaultSessionKind)
     // Read here with the rest: the modal below is drawn from it, and it must not flash in front of
     // someone who has used the app for months while an answer is in flight.
@@ -1128,19 +1119,15 @@ export default function App(): React.JSX.Element {
       setSlackLoaded(true)
     })
     void window.api.worktrees.getRoot().then(setWtRoot)
-    // Re-syncs the orchestration toggle whenever the modal opens. The initial value comes from the mount
-    // effect above (the rail needs it before anyone opens this modal); this is what keeps the checkbox
-    // honest if the stored value ever diverges from what the renderer is holding.
-    void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
-    // Same re-sync for work unit tracking. Unlike orchestration, nothing outside this modal reads it yet,
-    // so there is no mount-time fetch to keep honest — this is the only read.
+    // Work unit tracking. Nothing outside this modal reads it, so there is no mount-time fetch to keep
+    // honest — this is the only read.
     void window.api.settings.getWorkUnitTrackingEnabled().then(setWorkUnitTrackingEnabled)
     // 권한 모드도 같은 갈래다 — 이 모달 밖에서 읽는 곳이 없으므로 마운트 시점 읽기는 두지 않는다.
     void window.api.settings
       .getAgentPermissionMode()
       .then((m) => setAgentYolo(m === 'yolo'))
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
-    // Re-syncs the new-session default too, for the same reason as orchestration above.
+    // Re-syncs the new-session default too — the mount-time read above is what it keeps honest.
     void window.api.settings.getDefaultSessionKind().then(setDefaultSessionKind)
     // Re-read on open beside the effect below, which is what keeps it current the rest of the time:
     // the Info row wants the freshest answer at the moment it is drawn, and this costs nothing.
@@ -1220,10 +1207,6 @@ export default function App(): React.JSX.Element {
       // The two sidebar views the rail can open. Pressed again they close, which is what the rail
       // button does — so the key is the button, not a second way in.
       //
-      // Jobs is gated on the orchestration setting because its rail button is: with the setting off the
-      // button is not drawn, and a key that opens a view whose only control is missing strands the user
-      // in it. How It Works has no such flag.
-      //
       // Not blocked while a text field has focus, unlike the tab-cycling actions below: the default
       // chords are Ctrl+Shift+J/H, which no input of ours uses, and switching sidebars while reading a
       // file is exactly when it is wanted.
@@ -1232,7 +1215,6 @@ export default function App(): React.JSX.Element {
       // bodies are all refs and setters, so a stale closure still acts on the latest state — the same
       // convention toggleExplorer and closeFileTab already rely on.
       if (action === 'sidebar.home' || action === 'sidebar.jobs' || action === 'sidebar.howItWorks') {
-        if (action === 'sidebar.jobs' && !orchEnabledRef.current) return
         e.preventDefault()
         e.stopPropagation()
         if (e.repeat) return // holding the key would flap the sidebar
@@ -2876,9 +2858,6 @@ export default function App(): React.JSX.Element {
 
   // 사이드바에 그릴 뷰 하나 — 네 갈래 삼항보다 이 값 하나가 어느 뷰가 열려 있는지를 더 분명히 읽힌다.
   // 탐색기·Jobs·How It Works는 서로 배타적이다(toggleExplorer/toggleJobs/toggleHiw가 나머지를 끈다).
-  // orchEnabled가 꺼지면 jobsOpen이 내부적으로 true로 남아 있어도 Jobs를 그리지 않고 세션 목록으로
-  // 돌아간다 — 레일의 진입점이 사라지는 시점에 사이드바도 조용히 원래 모습으로 돌아가야 어색해지지
-  // 않는다. How It Works에는 그런 기능 플래그가 없다.
   //
   // **아래 효과들과 Run 콘솔의 렌더가 이 값을 공유한다.** 그래서 선언이 렌더 본문 끝이 아니라 여기에
   // 있다 — 효과의 의존성 배열은 렌더 중에 평가되므로 선언이 그보다 아래면 TDZ 로 터진다.
@@ -2886,7 +2865,7 @@ export default function App(): React.JSX.Element {
   // 어긋날 수 있다.
   const sidebarPane: 'explorer' | 'jobs' | 'understanding' | 'sessions' = explorerOpen
     ? 'explorer'
-    : jobsOpen && orchEnabled
+    : jobsOpen
       ? 'jobs'
       : hiwOpen
         ? 'understanding'
@@ -3002,18 +2981,6 @@ export default function App(): React.JSX.Element {
     }
   }, [currentProject, sessionTasksSeq])
 
-  // Turning the setting off makes the rail button — the only control that can close the Jobs view —
-  // disappear along with it (it is gated on the same orchEnabled), so a view left open past that point
-  // is one the user has no way left to reach the control for. Closing it here is what lets the
-  // subscription effect below run its own cleanup (unwatch): that effect does not depend on
-  // orchEnabled, and adding it to that dependency list alone would not help — jobsOpen would still be
-  // true and the effect would just re-arm. Setting jobsOpen to false here is what actually tears the
-  // subscription down, and it does not spring back open when the setting is turned back on (this
-  // effect only ever closes, never opens).
-  useEffect(() => {
-    if (!orchEnabled) setJobsOpen(false)
-  }, [orchEnabled])
-
   // The Host gate, read once and then listened for. **Its own effect with no dependencies**, because
   // it is one fact about the app rather than about a project (ruling F41): tying it to jobsOpen or to
   // currentProject is what hid it, and the read is what covers a window that mounts after main had
@@ -3059,7 +3026,7 @@ export default function App(): React.JSX.Element {
     // whole <aside> and JobsView with it, but jobsOpen stays true, so without this no unwatch is sent
     // and main goes on folding a snapshot on every orchestration write — inside the awaited setState,
     // i.e. in the CLI request's critical path — and pushing it to a component that is not mounted.
-    // The fourth teardown trigger, after unmount, orch.unwatch and the orchEnabled effect above.
+    // The third teardown trigger, after unmount and orch.unwatch.
     if (!jobsOpen || !sidebarOpen || !currentProject) return
     let cancelled = false
     void window.api.orch.list(currentProject).then((snapshot) => {
@@ -3682,37 +3649,34 @@ export default function App(): React.JSX.Element {
               </g>
             </svg>
           </button>
-          {/* Jobs 사이드바 토글. 오케스트레이션 설정이 꺼져 있으면 아예 그리지 않는다 — 뒤에 아무것도
-              없는 진입점을 보여줄 이유가 없다(App.tsx 의 orchEnabled, 설정 모달의 토글이 mirror한다) */}
-          {orchEnabled && (
-            <button
-              className={jobsOpen ? 'rail-btn on' : 'rail-btn'}
-              aria-label={t('jobs.rail.open')}
-              title={t('jobs.rail.open')}
-              onClick={toggleJobs}
+          {/* Jobs 사이드바 토글. 오케스트레이션은 Astera 가 늘 갖고 있는 것이므로 조건 없이 그린다. */}
+          <button
+            className={jobsOpen ? 'rail-btn on' : 'rail-btn'}
+            aria-label={t('jobs.rail.open')}
+            title={t('jobs.rail.open')}
+            onClick={toggleJobs}
+          >
+            {/* Jobs — 체크리스트. 앱의 SVG 관례대로 16 viewBox 에 currentColor 하나, 바깥 사각형은
+                1.4, 안쪽 체크와 줄은 1.2 */}
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinejoin="round"
             >
-              {/* Jobs — 체크리스트. 앱의 SVG 관례대로 16 viewBox 에 currentColor 하나, 바깥 사각형은
-                  1.4, 안쪽 체크와 줄은 1.2 */}
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinejoin="round"
-              >
-                <rect x="2.6" y="1.8" width="10.8" height="12.4" rx="1.4" />
-                <g strokeWidth="1.2" strokeLinecap="round">
-                  <path d="M4.8 5.2 5.7 6.1 7.3 4.3" />
-                  <line x1="9" y1="5.4" x2="11.4" y2="5.4" />
-                  <path d="M4.8 9.6 5.7 10.5 7.3 8.7" />
-                  <line x1="9" y1="9.8" x2="11.4" y2="9.8" />
-                </g>
-              </svg>
-            </button>
-          )}
-          {/* How It Works 사이드바 토글. Jobs 와 달리 기능 플래그가 없어 늘 그린다. */}
+              <rect x="2.6" y="1.8" width="10.8" height="12.4" rx="1.4" />
+              <g strokeWidth="1.2" strokeLinecap="round">
+                <path d="M4.8 5.2 5.7 6.1 7.3 4.3" />
+                <line x1="9" y1="5.4" x2="11.4" y2="5.4" />
+                <path d="M4.8 9.6 5.7 10.5 7.3 8.7" />
+                <line x1="9" y1="9.8" x2="11.4" y2="9.8" />
+              </g>
+            </svg>
+          </button>
+          {/* How It Works 사이드바 토글. */}
           <button
             className={hiwOpen ? 'rail-btn on' : 'rail-btn'}
             aria-label={t('hiw.rail.open')}
@@ -4370,41 +4334,11 @@ export default function App(): React.JSX.Element {
                 )}
                 {settingsTab === 'agent' && (
                   <div className="settings-stack">
-                    {/* Agent orchestration — reuses the same settings-row plus settings-hint
-                        combination as the language row. Turning it on starts the server immediately, but
-                        sessions that are already running do not get the CLI path (environment variables
-                        are fixed at spawn time) — the hint text says so.
-                        Why the container is a label rather than a div: pressing the text has to toggle it
-                        too (the same wrapping approach the checkboxes in NewSessionDialog use). The flex
-                        and colour rules of settings-row apply regardless of the tag. */}
-                    <div className="settings-group">
-                      <label className="settings-row">
-                        <span>{t('settings.orchestration.label')}</span>
-                        <input
-                          type="checkbox"
-                          checked={orchEnabled}
-                          onChange={(e) => {
-                            const next = e.target.checked
-                            setOrchEnabled(next) // an optimistic update — reverted below on failure
-                            void window.api.settings.setOrchestrationEnabled(next).catch((err) => {
-                              setOrchEnabled(!next)
-                              toast.error(
-                                t('settings.orchestration.saveFailed', {
-                                  detail: err instanceof Error ? err.message : String(err)
-                                })
-                              )
-                            })
-                          }}
-                        />
-                      </label>
-                      <span className="settings-hint">{t('settings.orchestration.hint')}</span>
-                    </div>
-                    {/* 명령줄 도구 — 오케스트레이션 바로 아래다. 위 토글이 켜는 서버가 이 명령이
-                        닿는 곳이라, 꺼져 있으면 설치해도 앱을 찾지 못한다(그 사실은 그 칸이 말한다). */}
+                    {/* 명령줄 도구 — 이 탭의 첫 칸이다. 오케스트레이션은 토글이 아니라 앱이 늘 갖고
+                        있는 것이 되었으므로, 이 명령이 닿을 서버는 언제나 서 있다. */}
                     <CliSettings />
-                    {/* 권한 모드 — 오케스트레이션 바로 아래. 위 토글이 켜는 것이 워커를 띄우는 일이고,
-                        이 토글이 정하는 것은 그 워커가 승인을 묻는가이기 때문이다. 같은
-                        optimistic-update-then-revert 관례를 쓴다. */}
+                    {/* 권한 모드 — 명령줄 도구 바로 아래. 이 토글이 정하는 것은 Job 워커가 승인을
+                        묻는가이다. 같은 optimistic-update-then-revert 관례를 쓴다. */}
                     <div className="settings-group">
                       <label className="settings-row">
                         <span>{t('settings.agentPermission.label')}</span>

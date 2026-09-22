@@ -307,7 +307,7 @@ describe('undeliveredReportNotice — what the agent is told', () => {
     expect(String(notice.note)).not.toMatch(/would not reach/)
     expect(String(notice.note)).toMatch(/already has/)
   })
-  // Whether the app applies it depends on the orchestration toggle, which the worker cannot see.
+  // Whether the app applies it depends on the state it finds, which the worker cannot see.
   it('does not promise the next start will apply it', () => {
     expect(String(notice.note)).not.toMatch(/next time it starts/)
   })

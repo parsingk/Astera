@@ -234,9 +234,9 @@ import { fillFromCommits } from '../core/github/fill'
  *  resumeText dep 구현이고, sessionId 로 열린 Job Dispatch 를 찾아 재개 packet 을 spec 파일에 적어
  *  넣은 뒤 그 자리에 쓸 한 줄을 돌려준다(main/orchestration/resumePacket.ts). Job 워커가 아니면(그리고
  *  `tabFallback` 이 참이면) 탭 브리핑으로 저하한다 — 그 저하는 `tabResumeTextFor` 를 그대로 감쌀
- *  뿐이라 오케스트레이션이 켜져 있을 때만 쓸 수 있는 자원(OrchState)에 기대지 않는다. **이 handle
- *  자체가 오케스트레이션이 켜져 있을 때만 존재한다는 점은 그대로다** — `orchRef` 가 null 인 경우의
- *  탭 폴백은 index.ts 가 별도로 받는 `tabResumeTextFor` 참조로 처리한다(fix wave 최종, F1 —
+ *  뿐이라 서버가 서 있을 때만 쓸 수 있는 자원(OrchState)에 기대지 않는다. **이 handle 자체가 서버가
+ *  선 뒤에만 존재한다는 점은 그대로다** — `orchRef` 가 null 인 경우의 탭 폴백은 index.ts 가 별도로
+ *  받는 `tabResumeTextFor` 참조로 처리한다(fix wave 최종, F1 —
  *  `OrchWiring.onTabResumeReady`). */
 export interface OrchHandle {
   stop: () => void
@@ -1269,23 +1269,19 @@ export function registerIpc(
    *  pin them down). Eviction is the only path that clears it — not a dead session, not a
    *  worker-release call: "preserve the output first, then close the session" is the contract. */
   const orchTails = new WorkerTails()
-  /** The CLI-access environment variables planted into a session. Nothing is injected when the server
-   *  is not up (toggle off, or startup failed) or the user turned it off at runtime — "off" has to
-   *  mean "newly created sessions do not know about the CLI". Looking only at whether the server is
-   *  alive (orch !== null) would let a session created after turning it off discover the CLI and then
-   *  get a 409 on every call. **Work-unit tracking counts too**: /astera-task needs the same CLI and
-   *  the same ASTERA_SESSION, and the command gate in the server decides what may be called. **So
-   *  does the agent browser**: `astera browser help` and `astera browser js` are that same CLI, and
-   *  skillsPath is where `browser help` reads the guide from — without this the astera-browser skill
-   *  is planted into a session that cannot reach the program it tells the agent to run. **And Smart
-   *  Resume**: `astera handoff` is that same CLI, and the memo it stores is what the Smart Resume
-   *  briefing reads back. */
+  /** The CLI-access environment variables planted into a session. **Every session gets them once the
+   *  server is up**, because orchestration is not a toggle any more — it is something Astera has, like
+   *  sessions, so there is no state in which a session created now must be kept from discovering the
+   *  CLI. The one condition left is the server itself: nothing is injected before it stands, or after
+   *  a startup that failed, since `cliPath`, `skillsPath` and `profileDir` are its values to give.
+   *
+   *  The other features ride on the same three: /astera-task needs this CLI and the same
+   *  ASTERA_SESSION, `astera browser help`/`browser js` are that same CLI with skillsPath as where
+   *  the guide is read from, and `astera handoff` stores the memo the Smart Resume briefing reads
+   *  back. Which of those a session may actually call is the command gate's question, not this
+   *  one's. */
   const orchEnvOf = (): { cliPath: string; skillsPath: string; profileDir: string } | undefined =>
-    orch &&
-    (core.appSettings.getOrchestrationEnabled() ||
-      core.appSettings.getWorkUnitTrackingEnabled() ||
-      core.appSettings.getAgentBrowserEnabled() ||
-      core.appSettings.getResumeStrategy() === 'smart')
+    orch
       ? {
           cliPath: orch.cliPath,
           skillsPath: orch.skillsPath,
@@ -2191,43 +2187,40 @@ export function registerIpc(
     })
   }
   // fix wave 최종, F1: handed over here, unconditionally — not inside bootOrch below, which only runs
-  // when orchestration is enabled. index.ts keeps this apart from `orchRef` (set by `onStarted`, further
-  // down) so the two rolling coordinators can reach a tab session's briefing even with the toggle off.
+  // once the server actually starts. index.ts keeps this apart from `orchRef` (set by `onStarted`,
+  // further down) so the two rolling coordinators can reach a tab session's briefing even when the
+  // server never came up.
   orchWiring?.onTabResumeReady(tabResumeTextFor)
 
   /**
-   * Installs whichever discovery stub(s) match the toggles' current state, against every known
-   * account. Pulled out of bootOrch (which used to build and install this list inline, once) into a
-   * standalone function that settings.setOrchestrationEnabled, settings.setWorkUnitTrackingEnabled,
-   * settings.setAgentBrowserEnabled and settings.setResumeStrategy also call directly — **not just
-   * bootOrch**.
+   * Installs the discovery stubs that belong to the current state, against every known account.
+   * **The orchestration stub is unconditional** — orchestration is something Astera has rather than
+   * something a person switches on, so every agent session is told it can orchestrate. The other
+   * three follow their own toggles.
+   *
+   * Pulled out of bootOrch (which used to build and install this list inline, once) into a standalone
+   * function that settings.setWorkUnitTrackingEnabled, settings.setAgentBrowserEnabled and
+   * settings.setResumeStrategy also call directly — **not just bootOrch**.
    *
    * **Why bootOrch alone is not enough**: bootOrch only runs on the transition that actually starts
-   * the server (see startOrch's `if (orch || orchStarting) return`). Before this task the server could
-   * only be up when orchestration was on, so setOrchestrationEnabled(true) always reached it. Now
-   * any of the toggles can start the server, so the second toggle to turn on reaches a server that is
-   * already up — bootOrch, and this install, never run for it. Concretely: tracking on first plants
-   * the task stub (server boots); orchestration on second calls startOrch(), which no-ops because
-   * `orch` is already set — without this function being called independently, the orchestration stub
-   * would never be planted for that session, on the one transition (enabling the feature) where losing
-   * the only discovery path for it matters most (see the header comment in stub.ts).
+   * the server (see startOrch's `if (orch || orchStarting) return`), and the server is already up
+   * from app start. So a toggle turned on later reaches a running server, and bootOrch — with the
+   * install inside it — never runs for that toggle. Without this function being called independently
+   * its stub would never be planted, on the one transition (enabling the feature) where losing the
+   * only discovery path for it matters most (see the header comment in stub.ts).
    *
    * No-ops when the server has never come up (`orch` is null — nothing has a skillsPath yet to install
-   * from) or when every toggle is off (`stubs` comes out empty). Safe to call redundantly — that is
-   * the point of calling it from five places: installStub already skips a write once content matches
-   * (see stub.ts), so the worst repeated cost is a per-account file read, not a per-account write.
+   * from). Safe to call redundantly — that is the point of calling it from four places: installStub
+   * already skips a write once content matches (see stub.ts), so the worst repeated cost is a
+   * per-account file read, not a per-account write.
    */
   const installStubsForCurrentToggles = (): void => {
     if (!orch) return
     const stubs = [
-      ...(core.appSettings.getOrchestrationEnabled()
-        ? [
-            {
-              stubPath: path.join(orch.skillsPath, 'orchestration-stub.md'),
-              skillName: 'astera-orchestration'
-            }
-          ]
-        : []),
+      {
+        stubPath: path.join(orch.skillsPath, 'orchestration-stub.md'),
+        skillName: 'astera-orchestration'
+      },
       ...(core.appSettings.getWorkUnitTrackingEnabled()
         ? [{ stubPath: path.join(orch.skillsPath, 'task-stub.md'), skillName: 'astera-task' }]
         : []),
@@ -2238,7 +2231,6 @@ export function registerIpc(
         ? [{ stubPath: path.join(orch.skillsPath, 'handoff-stub.md'), skillName: 'astera-handoff' }]
         : [])
     ]
-    if (stubs.length === 0) return
     // installStub swallows per-stub and per-account failures itself and does not throw, but the
     // .catch is here so that even an unexpected failure cannot affect the caller.
     void installStub({
@@ -2255,14 +2247,13 @@ export function registerIpc(
   }
 
   let orchStarting = false
-  /** Starts the orchestration server. Called when **any of the four** toggles is on — agent
-   *  orchestration, work-unit tracking, the agent browser, or Smart Resume, since `/astera-task`,
-   *  `astera browser js` and `astera handoff` need the same CLI and the same `ASTERA_SESSION` the
-   *  orchestration server already hands out (see `orchEnvOf`'s doc). With all off, this is never
-   *  called and no port is opened. Turning any one of them on at runtime comes back through here and
-   *  starts immediately (sessions created after that get the CLI — environment variables are fixed
-   *  at spawn time, so sessions already running cannot). If it is already up, this does nothing.
-   *  Turning a toggle off does not close the server — `enabled()`/`trackingEnabled()`/
+  /** Starts the orchestration server. **Called at app start, unconditionally** — orchestration is
+   *  something Astera has rather than something a person switches on, so there is no state in which
+   *  Jobs, the `astera` command or the Host are absent by choice. `/astera-task`, `astera browser js`
+   *  and `astera handoff` ride on the same CLI and the same `ASTERA_SESSION` it hands out (see
+   *  `orchEnvOf`'s doc), so their toggles do not decide this either. If it is already up, this does
+   *  nothing; the toggles call it again only so a start that failed can be retried.
+   *  Turning one of those toggles off does not close the server — `trackingEnabled()`/
    *  `browserEnabled()`/`handoffEnabled()` are read on every request, so CLI calls after that are
    *  rejected with a 409. */
   const startOrch = async (): Promise<void> => {
@@ -3539,11 +3530,6 @@ export function registerIpc(
         do {
           scheduleAgain = false
           if (!orch) return
-          // 꺼져 있으면 곧바로 나간다. **판정의 두 번째 사본이 아니다** — 권위는 그대로
-          // handleCommand 에 있고(그쪽이 409 conflict 로 거절한다), 여기 있는 이유는 값을 아끼는
-          // 것뿐이다: 꺼진 채로 저장이 일어날 때마다 슬롯 수만큼 로그가 쌓이는데 orchLog 는 메인
-          // 스레드의 동기 appendFileSync 다. 아래 slots.length === 0 조기 탈출과 같은 성격이다.
-          if (!orch.deps.enabled()) return
           // **계정이 없어 띄울 수 없는 Task 에 Gate 를 연다.** slotsToFill 이 그것들을 건너뛰므로
           // 아래 루프는 보지 못하고, 그냥 두면 Run 이 이유 없이 서 있는다 — 이 하위 시스템이
           // 없애려는 증상 그대로다(gateSlot 의 주석). Gate 는 Task 를 blocked 로 보내므로 판정이
@@ -3935,17 +3921,15 @@ export function registerIpc(
     /** 예약 템플릿의 발화. 판정은 core 의 firesDue 가 하고(그쪽에 테스트가 있다) 여기는 그 답대로
      *  명령을 부른다. */
     const orchFireTick = async (): Promise<void> => {
-      // 꺼져 있으면 아무 일도 하지 않는다. **끄는 것이 서버를 닫지는 않는다** —
-      // settings.setOrchestrationEnabled 는 enabled() 로 거절하게만 하므로, 이 확인이 없으면 꺼진
-      // 채로 회차가 계속 생긴다. runScheduler 의 같은 가드와 같은 이유다.
+      // 서버가 서 있지 않으면 아무 일도 하지 않는다.
       //
-      // **무장을 들고 있지 않고 버린다.** 들고 있으면 꺼져 있던 동안 지나간 시각이 그대로 남아,
-      // 다시 켜는 순간 그 시각들이 한꺼번에 발화한다 — 09:00 예약이 15:00 에 도는 것이고, 아무도
-      // 그 시각을 잡지 않았다. 놓친 발화는 버리는 것이 이 기능의 결정이므로(설계 2·5절) 끄고
-      // 켜는 것이 재시작과 같아야 한다: 재시작하면 이 Map 은 비어 있고, firesDue 의 첫 바퀴가
+      // **무장을 들고 있지 않고 버린다.** 들고 있으면 서 있지 않던 동안 지나간 시각이 그대로 남아,
+      // 다시 서는 순간 그 시각들이 한꺼번에 발화한다 — 09:00 예약이 15:00 에 도는 것이고, 아무도
+      // 그 시각을 잡지 않았다. 놓친 발화는 버리는 것이 이 기능의 결정이므로(설계 2·5절) 서버가
+      // 다시 서는 것이 재시작과 같아야 한다: 재시작하면 이 Map 은 비어 있고, firesDue 의 첫 바퀴가
       // nextFireAt(rule, now) 으로 다시 무장하기만 한다.
       const o = orch
-      if (!o || !o.deps.enabled()) {
+      if (!o) {
         orchArmed = new Map()
         return
       }
@@ -4320,11 +4304,10 @@ export function registerIpc(
           return `(unknown dispatch: ${dispatchId})`
         return orchTails.read(dispatchId, limit)
       },
-      // Read on every request — turning it off at runtime has to reject CLI calls from then on
-      enabled: () => core.appSettings.getOrchestrationEnabled(),
-      // Same reasoning as `enabled` above, but for the session-task-* commands. workUnitCollector is
-      // declared further down (around the `WorkUnitCollector` construction) — referencing it here is
-      // fine because these arrows only run once a call comes in, well after that declaration has run.
+      // Read on every request — turning it off at runtime has to reject the session-task-* commands
+      // from then on. workUnitCollector is declared further down (around the `WorkUnitCollector`
+      // construction) — referencing it here is fine because these arrows only run once a call comes
+      // in, well after that declaration has run.
       trackingEnabled: () => core.appSettings.getWorkUnitTrackingEnabled(),
       // Same reasoning again, for browser-js — and `agentRuns` is built above this function so the
       // deps can name it here.
@@ -4529,13 +4512,10 @@ export function registerIpc(
       // Job Continuity P1: a worker Dispatch just closed without an outcome, so its Task is
       // stranded. Always injected — the wiring always sets this property — but a no-op whenever
       // `recovery` is null (the toggle is off, or the reconciler has not been built yet on this very
-      // first call) or orchestration itself is off (same guard, same reason as the boot sweep below:
-      // a worker that recovery spawns while orchestration is off can never report — every call it
-      // makes gets a 409).
+      // first call).
       onDispatchLost: (a) =>
         void (
           recovery &&
-          deps.enabled() &&
           recovery.reconcileOne(a.dispatchId).catch((e) => orchLog(`recovery: reconcileOne failed: ${String(e)}`))
         )
     }
@@ -4562,7 +4542,6 @@ export function registerIpc(
       // 거울이 비어 있으면 null — 빈 상태로 판정하면 "끊긴 것이 없다" 는 거짓말이 된다. 여기까지
       // 왔다는 것은 state-get 이 성공했다는 뜻이라 실제로는 늘 차 있다.
       getState: () => (orchMirror.loaded() ? orchMirror.getState() : null),
-      enabled: () => deps.enabled(),
       startValidation: (r) => deps.startValidation?.(r),
       startReview: (r) => deps.startReview?.(r),
       now: () => new Date().toISOString(),
@@ -4589,13 +4568,12 @@ export function registerIpc(
         readGitFacts: (cwd) => readGitFacts(cwd),
         smartResume: () => core.appSettings.getResumeStrategy() === 'smart',
         // The last gate before a worker is spawned. Turning the toggle off, or quitting, must not
-        // put a worker on the disk a moment later — so this checks both `recovery === mine` (still
-        // the live reconciler, not one closeContinuity already retired) and orchestration itself
-        // (same reason the boot sweep and onDispatchLost guard on deps.enabled() above). The
-        // reconciler journals this as RECOVERY_FAILED through its own swallow-and-log helper, which
-        // is the honest record of what happened.
+        // put a worker on the disk a moment later — so this checks that `recovery === mine` (still
+        // the live reconciler, not one closeContinuity already retired). The reconciler journals
+        // this as RECOVERY_FAILED through its own swallow-and-log helper, which is the honest record
+        // of what happened.
         execute: async (a) => {
-          if (recovery !== mine || !deps.enabled())
+          if (recovery !== mine)
             return { ok: false, error: 'recovery was turned off while this attempt was being decided' }
           return executeRecovery(a, {
             getState: deps.getState,
@@ -4648,17 +4626,21 @@ export function registerIpc(
     // same validation and review after it. Nothing here needs a separate copy of any of that, and a
     // copy would be the thing that drifts.
     //
-    // **`deps.enabled()` guards it, for a reason the other two do not have.** `bootOrch` runs for
-    // any of the four toggles, so it can run with orchestration itself off — and then
-    // `handleCommand` answers every one of these with a 409, which the drain would read as the app
-    // refusing them and clear their files. That would delete finished workers' reports because
-    // somebody had the browser toggle on and orchestration off. They stay where they are instead,
-    // and the next start with orchestration on takes them.
-    if (pendingReports.length > 0 && !deps.enabled())
-      orchLog(
-        `pending reports — ${pendingReports.length} left untouched: orchestration is off, so there is nothing that can apply them yet`
-      )
-    else if (pendingReports.length > 0) {
+    // **There is no longer a state in which this must be skipped.** It used to be guarded on
+    // orchestration being on, because `bootOrch` runs for any of the toggles and `handleCommand`
+    // answered every queued report with a 409 while orchestration was off — which this drain reads
+    // as "the app refused it" and clears the file for, deleting a finished worker's report because
+    // somebody happened to have the browser toggle on. With orchestration always on, that refusal
+    // cannot be produced and the guard has gone with it.
+    //
+    // **What made that guard necessary is still here, and it is the line below.** Any non-2xx reads
+    // as a refusal, and `applyPendingReports` deletes a refused report's file — its contract is that
+    // a refusal is permanent ("that answer will be the same at every future start"). A 409 that
+    // means "not now" rather than "no" would therefore destroy a finished worker's only record. No
+    // such 409 is reachable for a queued report today: they are `send` alone (`isQueueableReport`),
+    // and what `send` can answer is 400, 403 and the pure layer's 404, all of them permanent. A new
+    // `conflict(…)` on this path would have to be weighed against that before it is added.
+    if (pendingReports.length > 0) {
       const drained = await applyPendingReports({
         queued: pendingReports,
         apply: async (r) => {
@@ -4718,12 +4700,7 @@ export function registerIpc(
     // null. A worker recovered in that window would come up with no astera CLI and no
     // ASTERA_SESSION: stranded with a spec file telling it to run commands it does not have — the
     // exact failure this feature exists to prevent.
-    //
-    // **`deps.enabled()` guards it too** — Job Continuity's checkbox does not imply orchestration is
-    // on (it lives in the Smart Resume section and is its own reason to run startOrch), and with
-    // orchestration off the server rejects every call a spawned worker makes with a 409, so it can
-    // never report. Same guard, same reasoning as runScheduler's `if (!orch.deps.enabled()) return`.
-    if (recovery && deps.enabled())
+    if (recovery)
       void recovery.reconcileAll().catch((e) => orchLog(`recovery: boot sweep failed: ${String(e)}`))
     // 완료 수렴 Run 이 재시작으로 멈춘 validating·reviewing Task. 시작은 deps 가 다 갖춰지고 orch 가
     // 선 뒤인 여기다 — startValidation 은 큐에, startReview 는 세션 spawn 에 닿는다.
@@ -4736,9 +4713,7 @@ export function registerIpc(
     // 그 Task 들을 다시 찾아 주었다. 이제는 sweep 이 그 자리를 대신하고, 붙을 때마다 돈다.
     //
     // 판정식은 load 와 같은 함수 하나다(core/orchestration/store.ts 의 interruptedResumes) — Run
-    // 게이트(일시 중지·예약 템플릿·pendingStart)와 열린 Dispatch 를 그쪽이 거른다. enabled() 가드와
-    // "꺼져 있으면 조용히 버리지 않고 로그를 남긴다" 도 그 안으로 옮겼다(리뷰 fix 1차, Minor→
-    // promoted 가 요구한 것이 그 문장이지 그 자리가 아니다).
+    // 게이트(일시 중지·예약 템플릿·pendingStart)와 열린 Dispatch 를 그쪽이 거른다.
     resumeSweep.run('this app started')
     // 예약 템플릿의 발화. **첫 바퀴는 무장만 한다**(firesDue) — 앱을 켤 때마다 한 회차가 도는
     // 것을 막는 장치가 그것이고, 그래서 여기서 즉시 한 번 부르지 않는다.
@@ -4769,7 +4744,7 @@ export function registerIpc(
       // that is gone and the restart button never appears. That is already what a plain app restart
       // leaves behind, since the slot is persisted and nothing at boot clears it.
       if (exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
-      if (!orch || !orch.deps.enabled()) return
+      if (!orch) return
       const st = orch.deps.getState()
       const run = st.runs.find((r) => r.coordinatorSessionId === sessionId)
       if (!run) return
@@ -4789,7 +4764,7 @@ export function registerIpc(
      *  훅이 아니라 바쁨으로 막는 것은 더 거친 근사다: 대화상자가 떴는데 바쁨이 풀리는 런타임이
      *  있으면 이 가드는 새어 나간다. 그 경우를 실측한 적은 없다. */
     const nudgeSleepingCoordinators = async (): Promise<void> => {
-      if (!orch || !orch.deps.enabled()) return
+      if (!orch) return
       for (const m of unreadUpwardMail(orch.deps.getState(), {
         nowMs: Date.now(),
         staleMs: COORDINATOR_NUDGE_MS
@@ -4909,15 +4884,11 @@ export function registerIpc(
       }
     })
   }
-  if (
-    orchWiring &&
-    (core.appSettings.getOrchestrationEnabled() ||
-      core.appSettings.getWorkUnitTrackingEnabled() ||
-      core.appSettings.getAgentBrowserEnabled() ||
-      core.appSettings.getResumeStrategy() === 'smart' ||
-      core.appSettings.getJobContinuityEnabled())
-  )
-    void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
+  // **Unconditional.** Orchestration is not a toggle any more, so there is no combination of
+  // settings under which the server stays down: Jobs is always in the rail, `astera` always has a
+  // Host to reach, and every session it starts is given the CLI. The toggles that used to be the
+  // other four reasons to come here now only decide which commands are answered.
+  if (orchWiring) void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
   ipcMain.on('sessions.write', (_e, id, data) => core.sessions.write(id, data))
   ipcMain.on('sessions.resize', (_e, id, cols, rows) => core.sessions.resize(id, cols, rows))
   ipcMain.on('sessions.ack', (_e, id, bytes) => core.sessions.ack(id, bytes))
@@ -5533,7 +5504,9 @@ export function registerIpc(
     'orch.command',
     async (_e, projectPath: string, cmd: string, args: Record<string, unknown>) => {
       await assertAllowedPath(projectPath)
-      if (!orch) return { status: 409, body: { error: 'orchestration disabled' } }
+      // The server is not up — a boot that failed, or one still in flight. Not 'orchestration is
+      // off': there is no such state any more, and a person told that would go looking for a switch.
+      if (!orch) return { status: 409, body: { error: 'orchestration is not running yet' } }
       // **범위는 렌더러가 지금 보고 있는 것이다.** 소유 판정이 답해야 하는 물음은 "이 렌더러가 남의
       // 프로젝트 Run 을 부르는가" 이고, 렌더러는 자기가 **보여 준** Run 만 이름 부른다. 무엇을
       // 보여 줬는지는 orchProject 가 알고 있다 — orch.list 가 정규화해 둔 저장소 경로다.
@@ -5587,10 +5560,10 @@ export function registerIpc(
   })
 
   // How It Works: understanding.json persistence. Unlike OrchestrationStore above (built inside
-  // bootOrch, which only runs when the orchestration toggle is on), this has nothing to do with agent
-  // orchestration — a project's stored explanation must be readable whether or not that toggle is on,
-  // and the toggle defaults to off. So it is constructed here, unconditionally, at the same scope as
-  // assertAllowedPath (needed by the handler below) rather than beside OrchestrationStore.
+  // bootOrch, which only runs if the server comes up), this has nothing to do with agent
+  // orchestration — a project's stored explanation must be readable even on a start where the server
+  // failed. So it is constructed here, unconditionally, at the same scope as assertAllowedPath
+  // (needed by the handler below) rather than beside OrchestrationStore.
   const understanding = new UnderstandingStore(
     path.join(app.getPath('userData'), 'understanding.json')
   )
@@ -5661,8 +5634,8 @@ export function registerIpc(
 
   // Work Unit detection: workUnits.json persistence, and the collector that fills it. Built here for
   // exactly the reason the understanding store above is — this has nothing to do with agent
-  // orchestration, so it must not go inside bootOrch, which only runs when the orchestration toggle is
-  // on and that toggle defaults to off. **Built unconditionally, started conditionally**: the object
+  // orchestration, so it must not go inside bootOrch, which only runs if the server comes up.
+  // **Built unconditionally, started conditionally**: the object
   // always exists, so every trigger site (session data, session exit, history updates, the git
   // watcher) can call it on a default install, and it is start() that the work unit toggle gates.
   // Those trigger sites appear earlier in this function than this declaration and close over it;
@@ -5759,7 +5732,7 @@ export function registerIpc(
     // Spec §5.4 — the same question server.ts asks before accepting session-task-*: is this
     // session's work already going to be recorded by a Run, at some level, when that Run finishes?
     inRun: (sessionId) => {
-      if (!orch || !orch.deps.enabled()) return false
+      if (!orch) return false
       const st = orch.deps.getState()
       if (st.dispatches.some((d) => d.sessionId === sessionId)) return true
       return st.runs.some(
@@ -6381,17 +6354,13 @@ export function registerIpc(
     installed: boolean
     onPath: boolean
     hint: string
-    orchestrationEnabled: boolean
   } => {
     const dir = cliBinDir()
     return {
       dir,
       installed: shuttleNames().every((n) => existsSync(path.join(dir, n))),
       onPath: isOnPath({ dir, pathVar: process.env.PATH ?? '', platform: process.platform }),
-      hint: pathHintFor({ dir, platform: process.platform }),
-      // **오케스트레이션이 꺼져 있으면 설치해도 쓸 수 없다.** 접속 정보 파일을 쓰는 것이 그
-      // 서버이고, 그것이 없으면 CLI 는 "앱이 없다"(HOST_NOT_RUNNING)로 끝난다.
-      orchestrationEnabled: core.appSettings.getOrchestrationEnabled()
+      hint: pathHintFor({ dir, platform: process.platform })
     }
   }
 
@@ -6404,26 +6373,10 @@ export function registerIpc(
     return cliStatus()
   })
 
-  // The agent orchestration toggle. The same trust-boundary check as setLang — the value the renderer
-  // sent is validated before being written to disk.
-  ipcMain.handle('settings.getOrchestrationEnabled', () => core.appSettings.getOrchestrationEnabled())
-  ipcMain.handle('settings.setOrchestrationEnabled', async (_e, enabled: boolean) => {
-    if (typeof enabled !== 'boolean')
-      throw new Error(`INVALID_ORCHESTRATION_ENABLED: ${String(enabled)}`)
-    await core.appSettings.setOrchestrationEnabled(enabled)
-    // Turning it on starts it immediately (a no-op if already up). Why turning it off does not close it is in the startOrch comment.
-    if (enabled && orchWiring) await startOrch()
-    // Not gated on whether startOrch() just booted anything — the case this covers is exactly the one
-    // where it did not: the server was already up (started by another toggle), so bootOrch's own
-    // install never ran for this one. installStubsForCurrentToggles re-reads every toggle itself and
-    // no-ops when the server still is not up.
-    if (enabled) installStubsForCurrentToggles()
-  })
-
   // The work unit tracking toggle. The same trust-boundary check as setLang — the value the renderer
   // sent is validated before being written to disk. Registered unconditionally here (not inside
-  // bootOrch, which only runs once orchestration is on) so the checkbox works on a default install
-  // exactly like every other setting.
+  // bootOrch, which only runs if the server comes up) so the checkbox works even on a start where it
+  // did not, exactly like every other setting.
   ipcMain.handle('settings.getWorkUnitTrackingEnabled', () =>
     core.appSettings.getWorkUnitTrackingEnabled()
   )
@@ -6435,10 +6388,12 @@ export function registerIpc(
     // 닫는다 — 스펙 §16.1 이다. 저장소를 다 읽기 전에 시작하지 않도록 load 를 먼저 기다린다.
     await workUnitsLoaded
     await workUnitCollector.onEnabledChanged(enabled)
-    // Same line the orchestration setter uses, for the same reason: /astera-task needs the server
-    // and the planted CLI. Turning it off does not close the server — see the startOrch comment.
+    // **A retry, not the reason the server exists.** It comes up at app start on its own; this only
+    // covers a start where that failed, so turning the toggle on gets a second chance rather than
+    // nothing. Turning it off does not close the server — see the startOrch comment.
     if (enabled && orchWiring) await startOrch()
-    // Same reasoning as the orchestration setter above — see installStubsForCurrentToggles's comment.
+    // The task stub has to reach every account now, and bootOrch's own install is long past — see
+    // installStubsForCurrentToggles's comment.
     if (enabled) installStubsForCurrentToggles()
   })
 
@@ -6447,8 +6402,8 @@ export function registerIpc(
   ipcMain.handle('settings.setAgentBrowserEnabled', async (_e, enabled: boolean) => {
     if (typeof enabled !== 'boolean') throw new Error(`INVALID_AGENT_BROWSER_ENABLED: ${String(enabled)}`)
     await core.appSettings.setAgentBrowserEnabled(enabled)
-    // Same line the other two setters use, for the same reason: browser-js needs the server and the
-    // planted CLI. Turning it off does not close the server — browserEnabled() is read per request.
+    // Same two lines the work-unit setter above uses, for the same two reasons. Turning it off does
+    // not close the server — browserEnabled() is read per request.
     if (enabled && orchWiring) await startOrch()
     if (enabled) installStubsForCurrentToggles()
   })
@@ -6505,8 +6460,8 @@ export function registerIpc(
     if (strategy !== 'smart' && strategy !== 'original')
       throw new Error(`INVALID_RESUME_STRATEGY: ${String(strategy)}`)
     await core.appSettings.setResumeStrategy(strategy)
-    // Same two lines the other three toggles' setters use, for the same reason: `astera handoff`
-    // needs the server and the planted CLI, and the astera-handoff stub has to reach every account.
+    // Same two lines the other two toggles' setters use, for the same reasons: a retry for a start
+    // where the server did not come up, and the astera-handoff stub has to reach every account.
     // Turning it off does not close the server — handoffEnabled() is read per request.
     if (strategy === 'smart' && orchWiring) await startOrch()
     if (strategy === 'smart') installStubsForCurrentToggles()
@@ -6514,7 +6469,7 @@ export function registerIpc(
 
   // 에이전트 권한 모드. 값 검사만 하고 부수 효과는 없다 — 이 값은 **다음 spawn 부터** 읽히고
   // (startWorker·startCoordinator 가 그때 getAgentPermissionMode 를 부른다), 이미 떠 있는 세션의
-  // 인수는 spawn 시점에 고정되므로 되돌릴 방법이 없다. 오케스트레이션 토글의 힌트가 같은 말을 한다.
+  // 인수는 spawn 시점에 고정되므로 되돌릴 방법이 없다. 이 토글의 힌트가 그 말을 한다.
   ipcMain.handle('settings.getAgentPermissionMode', () => core.appSettings.getAgentPermissionMode())
   ipcMain.handle('settings.setAgentPermissionMode', async (_e, mode: unknown) => {
     if (mode !== 'yolo' && mode !== 'manual') throw new Error(`INVALID_AGENT_PERMISSION_MODE: ${String(mode)}`)
@@ -6736,8 +6691,8 @@ export function registerIpc(
           sock.on('error', () => done(false))
           setTimeout(() => done(false), 1_000).unref?.()
         }),
-      // hostLog, not orchLog: this is a Host diagnostic, and it must still be recorded when
-      // orchestration is off, which is exactly when orchLog is a no-op.
+      // hostLog, not orchLog: this is a Host diagnostic, and it must still be recorded on a start
+      // where the orchestration wiring never came up, which is exactly when orchLog is a no-op.
       log: (m) => hostLog(m)
     })
     const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
@@ -6825,7 +6780,8 @@ export function registerIpc(
       onHostGone: (cb: () => void) => hostClient?.onDisconnect(cb) ?? ((): void => {}),
       // hostLog, not orchLog: this is the Host failure log every other line in startHostClient uses,
       // and the one path here (a caller's onExit throwing while ptyFactory.ts ends a refused spawn)
-      // must still be recorded when orchestration is off, which is exactly when orchLog is a no-op.
+      // must still be recorded on a start where the orchestration wiring never came up, which is
+      // exactly when orchLog is a no-op.
       log: (m: string) => hostLog(`host: ${m}`),
       // A spawn the Host never answered. **Only a Host too old for the heartbeat is judged by this.**
       // One that answers pings is already being asked the question directly and far more often, and a

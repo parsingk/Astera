@@ -12,8 +12,7 @@ const makeDeps = (): OrchServerDeps => {
     startWorker: async () => ({ sessionId: 'sess1', cwd: 'D:/p', specPath: 'D:/p/orch/specs/a.md' }),
     releaseWorker: async () => {},
     listAccounts: () => [{ id: 'acc1', label: '계정1', provider: 'codex' }],
-    readWorker: async () => '',
-    enabled: () => true
+    readWorker: async () => ''
   }
 }
 
@@ -347,8 +346,7 @@ describe('check --wait 커밋 순서', () => {
       startWorker: async () => ({ sessionId: 'sess1', cwd: 'D:/p', specPath: 'D:/p/orch/specs/a.md' }),
       releaseWorker: async () => {},
       listAccounts: () => [{ id: 'acc1', label: '계정1', provider: 'codex' }],
-      readWorker: async () => '',
-      enabled: () => true
+      readWorker: async () => ''
     }
     const { taskId, dispatchId } = await seed(deps)
     const waiting = handleCommand(deps, { sessionId: 'coord' }, 'check', {

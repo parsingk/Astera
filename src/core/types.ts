@@ -1061,11 +1061,6 @@ export interface CoreApi {
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.
     getLang(): Promise<LangPreference>
     setLang(lang: Lang | null): Promise<void>
-    // The agent orchestration toggle. Turning it on makes the app run a local HTTP server and plant
-    // access to the astera CLI in newly created sessions — it does not apply to sessions that are
-    // already open (environment variables are fixed at spawn time).
-    getOrchestrationEnabled(): Promise<boolean>
-    setOrchestrationEnabled(enabled: boolean): Promise<void>
     // Work unit tracking: groups a session's activity into goal-sized units. Off by default, and reads
     // nothing from before the moment it is turned on.
     getWorkUnitTrackingEnabled(): Promise<boolean>
@@ -1564,8 +1559,6 @@ export interface CliInstallStatus {
   onPath: boolean
   /** PATH 에 없을 때 사람이 직접 실행할 한 줄. 앱은 셸 프로필을 고치지 않는다. */
   hint: string
-  /** 오케스트레이션이 꺼져 있으면 설치해도 앱을 찾지 못한다. */
-  orchestrationEnabled: boolean
 }
 
 export type RendererApi = CoreApi & {

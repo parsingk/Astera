@@ -79,9 +79,7 @@ export async function answerFromFile(a: {
     startWorker: needsHost('startWorker'),
     releaseWorker: needsHost('releaseWorker'),
     listAccounts: needsHost('listAccounts'),
-    readWorker: needsHost('readWorker'),
-    // 이 길에 온 명령은 Host 가 없어서 온 것이지 기능이 꺼져서 온 것이 아니다.
-    enabled: () => true
+    readWorker: needsHost('readWorker')
   } as unknown as OrchServerDeps
   const r = await handleCommand(deps, { sessionId: a.sessionId }, a.cmd, a.args)
   // **`status` 만 고쳐 내보낸다.** 그 명령의 `running: true` 와 `pid` 는 "이 명령에 닿았다는 것이

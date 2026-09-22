@@ -53,7 +53,6 @@ const makeDeps = (initial: OrchState = emptyState()): OrchServerDeps & { state: 
     releaseWorker: async () => {},
     listAccounts: () => [{ id: 'acc1', label: '계정1', provider: 'codex' }],
     readWorker: async () => 'output',
-    enabled: () => true,
     now: () => NOW
   } as OrchServerDeps & { state: OrchState }
 }
@@ -66,11 +65,11 @@ const call = (
 ): Promise<{ status: number; body: unknown }> => handleCommand(deps, { sessionId }, cmd, args)
 
 describe('handleCommand — 기본', () => {
-  it('토글이 off면 disabled 에러를 낸다', async () => {
-    const deps = { ...makeDeps(), enabled: () => false }
-    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
-    expect(r.status).toBe(409)
-    expect(JSON.stringify(r.body)).toContain('disabled')
+  // **오케스트레이션에는 켜고 끄는 값이 없다.** Astera 가 늘 갖고 있는 기능이므로, 이 층에는
+  // 그것을 묻는 dep 자체가 없다 — makeDeps 에도 없고, 그래서 이 호출은 거절되지 않는다.
+  it('꺼져 있음을 물어볼 자리가 없다 — 명령은 그냥 돈다', async () => {
+    const r = await call(makeDeps(), 'run-create', { objective: 'o', cwd: 'D:/p' })
+    expect(r.status).toBe(200)
   })
   // **없는 명령과 없는 id 는 다른 일이다**(공개 CLI 설계 §8). 501 은 CLI 쪽에서
   // VERSION_MISMATCH(9) 로 떨어지고, 404 는 NOT_FOUND(4) 로 떨어진다.
@@ -388,10 +387,9 @@ describe('session-task-*', () => {
     })
   }
 
-  it('오케스트레이션이 꺼져 있어도 추적이 켜져 있으면 받는다', async () => {
+  it('추적이 켜져 있으면 받는다', async () => {
     const deps = {
       ...makeDeps(),
-      enabled: () => false,
       trackingEnabled: () => true,
       sessionTasks: makeSessionTasks()
     }
@@ -404,13 +402,6 @@ describe('session-task-*', () => {
     const r = await call(deps, 'session-task-start', { objective: '인증 리팩터' })
     expect(r.status).toBe(409)
     expect(JSON.stringify(r.body)).toContain('tracking')
-  })
-
-  it('추적이 켜져 있어도 run-create 는 여전히 오케스트레이션을 요구한다', async () => {
-    const deps = { ...makeDeps(), enabled: () => false, trackingEnabled: () => true }
-    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
-    expect(r.status).toBe(409)
-    expect(JSON.stringify(r.body)).toContain('disabled')
   })
 
   it('워커 세션은 세 명령을 다 못 부른다 — Run 이 이미 그 일을 기록한다', async () => {
@@ -1531,7 +1522,6 @@ describe('handleCommand — worker-start × OrchCoordinator 통합 배선', () =
       releaseWorker: async () => {},
       listAccounts: () => [{ id: 'acc1', label: '계정1', provider: 'codex' }],
       readWorker: async () => 'output',
-      enabled: () => true,
       now: () => NOW
     } as OrchServerDeps & { state: OrchState }
   }
@@ -4283,10 +4273,6 @@ describe('browser-js', () => {
     const deps = { ...makeDeps(), browserEnabled: () => true, browserRun: async () => ({ ok: false as const, status: 409 as const, error: 'a script is already running' }) }
     expect(await call(deps, 'browser-js', { script: 'log(1)' }, 's1')).toEqual({ status: 409, body: { error: 'a script is already running' } })
   })
-  it('does not need orchestration to be enabled', async () => {
-    const deps = { ...makeDeps(), enabled: () => false, browserEnabled: () => true, browserRun: async () => ({ ok: true as const, result: { log: [] } }) }
-    expect((await call(deps, 'browser-js', { script: 'log(1)' }, 's1')).status).toBe(200)
-  })
 })
 
 describe('handoff', () => {
@@ -4312,9 +4298,9 @@ describe('handoff', () => {
     expect(c.status).toBe(409)
   })
 
-  it('does not need orchestration to be on', async () => {
+  it('saves the document it was handed, for the calling session', async () => {
     const store = saved()
-    const deps = { ...makeDeps(), enabled: () => false, handoffEnabled: () => true, handoffs: store }
+    const deps = { ...makeDeps(), handoffEnabled: () => true, handoffs: store }
     const r = await call(deps, 'handoff', { memo: doc }, 'tab-1')
     expect(r.status).toBe(200)
     expect(r.body).toEqual({ savedAt: NOW })

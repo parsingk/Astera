@@ -14,15 +14,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.general.language': 'Language',
   'settings.general.language.system': 'System ({lang})',
   'settings.general.language.saveFailed': 'Could not save the language setting: {detail}',
-  'settings.orchestration.label': 'Agent orchestration (experimental)',
-  'settings.orchestration.hint':
-    'When on, agent sessions started by the app can start worker sessions on another vendor. ' +
-    'An agent can then create sessions under any of your accounts, so turn this on only when you need it. ' +
-    'It only works in a project that is a git repository. ' +
-    'It does not apply to sessions that are already open — only new sessions get it. ' +
-    'Ask the session you want to orchestrate with to run astera help for the full usage guide.',
-  'settings.orchestration.saveFailed': 'Could not save the orchestration setting: {detail}',
-  // The command line tool, directly under orchestration: this command reaches that server.
+  // The command line tool.
   'settings.cli.label': 'Command line tool (astera)',
   'settings.cli.hint':
     'Installing it lets you type astera in an ordinary shell. ' +
@@ -36,8 +28,6 @@ export const en: Record<keyof typeof ko, string> = {
   // The one line a person runs themselves is shown below
   'settings.cli.pathMissing': 'This folder is not on PATH. Running the line below once adds it.',
   'settings.cli.onPath': 'This folder is on PATH.',
-  'settings.cli.needsOrchestration':
-    'Agent orchestration is off. While it is off, astera runs but its Job commands are refused.',
   'settings.cli.copy': 'Copy',
   // Agent permission mode
   'settings.agentPermission.label': 'Run agents without permission checks',

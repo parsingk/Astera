@@ -19,7 +19,7 @@ import {
 } from '../core/notify/settings'
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, the
- *  orchestration toggle, the work unit tracking toggle, the agent browser toggle, the Job Continuity
+ *  work unit tracking toggle, the agent browser toggle, the Job Continuity
  *  toggle, the resume strategy, the terminal font, the theme, the default session kind, and the
  *  desktop notification flags.
  *  A null lang means the user has never picked one explicitly — the caller derives it with
@@ -28,7 +28,6 @@ export class AppSettingsStore {
   private lang: Lang | null = null
   /** The update campaign the user dismissed. The basis for not showing the same campaign again. */
   private dismissedCampaignId: string | null = null
-  private orchestrationEnabled = false
   private workUnitTrackingEnabled = false
   private agentBrowserEnabled = false
   /** Job Continuity (spec §3). Off by default; enabling it can also set resumeStrategy — see
@@ -84,11 +83,9 @@ export class AppSettingsStore {
       const dismissed = (parsed as { dismissedCampaignId?: unknown }).dismissedCampaignId
       this.dismissedCampaignId =
         typeof dismissed === 'string' && dismissed.trim() ? dismissed : null
-      // Narrowed to === true — values like 'yes' or 1 must not slip through as truthy and turn an experimental feature on
-      this.orchestrationEnabled =
-        (parsed as { orchestrationEnabled?: unknown }).orchestrationEnabled === true
-      // Same narrowing, same reason — and it is the whole point of this toggle: default (and any
-      // untrusted file content) reads as off, so detection stays off until the user explicitly turns it on.
+      // Narrowed to === true — values like 'yes' or 1 must not slip through as truthy and turn an
+      // experimental feature on. It is the whole point of this toggle: default (and any untrusted
+      // file content) reads as off, so detection stays off until the user explicitly turns it on.
       this.workUnitTrackingEnabled =
         (parsed as { workUnitTrackingEnabled?: unknown }).workUnitTrackingEnabled === true
       this.agentBrowserEnabled =
@@ -146,7 +143,6 @@ export class AppSettingsStore {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         this.lang = null
         this.dismissedCampaignId = null
-        this.orchestrationEnabled = false
         this.workUnitTrackingEnabled = false
         this.agentBrowserEnabled = false
         this.jobContinuityEnabled = false
@@ -166,9 +162,8 @@ export class AppSettingsStore {
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.lang = null
       this.dismissedCampaignId = null
-      // The failure branch resets this too — otherwise, on a reload through the same instance, the previous value
+      // The failure branch resets these too — otherwise, on a reload through the same instance, the previous value
       // survives the corrupt-file recovery and leaves a setting enabled that the file does not contain
-      this.orchestrationEnabled = false
       this.workUnitTrackingEnabled = false
       this.agentBrowserEnabled = false
       this.jobContinuityEnabled = false
@@ -206,15 +201,6 @@ export class AppSettingsStore {
     await this.persist()
   }
 
-  getOrchestrationEnabled(): boolean {
-    return this.orchestrationEnabled
-  }
-
-  async setOrchestrationEnabled(enabled: boolean): Promise<void> {
-    this.orchestrationEnabled = enabled
-    await this.persist()
-  }
-
   getWorkUnitTrackingEnabled(): boolean {
     return this.workUnitTrackingEnabled
   }
@@ -230,8 +216,8 @@ export class AppSettingsStore {
 
   /** The agent browser: sessions get a preview tab of their own to open, check and later click
    *  through this project's dev server, and the astera-browser skill is installed for every account.
-   *  Off by default for the same reason orchestration is — it installs files into the user's skill
-   *  directories and starts the local server. */
+   *  Off by default because it installs files into the user's skill directories and drives a browser
+   *  on their behalf. */
   async setAgentBrowserEnabled(enabled: boolean): Promise<void> {
     this.agentBrowserEnabled = enabled
     await this.persist()
@@ -351,13 +337,12 @@ export class AppSettingsStore {
 
   /** There is more than one field, so the whole object is always written — writing only one of them wipes the other
    *  (the defect from back when setLang wrote JSON.stringify({ lang })).
-   *  Falsy values are omitted: leaving lang:null and orchestrationEnabled:false out of the file still gives load the
+   *  Falsy values are omitted: leaving lang:null and workUnitTrackingEnabled:false out of the file still gives load the
    *  same result (it checks === true), and the file stays clean. */
   private async persist(): Promise<void> {
     const data: {
       lang?: Lang
       dismissedCampaignId?: string
-      orchestrationEnabled?: boolean
       workUnitTrackingEnabled?: boolean
       agentBrowserEnabled?: boolean
       jobContinuityEnabled?: boolean
@@ -373,7 +358,6 @@ export class AppSettingsStore {
     } = {}
     if (this.lang) data.lang = this.lang
     if (this.dismissedCampaignId) data.dismissedCampaignId = this.dismissedCampaignId
-    if (this.orchestrationEnabled) data.orchestrationEnabled = true
     if (this.workUnitTrackingEnabled) data.workUnitTrackingEnabled = true
     if (this.agentBrowserEnabled) data.agentBrowserEnabled = true
     if (this.jobContinuityEnabled) data.jobContinuityEnabled = true

@@ -35,10 +35,6 @@ export function createResumeSweep(a: {
   /** The mirror, or null while it holds nothing. **Null is not an empty state**: before the Host has
    *  pushed, "nothing is interrupted" would be a guess dressed as an answer. */
   getState(): OrchState | null
-  /** Whether agent orchestration itself is on. The wiring runs for any of the four toggles, and with
-   *  orchestration off the server answers every worker report with a 409 — a validation started then
-   *  could never finish. */
-  enabled(): boolean
   startValidation(a: { taskId: string; cwd: string }): void
   startReview(a: { taskId: string }): void
   now(): string
@@ -50,12 +46,6 @@ export function createResumeSweep(a: {
       if (!state) return
       const { revalidate, rereview } = interruptedResumes(state, a.now())
       if (revalidate.length === 0 && rereview.length === 0) return
-      if (!a.enabled()) {
-        a.log(
-          `restart cleanup (${why}) — orchestration is off, so ${revalidate.length} interrupted validation(s) and ${rereview.length} interrupted review(s) were not restarted; turning it on without restarting does not retry them — a restart with it already on will`
-        )
-        return
-      }
       for (const r of revalidate) a.startValidation(r)
       for (const taskId of rereview) a.startReview({ taskId })
       a.log(

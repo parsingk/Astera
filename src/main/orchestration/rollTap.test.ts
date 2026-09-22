@@ -104,7 +104,6 @@ const makeDeps = (initial: OrchState): OrchServerDeps & { state: () => OrchState
     releaseWorker: async () => {},
     listAccounts: () => [{ id: 'acc1', label: '계정1', provider: 'claude' }],
     readWorker: async () => '',
-    enabled: () => true,
     now: () => NOW
   } as OrchServerDeps & { state: () => OrchState }
 }

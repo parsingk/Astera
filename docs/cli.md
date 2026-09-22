@@ -8,11 +8,11 @@ Astera binary in Node mode, so the CLI and the app can never be different versio
 
 ## Install
 
-1. Open **Settings → General** and turn on **Agent orchestration (experimental)**.
-2. Under **Command line tool (astera)**, click **Install the astera command**.
-3. The panel names the folder it wrote to: `%LOCALAPPDATA%\astera\bin` on Windows,
+1. Open **Settings → Agents**, and under **Command line tool (astera)** click **Install the astera
+   command**.
+2. The panel names the folder it wrote to: `%LOCALAPPDATA%\astera\bin` on Windows,
    `~/.local/bin` on macOS and Linux.
-4. If that folder is not on your `PATH`, the panel shows one line to add it and a **Copy** button.
+3. If that folder is not on your `PATH`, the panel shows one line to add it and a **Copy** button.
    Run that line once, then open a new shell.
 
 Astera never edits your shell profile. The line is shown for you to run, so that the change is one
@@ -275,6 +275,9 @@ The boundary is your machine and your operating system account.
   was removed with the server it protected.
 - Public replies are shaped by an allowlist of fields. Account configuration directories, session
   credentials and provider tokens are not part of any reply, in either output mode.
+- Every agent session Astera starts can reach this command, and through it can start worker sessions
+  under any account the app holds. That is what orchestration is, and it is not something you switch
+  on: an agent you run is an agent that can spend your accounts.
 
 Anyone who can already run programs as you can run `astera`. Treat it with the same care as your
 shell.
@@ -283,7 +286,7 @@ shell.
 
 **`astera: command not found`**
 The install folder is not on your `PATH`, or this shell was opened before you added it. Re-check
-**Settings → General → Command line tool (astera)**, run the line it shows, and open a new shell.
+**Settings → Agents → Command line tool (astera)**, run the line it shows, and open a new shell.
 
 **Exit 3, "cannot reach the Host"**
 No Host is running and the command needs one. Run `astera host start`. If it does not come up,

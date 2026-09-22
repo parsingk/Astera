@@ -100,8 +100,8 @@ let hostClientRetireRef: (() => Promise<void>) | null = null
 let hostSurvivesUpdateRef: (() => boolean) | null = null
 // fix wave 최종, F1: the tab-briefing function, handed over unconditionally (OrchWiring.onTabResumeReady)
 // — unlike orchRef above, this is set the moment registerIpc runs, whether or not orchestration ever
-// boots. Read by the two rolling coordinators' resumeText dep when orchRef is null (orchestration off),
-// so a plain tab session's Smart Resume briefing does not depend on the unrelated orchestration toggle.
+// boots. Read by the two rolling coordinators' resumeText dep when orchRef is null (the server did not
+// come up), so a plain tab session's Smart Resume briefing does not depend on it having.
 let tabResumeTextRef: ((sessionId: string, form: 'handover' | 'update') => Promise<string | null>) | null =
   null
 // Work Unit 수집기의 "이 세션은 이어받은 것이다" 알림. `tabResumeTextRef` 와 같은 갈래다 —

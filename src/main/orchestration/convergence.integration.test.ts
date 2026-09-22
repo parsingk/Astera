@@ -284,7 +284,6 @@ function rig(initial: OrchState = emptyState()) {
     releaseWorker: async () => {},
     listAccounts: (provider) => (provider ? accounts.filter((a) => a.provider === provider) : accounts),
     readWorker: async () => '',
-    enabled: () => true,
     startValidation,
     startReview: startReviewHook,
     readReviewFile,

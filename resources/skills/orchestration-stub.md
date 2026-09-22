@@ -12,8 +12,7 @@ The full reference comes from the CLI — the single source of truth lives in th
 cannot drift from the installed version.
 
 1. Get the full reference (`astera` is on this session's PATH). This is also the tool check: if the
-   command is not found, this session was not started by the app, or orchestration is off — say so
-   and stop.
+   command is not found, this session was not started by the app — say so and stop.
    ```
    astera help
    ```

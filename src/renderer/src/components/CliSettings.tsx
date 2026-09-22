@@ -63,10 +63,6 @@ export function CliSettings(): React.JSX.Element {
               </button>
             </div>
           )}
-          {/* 설치는 됐는데 서버가 없으면 astera 는 "앱이 없다" 로 끝난다. 그 사실을 여기서 말한다. */}
-          {!status.orchestrationEnabled && (
-            <span className="settings-hint">{t('settings.cli.needsOrchestration')}</span>
-          )}
         </>
       )}
     </div>
