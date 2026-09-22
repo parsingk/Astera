@@ -11,6 +11,7 @@ import { HOST_PROTOCOL } from '../core/host/protocol'
 import { connectHost, type HostConnection } from '../core/host/connect'
 import { hostSpawnPlan, resolveHostEntry } from '../core/host/spawn'
 import { hostRuntimeBase, hostRuntimePaths } from '../core/host/runtime'
+import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { hostAddress } from '../host/address'
 import { userDataDir } from '../core/orchestration/cliDiscovery'
 import { exitCodeFor } from '../core/orchestration/cliOutput'
@@ -181,20 +182,6 @@ export function preparedRuntimeEntry(a: {
 const START_TIMEOUT_MS = 5_000
 const START_POLL_MS = 200
 
-/** How long `host stop` waits, after sending `retire`, for either a `retire-refused` reply or the
- *  connection ending, before concluding this Host is not going to answer at all.
- *
- *  **Copied from `src/main/host/client.ts`'s `PING_MS * PING_MISSES`, not imported** — this file
- *  cannot depend on `src/main` (the CLI outlives the app and must not need it) any more than it can
- *  import `CLI_VERSION` from `run.ts` (see that constant's own comment, just below). `PING_MS *
- *  PING_MISSES` is that file's own threshold for calling a connected Host unresponsive — the same
- *  15s judgment this command needs to make about a Host that answered `hello` and then went silent
- *  (docs/2026-09-22-host-unresponsive-recovery-design.md's wedged event loop is exactly this case:
- *  no reply, and no `close` either, because the Host's own code never runs again to send either
- *  one). `RETIRE_SETTLE_MS` in that same file (2s) was considered and rejected: it is a blind grace
- *  sleep client.ts gives a Host it already knows is exiting, not a "has this gone silent" verdict. */
-const STOP_TIMEOUT_MS = 15_000
-
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 /** Runs a `host-*` command and hands back what happened, without printing anything (see the note at
@@ -204,9 +191,9 @@ export async function runHostCommand(a: {
   env: NodeJS.ProcessEnv
   platform: NodeJS.Platform
   home: string
-  /** Overrides `STOP_TIMEOUT_MS` for `host-stop`. Test injection only, the same way `HostServerDeps`'
-   *  `idleMs`/`helloMs` and `HostClientDeps`'s `pingMs` are — nothing waits out a real 15s to prove a
-   *  silent Host resolves rather than hangs. */
+  /** Overrides `HOST_UNRESPONSIVE_MS` for `host-stop`'s wait. Test injection only, the same way
+   *  `HostServerDeps`'s `idleMs`/`helloMs` and `HostClientDeps`'s `pingMs` are — nothing waits out a
+   *  real 15s to prove a silent Host resolves rather than hangs. */
   stopTimeoutMs?: number
 }): Promise<{ body: unknown; code: number }> {
   if (a.cmd !== 'host-status' && a.cmd !== 'host-start' && a.cmd !== 'host-stop')
@@ -260,7 +247,7 @@ export async function runHostCommand(a: {
         offClose()
         resolve(r)
       }
-      const waitedMs = a.stopTimeoutMs ?? STOP_TIMEOUT_MS
+      const waitedMs = a.stopTimeoutMs ?? HOST_UNRESPONSIVE_MS
       const timer = setTimeout(() => settle(hostStopResult({ outcome: 'timeout', waitedMs })), waitedMs)
       timer.unref?.()
       offMessage = connected.onMessage((m) => {

@@ -3,6 +3,7 @@
 // as a sentence somebody can read, rather than reaching a caller.
 import net from 'node:net'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage } from '../../core/host/protocol'
+import { HOST_UNRESPONSIVE_MS } from '../../core/host/unresponsive'
 import { hostIsOutdated, hostSpeaksPing } from './outdated'
 import { encodeLine, createLineReader } from '../../host/framing'
 // HostStatus is declared in core/types.ts, not here, so the renderer can name it without importing
@@ -62,11 +63,12 @@ const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
 
 /** How often the heartbeat asks a Host that answers pings whether its event loop is still turning. */
 export const PING_MS = 5_000
-/** How many pings may be in flight unanswered before that Host is called unresponsive. Fifteen
- *  seconds with PING_MS above. An initial value rather than a measured one: if a slow first spawn or a
- *  wake from sleep ever produces a false verdict, this is what moves
- *  (docs/2026-09-22-host-unresponsive-recovery-design.md §9). */
-export const PING_MISSES = 3
+/** How many pings may be in flight unanswered before that Host is called unresponsive. Derived from
+ *  `HOST_UNRESPONSIVE_MS` (core/host/unresponsive.ts) divided by `PING_MS` above, rather than a second
+ *  literal that could drift from it — `cli/host.ts`'s `host stop` has to agree with the same 15s
+ *  judgment. If a slow first spawn or a wake from sleep ever produces a false verdict, `HOST_UNRESPONSIVE_MS`
+ *  is what moves (docs/2026-09-22-host-unresponsive-recovery-design.md §9), not this line. */
+export const PING_MISSES = HOST_UNRESPONSIVE_MS / PING_MS
 
 /** How long `retire()` waits for the Host to be gone. Covers the Host's own EXIT_HAMMER_MS
  *  (host/index.ts), which is the point by which it has stopped being polite about leaving. */
