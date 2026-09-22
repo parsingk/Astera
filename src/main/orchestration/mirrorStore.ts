@@ -42,8 +42,20 @@ export function createMirrorStore(a: {
   }): Promise<{ status: number; body: unknown }>
 }): MirrorStore {
   let state: OrchState | null = null
-  /** The Host commit this mirror is holding. Quoted on every write so a write built on a state the
-   *  Host has since replaced is refused rather than landing on top of it. */
+  /** The Host commit this mirror is holding — **or the one it will be holding once the writes already
+   *  in flight have landed.**
+   *
+   *  Quoted on every write so a write built on a state the Host has since replaced is refused rather
+   *  than landing on top of it. The "will be" half is what keeps that from refusing writes that are
+   *  perfectly correct: `state` moves synchronously at the top of `setState`, so a second flow that
+   *  reads the mirror during the first's await is reading the first's state and is right to be built
+   *  on it — but the reply carrying the first's new version has not come back yet, so quoting the
+   *  last *acknowledged* number would have the Host refuse a write that was never stale.
+   *  `store.ts`'s own `save` comment records that overlapping flows happen; this is the same window.
+   *
+   *  So the count moves with the state, in the same synchronous step, and a reply only ever confirms
+   *  what was already assumed. Anything the Host did in between still lands as a mismatch, which is
+   *  the case this check exists for: that number came from somewhere this app did not predict. */
   let version: number | undefined
   return {
     getState: () => {
@@ -68,7 +80,12 @@ export function createMirrorStore(a: {
       // still means "this is on disk", and a refusal still reaches it as a throw.
       const previous = state
       const sent = version
+      const previousVersion = version
       state = next
+      // Moved with the state, not when the reply lands — see `version`. Undefined stays undefined: a
+      // Host too old to issue versions is one this check is off for, and inventing a number here
+      // would start refusing every write against it.
+      if (typeof version === 'number') version = version + 1
       const r = await a.call({ cmd: 'state-put', args: { state: next, version: sent }, sessionId: '' })
       if (r.status === 409) {
         // **The Host had moved on, so this write never landed and the mirror was wrong before it was
@@ -80,7 +97,10 @@ export function createMirrorStore(a: {
         if (body && isValidState(body.state)) {
           state = body.state
           version = body.version
-        } else if (state === next) state = previous
+        } else if (state === next) {
+          state = previous
+          version = previousVersion
+        }
         throw new OrchStateConflict(body?.version, sent)
       }
       if (r.status < 200 || r.status >= 300) {
@@ -94,12 +114,17 @@ export function createMirrorStore(a: {
         //
         // Unless something has moved on in the meantime — a later write, or a push from the Host.
         // Then that is the newer truth and this reply has nothing to say about it.
-        if (state === next) state = previous
+        if (state === next) {
+          state = previous
+          version = previousVersion
+        }
         throw new Error(`the Host refused a state write: ${r.status}`)
       }
-      // The version this write became. **Only when nothing has moved on since** — a push that landed
-      // while this call was in flight is newer than the reply, and taking the reply's number would
-      // have the next write quote a version older than the state it is built from.
+      // The version this write really became — ordinarily the number already assumed above, and this
+      // is where that assumption is confirmed rather than guessed at twice. **Only when nothing has
+      // moved on since**: a push that landed while this call was in flight is newer than the reply,
+      // and taking the reply's number would have the next write quote a version older than the state
+      // it is built from.
       const ok = r.body as { version?: number } | null
       if (state === next && typeof ok?.version === 'number') version = ok.version
     },

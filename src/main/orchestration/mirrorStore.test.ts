@@ -159,4 +159,46 @@ describe('createMirrorStore', () => {
     )
     expect(m.getState()).toBe(before)
   })
+
+  // **겹치는 두 쓰기가 둘 다 맞게 지어졌는데 둘째가 거절당하던 것**(ruling F56/d). state 는 await
+  // 앞에서 동기로 옮겨지므로 둘째 흐름이 그 창에서 읽은 것은 첫째의 상태다 — 맞게 지어진 것이다.
+  // 그런데 인용할 버전이 답이 올 때까지 안 움직이면 둘 다 같은 번호를 인용하고 Host 가 둘째를 막는다.
+  it('겹치는 두 쓰기의 두 번째는 첫 번째의 다음 버전을 인용한다', async () => {
+    const replies: ((v: { status: number; body: unknown }) => void)[] = []
+    const call = vi.fn().mockImplementation(() => new Promise((r) => replies.push(r)))
+    const m = createMirrorStore({ call })
+    m.accept(emptyState(), 5)
+    const a = m.setState({ ...emptyState(), runs: [] } as never)
+    const b = m.setState({ ...emptyState(), messages: [] } as never)
+    expect(call.mock.calls[0][0].args.version).toBe(5)
+    expect(call.mock.calls[1][0].args.version).toBe(6)
+    replies[0]({ status: 200, body: { ok: true, version: 6 } })
+    replies[1]({ status: 200, body: { ok: true, version: 7 } })
+    await a
+    await b
+  })
+
+  // Host 가 사이에 커밋한 것은 여전히 어긋남이어야 한다 — 이 검사가 있는 이유가 그 경우다.
+  it('사이에 들어온 푸시는 인용할 버전을 그쪽으로 옮긴다', async () => {
+    const call = vi.fn().mockResolvedValue({ status: 200, body: { ok: true, version: 99 } })
+    const m = createMirrorStore({ call })
+    m.accept(emptyState(), 5)
+    m.accept({ ...emptyState(), jobs: [{ id: 'job_host' }] } as never, 12)
+    await m.setState({ ...emptyState(), runs: [] } as never)
+    expect(call.mock.calls[0][0].args.version).toBe(12)
+  })
+
+  // 거절당한 쓰기는 상태와 버전을 함께 되돌린다 — 하나만 되돌리면 다음 쓰기가 그 상태에 맞지 않는
+  // 번호를 인용한다.
+  it('거절당한 쓰기는 버전도 함께 되돌린다', async () => {
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 500, body: {} })
+      .mockResolvedValueOnce({ status: 200, body: { ok: true, version: 6 } })
+    const m = createMirrorStore({ call })
+    m.accept(emptyState(), 5)
+    await expect(m.setState({ ...emptyState(), runs: [] } as never)).rejects.toThrow(/500/)
+    await m.setState({ ...emptyState(), messages: [] } as never)
+    expect(call.mock.calls[1][0].args.version).toBe(5)
+  })
 })
