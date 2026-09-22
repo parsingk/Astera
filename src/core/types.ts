@@ -611,8 +611,32 @@ export interface JobRow {
   children?: JobRow[]
   tasks: JobTask[]
 }
+/** Why the Jobs view has nothing to draw, when the reason is the Host rather than the state.
+ *
+ *  **The app no longer owns `orchestration.json`** (host control plane design §6): with no Host
+ *  reachable there is no state to read, so `bootOrch` does not start — and the four features that
+ *  share that startup stop with it. Before this plan none of them needed a Host at all, so a person
+ *  meeting this has no way to guess what is missing. The four are named on this one surface and in
+ *  the log line beside it (`jobs.host.features`), rather than growing four separate surfaces of
+ *  their own (ruling F35).
+ *
+ *  Absent once orchestration is up, which is the ordinary case — then the snapshot's own emptiness
+ *  means what it always meant. */
+export interface OrchHostGate {
+  /** `waiting` — the app is still trying to reach the Host. `unreachable` — it has given up for now;
+   *  a toggle change or an app restart tries again from the top. */
+  state: 'waiting' | 'unreachable'
+  /** What went wrong, verbatim from the failure. Only on `unreachable`. */
+  reason?: string
+  /** The log file that carries the whole story. Named on screen because the reason above is one
+   *  line and the person who needs more has no way to find this file otherwise. */
+  logPath: string
+}
+
 export interface OrchSnapshot {
   runs: JobRow[]
+  /** Set only while there is no orchestration to draw and the Host is why — see OrchHostGate. */
+  host?: OrchHostGate
   /** 이 프로젝트 폴더에서 지금 일하는 워커가 하나라도 있는가. **새 Run 을 만드는 창이 읽는다.**
    *
    *  위의 Run 별 값으로는 이 질문에 답할 수 없다 — 만들 때 그 Run 은 아직 없고, 기존 Run 하나가

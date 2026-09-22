@@ -43,7 +43,7 @@ import { reattachSessions, type ReattachResult } from './host/reattach'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchSnapshot, Provider, RateLimitWindow, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
+import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchHostGate, OrchSnapshot, Provider, RateLimitWindow, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { markCodexProjectTrusted } from '../core/accounts/codexTrust'
 import { claudeConfigFileFor, markClaudeProjectTrusted } from '../core/accounts/claudeTrust'
@@ -60,6 +60,7 @@ import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
 import type { OrchLoadResult } from '../core/orchestration/store'
 import { createMirrorStore } from './orchestration/mirrorStore'
+import { createResumeSweep, type ResumeSweep } from './orchestration/resumeSweep'
 import { answerOrchAct } from './orchestration/answerAct'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { UnderstandingStore } from './understanding/store'
@@ -255,6 +256,10 @@ export interface OrchHandle {
  *  (onRolled), since index.ts is where rolling's own send tap lives. */
 export interface OrchWiring {
   log: (message: string) => void
+  /** Where `log` writes — userData/orchestration.log. **Handed over rather than rebuilt here** so the
+   *  two never drift: the Jobs view names this file when it cannot reach the Host, and a path that
+   *  points at nothing is worse than no path. */
+  logPath: string
   /** Hands over the shutdown cleanup handle once the server is up. Called from will-quit — and it is
    *  synchronous: asynchronous cleanup may not finish before the process ends, and deleting the token
    *  file has to happen (OS permissions on the token file are the access control). */
@@ -978,6 +983,10 @@ export function registerIpc(
   // ── Agent orchestration ────────────────────────────────────────────
   // The pure layers, the store, the server, the coordinator, and the CLI are first connected here.
   const orchLog = orchWiring?.log ?? ((): void => {})
+  /** The file `orchLog` writes to, for the one surface that names it — the Jobs view's "cannot reach
+   *  the Host" state. Empty when there is no orchestration wiring, which is also when that state can
+   *  never be reached (`bootOrch` does not run). */
+  const orchLogFile = orchWiring?.logPath ?? ''
   /** Task 7 — the directory a tab session's 'handover' briefing is written into (see
    *  buildTabResumeText's JSDoc, main/orchestration/resumePacket.ts). Same convention as
    *  `specsDir` below (userData, never the project folder — the briefing's own "inspect git status"
@@ -1101,6 +1110,12 @@ export function registerIpc(
    *  is not simply missed. Null until `bootOrch` has run — the first handshake needs no refill,
    *  because `bootOrch` fills the mirror itself and waits for that handshake to do it. */
   let remirrorOrchState: (() => void) | null = null
+  /** Re-drives the validations and reviews a restart interrupted, off the mirror (see
+   *  `createResumeSweep`). **Run on every Host attachment, not once per Host lifetime** — the Host's
+   *  `boot` findings go to one app only, and an app restarting against a surviving Host is handed
+   *  `boot: null`, so this is the only thing that finds a Task the kill left `validating`. Null until
+   *  `bootOrch` has built the dependencies it needs (`deps`, and `orch` for the spawn path). */
+  let resumeSweep: ResumeSweep | null = null
   /** Whether the Host this app is connected to keeps its sessions through an update being installed.
    *  True off win32, where a running binary can simply be replaced; on win32 it is true only once the
    *  Host is running from its own runtime rather than the app's executable inside the install
@@ -1314,6 +1329,25 @@ export function registerIpc(
     } catch (err) {
       orchLog(`orch:state push failed project=${orchProject}: ${String(err)}`)
     }
+  }
+  /** Why the Jobs view has nothing to draw, when the reason is the Host (see `OrchHostGate`). Null
+   *  whenever the snapshot's own emptiness is the honest answer: before `bootOrch` runs at all (every
+   *  toggle off — nobody is waiting on anything), and again once it has succeeded. */
+  let orchHostGate: OrchHostGate | null = null
+  /** Says it on screen. **Its own push rather than a field on the state push**, because the whole
+   *  point of these two states is that there is no state: `pushOrchState` needs an `OrchState` and
+   *  in this window the mirror has none. The channel is the same one the Jobs view already listens
+   *  on, so nothing new crosses the preload. */
+  const setOrchHostGate = (next: OrchHostGate | null): void => {
+    orchHostGate = next
+    if (orchProject === null) return // the renderer has not asked for a project, or it unwatched
+    const snapshot: OrchSnapshot = { runs: [], projectFolderBusy: false, ...(next ? { host: next } : {}) }
+    // Only while there is nothing else to draw. Once `orch` stands, the state push owns this channel
+    // and an empty snapshot from here would blank the sidebar.
+    if (orch) return
+    if (orchSent !== null && sameSnapshot(orchSent, snapshot)) return
+    orchSent = snapshot
+    send('orch:state', snapshot)
   }
 
   // Events: core to renderer (session:data is batched at 16ms)
@@ -2250,6 +2284,10 @@ export function registerIpc(
       )
       return
     }
+    // From here on, everything below waits on the Host — and the Jobs view is the surface that says
+    // so. Not before the guard above: a missing CLI bundle is not the Host's fault and pointing at
+    // the Host log for it would send a person to the wrong file.
+    setOrchHostGate({ state: 'waiting', logPath: orchLogFile })
 
     // spec files are written outside the user's repository: a spec body carries the work instructions
     // the orchestrator wrote, and keeping it inside the repo would show up in git status, get
@@ -2373,9 +2411,16 @@ export function registerIpc(
       // did in fact get saved; and `orch` staying null is a state this app already knows how to be
       // in — it is what orchestration being switched off looks like — so flipping a toggle later
       // tries again from the top. The person's half of this is the Jobs view's own two states.
+      //
+      // **The four features are named, here and on that surface** (ruling F35). `startOrch` serves
+      // agent orchestration, work-unit tracking, the agent browser and Smart Resume, and before this
+      // plan not one of them needed a Host — so "orchestration is not starting" reads as one feature
+      // being off to someone whose /astera-task just stopped working. One line that names all four
+      // beats four surfaces that each name one.
       orchLog(
-        `could not read the orchestration state from the Host: ${String(err)} — orchestration is not starting; it will try again the next time a toggle changes or the app restarts`
+        `could not read the orchestration state from the Host: ${String(err)} — agent orchestration (Jobs), work-unit tracking, the agent browser and Smart Resume are all waiting on it and none of them is starting; it will try again the next time a toggle changes or the app restarts`
       )
+      setOrchHostGate({ state: 'unreachable', reason: String(err), logPath: orchLogFile })
       return
     }
     // Refills the mirror after a later handshake. A commit the Host made while the socket was down
@@ -2388,6 +2433,12 @@ export function registerIpc(
           const state = (r.body as { state: OrchState }).state
           orchMirror.accept(state)
           pushOrchState(state)
+          // **And here, on the refilled mirror, not on the one this handshake replaced.** A Host that
+          // just came back may be a different Host holding the same file, and the Tasks a restart
+          // left mid-validation are found in the state, not in `boot` — which this deliberately does
+          // not ask for. Doing nothing until the refill has landed is the whole reason this is inside
+          // the `then`.
+          resumeSweep?.run('the Host attached')
         })
         .catch((e) => orchLog(`could not refill the orchestration mirror after reconnecting: ${String(e)}`))
     }
@@ -4328,6 +4379,10 @@ export function registerIpc(
       // checkConfigIdsOf 는 옛 validateConfigId 와 새 validateConfigIds 를 함께 읽으므로, 지금
       // 존재할 수 있는 모든 Task 에 대해 이것으로 충분하다.
       startValidation: ({ taskId, cwd }) => {
+        // **A resume for this Task is under way, so the restart sweep must leave it alone.** A Task
+        // handed here looks identical to an interrupted one from the state (validating, no open
+        // Dispatch) until the validation settles — see ResumeSweep.markDriven.
+        resumeSweep?.markDriven(taskId)
         const task = store.get().tasks.find((t) => t.id === taskId)
         validator.enqueue({ taskId, cwd, configIds: task ? checkConfigIdsOf(task) : [] })
         // 의심 파일(설계 §8.3) — **convergence Run 에서만** 계산한다(리뷰 fix 1차, Important 1).
@@ -4376,6 +4431,11 @@ export function registerIpc(
       // 비동기 작업은 안에서 흘려보낸다(startValidation 이 큐에 넣기만 하는 것과 같은 이유:
       // 기다리면 worker_done 응답이 그만큼 늦어지고 워커 세션이 그 자리에서 멈춘다).
       startReview: ({ taskId }) => {
+        // **startValidation 과 같은 이유, 그리고 더 급한 이유다.** 이 함수는 계정을 고르고 나서야
+        // 검토 Dispatch 를 커밋하는데, 그전까지 이 Task 는 상태만 보면 끊긴 Task 와 구별되지 않는다.
+        // 그 창에 sweep 이 한 번 더 띄우면 openReviewDispatch 가 둘째를 거절하고, 그 거절을 받은
+        // gate() 가 첫째의 Dispatch 를 지우고 Task 를 막는다 — 살아 있는 검토가 무너진다.
+        resumeSweep?.markDriven(taskId)
         // 떠나 보내는 promise 에 **종단 .catch 가 있어야 한다.** 안의 catch 는 gate() 를 기다리고
         // gate() 는 store.save 를 기다리는데, 그 쓰기(tmp+rename)는 거부될 수 있다 — 디스크가 찼거나
         // Windows 에서 rename 이 잠겼을 때다. 붙이지 않으면 그 거부가 main 프로세스의 unhandled
@@ -4452,6 +4512,21 @@ export function registerIpc(
       now: () => new Date().toISOString()
     }
 
+    // The re-drive for the validations and reviews a restart interrupted. **Built here, well before
+    // it is first run** (that is at the end of this function, once `orch` stands): the two deps above
+    // tell it about every resume the ordinary path starts, and the first of those happens in the
+    // pending-report drain, which is between here and there.
+    resumeSweep = createResumeSweep({
+      // 거울이 비어 있으면 null — 빈 상태로 판정하면 "끊긴 것이 없다" 는 거짓말이 된다. 여기까지
+      // 왔다는 것은 state-get 이 성공했다는 뜻이라 실제로는 늘 차 있다.
+      getState: () => (orchMirror.loaded() ? orchMirror.getState() : null),
+      enabled: () => deps.enabled(),
+      startValidation: (r) => deps.startValidation?.(r),
+      startReview: (r) => deps.startReview?.(r),
+      now: () => new Date().toISOString(),
+      log: orchLog
+    })
+
     // Job Continuity P1's reconciler needs the store and the deps above, both local to this closure —
     // openContinuity (outside bootOrch) cannot build it, so it only calls this builder. Assigned here,
     // after `deps` is complete, and invoked once below if continuity is already on; a later runtime
@@ -4519,6 +4594,9 @@ export function registerIpc(
       throw err
     }
     orch = { server, deps, cliPath, infoPath, skillsPath }
+    // Nobody is waiting on the Host any more, so the Jobs view goes back to meaning what it says.
+    // Before `pushOrchState` below, which is what redraws it.
+    setOrchHostGate(null)
     orchRollTap = new OrchRollTap(deps)
     orchLog(`started — port=${server.port} cli=${cliPath} skills=${skillsPath}`)
     // The other half of the queue read at the top of this function: the reports workers wrote down
@@ -4612,31 +4690,21 @@ export function registerIpc(
     // never report. Same guard, same reasoning as runScheduler's `if (!orch.deps.enabled()) return`.
     if (recovery && deps.enabled())
       void recovery.reconcileAll().catch((e) => orchLog(`recovery: boot sweep failed: ${String(e)}`))
-    // 완료 수렴 Run 이 재시작으로 멈춘 validating·reviewing Task — **이제 Host 의 load 가 채워
-    // 보내 준다**(state-get 의 `boot`). 그 계약은 그대로다: load 는 아무것도 시작하지 않고 목록만
-    // 준다(store.ts). 시작은 deps 가 다 갖춰지고 orch 가 선 뒤인 여기다. 이미 Run
-    // 게이트(일시 중지·예약 템플릿·pendingStart)와 열린 Dispatch 로 load 에서 걸러져 왔으므로
-    // 여기서 다시 거르지 않는다. runScheduler·recovery.reconcileAll 과 같은 이유로
-    // deps.enabled() 로 가드한다 — 꺼져 있으면 서버가 모든 보고를 409 로 거절해 시작해도 끝을 볼
-    // 수 없다.
+    // 완료 수렴 Run 이 재시작으로 멈춘 validating·reviewing Task. 시작은 deps 가 다 갖춰지고 orch 가
+    // 선 뒤인 여기다 — startValidation 은 큐에, startReview 는 세션 spawn 에 닿는다.
     //
-    // **`loaded` 가 null 인 경우는 재시작이 아무것도 잃지 않은 경우다** — Host 가 이미 떠 있었고
-    // 이 앱만 다시 뜬 것이라, 끊긴 검증도 끊긴 검토도 없다.
+    // **목록은 Host 의 `boot` 가 아니라 거울에서 온다(Task 7b).** `boot` 는 Host 수명마다 한 번만
+    // 나가고(설계대로다: `before` 와 카운터는 그 한 번의 load 를 말한다), Host 는 앱보다 오래 산다 —
+    // 그래서 살아남은 Host 에 다시 붙는 앱은 언제나 `boot: null` 을 받는다. 그 목록에만 기대면, 앱이
+    // 죽어 validating 으로 남은 Task 는 다시 검증되는 일이 영원히 없다: 검증은 앱 안의 큐이고,
+    // recovery 의 화해기는 잃어버린 Dispatch 만 본다. 이 계획 전에는 앱이 뜰 때마다 store.load 가
+    // 그 Task 들을 다시 찾아 주었다. 이제는 sweep 이 그 자리를 대신하고, 붙을 때마다 돈다.
     //
-    // **가드가 막았을 때 조용히 있지 않는다(리뷰 fix 1차, Minor→promoted).** `bootOrch` 는
-    // orchestration 자체가 꺼진 채로도(continuity·tracking 만 켜져 있어도) 돈다 — 그때 이 두
-    // 목록을 그냥 버리면, 나중에 orchestration 을 다시 켜도(재시작 없이 설정만 바꿔서는) Host 는
-    // 이 목록을 다시 주지 않으므로(한 번만 준다) 영영 되살아나지 않는다. 이 branch 가 열 번의 fix
-    // round 를 들여 없앤 것과 같은 부류의 결함 — "조용히 버려지는 복구 대상" — 이므로 로그로 그
-    // 사실을 남긴다. 다음 정상 재시작(orchestration 이 켜진 채)은 Host 도 새로 뜬 재시작이면 같은
-    // 목록을 다시 받는다.
-    if (loaded && deps.enabled()) {
-      for (const r of loaded.revalidate) deps.startValidation?.({ taskId: r.taskId, cwd: r.cwd })
-      for (const taskId of loaded.rereview) deps.startReview?.({ taskId })
-    } else if (loaded && (loaded.revalidate.length > 0 || loaded.rereview.length > 0))
-      orchLog(
-        `restart cleanup — orchestration is off, so ${loaded.revalidate.length} interrupted validation(s) and ${loaded.rereview.length} interrupted review(s) were not restarted; turning it on without restarting does not retry them — a restart with it already on will`
-      )
+    // 판정식은 load 와 같은 함수 하나다(core/orchestration/store.ts 의 interruptedResumes) — Run
+    // 게이트(일시 중지·예약 템플릿·pendingStart)와 열린 Dispatch 를 그쪽이 거른다. enabled() 가드와
+    // "꺼져 있으면 조용히 버리지 않고 로그를 남긴다" 도 그 안으로 옮겼다(리뷰 fix 1차, Minor→
+    // promoted 가 요구한 것이 그 문장이지 그 자리가 아니다).
+    resumeSweep.run('this app started')
     // 예약 템플릿의 발화. **첫 바퀴는 무장만 한다**(firesDue) — 앱을 켤 때마다 한 회차가 도는
     // 것을 막는 장치가 그것이고, 그래서 여기서 즉시 한 번 부르지 않는다.
     /** 코디네이터 세션이 사라졌을 때 그 Run 의 관리자 칸을 비운다. **다시 띄우지는 않는다.**
@@ -5247,7 +5315,10 @@ export function registerIpc(
   // The same assertAllowedPath as run.list: the path decides which Runs come back, so an arbitrary
   // one would let the renderer enumerate Runs created outside every registered project.
   // An empty snapshot before orchestration has started (toggle off, or startup still running or
-  // failed) — there is no state to read yet, and bootOrch pushes once as soon as there is.
+  // failed) — there is no state to read yet, and bootOrch pushes once as soon as there is. **With
+  // `host` set when the reason is the Host**, because "still running" and "failed" are two different
+  // screens and an empty sidebar says neither (see OrchHostGate). This reply races bootOrch either
+  // way, which is why `setOrchHostGate` also pushes.
   ipcMain.handle('orch.list', async (_e, projectPath: string) => {
     const request = ++orchRequest
     // The guard runs on the path as sent — it decides what the renderer is allowed to name, and the
@@ -5272,9 +5343,9 @@ export function registerIpc(
       const { state } = ensureProject(before, { path: project, now: new Date().toISOString() })
       if (state !== before) await orch.deps.setState(state)
     }
-    const snapshot = orch
+    const snapshot: OrchSnapshot = orch
       ? orchSnapshotOf(orch.deps.getState(), project)
-      : { runs: [], projectFolderBusy: false }
+      : { runs: [], projectFolderBusy: false, ...(orchHostGate ? { host: orchHostGate } : {}) }
     // Superseded while awaiting — by an unwatch, or by a later list for another project. The caller
     // still gets the project it asked for; what it does not get is the subscription, because
     // something more recent already decided what that should be.

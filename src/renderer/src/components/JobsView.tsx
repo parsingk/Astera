@@ -656,6 +656,31 @@ export function JobsView({
   // empty state, which would otherwise flash "no jobs" for a frame on every project switch).
   if (snapshot === null) return <></>
 
+  // **The Host is why there is nothing, and saying so is the whole point of this state.** The app no
+  // longer owns orchestration.json (host control plane design §6), so with no Host there is no state
+  // — and the empty state below would tell a person with a dozen Jobs that they have none. The four
+  // features that stop with it are named here rather than each growing a surface of its own (F35).
+  if (snapshot.host) {
+    const waiting = snapshot.host.state === 'waiting'
+    return (
+      <div className="jobs-empty">
+        <p>{t(waiting ? 'jobs.host.waiting' : 'jobs.host.unreachable')}</p>
+        <p className="jobs-empty-hint">{t('jobs.host.features')}</p>
+        {/* 못 붙은 뒤에만 사유와 기록을 적는다 — 아직 시도 중일 때는 적을 사유가 없고, 있지도
+            않은 실패를 화면에 두면 기다리는 중을 실패로 읽는다. */}
+        {!waiting && snapshot.host.reason && (
+          <p className="jobs-empty-hint">{t('jobs.host.reason', { reason: snapshot.host.reason })}</p>
+        )}
+        {!waiting && (
+          <>
+            <p className="jobs-empty-hint">{t('jobs.host.retry')}</p>
+            <p className="jobs-empty-hint">{t('jobs.host.log', { path: snapshot.host.logPath })}</p>
+          </>
+        )}
+      </div>
+    )
+  }
+
   if (snapshot.runs.length === 0) {
     // **프로젝트가 없을 때와 있을 때가 다른 화면이다.** 이 빈 상태는 둘 다에서 그려진다(App.tsx 가
     // 프로젝트 없을 때 일부러 `{ runs: [] }` 를 넣는다 — 빈 사이드바보다 낫다는 판단). 그런데

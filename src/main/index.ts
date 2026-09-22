@@ -1077,6 +1077,7 @@ app.whenReady().then(async () => {
     codexRollout,
     {
       log: orchLog,
+      logPath: orchLogFile,
       onStarted: (h) => {
         orchRef = h
       },

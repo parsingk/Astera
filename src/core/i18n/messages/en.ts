@@ -1055,6 +1055,14 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.empty.hint': 'Create one right here, or start it from a coordinator session — either way it lands here',
   'jobs.noProject': 'No project is open',
   'jobs.noProject.hint': 'Open a session and its folder becomes this window project — jobs can be created here from then on',
+  // The two screens that exist now the Host owns the state file. An empty sidebar makes "still
+  // trying" and "gave up" look the same, and both read as "no jobs".
+  'jobs.host.waiting': 'Connecting to the Host',
+  'jobs.host.unreachable': 'Cannot reach the Host',
+  'jobs.host.features': 'Jobs, work-unit tracking, the agent browser and Smart Resume are all waiting on this connection',
+  'jobs.host.retry': 'It tries again when a setting changes or the app restarts',
+  'jobs.host.reason': 'Reason: {reason}',
+  'jobs.host.log': 'Full record: {path}',
   // Tooltips for the eight state glyphs (JobIcons.tsx). The sidebar no longer spells a state out, so
   // these are not on screen all the time — they are where someone meeting the icons learns them.
   // pending and blocked have to read differently: a dependency holds the first, a person the second.

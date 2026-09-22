@@ -78,11 +78,87 @@ export interface OrchLoadResult {
   before: OrchState | null
   /** convergence Run 의 validating Task 들 — Gate 대신 여기 실려, caller 가 다시 check 를 돌린다
    *  (interruptStalledTask 의 resume, 설계 §10). `load` 는 아무것도 시작하지 않는다 — 그 일은
-   *  이 목록을 받는 배선의 것이다. */
+   *  이 목록을 받는 배선의 것이다.
+   *
+   *  **앱은 이제 이 칸에서 다시 돌리지 않는다**(Task 7b). `boot` 는 Host 수명마다 한 번만 나가는데
+   *  Host 는 앱보다 오래 살아서, 살아남은 Host 에 다시 붙는 앱은 언제나 `boot: null` 을 받는다 —
+   *  그 목록에만 기대면 그 재시작이 끊어 놓은 검증은 영원히 되살아나지 않는다. 앱은 같은 판정을
+   *  자기 거울에 직접 돌린다(interruptedResumes, main/orchestration/resumeSweep.ts). 이 칸이 남아
+   *  있는 것은 `load` 의 답이 무엇인지가 그 자체로 이 함수의 계약이고 그 테스트가 그것을 본다. */
   revalidate: { taskId: string; cwd: string }[]
   /** 같은 자리의 reviewing Task 들 — 다시 검토를 돌릴 Task id 만으로 충분하다(검토는 checkpoint
-   *  가 아니라 마지막 구현 Dispatch 의 세션을 잇는다). */
+   *  가 아니라 마지막 구현 Dispatch 의 세션을 잇는다). 앱이 읽지 않는 것은 `revalidate` 와 같다. */
   rereview: string[]
+}
+
+/**
+ * The Tasks a restart left mid-validation or mid-review, and what re-running each one needs. Pure,
+ * and it starts nothing — the same contract `load` has always had about these two lists.
+ *
+ * **Extracted from `load` because two processes need the same answer now.** The Host is the process
+ * that loads, and it hands these findings to one app — once per Host lifetime, deliberately
+ * (`bootHandedOut` in src/host/orch.ts). But the Host outlives the app: the first app start after a
+ * Host boots is handed them and every restart after that is handed `boot: null`. Before this plan
+ * every app boot's `load` re-found these Tasks, so a Task left `validating` by a killed app was
+ * re-driven at the next start. Nothing else re-finds them — validations are app-local and the
+ * recovery reconciler only looks at lost Dispatches — so without this the Task stays `validating`
+ * forever. The app sweeps its own mirror with this function instead, on every Host attachment.
+ *
+ * Two copies of the predicate would drift, and the copy that drifted would leave a Task stuck with
+ * nothing on screen to say why. That is why this is one function and both callers take it.
+ *
+ * `now` is only handed to `interruptStalledTask`. The branch read here never uses it: a Task that
+ * gets a `resume` is one that returns before `createGate` is ever reached.
+ */
+export function interruptedResumes(
+  s: OrchState,
+  now: string
+): {
+  revalidate: { taskId: string; cwd: string }[]
+  rereview: string[]
+  /** resume 이 validation 인데 다시 검증할 구현 Dispatch 가 없는 Task 의 수. `load` 는 이것을
+   *  stuckInterruptions 에 더한다 — 그 칸의 뜻이 "묻지도 못하고 세지도 못한 채 멈췄다" 이다. */
+  stuck: number
+} {
+  const revalidate: { taskId: string; cwd: string }[] = []
+  const rereview: string[] = []
+  let stuck = 0
+  for (const t of s.tasks) {
+    const r = interruptStalledTask(s, { taskId: t.id }, now)
+    if (r.resume !== 'validation' && r.resume !== 'review') continue
+    // recovery 의 candidates() 가 보는 세 가지 Run 게이트를 여기서도 그대로 적용한다(paused·
+    // schedule template·pendingStart) — 이 목록에는 runId 가 없어 받는 쪽이 다시 판정할 길이
+    // 없으므로, 아직 없는 소비자에게 요구사항을 적어 두기보다 원천에서 거른다.
+    const owner = s.runs.find((x) => x.id === t.runId)
+    const ownerJob = owner && jobOf(s, owner)
+    const runGated =
+      !owner ||
+      !ownerJob ||
+      owner.paused === true ||
+      ownerJob.paused === true ||
+      ownerJob.schedule !== undefined ||
+      ownerJob.pendingStart === true
+    // Host 가 이 Task 의 세션을 되돌려 받았으면(reattach) 그 워커는 지금도 돌고 있다 — 다시
+    // 돌리라고 이 목록에 실으면 받는 쪽(재검증 큐·openReviewDispatch)이 "dispatch already open"
+    // 으로 거절한다. interruptStalledTask 는 convergence Run 에서 이것을 보지 않는다(Dispatch 를
+    // 전혀 읽지 않는다) — 그래서 여기서 본다.
+    //
+    // **이 한 줄이 앱 쪽 sweep 의 멱등성이기도 하다**: 다시 돌린 검토가 Dispatch 를 열고 나면 그
+    // Task 는 여기서 빠진다.
+    const openHere = s.dispatches.some((d) => d.taskId === t.id && !d.outcome && !d.endedAt)
+    if (runGated || openHere) continue
+    if (r.resume === 'review') {
+      rereview.push(t.id)
+      continue
+    }
+    const impl = latestImplDispatch(s, t.id)
+    if (impl) revalidate.push({ taskId: t.id, cwd: impl.cwd })
+    // impl 이 없으면 이 Task 를 다시 검증할 길이 없다 — Gate 도 안 열리고 목록에도 안 실리면
+    // 아무도 모르게 멈춘다. stuck 이 정확히 이 "묻지도 못하고 세지도 못한 채 멈췄다"를 들리게
+    // 하려고 있다.
+    else stuck++
+  }
+  return { revalidate, rereview, stuck }
 }
 
 export class OrchestrationStore {
@@ -260,13 +336,20 @@ export class OrchestrationStore {
     // Tasks are counted into `stuckInterruptions` and the wiring logs the number.
     let staleValidations = 0
     let staleReviews = 0
-    let stuckInterruptions = 0
-    // convergence Run 의 validating·reviewing Task 들 — interruptStalledTask 가 Gate 대신 resume 을
-    // 낸다(설계 §10). load() 는 아무것도 시작하지 않는다: 여기 쌓아 두고 그대로 돌려주면, 시작하는
-    // 일은 이 목록을 받는 배선의 것이다.
-    const revalidate: { taskId: string; cwd: string }[] = []
-    const rereview: string[] = []
     let withGates: OrchState = { ...st, dispatches }
+    // convergence Run 의 validating·reviewing Task 들. **판정은 이 파일 밖이 아니라 이 파일 안의
+    // 한 함수에 있다**(interruptedResumes, 위) — 앱도 같은 판정을 해야 하기 때문이고, 왜 그런지는
+    // 그 함수의 주석에 있다. load() 는 여전히 아무것도 시작하지 않는다: 목록을 그대로 돌려주면,
+    // 시작하는 일은 이 목록을 받는 배선의 것이다.
+    //
+    // **판정이 이 아래 게이트 루프보다 먼저 돌아도 답은 같다.** 아래 루프가 바꾸는 것은
+    // createGate·blockForReview 를 통과한 *그* Task 하나뿐이고(상태·Gate·메시지), resume 판정이
+    // 읽는 것은 Task 자신의 status 와 그 Run·Job(policyOf·runGated)과 Dispatch 뿐이다 — 어느
+    // Task 를 게이트해도 다른 Task 의 판정은 움직이지 않는다.
+    const resumes = interruptedResumes(withGates, now)
+    const revalidate = resumes.revalidate
+    const rereview = resumes.rereview
+    let stuckInterruptions = resumes.stuck
     // **What is owed to one such Task lives in `interruptStalledTask`.** The pending-report drain
     // writes off a Dispatch of its own when it could not deliver the report that was holding it
     // open, and the Task under it is owed exactly this — the same Gate, with the same question,
@@ -275,37 +358,8 @@ export class OrchestrationStore {
     // about and what to count, which is this boot's business and not the rule's.
     for (const t of st.tasks) {
       const r = interruptStalledTask(withGates, { taskId: t.id }, now)
-      if (r.resume === 'validation' || r.resume === 'review') {
-        // recovery 의 candidates() 가 보는 세 가지 Run 게이트를 여기서도 그대로 적용한다(paused·
-        // schedule template·pendingStart) — 이 목록에는 runId 가 없어 받는 쪽이 다시 판정할 길이
-        // 없으므로, 아직 없는 소비자에게 요구사항을 적어 두기보다 원천에서 거른다.
-        const owner = withGates.runs.find((x) => x.id === t.runId)
-        const ownerJob = owner && jobOf(withGates, owner)
-        const runGated =
-          !owner ||
-          !ownerJob ||
-          owner.paused === true ||
-          ownerJob.paused === true ||
-          ownerJob.schedule !== undefined ||
-          ownerJob.pendingStart === true
-        // Host 가 이 Task 의 세션을 되돌려 받았으면(reattach) 그 워커는 지금도 돌고 있다 — 다시
-        // 돌리라고 이 목록에 실으면 받는 쪽(재검증 큐·openReviewDispatch)이 "dispatch already open"
-        // 으로 거절한다. interruptStalledTask 는 convergence Run 에서 이것을 보지 않는다(Dispatch 를
-        // 전혀 읽지 않는다) — 그래서 여기서 본다.
-        const openHere = withGates.dispatches.some((d) => d.taskId === t.id && !d.outcome && !d.endedAt)
-        if (runGated || openHere) continue
-        if (r.resume === 'validation') {
-          const impl = latestImplDispatch(withGates, t.id)
-          if (impl) revalidate.push({ taskId: t.id, cwd: impl.cwd })
-          // impl 이 없으면 이 Task 를 다시 검증할 길이 없다 — Gate 도 안 열리고 목록에도 안 실리면
-          // 아무도 모르게 멈춘다. stuckInterruptions 가 정확히 이 "묻지도 못하고 세지도 못한 채
-          // 멈췄다"를 들리게 하려고 있다(위 주석).
-          else stuckInterruptions++
-          continue
-        }
-        rereview.push(t.id)
-        continue
-      }
+      // resume 은 위 interruptedResumes 가 이미 판정하고 세었다 — 여기서 다시 보면 두 벌이 된다.
+      if (r.resume !== null) continue
       if (r.stuck) {
         stuckInterruptions++
         continue
