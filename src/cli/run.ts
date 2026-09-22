@@ -9,6 +9,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { parseArgs } from '../core/orchestration/cliArgs'
 import { publicFor } from '../core/orchestration/cliPublic'
+import { usageFor } from '../core/orchestration/cliUsage'
 import { humanFor, quietFor } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
@@ -357,6 +358,23 @@ function out(text: string): void {
 /** The function the thin shell of the entry point (index.ts) calls straight through. It does not
  *  call itself here, so a test that imports this file does not terminate the process. */
 export async function main(): Promise<void> {
+  // **Usage comes first, before the parser and before any Host.** All three levels used to end
+  // badly here: `--help` was `expected a command, got flag`, `jobs --help` was `jobs needs one of:
+  // …`, and `jobs list --help` parsed `--help` as an ordinary flag and *ran the command*. Answering
+  // in front of `parseArgs` is what stops that, and it is also what lets `--help` answer with
+  // nothing running — the text is already in this program (cliUsage.ts).
+  const help = usageFor(process.argv.slice(2))
+  if (help !== null) {
+    if ('error' in help) {
+      out(errorOutput(help.error, 'INVALID_ARGUMENTS'))
+      process.exit(exitCodeFor('INVALID_ARGUMENTS'))
+    }
+    // Text, not an envelope, and exit 0. `--help` is inherently for a person, the same footing as
+    // `astera help`, and asking for it is not one of the ten failures.
+    out(help.text)
+    process.exit(0)
+  }
+
   const parsed = parseArgs(process.argv.slice(2))
   if ('error' in parsed) {
     out(errorOutput(parsed.error, 'INVALID_ARGUMENTS'))

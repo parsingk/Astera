@@ -129,15 +129,24 @@ astera questions get    --id <questionId>
 astera questions answer --id <questionId> --answer <text>
 
 astera help                              the orchestration guide, in full
+
+astera browser js     [--script <text> | --file <path>]
 astera browser help                      the agent browser guide
 ```
 
 `astera help` is the reference agents read.
 
-**Known gap: there is no per-command help.** `astera --help`, `astera jobs --help` and
-`astera jobs list --help` all fail with exit 2, because the parser treats a leading flag as a missing
-command. What stands in for it today is the table above, `astera help`, and the fact that a noun with
-no verb names its verbs. Per-command usage text does not exist anywhere in the program yet.
+**`--help` prints usage, at three levels.** It is plain text, it exits 0, and it never contacts the
+Host, so it answers with nothing running.
+
+```text
+astera --help                 every command, one line each
+astera jobs --help            what the jobs noun can do
+astera jobs wait --help       that one command, what it does, and its flags
+```
+
+`-h` is the same as `--help`. Note that `astera help`, with no dashes, is a different command: it
+prints the whole orchestration guide, which is a reference for agents rather than usage text.
 
 **`jobs get` takes either id.** Give it a Job and it folds in that Job's latest run; give it a run
 and it folds in that one. A Job is the plan, a run is one execution of it. Jobs that only ever run

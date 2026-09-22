@@ -26,7 +26,11 @@ const JSON_ARRAY = new Set(['deps'])
  *  last value, which is what every existing caller expects. */
 const REPEATABLE = new Set(['check'])
 
-const BROWSER_SUBCOMMANDS = new Set(['js', 'help'])
+/** `astera browser <sub>`. Exported because cliUsage.ts prints usage for both of them, and a second
+ *  copy of the list would drift from this one. */
+export const BROWSER_VERBS = ['js', 'help'] as const
+
+const BROWSER_SUBCOMMANDS = new Set<string>(BROWSER_VERBS)
 
 /**
  * 두 낱말로 치는 명령들 — `astera jobs list`. **공개 표면은 전부 이 모양이다**(공개 CLI 설계 §5).
@@ -41,15 +45,24 @@ const BROWSER_SUBCOMMANDS = new Set(['js', 'help'])
  * 모델에 "취소된 회차" 가 없어서 그것을 먼저 정해야 하고, 그 뒤의 쓰기 동사들도 각자 구현되는
  * 단계에서 들어온다. 없는 동사를 미리 적어 두면 사람이 친 것이 "모르는 명령"(501)으로
  * 떨어진다 — 아직 안 만들어졌을 뿐인데 앱과 CLI 의 버전이 갈렸다고 말하는 셈이다.
+ *
+ * **`as const`, and exported.** cliUsage.ts derives the key type of its usage table from this
+ * object, so a verb added here stops that file compiling until its usage text exists — the same
+ * trick cliPublic.ts plays on the public field allowlist.
  */
-const NOUNS: Record<string, readonly string[]> = {
+export const NOUNS = {
   host: ['start', 'status', 'stop'],
   projects: ['list', 'get', 'find'],
   jobs: ['list', 'get', 'wait', 'run'],
   runs: ['list', 'get', 'wait', 'stop', 'resume'],
   tasks: ['list'],
   questions: ['list', 'get', 'answer']
-}
+} as const
+
+/** The same table, keyed by a word the person typed rather than by one of the literal keys above. */
+const NOUN_VERBS: Record<string, readonly string[] | undefined> = NOUNS
+
+export const verbsOf = (noun: string): readonly string[] | undefined => NOUN_VERBS[noun]
 
 /**
  * 없어진 이름과 그것을 대신하는 이름.
@@ -78,14 +91,14 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   let first = 1
   const renamed = RENAMED[cmd]
   if (renamed !== undefined) return { error: `${cmd} was renamed to \`${renamed}\` (astera help)` }
+  const verbs = verbsOf(cmd)
   if (cmd === 'browser') {
     const sub = argv[1]
     if (sub === undefined || sub.startsWith('-')) return { error: 'browser needs a subcommand: js or help' }
     if (!BROWSER_SUBCOMMANDS.has(sub)) return { error: `unknown browser subcommand: ${sub} (expected js or help)` }
     cmd = `browser-${sub}`
     first = 2
-  } else if (NOUNS[cmd] !== undefined) {
-    const verbs = NOUNS[cmd]
+  } else if (verbs !== undefined) {
     const sub = argv[1]
     if (sub === undefined || sub.startsWith('-'))
       return { error: `${cmd} needs one of: ${verbs.join(', ')}` }

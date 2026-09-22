@@ -1,0 +1,199 @@
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+import { BROWSER_VERBS, NOUNS } from './cliArgs'
+import { USAGE, usageFor, type PublicCommand } from './cliUsage'
+
+/** 사람이 치는 모양(`jobs wait`)이 아니라 표의 키(`jobs-wait`). */
+const commandsFromNouns = (): string[] =>
+  Object.entries(NOUNS).flatMap(([noun, verbs]) => verbs.map((verb) => `${noun}-${verb}`))
+
+describe('cliUsage — 표는 공개 표면과 정확히 같다', () => {
+  // 컴파일러가 이미 같은 것을 잡는다(USAGE 는 NOUNS 에서 파생한 키 타입의 Record 다). 이 테스트는
+  // 그 타입이 나중에 넓혀졌을 때를 위한 두 번째 증인이다 — 타입이 `Record<string, …>` 로 풀리면
+  // 컴파일은 조용해지지만 이 단언은 깨진다.
+  it('NOUNS 의 모든 noun/verb 와 단독 명령이 각각 하나씩, 그 밖은 없다', () => {
+    const expected = [
+      ...commandsFromNouns(),
+      ...BROWSER_VERBS.map((v) => `browser-${v}`),
+      'version',
+      'status',
+      'help'
+    ].sort()
+    expect(Object.keys(USAGE).sort()).toEqual(expected)
+  })
+
+  it('모든 항목에 한 줄 요약이 있다', () => {
+    for (const [cmd, entry] of Object.entries(USAGE)) {
+      expect(entry.summary, `${cmd} 의 요약이 비어 있다`).not.toBe('')
+      expect(entry.summary, `${cmd} 의 요약이 여러 줄이다`).not.toContain('\n')
+    }
+  })
+})
+
+describe('cliUsage — 세 층', () => {
+  it('--help 이 없으면 아무것도 아니다', () => {
+    expect(usageFor(['jobs', 'list'])).toBeNull()
+    expect(usageFor(['help'])).toBeNull()
+    expect(usageFor([])).toBeNull()
+  })
+
+  it('astera --help / -h 는 모든 공개 명령을 한 줄씩 낸다', () => {
+    for (const argv of [['--help'], ['-h']]) {
+      const r = usageFor(argv)
+      expect(r).not.toBeNull()
+      const text = (r as { text: string }).text
+      for (const cmd of Object.keys(USAGE)) expect(text).toContain(cmd.replace('-', ' '))
+    }
+  })
+
+  it('astera <noun> --help 는 그 noun 의 동사만 낸다', () => {
+    const text = (usageFor(['jobs', '--help']) as { text: string }).text
+    for (const verb of NOUNS.jobs) expect(text).toContain(verb)
+    // 다른 noun 의 것이 섞이지 않는다 — 이 층이 있는 이유가 좁히는 것이다
+    expect(text).not.toContain('resume')
+  })
+
+  it('astera <noun> <verb> --help 는 그 명령의 플래그를 낸다', () => {
+    const text = (usageFor(['jobs', 'wait', '--help']) as { text: string }).text
+    expect(text).toContain('astera jobs wait --id <jobId> [--timeout-ms <ms>]')
+    expect(text).toContain('required')
+  })
+
+  it('명령 뒤에 플래그가 더 있어도 --help 가 이긴다 — 명령을 돌리지 않는다', () => {
+    expect(usageFor(['jobs', 'list', '--quiet', '--help'])).toEqual({
+      text: expect.stringContaining('astera jobs list')
+    })
+  })
+
+  it('browser 의 두 하위 명령도 같은 세 층이다', () => {
+    const noun = (usageFor(['browser', '--help']) as { text: string }).text
+    expect(noun).toContain('js')
+    expect(noun).toContain('help')
+    const js = (usageFor(['browser', 'js', '--help']) as { text: string }).text
+    expect(js).toContain('astera browser js')
+    expect(js).toContain('--file <path>')
+  })
+
+  it('단독 명령도 제 사용법이 있다', () => {
+    expect((usageFor(['version', '--help']) as { text: string }).text).toContain('astera version')
+    expect((usageFor(['status', '--help']) as { text: string }).text).toContain('astera status')
+    // `astera help` 자신은 그대로 가이드를 찍는다(run.ts). 여기서 답하는 것은 `--help` 를 붙인 쪽뿐이다
+    expect((usageFor(['help', '--help']) as { text: string }).text).toContain('astera help')
+  })
+
+  it('모르는 동사와 공개 표면 밖의 명령은 사용법이 아니라 안내다', () => {
+    expect(usageFor(['jobs', 'bogus', '--help'])).toEqual({
+      error: expect.stringContaining('unknown jobs subcommand: bogus')
+    })
+    expect(usageFor(['worker-start', '--help'])).toEqual({
+      error: expect.stringContaining('no usage for worker-start')
+    })
+  })
+})
+
+// 텍스트 가드 — docs/cli.md 의 `## Command reference` 블록. ipcConvergenceWiring.test.ts 와 같은
+// 부류다: 두 글이 같은 것을 말하는지는 이 저장소의 어떤 유닛 테스트도 확인하지 못하고, 사람이 읽고
+// 행동하는 것은 문서 쪽이다.
+//
+// **비교하는 것은 명령의 집합과 각 명령의 플래그다** — 이름, 값을 받는가, 필수인가. 문구와
+// 자리표시자 이름(`<jobId>` 대 `<jobId | runId>`)은 비교하지 않는다. 둘은 읽는 사람이 다르고,
+// 그것까지 묶으면 옳은 문서를 고쳤다는 이유로 테스트가 깨진다.
+const docPath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../docs/cli.md'
+)
+
+interface DocFlag {
+  name: string
+  takesValue: boolean
+  required: boolean
+}
+
+/** `## Command reference` 아래 **첫** 울타리 블록. 표지가 없으면 조용히 빈 것을 비교하는 대신
+ *  여기서 던진다. */
+function commandReferenceBlock(text: string): string {
+  const heading = text.indexOf('\n## Command reference')
+  if (heading < 0) throw new Error('docs/cli.md has no `## Command reference` heading')
+  const open = text.indexOf('```text', heading)
+  if (open < 0) throw new Error('no ```text block under `## Command reference` in docs/cli.md')
+  const start = open + '```text\n'.length
+  const close = text.indexOf('```', start)
+  if (close < 0) throw new Error('the command reference block in docs/cli.md is never closed')
+  return text.slice(start, close)
+}
+
+/** 한 줄의 플래그들. 대괄호 깊이가 필수와 선택을 가른다 — `[--job <jobId>]` 는 선택이다. */
+function flagsIn(spec: string): DocFlag[] {
+  const out: DocFlag[] = []
+  let depth = 0
+  const re = /\[|\]|--([a-z][a-z-]*)(\s+<[^>]*>)?/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(spec)) !== null) {
+    if (m[0] === '[') depth++
+    else if (m[0] === ']') depth--
+    else out.push({ name: m[1], takesValue: typeof m[2] === 'string', required: depth === 0 })
+  }
+  return out
+}
+
+/**
+ * 한 줄에서 명령들과 그 플래그를.
+ *
+ * **동사 자리에서만 `|` 를 가른다.** `astera host status | start | stop` 은 세 명령이고,
+ * `--id <jobId | runId>` 의 `|` 는 자리표시자 안이라 명령이 아니다. 그래서 noun 뒤에서
+ * `동사 (| 동사)*` 만 읽고 거기서 멈춘다 — 그 뒤는 전부 플래그이거나 설명이다.
+ */
+function commandsInLine(line: string): { commands: string[]; flags: DocFlag[] } {
+  const tok = line.trim().split(/\s+/)
+  if (tok[0] !== 'astera') throw new Error(`not a command line: ${line}`)
+  const noun = tok[1]
+  const verbs: readonly string[] | undefined =
+    noun === 'browser' ? BROWSER_VERBS : (NOUNS as Record<string, readonly string[] | undefined>)[noun]
+  if (verbs === undefined)
+    return { commands: [noun], flags: flagsIn(tok.slice(2).join(' ')) }
+  let i = 2
+  const picked: string[] = []
+  for (;;) {
+    const verb = tok[i]
+    if (verb === undefined || !verbs.includes(verb))
+      throw new Error(`docs/cli.md: \`${line.trim()}\` — ${String(verb)} is not a verb of ${noun}`)
+    picked.push(verb)
+    i++
+    if (tok[i] !== '|') break
+    i++
+  }
+  return { commands: picked.map((v) => `${noun}-${v}`), flags: flagsIn(tok.slice(i).join(' ')) }
+}
+
+const byName = (a: DocFlag, b: DocFlag): number => a.name.localeCompare(b.name)
+
+const flagsOf = (cmd: PublicCommand): DocFlag[] =>
+  (USAGE[cmd].flags ?? [])
+    .map((f) => ({ name: f.name, takesValue: f.value !== undefined, required: f.required === true }))
+    .sort(byName)
+
+describe('cliUsage — docs/cli.md 의 명령 목록과 같다', () => {
+  const lines = commandReferenceBlock(readFileSync(docPath, 'utf8'))
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('astera '))
+  const parsed = lines.map(commandsInLine)
+
+  it('문서가 적은 명령과 표의 명령이 같다', () => {
+    const documented = parsed.flatMap((p) => p.commands).sort()
+    expect(documented).toEqual(Object.keys(USAGE).sort())
+  })
+
+  it('명령마다 플래그가 같다 — 이름, 값을 받는가, 필수인가', () => {
+    for (const { commands, flags } of parsed) {
+      for (const cmd of commands) {
+        expect(USAGE[cmd as PublicCommand], `${cmd} is in docs/cli.md but not in USAGE`).toBeDefined()
+        expect([...flags].sort(byName), `flags of \`${cmd.replace('-', ' ')}\``).toEqual(
+          flagsOf(cmd as PublicCommand)
+        )
+      }
+    }
+  })
+})
