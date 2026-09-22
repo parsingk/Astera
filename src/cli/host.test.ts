@@ -65,9 +65,9 @@ describe('hostStopResult', () => {
     expect(hostStopResult({ outcome: 'stopped' })).toEqual({ body: { stopped: true }, code: 0 })
   })
 
-  // 명세 §12 의 문구를 옮기되 **단위는 세는 것을 따른다**(ruling F57/e): 세는 것은 Run 이고,
-  // "Job" 이라고 적으면 회차 둘짜리 Job 하나가 둘로 읽힌다. 종료 코드는 CONFLICT(6) — host stop 이
-  // 거절하는 유일한 경우다.
+  // 명세 §12 의 문구를 그대로 옮긴다 — 그 문서가 회차 단위로 개정됐다(2026-09-22의 덧붙임).
+  // 세는 것이 Run 이고 "Job" 이라고 적으면 회차 둘짜리 Job 하나가 둘로 읽히기 때문이다.
+  // 종료 코드는 CONFLICT(6) — host stop 이 거절하는 유일한 경우다.
   it('거절되면 CONFLICT 로 끝나고 수를 문장에 담는다', () => {
     expect(hostStopResult({ outcome: 'refused', sessions: 2, runs: 1 })).toEqual({
       body: {

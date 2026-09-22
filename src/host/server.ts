@@ -39,14 +39,16 @@ export interface HostServerDeps {
    *  The idle timer checks it rather than only the connection count. */
   holdsWork?(): boolean
   /** Sessions and Runs the Host is holding right now. One dep rather than two because a `retire`
-   *  refusal always needs both counts together, to name them (design §12: "2 sessions and 1 run are
-   *  still running"). Both halves are answered for real — `runs` counts the Runs with work in flight,
-   *  off the state the Host now owns (`runningRunCount`, ruling F57).
+   *  refusal always needs both counts together, to name them (public CLI spec §12: "Cannot stop Host:
+   *  2 sessions and 1 run are still running"). Both halves are answered for real — `runs` counts the
+   *  Runs with work in flight, off the state the Host now owns (`runningRunCount`, ruling F57).
    *
-   *  **`runs`, not `jobs`.** It counted Runs under the other name, which made one Job with two
-   *  concurrent Runs report 2 and collided with `astera host status`'s own `jobs` (the number of Jobs
-   *  in the file). Runs is the right unit — a Run is the thing that runs — so the word follows it
-   *  here, in the refusal message and in docs/cli.md (ruling F57/e). */
+   *  **`runs`, not `jobs`, and the spec was amended to match rather than deviated from** (ruling
+   *  F57/e). It counted Runs under the other name, which made one Job with two concurrent Runs report
+   *  2 and collided with `astera host status`'s own `jobs` (the number of Jobs in the file). A Run is
+   *  the thing that runs and the thing that holds this Host, so the word follows the unit — in the
+   *  refusal message, in docs/cli.md, and beside the original sentence in
+   *  docs/ASTERA_PUBLIC_HEADLESS_CLI_IMPLEMENTATION_SPEC_20260919.md §12. */
   liveCounts?(): { sessions: number; runs: number }
   /** Answers `orch-call` (design §5). Optional here only so a caller that never sends `orch-call`
    *  does not have to supply one; `host/index.ts` always does, because it always advertises
