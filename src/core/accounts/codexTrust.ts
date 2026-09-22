@@ -16,8 +16,13 @@
 // leaves no trace of why nothing happened. The file is the same artifact codex writes itself once a
 // person accepts, so pre-writing it is indistinguishable from having accepted.
 //
-// There is no claude counterpart here on purpose: `--dangerously-skip-permissions` covers claude's
-// trust prompt as well, which is why Orca's preset module has no claude entry either.
+// **There is a claude counterpart now (claudeTrust.ts), and this note used to say there could not
+// be.** The claim was that `--dangerously-skip-permissions` covers claude's trust prompt as well,
+// with Orca's preset module having no claude entry as the corroboration. Measured 2026-09-22: a Job
+// worker went into a fresh worktree with that flag on its own command line and stopped at
+// `Yes, I trust this folder`. The flag sets the permission policy; trust is a different question,
+// which is exactly what the paragraph above says about codex's bypass flag. The same reasoning
+// applied to claude the whole time and was not followed through.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
