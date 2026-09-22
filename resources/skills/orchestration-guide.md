@@ -504,14 +504,14 @@ shell. Each `error.code` maps to exactly one of these:
 |---|---|---|
 | `0` | — | The command succeeded (`ok: true`) |
 | `1` | `FAILED` | Something failed that none of the codes below describes |
-| `2` | `INVALID_ARGUMENTS` | The parser refused, or the app rejected the arguments (400) |
+| `2` | `INVALID_ARGUMENTS` | The parser refused, or the Host rejected the arguments (400) |
 | `3` | `HOST_NOT_RUNNING` | The Host could not be reached, and this command is not one the state file can answer |
 | `4` | `NOT_FOUND` | No such id (404) |
 | `5` | `PERMISSION_DENIED` | Refused for this session (403) — e.g. a worker calling a coordinator command |
 | `6` | `CONFLICT` | Rejected because of current state (409) — e.g. a Task that already has an open Dispatch |
 | `7` | `TIMEOUT` | A deadline elapsed — this client's own, or the Host's `wait`, or a Host that is running and not answering |
 | `8` | `WAITING_FOR_INPUT` | A `wait` stopped because a person is needed — a question is open, or the run is paused (see below) |
-| `9` | `VERSION_MISMATCH` | This app does not have that command — the CLI and the app are different builds |
+| `9` | `VERSION_MISMATCH` | The Host does not have that command — the CLI and the Host are different builds |
 | `10` | `RUN_FAILED` | A Job or run finished in failure |
 
 **`wait` is the only place `ok` reports the outcome rather than the call.** `jobs wait` and

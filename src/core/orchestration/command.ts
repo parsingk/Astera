@@ -304,7 +304,14 @@ export interface OrchServerDeps {
   repairTargetFor?(taskId: string): RepairTarget | null | Promise<RepairTarget | null>
   /** 판정이 새로 연 repair Dispatch 의 부수 효과(repair.ts 의 performRepair) — spec 파일을 쓰고
    *  살아 있는 세션에 넣거나 새 워커를 띄운다. **커밋 뒤에만 부른다** — 이 파일의 다른 모든 부수
-   *  효과와 같은 순서(Dispatch 먼저, 세션은 그다음)다. */
+   *  효과와 같은 순서(Dispatch 먼저, 세션은 그다음)다.
+   *
+   *  **Host 가 앱 없이 이 명령을 받아도 안전한 이유는 이 칸이 아니라 `repairTargetFor` 다**
+   *  (ruling F58). 앱이 없으면 이 훅은 전달되지 못하고 조용히 빠지는데(host/orchDeps.ts 의 전달
+   *  표에 없다), 그때 열려 있을 repair Dispatch 자체가 없다: `repairTargetFor` 가 DEGRADES 로
+   *  `null` 을 답해 판정이 repair 를 열지 않고 `repairFailed` Gate 를 열기 때문이다. 즉 "부수 효과만
+   *  빠진 반쪽 repair" 는 지금 구조상 만들어지지 않는다 — **우연이 아니라 그 한 칸의 결과이고,
+   *  그 칸이 DEGRADES 에서 나가는 날 이 문장도 거짓이 된다.** */
   startRepair?(a: { dispatchId: string }): void
   /** 소진 Gate(kind: 'convergence-exhausted')의 retry-once 답(repair.ts 의 repairOnce) — 예산 밖의
    *  repair 를 정확히 하나 연다. gate-resolve 가 그 kind 의 Gate 를 이 답으로 풀 때만 부른다.

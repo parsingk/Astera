@@ -383,6 +383,17 @@ describe('cliHostTarget', () => {
       expect(of('C:/').profileDir).toBe('C:\\')
       expect(of('/', 'linux').profileDir).toBe('/')
       expect(of('//', 'linux').profileDir).toBe('/')
+      // **구분자가 없는 드라이브.** 걷을 것이 없으므로 그대로여야 하는데, 되돌리는 쪽이 원본의
+      // 마지막 글자를 붙이는 바람에 `C::` 가 됐다 — 어떤 생산자도 이 값을 내지 않지만, 위 세 줄이
+      // 지키려는 성질("그냥 두는 것과 망가뜨리는 것은 다르다")을 정확히 어긴다.
+      expect(of('C:').profileDir).toBe('C:')
+    })
+
+    // posix 에서 역슬래시는 파일 이름에 쓸 수 있는 보통 글자이고, 그것이 끝에 오는 것도 마찬가지다.
+    // 위 '방향은 두고' 테스트는 가운데에 있는 것만 붙잡고 있었다.
+    it('posix 에서 끝의 역슬래시는 구분자가 아니다', () => {
+      const withBackslash = `/home/me/dir${String.fromCharCode(92)}`
+      expect(of(withBackslash, 'linux').profileDir).toBe(withBackslash)
     })
   })
 })

@@ -187,11 +187,20 @@ export function preparedRuntimeEntry(a: {
  * **뿌리는 걷지 않는다.** `C:\` 를 `C:` 로 만들면 win32 에서 다른 것을 가리키고(그것은 그
  * 드라이브의 현재 디렉터리다), posix 의 `/` 를 걷으면 빈 문자열이 된다. 둘 다 구분자 하나짜리
  * 뿌리로 되돌린다 — 프로필이 뿌리일 리는 없지만, 그냥 두는 것과 망가뜨리는 것은 다른 일이다.
+ *
+ * **무엇이 구분자인지는 플랫폼이 정한다.** posix 에서 역슬래시는 파일 이름에 쓸 수 있는 보통
+ * 글자다 — 조건 없이 걷으면 실재하는 폴더 `/home/me/dir\` 가 `/home/me/dir` 이 되고, 그 둘은 다른
+ * 폴더다. 바로 아래 `nativePath` 가 같은 이유로 같은 자리에서 플랫폼을 받는다.
+ *
+ * **아무것도 걷지 않았으면 아무것도 붙이지 않는다.** 드라이브 갈래가 되돌리는 것은 자기가 방금
+ * 걷어 낸 구분자이지 원본의 마지막 글자가 아니다 — 구분자 없는 `C:` 하나가 들어오면 그 둘이
+ * 다르고, 마지막 글자를 붙이면 `C::` 가 된다.
  */
-const withoutTrailingSeparator = (p: string): string => {
-  const stripped = p.replace(/[\\/]+$/, '')
+const withoutTrailingSeparator = (p: string, platform: NodeJS.Platform): string => {
+  const stripped = p.replace(platform === 'win32' ? /[\\/]+$/ : /\/+$/, '')
+  if (stripped === p) return p
   if (stripped === '') return p.slice(0, 1)
-  if (/^[A-Za-z]:$/.test(stripped)) return stripped + p.slice(-1)
+  if (/^[A-Za-z]:$/.test(stripped)) return stripped + p.slice(stripped.length, stripped.length + 1)
   return stripped
 }
 
@@ -236,7 +245,7 @@ export function cliHostTarget(a: {
   const given = a.env.ASTERA_PROFILE_DIR
   const profileDir =
     given !== undefined && given.length > 0
-      ? withoutTrailingSeparator(nativePath(given, a.platform))
+      ? withoutTrailingSeparator(nativePath(given, a.platform), a.platform)
       : userDataDir({
           platform: a.platform,
           env: a.env,

@@ -1,4 +1,5 @@
 import type { JobTask } from '../types'
+import type { OrchState } from './state'
 
 /** 지금 일이 도는 Task 의 개수. 사이드바의 `+N` 과 두 화면(JobsView·RunDetail)의 머리 숫자가
  *  이것을 센다. 렌더러가 아니라 여기 있는 이유는 elapsed.ts 와 같다 — 렌더러에 테스트가 없어서,
@@ -47,4 +48,30 @@ export function runningCount(tasks: readonly JobTask[]): number {
  *  질문의 답이 다시 두 벌이 된다 — 개수가 두 화면에 복사되어 똑같이 틀렸던 것이 그 결과였다. */
 export function isStoppedWorker(t: JobTask): boolean {
   return t.status === 'dispatched' && t.startedAt === undefined
+}
+
+/** 지금 일이 도는 회차의 수 — `astera host stop` 이 거절할 때 세는 값이다(ruling F57).
+ *
+ *  **`runningCount` 와 같은 질문을 같은 규칙으로 답한다**, 입력만 다르다: 저쪽은 화면에 실려 간
+ *  `JobTask` 투영을 보고 이쪽은 상태 원본을 본다. 규칙을 따로 쓰면 화면이 "도는 중" 이라고 적은
+ *  회차를 Host 가 멈춰도 되는 것으로 읽는 날이 온다.
+ *
+ *  그래서 판정도 그대로다: `validating`·`reviewing` 은 세션 없이 앱이 도는 일이라 그 자체로 세고,
+ *  `dispatched` 는 **열린 Dispatch 를 요구한다** — worker-stop 이 세션을 죽이고 Task 는 일부러
+ *  그대로 두므로(server.ts), 상태만 보면 다 꺼 놓은 회차가 영원히 "도는 중" 이 된다.
+ *
+ *  **아직 시작하지 않은 계획은 세지 않는다.** Task 가 전부 pending·ready 인 회차는 사람이 Host 를
+ *  멈추는 것을 막을 이유가 없다 — 지킬 일이 아직 없고, 그 상태로 막으면 세워 둔 계획 하나가
+ *  `host stop` 을 영영 거절한다. 문서가 약속하는 것도 "진행 중인 일" 이다(docs/cli.md). */
+export function runningRunCount(s: OrchState): number {
+  const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt)
+  return s.runs.filter((run) =>
+    s.tasks.some(
+      (t) =>
+        t.runId === run.id &&
+        (t.status === 'validating' ||
+          t.status === 'reviewing' ||
+          (t.status === 'dispatched' && open.some((d) => d.taskId === t.id)))
+    )
+  ).length
 }

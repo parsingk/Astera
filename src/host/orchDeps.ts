@@ -72,6 +72,14 @@ const NESTED = {
  *   dependency's own word for "no repair target", and the pure layer's answer to it is documented
  *   where the dependency is declared: it opens the `repairFailed` Gate, which a person sees. A Gate
  *   beats a lost verdict.
+ *
+ *   **This entry is also what makes `startRepair` safe with no app, and that is not obvious**
+ *   (ruling F58). `startRepair` is not forwarded at all — it is a fire-and-forget side effect, so it
+ *   simply does not happen headless. What keeps that from leaving a half-opened repair (a Dispatch
+ *   committed with no spec file and no worker) is this `null`: the verdict never opens a repair
+ *   Dispatch in the first place, so there is nothing for the missing side effect to have finished.
+ *   **Move `repairTargetFor` out of this group and that hole opens**, silently, at a call site that
+ *   says nothing about it — which is why it is written down at both ends.
  * - `repairOnce`: `gate-resolve` commits the Gate resolution **before** calling it, so a refusal
  *   answers CONFLICT for a command whose main effect has already landed — a script reads "nothing
  *   happened" about something that did. `{ ok: false, error }` is this dependency's own way of saying

@@ -40,8 +40,8 @@ export interface HostServerDeps {
   holdsWork?(): boolean
   /** Sessions and Jobs the Host is holding right now. One dep rather than two because a `retire`
    *  refusal always needs both counts together, to name them (design §12: "2 sessions and 1 Job are
-   *  still running"). `jobs` is always 0 until a later task gives the Host its own Job registry —
-   *  `host/index.ts` fills that half in place once it exists. */
+   *  still running"). Both halves are answered for real — `jobs` counts the Runs with work in flight,
+   *  off the state the Host now owns (`runningRunCount`, ruling F57). */
   liveCounts?(): { sessions: number; jobs: number }
   /** Answers `orch-call` (design §5). Optional here only so a caller that never sends `orch-call`
    *  does not have to supply one; `host/index.ts` always does, because it always advertises
