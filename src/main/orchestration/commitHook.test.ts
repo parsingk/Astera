@@ -231,18 +231,31 @@ describe('createOrchCommitHook', () => {
 
   // Host 가 커밋한 전이는 아무도 journal 에 적지 않았다 — 그리고 그 공백을 recoverOne 은
   // "확인받지 못했다" 라는 **긍정**으로 읽는다.
-  it('앞서 적어 둔 것이 없으면 여기서 journal 을 적는다', () => {
-    const { hook, record } = build()
+  // **거절당할 수 있는 쓰기 뒤로 옮겼다**(ruling F56/d). 앱 경로도 커밋이 받아들여진 뒤에 적는다 —
+  // 409 로 거절당한 쓰기가 "일어나지 않은 전이" 의 journal 을 남기면 화해기가 그것을 사실로 읽는다.
+  it('journal 은 커밋이 받아들여진 뒤에 적는다', () => {
+    const { hook, record, checkpoint } = build()
     hook({ prev: s0, next: s0 })
     expect(record).toHaveBeenCalledTimes(1)
+    expect(checkpoint).toHaveBeenCalledTimes(1)
   })
 
-  // 앱 자신의 경로는 커밋 **전에** 적는다(의도 먼저). 여기서 또 적으면 두 벌이 된다.
-  it('앞서 적어 둔 것이 있으면 다시 적지 않는다', () => {
+  // **따라잡는 중에는 체크포인트를 안 찍는다.** journal 행은 "이 전이가 있었다" 이고 늦어도 참이지만,
+  // 체크포인트는 그 순간의 git 사실이라 지금 찍으면 다른 값이 된다 — 그리고 그 값이
+  // changedFilesSince 의 기준점이다.
+  it('따라잡는 중이면 journal 은 적고 체크포인트는 건너뛴다', () => {
     const { hook, record, checkpoint } = build()
-    hook({ prev: s0, next: s0, journalled: [{ id: 'evt_0' } as never] })
-    expect(record).not.toHaveBeenCalled()
-    expect(checkpoint).toHaveBeenCalledTimes(1)
+    hook({ prev: s0, next: s0, catchingUp: true })
+    expect(record).toHaveBeenCalledTimes(1)
+    expect(checkpoint).not.toHaveBeenCalled()
+  })
+
+  it('따라잡는 중에도 사이드바·기준점·스케줄러는 그대로다', () => {
+    const { hook, calls } = build()
+    hook({ prev: s0, next: s0, catchingUp: true })
+    expect(calls.push).toHaveLength(1)
+    expect(calls.remembered).toEqual([s0])
+    expect(calls.schedule).toBe(1)
   })
 
   it('네 가지를 모두 한다 — 사이드바·체크포인트·기준점·스케줄러', () => {

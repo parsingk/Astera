@@ -20,12 +20,11 @@ export interface OrchCommitHook {
      *  diffed against. */
     prev: OrchState
     next: OrchState
-    /** The journal rows this commit's intent already produced, when the caller wrote them **before**
-     *  the commit. That is this app's own write path and it is deliberate (Job Continuity spec §8,
-     *  intent first: a crash between the two must leave a row with no projection, never a projection
-     *  with no row). A commit that happened in the Host cannot have that ordering, so the push path
-     *  leaves this out and the rows are written here instead. */
-    journalled?: ContinuityEvent[]
+    /** This is a gap being reconciled rather than a transition seen as it happened — the reconnect
+     *  refill, where the state jumped by however many commits the Host made while the socket was
+     *  down. Everything still runs **except the git checkpoints**, and that exception has a reason of
+     *  its own (see below). */
+    catchingUp?: boolean
   }): void
 }
 
@@ -47,9 +46,29 @@ export function createOrchCommitHook(deps: {
   schedule: () => void
   log: (message: string) => void
 }): OrchCommitHook {
-  return ({ prev, next, journalled }) => {
-    const events = journalled ?? deps.record?.(prev, next) ?? []
-    if (events.length > 0)
+  return ({ prev, next, catchingUp }) => {
+    // **Recorded after the commit was accepted, not before it** (ruling F56/d). The journal used to be
+    // written ahead of the write — Job Continuity spec §8's "intent first", so that a crash between
+    // the two leaves a row with no projection rather than a projection with no row. That ordering was
+    // written when the app was the only writer and a write could not be refused. It can now: a
+    // `state-put` the Host rejects as stale leaves rows describing a transition that never happened,
+    // and `RecoveryReconciler` reasons from exactly those rows — a false row is read as a positive
+    // fact, where a missing one degrades to the conservative `promptConfirmed: false`.
+    //
+    // **What the move costs, precisely**: a crash in the window between the Host accepting and this
+    // line losing that one row. What it does *not* cost is the half that actually protects a worker —
+    // "the row lands before the spawn" — because the spawn follows `await deps.setState`, and this
+    // runs inside that await.
+    const events = deps.record?.(prev, next) ?? []
+    // **Skipped while catching up, and this is the one thing a refill must not do.** A checkpoint is
+    // not a note that something happened; it is a *git fact captured at the moment it happened*
+    // (`writeCheckpoint` reads the worktree's HEAD as it is right now). Written for a transition that
+    // landed while the socket was down, an `attempt-started` checkpoint would record a HEAD from
+    // after the attempt's own work — and that value is the baseline `changedFilesSince` diffs
+    // against, so a wrong one narrows the diff and hides the files it exists to surface (the mistake
+    // `Dispatch.stopSnapshot.headCommit` already made once on this branch). No checkpoint is the
+    // honest answer: the moment it would have described is gone.
+    if (events.length > 0 && !catchingUp)
       deps.checkpoint?.(events, next).catch((e) => deps.log(`continuity: checkpoint failed: ${String(e)}`))
     deps.push(next)
     // A finished Run becomes a record. `previous() ?? next` on the first commit after boot treats
@@ -72,11 +91,25 @@ export function createOrchCommitHook(deps: {
     // **Last, and after the commit** — the scheduler reads the committed state, so running it before
     // the commit lands would have it act on the state this transition replaced.
     //
-    // **Running it from a push cannot echo back, and it is the protocol that says so rather than
-    // anything here.** `orch-state` goes to every *other* greeted socket and never to the sender
-    // (`toOthers` in src/host/orch.ts), so a dispatch this app makes in answer to a push comes back
-    // as a reply, not as another push to this app. If that ever changes, this becomes a loop — the
-    // scheduler's own re-entrancy guard bounds one turn of it, not an endless chain of them.
+    // **Running it from a push cannot echo back — but the guarantee is narrower than it looks, and
+    // it is worth knowing exactly which one it is.**
+    //
+    // It is *not* that a push skips the socket that caused it. Only `state-put` answers that way
+    // (`toOthers`, src/host/orch.ts); a commit the Host makes itself goes out through
+    // `server.broadcast`, which writes to **every** greeted socket including the one whose
+    // `orch-call` caused the commit (src/host/server.ts).
+    //
+    // What actually holds is that the app never sends an `orch-call` that commits. Its whole
+    // outbound vocabulary is `state-get` (reads nothing into the file) and `state-put` (answered with
+    // `toOthers`) — see `orchCall`'s own note in ipc.ts. So the scheduler's own dispatches are
+    // executed in this process against the mirror and leave as `state-put`, and nothing this app does
+    // can come back to it as a push.
+    //
+    // **What would break it**: the app sending any third message type that reaches `handleCommand` in
+    // the Host. That commit would be broadcast back here, this hook would run the scheduler on it,
+    // and the scheduler's write would go out again — a loop the re-entrancy guard bounds by one turn,
+    // not endlessly. If that day comes, the fix is at the Host end (answer a caller's own commit with
+    // `toOthers`), not here.
     deps.schedule()
   }
 }

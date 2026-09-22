@@ -1118,7 +1118,7 @@ export function registerIpc(
    *  handler lives in `startHostClient`, outside `bootOrch`, and a commit the Host made owes the same
    *  six things as one this app made. Null before orchestration has started, which is also when there
    *  is nothing to owe: no journal, no scheduler, no sidebar subscription. */
-  let onOrchCommit: ((a: { prev: OrchState; next: OrchState }) => void) | null = null
+  let onOrchCommit: ((a: { prev: OrchState; next: OrchState; catchingUp?: boolean }) => void) | null = null
   /** Re-drives the validations and reviews a restart interrupted, off the mirror (see
    *  `createResumeSweep`). **Run on every Host attachment, not once per Host lifetime** — the Host's
    *  `boot` findings go to one app only, and an app restarting against a surviving Host is handed
@@ -2478,13 +2478,28 @@ export function registerIpc(
           if (r.status !== 200) throw new Error(`the Host answered state-get with ${r.status}`)
           const refill = r.body as { state: OrchState; version?: number }
           const state = refill.state
+          const before = orchMirror.loaded() ? orchMirror.getState() : state
           orchMirror.accept(state, refill.version)
-          pushOrchState(state)
+          // **The same hook a push pays, and for the same reason** (ruling F54, reached again through
+          // this path). A refill carries every commit the Host made while the socket was down, and a
+          // worker report among them leaves the next Task at `ready` unless the scheduler runs — the
+          // F54 symptom exactly, met after a Host restart or a dropped connection rather than in
+          // steady state. `pushOrchState` is inside the hook, so the sidebar is still told.
+          //
+          // `catchingUp` is the one thing that differs, and it is an argument rather than a second
+          // copy of the list: the git checkpoints describe a moment that has already passed by the
+          // time a refill sees it (the reason is written where the hook skips them).
+          if (onOrchCommit) onOrchCommit({ prev: before, next: state, catchingUp: true })
+          else pushOrchState(state)
           // **And here, on the refilled mirror, not on the one this handshake replaced.** A Host that
           // just came back may be a different Host holding the same file, and the Tasks a restart
           // left mid-validation are found in the state, not in `boot` — which this deliberately does
           // not ask for. Doing nothing until the refill has landed is the whole reason this is inside
           // the `then`.
+          //
+          // After the hook, not before: the sweep drives the Tasks nothing else will, and the hook's
+          // scheduler drives the ones the state already makes ready. Running the sweep first would
+          // have it decide against a mirror the hook is about to act on.
           resumeSweep?.run('the Host attached')
         })
         .catch((e) => orchLog(`could not refill the orchestration mirror after reconnecting: ${String(e)}`))
@@ -4053,16 +4068,15 @@ export function registerIpc(
       // re-read is needed. A command that writes twice (worker-start) pushes twice — the payload is
       // one project's Runs and the renderer replaces its copy wholesale, so a duplicate is a no-op.
       setState: async (next) => {
-        // Job Continuity: the journal row lands before the projection does (spec §8 — intent first);
-        // the spawn that follows a worker-start happens after both. A journal failure is logged
-        // inside record() and never reaches here. **That ordering is why the rows are written here
-        // and handed to the hook** rather than left to it — see `afterOrchCommit`'s `journalled`.
+        // **The journal is written by the hook, after the write is accepted** — not here, ahead of it
+        // (ruling F56/d). The reason the ordering changed is in `createOrchCommitHook`: a write can be
+        // refused now, and a row for a transition that never happened is read by the reconciler as a
+        // fact rather than as an absence.
         const prev = store.get()
-        const events = continuity?.record(prev, next) ?? []
         await store.save(next)
-        // Everything else this commit owes is the hook's, and the Host's own commits owe exactly the
-        // same list (ruling F54).
-        afterOrchCommit({ prev, next, journalled: events })
+        // Everything this commit owes is the hook's, and the Host's own commits owe exactly the same
+        // list (ruling F54).
+        afterOrchCommit({ prev, next })
       },
       // The .bak for reset — the one documented safety net for a destructive operation
       backup: () => store.backup(),
