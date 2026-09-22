@@ -1,7 +1,9 @@
 # Cross-vendor orchestration — full guide
 
-This document, which `astera help` prints, is the single source of truth for usage. Everything below
-is a runnable command line — use it as written rather than guessing.
+This document, which `astera help` prints, is the reference for the whole orchestration surface,
+including the commands that are not public. One command's flags are one line away with
+`astera <noun> <verb> --help`, and `docs/cli.md` is the reference for the public surface and the
+exit codes. Everything below is a runnable command line, so use it as written rather than guessing.
 
 `astera` is a **command** on the PATH of any session the app started. Its absolute path is in
 `$ASTERA_CLI` (section 10).
