@@ -15,6 +15,7 @@
 //   node scripts/host-runtime.mjs --force    # assemble anyway (inspecting the payload elsewhere)
 import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { isBuiltin } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -135,6 +136,47 @@ async function main() {
     recursive: true,
     filter: (src) => !src.endsWith('.pdb')
   })
+
+  // **Every other package the Host bundle requires, read out of the bundle itself.**
+  //
+  // node-pty above used to be the whole list. The Host runs the orchestration command layer now, and
+  // that reaches `ignore` through core/files/tree.ts — `externalizeDepsPlugin` leaves every dependency
+  // as a bare `require`, and the node.exe beside this tree resolves those against *this* directory,
+  // not against the app's asar. A missing one is not a degraded Host: it is MODULE_NOT_FOUND on the
+  // first line, before the log file is even open, and the app finds no Host at all.
+  //
+  // Read from the emitted files rather than listed here, for the same reason the manifest below is
+  // walked rather than typed out: a hand-kept list goes stale the first time an import changes, and
+  // nothing notices until a packaged build is installed. Only the chunks host.js actually reaches are
+  // scanned — the copy below takes the whole chunks directory, and some of it belongs to the app.
+  const reachable = (entry) => {
+    const seen = new Set()
+    const stack = [entry]
+    while (stack.length > 0) {
+      const file = stack.pop()
+      if (seen.has(file)) continue
+      seen.add(file)
+      for (const m of readFileSync(file, 'utf8').matchAll(/require\("(\.[^"]*)"\)/g))
+        stack.push(join(dirname(file), m[1]))
+    }
+    return [...seen]
+  }
+  const packages = new Set()
+  for (const file of reachable(join(built, 'host.js')))
+    for (const m of readFileSync(file, 'utf8').matchAll(/require\("([^".][^"]*)"\)/g))
+      if (!isBuiltin(m[1]) && m[1] !== 'node-pty') packages.add(m[1])
+  for (const name of [...packages].sort()) {
+    const from = join(ROOT, 'node_modules', name)
+    if (!existsSync(from)) throw new Error(`the Host bundle requires ${name}, which is not installed — run npm install`)
+    // One level deep on purpose. A package with dependencies of its own needs a real resolver, and a
+    // half-copied tree would fail the same way the missing package does — loudly here is the place to
+    // find that out, not on a user's machine.
+    const nested = Object.keys(JSON.parse(readFileSync(join(from, 'package.json'), 'utf8')).dependencies ?? {})
+    if (nested.length > 0)
+      throw new Error(`the Host bundle requires ${name}, which depends on ${nested.join(', ')} — this script copies one level only`)
+    cpSync(from, join(tree, 'node_modules', name), { recursive: true })
+    console.log(`host-runtime: the Host bundle requires ${name} — shipped`)
+  }
 
   // The whole chunks directory rather than the one file host.js names. It is ~11 KB, the names carry
   // build hashes, and which chunk belongs to which entry is a bundler detail this script has no

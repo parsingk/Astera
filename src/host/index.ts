@@ -21,7 +21,7 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { nodeProcSpawn } from './nodeProc'
 import { HOST_PROTOCOL } from '../core/host/protocol'
-import { versionOnlyOrchCall } from '../core/host/orchProtocol'
+import { createHostOrch } from './orch'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -125,9 +125,32 @@ async function main(): Promise<void> {
       })
   }
 
-  // Shared with `orch`'s stub below so the version the handshake reports and the version `orch-call
-  // version` answers never drift apart.
+  // Shared with `orch` below so the version the handshake reports and the version `orch-call status`
+  // answers never drift apart.
   const hostVersion = process.env.ASTERA_HOST_VERSION ?? '0.0.0'
+
+  // The orchestration state and the commands over it (host control plane design §5, §6).
+  //
+  // **Constructed, not loaded.** `ready()` is deliberately not called here: the app still builds its
+  // own store on this same file and still runs its boot cleanup, and loading here would put a second
+  // process's restart recovery on it. The first call that needs the state loads it, and once the app
+  // has pushed its state there is nothing left to load — see `createHostOrch`.
+  //
+  // `server` is assigned a few lines down; every one of these closures runs long after that, because
+  // nothing can call them before a client has connected.
+  const orch = createHostOrch({
+    profileDir,
+    version: hostVersion,
+    now: () => new Date().toISOString(),
+    // The same two registries `liveCounts` counts — this Host's own sessions, which `status` must be
+    // able to answer with no app attached.
+    runningSessions: () => registry.liveCount() + procs.liveCount(),
+    act: (name, args) => server.act(name, args),
+    hasApp: () => server.hasApp(),
+    // Every commit goes to the clients, so the app can swap its mirror (design §5). Greeted sockets
+    // only, which `broadcast` already guarantees.
+    onState: (state) => server.broadcast({ t: 'orch-state', state })
+  })
   try {
     server = await startHostServer({
       address: addr.address,
@@ -140,9 +163,7 @@ async function main(): Promise<void> {
       // Jobs are not the Host's to count yet — a later task gives it a Job registry, and this literal
       // 0 is what that task replaces (server.ts's own comment on `liveCounts` says the same).
       liveCounts: () => ({ sessions: registry.liveCount() + procs.liveCount(), jobs: 0 }),
-      // This slice's stub — one command, `version` (host control plane design §11 step 3). A later
-      // task replaces it with the real command layer; nothing above this line changes when it does.
-      orch: versionOnlyOrchCall({ version: hostVersion }),
+      orch,
       log
     })
   } catch (err) {

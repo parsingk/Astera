@@ -1,11 +1,10 @@
-// The Host's answer to `orch-call` (host control plane design §5). One message pair carries every
-// command instead of a type per command — see protocol.ts's `orch-call`/`orch-result` — and this
-// file is the table behind that pair.
+// What answers `orch-call` (host control plane design §5). One message pair carries every command
+// instead of a type per command — see protocol.ts's `orch-call`/`orch-result` — and this file is the
+// shape of the thing behind that pair, not the thing itself: the real one is `createHostOrch` in
+// src/host/orch.ts, which runs the command layer over the Host's own store.
 //
-// This slice's table has exactly one entry, `version`, to prove the wire end to end before any
-// orchestration state moves into the Host (design §11, step 3). A later task replaces
-// `versionOnlyOrchCall` with the real command layer; `server.ts` calls only `OrchCall.call` and does
-// not change when that happens.
+// `server.ts` calls only `OrchCall.call`, which is why swapping the stub below for that did not
+// change a line of its routing.
 import { HOST_PROTOCOL, type HostMessage } from './protocol'
 
 /** The client behind one `orch-call`. Supplied by `server.ts`, which is the only place that knows
@@ -34,10 +33,14 @@ export interface OrchCall {
   }): Promise<{ status: number; body: unknown }>
 }
 
-/** This slice's stub: one command, `version`, answering the Host's own version and protocol.
+/** One command, `version`, answering the Host's own version and protocol — and nothing else.
+ *
+ *  **Kept now that `createHostOrch` exists, as what the wire's own tests talk to.** They are about
+ *  correlation, greeting and framing, and giving them a real command layer would put a store and a
+ *  temp profile behind every one of them.
  *
  *  **Everything else answers 501, not 404.** That is the split the real command layer already uses
- *  (`src/main/orchestration/server.ts`'s `bad`/`notFound`/501-default, mapped by
+ *  (`src/core/orchestration/command.ts`'s `bad`/`notFound`/501-default, mapped by
  *  `cliOutput.ts`'s `codeForStatus` to `VERSION_MISMATCH`): 404 means an id that does not exist, 501
  *  means this Host does not know the command at all — which is what a CLI newer than the Host looks
  *  like, not a typo to report the same way as a missing id. */
