@@ -43,8 +43,11 @@ type NounCommand = {
   [N in keyof typeof NOUNS]: `${N}-${(typeof NOUNS)[N][number]}`
 }[keyof typeof NOUNS]
 
-/** The one-word commands. They have no noun, so `NOUNS` cannot name them. */
-const TOP = ['version', 'status', 'help'] as const
+/** The commands with no verb. They have no noun either, so `NOUNS` cannot name them.
+ *
+ *  **`agent-context` has a dash and is still one token.** `spelledCommand` below reads that off
+ *  `NOUNS` rather than off this list — `agent` is not a noun, so nothing splits it. */
+const TOP = ['version', 'status', 'help', 'agent-context'] as const
 
 export type PublicCommand =
   | NounCommand
@@ -95,6 +98,11 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     summary: 'the orchestration guide, in full',
     detail:
       'The reference agents read. It is a long document, not usage text. It comes from the folder ASTERA_SKILLS names, which a session Astera starts sets for you.'
+  },
+  'agent-context': {
+    summary: 'every command this binary can route, as JSON',
+    detail:
+      'For a caller that is a program. It lists the session-only commands as well as the public ones, with their flags, plus the protocol version and the exit codes. Like --help it needs no Host and always exits 0.'
   },
 
   'host-start': { summary: 'start a Host if none is running (already running is success)' },
@@ -202,8 +210,27 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'browser-help': { summary: 'the agent browser guide' }
 }
 
-/** `jobs-wait` as a person types it. Every public command has at most one dash. */
-const spelled = (cmd: string): string => cmd.replace('-', ' ')
+/**
+ * `jobs-wait` as a person types it: `jobs wait`.
+ *
+ * **The dash is a separator only when it separates a noun from one of its verbs.** Plenty of
+ * command names contain a dash and are still one token: `agent-context` here, and every
+ * session-only command — `worker-start`, `task-create`, `run-configs`, `gate-resolve`. Splitting
+ * those printed a command that does not exist, and `parseArgs` would then read the first half as
+ * the whole command. So the test is `NOUNS` itself, not a hand-kept list of exceptions: `worker` is
+ * not a noun, `runs` is.
+ *
+ * Exported because cliOutput.ts builds `astera jobs get --help` as a recovery step and
+ * cliAgentContext.ts prints one line per command, and three spellings of one rule would drift.
+ */
+export const spelledCommand = (cmd: string): string => {
+  const dash = cmd.indexOf('-')
+  if (dash < 0) return cmd
+  const noun = cmd.slice(0, dash)
+  const verb = cmd.slice(dash + 1)
+  const verbs: readonly string[] | undefined = noun === 'browser' ? BROWSER_VERBS : verbsOf(noun)
+  return verbs?.includes(verb) === true ? `${noun} ${verb}` : cmd
+}
 
 /** `--id <jobId>`, or `[--timeout-ms <ms>]` when it is optional. */
 const spelledFlag = (f: UsageFlag): string => {
@@ -211,9 +238,15 @@ const spelledFlag = (f: UsageFlag): string => {
   return f.required === true ? body : `[${body}]`
 }
 
-/** The first line of the per-command level: the command with its flags, ready to copy. */
-const invocation = (cmd: PublicCommand): string =>
-  [`astera ${spelled(cmd)}`, ...(USAGE[cmd].flags ?? []).map(spelledFlag)].join(' ')
+/** One command with its flags, ready to copy: `astera jobs wait --id <jobId> [--timeout-ms <ms>]`.
+ *
+ *  Exported because cliAgentContext.ts prints the same line for the session-only commands, whose
+ *  usage is not in `USAGE` — written twice the two spellings would drift. */
+export const invocationLine = (cmd: string, flags: readonly UsageFlag[] = []): string =>
+  [`astera ${spelledCommand(cmd)}`, ...flags.map(spelledFlag)].join(' ')
+
+/** The first line of the per-command level. */
+const invocation = (cmd: PublicCommand): string => invocationLine(cmd, USAGE[cmd].flags ?? [])
 
 type Row = readonly [string, string]
 
@@ -243,7 +276,7 @@ function wrapped(text: string): string[] {
 
 /** Level 1: every public command, one line each. */
 export function rootUsage(): string {
-  const row = (cmd: PublicCommand): Row => [spelled(cmd), USAGE[cmd].summary]
+  const row = (cmd: PublicCommand): Row => [spelledCommand(cmd), USAGE[cmd].summary]
   const blocks: Row[][] = [
     TOP.map(row),
     ...Object.entries(NOUNS as Record<string, readonly string[]>).map(([noun, verbs]) =>

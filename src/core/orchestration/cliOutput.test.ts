@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import {
+  CLI_ERROR_CODES,
   codeForStatus,
   dataFor,
   errEnvelope,
   exitCodeFor,
   messageFrom,
+  nextStepsFor,
   okEnvelope,
   waitEnd
 } from './cliOutput'
@@ -92,11 +94,22 @@ describe('봉투', () => {
     })
   })
 
-  it('실패는 ok 와 code·message·details 다', () => {
-    expect(JSON.parse(errEnvelope({ code: 'NOT_FOUND', message: 'unknown job: job_x' }))).toEqual({
+  it('실패는 ok 와 code·message·details·nextSteps 다', () => {
+    expect(JSON.parse(errEnvelope({ code: 'NOT_FOUND', message: 'unknown job: job_x' }, 'jobs-get'))).toEqual({
       ok: false,
-      error: { code: 'NOT_FOUND', message: 'unknown job: job_x', details: {} }
+      error: {
+        code: 'NOT_FOUND',
+        message: 'unknown job: job_x',
+        details: {},
+        nextSteps: ['astera jobs list']
+      }
     })
+  })
+
+  // `details` 가 `{}` 로 언제나 있는 것과 같은 판단이다 — 읽는 쪽이 `error.nextSteps[0]` 앞에
+  // 칸의 유무를 먼저 묻지 않아도 된다.
+  it('칠 것이 없어도 칸은 있다', () => {
+    expect(JSON.parse(errEnvelope({ code: 'FAILED', message: 'x' })).error.nextSteps).toEqual([])
   })
 
   // 한 줄이어야 한다 — 스크립트가 줄 단위로 읽는다
@@ -148,5 +161,79 @@ describe('waitEnd', () => {
     expect(waitEnd({ state: 'something-new' })?.code).toBe('FAILED')
     expect(waitEnd({})?.code).toBe('FAILED')
     expect(waitEnd(null)?.code).toBe('FAILED')
+  })
+})
+
+describe('nextStepsFor — 무엇을 치면 되는가', () => {
+  // 이 두 코드가 가장 자주 나고, 둘 다 답이 정확히 하나 있다
+  it('Host 가 없으면 Host 를 켜는 명령이다', () => {
+    expect(nextStepsFor({ code: 'HOST_NOT_RUNNING' })).toEqual(['astera host start'])
+  })
+
+  it('없는 id 는 그 명령의 목록 명령으로 이어진다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'jobs-get' })).toEqual(['astera jobs list'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'runs-stop' })).toEqual(['astera runs list'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'questions-answer' })).toEqual(['astera questions list'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'projects-get' })).toEqual(['astera projects list'])
+  })
+
+  // 세션 전용 명령은 무엇을 못 찾았다고 말하는지가 갈래다 — worker-start 가 못 찾는 것은
+  // Dispatch 가 아니라 Task 이고, run-create 가 못 찾는 것은 회차가 아니라 계정이다.
+  it('세션 전용 명령은 그것이 못 찾은 것의 목록으로 이어진다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'worker-start' })).toEqual(['astera tasks list'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'worker-show' })).toEqual([
+      'astera dispatch-show --task <taskId>'
+    ])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'run-create' })).toEqual(['astera accounts'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'run-merge' })).toEqual(['astera runs list'])
+  })
+
+  // 모르는 명령에 그럴듯한 목록 명령을 지어내지 않는다
+  it('짚을 곳이 없으면 가이드다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'nonesuch' })).toEqual(['astera help'])
+    expect(nextStepsFor({ code: 'NOT_FOUND' })).toEqual(['astera help'])
+  })
+
+  it('인자가 틀린 것은 그 명령의 사용법으로 이어진다', () => {
+    expect(nextStepsFor({ code: 'INVALID_ARGUMENTS', cmd: 'jobs-wait' })).toEqual([
+      'astera jobs wait --help'
+    ])
+    // 한 낱말짜리 명령은 대시를 쪼개지 않는다 — `astera agent context --help` 는 없는 명령이다
+    expect(nextStepsFor({ code: 'INVALID_ARGUMENTS', cmd: 'agent-context' })).toEqual([
+      'astera agent-context --help'
+    ])
+    // 공개 표면 밖의 명령에는 `--help` 가 없다
+    expect(nextStepsFor({ code: 'INVALID_ARGUMENTS', cmd: 'worker-start' })).toEqual(['astera help'])
+    expect(nextStepsFor({ code: 'INVALID_ARGUMENTS' })).toEqual(['astera --help'])
+  })
+
+  // 원인이 무엇인지 이쪽은 모른다 — 아무 명령이나 얹으면 맞는 경우보다 틀린 경우가 많다
+  it('FAILED 는 비어 있고, 그것이 판단이다', () => {
+    expect(nextStepsFor({ code: 'FAILED' })).toEqual([])
+    expect(nextStepsFor({ code: 'FAILED', cmd: 'jobs-get' })).toEqual([])
+  })
+
+  it('열 코드 전부가 답을 가진다 — 비어 있는 것도 답이다', () => {
+    for (const code of CLI_ERROR_CODES) expect(nextStepsFor({ code }), code).toBeInstanceOf(Array)
+  })
+
+  // 자리표시자를 채워 주면 그대로 칠 수 있는 줄이 된다 — wait 의 오류는 이미 그 값을 싣고 있다
+  it('details 에 있는 id 는 자리표시자에 채워진다', () => {
+    const end = waitEnd({ state: 'failed', runId: 'run_9' })!
+    expect(nextStepsFor({ code: end.code, cmd: 'runs-wait', details: end.details })).toEqual([
+      'astera tasks list --run run_9 --status failed'
+    ])
+  })
+
+  // 짐작한 id 를 채우는 것보다 비워 두는 편이 낫다
+  it('없는 값은 자리표시자로 남는다', () => {
+    expect(nextStepsFor({ code: 'RUN_FAILED' })).toEqual([
+      'astera tasks list --run <runId> --status failed'
+    ])
+  })
+
+  it('409 는 지금 무엇이 도는가로, 그리고 host 명령은 Host 쪽으로 이어진다', () => {
+    expect(nextStepsFor({ code: 'CONFLICT', cmd: 'jobs-run' })).toEqual(['astera status'])
+    expect(nextStepsFor({ code: 'CONFLICT', cmd: 'host-stop' })).toEqual(['astera host status'])
   })
 })

@@ -23,9 +23,12 @@ import {
   errEnvelope,
   exitCodeFor,
   messageFrom,
+  nextStepsFor,
   okEnvelope,
+  type CliError,
   type CliErrorCode
 } from '../core/orchestration/cliOutput'
+import { agentContext } from '../core/orchestration/cliAgentContext'
 
 /** 빌드가 박아 넣은 이 프로그램의 버전(electron.vite.config.ts). 앱과 CLI 는 한 프로그램이므로
  *  값이 하나이고, 그래서 둘이 갈라질 수가 없다. */
@@ -46,9 +49,13 @@ import {
 } from '../core/orchestration/pendingReports'
 
 /** 오류 하나를 봉투에 담아 그 종료 코드와 함께 돌려준다 — 부르는 쪽이 둘을 따로 고르지 않도록.
- *  코드와 종료 코드의 표는 core/orchestration/cliOutput.ts 한 곳에만 있다(설계 §8). */
-export function errorOutput(msg: string, code: CliErrorCode = 'FAILED'): string {
-  return errEnvelope({ code, message: msg })
+ *  코드와 종료 코드의 표는 core/orchestration/cliOutput.ts 한 곳에만 있다(설계 §8).
+ *
+ *  `cmd` 는 `nextSteps` 를 고르는 데만 쓰인다 — 무엇이 실패했는지에 따라 다음에 칠 것이 달라진다
+ *  (`jobs get` 의 404 는 `astera jobs list`). 명령이 정해지기 전에 나는 실패(파서·모드)는 주지
+ *  않고, 그때는 일반적인 안내가 나간다. */
+export function errorOutput(msg: string, code: CliErrorCode = 'FAILED', cmd?: string): string {
+  return errEnvelope({ code, message: msg }, cmd)
 }
 
 export type OutputMode = 'json' | 'human' | 'quiet'
@@ -143,9 +150,19 @@ export function renderOk(cmd: string, body: unknown, mode: OutputMode): string {
   return humanFor(cmd, data) ?? okEnvelope(cmd, body)
 }
 
-/** 모드에 맞춘 오류 출력. 사람에게는 봉투가 아니라 문장이다 — 코드는 종료 코드로 이미 간다. */
-export function renderErr(msg: string, code: CliErrorCode, mode: OutputMode): string {
-  return mode === 'json' ? errorOutput(msg, code) : `error: ${msg}`
+/**
+ * 모드에 맞춘 오류 출력. 사람에게는 봉투가 아니라 문장이다 — 코드는 종료 코드로 이미 간다.
+ *
+ * **다음에 칠 것은 두 모드 모두에 나간다.** 스크립트가 받는 `error.nextSteps` 와 같은 줄이고
+ * (cliOutput 의 `nextStepsFor`), 사람에게도 같은 것이 필요하다 — 무엇이 잘못됐는지 읽고 나서 다음
+ * 질문은 언제나 "그래서 뭘 치지" 다. JSON 쪽은 봉투가 이미 싣고 있으므로 **한 번만** 나간다.
+ */
+export function renderErr(e: CliError, mode: OutputMode, cmd?: string): string {
+  if (mode === 'json') return errEnvelope(e, cmd)
+  const steps = nextStepsFor({ code: e.code, cmd, details: e.details })
+  return [`error: ${e.message}`, ...(steps.length === 0 ? [] : ['try:', ...steps.map((s) => `  ${s}`)])].join(
+    '\n'
+  )
 }
 
 export function ensureTrailingNewline(text: string): string {
@@ -387,6 +404,16 @@ export async function main(): Promise<void> {
     process.exit(exitCodeFor('INVALID_ARGUMENTS'))
   }
 
+  // **스키마도 Host 없이 답한다** — `--help` 와 같은 자리다(cliAgentContext.ts). 물어본 것이 "이
+  // 바이너리가 무엇을 할 줄 아는가" 이고, 그 답은 이 프로그램 안에 이미 있다.
+  //
+  // **모드를 보지 않고 언제나 봉투다.** 이것은 스키마이고 스키마는 JSON 이다 — `--human` 에 칸을
+  // 맞춘 표를 씌울 것이 없고, `--quiet` 의 id 목록은 더더욱 아니다.
+  if (parsed.cmd === 'agent-context') {
+    out(okEnvelope(parsed.cmd, agentContext()))
+    process.exit(0)
+  }
+
   // help has to work without a Host — handle it before working out which one to talk to.
   if (parsed.cmd === 'help') {
     const resolved = resolveGuidePath({ args: parsed.args, env: process.env })
@@ -457,7 +484,16 @@ export async function main(): Promise<void> {
       // **닿지 못한 것은 HOST_NOT_RUNNING(3) 이다.** 스크립트가 "앱이 없다" 와 "명령이 실패했다" 를
       // 가를 수 있어야 한다(설계 §8) — 인자가 모자란 보고만 그 갈래가 아니라 잘못된 인자다.
       const code = problem === 'not a report' ? 'HOST_NOT_RUNNING' : 'INVALID_ARGUMENTS'
-      out(errorOutput(problem === 'not a report' ? reason : `${problem} (the Host is not running)`, code))
+      // **여기도 모드를 따른다.** 바로 아래 성공 쪽(renderOk)은 이미 따르고 있었고 실패 쪽만
+      // 봉투로 굳어 있었다 — `--human` 으로 물어본 사람이 여기서만 JSON 을 받았다. Host 가 없는
+      // 것은 사람이 가장 자주 보는 실패이고, 그래서 다음에 칠 것이 가장 필요한 자리다.
+      out(
+        renderErr(
+          { code, message: problem === 'not a report' ? reason : `${problem} (the Host is not running)` },
+          mode,
+          parsed.cmd
+        )
+      )
       process.exit(exitCodeFor(code))
     }
     const written = writePendingReport({
@@ -470,9 +506,13 @@ export async function main(): Promise<void> {
     })
     if (!written.ok) {
       out(
-        errorOutput(
-          `${reason} — and the report could not be recorded either: ${written.error}`,
-          'HOST_NOT_RUNNING'
+        renderErr(
+          {
+            code: 'HOST_NOT_RUNNING',
+            message: `${reason} — and the report could not be recorded either: ${written.error}`
+          },
+          mode,
+          parsed.cmd
         )
       )
       process.exit(exitCodeFor('HOST_NOT_RUNNING'))
@@ -536,7 +576,7 @@ export async function main(): Promise<void> {
       const end = connectFailureEnd({ error: conn.error, address })
       if (!end.fallback) {
         if (parsed.cmd === 'version') versionWithoutHost()
-        out(renderErr(end.message, end.code, mode))
+        out(renderErr({ code: end.code, message: end.message }, mode, parsed.cmd))
         process.exit(exitCodeFor(end.code))
       }
       return withoutHost(
@@ -550,7 +590,7 @@ export async function main(): Promise<void> {
       conn.close()
       if (parsed.cmd === 'version') versionWithoutHost()
       const code = codeForStatus(501)
-      out(renderErr(`the Host at ${address} does not answer orchestration commands`, code, mode))
+      out(renderErr({ code, message: `the Host at ${address} does not answer orchestration commands` }, mode, parsed.cmd))
       process.exit(exitCodeFor(code))
     }
     const r = await callHost({
@@ -566,7 +606,7 @@ export async function main(): Promise<void> {
     // 연결이 선 뒤의 침묵도 hello 전의 침묵과 같은 코드로 끝난다(`SILENT_HOST_CODE`) —
     // 예전에는 이쪽만 1 이었고, 그것은 스크립트에게 같은 일을 두 번 분기하라는 말이었다.
     if ('stuck' in r) {
-      out(renderErr(r.stuck, SILENT_HOST_CODE, mode))
+      out(renderErr({ code: SILENT_HOST_CODE, message: r.stuck }, mode, parsed.cmd))
       process.exit(exitCodeFor(SILENT_HOST_CODE))
     }
     if ('unreachable' in r) return withoutHost(r.unreachable)
@@ -592,7 +632,7 @@ export async function main(): Promise<void> {
     if (parsed.cmd === 'jobs-wait' || parsed.cmd === 'runs-wait') {
       const end = waitEnd(body)
       if (end !== null) {
-        out(mode === 'json' ? errEnvelope(end) : `error: ${end.message}`)
+        out(renderErr(end, mode, parsed.cmd))
         process.exit(exitCodeFor(end.code))
       }
     }
@@ -605,6 +645,6 @@ export async function main(): Promise<void> {
   // 제 코드로 분명하게 말한다.
   if (parsed.cmd === 'version') versionWithoutHost()
   const code = codeForStatus(reply.status)
-  out(renderErr(messageFrom(reply.body, `the Host answered ${reply.status}`), code, mode))
+  out(renderErr({ code, message: messageFrom(reply.body, `the Host answered ${reply.status}`) }, mode, parsed.cmd))
   process.exit(exitCodeFor(code))
 }

@@ -42,6 +42,7 @@ import {
   type Res
 } from './state'
 import { CLI_PROTOCOL } from './cliOutput'
+import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath } from './projects'
 import { workerDoneFieldError } from './sendArgs'
 import {
@@ -614,7 +615,14 @@ export async function handleCommand(
     return okBody(r.value)
   }
 
-  switch (cmd) {
+  // **이 캐스트가 아래 표를 `astera agent-context` 의 명령 목록에 못 박는다**(cliAgentContext.ts).
+  // `cmd` 는 여전히 아무 문자열이나 될 수 있고 — 모르는 명령은 아래 `default` 가 501 로 답한다 —
+  // 좁힌 이름으로 가르는 것은 **이 switch 가 무엇을 다루기로 했는가** 쪽이다. 그래서 두 방향이 다
+  // 컴파일 오류가 된다: 스키마에 없는 `case` 는 "not comparable to SwitchedCommand" 이고, 스키마에만
+  // 있고 `case` 가 없는 이름은 `default` 의 `never` 를 깨뜨린다. 명령을 하나 더할 때 스키마를
+  // 잊는 것이 이 파일에서 가장 하기 쉬운 실수였고, 이제 그것이 빌드를 멈춘다.
+  const routed = cmd as SwitchedCommand
+  switch (routed) {
     case 'run-create': {
       const objective = str(args.objective)
       // .trim() here (unlike the plain str() presence check elsewhere) because resolveProjectRoot
@@ -2353,11 +2361,17 @@ export async function handleCommand(
       await deps.setState(wipe())
       return okBody({ reset: true })
     }
-    default:
+    default: {
       // **모르는 명령은 501 이지 404 가 아니다**(공개 CLI 설계 §8). 404 는 없는 id 의 자리다 — 둘을
       // 같은 것으로 두면 스크립트가 \"그 Job 이 없다\" 와 \"이 앱은 그 명령을 모른다\" 를 가르지
       // 못한다. 뒤의 것은 앱과 CLI 의 버전이 갈렸다는 뜻이고, 그것이 VERSION_MISMATCH(9) 의 뜻이다.
-      return { status: 501, body: { error: `unknown command: ${cmd}` } }
+      //
+      // **`never` 인 것이 빠짐 검사다.** 위의 `case` 들이 `SwitchedCommand` 를 다 덮으면 여기 남는
+      // 타입이 `never` 이고, 하나라도 빠지면 그 이름이 남아 이 줄이 그 이름을 대며 깨진다. 값은
+      // 런타임에 그냥 `cmd` 이므로 문구는 달라지지 않는다.
+      const unhandled: never = routed
+      return { status: 501, body: { error: `unknown command: ${String(unhandled)}` } }
+    }
   }
 }
 

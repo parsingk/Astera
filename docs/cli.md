@@ -129,12 +129,24 @@ astera questions get    --id <questionId>
 astera questions answer --id <questionId> --answer <text>
 
 astera help                              the orchestration guide, in full
+astera agent-context                     every command this binary can route, as JSON
 
 astera browser js     [--script <text> | --file <path>]
 astera browser help                      the agent browser guide
 ```
 
 `astera help` is the reference agents read.
+
+**`astera agent-context` prints the command surface as JSON**, for a caller that is a program rather
+than a person. It covers every command this binary can route, not only the public ones above: the
+commands a coordinator or worker session uses are in it too, marked `"public": false`, with their
+flags. It also carries the protocol version and the exit code table. Like `--help` it needs no Host
+and always exits 0.
+
+The value of asking the binary is that the answer cannot be older than the binary. A document can
+say a flag exists after it has been removed; this cannot. One limit is worth knowing: the **command
+set** is held to what the program actually routes by the compiler, but the **flags** are written by
+hand, because no command in this program declares its flags anywhere a machine could read them.
 
 **`--help` prints usage, at three levels.** It is plain text, it exits 0, and it never contacts the
 Host, so it answers with nothing running.
@@ -173,7 +185,8 @@ not part of this surface and are not described here. `astera help` documents the
 
 ```json
 { "ok": true, "data": { "jobs": [ … ] } }
-{ "ok": false, "error": { "code": "NOT_FOUND", "message": "unknown job: job_x", "details": {} } }
+{ "ok": false, "error": { "code": "NOT_FOUND", "message": "unknown job: job_x", "details": {},
+                          "nextSteps": ["astera jobs list"] } }
 ```
 
 `data` is always an object, never a bare array, so that a field can be added later without breaking
@@ -182,6 +195,23 @@ every reader. A list arrives under its own noun: `data.jobs`, `data.runs`, `data
 
 `error.code` is for branching and `error.message` is for a person. The codes are the closed set in
 the exit code table below.
+
+**`error.nextSteps` is what to run next.** It is always present and its entries are command lines,
+not advice: `astera host start`, not "start the Host". It is empty when there is nothing general to
+run, which is the honest answer for exit 1. That code means none of the other nine described the
+failure, so nothing is known about the cause beyond the message.
+
+The steps depend on the command as well as the code, so a 4 from `jobs get` offers `astera jobs
+list` and a 4 from `runs get` offers `astera runs list`. Where a step needs an id the error already
+carries, that id is filled in: a `runs wait` that ends in failure offers
+`astera tasks list --run run_9f8e --status failed`, ready to run. A placeholder that is still in
+angle brackets is one the error could not fill.
+
+```bash
+astera jobs run --id job_typo || astera jobs list
+# or take them from the envelope
+astera jobs run --id job_typo | jq -r '.error.nextSteps[]'
+```
 
 **`--human`** prints aligned columns for reading, with the state first:
 
@@ -192,6 +222,15 @@ COMPLETE  job_2d80  Rename the run config store  5/5
 ```
 
 Never parse that. It has no contract, and columns will change.
+
+A failure in this mode is a sentence rather than an envelope, and the same steps follow it under
+`try:`, one per line. They are printed once, here or in the envelope, never both.
+
+```text
+error: cannot reach the Host at \\.\pipe\astera-host-9f2a (unreachable)
+try:
+  astera host start
+```
 
 **`--quiet`** prints ids only, one per line, so a shell loop works without `jq`:
 

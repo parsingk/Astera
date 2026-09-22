@@ -19,7 +19,8 @@ describe('cliUsage — 표는 공개 표면과 정확히 같다', () => {
       ...BROWSER_VERBS.map((v) => `browser-${v}`),
       'version',
       'status',
-      'help'
+      'help',
+      'agent-context'
     ].sort()
     expect(Object.keys(USAGE).sort()).toEqual(expected)
   })
@@ -44,8 +45,18 @@ describe('cliUsage — 세 층', () => {
       const r = usageFor(argv)
       expect(r).not.toBeNull()
       const text = (r as { text: string }).text
-      for (const cmd of Object.keys(USAGE)) expect(text).toContain(cmd.replace('-', ' '))
+      // `agent-context` 는 대시가 있지만 한 낱말이다 — 쪼개어 찍으면 없는 명령을 가르치게 된다.
+      for (const cmd of Object.keys(USAGE))
+        expect(text).toContain(cmd === 'agent-context' ? cmd : cmd.replace('-', ' '))
     }
+  })
+
+  // 명사와 동사를 가르는 대시와, 이름 안의 대시를 가른다. 쪼개어 찍으면 `astera agent context`
+  // 라는 없는 명령이 사용법에 실리고, 그 줄은 파서에서 `agent` 로 떨어진다.
+  it('한 낱말짜리 명령은 대시를 쪼개지 않는다', () => {
+    const text = (usageFor(['agent-context', '--help']) as { text: string }).text
+    expect(text).toContain('astera agent-context')
+    expect(text).not.toContain('astera agent context')
   })
 
   it('astera <noun> --help 는 그 noun 의 동사만 낸다', () => {

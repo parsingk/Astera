@@ -35,11 +35,18 @@ describe('errorOutput', () => {
   it('오류를 봉투 한 줄로 감싼다', () => {
     expect(JSON.parse(errorOutput('boom'))).toEqual({
       ok: false,
-      error: { code: 'FAILED', message: 'boom', details: {} }
+      error: { code: 'FAILED', message: 'boom', details: {}, nextSteps: [] }
     })
   })
   it('코드를 주면 그것이 실린다', () => {
     expect(JSON.parse(errorOutput('nope', 'NOT_FOUND')).error.code).toBe('NOT_FOUND')
+  })
+  // 어떤 명령이 실패했는지가 다음에 칠 것을 가른다 — 봉투를 짓는 자리에서 그것을 받는 이유다.
+  it('명령을 주면 그 명령에 맞는 nextSteps 가 실린다', () => {
+    expect(JSON.parse(errorOutput('unknown job: x', 'NOT_FOUND', 'jobs-get')).error.nextSteps).toEqual([
+      'astera jobs list'
+    ])
+    expect(JSON.parse(errorOutput('unknown job: x', 'NOT_FOUND')).error.nextSteps).toEqual(['astera help'])
   })
 })
 
@@ -357,8 +364,26 @@ describe('renderOk / renderErr', () => {
   })
 
   it('사람에게는 봉투가 아니라 문장이다', () => {
-    expect(renderErr('unknown run: nope', 'NOT_FOUND', 'human')).toBe('error: unknown run: nope')
-    expect(JSON.parse(renderErr('x', 'NOT_FOUND', 'json')).error.code).toBe('NOT_FOUND')
+    expect(renderErr({ code: 'NOT_FOUND', message: 'unknown run: nope' }, 'human')).toBe(
+      'error: unknown run: nope\ntry:\n  astera help'
+    )
+    expect(JSON.parse(renderErr({ code: 'NOT_FOUND', message: 'x' }, 'json')).error.code).toBe('NOT_FOUND')
+  })
+
+  // 사람도 다음에 칠 것을 받는다. 봉투에는 이미 실려 있으므로 JSON 쪽에 문장을 덧붙이지 않는다 —
+  // 같은 것을 두 모양으로 두 번 내보내면 읽는 쪽이 어느 것이 계약인지 모른다.
+  it('사람용에는 칠 명령이 붙고, JSON 에는 봉투 안에만 있다', () => {
+    expect(renderErr({ code: 'HOST_NOT_RUNNING', message: 'cannot reach the Host' }, 'human')).toBe(
+      'error: cannot reach the Host\ntry:\n  astera host start'
+    )
+    const json = renderErr({ code: 'HOST_NOT_RUNNING', message: 'cannot reach the Host' }, 'json')
+    expect(json).not.toContain('try:')
+    expect(JSON.parse(json).error.nextSteps).toEqual(['astera host start'])
+  })
+
+  // 칠 것이 없는 코드는 줄을 늘리지 않는다
+  it('할 것이 없으면 문장 하나뿐이다', () => {
+    expect(renderErr({ code: 'FAILED', message: 'boom' }, 'human')).toBe('error: boom')
   })
 })
 

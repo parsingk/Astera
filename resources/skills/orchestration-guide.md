@@ -217,6 +217,12 @@ Arguments like `--spec`, `--body`, `--question`, and `--result` **read from stdi
 value `-` (4.6). Every command already outputs JSON — the `--json` flag is accepted but makes no
 difference to the output.
 
+**`astera agent-context` prints this whole surface as JSON**, including every command below, with
+each one's flags, the protocol version and the exit code table. It needs no Host and always exits 0.
+Prefer it over this section when you want the list rather than the explanation: the command set in
+it is held to what the program actually routes, so it cannot name a command this build does not
+have. The flags in it are still written by hand, as they are here.
+
 ### 4.1 Run
 
 ```
@@ -474,7 +480,7 @@ differently from shell to shell.
 
 ```json
 {"ok":true,"data":{ … }}
-{"ok":false,"error":{"code":"NOT_FOUND","message":"unknown run: run_x","details":{}}}
+{"ok":false,"error":{"code":"NOT_FOUND","message":"unknown run: run_x","details":{},"nextSteps":["astera runs list"]}}
 ```
 
 **Everything this guide describes lives inside `data`.** Where a section says a command "responds
@@ -497,6 +503,14 @@ without breaking every reader, which is why there are none.
 
 `error.code` is for branching and `error.message` is for a person. The codes are the closed set in
 the table below.
+
+**`error.nextSteps` is for you.** It is always present, and its entries are command lines to run
+rather than sentences to interpret. The steps depend on the command as well as the code, so a `4`
+from `worker-show` offers `astera dispatch-show --task <taskId>` and a `4` from `worker-start`
+offers `astera tasks list`. Where an id is already in `details` it is filled in, so the line can be
+run as it stands; a placeholder still in angle brackets is one the error could not fill, and you
+supply it. An empty list means there is no one command that is right for this failure. Read
+`message` and decide.
 
 ### 4.8 Exit codes
 
