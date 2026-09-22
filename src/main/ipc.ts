@@ -1,5 +1,5 @@
 import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, type WebContents } from 'electron'
-import { promises as fs, cpSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync } from 'node:fs'
+import { promises as fs, cpSync, existsSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { configuredModelOf } from '../core/models/parse'
 import path from 'node:path'
 import os from 'node:os'
@@ -83,7 +83,6 @@ import {
   knowledgeIn,
   specFileName
 } from './orchestration/coordinator'
-import { startOrchServer, type OrchServer } from './orchestration/server'
 import {
   handleCommand as orchHandleCommand,
   type OrchServerDeps
@@ -159,7 +158,7 @@ import { completionForTaskOf } from '../core/orchestration/completion'
 import { repoPathOf } from '../core/worktrees/repo'
 import type { OrchState } from '../core/orchestration/state'
 import { makeLimitProbe } from './orchestration/limitProbe'
-import { shuttleNames, writeInfo, writeShuttle } from './orchestration/shuttle'
+import { shuttleNames, writeShuttle } from './orchestration/shuttle'
 import { binDirFor, isOnPath, pathHintFor } from '../core/orchestration/cliInstall'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
@@ -243,7 +242,7 @@ export interface OrchHandle {
   stop: () => void
   onRolled: (oldSessionId: string, newInfo: { id: string; accountId: string }) => void
   onRollState: (e: RollStateEvent) => void
-  orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string; profileDir: string } | undefined
+  orchEnv: () => { cliPath: string; skillsPath: string; profileDir: string } | undefined
   resumeText: (sessionId: string, form: 'handover' | 'update', tabFallback: boolean) => Promise<string | null>
   /** Job Continuity: binds the provider's session id to the open Dispatch of that app session. */
   onNativeSession: (sessionId: string, nativeSessionId: string) => void
@@ -1042,10 +1041,8 @@ export function registerIpc(
     })
     .catch((e) => orchLog(`handoff.json load failed: ${String(e)}`))
   let orch: {
-    server: OrchServer
     deps: OrchServerDeps
     cliPath: string
-    infoPath: string
     skillsPath: string
     /** This app's own userData folder — what a spawned session is told so its `astera` finds this
      *  app's Host and this app's report queue rather than recomputing a profile it cannot know
@@ -1275,7 +1272,7 @@ export function registerIpc(
    *  is planted into a session that cannot reach the program it tells the agent to run. **And Smart
    *  Resume**: `astera handoff` is that same CLI, and the memo it stores is what the Smart Resume
    *  briefing reads back. */
-  const orchEnvOf = (): { cliPath: string; infoPath: string; skillsPath: string; profileDir: string } | undefined =>
+  const orchEnvOf = (): { cliPath: string; skillsPath: string; profileDir: string } | undefined =>
     orch &&
     (core.appSettings.getOrchestrationEnabled() ||
       core.appSettings.getWorkUnitTrackingEnabled() ||
@@ -1283,7 +1280,6 @@ export function registerIpc(
       core.appSettings.getResumeStrategy() === 'smart')
       ? {
           cliPath: orch.cliPath,
-          infoPath: orch.infoPath,
           skillsPath: orch.skillsPath,
           profileDir: orch.profileDir
         }
@@ -2274,7 +2270,7 @@ export function registerIpc(
       // "waiting for the Host" from the moment it commits to needing one, and it turns a real Host
       // failure into `unreachable` with the reason before it returns — so anything that reaches here
       // is a throw from the parts that have nothing to do with the Host: the `fs.mkdir` of the spec
-      // directory, `writeShuttle`, `writeInfo`. Left as it was, the screen would stay on "connecting"
+      // directory and `writeShuttle`. Left as it was, the screen would stay on "connecting"
       // for the rest of the app's life and tell a person four features are waiting on a connection
       // that is fine. Cleared rather than given a third state: saying nothing is honest here, and the
       // failure is in the log with its real reason. The throw carries on to the caller's own catch.
@@ -4595,30 +4591,20 @@ export function registerIpc(
     }
     if (continuity) buildRecovery()
 
-    const server = await startOrchServer(deps)
-    // A failure after listen must close the server and only then throw. Throwing here would leave orch
-    // null while the server is still listening and the handle is gone — will-quit could not close it,
-    // and toggling back on would start a second server (because orch === null). A writeShuttle ENOSPC
-    // on a full disk reaches this.
-    let cliPath: string
-    let infoPath: string
     // The same string `startHost` hashes into the Host's address (`hostAddress`), so a session told
     // this folder derives exactly this app's Host and no other.
     const profileDir = app.getPath('userData')
     const dir = path.join(profileDir, 'orch')
-    try {
-      cliPath = await writeShuttle({ dir, execPath: process.execPath, entryPath })
-      infoPath = await writeInfo({ dir, port: server.port, token: server.token })
-    } catch (err) {
-      await server.close().catch(() => {}) // a failed close must not mask the original error
-      throw err
-    }
-    orch = { server, deps, cliPath, infoPath, skillsPath, profileDir }
+    // A `writeShuttle` ENOSPC on a full disk reaches the caller's catch with `orch` still null, which
+    // is the truth: nothing was assigned and nothing needs unwinding. There is no listening socket to
+    // close first any more — the command layer is the Host's (host control plane design §7).
+    const cliPath = await writeShuttle({ dir, execPath: process.execPath, entryPath })
+    orch = { deps, cliPath, skillsPath, profileDir }
     // Nobody is waiting on the Host any more, so the Jobs view goes back to meaning what it says.
     // Before `pushOrchState` below, which is what redraws it.
     setOrchHostGate(null)
     orchRollTap = new OrchRollTap(deps)
-    orchLog(`started — port=${server.port} cli=${cliPath} skills=${skillsPath}`)
+    orchLog(`started — cli=${cliPath} skills=${skillsPath}`)
     // The other half of the queue read at the top of this function: the reports workers wrote down
     // while there was no server to take them.
     //
@@ -4823,15 +4809,9 @@ export function registerIpc(
           clearInterval(orchFireTimer)
           orchFireTimer = null
         }
-        // Delete the token file. unlinkSync because this is called from will-quit, where an asynchronous
-        // delete has no guarantee of completing before the process ends. Leaving the shuttle behind is
-        // harmless (it holds no token).
-        try {
-          unlinkSync(infoPath)
-        } catch {
-          /* Already gone — ignore */
-        }
-        void server.close()
+        // Nothing to tear down beyond this: there is no socket of this app's own to close and no
+        // token file to remove any more. The shuttle stays where it is — it holds no secret, and it
+        // is rewritten at every boot.
       },
       onRolled: (oldSessionId, newInfo) => {
         // 롤링의 send 탭은 동기다 — 기다릴 자리가 없어 던져 놓고 간다. onRolled 는 스스로 예외를
@@ -6767,7 +6747,7 @@ export function registerIpc(
         return
       }
       // One thing the Host cannot do itself — spawn a session, touch a worktree (design §5). The
-      // table it is answered from is `orch.deps`, the same object literal `startOrchServer` is given;
+      // table it is answered from is `orch.deps`, the one this process builds for the command layer;
       // `answerOrchAct` has the reasoning, and never throws, because a rejection here would leave the
       // Host waiting for a reply that is never coming.
       if (m.t !== 'orch-act') return

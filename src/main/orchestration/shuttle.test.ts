@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { shuttleFiles, writeShuttle, writeInfo } from './shuttle'
+import { shuttleFiles, writeShuttle } from './shuttle'
 
 let dir: string
 beforeEach(async () => {
@@ -86,19 +86,5 @@ describe('writeShuttle', () => {
       return
     }
     expect((await fs.stat(sh)).mode & 0o111).not.toBe(0)
-  })
-})
-
-describe('writeInfo', () => {
-  it('port와 token을 JSON으로 쓴다', async () => {
-    const p = await writeInfo({ dir, port: 51234, token: 'abc' })
-    const parsed = JSON.parse(await fs.readFile(p, 'utf8'))
-    expect(parsed).toEqual({ port: 51234, token: 'abc' })
-  })
-  it('토큰 파일은 소유자만 읽고 쓸 수 있는 권한(0o600)으로 만든다 (win32는 POSIX 권한이 없어 제외)', async () => {
-    const p = await writeInfo({ dir, port: 1, token: 'x' })
-    if (process.platform === 'win32') return
-    const stat = await fs.stat(p)
-    expect(stat.mode & 0o777).toBe(0o600)
   })
 })

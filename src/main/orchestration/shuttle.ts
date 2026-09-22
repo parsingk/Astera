@@ -71,18 +71,3 @@ export async function writeShuttle(a: {
   }
   return written[0]
 }
-
-export async function writeInfo(a: {
-  dir: string
-  port: number
-  token: string
-}): Promise<string> {
-  await fs.mkdir(a.dir, { recursive: true })
-  const p = path.join(a.dir, 'orch-info.json')
-  // OS file permissions on the token file are what enforce access control.
-  await fs.writeFile(p, JSON.stringify({ port: a.port, token: a.token }), {
-    encoding: 'utf8',
-    mode: 0o600
-  })
-  return p
-}

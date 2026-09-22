@@ -672,16 +672,15 @@ describe('SessionManager', () => {
   describe('orchEnv 주입', () => {
     const orchEnv = {
       cliPath: 'C:/cli/astera.cmd',
-      infoPath: 'C:/u/info.json',
       skillsPath: 'C:/u/skills',
       profileDir: 'C:/u'
     }
 
-    it('ASTERA_* 다섯 개를 주입한다 (CLI·INFO·PROFILE_DIR·SKILLS·SESSION)', () => {
+    it('ASTERA_* 네 개를 주입한다 (CLI·PROFILE_DIR·SKILLS·SESSION)', () => {
       const { manager, spawned } = setup()
       manager.spawn({ account, cwd: process.cwd(), orchEnv })
       expect(spawned[0].opts.env.ASTERA_CLI).toBe('C:/cli/astera.cmd')
-      expect(spawned[0].opts.env.ASTERA_INFO).toBe('C:/u/info.json')
+      expect(spawned[0].opts.env.ASTERA_PROFILE_DIR).toBe('C:/u')
       // help가 이 디렉토리에서 orchestration-guide.md를 읽는다 (src/cli/run.ts resolveGuidePath)
       expect(spawned[0].opts.env.ASTERA_SKILLS).toBe('C:/u/skills')
       expect(spawned[0].opts.env.ASTERA_SESSION).toBeTruthy()
@@ -720,9 +719,8 @@ describe('SessionManager', () => {
      *  그래서 상속 값을 직접 심고 "지워지는지"까지 본다. */
     const INHERITED = {
       ASTERA_CLI: 'C:/other-instance/orch/astera.cmd',
-      ASTERA_INFO: 'C:/other-instance/orch/orch-info.json',
       // 남의 인스턴스의 프로필이 새면 이 세션의 워커가 남의 Host 에 보고하고 남의 큐에 적는다 —
-      // ASTERA_INFO 가 하던 누수를 그대로 물려받는 변수다.
+      // 없어진 ASTERA_INFO 가 하던 누수를 그대로 물려받는 변수다.
       ASTERA_PROFILE_DIR: 'C:/other-instance',
       ASTERA_SKILLS: 'C:/other-instance/skills',
       ASTERA_SESSION: 'inherited-session-id'
@@ -734,8 +732,8 @@ describe('SessionManager', () => {
 
     it('orchEnv가 없으면 상속된 ASTERA_*까지 지운다', () => {
       // 앱을 Astera 세션의 셸에서 띄우면(`npm run dev`가 그 경로다) 앱 프로세스가 **다른
-      // 인스턴스의** ASTERA_CLI·INFO를 물고 시작한다. 그것이 그대로 새 세션에 상속되면
-      // orchestration을 끈 세션의 에이전트가 남의 인스턴스 서버와 토큰을 쥐게 되고,
+      // 인스턴스의** ASTERA_CLI·PROFILE_DIR 을 물고 시작한다. 그것이 그대로 새 세션에 상속되면
+      // orchestration을 끈 세션의 에이전트가 남의 인스턴스의 Host 와 큐를 쥐게 되고,
       // 상속된 ASTERA_SESSION은 남의 세션 신원으로 보고하게 만든다.
       // 넣지 않는 것으로는 부족하고 지워야 한다 — configDirEnv와 main/core.ts의 규약이 같다.
       stubInherited()
@@ -774,7 +772,6 @@ describe('SessionManager', () => {
       const { manager, spawned } = setup()
       const info = manager.spawn({ account, cwd: process.cwd(), orchEnv })
       expect(spawned[0].opts.env.ASTERA_CLI).toBe('C:/cli/astera.cmd')
-      expect(spawned[0].opts.env.ASTERA_INFO).toBe('C:/u/info.json')
       expect(spawned[0].opts.env.ASTERA_PROFILE_DIR).toBe('C:/u')
       expect(spawned[0].opts.env.ASTERA_SKILLS).toBe('C:/u/skills')
       expect(spawned[0].opts.env.ASTERA_SESSION).toBe(info.id) // 상속된 남의 세션 id가 아니다

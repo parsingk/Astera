@@ -2,11 +2,12 @@
 // does to OrchState.
 //
 // handleCommand was always kept separate from HTTP because routing, authorization and argument
-// validation are the logic worth testing, and HTTP is a thin shell on top of it. **This file is that
+// validation are the logic worth testing, and HTTP was a thin shell on top of it. **This file is that
 // separation being spent** (host control plane design §5): it lives in core so the Host can import it
-// without importing Electron, and `src/main/orchestration/server.ts` is now only the HTTP shell that
-// calls it. Nothing here knows whether a dependency is answered locally or across a socket, which is
-// what lets the same command layer run in both places.
+// without importing Electron, and the Host's `orch-call` handler is now the only shell that calls it
+// — the app's loopback HTTP server was removed once nothing reached it any more (§7). Nothing here
+// knows whether a dependency is answered locally or across a socket, which is what lets the same
+// command layer run in both places.
 import { randomBytes } from 'node:crypto'
 import {
   ackDelivery,
@@ -2271,8 +2272,9 @@ export async function handleCommand(
       if (str(args.status)) gates = gates.filter((g) => g.status === args.status)
       return okBody(gates)
     }
-    // **앱이 거기 있는가, 그리고 무엇이 돌고 있는가**(공개 CLI 설계 §5). 이 명령에 닿았다는 것이
-    // 이미 "앱이 있다" 의 답이다 — 없으면 CLI 가 접속 정보 파일에서 걸린다(HOST_NOT_RUNNING).
+    // **오케스트레이터가 거기 있는가, 그리고 무엇이 돌고 있는가**(공개 CLI 설계 §5). 이 명령에
+    // 닿았다는 것이 이미 "Host 가 있다" 의 답이다 — 없으면 CLI 가 접속에서 걸리거나(HOST_NOT_RUNNING)
+    // 아무도 쓰지 않는 상태 파일로 대신 답한다(stateFile.ts).
     //
     // 세는 것은 사람이 한 화면에서 보고 싶은 넷이다. 질문을 따로 세는 이유는 그것만이 **사람을
     // 기다리는** 수이기 때문이다 — CI 가 분기하는 값이고(명세 §19), 그래서 `wait` 의 종료 코드

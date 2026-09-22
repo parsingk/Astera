@@ -90,7 +90,7 @@ export interface CodexRollingDeps {
      *  넘기지 않으면 spawn 이 폴더 이름으로 되돌린다 */
     title?: string
     /** astera CLI 환경. 배선이 넘긴다 — 없으면 세션은 CLI 없이 뜬다 */
-    orchEnv?: { cliPath: string; infoPath: string; skillsPath: string; profileDir: string }
+    orchEnv?: { cliPath: string; skillsPath: string; profileDir: string }
     /** design F5 fix round 1 (Important 3, the roll-inheritance fix): start the respawned process
      *  with the toolchain bypass already applied, because the chain being rolled had already been
      *  granted it (rolling.ts's own field, same contract). `bypassSignal` is not threaded through
@@ -126,7 +126,7 @@ export interface CodexRollingDeps {
   /** 롤로 띄우는 세션에 실을 astera CLI 환경.
    *
    *  **왜 dep 이고 왜 getter 인가.** 롤링 코디네이터는 `ipc.ts` 의 `spawnSession` 을 우회해
-   *  `core.sessions.spawn` 을 직접 부른다(index.ts 의 배선). 그 우회로에는 `ASTERA_CLI`·`ASTERA_INFO`·
+   *  `core.sessions.spawn` 을 직접 부른다(index.ts 의 배선). 그 우회로에는 `ASTERA_CLI`·`ASTERA_PROFILE_DIR`·
    *  `ASTERA_SKILLS` 와 PATH 주입이 붙지 않아서, **롤 뒤의 워커는 `astera` 로 아무것도 보고할 수
    *  없었다** — 조용히 끝나지 않는 Task 가 된다. `ipc.ts` 의 그 함수를 그대로 넘길 수는 없다: 그것이
    *  롤링 등록까지 하므로 재귀한다. 그래서 값만 따로 받는다.
@@ -135,7 +135,7 @@ export interface CodexRollingDeps {
    *  켜지고 꺼지며, 롤링 코디네이터는 그보다 먼저 만들어진다.
    *
    *  주입되지 않으면 아무것도 실리지 않는다(기존 동작) — now?/log? 와 같은 관례다. */
-  orchEnv?(): { cliPath: string; infoPath: string; skillsPath: string; profileDir: string } | undefined
+  orchEnv?(): { cliPath: string; skillsPath: string; profileDir: string } | undefined
   /** 재개 직전에 쓸 프롬프트를 물어본다. rolling.ts 의 같은 필드와 동일한 계약 — `chain.prompt` 가
    *  register 시점에 고정되는 정적 값이라서 필요하다.
    *

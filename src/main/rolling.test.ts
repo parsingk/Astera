@@ -38,7 +38,7 @@ function harness(overrides: Partial<RollingDeps> = {}): {
   written: { id: string; data: string }[]
   sent: { channel: string; payload: Record<string, unknown> }[]
   copied: { src: string; dest: string }[]
-  spawned: (SessionInfo & { orchEnv?: { cliPath: string; infoPath: string; skillsPath: string } })[]
+  spawned: (SessionInfo & { orchEnv?: { cliPath: string; skillsPath: string } })[]
   /** The whole opts object each spawn was given. `spawned` only carries the fields the fake turns back
    *  into a SessionInfo, and a chat roll is decided by two that it does not — kind and initialPrompt. */
   spawnedOpts: Parameters<RollingDeps['spawn']>[0][]
@@ -58,7 +58,7 @@ function harness(overrides: Partial<RollingDeps> = {}): {
   const written: { id: string; data: string }[] = []
   const sent: { channel: string; payload: Record<string, unknown> }[] = []
   const copied: { src: string; dest: string }[] = []
-  const spawned: (SessionInfo & { orchEnv?: { cliPath: string; infoPath: string; skillsPath: string } })[] = []
+  const spawned: (SessionInfo & { orchEnv?: { cliPath: string; skillsPath: string } })[] = []
   const spawnedOpts: Parameters<RollingDeps['spawn']>[0][] = []
   const persisted: { key: string; config: RollConfig }[] = []
   const chatIds = new Set<string>()
@@ -202,7 +202,6 @@ describe('RollingCoordinator', () => {
   it('롤로 띄운 세션에 orchEnv를 실어 보낸다', async () => {
     const env = {
       cliPath: 'C:/astera/cli.js',
-      infoPath: 'C:/astera/info.json',
       skillsPath: 'C:/astera/skills',
       profileDir: 'C:/astera'
     }

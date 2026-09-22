@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { infoPathFor, userDataDir } from './cliDiscovery'
+import { userDataDir } from './cliDiscovery'
 
 const HOME = '/home/me'
 
@@ -40,29 +40,5 @@ describe('userDataDir', () => {
   it('win32 은 구분자를 섞지 않는다', () => {
     const dir = userDataDir({ platform: 'win32', env: { APPDATA: 'C:\\a\\b' }, home: HOME })
     expect(dir).not.toContain('/')
-  })
-})
-
-describe('infoPathFor', () => {
-  // **세션 안에서는 그 세션을 띄운 앱과 말해야 한다.** 설치본이 함께 떠 있다고 그쪽으로 새면,
-  // 워커의 보고가 자기를 띄우지 않은 앱에 들어간다.
-  it('ASTERA_INFO 가 있으면 언제나 그것이다', () => {
-    expect(infoPathFor({ platform: 'win32', env: { ASTERA_INFO: 'D:/x/info.json', APPDATA: 'C:/a' }, home: HOME }))
-      .toBe('D:/x/info.json')
-  })
-
-  it('빈 ASTERA_INFO 는 없는 것으로 본다', () => {
-    expect(infoPathFor({ platform: 'linux', env: { ASTERA_INFO: '' }, home: HOME }))
-      .toBe('/home/me/.config/astera/orch/orch-info.json')
-  })
-
-  it('없으면 설치본의 것을 본다', () => {
-    expect(infoPathFor({ platform: 'darwin', env: {}, home: HOME }))
-      .toBe('/home/me/Library/Application Support/astera/orch/orch-info.json')
-  })
-
-  it('ASTERA_PROFILE=dev 면 개발본이다', () => {
-    expect(infoPathFor({ platform: 'darwin', env: { ASTERA_PROFILE: 'dev' }, home: HOME }))
-      .toBe('/home/me/Library/Application Support/astera-dev/orch/orch-info.json')
   })
 })

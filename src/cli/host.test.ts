@@ -282,6 +282,15 @@ describe('cliHostTarget', () => {
     )
   })
 
+  // 세션 밖에서 개발본을 가리키는 유일한 손잡이다. `infoPathFor` 가 이 매핑을 쥐고 있었고 그
+  // 함수는 없어졌으므로(Task 9), 이 자리가 그것을 이어받는다.
+  it('ASTERA_PROFILE=dev 면 개발본의 프로필이다', () => {
+    const env = { APPDATA: path.join('C:', 'a'), ASTERA_PROFILE: 'dev' } as NodeJS.ProcessEnv
+    expect(cliHostTarget({ env, platform: 'win32', home }).profileDir).toBe(
+      userDataDir({ platform: 'win32', env, home, dev: true })
+    )
+  })
+
   // 빈 값은 "지정하지 않았다"와 같다 — 셔틀이 빈 문자열을 넣는 날 CLI 가 빈 주소로 접속하면 안 된다.
   it('빈 ASTERA_HOST 는 없는 것과 같다', () => {
     const env = { APPDATA: path.join('C:', 'a'), ASTERA_HOST: '' } as NodeJS.ProcessEnv

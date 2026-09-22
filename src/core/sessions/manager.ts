@@ -113,7 +113,7 @@ export class SessionManager {
      *  in src/cli/run.ts) — without it, help dies.
      *  profileDir is this app's own userData folder; see where it is planted below for why the CLI
      *  cannot work it out for itself. */
-    orchEnv?: { cliPath: string; infoPath: string; skillsPath: string; profileDir: string }
+    orchEnv?: { cliPath: string; skillsPath: string; profileDir: string }
     /** Initial prompt for an interactive session. Carried as the command's last positional argument. */
     initialPrompt?: string
     /** Sets the tab title explicitly — orchestration worker tabs use task.title.
@@ -182,7 +182,6 @@ export class SessionManager {
       // turned on has no CLI even after the toggle flips; a new tab is the fix (see
       // resources/skills/task-stub.md, and resources/skills/browser-stub.md's step 1).
       env.ASTERA_CLI = opts.orchEnv.cliPath
-      env.ASTERA_INFO = opts.orchEnv.infoPath
       // **The profile, not the address.** The CLI now talks to the Host rather than to this process,
       // and left to itself it recomputes the profile folder from the platform (`userDataDir`) — which
       // answers `%APPDATA%\astera` for a dev build too, because the `-dev` suffix comes from

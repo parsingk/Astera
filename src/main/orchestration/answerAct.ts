@@ -1,8 +1,8 @@
 // Answering one `orch-act` — the Host asking the app for something it cannot do itself (host control
 // plane design §5).
 //
-// **The table is the dependency object `startOrchServer` is given**, looked up by name rather than
-// copied into a second list beside it. A copy is the thing that drifts, and the decision about which
+// **The table is the app's own `OrchServerDeps` object** (`orch.deps` in ipc.ts), looked up by name
+// rather than copied into a second list beside it. A copy is the thing that drifts, and the decision about which
 // names travel is not the app's to hold: it lives in the Host (`src/host/orchDeps.ts`), behind a
 // typecheck-enforced guard that names anything it has not classified.
 import type { OrchServerDeps } from '../../core/orchestration/command'

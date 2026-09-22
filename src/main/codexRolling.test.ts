@@ -115,7 +115,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     resumePrompt?: string
     resumeSessionId?: string
     initialPrompt?: string
-    orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
+    orchEnv?: { cliPath: string; skillsPath: string }
   }[]
   /** The spawn opts exactly as the coordinator built them. `spawned` above copies four fields out by
    *  hand, which cannot answer "is this field there at all" — and that is the question a chat roll
@@ -133,7 +133,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     resumePrompt?: string
     resumeSessionId?: string
     initialPrompt?: string
-    orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
+    orchEnv?: { cliPath: string; skillsPath: string }
   }[] = []
   const spawnedOpts: Parameters<CodexRollingDeps['spawn']>[0][] = []
   const written: [string, string][] = []
@@ -616,7 +616,6 @@ describe('CodexRollingCoordinator', () => {
   it('롤로 띄운 세션에 orchEnv를 실어 보낸다', async () => {
     const env = {
       cliPath: 'C:/astera/cli.js',
-      infoPath: 'C:/astera/info.json',
       skillsPath: 'C:/astera/skills',
       profileDir: 'C:/astera'
     }

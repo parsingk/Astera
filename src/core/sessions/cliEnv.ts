@@ -9,14 +9,18 @@ import { isAmbientDir, type ProviderDescriptor } from '../providers/descriptor'
  *
  *  PATH is not here: it is the shell's, not ours, and spawn only prepends to it. An inherited shuttle
  *  directory can therefore still leave `astera` resolvable in a session with orchestration off, but
- *  with ASTERA_INFO cleared the CLI has no token to reach any server with and says so, which is the
- *  diagnosis the stub's tool check expects. */
+ *  with ASTERA_CLI cleared the stub's tool check reads that as "not an app-spawned session" and says
+ *  so, which is the diagnosis it expects.
+ *
+ *  `ASTERA_INFO` was on this list until the loopback server was removed (host control plane design
+ *  §7). Nothing plants it and nothing reads it any more, so it is gone from here too rather than
+ *  left as a clear-only entry — this list means "what we plant", and an entry that lies about that
+ *  is how the list stops being read. */
 export const MANAGED_ENV_KEYS = [
   'ASTERA_STATUSLINE_OUT',
   'ASTERA_STATUSLINE_ORIGINAL',
   'ASTERA_HOOK_OUT',
   'ASTERA_CLI',
-  'ASTERA_INFO',
   'ASTERA_PROFILE_DIR',
   'ASTERA_SKILLS',
   'ASTERA_SESSION'
@@ -73,8 +77,8 @@ export function cliEnvFor(a: {
   // the app process's, and launching Astera from the shell of an Astera session — which is what
   // `npm run dev` from a session terminal is — means the app itself inherits another instance's
   // ASTERA_*. Passed on, a session spawned with the orchestration, work-unit-tracking and
-  // agent-browser toggles all off hands its agent a live CLI path and token aimed at that other
-  // instance, an inherited ASTERA_SESSION makes it report under another session's identity, and inherited
+  // agent-browser toggles all off hands its agent a live CLI path and profile folder aimed at that
+  // other instance, an inherited ASTERA_SESSION makes it report under another session's identity, and inherited
   // capture paths mix this session's statusLine and hook output into another instance's files.
   // Same rule as configDirEnv on the line above, and as runAccountLogout in main/core.ts.
   for (const k of MANAGED_ENV_KEYS) delete env[k]

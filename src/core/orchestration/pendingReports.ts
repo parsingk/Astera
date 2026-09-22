@@ -12,15 +12,16 @@ import path from 'node:path'
 import { workerDoneFieldError } from './sendArgs'
 import type { Dispatch } from './types'
 
-/** Folder beside the info file the CLI already reads (orch-info.json). One file per report rather
- *  than one appended log: two workers can finish at the same moment with the app gone, and two
+/** Folder under the profile's `orch` directory, beside the shuttle the app writes there. One file
+ *  per report rather than one appended log: two workers can finish at the same moment with the app gone, and two
  *  processes appending to one file can interleave into a line neither of them wrote. */
 export const PENDING_REPORTS_DIR = 'pending-reports'
 
 /** The queue lives under the profile's `orch` folder — the one folder all three readers can name
  *  without being told. **It used to be derived from `ASTERA_INFO`**, which was the only path the CLI
- *  was given; the CLI now computes the Host's address from this same profile directory and never
- *  reads that variable, so the rule is written once here instead of once per process. */
+ *  was given; that variable and the file it named are both gone (host control plane design §7), and
+ *  the CLI now derives the Host's address from this same profile directory — so the rule is written
+ *  once here instead of once per process. */
 export function pendingReportsDirIn(profileDir: string): string {
   return path.join(profileDir, 'orch', PENDING_REPORTS_DIR)
 }

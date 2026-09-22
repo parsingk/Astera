@@ -1,4 +1,8 @@
-// 세션 밖에서 실행된 `astera` 가 앱을 찾는 법 (공개 CLI 설계 §4).
+// 세션 밖에서 실행된 `astera` 가 프로필 폴더를 찾는 법 (공개 CLI 설계 §4).
+//
+// **접속 정보 파일은 없어졌다.** 예전에는 이 파일이 `orch-info.json` 의 경로도 지었다 — 이제
+// CLI 는 여기서 나온 프로필 폴더 하나로 Host 주소와 보고 큐를 둘 다 짓는다
+// (`cliHostTarget`, src/cli/host.ts; 호스트 제어 평면 설계 §7).
 //
 // **순수하다** — 플랫폼과 환경변수가 인자로 들어온다. 이 판정은 세 운영체제에서 다 맞아야 하는데
 // 테스트는 한 대에서만 돌기 때문이고, `core/host/address.ts` 가 같은 이유로 같은 모양이다.
@@ -12,10 +16,6 @@
  */
 export const nativePath = (p: string, platform: NodeJS.Platform): string =>
   platform === 'win32' ? p.replace(/\//g, '\\') : p
-
-/** 앱이 접속 정보를 적어 두는 파일의 이름. `writeInfo`(main/orchestration/shuttle.ts)가 쓰고
- *  앱이 종료하며 지운다 — 그래서 "앱이 없다" 가 곧 "이 파일이 없다" 다. */
-export const INFO_FILE = 'orch-info.json'
 
 /**
  * Electron 의 `app.getPath('userData')` 가 가리키는 곳을 CLI 쪽에서 다시 만든다.
@@ -42,29 +42,4 @@ export function userDataDir(a: {
   if (a.platform === 'darwin') return `${a.home}/Library/Application Support/${name}`
   const xdg = a.env.XDG_CONFIG_HOME
   return `${(xdg && xdg.length > 0 ? xdg : `${a.home}/.config`).replace(/[\\/]+$/, '')}/${name}`
-}
-
-/**
- * 이 실행이 읽어야 할 접속 정보 파일.
- *
- * **`ASTERA_INFO` 가 언제나 이긴다.** 그 변수가 있다는 것은 앱이 띄운 세션 안이라는 뜻이고, 그
- * 세션은 자기를 띄운 앱과 말해야 한다 — 설치본이 함께 떠 있다고 해서 그쪽으로 새면 안 된다.
- *
- * 없으면 설치본을 본다. `ASTERA_PROFILE=dev` 면 개발본이다 — 둘 다 떠 있을 때 사람이 무엇을
- * 뜻하는지에 대한 판단이고, 설계 §15 에 열어 둔 채로 적혀 있다.
- */
-export function infoPathFor(a: {
-  platform: NodeJS.Platform
-  env: NodeJS.ProcessEnv
-  home: string
-}): string {
-  const explicit = a.env.ASTERA_INFO
-  if (explicit !== undefined && explicit.length > 0) return explicit
-  const dir = userDataDir({
-    platform: a.platform,
-    env: a.env,
-    home: a.home,
-    dev: a.env.ASTERA_PROFILE === 'dev'
-  })
-  return `${dir}/orch/${INFO_FILE}`
 }
