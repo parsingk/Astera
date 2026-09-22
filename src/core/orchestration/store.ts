@@ -27,7 +27,11 @@ export const RUN_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 const isArr = (v: unknown): v is unknown[] => Array.isArray(v)
 
-function isValidState(v: unknown): v is OrchState {
+/** Exported because the Host is asked to accept a whole state over the wire (`state-put`), and what
+ *  arrives there is written to this same file — the question "is this a state at all" is the one this
+ *  answers about the file, so it is asked of the message with the same function rather than a second
+ *  one that can drift from it. */
+export function isValidState(v: unknown): v is OrchState {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return false
   const o = v as Record<string, unknown>
   return (
