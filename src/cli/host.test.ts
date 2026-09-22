@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { hostStatus, runHostCommand } from './host'
+import { hostStatus, hostStartTargets, runHostCommand } from './host'
 import { userDataDir } from '../core/orchestration/cliDiscovery'
 import { hostAddress } from '../host/address'
 import { startHostServer } from '../host/server'
@@ -86,5 +86,32 @@ describe('runHostCommand — host status against a real Host', () => {
     } finally {
       await fs.rm(home, { recursive: true, force: true })
     }
+  })
+})
+
+describe('hostStartTargets', () => {
+  // CLI 는 out/main/cli.js 로 돌고 host.js 는 그 옆에 있다. 패키지된 앱의 준비된 런타임이 있으면
+  // 그쪽이 먼저다 — 앱이 쓰는 것과 같은 것을 띄워야 한 Host 를 둘이 나눠 쓴다.
+  it('준비된 런타임이 있으면 그쪽을 먼저 본다', () => {
+    const t = hostStartTargets({
+      cliEntry: 'C:/app/out/main/cli.js',
+      execPath: 'C:/app/electron.exe',
+      profileDir: 'C:/profile',
+      version: '1.3.25',
+      runtimeEntry: 'C:/local/astera/host-runtime/node-24/builds/1.3.25/host.js'
+    })
+    expect(t.candidates[0]).toBe('C:/local/astera/host-runtime/node-24/builds/1.3.25/host.js')
+    expect(t.candidates[1]).toBe('C:/app/out/main/host.js')
+    expect(t.logPath).toBe('C:/profile/host/host.log')
+  })
+
+  it('런타임이 없으면 CLI 옆의 host.js 하나다', () => {
+    const t = hostStartTargets({
+      cliEntry: 'D:/repo/out/main/cli.js',
+      execPath: 'D:/repo/node_modules/electron/dist/electron.exe',
+      profileDir: 'D:/profile',
+      version: '1.3.25'
+    })
+    expect(t.candidates).toEqual(['D:/repo/out/main/host.js'])
   })
 })
