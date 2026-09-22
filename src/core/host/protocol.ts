@@ -30,6 +30,13 @@ export const HOST_FEATURE_PROC = 'proc'
  *  stopped answering — and end a Host that is running perfectly well. */
 export const HOST_FEATURE_PING = 'ping'
 
+/** The `orch-call`/`orch-result` pair (host control plane design §5) — one RPC channel for every
+ *  orchestration command instead of a message type per command. Announced the same way and for the
+ *  same reason as the features above: the protocol number stays 3 (see HOST_PROTOCOL's comment
+ *  above), and a Host from before this feature answers an `orch-call` the way it answers any message
+ *  it does not know — logged and ignored — rather than being retired for it. */
+export const HOST_FEATURE_ORCH = 'orch'
+
 /** What the app needs to rebuild its own record for a session after a restart. The Host stores it
  *  and hands it back untouched — only the manager that wrote it knows how to read it (slice 2
  *  design §4).
@@ -86,6 +93,12 @@ export type ClientMessage =
    *  `pong` carrying the same `seq`. What it asks is not "are you there" — the socket answers that —
    *  but "is your event loop still turning", which is the one thing a stuck pty spawn takes away. */
   | { t: 'ping'; seq: number }
+  /** One RPC call, routed by `cmd` (host control plane design §5). `call` is the caller's own
+   *  correlation id — one socket can have several `orch-call`s outstanding at once, so the reply
+   *  names which one it answers. `args`/`session` are today's HTTP body and `x-astera-session`
+   *  header, carried unchanged. Answered only for a socket that has said hello — the Host's
+   *  `greetedSockets` guard (design §9) — the same rule every other reply already follows. */
+  | { t: 'orch-call'; call: string; cmd: string; args: Record<string, unknown>; session?: string }
   /** node-pty's two argument forms are not interchangeable on win32: a string is a verbatim command
    *  line that skips argv quoting, while an array goes through it. The protocol carries whichever
    *  one the caller had rather than converting between them (see PtyFactory in core/sessions/pty.ts,
@@ -133,6 +146,9 @@ export type HostMessage =
    *  the same "silently does less" an older Host already does for any message it does not know. */
   | { t: 'retire-refused'; sessions: number; jobs: number }
   | { t: 'pong'; seq: number }
+  /** Answers one `orch-call`, carrying its `call` back so the asker can match the reply to the
+   *  request that made it. `status`/`body` are today's HTTP status and body, unchanged. */
+  | { t: 'orch-result'; call: string; status: number; body: unknown }
   | { t: 'pty-spawned'; id: string; pid: number }
   | { t: 'pty-failed'; id: string; error: string }
   | { t: 'pty-data'; id: string; data: string }

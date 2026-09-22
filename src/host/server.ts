@@ -5,9 +5,10 @@
 // idle — so this module can be started for real inside a test at an address of that test's own.
 import net from 'node:net'
 import { promises as fs } from 'node:fs'
-import { HOST_PROTOCOL, HOST_FEATURE_PROC, HOST_FEATURE_PING, type ClientMessage, type HostMessage } from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_FEATURE_PROC, HOST_FEATURE_PING, HOST_FEATURE_ORCH, type ClientMessage, type HostMessage } from '../core/host/protocol'
 import { encodeLine, createLineReader } from './framing'
 import type { HostLog } from './log'
+import type { OrchCall } from '../core/host/orchProtocol'
 
 /** Thrown by `startHostServer` when another Host already answers at this address. The entry point
  *  turns it into a quiet exit: losing the race is the normal outcome of two apps starting at once. */
@@ -41,6 +42,10 @@ export interface HostServerDeps {
    *  still running"). `jobs` is always 0 until a later task gives the Host its own Job registry —
    *  `host/index.ts` fills that half in place once it exists. */
   liveCounts?(): { sessions: number; jobs: number }
+  /** Answers `orch-call` (design §5). Optional here only so a caller that never sends `orch-call`
+   *  does not have to supply one; `host/index.ts` always does, because it always advertises
+   *  HOST_FEATURE_ORCH below. */
+  orch?: OrchCall
 }
 
 export interface HostServer {
@@ -174,7 +179,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // away from an app that cannot read them (core/host/protocol.ts), and broadcasting to one
           // that just announced a different number would walk around that.
           greetedSockets.add(socket)
-          send({ t: 'hello', protocol: HOST_PROTOCOL, host: deps.version, pid: process.pid, startedAt, features: [HOST_FEATURE_PROC, HOST_FEATURE_PING] })
+          send({ t: 'hello', protocol: HOST_PROTOCOL, host: deps.version, pid: process.pid, startedAt, features: [HOST_FEATURE_PROC, HOST_FEATURE_PING, HOST_FEATURE_ORCH] })
           return
         }
         if (m?.t === 'ping') {
@@ -200,6 +205,16 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           }
           deps.log.write('asked to retire — leaving')
           deps.onIdle()
+          return
+        }
+        if (m?.t === 'orch-call' && deps.orch) {
+          // Explicit rather than incidental (design §9's security property): a socket that has not
+          // said hello must hear nothing, here the same as everywhere else `send` is used directly
+          // instead of through `broadcast`.
+          if (!greetedSockets.has(socket)) return
+          void deps.orch
+            .call({ cmd: m.cmd, args: m.args, sessionId: m.session ?? '' })
+            .then((r) => send({ t: 'orch-result', call: m.call, status: r.status, body: r.body }))
           return
         }
         if (deps.onMessage?.(m, send) === true) return

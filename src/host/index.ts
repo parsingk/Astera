@@ -21,6 +21,7 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { nodeProcSpawn } from './nodeProc'
 import { HOST_PROTOCOL } from '../core/host/protocol'
+import { versionOnlyOrchCall } from '../core/host/orchProtocol'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -124,11 +125,14 @@ async function main(): Promise<void> {
       })
   }
 
+  // Shared with `orch`'s stub below so the version the handshake reports and the version `orch-call
+  // version` answers never drift apart.
+  const hostVersion = process.env.ASTERA_HOST_VERSION ?? '0.0.0'
   try {
     server = await startHostServer({
       address: addr.address,
       dirToPrepare: addr.dirToPrepare,
-      version: process.env.ASTERA_HOST_VERSION ?? '0.0.0',
+      version: hostVersion,
       idleMs: IDLE_MS,
       onIdle: () => leave(),
       onMessage: (m, send) => (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false),
@@ -136,6 +140,9 @@ async function main(): Promise<void> {
       // Jobs are not the Host's to count yet — a later task gives it a Job registry, and this literal
       // 0 is what that task replaces (server.ts's own comment on `liveCounts` says the same).
       liveCounts: () => ({ sessions: registry.liveCount() + procs.liveCount(), jobs: 0 }),
+      // This slice's stub — one command, `version` (host control plane design §11 step 3). A later
+      // task replaces it with the real command layer; nothing above this line changes when it does.
+      orch: versionOnlyOrchCall({ version: hostVersion }),
       log
     })
   } catch (err) {

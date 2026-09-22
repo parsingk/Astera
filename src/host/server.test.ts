@@ -7,6 +7,7 @@ import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
 import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer, type HostServerDeps } from './server'
 import { HOST_PROTOCOL, type ClientMessage } from '../core/host/protocol'
+import { versionOnlyOrchCall } from '../core/host/orchProtocol'
 
 let dir: string
 let open: HostServer[] = []
@@ -29,13 +30,16 @@ const server = async (
     onMessage?: HostServerDeps['onMessage']
     holdsWork?: HostServerDeps['holdsWork']
     liveCounts?: HostServerDeps['liveCounts']
+    orch?: HostServerDeps['orch']
   } = {}
 ): Promise<{
   s: HostServer
   address: string
   logs: string[]
+  version: string
 }> => {
   const logs: string[] = []
+  const version = '9.9.9'
   const addr = hostAddress({
     profileDir: path.join(dir, over.profile ?? 'profile'),
     platform: process.platform,
@@ -45,17 +49,18 @@ const server = async (
   const s = await startHostServer({
     address: addr.address,
     dirToPrepare: addr.dirToPrepare,
-    version: '9.9.9',
+    version,
     idleMs: over.idleMs ?? 60_000,
     helloMs: over.helloMs,
     onIdle: over.onIdle ?? ((): void => {}),
     onMessage: over.onMessage,
     holdsWork: over.holdsWork,
     liveCounts: over.liveCounts,
+    orch: over.orch ?? versionOnlyOrchCall({ version }),
     log: { write: (m) => logs.push(m), close: () => {} }
   })
   open.push(s)
-  return { s, address: addr.address, logs }
+  return { s, address: addr.address, logs, version }
 }
 
 /** Connects, sends the given lines, and resolves with everything the server said back. */
@@ -117,6 +122,8 @@ const start = async (
 ): Promise<{
   address: string
   stopped: boolean
+  /** The version this Host was started with — the same one its `orch-call version` answers with. */
+  version: string
   /** Connects, completes the handshake, and hands back something to send with and read replies from. */
   connect(): Promise<{ send(m: ClientMessage): void; next(waitMs?: number): Promise<unknown> }>
   /** Connects and says nothing — the peer the next task's tests need, that never says hello. */
@@ -132,6 +139,7 @@ const start = async (
     })
   return {
     address: h.address,
+    version: h.version,
     get stopped() {
       return state.stopped
     },
@@ -150,7 +158,7 @@ describe('startHostServer', () => {
   it('answers a hello on the same protocol with its own version and pid', async () => {
     const h = await server()
     const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
-    expect(reply).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: process.pid, features: ['proc', 'ping'] })
+    expect(reply).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: process.pid, features: ['proc', 'ping', 'orch'] })
     expect((reply as { startedAt: string }).startedAt).toMatch(/^\d{4}-/)
   })
 
@@ -406,6 +414,42 @@ describe('startHostServer', () => {
     holding = false
     await new Promise((r) => setTimeout(r, 300))
     expect(idle).toBe(true)
+  })
+
+  describe('orch-call', () => {
+    it('orch-call 에 그 call 로 답한다', async () => {
+      const h = await start({})
+      const client = await h.connect()
+      client.send({ t: 'orch-call', call: 'c1', cmd: 'version', args: {} })
+      expect(await client.next()).toEqual({
+        t: 'orch-result',
+        call: 'c1',
+        status: 200,
+        body: { version: h.version, protocol: HOST_PROTOCOL }
+      })
+    })
+
+    // 두 호출이 겹쳐도 각자 제 call 로 돌아와야 한다 — 소켓 하나에 여러 요청이 오간다.
+    it('겹친 호출이 섞이지 않는다', async () => {
+      const h = await start({})
+      const client = await h.connect()
+      client.send({ t: 'orch-call', call: 'a', cmd: 'version', args: {} })
+      client.send({ t: 'orch-call', call: 'b', cmd: 'version', args: {} })
+      const got = [await client.next(), await client.next()]
+      expect(got.map((m) => (m as { call: string }).call).sort()).toEqual(['a', 'b'])
+    })
+
+    // hello 를 안 한 소켓은 아무것도 못 듣는다(설계 §9) — orch 응답도 마찬가지다. 이 성질이 win32
+    // 파이프의 열린 ACL 을 대신한다. 여기 쓰는 orch 스텁은 진짜로 응답을 만들어내므로(server()의
+    // 기본값), greeted 체크가 옮겨지거나 지워지면 이 테스트는 조용히 통과하는 대신 시끄럽게 실패한다
+    // — got[0] 이 undefined 아닌 실제 orch-result 가 되어 toBeUndefined() 가 깨진다.
+    it('인사 안 한 소켓은 orch 답도 못 받는다', async () => {
+      const h = await start({})
+      const raw = await h.connectSilent() // hello 를 보내지 않는다
+      const chan = messageChannel(raw)
+      chan.send({ t: 'orch-call', call: 'c1', cmd: 'version', args: {} })
+      expect(await chan.next(300)).toBeUndefined()
+    })
   })
 })
 
