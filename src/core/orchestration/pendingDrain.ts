@@ -1,9 +1,15 @@
-// Draining the queue of reports that arrived while the app was not running.
+// Draining the queue of reports that arrived while nothing was there to take them.
 //
 // The CLI writes one file per undelivered report (core/orchestration/pendingReports.ts). This reads
 // them and hands them back to the server as if they had arrived over the socket, so a queued report
 // takes exactly the path a live one does — the same authorization, the same idempotency, the same
 // validation and review that follow a `worker_done`.
+//
+// **In core rather than main because the Host reads this queue too** (host control plane design §6),
+// the same reason `store.ts` and `command.ts` are here: it uses only `node:fs`/`node:path` and the
+// pure layer. The Host reads it at load time, to learn which Dispatches an undelivered report already
+// speaks for. **Only the reading half is shared** — applying a report reaches session spawning, so
+// `applyPendingReports` is still called by the app and nowhere else.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import {
@@ -12,7 +18,7 @@ import {
   pendingReportTempName,
   serializePendingReport,
   type PendingReport
-} from '../../core/orchestration/pendingReports'
+} from './pendingReports'
 
 /** One report and the file it came out of, so the drain can clear it once it has been dealt with. */
 export interface QueuedReport {

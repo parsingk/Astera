@@ -191,11 +191,17 @@ export interface OrchServerDeps {
   /** Whether work-unit tracking is on — the toggle the three session-task-* commands answer to,
    *  instead of `enabled()` (which gates Jobs). Optional so the existing test harnesses (and any
    *  wiring that predates work-unit tracking) keep compiling; the session-task-* commands treat a
-   *  missing implementation the same as `false`. */
-  trackingEnabled?(): boolean
+   *  missing implementation the same as `false`.
+   *
+   *  **A value or a promise of one, and its one call site awaits it — the same union as
+   *  `listAccounts` and `repairTargetFor`** (host control plane design §5). Inside the app it is the
+   *  settings read it always was; inside the Host it crosses a socket to the app, and this layer must
+   *  not be able to tell which. `await` on a plain boolean is already correct, so every existing
+   *  wiring and test double stays exactly as it is. */
+  trackingEnabled?(): boolean | Promise<boolean>
   /** The agent browser toggle — what `browser-js` answers to, instead of `enabled()`. Optional for
-   *  the same reason as trackingEnabled. */
-  browserEnabled?(): boolean
+   *  the same reason as trackingEnabled, and a value or a promise of one for the same reason. */
+  browserEnabled?(): boolean | Promise<boolean>
   /** Runs one script in the calling session's agent browser (main/agentBrowser/runs.ts). Optional:
    *  not injected, `browser-js` answers "agent browser is off". */
   browserRun?(sessionId: string, script: string): Promise<
@@ -204,8 +210,8 @@ export interface OrchServerDeps {
   >
   /** The Smart Resume setting — what the `handoff` command answers to. The memo only ever feeds a
    *  Smart Resume briefing, so there is no separate switch (spec §11). Optional for the same reason
-   *  as trackingEnabled; absent reads as off. */
-  handoffEnabled?(): boolean
+   *  as trackingEnabled; absent reads as off, and a value or a promise of one for the same reason. */
+  handoffEnabled?(): boolean | Promise<boolean>
   /** Stores a validated memo for the calling session. The server hands over only what it checked
    *  (the body); ipc.ts fills in the facts only the app can vouch for — cwd, provider, git, the
    *  clock — before writing. 409 is "unknown session" (the app has not caught up to a tab that just
@@ -314,8 +320,11 @@ export interface OrchServerDeps {
    *  싣는 용도이지, 여기서 또 로그할 것이 있어서가 아니다. */
   repairOnce?(a: { taskId: string }): Promise<{ ok: true } | { ok: false; error: string }>
   /** Gate 문구의 언어. 배선이 앱 언어를 넘긴다(applyValidationResult/applyReviewResult 의 `lang`
-   *  으로 그대로 간다); 주입되지 않으면 영어다. */
-  lang?(): Lang
+   *  으로 그대로 간다); 주입되지 않으면 영어다.
+   *
+   *  **값이거나 그 약속이다 — `listAccounts`·`repairTargetFor` 와 같은 이유다**(host control plane
+   *  설계 §5). 부르는 자리는 하나뿐이고, 거기서 `repairTargetFor` 바로 옆에서 await 한다. */
+  lang?(): Lang | Promise<Lang>
   /** Audit log left behind when task-update bypasses the transition table (canTransition) — the same
    *  shape as log(message: string) in coordinator.ts. The wiring decides where it goes. If it is not
    *  injected (existing tests and the like) logging is skipped — optional for the same reason as
@@ -519,7 +528,10 @@ export async function handleCommand(
 ): Promise<Reply> {
   if (cmd === 'browser-js') {
     // The browser has its own toggle and needs none of the orchestration state below.
-    if (!deps.browserEnabled?.() || !deps.browserRun) return conflict('agent browser is off')
+    // **이 await 는 상태를 읽기 전이다.** 이 분기는 handleCommand 의 첫 문장이고, 위에는 읽은
+    // 상태도 쓴 상태도 없다 — 여기서 멈춰도 뒤집힐 것이 없다(repairTargetFor 가 겪은 그 자리와
+    // 대조적으로).
+    if (!(await deps.browserEnabled?.()) || !deps.browserRun) return conflict('agent browser is off')
     const script = args.script
     if (typeof script !== 'string' || script.trim() === '') return bad('script is required')
     const outcome = await deps.browserRun(caller.sessionId, script)
@@ -529,7 +541,8 @@ export async function handleCommand(
     // Its own toggle and none of the orchestration state below — the same footing as browser-js
     // and the session-task-* commands: a plain tab session with orchestration off must be able to
     // leave a memo, because that is the session Smart Resume is for.
-    if (!deps.handoffEnabled?.() || !deps.handoffs) return conflict('smart resume is off')
+    // browser-js 와 같다 — 이 await 앞에 읽은 상태도 쓴 상태도 없다.
+    if (!(await deps.handoffEnabled?.()) || !deps.handoffs) return conflict('smart resume is off')
     const memo = args.memo
     if (typeof memo !== 'string' || memo.trim() === '')
       return bad('--memo is required: the JSON document, or - to read it from stdin')
@@ -539,7 +552,9 @@ export async function handleCommand(
     return r.ok ? okBody({ savedAt: r.savedAt }) : { status: r.status, body: { error: r.error } }
   }
   if (SESSION_TASK_CMDS.has(cmd)) {
-    if (!deps.trackingEnabled?.()) return conflict('work unit tracking is off')
+    // **이 await 도 상태 앞이다.** 바로 아래 `deps.getState()` 가 이 명령이 상태를 처음 읽는
+    // 자리이고, 그 위에 커밋은 없다 — 여기서 멈춰도 읽고-쓰는 창이 열리지 않는다.
+    if (!(await deps.trackingEnabled?.())) return conflict('work unit tracking is off')
   } else if (!deps.enabled()) {
     return conflict('orchestration disabled')
   }
@@ -1904,6 +1919,10 @@ export async function handleCommand(
           // `deps.getState()` **뒤에** 일어난다 — 그 사이에 커밋된 것을 아래 setState 가 덮는다.
           // 먼저 받아 두면 그 창이 없다.
           const repairTarget = deps.repairTargetFor ? (await deps.repairTargetFor(taskId)) ?? undefined : undefined
+          // **같은 이유로 여기서 받아 둔다.** `lang` 도 이제 소켓을 건널 수 있고(그 선언), 아래
+          // 리터럴 안에서 await 하면 그 await 는 첫 인자인 `deps.getState()` 뒤에 일어난다 — 바로
+          // 위 줄이 막 없앤 그 창을 도로 여는 셈이다.
+          const gateLang = (await deps.lang?.()) ?? 'en'
           // 진입 스냅숏(s)이 아니라 지금 상태를 읽는다 — 위 탐침과 방금 파일 읽기의 await 동안 다른
           // 흐름이 커밋했을 수 있고, 낡은 스냅숏으로 부르면 setState 가 그것을 덮어 잃는다(아래 구현
           // 경로와 같은 이유).
@@ -1917,7 +1936,7 @@ export async function handleCommand(
               body: str(args.body) ?? '',
               ...(issues !== undefined ? { issues } : {}),
               ...(deps.repairTargetFor ? { repair: repairTarget } : {}),
-              lang: deps.lang?.() ?? 'en'
+              lang: gateLang
             },
             now
           )

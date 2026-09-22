@@ -58,7 +58,10 @@ import { listClaudeModels, listCodexModels } from './models/discover'
 import { UnderstandingPipeline } from './understanding/pipeline'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
-import { OrchestrationStore } from '../core/orchestration/store'
+import type { OrchLoadResult } from '../core/orchestration/store'
+import { createMirrorStore } from './orchestration/mirrorStore'
+import { answerOrchAct } from './orchestration/answerAct'
+import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { UnderstandingStore } from './understanding/store'
 import { WorkUnitStore } from './workUnit/store'
 import { HandoffStore } from './handoff/store'
@@ -83,7 +86,7 @@ import {
   handleCommand as orchHandleCommand,
   type OrchServerDeps
 } from '../core/orchestration/command'
-import { applyPendingReports, readPendingReports } from './orchestration/pendingDrain'
+import { applyPendingReports, readPendingReports } from '../core/orchestration/pendingDrain'
 import {
   PENDING_REPORTS_DIR,
   dispatchesHeldOnlyByReport,
@@ -425,9 +428,12 @@ export function retryRegistrationsFor(
  *  worktree — see `OrchestrationStore.load`'s own argument for the whole reasoning. */
 export type SessionsTakenBack = ReattachResult | 'unknown' | null
 
-/** The shape `OrchestrationStore.load` wants, from the shape `startHostClient` produces. Trivial, and
- *  a named function with tests anyway: this is the exact place the three answers could quietly become
- *  two, and that collapse is the duplicate-agent bug. */
+/** The shape the app's own boot cleanup wants — `staleSpecFiles` and `dispatchesHeldOnlyByReport` —
+ *  from the shape `startHostClient` produces. **No longer what the restart cleanup inside
+ *  `OrchestrationStore.load` is judged against**: that runs in the Host now, against its own
+ *  registry, where the middle answer cannot arise (design §6). Trivial, and a named function with
+ *  tests anyway: this is the exact place the three answers could quietly become two, and that
+ *  collapse is the duplicate-agent bug. */
 export function liveWorkersFor(taken: SessionsTakenBack): ReadonlySet<string> | 'unknown' | undefined {
   if (taken === null) return undefined
   if (taken === 'unknown') return 'unknown'
@@ -1040,6 +1046,61 @@ export function registerIpc(
   /** Astera Host slice 1: the channel exists, and nothing depends on it yet. Built at startup so
    *  slices 2 and 3 inherit an open line rather than one they have to reach for (design §7). */
   let hostClient: HostClient | null = null
+  /** One reply to one `orch-call` — today's HTTP status and body, unchanged (design §5). */
+  type OrchReply = { status: number; body: unknown }
+  let orchCallSeq = 0
+  /** The `orch-call`s this app has sent and not had answered, by the correlation id it chose. One
+   *  socket can have several outstanding, which is why the reply names which one it answers. */
+  const pendingOrchCalls = new Map<
+    string,
+    { resolve(r: OrchReply): void; reject(e: Error): void; timer: ReturnType<typeof setTimeout> }
+  >()
+  /** Fails everything still waiting. Called when the connection drops: the Host may well have done
+   *  the work, but nothing is coming back on a socket that is gone, and a caller left waiting on one
+   *  is a Job that stops moving. What repairs a `state-put` that landed and whose answer did not is
+   *  the re-mirror on the next handshake, not this. */
+  const failPendingOrchCalls = (why: string): void => {
+    for (const [call, waiting] of [...pendingOrchCalls]) {
+      pendingOrchCalls.delete(call)
+      clearTimeout(waiting.timer)
+      waiting.reject(new Error(why))
+    }
+  }
+  /**
+   * The app's side of `orch-call` (design §5) — one RPC channel to the Host's command layer.
+   *
+   * **A deadline is safe here although `orch-call` also carries the long polls.** Those are the CLI's
+   * (`check --wait`, `ask`, `runs wait`); the only two commands this app ever sends are `state-get`
+   * and `state-put`, and both are one file write at the far end. The constant is the one the Host
+   * judges a silent app by in the other direction, so the two cannot drift.
+   */
+  const orchCall = (m: { cmd: string; args: Record<string, unknown>; sessionId: string }): Promise<OrchReply> =>
+    new Promise((resolve, reject) => {
+      const call = `app_${++orchCallSeq}`
+      const timer = setTimeout(() => {
+        pendingOrchCalls.delete(call)
+        reject(new Error(`the Host did not answer ${m.cmd} within ${HOST_UNRESPONSIVE_MS}ms`))
+      }, HOST_UNRESPONSIVE_MS)
+      timer.unref?.()
+      pendingOrchCalls.set(call, { resolve, reject, timer })
+      // A send that does not go out is the connection having dropped. Answered now rather than after
+      // the deadline's wait for a reply to a question nobody heard.
+      if (!hostClient?.send({ t: 'orch-call', call, cmd: m.cmd, args: m.args, session: m.sessionId })) {
+        pendingOrchCalls.delete(call)
+        clearTimeout(timer)
+        reject(new Error('there is no connection to the Host'))
+      }
+    })
+  /** The app's copy of the orchestration state — the Host owns the file, this holds the last thing it
+   *  said was in it (design §5, §6). One per app: `bootOrch` reads and writes it through the
+   *  store-shaped facade it builds over this, and `startHostClient` fills it from every `orch-state`
+   *  push. Constructed unconditionally, because the pushes arrive whether or not the Jobs feature is
+   *  switched on in this app, and an empty mirror costs nothing. */
+  const orchMirror = createMirrorStore({ call: orchCall })
+  /** Refills the mirror from the Host after a handshake, so a commit pushed while the socket was down
+   *  is not simply missed. Null until `bootOrch` has run — the first handshake needs no refill,
+   *  because `bootOrch` fills the mirror itself and waits for that handshake to do it. */
+  let remirrorOrchState: (() => void) | null = null
   /** Whether the Host this app is connected to keeps its sessions through an update being installed.
    *  True off win32, where a running binary can simply be replaced; on win32 it is true only once the
    *  Host is running from its own runtime rather than the app's executable inside the install
@@ -2205,57 +2266,119 @@ export function registerIpc(
         `warning — the spec directory path contains characters forbidden in a launch prompt (" & | < > ^ %): ${specsDir} — every worker-start will be rejected in this state`
       )
 
-    const store = new OrchestrationStore(path.join(app.getPath('userData'), 'orchestration.json'))
+    /**
+     * **The app stops owning `orchestration.json`** (design §6). One writer, and it is the Host — the
+     * app reads its own mirror of what the Host last said, and every write goes back across the
+     * socket as `state-put`.
+     *
+     * Shaped like the `OrchestrationStore` this replaces, so the thirty-odd `store.get()` call sites
+     * below do not change: `getState()` stays synchronous, which is what several of them depend on
+     * (they read it twice around an await on purpose — the run-create comment in the command layer
+     * says why). That is the whole point of the mirror.
+     */
+    const orchFile = path.join(app.getPath('userData'), 'orchestration.json')
+    const store = {
+      get: (): OrchState => orchMirror.getState(),
+      save: (next: OrchState): Promise<void> => orchMirror.setState(next),
+      /** Copies the file aside before `reset` does something destructive. **Still the app's to
+       *  answer** — `src/host/orchDeps.ts` classifies `backup` as forwarded — although the file is
+       *  the Host's now, so this is the same path and the same `.bak` convention the store used, done
+       *  directly. Best effort for the store's own reason: blocking `reset` because the copy failed
+       *  leaves a person no way to discard a state they cannot use. What is lost with the store is
+       *  the write queue this used to go through, which no longer means anything across two
+       *  processes; the rename the Host writes with is atomic, so what lands here is one whole state
+       *  either way, just possibly the one from a moment ago. */
+      backup: async (): Promise<void> => {
+        await fs.copyFile(orchFile, orchFile + '.bak').catch(() => {})
+      }
+    }
     if (core.appSettings.getJobContinuityEnabled()) openContinuity()
-    // Reports that could not be delivered while the app was away. **Read before the cleanup and
-    // applied further down, after `orch` is assigned** — the two halves cannot be one call, and the
-    // gap between them is the whole point:
+    // Reports that could not be delivered while nothing was there to take them. **Read here and
+    // applied further down, after `orch` is assigned** — applying one reaches `startValidation` and
+    // `startReview`, which spawn, which needs `orch` set (the same constraint `runScheduler` and the
+    // recovery boot sweep are under).
     //
-    // - The cleanup below closes every open Dispatch it cannot prove alive, and `applyWorkerDone`
-    //   answers `alreadyReported` for a Dispatch that already has `endedAt`. So the report has to be
-    //   in hand *before* the load, or it is thrown away by the very boot that was supposed to take
-    //   it — and the reconciler then reads that Dispatch as a lost worker. `reportedDispatchIds`
-    //   carries that evidence into the cleanup; its own note has the rest.
-    // - Applying one reaches `startValidation` and `startReview`, which spawn, which needs `orch`
-    //   set — the same constraint `runScheduler` and the recovery boot sweep are under.
-    //
-    // Neither line can throw: `readPendingReports` swallows its own failures (a missing folder is
-    // the ordinary case, not an error) and `reportedDispatchIdsOf` is pure. A queue that cannot be
-    // read costs the reports in it, never the boot.
+    // **The Host reads this same queue for its own reason**, and that half no longer happens here:
+    // the cleanup that has to know which Dispatches an undelivered report speaks for now runs inside
+    // the Host's `store.load` (`src/host/orch.ts`). Reading it twice costs one `readdir` and nothing
+    // else — neither read changes a file, and the drain below is still the only thing that deletes
+    // one. This line cannot throw: `readPendingReports` swallows its own failures, a missing folder
+    // being the ordinary case rather than an error.
     const pendingReportsDir = path.join(app.getPath('userData'), 'orch', PENDING_REPORTS_DIR)
     const pendingReports = await readPendingReports({ dir: pendingReportsDir, log: orchLog })
 
-    // Ask what the Host still had before deciding which workers were lost. Reattaching therefore
-    // runs before the cleanup, not after it: the sessions it took back are the ones whose Dispatch
-    // must stay open, and this is the only moment both facts are in hand.
+    // What the Host was still running when this app attached. **No longer the restart cleanup's
+    // evidence** — the Host judges that against its own registry now, where "we asked and got no
+    // answer" is not a state it can be in about itself (design §6) — but still this app's own, for
+    // the two things below that are the app's: which spec files are still being read, and which
+    // Dispatches a queued report is the *only* reason for. `'unknown'` therefore still means what it
+    // always did here: a Host answered the address and could not be asked, so nothing is written off
+    // on the strength of an empty list.
     //
     // **The ids match with nothing in between.** An adopted session keeps the id it had before the
     // restart (reattach.ts's `ReattachResult.sessions`), so a stored `Dispatch.sessionId` is
-    // literally one of these strings — there is no old-id/new-id map to keep, and a Dispatch that
-    // survives the cleanup is already pointing at the session that answers to it.
+    // literally one of these strings — there is no old-id/new-id map to keep.
     //
     // **The wait is bounded, and it is the wiring's own wait rather than a second one.** Reattaching
     // starts on `ready()`, which ends at the handshake, at the client giving up, or at its own
     // timeout; the list it then asks for gives up after five seconds. A build with no
-    // `out/main/host.js` waits for none of it — `startHostClient` settles this on the way out — so
-    // that app boots exactly as fast, with exactly the same answer, as it did before the Host existed.
-    //
-    // **A Host that never speaks does not give the same answer as no Host.** An earlier version of
-    // this comment said it did, and that was the bug: closing every open Dispatch is only safe when
-    // the emptiness is evidence, and it is evidence only when there was no Host to ask. A peer that
-    // accepted the connection and then went quiet is positive evidence a Host exists and none at all
-    // about its sessions, so the answer is `'unknown'` and the cleanup leaves open Dispatches where
-    // they are. A Job that stalls is a person noticing nothing moved; the alternative was a second
-    // agent dispatched into a worktree whose first one is still running.
+    // `out/main/host.js` waits for none of it — `startHostClient` settles this on the way out.
+    // Awaited before the mirror is filled for one more reason: it is also what guarantees the Host
+    // client exists to send `state-get` over.
     const aliveSessionIds = liveWorkersFor(await hostSessionsTakenBack)
     const reportedDispatchIds = reportedDispatchIdsOf(pendingReports.map((q) => q.report))
-    const loaded = await store.load({ aliveSessionIds, reportedDispatchIds })
-    // The unknown case gets a line of its own, because from the state alone it is indistinguishable
-    // from a boot that had nothing to clean up — and a person looking for why a Job did not move
-    // needs to be able to find it. The reason it could not be asked was logged by the Host wiring.
+
+    /**
+     * Fill the mirror, and take what the Host's load found.
+     *
+     * **This is where the app stops being the process that loads** (design §6). `state-get` makes the
+     * Host read the file, run the restart cleanup against its own registry, and answer with the state
+     * — so the two halves of what `store.load()` used to return arrive separately: the state, in the
+     * mirror, and the findings, in `boot`.
+     *
+     * `boot` is null when this Host had already loaded for somebody else — an app restarting against
+     * a Host that has been up for hours. That is the honest answer: nothing was lost, because the
+     * Host never went away, and re-running a cleanup's consequences hours later would journal a diff
+     * spanning everything since and restart validations for Tasks that have moved on.
+     */
+    let loaded: OrchLoadResult | null = null
+    try {
+      const answer = await orchCall({ cmd: 'state-get', args: { boot: true }, sessionId: '' })
+      if (answer.status !== 200) throw new Error(`the Host answered state-get with ${answer.status}`)
+      const body = answer.body as { state: OrchState; boot: OrchLoadResult | null }
+      orchMirror.accept(body.state)
+      loaded = body.boot
+    } catch (err) {
+      // **Nothing below can run without the state**, and inventing an empty one here is the single
+      // most expensive mistake available in this design: every read would answer "no such Job" and
+      // the first write would commit that over the real file.
+      //
+      // So this start is abandoned. **Returned rather than thrown**, for two reasons: `startOrch`
+      // is awaited from the settings handlers, where a throw becomes an error on a checkbox that
+      // did in fact get saved; and `orch` staying null is a state this app already knows how to be
+      // in — it is what orchestration being switched off looks like — so flipping a toggle later
+      // tries again from the top. The person's half of this is the Jobs view's own two states.
+      orchLog(
+        `could not read the orchestration state from the Host: ${String(err)} — orchestration is not starting; it will try again the next time a toggle changes or the app restarts`
+      )
+      return
+    }
+    // Refills the mirror after a later handshake. A commit the Host made while the socket was down
+    // was pushed to nobody, and nothing else would ever correct it. `boot` is deliberately not asked
+    // for: those findings belong to the next app start, not to a reconnect.
+    remirrorOrchState = () => {
+      void orchCall({ cmd: 'state-get', args: {}, sessionId: '' })
+        .then((r) => {
+          if (r.status !== 200) throw new Error(`the Host answered state-get with ${r.status}`)
+          const state = (r.body as { state: OrchState }).state
+          orchMirror.accept(state)
+          pushOrchState(state)
+        })
+        .catch((e) => orchLog(`could not refill the orchestration mirror after reconnecting: ${String(e)}`))
+    }
     if (aliveSessionIds === 'unknown')
       orchLog(
-        `restart cleanup — the Host could not be asked what it is still running, so ${store.get().dispatches.filter((d) => !d.endedAt).length} open dispatch(es) were left open rather than written off`
+        'restart cleanup — the Host could not be asked what it is still running, so no spec file was cleared on the strength of an empty list'
       )
     else if (aliveSessionIds && aliveSessionIds.size > 0)
       orchLog(
@@ -2264,7 +2387,7 @@ export function registerIpc(
     // Said out loud because emptying the slot is what turns the Run's safety net and its restart
     // button back on, and both are invisible until someone looks at the Jobs list. A person whose
     // Job stopped answering needs a line that says when it lost its coordinator.
-    if (loaded.coordinatorsLost > 0)
+    if (loaded && loaded.coordinatorsLost > 0)
       orchLog(
         `restart cleanup — ${loaded.coordinatorsLost} Run(s) lost their coordinator to the restart; the app answers their workers now and the Jobs list offers to start a new one`
       )
@@ -2287,7 +2410,7 @@ export function registerIpc(
       orchLog(
         `restart cleanup — ${heldOnlyByReport.size} open dispatch(es) were left open because an undelivered report speaks for them; the drain below says what became of each`
       )
-    if (loaded.stuckInterruptions > 0)
+    if (loaded && loaded.stuckInterruptions > 0)
       orchLog(
         `restart cleanup — ${loaded.stuckInterruptions} interrupted Task(s) were left as they were: their Dispatch is still open, so there is nothing to gate`
       )
@@ -2313,7 +2436,7 @@ export function registerIpc(
 
     // The restart cleanup is a state transition like any other: every worker it closed as
     // outcome_unknown lands as ATTEMPT_LOST, and Runs the TTL pruned lose their journal rows.
-    if (continuity && loaded.before) {
+    if (continuity && loaded?.before) {
       continuity.record(loaded.before, store.get())
       continuity.reportSkew(store.get())
     }
@@ -2328,12 +2451,13 @@ export function registerIpc(
         orchLog(`continuity: sweepOrphans failed: ${String(e)}`)
       }
     }
-    if (loaded.recovered) orchLog('failed to read or parse orchestration.json — kept the .bak and started from an empty state')
+    if (loaded?.recovered) orchLog('failed to read or parse orchestration.json — kept the .bak and started from an empty state')
     if (
-      loaded.unknownOutcomes > 0 ||
-      loaded.pruned > 0 ||
-      loaded.staleValidations > 0 ||
-      loaded.staleReviews > 0
+      loaded &&
+      (loaded.unknownOutcomes > 0 ||
+        loaded.pruned > 0 ||
+        loaded.staleValidations > 0 ||
+        loaded.staleReviews > 0)
     )
       orchLog(
         `restart cleanup — ${loaded.unknownOutcomes} dispatch(es) left as outcome_unknown, ` +
@@ -4458,26 +4582,28 @@ export function registerIpc(
     // never report. Same guard, same reasoning as runScheduler's `if (!orch.deps.enabled()) return`.
     if (recovery && deps.enabled())
       void recovery.reconcileAll().catch((e) => orchLog(`recovery: boot sweep failed: ${String(e)}`))
-    // 완료 수렴 Run 이 재시작으로 멈춘 validating·reviewing Task(store.load 가 위에서 채운
-    // loaded.revalidate·loaded.rereview) — store.load 는 아무것도 시작하지 않고 목록만 돌려주는
-    // 계약이므로(store.ts), 시작은 deps 가 다 갖춰지고 orch 가 선 뒤인 여기다. 이미 Run
-    // 게이트(일시 중지·예약 템플릿·pendingStart)와 열린 Dispatch 로 store.load 에서 걸러져
-    // 왔으므로 여기서 다시 거르지 않는다. runScheduler·recovery.reconcileAll 과 같은 이유로
+    // 완료 수렴 Run 이 재시작으로 멈춘 validating·reviewing Task — **이제 Host 의 load 가 채워
+    // 보내 준다**(state-get 의 `boot`). 그 계약은 그대로다: load 는 아무것도 시작하지 않고 목록만
+    // 준다(store.ts). 시작은 deps 가 다 갖춰지고 orch 가 선 뒤인 여기다. 이미 Run
+    // 게이트(일시 중지·예약 템플릿·pendingStart)와 열린 Dispatch 로 load 에서 걸러져 왔으므로
+    // 여기서 다시 거르지 않는다. runScheduler·recovery.reconcileAll 과 같은 이유로
     // deps.enabled() 로 가드한다 — 꺼져 있으면 서버가 모든 보고를 409 로 거절해 시작해도 끝을 볼
     // 수 없다.
     //
+    // **`loaded` 가 null 인 경우는 재시작이 아무것도 잃지 않은 경우다** — Host 가 이미 떠 있었고
+    // 이 앱만 다시 뜬 것이라, 끊긴 검증도 끊긴 검토도 없다.
+    //
     // **가드가 막았을 때 조용히 있지 않는다(리뷰 fix 1차, Minor→promoted).** `bootOrch` 는
     // orchestration 자체가 꺼진 채로도(continuity·tracking 만 켜져 있어도) 돈다 — 그때 이 두
-    // 목록을 그냥 버리면, 나중에 orchestration 을 다시 켜도(재시작 없이 설정만 바꿔서는)
-    // `store.load()` 가 다시 불리지 않으므로 이 목록은 영영 되살아나지 않는다. 이 branch 가
-    // 열 번의 fix round 를 들여 없앤 것과 같은 부류의 결함 — "조용히 버려지는 복구 대상" —
-    // 이므로 로그로 그 사실을 남긴다. 다음 정상 재시작(orchestration 이 켜진 채)의
-    // store.load() 는 이 Task 들이 여전히 validating·reviewing 이고 열린 Dispatch 가 없으므로
-    // 같은 목록을 다시 채운다 — "재시작하면 잡힌다"는 문장은 그래서 참이다.
-    if (deps.enabled()) {
+    // 목록을 그냥 버리면, 나중에 orchestration 을 다시 켜도(재시작 없이 설정만 바꿔서는) Host 는
+    // 이 목록을 다시 주지 않으므로(한 번만 준다) 영영 되살아나지 않는다. 이 branch 가 열 번의 fix
+    // round 를 들여 없앤 것과 같은 부류의 결함 — "조용히 버려지는 복구 대상" — 이므로 로그로 그
+    // 사실을 남긴다. 다음 정상 재시작(orchestration 이 켜진 채)은 Host 도 새로 뜬 재시작이면 같은
+    // 목록을 다시 받는다.
+    if (loaded && deps.enabled()) {
       for (const r of loaded.revalidate) deps.startValidation?.({ taskId: r.taskId, cwd: r.cwd })
       for (const taskId of loaded.rereview) deps.startReview?.({ taskId })
-    } else if (loaded.revalidate.length > 0 || loaded.rereview.length > 0)
+    } else if (loaded && (loaded.revalidate.length > 0 || loaded.rereview.length > 0))
       orchLog(
         `restart cleanup — orchestration is off, so ${loaded.revalidate.length} interrupted validation(s) and ${loaded.rereview.length} interrupted review(s) were not restarted; turning it on without restarting does not retry them — a restart with it already on will`
       )
@@ -6497,6 +6623,43 @@ export function registerIpc(
       }
     })
     hostClient = client
+
+    client.onMessage((m) => {
+      // Every commit the Host made, pushed (design §5). The mirror swaps, and the Jobs sidebar is
+      // told — a Job a CLI created with this app open has to appear on the screen, and this is the
+      // only thing that says so.
+      if (m.t === 'orch-state') {
+        orchMirror.accept(m.state)
+        pushOrchState(m.state)
+        return
+      }
+      if (m.t === 'orch-result') {
+        const waiting = pendingOrchCalls.get(m.call)
+        // An answer to a question nobody is waiting on any more — the deadline took it, or the
+        // socket dropped and everything pending was failed. Dropped rather than logged: the message
+        // is well formed and there is simply nobody left to hand it to.
+        if (!waiting) return
+        pendingOrchCalls.delete(m.call)
+        clearTimeout(waiting.timer)
+        waiting.resolve({ status: m.status, body: m.body })
+        return
+      }
+      // One thing the Host cannot do itself — spawn a session, touch a worktree (design §5). The
+      // table it is answered from is `orch.deps`, the same object literal `startOrchServer` is given;
+      // `answerOrchAct` has the reasoning, and never throws, because a rejection here would leave the
+      // Host waiting for a reply that is never coming.
+      if (m.t !== 'orch-act') return
+      void answerOrchAct({ deps: orch?.deps ?? null, act: m.act, args: m.args }).then((r) =>
+        client.send(
+          r.ok
+            ? { t: 'orch-acted', call: m.call, ok: true, value: r.value }
+            : { t: 'orch-acted', call: m.call, ok: false, error: r.error }
+        )
+      )
+    })
+    // Nothing is coming back on a socket that is gone. Armed before `start()` so the very first
+    // connection's drop is covered too.
+    client.onDisconnect(() => failPendingOrchCalls('the connection to the Host dropped'))
     client.start()
 
     const transport = {
@@ -7087,6 +7250,12 @@ export function registerIpc(
       // and the opposite one. Left here as well because this runs first for a handshake and the two
       // agree: one assignment of the same object either way.
       routeByStatus(hostClient?.status())
+      // Refill the mirror. **Every handshake, including one from a Host that just replaced the one
+      // that died** — the state is on disk and its successor opens the same file (design §6), so
+      // what this app holds is stale in exactly the same way either way. `remirrorOrchState` is null
+      // until `bootOrch` has filled the mirror itself, which is what keeps the first handshake from
+      // asking twice.
+      remirrorOrchState?.()
       // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this
       // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
       // that chain has already given up before a peer ever said hello — a handshake that outlasts its

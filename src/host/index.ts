@@ -145,6 +145,12 @@ async function main(): Promise<void> {
     // The same two registries `liveCounts` counts — this Host's own sessions, which `status` must be
     // able to answer with no app attached.
     runningSessions: () => registry.liveCount() + procs.liveCount(),
+    // What the restart cleanup inside `store.load` is judged against — the evidence the app used to
+    // have to ask this Host for and could be told nothing about (design §6). A worker session is a
+    // pty, so only `registry` is read: a line process is a chat session, and no `Dispatch.sessionId`
+    // ever names one. `meta.id` is the app's own id for the session, which is what a Dispatch holds.
+    aliveSessionIds: () =>
+      new Set(registry.list().filter((e) => e.alive && e.meta?.kind === 'session').map((e) => e.meta!.id)),
     act: (name, args) => server.act(name, args),
     hasApp: () => server.hasApp(),
     // Every commit goes to the clients, so the app can swap its mirror (design §5). Greeted sockets

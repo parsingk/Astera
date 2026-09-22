@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { readPendingReports, applyPendingReports, MAX_APPLY_ATTEMPTS } from './pendingDrain'
+import { readPendingReports, applyPendingReports, MAX_APPLY_ATTEMPTS } from '../../core/orchestration/pendingDrain'
 import {
   pendingReportFileName,
   pendingReportTempName,

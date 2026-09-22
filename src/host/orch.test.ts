@@ -47,6 +47,7 @@ const orchOver = (over: Partial<Parameters<typeof createHostOrch>[0]> = {}): Ret
     version: '9.9.9',
     now: () => NOW,
     runningSessions: () => 2,
+    aliveSessionIds: () => new Set<string>(),
     act: async () => ({}),
     hasApp: () => true,
     onState: () => {},
@@ -207,7 +208,9 @@ describe('createHostOrch', () => {
     if (!rev.ok) throw new Error(rev.error)
     await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(rev.state), 'utf8')
 
-    const orch = orchOver({ hasApp: () => false })
+    // 검토 세션은 지금 보고하는 중이니 당연히 살아 있다 — Host 의 등록부가 그것을 말해 준다.
+    // 이 말을 하지 않으면 load 의 재시작 청소가 먼저 이 Dispatch 를 outcome_unknown 으로 닫는다.
+    const orch = orchOver({ hasApp: () => false, aliveSessionIds: () => new Set(['rev1']) })
     const r = await orch.call({
       cmd: 'send',
       args: {
@@ -355,6 +358,7 @@ describe('createHostOrch', () => {
         version: '9.9.9',
         now: () => NOW,
         runningSessions: () => 0,
+        aliveSessionIds: () => new Set<string>(),
         act: async () => ({}),
         hasApp: () => true,
         onState: () => {},
@@ -375,6 +379,93 @@ describe('createHostOrch', () => {
       await orch.ready()
       const r = await orch.call({ cmd: 'jobs-list', args: {}, sessionId: '' })
       expect(r.body).toEqual([]) // 파일의 Job 이 아니라 앱이 민 빈 상태다
+    })
+  })
+
+  describe('state-get', () => {
+    /** 워커 하나가 돌던 중에 꺼진 프로필 — 열린 Dispatch 가 하나 남아 있다. */
+    const seedOpenDispatch = async (): Promise<{ taskId: string; dispatchId: string }> => {
+      const job = createJob(emptyState(), { objective: '무언가', cwd: 'D:/p' }, NOW)
+      if (!job.ok) throw new Error(job.error)
+      const run = startJobRun(job.state, job.value.id, NOW)
+      if (!run.ok) throw new Error(run.error)
+      const task = createTask(run.state, { runId: run.value.id, title: '하나', spec: 's', deps: [] }, NOW)
+      if (!task.ok) throw new Error(task.error)
+      const dsp = openDispatch(
+        task.state,
+        { taskId: task.value.id, provider: 'codex', accountId: 'accA', sessionId: 'ses1', cwd: 'D:/p', specPath: 'D:/p/s.md' },
+        NOW
+      )
+      if (!dsp.ok) throw new Error(dsp.error)
+      await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(dsp.state), 'utf8')
+      return { taskId: task.value.id, dispatchId: dsp.value.id }
+    }
+
+    it('상태를 통째로 답한다', async () => {
+      const { jobId } = await seed()
+      const r = await orchOver().call({ cmd: 'state-get', args: {}, sessionId: '' })
+      expect(r.status).toBe(200)
+      expect((r.body as { state: OrchState }).state.runs[0].jobId).toBe(jobId)
+    })
+
+    // **Host 는 제 등록부를 안다.** 앱이 물어보고 답을 못 들을 수 있었던 'unknown' 은 여기서 뜻이
+    // 없다 — 살아 있다고 말한 세션의 Dispatch 는 열린 채로 남는다.
+    it('제 등록부가 살아 있다고 하는 세션의 Dispatch 는 닫지 않는다', async () => {
+      const { dispatchId } = await seedOpenDispatch()
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses1']) })
+      const r = await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })
+      const state = (r.body as { state: OrchState }).state
+      expect(state.dispatches.find((d) => d.id === dispatchId)?.endedAt).toBeUndefined()
+    })
+
+    it('등록부에 없는 세션의 Dispatch 는 닫는다', async () => {
+      const { dispatchId } = await seedOpenDispatch()
+      const orch = orchOver({ aliveSessionIds: () => new Set<string>() })
+      const r = await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })
+      const state = (r.body as { state: OrchState }).state
+      expect(state.dispatches.find((d) => d.id === dispatchId)?.workerState).toBe('outcome_unknown')
+    })
+
+    // 대기 중인 보고가 말하는 Dispatch 는 세션이 죽었어도 열린 채로 남는다 — 그것을 닫으면 그
+    // 보고가 버려지고, 복구가 그 Task 에 두 번째 에이전트를 붙인다.
+    it('아직 전하지 못한 보고가 말하는 Dispatch 는 닫지 않는다', async () => {
+      const { taskId, dispatchId } = await seedOpenDispatch()
+      const queue = path.join(dir, 'orch', 'pending-reports')
+      await fs.mkdir(queue, { recursive: true })
+      await fs.writeFile(
+        path.join(queue, 'r1.json'),
+        JSON.stringify({
+          queuedAt: NOW,
+          sessionId: 'ses1',
+          cmd: 'send',
+          args: { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }
+        }),
+        'utf8'
+      )
+      const orch = orchOver({ aliveSessionIds: () => new Set<string>() })
+      const r = await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })
+      const state = (r.body as { state: OrchState }).state
+      expect(state.dispatches.find((d) => d.id === dispatchId)?.endedAt).toBeUndefined()
+    })
+
+    // 청소가 무엇을 했는지는 앱이 마저 해야 하는 일이다(저널, 끊긴 검증 재시작). 한 번만 준다 —
+    // 몇 시간째 떠 있던 Host 에 앱이 다시 붙었을 때 오래전의 청소를 또 실행하면 안 된다.
+    it('load 가 찾은 것은 boot 를 물은 첫 번째에게만 간다', async () => {
+      await seedOpenDispatch()
+      const orch = orchOver({ aliveSessionIds: () => new Set<string>() })
+      const first = await orch.call({ cmd: 'state-get', args: { boot: true }, sessionId: '' })
+      expect((first.body as { boot: { unknownOutcomes: number } | null }).boot?.unknownOutcomes).toBe(1)
+      const second = await orch.call({ cmd: 'state-get', args: { boot: true }, sessionId: '' })
+      expect((second.body as { boot: unknown }).boot).toBeNull()
+    })
+
+    it('boot 를 묻지 않은 호출은 그것을 가져가지 않는다', async () => {
+      await seedOpenDispatch()
+      const orch = orchOver({ aliveSessionIds: () => new Set<string>() })
+      const plain = await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })
+      expect((plain.body as { boot: unknown }).boot).toBeNull()
+      const booting = await orch.call({ cmd: 'state-get', args: { boot: true }, sessionId: '' })
+      expect((booting.body as { boot: { unknownOutcomes: number } | null }).boot?.unknownOutcomes).toBe(1)
     })
   })
 })

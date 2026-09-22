@@ -7,7 +7,7 @@
 // app applies it at the next start.
 //
 // This module holds the decisions and the file format, with no filesystem in it: `src/cli/run.ts`
-// writes, `src/main/orchestration/pendingDrain.ts` reads and applies.
+// writes, `core/orchestration/pendingDrain.ts` reads, and the app applies.
 import path from 'node:path'
 import { workerDoneFieldError } from './sendArgs'
 import type { Dispatch } from './types'

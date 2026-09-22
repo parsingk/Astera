@@ -24,8 +24,27 @@ const PROPAGATES = [
   // silently off, recorded nowhere. A refusal a person sees beats a Run that quietly skipped its
   // checks — and unlike the DEGRADES pair below, nothing is lost by refusing: the caller asks again.
   'listRunConfigs',
-  'browserRun'
+  'browserRun',
+  // **The three toggles the app owns.** Each is read as the first thing its command does, before any
+  // state is read and before anything has been committed, so a refusal costs nothing but the answer
+  // "not now" — which is the truth, and better than telling a person the feature is off when it is
+  // their app that is missing. (`lang` is the fourth of this shape and is *not* here: see DEGRADES.)
+  'browserEnabled', 'handoffEnabled', 'trackingEnabled'
 ] as const
+
+/**
+ * **Forwarded one method at a time, under a dotted name.** `handoffs` and `sessionTasks` are objects
+ * of methods rather than functions, so there is nothing to put on the wire under the bare name — the
+ * app's answer table resolves `handoffs.save` and the three `sessionTasks.*` the same way it resolves
+ * every other entry, by looking the name up in the dependency object it already had.
+ *
+ * All four are async and every one of their results is used by the command that called them, so all
+ * four are **PROPAGATES**: a refusal decides that command's outcome and reaches the caller.
+ */
+const NESTED = {
+  handoffs: ['save'],
+  sessionTasks: ['start', 'complete', 'cancel']
+} as const
 
 /**
  * **Forwarded, and when it cannot be asked it answers the value its own contract already has.**
@@ -43,6 +62,11 @@ const PROPAGATES = [
  *   happened" about something that did. `{ ok: false, error }` is this dependency's own way of saying
  *   the retry did not open, and the call site already carries it to the caller as `retryOnceFailed`
  *   in a 200 body, for exactly this: the person's "one more try" quietly not happening.
+ * - `lang`: read one line below `repairTargetFor`, in the same review report, for the same reason —
+ *   both feed `applyReviewResult`. Refusing here would 409 the very command the line above degrades
+ *   to keep, so the degradation above would buy nothing. `'en'` is this dependency's own documented
+ *   absent value ("주입되지 않으면 영어다"): a Gate in the wrong language is a Gate a person can still
+ *   read and act on, and a lost verdict is not.
  *
  * So these are the contracts the call sites were written against rather than behaviour invented for
  * the Host — and a group rather than two special cases, so they cannot drift back out of the guard.
@@ -52,7 +76,8 @@ const PROPAGATES = [
  */
 const DEGRADES = {
   repairTargetFor: () => null,
-  repairOnce: (why: string) => ({ ok: false as const, error: why })
+  repairOnce: (why: string) => ({ ok: false as const, error: why }),
+  lang: () => 'en'
 } as const
 
 /**
@@ -83,32 +108,18 @@ const FIRE_AND_FORGET = [
   'unregisterRolling', 'startValidation', 'startReview', 'startRepair', 'onDispatchLost'
 ] as const
 
-/**
- * **Not supplied, and each one needs a decision this task does not own.**
- *
- * - `lang`, `browserEnabled`, `handoffEnabled`, `trackingEnabled` are synchronous getters. Making
- *   them remote needs the same sync/async answer `listAccounts` got, and their callers read them
- *   inline in conditions rather than awaiting anything.
- * - `handoffs` and `sessionTasks` are objects of methods, so each method needs its own entry in the
- *   app's answer table rather than one name on the wire.
- *
- * Both belong with the task that writes the app's side of that table. Until then the commands that
- * read them behave as they do with any dependency that is not injected: `browser-js`, `handoff` and
- * the three `session-task-*` commands answer "that feature is off", which is visible rather than
- * silent. **The guard below is what keeps this list from growing without anyone noticing.**
- */
-const NOT_SUPPLIED = ['lang', 'browserEnabled', 'handoffEnabled', 'trackingEnabled', 'handoffs', 'sessionTasks'] as const
-
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
 const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING]
 
-/** Every name the groups above classify between them. */
+/** Every name the groups above classify between them. Nothing is unsupplied any more: the four
+ *  synchronous getters became `T | Promise<T>` in `command.ts` and are awaited at their one call site
+ *  each, and the two objects of methods travel a method at a time (NESTED). */
 type Classified =
   | (typeof OWNED)[number]
   | (typeof PROPAGATES)[number]
   | (typeof SWALLOWED)[number]
   | (typeof FIRE_AND_FORGET)[number]
-  | (typeof NOT_SUPPLIED)[number]
+  | keyof typeof NESTED
   | keyof typeof DEGRADES
 
 /** Whatever the groups above do not name between them lands here. */
@@ -209,6 +220,15 @@ export function hostOrchDeps(a: {
       return [name, forward(name, (PROPAGATES as readonly string[]).includes(name))]
     })
   )
+  // The dotted names (NESTED). Built as real objects because that is the shape the command layer
+  // checks before it calls — `if (!deps.sessionTasks) return conflict(...)` — so an object whose
+  // methods happen to travel is what keeps those guards reading the way they always did.
+  const nested = Object.fromEntries(
+    Object.entries(NESTED).map(([group, methods]) => [
+      group,
+      Object.fromEntries((methods as readonly string[]).map((m) => [m, forward(`${group}.${m}`, true)]))
+    ])
+  )
   return {
     getState: a.getState,
     setState: a.setState,
@@ -219,6 +239,7 @@ export function hostOrchDeps(a: {
     enabled: () => true,
     runningSessions: a.runningSessions,
     appVersion: a.appVersion,
-    ...remote
+    ...remote,
+    ...nested
   } as unknown as OrchServerDeps
 }

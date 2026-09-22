@@ -44,6 +44,47 @@ export function isValidState(v: unknown): v is OrchState {
   )
 }
 
+/** What one `load()` found and what it did about it.
+ *
+ *  **Named rather than inline because it now travels.** The Host is the process that loads, and the
+ *  app is the process that has to finish the job — journal the workers the restart lost, restart the
+ *  validations and reviews it interrupted, say in the log what was cleaned up. So the Host answers
+ *  `state-get` with this alongside the state, once (`src/host/orch.ts`). */
+export interface OrchLoadResult {
+  recovered: boolean
+  unknownOutcomes: number
+  pruned: number
+  staleValidations: number
+  /** 재시작에 끊긴 검토. staleValidations 와 따로 센다 — 배선이 이 숫자를 시작 로그에 적으므로
+   *  한데 묶으면 검토가 끊긴 재시작이 "검증이 끊겼다"고 기록된다. */
+  staleReviews: number
+  /** Tasks the cleanup wanted to interrupt and could not, because the Dispatch under them stayed
+   *  open — `createGate` refuses to gate a Task with an open Dispatch, and `blockForReview` refuses
+   *  for its own reasons. They are left exactly as they were, which for a validating or reviewing
+   *  Task means it stays that way until something else moves it. Counted so the wiring can say so:
+   *  a person looking at a Task stuck in validating has no other way to find out why. */
+  stuckInterruptions: number
+  /** Runs whose coordinator did not outlive the restart, and whose slot this sweep emptied.
+   *
+   *  **Counted because emptying it is what turns two things back on**, and a person needs to know
+   *  which Job they happened to: `inbox.ts` only nets Runs with no coordinator, and the Jobs list
+   *  only offers the restart button then (`view.ts`). A slot left naming a dead session is a Job
+   *  with nobody to answer its workers and no button to fix it — measured: a worker asked a
+   *  question and nothing answered until a person ran the CLI by hand. */
+  coordinatorsLost: number
+  /** The file as read — after the field migrations, before the restart cleanup — or null when
+   *  there was nothing to read. Job Continuity diffs this against get() so every worker the
+   *  restart lost is journaled (P0 design §5). */
+  before: OrchState | null
+  /** convergence Run 의 validating Task 들 — Gate 대신 여기 실려, caller 가 다시 check 를 돌린다
+   *  (interruptStalledTask 의 resume, 설계 §10). `load` 는 아무것도 시작하지 않는다 — 그 일은
+   *  이 목록을 받는 배선의 것이다. */
+  revalidate: { taskId: string; cwd: string }[]
+  /** 같은 자리의 reviewing Task 들 — 다시 검토를 돌릴 Task id 만으로 충분하다(검토는 checkpoint
+   *  가 아니라 마지막 구현 Dispatch 의 세션을 잇는다). */
+  rereview: string[]
+}
+
 export class OrchestrationStore {
   private state: OrchState = emptyState()
   /** Serialization queue for disk writes (see save) */
@@ -87,40 +128,7 @@ export class OrchestrationStore {
      *  Only a completion report is evidence; an escalation is a worker saying it is stuck and still
      *  there, which is why the pure helper leaves those out. */
     reportedDispatchIds?: ReadonlySet<string>
-  }): Promise<{
-    recovered: boolean
-    unknownOutcomes: number
-    pruned: number
-    staleValidations: number
-    /** 재시작에 끊긴 검토. staleValidations 와 따로 센다 — 배선이 이 숫자를 시작 로그에 적으므로
-     *  한데 묶으면 검토가 끊긴 재시작이 "검증이 끊겼다"고 기록된다. */
-    staleReviews: number
-    /** Tasks the cleanup wanted to interrupt and could not, because the Dispatch under them stayed
-     *  open — `createGate` refuses to gate a Task with an open Dispatch, and `blockForReview` refuses
-     *  for its own reasons. They are left exactly as they were, which for a validating or reviewing
-     *  Task means it stays that way until something else moves it. Counted so the wiring can say so:
-     *  a person looking at a Task stuck in validating has no other way to find out why. */
-    stuckInterruptions: number
-    /** Runs whose coordinator did not outlive the restart, and whose slot this sweep emptied.
-     *
-     *  **Counted because emptying it is what turns two things back on**, and a person needs to know
-     *  which Job they happened to: `inbox.ts` only nets Runs with no coordinator, and the Jobs list
-     *  only offers the restart button then (`view.ts`). A slot left naming a dead session is a Job
-     *  with nobody to answer its workers and no button to fix it — measured: a worker asked a
-     *  question and nothing answered until a person ran the CLI by hand. */
-    coordinatorsLost: number
-    /** The file as read — after the field migrations, before the restart cleanup — or null when
-     *  there was nothing to read. Job Continuity diffs this against get() so every worker the
-     *  restart lost is journaled (P0 design §5). */
-    before: OrchState | null
-    /** convergence Run 의 validating Task 들 — Gate 대신 여기 실려, caller 가 다시 check 를 돌린다
-     *  (interruptStalledTask 의 resume, 설계 §10). `load` 는 아무것도 시작하지 않는다 — 그 일은
-     *  이 목록을 받는 배선의 것이다. */
-    revalidate: { taskId: string; cwd: string }[]
-    /** 같은 자리의 reviewing Task 들 — 다시 검토를 돌릴 Task id 만으로 충분하다(검토는 checkpoint
-     *  가 아니라 마지막 구현 Dispatch 의 세션을 잇는다). */
-    rereview: string[]
-  }> {
+  }): Promise<OrchLoadResult> {
     let parsed: unknown
     try {
       parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))

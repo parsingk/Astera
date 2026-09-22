@@ -3,7 +3,9 @@
 // `OrchCall.call` and did not change when it did.
 import path from 'node:path'
 import { handleCommand, type OrchServerDeps } from '../core/orchestration/command'
-import { OrchestrationStore, isValidState } from '../core/orchestration/store'
+import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
+import { readPendingReports } from '../core/orchestration/pendingDrain'
+import { PENDING_REPORTS_DIR, reportedDispatchIdsOf } from '../core/orchestration/pendingReports'
 import type { OrchState } from '../core/orchestration/state'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { hostOrchDeps } from './orchDeps'
@@ -19,6 +21,15 @@ export function createHostOrch(a: {
   version: string
   now(): string
   runningSessions(): number
+  /** The sessions this Host is still running, by the app's own id for each — its registry's live
+   *  entries whose note says `kind: 'session'`, mapped to `meta.id`.
+   *
+   *  **That is literally a `Dispatch.sessionId`.** An adopted session keeps the id it had before the
+   *  restart (`src/main/host/reattach.ts`), so a stored Dispatch pointing at one of these is pointing
+   *  at a worker that is still working. **And it is never `'unknown'`**: the app had to ask another
+   *  process and could be told nothing, and design §6 says that answer cannot exist inside the Host —
+   *  "we asked and got no answer" is not a state a process can be in about itself. */
+  aliveSessionIds(): ReadonlySet<string>
   act(name: string, args: unknown[]): Promise<unknown>
   hasApp(): boolean
   /** Called with the state every commit leaves behind, so the Host can push it to the app. */
@@ -30,20 +41,35 @@ export function createHostOrch(a: {
 
   /** **Nothing is read at construction, and `host/index.ts` never calls `ready()`.**
    *
-   *  Until the app cuts over it still builds an `OrchestrationStore` on this same path and still runs
-   *  its boot cleanup, and `store.load()` writes. A load here at boot would be a second process
-   *  running load-time recovery against one file. So the load happens at the first call that needs
-   *  the state — and, once the app has pushed its state with `state-put`, never at all. */
+   *  The load happens at the first call that needs the state — and, once the app has pushed its state
+   *  with `state-put`, never at all. Lazy because a Host that nobody asks anything of has no reason to
+   *  touch the file, and memoized because the restart cleanup inside `load` must run exactly once. */
   let loading: Promise<void> | null = null
+  /** What that one load found. Handed to the app once, with `state-get` — see `stateGet`. */
+  let loadResult: OrchLoadResult | null = null
   const ready = (): Promise<void> =>
-    // `aliveSessionIds: 'unknown'` is the branch that closes nothing. The Host does know which ptys
-    // it is running, but mapping a pty id to a `Dispatch.sessionId` is something the app does through
-    // `liveWorkersFor` and reattach — guessing it wrong closes a live worker's Dispatch, and the
-    // reconciler then starts a second agent in the worktree the first is still working in. The cost
-    // of 'unknown' is the documented one: an open Dispatch stays open. The task that gives the app's
-    // side over to the Host replaces this with the Host's own registry evidence plus the
-    // pending-report queue (design §6).
-    (loading ??= store.load({ aliveSessionIds: 'unknown' }).then(() => {}))
+    (loading ??= (async () => {
+      // **The two pieces of evidence the app used to gather, gathered here instead** (design §6).
+      //
+      // - The live sessions are this Host's own registry, so `'unknown'` — the answer that closed
+      //   nothing — has no meaning here any more. A process is not in the dark about itself.
+      // - The undelivered reports are the third reason a Dispatch stays open, and the case that
+      //   matters most is the one where nothing survived to be alive: the machine was turned off
+      //   after a worker had already finished and written its report down. Closing that Dispatch
+      //   here would throw the report away (`applyWorkerDone` answers `alreadyReported` for a
+      //   Dispatch that already has `endedAt`) and hand the reconciler a lost worker to replace.
+      //
+      // Reading the queue cannot throw — `readPendingReports` swallows its own failures, a missing
+      // folder being the ordinary case — and `reportedDispatchIdsOf` is pure. A queue that cannot be
+      // read costs the reports in it, never the load. **Reading is all that happens here**: applying
+      // a report reaches session spawning, which is the app's, and the app still drains the same
+      // queue at its own boot.
+      const queued = await readPendingReports({ dir: path.join(a.profileDir, 'orch', PENDING_REPORTS_DIR), log: a.log })
+      loadResult = await store.load({
+        aliveSessionIds: a.aliveSessionIds(),
+        reportedDispatchIds: reportedDispatchIdsOf(queued.map((q) => q.report))
+      })
+    })())
 
   /** **Built per call, and that is what makes the CONFLICT decision honest.**
    *
@@ -90,11 +116,11 @@ export function createHostOrch(a: {
     // The same check the store uses on the file, for the same reason: what arrives here is written to
     // that file, and a malformed state saved over a good one costs every Job in it.
     if (!isValidState(state)) return { status: 400, body: { error: 'state-put needs a whole orchestration state' } }
-    // **The file is not read after this.** The app has just handed over everything that is in it, so
-    // a load would be reading an older copy of what we were given — and it would run restart recovery
-    // and write, which is the one thing that must not happen twice while the app still owns the file.
-    // A load already in flight is waited for instead of raced: its own assignment would otherwise
-    // land after this one.
+    // **The file is not read after this.** This is a whole state, so a load would be reading an older
+    // copy of what we were just given, and it would run the restart cleanup a second time. In the
+    // ordinary case the load has already happened — the app fills its mirror with `state-get` before
+    // it can write anything at all — and a load already in flight is waited for rather than raced:
+    // its own assignment would otherwise land after this one.
     if (loading) await loading
     else loading = Promise.resolve()
     await store.save(state)
@@ -102,6 +128,34 @@ export function createHostOrch(a: {
     // its own push would write its own state back over itself.
     from.toOthers({ t: 'orch-state', state })
     return { status: 200, body: { ok: true } }
+  }
+
+  /** Whether the load's findings have already been handed to somebody. See `stateGet`. */
+  let bootHandedOut = false
+
+  /**
+   * The app filling its mirror (design §5, §6). Not part of `handleCommand` for the same reasons
+   * `state-put` is not: nobody types it, and it answers with the whole state rather than a view of it.
+   *
+   * **Why the load's findings ride along.** `store.load` is where the restart cleanup happens, and
+   * half of what that cleanup starts is the app's: journalling every worker the restart lost (Job
+   * Continuity), restarting the validations and reviews it interrupted, and saying in the log what
+   * was written off. The app used to have those findings because it was the process that loaded. Now
+   * the Host loads, so they travel.
+   *
+   * **Once, and only to a caller that asked for them.** Two rules, and they cover the two ways this
+   * could go wrong. Only `boot: true` is answered with them, so the app's re-mirror after a reconnect
+   * cannot consume findings that belong to the next app start. And only the first such caller gets
+   * them, because an app restarting against a Host that has been up for hours would otherwise be
+   * handed a cleanup that happened long ago — re-journalling a diff spanning everything since, and
+   * restarting validations for Tasks that have moved on. `null` is the honest answer there: nothing
+   * was lost, because the Host never went away.
+   */
+  const stateGet = async (args: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
+    await ready()
+    const wantsBoot = args.boot === true && !bootHandedOut
+    if (wantsBoot) bootHandedOut = true
+    return { status: 200, body: { state: store.get(), boot: wantsBoot ? loadResult : null } }
   }
 
   return {
@@ -117,6 +171,9 @@ export function createHostOrch(a: {
       const refused = { app: false }
       try {
         if (cmd === 'state-put') return await statePut(args, from)
+        // Not restricted to the app: it is a read, and every CLI client can already read all of this
+        // through `jobs-list` and its neighbours. A refusal here would be a new one nobody needs.
+        if (cmd === 'state-get') return await stateGet(args)
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.
         await ready()
         const r = await handleCommand(depsFor(refused), { sessionId }, cmd, args)

@@ -1,0 +1,70 @@
+import { describe, it, expect, vi } from 'vitest'
+import { answerOrchAct, orchActionOf } from './answerAct'
+import type { OrchServerDeps } from '../../core/orchestration/command'
+
+const depsWith = (over: Record<string, unknown>): OrchServerDeps => over as unknown as OrchServerDeps
+
+describe('answerOrchAct', () => {
+  // **F21.** 인자는 언제나 도착한 배열 그대로 펼쳐진다 — 모양을 보고 고르지 않는다.
+  it('인수가 없는 호출은 인수 없이 부른다', async () => {
+    const backup = vi.fn().mockResolvedValue(undefined)
+    await answerOrchAct({ deps: depsWith({ backup }), act: 'backup', args: [] })
+    expect(backup).toHaveBeenCalledWith()
+  })
+
+  it('인수가 둘이면 둘로 부른다', async () => {
+    const mergeWorktrees = vi.fn().mockResolvedValue({ ok: true })
+    await answerOrchAct({ deps: depsWith({ mergeWorktrees }), act: 'mergeWorktrees', args: ['D:/p', ['a', 'b']] })
+    expect(mergeWorktrees).toHaveBeenCalledWith('D:/p', ['a', 'b'])
+  })
+
+  // 이 하나가 규칙을 정했다: 인수 하나가 그 자체로 배열이면, 인수 둘인 호출과 선 위에서 구별되지
+  // 않는다. 모양을 보는 순간 한쪽을 다른 쪽으로 부르게 된다.
+  it('배열 하나를 받는 호출을 두 인수로 풀지 않는다', async () => {
+    const removeWorktrees = vi.fn().mockResolvedValue({ failed: [] })
+    await answerOrchAct({ deps: depsWith({ removeWorktrees }), act: 'removeWorktrees', args: [['a', 'b']] })
+    expect(removeWorktrees).toHaveBeenCalledWith(['a', 'b'])
+  })
+
+  it('점이 있는 이름은 그 객체의 메서드를 부른다', async () => {
+    const save = vi.fn().mockResolvedValue({ ok: true, savedAt: 'now' })
+    const r = await answerOrchAct({ deps: depsWith({ handoffs: { save } }), act: 'handoffs.save', args: ['ses1', {}] })
+    expect(save).toHaveBeenCalledWith('ses1', {})
+    expect(r).toEqual({ ok: true, value: { ok: true, savedAt: 'now' } })
+  })
+
+  it('메서드는 제 객체에 묶여서 불린다', async () => {
+    const sessionTasks = {
+      mine: 'yes',
+      start(this: { mine: string }) {
+        return Promise.resolve(this.mine)
+      }
+    }
+    const r = await answerOrchAct({ deps: depsWith({ sessionTasks }), act: 'sessionTasks.start', args: [] })
+    expect(r).toEqual({ ok: true, value: 'yes' })
+  })
+
+  // 던지는 것은 Host 를 영영 기다리게 한다 — 실패는 값으로 답한다.
+  it('실패는 던지지 않고 ok:false 로 답한다', async () => {
+    const startWorker = vi.fn().mockRejectedValue(new Error('no account'))
+    const r = await answerOrchAct({ deps: depsWith({ startWorker }), act: 'startWorker', args: [{}] })
+    expect(r).toEqual({ ok: false, error: 'no account' })
+  })
+
+  it('이름이 없으면 그렇게 답한다', async () => {
+    const r = await answerOrchAct({ deps: depsWith({}), act: 'noSuchThing', args: [] })
+    expect(r.ok).toBe(false)
+    expect((r as { error: string }).error).toContain('noSuchThing')
+  })
+
+  // orchestration 이 안 돌고 있는 앱과, 그 이름을 모르는 앱은 사람이 읽을 때 다른 이야기다.
+  it('orchestration 이 없으면 그 이유를 말한다', async () => {
+    const r = await answerOrchAct({ deps: null, act: 'backup', args: [] })
+    expect((r as { error: string }).error).toContain('orchestration is not running')
+  })
+
+  it('함수가 아닌 속성은 행동이 아니다', () => {
+    expect(orchActionOf(depsWith({ handoffs: {} }), 'handoffs.save')).toBeNull()
+    expect(orchActionOf(depsWith({ lang: 'ko' }), 'lang')).toBeNull()
+  })
+})
