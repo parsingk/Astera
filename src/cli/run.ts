@@ -102,6 +102,19 @@ export function exitCodeForStatus(status: number): number {
  * 코드는 표에 이미 있는 것을 쓴다(설계 §8, 열 개뿐이다). 판이 갈린 것은 9 — `orch` 를 알리지 않는
  * Host 에 붙었을 때와 같은 자리이고, 거기도 파일을 읽지 않고 9 로 끝낸다. 답하지 않는 것은 7 이다.
  */
+/**
+ * 살아 있는데 답하지 않는 Host 가 받는 코드.
+ *
+ * **그런 침묵은 두 자리에서 난다** — 파이프는 열렸는데 `hello` 가 안 오는 것(바로 아래
+ * `connectFailureEnd`)과, 연결이 선 뒤에 답이 안 오는 것(`callHost` 의 `stuck`). 둘은 스크립트가
+ * 분기할 것이 같다 — 기다렸고, 안 왔고, Host 는 여전히 거기 있다. 값을 한 자리에 둔 것은
+ * 두 곳에 적으면 갈라지기 때문이고, 실제로 한쪽은 7 이고 다른 쪽은 1 로 갈라져 있었다.
+ *
+ * `wait` 이 서버쪽 마감을 넘겨 끝난 것도 같은 코드다(cliOutput 의 `waitEnd`) — 시한을
+ * 어느 쪽에서 재든 스크립트가 보는 것은 하나여야 한다. 무엇이었는지는 문구가 말한다.
+ */
+export const SILENT_HOST_CODE: CliErrorCode = 'TIMEOUT'
+
 export function connectFailureEnd(a: {
   error: ConnectFailure['error']
   address: string
@@ -115,7 +128,7 @@ export function connectFailureEnd(a: {
     }
   return {
     fallback: false,
-    code: 'TIMEOUT',
+    code: SILENT_HOST_CODE,
     message: `the Host at ${a.address} accepted the connection but did not say hello — it is running and not answering, so its state was not read from the file`
   }
 }
@@ -356,7 +369,7 @@ export async function main(): Promise<void> {
     process.exit(exitCodeFor('INVALID_ARGUMENTS'))
   }
 
-  // help has to work without a server connection — handle it before reading ASTERA_INFO.
+  // help has to work without a Host — handle it before working out which one to talk to.
   if (parsed.cmd === 'help') {
     const resolved = resolveGuidePath({ args: parsed.args, env: process.env })
     if (!resolved.ok) {
@@ -388,8 +401,10 @@ export async function main(): Promise<void> {
     process.exit(0)
   }
 
-  // **세션 밖에서도 Host 를 찾는다**(설계 §4). 세션 안이면 `ASTERA_HOST` 가 있고 그것이 언제나
-  // 이긴다 — 그 세션은 자기를 띄운 Host 와 말해야 한다. 없으면 프로필에서 계산한다.
+  // **세션 밖에서도 Host 를 찾는다**(설계 §4). 세션 안이면 앱이 자기 프로필 폴더를 실어 보내고
+  // (`ASTERA_PROFILE_DIR`), 주소도 보고 큐도 그 폴더에서 나온다. 주소 하나로는 못 한다 — 주소는 그
+  // Host 가 어느 프로필을 쓰는지 말해 주지 않고, 못 보낸 보고를 적을 곳이 거기서 나온다(F43).
+  // `ASTERA_HOST` 는 주소만 이긴다. 둘 다 없으면 플랫폼에서 계산한다 — `cliHostTarget` 이 그 순서를 쥐고 있다.
   const { address, profileDir } = cliHostTarget({
     platform: process.platform,
     env: process.env,
@@ -530,9 +545,11 @@ export async function main(): Promise<void> {
     conn.close()
     // **시한을 넘긴 것은 닿지 못한 것이 아니다.** 위의 시한은 분 단위이고, 그것을 넘겼다는 것은
     // 연결은 됐는데 저쪽이 멈췄다는 뜻이다 — 보고는 이미 적용됐을 수 있으므로 적어 두지 않는다.
+    // 연결이 선 뒤의 침묵도 hello 전의 침묵과 같은 코드로 끝난다(`SILENT_HOST_CODE`) —
+    // 예전에는 이쪽만 1 이었고, 그것은 스크립트에게 같은 일을 두 번 분기하라는 말이었다.
     if ('stuck' in r) {
-      out(errorOutput(r.stuck))
-      process.exit(1)
+      out(renderErr(r.stuck, SILENT_HOST_CODE, mode))
+      process.exit(exitCodeFor(SILENT_HOST_CODE))
     }
     if ('unreachable' in r) return withoutHost(r.unreachable)
     return r

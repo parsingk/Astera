@@ -12,6 +12,7 @@ import {
   argsForCall,
   callHost,
   connectFailureEnd,
+  SILENT_HOST_CODE,
   resolveGuidePath,
   readGuide,
   outputMode,
@@ -300,6 +301,15 @@ describe('connectFailureEnd — 접속 실패 셋을 가른다', () => {
     expect(end.fallback).toBe(false)
     expect((end as { code: string }).code).toBe('TIMEOUT')
     expect(exitCodeFor('TIMEOUT')).toBe(7)
+  })
+
+  // hello 전의 침묵과 답 전의 침묵은 같은 사실이다. `stuck` 은 1 로 끝나고 있었고,
+  // 그러면 스크립트가 "살아 있는데 답하지 않는 Host" 를 두 번 분기해야 한다.
+  it('두 침묵은 한 코드를 쓴다', () => {
+    expect((connectFailureEnd({ error: 'timeout', address: addr }) as { code: string }).code).toBe(
+      SILENT_HOST_CODE
+    )
+    expect(exitCodeFor(SILENT_HOST_CODE)).toBe(7)
   })
 })
 
