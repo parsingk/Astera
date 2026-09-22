@@ -402,6 +402,15 @@ export function createHostOrch(a: {
        *  forever. */
       let claimed: string | null = null
       try {
+        // **A key presented on these two is refused, not dropped.** They answer above the receipt
+        // line below, so a `request` sent with one would be accepted and silently ignored — which is
+        // precisely the fault §3 is built on: Orca's `check --peek` takes `--retry-request` and drops
+        // it, and "the caller's whole reason for passing the flag is a belief about what happens
+        // next". Unreachable today, because only the app sends these and it sends no key; written
+        // anyway, because the thing that makes it unreachable is a fact about today's clients and not
+        // a property of this code.
+        if ((cmd === 'state-put' || cmd === 'state-get') && request !== undefined)
+          return { status: 400, body: { error: `${cmd} does not take a request id` } }
         if (cmd === 'state-put') return await statePut(args, from)
         // Open to anyone: reading the state is something every CLI client can already do through
         // `jobs-list` and its neighbours, so a refusal here would be a new one nobody needs. The half

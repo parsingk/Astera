@@ -716,15 +716,19 @@ describe('요청 영수증', () => {
     expect((await savedState()).dispatches).toHaveLength(1)
   })
 
-  // id 를 만드는 명령(§3 의 첫 번째 갈래). 두 번 커밋되면 계획이 둘이고, 그것이 여기서 세는 효과다.
-  it('같은 요청 id 의 run-create 는 계획을 하나만 만든다', async () => {
+  // id 를 만드는 명령(§3 의 첫 번째 갈래). 두 번 커밋되면 계획도 회차도 둘이고, 그것이 여기서 세는
+  // 효과다 — 설계가 적은 문장이 "회차 하나, 두 번 다 같은 회차 id" 이므로 둘 다 센다.
+  it('같은 요청 id 의 run-create 는 계획과 회차를 하나씩만 만든다', async () => {
     const c = counting()
     const orch = orchOver({ act: c.act })
     const args = { objective: '무언가', cwd: 'D:/p' }
     const first = await orch.call({ cmd: 'run-create', args, sessionId: 'sesA', request: 'req-1' })
     const second = await orch.call({ cmd: 'run-create', args, sessionId: 'sesA', request: 'req-1' })
-    expect((await savedState()).jobs, '재시도가 계획을 하나 더 만들었다').toHaveLength(1)
+    const saved = await savedState()
+    expect(saved.jobs, '재시도가 계획을 하나 더 만들었다').toHaveLength(1)
+    expect(saved.runs, '재시도가 회차를 하나 더 만들었다').toHaveLength(1)
     expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+    expect((second.body as { id: string }).id).toBe((first.body as { id: string }).id)
   })
 
   // **우리 마음대로 합치지 않는다.** 두 호출이 한 요청이라는 말은 부르는 쪽만 할 수 있고, 그 말이
@@ -842,5 +846,61 @@ describe('요청 영수증', () => {
     }
     // 그리고 아무것도 커밋되지 않았다 — 거절은 명령에 닿기 전이다.
     expect((await orch.call({ cmd: 'jobs-list', args: {}, sessionId: '' })).body).toEqual([])
+  })
+
+  /**
+   * **받아 놓고 조용히 버리지 않는다.** 이 둘은 영수증 선 **위에서** 답하므로, 실린 요청 id 는
+   * 아무 일도 하지 못한다. 그것을 잠자코 두면 Orca 의 `check --peek` 이 `--retry-request` 를 받고
+   * 버리는 그 모양이 되고, §3 의 논거 전체가 그 위에 지어져 있다("플래그를 넘기는 이유는 다음에
+   * 무슨 일이 일어날지에 대한 믿음이다").
+   *
+   * 오늘 닿을 수 있는 클라이언트는 없다 — 이 둘을 보내는 것은 앱뿐이고 앱은 id 를 싣지 않는다.
+   * 그래도 적는다: 닿지 못하는 이유가 오늘의 클라이언트에 대한 사실이지 이 코드의 성질이 아니다.
+   */
+  it('state-put·state-get 에 실린 요청 id 는 버려지지 않고 400 이다', async () => {
+    await seed()
+    const orch = orchOver()
+    const app: OrchCaller = { role: 'app', toOthers: () => {} }
+    const put = await orch.call({
+      cmd: 'state-put',
+      args: { state: emptyState() },
+      sessionId: '',
+      from: app,
+      request: 'req-1'
+    })
+    expect(put.status).toBe(400)
+    const got = await orch.call({ cmd: 'state-get', args: {}, sessionId: '', from: app, request: 'req-1' })
+    expect(got.status).toBe(400)
+    // 거절이지 절반의 실행이 아니다 — 빈 상태가 앉았다면 계획이 사라졌을 것이다.
+    expect((await orch.call({ cmd: 'jobs-list', args: {}, sessionId: '' })).body).toHaveLength(1)
+  })
+
+  /**
+   * **앱이 없어 거절된 worker-start 는 영수증을 남긴다 — 받아들인 동작이고, 못을 박아 둔다.**
+   *
+   * 그 명령은 Dispatch 를 열고 시작에 실패하면 되돌리므로 두 번 커밋한다. 그래서 "커밋했으면
+   * 남긴다" 규칙에 걸리고, 남긴 것이 없는 호출인데 영수증이 생긴다. 앱이 돌아온 뒤에 같은 id 로
+   * 재시도해도 그 409 를 되받는다.
+   *
+   * **계약대로는 옳다.** 영수증은 "이 요청은 이렇게 답했다" 이고 실패 봉투도 그대로 기록한다(§8).
+   * 그리고 8단계가 재시도 명령을 실어 주는 것은 답이 **아예 없었던** 끝(`unreachable`·`stuck`)
+   * 뿐이므로, 409 를 받은 호출자는 답을 받은 것이고 그 id 를 다시 내밀 이유가 없다. 이 시험이
+   * 지키는 것은 그 판단이 나중에 조용히 뒤집히지 않는 것이다.
+   */
+  it('앱이 없어 거절된 worker-start 는 영수증을 남긴다 — 앱이 돌아와도 재생이다', async () => {
+    const { taskId } = await seed()
+    let appIsUp = false
+    const c = counting()
+    const orch = orchOver({ hasApp: () => appIsUp, act: c.act })
+    const args = workerArgs(taskId)
+    const first = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
+    expect(first.status).toBe(409)
+    // 앱이 돌아왔다. 요청 id 를 안 실었다면 이 재시도는 워커를 띄웠을 것이다.
+    appIsUp = true
+    const second = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+    expect(countOf(c.calls, 'startWorker'), '재생이 아니라 두 번째 실행이었다').toBe(0)
+    // 첫 호출이 되돌렸으므로 Dispatch 는 없다 — 영수증은 남았지만 상태에는 아무것도 남지 않았다.
+    expect((await savedState()).dispatches).toEqual([])
   })
 })

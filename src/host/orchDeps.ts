@@ -196,8 +196,13 @@ const EFFECTFUL: Record<Classified, boolean> = {
   startReview: true,
   startRepair: true,
   onDispatchLost: true,
-  // NESTED, by group: `handoffs.save` writes the memo, and the three `sessionTasks.*` each record a
-  // work unit.
+  // NESTED, **by group and not by method**: `handoffs.save` writes the memo, and the three
+  // `sessionTasks.*` each record a work unit. A method added to either object inherits its group's
+  // flag with no compiler stop — the check below is over `OrchServerDeps`'s own keys, and these two
+  // are objects. That is the safe direction of the two, because both groups are `true`: a new method
+  // is over-marked, so a command that did nothing may leave a receipt, where the opposite would let a
+  // command that acted leave none. Splitting the record per dotted method would buy the stop back and
+  // is worth doing the day one of these groups gains a member that reads rather than writes.
   handoffs: true,
   sessionTasks: true,
   // DEGRADES.
