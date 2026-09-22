@@ -6999,20 +6999,22 @@ export function registerIpc(
     hostWiring?.log(`the Host wiring failed to start: ${String(err)} — the app runs without a Host`)
   })
 
-  ipcMain.handle(
-    'host.status',
-    () =>
-      hostClient?.status() ?? {
-        connected: false,
-        protocol: null,
-        hostVersion: null,
-        startedAt: null,
-        pid: null,
-        problem: 'out/main/host.js was not found',
-        outdated: false,
-        features: []
-      }
-  )
+  /** What the two handlers below answer when the Host wiring never ran at all — a partial build, or a
+   *  packaging mistake. One object rather than two copies, because every field added to HostStatus has
+   *  to reach both of them and a missed copy is a status that lies about itself. */
+  const noHostStatus: HostStatus = {
+    connected: false,
+    protocol: null,
+    hostVersion: null,
+    startedAt: null,
+    pid: null,
+    problem: 'out/main/host.js was not found',
+    outdated: false,
+    unresponsive: false,
+    runtimeIncomplete: false,
+    features: []
+  }
+  ipcMain.handle('host.status', () => hostClient?.status() ?? noHostStatus)
   // How many of the running sessions would still be running after this app quits — the window-close
   // confirmation's question (App.tsx's closeWindow, then `quitConfirmBody`).
   //
@@ -7055,18 +7057,7 @@ export function registerIpc(
   // Host wiring never ran.
   ipcMain.handle('host.replace', async (): Promise<HostStatus> => {
     if (hostReplace) return hostReplace()
-    return (
-      hostClient?.status() ?? {
-        connected: false,
-        protocol: null,
-        hostVersion: null,
-        startedAt: null,
-        pid: null,
-        problem: 'out/main/host.js was not found',
-        outdated: false,
-        features: []
-      }
-    )
+    return hostClient?.status() ?? noHostStatus
   })
 
   // The conversation view (main/conversation.ts). open/more answer null rather than reject on a

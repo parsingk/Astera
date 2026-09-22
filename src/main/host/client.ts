@@ -3,7 +3,7 @@
 // as a sentence somebody can read, rather than reaching a caller.
 import net from 'node:net'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage } from '../../core/host/protocol'
-import { hostIsOutdated } from './outdated'
+import { hostIsOutdated, hostSpeaksPing } from './outdated'
 import { encodeLine, createLineReader } from '../../host/framing'
 // HostStatus is declared in core/types.ts, not here, so the renderer can name it without importing
 // from src/main.
@@ -24,6 +24,14 @@ export interface HostClientDeps {
   retryMs?: number
   /** How long to wait for the Host's `hello` after the socket connects. Defaults to HANDSHAKE_MS. */
   helloMs?: number
+  /** The heartbeat's interval, and how many of its pings may be in flight unanswered before the Host
+   *  is called unresponsive. Injected only so a test does not have to wait out the real ones. */
+  pingMs?: number
+  pingMisses?: number
+  /** Whether the runtime the Host was started from is missing files (design F6). Read at every hello,
+   *  not once: the answer belongs to the Host that just answered, and the next one may be started
+   *  from a runtime this app has since repaired. */
+  runtimeIncomplete?: () => boolean
 }
 
 const DEFAULT_ATTEMPTS = 25
@@ -51,6 +59,14 @@ export const HANDSHAKE_MS = 10_000
 export const READY_TIMEOUT_MS = CONNECT_PHASE_MS + HANDSHAKE_MS
 /** After a connection that worked drops, wait before trying again: 1s, 2s, 4s, capped at 30s. */
 const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
+
+/** How often the heartbeat asks a Host that answers pings whether its event loop is still turning. */
+export const PING_MS = 5_000
+/** How many pings may be in flight unanswered before that Host is called unresponsive. Fifteen
+ *  seconds with PING_MS above. An initial value rather than a measured one: if a slow first spawn or a
+ *  wake from sleep ever produces a false verdict, this is what moves
+ *  (docs/2026-09-22-host-unresponsive-recovery-design.md §9). */
+export const PING_MISSES = 3
 
 /** How long `retire()` waits for the Host to be gone. Covers the Host's own EXIT_HAMMER_MS
  *  (host/index.ts), which is the point by which it has stopped being polite about leaving. */
@@ -95,8 +111,16 @@ export class HostClient {
   private readonly connectSubscribers = new Set<(h: HostIdentity) => void>()
   /** Callers waiting on `ready()` for the current connection attempt to have an outcome. */
   private readonly readyWaiters = new Set<() => void>()
+  /** Every change of `status()`. What decides where a new pty goes — the Host or the app's own
+   *  node-pty — listens here, because that decision has to follow the Host becoming unresponsive and
+   *  not only it connecting (design F1). */
+  private readonly statusSubscribers = new Set<(s: HostStatus) => void>()
   /** Runs from `attach` until the Host answers. See where it is armed for what it is for. */
   private handshake: ReturnType<typeof setTimeout> | null = null
+  /** The heartbeat, and how many of its pings are in flight with no answer (design F2). */
+  private heartbeat: ReturnType<typeof setInterval> | null = null
+  private pingSeq = 0
+  private pingsOutstanding = 0
   /** Whether anything ever accepted a connection at the address. Set once, in `attach`, and never
    *  cleared: see `sawPeer`. */
   private peerSeen = false
@@ -108,6 +132,8 @@ export class HostClient {
     pid: null,
     problem: null,
     outdated: false,
+    unresponsive: false,
+    runtimeIncomplete: false,
     features: []
   }
 
@@ -115,6 +141,84 @@ export class HostClient {
 
   status(): HostStatus {
     return { ...this.state }
+  }
+
+  /** Notified after every change of `status()`, with the new value. Returns an unsubscribe. */
+  onStatusChange(cb: (s: HostStatus) => void): () => void {
+    this.statusSubscribers.add(cb)
+    return () => this.statusSubscribers.delete(cb)
+  }
+
+  /** The one place `state` is written after construction, so no transition can reach the outside
+   *  world without its subscribers hearing about it. */
+  private setState(next: HostStatus): void {
+    this.state = next
+    for (const cb of [...this.statusSubscribers]) {
+      try {
+        cb({ ...next })
+      } catch (err) {
+        // Same rule as every other fan-out here: one subscriber's failure is its own.
+        this.deps.log(`a status subscriber threw: ${String(err)}`)
+      }
+    }
+  }
+
+  /**
+   * The Host is there and is not answering.
+   *
+   * Called from the heartbeat, from the handshake deadline, and by the wiring for a Host too old for
+   * the heartbeat whose request ran its deadline out (design F1, F4). Idempotent, because all three
+   * can fire about the same silence.
+   *
+   * **The socket is left alone** when there is one. Nothing about it is broken — the Host simply is
+   * not reading it — and a late answer arriving on it is the one thing that takes this state back
+   * without ending anybody's sessions.
+   */
+  markUnresponsive(problem: string): void {
+    if (this.state.unresponsive) return
+    this.deps.log(problem)
+    this.setState({ ...this.state, connected: false, unresponsive: true, problem })
+    // A `ready()` caller waiting on this connection has its answer: there is a Host, and it is not
+    // going to talk to us.
+    this.settleReady()
+  }
+
+  /** Every message from the Host lands here first. Whatever it says, it proves the event loop on the
+   *  other side is turning, which is the only question `unresponsive` asks. */
+  private alive(): void {
+    this.pingsOutstanding = 0
+    if (!this.state.unresponsive) return
+    this.deps.log('the Host is answering again')
+    this.setState({ ...this.state, connected: true, unresponsive: false, problem: null })
+  }
+
+  /** Arms the heartbeat against a Host that announced it answers pings. A Host that did not is judged
+   *  by the deadline on a request instead — see `hostSpeaksPing`. */
+  private startHeartbeat(): void {
+    this.stopHeartbeat()
+    if (!hostSpeaksPing(this.state)) return
+    const misses = this.deps.pingMisses ?? PING_MISSES
+    this.heartbeat = setInterval(() => {
+      this.pingSeq += 1
+      this.pingsOutstanding += 1
+      this.send({ t: 'ping', seq: this.pingSeq })
+      // Judged after sending, so the count is pings in flight: with the defaults this fires fifteen
+      // seconds after the first one went unanswered. **Pinging continues past it on purpose** — a late
+      // pong reaching `alive()` is what takes the state back, and a heartbeat that stopped at the
+      // verdict would make that recovery impossible.
+      if (this.pingsOutstanding >= misses) {
+        this.markUnresponsive(`the Host stopped answering (${this.pingsOutstanding} pings unanswered)`)
+      }
+    }, this.deps.pingMs ?? PING_MS)
+    // Nothing here should keep the app alive, the same reason the retry sleep and the handshake
+    // deadline unref themselves.
+    this.heartbeat.unref?.()
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat) clearInterval(this.heartbeat)
+    this.heartbeat = null
+    this.pingsOutstanding = 0
   }
 
   /** Whether a Host was ever there — did anything accept a connection at the address, at any point in
@@ -138,6 +242,7 @@ export class HostClient {
   async stop(): Promise<void> {
     this.stopped = true
     this.clearHandshake()
+    this.stopHeartbeat()
     this.socket?.destroy()
     this.socket = null
   }
@@ -273,8 +378,10 @@ export class HostClient {
     if (!this.stopped) return
     this.stopped = false
     this.drops = 0
-    // What is known about the *previous* Host is not a description of the one being started.
-    this.state = { ...this.state, connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem: null, outdated: false, features: [] }
+    // What is known about the *previous* Host is not a description of the one being started — and
+    // that includes it having stopped answering, which is the reason a replacement is usually being
+    // started at all (design F5).
+    this.setState({ ...this.state, connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem: null, outdated: false, unresponsive: false, runtimeIncomplete: false, features: [] })
     void this.cycle()
   }
 
@@ -329,14 +436,24 @@ export class HostClient {
     socket.on('data', read)
     // A peer that accepts the connection and then says nothing is not a dropped connection: nothing
     // closes, so the 'close' handler below never runs and the status would sit at "not connected, no
-    // reason" for the app's whole life, with no retry. Ending the socket ourselves puts that case
-    // back on the path that already handles a connection going away.
+    // reason" for the app's whole life, with no retry.
+    //
+    // **And it is not a peer to reconnect to, either.** This used to `end()` the socket to put the
+    // case back on the reconnect path, which assumed the other side would close in return. A Host
+    // whose event loop is stuck does not: measured 2026-09-22, the close never came, nothing retried,
+    // and the status sat unchanged for the rest of the app's life — with a Host holding a person's
+    // sessions the whole time. Reconnecting would not have helped either, because the next connect
+    // gets accepted and ignored exactly like this one. So: destroy the socket, and say what is true.
+    // `unresponsive` is a state the app acts on (design F1, F3), not a sentence nobody reads.
     this.handshake = setTimeout(() => {
       this.handshake = null
       // Only a socket that never answered can reach here: the hello and the mismatch both clear this.
       if (this.socket !== socket) return
-      this.fail('the Host accepted the connection but did not answer')
-      socket.end()
+      // Cleared before destroying, so the 'close' handler below returns early rather than scheduling a
+      // reconnect to a peer this has just given up on.
+      this.socket = null
+      socket.destroy()
+      this.markUnresponsive('the Host accepted the connection but did not answer')
     }, this.deps.helloMs ?? HANDSHAKE_MS)
     // Same reason as `sleep`'s timer: a client waiting on a handshake is not work the app has to
     // finish before quitting.
@@ -344,15 +461,19 @@ export class HostClient {
     socket.on('close', () => {
       if (this.socket !== socket) return
       this.clearHandshake()
+      this.stopHeartbeat()
       this.socket = null
       if (this.stopped) return
-      this.state = {
+      this.setState({
         ...this.state,
         connected: false,
+        // A dropped connection is not an unresponsive Host: this one has a way forward of its own, the
+        // backoff below, and the Host on the other side may be perfectly well.
+        unresponsive: false,
         // A reason already set (a protocol mismatch, say) is more use than this one, and the next
         // successful handshake clears it either way.
         problem: this.state.problem ?? 'the connection to the Host dropped'
-      }
+      })
       const wait = BACKOFF_MS[Math.min(this.drops, BACKOFF_MS.length - 1)]
       this.drops += 1
       this.deps.log(`connection to the Host dropped — retrying in ${wait}ms`)
@@ -372,13 +493,18 @@ export class HostClient {
   }
 
   private handleHostMessage(m: HostMessage): void {
+    // Before anything is read off it: whatever this message says, it says the Host's event loop is
+    // turning. That is the only question `unresponsive` asks, so a Host written off a moment ago
+    // takes itself back here rather than waiting for somebody to notice (design F1).
+    this.alive()
     if (m?.t === 'hello') {
       this.clearHandshake()
       this.drops = 0
       // Judged here, from the two versions this handshake already carries, so the status the Info tab
       // reads and the replacement rule in ipc.ts act on cannot disagree about it.
       const outdated = hostIsOutdated(m.host, this.deps.appVersion)
-      this.state = {
+      const runtimeIncomplete = this.deps.runtimeIncomplete?.() ?? false
+      this.setState({
         connected: true,
         protocol: m.protocol,
         hostVersion: m.host,
@@ -386,11 +512,15 @@ export class HostClient {
         pid: m.pid,
         problem: null,
         outdated,
+        unresponsive: false,
+        runtimeIncomplete,
         features: Array.isArray(m.features) ? m.features.filter((f): f is string => typeof f === 'string') : []
-      }
+      })
       this.deps.log(
-        `connected to Host ${m.host} (pid ${m.pid}, protocol ${m.protocol})${outdated ? ` — older than this app (${this.deps.appVersion}); replaced once it holds nothing` : ''}`
+        `connected to Host ${m.host} (pid ${m.pid}, protocol ${m.protocol})${outdated ? ` — older than this app (${this.deps.appVersion}); replaced once it holds nothing` : ''}${runtimeIncomplete ? ' — its runtime is missing files; replaced once it holds nothing' : ''}`
       )
+      // Armed from the status this hello just set, which is what `hostSpeaksPing` reads.
+      this.startHeartbeat()
       this.settleReady()
       // After settleReady, so a first-connection subscriber and a `ready()` caller see the same
       // already-connected status rather than racing over it.
@@ -415,11 +545,15 @@ export class HostClient {
       // other than ours is turned away, whatever it actually is.
       this.deps.log(`the Host speaks protocol ${m.protocol} — retiring it and starting one we can talk to`)
       this.send({ t: 'retire' })
-      this.state = { ...this.state, connected: false, problem: `the Host speaks protocol ${m.protocol}` }
+      this.setState({ ...this.state, connected: false, problem: `the Host speaks protocol ${m.protocol}` })
       this.socket?.end()
       this.settleReady()
       return
     }
+    // The heartbeat's answer carries nothing but the fact that it arrived, and `alive()` above has
+    // already taken that. Returning here keeps it out of the subscribers, who would have to know to
+    // ignore it.
+    if (m?.t === 'pong') return
     for (const cb of [...this.subscribers]) {
       try {
         cb(m)
@@ -432,7 +566,7 @@ export class HostClient {
   }
 
   private fail(problem: string): void {
-    this.state = { connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem, outdated: false, features: [] }
+    this.setState({ connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem, outdated: false, unresponsive: false, runtimeIncomplete: false, features: [] })
     this.deps.log(problem)
     this.settleReady()
   }

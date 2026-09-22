@@ -777,9 +777,26 @@ export interface HostStatus {
   problem: string | null
   /** The Host is running an older build than this app — it outlived an update and still runs the
    *  previous host.js. The app replaces it on its own the first moment it holds nothing, and the Info
-   *  tab offers to do it now (docs/superpowers/specs/2026-09-14-host-replacement-design.md). False
-   *  whenever the version cannot be compared, and false for a Host *newer* than the app. */
+   *  tab offers to do it now (docs/2026-09-22-host-unresponsive-recovery-design.md F5 — the original
+   *  host-replacement design is not in this repository). False whenever the version cannot be
+   *  compared, and false for a Host *newer* than the app. */
   outdated: boolean
+  /** **A Host is there and it is not answering.** Not the same as `connected: false`, which also
+   *  covers "there is no Host" and "the connection dropped" — both of which have a way forward on
+   *  their own, and this one does not: nothing closes, so nothing retries, and the Host holds a
+   *  person's sessions while answering none of them (measured 2026-09-22, when a pty spawn stuck
+   *  inside node-pty took the Host's whole event loop with it).
+   *
+   *  Set when the heartbeat goes unanswered, when a peer accepts the connection and never says hello,
+   *  or when a Host too old for the heartbeat runs a request's deadline out. Cleared by any message
+   *  from the Host at all. While it is true new ptys go to the app's own factory so work can continue,
+   *  and the Info tab offers to end that Host and start another
+   *  (docs/2026-09-22-host-unresponsive-recovery-design.md F1). */
+  unresponsive: boolean
+  /** The runtime directory this Host was started from is missing files. It runs on what it already
+   *  loaded and will stall at its next spawn, so it is replaced the first moment it holds nothing —
+   *  the same rule `outdated` gets, for a different reason (design F6). */
+  runtimeIncomplete: boolean
   /** What the Host announced it can do (protocol.ts HOST_FEATURE_*); empty until a hello, and for a
    *  Host that predates the field. */
   features: string[]

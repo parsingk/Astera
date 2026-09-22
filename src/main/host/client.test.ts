@@ -73,6 +73,55 @@ const waitFor = async (want: () => boolean): Promise<void> => {
   throw new Error('condition never became true')
 }
 
+/** A peer that speaks the handshake itself, so a test decides what happens after it: which features
+ *  the hello names, and whether anything ever answers a ping. `startHostServer` cannot be made to
+ *  ignore a ping — it answers one — and ignoring it is the whole case under test here. */
+const rawHost = async (
+  addr: ReturnType<typeof hostAddress>,
+  features: string[]
+): Promise<{ sockets: net.Socket[]; got: Array<{ t: string }>; close(): Promise<void> }> => {
+  if (addr.dirToPrepare) await fs.mkdir(addr.dirToPrepare, { recursive: true, mode: 0o700 })
+  const sockets: net.Socket[] = []
+  const got: Array<{ t: string }> = []
+  const server = net.createServer((sock) => {
+    sockets.push(sock)
+    sock.setEncoding('utf8')
+    sock.on(
+      'data',
+      createLineReader({
+        onMessage: (v) => {
+          const m = v as { t: string }
+          got.push(m)
+          if (m.t === 'hello') {
+            sock.write(
+              encodeLine({
+                t: 'hello',
+                protocol: HOST_PROTOCOL,
+                host: '9.9.9',
+                pid: 4242,
+                startedAt: '2026-09-22T00:00:00.000Z',
+                features
+              })
+            )
+          }
+        },
+        onBadLine: () => {},
+        onHandlerError: () => {}
+      })
+    )
+  })
+  await new Promise<void>((r) => server.listen(addr.address, r))
+  return {
+    sockets,
+    got,
+    close: () =>
+      new Promise<void>((r) => {
+        for (const s of sockets) s.destroy()
+        server.close(() => r())
+      })
+  }
+}
+
 describe('HostClient', () => {
   it('connects to a Host that is already there and reports what it found', async () => {
     const addr = addressFor('already')
@@ -175,11 +224,20 @@ describe('HostClient', () => {
   // A peer that accepts and then says nothing is not a dropped connection: nothing closes, so the
   // close-and-backoff path never runs. Without a deadline of its own the status would sit at
   // "not connected, no reason" for the app's whole life, with no retry.
-  it('gives up on a peer that accepts and never says hello', async () => {
+  //
+  // **And it is not a peer to try again, either.** A Host whose event loop is stuck answers the next
+  // connect exactly as it answered this one — measured 2026-09-22, where `end()` never brought a
+  // 'close' back from one and the client therefore never retried and never updated its status. So the
+  // socket is destroyed, the state says `unresponsive`, and the way on is the Info tab's button.
+  it('marks a peer that accepts and never says hello as unresponsive, and does not try again', async () => {
     const addr = addressFor('silent')
     if (addr.dirToPrepare) await fs.mkdir(addr.dirToPrepare, { recursive: true, mode: 0o700 })
     const held: net.Socket[] = []
-    const silent = net.createServer((sock) => held.push(sock))
+    let connections = 0
+    const silent = net.createServer((sock) => {
+      connections += 1
+      held.push(sock)
+    })
     await new Promise<void>((r) => silent.listen(addr.address, r))
     try {
       const c = new HostClient({
@@ -190,14 +248,115 @@ describe('HostClient', () => {
         helloMs: 60
       })
       c.start()
-      await settled(c, (s) => s.problem !== null)
+      await settled(c, (s) => s.unresponsive)
       expect(c.status().connected).toBe(false)
       expect(c.status().problem).toContain('did not answer')
+      expect(c.sawPeer()).toBe(true)
+      await new Promise((r) => setTimeout(r, 200))
+      expect(connections).toBe(1)
       await c.stop()
     } finally {
       for (const sock of held) sock.destroy()
       await new Promise<void>((r) => silent.close(() => r()))
     }
+  })
+
+  // The 2026-09-22 failure, in the case the app was already connected for: the Host had answered
+  // every message for a day, then stopped answering anything at all mid-spawn. Nothing closed, so
+  // nothing in the client noticed.
+  it('marks a Host that stops answering pings as unresponsive, and takes it back when one arrives', async () => {
+    const addr = addressFor('heartbeat')
+    const h = await rawHost(addr, ['proc', 'ping'])
+    try {
+      const c = new HostClient({
+        address: addr.address,
+        appVersion: '9.0.0',
+        spawnHost: () => {},
+        log: () => {},
+        pingMs: 20,
+        pingMisses: 3
+      })
+      const seen: boolean[] = []
+      c.onStatusChange((s) => seen.push(s.unresponsive))
+      c.start()
+      await settled(c, (s) => s.connected)
+      await settled(c, (s) => s.unresponsive)
+      expect(c.status()).toMatchObject({ connected: false, unresponsive: true, pid: 4242 })
+      expect(c.status().problem).toContain('stopped answering')
+      expect(h.got.filter((m) => m.t === 'ping').length).toBeGreaterThanOrEqual(3)
+      // A late answer is the one thing that takes the state back — which is why the pings do not stop.
+      h.sockets[0].write(encodeLine({ t: 'pong', seq: 1 }))
+      await settled(c, (s) => s.connected)
+      expect(c.status()).toMatchObject({ connected: true, unresponsive: false, problem: null })
+      expect(seen).toContain(true)
+      expect(seen).toContain(false)
+      await c.stop()
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('never pings a Host that did not announce the feature, and never calls it unresponsive for that', async () => {
+    const addr = addressFor('no-ping')
+    const h = await rawHost(addr, ['proc'])
+    try {
+      const c = new HostClient({
+        address: addr.address,
+        appVersion: '9.0.0',
+        spawnHost: () => {},
+        log: () => {},
+        pingMs: 20,
+        pingMisses: 3
+      })
+      c.start()
+      await settled(c, (s) => s.connected)
+      await new Promise((r) => setTimeout(r, 200))
+      expect(h.got.some((m) => m.t === 'ping')).toBe(false)
+      expect(c.status()).toMatchObject({ connected: true, unresponsive: false })
+      await c.stop()
+    } finally {
+      await h.close()
+    }
+  })
+
+  // The judge for a Host too old for the heartbeat: ipc.ts calls this when a request that does have an
+  // answer runs its deadline out. Any message from the Host afterwards proves the loop alive again.
+  it('can be told the Host is unresponsive, and recovers on the next message from it', async () => {
+    const addr = addressFor('told')
+    const s = await serveAt(addr)
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    c.start()
+    await settled(c, (st) => st.connected)
+    c.markUnresponsive('the Host did not answer a pty-list within 5s')
+    expect(c.status()).toMatchObject({
+      connected: false,
+      unresponsive: true,
+      problem: 'the Host did not answer a pty-list within 5s'
+    })
+    s.broadcast({ t: 'pty-data', id: 'x', data: 'hello' })
+    await settled(c, (st) => st.connected)
+    expect(c.status()).toMatchObject({ unresponsive: false, problem: null })
+    await c.stop()
+  })
+
+  // Read at every hello rather than once: the answer belongs to the Host that just answered, and the
+  // next one may be started from a runtime that has since been repaired.
+  it('reports whether the runtime this Host runs from is incomplete', async () => {
+    const addr = addressFor('incomplete')
+    await serveAt(addr)
+    let incomplete = true
+    const c = new HostClient({
+      address: addr.address,
+      appVersion: '9.0.0',
+      spawnHost: () => {},
+      log: () => {},
+      runtimeIncomplete: () => incomplete
+    })
+    c.start()
+    await settled(c, (s) => s.connected)
+    expect(c.status().runtimeIncomplete).toBe(true)
+    incomplete = false
+    await c.stop()
   })
 
   // "we could not reach a Host" and "the Host we reached told us nothing" are different answers, and
