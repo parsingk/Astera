@@ -138,8 +138,8 @@ export function hostOrchDeps(a: {
   log(message: string): void
   /** Called when a **PROPAGATES** action could not be put to the app — none attached, or the one that
    *  was did not answer. `orch.ts` answers that call CONFLICT on the strength of this, rather than by
-   *  matching text in the reply. Never called for the other two groups: their refusal does not decide
-   *  what the command answers. */
+   *  matching text in the reply. Never called for the other three groups — SWALLOWED, FIRE_AND_FORGET
+   *  and DEGRADES: their refusal does not decide what the command answers. */
   onAppRequired(name: string, why: string): void
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
