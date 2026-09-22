@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { promises as fs, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createHostOrch } from './orch'
+import { fileURLToPath } from 'node:url'
+import { createHostOrch, OBSERVED } from './orch'
 import {
   applyWorkerDone,
   createJob,
@@ -1046,5 +1047,175 @@ describe('요청 영수증', () => {
         (await orch.call({ cmd: 'requests-show', args: { id: wrong }, sessionId: 'sesA' })).status,
         JSON.stringify(wrong)
       ).toBe(400)
+  })
+
+  // === 6단계 — 관찰해서 되돌려 주는 재생 ===
+  //
+  // **규칙**(설계 §7): 영수증은 그대로 재생된다. **커밋하고 나서 기다린 명령**만이 예외이고, 그때의
+  // 재생은 *관찰*이다 — 지금 참인 것을 답하지, 앞선 호출이 기다리기를 그만둔 순간에 참이던 것을
+  // 답하지 않는다. 기록된 `timedOut: true` 는 세상에 대한 사실이 아니라 한 호출이 얼마나 기다렸는지에
+  // 대한 사실이고, **더 기다리고 싶어서** 재시도하는 호출자에게 그것을 돌려주면 끝날 수 없는 고리에
+  // 가둔다 — 회복하려던 그 실패보다 나쁘다.
+
+  const appCallerFrom: OrchCaller = { role: 'app', toOthers: () => {} }
+  /** 워커 세션 `ses1` 이 물을 수 있는 자리까지 세운 상태 — 계획·회차·Task·Dispatch. */
+  const workerFixture = async (): Promise<{ taskId: string; dispatchId: string }> => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const dsp = openDispatch(
+      task.state,
+      { taskId: task.value.id, provider: 'codex', accountId: 'accA', sessionId: 'ses1', cwd: 'D:/p', specPath: 'D:/p/s.md' },
+      NOW
+    )
+    if (!dsp.ok) throw new Error(dsp.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(dsp.state), 'utf8')
+    return { taskId: task.value.id, dispatchId: dsp.value.id }
+  }
+  const askArgs = (f: { taskId: string; dispatchId: string }): Record<string, unknown> => ({
+    taskId: f.taskId,
+    dispatchId: f.dispatchId,
+    question: '이대로 갈까요?',
+    timeoutMs: 1
+  })
+
+  /**
+   * **`ask` — 다시 돌리면 질문이 둘이 되므로, 영수증이 가리키는 질문을 다시 읽는다.** 재생이 기록된
+   * `timedOut: true` 를 돌려주면 워커는 답이 이미 와 있는데도 영영 기다린다.
+   */
+  it('시간이 다 된 ask 의 재생은 그때의 timedOut 이 아니라 그 사이 온 답을 준다', async () => {
+    const f = await workerFixture()
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses1']) })
+    const first = await orch.call({ cmd: 'ask', args: askArgs(f), sessionId: 'ses1', request: 'req-1' })
+    expect(first.body).toMatchObject({ answered: false, timedOut: true })
+    const questionId = (first.body as { questionId: string }).questionId
+    // 사람이 답했다.
+    const answered = await orch.call({ cmd: 'reply', args: { id: questionId, body: '그렇게 가요' }, sessionId: '' })
+    expect(answered.status).toBe(200)
+    const again = await orch.call({ cmd: 'ask', args: askArgs(f), sessionId: 'ses1', request: 'req-1' })
+    expect(again.body, '멈춘 시계를 그대로 돌려줬다').toEqual({ answered: true, answer: '그렇게 가요', questionId })
+    expect(
+      (await savedState()).messages.filter((m) => m.type === 'question'),
+      '관찰한다면서 질문을 하나 더 만들었다'
+    ).toHaveLength(1)
+  })
+
+  /**
+   * **관찰을 부르는 것은 명령의 이름이 아니라 멈춘 시계다.** 답을 받고 끝난 `ask` 의 영수증은 세상에
+   * 대한 사실이므로 그대로 돌려준다. 이름으로 갈랐다면 여기서도 질문을 다시 읽었을 것이고, 그 질문이
+   * 사라진 뒤에는 기록된 답 대신 404 를 답했을 것이다.
+   *
+   * **그래서 관찰한 답이 영수증을 대신한다.** 멈춘 시계를 그대로 두면 그 뒤의 재시도가 계속 관찰하고,
+   * 세상은 그 사이에 움직인다 — Dispatch 가 닫히거나 `reset` 이 돌면 질문은 사라지고, 답을 잃은
+   * 호출자는 자기 답 대신 `unknown question` 을 받는다. 그 갱신이 빠지면 이 시험이 바로 그 404 로
+   * 깨진다.
+   */
+  it('멈춘 시계가 아닌 ask 의 영수증은 그대로 재생한다', async () => {
+    const f = await workerFixture()
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses1']) })
+    const first = await orch.call({ cmd: 'ask', args: askArgs(f), sessionId: 'ses1', request: 'req-1' })
+    const questionId = (first.body as { questionId: string }).questionId
+    await orch.call({ cmd: 'reply', args: { id: questionId, body: '그렇게 가요' }, sessionId: '' })
+    const observed = await orch.call({ cmd: 'ask', args: askArgs(f), sessionId: 'ses1', request: 'req-1' })
+    expect((observed.body as { answered: boolean }).answered).toBe(true)
+    // 질문을 상태에서 지운다 — 다시 읽는다면 여기서 404 다.
+    const now = await savedState()
+    await orch.call({
+      cmd: 'state-put',
+      args: { state: { ...now, messages: [] } },
+      sessionId: '',
+      from: appCallerFrom
+    })
+    const third = await orch.call({ cmd: 'ask', args: askArgs(f), sessionId: 'ses1', request: 'req-1' })
+    expect(JSON.stringify(third), '기록된 답 대신 질문을 다시 읽었다').toBe(JSON.stringify(observed))
+  })
+
+  /**
+   * **`check --ack <id> --wait` — 둘 중 나쁜 쪽이다.** ack 은 폴링 **앞에서** 커밋되므로, 마감에 닿은
+   * 호출은 `{count: 0, messages: [], timedOut: true}` 를 영수증에 남긴다. 가이드는 `check --wait` 의
+   * 시간 초과를 체크포인트로 삼아 다시 부르라고 이미 말하고 있으니, 그 id 를 다시 내밀 때마다 즉시
+   * 같은 `{count: 0}` 이 돌아오고 진짜 메시지는 이미 닫힌 ack 뒤에 쌓인다.
+   *
+   * 이쪽의 관찰은 **다시 돌리는 것**이다 — 이미 ack 된 배달의 ack 은 상태를 그대로 돌려주므로 두 번째
+   * ack 은 아무 일도 하지 않고, 호출자가 원하는 전부인 폴링만 새로 돈다.
+   */
+  it('시간이 다 된 check --ack --wait 의 재생은 그 사이 온 메시지를 준다', async () => {
+    const f = await workerFixture()
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses1']) })
+    const send = (subject: string): Promise<{ status: number; body: unknown }> =>
+      orch.call({
+        cmd: 'send',
+        args: { type: 'status', taskId: f.taskId, dispatchId: f.dispatchId, subject, body: 'b' },
+        sessionId: 'ses1'
+      })
+    expect((await send('첫 소식')).status).toBe(200)
+    const took = await orch.call({ cmd: 'check', args: {}, sessionId: '' })
+    const deliveryId = (took.body as { deliveryId: string }).deliveryId
+    const args = { ack: deliveryId, wait: true, timeoutMs: 1 }
+    const first = await orch.call({ cmd: 'check', args, sessionId: '', request: 'req-1' })
+    expect(first.body).toEqual({ count: 0, messages: [], timedOut: true })
+    const ackedAt = (await savedState()).deliveries.find((d) => d.id === deliveryId)?.ackedAt
+    expect(ackedAt).toBeTruthy()
+    // 그 사이에 소식이 왔다.
+    expect((await send('두 번째 소식')).status).toBe(200)
+    const again = await orch.call({ cmd: 'check', args, sessionId: '', request: 'req-1' })
+    const body = again.body as { count: number; messages: { subject: string }[]; timedOut?: boolean }
+    expect(body.timedOut, '멈춘 시계를 그대로 돌려줬다').toBeUndefined()
+    expect(body.messages.map((m) => m.subject)).toEqual(['두 번째 소식'])
+    // 같은 배달이 두 번 닫히지 않는다 — 두 번째 ack 은 아무 일도 하지 않는다.
+    const after = await savedState()
+    expect(after.deliveries.find((d) => d.id === deliveryId)?.ackedAt).toBe(ackedAt)
+    expect(after.deliveries.filter((d) => d.ackedAt)).toHaveLength(1)
+  })
+
+  /**
+   * **이 가드가 규칙을 지킨다 — 위의 두 항목이 아니라**(설계 §13 단계 6).
+   *
+   * 항목을 나열해서 만든 집합은 뒤처지는 집합이고, 그것이 §3 이 명령 목록을 거부한 이유다. 명령 층에서
+   * **커밋도 하고 폴링도 하는** 모든 case 는 관찰 표에 있어야 한다. 다음 사람이 그런 명령을 하나 더
+   * 만들면, 세 번째 예외가 조용히 생기는 대신 여기가 깨진다.
+   *
+   * 문서가 아니라 소스를 읽는 텍스트 가드다 — `cliUsage.test.ts` 가 `docs/cli.md` 에 하는 것과 같은
+   * 부류이고, 저 switch 의 case 들은 데이터가 아니라서 타입으로 붙들 방법이 없다.
+   */
+  it('커밋하고 폴링하는 명령은 빠짐없이 관찰 표에 있다', () => {
+    const source = readFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../core/orchestration/command.ts'),
+      'utf8'
+    )
+    /** case 이름 → 그 블록의 본문. 라벨이 잇달아 붙은 것(`case 'jobs-wait':` + `case 'runs-wait': {`)은
+     *  한 블록을 함께 쓴다. 주석은 지운다 — 이 파일의 주석은 `deps.setState` 와 `pollUntil` 을 산문으로
+     *  인용하므로, 남겨 두면 가드가 주석을 읽고 판정한다. */
+    const blocks = new Map<string, string>()
+    let group: string[] = []
+    let body: string[] = []
+    const flush = (): void => {
+      if (group.length > 0 && body.length > 0) for (const name of group) blocks.set(name, body.join('\n'))
+      if (body.length > 0) group = []
+      body = []
+    }
+    for (const line of source.split('\n').slice(source.split('\n').findIndex((l) => l.includes('switch (routed)')))) {
+      const label = /^\s*case '([^']+)':/.exec(line)
+      if (label) {
+        flush()
+        group.push(label[1])
+        continue
+      }
+      if (/^\s*default:/.test(line)) break
+      const code = line.trim()
+      if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) continue
+      body.push(line)
+    }
+    flush()
+    // 가드가 헛돌지 않는지부터 — 파싱이 조용히 아무것도 못 찾으면 이 시험은 늘 통과한다.
+    expect(blocks.size, 'switch 를 읽지 못했다').toBeGreaterThan(30)
+    const commitsAndPolls = [...blocks]
+      .filter(([, text]) => text.includes('pollUntil(') && (text.includes('deps.setState(') || /\bcommit\(/.test(text)))
+      .map(([name]) => name)
+      .sort()
+    expect(commitsAndPolls).toEqual(Object.keys(OBSERVED).sort())
   })
 })

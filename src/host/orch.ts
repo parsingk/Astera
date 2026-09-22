@@ -64,6 +64,73 @@ const interpretationOf = {
     `Before retrying, look at the state rather than at the receipt, because the state is the only record that survives everything.`
 }
 
+/** A reply body as a bag of fields, for the two predicates below. Anything that is not an object
+ *  reads as empty, which makes every question asked of it answer "no". */
+const bodyOf = (reply: Reply): Record<string, unknown> =>
+  typeof reply.body === 'object' && reply.body !== null ? (reply.body as Record<string, unknown>) : {}
+
+/**
+ * **A command that committed and then waited, and what its replay must answer instead** (request
+ * receipts design §7).
+ *
+ * The rule: *a receipt is replayed verbatim unless the command committed and then waited. When it
+ * did, its replay is **observed** — the Host answers with what is true now, never with what was true
+ * at the moment some earlier call gave up waiting.* A recorded `timedOut: true` is not a fact about
+ * the world; it is a fact about how long one call waited, and handing it back to a caller that is
+ * retrying *because it wants to keep waiting* answers instantly out of somebody else's stopwatch.
+ * That caller is then in a loop that cannot end, which is worse than the lost answer it was
+ * recovering from.
+ *
+ * **Each member answers for itself, and that is deliberate.** There is no single mechanism here that
+ * decides for both, because one that did would decide for the *third* member too — silently, and by
+ * whichever of the two it was modelled on. `stale` and `afresh` are two questions this design cannot
+ * answer in general: whether a particular recorded reply is a stopwatch reading depends on how that
+ * command reports a deadline, and reproducing the answer depends on what re-running would cost. So a
+ * new member writes two lines here rather than inheriting somebody else's.
+ *
+ * **What holds the line is not this table but the guard over it** (§13 step 6): a test that every
+ * command in the command layer which both commits and polls has an entry here. Membership is a shape,
+ * and this table is only the two answers that shape cannot supply.
+ */
+interface ObservedReplay {
+  /** Is this recorded reply a reading of a stopwatch rather than a fact about the world? */
+  stale(reply: Reply): boolean
+  /** The arguments that ask the same question again, now. */
+  afresh(args: Record<string, unknown>, recorded: Reply): Record<string, unknown>
+}
+export const OBSERVED: Record<string, ObservedReplay> = {
+  /**
+   * `ask` commits `createQuestion` and then long-polls for ten minutes. **Re-running it would create
+   * a second question** — a person sees the same thing asked twice, answers one, and the worker goes
+   * on waiting on the other — so the replay re-reads the question the receipt names, which is what
+   * `--resume` already does.
+   *
+   * **A recorded timeout with no question id is left verbatim**, which is why `stale` asks for the id
+   * rather than only for the timeout. Without that, `afresh` would hand `resume: undefined` to a
+   * command whose create branch it then falls into, and a stale answer is a far smaller fault than a
+   * duplicate question.
+   */
+  ask: {
+    stale: (reply) => bodyOf(reply).timedOut === true && typeof bodyOf(reply).questionId === 'string',
+    afresh: (args, recorded) => ({ ...args, resume: bodyOf(recorded).questionId })
+  },
+  /**
+   * `check --ack <id> --wait` commits `ackDelivery` **before** the poll, so a deadline leaves a
+   * receipt holding `{count: 0, messages: [], timedOut: true}`. **This is the worse of the two**: the
+   * orchestration guide already tells an agent that a `check --wait` timeout is a checkpoint and to
+   * call again, so every later presentation of that id would answer `{count: 0}` instantly while real
+   * messages piled up behind an ack that had already landed.
+   *
+   * It is observed by **re-running**, which is safe for the reason the pure layer gives: `ackDelivery`
+   * on an already-acked delivery returns the state unchanged, so the ack is a no-op the second time
+   * and the poll — the whole of what the caller wants — runs fresh.
+   */
+  check: {
+    stale: (reply) => bodyOf(reply).timedOut === true,
+    afresh: (args) => args
+  }
+}
+
 export interface HostOrch extends OrchCall {
   /** Loads the state, once. Lazy and memoized on purpose — see `createHostOrch`. */
   ready(): Promise<void>
@@ -394,14 +461,34 @@ export function createHostOrch(a: {
    * from. 409 is the code that already means "the current state makes this impossible"; there is no
    * eleventh exit code.
    */
-  const holdRequest = (sessionId: string, requestId: string, cmd: string): { answer: Reply } | { key: string } => {
+  const holdRequest = (
+    sessionId: string,
+    requestId: string,
+    cmd: string,
+    args: Record<string, unknown>
+  ): { answer: Reply } | { observe: { key: string; recorded: Reply; args: Record<string, unknown> } } | { key: string } => {
     const bad = badRequestId(requestId)
     if (bad) return { answer: { status: 400, body: { error: bad } } }
     const key = `${sessionId}\u0000${requestId}`
     const held = receipts.get(key)
-    // Byte for byte what the first attempt answered, including its status — the point of a replay is
-    // that it is indistinguishable from having received the first answer.
-    if (held?.state === 'completed') return { answer: held.reply }
+    if (held?.state === 'completed') {
+      // **Observed rather than returned, when what was recorded is a stopwatch reading** (§7).
+      //
+      // The claim is taken over the completed entry in this same synchronous step, so a retry that
+      // arrives *while an observation is running* is refused by the branch below rather than
+      // starting a second one. That is not tidiness: two `check` observations polling at once both
+      // see a state with no open delivery, both build a batch out of the same undelivered messages,
+      // and the second commit overwrites the first — one batch of messages carrying two delivery
+      // ids, only one of which anybody can ack.
+      const observed = OBSERVED[cmd]
+      if (observed?.stale(held.reply)) {
+        receipts.set(key, { state: 'pending', cmd, at: a.now() })
+        return { observe: { key, recorded: held.reply, args: observed.afresh(args, held.reply) } }
+      }
+      // Byte for byte what the first attempt answered, including its status — the point of a replay
+      // is that it is indistinguishable from having received the first answer.
+      return { answer: held.reply }
+    }
     if (held)
       return {
         answer: {
@@ -428,6 +515,27 @@ export function createHostOrch(a: {
   const settleRequest = (key: string, cmd: string, marks: CallMarks, reply: Reply): Reply => {
     if (marks.committed || marks.acted) receipts.set(key, { state: 'completed', cmd, at: a.now(), reply })
     else receipts.delete(key)
+    return reply
+  }
+
+  /**
+   * The end of an observed replay (§7). **Not `settleRequest`**, and the difference is not a detail:
+   * that one discards a claim the command did not earn, and an observed `ask --resume` that times out
+   * again commits nothing at all. Discarding there would make the id `absent`, and the next retry
+   * would run `ask` from the top and create the second question this whole path exists to prevent.
+   *
+   * **The fresh answer replaces the recorded one**, and the reason is that an answer which has been
+   * produced has to survive. Leave the stale reading in place and every later retry observes again —
+   * against a world that has moved on. `ask` is the worked example: once the question is gone, which
+   * a closed dispatch or a `reset` does, a re-read answers `unknown question` to a caller whose
+   * question *was* answered and whose only record of that answer is this receipt.
+   *
+   * **A failed observation keeps what was recorded.** The receipt is the only record this request has;
+   * an error from re-asking is a fact about now, and it is returned to the caller, but it is not worth
+   * the record.
+   */
+  const settleObserved = (key: string, cmd: string, recorded: Reply, reply: Reply): Reply => {
+    receipts.set(key, { state: 'completed', cmd, at: a.now(), reply: reply.status < 400 ? reply : recorded })
     return reply
   }
 
@@ -492,6 +600,13 @@ export function createHostOrch(a: {
        *  is why it is declared out here. A claim nobody releases is a request that answers `pending`
        *  forever. */
       let claimed: string | null = null
+      /** Set instead of `claimed` when this call is an **observed** replay (§7): the receipt already
+       *  holds an answer, and what is running is the fresh look the caller actually wanted. The
+       *  recorded reply rides along because a failed observation must not destroy it. */
+      let observing: { key: string; recorded: Reply } | null = null
+      /** What the command is actually run with. The same `args` in every case but one: `ask`'s
+       *  observed replay resumes the question the receipt names rather than asking a new one. */
+      let runArgs = args
       try {
         // **A key presented on these two is refused, not dropped.** They answer above the receipt
         // line below, so a `request` sent with one would be accepted and silently ignored — which is
@@ -517,9 +632,12 @@ export function createHostOrch(a: {
         // **A caller that sent no id skips all of it** and gets the same answer, the same exit code
         // and the same order as before this existed (§9).
         if (request !== undefined) {
-          const held = holdRequest(sessionId, request, cmd)
+          const held = holdRequest(sessionId, request, cmd, args)
           if ('answer' in held) return held.answer
-          claimed = held.key
+          if ('observe' in held) {
+            observing = { key: held.observe.key, recorded: held.observe.recorded }
+            runArgs = held.observe.args
+          } else claimed = held.key
         }
         // **Answered by the Host, like the two above — but on *this* side of the receipt line.**
         //
@@ -542,14 +660,16 @@ export function createHostOrch(a: {
         }
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.
         await ready()
-        const r = await handleCommand(depsFor(marks), { sessionId }, cmd, args)
+        const r = await handleCommand(depsFor(marks), { sessionId }, cmd, runArgs)
         // Only an error reply is rewritten: a command that carried on past a refusal it swallowed
         // (the fire-and-forget ones) succeeded, and a success is not a conflict.
         const reply = r.status >= 400 && marks.appRefused ? { status: 409, body: r.body } : r
+        if (observing) return settleObserved(observing.key, cmd, observing.recorded, reply)
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         const reply = { status: marks.appRefused ? 409 : 500, body: { error: message } }
+        if (observing) return settleObserved(observing.key, cmd, observing.recorded, reply)
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       }
     }
