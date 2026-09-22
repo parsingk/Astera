@@ -1,4 +1,4 @@
-// astera's `host-*` commands: they talk to the Host directly, not through the app's HTTP server.
+// astera's `host-*` commands: they ask about the Host itself rather than about orchestration.
 //
 // **This file must not import from `./run` — `run.ts` imports this file, and the reverse would be a
 // cycle.** So `runHostCommand` below returns a value instead of printing one; `run.ts` renders it
@@ -13,7 +13,7 @@ import { hostSpawnPlan, resolveHostEntry } from '../core/host/spawn'
 import { hostRuntimeBase, hostRuntimePaths } from '../core/host/runtime'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { hostAddress } from '../host/address'
-import { userDataDir } from '../core/orchestration/cliDiscovery'
+import { nativePath, userDataDir } from '../core/orchestration/cliDiscovery'
 import { exitCodeFor } from '../core/orchestration/cliOutput'
 
 /** What `astera host status` reports. **Answers without a Host**: the content says what is there and
@@ -192,6 +192,14 @@ export function preparedRuntimeEntry(a: {
  * **`ASTERA_HOST` 는 주소만 이긴다.** 특정 Host 를 손으로 가리키는 장치이고, 그 Host 가 어느
  * 프로필을 쓰는지는 여전히 주소가 말해 주지 않는다.
  *
+ * **실려 온 경로는 그 플랫폼의 철자로 맞춘다.** 주소는 이 문자열의 sha256 이라(host/address.ts)
+ * 정슬래시로 적은 경로와 역슬래시로 적은 같은 경로가 서로 **다른** Host 를 가리킨다 — 손으로
+ * 정슬래시로 적으면 살아 있는 Host 를 두고 `running: false` 라고 답하게 되고, 그것은 이 설계가
+ * 가장 애써 피하는 거짓말이다(core/orchestration/stateFile.ts 의 머리말).
+ * **지금 있는 주소는 하나도 바뀌지 않는다** — 값을 실어 보내는 쪽은 전부 이미 네이티브 철자다
+ * (앱과 Host 는 `app.getPath('userData')` 를 그대로 싣고, `userDataDir` 은 win32 에서
+ * `nativePath` 를 태운다). 사람이 직접 적은 값만 구제된다.
+ *
  * `run.ts` 와 이 파일이 같은 값을 쓴다. 두 벌로 두면 `astera host status` 가 보는 Host 와
  * `astera jobs list` 가 묻는 Host 가 갈리는 날이 온다.
  */
@@ -203,7 +211,7 @@ export function cliHostTarget(a: {
   const given = a.env.ASTERA_PROFILE_DIR
   const profileDir =
     given !== undefined && given.length > 0
-      ? given
+      ? nativePath(given, a.platform)
       : userDataDir({
           platform: a.platform,
           env: a.env,

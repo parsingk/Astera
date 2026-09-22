@@ -341,6 +341,36 @@ describe('cliHostTarget', () => {
       const env = { APPDATA: path.join('C:', 'a'), ASTERA_PROFILE_DIR: '' } as NodeJS.ProcessEnv
       expect(cliHostTarget({ env, platform: 'win32', home }).profileDir).toBe(installed)
     })
+
+    // **F47.** 주소는 이 경로 문자열의 sha256 이다. 손으로 정슬래시로 적으면 살아 있는 Host 를
+    // 두고 `running: false` 라고 답하게 되는데, 그것이 이 설계가 가장 애써 피하는 거짓말이다.
+    // 실려 오는 값은 전부 이미 네이티브 철자라 이 맞춤은 기존 주소를 하나도 바꾸지 않는다.
+    it('정슬래시로 적은 경로가 역슬래시로 적은 같은 경로와 한 Host 를 가리킨다', () => {
+      const slashed = dev.replace(/\\/g, '/')
+      expect(slashed).not.toBe(dev) // 이 테스트가 무엇을 재는지 — 두 철자가 실제로 다르다
+      const of = (v: string): { address: string; profileDir: string } =>
+        cliHostTarget({
+          env: { APPDATA: path.join('C:', 'a'), ASTERA_PROFILE_DIR: v } as NodeJS.ProcessEnv,
+          platform: 'win32',
+          home
+        })
+      expect(of(slashed).address).toBe(of(dev).address)
+      expect(of(slashed).profileDir).toBe(dev)
+      // 보고 큐도 같은 값에서 나온다 — 철자가 갈리면 큐도 둘로 갈린다.
+      expect(pendingReportsDirIn(of(slashed).profileDir)).toBe(pendingReportsDirIn(dev))
+    })
+
+    // posix 에서는 아무것도 하지 않는다. 역슬래시는 그쪽에서 파일 이름에 쓸 수 있는 글자다.
+    it('posix 에서는 경로를 건드리지 않는다', () => {
+      const given = '/home/me/.config/astera-dev'
+      expect(
+        cliHostTarget({
+          env: { ASTERA_PROFILE_DIR: given } as NodeJS.ProcessEnv,
+          platform: 'linux',
+          home
+        }).profileDir
+      ).toBe(given)
+    })
   })
 })
 
