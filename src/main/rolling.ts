@@ -185,8 +185,8 @@ export interface RollingDeps {
    *  없었다** — 조용히 끝나지 않는 Task 가 된다. `ipc.ts` 의 그 함수를 그대로 넘길 수는 없다: 그것이
    *  롤링 등록까지 하므로 재귀한다. 그래서 값만 따로 받는다.
    *
-   *  getter 인 이유는 값이 앱 수명 중간에 생기고 사라지기 때문이다 — 오케스트레이션은 설정으로
-   *  켜지고 꺼지며, 롤링 코디네이터는 그보다 먼저 만들어진다.
+   *  getter 인 이유는 값이 앱 수명 중간에 생기기 때문이다 — 오케스트레이션 서버는 앱이 뜬 뒤에
+   *  서고, 롤링 코디네이터는 그보다 먼저 만들어진다.
    *
    *  주입되지 않으면 아무것도 실리지 않는다(기존 동작) — now?/log? 와 같은 관례다. */
   orchEnv?(): { cliPath: string; skillsPath: string; profileDir: string } | undefined

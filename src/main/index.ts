@@ -101,7 +101,8 @@ let hostSurvivesUpdateRef: (() => boolean) | null = null
 // fix wave 최종, F1: the tab-briefing function, handed over unconditionally (OrchWiring.onTabResumeReady)
 // — unlike orchRef above, this is set the moment registerIpc runs, whether or not orchestration ever
 // boots. Read by the two rolling coordinators' resumeText dep when orchRef is null (the server did not
-// come up), so a plain tab session's Smart Resume briefing does not depend on it having.
+// come up), so a plain tab session's Smart Resume briefing does not depend on orchestration having
+// started.
 let tabResumeTextRef: ((sessionId: string, form: 'handover' | 'update') => Promise<string | null>) | null =
   null
 // Work Unit 수집기의 "이 세션은 이어받은 것이다" 알림. `tabResumeTextRef` 와 같은 갈래다 —
@@ -831,7 +832,7 @@ app.whenReady().then(async () => {
     orchEnv: () => orchRef?.orchEnv(),
     // Job Continuity: binds the native session id to the open Dispatch as soon as the coordinator learns it.
     onNativeSession: (sid, native) => orchRef?.onNativeSession(sid, native),
-    // Job 워커의 재개 packet(Task 4b/4c), 없으면(오케스트레이션이 꺼져 있거나 탭 세션이면) 탭
+    // Job 워커의 재개 packet(Task 4b/4c), 없으면(탭 세션이거나 서버가 서지 못했으면) 탭
     // 브리핑으로 저하한다 — resumeTextDep 의 JSDoc(fix wave 최종, F1/F3).
     resumeText: resumeTextDep,
     // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이

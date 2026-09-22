@@ -76,8 +76,8 @@ export function ResumeStrategySettings(): React.JSX.Element {
 
   return (
     <div className="settings-resume-strategy">
-      {/* **작업 이어가기가 먼저 온다.** 이 묶음은 오케스트레이션 토글 바로 아래에 서고(App.tsx),
-          거기 붙어야 하는 것은 재개 전략이 아니라 이 칸이다 — 둘 다 Job 에 관한 실험 기능이다.
+      {/* **작업 이어가기가 먼저 온다.** 이 묶음은 권한 모드 바로 아래에 서고(App.tsx), 거기 붙어야
+          하는 것은 재개 전략이 아니라 이 칸이다 — 둘 다 Job 워커에 관한 설정이다.
           재개 전략이 뒤로 가도 짝은 끊기지 않는다: 이 칸을 켜면 그것이 picker 를 smart 로 넘길 수
           있고, 그 일이 바로 아래에서 보이는 편이 위에서 보이는 것보다 낫다. */}
       {/* 두 기능이므로 묶음도 둘이다 — .settings-group 이 제목과 그 아래(설명 또는 카드)를 붙이고,

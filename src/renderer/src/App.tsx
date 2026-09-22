@@ -4363,8 +4363,8 @@ export default function App(): React.JSX.Element {
                       </label>
                       <span className="settings-hint">{t('settings.agentPermission.hint')}</span>
                     </div>
-                    {/* 작업 이어가기와 재개 전략 — 오케스트레이션 바로 아래에 둔다. 이어가기는 Job 이
-                        재시작을 건너 살아남게 하는 것이라 위 토글과 한 갈래이고, 재개 전략은 그것이
+                    {/* 작업 이어가기와 재개 전략 — 권한 모드 바로 아래에 둔다. 이어가기는 Job 이
+                        재시작을 건너 살아남게 하는 것이라 위 칸과 한 갈래이고, 재개 전략은 그것이
                         켜질 때 함께 움직인다(spec §3). 그 둘이 한 컴포넌트인 이유는 그 파일에 있다. */}
                     <ResumeStrategySettings />
                     {/* Agent browser — same settings-row/settings-hint/label shape and the same
