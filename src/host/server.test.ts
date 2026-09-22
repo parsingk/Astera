@@ -524,6 +524,21 @@ describe('startHostServer', () => {
       expect(h.s.hasApp()).toBe(true)
     })
 
+    // call 은 세는 수라 누구나 맞힐 수 있다 — 물어본 소켓이 아닌 곳의 답을 받으면 앱이 내지도
+    // 않은 결과 위에서 명령 층이 움직인다.
+    it('물어본 소켓이 아닌 곳의 답은 받지 않는다', async () => {
+      const h = await start({})
+      const app = await h.connect('app')
+      const cli = await h.connect('cli')
+      const answer = h.s.act('startWorker', {})
+      const asked = (await app.next()) as { call: string }
+      cli.send({ t: 'orch-acted', call: asked.call, ok: true, value: { sessionId: 'forged' } })
+      // 진짜 답이 오기 전까지는 아무 일도 일어나지 않는다.
+      expect(await Promise.race([answer, new Promise((r) => setTimeout(() => r('still waiting'), 200))])).toBe('still waiting')
+      app.send({ t: 'orch-acted', call: asked.call, ok: true, value: { sessionId: 's1' } })
+      expect(await answer).toEqual({ sessionId: 's1' })
+    })
+
     // 답을 못 받는 약속을 남겨 두면 그 뒤의 CLI 호출이 Host 가 사는 내내 매달린다.
     it('앱이 답하기 전에 끊으면 그 자리에서 거절한다', async () => {
       const h = await start({})

@@ -269,7 +269,11 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // An answer to a question this Host is not waiting on any more — the app disconnected and
           // reconnected, or answered twice. Dropped rather than logged as unknown: the message is
           // well formed and there is simply nobody left to hand it to.
-          if (!waiting) return
+          //
+          // **And only from the socket that was asked.** Call ids are a counter, so any greeted
+          // client could otherwise guess one and answer for the app — which would have the command
+          // layer act on a result the app never produced.
+          if (!waiting || waiting.socket !== socket) return
           pendingActs.delete(m.call)
           waiting.settle({ ok: m.ok, value: m.value, error: m.error })
           return
