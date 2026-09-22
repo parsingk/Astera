@@ -25,7 +25,7 @@ import {
   type ConversationSessions
 } from './conversation'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
-import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
+import { hostSpawnPlan, resolveHostEntry } from '../core/host/spawn'
 import {
   hostRuntimeBase,
   hostRuntimePaths,
