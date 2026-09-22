@@ -781,9 +781,21 @@ export async function handleCommand(
       if (!job) return notFound(`unknown job: ${id}`)
       const latest = latestRunOf(s, job)
       if (latest && waitEndingFor(s, latest.id) === null)
-        return conflict(`job ${id} is already running (run ${latest.id}) — wait for it or cancel it first`)
-      const first = job.pendingStart === true || latest === undefined
-      return handleCommand(deps, caller, first ? 'run-start' : 'run-spawn', { run: id })
+        return conflict(`job ${id} is already running (run ${latest.id}) — wait for it or stop it first`)
+      // **예약은 무장을 건드리지 않는다.** "지금 돌려라" 는 한 회차를 지금 만들라는 말이지
+      // "이 예약을 켜라" 가 아니다 — 켜는 것은 발화 시각마다 도는 것을 뜻하고, 사람이 그것까지
+      // 원했다면 사이드바의 '실행' 이 그 버튼이다.
+      const first = job.schedule === undefined && (job.pendingStart === true || latest === undefined)
+      const reply = await handleCommand(deps, caller, first ? 'run-start' : 'run-spawn', { run: id })
+      if (reply.status < 200 || reply.status >= 300) return reply
+      // **돌려주는 것은 언제나 회차다.** 이 명령이 있는 이유가 받은 id 를 `runs wait` 에 넘기는
+      // 것인데, run-start 는 계획을 돌려준다(사이드바의 '실행' 이 그것을 쓴다). 실제로 그 id 를
+      // `task-create --run` 에 넘겨 봤더니 Task 가 회차가 아니라 계획에 붙어 이번 회차에서는
+      // 아무 일도 하지 않았다.
+      const after = deps.getState()
+      const jobAfter = after.jobs.find((j) => j.id === id)
+      const started = jobAfter && latestRunOf(after, jobAfter)
+      return started ? okBody(runView(after, started)) : reply
     }
     case 'jobs-wait':
     case 'runs-wait': {

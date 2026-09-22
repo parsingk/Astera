@@ -5172,6 +5172,10 @@ describe('jobs run / questions answer', () => {
     expect(r.status).toBe(200)
     expect(deps.getState().jobs[0].pendingStart).toBeUndefined()
     expect(deps.getState().runs.length).toBe(1)
+    // **돌려주는 것은 언제나 회차다.** 실제로 계획 id 를 받아 `task-create --run` 에 넘겼더니
+    // Task 가 회차가 아니라 계획에 붙어 이번 회차에서는 아무 일도 하지 않았다.
+    expect((r.body as { id: string }).id).toBe(deps.getState().runs[0].id)
+    expect((r.body as { ordinal: number }).ordinal).toBe(1)
   })
 
   it('끝난 계획을 다시 돌리면 회차가 하나 늘어난다', async () => {
@@ -5181,8 +5185,28 @@ describe('jobs run / questions answer', () => {
     const runId = deps.getState().runs[0].id
     const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
     await call(deps, 'task-update', { id: (t.body as { id: string }).id, status: 'completed' })
-    expect((await call(deps, 'jobs-run', { id: jobId })).status).toBe(200)
+    const again = await call(deps, 'jobs-run', { id: jobId })
+    expect(again.status).toBe(200)
     expect(deps.getState().runs.filter((r) => r.jobId === jobId).length).toBe(2)
+    expect((again.body as { ordinal: number }).ordinal).toBe(2)
+  })
+
+  // "지금 돌려라" 는 한 회차를 지금 만들라는 말이지 "이 예약을 켜라" 가 아니다
+  it('예약은 무장을 건드리지 않고 한 회차만 만든다', async () => {
+    const deps = makeDeps()
+    // `--auto` 가 무장 게이트를 세운다(pendingStart) — 그것이 그대로 남는지를 보는 테스트다
+    await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      auto: true,
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const jobId = deps.getState().jobs[0].id
+    expect(deps.getState().jobs[0].pendingStart).toBe(true)
+    const r = await call(deps, 'jobs-run', { id: jobId })
+    expect(r.status).toBe(200)
+    expect((r.body as { ordinal: number }).ordinal).toBe(1)
+    expect(deps.getState().jobs[0].pendingStart).toBe(true)
   })
 
   // 한 계획에 두 회차가 동시에 도는 것을 손이 미끄러져 만들지 않게 한다
