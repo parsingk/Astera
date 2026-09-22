@@ -35,10 +35,12 @@ import {
   type RuntimeFs,
   type RuntimeFiles
 } from './host/runtime'
+import { executableProbe, parseExecutablePath, hostKillPlan, killHostCommand } from './host/hostProcess'
+import { hostPidFilePath, parseHostPidFile } from '../core/host/pidFile'
 import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
-import { hostSpeaksProcs } from './host/outdated'
+import { hostSpeaksProcs, hostSpeaksPing } from './host/outdated'
 import { reattachSessions, type ReattachResult } from './host/reattach'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
@@ -512,10 +514,13 @@ export function hostHoldings(entries: PtyEntry[], procEntries: PtyEntry[]): Host
   return { sessions, terminals, runs, chats }
 }
 
-/** Whether the outdated Host should be replaced *now* (docs/superpowers/specs/2026-09-14-host-replacement-design.md
- *  §4). Four gates, and every one has to open:
+/** Whether the Host should be replaced *now*. Four gates, and every one has to open:
  *
- *  - `outdated` — there is a newer build to run at all (`HostStatus.outdated`).
+ *  - a reason: `outdated`, there is a newer build to run (`HostStatus.outdated`), or
+ *    `runtimeIncomplete`, the runtime it runs from is missing files and could not be repaired while
+ *    it holds them (docs/2026-09-22-host-unresponsive-recovery-design.md F6). The second is the more
+ *    urgent of the two — that Host is one spawn away from stalling for good — but it earns the same
+ *    treatment, because replacing it early still costs somebody their sessions.
  *  - `holdings` all zero — replacing costs nobody anything. **`null` is not zero**: it is the Host not
  *    answering the list in time, and a Host too slow to enumerate twelve terminals is not one to
  *    retire on the assumption it had none. The same distinction `host.holdings` and the restart
@@ -529,11 +534,12 @@ export function hostHoldings(entries: PtyEntry[], procEntries: PtyEntry[]): Host
  *  closure no test can reach, and this is the rule that ends a process. */
 export function hostReplaceDue(a: {
   outdated: boolean
+  runtimeIncomplete: boolean
   holdings: HostHoldings | null
   inFlight: boolean
   quitting: boolean
 }): boolean {
-  if (!a.outdated || a.inFlight || a.quitting) return false
+  if ((!a.outdated && !a.runtimeIncomplete) || a.inFlight || a.quitting) return false
   if (a.holdings === null) return false
   return a.holdings.sessions === 0 && a.holdings.terminals === 0 && a.holdings.runs === 0 && a.holdings.chats === 0
 }
@@ -6484,7 +6490,15 @@ export function registerIpc(
       // hostLog, not orchLog: this is the Host failure log every other line in startHostClient uses,
       // and the one path here (a caller's onExit throwing while ptyFactory.ts ends a refused spawn)
       // must still be recorded when orchestration is off, which is exactly when orchLog is a no-op.
-      log: (m: string) => hostLog(`host: ${m}`)
+      log: (m: string) => hostLog(`host: ${m}`),
+      // A spawn the Host never answered. **Only a Host too old for the heartbeat is judged by this.**
+      // One that answers pings is already being asked the question directly and far more often, and a
+      // spawn going missing there is a fault in that one spawn, not a Host that has stopped
+      // answering — calling it unresponsive would be undone by the next pong a few seconds later, and
+      // all it would leave behind is a banner that flickered (design F4).
+      unanswered: (what: string) => {
+        if (hostClient && !hostSpeaksPing(hostClient.status())) hostClient.markUnresponsive(`the Host is not answering — ${what}`)
+      }
     }
     const { factory, attach } = createHostPtyFactory(transport)
     // The same transport, for line processes (chat-sessions design §6.5).
@@ -6545,6 +6559,73 @@ export function registerIpc(
       })
     hostProcList = () => listProcs(transport)
 
+    /** One command, its stdout, and a deadline. `shell: false` (the default): every argument here is
+     *  built in hostProcess.ts from a number, and a shell would only add a way to misread it. */
+    const run = (file: string, args: string[], timeout: number): Promise<string> =>
+      new Promise((resolve, reject) => {
+        execFile(file, args, { timeout, windowsHide: true }, (err, stdout) => {
+          if (err) reject(err)
+          else resolve(String(stdout))
+        })
+      })
+
+    /**
+     * Ends a Host that cannot be asked to leave, and answers what happened.
+     *
+     * `retire` is a message, and the Host this runs for does not read its socket — that is what makes
+     * it the case it is (design F5). So the pid is used instead, and because a pid is not a name, the
+     * executable behind it is read back first. Anything but a match leaves the process alone: the
+     * number can come from a file an earlier Host left behind, and Windows reuses pids.
+     */
+    const endUnresponsiveHost = async (): Promise<string | null> => {
+      const status = client.status()
+      // From the handshake when there was one; otherwise from what the Host wrote down at startup,
+      // which is the only source for the Host that never said hello (design F3).
+      let pid = status.pid
+      if (pid === null) {
+        try {
+          const rec = parseHostPidFile(readFileSync(hostPidFilePath(profileDir), 'utf8'))
+          pid = rec?.pid ?? null
+        } catch {
+          /* no file, or nothing readable in it — there is simply no pid to act on */
+        }
+      }
+      if (pid === null) return 'no pid to end'
+      const expectedExe = runtime?.paths.exePath ?? process.execPath
+      const probe = executableProbe(process.platform, pid)
+      let actualExe: string | null = null
+      try {
+        actualExe = probe
+          ? parseExecutablePath(await run(probe.file, probe.args, 5_000))
+          : // linux: the kernel already knows, and reading a symlink beats spawning anything.
+            await fs.readlink(`/proc/${pid}/exe`).catch(() => null)
+      } catch (err) {
+        hostLog(`host: could not read what pid ${pid} is: ${String(err)}`)
+      }
+      const plan = hostKillPlan({ platform: process.platform, expectedExe, actualExe })
+      if (plan === 'skip-gone') {
+        hostLog(`host: pid ${pid} is no longer running — nothing to end`)
+        return null
+      }
+      if (plan === 'skip-mismatch') {
+        // Said in a sentence the Info tab shows, because this is the one outcome a person has to act
+        // on themselves: something else holds the address, and the app will not end a process it
+        // cannot prove is its own.
+        hostLog(`host: pid ${pid} is ${actualExe ?? 'unknown'}, not this app's Host (${expectedExe}) — left alone`)
+        return `pid ${pid} is not this app's Host, so it was not ended`
+      }
+      const kill = killHostCommand(process.platform, pid)
+      try {
+        if (kill) await run(kill.file, kill.args, 10_000)
+        else process.kill(pid, 'SIGKILL')
+        hostLog(`host: ended the Host that was not answering (pid ${pid})`)
+        return null
+      } catch (err) {
+        hostLog(`host: could not end pid ${pid}: ${String(err)}`)
+        return `the Host (pid ${pid}) could not be ended`
+      }
+    }
+
     /** One replacement at a time. Shared by the automatic rule and the Info tab's button, which is
      *  what keeps a click during an automatic replacement from retiring the Host that was just
      *  started. */
@@ -6554,12 +6635,18 @@ export function registerIpc(
       replacing = true
       const was = client.status()
       hostLog(`host: replacing the Host (${was.hostVersion ?? '?'}, pid ${was.pid ?? '?'}) ${why}`)
+      let killProblem: string | null = null
       try {
+        // A Host that answers is asked to leave; one that does not is ended. Both paths then go
+        // through `restart()` below, which is what puts a new Host at the address either way.
+        if (was.unresponsive) killProblem = await endUnresponsiveHost()
         // retire() stops the client too, which is what keeps the reconnect loop from putting the
         // very same Host back the moment the socket drops (the 1.3.18 failure, in the other
         // direction). restart() brings the loop back once the retire has settled.
         // announce: the Host ends what it holds on the way out, and the app must hear that even
-        // though it is the one that asked (see retire's own comment).
+        // though it is the one that asked (see retire's own comment). Harmless against a Host that
+        // has just been killed: the message goes nowhere and the announce is what ends the handles
+        // its ptys left behind.
         await client.retire({ announce: true })
         client.restart()
         await client.ready(READY_TIMEOUT_MS)
@@ -6569,27 +6656,32 @@ export function registerIpc(
             ? `host: replaced — now Host ${now.hostVersion} (pid ${now.pid})`
             : `host: the replacement did not come up: ${now.problem ?? 'no answer'}`
         )
-        return now
+        // The refusal to end a process that is not ours is the reason the replacement failed, and it
+        // is more use on screen than "did not answer" — it names what a person has to go and do.
+        return killProblem && !now.connected ? { ...now, problem: killProblem } : now
       } finally {
         replacing = false
       }
     }
     hostReplace = () => replaceHost('on request')
 
-    /** The automatic rule: an outdated Host is replaced the first moment it holds nothing (design
-     *  §4). Asked after every `pty-exit` the Host reports and once after the startup sweep; each ask
-     *  is one `pty-list` round trip, plus one `proc-list` when the Host speaks procs, and they do not
-     *  overlap. */
+    /** The automatic rule: a Host that should not go on running is replaced the first moment it holds
+     *  nothing. Two reasons qualify — it is older than this app, or the runtime under it is missing
+     *  files (design F6). Asked after every `pty-exit` the Host reports and once after the startup
+     *  sweep; each ask is one `pty-list` round trip, plus one `proc-list` when the Host speaks procs,
+     *  and they do not overlap. */
     let checking = false
+    const replaceWorthy = (): boolean => client.status().outdated || client.status().runtimeIncomplete
     const maybeReplace = async (why: string): Promise<void> => {
-      if (checking || replacing || quittingForHost || !client.status().outdated) return
+      if (checking || replacing || quittingForHost || !replaceWorthy()) return
       checking = true
       try {
         const [entries, procEntries] = await Promise.all([listPtys(transport), speaksProcs() ? listProcs(transport) : Promise.resolve<PtyEntry[]>([])])
         // Unknown is not zero, for either list: a Host that should have answered and did not is not
         // replaced on a guess (hostReplaceDue's own rule).
         const holdings = entries !== null && procEntries !== null ? hostHoldings(entries, procEntries) : null
-        if (!hostReplaceDue({ outdated: client.status().outdated, holdings, inFlight: replacing, quitting: quittingForHost })) return
+        const s = client.status()
+        if (!hostReplaceDue({ outdated: s.outdated, runtimeIncomplete: s.runtimeIncomplete, holdings, inFlight: replacing, quitting: quittingForHost })) return
         await replaceHost(`${why}, and it holds nothing`)
       } catch (e) {
         hostLog(`host: the replacement check failed: ${String(e)}`)
@@ -6908,6 +7000,30 @@ export function registerIpc(
       return res
     }
 
+    /**
+     * Where a new pty or line process goes: the Host, or this app's own child.
+     *
+     * **Driven by the status rather than by the handshake**, which is the difference that matters. A
+     * handshake is one direction only, and a Host that stops answering never has another one — so the
+     * routers stayed pointed at a Host that could not spawn anything, and every session started after
+     * that sat pending until its deadline (2026-09-22, design F1). Now the same rule runs on every
+     * transition: answering, route to it; not answering, route to the app, so a person can keep
+     * working while the Info tab offers to restart it.
+     *
+     * Only ever changes what the *next* spawn reaches — a handle already handed out keeps the factory
+     * it came from (see ptyRouter's own tests), which is what makes running this on every transition
+     * safe.
+     */
+    const routeByStatus = (s: HostStatus | undefined): void => {
+      const live = s?.connected === true && s.unresponsive === false
+      core.ptyRouter.use(live ? factory : null)
+      // A proc-spawn to a Host that does not speak procs gets neither proc-spawned nor proc-failed,
+      // so that handle would wait out its deadline for nothing. The app's own child is the honest
+      // answer until such a Host is replaced.
+      core.procRouter.use(live && speaksProcs() ? procFactory.factory : null)
+    }
+    client.onStatusChange(routeByStatus)
+
     /** Which Host this app's ptys belong to, as `${pid}@${startedAt}` from the last `hello`, or null
      *  before the first one. The pair is what separates the two things a reconnect can mean. */
     let heldBy: string | null = null
@@ -6928,18 +7044,15 @@ export function registerIpc(
       // safe either way.)
       // Idempotent: `use` is one assignment of the same object, and it only changes which factory the
       // *next* spawn reaches, never a handle already handed out (see ptyRouter's own tests).
-      core.ptyRouter.use(factory)
-      // Only a Host that speaks procs gets the router: against an older one a proc-spawn would get
-      // neither proc-spawned nor proc-failed and the handle would hang pending forever. The fallback
-      // (the app's own child, outlivesApp false) is the honest answer until that Host is replaced;
-      // this runs again on the next handshake.
-      core.procRouter.use(speaksProcs() ? procFactory.factory : null)
+      //
+      // The routing itself is now decided by the status subscription below, which covers this moment
+      // and the opposite one. Left here as well because this runs first for a handshake and the two
+      // agree: one assignment of the same object either way.
+      routeByStatus(hostClient?.status())
       // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this
       // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
       // that chain has already given up before a peer ever said hello — a handshake that outlasts its
-      // deadline, fails, and succeeds on the retry. Nothing sweeps there, which is what happens today
-      // and is a gap of its own: the ptyRouter was never switched either, so the app is on node-pty
-      // beside a connected Host. Not made worse here, and not fixed here.
+      // deadline, fails, and succeeds on the retry.
       if (means === 'first') return
       if (means === 'other-host') {
         // The Host this app's ptys lived in really did die, and its successor's registry is empty.
