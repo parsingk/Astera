@@ -156,8 +156,12 @@ async function main() {
       const file = stack.pop()
       if (seen.has(file)) continue
       seen.add(file)
-      for (const m of readFileSync(file, 'utf8').matchAll(/require\("(\.[^"]*)"\)/g))
-        stack.push(join(dirname(file), m[1]))
+      // Both quote styles here too. A single-quoted relative require the walk cannot see ends the
+      // walk at host.js, the package scan below then reads one file, and a runtime ships without the
+      // packages its chunks need — the failure this whole block exists to prevent, arrived by the
+      // one path that looks like it is covered.
+      for (const m of readFileSync(file, 'utf8').matchAll(/require\(\s*(?:"(\.[^"]*)"|'(\.[^']*)')\s*\)/g))
+        stack.push(join(dirname(file), m[1] ?? m[2]))
     }
     return [...seen]
   }
