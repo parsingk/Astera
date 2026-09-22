@@ -41,6 +41,11 @@ export interface HostServerDeps {
 export interface HostServer {
   close(): Promise<void>
   clients(): number
+  /** When this Host began serving, the same string its `hello` carries. Exposed so the entry point can
+   *  write it where an app that never gets a `hello` can still read it
+   *  (docs/2026-09-22-host-unresponsive-recovery-design.md F3) — one Host, one answer to "which one
+   *  is this", whether it is answering or not. */
+  startedAt: string
   /** Sends to every connected client. Slice 2's pty output takes this rather than a reply, because
    *  the app that attaches after a restart is not the app that spawned. */
   broadcast(m: HostMessage): void
@@ -232,6 +237,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   armIdle()
 
   return {
+    startedAt,
     clients: () => live,
     broadcast: (m) => {
       const line = encodeLine(m)
