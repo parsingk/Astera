@@ -34,6 +34,8 @@ import path from 'node:path'
 import { handleCommand, type OrchServerDeps } from '../../core/orchestration/command'
 import { TaskValidator, type ValidatorRunner } from './validator'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './repair'
+import { createReviewGate } from './reviewGate'
+import { pauseWorkParkedByTheToggle } from '../../core/orchestration/alwaysOn'
 import { OrchestrationStore } from '../../core/orchestration/store'
 import { buildReviewSpecFile, specFileName } from './coordinator'
 import {
@@ -133,6 +135,15 @@ function rig(initial: OrchState = emptyState()) {
     return { sessionId, cwd: 'D:/wt', specPath }
   }
 
+  // ruling F63 의 회차 게이트와 그 거절 — production 코드 그대로다(createReviewGate). ipc.ts 가
+  // 같은 네 값으로 같은 것을 만든다.
+  const reviewGate = createReviewGate({
+    getState: () => box.state,
+    setState,
+    now: () => new Date().toISOString(),
+    log: (m) => logs.push(m)
+  })
+
   // repair.ts 가 그대로 받는 의존 묶음 — performRepair/repairOnce 는 production 코드다.
   const repairDeps: RepairDeps = {
     getState: () => box.state,
@@ -153,6 +164,9 @@ function rig(initial: OrchState = emptyState()) {
   const startReview = async ({ taskId }: { taskId: string }): Promise<void> => {
     const task = box.state.tasks.find((t) => t.id === taskId)
     if (task?.status !== 'reviewing') return
+    // ruling F63 — 회차 게이트. **여기는 production 코드 그대로다**(createReviewGate 를 실제로 부른다):
+    // 판정도 거절도 그 파일이 들고 있고, ipc.ts 의 startReview 가 부르는 것과 같은 한 줄이다.
+    if (await reviewGate.refuseIfRunGated({ taskId })) return
     const impl = box.state.dispatches
       .filter((d) => d.taskId === taskId && !d.review)
       .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
@@ -742,5 +756,48 @@ describe('convergence — §51', () => {
     ])
     expect(r.box.state.tasks[0].checkHistory).toEqual({ tests: ['failed'] })
     expect(r.logs).toEqual([])
+  })
+
+  // ruling F63 — 순서로 확인한다. 업그레이드가 세워 둔 회차에 큐로 들어온 보고가 적용되는 그 장면
+  // 이고, 그때 검토자가 뜨면 사람이 세워 둔 것 위에서 계정이 쓰인다. 여기서 도는 것은 전부
+  // production 코드다: 마이그레이션의 판정(pauseWorkParkedByTheToggle), handleCommand 의 send
+  // worker_done, applyWorkerDone, 그리고 createReviewGate.
+  it('F63: 세워 둔 회차에 큐 보고가 적용돼도 검토자는 뜨지 않고, Task 는 사람이 볼 자리에 남는다', async () => {
+    const r = rig()
+    const { taskId, dispatchId, sessionId } = await r.setup({ review: true })
+
+    // 업그레이드가 하는 일 그대로 — 칸만 세우고 열린 Dispatch 는 그대로 둔다. 큐에 남아 있던 보고는
+    // 바로 그 Dispatch 의 것이다.
+    const paused = pauseWorkParkedByTheToggle(r.box.state)
+    expect(paused.runs).toHaveLength(1)
+    r.box.state = paused.state
+
+    const startedBefore = r.started.length
+    await r.done(taskId, dispatchId, sessionId)
+
+    // **먼저 끝 상태를 기다린다.** startReview 는 fire-and-forget 이라, 곧바로 재면 "아직 안 떴다"
+    // 를 "안 뜬다" 로 잘못 읽는다 — 아래 대조 테스트가 같은 자리에서 검토자가 실제로 뜨는 것을
+    // 보이므로, 그 착각은 이 테스트를 조용히 통과시켰을 것이다.
+    await vi.waitFor(() => expect(r.box.state.tasks[0].status).toBe('blocked'))
+
+    // 그러고 나서: 검토자를 띄운 적이 없다. startWorker 가 불린 적 없다는 것이 그 증거다.
+    expect(r.started.slice(startedBefore)).toHaveLength(0)
+    expect(r.box.state.dispatches.filter((d) => d.review)).toHaveLength(0)
+
+    // Task 는 reviewing 에 버려지지 않았다 — 이유가 Gate 에 적혀 있다.
+    expect(r.box.state.gates).toHaveLength(1)
+    expect(r.box.state.gates[0].question).toMatch(/paused/)
+    expect(r.box.state.gates[0].taskId).toBe(taskId)
+  })
+
+  // 같은 순서에서 회차를 세우지 않으면 검토자가 뜬다 — 위 테스트가 "아무것도 안 뜬다" 를 다른
+  // 이유로 통과하고 있지 않다는 것을 이 한 줄이 말한다.
+  it('F63 대조: 세우지 않은 회차에서는 같은 보고가 검토자를 띄운다', async () => {
+    const r = rig()
+    const { taskId, dispatchId, sessionId } = await r.setup({ review: true })
+    await r.done(taskId, dispatchId, sessionId)
+    const rev = await r.awaitOpenReview(taskId)
+    expect(rev.review).toBe(true)
+    expect(r.box.state.gates).toHaveLength(0)
   })
 })

@@ -95,6 +95,37 @@ export const jobOf = (s: OrchState, run: JobRun): Job | undefined =>
   s.jobs.find((j) => j.id === run.jobId)
 
 /**
+ * **이 Task 의 회차에 앱이 지금 일을 새로 얹어도 되는가 — 아니면 `true`.**
+ *
+ * 세 소비자가 같은 물음을 묻는다: 복구 화해기의 `candidates`(잃어버린 워커를 다시 띄울까),
+ * `interruptedResumes`(끊긴 검증·검토를 다시 돌릴까), 그리고 `startReview`(검토자를 띄울까).
+ * 셋 다 "세션을 새로 띄운다" 는 같은 일을 하므로 답이 갈리면 안 된다 — 같은 조건이 세 벌로
+ * 흩어져 있었고, 그중 하나만 고쳐지는 것이 이 함수가 존재하는 이유다.
+ *
+ * 네 갈래다. **회차나 계획을 찾을 수 없으면** 붙잡는다 — orchestration.json 은 프로세스보다 오래
+ * 살고 손으로 고쳐지므로, 주인을 모르는 Task 에 워커를 띄우는 것은 아무도 책임지지 않는 지출이다.
+ * **`run.paused`·`job.paused`** 는 사람이 세운 것이고(`runs stop`·`pauseSchedule`), **`pendingStart`**
+ * 는 아직 시작하지 않은 초안, **`job.schedule !== undefined`** 는 계획 자신(템플릿)이다 — 템플릿의
+ * Task 는 회차가 대신 도는 것이지 템플릿에서 도는 것이 아니다.
+ *
+ * **`schedule.ts` 의 `appDriven` 은 이것과 다른 물음이라 합치지 않았다.** 그쪽은 "이 회차를 누가
+ * 운전하는가" 를 묻는다 — `autoDispatch` 를 요구하고(코디네이터가 끄는 회차는 앱이 배치하지
+ * 않는다), `job.schedule` 은 **보지 않는다**(예약의 회차는 당연히 돌아야 한다). 두 조건이 겹치는
+ * 것은 우연이 아니라 둘 다 "사람이 세운 것" 을 존중하기 때문이고, 다른 두 칸이 그 둘을 갈라 놓는다.
+ */
+export function runGatedForTask(s: OrchState, task: Pick<Task, 'runId'>): boolean {
+  const run = s.runs.find((r) => r.id === task.runId)
+  const job = run && jobOf(s, run)
+  if (!run || !job) return true
+  return (
+    run.paused === true ||
+    job.paused === true ||
+    job.schedule !== undefined ||
+    job.pendingStart === true
+  )
+}
+
+/**
  * 화면이 건네는 id 를 **회차 id 로** 푼다.
  *
  * Jobs 목록의 Job 줄은 Job 의 id 를 싣고(view.ts 의 rowFor), 펼쳐진 회차 줄은 회차의 id 를 싣는다.

@@ -8,7 +8,12 @@
 // to be able to hold one. That is the same reason `validator.ts` and `repair.ts` are their own files,
 // and the direction `ipcConvergenceWiring.test.ts`'s header names as the real answer to its own
 // scaffolding.
-import { blockForReview, isAlreadyOpenError, type OrchState } from '../../core/orchestration/state'
+import {
+  blockForReview,
+  isAlreadyOpenError,
+  runGatedForTask,
+  type OrchState
+} from '../../core/orchestration/state'
 
 export interface ReviewGate {
   /** Every way `startReview` can fail ends here: the Task becomes `blocked` with `reason` as its
@@ -16,6 +21,9 @@ export interface ReviewGate {
   gate(a: { taskId: string; reason: string }): Promise<void>
   /** The one caller that does not always gate — `openReviewDispatch`'s refusal. See below. */
   onOpenRefused(a: { taskId: string; error: string }): Promise<void>
+  /** The Run gates, asked before a reviewer is started, with the refusal already routed through
+   *  `gate`. Answers whether it refused, so `startReview` can return on `true`. */
+  refuseIfRunGated(a: { taskId: string }): Promise<boolean>
 }
 
 export function createReviewGate(deps: {
@@ -57,6 +65,37 @@ export function createReviewGate(deps: {
 
   return {
     gate,
+    /**
+     * **A reviewer is a session, so it asks the same question everything else that starts one asks**
+     * (ruling F63). `runGatedForTask` is that question, shared with the recovery reconciler's
+     * `candidates` and with `interruptedResumes`: is this Task's Run one the app may put work on
+     * right now, or has a person stopped it (`runs stop`, `pauseSchedule`), or is it a template or a
+     * draft. Without this a Run someone paused went on spending their accounts on reviewers, which
+     * contradicts what `docs/cli.md` says `runs stop` does.
+     *
+     * **It opens a Gate rather than returning quietly, and that is the difference from
+     * `candidates`.** A Task that `candidates` skips stays `dispatched` and is simply looked at again
+     * by the next sweep — nothing is lost. A Task here is already `reviewing`, and nothing re-drives
+     * `reviewing` except a restart: returning quietly would leave it in a state with nothing behind
+     * it, which is the exact shape of defect this branch has already paid to fix twice. The Gate puts
+     * it in `blocked` with the reason written where a person reads it, so resuming the Run leaves
+     * something visible to pick up.
+     *
+     * **A Task whose Run cannot be found is refused too** — `runGatedForTask` answers `true` for it.
+     * `orchestration.json` outlives the process and is hand-edited, and a reviewer nobody can account
+     * for is the one thing worse than a Gate.
+     */
+    refuseIfRunGated: async ({ taskId }) => {
+      const task = deps.getState().tasks.find((t) => t.id === taskId)
+      if (!task || !runGatedForTask(deps.getState(), task)) return false
+      await gate({
+        taskId,
+        reason:
+          "this task's run is not one the app starts work on right now — it is paused, a schedule " +
+          'template, or not yet started. Resume the run to have it reviewed.'
+      })
+      return true
+    },
     /**
      * **`dispatch already open` is not a failure, and sending it to the Gate destroys a live review**
      * (ruling F37).

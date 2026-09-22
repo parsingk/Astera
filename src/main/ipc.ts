@@ -2972,6 +2972,11 @@ export function registerIpc(
         // 큐를 거치지 않고 곧바로 오지만, setState 뒤에 불리므로 그 사이 task-update 가 상태를
         // 옮겼을 수 있다. validator.start 가 같은 이유로 'skip' 을 돌려준다.
         if (task?.status !== 'reviewing') return
+        // **세워 둔 회차에는 검토자를 띄우지 않는다**(ruling F63). 판정과 거절을 함께 reviewGate 가
+        // 들고 있다 — 그 이유는 그 파일에 있고, 요점은 그것이 상태를 놓고 검사할 수 있는 판정이라는
+        // 것이다. **이 자리가 큐로 들어온 보고의 뒷문이기도 하다**: 대기 보고 배수가 worker_done 을
+        // 적용하면 applyWorkerDone 이 수렴 Run 의 Task 를 곧바로 reviewing 으로 보내고 여기를 부른다.
+        if (await reviewGate.refuseIfRunGated({ taskId })) return
         // 구현 Dispatch — 그 provider 를 피해야 하고, cwd 도 여기서 얻는다(그래서 이 함수는 taskId
         // 하나만 받는다: 호출자가 cwd 를 따로 구하면 두 경로가 갈라진다)
         const impl = st.dispatches

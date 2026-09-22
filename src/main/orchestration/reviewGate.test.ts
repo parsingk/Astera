@@ -109,4 +109,60 @@ describe('createReviewGate', () => {
     expect(r.state().gates).toHaveLength(0)
     expect(r.log.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/could not block task=tsk_1/)
   })
+
+  // ruling F63 — 검토자는 세션이므로, 세션을 띄우는 다른 두 자리와 같은 회차 게이트를 묻는다.
+  describe('refuseIfRunGated', () => {
+    const paused = (over: Partial<OrchState>): OrchState => ({ ...reviewUnderWay(), ...over })
+
+    it('세워 둔 회차의 Task 는 거절하고 Gate 를 연다 — 사람이 볼 자리에 이유를 남긴다', async () => {
+      const s = reviewUnderWay()
+      const r = rig(paused({ runs: [{ ...s.runs[0], paused: true }] }))
+      expect(await r.gate.refuseIfRunGated({ taskId: 'tsk_1' })).toBe(true)
+      expect(r.state().tasks[0].status).toBe('blocked')
+      expect(r.state().gates).toHaveLength(1)
+      expect(r.state().gates[0].question).toMatch(/paused/)
+    })
+
+    it('세운 것이 계획 쪽이어도 같다', async () => {
+      const s = reviewUnderWay()
+      const r = rig(paused({ jobs: [{ ...s.jobs[0], paused: true }] }))
+      expect(await r.gate.refuseIfRunGated({ taskId: 'tsk_1' })).toBe(true)
+      expect(r.state().tasks[0].status).toBe('blocked')
+    })
+
+    it('예약 템플릿의 Task 도 거절한다 — 도는 것은 회차이지 템플릿이 아니다', async () => {
+      const s = reviewUnderWay()
+      const r = rig(paused({ jobs: [{ ...s.jobs[0], schedule: { kind: 'interval', minutes: 30 } }] }))
+      expect(await r.gate.refuseIfRunGated({ taskId: 'tsk_1' })).toBe(true)
+    })
+
+    it('아직 시작하지 않은 계획의 Task 도 거절한다', async () => {
+      const s = reviewUnderWay()
+      const r = rig(paused({ jobs: [{ ...s.jobs[0], pendingStart: true }] }))
+      expect(await r.gate.refuseIfRunGated({ taskId: 'tsk_1' })).toBe(true)
+    })
+
+    // orchestration.json 은 프로세스보다 오래 살고 손으로 고쳐진다 — 주인을 모르는 Task 에 검토자를
+    // 띄우는 것은 아무도 책임지지 않는 지출이다.
+    it('회차를 찾을 수 없는 Task 도 거절한다', async () => {
+      const r = rig(paused({ runs: [] }))
+      expect(await r.gate.refuseIfRunGated({ taskId: 'tsk_1' })).toBe(true)
+      expect(r.state().tasks[0].status).toBe('blocked')
+    })
+
+    // **거절하지 않을 때는 아무것도 건드리지 않는다** — 돌고 있는 검토의 Dispatch 를 포함해서다.
+    it('멀쩡한 회차면 거짓을 답하고 상태를 그대로 둔다', async () => {
+      const before = reviewUnderWay()
+      const r = rig(before)
+      expect(await r.gate.refuseIfRunGated({ taskId: 'tsk_1' })).toBe(false)
+      expect(r.state()).toBe(before)
+    })
+
+    it('모르는 Task 는 거절하지 않는다 — 판정할 것이 없다', async () => {
+      const before = reviewUnderWay()
+      const r = rig(before)
+      expect(await r.gate.refuseIfRunGated({ taskId: 'tsk_nope' })).toBe(false)
+      expect(r.state()).toBe(before)
+    })
+  })
 })

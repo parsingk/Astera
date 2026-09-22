@@ -16,7 +16,7 @@ import {
   emptyState,
   endedUnproven,
   interruptStalledTask,
-  jobOf,
+  runGatedForTask,
   type OrchState
 } from './state'
 import { latestImplDispatch } from './convergence'
@@ -126,18 +126,9 @@ export function interruptedResumes(
   for (const t of s.tasks) {
     const r = interruptStalledTask(s, { taskId: t.id }, now)
     if (r.resume !== 'validation' && r.resume !== 'review') continue
-    // recovery 의 candidates() 가 보는 세 가지 Run 게이트를 여기서도 그대로 적용한다(paused·
-    // schedule template·pendingStart) — 이 목록에는 runId 가 없어 받는 쪽이 다시 판정할 길이
-    // 없으므로, 아직 없는 소비자에게 요구사항을 적어 두기보다 원천에서 거른다.
-    const owner = s.runs.find((x) => x.id === t.runId)
-    const ownerJob = owner && jobOf(s, owner)
-    const runGated =
-      !owner ||
-      !ownerJob ||
-      owner.paused === true ||
-      ownerJob.paused === true ||
-      ownerJob.schedule !== undefined ||
-      ownerJob.pendingStart === true
+    // 회차 게이트는 세 소비자가 나눠 쓰는 하나다(state.ts 의 runGatedForTask) — 이 목록에는
+    // runId 가 없어 받는 쪽이 다시 판정할 길이 없으므로, 원천에서 거른다.
+    const runGated = runGatedForTask(s, t)
     // Host 가 이 Task 의 세션을 되돌려 받았으면(reattach) 그 워커는 지금도 돌고 있다 — 다시
     // 돌리라고 이 목록에 실으면 받는 쪽(재검증 큐·openReviewDispatch)이 "dispatch already open"
     // 으로 거절한다. interruptStalledTask 는 convergence Run 에서 이것을 보지 않는다(Dispatch 를

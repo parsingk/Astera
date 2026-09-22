@@ -120,4 +120,26 @@ describe('ipc.ts convergence wiring (source guard)', () => {
     // mistake before this fix).
     expect(wrapper.slice(policyAt, resultPathAt)).not.toMatch(/\.convergence\s*!==\s*undefined/)
   })
+
+  // ruling F63 — 판정과 거절은 reviewGate 가 들고 있고 유닛 테스트가 거기 있다. 이 가드가 메우는
+  // 격차는 하나뿐이지만 그것이 전부다: **ipc.ts 의 진짜 startReview 가 그것을 부르는가**, 그리고
+  // 검토 Dispatch 를 열기 **전에** 부르는가. 뒤에 부르면 Dispatch 를 커밋하고 세션을 띄운 다음에야
+  // 거절하는 것이 되어, 막으려던 지출이 이미 일어난다. convergence.integration.test.ts 의 rig 는
+  // 같은 줄을 자기 복사본에 들고 있을 뿐 이 파일을 실행하지 않는다.
+  it('the startReview wrapper asks the Run gates before it opens a review Dispatch (ruling F63)', () => {
+    const wrapper = stripLineComments(
+      sliceBetween(
+        ipcSource,
+        'const startReview = async ({ taskId }: { taskId: string }): Promise<void> => {',
+        'let started: { sessionId: string; cwd: string; specPath: string }'
+      )
+    )
+    const refuseAt = wrapper.indexOf('refuseIfRunGated(')
+    expect(refuseAt, 'reviewGate.refuseIfRunGated(...) not found in the startReview wrapper').toBeGreaterThanOrEqual(0)
+    // awaited, and its answer returns — a call whose boolean is dropped refuses nothing.
+    expect(wrapper).toMatch(/if\s*\(\s*await\s+\w+\.refuseIfRunGated\(\s*\{\s*taskId\s*\}\s*\)\s*\)\s*return/)
+    const openAt = wrapper.indexOf('openReviewDispatch(')
+    expect(openAt, 'openReviewDispatch(...) not found in the startReview wrapper').toBeGreaterThanOrEqual(0)
+    expect(refuseAt).toBeLessThan(openAt)
+  })
 })
