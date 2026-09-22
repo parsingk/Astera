@@ -8,7 +8,8 @@ import { promises as fs } from 'node:fs'
 import { HOST_PROTOCOL, HOST_FEATURE_PROC, HOST_FEATURE_PING, HOST_FEATURE_ORCH, type ClientMessage, type HostMessage } from '../core/host/protocol'
 import { encodeLine, createLineReader } from './framing'
 import type { HostLog } from './log'
-import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
+import { AppUnreachable, type OrchCall, type OrchCaller } from '../core/host/orchProtocol'
+import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 
 /** Thrown by `startHostServer` when another Host already answers at this address. The entry point
  *  turns it into a quiet exit: losing the race is the normal outcome of two apps starting at once. */
@@ -65,8 +66,9 @@ export interface HostServer {
   hasApp(): boolean
   /** Asks the app to do one thing the Host cannot (design §5) — one `orch-act` out, one `orch-acted`
    *  back, matched by call id. Rejects when no app is attached, when the app answers `ok: false`,
-   *  and when the app disconnects with the question still open: a caller waiting on an answer that
-   *  cannot arrive is the one outcome worse than a refusal. */
+   *  when the app disconnects with the question still open, and when it stays connected and says
+   *  nothing for HOST_UNRESPONSIVE_MS: a caller waiting on an answer that cannot arrive is the one
+   *  outcome worse than a refusal. */
   act(name: string, args: unknown): Promise<unknown>
 }
 
@@ -134,7 +136,10 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   const roles = new Map<net.Socket, 'app' | 'cli'>()
   /** The `orch-act`s that have gone out and not been answered, by call id. The socket is kept with
    *  each one so that a disconnect can refuse exactly the questions it left unanswered. */
-  const pendingActs = new Map<string, { socket: net.Socket; settle(r: { ok: boolean; value?: unknown; error?: string }): void }>()
+  const pendingActs = new Map<
+    string,
+    { socket: net.Socket; settle(r: { ok: boolean; value?: unknown; error?: string; fromApp?: boolean }): void }
+  >()
   let actSeq = 0
   /** The app among the greeted sockets, or null. The first one: one profile has one app (the
    *  single-instance lock), and a second would be a second app for the same state anyway. */
@@ -275,7 +280,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // layer act on a result the app never produced.
           if (!waiting || waiting.socket !== socket) return
           pendingActs.delete(m.call)
-          waiting.settle({ ok: m.ok, value: m.value, error: m.error })
+          // `fromApp`: the app answered. A failure it reports is the action's, not the channel's.
+          waiting.settle({ ok: m.ok, value: m.value, error: m.error, fromApp: true })
           return
         }
         if (deps.onMessage?.(m, send) === true) return
@@ -347,11 +353,34 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         const sock = appSocket()
         // The same sentence `orchDeps.ts` refuses with, so the reason reads the same however the
         // caller got here — the app can go away between that check and this one.
-        if (!sock) return reject(new Error(`APP_REQUIRED: ${name} needs the Astera app running`))
+        if (!sock) return reject(new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`))
         const call = `act_${++actSeq}`
+        // **The fourth way a caller can be left waiting, and the one the other three do not cover:**
+        // an app that stays connected and wedged. Its socket never closes, so nothing calls back, and
+        // the Host's own handshake deadline is about silence before `hello`, not after it. The same
+        // constant the rest of this codebase already judges a silent peer by — one number, so the two
+        // directions cannot drift (see unresponsive.ts). This plan has paid for an unbounded wait
+        // once already.
+        const deadline = setTimeout(() => {
+          const waiting = pendingActs.get(call)
+          if (!waiting) return
+          pendingActs.delete(call)
+          waiting.settle({
+            ok: false,
+            error: `the Astera app is attached but did not answer ${name} within ${HOST_UNRESPONSIVE_MS}ms`
+          })
+        }, HOST_UNRESPONSIVE_MS)
+        deadline.unref?.()
         pendingActs.set(call, {
           socket: sock,
-          settle: (r) => (r.ok ? resolve(r.value) : reject(new Error(r.error ?? `${name} failed`)))
+          settle: (r) => {
+            clearTimeout(deadline)
+            // A refusal is always an AppUnreachable — the app could not be reached, or would not
+            // answer. `ok: false` is the app answering, which is the action's own failure and not
+            // this: it keeps the plain Error, and the command that asked decides what that means.
+            if (r.ok) return resolve(r.value)
+            reject(r.fromApp === true ? new Error(r.error ?? `${name} failed`) : new AppUnreachable(r.error ?? `${name} failed`))
+          }
         })
         sock.write(encodeLine({ t: 'orch-act', call, act: name, args }))
       }),

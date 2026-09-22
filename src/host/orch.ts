@@ -2,7 +2,7 @@
 // §5, §6). This is what replaces the wire slice's `version`-only stub — `server.ts` calls
 // `OrchCall.call` and did not change when it did.
 import path from 'node:path'
-import { handleCommand } from '../core/orchestration/command'
+import { handleCommand, type OrchServerDeps } from '../core/orchestration/command'
 import { OrchestrationStore, isValidState } from '../core/orchestration/store'
 import type { OrchState } from '../core/orchestration/state'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
@@ -13,35 +13,18 @@ export interface HostOrch extends OrchCall {
   ready(): Promise<void>
 }
 
-/** The marker `orchDeps.ts` refuses with. Recognised here to give the refusal the status the design
- *  asks for, which is not the one the command that caught it would have chosen. */
-const APP_REQUIRED = 'APP_REQUIRED'
-
-/** 409 CONFLICT, and **not** whatever the command answered.
- *
- *  A remote dependency refuses by throwing, and each command turns a dependency failure into its own
- *  status: `worker-start` rolls its Dispatch back and answers 400 ("failed to start worker: ..."),
- *  which is right for a spawn that failed and wrong for this one — 400 tells a person their arguments
- *  were bad, and they were fine. The design says no app attached is CONFLICT (§5), which
- *  `cliOutput.ts`'s `codeForStatus` turns into exit 6, "the current state makes this impossible".
- *  Rewritten here rather than inside `handleCommand`, which must not learn that a dependency can be
- *  remote; the rollback each command already did is what makes rewriting the status safe. */
-const withAppRequiredStatus = (r: { status: number; body: unknown }): { status: number; body: unknown } => {
-  if (r.status < 400) return r
-  const error = (r.body as { error?: unknown } | null)?.error
-  return typeof error === 'string' && error.includes(APP_REQUIRED) ? { status: 409, body: r.body } : r
-}
-
 export function createHostOrch(a: {
   profileDir: string
   /** The Host's own version (`ASTERA_HOST_VERSION`) — what `status` and `version` answer with. */
   version: string
   now(): string
   runningSessions(): number
-  act(name: string, args: unknown): Promise<unknown>
+  act(name: string, args: unknown[]): Promise<unknown>
   hasApp(): boolean
   /** Called with the state every commit leaves behind, so the Host can push it to the app. */
   onState(s: OrchState): void
+  /** The Host's log. Handed to the command layer as well — see `hostOrchDeps`. */
+  log(message: string): void
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
 
@@ -62,18 +45,36 @@ export function createHostOrch(a: {
     // pending-report queue (design §6).
     (loading ??= store.load({ aliveSessionIds: 'unknown' }).then(() => {}))
 
-  const deps = hostOrchDeps({
-    getState: () => store.get(),
-    setState: async (next) => {
-      await store.save(next)
-      a.onState(next)
-    },
-    now: a.now,
-    runningSessions: a.runningSessions,
-    appVersion: () => a.version,
-    act: a.act,
-    hasApp: a.hasApp
-  })
+  /** **Built per call, and that is what makes the CONFLICT decision honest.**
+   *
+   *  A forwarded action refuses by throwing, and each command turns a dependency failure into its own
+   *  status: `worker-start` rolls its Dispatch back and answers 400 ("failed to start worker: ..."),
+   *  which is right for a spawn that failed and wrong for this one — 400 tells a person their
+   *  arguments were bad, and they were fine. So the status is corrected on the way out, and what it
+   *  is corrected on is this flag, set by the forwarder itself. It used to be a substring match on
+   *  the reply body, which most error paths fill with ids and titles the caller supplied: an id with
+   *  APP_REQUIRED in it turned a 404 into a 409 and a script read exit 6 where exit 4 was the truth.
+   *
+   *  One object literal per call costs nothing beside running a command, and a flag that lives no
+   *  longer than the call it belongs to cannot be read by the next one. */
+  const depsFor = (refused: { app: boolean }): OrchServerDeps =>
+    hostOrchDeps({
+      getState: () => store.get(),
+      setState: async (next) => {
+        await store.save(next)
+        a.onState(next)
+      },
+      now: a.now,
+      runningSessions: a.runningSessions,
+      appVersion: () => a.version,
+      act: a.act,
+      hasApp: a.hasApp,
+      log: a.log,
+      onAppRequired: (name, why) => {
+        refused.app = true
+        a.log(`${name} could not be put to the app: ${why}`)
+      }
+    })
 
   /** The app handing over its whole state (design §5). Not part of `handleCommand`: it is not a
    *  command anybody types, it writes the state wholesale rather than through a transition, and only
@@ -106,17 +107,25 @@ export function createHostOrch(a: {
   return {
     ready,
     call: async ({ cmd, args, sessionId, from }) => {
-      if (cmd === 'state-put') return statePut(args, from)
-      // Design §8: a call that arrives before the state is loaded waits, rather than failing.
-      await ready()
+      // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
+      // `orch-call` from this promise and has no catch of its own, so anything that escapes here is
+      // not a 500 — it is no `orch-result` at all, a caller waiting forever, and an unhandled
+      // rejection that takes the Host down with every terminal it owns. Both of the excluded halves
+      // could reject for real: `store.save` is an unguarded mkdir/writeFile/rename, and `state-put`
+      // is the app's first message after it connects. The HTTP shell has always turned a throw into
+      // a 500 the same way.
+      const refused = { app: false }
       try {
-        return withAppRequiredStatus(await handleCommand(deps, { sessionId }, cmd, args))
+        if (cmd === 'state-put') return await statePut(args, from)
+        // Design §8: a call that arrives before the state is loaded waits, rather than failing.
+        await ready()
+        const r = await handleCommand(depsFor(refused), { sessionId }, cmd, args)
+        // Only an error reply is rewritten: a command that carried on past a refusal it swallowed
+        // (the fire-and-forget ones) succeeded, and a success is not a conflict.
+        return r.status >= 400 && refused.app ? { status: 409, body: r.body } : r
       } catch (err) {
-        // **Nothing may escape.** `server.ts` answers `orch-call` from this promise and has no catch
-        // of its own, so a rejection here would mean no `orch-result` at all and a caller waiting
-        // forever. The HTTP shell has always turned a throw into a 500 the same way.
         const message = err instanceof Error ? err.message : String(err)
-        return { status: message.includes(APP_REQUIRED) ? 409 : 500, body: { error: message } }
+        return { status: refused.app ? 409 : 500, body: { error: message } }
       }
     }
   }

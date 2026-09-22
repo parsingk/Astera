@@ -149,7 +149,11 @@ async function main(): Promise<void> {
     hasApp: () => server.hasApp(),
     // Every commit goes to the clients, so the app can swap its mirror (design §5). Greeted sockets
     // only, which `broadcast` already guarantees.
-    onState: (state) => server.broadcast({ t: 'orch-state', state })
+    onState: (state) => server.broadcast({ t: 'orch-state', state }),
+    // The command layer's own `deps.log?.()` calls end up here too (hostOrchDeps) — a limit probe
+    // that could not run, an action that could not be forwarded. Otherwise the Host degrades in
+    // silence, and a person looking for why nothing happened has nothing to read.
+    log: (m) => log.write(m)
   })
   try {
     server = await startHostServer({

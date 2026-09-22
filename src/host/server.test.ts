@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -7,7 +7,8 @@ import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
 import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer, type HostServerDeps } from './server'
 import { HOST_PROTOCOL, type ClientMessage } from '../core/host/protocol'
-import { versionOnlyOrchCall } from '../core/host/orchProtocol'
+import { versionOnlyOrchCall, AppUnreachable } from '../core/host/orchProtocol'
+import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 
 let dir: string
 let open: HostServer[] = []
@@ -537,6 +538,31 @@ describe('startHostServer', () => {
       expect(await Promise.race([answer, new Promise((r) => setTimeout(() => r('still waiting'), 200))])).toBe('still waiting')
       app.send({ t: 'orch-acted', call: asked.call, ok: true, value: { sessionId: 's1' } })
       expect(await answer).toEqual({ sessionId: 's1' })
+    })
+
+    /**
+     * **붙어 있으면서 답을 안 하는 앱** — 세 가지(앱 없음·끊김·Host 종료)가 못 덮는 네 번째다.
+     * 소켓은 멀쩡하므로 아무도 깨우러 오지 않고, 이 서버의 악수 시한은 hello *전*의 침묵에 대한
+     * 것이다. 침묵한 상대를 재는 수는 이미 하나 있다(unresponsive.ts) — 두 번째 수를 만들면 둘이
+     * 갈라진다.
+     */
+    it('앱이 붙어만 있고 답하지 않으면 시한을 넘길 때 거절한다', async () => {
+      vi.useFakeTimers()
+      try {
+        const h = await start({})
+        const app = await h.connect('app')
+        const answer = h.s.act('startWorker', {})
+        const caught = answer.catch((e: Error) => e)
+        await vi.advanceTimersByTimeAsync(HOST_UNRESPONSIVE_MS + 10)
+        const err = await caught
+        expect(err).toBeInstanceOf(AppUnreachable)
+        // 앱이 아예 없는 경우와 문구가 달라야 한다 — 사람이 읽고 무엇을 할지 갈린다.
+        expect(String(err)).toMatch(/attached but did not answer/)
+        expect(String(err)).not.toMatch(/APP_REQUIRED/)
+        app.socket.destroy()
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     // 답을 못 받는 약속을 남겨 두면 그 뒤의 CLI 호출이 Host 가 사는 내내 매달린다.

@@ -7,6 +7,15 @@
 // change a line of its routing.
 import { HOST_PROTOCOL, type HostMessage } from './protocol'
 
+/** An action could not be put to the app: none is attached, the one that was went away, or it held
+ *  the question past the deadline.
+ *
+ *  **A type rather than a sentence to match on.** What decides the CONFLICT status has to be the fact
+ *  that the app could not be reached, never a substring of a message — most error bodies here echo
+ *  ids and titles a caller supplied, so matching text turns "unknown dispatch: APP_REQUIRED-ish-id"
+ *  into a conflict and a script reads exit 6 where exit 4 is the truth. */
+export class AppUnreachable extends Error {}
+
 /** The client behind one `orch-call`. Supplied by `server.ts`, which is the only place that knows
  *  which socket asked — the command table cannot work it out from `{cmd, args}`. */
 export interface OrchCaller {

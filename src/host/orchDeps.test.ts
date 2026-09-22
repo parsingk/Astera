@@ -1,34 +1,33 @@
 import { describe, it, expect, vi } from 'vitest'
 import { hostOrchDeps } from './orchDeps'
+import { AppUnreachable } from '../core/host/orchProtocol'
+
+const base = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): Parameters<typeof hostOrchDeps>[0] => ({
+  getState: () => ({}) as never,
+  setState: async () => {},
+  now: () => 'T',
+  runningSessions: () => 0,
+  appVersion: () => '0.0.0',
+  act: vi.fn(),
+  hasApp: () => true,
+  log: () => {},
+  onAppRequired: () => {},
+  ...over
+})
 
 describe('hostOrchDeps', () => {
   // 상태는 Host 안에서 끝나고, 행동은 앱으로 나간다.
   it('행동 의존은 앱으로 나가는 호출이다', async () => {
     const act = vi.fn().mockResolvedValue({ sessionId: 's1', cwd: 'D:/p', specPath: 'D:/p/s.md' })
-    const deps = hostOrchDeps({
-      getState: () => ({}) as never,
-      setState: async () => {},
-      now: () => 'T',
-      runningSessions: () => 0,
-      appVersion: () => '0.0.0',
-      act,
-      hasApp: () => true
-    })
+    const deps = hostOrchDeps(base({ act }))
     await deps.startWorker({ dispatchId: 'd1' } as never)
-    expect(act).toHaveBeenCalledWith('startWorker', { dispatchId: 'd1' })
+    // 인자는 언제나 배열째 간다 — 받는 쪽은 언제나 펼친다(F21).
+    expect(act).toHaveBeenCalledWith('startWorker', [{ dispatchId: 'd1' }])
   })
 
   // 앱이 없으면 그 자리에서 거절해야 한다. 기다리게 두면 워커가 영영 멈춘다.
   it('앱이 없으면 APP_REQUIRED 로 거절한다', async () => {
-    const deps = hostOrchDeps({
-      getState: () => ({}) as never,
-      setState: async () => {},
-      now: () => 'T',
-      runningSessions: () => 0,
-      appVersion: () => '0.0.0',
-      act: vi.fn(),
-      hasApp: () => false
-    })
+    const deps = hostOrchDeps(base({ hasApp: () => false }))
     await expect(deps.startWorker({} as never)).rejects.toThrow(/APP_REQUIRED/)
   })
 
@@ -36,35 +35,110 @@ describe('hostOrchDeps', () => {
   // 그것이 사람이 가장 먼저 해 보는 일이다.
   it('세션 수와 버전은 앱에 묻지 않는다', async () => {
     const act = vi.fn()
-    const deps = hostOrchDeps({
-      getState: () => ({}) as never,
-      setState: async () => {},
-      now: () => 'T',
-      runningSessions: () => 3,
-      appVersion: () => '1.2.3',
-      act,
-      hasApp: () => false
-    })
+    const deps = hostOrchDeps(base({ act, hasApp: () => false, runningSessions: () => 3, appVersion: () => '1.2.3' }))
     expect(deps.runningSessions?.()).toBe(3)
     expect(deps.appVersion?.()).toBe('1.2.3')
     expect(deps.enabled()).toBe(true)
     expect(act).not.toHaveBeenCalled()
   })
 
-  // 두 인자를 받는 의존(mergeWorktrees·browserRun)이 둘째 인자를 잃지 않는다 — 잃으면 `run-merge`
-  // 가 아무 워크트리도 합치지 않은 채 성공을 알린다.
-  it('인자가 둘인 의존은 둘 다 넘긴다', async () => {
-    const act = vi.fn().mockResolvedValue({ ok: true, merged: [], uncommitted: 0 })
-    const deps = hostOrchDeps({
-      getState: () => ({}) as never,
-      setState: async () => {},
-      now: () => 'T',
-      runningSessions: () => 0,
-      appVersion: () => '0.0.0',
-      act,
-      hasApp: () => true
-    })
-    await deps.mergeWorktrees?.('D:/p', ['D:/p/wt-1'])
-    expect(act).toHaveBeenCalledWith('mergeWorktrees', ['D:/p', ['D:/p/wt-1']])
+  /**
+   * **인자는 하나여도 배열로 간다**(F21). "하나면 그것만" 규칙은 `removeWorktrees(paths)` 처럼
+   * 인자 하나가 그 자체로 배열인 경우를 두 인자짜리 호출과 바이트 단위로 같게 만든다 — 받는 쪽이
+   * 둘을 구별할 방법이 없다. 규칙 하나, 이름별 표 없음.
+   */
+  it('인자 하나가 배열이어도 두 인자와 섞이지 않는다', async () => {
+    const act = vi.fn().mockResolvedValue({ failed: [] })
+    const deps = hostOrchDeps(base({ act }))
+    await deps.removeWorktrees?.(['D:/wt1', 'D:/wt2'])
+    expect(act).toHaveBeenCalledWith('removeWorktrees', [['D:/wt1', 'D:/wt2']])
+    await deps.mergeWorktrees?.('D:/p', ['D:/wt1'])
+    expect(act).toHaveBeenLastCalledWith('mergeWorktrees', ['D:/p', ['D:/wt1']])
+  })
+
+  it('인자가 없는 의존은 빈 배열로 간다', async () => {
+    const act = vi.fn().mockResolvedValue(undefined)
+    const deps = hostOrchDeps(base({ act }))
+    await deps.backup?.()
+    expect(act).toHaveBeenCalledWith('backup', [])
+  })
+
+  /**
+   * **아무도 안 받는 거절을 남기지 않는다.**
+   *
+   * `unregisterRolling` 은 `(sessionId): void` 이고 호출부 둘 다 결과를 버린다(command.ts 의
+   * dispatch-abandon, 그리고 worker_done 두 경로의 dropRollingChain). 이것을 async 로 감싸면 앱이
+   * 없을 때 아무도 붙잡지 않은 거부 약속이 남고, Host 에는 unhandledRejection 처리기가 없어서
+   * Node 의 기본 동작이 프로세스를 — 그 Host 가 들고 있는 모든 터미널과 함께 — 내린다.
+   */
+  it('결과를 안 받는 의존은 앱이 없어도 약속을 남기지 않는다', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (e: unknown): void => {
+      unhandled.push(e)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const logs: string[] = []
+      const deps = hostOrchDeps(base({ hasApp: () => false, log: (m) => logs.push(m) }))
+      // 반환값 자체가 약속이면 이미 틀렸다 — 호출부는 그것을 버린다.
+      expect(deps.unregisterRolling?.('s1')).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(unhandled).toEqual([])
+      // 삼키되 말은 남긴다 — 앱이 없으면 걷을 롤링 등록도 없지만, 조용히 넘어가면 안 된다.
+      expect(logs.some((l) => l.includes('unregisterRolling') && l.includes('APP_REQUIRED'))).toBe(true)
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
+  it('결과를 안 받는 의존은 앱이 실패로 답해도 약속을 남기지 않는다', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (e: unknown): void => {
+      unhandled.push(e)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const logs: string[] = []
+      const deps = hostOrchDeps(
+        base({ act: vi.fn().mockRejectedValue(new Error('the app went away')), log: (m) => logs.push(m) })
+      )
+      expect(deps.unregisterRolling?.('s1')).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(unhandled).toEqual([])
+      expect(logs.some((l) => l.includes('unregisterRolling') && l.includes('the app went away'))).toBe(true)
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
+  // 앱이 없어 거절한 것과, 앱이 답을 안 해 거절한 것은 같은 사실이다 — 둘 다 "지금은 못 한다".
+  it('앱이 도중에 닿지 않게 되면 그것도 앱 문제로 알린다', async () => {
+    const refused: string[] = []
+    const deps = hostOrchDeps(
+      base({
+        act: vi.fn().mockRejectedValue(new AppUnreachable('did not answer in time')),
+        onAppRequired: (name) => refused.push(name)
+      })
+    )
+    await expect(deps.readWorker({ dispatchId: 'd1' })).rejects.toThrow(/did not answer/)
+    expect(refused).toEqual(['readWorker'])
+  })
+
+  // 앱이 답한 실패는 그 행동의 실패다 — 채널 문제가 아니므로 CONFLICT 로 바뀌면 안 된다.
+  it('앱이 답한 실패는 앱 문제로 세지 않는다', async () => {
+    const refused: string[] = []
+    const deps = hostOrchDeps(
+      base({ act: vi.fn().mockRejectedValue(new Error('no account')), onAppRequired: (name) => refused.push(name) })
+    )
+    await expect(deps.readWorker({ dispatchId: 'd1' })).rejects.toThrow(/no account/)
+    expect(refused).toEqual([])
+  })
+
+  // 명령 층이 이미 쓰고 있는 deps.log 가 Host 의 로그로 나간다 — 안 이으면 한도 탐침이 못 돈 것
+  // 같은 성능 저하가 아무 흔적 없이 지나간다.
+  it('명령 층의 로그가 Host 로 이어진다', () => {
+    const logs: string[] = []
+    hostOrchDeps(base({ log: (m) => logs.push(m) })).log?.('무언가')
+    expect(logs).toEqual(['무언가'])
   })
 })

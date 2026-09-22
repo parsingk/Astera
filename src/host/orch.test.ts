@@ -12,6 +12,7 @@ const NOW = '2026-09-22T00:00:00.000Z'
 let dir: string
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hostorch-'))
+  logs = []
 })
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
@@ -30,6 +31,7 @@ const seed = async (): Promise<{ jobId: string; taskId: string }> => {
   return { jobId: job.value.id, taskId: task.value.id }
 }
 
+let logs: string[] = []
 const orchOver = (over: Partial<Parameters<typeof createHostOrch>[0]> = {}): ReturnType<typeof createHostOrch> =>
   createHostOrch({
     profileDir: dir,
@@ -39,6 +41,7 @@ const orchOver = (over: Partial<Parameters<typeof createHostOrch>[0]> = {}): Ret
     act: async () => ({}),
     hasApp: () => true,
     onState: () => {},
+    log: (m) => logs.push(m),
     ...over
   })
 
@@ -105,6 +108,31 @@ describe('createHostOrch', () => {
     expect((await orch.call({ cmd: 'no-such-command', args: {}, sessionId: '' })).status).toBe(501)
   })
 
+  /**
+   * **409 는 앱이 없었다는 사실로 정한다 — 답의 문구로 정하지 않는다.**
+   *
+   * 이 층의 에러 본문 대부분은 부르는 쪽이 준 id 와 제목을 그대로 실어 나른다. 문구를 맞춰 보면
+   * id 에 APP_REQUIRED 가 들어 있는 것만으로 404 가 409 가 되고, 스크립트는 NOT_FOUND(4) 여야 할
+   * 자리에서 CONFLICT(6) 를 읽는다.
+   */
+  it('문구에 APP_REQUIRED 가 들어 있어도 404 는 404 다', async () => {
+    const orch = orchOver({ hasApp: () => true })
+    const r = await orch.call({ cmd: 'worker-show', args: { dispatch: 'APP_REQUIRED' }, sessionId: '' })
+    expect(r.status).toBe(404)
+    expect(JSON.stringify(r.body)).toContain('APP_REQUIRED')
+  })
+
+  // 앱이 없어 거절한 것은 남기지 않아야 할 흔적도 남기지 않고, 로그는 남긴다.
+  it('앱이 없어 거절하면 그 사실이 로그에 남는다', async () => {
+    const { taskId } = await seed()
+    await orchOver({ hasApp: () => false }).call({
+      cmd: 'worker-start',
+      args: { task: taskId, agent: 'codex', account: 'acc1', worktree: 'current' },
+      sessionId: ''
+    })
+    expect(logs.some((l) => l.includes('startWorker') && l.includes('APP_REQUIRED'))).toBe(true)
+  })
+
   // Host 는 자기 버전과 자기 세션 수로 답한다 — 앱이 없어도 답해야 하는 두 가지다.
   it('status 는 앱이 없어도 Host 자신의 값으로 답한다', async () => {
     await seed()
@@ -156,6 +184,33 @@ describe('createHostOrch', () => {
       const r = await orchOver().call({ cmd: 'state-put', args: { state: { nope: 1 } }, sessionId: '', from: appCaller() })
       expect(r.status).toBe(400)
       expect(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')).toBe(before)
+    })
+
+    /**
+     * **쓰기가 실패해도 답은 나간다.**
+     *
+     * `server.ts` 는 이 약속에서 바로 `orch-result` 를 만들고 제 `.catch` 가 없다. 여기서 빠져나간
+     * 거부는 500 이 아니라 **답 자체가 없는 것**이고, 앱은 붙자마자 보내는 state-put 의 답을 영영
+     * 기다린다 — 게다가 아무도 안 받은 거부가 Host 를 통째로 내린다. store.save 는 mkdir·writeFile·
+     * rename 을 아무 보호 없이 한다(store.ts).
+     */
+    it('저장이 실패해도 5xx 로 답한다 — 침묵하지 않는다', async () => {
+      // 파일이 놓일 자리에 파일을 둔다: mkdir 이 거기서 실패한다.
+      const blocked = path.join(dir, 'blocked')
+      await fs.writeFile(blocked, 'not a directory', 'utf8')
+      const orch = createHostOrch({
+        profileDir: blocked,
+        version: '9.9.9',
+        now: () => NOW,
+        runningSessions: () => 0,
+        act: async () => ({}),
+        hasApp: () => true,
+        onState: () => {},
+        log: (m) => logs.push(m)
+      })
+      const r = await orch.call({ cmd: 'state-put', args: { state: emptyState() }, sessionId: '', from: appCaller() })
+      expect(r.status).toBeGreaterThanOrEqual(500)
+      expect(JSON.stringify(r.body)).toMatch(/ENOTDIR|EEXIST|ENOENT/)
     })
 
     // 앱이 통째로 건네준 뒤에 파일을 읽으면, 그것은 방금 받은 것의 옛 사본이다 — 그리고 load 는
