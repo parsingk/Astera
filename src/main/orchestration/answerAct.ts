@@ -27,7 +27,7 @@ export function orchActionOf(
 /**
  * Runs one action and shapes the reply the `orch-acted` message carries.
  *
- * **Every argument travels, always, as the array it arrived in.** `backup()` arrives as `[]`,
+ * **Every argument travels, always, as the array it arrived in.** `trackingEnabled()` arrives as `[]`,
  * `startWorker(x)` as `[x]`, `mergeWorktrees(cwd, paths)` as `[cwd, paths]` — and, the case that
  * settled the rule, `removeWorktrees(paths)` as `[paths]`. That last one takes a single argument that
  * is itself an array, so it goes on the wire byte-identically to a two-argument call: anything here

@@ -30,6 +30,14 @@ const PROPAGATES = [
   // "there are no check configs" omits `--validate`, and that Run then completes with verification
   // silently off, recorded nowhere. A refusal a person sees beats a Run that quietly skipped its
   // checks — and unlike the DEGRADES pair below, nothing is lost by refusing: the caller asks again.
+  //
+  // **One exception, and it is not this file's**: with no Host at all, the CLI answers `run-configs`
+  // from the state file with that same `[]` (`core/orchestration/stateFile.ts`'s allowlist). The
+  // reason above does not apply there, because the thing it protects is not running: a coordinator
+  // that would be misled into dropping `--validate` needs a Host to have dispatched it. What that
+  // path answers is "nothing is coordinating anything right now", and `[]` is true of it. The rule
+  // here governs a Host that *is* up and cannot reach the app — where a coordinator is live and a
+  // wrong `[]` reaches it.
   'listRunConfigs',
   'browserRun',
   // **The three toggles the app owns.** Each is read as the first thing its command does, before any

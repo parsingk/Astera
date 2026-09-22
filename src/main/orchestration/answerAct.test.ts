@@ -6,10 +6,14 @@ const depsWith = (over: Record<string, unknown>): OrchServerDeps => over as unkn
 
 describe('answerOrchAct', () => {
   // **F21.** 인자는 언제나 도착한 배열 그대로 펼쳐진다 — 모양을 보고 고르지 않는다.
+  //
+  // 이 자리는 원래 `backup` 이었다. 그것은 Host 가 제 것으로 가져가서(host/orchDeps.ts 의 OWNED)
+  // 더 이상 전달되지 않는다 — 지키는 것은 전달표 자체가 아니라 그 아래 일반 디스패처이므로,
+  // 테스트를 지우는 대신 실제로 전달되는 무인수 호출로 옮긴다.
   it('인수가 없는 호출은 인수 없이 부른다', async () => {
-    const backup = vi.fn().mockResolvedValue(undefined)
-    await answerOrchAct({ deps: depsWith({ backup }), act: 'backup', args: [] })
-    expect(backup).toHaveBeenCalledWith()
+    const trackingEnabled = vi.fn().mockResolvedValue(true)
+    await answerOrchAct({ deps: depsWith({ trackingEnabled }), act: 'trackingEnabled', args: [] })
+    expect(trackingEnabled).toHaveBeenCalledWith()
   })
 
   it('인수가 둘이면 둘로 부른다', async () => {
@@ -69,7 +73,7 @@ describe('answerOrchAct', () => {
 
   // orchestration 이 안 돌고 있는 앱과, 그 이름을 모르는 앱은 사람이 읽을 때 다른 이야기다.
   it('orchestration 이 없으면 그 이유를 말한다', async () => {
-    const r = await answerOrchAct({ deps: null, act: 'backup', args: [] })
+    const r = await answerOrchAct({ deps: null, act: 'trackingEnabled', args: [] })
     expect((r as { error: string }).error).toContain('orchestration is not running')
   })
 
