@@ -155,7 +155,7 @@ async function main(): Promise<void> {
     hasApp: () => server.hasApp(),
     // Every commit goes to the clients, so the app can swap its mirror (design §5). Greeted sockets
     // only, which `broadcast` already guarantees.
-    onState: (state) => server.broadcast({ t: 'orch-state', state }),
+    onState: (state, version) => server.broadcast({ t: 'orch-state', state, version }),
     // The command layer's own `deps.log?.()` calls end up here too (hostOrchDeps) — a limit probe
     // that could not run, an action that could not be forwarded. Otherwise the Host degrades in
     // silence, and a person looking for why nothing happened has nothing to read.
@@ -170,9 +170,15 @@ async function main(): Promise<void> {
       onIdle: () => leave(),
       onMessage: (m, send) => (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false),
       holdsWork: () => registry.liveCount() + procs.liveCount() > 0,
-      // Jobs are not the Host's to count yet — a later task gives it a Job registry, and this literal
-      // 0 is what that task replaces (server.ts's own comment on `liveCounts` says the same).
-      liveCounts: () => ({ sessions: registry.liveCount() + procs.liveCount(), jobs: 0 }),
+      // **Both halves are real now** (ruling F57). The Host owns the state, so it can answer the
+      // question `docs/cli.md` already promises `astera host stop` answers: how many Runs have work
+      // in flight. The rule is `runningRunCount`'s, which is the sidebar's rule over the state rather
+      // than a second one — a Host that let you stop a Run the screen calls running would be the
+      // worse half of two answers.
+      liveCounts: () => ({
+        sessions: registry.liveCount() + procs.liveCount(),
+        jobs: orch.runningRuns()
+      }),
       orch,
       log
     })

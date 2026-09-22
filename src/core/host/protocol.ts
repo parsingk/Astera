@@ -170,7 +170,19 @@ export type HostMessage =
   /** The whole orchestration state, pushed after every commit so the app can swap its mirror and
    *  derive its snapshot the way it does today (design §5). The whole state and not a patch because
    *  deriving a snapshot needs all of it anyway. */
-  | { t: 'orch-state'; state: OrchState }
+  | {
+      t: 'orch-state'
+      state: OrchState
+      /** How many commits this Host has made, counting this one. **The app quotes it back on
+       *  `state-put`, and a Host that has moved on refuses the write** (ruling F56) — without it a
+       *  whole-state write silently overwrites a commit made during the app's own await, which is
+       *  how a click could erase a worker's finished report.
+       *
+       *  Optional because it is additive and the protocol stays 3: a Host from before this sends
+       *  none, and an app that holds no version sends none, which the Host reads as "do not check"
+       *  rather than as a mismatch. */
+      version?: number
+    }
   | { t: 'pty-spawned'; id: string; pid: number }
   | { t: 'pty-failed'; id: string; error: string }
   | { t: 'pty-data'; id: string; data: string }

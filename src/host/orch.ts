@@ -7,12 +7,17 @@ import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/o
 import { readPendingReports } from '../core/orchestration/pendingDrain'
 import { pendingReportsDirIn, reportedDispatchIdsOf } from '../core/orchestration/pendingReports'
 import type { OrchState } from '../core/orchestration/state'
+import { runningRunCount } from '../core/orchestration/running'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { hostOrchDeps } from './orchDeps'
 
 export interface HostOrch extends OrchCall {
   /** Loads the state, once. Lazy and memoized on purpose — see `createHostOrch`. */
   ready(): Promise<void>
+  /** Runs with work actually in flight — what `astera host stop` refuses over and names (ruling F57,
+   *  docs/cli.md). **Synchronous and never loads**: it is read while answering a `retire`, and a Host
+   *  that has not been asked anything yet cannot be holding a running Job. */
+  runningRuns(): number
 }
 
 export function createHostOrch(a: {
@@ -32,8 +37,9 @@ export function createHostOrch(a: {
   aliveSessionIds(): ReadonlySet<string>
   act(name: string, args: unknown[]): Promise<unknown>
   hasApp(): boolean
-  /** Called with the state every commit leaves behind, so the Host can push it to the app. */
-  onState(s: OrchState): void
+  /** Called with the state every commit leaves behind, so the Host can push it to the app — and with
+   *  the version that commit is, which the app quotes back on its own writes (ruling F56). */
+  onState(s: OrchState, version: number): void
   /** The Host's log. Handed to the command layer as well — see `hostOrchDeps`. */
   log(message: string): void
 }): HostOrch {
@@ -98,7 +104,7 @@ export function createHostOrch(a: {
       getState: () => store.get(),
       setState: async (next) => {
         await store.save(next)
-        a.onState(next)
+        a.onState(next, ++version)
       },
       now: a.now,
       runningSessions: a.runningSessions,
@@ -129,6 +135,28 @@ export function createHostOrch(a: {
     // The same check the store uses on the file, for the same reason: what arrives here is written to
     // that file, and a malformed state saved over a good one costs every Job in it.
     if (!isValidState(state)) return { status: 400, body: { error: 'state-put needs a whole orchestration state' } }
+    // **The write the app built is against a state this Host has since replaced** (ruling F56). It
+    // carries a whole state, so landing it would erase every commit made in between — and the commit
+    // most likely to be in between is a worker's `worker_done`, whose author has already exited.
+    //
+    // The current state travels with the refusal so the app can put its mirror right without a second
+    // round trip: what it is holding is wrong by definition at this point, and leaving it wrong is
+    // the second half of the same fault (it would go on reading a state the file does not have).
+    //
+    // **An omitted version is not a mismatch.** It means the caller has no version to quote — an app
+    // built before this field, or one writing before its first `state-get` — and refusing those would
+    // be a new failure in place of the one being fixed. The check is a safety net over a client that
+    // opts into it, which is what keeps this additive and the protocol at 3.
+    const sent = args.version
+    if (typeof sent === 'number' && sent !== version)
+      return {
+        status: 409,
+        body: {
+          error: `the state moved on: this Host is at version ${version}, the write was built on ${sent}`,
+          state: store.get(),
+          version
+        }
+      }
     // **The file is not read after this.** This is a whole state, so a load would be reading an older
     // copy of what we were just given, and it would run the restart cleanup a second time. In the
     // ordinary case the load has already happened — the app fills its mirror with `state-get` before
@@ -139,12 +167,33 @@ export function createHostOrch(a: {
     await store.save(state)
     // To the others and not back to the sender: the state came from there, and an app that received
     // its own push would write its own state back over itself.
-    from.toOthers({ t: 'orch-state', state })
-    return { status: 200, body: { ok: true } }
+    from.toOthers({ t: 'orch-state', state, version: ++version })
+    return { status: 200, body: { ok: true, version } }
   }
 
   /** Whether the load's findings have already been handed to somebody. See `stateGet`. */
   let bootHandedOut = false
+
+  /**
+   * How many commits this Host has made. **The app quotes it back on `state-put` and a stale one is
+   * refused** (ruling F56).
+   *
+   * `state-put` is a whole-state write, and the state the app built it from came out of a mirror that
+   * a push can supersede while the app is awaiting. Without this, the sequence that costs work is one
+   * click: a worker's `worker_done` commits B here and is pushed; a moment earlier the person pressed
+   * Pause, so the app read S0, awaited, and its write of A lands after — and A does not contain B.
+   * The worker has already exited, so its report, its dispatch closure and its task transition are
+   * gone with nothing to reproduce them.
+   *
+   * **This is the detection half only.** Refusing the write turns silent data loss into something the
+   * person is told about and the mirror recovers from; making the refused action succeed needs the
+   * app's mutation to be re-appliable, and today it is not — it arrives here as a finished state, not
+   * as a transform. That decision is deliberately left open rather than guessed at.
+   *
+   * Starts at 0, which no app can hold before its first `state-get`, so the first write of a session
+   * always carries a version the Host has really issued.
+   */
+  let version = 0
 
   /**
    * The app filling its mirror (design §5, §6). Not part of `handleCommand` for the same reasons
@@ -178,11 +227,14 @@ export function createHostOrch(a: {
     // that arrived second is told — there is nothing here for you.
     const wantsBoot = args.boot === true && from?.role === 'app' && !bootHandedOut
     if (wantsBoot) bootHandedOut = true
-    return { status: 200, body: { state: store.get(), boot: wantsBoot ? loadResult : null } }
+    // `version` rides along so the app's first write of this session can quote something the Host
+    // really issued (ruling F56). Every later value comes from the pushes.
+    return { status: 200, body: { state: store.get(), boot: wantsBoot ? loadResult : null, version } }
   }
 
   return {
     ready,
+    runningRuns: () => runningRunCount(store.get()),
     call: async ({ cmd, args, sessionId, from }) => {
       // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
       // `orch-call` from this promise and has no catch of its own, so anything that escapes here is

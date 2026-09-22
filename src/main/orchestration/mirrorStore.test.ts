@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createMirrorStore } from './mirrorStore'
+import { createMirrorStore, OrchStateConflict } from './mirrorStore'
 import { emptyState } from '../../core/orchestration/state'
 
 describe('createMirrorStore', () => {
@@ -91,5 +91,72 @@ describe('createMirrorStore', () => {
     const next = { ...emptyState(), jobs: [{ id: 'job_8' }] } as never
     await expect(m.setState(next)).rejects.toThrow(/did not answer/)
     expect(m.getState()).toBe(next)
+  })
+
+  // === ruling F56 — 버전을 인용하고, 어긋나면 Host 가 들고 있는 것으로 되맞춘다 ===
+
+  it('받은 버전을 다음 쓰기에 인용한다', async () => {
+    const call = vi.fn().mockResolvedValue({ status: 200, body: { ok: true, version: 8 } })
+    const m = createMirrorStore({ call })
+    m.accept(emptyState(), 7)
+    await m.setState({ ...emptyState(), runs: [] } as never)
+    expect(call).toHaveBeenCalledWith({
+      cmd: 'state-put',
+      args: { state: { ...emptyState(), runs: [] }, version: 7 },
+      sessionId: ''
+    })
+  })
+
+  it('쓰기가 통과하면 그 쓰기의 버전을 들고 간다', async () => {
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 200, body: { ok: true, version: 8 } })
+      .mockResolvedValueOnce({ status: 200, body: { ok: true, version: 9 } })
+    const m = createMirrorStore({ call })
+    m.accept(emptyState(), 7)
+    await m.setState({ ...emptyState(), runs: [] } as never)
+    await m.setState({ ...emptyState(), messages: [] } as never)
+    expect(call.mock.calls[1][0].args.version).toBe(8)
+  })
+
+  // **되돌리는 곳이 previous 가 아니다.** previous 야말로 이 충돌을 만든 낡은 값이고, 거기로
+  // 돌아가면 main 은 파일에 없는 상태를 계속 읽는다.
+  it('409 면 Host 가 들고 있는 상태로 되맞추고 그 사실을 던진다', async () => {
+    const hostState = { ...emptyState(), jobs: [{ id: 'job_host' }] } as never
+    const call = vi.fn().mockResolvedValue({
+      status: 409,
+      body: { error: 'the state moved on', state: hostState, version: 12 }
+    })
+    const m = createMirrorStore({ call })
+    m.accept(emptyState(), 3)
+    await expect(m.setState({ ...emptyState(), runs: [] } as never)).rejects.toBeInstanceOf(
+      OrchStateConflict
+    )
+    expect(m.getState()).toBe(hostState)
+  })
+
+  it('되맞춘 뒤의 쓰기는 Host 의 버전을 인용한다', async () => {
+    const hostState = { ...emptyState(), jobs: [{ id: 'job_host' }] } as never
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 409, body: { state: hostState, version: 12 } })
+      .mockResolvedValueOnce({ status: 200, body: { ok: true, version: 13 } })
+    const m = createMirrorStore({ call })
+    m.accept(emptyState(), 3)
+    await expect(m.setState({ ...emptyState(), runs: [] } as never)).rejects.toThrow()
+    await m.setState({ ...emptyState(), messages: [] } as never)
+    expect(call.mock.calls[1][0].args.version).toBe(12)
+  })
+
+  // 409 인데 상태가 안 실려 온 경우(옛 Host) — 적어도 낡은 값으로는 돌려놓는다.
+  it('409 에 상태가 없으면 쓰기 전으로 되돌린다', async () => {
+    const before = emptyState()
+    const call = vi.fn().mockResolvedValue({ status: 409, body: { error: 'nope' } })
+    const m = createMirrorStore({ call })
+    m.accept(before, 3)
+    await expect(m.setState({ ...emptyState(), runs: [] } as never)).rejects.toBeInstanceOf(
+      OrchStateConflict
+    )
+    expect(m.getState()).toBe(before)
   })
 })

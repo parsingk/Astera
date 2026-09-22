@@ -5,13 +5,32 @@
 // thirty-odd places and several of them read it twice around an await on purpose (the run-create
 // comment in the command layer explains why). Turning it async would rewrite that reasoning at every
 // site. The mirror keeps it synchronous by holding the last state the Host pushed.
+import { isValidState } from '../../core/orchestration/store'
 import type { OrchState } from '../../core/orchestration/state'
+
+/** A write the Host refused because the state had moved on under it (ruling F56). Named so the
+ *  callers that can say something useful about it can tell it from a disk failure — this one means
+ *  "your action did not happen and the screen you decided from was stale", which is a sentence for a
+ *  person, not for a log. */
+export class OrchStateConflict extends Error {
+  constructor(
+    readonly hostVersion: number | undefined,
+    readonly sentVersion: number | undefined
+  ) {
+    super(
+      `the orchestration state moved on before this write landed (Host at ${String(hostVersion)}, write built on ${String(sentVersion)})`
+    )
+    this.name = 'OrchStateConflict'
+  }
+}
 
 export interface MirrorStore {
   getState(): OrchState
   setState(next: OrchState): Promise<void>
-  /** Called on every `orch-state` push, and once with the state the Host answers `state-get` with. */
-  accept(s: OrchState): void
+  /** Called on every `orch-state` push, and once with the state the Host answers `state-get` with.
+   *  `version` is that commit's number — see `OrchStateConflict`. A push from a Host too old to send
+   *  one leaves it undefined, which turns the check off rather than failing every write. */
+  accept(s: OrchState, version?: number): void
   loaded(): boolean
 }
 
@@ -23,6 +42,9 @@ export function createMirrorStore(a: {
   }): Promise<{ status: number; body: unknown }>
 }): MirrorStore {
   let state: OrchState | null = null
+  /** The Host commit this mirror is holding. Quoted on every write so a write built on a state the
+   *  Host has since replaced is refused rather than landing on top of it. */
+  let version: number | undefined
   return {
     getState: () => {
       // **Throws rather than answering an empty state.** Every caller here reads the state to decide
@@ -45,8 +67,22 @@ export function createMirrorStore(a: {
       // release where the state stops being local. What the caller's `await` is for is unchanged: it
       // still means "this is on disk", and a refusal still reaches it as a throw.
       const previous = state
+      const sent = version
       state = next
-      const r = await a.call({ cmd: 'state-put', args: { state: next }, sessionId: '' })
+      const r = await a.call({ cmd: 'state-put', args: { state: next, version: sent }, sessionId: '' })
+      if (r.status === 409) {
+        // **The Host had moved on, so this write never landed and the mirror was wrong before it was
+        // even built** (ruling F56). The refusal carries the state the Host actually holds, so the
+        // mirror is put onto that rather than back onto `previous` — `previous` is the stale thing
+        // that caused this. Going back to it would leave main reading a state the file does not have
+        // until the next commit happened to correct it.
+        const body = r.body as { state?: unknown; version?: number } | null
+        if (body && isValidState(body.state)) {
+          state = body.state
+          version = body.version
+        } else if (state === next) state = previous
+        throw new OrchStateConflict(body?.version, sent)
+      }
       if (r.status < 200 || r.status >= 300) {
         // **A refused write is put back; a write that timed out is not.** The difference is what the
         // two say about the file. A non-2xx reply is the Host having decided not to write — its own
@@ -61,9 +97,15 @@ export function createMirrorStore(a: {
         if (state === next) state = previous
         throw new Error(`the Host refused a state write: ${r.status}`)
       }
+      // The version this write became. **Only when nothing has moved on since** — a push that landed
+      // while this call was in flight is newer than the reply, and taking the reply's number would
+      // have the next write quote a version older than the state it is built from.
+      const ok = r.body as { version?: number } | null
+      if (state === next && typeof ok?.version === 'number') version = ok.version
     },
-    accept: (s) => {
+    accept: (s, v) => {
       state = s
+      version = v
     },
     loaded: () => state !== null
   }

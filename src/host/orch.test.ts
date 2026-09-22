@@ -310,7 +310,8 @@ describe('createHostOrch', () => {
       expect(r.status).toBe(200)
       const saved = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
       expect(saved.jobs).toHaveLength(1)
-      expect(from.pushed).toEqual([{ t: 'orch-state', state }])
+      // 버전이 함께 간다 — 앱이 다음 쓰기에 되돌려 인용하는 값이다(ruling F56).
+      expect(from.pushed).toEqual([{ t: 'orch-state', state, version: 1 }])
     })
 
     // 민 쪽에게 되돌려 보내면 앱이 자기 상태를 자기 위에 다시 쓴다.
@@ -325,6 +326,58 @@ describe('createHostOrch', () => {
       const cli: OrchCaller = { role: 'cli', toOthers: () => {} }
       const r = await orchOver().call({ cmd: 'state-put', args: { state: emptyState() }, sessionId: '', from: cli })
       expect(r.status).toBe(403)
+    })
+
+    // === ruling F56 — 버전이 어긋난 쓰기는 거절한다 ===
+    //
+    // 통째로 쓰는 명령이라, 그 사이에 Host 가 커밋한 것이 있으면 그것을 지워 버린다. 지워질 가능성이
+    // 가장 높은 것은 워커의 worker_done 이고, 그 워커는 이미 나갔다.
+    it('Host 가 더 나아가 있으면 409 이고 파일은 그대로다', async () => {
+      const from = appCaller()
+      const orch = orchOver()
+      // 먼저 한 번 커밋해 Host 를 버전 1 로 올린다.
+      const made = createJob(emptyState(), { objective: 'first', cwd: 'D:/p' }, NOW)
+      const first = made.ok ? made.state : emptyState()
+      expect((await orch.call({ cmd: 'state-put', args: { state: first, version: 0 }, sessionId: '', from })).status).toBe(200)
+      const saved = await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')
+
+      // 앱이 아직 0 을 들고 있다고 하고 빈 상태를 민다 — 고치기 전이라면 first 를 덮었다.
+      const r = await orch.call({ cmd: 'state-put', args: { state: emptyState(), version: 0 }, sessionId: '', from })
+      expect(r.status).toBe(409)
+      expect(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')).toBe(saved)
+    })
+
+    // 거절만 하고 끝내면 앱의 거울은 틀린 채로 남는다 — 다음 커밋이 우연히 고쳐 줄 때까지.
+    it('409 는 Host 가 실제로 들고 있는 상태를 함께 낸다', async () => {
+      const from = appCaller()
+      const orch = orchOver()
+      const made = createJob(emptyState(), { objective: 'first', cwd: 'D:/p' }, NOW)
+      const first = made.ok ? made.state : emptyState()
+      await orch.call({ cmd: 'state-put', args: { state: first, version: 0 }, sessionId: '', from })
+      const r = await orch.call({ cmd: 'state-put', args: { state: emptyState(), version: 0 }, sessionId: '', from })
+      const body = r.body as { state: OrchState; version: number }
+      expect(body.state.jobs).toHaveLength(1)
+      expect(body.version).toBe(1)
+    })
+
+    // 맞는 버전은 그대로 지나가고, 다음 버전을 돌려준다.
+    it('버전이 맞으면 통과하고 새 버전을 알려 준다', async () => {
+      const from = appCaller()
+      const orch = orchOver()
+      const r0 = await orch.call({ cmd: 'state-put', args: { state: emptyState(), version: 0 }, sessionId: '', from })
+      expect((r0.body as { version: number }).version).toBe(1)
+      const r1 = await orch.call({ cmd: 'state-put', args: { state: emptyState(), version: 1 }, sessionId: '', from })
+      expect(r1.status).toBe(200)
+    })
+
+    // **버전을 안 실은 쓰기는 어긋난 것이 아니다** — 인용할 버전이 없다는 뜻이고, 그것까지 거절하면
+    // 고치려는 결함 대신 새 결함이 생긴다(additive, 프로토콜은 3 그대로).
+    it('버전을 싣지 않으면 검사하지 않는다', async () => {
+      const from = appCaller()
+      const orch = orchOver()
+      await orch.call({ cmd: 'state-put', args: { state: emptyState(), version: 0 }, sessionId: '', from })
+      const r = await orch.call({ cmd: 'state-put', args: { state: emptyState() }, sessionId: '', from })
+      expect(r.status).toBe(200)
     })
 
     // 소켓이 없는 호출자(테스트, 스텁)도 앱이 아니다 — 모르면 거절한다.
