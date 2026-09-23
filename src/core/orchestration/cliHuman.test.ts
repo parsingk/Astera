@@ -259,15 +259,15 @@ describe('humanFor', () => {
     expect(humanFor('tasks-add', { id: 't1', status: 'ready' })).toBe(['id      t1', 'status  ready'].join('\n'))
   })
 
-  it('sessions list 는 상태·id·종류·제목이다', () => {
+  it('sessions list 는 살았는지·하는 일·id·종류·제목이다', () => {
     expect(
       humanFor('sessions-list', {
         sessions: [
-          { id: 's1', kind: 'terminal', title: 'repo', alive: true },
-          { id: 's2', kind: 'chat', title: '대화', alive: false }
+          { id: 's1', kind: 'terminal', title: 'repo', alive: true, state: 'working' },
+          { id: 's2', kind: 'chat', title: '대화', alive: false, state: 'unknown' }
         ]
       })
-    ).toBe(['ALIVE  s1  terminal  repo', 'ENDED  s2  chat      대화'].join('\n'))
+    ).toBe(['ALIVE  working  s1  terminal  repo', 'ENDED  unknown  s2  chat      대화'].join('\n'))
   })
 
   // 읽으라고 부른 것이므로 화면 그대로다 — 표로 싸면 사람이 읽으려던 것을 가린다.

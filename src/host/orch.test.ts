@@ -70,7 +70,7 @@ const orchOver = (over: Partial<Parameters<typeof createHostOrch>[0]> = {}): Ret
     hasApp: () => true,
     onState: () => {},
     log: (m) => logs.push(m),
-    sessions: { listSessions: () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} },
+    sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} },
     ...over
   })
 
@@ -475,7 +475,7 @@ describe('createHostOrch', () => {
         hasApp: () => true,
         onState: () => {},
         log: (m) => logs.push(m),
-        sessions: { listSessions: () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} }
+        sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} }
       })
       const r = await orch.call({ cmd: 'state-put', args: { state: emptyState() }, sessionId: '', from: appCaller() })
       expect(r.status).toBeGreaterThanOrEqual(500)
@@ -823,7 +823,7 @@ describe('요청 영수증', () => {
       },
       log: () => {}
     })
-    const orch = orchOver({ hasApp: () => false, sessions: registrySessions({ ptys, procs }) })
+    const orch = orchOver({ hasApp: () => false, sessions: registrySessions({ ptys, procs, hookEventsDir: path.join(os.tmpdir(), 'astera-orch-test-no-hook-events') }) })
     const args = { id: 'ses-1', text: 'echo hi' }
     const first = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-s' })
     const second = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-s' })

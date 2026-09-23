@@ -146,11 +146,11 @@ describe('publicFor', () => {
     })
   })
 
-  // 세션의 note 는 앱이 자기에게 남긴 말이라 무엇이든 들 수 있다 — 여섯 칸만 나간다.
+  // 세션의 note 는 앱이 자기에게 남긴 말이라 무엇이든 들 수 있다 — 일곱 칸만 나간다.
   it('sessions 셋은 제 칸만 낸다', () => {
-    const row = { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, ptyId: 'p1' }
+    const row = { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'waiting', ptyId: 'p1' }
     expect(publicFor('sessions-list', [row])).toEqual([
-      { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true }
+      { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'waiting' }
     ])
     expect(
       publicFor('sessions-read', { id: 's1', alive: true, cols: 80, rows: 24, screen: ['hi'], scrollback: [], raw: 'x' })

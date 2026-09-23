@@ -92,6 +92,24 @@ describe('PtyRegistry', () => {
     expect(h.r.size('nope')).toBe(null)
   })
 
+  // `sessions list` judges a hook event against it (host/sessions.ts): input written after the event
+  // is something the event cannot account for. Resizing is not input.
+  it('remembers when a pty was last written to, and only for a write that reached it', () => {
+    let clock = 1000
+    const r = new PtyRegistry({ spawn: () => fakePty(), log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    expect(r.lastWrite('p1')).toBe(null)
+    r.write('p1', 'x')
+    expect(r.lastWrite('p1')).toBe(1000)
+    clock = 2000
+    r.resize('p1', 100, 40)
+    expect(r.lastWrite('p1')).toBe(1000)
+    r.write('p1', '\r')
+    expect(r.lastWrite('p1')).toBe(2000)
+    r.write('nope', 'x')
+    expect(r.lastWrite('nope')).toBe(null)
+  })
+
   // A message for a session that has gone is ordinary, not exceptional: the app may have sent it
   // before it learned the pty exited.
   it('ignores every command for an id it does not have', () => {

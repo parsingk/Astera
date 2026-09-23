@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync, appendFileSync, utimesSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { PtyRegistry, type RegistryPty } from './registry'
 import { ProcRegistry, type RegistryProc } from './procRegistry'
 import { registrySessions } from './sessions'
@@ -40,13 +43,18 @@ function fakeProc(): RegistryProc & { exit(code: number): void } {
 
 const opts = { cwd: 'D:/p', cols: 80, rows: 24, env: {} }
 
+/** A folder no test writes into: every session in it has no hook event file. */
+const NO_HOOK_DIR = path.join(os.tmpdir(), 'astera-sessions-test-no-hook-events')
+/** The registry's write clock, so a test can put input before or after an event file's mtime. */
+const clock = { now: 0 }
+
 /**
  * The Host's four kinds of process, one each, the way the app spawns them: **the Host's pty id is
  * not the app's id**. `createHostPtyFactory` (main/host/ptyFactory.ts) mints its own UUID for the pty
  * and the app's session id travels in the note — so the id a person has (`ASTERA_SESSION`, a
  * Dispatch's `sessionId`) is `meta.id`, and every lookup here has to go through it.
  */
-const harness = (size: { cols: number; rows: number } = { cols: 80, rows: 24 }) => {
+const harness = (size: { cols: number; rows: number } = { cols: 80, rows: 24 }, hookEventsDir = NO_HOOK_DIR) => {
   const made = new Map<string, ReturnType<typeof fakePty>>()
   const procsMade: ReturnType<typeof fakeProc>[] = []
   let next = ''
@@ -56,7 +64,8 @@ const harness = (size: { cols: number; rows: number } = { cols: 80, rows: 24 }) 
       made.set(next, p)
       return p
     },
-    log: () => {}
+    log: () => {},
+    now: () => clock.now
   })
   const procs = new ProcRegistry({
     spawn: () => {
@@ -90,49 +99,166 @@ const harness = (size: { cols: number; rows: number } = { cols: 80, rows: 24 }) 
       meta: { kind: 'chat', id: 'chat-1', restore: { accountId: 'acc2', cwd: 'D:/repo', title: '대화' } }
     })
   openChat('proc-a')
-  return { ptys, procs, agent, shell, openChat, procsMade, sessions: registrySessions({ ptys, procs }) }
+  return { ptys, procs, agent, shell, openChat, procsMade, sessions: registrySessions({ ptys, procs, hookEventsDir }) }
 }
 
 describe('registrySessions — list', () => {
   // **Agent sessions only.** A plain shell tab and a run configuration are ptys too, but neither is a
   // session a person or an agent talks to: the tab has no account, and the run is a build.
-  it('lists agent sessions and chat sessions by the app’s id, and nothing else', () => {
+  it('lists agent sessions and chat sessions by the app’s id, and nothing else', async () => {
     const { sessions } = harness()
-    expect(sessions.listSessions()).toEqual([
-      { id: 'ses-1', kind: 'terminal', title: 'repo', accountId: 'acc1', cwd: 'D:/repo', alive: true },
-      { id: 'chat-1', kind: 'chat', title: '대화', accountId: 'acc2', cwd: 'D:/repo', alive: true }
+    expect(await sessions.listSessions()).toEqual([
+      { id: 'ses-1', kind: 'terminal', title: 'repo', accountId: 'acc1', cwd: 'D:/repo', alive: true, state: 'unknown' },
+      { id: 'chat-1', kind: 'chat', title: '대화', accountId: 'acc2', cwd: 'D:/repo', alive: true, state: 'unknown' }
     ])
   })
 
   // The entry stays after the exit so `list` can say it ended (registry.ts) — and so does this one.
-  it('an ended session stays listed, as not alive', () => {
+  it('an ended session stays listed, as not alive', async () => {
     const { sessions, agent } = harness()
     agent.exit(0)
-    expect(sessions.listSessions()[0]).toMatchObject({ id: 'ses-1', alive: false })
+    expect((await sessions.listSessions())[0]).toMatchObject({ id: 'ses-1', alive: false })
   })
 
   // `ChatManager.respawnWithBypass` spawns again under the same note, so the ended process and its
   // replacement share one session id. One id is one session: the live one answers for it.
-  it('a session id held by an ended and a live process is listed once, as the live one', () => {
+  it('a session id held by an ended and a live process is listed once, as the live one', async () => {
     const { sessions, procsMade, openChat } = harness()
     procsMade[0].exit(1)
     openChat('proc-b')
-    const chats = sessions.listSessions().filter((s) => s.id === 'chat-1')
+    const chats = (await sessions.listSessions()).filter((s) => s.id === 'chat-1')
     expect(chats).toEqual([
-      { id: 'chat-1', kind: 'chat', title: '대화', accountId: 'acc2', cwd: 'D:/repo', alive: true }
+      { id: 'chat-1', kind: 'chat', title: '대화', accountId: 'acc2', cwd: 'D:/repo', alive: true, state: 'unknown' }
     ])
   })
 
   // A note the app wrote is the app's, and nothing forces its keys to be strings.
-  it('a note key that is not a string reads as null rather than being passed on', () => {
+  it('a note key that is not a string reads as null rather than being passed on', async () => {
     const ptys = new PtyRegistry({ spawn: fakePty, log: () => {} })
     const procs = new ProcRegistry({ spawn: fakeProc, log: () => {} })
     ptys.open({ id: 'p', file: 'sh', args: [], opts, meta: { kind: 'session', id: 's', restore: { title: 7 } } })
     // And a pty opened with no note at all (an older build, a hand-written client) is nobody.
     ptys.open({ id: 'q', file: 'sh', args: [], opts })
-    expect(registrySessions({ ptys, procs }).listSessions()).toEqual([
-      { id: 's', kind: 'terminal', title: null, accountId: null, cwd: null, alive: true }
+    expect(await registrySessions({ ptys, procs, hookEventsDir: NO_HOOK_DIR }).listSessions()).toEqual([
+      { id: 's', kind: 'terminal', title: null, accountId: null, cwd: null, alive: true, state: 'unknown' }
     ])
+  })
+})
+
+/**
+ * **`state`, from the hook event files the capture script appends** (main/statusline.ts,
+ * `hook-events/<sessionId>.jsonl` under the profile, named by the app's session id). The fixtures are
+ * the lines the capture writes: one hook payload per line, newline-terminated. The file's mtime is
+ * when its last line landed, and the registry's clock is when the pty was last typed into.
+ */
+describe('registrySessions — state', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const withEvents = () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'astera-hook-events-'))
+    dirs.push(dir)
+    const h = harness(undefined, dir)
+    /** Appends one event line, then pins the file's mtime so the test decides what came first. */
+    const event = (sessionId: string, payload: unknown, atMs = 1_000_000) => {
+      const file = path.join(dir, `${sessionId}.jsonl`)
+      appendFileSync(file, JSON.stringify(payload) + '\n')
+      utimesSync(file, atMs / 1000, atMs / 1000)
+      return file
+    }
+    const stateOf = async (id: string) => (await h.sessions.listSessions()).find((s) => s.id === id)?.state
+    clock.now = 0
+    return { ...h, dir, event, stateOf }
+  }
+
+  it('flips with the last event: Stop is waiting, a tool call is working, a permission prompt is waiting', async () => {
+    const { event, stateOf } = withEvents()
+    expect(await stateOf('ses-1')).toBe('unknown')
+    event('ses-1', { hook_event_name: 'Stop', session_id: 'native-uuid' })
+    expect(await stateOf('ses-1')).toBe('waiting')
+    event('ses-1', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 't1' })
+    expect(await stateOf('ses-1')).toBe('working')
+    event('ses-1', { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'needs permission' })
+    expect(await stateOf('ses-1')).toBe('waiting')
+    event('ses-1', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 't1' })
+    expect(await stateOf('ses-1')).toBe('working')
+  })
+
+  // No hook announces a new turn, so the file cannot say one started. Typing after the event —
+  // the next prompt and its Enter, an answer to the prompt, Esc — leaves the event unable to answer.
+  it('input typed after the last event makes it unknown, until the next event', async () => {
+    const { event, stateOf, ptys } = withEvents()
+    event('ses-1', { hook_event_name: 'Stop' }, 1_000_000)
+    clock.now = 1_000_500
+    ptys.write('pty-a', 'next prompt\r')
+    expect(await stateOf('ses-1')).toBe('unknown')
+    event('ses-1', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 't2' }, 1_001_000)
+    expect(await stateOf('ses-1')).toBe('working')
+  })
+
+  it('input typed before the last event does not matter', async () => {
+    const { event, stateOf, ptys } = withEvents()
+    clock.now = 999_000
+    ptys.write('pty-a', 'x')
+    event('ses-1', { hook_event_name: 'Stop' }, 1_000_000)
+    expect(await stateOf('ses-1')).toBe('waiting')
+  })
+
+  // `sessions send` types through the same registry, so it counts as input like any other.
+  it('a send through the Host counts as input', async () => {
+    const { event, stateOf, sessions } = withEvents()
+    event('ses-1', { hook_event_name: 'Stop' }, 1_000_000)
+    clock.now = 2_000_000
+    await sessions.sendSession('ses-1', 'go', false)
+    expect(await stateOf('ses-1')).toBe('unknown')
+  })
+
+  it('a report of something finished, or a line that is not JSON, says nothing', async () => {
+    const { event, dir, stateOf } = withEvents()
+    event('ses-1', { hook_event_name: 'Stop' })
+    event('ses-1', { hook_event_name: 'Notification', notification_type: 'agent_completed' })
+    expect(await stateOf('ses-1')).toBe('unknown')
+    appendFileSync(path.join(dir, 'ses-1.jsonl'), 'garbage\n')
+    expect(await stateOf('ses-1')).toBe('unknown')
+  })
+
+  // The capture appends the payload and its newline in one write; a last line without one is an
+  // event still arriving, and the line before it is no longer the latest.
+  it('a last line still being written is unknown', async () => {
+    const { event, dir, stateOf } = withEvents()
+    event('ses-1', { hook_event_name: 'Stop' })
+    appendFileSync(path.join(dir, 'ses-1.jsonl'), '{"hook_event_name":"PreTo')
+    expect(await stateOf('ses-1')).toBe('unknown')
+  })
+
+  // A Write's PreToolUse carries the whole file in tool_input — one line can be far longer than the
+  // first window read from the end.
+  it('reads a last line longer than the first window whole', async () => {
+    const { event, stateOf } = withEvents()
+    event('ses-1', { hook_event_name: 'Stop' })
+    event('ses-1', { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { content: 'x'.repeat(300_000) } })
+    expect(await stateOf('ses-1')).toBe('working')
+  })
+
+  it('an ended session is unknown, whatever its file says', async () => {
+    const { event, stateOf, agent } = withEvents()
+    event('ses-1', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 't1' })
+    agent.exit(0)
+    expect(await stateOf('ses-1')).toBe('unknown')
+  })
+
+  // A chat session has no hooks: its status comes from its protocol, which the app's adapter reads.
+  it('a chat session is unknown, even with a file under its id', async () => {
+    const { event, stateOf } = withEvents()
+    event('chat-1', { hook_event_name: 'Stop' })
+    expect(await stateOf('chat-1')).toBe('unknown')
+  })
+
+  it('an empty file is unknown', async () => {
+    const { dir, stateOf } = withEvents()
+    writeFileSync(path.join(dir, 'ses-1.jsonl'), '')
+    expect(await stateOf('ses-1')).toBe('unknown')
   })
 })
 

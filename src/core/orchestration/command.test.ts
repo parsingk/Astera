@@ -5644,7 +5644,7 @@ describe('sessions list / read / send', () => {
       sent,
       deps: {
         ...makeDeps(),
-        listSessions: () => listed,
+        listSessions: async () => listed,
         readSession: async (id, lines) => {
           reads.push([id, lines])
           return screen
@@ -5655,8 +5655,8 @@ describe('sessions list / read / send', () => {
       }
     }
   }
-  const term: HostSession = { id: 'ses-1', kind: 'terminal', title: 'repo', accountId: 'acc1', cwd: 'D:/p', alive: true }
-  const chat: HostSession = { id: 'chat-1', kind: 'chat', title: '대화', accountId: 'acc1', cwd: 'D:/p', alive: true }
+  const term: HostSession = { id: 'ses-1', kind: 'terminal', title: 'repo', accountId: 'acc1', cwd: 'D:/p', alive: true, state: 'waiting' }
+  const chat: HostSession = { id: 'chat-1', kind: 'chat', title: '대화', accountId: 'acc1', cwd: 'D:/p', alive: true, state: 'unknown' }
 
   it('sessions list 는 Host 가 준 목록 그대로다', async () => {
     const { deps } = withSessions([term, chat])

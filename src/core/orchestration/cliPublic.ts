@@ -142,7 +142,7 @@ type _runConfig = NothingLeft<Unlisted<OrchRunConfig, typeof RUN_CONFIG, []>>
 /** 세션의 칸은 앱이 pty 에 남긴 note 에서 온다 — 앱이 자기에게 남긴 말이라 무엇이든 들 수 있고
  *  (재개 id, 롤링 계정, 우회 권한), 그것이 공개 API 가 되면 안 된다. Host 가 이미 여섯 칸으로
  *  추리지만(host/sessions.ts) 그래도 적는다 — ACCOUNT 와 같은 이유다. */
-const SESSION = ['id', 'kind', 'title', 'accountId', 'cwd', 'alive'] as const
+const SESSION = ['id', 'kind', 'title', 'accountId', 'cwd', 'alive', 'state'] as const
 type _session = NothingLeft<Unlisted<HostSession, typeof SESSION, []>>
 /** `sessions read` 는 SessionScreen 에 id·alive 를 더한 것이고, `sessions send` 는 명령 층이 짓는다(command.ts). */
 const SESSION_READ = ['id', 'alive', 'cols', 'rows', 'screen', 'scrollback'] as const

@@ -272,9 +272,39 @@ skill installed after it, and `data.note` says so. Open a new session.
 
 **`sessions` reaches the agent sessions the Host holds**: each tab in which Astera runs Claude Code
 or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` holds inside it, and
-`sessions list` prints it beside `kind` (`terminal` or `chat`), `title`, `accountId`, `cwd` and
-`alive`. Ended sessions stay listed with `alive: false` until the Host stops. Plain shell tabs and run
+`sessions list` prints it beside `kind` (`terminal` or `chat`), `title`, `accountId`, `cwd`,
+`alive` and `state`. Ended sessions stay listed with `alive: false` until the Host stops. Plain shell tabs and run
 configurations are not agent sessions, and are not listed.
+
+**`state` says whether a session is `working`, `waiting` or `unknown`.** The Host reads it from the
+hook event file that the session's own Claude Code hooks append to, `hook-events/<sessionId>.jsonl`
+in the profile. The hooks run inside the agent, so the file keeps growing while the app is closed.
+The Host only reads the file. The last event in the file decides:
+
+| Last event | `state` |
+|---|---|
+| a tool call started or returned (`PreToolUse`, `PostToolUse`) | `working` |
+| the turn ended (`Stop`) | `waiting`: the session waits for its next prompt |
+| a notification that asks for a person: a permission prompt, a question, or "waiting for your input" | `waiting` |
+| a notification that only reports something finished, such as a subagent completing | `unknown` |
+
+Everything else is `unknown`:
+
+- **Codex sessions.** Codex runs without the hooks, so it has no event file.
+- **Chat sessions.** Their status is in the chat protocol, which only the app reads.
+- **Ended sessions.**
+- **Sessions with no event yet.** Claude Code writes no event when a session starts, and the app
+  clears the folder each time it launches. A session reads `unknown` until its first event after that.
+- **Sessions typed into since their last event.** No hook fires when a turn is submitted. So after
+  anything is typed into the session (by you in the tab, by the app, or by `sessions send`),
+  the last event can no longer answer. This covers the next prompt, an answer to a permission
+  prompt, and an Esc that interrupts a turn. The state stays `unknown` until the next event. A Claude
+  session whose tools are not hooked (one without Slack notifications or rolling) therefore usually
+  reads `unknown` while it works, and `waiting` again once the turn ends.
+- **A last line that is not a whole event**, because it is still being written or is not JSON.
+
+`waiting` means the last event left the session at a prompt, with nothing typed since. It does not
+say what the prompt is. Read the screen before you answer it.
 
 **`sessions read` shows what the session's tab shows.** The Host replays the session's recent output
 into a terminal emulator at the tab's current size and returns what that terminal displays:

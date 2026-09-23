@@ -16,7 +16,13 @@
 // into the Host. The emulator is the one package here, and it is why `read` is a screen — see
 // `render`. It is loaded by the first read rather than when the Host starts, so a checkout missing it
 // fails that command instead of taking down the Host every terminal runs on.
+//
+// **`state` comes from the hook event files** the capture script appends under the profile
+// (core/hooks/sessionState.ts says what each event means). Read only: the agent CLI writes them and
+// the app drains them; the Host opens each for reading and never writes, moves or deletes one.
+import { promises as fs } from 'node:fs'
 import type { HostSession, SessionScreen } from '../core/orchestration/command'
+import { hookEventsFileIn, sessionStateOf, type SessionState } from '../core/hooks/sessionState'
 import type { PtyEntry } from '../core/host/protocol'
 import { ptyDriver } from '../core/sessions/sessionDriver'
 import type { PtyRegistry } from './registry'
@@ -24,7 +30,7 @@ import type { ProcRegistry } from './procRegistry'
 
 /** The three the command layer is handed. `Required`, because the Host always has them. */
 export interface HostSessions {
-  listSessions(): HostSession[]
+  listSessions(): Promise<HostSession[]>
   readSession(id: string, lines: number): Promise<SessionScreen>
   sendSession(id: string, text: string, enter: boolean): Promise<void>
 }
@@ -32,7 +38,7 @@ export interface HostSessions {
 /** A note key as the app wrote it, or `null` — the note is the app's, and nothing checks its keys. */
 const text = (v: unknown): string | null => (typeof v === 'string' ? v : null)
 
-const rowOf = (e: PtyEntry, kind: HostSession['kind']): HostSession => {
+const rowOf = (e: PtyEntry, kind: HostSession['kind'], state: SessionState): HostSession => {
   const restore = e.meta?.restore ?? {}
   return {
     id: e.meta!.id,
@@ -40,7 +46,43 @@ const rowOf = (e: PtyEntry, kind: HostSession['kind']): HostSession => {
     title: text(restore.title),
     accountId: text(restore.accountId),
     cwd: text(restore.cwd),
-    alive: e.alive
+    alive: e.alive,
+    state
+  }
+}
+
+/** How much of the end of a file the first read takes. Most events are a few hundred bytes; a Write's
+ *  PreToolUse carries the file it writes, so the window doubles until it holds the whole last line. */
+const TAIL_WINDOW = 16 * 1024
+
+/**
+ * The last complete line of a hook event file and when it landed, or null when there is no file,
+ * nothing in it, or a last line still being written. The capture appends each payload and its
+ * newline in one write, so a file that does not end in a newline has an event arriving right now —
+ * the line before it is no longer the latest, and there is no answer to give yet.
+ *
+ * Never rejects: a file that cannot be read is a session with no signal, not a failed `list`.
+ */
+async function lastEventLine(file: string): Promise<{ line: string; at: number } | null> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+  try {
+    handle = await fs.open(file, 'r')
+    const { size, mtimeMs } = await handle.stat()
+    for (let want = TAIL_WINDOW; ; want *= 2) {
+      const start = Math.max(0, size - want)
+      const buf = Buffer.alloc(size - start)
+      await handle.read(buf, 0, buf.length, start)
+      if (buf.length === 0 || buf[buf.length - 1] !== 0x0a) return null
+      // A negative offset would count from the end and find the last newline again.
+      const before = buf.length < 2 ? -1 : buf.lastIndexOf(0x0a, buf.length - 2)
+      // The line starts inside the window, or the window is the whole file.
+      if (before !== -1 || start === 0)
+        return { line: buf.subarray(before + 1, buf.length - 1).toString('utf8'), at: mtimeMs }
+    }
+  } catch {
+    return null
+  } finally {
+    await handle?.close().catch(() => {})
   }
 }
 
@@ -89,8 +131,10 @@ async function render(data: string, size: { cols: number; rows: number }, lines:
 }
 
 export function registrySessions(a: {
-  ptys: Pick<PtyRegistry, 'list' | 'buffer' | 'write' | 'size'>
+  ptys: Pick<PtyRegistry, 'list' | 'buffer' | 'write' | 'size' | 'lastWrite'>
   procs: Pick<ProcRegistry, 'list'>
+  /** The profile's hook-events folder (core/hooks/sessionState.ts `hookEventsDirIn`). */
+  hookEventsDir: string
 }): HostSessions {
   /** The pty behind an agent session's id — only an agent session's, so a shell tab's id is nobody. */
   const ptyOf = (id: string): string | null =>
@@ -109,11 +153,22 @@ export function registrySessions(a: {
     else write(id, value)
   }
 
+  /** A live terminal session's state. Only a pty session has hooks at all — and only a Claude one:
+   *  Codex runs without the settings file that installs them, so it never has a file. A chat session
+   *  is a line process whose status is in its protocol, read by the app's adapter, not in a file. */
+  const stateOf = async (e: PtyEntry): Promise<SessionState> => {
+    if (!e.alive) return 'unknown'
+    const last = await lastEventLine(hookEventsFileIn(a.hookEventsDir, e.meta!.id))
+    return sessionStateOf({ lastLine: last?.line ?? null, eventAt: last?.at ?? null, lastInputAt: a.ptys.lastWrite(e.id) })
+  }
+
   return {
-    listSessions: () => {
+    listSessions: async () => {
+      const terminals = a.ptys.list().filter((e) => e.meta?.kind === 'session')
+      const states = await Promise.all(terminals.map(stateOf))
       const rows = [
-        ...a.ptys.list().filter((e) => e.meta?.kind === 'session').map((e) => rowOf(e, 'terminal')),
-        ...a.procs.list().filter((e) => e.meta?.kind === 'chat').map((e) => rowOf(e, 'chat'))
+        ...terminals.map((e, i) => rowOf(e, 'terminal', states[i])),
+        ...a.procs.list().filter((e) => e.meta?.kind === 'chat').map((e) => rowOf(e, 'chat', 'unknown'))
       ]
       // **One id, one row, and the live one.** `ChatManager.respawnWithBypass` spawns again under the
       // same note, so an ended process and its replacement can share an id.

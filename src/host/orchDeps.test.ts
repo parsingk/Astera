@@ -15,7 +15,7 @@ const base = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): Parameter
   onAppRequired: () => {},
   readAccounts: vi.fn().mockResolvedValue([]),
   readRunConfigs: vi.fn().mockResolvedValue([]),
-  sessions: { listSessions: () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} },
+  sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} },
   ...over
 })
 
@@ -282,8 +282,8 @@ describe('hostOrchDeps', () => {
    */
   describe('sessions — Host 가 스스로 답한다', () => {
     const fake = () => ({
-      listSessions: vi.fn(() => [
-        { id: 's1', kind: 'terminal' as const, title: 't', accountId: 'a', cwd: 'D:/p', alive: true }
+      listSessions: vi.fn(async () => [
+        { id: 's1', kind: 'terminal' as const, title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'waiting' as const }
       ]),
       readSession: vi.fn(async () => ({ cols: 80, rows: 24, screen: ['screen'], scrollback: [] })),
       sendSession: vi.fn(async () => {})
@@ -295,7 +295,7 @@ describe('hostOrchDeps', () => {
       const refused: string[] = []
       const deps = hostOrchDeps(base({ sessions, act, hasApp: () => false, onAppRequired: (n) => refused.push(n) }))
       expect(await deps.listSessions?.()).toEqual([
-        { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true }
+        { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'waiting' }
       ])
       expect((await deps.readSession?.('s1', 200))?.screen).toEqual(['screen'])
       await deps.sendSession?.('s1', 'echo hi', true)

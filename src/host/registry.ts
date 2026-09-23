@@ -64,6 +64,10 @@ interface Entry {
    *  the scrollback at it (host/sessions.ts), because the bytes were painted for that size. */
   cols: number
   rows: number
+  /** When anything was last typed into this pty, by the app or through the Host, in ms since the
+   *  epoch; null until the first write. `sessions list` holds a hook event against it
+   *  (core/hooks/sessionState.ts): input after the event is something the event cannot account for. */
+  lastWriteAt: number | null
 }
 
 export interface PtyRegistryDeps {
@@ -71,6 +75,8 @@ export interface PtyRegistryDeps {
   log(m: string): void
   /** Test injection; the wiring leaves it out and gets SCROLLBACK_CHARS. */
   scrollback?: number
+  /** Test injection; the wiring leaves it out and gets Date.now. */
+  now?: () => number
 }
 
 export class PtyRegistry {
@@ -122,7 +128,8 @@ export class PtyRegistry {
       buffer: '',
       alive: true,
       cols: a.opts.cols,
-      rows: a.opts.rows
+      rows: a.opts.rows,
+      lastWriteAt: null
     }
     this.entries.set(a.id, entry)
     pty.onData((d) => {
@@ -162,7 +169,15 @@ export class PtyRegistry {
   }
 
   write(id: string, data: string): void {
-    this.live(id)?.pty.write(data)
+    const e = this.live(id)
+    if (!e) return
+    e.pty.write(data)
+    e.lastWriteAt = (this.deps.now ?? Date.now)()
+  }
+
+  /** When `write` last reached this pty, or null for one never written to or never here. */
+  lastWrite(id: string): number | null {
+    return this.entries.get(id)?.lastWriteAt ?? null
   }
 
   resize(id: string, cols: number, rows: number): void {

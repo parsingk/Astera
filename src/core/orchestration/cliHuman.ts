@@ -189,6 +189,7 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
       return columns(
         asList(data, 'sessions').map((x) => [
           x.alive === true ? 'ALIVE' : 'ENDED',
+          str(x.state),
           str(x.id),
           str(x.kind),
           str(x.title)

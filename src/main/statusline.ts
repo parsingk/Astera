@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Account } from '../core/types'
+import { hookEventsDirIn, hookEventsFileIn } from '../core/hooks/sessionState'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -118,7 +119,9 @@ export class StatusLineManager {
     this.outDir = path.join(userDataDir, 'statusline')
     this.hookCapturePath = path.join(userDataDir, 'astera-hook-capture.cjs')
     this.hooksSettingsFile = path.join(userDataDir, 'astera-hooks-settings.json')
-    this.hookEventsDir = path.join(userDataDir, 'hook-events')
+    // The Host reads these files back for `sessions list` (host/sessions.ts), so where they are is one
+    // rule in core rather than a path spelled out twice.
+    this.hookEventsDir = hookEventsDirIn(userDataDir)
   }
 
   /** Writes the capture script and settings files, and resets the per-session output folder (removing leftovers from the previous run). */
@@ -257,7 +260,7 @@ export class StatusLineManager {
       originalCommand: this.readOriginalStatusLine(account.configDir),
       // Always set: with ASTERA_HOOK_OUT unset the capture script does nothing, so a hook that is
       // installed but has nowhere to write is the same as no hook at all.
-      hookOutPath: path.join(this.hookEventsDir, `${sessionId}.jsonl`)
+      hookOutPath: hookEventsFileIn(this.hookEventsDir, sessionId)
     }
   }
 

@@ -45,6 +45,7 @@ import { CLI_PROTOCOL } from './cliOutput'
 import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath } from './projects'
 import { workerDoneFieldError } from './sendArgs'
+import type { SessionState } from '../hooks/sessionState'
 import {
   DEFAULT_ASK_TIMEOUT_MS,
   DEFAULT_CHECK_TIMEOUT_MS,
@@ -108,6 +109,11 @@ export interface HostSession {
   accountId: string | null
   cwd: string | null
   alive: boolean
+  /** Whether a turn is running (`working`) or the session is waiting on a person (`waiting`), read
+   *  off the hook event file the capture script appends for it (core/hooks/sessionState.ts);
+   *  `unknown` when there is no signal to read — a Codex or chat session, an ended one, no event yet,
+   *  or input typed after the last event. */
+  state: SessionState
 }
 
 /** What `sessions read` shows: a terminal session's scrollback replayed into a terminal at the size
@@ -383,7 +389,7 @@ export interface OrchServerDeps {
   /** The agent sessions the Host holds, live and ended (`sessions list`). **Only the Host injects
    *  the three below**, from its own registries (host/sessions.ts): it is the process that holds the
    *  ptys, so it answers with or without an app. Absent, the three commands answer 409. */
-  listSessions?(): HostSession[]
+  listSessions?(): Promise<HostSession[]>
   /** A terminal session's screen, rendered, by the app's session id, with up to `lines` rows of
    *  scrollback — empty once it has ended, because the scrollback goes with it. */
   readSession?(id: string, lines: number): Promise<SessionScreen>
@@ -2503,7 +2509,7 @@ export async function handleCommand(
     case 'sessions-send': {
       if (!deps.listSessions || !deps.readSession || !deps.sendSession)
         return conflict('sessions are answered by the Astera Host, and this caller is not one')
-      if (routed === 'sessions-list') return okBody(deps.listSessions())
+      if (routed === 'sessions-list') return okBody(await deps.listSessions())
       const id = str(args.id)
       if (id === null) return bad('--id is required: a session id from `sessions list`')
       const lines = routed === 'sessions-read' && args.lines !== undefined ? posInt(args.lines) : 200
@@ -2515,7 +2521,7 @@ export async function handleCommand(
       const text = routed === 'sessions-send' ? str(args.text) : null
       if (routed === 'sessions-send' && text === null)
         return bad('--text is required: what to type (a value of `-` reads it from stdin)')
-      const session = deps.listSessions().find((x) => x.id === id)
+      const session = (await deps.listSessions()).find((x) => x.id === id)
       if (!session) return notFound(`unknown session: ${id}`)
       // 대화 세션은 줄 프로세스라 화면이 없고, 치는 길도 다르다(chatDriver). 이 조각은 터미널만이다.
       if (session.kind === 'chat')
