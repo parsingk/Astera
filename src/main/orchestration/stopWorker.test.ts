@@ -17,17 +17,23 @@ const hostEntry = (over: Partial<PtyEntry> = {}): PtyEntry => ({
   ...over
 })
 
-/** The app's side of it: `info` stands in for `core.sessions.list()`, `kill` for `core.sessions.kill`. */
+/** The app's side of it: `info` stands in for `core.sessions.list()`, `kill` for `core.sessions.kill`.
+ *  The Host stand-in answers each `pty-kill` it is sent the way `exit` says: with its `pty-exit`
+ *  (`'exits'`), or never (`'silent'`: the kill failed in the Host, or the socket dropped before the
+ *  Host read it, or the exit was lost on the way back). `entries` is each `pty-list` answer in turn. */
 const rig = (a: {
   app?: { status: 'running' | 'exited'; exitCode?: number }
-  entries?: PtyEntry[] | null
+  entries?: Array<PtyEntry[] | null>
   sent?: boolean
   host?: false
+  exit?: 'exits' | 'silent'
 }) => {
   const appKilled: string[] = []
   const hostKilled: string[] = []
   const logs: string[] = []
-  const list = vi.fn(async () => (a.entries === undefined ? [hostEntry()] : a.entries))
+  const answers = [...(a.entries ?? [[hostEntry()], [hostEntry()]])]
+  const list = vi.fn(async () => (answers.length > 1 ? answers.shift()! : answers[0]))
+  const exitCbs = new Map<string, () => void>()
   const d: KillWorkerDeps = {
     app: {
       info: () => a.app,
@@ -40,12 +46,19 @@ const rig = (a: {
             list,
             kill: (id) => {
               hostKilled.push(id)
-              return a.sent ?? true
+              const sent = a.sent ?? true
+              if (sent && (a.exit ?? 'exits') === 'exits') queueMicrotask(() => exitCbs.get(id)?.())
+              return sent
+            },
+            onExit: (id, cb) => {
+              exitCbs.set(id, cb)
+              return () => exitCbs.delete(id)
             }
           },
-    log: (m) => logs.push(m)
+    log: (m) => logs.push(m),
+    waitMs: 20
   }
-  return { d, appKilled, hostKilled, logs, list }
+  return { d, appKilled, hostKilled, logs, list, exitCbs }
 }
 
 describe('killWorkerSession', () => {
@@ -71,16 +84,46 @@ describe('killWorkerSession', () => {
     expect(h.hostKilled).toEqual(['p_host'])
   })
   it('refuses when the Host does not answer, instead of claiming the worker stopped', async () => {
-    const h = rig({ entries: null })
+    const h = rig({ entries: [null] })
     await expect(killWorkerSession('ses_host', h.d)).rejects.toThrow(/not stopped/)
     expect(h.hostKilled).toEqual([])
+  })
+  // Fix round I2: "the pty-kill left the app" is not "the worker ended". Only the Host's pty-exit, or a
+  // pty-list that no longer shows it alive, counts as stopped.
+  it('waits for the pty-exit the Host broadcasts, and does not ask again once it came', async () => {
+    const h = rig({})
+    await killWorkerSession('ses_host', h.d)
+    expect(h.list).toHaveBeenCalledTimes(1)
+    expect(h.exitCbs.size).toBe(0) // the listener was taken off again
+  })
+  it('refuses when the kill failed in the Host: no exit comes and the pty is still alive', async () => {
+    const h = rig({ exit: 'silent' })
+    await expect(killWorkerSession('ses_host', h.d)).rejects.toThrow(/not stopped/)
+    expect(h.hostKilled).toEqual(['p_host'])
+    expect(h.list).toHaveBeenCalledTimes(2)
+  })
+  it('refuses when the socket dropped before the Host read the kill', async () => {
+    // The send reached the socket, the Host never saw it, and the list asked afterwards has no answer.
+    const h = rig({ exit: 'silent', entries: [[hostEntry()], null] })
+    await expect(killWorkerSession('ses_host', h.d)).rejects.toThrow(/not stopped/)
+  })
+  it('succeeds when the exit was lost but the pty is gone', async () => {
+    const h = rig({ exit: 'silent', entries: [[hostEntry()], [hostEntry({ alive: false })]] })
+    await killWorkerSession('ses_host', h.d)
+    expect(h.hostKilled).toEqual(['p_host'])
+  })
+  it('refuses the first press whose check went unanswered, and the second press, finding it gone, succeeds', async () => {
+    const h = rig({ exit: 'silent', entries: [[hostEntry()], null, [hostEntry({ alive: false })]] })
+    await expect(killWorkerSession('ses_host', h.d)).rejects.toThrow(/not stopped/)
+    await killWorkerSession('ses_host', h.d)
+    expect(h.hostKilled).toEqual(['p_host']) // the second press had nothing left to kill
   })
   it('refuses when the kill could not be sent to the Host', async () => {
     const h = rig({ sent: false })
     await expect(killWorkerSession('ses_host', h.d)).rejects.toThrow(/not stopped/)
   })
   it('has nothing to kill when the Host runs no live pty for that session', async () => {
-    const h = rig({ entries: [hostEntry({ alive: false }), hostEntry({ id: 'p2', meta: { kind: 'session', id: 'ses_other', restore: {} } })] })
+    const h = rig({ entries: [[hostEntry({ alive: false }), hostEntry({ id: 'p2', meta: { kind: 'session', id: 'ses_other', restore: {} } })]] })
     await killWorkerSession('ses_host', h.d)
     expect(h.hostKilled).toEqual([])
   })
@@ -150,11 +193,18 @@ describe("the app's worker-stop on a worker the Host spawned", () => {
   })
   it('before adoption, with a Host that does not answer, fails and leaves the Dispatch open', async () => {
     const { state, dispatchId } = withWorker()
-    const h = rig({ entries: null })
+    const h = rig({ entries: [null] })
     const deps = appDeps(state, h.d)
     await expect(handleCommand(deps, { sessionId: 'astera:app' }, 'worker-stop', { dispatch: dispatchId })).rejects.toThrow(/not stopped/)
     expect(deps.box.state.dispatches[0].endedAt).toBeUndefined()
     expect(deps.box.state.dispatches[0].workerState).not.toBe('stopped')
+  })
+  it('before adoption, with a kill the Host never carried out, fails and leaves the Dispatch open', async () => {
+    const { state, dispatchId } = withWorker()
+    const h = rig({ exit: 'silent' })
+    const deps = appDeps(state, h.d)
+    await expect(handleCommand(deps, { sessionId: 'astera:app' }, 'worker-stop', { dispatch: dispatchId })).rejects.toThrow(/not stopped/)
+    expect(deps.box.state.dispatches[0].endedAt).toBeUndefined()
   })
   it('after adoption, kills through the app handle', async () => {
     const { state, dispatchId } = withWorker()

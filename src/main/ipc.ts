@@ -2713,14 +2713,22 @@ export function registerIpc(
       isAlive: (id) => core.sessions.list().some((s) => s.id === id && s.status === 'running'),
       // A worker the Host started is not the app's until `pty-opened` has been answered, and
       // `core.sessions.kill` of a session the app does not hold does nothing — so worker-stop would
-      // mark it stopped while it keeps running. `killWorkerSession` ends it in the Host instead, or
-      // refuses (Task 11 review I3(c)).
+      // mark it stopped while it keeps running. `killWorkerSession` ends it in the Host instead, and
+      // counts it stopped only on the Host's pty-exit or a list that no longer shows it; otherwise it
+      // refuses (Task 11 review I3(c), fix round I2).
       killSession: (id) =>
         killWorkerSession(id, {
           app: { info: (sid) => core.sessions.list().find((s) => s.id === sid), kill: (sid) => core.sessions.kill(sid) },
           host:
             hostClient && hostPtyList
-              ? { list: hostPtyList, kill: (ptyId) => hostClient?.send({ t: 'pty-kill', id: ptyId }) ?? false }
+              ? {
+                  list: hostPtyList,
+                  kill: (ptyId) => hostClient?.send({ t: 'pty-kill', id: ptyId }) ?? false,
+                  onExit: (ptyId, cb) =>
+                    hostClient?.onMessage((m) => {
+                      if (m.t === 'pty-exit' && m.id === ptyId) cb()
+                    }) ?? ((): void => {})
+                }
               : null,
           log: orchLog
         }),
