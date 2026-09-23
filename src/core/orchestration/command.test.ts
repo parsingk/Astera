@@ -5361,6 +5361,23 @@ describe('jobs create / tasks add / accounts list', () => {
     expect(deps.getState().tasks).toHaveLength(0)
   })
 
+  // **친 플래그로 센다, 값으로가 아니라.** `--job --run r1` 은 `job: true` 로 오는데 값으로 세면
+  // `--run` 하나만 준 것이 되어 부른 사람이 적은 `--job` 이 조용히 사라진다.
+  it('값 없이 친 --job·--run 도 친 것이다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const both = await shell(deps, 'tasks-add', { job: true, run: runId, spec: 's', account: 'acc1' })
+    expect(both.status).toBe(400)
+    const empty = await shell(deps, 'tasks-add', { job: '', spec: 's', account: 'acc1' })
+    expect(empty.status).toBe(400)
+    expect(JSON.stringify(empty.body)).toContain('--job needs a value')
+    const bare = await shell(deps, 'tasks-add', { run: true, spec: 's', account: 'acc1' })
+    expect(bare.status).toBe(400)
+    expect(JSON.stringify(bare.body)).toContain('--run needs a value')
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
   // **다른 종류의 id 는 그 플래그의 종류로 없는 것이다** — 조용히 다른 일을 하지 않는다.
   it('--job 에 회차 id, --run 에 계획 id 는 404 다', async () => {
     const deps = makeDeps()

@@ -254,10 +254,13 @@ export function argsForCall(a: {
   /** The CLI process's own process.cwd(). */
   cwd: string
 }): Record<string, unknown> {
-  const hasExplicitCwd = typeof a.args.cwd === 'string' && a.args.cwd.length > 0
+  const given = typeof a.args.cwd === 'string' && a.args.cwd.length > 0 ? a.args.cwd : null
   // `jobs create` is run-create under its public name (command.ts), so it needs the same default.
-  const takesCwd = a.cmd === 'run-create' || a.cmd === 'jobs-create'
-  return takesCwd && !hasExplicitCwd ? { ...a.args, cwd: a.cwd } : a.args
+  if (a.cmd !== 'run-create' && a.cmd !== 'jobs-create') return a.args
+  if (given === null) return { ...a.args, cwd: a.cwd }
+  // **An explicit relative path is resolved here too, for the same reason.** Sent as typed, `--cwd .`
+  // is resolved against whichever process answers it, and the Job's workers start there.
+  return path.isAbsolute(given) ? a.args : { ...a.args, cwd: path.resolve(a.cwd, given) }
 }
 
 /**

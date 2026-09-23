@@ -3,7 +3,8 @@
 // **The command layer never learns which is which.** That is the whole point of the split (host
 // control plane design §5) — when S2 makes startWorker local, this file changes and `handleCommand`
 // does not.
-import type { OrchServerDeps } from '../core/orchestration/command'
+import type { OrchAccount, OrchServerDeps } from '../core/orchestration/command'
+import type { Provider } from '../core/types'
 import { AppUnreachable } from '../core/host/orchProtocol'
 
 /** What the Host answers out of itself. `runningSessions` and `appVersion` look like app questions
@@ -25,7 +26,7 @@ const OWNED = ['getState', 'setState', 'now', 'log', 'runningSessions', 'appVers
  */
 const PROPAGATES = [
   'startWorker', 'releaseWorker', 'mergeWorktrees', 'removeWorktrees', 'startCoordinator',
-  'makeRunWorktree', 'listAccounts', 'readWorker',
+  'makeRunWorktree', 'readWorker',
   // **`listRunConfigs` stays here although `[]` is its documented absent value.** A coordinator told
   // "there are no check configs" omits `--validate`, and that Run then completes with verification
   // silently off, recorded nowhere. A refusal a person sees beats a Run that quietly skipped its
@@ -132,8 +133,30 @@ const FIRE_AND_FORGET = [
   'unregisterRolling', 'startValidation', 'startReview', 'startRepair', 'onDispatchLost'
 ] as const
 
+/**
+ * **Forwarded when the app is there, and answered from the profile when it is not** (CLI phase C).
+ *
+ * `listAccounts` was PROPAGATES, and that left a shell with Astera closed able to create a Job and
+ * unable to put a task in it: `tasks add` checks every `--account`, and `accounts list` itself is
+ * the list. The answer does not need the app, only the app's file — the profile's accounts.json,
+ * which the app writes and nothing else does.
+ *
+ * **Not DEGRADES, and the difference is the point.** A degraded value is a stand-in the command
+ * layer copes with (`null`, `'en'`). This fallback is the real answer: with no app attached there is
+ * no writer, so the file is the last word the app wrote. When the app *is* attached its in-memory
+ * list stays the authority, because it can lead the disk for a moment (a save that has not landed).
+ *
+ * Cannot-be-asked is one condition here as in DEGRADES: no app, or an app that stopped answering
+ * mid-question, both read the file, and both are logged. `onAppRequired` is **not** called when the
+ * read succeeds, so the call is not answered CONFLICT. When the read itself fails — a corrupt file,
+ * which only the app may repair — it is called, and the caller gets 6 with the file's own reason.
+ *
+ * The local read is injected (`readAccounts`), so this file stays free of the filesystem.
+ */
+const LOCAL_WHEN_ABSENT = ['listAccounts'] as const
+
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
-const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING]
+const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING, ...LOCAL_WHEN_ABSENT]
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
  *  synchronous getters became `T | Promise<T>` in `command.ts` and are awaited at their one call site
@@ -145,6 +168,7 @@ type Classified =
   | (typeof FIRE_AND_FORGET)[number]
   | keyof typeof NESTED
   | keyof typeof DEGRADES
+  | (typeof LOCAL_WHEN_ABSENT)[number]
 
 /**
  * **Whether calling this dependency changes something outside the state** (request receipts design
@@ -178,7 +202,6 @@ const EFFECTFUL: Record<Classified, boolean> = {
   removeWorktrees: true,
   startCoordinator: true,
   makeRunWorktree: true,
-  listAccounts: false,
   readWorker: false,
   listRunConfigs: false,
   browserRun: true,
@@ -208,7 +231,9 @@ const EFFECTFUL: Record<Classified, boolean> = {
   // DEGRADES.
   repairTargetFor: false,
   repairOnce: true,
-  lang: false
+  lang: false,
+  // LOCAL_WHEN_ABSENT — a read either way, from the app or from its file.
+  listAccounts: false
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -263,6 +288,9 @@ export function hostOrchDeps(a: {
    *  holds it past the deadline, and neither says the app did not do it — a request that may have
    *  landed has to read as one that did. */
   onEffect?(): void
+  /** `listAccounts` answered from the profile's accounts.json (LOCAL_WHEN_ABSENT). Rejects when the
+   *  file cannot be read, with a message that says how to repair it. */
+  readAccounts(provider?: Provider): Promise<OrchAccount[]>
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -322,6 +350,33 @@ export function hostOrchDeps(a: {
       }
     }
 
+  /** Same forwarding, but a question that could not be put to the app is answered by `local` — see
+   *  LOCAL_WHEN_ABSENT. A failed local read is the app being required after all: it is flagged and
+   *  thrown as `AppUnreachable`, carrying the reader's own reason. */
+  const localWhenAbsent = (name: string, local: (...args: never[]) => Promise<unknown>) =>
+    async (...args: unknown[]): Promise<unknown> => {
+      const fromFile = async (why: string): Promise<unknown> => {
+        try {
+          const value = await local(...(args as never[]))
+          a.log(`${name} answered from accounts.json (${why})`)
+          return value
+        } catch (err) {
+          const refused = new AppUnreachable(
+            `APP_REQUIRED: ${name} could not be answered without the app: ${err instanceof Error ? err.message : String(err)}`
+          )
+          a.onAppRequired(name, refused.message)
+          throw refused
+        }
+      }
+      if (!a.hasApp()) return fromFile('no app attached')
+      try {
+        return await act(name, args)
+      } catch (err) {
+        if (!(err instanceof AppUnreachable)) throw err
+        return fromFile(err.message)
+      }
+    }
+
   /** Same forwarding, with the refusal caught and written down instead of thrown. Returns nothing:
    *  the declared signature is `void`, and handing back a promise is what made this dangerous. */
   const forgetful = (name: string) =>
@@ -337,6 +392,7 @@ export function hostOrchDeps(a: {
     REMOTE.map((name) => {
       if ((FIRE_AND_FORGET as readonly string[]).includes(name)) return [name, forgetful(name)]
       if (name in DEGRADES) return [name, degrading(name, DEGRADES[name as keyof typeof DEGRADES])]
+      if (name === 'listAccounts') return [name, localWhenAbsent(name, a.readAccounts)]
       return [name, forward(name, (PROPAGATES as readonly string[]).includes(name))]
     })
   )

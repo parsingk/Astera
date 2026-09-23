@@ -241,6 +241,20 @@ describe('argsForCall — run-create의 --cwd 기본값 (task-13a)', () => {
       argsForCall({ cmd: 'jobs-create', args: { objective: 'o', cwd: 'D:/explicit' }, cwd: 'D:/my-cwd' })
     ).toEqual({ objective: 'o', cwd: 'D:/explicit' })
   })
+  // **상대 경로는 CLI 의 cwd 에 대해 푼다.** 그대로 보내면 받는 프로세스(Host·앱)의 cwd 에 대해
+  // 풀리고, 그 회차의 워커가 엉뚱한 폴더에서 뜬다.
+  it('명시한 상대 --cwd 는 CLI의 cwd 에 대해 절대 경로가 된다', () => {
+    const here = path.resolve('/work/repo/sub')
+    for (const cmd of ['jobs-create', 'run-create']) {
+      expect(argsForCall({ cmd, args: { objective: 'o', cwd: '.' }, cwd: here })).toEqual({
+        objective: 'o',
+        cwd: here
+      })
+      expect(argsForCall({ cmd, args: { objective: 'o', cwd: '../other' }, cwd: here }).cwd).toBe(
+        path.resolve(here, '../other')
+      )
+    }
+  })
   it('run-create가 아닌 명령에는 CLI의 cwd를 채우지 않는다', () => {
     expect(argsForCall({ cmd: 'tasks-list', args: {}, cwd: 'D:/my-cwd' })).toEqual({})
   })

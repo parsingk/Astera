@@ -20,7 +20,9 @@ function slugify(label: string): string {
   return s || 'account'
 }
 
-function isValidAccount(a: unknown): a is Account {
+/** Exported for accountsFile.ts, the Host's read-only look at this same file — one rule for which
+ *  file is corrupt. */
+export function isValidAccount(a: unknown): a is Account {
   if (a === null || typeof a !== 'object') return false
   const o = a as Record<string, unknown>
   return (

@@ -784,6 +784,37 @@ describe('요청 영수증', () => {
     expect(saved.tasks, '재시도가 Task 를 하나 더 만들었다').toHaveLength(1)
   })
 
+  // 앱이 닫혀 있어도 셸이 계획을 짤 수 있다 — 계정 목록은 프로필의 accounts.json 이 답한다.
+  it('앱이 없으면 accounts.json 으로 계정을 답하고 tasks add 가 돈다', async () => {
+    await fs.writeFile(
+      path.join(dir, 'accounts.json'),
+      JSON.stringify({
+        accounts: [
+          { id: 'acc1', label: '일', configDir: 'D:/cfg', color: '#fff', createdAt: 'T', provider: 'claude' }
+        ]
+      }),
+      'utf8'
+    )
+    const act = vi.fn()
+    const orch = orchOver({ act, hasApp: () => false })
+    const list = await orch.call({ cmd: 'accounts-list', args: {}, sessionId: '' })
+    expect(list.status).toBe(200)
+    expect(list.body).toEqual([{ id: 'acc1', label: '일', provider: 'claude' }])
+    const job = await orch.call({
+      cmd: 'jobs-create',
+      args: { objective: 'o', cwd: 'D:/p', coordinatorAccount: 'acc1' },
+      sessionId: ''
+    })
+    expect(job.status).toBe(200)
+    const add = await orch.call({
+      cmd: 'tasks-add',
+      args: { job: (job.body as { id: string }).id, spec: 's', account: 'acc1' },
+      sessionId: ''
+    })
+    expect(add.status).toBe(200)
+    expect(act).not.toHaveBeenCalledWith('listAccounts', expect.anything())
+  })
+
   // **우리 마음대로 합치지 않는다.** 두 호출이 한 요청이라는 말은 부르는 쪽만 할 수 있고, 그 말이
   // 요청 id 다 — id 가 다르면 두 번 하는 것이 맞다.
   it('요청 id 가 다르면 두 번 만든다', async () => {

@@ -13,6 +13,7 @@ const base = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): Parameter
   hasApp: () => true,
   log: () => {},
   onAppRequired: () => {},
+  readAccounts: vi.fn().mockResolvedValue([]),
   ...over
 })
 
@@ -142,6 +143,83 @@ describe('hostOrchDeps', () => {
     )
     await expect(deps.readWorker({ dispatchId: 'd1' })).rejects.toThrow(/no account/)
     expect(refused).toEqual([])
+  })
+
+  /**
+   * **계정 목록은 앱이 없으면 프로필의 accounts.json 이 답한다**(CLI phase C, 수정 1회차). 앱만이
+   * 그 파일을 쓰므로 앱이 없으면 쓰는 쪽이 없고, 파일이 앱이 마지막으로 남긴 말이다. 앱이 있으면
+   * 앱의 메모리가 정본이다 — 잠깐 디스크보다 앞설 수 있다.
+   */
+  describe('listAccounts — 앱이 없으면 파일', () => {
+    const acc = [{ id: 'acc1', label: '일', provider: 'claude' as const }]
+
+    it('앱이 없으면 파일을 읽고, 앱 문제로 표시하지 않는다', async () => {
+      const refused: string[] = []
+      const act = vi.fn()
+      const readAccounts = vi.fn().mockResolvedValue(acc)
+      const deps = hostOrchDeps(
+        base({ hasApp: () => false, act, readAccounts, onAppRequired: (n) => refused.push(n) })
+      )
+      expect(await deps.listAccounts('claude')).toEqual(acc)
+      expect(readAccounts).toHaveBeenCalledWith('claude')
+      expect(act).not.toHaveBeenCalled()
+      expect(refused).toEqual([])
+    })
+
+    it('앱이 있으면 앱에 묻고 파일은 읽지 않는다', async () => {
+      const act = vi.fn().mockResolvedValue(acc)
+      const readAccounts = vi.fn()
+      const deps = hostOrchDeps(base({ act, readAccounts }))
+      expect(await deps.listAccounts()).toEqual(acc)
+      expect(act).toHaveBeenCalledWith('listAccounts', [])
+      expect(readAccounts).not.toHaveBeenCalled()
+    })
+
+    // 못 묻는 것은 한 조건이다 — 앱이 없는 것과 도중에 답하지 않는 것은 같은 사실이다.
+    it('앱이 도중에 닿지 않으면 파일로 답하고 로그를 남긴다', async () => {
+      const logs: string[] = []
+      const refused: string[] = []
+      const readAccounts = vi.fn().mockResolvedValue(acc)
+      const deps = hostOrchDeps(
+        base({
+          act: vi.fn().mockRejectedValue(new AppUnreachable('did not answer in time')),
+          readAccounts,
+          log: (m) => logs.push(m),
+          onAppRequired: (n) => refused.push(n)
+        })
+      )
+      expect(await deps.listAccounts('codex')).toEqual(acc)
+      expect(readAccounts).toHaveBeenCalledWith('codex')
+      expect(refused).toEqual([])
+      expect(logs.some((l) => l.includes('listAccounts') && l.includes('accounts.json'))).toBe(true)
+    })
+
+    // 앱이 답한 실패는 그 행동의 실패다 — 파일로 덮지 않는다.
+    it('앱이 답한 실패는 파일로 덮지 않는다', async () => {
+      const readAccounts = vi.fn()
+      const deps = hostOrchDeps(base({ act: vi.fn().mockRejectedValue(new Error('boom')), readAccounts }))
+      await expect(deps.listAccounts()).rejects.toThrow(/boom/)
+      expect(readAccounts).not.toHaveBeenCalled()
+    })
+
+    // 파일이 깨졌으면 "지금은 못 한다" 가 참이다 — 6 으로, 고치는 방법을 말하며.
+    it('파일을 못 읽으면 앱 문제로 표시하고 고치는 말을 싣는다', async () => {
+      const refused: string[] = []
+      const deps = hostOrchDeps(
+        base({
+          hasApp: () => false,
+          readAccounts: vi.fn().mockRejectedValue(new Error('accounts.json could not be read; open Astera to repair it')),
+          onAppRequired: (n) => refused.push(n)
+        })
+      )
+      const err = await Promise.resolve(deps.listAccounts()).then(
+        () => null,
+        (e: unknown) => e
+      )
+      expect(err).toBeInstanceOf(AppUnreachable)
+      expect(String(err)).toMatch(/open Astera to repair it/)
+      expect(refused).toEqual(['listAccounts'])
+    })
   })
 
   // 명령 층이 이미 쓰고 있는 deps.log 가 Host 의 로그로 나간다 — 안 이으면 한도 탐침이 못 돈 것

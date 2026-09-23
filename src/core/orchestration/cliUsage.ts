@@ -256,7 +256,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'accounts-list': {
     summary: 'the agent accounts the app holds',
     detail:
-      'The ids `jobs create --coordinator-account` and `tasks add --account` take. Answered by the app, so it needs Astera open.',
+      'The ids `jobs create --coordinator-account` and `tasks add --account` take. With Astera closed the Host reads them from the profile, so this works either way.',
     flags: [{ name: 'agent', value: '<claude|codex>', about: 'only this vendor' }]
   },
 

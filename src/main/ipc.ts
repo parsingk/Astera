@@ -47,6 +47,7 @@ import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageReques
 import { providerOf } from '../core/providers/meta'
 import { markCodexProjectTrusted } from '../core/accounts/codexTrust'
 import { claudeConfigFileFor, markClaudeProjectTrusted } from '../core/accounts/claudeTrust'
+import { orchAccountOf } from '../core/accounts/accountsFile'
 import { descriptorOf, isAmbientDir } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
@@ -4301,7 +4302,8 @@ export function registerIpc(
         core.accounts
           .list()
           .filter((a) => provider === undefined || providerOf(a) === provider)
-          .map((a) => ({ id: a.id, label: a.label, provider: providerOf(a) })),
+          // 같은 투영을 Host 가 accounts.json 을 읽을 때도 쓴다(accountsFile.ts) — 두 답이 갈라지지 않게.
+          .map(orchAccountOf),
       // limit is a line count (200 by default). The tail is returned as-is even after the session has
       // died — worker-release does not clear output. Why untracked, empty, and non-empty tails get three
       // different messages is explained in tail.ts (an empty string reads as "the worker did nothing").

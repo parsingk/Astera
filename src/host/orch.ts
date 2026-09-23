@@ -11,6 +11,7 @@ import type { OrchState } from '../core/orchestration/state'
 import { runningRunCount } from '../core/orchestration/running'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { hostOrchDeps } from './orchDeps'
+import { readAccountsFile } from '../core/accounts/accountsFile'
 
 /** One reply — today's HTTP status and body, the shape `OrchCall.call` already answers with. Named
  *  only because the receipt store below holds one. */
@@ -402,6 +403,8 @@ export function createHostOrch(a: {
       act: a.act,
       hasApp: a.hasApp,
       log: a.log,
+      // 앱이 없을 때 계정 목록은 앱이 쓴 파일이 답한다(orchDeps 의 LOCAL_WHEN_ABSENT). 읽기만 한다.
+      readAccounts: (provider) => readAccountsFile(path.join(a.profileDir, 'accounts.json'), provider),
       onEffect: () => {
         marks.acted = true
       },

@@ -66,11 +66,11 @@ something (`jobs create`, `jobs run`, `tasks add`, `runs stop`, `runs resume`, `
 and both waiting commands (`jobs wait`, `runs wait`), which a static file cannot answer however long
 they wait.
 
-**The account list needs the app as well.** Accounts are held by the Astera app, not by the Host, so
-three commands need Astera open: `accounts list`, `tasks add` (it checks every `--account` it is
-given), and `jobs create` when it is given `--coordinator-account`. With only the Host running they
-exit 6 with `APP_REQUIRED` in the message. `jobs create` without `--coordinator-account` needs only
-the Host.
+**The account list works with the app closed.** `accounts list`, `tasks add` (it checks every
+`--account`) and `jobs create --coordinator-account` ask the app for its accounts when it is open.
+When it is closed, the Host reads the profile's `accounts.json` instead, which is the file the app
+keeps them in. The Host only reads that file and never changes it. If the file is damaged, those
+three commands exit 6 and the message says to open Astera, which repairs it.
 
 ### Which Host, and which profile
 
@@ -442,7 +442,7 @@ run=$(astera jobs run --id job_123 --request-id "$CI_JOB_ID-start" | jq -r '.dat
 Re-running that step answers with the same run rather than starting a second one. If the step dies
 before it reads the reply, `astera requests show --id "$CI_JOB_ID-start"` says whether it landed.
 
-Plan a Job from a pipeline, then run it (Astera open, since `tasks add` checks the account):
+Plan a Job from a pipeline, then run it:
 
 ```bash
 account=$(astera accounts list --agent claude | jq -r '.data.accounts[0].id')

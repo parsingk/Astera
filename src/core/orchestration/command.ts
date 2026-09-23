@@ -895,12 +895,17 @@ export async function handleCommand(
      * 거절한다. `--validate` 도 거절한다: 그 id 는 공개가 아닌 run-configs 에서 온다.
      */
     case 'tasks-add': {
-      const job = str(args.job)
-      const run = str(args.run)
       if (args.runId !== undefined) return bad('tasks add takes --run, not --run-id')
       if (args.validate !== undefined)
         return bad('--validate is not offered by tasks add yet (its ids come from run-configs)')
-      if ((job === null) === (run === null)) return bad('exactly one of --job or --run is required')
+      // **친 플래그로 센다, 값으로가 아니라.** `--job --run r1` 은 `job: true` 로 온다 — 값으로 세면
+      // `--run` 하나만 준 것이 되어, 부른 사람이 적은 `--job` 이 조용히 사라진다.
+      if ((args.job === undefined) === (args.run === undefined))
+        return bad('exactly one of --job or --run is required')
+      const job = str(args.job)
+      const run = str(args.run)
+      if (args.job !== undefined && job === null) return bad('--job needs a value: the Job id')
+      if (args.run !== undefined && run === null) return bad('--run needs a value: the run id')
       if (job !== null && !s.jobs.some((j) => j.id === job)) return notFound(`unknown job: ${job}`)
       if (run !== null && !s.runs.some((r) => r.id === run)) return notFound(`unknown run: ${run}`)
       const { job: _job, ...rest } = args
