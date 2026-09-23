@@ -3,7 +3,7 @@
 // cannot be tested — that is why the side-effect-free functions and main() were pulled in here.
 // main() does not call itself inside this file, so importing this module (as the tests do) does not
 // terminate the process.
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
@@ -262,6 +262,27 @@ export function liftRequestId(
   delete rest.requestId
   return { request: given, args: rest }
 }
+
+/**
+ * The id this invocation is known by when the caller named none (request receipts design §8).
+ *
+ * **A receipt's value is highest exactly where the caller did not plan for failure.** Somebody who
+ * thought to pass `--request-id` has already thought about retries; the caller who did not is the one
+ * who, when the answer is lost, has nothing to check — and that caller is the reason this exists.
+ * Minting only for the first leaves the protection with the people who needed it least. Without it
+ * the error of a lost answer cannot name an id, and that sentence — here is your request id, here is
+ * how to check it, here is how to retry it — is the sentence the feature exists to write.
+ *
+ * **And it changes no success path.** A replay is only ever triggered by an id being *presented
+ * again*; a minted one is sent once and never re-sent by this program, so nobody gets a different
+ * answer, a different exit code or a different order for not having asked (§9). What an unkeyed
+ * caller pays is one `randomUUID()`, 36 bytes on the wire, and — only if the command acted — one
+ * bounded entry in a map that nothing reads.
+ *
+ * `randomUUID` rather than this repo's `a<8 hex>-<n>` convention (`chat/adapterCore.ts`) because
+ * there is no counter here to carry: one CLI process asks one thing and exits.
+ */
+export const mintRequestId = (): string => randomUUID()
 
 /**
  * A receipt's recorded response, filtered as the command that produced it would have been filtered.
@@ -632,7 +653,8 @@ export async function main(): Promise<void> {
   const lifted = liftRequestId(args)
   if ('error' in lifted) fail({ code: 'INVALID_ARGUMENTS', message: lifted.error })
   args = lifted.args
-  const request = lifted.request
+  /** **Every invocation carries an id, whether or not one was asked for** (`mintRequestId`, §8). */
+  const request = lifted.request ?? mintRequestId()
 
   /** The Host could not be reached at all, and the command is not one the state file can answer.
    *  A report is written down and the agent is told so; everything else fails exactly as it did.

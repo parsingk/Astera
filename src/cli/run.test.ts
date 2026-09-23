@@ -12,6 +12,7 @@ import {
   clientTimeoutMs,
   argsForCall,
   liftRequestId,
+  mintRequestId,
   shownReceipt,
   callHost,
   connectFailureEnd,
@@ -218,6 +219,27 @@ describe('liftRequestId — --request-id 는 인자가 아니라 메시지를 �
   it('값 없는 --request-id 는 조용히 버리지 않고 거절한다', () => {
     expect(liftRequestId({ requestId: true })).toEqual({ error: expect.stringContaining('--request-id') })
     expect(liftRequestId({ requestId: '' })).toEqual({ error: expect.stringContaining('--request-id') })
+  })
+})
+
+// **키를 안 단 쪽에도 id 가 있다**(설계 §8). 영수증의 값이 가장 큰 자리가 실패를 대비하지 않은
+// 호출자이고, 그쪽은 답을 잃었을 때 물어볼 것이 아무것도 없다 — 그리고 id 가 없으면 잃은 답의
+// 오류가 id 를 댈 수 없다. 그 문장이 이 기능이 쓰려는 문장이다.
+describe('mintRequestId — 키를 안 단 호출도 id 를 싣는다', () => {
+  // **두 번 같은 id 를 보내면 두 번째 명령이 첫 번째의 답을 받는다** — 새긴 id 가 재생을 부르는
+  // 유일한 길이 "다시 내미는 것" 이므로, 이쪽이 스스로 되풀이하면 그 약속이 깨진다.
+  it('같은 id 를 두 번 내놓지 않는다', () => {
+    const minted = new Set(Array.from({ length: 500 }, () => mintRequestId()))
+    expect(minted.size).toBe(500)
+  })
+
+  // Host 가 거절하지 않을 모양이어야 한다 — 저쪽의 검사는 "비어 있지 않고, 200자 이하이고,
+  // 제어문자가 없다" 이다(host/orch.ts 의 badRequestId).
+  it('Host 가 받아 주는 모양이다', () => {
+    const id = mintRequestId()
+    expect(id.length).toBeGreaterThan(0)
+    expect(id.length).toBeLessThanOrEqual(200)
+    expect(id).toMatch(/^[0-9a-f-]+$/)
   })
 })
 
