@@ -285,8 +285,9 @@ const STEPS: Record<
     cmd === 'tasks-add' && typeof details.jobId === 'string'
       ? ['astera run-configs list --job <jobId>']
       : listingFor(cmd),
-  // 403 은 언제나 "이 세션은 그 명령을 부를 수 없다" 다(command.ts 의 COORDINATOR_ONLY). 누가
-  // 무엇을 부를 수 있는지는 가이드에만 적혀 있고, 그것을 읽는 것 말고 칠 것이 없다.
+  // 403 은 "이 세션에는 허락되지 않는다" 다. 대개 COORDINATOR_ONLY 명령을 워커가 부른 것이고
+  // (command.ts), `worker-start --terminal` 에 다른 회차의 세션을 준 것도 403 이다(phase D). 어느
+  // 쪽이든 무엇이 허락되는지는 가이드에 적혀 있고, 그것을 읽는 것 말고 칠 것이 없다.
   PERMISSION_DENIED: () => ['astera help'],
   // 409 는 지금 상태 때문에 거절된 것이므로, 답은 "지금 무엇이 도는가" 다.
   //

@@ -209,7 +209,7 @@ import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun, prepareLaunch } from './run/prepare'
-import { orchRunConfigOf } from '../core/run/runConfigsFile'
+import { allowingJobCwds, orchRunConfigOf } from '../core/run/runConfigsFile'
 import { seedKeyOf } from '../core/run/config'
 import { executeLaunch } from './run/launch'
 import { resolveConsolePath } from './run/resolveLink'
@@ -4406,7 +4406,9 @@ export function registerIpc(
         const { configs } = await loadRunConfigs({
           projectPath,
           stored: core.runConfig.get(projectPath),
-          assertAllowedPath
+          // 이 층의 모든 호출(run-configs, run-configs-list, tasks-add)은 상태의 Job cwd 를 넘긴다.
+          // 셸에서 만든 Job 의 새 폴더도 받는다 — 앱이 닫혀 있을 때 Host 가 읽는 것과 같은 경계다.
+          assertAllowedPath: allowingJobCwds(() => store.get().jobs, assertAllowedPath)
         })
         return configs.map(orchRunConfigOf)
       },

@@ -78,10 +78,11 @@ keeps them in. The Host only reads that file and never changes it. If the file i
 three commands exit 6 and the message says to open Astera, which repairs it.
 
 **The run configurations work with the app closed too.** `run-configs list` and `tasks add
---validate` (it checks every id) ask the app when it is open. When it is closed, the Host builds the
-same list the app would: the configurations saved in the profile's `run-configs.json` for the Job's
-folder, and the ones that folder's `package.json`, Gradle or Maven build file gives. It only reads.
-A damaged `run-configs.json` is a 6 with the same "open Astera" message.
+--validate` (it checks every id) ask the app when it is open, and the app answers for the Job's own
+folder even when no session has run there yet. When it is closed, the Host builds the same list the
+app would: the configurations saved in the profile's `run-configs.json` for the Job's folder, and the
+ones that folder's `package.json`, Gradle, Maven, `Cargo.toml` or `go.mod` gives. It only reads. A
+damaged `run-configs.json` is a 6 with the same "open Astera" message.
 
 **The sessions commands work with the app closed, and need a Host.** `sessions list`, `sessions read`
 and `sessions send` are answered by the Host out of the sessions it holds, because the Host is the
@@ -223,7 +224,9 @@ Job's is a 4, and `nextSteps` is `astera run-configs list --job <jobId>` with th
 **`run-configs list --job <jobId>` prints `id`, `name` and `type`** for each run configuration of the
 Job's folder: the ones the app's Run menu shows there, saved and detected. Nothing else about a
 configuration is printed, so its command and environment stay in the app. A run id is a 4, as it is
-for `tasks add --job`.
+for `tasks add --job`. Saved configurations belong to a folder exactly as the Job names it, so create
+the Job from the project root (or pass `--cwd` with the root); a Job made from a subfolder lists only
+what that subfolder's build files give.
 
 **`accounts list` prints `id`, `label` and `provider`** for each account the app holds, and nothing
 else about them. `--agent claude` or `--agent codex` narrows it to one vendor.

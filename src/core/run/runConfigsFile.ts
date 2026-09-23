@@ -22,6 +22,23 @@ import type { OrchRunConfig } from '../orchestration/command'
 export const orchRunConfigOf = (c: RunConfig): OrchRunConfig => ({ id: c.id, name: c.name, type: c.type })
 
 /**
+ * The app's path guard for `listRunConfigs`, widened by exactly one thing: a path that **is** a Job's
+ * cwd in the orchestration state (CLI phase D, fix round 1).
+ *
+ * The app's `assertAllowedPath` accepts session cwds, registered worktrees and known history
+ * projects. A Job created from a shell in a folder the app has never seen is none of those, so with
+ * the app open `run-configs list` and `tasks add --validate` failed with "path not allowed", while
+ * with the app closed the Host answered from that same cwd (the boundary this file's header states).
+ * Workers already start in a Job's cwd, and reading its top-level names and three build files is
+ * weaker than that. Exact match only: a subfolder or another spelling still goes to `guard`.
+ * `jobs` is read on every call, so a Job committed a moment ago counts.
+ */
+export const allowingJobCwds =
+  (jobs: () => readonly { cwd: string }[], guard: (p: string) => Promise<string>) =>
+  async (p: string): Promise<string> =>
+    jobs().some((j) => j.cwd === p) ? p : guard(p)
+
+/**
  * The run configurations of `projectPath`: those saved for it in `filePath`, merged with the seeds
  * its build files give, exactly as the app merges them (`loadRunConfigs`).
  *
