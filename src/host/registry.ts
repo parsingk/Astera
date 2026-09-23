@@ -285,16 +285,20 @@ export class PtyRegistry {
 
   /** How the pty for this session ended, or null when it is alive or was never here. A scan, asked
    *  once per exit. A session with a live pty has not ended, whatever an earlier pty of it did; of
-   *  several ended ones, the one opened last is the answer. A pty that ended with no code (node-pty
-   *  can deliver one) answers null too, as its type says, because no number can be read from it. */
-  sessionExitCode(sessionId: string): number | null {
-    let code: number | null = null
+   *  several ended ones, the one opened last is the answer.
+   *
+   *  **Boxed, so that "ended with no code" is not "never here".** node-pty can end a pty with no code
+   *  (the `exited undefined` lines), and that answers `{ code: null }`: the session did end. The
+   *  Host's handover sweep closes an ended session's Dispatch and skips one the registry never held
+   *  (R3), and a bare `null` for both would skip a pty that is dead. */
+  sessionExitCode(sessionId: string): { code: number | null } | null {
+    let ended: { code: number | null } | null = null
     for (const e of this.entries.values()) {
       if (e.meta?.kind !== 'session' || e.meta.id !== sessionId) continue
       if (e.alive) return null
-      code = e.exitCode ?? null
+      ended = { code: e.exitCode ?? null }
     }
-    return code
+    return ended
   }
 
   list(): PtyEntry[] {

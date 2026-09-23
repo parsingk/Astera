@@ -23,6 +23,7 @@ import { nodeProcSpawn } from './nodeProc'
 import { HOST_FEATURE_SPAWN, HOST_PROTOCOL } from '../core/host/protocol'
 import { createHostOrch } from './orch'
 import { createHostSpawner } from './spawner'
+import { createHostExits } from './exits'
 import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
 import { readAccountEntries } from '../core/accounts/accountsFile'
@@ -198,6 +199,19 @@ async function main(): Promise<void> {
     }),
     local: spawner
   })
+
+  // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and
+  // emptying their coordinator slots, and the handover sweep when an app leaves. **Only with a
+  // spawner**, because the feature and the duty are one fact: without one the Host starts no session
+  // of its own, every agent session was the app's, and the app handles its exits as it always has.
+  const exits = spawner
+    ? createHostExits({
+        registry,
+        sessionExited: (e) => orch.sessionExited(e),
+        orphanedSessions: (isAlive) => orch.orphanedSessions(isAlive),
+        log: (m) => log.write(m)
+      })
+    : null
   try {
     server = await startHostServer({
       address: addr.address,
@@ -205,7 +219,15 @@ async function main(): Promise<void> {
       version: hostVersion,
       idleMs: IDLE_MS,
       onIdle: () => leave(),
-      onMessage: (m, send) => (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false),
+      onMessage: (m, send, from) => {
+        // Before the pty handler, so the mark is in place before a spawn can exit.
+        if (exits && from.role === 'app' && (m.t === 'pty-spawn' || m.t === 'pty-attach')) exits.heldBy(m.id, from.socket)
+        return (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false)
+      },
+      // Released by the socket number whatever role the socket gave last: a second `hello` can change
+      // it, and marks made as an app must still go when that socket closes. A socket that never held a
+      // pty, which is every CLI call, runs no sweep (exits.ts).
+      onClientGone: (from) => exits?.appGone(from.socket),
       // **Both halves are real now** (ruling F57). The Host owns the state, so it can answer the
       // question `docs/cli.md` already promises `astera host stop` answers: how many Runs have work
       // in flight. The rule is `runningRunCount`'s, which is the sidebar's rule over the state rather

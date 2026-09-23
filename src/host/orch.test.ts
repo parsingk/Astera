@@ -15,6 +15,7 @@ import {
 } from './orch'
 import {
   applyWorkerDone,
+  attachCoordinator,
   createJob,
   createTask,
   emptyState,
@@ -2115,5 +2116,76 @@ describe('repair refusals (S2)', () => {
     const r = await orchOver({ hasApp: () => false, act: vi.fn() }).call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
     expect(r.status).toBe(409)
     expect(r.body).not.toHaveProperty('repair')
+  })
+})
+
+describe('the Host handles exits (S2)', () => {
+  /** One Job, one Run, and one open Dispatch per session id given, each on its own Task. */
+  const withDispatches = (sessionIds: string[]): { state: OrchState; runId: string; taskIds: string[] } => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW); if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
+    let state = run.state
+    const taskIds: string[] = []
+    for (const sessionId of sessionIds) {
+      const task = createTask(state, { runId: run.value.id, title: sessionId, spec: 's', deps: [] }, NOW); if (!task.ok) throw new Error(task.error)
+      const dsp = openDispatch(task.state, { taskId: task.value.id, provider: 'claude', accountId: 'acc1', sessionId, cwd: 'D:/p', specPath: 'D:/p/s.md' }, NOW)
+      if (!dsp.ok) throw new Error(dsp.error)
+      state = dsp.state
+      taskIds.push(task.value.id)
+    }
+    return { state, runId: run.value.id, taskIds }
+  }
+  const write = (s: OrchState): Promise<void> => fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(s), 'utf8')
+
+  it('sessionExited closes the open Dispatch of that session and keeps the Task for a retry', async () => {
+    const { state, taskIds } = withDispatches(['ses_x'])
+    await write(state)
+    // Alive at load, as a Host-held worker is: otherwise the restart cleanup closes it first.
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), aliveSessionIds: () => new Set(['ses_x']) })
+    await orch.sessionExited({ sessionId: 'ses_x', exitCode: 1 })
+    const d = orch.state().dispatches.find((x) => x.sessionId === 'ses_x')
+    expect(d?.endedAt).toBe(NOW)
+    expect(d?.workerState).toBe('failed')
+    expect(orch.state().tasks.find((t) => t.id === taskIds[0])?.status).toBe('dispatched')
+    const saved = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+    expect(saved.dispatches[0].endedAt).toBe(NOW)
+  })
+
+  it('sessionExited empties a coordinator slot held by that session', async () => {
+    const { state, runId } = withDispatches([])
+    const attached = attachCoordinator(state, { runId, sessionId: 'ses_c' }); if (!attached.ok) throw new Error(attached.error)
+    await write(attached.state)
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), aliveSessionIds: () => new Set(['ses_c']) })
+    await orch.sessionExited({ sessionId: 'ses_c', exitCode: 0 })
+    expect(orch.state().runs.find((r) => r.id === runId)?.coordinatorSessionId).toBeUndefined()
+    expect(logs).toContain(`coordinator gone run=${runId} session=ses_c — restart it from the Jobs list`)
+  })
+
+  it('orphanedSessions is empty before the first load, then names dead sessions but never pending ones', async () => {
+    const { state, runId } = withDispatches(['ses_dead', 'pending:ab', 'ses_alive'])
+    // The dead worker's session also holds the coordinator slot: named once.
+    const attached = attachCoordinator(state, { runId, sessionId: 'ses_dead' }); if (!attached.ok) throw new Error(attached.error)
+    await write(attached.state)
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses_dead', 'pending:ab', 'ses_alive']) })
+    const isAlive = (s: string): boolean => s === 'ses_alive'
+    expect(orch.orphanedSessions(isAlive)).toEqual([])
+    await orch.ready()
+    expect(orch.orphanedSessions(isAlive)).toEqual(['ses_dead'])
+  })
+
+  it('orphanedSessions reads the state an app pushed, with no load of its own', async () => {
+    const { state } = withDispatches(['ses_dead'])
+    const orch = orchOver()
+    await orch.call({ cmd: 'state-put', args: { state }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    expect(orch.orphanedSessions(() => false)).toEqual(['ses_dead'])
+  })
+
+  it('names a dead coordinator slot with no open Dispatch', async () => {
+    const { state, runId } = withDispatches([])
+    const attached = attachCoordinator(state, { runId, sessionId: 'ses_c' }); if (!attached.ok) throw new Error(attached.error)
+    await write(attached.state)
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+    await orch.ready()
+    expect(orch.orphanedSessions(() => false)).toEqual(['ses_c'])
   })
 })

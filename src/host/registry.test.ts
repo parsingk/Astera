@@ -390,7 +390,7 @@ describe('the last screen of a session that ended badly', () => {
     expect(h.r.metaOf('p1')?.id).toBe('ses_1')
     p.exit(7)
     expect(h.r.sessionPty('ses_1')).toBeNull()
-    expect(h.r.sessionExitCode('ses_1')).toBe(7)
+    expect(h.r.sessionExitCode('ses_1')).toEqual({ code: 7 })
   })
   it('does not answer a session lookup with a pty of another kind', () => {
     const h = registry()
@@ -437,13 +437,15 @@ describe('the last screen of a session that ended badly', () => {
     made[1].exit(0)
     expect(r.sessionPty('ses_1')).toBe('p1')
   })
-  // M1: node-pty can deliver an exit with no code (the `exited undefined` lines); the answer keeps
-  // to its type.
-  it('answers null, not undefined, for a session whose pty ended with no code', () => {
+  // M1: node-pty can deliver an exit with no code (the `exited undefined` lines). That session has
+  // ended, and the answer must say so: the Host's handover closes an ended session and skips one it
+  // never held (R3), so "ended with no code" cannot read like "never here".
+  it('answers an ended session with no code as ended, not as never here', () => {
     const p = fakePty()
     const h = registry({ pty: p })
     h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ kind: 'session', id: 'ses_1', restore: {} }) })
     p.exit(undefined as unknown as number)
-    expect(h.r.sessionExitCode('ses_1')).toBeNull()
+    expect(h.r.sessionExitCode('ses_1')).toEqual({ code: null })
+    expect(h.r.sessionExitCode('nope')).toBeNull()
   })
 })

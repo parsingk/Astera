@@ -30,6 +30,7 @@ import type { Dispatch } from '../../core/orchestration/types'
 import type { RollStateEvent } from '../../core/types'
 import { git } from '../../core/worktrees/git'
 import { handleExit, type OrchServerDeps } from '../../core/orchestration/command'
+import { EXIT_DEFER_MS } from '../../core/orchestration/exec/exitOwner'
 
 /** exit 처리를 미뤄 두는 창.
  *
@@ -40,8 +41,11 @@ import { handleExit, type OrchServerDeps } from '../../core/orchestration/comman
  *  나란히 놓기 전에는 원인을 찾지 못한다.
  *
  *  코디네이터에게 이 지연은 보이지 않는다 — check --wait 의 기본 창은 300초다
- *  (DEFAULT_CHECK_TIMEOUT_MS). */
-export const EXIT_DEFER_MS = 3_000
+ *  (DEFAULT_CHECK_TIMEOUT_MS).
+ *
+ *  **값은 core 에 있다**(exitOwner.ts). Host 도 제가 쥔 세션의 exit 를 같은 창만큼 미루므로, 같은
+ *  사건을 보는 세 번째 구독자가 같은 값을 읽게 옮겼다. */
+export { EXIT_DEFER_MS }
 
 export interface OrchRollTapDeps {
   /** git 실행 어댑터. gitSummary.ts 의 `GitSummaryDeps.git` 과 같은 관례 — 테스트 주입용이고,

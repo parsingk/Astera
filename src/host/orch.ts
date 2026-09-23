@@ -3,12 +3,13 @@
 // `OrchCall.call` and did not change when it did.
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { handleCommand, type OrchServerDeps } from '../core/orchestration/command'
+import { handleCommand, handleExit, type OrchServerDeps } from '../core/orchestration/command'
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
 import { readPendingReports } from '../core/orchestration/pendingDrain'
 import { pendingReportsDirIn, reportedDispatchIdsOf } from '../core/orchestration/pendingReports'
-import type { OrchState } from '../core/orchestration/state'
+import { detachCoordinator, type OrchState } from '../core/orchestration/state'
 import { runningRunCount } from '../core/orchestration/running'
+import { isPlaceholderSessionId } from '../core/orchestration/types'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { hostOrchDeps } from './orchDeps'
 import { readAccountsFile } from '../core/accounts/accountsFile'
@@ -285,6 +286,16 @@ export interface HostOrch extends OrchCall {
   /** The state as the store holds it (`store.get()`). For the Host's spawner, whose every caller is
    *  a command already behind `ready()`, so it never triggers or races the load. */
   state(): OrchState
+  /** A session this Host holds has ended and no app handles it (host/exits.ts): closes its open
+   *  Dispatch through `handleExit`, the app's own path, then empties a coordinator slot it held. Waits
+   *  for the load, as every command does. */
+  sessionExited(e: { sessionId: string; exitCode: number }): Promise<void>
+  /** The sessions the state still counts on that `isAlive` says are gone: open Dispatches (never a
+   *  `pending:` one, which has no session yet) and coordinator slots, each id once. **Empty before
+   *  the first load**, and deliberately not a load: the handover sweep asks this, and a Host that has
+   *  never loaded has closed nothing and started nothing, while loading would run the restart cleanup
+   *  from an app leaving. */
+  orphanedSessions(isAlive: (sessionId: string) => boolean): string[]
 }
 
 export function createHostOrch(a: {
@@ -335,6 +346,9 @@ export function createHostOrch(a: {
   let loading: Promise<void> | null = null
   /** What that one load found. Handed to the app once, with `state-get` — see `stateGet`. */
   let loadResult: OrchLoadResult | null = null
+  /** Whether the state is in memory: the load finished, or the app pushed a whole one. `loading`
+   *  alone cannot say it, because it is set the moment a load starts. */
+  let loaded = false
   const ready = (): Promise<void> =>
     (loading ??= (async () => {
       // **The two pieces of evidence the app used to gather, gathered here instead** (design §6).
@@ -367,6 +381,7 @@ export function createHostOrch(a: {
         aliveSessionIds: a.aliveSessionIds(),
         reportedDispatchIds: reportedDispatchIdsOf(queued.map((q) => q.report))
       })
+      loaded = true
     })())
 
   /** What one call did, filled in by the dependencies as it runs. Three flags, two questions.
@@ -488,6 +503,7 @@ export function createHostOrch(a: {
     // Taken here, not after the write lands — the whole of `reserveVersion`'s note.
     const committed = reserveVersion()
     await store.save(state)
+    loaded = true
     // To the others and not back to the sender: the state came from there, and an app that received
     // its own push would write its own state back over itself.
     from.toOthers({ t: 'orch-state', state, version: committed })
@@ -816,6 +832,30 @@ export function createHostOrch(a: {
     ready,
     runningRuns: () => runningRunCount(store.get()),
     state: () => store.get(),
+    sessionExited: async (e) => {
+      await ready()
+      // Marks nobody reads: this is not a command, so there is no reply to correct and no receipt.
+      const deps = depsFor({ appRefused: false, committed: false, acted: false })
+      await handleExit(deps, e)
+      // Read after `handleExit`, which commits. The slot rule is `releaseCoordinator`'s in the app.
+      const st = store.get()
+      const run = st.runs.find((r) => r.coordinatorSessionId === e.sessionId)
+      if (!run) return
+      const detached = detachCoordinator(st, { runId: run.id })
+      if (!detached.ok) return
+      await deps.setState(detached.state)
+      a.log(`coordinator gone run=${run.id} session=${e.sessionId} — restart it from the Jobs list`)
+    },
+    orphanedSessions: (isAlive) => {
+      if (!loaded) return []
+      const st = store.get()
+      const ids = new Set<string>()
+      for (const d of st.dispatches)
+        if (!d.endedAt && !isPlaceholderSessionId(d.sessionId) && !isAlive(d.sessionId)) ids.add(d.sessionId)
+      for (const r of st.runs)
+        if (r.coordinatorSessionId && !isAlive(r.coordinatorSessionId)) ids.add(r.coordinatorSessionId)
+      return [...ids]
+    },
     call: async ({ cmd, args, sessionId, from, request }) => {
       // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
       // `orch-call` from this promise and has no catch of its own, so anything that escapes here is
