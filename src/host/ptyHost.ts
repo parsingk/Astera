@@ -3,6 +3,7 @@
 // touches `net`, so it is tested with a fake pty and no socket at all.
 import type { ClientMessage, HostMessage } from '../core/host/protocol'
 import type { PtyRegistry } from './registry'
+import { ENDED_WITHOUT_A_CODE } from './exits'
 
 /**
  * Returns a handler for one connection. It reports whether it owned the message, so the server can
@@ -53,6 +54,13 @@ export function attachPtyHost(a: {
         // replay would be an empty data message the app has to think about for nothing.
         const buffered = a.registry.buffer(m.id)
         if (buffered !== '') send({ t: 'pty-data', id: m.id, data: buffered })
+        // **A pty that already ended is answered with its exit** (Host S2 fix round, M3). The app can
+        // adopt one in the half round trip between the `pty-listed` that said alive and this attach,
+        // and the `pty-exit` broadcast in that window found no handle to end. After the replay, so the
+        // last screen is on the tab before the tab says it ended. Additive: an older app ends a handle
+        // it has adopted exactly as it ends one on a broadcast exit.
+        const ended = a.registry.exitCodeOf(m.id)
+        if (ended) send({ t: 'pty-exit', id: m.id, exitCode: ended.code ?? ENDED_WITHOUT_A_CODE })
         return true
       }
       default:

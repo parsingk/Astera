@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { attachPtyHost } from './ptyHost'
+import { ENDED_WITHOUT_A_CODE } from './exits'
 import { PtyRegistry, type RegistryPty } from './registry'
 import type { ClientMessage, HostMessage } from '../core/host/protocol'
 
@@ -121,6 +122,27 @@ describe('attachPtyHost', () => {
     expect(h.registry.list()[0].meta).toEqual({ kind: 'terminal', id: 'trm_1', restore: {} })
   })
 
+  // Fix round M3: an app can adopt a pty in the half round trip between the `pty-listed` that said
+  // alive and its own `pty-attach`, and the `pty-exit` broadcast in between reached no handle. Without
+  // an answer here its tab stays "running" forever.
+  it('answers an attach to a pty that has already ended with its exit, to the client that asked', () => {
+    const h = harness()
+    h.send(spawnMsg)
+    h.pty.exit(3)
+    h.replies.length = 0
+    h.broadcast.length = 0
+    h.send({ t: 'pty-attach', id: 'p1' })
+    expect(h.replies.at(-1)).toEqual({ t: 'pty-exit', id: 'p1', exitCode: 3 })
+    expect(h.broadcast).toEqual([])
+  })
+  it('answers an attach to a pty that ended with no code as ended without one', () => {
+    const h = harness()
+    h.send(spawnMsg)
+    ;(h.pty as unknown as { exit(c: unknown): void }).exit(undefined)
+    h.replies.length = 0
+    h.send({ t: 'pty-attach', id: 'p1' })
+    expect(h.replies.at(-1)).toEqual({ t: 'pty-exit', id: 'p1', exitCode: ENDED_WITHOUT_A_CODE })
+  })
   it('attaching to an empty or unknown session sends nothing', () => {
     const h = harness()
     h.send(spawnMsg)

@@ -301,6 +301,13 @@ export class PtyRegistry {
     return ended
   }
 
+  /** How this pty ended: null while it is alive or for an id never here, `{ code: null }` for one
+   *  that ended with no code. By pty id, as `sessionExitCode` is by session id. */
+  exitCodeOf(id: string): { code: number | null } | null {
+    const e = this.entries.get(id)
+    return e && !e.alive ? { code: e.exitCode ?? null } : null
+  }
+
   list(): PtyEntry[] {
     return [...this.entries.values()].map((e) => ({ id: e.id, pid: e.pid, meta: e.meta, alive: e.alive }))
   }
