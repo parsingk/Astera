@@ -12,6 +12,7 @@ import {
   type PtyLike,
   type PtySpawnOptions
 } from '../../core/sessions/pty'
+import { SPAWN_DEADLINE_MS } from '../../core/host/unresponsive'
 
 export interface HostPtyTransport {
   /** Whether the message actually reached the Host — false with no connection right now, the same
@@ -36,13 +37,8 @@ export interface HostPtyTransport {
   unanswered?(what: string): void
 }
 
-/** How long a spawn may go unanswered before the session it was for is ended.
- *
- * **There was no deadline at all**, and on 2026-09-22 that is what a stuck Host looked like from the
- * outside: a session tab that stayed blank, a Run that stayed yellow, and a stop button that did
- * nothing, for as long as the app was left open. An initial value rather than a measured one; if a
- * slow first spawn on a cold disk ever trips it, this is what moves (design §9). */
-export const SPAWN_DEADLINE_MS = 20_000
+/** Defined in core so the Host can read it as well; kept exported here for the app's callers. */
+export { SPAWN_DEADLINE_MS } from '../../core/host/unresponsive'
 
 type Queued = { t: 'pty-write'; data: string } | { t: 'pty-resize'; cols: number; rows: number }
 

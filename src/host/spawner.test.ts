@@ -30,7 +30,7 @@ beforeEach(async () => {
 afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
 
 type Spawned = { file: string; args: string[] | string; opts: { cwd: string; env: Record<string, string | undefined> }; pty: RegistryPty & { emit(d: string): void; exit(c: number): void; killed: boolean } }
-type LocateHooks = Pick<HostSpawnerDeps, 'findRollout' | 'locatePollMs' | 'locateForMs'>
+type LocateHooks = Pick<HostSpawnerDeps, 'findRollout' | 'locatePollMs' | 'locateForMs' | 'readAccounts'>
 const rig = (over: { env?: NodeJS.ProcessEnv; state?: () => OrchState; failSpawn?: boolean } & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
@@ -49,7 +49,7 @@ const rig = (over: { env?: NodeJS.ProcessEnv; state?: () => OrchState; failSpawn
   const env = over.env ?? hostEnv()
   const spawner = createHostSpawner({ profileDir: profile, env, platform: process.platform, homeDir: path.join(dir, 'home'), registry,
     broadcast: (m) => sent.push(m), getState: over.state ?? (() => emptyState()), log: (m) => logs.push(m),
-    findRollout: over.findRollout, locatePollMs: over.locatePollMs, locateForMs: over.locateForMs })
+    findRollout: over.findRollout, locatePollMs: over.locatePollMs, locateForMs: over.locateForMs, readAccounts: over.readAccounts })
   return { spawner, registry, spawned, logs, sent }
 }
 const hostEnv = (): NodeJS.ProcessEnv => ({
@@ -364,5 +364,69 @@ describe('createHostSpawner', () => {
     const h = rig({ state: () => s, failSpawn: true })
     await expect(h.spawner!.startWorker(startArgs(taskId, dispatchId))).rejects.toThrow(/node-pty is incomplete/)
     expect(h.sent).toEqual([])
+  })
+})
+
+// §8.4, R8: a Host on its way out lets the spawns it already took finish, and takes no new one.
+describe('createHostSpawner — retiring', () => {
+  it('lets a spawn in flight finish before it settles, and refuses a new one', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    const inFlight = h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    expect(h.spawner!.inFlight()).toBe(1)
+    const settled = h.spawner!.closeAndSettle(5_000)
+    await expect(h.spawner!.startWorker(startArgs(taskId, 'dsp_other'))).rejects.toThrow(/retiring/)
+    await inFlight
+    await settled
+    expect(h.spawner!.inFlight()).toBe(0)
+    // The one in flight really finished: its pty is up and was announced.
+    expect(h.spawned).toHaveLength(1)
+  })
+  it('refuses a coordinator start once it is retiring', async () => {
+    const h = rig()
+    await h.spawner!.closeAndSettle(1_000)
+    await expect(h.spawner!.startCoordinator({ runId: 'run_1', cwd: repo, accountId: 'acc1', brief: 'b' })).rejects.toThrow(
+      'the Host is retiring — start the worker again once a Host is up'
+    )
+    expect(h.spawned).toHaveLength(0)
+  })
+  it('settles at once with nothing in flight', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = rig()
+      let settled = false
+      void h.spawner!.closeAndSettle(1_000).then(() => { settled = true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(settled).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('stops waiting at its bound', async () => {
+    vi.useFakeTimers()
+    try {
+      const { s, taskId, dispatchId } = seeded()
+      // An accounts read that never answers holds the spawn in flight for as long as the test likes.
+      const h = rig({ state: () => s, readAccounts: () => new Promise(() => {}) })
+      void h.spawner!.startWorker(startArgs(taskId, dispatchId))
+      expect(h.spawner!.inFlight()).toBe(1)
+      let settled = false
+      const settling = h.spawner!.closeAndSettle(1000).then(() => { settled = true })
+      await vi.advanceTimersByTimeAsync(999)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await settling
+      expect(settled).toBe(true)
+      // Still in flight: the bound ends the wait, not the spawn.
+      expect(h.spawner!.inFlight()).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('counts down a spawn that failed, too', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s, readAccounts: async () => { throw new Error('no accounts') } })
+    await expect(h.spawner!.startWorker(startArgs(taskId, dispatchId))).rejects.toThrow('no accounts')
+    expect(h.spawner!.inFlight()).toBe(0)
   })
 })

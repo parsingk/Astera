@@ -74,9 +74,17 @@ export interface HostSpawnerDeps {
   locatePollMs?: number
   /** How long a codex session's rollout is looked for before the Host gives up. */
   locateForMs?: number
+  /** Test injection; defaults to readAccountEntries. */
+  readAccounts?: (file: string) => Promise<Account[]>
 }
 
-export interface HostSpawner extends HostLocal {}
+export interface HostSpawner extends HostLocal {
+  /** How many worker and coordinator starts are under way right now. */
+  inFlight(): number
+  /** From now on startWorker/startCoordinator reject with "the Host is retiring…"; resolves when every
+   *  spawn in flight has settled, or after `ms`, whichever is first. */
+  closeAndSettle(ms: number): Promise<void>
+}
 
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
 
@@ -157,6 +165,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     return null
   }
   const { profileDir, platform, homeDir, registry, log } = d
+  const readAccounts = d.readAccounts ?? readAccountEntries
   const descriptors = makeDescriptors(platform)
   // The rule core.ts uses for the app's StatusLineManager, so the two write the same settings files.
   const statusLine = new StatusLineManager(
@@ -374,9 +383,54 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       // No onPromptWrite: the journal is the app's (R9).
     })
 
+  /** The spawns under way, and who is waiting for them to finish (§8.4, R8). A Host that leaves in
+   *  the middle of one would kill a worker whose Dispatch the command is about to record as started,
+   *  or leave the command half done; one that starts a new spawn while leaving hands a worker to a
+   *  registry that is about to kill everything. So `closeAndSettle` refuses new starts and waits for
+   *  the ones already taken, which then finish and are recorded, or fail and roll their Dispatch back
+   *  as any failed start does. */
+  let retiring = false
+  let spawnsInFlight = 0
+  const settled = new Set<() => void>()
+  const spawning = <A extends unknown[], R>(start: (...a: A) => Promise<R>) =>
+    async (...args: A): Promise<R> => {
+      if (retiring) throw new Error('the Host is retiring — start the worker again once a Host is up')
+      spawnsInFlight += 1
+      try {
+        return await start(...args)
+      } finally {
+        spawnsInFlight -= 1
+        if (spawnsInFlight === 0) for (const done of [...settled]) done()
+      }
+    }
+
   return {
-    startWorker: async (a) => {
-      const accounts = await readAccountEntries(accountsPath)
+    inFlight: () => spawnsInFlight,
+    closeAndSettle: (ms) => {
+      retiring = true
+      if (spawnsInFlight === 0) return Promise.resolve()
+      log(`retiring — waiting up to ${ms}ms for ${spawnsInFlight} spawn(s) in flight`)
+      return new Promise<void>((resolve) => {
+        const done = (): void => {
+          clearTimeout(bound)
+          settled.delete(done)
+          resolve()
+        }
+        // A timer callback runs outside every caller's try/catch, and a throw from it would end the
+        // Host with every pty it holds; so it is caught and logged here, and the wait still ends.
+        const bound = setTimeout(() => {
+          try {
+            log(`retiring — ${spawnsInFlight} spawn(s) still in flight after ${ms}ms; leaving without them`)
+          } catch {
+            /* the log is the only thing that can throw here, and the wait must end regardless */
+          }
+          done()
+        }, ms)
+        settled.add(done)
+      })
+    },
+    startWorker: spawning(async (a) => {
+      const accounts = await readAccounts(accountsPath)
       const started = await startWorkerWithChain(
         {
           getState: d.getState,
@@ -393,9 +447,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       )
       startedOn.set(a.dispatchId, started.sessionId)
       return started
-    },
-    startCoordinator: async (a) => {
-      const accounts = await readAccountEntries(accountsPath)
+    }),
+    startCoordinator: spawning(async (a) => {
+      const accounts = await readAccounts(accountsPath)
       // The app makes this folder at boot; the Host may be the first to write into it.
       await fs.mkdir(specsDir, { recursive: true })
       return startCoordinatorSession(
@@ -409,7 +463,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         },
         a
       )
-    },
+    }),
     releaseWorker: async ({ dispatchId }) => {
       const args = releaseArgsFor(d.getState().dispatches, dispatchId)
       if (!args) {
@@ -423,7 +477,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         ? tails.read(dispatchId, limit)
         : `(unknown dispatch: ${dispatchId})`,
     probeLimit: async (disp) => {
-      const accounts = await readAccountEntries(accountsPath)
+      const accounts = await readAccounts(accountsPath)
       return makeLimitProbe({
         statusLinePayload: (sid) => statusLine.read(sid),
         configDirOf: (id) => accounts.find((x) => x.id === id)?.configDir ?? null,

@@ -12,6 +12,7 @@ import * as pty from 'node-pty'
 import { hostAddress } from './address'
 import { nodePtyMissing } from './nodePtyCheck'
 import { hostPidFilePath, serializeHostPidFile } from '../core/host/pidFile'
+import { SPAWN_DEADLINE_MS } from '../core/host/unresponsive'
 import { hideForkedConsoleWindows } from './childWindows'
 import { openHostLog } from './log'
 import { startHostServer, ADDRESS_TAKEN } from './server'
@@ -117,17 +118,25 @@ async function main(): Promise<void> {
     } catch {
       /* the app validates what it reads there anyway */
     }
-    void server
-      .close()
-      .catch((err) => log.write(`the server did not close cleanly: ${String(err)}`))
-      .finally(() => {
-        registry.killAll()
-        procs.killAll()
-        // Both deferred, and both unref'd: see EXIT_SETTLE_MS. Unref'd so that a Host whose loop
-        // empties on its own is not held open by its own way out.
-        setTimeout(() => process.exit(0), EXIT_SETTLE_MS).unref()
-        setTimeout(() => process.kill(process.pid, 'SIGKILL'), EXIT_HAMMER_MS).unref()
-      })
+    void (async () => {
+      // **The spawns this Host already took finish first** (Host S2 design §8.4, R8), and no new one
+      // is taken from here on. Bounded by the app's own spawn deadline: past that, the app has given
+      // up on the session anyway. `closeAndSettle` never rejects, and the chain below runs whatever
+      // happens here.
+      if (spawner) await spawner.closeAndSettle(SPAWN_DEADLINE_MS).catch((err) => log.write(`the spawns in flight could not be waited for: ${String(err)}`))
+      await server
+        .close()
+        .catch((err) => log.write(`the server did not close cleanly: ${String(err)}`))
+        .finally(() => {
+          registry.killAll()
+          procs.killAll()
+          // Both deferred, and both unref'd: see EXIT_SETTLE_MS. Unref'd so that a Host whose loop
+          // empties on its own is not held open by its own way out. Armed after the settle, so the
+          // hammer never lands while a spawn is still being waited for.
+          setTimeout(() => process.exit(0), EXIT_SETTLE_MS).unref()
+          setTimeout(() => process.kill(process.pid, 'SIGKILL'), EXIT_HAMMER_MS).unref()
+        })
+    })()
   }
 
   // Shared with `orch` below so the version the handshake reports and the version `orch-call status`

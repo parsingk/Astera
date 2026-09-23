@@ -24,3 +24,15 @@ export const HOST_UNRESPONSIVE_MS = 15_000
  * silence — which is three unanswered pings.
  */
 export const PING_MS = 5_000
+
+/** How long a spawn may go unanswered before the session it was for is ended.
+ *
+ * **There was no deadline at all**, and on 2026-09-22 that is what a stuck Host looked like from the
+ * outside: a session tab that stayed blank, a Run that stayed yellow, and a stop button that did
+ * nothing, for as long as the app was left open. An initial value rather than a measured one; if a
+ * slow first spawn on a cold disk ever trips it, this is what moves (design §9).
+ *
+ * Here rather than in `main/host/ptyFactory.ts`, which re-exports it, because the Host reads it too:
+ * a Host that is leaving waits this long for the spawns it already took (Host S2 design §8.4, R8). A
+ * spawn the app would already have given up on is not one worth holding the exit for. */
+export const SPAWN_DEADLINE_MS = 20_000

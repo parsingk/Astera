@@ -2120,6 +2120,40 @@ describe('repair refusals (S2)', () => {
   })
 })
 
+// §8.4, R8, through the real spawner: a worker-start that reaches a Host already on its way out is
+// refused, and the command rolls its Dispatch back, so nothing is left half written.
+describe('a retiring Host refuses new spawns (S2)', () => {
+  it('answers worker-start with an error and leaves no Dispatch once the spawner is closed', async () => {
+    const { taskId } = await seed()
+    for (const f of ['Astera.exe', 'cli.js']) await fs.writeFile(path.join(dir, f), '')
+    await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
+    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: 'D:/cfg', color: '#888', createdAt: NOW, provider: 'claude' }] }))
+    const spawned: string[] = []
+    const registry = new PtyRegistry({
+      spawn: (file) => { spawned.push(file); return { pid: 1, onData() {}, onExit() {}, write() {}, resize() {}, kill() {}, pause() {}, resume() {} } },
+      log: () => {}
+    })
+    const box: { orch?: ReturnType<typeof orchOver> } = {}
+    const spawner = createHostSpawner({
+      profileDir: dir,
+      env: { PATH: process.env.PATH, ASTERA_HOST_CLI_EXEC: path.join(dir, 'Astera.exe'), ASTERA_HOST_CLI_ENTRY: path.join(dir, 'cli.js'), ASTERA_HOST_SKILLS: path.join(dir, 'skills') },
+      platform: process.platform,
+      homeDir: path.join(dir, 'home'),
+      registry,
+      broadcast: () => {},
+      getState: () => box.orch!.state(),
+      log: () => {}
+    })!
+    box.orch = orchOver({ hasApp: () => false, act: vi.fn(), local: spawner })
+    await spawner.closeAndSettle(1_000)
+    const r = await box.orch.call({ cmd: 'worker-start', args: { task: taskId, agent: 'claude', account: 'acc1', worktree: 'current' }, sessionId: '' })
+    expect(r.status).not.toBe(200)
+    expect((r.body as { error: string }).error).toMatch(/the Host is retiring/)
+    expect(box.orch.state().dispatches).toEqual([])
+    expect(spawned).toEqual([])
+  })
+})
+
 describe('the spec sweep at the Host load (S2)', () => {
   it('sweeps stale spec files once, at its own load, where it is the only writer (§2.7)', async () => {
     await seed()
