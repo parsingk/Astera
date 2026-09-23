@@ -5397,6 +5397,33 @@ describe('없는 id 는 404 — 순수 층의 거절을 내보내던 자리들',
     expect(deps.getState().dispatches.filter((d) => d.taskId === otherId)).toEqual([])
   })
 
+  // **조용한 성공이 가장 나쁘다.** 오타 난 회차 id 로 check --wait 를 부르면 200 빈 배치를 받거나
+  // 기한까지 기다렸다 — 코디네이터가 되풀이해 부르는 명령에서 한 시간을 잃는다. 기다리기 전에 404 다.
+  it('check --run 이 없는 회차면 기다리기 전에 404 다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const before = deps.getState()
+    const started = Date.now()
+    const r = await call(deps, 'check', { run: 'run_nope', wait: true, timeoutMs: 5000 })
+    expect(r).toEqual({ status: 404, body: { error: 'unknown run: run_nope' } })
+    expect(Date.now() - started).toBeLessThan(1000)
+    // --ack 가 함께 와도 아무것도 ack 하지 않는다
+    expect((await call(deps, 'check', { run: 'run_nope', ack: 'dlv_x' })).status).toBe(404)
+    expect(deps.getState()).toBe(before)
+    // 있는 회차는 예전 그대로 빈 배치다
+    const runId = deps.getState().runs[0].id
+    expect(await call(deps, 'check', { run: runId })).toEqual({ status: 200, body: { count: 0, messages: [] } })
+  })
+
+  it('tasks list --run 이 없는 회차면 404 다 — 빈 목록이 아니라', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const r = await call(deps, 'tasks-list', { run: 'run_nope' })
+    expect(r).toEqual({ status: 404, body: { error: 'unknown run: run_nope' } })
+    const runId = deps.getState().runs[0].id
+    expect(await call(deps, 'tasks-list', { run: runId })).toEqual({ status: 200, body: [] })
+  })
+
   // ask 는 워커의 명령이라 워커가 남의 Dispatch 를 적으면 403 이 먼저다. 404 는 Dispatch 를 가진
   // 적이 없는 세션이 적은 id 가 없을 때, 그리고 그 Dispatch 의 Task 가 사라졌을 때다.
   it('ask 가 적은 Dispatch 나 Task 가 없으면 404 다', async () => {

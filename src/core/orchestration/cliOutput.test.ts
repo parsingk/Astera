@@ -179,6 +179,12 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'projects-get' })).toEqual(['astera projects list'])
   })
 
+  // **이름의 목록이 틀린 종류일 때는 표가 이긴다.** tasks list 가 못 찾는 것은 `--run` 의 회차다 —
+  // `tasks list` 를 다시 권하면 Task id 가 나온다.
+  it('tasks list 의 404 는 회차 목록으로 간다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'tasks-list' })).toEqual(['astera runs list'])
+  })
+
   // 세션 전용 명령은 무엇을 못 찾았다고 말하는지가 갈래다 — run-create 가 못 찾는 것은
   // 회차가 아니라 계정이다.
   it('세션 전용 명령은 그것이 못 찾은 것의 목록으로 이어진다', () => {
@@ -197,8 +203,9 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
   // **이 셋은 이제 404 를 낸다** — 순수 층의 거절을 400 으로 내보내던 자리가 없는 id 를 404 로
   // 말하게 되었다. 각 줄은 못 찾은 것과 같은 종류의 id 를 내놓고, 그 명령을 부른 쪽이 칠 수 있다.
   it('check·send·gate-resolve 의 404 는 못 찾은 것의 목록으로 간다', () => {
-    // `--ack` 의 배치 — 다시 부른 check 가 열린 배치의 deliveryId 를 준다
-    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'check' })).toEqual(['astera check'])
+    // 두 가지를 못 찾는다: `--run` 의 회차, 그리고 `--ack` 의 배치. 회차 목록이 먼저고, 다시 부른
+    // check 가 열린 배치의 deliveryId 를 준다 — 둘은 서로 다른 경우의 대안이다
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'check' })).toEqual(['astera runs list', 'astera check'])
     // worker_done 의 Task 나 Dispatch — worker-* 와 같은 두 줄, 둘 다 워커가 부를 수 있다
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'send' })).toEqual([
       'astera tasks list',

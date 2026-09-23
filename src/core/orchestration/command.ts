@@ -1230,10 +1230,11 @@ export async function handleCommand(
       if (!id) return bad('--run is required')
       const worktree = str(args.worktree)
       if (!worktree) return bad('--worktree is required')
-      // **"이미 있다" 만 409 로 따로 낸다.** setRunWorktree 도 같은 것을 거절하지만 그 층은 HTTP 를
-      // 모르고, commit 은 모든 실패를 400 으로 낸다(위) — 없는 Run 과 두 번 기록하려는 것이 같은
-      // 코드로 나오면 로그에서 구별되지 않는다. 뒤쪽은 배선이 워크트리를 **두 개 만들었다**는 뜻이고
-      // 그중 하나가 아무도 기억하지 못하는 폴더로 디스크에 남는다.
+      // **Only "already has one" is answered 409, on its own.** setRunWorktree refuses the same thing,
+      // but that layer knows no HTTP, and `commit` (above) answers its `unknown run` with 404 and
+      // every other refusal with 400 — so a second record would come out as a plain 400, not told
+      // apart in the log from a malformed call. It means the wiring **made two worktrees**, one of
+      // which stays on disk as a folder nobody remembers.
       //
       // 순수 층의 거절을 여기서 지우지 않는 이유: 이 명령이 유일한 호출자라는 보장이 없고, 그 함수가
       // 조용히 덮어쓰게 되면 이 코드가 지키는 불변식이 이 파일에만 있게 된다.
@@ -1354,7 +1355,11 @@ export async function handleCommand(
     }
     case 'tasks-list': {
       let tasks = s.tasks
-      if (str(args.run)) tasks = tasks.filter((t) => t.runId === args.run)
+      // A named Run that is not there is a 404, not an empty list — the list would read as "that
+      // Run has no Tasks", which is a different fact.
+      const run = str(args.run)
+      if (run && !s.runs.some((r) => r.id === run)) return notFound(`unknown run: ${run}`)
+      if (run) tasks = tasks.filter((t) => t.runId === run)
       if (str(args.status)) tasks = tasks.filter((t) => t.status === args.status)
       if (args.ready === true) tasks = tasks.filter((t) => t.status === 'ready')
       if (args.brief === true)
@@ -2092,6 +2097,11 @@ export async function handleCommand(
     case 'check': {
       const runId = str(args.run) ?? latestRun(s)?.id
       if (!runId) return bad('no run exists')
+      // **A named Run that is not there is a 404, before anything is acked or waited on.**
+      // nextDelivery does not look the Run up — it only filters by it — so a mistyped `--run`
+      // answered an empty batch, and with `--wait` sat out the whole deadline, on the command a
+      // coordinator calls in a loop.
+      if (!s.runs.some((r) => r.id === runId)) return notFound(`unknown run: ${runId}`)
       if (str(args.ack)) {
         const acked = ackDelivery(s, { deliveryId: str(args.ack)! }, now)
         if (!acked.ok) return refused(acked)

@@ -138,7 +138,8 @@ export const okEnvelope = (cmd: string, body: unknown, mark: ReplayMark = null):
  * 없는 id 를 들은 세션 전용 명령에게, **있는 것들이 어디 있는가**.
  *
  * 공개 명령은 표가 필요 없다 — `jobs-get` 의 명사에 `list` 동사가 있으면 그것이 답이다(아래
- * `listingFor`). 여기 적힌 것은 `NOUNS` 밖의 명령들뿐이다.
+ * `listingFor`). The one exception is a public command whose own noun's list is the wrong kind:
+ * `tasks-list` fails on `--run`, and `tasks list` gives Task ids. An entry here wins over the noun.
  *
  * **항목 하나를 적기 전에 세 가지를 묻는다. 셋 다 실제로 한 번씩 틀렸다.**
  *
@@ -200,10 +201,16 @@ const LISTING: Record<string, readonly string[]> = {
   // **A Gate, not a message** — the opposite of `reply`. resolveGate looks in `s.gates`, and
   // `questions list` lists `s.gates` (`gat_…`). It is public, not coordinator-only.
   'gate-resolve': ['astera questions list'],
-  // **What was not found is the `--ack` batch.** `check` again hands back the batch still
+  // **Two things can be missing, so two alternative lines.** `--run`: `runs list` gives run ids,
+  // and it is not coordinator-only. `--ack`: `check` again hands back the batch still
   // unacknowledged, and its `deliveryId` (`dlv_…`) is the id to ack; it acks nothing itself, so
-  // nothing is lost. `check` is coordinator-only, and so is the command that hit this 404.
-  check: ['astera check'],
+  // nothing is lost. `check` is coordinator-only, and so is the command that hit this 404. Neither
+  // line changes anything, so a caller that runs both in order, not knowing which applied, loses
+  // nothing either.
+  check: ['astera runs list', 'astera check'],
+  // **The Run of `--run`, not a Task.** The noun rule would offer `tasks list` again, which gives
+  // Task ids; `runs list` gives run ids and is public.
+  'tasks-list': ['astera runs list'],
   // **The Task or Dispatch a worker_done named** — the same two lines as `worker-*`, the first
   // giving the second its `<taskId>`. `send` is a worker's command, so neither line may be
   // coordinator-only, and neither is.
@@ -213,10 +220,10 @@ const LISTING: Record<string, readonly string[]> = {
 /** 없는 id 를 말한 명령에게 줄 목록 명령들. */
 function listingFor(cmd: string | undefined): readonly string[] {
   if (cmd === undefined) return ['astera help']
+  if (Object.hasOwn(LISTING, cmd)) return LISTING[cmd]
   const dash = cmd.indexOf('-')
   const noun = dash < 0 ? cmd : cmd.slice(0, dash)
   if (verbsOf(noun)?.includes('list') === true) return [`astera ${noun} list`]
-  if (Object.hasOwn(LISTING, cmd)) return LISTING[cmd]
   // 공개 표면 밖의 명령은 가이드가 유일한 문서다. `astera --help` 는 그것들을 적지 않는다.
   return ['astera help']
 }
