@@ -409,7 +409,7 @@ describe('OrchCoordinator.startWorker', () => {
   })
   // 한도에 걸린 워커가 스스로 이어지게 하려면 spawnSession이 롤링 코디네이터에 등록할 체인을
   // 받아야 한다. 코디네이터는 그 체인을 **정하지 않고 순서대로 그대로 넘긴다** — 무엇이 그 목록이
-  // 되는지는 배선이 정한다(Task.accountIds 를 읽는 ipc.ts의 deps.startWorker 래퍼).
+  // 되는지는 배선이 정한다(Task.accountIds 를 읽는 startWorkerWithChain, workerStart.test.ts).
   it('받은 롤링 체인을 순서대로 spawnSession에 넘긴다', async () => {
     const deps = makeDeps()
     const co = new OrchCoordinator(deps)

@@ -1,16 +1,17 @@
-// 텍스트 가드 — src/main/ipc.ts 의 완료 수렴 배선 두 자리. src/main/lineNumberCitations.test.ts,
-// src/main/packagedDeps.test.ts 와 같은 부류다: 이 자리의 회귀는 이 저장소의 어떤 유닛 테스트도 잡지
-// 못한다 — ipc.ts 자신에는 테스트가 없고, convergence.integration.test.ts 의 가짜는 이 파일의
-// 계약을 재구현한 것이지 ipc.ts 자신의 코드를 실행하는 것이 아니다(그 파일의 rig() 머리말 참고).
+// Text guards over src/main/ipc.ts's convergence wiring, the same kind as
+// src/main/lineNumberCitations.test.ts and src/main/packagedDeps.test.ts. The startValidation and
+// startReview wrappers still live inside registerIpc, where no unit test reaches them, and
+// convergence.integration.test.ts reimplements their contract rather than running ipc.ts (see its
+// rig() header).
 //
-// **이 가드는 스캐폴드이지 목표가 아니다.** 진짜 답은 아래 두 래퍼(startWorker·startValidation)를
-// Electron 에 얽매이지 않는, import 가능한 단위로 뽑아 진짜 유닛 테스트가 부를 수 있게 하는 것이다.
-// 그 리팩터가 오기 전까지, 이 가드는 최소한 두 래퍼의 텍스트가 자신이 말하는 일을 실제로 하고
-// 있는지를 — 사람의 리뷰가 놓칠 수 있는 자리에서 — 소리 내어 확인한다.
+// **These guards are a scaffold, not the goal.** The real answer for property 5 is to extract
+// startValidation into an importable unit a test can call, as Task 5 of the Host S2 plan did for
+// startWorker. Until then, the guards check that the wrapper text does what it says.
 //
 // Property 4 (a worker starts with the rolling chain built from its Task's own accounts) is now
 // proven by src/core/orchestration/exec/workerStart.test.ts, and the guard below only pins that the
-// startWorker wrapper calls startWorkerWithChain.
+// startWorker wrapper calls startWorkerWithChain. It strips `//` comments only, so a call named
+// inside a `/* */` block would still pass.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

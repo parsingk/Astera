@@ -1,6 +1,6 @@
 // The start path for orchestration workers and coordinators, shared by every process that spawns
-// them. The app's registerIpc wiring was its only home until the Host began spawning sessions too:
-// moving the bodies here is what keeps both spawners on the same chain rule, the same brief file and
+// them. The app's registerIpc wiring is the only caller today; the Host will call these too (Task 9).
+// Moving the bodies here is what keeps both spawners on the same chain rule, the same brief file and
 // the same folder-trust preset, instead of two copies that drift. Each caller supplies what only it
 // has (its state store, its account list, its session spawner, its log) through the context.
 
@@ -145,8 +145,8 @@ export interface CoordinatorStartContext {
  *  **롤링 체인을 그대로 넘긴다** — 코디네이터도 에이전트라 한도에 걸린다. 워커에게 이 값을
  *  넘기는 것과 같은 이유이고 같은 기계를 탄다(rollAccountIds 의 JSDoc).
  *
- *  **`bypassPermissions` 는 전역 설정이 정한다** — startWorker 와 같은 자리에서 같은 값을
- *  읽는다(AgentPermissionMode). 한동안 이 자리는 그것을 넘기지 않았고, 그 선택은 "멈추는 쪽이
+ *  **`bypassPermissions` 는 전역 설정이 정한다(AgentPermissionMode)** — this function reads nothing
+ *  itself; each caller's `ctx.bypassPermissions` reads the same setting its worker spawns use. 한동안 이 자리는 그것을 넘기지 않았고, 그 선택은 "멈추는 쪽이
  *  허가 없는 실행에 대해 안전하다" 는 것이었다. 뒤집은 근거는 안전이 덜 중요해져서가 아니라
  *  **멈춤이 실제로는 안전이 아니라 정지였기 때문이다**: 코디네이터는 워크트리가 아니라 프로젝트
  *  루트에서 뜨지만 그가 띄우는 워커는 매번 새 워크트리에서 뜨고, 사람이 그 프로젝트에 쌓아 둔

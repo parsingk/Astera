@@ -2627,7 +2627,7 @@ export function registerIpc(
     // 쓴다(rolling.ts 의 onHookEvent) — 훅을 떼면 그 갈래가 워커에게만 사라진다.
     // **wantHooks 에 체인과 별개인 자기 입력을 주는 일은 나중으로 남긴다.**
     // Folder trust before an orchestration spawn — the reasoning lives on preTrustWorkspace in
-    // core/orchestration/exec/workerStart.ts, which the Host calls too.
+    // core/orchestration/exec/workerStart.ts, which the Host will call (Task 9).
     const preTrustWorkspace = (accountId: string, cwd: string): Promise<void> =>
       preTrustWorkspaceFor({
         account: core.accounts.get(accountId),
@@ -4069,7 +4069,8 @@ export function registerIpc(
         ),
       // Every worker start goes through this one wrapper — the auto-dispatch loop, the CLI's
       // worker-start and review Dispatches alike. The chain rule and the tail are
-      // startWorkerWithChain's (core/orchestration/exec/workerStart.ts), which the Host calls too.
+      // startWorkerWithChain's (core/orchestration/exec/workerStart.ts), which the Host will call
+      // (Task 9).
       startWorker: (a) =>
         startWorkerWithChain(
           {

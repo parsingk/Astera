@@ -14,11 +14,12 @@
 //     일치하는지 확인하려면 손으로 흉내 낸 문자열이 아니라 진짜 조립기가 필요하다).
 //   - readReviewFile: 완성된 경로(`${specPath}.review.json`)를 받는다. suffix 를 붙이는 자리는
 //     server.ts 의 send worker_done(검토 분기) 하나뿐이다 — 여기서 또 붙이면 조용히 죽는다.
-//   - startWorker: ipc.ts 의 진짜 래퍼가 하는 일 중 이 테스트가 붙잡는 하나 — Task.accountIds 에서
-//     rollAccountIds(그 워커의 롤링 체인)를 계산해 붙인다(ipc.ts 의 startWorker 래퍼, core/accounts 의
-//     rollChainFor). 검토 Dispatch 는 구현자와 다른 provider 이므로 이 계산을 건너뛰고 요청된 계정
-//     하나로 저하한다 — ipc.ts 의 그 가드 그대로. **이 재구현이 ipc.ts 자신의 코드를 실행하는 것은
-//     아니다** — 그 격차는 옆의 ipcConvergenceWiring.test.ts(텍스트 가드)가 메운다.
+//   - startWorker: 진짜 래퍼(startWorkerWithChain, core/orchestration/exec/workerStart.ts)가 하는 일 중
+//     이 테스트가 붙잡는 하나 — Task.accountIds 에서 rollAccountIds(그 워커의 롤링 체인)를 계산해
+//     붙인다(core/accounts 의 rollChainFor). 검토 Dispatch 는 구현자와 다른 provider 이므로 이 계산을
+//     건너뛰고 요청된 계정 하나로 저하한다 — startWorkerWithChain 의 그 가드 그대로. **이 재구현이
+//     startWorkerWithChain 자신의 코드를 실행하는 것은 아니다** — 그 함수의 동작은
+//     workerStart.test.ts 가 증명하고, ipcConvergenceWiring.test.ts 는 ipc.ts 가 그 함수를 부르는지만 본다.
 //   - store.load 가 낸 revalidate·rereview 목록은 이 배선이 스스로 소비한다(부팅 로직은 ipc.ts 에
 //     있고 store.load 자신은 아무것도 시작하지 않는다).
 //
@@ -105,12 +106,12 @@ function rig(initial: OrchState = emptyState()) {
   const readReviewFileCalls: string[] = []
   const suspiciousFilesFor = new Map<string, string[]>()
 
-  // ipc.ts 의 startWorker 래퍼 — 워커를 띄우는 모든 길(worker-start, repair 의 같은 세션 재사용·새
-  // 워커, 검토 Dispatch)이 이 한 곳을 지나고, 여기서 Task.accountIds 로부터 rollAccountIds 를 계산해
-  // 붙인다(property 4). 띄우려는 provider 가 이 Task 의 provider 와 다르면(검토 Dispatch) 그 계산을
-  // 건너뛰고 요청된 계정 하나로 저하한다 — ipc.ts 의 그 가드 그대로. **이것은 그 계약을 이 층에서
-  // 재구현한 것이지 ipc.ts 자신의 코드가 아니다** — ipc.ts 가 실제로 그 계약을 지키는지는
-  // ipcConvergenceWiring.test.ts(텍스트 가드)가 별도로 확인한다.
+  // startWorkerWithChain(ipc.ts 의 startWorker 래퍼가 부른다) — 워커를 띄우는 모든 길(worker-start,
+  // repair 의 같은 세션 재사용·새 워커, 검토 Dispatch)이 이 한 곳을 지나고, 여기서 Task.accountIds
+  // 로부터 rollAccountIds 를 계산해 붙인다(property 4). 띄우려는 provider 가 이 Task 의 provider 와
+  // 다르면(검토 Dispatch) 그 계산을 건너뛰고 요청된 계정 하나로 저하한다 — 그 함수의 가드 그대로.
+  // **이것은 그 계약을 이 층에서 재구현한 것이지 그 함수 자신의 코드가 아니다** — 그 함수의 동작은
+  // workerStart.test.ts 가 증명하고, ipcConvergenceWiring.test.ts 는 ipc.ts 가 그것을 부르는지만 본다.
   const startWorker: OrchServerDeps['startWorker'] = async (a) => {
     const task = box.state.tasks.find((t) => t.id === a.taskId)
     const taskAccountIds = task?.accountIds
