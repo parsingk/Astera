@@ -8,6 +8,7 @@ import {
   hostStatus,
   hostStopResult,
   hostStartTargets,
+  otherProtocolHost,
   preparedRuntimeEntry,
   runHostCommand
 } from './host'
@@ -96,6 +97,73 @@ describe('hostStopResult', () => {
       },
       code: exitCodeFor('TIMEOUT')
     })
+  })
+})
+
+// 감사 #12. 판이 다른 CLI 는 제 판의 주소만 보므로 살아 있는 Host 를 "없다" 로 읽었다. 가짜
+// 리스너를 다른 판의 주소에 세우고, 파일로 답하기 전의 확인이 그것을 찾는지 본다.
+describe('otherProtocolHost — 같은 프로필을 다른 판의 Host 가 쥐고 있는가', () => {
+  const listenAt = async (protocol: number, profileDir: string): Promise<{ address: string; close(): Promise<void> }> => {
+    const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol })
+    if (addr.dirToPrepare) await fs.mkdir(addr.dirToPrepare, { recursive: true, mode: 0o700 })
+    const server = net.createServer((s) => s.end())
+    await new Promise<void>((resolve) => server.listen(addr.address, resolve))
+    return {
+      address: addr.address,
+      close: async () => {
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+        if (addr.dirToPrepare) await fs.rm(addr.dirToPrepare, { recursive: true, force: true })
+      }
+    }
+  }
+
+  it('다른 판의 주소에 누가 있으면 그 판과 주소를 낸다', async () => {
+    const profileDir = path.join(os.tmpdir(), `astera-probe-${process.pid}-a`)
+    const other = await listenAt(HOST_PROTOCOL + 1, profileDir)
+    try {
+      expect(await otherProtocolHost({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })).toEqual({
+        protocol: HOST_PROTOCOL + 1,
+        address: other.address
+      })
+    } finally {
+      await other.close()
+    }
+  })
+
+  it('자기 판의 주소에 있는 것과 다른 프로필의 것은 세지 않는다', async () => {
+    const profileDir = path.join(os.tmpdir(), `astera-probe-${process.pid}-b`)
+    const same = await listenAt(HOST_PROTOCOL, profileDir)
+    const elsewhere = await listenAt(HOST_PROTOCOL + 1, `${profileDir}-other`)
+    try {
+      expect(await otherProtocolHost({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })).toBeNull()
+    } finally {
+      await same.close()
+      await elsewhere.close()
+    }
+  })
+
+  // 권하는 다음 명령이 `host start` 이므로, 그 명령이 다른 판의 Host 를 두고 같은 프로필에 두 번째
+  // Host 를 띄우면 안 된다. 띄우기 전에 거절한다.
+  it('host start 는 다른 판의 Host 가 있으면 띄우지 않고 9 로 거절한다', async () => {
+    const profileDir = path.join(os.tmpdir(), `astera-probe-${process.pid}-d`)
+    const other = await listenAt(HOST_PROTOCOL + 1, profileDir)
+    try {
+      const r = await runHostCommand({
+        cmd: 'host-start',
+        env: { ASTERA_PROFILE_DIR: profileDir },
+        platform: process.platform,
+        home: os.tmpdir()
+      })
+      expect(r.code).toBe(exitCodeFor('VERSION_MISMATCH'))
+      expect(r.body).toMatchObject({ hostProtocol: HOST_PROTOCOL + 1, hostAddress: other.address })
+    } finally {
+      await other.close()
+    }
+  })
+
+  it('아무도 없으면 null 이다', async () => {
+    const profileDir = path.join(os.tmpdir(), `astera-probe-${process.pid}-c`)
+    expect(await otherProtocolHost({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })).toBeNull()
   })
 })
 

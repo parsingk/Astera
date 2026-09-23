@@ -93,8 +93,9 @@ export interface HostServer {
 const HANDSHAKE_MS = 10_000
 
 /** Whether something is answering at this address right now. Used to tell a stale socket file from a
- *  live one — unlinking a path someone is listening on would take a working Host's address away. */
-const answers = (address: string): Promise<boolean> =>
+ *  live one — unlinking a path someone is listening on would take a working Host's address away.
+ *  The CLI asks the same of a sibling protocol's address (cli/host.ts `otherProtocolHost`). */
+export const answers = (address: string): Promise<boolean> =>
   new Promise((resolve) => {
     const probe = net.connect(address)
     // A last resort for an address that neither accepts nor refuses. Cleared as soon as the probe

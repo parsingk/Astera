@@ -6,15 +6,15 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { homedir } from 'node:os'
+import os, { homedir } from 'node:os'
 import { parseArgs } from '../core/orchestration/cliArgs'
 import { publicFor } from '../core/orchestration/cliPublic'
 import { spelledCommand, unknownFlagError, usageFor } from '../core/orchestration/cliUsage'
 import { humanFor, quietFor } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
-import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS } from '../core/host/protocol'
-import { cliHostTarget, logToStderr, runHostCommand } from './host'
+import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTOCOL } from '../core/host/protocol'
+import { cliHostTarget, logToStderr, otherProtocolHost, runHostCommand } from './host'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import {
   CLI_PROTOCOL,
@@ -148,6 +148,30 @@ export function connectFailureEnd(a: {
     fallback: false,
     code: SILENT_HOST_CODE,
     message: `the Host at ${a.address} accepted the connection but did not say hello — it is running and not answering, so its state was not read from the file`
+  }
+}
+
+/**
+ * The ending for a CLI that found nobody at its own address and a Host of **another** protocol
+ * serving this profile (`otherProtocolHost`, conformance audit #12).
+ *
+ * **9, and the state file is not read.** The address carries the protocol, so the two builds miss
+ * each other: the Host is running and writing that file, which is the one condition under which the
+ * file cannot answer (stateFile.ts). It is the same fact `connectFailureEnd` answers 9 for when the
+ * mismatch is seen in the handshake instead of in the address.
+ *
+ * `details` carries both protocols and the address, so `nextSteps` can tell this 9 from the one a
+ * Host that does not know a command gives (cliOutput.ts), and the steps here start again from this
+ * build once the other is gone.
+ */
+export function siblingHostError(a: { found: { protocol: number; address: string }; cliProtocol: number }): CliError {
+  return {
+    code: 'VERSION_MISMATCH',
+    message:
+      `a Host speaking protocol ${a.found.protocol} serves this profile at ${a.found.address}, and this astera speaks protocol ${a.cliProtocol}: ` +
+      'they come from different builds of Astera. That Host is running, so its state was not read from the file. ' +
+      'Quit Astera, stop that Host with the build that started it, then start the build you mean to use.',
+    details: { hostProtocol: a.found.protocol, hostAddress: a.found.address, cliProtocol: a.cliProtocol }
   }
 }
 
@@ -1073,6 +1097,15 @@ export async function main(): Promise<void> {
     lost?: Record<string, unknown>
   ): Promise<HostAnswer> => {
     if (parsed.cmd === 'version') versionWithoutHost()
+    // **Nobody at this address is not yet nobody** (`otherProtocolHost`, conformance audit #12). A
+    // Host of another protocol serving this profile is at another address, and it is writing the
+    // file read below; "start one with astera host start" would start a second Host on the same
+    // profile. A worker's complete report skips the check: it is written to the queue either way,
+    // and the queue is the path that never loses one.
+    if (queueableReportProblem({ cmd: parsed.cmd, args }) !== null) {
+      const found = await otherProtocolHost({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })
+      if (found !== null) fail(siblingHostError({ found, cliProtocol: HOST_PROTOCOL }))
+    }
     if (!fileAnswerable(parsed.cmd)) unreachable(reason, lost)
     const state = readStateFile(path.join(profileDir, 'orchestration.json'))
     // 못 읽은 파일을 빈 Job 목록으로 내면 사람은 자기 Job 이 사라졌다고 읽는다.

@@ -3,7 +3,7 @@
 // **This file must not import from `./run` — `run.ts` imports this file, and the reverse would be a
 // cycle.** So `runHostCommand` below returns a value instead of printing one; `run.ts` renders it
 // with `renderOk` and calls `process.exit` itself.
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
@@ -12,7 +12,8 @@ import { connectHost, type HostConnection } from '../core/host/connect'
 import { hostSpawnPlan, resolveHostEntry } from '../core/host/spawn'
 import { hostRuntimeBase, hostRuntimePaths } from '../core/host/runtime'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
-import { hostAddress } from '../host/address'
+import { hostAddress, siblingHostAddresses } from '../host/address'
+import { answers } from '../host/server'
 import { nativePath, userDataDir } from '../core/orchestration/cliDiscovery'
 import { exitCodeFor } from '../core/orchestration/cliOutput'
 
@@ -348,6 +349,19 @@ export async function runHostCommand(a: {
   // to be running, and one is.
   const already = await tryStatus()
   if (already) return already
+  // **Not while a Host of another protocol serves this profile** (conformance audit #12). It is at
+  // another address, so nothing above saw it, and a second Host would write the same state file.
+  // This is the step the 9 for that case offers next, so it has to be safe to follow.
+  const other = await otherProtocolHost({ profileDir, platform: a.platform, tmpDir: os.tmpdir() })
+  if (other !== null)
+    return {
+      body: {
+        error: `a Host speaking protocol ${other.protocol} already serves this profile at ${other.address}, and this astera speaks protocol ${HOST_PROTOCOL} — quit Astera and stop that Host with the build that started it, then run this again`,
+        hostProtocol: other.protocol,
+        hostAddress: other.address
+      },
+      code: exitCodeFor('VERSION_MISMATCH')
+    }
 
   const targets = hostStartTargets({
     cliEntry: process.argv[1] ?? '',
@@ -393,4 +407,28 @@ export async function runHostCommand(a: {
     body: { error: `the Host did not answer within ${START_TIMEOUT_MS}ms`, logPath: targets.logPath },
     code: exitCodeFor('HOST_NOT_RUNNING')
   }
+}
+
+/**
+ * A Host of **another** protocol version that serves this profile right now, or `null`.
+ *
+ * **Asked only on the path where this CLI found nobody at its own address** (run.ts), before it
+ * answers from the state file or says there is no Host. The address carries the protocol
+ * (host/address.ts), so an installed build and a development build of different protocols miss each
+ * other, and the one that misses would read the file a live Host is writing, or tell the person to
+ * start a second Host on the same profile (conformance audit #12).
+ *
+ * Cheap and bounded: one directory listing, then one connect per sibling found, in parallel, each
+ * given at most a second (`answers`). Connecting is what tells a live Host from a posix socket
+ * directory its Host left behind. Nothing is said on the connection, so no Host of any version is
+ * asked to do anything.
+ */
+export async function otherProtocolHost(a: {
+  profileDir: string
+  platform: NodeJS.Platform
+  tmpDir: string
+}): Promise<{ protocol: number; address: string } | null> {
+  const siblings = siblingHostAddresses({ ...a, protocol: HOST_PROTOCOL, list: (dir) => readdirSync(dir) })
+  const live = await Promise.all(siblings.map((s) => answers(s.address)))
+  return siblings.find((_, i) => live[i]) ?? null
 }

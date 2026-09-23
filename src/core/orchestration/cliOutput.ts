@@ -324,7 +324,15 @@ const STEPS: Record<
     'astera runs resume --id <runId>'
   ],
   // 두 빌드가 갈렸다. 무엇과 무엇이 갈렸는지 보고, 옛 Host 를 물린다(docs/cli.md 의 Exit 9).
-  VERSION_MISMATCH: () => ['astera version', 'astera host stop'],
+  //
+  // **다른 판의 Host 를 주소에서 찾은 9 는 `host stop` 이 아니다**(run.ts 의 siblingHostError). 그
+  // Host 는 이 CLI 의 주소에 없으므로 이 CLI 의 `host stop` 은 "없다" 고 답한다. 그만두게 하는 것은
+  // 문구가 말하고(앱을 닫고, 그 Host 를 띄운 빌드로 멈춘다), 칠 명령은 그다음 이 판으로 다시
+  // 띄우는 것이다 — `host start` 는 다른 판의 Host 가 아직 있으면 띄우지 않고 9 로 거절한다.
+  VERSION_MISMATCH: (_cmd, details) =>
+    typeof details.hostProtocol === 'number'
+      ? ['astera version', 'astera host start']
+      : ['astera version', 'astera host stop'],
   RUN_FAILED: () => ['astera tasks list --run <runId> --status failed']
 }
 

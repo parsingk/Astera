@@ -27,6 +27,9 @@ export interface HostAddress {
   dirToPrepare: string | null
 }
 
+/** Where every named pipe lives on win32. Listing it lists the pipes that exist right now. */
+const PIPE_DIR = '\\\\.\\pipe\\'
+
 /** The protocol is part of the address, not something to discover after connecting. From slice 2 a
  *  Host holds live terminals, so an app that cannot speak its protocol must not reach it at all —
  *  and an address that already says which protocol lives there makes that impossible rather than
@@ -43,7 +46,7 @@ export function hostAddress(a: {
 }): HostAddress {
   const key = createHash('sha256').update(a.profileDir).digest('hex').slice(0, KEY_LENGTH)
   const name = a.protocol === 1 ? `astera-host-${key}` : `astera-host-${key}-v${a.protocol}`
-  if (a.platform === 'win32') return { address: '\\\\.\\pipe\\' + name, dirToPrepare: null }
+  if (a.platform === 'win32') return { address: PIPE_DIR + name, dirToPrepare: null }
   const dir = `${a.tmpDir.replace(/\/+$/, '')}/${name}`
   return { address: `${dir}/sock`, dirToPrepare: dir }
 }
@@ -72,4 +75,45 @@ export async function retireOlderHosts(a: {
     retired += 1
   }
   return retired
+}
+
+/**
+ * The addresses of this profile's Hosts at **other** protocol versions that exist right now, with
+ * the protocol each one names. `list` reads a directory's entry names.
+ *
+ * **Why a CLI needs this** (conformance audit #12). The protocol is part of the address (above), so
+ * a CLI of another build asks its own address, finds nobody, and would read the state file a live
+ * Host is writing. Before it trusts "nobody is there" it asks whether a sibling is.
+ *
+ * **Listed rather than enumerated**, so a newer protocol than this build knows is found too. On
+ * win32 the pipe namespace is listable and a pipe is there only while a server holds it. On posix
+ * the entries are the per-address directories under the temp folder, and a directory can outlive
+ * its Host, so an entry found here is a candidate: the caller still has to connect to it. A listing
+ * that cannot be read finds nothing, which is the answer this path gave before the check existed.
+ */
+export function siblingHostAddresses(a: {
+  profileDir: string
+  platform: NodeJS.Platform
+  tmpDir: string
+  protocol: number
+  list(dir: string): readonly string[]
+}): { protocol: number; address: string }[] {
+  const base = hostAddress({ ...a, protocol: 1 }).address
+  const stem = a.platform === 'win32' ? base.slice(PIPE_DIR.length) : base.split('/').slice(-2)[0]
+  const dir = a.platform === 'win32' ? PIPE_DIR : a.tmpDir.replace(/\/+$/, '')
+  let names: readonly string[]
+  try {
+    names = a.list(dir)
+  } catch {
+    return []
+  }
+  const found: { protocol: number; address: string }[] = []
+  for (const name of names) {
+    const m = name === stem ? ['', '1'] : new RegExp(`^${stem}-v(\\d+)$`).exec(name)
+    if (m === null) continue
+    const protocol = Number(m[1])
+    if (protocol === a.protocol) continue
+    found.push({ protocol, address: hostAddress({ ...a, protocol }).address })
+  }
+  return found.sort((x, y) => x.protocol - y.protocol)
 }

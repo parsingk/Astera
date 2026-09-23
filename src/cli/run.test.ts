@@ -23,6 +23,7 @@ import {
   callHost,
   connectFailureEnd,
   SILENT_HOST_CODE,
+  siblingHostError,
   resolveGuidePath,
   readGuide,
   outputMode,
@@ -618,6 +619,24 @@ describe('connectFailureEnd — 접속 실패 셋을 가른다', () => {
       SILENT_HOST_CODE
     )
     expect(exitCodeFor(SILENT_HOST_CODE)).toBe(7)
+  })
+})
+
+// 감사 #12. 주소에 판이 들어가서, 다른 판의 CLI 는 살아 있는 Host 를 못 보고 그 Host 가 쓰는 파일을
+// 읽었다. 찾았으면 파일로 답하지 않고 9 로 끝난다 — 무엇과 무엇이 갈렸는지를 싣고.
+describe('siblingHostError — 다른 판의 Host 가 이 프로필을 쥐고 있다', () => {
+  const found = { protocol: 4, address: '\\\\.\\pipe\\astera-host-abc-v4' }
+
+  it('VERSION_MISMATCH 이고, 두 판과 주소를 말하며, 파일을 읽지 않았다고 한다', () => {
+    const e = siblingHostError({ found, cliProtocol: 3 })
+    expect(e.code).toBe('VERSION_MISMATCH')
+    expect(exitCodeFor(e.code)).toBe(9)
+    expect(e.message).toContain('protocol 4')
+    expect(e.message).toContain('protocol 3')
+    expect(e.message).toContain(found.address)
+    expect(e.message).toContain('not read from the file')
+    expect(e.message).toContain('Quit Astera')
+    expect(e.details).toEqual({ hostProtocol: 4, hostAddress: found.address, cliProtocol: 3 })
   })
 })
 

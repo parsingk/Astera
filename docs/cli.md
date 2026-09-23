@@ -644,6 +644,13 @@ waiting for a person", and both are legitimate non-zero endings of a wait.
 **9 means two different builds.** The command on your `PATH` and the running Host came from
 different versions of Astera. Report it rather than working around it.
 
+The Host's address includes its protocol version, so an `astera` of another protocol does not reach
+the running Host at all. When it finds nobody at its own address, it checks whether a Host of any
+other protocol serves the same profile before it says there is no Host or answers from the state
+file. If one does, the answer is 9 rather than 3, the file is not read (that Host is writing it), and
+`error.details` carries `hostProtocol`, `hostAddress` and `cliProtocol`. `astera host start` refuses
+with 9 in the same situation instead of starting a second Host on the profile.
+
 `astera version` never fails. It answers 0 with whatever it knows, so it can be used to check
 whether the two halves agree.
 
@@ -772,7 +779,10 @@ in the second.
 
 **Exit 9**
 The `astera` on your `PATH` and the running Host came from different builds. Quit Astera, run
-`astera host stop`, and start the version you meant to use.
+`astera host stop`, and start the version you meant to use. When `error.details.hostProtocol` is
+there, the other Host speaks a different protocol and this `astera` cannot reach it, so its
+`host stop` finds nothing: stop that Host with the build that started it (quitting that Astera, or
+its own `astera host stop`), then run `astera host start` with the build you mean to use.
 
 **A worker reported while nothing was running**
 Reports a worker could not deliver are written into the profile's queue and applied when the

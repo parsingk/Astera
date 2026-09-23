@@ -174,6 +174,16 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'HOST_NOT_RUNNING' })).toEqual(['astera host start'])
   })
 
+  // 감사 #12. 다른 판의 Host 가 이 프로필을 쥐고 있을 때 `host stop` 은 이 CLI 로는 닿지 않는다 —
+  // 그 Host 를 먼저 그만두게 하고(문구가 말한다), 그다음 이 판으로 다시 띄운다.
+  it('다른 판의 Host 를 찾은 9 는 버전을 보고 다시 띄우는 명령이다', () => {
+    expect(nextStepsFor({ code: 'VERSION_MISMATCH', details: { hostProtocol: 4 } })).toEqual([
+      'astera version',
+      'astera host start'
+    ])
+    expect(nextStepsFor({ code: 'VERSION_MISMATCH' })).toEqual(['astera version', 'astera host stop'])
+  })
+
   it('없는 id 는 그 명령의 목록 명령으로 이어진다', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'jobs-get' })).toEqual(['astera jobs list'])
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'runs-stop' })).toEqual(['astera runs list'])
