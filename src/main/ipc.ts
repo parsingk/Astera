@@ -565,6 +565,27 @@ export function hostReplaceDue(a: {
 }
 
 /**
+ * The line `replaceHost` logs once its ready wait is over (Host S2 fix round 2, N2).
+ *
+ * **A Host that is still leaving is not a replacement that failed.** A retired Host first waits up to
+ * SPAWN_DEADLINE_MS for spawns it already took, and keeps its address the whole time (`leave()` in
+ * host/index.ts); on win32 no new Host can bind the pipe name until it has closed. So the app's
+ * ready wait can run out while the old Host (`oldPid`) is still alive, and the client's own cycle
+ * reaches the new Host at a later attempt. Saying "did not come up" then sends a person looking for
+ * a failure that is not there. `oldAlive` is the caller's check on that pid.
+ */
+export function replacementLogLine(a: {
+  now: { connected: boolean; hostVersion: string | null; pid: number | null; problem: string | null }
+  oldPid: number | null
+  oldAlive: boolean
+}): string {
+  if (a.now.connected) return `host: replaced — now Host ${a.now.hostVersion} (pid ${a.now.pid})`
+  if (a.oldPid !== null && a.oldAlive)
+    return `host: the old Host (pid ${a.oldPid}) is still leaving and holds the address — the replacement is retried once it has gone`
+  return `host: the replacement did not come up: ${a.now.problem ?? 'no answer'}`
+}
+
+/**
  * The schedule a session taken back from the Host should be re-armed with, or null when there is
  * none to find. `spawnSession` registers one right after `core.sessions.spawn`; nothing did it for an
  * adopted session, so a scheduled session came back from a restart with no schedule, no warning, and
@@ -6901,11 +6922,17 @@ export function registerIpc(
         client.restart()
         await client.ready(READY_TIMEOUT_MS)
         const now = client.status()
-        hostLog(
-          now.connected
-            ? `host: replaced — now Host ${now.hostVersion} (pid ${now.pid})`
-            : `host: the replacement did not come up: ${now.problem ?? 'no answer'}`
-        )
+        // Signal 0 asks whether the pid exists, and does nothing to it; EPERM also means it does.
+        const oldAlive = ((): boolean => {
+          if (now.connected || was.pid === null) return false
+          try {
+            process.kill(was.pid, 0)
+            return true
+          } catch (err) {
+            return (err as NodeJS.ErrnoException).code === 'EPERM'
+          }
+        })()
+        hostLog(replacementLogLine({ now, oldPid: was.pid, oldAlive }))
         return now
       } finally {
         replacing = false

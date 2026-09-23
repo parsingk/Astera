@@ -96,7 +96,7 @@ export interface HostServer {
    *  nor fails; it hangs, because the pipe name lives on in the connected instance. A peer told
    *  nothing waits out its own deadline; one that is hung up on retries at once. A new Host still
    *  cannot bind the address until this one closes it, so an app converges on the new Host at its
-   *  next attempt after this one has gone. */
+   *  next attempt after this one has gone, which the client's backoff may place up to ~16 s later. */
   stopAccepting(): void
   clients(): number
   /** When this Host began serving, the same string its `hello` carries. Exposed so the entry point can

@@ -9,6 +9,7 @@ import {
   hostHandshakeMeans,
   hostHoldings,
   hostReplaceDue,
+  replacementLogLine,
   liveChatOnThread,
   parseAllowedExternalUrl,
   providerOfSession,
@@ -742,5 +743,26 @@ describe('hostReplaceDue - when an outdated Host is replaced', () => {
 
   it('stands aside while the app is quitting', () => {
     expect(hostReplaceDue({ ...base, quitting: true })).toBe(false)
+  })
+})
+
+// Host S2 fix round 2, N2: a replaced Host that is still settling holds its address, so the new one
+// cannot bind until it has gone, and the app's ready wait runs out first. That is not the
+// replacement failing, and the log must not say it did.
+describe('replacementLogLine', () => {
+  const connected = { connected: true, hostVersion: '2.0.0', pid: 20, problem: null }
+  const down = { connected: false, hostVersion: null, pid: null, problem: 'no answer' }
+  it('says replaced when the new Host answered', () => {
+    expect(replacementLogLine({ now: connected, oldPid: 10, oldAlive: true })).toBe('host: replaced — now Host 2.0.0 (pid 20)')
+  })
+  it('says the old Host is still leaving, not that the replacement failed, while it is alive', () => {
+    const line = replacementLogLine({ now: down, oldPid: 10, oldAlive: true })
+    expect(line).toContain('pid 10')
+    expect(line).toMatch(/still leaving/)
+    expect(line).not.toMatch(/did not come up/)
+  })
+  it('says the replacement did not come up once the old Host is gone', () => {
+    expect(replacementLogLine({ now: down, oldPid: 10, oldAlive: false })).toBe('host: the replacement did not come up: no answer')
+    expect(replacementLogLine({ now: down, oldPid: null, oldAlive: false })).toBe('host: the replacement did not come up: no answer')
   })
 })
