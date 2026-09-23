@@ -1,0 +1,927 @@
+# Host S2 to S6: Jobs advance with the app closed
+
+Design only. No code was changed. Written 2026-09-23 against `develop` at `afab43f`, with Track A's
+uncommitted edits present in the working tree (`src/core/orchestration/command.ts`,
+`src/host/index.ts`, `src/host/server.ts`, `docs/cli.md`). Every `file:line` below is from that
+working tree. Line numbers in `command.ts` and `src/host/index.ts` may move when Track A lands.
+
+Binding context: `docs/2026-09-22-host-control-plane-design.md` §2 (the slice table and the S5 trap),
+§5 (S2 to S4 make dependencies local while `handleCommand` stays unchanged), §12.3 (the S5 question
+belongs to S4's design). The S1 ledger rulings F21 to F72 are assumed; the ones this design leans on
+are named where they matter.
+
+## Decisions (2026-09-24)
+
+Taken with the user after the draft, and binding on every slice below. §10 keeps the options and the
+reasoning; this list is what was chosen.
+
+| | Decision | Chosen | By |
+|---|---|---|---|
+| D1 | The S5 trap | S5 (validation, review, repair) moves **with** S4, in the same release | user |
+| D2 | Scheduled Jobs with the app closed | Fire only while an app is attached, as today | user |
+| D3 | Owner of `worktrees.json` | The Host; the app writes through it | controller, the draft's recommendation |
+| D4 | Worker environment | The Host's own environment minus a documented strip list | user |
+| D5 | New app, old Host holding work | The app keeps today's loop until that Host is replaced | controller |
+| D6 | A worker lost to a Host restart with no journal | Open a Gate at load | controller |
+| D7 | A usage limit with no app | A Gate carrying the reset time, so `runs wait` ends with 8 | controller |
+| D8 | Journal and reconciler | Stay in the app | controller |
+| D9 | A second app | Left as S1 recorded it | controller |
+| D10 | Release shape | S2 and S3 merge separately; S4 and S5 release together | controller |
+| D11 | `jobs run` with no Host | Keep exit 3 and point at `astera host start`; no auto-start | controller |
+| D12 | Permission mode with no settings file | The app's default | user |
+
+D4 has a consequence the docs must carry: a Host started from a CI shell hands that shell's variables,
+secrets included, to the agents it spawns, exactly as an app started from that shell would.
+
+## 0. The problem, measured
+
+The goal is: `astera host start`, `astera jobs run --id <job>`, `astera runs wait --id <run>`, and the
+wait ends `completed` with no Astera window ever opened.
+
+Today it cannot, for four separate reasons, each at a specific line.
+
+1. **Nothing dispatches.** `jobs run` goes to `run-start` (`command.ts:937`), which for a Job with no
+   coordinator account only releases `pendingStart` and commits (`command.ts:1286`). The Job
+   keeps `autoDispatch` (`command.ts:856`), and the only thing that reads it is the app's
+   `runScheduler` (`src/main/ipc.ts:3513-3911`), reached from the app's commit hook
+   (`ipc.ts:4006`, `src/main/orchestration/commitHook.ts:114`). With no app, the Run sits `running`
+   and `runs wait` holds for its hour. This is audit item 1 (`cli-spec-audit.md:140`, #99).
+2. **Nothing spawns.** Even a coordinator-driven Job (one with `coordinatorAccountId`) fails:
+   `startCoordinator`, `startWorker`, `makeRunWorktree` are PROPAGATES (`src/host/orchDeps.ts:28-37`)
+   and are refused with CONFLICT when no app is attached (`orchDeps.ts:395-402`).
+3. **Nothing notices a worker die.** `handleExit` runs only in the app: session exit reaches
+   `OrchRollTap.onExit` (`ipc.ts:1498`, `src/main/orchestration/rollTap.ts:88-104`). A worker that
+   dies with the app closed leaves its Dispatch open until the Host's next `store.load`.
+4. **Nothing validates.** `startValidation`, `startReview`, `startRepair` are FIRE_AND_FORGET
+   (`orchDeps.ts:126-128`): with no app they are logged and dropped (`orchDeps.ts:470-477`). The Task
+   stays `validating`; the app's resume sweep re-drives it when an app attaches (ruling F27,
+   `ipc.ts:4807`, `ipc.ts:2494`). `runs wait` holds meanwhile.
+
+What already moved toward the Host and is reused here: accounts and run configs read from the
+profile when no app is attached (`orchDeps.ts:150-167`, `src/host/orch.ts:399-402`); sessions list,
+read and send answered from the Host's own registries (`orchDeps.ts:184`, `src/host/sessions.ts`);
+hook event state read from the profile (`src/host/sessions.ts:216-220`); a chat turn written by the
+Host when no app is attached (`orchDeps.ts:217`). Track A is making the idle exit count running Runs
+through `liveCounts` (working tree, `src/host/index.ts:194-197`), which this design depends on.
+
+## 1. Scope and order
+
+### 1.1 Which slices the goal needs
+
+| Slice | Needed for "Jobs advance with no app"? | Why |
+|---|---|---|
+| S2 session spawn | **Yes** | Every worker, reviewer, repair worker and coordinator is a session. |
+| S3 worktrees | **Yes** | An app-driven Run gets its worktree lazily from the scheduler (`ipc.ts:3669-3722`); a concurrency-2 Run puts each Task in `worktree: 'new'` (`ipc.ts:3855-3866`); a coordinator Run gets its worktree at `run-start` (`command.ts:1290-1306`). All of it is `forkWorktree` (`ipc.ts:2634-2657`). |
+| S4 dispatch loop | **Yes** | Reason 1 above. |
+| S5 validation, review, repair | **Yes, or the refuse rule** | Reason 4 above, and the §2 trap. |
+| S5 recovery reconciler | **No** | It only acts on attempts the Continuity journal witnessed (`src/main/recovery/reconciler.ts:117-122`). An attempt made with no app has no rows, so the reconciler leaves it alone. That is the conservative direction. See D8. |
+| S6 rolling and limits | **No** | A worker that hits a limit with the app closed stalls; nothing is corrupted. See §6. |
+
+### 1.2 The sequence
+
+Four merges, the first three shippable on their own, the goal reached at the fourth.
+
+1. **S2: the Host spawns orchestration sessions.** Opens: `worker-start` from a shell or a
+   coordinator with the app closed, for placements that need no new worktree (`--worktree current`,
+   an explicit path, or a Run that already has one). Coordinator-driven Jobs whose Run worktree
+   already exists advance with no app.
+2. **S3: the Host owns Job worktrees and the git that merges them.** Opens: `worktree: 'new'`,
+   `run-start`'s worktree, `run-merge`, `run-delete --merge/--remove-worktrees` with no app.
+   Coordinator-driven Jobs advance with no app in every placement.
+3. **S4 + S5 together: the Host drives.** The dispatch loop, schedule firing policy (D2), coordinator
+   nudges, the unattended-question net, the pending-report drain, **and** validation, review and
+   repair move in one merge. Opens: the goal.
+
+**The S5 trap is resolved by moving S5 with S4** (recommended, D1). The alternative, if S4 must ship
+first, is the precise refuse rule in §5.4. Either way nothing ships where a validation-bearing Task
+reads as done without having been validated.
+
+S6 follows later, independently.
+
+### 1.3 What each slice moves, measured
+
+`bootOrch` in `src/main/ipc.ts` runs from line 2289 to 4977: **2,689 lines**, the whole of the
+orchestration wiring. Its sections, and which slice takes each:
+
+| `ipc.ts` lines | Size | What | Slice |
+|---|---|---|---|
+| 2306-2335 | 30 | CLI entry, skills path, specs dir, `LAUNCH_FORBIDDEN` check | S2 (paths travel in the Host's env, §2.2) |
+| 2337-2367 | 31 | the store facade over the mirror | stays |
+| 2368-2600 | 233 | continuity open, pending queue read, mirror fill, boot log lines | drain moves in S4; continuity stays (D8) |
+| 2552-2569 | 18 | stale spec file sweep | **S2** (the Host writes spec files; §2.7 race) |
+| 2602-2657 | 56 | `forkWorktree` | S3 |
+| 2680-2723 | 44 | `preTrustWorkspace` | S2 |
+| 2725-2821 | 97 | `OrchCoordinator` construction and its `spawnSession` adapter | S2 |
+| 2823-2948 | 126 | `TaskValidator` construction, runner, `onSettled`, `onCannotRun` | S5 |
+| 2950-3133 | 184 | `reviewGate`, `startReview` | S5 |
+| 3135-3167 | 33 | `gateSlot` | S4 |
+| 3169-3502 | 334 | `Integration`, `reapWorktree`, `integrateWorktrees` | S3 |
+| 3504-3911 | 408 | `runScheduler` | S4 |
+| 3913-3964 | 52 | nudge threshold, `orchFireTick` | S4 |
+| 3966-4009 | 44 | the commit hook wiring | stays (its `schedule` becomes a no-op, §4) |
+| 4011-4044 | 34 | `firstImplDispatch`, `changedFilesSince` | S5 |
+| 4046-4547 | 502 | the `OrchServerDeps` literal | split across S2, S3, S5 (§1.4) |
+| 4549-4625 | 77 | `repairDeps`, `resumeSweep`, `buildRecovery` | S5 (repair, sweep); recovery stays |
+| 4627-4670 | 44 | the always-on migration (F62) | stays; the Host gates on its marker (§4.6) |
+| 4672-4807 | 136 | shuttle, `orch` assignment, drain, first scheduler run, sweeps | S4 |
+| 4810-4845 | 36 | `releaseCoordinator` | S2 (exit handling, §2.6) |
+| 4847-4877 | 31 | `nudgeSleepingCoordinators` | S4 |
+| 4879-4977 | 99 | timers, stubs, rolling taps | timers S4; stubs and rolling stay |
+
+Electron-free modules that move whole (measured, `wc -l`): `src/main/orchestration/coordinator.ts`
+954, `tail.ts` 124, `release.ts` 32, `limitProbe.ts` 154 (S2); `validator.ts` 303, `repair.ts` 239,
+`reviewGate.ts` 127, `resumeSweep.ts` 56, `src/main/run/prepare.ts` 171, `src/main/runManager.ts` 373
+(S5); `src/main/statusline.ts` 390 (S2). Each imports only `node:*` and `src/core/*` (checked by
+reading their import lines). They move to a new `src/core/orchestration/exec/` so both the app and the
+Host bundle can import them, which keeps one literal of each while both processes still use them
+(§7.3).
+
+### 1.4 The orchDeps classification per slice
+
+`hostOrchDeps` classifies all 34 keys and fails the build on an unclassified one
+(`orchDeps.ts:228-334`). Each slice moves names into a new group, `HOST_LOCAL`: answered by the Host
+itself whether or not an app is attached.
+
+| Name | Today | After |
+|---|---|---|
+| `startWorker`, `startCoordinator`, `releaseWorker`, `readWorker` | PROPAGATES | HOST_LOCAL in S2 |
+| `probeLimit` | SWALLOWED | HOST_LOCAL in S2 (pure file reads, `limitProbe.ts:17-23`) |
+| `readReviewFile` | SWALLOWED | HOST_LOCAL in S2 (a read of the Host's own specs dir) |
+| `makeRunWorktree`, `mergeWorktrees`, `removeWorktrees` | PROPAGATES | HOST_LOCAL in S3 |
+| `resolveProjectRoot` | SWALLOWED | HOST_LOCAL in S3 (worktree list plus Job cwds; still degrades) |
+| `startValidation`, `startReview`, `startRepair` | FIRE_AND_FORGET | HOST_LOCAL in S5 |
+| `repairTargetFor`, `repairOnce`, `lang` | DEGRADES | HOST_LOCAL in S5 (`lang` from `app-settings.json`) |
+| `listRunConfigs` | LOCAL_WHEN_ABSENT | unchanged |
+| `unregisterRolling`, `onDispatchLost` | FIRE_AND_FORGET | unchanged (rolling and recovery stay, S6/D8) |
+| `browserEnabled`, `browserRun` | PROPAGATES | unchanged forever (needs an Electron window) |
+| `handoffEnabled`, `handoffs.*`, `trackingEnabled`, `sessionTasks.*`, `chatPending`, `chatSend` | as today | unchanged |
+
+**F58 must be honoured when `repairTargetFor` leaves DEGRADES** (`orchDeps.ts:65-72`): its `null`
+fallback is what makes a swallowed `startRepair` safe. In S5 both become local in the same commit, so
+there is no state in which `startRepair` is swallowed while `repairTargetFor` answers a real target.
+The comment at both ends is rewritten in that commit.
+
+## 2. S2: session spawn in the Host
+
+### 2.1 What moves, what stays, what the app becomes
+
+**Moves.** The orchestration spawn path only:
+- `OrchCoordinator` (`coordinator.ts`, 954 lines) and its deps adapter (`ipc.ts:2725-2821`).
+- The `startWorker` wrapper: rolling chain choice, login lookups, tail start (`ipc.ts:4191-4278`,
+  88 lines). Its body becomes one shared function, `startWorkerWithChain(ctx, args)`, called by both
+  processes.
+- `startCoordinator` (`ipc.ts:4139-4190`, 52 lines), `releaseWorker` (`ipc.ts:4279-4290`),
+  `readWorker` (`ipc.ts:4308-4312`), `preTrustWorkspace` (`ipc.ts:2680-2723`).
+- `WorkerTails` (`tail.ts`), fed from `PtyRegistry.onData` in the Host.
+- `makeLimitProbe` (`limitProbe.ts`) with the statusline payload read from the profile.
+- Worker exit handling while no app is attached (§2.6), including `releaseCoordinator`
+  (`ipc.ts:4819-4845`).
+- The stale spec file sweep (`ipc.ts:2562-2569`).
+
+**Stays.** Every session a person opens: `spawnSession` (`ipc.ts:1717-2022`, 306 lines) is not
+touched. Rolling and codex rolling registration, Slack, schedules, the codex rollout watcher, the
+renderer's tabs, backpressure acks.
+
+**The app becomes, for orchestration sessions, an adopter and a display.** It learns of each
+Host-spawned session from a push (§2.3), adopts it through the exact adopter the reattach sweep uses
+(`ipc.ts:7151-7275`), and from then on treats it as it treats any session it took back after a
+restart: tab, rolling, Slack, schedule, codex rollout. The app keeps its own copy of the spawn path
+for one purpose only: a Host that does not announce `spawn` (§7.2).
+
+### 2.2 Environment assembly in the Host
+
+The Host builds the same environment the app builds. The pieces, and where each comes from:
+
+| Piece | App today | Host in S2 |
+|---|---|---|
+| Base env | `process.env` of the app (`src/core/sessions/manager.ts:162`) | `process.env` of the Host, minus a strip list (below). D4. |
+| Config-dir variable, cleared managed and inherited keys | `cliEnvFor` (`src/core/sessions/cliEnv.ts:61-89`) | the same function |
+| `CLAUDE_CODE_GIT_BASH_PATH` | `findGitBash` (`manager.ts:167-170`) | the same code: `SessionManager` is electron-free and is constructed in the Host |
+| `ASTERA_STATUSLINE_OUT`, `ASTERA_STATUSLINE_ORIGINAL`, `ASTERA_HOOK_OUT` and `--settings` | `StatusLineManager.spawnConfig` (`src/main/statusline.ts:359-370`) | the same class, constructed on the profile, **without `init()`** (below) |
+| `ASTERA_CLI`, `ASTERA_PROFILE_DIR`, `ASTERA_SKILLS`, `ASTERA_SESSION`, PATH prepend | `orchEnvOf` (`ipc.ts:1291-1298`) into `manager.ts:176-203` | paths from new Host env variables (below) |
+| `--add-dir` for the screenshot folder | `sessionReadDirs` (`src/main/core.ts:241`) | `previewShotsDir(profileDir)`, the same function |
+| Account | `core.accounts.get` | `readAccountEntries(profile/accounts.json)` (`src/host/index.ts:177`), read only |
+| Permission mode | `core.appSettings.getAgentPermissionMode()` (`ipc.ts:2754-2755`) | read from `app-settings.json`, read only, the same pattern `src/cli/skills.ts:86` uses; default `yolo` as the store's (`src/main/appSettingsStore.ts:118`). D12. |
+
+**The strip list.** The Host's own environment is not a clean base. `hostSpawnPlan` sets
+`ELECTRON_RUN_AS_NODE=1`, `ASTERA_HOST_PROFILE_DIR`, `ASTERA_HOST_LOG`, `ASTERA_HOST_VERSION`
+(`src/core/host/spawn.ts:50-56`). A worker inheriting `ELECTRON_RUN_AS_NODE=1` turns any Electron
+binary it runs, this repository's own dev app included, into plain Node. So the Host's base is its
+env with `ELECTRON_RUN_AS_NODE` and every `ASTERA_HOST_*` removed, then handed to `cliEnvFor`. The
+list sits beside `NOT_INHERITED` (`spawn.ts:8`) as one exported constant with a test.
+
+**Three paths the Host cannot compute, carried in its env.** The shuttle and the skills folder are
+properties of the app build, not the profile, and the Host in a packaged install runs on the prepared
+Node runtime (`scripts/host-runtime.mjs:50`), which cannot run a script inside `app.asar`.
+- `ASTERA_HOST_CLI_EXEC` and `ASTERA_HOST_CLI_ENTRY`: the Electron executable and `out/main/cli.js`.
+  The app passes `process.execPath` and `cliEntryPath()` (`ipc.ts:2284-2287`); `astera host start`
+  passes its own `process.execPath` and `process.argv[1]` (`src/cli/host.ts:352-354`), which are the
+  same pair because the CLI already runs as `ELECTRON_RUN_AS_NODE` Electron. The Host writes the
+  shuttle into `profile/orch` with `writeShuttle` (`src/main/orchestration/shuttle.ts:54`, moved to
+  core) if it differs, exactly as `ipc.ts:4679` does.
+- `ASTERA_HOST_SKILLS`: the skills folder (`ipc.ts:2307-2309`); the CLI already resolves it
+  (`resolveSkillsDir`).
+
+A Host that was started without these (an older app or CLI) answers every Host-local spawn with the
+refusal it answers today, `APP_REQUIRED`, and logs which variable was missing. It does not guess a
+path.
+
+**Statusline init is split.** `StatusLineManager.init()` does two different things
+(`statusline.ts:204-330`): it writes the capture scripts and settings files, and it deletes the hook
+events folder as app-start cleanup ("a queue the app drains"). The Host must do the first and never
+the second, because the second would erase the events of sessions it is running. `init()` becomes
+`ensureFiles()` plus `startupCleanup()`; the app calls both, the Host only `ensureFiles()`. The
+scripts are written with `writeScript`'s skip-identical and busy-rename retry (`statusline.ts:85-131`),
+so two processes writing the same content is already safe (ruling from e127640).
+
+### 2.3 How the app learns about a Host-spawned session
+
+**One new push, `pty-opened`**, broadcast by the Host when **it** opens a pty (not when a client
+asks it to with `pty-spawn`):
+
+```text
+host -> clients   { t: 'pty-opened', entry: PtyEntry }
+```
+
+`PtyEntry` is the shape `pty-listed` already carries (`src/core/host/protocol.ts:85-93`), so the
+app's handler is the reattach sweep's per-entry body (`src/main/host/reattach.ts:97-132`) applied to
+one entry: `heldLive` guard, `attach`, adopter, `pty-attach` replay. The adopter is the existing one
+(`ipc.ts:7151-7275`), which already registers rolling from `rollAccountIds`, Slack, the schedule, the
+codex rollout watcher, and sends `session:created` so the renderer builds the tab.
+
+**The note is the one `SessionManager.spawn` writes** (`manager.ts:209-228`): `kind: 'session'`,
+`id`, `restore: { accountId, cwd, title, resumeSessionId?, rollAccountIds?, rollPrompt?,
+bypassPermissions? }`. Because the Host constructs the same `SessionManager`, the note is byte-for-byte
+the note an app-spawned worker has. That is what makes this version-safe: an older app that ignores
+`pty-opened` (unknown message types reach no subscriber; the app's handlers filter on `m.t`,
+`ipc.ts:6831`, `ipc.ts:6856`) still adopts the session at its next reattach sweep, because the note is
+one it can read. The kill-on-unreadable rule (`reattach.ts:104-109`, `reattach.ts:120-125`) can never
+fire on a Host-spawned worker.
+
+**The race with the reattach sweep** (a `pty-opened` arriving while the app is mid-sweep over a
+`pty-list` that already contains the same pty) is closed by `heldLive`, which both paths consult
+before adopting (`reattach.ts:62-63`, `ipc.ts:7143-7149`). The two paths share one queue
+(`takeSessionsBack`, `ipc.ts:7101-7106`), so the second one to run sees the first one's record.
+
+**No app attached**: nothing to tell. The next app adopts at its reattach sweep, the same way it takes
+back any session that outlived it.
+
+### 2.4 Folder trust
+
+Same rule, new place: only orchestration spawns pre-trust, never a person's tab (the reasoning is at
+`ipc.ts:2680-2699`, measured 2026-09-22). The Host calls `markClaudeProjectTrusted` with
+`claudeConfigFileFor({ configDir, homeDir: os.homedir(), ambient })` or `markCodexProjectTrusted`
+(`ipc.ts:2703-2719`), both in `src/core/accounts/claudeTrust.ts` (129) and `codexTrust.ts` (200),
+both electron-free. `app.getPath('home')` becomes `os.homedir()`; for one OS user these are the same
+folder. Best-effort as today: a config it cannot write is logged and the spawn goes on. The trust
+decision stays keyed on the worker's `cwd` (memory note on Claude folder trust, `f5982a0`).
+
+### 2.5 Codex versus Claude
+
+- **Claude.** Statusline plus hooks. Every worker carries `rollAccountIds`, so `wantToolHooks` is true
+  (`manager.ts:147`) and it gets the tool-hook settings file; that is today's behaviour, recorded at
+  `ipc.ts:2665-2679`. Limit probing reads the statusline payload the capture script writes under the
+  profile.
+- **Codex.** No statusline and no hooks (`usesStatusLine` false); `sessions list` reports its state
+  `unknown` today and still will. Its rollout file is found by the app's `CodexRolloutWatcher`
+  (`src/main/codexRolloutWatcher.ts`, 400 lines), which writes `rolloutPath` and `codexSessionId` into
+  the note. A Host-spawned codex worker with no app attached would have no mapping, which costs the
+  limit probe (`limitProbe.ts:20` uses `findRollout`) and, later, rolling. So the Host runs the same
+  locate once per codex worker it spawns (`src/core/rolling/codexLocate.ts`, 116 lines, `since` = the
+  spawn moment, which is the safe case the adopter's comment describes at `ipc.ts:7198-7205`) and
+  writes the mapping with `registry.note`. The adopter then takes the mapped branch
+  (`ipc.ts:7219-7227`) and never scans.
+- Trust differs per provider, as above.
+
+### 2.6 Exit handling: one owner, and it follows rolling
+
+`handleExit` (`command.ts:2646`) is what closes a Dispatch whose worker died. Today the app calls it,
+deferred by `EXIT_DEFER_MS` so that a roll's kill is not read as a death (`rollTap.ts:32-104`). The
+roll's rekey (`rollTap.ts:130-`) is app-side and stays app-side until S6.
+
+**Rule: while an app is attached, the app handles session exits; while none is, the Host does.** The
+reason is that the only exits that must not close a Dispatch are the ones a roll makes, and rolls only
+happen where rolling runs. With no app there is no roll, so the Host can call `handleExit` on every
+`kind: 'session'` exit with the same 3-second defer and be right. With an app attached, the app
+already sees the exit (it adopted the pty) and already defers it correctly.
+
+**The handover sweep.** Ownership changes when the app attaches or detaches. An exit that lands in
+the gap (the app quits inside its own 3-second defer, `rollTap.ts:88-104`) would otherwise be lost
+until the next `store.load`. So each time ownership passes to the Host, the Host runs one sweep: every
+open Dispatch whose `sessionId` is not alive in its registry goes through `handleExit`. Ids starting
+`pending:` are skipped (a spawn in flight, §8.1). `PTY_LOST_SIGHT_EXIT_CODE` never arises inside the
+Host: it is the app's code for losing the socket (`src/main/host/ptyFactory.ts:74-82`).
+
+`releaseCoordinator` (`ipc.ts:4819-4845`) follows the same owner: a coordinator session's exit with no
+app attached detaches the coordinator slot in the Host.
+
+### 2.7 Spec files and the sweep race
+
+After S2 the Host writes worker spec files into `profile/orch/specs` (`coordinator.ts` via
+`specsDir`, `ipc.ts:2800`). The app's boot sweep deletes spec files not named by an open Dispatch in
+the state it read (`ipc.ts:2562-2569`). A Dispatch the Host opens between the app's `state-get` and
+its `readdir` has its spec file deleted under a live worker. So the sweep moves to the Host, at
+`ready()` after `store.load` (`src/host/orch.ts:331-363`), where the Host is the only writer and the
+set is exact. The app stops sweeping when the Host announces `spawn`.
+
+### 2.8 Busy signal
+
+`OrchCoordinator.isBusy` gates typing into a reused terminal (`coordinator.ts:655-670`,
+`coordinator.ts:881-885`). The app answers it from its `BusyScanner` (`ipc.ts:2139-2150`,
+`src/core/terminal/busy.ts`, 51 lines, core). The Host feeds a `BusyScanner` per `kind: 'session'`
+pty from `registry.onData`, and uses the same `busyTitleReliable` gate. The hook state the Host
+already derives (`sessions.ts:216-220`) is the second opinion: `working` counts as busy.
+
+### 2.9 Chat sessions
+
+Out of S2. Orchestration never spawns a chat session (every worker is a pty; `adopt` refuses anything
+but `kind: 'session'`, `manager.ts:322`). The Host already reads and writes chat sessions it holds
+(CLI phase D4). `sessions create` (audit #28) would be the first Host spawn of a person's session and
+is a separate decision (it would change the rule in §2.10).
+
+### 2.10 What must not change for sessions a person opens
+
+1. They are spawned by the app's `spawnSession` (`ipc.ts:1717-2022`), never by the Host.
+2. They are never pre-trusted (`ipc.ts:2684-2688`).
+3. Smart resume, blank-slate resume, transcript copy across accounts, the chat fork, schedule, Slack,
+   rolling and codex rollout registration all stay exactly where they are (`ipc.ts:1769-2020`).
+4. Their notes are unchanged, so an older Host and an older app read them as before.
+5. The Host's exit handling ignores them: `handleExit` finds nothing for a session id no Dispatch
+   names, and `releaseCoordinator` finds nothing for a session id no Run names.
+6. `StatusLineManager.startupCleanup()` still runs at app start, as today.
+
+## 3. S3: worktrees and the git the Host runs
+
+### 3.1 What moves
+
+- `forkWorktree` (`ipc.ts:2634-2657`): repo probe, `symbolic-ref --quiet --short HEAD`,
+  `workerBaseFailure`, `createWorktree`, warnings logged.
+- `reapWorktree` (`ipc.ts:3207-3245`) and `WORKTREE_CLOSE_TIMEOUT_MS` (`ipc.ts:3191`).
+- `integrateWorktrees` and its `Integration` type (`ipc.ts:3169-3502`).
+- The three deps: `mergeWorktrees` (`ipc.ts:4088-4100`), `removeWorktrees` (`ipc.ts:4103-4117`),
+  `makeRunWorktree` (`ipc.ts:4124`).
+- `isPathInUse` for these paths. The app's version (`ipc.ts:5096-5105`) reads its own sessions and
+  runs; the Host answers from its registry, which holds every pty of every kind with its cwd in the
+  note, so it is at least as complete.
+
+Core modules already used, unchanged: `src/core/worktrees/create.ts` 98, `remove.ts` 188, `git.ts`
+230, `registry.ts` 88, `base.ts` 98, `include.ts` 135, `naming.ts` 79; the pure judgements in
+`src/core/orchestration/integrate.ts` 292.
+
+### 3.2 The safety rules the move carries, all of them
+
+These are the rules of the only automatic path that writes into a person's repository
+(`ipc.ts:3184-3187`). They move verbatim and each keeps its test or gains one.
+
+1. **Never merge into a folder that is not a reachable repository.** `gitDir(mergeInto)` first
+   (`ipc.ts:3295-3302`); human Gate if absent. Asked before `symbolic-ref`, because the latter fails
+   the same way on a missing repo (`ipc.ts:3291-3294`).
+2. **Never merge onto a detached HEAD** (`ipc.ts:3303-3312`): covers bisect and rebase, which git
+   itself does not block (measured, `ipc.ts:3269-3276`).
+3. **Never merge in the middle of another operation**: `rebase-merge`, `rebase-apply`, `BISECT_LOG`,
+   `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `MERGE_HEAD` in the real git dir (`ipc.ts:3314-3331`).
+4. **Never merge over tracked uncommitted changes**: `status --porcelain --untracked-files=no`
+   (`ipc.ts:3347-3360`). Untracked files are allowed because git refuses before touching the tree
+   (`ipc.ts:3339-3343`).
+5. **Branch per worktree from `git worktree list`**, compared with `isSamePath`; an unknown branch
+   goes to an agent, never treated as absent (`ipc.ts:3362-3387`).
+6. **No pre-check, no merge**: git older than 2.38 has no `merge-tree --write-tree`, so the work goes
+   to an agent (`ipc.ts:3392-3398`).
+7. **Probe then merge, one at a time**, because each merge moves HEAD (`ipc.ts:3400-3404`); full refs
+   `refs/heads/<b>` against tag shadowing (`ipc.ts:3430`); a probe's stderr separates "conflicts"
+   from "could not run" in the agent's spec (`ipc.ts:3432-3449`).
+8. **`merge --no-edit`**, because an editor would hold the merge half-done until the 30 s git timeout
+   (`ipc.ts:3450-3452`).
+9. **On failure: abort, then check that the abort worked, and say so in the Gate**
+   (`ipc.ts:3461-3477`).
+10. **Uncommitted changes in the source worktrees are counted before merging and reported**
+    (`ipc.ts:3416-3428`), because the merge does not carry them and reaping would delete them.
+11. **Reap only with `reap`, only app-registered worktrees, only when no held or working session is in
+    them; close sessions first and poll for their exit** (`ipc.ts:3207-3245`, `ipc.ts:3248-3258`);
+    `removeWorktree` is the one removal function (`ipc.ts:3486-3490`).
+12. **Integration Tasks never integrate themselves** (`ipc.ts:3736-3739`), and no second integration
+    Task is made for one that already exists (`ipc.ts:3741-3751`).
+13. **No merge while a worker works in the Run root** (`ipc.ts:3752-3760`, `integrate.ts:223`).
+14. **A worker never runs in the project folder of an app-driven Run** (`command.ts:1758-1766`).
+
+### 3.3 The one rule that is new with a second process
+
+**The Work Unit collector must hear about a Host merge.** The app wraps each merge in
+`workUnitCollector.beginGitOperation('job-merge', mergeInto)` so that its git watcher does not record
+Astera's own merge as an outside change (`ipc.ts:3453-3480`). With the Host merging, the app cannot
+wrap it. An additive broadcast closes this:
+
+```text
+host -> clients   { t: 'git-op', op: string, phase: 'begin' | 'end', kind: 'job-merge', cwd: string }
+```
+
+The app calls `beginGitOperation`/`endGitOperation` on it. A Host that crashes between the two leaves
+an open operation; the app ends every open one when the socket drops, which is the same `finally`
+discipline `ipc.ts:3455-3457` states for the in-process case.
+
+### 3.4 Who owns `worktrees.json`
+
+This is the one real two-writer problem in S3. `WorktreeRegistry` holds its list in memory, loads once
+and rewrites the whole file on every change (`src/core/worktrees/registry.ts:36-87`). The app loads it
+at start (`src/main/core.ts:276-282`). If the Host adds an entry while the app is open, the app's next
+write erases it; if the Host adds one while the app is closed, the app loaded before and still erases
+it. Being listed is what authorises deletion (`registry.ts:26`), so a lost entry is a worktree nobody
+may remove again. D3 has the options; the recommendation is that **the Host owns `worktrees.json`**
+and the app's registry becomes a mirror whose `add`, `removeEntry` and `setRoot` are internal
+`orch-call`s answered only for `role: 'app'`, the same pattern as `state-put` (`src/host/orch.ts:426-440`).
+
+### 3.5 What the app becomes for worktrees
+
+A client. Its Explorer worktree panel keeps its buttons; they go to the Host. `run-merge` (the detail
+view's merge button) already goes through `handleCommand` with `mergeWorktrees`, so it becomes
+Host-local with no UI change.
+
+## 4. S4: the dispatch loop
+
+### 4.1 Where it runs and what triggers it
+
+**In the Host**, as a `HostDriver` built beside `createHostOrch` in `src/host/index.ts`. Its body is
+`runScheduler` (`ipc.ts:3513-3911`) moved to `src/core/orchestration/exec/dispatchLoop.ts` with its
+dependencies injected; the logic is already pure at its core (`slotsToFill`, `tasksMissingAccounts`,
+`src/core/orchestration/schedule.ts:58-120`; `unattendedQuestions`, `src/core/orchestration/inbox.ts`;
+`pendingMerges` and friends, `integrate.ts`; `reapableChildRuns`, `src/core/orchestration/reap.ts`).
+It keeps `orchHandleCommand` as its one door (`ipc.ts:3509-3510`), now the Host's own `handleCommand`
+with the Host's deps.
+
+**Triggers, the same set as today, re-homed:**
+1. **After every commit the Host makes**: the `setState` inside `depsFor` (`src/host/orch.ts:385-398`)
+   and every accepted `state-put` (`orch.ts:463-468`). This is the rule `ipc.ts:3504-3507` gives
+   (seven paths make a Task ready; the commit is the only door they share). It also retires F54's
+   whole class of bug: the scheduler runs where the commit happens, so no push has to wake it.
+2. **At load**, after `store.load` and the pending-report drain (§4.4), the way `ipc.ts:4783` runs it
+   at app boot.
+3. **At every ownership change to the Host** (§4.3), after the exit sweep (§2.6).
+4. **A 15-second tick** (`ipc.ts:3914`) for `nudgeSleepingCoordinators` (`ipc.ts:4856-4877`, with the
+   Host's busy signal from §2.8) and, subject to D2, `orchFireTick` (`ipc.ts:3928-3964`).
+
+The re-entrancy guard, the per-activation `attempted` set and the `finally` (`ipc.ts:3511-3536`,
+`ipc.ts:3905-3910`) move with it; they are what stop a failing spawn from spinning.
+
+### 4.2 What the app becomes for dispatch
+
+A display of Host events. It keeps receiving `orch-state`, keeps its commit hook for the sidebar,
+the journal and the finished-Run record (`commitHook.ts:31-115`), and its `schedule` dependency
+becomes a no-op when the Host announces `dispatch`. The renderer's own commands (`orch.command`:
+pause, resume, delete, task-update) still run `handleCommand` in the app and write with `state-put`,
+as in S1. Moving them to `orch-call` is S8 and not needed here; the F56 version check keeps them safe
+meanwhile.
+
+### 4.3 One owner, and the handover
+
+**The owner is a value the Host computes, not a lease anyone holds.**
+
+```text
+driver = 'app'   if a role:'app' client is attached and its hello did not say yields: ['dispatch']
+driver = 'host'  otherwise (no app attached, or the attached app yields)
+```
+
+The new app says `yields: ['dispatch']` in its `hello` (an additive field, §7). An app that predates
+this says nothing, and the Host takes that to mean "this app will dispatch", because it will: its
+`runScheduler` runs on every push (`ipc.ts:2483`, `ipc.ts:4006`).
+
+**The handover is synchronous in the Host's event loop.** `driver` is recomputed in the same turn that
+the server records a `hello` role (`src/host/server.ts:232`) or removes a closed socket
+(`server.ts:342`). The dispatch loop checks `driver === 'host'` on entry and **again before each
+slot**. A slot already inside `worker-start` finishes, because a spawn cannot be taken back halfway;
+no new slot starts.
+
+**Why nothing dispatches twice even inside that window.** Every door that starts a session commits its
+Dispatch before it spawns: `worker-start` (`command.ts:1811-1828`), `startReview` (`ipc.ts:3014-3036`),
+repair (`repair.ts:98-`, `openRepairDispatch` first), recovery (`src/main/recovery/execute.ts`,
+`openDispatch` first). The app's commit is a `state-put` carrying the version it built on, and the
+Host refuses a stale one with 409 before anything is written (`orch.ts:450-461`, ruling F56). So if a
+legacy app and the Host both pick the same ready Task in the same instant, one Dispatch commits and the
+other side's commit is refused **before its spawn**. The cost is a log line and, on the app side, a
+`gateSlot` attempt that `createGate` refuses because the Task now has an open Dispatch
+(`ipc.ts:3158-3163`). F56 is therefore the safety net and `driver` is the policy; neither alone is the
+design.
+
+**Everything that is a door into starting work follows `driver`**: the dispatch loop, the pending-report
+drain, validation, review and repair starts (S5), the resume sweep, coordinator nudges, the
+unattended-question net, schedule firing. The exception, stated so it is not mistaken for a leak, is
+the recovery reconciler, which stays in the app (D8): it is journal-gated, obeys `hasRoom`
+(`reconciler.ts:75-84`) and commits before it spawns.
+
+### 4.4 The pending-report drain moves
+
+The Host already reads the queue at load but does not apply it, because applying reached session
+spawning (`orch.ts:352-356`). After S2 it can. So the drain (`ipc.ts:4733-4774`) runs in the Host at
+`ready()`, right after `store.load`, under the worker's own session id, with the `writeOff` half
+(`ipc.ts:4752-4768`) against the Host's own `heldOnlyByReport` set. The app stops draining when the
+Host announces `dispatch`. That also removes the two-process queue read described at
+`ipc.ts:2374-2391`.
+
+### 4.5 `holdsWork` and the idle exit
+
+A Host started by `astera host start` must stay while a Run is in flight. Track A is making the idle
+timer ask `liveCounts` (sessions plus `runningRunCount`, working tree `src/host/index.ts:194-197`),
+which is exactly the rule S4 needs. S4 adds nothing here, and deliberately does **not** add Jobs to the
+replacement holdings (`hostReplaceDue`, `ipc.ts:551-562`): replacing a Host between two workers is
+safe, because the next Host loads the file and continues, and a long-running schedule must not pin an
+old Host forever. §8.4 covers the one moment that is not safe.
+
+### 4.6 The always-on migration gate
+
+Ruling F62 pauses work a profile had parked under the old toggle, in the app, once
+(`ipc.ts:4652-4670`, `src/core/orchestration/alwaysOn.ts`). A Host that dispatches at load would act
+on that parked work before any app has run the migration, which is the exact spend F62 exists to
+prevent. So the Host's `driver` has a third value:
+
+```text
+driver = 'parked'  if profile/app-settings.json exists and does not carry orchAlwaysOnMigrated: true
+```
+
+read only, with the same test the app uses (`appSettingsStore.ts:321-331`). A profile with no
+settings file (a fresh CI profile) was never "off" and is not parked, matching the app's own rule
+(ruling F64's correction, ledger line 1282-1288). A parked Host dispatches nothing, drains nothing,
+fires nothing, and says so in `status` (§7.4) and in its log, until an app attaches, migrates, and the
+Host re-reads the file on that app's next commit.
+
+## 5. S5: validation, convergence, recovery
+
+### 5.1 Recommendation: move validation, review and repair with S4
+
+Once S2 exists, review and repair are wiring: a reviewer is `startWorker` with `worktree: 'current'`
+(`ipc.ts:3091-3107`), and repair is `performRepair` over `RepairDeps` whose `startWorker` is the same
+wrapper (`ipc.ts:4552-4561`). Validation is the heavier half: it runs a run configuration in a pty.
+
+**Moves:**
+- `TaskValidator` (`validator.ts`, 303) and its runner (`ipc.ts:2832-2891`): `prepareRun`
+  (`src/main/run/prepare.ts`, 171) and a `RunManager` (`src/main/runManager.ts`, 373) in the Host,
+  constructed with the registry's pty factory. Validation runs already carry `validation: true` in
+  their note (`runManager.ts:123-128`) and the app's run adopter keeps it (`runManager.ts:206-230`),
+  so a Host-run validation appears in the app's run panel through `pty-opened` exactly as a session
+  does.
+- `onSettled` and `onCannotRun` (`ipc.ts:2892-2945`), `startValidation` with the policy fingerprint
+  and suspicious files (`ipc.ts:4441-4484`, `ipc.ts:4011-4044`).
+- `startReview` and `reviewGate` (`ipc.ts:2953-3133`, `reviewGate.ts` 127), `pickReviewer`
+  (`src/core/orchestration/reviewer.ts`).
+- `repairTargetFor`, `startRepair`, `repairOnce`, `repairDeps` (`ipc.ts:4516-4534`, `ipc.ts:4552-4561`,
+  `repair.ts` 239).
+- `resumeSweep` (`resumeSweep.ts`, 56), run by the Host at load and at every change of `driver` to
+  `host`, instead of by the app on attach (`ipc.ts:2494`, `ipc.ts:4807`).
+- `knowledgeIn` (`coordinator.ts:284`) comes with the coordinator in S2.
+
+**The path guard.** The runner calls `assertAllowedPath(cwd)` before starting a pty
+(`ipc.ts:2848`). The app's guard allows session cwds, registered worktrees and every project the
+history index knows (`ipc.ts:5255-5265`). The Host has no history index. Its guard allows: Job cwds
+(the `allowingJobCwds` rule, `src/core/run/runConfigsFile.ts:36`), registered worktrees (the Host
+owns the registry after S3, D3), and Run worktrees. A Dispatch cwd is always one of these, so the Host
+guard is narrower and still sufficient. A cwd outside it is `onCannotRun`, which is a Gate
+(`ipc.ts:2845-2847`).
+
+**The one new message: a person stops a validation run.** The app's run panel stop button marks a
+validation run stopped so its exit reads as "could not prove it" rather than a failure
+(`ipc.ts:6019`, `validator.ts:53-55`). With the Host validating, the app forwards that as an internal
+`orch-call` `validation-stop {runId}` (role app only) and the Host's validator calls `markStopped`.
+An older Host does not know the command and the stop degrades to today's "exit read as a result".
+
+### 5.2 Recovery stays in the app, on purpose
+
+The reconciler (`reconciler.ts`, 304; `execute.ts`, 277) reads the Continuity journal
+(`src/main/continuity/journal.ts`, 508 lines, `node:sqlite`). The journal is written by the app's
+commit hook from pushes (`commitHook.ts:62`, ruling F54), so while the app is closed nothing is
+journalled, and the reconciler refuses to act on an attempt with no rows (`reconciler.ts:108-122`).
+That is the safe direction: no replacement agent is ever started on missing evidence. What it costs:
+an attempt lost while the app was closed is never recovered automatically. Moving the journal would
+make SQLite a two-process file or make the Host its owner; that is D8.
+
+### 5.3 What the app becomes for validation
+
+A display. It shows Host-run validations in its run panel (adopted `run` ptys) and forwards the stop
+button. It no longer owns a validator queue when the Host announces `dispatch`.
+
+### 5.4 The refuse rule, stated precisely, if S4 ships before S5
+
+If D1 goes the other way, S4 ships with this rule and S5 follows:
+
+> **R-S5.** When the Host would call `startValidation`, `startReview` or `startRepair` and no attached
+> app has announced that it will run them, the Host does not drop the call. In the same turn it
+> commits a Gate on the Task through the existing transitions: `blockForValidation`
+> (`ipc.ts:2939`) for a validation, the `reviewGate.gate` rule (`ipc.ts:2966`) for a review, and the
+> `repairFailed` Gate the pure layer already opens when `repairTargetFor` answers `null` (F58) for a
+> repair. The Gate's question names the reason: "This Task's checks run in the Astera app, which is
+> not open. Open Astera and resolve this Gate to validate it." The Task moves to `blocked`, so no
+> dependent becomes `ready` and the Run does not complete. `runs wait` ends `waiting` with the Gate's
+> id (`command.ts:484-494`), which the CLI maps to exit 8. When an app that runs validation is
+> attached, the three calls are forwarded as today.
+
+This rule never lets a validation-bearing Task read as validated, never spends a turn on a Task whose
+result cannot be judged, and ends the wait instead of holding it for an hour. Its cost is that CI Jobs
+with `--validate` or convergence never complete headless until S5 ships.
+
+## 6. S6: rolling and usage limits
+
+**Not needed for the goal, and it should follow later.** It is the largest slice by far:
+`src/main/rolling.ts` 2,273 lines, `src/main/codexRolling.ts` 1,704, `rollTap.ts` 359, the
+coordinator wiring in `src/main/index.ts:572-1040` (about 470 lines), `codexRolloutWatcher.ts` 400.
+None of it is needed to dispatch, run, merge or validate.
+
+**What happens to a worker that hits a limit while the app is closed.** Measured by reading, not by
+running:
+1. The agent CLI shows its limit message and stops taking turns. The pty stays alive.
+2. The Dispatch stays open and the Task stays `dispatched`. Nothing is closed, so nothing is
+   misread as a failure, and the circuit breaker does not move.
+3. `runs wait` keeps waiting, because `outcomeOf` is still `running`, until its timeout.
+4. When an app opens, the adopter registers the session with its rolling coordinator from
+   `rollAccountIds` (`ipc.ts:7164-7189`), which detects the stall and rolls or nudges as it does for
+   any session.
+
+That is a stall, not a corruption. What is worth adding in S4 without S6 is making the stall visible
+(D7): the Host already runs the limit probe locally after S2, and can open a Gate "the worker hit its
+usage limit; it resets at <time>; open Astera to roll it to another account" when a worker's
+statusline shows a limit and no app is attached. `runs wait` then ends `waiting` with a reason instead
+of timing out.
+
+## 7. Protocol
+
+### 7.1 Stays 3
+
+Every change below is a new feature name, a new optional field or a new message type, which is the
+pattern `HOST_FEATURE_PROC`, `_PING`, `_ORCH`, `_REQUESTS` already follow
+(`src/core/host/protocol.ts:15-53`). A bump puts the new app on a new pipe name and leaves an old
+Host's terminals invisible to it (`protocol.ts:17-20`), and every running worker would die with that
+Host. No change here needs a bump:
+- an older app ignores unknown message types (subscribers filter on `m.t`);
+- an older Host logs unknown messages and carries on (`src/host/server.ts:329`);
+- an older Host that does not announce a feature is never asked for it.
+
+### 7.2 Additions
+
+| Slice | Addition | Direction |
+|---|---|---|
+| S2 | feature `spawn` | Host hello |
+| S2 | `{ t: 'pty-opened', entry: PtyEntry }` | Host to all greeted clients |
+| S2 | env `ASTERA_HOST_CLI_EXEC`, `ASTERA_HOST_CLI_ENTRY`, `ASTERA_HOST_SKILLS` | spawner to Host (not the wire) |
+| S3 | feature `worktrees` | Host hello |
+| S3 | `{ t: 'git-op', op, phase, kind, cwd }` | Host to all greeted clients |
+| S3 | internal `orch-call` `worktree-add`, `worktree-remove`, `worktree-root` (D3 option A) | app to Host, role app only |
+| S4 | feature `dispatch` | Host hello |
+| S4 | `hello.yields?: string[]` (`['dispatch']`) | app to Host |
+| S4 | `status` body gains `driver: 'host' \| 'app' \| 'parked'` and `appAttached: boolean` | orch-result |
+| S5 | internal `orch-call` `validation-stop` | app to Host, role app only |
+
+### 7.3 Version skew
+
+| App | Host | What happens |
+|---|---|---|
+| new | new | The Host spawns, owns worktrees, drives. The app yields, adopts, displays. |
+| new | old (no `spawn`/`dispatch`) | The app keeps today's code path: its own spawn, worktrees, loop, validator. **This is why the app's copies are kept, not deleted, in S2 to S5**: the shared `exec/` modules make that a second construction, not a second implementation. The automatic replacement (`hostReplaceDue`) swaps the old Host the first time it holds nothing. |
+| old | new | The old app sends no `yields`, so `driver = 'app'`: the Host parks its loop and every other door into starting work while that app is attached, and the old app dispatches as today. Host-local spawns for commands the Host answers (a coordinator's `worker-start`) still happen in the Host; the old app ignores `pty-opened` and adopts them at its next reattach sweep. When the old app detaches, `driver` becomes `host` and the handover sweep runs. |
+| old | old | Today. |
+
+One subtle case in row 3: the old app also handles exits (it is attached, §2.6), runs its own resume
+sweep, and may validate a Task the Host started validating a moment earlier. `TaskValidator` answers
+`skip` for a Task that has left `validating` (`ipc.ts:2842`), and a second result for the same round is
+refused by `applyValidationResult`. The waste is one duplicate run; nothing is recorded twice.
+
+### 7.4 A CLI talking to a Host without `dispatch`
+
+`jobs run` still succeeds (the state transition is the Host's since S1), but with no driver it would
+wait forever. Until S4 ships, `jobs run` with no app attached and no `dispatch` feature adds a
+`details.note` and `nextSteps` saying workers start when Astera is open (the audit's interim proposal,
+`cli-spec-audit.md:140`). After S4, `status.driver` tells a script which case it is in.
+
+## 8. Failure modes
+
+### 8.1 The Host crashes mid-dispatch
+
+| Moment | On disk | Next Host's `store.load` | Result |
+|---|---|---|---|
+| after `openDispatch` commit, before the pty opens | Dispatch open, `sessionId: pending:…` (`command.ts:1811`) | not alive, so `outcome_unknown` (`src/core/orchestration/store.ts:310-318`) | Task left `dispatched` with a lost attempt. D6. |
+| pty open, real session id not yet committed | same | same | same; the pty is expected to die with the Host (to be measured in S2, §9.1) |
+| worker running | Dispatch open with the real id | `outcome_unknown` unless a queued report speaks for it (`store.ts:316`) | a worker that finished and could not reach the Host wrote its report to the queue; the drain applies it (§4.4) |
+| inside `integrateWorktrees`, between `merge` and its abort | the repo may be mid-merge | nothing | the next merge attempt meets `MERGE_HEAD` and opens a human Gate (`ipc.ts:3314-3331`). The repo is never merged over. |
+| inside `worker-start` after spawn, before the patch commit | spec file written, session gone | spec swept at load (§2.7) | clean |
+
+A caller holding `runs wait` sees its socket drop and exits 3 (design §8 table). Nothing is killed by
+PID (S1 rule).
+
+### 8.2 The app opens while the Host is dispatching
+
+1. `hello` with `yields: ['dispatch']`: `driver` stays `host`. Nothing changes hands.
+2. `state-get {boot: true}` fills the mirror (`ipc.ts:2432-2462`). The Host's load findings go to the
+   first app as before.
+3. The reattach sweep adopts every live session, including workers the Host spawned while no app was
+   open; a worker spawned during the sweep arrives as `pty-opened` and meets `heldLive`.
+4. The app does **not** run at boot: `runScheduler` (`ipc.ts:4783`), the drain (`ipc.ts:4733`), the
+   resume sweep (`ipc.ts:4807`), the spec sweep (`ipc.ts:2562`). It still runs the F62 migration
+   (`ipc.ts:4652`) and `recovery.reconcileAll` (`ipc.ts:4793`).
+5. Exit handling passes to the app (§2.6). Any exit the Host deferred and has not handled yet is
+   handled by whichever side's timer fires; `handleExit` on an already closed Dispatch is a no-op
+   (`rollTap.ts:9-10`), so the overlap is harmless.
+
+### 8.3 Two apps
+
+The single-instance lock allows one app per profile, and the dev and installed apps use different
+profiles, so different Hosts (`src/main/index.ts:68`). The Host does not enforce it: it takes the first
+`role: 'app'` socket (`server.ts:164-167`), and S1 recorded a second one as "two mirrors and two
+writers on top of F56" (ledger line 178-180). With S4 a second app matters more, because it decides
+`driver`. **Recommendation (D9): the Host refuses a second `role: 'app'` hello while one is attached**,
+answering it as a CLI and logging it. The refused app sees no `orch-act` and no `features` it can drive
+with, so it degrades to the S1 "unreachable" state rather than splitting ownership.
+
+### 8.4 The Host is upgraded while workers run
+
+The Host outlives an app update by design. The prepared runtime is versioned per build
+(`scripts/host-runtime.mjs:32`, `:122`), so the old Host keeps running its own `host.js`.
+- **Old Host is pre-S4, new app arrives.** Row 2 of §7.3. The new app drives until the old Host holds
+  nothing and is replaced.
+- **Old Host is S4, newer app arrives.** The newer app yields, and the old Host drives with its own
+  code. That is correct as long as the state schema is forward-readable, which `migrateLoadedState`
+  already requires (`store.ts:290`).
+- **Replacement mid-spawn.** The one unsafe moment: `hostReplaceDue` sees zero sessions while a
+  `worker-start` has committed its Dispatch and not yet opened the pty. The app retires the Host with
+  `reason: 'protocol'`, which is never refused (`protocol.ts:106-115`). **Rule: the Host's retire
+  handler waits for spawns in flight to settle, bounded by the spawn deadline (20 s,
+  `ptyFactory.ts:45`), before leaving**, and does not start new ones once retire has arrived.
+- **Workers spawned by the old Host run the new CLI.** Their `ASTERA_CLI` names the profile's shuttle,
+  which the new app rewrites at boot (`ipc.ts:4679`) to the new `cli.js`. The CLI's messages are
+  additive, so an old Host answers them.
+
+### 8.5 The Host cannot spawn
+
+Missing `ASTERA_HOST_CLI_*` or a half-deleted node-pty (`src/host/index.ts:80-84`): `startWorker`
+throws, `worker-start` rolls its Dispatch back and restores the Task (`command.ts:1861-`), and the
+dispatch loop's `gateSlot` opens a Gate with the reason (`ipc.ts:3149-3167`), so `runs wait` ends
+`waiting` with a sentence rather than hanging.
+
+## 9. Tests and verification per slice
+
+All bug-fix tests in these slices follow the standing rule: shown failing on the commit before the fix
+(memory: fix tests must fail on the pre-fix commit).
+
+### 9.1 S2
+
+**Pure.** The strip list over a Host env. `startWorkerWithChain` with a fake context, both processes'
+construction of it. `ensureFiles` never removes the hook events folder. The Host path guard.
+The exit owner rule as a function of `(appAttached, exitCode)`.
+
+**Host in process** (the rig style of `src/host/orch.test.ts` and `procHost.integration.test.ts`).
+A fake registry: `worker-start` with no app attached spawns locally, writes a note equal to
+`SessionManager.spawn`'s, broadcasts `pty-opened`, starts a tail that `worker-read` answers. A pty exit
+with no app attached closes the Dispatch after the defer; with an app attached it does not. The
+handover sweep closes a Dispatch whose session died in the gap. A codex spawn writes the rollout
+mapping into the note.
+
+**App in process.** `pty-opened` goes through the reattach adopter; a `pty-opened` arriving during a
+sweep does not double-adopt (`heldLive`).
+
+**Hand run with the dev app** (memory: CDP verification procedure, process isolation, `ASTERA_*`
+cleared first). App open: a coordinator's `worker-start` from a shell makes a tab appear, seen on
+screen (memory: verify on screen). App closed: the same command spawns, `sessions list` shows it, the
+next app launch shows its tab. **Measure** what happens to a Host-spawned worker when the Host process
+is ended (only the Host PID we started): does the agent process die with the ConPTY? §8.1 assumes it
+does.
+
+### 9.2 S3
+
+**Pure and git.** Every rule in §3.2 against temporary repos (`src/core/worktrees/testRepo.ts` exists
+for this): detached HEAD, each marker file, tracked dirt, untracked file allowed, unknown branch, old
+git, probe conflict versus probe failure, merge failure with a verified abort, uncommitted count.
+These tests exist in spirit today only as comments ("이 자리에는 테스트가 없다", `ipc.ts:3269`); the
+move is the moment to add them, because the function stops living in an untestable closure.
+
+**Registry ownership.** A Host `add` while the app mirror holds an older list: the app's next write
+does not drop the Host's entry (the D3 test that fails on today's code).
+
+**Hand run.** App closed: a concurrency-2 Job's two Tasks run in their own worktrees and are merged
+into the Run worktree; `git log` shows both merges; the worktrees are gone from disk and from
+`worktrees.json`. App open during a merge: the Work Unit screen does not record an outside change.
+
+### 9.3 S4 and S5
+
+**Pure.** `driver` as a function of `(attached apps, yields, settings file)`, all combinations,
+including `parked`. The retire-waits-for-spawns rule.
+
+**Two-process rig** (the F54 rig's shape, `commitHook.test.ts`: the real `handleCommand` on one side,
+the real loop on the other). The Host drives a two-Task chain to `completed` with no app. A legacy app
+(no `yields`) attaches mid-run: the Host starts no new slot; the app's `worker-start` for a Task the
+Host already opened is refused by the version check before spawning; the list of spawns equals the
+number of Tasks. Validation pass, validation fail with repair, review with a second provider, all
+headless. R-S5 (if D1 is option B): the wait ends `waiting` with the Gate.
+
+**The end-to-end hand run: the app closed, a scratch profile, one real Claude turn at most.**
+
+Setup, once:
+1. `npx electron-vite build`. Clear every `ASTERA_*` variable in the shell (memory: the CLI is hijacked
+   by `ASTERA_INFO`-era variables of the installed app's sessions).
+2. `ASTERA_PROFILE_DIR=<scratchpad>\e2e\profile`, a fresh folder. Never `%APPDATA%\astera` or
+   `-dev`, never delete `%LOCALAPPDATA%\astera` (memory).
+3. A scratch git repo with one commit and a `package.json` whose `test` script is
+   `node -e "process.exit(0)"`, so `seed:npm:test` is a run configuration.
+4. **Fake agent first, zero turns.** A `claude.cmd` placed first on the Host's PATH. The worker is
+   launched as `cmd.exe /c claude …` (`src/core/sessions/commands.ts:44-47`), so it resolves to the
+   fake. The fake reads the spec path out of its last argument, creates the file the spec names,
+   commits, and runs the `astera send` line the spec's report section gives it. `accounts.json` in the
+   scratch profile names a fake account.
+
+Run, fake agent:
+1. `astera host start`; `astera status` shows `driver: host`, `appAttached: false`.
+2. `astera jobs create --cwd <repo> --objective "e2e"`; two `tasks add`, the second depending on the
+   first, the first with `--validate seed:npm:test`; `--concurrency 2` for the merge path.
+3. `astera jobs run --id <job>`; `astera runs wait --id <run> --timeout 10m`. Expect exit 0,
+   `completed`.
+4. Check: both commits merged into the Run worktree; worktrees reaped; Host log shows one
+   `worker-start` per Task and one validation run; no Electron process with our profile (by the PIDs we
+   launched, never by name).
+5. Variants: a failing `test` script (repair then `convergence-exhausted` Gate, wait ends `waiting`);
+   Host killed mid-worker then restarted (D6's behaviour); app opened mid-run with the dev app on a
+   debug port, tab seen on screen, closed with a normal quit (memory: a force kill hides quit bugs),
+   Job continues; an old app build from a worktree attached mid-run (memory: remove the node_modules
+   junction before `worktree remove`).
+
+Run, one real turn: the same Job with one Task, a real Claude account's configDir in the scratch
+`accounts.json` (with the user's approval, as in phase E3; credentials never read), spec "create
+hello.txt containing hi and commit it". Expect `completed`. This is the only real turn.
+
+## 10. Decisions that need the user
+
+Each changes the design. Recommendation first.
+
+**D1. How the S5 trap is resolved.**
+- (a) **S5 moves with S4 in one merge** (validation, review, repair; recovery stays per D8).
+  Recommended: CI Jobs with checks complete headless on the first release that has the goal.
+- (b) S4 ships first with R-S5 (§5.4), S5 follows. Smaller first merge; `--validate` Jobs end
+  `waiting` headless until S5.
+
+**D2. Scheduled Jobs with the app closed.**
+- (a) **Fire only while an app is attached, as today.** Recommended: no new unattended spending in
+  this slice; the Host's idle exit would make headless firing erratic anyway.
+- (b) Fire whenever the Host is up, without keeping it up.
+- (c) Fire whenever the Host is up, and count an armed schedule as held so the Host stays up.
+
+**D3. Who owns `worktrees.json`.**
+- (a) **The Host owns it; the app's registry is a mirror and writes through the Host.** Recommended:
+  one writer, as S1 did for the state.
+- (b) The Host keeps its own `host-worktrees.json`; the app lists and authorises the union.
+- (c) The Host writes the file only when no app is attached and forwards otherwise; the app reloads on
+  attach. Smallest, and racy at the moment an app opens.
+
+**D4. The environment a Host-spawned worker inherits.**
+- (a) **The Host's own env minus the strip list**, documented: a Host started from a CI shell passes
+  that shell's env (secrets included) to workers, as a person starting the app from that shell would.
+  Recommended.
+- (b) The spawner records the app's env when the app starts the Host, and the CLI's `host start`
+  records its own; both identical in practice, only more explicit.
+- (c) Workers get a minimal allowlisted env. Safer, and a behaviour change for app-open Jobs too.
+
+**D5. New app, old Host that is holding work.**
+- (a) **The app keeps today's loop for that Host until it is replaced.** Recommended: nothing strands.
+- (b) The app refuses to dispatch against an old Host and asks for a Host restart.
+
+**D6. A worker lost to a Host restart, with no journal to recover it.**
+- (a) **At load, open a Gate on each such Task** ("the worker was lost when the Host stopped"), using
+  the `dispatched -> blocked` edge recovery added. Recommended: `runs wait` ends instead of hanging.
+- (b) Leave the Task `dispatched` as today; a person or a coordinator retries.
+
+**D7. A worker at its usage limit with no app attached.**
+- (a) **The Host opens a Gate naming the reset time** when its local limit probe sees a limit and no
+  app is attached; `runs wait` ends `waiting`. Recommended.
+- (b) Stall silently until an app opens or the wait times out.
+- (c) An S6-lite in the Host: after the reset time, type the roll prompt into single-account chains.
+
+**D8. Continuity journal and the recovery reconciler.**
+- (a) **Stay in the app.** Recommended: journal-gated, so absent rows mean no action.
+- (b) The Host owns the journal (SQLite single writer moves), and the reconciler moves in S5.
+
+**D9. A second app on one profile.**
+- (a) **The Host refuses a second `role: 'app'` hello while one is attached.** Recommended.
+- (b) Leave it as S1 recorded it.
+
+**D10. Release shape.**
+- (a) **S2 and S3 merge to `develop` separately; S4 and S5 release together.** Recommended.
+- (b) One release for all four.
+
+**D11. `jobs run` with no Host running.**
+- (a) **Keep it exit 3 with `astera host start` in `nextSteps`**, and put `host start` first in the CI
+  recipe. Recommended: the S1 decision made `host start` the explicit way in.
+- (b) `jobs run` starts the Host itself.
+
+**D12. Permission mode for a profile with no `app-settings.json`.**
+- (a) **`yolo`, the store's own default** (`appSettingsStore.ts:118`). Recommended: `manual` stops a
+  headless worker at its first command with nobody to answer.
+- (b) `manual` when the settings file is absent.
+
+## 11. Size and risk per slice
+
+Estimates from the measured sources above. "Moved" is lines relocated with no logic change; "changed"
+is new or edited lines, tests included.
+
+| Slice | Files touched | Moved | Changed | Where the risk sits |
+|---|---|---|---|---|
+| S2 | about 22: `src/host/{index,orch,orchDeps,ptyHost,server}.ts`, new `src/host/spawner.ts`, new `src/host/exits.ts`, `src/core/host/{protocol,spawn}.ts`, new `src/core/orchestration/exec/*` (coordinator, tail, release, limitProbe, workerStart), `src/main/statusline.ts`, `src/main/ipc.ts`, `src/main/host/reattach.ts`, `src/cli/host.ts`, tests | about 1,700 (coordinator 954, statusline 390, limitProbe 154, tail 124, release 32, wrapper bodies about 180) | about 1,500 (900 of it tests) | **Environment parity** between the two spawners (a worker behaving differently by who spawned it); the statusline init split; the Windows ConPTY outcome when the Host dies (unmeasured); `pty-opened` versus the sweep. |
+| S3 | about 10: `src/host/*`, new `src/core/orchestration/exec/integrateGit.ts`, `src/core/worktrees/registry.ts`, `src/main/ipc.ts`, `src/main/core.ts`, protocol, tests | about 450 (`ipc.ts:2634-2657`, `3169-3502`, `4088-4124`) | about 900 (600 tests) | **The user's repository**: this is the only automatic writer into it, and the move is also the first time its rules get tests. The registry ownership change touches the Explorer panel. |
+| S4 + S5 | about 18: new `src/core/orchestration/exec/{dispatchLoop,validation,review}.ts`, moved `validator`, `repair`, `reviewGate`, `resumeSweep`, `prepare`, `runManager`, `src/host/{index,orch,orchDeps,server}.ts`, `src/main/ipc.ts`, `src/main/orchestration/commitHook.ts`, `src/core/orchestration/command.ts` (status fields only), `docs/cli.md`, tests | about 2,100 (loop 408, gateSlot 33, fire and nudge 83, drain about 60, validator wiring 126, review 184, startValidation 80, repair wiring 30, and the modules: validator 303, repair 239, reviewGate 127, resumeSweep 56, prepare 171, runManager 373) | about 1,800 (1,000 tests) | **The handover**: `driver` changes, the legacy-app window, F62's gate, and the S1 invariant that `handleCommand` is untouched (it stays untouched; only its deps move). Validation's run panel via adopted `run` ptys and the narrower Host path guard. |
+| S6 (later) | about 12 | about 4,800 (rolling 2,273, codexRolling 1,704, rollTap 359, watcher 400, index.ts wiring about 470) | unknown until designed | Rolling has been this app's most bug-dense axis (`src/core/rolling/retry.ts` header, cited at `rollTap.ts:17-20`). Not attempted here. |
+
+**The largest single risk across all of it** is the transition period in which both processes can run
+the same code for different callers. It is bounded three ways: the shared `exec/` modules (one literal
+each), the `driver` value (one policy), and F56's version check (one safety net that refuses a
+competing commit before its spawn). Each of the three is testable on its own, and §9.3's two-process
+rig tests them together.

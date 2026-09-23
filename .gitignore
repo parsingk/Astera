@@ -52,6 +52,9 @@ docs/*
 # order of two of them is load-bearing — retention lands before auto-minting, or a long-lived Host keeps
 # one entry per acting call with no sweep. That constraint has to travel with the design.
 !docs/2026-09-23-request-receipts-design.md
+# Published deliberately, same reason: S2 to S6 are four merges over several sessions, and the order
+# (S5 must ship with S4, or validation silently stops with the app closed) has to travel with them.
+!docs/2026-09-24-host-s2-s6-design.md
 # Published deliberately: the SignPath Foundation requires the code signing policy to be reachable at
 # a public URL, and the README links to it.
 !docs/code-signing.md
