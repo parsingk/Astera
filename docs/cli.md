@@ -67,8 +67,9 @@ paused run with such a task still counts. The app finishes that task when it is 
 then `host stop` refuses over that run. `astera status` reports the same count as `runsRunning`.
 
 A Host with no client connected leaves by itself after a minute, but only when it holds no sessions
-and no running run, by that same count. With Astera closed, workers are not started today, so a Host
-that `astera host start` started usually holds nothing and leaves a minute after its last client.
+and no running run, by that same count. A worker the Host started is one of its sessions, so the Host
+stays while that worker runs (see "Workers with Astera closed" below). A Host that `astera host start`
+started and that has started no worker holds nothing, and leaves a minute after its last client.
 That includes a run that is waiting on a question: an open question does not keep the Host up.
 **So with Astera closed, run `astera host start` before `astera questions answer`**; without a Host,
 `questions answer` exits 3.
@@ -126,6 +127,71 @@ process that runs them. That is true with Astera open as well, with two exceptio
 while Astera is open, `sessions read` asks it which card a chat session is waiting on, and
 `sessions send` hands a chat turn to it to deliver. With no Host there are no sessions to answer
 about, so they exit 3.
+
+### Workers with Astera closed
+
+**With Astera closed, the Host starts and stops workers itself.** These coordinator commands work
+from a shell with only a Host running: `worker-start`, `worker-stop`, `worker-release` and
+`worker-read`. So does `run-start`, which starts a Job's coordinator again, once the Job's run has its
+worktree. They are the commands a coordinator session uses, and `astera help` describes them. The Host
+starts the agent in a session it holds, keeps its output, and ends it when asked. When such a worker
+ends on its own, its Dispatch is closed all the same: by the Host while Astera is closed, and by
+Astera once it has taken the session back. Open Astera later and it shows those workers as tabs. With
+Astera open, a worker the Host starts gets its tab at once.
+
+**`astera host status` says whether this Host can do this.** `spawn` in `data.features` means it
+can. A Host started by an older Astera does not have it, and neither does one whose starter could not
+name the files a worker needs. With such a Host, these commands need the app as they did before.
+
+The Host reads the permission setting, **Run agents without permission checks**, from the profile's
+`app-settings.json` at every start. With no such file it uses the app's default, which is on. A
+damaged file refuses the start with exit 6 and `error.details.repair`, rather than guessing. A start
+that reaches a Host that is stopping is refused with 6 and `error.details.retry` (see Output).
+
+**What still needs the app.** Each of these is exit 6 with a message that says the app is needed,
+and nothing is started or changed:
+
+- `worker-start --worktree new`. The app is what makes worktrees, so a worker that needs a new one
+  waits for it. No Dispatch is left behind.
+- The first `jobs run` of a Job with a coordinator account. It starts the coordinator in a new
+  worktree, which the app makes. The Job keeps `pendingStart`, so it can be run again once Astera is
+  open.
+- `worker-read` of a worker Astera started. Astera keeps that output, not the Host. The Host reads
+  only the workers it started.
+- `worker-stop` and `worker-release` of a worker that ran inside Astera itself, which Astera does only
+  when it could not reach the Host. Only Astera can end it. Its Dispatch is not marked stopped.
+
+A worker Astera started in a Host session is the Host's to end, so with Astera closed `worker-stop`
+and `worker-release` still work on it.
+
+**Validation and review wait for Astera.** A task added with `--validate` or `--review` stays
+`validating` or `reviewing` after its worker reports done with Astera closed. Nothing checks it yet,
+and Astera starts the check when it next opens.
+
+**Jobs do not move on their own with Astera closed.** When a Job has no coordinator, the app is what
+places its workers. With Astera closed, `jobs run` of such a Job starts the run and answers with its
+id, but no worker is placed, so **a `runs wait` on that run does not complete**. It holds until its deadline
+and ends with 7. Scheduled Jobs fire only while Astera is open. Until the Host learns to place workers
+itself, run Jobs with Astera open.
+
+**Stopping a worker.** `worker-stop --dispatch <id>` ends the worker's session and marks its Dispatch
+stopped. `runs stop --id <runId>` does the same for every open worker of a run, and pauses the run.
+Both refuse with 6, and end nothing, while a worker is still starting: the message is `the worker is
+still starting; try again in a moment`, and the answer is to run the same command a few seconds later.
+That refusal lasts only two minutes from the start. A start older than that is taken as one that died,
+and the stop closes its Dispatch without ending anything. Both also refuse a Dispatch held by
+`worker-retain`. A worker that only Astera can end (the list above) is found only as `runs stop`
+reaches it, so `runs stop` can end the workers before it and then refuse. Run it again with Astera
+open.
+
+In Astera, **Stop** on a worker the Host started ends it in the Host, and counts only once the Host
+confirms the session ended. If the Host does not confirm, Astera says it could not stop the worker,
+and the task stays open.
+
+Stop your workers before `astera host stop`. The Host refuses to stop while it holds sessions, and
+each worker it started is one.
+
+What a worker the Host starts inherits from the Host's environment is under Security.
 
 ### Which Host, and which profile
 
@@ -793,6 +859,28 @@ The boundary is your machine and your operating system account.
   session, with `astera sessions`. A worker can type into its coordinator
   and into any other session. That is the chosen model, and the boundary is the same as for the rest
   of this command: your operating system account.
+- **A worker the Host starts inherits the Host's environment**, and the Host's environment is that of
+  whatever started it: Astera, or the shell that ran `astera host start`. A Host started from a shell,
+  a CI job for example, therefore hands that shell's variables, secrets included, to every agent it
+  starts, exactly as Astera does when you start Astera from that shell. Start the Host from an
+  environment that holds only what the agents may see. What is removed is a fixed list:
+  - When the Host starts: every variable whose name begins with `ASTERA_SESSION`, `ASTERA_CLI` or
+    `ASTERA_SKILLS`; the variables a Claude Code session sets about itself (`CLAUDECODE`,
+    `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`,
+    `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
+    `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_PID`, `CLAUDE_EFFORT`); and `ELECTRON_RUN_AS_NODE` and every
+    `ASTERA_HOST_` variable, which the Host's start then sets for itself.
+  - When the Host starts a worker: `ELECTRON_RUN_AS_NODE` and every `ASTERA_HOST_` variable again, so
+    the Host's own settings never reach an agent. Then the same steps as for a worker Astera starts:
+    the Claude Code list above is cleared once more, the Astera variables a session is given
+    (`ASTERA_STATUSLINE_OUT`, `ASTERA_STATUSLINE_ORIGINAL`, `ASTERA_HOOK_OUT`, `ASTERA_CLI`,
+    `ASTERA_PROFILE_DIR`, `ASTERA_SKILLS`, `ASTERA_SESSION`) are cleared and set afresh, and
+    `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set to the account's folder, or removed for the default
+    account.
+
+  Everything else passes through as it is, including `PATH` (with the `astera` folder put in front),
+  `ASTERA_HOST`, `ASTERA_PROFILE` and settings such as `CLAUDE_CODE_USE_BEDROCK` or
+  `CLAUDE_CODE_OAUTH_TOKEN`.
 
 Anyone who can already run programs as you can run `astera`. Treat it with the same care as your
 shell.
