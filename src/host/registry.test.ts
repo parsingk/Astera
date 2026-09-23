@@ -367,4 +367,40 @@ describe('the last screen of a session that ended badly', () => {
     p.exit(1)
     expect(logs.some((l) => l.includes('last screen: (nothing)'))).toBe(true)
   })
+
+  // F4: the Host's spawner subscribes beside attachPtyHost, and the second subscriber must not
+  // silently disconnect the first.
+  it('tells every subscriber, not only the last one', () => {
+    const p = fakePty()
+    const h = registry({ pty: p })
+    const a: string[] = []; const b: string[] = []
+    h.r.onData((_id, d) => a.push(d)); h.r.onData((_id, d) => b.push(d))
+    const ea: number[] = []; const eb: number[] = []
+    h.r.onExit((_id, c) => ea.push(c)); h.r.onExit((_id, c) => eb.push(c))
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    p.emit('x'); p.exit(2)
+    expect([a, b, ea, eb]).toEqual([['x'], ['x'], [2], [2]])
+  })
+  it('finds a live session pty by the app id in its note', () => {
+    const p = fakePty()
+    const h = registry({ pty: p })
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ kind: 'session', id: 'ses_1', restore: {} }) })
+    expect(h.r.sessionPty('ses_1')).toBe('p1')
+    expect(h.r.sessionPty('ses_2')).toBeNull()
+    expect(h.r.metaOf('p1')?.id).toBe('ses_1')
+    p.exit(7)
+    expect(h.r.sessionPty('ses_1')).toBeNull()
+    expect(h.r.sessionExitCode('ses_1')).toBe(7)
+  })
+  it('does not answer a session lookup with a pty of another kind', () => {
+    const h = registry()
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ kind: 'terminal', id: 'ses_1' }) })
+    expect(h.r.sessionPty('ses_1')).toBeNull()
+  })
+  it('has no exit code for a session that is alive or was never here', () => {
+    const h = registry()
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ kind: 'session', id: 'ses_1', restore: {} }) })
+    expect(h.r.sessionExitCode('ses_1')).toBeNull()
+    expect(h.r.sessionExitCode('nope')).toBeNull()
+  })
 })

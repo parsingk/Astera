@@ -73,6 +73,9 @@ interface Entry {
    *  A write of nothing but terminal reports (a focus change, a reply to the TUI's own query) is not
    *  typing, and leaves it alone (core/terminal/reports.ts). */
   lastWriteAt: number | null
+  /** How the pty ended, or null while it is alive. Kept after the buffer is dropped, because the
+   *  Host's exit handling asks for it after the fact (`sessionExitCode`). */
+  exitCode: number | null
 }
 
 export interface PtyRegistryDeps {
@@ -86,8 +89,10 @@ export interface PtyRegistryDeps {
 
 export class PtyRegistry {
   private readonly entries = new Map<string, Entry>()
-  private dataCb: (id: string, data: string) => void = () => {}
-  private exitCb: (id: string, exitCode: number) => void = () => {}
+  // Sets, not single slots: attachPtyHost broadcasts to the clients and the Host's own spawner reads
+  // the same output and exits, and a second subscriber must not silently disconnect the first.
+  private readonly dataCbs = new Set<(id: string, data: string) => void>()
+  private readonly exitCbs = new Set<(id: string, exitCode: number) => void>()
   private readonly deps: PtyRegistryDeps
   /** `slice(-0)` returns the whole string, so a scrollback of 0 would turn the cap off rather than
    *  down. One character is the smallest honest answer to "keep almost nothing". Computed once here,
@@ -100,12 +105,14 @@ export class PtyRegistry {
     this.scrollback = Math.max(1, deps.scrollback ?? SCROLLBACK_CHARS)
   }
 
+  /** Adds a listener; every one registered hears every chunk. */
   onData(cb: (id: string, data: string) => void): void {
-    this.dataCb = cb
+    this.dataCbs.add(cb)
   }
 
+  /** Adds a listener; every one registered hears every exit, after `exitCode` is recorded. */
   onExit(cb: (id: string, exitCode: number) => void): void {
-    this.exitCb = cb
+    this.exitCbs.add(cb)
   }
 
   open(a: {
@@ -134,16 +141,18 @@ export class PtyRegistry {
       alive: true,
       cols: a.opts.cols,
       rows: a.opts.rows,
-      lastWriteAt: null
+      lastWriteAt: null,
+      exitCode: null
     }
     this.entries.set(a.id, entry)
     pty.onData((d) => {
       // The same shape TerminalManager's own buffer uses: append, then keep the tail.
       entry.buffer = (entry.buffer + d).slice(-this.scrollback)
-      this.dataCb(a.id, d)
+      for (const cb of this.dataCbs) cb(a.id, d)
     })
     pty.onExit(({ exitCode }) => {
       entry.alive = false
+      entry.exitCode = exitCode
       // **A session that ended badly leaves its last screen here.** The buffer is cleared on the next
       // line and the Host is the only place it exists — the app may not even be running — so without
       // this an exit is a timestamp and an exit code, and when the pty layer cannot supply the code
@@ -160,7 +169,7 @@ export class PtyRegistry {
       // "it ended while I was away" from "it was never here".
       entry.buffer = ''
       this.deps.log(`pty ${a.id} exited ${exitCode}`)
-      this.exitCb(a.id, exitCode)
+      for (const cb of this.exitCbs) cb(a.id, exitCode)
     })
     this.deps.log(`pty ${a.id} started, pid ${pty.pid}`)
     return { ok: true, pid: pty.pid }
@@ -237,6 +246,33 @@ export class PtyRegistry {
    *  built on one would never deliver the exit that already happened. */
   buffer(id: string): string {
     return this.entries.get(id)?.buffer ?? ''
+  }
+
+  /** The note this pty was opened with, or null for one opened without a note or never here. A map
+   *  lookup, because the spawner's data tap calls it for every chunk. */
+  metaOf(id: string): PtyMeta | null {
+    return this.entries.get(id)?.meta ?? null
+  }
+
+  /** The live pty whose note is `kind: 'session'` with this app id, or null. A scan: it is asked once
+   *  per command, never per chunk. */
+  sessionPty(sessionId: string): string | null {
+    for (const e of this.entries.values())
+      if (e.alive && e.meta?.kind === 'session' && e.meta.id === sessionId) return e.id
+    return null
+  }
+
+  /** How the pty for this session ended, or null when it is alive or was never here. A scan, asked
+   *  once per exit. A session with a live pty has not ended, whatever an earlier pty of it did; of
+   *  several ended ones, the one opened last is the answer. */
+  sessionExitCode(sessionId: string): number | null {
+    let code: number | null = null
+    for (const e of this.entries.values()) {
+      if (e.meta?.kind !== 'session' || e.meta.id !== sessionId) continue
+      if (e.alive) return null
+      code = e.exitCode
+    }
+    return code
   }
 
   list(): PtyEntry[] {
