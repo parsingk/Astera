@@ -1,6 +1,6 @@
 ---
 name: astera-orchestration
-description: Cross-vendor agent orchestration — dispatch tasks to worker agents running on another vendor (claude/codex) and collect their results. Use when supervision, completion tracking, or breaking down dependent tasks is required.
+description: Cross-vendor agent orchestration — dispatch tasks to worker agents running on another vendor (claude/codex) and collect their results. Use when supervision, completion tracking, or breaking down dependent tasks is required. Also use it, through the astera CLI, to plan a Job for later, to read or message another agent session, or to install a missing Astera skill.
 ---
 
 <!-- managed by Astera — the app owns this file. Local edits are overwritten on the next launch.
@@ -24,6 +24,14 @@ cannot drift from the installed version.
    **If the Run you were handed has completion convergence on, that reference has a whole section on
    it** — read it before your first `worker-start`; the app repairs a checked or reviewed Task itself,
    and refuses commands you would otherwise reach for while that is happening.
+
+## Outside a Run
+
+The same reference has a section (12) for any session, coordinator or not. `astera jobs create`
+and `astera tasks add --job` plan work a person starts later. `astera sessions list`, `read` and
+`send` see or message another agent session. `astera skills install` puts back a missing Astera
+skill. **`sessions send` types into whatever the other session shows**, a permission prompt or a
+first-run screen included, so `sessions read` it right before you send.
 
 ## When not to use this
 

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { BROWSER_VERBS, NOUNS } from './cliArgs'
+import { BROWSER_VERBS, NOUNS, camel, parseArgs, verbsOf } from './cliArgs'
 import { USAGE, spelledCommand, usageFor, type PublicCommand } from './cliUsage'
 import { agentContext } from './cliAgentContext'
 
@@ -261,6 +261,88 @@ describe('cliUsage — docs/cli.md 의 명령 목록과 같다', () => {
           flagsOf(cmd as PublicCommand)
         )
       }
+    }
+  })
+})
+
+// 텍스트 가드 — `astera help` 가 내는 가이드(resources/skills/orchestration-guide.md). 위의 가드가
+// docs/cli.md 에 하는 일을 에이전트가 읽는 쪽에 한다. 에이전트는 가이드의 줄을 그대로 친다.
+//
+// **둘을 본다.** 하나, 에이전트에게 알려야 하는 공개 명령이 가이드의 명령 줄에 있다 — 가이드가
+// 그것들을 한 번도 적지 않은 채로 phase C·D 가 나갔고, 에이전트는 모르는 명령을 쓰지 않는다. 둘,
+// 가이드의 울타리 블록에서 `astera <공개 명사>` 로 시작하는 줄은 실제로 가르는 명령이고, 그 명령이
+// 받는 플래그만 쓴다. 세션 전용 명령(`task-create` 등)의 플래그는 어디에도 선언되어 있지 않아
+// 여기서도 보지 않는다(cliAgentContext.ts 의 "standing risk").
+//
+// 줄 하나만 읽는다: `\` 로 이어지는 다음 줄의 플래그는 보지 않고, `<<` 와 `#` 부터는 셸의 것이다.
+const guidePath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../resources/skills/orchestration-guide.md'
+)
+
+/** 따옴표를 벗기는 정도의 셸 낱말 가르기. 가이드의 줄은 확장할 것이 없는 줄이다. */
+function shellWords(line: string): string[] {
+  const out: string[] = []
+  const re = /'([^']*)'|"([^"]*)"|(\S+)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(line)) !== null) out.push(m[1] ?? m[2] ?? m[3])
+  return out
+}
+
+/** 울타리 블록 안에서 `astera ` 로 시작하는 줄, 셸이 읽는 꼬리(`<<`, `#`, 이어짐 `\`)를 뗀 것. */
+function guideCommandLines(text: string): string[] {
+  const out: string[] = []
+  let fenced = false
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line.startsWith('```')) {
+      fenced = !fenced
+      continue
+    }
+    if (!fenced || !line.startsWith('astera ')) continue
+    out.push(line.replace(/\s(<<|#).*$/, '').replace(/\s\\$/, '').trim())
+  }
+  return out
+}
+
+describe('orchestration-guide — 에이전트에게 공개 명령을 가르친다', () => {
+  const lines = guideCommandLines(readFileSync(guidePath, 'utf8'))
+  const globals = new Set(agentContext().globalFlags.map((f) => camel(f.name)))
+  /** 가이드의 줄 중 공개 명사로 시작하는 것을 파싱한 결과. 동사 없는 옛 세션 명령(`accounts --json`)은
+   *  USAGE 에 없으므로 `usage` 가 비어 있다. */
+  const publicLines = lines
+    .map((line) => ({ line, words: shellWords(line).slice(1) }))
+    .filter(({ words }) => words[0] === 'browser' || verbsOf(words[0]) !== undefined)
+    .map(({ line, words }) => ({ line, parsed: parseArgs(words) }))
+
+  it('에이전트가 쓸 공개 명령이 가이드의 명령 줄에 있다', () => {
+    const shown = new Set(publicLines.flatMap(({ parsed }) => ('cmd' in parsed ? [parsed.cmd] : [])))
+    for (const cmd of [
+      'jobs-create',
+      'tasks-add',
+      'accounts-list',
+      'run-configs-list',
+      'sessions-list',
+      'sessions-read',
+      'sessions-send',
+      'skills-list',
+      'skills-install',
+      'requests-show'
+    ])
+      expect(shown.has(cmd), `\`astera ${cmd.replace(/-(?=[a-z]+$)/, ' ')}\` is on no command line of the guide`).toBe(true)
+  })
+
+  it('공개 명사로 시작하는 줄은 가르는 명령이고, 그 명령의 플래그만 쓴다', () => {
+    expect(publicLines.length).toBeGreaterThan(0)
+    for (const { line, parsed } of publicLines) {
+      if ('error' in parsed) throw new Error(`guide: \`${line}\` — ${parsed.error}`)
+      const usage = USAGE[parsed.cmd as PublicCommand] as (typeof USAGE)[PublicCommand] | undefined
+      if (usage === undefined) continue // 동사 없는 세션 명령 — 공개 표의 것이 아니다
+      const known = new Set((usage.flags ?? []).map((f) => camel(f.name)))
+      for (const key of [...Object.keys(parsed.args), ...parsed.wantsStdin])
+        expect(known.has(key) || globals.has(key), `guide: \`${line}\` — --${key} is not a flag of ${parsed.cmd}`).toBe(
+          true
+        )
     }
   })
 })

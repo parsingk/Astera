@@ -6,6 +6,10 @@ public commands only, one command's flags are also one line away with `astera <n
 and `docs/cli.md` is the reference for that surface and the exit codes. Everything below is a
 runnable command line, so use it as written rather than guessing.
 
+**Section 12 is for any session, not only a coordinator.** When you are asked to plan work for later,
+to check on or talk to another agent session, or to fix a missing Astera skill, the command for it is
+there: `jobs create`, `sessions`, `skills install`.
+
 `astera` is a **command** on the PATH of any session the app started. Its absolute path is in
 `$ASTERA_CLI` (section 10).
 
@@ -499,6 +503,8 @@ with `{sessionId, cwd, …}`", that object is `data`. Read `.data.sessionId`, no
 | `run-configs` | `data.configs` |
 | `accounts` | `data.accounts` |
 | `jobs list` / `runs list` / `projects list` | `data.jobs` / `data.runs` / `data.projects` |
+| `accounts list` / `run-configs list` / `sessions list` | `data.accounts` / `data.runConfigs` / `data.sessions` |
+| `skills list` / `skills install` | `data.accounts`, each with its `skills` |
 
 Anything else that returns a list gives `data.items`. A bare top-level array can never grow a field
 without breaking every reader, which is why there are none.
@@ -927,6 +933,9 @@ meaningless and repeats the same failure indefinitely.
   refused — and do not `task-update` it either, even though that one is not refused (section 11).
 - Do not resolve a `convergence-exhausted` Gate yourself — `retry-once`/`mark-failed` is a person's call
   (section 11).
+- Do not `sessions send` without a `sessions read` right before it. The text answers whatever prompt
+  the other session shows, a folder-trust or first-run screen included (12.3).
+- Do not send anything again after exit `3` or `7`. Ask `requests show` first (4.10, 12.3).
 
 ## 10. Environment variables
 
@@ -1049,3 +1058,140 @@ each result is unambiguous.
 **`--validate`'s comma list (4.2) is what convergence repairs run against.** The list runs in the order
 given, in every Run, and the first failure stops it; on a convergence Run that first failure is what
 gets sent back to the worker, named by its configuration's `name` — the ones after it never ran.
+
+## 12. The public commands an agent uses
+
+Everything above is what a coordinator and its workers use inside one Run. `astera` also has a public
+surface, the one `docs/cli.md` describes, and a few of its commands are for you as well. They reach
+what lies outside the Run you were handed, or outside any Run: a Job a person will start later,
+another agent session, the skills installed in an account. **They are not a second way to drive your
+own Run.**
+
+| When you need to | Use | Not |
+|---|---|---|
+| plan work that a person, not you, starts later | `jobs create`, then `tasks add --job` | `run-create`, whose Run is yours to drive now |
+| know which accounts exist, before `tasks add --account` or `--coordinator-account` | `accounts list` | a guessed id |
+| know the ids `tasks add --validate` takes | `run-configs list --job <jobId>` | `run-configs`, which reads the latest run's project |
+| see what another agent session is doing, or give it one short message | `sessions list`, `sessions read`, then `sessions send` | `worker-read` and `worker-start --terminal`, which are for your own Dispatches |
+| find out why an Astera skill is missing, and put it back | `skills list`, `skills install` | copying a `SKILL.md` by hand |
+| learn whether a call whose answer you lost took effect | `requests show` | sending it again |
+
+`astera <noun> <verb> --help` prints one command's flags, and it needs no Host.
+
+### 12.1 When not to use them
+
+- **A coordinator inside its Run keeps using section 4.** `task-create --run`, `worker-start`,
+  `check`, `worker-show`, `worker-read` and the rest. `tasks add --run <run>` reaches the same Run, but
+  it adds nothing a coordinator needs, and one vocabulary per Run is easier to read back.
+- **A Run someone laid out in the app gets no new Tasks from `tasks add` either** (section 1). Raise a
+  plan you think is wrong with `gate-create`.
+- **A worker uses none of this.** `jobs create` and `tasks add` go through `run-create` and
+  `task-create`, so a worker is refused them with exit `5`, the same boundary as section 6. A worker
+  talks to its coordinator with `send` and `ask`, never by typing into a session.
+- **Do not type into your own workers.** A worker's next instruction is a Task, given with
+  `worker-start --terminal <sessionId>` (section 8). Text typed with `sessions send` is outside every
+  Dispatch: no Task records it and no `worker_done` answers it.
+- **Do not type into your own session.** `$ASTERA_SESSION` is your own id, and `sessions list` lists
+  you too. Text sent there arrives as input to you.
+- **Do not create a Job for work you are about to do yourself**, and do not start one someone asked
+  you only to plan. `jobs create` runs nothing; starting it is the person's call, and it spends their
+  quota.
+- **Do not reach for `skills install` to switch a skill on.** It installs what the app's settings
+  already enable and nothing else. A skill whose setting is off comes back in `data.notEnabled`
+  with the setting that turns it on: tell the person, and let them decide.
+
+### 12.2 Planning work for later: `jobs create` and `tasks add --job`
+
+```bash
+# 1) Which accounts exist. The account rules of 4.2 apply here unchanged: ask when it is not clear
+astera accounts list --json
+
+# 2) The plan. Nothing runs; it comes back marked pendingStart with no run. Its id is .data.id
+astera jobs create --objective "migrate the payment module" --cwd "/abs/path/to/repo" --json
+
+# 3) The ids --validate takes, if a Task's result can be checked by running something (section 2)
+astera run-configs list --job job_4f2a --json
+
+# 4) Its Tasks. Each comes back with its own id in .data.id; --deps takes those ids
+astera tasks add --job job_4f2a --account acc_main --title "move the types" --spec - --json <<'EOF'
+Move the payment types into src/payments/types.ts. ...
+EOF
+astera tasks add --job job_4f2a --account acc_main --title "add tests" --spec - --deps '["tsk_1a2b3c4d"]' --validate <configId> --json <<'EOF'
+Once the types have moved, add regression tests. ...
+EOF
+```
+
+- **Pass `--cwd` with the repository root**, for the same two reasons as section 4.1: it decides
+  where the workers run and which window's Jobs sidebar shows the Job.
+- **`tasks add` takes exactly one of `--job` or `--run`**, with no default. A Job id given to `--run`,
+  or a run id given to `--job`, is a `4`, never quietly the other kind.
+- **Then say what you made.** The person sees the Job in the Jobs sidebar, waiting to be run, and
+  starts it there. `jobs run --id <jobId>` starts it from here, and is theirs to ask for.
+
+### 12.3 Another session: `sessions list`, `sessions read`, `sessions send`
+
+```bash
+astera sessions list --json
+astera sessions read --id <sessionId> --json
+astera sessions send --id <sessionId> --text "Please rebase on develop before you push." --request-id <an-id-you-choose> --json
+```
+
+`sessions list` gives each session's `id`, `kind` (`terminal` or `chat`), `title`, `accountId`,
+`cwd`, `alive` and `state`. `state` is `working`, `waiting` or `unknown`, and `waiting` only says
+that the session stopped at a prompt: it does not say which prompt.
+
+**`sessions send` types into whatever the other session is showing.** The text and the Enter answer
+the prompt on the screen, whatever it is. **Read the screen with `sessions read` right before every
+send**, and send only when it shows the agent's own input prompt. These were measured on a real
+Claude Code session:
+
+- **In a folder it has not seen, Claude Code first asks whether to trust the folder, and the answer
+  under the cursor is "No, exit".** Text and Enter there end the session.
+- **On Claude Code's first-run theme picker, a digit picks a theme and the Enter after it takes the
+  next screen's default, which starts a login** and tries to open a browser to sign in.
+- **At a permission prompt, your text is the answer to the permission.**
+
+If the screen shows any of these, do not send. Tell the person what the session is waiting on.
+
+**Keep what you send short.** Measured on the same Claude Code session: a one-line send is submitted,
+and `state` goes from `unknown` to `working` to `waiting` as that turn runs; text with a line break in
+it is submitted as one message, not split. A long text (about 2,000 characters) is submitted too, but
+Claude reads text typed that way as pasted content, and it hedged on an instruction inside it as
+something it had not been told directly. So when the other session needs a lot of context, write it
+to a file and send one short line that names the file.
+
+**A chat session takes a send as one turn.** With Astera open, a chat session that is waiting on an
+approval or a question card refuses the send with exit `6` and names the card; `sessions send` does
+not answer cards, and nothing was sent. A session that has ended is a `6` as well.
+
+**Pass `--request-id` on every send, with an id you choose.** A retry with the same id is replayed:
+the Host answers what it answered the first time and types nothing a second time.
+
+**Exit `3` and exit `7` mean "I do not know whether it was typed", not "it failed".** Do not send
+again. Ask the receipt, the way section 4.10 describes:
+
+```bash
+astera requests show --id <requestId> --json
+```
+
+A `completed` receipt means it was typed. A `pending` one means it is being typed right now: ask
+again in a moment. After an `absent`, read the screen before you decide anything, because the screen
+is then the only record of whether the text arrived.
+
+### 12.4 A missing skill: `skills list` and `skills install`
+
+```bash
+astera skills list --json
+astera skills install --json
+```
+
+- **Use them when a skill the person expects is not there**, for example `/astera-browser` not
+  found, or right after an account was added: a new account gets no skills until the app restarts.
+- `skills list` changes nothing. Per account it gives each skill's `enabled` (whether its setting is
+  on) and `installed` (`current`, `stale`, `missing` or `not-ours`).
+- `skills install` writes only what the settings enable, and leaves a file Astera did not write
+  exactly as it is (`skipped-not-ours`). Any `failed` makes it exit `1`.
+- **A session that is already open never sees a skill installed after it started**, and that includes
+  yours. Say so, and suggest a new session.
+- Both answer from the profile's files, with no Host and no app. They refuse `--request-id` with exit
+  `2`; running `skills install` twice is safe anyway, because the second run writes nothing.
