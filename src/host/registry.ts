@@ -272,22 +272,27 @@ export class PtyRegistry {
   }
 
   /** The live pty whose note is `kind: 'session'` with this app id, or null. A scan: it is asked once
-   *  per command, never per chunk. */
+   *  per command, never per chunk. **Of several live ones, the one opened last**, the same rule as
+   *  `sessionExitCode`: a roll that keeps the session id kills the old pty and opens the new one at
+   *  once, and a slow ConPTY kill leaves both alive for a while. A stop or a write for the session
+   *  belongs to the new one. Insertion order is opening order, because `open` refuses a reused id. */
   sessionPty(sessionId: string): string | null {
+    let last: string | null = null
     for (const e of this.entries.values())
-      if (e.alive && e.meta?.kind === 'session' && e.meta.id === sessionId) return e.id
-    return null
+      if (e.alive && e.meta?.kind === 'session' && e.meta.id === sessionId) last = e.id
+    return last
   }
 
   /** How the pty for this session ended, or null when it is alive or was never here. A scan, asked
    *  once per exit. A session with a live pty has not ended, whatever an earlier pty of it did; of
-   *  several ended ones, the one opened last is the answer. */
+   *  several ended ones, the one opened last is the answer. A pty that ended with no code (node-pty
+   *  can deliver one) answers null too, as its type says, because no number can be read from it. */
   sessionExitCode(sessionId: string): number | null {
     let code: number | null = null
     for (const e of this.entries.values()) {
       if (e.meta?.kind !== 'session' || e.meta.id !== sessionId) continue
       if (e.alive) return null
-      code = e.exitCode
+      code = e.exitCode ?? null
     }
     return code
   }

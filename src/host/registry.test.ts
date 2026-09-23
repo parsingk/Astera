@@ -424,4 +424,26 @@ describe('the last screen of a session that ended badly', () => {
     expect(exitLogs).toHaveLength(1)
     expect(dataLogs[0]).toContain('p1')
   })
+
+  // I3: during a roll that keeps the session id the old pty can still be alive (a slow ConPTY kill)
+  // when the new one opens. A command for the session belongs to the new one.
+  it('answers a session lookup with the last-opened live pty', () => {
+    const made = [fakePty(1), fakePty(2)]
+    let i = 0
+    const r = new PtyRegistry({ spawn: () => made[i++], log: () => {} })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ kind: 'session', id: 'ses_1', restore: {} }) })
+    r.open({ id: 'p2', file: 'cmd.exe', args: [], opts, meta: meta({ kind: 'session', id: 'ses_1', restore: {} }) })
+    expect(r.sessionPty('ses_1')).toBe('p2')
+    made[1].exit(0)
+    expect(r.sessionPty('ses_1')).toBe('p1')
+  })
+  // M1: node-pty can deliver an exit with no code (the `exited undefined` lines); the answer keeps
+  // to its type.
+  it('answers null, not undefined, for a session whose pty ended with no code', () => {
+    const p = fakePty()
+    const h = registry({ pty: p })
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ kind: 'session', id: 'ses_1', restore: {} }) })
+    p.exit(undefined as unknown as number)
+    expect(h.r.sessionExitCode('ses_1')).toBeNull()
+  })
 })
