@@ -3,7 +3,14 @@ import { promises as fs, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createHostOrch, OBSERVED } from './orch'
+import {
+  createHostOrch,
+  OBSERVED,
+  receiptsToEvict,
+  RECEIPTS_PER_CALLER,
+  RECEIPTS_TOTAL,
+  RECEIPT_TTL_MS
+} from './orch'
 import {
   applyWorkerDone,
   createJob,
@@ -1217,5 +1224,161 @@ describe('요청 영수증', () => {
       .map(([name]) => name)
       .sort()
     expect(commitsAndPolls).toEqual(Object.keys(OBSERVED).sort())
+  })
+
+  // === 7단계 — 보존 ===
+  //
+  // **정책은 정해져 있고 숫자만 보정거리다: 비우되, 거절하지 않는다**(설계 §4). Orca 의
+  // `mutation_ledger_full` 은 장부가 차면 새 변경을 거절한다 — 어떤 크기에서도 들여오지 않을 하나다.
+  // 진짜 일을 거절하는 장부질은 그것이 막으려는 실패보다 나쁘다.
+
+  /** 커밋하는 가장 싼 명령 하나. 상태는 메시지 하나씩만 자라고, 영수증은 요청 id 마다 하나 남는다. */
+  const fill = (
+    orch: ReturnType<typeof createHostOrch>,
+    f: { taskId: string; dispatchId: string },
+    request: string
+  ): Promise<{ status: number; body: unknown }> =>
+    orch.call({
+      cmd: 'send',
+      args: { type: 'status', taskId: f.taskId, dispatchId: f.dispatchId, subject: request, body: 'b' },
+      sessionId: 'ses1',
+      request
+    })
+
+  it('세션마다 최근 것만 남는다 — 넘친 가장 오래된 것은 absent 이고 가장 새것은 재생한다', async () => {
+    const f = await workerFixture()
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses1']) })
+    const first = await fill(orch, f, 'req-0')
+    for (let i = 1; i <= RECEIPTS_PER_CALLER; i++) await fill(orch, f, `req-${i}`)
+    expect((await show(orch, 'ses1', 'req-0')).body.state, '상한을 넘겼는데 가장 오래된 것이 남아 있다').toBe('absent')
+    const newest = await show(orch, 'ses1', `req-${RECEIPTS_PER_CALLER}`)
+    expect(newest.body.state, '가장 새것이 쓸려 나갔다').toBe('completed')
+    // 밀려난 id 를 다시 내밀면 그것은 재생이 아니라 새 명령이다 — 그리고 그것이 옳다. 영수증이 없으면
+    // 없다고 답하는 것이 설계의 `absent` 이고, 그 뒤는 상태를 보라는 것이 §6 의 규율이다.
+    const again = await fill(orch, f, 'req-0')
+    expect(again.status).toBe(200)
+    expect(JSON.stringify(again), '쓸려 나간 영수증이 그대로 재생됐다').toBe(JSON.stringify(first))
+  })
+
+  /**
+   * **자리는 저장이 아무리 차도 비워지지 않는다.** 자리는 호출의 기록이 아니라 호출 그 자체다 —
+   * 비우면 그 자리가 막고 있던 재시도가 통과하고, 그것이 이 기구 전체가 막으려는 실패다.
+   */
+  it('진행 중인 자리는 상한을 넘겨 채워도 그대로 있다', async () => {
+    const f = await workerFixture()
+    let release = (): void => {}
+    const blocked = new Promise<void>((r) => {
+      release = () => r()
+    })
+    const c = counting({
+      readWorker: async () => {
+        await blocked
+        return '출력'
+      }
+    })
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses1']), act: c.act })
+    const reading = orch.call({ cmd: 'worker-read', args: { dispatch: f.dispatchId }, sessionId: 'ses1', request: 'hold' })
+    while (countOf(c.calls, 'readWorker') === 0) await new Promise((r) => setImmediate(r))
+    for (let i = 0; i <= RECEIPTS_PER_CALLER; i++) await fill(orch, f, `req-${i}`)
+    expect((await show(orch, 'ses1', 'hold')).body.state, '자리가 쓸려 나갔다').toBe('pending')
+    release()
+    expect((await reading).status).toBe(200)
+  })
+
+  // **가득 찬 저장이 명령을 막지 않는다.** 위의 두 시험이 비우는 것을 보고, 이것이 비우기가 거절로
+  // 새지 않는 것을 본다 — 설계가 Orca 에서 유일하게 들여오지 않기로 한 행동에 못을 박는다.
+  it('저장이 가득 차도 새 명령은 그대로 받아들여진다', async () => {
+    const f = await workerFixture()
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses1']) })
+    for (let i = 0; i <= RECEIPTS_PER_CALLER; i++) await fill(orch, f, `req-${i}`)
+    const after = await fill(orch, f, 'req-그다음')
+    expect(after.status, '저장이 찼다고 명령을 거절했다').toBe(200)
+    expect((await show(orch, 'ses1', 'req-그다음')).body.state).toBe('completed')
+    expect((await savedState()).messages.filter((m) => m.subject === 'req-그다음')).toHaveLength(1)
+  })
+
+  // 나이로도 비운다. **다음 쓰기가 비질을 부른다** — 타이머도 아니고 시작할 때도 아니다.
+  it('한 시간이 지난 영수증은 다음 쓰기에 쓸려 나간다', async () => {
+    const f = await workerFixture()
+    let clock = NOW
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses1']), now: () => clock })
+    await fill(orch, f, 'req-옛것')
+    expect((await show(orch, 'ses1', 'req-옛것')).body.state).toBe('completed')
+    clock = new Date(Date.parse(NOW) + RECEIPT_TTL_MS + 1_000).toISOString()
+    await fill(orch, f, 'req-새것')
+    expect((await show(orch, 'ses1', 'req-옛것')).body.state, '한 시간이 지났는데 남아 있다').toBe('absent')
+    expect((await show(orch, 'ses1', 'req-새것')).body.state).toBe('completed')
+  })
+})
+
+/**
+ * **정책 자체를 규칙으로 본다.** 위의 보존 시험들은 진짜 명령이 지나가는 길로 세션 상한과 나이와
+ * "거절하지 않는다" 를 지키지만, 전체 천장은 그 길로는 2000번의 커밋 — 2000번의 파일 통째 쓰기 —
+ * 이어야 닿는다. 그것은 규칙이 아니라 저장소의 속도를 재는 시험이고, 실제로 묶음 전체와 함께 돌 때
+ * 10초를 넘겨 깨졌다. 그래서 규칙은 순수 함수로 떼어 여기서 잰다.
+ */
+describe('receiptsToEvict — 무엇이 떨어져 나가는가', () => {
+  const entry = (key: string, at = NOW, pending = false): { key: string; pending: boolean; at: string } => ({
+    key,
+    pending,
+    at
+  })
+  const nowMs = Date.parse(NOW)
+
+  it('세션마다 최근 것만 남기고 넘친 옛것을 뱉는다', () => {
+    const held = Array.from({ length: RECEIPTS_PER_CALLER + 3 }, (_, i) => entry(`sesA\u0000req-${i}`))
+    expect(receiptsToEvict(held, nowMs)).toEqual(['sesA\u0000req-2', 'sesA\u0000req-1', 'sesA\u0000req-0'])
+  })
+
+  // **통마다 따로 센다** — 한 세션이 제 몫을 다 써도 다른 세션의 영수증은 밀려나지 않는다.
+  it('한 세션이 제 상한을 채워도 다른 세션은 그대로다', () => {
+    const held = [
+      entry('sesB\u0000하나'),
+      ...Array.from({ length: RECEIPTS_PER_CALLER + 1 }, (_, i) => entry(`sesA\u0000req-${i}`))
+    ]
+    expect(receiptsToEvict(held, nowMs)).toEqual(['sesA\u0000req-0'])
+  })
+
+  /**
+   * **세션 상한은 통 하나를 묶을 뿐, 통의 수를 묶지 않는다.** 앱이 다시 뜰 때마다 세션 id 는 새것이라,
+   * 보름을 서 있는 Host 는 새 통을 끝없이 만난다. 전체 천장이 그것을 묶는다.
+   */
+  it('통이 여럿이어도 전체 천장을 넘지 않는다', () => {
+    const callers = 20
+    const per = 120 // 세션 상한 아래 — 여기서 비우는 것은 천장뿐이다
+    expect(per).toBeLessThan(RECEIPTS_PER_CALLER)
+    const held = Array.from({ length: callers * per }, (_, i) => entry(`c${i % callers}\u0000req-${i}`))
+    const gone = receiptsToEvict(held, nowMs)
+    expect(held.length - gone.length).toBe(RECEIPTS_TOTAL)
+    // 떨어진 것은 가장 오래된 쪽이다.
+    expect(gone).toContain('c0\u0000req-0')
+    expect(gone).not.toContain(`c${(held.length - 1) % callers}\u0000req-${held.length - 1}`)
+  })
+
+  it('한 시간이 지난 것은 수와 무관하게 떨어진다', () => {
+    const old = new Date(nowMs - RECEIPT_TTL_MS - 1_000).toISOString()
+    const held = [entry('sesA\u0000옛것', old), entry('sesA\u0000새것')]
+    expect(receiptsToEvict(held, nowMs)).toEqual(['sesA\u0000옛것'])
+  })
+
+  /**
+   * **자리는 어떤 상한으로도 비워지지 않고, 어느 상한에도 세어지지 않는다.** 긴 폴링을 여럿 쥔
+   * 호출자가 제 답들을 스스로 밀어내면 안 된다 — 자리는 기록이 아니라 지금 도는 호출이다.
+   */
+  it('자리는 비워지지도, 상한에 세어지지도 않는다', () => {
+    const old = new Date(nowMs - RECEIPT_TTL_MS - 1_000).toISOString()
+    const held = [
+      entry('sesA\u0000오래된자리', old, true),
+      ...Array.from({ length: RECEIPTS_PER_CALLER }, (_, i) => entry(`sesA\u0000req-${i}`)),
+      entry('sesA\u0000자리', NOW, true)
+    ]
+    // 자리 둘을 빼면 완료된 것이 정확히 상한만큼이므로, 자리가 세어졌다면 가장 오래된 것이 떨어진다.
+    expect(receiptsToEvict(held, nowMs)).toEqual([])
+  })
+
+  // 시계를 읽을 수 없으면 "만료됨" 이 아니라 "만료되지 않음" 으로 읽는다 — 오래 두는 값은 메모리지만,
+  // 일찍 버리는 값은 호출자의 답이다.
+  it('읽을 수 없는 시각은 만료로 치지 않는다', () => {
+    expect(receiptsToEvict([entry('sesA\u0000req-1', '시각 아님')], nowMs)).toEqual([])
   })
 })

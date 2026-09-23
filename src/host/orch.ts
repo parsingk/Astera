@@ -64,6 +64,73 @@ const interpretationOf = {
     `Before retrying, look at the state rather than at the receipt, because the state is the only record that survives everything.`
 }
 
+/**
+ * **How much of what this Host has answered it keeps** (request receipts design §4, §12/4).
+ *
+ * **The policy is decided and only the numbers are calibration**: evict, never refuse. Orca's
+ * `mutation_ledger_full` refuses to start a new mutation while its table is full of unresolved
+ * claims, and that is the one behaviour of theirs this design will not ship at any size —
+ * bookkeeping that refuses real work is a worse failure than the one it guards against. Nothing
+ * below is ever consulted before a command runs; the sweep only takes things out afterwards.
+ *
+ * - **200 completed receipts per caller.** A coordinator issuing a few acting commands a minute
+ *   fills that in about the hour the TTL gives it, so the two caps bind at roughly the same place.
+ *   The shared `''` bucket (every caller with no `ASTERA_SESSION`: a person at a shell, a CI job, a
+ *   worker whose environment was never planted) holds 200 *between* them, which §4 already names as
+ *   the first thing to look at when these numbers are set against a measurement.
+ * - **One hour.** The longest call this Host takes is `runs wait`, at an hour, so a receipt outlives
+ *   the call that made it.
+ * - **2000 across all callers.** The per-caller cap bounds each bucket and not their number, and a
+ *   Host that is up for a fortnight meets a new session id every time the app restarts. Ten full
+ *   buckets is the ceiling: reachable only by ten busy callers at once, and worth a few megabytes.
+ *   §12/5 worries about the size of a recorded body and names `worker-read`'s tail of output and
+ *   `inbox`'s fifty messages — **neither can occur**, because both are reads and §3's rule leaves
+ *   them no receipt at all. The one acting command that carries bulk is `check`, which returns a
+ *   delivered batch, so the count really is the lever the design says it is.
+ */
+export const RECEIPTS_PER_CALLER = 200
+export const RECEIPT_TTL_MS = 60 * 60 * 1000
+export const RECEIPTS_TOTAL = 2000
+
+/**
+ * Which of the receipts held right now fall off, given the caps above. **Pure, and separate from the
+ * map it decides about**, so the policy can be read and tested as a policy: reaching the 2000 ceiling
+ * through the command layer costs two thousand commits and two thousand whole-file writes, which is a
+ * test that measures the store rather than the rule.
+ *
+ * `entries` is oldest first, the order the map holds them in, and the key is `${sessionId}\u0000${id}`
+ * — so the caller is everything before the first NUL, which is also why an id may not contain one.
+ *
+ * **A claim is never evicted, however full the store is.** It is not a record of a call, it is the
+ * call; evicting one would let the retry it is refusing through, which is the fault the whole
+ * mechanism exists to prevent. Claims do not count towards either cap either — a caller holding
+ * several long polls must not push its own answered receipts out with them.
+ */
+export function receiptsToEvict(
+  entries: readonly { key: string; pending: boolean; at: string }[],
+  nowMs: number
+): string[] {
+  const gone: string[] = []
+  const perCaller = new Map<string, number>()
+  let kept = 0
+  // Newest first, so the caps keep the newest and the oldest fall off the end.
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]
+    if (e.pending) continue
+    const caller = e.key.slice(0, e.key.indexOf('\u0000'))
+    const mine = perCaller.get(caller) ?? 0
+    // An unparseable clock reads as "not expired" rather than as "expired", which is the safe way
+    // round: a receipt kept too long costs memory, and one dropped too early costs a caller its answer.
+    if (mine >= RECEIPTS_PER_CALLER || kept >= RECEIPTS_TOTAL || nowMs - Date.parse(e.at) > RECEIPT_TTL_MS) {
+      gone.push(e.key)
+      continue
+    }
+    perCaller.set(caller, mine + 1)
+    kept++
+  }
+  return gone
+}
+
 /** A reply body as a bag of fields, for the two predicates below. Anything that is not an object
  *  reads as empty, which makes every question asked of it answer "no". */
 const bodyOf = (reply: Reply): Record<string, unknown> =>
@@ -503,6 +570,24 @@ export function createHostOrch(a: {
   }
 
   /**
+   * Writes one completed receipt down and then sweeps — **lazily, on the write that made the store
+   * bigger, and never on a timer or at startup**.
+   *
+   * **A claim is never swept, however full the store is.** It is not a record of a call, it is the
+   * call: evicting one would let the retry it is refusing through, which is the fault this whole
+   * mechanism exists to prevent. Claims are bounded by how many calls are in flight, and every one
+   * of them ends (`call` settles on every path, including its catch).
+   *
+   * **Nothing here can refuse anything.** The sweep runs after the command has already answered, and
+   * no caller is told about it — see the caps above for why that is the rule and not an oversight.
+   */
+  const remember = (key: string, entry: { state: 'completed'; cmd: string; at: string; reply: Reply }): void => {
+    receipts.set(key, entry)
+    const held = [...receipts].map(([k, v]) => ({ key: k, pending: v.state === 'pending', at: v.at }))
+    for (const gone of receiptsToEvict(held, Date.parse(a.now()))) receipts.delete(gone)
+  }
+
+  /**
    * The end of a claimed call. **The claim is discarded, not completed, when the command turns out
    * not to have acted** (§7): a keyed read that left a claim behind would answer `pending` forever
    * about a command that finished, and a keyed rejection that left a receipt would hand the same
@@ -513,8 +598,11 @@ export function createHostOrch(a: {
    * answer it lost.
    */
   const settleRequest = (key: string, cmd: string, marks: CallMarks, reply: Reply): Reply => {
-    if (marks.committed || marks.acted) receipts.set(key, { state: 'completed', cmd, at: a.now(), reply })
-    else receipts.delete(key)
+    // Deleted first even when a receipt follows: `Map.set` leaves an existing key where it was, and
+    // the sweep reads insertion order as "how recently this was written". A receipt that kept its
+    // claim's place would be evicted ahead of older ones that were merely claimed later.
+    receipts.delete(key)
+    if (marks.committed || marks.acted) remember(key, { state: 'completed', cmd, at: a.now(), reply })
     return reply
   }
 
@@ -535,7 +623,8 @@ export function createHostOrch(a: {
    * the record.
    */
   const settleObserved = (key: string, cmd: string, recorded: Reply, reply: Reply): Reply => {
-    receipts.set(key, { state: 'completed', cmd, at: a.now(), reply: reply.status < 400 ? reply : recorded })
+    receipts.delete(key)
+    remember(key, { state: 'completed', cmd, at: a.now(), reply: reply.status < 400 ? reply : recorded })
     return reply
   }
 
