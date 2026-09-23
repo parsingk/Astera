@@ -263,6 +263,35 @@ export function liftRequestId(
   return { request: given, args: rest }
 }
 
+/**
+ * A receipt's recorded response, filtered as the command that produced it would have been filtered.
+ *
+ * **Why this keys on the *recorded* command while the line that calls it keys on `parsed.cmd`.**
+ * Everywhere else in this program the two are the same command: a caller retries `jobs get`, the
+ * reply is a Job, and `jobs-get`'s allowlist is the right one. `requests show` is the one place they
+ * come apart — what it carries is some other command's answer, and `SHAPE` has no entry for
+ * `requests-show`, so `publicFor` would hand back that answer untouched. Fetching a Job through a
+ * receipt would then print the fields `jobs get` hides. `cliPublic.ts` exists to be one boundary and
+ * that would make it two. The receipt names the command it answered (`cmd`, which the Host records
+ * beside the reply), so the honest key is what the body *is* rather than what was typed to fetch it.
+ *
+ * **A command with no `SHAPE` entry passes through, and that is right rather than a gap.** The
+ * session-only commands were never filtered in the first place, which is `publicFor`'s own stated
+ * rule: shaping them "가리려 들면 가이드가 시키는 것을 못 읽게 만들 뿐이다". Turning a missing entry
+ * into a refusal here would make a replay show less than the original command printed.
+ *
+ * Only a `completed` receipt has a `response` at all; `pending` and `absent` pass straight through,
+ * as does anything that is not the shape this expects.
+ */
+export function shownReceipt(body: unknown): unknown {
+  if (body === null || typeof body !== 'object') return body
+  const held = body as { cmd?: unknown; response?: unknown }
+  const response = held.response
+  if (typeof held.cmd !== 'string' || response === null || typeof response !== 'object') return body
+  const recorded = response as { body?: unknown }
+  return { ...held, response: { ...recorded, body: publicFor(held.cmd, recorded.body) } }
+}
+
 /** 한 명령을 Host 에 묻고 그 답을 기다린다 (host control plane design §5).
  *
  *  **닿지 못한 것과 답을 못 받은 것을 가른다.** 연결이 답 전에 끊기면 그 Host 는 사라진 것이므로
@@ -761,9 +790,14 @@ export async function main(): Promise<void> {
             app: (reply.body as { version?: string | null } | null)?.version ?? null,
             protocol: (reply.body as { protocol?: number } | null)?.protocol ?? CLI_PROTOCOL
           }
-        : // 공개 읽기 명령은 허용된 칸만 내보낸다(설계 §11). 명령 층이 아니라 여기서 가리는 이유는
-          // 봉투와 같다 — 화면도 같은 명령 층을 쓰고, 그쪽은 온전한 개체가 필요하다.
-          publicFor(parsed.cmd, reply.body)
+        : // **`requests show` 만 친 명령이 아니라 실려 온 명령으로 가린다**(`shownReceipt`). 그것이
+          // 싣고 오는 것은 다른 명령의 답이고, 여기서 `parsed.cmd` 로 가리면 `requests-show` 는
+          // 표에 없으므로 아무것도 안 가린 채 나간다 — 영수증이 가림막을 도는 길이 된다.
+          parsed.cmd === 'requests-show'
+          ? shownReceipt(reply.body)
+          : // 공개 읽기 명령은 허용된 칸만 내보낸다(설계 §11). 명령 층이 아니라 여기서 가리는 이유는
+            // 봉투와 같다 — 화면도 같은 명령 층을 쓰고, 그쪽은 온전한 개체가 필요하다.
+            publicFor(parsed.cmd, reply.body)
     // **시한이 지난 `ask` 는 다시 기다리는 법을 싣고 나간다**(cliOutput 의 askTimeoutBody). 200 이고
     // 0 으로 끝나는 것은 그대로다 — 시한을 넘긴 것은 실패가 아니라 정보이고, 열한 번째 종료 코드를
     // 만들 일도 아니다. 답이 온 `ask` 와 그 밖의 명령은 이 함수를 그대로 지나간다.

@@ -12,6 +12,7 @@ import {
   clientTimeoutMs,
   argsForCall,
   liftRequestId,
+  shownReceipt,
   callHost,
   connectFailureEnd,
   SILENT_HOST_CODE,
@@ -135,6 +136,56 @@ describe('argsForCall — run-create의 --cwd 기본값 (task-13a)', () => {
   })
   it('run-create가 아닌 명령에는 CLI의 cwd를 채우지 않는다', () => {
     expect(argsForCall({ cmd: 'tasks-list', args: {}, cwd: 'D:/my-cwd' })).toEqual({})
+  })
+})
+
+// **영수증이 가림막을 도는 길이 되면 안 된다.** `publicFor` 는 친 명령으로 가리는데(run.ts),
+// `requests show` 가 싣고 오는 것은 **다른 명령의 답**이고 `requests-show` 는 그 표에 없다 — 그대로
+// 두면 공개 표면이 가리는 칸이 영수증을 통해 그대로 나간다. cliPublic 이 한 경계이려면 여기서
+// 실려 온 명령으로 가려야 한다.
+describe('shownReceipt — 영수증 속 답은 그 답을 낸 명령으로 가린다', () => {
+  const receipt = (cmd: string, body: unknown): Record<string, unknown> => ({
+    id: 'rq-1',
+    state: 'completed',
+    cmd,
+    at: 'T',
+    hostStartedAt: 'T0',
+    interpretation: 'Request rq-1 already took effect …',
+    response: { status: 200, body }
+  })
+
+  it('공개 명령의 답은 그 명령의 허용 목록만 남는다', () => {
+    const shown = shownReceipt(
+      receipt('tasks-list', [
+        { id: 'tsk_1', title: 'work', status: 'done', policySnapshot: { secret: true }, checkHistory: [1] }
+      ])
+    ) as { response: { body: Record<string, unknown>[] } }
+    expect(shown.response.body[0]).toEqual({ id: 'tsk_1', title: 'work', status: 'done' })
+  })
+
+  it('영수증 자신의 칸과 기록된 상태는 그대로다 — 가리는 것은 실려 온 본문뿐이다', () => {
+    const shown = shownReceipt(receipt('tasks-list', [{ id: 'tsk_1', policySnapshot: {} }])) as Record<
+      string,
+      unknown
+    >
+    expect(shown.id).toBe('rq-1')
+    expect(shown.state).toBe('completed')
+    expect(shown.cmd).toBe('tasks-list')
+    expect((shown.response as { status: number }).status).toBe(200)
+  })
+
+  // 세션 전용 명령은 애초에 가려진 적이 없다(cliPublic 의 SHAPE). 표에 없는 것을 여기서 거절로
+  // 바꾸면 재생이 원래 명령보다 적게 보여 주게 된다.
+  it('표에 없는 명령의 답은 통째로 지나간다', () => {
+    const body = { dispatchId: 'dsp_1', sessionId: 'ses_1', cwd: 'D:/x', specPath: 'D:/x/spec.md' }
+    const shown = shownReceipt(receipt('worker-start', body)) as { response: { body: unknown } }
+    expect(shown.response.body).toEqual(body)
+  })
+
+  it('response 가 없는 영수증(pending·absent)은 그대로 돌려준다', () => {
+    const absent = { id: 'rq-1', state: 'absent', hostStartedAt: 'T0', interpretation: '…' }
+    expect(shownReceipt(absent)).toBe(absent)
+    expect(shownReceipt(null)).toBe(null)
   })
 })
 
