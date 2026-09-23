@@ -8,16 +8,31 @@ export function agentPermissionModeOf(value: unknown): AgentPermissionMode {
   return value === 'manual' ? 'manual' : 'yolo'
 }
 
-/** Read only. No file, an unreadable file or an unparseable file all answer 'yolo' — the store's
- *  default and what it recovers to (appSettingsStore), and D12's choice: 'manual' would stop a
- *  headless worker at its first command with nobody to answer.
+/**
+ * Read only; not AppSettingsStore.load, which copies a file it cannot parse to `.bak`, and the app is
+ * the file's only writer.
  *
- *  Not AppSettingsStore.load: on a file it cannot parse, load copies it to `.bak`, and the app is the
- *  file's only writer. */
+ * - **Missing file: 'yolo'**, the store's default and D12's choice for a profile that has never saved
+ *   a setting: 'manual' would stop a headless worker at its first command with nobody to answer.
+ * - **A valid file** narrows the field the way `load` does: only 'manual' is manual.
+ * - **Unreadable, or not a JSON object: it throws** with a message that says what to do. It does not
+ *   answer 'yolo', because the file may have said 'manual', and answering the bypass would start the
+ *   Host's workers with permissions off. The caller refuses the spawn. The same rule
+ *   readSkillSettings (main/appSettingsStore.ts) and accountsFile.ts apply.
+ */
 export async function readAgentPermissionMode(filePath: string): Promise<AgentPermissionMode> {
+  let text: string
   try {
-    return agentPermissionModeOf(settingsObjectOf(await fs.readFile(filePath, 'utf8')).agentPermissionMode)
-  } catch {
-    return 'yolo'
+    text = await fs.readFile(filePath, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'yolo'
+    throw new Error(`app-settings.json could not be read (${String(err)}); open Astera to repair it`)
   }
+  let parsed: Record<string, unknown>
+  try {
+    parsed = settingsObjectOf(text)
+  } catch {
+    throw new Error('app-settings.json is not a valid settings file; open Astera to repair it')
+  }
+  return agentPermissionModeOf(parsed.agentPermissionMode)
 }
