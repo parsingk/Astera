@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { spawn } from 'node:child_process'
 import type { Account } from '../core/types'
 import { StatusLineManager } from './statusline'
 
@@ -118,6 +119,48 @@ describe('StatusLineManager 훅 주입', () => {
       expect(settings.hooks.Stop[0].hooks[0].async).toBeUndefined()
     }
   )
+
+  /** Runs the capture script the way Claude Code does: payload on stdin, ASTERA_HOOK_OUT set. The
+   *  payload is written only after `stdinDelayMs`, so a stamp taken before stdin is read is earlier
+   *  than the write. Returns when it was written and the file's lines. */
+  const capture = async (payload: string, stdinDelayMs = 0): Promise<{ writtenAt: number; lines: string[] }> => {
+    const out = path.join(dir, 'capture-out.jsonl')
+    const child = spawn(process.execPath, [path.join(dir, 'astera-hook-capture.cjs')], {
+      env: { ...process.env, ASTERA_HOOK_OUT: out },
+      stdio: ['pipe', 'ignore', 'ignore']
+    })
+    const closed = new Promise((r) => child.on('close', r))
+    await new Promise((r) => child.on('spawn', r))
+    await new Promise((r) => setTimeout(r, stdinDelayMs))
+    const writtenAt = Date.now()
+    child.stdin.end(payload)
+    await closed
+    return { writtenAt, lines: (await fs.readFile(out, 'utf8')).split('\n').filter((l) => l !== '') }
+  }
+
+  // UserPromptSubmit·StopFailure 는 async 라 캡처가 붙는 순서가 뒤집힐 수 있다. Claude Code 는 훅을
+  // 이벤트 순서대로 띄우니, 캡처가 시작한 시각이 이벤트 순서다 — stdin 을 읽기 전에 잰다.
+  it('캡처는 stdin 을 읽기 전에 잰 시각을 astera_at 으로 싣고, 나머지는 그대로 둔다', async () => {
+    const { writtenAt, lines } = await capture('{"hook_event_name":"Stop","session_id":"s",\n"n":12345678901234567890}', 300)
+    expect(lines).toHaveLength(1)
+    const p = JSON.parse(lines[0])
+    expect(typeof p.astera_at).toBe('number')
+    expect(p.astera_at).toBeLessThan(writtenAt)
+    expect(p.hook_event_name).toBe('Stop')
+    expect(p.session_id).toBe('s')
+    // 다시 직렬화하지 않는다 — 큰 정수도 적힌 그대로다.
+    expect(lines[0]).toContain('"n":12345678901234567890')
+  })
+
+  it('객체가 아닌 페이로드는 예전처럼 한 줄로 그대로 붙는다', async () => {
+    const { lines } = await capture('not json\nsecond')
+    expect(lines).toEqual(['not json second'])
+  })
+
+  it('빈 객체에도 시각을 싣는다', async () => {
+    const { lines } = await capture('{ }')
+    expect(Object.keys(JSON.parse(lines[0]))).toEqual(['astera_at'])
+  })
 })
 
 // What the app reads a session's transcript path out of. The folder used to be wiped at init, on the

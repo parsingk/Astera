@@ -29,7 +29,7 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import type { HostSession, SessionScreen } from '../core/orchestration/command'
-import { hookEventsFileIn, sessionStateOf, type SessionState } from '../core/hooks/sessionState'
+import { hookEventsFileIn, latestEventLine, sessionStateOf, type SessionState } from '../core/hooks/sessionState'
 import type { PtyEntry } from '../core/host/protocol'
 import type { Account } from '../core/types'
 import { ptyDriver } from '../core/sessions/sessionDriver'
@@ -77,18 +77,22 @@ const rowOf = (e: PtyEntry, kind: HostSession['kind'], state: SessionState): Hos
 }
 
 /** How much of the end of a file the first read takes. Most events are a few hundred bytes; a Write's
- *  PreToolUse carries the file it writes, so the window doubles until it holds the whole last line. */
+ *  PreToolUse carries the file it writes, so the window doubles until it holds the whole last line.
+ *  The whole lines in the window are the ones the stamp can reorder: two captures land out of order
+ *  within a fraction of a second, so the lines that can swap are the last few, well inside it. */
 const TAIL_WINDOW = 16 * 1024
 
 /**
- * The last complete line of a hook event file and when it landed, or null when there is no file,
- * nothing in it, or a last line still being written. The capture appends each payload and its
- * newline in one write, so a file that does not end in a newline has an event arriving right now —
- * the line before it is no longer the latest, and there is no answer to give yet.
+ * The line of the event that happened last in a hook event file, and when the file was last written;
+ * null when there is no file, nothing in it, or a last line still being written. The capture appends
+ * each payload and its newline in one write, so a file that does not end in a newline has an event
+ * arriving right now — the lines before it are no longer the latest, and there is no answer to give
+ * yet. Which of the window's whole lines happened last is core's rule (`latestEventLine`): the
+ * async hooks can land out of order, and the capture's stamp says which came first.
  *
  * Never rejects: a file that cannot be read is a session with no signal, not a failed `list`.
  */
-async function lastEventLine(file: string): Promise<{ line: string; at: number } | null> {
+async function latestEvent(file: string): Promise<{ line: string; at: number } | null> {
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined
   try {
     handle = await fs.open(file, 'r')
@@ -100,9 +104,13 @@ async function lastEventLine(file: string): Promise<{ line: string; at: number }
       if (buf.length === 0 || buf[buf.length - 1] !== 0x0a) return null
       // A negative offset would count from the end and find the last newline again.
       const before = buf.length < 2 ? -1 : buf.lastIndexOf(0x0a, buf.length - 2)
-      // The line starts inside the window, or the window is the whole file.
-      if (before !== -1 || start === 0)
-        return { line: buf.subarray(before + 1, buf.length - 1).toString('utf8'), at: mtimeMs }
+      // The last line starts inside the window, or the window is the whole file. The window's first
+      // line is cut off unless the window starts at the top of the file.
+      if (before !== -1 || start === 0) {
+        const lines = buf.subarray(0, buf.length - 1).toString('utf8').split('\n')
+        if (start !== 0) lines.shift()
+        return { line: latestEventLine(lines) ?? '', at: mtimeMs }
+      }
     }
   } catch {
     return null
@@ -207,7 +215,7 @@ export function registrySessions(a: {
    *  is a line process whose status is in its protocol, read by the app's adapter, not in a file. */
   const stateOf = async (e: PtyEntry): Promise<SessionState> => {
     if (!e.alive) return 'unknown'
-    const last = await lastEventLine(hookEventsFileIn(a.hookEventsDir, e.meta!.id))
+    const last = await latestEvent(hookEventsFileIn(a.hookEventsDir, e.meta!.id))
     return sessionStateOf({ lastLine: last?.line ?? null, eventAt: last?.at ?? null, lastInputAt: a.ptys.lastWrite(e.id) })
   }
 

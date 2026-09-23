@@ -9,9 +9,10 @@
 // Same rules as slack.ts, deliberately: the latest PreToolUse wins (Claude Code batches calls, and the
 // last one issued is the one whose prompt is up); the PostToolUse with the same id ends it; Stop (or
 // StopFailure, the turn end of an API error) ends it whatever the id (a declined question runs no tool,
-// so its PostToolUse can be missed); a session's exit
+// so its PostToolUse can be missed), unless it happened before the latest UserPromptSubmit; a session's exit
 // forgets it. Fed by the hook fan-out (hookFanOut.ts), read over IPC (ipc.ts: `conversation.pendingPrompt`
 // and the `conversation:pendingPrompt` push).
+import { happenedBefore, hookEventAt } from '../core/hooks/eventTime'
 import type { PendingToolPrompt } from '../core/types'
 
 export interface PendingPromptState {
@@ -27,6 +28,8 @@ export interface PendingPromptState {
 
 export function createPendingPromptState(now: () => number = Date.now): PendingPromptState {
   const sessions = new Map<string, PendingToolPrompt>()
+  /** When each session's latest UserPromptSubmit happened (its capture's stamp). */
+  const promptAt = new Map<string, number>()
   const listeners = new Set<(sessionId: string, prompt: PendingToolPrompt | null) => void>()
 
   function set(sessionId: string, next: PendingToolPrompt | null): void {
@@ -49,14 +52,20 @@ export function createPendingPromptState(now: () => number = Date.now): PendingP
       } else if (p.hook_event_name === 'PostToolUse') {
         const current = sessions.get(sessionId)
         if (current !== undefined && current.toolUseId === p.tool_use_id) set(sessionId, null)
+      } else if (p.hook_event_name === 'UserPromptSubmit') {
+        const at = hookEventAt(p)
+        if (at !== null && !happenedBefore(at, promptAt.get(sessionId) ?? null)) promptAt.set(sessionId, at)
       } else if (p.hook_event_name === 'Stop' || p.hook_event_name === 'StopFailure') {
         // StopFailure fires instead of Stop when an API error ends the turn; no question of it is on
         // screen after that either. It is captured async and can land after the next turn's
-        // PreToolUse; see attention.ts for that window and why it is accepted.
+        // PreToolUse: a turn end that happened before the latest prompt is the previous turn's and
+        // leaves the new question up (the rule and its stamp: attention.ts, core/hooks/eventTime.ts).
+        if (happenedBefore(hookEventAt(p), promptAt.get(sessionId) ?? null)) return
         set(sessionId, null)
       }
     },
     forget(sessionId) {
+      promptAt.delete(sessionId)
       set(sessionId, null)
     },
     get(sessionId) {

@@ -28,6 +28,7 @@ import {
 import type { SlackTransportConfig } from '../core/slack/ready'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { sessionKindOf } from '../core/sessions/kind'
+import { happenedBefore, hookEventAt } from '../core/hooks/eventTime'
 import { t, type Lang } from '../core/i18n'
 import {
   BotTransport,
@@ -108,6 +109,9 @@ interface SlackRecord {
   /** When the non-rolling limit scanner last fired (handleData), whether or not its "⛔" survived the
    *  send dedup. sendStopFailure reads it as the evidence that this turn's limit was already announced. */
   limitSeenAt?: number
+  /** When the latest UserPromptSubmit seen for this session happened (its capture's stamp). A turn end
+   *  older than this is the previous turn's, and does not clear `pendingTool`. */
+  promptAt?: number
   /** The promise for posting the root message. register starts it and send awaits it — without waiting for
    *  the ts, notifications that go out first leak outside the thread. Resolves to null on failure. */
   thread: Promise<string | null> | null
@@ -414,6 +418,8 @@ export class SlackNotifier {
       exitTimer: null,
       thread: replaced?.thread ?? null,
       pendingTool: replaced?.pendingTool ?? null,
+      // Carried with pendingTool, for the same reason: it decides whether a late turn end clears it.
+      promptAt: replaced?.promptAt,
       // A terminal session has no protocol to hold — null, as it always was. A chat session starts (or
       // carries across a reconnect's) its own state; the reconnect case mirrors thread and lastSent
       // above, for the same reason: the session did not restart, so what onChatEvent already knows still
@@ -520,7 +526,9 @@ export class SlackNotifier {
 
   /** The HookEventWatcher callback. Stop → turn complete (with an excerpt), StopFailure → turn failed
    *  (with the error), Notification → input needed, PreToolUse → capture the pending question,
-   *  PostToolUse → that call ran, so drop the capture. Other events are ignored. */
+   *  PostToolUse → that call ran, so drop the capture, UserPromptSubmit → remember when it happened, so
+   *  a turn end that lands later but is older does not drop the new turn's capture. Other events are
+   *  ignored. */
   onHookEvent(sessionId: string, payload: unknown): void {
     const record = this.records.get(sessionId)
     if (!record || typeof payload !== 'object' || payload === null) return
@@ -534,16 +542,22 @@ export class SlackNotifier {
       error?: unknown // StopFailure's error kind: rate_limit, overloaded, authentication_failed, …
     } & NotificationPayload
     const transcriptPath = typeof p.transcript_path === 'string' ? p.transcript_path : null
-    if (p.hook_event_name === 'Stop') {
+    // A turn end that happened before the latest prompt is the previous turn's: the async hooks can
+    // land out of order (attention.ts, core/hooks/eventTime.ts). It still says what it says about
+    // that turn, so its line is posted, but the call waiting now is the new turn's and stays.
+    const endsCurrentTurn = !happenedBefore(hookEventAt(p), record.promptAt ?? null)
+    if (p.hook_event_name === 'UserPromptSubmit') {
+      const at = hookEventAt(p)
+      if (at !== null && !happenedBefore(at, record.promptAt ?? null)) record.promptAt = at
+    } else if (p.hook_event_name === 'Stop') {
       // If the turn has ended there is no call waiting for an answer either. Even the cases the id
       // cross-check misses are cleaned up here for certain.
-      record.pendingTool = null
+      if (endsCurrentTurn) record.pendingTool = null
       void this.sendStopSummary(record, transcriptPath, p.last_assistant_message)
     } else if (p.hook_event_name === 'StopFailure') {
       // Claude Code fires this *instead of* Stop when an API error ends the turn. The turn is over,
-      // so the capture goes exactly as on Stop. It is captured async and can land after the next
-      // turn's PreToolUse; see attention.ts for that window and why it is accepted.
-      record.pendingTool = null
+      // so the capture goes exactly as on Stop, unless this landed after the next turn began.
+      if (endsCurrentTurn) record.pendingTool = null
       this.sendStopFailure(record, p.error, p.last_assistant_message)
     } else if (p.hook_event_name === 'Notification') {
       void this.sendNotification(record, p, transcriptPath)

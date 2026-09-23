@@ -282,9 +282,12 @@ configurations are not agent sessions, and are not listed.
 **`state` says whether a session is `working`, `waiting` or `unknown`.** The Host reads it from the
 hook event file that the session's own Claude Code hooks append to, `hook-events/<sessionId>.jsonl`
 in the profile. The hooks run inside the agent, so the file keeps growing while the app is closed.
-The Host only reads the file. The last event in the file decides:
+The Host only reads the file. The event that happened last decides. Each line carries the time its
+hook started (`astera_at`), and the Host goes by that time rather than by where the line sits,
+because two hooks can finish writing in either order (see below). A line with no time, written by an
+older Astera, and two lines with the same time are taken in the order they were written.
 
-| Last event | `state` |
+| Latest event | `state` |
 |---|---|
 | a prompt went to the model (`UserPromptSubmit`) | `working` |
 | a tool call started or returned (`PreToolUse`, `PostToolUse`) | `working` |
@@ -323,9 +326,12 @@ Where the hooks cannot see, `state` can lag or be wrong:
 - A prompt queued while a turn is ending can read `waiting` for a moment, until its own
   `UserPromptSubmit` lands.
 - `UserPromptSubmit` and `StopFailure` are written by two separate background processes, so their
-  order in the file is not guaranteed. A turn that fails almost as soon as it is submitted can
-  leave `UserPromptSubmit` last, and the session reads `working` until the next event or until you
-  type.
+  order in the file is not guaranteed: a turn that fails almost as soon as it is submitted can write
+  its `StopFailure` first, and a prompt sent right after a failed turn can write its
+  `UserPromptSubmit` before that turn's `StopFailure`. The time on each line puts them back in order.
+  Two events that start within a few milliseconds of each other can still come out the wrong way
+  round, and then the session reads as if the earlier one came last, until the next event or until
+  you type.
 - Hooks of your own in the account's settings run alongside Astera's. One that blocks a prompt leaves
   `working` standing until you type, and a `Stop` hook that makes Claude carry on leaves `waiting`
   standing while it works.

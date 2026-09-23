@@ -3,6 +3,7 @@ import {
   isNonPromptNotification,
   type NotificationPayload
 } from '../core/hooks/notification'
+import { happenedBefore, hookEventAt } from '../core/hooks/eventTime'
 import type { Attention } from '../core/types'
 
 /** Where a session stands right now, from the app's own point of view rather than the transcript's —
@@ -42,6 +43,9 @@ export interface AttentionState {
 interface SessionAttention {
   value: Attention
   outstanding: Set<string>
+  /** When the latest UserPromptSubmit seen for this session happened (its capture's stamp), or null
+   *  before one with a stamp. A turn end older than this belongs to the turn before it. */
+  promptAt: number | null
 }
 
 export function createAttentionState(): AttentionState {
@@ -51,7 +55,7 @@ export function createAttentionState(): AttentionState {
   function recordFor(sessionId: string): SessionAttention {
     let record = sessions.get(sessionId)
     if (!record) {
-      record = { value: 'idle', outstanding: new Set() }
+      record = { value: 'idle', outstanding: new Set(), promptAt: null }
       sessions.set(sessionId, record)
     }
     return record
@@ -68,7 +72,14 @@ export function createAttentionState(): AttentionState {
       if (typeof payload !== 'object' || payload === null) return
       const p = payload as { hook_event_name?: unknown; tool_use_id?: unknown } & NotificationPayload
 
-      if (p.hook_event_name === 'PreToolUse') {
+      if (p.hook_event_name === 'UserPromptSubmit') {
+        // A turn starting is no reason to change the value. What is kept is when it happened, so a
+        // turn end that lands after it but happened before it is known for the previous turn's.
+        const at = hookEventAt(p)
+        if (at === null) return
+        const record = recordFor(sessionId)
+        if (!happenedBefore(at, record.promptAt)) record.promptAt = at
+      } else if (p.hook_event_name === 'PreToolUse') {
         const record = recordFor(sessionId)
         if (typeof p.tool_use_id === 'string') record.outstanding.add(p.tool_use_id)
         setValue(sessionId, record, 'working')
@@ -111,16 +122,22 @@ export function createAttentionState(): AttentionState {
         // API error (a limit, an auth failure, an overload) ends the turn. The turn is over either
         // way, and leaving the value standing would keep a `waiting` up with nobody waiting, so the
         // next real prompt would be no transition and the desktop notifier would miss it.
-        // **StopFailure is captured async (statusline.ts), so it can land late.** A prompt queued
-        // behind the failed turn starts at once; if that turn's synchronous PreToolUse is written
-        // before the StopFailure line (about 0.1 s through Git Bash), this branch ends the new turn
-        // early: idle while it works, and pendingPrompt and Slack drop its question capture. The
-        // payload carries no ordering key to tell a late turn end from a current one, so the narrow
-        // window is accepted rather than guessed around. Stop is synchronous and has no such race.
+        // **StopFailure is captured async (statusline.ts), and so is UserPromptSubmit, so they can
+        // land out of order.** A prompt sent right after the failed turn (typed, or queued and sent
+        // at once) can have its UserPromptSubmit land first, and the StopFailure after the new
+        // turn's first PreToolUse; taken as it lands, it would end the new turn early: idle while it
+        // works, and pendingPrompt and Slack would drop its question capture. The capture stamps
+        // when it started (core/hooks/eventTime.ts), so a turn end that happened before the latest
+        // prompt is the previous turn's and is passed by here. Lines without the stamp, and a tie,
+        // keep the order they landed in. Stop is synchronous and cannot land late, but the same
+        // rule holds for it. What a late turn end leaves behind is only what the previous turn left:
+        // the rare call that never got its PostToolUse (a denied one) stays in `outstanding` until
+        // the new turn's own end, as it did before StopFailure was read at all.
         // A stray Stop for a session never seen is already idle by default; only touch an existing
         // record, for the same reason as PostToolUse above.
         const record = sessions.get(sessionId)
         if (!record) return
+        if (happenedBefore(hookEventAt(p), record.promptAt)) return
         record.outstanding.clear()
         setValue(sessionId, record, 'idle')
       }

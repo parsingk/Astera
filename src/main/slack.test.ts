@@ -145,6 +145,53 @@ describe('SlackNotifier 훅 이벤트', () => {
     expect(h.notifier.pendingChoiceShape('s-1')).toBeNull()
   })
 
+  // **붙은 순서가 아니라 일어난 순서.** StopFailure 와 UserPromptSubmit 은 async 로 캡처돼, 실패한 턴
+  // 바로 뒤에 보낸 프롬프트의 UserPromptSubmit 이 먼저 붙고 이전 턴의 StopFailure 가 새 턴의 질문 뒤에
+  // 붙을 수 있다. 캡처가 시작 시각(`astera_at`)을 싣는다 — 가장 늦은 프롬프트보다 이른 턴 끝은 이전
+  // 턴의 것이라 새 턴의 질문 캡처를 지우지 않는다. 이전 턴이 실패했다는 알림은 사실이라 그대로 나간다.
+  const ask = (id: string, at?: number): Record<string, unknown> => ({
+    hook_event_name: 'PreToolUse',
+    tool_name: 'AskUserQuestion',
+    tool_use_id: id,
+    tool_input: { questions: [{ question: '어느 쪽?', options: [{ label: 'A' }, { label: 'B' }] }] },
+    ...(at === undefined ? {} : { astera_at: at })
+  })
+  it('가장 늦은 프롬프트보다 이른 StopFailure 는 새 턴의 질문 캡처를 지우지 않고, 실패는 알린다', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'UserPromptSubmit', prompt: '다시', astera_at: 1_020 })
+    h.notifier.onHookEvent('s-1', ask('toolu_2', 1_500))
+    h.notifier.onHookEvent('s-1', { ...stopFailure('server_error', 'API Error: 500'), astera_at: 1_000 })
+    await flush()
+    expect(h.notifier.pendingChoiceShape('s-1')).not.toBeNull()
+    expect(h.sent).toEqual(['[myproj · work1] ⚠️ 턴 실패 — API Error: 500'])
+  })
+
+  // 시각이 없는 줄(예전 캡처)과 같은 밀리초는 붙은 순서대로 — 턴 끝이 지운다.
+  it.each([
+    ['시각 없음', {}, {}],
+    ['같은 밀리초', { astera_at: 1_000 }, { astera_at: 1_000 }]
+  ])('%s 이면 StopFailure 가 질문 캡처를 지운다', async (_label, promptAt, endAt) => {
+    const h = setup()
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'UserPromptSubmit', prompt: '해 줘', ...promptAt })
+    h.notifier.onHookEvent('s-1', ask('toolu_1'))
+    h.notifier.onHookEvent('s-1', { ...stopFailure('server_error', 'API Error: 500'), ...endAt })
+    expect(h.notifier.pendingChoiceShape('s-1')).toBeNull()
+  })
+
+  // Host 재연결로 같은 id 에 다시 register 해도 세션은 재시작하지 않았다 — pendingTool 처럼 프롬프트
+  // 시각도 넘겨받는다. 안 넘기면 늦게 붙은 이전 턴의 StopFailure 가 새 질문 캡처를 지운다.
+  it('같은 id 로 다시 register 해도 가장 늦은 프롬프트 시각을 넘겨받는다', () => {
+    const h = setup()
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'UserPromptSubmit', prompt: '다시', astera_at: 1_020 })
+    h.notifier.onHookEvent('s-1', ask('toolu_2', 1_500))
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', { ...stopFailure('server_error', 'API Error: 500'), astera_at: 1_000 })
+    expect(h.notifier.pendingChoiceShape('s-1')).not.toBeNull()
+  })
+
   // **한도는 이미 알린다 — 두 번 알리지 않는다.** 롤링 체인은 transcript 의 같은 `error: rate_limit`
   // 항목을 읽어(core/rolling/claudeSignal.ts) onRollState 로 "⏸ 한도 도달" 을 보낸다. StopFailure 의
   // `error` 는 그 항목과 같은 메시지에서 온다.

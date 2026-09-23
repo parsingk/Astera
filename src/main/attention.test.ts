@@ -231,6 +231,46 @@ describe('createAttentionState — StopFailure', () => {
     expect(state.get('fresh')).toBe('idle')
     expect(seen).toEqual([])
   })
+
+  // StopFailure and UserPromptSubmit are captured async, so a prompt submitted right after a failed
+  // turn can have its UserPromptSubmit land first, and the old StopFailure after the new turn's first
+  // tool call. The capture stamps when it started (`astera_at`); a turn end that happened before the
+  // latest prompt belongs to the turn before it.
+  it.each(['StopFailure', 'Stop'])('a %s older than the latest prompt does not end the new turn', (name) => {
+    const state = createAttentionState()
+    state.onHookEvent('w', { hook_event_name: 'UserPromptSubmit', prompt: 'again', astera_at: 1_020 })
+    state.onHookEvent('w', { hook_event_name: 'PreToolUse', tool_use_id: 'call-1', astera_at: 1_500 })
+    state.onHookEvent('w', { ...(stopFailure() as object), hook_event_name: name, astera_at: 1_000 })
+    expect(state.get('w')).toBe('working')
+    // and the call it left outstanding is still the one that ends the value
+    state.onHookEvent('w', { hook_event_name: 'PostToolUse', tool_use_id: 'call-1', astera_at: 1_600 })
+    expect(state.get('w')).toBe('idle')
+  })
+
+  // An instant API error whose StopFailure lands before its own prompt: the prompt is older, so the
+  // turn end stands.
+  it('a StopFailure that landed before its own older prompt still ends the turn', () => {
+    const state = createAttentionState()
+    state.onHookEvent('w', { hook_event_name: 'PreToolUse', tool_use_id: 'call-1', astera_at: 900 })
+    state.onHookEvent('w', { ...(stopFailure() as object), astera_at: 1_005 })
+    state.onHookEvent('w', { hook_event_name: 'UserPromptSubmit', prompt: 'go', astera_at: 1_000 })
+    expect(state.get('w')).toBe('idle')
+    state.onHookEvent('w', { hook_event_name: 'PreToolUse', tool_use_id: 'call-2', astera_at: 2_000 })
+    state.onHookEvent('w', { ...(stopFailure() as object), astera_at: 2_500 })
+    expect(state.get('w')).toBe('idle')
+  })
+
+  // Lines from a capture that predates the stamp keep the append-order rule, and so does a tie.
+  it.each([
+    ['no stamp', {}, {}],
+    ['the same millisecond', { astera_at: 1_000 }, { astera_at: 1_000 }]
+  ])('with %s the turn end ends the turn, as it always did', (_label, promptAt, endAt) => {
+    const state = createAttentionState()
+    state.onHookEvent('w', { hook_event_name: 'UserPromptSubmit', prompt: 'go', ...promptAt })
+    state.onHookEvent('w', pre('call-1'))
+    state.onHookEvent('w', { ...(stopFailure() as object), ...endAt })
+    expect(state.get('w')).toBe('idle')
+  })
 })
 
 // The capture also records UserPromptSubmit, for `astera sessions list` (core/hooks/sessionState.ts).

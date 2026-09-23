@@ -74,6 +74,40 @@ describe('createPendingPromptState', () => {
     expect(changes).toEqual([null])
   })
 
+  // StopFailure is captured async (so is UserPromptSubmit): a prompt sent right after a failed turn
+  // can land its UserPromptSubmit first and the old StopFailure after the new turn's question. The
+  // capture stamps when it started (`astera_at`); a turn end older than the latest prompt belongs to
+  // the turn before, and the question on screen now stays drawn.
+  it.each(['StopFailure', 'Stop'])('a %s older than the latest prompt leaves the new question up', (name) => {
+    const state = createPendingPromptState()
+    state.onHookEvent('s1', { hook_event_name: 'UserPromptSubmit', prompt: 'again', astera_at: 1_020 })
+    state.onHookEvent('s1', { ...(pre('call-2') as object), astera_at: 1_500 })
+    state.onHookEvent('s1', { hook_event_name: name, error: 'rate_limit', astera_at: 1_000 })
+    expect(state.get('s1')?.toolUseId).toBe('call-2')
+  })
+
+  // Lines with no stamp (an older capture) and a tie keep the append-order rule.
+  it.each([
+    ['no stamp', {}, {}],
+    ['the same millisecond', { astera_at: 1_000 }, { astera_at: 1_000 }],
+    ['a turn end newer than the prompt', { astera_at: 1_000 }, { astera_at: 1_005 }]
+  ])('with %s the turn end clears it', (_label, promptAt, endAt) => {
+    const state = createPendingPromptState()
+    state.onHookEvent('s1', { hook_event_name: 'UserPromptSubmit', prompt: 'go', ...promptAt })
+    state.onHookEvent('s1', pre('call-1'))
+    state.onHookEvent('s1', { hook_event_name: 'StopFailure', error: 'server_error', ...endAt })
+    expect(state.get('s1')).toBeNull()
+  })
+
+  it('forget drops the prompt time with the capture', () => {
+    const state = createPendingPromptState()
+    state.onHookEvent('s1', { hook_event_name: 'UserPromptSubmit', prompt: 'go', astera_at: 2_000 })
+    state.forget('s1')
+    state.onHookEvent('s1', pre('call-1'))
+    state.onHookEvent('s1', { hook_event_name: 'StopFailure', error: 'server_error', astera_at: 1_000 })
+    expect(state.get('s1')).toBeNull()
+  })
+
   it('the latest PreToolUse wins', () => {
     const state = createPendingPromptState()
     state.onHookEvent('s1', pre('call-1', 'Bash', { command: 'ls' }))

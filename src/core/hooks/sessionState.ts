@@ -4,8 +4,10 @@
 // appending whether or not the app is there to drain it.
 //
 // **Only what an event means without guessing.** Claude Code runs the capture for six hooks
-// (statusline.ts `everySessionHooks`, and the wider tool pair in the Slack/rolling file). What the
-// last event says:
+// (statusline.ts `everySessionHooks`, and the wider tool pair in the Slack/rolling file). The event
+// that decides is the one that happened last, which is not always the last line: the async hooks
+// can land out of order, and the capture's stamp orders them (`latestEventLine`, eventTime.ts).
+// What that event says:
 // - UserPromptSubmit: a prompt is going to the model → `working`. Claude Code runs it only for input
 //   that queries the model: a local command (/clear, /model, /config) and bash mode return before
 //   the hook (checked in the 2.1.280 binary), so those leave no turn standing that never starts.
@@ -36,6 +38,7 @@
 // writes by itself (focus changes, replies to the TUI's queries) do not count (core/terminal/reports.ts).
 import path from 'node:path'
 import type { NotificationPayload } from './notification'
+import { happenedBefore, hookEventAt } from './eventTime'
 
 export type SessionState = 'working' | 'waiting' | 'unknown'
 
@@ -80,9 +83,31 @@ export function hookEventState(payload: unknown): 'working' | 'waiting' | null {
 }
 
 /**
- * The state from a session's last event line and two times: when that line landed (the file's
- * mtime — the capture writes one line per append, so the last line is the last write) and when the
- * pty was last typed into. `lastLine` null is "no file, or no complete last line".
+ * The line of the event that happened last, out of a file's last lines in the order they landed.
+ * Not simply the last line: the async hooks can land out of order, and the capture's stamp says
+ * which came first (core/hooks/eventTime.ts). A line replaces the current pick unless it is known to
+ * have happened before it, so lines without the stamp, lines that are not JSON, and a tie keep the
+ * append order. null for no lines.
+ */
+export function latestEventLine(lines: readonly string[]): string | null {
+  let pick: { line: string; at: number | null } | null = null
+  for (const line of lines) {
+    let at: number | null = null
+    try {
+      at = hookEventAt(JSON.parse(line))
+    } catch {
+      /* not JSON: no time, so it falls back to where it landed */
+    }
+    if (pick === null || !happenedBefore(at, pick.at)) pick = { line, at }
+  }
+  return pick?.line ?? null
+}
+
+/**
+ * The state from a session's latest event line (`latestEventLine`) and two times: when the file
+ * was last written (its mtime — the capture writes one line per append, so that is when the last
+ * line landed) and when the pty was last typed into. `lastLine` null is "no file, or no complete
+ * last line".
  *
  * Input at the same millisecond as the event counts as after it: the two cannot be ordered, and
  * `unknown` is the answer that cannot be wrong.

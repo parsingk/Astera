@@ -263,6 +263,30 @@ describe('registrySessions — state', () => {
     writeFileSync(path.join(dir, 'ses-1.jsonl'), '')
     expect(await stateOf('ses-1')).toBe('unknown')
   })
+
+  // UserPromptSubmit and StopFailure are async hooks, so their captures can land out of order. The
+  // capture stamps when it started (`astera_at`), and the event that happened last decides.
+  it('an instant API error whose StopFailure landed before its own prompt reads waiting', async () => {
+    const { event, stateOf } = withEvents()
+    event('ses-1', { hook_event_name: 'StopFailure', error: 'server_error', astera_at: 1_000_005 })
+    event('ses-1', { hook_event_name: 'UserPromptSubmit', prompt: 'go', astera_at: 1_000_000 })
+    expect(await stateOf('ses-1')).toBe('waiting')
+  })
+
+  it("a prompt whose UserPromptSubmit landed before the previous turn's StopFailure reads working", async () => {
+    const { event, stateOf } = withEvents()
+    event('ses-1', { hook_event_name: 'UserPromptSubmit', prompt: 'again', astera_at: 1_000_020 })
+    event('ses-1', { hook_event_name: 'StopFailure', error: 'rate_limit', astera_at: 1_000_000 })
+    expect(await stateOf('ses-1')).toBe('working')
+  })
+
+  // Lines from a capture that predates the stamp keep today's rule: the last line to land.
+  it('lines with no stamp are read in the order they landed', async () => {
+    const { event, stateOf } = withEvents()
+    event('ses-1', { hook_event_name: 'StopFailure', error: 'server_error' })
+    event('ses-1', { hook_event_name: 'UserPromptSubmit', prompt: 'go' })
+    expect(await stateOf('ses-1')).toBe('working')
+  })
 })
 
 /**

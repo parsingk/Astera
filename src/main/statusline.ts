@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Account } from '../core/types'
 import { hookEventsDirIn, hookEventsFileIn } from '../core/hooks/sessionState'
+import { HOOK_EVENT_AT } from '../core/hooks/eventTime'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -47,12 +48,25 @@ process.stdin.on('error', finish)
 // (Notification, Stop, StopFailure, UserPromptSubmit and the tool pair; for a Slack-notifying or
 // rolling session the tool pair matches more tools), and it appends the stdin payload (JSON) as one
 // line to ASTERA_HOOK_OUT (a per-session jsonl). With that env unset it does nothing.
-const HOOK_CAPTURE_SCRIPT = `const fs = require('fs')
+//
+// **It stamps when it started, as `astera_at` (HOOK_EVENT_AT), first in the object.** Taken as the first
+// statement, before stdin is read: two async hooks can land out of order, and Claude Code spawns
+// hooks in event order, so the start time is what orders them (core/hooks/eventTime.ts). Spliced in
+// as text rather than parsed and re-serialised, so the payload is written exactly as Claude sent it
+// (a number past 2^53 would not survive a round trip). A payload that is not an object is written as
+// before, with no stamp.
+const HOOK_CAPTURE_SCRIPT = `const at = Date.now()
+const fs = require('fs')
 const out = process.env.ASTERA_HOOK_OUT
 const chunks = []
 function finish() {
   if (out) {
-    try { fs.appendFileSync(out, Buffer.concat(chunks).toString('utf8').replace(/\\r?\\n/g, ' ') + '\\n') } catch {}
+    let line = Buffer.concat(chunks).toString('utf8').replace(/\\r?\\n/g, ' ').trim()
+    if (line.startsWith('{')) {
+      const rest = line.slice(1).trimStart()
+      line = '{"${HOOK_EVENT_AT}":' + at + (rest.startsWith('}') ? '' : ',') + rest
+    }
+    try { fs.appendFileSync(out, line + '\\n') } catch {}
   }
   process.exit(0)
 }
@@ -161,13 +175,15 @@ export class StatusLineManager {
       PostToolUse: [{ matcher: ASK_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }],
       // A turn starting and a turn ended by an API error (a limit, an auth failure) — StopFailure fires
       // *instead of* Stop then. The Host reads both for `astera sessions list`: it tells working from
-      // waiting off the last line (core/hooks/sessionState.ts). In the app, attention, pendingPrompt
-      // and Slack read StopFailure as a turn end, the same as Stop; nothing in the app reads
-      // UserPromptSubmit, and rolling reads neither. `async`, so Claude Code does not
+      // waiting off the event that happened last (core/hooks/sessionState.ts). In the app, attention,
+      // pendingPrompt and Slack read StopFailure as a turn end, the same as Stop, and read
+      // UserPromptSubmit only for when it happened, to pass by a turn end that is older than it;
+      // rolling reads neither. `async`, so Claude Code does not
       // wait on the capture's node process (about 0.1 s through Git Bash) before every prompt; it
       // honours that for both events (2.1.280 forces a hook synchronous only on its SessionStart,
-      // Setup and MessageDisplay passes and on calls from a cloud session). A session reads this file
-      // when it starts, so one already running keeps the hooks it started with.
+      // Setup and MessageDisplay passes and on calls from a cloud session). Being async, the two can
+      // land out of order, which is what the capture's stamp is for (core/hooks/eventTime.ts). A
+      // session reads this file when it starts, so one already running keeps the hooks it started with.
       UserPromptSubmit: [{ hooks: [{ type: 'command', command: hookCmd, async: true }] }],
       StopFailure: [{ hooks: [{ type: 'command', command: hookCmd, async: true }] }]
     }
