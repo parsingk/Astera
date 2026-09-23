@@ -225,8 +225,9 @@ Job's is a 4, and `nextSteps` is `astera run-configs list --job <jobId>` with th
 Job's folder: the ones the app's Run menu shows there, saved and detected. Nothing else about a
 configuration is printed, so its command and environment stay in the app. A run id is a 4, as it is
 for `tasks add --job`. Saved configurations belong to a folder exactly as the Job names it, so create
-the Job from the project root (or pass `--cwd` with the root); a Job made from a subfolder lists only
-what that subfolder's build files give.
+the Job from the project root (or pass `--cwd` with the root). With Astera running, `jobs create` moves
+a subfolder of a project the app knows up to that project's root; with Astera closed it keeps the
+folder as given, and a Job made from a subfolder then lists only what that subfolder's build files give.
 
 **`accounts list` prints `id`, `label` and `provider`** for each account the app holds, and nothing
 else about them. `--agent claude` or `--agent codex` narrows it to one vendor.
