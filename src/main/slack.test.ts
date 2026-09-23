@@ -85,19 +85,97 @@ describe('SlackNotifier 훅 이벤트', () => {
     expect(h.sent).toEqual(['[myproj · work1] 🙋 입력 필요 — 권한 승인이 필요합니다'])
   })
 
-  // 캡처가 sessions list 의 state 를 위해 턴 시작(UserPromptSubmit)과 오류로 끝난 턴(StopFailure)도
-  // 적는다. Slack 은 둘 다 모른 체한다 — 턴 끝 요약은 여전히 Stop 에서 한 번만 나간다.
-  it('UserPromptSubmit·StopFailure 훅은 아무것도 보내지 않고, 뒤의 Stop 은 그대로 요약을 보낸다', async () => {
+  // 캡처가 sessions list 의 state 를 위해 턴 시작(UserPromptSubmit)도 적는다. Slack 은 모른 체한다 —
+  // 턴 끝 요약은 여전히 Stop 에서 한 번만 나간다.
+  it('UserPromptSubmit 훅은 아무것도 보내지 않고, 뒤의 Stop 은 그대로 요약을 보낸다', async () => {
     const h = setup({ readFileTail: async () => assistantLine('끝') })
     h.notifier.register(info())
     h.notifier.onHookEvent('s-1', { hook_event_name: 'UserPromptSubmit', prompt: '해 줘', transcript_path: 'D:/t.jsonl' })
-    h.notifier.onHookEvent('s-1', { hook_event_name: 'StopFailure', error: 'rate_limit', transcript_path: 'D:/t.jsonl' })
     await flush()
     expect(h.sent).toEqual([])
     h.notifier.onHookEvent('s-1', { hook_event_name: 'Stop', transcript_path: 'D:/t.jsonl' })
     await flush()
     expect(h.sent).toHaveLength(1)
     expect(h.sent[0]).toContain('✅ 응답 완료')
+  })
+
+  /** API 오류가 턴을 끝냈을 때 Claude Code 2.1.280 이 Stop 대신 보내는 것 — 그 빌더(`sAe`)의 칸 그대로다:
+   *  모든 훅의 세션 칸, `error`(rate_limit·overloaded·authentication_failed·server_error …),
+   *  있으면 `error_details`, 오류 메시지 자체의 글인 `last_assistant_message`. */
+  const stopFailure = (error: string, message?: string): Record<string, unknown> => ({
+    session_id: 'cc-1',
+    transcript_path: 'D:/t.jsonl',
+    cwd: 'D:/proj/myproj',
+    hook_event_name: 'StopFailure',
+    error,
+    ...(message === undefined ? {} : { last_assistant_message: message })
+  })
+
+  // 오류로 끝난 턴도 턴의 끝이다. 다만 "응답 완료" 와 요약은 거짓말이 된다 — transcript 의 마지막
+  // 글은 오류 문장이거나 오류 앞의 반쯤 한 말이다. 그래서 오류를 그대로 알린다.
+  it('StopFailure 는 응답 완료 대신 턴 실패와 그 오류 문장을 보낸다', async () => {
+    const h = setup({ readFileTail: async () => assistantLine('반쯤 한 말') })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', stopFailure('overloaded', 'API Error: Repeated 529 Overloaded errors'))
+    await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ⚠️ 턴 실패 — API Error: Repeated 529 Overloaded errors'])
+  })
+
+  it('StopFailure 에 오류 문장이 없으면 오류 코드를 보낸다', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', stopFailure('authentication_failed'))
+    await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ⚠️ 턴 실패 — authentication_failed'])
+  })
+
+  // Stop 처럼 기다리던 질문 캡처를 지운다 — 턴이 끝났으면 화면에 그 질문은 없다. 남겨 두면 다음 답글이
+  // 없는 선택지 모양으로 키 입력이 된다.
+  it('StopFailure 는 Stop 처럼 기다리던 질문 캡처를 지운다', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'AskUserQuestion',
+      tool_use_id: 'toolu_1',
+      tool_input: { questions: [{ question: '어느 쪽?', options: [{ label: 'A' }, { label: 'B' }] }] }
+    })
+    expect(h.notifier.pendingChoiceShape('s-1')).not.toBeNull()
+    h.notifier.onHookEvent('s-1', stopFailure('server_error', 'API Error: 500'))
+    expect(h.notifier.pendingChoiceShape('s-1')).toBeNull()
+  })
+
+  // **한도는 이미 알린다 — 두 번 알리지 않는다.** 롤링 체인은 transcript 의 같은 `error: rate_limit`
+  // 항목을 읽어(core/rolling/claudeSignal.ts) onRollState 로 "⏸ 한도 도달" 을 보낸다. StopFailure 의
+  // `error` 는 그 항목과 같은 메시지에서 온다.
+  it('롤링 체인 세션의 rate_limit StopFailure 는 아무것도 보내지 않는다', async () => {
+    const h = setup()
+    h.notifier.register(info({ rollAccountIds: ['acc-1'] }))
+    h.notifier.onHookEvent('s-1', stopFailure('rate_limit', "You've hit your session " + 'limit · resets 3pm'))
+    await flush()
+    expect(h.sent).toEqual([])
+  })
+
+  // 비롤링 세션은 화면 출력의 한도 문구로 "⛔ 한도 도달" 을 보낸다(handleData). 오류 문장이 그 문구면
+  // 그 알림이 이 턴의 끝을 말한다.
+  it('비롤링 세션에서 한도 문구인 rate_limit StopFailure 는 한도 알림 하나만 남긴다', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    const text = "You've hit your session " + 'limit · resets 3pm'
+    h.notifier.onHookEvent('s-1', stopFailure('rate_limit', text))
+    h.notifier.handleData({ sessionId: 's-1', data: text })
+    await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ⛔ 한도 도달 — 자동 재개 없음'])
+  })
+
+  // 한도 문구가 아닌 rate_limit(요청이 너무 잦다는 429 같은 것)은 출력 감지가 물지 않는다 — 알리는 것이
+  // 이것뿐이다.
+  it('비롤링 세션에서 한도 문구가 아닌 rate_limit StopFailure 는 턴 실패로 보낸다', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', stopFailure('rate_limit', 'API Error: Request rejected (429)'))
+    await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ⚠️ 턴 실패 — API Error: Request rejected (429)'])
   })
 
   it('Notification 훅 → 프리픽스 붙은 입력 필요 알림', async () => {

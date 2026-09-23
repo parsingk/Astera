@@ -7,8 +7,9 @@
 // draw the question as a form (core/prompts/askUserQuestion.ts) instead of reading the screen for it.
 //
 // Same rules as slack.ts, deliberately: the latest PreToolUse wins (Claude Code batches calls, and the
-// last one issued is the one whose prompt is up); the PostToolUse with the same id ends it; Stop ends it
-// whatever the id (a declined question runs no tool, so its PostToolUse can be missed); a session's exit
+// last one issued is the one whose prompt is up); the PostToolUse with the same id ends it; Stop (or
+// StopFailure, the turn end of an API error) ends it whatever the id (a declined question runs no tool,
+// so its PostToolUse can be missed); a session's exit
 // forgets it. Fed by the hook fan-out (hookFanOut.ts), read over IPC (ipc.ts: `conversation.pendingPrompt`
 // and the `conversation:pendingPrompt` push).
 import type { PendingToolPrompt } from '../core/types'
@@ -48,7 +49,9 @@ export function createPendingPromptState(now: () => number = Date.now): PendingP
       } else if (p.hook_event_name === 'PostToolUse') {
         const current = sessions.get(sessionId)
         if (current !== undefined && current.toolUseId === p.tool_use_id) set(sessionId, null)
-      } else if (p.hook_event_name === 'Stop') {
+      } else if (p.hook_event_name === 'Stop' || p.hook_event_name === 'StopFailure') {
+        // StopFailure fires instead of Stop when an API error ends the turn; no question of it is on
+        // screen after that either.
         set(sessionId, null)
       }
     },

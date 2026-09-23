@@ -6,7 +6,7 @@
 // is in ipc.ts and index.ts. The Webhook URL and bot token are never written to the log.
 import { promises as fs } from 'node:fs'
 import type { Account, SessionInfo, RollStateEvent } from '../core/types'
-import { OutputScanner } from '../core/rolling/detect'
+import { OutputScanner, matchesLimitPhrase } from '../core/rolling/detect'
 import { CodexLimitScanner } from '../core/rolling/codexSignal'
 import { PROVIDER_META, providerOf, type Provider } from '../core/providers/meta'
 import { parseStatusLinePayload } from '../core/usage/statusline'
@@ -511,9 +511,9 @@ export class SlackNotifier {
     return providerOf(this.deps.getAccount(accountId) ?? {})
   }
 
-  /** The HookEventWatcher callback. Stop → turn complete (with an excerpt), Notification → input needed,
-   *  PreToolUse → capture the pending question, PostToolUse → that call ran, so drop the capture. Other
-   *  events are ignored. */
+  /** The HookEventWatcher callback. Stop → turn complete (with an excerpt), StopFailure → turn failed
+   *  (with the error), Notification → input needed, PreToolUse → capture the pending question,
+   *  PostToolUse → that call ran, so drop the capture. Other events are ignored. */
   onHookEvent(sessionId: string, payload: unknown): void {
     const record = this.records.get(sessionId)
     if (!record || typeof payload !== 'object' || payload === null) return
@@ -523,7 +523,8 @@ export class SlackNotifier {
       tool_name?: unknown
       tool_input?: unknown
       tool_use_id?: unknown // PreToolUse's call identifier — the basis for the pending verdict
-      last_assistant_message?: unknown // Stop's own copy of the closing text — the excerpt fallback
+      last_assistant_message?: unknown // Stop's own copy of the closing text — the excerpt fallback; StopFailure's error text
+      error?: unknown // StopFailure's error kind: rate_limit, overloaded, authentication_failed, …
     } & NotificationPayload
     const transcriptPath = typeof p.transcript_path === 'string' ? p.transcript_path : null
     if (p.hook_event_name === 'Stop') {
@@ -531,6 +532,11 @@ export class SlackNotifier {
       // cross-check misses are cleaned up here for certain.
       record.pendingTool = null
       void this.sendStopSummary(record, transcriptPath, p.last_assistant_message)
+    } else if (p.hook_event_name === 'StopFailure') {
+      // Claude Code fires this *instead of* Stop when an API error ends the turn. The turn is over,
+      // so the capture goes exactly as on Stop.
+      record.pendingTool = null
+      void this.sendStopFailure(record, p.error, p.last_assistant_message)
     } else if (p.hook_event_name === 'Notification') {
       void this.sendNotification(record, p, transcriptPath)
     } else if (p.hook_event_name === 'PreToolUse') {
@@ -865,6 +871,30 @@ export class SlackNotifier {
     // Completion is announced even when the excerpt fails (no transcript record, or a parse failure)
     const done = t(this.deps.lang(), 'slack.turnDone')
     await this.send(record, excerpt ? `${done}\n> ${excerpt.replace(/\n/g, '\n> ')}` : done)
+  }
+
+  /**
+   * StopFailure → "turn failed", with the error Claude Code showed.
+   *
+   * **Not the Stop summary.** "Response complete" over an excerpt would be false: the last text of an
+   * errored turn is the error line itself, or whatever was said before the error cut it off. So the
+   * error is posted instead — `last_assistant_message`, which on this event is the error message's own
+   * text (Claude Code 2.1.280's `sAe` builder), or the `error` kind when there is none. The line is the
+   * one a failed chat turn already posts (`slack.chat.turnFailed`).
+   *
+   * **A usage limit is already announced, and is not announced twice.** In a rolling chain, rolling
+   * reads the same `error: rate_limit` entry from the transcript (core/rolling/claudeSignal.ts) and
+   * onRollState posts the wait. In any other session, handleData's scanner posts "limit reached" from
+   * the limit phrase on screen, and the error text here is that same phrase. A `rate_limit` that is
+   * neither, a plain request-rate refusal, is caught by nothing else, so it is posted here.
+   */
+  private async sendStopFailure(record: SlackRecord, error: unknown, lastMessage: unknown): Promise<void> {
+    const message = typeof lastMessage === 'string' ? lastMessage.trim() : ''
+    if (error === 'rate_limit' && ((record.info.rollAccountIds?.length ?? 0) >= 1 || matchesLimitPhrase(message)))
+      return
+    let text = message !== '' ? message : typeof error === 'string' && error !== '' ? error : 'unknown'
+    if (text.length > EXCERPT_MAX) text = text.slice(0, EXCERPT_MAX) + '…'
+    await this.send(record, t(this.deps.lang(), 'slack.chat.turnFailed', { message: text }))
   }
 
   /**

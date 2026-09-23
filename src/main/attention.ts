@@ -106,7 +106,11 @@ export function createAttentionState(): AttentionState {
         // screen: the same call notification.ts makes for the notifier, because a missed waiting
         // screen strands a session with nobody knowing while a surplus one only costs a glance.
         setValue(sessionId, recordFor(sessionId), 'waiting')
-      } else if (p.hook_event_name === 'Stop') {
+      } else if (p.hook_event_name === 'Stop' || p.hook_event_name === 'StopFailure') {
+        // StopFailure is the other way a turn ends: Claude Code fires it *instead of* Stop when an
+        // API error (a limit, an auth failure, an overload) ends the turn. The turn is over either
+        // way, and leaving the value standing would keep a `waiting` up with nobody waiting, so the
+        // next real prompt would be no transition and the desktop notifier would miss it.
         // A stray Stop for a session never seen is already idle by default; only touch an existing
         // record, for the same reason as PostToolUse above.
         const record = sessions.get(sessionId)

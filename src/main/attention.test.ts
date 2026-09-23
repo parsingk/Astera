@@ -184,11 +184,59 @@ describe('createAttentionState — set', () => {
   })
 })
 
-// The capture also records UserPromptSubmit and StopFailure now, for `astera sessions list`
-// (core/hooks/sessionState.ts). Neither is this state's business: a turn starting is no reason to
-// raise a banner, and a turn that errored is not something this state has ever tracked.
+/** What Claude Code 2.1.280 sends when an API error ends the turn, field for field (its builder
+ *  `sAe`): the session fields every hook carries, `error` (rate_limit, overloaded,
+ *  authentication_failed, server_error, …), `error_details` when there are any, and the error
+ *  message's own text as `last_assistant_message`. It fires *instead of* Stop. */
+const stopFailure = (error = 'rate_limit'): unknown => ({
+  session_id: 'cc-1',
+  transcript_path: 'D:/t.jsonl',
+  cwd: 'D:/work',
+  hook_event_name: 'StopFailure',
+  error,
+  last_assistant_message: 'API Error: Repeated 529 Overloaded errors'
+})
+
+// StopFailure is the other way a turn ends, so it ends a turn here exactly as Stop does. Before, a
+// turn that errored left whatever the value was standing: `waiting` stayed up with nobody waiting,
+// and the next real prompt was no transition, so the desktop notifier never fired for it.
+describe('createAttentionState — StopFailure', () => {
+  it('StopFailure ends the turn the way Stop does: idle, every outstanding call cleared', () => {
+    const state = createAttentionState()
+    const seen: Array<[string, Attention]> = []
+    state.subscribe((id, value) => seen.push([id, value]))
+    state.onHookEvent('w', pre('call-1'))
+    state.onHookEvent('w', pre('call-2'))
+    state.onHookEvent('q', pre('call-3'))
+    state.onHookEvent('q', notify('permission_prompt'))
+    seen.length = 0
+    state.onHookEvent('w', stopFailure('overloaded'))
+    state.onHookEvent('q', stopFailure('authentication_failed'))
+    expect(state.get('w')).toBe('idle')
+    expect(state.get('q')).toBe('idle')
+    expect(seen).toEqual([
+      ['w', 'idle'],
+      ['q', 'idle']
+    ])
+    // cleared, not only flipped: a stray PostToolUse of one of them does not bring working back
+    state.onHookEvent('w', post('call-1'))
+    expect(state.get('w')).toBe('idle')
+  })
+
+  it('a StopFailure for a session never seen creates nothing, as Stop does not', () => {
+    const state = createAttentionState()
+    const seen: Array<[string, Attention]> = []
+    state.subscribe((id, value) => seen.push([id, value]))
+    state.onHookEvent('fresh', stopFailure())
+    expect(state.get('fresh')).toBe('idle')
+    expect(seen).toEqual([])
+  })
+})
+
+// The capture also records UserPromptSubmit, for `astera sessions list` (core/hooks/sessionState.ts).
+// It is not this state's business: a turn starting is no reason to raise a banner.
 describe('createAttentionState — the events it does not read', () => {
-  it('UserPromptSubmit and StopFailure change no value and notify nobody', () => {
+  it('UserPromptSubmit changes no value and notifies nobody', () => {
     const state = createAttentionState()
     const seen: Array<[string, Attention]> = []
     state.subscribe((id, value) => seen.push([id, value]))
@@ -196,10 +244,7 @@ describe('createAttentionState — the events it does not read', () => {
     state.onHookEvent('q', pre('call-2'))
     state.onHookEvent('q', notify('permission_prompt'))
     seen.length = 0
-    for (const id of ['w', 'q', 'fresh']) {
-      state.onHookEvent(id, { hook_event_name: 'UserPromptSubmit', prompt: 'go' })
-      state.onHookEvent(id, { hook_event_name: 'StopFailure', error: 'rate_limit' })
-    }
+    for (const id of ['w', 'q', 'fresh']) state.onHookEvent(id, { hook_event_name: 'UserPromptSubmit', prompt: 'go' })
     expect(state.get('w')).toBe('working')
     expect(state.get('q')).toBe('waiting')
     expect(state.get('fresh')).toBe('idle')

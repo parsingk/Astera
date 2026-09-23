@@ -42,17 +42,36 @@ describe('createPendingPromptState', () => {
     expect(state.get('s1')).toBeNull()
   })
 
-  // The capture also records UserPromptSubmit and StopFailure (for `astera sessions list`); neither
-  // clears or replaces a waiting question here.
-  it('UserPromptSubmit and StopFailure leave the capture alone', () => {
+  // The capture also records UserPromptSubmit (for `astera sessions list`); it neither clears nor
+  // replaces a waiting question here.
+  it('UserPromptSubmit leaves the capture alone', () => {
     const state = createPendingPromptState()
     const changes: unknown[] = []
     state.onHookEvent('s1', pre('call-1'))
     state.subscribe((_id, p) => changes.push(p))
     state.onHookEvent('s1', { hook_event_name: 'UserPromptSubmit', prompt: 'go' })
-    state.onHookEvent('s1', { hook_event_name: 'StopFailure', error: 'rate_limit' })
     expect(state.get('s1')?.toolUseId).toBe('call-1')
     expect(changes).toEqual([])
+  })
+
+  // StopFailure fires instead of Stop when an API error ends the turn (Claude Code 2.1.280's payload:
+  // `error`, `error_details`, the error text as `last_assistant_message`). The turn is over either way,
+  // so no question from it is still on screen, and the form must not stay drawn.
+  it('StopFailure clears it, as Stop does', () => {
+    const state = createPendingPromptState()
+    const changes: unknown[] = []
+    state.onHookEvent('s1', pre('call-1'))
+    state.subscribe((_id, p) => changes.push(p))
+    state.onHookEvent('s1', {
+      session_id: 'cc-1',
+      transcript_path: 'D:/t.jsonl',
+      cwd: 'D:/work',
+      hook_event_name: 'StopFailure',
+      error: 'server_error',
+      last_assistant_message: 'API Error: 500 Internal server error'
+    })
+    expect(state.get('s1')).toBeNull()
+    expect(changes).toEqual([null])
   })
 
   it('the latest PreToolUse wins', () => {

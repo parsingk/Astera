@@ -111,6 +111,29 @@ describe('DesktopNotifier — the three events', () => {
     expect(h.shown).toHaveLength(0)
   })
 
+  // A turn an API error ended is a turn end (StopFailure fires instead of Stop). It shows nothing
+  // itself, like Stop, but it has to put the session back to idle: otherwise a `waiting` it left
+  // standing swallows the next prompt, which is then no transition into `waiting` and fires nothing.
+  it('after a turn ended by an API error, the next prompt fires again', () => {
+    const h = harness()
+    h.notifier.onHookEvent('s1', { hook_event_name: 'PreToolUse', tool_use_id: 't1' })
+    h.notifier.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'permission_prompt' })
+    expect(h.shown.map((s) => s.event)).toEqual(['inputNeeded'])
+    h.notifier.onHookEvent('s1', {
+      session_id: 'cc-1',
+      transcript_path: 'D:/t.jsonl',
+      cwd: 'D:/work',
+      hook_event_name: 'StopFailure',
+      error: 'authentication_failed',
+      last_assistant_message: 'Invalid API key · Please run /login'
+    })
+    expect(h.shown).toHaveLength(1) // the error itself is no desktop event
+    // An MCP server's question comes with no PreToolUse in front of it, so nothing but the turn end
+    // can have taken the session out of `waiting` before it.
+    h.notifier.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'elicitation_dialog' })
+    expect(h.shown.map((s) => s.event)).toEqual(['inputNeeded', 'inputNeeded'])
+  })
+
   it('other hook events and other roll states are ignored', () => {
     const h = harness({ accountSwitched: true })
     // Stop is Slack's turn notice, not a desktop event — the desktop sink ignores it entirely.

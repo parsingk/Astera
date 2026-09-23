@@ -16,6 +16,7 @@ Once it is set up, it looks like this.
 │  │  1. Fix it now — handle it on this branch
 │  │  2. Separate ticket — split it out and do it later
 │  ├─ ⏸ Limit reached — resuming at 15:20
+│  ├─ ⚠️ Turn failed — API Error: …  ← when an API error such as an overload or a failed login ends a turn
 │  │
 │  └─ [reply here]  ────────────→ typed into that session's terminal
 │
