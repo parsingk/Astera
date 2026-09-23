@@ -135,6 +135,33 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       'Returns the run it started, which is the id to pass to `runs wait`. Refused while a run of this Job is already going.',
     flags: [ID('<jobId>', 'the Job to run')]
   },
+  'jobs-create': {
+    summary: 'create a Job with no run yet',
+    detail:
+      'Returns the Job. Nothing runs until `jobs run`: add its tasks first with `tasks add --job`. Without --cwd the Job belongs to the directory this command was run from. With --coordinator-account a coordinator session starts on that account when the Job runs; without it the app places the workers itself.',
+    flags: [
+      { name: 'objective', value: '<text>', required: true, about: 'what this Job is for' },
+      { name: 'cwd', value: '<path>', about: 'the repository root this Job belongs to (default: here)' },
+      { name: 'concurrency', value: '<n>', about: 'how many workers this Job places at once' },
+      {
+        name: 'coordinator-account',
+        value: '<accountId>',
+        about: 'the account a coordinator session runs on (one, from `accounts list`)'
+      },
+      {
+        name: 'convergence',
+        about: 'let the app repair failing tasks instead of failing them'
+      },
+      { name: 'max-fix-attempts', value: '<n>', about: 'repairs per task; needs --convergence' },
+      { name: 'max-review-rounds', value: '<n>', about: 'review rounds per task; needs --convergence' },
+      {
+        name: 'blocking-severity',
+        value: '<high|medium>',
+        about: 'which review findings block; needs --convergence'
+      },
+      { name: 'max-total-minutes', value: '<n>', about: 'time budget per task; needs --convergence' }
+    ]
+  },
   'jobs-wait': {
     summary: "wait until this Job's latest run ends",
     detail:
@@ -173,6 +200,34 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       { name: 'brief', about: 'cut each spec to 160 characters' }
     ]
   },
+  // **--job and --run are both listed as optional, and exactly one of them is required.** A flag in
+  // this table is either required or not; there is no field for "one of these two". `browser js`
+  // has the same shape with --script and --file, and as there the rule is carried by the prose.
+  'tasks-add': {
+    summary: 'add a task to a Job, or to one run of it',
+    detail:
+      'Exactly one of --job or --run. A task added to a Job is copied into every run `jobs run` starts from then on; a task added to a run belongs to that run only. An id of the other kind is not found (4), never quietly the other thing. Returns the task.',
+    flags: [
+      { name: 'job', value: '<jobId>', about: 'the Job to add it to (exactly one of --job or --run)' },
+      { name: 'run', value: '<runId>', about: 'the run to add it to (exactly one of --job or --run)' },
+      {
+        name: 'spec',
+        value: '<text|->',
+        required: true,
+        about: 'the work, in full (a value of `-` reads it from stdin)'
+      },
+      {
+        name: 'account',
+        value: '<id,…>',
+        required: true,
+        about: 'the accounts a worker may run on, in failover order (from `accounts list`)'
+      },
+      { name: 'title', value: '<text>', about: "a short name (default: the spec's first line)" },
+      { name: 'deps', value: '<json array>', about: 'the task ids this one waits for' },
+      { name: 'parent', value: '<taskId>', about: 'the task this one was split out of' },
+      { name: 'review', about: 'have the result reviewed before it counts as done' }
+    ]
+  },
 
   'questions-list': {
     summary: 'questions workers have asked',
@@ -196,6 +251,13 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
         about: 'the answer (a value of `-` reads it from stdin)'
       }
     ]
+  },
+
+  'accounts-list': {
+    summary: 'the agent accounts the app holds',
+    detail:
+      'The ids `jobs create --coordinator-account` and `tasks add --account` take. Answered by the app, so it needs Astera open.',
+    flags: [{ name: 'agent', value: '<claude|codex>', about: 'only this vendor' }]
   },
 
   'requests-show': {

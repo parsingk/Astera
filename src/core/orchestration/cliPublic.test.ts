@@ -91,6 +91,21 @@ describe('publicFor', () => {
     expect(out[0]).toEqual({ id: 't1', spec: '짧게', spec_truncated: true })
   })
 
+  // phase C 의 셋. 새 목록을 만들지 않는다 — 개체마다 한 목록이다(설계 §11).
+  it('jobs create 는 계획으로, tasks add 는 Task 로 가린다', () => {
+    expect(
+      publicFor('jobs-create', { id: 'job_1', objective: 'o', pendingStart: true, outcome: 'running', secret: 1 })
+    ).toEqual({ id: 'job_1', objective: 'o', pendingStart: true, outcome: 'running' })
+    expect(publicFor('tasks-add', { id: 't1', jobId: 'job_1', reviewRequested: true, policyChanged: true }))
+      .toEqual({ id: 't1', jobId: 'job_1' })
+  })
+
+  it('accounts list 는 id·label·provider 셋만 낸다', () => {
+    expect(
+      publicFor('accounts-list', [{ id: 'a1', label: '일', provider: 'claude', configDir: 'C:/secret' }])
+    ).toEqual([{ id: 'a1', label: '일', provider: 'claude' }])
+  })
+
   // **코디네이터 전용 명령은 이 계약의 약속 밖이다.** 가리려 들면 가이드가 시키는 것을 못 읽는다
   it('표에 없는 명령은 그대로 지나간다', () => {
     const body = { dispatchId: 'd1', anything: { nested: true } }

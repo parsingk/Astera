@@ -761,6 +761,29 @@ describe('요청 영수증', () => {
     expect((second.body as { id: string }).id).toBe((first.body as { id: string }).id)
   })
 
+  // phase C 의 두 쓰기. 셸이 부르는 모양이다(세션 id 가 비어 있다) — CI 가 `--request-id` 를 다는
+  // 자리가 바로 이것이다.
+  it('같은 요청 id 의 jobs create 와 tasks add 는 한 번씩만 만든다', async () => {
+    const c = counting({ listAccounts: () => [{ id: 'acc1', label: 'a', provider: 'codex' }] })
+    const orch = orchOver({ act: c.act })
+    const jobArgs = { objective: '무언가', cwd: 'D:/p' }
+    const first = await orch.call({ cmd: 'jobs-create', args: jobArgs, sessionId: '', request: 'req-j' })
+    const second = await orch.call({ cmd: 'jobs-create', args: jobArgs, sessionId: '', request: 'req-j' })
+    expect(first.status).toBe(200)
+    expect(second.replayed, '재생인데 그렇게 말하지 않았다').toBe(true)
+    expect(answerOf(second)).toBe(answerOf(first))
+    const jobId = (first.body as { id: string }).id
+    const taskArgs = { job: jobId, spec: 's', account: 'acc1' }
+    const t1 = await orch.call({ cmd: 'tasks-add', args: taskArgs, sessionId: '', request: 'req-t' })
+    const t2 = await orch.call({ cmd: 'tasks-add', args: taskArgs, sessionId: '', request: 'req-t' })
+    expect(t1.status).toBe(200)
+    expect(t2.replayed).toBe(true)
+    const saved = await savedState()
+    expect(saved.jobs, '재시도가 계획을 하나 더 만들었다').toHaveLength(1)
+    expect(saved.runs).toHaveLength(0)
+    expect(saved.tasks, '재시도가 Task 를 하나 더 만들었다').toHaveLength(1)
+  })
+
   // **우리 마음대로 합치지 않는다.** 두 호출이 한 요청이라는 말은 부르는 쪽만 할 수 있고, 그 말이
   // 요청 id 다 — id 가 다르면 두 번 하는 것이 맞다.
   it('요청 id 가 다르면 두 번 만든다', async () => {

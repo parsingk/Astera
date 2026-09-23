@@ -60,10 +60,15 @@ const BROWSER_SUBCOMMANDS = new Set<string>(BROWSER_VERBS)
 export const NOUNS = {
   host: ['start', 'status', 'stop'],
   projects: ['list', 'get', 'find'],
-  jobs: ['list', 'get', 'wait', 'run'],
+  // `jobs create` 와 `tasks add` 는 phase C 다 — 앞의 것은 run-create 를 `--auto` 로, 뒤의 것은
+  // task-create 를 부른다(command.ts). 코디네이터가 쓰는 두 이름은 그대로 남는다.
+  jobs: ['list', 'get', 'wait', 'run', 'create'],
   runs: ['list', 'get', 'wait', 'stop', 'resume'],
-  tasks: ['list'],
+  tasks: ['list', 'add'],
   questions: ['list', 'get', 'answer'],
+  // `jobs create --coordinator-account` 와 `tasks add --account` 에 넣을 id 가 여기서 나온다.
+  // 동사 없는 `accounts` 는 가이드가 가르치는 세션 명령 그대로다(BARE_NOUNS).
+  accounts: ['list'],
   // **요청 영수증**(request receipts design §8). 여기 있는 것은 공개 표면이어서가 아니라 —
   // 답하는 것은 명령 층이 아니라 Host 다(host/orch.ts) — 이 모양이 그것을 `USAGE` 와
   // `docs/cli.md` 에 함께 적히게 만들기 때문이다. `--request-id` 는 반대로 여기 없다: 그것은
@@ -71,6 +76,11 @@ export const NOUNS = {
   // `globalFlags` 다(설계 §3 — 명령 목록을 손으로 들고 있으면 빠뜨린 명령이 조용히 무시한다).
   requests: ['show']
 } as const
+
+/** 명사이면서 동사 없이도 명령인 이름. `accounts` 는 공개 명사가 되기 전부터 세션 명령이었고
+ *  가이드가 `astera accounts --json` 으로 가르친다 — 동사 자리가 비었거나 플래그면 그 한 낱말
+ *  명령으로 지나간다. 모르는 동사는 여전히 거절한다. */
+const BARE_NOUNS = new Set(['accounts'])
 
 /** The same table, keyed by a word the person typed rather than by one of the literal keys above.
  *
@@ -124,7 +134,7 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
     if (!BROWSER_SUBCOMMANDS.has(sub)) return { error: `unknown browser subcommand: ${sub} (expected js or help)` }
     cmd = `browser-${sub}`
     first = 2
-  } else if (verbs !== undefined) {
+  } else if (verbs !== undefined && !(BARE_NOUNS.has(cmd) && (argv[1] === undefined || argv[1].startsWith('-')))) {
     const sub = argv[1]
     if (sub === undefined || sub.startsWith('-'))
       return { error: `${cmd} needs one of: ${verbs.join(', ')}` }

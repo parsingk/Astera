@@ -866,6 +866,46 @@ export async function handleCommand(
       const started = jobAfter && latestRunOf(after, jobAfter)
       return started ? okBody(runView(after, started)) : reply
     }
+    /**
+     * 계획을 만든다 — 공개 이름(phase C). **언제나 계획부터다**: 사이드바의 '새 작업' 이 보내는 것과
+     * 같이 `auto` 를 붙여 run-create 로 간다(NewRunModal). auto 없는 run-create 는 Task 가 하나도
+     * 없는 회차를 곧바로 돌리는데, 셸에서 치는 사람이 원하는 일이 아니다. 회차는 `jobs run` 이 만든다.
+     *
+     * 돌려주는 것은 계획이고 `jobs get` 과 같은 파생값을 싣는다 — 회차가 없으므로 정의 Task 를 센다.
+     *
+     * **COORDINATOR_ONLY 에 따로 적지 않는다.** 같은 caller 로 run-create 를 부르므로 워커는 거기서
+     * 403 을 받는다 — `jobs run` 이 run-start 로 가며 받는 것과 같은 경계다. tasks-add 도 같다.
+     */
+    case 'jobs-create': {
+      const reply = await handleCommand(deps, caller, 'run-create', { ...args, auto: true })
+      if (reply.status < 200 || reply.status >= 300) return reply
+      const after = deps.getState()
+      const created = after.jobs.find((j) => j.id === (reply.body as { id?: unknown }).id)
+      return created ? okBody(jobView(after, created, undefined)) : reply
+    }
+    /**
+     * Task 를 더한다 — task-create 의 공개 이름(phase C).
+     *
+     * **`--job` 과 `--run` 중 정확히 하나다.** task-create 의 기본값("가장 최근 회차")은 셸에서
+     * 치는 사람에게 남의 회차일 수 있어서 내주지 않는다. 그리고 **플래그가 종류를 정한다** —
+     * task-create 의 `--run` 은 Job id 를 받으면 조용히 정의 Task 를 만들지만, 여기서는 `--job` 에 준
+     * 회차 id 도 `--run` 에 준 계획 id 도 그 종류로는 없는 것이므로 404 다.
+     *
+     * `--run-id` 는 task-create 가 `--run` 보다 먼저 읽는 옛 철자라, 받으면 이 규칙을 넘어선다 —
+     * 거절한다. `--validate` 도 거절한다: 그 id 는 공개가 아닌 run-configs 에서 온다.
+     */
+    case 'tasks-add': {
+      const job = str(args.job)
+      const run = str(args.run)
+      if (args.runId !== undefined) return bad('tasks add takes --run, not --run-id')
+      if (args.validate !== undefined)
+        return bad('--validate is not offered by tasks add yet (its ids come from run-configs)')
+      if ((job === null) === (run === null)) return bad('exactly one of --job or --run is required')
+      if (job !== null && !s.jobs.some((j) => j.id === job)) return notFound(`unknown job: ${job}`)
+      if (run !== null && !s.runs.some((r) => r.id === run)) return notFound(`unknown run: ${run}`)
+      const { job: _job, ...rest } = args
+      return handleCommand(deps, caller, 'task-create', { ...rest, run: job ?? run })
+    }
     case 'jobs-wait':
     case 'runs-wait': {
       const id = str(args.id)
@@ -2349,7 +2389,9 @@ export async function handleCommand(
     // CLI 는 자기 버전을 빌드에서 받아 알고 있다(§4) — 여기서 답하는 것은 앱 쪽 값이다.
     case 'version':
       return okBody({ version: deps.appVersion?.() ?? null, protocol: CLI_PROTOCOL })
-    case 'accounts': {
+    // 공개 이름(phase C). 같은 목록이고, 공개 표면의 칸은 cliPublic 이 세 칸으로 가린다.
+    case 'accounts':
+    case 'accounts-list': {
       const agent = str(args.agent)
       return okBody(await deps.listAccounts(agent === 'claude' || agent === 'codex' ? agent : undefined))
     }

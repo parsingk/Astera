@@ -183,19 +183,48 @@ describe('공개 표면 — 두 낱말 명령', () => {
 
   it('동사가 없으면 무엇을 칠 수 있는지 말한다', () => {
     expect(parseArgs(['projects'])).toEqual({ error: 'projects needs one of: list, get, find' })
-    expect(parseArgs(['jobs'])).toEqual({ error: 'jobs needs one of: list, get, wait, run' })
+    expect(parseArgs(['jobs'])).toEqual({ error: 'jobs needs one of: list, get, wait, run, create' })
   })
 
   it('모르는 동사는 거절하고 목록을 보여 준다', () => {
     expect(parseArgs(['jobs', 'fly'])).toEqual({
-      error: 'unknown jobs subcommand: fly (expected list, get, wait, run)'
+      error: 'unknown jobs subcommand: fly (expected list, get, wait, run, create)'
     })
   })
 
   // 플래그가 동사 자리에 오면 동사를 안 준 것이다 — `--json` 을 동사로 읽으면 엉뚱한 오류가 난다
   it('플래그를 동사로 읽지 않는다', () => {
     expect(parseArgs(['tasks', '--json'])).toEqual({
-      error: 'tasks needs one of: list'
+      error: 'tasks needs one of: list, add'
+    })
+  })
+
+  it('phase C 의 세 동사', () => {
+    expect(parseArgs(['jobs', 'create', '--objective', 'o'])).toMatchObject({
+      cmd: 'jobs-create',
+      args: { objective: 'o' }
+    })
+    expect(parseArgs(['tasks', 'add', '--job', 'job_1', '--deps', '["tsk_1"]'])).toMatchObject({
+      cmd: 'tasks-add',
+      args: { job: 'job_1', deps: ['tsk_1'] }
+    })
+    expect(parseArgs(['accounts', 'list', '--agent', 'codex'])).toMatchObject({
+      cmd: 'accounts-list',
+      args: { agent: 'codex' }
+    })
+  })
+
+  // **가이드가 가르치는 `astera accounts --json` 은 그대로 돈다.** 명사가 된 뒤에도 동사 없는
+  // `accounts` 는 세션 전용 명령 그 자체다 — 가이드를 고쳐 쓰지 않아도 된다.
+  it('동사 없는 accounts 는 옛 한 낱말 명령이다', () => {
+    expect(parseArgs(['accounts'])).toMatchObject({ cmd: 'accounts' })
+    expect(parseArgs(['accounts', '--json'])).toMatchObject({ cmd: 'accounts', json: true })
+    expect(parseArgs(['accounts', '--agent', 'claude'])).toMatchObject({
+      cmd: 'accounts',
+      args: { agent: 'claude' }
+    })
+    expect(parseArgs(['accounts', 'fly'])).toEqual({
+      error: 'unknown accounts subcommand: fly (expected list)'
     })
   })
 

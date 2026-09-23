@@ -5274,6 +5274,197 @@ describe('jobs run / questions answer', () => {
 })
 
 /**
+ * 공개 쓰기 표면 phase C — `jobs create`, `tasks add`, `accounts list`.
+ *
+ * 셸이 부르는 모양이다: 세션 id 가 비어 있고 워커가 아니다(run.ts 의 ASTERA_SESSION ?? '').
+ */
+describe('jobs create / tasks add / accounts list', () => {
+  const shell = (
+    deps: OrchServerDeps,
+    cmd: string,
+    args: Record<string, unknown> = {}
+  ): Promise<{ status: number; body: unknown }> => call(deps, cmd, args, '')
+
+  const jobOf = async (deps: ReturnType<typeof makeDeps>): Promise<string> => {
+    const r = await shell(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p' })
+    return (r.body as { id: string }).id
+  }
+
+  // **언제나 계획부터다.** auto 없는 run-create 는 Task 가 하나도 없는 회차를 곧바로 돌린다 —
+  // 셸에서 치는 사람이 원하는 일이 아니다. 사이드바의 '새 작업' 이 보내는 것과 같은 모양이다.
+  it('jobs create 는 회차 없이 계획을 만들고 그 계획을 돌려준다', async () => {
+    const deps = makeDeps()
+    const r = await shell(deps, 'jobs-create', { objective: '무언가', cwd: 'D:/p', concurrency: 2 })
+    expect(r.status).toBe(200)
+    expect(deps.getState().jobs).toHaveLength(1)
+    expect(deps.getState().runs).toHaveLength(0)
+    const job = deps.getState().jobs[0]
+    expect(job).toMatchObject({ pendingStart: true, autoDispatch: true, concurrency: 2 })
+    // 계획이다, 회차가 아니라 — 그리고 jobs get 처럼 파생값을 싣는다
+    expect(r.body).toMatchObject({ id: job.id, objective: '무언가', pendingStart: true })
+    expect(r.body).toHaveProperty('outcome')
+    expect(r.body).toHaveProperty('progress')
+    expect(r.body).toHaveProperty('questionsOpen', 0)
+    expect(r.body).not.toHaveProperty('ordinal')
+  })
+
+  it('jobs create 는 run-create 의 검증을 그대로 쓴다', async () => {
+    const deps = makeDeps()
+    expect((await shell(deps, 'jobs-create', { cwd: 'D:/p' })).status).toBe(400)
+    expect(
+      (await shell(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorAccount: 'nope' })).status
+    ).toBe(404)
+    expect(
+      (await shell(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', maxFixAttempts: '2' })).status
+    ).toBe(400)
+    const ok = await shell(deps, 'jobs-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      coordinatorAccount: 'acc1',
+      convergence: true,
+      maxFixAttempts: '2'
+    })
+    expect(ok.status).toBe(200)
+    expect(ok.body).toMatchObject({ coordinatorAccountId: 'acc1', convergence: { maxFixAttempts: 2 } })
+    expect(deps.getState().runs).toHaveLength(0)
+  })
+
+  it('tasks add --job 은 정의 Task 를 만든다', async () => {
+    const deps = makeDeps()
+    const jobId = await jobOf(deps)
+    const r = await shell(deps, 'tasks-add', { job: jobId, spec: 's', account: 'acc1' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ jobId, title: 's' })
+    expect(r.body).not.toHaveProperty('runId')
+  })
+
+  it('tasks add --run 은 그 회차에 붙인다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const r = await shell(deps, 'tasks-add', { run: runId, spec: 's', account: 'acc1', review: true })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ runId, reviewRequested: true })
+    expect(r.body).not.toHaveProperty('jobId')
+  })
+
+  // **최신 회차로 기본값을 두지 않는다** — task-create 의 기본값은 남의 회차에 떨어질 수 있다.
+  it('--job 과 --run 은 정확히 하나다', async () => {
+    const deps = makeDeps()
+    const jobId = await jobOf(deps)
+    await call(deps, 'run-create', { objective: 'o2', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const neither = await shell(deps, 'tasks-add', { spec: 's', account: 'acc1' })
+    expect(neither.status).toBe(400)
+    const both = await shell(deps, 'tasks-add', { job: jobId, run: runId, spec: 's', account: 'acc1' })
+    expect(both.status).toBe(400)
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  // **다른 종류의 id 는 그 플래그의 종류로 없는 것이다** — 조용히 다른 일을 하지 않는다.
+  it('--job 에 회차 id, --run 에 계획 id 는 404 다', async () => {
+    const deps = makeDeps()
+    const jobId = await jobOf(deps)
+    await call(deps, 'run-create', { objective: 'o2', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const wrongJob = await shell(deps, 'tasks-add', { job: runId, spec: 's', account: 'acc1' })
+    expect(wrongJob.status).toBe(404)
+    expect(JSON.stringify(wrongJob.body)).toContain(`unknown job: ${runId}`)
+    const wrongRun = await shell(deps, 'tasks-add', { run: jobId, spec: 's', account: 'acc1' })
+    expect(wrongRun.status).toBe(404)
+    expect(JSON.stringify(wrongRun.body)).toContain(`unknown run: ${jobId}`)
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  // `--run-id` 는 task-create 가 받는 옛 철자다. 그것이 `--job` 을 이기면 정확히 하나의 규칙이 샌다.
+  it('--run-id 가 --job 을 넘어 회차로 새지 않는다', async () => {
+    const deps = makeDeps()
+    const jobId = await jobOf(deps)
+    await call(deps, 'run-create', { objective: 'o2', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const r = await shell(deps, 'tasks-add', { job: jobId, runId, spec: 's', account: 'acc1' })
+    expect(r.status).toBe(400)
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  it('없는 계정·deps·parent 는 404, 없는 spec·account 는 400 이다', async () => {
+    const deps = makeDeps()
+    const jobId = await jobOf(deps)
+    expect((await shell(deps, 'tasks-add', { job: jobId, spec: 's', account: 'nope' })).status).toBe(404)
+    expect(
+      (await shell(deps, 'tasks-add', { job: jobId, spec: 's', account: 'acc1', deps: ['tsk_x'] })).status
+    ).toBe(404)
+    expect(
+      (await shell(deps, 'tasks-add', { job: jobId, spec: 's', account: 'acc1', parent: 'tsk_x' })).status
+    ).toBe(404)
+    expect((await shell(deps, 'tasks-add', { job: jobId, account: 'acc1' })).status).toBe(400)
+    expect((await shell(deps, 'tasks-add', { job: jobId, spec: 's' })).status).toBe(400)
+  })
+
+  // 그 id 들은 run-configs 에서 오고, run-configs 는 공개가 아니다. 조용히 버리지 않고 거절한다.
+  it('--validate 는 받지 않는다', async () => {
+    const deps = makeDeps()
+    const jobId = await jobOf(deps)
+    const r = await shell(deps, 'tasks-add', { job: jobId, spec: 's', account: 'acc1', validate: 'cfg1' })
+    expect(r.status).toBe(400)
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  // 정의 Task 는 jobs run 이 회차로 베낀다 — deps 도 새 id 로 다시 이어진다(startJobRun).
+  it('tasks add --job 두 개 뒤의 jobs run 은 둘을 회차로 베낀다', async () => {
+    const deps = makeDeps()
+    const jobId = await jobOf(deps)
+    const a = await shell(deps, 'tasks-add', { job: jobId, spec: 'first', account: 'acc1' })
+    const aId = (a.body as { id: string }).id
+    const b = await shell(deps, 'tasks-add', { job: jobId, spec: 'second', account: 'acc1', deps: [aId] })
+    expect(b.status).toBe(200)
+    expect(deps.getState().runs).toHaveLength(0)
+    const ran = await shell(deps, 'jobs-run', { id: jobId })
+    expect(ran.status).toBe(200)
+    const runId = (ran.body as { id: string }).id
+    const copies = deps.getState().tasks.filter((t) => t.runId === runId)
+    expect(copies.map((t) => t.spec).sort()).toEqual(['first', 'second'])
+    const first = copies.find((t) => t.spec === 'first')!
+    const second = copies.find((t) => t.spec === 'second')!
+    expect(second.deps).toEqual([first.id])
+  })
+
+  it('accounts list 는 accounts 와 같은 목록이고 --agent 로 거른다', async () => {
+    const seen: (string | undefined)[] = []
+    const deps = {
+      ...makeDeps(),
+      listAccounts: (p?: string) => {
+        seen.push(p)
+        return [{ id: 'acc1', label: '계정1', provider: 'codex' as const }]
+      }
+    }
+    const r = await shell(deps, 'accounts-list', {})
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual([{ id: 'acc1', label: '계정1', provider: 'codex' }])
+    await shell(deps, 'accounts-list', { agent: 'claude' })
+    expect(seen).toEqual([undefined, 'claude'])
+  })
+
+  // 워커는 계획도 Task 도 만들 수 없다 — 안에서 부르는 run-create·task-create 의 경계가 그대로 선다.
+  it('워커 세션은 jobs create 와 tasks add 를 부를 수 없다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc1' })
+    await call(deps, 'worker-start', {
+      task: (t.body as { id: string }).id,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'current'
+    })
+    const job = await call(deps, 'jobs-create', { objective: 'x', cwd: 'D:/p' }, 'sess1')
+    expect(job.status).toBe(403)
+    const add = await call(deps, 'tasks-add', { run: runId, spec: 's', account: 'acc1' }, 'sess1')
+    expect(add.status).toBe(403)
+  })
+})
+
+/**
  * **적은 id 가 없으면 어느 명령에서든 404(4) 다.** 없는 id 가 호출자에게 가는 길이 셋이었다 — 직접
  * `notFound`, `commit()` 의 옮김, 그리고 순수 층의 거절을 `bad()` 로 내보내는 자리들. 마지막 길에서만
  * 같은 사실이 400(2) 으로 끝나, 4 를 보는 스크립트가 그것을 영영 못 봤다. 반대쪽도 여기서 고정한다:

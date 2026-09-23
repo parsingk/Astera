@@ -231,6 +231,16 @@ describe('argsForCall — run-create의 --cwd 기본값 (task-13a)', () => {
       argsForCall({ cmd: 'run-create', args: { objective: 'o', cwd: 'D:/explicit' }, cwd: 'D:/my-cwd' })
     ).toEqual({ objective: 'o', cwd: 'D:/explicit' })
   })
+  // jobs create 는 run-create 로 간다 — 같은 이유로 같은 기본값이다
+  it('jobs create 에도 CLI의 cwd를 채우고, 명시한 것이 이긴다', () => {
+    expect(argsForCall({ cmd: 'jobs-create', args: { objective: 'o' }, cwd: 'D:/my-cwd' })).toEqual({
+      objective: 'o',
+      cwd: 'D:/my-cwd'
+    })
+    expect(
+      argsForCall({ cmd: 'jobs-create', args: { objective: 'o', cwd: 'D:/explicit' }, cwd: 'D:/my-cwd' })
+    ).toEqual({ objective: 'o', cwd: 'D:/explicit' })
+  })
   it('run-create가 아닌 명령에는 CLI의 cwd를 채우지 않는다', () => {
     expect(argsForCall({ cmd: 'tasks-list', args: {}, cwd: 'D:/my-cwd' })).toEqual({})
   })

@@ -93,6 +93,7 @@ const LIST_FIELD: Record<string, string> = {
   'tasks-list': 'tasks',
   'questions-list': 'questions',
   accounts: 'accounts',
+  'accounts-list': 'accounts',
   // 아래 셋은 공개 표면이 아니지만 코디네이터가 읽는다. "약속 밖" 은 무엇을 돌려줄지
   // 고칠 수 있다는 뜻이지, 읽는 쪽에게 일부러 불친절해도 된다는 뜻이 아니다 — 세을 한 이름으로
   // 묶으면 가이드가 그 자리마다 "어떤 items 인가" 를 다시 설명해야 한다.
@@ -165,8 +166,11 @@ export const okEnvelope = (cmd: string, body: unknown, mark: ReplayMark = null):
  * 실재하는 명령인지, 그리고 부를 수 있는 명령인지 본다).
  */
 const LISTING: Record<string, readonly string[]> = {
-  // 이 404 는 회차가 아니라 `--coordinator-account` 의 계정이다
-  'run-create': ['astera accounts'],
+  // 이 404 는 회차가 아니라 `--coordinator-account` 의 계정이다. **`accounts list` 로 권한다** —
+  // 셸에서 부른 쪽도 칠 수 있는 공개 이름이다. 동사 없는 `accounts` 는 세션 명령이라 `--help` 에 없다.
+  'run-create': ['astera accounts list'],
+  // 공개 이름도 같다 — 명사 규칙(`jobs list`)은 계획 id 를 주는데, 이 명령이 못 찾는 것은 계정이다.
+  'jobs-create': ['astera accounts list'],
   // **`--id` 는 Job 도 회차도 받고, 지우는 것이 다르다.** Job 을 주면 그 계획과 회차 전부가
   // 사라진다 — 회차 하나를 지우려던 사람에게 `jobs list` 만 주면 그 목록의 id 가 바로 그 사고다.
   'run-delete': ['astera jobs list', 'astera runs list'],
@@ -179,7 +183,11 @@ const LISTING: Record<string, readonly string[]> = {
   'run-use': ['astera runs list'],
   // **회차다.** `--run` 에 Job id 도 통하지만 그것은 템플릿의 정의 Task 를 만드는 다른 일이다.
   // `--deps`·`--parent` 가 못 찾는 것은 Task 다. `--account` 가 못 찾는 것은 계정이다.
-  'task-create': ['astera runs list', 'astera tasks list', 'astera accounts'],
+  'task-create': ['astera runs list', 'astera tasks list', 'astera accounts list'],
+  // **네 가지를 못 찾는다**: `--job` 의 계획, `--run` 의 회차, `--deps`·`--parent` 의 Task,
+  // `--account` 의 계정. task-create 와 달리 `jobs list` 를 권해도 된다 — 이 명령은 플래그가 종류를
+  // 정하므로 `--run` 에 넣은 계획 id 는 정의 Task 가 되지 않고 404 로 돌아온다(command.ts).
+  'tasks-add': ['astera jobs list', 'astera runs list', 'astera tasks list', 'astera accounts list'],
   'task-update': ['astera tasks list'],
   // **Dispatch 를 통째로 세는 명령은 없다** — `dispatch-show` 는 Task 하나의 것만 준다. 그래서 두
   // 줄이고, 앞 줄이 뒷줄의 `<taskId>` 를 준다. 한 줄만 주면 채워질 길이 없는 자리표시자가 된다.

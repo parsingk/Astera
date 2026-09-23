@@ -188,7 +188,7 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
   // 세션 전용 명령은 무엇을 못 찾았다고 말하는지가 갈래다 — run-create 가 못 찾는 것은
   // 회차가 아니라 계정이다.
   it('세션 전용 명령은 그것이 못 찾은 것의 목록으로 이어진다', () => {
-    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'run-create' })).toEqual(['astera accounts'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'run-create' })).toEqual(['astera accounts list'])
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'run-merge' })).toEqual(['astera runs list'])
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'task-update' })).toEqual(['astera tasks list'])
   })
@@ -222,7 +222,20 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'task-create' })).toEqual([
       'astera runs list',
       'astera tasks list',
-      'astera accounts'
+      'astera accounts list'
+    ])
+  })
+
+  // phase C. 표가 명사 규칙을 이긴다 — jobs create 가 못 찾는 것은 계획이 아니라 계정이다.
+  // tasks add 는 네 가지를 못 찾는다: --job 의 계획, --run 의 회차, --deps·--parent 의 Task,
+  // --account 의 계정. 종류를 확인하므로 다른 목록의 id 는 받아들여지지 않고 404 다.
+  it('jobs create 와 tasks add 는 못 찾은 것의 목록으로 간다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'jobs-create' })).toEqual(['astera accounts list'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'tasks-add' })).toEqual([
+      'astera jobs list',
+      'astera runs list',
+      'astera tasks list',
+      'astera accounts list'
     ])
   })
 

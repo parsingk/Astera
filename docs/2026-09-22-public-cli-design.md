@@ -153,6 +153,13 @@ already ships is the same evidence.
 `ask`, `gate-*`, `task-create`, `task-update` are not part of the public surface and are not renamed
 — renaming them would cost a guide rewrite and buy nothing, since nobody outside the app types them.
 
+*Phase C (2026-09-23) changed the premise for one of them.* A shell or CI caller now plans a Job
+itself, so `task-create` gained a public name, `tasks add`, beside `jobs create` (over `run-create
+--auto`) and `accounts list` (over `accounts`). The old names are not renamed: they stay exactly as
+the guide teaches them, and the public names route to the same handlers. `tasks add` differs in
+one respect on purpose: it takes exactly one of `--job` or `--run`, with no default and no reading
+of one kind of id as the other.
+
 `tasks list` is the one read command that overlaps: it is `task-list` under a public name, because a
 person watching a Job wants to see its Tasks and that is the CLI spec's §18.
 

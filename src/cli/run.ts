@@ -255,7 +255,9 @@ export function argsForCall(a: {
   cwd: string
 }): Record<string, unknown> {
   const hasExplicitCwd = typeof a.args.cwd === 'string' && a.args.cwd.length > 0
-  return a.cmd === 'run-create' && !hasExplicitCwd ? { ...a.args, cwd: a.cwd } : a.args
+  // `jobs create` is run-create under its public name (command.ts), so it needs the same default.
+  const takesCwd = a.cmd === 'run-create' || a.cmd === 'jobs-create'
+  return takesCwd && !hasExplicitCwd ? { ...a.args, cwd: a.cwd } : a.args
 }
 
 /**

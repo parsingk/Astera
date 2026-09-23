@@ -214,6 +214,18 @@ describe('humanFor', () => {
     expect(humanFor('ask', { answered: true, answer: '그대로', questionId: 'msg_1' })).toBe(null)
   })
 
+  it('accounts list 는 id·provider·label 이다', () => {
+    expect(humanFor('accounts-list', { accounts: [{ id: 'a1', label: '일', provider: 'claude' }] }))
+      .toBe('a1  claude  일')
+  })
+
+  it('jobs create 와 tasks add 는 단건처럼 편다', () => {
+    expect(humanFor('jobs-create', { id: 'job_1', pendingStart: true })).toBe(
+      ['id            job_1', 'pendingStart  true'].join('\n')
+    )
+    expect(humanFor('tasks-add', { id: 't1', status: 'ready' })).toBe(['id      t1', 'status  ready'].join('\n'))
+  })
+
   // 억지로 표를 씌우면 가이드가 시키는 것을 못 읽게 된다
   it('공개 표면이 아닌 명령은 null 이다', () => {
     expect(humanFor('dispatch-show', { id: 'd1' })).toBe(null)

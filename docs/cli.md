@@ -62,8 +62,15 @@ questions list | get
 ```
 
 Everything else needs a Host and exits 3 without one. That includes every command that changes
-something (`jobs run`, `runs stop`, `runs resume`, `questions answer`) and both waiting commands
-(`jobs wait`, `runs wait`), which a static file cannot answer however long they wait.
+something (`jobs create`, `jobs run`, `tasks add`, `runs stop`, `runs resume`, `questions answer`)
+and both waiting commands (`jobs wait`, `runs wait`), which a static file cannot answer however long
+they wait.
+
+**The account list needs the app as well.** Accounts are held by the Astera app, not by the Host, so
+three commands need Astera open: `accounts list`, `tasks add` (it checks every `--account` it is
+given), and `jobs create` when it is given `--coordinator-account`. With only the Host running they
+exit 6 with `APP_REQUIRED` in the message. `jobs create` without `--coordinator-account` needs only
+the Host.
 
 ### Which Host, and which profile
 
@@ -115,6 +122,7 @@ astera jobs    list
 astera jobs    get    --id <jobId | runId>
 astera jobs    run    --id <jobId>
 astera jobs    wait   --id <jobId>  [--timeout-ms <n>]
+astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
 
 astera runs    list   [--job <jobId>]
 astera runs    get    --id <runId>
@@ -123,6 +131,9 @@ astera runs    stop   --id <runId>
 astera runs    resume --id <runId>
 
 astera tasks   list   [--run <runId>] [--status <s>] [--ready] [--brief]
+astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> --account <id,…> [--title <text>] [--deps <json array>] [--parent <taskId>] [--review]
+
+astera accounts list  [--agent <claude|codex>]
 
 astera questions list  [--task <taskId>] [--status <open|resolved>]
 astera questions get    --id <questionId>
@@ -168,6 +179,21 @@ once never need the `runs` commands.
 
 **`jobs run` refuses a Job that is already running** and names the run that is going. It returns the
 run it started, which is the id to pass to `runs wait`.
+
+**`jobs create` makes a plan and runs nothing.** It returns the Job, marked `pendingStart`, with no
+run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in
+the app does. `--cwd` defaults to the directory you ran the command from. Give `--coordinator-account`
+to have a coordinator session drive the Job once it runs; without it the app places the workers
+itself.
+
+**`tasks add` takes exactly one of `--job` or `--run`**, and there is no default. `--job` adds a task
+to the plan, and `jobs run` copies it, with its `--deps` pointing at the copies, into every run it
+starts from then on. `--run` adds a task to one run that already exists. The flag decides which: a run
+id given to `--job`, or a Job id given to `--run`, is a 4, never quietly the other kind. The ids
+`--account` takes come from `accounts list`, first one first, the rest in the order to fail over to.
+
+**`accounts list` prints `id`, `label` and `provider`** for each account the app holds, and nothing
+else about them. `--agent claude` or `--agent codex` narrows it to one vendor.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
 dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
@@ -261,7 +287,9 @@ whether the question is answered. With no Host at all, `requests show` is exit 3
 command that needs one, and for the same reason: there is no receipt to have.
 
 Commands the in-app coordinator agent uses, such as `worker-start`, `send`, `check` and `ask`, are
-not part of this surface and are not described here. `astera help` documents them.
+not part of this surface and are not described here. `astera help` documents them. `jobs create`,
+`tasks add` and `accounts list` are the public names of three of them (`run-create --auto`,
+`task-create`, `accounts`), and the old names keep working for the agents that use them.
 
 ## Output
 
@@ -275,7 +303,7 @@ not part of this surface and are not described here. `astera help` documents the
 
 `data` is always an object, never a bare array, so that a field can be added later without breaking
 every reader. A list arrives under its own noun: `data.jobs`, `data.runs`, `data.tasks`,
-`data.questions`, `data.projects`.
+`data.questions`, `data.projects`, `data.accounts`.
 
 `error.code` is for branching and `error.message` is for a person. The codes are the closed set in
 the exit code table below.
@@ -413,6 +441,16 @@ run=$(astera jobs run --id job_123 --request-id "$CI_JOB_ID-start" | jq -r '.dat
 
 Re-running that step answers with the same run rather than starting a second one. If the step dies
 before it reads the reply, `astera requests show --id "$CI_JOB_ID-start"` says whether it landed.
+
+Plan a Job from a pipeline, then run it (Astera open, since `tasks add` checks the account):
+
+```bash
+account=$(astera accounts list --agent claude | jq -r '.data.accounts[0].id')
+job=$(astera jobs create --objective "nightly dependency bump" --request-id "$CI_JOB_ID-plan" | jq -r '.data.id')
+build=$(astera tasks add --job "$job" --spec "update the lockfile" --account "$account" | jq -r '.data.id')
+astera tasks add --job "$job" --spec "run the tests" --account "$account" --deps "[\"$build\"]"
+run=$(astera jobs run --id "$job" | jq -r '.data.id')
+```
 
 Answer a question from a pipeline:
 

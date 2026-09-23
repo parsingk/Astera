@@ -12,6 +12,7 @@
 // **컴파일러가 빠짐을 잡는다.** 칸을 더하고 두 목록 중 어디에도 적지 않으면 타입 검사가 그
 // 이름을 대며 깨진다. 허용 목록의 유일한 실패 방식이 "낡는 것" 이고, 막을 것은 그것뿐이다.
 import type { Gate, Job, JobRun, Project, Task } from './types'
+import type { OrchAccount } from './command'
 
 /** 두 목록이 그 타입의 칸을 전부 덮지 못하면 남은 이름이 여기 남는다. */
 type Unlisted<
@@ -127,6 +128,11 @@ const QUESTION = [
 ] as const
 type _question = NothingLeft<Unlisted<Gate, typeof QUESTION, []>>
 
+/** 계정은 앱이 이미 이 셋으로만 내보낸다(ipc.ts 의 listAccounts). 그래도 적는 이유는 이 파일의
+ *  머리말 그대로다 — 앱 쪽이 칸을 하나 더하는 순간 그것이 공개 API 가 되지 않게 한다. */
+const ACCOUNT = ['id', 'label', 'provider'] as const
+type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT, []>>
+
 /**
  * 어느 명령이 무엇을 내보내는가.
  *
@@ -140,11 +146,14 @@ const SHAPE: Record<string, readonly string[]> = {
   'projects-find': PROJECT,
   'jobs-list': JOB,
   'jobs-get': JOB,
+  'jobs-create': JOB,
   'runs-list': RUN,
   'runs-get': RUN,
   'tasks-list': TASK,
+  'tasks-add': TASK,
   'questions-list': QUESTION,
-  'questions-get': QUESTION
+  'questions-get': QUESTION,
+  'accounts-list': ACCOUNT
 }
 
 /** 허용된 칸만 남긴다. **없는 칸은 만들지 않는다** — 없는 것을 `undefined` 로 찍으면 JSON 에서

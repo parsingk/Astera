@@ -177,6 +177,10 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
           str(q.question)
         ])
       )
+    case 'accounts-list':
+      return columns(
+        asList(data, 'accounts').map((a) => [str(a.id), str(a.provider), str(a.label)])
+      )
     // 접어 실은 회차를 한 줄 JSON 으로 내면 읽으라고 만든 모드가 읽힐 수 없게 된다.
     case 'jobs-get': {
       const { run, ...job } = data
@@ -217,6 +221,8 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
     case 'projects-find':
     case 'runs-get':
     case 'questions-get':
+    case 'jobs-create':
+    case 'tasks-add':
     case 'status':
     case 'version':
     case 'host-status':
