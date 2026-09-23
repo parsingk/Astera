@@ -3,6 +3,7 @@ import { promises as fs, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHostSpawner, type HostSpawnerDeps } from './spawner'
+import { AppUnreachable } from '../core/host/orchProtocol'
 import { PtyRegistry, type RegistryPty } from './registry'
 import type { HostMessage } from '../core/host/protocol'
 import { HOST_ONLY_ENV } from '../core/host/spawn'
@@ -137,6 +138,16 @@ describe('createHostSpawner', () => {
     expect(h.spawned).toHaveLength(0)
   })
 
+  // Only the app can repair the file, so the refusal is the app being required: the command layer
+  // answers it as CONFLICT (exit 6) with these words, not as a bad argument.
+  it('refuses a broken settings file as a refusal only the app can clear', async () => {
+    await fs.writeFile(path.join(profile, 'app-settings.json'), '{ not json')
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    await expect(h.spawner!.startWorker(startArgs(taskId, dispatchId))).rejects.toBeInstanceOf(AppUnreachable)
+    await expect(h.spawner!.startCoordinator({ runId: 'run_1', cwd: repo, accountId: 'acc1', brief: 'b' })).rejects.toBeInstanceOf(AppUnreachable)
+  })
+
   // Task 5's review: the app's preTrust adapter throws on an account it cannot find
   // (core.accounts.get), so the Host's does too, and the coordinator never spawns.
   // The broken settings file is what shows where it throws: the app's lookup fails in the trust step,
@@ -223,8 +234,40 @@ describe('createHostSpawner', () => {
   it('does not own a start that needs a new worktree', () => {
     const h = rig()
     expect(h.spawner!.owns('startWorker', [{ worktree: 'new', name: 'x' }])).toBe(false)
-    expect(h.spawner!.owns('startWorker', [{ worktree: 'new', terminal: 'ses_1' }])).toBe(true)
     expect(h.spawner!.owns('startWorker', [{ worktree: 'current' }])).toBe(true)
+  })
+
+  // Review M2 of Task 9: ownership follows who spawned the session. A `--terminal` reuse types into
+  // the session, and a release kills it; the Host can do either only to a session its registry holds.
+  it('owns a --terminal reuse only of a session its registry holds', () => {
+    const h = rig()
+    expect(h.spawner!.owns('startWorker', [{ worktree: 'new', terminal: 'ses_app_local' }])).toBe(false)
+    h.registry.open({ id: 'pty_t', file: 'claude', args: [], opts: { cwd: repo, cols: 120, rows: 30, env: {} },
+      meta: { kind: 'session', id: 'ses_1', restore: { accountId: 'acc1' } } })
+    expect(h.spawner!.owns('startWorker', [{ worktree: 'new', terminal: 'ses_1' }])).toBe(true)
+  })
+
+  it('does not own the release of a worker whose session its registry never held', async () => {
+    const seed = seeded()
+    let state = seed.s
+    const h = rig({ state: () => state })
+    const onSession = (sessionId: string, extra: Partial<OrchState['dispatches'][number]> = {}) =>
+      (state = { ...state, dispatches: state.dispatches.map((x) => (x.id === seed.dispatchId ? { ...x, sessionId, ...extra } : x)) })
+    const owns = () => h.spawner!.owns('releaseWorker', [{ dispatchId: seed.dispatchId }])
+    // pending, unknown, retained: there is nothing to kill on either side, so the Host answers.
+    expect(owns()).toBe(true)
+    expect(h.spawner!.owns('releaseWorker', [{ dispatchId: 'dsp_gone' }])).toBe(true)
+    onSession('ses_app_local', { retained: true })
+    expect(owns()).toBe(true)
+    // The app spawned it in its own node-pty: only the app can kill it.
+    onSession('ses_app_local', { retained: false })
+    expect(owns()).toBe(false)
+    // A session the registry holds, alive or already ended, is the Host's to answer.
+    const r = await h.spawner!.startWorker(startArgs(seed.taskId, seed.dispatchId))
+    onSession(r.sessionId)
+    expect(owns()).toBe(true)
+    h.spawned[0].pty.exit(0)
+    expect(owns()).toBe(true)
   })
 
   it('releases a worker by killing its own pty', async () => {

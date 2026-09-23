@@ -11,6 +11,7 @@ import { existsSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { HostMessage, PtyEntry } from '../core/host/protocol'
+import { AppUnreachable } from '../core/host/orchProtocol'
 import { hostCliPaths, hostWorkerBaseEnv } from '../core/host/spawn'
 import type { OrchServerDeps } from '../core/orchestration/command'
 import type { OrchState } from '../core/orchestration/state'
@@ -222,6 +223,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     if (m?.kind === 'session') busyOf.delete(m.id)
   })
 
+  /** Whether this registry ever held a pty for the session, alive or ended. One it never held was
+   *  spawned by the app in its own node-pty (the unresponsive-Host fallback), so it is the app's to type
+   *  into or to kill (review M2). */
+  const held = (sessionId: string): boolean =>
+    registry.list().some((e) => e.meta?.kind === 'session' && e.meta.id === sessionId)
   const norm = (p: string): string => path.resolve(p).toLowerCase()
   const alive = (ptyId: string): boolean => registry.list().some((e) => e.id === ptyId && e.alive)
   /** The watcher's claimed(): every rollout a live session's note already holds, other than this pty's.
@@ -287,13 +293,14 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   }
 
   /** Task 4's ruling: a settings file the Host cannot read may have said 'manual', so it is never read
-   *  as the bypass. The spawn is refused with the reader's own "open Astera to repair it". */
+   *  as the bypass. The spawn is refused with the reader's own "open Astera to repair it", as an
+   *  `AppUnreachable`: only the app can repair the file, so the command answers CONFLICT (orchDeps). */
   const bypassFromSettings = async (): Promise<boolean> => {
     try {
       return (await readAgentPermissionMode(settingsPath)) === 'yolo'
     } catch (err) {
       log(`spawn refused: ${(err as Error).message}`)
-      throw new Error(`the Host will not start a session: ${(err as Error).message}`)
+      throw new AppUnreachable(`the Host will not start a session: ${(err as Error).message}`)
     }
   }
 
@@ -432,7 +439,14 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     },
     owns: (name, args) => {
       const a = (args[0] ?? {}) as { terminal?: string; worktree?: string; dispatchId?: string }
-      if (name === 'startWorker') return !!a.terminal || a.worktree !== 'new'
+      if (name === 'startWorker') return a.terminal ? held(a.terminal) : a.worktree !== 'new'
+      if (name === 'releaseWorker') {
+        const r = releaseArgsFor(d.getState().dispatches, a.dispatchId ?? '')
+        // Unknown, retained, reused by a later Dispatch, or still pending: nothing is killed on either
+        // side, so the Host answers (and logs, as the app does).
+        if (!r || r.retained || !r.isLatestOwner || r.sessionId.startsWith('pending:')) return true
+        return held(r.sessionId)
+      }
       if (name === 'readWorker') {
         const id = a.dispatchId ?? ''
         const disp = d.getState().dispatches.find((x) => x.id === id)
