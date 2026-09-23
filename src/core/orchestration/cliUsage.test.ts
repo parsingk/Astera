@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { BROWSER_VERBS, NOUNS } from './cliArgs'
 import { USAGE, usageFor, type PublicCommand } from './cliUsage'
+import { agentContext } from './cliAgentContext'
 
 /** 사람이 치는 모양(`jobs wait`)이 아니라 표의 키(`jobs-wait`). */
 const commandsFromNouns = (): string[] =>
@@ -203,6 +204,33 @@ const flagsOf = (cmd: PublicCommand): DocFlag[] =>
   (USAGE[cmd].flags ?? [])
     .map((f) => ({ name: f.name, takesValue: f.value !== undefined, required: f.required === true }))
     .sort(byName)
+
+// **전역 플래그는 표에 없다** — `USAGE` 는 명령마다의 플래그이고 `--json`·`--quiet` 같은 것은 어느
+// 명령의 것도 아니다. 그래서 위의 명령 가드가 이것들을 보지 못하고, 그 사이로 `--no-keepalive` 가
+// 스키마에만 있고 사용법에도 문서에도 없는 상태로 살 수 있었다. 여기서 그 자리 둘을 마저 못 박는다.
+//
+// **무엇을 못 박지 않는지도 적어 둔다:** 문구다. 문서가 이 플래그를 *어떻게* 설명하는지, 기다림의
+// 줄이 어떤 모양인지는 아무것도 지키지 않는다 — 두 글은 읽는 사람이 다르고, 문구까지 묶으면 옳은
+// 문서를 고쳤다는 이유로 테스트가 깨진다(이 파일의 명령 가드가 자리표시자를 비교하지 않는 것과
+// 같은 판단이다).
+describe('cliUsage — 전역 플래그는 사용법과 문서에도 있다', () => {
+  const globals = agentContext().globalFlags.map((f) => f.name)
+  const doc = readFileSync(docPath, 'utf8')
+
+  it('스키마가 적은 전역 플래그는 문서에 이름이 있다', () => {
+    for (const name of globals) expect(doc, name).toContain(`--${name}`)
+  })
+
+  // 루트 사용법은 `--json` 을 이름으로 부르지 않는다("output is JSON") — 그래서 전부를 돌지 않고,
+  // 출력 모양을 고르는 플래그들만 본다.
+  it('출력을 고르는 플래그는 루트 사용법에도 있다', () => {
+    const root = (usageFor(['--help']) as { text: string }).text
+    for (const name of ['human', 'quiet', 'no-keepalive']) {
+      expect(globals, name).toContain(name)
+      expect(root, name).toContain(`--${name}`)
+    }
+  })
+})
 
 describe('cliUsage — docs/cli.md 의 명령 목록과 같다', () => {
   const lines = commandReferenceBlock(readFileSync(docPath, 'utf8'))

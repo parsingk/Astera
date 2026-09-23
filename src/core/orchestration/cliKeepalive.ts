@@ -15,7 +15,7 @@
 //
 // **The line is pure here and the timer is in run.ts**, the same split as cliHuman.ts: what to print
 // is decided without a clock, a socket or a process.
-import { HOST_UNRESPONSIVE_MS } from '../host/unresponsive'
+import { HOST_UNRESPONSIVE_MS, PING_MS } from '../host/unresponsive'
 import { spelledCommand } from './cliUsage'
 
 /**
@@ -42,12 +42,14 @@ export const KEEPALIVE_MS = HOST_UNRESPONSIVE_MS
  * every healthy Host would report a last answer exactly one interval old — the same number an
  * unresponsive one reports — and the field would carry no information at all.
  *
- * The divisor is 3 because that is the one the app already uses: `PING_MISSES` is
- * `HOST_UNRESPONSIVE_MS / PING_MS` (main/host/client.ts), so three unanswered heartbeats is what the
- * app calls unresponsive, and this lands on the same 5s cadence. A CLI that waits on the same Host
- * asks at the same rate.
+ * **It is the app's own `PING_MS`, not a divisor written a second time.** This used to say
+ * `HOST_UNRESPONSIVE_MS / 3`, which is the arithmetic `PING_MISSES` does in `main/host/client.ts`
+ * (`HOST_UNRESPONSIVE_MS / PING_MS`) with the answer hardcoded — so a change to `PING_MS` would have
+ * moved the app's heartbeat and left this one where it was, silently. The constant moved to
+ * core/host/unresponsive.ts instead, beside the threshold it is paired with, and both processes now
+ * ask the same Host at the same rate by construction.
  */
-export const KEEPALIVE_PING_MS = HOST_UNRESPONSIVE_MS / 3
+export const KEEPALIVE_PING_MS = PING_MS
 
 /**
  * Is this call one that blocks for a person?

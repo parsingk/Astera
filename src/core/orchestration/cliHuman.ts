@@ -200,15 +200,15 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
       const steps = Array.isArray(data.nextSteps)
         ? (data.nextSteps as unknown[]).filter((s): s is string => typeof s === 'string')
         : []
-      const head = 'the deadline passed and the question is still open.'
+      const head = 'the deadline passed and the question is still open'
       if (steps.length === 0) {
+        // `but` 로 잇는다 — 그 칸의 문장은 소문자로 시작하는 절이고(cliOutput 의 두 상수), 마침표
+        // 뒤에 그대로 붙이면 문장이 소문자로 시작한다.
         const why =
-          typeof data.cannotResume === 'string'
-            ? data.cannotResume
-            : 'do not ask again while it may still be pending'
-        return `${head} ${why}`
+          typeof data.cannotResume === 'string' ? data.cannotResume : 'it cannot be resumed safely'
+        return `${head}, but ${why}`
       }
-      return [`${head} Do not ask again; keep waiting:`, ...steps.map((s) => `  ${s}`)].join('\n')
+      return [`${head}. Do not ask again; keep waiting:`, ...steps.map((s) => `  ${s}`)].join('\n')
     }
     // 잘 끝난 때만 여기까지 온다 — 나머지 끝은 종료 코드와 한 줄로 나간다(run.ts).
     case 'jobs-wait':

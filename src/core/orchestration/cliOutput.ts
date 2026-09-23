@@ -233,13 +233,16 @@ const STEPS: Record<
   // 질문은 여전히 열려 있고, 그것을 실패로 읽고 다시 묻는 워커는 같은 사람에게 질문을 둘 만든다
   // (`silentHostEnd` 가 이 `details` 를 채운다). 조건이 붙는 이유는 자리표시자다: 모르는 id 를
   // `<questionId>` 로 남겨 주면 워커가 채울 수 있는 것은 짐작뿐이고, 짐작한 id 는 2 로 끝나거나
-  // 남의 질문을 기다린다. **여기서는 `--timeout-ms` 를 싣지 않는다** — 이 표가 보는 것은 코드와
-  // 명령 이름뿐이고 인자를 보지 못한다. 답이 온 쪽(`askTimeoutBody`)은 인자를 보므로 부르는 쪽이
-  // 정한 시한까지 그대로 옮긴다.
-  TIMEOUT: (cmd, details) =>
-    cmd === 'ask' && typeof details.questionId === 'string'
-      ? ['astera ask --resume <questionId>', 'astera host status']
-      : ['astera host status'],
+  // 남의 질문을 기다린다. **`--timeout-ms` 도 같은 방식으로 붙인다** — 표는 인자를 보지 못하지만
+  // `details` 는 보고, 그것이 없으면 덜 아는 쪽(답이 아예 안 온 갈래)이 더 나쁜 줄을 받는다.
+  TIMEOUT: (cmd, details) => {
+    if (cmd !== 'ask' || typeof details.questionId !== 'string') return ['astera host status']
+    const resume =
+      typeof details.timeoutMs === 'number'
+        ? 'astera ask --resume <questionId> --timeout-ms <timeoutMs>'
+        : 'astera ask --resume <questionId>'
+    return [resume, 'astera host status']
+  },
   // 8 은 질문이 열린 것과 회차가 멈춘 것, 둘 다다. 어느 쪽인지는 `details.state` 가 말한다.
   WAITING_FOR_INPUT: () => [
     'astera questions list --status open',
@@ -257,6 +260,10 @@ const STEPS: Record<
  * **자리표시자는 `details` 에서 채운다.** `<runId>` 는 `details.runId` 가 있으면 그 값이 된다 —
  * `wait` 의 오류는 이미 그 값을 싣고 있고(`waitEnd`), 채워 주면 그대로 칠 수 있는 줄이 된다.
  * 없는 것은 자리표시자로 남는다: 짐작한 id 를 채우는 것보다 비워 두는 편이 낫다.
+ *
+ * **글자와 수를 둘 다 채운다.** 채울 값이 언제나 id 인 것은 아니다 — `--timeout-ms <ms>` 는 수이고,
+ * 그것을 받으려고 `details` 에 문자열로 적어 두면 봉투를 읽는 쪽이 수를 글자로 받는다. 채우는
+ * 규칙이 "이 오류가 이미 싣고 있는 값" 이므로 종류로 가르지 않는다.
  */
 export function nextStepsFor(a: {
   code: CliErrorCode
@@ -266,9 +273,10 @@ export function nextStepsFor(a: {
 }): string[] {
   const details = a.details ?? {}
   return STEPS[a.code](a.cmd, details).map((step) =>
-    step.replace(/<([A-Za-z]+)>/g, (whole, key: string) =>
-      typeof details[key] === 'string' ? (details[key] as string) : whole
-    )
+    step.replace(/<([A-Za-z]+)>/g, (whole, key: string) => {
+      const v = details[key]
+      return typeof v === 'string' || typeof v === 'number' ? String(v) : whole
+    })
   )
 }
 
@@ -341,10 +349,21 @@ export function waitEnd(body: unknown): CliError | null {
 const resumeCommand = (a: { questionId: string; args: Record<string, unknown> }): string =>
   `astera ask --resume ${a.questionId}${typeof a.args.timeoutMs === 'number' ? ` --timeout-ms ${a.args.timeoutMs}` : ''}`
 
-/** 질문 id 없이 끝난 `ask` 에게 주는 문장. **명령 대신 사실이다** — 이 자리에서 줄 수 있는 명령은
- *  자리표시자가 남은 줄뿐이고, 그것을 채우는 방법은 짐작밖에 없다. */
-const CANNOT_RESUME =
+/**
+ * 다시 기다릴 수 없는 두 경우, **다른 문장**. 둘 다 명령 대신 사실을 준다 — 이 자리에서 줄 수
+ * 있는 명령은 자리표시자가 남은 줄뿐이고, 그것을 채우는 방법은 짐작밖에 없다.
+ *
+ * **한 문장을 두 자리에 쓰면 한쪽에서 거짓이 된다.** 실제로 그랬다: 답이 오지 않은 갈래에
+ * "답이 질문을 이름 붙이지 못했다" 를 붙여 놓았고, 그 줄을 읽는 에이전트는 **답은 왔다 = 질문은
+ * 만들어졌다** 로 읽는다. 그 갈래에서 이쪽이 아는 것은 그 반대다. 시한을 넘긴 답이 무엇을
+ * 가르치는가가 이 기능 전체의 요지이므로, 문장도 갈라 둔다.
+ */
+const UNNAMED_QUESTION =
   'the answer did not name the question, so this wait cannot be resumed safely; the question may still be pending, so do not ask again'
+
+/** 답이 **아예 오지 않은** 갈래(`silentHostEnd`). 질문이 만들어졌는지조차 이쪽은 모른다. */
+const NO_ANSWER_AT_ALL =
+  'no answer came back at all, so there is no way to tell from here whether the question was created; it cannot be resumed safely, and asking again risks a second question in front of the same person'
 
 /**
  * 시한이 지난 `ask` 의 답에 **다시 기다리는 법**을 싣는다.
@@ -371,7 +390,7 @@ export function askTimeoutBody(a: { body: unknown; args: Record<string, unknown>
   // 그 안내가 아무것도 뜻하지 않게 된다.
   if (timed.timedOut !== true) return b
   const id = typeof timed.questionId === 'string' && timed.questionId.length > 0 ? timed.questionId : null
-  if (id === null) return { ...b, cannotResume: CANNOT_RESUME, nextSteps: [] }
+  if (id === null) return { ...b, cannotResume: UNNAMED_QUESTION, nextSteps: [] }
   return { ...b, nextSteps: [resumeCommand({ questionId: id, args: a.args })] }
 }
 
@@ -384,8 +403,12 @@ export function askTimeoutBody(a: { body: unknown; args: Record<string, unknown>
  * 첫 질문이 영영 답 없이 남을 수도 있다.
  *
  * **아는 것과 모르는 것을 가른다.** `--resume` 으로 기다리던 중이었다면 id 는 이 프로세스가
- * 보낸 값이므로 확실히 안다. 새 질문이었다면 id 를 돌려받지 못했으므로 모르고, 그때는 명령이
- * 아니라 그 사실을 말한다.
+ * 보낸 값이므로 확실히 안다. 새 질문이었다면 id 를 돌려받지 못했으므로 모르고 — 질문이
+ * 만들어졌는지조차 모른다 — 그때는 명령이 아니라 그 사실을 말한다(`NO_ANSWER_AT_ALL`).
+ *
+ * **부르는 쪽이 정한 시한도 함께 싣는다.** 답이 온 갈래(`askTimeoutBody`)는 인자를 보고 그 값을
+ * 줄에 옮기는데, 이쪽만 그것을 잃으면 **덜 아는 쪽이 더 나쁜 줄을 받는다**. 표는 인자를 보지
+ * 못하므로 값을 `details` 로 건네고, 자리표시자를 채우는 것은 `nextStepsFor` 가 이미 한다.
  */
 export function silentHostEnd(a: {
   cmd: string
@@ -398,9 +421,12 @@ export function silentHostEnd(a: {
   if (resuming !== null)
     return {
       message: `${a.reason} — the question is still pending; resume waiting rather than asking again`,
-      details: { questionId: resuming }
+      details: {
+        questionId: resuming,
+        ...(typeof a.args.timeoutMs === 'number' ? { timeoutMs: a.args.timeoutMs } : {})
+      }
     }
-  return { message: `${a.reason} — ${CANNOT_RESUME}`, details: {} }
+  return { message: `${a.reason} — ${NO_ANSWER_AT_ALL}`, details: {} }
 }
 
 /**

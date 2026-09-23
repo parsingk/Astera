@@ -318,7 +318,9 @@ describe('askTimeoutBody — 시한이 지난 ask', () => {
       cannotResume: string
     }
     expect(r.nextSteps).toEqual([])
-    expect(r.cannotResume).toContain('cannot be resumed safely')
+    // 이쪽은 답이 **왔다** — 무엇이 빠졌는지를 말한다. 아무것도 안 온 갈래의 문장과 다르다.
+    expect(r.cannotResume).toContain('the answer did not name the question')
+    expect(r.cannotResume).not.toContain('no answer came back at all')
   })
 
   // 답이 온 ask 와 다른 명령의 본문에는 손대지 않는다 — 기다림이 아닌 출력에 기다림의 안내를
@@ -342,10 +344,30 @@ describe('silentHostEnd — Host 가 답하지 않은 채 시한이 지났다', 
     ])
   })
 
-  it('새 질문이었으면 id 를 모른다고 말하고 명령을 지어내지 않는다', () => {
+  // **덜 아는 쪽이 더 나쁜 줄을 받으면 안 된다.** 답이 온 갈래는 인자를 보고 시한을 옮기는데,
+  // 답이 안 온 이쪽만 그것을 잃으면 박자를 정한 호출자가 기본값으로 되돌아간다.
+  it('부르는 쪽이 정한 시한은 이 갈래에서도 그 줄에 남는다', () => {
+    const end = silentHostEnd({
+      cmd: 'ask',
+      args: { resume: 'msg_7', timeoutMs: 60000 },
+      reason: '시한'
+    })
+    expect(end.details).toEqual({ questionId: 'msg_7', timeoutMs: 60000 })
+    expect(nextStepsFor({ code: 'TIMEOUT', cmd: 'ask', details: end.details })).toEqual([
+      'astera ask --resume msg_7 --timeout-ms 60000',
+      'astera host status'
+    ])
+  })
+
+  // **두 갈래의 문장이 다르다, 그리고 그것이 요점이다.** "답이 질문을 이름 붙이지 못했다" 를
+  // 여기에 쓰면 답이 오기는 왔다고 — 따라서 질문은 만들어졌다고 — 가르치는 셈인데, 이 갈래에서
+  // 이쪽이 아는 것은 정확히 그 반대다.
+  it('새 질문이었으면 아무것도 안 왔다고 말한다, 답이 모자랐다고 말하지 않는다', () => {
     const end = silentHostEnd({ cmd: 'ask', args: { question: '어느 쪽인가' }, reason: '시한이 지났다' })
     expect(end.message).toContain('시한이 지났다')
-    expect(end.message).toContain('cannot be resumed safely')
+    expect(end.message).toContain('no answer came back at all')
+    expect(end.message).toContain('whether the question was created')
+    expect(end.message).not.toContain('the answer did not name the question')
     expect(end.details).toEqual({})
     expect(nextStepsFor({ code: 'TIMEOUT', cmd: 'ask', details: end.details })).toEqual([
       'astera host status'

@@ -569,12 +569,23 @@ line, the one that waits again on the question you already asked:
 Run that line. Do not ask again: the question is still open and still in front of the same person, so
 a second one is answered once and waited on twice (section 6).
 
-**When the id is not there, the list is empty and `data.cannotResume` says why.** That happens when
-the answer came back without naming the question, and it is said out loud rather than papered over
-with a line you cannot run. The same sentence appears in the `message` of a `7` from `ask`, which is
-the other way this ends: the Host never answered at all, so this CLI cannot know whether the question
-exists. Either way, do not re-ask — tell your coordinator with `send --type escalation` if you are
-stuck without it.
+**When the id is not there, the list is empty and `data.cannotResume` says why**, rather than handing
+you a line you cannot run:
+
+> the answer did not name the question, so this wait cannot be resumed safely; the question may still
+> be pending, so do not ask again
+
+**A `7` from `ask` is a different ending and says a different thing.** There the Host never answered
+at all, so nothing came back to be missing an id — and this CLI cannot tell whether your question was
+ever created:
+
+> no answer came back at all, so there is no way to tell from here whether the question was created;
+> it cannot be resumed safely, and asking again risks a second question in front of the same person
+
+Read the two apart. The first says a question exists and cannot be named; the second says not even
+that much is known. Neither is a reason to ask again — if you are stuck without the answer, tell your
+coordinator with `send --type escalation`. A `7` from `ask` that *was* a `--resume` carries the id it
+was given, so its `nextSteps` has the line to run.
 
 ### 4.9 While you wait
 
@@ -639,14 +650,16 @@ server blocks `check` and `inbox` as coordinator-only (403).
   ```
   On `data` = `{"answered":true,"answer":"…"}`, proceed accordingly.
 - **If `ask` times out, do not ask again — keep waiting with `--resume`.** The question stays pending,
-  and re-asking is rejected (one unanswered question per Dispatch). The answer hands you the line:
+  and re-asking is rejected (one unanswered question per Dispatch). The answer hands you the line to
+  run, so take it from there rather than assembling one:
   ```bash
-  astera ask --json | jq -r '.data.nextSteps[]'   # astera ask --resume msg_ab12cd34
-  astera ask --resume <questionId> --json
+  answer=$(astera ask --task-id <tsk> --question - --json < q.txt)
+  echo "$answer" | jq -r '.data.nextSteps[]'   # astera ask --resume msg_ab12cd34
+  astera ask --resume msg_ab12cd34 --json      # and again, as many times as it takes
   ```
-  Repeat as many times as needed. A timeout is not a failure — nothing about the question changed,
-  only this call gave up waiting on it. If `data.nextSteps` is empty, `data.cannotResume` says why
-  (section 4.8); guessing an id from there waits on somebody else's question.
+  A timeout is not a failure — nothing about the question changed, only this call gave up waiting on
+  it. If `data.nextSteps` is empty, `data.cannotResume` says why (section 4.8); guessing an id from
+  there waits on somebody else's question.
 - **When ownership is still valid and the coordinator should step in but it is not blocking, use
   `escalation`** (non-blocking):
   ```bash

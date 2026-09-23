@@ -206,7 +206,7 @@ describe('humanFor', () => {
   it('다시 기다릴 수 없으면 왜인지를 말한다', () => {
     expect(
       humanFor('ask', { answered: false, timedOut: true, nextSteps: [], cannotResume: '이유' })
-    ).toBe('the deadline passed and the question is still open. 이유')
+    ).toBe('the deadline passed and the question is still open, but 이유')
   })
 
   // 답이 온 ask 를 읽는 것은 워커이고, 워커가 읽는 것은 JSON 이다
