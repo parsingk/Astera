@@ -899,6 +899,9 @@ export async function handleCommand(
     // 사람이 앞 회차를 지우면 그 자리가 메워지지 않는다.
     case 'runs-list': {
       const job = str(args.job)
+      // Given with no value (`--job ""`, or a bare `--job`), it is not "no filter": a script whose id
+      // came back empty would read every run as that Job's (review M1). The same 400 as tasks-add.
+      if (args.job !== undefined && job === null) return bad('--job needs a value: the Job id')
       // A named Job that is not there is a 404, not an empty list, for the reason tasks-list gives
       // for its `--run`: the list would read as "that Job has no runs" (conformance audit #101).
       if (job && !s.jobs.some((j) => j.id === job)) return notFound(`unknown job: ${job}`)

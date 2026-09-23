@@ -6047,6 +6047,18 @@ describe('없는 id 는 404 — 순수 층의 거절을 내보내던 자리들',
     expect((listed.body as { id: string }[]).map((r) => r.id)).toEqual([runId])
   })
 
+  // 리뷰 M1. 빈 값(`--job ""`, 또는 값 없는 `--job`)은 걸러지지 않은 전체 목록이 아니다 — 비어 있는 id 를
+  // 받은 스크립트가 모든 회차를 그 Job 의 것으로 읽는다. tasks add 의 --job 과 같은 400 이다.
+  it('runs list --job 에 값이 없으면 400 이다 — 전부를 돌려주지 않는다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    for (const job of ['', true]) {
+      const r = await call(deps, 'runs-list', { job })
+      expect(r, String(job)).toEqual({ status: 400, body: { error: '--job needs a value: the Job id' } })
+    }
+    expect((await call(deps, 'runs-list', {})).status).toBe(200)
+  })
+
   it('tasks list --run 이 없는 회차면 404 다 — 빈 목록이 아니라', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
