@@ -934,8 +934,9 @@ export class SlackNotifier {
    * channel reads. So the text goes through `sanitize` (core/orchestration/checkpoint.ts), the
    * redactor already used for agents' free text (tab briefings, handoffs): `key=value` pairs whose
    * key names a token, key, secret, password or credential and whose value looks like one, Bearer
-   * tokens, and the sk-/gh?_/xox?-/AKIA prefixes. A path is not a credential and stays, and so do
-   * short human passwords and `user:password@` in a URL, which that gate does not catch. Redacted
+   * tokens, the sk-/gh?_/xox?-/AKIA prefixes, the password in a URL's `user:password@`, and a query
+   * value whose parameter name is a credential name (`?key=`, `&sig=`, …). A path is not a credential
+   * and stays, and so do short human passwords outside a URL, which that gate does not catch. Redacted
    * before the cut, as handoff/parse.ts does, so a cut cannot halve a secret past the gate.
    *
    * **The turn summary (sendStopSummary) is not redacted.** It is the model's own reply, which the

@@ -248,7 +248,10 @@ function truncate(text: string, max: number): string {
  *  결과 발췌도 똑같이 사람/에이전트의 자유 형식 텍스트이고, 아래 사고(산문을 망치는 것보다 없던
  *  자격 증명이 있었던 것처럼 보이게 만드는 것이 더 나쁘다)는 그 텍스트에도 그대로 적용된다. 새
  *  규칙을 또 만들면 이 사고를 다시 만든다. Slack 의 "⚠️ 턴 실패" 줄(main/slack.ts sendStopFailure)도
- *  API 오류 문장에 이것을 댄다. */
+ *  API 오류 문장에 이것을 댄다.
+ *
+ *  URL 의 두 자리(userinfo 의 password, 이름이 자격 증명인 query 값)는 값 모양을 보지 않고 가린다 —
+ *  sanitize 안의 주석이 이유와 멈춘 자리를 적어 둔다. */
 /** 값이 자격 증명처럼 **보이는가**. 두 조건을 함께 요구한다: 공백 없는 16자 이상의 긴 런이고,
  *  영어 낱말과 구별되는 신호(숫자·구분자·대소문자 혼용) 중 하나가 있어야 한다.
  *
@@ -291,5 +294,18 @@ export function sanitize(text: string): string {
   ]) {
     out = out.replace(re, '[REDACTED]')
   }
+  // URL 두 자리는 looksLikeSecret 을 거치지 않는다 — 위 게이트는 산문 속 `token:` 을 가려내려는
+  // 것인데, 이 두 자리는 모양 자체가 산문에 나오지 않는다.
+  // scheme://user:password@host 의 password. user 와 host 는 남긴다(어느 계정·어느 곳인지는 판단에
+  // 필요하다). 비밀번호 없는 user@host 와 host:port 는 `:…@` 가 없어 걸리지 않는다.
+  out = out.replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s:/?#@]+):[^\s/?#@]+@/gi, '$1:[REDACTED]@')
+  // 이름이 관례상 자격 증명인 query 파라미터. 이름은 `?`/`&` 에서 `=` 까지 통째로 맞춘다 — 부분
+  // 문자열로 맞추면 monkey=·keyword= 가 걸린다. **여기서 멈춘다:** 이름이 말해 주지 않는 값(id=,
+  // 캐시 키, 해시)을 무작위해 보인다는 이유로 가리면 인계 메모·재개 노트의 평범한 식별자가 바뀌고,
+  // 위 사고처럼 없던 자격 증명이 있었던 것처럼 보이게 된다. 가린 값은 위 규칙과 같은 `name=[REDACTED]`.
+  out = out.replace(
+    /([?&])(key|apikey|api_key|api-key|access_token|auth|sig|signature|client_secret)=[^&#\s"'<>]+/gi,
+    '$1$2=[REDACTED]'
+  )
   return out
 }

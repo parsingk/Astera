@@ -12,7 +12,7 @@ import {
   resolveGate,
   type OrchState
 } from './state'
-import { buildCheckpoint, type GitSummary } from './checkpoint'
+import { buildCheckpoint, sanitize, type GitSummary } from './checkpoint'
 import { formatResumeSection } from './resumeSection'
 
 const NOW = '2026-08-26T00:00:00.000Z'
@@ -330,5 +330,43 @@ describe('buildCheckpoint', () => {
     expect(c.decisions).toEqual([
       { question: 'Which token store?', status: 'resolved', resolution: 'Use the existing KeyStore.' }
     ])
+  })
+})
+
+// Review follow-up: two credential shapes the key=value gate never saw. The URL userinfo password and
+// a query parameter whose name is a credential name are redacted whatever the value looks like; the
+// name is matched whole, so a name that merely contains one (monkey, keyword) is left alone.
+describe('sanitize — URL userinfo and credential-named query parameters', () => {
+  it('redacts the password in scheme://user:password@host and keeps the user and host', () => {
+    expect(sanitize('clone https://admin:hunter2@git.corp/repo failed')).toBe(
+      'clone https://admin:[REDACTED]@git.corp/repo failed'
+    )
+    expect(sanitize('postgres://svc:p%40ss@db:5432/app')).toBe('postgres://svc:[REDACTED]@db:5432/app')
+  })
+
+  it('redacts a query value whose name is a credential name, in any case', () => {
+    expect(sanitize('GET https://maps.example.com/api?key=abc123&page=2')).toBe(
+      'GET https://maps.example.com/api?key=[REDACTED]&page=2'
+    )
+    expect(sanitize('https://h/p?x=1&APIKEY=short&api-key=v&Sig=s1#frag')).toBe(
+      'https://h/p?x=1&APIKEY=[REDACTED]&api-key=[REDACTED]&Sig=[REDACTED]#frag'
+    )
+    expect(sanitize('https://h/cb?access_token=t0k&auth=x&signature=zz&client_secret=cs')).toBe(
+      'https://h/cb?access_token=[REDACTED]&auth=[REDACTED]&signature=[REDACTED]&client_secret=[REDACTED]'
+    )
+  })
+
+  it('leaves names that only contain a credential name, users without a password and plain ids', () => {
+    for (const text of [
+      'https://h/p?monkey=1',
+      'https://h/p?keyword=x',
+      'https://h/p?id=abc',
+      'ssh://git@github.com/org/repo.git',
+      'https://user@host/path',
+      'http://localhost:5173/app',
+      'monkey=1 and keyword=x in prose'
+    ]) {
+      expect(sanitize(text)).toBe(text)
+    }
   })
 })
