@@ -916,6 +916,24 @@ export class SlackNotifier {
    * async hook, so the decision waits STOP_FAILURE_DELAY_MS (the exit notification's delay), then
    * posts unless the scanner fired within LIMIT_SEEN_WINDOW_MS of the hook. A scanner that never
    * fired cannot suppress it, so a limit is never missed; the cost is a few seconds' delay.
+   *
+   * **The error text is posted as Claude Code wrote it, unredacted.** What it can hold, from the
+   * 2.1.280 binary's error-to-message builder (`pNn`, each case an `Ao({content: …})`):
+   * - mostly fixed sentences ("Request timed out", "Connection refused … (ECONNREFUSED)", the limit
+   *   texts) and the API's own `error.message`, which `Mwe` pulls out of a JSON body so the body
+   *   and its `request_id` are dropped. The raw `e.message`, body and all, is used only when that
+   *   parse finds no message;
+   * - a gateway's HTML error page reduced to its `<title>`;
+   * - `cloud_credential_error`: "Could not load <provider> credentials · <the provider SDK's own
+   *   message>", which can name a credentials file path or a profile;
+   * - the fallback for any other error, "API Error: <e.message>", whose text is whatever threw,
+   *   including a local path.
+   * So a path can reach the thread; nothing token-like is put there by Claude Code itself. The repo
+   * has no redactor for free text to apply: core/slack/transcript.ts's REDACTED_KEYS hides tool
+   * arguments by key name, and core/slack/inbound.ts's sanitizeChatText strips control characters
+   * from replies coming in. The turn summary (sendStopSummary) already posts arbitrary assistant
+   * text into the same thread, so this line is the same exposure, capped the same way. If a
+   * redactor is ever added, it belongs in `send`, for every line.
    */
   private sendStopFailure(record: SlackRecord, error: unknown, lastMessage: unknown): void {
     const message = typeof lastMessage === 'string' ? lastMessage.trim() : ''
