@@ -84,6 +84,7 @@ import {
   specFileName
 } from '../core/orchestration/exec/coordinator'
 import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
+import { killWorkerSession } from './orchestration/stopWorker'
 import {
   handleCommand as orchHandleCommand,
   type OrchServerDeps
@@ -1098,8 +1099,9 @@ export function registerIpc(
    *  what the fallback path cannot deliver. */
   let hostSurvivesUpdate = process.platform !== 'win32'
   /** One `pty-list` round trip, or null before the Host wiring has built one. `startHostClient`
-   *  assigns it; the `host.holdings` handler is the only caller, and it is registered outside that
-   *  function, which is why this is here rather than a local.
+   *  assigns it; the `host.holdings` handler and worker-stop's `killSession` (for a session the Host
+   *  runs and the app does not hold) are the callers, and both are outside that function, which is
+   *  why this is here rather than a local.
    *
    *  **Not routed through the sweep queue.** A sweep can be waiting out its own five seconds, and a
    *  Settings row must not queue behind that; this asks its own question and reads its own reply.
@@ -2709,7 +2711,19 @@ export function registerIpc(
       writeToSession: (id, data) => core.sessions.write(id, data),
       isBusy: orchIsBusy,
       isAlive: (id) => core.sessions.list().some((s) => s.id === id && s.status === 'running'),
-      killSession: (id) => core.sessions.kill(id),
+      // A worker the Host started is not the app's until `pty-opened` has been answered, and
+      // `core.sessions.kill` of a session the app does not hold does nothing — so worker-stop would
+      // mark it stopped while it keeps running. `killWorkerSession` ends it in the Host instead, or
+      // refuses (Task 11 review I3(c)).
+      killSession: (id) =>
+        killWorkerSession(id, {
+          app: { info: (sid) => core.sessions.list().find((s) => s.id === sid), kill: (sid) => core.sessions.kill(sid) },
+          host:
+            hostClient && hostPtyList
+              ? { list: hostPtyList, kill: (ptyId) => hostClient?.send({ t: 'pty-kill', id: ptyId }) ?? false }
+              : null,
+          log: orchLog
+        }),
       // Reuses the worktree creation utility the app already has (core/worktrees/create) — that also
       // registers it, so the worktree list and delete paths in settings handle a worker's worktree
       // exactly like any other. 갈라질 자리를 고르는 판단은 forkWorktree 에 있다(위) — Run 워크트리를
@@ -6917,6 +6931,16 @@ export function registerIpc(
     }
     client.onMessage((m) => {
       if (m.t === 'pty-exit') void maybeReplace('after a pty exited')
+      // A session the Host started for a CLI call (Host S2 design §2.3), taken back the way a restart
+      // takes sessions back: its tab, rolling, attention and Slack all hang off the same adopter.
+      // Through the queue, so it cannot race a sweep already walking the same entry, and through a
+      // fresh `pty-list` rather than `m.entry`: an exit landing between this push and the queued
+      // sweep is then already in the list, so a dead pty is never adopted as running. Its exit is
+      // the Host's in that case, because nothing here sent `pty-attach` for it (R2).
+      if (m.t === 'pty-opened')
+        void takeSessionsBack('the Host opened a session', m.entry.id).catch((e) =>
+          hostLog(`host: could not take back the session the Host opened: ${String(e)}`)
+        )
     })
 
     /** One sweep: ask the Host what it is holding, hand each entry to the manager its note names,
@@ -6929,13 +6953,15 @@ export function registerIpc(
      *  to replay the scrollback again. Queued rather than deduplicated: a sweep that came back with
      *  nothing is not an answer the next one can reuse. */
     let sweeps: Promise<unknown> = Promise.resolve()
-    const takeSessionsBack = (why: string): Promise<SessionsTakenBack> => {
-      const next = sweeps.then(() => sweep(why))
+    const takeSessionsBack = (why: string, only?: string): Promise<SessionsTakenBack> => {
+      const next = sweeps.then(() => sweep(why, only))
       // The queue must not break on a sweep that threw — the caller keeps that rejection.
       sweeps = next.catch(() => undefined)
       return next
     }
-    const sweep = async (why: string): Promise<SessionsTakenBack> => {
+    /** `only`: the Host id of the one pty a `pty-opened` named. Every other entry is left alone, and
+     *  line processes are not asked for (`ReattachDeps.only`). */
+    const sweep = async (why: string, only?: string): Promise<SessionsTakenBack> => {
       // Asked here rather than from inside reattach's `list` dep so the unanswered case can be its
       // own answer: reattach has no way to say "I was told nothing", and an empty list would have
       // it adopt nothing and report nothing adopted, which reads identically to a Host that really
@@ -6950,7 +6976,8 @@ export function registerIpc(
       // Only a Host that announced the proc-* family is asked (protocol.ts's contract). A null answer
       // from one that did is "did not answer" — nothing is adopted, and the log says so. Hoisted once
       // for the three reads below rather than calling speaksProcs() again at each one.
-      const speaks = speaksProcs()
+      // Not asked at all for a sweep limited to one pty: a pty-opened never names a line process.
+      const speaks = only === undefined && speaksProcs()
       // A Host that announced procs but wedges adds proc-list's 5 s to the pty list's 5 s; sequential
       // on purpose so the pty list's null can return first.
       const procEntries = speaks ? await listProcs(transport) : []
@@ -7213,7 +7240,8 @@ export function registerIpc(
             return true
           }
         },
-        log: (m) => hostLog(`host: ${m}`)
+        log: (m) => hostLog(`host: ${m}`),
+        only
       })
       // procEntries === null here means a speaking Host did not answer the proc list: chats is then
       // not a fact, the same reason a null pty list returns 'unknown' above rather than an empty list.

@@ -62,7 +62,7 @@ const makeDeps = (): CoordinatorDeps & {
     // 기존 테스트(재사용 경로 등)의 기대와 일치한다.
     isBusy: () => null,
     isAlive: () => true,
-    killSession: (id) => killed.push(id),
+    killSession: (id) => { killed.push(id) },
     createWorktree: async (a) => {
       worktrees.push(a.name)
       return { path: path.join(dir, 'wt-' + a.name) }
@@ -851,6 +851,13 @@ describe('OrchCoordinator.releaseWorker', () => {
     expect(deps.logs).toHaveLength(1)
     expect(deps.logs[0]).toContain('sess1')
     expect(deps.logs[0]).toContain('retained')
+  })
+  // A kill the app has to put to the Host is asynchronous and can be refused; worker-stop must hear
+  // the refusal before it marks the Dispatch stopped.
+  it('waits for an asynchronous killSession and passes its refusal on', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator({ ...deps, killSession: async () => { await Promise.resolve(); throw new Error('not stopped') } })
+    await expect(co.releaseWorker({ sessionId: 'sess1', retained: false, isLatestOwner: true })).rejects.toThrow('not stopped')
   })
   it('최신 소유자가 아니면 닫지 않는다 — 재사용된 세션은 더 최신 Dispatch가 소유한다', async () => {
     const deps = makeDeps()

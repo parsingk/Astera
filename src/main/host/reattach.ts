@@ -61,6 +61,9 @@ export interface ReattachDeps {
     chat?(a: AdoptProcArgs): boolean
   }
   log(m: string): void
+  /** Take back only the pty with this Host id — the entry a `pty-opened` named. Other entries are
+   *  left exactly as they are: not adopted, not killed, not counted. Line processes are not listed. */
+  only?: string
 }
 
 export interface ReattachResult {
@@ -84,6 +87,10 @@ export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResu
   let refused = 0
   const sessions: string[] = []
   for (const e of await deps.list()) {
+    // Not this sweep's: a `pty-opened` names one session the Host started, and every other entry is
+    // one the app took back already, or one the next full sweep decides about. Killing a note-less
+    // entry from here would be a verdict this sweep was never asked to give.
+    if (deps.only !== undefined && e.id !== deps.only) continue
     // An exited pty is history the Host is still holding for its buffer. There is nothing to adopt
     // and nothing to kill, and it is not a refusal — nobody failed to read anything.
     if (!e.alive) continue
@@ -130,7 +137,8 @@ export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResu
     }
   }
   const chats: string[] = []
-  if (deps.listProcs && deps.attachProc && deps.sendAttachProc && deps.killProc) {
+  // A pty-opened is about a pty, never a line process, so a sweep limited to one skips them all.
+  if (deps.only === undefined && deps.listProcs && deps.attachProc && deps.sendAttachProc && deps.killProc) {
     for (const e of await deps.listProcs()) {
       if (!e.alive) continue
       if (!e.meta) {

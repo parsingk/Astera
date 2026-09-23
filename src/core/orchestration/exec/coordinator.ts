@@ -89,7 +89,10 @@ export interface CoordinatorDeps {
    *  check this first, before injecting. Otherwise the prompt goes nowhere and the Task stays locked
    *  with worker_done never arriving. */
   isAlive(sessionId: string): boolean
-  killSession(sessionId: string): void
+  /** May be asynchronous and may refuse: the app has to put a kill to the Host for a session it
+   *  does not hold (main/orchestration/stopWorker.ts). `releaseWorker` waits for it, so a refusal
+   *  reaches worker-stop before it marks anything stopped. */
+  killSession(sessionId: string): void | Promise<void>
   createWorktree(a: { repoPath: string; name: string }): Promise<{ path: string }>
   accountProvider(accountId: string): Provider | null
   /** Directory to write spec files into (absolute path). It has to be outside the user's repository
@@ -949,6 +952,6 @@ export class OrchCoordinator {
       return
     }
     if (!a.isLatestOwner) return
-    this.deps.killSession(a.sessionId)
+    await this.deps.killSession(a.sessionId)
   }
 }
