@@ -51,6 +51,11 @@ export interface OrchCall {
      *  `orch-result` and the CLI puts it at the top of the envelope it prints, so a caller can tell
      *  a replay from a first answer without the exit code or the body changing. */
     replayed?: true
+    /** The `request` had already taken effect and the command **was** run again, because what the
+     *  receipt held was a stopwatch reading rather than a fact about the world (design §7). The
+     *  commit is not repeated; the body is what is true now. Its own word rather than `replayed`,
+     *  for the reason `orch-result` gives in protocol.ts. */
+    observed?: true
   }>
 }
 

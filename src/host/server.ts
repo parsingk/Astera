@@ -296,10 +296,11 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
                 call: m.call,
                 status: r.status,
                 body: r.body,
-                // Only when it is true: the field means "this came out of a receipt", and a `false`
-                // on every ordinary answer would put a word about receipts in front of every caller
-                // that never asked for one.
-                ...(r.replayed === true ? { replayed: true as const } : {})
+                // Only when they are true: these mean "this answer is about an id you had already
+                // used", and a `false` on every ordinary answer would put a word about receipts in
+                // front of every caller that never asked for one. They are never both set.
+                ...(r.replayed === true ? { replayed: true as const } : {}),
+                ...(r.observed === true ? { observed: true as const } : {})
               })
             )
           return

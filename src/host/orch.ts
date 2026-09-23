@@ -65,7 +65,11 @@ const canonical = (v: unknown): unknown => {
   if (Array.isArray(v)) return v.map(canonical)
   if (v === null || typeof v !== 'object') return v
   const held = v as Record<string, unknown>
-  const out: Record<string, unknown> = {}
+  // **`Object.create(null)`, and that is a correctness fix rather than a style.** `JSON.parse` does
+  // create an own `__proto__` key, and assigning one into a plain `{}` hits the prototype setter
+  // instead: the key would vanish from the hash, and two different argument payloads would fingerprint
+  // alike — which is the one thing this function must never do.
+  const out = Object.create(null) as Record<string, unknown>
   for (const k of Object.keys(held).sort()) if (held[k] !== undefined) out[k] = canonical(held[k])
   return out
 }
@@ -83,7 +87,9 @@ const canonical = (v: unknown): unknown => {
  * to a different command" is the same fault as "different arguments" and deserves the same sentence.
  */
 export const fingerprintOf = (cmd: string, args: Record<string, unknown>): string => {
-  const kept: Record<string, unknown> = {}
+  // Null-prototype for `canonical`'s reason — an own `__proto__` at the top level would disappear the
+  // same way.
+  const kept = Object.create(null) as Record<string, unknown>
   for (const k of Object.keys(args)) if (!FINGERPRINT_BLIND.has(k)) kept[k] = args[k]
   return createHash('sha256').update(JSON.stringify([cmd, canonical(kept)])).digest('hex')
 }
@@ -104,9 +110,13 @@ export const interpretationOf = {
     `Request ${id} already took effect (${cmd}). The recorded response is what this Host answered the first time. ` +
     `Treat it exactly as if you had received it then: the ids in it name things that exist. ` +
     `Do not send the command again.`,
+  /** **Exit 6, not 409, and the design says so** (§6: "if you do, it is refused with `6` and the same
+   *  message"). The status on the wire really is 409, but everybody who reads this sentence reads it
+   *  through the CLI, where what they see is an exit code — and the guide quotes this sentence, so an
+   *  HTTP number here puts HTTP into a document whose readers have no other use for it. */
   pending: (id: string, cmd: string): string =>
     `Request ${id} is running on this Host right now (${cmd}). Nothing is lost and nothing is decided: wait and ask again. ` +
-    `Do not send the command again, because a second attempt while this one is in flight is refused with 409.`,
+    `Do not send the command again, because a second attempt while this one is in flight is refused with exit 6.`,
   absent: (id: string): string =>
     `This Host holds no receipt for request ${id} under your caller identity, and that is not proof that nothing happened. ` +
     `There are four ways to see it and only one of them means nothing happened: the request never reached a Host, and retrying is correct; ` +
@@ -853,16 +863,18 @@ export function createHostOrch(a: {
         // Only an error reply is rewritten: a command that carried on past a refusal it swallowed
         // (the fire-and-forget ones) succeeded, and a success is not a conflict.
         const reply = r.status >= 400 && marks.appRefused ? { status: 409, body: r.body } : r
-        // **An observed replay is a replay too**, and the word is about the id rather than about the
-        // body: this caller presented an id that had already taken effect, and the commit behind it
-        // was not repeated. What is fresh is the observation (§7), which is the whole of what a
-        // caller retrying a wait asked for — it just did not also ask for a second question.
-        if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), replayed: true }
+        // **An observed replay says `observed`, not `replayed`** (§7, and `orch-result`'s comment).
+        // The id had already taken effect and its commit was not repeated, which is what the caller
+        // needs to know; but the command *did* run again and this body is what is true now, so the
+        // word that means "the command was not run a second time" would be false here. `check --ack
+        // --wait` is the case that matters: its fresh poll can open a delivery nobody has seen, and
+        // a caller that skipped it as already handled would lose that batch.
+        if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), observed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         const reply = { status: marks.appRefused ? 409 : 500, body: { error: message } }
-        if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), replayed: true }
+        if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), observed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       }
     }

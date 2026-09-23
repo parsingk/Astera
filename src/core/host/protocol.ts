@@ -194,10 +194,21 @@ export type HostMessage =
    *
    *  **`replayed` says this answer came out of a receipt rather than out of a run of the command**
    *  (request receipts design §8). Present only when the `request` this call carried had already
-   *  taken effect on this Host: the command was not done a second time, and the CLI puts the same
-   *  word at the top level of the envelope it prints. Absent otherwise — a field that is never
-   *  `false` is one a reader can test for with `?.` and no older Host has to learn to send. */
-  | { t: 'orch-result'; call: string; status: number; body: unknown; replayed?: true }
+   *  taken effect on this Host: the command was not run a second time, and the CLI puts the same
+   *  word at the top level of the envelope it prints.
+   *
+   *  **`observed` is the other kind of answer to a repeated id, and it is deliberately not the same
+   *  word** (design §7). A command that committed and then waited is replayed by *observing*: the
+   *  commit is not repeated, but the command does run again and the body is what is true now — for
+   *  `check --ack <id> --wait` that is a fresh poll, which can open a new delivery the caller has
+   *  never seen. Calling that `replayed` would publish a sentence ("the command was not run a second
+   *  time") that is false for it, and a caller that skips a body it believes it has already handled
+   *  would drop that batch and its delivery id. So an older reader, which knows only `replayed`, sees
+   *  no marker at all here and treats the answer as the first answer it is.
+   *
+   *  Both are absent rather than `false` when they do not apply, so no older Host has to learn to
+   *  send them and a reader can test for them with `?.`. */
+  | { t: 'orch-result'; call: string; status: number; body: unknown; replayed?: true; observed?: true }
   /** Asks the app to do one thing the Host cannot do itself — spawn a session, touch a worktree
    *  (design §5). Sent only to a client whose `hello` said `role: 'app'`, and answered with
    *  `orch-acted` carrying the same `call`. */

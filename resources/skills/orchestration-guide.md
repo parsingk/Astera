@@ -630,6 +630,9 @@ happens, the error hands you that id and the two commands to run:
 ```
 
 Run `queryCommand` first. `retryCommand` is the line you ran with that id on it, for after you know.
+Both are POSIX shell syntax — bash, zsh, Git Bash, and PowerShell read them the same way; `cmd.exe`
+does not read single quotes, so requote there. Nothing in either line is left where a shell would
+expand it, so pasting one cannot run anything but `astera`.
 
 **`astera requests show --id <id>` has three answers and all three exit `0`**, because not finding a
 receipt is an answer rather than a failure. `data.interpretation` is the runtime's own sentence for
@@ -644,7 +647,7 @@ Host recorded was a failure.
 
 > **`pending`** — Request `<requestId>` is running on this Host right now (`<command>`). Nothing is
 > lost and nothing is decided: wait and ask again. Do not send the command again, because a second
-> attempt while this one is in flight is refused with 409.
+> attempt while this one is in flight is refused with exit 6.
 
 > **`absent`** — This Host holds no receipt for request `<requestId>` under your caller identity, and
 > that is not proof that nothing happened. There are four ways to see it and only one of them means
@@ -665,6 +668,14 @@ no receipt to have.
 and the earlier one are one request. A command that already took effect is not done twice: the Host
 replays what it answered the first time, the reply carries `"replayed": true` beside `"ok"`, and the
 exit code is the original answer's — so a replayed `4` is still a `4`.
+
+**`"observed": true` is a different word for a different thing.** `ask` and `check --ack <id> --wait`
+commit and then wait, and a recorded timeout from one of them is not a fact about the world — it is
+how long some earlier call waited. Handing that back would answer instantly out of somebody else's
+stopwatch and leave you looping. So those two are not replayed from the record: the commit is not
+repeated (no second question, no second ack), the command runs again, and the body is what is true
+now. **Read an `observed` body as a first answer**, because it is one: a fresh `check` can hand you a
+delivery, with a new `deliveryId` to ack, that nobody has seen.
 
 **One id names one call.** Present the same id with a different command or different arguments and it
 is refused with `2`, naming the command the id was first used for, rather than being answered with

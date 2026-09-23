@@ -1148,10 +1148,11 @@ describe('요청 영수증', () => {
     await orch.call({ cmd: 'reply', args: { id: questionId, body: '그렇게 가요' }, sessionId: '' })
     const observed = await orch.call({ cmd: 'ask', args: askArgs(f), sessionId: 'ses1', request: 'req-1' })
     expect((observed.body as { answered: boolean }).answered).toBe(true)
-    // **관찰한 재생도 재생이다.** 표시가 말하는 것은 본문이 아니라 id 다 — 이 호출자가 이미 효력을
-    // 낸 id 를 다시 내밀었고, 그 뒤의 커밋(질문 만들기)은 되풀이되지 않았다. 새것은 관찰뿐이고,
-    // 그것이 기다림을 다시 거는 호출자가 부탁한 전부다(§7).
-    expect(observed.replayed, '관찰한 재생이 재생이라고 말하지 않았다').toBe(true)
+    // **관찰한 답은 `observed` 이고 `replayed` 가 아니다**(§7). id 는 이미 효력을 냈고 그 커밋(질문
+    // 만들기)은 되풀이되지 않았지만, 명령은 다시 돌았고 본문은 지금 참인 것이다 — `replayed` 가
+    // 공표한 문장("명령을 두 번 돌리지 않았다")은 `check` 의 관찰에서 거짓이 된다.
+    expect(observed.observed, '관찰한 답이 그렇다고 말하지 않았다').toBe(true)
+    expect(observed.replayed, '관찰한 답이 재생으로도 나갔다').toBeUndefined()
     // 질문을 상태에서 지운다 — 다시 읽는다면 여기서 404 다.
     const now = await savedState()
     await orch.call({
@@ -1161,7 +1162,11 @@ describe('요청 영수증', () => {
       from: appCallerFrom
     })
     const third = await orch.call({ cmd: 'ask', args: askArgs(f), sessionId: 'ses1', request: 'req-1' })
-    expect(JSON.stringify(third), '기록된 답 대신 질문을 다시 읽었다').toBe(JSON.stringify(observed))
+    expect(answerOf(third), '기록된 답 대신 질문을 다시 읽었다').toBe(answerOf(observed))
+    // 그리고 이번에는 **그대로 재생**이다 — 앞선 관찰이 낳은 답이 영수증에 앉았으므로 다시 볼 것이
+    // 없다. 낱말이 갈리는 것이 그 차이를 그대로 말한다.
+    expect(third.replayed).toBe(true)
+    expect(third.observed).toBeUndefined()
   })
 
   /**
@@ -1390,7 +1395,7 @@ describe('요청 영수증', () => {
       request: 'req-1'
     })
     expect(patient.status, '시한이 다르다고 다른 부름으로 봤다').toBe(200)
-    expect(patient.replayed).toBe(true)
+    expect(patient.observed).toBe(true)
     expect((patient.body as { questionId: string }).questionId).toBe(
       (first.body as { questionId: string }).questionId
     )
@@ -1436,6 +1441,24 @@ describe('fingerprintOf — 무엇이 같은 부름인가', () => {
 
   it('명령 이름이 다르면 인자가 같아도 다른 부름이다', () => {
     expect(fingerprintOf('run-start', { id: 'x' })).not.toBe(fingerprintOf('run-delete', { id: 'x' }))
+  })
+
+  /**
+   * **`__proto__` 는 해시에서 사라질 수 있었다.** `JSON.parse` 는 그 이름의 **자기 속성**을 만들고
+   * (전선에서 오는 인자가 바로 그것이다), 그것을 평범한 `{}` 에 넣으면 프로토타입 설정자로 빨려
+   * 들어가 키가 없어진다 — 그러면 서로 다른 인자가 같은 지문을 받는다. 이 함수가 절대 하면 안 되는
+   * 한 가지다. `Object.create(null)` 이 그 구멍을 막는다.
+   */
+  it('JSON 이 만든 __proto__ 키도 지문에 들어간다', () => {
+    const withKey = JSON.parse('{"deps":{"__proto__":"a"}}') as Record<string, unknown>
+    const without = JSON.parse('{"deps":{}}') as Record<string, unknown>
+    const other = JSON.parse('{"deps":{"__proto__":"b"}}') as Record<string, unknown>
+    expect(fingerprintOf('task-create', withKey)).not.toBe(fingerprintOf('task-create', without))
+    expect(fingerprintOf('task-create', withKey)).not.toBe(fingerprintOf('task-create', other))
+    // 맨 위에서도 마찬가지다 — 거기도 같은 방식으로 담는다.
+    expect(fingerprintOf('x', JSON.parse('{"__proto__":"a"}') as Record<string, unknown>)).not.toBe(
+      fingerprintOf('x', {})
+    )
   })
 })
 
