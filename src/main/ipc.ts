@@ -95,7 +95,7 @@ import {
   dispatchesHeldOnlyByReport,
   reportedDispatchIdsOf
 } from '../core/orchestration/pendingReports'
-import { OrchRollTap } from './orchestration/rollTap'
+import { ExitsBeforeTap, OrchRollTap } from './orchestration/rollTap'
 import { TaskValidator } from './orchestration/validator'
 import {
   applyValidationResult,
@@ -1010,6 +1010,9 @@ export function registerIpc(
    *  따로 두는 이유는 onExit 이 orch 대입보다 훨씬 먼저 배선되기 때문이다 — 그 콜백은 호출 시점에
    *  이 변수를 읽는다. */
   let orchRollTap: OrchRollTap | null = null
+  /** The exits that arrive before `bootOrch` builds the tap, replayed into it once it does. The
+   *  startup sweep's `pty-attach` hands those exits to this app before the tap exists; see the class. */
+  const exitsBeforeTap = new ExitsBeforeTap()
   /** Astera Host slice 1: the channel exists, and nothing depends on it yet. Built at startup so
    *  slices 2 and 3 inherit an open line rather than one they have to reach for (design §7). */
   let hostClient: HostClient | null = null
@@ -1444,7 +1447,14 @@ export function registerIpc(
     // 유일한 경우는 stop() 이 탭을 null 로 되돌린 **뒤**, 즉 종료(quit) 중이다. 그때 도착한 exit 는
     // 일부러 버린다 — dispose() 의 정책과 같다: 열린 채 남은 Dispatch 는 다음 실행에서 store.load 의
     // 재시작 정리가 outcome_unknown 으로 처리하며 Task 는 건드리지 않는다.
+    //
+    // **Except before the first tap.** The startup sweep's `pty-attach` makes the Host leave these
+    // exits to this app while `bootOrch` is still on its way to building the tap, so they wait in
+    // `exitsBeforeTap` and are replayed into it (review of Task 12, I2). After that drain, a null tap is
+    // the quit above again.
     if (orchRollTap) orchRollTap.onExit(e)
+    else if (exitsBeforeTap.hold(e) === 'full')
+      orchLog(`exit of session=${e.sessionId} dropped: too many exits arrived before orchestration started`)
   }
   core.sessions.onExit = onSessionExit
   core.chat.onExit = onSessionExit
@@ -4491,6 +4501,9 @@ export function registerIpc(
     // Before `pushOrchState` below, which is what redraws it.
     setOrchHostGate(null)
     orchRollTap = new OrchRollTap(deps)
+    // The exits of adopted sessions that ended while this boot was on its way here.
+    const replayed = exitsBeforeTap.drainInto(orchRollTap)
+    if (replayed > 0) orchLog(`replayed ${replayed} session exit(s) that arrived before orchestration started`)
     orchLog(`started — cli=${cliPath} skills=${skillsPath}`)
     // The other half of the queue read at the top of this function: the reports workers wrote down
     // while there was no server to take them.

@@ -43,8 +43,8 @@ import { EXIT_DEFER_MS } from '../../core/orchestration/exec/exitOwner'
  *  코디네이터에게 이 지연은 보이지 않는다 — check --wait 의 기본 창은 300초다
  *  (DEFAULT_CHECK_TIMEOUT_MS).
  *
- *  **값은 core 에 있다**(exitOwner.ts). Host 도 제가 쥔 세션의 exit 를 같은 창만큼 미루므로, 같은
- *  사건을 보는 세 번째 구독자가 같은 값을 읽게 옮겼다. */
+ *  **The value lives in core** (exitOwner.ts): the Host defers the exits of the sessions it owns by
+ *  the same window, so the third subscriber to the same event reads the same number. */
 export { EXIT_DEFER_MS }
 
 export interface OrchRollTapDeps {
@@ -359,5 +359,44 @@ export class OrchRollTap {
     for (const t of this.timers.values()) clearTimeout(t)
     this.timers.clear()
     this.stopped.clear()
+  }
+}
+
+/** How many exits wait for the tap. The startup sweep adopts every live session at once, so this is
+ *  a few dozen at most in practice; the bound is there for an orchestration boot that never finishes. */
+export const EXITS_BEFORE_TAP_MAX = 256
+
+/**
+ * The exits of the app's own sessions that arrive before the tap exists, replayed into it once.
+ *
+ * **Why there is such a gap** (review of Task 12, I2). The startup sweep (`takeSessionsBack('at
+ * startup')`) sends `pty-attach` for every session it adopts, and from that message on the Host leaves
+ * those exits to this app (host/exits.ts). `bootOrch` then still awaits the sweep, a `state-get` round
+ * trip, the spec sweep and `writeShuttle` before it builds the tap. An exit in between reached neither
+ * side: the Host skipped it as held, and `onSessionExit` found no tap. A worker the Host spawned while
+ * no app was open, adopted at startup and dying in that window, left its Dispatch open with a dead
+ * session.
+ *
+ * **Only before the first tap.** Every exit `onSessionExit` hears is of a session this app holds, so
+ * nothing else can arrive here. After the drain the queue is closed: a tap that is null again means
+ * `stop()` ran, which is a quit, and those exits are dropped on purpose (`OrchRollTap.dispose`).
+ */
+export class ExitsBeforeTap {
+  private queue: Array<{ sessionId: string; exitCode: number }> | null = []
+
+  /** Queues an exit while no tap has existed yet. `full` past the bound, `closed` after the drain. */
+  hold(e: { sessionId: string; exitCode: number }): 'queued' | 'full' | 'closed' {
+    if (!this.queue) return 'closed'
+    if (this.queue.length >= EXITS_BEFORE_TAP_MAX) return 'full'
+    this.queue.push(e)
+    return 'queued'
+  }
+
+  /** Replays the queue into the tap, in arrival order, and closes it. Returns how many it replayed. */
+  drainInto(tap: Pick<OrchRollTap, 'onExit'>): number {
+    const queued = this.queue ?? []
+    this.queue = null
+    for (const e of queued) tap.onExit(e)
+    return queued.length
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { OrchRollTap, EXIT_DEFER_MS } from './rollTap'
+import { OrchRollTap, EXIT_DEFER_MS, ExitsBeforeTap, EXITS_BEFORE_TAP_MAX } from './rollTap'
 import type { OrchServerDeps } from '../../core/orchestration/command'
 import type { RollStateEvent } from '../../core/types'
 import type { git } from '../../core/worktrees/git'
@@ -625,5 +625,36 @@ describe('OrchRollTap 정지 표시의 수명', () => {
     expect(resumes?.[0].resumedAt).toBeUndefined() // 재개 횟수는 그대로다 — 아직 기다리는 중이다
     expect(snapshotOf(deps, dispatchId)?.resetsAt).toBe('2026-08-25T03:15:00.000Z')
     expect(g.calls).toBe(1) // 리셋 시각 갱신은 HEAD 를 다시 읽지 않는다
+  })
+})
+
+// Review of Task 12, I2: the app's startup sweep sends pty-attach, so the Host leaves the adopted
+// sessions' exits to the app, before bootOrch has built the tap. An exit in that gap used to be dropped.
+describe('ExitsBeforeTap', () => {
+  it('hands a worker exit that came before the tap to the tap once it exists, which closes the Dispatch', async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const before = new ExitsBeforeTap()
+    expect(before.hold({ sessionId: 'sess1', exitCode: 1 })).toBe('queued')
+    await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS * 2)
+    expect(deps.state().dispatches.find((d) => d.id === dispatchId)?.endedAt).toBeUndefined()
+    expect(before.drainInto(new OrchRollTap(deps))).toBe(1)
+    await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS)
+    const d = deps.state().dispatches.find((x) => x.id === dispatchId)
+    expect(d?.endedAt).toBeDefined()
+    expect(d?.workerState).toBe('failed')
+  })
+
+  it('is bounded, and drained once: after that an exit with no tap is a quit and is dropped', () => {
+    const before = new ExitsBeforeTap()
+    for (let i = 0; i < EXITS_BEFORE_TAP_MAX; i++) expect(before.hold({ sessionId: `s${i}`, exitCode: 0 })).toBe('queued')
+    expect(before.hold({ sessionId: 'one-too-many', exitCode: 0 })).toBe('full')
+    const heard: string[] = []
+    const tap = { onExit: (e: { sessionId: string }) => heard.push(e.sessionId) }
+    expect(before.drainInto(tap)).toBe(EXITS_BEFORE_TAP_MAX)
+    expect(heard).toHaveLength(EXITS_BEFORE_TAP_MAX)
+    expect(before.hold({ sessionId: 'after', exitCode: 0 })).toBe('closed')
+    expect(before.drainInto(tap)).toBe(0)
+    expect(heard).toHaveLength(EXITS_BEFORE_TAP_MAX)
   })
 })

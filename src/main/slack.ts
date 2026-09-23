@@ -47,7 +47,8 @@ const EXIT_DELAY_MS = 3_000 // the exit notification delay — so a rolling kill
 // hit has to be to count as this turn's limit already announced (sendStopFailure).
 const STOP_FAILURE_DELAY_MS = EXIT_DELAY_MS
 const LIMIT_SEEN_WINDOW_MS = 60_000
-// EXIT_DEFER_MS in main/orchestration/rollTap.ts deliberately mirrors this value — tune them together.
+// EXIT_DEFER_MS in core/orchestration/exec/exitOwner.ts deliberately mirrors this value — tune them together.
+// The app's roll tap and the Host's exit handling both read that one.
 // Slack's cap on the `text` field — see the same constant in core/slack/transcript.ts for why every
 // display cap is opened to it rather than kept narrow.
 const SLACK_TEXT_MAX = 40_000
