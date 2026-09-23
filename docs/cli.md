@@ -178,12 +178,39 @@ a question is open, or the run is paused. The exit code says which. The default 
 hour; `--timeout-ms` changes it, and reaching it is exit 7 with the progress so far, not a failure
 of the Job.
 
-**`--request-id <id>` is accepted by every command**, and it says that two calls are one request. A
-command can fail without telling you whether it landed: exit 3 when the connection dropped before
-the answer came back, exit 7 when the deadline passed with the Host still there. Both leave the
-question open, because the Host commits before it answers. Send the command again with the same id
-and one that already took effect is not done twice; the Host replays the answer it gave the first
-time, so a retrying script sees the run it created rather than a second one.
+**A command can fail without telling you whether it landed**: exit 3 when the connection dropped
+before the answer came back, exit 7 when the deadline passed with the Host still there. Both leave
+the question open, because the Host commits before it answers.
+
+**Every command already carries a request id**, minted per invocation whether or not you passed one,
+and those two failures hand it back in `error.details` with the two commands to run:
+
+```json
+{"ok":false,"error":{"code":"TIMEOUT","message":"the Host did not answer ask within 31000ms — …",
+  "details":{"requestId":"d3e3fe89-…",
+             "queryCommand":"astera requests show --id d3e3fe89-…",
+             "retryCommand":"astera ask --task-id tsk_1 --question \"shall I go on?\" --request-id d3e3fe89-…"},
+  "nextSteps":["astera requests show --id d3e3fe89-…","astera host status"]}}
+```
+
+`queryCommand` asks what became of it; `retryCommand` is the line you ran with that id on it, for
+after you know. Both are ready to run as they stand.
+
+**`--request-id <id>` presents an id**, which is how a retry says that two calls are one request. Use
+it with an id an error handed back, or choose one up front so a CI step is idempotent by
+construction. A command that already took effect is not done twice: the Host replays the answer it
+gave the first time, so a retrying script sees the run it created rather than a second one. A
+replayed answer carries `"replayed": true` beside `"ok"` and exits with the original answer's code,
+so a replayed 4 is still a 4.
+
+**One id names one call.** Present the same id with a different command or different arguments and it
+is refused with exit 2, naming the command the id was first used for, rather than being answered with
+somebody else's result. Changing only `--timeout-ms` is the same call: more patience is not a
+different question.
+
+**Against a Host too old to keep receipts, a `--request-id` you typed is refused with exit 9** rather
+than run unprotected. The id minted for a command you did not key is dropped instead, and that
+command runs exactly as it always did.
 
 **`requests show` asks what became of an id, and its three answers all exit 0**, because not finding
 a receipt is an answer rather than a failure. `completed` means this Host ran the request, and
@@ -308,6 +335,11 @@ channel.
 **3 and 4 are different questions.** 3 means nothing answered; 4 means something answered and does
 not know that id. Do not retry a 4.
 
+**3 and 7 are the two that mean "I do not know".** Every other code is a decision about a command
+that ran; these two say only that no answer came back, and the Host commits before it answers. Do not
+read either as "it failed, run it again" — `error.details` carries the request id and the command
+that says what became of it.
+
 **8 and 10 are the two that matter in CI.** A pipeline needs to tell "it finished badly" from "it is
 waiting for a person", and both are legitimate non-zero endings of a wait.
 
@@ -340,6 +372,15 @@ case $? in
   *)  echo "could not wait"; exit 1 ;;
 esac
 ```
+
+Make a step safe to re-run, by giving the call an id the pipeline can reproduce:
+
+```bash
+run=$(astera jobs run --id job_123 --request-id "$CI_JOB_ID-start" | jq -r '.data.id')
+```
+
+Re-running that step answers with the same run rather than starting a second one. If the step dies
+before it reads the reply, `astera requests show --id "$CI_JOB_ID-start"` says whether it landed.
 
 Answer a question from a pipeline:
 

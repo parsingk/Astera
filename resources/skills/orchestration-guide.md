@@ -550,6 +550,12 @@ and for a question `details.questionId` is the one to answer.
 **`3` and `4` are different questions.** `3` means the orchestrator is not reachable at all; `4` means it is there
 and does not know that id. Do not retry a `4`.
 
+**`3` and `7` are the two that mean "I do not know".** Every other code is a decision: the command
+ran and this is what happened. These two say only that no answer came back — the connection dropped,
+or the deadline passed with the Host still there — and the Host commits before it answers, so the
+command may well have run. Do not read either as "it failed, do it again". Section 4.10 is what to
+do instead, and the error itself carries the two commands to run.
+
 **`9` is not your mistake.** It means the `astera` on the PATH and the running app came from
 different builds. Report it rather than working around it.
 
@@ -603,6 +609,74 @@ are looking at is probably not a wait any more (`astera host status`).
 
 **stdout is untouched** — it carries the one result, so nothing has to be filtered out of it.
 `--no-keepalive` turns the lines off.
+
+### 4.10 When you do not know whether it landed
+
+Exit `3` and exit `7` are the two endings where no answer came back (4.8). The Host commits before it
+answers, so between the work happening and the reply reaching you there is a window in which the
+command ran and you were told nothing. A `worker-start` sent twice across that window is two agents
+in one worktree.
+
+**Every command carries a request id, whether or not you passed one.** When one of those two endings
+happens, the error hands you that id and the two commands to run:
+
+```json
+{"ok":false,"error":{"code":"HOST_NOT_RUNNING",
+  "message":"the Host closed the connection before answering worker-start",
+  "details":{"requestId":"d9cea50f-d589-4cd8-8132-d1ab5e3fbfbf",
+             "queryCommand":"astera requests show --id d9cea50f-d589-4cd8-8132-d1ab5e3fbfbf",
+             "retryCommand":"astera worker-start --task tsk_9f2b --agent codex --account acc1 --worktree current --request-id d9cea50f-d589-4cd8-8132-d1ab5e3fbfbf"},
+  "nextSteps":["astera requests show --id d9cea50f-d589-4cd8-8132-d1ab5e3fbfbf","astera host start"]}}
+```
+
+Run `queryCommand` first. `retryCommand` is the line you ran with that id on it, for after you know.
+
+**`astera requests show --id <id>` has three answers and all three exit `0`**, because not finding a
+receipt is an answer rather than a failure. `data.interpretation` is the runtime's own sentence for
+the one you got, and it is worth reading rather than deriving:
+
+> **`completed`** — Request `<requestId>` already took effect (`<command>`). The recorded response is
+> what this Host answered the first time. Treat it exactly as if you had received it then: the ids in
+> it name things that exist. Do not send the command again.
+
+`data.response` carries that answer whole, status and body, including an error body when what the
+Host recorded was a failure.
+
+> **`pending`** — Request `<requestId>` is running on this Host right now (`<command>`). Nothing is
+> lost and nothing is decided: wait and ask again. Do not send the command again, because a second
+> attempt while this one is in flight is refused with 409.
+
+> **`absent`** — This Host holds no receipt for request `<requestId>` under your caller identity, and
+> that is not proof that nothing happened. There are four ways to see it and only one of them means
+> nothing happened: the request never reached a Host, and retrying is correct; it reached a Host that
+> has since restarted, which comparing `hostStartedAt` with the time you sent it will tell you; you
+> are asking under a different session than the one that sent it; or the command changed nothing, so
+> there was nothing to record and retrying gets the same answer. Before retrying, look at the state
+> rather than at the receipt, because the state is the only record that survives everything.
+
+**That last sentence is the discipline.** Receipts live in the Host's memory and die with it, so
+`absent` is the one answer that decides nothing. Look at the state instead: does the run exist
+(`astera runs list --job <j>`), is the dispatch open (`astera dispatch-show --task <t>`), is the
+question already answered (`astera questions get --id <q>`). With no Host running at all,
+`requests show` is exit `3` like any other command that needs one, and for the same reason: there is
+no receipt to have.
+
+**Retrying is presenting the same id again.** `--request-id <id>` on any command says that this call
+and the earlier one are one request. A command that already took effect is not done twice: the Host
+replays what it answered the first time, the reply carries `"replayed": true` beside `"ok"`, and the
+exit code is the original answer's — so a replayed `4` is still a `4`.
+
+**One id names one call.** Present the same id with a different command or different arguments and it
+is refused with `2`, naming the command the id was first used for, rather than being answered with
+somebody else's result. Changing only `--timeout-ms` is the same call: asking for more patience does
+not change what you asked for.
+
+**`--resume` and the request id are for two different things.** A `check --wait` or `ask` that times
+out is a success (4.8) and tells you so; `ask --resume <questionId>` continues that wait, and its
+`data.nextSteps` hands you the line. The request id is for the other case: **no answer came back at
+all**, so you have no `questionId` and cannot tell whether the question was even created. Present the
+id instead — no second question is created, and the reply says whether the answer has since arrived.
+A timeout you expected is `--resume`; an answer you lost is the key.
 
 ## 5. The Delivery contract of `check`
 

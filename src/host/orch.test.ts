@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import {
   createHostOrch,
   fingerprintOf,
+  interpretationOf,
   OBSERVED,
   receiptsToEvict,
   RECEIPTS_PER_CALLER,
@@ -1435,6 +1436,32 @@ describe('fingerprintOf — 무엇이 같은 부름인가', () => {
 
   it('명령 이름이 다르면 인자가 같아도 다른 부름이다', () => {
     expect(fingerprintOf('run-start', { id: 'x' })).not.toBe(fingerprintOf('run-delete', { id: 'x' }))
+  })
+})
+
+/**
+ * **가이드는 런타임의 문장을 인용한다**(설계 §13 단계 12).
+ *
+ * Orca 의 가이드와 런타임은 `pending` 을 두고 서로 다른 말을 한다 — 가이드는 다시 보내라 하고 런타임은
+ * 거절한다 — 문장을 두 번 썼기 때문이다. 여기서는 한 번 쓰고, 가이드가 그것을 옮긴다. 이 시험이 그
+ * 옮긴 것이 여전히 같은 문장인지 본다.
+ *
+ * **빈칸을 지우고 비교한다.** 가이드 쪽은 마크다운이라 줄바꿈과 인용 표시(`>`)가 섞이고, 그것을
+ * 그대로 묶으면 옳은 문서를 줄바꿈 하나 고쳤다는 이유로 시험이 깨진다. 지키는 것은 낱말이다.
+ */
+describe('orchestration-guide 는 영수증의 세 문장을 런타임에서 인용한다', () => {
+  const guide = readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../resources/skills/orchestration-guide.md'),
+    'utf8'
+  )
+  /** 인용 표시와 줄바꿈과 강조를 걷어 낸 낱말들. */
+  const words = (s: string): string => s.replace(/[>`*]/g, '').replace(/\s+/g, ' ').trim()
+  const flat = words(guide)
+
+  it('세 상태의 문장이 그대로 있다', () => {
+    expect(flat, 'completed').toContain(words(interpretationOf.completed('<requestId>', '<command>')))
+    expect(flat, 'pending').toContain(words(interpretationOf.pending('<requestId>', '<command>')))
+    expect(flat, 'absent').toContain(words(interpretationOf.absent('<requestId>')))
   })
 })
 

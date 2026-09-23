@@ -95,9 +95,11 @@ export const fingerprintOf = (cmd: string, args: Record<string, unknown>): strin
  *
  * **And so the guide cannot drift from the runtime.** Orca's guide and Orca's runtime disagree about
  * `pending` today — the guide says to replay it, the runtime refuses — because the sentence was
- * written twice. Here it is written once, and the guide quotes it.
+ * written twice. Here it is written once, the guide quotes it with `<requestId>` and `<command>` where
+ * a real answer carries values, and a test in `orch.test.ts` reads the guide and checks that the three
+ * sentences are still in it. Exported for that test: it is the only reader outside this file.
  */
-const interpretationOf = {
+export const interpretationOf = {
   completed: (id: string, cmd: string): string =>
     `Request ${id} already took effect (${cmd}). The recorded response is what this Host answered the first time. ` +
     `Treat it exactly as if you had received it then: the ids in it name things that exist. ` +
