@@ -23,7 +23,7 @@ import { nodeProcSpawn } from './nodeProc'
 import { HOST_FEATURE_SPAWN, HOST_PROTOCOL } from '../core/host/protocol'
 import { createHostOrch } from './orch'
 import { createHostSpawner } from './spawner'
-import { createHostExits } from './exits'
+import { createHostExits, ptyHeldBy } from './exits'
 import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
 import { readAccountEntries } from '../core/accounts/accountsFile'
@@ -220,8 +220,10 @@ async function main(): Promise<void> {
       idleMs: IDLE_MS,
       onIdle: () => leave(),
       onMessage: (m, send, from) => {
-        // Before the pty handler, so the mark is in place before a spawn can exit.
-        if (exits && from.role === 'app' && (m.t === 'pty-spawn' || m.t === 'pty-attach')) exits.heldBy(m.id, from.socket)
+        // Before the pty handler, so the mark is in place before a spawn can exit. Any role: see
+        // `ptyHeldBy` for the apps that declare none.
+        const held = ptyHeldBy(m)
+        if (exits && held !== null) exits.heldBy(held, from.socket)
         return (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false)
       },
       // Released by the socket number whatever role the socket gave last: a second `hello` can change

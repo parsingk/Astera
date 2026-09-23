@@ -10,6 +10,7 @@ import { pendingReportsDirIn, reportedDispatchIdsOf } from '../core/orchestratio
 import { detachCoordinator, type OrchState } from '../core/orchestration/state'
 import { runningRunCount } from '../core/orchestration/running'
 import { isPlaceholderSessionId } from '../core/orchestration/types'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { hostOrchDeps } from './orchDeps'
 import { readAccountsFile } from '../core/accounts/accountsFile'
@@ -837,7 +838,12 @@ export function createHostOrch(a: {
       // Marks nobody reads: this is not a command, so there is no reply to correct and no receipt.
       const deps = depsFor({ appRefused: false, committed: false, acted: false })
       await handleExit(deps, e)
-      // Read after `handleExit`, which commits. The slot rule is `releaseCoordinator`'s in the app.
+      // The slot rule is `releaseCoordinator`'s in the app, whole: an exit that only says the session
+      // was lost sight of keeps the slot, as `handleExit` keeps the Dispatch. The Host's own registry
+      // never delivers one today (§2.6), so this keeps the two rules identical rather than guarding a
+      // path that is reached.
+      if (e.exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
+      // Read after `handleExit`, which commits.
       const st = store.get()
       const run = st.runs.find((r) => r.coordinatorSessionId === e.sessionId)
       if (!run) return

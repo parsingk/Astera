@@ -34,6 +34,7 @@ import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
 import { registrySessions } from './sessions'
 import { encodeUserTurn } from '../core/chat/claudeProtocol'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 
 const NOW = '2026-09-22T00:00:00.000Z'
 /** 이 Host 가 선 시각. `now` 보다 **앞**이어야 하는 값이다 — `requests show` 가 이것을 실어 주는
@@ -2159,6 +2160,27 @@ describe('the Host handles exits (S2)', () => {
     await orch.sessionExited({ sessionId: 'ses_c', exitCode: 0 })
     expect(orch.state().runs.find((r) => r.id === runId)?.coordinatorSessionId).toBeUndefined()
     expect(logs).toContain(`coordinator gone run=${runId} session=ses_c — restart it from the Jobs list`)
+  })
+
+  // Review of Task 12, M3: releaseCoordinator's rule, whole. An exit that only says the session was
+  // lost sight of keeps the slot, as handleExit keeps the Dispatch.
+  it('sessionExited keeps a coordinator slot on an exit that only says the session was lost sight of', async () => {
+    const { state, runId } = withDispatches([])
+    const attached = attachCoordinator(state, { runId, sessionId: 'ses_c' }); if (!attached.ok) throw new Error(attached.error)
+    await write(attached.state)
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), aliveSessionIds: () => new Set(['ses_c']) })
+    await orch.sessionExited({ sessionId: 'ses_c', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+    expect(orch.state().runs.find((r) => r.id === runId)?.coordinatorSessionId).toBe('ses_c')
+  })
+
+  // Review of Task 12, M8: the app's mirror hears the closure.
+  it('pushes the state sessionExited commits to the clients', async () => {
+    const { state } = withDispatches(['ses_x'])
+    await write(state)
+    const pushed: OrchState[] = []
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), aliveSessionIds: () => new Set(['ses_x']), onState: (s) => pushed.push(s) })
+    await orch.sessionExited({ sessionId: 'ses_x', exitCode: 1 })
+    expect(pushed.at(-1)?.dispatches[0].endedAt).toBe(NOW)
   })
 
   it('orphanedSessions is empty before the first load, then names dead sessions but never pending ones', async () => {

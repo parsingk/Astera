@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { PtyRegistry, type RegistryPty } from './registry'
-import { createHostExits, ENDED_WITHOUT_A_CODE, type HostExitsDeps } from './exits'
+import { createHostExits, ENDED_WITHOUT_A_CODE, ptyHeldBy, type HostExitsDeps } from './exits'
 import { EXIT_DEFER_MS } from '../core/orchestration/exec/exitOwner'
-import type { PtyMeta } from '../core/host/protocol'
+import type { ClientMessage, PtyMeta } from '../core/host/protocol'
 
 /** A pty whose exit the test fires. */
 function fakePty(): RegistryPty & { exit(code: number): void } {
@@ -169,6 +169,52 @@ describe('createHostExits', () => {
     h.exits.appGone(7) // a second close of the same socket number has nothing left to hand over
     await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS)
     expect(asked).toEqual([1])
+  })
+
+  // Review of Task 12, I1: apps v1.3.17 to v1.3.25 send `hello` with no role, and the server calls
+  // such a socket 'cli'. Their ptys are still theirs, and a Host that handled their exits would load
+  // and write orchestration.json behind an app that writes the file itself.
+  it('lets a socket with no role that attached a pty keep its exits', async () => {
+    const exited: unknown[] = []
+    const h = rig({ sessionExited: async (e) => { exited.push(e) } })
+    h.open('p1', { kind: 'session', id: 'ses_old', restore: {} })
+    const held = ptyHeldBy({ t: 'pty-attach', id: 'p1' })
+    if (held) h.exits.heldBy(held, 5)
+    h.exit('p1', 1)
+    await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS * 2)
+    expect(exited).toEqual([])
+  })
+
+  it('holds a pty for a pty-spawn or a pty-attach and for nothing the CLI sends', () => {
+    const spawn: ClientMessage = { t: 'pty-spawn', id: 'p1', file: 'cmd.exe', args: [], opts }
+    expect(ptyHeldBy(spawn)).toBe('p1')
+    expect(ptyHeldBy({ t: 'pty-attach', id: 'p2' })).toBe('p2')
+    const cli: ClientMessage[] = [
+      { t: 'hello', protocol: 3, app: '1.4.0', role: 'cli' },
+      { t: 'ping', seq: 1 },
+      { t: 'orch-call', call: 'c1', cmd: 'worker-start', args: {} },
+      { t: 'retire', reason: 'user' }
+    ]
+    for (const m of cli) expect(ptyHeldBy(m)).toBeNull()
+    // Asking about a pty is not holding it.
+    expect(ptyHeldBy({ t: 'pty-list' })).toBeNull()
+    expect(ptyHeldBy({ t: 'pty-kill', id: 'p1' })).toBeNull()
+  })
+
+  // Review of Task 12, M8: the app reconnects on a new socket inside the handover's defer.
+  it('closes, at handover, a session that died after its app re-attached on a new socket, and leaves the live one', async () => {
+    const exited: unknown[] = []
+    const h = rig({
+      sessionExited: async (e) => { exited.push(e) },
+      orphaned: (alive) => ['ses_1', 'ses_2'].filter((s) => !alive(s))
+    })
+    h.open('p1', { kind: 'session', id: 'ses_1', restore: {} }); h.exits.heldBy('p1', 7)
+    h.open('p2', { kind: 'session', id: 'ses_2', restore: {} }); h.exits.heldBy('p2', 7)
+    h.exits.appGone(7)
+    h.exits.heldBy('p1', 8); h.exits.heldBy('p2', 8)
+    h.exit('p1', 4) // held by the new socket: its app handles it; the sweep's overlap is harmless
+    await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS)
+    expect(exited).toEqual([{ sessionId: 'ses_1', exitCode: 4 }])
   })
 
   it('handles a later exit of a session whose app socket has gone', async () => {

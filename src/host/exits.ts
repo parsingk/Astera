@@ -13,8 +13,9 @@
 //
 // **Keyed by socket number, not by role.** A socket's role comes from its `hello`, and a second
 // `hello` can change it (review M3 of Tasks 6 to 8), so the marks are released by the socket that
-// made them whatever it calls itself now.
+// made them whatever it calls itself now. **And placed whatever the role, too** (`ptyHeldBy`).
 import { EXIT_DEFER_MS, hostOwnsExit } from '../core/orchestration/exec/exitOwner'
+import type { ClientMessage } from '../core/host/protocol'
 import type { PtyRegistry } from './registry'
 
 /** The code handed on for a pty that ended with no code (node-pty can deliver one). The session did
@@ -22,6 +23,15 @@ import type { PtyRegistry } from './registry'
  *  -1**: that is `PTY_LOST_SIGHT_EXIT_CODE`, which `handleExit` reads as "still running" and keeps
  *  the Dispatch open over. */
 export const ENDED_WITHOUT_A_CODE = -2
+
+/** The pty a client message makes its socket hold, or null. A `pty-spawn` or a `pty-attach` from any
+ *  socket, **whatever role it declared**: apps v1.3.17 to v1.3.25 send `hello` with no role and the
+ *  server calls them 'cli', yet their ptys are theirs, and a Host that handled those exits would load
+ *  and write orchestration.json behind an app that writes the file itself (review of Task 12, I1). The
+ *  CLI never sends either message, so the role check excluded no one else. */
+export function ptyHeldBy(m: ClientMessage): string | null {
+  return m.t === 'pty-spawn' || m.t === 'pty-attach' ? m.id : null
+}
 
 export interface HostExitsDeps {
   registry: Pick<PtyRegistry, 'onExit' | 'metaOf' | 'sessionPty' | 'sessionExitCode'>
@@ -33,7 +43,7 @@ export interface HostExitsDeps {
 }
 
 export interface HostExits {
-  /** An app socket spawned or attached this pty, so its exit is that app's. */
+  /** A socket spawned or attached this pty (`ptyHeldBy`), so its exit is that client's. */
   heldBy(ptyId: string, socket: number): void
   /** A socket closed: its marks go, and if it ever held a pty the handover runs after the defer. */
   appGone(socket: number): void
