@@ -160,6 +160,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const settingsPath = path.join(profileDir, 'app-settings.json')
   const accountsPath = path.join(profileDir, 'accounts.json')
   const tails = new WorkerTails()
+  /** dispatchId → the session this Host started it on. The Host's tail follows that session only: an
+   *  app-side roll rekeys the Dispatch and re-points the app's own tail (its onRolled), not this one. */
+  const startedOn = new Map<string, string>()
   const busyOf = new Map<string, { scanner: BusyScanner; busy: boolean }>()
 
   const factory = hostPtyFactory({
@@ -279,7 +282,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   return {
     startWorker: async (a) => {
       const accounts = await readAccountEntries(accountsPath)
-      return startWorkerWithChain(
+      const started = await startWorkerWithChain(
         {
           getState: d.getState,
           accounts: async () => accounts,
@@ -293,6 +296,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         },
         a
       )
+      startedOn.set(a.dispatchId, started.sessionId)
+      return started
     },
     startCoordinator: async (a) => {
       const accounts = await readAccountEntries(accountsPath)
@@ -344,7 +349,12 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       if (name === 'startWorker') return !!a.terminal || a.worktree !== 'new'
       if (name === 'readWorker') {
         const id = a.dispatchId ?? ''
-        return tails.has(id) || !d.getState().dispatches.some((x) => x.id === id)
+        const disp = d.getState().dispatches.find((x) => x.id === id)
+        if (!disp) return true // answered "(unknown dispatch …)"
+        if (!tails.has(id)) return false
+        // Review I1: once a roll has moved the Dispatch to another session, the app holds the tail
+        // that followed it. A `pending:` id is the window before worker-start records the session.
+        return disp.sessionId === startedOn.get(id) || disp.sessionId.startsWith('pending:')
       }
       return true
     }

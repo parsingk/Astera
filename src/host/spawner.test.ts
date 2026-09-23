@@ -97,16 +97,19 @@ describe('createHostSpawner', () => {
   })
 
   // D12: no settings file is the app's default, yolo; an explicit manual turns the bypass off.
-  it('reads the permission mode from the profile, yolo when there is no file', async () => {
-    const { s, taskId, dispatchId } = seeded()
-    const h = rig({ state: () => s })
-    await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+  // Both spawns go through the same spawner, so a mode remembered from the first spawn would fail here:
+  // a person who switches to manual must not keep getting bypassed workers from a long-lived Host.
+  it('reads the permission mode from the profile at every spawn, yolo when there is no file', async () => {
+    const first = seeded()
+    let state = first.s
+    const h = rig({ state: () => state })
+    await h.spawner!.startWorker(startArgs(first.taskId, first.dispatchId))
     expect(JSON.stringify(h.spawned[0].args)).toMatch(/--dangerously-skip-permissions/)
     await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
     const again = seeded()
-    const h2 = rig({ state: () => again.s })
-    await h2.spawner!.startWorker(startArgs(again.taskId, again.dispatchId))
-    expect(JSON.stringify(h2.spawned[0].args)).not.toMatch(/--dangerously-skip-permissions/)
+    state = again.s
+    await h.spawner!.startWorker(startArgs(again.taskId, again.dispatchId))
+    expect(JSON.stringify(h.spawned[1].args)).not.toMatch(/--dangerously-skip-permissions/)
   })
 
   // Task 4's ruling: a broken file may have said manual, so it is never read as yolo. The spawn is
@@ -174,6 +177,26 @@ describe('createHostSpawner', () => {
     expect(h.spawner!.owns('readWorker', [{ dispatchId }])).toBe(true)
     expect(h.spawner!.owns('readWorker', [{ dispatchId: 'dsp_unknown' }])).toBe(true) // answers "(unknown dispatch …)"
     expect(await h.spawner!.readWorker({ dispatchId: 'dsp_unknown' })).toBe('(unknown dispatch: dsp_unknown)')
+  })
+
+  // Review I1: an app-side roll opens the new pty through the Host and rekeys the Dispatch, but only the
+  // app's own tail follows it. The Host's tail stops at the roll, so the read is the app's to answer.
+  it('does not own a worker-read once a roll has moved the dispatch to another session', async () => {
+    const seed = seeded()
+    let state = seed.s
+    const h = rig({ state: () => state })
+    const r = await h.spawner!.startWorker(startArgs(seed.taskId, seed.dispatchId))
+    const rekey = (sessionId: string) =>
+      (state = { ...state, dispatches: state.dispatches.map((x) => (x.id === seed.dispatchId ? { ...x, sessionId } : x)) })
+    rekey(r.sessionId)
+    h.spawned[0].pty.emit('before roll\n')
+    expect(h.spawner!.owns('readWorker', [{ dispatchId: seed.dispatchId }])).toBe(true)
+    // The app's roll: a new pty for a new session id, through the same registry, then the rekey.
+    h.registry.open({ id: 'pty_rolled', file: 'claude', args: [], opts: { cwd: repo, cols: 120, rows: 30, env: {} },
+      meta: { kind: 'session', id: 'ses_rolled', restore: { accountId: 'acc1' } } })
+    rekey('ses_rolled')
+    h.spawned[1].pty.emit('after roll\n')
+    expect(h.spawner!.owns('readWorker', [{ dispatchId: seed.dispatchId }])).toBe(false)
   })
 
   it('does not own a worker-read for a dispatch someone else started', () => {
