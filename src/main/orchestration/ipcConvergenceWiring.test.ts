@@ -8,10 +8,9 @@
 // 그 리팩터가 오기 전까지, 이 가드는 최소한 두 래퍼의 텍스트가 자신이 말하는 일을 실제로 하고
 // 있는지를 — 사람의 리뷰가 놓칠 수 있는 자리에서 — 소리 내어 확인한다.
 //
-// **property 4 — 롤링 체인을 지닌 repair 워커는 이 기능의 첫머리 약속이고, 오늘 이 스위트에서 그것을
-// 확인하는 유일한 자리다.** startWorker 래퍼가 rollChainFor 호출 자체를 지우거나, Task 자신의 계정이
-// 아닌 다른 것을 넘기거나, 결과를 계산해 놓고 coordinator.startWorker 에 넘기지 않으면 — 리뷰로도,
-// 어떤 유닛 테스트로도 잡히지 않는다.
+// Property 4 (a worker starts with the rolling chain built from its Task's own accounts) is now
+// proven by src/core/orchestration/exec/workerStart.test.ts, and the guard below only pins that the
+// startWorker wrapper calls startWorkerWithChain.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -45,36 +44,11 @@ function stripLineComments(text: string): string {
 }
 
 describe('ipc.ts convergence wiring (source guard)', () => {
-  it('the startWorker wrapper attaches the rolling chain to the worker it actually starts (property 4)', () => {
+  it('the startWorker wrapper hands every worker start to startWorkerWithChain (property 4)', () => {
     // deps.startWorker — every worker-start, repair (same-session reuse or fresh) and review Dispatch
     // goes through this one wrapper (repair.ts's RepairDeps.startWorker JSDoc names it explicitly).
-    const wrapper = stripLineComments(sliceBetween(ipcSource, 'startWorker: async (a) => {', 'releaseWorker: async ('))
-
-    // rollChainFor is asked with **this Task's own** accounts (`task.accountIds`) — not just the one
-    // account being dispatched on right now (`taskAccountIds: [a.accountId]` would read as "the chain
-    // exists" to a looser check while quietly being a chain of one, unable to survive a usage limit by
-    // switching accounts).
-    const rollChainCall = /rollChainFor\(\s*\{([\s\S]*?)\}\s*\)/.exec(wrapper)
-    expect(rollChainCall, 'rollChainFor(...) call not found in the startWorker wrapper').not.toBeNull()
-    expect(rollChainCall![1]).toMatch(/taskAccountIds\s*:\s*task\.accountIds\b/)
-
-    // ...and its *result* is what feeds the chain variable — not a call left standing while the
-    // variable it should have fed keeps its stale initial value (a `rollChainFor(...)` call with its
-    // return value silently discarded compiles fine and this repo has no lint rule that would flag the
-    // now-never-reassigned variable).
-    const assignedFrom = /(?:const|let|var)\s+(\w+)\s*=\s*rollChainFor\(/.exec(wrapper)
-    expect(assignedFrom, 'no variable is assigned from the result of rollChainFor(...)').not.toBeNull()
-    const pickedVar = assignedFrom![1]
-    expect(wrapper).toMatch(new RegExp(`rollAccountIds\\s*=\\s*${pickedVar}\\.chain\\b`))
-
-    // ...and that chain variable actually reaches the coordinator. Deliberately loose on the rest of
-    // the object literal (`{ ...a, rollAccountIds }` today) — requiring that *exact* shape would fail a
-    // correct wrapper the day a third property is added there, and a guard that cries wolf on correct
-    // code is a guard people delete.
-    const startCall = /coordinator\.startWorker\(\s*\{([\s\S]*?)\}\s*\)/.exec(wrapper)
-    expect(startCall, 'coordinator.startWorker(...) call not found in the startWorker wrapper').not.toBeNull()
-    expect(startCall![1]).toMatch(/\.\.\.a\b/)
-    expect(startCall![1]).toMatch(/\brollAccountIds\b/)
+    const wrapper = sliceBetween(ipcSource, 'startWorker: (a) =>', 'releaseWorker: async (')
+    expect(stripLineComments(wrapper)).toMatch(/startWorkerWithChain\(/)
   })
 
   it('startValidation checks policyOf before anything writes suspiciousFiles (property 5)', () => {

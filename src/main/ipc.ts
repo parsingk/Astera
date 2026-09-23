@@ -45,10 +45,8 @@ import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchHostGate, OrchSnapshot, Provider, RateLimitWindow, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
-import { markCodexProjectTrusted } from '../core/accounts/codexTrust'
-import { claudeConfigFileFor, markClaudeProjectTrusted } from '../core/accounts/claudeTrust'
 import { orchAccountOf } from '../core/accounts/accountsFile'
-import { descriptorOf, isAmbientDir } from '../core/providers/descriptor'
+import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
 import { attachmentNameOf } from '../core/files/attachmentName'
@@ -85,7 +83,7 @@ import {
   knowledgeIn,
   specFileName
 } from '../core/orchestration/exec/coordinator'
-import { coordinatorBriefName, staleSpecFiles } from '../core/orchestration/exec/specFiles'
+import { staleSpecFiles } from '../core/orchestration/exec/specFiles'
 import {
   handleCommand as orchHandleCommand,
   type OrchServerDeps
@@ -113,7 +111,6 @@ import {
   unattendedQuestions,
   unreadUpwardMail
 } from '../core/orchestration/inbox'
-import { coordinatorLaunchPrompt } from '../core/orchestration/handover'
 import { detachCoordinator, stampPolicySnapshot } from '../core/orchestration/state'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { chatPendingOf } from '../core/sessions/chatRead'
@@ -139,7 +136,7 @@ import {
   suspiciousCheckFiles
 } from '../core/orchestration/convergence'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './orchestration/repair'
-import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
+import { accountToDispatchOn } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
 import { ensureProject } from '../core/orchestration/projects'
 import { jobOf, resolveRunId, runIdOf } from '../core/orchestration/state'
@@ -166,6 +163,11 @@ import { shuttleNames, writeShuttle } from '../core/orchestration/exec/shuttle'
 import { binDirFor, isOnPath, pathHintFor } from '../core/orchestration/cliInstall'
 import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
+import {
+  preTrustWorkspace as preTrustWorkspaceFor,
+  startCoordinatorSession,
+  startWorkerWithChain
+} from '../core/orchestration/exec/workerStart'
 import { installStub, skillStubs } from './orchestration/stub'
 import { AgentGuestRegistry, type GuestLike } from './agentBrowser/registry'
 import { AgentBufferStore, attachBuffers, installNetworkCapture } from './agentBrowser/buffers'
@@ -2624,50 +2626,16 @@ export function registerIpc(
     // 그래도 지금 이 조합을 그대로 두는 이유: 롤링의 idle nudge 는 Notification 훅을 정지 신호로
     // 쓴다(rolling.ts 의 onHookEvent) — 훅을 떼면 그 갈래가 워커에게만 사라진다.
     // **wantHooks 에 체인과 별개인 자기 입력을 주는 일은 나중으로 남긴다.**
-    /** Marks the folder behind `cwd` trusted for this account before a session is spawned into it,
-     *  so an agent nobody is sitting in front of does not stop at the CLI's "do you trust this
-     *  folder?" menu.
-     *
-     *  **Only the orchestration path calls this**, not the shared `spawnSession` every tab goes
-     *  through. The justification is exactly that nobody is there: a worker starts in a worktree made
-     *  seconds earlier, which no person has ever approved, and the menu is a wall it cannot get past
-     *  on its own — measured, three workers in a row. A person opening a tab is present to answer, and
-     *  pre-approving a folder on their behalf would take away a decision they still have.
-     *
-     *  **Both providers need it.** This used to be codex-only, on the stated grounds that
-     *  `--dangerously-skip-permissions` covers claude's trust prompt too. Measured 2026-09-22: it does
-     *  not. A Job worker went into a fresh worktree with that flag on its own command line and stopped
-     *  at `Yes, I trust this folder`; `~/.claude.json` held 47 project entries and none under the
-     *  worktree root, so no claude worker had ever got past it. The flag sets the permission policy,
-     *  and trust is a different question — which is what codex's own note said about its bypass flag
-     *  all along. Orca's preset module has no claude entry either, and that is the same mistake.
-     *
-     *  Best-effort for both: a config this cannot write is a menu the agent will meet, not a reason to
-     *  refuse to start it. The same convention as the other incidental failures around here. */
-    const preTrustWorkspace = async (accountId: string, cwd: string): Promise<void> => {
-      const account = core.accounts.get(accountId)
-      if (!account) return
-      try {
-        if (providerOf(account) === 'codex') {
-          await markCodexProjectTrusted(account.configDir, cwd)
-          return
-        }
-        await markClaudeProjectTrusted(
-          claudeConfigFileFor({
-            configDir: account.configDir,
-            homeDir: app.getPath('home'),
-            ambient: isAmbientDir(
-              descriptorOf(core.descriptors, account),
-              app.getPath('home'),
-              account.configDir
-            )
-          }),
-          cwd
-        )
-      } catch (e) {
-        orchLog(`trust preset failed account=${accountId} cwd=${cwd}: ${String(e)}`)
-      }
-    }
+    // Folder trust before an orchestration spawn — the reasoning lives on preTrustWorkspace in
+    // core/orchestration/exec/workerStart.ts, which the Host calls too.
+    const preTrustWorkspace = (accountId: string, cwd: string): Promise<void> =>
+      preTrustWorkspaceFor({
+        account: core.accounts.get(accountId),
+        cwd,
+        homeDir: app.getPath('home'),
+        descriptors: core.descriptors,
+        log: orchLog
+      })
 
     const coordinator = new OrchCoordinator({
       // session:created is emitted at three sites: here (this spawnSession closure), in
@@ -2697,13 +2665,13 @@ export function registerIpc(
           // **워커의 권한 태도는 전역 설정이 정한다**(AgentPermissionMode). `??` 인 이유는 이
           // 클로저가 값을 **만드는 자리가 아니라 메꾸는 자리**이기 때문이다 — 지금은 coordinator.ts
           // 가 이 칸을 채우지 않지만(그쪽은 앱 설정을 볼 수 없다), 언젠가 Task 하나만 다르게
-          // 띄우기로 하면 그 값이 여기서 이겨야 한다. 근거는 startCoordinator 의 주석에 있다.
+          // 띄우기로 하면 그 값이 여기서 이겨야 한다. 근거는 startCoordinatorSession 의 주석에 있다.
           bypassPermissions:
             o.bypassPermissions ?? core.appSettings.getAgentPermissionMode() === 'yolo',
           initialPrompt: o.initialPrompt,
           title: o.title, // the worker tab title is task.title
           // 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고 나머지는 갈아탈 순서다
-          // (Task.accountIds 에서 온다; 아래 startWorker 래퍼가 rollChainFor 로 만든다). 지정이 없는
+          // (Task.accountIds 에서 온다; startWorkerWithChain 이 rollChainFor 로 만든다). 지정이 없는
           // Task 에서는 그대로 한 원소다. **넘기는 것 자체가 이 세션을 롤링에 등록시킨다.**
           rollAccountIds: o.rollAccountIds,
           rollPrompt: o.rollPrompt, // 워커용 재개 문구 — 없으면 롤링이 UI 언어 기본값을 쓴다
@@ -4069,160 +4037,51 @@ export function registerIpc(
        *  끌고 온다 — 스케줄러의 게으른 생성이 같은 함수를 쓰는 이유와 같다. 그 판단은 한 곳에만
        *  있어야 한다. */
       makeRunWorktree: (a) => forkWorktree({ repoPath: a.repoPath, name: a.name }),
-      /** 이 Run 을 관리할 코디네이터 세션을 띄운다. **워커가 아니다** — Dispatch 도 spec 파일도
-       *  워크트리도 없다. 사람이 여는 세션과 같은 모양이고, 다른 것은 첫 입력이 인수 프롬프트라는
-       *  것뿐이다(core/orchestration/handover.ts).
-       *
-       *  **롤링 체인을 그대로 넘긴다** — 코디네이터도 에이전트라 한도에 걸린다. 워커에게 이 값을
-       *  넘기는 것과 같은 이유이고 같은 기계를 탄다(rollAccountIds 의 JSDuc).
-       *
-       *  **`bypassPermissions` 는 전역 설정이 정한다** — startWorker 와 같은 자리에서 같은 값을
-       *  읽는다(AgentPermissionMode). 한동안 이 자리는 그것을 넘기지 않았고, 그 선택은 "멈추는 쪽이
-       *  허가 없는 실행에 대해 안전하다" 는 것이었다. 뒤집은 근거는 안전이 덜 중요해져서가 아니라
-       *  **멈춤이 실제로는 안전이 아니라 정지였기 때문이다**: 코디네이터는 워크트리가 아니라 프로젝트
-       *  루트에서 뜨지만 그가 띄우는 워커는 매번 새 워크트리에서 뜨고, 사람이 그 프로젝트에 쌓아 둔
-       *  허용 목록은 거기 따라오지 않는다. 그래서 manual 인 Job 은 자율로 돌라고 띄운 세션이 첫
-       *  명령에서 서고, 사람은 탭마다 승인하러 다니게 된다 — 사용자가 보고한 그대로다. */
-      startCoordinator: async (a) => {
-        // **브리핑은 파일로, 세션에는 한 줄만.** 이 프롬프트는 argv 로 가고 win32 에서 세션은
-        // `cmd.exe /c` 로 뜨므로 줄바꿈이 명령을 끊는다 — 워커의 spec 파일과 탭 재개 브리핑이
-        // 같은 제약 때문에 같은 모양으로 갈렸다(coordinatorLaunchPrompt 의 주석).
-        //
-        // **specsDir 에 쓴다.** 그 경로에 argv 금지 문자가 있으면 앱 시작 시 경고가 남는 자리가
-        // 이미 그것이고(아래 LAUNCH_FORBIDDEN 검사), 시작 시 비워지는 것도 무해하다: 앱을 다시
-        // 켜면 코디네이터도 없으므로 사람이 실행을 다시 누른다.
-        //
-        // **The last clause stopped being true when the Host started keeping terminals alive**, and
-        // the boot no longer relies on it: a coordinator session the Host hands back is still running
-        // with this path in its launch prompt, so the boot sweep keeps this file while
-        // `Run.coordinatorSessionId` names a session that survived. That is `staleSpecFiles`, which
-        // recognises this file by `coordinatorBriefName` — the same function that names it here, so
-        // the two cannot drift.
-        const briefPath = path.join(specsDir, coordinatorBriefName(a.runId))
-        await fs.writeFile(briefPath, a.brief, 'utf8')
-        // 코디네이터는 프로젝트 루트에서 뜨므로 대개 이미 신뢰돼 있다 — 그래도 부른다. 그 Run 을
-        // 처음 돌리는 사람에게는 여기가 첫 codex 세션이고, 멈추면 아무도 답할 사람이 없는 것은
-        // 워커와 같다(preTrustWorkspace 의 주석).
-        await preTrustWorkspace(a.accountId, a.cwd)
-        // **워커와 같은 래퍼를 쓴다**(위 spawnSession) — 그 래퍼가 계정 객체를 찾고, 롤링
-        // 코디네이터에 등록하고, orchEnv 를 실어 준다. core.sessions.spawn 을 직접 부르면 그 셋을
-        // 여기서 다시 하게 되고, 그중 하나를 빠뜨리면 코디네이터는 한도에 걸린 채 멈춰 선다.
-        const info = await spawnSession({
-          accountId: a.accountId,
-          cwd: a.cwd,
-          bypassPermissions: core.appSettings.getAgentPermissionMode() === 'yolo',
-          initialPrompt: coordinatorLaunchPrompt(briefPath.replace(/\\/g, '/')),
-          // 탭 제목 — 워커 탭이 Task 제목을 쓰는 것과 같은 이유다. 없으면 워크트리 basename 으로
-          // 떠서 사용자가 이것이 무엇인지 알 수 없다.
-          title: `Coordinator · ${a.runId.slice(0, 12)}`,
-          // **한 원소다.** 그래서 롤링은 계정을 갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서
-          // 이어간다 — 관리 중이던 Run 의 맥락을 잃지 않는 쪽을 골랐다(Run.coordinatorAccountId).
-          rollAccountIds: [a.accountId]
-        })
-        // **탭을 띄우는 것이 이 한 줄이다.** 공용 spawnSession 은 이 이벤트를 내지 않는다 — 사용자
-        // 경로에서는 반환값이 렌더러로 가서 App.tsx 가 탭을 만들기 때문이다(그 함수 위의 주석).
-        // main 안에서 직접 부르는 이 자리는 반환값이 렌더러에 닿지 않으므로, 워커 세션이 그랬던
-        // 것처럼 탭 없는 세션이 된다. 코디네이터 탭은 보여야 한다는 것이 이 기능의 결정이고
-        // (사람이 직접 지시할 자리가 그것이다), 탭이 없으면 그 자리가 사라진다.
-        //
-        // 실패는 삼킨다 — 같은 관례다(startWorker 의 emit): 부수적 실패가 세션 생성을 막지 않고,
-        // 탭은 다음 렌더러 마운트의 sessions.list() 재입양이 만든다.
-        try {
-          send('session:created', info)
-        } catch (err) {
-          orchLog(`session:created emit failed session=${info.id}: ${String(err)}`)
-        }
-        orchLog(`coordinator started run=${a.runId} session=${info.id} account=${a.accountId}`)
-        return { sessionId: info.id }
-      },
-      startWorker: async (a) => {
-        // **이 워커의 롤링 체인을 여기서 정한다 — 워커를 띄우는 길이 전부 이 래퍼로 모이기
-        // 때문이다.** 자동 배치 루프도 orchHandleCommand('worker-start') 를 부르고, CLI 의
-        // worker-start 도 같은 핸들러이며(server.ts 의 deps.startWorker), 검토 Dispatch 도 이 함수를
-        // 지난다. 체인을 그중 한 곳에서 넘기면 나머지 경로는 갈아탈 곳 없는 워커를 띄운다.
-        //
-        // **규칙 자체는 core 에 있다**(rollChainFor) — 이 파일에는 테스트가 닿지 않으므로(위
-        // accountToDispatchOn 호출부의 주석) 규칙을 여기 두면 다음 편집을 막아 줄 것이 없다. 여기
-        // 남는 것은 순수 함수가 가질 수 없는 것뿐이다: Task 를 읽고, 로그인 여부를 조회하고,
-        // 그 조회의 예외를 삼키고, 저하한 이유를 로그에 남긴다.
-        let rollAccountIds = [a.accountId]
-        const stateHere = store.get()
-        const task = stateHere.tasks.find((t) => t.id === a.taskId)
-        // Task 의 provider — **그 Task 의 첫 계정이 정한다**(Task.accountIds). 계정 목록 조회는
-        // 메모리에서 끝나므로(비싼 것은 아래 loginStatus 다) 이 한 걸음에 비용이 없다. 첫 id 가
-        // 목록에 없으면 undefined — 아래 조건이 그 경우를 "어긋났다고 말할 수 없다"로 다룬다.
-        const taskProvider = task?.accountIds?.length
-          ? (() => {
-              const first = core.accounts.list().find((x) => x.id === task.accountIds![0])
-              return first ? providerOf(first) : undefined
-            })()
-          : undefined
-        // **두 경우에 로그인 조회를 하지 않는다.**
-        // (1) 지정이 없을 때 — 답은 요청된 계정 하나로 확정이고(rollChainFor), 그 조회는 계정마다 파일
-        //     읽기(macOS 의 claude 계정은 `security` 프로세스)를 붙인다. 워커를 띄우는 모든 자리가 이
-        //     래퍼를 지나므로 그 값을 헛되이 물릴 이유가 없다(자동 배치 루프가 바퀴마다 한 번만
-        //     조회하는 것과 같은 이유).
-        // (2) **띄우는 provider 가 이 Task 의 provider 와 다를 때** — 검토 Dispatch 가 그 자리다.
-        //     검토자는 구현자와 다른 provider 이므로 Task 의 계정은 rollChainFor 안에서 전부 걸러지고,
-        //     남는 것은 조회 비용과 "쓸 수 있는 계정이 하나도 없다"는 어긋난 로그뿐이다 — 사실은 그
-        //     계정들이 다른 provider 의 것일 뿐이고 사람이 할 일은 없다. 검토 경로는 이 앞에서 이미
-        //     같은 조회를 한 번 했다(startReview). 첫 계정 id 가 목록에 없어 provider 를 알 수
-        //     없으면 어긋났다고 말할 수 없으므로 건너뛰지 않는다.
-        if (task?.accountIds?.length && (taskProvider === undefined || taskProvider === a.provider)) {
-          try {
-            const accountList = core.accounts.list()
-            const loggedInHere = new Set(
-              (
-                await Promise.all(
-                  accountList.map(async (x) =>
-                    (await core.accounts.loginStatus(x.id)) ? x.id : null
-                  )
-                )
-              ).filter((id): id is string => id !== null)
-            )
-            const picked = rollChainFor({
-              requested: a.accountId,
-              taskAccountIds: task.accountIds,
-              provider: a.provider,
-              accounts: accountList,
-              loggedInIds: loggedInHere
-            })
-            rollAccountIds = picked.chain
-            // 저하한 두 갈래를 갈라 적는다 — 사람이 할 일이 다르다: 앞은 이 Task 의 계정을 아무것도
-            // 못 쓴다는 뜻(로그인이 필요하다), 뒤는 하필 이 Dispatch 의 계정만 걸러졌다는 뜻이다.
-            if (picked.degraded === 'nothing-usable')
-              orchLog(
-                `worker-start: no usable account among ${a.accountId},${task.accountIds.join(',')} ` +
-                  `for ${a.provider} — rolling chain falls back to ${a.accountId} alone`
-              )
-            else if (picked.degraded === 'requested-unusable')
-              orchLog(
-                `worker-start: the dispatch account ${a.accountId} is not usable, so the chain ` +
-                  `${task.accountIds.join(',')} is dropped — falls back to ${a.accountId} alone`
-              )
-          } catch (e) {
-            // 로그인 조회는 계정 파일과 Keychain 을 읽으므로 던질 수 있다. 그것이 워커를 못 띄우는
-            // 이유가 되어서는 안 된다 — 체인 없이 띄우는 것은 이 목록이 생기기 전의 동작이다.
-            orchLog(
-              `worker-start: could not read login status — rolling chain falls back to ` +
-                `${a.accountId} alone: ${String(e)}`
-            )
-          }
-        }
-        const started = await coordinator.startWorker({ ...a, rollAccountIds })
-        // From this point on, that session's output belongs to this dispatch. On reuse (--terminal) the
-        // previous dispatch's tail freezes where it is. Only a dispatch that has reached a terminal
-        // state is eligible for eviction — a live worker's tail is not dropped even past the cap (see
-        // tail.ts).
-        orchTails.start(
-          { dispatchId: a.dispatchId, sessionId: started.sessionId },
-          (id) => {
-            const d = store.get().dispatches.find((x) => x.id === id)
-            return d === undefined || d.endedAt !== undefined || d.outcome !== undefined
-          }
-        )
-        return started
-      },
+      /** 이 Run 을 관리할 코디네이터 세션을 띄운다 — the body, and the reasoning for its brief file,
+       *  its one-account chain and its permission mode, is startCoordinatorSession in
+       *  core/orchestration/exec/workerStart.ts. What stays here is the app's spawn adapter. */
+      startCoordinator: (a) =>
+        startCoordinatorSession(
+          {
+            specsDir,
+            preTrust: preTrustWorkspace,
+            bypassPermissions: async () => core.appSettings.getAgentPermissionMode() === 'yolo',
+            spawn: async (o) => {
+              const info = await spawnSession(o)
+              // **탭을 띄우는 것이 이 한 줄이다.** 공용 spawnSession 은 이 이벤트를 내지 않는다 — 사용자
+              // 경로에서는 반환값이 렌더러로 가서 App.tsx 가 탭을 만들기 때문이다(그 함수 위의 주석).
+              // main 안에서 직접 부르는 이 자리는 반환값이 렌더러에 닿지 않으므로, 워커 세션이 그랬던
+              // 것처럼 탭 없는 세션이 된다. 코디네이터 탭은 보여야 한다는 것이 이 기능의 결정이고
+              // (사람이 직접 지시할 자리가 그것이다), 탭이 없으면 그 자리가 사라진다.
+              //
+              // 실패는 삼킨다 — 같은 관례다(startWorker 의 emit): 부수적 실패가 세션 생성을 막지 않고,
+              // 탭은 다음 렌더러 마운트의 sessions.list() 재입양이 만든다.
+              try {
+                send('session:created', info)
+              } catch (err) {
+                orchLog(`session:created emit failed session=${info.id}: ${String(err)}`)
+              }
+              return info
+            },
+            log: orchLog
+          },
+          a
+        ),
+      // Every worker start goes through this one wrapper — the auto-dispatch loop, the CLI's
+      // worker-start and review Dispatches alike. The chain rule and the tail are
+      // startWorkerWithChain's (core/orchestration/exec/workerStart.ts), which the Host calls too.
+      startWorker: (a) =>
+        startWorkerWithChain(
+          {
+            getState: () => store.get(),
+            accounts: async () => core.accounts.list(),
+            loginStatus: (id) => core.accounts.loginStatus(id),
+            coordinator,
+            tails: orchTails,
+            log: orchLog
+          },
+          a
+        ),
       releaseWorker: async ({ dispatchId }) => {
         // The coordinator does not know about state, so the wiring pulls the material for the "is it
         // safe to close" verdict out of state and passes it in (the computation is in release.ts, and
