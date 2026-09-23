@@ -781,4 +781,25 @@ describe('AppSettingsStore first-run question', () => {
     expect(await store.load()).toEqual({ recovered: true })
     expect(store.getFirstRunAsked()).toBe(true)
   })
+
+  // 첫 실행에서 두 설정이 한꺼번에 저장되면(이전 처리의 표시와 첫 실행 질문의 답) 두 쓰기가 한
+  // 파일에 겹쳐 짧은 내용 뒤에 긴 내용의 꼬리가 남았다. 다음 실행은 그 파일을 깨진 것으로 보고
+  // .bak 으로 옮긴 뒤 모든 설정을 기본값으로 되돌린다 — 사람이 켠 것이 조용히 꺼진다.
+  it('동시에 저장해도 파일이 깨지지 않고 마지막 상태를 담는다', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    for (let i = 0; i < 20; i++) {
+      await Promise.all([
+        store.setLang(i % 2 === 0 ? 'en' : null),
+        store.setDismissedCampaignId('campaign-' + 'x'.repeat(i % 7) + String(i)),
+        store.setAgentBrowserEnabled(i % 3 === 0)
+      ])
+      const raw = await fs.readFile(file(), 'utf8')
+      expect(() => JSON.parse(raw), `round ${i}: ${raw}`).not.toThrow()
+    }
+    const b = new AppSettingsStore(file())
+    expect(await b.load()).toEqual({ recovered: false })
+    expect(b.getLang()).toBe(store.getLang())
+    expect(b.getAgentBrowserEnabled()).toBe(store.getAgentBrowserEnabled())
+  })
 })

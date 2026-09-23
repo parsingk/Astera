@@ -457,11 +457,25 @@ export class AppSettingsStore {
     await this.persist()
   }
 
+  /** The write in progress, so the next one waits for it (see persist). */
+  private writing: Promise<void> = Promise.resolve()
+
+  /** Writes run one at a time. Two setters called together (the first launch does this: the always-on
+   *  migration's marker and the first-run answer) used to open the file at once, and the shorter write
+   *  landed over the longer one's tail — a file the next load calls corrupt, backs up and replaces with
+   *  every default, so a setting the person turned on is silently off. Each write reads the fields when
+   *  it runs, so the last one to run carries the latest state. A failed write does not block the next. */
+  private persist(): Promise<void> {
+    const run = this.writing.then(() => this.write())
+    this.writing = run.catch(() => {})
+    return run
+  }
+
   /** There is more than one field, so the whole object is always written — writing only one of them wipes the other
    *  (the defect from back when setLang wrote JSON.stringify({ lang })).
    *  Falsy values are omitted: leaving lang:null and workUnitTrackingEnabled:false out of the file still gives load the
    *  same result (it checks === true), and the file stays clean. */
-  private async persist(): Promise<void> {
+  private async write(): Promise<void> {
     const data: {
       lang?: Lang
       dismissedCampaignId?: string
@@ -519,6 +533,10 @@ export class AppSettingsStore {
     if (this.theme !== DEFAULT_THEME_ID) data.theme = this.theme
     if (this.defaultSessionKind === 'chat') data.defaultSessionKind = 'chat'
     await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-    await fs.writeFile(this.filePath, JSON.stringify(data, null, 2), 'utf8')
+    // Through a temp file and a rename, like accounts.json (registry.ts): a crash mid-write leaves the
+    // old file whole, and a reader outside the app (`astera skills`) never sees half a file.
+    const tmp = this.filePath + '.tmp'
+    await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8')
+    await fs.rename(tmp, this.filePath)
   }
 }
