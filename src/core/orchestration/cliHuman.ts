@@ -191,8 +191,9 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
         ])
       )
     // 읽으라고 부른 화면이다 — 표로 싸면 사람이 읽으려던 것을 가린다.
+    // 위의 줄들이 먼저, 그 아래 화면 — 터미널에서 보던 순서다.
     case 'sessions-read':
-      return typeof data.text === 'string' ? data.text : null
+      return [...asList(data, 'scrollback'), ...asList(data, 'screen')].map(str).join('\n')
     // 계정×스킬 한 줄씩. install 은 설정이 꺼져 심지 않은 것과 그것을 켜는 설정, 그리고 이미 열린
     // 세션은 새 스킬을 못 본다는 한 줄을 표 아래에 붙인다(cli/skills.ts).
     case 'skills-list':

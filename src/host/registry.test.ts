@@ -82,6 +82,16 @@ describe('PtyRegistry', () => {
     expect(p.killed).toBe(true)
   })
 
+  // `sessions read` renders the scrollback at the size the tab has — spawn says it, resize changes it.
+  it('remembers the size a pty was opened at and the last size it was resized to', () => {
+    const h = registry()
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    expect(h.r.size('p1')).toEqual({ cols: 80, rows: 24 })
+    h.r.resize('p1', 100, 40)
+    expect(h.r.size('p1')).toEqual({ cols: 100, rows: 40 })
+    expect(h.r.size('nope')).toBe(null)
+  })
+
   // A message for a session that has gone is ordinary, not exceptional: the app may have sent it
   // before it learned the pty exited.
   it('ignores every command for an id it does not have', () => {

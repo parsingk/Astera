@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { handleCommand, handleExit, type HostSession, type OrchServerDeps } from './command'
+import { handleCommand, handleExit, type HostSession, type OrchServerDeps, type SessionScreen } from './command'
 import { ensureProject } from './projects'
 import { absPath } from '../testPaths'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
@@ -23,7 +23,6 @@ import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project } from './ty
 import { parseArgs } from './cliArgs'
 import { isQueueableReport } from './pendingReports'
 import { checkConfigIdsOf } from './convergence'
-import { ENTER_DELAY_MS } from '../sessions/sessionDriver'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -5484,25 +5483,28 @@ describe('jobs create / tasks add / accounts list', () => {
 
 /**
  * `sessions list / read / send` (CLI phase C). 답은 Host 의 레지스트리가 준다 — 여기서는 그 셋을
- * 가짜로 주입한다. id 는 앱의 세션 id(`ASTERA_SESSION`)이고, 어느 pty 인지는 Host 쪽 일이다
- * (host/sessions.ts).
+ * 가짜로 주입한다. id 는 앱의 세션 id(`ASTERA_SESSION`)이고, 어느 pty 인지, 화면을 어떻게 그리는지,
+ * Enter 를 언제 치는지는 Host 쪽 일이다(host/sessions.ts 와 그 테스트).
  */
 describe('sessions list / read / send', () => {
-  const ESC = String.fromCharCode(27)
-  const BEL = String.fromCharCode(7)
   const withSessions = (
     listed: HostSession[],
-    screens: Record<string, string> = {}
-  ): { deps: OrchServerDeps; written: Array<[string, string]> } => {
-    const written: Array<[string, string]> = []
+    screen: SessionScreen = { cols: 80, rows: 24, screen: ['D:\\p>echo hi', 'hi'], scrollback: ['older'] }
+  ): { deps: OrchServerDeps; reads: Array<[string, number]>; sent: Array<[string, string, boolean]> } => {
+    const reads: Array<[string, number]> = []
+    const sent: Array<[string, string, boolean]> = []
     return {
-      written,
+      reads,
+      sent,
       deps: {
         ...makeDeps(),
         listSessions: () => listed,
-        readSession: (id) => screens[id] ?? '',
-        writeSession: (id, data) => {
-          written.push([id, data])
+        readSession: async (id, lines) => {
+          reads.push([id, lines])
+          return screen
+        },
+        sendSession: async (id, text, enter) => {
+          sent.push([id, text, enter])
         }
       }
     }
@@ -5522,106 +5524,90 @@ describe('sessions list / read / send', () => {
       expect((await call(makeDeps(), cmd, { id: 'ses-1', text: 'x' }, '')).status, cmd).toBe(409)
   })
 
-  it('sessions read 는 ANSI 를 벗기고 마지막 줄들만 낸다', async () => {
-    const screen = [`${ESC}[32mone${ESC}[0m`, 'two', `${ESC}]0;✳ title${BEL}three`, 'four'].join('\r\n')
-    const { deps } = withSessions([term], { 'ses-1': screen })
-    const all = await call(deps, 'sessions-read', { id: 'ses-1' }, '')
-    expect(all).toEqual({ status: 200, body: { id: 'ses-1', alive: true, text: 'one\ntwo\nthree\nfour' } })
-    const two = await call(deps, 'sessions-read', { id: 'ses-1', lines: '2' }, '')
-    expect(two.body).toMatchObject({ text: 'three\nfour' })
-    // 숫자로 와도 같다 — CLI 는 문자열로 넘기지만 다른 호출자는 숫자로 넘길 수 있다.
-    const one = await call(deps, 'sessions-read', { id: 'ses-1', lines: 1 }, '')
-    expect(one.body).toMatchObject({ text: 'four' })
+  it('sessions read 는 Host 가 그린 화면과 그 위의 줄들을 싣는다', async () => {
+    const { deps, reads } = withSessions([term])
+    const r = await call(deps, 'sessions-read', { id: 'ses-1', lines: '5' }, '')
+    expect(r).toEqual({
+      status: 200,
+      body: { id: 'ses-1', alive: true, cols: 80, rows: 24, screen: ['D:\\p>echo hi', 'hi'], scrollback: ['older'] }
+    })
+    expect(reads).toEqual([['ses-1', 5]])
   })
 
-  it('sessions read 는 기본 200 줄이다', async () => {
-    const screen = Array.from({ length: 250 }, (_, i) => `line${i}`).join('\n')
-    const { deps } = withSessions([term], { 'ses-1': screen })
-    const text = ((await call(deps, 'sessions-read', { id: 'ses-1' }, '')).body as { text: string }).text
-    expect(text.split('\n')).toHaveLength(200)
-    expect(text.split('\n')[0]).toBe('line50')
+  it('--lines 의 기본은 200 이고, 숫자로 와도 같다', async () => {
+    const { deps, reads } = withSessions([term])
+    await call(deps, 'sessions-read', { id: 'ses-1' }, '')
+    await call(deps, 'sessions-read', { id: 'ses-1', lines: 7 }, '')
+    expect(reads).toEqual([
+      ['ses-1', 200],
+      ['ses-1', 7]
+    ])
   })
 
   it('--lines 가 1 이상의 정수가 아니면 400 이다', async () => {
-    const { deps } = withSessions([term])
+    const { deps, reads } = withSessions([term])
     for (const lines of ['0', '-1', 'x', '1.5', true])
       expect((await call(deps, 'sessions-read', { id: 'ses-1', lines }, '')).status, String(lines)).toBe(400)
+    expect(reads).toEqual([])
   })
 
   it('없는 id 는 404, 없는 --id 는 400 이다', async () => {
-    const { deps, written } = withSessions([term])
+    const { deps, reads, sent } = withSessions([term])
     const missing = await call(deps, 'sessions-read', { id: 'nope' }, '')
     expect(missing.status).toBe(404)
     expect(JSON.stringify(missing.body)).toContain('unknown session: nope')
     expect((await call(deps, 'sessions-send', { id: 'nope', text: 'x' }, '')).status).toBe(404)
     expect((await call(deps, 'sessions-read', {}, '')).status).toBe(400)
     expect((await call(deps, 'sessions-send', { text: 'x' }, '')).status).toBe(400)
-    expect(written).toEqual([])
+    expect([reads, sent]).toEqual([[], []])
   })
 
   it('대화 세션은 아직 읽지도 치지도 못한다 — 409 에 그렇게 말한다', async () => {
-    const { deps, written } = withSessions([chat])
+    const { deps, reads, sent } = withSessions([chat])
     const read = await call(deps, 'sessions-read', { id: 'chat-1' }, '')
     expect(read.status).toBe(409)
     expect(JSON.stringify(read.body)).toMatch(/chat session.*not supported yet/)
     const send = await call(deps, 'sessions-send', { id: 'chat-1', text: 'x' }, '')
     expect(send.status).toBe(409)
     expect(JSON.stringify(send.body)).toMatch(/chat session.*not supported yet/)
-    expect(written).toEqual([])
+    expect([reads, sent]).toEqual([[], []])
   })
 
-  // **ptyDriver 와 같은 약속이다** — 글을 넣고, ENTER_DELAY_MS 뒤에 Enter(core/sessions/sessionDriver.ts).
-  it('sessions send 는 글을 치고 ENTER_DELAY_MS 뒤에 Enter 를 친다', async () => {
-    vi.useFakeTimers()
-    try {
-      const { deps, written } = withSessions([term])
-      const p = call(deps, 'sessions-send', { id: 'ses-1', text: 'echo hi' }, '')
-      await vi.advanceTimersByTimeAsync(0)
-      expect(written).toEqual([['ses-1', 'echo hi']])
-      await vi.advanceTimersByTimeAsync(ENTER_DELAY_MS - 1)
-      expect(written).toEqual([['ses-1', 'echo hi']])
-      await vi.advanceTimersByTimeAsync(1)
-      expect(await p).toEqual({ status: 200, body: { id: 'ses-1', sent: true, enter: true } })
-      expect(written).toEqual([
-        ['ses-1', 'echo hi'],
-        ['ses-1', '\r']
-      ])
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('--no-enter 는 글만 치고 기다리지 않는다', async () => {
-    vi.useFakeTimers()
-    try {
-      const { deps, written } = withSessions([term])
-      const r = await call(deps, 'sessions-send', { id: 'ses-1', text: 'draft', noEnter: true }, '')
-      expect(r).toEqual({ status: 200, body: { id: 'ses-1', sent: true, enter: false } })
-      await vi.advanceTimersByTimeAsync(ENTER_DELAY_MS * 2)
-      expect(written).toEqual([['ses-1', 'draft']])
-    } finally {
-      vi.useRealTimers()
-    }
+  // 붙여 넣고 Enter 를 치는 약속과 그 150ms 는 Host 가 지킨다(host/sessions.ts 의 sendSession).
+  it('sessions send 는 Enter 와 함께, --no-enter 는 Enter 없이 넘긴다', async () => {
+    const { deps, sent } = withSessions([term])
+    expect(await call(deps, 'sessions-send', { id: 'ses-1', text: 'echo hi' }, '')).toEqual({
+      status: 200,
+      body: { id: 'ses-1', sent: true, enter: true }
+    })
+    expect(await call(deps, 'sessions-send', { id: 'ses-1', text: 'draft', noEnter: true }, '')).toEqual({
+      status: 200,
+      body: { id: 'ses-1', sent: true, enter: false }
+    })
+    expect(sent).toEqual([
+      ['ses-1', 'echo hi', true],
+      ['ses-1', 'draft', false]
+    ])
   })
 
   it('끝난 세션에는 치지 않는다 — 409 다', async () => {
-    const { deps, written } = withSessions([{ ...term, alive: false }])
+    const { deps, sent } = withSessions([{ ...term, alive: false }])
     const r = await call(deps, 'sessions-send', { id: 'ses-1', text: 'x' }, '')
     expect(r.status).toBe(409)
     expect(JSON.stringify(r.body)).toMatch(/has ended/)
-    expect(written).toEqual([])
+    expect(sent).toEqual([])
   })
 
   it('--text 가 없거나 비었으면 400 이다', async () => {
-    const { deps, written } = withSessions([term])
+    const { deps, sent } = withSessions([term])
     for (const text of [undefined, '', true])
       expect((await call(deps, 'sessions-send', { id: 'ses-1', text }, '')).status, String(text)).toBe(400)
-    expect(written).toEqual([])
+    expect(sent).toEqual([])
   })
 
   // **사용자 결정: 누구든 부를 수 있다** — 워커 세션도. COORDINATOR_ONLY 에 넣지 않았다.
   it('워커 세션도 세 명령을 다 부를 수 있다', async () => {
-    const { deps, written } = withSessions([term], { 'ses-1': 'x' })
+    const { deps, sent } = withSessions([term])
     await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = deps.getState().runs[0].id
     const t = await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc1' })
@@ -5634,7 +5620,7 @@ describe('sessions list / read / send', () => {
     expect((await call(deps, 'sessions-list', {}, 'sess1')).status).toBe(200)
     expect((await call(deps, 'sessions-read', { id: 'ses-1' }, 'sess1')).status).toBe(200)
     expect((await call(deps, 'sessions-send', { id: 'ses-1', text: 'x', noEnter: true }, 'sess1')).status).toBe(200)
-    expect(written).toEqual([['ses-1', 'x']])
+    expect(sent).toEqual([['ses-1', 'x', false]])
   })
 })
 

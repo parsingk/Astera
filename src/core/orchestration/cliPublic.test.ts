@@ -143,11 +143,9 @@ describe('publicFor', () => {
     expect(publicFor('sessions-list', [row])).toEqual([
       { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true }
     ])
-    expect(publicFor('sessions-read', { id: 's1', alive: true, text: 'hi', raw: 'x' })).toEqual({
-      id: 's1',
-      alive: true,
-      text: 'hi'
-    })
+    expect(
+      publicFor('sessions-read', { id: 's1', alive: true, cols: 80, rows: 24, screen: ['hi'], scrollback: [], raw: 'x' })
+    ).toEqual({ id: 's1', alive: true, cols: 80, rows: 24, screen: ['hi'], scrollback: [] })
     expect(publicFor('sessions-send', { id: 's1', sent: true, enter: false, extra: 1 })).toEqual({
       id: 's1',
       sent: true,

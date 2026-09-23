@@ -14,7 +14,7 @@ const base = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): Parameter
   log: () => {},
   onAppRequired: () => {},
   readAccounts: vi.fn().mockResolvedValue([]),
-  sessions: { listSessions: () => [], readSession: () => '', writeSession: () => {} },
+  sessions: { listSessions: () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} },
   ...over
 })
 
@@ -226,7 +226,7 @@ describe('hostOrchDeps', () => {
   /**
    * **세션은 Host 가 제 레지스트리로 답한다 — 앱이 붙어 있어도**(CLI phase C, `astera sessions`).
    * pty 를 쥐고 있는 것이 Host 이므로 앱에 물을 까닭이 없고, 앱이 닫혀 있어도 답해야 한다.
-   * 다만 `writeSession` 은 세션에 글자를 친다 — 두 번 치면 두 번 쳐진다. 그래서 영수증의 "움직였다"
+   * 다만 `sendSession` 은 세션에 글자를 친다 — 두 번 치면 두 번 쳐진다. 그래서 영수증의 "움직였다"
    * 표시를 남긴다(onEffect), 앱으로 나가는 행동이 act 깔때기에서 남기는 것과 같은 표시다.
    */
   describe('sessions — Host 가 스스로 답한다', () => {
@@ -234,8 +234,8 @@ describe('hostOrchDeps', () => {
       listSessions: vi.fn(() => [
         { id: 's1', kind: 'terminal' as const, title: 't', accountId: 'a', cwd: 'D:/p', alive: true }
       ]),
-      readSession: vi.fn(() => 'screen'),
-      writeSession: vi.fn()
+      readSession: vi.fn(async () => ({ cols: 80, rows: 24, screen: ['screen'], scrollback: [] })),
+      sendSession: vi.fn(async () => {})
     })
 
     it('앱이 없어도 앱에 묻지 않고 답하며, 앱 문제로 표시하지 않는다', async () => {
@@ -246,9 +246,9 @@ describe('hostOrchDeps', () => {
       expect(await deps.listSessions?.()).toEqual([
         { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true }
       ])
-      expect(await deps.readSession?.('s1')).toBe('screen')
-      await deps.writeSession?.('s1', 'echo hi')
-      expect(sessions.writeSession).toHaveBeenCalledWith('s1', 'echo hi')
+      expect((await deps.readSession?.('s1', 200))?.screen).toEqual(['screen'])
+      await deps.sendSession?.('s1', 'echo hi', true)
+      expect(sessions.sendSession).toHaveBeenCalledWith('s1', 'echo hi', true)
       expect(act).not.toHaveBeenCalled()
       expect(refused).toEqual([])
     })
@@ -258,8 +258,8 @@ describe('hostOrchDeps', () => {
       const act = vi.fn()
       const deps = hostOrchDeps(base({ sessions, act }))
       await deps.listSessions?.()
-      await deps.readSession?.('s1')
-      await deps.writeSession?.('s1', 'x')
+      await deps.readSession?.('s1', 200)
+      await deps.sendSession?.('s1', 'x', true)
       expect(act).not.toHaveBeenCalled()
     })
 
@@ -267,9 +267,9 @@ describe('hostOrchDeps', () => {
       let n = 0
       const deps = hostOrchDeps(base({ sessions: fake(), onEffect: () => n++ }))
       await deps.listSessions?.()
-      await deps.readSession?.('s1')
+      await deps.readSession?.('s1', 200)
       expect(n).toBe(0)
-      await deps.writeSession?.('s1', 'x')
+      await deps.sendSession?.('s1', 'x', true)
       expect(n).toBe(1)
     })
   })

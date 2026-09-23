@@ -204,12 +204,20 @@ export function stdinMissingError(a: { keys: readonly string[]; text: string }):
 /** Fills the wantsStdin keys parseArgs collected (the flags whose value was '-') with the stdin
  *  text. The original args are not mutated (the same state-spread convention as server.ts). */
 export function applyStdin(a: {
+  /** The command, for the one flag whose value is typed into a terminal rather than stored. */
+  cmd?: string
   args: Record<string, unknown>
   keys: string[]
   text: string
 }): Record<string, unknown> {
   const next = { ...a.args }
   for (const key of a.keys) next[key] = a.text
+  // **`sessions send --text -` loses exactly one trailing newline.** A heredoc or `echo |` always ends
+  // in one, and typed into a terminal it is a keystroke of its own before the Enter the command
+  // presses — a second Enter in a shell, a newline in an agent's input box. One and no more, so text
+  // that really ends in a blank line keeps it. Every other flag keeps its text byte for byte.
+  if (a.cmd === 'sessions-send' && typeof next.text === 'string' && a.keys.includes('text'))
+    next.text = next.text.replace(/\r?\n$/, '')
   return next
 }
 
@@ -910,7 +918,7 @@ export async function main(): Promise<void> {
     // the caller meant.
     const missing = stdinMissingError({ keys: parsed.wantsStdin, text })
     if (missing !== null) fail({ code: 'INVALID_ARGUMENTS', message: missing })
-    args = applyStdin({ args, keys: parsed.wantsStdin, text })
+    args = applyStdin({ cmd: parsed.cmd, args, keys: parsed.wantsStdin, text })
   }
 
   // **`--request-id` leaves `args` here, before anything reads them** (liftRequestId): the queue

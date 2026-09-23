@@ -257,15 +257,34 @@ or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` hold
 `alive`. Ended sessions stay listed with `alive: false` until the Host stops. Plain shell tabs and run
 configurations are not agent sessions, and are not listed.
 
-`sessions read` prints the last `--lines` lines (default 200) of a terminal session's screen as plain
-text, with the terminal's escape codes taken out, in `data.text`. The Host keeps about 256,000
-characters of each session's output while it runs and drops them when it ends, so an ended session
-reads as empty. `sessions send` types `--text` into a terminal session and presses Enter 150ms later,
-which is how the app delivers a scheduled message; `--no-enter` types the text and stops there. It
-answers `{"id":…,"sent":true,"enter":true}` once the Enter has gone out. A session that has ended is
-a 6. Chat sessions are listed, but reading one or typing into one is a 6 for now: only terminal
-sessions are supported yet. With `--request-id`, a retried `sessions send` is replayed rather than
-typed a second time.
+**`sessions read` shows what the session's tab shows.** The Host replays the session's recent output
+into a terminal emulator at the tab's current size and returns what that terminal displays:
+`data.screen` is the visible rows, top first, with the empty rows below the last painted one left
+off, and `data.scrollback` is up to `--lines` rows (default 200) from just above the screen, oldest
+first. Each row is the text of its cells with trailing spaces trimmed; colours and other styling are
+not included. `data.cols` and `data.rows` are the size it was rendered at. `--human` prints the
+scrollback and then the screen, one row per line.
+
+```json
+{"ok":true,"data":{"id":"…","alive":true,"cols":100,"rows":30,
+  "screen":["D:\\repo>echo hi","hi","","D:\\repo>"],"scrollback":["Microsoft Windows [Version …]"]}}
+```
+
+The Host keeps about 256,000 characters of each session's output while it runs, so scrollback goes
+back only that far, and its oldest rows can be garbled where that window starts in the middle of a
+sequence. Output from before the tab was last resized is shown at the current width. The Host drops
+the output when a session ends, so an ended session reads as empty.
+
+`sessions send` types `--text` into a terminal session and presses Enter 150ms later, which is how
+the app delivers a scheduled message; `--no-enter` types the text and stops there. It answers
+`{"id":…,"sent":true,"enter":true}` once the Enter has gone out, and `sent` means the Host handed the
+text to the session. Two sends to one session are typed one after the other, never interleaved.
+`--text -` reads the text from standard input and drops one trailing newline, so a heredoc is typed
+once and Enter is pressed once. **It types into whatever the session is showing**: if the agent is
+waiting at a permission prompt or a menu, the text and the Enter answer that prompt. Read the screen
+first. A session that has ended is a 6. Chat sessions are listed, but reading one or typing into one
+is a 6 for now: only terminal sessions are supported yet. With `--request-id`, a retried
+`sessions send` is replayed rather than typed a second time.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
 dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
@@ -562,8 +581,8 @@ The boundary is your machine and your operating system account.
 - Every agent session Astera starts can reach this command, and through it can start worker sessions
   under any account the app holds. That is what orchestration is, and it is not something you switch
   on: an agent you run is an agent that can spend your accounts.
-- Any process running as you, including every agent session Astera starts, can read every session's
-  screen and type into every session with `astera sessions`. A worker can type into its coordinator
+- Any process running as you, including every agent session Astera starts, can see what every
+  terminal session's screen shows, and type into every session, with `astera sessions`. A worker can type into its coordinator
   and into any other session. That is the chosen model, and the boundary is the same as for the rest
   of this command: your operating system account.
 

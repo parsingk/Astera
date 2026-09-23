@@ -172,6 +172,15 @@ describe('applyStdin', () => {
     applyStdin({ args, keys: ['spec'], text: '본문' })
     expect(args).toEqual({ a: 1 })
   })
+  // `astera sessions send --text - <<'EOF'` 의 본문은 줄바꿈으로 끝난다. 그대로 치면 Enter 앞에
+  // 줄바꿈이 하나 더 간다 — 꼭 하나만 뗀다. 다른 명령의 본문은 그대로다.
+  it('sessions send 의 --text 에서만 끝 줄바꿈을 꼭 하나 뗀다', () => {
+    expect(applyStdin({ cmd: 'sessions-send', args: {}, keys: ['text'], text: 'echo hi\n' })).toEqual({ text: 'echo hi' })
+    expect(applyStdin({ cmd: 'sessions-send', args: {}, keys: ['text'], text: 'echo hi\r\n' })).toEqual({ text: 'echo hi' })
+    expect(applyStdin({ cmd: 'sessions-send', args: {}, keys: ['text'], text: 'a\n\n' })).toEqual({ text: 'a\n' })
+    expect(applyStdin({ cmd: 'sessions-send', args: {}, keys: ['text'], text: 'a' })).toEqual({ text: 'a' })
+    expect(applyStdin({ cmd: 'send', args: {}, keys: ['body'], text: 'b\n' })).toEqual({ body: 'b\n' })
+  })
 })
 
 /**
@@ -913,7 +922,7 @@ describe('회복 줄은 진짜로 재생을 부른다', () => {
       hasApp: () => true,
       onState: () => {},
       log: () => {},
-      sessions: { listSessions: () => [], readSession: () => '', writeSession: () => {} }
+      sessions: { listSessions: () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} }
     })
     // 키를 안 단 부름이고, **`--cwd` 도 안 단 부름이다**(§8, 그리고 `implicitArgs`). 일부러 그렇게
     // 둔다: `argsForCall` 이 메꾼 cwd 는 Host 가 지문에 넣는 값이므로, 회복 줄이 그것을 안 싣고

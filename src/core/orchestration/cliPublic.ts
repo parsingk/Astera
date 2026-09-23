@@ -139,8 +139,8 @@ type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT, []>>
  *  추리지만(host/sessions.ts) 그래도 적는다 — ACCOUNT 와 같은 이유다. */
 const SESSION = ['id', 'kind', 'title', 'accountId', 'cwd', 'alive'] as const
 type _session = NothingLeft<Unlisted<HostSession, typeof SESSION, []>>
-/** `sessions read` 와 `sessions send` 의 답은 명령 층이 짓는 것이라 타입이 따로 없다(command.ts). */
-const SESSION_READ = ['id', 'alive', 'text'] as const
+/** `sessions read` 는 SessionScreen 에 id·alive 를 더한 것이고, `sessions send` 는 명령 층이 짓는다(command.ts). */
+const SESSION_READ = ['id', 'alive', 'cols', 'rows', 'screen', 'scrollback'] as const
 const SESSION_SEND = ['id', 'sent', 'enter'] as const
 
 /** `astera skills` 의 답은 계정 목록 안에 스킬 목록이 접힌 모양이다(cli/skills.ts). 개체가 앱이

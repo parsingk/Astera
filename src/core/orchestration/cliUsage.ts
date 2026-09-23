@@ -281,18 +281,18 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       'Each with its id, which is the id `sessions read` and `sessions send` take and the one `ASTERA_SESSION` holds inside that session. `kind` is terminal (an agent CLI in a terminal) or chat. Plain shell tabs and run configurations are not sessions and are not listed. Answered by the Host, so it works with Astera closed.'
   },
   'sessions-read': {
-    summary: "the last lines of a terminal session's screen",
+    summary: "what a terminal session's tab shows, and the rows above it",
     detail:
-      'Plain text, with the terminal escape codes taken out. The Host keeps about 256,000 characters of each running session and drops them when it ends. A chat session is refused with 6: reading one is not supported yet.',
+      "The Host replays the session's recent output into a terminal at the tab's size. `screen` is the visible rows, top first, with the empty rows below the last painted one left off; `scrollback` is up to --lines rows from just above it, oldest first; `cols` and `rows` are the size. Text only, trailing spaces trimmed, no colours. The Host keeps about 256,000 characters of each running session and drops them when it ends. A chat session is refused with 6: reading one is not supported yet.",
     flags: [
       ID('<sessionId>', 'the session to read (from `sessions list`)'),
-      { name: 'lines', value: '<n>', about: 'how many lines, from the end (default 200)' }
+      { name: 'lines', value: '<n>', about: 'how many rows of scrollback above the screen (default 200)' }
     ]
   },
   'sessions-send': {
     summary: 'type into a terminal session, then press Enter',
     detail:
-      'Writes the text, then Enter 150ms later, the way the app delivers a scheduled message. A session that has ended, or a chat session, is refused with 6. Any process running as you can do this to any session, agent sessions included. With --request-id a retry is not typed twice.',
+      'Writes the text, then Enter 150ms later, the way the app delivers a scheduled message, one send at a time per session. It types into whatever the session shows, a permission prompt included, so read it first. `--text -` drops one trailing newline. A session that has ended, or a chat session, is refused with 6. Any process running as you can do this to any session, agent sessions included. With --request-id a retry is not typed twice.',
     flags: [
       ID('<sessionId>', 'the session to type into (from `sessions list`)'),
       { name: 'text', value: '<text|->', required: true, about: 'what to type (a value of `-` reads it from stdin)' },

@@ -266,7 +266,10 @@ describe('humanFor', () => {
 
   // 읽으라고 부른 것이므로 화면 그대로다 — 표로 싸면 사람이 읽으려던 것을 가린다.
   it('sessions read 는 화면 글 그대로, sessions send 는 단건이다', () => {
-    expect(humanFor('sessions-read', { id: 's1', alive: true, text: 'a\nb' })).toBe('a\nb')
+    // 위의 줄들이 먼저, 그 아래 화면 — 터미널에서 보던 순서다.
+    expect(humanFor('sessions-read', { id: 's1', alive: true, screen: ['c', 'd'], scrollback: ['a', 'b'] })).toBe(
+      'a\nb\nc\nd'
+    )
     expect(humanFor('sessions-send', { id: 's1', sent: true, enter: true })).toBe(
       ['id     s1', 'sent   true', 'enter  true'].join('\n')
     )

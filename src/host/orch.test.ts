@@ -25,6 +25,9 @@ import {
 } from '../core/orchestration/state'
 import type { OrchCaller } from '../core/host/orchProtocol'
 import type { HostMessage } from '../core/host/protocol'
+import { PtyRegistry } from './registry'
+import { ProcRegistry } from './procRegistry'
+import { registrySessions } from './sessions'
 
 const NOW = '2026-09-22T00:00:00.000Z'
 /** 이 Host 가 선 시각. `now` 보다 **앞**이어야 하는 값이다 — `requests show` 가 이것을 실어 주는
@@ -67,7 +70,7 @@ const orchOver = (over: Partial<Parameters<typeof createHostOrch>[0]> = {}): Ret
     hasApp: () => true,
     onState: () => {},
     log: (m) => logs.push(m),
-    sessions: { listSessions: () => [], readSession: () => '', writeSession: () => {} },
+    sessions: { listSessions: () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} },
     ...over
   })
 
@@ -472,7 +475,7 @@ describe('createHostOrch', () => {
         hasApp: () => true,
         onState: () => {},
         log: (m) => logs.push(m),
-        sessions: { listSessions: () => [], readSession: () => '', writeSession: () => {} }
+        sessions: { listSessions: () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} }
       })
       const r = await orch.call({ cmd: 'state-put', args: { state: emptyState() }, sessionId: '', from: appCaller() })
       expect(r.status).toBeGreaterThanOrEqual(500)
@@ -790,29 +793,44 @@ describe('요청 영수증', () => {
   // onEffect 하나다. 그것이 빠지면 재시도가 글자를 한 번 더 친다: 셸에 `rm` 을 두 번, 에이전트에
   // 같은 지시를 두 번. 앱이 붙어 있지 않은 모양으로 부른다 — pty 를 쥔 것은 Host 이기 때문이다.
   it('같은 요청 id 의 sessions send 는 한 번만 친다', async () => {
-    const written: Array<[string, string]> = []
-    const orch = orchOver({
-      hasApp: () => false,
-      sessions: {
-        listSessions: () => [
-          { id: 'ses-1', kind: 'terminal', title: 't', accountId: 'acc1', cwd: 'D:/p', alive: true }
-        ],
-        readSession: () => '',
-        writeSession: (id, data) => {
-          written.push([id, data])
-        }
-      }
+    // 진짜 레지스트리 위에서 — 가짜 pty 가 받은 글자를 센다.
+    const written: string[] = []
+    const ptys = new PtyRegistry({
+      spawn: () => ({
+        pid: 1,
+        onData: () => {},
+        onExit: () => {},
+        write: (d: string) => {
+          written.push(d)
+        },
+        resize: () => {},
+        kill: () => {},
+        pause: () => {},
+        resume: () => {}
+      }),
+      log: () => {}
     })
+    ptys.open({
+      id: 'pty-1',
+      file: 'cmd.exe',
+      args: [],
+      opts: { cwd: 'D:/p', cols: 80, rows: 24, env: {} },
+      meta: { kind: 'session', id: 'ses-1', restore: { cwd: 'D:/p' } }
+    })
+    const procs = new ProcRegistry({
+      spawn: () => {
+        throw new Error('no line processes here')
+      },
+      log: () => {}
+    })
+    const orch = orchOver({ hasApp: () => false, sessions: registrySessions({ ptys, procs }) })
     const args = { id: 'ses-1', text: 'echo hi' }
     const first = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-s' })
     const second = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-s' })
     expect(first.status).toBe(200)
     expect(second.replayed, '재생인데 그렇게 말하지 않았다').toBe(true)
     expect(answerOf(second)).toBe(answerOf(first))
-    expect(written, '재시도가 한 번 더 쳤다').toEqual([
-      ['ses-1', 'echo hi'],
-      ['ses-1', '\r']
-    ])
+    expect(written, '재시도가 한 번 더 쳤다').toEqual(['echo hi', '\r'])
     // 읽기는 영수증을 남기지 않는다 — 같은 id 로 다시 읽으면 지금의 화면을 받는다.
     await orch.call({ cmd: 'sessions-read', args: { id: 'ses-1' }, sessionId: '', request: 'req-r' })
     const shown = await orch.call({ cmd: 'requests-show', args: { id: 'req-r' }, sessionId: '' })

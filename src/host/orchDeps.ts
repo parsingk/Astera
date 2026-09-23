@@ -164,14 +164,14 @@ const LOCAL_WHEN_ABSENT = ['listAccounts'] as const
  * itself, and its one effect, `setState`, is marked by the commit flag in `orch.ts`. These are the
  * sessions the Host holds — the ptys live in this process, so there is nothing to forward even when
  * the app is attached, and forwarding would only make `sessions list` fail when Astera is closed,
- * which is when a shell most wants it. But **`writeSession` types into a session**, and nothing about
+ * which is when a shell most wants it. But **`sendSession` types into a session**, and nothing about
  * that goes through `setState`: a retried `sessions send` would type the text a second time. So each
  * of these is wrapped to call `onEffect` when EFFECTFUL says it acts — the same mark the `act` funnel
  * leaves for a forwarded action, taken before the action for the same reason.
  *
  * Never refused, so never `onAppRequired`: nothing here needs the app.
  */
-const HOST_SESSIONS = ['listSessions', 'readSession', 'writeSession'] as const
+const HOST_SESSIONS = ['listSessions', 'readSession', 'sendSession'] as const
 
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
 const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING, ...LOCAL_WHEN_ABSENT]
@@ -256,7 +256,7 @@ const EFFECTFUL: Record<Classified, boolean> = {
   // HOST_SESSIONS. Reading a screen twice leaves it as it was; typing twice types twice.
   listSessions: false,
   readSession: false,
-  writeSession: true
+  sendSession: true
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -449,7 +449,7 @@ export function hostOrchDeps(a: {
     backup: a.backup,
     listSessions: own('listSessions'),
     readSession: own('readSession'),
-    writeSession: own('writeSession'),
+    sendSession: own('sendSession'),
     ...remote,
     ...nested
   } as unknown as OrchServerDeps

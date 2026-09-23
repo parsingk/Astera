@@ -76,8 +76,6 @@ import { parseHandoffBody } from '../handoff/parse'
 import type { HandoffBody } from '../handoff/types'
 import type { Lang } from '../i18n'
 import { isOverrideCompletion, policyOf } from './convergence'
-import { stripAnsi } from '../rolling/detect'
-import { ptyDriver } from '../sessions/sessionDriver'
 
 /** One row of `listAccounts`. Named only because the declaration below is a union and repeating the
  *  shape on both sides invites the two halves to drift. */
@@ -102,6 +100,17 @@ export interface HostSession {
   accountId: string | null
   cwd: string | null
   alive: boolean
+}
+
+/** What `sessions read` shows: a terminal session's scrollback replayed into a terminal at the size
+ *  the tab has (host/sessions.ts). `screen` is the visible rows, top first, with the blank rows under
+ *  the last painted one dropped; `scrollback` is up to `--lines` rows just above it, oldest first.
+ *  Each row is the text in its cells, trailing spaces trimmed. */
+export interface SessionScreen {
+  cols: number
+  rows: number
+  screen: string[]
+  scrollback: string[]
 }
 
 export interface OrchServerDeps {
@@ -367,11 +376,13 @@ export interface OrchServerDeps {
    *  the three below**, from its own registries (host/sessions.ts): it is the process that holds the
    *  ptys, so it answers with or without an app. Absent, the three commands answer 409. */
   listSessions?(): HostSession[]
-  /** A terminal session's scrollback, raw, by the app's session id — empty once it has ended. */
-  readSession?(id: string): string
-  /** Types into a terminal session by the app's session id. A write to one that has ended is dropped
-   *  by the registry, as every write is. */
-  writeSession?(id: string, data: string): void
+  /** A terminal session's screen, rendered, by the app's session id, with up to `lines` rows of
+   *  scrollback — empty once it has ended, because the scrollback goes with it. */
+  readSession?(id: string, lines: number): Promise<SessionScreen>
+  /** Types into a terminal session by the app's session id, then presses Enter 150ms later when
+   *  `enter` (ptyDriver's convention), one delivery at a time per session. A write to one that has
+   *  ended is dropped by the registry, as every write is. */
+  sendSession?(id: string, text: string, enter: boolean): Promise<void>
 }
 
 type Reply = { status: number; body: unknown }
@@ -2435,14 +2446,14 @@ export async function handleCommand(
      * CLI 의 나머지와 같은 OS 계정이고(docs/cli.md 의 Security), 그 안의 누구든 이미 이 세션들을 띄운
      * 프로그램을 돌릴 수 있다.
      *
-     * **`sessions send` 가 영수증에 남는 것은 커밋이 아니라 `writeSession` 때문이다** — 상태는 그대로다.
+     * **`sessions send` 가 영수증에 남는 것은 커밋이 아니라 `sendSession` 때문이다** — 상태는 그대로다.
      * host/orchDeps.ts 가 그 의존을 "움직인다" 로 적어 두었으므로 같은 `--request-id` 의 재시도는 한 번
      * 더 치지 않고 첫 답을 재생한다.
      */
     case 'sessions-list':
     case 'sessions-read':
     case 'sessions-send': {
-      if (!deps.listSessions || !deps.readSession || !deps.writeSession)
+      if (!deps.listSessions || !deps.readSession || !deps.sendSession)
         return conflict('sessions are answered by the Astera Host, and this caller is not one')
       if (routed === 'sessions-list') return okBody(deps.listSessions())
       const id = str(args.id)
@@ -2459,17 +2470,13 @@ export async function handleCommand(
         return conflict(
           `${id} is a chat session, and ${routed === 'sessions-read' ? 'reading' : 'typing into'} chat sessions is not supported yet — only terminal sessions`
         )
-      if (routed === 'sessions-read') {
-        // 줄은 화면의 줄이다 — ConPTY 는 \r\n 으로 끝낸다. 벗기기는 롤링이 한도 문구를 찾을 때 쓰는
-        // 그것이다(core/rolling/detect.ts).
-        const all = stripAnsi(deps.readSession(id)).split(/\r?\n/)
-        return okBody({ id, alive: session.alive, text: all.slice(-lines).join('\n') })
-      }
+      // 화면은 Host 가 그린다 — 흐름에서 escape 만 벗기면 ConPTY 가 커서로 옮긴 줄이 한 줄로 붙는다.
+      if (routed === 'sessions-read')
+        return okBody({ id, alive: session.alive, ...(await deps.readSession(id, lines)) })
       if (!session.alive) return conflict(`session ${id} has ended; there is nothing to type into`)
       const enter = args.noEnter !== true
-      // 붙여 넣고 Enter — 앱의 스케줄러·롤링·Slack 이 쓰는 그 약속 그대로다(ptyDriver).
-      if (enter) await ptyDriver({ write: deps.writeSession }).deliver(id, text as string)
-      else deps.writeSession(id, text as string)
+      // 붙여 넣고 Enter 를 치는 약속(ptyDriver)과 세션마다 한 번에 하나씩은 Host 가 지킨다.
+      await deps.sendSession(id, text as string, enter)
       return okBody({ id, sent: true, enter })
     }
     case 'reset': {

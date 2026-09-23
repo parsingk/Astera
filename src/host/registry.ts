@@ -60,6 +60,10 @@ interface Entry {
   meta: PtyMeta | null
   buffer: string
   alive: boolean
+  /** The size the app last gave this pty — at spawn, then at every resize. `sessions read` renders
+   *  the scrollback at it (host/sessions.ts), because the bytes were painted for that size. */
+  cols: number
+  rows: number
 }
 
 export interface PtyRegistryDeps {
@@ -110,7 +114,16 @@ export class PtyRegistry {
       this.deps.log(`pty ${a.id} could not be started: ${String(err)}`)
       return { ok: false, error: String(err) }
     }
-    const entry: Entry = { id: a.id, pty, pid: pty.pid, meta: a.meta ?? null, buffer: '', alive: true }
+    const entry: Entry = {
+      id: a.id,
+      pty,
+      pid: pty.pid,
+      meta: a.meta ?? null,
+      buffer: '',
+      alive: true,
+      cols: a.opts.cols,
+      rows: a.opts.rows
+    }
     this.entries.set(a.id, entry)
     pty.onData((d) => {
       // The same shape TerminalManager's own buffer uses: append, then keep the tail.
@@ -153,7 +166,17 @@ export class PtyRegistry {
   }
 
   resize(id: string, cols: number, rows: number): void {
-    this.live(id)?.pty.resize(cols, rows)
+    const e = this.live(id)
+    if (!e) return
+    e.pty.resize(cols, rows)
+    e.cols = cols
+    e.rows = rows
+  }
+
+  /** The size recorded by `open` and `resize`, or null for an id that was never here. */
+  size(id: string): { cols: number; rows: number } | null {
+    const e = this.entries.get(id)
+    return e ? { cols: e.cols, rows: e.rows } : null
   }
 
   kill(id: string): void {
