@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555)
 
-[Download](#install) · [What it does](#what-it-does) · [Jobs](#jobs) · [Documentation](#documentation) · [Report a bug](https://github.com/parsingk/Astera/issues/new)
+[Website](https://astera.run/) · [Download](#install) · [What it does](#what-it-does) · [Jobs](#jobs) · [Documentation](#documentation) · [Report a bug](https://github.com/parsingk/Astera/issues/new)
 
 **English** · [한국어](README.ko.md) · [日本語](README.ja.md) · [Español](README.es.md)
 

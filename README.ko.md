@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555)
 
-[다운로드](#설치) · [기능](#무엇을-하는-앱인가) · [Jobs](#jobs) · [문서](#문서) · [버그 신고](https://github.com/parsingk/Astera/issues/new)
+[웹사이트](https://astera.run/index.ko.html) · [다운로드](#설치) · [기능](#무엇을-하는-앱인가) · [Jobs](#jobs) · [문서](#문서) · [버그 신고](https://github.com/parsingk/Astera/issues/new)
 
 [English](README.md) · **한국어** · [日本語](README.ja.md) · [Español](README.es.md)
 
