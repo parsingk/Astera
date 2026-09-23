@@ -18,15 +18,8 @@ import {
   type DesktopNotifySettings
 } from '../core/notify/settings'
 import type { SkillSettings } from '../core/orchestration/skills'
-
-/** The file's text as `load` reads it: a JSON object, or a throw. Same guard as the sibling stores
- *  (ProjectSettings, RunConfigStore) — typeof [] === 'object', so an array would otherwise pass
- *  straight through. */
-function settingsObjectOf(text: string): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(text)
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid schema')
-  return parsed as Record<string, unknown>
-}
+import { settingsObjectOf } from '../core/settings/settingsObject'
+import { agentPermissionModeOf } from '../core/settings/agentPermissionMode'
 
 /** The three settings that gate Astera's agent skills when the file does not say otherwise — a
  *  missing file, a corrupt one, or an absent key. */
@@ -180,10 +173,10 @@ export class AppSettingsStore {
       this.resumeStrategy = gates.resumeStrategy
       // Narrowed the other way round, because the default is the other way round: only the explicit
       // 'manual' turns the bypass off, and anything else the user-editable file holds reads as 'yolo'.
-      this.agentPermissionMode =
-        (parsed as { agentPermissionMode?: unknown }).agentPermissionMode === 'manual'
-          ? 'manual'
-          : 'yolo'
+      // The same function the Host's read uses (readAgentPermissionMode), so the two cannot differ.
+      this.agentPermissionMode = agentPermissionModeOf(
+        (parsed as { agentPermissionMode?: unknown }).agentPermissionMode
+      )
       // Sanitised on read as well as on write: the file is user-editable, and the value ends up in a
       // CSS font-family string. Anything that does not survive is treated as unset.
       const font = (parsed as { terminalFont?: unknown }).terminalFont
