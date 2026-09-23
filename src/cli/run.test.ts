@@ -17,6 +17,8 @@ import {
   lostAnswerDetails,
   retryCommandLine,
   implicitArgs,
+  stdinMissingError,
+  requestIdOf,
   shownReceipt,
   callHost,
   connectFailureEnd,
@@ -169,6 +171,32 @@ describe('applyStdin', () => {
     const args = { a: 1 }
     applyStdin({ args, keys: ['spec'], text: '본문' })
     expect(args).toEqual({ a: 1 })
+  })
+})
+
+/**
+ * **`-` 는 "값이 지금 온다" 는 약속이고, 아무것도 안 오면 그 약속이 깨진 것이다** — 값이 빈 글자라는
+ * 뜻은 아니다. 그냥 넘기면 가장 비싼 경우가 조용하다: `send --type worker_done --body -` 는 본문을
+ * 요구하지 않으므로(`workerDoneFieldError`) 빈 보고가 0 으로 올라가고, Dispatch 는 닫히고,
+ * 코디네이터는 요약이 사라진 Task 를 끝난 것으로 읽는다.
+ */
+describe('stdinMissingError — 빈 stdin 은 값이 아니다', () => {
+  it('`-` 를 쓴 칸이 있는데 아무것도 안 오면 거절 문구를 준다', () => {
+    expect(stdinMissingError({ keys: ['body'], text: '' })).toContain('--body')
+    expect(stdinMissingError({ keys: ['body'], text: '' })).toContain('standard input')
+  })
+
+  it('캐멀케이스 칸은 친 모양으로 되돌려 댄다', () => {
+    expect(stdinMissingError({ keys: ['taskId'], text: '' })).toContain('--task-id')
+  })
+
+  it('글자가 왔으면 아무 말도 하지 않는다 — 공백 한 칸도 값이다', () => {
+    expect(stdinMissingError({ keys: ['body'], text: '보고' })).toBeNull()
+    expect(stdinMissingError({ keys: ['body'], text: ' ' })).toBeNull()
+  })
+
+  it('`-` 를 쓴 칸이 없으면 stdin 이 비어도 상관없다', () => {
+    expect(stdinMissingError({ keys: [], text: '' })).toBeNull()
   })
 })
 
@@ -342,6 +370,28 @@ describe('requestForHost — 실은 id 와 새긴 id 는 옛 Host 앞에서 갈�
     // 만들지 않는다" 가 그 절반을 지킨다. 칸이 있고 값이 없는 것과 애초에 안 보낸 것을 저쪽이 가를
     // 수 있어야 한다.
     expect(against(['orch'], false)).toEqual({ send: undefined })
+  })
+})
+
+/**
+ * **이미 도는 요청이라 거절당한 호출은 "지금 뭐가 도나" 가 아니라 "그 요청이 어떻게 됐나" 를
+ * 물어야 한다**(요청 영수증 설계 §7). 런타임의 `pending` 문장도 기다렸다 다시 물으라고 말하고,
+ * 그 "다시 묻기" 는 `requests show` 다. 문구가 아니라 봉투의 칸으로 가른다 — Host 가 그 409 에
+ * `requestId` 를 싣고, 이 함수가 그것을 `details` 로 올린다.
+ */
+describe('requestIdOf — 요청을 이름 댄 거절만 그 id 를 싣는다', () => {
+  it('본문에 requestId 가 있으면 details 로 올린다', () => {
+    expect(requestIdOf({ error: 'request rq-1 is already running', requestId: 'rq-1' })).toEqual({
+      requestId: 'rq-1'
+    })
+  })
+
+  it('없거나 모양이 아니면 아무것도 올리지 않는다 — 없던 details 를 만들지 않는다', () => {
+    expect(requestIdOf({ error: 'unknown job: job_x' })).toBeUndefined()
+    expect(requestIdOf({ requestId: '' })).toBeUndefined()
+    expect(requestIdOf({ requestId: 7 })).toBeUndefined()
+    expect(requestIdOf(null)).toBeUndefined()
+    expect(requestIdOf('boom')).toBeUndefined()
   })
 })
 
@@ -666,6 +716,50 @@ describe('lostAnswerDetails — 잃은 답의 회복 줄', () => {
    *  않았다. 둘 다 물어볼 영수증이 없다 — id 를 대면 `absent` 밖에 못 받는 명령으로 보내는 셈이다. */
   it('보낸 id 가 없으면 아무것도 싣지 않는다', () => {
     expect(lostAnswerDetails({ argv, request: undefined })).toEqual({})
+  })
+
+  /**
+   * **stdin 으로 값을 받은 부름에는 다시 칠 줄이 없다 — 그래서 내보내지 않는다.**
+   *
+   * `parseArgs` 는 `-` 값을 `args` 에 넣지 않고(`applyStdin` 이 나중에 채운다), 그래서 argv 에 남는
+   * 것은 맨 `-` 뿐이다. 그 줄을 찍으면 본문이 빠진 줄이 된다. **두 결말이 다 나쁘다**: Host 가 그
+   * 사이 다시 섰으면 빈 본문으로 `worker_done` 이 0 으로 올라가 워커의 보고가 사라지고, Host 가 살아
+   * 있으면 지문이 달라 400 이 나며 그 문구를 곧이 따르면 새 id 로 **중복**을 만든다 — 이 기능이 막으려는
+   * 바로 그것이다.
+   *
+   * **본문을 줄에 박아 넣지도 않는다**: 길 수 있고, 비밀을 실을 수 있고, 돌아갈 것처럼 생겼는데 안
+   * 도는 줄이 애초에 이 사달을 냈다. 대신 칠 수 있는 한 문장을 준다.
+   */
+  it('stdin 으로 값을 받았으면 retryCommand 대신 무엇을 하라는 문장이 나간다', () => {
+    const d = lostAnswerDetails({
+      argv: ['send', '--type', 'worker_done', '--body', '-'],
+      request: 'rq-1',
+      fromStdin: ['body']
+    })
+    expect(Object.hasOwn(d, 'retryCommand'), '다시 칠 수 없는 줄을 내보냈다').toBe(false)
+    expect(d.queryCommand).toBe('astera requests show --id rq-1')
+    expect(d.retryNote).toContain('--body')
+    expect(d.retryNote).toContain('--request-id rq-1')
+    expect(d.retryNote).toContain('stdin')
+  })
+
+  /** 여러 칸이 stdin 을 읽었으면 전부 댄다 — 어느 것을 다시 넣어야 하는지가 그 문장의 값이다. */
+  it('stdin 을 읽은 칸이 여럿이면 전부 이름을 댄다', () => {
+    const d = lostAnswerDetails({
+      argv: ['task-create', '--spec', '-'],
+      request: 'rq-1',
+      fromStdin: ['spec', 'taskId']
+    })
+    expect(d.retryNote).toContain('--spec')
+    // 캐멀케이스는 친 모양으로 되돌린다 — `--taskId` 라는 플래그는 없다.
+    expect(d.retryNote).toContain('--task-id')
+  })
+
+  /** `browser js` 는 줄에 토큰조차 없다 — 스크립트가 통째로 stdin 이다. 같은 규칙이 덮는다. */
+  it('줄에 토큰이 아예 없는 browser js 도 같은 문장을 받는다', () => {
+    const d = lostAnswerDetails({ argv: ['browser', 'js'], request: 'rq-1', fromStdin: ['script'] })
+    expect(Object.hasOwn(d, 'retryCommand')).toBe(false)
+    expect(d.retryNote).toContain('--script')
   })
 
   /** **줄은 실제로 파싱돼야 한다.** 이 저장소는 없는 것을 가리키는 안내를 몇 번 내보냈고, 그래서

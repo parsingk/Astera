@@ -304,6 +304,10 @@ export function rootUsage(): string {
     '',
     'output is JSON. --human prints aligned columns for reading, --quiet prints ids only.',
     'while a wait is on, a line every 15s goes to stderr, never stdout. --no-keepalive stops them.',
+    // **The one flag here that changes what happens rather than how it is printed.** It was missing,
+    // and `requests show`'s own usage text refers to it by name — so a person sent to that command
+    // had no way to learn it from `--help`, which is the level that answers with nothing running.
+    '--request-id <id> on any command says a retry is the same request: it is not done twice.',
     '',
     "astera <noun> --help lists that noun's verbs.",
     'astera <noun> <verb> --help describes one command and its flags.',

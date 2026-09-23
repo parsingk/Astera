@@ -256,6 +256,20 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
   })
 
   /**
+   * **이미 도는 요청이라 거절당한 6 은 다른 것을 묻는다**(요청 영수증 설계 §7). 그 거절이 말하는
+   * "지금 상태" 는 Job 도 회차도 아니라 그 요청이고, `astera status` 는 그것에 대해 아무 말도 하지
+   * 않는다. 런타임의 `pending` 문장이 시키는 "기다렸다 다시 묻기" 가 곧 이 줄이다.
+   */
+  it('요청이 이미 돌아서 난 6 은 그 요청을 묻는 줄로 간다', () => {
+    expect(nextStepsFor({ code: 'CONFLICT', cmd: 'worker-start', details: { requestId: 'rq-1' } })).toEqual([
+      'astera requests show --id rq-1'
+    ])
+    // 그 밖의 6 은 예전 그대로다 — 요청이 아니라 상태 때문에 거절된 것이므로 답은 "지금 무엇이 도는가" 다.
+    expect(nextStepsFor({ code: 'CONFLICT', cmd: 'run-start' })).toEqual(['astera status'])
+    expect(nextStepsFor({ code: 'CONFLICT', cmd: 'host-stop' })).toEqual(['astera host status'])
+  })
+
+  /**
    * **3 만은 순서가 뒤집힌다.** Host 에 닿지 못한 것이 그 코드의 뜻이고, 영수증을 묻는 명령도 Host 가
    * 있어야 답한다 — 목록을 위에서부터 따르는 에이전트는 "모르겠다" 를 한 번 더 받고 나서야 그것을
    * 고치는 줄에 닿는다. 그래서 Host 를 세우는 줄이 먼저고, 영수증은 그것이 답할 수 있게 된 뒤다.
@@ -409,6 +423,25 @@ describe('silentHostEnd — Host 가 답하지 않은 채 시한이 지났다', 
     expect(nextStepsFor({ code: 'TIMEOUT', cmd: 'ask', details: end.details })).toEqual([
       'astera host status'
     ])
+  })
+
+  /**
+   * **영수증이 생기면서 그 문장의 사실이 바뀌었다.** "질문이 만들어졌는지 알 길이 없다" 는 요청 id 를
+   * 못 실은 부름에서만 참이다 — 실은 부름에서는 같은 봉투의 `nextSteps[0]` 이 바로 그것을 묻는
+   * 명령이고, 한 봉투가 "알 수 없다" 와 "이렇게 물어봐라" 를 함께 말할 수는 없다.
+   */
+  it('요청 id 를 실었으면 그것을 먼저 물으라고 말한다', () => {
+    const end = silentHostEnd({
+      cmd: 'ask',
+      args: { question: '어느 쪽인가' },
+      reason: '시한이 지났다',
+      request: 'rq-1'
+    })
+    expect(end.message).toContain('astera requests show --id rq-1')
+    expect(end.message).toContain('whether the question was created')
+    expect(end.message, '알 길이 없다는 옛 문장이 남아 있다').not.toContain('no way to tell from here')
+    // 다시 묻지 말라는 것은 두 갈래 모두에서 그대로다 — 그것이 이 자리의 요점이다.
+    expect(end.message).toContain('a second question in front of the same person')
   })
 
   it('다른 명령은 이유 한 줄 그대로다', () => {

@@ -582,16 +582,20 @@ you a line you cannot run:
 > be pending, so do not ask again
 
 **A `7` from `ask` is a different ending and says a different thing.** There the Host never answered
-at all, so nothing came back to be missing an id — and this CLI cannot tell whether your question was
-ever created:
+at all, so nothing came back to be missing an id — and this CLI cannot tell from the reply whether
+your question was ever created. **The request id can**, and the message says so:
 
-> no answer came back at all, so there is no way to tell from here whether the question was created;
-> it cannot be resumed safely, and asking again risks a second question in front of the same person
+> no answer came back at all, so this wait cannot be resumed from here — but this call carried a
+> request id, and `astera requests show --id <id>` says whether the question was created and what its
+> id is. Run that before asking again: asking again risks a second question in front of the same
+> person
 
-Read the two apart. The first says a question exists and cannot be named; the second says not even
-that much is known. Neither is a reason to ask again — if you are stuck without the answer, tell your
-coordinator with `send --type escalation`. A `7` from `ask` that *was* a `--resume` carries the id it
-was given, so its `nextSteps` has the line to run.
+Read the two apart. The first says a question exists and cannot be named; the second says the reply
+told you nothing and the receipt is where to look. **One first move either way: do not ask again.**
+Run the command in that message (4.10 is the whole of it); a `completed` receipt hands you the
+`questionId` to `--resume`, and only an `absent` leaves you with nothing to resume — that is when to
+tell your coordinator with `send --type escalation`. A `7` from `ask` that *was* a `--resume` carries
+the id it was given, so its `nextSteps` already has the line to run.
 
 ### 4.9 While you wait
 
@@ -626,13 +630,23 @@ happens, the error hands you that id and the two commands to run:
   "details":{"requestId":"d9cea50f-d589-4cd8-8132-d1ab5e3fbfbf",
              "queryCommand":"astera requests show --id d9cea50f-d589-4cd8-8132-d1ab5e3fbfbf",
              "retryCommand":"astera worker-start --task tsk_9f2b --agent codex --account acc1 --worktree current --request-id d9cea50f-d589-4cd8-8132-d1ab5e3fbfbf"},
-  "nextSteps":["astera requests show --id d9cea50f-d589-4cd8-8132-d1ab5e3fbfbf","astera host start"]}}
+  "nextSteps":["astera host start","astera requests show --id d9cea50f-d589-4cd8-8132-d1ab5e3fbfbf"]}}
 ```
 
-Run `queryCommand` first. `retryCommand` is the line you ran with that id on it, for after you know.
-Both are POSIX shell syntax — bash, zsh, Git Bash, and PowerShell read them the same way; `cmd.exe`
-does not read single quotes, so requote there. Nothing in either line is left where a shell would
-expand it, so pasting one cannot run anything but `astera`.
+**Follow `nextSteps` in the order it gives them.** For a `7` the receipt question comes first, because
+the Host is there and can answer it. For a `3` it comes second, behind `astera host start`, and that
+order is deliberate: with no Host reachable, `requests show` is a second `3` and tells you nothing.
+
+`retryCommand` is the line you ran with that id on it, for after you know. It is POSIX shell syntax —
+bash, zsh and Git Bash; PowerShell reads the same quotes apart from a value containing a single quote
+of its own, and `cmd.exe` does not read single quotes at all, so requote there. Nothing in it is left
+where a shell would expand it, so pasting it cannot run anything but `astera`.
+
+**A command that read part of itself from standard input gets `retryNote` instead of
+`retryCommand`**, because there is no line to print: the payload was never on the command line, so a
+printed line would carry a bare `-` and send an empty body. The note names the flags that read stdin
+and the id to pass. Run what you ran, with `--request-id <that id>`, feeding the same text in the same
+way. `queryCommand` is there either way.
 
 **`astera requests show --id <id>` has three answers and all three exit `0`**, because not finding a
 receipt is an answer rather than a failure. `data.interpretation` is the runtime's own sentence for

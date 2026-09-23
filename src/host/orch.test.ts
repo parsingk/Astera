@@ -842,6 +842,10 @@ describe('요청 영수증', () => {
     const retry = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
     expect(retry.status).toBe(409)
     expect(JSON.stringify(retry.body)).toContain('req-1')
+    // **문장 안에만이 아니라 칸으로도 댄다.** 이 거절을 받은 쪽이 다음에 할 일은 *그 요청*을 묻는
+    // 것이고, CLI 는 문구를 읽지 않고는 이 409 를 "Job 이 이미 돈다" 와 가를 수 없다 — 칸이 있으면
+    // 그 실패의 `nextSteps` 가 `astera status` 대신 `requests show --id` 가 된다.
+    expect((retry.body as { requestId?: string }).requestId).toBe('req-1')
     // **거절은 재생이 아니다.** 뒤에 영수증이 없는 답이므로 재생 표시를 달면, 부르는 쪽은 자기 명령이
     // 이미 한 번 끝났다고 읽는다 — 아직 돌고 있는데.
     expect(retry.replayed, '거절에 재생 표시가 붙었다').toBeUndefined()

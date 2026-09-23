@@ -248,7 +248,16 @@ const STEPS: Record<
   // 무엇을 부를 수 있는지는 가이드에만 적혀 있고, 그것을 읽는 것 말고 칠 것이 없다.
   PERMISSION_DENIED: () => ['astera help'],
   // 409 는 지금 상태 때문에 거절된 것이므로, 답은 "지금 무엇이 도는가" 다.
-  CONFLICT: (cmd) => [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
+  //
+  // **요청 하나가 이미 돌고 있어서 난 409 만은 다른 것을 묻는다**(요청 영수증 설계 §7). 그 거절이
+  // 말하는 "지금 상태" 는 Job 도 회차도 아니라 **그 요청**이고, 런타임의 `pending` 문장도 기다렸다
+  // 다시 물으라고 말한다 — 그 "다시 묻는" 명령이 `astera status` 일 수는 없다. 문구가 아니라 `details`
+  // 의 칸으로 가른다(Host 가 그 봉투에 `requestId` 를 싣는다): 계약을 문자열에 매는 것이 이 표가
+  // 처음부터 피해 온 일이다.
+  CONFLICT: (cmd, details) =>
+    typeof details.requestId === 'string'
+      ? ['astera requests show --id <requestId>']
+      : [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
   // 시한을 넘긴 것과 Host 가 살아서 답하지 않는 것이 같은 코드다(run.ts 의 SILENT_HOST_CODE).
   // 둘을 가르는 명령이 이것이다 — 앞의 경우에는 답하고 뒤의 경우에는 답하지 않는다(docs/cli.md).
   //
@@ -405,6 +414,16 @@ const UNNAMED_QUESTION =
   'the answer did not name the question, so this wait cannot be resumed safely; the question may still be pending, so do not ask again'
 
 /** 답이 **아예 오지 않은** 갈래(`silentHostEnd`). 질문이 만들어졌는지조차 이쪽은 모른다. */
+/** 답이 **아예 오지 않았고**, 그 부름이 요청 id 를 실어 보낸 갈래.
+ *
+ *  **영수증이 생기면서 이 자리의 사실이 바뀌었다.** 예전에는 질문이 만들어졌는지 알 길이 없었고
+ *  그래서 이 문장이 그렇게 말했다. 지금은 그 길이 있고, 같은 봉투의 `nextSteps[0]` 이 바로 그
+ *  명령이다 — 문장만 옛것으로 남겨 두면 한 봉투가 두 가지를 말한다. */
+const ASK_RECEIPT_FIRST = (id: string): string =>
+  `no answer came back at all, so this wait cannot be resumed from here — but this call carried a request id, and \`astera requests show --id ${id}\` says whether the question was created and what its id is. Run that before asking again: asking again risks a second question in front of the same person`
+
+/** 그리고 id 를 못 실은 갈래 — 영수증을 모르는 옛 Host 앞에서 새긴 id 는 버려진다
+ *  (`requestForHost`). 거기서는 예전의 사실이 그대로 참이다. */
 const NO_ANSWER_AT_ALL =
   'no answer came back at all, so there is no way to tell from here whether the question was created; it cannot be resumed safely, and asking again risks a second question in front of the same person'
 
@@ -458,6 +477,9 @@ export function silentHostEnd(a: {
   args: Record<string, unknown>
   /** `callHost` 가 만든 "안 왔다" 한 줄. */
   reason: string
+  /** 이 부름이 실어 보낸 요청 id, 실은 것이 있으면. **문장이 여기서 갈린다**: 영수증이 있는 쪽은
+   *  질문이 만들어졌는지 물어볼 수 있고, 없는 쪽은 여전히 알 길이 없다. */
+  request?: string
 }): { message: string; details: Record<string, unknown> } {
   if (a.cmd !== 'ask') return { message: a.reason, details: {} }
   const resuming = typeof a.args.resume === 'string' && a.args.resume.length > 0 ? a.args.resume : null
@@ -469,6 +491,8 @@ export function silentHostEnd(a: {
         ...(typeof a.args.timeoutMs === 'number' ? { timeoutMs: a.args.timeoutMs } : {})
       }
     }
+  if (a.request !== undefined)
+    return { message: `${a.reason} — ${ASK_RECEIPT_FIRST(a.request)}`, details: {} }
   return { message: `${a.reason} — ${NO_ANSWER_AT_ALL}`, details: {} }
 }
 

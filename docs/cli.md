@@ -189,12 +189,19 @@ and those two failures hand it back in `error.details` with the two commands to 
 {"ok":false,"error":{"code":"TIMEOUT","message":"the Host did not answer ask within 31000ms — …",
   "details":{"requestId":"d3e3fe89-…",
              "queryCommand":"astera requests show --id d3e3fe89-…",
-             "retryCommand":"astera ask --task-id tsk_1 --question \"shall I go on?\" --request-id d3e3fe89-…"},
+             "retryCommand":"astera ask --task-id tsk_1 --question 'shall I go on?' --request-id d3e3fe89-…"},
   "nextSteps":["astera requests show --id d3e3fe89-…","astera host status"]}}
 ```
 
 `queryCommand` asks what became of it; `retryCommand` is the line you ran with that id on it, for
-after you know.
+after you know. **Follow `nextSteps` in the order it gives them**: after a 7 the receipt question
+comes first, and after a 3 it comes behind `astera host start`, because with no Host reachable
+`requests show` is a second 3.
+
+**A command that read part of itself from standard input gets `retryNote` and no `retryCommand`.**
+The payload was never on the command line, so a printed line would carry a bare `-` and send an empty
+value; the note names the flags that read stdin and the id, and what to do is run the same command
+again with that id and the same input. `queryCommand` is there either way.
 
 **Both lines are POSIX shell syntax** — bash, zsh, and Git Bash on Windows, which is where `astera`
 is usually run from. PowerShell reads the same quotes, apart from a value that contains a single
@@ -224,12 +231,18 @@ different question.
 than run unprotected. The id minted for a command you did not key is dropped instead, and that
 command runs exactly as it always did.
 
-**That refusal is about a Host that answered and cannot help. Three answers never reach a Host at
-all, and there a request id simply does nothing rather than being refused**: `version` answers from
-the binary, because saying that the two builds differ is exactly what that command is for; a read the
-state file can answer is answered from the file when no Host is running; and a worker's report that
-cannot be delivered is written to the queue. None of the three can leave a receipt, and none of them
-can act twice either, which is why nothing is refused over the id.
+**That refusal is about a Host that answered and cannot help. Some answers never reach a Host at
+all**, and they split in two.
+
+`host start`, `host status` and `host stop` do not go through the Host's command layer, so a
+`--request-id` on one of them is **refused with exit 2** rather than dropped. `host stop` is the one
+that acts, and a caller that keys it is owed either the protection or the refusal.
+
+The rest simply cannot act twice, so the id does nothing and nothing is refused over it: `version`
+answers from the binary, because saying that the two builds differ is exactly what that command is
+for; a read the state file can answer is answered from the file when no Host is running; a worker's
+report that cannot be delivered is written to the queue; and `help`, `agent-context` and `browser
+help` only print what is already in this binary.
 
 **`requests show` asks what became of an id, and its three answers all exit 0**, because not finding
 a receipt is an answer rather than a failure. `completed` means this Host ran the request, and

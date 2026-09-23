@@ -9,7 +9,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { parseArgs } from '../core/orchestration/cliArgs'
 import { publicFor } from '../core/orchestration/cliPublic'
-import { usageFor } from '../core/orchestration/cliUsage'
+import { spelledCommand, usageFor } from '../core/orchestration/cliUsage'
 import { humanFor, quietFor } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
@@ -179,6 +179,25 @@ export function renderErr(e: CliError, mode: OutputMode, cmd?: string, mark: Rep
 
 export function ensureTrailingNewline(text: string): string {
   return text.endsWith('\n') ? text : text + '\n'
+}
+
+/**
+ * Why an empty standard input cannot be the value, or `null`.
+ *
+ * **A `-` is a promise that the value is coming, and nothing arriving means it did not.** The
+ * heredoc was forgotten, the pipe was closed, or this is a terminal — the one thing it never means is
+ * that the value is the empty string. The worst case of passing it on is silent and expensive:
+ * `send --type worker_done --body -` does not require a body (`workerDoneFieldError`), so an empty
+ * report posts at exit 0, the Dispatch closes, and the coordinator reads a finished Task whose
+ * summary is gone.
+ *
+ * A caller that really means an empty value writes `--body ""`, which the parser takes as a value
+ * like any other.
+ */
+export function stdinMissingError(a: { keys: readonly string[]; text: string }): string | null {
+  if (a.keys.length === 0 || a.text !== '') return null
+  const flags = a.keys.map((k) => `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`).join(', ')
+  return `${flags} read nothing from standard input — send the text in, or give the flag a value`
 }
 
 /** Fills the wantsStdin keys parseArgs collected (the flags whose value was '-') with the stdin
@@ -462,13 +481,55 @@ export function lostAnswerDetails(a: {
   /** Arguments this process added on the way out, so the retry line sends what the first call sent
    *  (`implicitArgs`). */
   implicit?: Record<string, unknown>
+  /** The flags whose value came from standard input (`parseArgs`'s `wantsStdin`). */
+  fromStdin?: readonly string[]
 }): Record<string, unknown> {
   if (a.request === undefined) return {}
-  return {
+  const head = {
     requestId: a.request,
-    queryCommand: `astera requests show --id ${shellToken(a.request)}`,
+    queryCommand: `astera requests show --id ${shellToken(a.request)}`
+  }
+  /**
+   * **A command that read part of itself from standard input has no line to print, so none is
+   * printed.**
+   *
+   * `parseArgs` never puts a `-` value into `args` — `applyStdin` fills it afterwards — so the argv
+   * this line is built from still carries the bare `-`, and `browser js` carries nothing at all. The
+   * payload is simply not on the line, and the guide teaches `-` with a heredoc as *the* way to pass
+   * a spec, a body, a question or a report.
+   *
+   * **Both endings of printing it anyway are worse than saying nothing.** Against a Host that
+   * restarted, the retry runs with an empty body and `worker_done` does not require one, so a
+   * worker's finished report posts empty at exit 0 and the coordinator reads it as delivered.
+   * Against a live Host, the fingerprint differs and the caller is told to use a different id —
+   * which, followed literally, creates the second Task or the second question this whole mechanism
+   * exists to prevent.
+   *
+   * **And the payload is not inlined instead.** It can be a whole spec, it can carry secrets, and a
+   * line that looks runnable and is not is exactly how this went wrong. What the caller gets is the
+   * one sentence it can act on: run what you ran, with this id, feeding the same input the same way.
+   */
+  if (a.fromStdin !== undefined && a.fromStdin.length > 0) {
+    const flags = a.fromStdin.map((k) => `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`).join(', ')
+    return {
+      ...head,
+      retryNote:
+        `this command read ${flags} from standard input, so the line to retry it cannot be written out here. ` +
+        `Run the same command again with --request-id ${a.request} and the same input on stdin.`
+    }
+  }
+  return {
+    ...head,
     retryCommand: retryCommandLine({ argv: a.argv, request: a.request, implicit: a.implicit })
   }
+}
+
+/** The request id a refusal names, as `details` for the envelope, or nothing. Undefined rather than
+ *  an empty object so a failure that names none prints `details: {}` exactly as it did before. */
+export function requestIdOf(body: unknown): Record<string, unknown> | undefined {
+  if (body === null || typeof body !== 'object') return undefined
+  const id = (body as { requestId?: unknown }).requestId
+  return typeof id === 'string' && id !== '' ? { requestId: id } : undefined
 }
 
 /** 한 명령을 Host 에 묻고 그 답을 기다린다 (host control plane design §5).
@@ -830,6 +891,19 @@ export async function main(): Promise<void> {
   let args = parsed.args
   if (parsed.wantsStdin.length > 0) {
     const text = await readStdin()
+    // **An empty stdin is refused rather than passed on as an empty value.**
+    //
+    // A `-` is the caller saying "the value is coming on stdin", and nothing arriving means the
+    // heredoc was forgotten, the pipe was closed, or this is a terminal — never that the value is
+    // the empty string. Passed on, the worst case is silent and expensive: `send --type worker_done
+    // --body -` does not require a body (`workerDoneFieldError`), so an empty report posts at exit
+    // 0, the Dispatch closes, and the coordinator reads a finished Task whose summary is gone.
+    //
+    // Refusing costs a caller that really meant an empty value one flag (`--body ""`), which is a
+    // line it can write, and it is the parser's own kind of failure: the arguments do not say what
+    // the caller meant.
+    const missing = stdinMissingError({ keys: parsed.wantsStdin, text })
+    if (missing !== null) fail({ code: 'INVALID_ARGUMENTS', message: missing })
     args = applyStdin({ args, keys: parsed.wantsStdin, text })
   }
 
@@ -894,6 +968,15 @@ export async function main(): Promise<void> {
   // **host 명령은 앱의 접속 정보를 안 읽는다.** 그 정보가 없는 것이 이 명령이 답해야 할 사실이고,
   // 읽으려다 실패하면 물어본 것에 답하지 못한 채 끝난다.
   if (parsed.cmd.startsWith('host-')) {
+    // **실은 키를 받아 놓고 버리지 않는다** (요청 영수증 설계 §3). 이 셋은 `orch-call` 을 타지 않고
+    // Host 의 명령 층에 닿지도 않으므로 영수증을 남길 수가 없다 — Host 쪽이 `state-put`·`state-get`
+    // 에 실린 id 를 400 으로 거절하는 것과 같은 자리이고, 같은 이유다. 그중 `host stop` 은 **일을
+    // 한다**: 조용히 버리면 부르는 쪽은 그 종료가 보호받는다고 믿는다.
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
     const { body, code } = await runHostCommand({
       cmd: parsed.cmd,
       env: process.env,
@@ -1022,13 +1105,14 @@ export async function main(): Promise<void> {
     const lost = lostAnswerDetails({
       argv,
       request: carried.send,
-      implicit: implicitArgs(args, sentArgs)
+      implicit: implicitArgs(args, sentArgs),
+      fromStdin: parsed.wantsStdin
     })
     if ('stuck' in r) {
       // **`ask` 는 이 자리에서 한 마디를 더 한다**(cliOutput 의 silentHostEnd). 답이 오지 않았다는
       // 것은 질문이 사라졌다는 뜻이 아니다 — 열린 채로 남아 있을 수 있고, 그것을 실패로 읽고 다시
       // 묻는 워커는 같은 사람에게 질문을 둘 만든다.
-      const end = silentHostEnd({ cmd: parsed.cmd, args, reason: r.stuck })
+      const end = silentHostEnd({ cmd: parsed.cmd, args, reason: r.stuck, request: carried.send })
       fail({ code: SILENT_HOST_CODE, message: end.message, details: { ...end.details, ...lost } })
     }
     if ('unreachable' in r) return withoutHost(r.unreachable, lost)
@@ -1076,5 +1160,14 @@ export async function main(): Promise<void> {
   // 제 코드로 분명하게 말한다.
   if (parsed.cmd === 'version') versionWithoutHost()
   const code = codeForStatus(reply.status)
-  fail({ code, message: messageFrom(reply.body, `the Host answered ${reply.status}`) })
+  fail({
+    code,
+    message: messageFrom(reply.body, `the Host answered ${reply.status}`),
+    // **A refusal that names a request carries that id into `details`** — today only the 409 for a
+    // request already in flight does (host/orch.ts), and it is what lets this failure's `nextSteps`
+    // say `requests show --id <it>` instead of the general `astera status`. Read as a field rather
+    // than out of the message, because a contract hung on a string is the thing `codeForStatus`
+    // refuses to do one line above.
+    details: requestIdOf(reply.body)
+  })
 }

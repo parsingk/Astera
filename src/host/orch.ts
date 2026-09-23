@@ -649,7 +649,13 @@ export function createHostOrch(a: {
         answer: {
           status: 409,
           body: {
-            error: `request ${requestId} is already running — wait for that answer rather than sending it again`
+            error: `request ${requestId} is already running — wait for that answer rather than sending it again`,
+            // **The id as a field, not only inside the sentence.** What a caller does next here is
+            // ask about *this request*, and the CLI cannot tell this 409 from "the Job is already
+            // running" without reading the message — which is the one thing that must never decide a
+            // contract (`codeForStatus`'s note). Given the field, the CLI's `nextSteps` for this
+            // failure can be `requests show --id <it>` instead of a general `astera status`.
+            requestId
           }
         }
       }
