@@ -14,6 +14,8 @@ import {
   liftRequestId,
   mintRequestId,
   requestForHost,
+  lostAnswerDetails,
+  retryCommandLine,
   shownReceipt,
   callHost,
   connectFailureEnd,
@@ -26,6 +28,8 @@ import {
   startKeepalive,
   writePendingReport
 } from './run'
+import { parseArgs } from '../core/orchestration/cliArgs'
+import { createHostOrch } from '../host/orch'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
 import { KEEPALIVE_MS } from '../core/orchestration/cliKeepalive'
 import type { HostConnection } from '../core/host/connect'
@@ -36,6 +40,44 @@ import {
   pendingReportTempName,
   pendingReportsDirIn
 } from '../core/orchestration/pendingReports'
+
+/**
+ * A command line back into the argv a shell would hand the program.
+ *
+ * **It has to live here and not in the source**, because the claim being tested is that the line this
+ * program *writes* is a line a shell can *run*: a splitter that came out of the same file as the
+ * quoter would agree with it whatever either of them did. This one knows only what both `bash` and
+ * the Windows argv parser know — double quotes group, and inside them `\"` is a quote and `\\` a
+ * backslash.
+ */
+const splitCommandLine = (line: string): string[] => {
+  const out: string[] = []
+  let cur = ''
+  let started = false
+  let quoted = false
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (quoted && c === '\\' && (line[i + 1] === '"' || line[i + 1] === '\\')) {
+      cur += line[++i]
+      continue
+    }
+    if (c === '"') {
+      quoted = !quoted
+      started = true
+      continue
+    }
+    if (c === ' ' && !quoted) {
+      if (started) out.push(cur)
+      cur = ''
+      started = false
+      continue
+    }
+    cur += c
+    started = true
+  }
+  if (started) out.push(cur)
+  return out
+}
 
 describe('errorOutput', () => {
   // 스크립트가 기대는 것은 봉투다(설계 §7) — 코드는 기계의 것이고 문구는 사람의 것이다.
@@ -528,6 +570,153 @@ describe('renderOk / renderErr', () => {
   // 칠 것이 없는 코드는 줄을 늘리지 않는다
   it('할 것이 없으면 문장 하나뿐이다', () => {
     expect(renderErr({ code: 'FAILED', message: 'boom' }, 'human')).toBe('error: boom')
+  })
+
+  /**
+   * **재생 표시는 `data` 밖, `ok` 옆이다**(요청 영수증 설계 §8). `data` 의 모양은 그 명령이 공표한
+   * 계약이므로 거기 칸을 더하면 `jobs list` 가 돌려주는 것이 바뀐다. 칸을 더하는 것은 `CLI_PROTOCOL`
+   * 을 올리지 않는다 — 올리는 때는 읽는 쪽이 고쳐야 하는 변화가 있을 때뿐이다.
+   */
+  it('재생은 봉투 맨 위에 표시가 붙고 data 는 그대로다', () => {
+    expect(JSON.parse(renderOk('jobs-list', jobs, 'json', true))).toEqual({
+      ok: true,
+      replayed: true,
+      data: { jobs }
+    })
+    // 재생이 아닌 답에는 칸 자체가 없다 — `false` 를 늘 실으면 영수증을 부탁한 적 없는 호출자 앞에
+    // 영수증 이야기가 놓인다.
+    expect(Object.hasOwn(JSON.parse(renderOk('jobs-list', jobs, 'json')), 'replayed')).toBe(false)
+  })
+
+  /** 재생된 실패도 표시가 붙는다. 종료 코드는 원래의 것이고(재생의 요점이 그것이다), 표시가 더하는
+   *  것은 "이 404 는 이미 일어난 부름의 답" 이라는 사실 하나다. */
+  it('재생된 실패 봉투에도 같은 표시가 붙는다', () => {
+    const json = JSON.parse(renderErr({ code: 'NOT_FOUND', message: 'unknown run: run_x' }, 'json', 'runs-get', true))
+    expect(json.replayed).toBe(true)
+    expect(json.error.code).toBe('NOT_FOUND')
+    expect(exitCodeFor('NOT_FOUND')).toBe(4)
+  })
+
+  // 사람용 두 모드는 표시를 싣지 않는다 — 봉투를 읽는 것은 스크립트이고, `--quiet` 는 id 목록이라
+  // 얹을 자리조차 없다.
+  it('human·quiet 에는 표시가 없다', () => {
+    expect(renderOk('jobs-list', jobs, 'human', true)).toBe('RUNNING  job_1  o  1/2')
+    expect(renderOk('jobs-list', jobs, 'quiet', true)).toBe('job_1')
+  })
+})
+
+/**
+ * **답이 아예 오지 않은 끝이 싣고 나가는 것**(요청 영수증 설계 §8). 이 문장이 이 기능이 있는
+ * 이유다 — 여기 네 요청 id 가 있고, 이렇게 물어보고, 이렇게 다시 치면 된다.
+ */
+describe('lostAnswerDetails — 잃은 답의 회복 줄', () => {
+  const argv = ['worker-start', '--task', 'tsk_1', '--agent', 'codex']
+
+  it('요청 id 와 물을 명령과 다시 칠 명령을 싣는다', () => {
+    expect(lostAnswerDetails({ argv, request: 'rq-1' })).toEqual({
+      requestId: 'rq-1',
+      queryCommand: 'astera requests show --id rq-1',
+      retryCommand: 'astera worker-start --task tsk_1 --agent codex --request-id rq-1'
+    })
+  })
+
+  /** 옛 Host 앞에서 새긴 id 는 빠졌고(`requestForHost`), 연결이 아예 안 선 끝에서는 아무것도 보내지
+   *  않았다. 둘 다 물어볼 영수증이 없다 — id 를 대면 `absent` 밖에 못 받는 명령으로 보내는 셈이다. */
+  it('보낸 id 가 없으면 아무것도 싣지 않는다', () => {
+    expect(lostAnswerDetails({ argv, request: undefined })).toEqual({})
+  })
+
+  /** **줄은 실제로 파싱돼야 한다.** 이 저장소는 없는 것을 가리키는 안내를 몇 번 내보냈고, 그래서
+   *  여기서는 만든 줄을 도로 파서에 넣어 같은 명령과 같은 인자가 나오는지 본다. */
+  it('만든 줄은 도로 파싱돼 같은 명령과 같은 인자가 된다', () => {
+    const line = (lostAnswerDetails({ argv, request: 'rq-1' }) as { retryCommand: string }).retryCommand
+    const parsed = parseArgs(splitCommandLine(line).slice(1))
+    expect(parsed).toMatchObject({
+      cmd: 'worker-start',
+      args: { task: 'tsk_1', agent: 'codex', requestId: 'rq-1' }
+    })
+  })
+
+  /** 이미 줄에 있던 `--request-id` 는 값과 함께 걷어 내고 진짜 id 를 붙인다 — 그러지 않으면 같은
+   *  플래그가 둘이 되고, `--request-id -` 처럼 값을 stdin 에서 읽은 줄은 다시 stdin 을 읽으려 든다. */
+  it('이미 실린 --request-id 는 값과 함께 걷어 내고 다시 붙인다', () => {
+    expect(
+      retryCommandLine({ argv: ['jobs', 'get', '--id', 'job_1', '--request-id', '-'], request: 'rq-9' })
+    ).toBe('astera jobs get --id job_1 --request-id rq-9')
+  })
+
+  /** 빈칸이 든 값은 따옴표로 묶는다. 묶지 않으면 그 줄은 다른 명령이 된다 — `--objective 두 낱말` 은
+   *  두 번째 낱말에서 `unexpected argument` 로 죽는다. */
+  it('빈칸과 따옴표가 든 값은 묶여 나가고, 묶인 채로 도로 파싱된다', () => {
+    const line = retryCommandLine({
+      argv: ['run-create', '--objective', '두 낱말과 "따옴표"'],
+      request: 'rq-1'
+    })
+    expect(line).toBe('astera run-create --objective "두 낱말과 \\"따옴표\\"" --request-id rq-1')
+    expect(parseArgs(splitCommandLine(line).slice(1))).toMatchObject({
+      args: { objective: '두 낱말과 "따옴표"', requestId: 'rq-1' }
+    })
+  })
+})
+
+/**
+ * **문장 전체를 한 번 돌려 본다**(요청 영수증 설계 §13 단계 10). 답이 사라진 명령이 내보낸
+ * `retryCommand` 를 그대로 도로 파싱하고, CLI 가 하는 일(`--request-id` 를 봉투로 옮기는 것)을 하고,
+ * 진짜 Host 에 친다 — 나오는 것이 재생이어야 한다.
+ *
+ * 조각마다 시험이 있어도 이 줄은 조각들 **사이**에서 끊긴다: 따옴표가 파서와 어긋나거나, 걷어 낸
+ * 플래그가 인자로 남거나, 새긴 id 가 봉투에 못 오르거나. 이 저장소가 없는 것을 가리키는 안내를
+ * 내보낸 적이 있어서, 이 단계만은 끝에서 끝까지 잰다.
+ */
+describe('회복 줄은 진짜로 재생을 부른다', () => {
+  let dir: string
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cli-replay-'))
+  })
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  it('답을 잃은 run-create 의 retryCommand 를 도로 쳐서 같은 회차를 받는다', async () => {
+    const orch = createHostOrch({
+      profileDir: dir,
+      version: '9.9.9',
+      now: () => '2026-09-23T00:00:00.000Z',
+      hostStartedAt: () => '2026-09-22T23:00:00.000Z',
+      runningSessions: () => 0,
+      aliveSessionIds: () => new Set<string>(),
+      act: async (name, callArgs) => (name === 'resolveProjectRoot' ? callArgs[0] : {}),
+      hasApp: () => true,
+      onState: () => {},
+      log: () => {}
+    })
+    // 키를 안 단 부름이다 — id 는 이 프로세스가 새겼다(§8).
+    const argv = ['run-create', '--objective', '두 낱말', '--cwd', 'D:/p']
+    const first = parseArgs(argv)
+    if ('error' in first) throw new Error(first.error)
+    const request = mintRequestId()
+    const sent = await orch.call({ cmd: first.cmd, args: first.args, sessionId: 'sesA', request })
+    expect(sent.status).toBe(200)
+    // …그리고 그 답이 오는 길에 사라졌다. 부르는 쪽이 손에 쥐는 것은 이 줄뿐이다.
+    const line = (lostAnswerDetails({ argv, request }) as { retryCommand: string }).retryCommand
+    const retyped = parseArgs(splitCommandLine(line).slice(1))
+    if ('error' in retyped) throw new Error(retyped.error)
+    const lifted = liftRequestId(retyped.args)
+    if ('error' in lifted) throw new Error(lifted.error)
+    const again = await orch.call({
+      cmd: retyped.cmd,
+      args: lifted.args,
+      sessionId: 'sesA',
+      request: lifted.request
+    })
+    expect(again.replayed, '다시 친 줄이 재생이 아니라 새 명령이었다').toBe(true)
+    expect((again.body as { id: string }).id).toBe((sent.body as { id: string }).id)
+    const saved = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as {
+      jobs: unknown[]
+      runs: unknown[]
+    }
+    expect(saved.jobs, '다시 친 줄이 계획을 하나 더 만들었다').toHaveLength(1)
+    expect(saved.runs).toHaveLength(1)
   })
 })
 

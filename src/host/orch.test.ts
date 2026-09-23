@@ -630,6 +630,17 @@ describe('요청 영수증', () => {
   }
   const countOf = (calls: string[], name: string): number => calls.filter((c) => c === name).length
 
+  /**
+   * **답 자체** — 재생 표시를 뺀 `{status, body}`.
+   *
+   * 바이트 단위로 같아야 하는 것은 이쪽이다. `replayed` 는 일부러 다르다: 재생의 요점이 "첫 답을
+   * 받은 것과 구별되지 않는다" 이지만, 그것이 재생이었다는 사실 하나는 **본문 밖에서** 말해야
+   * 한다(설계 §8). `data` 의 모양은 그 명령이 공표한 계약이고 거기에 칸을 더하면 `run-create` 가
+   * 돌려주는 것이 바뀐다.
+   */
+  const answerOf = (r: { status: number; body: unknown }): string =>
+    JSON.stringify({ status: r.status, body: r.body })
+
   const workerArgs = (taskId: string): Record<string, unknown> => ({
     task: taskId,
     agent: 'codex',
@@ -663,7 +674,8 @@ describe('요청 영수증', () => {
     const second = await orch.call({ cmd: 'run-merge', args, sessionId: 'sesA', request: 'req-1' })
     expect(first.status).toBe(200)
     expect(countOf(c.calls, 'mergeWorktrees'), '재시도가 병합을 한 번 더 돌렸다').toBe(1)
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+    expect(answerOf(second)).toBe(answerOf(first))
+    expect(second.replayed, '재생인데 그렇게 말하지 않았다').toBe(true)
   })
 
   // 읽기는 아무것도 바꾸지 않으므로 남길 것이 없다 — 남기면 그 뒤의 읽기가 모두 낡은 답을 받는다
@@ -726,7 +738,8 @@ describe('요청 영수증', () => {
     const second = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
     expect(first.status).toBe(200)
     expect(countOf(c.calls, 'startWorker'), '재시도가 워커를 한 번 더 띄웠다').toBe(1)
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+    expect(answerOf(second)).toBe(answerOf(first))
+    expect(second.replayed, '재생인데 그렇게 말하지 않았다').toBe(true)
     expect((await savedState()).dispatches).toHaveLength(1)
   })
 
@@ -741,7 +754,8 @@ describe('요청 영수증', () => {
     const saved = await savedState()
     expect(saved.jobs, '재시도가 계획을 하나 더 만들었다').toHaveLength(1)
     expect(saved.runs, '재시도가 회차를 하나 더 만들었다').toHaveLength(1)
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+    expect(answerOf(second)).toBe(answerOf(first))
+    expect(second.replayed, '재생인데 그렇게 말하지 않았다').toBe(true)
     expect((second.body as { id: string }).id).toBe((first.body as { id: string }).id)
   })
 
@@ -795,7 +809,7 @@ describe('요청 영수증', () => {
     const first = await orch.call({ cmd: 'ask', args, sessionId: 'ses1', request: 'req-1' })
     const second = await orch.call({ cmd: 'ask', args, sessionId: 'ses1', request: 'req-1' })
     expect(first.status).toBe(200)
-    expect(JSON.stringify(second), '재시도가 자기 인자를 탓하는 400 을 받았다').toBe(JSON.stringify(first))
+    expect(answerOf(second), '재시도가 자기 인자를 탓하는 400 을 받았다').toBe(answerOf(first))
     expect((await savedState()).messages.filter((m) => m.type === 'question')).toHaveLength(1)
   })
 
@@ -826,6 +840,9 @@ describe('요청 영수증', () => {
     const retry = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
     expect(retry.status).toBe(409)
     expect(JSON.stringify(retry.body)).toContain('req-1')
+    // **거절은 재생이 아니다.** 뒤에 영수증이 없는 답이므로 재생 표시를 달면, 부르는 쪽은 자기 명령이
+    // 이미 한 번 끝났다고 읽는다 — 아직 돌고 있는데.
+    expect(retry.replayed, '거절에 재생 표시가 붙었다').toBeUndefined()
     expect(countOf(c.calls, 'startWorker'), '거절이 의존을 한 번 더 건드렸다').toBe(1)
     release()
     expect((await inFlight).status).toBe(200)
@@ -912,7 +929,8 @@ describe('요청 영수증', () => {
     // 앱이 돌아왔다. 요청 id 를 안 실었다면 이 재시도는 워커를 띄웠을 것이다.
     appIsUp = true
     const second = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-1' })
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+    expect(answerOf(second)).toBe(answerOf(first))
+    expect(second.replayed, '재생인데 그렇게 말하지 않았다').toBe(true)
     expect(countOf(c.calls, 'startWorker'), '재생이 아니라 두 번째 실행이었다').toBe(0)
     // 첫 호출이 되돌렸으므로 Dispatch 는 없다 — 영수증은 남았지만 상태에는 아무것도 남지 않았다.
     expect((await savedState()).dispatches).toEqual([])
@@ -1128,6 +1146,10 @@ describe('요청 영수증', () => {
     await orch.call({ cmd: 'reply', args: { id: questionId, body: '그렇게 가요' }, sessionId: '' })
     const observed = await orch.call({ cmd: 'ask', args: askArgs(f), sessionId: 'ses1', request: 'req-1' })
     expect((observed.body as { answered: boolean }).answered).toBe(true)
+    // **관찰한 재생도 재생이다.** 표시가 말하는 것은 본문이 아니라 id 다 — 이 호출자가 이미 효력을
+    // 낸 id 를 다시 내밀었고, 그 뒤의 커밋(질문 만들기)은 되풀이되지 않았다. 새것은 관찰뿐이고,
+    // 그것이 기다림을 다시 거는 호출자가 부탁한 전부다(§7).
+    expect(observed.replayed, '관찰한 재생이 재생이라고 말하지 않았다').toBe(true)
     // 질문을 상태에서 지운다 — 다시 읽는다면 여기서 404 다.
     const now = await savedState()
     await orch.call({

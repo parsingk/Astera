@@ -533,7 +533,10 @@ export function createHostOrch(a: {
     requestId: string,
     cmd: string,
     args: Record<string, unknown>
-  ): { answer: Reply } | { observe: { key: string; recorded: Reply; args: Record<string, unknown> } } | { key: string } => {
+  ):
+    | { answer: Reply; replayed?: true }
+    | { observe: { key: string; recorded: Reply; args: Record<string, unknown> } }
+    | { key: string } => {
     const bad = badRequestId(requestId)
     if (bad) return { answer: { status: 400, body: { error: bad } } }
     const key = `${sessionId}\u0000${requestId}`
@@ -553,8 +556,10 @@ export function createHostOrch(a: {
         return { observe: { key, recorded: held.reply, args: observed.afresh(args, held.reply) } }
       }
       // Byte for byte what the first attempt answered, including its status — the point of a replay
-      // is that it is indistinguishable from having received the first answer.
-      return { answer: held.reply }
+      // is that it is indistinguishable from having received the first answer. **The one thing that
+      // does say so is outside the body** (§8): `replayed` rides the envelope, so `data`'s shape
+      // stays the command's own published contract.
+      return { answer: held.reply, replayed: true }
     }
     if (held)
       return {
@@ -722,7 +727,11 @@ export function createHostOrch(a: {
         // and the same order as before this existed (§9).
         if (request !== undefined) {
           const held = holdRequest(sessionId, request, cmd, args)
-          if ('answer' in held) return held.answer
+          // **A refusal is not a replay.** A malformed id and a call that is already in flight both
+          // answer from this branch without a receipt behind them, so only the one that really came
+          // out of a receipt carries the word.
+          if ('answer' in held)
+            return held.replayed === true ? { ...held.answer, replayed: true } : held.answer
           if ('observe' in held) {
             observing = { key: held.observe.key, recorded: held.observe.recorded }
             runArgs = held.observe.args
@@ -753,12 +762,16 @@ export function createHostOrch(a: {
         // Only an error reply is rewritten: a command that carried on past a refusal it swallowed
         // (the fire-and-forget ones) succeeded, and a success is not a conflict.
         const reply = r.status >= 400 && marks.appRefused ? { status: 409, body: r.body } : r
-        if (observing) return settleObserved(observing.key, cmd, observing.recorded, reply)
+        // **An observed replay is a replay too**, and the word is about the id rather than about the
+        // body: this caller presented an id that had already taken effect, and the commit behind it
+        // was not repeated. What is fresh is the observation (§7), which is the whole of what a
+        // caller retrying a wait asked for — it just did not also ask for a second question.
+        if (observing) return { ...settleObserved(observing.key, cmd, observing.recorded, reply), replayed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         const reply = { status: marks.appRefused ? 409 : 500, body: { error: message } }
-        if (observing) return settleObserved(observing.key, cmd, observing.recorded, reply)
+        if (observing) return { ...settleObserved(observing.key, cmd, observing.recorded, reply), replayed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       }
     }

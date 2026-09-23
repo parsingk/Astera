@@ -43,7 +43,15 @@ export interface OrchCall {
      *  did not ask for a receipt, and then nothing about this call changes: no lookup, no record,
      *  and the same reply in the same order as before the mechanism existed (§9). */
     request?: string
-  }): Promise<{ status: number; body: unknown }>
+  }): Promise<{
+    status: number
+    body: unknown
+    /** This answer came out of a receipt: the `request` had already taken effect here and the
+     *  command was not run a second time (request receipts design §8). `server.ts` puts it on
+     *  `orch-result` and the CLI puts it at the top of the envelope it prints, so a caller can tell
+     *  a replay from a first answer without the exit code or the body changing. */
+    replayed?: true
+  }>
 }
 
 /** One command, `version`, answering the Host's own version and protocol — and nothing else.

@@ -151,11 +151,14 @@ export function connectFailureEnd(a: {
 
 /** 모드에 맞춘 성공 출력. **사람용이 없는 명령은 JSON 으로 되돌린다** — 코디네이터의
  *  명령들에 억지로 표를 씨우면 가이드가 시키는 것을 못 읽게 된다. */
-export function renderOk(cmd: string, body: unknown, mode: OutputMode): string {
-  if (mode === 'json') return okEnvelope(cmd, body)
+export function renderOk(cmd: string, body: unknown, mode: OutputMode, replayed = false): string {
+  if (mode === 'json') return okEnvelope(cmd, body, replayed)
   const data = dataFor(cmd, body)
   if (mode === 'quiet') return quietFor(data)
-  return humanFor(cmd, data) ?? okEnvelope(cmd, body)
+  // **사람용 두 모드는 표시를 싣지 않는다.** 재생의 요점은 첫 답을 받은 것과 구별되지 않는 것이고,
+  // 그것이 재생이었다는 사실은 봉투를 읽는 쪽 — 즉 스크립트 — 의 것이다. `--quiet` 는 id 목록이라
+  // 얹을 자리조차 없다. 사람용이 없어 봉투로 되돌아가는 명령은 봉투이므로 그때는 실린다.
+  return humanFor(cmd, data) ?? okEnvelope(cmd, body, replayed)
 }
 
 /**
@@ -165,8 +168,8 @@ export function renderOk(cmd: string, body: unknown, mode: OutputMode): string {
  * (cliOutput 의 `nextStepsFor`), 사람에게도 같은 것이 필요하다 — 무엇이 잘못됐는지 읽고 나서 다음
  * 질문은 언제나 "그래서 뭘 치지" 다. JSON 쪽은 봉투가 이미 싣고 있으므로 **한 번만** 나간다.
  */
-export function renderErr(e: CliError, mode: OutputMode, cmd?: string): string {
-  if (mode === 'json') return errEnvelope(e, cmd)
+export function renderErr(e: CliError, mode: OutputMode, cmd?: string, replayed = false): string {
+  if (mode === 'json') return errEnvelope(e, cmd, replayed)
   const steps = nextStepsFor({ code: e.code, cmd, details: e.details })
   return [`error: ${e.message}`, ...(steps.length === 0 ? [] : ['try:', ...steps.map((s) => `  ${s}`)])].join(
     '\n'
@@ -348,11 +351,89 @@ export function shownReceipt(body: unknown): unknown {
   return { ...held, response: { ...recorded, body: publicFor(held.cmd, recorded.body) } }
 }
 
+/**
+ * One argv token as a command line carries it.
+ *
+ * **Quoted only when it has to be, and with the one escaping both shells agree on.** Inside double
+ * quotes, `bash` and the argv parser every Windows binary is built on both read `\"` as a quote and
+ * `\\` as a backslash, so escaping exactly those two characters makes a token that survives being
+ * pasted into either. Everything in the safe set below is a character neither shell does anything
+ * with, which is what keeps the common line — ids, paths, flags — free of quotes nobody needs.
+ */
+const shellToken = (t: string): string =>
+  /^[A-Za-z0-9_@%+=:,./-]+$/.test(t) ? t : `"${t.replace(/(["\\])/g, '\\$1')}"`
+
+/**
+ * The line that presents this request id again (request receipts design §8).
+ *
+ * **Built from the argv this process was given, not from the parsed arguments**, and that is what
+ * makes it a line that really runs. Rebuilding from `args` would have to re-serialise every value
+ * this program has already interpreted — a `--deps` back into JSON, a `--check` back into repeats,
+ * an `--options` back into CSV or JSON depending on which it was — and each of those is a place for
+ * the printed line to differ from the one that was typed. It would also inline whatever `-` read
+ * from stdin, so a report of a few kilobytes would come back inside an error envelope. The argv is
+ * exact, already the right size, and it round-trips through `parseArgs` by construction.
+ *
+ * Any `--request-id` already on the line is taken off and the real id appended, so the line carries
+ * the id this call was actually made with — including the case where the flag read its value from
+ * stdin and the token on the line is a bare `-`.
+ */
+export function retryCommandLine(a: { argv: readonly string[]; request: string }): string {
+  const rest: string[] = []
+  for (let i = 0; i < a.argv.length; i++) {
+    if (a.argv[i] !== '--request-id') {
+      rest.push(a.argv[i])
+      continue
+    }
+    // Its value goes with it. A next token that is itself a flag means the id was never given one,
+    // and `liftRequestId` has already refused that line — so there is nothing to skip.
+    const next = a.argv[i + 1]
+    if (next !== undefined && !next.startsWith('--')) i++
+  }
+  return ['astera', ...rest, '--request-id', a.request].map(shellToken).join(' ')
+}
+
+/**
+ * **The sentence this feature exists to write** (request receipts design §8): here is your request
+ * id, here is how to check what became of it, here is how to retry it.
+ *
+ * It rides `error.details` of the two endings that leave the question open — the socket closing
+ * before the answer arrives, and this client's own deadline passing — because those are the two
+ * places where the Host commits before it answers and the caller learns nothing. An agent that reads
+ * `error.details` gets the recovery path without having read the guide.
+ *
+ * **Empty when no id was sent**, which is the case against a Host too old to keep receipts
+ * (`requestForHost` dropped the minted one) and the case where the connection never opened at all.
+ * There is no receipt to ask about then, and naming one would send the caller to a command that can
+ * only answer `absent` — the one answer that means nothing at all.
+ */
+export function lostAnswerDetails(a: {
+  argv: readonly string[]
+  /** What actually went on the wire, which is not always what this process minted. */
+  request: string | undefined
+}): Record<string, unknown> {
+  if (a.request === undefined) return {}
+  return {
+    requestId: a.request,
+    queryCommand: `astera requests show --id ${shellToken(a.request)}`,
+    retryCommand: retryCommandLine({ argv: a.argv, request: a.request })
+  }
+}
+
 /** 한 명령을 Host 에 묻고 그 답을 기다린다 (host control plane design §5).
  *
  *  **닿지 못한 것과 답을 못 받은 것을 가른다.** 연결이 답 전에 끊기면 그 Host 는 사라진 것이므로
  *  `unreachable` 과 같은 사실이고(보고는 파일에 적힌다), 시한을 넘긴 것은 연결은 됐는데 저쪽이
  *  멈춘 것이라 그냥 실패다 — HTTP 시절의 갈래(`ctl.signal.aborted`)를 그대로 옮긴 것이다. */
+/** One answer from the Host. `replayed` is there when this answer came out of a receipt rather than
+ *  out of a run of the command (request receipts design §8) — the same word the Host puts on
+ *  `orch-result`, carried to the envelope this program prints. */
+export interface HostAnswer {
+  status: number
+  body: unknown
+  replayed?: true
+}
+
 export function callHost(a: {
   conn: HostConnection
   cmd: string
@@ -363,14 +444,14 @@ export function callHost(a: {
    *  named no id from one that named an empty one. */
   request?: string
   timeoutMs: number
-}): Promise<{ status: number; body: unknown } | { unreachable: string } | { stuck: string }> {
+}): Promise<HostAnswer | { unreachable: string } | { stuck: string }> {
   return new Promise((resolve) => {
     // 이 프로세스는 명령 하나를 묻고 끝난다 — 한 번에 하나뿐이라 상관 id 는 하나면 된다.
     const call = 'cli_1'
     let settled = false
     let offMessage: () => void = () => {}
     let offClose: () => void = () => {}
-    const done = (r: { status: number; body: unknown } | { unreachable: string } | { stuck: string }): void => {
+    const done = (r: HostAnswer | { unreachable: string } | { stuck: string }): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
@@ -384,7 +465,8 @@ export function callHost(a: {
     )
     timer.unref?.()
     offMessage = a.conn.onMessage((m) => {
-      if (m.t === 'orch-result' && m.call === call) done({ status: m.status, body: m.body })
+      if (m.t === 'orch-result' && m.call === call)
+        done({ status: m.status, body: m.body, ...(m.replayed === true ? { replayed: true } : {}) })
     })
     offClose = a.conn.onClose(() =>
       done({ unreachable: `the Host closed the connection before answering ${a.cmd}` })
@@ -587,7 +669,11 @@ export async function main(): Promise<void> {
   // …`, and `jobs list --help` parsed `--help` as an ordinary flag and *ran the command*. Answering
   // in front of `parseArgs` is what stops that, and it is also what lets `--help` answer with
   // nothing running — the text is already in this program (cliUsage.ts).
-  const help = usageFor(process.argv.slice(2))
+  // Read once and kept: the recovery line an ambiguous failure carries is this argv with the request
+  // id appended (`retryCommandLine`), and a second read of the same array would be a second chance
+  // for the two to disagree.
+  const argv = process.argv.slice(2)
+  const help = usageFor(argv)
   if (help !== null) {
     if ('error' in help) {
       out(errorOutput(help.error, 'INVALID_ARGUMENTS'))
@@ -599,7 +685,7 @@ export async function main(): Promise<void> {
     process.exit(0)
   }
 
-  const parsed = parseArgs(process.argv.slice(2))
+  const parsed = parseArgs(argv)
   if ('error' in parsed) {
     out(errorOutput(parsed.error, 'INVALID_ARGUMENTS'))
     process.exit(exitCodeFor('INVALID_ARGUMENTS'))
@@ -623,8 +709,11 @@ export async function main(): Promise<void> {
    * 얻는 것이 모드를 따르는 쪽이어야 한다 — 기억해야 할 목록으로 두면 다음에 또 잊는다.
    * `FAIL_SEAM` 아래로 봉투를 직접 만드는 호출이 남아 있지 않은 것을 run.test.ts 가 지킨다.
    */
+  /** Whether the answer this process is carrying came out of a receipt (§8). Declared here because
+   *  `fail` is built before there is any answer to mark, and a replayed 404 goes out through it. */
+  let replayed = false
   const fail: (e: CliError) => never = (e) => {
-    out(renderErr(e, mode, parsed.cmd))
+    out(renderErr(e, mode, parsed.cmd, replayed))
     process.exit(exitCodeFor(e.code))
   }
   // FAIL_SEAM — 이 줄 아래에서 실패를 내보내는 길은 `fail` 하나다. 봉투를 직접 짓는 호출을
@@ -702,7 +791,7 @@ export async function main(): Promise<void> {
    *  what left workers deciding for themselves whether to retry, give up, or read their own finished
    *  work as failed. When the write itself fails there is something wrong, and both halves of it are
    *  said in one error. */
-  const unreachable: (reason: string) => never = (reason) => {
+  const unreachable: (reason: string, lost?: Record<string, unknown>) => never = (reason, lost) => {
     const problem = queueableReportProblem({ cmd: parsed.cmd, args })
     if (problem !== null) {
       // A report one flag short of being recordable is told which flag, not that the app is away:
@@ -711,7 +800,14 @@ export async function main(): Promise<void> {
       // **닿지 못한 것은 HOST_NOT_RUNNING(3) 이다.** 스크립트가 "앱이 없다" 와 "명령이 실패했다" 를
       // 가를 수 있어야 한다(설계 §8) — 인자가 모자란 보고만 그 갈래가 아니라 잘못된 인자다.
       const code = problem === 'not a report' ? 'HOST_NOT_RUNNING' : 'INVALID_ARGUMENTS'
-      fail({ code, message: problem === 'not a report' ? reason : `${problem} (the Host is not running)` })
+      fail({
+        code,
+        message: problem === 'not a report' ? reason : `${problem} (the Host is not running)`,
+        // **Only the ending that is really ambiguous carries the recovery line.** A report one flag
+        // short is a fact about the arguments, and telling that caller to go and check a request id
+        // would send it after a receipt its own line never earned.
+        ...(problem === 'not a report' ? { details: lost } : {})
+      })
     }
     const written = writePendingReport({
       profileDir,
@@ -724,7 +820,8 @@ export async function main(): Promise<void> {
     if (!written.ok)
       fail({
         code: 'HOST_NOT_RUNNING',
-        message: `${reason} — and the report could not be recorded either: ${written.error}`
+        message: `${reason} — and the report could not be recorded either: ${written.error}`,
+        details: lost
       })
     // 다른 모든 응답과 같은 봉투로 나간다 — 이것만 예외면 `jq .ok` 가 이 한 경우에만 null 이 된다.
     out(renderOk(parsed.cmd, undeliveredReportNotice({ path: written.path }), mode))
@@ -770,16 +867,22 @@ export async function main(): Promise<void> {
    *
    *  **"없다" 를 가르는 것은 부르는 쪽이다** — `connectFailureEnd` 가 돌려보낸 실패만 여기 온다.
    *  살아 있는 Host 는 여기 닿지 않는다. */
-  const withoutHost = async (reason: string): Promise<{ status: number; body: unknown }> => {
+  const withoutHost = async (
+    reason: string,
+    /** The recovery line, on the one call of this that had already sent the command
+     *  (`lostAnswerDetails`). Absent from the other one, where the connection never opened: nothing
+     *  was sent, so there is no receipt for anyone to ask about. */
+    lost?: Record<string, unknown>
+  ): Promise<HostAnswer> => {
     if (parsed.cmd === 'version') versionWithoutHost()
-    if (!fileAnswerable(parsed.cmd)) unreachable(reason)
+    if (!fileAnswerable(parsed.cmd)) unreachable(reason, lost)
     const state = readStateFile(path.join(profileDir, 'orchestration.json'))
     // 못 읽은 파일을 빈 Job 목록으로 내면 사람은 자기 Job 이 사라졌다고 읽는다.
-    if (!state) unreachable(reason)
+    if (!state) unreachable(reason, lost)
     return answerFromFile({ state, cmd: parsed.cmd, args, sessionId })
   }
 
-  const reply = await (async (): Promise<{ status: number; body: unknown }> => {
+  const reply = await (async (): Promise<HostAnswer> => {
     const conn = await connectHost({ address, app: CLI_VERSION, log: logToStderr })
     if ('error' in conn) {
       // **셋 중 하나만 "아무도 없다" 다** (connectFailureEnd). 나머지 둘에서 파일을 읽으면 살아
@@ -843,17 +946,25 @@ export async function main(): Promise<void> {
     // 연결은 됐는데 저쪽이 멈췄다는 뜻이다 — 보고는 이미 적용됐을 수 있으므로 적어 두지 않는다.
     // 연결이 선 뒤의 침묵도 hello 전의 침묵과 같은 코드로 끝난다(`SILENT_HOST_CODE`) —
     // 예전에는 이쪽만 1 이었고, 그것은 스크립트에게 같은 일을 두 번 분기하라는 말이었다.
+    // **답이 아예 오지 않은 두 끝은 요청 id 와 칠 명령 둘을 싣고 나간다**(`lostAnswerDetails`,
+    // 설계 §8). 이 둘이 이 기능이 있는 이유다 — Host 는 답하기 전에 커밋하므로, 여기서 아는 것은
+    // "일어났을 수도 있다" 하나뿐이고, 그것을 스스로 알아낼 길이 부르는 쪽에는 없었다.
+    const lost = lostAnswerDetails({ argv, request: carried.send })
     if ('stuck' in r) {
       // **`ask` 는 이 자리에서 한 마디를 더 한다**(cliOutput 의 silentHostEnd). 답이 오지 않았다는
       // 것은 질문이 사라졌다는 뜻이 아니다 — 열린 채로 남아 있을 수 있고, 그것을 실패로 읽고 다시
       // 묻는 워커는 같은 사람에게 질문을 둘 만든다.
       const end = silentHostEnd({ cmd: parsed.cmd, args, reason: r.stuck })
-      fail({ code: SILENT_HOST_CODE, message: end.message, details: end.details })
+      fail({ code: SILENT_HOST_CODE, message: end.message, details: { ...end.details, ...lost } })
     }
-    if ('unreachable' in r) return withoutHost(r.unreachable)
+    if ('unreachable' in r) return withoutHost(r.unreachable, lost)
     return r
   })()
 
+  // **재생 표시는 답과 함께 왔고, 성공이든 실패든 같은 자리에 찍힌다**(§8). 여기서 세우는 이유는
+  // 실패 쪽이다: 재생된 404 는 404 로 끝나야 하고(재생의 요점이 첫 답과 구별되지 않는 것이다),
+  // 그 길은 `fail` 이며 `fail` 은 이 값을 읽는다.
+  replayed = reply.replayed === true
   if (reply.status >= 200 && reply.status < 300) {
     // `version` 만 저쪽 답에 이쪽 값을 더한다. 둘은 한 프로그램이라 같은 값이어야 하고, 다르면
     // 그 자체가 사람이 봐야 할 사실이다 — 셔틀이 가리키는 바이너리가 갈렸다는 뜻이다. 칸 이름은
@@ -885,7 +996,7 @@ export async function main(): Promise<void> {
         fail(end)
       }
     }
-    out(renderOk(parsed.cmd, body, mode))
+    out(renderOk(parsed.cmd, body, mode, replayed))
     process.exit(0)
   }
   // **`version` 은 저쪽이 답하지 못해도 답한다.** 이 명령이 있는 이유가 "둘이 갈렸는가" 를

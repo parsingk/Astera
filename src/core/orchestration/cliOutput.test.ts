@@ -233,6 +233,32 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'reply' })).toEqual(['astera inbox'])
   })
 
+  /**
+   * **답이 아예 안 온 실패에서는 "닿았는가" 가 먼저다**(요청 영수증 설계 §8). 그 끝만 이 값을
+   * 싣는다(run.ts 의 `lostAnswerDetails`) — 표는 인자도 요청 id 도 보지 못하므로, 이 줄은 코드가
+   * 아니라 실려 온 사실에서 나온다.
+   *
+   * **`retryCommand` 는 여기 오지 않는다.** 확인하기 전에 다시 보내는 것이 이 기능이 막으려는 바로
+   * 그 행동이라, 그 줄은 `details` 에만 있다.
+   */
+  it('잃은 답의 요청 id 가 실려 있으면 그것을 묻는 줄이 맨 앞에 선다', () => {
+    const details = {
+      requestId: 'rq-1',
+      queryCommand: 'astera requests show --id rq-1',
+      retryCommand: 'astera worker-start --task tsk_1 --request-id rq-1'
+    }
+    expect(nextStepsFor({ code: 'TIMEOUT', cmd: 'worker-start', details })).toEqual([
+      'astera requests show --id rq-1',
+      'astera host status'
+    ])
+    expect(nextStepsFor({ code: 'HOST_NOT_RUNNING', cmd: 'worker-start', details })).toEqual([
+      'astera requests show --id rq-1',
+      'astera host start'
+    ])
+    // 그 줄이 없는 실패는 예전 그대로다 — 연결이 아예 안 선 끝에는 물어볼 영수증이 없다.
+    expect(nextStepsFor({ code: 'HOST_NOT_RUNNING', cmd: 'worker-start' })).toEqual(['astera host start'])
+  })
+
   // 모르는 명령에 그럴듯한 목록 명령을 지어내지 않는다
   it('짚을 곳이 없으면 가이드다', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'nonesuch' })).toEqual(['astera help'])

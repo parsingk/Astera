@@ -190,8 +190,14 @@ export type HostMessage =
     }
   | { t: 'pong'; seq: number }
   /** Answers one `orch-call`, carrying its `call` back so the asker can match the reply to the
-   *  request that made it. `status`/`body` are today's HTTP status and body, unchanged. */
-  | { t: 'orch-result'; call: string; status: number; body: unknown }
+   *  request that made it. `status`/`body` are today's HTTP status and body, unchanged.
+   *
+   *  **`replayed` says this answer came out of a receipt rather than out of a run of the command**
+   *  (request receipts design §8). Present only when the `request` this call carried had already
+   *  taken effect on this Host: the command was not done a second time, and the CLI puts the same
+   *  word at the top level of the envelope it prints. Absent otherwise — a field that is never
+   *  `false` is one a reader can test for with `?.` and no older Host has to learn to send. */
+  | { t: 'orch-result'; call: string; status: number; body: unknown; replayed?: true }
   /** Asks the app to do one thing the Host cannot do itself — spawn a session, touch a worktree
    *  (design §5). Sent only to a client whose `hello` said `role: 'app'`, and answered with
    *  `orch-acted` carrying the same `call`. */

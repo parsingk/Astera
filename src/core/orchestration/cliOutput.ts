@@ -108,8 +108,18 @@ export function dataFor(cmd: string, body: unknown): Record<string, unknown> {
   return body as Record<string, unknown>
 }
 
-export const okEnvelope = (cmd: string, body: unknown): string =>
-  JSON.stringify({ ok: true, data: dataFor(cmd, body) })
+/**
+ * **`replayed` sits at the top level, beside `ok`, and never inside `data`** (request receipts design
+ * §8). `data` is the command's own published contract, so adding a field to it would change what
+ * `run-create` returns to every caller; the fact that this particular answer came out of a receipt is
+ * about the call, not about the thing answered.
+ *
+ * Additive, so `CLI_PROTOCOL` stays 1 — a bump is for a change readers must react to, and a new
+ * column is not one. Present only when true: a reader tests for it, and a `false` on every ordinary
+ * answer would put a word about receipts in front of every caller that never asked for one.
+ */
+export const okEnvelope = (cmd: string, body: unknown, replayed = false): string =>
+  JSON.stringify({ ok: true, ...(replayed ? { replayed: true } : {}), data: dataFor(cmd, body) })
 
 /**
  * 없는 id 를 들은 세션 전용 명령에게, **있는 것들이 어디 있는가**.
@@ -272,7 +282,17 @@ export function nextStepsFor(a: {
   details?: Record<string, unknown>
 }): string[] {
   const details = a.details ?? {}
-  return STEPS[a.code](a.cmd, details).map((step) =>
+  /**
+   * **답이 아예 안 온 실패에서는 "닿았는가" 가 먼저다** (요청 영수증 설계 §8). 그 끝에서만
+   * `details` 가 이 줄을 싣는다(run.ts 의 `lostAnswerDetails`) — 표는 인자도 요청 id 도 보지
+   * 못하므로, 이 한 줄은 코드가 아니라 실려 온 사실에서 나온다.
+   *
+   * **`retryCommand` 는 여기 오지 않는다.** 그것은 `details` 에만 있고, 이유는 순서다: 확인하기
+   * 전에 다시 보내는 것이 이 기능이 막으려는 바로 그 행동이다. 먼저 물어보고, 그 답이 `absent` 일
+   * 때 치는 줄이 그쪽에 준비돼 있다.
+   */
+  const lost = typeof details.queryCommand === 'string' ? [details.queryCommand] : []
+  return [...lost, ...STEPS[a.code](a.cmd, details)].map((step) =>
     step.replace(/<([A-Za-z]+)>/g, (whole, key: string) => {
       const v = details[key]
       return typeof v === 'string' || typeof v === 'number' ? String(v) : whole
@@ -284,9 +304,14 @@ export function nextStepsFor(a: {
  * **`nextSteps` 는 언제나 있다.** 할 것이 없으면 빈 배열이다 — `details` 가 `{}` 로 언제나 있는
  * 것과 같은 판단이고, 읽는 쪽이 `error.nextSteps[0]` 앞에 칸의 유무를 먼저 묻지 않아도 되게 한다.
  */
-export const errEnvelope = (e: CliError, cmd?: string): string =>
+export const errEnvelope = (e: CliError, cmd?: string, replayed = false): string =>
   JSON.stringify({
     ok: false,
+    // **A replayed failure is marked too**, in the same place and for the same reason as the success
+    // envelope's (`okEnvelope`). A recorded 404 comes back as a 404 and exits 4, which is the point;
+    // what the marker adds is that this one is the answer to a call that already happened, so a
+    // caller does not read it as a fresh id that has since gone missing.
+    ...(replayed ? { replayed: true } : {}),
     error: {
       code: e.code,
       message: e.message,
