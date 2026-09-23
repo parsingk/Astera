@@ -82,17 +82,57 @@ process.stdin.on('end', finish)
 process.stdin.on('error', finish)
 `
 
-/** A script a running session may execute at any moment: written to a temp file beside it, then
- *  renamed over it, the way the repo's stores write (core/scheduler/config.ts), so a reader sees the
- *  old file or the new one and never a partial one. */
+/** The rename errors Windows gives while another process holds the target open: a hook loading the
+ *  script, or a scanner. The handle lasts milliseconds, so they are retried. */
+const RENAME_BUSY = new Set(['EPERM', 'EACCES', 'EBUSY'])
+const RENAME_TRIES = 5
+
+/**
+ * A script a running session may execute at any moment, put in place for this launch.
+ *
+ * - **Unchanged content is not written at all.** Most launches write the same bytes, so a hook
+ *   loading the file is never raced in the common case.
+ * - **Otherwise it is written to a temp file beside it and renamed over it**, the way the repo's
+ *   stores write (core/scheduler/config.ts), so a reader sees the old file or the new one and never
+ *   half of one. Written in place, a hook that fired mid-write loaded a torn script (measured in the
+ *   task F review: 251 torn reads in 1653 runs).
+ * - **A busy rename is retried** (RENAME_BUSY, RENAME_TRIES, 20 to 50 ms apart). Measured on Windows,
+ *   5 to 8% of renames over a script being loaded fail with EPERM.
+ * - **If it still fails, the script is written in place**, the old behaviour: a torn read is possible
+ *   but rare.
+ *
+ * **Never throws.** `init` runs inside createCore, and a rejection there leaves the app with no window
+ * (the same path core/scheduler/config.ts's load() documents for a rename EPERM). createCore has no
+ * logger, so a failure goes to the console. The temp file is removed on every path.
+ */
 async function writeScript(file: string, content: string): Promise<void> {
-  const tmp = `${file}.${randomUUID()}.tmp`
-  await fs.writeFile(tmp, content, 'utf8')
   try {
-    await fs.rename(tmp, file)
+    if ((await fs.readFile(file, 'utf8')) === content) return
+  } catch {
+    /* no file yet, or unreadable: write it */
+  }
+  const tmp = `${file}.${randomUUID()}.tmp`
+  try {
+    await fs.writeFile(tmp, content, 'utf8')
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await fs.rename(tmp, file)
+        return
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code ?? ''
+        if (attempt >= RENAME_TRIES || !RENAME_BUSY.has(code)) throw err
+        await new Promise((r) => setTimeout(r, 10 + attempt * 10))
+      }
+    }
   } catch (err) {
+    console.warn(`astera: could not swap in ${path.basename(file)} (${(err as Error).message}); writing it in place`)
+    try {
+      await fs.writeFile(file, content, 'utf8')
+    } catch (again) {
+      console.warn(`astera: could not write ${path.basename(file)} (${(again as Error).message})`)
+    }
+  } finally {
     await fs.rm(tmp, { force: true }).catch(() => {})
-    throw err
   }
 }
 

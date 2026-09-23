@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -184,6 +184,7 @@ describe('StatusLineManager 훅 주입', () => {
     '%s 는 제자리에 덮어쓰지 않고 다 쓴 파일로 바꿔 끼운다',
     async (name) => {
       const file = path.join(dir, name)
+      await fs.writeFile(file, '// an older build\n', 'utf8')
       const first = (await fs.stat(file, { bigint: true })).ino
       await mgr.init()
       expect((await fs.stat(file, { bigint: true })).ino).not.toBe(first)
@@ -191,6 +192,56 @@ describe('StatusLineManager 훅 주입', () => {
       expect((await fs.readdir(dir)).filter((n) => n.includes('.tmp'))).toEqual([])
     }
   )
+
+  // 대부분의 실행은 같은 바이트를 쓴다. 같으면 아예 쓰지 않는다 — 떠 있는 훅이 읽는 중인 파일을
+  // 건드릴 일이 흔한 경우에는 없다.
+  it.each(['astera-hook-capture.cjs', 'astera-statusline-capture.cjs'])(
+    '%s 의 내용이 같으면 init 은 쓰지 않는다',
+    async (name) => {
+      const file = path.join(dir, name)
+      const before = await fs.stat(file, { bigint: true })
+      await mgr.init()
+      const after = await fs.stat(file, { bigint: true })
+      expect(after.ino).toBe(before.ino)
+      expect(after.mtimeNs).toBe(before.mtimeNs)
+    }
+  )
+
+  // Windows 에서 훅이 이 스크립트를 여는 순간의 rename 은 EPERM 으로 실패한다(검토가 잰 값 5~8%).
+  // 잠깐의 핸들이라 몇 번 다시 해 보면 넘어간다.
+  it('rename 이 EPERM 으로 몇 번 실패해도 다시 해서 바꿔 끼운다', async () => {
+    const file = path.join(dir, 'astera-hook-capture.cjs')
+    await fs.writeFile(file, '// an older build\n', 'utf8')
+    const eperm = Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })
+    const rename = vi.spyOn(fs, 'rename')
+    rename.mockRejectedValueOnce(eperm).mockRejectedValueOnce(eperm).mockRejectedValueOnce(eperm)
+    try {
+      await expect(mgr.init()).resolves.toBeUndefined()
+    } finally {
+      rename.mockRestore()
+    }
+    expect(await fs.readFile(file, 'utf8')).toContain('astera_at')
+    expect((await fs.readdir(dir)).filter((n) => n.includes('.tmp'))).toEqual([])
+  })
+
+  // 끝내 안 되면 예전처럼 제자리에 쓴다 — 드물게 반쯤 읽기가 날 수 있어도 앱 시작을 막지는 않는다.
+  // 전에는 init 이 거부했고, createCore 가 거부해 창이 뜨지 않았다(core/scheduler/config.ts 의 같은 경로).
+  it('rename 이 끝내 실패하면 제자리에 쓰고 init 은 성공한다', async () => {
+    const file = path.join(dir, 'astera-hook-capture.cjs')
+    await fs.writeFile(file, '// an older build\n', 'utf8')
+    const eperm = Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValue(eperm)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(mgr.init()).resolves.toBeUndefined()
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      rename.mockRestore()
+      warn.mockRestore()
+    }
+    expect(await fs.readFile(file, 'utf8')).toContain('astera_at')
+    expect((await fs.readdir(dir)).filter((n) => n.includes('.tmp'))).toEqual([])
+  })
 
   it('객체가 아닌 페이로드는 예전처럼 한 줄로 그대로 붙는다', async () => {
     const { lines } = await capture('not json\nsecond')
