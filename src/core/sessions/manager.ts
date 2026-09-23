@@ -88,7 +88,10 @@ export class SessionManager {
     private homeDir: string = os.homedir(),
     private statusLineProvider?: StatusLineProvider,
     /** Directories every Claude session may read without a prompt — the app's screenshot folder. */
-    private sessionReadDirs: string[] = []
+    private sessionReadDirs: string[] = [],
+    /** The environment every child env is built from. The app keeps process.env; the Host passes
+     *  its own minus what its start added (hostWorkerBaseEnv, design D4). */
+    private baseEnv: NodeJS.ProcessEnv = process.env
   ) {}
 
   spawn(opts: {
@@ -156,10 +159,10 @@ export class SessionManager {
       resumePrompt: opts.resumePrompt,
       initialPrompt: opts.initialPrompt
     })
-    // The env a CLI child gets: process.env minus the app-managed and inherited-agent keys, plus the
-    // provider's config-dir variable set to the account's dir (or deleted for the ambient dir). See
-    // cliEnv.ts for the full rationale — this used to be inline here.
-    const env = cliEnvFor({ base: process.env, account: opts.account, descriptor: d, homeDir: this.homeDir })
+    // The env a CLI child gets: the base env (process.env in the app) minus the app-managed and
+    // inherited-agent keys, plus the provider's config-dir variable set to the account's dir (or
+    // deleted for the ambient dir). See cliEnv.ts for the full rationale — this used to be inline here.
+    const env = cliEnvFor({ base: this.baseEnv, account: opts.account, descriptor: d, homeDir: this.homeDir })
     // Windows only: CLAUDE_CODE_GIT_BASH_PATH exists for Git for Windows, and on other platforms the
     // agent's bash is the system one. The agent's hooks and statusLine need a real Git Bash when
     // available; without one the statusLine capture never runs and the app never learns this session's

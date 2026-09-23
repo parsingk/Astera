@@ -7,6 +7,21 @@ import type { SpawnOptions } from 'node:child_process'
  *  slice 2 will have it spawn workers of its own that would inherit them in turn. */
 const NOT_INHERITED = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS|CLAUDE_CODE_|CLAUDECODE$)/
 
+/** What the Host's own start adds to its environment — the runtime switch and the Host's own
+ *  settings. None of it may reach an agent the Host spawns: ELECTRON_RUN_AS_NODE turns any Electron
+ *  binary the agent runs into plain Node (design D4, §2.2). Case-insensitive because a Windows
+ *  environment block is. Written by prefix so an ASTERA_HOST_ variable added later is covered too. */
+export const HOST_ONLY_ENV: RegExp = /^(ELECTRON_RUN_AS_NODE$|ASTERA_HOST_)/i
+
+/** The environment a worker the Host spawns starts from (D4): the Host's own, minus HOST_ONLY_ENV.
+ *  Everything else is kept on purpose — the Host was started from the app's environment, so a
+ *  worker sees what a worker the app spawned would. */
+export function hostWorkerBaseEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = {}
+  for (const [k, v] of Object.entries(env)) if (!HOST_ONLY_ENV.test(k)) base[k] = v
+  return base
+}
+
 export interface HostSpawnPlan {
   command: string
   args: string[]

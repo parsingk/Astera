@@ -449,6 +449,21 @@ describe('SessionManager', () => {
     expect(manager.list()[0].slackNotify).toBe(true)
   })
 
+  it('builds the child env from the base it was given, not from process.env', () => {
+    const spawned: PtySpawnOptions[] = []
+    const factory: PtyFactory = (_f, _a, opts) => { spawned.push(opts); return new FakePty() }
+    const m = new SessionManager(factory, makeDescriptors(process.platform), undefined, undefined, undefined, undefined, [],
+      { PATH: process.env.PATH, ONLY_IN_BASE: 'yes' })
+    m.spawn({ account, cwd: process.cwd() })
+    expect(spawned[0].env.ONLY_IN_BASE).toBe('yes')
+    // a key only process.env has does not leak in
+    process.env.ASTERA_TEST_ONLY_PROCESS = '1'
+    try {
+      m.spawn({ account, cwd: process.cwd() })
+      expect('ASTERA_TEST_ONLY_PROCESS' in spawned[1].env).toBe(false)
+    } finally { delete process.env.ASTERA_TEST_ONLY_PROCESS }
+  })
+
   // slackNotify 도 롤링도 없는 평범한 세션이다. 도구 캡처(toolHooks)는 안 들어가지만
   // ASTERA_HOOK_OUT 은 들어가야 한다 — Stop·Notification 훅은 모든 세션에 심기고, 그 훅이 쓸
   // 경로가 없으면 캡처 스크립트가 아무 일도 하지 않아 심으나 마나가 된다. 데스크톱 알림이 보통
