@@ -1717,6 +1717,15 @@ export async function handleCommand(
       if (terminal) {
         const prev = s.dispatches.find((d) => d.sessionId === terminal)
         if (!prev) return notFound(`unknown terminal: ${terminal}`)
+        // Only a session of this same Run may be reused. Finding *some* dispatch with that id was
+        // the whole check before, so a coordinator that knew another run's worker session id could
+        // type its Task into that run's session. Refused before openDispatch, so nothing is typed.
+        const prevRunId = s.tasks.find((t) => t.id === prev.taskId)?.runId
+        if (prevRunId !== run.id)
+          return denied(
+            `terminal ${terminal} is a session of ${prevRunId ? `run ${prevRunId}` : 'no known run'}, ` +
+              `not of run ${run.id} — --terminal reuses only a session of the same run; start a fresh worker instead`
+          )
         terminalCwd = prev.cwd
         terminalProvider = prev.provider
         terminalAccountId = prev.accountId

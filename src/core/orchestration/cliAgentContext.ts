@@ -250,7 +250,7 @@ const SESSION = {
       req('account', '<accountId>', 'the account it runs on'),
       { name: 'worktree', value: '<current|new|path>', about: "where it works (default: the run's)" },
       { name: 'name', value: '<text>', about: 'what to call the session' },
-      { name: 'terminal', value: '<sessionId>', about: "reuse this finished session's terminal" },
+      { name: 'terminal', value: '<sessionId>', about: "reuse this finished session's terminal (a session of the same run)" },
       { name: 'retry-of', value: '<dispatchId>', about: 'the attempt this one retries' }
     ]
   },

@@ -1532,6 +1532,12 @@ describe('handleCommand — worker-start × OrchCoordinator 통합 배선', () =
     const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     return (task.body as { id: string }).id
   }
+  /** taskId 와 같은 회차에 Task 하나를 더 만든다 — --terminal 재사용 후보 Dispatch 의 주인이다. */
+  const seedSibling = async (deps: OrchServerDeps, taskId: string): Promise<string> => {
+    const runId = deps.getState().tasks.find((t) => t.id === taskId)!.runId
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 'o', spec: 's' })
+    return (task.body as { id: string }).id
+  }
 
   it('worker-start 왕복이 200이고 dispatchId를 돌려준다 — openDispatch 이중 호출 회귀 방지', async () => {
     const deps = makeWiredDeps()
@@ -1628,6 +1634,7 @@ describe('handleCommand — worker-start × OrchCoordinator 통합 배선', () =
   it('죽은 --terminal로 재사용을 시도하면 거부되고 dispatch가 남지 않는다', async () => {
     const deps = makeWiredDeps({ isAlive: () => false })
     const taskId = await seedTask(deps)
+    const other = await seedSibling(deps, taskId)
     // 재사용 후보 dispatch를 직접 심는다(이미 종단된, 재사용 가능한 것처럼 보이는 상태) —
     // 실제로 살아 있는지는 isAlive만이 판정한다.
     await deps.setState({
@@ -1635,7 +1642,7 @@ describe('handleCommand — worker-start × OrchCoordinator 통합 배선', () =
       dispatches: [
         {
           id: 'dsp_prev',
-          taskId: 'tsk_other',
+          taskId: other,
           provider: 'codex',
           accountId: 'acc1',
           sessionId: 'sessDead',
@@ -1669,12 +1676,13 @@ describe('handleCommand — worker-start × OrchCoordinator 통합 배선', () =
     // 가리킨다. 그 두 규칙이 만나는 경우 자체를 없애는 것이 이 거부다.
     const deps = makeWiredDeps({ isAlive: () => true })
     const taskId = await seedTask(deps)
+    const other = await seedSibling(deps, taskId)
     await deps.setState({
       ...deps.getState(),
       dispatches: [
         {
           id: 'dsp_live',
-          taskId: 'tsk_other',
+          taskId: other,
           provider: 'codex',
           accountId: 'acc1',
           sessionId: 'sessLive',
@@ -1696,6 +1704,79 @@ describe('handleCommand — worker-start × OrchCoordinator 통합 배선', () =
     expect(r.status).toBe(400)
     expect(JSON.stringify(r.body)).toContain('sessionId already in use')
     expect(deps.getState().dispatches.filter((x) => x.taskId === taskId)).toHaveLength(0)
+  })
+
+  // **--terminal 은 같은 회차의 세션만 다시 쓴다.** 이전에는 "그 sessionId 를 가진 Dispatch 가
+  // 어딘가 있다" 만 봤으므로, 다른 회차 워커의 세션 id 를 아는 코디네이터가 그 세션에 타이핑할 수
+  // 있었다.
+  /** taskId 를 한 번 돌려 끝낸다(worker-start → worker_done). 그 세션(sess1)은 살아 있고 열린
+   *  Dispatch 가 없으니 --terminal 로 다시 쓸 수 있는 상태다. */
+  const finishOnce = async (deps: OrchServerDeps, taskId: string): Promise<string> => {
+    const r = await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    const { dispatchId, sessionId } = r.body as { dispatchId: string; sessionId: string }
+    await call(deps, 'send', { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' })
+    return sessionId
+  }
+  const runOf = (deps: OrchServerDeps, taskId: string): string =>
+    deps.getState().tasks.find((t) => t.id === taskId)!.runId!
+
+  it('같은 회차의 끝난 세션은 --terminal 로 다시 쓸 수 있다', async () => {
+    const writes: string[] = []
+    const deps = makeWiredDeps({ writeToSession: (id) => void writes.push(id) })
+    const first = await seedTask(deps)
+    const sessionId = await finishOnce(deps, first)
+    const next = await call(deps, 'task-create', { account: 'acc1', runId: runOf(deps, first), title: 'n', spec: 's' })
+    const nextId = (next.body as { id: string }).id
+    writes.length = 0
+    const r = await call(deps, 'worker-start', {
+      taskId: nextId,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'current',
+      terminal: sessionId
+    })
+    expect(r.status).toBe(200)
+    expect((r.body as { sessionId: string }).sessionId).toBe(sessionId)
+    expect(writes).toContain(sessionId)
+  })
+
+  it('다른 회차의 세션은 --terminal 로 다시 쓸 수 없다 — 403, 아무것도 타이핑하지 않는다', async () => {
+    const writes: string[] = []
+    const deps = makeWiredDeps({ writeToSession: (id) => void writes.push(id) })
+    const other = await seedTask(deps)
+    const sessionId = await finishOnce(deps, other)
+    const mine = await seedTask(deps) // 새 run-create 이므로 다른 회차다
+    expect(runOf(deps, mine)).not.toBe(runOf(deps, other))
+    writes.length = 0
+    const before = deps.getState().tasks.find((t) => t.id === mine)!.status
+    const r = await call(deps, 'worker-start', {
+      taskId: mine,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'current',
+      terminal: sessionId
+    })
+    expect(r.status).toBe(403)
+    const msg = JSON.stringify(r.body)
+    expect(msg).toContain(runOf(deps, other))
+    expect(msg).toContain(runOf(deps, mine))
+    expect(writes).toHaveLength(0)
+    expect(deps.getState().dispatches.filter((x) => x.taskId === mine)).toHaveLength(0)
+    expect(deps.getState().tasks.find((t) => t.id === mine)!.status).toBe(before)
+  })
+
+  it('어느 Dispatch 도 쓰지 않은 세션은 지금처럼 404 다', async () => {
+    const deps = makeWiredDeps()
+    const taskId = await seedTask(deps)
+    const r = await call(deps, 'worker-start', {
+      taskId,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'current',
+      terminal: 'sessNobody'
+    })
+    expect(r.status).toBe(404)
+    expect(JSON.stringify(r.body)).toContain('unknown terminal: sessNobody')
   })
 })
 

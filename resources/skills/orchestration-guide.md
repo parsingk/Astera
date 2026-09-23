@@ -388,7 +388,9 @@ accounts [--agent <claude|codex>] [--json]
   way it is refused, only the message differs. Read section 11 in full before driving a convergence
   Run; this bullet is the pointer, not the reference.
 - `--terminal <sessionId>` reuses an existing worker session. This is the only case where a new Task
-  can be handed to the same session without `--retry-of` (see the example in section 5).
+  can be handed to the same session without `--retry-of` (see the example in section 5). The session
+  must belong to a worker of the **same Run** as the Task being started; a session of another Run is
+  refused with `403` and nothing is typed into it.
   **A Task placed into an existing session inherits that session's account chain, not its own.** The
   chain is fixed when a session starts, so a Task whose `--account` list differs from the list the
   session was started with can be moved onto an account it was never given — or have nowhere to move
