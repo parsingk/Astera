@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { promises as fs, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createHostSpawner } from './spawner'
+import { createHostSpawner, type HostSpawnerDeps } from './spawner'
 import { PtyRegistry, type RegistryPty } from './registry'
 import type { HostMessage } from '../core/host/protocol'
 import { HOST_ONLY_ENV } from '../core/host/spawn'
@@ -29,7 +29,8 @@ beforeEach(async () => {
 afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
 
 type Spawned = { file: string; args: string[] | string; opts: { cwd: string; env: Record<string, string | undefined> }; pty: RegistryPty & { emit(d: string): void; exit(c: number): void; killed: boolean } }
-const rig = (over: { env?: NodeJS.ProcessEnv; state?: () => OrchState; failSpawn?: boolean } = {}) => {
+type LocateHooks = Pick<HostSpawnerDeps, 'findRollout' | 'locatePollMs' | 'locateForMs'>
+const rig = (over: { env?: NodeJS.ProcessEnv; state?: () => OrchState; failSpawn?: boolean } & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
   const sent: HostMessage[] = []
@@ -46,22 +47,35 @@ const rig = (over: { env?: NodeJS.ProcessEnv; state?: () => OrchState; failSpawn
   })
   const env = over.env ?? hostEnv()
   const spawner = createHostSpawner({ profileDir: profile, env, platform: process.platform, homeDir: path.join(dir, 'home'), registry,
-    broadcast: (m) => sent.push(m), getState: over.state ?? (() => emptyState()), log: (m) => logs.push(m) })
+    broadcast: (m) => sent.push(m), getState: over.state ?? (() => emptyState()), log: (m) => logs.push(m),
+    findRollout: over.findRollout, locatePollMs: over.locatePollMs, locateForMs: over.locateForMs })
   return { spawner, registry, spawned, logs, sent }
 }
 const hostEnv = (): NodeJS.ProcessEnv => ({
   PATH: process.env.PATH, CI_SECRET: 'kept', ELECTRON_RUN_AS_NODE: '1', ASTERA_HOST_PROFILE_DIR: profile,
   ASTERA_HOST_CLI_EXEC: path.join(dir, 'Astera.exe'), ASTERA_HOST_CLI_ENTRY: path.join(dir, 'cli.js'), ASTERA_HOST_SKILLS: path.join(dir, 'skills')
 })
-const seeded = (): { s: OrchState; taskId: string; dispatchId: string } => {
+const seeded = (accountId = 'acc1', provider: 'claude' | 'codex' = 'claude'): { s: OrchState; taskId: string; dispatchId: string } => {
   const job = createJob(emptyState(), { objective: 'o', cwd: repo }, NOW); if (!job.ok) throw new Error(job.error)
   const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
   const t = createTask(run.state, { runId: run.value.id, title: 'Write hello', spec: 's', deps: [] }, NOW); if (!t.ok) throw new Error(t.error)
-  const d = openDispatch(t.state, { taskId: t.value.id, provider: 'claude', accountId: 'acc1', sessionId: 'pending:x', cwd: repo, specPath: '' }, NOW); if (!d.ok) throw new Error(d.error)
+  const d = openDispatch(t.state, { taskId: t.value.id, provider, accountId, sessionId: 'pending:x', cwd: repo, specPath: '' }, NOW); if (!d.ok) throw new Error(d.error)
   return { s: d.state, taskId: t.value.id, dispatchId: d.value.id }
 }
 const startArgs = (taskId: string, dispatchId: string, worktree = 'current') =>
   ({ dispatchId, taskId, title: 'Write hello', spec: 'write hello.txt', provider: 'claude' as const, accountId: 'acc1', runCwd: repo, worktree })
+
+/** rig, plus a codex account acc2 whose configDir is under `dir`, a Task and Dispatch seeded on it, and
+ *  the locate hooks. `state` is settable so a second Dispatch can be seeded on the same spawner. */
+const rigWith = (hooks: LocateHooks) => {
+  writeFileSync(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+    { id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg1'), color: '#888', createdAt: NOW, provider: 'claude' },
+    { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+  ] }))
+  const seed = seeded('acc2', 'codex')
+  const box = { state: seed.s }
+  return { ...rig({ ...hooks, state: () => box.state }), taskId: seed.taskId, dispatchId: seed.dispatchId, box }
+}
 
 describe('createHostSpawner', () => {
   it('is null, and says which paths are missing, when the Host was started without them', () => {
@@ -227,6 +241,73 @@ describe('createHostSpawner', () => {
     const h = rig()
     await h.spawner!.releaseWorker({ dispatchId: 'dsp_gone' })
     expect(h.logs.join('\n')).toMatch(/worker-release: unknown dispatch dsp_gone/)
+  })
+
+  // §2.5: the app's CodexRolloutWatcher writes this mapping for the sessions it spawns, and an adopted
+  // session can never be scanned for again, so the Host writes it for the ones it spawns.
+  it("writes a codex worker's rollout into its note, which is the mapping the app adopts", async () => {
+    let calls = 0
+    const h = rigWith({ findRollout: async () => (++calls < 2 ? null : { path: 'C:/cx/rollout-1.jsonl', sessionId: 'cx-1' }), locatePollMs: 5 })
+    const r = await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
+    await vi.waitFor(() => expect(h.registry.list()[0].meta!.restore).toMatchObject({ rolloutPath: 'C:/cx/rollout-1.jsonl', codexSessionId: 'cx-1' }))
+    expect(calls).toBe(2)
+    expect(r.sessionId).toBe(h.registry.list()[0].meta!.id)
+  })
+
+  it('stops looking once the worker is gone', async () => {
+    let calls = 0
+    const h = rigWith({ findRollout: async () => { calls++; return null }, locatePollMs: 5 })
+    await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
+    h.spawned[0].pty.exit(0)
+    const at = calls
+    await new Promise((r) => setTimeout(r, 50))
+    expect(calls - at).toBeLessThanOrEqual(1)
+  })
+
+  // The watcher's claimed(): a rollout another live session's note holds is never a candidate.
+  it('never claims a rollout another live session already holds', async () => {
+    const excluded: string[][] = []
+    const h = rigWith({ findRollout: async (o) => { excluded.push(o.excludePaths ?? []); return null }, locatePollMs: 5 })
+    h.registry.open({ id: 'pty_other', file: 'codex', args: [], opts: { cwd: repo, cols: 120, rows: 30, env: {} },
+      meta: { kind: 'session', id: 'ses_other', restore: { accountId: 'acc2', rolloutPath: 'C:/cx/theirs.jsonl' } } })
+    await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
+    await vi.waitFor(() => expect(excluded.length).toBeGreaterThan(0))
+    expect(excluded[0]).toEqual(['C:/cx/theirs.jsonl'])
+  })
+
+  it('does nothing for a claude worker', async () => {
+    let calls = 0
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s, findRollout: async () => { calls++; return null }, locatePollMs: 5 })
+    await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(calls).toBe(0)
+  })
+
+  // The watcher's mayClaim(): of two sessions looking in one account and folder, the newest file is the
+  // newest starter's. Without it the earlier worker's poll takes the later worker's rollout.
+  it('lets only the later of two workers looking in one folder claim the next rollout', async () => {
+    let ready = false
+    const h = rigWith({ locatePollMs: 5, findRollout: async (o) =>
+      !ready || (o.excludePaths ?? []).includes('C:/cx/second.jsonl') ? null : { path: 'C:/cx/second.jsonl', sessionId: 'cx-2' } })
+    await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
+    const again = seeded('acc2', 'codex')
+    h.box.state = again.s
+    await h.spawner!.startWorker({ ...startArgs(again.taskId, again.dispatchId), provider: 'codex', accountId: 'acc2' })
+    ready = true
+    await vi.waitFor(() => expect(h.registry.list()[1].meta!.restore).toMatchObject({ rolloutPath: 'C:/cx/second.jsonl' }))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(h.registry.list()[0].meta!.restore.rolloutPath).toBeUndefined()
+  })
+
+  it('stops looking, and says so, when no rollout turns up in time', async () => {
+    let calls = 0
+    const h = rigWith({ findRollout: async () => { calls++; return null }, locatePollMs: 5, locateForMs: 20 })
+    await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
+    await vi.waitFor(() => expect(h.logs.join(' ')).toMatch(/no codex rollout found/))
+    const at = calls
+    await new Promise((r) => setTimeout(r, 30))
+    expect(calls).toBe(at)
   })
 
   it('turns a registry refusal into a thrown start, so worker-start rolls back', async () => {

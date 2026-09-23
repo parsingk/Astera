@@ -26,6 +26,7 @@ import {
 } from '../core/orchestration/exec/workerStart'
 import { readAccountEntries } from '../core/accounts/accountsFile'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
+import { findRollout as findRolloutOnDisk } from '../core/rolling/codexLocate'
 import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
 import { SessionManager } from '../core/sessions/manager'
@@ -66,11 +67,20 @@ export interface HostSpawnerDeps {
   log(m: string): void
   /** Test injection; defaults to existsSync. */
   exists?(p: string): boolean
+  /** Test injection; defaults to the scan the app's CodexRolloutWatcher runs. */
+  findRollout?: typeof findRolloutOnDisk
+  /** How often a codex session's rollout is looked for: the watcher's POLL_MS. */
+  locatePollMs?: number
+  /** How long a codex session's rollout is looked for before the Host gives up. */
+  locateForMs?: number
 }
 
 export interface HostSpawner extends HostLocal {}
 
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
+
+const LOCATE_POLL_MS = 1_000
+const LOCATE_FOR_MS = 10 * 60_000
 
 /** A promise made once, on first use. The shuttle and the statusLine files are written at the first
  *  local spawn and never at startup (R6): a Host that is constructed and never asked to spawn touches
@@ -164,6 +174,12 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
    *  app-side roll rekeys the Dispatch and re-points the app's own tail (its onRolled), not this one. */
   const startedOn = new Map<string, string>()
   const busyOf = new Map<string, { scanner: BusyScanner; busy: boolean }>()
+  const findRollout = d.findRollout ?? findRolloutOnDisk
+  const locatePollMs = d.locatePollMs ?? LOCATE_POLL_MS
+  const locateForMs = d.locateForMs ?? LOCATE_FOR_MS
+  /** ptyId → the codex sessions still looking for their rollout, in start order (`seq`). */
+  const looking = new Map<string, { accountId: string; cwd: string; seq: number }>()
+  let lookSeq = 0
 
   const factory = hostPtyFactory({
     registry,
@@ -206,6 +222,70 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     if (m?.kind === 'session') busyOf.delete(m.id)
   })
 
+  const norm = (p: string): string => path.resolve(p).toLowerCase()
+  const alive = (ptyId: string): boolean => registry.list().some((e) => e.id === ptyId && e.alive)
+  /** The watcher's claimed(): every rollout a live session's note already holds, other than this pty's.
+   *  The notes are the one list both processes write to: the Host here, the app's watcher through
+   *  `remember`. */
+  const claimed = (ptyId: string): string[] => {
+    const out: string[] = []
+    for (const e of registry.list()) {
+      const p = e.meta?.restore.rolloutPath
+      if (e.alive && e.id !== ptyId && typeof p === 'string' && p !== '') out.push(p)
+    }
+    return out
+  }
+  /** The watcher's mayClaim(): of the sessions still looking in one account and folder, only the one
+   *  that started last may claim, because "newest file created after I started" is only its answer. By
+   *  start order rather than by `since`, since two Host spawns can share a millisecond. */
+  const mayClaim = (ptyId: string): boolean => {
+    const self = looking.get(ptyId)!
+    for (const [id, e] of looking)
+      if (id !== ptyId && e.accountId === self.accountId && norm(e.cwd) === norm(self.cwd) && e.seq > self.seq)
+        return false
+    return true
+  }
+
+  /** §2.5: what the app's CodexRolloutWatcher does for the codex sessions it spawns, for the ones this
+   *  Host spawns. The scan works only right after a real spawn (an adopted session can never be scanned
+   *  for), so the Host writes the mapping into the note, where the app's adopter reads it
+   *  (codexRolloutFromNote). It stops at a hit, when the pty exits, or after `locateForMs`. */
+  const locateRollout = (ptyId: string, sessionId: string, account: Account, cwd: string, since: number): void => {
+    looking.set(ptyId, { accountId: account.id, cwd, seq: lookSeq++ })
+    const giveUpAt = since + locateForMs
+    const stop = (): void => {
+      looking.delete(ptyId)
+    }
+    const tick = async (): Promise<void> => {
+      if (!alive(ptyId)) return stop()
+      if (Date.now() >= giveUpAt) {
+        log(`no codex rollout found for session=${sessionId} in ${locateForMs}ms — its note carries no rollout`)
+        return stop()
+      }
+      if (mayClaim(ptyId)) {
+        const found = await findRollout({ configDir: account.configDir, cwd, since, excludePaths: claimed(ptyId) })
+        if (!alive(ptyId)) return stop()
+        // Another session can claim it across the await: re-checked, as the watcher does.
+        if (found && !claimed(ptyId).includes(found.path)) {
+          registry.note(ptyId, { rolloutPath: found.path, codexSessionId: found.sessionId })
+          log(`codex rollout mapped session=${sessionId} path=${found.path}`)
+          return stop()
+        }
+      }
+      schedule()
+    }
+    const schedule = (): void => {
+      setTimeout(() => {
+        tick().catch((err) => {
+          // One failed scan must not end the search: the next tick tries again, as the watcher's does.
+          log(`codex rollout locate error session=${sessionId}: ${String(err)}`)
+          schedule()
+        })
+      }, locatePollMs).unref()
+    }
+    schedule()
+  }
+
   /** Task 4's ruling: a settings file the Host cannot read may have said 'manual', so it is never read
    *  as the bypass. The spawn is refused with the reader's own "open Astera to repair it". */
   const bypassFromSettings = async (): Promise<boolean> => {
@@ -233,7 +313,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     const cliPath = await shuttlePath()
     const bypass = o.bypassPermissions ?? (await bypassFromSettings())
     const rollProviders = o.rollAccountIds.map((rid) => providerOf(accounts.find((x) => x.id === rid) ?? account))
-    return sessions.spawn({
+    const info = sessions.spawn({
       account,
       cwd: o.cwd,
       bypassPermissions: bypass,
@@ -246,6 +326,12 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       rollProviders,
       orchEnv: { cliPath, skillsPath: cli.skills, profileDir }
     })
+    // The app registers every codex session with its watcher right after core.sessions.spawn.
+    if (providerOf(account) === 'codex') {
+      const ptyId = registry.sessionPty(info.id)
+      if (ptyId) locateRollout(ptyId, info.id, account, info.cwd, Date.now())
+    }
+    return info
   }
 
   const coordinatorFor = (accounts: Account[]): OrchCoordinator =>
