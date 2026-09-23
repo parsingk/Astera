@@ -2460,6 +2460,10 @@ export async function handleCommand(
       if (id === null) return bad('--id is required: a session id from `sessions list`')
       const lines = routed === 'sessions-read' && args.lines !== undefined ? posInt(args.lines) : 200
       if (lines === null) return bad('--lines must be a whole number, 1 or more')
+      // The emulator holds that many rows, in the Host that holds every session: a million costs it
+      // about half a gigabyte for one read. The Host keeps 256,000 characters of a session, so this
+      // is more rows than a session can have.
+      if (lines > 10_000) return bad('--lines is at most 10000')
       const text = routed === 'sessions-send' ? str(args.text) : null
       if (routed === 'sessions-send' && text === null)
         return bad('--text is required: what to type (a value of `-` reads it from stdin)')

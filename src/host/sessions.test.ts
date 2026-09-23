@@ -253,3 +253,15 @@ describe('registrySessions — send', () => {
     expect(shell.sent).toEqual([])
   })
 })
+
+// The emulator is loaded when a read needs it, not when the Host starts. A checkout that pulled the
+// dependency without `npm install` then fails one command instead of refusing to start the Host that
+// every terminal in the app runs on.
+describe('the @xterm/headless load', () => {
+  it('is not a top-level import of the Host', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('./sessions.ts', import.meta.url), 'utf8')
+    expect(src).not.toMatch(/^import\s+(?!type\b)[^\n]*from\s+'@xterm\/headless'/m)
+    expect(src).toContain("import('@xterm/headless')")
+  })
+})

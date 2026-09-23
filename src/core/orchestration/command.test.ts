@@ -5551,6 +5551,16 @@ describe('sessions list / read / send', () => {
     expect(reads).toEqual([])
   })
 
+  // 에뮬레이터는 --lines 만큼 줄을 잡아 둔다. 상한이 없으면 한 번의 read 가 모든 세션을 쥔 Host 를
+  // 수백 MB 부풀린다(검토에서 1,000,000 으로 약 512 MB 를 쟀다). Host 가 세션마다 쥐는 출력이
+  // 256,000 자라 10,000 줄이면 남는다.
+  it('--lines 는 10000 까지다 — 넘으면 400 이고 Host 에 닿지 않는다', async () => {
+    const { deps, reads } = withSessions([term])
+    expect((await call(deps, 'sessions-read', { id: 'ses-1', lines: '10001' }, '')).status).toBe(400)
+    expect(reads).toEqual([])
+    expect((await call(deps, 'sessions-read', { id: 'ses-1', lines: '10000' }, '')).status).toBe(200)
+  })
+
   it('없는 id 는 404, 없는 --id 는 400 이다', async () => {
     const { deps, reads, sent } = withSessions([term])
     const missing = await call(deps, 'sessions-read', { id: 'nope' }, '')

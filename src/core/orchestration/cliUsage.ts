@@ -283,7 +283,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'sessions-read': {
     summary: "what a terminal session's tab shows, and the rows above it",
     detail:
-      "The Host replays the session's recent output into a terminal at the tab's size. `screen` is the visible rows, top first, with the empty rows below the last painted one left off; `scrollback` is up to --lines rows from just above it, oldest first; `cols` and `rows` are the size. Text only, trailing spaces trimmed, no colours. The Host keeps about 256,000 characters of each running session and drops them when it ends. A chat session is refused with 6: reading one is not supported yet.",
+      "The Host replays the session's recent output into a terminal at the tab's size. `screen` is the visible rows, top first, with the empty rows below the last painted one left off; `scrollback` is up to --lines rows (at most 10000) from just above it, oldest first; `cols` and `rows` are the size. Text only, trailing spaces trimmed, no colours. The Host keeps about 256,000 characters of each running session and drops them when it ends. A chat session is refused with 6: reading one is not supported yet.",
     flags: [
       ID('<sessionId>', 'the session to read (from `sessions list`)'),
       { name: 'lines', value: '<n>', about: 'how many rows of scrollback above the screen (default 200)' }

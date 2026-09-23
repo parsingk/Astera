@@ -32,14 +32,17 @@ const ROOT = process.cwd()
 // 원본의 문구를 담으므로, 검사 대상에 넣으면 브랜치 작업 중 항상 실패한다. 이것은 **알려진 잔여
 // 위험을 수용하는 것**이며 안전하다는 뜻이 아니다: 실측 오탐 하나가 실제로 그 디렉토리의
 // 리뷰 산출물이었다. git 히스토리에 남지 않는다는 것과 디스크에 있는 동안 라이브 세션을 흔들 수
-// 있다는 것은 다른 문제고, 후자는 이미 한 번 일어났다. out·dist·release는 빌드 산출물로 소스에서
-// 생성되며, 소스가 깨끗하면 번들도 깨끗하다.
+// 있다는 것은 다른 문제고, 후자는 이미 한 번 일어났다. out·dist·release·host-runtime 은 빌드
+// 산출물이라 같은 이유로 뺀다 — 그리고 **소스가 깨끗해도 번들은 깨끗하지 않다**: 소스가 `+` 로
+// 나눠 둔 문구를 번들러가 한 문자열로 접는다(2026-09-23, resources/host-runtime 의 Host 번들에서
+// 실측). 이것도 .superpowers 와 같은 수용한 잔여 위험이다.
 const SKIP_DIRS = new Set([
   'node_modules',
   '.git',
   'out',
   'dist',
   'release',
+  'host-runtime',
   '.superpowers',
   '.worktrees',
   'coverage'

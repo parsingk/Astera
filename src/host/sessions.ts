@@ -14,8 +14,8 @@
 //
 // Imports nothing outside core but `@xterm/headless`, for the reason registry.ts gives: this bundles
 // into the Host. The emulator is the one package here, and it is why `read` is a screen — see
-// `render`.
-import { Terminal } from '@xterm/headless'
+// `render`. It is loaded by the first read rather than when the Host starts, so a checkout missing it
+// fails that command instead of taking down the Host every terminal runs on.
 import type { HostSession, SessionScreen } from '../core/orchestration/command'
 import type { PtyEntry } from '../core/host/protocol'
 import { ptyDriver } from '../core/sessions/sessionDriver'
@@ -64,6 +64,12 @@ const rowOf = (e: PtyEntry, kind: HostSession['kind']): HostSession => {
 async function render(data: string, size: { cols: number; rows: number }, lines: number): Promise<SessionScreen> {
   const empty: SessionScreen = { ...size, screen: [], scrollback: [] }
   if (data === '') return empty
+  // The package is CommonJS. Under Node's dynamic import its exports arrive on `default` only (named
+  // `Terminal` is undefined — measured on node 24 and Electron's node), while the test runner hands
+  // back named exports. Take whichever is there.
+  const mod: typeof import('@xterm/headless') & { default?: typeof import('@xterm/headless') } =
+    await import('@xterm/headless')
+  const { Terminal } = mod.default ?? mod
   const term = new Terminal({ cols: size.cols, rows: size.rows, scrollback: lines, allowProposedApi: true })
   try {
     await new Promise<void>((resolve) => term.write(data, resolve))
