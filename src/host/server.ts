@@ -27,6 +27,14 @@ export const ADDRESS_TAKEN = 'astera-host: the address is already served'
  *  can open. See the check in `startHostServer` for why an existing directory cannot be trusted. */
 export const UNSAFE_ADDRESS_DIR = 'astera-host: the address directory is not private to this user'
 
+/** Which client a message came from, or which one left. `socket` is a number this server gives each
+ *  connection in turn, never reused while it runs, so two clients of the same role can be told apart
+ *  without handing the socket itself out. */
+export interface ClientRef {
+  role: 'app' | 'cli'
+  socket: number
+}
+
 export interface HostServerDeps {
   address: string
   /** posix: created with mode 0700 before binding. null on win32 (design §5). */
@@ -41,8 +49,17 @@ export interface HostServerDeps {
   onIdle(): void
   log: HostLog
   /** A handler for messages the server does not own. Returns true when it handled one; false lets
-   *  the server treat it as unknown. Slice 2's pty-* messages arrive here. */
-  onMessage?(m: ClientMessage, send: (h: HostMessage) => void): boolean
+   *  the server treat it as unknown. Slice 2's pty-* messages arrive here. `from` is the sender: the
+   *  Host records which ptys an app holds by it (host S2 ruling R2). A socket that has not said hello
+   *  reads as `'cli'`, the same careful default the role itself has. */
+  onMessage?(m: ClientMessage, send: (h: HostMessage) => void, from: ClientRef): boolean
+  /** A client that had said hello has closed. Not called for a peer that never did: it was never
+   *  anybody, and held nothing. */
+  onClientGone?(from: ClientRef): void
+  /** Feature names announced in `hello` after the built-in ones. Given only by a caller that serves
+   *  them: advertising a feature and being able to serve it are the same fact, as the `orch`
+   *  condition below says. */
+  features?: string[]
   /** Sessions and Runs the Host is holding right now. One dep rather than two because a `retire`
    *  refusal always needs both counts together, to name them (public CLI spec §12: "Cannot stop Host:
    *  2 sessions and 1 run are still running"). Both halves are answered for real — `runs` counts the
@@ -152,6 +169,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
    *  set's element because the set is what `broadcast` walks and that must not change shape.
    *  A socket that is in `greetedSockets` is always in here too — both are written in one place. */
   const roles = new Map<net.Socket, 'app' | 'cli'>()
+  let socketSeq = 0
   /** The `orch-act`s that have gone out and not been answered, by call id. The socket is kept with
    *  each one so that a disconnect can refuse exactly the questions it left unanswered. */
   const pendingActs = new Map<
@@ -190,6 +208,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
 
   const server = net.createServer((socket) => {
     live += 1
+    const socketNo = ++socketSeq
     sockets.add(socket)
     if (idleTimer) clearTimeout(idleTimer)
     socket.setEncoding('utf8')
@@ -250,7 +269,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
             features: [
               HOST_FEATURE_PROC,
               HOST_FEATURE_PING,
-              ...(deps.orch ? [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS] : [])
+              ...(deps.orch ? [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS] : []),
+              ...(deps.features ?? [])
             ]
           })
           return
@@ -325,7 +345,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           waiting.settle({ ok: m.ok, value: m.value, error: m.error, fromApp: true })
           return
         }
-        if (deps.onMessage?.(m, send) === true) return
+        if (deps.onMessage?.(m, send, { role: roles.get(socket) ?? 'cli', socket: socketNo }) === true) return
         deps.log.write(`unknown message: ${JSON.stringify(v).slice(0, 200)}`)
       },
       onBadLine: (raw) => deps.log.write(`line that is not JSON, ignored: ${raw.slice(0, 200)}`),
@@ -338,7 +358,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       // logged against it after it has already gone.
       greeted()
       sockets.delete(socket)
-      greetedSockets.delete(socket)
+      // Read before the two deletes below: they are what says who this was.
+      const wasGreeted = greetedSockets.delete(socket)
+      const role = roles.get(socket) ?? 'cli'
       roles.delete(socket)
       // Whatever this socket was asked and never answered is refused now. Left in the map it would
       // be a promise nothing can ever settle, and the CLI call waiting behind it would hang for as
@@ -349,6 +371,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           p.settle({ ok: false, error: 'the Astera app disconnected before it answered' })
         }
       live = Math.max(0, live - 1)
+      if (wasGreeted) deps.onClientGone?.({ role, socket: socketNo })
       if (live === 0) armIdle()
     }
     socket.on('close', gone)

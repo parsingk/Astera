@@ -32,6 +32,8 @@ const server = async (
     onMessage?: HostServerDeps['onMessage']
     liveCounts?: HostServerDeps['liveCounts']
     orch?: HostServerDeps['orch']
+    features?: HostServerDeps['features']
+    onClientGone?: HostServerDeps['onClientGone']
   } = {}
 ): Promise<{
   s: HostServer
@@ -57,6 +59,8 @@ const server = async (
     onMessage: over.onMessage,
     liveCounts: over.liveCounts,
     orch: over.orch ?? versionOnlyOrchCall({ version }),
+    features: over.features,
+    onClientGone: over.onClientGone,
     log: { write: (m) => logs.push(m), close: () => {} }
   })
   open.push(s)
@@ -123,6 +127,8 @@ const start = async (
     /** The default is the version-only stub, which is what almost every test here wants. Overridden
      *  by the one test that has to talk to the real command layer over a real socket. */
     orch?: HostServerDeps['orch']
+    onMessage?: HostServerDeps['onMessage']
+    onClientGone?: HostServerDeps['onClientGone']
   } = {}
 ): Promise<{
   address: string
@@ -478,6 +484,35 @@ describe('startHostServer', () => {
     // 영수증도 같은 사실을 탄다 — 명령에 답하지 못하는 Host 는 그 명령을 답했다는 기록도 쥘 수 없다.
     // 이것을 무조건 알리면, 부르는 쪽은 아무도 답하지 않을 호출이 보호받는다고 믿는다.
     expect((reply as { features: string[] }).features).not.toContain('requests')
+  })
+
+  it('announces the extra features it was given, after the built-in ones', async () => {
+    const h = await server({ features: ['spawn'] })
+    const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
+    expect((reply as { features: string[] }).features).toEqual(['proc', 'ping', 'orch', 'requests', 'spawn'])
+  })
+  it('tells onMessage which client sent it, by role and a per-connection number', async () => {
+    const seen: Array<{ t: string; role: string; socket: number }> = []
+    const h = await start({ onMessage: (m, _send, from) => { seen.push({ t: m.t, ...from }); return true } })
+    const app = await h.connect('app'); const cli = await h.connect('cli')
+    app.send({ t: 'pty-list' }); cli.send({ t: 'pty-list' })
+    await vi.waitFor(() => expect(seen).toHaveLength(2))
+    expect(seen.map((x) => x.role).sort()).toEqual(['app', 'cli'])
+    expect(seen[0].socket).not.toBe(seen[1].socket)
+  })
+  it('tells onClientGone when a greeted client closes, with its role', async () => {
+    const gone: Array<{ role: string }> = []
+    const h = await start({ onClientGone: (from) => gone.push(from) })
+    const app = await h.connect('app')
+    app.socket.end()
+    await vi.waitFor(() => expect(gone).toEqual([expect.objectContaining({ role: 'app' })]))
+  })
+  it('does not report a peer that never said hello', async () => {
+    const gone: unknown[] = []
+    const h = await start({ onClientGone: (from) => gone.push(from) })
+    const silent = await h.connectSilent(); silent.end()
+    await new Promise((r) => setTimeout(r, 100))
+    expect(gone).toEqual([])
   })
 
   describe('orch-call', () => {
