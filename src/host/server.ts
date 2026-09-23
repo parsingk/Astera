@@ -85,6 +85,19 @@ export interface HostServerDeps {
 
 export interface HostServer {
   close(): Promise<void>
+  /** Stops taking new clients and keeps the ones connected (Host S2 fix round, I3). A Host that is
+   *  leaving can wait up to SPAWN_DEADLINE_MS for its spawns in flight before `close`, and an app
+   *  replacing it in that time must not reach it: it would hand the leaving Host its new sessions,
+   *  and `killAll` would end them a moment later. So every new connection is destroyed as it lands,
+   *  and the peer reads a hang-up it can retry on.
+   *
+   *  **The listener itself stays open until `close`.** Measured on win32 (2026-09-24): after
+   *  `net.Server.close()` with a client still connected, a new `connect` to the pipe neither connects
+   *  nor fails; it hangs, because the pipe name lives on in the connected instance. A peer told
+   *  nothing waits out its own deadline; one that is hung up on retries at once. A new Host still
+   *  cannot bind the address until this one closes it, so an app converges on the new Host at its
+   *  next attempt after this one has gone. */
+  stopAccepting(): void
   clients(): number
   /** When this Host began serving, the same string its `hello` carries. Exposed so the entry point can
    *  write it where an app that never gets a `hello` can still read it
@@ -187,6 +200,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   // arrives asynchronously, after close() has already returned — without this flag that deferred
   // event would re-arm the idle timer on a server that is already gone, and onIdle() would fire again.
   let closing = false
+  /** Cleared by `stopAccepting`. */
+  let accepting = true
 
   const armIdle = (): void => {
     if (closing) return
@@ -207,6 +222,10 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   }
 
   const server = net.createServer((socket) => {
+    if (!accepting) {
+      socket.destroy()
+      return
+    }
     live += 1
     const socketNo = ++socketSeq
     sockets.add(socket)
@@ -458,6 +477,11 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     broadcast: (m) => {
       const line = encodeLine(m)
       for (const s of greetedSockets) if (!s.destroyed) s.write(line)
+    },
+    stopAccepting: () => {
+      if (!accepting) return
+      accepting = false
+      deps.log.write('leaving — no new clients from here on')
     },
     close: () =>
       new Promise<void>((resolve) => {

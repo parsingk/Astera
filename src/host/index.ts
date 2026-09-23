@@ -118,6 +118,10 @@ async function main(): Promise<void> {
     } catch {
       /* the app validates what it reads there anyway */
     }
+    // No new client from here on, and the ones connected are kept for the settle below: an app that
+    // is replacing this Host must reach the new one, not this one (fix round, I3). `server` is unset
+    // only if the listen itself failed, and that path exits without coming here.
+    server.stopAccepting()
     void (async () => {
       // **The spawns this Host already took finish first** (Host S2 design §8.4, R8), and no new one
       // is taken from here on. Bounded by the app's own spawn deadline: past that, the app has given

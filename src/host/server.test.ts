@@ -223,6 +223,27 @@ describe('startHostServer', () => {
     expect(reply).toMatchObject({ t: 'hello', host: '9.9.9' })
   })
 
+  // Fix round I3: a Host that is leaving waits for its spawns in flight with the address still
+  // bound, and an app replacing it must not reconnect to it in that time. It keeps the clients it has.
+  it('stops accepting new clients, and keeps serving the ones it has', async () => {
+    const h = await start()
+    const app = await h.connect('app')
+    h.s.stopAccepting()
+    const refused = await new Promise<'refused' | 'answered' | 'hung'>((resolve) => {
+      setTimeout(() => resolve('hung'), 2000)
+      const sock = net.connect(h.address)
+      const read = createLineReader({ onMessage: () => { sock.destroy(); resolve('answered') }, onBadLine: () => {}, onHandlerError: () => {} })
+      sock.setEncoding('utf8')
+      sock.on('data', read)
+      sock.on('connect', () => sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' })))
+      sock.on('error', () => resolve('refused'))
+      sock.on('close', () => resolve('refused'))
+    })
+    expect(refused).toBe('refused')
+    h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'still here' })
+    expect(await app.next()).toEqual({ t: 'pty-data', id: 'p1', data: 'still here' })
+  })
+
   it('retire asks the caller to leave', async () => {
     let retired = false
     const h = await server({ onIdle: () => { retired = true } })
