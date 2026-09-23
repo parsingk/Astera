@@ -284,10 +284,12 @@ The Host only reads the file. The last event in the file decides:
 
 | Last event | `state` |
 |---|---|
+| a prompt went to the model (`UserPromptSubmit`) | `working` |
 | a tool call started or returned (`PreToolUse`, `PostToolUse`) | `working` |
-| the turn ended (`Stop`) | `waiting`: the session waits for its next prompt |
-| a notification that asks for a person: a permission prompt, a question, or "waiting for your input" | `waiting` |
-| a notification that only reports something finished, such as a subagent completing | `unknown` |
+| Claude asked a question (`PreToolUse` of `AskUserQuestion`) | `waiting` |
+| the turn ended (`Stop`), or an API error such as a usage limit ended it (`StopFailure`) | `waiting`: the session waits for its next prompt |
+| a notification that this session is waiting on you: a permission prompt, an MCP server's question, or "waiting for your input" | `waiting` |
+| any other notification: something finished, a background agent or a teammate asking for input or permission (these can arrive while the session's own turn runs), a type Astera does not know, or one with no type | `unknown` |
 
 Everything else is `unknown`:
 
@@ -296,16 +298,31 @@ Everything else is `unknown`:
 - **Ended sessions.**
 - **Sessions with no event yet.** Claude Code writes no event when a session starts, and the app
   clears the folder each time it launches. A session reads `unknown` until its first event after that.
-- **Sessions typed into since their last event.** No hook fires when a turn is submitted. So after
-  anything is typed into the session (by you in the tab, by the app, or by `sessions send`),
-  the last event can no longer answer. This covers the next prompt, an answer to a permission
-  prompt, and an Esc that interrupts a turn. The state stays `unknown` until the next event. A Claude
-  session whose tools are not hooked (one without Slack notifications or rolling) therefore usually
-  reads `unknown` while it works, and `waiting` again once the turn ends.
+- **Sessions typed into since their last event.** After anything is typed into the session (by you
+  in the tab, by the app, or by `sessions send`), the last event can no longer answer until the next
+  one lands. This covers an answer to a permission prompt, an Esc that interrupts a turn (which fires
+  no `Stop`), and a local command such as `/clear` or `/model`, which fires no event at all. A
+  prompt you submit reads `unknown` for the moment it takes its `UserPromptSubmit` event to land
+  (about a tenth of a second), then `working`. What the tab's terminal writes by itself does not
+  count as typing: focus changes and its answers to the agent's own queries. Mouse clicks and wheel
+  scrolls over a session that tracks the mouse do count, because a click can answer a dialog.
 - **A last line that is not a whole event**, because it is still being written or is not JSON.
 
 `waiting` means the last event left the session at a prompt, with nothing typed since. It does not
 say what the prompt is. Read the screen before you answer it.
+
+Where the hooks cannot see, `state` can lag or be wrong:
+
+- **Sessions started before this version of Astera** have only the hooks they started with: no
+  `UserPromptSubmit` and no `StopFailure`. They usually read `unknown` while a turn runs, and a turn ended by
+  an API error leaves its last tool event standing, `working`. Open a new session to get the hooks.
+- A permission dialog reads `working` for its first few seconds. Claude Code sends the permission
+  notification only once the dialog has been up that long.
+- A prompt queued while a turn is ending can read `waiting` for a moment, until its own
+  `UserPromptSubmit` lands.
+- Hooks of your own in the account's settings run alongside Astera's. One that blocks a prompt leaves
+  `working` standing until you type, and a `Stop` hook that makes Claude carry on leaves `waiting`
+  standing while it works.
 
 **`sessions read` shows what the session's tab shows.** The Host replays the session's recent output
 into a terminal emulator at the tab's current size and returns what that terminal displays:

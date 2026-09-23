@@ -3,16 +3,25 @@
 // the file itself, so this answers with the app closed: the hook runs inside the agent CLI and keeps
 // appending whether or not the app is there to drain it.
 //
-// **Only what an event means without guessing.** Claude Code runs the capture for four hooks
-// (statusline.ts `everySessionHooks` and the tool pair in the Slack/rolling file): Notification, Stop,
-// PreToolUse and PostToolUse. There is no hook for "a turn was submitted", so no event says a new
-// turn started. What the last event does say:
+// **Only what an event means without guessing.** Claude Code runs the capture for six hooks
+// (statusline.ts `everySessionHooks`, and the wider tool pair in the Slack/rolling file). What the
+// last event says:
+// - UserPromptSubmit: a prompt is going to the model → `working`. Claude Code runs it only for input
+//   that queries the model: a local command (/clear, /model, /config) and bash mode return before
+//   the hook (checked in the 2.1.280 binary), so those leave no turn standing that never starts.
+//   The one way left is another UserPromptSubmit hook of the account's own that blocks the prompt
+//   after this capture ran: no turn, no Stop, and `working` until something is typed.
 // - PreToolUse / PostToolUse: a tool call inside a turn that has not stopped yet → `working`.
+//   Except AskUserQuestion's PreToolUse, which is the question going up on screen → `waiting` (the
+//   same moment main/pendingPrompt.ts draws it as a card). Its PostToolUse is the answer → `working`.
 // - Stop: the turn is over (the edge slack.ts posts its turn summary on) → `waiting` for the next one.
-// - Notification: classified by core/hooks/notification.ts, the rule main/attention.ts, slack.ts,
-//   rolling.ts and desktopNotifier.ts share. A report of something that already happened says
-//   nothing about now → no verdict. Everything else, a type never seen before included, is a screen
-//   waiting on a person → `waiting`, which is the app's own call for an unknown type.
+// - StopFailure: fired *instead of* Stop when an API error (a limit, an auth failure) ends the turn
+//   → `waiting`, for the same reason.
+// - Notification: only the types that say this session itself is waiting on a person → `waiting`.
+//   A report of something finished, a background agent or teammate asking (those arrive while this
+//   session's own turn runs), a type never seen before and an untyped one say nothing about this
+//   session's turn → no verdict. The app's notifiers err toward notifying on an unknown type; a
+//   state errs toward `unknown`, the answer that cannot be wrong.
 //
 // **Where this differs from main/attention.ts, and why.** Attention answers "does this session need
 // you": after a tool call returns it reads `idle`, and a bare `idle_prompt` leaves it alone, because
@@ -20,13 +29,13 @@
 // still inside the turn, and `idle_prompt` ("Claude is waiting for your input") is emitted only when
 // no turn is running. Replaying attention here would report a turn in progress as idle.
 //
-// **Input after the event voids it.** Because nothing announces a new turn, `waiting` after a Stop
-// would stay `waiting` through the whole next turn in a session whose tools are not hooked. So the
-// Host keeps when each pty was last typed into (host/registry.ts), and anything typed after the last
-// event — the next prompt, an answer to a permission prompt, an Esc that interrupts a turn (which
-// fires no Stop) — makes the answer `unknown` until the next event lands.
+// **Input after the event voids it.** Anything typed after the last event — an answer to a
+// permission prompt, an Esc that interrupts a turn (which fires no Stop), a prompt whose
+// UserPromptSubmit has not landed yet — makes the answer `unknown` until the next event lands. The
+// Host keeps when each pty was last typed into (host/registry.ts); the reports the app's terminal
+// writes by itself (focus changes, replies to the TUI's queries) do not count (core/terminal/reports.ts).
 import path from 'node:path'
-import { isNonPromptNotification, type NotificationPayload } from './notification'
+import type { NotificationPayload } from './notification'
 
 export type SessionState = 'working' | 'waiting' | 'unknown'
 
@@ -42,18 +51,29 @@ export function hookEventsFileIn(dir: string, sessionId: string): string {
   return path.join(dir, `${sessionId}.jsonl`)
 }
 
+/** The notification types that mean this session is showing a person something to answer, read off
+ *  their emit sites in Claude Code 2.1.280: `permission_prompt` ("Claude needs your permission to
+ *  use …", after the dialog has been up a few seconds), `elicitation_dialog` (an MCP server's
+ *  question), `idle_prompt` ("Claude is waiting for your input", after a turn ended). Not here:
+ *  `agent_needs_input` (a background agent's "… needs your input") and `worker_permission_prompt`
+ *  (a teammate's permission request), which are about another agent and can arrive mid-turn. */
+const WAITING_TYPES = new Set(['permission_prompt', 'elicitation_dialog', 'idle_prompt'])
+
 /** What one hook payload says the session is doing, or null when it says nothing about that. */
 export function hookEventState(payload: unknown): 'working' | 'waiting' | null {
   if (typeof payload !== 'object' || payload === null) return null
-  const p = payload as { hook_event_name?: unknown } & NotificationPayload
+  const p = payload as { hook_event_name?: unknown; tool_name?: unknown } & NotificationPayload
   switch (p.hook_event_name) {
-    case 'PreToolUse':
+    case 'UserPromptSubmit':
     case 'PostToolUse':
       return 'working'
+    case 'PreToolUse':
+      return p.tool_name === 'AskUserQuestion' ? 'waiting' : 'working'
     case 'Stop':
+    case 'StopFailure':
       return 'waiting'
     case 'Notification':
-      return isNonPromptNotification(p) ? null : 'waiting'
+      return typeof p.notification_type === 'string' && WAITING_TYPES.has(p.notification_type) ? 'waiting' : null
     default:
       return null
   }

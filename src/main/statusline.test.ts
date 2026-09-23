@@ -100,6 +100,24 @@ describe('StatusLineManager 훅 주입', () => {
     expect(settings.hooks.Stop[0].hooks[0].command).toContain('astera-hook-capture.cjs')
     expect(settings.hooks.Notification[0].hooks[0].command).toContain('astera-hook-capture.cjs')
   })
+
+  // `astera sessions list` 의 state 가 읽는 턴의 시작과 오류로 끝난 턴(core/hooks/sessionState.ts).
+  // 둘 다 async — 프롬프트마다 캡처 프로세스를 기다리지 않는다. 두 설정 파일 모두에 든다.
+  it.each(['astera-statusline-settings.json', 'astera-hooks-settings.json'])(
+    '%s 는 UserPromptSubmit 과 StopFailure 를 async 로 캡처한다',
+    async (file) => {
+      const settings = JSON.parse(await fs.readFile(path.join(dir, file), 'utf8'))
+      for (const event of ['UserPromptSubmit', 'StopFailure']) {
+        expect(settings.hooks[event], event).toHaveLength(1)
+        expect(settings.hooks[event][0].matcher, event).toBeUndefined()
+        expect(settings.hooks[event][0].hooks, event).toEqual([
+          { type: 'command', command: settings.hooks.Stop[0].hooks[0].command, async: true }
+        ])
+      }
+      // 이미 있던 훅은 바꾸지 않는다 — 동기 그대로다.
+      expect(settings.hooks.Stop[0].hooks[0].async).toBeUndefined()
+    }
+  )
 })
 
 // What the app reads a session's transcript path out of. The folder used to be wiped at init, on the

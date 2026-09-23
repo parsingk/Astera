@@ -101,6 +101,16 @@ describe('DesktopNotifier — the three events', () => {
     expect(h.shown).toHaveLength(0)
   })
 
+  // The two events the capture records for `astera sessions list` are no desktop event either.
+  it('UserPromptSubmit and StopFailure show nothing', () => {
+    const h = harness({ accountSwitched: true })
+    h.notifier.onHookEvent('s1', { hook_event_name: 'UserPromptSubmit', prompt: 'go' })
+    h.notifier.onHookEvent('s1', { hook_event_name: 'StopFailure', error: 'rate_limit' })
+    h.notifier.onHookEvent('s1', { hook_event_name: 'PreToolUse', tool_use_id: 't1' })
+    h.notifier.onHookEvent('s1', { hook_event_name: 'UserPromptSubmit', prompt: 'again' })
+    expect(h.shown).toHaveLength(0)
+  })
+
   it('other hook events and other roll states are ignored', () => {
     const h = harness({ accountSwitched: true })
     // Stop is Slack's turn notice, not a desktop event — the desktop sink ignores it entirely.

@@ -157,7 +157,17 @@ export class StatusLineManager {
       // waits). Matcher-limited to the one tool so ordinary tool calls pay nothing; the write/execute
       // family stays in the gated file below for the reasons given there.
       PreToolUse: [{ matcher: ASK_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }],
-      PostToolUse: [{ matcher: ASK_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }]
+      PostToolUse: [{ matcher: ASK_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }],
+      // A turn starting and a turn ended by an API error (a limit, an auth failure) — StopFailure fires
+      // *instead of* Stop then. Only `astera sessions list` reads them: the Host tells working from
+      // waiting off the last line (core/hooks/sessionState.ts); attention, pendingPrompt, Slack and
+      // rolling switch on the names they know and pass these by. `async`, so Claude Code does not
+      // wait on the capture's node process (about 0.1 s through Git Bash) before every prompt; it
+      // honours that for both events (2.1.280 forces a hook synchronous only on its SessionStart,
+      // Setup and MessageDisplay passes and on calls from a cloud session). A session reads this file when it starts, so one already running keeps
+      // the hooks it started with.
+      UserPromptSubmit: [{ hooks: [{ type: 'command', command: hookCmd, async: true }] }],
+      StopFailure: [{ hooks: [{ type: 'command', command: hookCmd, async: true }] }]
     }
     const settings = {
       // It is a JSON string, so no shell escaping. Paths are normalised to forward slashes (fine on Windows too).

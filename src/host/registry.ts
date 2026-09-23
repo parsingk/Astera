@@ -4,6 +4,8 @@
 // No `net` here and no node-pty either — the pty arrives as a dependency, so the whole file is
 // testable with a fake and the same code runs under a real ConPTY without a test ever spawning one.
 import type { PtyEntry, PtyMeta, PtyOpenOptions } from '../core/host/protocol'
+// Imports nothing itself, so it adds nothing to the Host bundle but the one pattern.
+import { isOnlyTerminalReports } from '../core/terminal/reports'
 
 /** How much of a dead session's screen goes into the log. A couple of lines is what says which of
  *  "not found", "refused", "printed an error" happened; a whole scrollback in a log file is a
@@ -13,7 +15,8 @@ const LAST_SCREEN_CHARS = 400
 /** The tail of a session's buffer as one printable log line.
  *
  *  **Does not reuse `stripAnsi` (core/rolling/detect.ts) on purpose** — this file states at the top
- *  that it imports nothing outside `core/host/protocol`, because it bundles into the Host's own
+ *  that it imports nothing outside `core/host/protocol` (and `core/terminal/reports`, which imports
+ *  nothing at all), because it bundles into the Host's own
  *  executable; pulling in the rolling module to save four lines would drag its detection machinery
  *  along with it. That is the same reason `PtyOpenOptions` repeats fields instead of importing them. */
 function lastScreen(buffer: string): string {
@@ -66,7 +69,9 @@ interface Entry {
   rows: number
   /** When anything was last typed into this pty, by the app or through the Host, in ms since the
    *  epoch; null until the first write. `sessions list` holds a hook event against it
-   *  (core/hooks/sessionState.ts): input after the event is something the event cannot account for. */
+   *  (core/hooks/sessionState.ts): input after the event is something the event cannot account for.
+   *  A write of nothing but terminal reports (a focus change, a reply to the TUI's own query) is not
+   *  typing, and leaves it alone (core/terminal/reports.ts). */
   lastWriteAt: number | null
 }
 
@@ -172,7 +177,7 @@ export class PtyRegistry {
     const e = this.live(id)
     if (!e) return
     e.pty.write(data)
-    e.lastWriteAt = (this.deps.now ?? Date.now)()
+    if (!isOnlyTerminalReports(data)) e.lastWriteAt = (this.deps.now ?? Date.now)()
   }
 
   /** When `write` last reached this pty, or null for one never written to or never here. */

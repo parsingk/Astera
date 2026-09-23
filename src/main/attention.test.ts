@@ -184,6 +184,29 @@ describe('createAttentionState — set', () => {
   })
 })
 
+// The capture also records UserPromptSubmit and StopFailure now, for `astera sessions list`
+// (core/hooks/sessionState.ts). Neither is this state's business: a turn starting is no reason to
+// raise a banner, and a turn that errored is not something this state has ever tracked.
+describe('createAttentionState — the events it does not read', () => {
+  it('UserPromptSubmit and StopFailure change no value and notify nobody', () => {
+    const state = createAttentionState()
+    const seen: Array<[string, Attention]> = []
+    state.subscribe((id, value) => seen.push([id, value]))
+    state.onHookEvent('w', pre('call-1'))
+    state.onHookEvent('q', pre('call-2'))
+    state.onHookEvent('q', notify('permission_prompt'))
+    seen.length = 0
+    for (const id of ['w', 'q', 'fresh']) {
+      state.onHookEvent(id, { hook_event_name: 'UserPromptSubmit', prompt: 'go' })
+      state.onHookEvent(id, { hook_event_name: 'StopFailure', error: 'rate_limit' })
+    }
+    expect(state.get('w')).toBe('working')
+    expect(state.get('q')).toBe('waiting')
+    expect(state.get('fresh')).toBe('idle')
+    expect(seen).toEqual([])
+  })
+})
+
 describe('createAttentionState — malformed input', () => {
   it('a non-object payload and an unrecognised hook_event_name are ignored rather than throwing', () => {
     const state = createAttentionState()

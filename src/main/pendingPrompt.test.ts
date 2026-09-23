@@ -42,6 +42,19 @@ describe('createPendingPromptState', () => {
     expect(state.get('s1')).toBeNull()
   })
 
+  // The capture also records UserPromptSubmit and StopFailure (for `astera sessions list`); neither
+  // clears or replaces a waiting question here.
+  it('UserPromptSubmit and StopFailure leave the capture alone', () => {
+    const state = createPendingPromptState()
+    const changes: unknown[] = []
+    state.onHookEvent('s1', pre('call-1'))
+    state.subscribe((_id, p) => changes.push(p))
+    state.onHookEvent('s1', { hook_event_name: 'UserPromptSubmit', prompt: 'go' })
+    state.onHookEvent('s1', { hook_event_name: 'StopFailure', error: 'rate_limit' })
+    expect(state.get('s1')?.toolUseId).toBe('call-1')
+    expect(changes).toEqual([])
+  })
+
   it('the latest PreToolUse wins', () => {
     const state = createPendingPromptState()
     state.onHookEvent('s1', pre('call-1', 'Bash', { command: 'ls' }))

@@ -85,6 +85,21 @@ describe('SlackNotifier 훅 이벤트', () => {
     expect(h.sent).toEqual(['[myproj · work1] 🙋 입력 필요 — 권한 승인이 필요합니다'])
   })
 
+  // 캡처가 sessions list 의 state 를 위해 턴 시작(UserPromptSubmit)과 오류로 끝난 턴(StopFailure)도
+  // 적는다. Slack 은 둘 다 모른 체한다 — 턴 끝 요약은 여전히 Stop 에서 한 번만 나간다.
+  it('UserPromptSubmit·StopFailure 훅은 아무것도 보내지 않고, 뒤의 Stop 은 그대로 요약을 보낸다', async () => {
+    const h = setup({ readFileTail: async () => assistantLine('끝') })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'UserPromptSubmit', prompt: '해 줘', transcript_path: 'D:/t.jsonl' })
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'StopFailure', error: 'rate_limit', transcript_path: 'D:/t.jsonl' })
+    await flush()
+    expect(h.sent).toEqual([])
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'Stop', transcript_path: 'D:/t.jsonl' })
+    await flush()
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0]).toContain('✅ 응답 완료')
+  })
+
   it('Notification 훅 → 프리픽스 붙은 입력 필요 알림', async () => {
     const h = setup()
     h.notifier.register(info())

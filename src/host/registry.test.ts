@@ -110,6 +110,28 @@ describe('PtyRegistry', () => {
     expect(r.lastWrite('nope')).toBe(null)
   })
 
+  // The app's xterm writes its own reports into the pty — a focus change, the answer to a query the
+  // agent's TUI sent. They reach the pty (the TUI asked for them), but nobody typed them.
+  it('a write of only terminal reports reaches the pty but is not input; a keystroke is', () => {
+    const esc = String.fromCharCode(27)
+    let clock = 1000
+    const p = fakePty()
+    const r = new PtyRegistry({ spawn: () => p, log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.write('p1', `${esc}[O`)
+    r.write('p1', `${esc}[?12;40R`)
+    expect(p.sent).toEqual([`${esc}[O`, `${esc}[?12;40R`])
+    expect(r.lastWrite('p1')).toBe(null)
+    r.write('p1', `${esc}[A`)
+    expect(r.lastWrite('p1')).toBe(1000)
+    clock = 2000
+    r.write('p1', esc)
+    expect(r.lastWrite('p1')).toBe(2000)
+    clock = 3000
+    r.write('p1', `${esc}[I`)
+    expect(r.lastWrite('p1')).toBe(2000)
+  })
+
   // A message for a session that has gone is ordinary, not exceptional: the app may have sent it
   // before it learned the pty exited.
   it('ignores every command for an id it does not have', () => {
