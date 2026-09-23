@@ -2234,13 +2234,15 @@ describe('task-create --account', () => {
     expect(deps.getState().tasks.at(-1)?.accountIds).toEqual(['acc1'])
   })
 
-  it('목록의 어느 한 칸이라도 모르는 계정이면 거절한다', async () => {
+  // **없는 계정은 404 다** — 적은 id 가 없다는 것이고, `run-create --coordinator-account` 가
+  // 같은 사실을 이미 404 로 말한다. 빈 칸·중복·provider 섞임은 인자가 틀린 것이라 400 그대로다.
+  it('목록의 어느 한 칸이라도 모르는 계정이면 404 로 거절한다', async () => {
     const deps = accountDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
     const r = await call(deps, 'task-create', { runId, spec: 's', account: 'acc1,nope' })
-    expect(r.status).toBe(400)
-    expect((r.body as { error: string }).error).toMatch(/nope/)
+    expect(r.status).toBe(404)
+    expect((r.body as { error: string }).error).toBe('unknown account: nope')
   })
 
   it('같은 계정을 두 번 적으면 거절한다', async () => {
@@ -5268,6 +5270,143 @@ describe('jobs run / questions answer', () => {
 
   it('답이 없으면 거절한다', async () => {
     expect((await call(makeDeps(), 'questions-answer', { id: 'gat_x' })).status).toBe(400)
+  })
+})
+
+/**
+ * **적은 id 가 없으면 어느 명령에서든 404(4) 다.** 없는 id 가 호출자에게 가는 길이 셋이었다 — 직접
+ * `notFound`, `commit()` 의 옮김, 그리고 순수 층의 거절을 `bad()` 로 내보내는 자리들. 마지막 길에서만
+ * 같은 사실이 400(2) 으로 끝나, 4 를 보는 스크립트가 그것을 영영 못 봤다. 반대쪽도 여기서 고정한다:
+ * **있는 것을 적었는데 그 뒤가 어긋난 것은 400 그대로다.**
+ */
+describe('없는 id 는 404 — 순수 층의 거절을 내보내던 자리들', () => {
+  const seedDispatch = async (): Promise<{
+    deps: ReturnType<typeof makeDeps>
+    taskId: string
+    dispatchId: string
+  }> => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc1' })
+    const taskId = (t.body as { id: string }).id
+    const ws = await call(deps, 'worker-start', { task: taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    const dispatchId = (ws.body as { dispatchId: string }).dispatchId
+    return { deps, taskId, dispatchId }
+  }
+  const dropTask = async (deps: ReturnType<typeof makeDeps>, taskId: string): Promise<void> => {
+    const s = deps.getState()
+    await deps.setState({ ...s, tasks: s.tasks.filter((t) => t.id !== taskId) })
+  }
+  const done = (taskId: string, dispatchId: string): Record<string, unknown> => ({
+    type: 'worker_done',
+    taskId,
+    dispatchId,
+    outcome: 'succeeded',
+    subject: 's',
+    body: 'b'
+  })
+
+  // 공개 증상 그 자체다: `astera questions answer --id <없는 id>` 가 2 로 끝났다
+  it('없는 질문에 답하면 404 다 — questions answer 와 gate-resolve 둘 다', async () => {
+    const deps = makeDeps()
+    const a = await call(deps, 'questions-answer', { id: 'gat_nope', answer: 'x' })
+    expect(a).toEqual({ status: 404, body: { error: 'unknown gate: gat_nope' } })
+    const r = await call(deps, 'gate-resolve', { id: 'gat_nope', resolution: 'x' })
+    expect(r).toEqual({ status: 404, body: { error: 'unknown gate: gat_nope' } })
+  })
+
+  // Gate 는 있고 그것이 가리키는 Task 가 없다 — 적은 id 가 없는 것이 아니다
+  it('있는 Gate 의 Task 가 사라진 것은 400 그대로다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const t = await call(deps, 'task-create', { run: deps.getState().runs[0].id, spec: 's', account: 'acc1' })
+    const taskId = (t.body as { id: string }).id
+    const g = await call(deps, 'gate-create', { task: taskId, question: 'q' })
+    expect(g.status).toBe(200)
+    await dropTask(deps, taskId)
+    const gateId = (g.body as { id: string }).id
+    const r = await call(deps, 'gate-resolve', { id: gateId, resolution: 'x' })
+    expect(r).toEqual({ status: 400, body: { error: `unknown task for gate: ${gateId}` } })
+  })
+
+  it('없는 배치를 ack 하면 404 이고 아무것도 쓰지 않는다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const before = deps.getState()
+    const r = await call(deps, 'check', { ack: 'dlv_nope' })
+    expect(r).toEqual({ status: 404, body: { error: 'unknown delivery: dlv_nope' } })
+    expect(deps.getState()).toBe(before)
+  })
+
+  it('없는 Dispatch 의 worker_done 은 404 다', async () => {
+    const { deps, taskId } = await seedDispatch()
+    const r = await call(deps, 'send', done(taskId, 'dsp_nope'))
+    expect(r).toEqual({ status: 404, body: { error: 'unknown dispatch: dsp_nope' } })
+  })
+
+  // 적은 --task-id 가 그 Dispatch 의 Task 와 같은데 그 Task 가 없다 — 적은 id 가 없는 것이다
+  it('Dispatch 는 있고 적은 Task 가 없으면 404 다', async () => {
+    const { deps, taskId, dispatchId } = await seedDispatch()
+    await dropTask(deps, taskId)
+    const r = await call(deps, 'send', done(taskId, dispatchId))
+    expect(r).toEqual({ status: 404, body: { error: `unknown task: ${taskId}` } })
+  })
+
+  // 둘 다 있다 — 짝이 틀린 것은 인자가 틀린 것이다. 적은 Task 가 마침 없어도 거절 문구는 짝을
+  // 말하므로, 그 문구를 404 로 내면 문구와 코드가 서로 다른 것을 말한다.
+  it('Task 와 Dispatch 의 짝이 틀린 것은 400 그대로다', async () => {
+    const { deps, dispatchId } = await seedDispatch()
+    const runId = deps.getState().runs[0].id
+    const other = await call(deps, 'task-create', { run: runId, spec: 's2', account: 'acc1' })
+    for (const taskId of [(other.body as { id: string }).id, 'tsk_nope']) {
+      const r = await call(deps, 'send', done(taskId, dispatchId))
+      expect(r, taskId).toEqual({ status: 400, body: { error: 'taskId does not match dispatch' } })
+    }
+  })
+
+  // 검토 Dispatch 의 보고는 applyReviewResult 로 간다 — 같은 규칙이 그 갈래에도 선다
+  it('검토 보고도 적은 Task 가 없으면 404, 짝이 틀리면 400 이다', async () => {
+    const { deps, taskId, dispatchId } = await seedDispatch()
+    const s = deps.getState()
+    await deps.setState({
+      ...s,
+      dispatches: s.dispatches.map((d) => (d.id === dispatchId ? { ...d, review: true } : d))
+    })
+    expect((await call(deps, 'send', done('tsk_other', dispatchId))).status).toBe(400)
+    await dropTask(deps, taskId)
+    const r = await call(deps, 'send', done(taskId, dispatchId))
+    expect(r).toEqual({ status: 404, body: { error: `unknown task: ${taskId}` } })
+  })
+
+  it('없는 --retry-of 는 404, 다른 Task 의 Dispatch 는 400 이다', async () => {
+    const { deps, taskId, dispatchId } = await seedDispatch()
+    await call(deps, 'send', { ...done(taskId, dispatchId), outcome: 'failed' }, 'sess1')
+    const runId = deps.getState().runs[0].id
+    const other = await call(deps, 'task-create', { run: runId, spec: 's2', account: 'acc1' })
+    const otherId = (other.body as { id: string }).id
+    const start = { task: otherId, agent: 'codex', account: 'acc1', worktree: 'current' }
+    const missing = await call(deps, 'worker-start', { ...start, retryOf: 'dsp_nope' })
+    expect(missing).toEqual({ status: 404, body: { error: 'unknown retryOf dispatch: dsp_nope' } })
+    const wrong = await call(deps, 'worker-start', { ...start, retryOf: dispatchId })
+    expect(wrong).toEqual({
+      status: 400,
+      body: { error: `retryOf dispatch belongs to a different task: ${dispatchId}` }
+    })
+    // 거절은 아무것도 열지 않았다
+    expect(deps.getState().dispatches.filter((d) => d.taskId === otherId)).toEqual([])
+  })
+
+  // ask 는 워커의 명령이라 워커가 남의 Dispatch 를 적으면 403 이 먼저다. 404 는 Dispatch 를 가진
+  // 적이 없는 세션이 적은 id 가 없을 때, 그리고 그 Dispatch 의 Task 가 사라졌을 때다.
+  it('ask 가 적은 Dispatch 나 Task 가 없으면 404 다', async () => {
+    const { deps, taskId, dispatchId } = await seedDispatch()
+    const q = { taskId, question: 'q?', timeoutMs: 50 }
+    const missing = await call(deps, 'ask', { ...q, dispatchId: 'dsp_nope' })
+    expect(missing).toEqual({ status: 404, body: { error: 'unknown dispatch: dsp_nope' } })
+    await dropTask(deps, taskId)
+    const gone = await call(deps, 'ask', { ...q, dispatchId })
+    expect(gone).toEqual({ status: 404, body: { error: `unknown task: ${taskId}` } })
   })
 })
 

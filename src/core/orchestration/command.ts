@@ -353,6 +353,11 @@ const bad = (msg: string): Reply => ({ status: 400, body: { error: msg } })
  *  "그런 id 가 없다"(exit 4)를 구별할 수 있어야 한다(공개 CLI 설계 §8). 그 전에는 둘 다 400 이라
  *  부르는 쪽이 문구를 읽어야 알 수 있었다. */
 const notFound = (msg: string): Reply => ({ status: 404, body: { error: msg } })
+/** A pure-layer refusal handed straight to the caller: 404 when it is marked `missing` (the id the
+ *  caller named is not there — state.ts marks it where it refuses), 400 otherwise. For the cases that
+ *  do not go through `commit()`; the same fact must not exit 4 from one command and 2 from another. */
+const refused = (r: { error: string; missing?: true }): Reply =>
+  r.missing ? notFound(r.error) : bad(r.error)
 const denied = (msg: string): Reply => ({ status: 403, body: { error: msg } })
 const conflict = (msg: string): Reply => ({ status: 409, body: { error: msg } })
 
@@ -512,13 +517,15 @@ function parseAccountList(
   raw: string,
   known: { id: string; provider: Provider }[],
   flag: string
-): { ok: true; ids: string[] } | { ok: false; reason: string } {
+): { ok: true; ids: string[] } | { ok: false; reason: string; missing?: true } {
   const parts = raw.split(',').map((x) => x.trim())
   if (parts.some((x) => x === '')) return { ok: false, reason: `${flag} must not contain an empty entry` }
   const dup = parts.find((x, i) => parts.indexOf(x) !== i)
   if (dup !== undefined) return { ok: false, reason: `${flag} lists ${dup} twice` }
   const unknown = parts.find((x) => !known.some((k) => k.id === x))
-  if (unknown !== undefined) return { ok: false, reason: `unknown account: ${unknown}` }
+  // `missing` is the one refusal here that is about an id the caller named not existing — the
+  // caller answers it 404, the rest 400. Carried as a field so nobody has to read it off the words.
+  if (unknown !== undefined) return { ok: false, reason: `unknown account: ${unknown}`, missing: true }
   const providerOfId = (id: string): Provider => known.find((k) => k.id === id)!.provider
   const head = providerOfId(parts[0])
   const odd = parts.find((x) => providerOfId(x) !== head)
@@ -1090,14 +1097,18 @@ export async function handleCommand(
       // **id 는 Job 이다.** '실행' 은 계획을 푸는 일이고, 회차는 그 결과로 생긴다.
       const job = s.jobs.find((j) => j.id === id)
       if (!job) return notFound(`unknown job: ${id}`)
+      // **Not reachable today.** releaseJob and startJobRun refuse only `unknown job: <id>` — the id
+      // this command was given, which the guard above has just found in the same state. Were that
+      // guard ever to drift from them, the answer is still "no such id", so they go through
+      // `refused` like every other pure-layer refusal here.
       const released = releaseJob(s, id)
-      if (!released.ok) return bad(released.error)
+      if (!released.ok) return refused(released)
       // 예약 Job 은 여기서 회차를 만들지 않는다 — 발화가 만든다. 게이트만 걷힌다.
       let started = released
       let target = released.state.runs.filter((r) => r.jobId === id).at(-1)
       if (job.schedule === undefined && target === undefined) {
         const first = startJobRun(released.state, id, now)
-        if (!first.ok) return bad(first.error)
+        if (!first.ok) return refused(first)
         started = { ok: true, state: first.state, value: job }
         target = first.value
       }
@@ -1302,7 +1313,8 @@ export async function handleCommand(
       // 검증은 parseAccountList 가 한다 — `run-create --coordinator-account` 와 **같은 규칙**이고,
       // 두 번 적으면 한쪽만 고쳐지는 날이 온다(그 함수의 주석).
       const parsedAccounts = parseAccountList(accountArg, await deps.listAccounts(), '--account')
-      if (!parsedAccounts.ok) return bad(parsedAccounts.reason)
+      if (!parsedAccounts.ok)
+        return parsedAccounts.missing ? notFound(parsedAccounts.reason) : bad(parsedAccounts.reason)
       const accountIds: string[] = parsedAccounts.ids
       // `--validate` 는 쉼표 목록이다(설계 D8) — `--account` 와 같은 규약. 옛 단일 값도 한 칸짜리
       // 목록으로 저장한다; validateConfigId 는 더 쓰지 않는다(읽기는 checkConfigIdsOf 가 합친다).
@@ -1641,7 +1653,9 @@ export async function handleCommand(
         },
         now
       )
-      if (!opened.ok) return bad(opened.error)
+      // A `--retry-of` that names nothing is the 404 that reaches here (its `unknown task` is the
+      // up-front check's, already answered above from this same `s`).
+      if (!opened.ok) return refused(opened)
       await deps.setState(opened.state)
       const dispatchId = opened.value.id
       const previousStatus = task.status // value to restore on rollback — the status before openDispatch moved it
@@ -1967,7 +1981,7 @@ export async function handleCommand(
             },
             now
           )
-          if (!r.ok) return bad(r.error)
+          if (!r.ok) return refused(r)
           await deps.setState(withLimit(r.state))
           // 'alreadyReported' 는 아무것도 닫지 않았다(재전송) — 그때 이미 걷혔다
           if (r.value === 'accepted') dropRollingChain()
@@ -2006,7 +2020,7 @@ export async function handleCommand(
           },
           now
         )
-        if (!result.ok) return bad(result.error)
+        if (!result.ok) return refused(result)
         await deps.setState(withLimit(result.state))
         if (result.value === 'accepted') dropRollingChain() // 위 검토 경로와 같은 이유·같은 조건
         // 커밋 뒤에 부른다 — 검증이 먼저 끝나면 아직 validating 이 아닌 Task 에 결과를 쓰게 된다.
@@ -2080,7 +2094,7 @@ export async function handleCommand(
       if (!runId) return bad('no run exists')
       if (str(args.ack)) {
         const acked = ackDelivery(s, { deliveryId: str(args.ack)! }, now)
-        if (!acked.ok) return bad(acked.error)
+        if (!acked.ok) return refused(acked)
         await deps.setState(acked.state)
       }
       const types =
@@ -2168,7 +2182,7 @@ export async function handleCommand(
           },
           now
         )
-        if (!created.ok) return bad(created.error)
+        if (!created.ok) return refused(created)
         await deps.setState(created.state)
         questionId = created.value.id
       }
@@ -2235,7 +2249,7 @@ export async function handleCommand(
       if (!resolution) return bad('--resolution is required')
       const gate = s.gates.find((g) => g.id === gateId)
       const r = resolveGate(s, { gateId, resolution }, now)
-      if (!r.ok) return bad(r.error)
+      if (!r.ok) return refused(r)
       // 소진 Gate 의 두 답(설계 §5.2). **다른 모든 Gate·다른 모든 resolution 은 지금처럼 풀린다** —
       // 이 갈래는 kind 가 'convergence-exhausted' 이고 이번 호출이 실제로 그 Gate 를 닫았을 때만
       // 탄다(위 snapshot 의 `gate.status === 'open'`; resolveGate 는 이미 resolved 인 Gate 를 다시

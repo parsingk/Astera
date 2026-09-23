@@ -65,7 +65,13 @@ export const emptyState = (): OrchState => ({
   projects: []
 })
 
-export type Res<T> = { ok: true; state: OrchState; value: T } | { ok: false; error: string }
+/** `missing` marks the refusal that means **the id the caller named is not there** — set where the
+ *  refusal is made (`gone` below), so a caller can answer it 404 without reading it off the words.
+ *  Only the refusals a command hands straight to its caller carry it; `commit()` in command.ts still
+ *  decides the rest by their `unknown …` prefix. */
+export type Res<T> =
+  | { ok: true; state: OrchState; value: T }
+  | { ok: false; error: string; missing?: true }
 
 /**
  * 이 Task 가 속한 회차의 id.
@@ -164,6 +170,8 @@ export function jobOfRunId(s: OrchState, runId: string): Job | undefined {
 
 const ok = <T>(state: OrchState, value: T): Res<T> => ({ ok: true, state, value })
 const err = <T>(error: string): Res<T> => ({ ok: false, error })
+/** A refusal because the id the caller named does not exist (Res's `missing`). */
+const gone = <T>(error: string): Res<T> => ({ ok: false, error, missing: true })
 
 const replace = <T extends { id: string }>(xs: T[], next: T): T[] =>
   xs.map((x) => (x.id === next.id ? next : x))
@@ -248,7 +256,7 @@ export function createJob(
  */
 export function releaseJob(s: OrchState, jobId: string): Res<Job> {
   const job = s.jobs.find((j) => j.id === jobId)
-  if (!job) return err(`unknown job: ${jobId}`)
+  if (!job) return gone(`unknown job: ${jobId}`)
   if (!job.pendingStart) return ok(s, job)
   // pendingStart 를 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이 코드베이스는
   // 해당 없는 칸을 아예 두지 않는 관례다
@@ -280,7 +288,7 @@ export function releaseJob(s: OrchState, jobId: string): Res<Job> {
  */
 export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRun> {
   const job = s.jobs.find((j) => j.id === jobId)
-  if (!job) return err(`unknown job: ${jobId}`)
+  if (!job) return gone(`unknown job: ${jobId}`)
   // 몇 번째 회차인가. **회차 개수가 아니라 Job 에 새긴 카운터에서 온다** — 개수로 세면 회차를
   // 지우거나 TTL 이 정리할 때 번호가 뒤로 간다(Job.fireCount 의 주석).
   const ordinal = (job.fireCount ?? 0) + 1
@@ -530,7 +538,7 @@ export function openDispatch(
   now: string
 ): Res<Dispatch> {
   const task = s.tasks.find((t) => t.id === a.taskId)
-  if (!task) return err(`unknown task: ${a.taskId}`)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
   if (task.status === 'blocked') return err('task is blocked by an open gate')
   // validating·reviewing 은 판정을 기다리는 중이다 — moveTask/canTransition 만으로는 이제 이것을
   // 막지 못한다: ALLOWED.validating·ALLOWED.reviewing 이 'dispatched' 를 허용하는 것은
@@ -551,7 +559,7 @@ export function openDispatch(
   if (open) return err(`dispatch already open: ${open.id}`)
   if (a.retryOf) {
     const prior = s.dispatches.find((d) => d.id === a.retryOf)
-    if (!prior) return err(`unknown retryOf dispatch: ${a.retryOf}`)
+    if (!prior) return gone(`unknown retryOf dispatch: ${a.retryOf}`)
     if (prior.taskId !== a.taskId)
       return err(`retryOf dispatch belongs to a different task: ${a.retryOf}`)
     // The unconditional open-dispatch guard above (line 132) catches an open dispatch on the same
@@ -618,14 +626,14 @@ export function applyWorkerDone(
   now: string
 ): Res<'accepted' | 'alreadyReported'> {
   const dispatch = s.dispatches.find((d) => d.id === a.dispatchId)
-  if (!dispatch) return err(`unknown dispatch: ${a.dispatchId}`)
+  if (!dispatch) return gone(`unknown dispatch: ${a.dispatchId}`)
   if (dispatch.taskId !== a.taskId) return err('taskId does not match dispatch')
   // Looking at outcome alone does not filter out a stale dispatch that closeDispatch closed (only
   // endedAt, no outcome) — that was the defect where a worker_done arriving late, after the session
   // had ended, hijacked the Task's terminal state.
   if (dispatch.outcome || dispatch.endedAt) return ok(s, 'alreadyReported')
   const task = s.tasks.find((t) => t.id === a.taskId)
-  if (!task) return err(`unknown task: ${a.taskId}`)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
   const run = s.runs.find((r) => r.id === task.runId)
   if (!run) return err(`unknown run for task: ${a.taskId}`)
 
@@ -1147,14 +1155,14 @@ export function applyReviewResult(
   now: string
 ): Res<'accepted' | 'alreadyReported'> {
   const dispatch = s.dispatches.find((d) => d.id === a.dispatchId)
-  if (!dispatch) return err(`unknown dispatch: ${a.dispatchId}`)
+  if (!dispatch) return gone(`unknown dispatch: ${a.dispatchId}`)
   if (!dispatch.review) return err(`not a review dispatch: ${a.dispatchId}`)
   if (dispatch.taskId !== a.taskId) return err('taskId does not match dispatch')
   // applyWorkerDone 과 같은 판정 — outcome 만 보면 closeDispatch 가 닫아 둔(endedAt 만 있고
   // outcome 은 없는) Dispatch 가 걸러지지 않아, 늦게 도착한 보고가 Task 의 종료 상태를 가로챈다.
   if (dispatch.outcome || dispatch.endedAt) return ok(s, 'alreadyReported')
   const task = s.tasks.find((t) => t.id === a.taskId)
-  if (!task) return err(`unknown task: ${a.taskId}`)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
   if (task.status !== 'reviewing') return err(`task is not reviewing: ${task.status}`)
   const lang: Lang = a.lang ?? 'en'
   const nextDispatch: Dispatch = {
@@ -1743,7 +1751,7 @@ export function ackDelivery(
   now: string
 ): Res<Delivery> {
   const d = s.deliveries.find((x) => x.id === a.deliveryId)
-  if (!d) return err(`unknown delivery: ${a.deliveryId}`)
+  if (!d) return gone(`unknown delivery: ${a.deliveryId}`)
   if (d.ackedAt) return ok(s, d)
   const next: Delivery = { ...d, ackedAt: now }
   const ids = new Set(d.messageIds)
@@ -1763,7 +1771,7 @@ export function createQuestion(
   now: string
 ): Res<Message> {
   const dispatch = s.dispatches.find((d) => d.id === a.dispatchId)
-  if (!dispatch) return err(`unknown dispatch: ${a.dispatchId}`)
+  if (!dispatch) return gone(`unknown dispatch: ${a.dispatchId}`)
   if (dispatch.taskId !== a.taskId) return err('taskId does not match dispatch')
   // endedAt counts as terminal here for the same reason as in applyWorkerDone — a new question
   // cannot be attached to a dispatch that closeDispatch closed.
@@ -1773,7 +1781,7 @@ export function createQuestion(
   )
   if (pending) return err('a pending question already exists for this dispatch')
   const task = s.tasks.find((t) => t.id === a.taskId)
-  if (!task) return err(`unknown task: ${a.taskId}`)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
   const { state, message } = pushMessage(
     s,
     {
@@ -1866,7 +1874,7 @@ export function resolveGate(
   now: string
 ): Res<Gate> {
   const gate = s.gates.find((g) => g.id === a.gateId)
-  if (!gate) return err(`unknown gate: ${a.gateId}`)
+  if (!gate) return gone(`unknown gate: ${a.gateId}`)
   if (gate.status === 'resolved') return ok(s, gate)
   const next: Gate = { ...gate, status: 'resolved', resolution: a.resolution, resolvedAt: now }
   const task = s.tasks.find((t) => t.id === gate.taskId)

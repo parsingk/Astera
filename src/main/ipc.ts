@@ -4697,11 +4697,12 @@ export function registerIpc(
     // start"). A 409 that means "not now" rather than "no" would therefore destroy a finished
     // worker's only record. No such 409 is reachable for a queued report today, and this is the
     // third pass at saying so, so here it is exactly: a queued report is `send` and nothing else
-    // (`isQueueableReport`), and every exit of the `send` case is `okBody`, `bad` (400) or `denied`
-    // (403). It never reaches `conflict`, and it never goes through `commit` — so the pure layer's
-    // `unknown …` → 404 mapping is not on this path either. **400 and 403 are the whole set**, and
-    // both are permanent: the same report will be refused the same way at every future start, which
-    // is exactly what `applyPendingReports` deletes the file on the strength of. A new
+    // (`isQueueableReport`), and every exit of the `send` case is `okBody`, `bad` (400), `denied`
+    // (403) or `refused` — which is 404 when the report names a Dispatch, or behind it a Task, that
+    // is not there (`unknown dispatch` / `unknown task` from applyWorkerDone or applyReviewResult),
+    // and 400 for every other refusal. It never reaches `conflict`, and it never goes through
+    // `commit`. **400, 403 and 404 are the whole set**, and all three are permanent: the same report
+    // will be refused the same way at every future start, which is exactly what `applyPendingReports` deletes the file on the strength of. A new
     // `conflict(…)` reachable from `send` would have to be weighed against that before it is added.
     if (pendingReports.length > 0 && parkedByTheOldToggle)
       orchLog(

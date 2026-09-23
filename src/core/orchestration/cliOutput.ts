@@ -142,12 +142,13 @@ export const okEnvelope = (cmd: string, body: unknown, mark: ReplayMark = null):
  *
  * **항목 하나를 적기 전에 세 가지를 묻는다. 셋 다 실제로 한 번씩 틀렸다.**
  *
- * 1. *이 명령이 404 를 내기는 하는가.* 없는 id 가 세 갈래로 갈린다 — 직접 `notFound(...)`,
- *    `commit()` 이 `unknown …` 을 404 로 옮기는 것, 그리고 **순수 층의 `unknown …` 을 `bad()` 로
- *    내보내는 것(400 → 2)**. 세 번째를 빼먹고 적은 항목 셋이 죽어 있었다: `check`(`ackDelivery`·
- *    `nextDelivery` 가 `bad`), `send`(`case` 안에 `commit(` 이 아예 없다), `gate-resolve`
- *    (`resolveGate` 가 `bad`). 그 셋은 여기서 걷어 냈다. `worker-read`·`worker-release` 는 아예
- *    존재 검사를 하지 않아(command.ts 의 worker-release 주석) 404 가 날 자리가 없다.
+ * 1. *Does this command return 404 at all?* A missing id reaches the caller three ways: a direct
+ *    `notFound(...)`, `commit()` mapping `unknown …` to 404, and a pure-layer refusal handed
+ *    straight on. The third used to be `bad()` (400 → 2), and three entries written without
+ *    noticing it were dead and were removed. It is now `refused()`, which answers 404 for a refusal
+ *    state.ts marks `missing`, so `check --ack`, `send`'s worker_done and `gate-resolve` do return
+ *    404 and have entries again. `worker-read` and `worker-release` check no existence at all
+ *    (command.ts, the worker-release note), so they have nowhere to return 404 from.
  * 2. *권하는 명령이 같은 종류의 id 를 내놓는가.* `ask --resume` 은 id 를 `s.messages` 에서
  *    찾는데(`msg_…`) `questions list` 는 `s.gates` 를 준다(`gat_…`) — 줄은 잘 돌고, 거기서 고른
  *    id 는 전부 `not a question` 으로 2 가 된다. **더 나쁜 모양도 있다**: `task-create --run` 에
@@ -195,7 +196,18 @@ const LISTING: Record<string, readonly string[]> = {
   // **메시지다, Gate 가 아니다**(`applyReply` 의 `unknown question: <messageId>`). 이쪽은 부르는
   // 쪽이 코디네이터이므로 `inbox` 를 부를 수 있다.
   reply: ['astera inbox'],
-  'gate-create': ['astera tasks list']
+  'gate-create': ['astera tasks list'],
+  // **A Gate, not a message** — the opposite of `reply`. resolveGate looks in `s.gates`, and
+  // `questions list` lists `s.gates` (`gat_…`). It is public, not coordinator-only.
+  'gate-resolve': ['astera questions list'],
+  // **What was not found is the `--ack` batch.** `check` again hands back the batch still
+  // unacknowledged, and its `deliveryId` (`dlv_…`) is the id to ack; it acks nothing itself, so
+  // nothing is lost. `check` is coordinator-only, and so is the command that hit this 404.
+  check: ['astera check'],
+  // **The Task or Dispatch a worker_done named** — the same two lines as `worker-*`, the first
+  // giving the second its `<taskId>`. `send` is a worker's command, so neither line may be
+  // coordinator-only, and neither is.
+  send: ['astera tasks list', 'astera dispatch-show --task <taskId>']
 }
 
 /** 없는 id 를 말한 명령에게 줄 목록 명령들. */

@@ -187,12 +187,25 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'task-update' })).toEqual(['astera tasks list'])
   })
 
-  // **404 를 내지 않는 명령에 404 안내를 달아 두지 않는다.** 없는 id 가 세 갈래인데 한 갈래를
-  // 빼먹고 적었다: 순수 층의 `unknown …` 을 `bad()` 로 내보내는 명령은 400(2)으로 끝난다.
-  // check·send·gate-resolve 가 그쪽이고, worker-read·worker-release 는 존재 검사 자체가 없다.
+  // **404 를 내지 않는 명령에 404 안내를 달아 두지 않는다.** worker-read·worker-release 는 존재
+  // 검사 자체가 없다.
   it('404 를 낼 수 없는 명령에는 404 항목이 없다', () => {
-    for (const cmd of ['check', 'send', 'gate-resolve', 'worker-read', 'worker-release'])
+    for (const cmd of ['worker-read', 'worker-release'])
       expect(nextStepsFor({ code: 'NOT_FOUND', cmd }), cmd).toEqual(['astera help'])
+  })
+
+  // **이 셋은 이제 404 를 낸다** — 순수 층의 거절을 400 으로 내보내던 자리가 없는 id 를 404 로
+  // 말하게 되었다. 각 줄은 못 찾은 것과 같은 종류의 id 를 내놓고, 그 명령을 부른 쪽이 칠 수 있다.
+  it('check·send·gate-resolve 의 404 는 못 찾은 것의 목록으로 간다', () => {
+    // `--ack` 의 배치 — 다시 부른 check 가 열린 배치의 deliveryId 를 준다
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'check' })).toEqual(['astera check'])
+    // worker_done 의 Task 나 Dispatch — worker-* 와 같은 두 줄, 둘 다 워커가 부를 수 있다
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'send' })).toEqual([
+      'astera tasks list',
+      'astera dispatch-show --task <taskId>'
+    ])
+    // Gate 다 — questions list 가 세는 것이 s.gates 이고 resolveGate 가 찾는 곳도 거기다
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'gate-resolve' })).toEqual(['astera questions list'])
   })
 
   // **`--run` 에 Job id 는 통한다 — 그래서 더 나쁘다.** 회차가 아니라 템플릿에 정의 Task 가 생기고
