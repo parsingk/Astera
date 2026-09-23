@@ -24,6 +24,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { confirmModal } from '../lib/confirm'
 import { CompletionBlock } from './CompletionBlock'
 import { toast } from '../lib/toast'
+import { errText } from '../hooks/useFileOps'
 import {
   LockIcon,
   RunIcon,
@@ -623,9 +624,14 @@ export function RunDetail({
         return
       }
       const reply = await window.api.orch.command(projectPath, 'worker-stop', { dispatch: open.id })
-      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
-    } catch {
-      toast.error(t('jobs.node.failed'))
+      // The refusal's own words, not only "could not": a stop refused because the worker is still
+      // starting, or because the Host could not confirm the kill, says what to do next.
+      if (reply.status >= 400) {
+        const why = (reply.body as { error?: unknown } | null)?.error
+        toast.error(typeof why === 'string' ? t('jobs.node.stopFailed', { detail: why }) : t('jobs.node.failed'))
+      }
+    } catch (err) {
+      toast.error(t('jobs.node.stopFailed', { detail: errText(err) }))
     } finally {
       setBusy(null)
     }

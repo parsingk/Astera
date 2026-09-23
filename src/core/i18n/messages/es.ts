@@ -1240,6 +1240,7 @@ export const es: Catalog = {
   'jobs.node.answerLabel': 'Decisión',
   'jobs.node.gateQuestion': 'Por qué queda en espera',
   'jobs.node.failed': 'No se pudo completar esta acción',
+  'jobs.node.stopFailed': 'No se pudo detener el worker: {detail}',
   // How It Works — comprensión del proyecto
   'hiw.rail.open': 'How It Works',
   'hiw.title': 'How It Works',

@@ -1222,6 +1222,7 @@ export const ja: Catalog = {
   'jobs.node.answerLabel': '決定',
   'jobs.node.gateQuestion': 'なぜ止めるのか',
   'jobs.node.failed': 'この操作を行えませんでした',
+  'jobs.node.stopFailed': 'ワーカーを停止できませんでした: {detail}',
   // How It Works — プロジェクト理解
   'hiw.rail.open': 'How It Works',
   'hiw.title': 'How It Works',

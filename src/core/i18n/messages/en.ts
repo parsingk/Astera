@@ -1300,6 +1300,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.node.answerLabel': 'Decision',
   'jobs.node.gateQuestion': 'Why it is held',
   'jobs.node.failed': 'Could not do that',
+  'jobs.node.stopFailed': 'Could not stop the worker: {detail}',
   // How It Works — project understanding
   'hiw.rail.open': 'How It Works',
   'hiw.title': 'How It Works',

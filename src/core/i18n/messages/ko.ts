@@ -1542,6 +1542,7 @@ export const ko = {
   // 여전히 질문으로 읽히므로 잃는 것이 없다(가이드: a decision block for deciding the task DAG)
   'jobs.node.gateQuestion': '왜 세워 두는지',
   'jobs.node.failed': '이 동작을 하지 못했습니다',
+  'jobs.node.stopFailed': '워커를 멈추지 못했습니다: {detail}',
   // How It Works — 프로젝트 이해
   'hiw.rail.open': 'How It Works',
   'hiw.title': 'How It Works',
