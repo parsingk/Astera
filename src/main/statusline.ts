@@ -49,13 +49,19 @@ process.stdin.on('error', finish)
 // rolling session the tool pair matches more tools), and it appends the stdin payload (JSON) as one
 // line to ASTERA_HOOK_OUT (a per-session jsonl). With that env unset it does nothing.
 //
-// **It stamps when it started, as `astera_at` (HOOK_EVENT_AT), first in the object.** Taken as the first
-// statement, before stdin is read: two async hooks can land out of order, and Claude Code spawns
-// hooks in event order, so the start time is what orders them (core/hooks/eventTime.ts). Spliced in
+// **It stamps when its process started, as `astera_at` (HOOK_EVENT_AT), first in the object.** Two
+// async hooks can land out of order, and Claude Code spawns hooks in event order, so the start time
+// is what orders them (core/hooks/eventTime.ts). The time is `performance.timeOrigin`: when this node
+// process began, as epoch milliseconds with a fraction, so node's own startup (tens of ms, and the
+// part that varies) is not in it. It is closer to Claude's spawn than the script's first statement,
+// and in the same measurement it inverted 2 of 40 pairs spawned at once against 7 for `Date.now()`.
+// The capture runs under whatever `node` the settings command names (bare `node` on PATH on Windows,
+// the resolved one on macOS); a node older than 16 has no global `performance`, and falls back to
+// `Date.now()` taken first, before stdin is read. Spliced in
 // as text rather than parsed and re-serialised, so the payload is written exactly as Claude sent it
 // (a number past 2^53 would not survive a round trip). A payload that is not an object is written as
 // before, with no stamp.
-const HOOK_CAPTURE_SCRIPT = `const at = Date.now()
+const HOOK_CAPTURE_SCRIPT = `const at = typeof performance === 'object' && Number.isFinite(performance.timeOrigin) ? performance.timeOrigin : Date.now()
 const fs = require('fs')
 const out = process.env.ASTERA_HOOK_OUT
 const chunks = []

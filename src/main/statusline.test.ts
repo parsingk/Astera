@@ -123,10 +123,14 @@ describe('StatusLineManager 훅 주입', () => {
   /** Runs the capture script the way Claude Code does: payload on stdin, ASTERA_HOOK_OUT set. The
    *  payload is written only after `stdinDelayMs`, so a stamp taken before stdin is read is earlier
    *  than the write. Returns when it was written and the file's lines. */
-  const capture = async (payload: string, stdinDelayMs = 0): Promise<{ writtenAt: number; lines: string[] }> => {
+  const capture = async (
+    payload: string,
+    stdinDelayMs = 0,
+    env: Record<string, string> = {}
+  ): Promise<{ writtenAt: number; lines: string[] }> => {
     const out = path.join(dir, 'capture-out.jsonl')
     const child = spawn(process.execPath, [path.join(dir, 'astera-hook-capture.cjs')], {
-      env: { ...process.env, ASTERA_HOOK_OUT: out },
+      env: { ...process.env, ASTERA_HOOK_OUT: out, ...env },
       stdio: ['pipe', 'ignore', 'ignore']
     })
     const closed = new Promise((r) => child.on('close', r))
@@ -150,6 +154,22 @@ describe('StatusLineManager 훅 주입', () => {
     expect(p.session_id).toBe('s')
     // 다시 직렬화하지 않는다 — 큰 정수도 적힌 그대로다.
     expect(lines[0]).toContain('"n":12345678901234567890')
+  })
+
+  // 시각은 스크립트의 첫 문장이 아니라 프로세스가 시작한 때다(performance.timeOrigin) — node 가 뜨는
+  // 데 드는 시간과 그 흔들림이 빠진다. 스크립트보다 먼저 도는 --require 가 300ms 를 붙잡아도 시각은
+  // 그 앞이어야 한다. 소수점 아래도 그대로 싣는다.
+  it('시각은 프로세스 시작 시각이라 스크립트 앞의 지연이 들어가지 않는다', async () => {
+    const spin = path.join(dir, 'spin.cjs')
+    await fs.writeFile(spin, 'const e = Date.now() + 300; while (Date.now() < e) {}\n', 'utf8')
+    const before = Date.now()
+    const { lines } = await capture('{"hook_event_name":"Stop"}', 0, {
+      NODE_OPTIONS: `--require "${spin.replace(/\\/g, '/')}"`
+    })
+    const at = JSON.parse(lines[0]).astera_at
+    expect(at).toBeGreaterThanOrEqual(before - 5)
+    expect(at).toBeLessThan(before + 250)
+    expect(lines[0]).toMatch(/^\{"astera_at":\d+(\.\d+)?,"hook_event_name":"Stop"\}$/)
   })
 
   it('객체가 아닌 페이로드는 예전처럼 한 줄로 그대로 붙는다', async () => {

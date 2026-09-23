@@ -9,16 +9,17 @@
 // - a prompt submitted right after a failed turn (typed, or queued and sent at once) appends its
 //   UserPromptSubmit before the previous turn's StopFailure.
 //
-// **The stamp.** The capture script takes `Date.now()` as its first statement, before it reads
-// stdin, and writes it into the line as `HOOK_EVENT_AT`. Claude Code spawns hooks in event order, so
-// the start time is the event order to within the spawn jitter. Measured on Windows through Git Bash
-// with two captures spawned a known gap apart (40 pairs per gap): with a gap of 10 ms or more the
-// stamps never inverted; at 0-3 ms they inverted in up to 7 of 40 pairs, where the landing order
-// inverted in up to 13. So a stamp orders any two events more than a few milliseconds apart, and at
-// worst gets wrong what append order already got wrong.
+// **The stamp.** The capture script writes when its node process started (`performance.timeOrigin`,
+// epoch milliseconds with a fraction; `Date.now()` as its first statement on a node too old to have
+// it) into the line as `HOOK_EVENT_AT`. Claude Code spawns hooks in event order, so the start time is
+// the event order to within the spawn jitter. Measured on Windows through Git Bash with two captures
+// spawned a known gap apart (40 pairs per gap): with a gap of 10 ms or more no stamp ever inverted;
+// spawned at the same moment, the process start time inverted 2 of 40 pairs, a first-statement
+// `Date.now()` 7, and the landing order 13. So a stamp orders any two events more than a few
+// milliseconds apart, and at worst gets wrong what append order already got wrong.
 //
 // **Lines without the stamp** (a capture from before it, whose session has not run a hook since the
-// app rewrote the script) have no time, and a tie is two events in the same millisecond. Neither can
+// app rewrote the script) have no time, and a tie is two events at the same instant. Neither can
 // be ordered by time, so both fall back to the order they landed in, which is today's rule.
 
 /** The field the capture adds. Claude Code's hook payloads use snake_case names of their own
