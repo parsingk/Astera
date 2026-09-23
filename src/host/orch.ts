@@ -10,6 +10,7 @@ import { pendingReportsDirIn, reportedDispatchIdsOf } from '../core/orchestratio
 import { detachCoordinator, type OrchState } from '../core/orchestration/state'
 import { runningRunCount } from '../core/orchestration/running'
 import { isPlaceholderSessionId } from '../core/orchestration/types'
+import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { hostOrchDeps } from './orchDeps'
@@ -336,6 +337,10 @@ export function createHostOrch(a: {
   /** The Host's own spawner (orchDeps' HOST_LOCAL). Null or absent when the Host was started without
    *  the CLI paths, and then every one of those calls takes its pre-S2 route. */
   local?: HostLocal | null
+  /** The spec folder this Host sweeps at its load (Host S2 design §2.7). Given only when the Host
+   *  has a spawner and so announces `spawn`: from then on it writes specs itself, and the app leaves
+   *  the sweep to it. Absent, nothing is swept here and the app's boot sweeps as before. */
+  specsDir?: string
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
 
@@ -378,10 +383,20 @@ export function createHostOrch(a: {
       // has just applied, between this `readdir` and its `readFile`, the log below says "setting
       // aside … — it is not a report this app can read" about a report that applied perfectly well.
       const queued = await readPendingReports({ dir: pendingReportsDirIn(a.profileDir), log: a.log })
+      const alive = a.aliveSessionIds()
       loadResult = await store.load({
-        aliveSessionIds: a.aliveSessionIds(),
+        aliveSessionIds: alive,
         reportedDispatchIds: reportedDispatchIdsOf(queued.map((q) => q.report))
       })
+      // **The stale spec sweep, once, here** (§2.7), after the cleanup because only the cleanup knows
+      // which Dispatches are still open. This load is the one place every writer of that folder is
+      // past its restart: the Host's own spawns wait on `ready()`, and an app in front of a Host
+      // that announces `spawn` does not sweep. The same live set the load judged by, so the two
+      // cannot disagree about a session. It never throws, so it cannot cost the load.
+      if (a.specsDir) {
+        const removed = await sweepStaleSpecFiles({ dir: a.specsDir, state: store.get(), live: alive })
+        if (removed.length > 0) a.log(`spec files — swept ${removed.length} stale file(s) at the Host's load`)
+      }
       loaded = true
     })())
 

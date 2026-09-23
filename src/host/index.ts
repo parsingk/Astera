@@ -197,7 +197,10 @@ async function main(): Promise<void> {
       hookEventsDir: hookEventsDirIn(profileDir),
       accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json'))
     }),
-    local: spawner
+    local: spawner,
+    // The spec sweep goes with the spawner (§2.7): a Host that spawns writes specs and announces
+    // `spawn`, and the app then leaves the sweep to this load. One that does not leaves it to the app.
+    specsDir: spawner ? path.join(profileDir, 'orch', 'specs') : undefined
   })
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and

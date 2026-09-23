@@ -1,3 +1,6 @@
+import { promises as fs } from 'node:fs'
+import path from 'node:path'
+
 /** The coordinator's brief, named for the Run it manages. It lives in the same directory as the
  *  workers' spec files, so the boot sweep has to be able to recognise one; `startCoordinator` writes
  *  it. The name is here, in one place, so those two cannot drift. */
@@ -52,4 +55,36 @@ export function staleSpecFiles(a: {
   // hold an empty name that must not be allowed to match anything.
   const live = new Set(keep.filter((n) => n !== ''))
   return a.files.filter((f) => !live.has(f))
+}
+
+/**
+ * The sweep itself: `staleSpecFiles` over the directory's listing, then each of those files removed.
+ * Run by whichever process owns the sweep: the Host at its own load when it announces `spawn`, since
+ * from then on it writes specs too and is the one process that knows every writer is past its
+ * restart; otherwise the app at its boot, as before.
+ *
+ * **Never throws.** A failed cleanup must never block the load or the boot that runs it: an
+ * unreadable directory yields nothing to delete, and one file that will not go does not cost the rest
+ * their turn. The worst outcome is a stale file nobody reads, which the next sweep retries. The answer
+ * is the names that were removed, for the caller's log line.
+ */
+export async function sweepStaleSpecFiles(a: {
+  dir: string
+  /** The state the restart cleanup produced. */
+  state: {
+    dispatches: readonly { endedAt?: string; specPath: string }[]
+    runs: readonly { id: string; coordinatorSessionId?: string }[]
+  }
+  live: ReadonlySet<string> | 'unknown' | undefined
+}): Promise<string[]> {
+  const files = await fs.readdir(a.dir).catch((): string[] => [])
+  const removed: string[] = []
+  for (const name of staleSpecFiles({ files, dispatches: a.state.dispatches, runs: a.state.runs, live: a.live })) {
+    const gone = await fs
+      .rm(path.join(a.dir, name), { recursive: true, force: true })
+      .then(() => true)
+      .catch(() => false)
+    if (gone) removed.push(name)
+  }
+  return removed
 }

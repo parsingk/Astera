@@ -38,7 +38,7 @@ import { hostPidFilePath, parseHostPidFile } from '../core/host/pidFile'
 import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
-import { hostSpeaksProcs, hostSpeaksPing } from './host/outdated'
+import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn } from './host/outdated'
 import { reattachSessions, type ReattachResult } from './host/reattach'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
@@ -83,7 +83,7 @@ import {
   knowledgeIn,
   specFileName
 } from '../core/orchestration/exec/coordinator'
-import { staleSpecFiles } from '../core/orchestration/exec/specFiles'
+import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
 import {
   handleCommand as orchHandleCommand,
   type OrchServerDeps
@@ -2517,17 +2517,18 @@ export function registerIpc(
     // cleanup rather than before it because only the cleanup knows which Dispatches are still open,
     // now that a worker the Host kept running survives a restart with its Dispatch intact.
     //
-    // A failed cleanup must never block startup, so every step here swallows its own failure: an
-    // unreadable directory yields nothing to delete, and one file that will not go does not cost the
-    // rest their turn. The worst outcome is a stale file nobody reads, which the next boot retries.
-    const swept = store.get()
-    for (const name of staleSpecFiles({
-      files: await fs.readdir(specsDir).catch(() => []),
-      dispatches: swept.dispatches,
-      runs: swept.runs,
-      live: aliveSessionIds
-    }))
-      await fs.rm(path.join(specsDir, name), { recursive: true, force: true }).catch(() => {})
+    // **Two owners, never both** (Host S2 design §2.7). A Host that announces `spawn` writes specs
+    // itself, so a sweep here could delete one it has just written for a worker this app has not
+    // heard of yet; that Host sweeps at its own load instead (`createHostOrch`'s `specsDir`), where
+    // it is the only writer. So this app sweeps only when no such Host is connected: no Host at all,
+    // or an older one that spawns nothing. An older app in front of a spawning Host still sweeps
+    // here, which is the accepted risk of mixing versions.
+    //
+    // `sweepStaleSpecFiles` never throws: a failed cleanup must never block startup, and the worst
+    // outcome is a stale file nobody reads, which the next boot retries.
+    if (!hostSpeaksSpawn(hostClient?.status() ?? { connected: false, features: [] }))
+      await sweepStaleSpecFiles({ dir: specsDir, state: store.get(), live: aliveSessionIds })
+    else orchLog('spec files — the Host sweeps them at its own load (it announces spawn)')
 
     // The restart cleanup is a state transition like any other: every worker it closed as
     // outcome_unknown lands as ATTEMPT_LOST, and Runs the TTL pruned lose their journal rows.

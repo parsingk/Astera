@@ -2120,6 +2120,24 @@ describe('repair refusals (S2)', () => {
   })
 })
 
+describe('the spec sweep at the Host load (S2)', () => {
+  it('sweeps stale spec files once, at its own load, where it is the only writer (§2.7)', async () => {
+    await seed()
+    const specs = path.join(dir, 'orch', 'specs'); await fs.mkdir(specs, { recursive: true })
+    await fs.writeFile(path.join(specs, 'stale.md'), 'x')
+    const orch = orchOver({ specsDir: specs })
+    await orch.ready()
+    expect(await fs.readdir(specs)).toEqual([])
+  })
+  it('sweeps nothing when it was given no specs folder — a Host that does not spawn leaves it to the app', async () => {
+    await seed()
+    const specs = path.join(dir, 'orch', 'specs'); await fs.mkdir(specs, { recursive: true })
+    await fs.writeFile(path.join(specs, 'stale.md'), 'x')
+    await orchOver().ready()
+    expect(await fs.readdir(specs)).toEqual(['stale.md'])
+  })
+})
+
 describe('the Host handles exits (S2)', () => {
   /** One Job, one Run, and one open Dispatch per session id given, each on its own Task. */
   const withDispatches = (sessionIds: string[]): { state: OrchState; runId: string; taskIds: string[] } => {
