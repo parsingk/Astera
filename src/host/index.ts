@@ -24,6 +24,7 @@ import { HOST_PROTOCOL } from '../core/host/protocol'
 import { createHostOrch } from './orch'
 import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
+import { readAccountEntries } from '../core/accounts/accountsFile'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -167,8 +168,14 @@ async function main(): Promise<void> {
     // silence, and a person looking for why nothing happened has nothing to read.
     log: (m) => log.write(m),
     // `astera sessions` — answered from the same two registries, by the app's id for each session,
-    // plus the hook event files the sessions' own hooks append under this profile (read only).
-    sessions: registrySessions({ ptys: registry, procs, hookEventsDir: hookEventsDirIn(profileDir) })
+    // plus the hook event files the sessions' own hooks append under this profile (read only), and
+    // the profile's accounts.json for where a Claude chat session's transcript lives (read only).
+    sessions: registrySessions({
+      ptys: registry,
+      procs,
+      hookEventsDir: hookEventsDirIn(profileDir),
+      accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json'))
+    })
   })
   try {
     server = await startHostServer({

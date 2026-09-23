@@ -1086,7 +1086,8 @@ app.whenReady().then(async () => {
       // see OrchWiring.onTabResumeReady's JSDoc (ipc.ts) and resumeTextDep above.
       onTabResumeReady: (fn) => {
         tabResumeTextRef = fn
-      }
+      },
+      deliverChat: (sid, text) => sessionDriver.deliver(sid, text)
     },
     () => refreshTrayMenu(win), // rebuild Open/Quit in the new language after settings.setLang
     // 위 두 send 탭이 부를 자리를 받아 둔다. registerIpc 가 돌아오면서 바로 채워지고,

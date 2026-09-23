@@ -5636,12 +5636,22 @@ describe('sessions list / read / send', () => {
   const withSessions = (
     listed: HostSession[],
     screen: SessionScreen = { cols: 80, rows: 24, screen: ['D:\\p>echo hi', 'hi'], scrollback: ['older'] }
-  ): { deps: OrchServerDeps; reads: Array<[string, number]>; sent: Array<[string, string, boolean]> } => {
+  ): {
+    deps: OrchServerDeps
+    reads: Array<[string, number]>
+    sent: Array<[string, string, boolean]>
+    chatReads: Array<[string, number]>
+    chatSent: Array<[string, string]>
+  } => {
     const reads: Array<[string, number]> = []
     const sent: Array<[string, string, boolean]> = []
+    const chatReads: Array<[string, number]> = []
+    const chatSent: Array<[string, string]> = []
     return {
       reads,
       sent,
+      chatReads,
+      chatSent,
       deps: {
         ...makeDeps(),
         listSessions: async () => listed,
@@ -5651,6 +5661,14 @@ describe('sessions list / read / send', () => {
         },
         sendSession: async (id, text, enter) => {
           sent.push([id, text, enter])
+        },
+        readChat: async (id, turns) => {
+          chatReads.push([id, turns])
+          return [{ role: 'user', text: '안녕', tools: [] }]
+        },
+        chatSend: async (id, text) => {
+          chatSent.push([id, text])
+          return { sent: true }
         }
       }
     }
@@ -5675,7 +5693,7 @@ describe('sessions list / read / send', () => {
     const r = await call(deps, 'sessions-read', { id: 'ses-1', lines: '5' }, '')
     expect(r).toEqual({
       status: 200,
-      body: { id: 'ses-1', alive: true, cols: 80, rows: 24, screen: ['D:\\p>echo hi', 'hi'], scrollback: ['older'] }
+      body: { id: 'ses-1', kind: 'terminal', alive: true, cols: 80, rows: 24, screen: ['D:\\p>echo hi', 'hi'], scrollback: ['older'] }
     })
     expect(reads).toEqual([['ses-1', 5]])
   })
@@ -5718,15 +5736,96 @@ describe('sessions list / read / send', () => {
     expect([reads, sent]).toEqual([[], []])
   })
 
-  it('대화 세션은 아직 읽지도 치지도 못한다 — 409 에 그렇게 말한다', async () => {
-    const { deps, reads, sent } = withSessions([chat])
-    const read = await call(deps, 'sessions-read', { id: 'chat-1' }, '')
-    expect(read.status).toBe(409)
-    expect(JSON.stringify(read.body)).toMatch(/chat session.*not supported yet/)
-    const send = await call(deps, 'sessions-send', { id: 'chat-1', text: 'x' }, '')
-    expect(send.status).toBe(409)
-    expect(JSON.stringify(send.body)).toMatch(/chat session.*not supported yet/)
-    expect([reads, sent]).toEqual([[], []])
+  // 대화 세션은 화면이 아니라 턴이다(CLI phase D4). 읽는 것은 Host 가 대화 화면의 그 파일에서 한다.
+  it('대화 세션의 read 는 턴을 싣는다 — --turns 의 기본은 20 이다', async () => {
+    const { deps, chatReads, reads } = withSessions([chat])
+    expect(await call(deps, 'sessions-read', { id: 'chat-1' }, '')).toEqual({
+      status: 200,
+      body: { id: 'chat-1', kind: 'chat', alive: true, turns: [{ role: 'user', text: '안녕', tools: [] }] }
+    })
+    await call(deps, 'sessions-read', { id: 'chat-1', turns: '5' }, '')
+    await call(deps, 'sessions-read', { id: 'chat-1', turns: 200 }, '')
+    expect(chatReads).toEqual([
+      ['chat-1', 20],
+      ['chat-1', 5],
+      ['chat-1', 200]
+    ])
+    expect(reads).toEqual([])
+  })
+
+  it('--turns 는 1 이상 200 이하의 정수다 — 아니면 400 이고 Host 에 닿지 않는다', async () => {
+    const { deps, chatReads } = withSessions([chat])
+    for (const turns of ['0', '-1', 'x', '1.5', true, '201'])
+      expect((await call(deps, 'sessions-read', { id: 'chat-1', turns }, '')).status, String(turns)).toBe(400)
+    expect(chatReads).toEqual([])
+  })
+
+  // 한 명령에 두 모양이 있고, 각 플래그는 한쪽에만 뜻이 있다. 조용히 무시하면 사람이 준 것이 안
+  // 먹은 줄 모른다.
+  it('맞지 않는 쪽의 플래그는 400 이다 — 대화에 --lines, 터미널에 --turns, 대화에 --no-enter', async () => {
+    const { deps, reads, chatReads, sent, chatSent } = withSessions([term, chat])
+    const lines = await call(deps, 'sessions-read', { id: 'chat-1', lines: '5' }, '')
+    expect(lines.status).toBe(400)
+    expect(JSON.stringify(lines.body)).toMatch(/--lines .*terminal/)
+    const turns = await call(deps, 'sessions-read', { id: 'ses-1', turns: '5' }, '')
+    expect(turns.status).toBe(400)
+    expect(JSON.stringify(turns.body)).toMatch(/--turns .*chat/)
+    const noEnter = await call(deps, 'sessions-send', { id: 'chat-1', text: 'x', noEnter: true }, '')
+    expect(noEnter.status).toBe(400)
+    expect(JSON.stringify(noEnter.body)).toMatch(/--no-enter .*terminal/)
+    expect([reads, chatReads, sent, chatSent]).toEqual([[], [], [], []])
+  })
+
+  // 카드는 앱만 본다. 앱이 답했을 때만 칸이 있다 — 없음(null)과 볼 수 없음(칸 없음)은 다른 말이다.
+  it('pending 은 앱이 답했을 때만 있다', async () => {
+    const { deps } = withSessions([chat])
+    const read = async (chatPending: OrchServerDeps['chatPending']) =>
+      (await call({ ...deps, chatPending }, 'sessions-read', { id: 'chat-1' }, '')).body as Record<string, unknown>
+    expect(await read(async () => ({ kind: 'approval', summary: 'Bash: npm test' }))).toMatchObject({
+      pending: { kind: 'approval', summary: 'Bash: npm test' }
+    })
+    expect(await read(async () => null)).toMatchObject({ pending: null })
+    // Host 가 앱에 묻지 못했다(orchDeps 의 DEGRADES) — 칸을 싣지 않는다.
+    expect('pending' in (await read(async () => undefined))).toBe(false)
+    expect('pending' in (await read(undefined))).toBe(false)
+  })
+
+  it('대화 세션의 send 는 chatSend 로 넘긴다 — Enter 는 없다', async () => {
+    const { deps, chatSent, sent } = withSessions([chat])
+    expect(await call(deps, 'sessions-send', { id: 'chat-1', text: '다음' }, '')).toEqual({
+      status: 200,
+      body: { id: 'chat-1', sent: true }
+    })
+    expect(chatSent).toEqual([['chat-1', '다음']])
+    expect(sent).toEqual([])
+  })
+
+  // 카드에 답하는 것은 앱에서 사람이 할 일이다. send 로 답하지 않고 무엇이 열렸는지 말한다(R4.3).
+  it('앱이 카드가 열렸다고 하면 409 이고, 그 카드를 이름으로 말한다', async () => {
+    const { deps } = withSessions([chat])
+    const r = await call(
+      { ...deps, chatSend: async () => ({ sent: false, pending: { kind: 'approval', summary: 'Bash: rm -rf out' } }) },
+      'sessions-send',
+      { id: 'chat-1', text: 'x' },
+      ''
+    )
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toMatch(/waiting on an approval: Bash: rm -rf out.*Astera/)
+    const q = await call(
+      { ...deps, chatSend: async () => ({ sent: false, pending: { kind: 'question', summary: '어느 쪽?' } }) },
+      'sessions-send',
+      { id: 'chat-1', text: 'x' },
+      ''
+    )
+    expect(JSON.stringify(q.body)).toMatch(/waiting on a question: 어느 쪽\?/)
+  })
+
+  it('끝난 대화 세션에는 치지 않는다 — 409 다', async () => {
+    const { deps, chatSent } = withSessions([{ ...chat, alive: false }])
+    const r = await call(deps, 'sessions-send', { id: 'chat-1', text: 'x' }, '')
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toMatch(/has ended/)
+    expect(chatSent).toEqual([])
   })
 
   // 붙여 넣고 Enter 를 치는 약속과 그 150ms 는 Host 가 지킨다(host/sessions.ts 의 sendSession).

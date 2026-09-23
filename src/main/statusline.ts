@@ -43,9 +43,10 @@ process.stdin.on('end', finish)
 process.stdin.on('error', finish)
 `
 
-// Hook capture script (node): Claude runs it as the Notification hook — and, for a Slack session, as
-// Stop and the tool pair too — and it appends the stdin payload (JSON) as one line to
-// ASTERA_HOOK_OUT (a per-session jsonl). With that env unset it does nothing.
+// Hook capture script (node): Claude runs it for every hook the settings files below install
+// (Notification, Stop, StopFailure, UserPromptSubmit and the tool pair; for a Slack-notifying or
+// rolling session the tool pair matches more tools), and it appends the stdin payload (JSON) as one
+// line to ASTERA_HOOK_OUT (a per-session jsonl). With that env unset it does nothing.
 const HOOK_CAPTURE_SCRIPT = `const fs = require('fs')
 const out = process.env.ASTERA_HOOK_OUT
 const chunks = []
@@ -164,8 +165,8 @@ export class StatusLineManager {
       // rolling switch on the names they know and pass these by. `async`, so Claude Code does not
       // wait on the capture's node process (about 0.1 s through Git Bash) before every prompt; it
       // honours that for both events (2.1.280 forces a hook synchronous only on its SessionStart,
-      // Setup and MessageDisplay passes and on calls from a cloud session). A session reads this file when it starts, so one already running keeps
-      // the hooks it started with.
+      // Setup and MessageDisplay passes and on calls from a cloud session). A session reads this file
+      // when it starts, so one already running keeps the hooks it started with.
       UserPromptSubmit: [{ hooks: [{ type: 'command', command: hookCmd, async: true }] }],
       StopFailure: [{ hooks: [{ type: 'command', command: hookCmd, async: true }] }]
     }

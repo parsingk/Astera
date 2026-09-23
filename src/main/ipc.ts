@@ -115,6 +115,7 @@ import {
 import { coordinatorLaunchPrompt } from '../core/orchestration/handover'
 import { detachCoordinator, stampPolicySnapshot } from '../core/orchestration/state'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
+import { chatPendingOf } from '../core/sessions/chatRead'
 import type { ChatAnswer, ChatContextUsage, RateLimitInfo } from '../core/chat/types'
 import { chatSessionUsage } from '../core/usage/chatSession'
 import { isPermissionMode } from '../core/chat/types'
@@ -275,6 +276,11 @@ export interface OrchWiring {
    *  `orchRef` was null and Smart Resume was inert regardless of its own setting. index.ts stores the function this hands over separately from `orchRef` and calls it
    *  directly when `orchRef` is null. */
   onTabResumeReady: (fn: (sessionId: string, form: 'handover' | 'update') => Promise<string | null>) => void
+  /** One turn into a chat session through index.ts's session driver — the scheduler's and Slack's
+   *  (`sessionDriver.deliver`), so `astera sessions send` moves the adapter's turn state the way they
+   *  do. Handed over rather than rebuilt here: a second driver is a second place for the seam's
+   *  "a rejection means not sent" contract to drift. */
+  deliverChat: (sessionId: string, text: string) => Promise<void>
 }
 
 /** The index.ts side of the Astera Host (design §4). Its own wiring rather than a member of
@@ -4411,6 +4417,21 @@ export function registerIpc(
           assertAllowedPath: allowingJobCwds(() => store.get().jobs, assertAllowedPath)
         })
         return configs.map(orchRunConfigOf)
+      },
+      // `astera sessions read` 의 pending — 대화 세션이 열어 둔 카드는 어댑터의 프로토콜 상태에만
+      // 있다(CLI phase D4). 모르는 id 에는 null 이다. Host 가 묻고, 앱이 없으면 칸을 싣지 않는다.
+      chatPending: async (sessionId) => chatPendingOf(core.chat.state(sessionId)?.request ?? null),
+      // `astera sessions send` 가 대화 세션에 치는 턴. 스케줄러와 Slack 이 쓰는 그 세션 드라이버로
+      // 넘겨 앱의 턴 상태가 제 것으로 남는다. 카드가 열려 있으면 치지 않고 그 카드를 돌려준다 —
+      // 답은 앱에서 사람이 한다(R4.3). Slack 은 여기서 카드에 답하지만, 셸에서 온 글자를 승인이나
+      // 질문의 답으로 읽는 것은 이 명령의 약속이 아니다.
+      chatSend: async (sessionId, text) => {
+        if (!core.chat.has(sessionId)) throw new Error(`this app does not hold chat session ${sessionId}`)
+        const pending = chatPendingOf(core.chat.state(sessionId)?.request ?? null)
+        if (pending !== null) return { sent: false, pending }
+        if (!orchWiring) throw new Error('orchestration is not wired in this app')
+        await orchWiring.deliverChat(sessionId, text)
+        return { sent: true }
       },
       // checkConfigIdsOf 는 옛 validateConfigId 와 새 validateConfigIds 를 함께 읽으므로, 지금
       // 존재할 수 있는 모든 Task 에 대해 이것으로 충분하다.

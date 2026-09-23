@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync, utimesSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, appendFileSync, utimesSync, mkdirSync, copyFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { PtyRegistry, type RegistryPty } from './registry'
 import { ProcRegistry, type RegistryProc } from './procRegistry'
 import { registrySessions } from './sessions'
 import { ENTER_DELAY_MS } from '../core/sessions/sessionDriver'
+import { encodeUserTurn } from '../core/chat/claudeProtocol'
+import { encodeRequest, turnStartParams } from '../core/chat/codexProtocol'
+import type { Account } from '../core/types'
 
 const ESC = String.fromCharCode(27)
 
@@ -99,7 +102,7 @@ const harness = (size: { cols: number; rows: number } = { cols: 80, rows: 24 }, 
       meta: { kind: 'chat', id: 'chat-1', restore: { accountId: 'acc2', cwd: 'D:/repo', title: '대화' } }
     })
   openChat('proc-a')
-  return { ptys, procs, agent, shell, openChat, procsMade, sessions: registrySessions({ ptys, procs, hookEventsDir }) }
+  return { ptys, procs, agent, shell, openChat, procsMade, sessions: registrySessions({ ptys, procs, hookEventsDir, accounts: async () => [] }) }
 }
 
 describe('registrySessions — list', () => {
@@ -139,7 +142,7 @@ describe('registrySessions — list', () => {
     ptys.open({ id: 'p', file: 'sh', args: [], opts, meta: { kind: 'session', id: 's', restore: { title: 7 } } })
     // And a pty opened with no note at all (an older build, a hand-written client) is nobody.
     ptys.open({ id: 'q', file: 'sh', args: [], opts })
-    expect(await registrySessions({ ptys, procs, hookEventsDir: NO_HOOK_DIR }).listSessions()).toEqual([
+    expect(await registrySessions({ ptys, procs, hookEventsDir: NO_HOOK_DIR, accounts: async () => [] }).listSessions()).toEqual([
       { id: 's', kind: 'terminal', title: null, accountId: null, cwd: null, alive: true, state: 'unknown' }
     ])
   })
@@ -377,6 +380,176 @@ describe('registrySessions — send', () => {
     await sessions.sendSession('trm-1', 'no', false)
     expect(agent.sent).toEqual([])
     expect(shell.sent).toEqual([])
+  })
+})
+
+/**
+ * **A chat session: the conversation from the file the agent CLI writes, and a turn in the app's own
+ * bytes** (CLI phase D4). The line process is the one the app spawned (main/chat/manager.ts), and its
+ * note carries what the Host needs: the provider, the account, the thread and, for Codex, the rollout.
+ */
+describe('registrySessions — chat', () => {
+  const FIXTURES = path.join(__dirname, '..', 'core', 'history', 'fixtures')
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  /** One chat line process with the note the app writes, over a fabricated account whose configDir
+   *  is a temp folder. `written` is every line the process was handed, newline included. */
+  const chatHarness = (restore: Record<string, unknown>) => {
+    const cfg = mkdtempSync(path.join(os.tmpdir(), 'astera-chat-cfg-'))
+    dirs.push(cfg)
+    const written: string[] = []
+    let exit: (code: number) => void = () => {}
+    const ptys = new PtyRegistry({ spawn: fakePty, log: () => {} })
+    const procs = new ProcRegistry({
+      spawn: () => ({
+        pid: 3,
+        onData: () => {},
+        onExit: (cb) => {
+          exit = (code) => cb({ exitCode: code })
+        },
+        write: (d) => {
+          written.push(d)
+        },
+        kill: () => {}
+      }),
+      log: () => {}
+    })
+    procs.open({
+      id: 'proc-x',
+      file: 'claude',
+      args: [],
+      opts: { cwd: 'D:/repo', env: {} },
+      meta: { kind: 'chat', id: 'chat-9', restore: { accountId: 'acc-c', cwd: 'D:/repo', title: '대화', ...restore } }
+    })
+    const account: Account = { id: 'acc-c', label: 'c', configDir: cfg, color: '#fff', createdAt: '2026-09-23T00:00:00.000Z' }
+    let n = 0
+    const sessions = registrySessions({
+      ptys,
+      procs,
+      hookEventsDir: NO_HOOK_DIR,
+      accounts: async () => [account],
+      mintId: () => `id-${++n}`
+    })
+    return { sessions, written, cfg, exit: () => exit(0) }
+  }
+  /** The transcript where the Claude rule looks for it: <configDir>/projects/<slug>/<threadId>.jsonl. */
+  const plantTranscript = (cfg: string, threadId: string) => {
+    mkdirSync(path.join(cfg, 'projects', 'D--repo'), { recursive: true })
+    copyFileSync(path.join(FIXTURES, 'conversation-turn.jsonl'), path.join(cfg, 'projects', 'D--repo', `${threadId}.jsonl`))
+  }
+
+  it('reads a Claude session from its transcript under the account’s configDir, by the thread in the note', async () => {
+    const { sessions, cfg } = chatHarness({ provider: 'claude', threadId: 'th-claude' })
+    plantTranscript(cfg, 'th-claude')
+    const turns = await sessions.readChat('chat-9', 20)
+    expect(turns.map((t) => t.role)).toEqual(['user', 'assistant', 'user'])
+    expect(turns[2]).toEqual({ role: 'user', text: '일반으로 바꾸자', tools: [] })
+    expect((await sessions.readChat('chat-9', 2)).map((t) => t.role)).toEqual(['assistant', 'user'])
+  })
+
+  // The file is the agent's and outlives the process; the note stays on the ended entry.
+  it('an ended chat session still reads from its file', async () => {
+    const { sessions, cfg, exit } = chatHarness({ provider: 'claude', threadId: 'th-claude' })
+    plantTranscript(cfg, 'th-claude')
+    exit()
+    expect(await sessions.readChat('chat-9', 20)).toHaveLength(3)
+  })
+
+  it('reads a Codex session from the rollout path in its note', async () => {
+    const { sessions } = chatHarness({ provider: 'codex', threadId: 'th-codex', rolloutPath: path.join(FIXTURES, 'codex-rollout.jsonl') })
+    const turns = await sessions.readChat('chat-9', 20)
+    expect(turns.map((t) => t.text)).toEqual([
+      '빌드가 왜 깨지는지 봐줘',
+      '먼저 빌드 로그를 보겠습니다.\n\n타입이 안 맞습니다. 고치겠습니다.\n\n고쳤습니다. 빌드가 지나갑니다.',
+      '고마워'
+    ])
+  })
+
+  // A brand-new session has no file yet (Claude writes it with the first turn; Codex may not have
+  // named its rollout), and an unknown account has no folder to look in. None of them is an error.
+  it('no transcript yet, no thread, no rollout path or no such account is an empty conversation', async () => {
+    expect(await chatHarness({ provider: 'claude', threadId: 'th-none' }).sessions.readChat('chat-9', 20)).toEqual([])
+    expect(await chatHarness({ provider: 'claude' }).sessions.readChat('chat-9', 20)).toEqual([])
+    expect(await chatHarness({ provider: 'codex', threadId: 't' }).sessions.readChat('chat-9', 20)).toEqual([])
+    const other = chatHarness({ provider: 'claude', threadId: 'th-claude', accountId: 'acc-gone' })
+    plantTranscript(other.cfg, 'th-claude')
+    expect(await other.sessions.readChat('chat-9', 20)).toEqual([])
+  })
+
+  it('an id that is not a chat session reads as empty', async () => {
+    const { sessions } = chatHarness({ provider: 'claude', threadId: 'th' })
+    expect(await sessions.readChat('proc-x', 20)).toEqual([])
+  })
+
+  // The app's own encoder, and the registry adds the newline the app's proc-write gets from the Host.
+  it('sends a Claude turn as exactly encodeUserTurn’s line', async () => {
+    const { sessions, written } = chatHarness({ provider: 'claude', threadId: 'th' })
+    await sessions.sendChat('chat-9', '다음으로 가자')
+    expect(written).toEqual([encodeUserTurn('다음으로 가자') + '\n'])
+  })
+
+  // turn/start on the thread in the note, with an id of the Host's own that the app's adapter never
+  // mints; the adapter's replay tolerates a response to an id it did not send.
+  it('sends a Codex turn as turn/start on the note’s thread', async () => {
+    const { sessions, written } = chatHarness({ provider: 'codex', threadId: 'th-codex', rolloutPath: null })
+    await sessions.sendChat('chat-9', 'go on')
+    expect(written).toEqual([
+      encodeRequest(
+        'id-1',
+        'turn/start',
+        turnStartParams({ threadId: 'th-codex', text: 'go on', model: null, effort: null, planMode: false, planEffort: null, threadModel: null })
+      ) + '\n'
+    ])
+    expect(JSON.parse(written[0])).toEqual({ id: 'id-1', method: 'turn/start', params: { threadId: 'th-codex', input: [{ type: 'text', text: 'go on' }] } })
+  })
+
+  it('refuses a Codex turn with no thread yet, an ended session, and a provider it does not know, writing nothing', async () => {
+    const noThread = chatHarness({ provider: 'codex' })
+    await expect(noThread.sessions.sendChat('chat-9', 'x')).rejects.toThrow(/no Codex thread yet/)
+    expect(noThread.written).toEqual([])
+    const ended = chatHarness({ provider: 'claude', threadId: 'th' })
+    ended.exit()
+    await expect(ended.sessions.sendChat('chat-9', 'x')).rejects.toThrow(/has ended/)
+    const odd = chatHarness({ provider: 'gemini' })
+    await expect(odd.sessions.sendChat('chat-9', 'x')).rejects.toThrow(/provider/)
+    expect(odd.written).toEqual([])
+  })
+
+  // What orchDeps runs both routes of a chat send through: one at a time per session, in call order,
+  // and a failure does not hold up the next.
+  it('serial runs one at a time per session, in order, past a failure', async () => {
+    const { sessions } = chatHarness({ provider: 'claude', threadId: 'th' })
+    const order: string[] = []
+    let release: () => void = () => {}
+    const first = sessions.serial(
+      'chat-9',
+      () =>
+        new Promise<void>((resolve) => {
+          release = () => {
+            order.push('a')
+            resolve()
+          }
+        })
+    )
+    const second = sessions.serial('chat-9', async () => {
+      order.push('b')
+      throw new Error('no')
+    })
+    const third = sessions.serial('chat-9', async () => {
+      order.push('c')
+      return 3
+    })
+    await sessions.serial('chat-other', async () => {
+      order.push('x')
+    })
+    expect(order).toEqual(['x'])
+    release()
+    await first
+    await expect(second).rejects.toThrow('no')
+    expect(await third).toBe(3)
+    expect(order).toEqual(['x', 'a', 'b', 'c'])
   })
 })
 

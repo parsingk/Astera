@@ -90,7 +90,13 @@ const NESTED = {
 const DEGRADES = {
   repairTargetFor: () => null,
   repairOnce: (why: string) => ({ ok: false as const, error: why }),
-  lang: () => 'en'
+  lang: () => 'en',
+  // **`chatPending` joined in CLI phase D4.** The card a chat session holds open is in the app's
+  // adapter and nowhere the Host can read. `undefined` is this dependency's own word for "could not
+  // be asked" (command.ts): `sessions read` then leaves `pending` out, rather than answering `null`,
+  // which would claim there is no card. Refusing would cost the whole read, and the conversation
+  // itself is the Host's to give.
+  chatPending: () => undefined
 } as const
 
 /**
@@ -175,10 +181,33 @@ const LOCAL_FILE: Record<(typeof LOCAL_WHEN_ABSENT)[number], string> = {
  *
  * Never refused, so never `onAppRequired`: nothing here needs the app.
  */
-const HOST_SESSIONS = ['listSessions', 'readSession', 'sendSession'] as const
+const HOST_SESSIONS = ['listSessions', 'readSession', 'sendSession', 'readChat'] as const
+
+/**
+ * **Forwarded when the app is attached, and done by the Host itself when none is** (CLI phase D4).
+ *
+ * `chatSend` types a turn into a chat session. With the app there it must be the app's to deliver:
+ * its session driver (the one the scheduler and Slack use) moves the adapter's turn state with the
+ * write, and only the app can see a card the turn would land behind. With no app there is no turn
+ * state to keep in step; the Host writes the adapter's own bytes to the process (`HostSessions.
+ * sendChat`), and the app, when it comes back, replays the process's output into a fresh adapter
+ * and re-reads the transcript, which is how it already rebuilds a turn run while it was closed.
+ *
+ * **Not LOCAL_WHEN_ABSENT, and the difference is an app that stops answering mid-question.** A read
+ * can be asked again from the file; a send cannot: the app may already have delivered it, and a
+ * second write from the Host is the same turn twice. So only "no app attached" falls to the Host.
+ * An app that went away mid-flight, or held the question past its deadline, is `onAppRequired` and
+ * a refusal, like PROPAGATES. A local write that cannot be made (a Codex session with no thread yet)
+ * is the app being required after all, and is refused the same way.
+ *
+ * Both routes run inside `HostSessions.serial`, so sends to one session go one at a time and in call
+ * order whichever route each takes, and both are effects: the funnel marks the forwarded one, and
+ * the local one is marked here before it writes.
+ */
+const HOST_WHEN_ABSENT = ['chatSend'] as const
 
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
-const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING, ...LOCAL_WHEN_ABSENT]
+const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
  *  synchronous getters became `T | Promise<T>` in `command.ts` and are awaited at their one call site
@@ -192,6 +221,7 @@ type Classified =
   | keyof typeof DEGRADES
   | (typeof LOCAL_WHEN_ABSENT)[number]
   | (typeof HOST_SESSIONS)[number]
+  | (typeof HOST_WHEN_ABSENT)[number]
 
 /**
  * **Whether calling this dependency changes something outside the state** (request receipts design
@@ -254,13 +284,17 @@ const EFFECTFUL: Record<Classified, boolean> = {
   repairTargetFor: false,
   repairOnce: true,
   lang: false,
+  chatPending: false,
   // LOCAL_WHEN_ABSENT — a read either way, from the app or from its file.
   listAccounts: false,
   listRunConfigs: false,
   // HOST_SESSIONS. Reading a screen twice leaves it as it was; typing twice types twice.
   listSessions: false,
   readSession: false,
-  sendSession: true
+  sendSession: true,
+  readChat: false,
+  // HOST_WHEN_ABSENT — a turn, on either route.
+  chatSend: true
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -321,7 +355,8 @@ export function hostOrchDeps(a: {
   /** `listRunConfigs` answered from the profile's run-configs.json and the project folder
    *  (LOCAL_WHEN_ABSENT). Rejects when the file cannot be read, with a message that says how to repair it. */
   readRunConfigs(projectPath: string): Promise<OrchRunConfig[]>
-  /** The Host's own sessions (HOST_SESSIONS), out of its two registries (`host/sessions.ts`). */
+  /** The Host's own sessions (HOST_SESSIONS), out of its two registries (`host/sessions.ts`), and
+   *  the local half and the per-session order of `chatSend` (HOST_WHEN_ABSENT). */
   sessions: HostSessions
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
@@ -423,6 +458,26 @@ export function hostOrchDeps(a: {
       void act(name, args).catch((err) => a.log(`${name} failed in the app: ${String(err)}`))
     }
 
+  /** HOST_WHEN_ABSENT: to the app when one is attached, else the Host's own write — see that group
+   *  for why an app that fails mid-flight is refused rather than written for. */
+  const hostWhenAbsent = (name: (typeof HOST_WHEN_ABSENT)[number]) =>
+    (id: string, text: string): Promise<unknown> =>
+      a.sessions.serial(id, async () => {
+        if (a.hasApp()) return forward(name, true)(id, text)
+        if (EFFECTFUL[name]) a.onEffect?.()
+        try {
+          await a.sessions.sendChat(id, text)
+        } catch (err) {
+          const refused = new AppUnreachable(
+            `APP_REQUIRED: ${name} could not be done without the app: ${err instanceof Error ? err.message : String(err)}`
+          )
+          a.onAppRequired(name, refused.message)
+          throw refused
+        }
+        a.log(`${name} written by the Host (no app attached)`)
+        return { sent: true }
+      })
+
   /** HOST_SESSIONS: the Host's own answer, marked as an effect before it runs when it is one. */
   const own = <K extends (typeof HOST_SESSIONS)[number]>(name: K): HostSessions[K] => {
     const fn = a.sessions[name] as (...args: unknown[]) => unknown
@@ -438,6 +493,8 @@ export function hostOrchDeps(a: {
       if (name in DEGRADES) return [name, degrading(name, DEGRADES[name as keyof typeof DEGRADES])]
       if (name === 'listAccounts') return [name, localWhenAbsent(name, a.readAccounts)]
       if (name === 'listRunConfigs') return [name, localWhenAbsent(name, a.readRunConfigs)]
+      if ((HOST_WHEN_ABSENT as readonly string[]).includes(name))
+        return [name, hostWhenAbsent(name as (typeof HOST_WHEN_ABSENT)[number])]
       return [name, forward(name, (PROPAGATES as readonly string[]).includes(name))]
     })
   )
@@ -461,6 +518,7 @@ export function hostOrchDeps(a: {
     listSessions: own('listSessions'),
     readSession: own('readSession'),
     sendSession: own('sendSession'),
+    readChat: own('readChat'),
     ...remote,
     ...nested
   } as unknown as OrchServerDeps

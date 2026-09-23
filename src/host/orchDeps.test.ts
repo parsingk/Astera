@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { hostOrchDeps } from './orchDeps'
 import { AppUnreachable } from '../core/host/orchProtocol'
+import os from 'node:os'
+import path from 'node:path'
+import { PtyRegistry } from './registry'
+import { ProcRegistry } from './procRegistry'
+import { registrySessions } from './sessions'
+import { encodeUserTurn } from '../core/chat/claudeProtocol'
 
 const base = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): Parameters<typeof hostOrchDeps>[0] => ({
   getState: () => ({}) as never,
@@ -15,7 +21,7 @@ const base = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): Parameter
   onAppRequired: () => {},
   readAccounts: vi.fn().mockResolvedValue([]),
   readRunConfigs: vi.fn().mockResolvedValue([]),
-  sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} },
+  sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {}, readChat: async () => [], sendChat: async () => {}, serial: (_id, run) => run() },
   ...over
 })
 
@@ -286,7 +292,10 @@ describe('hostOrchDeps', () => {
         { id: 's1', kind: 'terminal' as const, title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'waiting' as const }
       ]),
       readSession: vi.fn(async () => ({ cols: 80, rows: 24, screen: ['screen'], scrollback: [] })),
-      sendSession: vi.fn(async () => {})
+      sendSession: vi.fn(async () => {}),
+      readChat: vi.fn(async () => []),
+      sendChat: vi.fn(async () => {}),
+      serial: <T,>(_id: string, run: () => Promise<T>) => run()
     })
 
     it('앱이 없어도 앱에 묻지 않고 답하며, 앱 문제로 표시하지 않는다', async () => {
@@ -322,6 +331,152 @@ describe('hostOrchDeps', () => {
       expect(n).toBe(0)
       await deps.sendSession?.('s1', 'x', true)
       expect(n).toBe(1)
+    })
+  })
+
+  /**
+   * **대화 세션은 둘로 갈린다**(CLI phase D4). 읽기는 Host 가 파일에서 한다 — 앱이 있어도. 열린 카드는
+   * 앱만 알고, 물을 수 없으면 모른다고(undefined) 답한다. 치기는 앱이 있으면 앱의 세션 드라이버로,
+   * 없으면 Host 가 어댑터의 바이트를 직접 쓴다. 두 길 모두 "움직였다" 이고, 세션마다 한 번에 하나다.
+   *
+   * 진짜 레지스트리 위에서 — 가짜 줄 프로세스가 받은 줄을 센다.
+   */
+  describe('대화 세션 — 읽기는 Host, 카드는 앱, 치기는 앱이 있으면 앱', () => {
+    const chatHost = (restore: Record<string, unknown> = { provider: 'claude', threadId: 'th' }) => {
+      const written: string[] = []
+      const procs = new ProcRegistry({
+        spawn: () => ({
+          pid: 7,
+          onData: () => {},
+          onExit: () => {},
+          write: (d: string) => {
+            written.push(d)
+          },
+          kill: () => {}
+        }),
+        log: () => {}
+      })
+      procs.open({
+        id: 'proc-1',
+        file: 'claude',
+        args: [],
+        opts: { cwd: 'D:/p', env: {} },
+        meta: { kind: 'chat', id: 'chat-1', restore: { accountId: 'acc', cwd: 'D:/p', ...restore } }
+      })
+      const ptys = new PtyRegistry({ spawn: () => { throw new Error('no ptys') }, log: () => {} })
+      const sessions = registrySessions({ ptys, procs, hookEventsDir: path.join(os.tmpdir(), 'astera-orchdeps-no-hooks'), accounts: async () => [] })
+      return { written, sessions }
+    }
+
+    it('카드는 앱이 있으면 앱에 묻고, 없으면 모른다(undefined) — 앱 문제로 표시하지 않는다', async () => {
+      const act = vi.fn().mockResolvedValue({ kind: 'approval', summary: 'Bash: npm test' })
+      const refused: string[] = []
+      const withApp = hostOrchDeps(base({ act, onAppRequired: (n) => refused.push(n) }))
+      expect(await withApp.chatPending?.('chat-1')).toEqual({ kind: 'approval', summary: 'Bash: npm test' })
+      expect(act).toHaveBeenCalledWith('chatPending', ['chat-1'])
+      const act2 = vi.fn()
+      const noApp = hostOrchDeps(base({ act: act2, hasApp: () => false, onAppRequired: (n) => refused.push(n) }))
+      expect(await noApp.chatPending?.('chat-1')).toBeUndefined()
+      expect(act2).not.toHaveBeenCalled()
+      const gone = hostOrchDeps(base({ act: vi.fn().mockRejectedValue(new AppUnreachable('APP_REQUIRED: gone')) }))
+      expect(await gone.chatPending?.('chat-1')).toBeUndefined()
+      expect(refused).toEqual([])
+    })
+
+    it('읽기는 앱이 있어도 Host 가 한다', async () => {
+      const act = vi.fn()
+      const readChat = vi.fn(async () => [{ role: 'user' as const, text: 'hi', tools: [] }])
+      const deps = hostOrchDeps(base({ act, sessions: { ...base().sessions, readChat } }))
+      expect(await deps.readChat?.('chat-1', 20)).toEqual([{ role: 'user', text: 'hi', tools: [] }])
+      expect(readChat).toHaveBeenCalledWith('chat-1', 20)
+      expect(act).not.toHaveBeenCalled()
+    })
+
+    it('앱이 있으면 치기는 앱으로 간다 — Host 는 아무것도 쓰지 않는다', async () => {
+      const { written, sessions } = chatHost()
+      const act = vi.fn().mockResolvedValue({ sent: true })
+      let acted = 0
+      const deps = hostOrchDeps(base({ act, sessions, onEffect: () => acted++ }))
+      expect(await deps.chatSend?.('chat-1', '다음')).toEqual({ sent: true })
+      expect(act).toHaveBeenCalledWith('chatSend', ['chat-1', '다음'])
+      expect(written).toEqual([])
+      expect(acted).toBe(1)
+    })
+
+    it('앱이 카드 때문에 거절한 답은 그대로 돌아온다 — Host 가 대신 쓰지 않는다', async () => {
+      const { written, sessions } = chatHost()
+      const refusal = { sent: false, pending: { kind: 'question', summary: '어느 쪽?' } }
+      const deps = hostOrchDeps(base({ act: vi.fn().mockResolvedValue(refusal), sessions }))
+      expect(await deps.chatSend?.('chat-1', 'x')).toEqual(refusal)
+      expect(written).toEqual([])
+    })
+
+    it('앱이 없으면 Host 가 어댑터의 바이트를 쓴다 — Claude 는 encodeUserTurn 한 줄', async () => {
+      const { written, sessions } = chatHost()
+      const act = vi.fn()
+      let acted = 0
+      const refused: string[] = []
+      const deps = hostOrchDeps(base({ act, sessions, hasApp: () => false, onEffect: () => acted++, onAppRequired: (n) => refused.push(n) }))
+      expect(await deps.chatSend?.('chat-1', '다음')).toEqual({ sent: true })
+      expect(written).toEqual([encodeUserTurn('다음') + '\n'])
+      expect(act).not.toHaveBeenCalled()
+      expect(acted).toBe(1)
+      expect(refused).toEqual([])
+    })
+
+    // 스레드가 아직 없는 Codex 는 Host 가 turn/start 를 쓸 곳이 없다 — 앱이 있어야 한다는 거절이다.
+    it('앱이 없는데 Host 도 쓸 수 없으면 앱이 필요하다는 거절이다', async () => {
+      const { written, sessions } = chatHost({ provider: 'codex' })
+      const refused: string[] = []
+      const deps = hostOrchDeps(base({ sessions, hasApp: () => false, onAppRequired: (n) => refused.push(n) }))
+      const err = await deps.chatSend?.('chat-1', 'x').catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(AppUnreachable)
+      expect(String(err)).toMatch(/no Codex thread yet/)
+      expect(refused).toEqual(['chatSend'])
+      expect(written).toEqual([])
+    })
+
+    // **앱이 도중에 사라진 것은 "앱이 없다" 와 다르다.** 앱이 이미 보냈을 수 있다 — Host 가 이어서 쓰면
+    // 같은 턴이 두 번 간다. 그래서 거절하고, 쓰지 않는다.
+    it('앱이 답하지 못했으면 Host 가 대신 쓰지 않고 거절한다', async () => {
+      const { written, sessions } = chatHost()
+      const refused: string[] = []
+      let acted = 0
+      const deps = hostOrchDeps(
+        base({ act: vi.fn().mockRejectedValue(new AppUnreachable('APP_REQUIRED: gone')), sessions, onEffect: () => acted++, onAppRequired: (n) => refused.push(n) })
+      )
+      await expect(deps.chatSend?.('chat-1', 'x')).rejects.toBeInstanceOf(AppUnreachable)
+      expect(written).toEqual([])
+      expect(refused).toEqual(['chatSend'])
+      expect(acted).toBe(1)
+    })
+
+    // 세션마다 한 번에 하나 — 앱으로 가는 길도. 먼저 친 것이 끝나야 다음 것을 묻는다.
+    it('세션마다 차례대로 — 앞의 것이 끝나야 다음 것이 앱에 간다', async () => {
+      const { sessions } = chatHost()
+      let release: () => void = () => {}
+      const act = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise((r) => (release = () => r({ sent: true }))))
+        .mockResolvedValue({ sent: true })
+      const deps = hostOrchDeps(base({ act, sessions }))
+      const a = deps.chatSend?.('chat-1', 'a')
+      const b = deps.chatSend?.('chat-1', 'b')
+      await new Promise((r) => setTimeout(r, 10))
+      expect(act.mock.calls).toEqual([['chatSend', ['chat-1', 'a']]])
+      release()
+      await Promise.all([a, b])
+      expect(act.mock.calls).toEqual([
+        ['chatSend', ['chat-1', 'a']],
+        ['chatSend', ['chat-1', 'b']]
+      ])
+    })
+
+    it('앱이 없을 때도 차례대로 쓴다', async () => {
+      const { written, sessions } = chatHost()
+      const deps = hostOrchDeps(base({ sessions, hasApp: () => false }))
+      await Promise.all([deps.chatSend?.('chat-1', 'a'), deps.chatSend?.('chat-1', 'b'), deps.chatSend?.('chat-1', 'c')])
+      expect(written).toEqual(['a', 'b', 'c'].map((t) => encodeUserTurn(t) + '\n'))
     })
   })
 

@@ -46,6 +46,7 @@ import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath } from './projects'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
+import { CHAT_TURNS_DEFAULT, CHAT_TURNS_MAX, type ChatPending, type ChatTurn } from '../sessions/chatRead'
 import {
   DEFAULT_ASK_TIMEOUT_MS,
   DEFAULT_CHECK_TIMEOUT_MS,
@@ -126,6 +127,11 @@ export interface SessionScreen {
   screen: string[]
   scrollback: string[]
 }
+
+/** What a turn sent to a chat session came to. The app refuses one while the session holds a card
+ *  open (an approval or a question): answering it is the person's, in the app, and a turn typed at
+ *  it would be read as the answer by nobody and queued behind it by the CLI. */
+export type ChatSendResult = { sent: true } | { sent: false; pending: ChatPending }
 
 export interface OrchServerDeps {
   getState(): OrchState
@@ -397,6 +403,19 @@ export interface OrchServerDeps {
    *  `enter` (ptyDriver's convention), one delivery at a time per session. A write to one that has
    *  ended is dropped by the registry, as every write is. */
   sendSession?(id: string, text: string, enter: boolean): Promise<void>
+  /** A chat session's last `turns` turns, oldest first, from the transcript or rollout file its agent
+   *  CLI writes (core/sessions/chatRead.ts). Host-injected, beside the three above. */
+  readChat?(id: string, turns: number): Promise<ChatTurn[]>
+  /** The card a chat session holds open, or `null` for none. **Only the app can say**: the card is
+   *  in its adapter's protocol state. The app injects it (`core.chat.state(id).request`); the Host
+   *  forwards it, and answers `undefined` when the app cannot be asked, which means "not known" and
+   *  leaves `pending` out of the reply rather than claiming there is no card. */
+  chatPending?(id: string): Promise<ChatPending | null | undefined>
+  /** One turn into a chat session. With the app attached the app delivers it through its session
+   *  driver (the scheduler's and Slack's), so its turn state stays its own, and refuses while a card
+   *  is open. With no app the Host writes the adapter's own bytes to the process itself
+   *  (host/orchDeps.ts `chatSend`). Either way one at a time per session. */
+  chatSend?(id: string, text: string): Promise<ChatSendResult>
 }
 
 type Reply = { status: number; body: unknown }
@@ -2507,7 +2526,7 @@ export async function handleCommand(
     case 'sessions-list':
     case 'sessions-read':
     case 'sessions-send': {
-      if (!deps.listSessions || !deps.readSession || !deps.sendSession)
+      if (!deps.listSessions || !deps.readSession || !deps.sendSession || !deps.readChat || !deps.chatSend)
         return conflict('sessions are answered by the Astera Host, and this caller is not one')
       if (routed === 'sessions-list') return okBody(await deps.listSessions())
       const id = str(args.id)
@@ -2518,20 +2537,45 @@ export async function handleCommand(
       // about half a gigabyte for one read. The Host keeps 256,000 characters of a session, so this
       // is more rows than a session can have.
       if (lines > 10_000) return bad('--lines is at most 10000')
+      const turns =
+        routed === 'sessions-read' && args.turns !== undefined ? posInt(args.turns) : CHAT_TURNS_DEFAULT
+      if (turns === null) return bad('--turns must be a whole number, 1 or more')
+      if (turns > CHAT_TURNS_MAX) return bad(`--turns is at most ${CHAT_TURNS_MAX}`)
       const text = routed === 'sessions-send' ? str(args.text) : null
       if (routed === 'sessions-send' && text === null)
         return bad('--text is required: what to type (a value of `-` reads it from stdin)')
       const session = (await deps.listSessions()).find((x) => x.id === id)
       if (!session) return notFound(`unknown session: ${id}`)
-      // 대화 세션은 줄 프로세스라 화면이 없고, 치는 길도 다르다(chatDriver). 이 조각은 터미널만이다.
-      if (session.kind === 'chat')
-        return conflict(
-          `${id} is a chat session, and ${routed === 'sessions-read' ? 'reading' : 'typing into'} chat sessions is not supported yet — only terminal sessions`
-        )
+      // **한 명령에 두 모양이다.** 터미널은 화면의 줄(--lines), 대화는 턴(--turns)이다. 맞지 않는
+      // 쪽의 플래그는 조용히 버리지 않고 400 으로 돌려보낸다 — 준 것이 안 먹은 줄 모르게 두지 않는다.
+      if (session.kind === 'chat') {
+        if (args.lines !== undefined)
+          return bad(`--lines is for terminal sessions; ${id} is a chat session, which reads in turns (--turns)`)
+        if (routed === 'sessions-send' && args.noEnter !== undefined)
+          return bad(`--no-enter is for terminal sessions; ${id} is a chat session, where a send is one turn`)
+      } else if (args.turns !== undefined)
+        return bad(`--turns is for chat sessions; ${id} is a terminal session, which reads in rows (--lines)`)
+      // 대화는 CLI 가 쓰는 transcript·rollout 파일에서 읽는다 — 대화 화면이 읽는 그 파일, 그 reducer 다.
+      // 열린 카드는 앱만 안다. 앱이 답하지 못하면(`undefined`) 칸을 싣지 않는다 — "카드 없음" 이 아니다.
+      if (routed === 'sessions-read' && session.kind === 'chat') {
+        const read = await deps.readChat(id, turns)
+        const pending = deps.chatPending ? await deps.chatPending(id) : undefined
+        return okBody({ id, kind: 'chat', alive: session.alive, turns: read, ...(pending === undefined ? {} : { pending }) })
+      }
       // 화면은 Host 가 그린다 — 흐름에서 escape 만 벗기면 ConPTY 가 커서로 옮긴 줄이 한 줄로 붙는다.
       if (routed === 'sessions-read')
-        return okBody({ id, alive: session.alive, ...(await deps.readSession(id, lines)) })
+        return okBody({ id, kind: 'terminal', alive: session.alive, ...(await deps.readSession(id, lines)) })
       if (!session.alive) return conflict(`session ${id} has ended; there is nothing to type into`)
+      // 앱이 붙어 있으면 앱의 세션 드라이버로, 없으면 Host 가 어댑터의 바이트를 직접 쓴다(orchDeps 의
+      // chatSend). 카드가 열려 있으면 앱이 거절한다 — 그 답은 앱에서 사람이 한다(R4.3).
+      if (session.kind === 'chat') {
+        const r = await deps.chatSend(id, text as string)
+        if (!r.sent)
+          return conflict(
+            `${id} is waiting on ${r.pending.kind === 'approval' ? 'an approval' : 'a question'}: ${r.pending.summary}. Answer it in Astera; a send does not answer it`
+          )
+        return okBody({ id, sent: true })
+      }
       const enter = args.noEnter !== true
       // 붙여 넣고 Enter 를 치는 약속(ptyDriver)과 세션마다 한 번에 하나씩은 Host 가 지킨다.
       await deps.sendSession(id, text as string, enter)

@@ -281,6 +281,37 @@ describe('humanFor', () => {
     )
   })
 
+  // 대화는 턴 단위로 — 누가 말했는지, 무슨 말을, 무엇을 돌렸는지. 기다리는 카드는 맨 끝에.
+  it('대화 세션의 read 는 턴을 차례로, 열린 카드를 끝에 적는다', () => {
+    expect(
+      humanFor('sessions-read', {
+        id: 'c1',
+        kind: 'chat',
+        alive: true,
+        turns: [
+          { role: 'user', text: '빌드 봐줘', tools: [] },
+          { role: 'assistant', text: '고쳤습니다.\n\n지나갑니다.', tools: ['Bash npm run build (failed: exit 1)', 'Edit src/a.ts (ok)'] }
+        ],
+        pending: { kind: 'approval', summary: 'Bash: npm test' }
+      })
+    ).toBe(
+      [
+        'user:',
+        '  빌드 봐줘',
+        '',
+        'assistant:',
+        '  고쳤습니다.',
+        '',
+        '  지나갑니다.',
+        '  [tool] Bash npm run build (failed: exit 1)',
+        '  [tool] Edit src/a.ts (ok)',
+        '',
+        'waiting on an approval: Bash: npm test'
+      ].join('\n')
+    )
+    expect(humanFor('sessions-read', { id: 'c1', kind: 'chat', alive: true, turns: [] })).toBe('(no turns yet)')
+  })
+
   // 억지로 표를 씌우면 가이드가 시키는 것을 못 읽게 된다
   it('공개 표면이 아닌 명령은 null 이다', () => {
     expect(humanFor('dispatch-show', { id: 'd1' })).toBe(null)

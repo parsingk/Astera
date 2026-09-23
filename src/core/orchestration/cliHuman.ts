@@ -197,8 +197,22 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
       )
     // 읽으라고 부른 화면이다 — 표로 싸면 사람이 읽으려던 것을 가린다.
     // 위의 줄들이 먼저, 그 아래 화면 — 터미널에서 보던 순서다.
-    case 'sessions-read':
-      return [...asList(data, 'scrollback'), ...asList(data, 'screen')].map(str).join('\n')
+    // 대화 세션은 화면이 아니라 턴이다 — 누가 말했는지 줄을 세우고, 글은 들여 쓰고, 도구는 한 줄씩.
+    // 열린 카드는 맨 끝이다: 사람이 그 세션에서 가장 먼저 알아야 할 것이 거기 있다.
+    case 'sessions-read': {
+      if (data.kind !== 'chat') return [...asList(data, 'scrollback'), ...asList(data, 'screen')].map(str).join('\n')
+      const turns = asList(data, 'turns').map((t) =>
+        [
+          `${str(t.role)}:`,
+          ...(str(t.text) === '' ? [] : [str(t.text).split('\n').map((l) => (l === '' ? '' : `  ${l}`)).join('\n')]),
+          ...(Array.isArray(t.tools) ? (t.tools as unknown[]).map((x) => `  [tool] ${str(x)}`) : [])
+        ].join('\n')
+      )
+      const p = data.pending !== null && typeof data.pending === 'object' ? (data.pending as Record<string, unknown>) : null
+      const tail = p === null ? [] : [`waiting on ${p.kind === 'approval' ? 'an approval' : 'a question'}: ${str(p.summary)}`]
+      const body = [...turns, ...tail]
+      return body.length === 0 ? '(no turns yet)' : body.join('\n\n')
+    }
     // 계정×스킬 한 줄씩. install 은 설정이 꺼져 심지 않은 것과 그것을 켜는 설정, 그리고 이미 열린
     // 세션은 새 스킬을 못 본다는 한 줄을 표 아래에 붙인다(cli/skills.ts).
     case 'skills-list':

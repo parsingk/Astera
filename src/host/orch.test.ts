@@ -28,6 +28,7 @@ import type { HostMessage } from '../core/host/protocol'
 import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
 import { registrySessions } from './sessions'
+import { encodeUserTurn } from '../core/chat/claudeProtocol'
 
 const NOW = '2026-09-22T00:00:00.000Z'
 /** 이 Host 가 선 시각. `now` 보다 **앞**이어야 하는 값이다 — `requests show` 가 이것을 실어 주는
@@ -70,7 +71,7 @@ const orchOver = (over: Partial<Parameters<typeof createHostOrch>[0]> = {}): Ret
     hasApp: () => true,
     onState: () => {},
     log: (m) => logs.push(m),
-    sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} },
+    sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {}, readChat: async () => [], sendChat: async () => {}, serial: (_id, run) => run() },
     ...over
   })
 
@@ -475,7 +476,7 @@ describe('createHostOrch', () => {
         hasApp: () => true,
         onState: () => {},
         log: (m) => logs.push(m),
-        sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} }
+        sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {}, readChat: async () => [], sendChat: async () => {}, serial: (_id, run) => run() }
       })
       const r = await orch.call({ cmd: 'state-put', args: { state: emptyState() }, sessionId: '', from: appCaller() })
       expect(r.status).toBeGreaterThanOrEqual(500)
@@ -823,7 +824,7 @@ describe('요청 영수증', () => {
       },
       log: () => {}
     })
-    const orch = orchOver({ hasApp: () => false, sessions: registrySessions({ ptys, procs, hookEventsDir: path.join(os.tmpdir(), 'astera-orch-test-no-hook-events') }) })
+    const orch = orchOver({ hasApp: () => false, sessions: registrySessions({ ptys, procs, hookEventsDir: path.join(os.tmpdir(), 'astera-orch-test-no-hook-events'), accounts: async () => [] }) })
     const args = { id: 'ses-1', text: 'echo hi' }
     const first = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-s' })
     const second = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-s' })
@@ -835,6 +836,98 @@ describe('요청 영수증', () => {
     await orch.call({ cmd: 'sessions-read', args: { id: 'ses-1' }, sessionId: '', request: 'req-r' })
     const shown = await orch.call({ cmd: 'requests-show', args: { id: 'req-r' }, sessionId: '' })
     expect(shown.body).toMatchObject({ state: 'absent' })
+  })
+
+  /**
+   * **대화 세션에 치는 것도 한 번만이다 — 두 길 모두**(CLI phase D4). 앱이 없으면 Host 가 줄 프로세스에
+   * 어댑터의 바이트를 쓰고, 앱이 있으면 앱에 넘긴다. 어느 쪽이든 같은 요청 id 의 재시도는 첫 답을
+   * 재생하고 다시 치지 않는다. 진짜 레지스트리 위에서 — 가짜 줄 프로세스가 받은 줄을 센다.
+   */
+  describe('대화 세션의 sessions send', () => {
+    const chatRegistries = () => {
+      const written: string[] = []
+      const ptys = new PtyRegistry({ spawn: () => { throw new Error('no ptys here') }, log: () => {} })
+      const procs = new ProcRegistry({
+        spawn: () => ({
+          pid: 5,
+          onData: () => {},
+          onExit: () => {},
+          write: (d: string) => {
+            written.push(d)
+          },
+          kill: () => {}
+        }),
+        log: () => {}
+      })
+      procs.open({
+        id: 'proc-1',
+        file: 'claude',
+        args: [],
+        opts: { cwd: 'D:/p', env: {} },
+        meta: { kind: 'chat', id: 'chat-1', restore: { accountId: 'acc', cwd: 'D:/p', provider: 'claude', threadId: 'th' } }
+      })
+      const sessions = registrySessions({
+        ptys,
+        procs,
+        hookEventsDir: path.join(os.tmpdir(), 'astera-orch-test-no-hook-events'),
+        accounts: async () => []
+      })
+      return { written, sessions }
+    }
+    const args = { id: 'chat-1', text: '다음으로' }
+
+    it('앱이 없을 때 같은 요청 id 의 재시도는 한 번만 쓴다', async () => {
+      const { written, sessions } = chatRegistries()
+      const orch = orchOver({ hasApp: () => false, sessions })
+      const first = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c1' })
+      const second = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c1' })
+      expect(first).toMatchObject({ status: 200, body: { id: 'chat-1', sent: true } })
+      expect(second.replayed).toBe(true)
+      expect(answerOf(second)).toBe(answerOf(first))
+      expect(written, '재시도가 한 번 더 썼다').toEqual([encodeUserTurn('다음으로') + '\n'])
+    })
+
+    it('앱이 있을 때 같은 요청 id 의 재시도는 앱에 한 번만 넘기고, Host 는 쓰지 않는다', async () => {
+      const { written, sessions } = chatRegistries()
+      const acts: Array<[string, unknown[]]> = []
+      const orch = orchOver({
+        sessions,
+        act: async (name, a) => {
+          acts.push([name, a])
+          return name === 'chatPending' ? null : { sent: true }
+        }
+      })
+      const first = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c2' })
+      const second = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c2' })
+      expect(first.status).toBe(200)
+      expect(second.replayed).toBe(true)
+      expect(acts).toEqual([['chatSend', ['chat-1', '다음으로']]])
+      expect(written).toEqual([])
+    })
+
+    // 카드에 답하는 것은 앱에서 사람이 한다 — 앱이 거절하면 6 이다(CONFLICT).
+    it('앱이 카드가 열렸다고 하면 409 이고 아무것도 쓰지 않는다', async () => {
+      const { written, sessions } = chatRegistries()
+      const orch = orchOver({
+        sessions,
+        act: async () => ({ sent: false, pending: { kind: 'approval', summary: 'Bash: npm test' } })
+      })
+      const r = await orch.call({ cmd: 'sessions-send', args, sessionId: '' })
+      expect(r.status).toBe(409)
+      expect(JSON.stringify(r.body)).toMatch(/waiting on an approval: Bash: npm test/)
+      expect(written).toEqual([])
+    })
+
+    // 앱이 붙어 있으면 read 는 앱에 카드를 묻고 싣는다. 앱이 없으면 그 칸이 없다.
+    it('read 의 pending 은 앱이 있을 때만 있다', async () => {
+      const { sessions } = chatRegistries()
+      const withApp = orchOver({ sessions, act: async () => ({ kind: 'question', summary: '어느 쪽?' }) })
+      const r = await withApp.call({ cmd: 'sessions-read', args: { id: 'chat-1' }, sessionId: '' })
+      expect(r.body).toEqual({ id: 'chat-1', kind: 'chat', alive: true, turns: [], pending: { kind: 'question', summary: '어느 쪽?' } })
+      const noApp = orchOver({ sessions, hasApp: () => false })
+      const q = await noApp.call({ cmd: 'sessions-read', args: { id: 'chat-1' }, sessionId: '' })
+      expect(q.body).toEqual({ id: 'chat-1', kind: 'chat', alive: true, turns: [] })
+    })
   })
 
   // 앱이 닫혀 있어도 셸이 계획을 짤 수 있다 — 계정 목록은 프로필의 accounts.json 이 답한다.

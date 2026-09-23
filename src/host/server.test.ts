@@ -519,7 +519,7 @@ describe('startHostServer', () => {
         hasApp: () => false,
         onState: () => {},
         log: () => {},
-        sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} }
+        sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {}, readChat: async () => [], sendChat: async () => {}, serial: (_id, run) => run() }
       })
       const h = await start({ orch })
       live = h.s

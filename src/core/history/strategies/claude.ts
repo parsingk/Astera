@@ -32,6 +32,49 @@ const projectSummaryForDir = async (
   }
 }
 
+/** Every `<configDir>/projects/<slug>/<sessionId>.jsonl` that exists, in folder order. The folder is
+ *  the munged cwd, which the session id alone does not give, so each one is tried. */
+async function transcriptCandidates(configDir: string, sessionId: string): Promise<string[]> {
+  const base = root(configDir)
+  let slugs: string[]
+  try {
+    slugs = await fs.readdir(base)
+  } catch {
+    return []
+  }
+  const found: string[] = []
+  for (const slug of slugs) {
+    const filePath = path.join(base, slug, `${sessionId}.jsonl`)
+    try {
+      await fs.access(filePath)
+    } catch {
+      continue
+    }
+    found.push(filePath)
+  }
+  return found
+}
+
+/**
+ * **The transcript of one Claude conversation, found the way the app finds a chat session's**
+ * (ipc.ts `findClaudeChatTranscript` → HistoryIndex `transcriptPathById` → `locate` below): the first
+ * candidate that is a conversation, a sidechain or a helper session skipped. `locate` goes on to build
+ * a history entry out of the file; this stops at the path, for the Host (`astera sessions read`), which
+ * has an account's `configDir` and a thread id and no history index. null when there is none yet — a
+ * conversation's file is written with its first turn.
+ */
+export async function findClaudeTranscript(configDir: string, sessionId: string): Promise<string | null> {
+  for (const filePath of await transcriptCandidates(configDir, sessionId)) {
+    try {
+      const meta = await parseTranscriptMeta(filePath)
+      if (!meta.isSidechain && !meta.isHelper) return filePath
+    } catch {
+      /* unreadable: not this one, as buildEntry would say */
+    }
+  }
+  return null
+}
+
 /** claude history: <configDir>/projects/<slug>/*.jsonl — directory↔project 1:1 */
 export const claudeHistoryStrategy: HistoryStrategy = {
   scanRoot: (account: Account) => root(account.configDir),
@@ -123,20 +166,7 @@ export const claudeHistoryStrategy: HistoryStrategy = {
    *  projects and parses it. It does not load entryById (that is the caller
    *  HistoryIndex.locateEntry's job). */
   locate: async (account, sessionId, io) => {
-    const base = claudeHistoryStrategy.scanRoot(account)
-    let slugs: string[]
-    try {
-      slugs = await fs.readdir(base)
-    } catch {
-      return null
-    }
-    for (const slug of slugs) {
-      const filePath = path.join(base, slug, `${sessionId}.jsonl`)
-      try {
-        await fs.access(filePath)
-      } catch {
-        continue
-      }
+    for (const filePath of await transcriptCandidates(account.configDir, sessionId)) {
       const entry = await claudeHistoryStrategy.buildEntry(account, filePath, undefined, io)
       if (entry) return entry
     }

@@ -155,6 +155,30 @@ describe('publicFor', () => {
     expect(
       publicFor('sessions-read', { id: 's1', alive: true, cols: 80, rows: 24, screen: ['hi'], scrollback: [], raw: 'x' })
     ).toEqual({ id: 's1', alive: true, cols: 80, rows: 24, screen: ['hi'], scrollback: [] })
+    // 대화 세션의 read — 턴 안과 카드 안도 같은 규칙으로 가린다. 한 겹 안이라고 새면 가림막이 아니다.
+    expect(
+      publicFor('sessions-read', {
+        id: 'c1',
+        kind: 'chat',
+        alive: true,
+        turns: [{ role: 'user', text: 'hi', tools: [], uuid: 'u1' }],
+        pending: { kind: 'approval', summary: 'Bash: ls', requestId: 'r1' },
+        threadId: 't'
+      })
+    ).toEqual({
+      id: 'c1',
+      kind: 'chat',
+      alive: true,
+      turns: [{ role: 'user', text: 'hi', tools: [] }],
+      pending: { kind: 'approval', summary: 'Bash: ls' }
+    })
+    expect(publicFor('sessions-read', { id: 'c1', kind: 'chat', alive: true, turns: [], pending: null })).toEqual({
+      id: 'c1',
+      kind: 'chat',
+      alive: true,
+      turns: [],
+      pending: null
+    })
     expect(publicFor('sessions-send', { id: 's1', sent: true, enter: false, extra: 1 })).toEqual({
       id: 's1',
       sent: true,

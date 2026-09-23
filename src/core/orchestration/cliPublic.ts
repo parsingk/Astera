@@ -13,6 +13,7 @@
 // 이름을 대며 깨진다. 허용 목록의 유일한 실패 방식이 "낡는 것" 이고, 막을 것은 그것뿐이다.
 import type { Gate, Job, JobRun, Project, Task } from './types'
 import type { HostSession, OrchAccount, OrchRunConfig } from './command'
+import type { ChatPending, ChatTurn } from '../sessions/chatRead'
 import type { SkillInstalled, SkillListed, SkillNotEnabled, SkillsAccount } from './skills'
 
 /** 두 목록이 그 타입의 칸을 전부 덮지 못하면 남은 이름이 여기 남는다. */
@@ -144,9 +145,15 @@ type _runConfig = NothingLeft<Unlisted<OrchRunConfig, typeof RUN_CONFIG, []>>
  *  추리지만(host/sessions.ts) 그래도 적는다 — ACCOUNT 와 같은 이유다. */
 const SESSION = ['id', 'kind', 'title', 'accountId', 'cwd', 'alive', 'state'] as const
 type _session = NothingLeft<Unlisted<HostSession, typeof SESSION, []>>
-/** `sessions read` 는 SessionScreen 에 id·alive 를 더한 것이고, `sessions send` 는 명령 층이 짓는다(command.ts). */
-const SESSION_READ = ['id', 'alive', 'cols', 'rows', 'screen', 'scrollback'] as const
+/** `sessions read` 는 두 모양이다(command.ts). 터미널은 SessionScreen 에 id·kind·alive 를 더한 것,
+ *  대화는 id·kind·alive 에 턴과 열린 카드다. `sessions send` 는 명령 층이 짓는다. */
+const SESSION_READ = ['id', 'kind', 'alive', 'cols', 'rows', 'screen', 'scrollback', 'turns', 'pending'] as const
 const SESSION_SEND = ['id', 'sent', 'enter'] as const
+/** 대화의 턴과 카드 — 접혀 실린 것도 같은 규칙으로 가린다(`jobs get` 의 회차와 같다). */
+const CHAT_TURN = ['role', 'text', 'tools'] as const
+type _chatTurn = NothingLeft<Unlisted<ChatTurn, typeof CHAT_TURN, []>>
+const CHAT_PENDING = ['kind', 'summary'] as const
+type _chatPending = NothingLeft<Unlisted<ChatPending, typeof CHAT_PENDING, []>>
 
 /** `astera skills` 의 답은 계정 목록 안에 스킬 목록이 접힌 모양이다(cli/skills.ts). 개체가 앱이
  *  아니라 CLI 가 지은 것이어도 적는다 — 계정 칸은 accounts.json 을 읽은 것이고, 거기엔 configDir 이
@@ -221,6 +228,12 @@ function shapeOne(cmd: string, fields: readonly string[], x: unknown): unknown {
   // 한 겹 안이라고 새면 가림막이 아니다.
   const run = (x as { run?: unknown }).run
   if (cmd === 'jobs-get' && run !== null && typeof run === 'object') picked.run = pick(RUN, run)
+  if (cmd === 'sessions-read') {
+    if (Array.isArray(picked.turns))
+      picked.turns = picked.turns.map((t: unknown) => (t !== null && typeof t === 'object' ? pick(CHAT_TURN, t) : t))
+    // null 은 "앱이 보니 카드가 없다" 이고 그대로 싣는다 — 칸이 없는 것(앱이 없어 모른다)과 다르다.
+    if (picked.pending !== null && typeof picked.pending === 'object') picked.pending = pick(CHAT_PENDING, picked.pending)
+  }
   return picked
 }
 

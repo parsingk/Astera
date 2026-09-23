@@ -20,19 +20,42 @@
 // **`state` comes from the hook event files** the capture script appends under the profile
 // (core/hooks/sessionState.ts says what each event means). Read only: the agent CLI writes them and
 // the app drains them; the Host opens each for reading and never writes, moves or deletes one.
+//
+// **A chat session is read from the file its agent CLI writes and typed into in the app's own bytes**
+// (CLI phase D4). The file is the conversation view's source (core/sessions/chatRead.ts), found the way
+// the app finds it: a Claude transcript under the account's configDir by the thread id in the note,
+// a Codex rollout at the path in the note. A turn is the app adapter's own line (`encodeUserTurn`,
+// `turn/start`). Whether the Host writes it at all, or the app does, is orchDeps' decision (`chatSend`).
+import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import type { HostSession, SessionScreen } from '../core/orchestration/command'
 import { hookEventsFileIn, sessionStateOf, type SessionState } from '../core/hooks/sessionState'
 import type { PtyEntry } from '../core/host/protocol'
+import type { Account } from '../core/types'
 import { ptyDriver } from '../core/sessions/sessionDriver'
+import { readChatTurns, type ChatTurn } from '../core/sessions/chatRead'
+import { findClaudeTranscript } from '../core/history/strategies/claude'
+import { encodeUserTurn } from '../core/chat/claudeProtocol'
+import { encodeRequest, turnStartParams } from '../core/chat/codexProtocol'
 import type { PtyRegistry } from './registry'
 import type { ProcRegistry } from './procRegistry'
 
-/** The three the command layer is handed. `Required`, because the Host always has them. */
+/** What the command layer is handed, and what orchDeps builds `chatSend` from. `Required`, because
+ *  the Host always has them. */
 export interface HostSessions {
   listSessions(): Promise<HostSession[]>
   readSession(id: string, lines: number): Promise<SessionScreen>
   sendSession(id: string, text: string, enter: boolean): Promise<void>
+  /** A chat session's last `turns` turns, oldest first; `[]` when there is no file to read yet. */
+  readChat(id: string, turns: number): Promise<ChatTurn[]>
+  /** One turn written to a chat session's process, in the bytes the app's adapter writes. **Not
+   *  queued by itself**: orchDeps runs it inside `serial`, beside the route that asks the app instead,
+   *  so both routes share one order. Rejects, writing nothing, when it cannot be written: no Codex
+   *  thread yet, a provider it does not know, a session that has ended. */
+  sendChat(id: string, text: string): Promise<void>
+  /** Runs `run` after every earlier `serial` call for the same session id has settled. A rejection
+   *  is the caller's and does not hold up the next one. */
+  serial<T>(id: string, run: () => Promise<T>): Promise<T>
 }
 
 /** A note key as the app wrote it, or `null` — the note is the app's, and nothing checks its keys. */
@@ -132,18 +155,42 @@ async function render(data: string, size: { cols: number; rows: number }, lines:
 
 export function registrySessions(a: {
   ptys: Pick<PtyRegistry, 'list' | 'buffer' | 'write' | 'size' | 'lastWrite'>
-  procs: Pick<ProcRegistry, 'list'>
+  procs: Pick<ProcRegistry, 'list' | 'write'>
   /** The profile's hook-events folder (core/hooks/sessionState.ts `hookEventsDirIn`). */
   hookEventsDir: string
+  /** The profile's accounts, `configDir` included (core/accounts/accountsFile.ts
+   *  `readAccountEntries`): a Claude chat transcript lives under its account's folder. */
+  accounts(): Promise<Account[]>
+  /** The JSON-RPC id of a Codex turn the Host writes. Test injection; the wiring leaves it out. */
+  mintId?: () => string
 }): HostSessions {
+  const mintId = a.mintId ?? (() => `astera-host-${randomUUID()}`)
   /** The pty behind an agent session's id — only an agent session's, so a shell tab's id is nobody. */
   const ptyOf = (id: string): string | null =>
     a.ptys.list().find((e) => e.meta?.kind === 'session' && e.meta.id === id)?.id ?? null
 
+  /** A chat session's line process by the app's id: the live one when an ended process and its
+   *  replacement share the id (`respawnWithBypass`), as `listSessions` picks. */
+  const chatOf = (id: string): PtyEntry | null => {
+    const all = a.procs.list().filter((e) => e.meta?.kind === 'chat' && e.meta.id === id)
+    return all.find((e) => e.alive) ?? all[0] ?? null
+  }
+
   /** One delivery at a time per session: the text-then-Enter pair is two writes 150ms apart, and a
    *  second sender inside that window would put its text between them. Only what goes through here
    *  is ordered — the app's own writes reach the pty directly. */
-  const queues = new Map<string, Promise<void>>()
+  const queues = new Map<string, Promise<unknown>>()
+  const serial = <T>(id: string, run: () => Promise<T>): Promise<T> => {
+    // Run at once when nothing is queued, so the first write is not deferred a turn for nothing.
+    const prev = queues.get(id)
+    const p = prev ? prev.then(run) : run()
+    const settled = p.catch(() => {})
+    queues.set(id, settled)
+    void settled.then(() => {
+      if (queues.get(id) === settled) queues.delete(id)
+    })
+    return p
+  }
   const deliver = async (id: string, value: string, enter: boolean): Promise<void> => {
     const pty = ptyOf(id)
     if (pty === null) return
@@ -184,16 +231,54 @@ export function registrySessions(a: {
       const size = (pty === null ? null : a.ptys.size(pty)) ?? { cols: 80, rows: 24 }
       return render(pty === null ? '' : a.ptys.buffer(pty), size, lines)
     },
-    sendSession: (id, value, enter) => {
-      // Run at once when nothing is queued, so the first write is not deferred a turn for nothing.
-      const prev = queues.get(id)
-      const run = prev ? prev.then(() => deliver(id, value, enter)) : deliver(id, value, enter)
-      const settled = run.catch(() => {})
-      queues.set(id, settled)
-      void settled.then(() => {
-        if (queues.get(id) === settled) queues.delete(id)
-      })
-      return run
-    }
+    sendSession: (id, value, enter) => serial(id, () => deliver(id, value, enter)),
+    readChat: async (id, turns) => {
+      const e = chatOf(id)
+      if (e === null) return []
+      const restore = e.meta!.restore ?? {}
+      if (restore.provider === 'codex') {
+        // Codex names its rollout at `ready` and the adapter writes it into the note. Not named yet
+        // is a session whose file the app's watcher is still looking for, and nothing to read here.
+        const rollout = text(restore.rolloutPath)
+        return rollout === null ? [] : readChatTurns(rollout, 'codex', turns)
+      }
+      if (restore.provider !== 'claude') return []
+      const threadId = text(restore.threadId)
+      const accountId = text(restore.accountId)
+      if (threadId === null || accountId === null) return []
+      const account = (await a.accounts()).find((x) => x.id === accountId)
+      if (!account) return []
+      const file = await findClaudeTranscript(account.configDir, threadId)
+      return file === null ? [] : readChatTurns(file, 'claude', turns)
+    },
+    sendChat: async (id, value) => {
+      const e = chatOf(id)
+      if (e === null || !e.alive) throw new Error(`chat session ${id} has ended`)
+      const restore = e.meta!.restore ?? {}
+      if (restore.provider === 'claude') {
+        // claudeAdapter.ts doSend's write. The registry adds the newline, as it does for proc-write.
+        a.procs.write(e.id, encodeUserTurn(value))
+        return
+      }
+      if (restore.provider === 'codex') {
+        const threadId = text(restore.threadId)
+        if (threadId === null) throw new Error(`chat session ${id} has no Codex thread yet; open Astera and let it start`)
+        // codexAdapter.ts doSend's request, with what only the app knows left out: the model and
+        // effort picked in the composer and plan mode. The thread keeps its own model then.
+        const params = turnStartParams({
+          threadId,
+          text: value,
+          model: null,
+          effort: null,
+          planMode: false,
+          planEffort: null,
+          threadModel: null
+        })
+        a.procs.write(e.id, encodeRequest(mintId(), 'turn/start', params))
+        return
+      }
+      throw new Error(`chat session ${id} has a provider the Host does not know: ${String(restore.provider)}`)
+    },
+    serial
   }
 }

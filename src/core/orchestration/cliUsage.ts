@@ -293,22 +293,23 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       'Each with its id, which is the id `sessions read` and `sessions send` take and the one `ASTERA_SESSION` holds inside that session. `kind` is terminal (an agent CLI in a terminal) or chat. `state` is working, waiting or unknown, from the hook events a Claude terminal session writes; Codex and chat sessions are always unknown, and so is a session typed into since its last event. Plain shell tabs and run configurations are not sessions and are not listed. Answered by the Host, so it works with Astera closed.'
   },
   'sessions-read': {
-    summary: "what a terminal session's tab shows, and the rows above it",
+    summary: "what a terminal session's tab shows, or a chat session's recent turns",
     detail:
-      "The Host replays the session's recent output into a terminal at the tab's size. `screen` is the visible rows, top first, with the empty rows below the last painted one left off; `scrollback` is up to --lines rows (at most 10000) from just above it, oldest first; `cols` and `rows` are the size. Text only, trailing spaces trimmed, no colours. The Host keeps about 256,000 characters of each running session and drops them when it ends. A chat session is refused with 6: reading one is not supported yet.",
+      "`kind` says which shape came back. A terminal session: the Host replays its recent output into a terminal at the tab's size. `screen` is the visible rows, top first, with the empty rows below the last painted one left off; `scrollback` is up to --lines rows (at most 10000) from just above it, oldest first; `cols` and `rows` are the size. Text only, trailing spaces trimmed, no colours. The Host keeps about 256,000 characters of each running session and drops them when it ends. A chat session: `turns` is up to --turns turns (at most 200), oldest first, each with `role`, `text` and `tools` (one line per tool call), read from the transcript the agent writes, so it works with Astera closed and survives the session ending. `pending` names a card the session is waiting on (an approval or a question), and is there only while Astera is open, because only the app can see cards. --lines is for terminal sessions and --turns for chat sessions; the other one is refused with 2.",
     flags: [
       ID('<sessionId>', 'the session to read (from `sessions list`)'),
-      { name: 'lines', value: '<n>', about: 'how many rows of scrollback above the screen (default 200)' }
+      { name: 'lines', value: '<n>', about: 'terminal: how many rows of scrollback above the screen (default 200)' },
+      { name: 'turns', value: '<n>', about: 'chat: how many of the most recent turns (default 20)' }
     ]
   },
   'sessions-send': {
-    summary: 'type into a terminal session, then press Enter',
+    summary: 'type into a terminal session and press Enter, or send a chat session one turn',
     detail:
-      'Writes the text, then Enter 150ms later, the way the app delivers a scheduled message, one send at a time per session. It types into whatever the session shows, a permission prompt included, so read it first. `--text -` drops one trailing newline. A session that has ended, or a chat session, is refused with 6. Any process running as you can do this to any session, agent sessions included. With --request-id a retry is not typed twice.',
+      'A terminal session: writes the text, then Enter 150ms later, the way the app delivers a scheduled message. It types into whatever the session shows, a permission prompt included, so read it first. A chat session: the text is one turn. With Astera open the app delivers it, and a session waiting on a card (an approval or a question) is refused with 6 naming the card: answer it in Astera. With Astera closed the Host writes the turn itself, and cannot see a card, so the turn queues behind one. --no-enter is for terminal sessions only. One send at a time per session either way. `--text -` drops one trailing newline. A session that has ended is refused with 6. Any process running as you can do this to any session, agent sessions included. With --request-id a retry is not sent twice.',
     flags: [
       ID('<sessionId>', 'the session to type into (from `sessions list`)'),
       { name: 'text', value: '<text|->', required: true, about: 'what to type (a value of `-` reads it from stdin)' },
-      { name: 'no-enter', about: 'type the text and do not press Enter' }
+      { name: 'no-enter', about: 'terminal: type the text and do not press Enter' }
     ]
   },
 

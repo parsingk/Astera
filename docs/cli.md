@@ -86,8 +86,10 @@ damaged `run-configs.json` is a 6 with the same "open Astera" message.
 
 **The sessions commands work with the app closed, and need a Host.** `sessions list`, `sessions read`
 and `sessions send` are answered by the Host out of the sessions it holds, because the Host is the
-process that runs them. That is true with Astera open as well: the app is not asked. With no Host
-there are no sessions to answer about, so they exit 3.
+process that runs them. That is true with Astera open as well, with two exceptions for chat sessions:
+while Astera is open, `sessions read` asks it which card a chat session is waiting on, and
+`sessions send` hands a chat turn to it to deliver. With no Host there are no sessions to answer
+about, so they exit 3.
 
 ### Which Host, and which profile
 
@@ -158,7 +160,7 @@ astera skills  list    [--account <accountId>]
 astera skills  install [--account <accountId>]
 
 astera sessions list
-astera sessions read   --id <sessionId> [--lines <n>]
+astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
 astera sessions send   --id <sessionId> --text <text|-> [--no-enter]
 
 astera questions list  [--task <taskId>] [--status <open|resolved>]
@@ -320,6 +322,10 @@ Where the hooks cannot see, `state` can lag or be wrong:
   notification only once the dialog has been up that long.
 - A prompt queued while a turn is ending can read `waiting` for a moment, until its own
   `UserPromptSubmit` lands.
+- `UserPromptSubmit` and `StopFailure` are written by two separate background processes, so their
+  order in the file is not guaranteed. A turn that fails almost as soon as it is submitted can
+  leave `UserPromptSubmit` last, and the session reads `working` until the next event or until you
+  type.
 - Hooks of your own in the account's settings run alongside Astera's. One that blocks a prompt leaves
   `working` standing until you type, and a `Stop` hook that makes Claude carry on leaves `waiting`
   standing while it works.
@@ -333,7 +339,7 @@ not included. `data.cols` and `data.rows` are the size it was rendered at. `--hu
 scrollback and then the screen, one row per line.
 
 ```json
-{"ok":true,"data":{"id":"…","alive":true,"cols":100,"rows":30,
+{"ok":true,"data":{"id":"…","kind":"terminal","alive":true,"cols":100,"rows":30,
   "screen":["D:\\repo>echo hi","hi","","D:\\repo>"],"scrollback":["Microsoft Windows [Version …]"]}}
 ```
 
@@ -342,6 +348,30 @@ back only that far, and its oldest rows can be garbled where that window starts 
 sequence. Output from before the tab was last resized is shown at the current width. The Host drops
 the output when a session ends, so an ended session reads as empty.
 
+**A chat session reads as its conversation.** `data.kind` is `chat` and `data.turns` is the most
+recent `--turns` turns (default 20, at most 200), oldest first. Each has `role` (`user` or
+`assistant`), `text` (its text, paragraphs separated by a blank line, empty for a turn that only
+ran tools) and `tools`, one line per tool call: the tool, what it acted on, and `(ok)` or
+`(failed)` once its result is in. The Host reads the file the agent itself writes, the same file
+Astera's conversation view reads: a Claude session's transcript in its account's folder, a Codex
+session's rollout. So it works with Astera closed and still reads after the session has ended. A
+session that has not finished its first turn has no file yet and reads `"turns": []`. `--lines`
+belongs to terminal sessions and `--turns` to chat sessions; giving a session the other one is a 2.
+
+```json
+{"ok":true,"data":{"id":"…","kind":"chat","alive":true,
+  "turns":[{"role":"user","text":"why does the build fail?","tools":[]},
+           {"role":"assistant","text":"Fixed. The build passes.","tools":["shell_command npm run build (failed: exit 1)","apply_patch src/a.ts (ok)"]}],
+  "pending":{"kind":"approval","summary":"Bash: npm test"}}}
+```
+
+**`data.pending` is there only while Astera is open.** A chat session asks for approvals and
+questions through cards, and only the app holds them. With Astera open, `pending` is the card the
+session is waiting on (`kind` is `approval` or `question`, and `summary` is one line about it), or
+`null` when there is none. With Astera closed the field is left out, because the Host cannot see
+cards: a session waiting on one then looks like any other. `--human` prints each turn under its
+role, the tools as `[tool]` lines, and the card last.
+
 `sessions send` types `--text` into a terminal session and presses Enter 150ms later, which is how
 the app delivers a scheduled message; `--no-enter` types the text and stops there. It answers
 `{"id":…,"sent":true,"enter":true}` once the Enter has gone out, and `sent` means the Host handed the
@@ -349,9 +379,21 @@ text to the session. Two sends to one session are typed one after the other, nev
 `--text -` reads the text from standard input and drops one trailing newline, so a heredoc is typed
 once and Enter is pressed once. **It types into whatever the session is showing**: if the agent is
 waiting at a permission prompt or a menu, the text and the Enter answer that prompt. Read the screen
-first. A session that has ended is a 6. Chat sessions are listed, but reading one or typing into one
-is a 6 for now: only terminal sessions are supported yet. With `--request-id`, a retried
-`sessions send` is replayed rather than typed a second time.
+first. A session that has ended is a 6. With `--request-id`, a retried `sessions send` is replayed
+rather than typed a second time.
+
+**To a chat session, `sessions send` is one turn**, and it answers `{"id":…,"sent":true}`.
+`--no-enter` belongs to terminal sessions and is a 2 here. Sends to one session go one at a time.
+
+- **With Astera open, the app delivers the turn**, the same way it delivers a scheduled message, so
+  the conversation view shows it as usual. If the session is waiting on a card (an approval or a
+  question), the send is a 6 whose message names the card. `sessions send` does not answer cards:
+  open Astera and answer it there.
+- **With Astera closed, the Host writes the turn to the agent itself**, in the same form the app
+  would. It cannot see cards, so a turn sent while the session waits on one queues behind it in the
+  agent and runs once the card is answered. When Astera opens again it rebuilds the session from
+  the agent's output and transcript, and the turn is there. A Codex session that has not started
+  its first thread yet cannot take a turn from the Host, and that is a 6 that says so.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
 dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
@@ -651,7 +693,8 @@ The boundary is your machine and your operating system account.
   under any account the app holds. That is what orchestration is, and it is not something you switch
   on: an agent you run is an agent that can spend your accounts.
 - Any process running as you, including every agent session Astera starts, can see what every
-  terminal session's screen shows, and type into every session, with `astera sessions`. A worker can type into its coordinator
+  terminal session's screen shows and read every chat session's conversation, and type into every
+  session, with `astera sessions`. A worker can type into its coordinator
   and into any other session. That is the chosen model, and the boundary is the same as for the rest
   of this command: your operating system account.
 
