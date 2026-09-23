@@ -9,7 +9,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { parseArgs } from '../core/orchestration/cliArgs'
 import { publicFor } from '../core/orchestration/cliPublic'
-import { spelledCommand, usageFor } from '../core/orchestration/cliUsage'
+import { spelledCommand, unknownFlagError, usageFor } from '../core/orchestration/cliUsage'
 import { humanFor, quietFor } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
@@ -862,6 +862,11 @@ export async function main(): Promise<void> {
   }
   // FAIL_SEAM — 이 줄 아래에서 실패를 내보내는 길은 `fail` 하나다. 봉투를 직접 짓는 호출을
   // 두지 않는다(run.test.ts 가 이 표식 아래를 훑는다).
+
+  // **공개 명령은 선언하지 않은 플래그를 거절한다**(cliUsage.ts 의 unknownFlagError). 무시하면
+  // `runs wait --timeout 30m` 이 기본 한 시간을 기다린다. 세션 전용 명령은 예전처럼 지나간다.
+  const flagError = unknownFlagError(parsed.cmd, argv)
+  if (flagError !== null) fail({ code: 'INVALID_ARGUMENTS', message: flagError })
 
   // **스키마도 Host 없이 답한다** — `--help` 와 같은 자리다(cliAgentContext.ts). 물어본 것이 "이
   // 바이너리가 무엇을 할 줄 아는가" 이고, 그 답은 이 프로그램 안에 이미 있다.

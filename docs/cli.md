@@ -127,6 +127,14 @@ command, and `ASTERA_SKILLS` is the folder `astera help` reads its guide from.
 Every command is a noun and a verb. A noun with no verb is rejected with the list of its verbs, so
 `astera jobs` tells you what `jobs` can do.
 
+**A flag that a command does not take is refused with exit 2.** The message names the flag and lists
+the flags the command does take, and `nextSteps` is that command's `--help`. Nothing is mapped to a
+flag it resembles, so `--timeout 30m` is refused rather than read as `--timeout-ms`. The global flags
+(`--json`, `--human`, `--quiet`, `--no-keepalive`, `--request-id`) are accepted by every command. The
+commands agents use inside sessions (see the end of this section) are not checked this way: the guide
+and sessions started by older builds pass them flags they ignore, and refusing those would break a
+running coordinator over a flag that never did anything.
+
 ```text
 astera version                           CLI, app and protocol versions
 astera status                            is the orchestrator there, and what is running

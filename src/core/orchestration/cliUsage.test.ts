@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { BROWSER_VERBS, NOUNS, camel, parseArgs, verbsOf } from './cliArgs'
-import { USAGE, spelledCommand, usageFor, type PublicCommand } from './cliUsage'
+import { GLOBAL_FLAGS, USAGE, spelledCommand, unknownFlagError, usageFor, type PublicCommand } from './cliUsage'
 import { agentContext } from './cliAgentContext'
 
 /** 사람이 치는 모양(`jobs wait`)이 아니라 표의 키(`jobs-wait`). */
@@ -343,6 +343,164 @@ describe('orchestration-guide — 에이전트에게 공개 명령을 가르친�
         expect(known.has(key) || globals.has(key), `guide: \`${line}\` — --${key} is not a flag of ${parsed.cmd}`).toBe(
           true
         )
+    }
+  })
+})
+
+// 감사 #59 — 공개 명령은 제가 선언하지 않은 플래그를 거절한다. `runs wait --timeout 30m` 이 기본 한
+// 시간을 조용히 기다리고, `jobs list --project` 가 전부를 돌려주던 것이 그 결함이다.
+describe('unknownFlagError — 공개 명령은 모르는 플래그를 거절한다', () => {
+  const check = (line: string): string | null => {
+    const argv = line.split(' ')
+    const parsed = parseArgs(argv)
+    if ('error' in parsed) throw new Error(`${line}: ${parsed.error}`)
+    return unknownFlagError(parsed.cmd, argv)
+  }
+
+  it('선언하지 않은 플래그는 그 이름과 그 명령이 받는 플래그를 말한다', () => {
+    const err = check('runs wait --id run_1 --timeout 30m')
+    expect(err).toContain('--timeout')
+    expect(err).toContain('--id')
+    expect(err).toContain('--timeout-ms')
+    expect(err).toContain('runs wait')
+  })
+
+  it('감사가 실행으로 본 무시 사례가 전부 거절된다', () => {
+    for (const line of [
+      'jobs list --project p_x --status running',
+      'sessions list --provider claude --status running',
+      'questions list --run run_nope',
+      'runs get --id run_1 --follow',
+      'status --no-color',
+      'host stop --force'
+    ])
+      expect(check(line), line).not.toBeNull()
+  })
+
+  it('플래그가 없는 명령은 그렇다고 말한다', () => {
+    expect(check('jobs list --project p_x')).toContain('takes no flags of its own')
+  })
+
+  it('전역 플래그는 어느 공개 명령에서든 받는다', () => {
+    expect(check('jobs list --json --request-id r1 --no-keepalive')).toBeNull()
+    expect(check('jobs list --human')).toBeNull()
+    expect(check('runs wait --id run_1 --quiet --timeout-ms 5')).toBeNull()
+  })
+
+  it('파서가 허용하는 전역 플래그는 agent-context 가 적는 것과 같다', () => {
+    expect([...GLOBAL_FLAGS].sort()).toEqual(agentContext().globalFlags.map((f) => f.name).sort())
+  })
+
+  it('help 와 browser help 의 --skills-dir 는 표에 없어도 받는다', () => {
+    expect(check('help --skills-dir /x')).toBeNull()
+    expect(check('browser help --skills-dir /x')).toBeNull()
+    expect(check('version --skills-dir /x')).not.toBeNull()
+  })
+
+  it('세션 전용 명령은 예전처럼 너그럽다 — 가이드와 옛 세션이 더 붙여 보낸다', () => {
+    expect(check('worker-start --task t --agent claude --account a --whatever 1')).toBeNull()
+    expect(check('accounts --json --bogus')).toBeNull()
+    expect(check('run-configs --json --bogus')).toBeNull()
+  })
+
+  it('stdin 으로 받는 플래그도 선언된 것만 받는다', () => {
+    expect(check('tasks add --job j --account a --spec -')).toBeNull()
+    expect(check('tasks add --job j --account a --body -')).toContain('--body')
+  })
+})
+
+// 문서·가이드·스킬이 가르치는 줄이 전부 이 파서와 위의 검사를 지난다. 에이전트와 사람은 이 줄들을
+// 그대로 친다.
+const skillsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../resources/skills')
+
+/** 셸이 읽는 모양의 낱말들. 따옴표 안이 아닌 `|`·`)`·`;`·`&`·`#`·`<`·줄 이음 `\` 에서 멈춘다 —
+ *  그 뒤는 셸의 것이다. 자리표시자 `<…>` 는 먼저 한 낱말로 바꾼다(`<same agent>` 는 값 하나다). */
+function shellLine(text: string): string[] {
+  const s = text.replace(/<[^<>]*>/g, 'X')
+  const words: string[] = []
+  let cur = ''
+  let has = false
+  let q: '"' | "'" | null = null
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (q !== null) {
+      if (c === q) q = null
+      else if (q === '"' && c === '\\' && i + 1 < s.length) cur += s[++i]
+      else cur += c
+      continue
+    }
+    if (c === '"' || c === "'") {
+      q = c
+      has = true
+      continue
+    }
+    if ('|);&#<\\`'.includes(c)) break
+    if (/\s/.test(c)) {
+      if (has) words.push(cur)
+      cur = ''
+      has = false
+      continue
+    }
+    cur += c
+    has = true
+  }
+  if (has && q === null) words.push(cur)
+  return words
+}
+
+/** 한 문서가 보여 주는 `astera …` 줄들: bash·무표지 울타리 블록의 것과, 인라인 코드의 것.
+ *  `text`·`json` 블록은 뺀다 — 앞의 것은 명령 표(대괄호가 선택을 뜻한다, 위의 가드가 본다)이고 뒤의
+ *  것은 봉투 안의 문자열이다. */
+function documentedLines(text: string): string[] {
+  const out: string[] = []
+  let fence: string | null = null
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line.startsWith('```')) {
+      fence = fence === null ? line.slice(3).trim() : null
+      continue
+    }
+    if (fence !== null) {
+      if (fence === 'text' || fence === 'json') continue
+      for (const m of line.matchAll(/(?:^|[\s($])astera\s+(.*)$/g)) out.push(m[1])
+      continue
+    }
+    for (const m of line.matchAll(/`astera ([^`]+)`/g)) out.push(m[1])
+  }
+  return out
+}
+
+describe('문서가 보여 주는 명령 줄은 전부 파서와 플래그 검사를 지난다', () => {
+  const sources = [
+    docPath,
+    ...readdirSync(skillsDir)
+      .filter((f) => f.endsWith('.md'))
+      .map((f) => path.join(skillsDir, f))
+  ]
+  const lines = sources.flatMap((file) =>
+    documentedLines(readFileSync(file, 'utf8')).map((line) => ({ file: path.basename(file), line }))
+  )
+
+  it('줄을 찾았다', () => {
+    expect(lines.length).toBeGreaterThan(50)
+  })
+
+  it('모르는 플래그가 없고, 파서가 거절하는 줄은 동사 없는 명사뿐이다', () => {
+    for (const { file, line } of lines) {
+      const argv = shellLine(line)
+      // `astera <noun> <verb> --help` 처럼 명령 자리부터 자리표시자인 줄은 명령이 아니라 모양이다.
+      if (argv.length === 0 || argv[0].startsWith('-') || argv[0] === 'X') continue
+      if (usageFor(argv) !== null) {
+        expect(usageFor(argv), `${file}: astera ${line}`).not.toHaveProperty('error')
+        continue
+      }
+      const parsed = parseArgs(argv)
+      if ('error' in parsed) {
+        // `astera jobs` 는 문서가 일부러 보여 주는 것이다: 그 명사의 동사 목록으로 거절된다.
+        expect(argv.length === 1 && verbsOf(argv[0]) !== undefined, `${file}: astera ${line} — ${parsed.error}`).toBe(true)
+        continue
+      }
+      expect(unknownFlagError(parsed.cmd, argv), `${file}: astera ${line}`).toBeNull()
     }
   })
 })

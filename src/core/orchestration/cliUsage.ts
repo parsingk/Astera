@@ -36,7 +36,7 @@
 //
 // The text is plain, not JSON, and no part of it needs a Host. `--help` is for a person, and a
 // person asking what the commands are must get an answer with nothing running.
-import { BROWSER_VERBS, NOUNS, renamedTo, verbsOf } from './cliArgs'
+import { BROWSER_VERBS, NOUNS, camel, renamedTo, verbsOf } from './cliArgs'
 
 /** `jobs-wait`, `host-start`, … — every noun/verb pair `NOUNS` declares. */
 type NounCommand = {
@@ -539,4 +539,56 @@ export function usageFor(argv: string[]): { text: string } | { error: string } |
       error: `no usage for ${first} (astera --help lists the commands, astera help documents the ones agents use)`
     }
   return { text: commandUsage(first as PublicCommand) }
+}
+
+/**
+ * The flags every command takes, public or not. They are read by the parser and by run.ts rather
+ * than by any one command, so no `USAGE` entry lists them. cliAgentContext.ts describes each one
+ * (`globalFlags`), and cliUsage.test.ts holds the two lists to the same names.
+ */
+export const GLOBAL_FLAGS: readonly string[] = ['json', 'human', 'quiet', 'no-keepalive', 'request-id', 'help']
+
+/** Flags a public command really reads that its `USAGE` entry leaves out on purpose. `--skills-dir`
+ *  is the one, and the comment on `help` above says why it is not listed. */
+const UNLISTED: Partial<Record<PublicCommand, readonly string[]>> = {
+  help: ['skills-dir'],
+  'browser-help': ['skills-dir']
+}
+
+/**
+ * Why this line is refused, or `null`: a **public** command given a flag it does not declare.
+ *
+ * **Refused, because ignoring it was a wrong answer that looked right** (conformance audit #59).
+ * `parseArgs` carries every `--x` into `args` and each command reads only the keys it knows, so
+ * `runs wait --timeout 30m` waited the one-hour default and `jobs list --project p` listed every Job.
+ * A script reads either as the answer it asked for.
+ *
+ * **No near-miss is mapped to the flag it resembles.** `--timeout` is not read as `--timeout-ms`:
+ * this CLI has no aliases (public CLI design §2), and the message lists the flags the command takes,
+ * which is the whole fix.
+ *
+ * **Session-only commands are not checked.** Their flags are declared nowhere a machine can read
+ * (cliAgentContext.ts), and the guide and sessions started by older builds pass flags a command
+ * ignores. Refusing those would break a running coordinator over a flag that never did anything.
+ * `accounts` and `run-configs` with no verb are session commands in this sense.
+ *
+ * **It reads the flags off `argv`, not off the parsed arguments**, so the message names the flag as
+ * it was typed. Every token that starts with `--` is a flag: `parseArgs` never takes one as a value.
+ */
+export function unknownFlagError(cmd: string, argv: readonly string[]): string | null {
+  if (!Object.hasOwn(USAGE, cmd)) return null
+  const pc = cmd as PublicCommand
+  const own = (USAGE[pc].flags ?? []).map((f) => f.name)
+  const allowed = new Set([...own, ...(UNLISTED[pc] ?? []), ...GLOBAL_FLAGS].map(camel))
+  const unknown = argv
+    .filter((t) => t.startsWith('--'))
+    .map((t) => t.slice(2))
+    .filter((name) => !allowed.has(camel(name)))
+  if (unknown.length === 0) return null
+  const named = [...new Set(unknown)].map((n) => `--${n}`).join(', ')
+  const takes =
+    own.length === 0
+      ? `it takes no flags of its own`
+      : `its flags are ${own.map((n) => `--${n}`).join(', ')}`
+  return `${spelledCommand(cmd)} does not take ${named}: ${takes}, plus the global ones (--json, --human, --quiet, --no-keepalive, --request-id)`
 }
