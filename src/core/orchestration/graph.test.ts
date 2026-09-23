@@ -151,6 +151,40 @@ describe('layersOf', () => {
     const s = state({ runs: [run('r1')] })
     expect(layersOf(s, 'r1')).toEqual({ layers: [], deps: {}, cyclic: [] })
   })
+
+  // 아직 한 번도 돌지 않은 계획의 상세 창도 그래프를 그린다 — 그 계획의 정의 Task 로. 없으면
+  // "새 작업" 으로 짠 계획이 실행 전까지 빈 창으로 보인다(정의 Task 에는 runId 가 없다).
+  it('Job id 를 주면 그 계획의 정의 Task 를 층으로 묶는다', () => {
+    const def = (id: string, deps: string[], createdAt: string): Task => {
+      const { runId: _r, ...rest } = task(id, '', deps, createdAt)
+      return { ...rest, jobId: 'job1' }
+    }
+    const s: OrchState = {
+      ...emptyState(),
+      tasks: [def('a', [], T(1)), def('b', ['a'], T(2))]
+    }
+    expect(layersOf(s, 'job1')).toEqual({
+      layers: [['a'], ['b']],
+      deps: { a: [], b: ['a'] },
+      cyclic: []
+    })
+  })
+
+  // 회차로 베껴진 Task 는 jobId 도 들고 있을 수 있다 — 그것이 계획의 그림에 섞이면 안 된다
+  it('계획의 그림에는 회차의 Task 가 섞이지 않는다', () => {
+    const s: OrchState = {
+      ...emptyState(),
+      tasks: [
+        { ...task('inst', 'r1'), jobId: 'job1' },
+        (() => {
+          const { runId: _r, ...rest } = task('def', '')
+          return { ...rest, jobId: 'job1' }
+        })()
+      ]
+    }
+    expect(layersOf(s, 'job1').layers).toEqual([['def']])
+    expect(layersOf(s, 'r1').layers).toEqual([['inst']])
+  })
 })
 
 describe('chainOf', () => {

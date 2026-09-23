@@ -5436,9 +5436,11 @@ export function registerIpc(
       return { events: [], layers: [], deps: {}, cyclic: [] }
     }
     // 사이드바의 Job 줄은 계획의 id 를 보낸다 — 상세는 언제나 한 회차의 것이므로 가장 최근 회차로
-    // 푼다(resolveRunId). 아직 돌지 않은 Job 이면 보여 줄 기록이 없다.
+    // 푼다(resolveRunId). 아직 돌지 않은 Job 이면 보여 줄 기록은 없지만 **그림은 있다**: 그 계획의
+    // 정의 Task 다(layersOf 가 계획의 id 를 받는다). 빈 그림을 주면 "새 작업" 으로 짠 계획이 실행을
+    // 누르기 전까지 빈 창으로 보인다.
     const detailRunId = resolveRunId(state, runId)
-    if (detailRunId === undefined) return { events: [], layers: [], deps: {}, cyclic: [] }
+    if (detailRunId === undefined) return { events: [], ...layersOf(state, runId) }
     const known = new Set(core.sessions.list().map((s) => s.id))
     const { layers, deps, cyclic } = layersOf(state, detailRunId)
     // The journal's losses are merged in rather than derived: an attempt the restart could not find

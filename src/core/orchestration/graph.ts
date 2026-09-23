@@ -24,14 +24,18 @@ import type { OrchState } from './state'
  *  그런데도 이 함수가 순환을 견뎌야 하는 이유는 **입력이 명령이 아니라 파일**이기 때문이다.
  *  orchestration.json 은 프로세스보다 오래 살고 손으로 고쳐질 수 있다. 그때 이 함수가 무한히 돌거나
  *  Task 를 조용히 떨어뜨리면 화면에서 그 Task 가 사라진 이유를 알 길이 없다. 따로 돌려주면 상세 창이
- *  "순서를 정할 수 없다"고 말할 수 있다. */
+ *  "순서를 정할 수 없다"고 말할 수 있다.
+ *
+ *  **id 는 회차의 것일 수도, 계획의 것일 수도 있다.** 계획의 id 면 그 계획의 정의 Task(runId 가
+ *  없는 것)를 묶는다 — 한 번도 돌지 않은 계획의 상세 창이 그리는 것이 그것이다. 두 id 는 접두어가
+ *  달라 겹치지 않고, 회차로 베껴진 Task 는 runId 를 들고 있으므로 계획의 그림에 섞이지 않는다. */
 export function layersOf(
   state: OrchState,
   runId: string
 ): { layers: string[][]; deps: Record<string, string[]>; cyclic: string[] } {
   // createdAt 순서로 훑는다 — 층 안의 순서가 곧 코디네이터가 선언한 순서가 된다(snapshotFor 와 같은 규칙)
   const tasks = state.tasks
-    .filter((t) => t.runId === runId)
+    .filter((t) => t.runId === runId || (t.runId === undefined && t.jobId === runId))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   const own = new Set(tasks.map((t) => t.id))
   // 이 Run 밖을 가리키는 deps 는 버린다. Run 은 독립한 이름공간이고, 다른 Run 의 Task 가 이 Run 의
