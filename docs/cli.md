@@ -55,12 +55,18 @@ nothing is.
 
 A run, not a Job: a Job with two runs going at once counts as two, because two things are running.
 A run is running while it has work in flight: a worker session open on one of its tasks, or a task
-being validated or reviewed. A run whose tasks have not started yet, or whose workers were stopped,
-is not. `astera status` reports the same count as `runsRunning`.
+being validated or reviewed. A run whose tasks have not started yet is not. Neither is one whose
+workers were all stopped, unless one of its tasks is still being validated or reviewed. `runs stop`
+closes the run's worker sessions and pauses it, but it does not end a validation or a review, and a
+paused run with such a task still counts. The app finishes that task when it is next open. Until
+then `host stop` refuses over that run. `astera status` reports the same count as `runsRunning`.
 
 A Host with no client connected leaves by itself after a minute, but only when it holds no sessions
-and no running run, by that same count. So a Host that `astera host start` started stays up while
-its work runs, and goes away once there is nothing left for it to hold.
+and no running run, by that same count. With Astera closed, workers are not started today, so a Host
+that `astera host start` started usually holds nothing and leaves a minute after its last client.
+That includes a run that is waiting on a question: an open question does not keep the Host up.
+**So with Astera closed, run `astera host start` before `astera questions answer`**; without a Host,
+`questions answer` exits 3.
 
 `astera host status` reports `jobsInProfile`, which is a different number — how many Jobs the
 profile's file holds, running or not.
@@ -155,7 +161,9 @@ Every command is a noun and a verb. A noun with no verb is rejected with the lis
 **A flag that a command does not take is refused with exit 2.** The message names the flag and lists
 the flags the command does take, and `nextSteps` is that command's `--help`. Nothing is mapped to a
 flag it resembles, so `--timeout 30m` is refused rather than read as `--timeout-ms`. The global flags
-(`--json`, `--human`, `--quiet`, `--no-keepalive`, `--request-id`) are accepted by every command. The
+(`--json`, `--human`, `--quiet`, `--no-keepalive`, `--request-id`) are never refused as unknown,
+though a command can still refuse one for its own reason, as the `host` and `skills` commands do
+with `--request-id` (below). The
 commands agents use inside sessions (see the end of this section) are not checked this way: the guide
 and sessions started by older builds pass them flags they ignore, and refusing those would break a
 running coordinator over a flag that never did anything.
@@ -241,7 +249,8 @@ once never need the `runs` commands.
 **A list narrowed to an id that does not exist is a 4, not an empty list**: `runs list --job` with
 an unknown Job, and `tasks list --run` with an unknown run. An empty list would read as "that Job
 has no runs". `nextSteps` is the list that gives the missing kind of id, `astera jobs list` and
-`astera runs list` respectively.
+`astera runs list` respectively. `runs list --job` given no value (`--job ""`, as a script whose id
+came back empty would send) is a 2, not the list of every run.
 
 **`jobs run` refuses a Job that is already running** and names the run that is going. It returns the
 run it started, which is the id to pass to `runs wait`.
