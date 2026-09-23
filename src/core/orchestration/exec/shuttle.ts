@@ -71,3 +71,27 @@ export async function writeShuttle(a: {
   }
   return written[0]
 }
+
+/** writeShuttle, but a file whose content is already right is left alone (R6). The Host calls this at
+ *  its first spawn and the app writes the same files at its start, so a rewrite of identical content
+ *  would be a second writer racing the first for nothing. Returns the canonical path. */
+export async function ensureShuttle(a: { dir: string; execPath: string; entryPath: string }): Promise<string> {
+  const files = shuttleFiles(a)
+  await fs.mkdir(a.dir, { recursive: true })
+  const written: string[] = []
+  for (const f of files) {
+    const p = path.join(a.dir, f.name)
+    let current: string | null = null
+    try {
+      current = await fs.readFile(p, 'utf8')
+    } catch {
+      /* no file yet, or unreadable: write it */
+    }
+    if (current !== f.content) {
+      await fs.writeFile(p, f.content, 'utf8')
+      await fs.chmod(p, 0o755) // the reason is on writeShuttle
+    }
+    written.push(p)
+  }
+  return written[0]
+}

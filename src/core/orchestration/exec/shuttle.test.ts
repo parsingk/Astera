@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { shuttleFiles, writeShuttle } from './shuttle'
+import { ensureShuttle, shuttleFiles, writeShuttle } from './shuttle'
 
 let dir: string
 beforeEach(async () => {
@@ -86,5 +86,28 @@ describe('writeShuttle', () => {
       return
     }
     expect((await fs.stat(sh)).mode & 0o111).not.toBe(0)
+  })
+})
+
+// R6: the Host writes the shuttle at its first spawn, and the app writes the same files at its start,
+// so a file that already says the right thing is left alone.
+describe('ensureShuttle', () => {
+  it('writes nothing the second time for the same pair, and returns the canonical path', async () => {
+    const first = await ensureShuttle({ dir, execPath: 'x', entryPath: 'y' })
+    const spy = vi.spyOn(fs, 'writeFile')
+    try {
+      const again = await ensureShuttle({ dir, execPath: 'x', entryPath: 'y' })
+      expect(spy).not.toHaveBeenCalled()
+      expect(again).toBe(first)
+      expect(path.basename(again)).toBe(process.platform === 'win32' ? 'astera.cmd' : 'astera')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+  it('rewrites the files when the entry path changes', async () => {
+    await ensureShuttle({ dir, execPath: 'x', entryPath: 'y' })
+    const p = await ensureShuttle({ dir, execPath: 'x', entryPath: 'y2' })
+    expect(await fs.readFile(p, 'utf8')).toContain('y2')
+    expect(await fs.readFile(path.join(dir, 'astera'), 'utf8')).toContain('y2')
   })
 })

@@ -117,6 +117,12 @@ export class WorkerTails {
     return tail.replace(/\n+$/, '').split('\n').slice(-n).join('\n')
   }
 
+  /** Whether this dispatch has a tail here — started and not evicted. The Host asks it to decide
+   *  whether a worker-read is its to answer (a tail it does not hold is the app's). */
+  has(dispatchId: string): boolean {
+    return this.buffers.has(dispatchId)
+  }
+
   /** For diagnostics — the number of dispatches retained */
   size(): number {
     return this.buffers.size

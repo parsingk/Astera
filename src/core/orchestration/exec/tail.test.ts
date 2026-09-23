@@ -20,6 +20,14 @@ describe('WorkerTails', () => {
     expect(TAIL_EMPTY).not.toBe(TAIL_UNTRACKED)
   })
 
+  // The Host asks this before it answers worker-read, so a tail it does not hold goes to the app.
+  it('has is true once a dispatch is started, and false for one it never saw', () => {
+    const t = new WorkerTails()
+    t.start({ dispatchId: 'dsp_1', sessionId: 'sess_A' }, never)
+    expect(t.has('dsp_1')).toBe(true)
+    expect(t.has('dsp_unknown')).toBe(false)
+  })
+
   it('추적 대상이 아닌 세션의 출력은 무시한다', () => {
     // 이 조기 반환이 stripAnsi보다 **먼저** 온다는 것이 이 설계의 핵심이다 — 게이트와 비용이 같은
     // 자리에 있어야 앱의 모든 세션 핫패스에 정규식이 붙지 않는다(아래 ANSI 테스트 참고).

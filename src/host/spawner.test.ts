@@ -1,0 +1,215 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { createHostSpawner } from './spawner'
+import { PtyRegistry, type RegistryPty } from './registry'
+import type { HostMessage } from '../core/host/protocol'
+import { HOST_ONLY_ENV } from '../core/host/spawn'
+import { createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../core/orchestration/state'
+import { SessionManager } from '../core/sessions/manager'
+import { StatusLineManager } from '../core/sessions/statusline'
+import { makeDescriptors } from '../core/providers/descriptor'
+import { previewShotsDir } from '../core/preview/shotsDir'
+
+const NOW = '2026-09-24T00:00:00.000Z'
+let dir: string
+let profile: string
+let repo: string
+beforeEach(async () => {
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-spawner-'))
+  profile = path.join(dir, 'profile'); repo = path.join(dir, 'repo')
+  await fs.mkdir(profile, { recursive: true }); await fs.mkdir(repo, { recursive: true })
+  await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
+  await fs.writeFile(path.join(dir, 'Astera.exe'), ''); await fs.writeFile(path.join(dir, 'cli.js'), '')
+  await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+    { id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg1'), color: '#888', createdAt: NOW, provider: 'claude' }
+  ] }))
+})
+afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
+
+type Spawned = { file: string; args: string[] | string; opts: { cwd: string; env: Record<string, string | undefined> }; pty: RegistryPty & { emit(d: string): void; exit(c: number): void; killed: boolean } }
+const rig = (over: { env?: NodeJS.ProcessEnv; state?: () => OrchState; failSpawn?: boolean } = {}) => {
+  const spawned: Spawned[] = []
+  const logs: string[] = []
+  const sent: HostMessage[] = []
+  const registry = new PtyRegistry({
+    spawn: (file, args, opts) => {
+      if (over.failSpawn) throw new Error('node-pty is incomplete')
+      let onData: (d: string) => void = () => {}; let onExit: (e: { exitCode: number }) => void = () => {}
+      const pty = { pid: 1000 + spawned.length, killed: false, onData: (cb: typeof onData) => { onData = cb }, onExit: (cb: typeof onExit) => { onExit = cb },
+        write() {}, resize() {}, kill() { this.killed = true }, pause() {}, resume() {}, emit: (d: string) => onData(d), exit: (c: number) => onExit({ exitCode: c }) }
+      spawned.push({ file, args, opts, pty })
+      return pty
+    },
+    log: (m) => logs.push(m)
+  })
+  const env = over.env ?? hostEnv()
+  const spawner = createHostSpawner({ profileDir: profile, env, platform: process.platform, homeDir: path.join(dir, 'home'), registry,
+    broadcast: (m) => sent.push(m), getState: over.state ?? (() => emptyState()), log: (m) => logs.push(m) })
+  return { spawner, registry, spawned, logs, sent }
+}
+const hostEnv = (): NodeJS.ProcessEnv => ({
+  PATH: process.env.PATH, CI_SECRET: 'kept', ELECTRON_RUN_AS_NODE: '1', ASTERA_HOST_PROFILE_DIR: profile,
+  ASTERA_HOST_CLI_EXEC: path.join(dir, 'Astera.exe'), ASTERA_HOST_CLI_ENTRY: path.join(dir, 'cli.js'), ASTERA_HOST_SKILLS: path.join(dir, 'skills')
+})
+const seeded = (): { s: OrchState; taskId: string; dispatchId: string } => {
+  const job = createJob(emptyState(), { objective: 'o', cwd: repo }, NOW); if (!job.ok) throw new Error(job.error)
+  const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
+  const t = createTask(run.state, { runId: run.value.id, title: 'Write hello', spec: 's', deps: [] }, NOW); if (!t.ok) throw new Error(t.error)
+  const d = openDispatch(t.state, { taskId: t.value.id, provider: 'claude', accountId: 'acc1', sessionId: 'pending:x', cwd: repo, specPath: '' }, NOW); if (!d.ok) throw new Error(d.error)
+  return { s: d.state, taskId: t.value.id, dispatchId: d.value.id }
+}
+const startArgs = (taskId: string, dispatchId: string, worktree = 'current') =>
+  ({ dispatchId, taskId, title: 'Write hello', spec: 'write hello.txt', provider: 'claude' as const, accountId: 'acc1', runCwd: repo, worktree })
+
+describe('createHostSpawner', () => {
+  it('is null, and says which paths are missing, when the Host was started without them', () => {
+    const h = rig({ env: { PATH: '/x' } })
+    expect(h.spawner).toBeNull()
+    expect(h.logs.join('\n')).toMatch(/ASTERA_HOST_CLI_EXEC, ASTERA_HOST_CLI_ENTRY, ASTERA_HOST_SKILLS/)
+  })
+
+  it('starts a worker in its own registry with the note SessionManager writes, and announces it', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    const r = await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    expect(h.spawned).toHaveLength(1)
+    const entry = h.registry.list()[0]
+    expect(entry.meta).toMatchObject({ kind: 'session', id: r.sessionId, restore: { accountId: 'acc1', cwd: repo, title: 'Write hello', rollAccountIds: ['acc1'], bypassPermissions: true } })
+    expect(h.sent).toEqual([{ t: 'pty-opened', entry }])
+    expect(r.specPath.startsWith(path.join(profile, 'orch', 'specs'))).toBe(true)
+  })
+
+  // D4 and §2.2: the Host's env minus the strip list, plus exactly what the app plants.
+  it('hands the worker the Host environment without the Host\'s own variables, plus the CLI', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    const r = await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    const env = h.spawned[0].opts.env
+    expect(env.CI_SECRET).toBe('kept')
+    expect(Object.keys(env).filter((k) => /^(ELECTRON_RUN_AS_NODE|ASTERA_HOST_)/i.test(k))).toEqual([])
+    expect(env.ASTERA_SESSION).toBe(r.sessionId)
+    expect(env.ASTERA_PROFILE_DIR).toBe(profile)
+    expect(env.ASTERA_SKILLS).toBe(path.join(dir, 'skills'))
+    expect(path.dirname(env.ASTERA_CLI!)).toBe(path.join(profile, 'orch'))
+    expect(env.ASTERA_STATUSLINE_OUT).toBe(path.join(profile, 'statusline', `${r.sessionId}.json`))
+  })
+
+  // D12: no settings file is the app's default, yolo; an explicit manual turns the bypass off.
+  it('reads the permission mode from the profile, yolo when there is no file', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    expect(JSON.stringify(h.spawned[0].args)).toMatch(/--dangerously-skip-permissions/)
+    await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+    const again = seeded()
+    const h2 = rig({ state: () => again.s })
+    await h2.spawner!.startWorker(startArgs(again.taskId, again.dispatchId))
+    expect(JSON.stringify(h2.spawned[0].args)).not.toMatch(/--dangerously-skip-permissions/)
+  })
+
+  // Task 4's ruling: a broken file may have said manual, so it is never read as yolo. The spawn is
+  // refused, for a worker and for a coordinator alike.
+  it('refuses to spawn, and says to open Astera, when the settings file is broken', async () => {
+    await fs.writeFile(path.join(profile, 'app-settings.json'), '{ not json')
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    await expect(h.spawner!.startWorker(startArgs(taskId, dispatchId))).rejects.toThrow(/the Host will not start a session: .*open Astera to repair it/)
+    await expect(h.spawner!.startCoordinator({ runId: 'run_1', cwd: repo, accountId: 'acc1', brief: 'b' })).rejects.toThrow(/the Host will not start a session: .*open Astera to repair it/)
+    expect(h.spawned).toHaveLength(0)
+  })
+
+  // Task 5's review: the app's preTrust adapter throws on an account it cannot find
+  // (core.accounts.get), so the Host's does too, and the coordinator never spawns.
+  // The broken settings file is what shows where it throws: the app's lookup fails in the trust step,
+  // before the permission mode is read, so a lenient trust step here would answer "open Astera" instead.
+  it('rejects a coordinator start for an account that is not in accounts.json, at the trust step', async () => {
+    await fs.writeFile(path.join(profile, 'app-settings.json'), '{ not json')
+    const h = rig()
+    await expect(h.spawner!.startCoordinator({ runId: 'run_1', cwd: repo, accountId: 'acc_gone', brief: 'b' })).rejects.toThrow(/unknown account: acc_gone/)
+    expect(h.spawned).toHaveLength(0)
+  })
+
+  it('starts a coordinator in its own registry with its brief file and one-account chain', async () => {
+    const h = rig()
+    const r = await h.spawner!.startCoordinator({ runId: 'run_abcdefghijklmn', cwd: repo, accountId: 'acc1', brief: 'the brief' })
+    const entry = h.registry.list()[0]
+    expect(entry.meta).toMatchObject({ kind: 'session', id: r.sessionId, restore: { accountId: 'acc1', rollAccountIds: ['acc1'], bypassPermissions: true, title: 'Coordinator · run_abcdefgh' } })
+    expect(h.sent).toEqual([{ t: 'pty-opened', entry }])
+    const briefs = await fs.readdir(path.join(profile, 'orch', 'specs'))
+    expect(briefs).toHaveLength(1)
+    expect(await fs.readFile(path.join(profile, 'orch', 'specs', briefs[0]), 'utf8')).toBe('the brief')
+  })
+
+  // §11's first risk: the same command line, whichever process spawned it. The env is compared whole:
+  // the app's own, run through the same SessionManager, minus the strip list (HOST_ONLY_ENV).
+  it('builds the same command, env and note an app-side SessionManager builds for the same worker', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    const r = await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    const app: Array<{ file: string; args: string[] | string; env: Record<string, string | undefined>; meta: unknown }> = []
+    const sl = new StatusLineManager(profile)
+    const m = new SessionManager((file, args, opts) => { app.push({ file, args, env: opts.env, meta: opts.meta }); return { pid: 1, onData() {}, onExit() {}, write() {}, resize() {}, kill() {}, pause() {}, resume() {} } },
+      makeDescriptors(process.platform), undefined, undefined, path.join(dir, 'home'), (id, a, o) => sl.spawnConfig(id, a, o), [previewShotsDir(profile)], hostEnv())
+    const account = JSON.parse(await fs.readFile(path.join(profile, 'accounts.json'), 'utf8')).accounts[0]
+    const initialPrompt = (h.spawned[0].args as string[]).at(-1)
+    const info = m.spawn({ account, cwd: repo, bypassPermissions: true, initialPrompt, title: 'Write hello', rollAccountIds: ['acc1'],
+      rollPrompt: (h.registry.list()[0].meta!.restore as { rollPrompt: string }).rollPrompt, rollProviders: ['claude'],
+      orchEnv: { cliPath: path.join(profile, 'orch', process.platform === 'win32' ? 'astera.cmd' : 'astera'), skillsPath: path.join(dir, 'skills'), profileDir: profile } })
+    const norm = (x: unknown, id: string) => JSON.parse(JSON.stringify(x).split(id).join('<id>'))
+    expect(norm(h.spawned[0].file, r.sessionId)).toEqual(norm(app[0].file, info.id))
+    expect(norm(h.spawned[0].args, r.sessionId)).toEqual(norm(app[0].args, info.id))
+    expect(norm(h.registry.list()[0].meta, r.sessionId)).toEqual(norm(app[0].meta, info.id))
+    const appEnv = Object.fromEntries(Object.entries(app[0].env).filter(([k]) => !HOST_ONLY_ENV.test(k)))
+    expect(norm(h.spawned[0].opts.env, r.sessionId)).toEqual(norm(appEnv, info.id))
+  })
+
+  it('answers worker-read from the output the registry saw, and owns only the tails it holds', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    h.spawned[0].pty.emit('\u001b[32mhello\u001b[0m\n')
+    expect(await h.spawner!.readWorker({ dispatchId })).toBe('hello')
+    expect(h.spawner!.owns('readWorker', [{ dispatchId }])).toBe(true)
+    expect(h.spawner!.owns('readWorker', [{ dispatchId: 'dsp_unknown' }])).toBe(true) // answers "(unknown dispatch …)"
+    expect(await h.spawner!.readWorker({ dispatchId: 'dsp_unknown' })).toBe('(unknown dispatch: dsp_unknown)')
+  })
+
+  it('does not own a worker-read for a dispatch someone else started', () => {
+    const { s, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    expect(h.spawner!.owns('readWorker', [{ dispatchId }])).toBe(false)
+  })
+
+  // R1: S2 makes no worktree.
+  it('does not own a start that needs a new worktree', () => {
+    const h = rig()
+    expect(h.spawner!.owns('startWorker', [{ worktree: 'new', name: 'x' }])).toBe(false)
+    expect(h.spawner!.owns('startWorker', [{ worktree: 'new', terminal: 'ses_1' }])).toBe(true)
+    expect(h.spawner!.owns('startWorker', [{ worktree: 'current' }])).toBe(true)
+  })
+
+  it('releases a worker by killing its own pty', async () => {
+    const seed = seeded()
+    let state = seed.s
+    const h = rig({ state: () => state })
+    const r = await h.spawner!.startWorker(startArgs(seed.taskId, seed.dispatchId))
+    state = { ...state, dispatches: state.dispatches.map((x) => (x.id === seed.dispatchId ? { ...x, sessionId: r.sessionId } : x)) }
+    await h.spawner!.releaseWorker({ dispatchId: seed.dispatchId })
+    expect(h.spawned[0].pty.killed).toBe(true)
+  })
+
+  it('logs a release for a dispatch it cannot find, as the app does', async () => {
+    const h = rig()
+    await h.spawner!.releaseWorker({ dispatchId: 'dsp_gone' })
+    expect(h.logs.join('\n')).toMatch(/worker-release: unknown dispatch dsp_gone/)
+  })
+
+  it('turns a registry refusal into a thrown start, so worker-start rolls back', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s, failSpawn: true })
+    await expect(h.spawner!.startWorker(startArgs(taskId, dispatchId))).rejects.toThrow(/node-pty is incomplete/)
+    expect(h.sent).toEqual([])
+  })
+})
