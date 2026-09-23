@@ -1939,6 +1939,34 @@ describe('Host-local spawn (S2)', () => {
     expect((await orch.call({ cmd: 'worker-stop', args: { dispatch: dispatchId }, sessionId: '' })).status).toBe(200)
     expect(l.releaseWorker).toHaveBeenCalledWith({ dispatchId })
   })
+  // Fix round I1: a Stop that arrives while the Host is still spawning the worker. The Dispatch holds
+  // the `pending:` placeholder, so nothing could be killed; recording it stopped would leave the agent
+  // that is about to start on a closed Dispatch.
+  it('refuses worker-stop while the Host is still starting the worker, and the worker then starts on an open Dispatch', async () => {
+    const { taskId } = await seed()
+    let finish: () => void = () => {}
+    const l = local({
+      startWorker: vi.fn(() => new Promise<{ sessionId: string; cwd: string; specPath: string }>((resolve) => {
+        finish = () => resolve({ sessionId: 'ses_host', cwd: 'D:/p', specPath: 'D:/specs/s.md' })
+      }))
+    })
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const starting = orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
+    await vi.waitFor(() => expect(l.startWorker).toHaveBeenCalled())
+    const pending = orch.state().dispatches[0]
+    expect(pending.sessionId.startsWith('pending:')).toBe(true)
+    const r = await orch.call({ cmd: 'worker-stop', args: { dispatch: pending.id }, sessionId: '' })
+    expect(r.status).toBe(409)
+    expect(exitCodeFor(codeForStatus(r.status))).toBe(6)
+    expect((r.body as { error: string }).error).toContain('the worker is still starting; try again in a moment')
+    expect(l.releaseWorker).not.toHaveBeenCalled()
+    finish()
+    expect((await starting).status).toBe(200)
+    const d = orch.state().dispatches[0]
+    expect(d.sessionId).toBe('ses_host')
+    expect(d.endedAt).toBeUndefined()
+    expect(d.workerState).not.toBe('stopped')
+  })
   // R1: S3 is not here yet.
   it('still refuses --worktree new with no app, 409, leaving no Dispatch', async () => {
     const { taskId } = await seed()

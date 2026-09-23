@@ -6150,3 +6150,79 @@ describe('version / status — 공개 표면의 두 읽기', () => {
     expect((await call(makeDeps(), 'status')).body).toMatchObject({ sessionsRunning: null })
   })
 })
+
+// Host S2 fix round, I1: a Dispatch whose worker-start has not answered yet still carries the
+// `pending:` placeholder. There is no session to kill, and the spawn may still complete and write the
+// real id onto the Dispatch. Recording it stopped would leave a live agent on a closed Dispatch, so the
+// four commands that stop workers refuse, and write nothing.
+describe('stopping a worker that is still starting', () => {
+  const pendingPatch = (s: OrchState, dispatchId: string): OrchState => ({
+    ...s,
+    dispatches: s.dispatches.map((d) => (d.id === dispatchId ? { ...d, sessionId: 'pending:abc' } : d))
+  })
+  const tracked = (deps: OrchServerDeps & { state: OrchState }): string[] => {
+    const released: string[] = []
+    deps.releaseWorker = async ({ dispatchId }) => {
+      released.push(dispatchId)
+    }
+    return released
+  }
+  const withPendingWorker = async () => {
+    const deps = makeDeps()
+    const released = tracked(deps)
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    const w = await call(deps, 'worker-start', { task: (t.body as { id: string }).id, agent: 'codex', account: 'acc1' })
+    const dispatchId = (w.body as { dispatchId: string }).dispatchId
+    await deps.setState(pendingPatch(deps.getState(), dispatchId))
+    return { deps, released, runId, dispatchId }
+  }
+  const withPendingScheduledWorker = async () => {
+    const deps = makeDeps()
+    const released = tracked(deps)
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, schedule: { kind: 'daily', time: '09:00' } })
+    const templateId = (c.body as { id: string }).id
+    await call(deps, 'run-start', { run: templateId })
+    await deps.setState({
+      ...deps.getState(),
+      runs: [...deps.getState().runs, { id: 'run_kid', jobId: templateId, ordinal: 1, createdAt: NOW }],
+      tasks: [{ id: 'tsk_kid', runId: 'run_kid', title: 't', spec: 's', deps: [], status: 'dispatched', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }],
+      dispatches: [{ id: 'dsp_kid', taskId: 'tsk_kid', provider: 'claude', accountId: 'acc1', sessionId: 'pending:abc', cwd: 'D:/p', specPath: '', startedAt: NOW, workerState: 'ready', retained: false }]
+    })
+    return { deps, released, templateId }
+  }
+  const refusedAsStarting = (r: { status: number; body: unknown }): void => {
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toContain('the worker is still starting; try again in a moment')
+  }
+
+  it('worker-stop refuses and writes nothing', async () => {
+    const { deps, released, dispatchId } = await withPendingWorker()
+    const before = deps.getState()
+    refusedAsStarting(await call(deps, 'worker-stop', { dispatch: dispatchId }))
+    expect(released).toEqual([])
+    expect(deps.getState()).toBe(before)
+  })
+  it('runs-stop refuses and writes nothing', async () => {
+    const { deps, released, runId } = await withPendingWorker()
+    const before = deps.getState()
+    refusedAsStarting(await call(deps, 'runs-stop', { id: runId }))
+    expect(released).toEqual([])
+    expect(deps.getState()).toBe(before)
+  })
+  it('run-delete of a scheduled Job refuses and writes nothing', async () => {
+    const { deps, released, templateId } = await withPendingScheduledWorker()
+    const before = deps.getState()
+    refusedAsStarting(await call(deps, 'run-delete', { id: templateId }))
+    expect(released).toEqual([])
+    expect(deps.getState()).toBe(before)
+  })
+  it('run-pause refuses and writes nothing', async () => {
+    const { deps, released, templateId } = await withPendingScheduledWorker()
+    const before = deps.getState()
+    refusedAsStarting(await call(deps, 'run-pause', { run: templateId }))
+    expect(released).toEqual([])
+    expect(deps.getState()).toBe(before)
+  })
+})

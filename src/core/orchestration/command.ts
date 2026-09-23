@@ -54,6 +54,7 @@ import {
   DEFAULT_CONCURRENCY,
   FAILURE_LIMIT,
   canTransition,
+  isPlaceholderSessionId,
   recomputeReady,
   type ConvergencePolicy,
   type Dispatch,
@@ -439,6 +440,16 @@ const refused = (r: { error: string; missing?: true }): Reply =>
   r.missing ? notFound(r.error) : bad(r.error)
 const denied = (msg: string): Reply => ({ status: 403, body: { error: msg } })
 const conflict = (msg: string): Reply => ({ status: 409, body: { error: msg } })
+/** The refusal of every command that stops workers, for a Dispatch whose worker-start has not
+ *  answered yet (Host S2 fix round, I1). Its session id is still the `pending:` placeholder, so there
+ *  is nothing to kill, and the spawn may still complete and write the real id onto the Dispatch.
+ *  Recording it stopped would leave a live agent on a closed Dispatch, and the next `--retry-of`
+ *  would put a second one in the same worktree. So the command writes nothing and says to try again.
+ *  Null when no such Dispatch is among `open`. */
+const stillStarting = (open: readonly Dispatch[]): Reply | null => {
+  const d = open.find((x) => isPlaceholderSessionId(x.sessionId))
+  return d ? conflict(`the worker is still starting; try again in a moment (dispatch ${d.id})`) : null
+}
 
 /**
  * 계획과 회차에 붙는 파생값 — 공개 읽기 표면이 상태를 말하는 방식(공개 CLI 설계 §6).
@@ -1078,6 +1089,8 @@ export async function handleCommand(
         return conflict(
           `refusing to stop while ${retained.length} dispatch(es) are held by worker-retain — release them first`
         )
+      const starting = stillStarting(open)
+      if (starting) return starting
       for (const d of open) await deps.releaseWorker({ dispatchId: d.id })
       const stopped = new Set(open.map((d) => d.id))
       const latest = deps.getState()
@@ -1198,6 +1211,8 @@ export async function handleCommand(
           return conflict(
             `refusing to delete while ${retained.length} dispatch(es) are held by worker-retain — release them first`
           )
+        const starting = stillStarting(open)
+        if (starting) return starting
         // 순차로 닫는다. releaseWorker 는 세션을 죽이는 부수 효과이고 상태를 쓰지 않는다 — 상태에서
         // 사라지는 것은 아래 deleteRuns 가 한꺼번에 한다.
         for (const d of open) await deps.releaseWorker({ dispatchId: d.id })
@@ -1373,6 +1388,8 @@ export async function handleCommand(
         return conflict(
           `refusing to pause while ${retained.length} dispatch(es) are held by worker-retain — release them first`
         )
+      const starting = stillStarting(open)
+      if (starting) return starting
       // 세션을 닫는 것은 부수 효과이고 상태를 쓰지 않는다 — 상태에서 닫히는 것은 아래
       // pauseSchedule 이 한꺼번에 한다(run-delete 가 releaseWorker 를 쓰는 순서와 같다).
       for (const d of open) await deps.releaseWorker({ dispatchId: d.id })
@@ -1961,6 +1978,10 @@ export async function handleCommand(
         return conflict(
           `dispatch is retained: ${d.id} — a session held by worker-retain is not stopped`
         )
+      // Only an open Dispatch: a closed one carrying a placeholder is a start that failed, and has
+      // nothing still starting.
+      const starting = !d.outcome && !d.endedAt ? stillStarting([d]) : null
+      if (starting) return starting
       await deps.releaseWorker({ dispatchId: d.id })
       await deps.setState({
         ...deps.getState(),
