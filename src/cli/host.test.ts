@@ -20,6 +20,27 @@ import { HOST_PROTOCOL } from '../core/host/protocol'
 import { encodeLine } from '../host/framing'
 import { exitCodeFor } from '../core/orchestration/cliOutput'
 import { hostRuntimePaths } from '../core/host/runtime'
+import { errEnvelope, type CliError } from '../core/orchestration/cliOutput'
+
+/**
+ * 리뷰 I1. host 명령의 실패는 다른 모든 명령과 같은 오류 봉투로 나간다 — `jq -e .ok` 가 false 이고
+ * `error.code` 와 `nextSteps` 가 있다. run.ts 는 실패를 `fail()` 로만 내보내므로(run.test.ts 의
+ * FAIL_SEAM 가드), 여기서 확인하는 것은 결과가 실패 모양인가와 그 봉투다.
+ */
+const failed = (r: Awaited<ReturnType<typeof runHostCommand>>, cmd: string): CliError => {
+  if (r.ok) throw new Error(`${cmd} succeeded: ${JSON.stringify(r.body)}`)
+  const env = JSON.parse(errEnvelope(r.error, cmd)) as { ok: boolean }
+  expect(env.ok, `${cmd} printed ok: true on a failure`).toBe(false)
+  expect(exitCodeFor(r.error.code)).toBeGreaterThan(0)
+  return r.error
+}
+const envelopeOf = (
+  r: Awaited<ReturnType<typeof runHostCommand>>,
+  cmd: string
+): { ok: boolean; error: { nextSteps: string[] } } => {
+  if (r.ok) throw new Error(`${cmd} succeeded`)
+  return JSON.parse(errEnvelope(r.error, cmd)) as { ok: boolean; error: { nextSteps: string[] } }
+}
 
 describe('hostStatus', () => {
   // Host 가 없을 때도 사람에게 할 말이 있어야 한다 — 어느 프로필을 봤는지와, 파일에 몇 개가 있는지.
@@ -57,13 +78,13 @@ describe('hostStopResult', () => {
   // 없는 것을 멈추는 것은 실패가 아니다 — 0으로 끝난다.
   it('Host 가 없으면 0 으로 끝나고 그렇다고 말한다', () => {
     expect(hostStopResult({ outcome: 'absent' })).toEqual({
-      body: { stopped: true, message: 'no Host was running' },
-      code: 0
+      ok: true,
+      body: { stopped: true, message: 'no Host was running' }
     })
   })
 
   it('물러났으면 0 으로 끝난다', () => {
-    expect(hostStopResult({ outcome: 'stopped' })).toEqual({ body: { stopped: true }, code: 0 })
+    expect(hostStopResult({ outcome: 'stopped' })).toEqual({ ok: true, body: { stopped: true } })
   })
 
   // 명세 §12 의 문구를 그대로 옮긴다 — 그 문서가 회차 단위로 개정됐다(2026-09-22의 덧붙임).
@@ -71,19 +92,18 @@ describe('hostStopResult', () => {
   // 종료 코드는 CONFLICT(6) — host stop 이 거절하는 유일한 경우다.
   it('거절되면 CONFLICT 로 끝나고 수를 문장에 담는다', () => {
     expect(hostStopResult({ outcome: 'refused', sessions: 2, runs: 1 })).toEqual({
-      body: {
-        stopped: false,
-        sessions: 2,
-        runs: 1,
-        message: 'Cannot stop Host: 2 sessions and 1 run are still running.'
-      },
-      code: exitCodeFor('CONFLICT')
+      ok: false,
+      error: {
+        code: 'CONFLICT',
+        message: 'Cannot stop Host: 2 sessions and 1 run are still running.',
+        details: { sessions: 2, runs: 1 }
+      }
     })
   })
 
   it('하나씩이면 단수로 말한다', () => {
     expect(hostStopResult({ outcome: 'refused', sessions: 1, runs: 1 })).toMatchObject({
-      body: { message: 'Cannot stop Host: 1 session and 1 run are still running.' }
+      error: { message: 'Cannot stop Host: 1 session and 1 run are still running.' }
     })
   })
 
@@ -91,11 +111,12 @@ describe('hostStopResult', () => {
   // 다음에 할 일이 다르므로 그렇다고 말한다. TIMEOUT(7)은 열 개짜리 표에 이미 있는 코드다.
   it('답이 없으면 TIMEOUT 으로 끝나고, 있었던 일을 그대로 말한다', () => {
     expect(hostStopResult({ outcome: 'timeout', waitedMs: 15_000 })).toEqual({
-      body: {
-        stopped: false,
-        message: 'retire was sent, but the Host did not answer within 15000ms — it may still be running (and possibly stuck)'
-      },
-      code: exitCodeFor('TIMEOUT')
+      ok: false,
+      error: {
+        code: 'TIMEOUT',
+        message: 'retire was sent, but the Host did not answer within 15000ms — it may still be running (and possibly stuck)',
+        details: { waitedMs: 15_000 }
+      }
     })
   })
 })
@@ -154,8 +175,32 @@ describe('otherProtocolHost — 같은 프로필을 다른 판의 Host 가 쥐�
         platform: process.platform,
         home: os.tmpdir()
       })
-      expect(r.code).toBe(exitCodeFor('VERSION_MISMATCH'))
-      expect(r.body).toMatchObject({ hostProtocol: HOST_PROTOCOL + 1, hostAddress: other.address })
+      expect(failed(r, 'host-start')).toMatchObject({
+        code: 'VERSION_MISMATCH',
+        details: { hostProtocol: HOST_PROTOCOL + 1, hostAddress: other.address }
+      })
+      // 실패한 명령이 `host start` 자신이므로 그것을 다시 권하지 않는다
+      expect(envelopeOf(r, 'host-start').error.nextSteps).toEqual(['astera version'])
+    } finally {
+      await other.close()
+    }
+  })
+
+  // 리뷰 M5. `status` 가 9 로 답하는 자리에서 `host status` 가 3 이면 스크립트는 두 이야기를 듣는다.
+  it('host status 도 다른 판의 Host 가 있으면 9 다', async () => {
+    const profileDir = path.join(os.tmpdir(), `astera-probe-${process.pid}-e`)
+    const other = await listenAt(HOST_PROTOCOL + 1, profileDir)
+    try {
+      const r = await runHostCommand({
+        cmd: 'host-status',
+        env: { ASTERA_PROFILE_DIR: profileDir },
+        platform: process.platform,
+        home: os.tmpdir()
+      })
+      expect(failed(r, 'host-status')).toMatchObject({
+        code: 'VERSION_MISMATCH',
+        details: { hostProtocol: HOST_PROTOCOL + 1, hostAddress: other.address }
+      })
     } finally {
       await other.close()
     }
@@ -173,8 +218,7 @@ describe('runHostCommand — host stop against a real Host', () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cli-home-'))
     try {
       const down = await runHostCommand({ cmd: 'host-stop', env: {}, platform: process.platform, home })
-      expect(down.code).toBe(0)
-      expect(down.body).toMatchObject({ stopped: true })
+      expect(down).toMatchObject({ ok: true, body: { stopped: true } })
     } finally {
       await fs.rm(home, { recursive: true, force: true })
     }
@@ -206,18 +250,16 @@ describe('runHostCommand — host stop against a real Host', () => {
       })
       try {
         const refused = await runHostCommand({ cmd: 'host-stop', env, platform: process.platform, home })
-        expect(refused.code).toBe(exitCodeFor('CONFLICT'))
-        expect(refused.body).toMatchObject({ stopped: false, sessions: 2, runs: 0 })
+        expect(failed(refused, 'host-stop')).toMatchObject({ code: 'CONFLICT', details: { sessions: 2, runs: 0 } })
+        expect(exitCodeFor('CONFLICT')).toBe(6)
 
         sessions = 0
         const stopped = await runHostCommand({ cmd: 'host-stop', env, platform: process.platform, home })
-        expect(stopped.code).toBe(0)
-        expect(stopped.body).toEqual({ stopped: true })
+        expect(stopped).toEqual({ ok: true, body: { stopped: true } })
 
         // The address is free: a fresh connect finds nobody, the way it would after any Host leaves.
         const after = await runHostCommand({ cmd: 'host-status', env, platform: process.platform, home })
-        expect(after.code).toBe(exitCodeFor('HOST_NOT_RUNNING'))
-        expect(after.body).toMatchObject({ running: false })
+        expect(failed(after, 'host-status')).toMatchObject({ code: 'HOST_NOT_RUNNING', details: { running: false } })
       } finally {
         await server.close().catch(() => {})
       }
@@ -262,8 +304,7 @@ describe('runHostCommand — host stop against a Host whose event loop is wedged
         home,
         stopTimeoutMs: 50
       })
-      expect(result.code).toBe(exitCodeFor('TIMEOUT'))
-      expect(result.body).toMatchObject({ stopped: false })
+      expect(failed(result, 'host-stop')).toMatchObject({ code: 'TIMEOUT' })
     } finally {
       server.close()
       await fs.rm(home, { recursive: true, force: true })
@@ -302,8 +343,8 @@ describe('runHostCommand — host status against a real Host', () => {
       })
       try {
         const up = await runHostCommand({ cmd: 'host-status', env, platform: process.platform, home })
-        expect(up.code).toBe(0)
-        expect(up.body).toMatchObject({
+        expect(up.ok).toBe(true)
+        expect((up as { body: unknown }).body).toMatchObject({
           running: true,
           pid: process.pid,
           version: '9.9.9',
@@ -315,8 +356,12 @@ describe('runHostCommand — host status against a real Host', () => {
         await server.close()
       }
       const down = await runHostCommand({ cmd: 'host-status', env, platform: process.platform, home })
-      expect(down.code).toBe(exitCodeFor('HOST_NOT_RUNNING'))
-      expect(down.body).toMatchObject({ running: false, profile: profileDir, jobsInProfile: 3 })
+      // 없다는 것도 오류 봉투다 — 무엇을 봤는지는 details 가 싣는다
+      expect(failed(down, 'host-status')).toMatchObject({
+        code: 'HOST_NOT_RUNNING',
+        details: { running: false, profile: profileDir, jobsInProfile: 3 }
+      })
+      expect(envelopeOf(down, 'host-status').error.nextSteps).toEqual(['astera host start'])
     } finally {
       await fs.rm(home, { recursive: true, force: true })
     }

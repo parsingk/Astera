@@ -184,6 +184,15 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'VERSION_MISMATCH' })).toEqual(['astera version', 'astera host stop'])
   })
 
+  // 리뷰 I1. 실패한 명령이 `host start` 자신이면 그것을 다시 권하는 것은 돌고 도는 안내다.
+  it('host start 의 실패는 host start 를 권하지 않는다', () => {
+    expect(nextStepsFor({ code: 'VERSION_MISMATCH', cmd: 'host-start', details: { hostProtocol: 4 } })).toEqual([
+      'astera version'
+    ])
+    expect(nextStepsFor({ code: 'HOST_NOT_RUNNING', cmd: 'host-start' })).toEqual(['astera host status'])
+    expect(nextStepsFor({ code: 'HOST_NOT_RUNNING', cmd: 'host-status' })).toEqual(['astera host start'])
+  })
+
   it('없는 id 는 그 명령의 목록 명령으로 이어진다', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'jobs-get' })).toEqual(['astera jobs list'])
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'runs-stop' })).toEqual(['astera runs list'])

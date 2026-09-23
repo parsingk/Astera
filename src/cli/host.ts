@@ -15,7 +15,7 @@ import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { hostAddress, siblingHostAddresses } from '../host/address'
 import { answers } from '../host/server'
 import { nativePath, userDataDir } from '../core/orchestration/cliDiscovery'
-import { exitCodeFor } from '../core/orchestration/cliOutput'
+import type { CliError } from '../core/orchestration/cliOutput'
 
 /** What `astera host status` reports. **Answers without a Host**: the content says what is there and
  *  the exit code says whether the Host is running, which is the pair a script needs (spec §8). */
@@ -40,6 +40,41 @@ export function hostStatus(a: {
   }
 }
 
+/**
+ * What a `host-*` command ends with. **A failure is a `CliError`, never a success-shaped body with a
+ * non-zero exit** (review I1). run.ts sends it through `fail()`, so it gets the documented envelope
+ * (`ok: false`, `error.code`, `error.nextSteps`) and, under `--human`, the `error:` sentence. What the
+ * old bodies carried beside their message (the refusal's counts, the log path, the profile looked in)
+ * is in `error.details`.
+ */
+export type HostCommandResult =
+  | { ok: true; body: Record<string, unknown> }
+  | { ok: false; error: CliError }
+
+/**
+ * The ending for a CLI that found nobody at its own address and a Host of **another** protocol
+ * serving this profile (`otherProtocolHost`, conformance audit #12).
+ *
+ * **9, and the state file is not read.** The address carries the protocol, so the two builds miss
+ * each other: the Host is running and writing that file, which is the one condition under which the
+ * file cannot answer (stateFile.ts). It is the same fact `connectFailureEnd` answers 9 for when the
+ * mismatch is seen in the handshake instead of in the address.
+ *
+ * `details` carries both protocols and the address, so `nextSteps` can tell this 9 from the one a
+ * Host that does not know a command gives (cliOutput.ts). Here rather than in run.ts because the
+ * `host-*` commands below end with it too, and this file cannot import run.ts.
+ */
+export function siblingHostError(a: { found: { protocol: number; address: string }; cliProtocol: number }): CliError {
+  return {
+    code: 'VERSION_MISMATCH',
+    message:
+      `a Host speaking protocol ${a.found.protocol} serves this profile at ${a.found.address}, and this astera speaks protocol ${a.cliProtocol}: ` +
+      'they come from different builds of Astera. That Host is running, so its state was not read from the file. ' +
+      'Quit Astera, stop that Host with the build that started it, then start the build you mean to use.',
+    details: { hostProtocol: a.found.protocol, hostAddress: a.found.address, cliProtocol: a.cliProtocol }
+  }
+}
+
 /** What `astera host stop` reports for each of the four ways it can end (host control plane design
  *  §12). Kept pure and separate from the connecting and waiting below, the same way `hostStatus` is,
  *  so the four shapes can be checked without a socket.
@@ -58,28 +93,30 @@ export function hostStopResult(
     | { outcome: 'stopped' }
     | { outcome: 'refused'; sessions: number; runs: number }
     | { outcome: 'timeout'; waitedMs: number }
-): { body: Record<string, unknown>; code: number } {
-  if (a.outcome === 'absent') return { body: { stopped: true, message: 'no Host was running' }, code: 0 }
-  if (a.outcome === 'stopped') return { body: { stopped: true }, code: 0 }
+): HostCommandResult {
+  if (a.outcome === 'absent') return { ok: true, body: { stopped: true, message: 'no Host was running' } }
+  if (a.outcome === 'stopped') return { ok: true, body: { stopped: true } }
   if (a.outcome === 'timeout')
     return {
-      body: {
-        stopped: false,
-        message: `retire was sent, but the Host did not answer within ${a.waitedMs}ms — it may still be running (and possibly stuck)`
-      },
-      code: exitCodeFor('TIMEOUT')
+      ok: false,
+      error: {
+        code: 'TIMEOUT',
+        message: `retire was sent, but the Host did not answer within ${a.waitedMs}ms — it may still be running (and possibly stuck)`,
+        details: { waitedMs: a.waitedMs }
+      }
     }
   const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
   return {
-    body: {
-      stopped: false,
-      sessions: a.sessions,
-      runs: a.runs,
+    ok: false,
+    error: {
+      code: 'CONFLICT',
       // **`run`, because Runs are what is counted** (ruling F57/e). It said "Job" while counting
       // Runs, so one Job with two concurrent Runs read as two Jobs.
-      message: `Cannot stop Host: ${plural(a.sessions, 'session')} and ${plural(a.runs, 'run')} are still running.`
-    },
-    code: exitCodeFor('CONFLICT')
+      message: `Cannot stop Host: ${plural(a.sessions, 'session')} and ${plural(a.runs, 'run')} are still running.`,
+      // The counts a script acts on. They used to ride a success-shaped body (`ok: true` with exit 6);
+      // they are the same numbers in the envelope every other refusal uses (review I1).
+      details: { sessions: a.sessions, runs: a.runs }
+    }
   }
 }
 
@@ -290,30 +327,46 @@ export async function runHostCommand(a: {
    *  `HostServerDeps`'s `idleMs`/`helloMs` and `HostClientDeps`'s `pingMs` are — nothing waits out a
    *  real 15s to prove a silent Host resolves rather than hangs. */
   stopTimeoutMs?: number
-}): Promise<{ body: unknown; code: number }> {
+}): Promise<HostCommandResult> {
   if (a.cmd !== 'host-status' && a.cmd !== 'host-start' && a.cmd !== 'host-stop')
-    return { body: { error: `${a.cmd} is not implemented yet` }, code: exitCodeFor('FAILED') }
+    return { ok: false, error: { code: 'FAILED', message: `${a.cmd} is not implemented yet` } }
 
   const { address, profileDir } = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
 
   /** One connect attempt, turned into the pair `runHostCommand` returns — or null when nothing
    *  answered, which the two callers below read differently (a failed `status` and a `start` that
    *  still has spawning left to do are not the same null). */
-  const tryStatus = async (): Promise<{ body: unknown; code: number } | null> => {
+  const tryStatus = async (): Promise<HostCommandResult | null> => {
     const connected = await connectHost({ address, app: CLI_VERSION, log: logToStderr })
     if ('error' in connected) return null
     const body = hostStatus({ conn: connected, profileDir, jobsInProfile: jobCountFrom(profileDir) })
     connected.close()
-    return { body, code: 0 }
+    return { ok: true, body }
+  }
+
+  /** A Host of another protocol on this profile, as the 9 both `host status` and `host start` end
+   *  with: the same answer `status` gives (review M5), so a script hears one story. */
+  const sibling = async (): Promise<HostCommandResult | null> => {
+    const found = await otherProtocolHost({ profileDir, platform: a.platform, tmpDir: os.tmpdir() })
+    return found === null ? null : { ok: false, error: siblingHostError({ found, cliProtocol: HOST_PROTOCOL }) }
   }
 
   if (a.cmd === 'host-status') {
-    return (
-      (await tryStatus()) ?? {
-        body: hostStatus({ conn: null, profileDir, jobsInProfile: jobCountFrom(profileDir) }),
-        code: exitCodeFor('HOST_NOT_RUNNING')
+    const up = await tryStatus()
+    if (up) return up
+    const other = await sibling()
+    if (other) return other
+    // **No Host is a 3 in the error envelope**, with what the success body used to say in `details`:
+    // the profile looked in and how many Jobs its file holds. Troubleshooting sends people here to
+    // read the profile, and the message names it too.
+    return {
+      ok: false,
+      error: {
+        code: 'HOST_NOT_RUNNING',
+        message: `no Host is running for the profile ${profileDir}`,
+        details: hostStatus({ conn: null, profileDir, jobsInProfile: jobCountFrom(profileDir) })
       }
-    )
+    }
   }
 
   if (a.cmd === 'host-stop') {
@@ -322,10 +375,10 @@ export async function runHostCommand(a: {
     // A `retire` that is honoured gets no reply, only the connection ending — so this races three
     // outcomes: `retire-refused`, the socket closing on its own, or neither ever arriving because the
     // Host's event loop is wedged and cannot run the code that would send either one.
-    const outcome = await new Promise<{ body: unknown; code: number }>((resolve) => {
+    const outcome = await new Promise<HostCommandResult>((resolve) => {
       let offMessage: () => void = () => {}
       let offClose: () => void = () => {}
-      const settle = (r: { body: unknown; code: number }): void => {
+      const settle = (r: HostCommandResult): void => {
         clearTimeout(timer)
         offMessage()
         offClose()
@@ -352,16 +405,8 @@ export async function runHostCommand(a: {
   // **Not while a Host of another protocol serves this profile** (conformance audit #12). It is at
   // another address, so nothing above saw it, and a second Host would write the same state file.
   // This is the step the 9 for that case offers next, so it has to be safe to follow.
-  const other = await otherProtocolHost({ profileDir, platform: a.platform, tmpDir: os.tmpdir() })
-  if (other !== null)
-    return {
-      body: {
-        error: `a Host speaking protocol ${other.protocol} already serves this profile at ${other.address}, and this astera speaks protocol ${HOST_PROTOCOL} — quit Astera and stop that Host with the build that started it, then run this again`,
-        hostProtocol: other.protocol,
-        hostAddress: other.address
-      },
-      code: exitCodeFor('VERSION_MISMATCH')
-    }
+  const other = await sibling()
+  if (other) return other
 
   const targets = hostStartTargets({
     cliEntry: process.argv[1] ?? '',
@@ -379,8 +424,12 @@ export async function runHostCommand(a: {
   const entry = resolveHostEntry(targets.candidates, existsSync)
   if (!entry)
     return {
-      body: { error: `no Host build found among: ${targets.candidates.join(', ')}` },
-      code: exitCodeFor('HOST_NOT_RUNNING')
+      ok: false,
+      error: {
+        code: 'HOST_NOT_RUNNING',
+        message: `no Host build found among: ${targets.candidates.join(', ')}`,
+        details: { candidates: targets.candidates }
+      }
     }
   const plan = hostSpawnPlan({
     execPath: targets.execPath,
@@ -404,8 +453,12 @@ export async function runHostCommand(a: {
     await sleep(START_POLL_MS)
   }
   return {
-    body: { error: `the Host did not answer within ${START_TIMEOUT_MS}ms`, logPath: targets.logPath },
-    code: exitCodeFor('HOST_NOT_RUNNING')
+    ok: false,
+    error: {
+      code: 'HOST_NOT_RUNNING',
+      message: `the Host did not answer within ${START_TIMEOUT_MS}ms — its log is at ${targets.logPath}`,
+      details: { logPath: targets.logPath }
+    }
   }
 }
 

@@ -23,7 +23,6 @@ import {
   callHost,
   connectFailureEnd,
   SILENT_HOST_CODE,
-  siblingHostError,
   resolveGuidePath,
   readGuide,
   outputMode,
@@ -32,6 +31,7 @@ import {
   startKeepalive,
   writePendingReport
 } from './run'
+import { siblingHostError } from './host'
 import { parseArgs } from '../core/orchestration/cliArgs'
 import { createHostOrch } from '../host/orch'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
@@ -1173,7 +1173,7 @@ describe('run.ts — 모드가 정해진 뒤의 실패는 한 문으로만 나�
   // **아무것도 안 찍고 끝내는 것이 이 집안에서 가장 나쁘다.** 봉투를 잘못 찍는 것은 보이기라도
   // 하는데, 맨 `process.exit(2)` 는 스크립트에게 코드만 주고 왜인지는 아무 데도 남기지 않는다.
   // 그래서 0 이 아닌 종료는 전부 `fail` 을 지나야 하고, 지나지 않는 자리는 그 줄에서 그렇게 말해야
-  // 한다. 지금 면제는 하나이고(`host-*` 는 성공 모양의 본문에 0 아닌 코드를 붙인다) 그 수를 센다.
+  // 한다. 그 수를 센다.
   it('0 이 아닌 종료는 fail 을 지나거나, 그 자리에서 면제라고 말한다', () => {
     const lines = afterSeam().split('\n')
     const exits = lines.map((l, i) => ({ l, i })).filter(({ l }) => l.includes('process.exit('))
@@ -1184,7 +1184,9 @@ describe('run.ts — 모드가 정해진 뒤의 실패는 한 문으로만 나�
       const preface = lines.slice(Math.max(0, i - 8), i).join('\n')
       expect(preface.includes('FAIL_SEAM:exempt'), `unmarked non-zero exit: ${l.trim()}`).toBe(true)
     }
-    expect(bare.length, 'the number of exemptions changed').toBe(1)
+    // 면제는 없다. `host-*` 가 성공 모양의 본문에 0 아닌 코드를 붙이던 것이 마지막 면제였고, 그 실패는
+    // 이제 `fail` 을 지난다(리뷰 I1).
+    expect(bare.length, 'the number of exemptions changed').toBe(0)
   })
 
   // 앞선 세 자리는 아직 모드가 없어서 봉투로 나간다 — 그것이 errorOutput 이 남아 있는 이유이고,

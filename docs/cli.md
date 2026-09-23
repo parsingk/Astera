@@ -42,7 +42,16 @@ astera host stop       # ask the running Host to retire
 `astera host start` is idempotent. A Host that is already running is success, not an error.
 
 `astera host stop` refuses while the Host still holds sessions or running **runs**, and says how many.
-That refusal is the Host protecting work in progress. Stop the work first, then stop the Host.
+That refusal is the Host protecting work in progress. Stop the work first, then stop the Host. The
+refusal is exit 6 (`CONFLICT`), and the counts are in `error.details.sessions` and
+`error.details.runs`.
+
+**The three `host` commands fail the way every other command does**, with `"ok": false`, an
+`error.code` and `error.nextSteps`, and with the `error:` sentence under `--human`. Until 2026-09-24
+their failures printed `"ok": true` with the details under `data` and only the exit code saying
+otherwise. A script that read `.data.stopped` or `.data.sessions` off a refused `host stop` reads
+`.error.details` now. `host stop` with no Host running is still a success: nothing was running, and
+nothing is.
 
 A run, not a Job: a Job with two runs going at once counts as two, because two things are running.
 A run is running while it has work in flight: a worker session open on one of its tasks, or a task
@@ -78,7 +87,9 @@ they wait.
 **`astera status` is on that list, so its exit code does not say whether a Host is running.** With
 no Host it answers 0 with `"running": false`, read from the file, and 3 only when the profile has no
 state file yet. A script that needs to know reads `.data.running`, or the exit code of
-`astera host status`: 0 when a Host is running, 3 when none is.
+`astera host status`: 0 when a Host is running, 3 when none is. With no Host, `host status` puts what
+it looked at (`profile`, `jobsInProfile`) in `error.details`. When a Host of another protocol serves
+the profile, both `status` and `host status` answer 9 (see Exit codes).
 
 `skills list` and `skills install` are outside both lists: they never contact a Host and never need
 one. They read the profile's `accounts.json` and `app-settings.json` and work on files in each
@@ -659,8 +670,10 @@ The Host's address includes its protocol version, so an `astera` of another prot
 the running Host at all. When it finds nobody at its own address, it checks whether a Host of any
 other protocol serves the same profile before it says there is no Host or answers from the state
 file. If one does, the answer is 9 rather than 3, the file is not read (that Host is writing it), and
-`error.details` carries `hostProtocol`, `hostAddress` and `cliProtocol`. `astera host start` refuses
-with 9 in the same situation instead of starting a second Host on the profile.
+`error.details` carries `hostProtocol`, `hostAddress` and `cliProtocol`. `astera host status` answers
+9 in the same situation, and `astera host start` refuses with 9 instead of starting a second Host on
+the profile. Its `nextSteps` is only `astera version`, because running `host start` again would get
+the same answer.
 
 `astera version` never fails. It answers 0 with whatever it knows, so it can be used to check
 whether the two halves agree.
@@ -781,7 +794,8 @@ restarts. Run `astera skills list` to see what each account has and `astera skil
 in what the settings enable, then open a new session: a session reads its skills when it starts.
 
 **Exit 6 from `astera host stop`**
-The Host still holds sessions or running runs. The message says how many. Stop the work first.
+The Host still holds sessions or running runs. The message says how many, and so do
+`error.details.sessions` and `error.details.runs`. Stop the work first.
 
 **Exit 7**
 Either a wait reached its deadline, which is not a failure of the Job, or the Host is running and

@@ -14,7 +14,7 @@ import { humanFor, quietFor } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
 import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTOCOL } from '../core/host/protocol'
-import { cliHostTarget, logToStderr, otherProtocolHost, runHostCommand } from './host'
+import { cliHostTarget, logToStderr, otherProtocolHost, runHostCommand, siblingHostError } from './host'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import {
   CLI_PROTOCOL,
@@ -148,30 +148,6 @@ export function connectFailureEnd(a: {
     fallback: false,
     code: SILENT_HOST_CODE,
     message: `the Host at ${a.address} accepted the connection but did not say hello — it is running and not answering, so its state was not read from the file`
-  }
-}
-
-/**
- * The ending for a CLI that found nobody at its own address and a Host of **another** protocol
- * serving this profile (`otherProtocolHost`, conformance audit #12).
- *
- * **9, and the state file is not read.** The address carries the protocol, so the two builds miss
- * each other: the Host is running and writing that file, which is the one condition under which the
- * file cannot answer (stateFile.ts). It is the same fact `connectFailureEnd` answers 9 for when the
- * mismatch is seen in the handshake instead of in the address.
- *
- * `details` carries both protocols and the address, so `nextSteps` can tell this 9 from the one a
- * Host that does not know a command gives (cliOutput.ts), and the steps here start again from this
- * build once the other is gone.
- */
-export function siblingHostError(a: { found: { protocol: number; address: string }; cliProtocol: number }): CliError {
-  return {
-    code: 'VERSION_MISMATCH',
-    message:
-      `a Host speaking protocol ${a.found.protocol} serves this profile at ${a.found.address}, and this astera speaks protocol ${a.cliProtocol}: ` +
-      'they come from different builds of Astera. That Host is running, so its state was not read from the file. ' +
-      'Quit Astera, stop that Host with the build that started it, then start the build you mean to use.',
-    details: { hostProtocol: a.found.protocol, hostAddress: a.found.address, cliProtocol: a.cliProtocol }
   }
 }
 
@@ -1038,18 +1014,18 @@ export async function main(): Promise<void> {
         code: 'INVALID_ARGUMENTS',
         message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
       })
-    const { body, code } = await runHostCommand({
+    const done = await runHostCommand({
       cmd: parsed.cmd,
       env: process.env,
       platform: process.platform,
       home: homedir()
     })
-    out(renderOk(parsed.cmd, body, mode))
-    // FAIL_SEAM:exempt — 이 자리만 0 이 아닌 값으로 끝나면서 `fail` 을 지나지 않는다. 내보내는
-    // 것이 실패가 아니라 **성공 모양의 답**이기 때문이다: `host stop` 이 일을 쥔 Host 를 두고
-    // 물러서면 본문은 `{stopped:false, sessions, runs}` 이고 종료 코드만 6 이다(cli/host.ts 의
-    // hostStopResult). 오류 문구로 바꾸면 그 수들을 잃는다. run.test.ts 가 이 면제를 하나로 센다.
-    process.exit(code)
+    // A failure is a `CliError` and goes out like every other one (review I1): `ok: false`, its code,
+    // its nextSteps, and the `error:` sentence under `--human`. `host stop`'s refusal keeps its counts
+    // in `error.details`.
+    if (!done.ok) fail(done.error)
+    out(renderOk(parsed.cmd, done.body, mode))
+    process.exit(0)
   }
 
   // **skills 도 Host 없이 답한다** — 프로필의 accounts.json·app-settings.json 을 읽고 계정의 설정

@@ -280,7 +280,9 @@ const STEPS: Record<
 > = {
   FAILED: () => [],
   INVALID_ARGUMENTS: (cmd) => [usageCommandFor(cmd)],
-  HOST_NOT_RUNNING: () => ['astera host start'],
+  // **`host start` 가 3 으로 끝난 것에 `host start` 를 권하지 않는다**(리뷰 I1). 방금 그것이 안 됐다.
+  // 무엇을 봤는지는 `host status` 가 말하고, Host 의 로그 자리는 이 오류의 details 가 싣는다.
+  HOST_NOT_RUNNING: (cmd) => [cmd === 'host-start' ? 'astera host status' : 'astera host start'],
   // **`tasks add --validate` 의 없는 구성 id 는 그 계획의 목록 한 줄이다**(phase D). 그 404 만 답에
   // 계획 id 를 싣고 오고(command.ts, run.ts 가 `details` 로 옮긴다), 채워진 줄은 그대로 칠 수 있다.
   // 문구가 아니라 칸으로 가른다 — CONFLICT 의 `requestId` 와 같은 판단이다.
@@ -328,13 +330,16 @@ const STEPS: Record<
   ],
   // 두 빌드가 갈렸다. 무엇과 무엇이 갈렸는지 보고, 옛 Host 를 물린다(docs/cli.md 의 Exit 9).
   //
-  // **다른 판의 Host 를 주소에서 찾은 9 는 `host stop` 이 아니다**(run.ts 의 siblingHostError). 그
+  // **다른 판의 Host 를 주소에서 찾은 9 는 `host stop` 이 아니다**(cli/host.ts 의 siblingHostError). 그
   // Host 는 이 CLI 의 주소에 없으므로 이 CLI 의 `host stop` 은 "없다" 고 답한다. 그만두게 하는 것은
   // 문구가 말하고(앱을 닫고, 그 Host 를 띄운 빌드로 멈춘다), 칠 명령은 그다음 이 판으로 다시
   // 띄우는 것이다 — `host start` 는 다른 판의 Host 가 아직 있으면 띄우지 않고 9 로 거절한다.
-  VERSION_MISMATCH: (_cmd, details) =>
+  // 실패한 것이 `host start` 자신이면 그것을 다시 권하지 않는다. 돌고 도는 안내다(리뷰 I1).
+  VERSION_MISMATCH: (cmd, details) =>
     typeof details.hostProtocol === 'number'
-      ? ['astera version', 'astera host start']
+      ? cmd === 'host-start'
+        ? ['astera version']
+        : ['astera version', 'astera host start']
       : ['astera version', 'astera host stop'],
   RUN_FAILED: () => ['astera tasks list --run <runId> --status failed']
 }
