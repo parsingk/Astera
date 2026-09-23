@@ -75,6 +75,11 @@ something (`jobs create`, `jobs run`, `tasks add`, `runs stop`, `runs resume`, `
 and both waiting commands (`jobs wait`, `runs wait`), which a static file cannot answer however long
 they wait.
 
+**`astera status` is on that list, so its exit code does not say whether a Host is running.** With
+no Host it answers 0 with `"running": false`, read from the file, and 3 only when the profile has no
+state file yet. A script that needs to know reads `.data.running`, or the exit code of
+`astera host status`: 0 when a Host is running, 3 when none is.
+
 `skills list` and `skills install` are outside both lists: they never contact a Host and never need
 one. They read the profile's `accounts.json` and `app-settings.json` and work on files in each
 account's config folder, so they answer the same with Astera and the Host running or not.
