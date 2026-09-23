@@ -4,7 +4,7 @@
 // main() does not call itself inside this file, so importing this module (as the tests do) does not
 // terminate the process.
 import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { parseArgs } from '../core/orchestration/cliArgs'
@@ -15,6 +15,7 @@ import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestra
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
 import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS } from '../core/host/protocol'
 import { cliHostTarget, logToStderr, runHostCommand } from './host'
+import { resolveSkillsDir, skillsCommand } from './skills'
 import {
   CLI_PROTOCOL,
   askTimeoutBody,
@@ -994,6 +995,29 @@ export async function main(): Promise<void> {
     // 물러서면 본문은 `{stopped:false, sessions, runs}` 이고 종료 코드만 6 이다(cli/host.ts 의
     // hostStopResult). 오류 문구로 바꾸면 그 수들을 잃는다. run.test.ts 가 이 면제를 하나로 센다.
     process.exit(code)
+  }
+
+  // **skills 도 Host 없이 답한다** — 프로필의 accounts.json·app-settings.json 을 읽고 계정의 설정
+  // 폴더에 스킬 파일을 심는다(cli/skills.ts). Host 에게 물을 것이 없으므로 host 명령보다도 앞선
+  // 자리가 맞지만, `--request-id` 를 거절하려면 그것을 걷어 낸 뒤여야 한다. 거절하는 이유는 바로
+  // 위 host 명령과 같다: 명령 층에 닿지 않아 영수증이 없고, `skills install` 은 일을 한다.
+  if (parsed.cmd === 'skills-list' || parsed.cmd === 'skills-install') {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    const skillsDir = resolveSkillsDir({
+      resourcesPath: process.resourcesPath,
+      cliEntry: process.argv[1] ?? '',
+      exists: existsSync
+    })
+    if (skillsDir === undefined)
+      fail({ code: 'FAILED', message: 'cannot find the skill sources (resources/skills) beside this build' })
+    const done = await skillsCommand({ cmd: parsed.cmd, args, profileDir, skillsDir, log: logToStderr })
+    if (!done.ok) fail(done.error)
+    out(renderOk(parsed.cmd, publicFor(parsed.cmd, done.body), mode))
+    process.exit(0)
   }
 
   // `astera browser js --file check.js` — the script from a file instead of stdin

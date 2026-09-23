@@ -37,6 +37,15 @@ export const orchAccountOf = (a: Account): OrchAccount => ({
  *   (`isValidAccount`), so the two cannot disagree about which file is corrupt.
  */
 export async function readAccountsFile(filePath: string, provider?: Provider): Promise<OrchAccount[]> {
+  return (await readAccountEntries(filePath))
+    .filter((a) => provider === undefined || providerOf(a) === provider)
+    .map(orchAccountOf)
+}
+
+/** The same read, with every account whole — `configDir` included. For `astera skills`, which runs
+ *  in the CLI process and plants files in each account's config folder; never for a reply, which is
+ *  what `readAccountsFile`'s projection is for. */
+export async function readAccountEntries(filePath: string): Promise<Account[]> {
   let text: string
   try {
     text = await fs.readFile(filePath, 'utf8')
@@ -54,6 +63,4 @@ export async function readAccountsFile(filePath: string, provider?: Provider): P
   if (!Array.isArray(list) || !list.every(isValidAccount))
     throw new Error('accounts.json has an entry Astera cannot read; open Astera to repair it')
   return list
-    .filter((a) => provider === undefined || providerOf(a) === provider)
-    .map(orchAccountOf)
 }

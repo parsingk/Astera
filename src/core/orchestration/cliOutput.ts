@@ -189,6 +189,10 @@ const LISTING: Record<string, readonly string[]> = {
   // 정하므로 `--run` 에 넣은 계획 id 는 정의 Task 가 되지 않고 404 로 돌아온다(command.ts).
   'tasks-add': ['astera jobs list', 'astera runs list', 'astera tasks list', 'astera accounts list'],
   'task-update': ['astera tasks list'],
+  // **못 찾는 것은 `--account` 의 계정뿐이다.** 명사 규칙은 `skills list` 를 줄 텐데, 같은
+  // `--account` 를 준 그 줄은 같은 404 다.
+  'skills-list': ['astera accounts list'],
+  'skills-install': ['astera accounts list'],
   // **Dispatch 를 통째로 세는 명령은 없다** — `dispatch-show` 는 Task 하나의 것만 준다. 그래서 두
   // 줄이고, 앞 줄이 뒷줄의 `<taskId>` 를 준다. 한 줄만 주면 채워질 길이 없는 자리표시자가 된다.
   // `worker-start` 는 Task 를 못 찾기도 하고(`--task`) 세션을 못 찾기도 하는데(`--terminal`),

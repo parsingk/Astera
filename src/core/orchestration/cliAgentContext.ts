@@ -7,7 +7,7 @@
 // binary makes the answer as new as the build that gives it.
 //
 // **It covers everything the CLI can route, not just the public commands.** The public ones are the
-// 29 in `USAGE` (cliUsage.ts); the other 33 — `send`, `ask`, `check`, `worker-*`, `task-*`, `run-*`,
+// 31 in `USAGE` (cliUsage.ts); the other 33 — `send`, `ask`, `check`, `worker-*`, `task-*`, `run-*`,
 // `gate-*`, `session-task-*`, `handoff` — are what a coordinator or worker session actually calls,
 // and their contract lives only in the guide's prose. Closing that gap is the point, so `public` is
 // a field here rather than a filter.
@@ -330,8 +330,9 @@ export type AgentCommand = PublicCommand | SessionCommand
  * reasons.
  *
  * *Answered by the CLI itself, so they never reach the command layer:* `help` and `browser-help`
- * read a guide off disk, `agent-context` prints this file, and the three `host-*` commands ask
- * about the Host rather than about orchestration (src/cli/host.ts).
+ * read a guide off disk, `agent-context` prints this file, the three `host-*` commands ask
+ * about the Host rather than about orchestration (src/cli/host.ts), and the two `skills-*` commands
+ * read and write the profile's files with no Host at all (src/cli/skills.ts).
  *
  * *Answered before the switch:* `browser-js` and `handoff` each have their own toggle and need none
  * of the orchestration state the switch is built on, so `handleCommand` returns from an `if` above
@@ -344,8 +345,8 @@ export type AgentCommand = PublicCommand | SessionCommand
  * free.
  *
  * **This is a hand-kept list, and `satisfies` is not the check it looks like.** It proves only that
- * these nine names exist in the schema, which keeps a typo from quietly widening
- * `SwitchedCommand`. It proves nothing about anything answering them: a tenth name added here would
+ * these eleven names exist in the schema, which keeps a typo from quietly widening
+ * `SwitchedCommand`. It proves nothing about anything answering them: a twelfth name added here would
  * compile, would pass the exhaustiveness check, and would 501 at runtime with no `case` and no
  * branch. cliAgentContext.test.ts carries the witness for that half — it asserts each name is
  * mentioned in one of the four files that can answer it. A text witness is weak, but it is the
@@ -360,7 +361,9 @@ const NOT_SWITCHED = [
   'host-stop',
   'browser-js',
   'handoff',
-  'requests-show'
+  'requests-show',
+  'skills-list',
+  'skills-install'
 ] as const satisfies readonly AgentCommand[]
 
 /**
@@ -431,7 +434,7 @@ const MEANING: Record<CliErrorCode, string> = {
 /** The flags every command accepts. They are read by the parser and by the output layer rather than
  *  by any one command (cliArgs.ts, run.ts), so no entry above carries them.
  *
- *  **`--request-id` is here rather than on 62 command entries, and that is the design's own
+ *  **`--request-id` is here rather than on 64 command entries, and that is the design's own
  *  argument** (request receipts design §3, §8): every command takes the key and the Host decides
  *  afterwards whether there was anything to record. Naming the set instead would mean a list beside
  *  a switch statement, and the command somebody forgets to add to it accepts the key and ignores

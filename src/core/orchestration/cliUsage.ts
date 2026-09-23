@@ -260,6 +260,20 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     flags: [{ name: 'agent', value: '<claude|codex>', about: 'only this vendor' }]
   },
 
+  // Answered in the CLI process from the profile's files, with no Host and no app (cli/skills.ts).
+  'skills-list': {
+    summary: "which of Astera's agent skills each account has, and whether they are current",
+    detail:
+      'Per account, each skill with `enabled` (whether its setting in the app turns it on) and `installed`: current, stale (an older copy of ours that install would rewrite), missing, or not-ours (a file Astera did not write, which install leaves alone). It reads the profile and needs no Host and no app.',
+    flags: [{ name: 'account', value: '<accountId>', about: 'only this account (from `accounts list`)' }]
+  },
+  'skills-install': {
+    summary: 'install the skills the current settings enable, in every account',
+    detail:
+      'Writes what the settings in the app enable and nothing else: a skill whose setting is off is listed under notEnabled with the setting that turns it on. Each skill comes back written, unchanged, skipped-not-ours or failed. It removes nothing. Sessions already open do not pick up a new skill; open a new session. Run it after adding an account, which gets no skills until the app restarts. It needs no Host and no app.',
+    flags: [{ name: 'account', value: '<accountId>', about: 'only this account (from `accounts list`)' }]
+  },
+
   'requests-show': {
     summary: 'did a call of mine land, and what did it answer',
     detail:

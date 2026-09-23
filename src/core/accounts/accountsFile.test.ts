@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { orchAccountOf, readAccountsFile } from './accountsFile'
+import { orchAccountOf, readAccountEntries, readAccountsFile } from './accountsFile'
 
 let dir: string
 let file: string
@@ -64,5 +64,20 @@ describe('orchAccountOf', () => {
       label: '일',
       provider: 'codex'
     })
+  })
+})
+
+// `astera skills` 는 계정의 설정 폴더에 스킬을 심으므로 configDir 이 있어야 한다. 읽기 규칙은
+// readAccountsFile 과 같은 하나다 — 없는 파일은 [], 깨진 파일은 같은 말로 거절한다.
+describe('readAccountEntries', () => {
+  it('configDir 까지 담은 계정 그대로다', async () => {
+    expect(await readAccountEntries(file)).toEqual([])
+    await fs.writeFile(file, JSON.stringify({ accounts: [account()] }), 'utf8')
+    expect(await readAccountEntries(file)).toEqual([account()])
+  })
+
+  it('깨진 파일은 같은 말로 거절한다', async () => {
+    await fs.writeFile(file, '{not json', 'utf8')
+    await expect(readAccountEntries(file)).rejects.toThrow(/open Astera to repair it/)
   })
 })

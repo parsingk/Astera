@@ -181,6 +181,26 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
       return columns(
         asList(data, 'accounts').map((a) => [str(a.id), str(a.provider), str(a.label)])
       )
+    // 계정×스킬 한 줄씩. install 은 설정이 꺼져 심지 않은 것과 그것을 켜는 설정, 그리고 이미 열린
+    // 세션은 새 스킬을 못 본다는 한 줄을 표 아래에 붙인다(cli/skills.ts).
+    case 'skills-list':
+    case 'skills-install': {
+      const rows = asList(data, 'accounts').flatMap((a) =>
+        asList(a, 'skills').map((s) =>
+          cmd === 'skills-list'
+            ? [str(a.id), str(a.provider), str(s.name), s.enabled === true ? 'on' : 'off', str(s.installed)]
+            : [str(a.id), str(a.provider), str(s.name), str(s.result)]
+        )
+      )
+      const off = asList(data, 'notEnabled')
+      return [
+        rows.length === 0 ? 'no accounts' : columns(rows),
+        ...(off.length === 0
+          ? []
+          : ['', 'not enabled:', ...columns(off.map((n) => [str(n.name), str(n.setting)])).split('\n').map((l) => `  ${l}`)]),
+        ...(typeof data.note === 'string' ? ['', data.note] : [])
+      ].join('\n')
+    }
     // 접어 실은 회차를 한 줄 JSON 으로 내면 읽으라고 만든 모드가 읽힐 수 없게 된다.
     case 'jobs-get': {
       const { run, ...job } = data

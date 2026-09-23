@@ -66,6 +66,10 @@ something (`jobs create`, `jobs run`, `tasks add`, `runs stop`, `runs resume`, `
 and both waiting commands (`jobs wait`, `runs wait`), which a static file cannot answer however long
 they wait.
 
+`skills list` and `skills install` are outside both lists: they never contact a Host and never need
+one. They read the profile's `accounts.json` and `app-settings.json` and work on files in each
+account's config folder, so they answer the same with Astera and the Host running or not.
+
 **The account list works with the app closed.** `accounts list`, `tasks add` (it checks every
 `--account`) and `jobs create --coordinator-account` ask the app for its accounts when it is open.
 When it is closed, the Host reads the profile's `accounts.json` instead, which is the file the app
@@ -135,6 +139,9 @@ astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> --account 
 
 astera accounts list  [--agent <claude|codex>]
 
+astera skills  list    [--account <accountId>]
+astera skills  install [--account <accountId>]
+
 astera questions list  [--task <taskId>] [--status <open|resolved>]
 astera questions get    --id <questionId>
 astera questions answer --id <questionId> --answer <text>
@@ -194,6 +201,44 @@ id given to `--job`, or a Job id given to `--run`, is a 4, never quietly the oth
 
 **`accounts list` prints `id`, `label` and `provider`** for each account the app holds, and nothing
 else about them. `--agent claude` or `--agent codex` narrows it to one vendor.
+
+**`skills` manages the agent skills Astera installs into each account**: the files that tell an agent
+session about `astera`, and about the features switched on in the app. There are four.
+`astera-orchestration` is always on. `astera-task`, `astera-browser` and `astera-handoff` follow
+**Work unit tracking**, **Agent browser** and the **Smart Resume** resume strategy in Settings. The app
+installs them itself at launch and when a setting is turned on; these two commands are for checking,
+and for the times it has not yet done so. `--account <accountId>` narrows either to one account, and
+an id that is not in `accounts list` is a 4. A damaged `accounts.json` is a 6, and the message says
+to open Astera, which repairs it. A damaged `app-settings.json` reads as every setting off, which is
+how the app reads it too.
+
+`skills list` reports, per account, every skill with `enabled` (whether its setting is on) and
+`installed`: `current`, `stale` (an older copy Astera wrote, which `install` would replace),
+`missing`, or `not-ours` (a file at that place that Astera did not write). It changes nothing.
+
+```json
+{"ok":true,"data":{"accounts":[{"id":"acc_1","label":"Work","provider":"claude","skills":[
+  {"name":"astera-orchestration","enabled":true,"installed":"current"},
+  {"name":"astera-browser","enabled":false,"installed":"missing"}, …]}]}}
+```
+
+`skills install` writes what the current settings enable and nothing else. **A skill whose setting
+is off is never installed**, because the setting is your consent: the browser skill lets an agent
+drive a browser on your behalf. Each installed skill comes back with `result`: `written`, `unchanged`,
+`skipped-not-ours` (a file Astera did not write is left exactly as it is), or `failed` (the reason is
+on stderr). `data.notEnabled` names each skill left out and the setting that turns it on. It removes
+nothing, including a skill whose setting you have since turned off. Running it twice is safe: the
+second run is all `unchanged`.
+
+```json
+{"ok":true,"data":{"accounts":[{"id":"acc_1","label":"Work","provider":"claude","skills":[
+  {"name":"astera-orchestration","result":"written"}]}],
+  "notEnabled":[{"name":"astera-browser","setting":"Settings → Agents → Agent browser"}, …],
+  "note":"Sessions already open do not pick up new skills; open a new session to use them."}}
+```
+
+**Agent sessions read their skills when they start**, so a session already open does not see a
+skill installed after it, and `data.note` says so. Open a new session.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
 dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
@@ -260,9 +305,11 @@ command runs exactly as it always did.
 **That refusal is about a Host that answered and cannot help. Some answers never reach a Host at
 all**, and they split in two.
 
-`host start`, `host status` and `host stop` do not go through the Host's command layer, so a
-`--request-id` on one of them is **refused with exit 2** rather than dropped. `host stop` is the one
-that acts, and a caller that keys it is owed either the protection or the refusal.
+`host start`, `host status`, `host stop`, `skills list` and `skills install` do not go through the
+Host's command layer, so a `--request-id` on one of them is **refused with exit 2** rather than
+dropped. `host stop` and `skills install` are the ones that act, and a caller that keys them is owed
+either the protection or the refusal. (`skills install` is safe to repeat anyway: a second run writes
+nothing.)
 
 The rest simply cannot act twice, so the id does nothing and nothing is refused over it: `version`
 answers from the binary, because saying that the two builds differ is exactly what that command is
@@ -513,6 +560,11 @@ letter case differs from the running Host's. `astera host status` prints the pro
 compare it with the one the Host is on. Inside a session the app sets `ASTERA_PROFILE_DIR` itself, so
 a session's `astera` always reaches the app that started it. From a plain shell, `ASTERA_PROFILE=dev`
 selects the development profile.
+
+**An agent session does not know about `astera`, or about a feature you switched on**
+Its account may not have the skill yet. An account added in the app gets no skills until Astera
+restarts. Run `astera skills list` to see what each account has and `astera skills install` to put
+in what the settings enable, then open a new session: a session reads its skills when it starts.
 
 **Exit 6 from `astera host stop`**
 The Host still holds sessions or running runs. The message says how many. Stop the work first.

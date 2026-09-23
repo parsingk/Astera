@@ -214,6 +214,33 @@ describe('humanFor', () => {
     expect(humanFor('ask', { answered: true, answer: '그대로', questionId: 'msg_1' })).toBe(null)
   })
 
+  // 계정×스킬 한 줄씩. install 은 설정이 꺼져 켜지 않은 스킬과 그 설정을 표 아래에 적는다.
+  it('skills list 와 install 은 계정마다 스킬 한 줄이다', () => {
+    const accounts = [
+      { id: 'a1', provider: 'claude', skills: [{ name: 'astera-orchestration', enabled: true, installed: 'current' }] },
+      { id: 'a2', provider: 'codex', skills: [{ name: 'astera-browser', enabled: false, installed: 'missing' }] }
+    ]
+    expect(humanFor('skills-list', { accounts })).toBe(
+      ['a1  claude  astera-orchestration  on   current', 'a2  codex   astera-browser        off  missing'].join('\n')
+    )
+    expect(
+      humanFor('skills-install', {
+        accounts: [{ id: 'a1', provider: 'claude', skills: [{ name: 'astera-orchestration', result: 'written' }] }],
+        notEnabled: [{ name: 'astera-browser', setting: 'Settings → Agents → Agent browser' }],
+        note: 'Open a new session.'
+      })
+    ).toBe(
+      [
+        'a1  claude  astera-orchestration  written',
+        '',
+        'not enabled:',
+        '  astera-browser  Settings → Agents → Agent browser',
+        '',
+        'Open a new session.'
+      ].join('\n')
+    )
+  })
+
   it('accounts list 는 id·provider·label 이다', () => {
     expect(humanFor('accounts-list', { accounts: [{ id: 'a1', label: '일', provider: 'claude' }] }))
       .toBe('a1  claude  일')

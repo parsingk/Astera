@@ -228,6 +228,16 @@ describe('공개 표면 — 두 낱말 명령', () => {
     })
   })
 
+  // skills 는 동사가 있어야 한다 — 동사 없는 옛 명령이 없으므로 BARE_NOUNS 가 아니다.
+  it('skills list 와 skills install', () => {
+    expect(parseArgs(['skills', 'list'])).toMatchObject({ cmd: 'skills-list', args: {} })
+    expect(parseArgs(['skills', 'install', '--account', 'acc_1'])).toMatchObject({
+      cmd: 'skills-install',
+      args: { account: 'acc_1' }
+    })
+    expect(parseArgs(['skills'])).toEqual({ error: 'skills needs one of: list, install' })
+  })
+
   // 코디네이터 전용 명령은 한 낱말 그대로다 — 개명이 가이드 재작성만 사고 아무것도 주지 않는다
   it('한 낱말 명령은 그대로 지나간다', () => {
     expect(parseArgs(['worker-start', '--task', 'tsk_1'])).toMatchObject({ cmd: 'worker-start' })

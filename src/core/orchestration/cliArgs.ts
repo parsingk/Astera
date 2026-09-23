@@ -69,6 +69,9 @@ export const NOUNS = {
   // `jobs create --coordinator-account` 와 `tasks add --account` 에 넣을 id 가 여기서 나온다.
   // 동사 없는 `accounts` 는 가이드가 가르치는 세션 명령 그대로다(BARE_NOUNS).
   accounts: ['list'],
+  // **CLI 프로세스 안에서 답한다 — Host 도 앱도 없이**(run.ts, `help` 와 같은 자리). 프로필의
+  // accounts.json 과 app-settings.json 을 읽고 계정의 설정 폴더에 스킬 파일을 심는다(cli/skills.ts).
+  skills: ['list', 'install'],
   // **요청 영수증**(request receipts design §8). 여기 있는 것은 공개 표면이어서가 아니라 —
   // 답하는 것은 명령 층이 아니라 Host 다(host/orch.ts) — 이 모양이 그것을 `USAGE` 와
   // `docs/cli.md` 에 함께 적히게 만들기 때문이다. `--request-id` 는 반대로 여기 없다: 그것은

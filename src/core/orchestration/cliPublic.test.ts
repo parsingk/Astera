@@ -106,6 +106,34 @@ describe('publicFor', () => {
     ).toEqual([{ id: 'a1', label: '일', provider: 'claude' }])
   })
 
+  // skills 의 답은 계정 목록 안에 스킬 목록이 접힌 모양이다. 두 겹 모두 같은 규칙으로 가린다 —
+  // 계정의 configDir 도, 스킬 파일의 경로도 나가지 않는다.
+  it('skills list 와 install 은 계정과 그 안의 스킬을 둘 다 가린다', () => {
+    const account = {
+      id: 'a1',
+      label: '일',
+      provider: 'claude',
+      configDir: 'C:/secret',
+      skills: [{ name: 'astera-task', enabled: true, installed: 'current', path: 'C:/secret/skills' }]
+    }
+    expect(publicFor('skills-list', { accounts: [account], extra: 1 })).toEqual({
+      accounts: [
+        { id: 'a1', label: '일', provider: 'claude', skills: [{ name: 'astera-task', enabled: true, installed: 'current' }] }
+      ]
+    })
+    expect(
+      publicFor('skills-install', {
+        accounts: [{ ...account, skills: [{ name: 'astera-task', result: 'written', path: 'C:/secret' }] }],
+        notEnabled: [{ name: 'astera-browser', setting: 'Settings → Agents → Agent browser', stubPath: 'x' }],
+        note: 'n'
+      })
+    ).toEqual({
+      accounts: [{ id: 'a1', label: '일', provider: 'claude', skills: [{ name: 'astera-task', result: 'written' }] }],
+      notEnabled: [{ name: 'astera-browser', setting: 'Settings → Agents → Agent browser' }],
+      note: 'n'
+    })
+  })
+
   // **코디네이터 전용 명령은 이 계약의 약속 밖이다.** 가리려 들면 가이드가 시키는 것을 못 읽는다
   it('표에 없는 명령은 그대로 지나간다', () => {
     const body = { dispatchId: 'd1', anything: { nested: true } }

@@ -13,6 +13,7 @@
 // 이름을 대며 깨진다. 허용 목록의 유일한 실패 방식이 "낡는 것" 이고, 막을 것은 그것뿐이다.
 import type { Gate, Job, JobRun, Project, Task } from './types'
 import type { OrchAccount } from './command'
+import type { SkillInstalled, SkillListed, SkillNotEnabled, SkillsAccount } from '../../cli/skills'
 
 /** 두 목록이 그 타입의 칸을 전부 덮지 못하면 남은 이름이 여기 남는다. */
 type Unlisted<
@@ -133,6 +134,36 @@ type _question = NothingLeft<Unlisted<Gate, typeof QUESTION, []>>
 const ACCOUNT = ['id', 'label', 'provider'] as const
 type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT, []>>
 
+/** `astera skills` 의 답은 계정 목록 안에 스킬 목록이 접힌 모양이다(cli/skills.ts). 개체가 앱이
+ *  아니라 CLI 가 지은 것이어도 적는다 — 계정 칸은 accounts.json 을 읽은 것이고, 거기엔 configDir 이
+ *  있다. 두 겹 모두 이 목록으로 가린다(아래 `shapeSkills`). */
+const SKILLS_ACCOUNT = ['id', 'label', 'provider', 'skills'] as const
+type _skillsAccount = NothingLeft<Unlisted<SkillsAccount, typeof SKILLS_ACCOUNT, []>>
+const SKILL_LISTED = ['name', 'enabled', 'installed'] as const
+type _skillListed = NothingLeft<Unlisted<SkillListed, typeof SKILL_LISTED, []>>
+const SKILL_INSTALLED = ['name', 'result'] as const
+type _skillInstalled = NothingLeft<Unlisted<SkillInstalled, typeof SKILL_INSTALLED, []>>
+const SKILL_NOT_ENABLED = ['name', 'setting'] as const
+type _skillNotEnabled = NothingLeft<Unlisted<SkillNotEnabled, typeof SKILL_NOT_ENABLED, []>>
+
+/** 봉투의 `data` 칸과 그 안의 두 겹. 다른 명령과 달리 최상위가 목록 하나가 아니라서 SHAPE 표에
+ *  넣지 않고 따로 편다 — `jobs get` 의 접힌 회차와 같은 처지다. */
+function shapeSkills(cmd: 'skills-list' | 'skills-install', body: unknown): unknown {
+  if (body === null || typeof body !== 'object') return body
+  const skill = cmd === 'skills-list' ? SKILL_LISTED : SKILL_INSTALLED
+  const list = (v: unknown, f: (x: object) => unknown): unknown =>
+    Array.isArray(v) ? v.map((x) => (x !== null && typeof x === 'object' ? f(x) : x)) : v
+  const out = pick(cmd === 'skills-list' ? ['accounts'] : ['accounts', 'notEnabled', 'note'], body)
+  if ('accounts' in out)
+    out.accounts = list(out.accounts, (a) => {
+      const row = pick(SKILLS_ACCOUNT, a)
+      if ('skills' in row) row.skills = list(row.skills, (x) => pick(skill, x))
+      return row
+    })
+  if ('notEnabled' in out) out.notEnabled = list(out.notEnabled, (x) => pick(SKILL_NOT_ENABLED, x))
+  return out
+}
+
 /**
  * 어느 명령이 무엇을 내보내는가.
  *
@@ -176,6 +207,7 @@ function shapeOne(cmd: string, fields: readonly string[], x: unknown): unknown {
 
 /** 앱이 돌려준 것을 공개 표면의 모양으로. 표에 없는 명령은 그대로 지나간다. */
 export function publicFor(cmd: string, body: unknown): unknown {
+  if (cmd === 'skills-list' || cmd === 'skills-install') return shapeSkills(cmd, body)
   const fields = SHAPE[cmd]
   if (fields === undefined) return body
   if (Array.isArray(body)) return body.map((x) => shapeOne(cmd, fields, x))

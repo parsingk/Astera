@@ -23,6 +23,7 @@
 // **`AGENTS.md` is left alone** — that is a user file and would need its own decision.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import type { ResumeStrategy } from '../../core/types'
 
 /** Marks the file as owned by the app. It sits in the first line of the body of
  *  `resources/skills/orchestration-stub.md`, and when a target file lacks it the file is **left
@@ -95,6 +96,71 @@ const ORCHESTRATION_SKILL_NAME = 'astera-orchestration'
 export const stubTargetPath = (configDir: string, skillName: string = ORCHESTRATION_SKILL_NAME): string =>
   path.join(configDir, 'skills', skillName, 'SKILL.md')
 
+/** What is at one stub's target, judged by the ownership rule `installStub` acts on (see there).
+ *  `stale` is a file of ours that `installStub` would rewrite; `not-ours` is one it leaves alone.
+ *  Exported so `astera skills list` reports with the same rule `astera skills install` writes by. */
+export type StubState = 'missing' | 'current' | 'stale' | 'not-ours'
+
+export const stubStateOf = (existing: string | null, content: string): StubState => {
+  if (existing === null) return 'missing'
+  if (existing === content) return 'current'
+  const appOwned = existing.includes(STUB_MARKER) || withoutMarker(existing) === withoutMarker(content)
+  return appOwned ? 'stale' : 'not-ours'
+}
+
+/** The settings that gate the stubs. Values rather than the store, so the CLI can hand in what it
+ *  read from the profile's app-settings.json and the app what it holds in memory. */
+export interface SkillSettings {
+  workUnitTrackingEnabled: boolean
+  agentBrowserEnabled: boolean
+  resumeStrategy: ResumeStrategy
+}
+
+export interface SkillStub {
+  skillName: string
+  stubPath: string
+  /** Whether the current settings install it. */
+  enabled: boolean
+  /** Where in the app the setting that turns it on lives, or null for the one that is always on. */
+  setting: string | null
+}
+
+/**
+ * Every discovery stub Astera ships, in install order, each with whether the given settings enable
+ * it. **The one list**: the app (`installStubsForCurrentToggles` in ipc.ts) installs the enabled
+ * ones, and `astera skills` reports and installs from the same list, so the two cannot disagree
+ * about which skills exist or what gates them.
+ *
+ * The orchestration stub is unconditional — orchestration is something Astera has rather than
+ * something a person switches on. The other three follow their own settings, and a setting that is
+ * off is the person's consent withheld (the browser skill drives a browser on their behalf), so
+ * nothing installs a gated stub while its setting is off.
+ */
+export function skillStubs(skillsPath: string, s: SkillSettings): SkillStub[] {
+  const at = (file: string): string => path.join(skillsPath, file)
+  return [
+    { skillName: ORCHESTRATION_SKILL_NAME, stubPath: at('orchestration-stub.md'), enabled: true, setting: null },
+    {
+      skillName: 'astera-task',
+      stubPath: at('task-stub.md'),
+      enabled: s.workUnitTrackingEnabled,
+      setting: 'Settings → How It Works → Work unit tracking'
+    },
+    {
+      skillName: 'astera-browser',
+      stubPath: at('browser-stub.md'),
+      enabled: s.agentBrowserEnabled,
+      setting: 'Settings → Agents → Agent browser'
+    },
+    {
+      skillName: 'astera-handoff',
+      stubPath: at('handoff-stub.md'),
+      enabled: s.resumeStrategy === 'smart',
+      setting: 'Settings → Agents → Session resume strategy → Smart Resume'
+    }
+  ]
+}
+
 /**
  * Installs one or more stubs into each account's skills directory.
  *
@@ -134,6 +200,9 @@ export async function installStub(a: {
   stubs: { stubPath: string; skillName: string }[]
   /** configDirs of the target accounts (both claude and codex) */
   configDirs: string[]
+  /** True leaves stubs under an old name where they are. `astera skills install` removes nothing
+   *  (it installs, and a removal is the app's to make at launch); the app leaves this unset. */
+  keepLegacy?: boolean
   log?: (message: string) => void
 }): Promise<{
   written: string[]
@@ -172,18 +241,15 @@ export async function installStub(a: {
       let inPlace = false
       try {
         const existing = await fs.readFile(target, 'utf8').catch(() => null)
-        const appOwned =
-          existing === null ||
-          existing.includes(STUB_MARKER) ||
-          withoutMarker(existing) === withoutMarker(content)
-        if (!appOwned) {
+        const state = stubStateOf(existing, content)
+        if (state === 'not-ours') {
           result.skipped.push(target)
           // Does not overclaim: we cannot assert the app did not create it (it may be a stub from an
           // older version). State only what is known and leave the path as evidence for the user.
           a.log?.(
             `stub install skipped — no ownership marker and content differs from the current stub ${target}`
           )
-        } else if (existing === content) {
+        } else if (state === 'current') {
           result.unchanged.push(target)
           inPlace = true
         } else {
@@ -198,7 +264,7 @@ export async function installStub(a: {
       }
       // Scoped to the orchestration stub only — LEGACY_STUB_DIRS names directories that only that
       // stub ever used, so a task-stub install (or any future stub) must never touch them.
-      if (inPlace && stub.skillName === ORCHESTRATION_SKILL_NAME) {
+      if (inPlace && stub.skillName === ORCHESTRATION_SKILL_NAME && a.keepLegacy !== true) {
         result.removed.push(...(await removeLegacyStubs(configDir, a.log)))
       }
     }

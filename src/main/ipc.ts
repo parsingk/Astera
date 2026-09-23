@@ -164,7 +164,7 @@ import { shuttleNames, writeShuttle } from './orchestration/shuttle'
 import { binDirFor, isOnPath, pathHintFor } from '../core/orchestration/cliInstall'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
-import { installStub } from './orchestration/stub'
+import { installStub, skillStubs } from './orchestration/stub'
 import { AgentGuestRegistry, type GuestLike } from './agentBrowser/registry'
 import { AgentBufferStore, attachBuffers, installNetworkCapture } from './agentBrowser/buffers'
 import type { GuestDriver } from './agentBrowser/helpers'
@@ -2218,21 +2218,12 @@ export function registerIpc(
    */
   const installStubsForCurrentToggles = (): void => {
     if (!orch) return
-    const stubs = [
-      {
-        stubPath: path.join(orch.skillsPath, 'orchestration-stub.md'),
-        skillName: 'astera-orchestration'
-      },
-      ...(core.appSettings.getWorkUnitTrackingEnabled()
-        ? [{ stubPath: path.join(orch.skillsPath, 'task-stub.md'), skillName: 'astera-task' }]
-        : []),
-      ...(core.appSettings.getAgentBrowserEnabled()
-        ? [{ stubPath: path.join(orch.skillsPath, 'browser-stub.md'), skillName: 'astera-browser' }]
-        : []),
-      ...(core.appSettings.getResumeStrategy() === 'smart'
-        ? [{ stubPath: path.join(orch.skillsPath, 'handoff-stub.md'), skillName: 'astera-handoff' }]
-        : [])
-    ]
+    // The list and its gates are skillStubs' (stub.ts) — `astera skills install` builds from the same one.
+    const stubs = skillStubs(orch.skillsPath, {
+      workUnitTrackingEnabled: core.appSettings.getWorkUnitTrackingEnabled(),
+      agentBrowserEnabled: core.appSettings.getAgentBrowserEnabled(),
+      resumeStrategy: core.appSettings.getResumeStrategy()
+    }).filter((s) => s.enabled)
     // installStub swallows per-stub and per-account failures itself and does not throw, but the
     // .catch is here so that even an unexpected failure cannot affect the caller.
     void installStub({
@@ -4872,7 +4863,8 @@ export function registerIpc(
     // installStubsForCurrentToggles's own comment for why the settings handlers call it too.
     // **A remaining limit**: an account added while everything relevant is already on does not get
     // the stub until the next app start or a toggle flip — hooking accounts.onChanged would write to
-    // user files on every account edit, and that trade-off is out of scope here.
+    // user files on every account edit, and that trade-off is out of scope here. `astera skills
+    // install` (src/cli/skills.ts) is the way to fill that gap without a restart.
     installStubsForCurrentToggles()
     orchWiring?.onStarted({
       stop: () => {

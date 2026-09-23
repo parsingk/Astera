@@ -4,6 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   installStub,
+  skillStubs,
+  stubStateOf,
   legacyStubPaths,
   stubTargetPath,
   LEGACY_STUB_MARKER,
@@ -506,5 +508,90 @@ describe('여러 스킬 설치', () => {
     const configDir = path.join(dir, '.claude-accounts', 'c')
     const r = await installStub({ stubs: [{ stubPath, skillName: 'astera-browser' }], configDirs: [configDir] })
     expect(r.written).toEqual([path.join(configDir, 'skills', 'astera-browser', 'SKILL.md')])
+  })
+})
+
+// The one list of stubs and their gates. The app (ipc.ts installStubsForCurrentToggles) and the
+// CLI (`astera skills`) both build from it, so what the two install cannot drift apart.
+describe('skillStubs', () => {
+  const off = { workUnitTrackingEnabled: false, agentBrowserEnabled: false, resumeStrategy: 'original' as const }
+
+  it('lists the four stubs in install order, orchestration first and always on', () => {
+    const list = skillStubs('/skills', off)
+    expect(list.map((s) => s.skillName)).toEqual([
+      'astera-orchestration',
+      'astera-task',
+      'astera-browser',
+      'astera-handoff'
+    ])
+    expect(list.map((s) => s.stubPath)).toEqual([
+      path.join('/skills', 'orchestration-stub.md'),
+      path.join('/skills', 'task-stub.md'),
+      path.join('/skills', 'browser-stub.md'),
+      path.join('/skills', 'handoff-stub.md')
+    ])
+    expect(list.map((s) => s.enabled)).toEqual([true, false, false, false])
+    // the unconditional one has no setting to name; every gated one names the setting that turns it on
+    expect(list[0].setting).toBe(null)
+    for (const s of list.slice(1)) expect(typeof s.setting).toBe('string')
+  })
+
+  it('each gate follows its own setting', () => {
+    expect(skillStubs('/s', { ...off, workUnitTrackingEnabled: true }).map((s) => s.enabled)).toEqual([
+      true,
+      true,
+      false,
+      false
+    ])
+    expect(skillStubs('/s', { ...off, agentBrowserEnabled: true }).map((s) => s.enabled)).toEqual([
+      true,
+      false,
+      true,
+      false
+    ])
+    expect(skillStubs('/s', { ...off, resumeStrategy: 'smart' }).map((s) => s.enabled)).toEqual([
+      true,
+      false,
+      false,
+      true
+    ])
+  })
+
+  it('every stub it names ships in resources/skills', async () => {
+    const real = path.resolve(__dirname, '../../../resources/skills')
+    for (const s of skillStubs(real, off)) expect(await fs.readFile(s.stubPath, 'utf8')).toContain(STUB_MARKER)
+  })
+})
+
+// What `astera skills list` reports, judged by the same ownership rule installStub acts on.
+describe('stubStateOf', () => {
+  const source = `---\nname: x\n---\n\n${markerBlock()}\n# stub\n`
+
+  it('missing, current, stale, not-ours', () => {
+    expect(stubStateOf(null, source)).toBe('missing')
+    expect(stubStateOf(source, source)).toBe('current')
+    // ours (marker present) but older content: installStub would rewrite it
+    expect(stubStateOf(source.replace('# stub', '# old'), source)).toBe('stale')
+    // a pre-marker file with the current body is ours too, and differs byte-wise: stale
+    expect(stubStateOf(stripMarkerByIndex(source), source)).toBe('stale')
+    expect(stubStateOf('# my own skill\n', source)).toBe('not-ours')
+  })
+})
+
+describe('installStub keepLegacy', () => {
+  it('leaves a stub under the old name alone when asked to', async () => {
+    const stubPath = await writeSource()
+    const configDir = path.join(dir, 'acc')
+    const [legacy] = legacyStubPaths(configDir)
+    await fs.mkdir(path.dirname(legacy), { recursive: true })
+    await fs.writeFile(legacy, `${STUB_MARKER}\n# old\n`, 'utf8')
+    const r = await installStub({
+      stubs: [{ stubPath, skillName: 'astera-orchestration' }],
+      configDirs: [configDir],
+      keepLegacy: true
+    })
+    expect(r.written).toEqual([stubTargetPath(configDir)])
+    expect(r.removed).toEqual([])
+    expect(await fs.readFile(legacy, 'utf8')).toContain('# old')
   })
 })

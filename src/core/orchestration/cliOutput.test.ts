@@ -239,6 +239,13 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     ])
   })
 
+  // skills 가 못 찾는 것은 --account 의 계정뿐이다. 명사 규칙은 `skills list` 를 줄 텐데 그것은
+  // 같은 --account 로 같은 404 다.
+  it('skills 의 404 는 계정 목록으로 간다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'skills-list' })).toEqual(['astera accounts list'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'skills-install' })).toEqual(['astera accounts list'])
+  })
+
   // **`--id` 가 Job 도 회차도 받고 지우는 것이 다르다.** Job 목록만 주면 회차 하나를 지우려던
   // 사람에게 계획째 지우는 id 를 건네는 셈이다.
   it('run-delete 는 두 목록을 다 준다', () => {
