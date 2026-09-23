@@ -160,17 +160,37 @@ describe('StatusLineManager 훅 주입', () => {
   // 데 드는 시간과 그 흔들림이 빠진다. 스크립트보다 먼저 도는 --require 가 300ms 를 붙잡아도 시각은
   // 그 앞이어야 한다. 소수점 아래도 그대로 싣는다.
   it('시각은 프로세스 시작 시각이라 스크립트 앞의 지연이 들어가지 않는다', async () => {
+    // The preload notes when it began, inside the capture's own process, and then holds it. The stamp
+    // must not be later than that note: no wall-clock bound that a slow machine could overrun.
     const spin = path.join(dir, 'spin.cjs')
-    await fs.writeFile(spin, 'const e = Date.now() + 300; while (Date.now() < e) {}\n', 'utf8')
-    const before = Date.now()
+    const spinAt = path.join(dir, 'spin-at.txt')
+    await fs.writeFile(
+      spin,
+      `const s = Date.now(); require('fs').writeFileSync(${JSON.stringify(spinAt)}, String(s)); while (Date.now() < s + 300) {}\n`,
+      'utf8'
+    )
     const { lines } = await capture('{"hook_event_name":"Stop"}', 0, {
       NODE_OPTIONS: `--require "${spin.replace(/\\/g, '/')}"`
     })
     const at = JSON.parse(lines[0]).astera_at
-    expect(at).toBeGreaterThanOrEqual(before - 5)
-    expect(at).toBeLessThan(before + 250)
+    // +1: the preload's Date.now() is a whole millisecond, the stamp can carry a fraction of the same one.
+    expect(at).toBeLessThan(Number(await fs.readFile(spinAt, 'utf8')) + 1)
     expect(lines[0]).toMatch(/^\{"astera_at":\d+(\.\d+)?,"hook_event_name":"Stop"\}$/)
   })
+
+  // 떠 있는 세션의 훅은 경로로 이 스크립트를 부른다. init 이 제자리에서 덮어쓰면 그 사이에 뜬 캡처가
+  // 반쯤 쓴 파일을 읽는다 — 임시 파일에 다 쓴 뒤 바꿔 끼운다. 바꿔 끼웠으면 파일이 새 것이다(ino).
+  it.each(['astera-hook-capture.cjs', 'astera-statusline-capture.cjs'])(
+    '%s 는 제자리에 덮어쓰지 않고 다 쓴 파일로 바꿔 끼운다',
+    async (name) => {
+      const file = path.join(dir, name)
+      const first = (await fs.stat(file, { bigint: true })).ino
+      await mgr.init()
+      expect((await fs.stat(file, { bigint: true })).ino).not.toBe(first)
+      expect(await fs.readFile(file, 'utf8')).toContain('process.stdin')
+      expect((await fs.readdir(dir)).filter((n) => n.includes('.tmp'))).toEqual([])
+    }
+  )
 
   it('객체가 아닌 페이로드는 예전처럼 한 줄로 그대로 붙는다', async () => {
     const { lines } = await capture('not json\nsecond')

@@ -29,6 +29,7 @@ import type { SlackTransportConfig } from '../core/slack/ready'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { sessionKindOf } from '../core/sessions/kind'
 import { happenedBefore, hookEventAt } from '../core/hooks/eventTime'
+import { sanitize } from '../core/orchestration/checkpoint'
 import { t, type Lang } from '../core/i18n'
 import {
   BotTransport,
@@ -917,8 +918,8 @@ export class SlackNotifier {
    * posts unless the scanner fired within LIMIT_SEEN_WINDOW_MS of the hook. A scanner that never
    * fired cannot suppress it, so a limit is never missed; the cost is a few seconds' delay.
    *
-   * **The error text is posted as Claude Code wrote it, unredacted.** What it can hold, from the
-   * 2.1.280 binary's error-to-message builder (`pNn`, each case an `Ao({content: …})`):
+   * **The error text goes through the repo's credential redactor before it is posted.** What it can
+   * hold, from the 2.1.280 binary's error-to-message builder (`pNn`, each case an `Ao({content: …})`):
    * - mostly fixed sentences ("Request timed out", "Connection refused … (ECONNREFUSED)", the limit
    *   texts) and the API's own `error.message`, which `Mwe` pulls out of a JSON body so the body
    *   and its `request_id` are dropped. The raw `e.message`, body and all, is used only when that
@@ -928,16 +929,22 @@ export class SlackNotifier {
    *   message>", which can name a credentials file path or a profile;
    * - the fallback for any other error, "API Error: <e.message>", whose text is whatever threw,
    *   including a local path.
-   * So a path can reach the thread; nothing token-like is put there by Claude Code itself. The repo
-   * has no redactor for free text to apply: core/slack/transcript.ts's REDACTED_KEYS hides tool
-   * arguments by key name, and core/slack/inbound.ts's sanitizeChatText strips control characters
-   * from replies coming in. The turn summary (sendStopSummary) already posts arbitrary assistant
-   * text into the same thread, so this line is the same exposure, capped the same way. If a
-   * redactor is ever added, it belongs in `send`, for every line.
+   * Claude Code adds nothing token-like of its own, but the last two cases carry text from whatever
+   * threw (an SDK message, a gateway or proxy URL with a key in it) into a thread everyone in the
+   * channel reads. So the text goes through `sanitize` (core/orchestration/checkpoint.ts), the
+   * redactor already used for agents' free text (tab briefings, handoffs): `key=value` pairs whose
+   * key names a token, key, secret, password or credential and whose value looks like one, Bearer
+   * tokens, and the sk-/gh?_/xox?-/AKIA prefixes. A path is not a credential and stays, and so do
+   * short human passwords and `user:password@` in a URL, which that gate does not catch. Redacted
+   * before the cut, as handoff/parse.ts does, so a cut cannot halve a secret past the gate.
+   *
+   * **The turn summary (sendStopSummary) is not redacted.** It is the model's own reply, which the
+   * person already sees in the app, and it is often code, where `token = …` is legitimate text the
+   * gate could rewrite.
    */
   private sendStopFailure(record: SlackRecord, error: unknown, lastMessage: unknown): void {
     const message = typeof lastMessage === 'string' ? lastMessage.trim() : ''
-    let text = message !== '' ? message : typeof error === 'string' && error !== '' ? error : 'unknown'
+    let text = sanitize(message !== '' ? message : typeof error === 'string' && error !== '' ? error : 'unknown')
     if (text.length > EXCERPT_MAX) text = text.slice(0, EXCERPT_MAX) + '…'
     const post = (to: SlackRecord): void =>
       void this.send(to, t(this.deps.lang(), 'slack.chat.turnFailed', { message: text }))

@@ -138,6 +138,23 @@ describe('latestEventLine', () => {
   })
 
   // JSON 이 아닌 줄은 시각이 없는 줄이다 — 마지막에 붙었으면 그대로 마지막이고, sessionStateOf 가 unknown 으로 읽는다.
+  // 빈 stdin 으로 돈 캡처는 빈 줄을 남긴다. 중간의 빈 줄·깨진 줄은 판정할 것이 없으니 건너뛴다 —
+  // 안 그러면 그 줄이 시각 없는 줄로 고른 것을 밀어내고, 그 뒤의 더 이른 이벤트가 이긴다.
+  it('중간의 빈 줄이나 깨진 줄이 더 늦은 이벤트를 가리지 않는다', () => {
+    const prompt = line({ hook_event_name: 'UserPromptSubmit', astera_at: 1_020 })
+    const failure = line({ hook_event_name: 'StopFailure', astera_at: 1_000 })
+    expect(latestEventLine([prompt, '', failure])).toBe(prompt)
+    expect(latestEventLine([prompt, 'garbage', failure])).toBe(prompt)
+  })
+
+  // 벽시계가 뒤로 설정되면 그 뒤의 이벤트는 시각이 더 이르다. 30초는 뒤집힘 폭을 한참 넘으니 붙은
+  // 순서다 — Stop 이 마지막이다. 안 그러면 세션이 working 에 영영 머문다.
+  it('시계가 30초 뒤로 간 뒤의 Stop 은 붙은 순서대로 마지막이다', () => {
+    const tool = line({ hook_event_name: 'PreToolUse', tool_name: 'Bash', astera_at: 1_000_000 })
+    const stop = line({ hook_event_name: 'Stop', astera_at: 1_000_000 - 29_900 })
+    expect(latestEventLine([tool, stop])).toBe(stop)
+  })
+
   it('JSON 이 아닌 줄과 빈 목록', () => {
     const stop = line({ hook_event_name: 'Stop', astera_at: 1_000 })
     expect(latestEventLine([stop, 'garbage'])).toBe('garbage')

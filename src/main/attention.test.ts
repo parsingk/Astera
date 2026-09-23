@@ -260,6 +260,16 @@ describe('createAttentionState — StopFailure', () => {
     expect(state.get('w')).toBe('idle')
   })
 
+  // A wall clock set back 30 s during a turn stamps its Stop well before the prompt. That is far past
+  // any reordering, so the stamps are not trusted and the Stop ends the turn as it lands.
+  it('a Stop stamped 20 s before its prompt, after a clock step back, still ends the turn', () => {
+    const state = createAttentionState()
+    state.onHookEvent('w', { hook_event_name: 'UserPromptSubmit', prompt: 'go', astera_at: 1_000_000 })
+    state.onHookEvent('w', { hook_event_name: 'PreToolUse', tool_use_id: 'call-1', astera_at: 1_000_000 - 25_000 })
+    state.onHookEvent('w', { hook_event_name: 'Stop', astera_at: 1_000_000 - 20_000 })
+    expect(state.get('w')).toBe('idle')
+  })
+
   // Lines from a capture that predates the stamp keep the append-order rule, and so does a tie.
   it.each([
     ['no stamp', {}, {}],

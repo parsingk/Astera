@@ -280,6 +280,24 @@ describe('registrySessions — state', () => {
     expect(await stateOf('ses-1')).toBe('working')
   })
 
+  // A wall clock set back 30 s after a tool call stamps the turn's Stop earlier than the call. That is
+  // far past any reordering, so the lines keep the order they landed in and the session is waiting.
+  it('a Stop stamped 30 s before the call it follows, after a clock step back, reads waiting', async () => {
+    const { event, stateOf } = withEvents()
+    event('ses-1', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 't1', astera_at: 1_000_000 })
+    event('ses-1', { hook_event_name: 'Stop', astera_at: 1_000_000 - 29_900 })
+    expect(await stateOf('ses-1')).toBe('waiting')
+  })
+
+  // An empty-stdin capture leaves a blank line. It must not push aside the pick before it.
+  it('a blank line between events does not hide the one that happened last', async () => {
+    const { event, dir, stateOf } = withEvents()
+    event('ses-1', { hook_event_name: 'UserPromptSubmit', prompt: 'again', astera_at: 1_000_020 })
+    appendFileSync(path.join(dir, 'ses-1.jsonl'), '\n')
+    event('ses-1', { hook_event_name: 'StopFailure', error: 'rate_limit', astera_at: 1_000_000 })
+    expect(await stateOf('ses-1')).toBe('working')
+  })
+
   // Lines from a capture that predates the stamp keep today's rule: the last line to land.
   it('lines with no stamp are read in the order they landed', async () => {
     const { event, stateOf } = withEvents()

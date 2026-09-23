@@ -86,17 +86,20 @@ export function hookEventState(payload: unknown): 'working' | 'waiting' | null {
  * The line of the event that happened last, out of a file's last lines in the order they landed.
  * Not simply the last line: the async hooks can land out of order, and the capture's stamp says
  * which came first (core/hooks/eventTime.ts). A line replaces the current pick unless it is known to
- * have happened before it, so lines without the stamp, lines that are not JSON, and a tie keep the
- * append order. null for no lines.
+ * have happened before it, so lines without the stamp and a tie keep the append order. A blank or
+ * non-JSON line (an empty-stdin capture writes a bare newline) says nothing and is skipped, except
+ * as the last line, where it still stands so the state reads `unknown`: taken as a pick, it would
+ * push aside a newer event and let an older one after it win. null for no lines.
  */
 export function latestEventLine(lines: readonly string[]): string | null {
   let pick: { line: string; at: number | null } | null = null
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
     let at: number | null = null
     try {
       at = hookEventAt(JSON.parse(line))
     } catch {
-      /* not JSON: no time, so it falls back to where it landed */
+      if (i < lines.length - 1) continue
     }
     if (pick === null || !happenedBefore(at, pick.at)) pick = { line, at }
   }

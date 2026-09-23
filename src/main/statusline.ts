@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { Account } from '../core/types'
 import { hookEventsDirIn, hookEventsFileIn } from '../core/hooks/sessionState'
 import { HOOK_EVENT_AT } from '../core/hooks/eventTime'
@@ -81,6 +82,20 @@ process.stdin.on('end', finish)
 process.stdin.on('error', finish)
 `
 
+/** A script a running session may execute at any moment: written to a temp file beside it, then
+ *  renamed over it, the way the repo's stores write (core/scheduler/config.ts), so a reader sees the
+ *  old file or the new one and never a partial one. */
+async function writeScript(file: string, content: string): Promise<void> {
+  const tmp = `${file}.${randomUUID()}.tmp`
+  await fs.writeFile(tmp, content, 'utf8')
+  try {
+    await fs.rename(tmp, file)
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {})
+    throw err
+  }
+}
+
 /**
  * The absolute path to the node that will run the capture script.
  *
@@ -148,8 +163,10 @@ export class StatusLineManager {
   /** Writes the capture script and settings files, and resets the per-session output folder (removing leftovers from the previous run). */
   async init(): Promise<void> {
     await fs.mkdir(this.userDataDir, { recursive: true })
-    await fs.writeFile(this.capturePath, CAPTURE_SCRIPT, 'utf8')
-    await fs.writeFile(this.hookCapturePath, HOOK_CAPTURE_SCRIPT, 'utf8')
+    // Written whole and then swapped in: sessions still running from before this launch run these
+    // scripts by path, and a hook that fires during an in-place write would load half a script.
+    await writeScript(this.capturePath, CAPTURE_SCRIPT)
+    await writeScript(this.hookCapturePath, HOOK_CAPTURE_SCRIPT)
     const hookCmd = `"${this.nodePath.replace(/\\/g, '/')}" "${this.hookCapturePath.replace(/\\/g, '/')}"`
     // Hooks from --settings merge with the account's global settings.json hooks and both run
     // (measured). The global settings stay untouched.

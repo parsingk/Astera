@@ -335,7 +335,8 @@ Where the hooks cannot see, `state` can lag or be wrong:
   `UserPromptSubmit` before that turn's `StopFailure`. The time on each line puts them back in order.
   Two events that start within a few milliseconds of each other can still come out the wrong way
   round, and then the session reads as if the earlier one came last, until the next event or until
-  you type.
+  you type. The times are trusted only within five seconds of each other: two lines further apart
+  than that, as after the computer's clock is set back, are taken in the order they were written.
 - Hooks of your own in the account's settings run alongside Astera's. One that blocks a prompt leaves
   `working` standing until you type, and a `Stop` hook that makes Claude carry on leaves `waiting`
   standing while it works.

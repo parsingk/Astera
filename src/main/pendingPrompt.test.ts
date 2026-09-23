@@ -86,9 +86,11 @@ describe('createPendingPromptState', () => {
     expect(state.get('s1')?.toolUseId).toBe('call-2')
   })
 
-  // Lines with no stamp (an older capture) and a tie keep the append-order rule.
+  // Lines with no stamp (an older capture), a tie, and a gap far past any reordering (a wall clock set
+  // back 30 s) keep the append-order rule.
   it.each([
     ['no stamp', {}, {}],
+    ['a clock stepped back 30 s', { astera_at: 1_000_000 }, { astera_at: 1_000_000 - 20_000 }],
     ['the same millisecond', { astera_at: 1_000 }, { astera_at: 1_000 }],
     ['a turn end newer than the prompt', { astera_at: 1_000 }, { astera_at: 1_005 }]
   ])('with %s the turn end clears it', (_label, promptAt, endAt) => {

@@ -20,7 +20,8 @@
 //
 // **Lines without the stamp** (a capture from before it, whose session has not run a hook since the
 // app rewrote the script) have no time, and a tie is two events at the same instant. Neither can
-// be ordered by time, so both fall back to the order they landed in, which is today's rule.
+// be ordered by time, so both fall back to the order they landed in, which is today's rule. So
+// does a gap too large to be a reordering (REORDER_WINDOW_MS).
 
 /** The field the capture adds. Claude Code's hook payloads use snake_case names of their own
  *  (`hook_event_name`, `session_id`); the prefix keeps this one from ever being one of them. */
@@ -34,12 +35,24 @@ export function hookEventAt(payload: unknown): number | null {
 }
 
 /**
+ * How far apart two stamps may be and still be trusted to reorder lines. The reorderings this fixes
+ * are two async captures landing within node's startup jitter: measured, a few milliseconds, and
+ * well under a second even through Git Bash under full load. A gap of seconds is not a reordering
+ * but a wall clock that was set back (Windows steps the clock after a resume or a large offset).
+ * Trusting it would make every event after the step look older than the ones before it, and a
+ * session would read `working`, or keep a turn open, until wall time caught up. Past this window
+ * the stamps are ignored and append order stands. A step shorter than the window can still misorder
+ * a turn shorter than the step.
+ */
+export const REORDER_WINDOW_MS = 5_000
+
+/**
  * **The ordering rule, for every reader of the hook event files.** True only when both events carry
- * a time and `a`'s is strictly earlier. False means "not known to be earlier": the caller then keeps
- * the order the lines landed in. The Host picks the latest event with it
+ * a time and `a`'s is earlier by more than 0 and less than REORDER_WINDOW_MS. False means "not known
+ * to be earlier": the caller then keeps the order the lines landed in. The Host picks the latest event with it
  * (core/hooks/sessionState.ts `latestEventLine`); the app's readers use it to tell a turn end that
  * belongs to the turn before the latest prompt (main/attention.ts, pendingPrompt.ts, slack.ts).
  */
 export function happenedBefore(a: number | null, b: number | null): boolean {
-  return a !== null && b !== null && a < b
+  return a !== null && b !== null && b - a > 0 && b - a < REORDER_WINDOW_MS
 }

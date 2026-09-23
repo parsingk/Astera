@@ -121,6 +121,35 @@ describe('SlackNotifier 훅 이벤트', () => {
     expect(h.sent).toEqual(['[myproj · work1] ⚠️ 턴 실패 — API Error: Repeated 529 Overloaded errors'])
   })
 
+  // 오류 문장은 던진 쪽의 글을 그대로 싣는다(공급자 SDK 의 메시지, 게이트웨이 주소). 채널의 모두가
+  // 읽는 곳이라 이 저장소의 자격 증명 가리개(core/orchestration/checkpoint.ts sanitize)를 댄다.
+  it('StopFailure 의 오류 문장에서 키 모양 값과 자격 증명이 든 주소를 가린다', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    const key = 'sk-ant-' + 'api03-AbCdEf0123456789AbCdEf0123456789xyz'
+    h.notifier.onHookEvent(
+      's-1',
+      stopFailure(
+        'unknown',
+        `API Error: request to https://gw.example.com/v1?api_key=AbCdEf0123456789XyZw failed · using ${key}`
+      )
+    )
+    await flush()
+    expect(h.sent).toEqual([
+      '[myproj · work1] ⚠️ 턴 실패 — API Error: request to https://gw.example.com/v1?api_key=[REDACTED] failed · using [REDACTED]'
+    ])
+  })
+
+  // 턴 요약은 가리지 않는다 — 앱에서 이미 보이는 모델의 출력이고, 가리면 정상적인 코드 글이 바뀐다.
+  it('응답 완료 요약은 가리개를 대지 않는다', async () => {
+    const text = 'const api_key = process.env.KEY // token=AbCdEf0123456789XyZw'
+    const h = setup({ readFileTail: async () => assistantLine(text) })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'Stop', transcript_path: 'D:/t.jsonl' })
+    await flush()
+    expect(h.sent[0]).toContain(text)
+  })
+
   it('StopFailure 에 오류 문장이 없으면 오류 코드를 보낸다', async () => {
     const h = setup()
     h.notifier.register(info())
@@ -168,9 +197,11 @@ describe('SlackNotifier 훅 이벤트', () => {
   })
 
   // 시각이 없는 줄(예전 캡처)과 같은 밀리초는 붙은 순서대로 — 턴 끝이 지운다.
+  // 시계가 30초 뒤로 설정된 것도 뒤집힘 폭을 한참 넘으니 붙은 순서다.
   it.each([
     ['시각 없음', {}, {}],
-    ['같은 밀리초', { astera_at: 1_000 }, { astera_at: 1_000 }]
+    ['같은 밀리초', { astera_at: 1_000 }, { astera_at: 1_000 }],
+    ['시계가 30초 뒤로 감', { astera_at: 1_000_000 }, { astera_at: 1_000_000 - 20_000 }]
   ])('%s 이면 StopFailure 가 질문 캡처를 지운다', async (_label, promptAt, endAt) => {
     const h = setup()
     h.notifier.register(info())
