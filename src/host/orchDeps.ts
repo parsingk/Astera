@@ -1,12 +1,13 @@
 // The Host's OrchServerDeps: the members it owns, and the actions it forwards to the app.
 //
 // **The command layer never learns which is which.** That is the whole point of the split (host
-// control plane design §5) — when S2 makes startWorker local, this file changes and `handleCommand`
-// does not.
+// control plane design §5) — S2 made startWorker local (HOST_LOCAL), and this file changed while
+// `handleCommand` did not.
 import type { OrchAccount, OrchRunConfig, OrchServerDeps } from '../core/orchestration/command'
 import type { Provider } from '../core/types'
 import { AppUnreachable } from '../core/host/orchProtocol'
 import type { HostSessions } from './sessions'
+import type { HostLocal, HostLocalName } from './spawner'
 
 /** What the Host answers out of itself. `runningSessions` and `appVersion` look like app questions
  *  and are not: the Host knows its own version and its own session registry, and `status` and
@@ -26,8 +27,7 @@ const OWNED = ['getState', 'setState', 'now', 'log', 'runningSessions', 'appVers
  * by the refusal, so the call is answered CONFLICT (`orch.ts`'s `appRefused` mark).
  */
 const PROPAGATES = [
-  'startWorker', 'releaseWorker', 'mergeWorktrees', 'removeWorktrees', 'startCoordinator',
-  'makeRunWorktree', 'readWorker',
+  'mergeWorktrees', 'removeWorktrees', 'makeRunWorktree',
   'browserRun',
   // **The three toggles the app owns.** Each is read as the first thing its command does, before any
   // state is read and before anything has been committed, so a refusal costs nothing but the answer
@@ -100,15 +100,16 @@ const DEGRADES = {
 } as const
 
 /**
- * **Forwarded, and the command layer deliberately swallows a failure.** `probeLimit` logs and carries
- * on with no limit detected; `resolveProjectRoot` logs and keeps the path it was given;
- * `readReviewFile` records the verdict file as malformed.
+ * **Forwarded, and the command layer deliberately swallows a failure.** `resolveProjectRoot` logs and
+ * keeps the path it was given. `probeLimit` (logs and carries on with no limit detected) and
+ * `readReviewFile` (records the verdict file as malformed) were here until S2; they are HOST_LOCAL now,
+ * and a call of theirs the Host does not own is still forwarded this way.
  *
  * **So these must not decide the status.** The command goes on to succeed or to fail for its own
  * reasons, and rewriting that later failure as CONFLICT tells a script "the app is missing" when the
  * truth was a bad id — the same lie the substring match used to tell, wearing a flag instead.
  */
-const SWALLOWED = ['probeLimit', 'resolveProjectRoot', 'readReviewFile'] as const
+const SWALLOWED = ['resolveProjectRoot'] as const
 
 /**
  * **Called as a bare statement — nobody holds the result.**
@@ -220,16 +221,53 @@ const HOST_WHEN_ABSENT = ['chatSend'] as const
  *  app failed to answer. `chatPending` with Astera closed is every chat read, and its fallback (the
  *  field left out) already tells the caller; a line per read would bury the degradations that are
  *  news (CLI phase D4 review M1). */
+/**
+ * **Answered by the Host's own spawner, with or without an app attached** (Host S2 design §1.4, §2.1).
+ * The Host starts the worker or coordinator in its own pty registry, reads its output there, and
+ * kills it there — so a coordinator's `worker-start`, `worker-stop`, `worker-release` and
+ * `worker-read` work with no Astera window open.
+ *
+ * **Per call, not per name (R1).** The spawner's `owns(name, args)` says whether this particular call
+ * is the Host's. It says no to a start that needs a new worktree (S2 makes none; that is S3), to a read
+ * of a tail the app holds, and to a stop or a `--terminal` reuse of a session the Host's registry never
+ * held (an app-local pty: the app started it, so only the app can end it). A call the Host does not
+ * own goes the way its name went before S2 (`HOST_LOCAL_FALLBACK`): the four that decide their
+ * command as PROPAGATES, `probeLimit` and `readReviewFile` as SWALLOWED. So `worker-start --worktree
+ * new` with no app is still 409 `APP_REQUIRED` with no Dispatch left, exactly as before.
+ *
+ * **A Host started without the CLI paths has no spawner (`local: null`)**, and then every one of the
+ * six takes its old route — that Host behaves exactly as a Host before S2.
+ *
+ * A local call that acts calls `onEffect` before it runs, the rule the `act` funnel keeps. A local
+ * refusal only the app can clear (a settings file the Host cannot read) is thrown as `AppUnreachable`
+ * and flagged like an absent app, so the command answers CONFLICT with the refusal's own words.
+ */
+const HOST_LOCAL = [
+  'startWorker', 'startCoordinator', 'releaseWorker', 'readWorker', 'probeLimit', 'readReviewFile'
+] as const satisfies readonly HostLocalName[]
+type _hostLocalIsWhole = NothingLeft<Exclude<HostLocalName, (typeof HOST_LOCAL)[number]>>
+
+/** When `local` does not own a call, it goes the way its group went before S2 (R1). */
+const HOST_LOCAL_FALLBACK: Record<HostLocalName, 'propagates' | 'swallowed'> = {
+  startWorker: 'propagates',
+  startCoordinator: 'propagates',
+  releaseWorker: 'propagates',
+  readWorker: 'propagates',
+  probeLimit: 'swallowed',
+  readReviewFile: 'swallowed'
+}
+
 const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending'])
 
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
-const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
+const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
  *  synchronous getters became `T | Promise<T>` in `command.ts` and are awaited at their one call site
  *  each, and the two objects of methods travel a method at a time (NESTED). */
 type Classified =
   | (typeof OWNED)[number]
+  | (typeof HOST_LOCAL)[number]
   | (typeof PROPAGATES)[number]
   | (typeof SWALLOWED)[number]
   | (typeof FIRE_AND_FORGET)[number]
@@ -264,22 +302,23 @@ const EFFECTFUL: Record<Classified, boolean> = {
   runningSessions: false,
   appVersion: false,
   backup: true,
-  // PROPAGATES.
+  // HOST_LOCAL — the same values these names had in PROPAGATES and SWALLOWED before S2.
   startWorker: true,
+  startCoordinator: true,
   releaseWorker: true,
+  readWorker: false,
+  probeLimit: false,
+  readReviewFile: false,
+  // PROPAGATES.
   mergeWorktrees: true,
   removeWorktrees: true,
-  startCoordinator: true,
   makeRunWorktree: true,
-  readWorker: false,
   browserRun: true,
   browserEnabled: false,
   handoffEnabled: false,
   trackingEnabled: false,
-  // SWALLOWED — all three are questions about what is already there.
-  probeLimit: false,
+  // SWALLOWED — a question about what is already there.
   resolveProjectRoot: false,
-  readReviewFile: false,
   // FIRE_AND_FORGET — every one of them starts or ends something, which is why nobody holds the
   // result. That the caller does not wait for them does not make them free to do twice.
   unregisterRolling: true,
@@ -351,7 +390,8 @@ export function hostOrchDeps(a: {
    *  the transition table — lands somewhere a person can read it. Without it the Host's command layer
    *  degrades silently, which is the one thing a degradation must not do. */
   log(message: string): void
-  /** Called when a **PROPAGATES** action could not be put to the app — none attached, or the one that
+  /** Called when a **PROPAGATES** action (or a HOST_LOCAL one that falls back to that route, or a local
+   *  refusal only the app can clear) could not be put to the app — none attached, or the one that
    *  was did not answer. `orch.ts` answers that call CONFLICT on the strength of this, rather than by
    *  matching text in the reply. Never called for the other three groups — SWALLOWED, FIRE_AND_FORGET
    *  and DEGRADES: their refusal does not decide what the command answers. */
@@ -374,6 +414,9 @@ export function hostOrchDeps(a: {
   /** The Host's own sessions (HOST_SESSIONS), out of its two registries (`host/sessions.ts`), and
    *  the local half and the per-session order of `chatSend` (HOST_WHEN_ABSENT). */
   sessions: HostSessions
+  /** The Host's own spawner (HOST_LOCAL), or null/absent for a Host started without the CLI paths —
+   *  then the six names take their pre-S2 routes. */
+  local?: HostLocal | null
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -512,8 +555,28 @@ export function hostOrchDeps(a: {
     }) as HostSessions[K]
   }
 
+  /** HOST_LOCAL: the spawner's answer when it owns this call, otherwise the route the name had before
+   *  S2. A local refusal thrown as `AppUnreachable` is flagged the way a propagating forward is — and
+   *  only for the four that propagate, since a swallowed failure must not decide the status. */
+  const hostLocal = (name: HostLocalName) => {
+    const propagates = HOST_LOCAL_FALLBACK[name] === 'propagates'
+    const fallback = forward(name, propagates)
+    return async (...args: unknown[]): Promise<unknown> => {
+      const local = a.local
+      if (!local || !local.owns(name, args)) return fallback(...args)
+      if (EFFECTFUL[name]) a.onEffect?.()
+      try {
+        return await (local[name] as (...xs: unknown[]) => Promise<unknown>)(...args)
+      } catch (err) {
+        if (propagates && err instanceof AppUnreachable) a.onAppRequired(name, err.message)
+        throw err
+      }
+    }
+  }
+
   const remote = Object.fromEntries(
     REMOTE.map((name) => {
+      if ((HOST_LOCAL as readonly string[]).includes(name)) return [name, hostLocal(name as HostLocalName)]
       if ((FIRE_AND_FORGET as readonly string[]).includes(name)) return [name, forgetful(name)]
       if (name in DEGRADES) return [name, degrading(name, DEGRADES[name as keyof typeof DEGRADES])]
       if (name === 'listAccounts') return [name, localWhenAbsent(name, a.readAccounts)]

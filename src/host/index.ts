@@ -20,8 +20,9 @@ import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_PROTOCOL } from '../core/host/protocol'
+import { HOST_FEATURE_SPAWN, HOST_PROTOCOL } from '../core/host/protocol'
 import { createHostOrch } from './orch'
+import { createHostSpawner } from './spawner'
 import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
 import { readAccountEntries } from '../core/accounts/accountsFile'
@@ -132,12 +133,31 @@ async function main(): Promise<void> {
   // answers never drift apart.
   const hostVersion = process.env.ASTERA_HOST_VERSION ?? '0.0.0'
 
+  // The Host's own spawn path (Host S2 design §2.1): orchestration workers and coordinators started in
+  // this registry, so a coordinator's worker-start works with no Astera window open. Null when the
+  // Host was started without the CLI paths, and then those commands go to the app as before (R1).
+  //
+  // It writes nothing until its first spawn (R6). `server` and `orch` are assigned below; its
+  // closures only run inside a command, long after both exist.
+  const spawner = createHostSpawner({
+    profileDir,
+    env: process.env,
+    platform: process.platform,
+    homeDir: os.homedir(),
+    registry,
+    broadcast: (m) => server.broadcast(m),
+    getState: () => orch.state(),
+    log: (m) => log.write(m)
+  })
+
   // The orchestration state and the commands over it (host control plane design §5, §6).
   //
   // **Constructed, not loaded.** `ready()` is deliberately not called here: the app still builds its
   // own store on this same file and still runs its boot cleanup, and loading here would put a second
   // process's restart recovery on it. The first call that needs the state loads it, and once the app
-  // has pushed its state there is nothing left to load — see `createHostOrch`.
+  // has pushed its state there is nothing left to load — see `createHostOrch`. That is still true now
+  // that the Host can start sessions itself: a spawn happens only inside a command, and every command
+  // waits on `ready()` first.
   //
   // `server` is assigned a few lines down; every one of these closures runs long after that, because
   // nothing can call them before a client has connected.
@@ -175,7 +195,8 @@ async function main(): Promise<void> {
       procs,
       hookEventsDir: hookEventsDirIn(profileDir),
       accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json'))
-    })
+    }),
+    local: spawner
   })
   try {
     server = await startHostServer({
@@ -196,6 +217,8 @@ async function main(): Promise<void> {
         runs: orch.runningRuns()
       }),
       orch,
+      // Announced only when there is a spawner, so an app can tell a Host that starts sessions itself.
+      features: spawner ? [HOST_FEATURE_SPAWN] : [],
       log
     })
   } catch (err) {

@@ -20,10 +20,14 @@ import {
   emptyState,
   openDispatch,
   openReviewDispatch,
+  setRunWorktree,
   startJobRun,
   type OrchState
 } from '../core/orchestration/state'
-import type { OrchCaller } from '../core/host/orchProtocol'
+import { outcomeOf } from '../core/orchestration/view'
+import { codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
+import { AppUnreachable, type OrchCaller } from '../core/host/orchProtocol'
+import type { HostLocal } from './spawner'
 import type { HostMessage } from '../core/host/protocol'
 import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
@@ -1898,5 +1902,139 @@ describe('receiptsToEvict — 무엇이 떨어져 나가는가', () => {
   // 일찍 버리는 값은 호출자의 답이다.
   it('읽을 수 없는 시각은 만료로 치지 않는다', () => {
     expect(receiptsToEvict([entry('sesA\u0000req-1', '시각 아님')], nowMs)).toEqual([])
+  })
+})
+
+describe('Host-local spawn (S2)', () => {
+  const local = (over: Partial<HostLocal> = {}): HostLocal => ({
+    owns: (name, args) => !(name === 'startWorker' && (args[0] as { worktree?: string; terminal?: string }).worktree === 'new' && !(args[0] as { terminal?: string }).terminal),
+    startWorker: vi.fn(async () => ({ sessionId: 'ses_host', cwd: 'D:/p', specPath: 'D:/specs/s.md' })),
+    startCoordinator: vi.fn(async () => ({ sessionId: 'ses_coord' })),
+    releaseWorker: vi.fn(async () => {}),
+    readWorker: vi.fn(async () => 'worker output'),
+    probeLimit: vi.fn(async () => null),
+    readReviewFile: vi.fn(async () => null),
+    ...over
+  })
+  const worker = (taskId: string, worktree = 'current') => ({ task: taskId, agent: 'claude', account: 'acc1', worktree })
+
+  it('starts a worker with no app attached and records the real session id', async () => {
+    const { taskId } = await seed()
+    const act = vi.fn()
+    const orch = orchOver({ hasApp: () => false, act, local: local() })
+    const r = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
+    expect(r.status).toBe(200)
+    expect(act).not.toHaveBeenCalled()
+    expect(orch.state().dispatches[0].sessionId).toBe('ses_host')
+  })
+  it('stops and reads a worker with no app attached', async () => {
+    const { taskId } = await seed()
+    const l = local()
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const started = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
+    const dispatchId = (started.body as { dispatchId: string }).dispatchId
+    expect((await orch.call({ cmd: 'worker-read', args: { dispatch: dispatchId }, sessionId: '' })).body).toEqual({ output: 'worker output' })
+    expect((await orch.call({ cmd: 'worker-stop', args: { dispatch: dispatchId }, sessionId: '' })).status).toBe(200)
+    expect(l.releaseWorker).toHaveBeenCalledWith({ dispatchId })
+  })
+  // R1: S3 is not here yet.
+  it('still refuses --worktree new with no app, 409, leaving no Dispatch', async () => {
+    const { taskId } = await seed()
+    const l = local()
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const r = await orch.call({ cmd: 'worker-start', args: { ...worker(taskId, 'new'), name: 'n' }, sessionId: '' })
+    expect(r.status).toBe(409)
+    expect(l.startWorker).not.toHaveBeenCalled()
+    expect(orch.state().dispatches).toEqual([])
+  })
+  // §1.2: a coordinator Job whose Run already has a worktree advances with no app; one without is refused before any spawn.
+  it('starts a coordinator with no app when the Run has its worktree, and refuses before spawning when it has none', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p', coordinatorAccountId: 'acc1' }, NOW); if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(run.state))
+    const l = local()
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const refused = await orch.call({ cmd: 'run-start', args: { run: job.value.id }, sessionId: '' })
+    expect(refused.status).toBe(409)
+    expect(l.startCoordinator).not.toHaveBeenCalled()
+    const withTree = setRunWorktree(orch.state(), run.value.id, 'D:/wt'); if (!withTree.ok) throw new Error(withTree.error)
+    await orch.call({ cmd: 'state-put', args: { state: withTree.state }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    const started = await orch.call({ cmd: 'run-start', args: { run: job.value.id }, sessionId: '' })
+    expect(started.status).toBe(200)
+    expect(l.startCoordinator).toHaveBeenCalledTimes(1)
+  })
+  // Receipts replay safety.
+  it('spawns once for a worker-start retried under the same request id', async () => {
+    const { taskId } = await seed()
+    const l = local()
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const first = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: 'sesA', request: 'req-1' })
+    const second = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: 'sesA', request: 'req-1' })
+    expect(first.status).toBe(200)
+    expect(second.replayed).toBe(true)
+    expect(l.startWorker).toHaveBeenCalledTimes(1)
+  })
+  // R10: nothing reads as validated with no app.
+  it('leaves a --validate Task validating after its Host-spawned worker reports, with no app', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW); if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [], validateConfigIds: ['seed:npm:test'] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(task.state))
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: local() })
+    const started = await orch.call({ cmd: 'worker-start', args: worker(task.value.id), sessionId: '' })
+    expect(started.status).toBe(200)
+    const dispatchId = (started.body as { dispatchId: string }).dispatchId
+    const done = await orch.call({
+      cmd: 'send',
+      args: { type: 'worker_done', taskId: task.value.id, dispatchId, outcome: 'succeeded', subject: 's' },
+      sessionId: 'ses_host'
+    })
+    expect(done.status).toBe(200)
+    expect(orch.state().tasks.find((t) => t.id === task.value.id)?.status).toBe('validating')
+    expect(outcomeOf(orch.state(), run.value.id)).toBe('running')
+    // The validation itself is the app's until S5: logged as not forwarded, never run or faked here.
+    expect(logs.some((l) => l.startsWith('startValidation was not forwarded'))).toBe(true)
+  })
+  // Carried from Task 4: a broken settings file refuses the spawn as a conflict (exit 6) with the
+  // spawner's own words, never as a bad argument, and leaves no Dispatch behind.
+  it('answers a spawn the settings file refuses as 409 with its reason, and rolls the Dispatch back', async () => {
+    const { taskId } = await seed()
+    const why = 'the Host will not start a session: app-settings.json is not a valid settings file; open Astera to repair it'
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: local({ startWorker: vi.fn().mockRejectedValue(new AppUnreachable(why)) }) })
+    const r = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
+    expect(r.status).toBe(409)
+    expect(exitCodeFor(codeForStatus(r.status))).toBe(6)
+    expect((r.body as { error: string }).error).toContain(why)
+    expect(orch.state().dispatches).toEqual([])
+  })
+  // Review M2 of Task 9: a worker whose pty is app-local is the app's to kill. With no app the stop is
+  // refused, and the Dispatch is not marked stopped over a worker that is still running.
+  it('forwards the stop of a worker the Host does not hold, and refuses it honestly with no app', async () => {
+    const { taskId } = await seed()
+    const l = local({ owns: (name) => name !== 'releaseWorker' })
+    let app = true
+    const act = vi.fn().mockResolvedValue(undefined)
+    const orch = orchOver({ hasApp: () => app, act, local: l })
+    const started = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
+    const dispatchId = (started.body as { dispatchId: string }).dispatchId
+    app = false
+    const refused = await orch.call({ cmd: 'worker-stop', args: { dispatch: dispatchId }, sessionId: '' })
+    expect(refused.status).toBe(409)
+    expect(JSON.stringify(refused.body)).toContain('APP_REQUIRED')
+    expect(l.releaseWorker).not.toHaveBeenCalled()
+    expect(orch.state().dispatches[0].workerState).not.toBe('stopped')
+    app = true
+    const stopped = await orch.call({ cmd: 'worker-stop', args: { dispatch: dispatchId }, sessionId: '' })
+    expect(stopped.status).toBe(200)
+    expect(act).toHaveBeenCalledWith('releaseWorker', [{ dispatchId }])
+    expect(l.releaseWorker).not.toHaveBeenCalled()
+  })
+  it('behaves exactly as before with no spawner: worker-start with no app is refused', async () => {
+    const { taskId } = await seed()
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: null })
+    const r = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
+    expect(r.status).toBe(409)
+    expect(orch.state().dispatches).toEqual([])
   })
 })

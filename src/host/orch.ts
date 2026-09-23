@@ -14,6 +14,7 @@ import { hostOrchDeps } from './orchDeps'
 import { readAccountsFile } from '../core/accounts/accountsFile'
 import { readRunConfigsFile } from '../core/run/runConfigsFile'
 import type { HostSessions } from './sessions'
+import type { HostLocal } from './spawner'
 
 /** One reply — today's HTTP status and body, the shape `OrchCall.call` already answers with. Named
  *  only because the receipt store below holds one. */
@@ -281,6 +282,9 @@ export interface HostOrch extends OrchCall {
    *  leave `host stop` permanently refusing until somebody cleaned the file up by hand. Work this
    *  Host really holds from before a load is a live pty, and that is counted as a session. */
   runningRuns(): number
+  /** The state as the store holds it (`store.get()`). For the Host's spawner, whose every caller is
+   *  a command already behind `ready()`, so it never triggers or races the load. */
+  state(): OrchState
 }
 
 export function createHostOrch(a: {
@@ -317,6 +321,9 @@ export function createHostOrch(a: {
   log(message: string): void
   /** The agent sessions this Host holds, for `astera sessions` (orchDeps' HOST_SESSIONS). */
   sessions: HostSessions
+  /** The Host's own spawner (orchDeps' HOST_LOCAL). Null or absent when the Host was started without
+   *  the CLI paths, and then every one of those calls takes its pre-S2 route. */
+  local?: HostLocal | null
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
 
@@ -412,6 +419,7 @@ export function createHostOrch(a: {
       // 실행 구성도 같다 — 앱이 쓴 run-configs.json 과 계획의 폴더를 읽기만 한다(CLI phase D).
       readRunConfigs: (projectPath) => readRunConfigsFile(path.join(a.profileDir, 'run-configs.json'), projectPath),
       sessions: a.sessions,
+      local: a.local ?? null,
       onEffect: () => {
         marks.acted = true
       },
@@ -798,6 +806,7 @@ export function createHostOrch(a: {
   return {
     ready,
     runningRuns: () => runningRunCount(store.get()),
+    state: () => store.get(),
     call: async ({ cmd, args, sessionId, from, request }) => {
       // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
       // `orch-call` from this promise and has no catch of its own, so anything that escapes here is

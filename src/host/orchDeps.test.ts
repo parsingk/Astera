@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { hostOrchDeps } from './orchDeps'
+import type { HostLocal } from './spawner'
 import { AppUnreachable } from '../core/host/orchProtocol'
 import os from 'node:os'
 import path from 'node:path'
@@ -735,5 +736,78 @@ describe('hostOrchDeps', () => {
       await deps.startWorker({ dispatchId: 'd1' } as never)
       expect(act).toHaveBeenCalledWith('startWorker', [{ dispatchId: 'd1' }])
     })
+  })
+})
+
+const fakeLocal = (over: Partial<HostLocal> = {}): HostLocal => ({
+  owns: () => true,
+  startWorker: vi.fn().mockResolvedValue({ sessionId: 'ses_h', cwd: 'D:/p', specPath: 'D:/s.md' }),
+  startCoordinator: vi.fn().mockResolvedValue({ sessionId: 'ses_c' }),
+  releaseWorker: vi.fn().mockResolvedValue(undefined),
+  readWorker: vi.fn().mockResolvedValue('tail'),
+  probeLimit: vi.fn().mockResolvedValue(null),
+  readReviewFile: vi.fn().mockResolvedValue(null),
+  ...over
+})
+describe('HOST_LOCAL (S2)', () => {
+  it('is answered by the Host and never asked of the app, with or without one', async () => {
+    for (const hasApp of [true, false]) {
+      const act = vi.fn(); const local = fakeLocal()
+      const deps = hostOrchDeps(base({ act, hasApp: () => hasApp, local }))
+      expect(await deps.startWorker({ dispatchId: 'd1', worktree: 'current' } as never)).toMatchObject({ sessionId: 'ses_h' })
+      await deps.releaseWorker({ dispatchId: 'd1' })
+      expect(await deps.readWorker({ dispatchId: 'd1' })).toBe('tail')
+      expect(await deps.startCoordinator!({ runId: 'r', cwd: 'D:/p', accountId: 'a', brief: 'b' })).toEqual({ sessionId: 'ses_c' })
+      expect(act).not.toHaveBeenCalled()
+    }
+  })
+  it('marks an effectful local call before it runs, and a read not at all', async () => {
+    const order: string[] = []
+    const local = fakeLocal({ startWorker: vi.fn(async () => { order.push('start'); return { sessionId: 's', cwd: 'c', specPath: 'p' } }), readWorker: vi.fn(async () => { order.push('read'); return '' }) })
+    const deps = hostOrchDeps(base({ local, onEffect: () => order.push('effect') }))
+    await deps.startWorker({} as never); await deps.readWorker({ dispatchId: 'd' })
+    expect(order).toEqual(['effect', 'start', 'read'])
+  })
+  // R1: the S2-alone guard.
+  it('sends a call the Host does not own the way it went before — refused with no app', async () => {
+    const onAppRequired = vi.fn()
+    const local = fakeLocal({ owns: (name, args) => !(name === 'startWorker' && (args[0] as { worktree?: string }).worktree === 'new') })
+    const deps = hostOrchDeps(base({ hasApp: () => false, local, onAppRequired }))
+    await expect(deps.startWorker({ worktree: 'new' } as never)).rejects.toThrow(/APP_REQUIRED/)
+    expect(onAppRequired).toHaveBeenCalledWith('startWorker', expect.any(String))
+    expect(local.startWorker).not.toHaveBeenCalled()
+  })
+  it('keeps probeLimit and readReviewFile swallowed when they fall back', async () => {
+    const onAppRequired = vi.fn()
+    const deps = hostOrchDeps(base({ hasApp: () => false, local: fakeLocal({ owns: () => false }), onAppRequired }))
+    await expect(deps.probeLimit!({} as never)).rejects.toThrow(/APP_REQUIRED/)
+    await expect(deps.readReviewFile!('D:/r.md')).rejects.toThrow(/APP_REQUIRED/)
+    expect(onAppRequired).not.toHaveBeenCalled()
+  })
+  it('with no local, every one of the six travels to the app exactly as before', async () => {
+    const act = vi.fn().mockResolvedValue({})
+    const deps = hostOrchDeps(base({ act, local: null }))
+    await deps.startWorker({ dispatchId: 'd1' } as never)
+    expect(act).toHaveBeenCalledWith('startWorker', [{ dispatchId: 'd1' }])
+  })
+  // A forwarded fallback still goes through the funnel, so a keyed retry of it is not re-run either.
+  it('marks a forwarded fallback as an effect, as it did before S2', async () => {
+    const onEffect = vi.fn()
+    const act = vi.fn().mockResolvedValue(undefined)
+    const deps = hostOrchDeps(base({ act, onEffect, local: fakeLocal({ owns: () => false }) }))
+    await deps.releaseWorker({ dispatchId: 'd1' })
+    expect(act).toHaveBeenCalledWith('releaseWorker', [{ dispatchId: 'd1' }])
+    expect(onEffect).toHaveBeenCalledTimes(1)
+  })
+  // Carried from Task 4: a local refusal that only the app can clear (a broken settings file) decides
+  // the command's outcome the way an absent app does — CONFLICT, with the refusal's own words.
+  it('flags a local refusal that needs the app, and passes any other local failure straight through', async () => {
+    const onAppRequired = vi.fn()
+    const needsApp = new AppUnreachable('the Host will not start a session: app-settings.json is not a valid settings file; open Astera to repair it')
+    const deps = hostOrchDeps(base({ onAppRequired, local: fakeLocal({ startWorker: vi.fn().mockRejectedValue(needsApp), releaseWorker: vi.fn().mockRejectedValue(new Error('boom')) }) }))
+    await expect(deps.startWorker({} as never)).rejects.toBe(needsApp)
+    expect(onAppRequired).toHaveBeenCalledWith('startWorker', needsApp.message)
+    await expect(deps.releaseWorker({ dispatchId: 'd1' })).rejects.toThrow('boom')
+    expect(onAppRequired).toHaveBeenCalledTimes(1)
   })
 })
