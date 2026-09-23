@@ -99,7 +99,10 @@ export function hostSpawnPlan(a: {
   cli?: HostCliPaths
 }): HostSpawnPlan {
   const env: NodeJS.ProcessEnv = {}
-  for (const [k, v] of Object.entries(a.env ?? process.env)) if (!notInherited(k)) env[k] = v
+  // HOST_ONLY_ENV too: what the Host is started with is this caller's to say, never an ancestor's. A
+  // parent that already carried ASTERA_HOST_CLI_* would otherwise hand them to a Host whose caller
+  // could not name the paths itself, and that Host would spawn with them anyway (review M2).
+  for (const [k, v] of Object.entries(a.env ?? process.env)) if (!notInherited(k) && !HOST_ONLY_ENV.test(k)) env[k] = v
   return {
     command: a.execPath,
     args: [a.entryPath],

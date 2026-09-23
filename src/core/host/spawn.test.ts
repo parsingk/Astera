@@ -119,6 +119,17 @@ describe('the CLI paths the Host is started with', () => {
     const plan = hostSpawnPlan({ execPath: 'x', entryPath: 'y', profileDir: 'p', logPath: 'l', version: 'v', env: {} })
     expect('ASTERA_HOST_CLI_EXEC' in plan.options.env).toBe(false)
   })
+  // M2: a caller that could not name the paths must not start a Host that spawns with an ancestor's.
+  it('are absent when not given even if the parent environment carries them', () => {
+    const plan = hostSpawnPlan({ execPath: 'x', entryPath: 'y', profileDir: 'p', logPath: 'l', version: 'v',
+      env: { PATH: '/usr/bin', ASTERA_HOST_CLI_EXEC: 'old-e', astera_host_cli_entry: 'old-n', ASTERA_HOST_SKILLS: 'old-s', ASTERA_HOST_LOG: 'old-l' } })
+    const names = Object.keys(plan.options.env).map((k) => k.toUpperCase())
+    expect(names).not.toContain('ASTERA_HOST_CLI_EXEC')
+    expect(names).not.toContain('ASTERA_HOST_CLI_ENTRY')
+    expect(names).not.toContain('ASTERA_HOST_SKILLS')
+    expect(plan.options.env.ASTERA_HOST_LOG).toBe('l')
+    expect(plan.options.env.PATH).toBe('/usr/bin')
+  })
   it('read back as the three paths, or the names of the ones missing', () => {
     const env = { ASTERA_HOST_CLI_EXEC: 'e', ASTERA_HOST_CLI_ENTRY: 'n', ASTERA_HOST_SKILLS: 's' }
     expect(hostCliPaths(env, () => true)).toEqual({ exec: 'e', entry: 'n', skills: 's' })
