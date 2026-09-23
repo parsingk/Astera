@@ -14,6 +14,7 @@ const base = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): Parameter
   log: () => {},
   onAppRequired: () => {},
   readAccounts: vi.fn().mockResolvedValue([]),
+  readRunConfigs: vi.fn().mockResolvedValue([]),
   sessions: { listSessions: () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {} },
   ...over
 })
@@ -224,6 +225,56 @@ describe('hostOrchDeps', () => {
   })
 
   /**
+   * **실행 구성도 앱이 없으면 프로필의 run-configs.json 과 그 폴더가 답한다**(CLI phase D). 계정과
+   * 같은 갈래다: 앱이 있으면 앱이 정본이고, 없으면 파일이 앱이 마지막으로 남긴 말이다.
+   */
+  describe('listRunConfigs — 앱이 없으면 파일', () => {
+    const cfgs = [{ id: 'cfg1', name: 'test', type: 'npm' }]
+
+    it('앱이 없으면 파일을 읽고, 앱 문제로 표시하지 않는다', async () => {
+      const refused: string[] = []
+      const logs: string[] = []
+      const act = vi.fn()
+      const readRunConfigs = vi.fn().mockResolvedValue(cfgs)
+      const deps = hostOrchDeps(
+        base({ hasApp: () => false, act, readRunConfigs, log: (m) => logs.push(m), onAppRequired: (n) => refused.push(n) })
+      )
+      expect(await deps.listRunConfigs?.('D:/p')).toEqual(cfgs)
+      expect(readRunConfigs).toHaveBeenCalledWith('D:/p')
+      expect(act).not.toHaveBeenCalled()
+      expect(refused).toEqual([])
+      expect(logs.some((l) => l.includes('listRunConfigs') && l.includes('run-configs.json'))).toBe(true)
+    })
+
+    it('앱이 있으면 앱에 묻고 파일은 읽지 않는다', async () => {
+      const act = vi.fn().mockResolvedValue(cfgs)
+      const readRunConfigs = vi.fn()
+      const deps = hostOrchDeps(base({ act, readRunConfigs }))
+      expect(await deps.listRunConfigs?.('D:/p')).toEqual(cfgs)
+      expect(act).toHaveBeenCalledWith('listRunConfigs', ['D:/p'])
+      expect(readRunConfigs).not.toHaveBeenCalled()
+    })
+
+    it('파일을 못 읽으면 앱 문제로 표시하고 고치는 말을 싣는다', async () => {
+      const refused: string[] = []
+      const deps = hostOrchDeps(
+        base({
+          hasApp: () => false,
+          readRunConfigs: vi.fn().mockRejectedValue(new Error('run-configs.json is not valid JSON; open Astera to repair it')),
+          onAppRequired: (n) => refused.push(n)
+        })
+      )
+      const err = await Promise.resolve(deps.listRunConfigs?.('D:/p')).then(
+        () => null,
+        (e: unknown) => e
+      )
+      expect(err).toBeInstanceOf(AppUnreachable)
+      expect(String(err)).toMatch(/run-configs\.json .*open Astera to repair it/)
+      expect(refused).toEqual(['listRunConfigs'])
+    })
+  })
+
+  /**
    * **세션은 Host 가 제 레지스트리로 답한다 — 앱이 붙어 있어도**(CLI phase C, `astera sessions`).
    * pty 를 쥐고 있는 것이 Host 이므로 앱에 물을 까닭이 없고, 앱이 닫혀 있어도 답해야 한다.
    * 다만 `sendSession` 은 세션에 글자를 친다 — 두 번 치면 두 번 쳐진다. 그래서 영수증의 "움직였다"
@@ -292,8 +343,8 @@ describe('hostOrchDeps', () => {
       const refused: string[] = []
       const deps = hostOrchDeps(base({ hasApp: () => false, onAppRequired: (n) => refused.push(n) }))
       await expect(deps.startWorker({} as never)).rejects.toThrow(/APP_REQUIRED/)
-      await expect(deps.listRunConfigs?.('D:/p')).rejects.toThrow(/APP_REQUIRED/)
-      expect(refused).toEqual(['startWorker', 'listRunConfigs'])
+      await expect(deps.readWorker({ dispatchId: 'd1' })).rejects.toThrow(/APP_REQUIRED/)
+      expect(refused).toEqual(['startWorker', 'readWorker'])
     })
 
     it('명령 층이 삼키는 의존은 거절해도 앱 문제로 표시하지 않는다', async () => {

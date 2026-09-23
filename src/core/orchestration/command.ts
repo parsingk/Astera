@@ -85,6 +85,14 @@ export interface OrchAccount {
   provider: Provider
 }
 
+/** One run configuration as this layer sees it: what `--validate` takes and what `run-configs`
+ *  lists. The rest of a configuration (its command, env, cwd) stays with the app. */
+export interface OrchRunConfig {
+  id: string
+  name: string
+  type: string
+}
+
 /** One agent session the Host holds — a row of `sessions list` (CLI phase C).
  *
  *  **`id` is the app's id for the session**, not the Host's id for its pty: the app mints a pty id of
@@ -290,7 +298,7 @@ export interface OrchServerDeps {
   resolveProjectRoot?(cwd: string): Promise<string>
   /** Run 의 프로젝트에 저장된 실행 구성 목록. 주입되지 않으면 빈 목록이다 —
    *  now?/log?/backup?/probeLimit? 와 같은 관례다. */
-  listRunConfigs?(projectPath: string): Promise<{ id: string; name: string; type: string }[]>
+  listRunConfigs?(projectPath: string): Promise<OrchRunConfig[]>
   /** 지금 도는 세션 수. **상태에 없는 값이라 주입된다** — 세션은 SessionManager 의 것이고
    *  (core.sessions) 이 층은 OrchState 만 본다. `status` 하나가 쓴다. */
   runningSessions?(): number
@@ -931,12 +939,15 @@ export async function handleCommand(
      * 회차 id 도 `--run` 에 준 계획 id 도 그 종류로는 없는 것이므로 404 다.
      *
      * `--run-id` 는 task-create 가 `--run` 보다 먼저 읽는 옛 철자라, 받으면 이 규칙을 넘어선다 —
-     * 거절한다. `--validate` 도 거절한다: 그 id 는 공개가 아닌 run-configs 에서 온다.
+     * 거절한다.
+     *
+     * **`--validate` 는 그 계획의 구성 id 로 확인한다**(phase D). task-create 는 id 를 확인하지 않고
+     * 싣는다 — 코디네이터는 run-configs 에서 막 읽은 id 를 넣기 때문이다. 셸에서 치는 사람은 오타를
+     * 내고, 확인 없이 실린 id 는 워커가 일을 다 마친 뒤 검증 자리에서야 실패한다. 없는 id 는 404 이고
+     * 답에 계획 id 를 싣는다: CLI 가 `run-configs list --job <jobId>` 를 채워 권한다(cliOutput).
      */
     case 'tasks-add': {
       if (args.runId !== undefined) return bad('tasks add takes --run, not --run-id')
-      if (args.validate !== undefined)
-        return bad('--validate is not offered by tasks add yet (its ids come from run-configs)')
       // **친 플래그로 센다, 값으로가 아니라.** `--job --run r1` 은 `job: true` 로 온다 — 값으로 세면
       // `--run` 하나만 준 것이 되어, 부른 사람이 적은 `--job` 이 조용히 사라진다.
       if ((args.job === undefined) === (args.run === undefined))
@@ -947,6 +958,22 @@ export async function handleCommand(
       if (args.run !== undefined && run === null) return bad('--run needs a value: the run id')
       if (job !== null && !s.jobs.some((j) => j.id === job)) return notFound(`unknown job: ${job}`)
       if (run !== null && !s.runs.some((r) => r.id === run)) return notFound(`unknown run: ${run}`)
+      if (args.validate !== undefined) {
+        const validate = str(args.validate)
+        if (validate === null) return bad('--validate needs a value: run configuration ids')
+        const ids = validate.split(',').map((x) => x.trim())
+        if (ids.some((x) => x === '')) return bad('--validate must not contain an empty entry')
+        const owner = job !== null ? s.jobs.find((j) => j.id === job) : jobOf(s, s.runs.find((r) => r.id === run)!)
+        if (!owner) return notFound(`unknown job for run: ${String(run)}`)
+        if (!deps.listRunConfigs) return conflict('run configurations cannot be listed here')
+        const known = new Set((await deps.listRunConfigs(owner.cwd)).map((c) => c.id))
+        const unknown = ids.filter((x) => !known.has(x))
+        if (unknown.length > 0)
+          return {
+            status: 404,
+            body: { error: `unknown run configuration: ${unknown.join(', ')} (not one of job ${owner.id}'s)`, jobId: owner.id }
+          }
+      }
       const { job: _job, ...rest } = args
       return handleCommand(deps, caller, 'task-create', { ...rest, run: job ?? run })
     }
@@ -1052,6 +1079,18 @@ export async function handleCommand(
       const run = latestRun(s)
       const job = run && jobOf(s, run)
       if (!job) return bad(`no run exists`)
+      return okBody(await deps.listRunConfigs(job.cwd))
+    }
+    // **공개 이름은 계획을 지목한다**(phase D). 위의 `run-configs` 는 "가장 최근 회차" 의 것이라, 셸에서
+    // 치는 사람에게는 남의 계획의 목록일 수 있다 — task-create 의 기본값을 tasks add 가 내주지 않은
+    // 것과 같은 이유다. 회차 id 는 받지 않는다(tasks add --job 과 같은 규칙).
+    case 'run-configs-list': {
+      if (args.job === undefined) return bad('--job is required')
+      const id = str(args.job)
+      if (id === null) return bad('--job needs a value: the Job id')
+      const job = s.jobs.find((j) => j.id === id)
+      if (!job) return notFound(`unknown job: ${id}`)
+      if (!deps.listRunConfigs) return okBody([])
       return okBody(await deps.listRunConfigs(job.cwd))
     }
     // **id 는 계획일 수도 회차일 수도 있다.** 사람은 목록에서 본 Job 의 id 를 주고, 코디네이터는

@@ -868,6 +868,52 @@ describe('요청 영수증', () => {
     expect(act).not.toHaveBeenCalledWith('listAccounts', expect.anything())
   })
 
+  // phase D. 실행 구성도 같다 — 프로필의 run-configs.json 과 계획의 폴더를 Host 가 읽는다.
+  it('앱이 없으면 run-configs.json 과 폴더로 구성을 답하고 tasks add --validate 가 돈다', async () => {
+    const project = path.join(dir, 'proj')
+    await fs.mkdir(project)
+    await fs.writeFile(path.join(project, 'package.json'), '{"scripts":{"test":"vitest"}}', 'utf8')
+    await fs.writeFile(
+      path.join(dir, 'run-configs.json'),
+      JSON.stringify({ [project]: [{ id: 'cfg1', name: 'unit', type: 'shell', command: 'echo', env: { K: 'v' } }] }),
+      'utf8'
+    )
+    await fs.writeFile(
+      path.join(dir, 'accounts.json'),
+      JSON.stringify({
+        accounts: [
+          { id: 'acc1', label: '일', configDir: 'D:/cfg', color: '#fff', createdAt: 'T', provider: 'claude' }
+        ]
+      }),
+      'utf8'
+    )
+    const act = vi.fn()
+    const orch = orchOver({ act, hasApp: () => false })
+    const job = await orch.call({ cmd: 'jobs-create', args: { objective: 'o', cwd: project }, sessionId: '' })
+    const jobId = (job.body as { id: string }).id
+    const list = await orch.call({ cmd: 'run-configs-list', args: { job: jobId }, sessionId: '' })
+    expect(list.status).toBe(200)
+    expect(list.body).toEqual([
+      { id: 'cfg1', name: 'unit', type: 'shell' },
+      { id: 'seed:npm:test', name: 'test', type: 'npm' }
+    ])
+    const add = await orch.call({
+      cmd: 'tasks-add',
+      args: { job: jobId, spec: 's', account: 'acc1', validate: 'cfg1,seed:npm:test' },
+      sessionId: ''
+    })
+    expect(add.status).toBe(200)
+    expect(add.body).toMatchObject({ validateConfigIds: ['cfg1', 'seed:npm:test'] })
+    const unknown = await orch.call({
+      cmd: 'tasks-add',
+      args: { job: jobId, spec: 's', account: 'acc1', validate: 'nope' },
+      sessionId: ''
+    })
+    expect(unknown.status).toBe(404)
+    expect(unknown.body).toMatchObject({ jobId })
+    expect(act).not.toHaveBeenCalled()
+  })
+
   // **우리 마음대로 합치지 않는다.** 두 호출이 한 요청이라는 말은 부르는 쪽만 할 수 있고, 그 말이
   // 요청 id 다 — id 가 다르면 두 번 하는 것이 맞다.
   it('요청 id 가 다르면 두 번 만든다', async () => {

@@ -18,7 +18,7 @@ import {
   retryCommandLine,
   implicitArgs,
   stdinMissingError,
-  requestIdOf,
+  refusalDetailsOf,
   shownReceipt,
   callHost,
   connectFailureEnd,
@@ -412,19 +412,26 @@ describe('requestForHost — 실은 id 와 새긴 id 는 옛 Host 앞에서 갈�
  * 그 "다시 묻기" 는 `requests show` 다. 문구가 아니라 봉투의 칸으로 가른다 — Host 가 그 409 에
  * `requestId` 를 싣고, 이 함수가 그것을 `details` 로 올린다.
  */
-describe('requestIdOf — 요청을 이름 댄 거절만 그 id 를 싣는다', () => {
+describe('refusalDetailsOf — 요청을 이름 댄 거절만 그 id 를 싣는다', () => {
   it('본문에 requestId 가 있으면 details 로 올린다', () => {
-    expect(requestIdOf({ error: 'request rq-1 is already running', requestId: 'rq-1' })).toEqual({
+    expect(refusalDetailsOf({ error: 'request rq-1 is already running', requestId: 'rq-1' })).toEqual({
       requestId: 'rq-1'
     })
   })
 
   it('없거나 모양이 아니면 아무것도 올리지 않는다 — 없던 details 를 만들지 않는다', () => {
-    expect(requestIdOf({ error: 'unknown job: job_x' })).toBeUndefined()
-    expect(requestIdOf({ requestId: '' })).toBeUndefined()
-    expect(requestIdOf({ requestId: 7 })).toBeUndefined()
-    expect(requestIdOf(null)).toBeUndefined()
-    expect(requestIdOf('boom')).toBeUndefined()
+    expect(refusalDetailsOf({ error: 'unknown job: job_x' })).toBeUndefined()
+    expect(refusalDetailsOf({ requestId: '' })).toBeUndefined()
+    expect(refusalDetailsOf({ requestId: 7 })).toBeUndefined()
+    expect(refusalDetailsOf(null)).toBeUndefined()
+    expect(refusalDetailsOf('boom')).toBeUndefined()
+  })
+
+  // phase D. `tasks add --validate` 의 없는 구성 id 는 404 에 계획 id 를 싣는다 — nextSteps 가
+  // `run-configs list --job <jobId>` 를 그 값으로 채운다(cliOutput).
+  it('본문의 jobId 도 details 로 올린다', () => {
+    expect(refusalDetailsOf({ error: 'unknown run configuration: x', jobId: 'job_1' })).toEqual({ jobId: 'job_1' })
+    expect(refusalDetailsOf({ jobId: 3 })).toBeUndefined()
   })
 })
 

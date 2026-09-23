@@ -12,7 +12,7 @@
 // **컴파일러가 빠짐을 잡는다.** 칸을 더하고 두 목록 중 어디에도 적지 않으면 타입 검사가 그
 // 이름을 대며 깨진다. 허용 목록의 유일한 실패 방식이 "낡는 것" 이고, 막을 것은 그것뿐이다.
 import type { Gate, Job, JobRun, Project, Task } from './types'
-import type { HostSession, OrchAccount } from './command'
+import type { HostSession, OrchAccount, OrchRunConfig } from './command'
 import type { SkillInstalled, SkillListed, SkillNotEnabled, SkillsAccount } from './skills'
 
 /** 두 목록이 그 타입의 칸을 전부 덮지 못하면 남은 이름이 여기 남는다. */
@@ -134,6 +134,11 @@ type _question = NothingLeft<Unlisted<Gate, typeof QUESTION, []>>
 const ACCOUNT = ['id', 'label', 'provider'] as const
 type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT, []>>
 
+/** 구성의 명령·env·cwd 는 앱에 남는다 — env 값은 비밀일 수 있다. 앱도 Host 도 이미 셋으로 추려
+ *  넘기지만(OrchRunConfig) 그래도 적는다 — ACCOUNT 와 같은 이유다. */
+const RUN_CONFIG = ['id', 'name', 'type'] as const
+type _runConfig = NothingLeft<Unlisted<OrchRunConfig, typeof RUN_CONFIG, []>>
+
 /** 세션의 칸은 앱이 pty 에 남긴 note 에서 온다 — 앱이 자기에게 남긴 말이라 무엇이든 들 수 있고
  *  (재개 id, 롤링 계정, 우회 권한), 그것이 공개 API 가 되면 안 된다. Host 가 이미 여섯 칸으로
  *  추리지만(host/sessions.ts) 그래도 적는다 — ACCOUNT 와 같은 이유다. */
@@ -195,6 +200,7 @@ const SHAPE: Record<string, readonly string[]> = {
   'questions-list': QUESTION,
   'questions-get': QUESTION,
   'accounts-list': ACCOUNT,
+  'run-configs-list': RUN_CONFIG,
   'sessions-list': SESSION,
   'sessions-read': SESSION_READ,
   'sessions-send': SESSION_SEND

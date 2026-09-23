@@ -181,6 +181,10 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
       return columns(
         asList(data, 'accounts').map((a) => [str(a.id), str(a.provider), str(a.label)])
       )
+    case 'run-configs-list':
+      return columns(
+        asList(data, 'runConfigs').map((c) => [str(c.id), str(c.type), str(c.name)])
+      )
     case 'sessions-list':
       return columns(
         asList(data, 'sessions').map((x) => [

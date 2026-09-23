@@ -3,7 +3,7 @@
 // **The command layer never learns which is which.** That is the whole point of the split (host
 // control plane design §5) — when S2 makes startWorker local, this file changes and `handleCommand`
 // does not.
-import type { OrchAccount, OrchServerDeps } from '../core/orchestration/command'
+import type { OrchAccount, OrchRunConfig, OrchServerDeps } from '../core/orchestration/command'
 import type { Provider } from '../core/types'
 import { AppUnreachable } from '../core/host/orchProtocol'
 import type { HostSessions } from './sessions'
@@ -28,19 +28,6 @@ const OWNED = ['getState', 'setState', 'now', 'log', 'runningSessions', 'appVers
 const PROPAGATES = [
   'startWorker', 'releaseWorker', 'mergeWorktrees', 'removeWorktrees', 'startCoordinator',
   'makeRunWorktree', 'readWorker',
-  // **`listRunConfigs` stays here although `[]` is its documented absent value.** A coordinator told
-  // "there are no check configs" omits `--validate`, and that Run then completes with verification
-  // silently off, recorded nowhere. A refusal a person sees beats a Run that quietly skipped its
-  // checks — and unlike the DEGRADES pair below, nothing is lost by refusing: the caller asks again.
-  //
-  // **One exception, and it is not this file's**: with no Host at all, the CLI answers `run-configs`
-  // from the state file with that same `[]` (`core/orchestration/stateFile.ts`'s allowlist). The
-  // reason above does not apply there, because the thing it protects is not running: a coordinator
-  // that would be misled into dropping `--validate` needs a Host to have dispatched it. What that
-  // path answers is "nothing is coordinating anything right now", and `[]` is true of it. The rule
-  // here governs a Host that *is* up and cannot reach the app — where a coordinator is live and a
-  // wrong `[]` reaches it.
-  'listRunConfigs',
   'browserRun',
   // **The three toggles the app owns.** Each is read as the first thing its command does, before any
   // state is read and before anything has been committed, so a refusal costs nothing but the answer
@@ -154,7 +141,24 @@ const FIRE_AND_FORGET = [
  *
  * The local read is injected (`readAccounts`), so this file stays free of the filesystem.
  */
-const LOCAL_WHEN_ABSENT = ['listAccounts'] as const
+const LOCAL_WHEN_ABSENT = ['listAccounts', 'listRunConfigs'] as const
+
+/** Which file each LOCAL_WHEN_ABSENT member reads, for the log line that says it answered from one.
+ *
+ *  **`listRunConfigs` joined in CLI phase D.** It was PROPAGATES, and never DEGRADES, for a reason
+ *  that still holds: a coordinator told "there are no check configs" omits `--validate`, and that Run
+ *  completes with verification silently off. That reason was against a *stand-in* `[]`. What the Host
+ *  reads is the real list — the profile's run-configs.json, which only the app writes, merged with the
+ *  seeds of the Job's folder by the same function the app uses (core/run/load.ts) — so there is no
+ *  stand-in to mislead anyone, and a damaged file still refuses rather than answering `[]`.
+ *
+ *  With no Host at all the CLI still answers `run-configs` from the state file with `[]`
+ *  (`core/orchestration/stateFile.ts`'s allowlist): nothing is coordinating anything then, and `[]`
+ *  is true of that. */
+const LOCAL_FILE: Record<(typeof LOCAL_WHEN_ABSENT)[number], string> = {
+  listAccounts: 'accounts.json',
+  listRunConfigs: 'run-configs.json'
+}
 
 /**
  * **Answered by the Host out of its own registries, with or without an app attached** (CLI phase C,
@@ -222,7 +226,6 @@ const EFFECTFUL: Record<Classified, boolean> = {
   startCoordinator: true,
   makeRunWorktree: true,
   readWorker: false,
-  listRunConfigs: false,
   browserRun: true,
   browserEnabled: false,
   handoffEnabled: false,
@@ -253,6 +256,7 @@ const EFFECTFUL: Record<Classified, boolean> = {
   lang: false,
   // LOCAL_WHEN_ABSENT — a read either way, from the app or from its file.
   listAccounts: false,
+  listRunConfigs: false,
   // HOST_SESSIONS. Reading a screen twice leaves it as it was; typing twice types twice.
   listSessions: false,
   readSession: false,
@@ -314,6 +318,9 @@ export function hostOrchDeps(a: {
   /** `listAccounts` answered from the profile's accounts.json (LOCAL_WHEN_ABSENT). Rejects when the
    *  file cannot be read, with a message that says how to repair it. */
   readAccounts(provider?: Provider): Promise<OrchAccount[]>
+  /** `listRunConfigs` answered from the profile's run-configs.json and the project folder
+   *  (LOCAL_WHEN_ABSENT). Rejects when the file cannot be read, with a message that says how to repair it. */
+  readRunConfigs(projectPath: string): Promise<OrchRunConfig[]>
   /** The Host's own sessions (HOST_SESSIONS), out of its two registries (`host/sessions.ts`). */
   sessions: HostSessions
 }): OrchServerDeps {
@@ -378,12 +385,15 @@ export function hostOrchDeps(a: {
   /** Same forwarding, but a question that could not be put to the app is answered by `local` — see
    *  LOCAL_WHEN_ABSENT. A failed local read is the app being required after all: it is flagged and
    *  thrown as `AppUnreachable`, carrying the reader's own reason. */
-  const localWhenAbsent = (name: string, local: (...args: never[]) => Promise<unknown>) =>
+  const localWhenAbsent = (
+    name: (typeof LOCAL_WHEN_ABSENT)[number],
+    local: (...args: never[]) => Promise<unknown>
+  ) =>
     async (...args: unknown[]): Promise<unknown> => {
       const fromFile = async (why: string): Promise<unknown> => {
         try {
           const value = await local(...(args as never[]))
-          a.log(`${name} answered from accounts.json (${why})`)
+          a.log(`${name} answered from ${LOCAL_FILE[name]} (${why})`)
           return value
         } catch (err) {
           const refused = new AppUnreachable(
@@ -427,6 +437,7 @@ export function hostOrchDeps(a: {
       if ((FIRE_AND_FORGET as readonly string[]).includes(name)) return [name, forgetful(name)]
       if (name in DEGRADES) return [name, degrading(name, DEGRADES[name as keyof typeof DEGRADES])]
       if (name === 'listAccounts') return [name, localWhenAbsent(name, a.readAccounts)]
+      if (name === 'listRunConfigs') return [name, localWhenAbsent(name, a.readRunConfigs)]
       return [name, forward(name, (PROPAGATES as readonly string[]).includes(name))]
     })
   )

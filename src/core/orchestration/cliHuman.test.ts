@@ -246,6 +246,12 @@ describe('humanFor', () => {
       .toBe('a1  claude  일')
   })
 
+  it('run-configs list 는 id·type·name 이다', () => {
+    expect(humanFor('run-configs-list', { runConfigs: [{ id: 'c1', name: 'test', type: 'npm' }] })).toBe(
+      'c1  npm  test'
+    )
+  })
+
   it('jobs create 와 tasks add 는 단건처럼 편다', () => {
     expect(humanFor('jobs-create', { id: 'job_1', pendingStart: true })).toBe(
       ['id            job_1', 'pendingStart  true'].join('\n')

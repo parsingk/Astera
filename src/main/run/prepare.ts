@@ -1,64 +1,20 @@
 // run.start 와 run.list 가 공유하던 조립 과정. ipc.ts 안에 있을 때는 테스트도 다른 main 코드도
 // 닿을 수 없었다 — 그 파일은 첫 줄에서 electron 을 import 하고 registerIpc 하나만 export 한다.
 // 검증(TaskValidator)이 같은 조립을 필요로 하므로, 복제 대신 여기로 들어냈다.
+//
+// 구성 목록(loadRunConfigs)은 core/run/load.ts 로 더 내려갔다 — 앱이 닫혀 있을 때 Host 가 같은 목록을
+// 답하고(CLI phase D), Host 는 main 을 가져오지 않는다. 여기서 다시 내보내 부르는 쪽은 그대로다.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { detectSeedConfigs, mergeConfigs, type RunConfig } from '../../core/run/config'
+import type { RunConfig } from '../../core/run/config'
+import { loadRunConfigs } from '../../core/run/load'
 import { buildCommand, buildRunContext } from '../../core/run/build'
 import { missingRequiredFields } from '../../core/run/migrate'
 import { isPathWithin } from '../../core/files/tree'
 import { planLaunch, type LaunchPlan } from '../../core/run/launch'
 import type { RunnableConfig } from '../../core/run/types'
 
-export interface SeedTexts {
-  packageJson: string | null
-  buildGradle: string | null
-  pom: string | null
-}
-
-/** 시드 판정에 필요한 빌드 파일 본문을 읽는다. .kts 와 .gradle 이 둘 다 있으면 .kts 가 이긴다.
- *  읽기 실패는 null 로 삼킨다 — 파일 하나를 못 읽었다고 run.list 와 run.start 전체가 무너지면 안 된다. */
-export async function readSeedTexts(projectRoot: string, files: string[]): Promise<SeedTexts> {
-  const readIfPresent = async (name: string): Promise<string | null> => {
-    if (!files.includes(name)) return null
-    try {
-      return await fs.readFile(path.join(projectRoot, name), 'utf8')
-    } catch {
-      return null
-    }
-  }
-  const gradleFile = files.includes('build.gradle.kts') ? 'build.gradle.kts' : 'build.gradle'
-  const [packageJson, buildGradle, pom] = await Promise.all([
-    readIfPresent('package.json'),
-    readIfPresent(gradleFile),
-    readIfPresent('pom.xml')
-  ])
-  return { packageJson, buildGradle, pom }
-}
-
-/** 저장된 구성과 자동 감지된 시드를 합친 목록. 파일 목록과 본문도 함께 돌려준다 —
- *  호출자가 buildRunContext 나 isSpringBootProject 같은 판정에 다시 필요로 한다.
- *
- *  **assertAllowedPath 가 필수 인자인 이유:** 이 함수는 projectPath 를 readdir 하고 그 아래
- *  빌드 파일들을 읽는다. IPC 핸들러(run.list)는 자기 자리에서 이미 검사하지만, 오케스트레이션의
- *  run-configs 는 코디네이터가 준 Run.cwd 를 그대로 들고 들어온다 — resolveProjectRoot 는
- *  ADR-003 이 명시하듯 "최선 노력이지 검증이 아니다". 인자로 받아 두면 호출자가 검사를 빠뜨릴
- *  자리가 없다. 앱의 다른 모든 경로 읽기가 이 가드 뒤에 있다. */
-export async function loadRunConfigs(a: {
-  projectPath: string
-  stored: RunConfig[]
-  assertAllowedPath: (p: string) => Promise<string>
-}): Promise<{ configs: RunConfig[]; files: string[]; texts: SeedTexts }> {
-  await a.assertAllowedPath(a.projectPath)
-  let files: string[] = []
-  try {
-    files = (await fs.readdir(a.projectPath, { withFileTypes: true })).map((d) => d.name)
-  } catch {
-    /* 읽을 수 없으면 빈 목록 — 저장된 구성만 남는다 */
-  }
-  const texts = await readSeedTexts(a.projectPath, files)
-  return { configs: mergeConfigs(detectSeedConfigs(files, texts), a.stored), files, texts }
-}
+export { loadRunConfigs, readSeedTexts, type SeedTexts } from '../../core/run/load'
 
 export interface PrepareRunArgs {
   /** 구성을 찾을 프로젝트 */

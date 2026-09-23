@@ -5499,12 +5499,77 @@ describe('jobs create / tasks add / accounts list', () => {
     expect((await shell(deps, 'tasks-add', { job: jobId, spec: 's' })).status).toBe(400)
   })
 
-  // 그 id 들은 run-configs 에서 오고, run-configs 는 공개가 아니다. 조용히 버리지 않고 거절한다.
-  it('--validate 는 받지 않는다', async () => {
+  // phase D: 검사 구성 id 는 `run-configs list --job` 이 준다. 그 목록은 계획의 폴더의 것이다 —
+  // 코디네이터용 `run-configs` 처럼 "가장 최근 회차" 의 것이 아니다.
+  const withConfigs = (): { deps: ReturnType<typeof makeDeps>; asked: string[] } => {
+    const asked: string[] = []
     const deps = makeDeps()
+    deps.listRunConfigs = async (p) => {
+      asked.push(p)
+      return p === 'D:/p'
+        ? [
+            { id: 'cfg1', name: 'test', type: 'npm' },
+            { id: 'cfg2', name: 'lint', type: 'npm' }
+          ]
+        : [{ id: 'other', name: 'other', type: 'npm' }]
+    }
+    return { deps, asked }
+  }
+
+  it('run-configs list --job 은 그 계획의 폴더의 구성이다, 가장 최근 회차의 것이 아니라', async () => {
+    const { deps, asked } = withConfigs()
     const jobId = await jobOf(deps)
-    const r = await shell(deps, 'tasks-add', { job: jobId, spec: 's', account: 'acc1', validate: 'cfg1' })
-    expect(r.status).toBe(400)
+    await call(deps, 'run-create', { objective: 'later', cwd: 'D:/q' }) // 더 최근 회차, 다른 폴더
+    const r = await shell(deps, 'run-configs-list', { job: jobId })
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual([
+      { id: 'cfg1', name: 'test', type: 'npm' },
+      { id: 'cfg2', name: 'lint', type: 'npm' }
+    ])
+    expect(asked).toEqual(['D:/p'])
+  })
+
+  it('run-configs list 는 없는 계획에 404, --job 이 없으면 400 이다', async () => {
+    const { deps, asked } = withConfigs()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const missing = await shell(deps, 'run-configs-list', { job: 'job_nope' })
+    expect(missing.status).toBe(404)
+    expect(JSON.stringify(missing.body)).toContain('unknown job: job_nope')
+    // 회차 id 는 계획 id 가 아니다 — tasks add 의 --job 과 같은 규칙이다
+    expect((await shell(deps, 'run-configs-list', { job: runId })).status).toBe(404)
+    expect((await shell(deps, 'run-configs-list', {})).status).toBe(400)
+    expect((await shell(deps, 'run-configs-list', { job: true })).status).toBe(400)
+    expect(asked).toEqual([])
+  })
+
+  it('tasks add --validate 는 그 계획의 구성 id 를 받아 Task 에 싣는다 — --job 과 --run 둘 다', async () => {
+    const { deps, asked } = withConfigs()
+    const jobId = await jobOf(deps)
+    const byJob = await shell(deps, 'tasks-add', { job: jobId, spec: 's', account: 'acc1', validate: 'cfg1,cfg2' })
+    expect(byJob.status).toBe(200)
+    expect(byJob.body).toMatchObject({ jobId, validateConfigIds: ['cfg1', 'cfg2'] })
+    const ran = await shell(deps, 'jobs-run', { id: jobId })
+    const runId = (ran.body as { id: string }).id
+    const byRun = await shell(deps, 'tasks-add', { run: runId, spec: 's2', account: 'acc1', validate: 'cfg2' })
+    expect(byRun.status).toBe(200)
+    expect(byRun.body).toMatchObject({ runId, validateConfigIds: ['cfg2'] })
+    expect(asked).toEqual(['D:/p', 'D:/p'])
+  })
+
+  it('tasks add --validate 에 없는 구성 id 는 404 이고 계획 id 를 싣는다 — Task 는 생기지 않는다', async () => {
+    const { deps } = withConfigs()
+    const jobId = await jobOf(deps)
+    const r = await shell(deps, 'tasks-add', { job: jobId, spec: 's', account: 'acc1', validate: 'cfg1,other' })
+    expect(r.status).toBe(404)
+    expect(JSON.stringify(r.body)).toContain('unknown run configuration: other')
+    // nextSteps 의 `run-configs list --job <jobId>` 를 채우는 값이다(cliOutput)
+    expect(r.body).toMatchObject({ jobId })
+    expect(deps.getState().tasks).toHaveLength(0)
+    // 빈 칸은 task-create 와 같은 400 이다 — 목록을 묻기 전에
+    const empty = await shell(deps, 'tasks-add', { job: jobId, spec: 's', account: 'acc1', validate: 'cfg1,,cfg2' })
+    expect(empty.status).toBe(400)
+    expect((await shell(deps, 'tasks-add', { job: jobId, spec: 's', account: 'acc1', validate: true })).status).toBe(400)
     expect(deps.getState().tasks).toHaveLength(0)
   })
 

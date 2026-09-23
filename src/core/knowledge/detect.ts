@@ -31,7 +31,7 @@ export interface KnowledgeFiles {
  *  않으면 같은 저장소에서 두 번 띄운 워커가 다른 spec 을 받는다.
  *
  *  디스크를 읽지 않는다 — fs 는 부르는 쪽(main)의 일이고, 여기는 무엇을 고를지만 정한다
- *  (main/run/prepare.ts 의 loadRunConfigs 와 같은 갈래다). */
+ *  (core/run/load.ts 의 loadRunConfigs 와 같은 갈래다). */
 export function knowledgeFilesFrom(found: string[]): KnowledgeFiles {
   const sorted = [...new Set(found)].sort()
   return {

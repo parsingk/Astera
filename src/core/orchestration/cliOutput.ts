@@ -94,6 +94,7 @@ const LIST_FIELD: Record<string, string> = {
   'questions-list': 'questions',
   accounts: 'accounts',
   'accounts-list': 'accounts',
+  'run-configs-list': 'runConfigs',
   'sessions-list': 'sessions',
   // 아래 셋은 공개 표면이 아니지만 코디네이터가 읽는다. "약속 밖" 은 무엇을 돌려줄지
   // 고칠 수 있다는 뜻이지, 읽는 쪽에게 일부러 불친절해도 된다는 뜻이 아니다 — 세을 한 이름으로
@@ -189,6 +190,8 @@ const LISTING: Record<string, readonly string[]> = {
   // `--account` 의 계정. task-create 와 달리 `jobs list` 를 권해도 된다 — 이 명령은 플래그가 종류를
   // 정하므로 `--run` 에 넣은 계획 id 는 정의 Task 가 되지 않고 404 로 돌아온다(command.ts).
   'tasks-add': ['astera jobs list', 'astera runs list', 'astera tasks list', 'astera accounts list'],
+  // 못 찾는 것은 `--job` 의 계획이다. 명사 규칙은 첫 대시에서 잘라 `run` 을 명사로 읽는다.
+  'run-configs-list': ['astera jobs list'],
   'task-update': ['astera tasks list'],
   // **못 찾는 것은 `--account` 의 계정뿐이다.** 명사 규칙은 `skills list` 를 줄 텐데, 같은
   // `--account` 를 준 그 줄은 같은 404 다.
@@ -275,7 +278,13 @@ const STEPS: Record<
   FAILED: () => [],
   INVALID_ARGUMENTS: (cmd) => [usageCommandFor(cmd)],
   HOST_NOT_RUNNING: () => ['astera host start'],
-  NOT_FOUND: (cmd) => listingFor(cmd),
+  // **`tasks add --validate` 의 없는 구성 id 는 그 계획의 목록 한 줄이다**(phase D). 그 404 만 답에
+  // 계획 id 를 싣고 오고(command.ts, run.ts 가 `details` 로 옮긴다), 채워진 줄은 그대로 칠 수 있다.
+  // 문구가 아니라 칸으로 가른다 — CONFLICT 의 `requestId` 와 같은 판단이다.
+  NOT_FOUND: (cmd, details) =>
+    cmd === 'tasks-add' && typeof details.jobId === 'string'
+      ? ['astera run-configs list --job <jobId>']
+      : listingFor(cmd),
   // 403 은 언제나 "이 세션은 그 명령을 부를 수 없다" 다(command.ts 의 COORDINATOR_ONLY). 누가
   // 무엇을 부를 수 있는지는 가이드에만 적혀 있고, 그것을 읽는 것 말고 칠 것이 없다.
   PERMISSION_DENIED: () => ['astera help'],

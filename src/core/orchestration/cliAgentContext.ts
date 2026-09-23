@@ -7,7 +7,7 @@
 // binary makes the answer as new as the build that gives it.
 //
 // **It covers everything the CLI can route, not just the public commands.** The public ones are the
-// 34 in `USAGE` (cliUsage.ts); the other 33 — `send`, `ask`, `check`, `worker-*`, `task-*`, `run-*`,
+// 35 in `USAGE` (cliUsage.ts); the other 33 — `send`, `ask`, `check`, `worker-*`, `task-*`, `run-*`,
 // `gate-*`, `session-task-*`, `handoff` — are what a coordinator or worker session actually calls,
 // and their contract lives only in the guide's prose. Closing that gap is the point, so `public` is
 // a field here rather than a filter.
@@ -93,7 +93,8 @@ const SESSION = {
   },
   'run-configs': {
     summary: "the run configurations of the latest run's project",
-    detail: 'The ids `task-create --validate` accepts. It takes no --run: it always reads the latest.'
+    detail:
+      'The ids `task-create --validate` accepts. It takes no --run: it always reads the latest. `run-configs list --job` is the same list for a named Job.'
   },
   'run-use': {
     summary: 'check that a run exists',
@@ -497,7 +498,7 @@ export function agentContext(): AgentContext {
       ok: '{"ok":true,"data":{…}}',
       error: '{"ok":false,"error":{"code":…,"message":…,"details":{…},"nextSteps":[…]}}',
       notes: [
-        'data is always an object. A list arrives under its own noun: data.jobs, data.tasks, data.questions, data.runs, data.projects, data.accounts, data.sessions; anything else is data.items.',
+        'data is always an object. A list arrives under its own noun: data.jobs, data.tasks, data.questions, data.runs, data.projects, data.accounts, data.runConfigs, data.sessions; anything else is data.items.',
         'error.code is for branching, error.message is for a person, and error.nextSteps is a list of command lines to try — empty when there is nothing general to run.',
         'A timeout from `check --wait` or `ask` is a success: exit 0, with data.timedOut set.',
         // 요청 영수증 설계 §8·§7. 세 줄인 이유는 읽는 쪽이 다르기 때문이다 — 앞의 둘은 답을 받은

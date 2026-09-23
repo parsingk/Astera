@@ -225,6 +225,11 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       { name: 'title', value: '<text>', about: "a short name (default: the spec's first line)" },
       { name: 'deps', value: '<json array>', about: 'the task ids this one waits for' },
       { name: 'parent', value: '<taskId>', about: 'the task this one was split out of' },
+      {
+        name: 'validate',
+        value: '<configId,…>',
+        about: 'run configurations that must pass before it counts as done (from `run-configs list`)'
+      },
       { name: 'review', about: 'have the result reviewed before it counts as done' }
     ]
   },
@@ -261,6 +266,13 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
 
   // Answered in the CLI process from the profile's files, with no Host and no app (cli/skills.ts).
+  'run-configs-list': {
+    summary: "the run configurations of a Job's project",
+    detail:
+      "The ids `tasks add --validate` takes: each with `id`, `name` and `type`, and nothing else about it. They are the Job's folder's configurations, the ones the app's Run menu shows there. With Astera closed the Host reads the profile's saved configurations and the folder's build files itself, so this works either way.",
+    flags: [{ name: 'job', value: '<jobId>', required: true, about: 'the Job whose project to list (from `jobs list`)' }]
+  },
+
   'skills-list': {
     summary: "which of Astera's agent skills each account has, and whether they are current",
     detail:
@@ -329,11 +341,14 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
  * the whole command. So the test is `NOUNS` itself, not a hand-kept list of exceptions: `worker` is
  * not a noun, `runs` is.
  *
+ * **The last dash, not the first**, because a noun can hold a dash of its own: `run-configs-list` is
+ * `run-configs list`. No verb has a dash, so the last one is the only place a verb can start.
+ *
  * Exported because cliOutput.ts builds `astera jobs get --help` as a recovery step and
  * cliAgentContext.ts prints one line per command, and three spellings of one rule would drift.
  */
 export const spelledCommand = (cmd: string): string => {
-  const dash = cmd.indexOf('-')
+  const dash = cmd.lastIndexOf('-')
   if (dash < 0) return cmd
   const noun = cmd.slice(0, dash)
   const verb = cmd.slice(dash + 1)

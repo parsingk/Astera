@@ -69,6 +69,9 @@ export const NOUNS = {
   // `jobs create --coordinator-account` 와 `tasks add --account` 에 넣을 id 가 여기서 나온다.
   // 동사 없는 `accounts` 는 가이드가 가르치는 세션 명령 그대로다(BARE_NOUNS).
   accounts: ['list'],
+  // `tasks add --validate` 에 넣을 id 가 여기서 나온다(phase D). 동사 없는 `run-configs` 는 가이드가
+  // 가르치는 세션 명령 그대로다(BARE_NOUNS) — 그쪽은 가장 최근 회차의 것이고 이쪽은 --job 의 것이다.
+  'run-configs': ['list'],
   // **CLI 프로세스 안에서 답한다 — Host 도 앱도 없이**(run.ts, `help` 와 같은 자리). 프로필의
   // accounts.json 과 app-settings.json 을 읽고 계정의 설정 폴더에 스킬 파일을 심는다(cli/skills.ts).
   skills: ['list', 'install'],
@@ -85,8 +88,8 @@ export const NOUNS = {
 
 /** 명사이면서 동사 없이도 명령인 이름. `accounts` 는 공개 명사가 되기 전부터 세션 명령이었고
  *  가이드가 `astera accounts --json` 으로 가르친다 — 동사 자리가 비었거나 플래그면 그 한 낱말
- *  명령으로 지나간다. 모르는 동사는 여전히 거절한다. */
-const BARE_NOUNS = new Set(['accounts'])
+ *  명령으로 지나간다. 모르는 동사는 여전히 거절한다. `run-configs` 도 같다(`run-configs --json`). */
+const BARE_NOUNS = new Set(['accounts', 'run-configs'])
 
 /** The same table, keyed by a word the person typed rather than by one of the literal keys above.
  *

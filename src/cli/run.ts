@@ -538,12 +538,18 @@ export function lostAnswerDetails(a: {
   }
 }
 
-/** The request id a refusal names, as `details` for the envelope, or nothing. Undefined rather than
- *  an empty object so a failure that names none prints `details: {}` exactly as it did before. */
-export function requestIdOf(body: unknown): Record<string, unknown> | undefined {
+/** The ids a refusal names, as `details` for the envelope, or nothing: `requestId` (the 409 for a
+ *  request already in flight) and `jobId` (`tasks add --validate`'s unknown configuration, CLI phase
+ *  D). Undefined rather than an empty object so a failure that names none prints `details: {}`
+ *  exactly as it did before. */
+export function refusalDetailsOf(body: unknown): Record<string, unknown> | undefined {
   if (body === null || typeof body !== 'object') return undefined
-  const id = (body as { requestId?: unknown }).requestId
-  return typeof id === 'string' && id !== '' ? { requestId: id } : undefined
+  const out: Record<string, unknown> = {}
+  for (const key of ['requestId', 'jobId'] as const) {
+    const id = (body as Record<string, unknown>)[key]
+    if (typeof id === 'string' && id !== '') out[key] = id
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /** 한 명령을 Host 에 묻고 그 답을 기다린다 (host control plane design §5).
@@ -1204,11 +1210,12 @@ export async function main(): Promise<void> {
   fail({
     code,
     message: messageFrom(reply.body, `the Host answered ${reply.status}`),
-    // **A refusal that names a request carries that id into `details`** — today only the 409 for a
-    // request already in flight does (host/orch.ts), and it is what lets this failure's `nextSteps`
-    // say `requests show --id <it>` instead of the general `astera status`. Read as a field rather
-    // than out of the message, because a contract hung on a string is the thing `codeForStatus`
-    // refuses to do one line above.
-    details: requestIdOf(reply.body)
+    // **A refusal that names a request carries that id into `details`** — the 409 for a request
+    // already in flight does (host/orch.ts), and it is what lets this failure's `nextSteps` say
+    // `requests show --id <it>` instead of the general `astera status`. `tasks add --validate`'s 404
+    // carries its Job the same way, for `run-configs list --job <it>`. Read as a field rather than
+    // out of the message, because a contract hung on a string is the thing `codeForStatus` refuses
+    // to do one line above.
+    details: refusalDetailsOf(reply.body)
   })
 }

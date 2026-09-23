@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { BROWSER_VERBS, NOUNS } from './cliArgs'
-import { USAGE, usageFor, type PublicCommand } from './cliUsage'
+import { USAGE, spelledCommand, usageFor, type PublicCommand } from './cliUsage'
 import { agentContext } from './cliAgentContext'
 
 /** 사람이 치는 모양(`jobs wait`)이 아니라 표의 키(`jobs-wait`). */
@@ -48,12 +48,21 @@ describe('cliUsage — 세 층', () => {
       const text = (r as { text: string }).text
       // `agent-context` 는 대시가 있지만 한 낱말이다 — 쪼개어 찍으면 없는 명령을 가르치게 된다.
       for (const cmd of Object.keys(USAGE))
-        expect(text).toContain(cmd === 'agent-context' ? cmd : cmd.replace('-', ' '))
+        expect(text).toContain(cmd === 'agent-context' ? cmd : cmd.replace(/-(?=[^-]*$)/, ' '))
     }
   })
 
   // 명사와 동사를 가르는 대시와, 이름 안의 대시를 가른다. 쪼개어 찍으면 `astera agent context`
   // 라는 없는 명령이 사용법에 실리고, 그 줄은 파서에서 `agent` 로 떨어진다.
+  // phase D. 명사 자체에 대시가 있다 — `run-configs list` 는 `run configs-list` 가 아니다.
+  it('대시가 든 명사의 동사는 마지막 대시에서 가른다', () => {
+    expect(spelledCommand('run-configs-list')).toBe('run-configs list')
+    expect(spelledCommand('run-configs')).toBe('run-configs')
+    expect(spelledCommand('run-worktree-set')).toBe('run-worktree-set')
+    const text = (usageFor(['run-configs', 'list', '--help']) as { text: string }).text
+    expect(text).toContain('astera run-configs list --job <jobId>')
+  })
+
   it('한 낱말짜리 명령은 대시를 쪼개지 않는다', () => {
     const text = (usageFor(['agent-context', '--help']) as { text: string }).text
     expect(text).toContain('astera agent-context')

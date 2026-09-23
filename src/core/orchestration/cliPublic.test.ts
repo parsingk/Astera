@@ -103,6 +103,15 @@ describe('publicFor', () => {
       .toEqual({ id: 't1', jobId: 'job_1' })
   })
 
+  // 구성은 명령·env·cwd 를 들고 있다 — env 값은 비밀일 수 있다. 앱이 이미 셋으로 추리지만 그래도 가린다.
+  it('run-configs list 는 id·name·type 셋만 낸다', () => {
+    expect(
+      publicFor('run-configs-list', [
+        { id: 'c1', name: 'test', type: 'npm', env: { TOKEN: 's3cret' }, command: 'npm test', cwd: 'D:/p' }
+      ])
+    ).toEqual([{ id: 'c1', name: 'test', type: 'npm' }])
+  })
+
   it('accounts list 는 id·label·provider 셋만 낸다', () => {
     expect(
       publicFor('accounts-list', [{ id: 'a1', label: '일', provider: 'claude', configDir: 'C:/secret' }])

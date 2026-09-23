@@ -12,6 +12,7 @@ import { runningRunCount } from '../core/orchestration/running'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { hostOrchDeps } from './orchDeps'
 import { readAccountsFile } from '../core/accounts/accountsFile'
+import { readRunConfigsFile } from '../core/run/runConfigsFile'
 import type { HostSessions } from './sessions'
 
 /** One reply — today's HTTP status and body, the shape `OrchCall.call` already answers with. Named
@@ -408,6 +409,8 @@ export function createHostOrch(a: {
       log: a.log,
       // 앱이 없을 때 계정 목록은 앱이 쓴 파일이 답한다(orchDeps 의 LOCAL_WHEN_ABSENT). 읽기만 한다.
       readAccounts: (provider) => readAccountsFile(path.join(a.profileDir, 'accounts.json'), provider),
+      // 실행 구성도 같다 — 앱이 쓴 run-configs.json 과 계획의 폴더를 읽기만 한다(CLI phase D).
+      readRunConfigs: (projectPath) => readRunConfigsFile(path.join(a.profileDir, 'run-configs.json'), projectPath),
       sessions: a.sessions,
       onEffect: () => {
         marks.acted = true

@@ -59,6 +59,7 @@ describe('dataFor', () => {
     expect(dataFor('jobs-list', [{ id: 'job_1' }])).toEqual({ jobs: [{ id: 'job_1' }] })
     expect(dataFor('projects-list', [])).toEqual({ projects: [] })
     expect(dataFor('questions-list', [])).toEqual({ questions: [] })
+    expect(dataFor('run-configs-list', [])).toEqual({ runConfigs: [] })
     expect(dataFor('sessions-list', [])).toEqual({ sessions: [] })
   })
 
@@ -237,6 +238,19 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
       'astera runs list',
       'astera tasks list',
       'astera accounts list'
+    ])
+  })
+
+  // phase D. `--validate` 의 구성 id 를 못 찾은 404 만 계획 id 를 싣고 온다 — 그때는 그 계획의 구성
+  // 목록 한 줄이고, 계획 id 가 채워져 그대로 칠 수 있다. 나머지 tasks add 404 는 위의 네 줄 그대로다.
+  it('tasks add 의 없는 구성 id 는 그 계획의 run-configs list 로 간다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'tasks-add', details: { jobId: 'job_1' } })).toEqual([
+      'astera run-configs list --job job_1'
+    ])
+    // run-configs list 가 못 찾는 것은 계획이다. 명사 규칙(`run` 이나 `run-configs`)이 아니다.
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'run-configs-list' })).toEqual(['astera jobs list'])
+    expect(nextStepsFor({ code: 'INVALID_ARGUMENTS', cmd: 'run-configs-list' })).toEqual([
+      'astera run-configs list --help'
     ])
   })
 

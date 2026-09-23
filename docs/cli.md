@@ -77,6 +77,12 @@ When it is closed, the Host reads the profile's `accounts.json` instead, which i
 keeps them in. The Host only reads that file and never changes it. If the file is damaged, those
 three commands exit 6 and the message says to open Astera, which repairs it.
 
+**The run configurations work with the app closed too.** `run-configs list` and `tasks add
+--validate` (it checks every id) ask the app when it is open. When it is closed, the Host builds the
+same list the app would: the configurations saved in the profile's `run-configs.json` for the Job's
+folder, and the ones that folder's `package.json`, Gradle or Maven build file gives. It only reads.
+A damaged `run-configs.json` is a 6 with the same "open Astera" message.
+
 **The sessions commands work with the app closed, and need a Host.** `sessions list`, `sessions read`
 and `sessions send` are answered by the Host out of the sessions it holds, because the Host is the
 process that runs them. That is true with Astera open as well: the app is not asked. With no Host
@@ -141,9 +147,11 @@ astera runs    stop   --id <runId>
 astera runs    resume --id <runId>
 
 astera tasks   list   [--run <runId>] [--status <s>] [--ready] [--brief]
-astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> --account <id,…> [--title <text>] [--deps <json array>] [--parent <taskId>] [--review]
+astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> --account <id,…> [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
 
 astera accounts list  [--agent <claude|codex>]
+
+astera run-configs list --job <jobId>
 
 astera skills  list    [--account <accountId>]
 astera skills  install [--account <accountId>]
@@ -208,6 +216,14 @@ to the plan, and `jobs run` copies it, with its `--deps` pointing at the copies,
 starts from then on. `--run` adds a task to one run that already exists. The flag decides which: a run
 id given to `--job`, or a Job id given to `--run`, is a 4, never quietly the other kind. The ids
 `--account` takes come from `accounts list`, first one first, the rest in the order to fail over to.
+`--validate` names the run configurations that must pass on the worker's result before the task counts
+as done; the ids come from `run-configs list --job`, comma-separated. An id that is not one of that
+Job's is a 4, and `nextSteps` is `astera run-configs list --job <jobId>` with the Job filled in.
+
+**`run-configs list --job <jobId>` prints `id`, `name` and `type`** for each run configuration of the
+Job's folder: the ones the app's Run menu shows there, saved and detected. Nothing else about a
+configuration is printed, so its command and environment stay in the app. A run id is a 4, as it is
+for `tasks add --job`.
 
 **`accounts list` prints `id`, `label` and `provider`** for each account the app holds, and nothing
 else about them. `--agent claude` or `--agent codex` narrows it to one vendor.
@@ -381,8 +397,10 @@ command that needs one, and for the same reason: there is no receipt to have.
 
 Commands the in-app coordinator agent uses, such as `worker-start`, `send`, `check` and `ask`, are
 not part of this surface and are not described here. `astera help` documents them. `jobs create`,
-`tasks add` and `accounts list` are the public names of three of them (`run-create --auto`,
-`task-create`, `accounts`), and the old names keep working for the agents that use them.
+`tasks add`, `accounts list` and `run-configs list` are the public names of four of them
+(`run-create --auto`, `task-create`, `accounts`, `run-configs`), and the old names keep working for
+the agents that use them. `run-configs list` differs in one way: it names its Job, where `run-configs`
+reads the latest run's.
 
 ## Output
 
@@ -396,7 +414,7 @@ not part of this surface and are not described here. `astera help` documents the
 
 `data` is always an object, never a bare array, so that a field can be added later without breaking
 every reader. A list arrives under its own noun: `data.jobs`, `data.runs`, `data.tasks`,
-`data.questions`, `data.projects`, `data.accounts`, `data.sessions`.
+`data.questions`, `data.projects`, `data.accounts`, `data.runConfigs`, `data.sessions`.
 
 `error.code` is for branching and `error.message` is for a person. The codes are the closed set in
 the exit code table below.

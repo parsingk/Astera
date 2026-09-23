@@ -209,6 +209,7 @@ import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun, prepareLaunch } from './run/prepare'
+import { orchRunConfigOf } from '../core/run/runConfigsFile'
 import { seedKeyOf } from '../core/run/config'
 import { executeLaunch } from './run/launch'
 import { resolveConsolePath } from './run/resolveLink'
@@ -4407,7 +4408,7 @@ export function registerIpc(
           stored: core.runConfig.get(projectPath),
           assertAllowedPath
         })
-        return configs.map((c) => ({ id: c.id, name: c.name, type: c.type }))
+        return configs.map(orchRunConfigOf)
       },
       // checkConfigIdsOf 는 옛 validateConfigId 와 새 validateConfigIds 를 함께 읽으므로, 지금
       // 존재할 수 있는 모든 Task 에 대해 이것으로 충분하다.

@@ -246,7 +246,7 @@ you cannot make the fix at all.
  *  읽는다.
  *
  *  **읽지 못하면 빈 목록이다.** 권한이 없거나 경로가 사라졌을 때 지식을 못 읽는 것이 워커를 못
- *  띄우는 이유가 되어서는 안 된다 — loadRunConfigs(main/run/prepare.ts)가 readdir 실패를 같은
+ *  띄우는 이유가 되어서는 안 된다 — loadRunConfigs(core/run/load.ts)가 readdir 실패를 같은
  *  방식으로 접는다.
  *
  *  깊이는 관례 디렉터리 자신과 그 바로 아래 한 층까지다. 이 저장소의 knowledge/ 가 그 모양이고
@@ -262,7 +262,7 @@ you cannot make the fix at all.
  *  그대로 박힌다 — 사람이 손으로 task-update 를 칠 때까지.
  *
  *  **그래서 훑기 전체를 KNOWLEDGE_SCAN_TIMEOUT_MS 로 묶는다(race, 아래).** 예전에는 이 함수도
- *  loadRunConfigs(main/run/prepare.ts), jdkScanner, dotnetScanner, core/history/strategies 의
+ *  loadRunConfigs(core/run/load.ts), jdkScanner, dotnetScanner, core/history/strategies 의
  *  codex.ts·claude.ts 를 근거로 제한을 두지 않았다 — 그것들도 readdir 를 하나같이 제한 없이
  *  부르니까. 하지만 그 넷은 다른 부류다: 전부 **사람이 켠 작업**이다. 설정 화면을 열거나 목록을
  *  조회할 때만 도는 코드라, 멈춰도 사람이 보는 스피너로 나타나고 그 사람이 자리를 뜨면 그만이다.

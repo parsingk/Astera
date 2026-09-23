@@ -228,6 +228,19 @@ describe('공개 표면 — 두 낱말 명령', () => {
     })
   })
 
+  // phase D. `run-configs` 도 accounts 처럼 가이드가 동사 없이 가르치는 세션 명령이다.
+  it('run-configs list 는 공개 명령이고, 동사 없는 run-configs 는 옛 세션 명령이다', () => {
+    expect(parseArgs(['run-configs', 'list', '--job', 'job_1'])).toMatchObject({
+      cmd: 'run-configs-list',
+      args: { job: 'job_1' }
+    })
+    expect(parseArgs(['run-configs'])).toMatchObject({ cmd: 'run-configs' })
+    expect(parseArgs(['run-configs', '--json'])).toMatchObject({ cmd: 'run-configs', json: true })
+    expect(parseArgs(['run-configs', 'fly'])).toEqual({
+      error: 'unknown run-configs subcommand: fly (expected list)'
+    })
+  })
+
   // skills 는 동사가 있어야 한다 — 동사 없는 옛 명령이 없으므로 BARE_NOUNS 가 아니다.
   it('skills list 와 skills install', () => {
     expect(parseArgs(['skills', 'list'])).toMatchObject({ cmd: 'skills-list', args: {} })
