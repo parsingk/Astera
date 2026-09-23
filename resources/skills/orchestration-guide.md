@@ -447,8 +447,9 @@ help [--skills-dir <p>]
   its own Dispatch.
 - `ask --resume <questionId>` keeps waiting on that question id alone, with no `--task-id`,
   `--dispatch-id`, or `--question` (section 8).
-- `help` takes no arguments. It works with no Host running, but `ASTERA_SKILLS`
-  (or `--skills-dir`) must be present for it to find this document.
+- `help` takes no arguments. It works with no Host running. It reads this document from
+  `--skills-dir` when given, else from `ASTERA_SKILLS`, else from the `resources/skills` folder of
+  the Astera build the command belongs to, so it also works in a shell Astera did not start.
 
 ### 4.5 Recovery (coordinator only)
 

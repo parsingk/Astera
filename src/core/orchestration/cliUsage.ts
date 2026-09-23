@@ -90,14 +90,14 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   status: { summary: 'is the orchestrator there, and what is running' },
   // `--skills-dir <path>` is real and is left out on purpose. It relocates the folder the guide is
   // read from, overriding ASTERA_SKILLS, and it exists for the app and for development rather than
-  // for a person at a prompt: outside a session there is no guide to point it at. The guide itself
+  // for a person at a prompt, who gets the guide this build ships with. The guide itself
   // documents it, which is the right place, because the guide is where the non-public commands are
   // documented and this flag is one of them. docs/cli.md makes the same call, documenting the
   // ASTERA_SKILLS variable and not the flag, which is why the doc guard cannot see the difference.
   help: {
     summary: 'the orchestration guide, in full',
     detail:
-      'The reference agents read. It is a long document, not usage text. It comes from the folder ASTERA_SKILLS names, which a session Astera starts sets for you.'
+      'The reference agents read. It is a long document, not usage text. Inside a session Astera starts it comes from the folder ASTERA_SKILLS names; elsewhere, from the guides this build ships with.'
   },
   'agent-context': {
     summary: 'every command this binary can route, as JSON',

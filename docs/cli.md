@@ -128,7 +128,8 @@ set `ASTERA_PROFILE_DIR` by hand, copy the path rather than typing it. `astera h
 the profile it resolved, which is how to check.
 
 Two more variables exist inside sessions Astera starts: `ASTERA_CLI` is the absolute path to this
-command, and `ASTERA_SKILLS` is the folder `astera help` reads its guide from.
+command, and `ASTERA_SKILLS` is the folder `astera help` reads its guide from. Outside a session
+`astera help` and `astera browser help` read the guides that ship with the installed Astera instead.
 
 ## Command reference
 

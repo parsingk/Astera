@@ -726,24 +726,32 @@ export function startKeepalive(a: {
 
 /** Absolute location of the guide document. Now that the CLI moved into a bundle artifact
  *  (out/main/cli.js), a relative path to resources/skills can no longer be fixed — __dirname points
- *  somewhere different in a packaged app than in dev mode. So it is not hardcoded but taken from the
- *  ASTERA_SKILLS environment variable the wiring injects (or the --skills-dir argument that
- *  overrides it). */
+ *  somewhere different in a packaged app than in dev mode. So it is taken from the --skills-dir
+ *  argument, else the ASTERA_SKILLS environment variable the wiring injects into a session, else
+ *  `bundled`.
+ *
+ *  **`bundled` is where this binary's own resources are** (`resolveSkillsDir`, the same lookup
+ *  `skills install` finds its stubs with). Without it `astera help` failed in any shell Astera did
+ *  not start, and it is the command `--help`'s first screen points at (conformance audit #70).
+ *  ASTERA_SKILLS still wins inside a session: it names the app that started the session, which is
+ *  the guide that session's commands answer to. */
 export function resolveGuidePath(a: {
   args: Record<string, unknown>
   env: NodeJS.ProcessEnv
+  /** The skills folder beside this binary, or undefined when none was found. */
+  bundled?: string
   /** Which guide. `astera help` is the orchestration guide; `astera browser help` the browser's. */
   guide?: 'orchestration' | 'browser'
 }): { ok: true; path: string } | { ok: false; error: string } {
   const dir =
     typeof a.args.skillsDir === 'string' && a.args.skillsDir.length > 0
       ? a.args.skillsDir
-      : a.env.ASTERA_SKILLS
+      : a.env.ASTERA_SKILLS || a.bundled
   if (!dir)
     return {
       ok: false,
       error:
-        'ASTERA_SKILLS is not set (and no --skills-dir given) — is this session started by the app?'
+        'ASTERA_SKILLS is not set, no --skills-dir was given, and no resources/skills was found beside this build'
     }
   const file = a.guide === 'browser' ? 'browser-guide.md' : 'orchestration-guide.md'
   return { ok: true, path: path.join(dir, file) }
@@ -903,8 +911,12 @@ export async function main(): Promise<void> {
   }
 
   // help has to work without a Host — handle it before working out which one to talk to.
+  /** The skills folder beside this binary, looked up only by the two guide commands below. */
+  const bundledSkills = (): string | undefined =>
+    resolveSkillsDir({ resourcesPath: process.resourcesPath, cliEntry: process.argv[1] ?? '', exists: existsSync })
+
   if (parsed.cmd === 'help') {
-    const resolved = resolveGuidePath({ args: parsed.args, env: process.env })
+    const resolved = resolveGuidePath({ args: parsed.args, env: process.env, bundled: bundledSkills() })
     if (!resolved.ok) fail({ code: 'FAILED', message: resolved.error })
     const guide = readGuide(resolved.path)
     if (!guide.ok) fail({ code: 'FAILED', message: guide.error })
@@ -914,7 +926,7 @@ export async function main(): Promise<void> {
 
   // The browser guide works without a server too — same shape as help above.
   if (parsed.cmd === 'browser-help') {
-    const resolved = resolveGuidePath({ args: parsed.args, env: process.env, guide: 'browser' })
+    const resolved = resolveGuidePath({ args: parsed.args, env: process.env, bundled: bundledSkills(), guide: 'browser' })
     if (!resolved.ok) fail({ code: 'FAILED', message: resolved.error })
     const guide = readGuide(resolved.path)
     if (!guide.ok) fail({ code: 'FAILED', message: guide.error })

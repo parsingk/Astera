@@ -448,6 +448,18 @@ describe('resolveGuidePath', () => {
     })
     expect(r).toEqual({ ok: true, path: path.join('/custom', 'orchestration-guide.md') })
   })
+  // 감사 #70. 세션 밖에서는 ASTERA_SKILLS 가 없어 `astera help` 가 1 로 끝났다. `--help` 의 첫
+  // 화면이 권하는 명령이다. 그때는 `skills install` 이 스텁을 찾는 곳(바이너리 옆의 resources)을 쓴다.
+  it('둘 다 없으면 바이너리 옆에 묶인 가이드를 읽는다', () => {
+    const r = resolveGuidePath({ args: {}, env: {}, bundled: '/app/resources/skills' })
+    expect(r).toEqual({ ok: true, path: path.join('/app/resources/skills', 'orchestration-guide.md') })
+    const browser = resolveGuidePath({ args: {}, env: {}, bundled: '/app/resources/skills', guide: 'browser' })
+    expect(browser).toEqual({ ok: true, path: path.join('/app/resources/skills', 'browser-guide.md') })
+  })
+  it('ASTERA_SKILLS 가 있으면 묶인 가이드보다 이긴다', () => {
+    const r = resolveGuidePath({ args: {}, env: { ASTERA_SKILLS: '/opt/skills' }, bundled: '/app/resources/skills' })
+    expect(r).toEqual({ ok: true, path: path.join('/opt/skills', 'orchestration-guide.md') })
+  })
   it('둘 다 없으면 ASTERA_SKILLS를 언급하는 명확한 에러를 낸다', () => {
     const r = resolveGuidePath({ args: {}, env: {} })
     expect(r.ok).toBe(false)
