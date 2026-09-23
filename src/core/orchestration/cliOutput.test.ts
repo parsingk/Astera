@@ -251,12 +251,23 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
       'astera requests show --id rq-1',
       'astera host status'
     ])
-    expect(nextStepsFor({ code: 'HOST_NOT_RUNNING', cmd: 'worker-start', details })).toEqual([
-      'astera requests show --id rq-1',
-      'astera host start'
-    ])
     // 그 줄이 없는 실패는 예전 그대로다 — 연결이 아예 안 선 끝에는 물어볼 영수증이 없다.
     expect(nextStepsFor({ code: 'HOST_NOT_RUNNING', cmd: 'worker-start' })).toEqual(['astera host start'])
+  })
+
+  /**
+   * **3 만은 순서가 뒤집힌다.** Host 에 닿지 못한 것이 그 코드의 뜻이고, 영수증을 묻는 명령도 Host 가
+   * 있어야 답한다 — 목록을 위에서부터 따르는 에이전트는 "모르겠다" 를 한 번 더 받고 나서야 그것을
+   * 고치는 줄에 닿는다. 그래서 Host 를 세우는 줄이 먼저고, 영수증은 그것이 답할 수 있게 된 뒤다.
+   */
+  it('3 에서는 Host 를 세우는 줄이 먼저고 영수증은 그 뒤다', () => {
+    expect(
+      nextStepsFor({
+        code: 'HOST_NOT_RUNNING',
+        cmd: 'worker-start',
+        details: { queryCommand: 'astera requests show --id rq-1' }
+      })
+    ).toEqual(['astera host start', 'astera requests show --id rq-1'])
   })
 
   // 모르는 명령에 그럴듯한 목록 명령을 지어내지 않는다

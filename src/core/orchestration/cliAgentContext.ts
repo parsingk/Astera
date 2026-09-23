@@ -497,10 +497,12 @@ export function agentContext(): AgentContext {
         'data is always an object. A list arrives under its own noun: data.jobs, data.tasks, data.questions, data.runs, data.projects; anything else is data.items.',
         'error.code is for branching, error.message is for a person, and error.nextSteps is a list of command lines to try — empty when there is nothing general to run.',
         'A timeout from `check --wait` or `ask` is a success: exit 0, with data.timedOut set.',
-        // 요청 영수증 설계 §8. 두 줄인 이유는 읽는 쪽이 다르기 때문이다 — 앞은 답을 받은 뒤에 보는
-        // 칸이고, 뒤는 답을 못 받았을 때 손에 쥐는 줄이다.
+        // 요청 영수증 설계 §8·§7. 세 줄인 이유는 읽는 쪽이 다르기 때문이다 — 앞의 둘은 답을 받은
+        // 뒤에 보는 칸이고, 마지막은 답을 못 받았을 때 손에 쥐는 줄이다. 그리고 앞의 둘은 서로 다른
+        // 약속을 하므로 한 낱말로 묶을 수 없다.
         'replayed: true beside ok means this answer came out of a request receipt: you presented a --request-id that had already taken effect here, and the command was not run a second time. The exit code is the original answer\'s, so a replayed 404 still exits 4.',
-        'When no answer came back at all — exit 3 with the connection dropped, or exit 7 with the deadline passed — error.details carries requestId, queryCommand and retryCommand. Run queryCommand first: `astera requests show --id <id>` says whether the command landed. retryCommand is the same line you ran with that id on it, for after you know.',
+        'observed: true beside ok is the other answer to an id you had already used, and it does not mean the same thing. The command committed once and then waited (ask, or check --ack --wait), so the commit was not repeated but the command did run again and this body is what is true now — a fresh poll can hand you a delivery you have never seen. Read it as a first answer, not as one you have already handled.',
+        'When no answer came back at all — exit 3 with the connection dropped, or exit 7 with the deadline passed — error.details carries requestId, queryCommand and retryCommand. Run queryCommand first: `astera requests show --id <id>` says whether the command landed. retryCommand is the same line you ran with that id on it, for after you know. Both are POSIX shell syntax (bash, zsh, Git Bash; PowerShell reads the same quotes) — cmd.exe does not read single quotes, so requote there.',
         "A timed out `ask` leaves the question open. Its data carries nextSteps — the same kind of command lines as error.nextSteps — with the one command that waits again on that question; when the id is unknown the list is empty and data.cannotResume says why. Do not ask again either way: a second question for the same person is answered once and waited on twice.",
         'While `ask`, `check --wait`, `jobs wait` or `runs wait` is waiting, a line goes to stderr every 15 seconds saying it is still waiting and when the Host last answered. stdout carries only the one result, so nothing has to be filtered out of it; --no-keepalive turns the lines off.'
       ]

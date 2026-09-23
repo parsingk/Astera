@@ -28,7 +28,8 @@ import {
   okEnvelope,
   silentHostEnd,
   type CliError,
-  type CliErrorCode
+  type CliErrorCode,
+  type ReplayMark
 } from '../core/orchestration/cliOutput'
 import {
   KEEPALIVE_MS,
@@ -151,14 +152,14 @@ export function connectFailureEnd(a: {
 
 /** 모드에 맞춘 성공 출력. **사람용이 없는 명령은 JSON 으로 되돌린다** — 코디네이터의
  *  명령들에 억지로 표를 씨우면 가이드가 시키는 것을 못 읽게 된다. */
-export function renderOk(cmd: string, body: unknown, mode: OutputMode, replayed = false): string {
-  if (mode === 'json') return okEnvelope(cmd, body, replayed)
+export function renderOk(cmd: string, body: unknown, mode: OutputMode, mark: ReplayMark = null): string {
+  if (mode === 'json') return okEnvelope(cmd, body, mark)
   const data = dataFor(cmd, body)
   if (mode === 'quiet') return quietFor(data)
   // **사람용 두 모드는 표시를 싣지 않는다.** 재생의 요점은 첫 답을 받은 것과 구별되지 않는 것이고,
   // 그것이 재생이었다는 사실은 봉투를 읽는 쪽 — 즉 스크립트 — 의 것이다. `--quiet` 는 id 목록이라
   // 얹을 자리조차 없다. 사람용이 없어 봉투로 되돌아가는 명령은 봉투이므로 그때는 실린다.
-  return humanFor(cmd, data) ?? okEnvelope(cmd, body, replayed)
+  return humanFor(cmd, data) ?? okEnvelope(cmd, body, mark)
 }
 
 /**
@@ -168,8 +169,8 @@ export function renderOk(cmd: string, body: unknown, mode: OutputMode, replayed 
  * (cliOutput 의 `nextStepsFor`), 사람에게도 같은 것이 필요하다 — 무엇이 잘못됐는지 읽고 나서 다음
  * 질문은 언제나 "그래서 뭘 치지" 다. JSON 쪽은 봉투가 이미 싣고 있으므로 **한 번만** 나간다.
  */
-export function renderErr(e: CliError, mode: OutputMode, cmd?: string, replayed = false): string {
-  if (mode === 'json') return errEnvelope(e, cmd, replayed)
+export function renderErr(e: CliError, mode: OutputMode, cmd?: string, mark: ReplayMark = null): string {
+  if (mode === 'json') return errEnvelope(e, cmd, mark)
   const steps = nextStepsFor({ code: e.code, cmd, details: e.details })
   return [`error: ${e.message}`, ...(steps.length === 0 ? [] : ['try:', ...steps.map((s) => `  ${s}`)])].join(
     '\n'
@@ -352,16 +353,26 @@ export function shownReceipt(body: unknown): unknown {
 }
 
 /**
- * One argv token as a command line carries it.
+ * One argv token as a command line carries it. **The line these build is POSIX shell syntax**, and
+ * that is a decision rather than a default — see `retryCommandLine` for what it costs and what it
+ * buys.
  *
- * **Quoted only when it has to be, and with the one escaping both shells agree on.** Inside double
- * quotes, `bash` and the argv parser every Windows binary is built on both read `\"` as a quote and
- * `\\` as a backslash, so escaping exactly those two characters makes a token that survives being
- * pasted into either. Everything in the safe set below is a character neither shell does anything
- * with, which is what keeps the common line — ids, paths, flags — free of quotes nobody needs.
+ * **Single quotes, because they are the only quoting that expands nothing.** We publish this line as
+ * one a person or an agent can paste, so the first requirement is that pasting it cannot *run*
+ * anything. Inside double quotes a shell still expands `$HOME`, `$(date)` and backticks, so a
+ * `--question 'ship at $(date)?'` that came back inside an error would execute `date` on its way to
+ * being refused by the fingerprint. Inside single quotes nothing at all is special, backslashes
+ * included, which is also what makes a Windows path come back as the path that was typed.
+ *
+ * A single quote inside the value is the one character that cannot be written inside single quotes,
+ * so it closes, escapes and reopens — `'\''`, the POSIX idiom. That is the one place this line is
+ * bash-and-zsh only rather than bash-and-PowerShell.
+ *
+ * Everything in the safe set below is a character no shell does anything with, which is what keeps
+ * the ordinary line — ids, flags, plain words — free of quotes nobody needs.
  */
 const shellToken = (t: string): string =>
-  /^[A-Za-z0-9_@%+=:,./-]+$/.test(t) ? t : `"${t.replace(/(["\\])/g, '\\$1')}"`
+  /^[A-Za-z0-9_@%+=:,./-]+$/.test(t) ? t : `'${t.replace(/'/g, `'\\''`)}'`
 
 /**
  * The line that presents this request id again (request receipts design §8).
@@ -377,8 +388,25 @@ const shellToken = (t: string): string =>
  * Any `--request-id` already on the line is taken off and the real id appended, so the line carries
  * the id this call was actually made with — including the case where the flag read its value from
  * stdin and the token on the line is a bare `-`.
+ *
+ * **And what this process added on the way out is written in** (`implicit`). `argsForCall` fills a
+ * missing `--cwd` on `run-create` with this process's working directory, and that value is part of
+ * the request the Host fingerprinted. Print the typed line alone and running it from another folder
+ * sends a different `cwd`, which is refused as "already used with different arguments" while the two
+ * lines are character for character the same — safe, and impossible to explain.
+ *
+ * **The line is POSIX shell syntax** (`shellToken`): bash, zsh, and Git Bash on Windows, which is
+ * where `astera` is run from when an agent runs it. PowerShell reads the same single quotes, apart
+ * from a value that contains one. `cmd.exe` does not read single quotes at all, so a value with a
+ * space in it has to be requoted there. Both documents that publish this line say so rather than
+ * calling it universal, which is what it was and was not.
  */
-export function retryCommandLine(a: { argv: readonly string[]; request: string }): string {
+export function retryCommandLine(a: {
+  argv: readonly string[]
+  request: string
+  /** Arguments this process put on the wire that are not on the line (`implicitArgs`). */
+  implicit?: Record<string, unknown>
+}): string {
   const rest: string[] = []
   for (let i = 0; i < a.argv.length; i++) {
     if (a.argv[i] !== '--request-id') {
@@ -390,7 +418,27 @@ export function retryCommandLine(a: { argv: readonly string[]; request: string }
     const next = a.argv[i + 1]
     if (next !== undefined && !next.startsWith('--')) i++
   }
+  for (const [key, value] of Object.entries(a.implicit ?? {})) {
+    const flag = `--${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`
+    // `true` is a flag with no value, as `parseArgs` reads it back. Nothing but a string reaches here
+    // today (`argsForCall` adds one `cwd`); JSON is what a future one would have to be written as for
+    // the parser to read the same value back, and printing it is better than dropping the flag.
+    if (value === true) rest.push(flag)
+    else rest.push(flag, typeof value === 'string' ? value : JSON.stringify(value))
+  }
   return ['astera', ...rest, '--request-id', a.request].map(shellToken).join(' ')
+}
+
+/** What this process put on the wire that the caller did not type — the difference `argsForCall`
+ *  makes. Derived rather than listed, so whatever that function fills in next is carried without
+ *  anybody remembering to add it here. */
+export function implicitArgs(
+  typed: Record<string, unknown>,
+  sent: Record<string, unknown>
+): Record<string, unknown> {
+  const added: Record<string, unknown> = {}
+  for (const key of Object.keys(sent)) if (!Object.hasOwn(typed, key)) added[key] = sent[key]
+  return added
 }
 
 /**
@@ -411,12 +459,15 @@ export function lostAnswerDetails(a: {
   argv: readonly string[]
   /** What actually went on the wire, which is not always what this process minted. */
   request: string | undefined
+  /** Arguments this process added on the way out, so the retry line sends what the first call sent
+   *  (`implicitArgs`). */
+  implicit?: Record<string, unknown>
 }): Record<string, unknown> {
   if (a.request === undefined) return {}
   return {
     requestId: a.request,
     queryCommand: `astera requests show --id ${shellToken(a.request)}`,
-    retryCommand: retryCommandLine({ argv: a.argv, request: a.request })
+    retryCommand: retryCommandLine({ argv: a.argv, request: a.request, implicit: a.implicit })
   }
 }
 
@@ -432,7 +483,13 @@ export interface HostAnswer {
   status: number
   body: unknown
   replayed?: true
+  observed?: true
 }
+
+/** Which of the two words this answer wears at the top of the envelope, if either (`ReplayMark`).
+ *  They are never both set, and an ordinary answer wears neither. */
+export const markOf = (r: Pick<HostAnswer, 'replayed' | 'observed'>): ReplayMark =>
+  r.replayed === true ? 'replayed' : r.observed === true ? 'observed' : null
 
 export function callHost(a: {
   conn: HostConnection
@@ -466,7 +523,12 @@ export function callHost(a: {
     timer.unref?.()
     offMessage = a.conn.onMessage((m) => {
       if (m.t === 'orch-result' && m.call === call)
-        done({ status: m.status, body: m.body, ...(m.replayed === true ? { replayed: true } : {}) })
+        done({
+          status: m.status,
+          body: m.body,
+          ...(m.replayed === true ? { replayed: true } : {}),
+          ...(m.observed === true ? { observed: true } : {})
+        })
     })
     offClose = a.conn.onClose(() =>
       done({ unreachable: `the Host closed the connection before answering ${a.cmd}` })
@@ -709,11 +771,12 @@ export async function main(): Promise<void> {
    * 얻는 것이 모드를 따르는 쪽이어야 한다 — 기억해야 할 목록으로 두면 다음에 또 잊는다.
    * `FAIL_SEAM` 아래로 봉투를 직접 만드는 호출이 남아 있지 않은 것을 run.test.ts 가 지킨다.
    */
-  /** Whether the answer this process is carrying came out of a receipt (§8). Declared here because
-   *  `fail` is built before there is any answer to mark, and a replayed 404 goes out through it. */
-  let replayed = false
+  /** The answer this process is carrying, once there is one. **`fail` reads its mark from here**,
+   *  because a replayed failure goes out through `fail` and `fail` is built long before there is any
+   *  answer to mark. Null until then, and nothing has a mark. */
+  let answer: HostAnswer | null = null
   const fail: (e: CliError) => never = (e) => {
-    out(renderErr(e, mode, parsed.cmd, replayed))
+    out(renderErr(e, mode, parsed.cmd, answer === null ? null : markOf(answer)))
     process.exit(exitCodeFor(e.code))
   }
   // FAIL_SEAM — 이 줄 아래에서 실패를 내보내는 길은 `fail` 하나다. 봉투를 직접 짓는 호출을
@@ -882,7 +945,11 @@ export async function main(): Promise<void> {
     return answerFromFile({ state, cmd: parsed.cmd, args, sessionId })
   }
 
-  const reply = await (async (): Promise<HostAnswer> => {
+  // **`answer` and `reply` are one value, deliberately written as one statement each.** `fail` reads
+  // the mark off `answer`, and it can be called from inside the branches below — a replayed failure
+  // is exactly that — so the assignment must not be something a later edit can move past them.
+  // Defining `reply` *from* `answer` is what makes that impossible rather than merely unlikely.
+  answer = await (async (): Promise<HostAnswer> => {
     const conn = await connectHost({ address, app: CLI_VERSION, log: logToStderr })
     if ('error' in conn) {
       // **셋 중 하나만 "아무도 없다" 다** (connectFailureEnd). 나머지 둘에서 파일을 읽으면 살아
@@ -933,10 +1000,13 @@ export async function main(): Promise<void> {
       args,
       enabled: !parsed.noKeepalive
     })
+    // Held rather than passed inline: the retry line below has to carry what this actually sent,
+    // and `argsForCall` fills a missing `--cwd` that the typed line does not have (`implicitArgs`).
+    const sentArgs = argsForCall({ cmd: parsed.cmd, args, cwd: process.cwd() })
     const r = await callHost({
       conn,
       cmd: parsed.cmd,
-      args: argsForCall({ cmd: parsed.cmd, args, cwd: process.cwd() }),
+      args: sentArgs,
       sessionId,
       request: carried.send,
       timeoutMs: clientTimeoutMs({ cmd: parsed.cmd, args })
@@ -949,7 +1019,11 @@ export async function main(): Promise<void> {
     // **답이 아예 오지 않은 두 끝은 요청 id 와 칠 명령 둘을 싣고 나간다**(`lostAnswerDetails`,
     // 설계 §8). 이 둘이 이 기능이 있는 이유다 — Host 는 답하기 전에 커밋하므로, 여기서 아는 것은
     // "일어났을 수도 있다" 하나뿐이고, 그것을 스스로 알아낼 길이 부르는 쪽에는 없었다.
-    const lost = lostAnswerDetails({ argv, request: carried.send })
+    const lost = lostAnswerDetails({
+      argv,
+      request: carried.send,
+      implicit: implicitArgs(args, sentArgs)
+    })
     if ('stuck' in r) {
       // **`ask` 는 이 자리에서 한 마디를 더 한다**(cliOutput 의 silentHostEnd). 답이 오지 않았다는
       // 것은 질문이 사라졌다는 뜻이 아니다 — 열린 채로 남아 있을 수 있고, 그것을 실패로 읽고 다시
@@ -960,11 +1034,8 @@ export async function main(): Promise<void> {
     if ('unreachable' in r) return withoutHost(r.unreachable, lost)
     return r
   })()
+  const reply = answer
 
-  // **재생 표시는 답과 함께 왔고, 성공이든 실패든 같은 자리에 찍힌다**(§8). 여기서 세우는 이유는
-  // 실패 쪽이다: 재생된 404 는 404 로 끝나야 하고(재생의 요점이 첫 답과 구별되지 않는 것이다),
-  // 그 길은 `fail` 이며 `fail` 은 이 값을 읽는다.
-  replayed = reply.replayed === true
   if (reply.status >= 200 && reply.status < 300) {
     // `version` 만 저쪽 답에 이쪽 값을 더한다. 둘은 한 프로그램이라 같은 값이어야 하고, 다르면
     // 그 자체가 사람이 봐야 할 사실이다 — 셔틀이 가리키는 바이너리가 갈렸다는 뜻이다. 칸 이름은
@@ -996,7 +1067,7 @@ export async function main(): Promise<void> {
         fail(end)
       }
     }
-    out(renderOk(parsed.cmd, body, mode, replayed))
+    out(renderOk(parsed.cmd, body, mode, markOf(reply)))
     process.exit(0)
   }
   // **`version` 은 저쪽이 답하지 못해도 답한다.** 이 명령이 있는 이유가 "둘이 갈렸는가" 를

@@ -109,17 +109,30 @@ export function dataFor(cmd: string, body: unknown): Record<string, unknown> {
 }
 
 /**
- * **`replayed` sits at the top level, beside `ok`, and never inside `data`** (request receipts design
+ * What an answer to an id that had already taken effect is called at the top of the envelope
+ * (request receipts design §8, §7), or `null` for an ordinary answer.
+ *
+ * **Two words rather than one, because they promise different things.** `replayed` means the command
+ * was not run a second time and this is the recorded answer. `observed` means the commit was not
+ * repeated but the command did run again, so the body is what is true now — `check --ack <id> --wait`
+ * polls afresh, and that poll can open a delivery the caller has never seen. One word for both would
+ * make either promise false somewhere, and the dangerous direction is a caller skipping a body it
+ * believes it has already handled.
+ */
+export type ReplayMark = 'replayed' | 'observed' | null
+
+/**
+ * **The mark sits at the top level, beside `ok`, and never inside `data`** (request receipts design
  * §8). `data` is the command's own published contract, so adding a field to it would change what
- * `run-create` returns to every caller; the fact that this particular answer came out of a receipt is
- * about the call, not about the thing answered.
+ * `run-create` returns to every caller; the fact that this particular answer is about an id already
+ * used is about the call, not about the thing answered.
  *
  * Additive, so `CLI_PROTOCOL` stays 1 — a bump is for a change readers must react to, and a new
- * column is not one. Present only when true: a reader tests for it, and a `false` on every ordinary
- * answer would put a word about receipts in front of every caller that never asked for one.
+ * column is not one. Present only when there is one: a reader tests for it, and a `false` on every
+ * ordinary answer would put a word about receipts in front of every caller that never asked for one.
  */
-export const okEnvelope = (cmd: string, body: unknown, replayed = false): string =>
-  JSON.stringify({ ok: true, ...(replayed ? { replayed: true } : {}), data: dataFor(cmd, body) })
+export const okEnvelope = (cmd: string, body: unknown, mark: ReplayMark = null): string =>
+  JSON.stringify({ ok: true, ...(mark ? { [mark]: true } : {}), data: dataFor(cmd, body) })
 
 /**
  * 없는 id 를 들은 세션 전용 명령에게, **있는 것들이 어디 있는가**.
@@ -292,7 +305,12 @@ export function nextStepsFor(a: {
    * 때 치는 줄이 그쪽에 준비돼 있다.
    */
   const lost = typeof details.queryCommand === 'string' ? [details.queryCommand] : []
-  return [...lost, ...STEPS[a.code](a.cmd, details)].map((step) =>
+  const own = STEPS[a.code](a.cmd, details)
+  // **Except for 3, where the receipt question needs the very thing that is missing.** With no Host
+  // reachable, `requests show` exits 3 as well, so an agent working down the list in order would get
+  // a second "I do not know" before reaching the line that fixes it. There the line that starts a
+  // Host comes first and the receipt question after it, where it can actually answer.
+  return (a.code === 'HOST_NOT_RUNNING' ? [...own, ...lost] : [...lost, ...own]).map((step) =>
     step.replace(/<([A-Za-z]+)>/g, (whole, key: string) => {
       const v = details[key]
       return typeof v === 'string' || typeof v === 'number' ? String(v) : whole
@@ -304,14 +322,14 @@ export function nextStepsFor(a: {
  * **`nextSteps` 는 언제나 있다.** 할 것이 없으면 빈 배열이다 — `details` 가 `{}` 로 언제나 있는
  * 것과 같은 판단이고, 읽는 쪽이 `error.nextSteps[0]` 앞에 칸의 유무를 먼저 묻지 않아도 되게 한다.
  */
-export const errEnvelope = (e: CliError, cmd?: string, replayed = false): string =>
+export const errEnvelope = (e: CliError, cmd?: string, mark: ReplayMark = null): string =>
   JSON.stringify({
     ok: false,
-    // **A replayed failure is marked too**, in the same place and for the same reason as the success
-    // envelope's (`okEnvelope`). A recorded 404 comes back as a 404 and exits 4, which is the point;
-    // what the marker adds is that this one is the answer to a call that already happened, so a
-    // caller does not read it as a fresh id that has since gone missing.
-    ...(replayed ? { replayed: true } : {}),
+    // **A failure that is about an already-used id is marked too**, in the same place and for the
+    // same reason as the success envelope's (`okEnvelope`). A recorded 404 comes back as a 404 and
+    // exits 4, which is the point; what the mark adds is that this one answers a call that already
+    // happened, so a caller does not read it as a fresh id that has since gone missing.
+    ...(mark ? { [mark]: true } : {}),
     error: {
       code: e.code,
       message: e.message,

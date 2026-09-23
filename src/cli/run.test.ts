@@ -16,6 +16,7 @@ import {
   requestForHost,
   lostAnswerDetails,
   retryCommandLine,
+  implicitArgs,
   shownReceipt,
   callHost,
   connectFailureEnd,
@@ -42,32 +43,55 @@ import {
 } from '../core/orchestration/pendingReports'
 
 /**
- * A command line back into the argv a shell would hand the program.
+ * A command line back into the argv a POSIX shell would hand the program, **and every place that
+ * shell would expand something on the way**.
  *
  * **It has to live here and not in the source**, because the claim being tested is that the line this
  * program *writes* is a line a shell can *run*: a splitter that came out of the same file as the
- * quoter would agree with it whatever either of them did. This one knows only what both `bash` and
- * the Windows argv parser know — double quotes group, and inside them `\"` is a quote and `\\` a
- * backslash.
+ * quoter would agree with it whatever either of them did. This one knows only what the shell knows.
+ *
+ * **`expansions` is the half that matters and the half the first version of this helper could not
+ * see.** Splitting a line the way a shell splits it says nothing about whether the shell would first
+ * run something inside it: `"cost is $(date)"` splits into one tidy token *and* executes `date`. So
+ * every `$` and backtick that is not inside single quotes is recorded here, and a line that is safe
+ * to publish is one that leaves this list empty.
  */
-const splitCommandLine = (line: string): string[] => {
-  const out: string[] = []
+const posixArgv = (line: string): { argv: string[]; expansions: string[] } => {
+  const argv: string[] = []
+  const expansions: string[] = []
   let cur = ''
   let started = false
-  let quoted = false
+  /** `null` outside quotes, otherwise the quote character we are inside. */
+  let quote: "'" | '"' | null = null
   for (let i = 0; i < line.length; i++) {
     const c = line[i]
-    if (quoted && c === '\\' && (line[i + 1] === '"' || line[i + 1] === '\\')) {
-      cur += line[++i]
-      continue
-    }
-    if (c === '"') {
-      quoted = !quoted
+    // Single quotes expand nothing at all and end only at the next single quote — not even a
+    // backslash is special inside them, which is the whole reason the quoter uses them.
+    if (quote === "'") {
+      if (c === "'") quote = null
+      else cur += c
       started = true
       continue
     }
-    if (c === ' ' && !quoted) {
-      if (started) out.push(cur)
+    if (c === '\\' && quote === null && line[i + 1] !== undefined) {
+      cur += line[++i]
+      started = true
+      continue
+    }
+    if (quote === '"' && c === '\\' && ['"', '\\', '$', '`'].includes(line[i + 1])) {
+      cur += line[++i]
+      continue
+    }
+    if (c === '$' || c === '`') expansions.push(line.slice(i, i + 12))
+    if (c === "'" || c === '"') {
+      if (quote === c) quote = null
+      else if (quote === null) quote = c
+      else cur += c
+      started = true
+      continue
+    }
+    if (c === ' ' && quote === null) {
+      if (started) argv.push(cur)
       cur = ''
       started = false
       continue
@@ -75,9 +99,10 @@ const splitCommandLine = (line: string): string[] => {
     cur += c
     started = true
   }
-  if (started) out.push(cur)
-  return out
+  if (started) argv.push(cur)
+  return { argv, expansions }
 }
+const splitCommandLine = (line: string): string[] => posixArgv(line).argv
 
 describe('errorOutput', () => {
   // 스크립트가 기대는 것은 봉투다(설계 §7) — 코드는 기계의 것이고 문구는 사람의 것이다.
@@ -578,7 +603,7 @@ describe('renderOk / renderErr', () => {
    * 을 올리지 않는다 — 올리는 때는 읽는 쪽이 고쳐야 하는 변화가 있을 때뿐이다.
    */
   it('재생은 봉투 맨 위에 표시가 붙고 data 는 그대로다', () => {
-    expect(JSON.parse(renderOk('jobs-list', jobs, 'json', true))).toEqual({
+    expect(JSON.parse(renderOk('jobs-list', jobs, 'json', 'replayed'))).toEqual({
       ok: true,
       replayed: true,
       data: { jobs }
@@ -588,10 +613,27 @@ describe('renderOk / renderErr', () => {
     expect(Object.hasOwn(JSON.parse(renderOk('jobs-list', jobs, 'json')), 'replayed')).toBe(false)
   })
 
+  /**
+   * **관찰한 답은 `replayed` 가 아니라 `observed` 다**(설계 §7). `replayed` 가 공표한 문장은 "명령을
+   * 두 번 돌리지 않았다" 이고, `check --ack --wait` 의 관찰은 폴링을 다시 돌려 아무도 못 본 배달을
+   * 열 수 있으므로 그 문장이 거짓이 된다. 그 표시를 보고 "이미 처리한 본문" 이라며 건너뛰는 호출자는
+   * 그 배치와 그 배달 id 를 잃는다.
+   *
+   * **그리고 `replayed` 만 아는 옛 읽는 쪽에는 아무 표시도 안 보인다** — 그쪽이 안전한 방향이다.
+   * 그쪽에 보이는 것은 첫 답이고, 실제로 그것은 첫 답이 맞다.
+   */
+  it('관찰한 답은 다른 낱말을 쓴다', () => {
+    const observed = JSON.parse(renderOk('check', { count: 1, messages: [] }, 'json', 'observed'))
+    expect(observed.observed).toBe(true)
+    expect(Object.hasOwn(observed, 'replayed'), 'observed 가 replayed 로도 나갔다').toBe(false)
+  })
+
   /** 재생된 실패도 표시가 붙는다. 종료 코드는 원래의 것이고(재생의 요점이 그것이다), 표시가 더하는
    *  것은 "이 404 는 이미 일어난 부름의 답" 이라는 사실 하나다. */
   it('재생된 실패 봉투에도 같은 표시가 붙는다', () => {
-    const json = JSON.parse(renderErr({ code: 'NOT_FOUND', message: 'unknown run: run_x' }, 'json', 'runs-get', true))
+    const json = JSON.parse(
+      renderErr({ code: 'NOT_FOUND', message: 'unknown run: run_x' }, 'json', 'runs-get', 'replayed')
+    )
     expect(json.replayed).toBe(true)
     expect(json.error.code).toBe('NOT_FOUND')
     expect(exitCodeFor('NOT_FOUND')).toBe(4)
@@ -600,8 +642,8 @@ describe('renderOk / renderErr', () => {
   // 사람용 두 모드는 표시를 싣지 않는다 — 봉투를 읽는 것은 스크립트이고, `--quiet` 는 id 목록이라
   // 얹을 자리조차 없다.
   it('human·quiet 에는 표시가 없다', () => {
-    expect(renderOk('jobs-list', jobs, 'human', true)).toBe('RUNNING  job_1  o  1/2')
-    expect(renderOk('jobs-list', jobs, 'quiet', true)).toBe('job_1')
+    expect(renderOk('jobs-list', jobs, 'human', 'replayed')).toBe('RUNNING  job_1  o  1/2')
+    expect(renderOk('jobs-list', jobs, 'quiet', 'observed')).toBe('job_1')
   })
 })
 
@@ -652,10 +694,74 @@ describe('lostAnswerDetails — 잃은 답의 회복 줄', () => {
       argv: ['run-create', '--objective', '두 낱말과 "따옴표"'],
       request: 'rq-1'
     })
-    expect(line).toBe('astera run-create --objective "두 낱말과 \\"따옴표\\"" --request-id rq-1')
+    expect(line).toBe(`astera run-create --objective '두 낱말과 "따옴표"' --request-id rq-1`)
     expect(parseArgs(splitCommandLine(line).slice(1))).toMatchObject({
       args: { objective: '두 낱말과 "따옴표"', requestId: 'rq-1' }
     })
+  })
+
+  /**
+   * **우리는 이 줄을 "그대로 치면 된다" 고 발행한다. 그러니 치는 것이 무엇을 실행해서는 안 된다.**
+   *
+   * 큰따옴표 안에서 셸은 여전히 `$HOME` 과 `$(…)` 와 역따옴표를 펼친다. 답을 잃은 `ask
+   * --question 'ship at $(date)?'` 의 회복 줄을 사람이 붙여 넣으면 `date` 가 돌고, 그러고 나서 인자가
+   * 달라졌으니 지문이 400 으로 막는다 — 그것이 **덜 나쁜** 쪽 결말이다.
+   *
+   * 값은 그대로 돌아오고, 펼칠 자리는 하나도 남지 않아야 한다. 뒤엣것을 앞의 `splitCommandLine` 은
+   * 볼 수 없었다 — 이미 파싱된 문자열에 셸의 쪼개기 규칙만 적용했기 때문이다.
+   */
+  it('펼쳐질 수 있는 것은 하나도 남기지 않는다', () => {
+    for (const value of ['ship at $(date)?', 'cost is $HOME', 'tick `whoami` tock', 'a$b']) {
+      const line = retryCommandLine({ argv: ['ask', '--question', value], request: 'rq-1' })
+      const back = posixArgv(line)
+      expect(back.expansions, `${value} 가 펼쳐질 자리를 남겼다`).toEqual([])
+      expect(back.argv).toEqual(['astera', 'ask', '--question', value, '--request-id', 'rq-1'])
+    }
+  })
+
+  /** **win32 이 주 무대이고 경로에는 역슬래시가 있다.** 큰따옴표 안에서 역슬래시를 겹치면 bash 만
+   *  그것을 도로 읽고, `CommandLineToArgvW` 는 겹친 그대로 넘긴다. 홑따옴표 안에서는 아무것도 특별하지
+   *  않으므로 친 경로가 그대로 간다. */
+  it('Windows 경로는 겹치지도 잘리지도 않는다', () => {
+    const line = retryCommandLine({
+      argv: ['projects', 'find', '--path', 'D:\\repo\\sub'],
+      request: 'rq-1'
+    })
+    expect(line).toBe(`astera projects find --path 'D:\\repo\\sub' --request-id rq-1`)
+    expect(posixArgv(line).argv[4]).toBe('D:\\repo\\sub')
+  })
+
+  /** 홑따옴표 안에 홑따옴표는 못 쓴다. POSIX 의 관용구로 닫고 벗기고 다시 연다 — 이 줄이 bash·zsh
+   *  전용이 되는 유일한 자리이고, 그래서 두 문서가 어느 셸을 겨눈 줄인지 말한다. */
+  it('값 안의 홑따옴표는 POSIX 관용구로 나간다', () => {
+    const line = retryCommandLine({ argv: ['ask', '--question', "don't stop"], request: 'rq-1' })
+    expect(line).toBe(`astera ask --question 'don'\\''t stop' --request-id rq-1`)
+    expect(posixArgv(line).argv[3]).toBe("don't stop")
+  })
+
+  /**
+   * **친 줄과 보낸 부름이 같아야 한다**(`implicitArgs`). `argsForCall` 은 `run-create` 의 빠진
+   * `--cwd` 를 이 프로세스의 작업 폴더로 메꾸고, Host 는 그 값까지 지문에 넣는다. 메꾼 것을 안 적으면
+   * 다른 폴더에서 친 회복 줄이 "같은 id 를 다른 인자로 썼다" 로 400 을 받는다 — 두 줄이 글자 하나까지
+   * 같은데.
+   */
+  it('이 프로세스가 메꾼 인자는 회복 줄에 적힌다', () => {
+    const typed = { objective: 'o' }
+    const sent = argsForCall({ cmd: 'run-create', args: typed, cwd: 'D:/where-it-ran' })
+    const line = retryCommandLine({
+      argv: ['run-create', '--objective', 'o'],
+      request: 'rq-1',
+      implicit: implicitArgs(typed, sent)
+    })
+    expect(line).toBe('astera run-create --objective o --cwd D:/where-it-ran --request-id rq-1')
+    // 그리고 그 줄을 도로 파싱하면 첫 부름이 보낸 것과 같은 인자가 나온다 — 어느 폴더에서 치든.
+    const back = parseArgs(splitCommandLine(line).slice(1))
+    expect((back as { args: Record<string, unknown> }).args.cwd).toBe('D:/where-it-ran')
+  })
+
+  it('친 --cwd 가 있으면 메꾼 것이 없으므로 줄도 그대로다', () => {
+    const typed = { objective: 'o', cwd: 'D:/typed' }
+    expect(implicitArgs(typed, argsForCall({ cmd: 'run-create', args: typed, cwd: 'D:/elsewhere' }))).toEqual({})
   })
 })
 
@@ -690,22 +796,30 @@ describe('회복 줄은 진짜로 재생을 부른다', () => {
       onState: () => {},
       log: () => {}
     })
-    // 키를 안 단 부름이다 — id 는 이 프로세스가 새겼다(§8).
-    const argv = ['run-create', '--objective', '두 낱말', '--cwd', 'D:/p']
+    // 키를 안 단 부름이고, **`--cwd` 도 안 단 부름이다**(§8, 그리고 `implicitArgs`). 일부러 그렇게
+    // 둔다: `argsForCall` 이 메꾼 cwd 는 Host 가 지문에 넣는 값이므로, 회복 줄이 그것을 안 싣고
+    // 나가면 다른 폴더에서 다시 친 줄이 400 을 받는다 — 두 줄이 글자까지 같은데.
+    const argv = ['run-create', '--objective', '두 낱말']
     const first = parseArgs(argv)
     if ('error' in first) throw new Error(first.error)
     const request = mintRequestId()
-    const sent = await orch.call({ cmd: first.cmd, args: first.args, sessionId: 'sesA', request })
+    const sentArgs = argsForCall({ cmd: first.cmd, args: first.args, cwd: 'D:/where-it-ran' })
+    const sent = await orch.call({ cmd: first.cmd, args: sentArgs, sessionId: 'sesA', request })
     expect(sent.status).toBe(200)
     // …그리고 그 답이 오는 길에 사라졌다. 부르는 쪽이 손에 쥐는 것은 이 줄뿐이다.
-    const line = (lostAnswerDetails({ argv, request }) as { retryCommand: string }).retryCommand
+    const line = (
+      lostAnswerDetails({ argv, request, implicit: implicitArgs(first.args, sentArgs) }) as {
+        retryCommand: string
+      }
+    ).retryCommand
     const retyped = parseArgs(splitCommandLine(line).slice(1))
     if ('error' in retyped) throw new Error(retyped.error)
     const lifted = liftRequestId(retyped.args)
     if ('error' in lifted) throw new Error(lifted.error)
+    // 다시 친 줄은 **다른 폴더에서** 쳐진다 — 그것이 이 시험이 잡으려는 경우다.
     const again = await orch.call({
       cmd: retyped.cmd,
-      args: lifted.args,
+      args: argsForCall({ cmd: retyped.cmd, args: lifted.args, cwd: 'D:/somewhere-else' }),
       sessionId: 'sesA',
       request: lifted.request
     })
@@ -819,6 +933,34 @@ describe('callHost — 명령 하나를 Host 에 묻는다', () => {
     const f = fakeConn()
     void callHost({ conn: f.conn, cmd: 'jobs-list', args: {}, sessionId: '', timeoutMs: 1000 })
     expect(Object.hasOwn(f.sent[0], 'request')).toBe(false)
+  })
+
+  /**
+   * **저쪽이 붙인 낱말을 이쪽이 그대로 들고 온다.** 이 한 걸음이 없으면 `replayed` 는 Host 에서
+   * 봉투까지 오지 못하고, 재생된 404 는 첫 404 와 구별되지 않는다. 표시가 없는 보통 답에는 칸을
+   * 만들지 않는다 — 있고 `false` 인 것과 애초에 없는 것을 읽는 쪽이 가를 수 있어야 한다.
+   */
+  it('orch-result 의 재생·관찰 표시를 그대로 들고 온다', async () => {
+    const answered = async (extra: Partial<HostMessage & { replayed: true; observed: true }>) => {
+      const f = fakeConn()
+      const p = callHost({ conn: f.conn, cmd: 'run-create', args: {}, sessionId: '', timeoutMs: 1000 })
+      const call = (f.sent[0] as { call: string }).call
+      f.answer({ t: 'orch-result', call, status: 404, body: { error: 'nope' }, ...extra } as HostMessage)
+      return await p
+    }
+    expect(await answered({ replayed: true })).toEqual({
+      status: 404,
+      body: { error: 'nope' },
+      replayed: true
+    })
+    expect(await answered({ observed: true })).toEqual({
+      status: 404,
+      body: { error: 'nope' },
+      observed: true
+    })
+    const plain = await answered({})
+    expect(Object.hasOwn(plain, 'replayed')).toBe(false)
+    expect(Object.hasOwn(plain, 'observed')).toBe(false)
   })
 
   // 끊긴 뒤에 오는 답은 없지만, 두 번 답하는 Host 에 두 번 resolve 되면 안 된다.

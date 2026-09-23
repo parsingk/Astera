@@ -194,7 +194,13 @@ and those two failures hand it back in `error.details` with the two commands to 
 ```
 
 `queryCommand` asks what became of it; `retryCommand` is the line you ran with that id on it, for
-after you know. Both are ready to run as they stand.
+after you know.
+
+**Both lines are POSIX shell syntax** — bash, zsh, and Git Bash on Windows, which is where `astera`
+is usually run from. PowerShell reads the same quotes, apart from a value that contains a single
+quote of its own. `cmd.exe` does not read single quotes at all, so a value with a space in it has to
+be requoted there. Nothing in either line is ever left where a shell would expand it, so pasting one
+cannot run anything but `astera`.
 
 **`--request-id <id>` presents an id**, which is how a retry says that two calls are one request. Use
 it with an id an error handed back, or choose one up front so a CI step is idempotent by
@@ -202,6 +208,12 @@ construction. A command that already took effect is not done twice: the Host rep
 gave the first time, so a retrying script sees the run it created rather than a second one. A
 replayed answer carries `"replayed": true` beside `"ok"` and exits with the original answer's code,
 so a replayed 4 is still a 4.
+
+**`"observed": true` is the other answer to an id you had already used, and it means something
+else.** A command that commits and then waits, such as `ask` or `check --ack <id> --wait`, is not
+replayed from the record: handing back a recorded timeout would answer out of an earlier call's
+stopwatch and leave a retrying caller in a loop that cannot end. So the commit is not repeated, the
+command runs again, and the body is what is true now. Read it as a first answer, because it is one.
 
 **One id names one call.** Present the same id with a different command or different arguments and it
 is refused with exit 2, naming the command the id was first used for, rather than being answered with
@@ -211,6 +223,13 @@ different question.
 **Against a Host too old to keep receipts, a `--request-id` you typed is refused with exit 9** rather
 than run unprotected. The id minted for a command you did not key is dropped instead, and that
 command runs exactly as it always did.
+
+**That refusal is about a Host that answered and cannot help. Three answers never reach a Host at
+all, and there a request id simply does nothing rather than being refused**: `version` answers from
+the binary, because saying that the two builds differ is exactly what that command is for; a read the
+state file can answer is answered from the file when no Host is running; and a worker's report that
+cannot be delivered is written to the queue. None of the three can leave a receipt, and none of them
+can act twice either, which is why nothing is refused over the id.
 
 **`requests show` asks what became of an id, and its three answers all exit 0**, because not finding
 a receipt is an answer rather than a failure. `completed` means this Host ran the request, and
