@@ -6566,6 +6566,8 @@ export function registerIpc(
    *  file counts. */
   ipcMain.handle('settings.getFirstRunAsked', () => core.appSettings.getFirstRunAsked())
   ipcMain.handle('settings.markFirstRunAsked', () => core.appSettings.markFirstRunAsked())
+  /** Whether this launch recovered app-settings.json from a damaged file — answered true once. */
+  ipcMain.handle('settings.takeRecoveryNotice', () => core.appSettings.takeRecoveryNotice())
   ipcMain.handle('settings.getDefaultSessionKind', () => core.appSettings.getDefaultSessionKind())
   ipcMain.handle('settings.setDefaultSessionKind', async (_e, kind: unknown) => {
     if (kind !== 'terminal' && kind !== 'chat')

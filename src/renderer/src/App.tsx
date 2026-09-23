@@ -80,6 +80,7 @@ import * as sessionBus from './lib/sessionBus'
 import * as sticky from './lib/stickyProject'
 import { dismiss, toast } from './lib/toast'
 import { spawnNotice } from './lib/spawnNotice'
+import { announceSettingsRecovery } from './lib/settingsRecoveryNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
 import { quitConfirmBody, updateConfirmBody } from './lib/quitConfirm'
 import { toggleSidebarView, type SidebarView } from '../../core/ui/sidebar'
@@ -921,6 +922,9 @@ export default function App(): React.JSX.Element {
       .getFirstRunAsked()
       .then(setFirstRunAsked)
       .catch(() => setFirstRunAsked(true)) // could not tell — the quiet answer is the right one
+    // A damaged settings file was reset at load, with permission prompts on. An error toast, because
+    // it does not auto-dismiss: the person has to see that their settings changed.
+    void announceSettingsRecovery(window.api.settings.takeRecoveryNotice, (key) => toast.error(tRef.current(key)))
     // The schedule banner's one-shot read. 'session:schedState' is pushed on changes only, so a session
     // whose schedule was registered before this renderer existed — a reload, or main re-arming a
     // session while the window was still coming up — would wear no banner until its next due tick.

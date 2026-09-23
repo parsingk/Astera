@@ -39,6 +39,10 @@ export const en: Record<keyof typeof ko, string> = {
     'follow it there, so with this off a worker stalls on its first command. ' +
     'Sessions already running are unaffected. It applies from the next session.',
   'settings.agentPermission.saveFailed': 'Could not save the permission mode: {detail}',
+  'settings.recovered.toast':
+    'The settings file (app-settings.json) was damaged, so settings were reset to their defaults. ' +
+    'The damaged file is kept as app-settings.json.bak. To be safe, permission prompts are on: ' +
+    'turn on "Run agents without permission checks" in Settings > Agents to skip them again.',
   // Work unit tracking
   'settings.workUnit.label': 'Work unit tracking (experimental)',
   'settings.workUnit.hint':

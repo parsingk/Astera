@@ -729,11 +729,43 @@ describe('agentPermissionMode', () => {
     expect(store.getAgentPermissionMode()).toBe('yolo')
   })
 
-  it('a corrupt file resets it to yolo', async () => {
+  // I2: a file that cannot be read may have said 'manual'. Recovering to the 'yolo' default would
+  // turn the person's permission prompts off without their knowing, so recovery takes the narrower
+  // side for this one field. Every other field keeps its recovery default.
+  it('a corrupt file recovers to manual, not to the yolo default', async () => {
     await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    expect(await store.load()).toEqual({ recovered: true })
+    expect(store.getAgentPermissionMode()).toBe('manual')
+    expect(store.getResumeStrategy()).toBe('original')
+    expect(store.getGithubPolling()).toBe(true)
+  })
+
+  // The repair the CLI's and the Host's message points to ("open Astera to repair it") has to be on
+  // disk, or the Host keeps refusing and the next app start recovers all over again.
+  it('writes the recovered settings back, so the next reader sees a valid file that says manual', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    await new AppSettingsStore(file()).load()
+    const b = new AppSettingsStore(file())
+    expect(await b.load()).toEqual({ recovered: false })
+    expect(b.getAgentPermissionMode()).toBe('manual')
+    expect(await fs.readFile(file() + '.bak', 'utf8')).toBe('{ not json')
+  })
+
+  it('a missing file is still the yolo default, and nothing is announced', async () => {
     const store = new AppSettingsStore(file())
     await store.load()
     expect(store.getAgentPermissionMode()).toBe('yolo')
+    expect(store.takeRecoveryNotice()).toBe(false)
+  })
+
+  // The person is told once per recovery: the renderer asks at mount, and a reload must not repeat it.
+  it('a recovery is announced once', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.takeRecoveryNotice()).toBe(true)
+    expect(store.takeRecoveryNotice()).toBe(false)
   })
 })
 

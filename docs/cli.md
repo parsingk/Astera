@@ -288,7 +288,10 @@ session about `astera`, and about the features switched on in the app. There are
 installs them itself at launch and when a setting is turned on; these two commands are for checking,
 and for the times it has not yet done so. `--account <accountId>` narrows either to one account, and
 an id that is not in `accounts list` is a 4. A damaged `accounts.json` or `app-settings.json` is a 6,
-and the message says to open Astera, which repairs it. Neither command writes to either file. A
+and the message says to open Astera, which repairs it. Repairing `app-settings.json` keeps the
+damaged copy as `app-settings.json.bak` and writes every setting back at its default, with one
+exception: permission prompts are turned on ("Run agents without permission checks" is off), because
+the damaged file may have had them on. Astera tells you when it opens. Neither command writes to either file. A
 missing `app-settings.json` is not an error: it reads as every setting at its default, which is off.
 
 `skills list` reports, per account, every skill with `enabled` (whether its setting is on) and

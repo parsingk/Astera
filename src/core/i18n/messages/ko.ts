@@ -42,6 +42,11 @@ export const ko = {
     '프로젝트에 쌓아 둔 허용 목록(.claude/settings.local.json)도 따라오지 않아, 끄면 워커가 첫 명령에서 멈춥니다. ' +
     '이미 열려 있는 세션에는 적용되지 않습니다. 새 세션부터 동작합니다.',
   'settings.agentPermission.saveFailed': '권한 모드를 저장하지 못했습니다: {detail}',
+  // app-settings.json 이 손상되어 복구했을 때 한 번 뜨는 알림. 권한 확인은 켜진 쪽으로 복구된다
+  'settings.recovered.toast':
+    '설정 파일(app-settings.json)이 손상되어 설정을 기본값으로 되돌렸습니다. 손상된 파일은 ' +
+    'app-settings.json.bak 에 남겨 두었습니다. 안전을 위해 권한 확인은 켜 두었습니다. ' +
+    '설정 > 에이전트에서 "권한 확인 없이 에이전트 실행"을 다시 켜면 확인 없이 실행됩니다.',
   // Work Unit 추적
   'settings.workUnit.label': '작업 단위 추적 (실험)',
   'settings.workUnit.hint':

@@ -1112,6 +1112,9 @@ export interface CoreApi {
     getFirstRunAsked(): Promise<boolean>
     /** It has been put to them. Answering and dismissing are the same thing here: it asks once. */
     markFirstRunAsked(): Promise<void>
+    /** True once after main's load recovered app-settings.json from a damaged file (settings reset,
+     *  permission prompts on); asking clears it. */
+    takeRecoveryNotice(): Promise<boolean>
     /** Which kind the new-session and resume dialogs open on. Seeds the dialog's selection only —
      *  changing the kind inside the dialog is that session's business and is not written back. */
     getDefaultSessionKind(): Promise<SessionKind>

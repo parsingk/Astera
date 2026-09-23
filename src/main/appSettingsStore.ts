@@ -135,6 +135,8 @@ export class AppSettingsStore {
   /** Desktop notifications, one flag per event. Written and read as one object, so the four move
    *  together and there is one place that knows what a missing file means. */
   private desktopNotify: DesktopNotifySettings = { ...DESKTOP_NOTIFY_DEFAULTS }
+  /** Whether the last load recovered from a damaged file and the person has not been told yet. */
+  private recoveryNotice = false
 
   constructor(private filePath: string) {}
 
@@ -248,15 +250,34 @@ export class AppSettingsStore {
       this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
       this.generator = {}
       this.resumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
-      this.agentPermissionMode = 'yolo'
+      // **The narrower side, not the default** (I2). The file may have said 'manual', and the 'yolo'
+      // default would turn the person's permission prompts off without their knowing: every worker
+      // after this, the app's or the Host's, would start with the bypass. So a recovered profile
+      // asks, and the renderer says so (takeRecoveryNotice). Every other field takes its default.
+      this.agentPermissionMode = 'manual'
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
       this.defaultSessionKind = 'terminal'
       // A file that could not be read is still a file: this person has used the app before, and a
       // corrupt settings file is not a reason to put a first-run question in front of them.
       this.firstRunAsked = true
+      this.recoveryNotice = true
+      // Written back now rather than at the next setting change: the CLI and the Host refuse a
+      // damaged file and tell the person to open Astera to repair it, so opening Astera has to leave a
+      // valid file behind. The damaged one is already in .bak. A failed write leaves the file as it
+      // was, which the next launch recovers again; it must not reject load (createCore).
+      await this.persist().catch(() => {})
       return { recovered: true }
     }
+  }
+
+  /** True once after a load that recovered from a damaged file: the settings were reset and
+   *  permission prompts are on. The renderer asks at mount and shows it; asking clears it, so a
+   *  renderer reload does not repeat it. */
+  takeRecoveryNotice(): boolean {
+    const notice = this.recoveryNotice
+    this.recoveryNotice = false
+    return notice
   }
 
   getLang(): Lang | null {
