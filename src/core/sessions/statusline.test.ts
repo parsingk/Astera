@@ -341,6 +341,24 @@ describe('StatusLineManager.ensureFiles (the Host half)', () => {
     } finally { spy.mockRestore() }
   })
 
+  // A Host-only spawn on a fresh profile (the app's startupCleanup never ran): the capture scripts
+  // write into these folders with the error swallowed, so without them the output is lost silently.
+  it('creates the statusline output folder and the hook events folder when they are missing', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.ensureFiles()
+    expect((await fs.stat(mgr.hookEventsDir)).isDirectory()).toBe(true)
+    expect((await fs.stat(path.join(dir, 'statusline'))).isDirectory()).toBe(true)
+  })
+
+  it('keeps what the statusline output folder already holds', async () => {
+    const mgr = new StatusLineManager(dir)
+    const payload = path.join(dir, 'statusline', 'ses_live.json')
+    await fs.mkdir(path.dirname(payload), { recursive: true })
+    await fs.writeFile(payload, '{}')
+    await mgr.ensureFiles()
+    expect(await fs.readFile(payload, 'utf8')).toBe('{}')
+  })
+
   it('startupCleanup empties the hook events folder, as init always has', async () => {
     const mgr = new StatusLineManager(dir)
     await fs.mkdir(mgr.hookEventsDir, { recursive: true })

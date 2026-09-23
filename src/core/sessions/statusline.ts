@@ -207,8 +207,9 @@ export class StatusLineManager {
     await this.startupCleanup()
   }
 
-  /** Writes the capture scripts and both settings files, skipping identical content. Never deletes
-   *  anything. The Host calls this and only this: the hook events are its running sessions'. */
+  /** Writes the capture scripts and both settings files, skipping identical content, and creates the
+   *  folders the scripts write into. Never deletes anything. The Host calls this and only this: the
+   *  hook events are its running sessions'. */
   async ensureFiles(): Promise<void> {
     await fs.mkdir(this.userDataDir, { recursive: true })
     // Written whole and then swapped in: sessions still running from before this launch run these
@@ -320,6 +321,12 @@ export class StatusLineManager {
       }
     }
     await writeScript(this.hooksSettingsFile, JSON.stringify(hooksSettings, null, 2))
+    // The folders the capture scripts write into. Both scripts swallow a write error, so a session
+    // spawned before these exist (the Host's first spawn on a fresh profile, where the app's
+    // startupCleanup never ran) would lose its statusline and hook output silently. Creating a folder
+    // that is already there touches nothing in it.
+    await fs.mkdir(this.hookEventsDir, { recursive: true })
+    await fs.mkdir(this.outDir, { recursive: true })
   }
 
   /** The app-start half: empties the hook events folder (a queue the app drains) and makes the
