@@ -182,8 +182,22 @@ export class StatusLineManager {
       // wait on the capture's node process (about 0.1 s through Git Bash) before every prompt; it
       // honours that for both events (2.1.280 forces a hook synchronous only on its SessionStart,
       // Setup and MessageDisplay passes and on calls from a cloud session). Being async, the two can
-      // land out of order, which is what the capture's stamp is for (core/hooks/eventTime.ts). A
-      // session reads this file when it starts, so one already running keeps the hooks it started with.
+      // land out of order, which is what the capture's stamp is for (core/hooks/eventTime.ts).
+      //
+      // **A session keeps the hooks it started with.** Claude Code 2.1.280 reads a `--settings`
+      // file once, at startup: `Wyo` reads it and pins its content
+      // (`replaceFlagSettingsFilePinnedContent`), and every later settings load parses that pinned
+      // content, not the file (`flagExpectedContent: nA() ?? Ase()`, which `tve` uses in place of a
+      // read). Its settings watcher skips the source outright (`xD`:
+      // `if(Y==="flagSettings")continue`). So rewriting this file at app start never reaches a
+      // running session, not even when another settings change refreshes that session's hooks
+      // snapshot (`jlt` → `updateHooksConfigSnapshot`). A session opened before a hook was added here
+      // has to be reopened to get it. The capture script is different: it is run by path, so a
+      // running session's existing hooks run the rewritten script, stamp included.
+      //
+      // Nothing marks such a session today. A mark would need a hook-set version in the pty note at
+      // spawn, and every session spawned before the mark existed would carry none, whether or not
+      // it has these hooks, so it could not tell the two apart. docs/cli.md says it instead.
       UserPromptSubmit: [{ hooks: [{ type: 'command', command: hookCmd, async: true }] }],
       StopFailure: [{ hooks: [{ type: 'command', command: hookCmd, async: true }] }]
     }

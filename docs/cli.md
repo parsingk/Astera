@@ -319,8 +319,12 @@ say what the prompt is. Read the screen before you answer it.
 Where the hooks cannot see, `state` can lag or be wrong:
 
 - **Sessions started before this version of Astera** have only the hooks they started with: no
-  `UserPromptSubmit` and no `StopFailure`. They usually read `unknown` while a turn runs, and a turn ended by
-  an API error leaves its last tool event standing, `working`. Open a new session to get the hooks.
+  `UserPromptSubmit` and no `StopFailure`. Claude Code reads the hook settings Astera gives a session
+  once, when the session starts, and does not watch that file afterwards, so restarting or updating
+  Astera does not add hooks to a session that is already running. Such a session usually reads
+  `unknown` while a turn runs, and a turn ended by an API error leaves its last tool event standing,
+  `working`. Astera cannot tell these sessions apart from newer ones. Open a new session, or resume
+  the old one in a new tab, to get the hooks.
 - A permission dialog reads `working` for its first few seconds. Claude Code sends the permission
   notification only once the dialog has been up that long.
 - A prompt queued while a turn is ending can read `waiting` for a moment, until its own
