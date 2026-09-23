@@ -222,6 +222,11 @@ prints the whole orchestration guide, which is a reference for agents rather tha
 and it folds in that one. A Job is the plan, a run is one execution of it. Jobs that only ever run
 once never need the `runs` commands.
 
+**A list narrowed to an id that does not exist is a 4, not an empty list**: `runs list --job` with
+an unknown Job, and `tasks list --run` with an unknown run. An empty list would read as "that Job
+has no runs". `nextSteps` is the list that gives the missing kind of id, `astera jobs list` and
+`astera runs list` respectively.
+
 **`jobs run` refuses a Job that is already running** and names the run that is going. It returns the
 run it started, which is the id to pass to `runs wait`.
 

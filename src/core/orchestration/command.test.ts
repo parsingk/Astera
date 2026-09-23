@@ -6030,6 +6030,23 @@ describe('없는 id 는 404 — 순수 층의 거절을 내보내던 자리들',
     expect(await call(deps, 'check', { run: runId })).toEqual({ status: 200, body: { count: 0, messages: [] } })
   })
 
+  // 감사 #101. 이름 댄 id 가 없으면 404 라는 규칙이 여기만 빠져 있었다 — 빈 목록은 "그 Job 에 회차가
+  // 없다" 로 읽힌다. 회차 id 를 --job 에 준 것도 없는 Job 이다.
+  it('runs list --job 이 없는 Job 이면 404 다 — 빈 목록이 아니라', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const jobId = deps.getState().runs[0].jobId
+    expect(await call(deps, 'runs-list', { job: 'job_nope' })).toEqual({
+      status: 404,
+      body: { error: 'unknown job: job_nope' }
+    })
+    expect((await call(deps, 'runs-list', { job: runId })).status).toBe(404)
+    const listed = await call(deps, 'runs-list', { job: jobId })
+    expect(listed.status).toBe(200)
+    expect((listed.body as { id: string }[]).map((r) => r.id)).toEqual([runId])
+  })
+
   it('tasks list --run 이 없는 회차면 404 다 — 빈 목록이 아니라', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })

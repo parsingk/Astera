@@ -197,6 +197,12 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'tasks-list' })).toEqual(['astera runs list'])
   })
 
+  // 같은 모양의 반대쪽: runs list 가 못 찾는 것은 `--job` 의 Job 이다. `runs list` 를 다시 권하면
+  // 회차 id 가 나오고, 그것을 --job 에 주면 다시 404 다.
+  it('runs list 의 404 는 Job 목록으로 간다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'runs-list' })).toEqual(['astera jobs list'])
+  })
+
   // 세션 전용 명령은 무엇을 못 찾았다고 말하는지가 갈래다 — run-create 가 못 찾는 것은
   // 회차가 아니라 계정이다.
   it('세션 전용 명령은 그것이 못 찾은 것의 목록으로 이어진다', () => {

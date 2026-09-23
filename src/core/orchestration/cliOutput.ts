@@ -227,6 +227,9 @@ const LISTING: Record<string, readonly string[]> = {
   // **The Run of `--run`, not a Task.** The noun rule would offer `tasks list` again, which gives
   // Task ids; `runs list` gives run ids and is public.
   'tasks-list': ['astera runs list'],
+  // **The Job of `--job`, not a run** — the same shape the other way round. The noun rule would offer
+  // `runs list` again, which gives run ids, and a run id given to `--job` is the same 404.
+  'runs-list': ['astera jobs list'],
   // **The Task or Dispatch a worker_done named** — the same two lines as `worker-*`, the first
   // giving the second its `<taskId>`. `send` is a worker's command, so neither line may be
   // coordinator-only, and neither is.
