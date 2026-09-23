@@ -440,16 +440,33 @@ const refused = (r: { error: string; missing?: true }): Reply =>
   r.missing ? notFound(r.error) : bad(r.error)
 const denied = (msg: string): Reply => ({ status: 403, body: { error: msg } })
 const conflict = (msg: string): Reply => ({ status: 409, body: { error: msg } })
+/** How long after its `startedAt` a `pending:` Dispatch still counts as a start in flight (Host S2
+ *  fix round 2, N1). A start waits at most a spawn deadline (SPAWN_DEADLINE_MS, 20 s) plus the
+ *  coordinator's idle wait before its prompt (30 s), plus trust and account reads; two minutes covers
+ *  that with room to spare, and a test pins that it stays above the sum. Past it, the placeholder is
+ *  a start that died: an app that quit inside worker-start leaves one, and nothing else ever closes
+ *  it, so the stop goes ahead. */
+export const PENDING_START_WINDOW_MS = 2 * 60_000
+
 /** The refusal of every command that stops workers, for a Dispatch whose worker-start has not
  *  answered yet (Host S2 fix round, I1). Its session id is still the `pending:` placeholder, so there
  *  is nothing to kill, and the spawn may still complete and write the real id onto the Dispatch.
  *  Recording it stopped would leave a live agent on a closed Dispatch, and the next `--retry-of`
  *  would put a second one in the same worktree. So the command writes nothing and says to try again.
- *  Null when no such Dispatch is among `open`. */
-const stillStarting = (open: readonly Dispatch[]): Reply | null => {
-  const d = open.find((x) => isPlaceholderSessionId(x.sessionId))
+ *
+ *  **Only inside the start window** (`PENDING_START_WINDOW_MS`, fix round 2). An older placeholder
+ *  is a start that died, and refusing it forever would leave a Dispatch nothing can close short of
+ *  `worker-abandon` or a Host restart. Such a one goes ahead, with no release (`releases`).
+ *  Null when no Dispatch among `open` is still starting. */
+const stillStarting = (open: readonly Dispatch[], now: string): Reply | null => {
+  const d = open.find(
+    (x) => isPlaceholderSessionId(x.sessionId) && Date.parse(now) - Date.parse(x.startedAt) < PENDING_START_WINDOW_MS
+  )
   return d ? conflict(`the worker is still starting; try again in a moment (dispatch ${d.id})`) : null
 }
+/** Whether stopping this Dispatch has a session to kill. A placeholder that got past `stillStarting`
+ *  is a start that died: no pty was ever opened for it, so there is nothing to release. */
+const releases = (d: Dispatch): boolean => !isPlaceholderSessionId(d.sessionId)
 
 /**
  * 계획과 회차에 붙는 파생값 — 공개 읽기 표면이 상태를 말하는 방식(공개 CLI 설계 §6).
@@ -1089,9 +1106,9 @@ export async function handleCommand(
         return conflict(
           `refusing to stop while ${retained.length} dispatch(es) are held by worker-retain — release them first`
         )
-      const starting = stillStarting(open)
+      const starting = stillStarting(open, now)
       if (starting) return starting
-      for (const d of open) await deps.releaseWorker({ dispatchId: d.id })
+      for (const d of open.filter(releases)) await deps.releaseWorker({ dispatchId: d.id })
       const stopped = new Set(open.map((d) => d.id))
       const latest = deps.getState()
       await deps.setState({
@@ -1211,11 +1228,11 @@ export async function handleCommand(
           return conflict(
             `refusing to delete while ${retained.length} dispatch(es) are held by worker-retain — release them first`
           )
-        const starting = stillStarting(open)
+        const starting = stillStarting(open, now)
         if (starting) return starting
         // 순차로 닫는다. releaseWorker 는 세션을 죽이는 부수 효과이고 상태를 쓰지 않는다 — 상태에서
         // 사라지는 것은 아래 deleteRuns 가 한꺼번에 한다.
-        for (const d of open) await deps.releaseWorker({ dispatchId: d.id })
+        for (const d of open.filter(releases)) await deps.releaseWorker({ dispatchId: d.id })
       }
       // **병합이 먼저다.** 사람이 병합을 골랐는데 실패한 뒤 지우면 워커의 일이 워크트리 브랜치에
       // 갇힌 채 그 브랜치까지 사라진다 — 그래서 실패하면 아무것도 지우지 않고 이유를 돌려준다.
@@ -1388,11 +1405,11 @@ export async function handleCommand(
         return conflict(
           `refusing to pause while ${retained.length} dispatch(es) are held by worker-retain — release them first`
         )
-      const starting = stillStarting(open)
+      const starting = stillStarting(open, now)
       if (starting) return starting
       // 세션을 닫는 것은 부수 효과이고 상태를 쓰지 않는다 — 상태에서 닫히는 것은 아래
       // pauseSchedule 이 한꺼번에 한다(run-delete 가 releaseWorker 를 쓰는 순서와 같다).
-      for (const d of open) await deps.releaseWorker({ dispatchId: d.id })
+      for (const d of open.filter(releases)) await deps.releaseWorker({ dispatchId: d.id })
       return commit(pauseSchedule(s, id, now))
     }
     case 'run-resume': {
@@ -1980,9 +1997,9 @@ export async function handleCommand(
         )
       // Only an open Dispatch: a closed one carrying a placeholder is a start that failed, and has
       // nothing still starting.
-      const starting = !d.outcome && !d.endedAt ? stillStarting([d]) : null
+      const starting = !d.outcome && !d.endedAt ? stillStarting([d], now) : null
       if (starting) return starting
-      await deps.releaseWorker({ dispatchId: d.id })
+      if (releases(d)) await deps.releaseWorker({ dispatchId: d.id })
       await deps.setState({
         ...deps.getState(),
         dispatches: deps

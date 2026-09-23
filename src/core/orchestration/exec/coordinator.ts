@@ -121,7 +121,7 @@ const IDLE_POLL_MS = 50
  *  function forever, the worker-start HTTP response above it would never finish either, and one of
  *  the orchestrator's shell commands would hang with no output. 30s is generous compared to a normal
  *  busy frame (a few seconds) while still always elapsing before the user's next turn starts. */
-const DEFAULT_IDLE_WAIT_TIMEOUT_MS = 30_000
+export const DEFAULT_IDLE_WAIT_TIMEOUT_MS = 30_000
 
 /** Limit on the whole knowledgeIn scan (below). The scan is a handful of readdir calls on local
  *  disk — sub-millisecond in the healthy case — so 2s is far past anything a working repository

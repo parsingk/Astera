@@ -2,11 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { handleCommand, handleExit, type HostSession, type OrchServerDeps, type SessionScreen } from './command'
+import { handleCommand, handleExit, PENDING_START_WINDOW_MS, type HostSession, type OrchServerDeps, type SessionScreen } from './command'
+import { SPAWN_DEADLINE_MS } from '../host/unresponsive'
 import { ensureProject } from './projects'
 import { absPath } from '../testPaths'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
-import { OrchCoordinator, type CoordinatorDeps } from './exec/coordinator'
+import { DEFAULT_IDLE_WAIT_TIMEOUT_MS, OrchCoordinator, type CoordinatorDeps } from './exec/coordinator'
 import { OrchestrationStore } from './store'
 import {
   applyValidationResult,
@@ -6156,9 +6157,12 @@ describe('version / status — 공개 표면의 두 읽기', () => {
 // real id onto the Dispatch. Recording it stopped would leave a live agent on a closed Dispatch, so the
 // four commands that stop workers refuse, and write nothing.
 describe('stopping a worker that is still starting', () => {
-  const pendingPatch = (s: OrchState, dispatchId: string): OrchState => ({
+  /** `startedAt` minus this many ms: 0 is a start still in its window, STALE one long past it. */
+  const STALE = PENDING_START_WINDOW_MS + 60_000
+  const ago = (ms: number): string => new Date(Date.parse(NOW) - ms).toISOString()
+  const pendingPatch = (s: OrchState, dispatchId: string, age = 0): OrchState => ({
     ...s,
-    dispatches: s.dispatches.map((d) => (d.id === dispatchId ? { ...d, sessionId: 'pending:abc' } : d))
+    dispatches: s.dispatches.map((d) => (d.id === dispatchId ? { ...d, sessionId: 'pending:abc', startedAt: ago(age) } : d))
   })
   const tracked = (deps: OrchServerDeps & { state: OrchState }): string[] => {
     const released: string[] = []
@@ -6167,7 +6171,7 @@ describe('stopping a worker that is still starting', () => {
     }
     return released
   }
-  const withPendingWorker = async () => {
+  const withPendingWorker = async (age = 0) => {
     const deps = makeDeps()
     const released = tracked(deps)
     await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
@@ -6175,10 +6179,10 @@ describe('stopping a worker that is still starting', () => {
     const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
     const w = await call(deps, 'worker-start', { task: (t.body as { id: string }).id, agent: 'codex', account: 'acc1' })
     const dispatchId = (w.body as { dispatchId: string }).dispatchId
-    await deps.setState(pendingPatch(deps.getState(), dispatchId))
+    await deps.setState(pendingPatch(deps.getState(), dispatchId, age))
     return { deps, released, runId, dispatchId }
   }
-  const withPendingScheduledWorker = async () => {
+  const withPendingScheduledWorker = async (age = 0) => {
     const deps = makeDeps()
     const released = tracked(deps)
     const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, schedule: { kind: 'daily', time: '09:00' } })
@@ -6188,7 +6192,7 @@ describe('stopping a worker that is still starting', () => {
       ...deps.getState(),
       runs: [...deps.getState().runs, { id: 'run_kid', jobId: templateId, ordinal: 1, createdAt: NOW }],
       tasks: [{ id: 'tsk_kid', runId: 'run_kid', title: 't', spec: 's', deps: [], status: 'dispatched', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }],
-      dispatches: [{ id: 'dsp_kid', taskId: 'tsk_kid', provider: 'claude', accountId: 'acc1', sessionId: 'pending:abc', cwd: 'D:/p', specPath: '', startedAt: NOW, workerState: 'ready', retained: false }]
+      dispatches: [{ id: 'dsp_kid', taskId: 'tsk_kid', provider: 'claude', accountId: 'acc1', sessionId: 'pending:abc', cwd: 'D:/p', specPath: '', startedAt: ago(age), workerState: 'ready', retained: false }]
     })
     return { deps, released, templateId }
   }
@@ -6224,5 +6228,37 @@ describe('stopping a worker that is still starting', () => {
     refusedAsStarting(await call(deps, 'run-pause', { run: templateId }))
     expect(released).toEqual([])
     expect(deps.getState()).toBe(before)
+  })
+
+  // Fix round 2, N1: past the start window a placeholder is a start that died (an app that quit inside
+  // worker-start leaves one, and nothing rolls it back). There is no pty to kill, so the stop goes
+  // ahead without a release and closes it as a Stop did before the refusal existed.
+  it('the start window is longer than a spawn deadline plus the idle wait, with room to spare', () => {
+    expect(PENDING_START_WINDOW_MS).toBeGreaterThan(SPAWN_DEADLINE_MS + DEFAULT_IDLE_WAIT_TIMEOUT_MS + 30_000)
+  })
+  it('worker-stop closes a stale placeholder as stopped, and kills nothing', async () => {
+    const { deps, released, dispatchId } = await withPendingWorker(STALE)
+    expect((await call(deps, 'worker-stop', { dispatch: dispatchId })).status).toBe(200)
+    expect(released).toEqual([])
+    expect(deps.getState().dispatches.find((d) => d.id === dispatchId)).toMatchObject({ workerState: 'stopped', closedBy: 'stop', endedAt: NOW })
+  })
+  it('runs-stop closes a stale placeholder and pauses the run, and kills nothing', async () => {
+    const { deps, released, runId, dispatchId } = await withPendingWorker(STALE)
+    expect((await call(deps, 'runs-stop', { id: runId })).status).toBe(200)
+    expect(released).toEqual([])
+    expect(deps.getState().dispatches.find((d) => d.id === dispatchId)?.workerState).toBe('stopped')
+    expect(deps.getState().runs.find((r) => r.id === runId)?.paused).toBe(true)
+  })
+  it('run-delete of a scheduled Job goes ahead over a stale placeholder, and kills nothing', async () => {
+    const { deps, released, templateId } = await withPendingScheduledWorker(STALE)
+    expect((await call(deps, 'run-delete', { id: templateId })).status).toBe(200)
+    expect(released).toEqual([])
+    expect(deps.getState().jobs).toHaveLength(0)
+  })
+  it('run-pause goes ahead over a stale placeholder and closes it, and kills nothing', async () => {
+    const { deps, released, templateId } = await withPendingScheduledWorker(STALE)
+    expect((await call(deps, 'run-pause', { run: templateId })).status).toBe(200)
+    expect(released).toEqual([])
+    expect(deps.getState().dispatches[0].endedAt).toBeDefined()
   })
 })

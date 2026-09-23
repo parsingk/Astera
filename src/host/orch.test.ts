@@ -13,6 +13,7 @@ import {
   RECEIPTS_TOTAL,
   RECEIPT_TTL_MS
 } from './orch'
+import { PENDING_START_WINDOW_MS } from '../core/orchestration/command'
 import {
   applyWorkerDone,
   attachCoordinator,
@@ -1966,6 +1967,26 @@ describe('Host-local spawn (S2)', () => {
     expect(d.sessionId).toBe('ses_host')
     expect(d.endedAt).toBeUndefined()
     expect(d.workerState).not.toBe('stopped')
+  })
+  // Fix round 2, N1: a placeholder past its start window is a start that died, and nothing else will
+  // ever close it. The Host's stop closes it as a Stop always did, with no release to call.
+  it('stops a Dispatch left on a placeholder long past its start window, and releases nothing', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW); if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW); if (!task.ok) throw new Error(task.error)
+    const stale = new Date(Date.parse(NOW) - PENDING_START_WINDOW_MS - 60_000).toISOString()
+    const dsp = openDispatch(task.state, { taskId: task.value.id, provider: 'claude', accountId: 'acc1', sessionId: 'pending:dead', cwd: 'D:/p', specPath: '' }, stale)
+    if (!dsp.ok) throw new Error(dsp.error)
+    const l = local()
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    // Pushed by an app rather than loaded: a load's restart cleanup would close it on its own, and the
+    // case is a Host that is not restarting.
+    await orch.call({ cmd: 'state-put', args: { state: dsp.state }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    expect(orch.state().dispatches[0].endedAt).toBeUndefined()
+    const r = await orch.call({ cmd: 'worker-stop', args: { dispatch: dsp.value.id }, sessionId: '' })
+    expect(r.status).toBe(200)
+    expect(l.releaseWorker).not.toHaveBeenCalled()
+    expect(orch.state().dispatches[0]).toMatchObject({ workerState: 'stopped', closedBy: 'stop' })
   })
   // R1: S3 is not here yet.
   it('still refuses --worktree new with no app, 409, leaving no Dispatch', async () => {
