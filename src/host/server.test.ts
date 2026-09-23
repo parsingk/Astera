@@ -507,6 +507,21 @@ describe('startHostServer', () => {
     app.socket.end()
     await vi.waitFor(() => expect(gone).toEqual([expect.objectContaining({ role: 'app' })]))
   })
+  // I2: the hook runs inside the socket's 'close' event. A throw there is uncaught and ends the Host,
+  // and even caught it would skip the idle arming that follows it.
+  it('survives an onClientGone that throws, and still arms the idle timer', async () => {
+    let idled = false
+    const h = await server({
+      idleMs: 50,
+      onIdle: () => { idled = true },
+      onClientGone: () => { throw new Error('hook broke') }
+    })
+    await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
+    await vi.waitFor(() => expect(idled).toBe(true))
+    expect(h.logs.some((l) => l.includes('hook broke'))).toBe(true)
+    const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
+    expect(reply).toMatchObject({ t: 'hello' })
+  })
   it('does not report a peer that never said hello', async () => {
     const gone: unknown[] = []
     const h = await start({ onClientGone: (from) => gone.push(from) })

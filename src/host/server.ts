@@ -371,7 +371,14 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           p.settle({ ok: false, error: 'the Astera app disconnected before it answered' })
         }
       live = Math.max(0, live - 1)
-      if (wasGreeted) deps.onClientGone?.({ role, socket: socketNo })
+      // Inside the socket's 'close' event, where a throw is uncaught and ends the Host with every pty it
+      // holds; and even caught, it would skip the idle arming below and the Host would never leave.
+      if (wasGreeted)
+        try {
+          deps.onClientGone?.({ role, socket: socketNo })
+        } catch (err) {
+          deps.log.write(`onClientGone failed for socket ${socketNo}: ${String(err)}`)
+        }
       if (live === 0) armIdle()
     }
     socket.on('close', gone)
