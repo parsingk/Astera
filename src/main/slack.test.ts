@@ -148,12 +148,19 @@ describe('SlackNotifier 훅 이벤트', () => {
   // **한도는 이미 알린다 — 두 번 알리지 않는다.** 롤링 체인은 transcript 의 같은 `error: rate_limit`
   // 항목을 읽어(core/rolling/claudeSignal.ts) onRollState 로 "⏸ 한도 도달" 을 보낸다. StopFailure 의
   // `error` 는 그 항목과 같은 메시지에서 온다.
+  // 비롤링 쪽은 몇 초 기다렸다 보내므로, 기다림이 끝난 뒤에 봐야 이 건너뜀이 지켜진다 — 곧바로 보면
+  // 건너뜀 줄을 지워도 아직 아무것도 안 나간 채로 통과한다.
   it('롤링 체인 세션의 rate_limit StopFailure 는 아무것도 보내지 않는다', async () => {
-    const h = setup()
-    h.notifier.register(info({ rollAccountIds: ['acc-1'] }))
-    h.notifier.onHookEvent('s-1', stopFailure('rate_limit', "You've hit your session " + 'limit · resets 3pm'))
-    await flush()
-    expect(h.sent).toEqual([])
+    vi.useFakeTimers()
+    try {
+      const h = setup()
+      h.notifier.register(info({ rollAccountIds: ['acc-1'] }))
+      h.notifier.onHookEvent('s-1', stopFailure('rate_limit', "You've hit your session " + 'limit · resets 3pm'))
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(h.sent).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   // **비롤링 세션은 문구가 아니라 증거로 가른다.** 화면의 한도 감지(handleData)가 "⛔ 한도 도달" 을
@@ -191,6 +198,18 @@ describe('SlackNotifier 훅 이벤트', () => {
         h.notifier.handleData({ sessionId: 's-1', data: SCREEN_LIMIT })
         await vi.advanceTimersByTimeAsync(10_000)
         expect(h.sent).toEqual(['[myproj · work1] ⛔ 한도 도달 — 자동 재개 없음'])
+      }))
+
+    // 기다리는 몇 초 사이에 Host 재연결로 같은 id 의 기록이 다시 만들어지면, 감지는 새 기록에 적힌다.
+    // 타이머가 옛 기록만 보면 그 감지를 못 보고 "⚠️" 를 하나 더 보낸다.
+    it('기다리는 사이 기록이 다시 만들어져도 새 기록의 감지를 본다', () =>
+      run(async (h) => {
+        h.notifier.onHookEvent('s-1', stopFailure('rate_limit', FABLE))
+        await vi.advanceTimersByTimeAsync(500)
+        h.notifier.register(info())
+        h.notifier.handleData({ sessionId: 's-1', data: SCREEN_LIMIT })
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(h.sent.filter((m) => m.includes('⚠️'))).toEqual([])
       }))
 
     // 10분 안의 두 번째 한도는 "⛔" 가 중복으로 걸러진다. 그래도 알린 것으로 친다 — 이미 한 번 알렸다.

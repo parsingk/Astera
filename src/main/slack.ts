@@ -907,14 +907,19 @@ export class SlackNotifier {
     const message = typeof lastMessage === 'string' ? lastMessage.trim() : ''
     let text = message !== '' ? message : typeof error === 'string' && error !== '' ? error : 'unknown'
     if (text.length > EXCERPT_MAX) text = text.slice(0, EXCERPT_MAX) + '…'
-    const post = (): void => void this.send(record, t(this.deps.lang(), 'slack.chat.turnFailed', { message: text }))
-    if (error !== 'rate_limit') return post()
+    const post = (to: SlackRecord): void =>
+      void this.send(to, t(this.deps.lang(), 'slack.chat.turnFailed', { message: text }))
+    if (error !== 'rate_limit') return post(record)
     if ((record.info.rollAccountIds?.length ?? 0) >= 1) return
     const hookAt = this.now()
     setTimeout(() => {
-      const seen = record.limitSeenAt
+      // Looked up again: a Host reconnect can rebuild the record under the same id during the wait, and
+      // the scanner then marks the new one. A record that is gone keeps the old one, which posts into
+      // its own thread the way the exit notice does.
+      const current = this.records.get(record.info.id) ?? record
+      const seen = current.limitSeenAt
       if (seen !== undefined && seen >= hookAt - LIMIT_SEEN_WINDOW_MS) return
-      post()
+      post(current)
     }, STOP_FAILURE_DELAY_MS)
   }
 
