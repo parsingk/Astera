@@ -93,6 +93,8 @@ export class PtyRegistry {
   // the same output and exits, and a second subscriber must not silently disconnect the first.
   private readonly dataCbs = new Set<(id: string, data: string) => void>()
   private readonly exitCbs = new Set<(id: string, exitCode: number) => void>()
+  /** Listeners that have thrown, by kind, so each is logged once and not on every chunk. */
+  private readonly failedCbs = { data: new Set<unknown>(), exit: new Set<unknown>() }
   private readonly deps: PtyRegistryDeps
   /** `slice(-0)` returns the whole string, so a scrollback of 0 would turn the cap off rather than
    *  down. One character is the smallest honest answer to "keep almost nothing". Computed once here,
@@ -148,7 +150,7 @@ export class PtyRegistry {
     pty.onData((d) => {
       // The same shape TerminalManager's own buffer uses: append, then keep the tail.
       entry.buffer = (entry.buffer + d).slice(-this.scrollback)
-      for (const cb of this.dataCbs) cb(a.id, d)
+      for (const cb of this.dataCbs) this.tell(cb, 'data', a.id, () => cb(a.id, d))
     })
     pty.onExit(({ exitCode }) => {
       entry.alive = false
@@ -169,10 +171,25 @@ export class PtyRegistry {
       // "it ended while I was away" from "it was never here".
       entry.buffer = ''
       this.deps.log(`pty ${a.id} exited ${exitCode}`)
-      for (const cb of this.exitCbs) cb(a.id, exitCode)
+      for (const cb of this.exitCbs) this.tell(cb, 'exit', a.id, () => cb(a.id, exitCode))
     })
     this.deps.log(`pty ${a.id} started, pid ${pty.pid}`)
     return { ok: true, pid: pty.pid }
+  }
+
+  /** Calls one listener and keeps its throw to itself. **The registry owns the fan-out, so it is the
+   *  one place that isolates it**: a throw would otherwise skip every listener after it (the app's
+   *  broadcast among them) and then escape into node-pty's own event handler, where nothing catches it
+   *  and the Host exits with every pty it holds. Logged once per listener and kind, because a
+   *  listener that throws on one chunk usually throws on every chunk. */
+  private tell(cb: unknown, kind: 'data' | 'exit', id: string, call: () => void): void {
+    try {
+      call()
+    } catch (err) {
+      if (this.failedCbs[kind].has(cb)) return
+      this.failedCbs[kind].add(cb)
+      this.deps.log(`pty ${id}: a ${kind} listener threw, and is logged only this once: ${String(err)}`)
+    }
   }
 
   /** Every command is a no-op for an id the registry does not have. The app can legitimately send one

@@ -403,4 +403,25 @@ describe('the last screen of a session that ended badly', () => {
     expect(h.r.sessionExitCode('ses_1')).toBeNull()
     expect(h.r.sessionExitCode('nope')).toBeNull()
   })
+
+  // I1: a listener that throws must not starve the ones after it, and must not escape into node-pty's
+  // own event handler, where nothing catches it and the Host would exit with every pty it holds.
+  it('keeps calling the other listeners when one throws, and lets nothing escape', () => {
+    const p = fakePty()
+    const h = registry({ pty: p })
+    h.r.onData(() => { throw new Error('tap broke') })
+    h.r.onExit(() => { throw new Error('exit tap broke') })
+    const data: string[] = []; const exits: number[] = []
+    h.r.onData((_id, d) => data.push(d))
+    h.r.onExit((_id, c) => exits.push(c))
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    expect(() => { p.emit('x'); p.emit('y'); p.exit(2) }).not.toThrow()
+    expect([data, exits]).toEqual([['x', 'y'], [2]])
+    // Once per listener per kind: a tap that throws on every chunk must not flood the log.
+    const dataLogs = h.logs.filter((l) => l.includes('tap broke') && !l.includes('exit tap'))
+    const exitLogs = h.logs.filter((l) => l.includes('exit tap broke'))
+    expect(dataLogs).toHaveLength(1)
+    expect(exitLogs).toHaveLength(1)
+    expect(dataLogs[0]).toContain('p1')
+  })
 })
