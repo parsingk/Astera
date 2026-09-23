@@ -1611,6 +1611,10 @@ describe('요청 영수증', () => {
       request
     })
 
+  // 상한을 넘기려고 영수증을 RECEIPTS_PER_CALLER 개 넘게 채우고, 하나마다 디스크에 쓴다. 혼자 돌면
+  // 1초 안쪽이지만 전체 스위트가 병렬로 디스크를 쓰면 기본 10초를 넘긴다. 상한은 코드에 고정된 값이라
+  // 채우는 수를 줄일 수 없으므로 이 셋만 기다리는 시간을 늘린다.
+  const FILL_TIMEOUT_MS = 30_000
   it('세션마다 최근 것만 남는다 — 넘친 가장 오래된 것은 absent 이고 가장 새것은 재생한다', async () => {
     const f = await workerFixture()
     const orch = orchOver({ aliveSessionIds: () => new Set(['ses1']) })
@@ -1624,7 +1628,7 @@ describe('요청 영수증', () => {
     const again = await fill(orch, f, 'req-0')
     expect(again.status).toBe(200)
     expect(JSON.stringify(again), '쓸려 나간 영수증이 그대로 재생됐다').toBe(JSON.stringify(first))
-  })
+  }, FILL_TIMEOUT_MS)
 
   /**
    * **자리는 저장이 아무리 차도 비워지지 않는다.** 자리는 호출의 기록이 아니라 호출 그 자체다 —
@@ -1649,7 +1653,7 @@ describe('요청 영수증', () => {
     expect((await show(orch, 'ses1', 'hold')).body.state, '자리가 쓸려 나갔다').toBe('pending')
     release()
     expect((await reading).status).toBe(200)
-  })
+  }, FILL_TIMEOUT_MS)
 
   // **가득 찬 저장이 명령을 막지 않는다.** 위의 두 시험이 비우는 것을 보고, 이것이 비우기가 거절로
   // 새지 않는 것을 본다 — 설계가 Orca 에서 유일하게 들여오지 않기로 한 행동에 못을 박는다.
@@ -1661,7 +1665,7 @@ describe('요청 영수증', () => {
     expect(after.status, '저장이 찼다고 명령을 거절했다').toBe(200)
     expect((await show(orch, 'ses1', 'req-그다음')).body.state).toBe('completed')
     expect((await savedState()).messages.filter((m) => m.subject === 'req-그다음')).toHaveLength(1)
-  })
+  }, FILL_TIMEOUT_MS)
 
   // 나이로도 비운다. **다음 쓰기가 비질을 부른다** — 타이머도 아니고 시작할 때도 아니다.
   it('한 시간이 지난 영수증은 다음 쓰기에 쓸려 나간다', async () => {
