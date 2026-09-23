@@ -2,10 +2,18 @@
 // child_process.spawn — which is what makes the shape of the call testable, the same arrangement
 // src/core/orchestration/exec/shuttle.ts uses for the CLI shuttle.
 import type { SpawnOptions } from 'node:child_process'
+import { INHERITED_AGENT_ENV_KEYS } from '../sessions/cliEnv'
 
 /** Variables that belong to one agent session and must not reach the Host: it is not a worker, and
- *  slice 2 will have it spawn workers of its own that would inherit them in turn. */
-const NOT_INHERITED = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS|CLAUDE_CODE_|CLAUDECODE$)/
+ *  it spawns workers of its own that would inherit them in turn. The astera ones by prefix; the
+ *  Claude Code ones are exactly the session-identity list cliEnvFor clears for an app worker
+ *  (INHERITED_AGENT_ENV_KEYS), not the whole CLAUDE_CODE_ family: CLAUDE_CODE_USE_BEDROCK,
+ *  CLAUDE_CODE_OAUTH_TOKEN and the like are settings a person chose, and a Host worker must keep
+ *  them just as an app worker does. An inherited CLAUDE_CODE_CHILD_SESSION is what turns a worker's
+ *  transcript off. */
+const NOT_INHERITED_ASTERA = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS)/
+const NOT_INHERITED_AGENT: ReadonlySet<string> = new Set(INHERITED_AGENT_ENV_KEYS)
+const notInherited = (k: string): boolean => NOT_INHERITED_ASTERA.test(k) || NOT_INHERITED_AGENT.has(k)
 
 /** What the Host's own start adds to its environment — the runtime switch and the Host's own
  *  settings. None of it may reach an agent the Host spawns: ELECTRON_RUN_AS_NODE turns any Electron
@@ -14,8 +22,9 @@ const NOT_INHERITED = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS|CLAUDE_CODE_|CL
 export const HOST_ONLY_ENV: RegExp = /^(ELECTRON_RUN_AS_NODE$|ASTERA_HOST_)/i
 
 /** The environment a worker the Host spawns starts from (D4): the Host's own, minus HOST_ONLY_ENV.
- *  Everything else is kept on purpose — the Host was started from the app's environment, so a
- *  worker sees what a worker the app spawned would. */
+ *  Everything else is kept on purpose. The Host was started from the app's environment minus only
+ *  the parent session's identity (hostSpawnPlan), and SessionManager then runs this through
+ *  cliEnvFor exactly as the app does, so a worker sees what a worker the app spawned would. */
 export function hostWorkerBaseEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(env)) if (!HOST_ONLY_ENV.test(k)) base[k] = v
@@ -43,7 +52,7 @@ export function hostSpawnPlan(a: {
   env?: NodeJS.ProcessEnv
 }): HostSpawnPlan {
   const env: NodeJS.ProcessEnv = {}
-  for (const [k, v] of Object.entries(a.env ?? process.env)) if (!NOT_INHERITED.test(k)) env[k] = v
+  for (const [k, v] of Object.entries(a.env ?? process.env)) if (!notInherited(k)) env[k] = v
   return {
     command: a.execPath,
     args: [a.entryPath],

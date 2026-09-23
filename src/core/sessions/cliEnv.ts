@@ -41,6 +41,9 @@ export const MANAGED_ENV_KEYS = [
  * Only what names the parent's session. `CLAUDE_CODE_GIT_BASH_PATH` and `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
  * are settings a person chose and are left exactly as they are — the one just below is read back a few
  * lines down on purpose.
+ *
+ * hostSpawnPlan (core/host/spawn.ts) strips the same list when the app starts the Host, so a worker
+ * the Host spawns keeps the same CLAUDE_CODE_ settings as one the app spawns.
  */
 export const INHERITED_AGENT_ENV_KEYS = [
   'CLAUDECODE',

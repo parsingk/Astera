@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import type { Account } from '../types'
+import { makeDescriptors } from '../providers/descriptor'
+import { cliEnvFor } from '../sessions/cliEnv'
 import { HOST_ONLY_ENV, hostSpawnPlan, hostWorkerBaseEnv, resolveHostEntry } from './spawn'
 
 describe('resolveHostEntry', () => {
@@ -90,5 +93,39 @@ describe('hostWorkerBaseEnv', () => {
   it('removes everything hostSpawnPlan itself adds', () => {
     const plan = hostSpawnPlan({ execPath: 'x', entryPath: 'y', profileDir: 'p', logPath: 'l', version: 'v', env: {} })
     expect(hostWorkerBaseEnv(plan.options.env)).toEqual({})
+  })
+})
+
+// §11's first risk: a worker the Host spawns and one the app spawns must see the same agent
+// settings. Only the parent session's identity is stripped on the way to the Host (I1).
+describe('Host worker env parity with an app worker', () => {
+  const parent: NodeJS.ProcessEnv = {
+    PATH: '/usr/bin',
+    CLAUDE_CODE_USE_BEDROCK: '1',
+    CLAUDE_CODE_OAUTH_TOKEN: 'tok',
+    CLAUDE_CODE_GIT_BASH_PATH: 'C:/Git/bin/bash.exe',
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
+    CLAUDE_CODE_SESSION_ID: 'parent-session',
+    CLAUDE_CODE_CHILD_SESSION: '1'
+  }
+  const account: Account = { id: 'a', label: 'a', configDir: '/cfg/a', color: '#fff', createdAt: '2026-09-24T00:00:00Z' }
+  const descriptor = makeDescriptors(process.platform).claude
+  const claudeKeys = (env: NodeJS.ProcessEnv): Record<string, string | undefined> =>
+    Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith('CLAUDE_CODE_')).sort())
+
+  it('agrees with an app worker on every CLAUDE_CODE_ key', () => {
+    const plan = hostSpawnPlan({ execPath: 'x', entryPath: 'y', profileDir: 'p', logPath: 'l', version: 'v', env: parent })
+    const hostWorker = cliEnvFor({ base: hostWorkerBaseEnv(plan.options.env), account, descriptor, homeDir: '/home/u' })
+    const appWorker = cliEnvFor({ base: parent, account, descriptor, homeDir: '/home/u' })
+    expect(claudeKeys(hostWorker)).toEqual(claudeKeys(appWorker))
+    expect(hostWorker.CLAUDE_CODE_USE_BEDROCK).toBe('1')
+    expect('CLAUDE_CODE_SESSION_ID' in hostWorker).toBe(false)
+  })
+
+  it('still keeps the parent session identity away from the Host itself', () => {
+    const plan = hostSpawnPlan({ execPath: 'x', entryPath: 'y', profileDir: 'p', logPath: 'l', version: 'v', env: parent })
+    expect('CLAUDE_CODE_SESSION_ID' in plan.options.env).toBe(false)
+    expect('CLAUDE_CODE_CHILD_SESSION' in plan.options.env).toBe(false)
+    expect(plan.options.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('tok')
   })
 })
