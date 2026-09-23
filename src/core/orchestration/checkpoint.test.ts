@@ -356,6 +356,17 @@ describe('sanitize — URL userinfo and credential-named query parameters', () =
     )
   })
 
+  it('redacts token, password, passwd, secret and refresh_token query values however short', () => {
+    expect(sanitize('https://h/p?token=short&Password=pw&passwd=x&SECRET=s&refresh_token=r')).toBe(
+      'https://h/p?token=[REDACTED]&Password=[REDACTED]&passwd=[REDACTED]&SECRET=[REDACTED]&refresh_token=[REDACTED]'
+    )
+  })
+
+  it('leaves tokens=, secretary= and password_hint= alone', () => {
+    const text = 'https://h/p?tokens=3&secretary=kim&password_hint=pet'
+    expect(sanitize(text)).toBe(text)
+  })
+
   it('leaves names that only contain a credential name, users without a password and plain ids', () => {
     for (const text of [
       'https://h/p?monkey=1',

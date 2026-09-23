@@ -304,7 +304,7 @@ export function sanitize(text: string): string {
   // 캐시 키, 해시)을 무작위해 보인다는 이유로 가리면 인계 메모·재개 노트의 평범한 식별자가 바뀌고,
   // 위 사고처럼 없던 자격 증명이 있었던 것처럼 보이게 된다. 가린 값은 위 규칙과 같은 `name=[REDACTED]`.
   out = out.replace(
-    /([?&])(key|apikey|api_key|api-key|access_token|auth|sig|signature|client_secret)=[^&#\s"'<>]+/gi,
+    /([?&])(key|apikey|api_key|api-key|access_token|refresh_token|token|auth|sig|signature|client_secret|secret|password|passwd)=[^&#\s"'<>]+/gi,
     '$1$2=[REDACTED]'
   )
   return out
