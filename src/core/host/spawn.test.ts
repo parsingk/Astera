@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type { Account } from '../types'
 import { makeDescriptors } from '../providers/descriptor'
 import { cliEnvFor } from '../sessions/cliEnv'
@@ -122,6 +125,60 @@ describe('the CLI paths the Host is started with', () => {
     expect(hostCliPaths({ ASTERA_HOST_CLI_EXEC: 'e' }, () => true)).toEqual({ missing: ['ASTERA_HOST_CLI_ENTRY', 'ASTERA_HOST_SKILLS'] })
     // a path that is named but not there is missing too — the Host does not guess (§2.2)
     expect(hostCliPaths(env, (p) => p !== 'n')).toEqual({ missing: ['ASTERA_HOST_CLI_ENTRY'] })
+  })
+
+  // C1: in a packaged build the entry is inside app.asar, and the Host runs as plain node.exe, whose
+  // fs has no asar layer. The worker runs the entry through Electron, which reads asar, so the Host
+  // checks the archive file itself.
+  describe('an entry inside an asar archive', () => {
+    const asar = String.raw`C:\A\resources\app.asar`
+    const entry = String.raw`C:\A\resources\app.asar\out\main\cli.js`
+    const exec = String.raw`C:\A\Astera.exe`
+    const skills = String.raw`C:\A\resources\skills`
+    const env = { ASTERA_HOST_CLI_EXEC: exec, ASTERA_HOST_CLI_ENTRY: entry, ASTERA_HOST_SKILLS: skills }
+
+    it('counts as there when the archive file is, although plain fs cannot see inside it', () => {
+      const onDisk = new Set([asar, exec, skills])
+      expect(hostCliPaths(env, (p) => onDisk.has(p))).toEqual({ exec, entry, skills })
+    })
+    it('is missing when the archive file is not there', () => {
+      const onDisk = new Set([exec, skills])
+      expect(hostCliPaths(env, (p) => onDisk.has(p))).toEqual({ missing: ['ASTERA_HOST_CLI_ENTRY'] })
+    })
+    it('checks up to the first .asar segment only, with either slash', () => {
+      const nested = 'C:/A/resources/app.asar/x/inner.asar/cli.js'
+      const onDisk = new Set(['C:/A/resources/app.asar', exec, skills])
+      expect(hostCliPaths({ ...env, ASTERA_HOST_CLI_ENTRY: nested }, (p) => onDisk.has(p))).toEqual({ exec, entry: nested, skills })
+    })
+    it('does not treat a name that merely contains .asar as an archive', () => {
+      const lookalike = 'C:/A/app.asar.bak/cli.js'
+      const onDisk = new Set(['C:/A/app.asar.bak', exec, skills])
+      expect(hostCliPaths({ ...env, ASTERA_HOST_CLI_ENTRY: lookalike }, (p) => onDisk.has(p))).toEqual({ missing: ['ASTERA_HOST_CLI_ENTRY'] })
+    })
+    // The real failure, against the real fs: vitest runs as plain Node, like the Host's node.exe.
+    it('counts as there against plain Node fs, where a path through a file is ENOTDIR', () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), 'astera-asar-'))
+      try {
+        const archive = path.join(root, 'app.asar')
+        writeFileSync(archive, 'not a directory')
+        const skillsDir = path.join(root, 'skills')
+        mkdirSync(skillsDir)
+        const exe = path.join(root, 'Astera.exe')
+        writeFileSync(exe, '')
+        const inner = path.join(archive, 'out', 'main', 'cli.js')
+        expect(existsSync(inner)).toBe(false)
+        const real = { ASTERA_HOST_CLI_EXEC: exe, ASTERA_HOST_CLI_ENTRY: inner, ASTERA_HOST_SKILLS: skillsDir }
+        expect(hostCliPaths(real, existsSync)).toEqual({ exec: exe, entry: inner, skills: skillsDir })
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    })
+    it('checks the executable and the skills folder the same way', () => {
+      const inAsar = { ASTERA_HOST_CLI_EXEC: 'C:/A/app.asar/node.exe', ASTERA_HOST_CLI_ENTRY: entry, ASTERA_HOST_SKILLS: 'C:/A/app.asar/skills' }
+      expect(hostCliPaths(inAsar, (p) => p === asar || p === 'C:/A/app.asar')).toEqual({
+        exec: 'C:/A/app.asar/node.exe', entry, skills: 'C:/A/app.asar/skills'
+      })
+    })
   })
 })
 

@@ -42,10 +42,27 @@ export interface HostCliPaths {
 
 const HOST_CLI_ENV = { exec: 'ASTERA_HOST_CLI_EXEC', entry: 'ASTERA_HOST_CLI_ENTRY', skills: 'ASTERA_HOST_SKILLS' } as const
 
+/** Everything up to and including the first path segment that is an asar archive. */
+const ASAR_ARCHIVE = /^(.*?\.asar)(?=[\\/]|$)/
+
+/** Whether a path exists, asked from a process with no asar layer in its `fs`. **In a packaged build
+ *  the CLI entry is inside `app.asar`**, and the Host runs from the prepared runtime's plain
+ *  `node.exe`, which sees `app.asar` as a file and every path through it as ENOTDIR. The worker runs
+ *  the entry through Electron, which does read asar, so the path is good exactly when the archive
+ *  file is there. A path with no `.asar` segment is checked as it is. The executable and the skills
+ *  folder sit outside the archive in a packaged build (the install directory, and extraResources in
+ *  electron-builder.yml), so for them this is the plain check; they go through it anyway, so that no
+ *  path is judged by a rule that depends on which one it is. */
+function existsFromPlainNode(p: string, exists: (p: string) => boolean): boolean {
+  const archive = ASAR_ARCHIVE.exec(p)?.[1]
+  return exists(archive ?? p)
+}
+
 /** The CLI paths this Host was started with, or the names of the variables that are unset, empty, or
- *  name a path that is not there. **Any one missing means none**: the Host does not guess a path
- *  (§2.2), so a Host started by an older app or CLI, which passes none of them, does not spawn. The
- *  `ASTERA_HOST_` prefix is what keeps all three away from the workers (HOST_ONLY_ENV). */
+ *  name a path that is not there (`existsFromPlainNode`). **Any one missing means none**: the Host
+ *  does not guess a path (§2.2), so a Host started by an older app or CLI, which passes none of them,
+ *  does not spawn. The `ASTERA_HOST_` prefix is what keeps all three away from the workers
+ *  (HOST_ONLY_ENV). */
 export function hostCliPaths(
   env: NodeJS.ProcessEnv,
   exists: (p: string) => boolean
@@ -53,7 +70,7 @@ export function hostCliPaths(
   const missing: string[] = []
   for (const name of [HOST_CLI_ENV.exec, HOST_CLI_ENV.entry, HOST_CLI_ENV.skills]) {
     const v = env[name]
-    if (!v || !exists(v)) missing.push(name)
+    if (!v || !existsFromPlainNode(v, exists)) missing.push(name)
   }
   if (missing.length > 0) return { missing }
   return { exec: env[HOST_CLI_ENV.exec]!, entry: env[HOST_CLI_ENV.entry]!, skills: env[HOST_CLI_ENV.skills]! }
