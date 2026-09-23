@@ -149,7 +149,7 @@ describe('registrySessions — list', () => {
 })
 
 /**
- * **`state`, from the hook event files the capture script appends** (main/statusline.ts,
+ * **`state`, from the hook event files the capture script appends** (core/sessions/statusline.ts,
  * `hook-events/<sessionId>.jsonl` under the profile, named by the app's session id). The fixtures are
  * the lines the capture writes: one hook payload per line, newline-terminated. The file's mtime is
  * when its last line landed, and the registry's clock is when the pty was last typed into.

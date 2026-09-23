@@ -5,7 +5,7 @@ import type { WorktreeInfo } from '../types'
  *  created from; every other path is returned unchanged.
  *
  *  Why this exists: a worker dispatched with `--worktree new` gets a freshly created worktree as its
- *  cwd (main/orchestration/coordinator.ts → createWorktree), and SessionInfo.cwd is that same value
+ *  cwd (core/orchestration/exec/coordinator.ts → createWorktree), and SessionInfo.cwd is that same value
  *  (sessions/manager.ts) — a path under the worktree registry root, outside the repository entirely.
  *  Anything scoped by "the active tab's cwd" therefore asks about a path no Run was ever created
  *  with. A worktree is the same project wearing a different path, and WorktreeInfo.repoPath is the

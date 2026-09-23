@@ -17,10 +17,10 @@
 // testable).
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { isSamePath } from '../../core/files/tree'
-import type { Provider } from '../../core/providers/meta'
-import { KNOWLEDGE_DIRS, knowledgeFilesFrom, type KnowledgeFiles } from '../../core/knowledge/detect'
-import type { CheckResult, RepairReason, ReviewIssue } from '../../core/orchestration/types'
+import { isSamePath } from '../../files/tree'
+import type { Provider } from '../../providers/meta'
+import { KNOWLEDGE_DIRS, knowledgeFilesFrom, type KnowledgeFiles } from '../../knowledge/detect'
+import type { CheckResult, RepairReason, ReviewIssue } from '../types'
 
 /** Job Continuity's two prompt events (P0 design §5): 'requested' right before the prompt leaves
  *  the app, 'confirmed' once it has — the spawned process holds it as argv, or the typed prompt's

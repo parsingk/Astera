@@ -6,7 +6,7 @@ import { handleCommand, handleExit, type HostSession, type OrchServerDeps, type 
 import { ensureProject } from './projects'
 import { absPath } from '../testPaths'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
-import { OrchCoordinator, type CoordinatorDeps } from '../../main/orchestration/coordinator'
+import { OrchCoordinator, type CoordinatorDeps } from './exec/coordinator'
 import { OrchestrationStore } from './store'
 import {
   applyValidationResult,

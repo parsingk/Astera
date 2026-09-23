@@ -92,7 +92,7 @@ function subagentLimitText(o: Record<string, unknown>): string | null {
 }
 
 /** Pulls the limit signal out of one transcript line. null when it is not a limit or has a different shape.
- *  A public API — the orchestration limit probe (main/orchestration/limitProbe.ts) reuses it.
+ *  A public API — the orchestration limit probe (core/orchestration/exec/limitProbe.ts) reuses it.
  *  The body of this function (including the false-positive defences) is unchanged — widening or narrowing
  *  it away from what the 9 measured cases justify is a regression. */
 export function parseClaudeLimitLine(raw: string): ClaudeLimitHit | null {

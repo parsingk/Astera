@@ -198,7 +198,7 @@ export class SessionManager {
       env.ASTERA_SKILLS = opts.orchEnv.skillsPath
       env.ASTERA_SESSION = id
       // Uses cliPath's directory rather than adding a new field — the shuttle file is already named
-      // `astera` (main/orchestration/shuttle.ts: astera.cmd on win32, astera on posix).
+      // `astera` (core/orchestration/exec/shuttle.ts: astera.cmd on win32, astera on posix).
       prependToPath(env, path.dirname(opts.orchEnv.cliPath))
     }
     const pty = this.ptyFactory(file, args, {

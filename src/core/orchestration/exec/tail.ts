@@ -17,7 +17,7 @@
 // be tested (three defects actually came out of there, and the --limit defect was caught only by
 // a one-off smoke run).
 
-import { stripAnsi } from '../../core/rolling/detect'
+import { stripAnsi } from '../../rolling/detect'
 
 /** Characters retained per dispatch. String.slice counts UTF-16 code units, not bytes —
  *  a Hangul character is one code unit, but a JS string's internal representation is 2 bytes, so

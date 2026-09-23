@@ -2,9 +2,9 @@ import { promises as fs } from 'node:fs'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { Account } from '../core/types'
-import { hookEventsDirIn, hookEventsFileIn } from '../core/hooks/sessionState'
-import { HOOK_EVENT_AT } from '../core/hooks/eventTime'
+import type { Account } from '../types'
+import { hookEventsDirIn, hookEventsFileIn } from '../hooks/sessionState'
+import { HOOK_EVENT_AT } from '../hooks/eventTime'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {

@@ -5,7 +5,7 @@ import path from 'node:path'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './resumePacket'
 import type { TranscriptResumeMaterial } from '../../core/history/parser'
 import type { Handoff } from '../../core/handoff/types'
-import { LAUNCH_FORBIDDEN } from './coordinator'
+import { LAUNCH_FORBIDDEN } from '../../core/orchestration/exec/coordinator'
 import * as checkpointModule from '../../core/orchestration/checkpoint'
 import { emptyState, createJob,
   startJobRun, createTask, openDispatch } from '../../core/orchestration/state'

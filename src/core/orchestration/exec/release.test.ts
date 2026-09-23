@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { releaseArgsFor } from './release'
-import type { Dispatch } from '../../core/orchestration/types'
+import type { Dispatch } from '../types'
 
 const dsp = (o: Partial<Dispatch> & { id: string; sessionId: string }): Dispatch => ({
   taskId: 'tsk_1',

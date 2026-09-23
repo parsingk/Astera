@@ -150,7 +150,7 @@ describe('executeRecovery', () => {
   })
 
   // Important 2 — 재조립된 repair spec 도 원래 repair·평범한 redispatch 와 똑같이 지식 절을 실어야
-  // 한다(main/orchestration/repair.ts 의 repairSpec, main/orchestration/coordinator.ts 의
+  // 한다(main/orchestration/repair.ts 의 repairSpec, core/orchestration/exec/coordinator.ts 의
   // startWorker 기본 경로). specFileContent 를 통째로 넘기면 코디네이터 자신의 스캔을 건너뛰므로,
   // 여기서 주입된 knowledge 의존으로 대신 실어야 한다.
   it('knowledge 의존이 있으면 재조립된 repair spec 에도 지식 절이 실린다', async () => {

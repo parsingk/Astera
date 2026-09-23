@@ -1,5 +1,5 @@
 // Whether a terminal session is working or waiting, as `astera sessions list` reports it (CLI phase
-// D3), read off the hook event file the capture script appends (main/statusline.ts). The Host reads
+// D3), read off the hook event file the capture script appends (core/sessions/statusline.ts). The Host reads
 // the file itself, so this answers with the app closed: the hook runs inside the agent CLI and keeps
 // appending whether or not the app is there to drain it.
 //

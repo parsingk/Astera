@@ -14,13 +14,13 @@
 // — it runs on a Dispatch exit that rolling did not turn into a roll (a real death, not a
 // rolled-away one), to answer "did this end on a limit, and when does that lift" for the
 // orchestrator's own retry/backoff decision.
-import type { Dispatch } from '../../core/orchestration/types'
-import { parseClaudeLimitLine, type ClaudeLimitHit } from '../../core/rolling/claudeSignal'
-import { limitReached, limitStateFromLines, worstResetAt } from '../../core/rolling/codexSignal'
-import { findRollout } from '../../core/rolling/codexLocate'
-import { parseResetTime } from '../../core/rolling/resetTime'
-import { tailLines } from '../../core/rolling/tailLines'
-import { extractStatusLineSession } from '../../core/usage/statusline'
+import type { Dispatch } from '../types'
+import { parseClaudeLimitLine, type ClaudeLimitHit } from '../../rolling/claudeSignal'
+import { limitReached, limitStateFromLines, worstResetAt } from '../../rolling/codexSignal'
+import { findRollout } from '../../rolling/codexLocate'
+import { parseResetTime } from '../../rolling/resetTime'
+import { tailLines } from '../../rolling/tailLines'
+import { extractStatusLineSession } from '../../usage/statusline'
 
 export interface LimitProbeDeps {
   /** The session's raw statusLine payload. The claude transcript path comes only from here */

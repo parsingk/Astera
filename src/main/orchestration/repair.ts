@@ -15,7 +15,7 @@ import {
   type Task
 } from '../../core/orchestration/types'
 import type { KnowledgeFiles } from '../../core/knowledge/detect'
-import { buildSpecFile, repairWorkerPrompt } from './coordinator'
+import { buildSpecFile, repairWorkerPrompt } from '../../core/orchestration/exec/coordinator'
 import type { OrchServerDeps } from '../../core/orchestration/command'
 
 export interface RepairDeps {

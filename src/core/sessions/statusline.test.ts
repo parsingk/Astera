@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { spawn } from 'node:child_process'
-import type { Account } from '../core/types'
+import type { Account } from '../types'
 import { StatusLineManager } from './statusline'
 
 const account: Account = {

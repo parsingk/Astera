@@ -4,7 +4,7 @@
 // (the server owns the state), so the wiring has to pull the material for the "may this session be
 // closed" decision out of the state and pass it in. That computation is this function — inside the
 // registerIpc closure it could not be tested without Electron, so it was lifted out.
-import type { Dispatch } from '../../core/orchestration/types'
+import type { Dispatch } from '../types'
 
 /** The argument OrchCoordinator.releaseWorker takes. null for an unknown dispatch (no session to close) */
 export function releaseArgsFor(

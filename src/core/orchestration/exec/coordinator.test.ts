@@ -12,7 +12,7 @@ import {
   LAUNCH_FORBIDDEN,
   type CoordinatorDeps
 } from './coordinator'
-import type { CheckResult, ReviewIssue } from '../../core/orchestration/types'
+import type { CheckResult, ReviewIssue } from '../types'
 
 let dir: string
 /** spec 디렉토리는 **워커 cwd 밖**이다 — 배선이 `<userData>/orch/specs`를 주입한다.

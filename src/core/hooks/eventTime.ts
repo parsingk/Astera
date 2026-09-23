@@ -1,7 +1,7 @@
 // When a hook event happened, as opposed to when its line landed in the file.
 //
 // **Why the file's order is not the event order.** UserPromptSubmit and StopFailure are installed
-// `async` (main/statusline.ts): Claude Code starts their capture process and does not wait for it.
+// `async` (core/sessions/statusline.ts): Claude Code starts their capture process and does not wait for it.
 // Each capture is its own node process (about 0.05 s to start directly, 0.1 s through Git Bash), so
 // two of them can append in either order. Two ways that ends the file on the wrong event:
 // - an API error almost as soon as a prompt is submitted appends that turn's StopFailure before its

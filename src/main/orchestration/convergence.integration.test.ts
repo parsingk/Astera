@@ -37,7 +37,7 @@ import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './r
 import { createReviewGate } from './reviewGate'
 import { pauseWorkParkedByTheToggle } from '../../core/orchestration/alwaysOn'
 import { OrchestrationStore } from '../../core/orchestration/store'
-import { buildReviewSpecFile, specFileName } from './coordinator'
+import { buildReviewSpecFile, specFileName } from '../../core/orchestration/exec/coordinator'
 import {
   applyValidationResult,
   blockForValidation,

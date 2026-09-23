@@ -289,7 +289,7 @@ export interface TranscriptResumeMaterial {
  *  쓴다 — 그래서 export한다(claude와 codex 두 재료 읽기가 서로 다른 상한으로 갈리지 않게). */
 export const READ_BUFFER_MAX = 20
 
-/** `launchPrompt`(main/orchestration/coordinator.ts)가 spec 경로에 적용하는 것과 같은 정규화 —
+/** `launchPrompt`(core/orchestration/exec/coordinator.ts)가 spec 경로에 적용하는 것과 같은 정규화 —
  *  `file-history-snapshot`의 경로는 OS 그대로(윈도에서는 `\`)라서, 그 문자가 셸의 이스케이프
  *  문자로 읽히는 것을 앞서 그 파일이 겪은 것과 같은 이유로 미리 없앤다. */
 function toPortablePath(p: string): string {

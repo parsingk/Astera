@@ -20,7 +20,7 @@ import type { OrchState } from '../../core/orchestration/state'
 import type { LastCommand, Provider, TranscriptMessage } from '../../core/types'
 import type { HandoffLookup } from '../../core/handoff/types'
 import { readGitSummary, type GitSummaryDeps } from '../gitSummary'
-import { LAUNCH_FORBIDDEN } from './coordinator'
+import { LAUNCH_FORBIDDEN } from '../../core/orchestration/exec/coordinator'
 import { parseTranscriptForResume, type TranscriptResumeMaterial } from '../../core/history/parser'
 import { parseCodexForResume } from '../../core/history/codexParser'
 

@@ -51,7 +51,7 @@ export interface RegistryPty {
 export type RegistrySpawn = (file: string, args: string[] | string, opts: PtyOpenOptions) => RegistryPty
 
 /** Characters of scrollback kept per session, counted in UTF-16 code units — the unit
- *  `main/orchestration/tail.ts` counts, and for the reason its comment gives: a Hangul character is
+ *  `core/orchestration/exec/tail.ts` counts, and for the reason its comment gives: a Hangul character is
  *  one unit and two bytes, so counting bytes would halve a Korean session's scrollback. Roughly
  *  2,500 lines of 100 characters. */
 export const SCROLLBACK_CHARS = 256_000

@@ -1,6 +1,6 @@
 // How the app starts the Host (design §4). Pure: the plan is a value, and the caller passes it to
 // child_process.spawn — which is what makes the shape of the call testable, the same arrangement
-// src/main/orchestration/shuttle.ts uses for the CLI shuttle.
+// src/core/orchestration/exec/shuttle.ts uses for the CLI shuttle.
 import type { SpawnOptions } from 'node:child_process'
 
 /** Variables that belong to one agent session and must not reach the Host: it is not a worker, and

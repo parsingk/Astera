@@ -12,14 +12,14 @@ import { t, type Lang } from '../../core/i18n'
 import type { LostAttempt, RecoveryDecision } from '../../core/recovery/types'
 import type { Provider } from '../../core/providers/meta'
 import type { KnowledgeFiles } from '../../core/knowledge/detect'
-import { buildSpecFile } from '../orchestration/coordinator'
+import { buildSpecFile } from '../../core/orchestration/exec/coordinator'
 
 export type ExecuteResult = { ok: true; newDispatchId?: string } | { ok: false; error: string }
 
 export interface ExecuteDeps {
   getState(): OrchState
   setState(next: OrchState): Promise<void>
-  /** Same shape as OrchCoordinator.startWorker (main/orchestration/coordinator.ts) — a subset of its
+  /** Same shape as OrchCoordinator.startWorker (core/orchestration/exec/coordinator.ts) — a subset of its
    *  fields, the ones a recovered attempt needs. Never touches OrchState; throws on failure. */
   startWorker(a: {
     dispatchId: string

@@ -8,16 +8,12 @@ import path from 'node:path'
 import { evictionPlan } from '../../core/preview/pick/shots'
 import type { CaptureResult } from '../../core/preview/pick/types'
 
+export { previewShotsDir } from '../../core/preview/shotsDir'
+
 /** The two things this needs from Electron's NativeImage, so tests pass a plain object. */
 export interface CapturedImage {
   getSize(): { width: number; height: number }
   toPNG(): Buffer
-}
-
-/** Where screenshots are written. Kept as one function so the session spawn, which grants a Claude
- *  session read access to exactly this folder (--add-dir), names the same path this writes to. */
-export function previewShotsDir(userData: string): string {
-  return path.join(userData, 'preview', 'shots')
 }
 
 /** Applies the eviction rule to the store. Errors are swallowed: a failed cleanup must not fail a

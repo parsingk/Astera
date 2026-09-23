@@ -85,8 +85,8 @@ export interface ProviderDescriptor extends ProviderMeta {
    *  is actually in progress can be misread as idle (a child process title matched by coincidence).
    *
    *  Why it lives on ProviderDescriptor (Node only): the only place that reads this value is the coordinator
-   *  wiring in main/orchestration — this flag is the reason
-   *  CoordinatorDeps.isBusy(sessionId): boolean | null (main/orchestration/coordinator.ts) is tri-state
+   *  wiring in core/orchestration/exec — this flag is the reason
+   *  CoordinatorDeps.isBusy(sessionId): boolean | null (core/orchestration/exec/coordinator.ts) is tri-state
    *  (null = it cannot be decided for this provider). The renderer's session:busy display (App.tsx) does not
    *  consult this flag and uses the raw BusyScanner value (existing behaviour) — since the renderer has no
    *  use for it, it goes here rather than in meta.ts (which the renderer shares). */
