@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { allowingJobCwds, readRunConfigsFile } from './runConfigsFile'
+import { RepairNeeded } from '../settings/repairNeeded'
 
 let dir: string
 let project: string
@@ -97,5 +98,16 @@ describe('allowingJobCwds', () => {
     await expect(allow('D:/later')).rejects.toThrow()
     jobs.push({ cwd: 'D:/later' })
     await expect(allow('D:/later')).resolves.toBe('D:/later')
+  })
+})
+
+describe('a corrupt run-configs.json', () => {
+  it('is refused as a RepairNeeded naming the file', async () => {
+    for (const text of ['{not json', '[]']) {
+      await fs.writeFile(file, text, 'utf8')
+      const err = await readRunConfigsFile(file, project).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(RepairNeeded)
+      expect((err as RepairNeeded).file).toBe('run-configs.json')
+    }
   })
 })

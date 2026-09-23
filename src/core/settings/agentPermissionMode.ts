@@ -2,6 +2,7 @@
 import { promises as fs } from 'node:fs'
 import type { AgentPermissionMode } from '../types'
 import { settingsObjectOf } from './settingsObject'
+import { RepairNeeded } from './repairNeeded'
 
 /** The store's own narrowing: only the explicit 'manual' turns the bypass off. */
 export function agentPermissionModeOf(value: unknown): AgentPermissionMode {
@@ -26,13 +27,13 @@ export async function readAgentPermissionMode(filePath: string): Promise<AgentPe
     text = await fs.readFile(filePath, 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'yolo'
-    throw new Error(`app-settings.json could not be read (${String(err)}); open Astera to repair it`)
+    throw new RepairNeeded(`app-settings.json could not be read (${String(err)}); open Astera to repair it`, 'app-settings.json')
   }
   let parsed: Record<string, unknown>
   try {
     parsed = settingsObjectOf(text)
   } catch {
-    throw new Error('app-settings.json is not a valid settings file; open Astera to repair it')
+    throw new RepairNeeded('app-settings.json is not a valid settings file; open Astera to repair it', 'app-settings.json')
   }
   return agentPermissionModeOf(parsed.agentPermissionMode)
 }

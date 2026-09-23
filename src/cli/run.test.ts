@@ -434,6 +434,12 @@ describe('refusalDetailsOf — 요청을 이름 댄 거절만 그 id 를 싣는�
     expect(refusalDetailsOf({ error: 'unknown run configuration: x', jobId: 'job_1' })).toEqual({ jobId: 'job_1' })
     expect(refusalDetailsOf({ jobId: 3 })).toBeUndefined()
   })
+
+  // The Host's repair refusal names the profile file; `STEPS.CONFLICT` then offers no command.
+  it('본문의 repair 도 details 로 올린다', () => {
+    expect(refusalDetailsOf({ error: 'accounts.json is not valid JSON; open Astera to repair it', repair: 'accounts.json' })).toEqual({ repair: 'accounts.json' })
+    expect(refusalDetailsOf({ repair: true })).toBeUndefined()
+  })
 })
 
 describe('resolveGuidePath', () => {

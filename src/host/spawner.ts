@@ -11,7 +11,6 @@ import { existsSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { HostMessage, PtyEntry } from '../core/host/protocol'
-import { AppUnreachable } from '../core/host/orchProtocol'
 import { hostCliPaths, hostWorkerBaseEnv } from '../core/host/spawn'
 import type { OrchServerDeps } from '../core/orchestration/command'
 import type { OrchState } from '../core/orchestration/state'
@@ -27,6 +26,7 @@ import {
 } from '../core/orchestration/exec/workerStart'
 import { readAccountEntries } from '../core/accounts/accountsFile'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
+import { RepairNeeded } from '../core/settings/repairNeeded'
 import { findRollout as findRolloutOnDisk } from '../core/rolling/codexLocate'
 import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
@@ -293,14 +293,16 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   }
 
   /** Task 4's ruling: a settings file the Host cannot read may have said 'manual', so it is never read
-   *  as the bypass. The spawn is refused with the reader's own "open Astera to repair it", as an
-   *  `AppUnreachable`: only the app can repair the file, so the command answers CONFLICT (orchDeps). */
+   *  as the bypass. The spawn is refused with the reader's own "open Astera to repair it", still a
+   *  `RepairNeeded` naming the file: only the app can repair it, so the command answers CONFLICT
+   *  with `repair` (orchDeps). */
   const bypassFromSettings = async (): Promise<boolean> => {
     try {
       return (await readAgentPermissionMode(settingsPath)) === 'yolo'
     } catch (err) {
       log(`spawn refused: ${(err as Error).message}`)
-      throw new AppUnreachable(`the Host will not start a session: ${(err as Error).message}`)
+      const why = `the Host will not start a session: ${(err as Error).message}`
+      throw err instanceof RepairNeeded ? new RepairNeeded(why, err.file) : new Error(why)
     }
   }
 

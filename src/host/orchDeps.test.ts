@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { hostOrchDeps } from './orchDeps'
 import type { HostLocal } from './spawner'
+import { RepairNeeded } from '../core/settings/repairNeeded'
 import { AppUnreachable } from '../core/host/orchProtocol'
 import os from 'node:os'
 import path from 'node:path'
@@ -799,15 +800,21 @@ describe('HOST_LOCAL (S2)', () => {
     expect(act).toHaveBeenCalledWith('releaseWorker', [{ dispatchId: 'd1' }])
     expect(onEffect).toHaveBeenCalledTimes(1)
   })
-  // Carried from Task 4: a local refusal that only the app can clear (a broken settings file) decides
-  // the command's outcome the way an absent app does — CONFLICT, with the refusal's own words.
-  it('flags a local refusal that needs the app, and passes any other local failure straight through', async () => {
+  // I1/I2: a local refusal only the app can clear (a profile file it must repair) decides the command
+  // the way an absent app does, and names the file. Any other local failure passes straight through.
+  it('flags a local repair refusal with its file, and passes any other local failure straight through', async () => {
     const onAppRequired = vi.fn()
-    const needsApp = new AppUnreachable('the Host will not start a session: app-settings.json is not a valid settings file; open Astera to repair it')
-    const deps = hostOrchDeps(base({ onAppRequired, local: fakeLocal({ startWorker: vi.fn().mockRejectedValue(needsApp), releaseWorker: vi.fn().mockRejectedValue(new Error('boom')) }) }))
-    await expect(deps.startWorker({} as never)).rejects.toBe(needsApp)
-    expect(onAppRequired).toHaveBeenCalledWith('startWorker', needsApp.message)
+    const needsRepair = new RepairNeeded('accounts.json is not valid JSON; open Astera to repair it', 'accounts.json')
+    const deps = hostOrchDeps(base({ onAppRequired, local: fakeLocal({ startWorker: vi.fn().mockRejectedValue(needsRepair), releaseWorker: vi.fn().mockRejectedValue(new Error('boom')) }) }))
+    await expect(deps.startWorker({} as never)).rejects.toBe(needsRepair)
+    expect(onAppRequired).toHaveBeenCalledWith('startWorker', needsRepair.message, { repair: 'accounts.json' })
     await expect(deps.releaseWorker({ dispatchId: 'd1' })).rejects.toThrow('boom')
     expect(onAppRequired).toHaveBeenCalledTimes(1)
+  })
+  it('flags a file read that needs repair with its file, when the app is absent', async () => {
+    const onAppRequired = vi.fn()
+    const deps = hostOrchDeps(base({ hasApp: () => false, onAppRequired, readAccounts: vi.fn().mockRejectedValue(new RepairNeeded('accounts.json is not valid JSON; open Astera to repair it', 'accounts.json')) }))
+    await expect(deps.listAccounts()).rejects.toThrow(/open Astera to repair it/)
+    expect(onAppRequired).toHaveBeenCalledWith('listAccounts', expect.stringMatching(/open Astera/), { repair: 'accounts.json' })
   })
 })

@@ -20,6 +20,7 @@ import {
 import type { SkillSettings } from '../core/orchestration/skills'
 import { settingsObjectOf } from '../core/settings/settingsObject'
 import { agentPermissionModeOf } from '../core/settings/agentPermissionMode'
+import { RepairNeeded } from '../core/settings/repairNeeded'
 
 /** The three settings that gate Astera's agent skills when the file does not say otherwise — a
  *  missing file, a corrupt one, or an absent key. */
@@ -62,12 +63,12 @@ export async function readSkillSettings(filePath: string): Promise<SkillSettings
     text = await fs.readFile(filePath, 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ...SKILL_SETTINGS_DEFAULTS }
-    throw new Error(`app-settings.json could not be read (${String(err)}); open Astera to repair it`)
+    throw new RepairNeeded(`app-settings.json could not be read (${String(err)}); open Astera to repair it`, 'app-settings.json')
   }
   try {
     return skillSettingsOf(settingsObjectOf(text))
   } catch {
-    throw new Error('app-settings.json is not a valid settings file; open Astera to repair it')
+    throw new RepairNeeded('app-settings.json is not a valid settings file; open Astera to repair it', 'app-settings.json')
   }
 }
 

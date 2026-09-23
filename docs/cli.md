@@ -105,7 +105,8 @@ account's config folder, so they answer the same with Astera and the Host runnin
 `--account`) and `jobs create --coordinator-account` ask the app for its accounts when it is open.
 When it is closed, the Host reads the profile's `accounts.json` instead, which is the file the app
 keeps them in. The Host only reads that file and never changes it. If the file is damaged, those
-three commands exit 6 and the message says to open Astera, which repairs it.
+three commands exit 6 and the message says to open Astera, which repairs it. `error.details.repair`
+names the file.
 
 **The run configurations work with the app closed too.** `run-configs list` and `tasks add
 --validate` (it checks every id) ask the app when it is open, and the app answers for the Job's own
@@ -584,6 +585,12 @@ the exit code table below.
 not advice: `astera host start`, not "start the Host". It is empty when there is nothing general to
 run, which is the honest answer for exit 1. That code means none of the other nine described the
 failure, so nothing is known about the cause beyond the message.
+
+It is also empty for a 6 that a damaged profile file caused. The app is the only program that
+writes `accounts.json`, `app-settings.json` and `run-configs.json`, and it repairs them when it
+starts. So when a command cannot read one, the step is to open Astera, and no command does that.
+`error.details.repair` names the file. Branch on that field, not on the wording of the message.
+Any other 6 still offers `astera status`.
 
 The steps depend on the command as well as the code, so a 4 from `jobs get` offers `astera jobs
 list` and a 4 from `runs get` offers `astera runs list`. Where a step needs an id the error already

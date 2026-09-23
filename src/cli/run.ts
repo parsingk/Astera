@@ -539,13 +539,13 @@ export function lostAnswerDetails(a: {
 }
 
 /** The ids a refusal names, as `details` for the envelope, or nothing: `requestId` (the 409 for a
- *  request already in flight) and `jobId` (`tasks add --validate`'s unknown configuration, CLI phase
- *  D). Undefined rather than an empty object so a failure that names none prints `details: {}`
- *  exactly as it did before. */
+ *  request already in flight), `jobId` (`tasks add --validate`'s unknown configuration, CLI phase
+ *  D) and `repair` (the profile file a 409 says only the app can repair, Host S2). Undefined rather
+ *  than an empty object so a failure that names none prints `details: {}` exactly as it did before. */
 export function refusalDetailsOf(body: unknown): Record<string, unknown> | undefined {
   if (body === null || typeof body !== 'object') return undefined
   const out: Record<string, unknown> = {}
-  for (const key of ['requestId', 'jobId'] as const) {
+  for (const key of ['requestId', 'jobId', 'repair'] as const) {
     const id = (body as Record<string, unknown>)[key]
     if (typeof id === 'string' && id !== '') out[key] = id
   }

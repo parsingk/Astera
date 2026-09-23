@@ -3,7 +3,7 @@ import { promises as fs, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHostSpawner, type HostSpawnerDeps } from './spawner'
-import { AppUnreachable } from '../core/host/orchProtocol'
+import { RepairNeeded } from '../core/settings/repairNeeded'
 import { PtyRegistry, type RegistryPty } from './registry'
 import type { HostMessage } from '../core/host/protocol'
 import { HOST_ONLY_ENV } from '../core/host/spawn'
@@ -144,8 +144,14 @@ describe('createHostSpawner', () => {
     await fs.writeFile(path.join(profile, 'app-settings.json'), '{ not json')
     const { s, taskId, dispatchId } = seeded()
     const h = rig({ state: () => s })
-    await expect(h.spawner!.startWorker(startArgs(taskId, dispatchId))).rejects.toBeInstanceOf(AppUnreachable)
-    await expect(h.spawner!.startCoordinator({ runId: 'run_1', cwd: repo, accountId: 'acc1', brief: 'b' })).rejects.toBeInstanceOf(AppUnreachable)
+    for (const start of [
+      () => h.spawner!.startWorker(startArgs(taskId, dispatchId)),
+      () => h.spawner!.startCoordinator({ runId: 'run_1', cwd: repo, accountId: 'acc1', brief: 'b' })
+    ]) {
+      const err = await start().catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(RepairNeeded)
+      expect((err as RepairNeeded).file).toBe('app-settings.json')
+    }
   })
 
   // Task 5's review: the app's preTrust adapter throws on an account it cannot find

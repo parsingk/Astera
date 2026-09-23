@@ -384,7 +384,7 @@ export function createHostOrch(a: {
    *  design §3), and a receipt is kept only when one of them is set. They ride here rather than in a
    *  second object because this one is already built per call, and a flag that lives no longer than
    *  the call it belongs to cannot be read by the next one. */
-  type CallMarks = { appRefused: boolean; committed: boolean; acted: boolean }
+  type CallMarks = { appRefused: boolean; committed: boolean; acted: boolean; repair?: string }
 
   /** **Built per call**, because the marks above are. One object literal per call costs nothing
    *  beside running a command. */
@@ -423,11 +423,20 @@ export function createHostOrch(a: {
       onEffect: () => {
         marks.acted = true
       },
-      onAppRequired: (name, why) => {
+      onAppRequired: (name, why, detail) => {
         marks.appRefused = true
-        a.log(`${name} could not be put to the app: ${why}`)
+        // A profile file only the app can repair: the 409 names it (`repair`), so the CLI can say
+        // there is no command to run rather than point at `astera status`.
+        if (detail?.repair) marks.repair = detail.repair
+        // Said as what happened: with `detail` the Host refused it itself and asked nobody.
+        a.log(detail ? `${name} refused by the Host: ${why}` : `${name} could not be put to the app: ${why}`)
       }
     })
+
+  /** A 409 body with the file to repair beside its error, when the refusal was one (`marks.repair`).
+   *  A field, so the CLI reads which file it is rather than matching the sentence. */
+  const withRepair = (body: unknown, marks: CallMarks): unknown =>
+    marks.repair && typeof body === 'object' && body !== null ? { ...body, repair: marks.repair } : body
 
   /** The app handing over its whole state (design §5). Not part of `handleCommand`: it is not a
    *  command anybody types, it writes the state wholesale rather than through a transition, and only
@@ -887,7 +896,7 @@ export function createHostOrch(a: {
         const r = await handleCommand(depsFor(marks), { sessionId }, cmd, runArgs)
         // Only an error reply is rewritten: a command that carried on past a refusal it swallowed
         // (the fire-and-forget ones) succeeded, and a success is not a conflict.
-        const reply = r.status >= 400 && marks.appRefused ? { status: 409, body: r.body } : r
+        const reply = r.status >= 400 && marks.appRefused ? { status: 409, body: withRepair(r.body, marks) } : r
         // **An observed replay says `observed`, not `replayed`** (§7, and `orch-result`'s comment).
         // The id had already taken effect and its commit was not repeated, which is what the caller
         // needs to know; but the command *did* run again and this body is what is true now, so the
@@ -898,7 +907,7 @@ export function createHostOrch(a: {
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        const reply = { status: marks.appRefused ? 409 : 500, body: { error: message } }
+        const reply = { status: marks.appRefused ? 409 : 500, body: withRepair({ error: message }, marks) }
         if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), observed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       }

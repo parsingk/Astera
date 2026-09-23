@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { orchAccountOf, readAccountEntries, readAccountsFile } from './accountsFile'
+import { RepairNeeded } from '../settings/repairNeeded'
 
 let dir: string
 let file: string
@@ -79,5 +80,17 @@ describe('readAccountEntries', () => {
   it('깨진 파일은 같은 말로 거절한다', async () => {
     await fs.writeFile(file, '{not json', 'utf8')
     await expect(readAccountEntries(file)).rejects.toThrow(/open Astera to repair it/)
+  })
+})
+
+// The Host answers this refusal as a conflict that names the file (409, `repair`), read off the type.
+describe('a corrupt accounts.json', () => {
+  it('is refused as a RepairNeeded naming the file', async () => {
+    for (const body of ['{not json', JSON.stringify({ accounts: [account({ configDir: '' })] })]) {
+      await fs.writeFile(file, body, 'utf8')
+      const err = await readAccountEntries(file).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(RepairNeeded)
+      expect((err as RepairNeeded).file).toBe('accounts.json')
+    }
   })
 })

@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { agentPermissionModeOf, readAgentPermissionMode } from './agentPermissionMode'
+import { RepairNeeded } from './repairNeeded'
 
 let dir: string
 beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-perm-')) })
@@ -49,5 +50,14 @@ describe('readAgentPermissionMode (D12)', () => {
   it('narrows a raw value the way the store does', () => {
     expect(agentPermissionModeOf('manual')).toBe('manual')
     expect(agentPermissionModeOf(undefined)).toBe('yolo')
+  })
+})
+
+describe('a corrupt app-settings.json, for the permission mode', () => {
+  it('is refused as a RepairNeeded naming the file', async () => {
+    await fs.writeFile(file(), '{not json')
+    const err = await readAgentPermissionMode(file()).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(RepairNeeded)
+    expect((err as RepairNeeded).file).toBe('app-settings.json')
   })
 })

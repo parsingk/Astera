@@ -15,6 +15,7 @@ import type { Account, Provider } from '../types'
 import { providerOf } from '../providers/meta'
 import type { OrchAccount } from '../orchestration/command'
 import { isValidAccount } from './registry'
+import { RepairNeeded } from '../settings/repairNeeded'
 
 /** One account as the orchestration layer sees it. **The one projection**: the app's `listAccounts`
  *  (ipc.ts) and this file's reader both go through it, so the two answers cannot drift apart —
@@ -51,16 +52,16 @@ export async function readAccountEntries(filePath: string): Promise<Account[]> {
     text = await fs.readFile(filePath, 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw new Error(`accounts.json could not be read (${String(err)}); open Astera to repair it`)
+    throw new RepairNeeded(`accounts.json could not be read (${String(err)}); open Astera to repair it`, 'accounts.json')
   }
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
-    throw new Error('accounts.json is not valid JSON; open Astera to repair it')
+    throw new RepairNeeded('accounts.json is not valid JSON; open Astera to repair it', 'accounts.json')
   }
   const list = (parsed as { accounts?: unknown } | null)?.accounts
   if (!Array.isArray(list) || !list.every(isValidAccount))
-    throw new Error('accounts.json has an entry Astera cannot read; open Astera to repair it')
+    throw new RepairNeeded('accounts.json has an entry Astera cannot read; open Astera to repair it', 'accounts.json')
   return list
 }

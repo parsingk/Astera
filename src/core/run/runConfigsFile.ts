@@ -15,6 +15,7 @@ import type { RunConfig } from './config'
 import { migrateRunConfigs } from './migrate'
 import { loadRunConfigs } from './load'
 import type { OrchRunConfig } from '../orchestration/command'
+import { RepairNeeded } from '../settings/repairNeeded'
 
 /** One configuration as the orchestration layer sees it. **The one projection**: the app's
  *  `listRunConfigs` (ipc.ts) and this file's reader both go through it, so a configuration's command,
@@ -60,15 +61,15 @@ async function readMap(filePath: string): Promise<Record<string, unknown>> {
     text = await fs.readFile(filePath, 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
-    throw new Error(`run-configs.json could not be read (${String(err)}); open Astera to repair it`)
+    throw new RepairNeeded(`run-configs.json could not be read (${String(err)}); open Astera to repair it`, 'run-configs.json')
   }
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
-    throw new Error('run-configs.json is not valid JSON; open Astera to repair it')
+    throw new RepairNeeded('run-configs.json is not valid JSON; open Astera to repair it', 'run-configs.json')
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
-    throw new Error('run-configs.json is not a map of projects; open Astera to repair it')
+    throw new RepairNeeded('run-configs.json is not a map of projects; open Astera to repair it', 'run-configs.json')
   return parsed as Record<string, unknown>
 }

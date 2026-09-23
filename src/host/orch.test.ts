@@ -26,8 +26,8 @@ import {
 } from '../core/orchestration/state'
 import { outcomeOf } from '../core/orchestration/view'
 import { codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
-import { AppUnreachable, type OrchCaller } from '../core/host/orchProtocol'
-import type { HostLocal } from './spawner'
+import type { OrchCaller } from '../core/host/orchProtocol'
+import { createHostSpawner, type HostLocal } from './spawner'
 import type { HostMessage } from '../core/host/protocol'
 import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
@@ -1996,18 +1996,6 @@ describe('Host-local spawn (S2)', () => {
     // The validation itself is the app's until S5: logged as not forwarded, never run or faked here.
     expect(logs.some((l) => l.startsWith('startValidation was not forwarded'))).toBe(true)
   })
-  // Carried from Task 4: a broken settings file refuses the spawn as a conflict (exit 6) with the
-  // spawner's own words, never as a bad argument, and leaves no Dispatch behind.
-  it('answers a spawn the settings file refuses as 409 with its reason, and rolls the Dispatch back', async () => {
-    const { taskId } = await seed()
-    const why = 'the Host will not start a session: app-settings.json is not a valid settings file; open Astera to repair it'
-    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: local({ startWorker: vi.fn().mockRejectedValue(new AppUnreachable(why)) }) })
-    const r = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
-    expect(r.status).toBe(409)
-    expect(exitCodeFor(codeForStatus(r.status))).toBe(6)
-    expect((r.body as { error: string }).error).toContain(why)
-    expect(orch.state().dispatches).toEqual([])
-  })
   // Review M2 of Task 9: a worker whose pty is app-local is the app's to kill. With no app the stop is
   // refused, and the Dispatch is not marked stopped over a worker that is still running.
   it('forwards the stop of a worker the Host does not hold, and refuses it honestly with no app', async () => {
@@ -2036,5 +2024,96 @@ describe('Host-local spawn (S2)', () => {
     const r = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
     expect(r.status).toBe(409)
     expect(orch.state().dispatches).toEqual([])
+  })
+})
+
+/**
+ * **A profile file only the app can repair refuses as a conflict that names the file** (Task 11 fix
+ * round, I1 and I2). Through the real spawner, so the accounts.json the spawner reads itself and the
+ * settings file it reads at the spawn are both on the path: 409 (exit 6), `repair: <file>` in the body,
+ * the reader's own message, and no Dispatch left. Never 400: an agent told its arguments are wrong
+ * edits the one thing that was right.
+ */
+describe('repair refusals (S2)', () => {
+  const ACCOUNTS = JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: 'D:/cfg', color: '#888', createdAt: NOW, provider: 'claude' }] })
+  const withSpawner = async () => {
+    for (const f of ['Astera.exe', 'cli.js']) await fs.writeFile(path.join(dir, f), '')
+    await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
+    const registry = new PtyRegistry({
+      spawn: () => ({ pid: 1, onData() {}, onExit() {}, write() {}, resize() {}, kill() {}, pause() {}, resume() {} }),
+      log: () => {}
+    })
+    const box: { orch?: ReturnType<typeof orchOver> } = {}
+    const spawner = createHostSpawner({
+      profileDir: dir,
+      env: { PATH: process.env.PATH, ASTERA_HOST_CLI_EXEC: path.join(dir, 'Astera.exe'), ASTERA_HOST_CLI_ENTRY: path.join(dir, 'cli.js'), ASTERA_HOST_SKILLS: path.join(dir, 'skills') },
+      platform: process.platform,
+      homeDir: path.join(dir, 'home'),
+      registry,
+      broadcast: () => {},
+      getState: () => box.orch!.state(),
+      log: () => {}
+    })
+    expect(spawner).not.toBeNull()
+    box.orch = orchOver({ hasApp: () => false, act: vi.fn(), local: spawner })
+    return box.orch
+  }
+  const worker = (taskId: string) => ({ task: taskId, agent: 'claude', account: 'acc1', worktree: 'current' })
+  const refusedForRepair = (r: { status: number; body: unknown }, file: string) => {
+    expect(r.status).toBe(409)
+    expect(exitCodeFor(codeForStatus(r.status))).toBe(6)
+    expect(r.body).toMatchObject({ repair: file })
+    expect((r.body as { error: string }).error).toMatch(/open Astera to repair it/)
+  }
+
+  it('answers a Host-local worker-start over a corrupt accounts.json with 409 and repair, leaving no Dispatch', async () => {
+    const { taskId } = await seed()
+    await fs.writeFile(path.join(dir, 'accounts.json'), '{not json')
+    const orch = await withSpawner()
+    refusedForRepair(await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' }), 'accounts.json')
+    expect(orch.state().dispatches).toEqual([])
+    // Said as what it was, a refusal here, not as a question the app was asked.
+    expect(logs.some((l) => l.includes('startWorker refused by the Host') && l.includes('accounts.json'))).toBe(true)
+    expect(logs.some((l) => l.includes('startWorker could not be put to the app'))).toBe(false)
+  })
+
+  it('answers a Host-local worker-start over a corrupt app-settings.json with 409 and repair', async () => {
+    const { taskId } = await seed()
+    await fs.writeFile(path.join(dir, 'accounts.json'), ACCOUNTS)
+    await fs.writeFile(path.join(dir, 'app-settings.json'), '{not json')
+    const orch = await withSpawner()
+    const r = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
+    refusedForRepair(r, 'app-settings.json')
+    expect((r.body as { error: string }).error).toMatch(/the Host will not start a session/)
+    expect(orch.state().dispatches).toEqual([])
+  })
+
+  it('answers a Host-local run-start over a corrupt accounts.json with 409 and repair', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p', coordinatorAccountId: 'acc1' }, NOW); if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
+    const tree = setRunWorktree(run.state, run.value.id, 'D:/wt'); if (!tree.ok) throw new Error(tree.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(tree.state))
+    await fs.writeFile(path.join(dir, 'accounts.json'), '{not json')
+    const orch = await withSpawner()
+    refusedForRepair(await orch.call({ cmd: 'run-start', args: { run: job.value.id }, sessionId: '' }), 'accounts.json')
+  })
+
+  it('answers accounts and run configurations read from a corrupt file with 409 and repair', async () => {
+    await fs.writeFile(path.join(dir, 'accounts.json'), '{not json')
+    await fs.writeFile(path.join(dir, 'run-configs.json'), '{not json')
+    const orch = orchOver({ hasApp: () => false, act: vi.fn() })
+    refusedForRepair(await orch.call({ cmd: 'accounts-list', args: {}, sessionId: '' }), 'accounts.json')
+    const job = await orch.call({ cmd: 'jobs-create', args: { objective: 'o', cwd: 'D:/p' }, sessionId: '' })
+    refusedForRepair(
+      await orch.call({ cmd: 'run-configs-list', args: { job: (job.body as { id: string }).id }, sessionId: '' }),
+      'run-configs.json'
+    )
+  })
+
+  it('carries no repair on a 409 that is not one', async () => {
+    const { taskId } = await seed()
+    const r = await orchOver({ hasApp: () => false, act: vi.fn() }).call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
+    expect(r.status).toBe(409)
+    expect(r.body).not.toHaveProperty('repair')
   })
 })

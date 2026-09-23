@@ -194,7 +194,7 @@ describe('an unreadable accounts.json', () => {
   it('is refused with the repair message, not answered as no accounts', async () => {
     await fs.writeFile(path.join(profileDir, 'accounts.json'), '{not json', 'utf8')
     const r = await run('skills-install')
-    expect(r).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect(r).toMatchObject({ ok: false, error: { code: 'CONFLICT', details: { repair: 'accounts.json' } } })
     if (!r.ok) expect(r.error.message).toMatch(/open Astera to repair it/)
   })
 })
@@ -244,7 +244,7 @@ describe('an unreadable app-settings.json', () => {
       const before = await fs.stat(file)
       for (const cmd of ['skills-list', 'skills-install'] as const) {
         const r = await run(cmd)
-        expect(r).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+        expect(r).toMatchObject({ ok: false, error: { code: 'CONFLICT', details: { repair: 'app-settings.json' } } })
         if (!r.ok) expect(r.error.message).toMatch(/app-settings\.json.*open Astera to repair it/)
       }
       expect(await fs.readFile(file, 'utf8')).toBe(body)

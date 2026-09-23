@@ -73,8 +73,9 @@ export async function skillsCommand(a: {
     accounts = await readAccountEntries(path.join(a.profileDir, 'accounts.json'))
   } catch (err) {
     // The same refusal the Host gives for this file (6): answering "no accounts" would make every
-    // --account a false 404, and repairing it is the app's job.
-    return { ok: false, error: { code: 'CONFLICT', message: err instanceof Error ? err.message : String(err) } }
+    // --account a false 404, and repairing it is the app's job. `repair` names the file, so the
+    // envelope offers no command: opening Astera is the step, and no command does that.
+    return { ok: false, error: { code: 'CONFLICT', message: err instanceof Error ? err.message : String(err), details: { repair: 'accounts.json' } } }
   }
   if (typeof wanted === 'string') {
     accounts = accounts.filter((x) => x.id === wanted)
@@ -85,7 +86,7 @@ export async function skillsCommand(a: {
   try {
     settings = await readSkillSettings(path.join(a.profileDir, 'app-settings.json'))
   } catch (err) {
-    return { ok: false, error: { code: 'CONFLICT', message: err instanceof Error ? err.message : String(err) } }
+    return { ok: false, error: { code: 'CONFLICT', message: err instanceof Error ? err.message : String(err), details: { repair: 'app-settings.json' } } }
   }
   const stubs = skillStubs(a.skillsDir, settings)
   const head = (x: Account): Omit<SkillsAccount, 'skills'> => ({ id: x.id, label: x.label, provider: providerOf(x) })

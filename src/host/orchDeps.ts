@@ -6,6 +6,7 @@
 import type { OrchAccount, OrchRunConfig, OrchServerDeps } from '../core/orchestration/command'
 import type { Provider } from '../core/types'
 import { AppUnreachable } from '../core/host/orchProtocol'
+import { RepairNeeded } from '../core/settings/repairNeeded'
 import type { HostSessions } from './sessions'
 import type { HostLocal, HostLocalName } from './spawner'
 
@@ -239,8 +240,9 @@ const HOST_WHEN_ABSENT = ['chatSend'] as const
  * six takes its old route — that Host behaves exactly as a Host before S2.
  *
  * A local call that acts calls `onEffect` before it runs, the rule the `act` funnel keeps. A local
- * refusal only the app can clear (a settings file the Host cannot read) is thrown as `AppUnreachable`
- * and flagged like an absent app, so the command answers CONFLICT with the refusal's own words.
+ * refusal only the app can clear (a profile file the Host cannot read: accounts.json, app-settings.json)
+ * arrives as `RepairNeeded` and is flagged with its file, so the command answers CONFLICT carrying
+ * `repair: <file>` and the refusal's own words — never the 400 a failed start otherwise is.
  */
 const HOST_LOCAL = [
   'startWorker', 'startCoordinator', 'releaseWorker', 'readWorker', 'probeLimit', 'readReviewFile'
@@ -390,12 +392,14 @@ export function hostOrchDeps(a: {
    *  the transition table — lands somewhere a person can read it. Without it the Host's command layer
    *  degrades silently, which is the one thing a degradation must not do. */
   log(message: string): void
-  /** Called when a **PROPAGATES** action (or a HOST_LOCAL one that falls back to that route, or a local
-   *  refusal only the app can clear) could not be put to the app — none attached, or the one that
-   *  was did not answer. `orch.ts` answers that call CONFLICT on the strength of this, rather than by
+  /** Called when a **PROPAGATES** action (or a HOST_LOCAL one that falls back to that route) could not
+   *  be put to the app — none attached, or the one that was did not answer — or when the Host itself
+   *  refused for want of the app. That last case carries `detail` (so the log says the Host refused,
+   *  not that the app was asked), and a profile file only the app can repair (`RepairNeeded`) rides
+   *  in it as `repair`. `orch.ts` answers that call CONFLICT on the strength of this, rather than by
    *  matching text in the reply. Never called for the other three groups — SWALLOWED, FIRE_AND_FORGET
    *  and DEGRADES: their refusal does not decide what the command answers. */
-  onAppRequired(name: string, why: string): void
+  onAppRequired(name: string, why: string, detail?: { repair?: string }): void
   /** Called when this command is about to ask the app for something that **changes something outside
    *  the state** — the other half of "did this call do anything", beside the commit flag (request
    *  receipts design §3). Optional: a caller that does not record receipts leaves it out, and the
@@ -480,7 +484,8 @@ export function hostOrchDeps(a: {
 
   /** Same forwarding, but a question that could not be put to the app is answered by `local` — see
    *  LOCAL_WHEN_ABSENT. A failed local read is the app being required after all: it is flagged and
-   *  thrown as `AppUnreachable`, carrying the reader's own reason. */
+   *  thrown as `AppUnreachable`, carrying the reader's own reason — and, for a file only the app can
+   *  repair, which file (`repair`). */
   const localWhenAbsent = (
     name: (typeof LOCAL_WHEN_ABSENT)[number],
     local: (...args: never[]) => Promise<unknown>
@@ -495,7 +500,7 @@ export function hostOrchDeps(a: {
           const refused = new AppUnreachable(
             `APP_REQUIRED: ${name} could not be answered without the app: ${err instanceof Error ? err.message : String(err)}`
           )
-          a.onAppRequired(name, refused.message)
+          a.onAppRequired(name, refused.message, err instanceof RepairNeeded ? { repair: err.file } : {})
           throw refused
         }
       }
@@ -539,7 +544,7 @@ export function hostOrchDeps(a: {
           const refused = new AppUnreachable(
             `APP_REQUIRED: ${name} could not be done without the app: ${err instanceof Error ? err.message : String(err)}`
           )
-          a.onAppRequired(name, refused.message)
+          a.onAppRequired(name, refused.message, {})
           throw refused
         }
         a.log(`${name} written by the Host (no app attached)`)
@@ -556,7 +561,7 @@ export function hostOrchDeps(a: {
   }
 
   /** HOST_LOCAL: the spawner's answer when it owns this call, otherwise the route the name had before
-   *  S2. A local refusal thrown as `AppUnreachable` is flagged the way a propagating forward is — and
+   *  S2. A local `RepairNeeded` is flagged with its file the way a propagating forward is flagged — and
    *  only for the four that propagate, since a swallowed failure must not decide the status. */
   const hostLocal = (name: HostLocalName) => {
     const propagates = HOST_LOCAL_FALLBACK[name] === 'propagates'
@@ -568,7 +573,7 @@ export function hostOrchDeps(a: {
       try {
         return await (local[name] as (...xs: unknown[]) => Promise<unknown>)(...args)
       } catch (err) {
-        if (propagates && err instanceof AppUnreachable) a.onAppRequired(name, err.message)
+        if (propagates && err instanceof RepairNeeded) a.onAppRequired(name, err.message, { repair: err.file })
         throw err
       }
     }

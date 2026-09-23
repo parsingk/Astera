@@ -301,10 +301,16 @@ const STEPS: Record<
   // 다시 물으라고 말한다 — 그 "다시 묻는" 명령이 `astera status` 일 수는 없다. 문구가 아니라 `details`
   // 의 칸으로 가른다(Host 가 그 봉투에 `requestId` 를 싣는다): 계약을 문자열에 매는 것이 이 표가
   // 처음부터 피해 온 일이다.
+  //
+  // **앱만 고칠 수 있는 프로필 파일 때문에 난 409 는 칠 명령이 없다**(Host S2). 할 일은 Astera 를
+  // 여는 것이고, 그것을 하는 명령은 없다 — 문구가 그 말을 하고, `details.repair` 가 어느 파일인지
+  // 말한다. `astera status` 를 주면 그 파일과 상관없는 것을 보러 가게 된다. 이것도 칸으로 가른다.
   CONFLICT: (cmd, details) =>
     typeof details.requestId === 'string'
       ? ['astera requests show --id <requestId>']
-      : [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
+      : typeof details.repair === 'string'
+        ? []
+        : [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
   // 시한을 넘긴 것과 Host 가 살아서 답하지 않는 것이 같은 코드다(run.ts 의 SILENT_HOST_CODE).
   // 둘을 가르는 명령이 이것이다 — 앞의 경우에는 답하고 뒤의 경우에는 답하지 않는다(docs/cli.md).
   //

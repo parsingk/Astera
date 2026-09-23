@@ -540,3 +540,19 @@ describe('silentHostEnd — Host 가 답하지 않은 채 시한이 지났다', 
     ])
   })
 })
+
+// A profile file only the app can repair (the Host's `repair` field, lifted into `details`): the step is
+// opening Astera, which no command does, so no command is offered. Any other 409 keeps its line.
+describe('a CONFLICT that names a file to repair', () => {
+  it('offers no command, carries the file, and exits 6', () => {
+    const e = { code: 'CONFLICT' as const, message: 'accounts.json is not valid JSON; open Astera to repair it', details: { repair: 'accounts.json' } }
+    expect(JSON.parse(errEnvelope(e, 'worker-start')).error).toEqual({
+      code: 'CONFLICT',
+      message: e.message,
+      details: { repair: 'accounts.json' },
+      nextSteps: []
+    })
+    expect(exitCodeFor(e.code)).toBe(6)
+    expect(nextStepsFor({ code: 'CONFLICT', cmd: 'worker-start' })).toEqual(['astera status'])
+  })
+})

@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { AppSettingsStore } from './appSettingsStore'
+import { AppSettingsStore, readSkillSettings } from './appSettingsStore'
+import { RepairNeeded } from '../core/settings/repairNeeded'
 import type { DesktopNotifySettings } from '../core/notify/settings'
 
 let dir: string
@@ -833,5 +834,21 @@ describe('AppSettingsStore first-run question', () => {
     expect(await b.load()).toEqual({ recovered: false })
     expect(b.getLang()).toBe(store.getLang())
     expect(b.getAgentBrowserEnabled()).toBe(store.getAgentBrowserEnabled())
+  })
+})
+
+describe('readSkillSettings on a corrupt file', () => {
+  it('is refused as a RepairNeeded naming the file, with the repair message', async () => {
+    const dirX = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-skillset-'))
+    try {
+      const f = path.join(dirX, 'app-settings.json')
+      await fs.writeFile(f, '{ not json', 'utf8')
+      const err = await readSkillSettings(f).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(RepairNeeded)
+      expect((err as RepairNeeded).file).toBe('app-settings.json')
+      expect((err as Error).message).toMatch(/open Astera to repair it/)
+    } finally {
+      await fs.rm(dirX, { recursive: true, force: true })
+    }
   })
 })

@@ -17,9 +17,10 @@ import type { OrchState } from './state'
  * `run-configs` 가 여기 있는 것은 그것이 상태를 읽어 답하는 명령이기 때문이다 — 다만 검사 구성 목록
  * 자체는 앱의 것이라(`OrchServerDeps.listRunConfigs`) 이 길에서는 그 명령 자신의 문서화된 부재값인
  * 빈 목록으로 답한다. 그 값을 읽고 `--validate` 를 빼는 코디네이터는 Host 가 없으면 애초에 돌고
- * 있지 않다. **Host 가 떠 있을 때는 정반대다** — 그쪽에서는 이 명령이 거절로 간다(`host/orchDeps.ts`
- * 의 PROPAGATES). 거기서는 속을 코디네이터가 살아 있기 때문이고, 그 파일이 이 길을 자기 유일한
- * 예외로 적어 두고 있다.
+ * 있지 않다. **Host 가 떠 있을 때는 다르다** — 앱이 있으면 앱이 답하고, 없으면 Host 가 프로필의
+ * run-configs.json 과 계획의 폴더를 읽어 앱과 같은 목록을 답한다(`host/orchDeps.ts` 의
+ * LOCAL_WHEN_ABSENT). 그 파일이 깨졌으면 빈 목록이 아니라 거절이다 — 거기서는 속을 코디네이터가 살아
+ * 있기 때문이다.
  */
 const FROM_FILE = new Set([
   'jobs-list', 'jobs-get', 'runs-list', 'runs-get', 'tasks-list',
