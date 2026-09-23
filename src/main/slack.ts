@@ -6,7 +6,7 @@
 // is in ipc.ts and index.ts. The Webhook URL and bot token are never written to the log.
 import { promises as fs } from 'node:fs'
 import type { Account, SessionInfo, RollStateEvent } from '../core/types'
-import { OutputScanner, matchesLimitPhrase } from '../core/rolling/detect'
+import { OutputScanner } from '../core/rolling/detect'
 import { CodexLimitScanner } from '../core/rolling/codexSignal'
 import { PROVIDER_META, providerOf, type Provider } from '../core/providers/meta'
 import { parseStatusLinePayload } from '../core/usage/statusline'
@@ -41,6 +41,10 @@ import {
 const GATE_PCT = 90 // the bar for choosing which window's reset to show — no longer used as a gate for accepting a limit phrase
 const DEDUP_MS = 10 * 60_000 // the window in which identical text is not re-sent (guards against a repeated excerpt or state)
 const EXIT_DELAY_MS = 3_000 // the exit notification delay — so a rolling kill→exit is not mistaken for a real exit
+// How long a usage-limit StopFailure waits before it decides, and how near its hook the screen scanner's
+// hit has to be to count as this turn's limit already announced (sendStopFailure).
+const STOP_FAILURE_DELAY_MS = EXIT_DELAY_MS
+const LIMIT_SEEN_WINDOW_MS = 60_000
 // EXIT_DEFER_MS in main/orchestration/rollTap.ts deliberately mirrors this value — tune them together.
 // Slack's cap on the `text` field — see the same constant in core/slack/transcript.ts for why every
 // display cap is opened to it rather than kept narrow.
@@ -101,6 +105,9 @@ interface SlackRecord {
   scanner: LimitScanner // for limit detection in non-rolling sessions
   lastSent: Map<string, number> // sent text → time (dedup)
   exitTimer: ReturnType<typeof setTimeout> | null // the deferred exit notification
+  /** When the non-rolling limit scanner last fired (handleData), whether or not its "⛔" survived the
+   *  send dedup. sendStopFailure reads it as the evidence that this turn's limit was already announced. */
+  limitSeenAt?: number
   /** The promise for posting the root message. register starts it and send awaits it — without waiting for
    *  the ts, notifications that go out first leak outside the thread. Resolves to null on failure. */
   thread: Promise<string | null> | null
@@ -534,9 +541,10 @@ export class SlackNotifier {
       void this.sendStopSummary(record, transcriptPath, p.last_assistant_message)
     } else if (p.hook_event_name === 'StopFailure') {
       // Claude Code fires this *instead of* Stop when an API error ends the turn. The turn is over,
-      // so the capture goes exactly as on Stop.
+      // so the capture goes exactly as on Stop. It is captured async and can land after the next
+      // turn's PreToolUse; see attention.ts for that window and why it is accepted.
       record.pendingTool = null
-      void this.sendStopFailure(record, p.error, p.last_assistant_message)
+      this.sendStopFailure(record, p.error, p.last_assistant_message)
     } else if (p.hook_event_name === 'Notification') {
       void this.sendNotification(record, p, transcriptPath)
     } else if (p.hook_event_name === 'PreToolUse') {
@@ -803,7 +811,10 @@ export class SlackNotifier {
   handleData(e: { sessionId: string; data: string }): void {
     const record = this.records.get(e.sessionId)
     if (!record || (record.info.rollAccountIds?.length ?? 0) >= 1) return
-    if (record.scanner.push(e.data)) void this.onLimitText(record)
+    if (record.scanner.push(e.data)) {
+      record.limitSeenAt = this.now()
+      void this.onLimitText(record)
+    }
   }
 
   /** The session exit notification — sent after a 3-second delay. If onRolled (a rolling switch) arrives in that window, it is cancelled.
@@ -880,21 +891,31 @@ export class SlackNotifier {
    * errored turn is the error line itself, or whatever was said before the error cut it off. So the
    * error is posted instead — `last_assistant_message`, which on this event is the error message's own
    * text (Claude Code 2.1.280's `sAe` builder), or the `error` kind when there is none. The line is the
-   * one a failed chat turn already posts (`slack.chat.turnFailed`).
+   * one a failed chat turn already posts; the key says `chat` but its text is not chat-specific.
    *
    * **A usage limit is already announced, and is not announced twice.** In a rolling chain, rolling
    * reads the same `error: rate_limit` entry from the transcript (core/rolling/claudeSignal.ts) and
-   * onRollState posts the wait. In any other session, handleData's scanner posts "limit reached" from
-   * the limit phrase on screen, and the error text here is that same phrase. A `rate_limit` that is
-   * neither, a plain request-rate refusal, is caught by nothing else, so it is posted here.
+   * always posts a switch or a wait through onRollState, so this stays silent. In any other session
+   * the evidence is whether handleData's scanner actually fired, not what the error text says: the
+   * scanner also fires on the limit dialog alone, and several of the binary's limit texts ("Fable
+   * limit", the monthly spend limit) are not LIMIT_RE's phrase. The pty data can land after this
+   * async hook, so the decision waits STOP_FAILURE_DELAY_MS (the exit notification's delay), then
+   * posts unless the scanner fired within LIMIT_SEEN_WINDOW_MS of the hook. A scanner that never
+   * fired cannot suppress it, so a limit is never missed; the cost is a few seconds' delay.
    */
-  private async sendStopFailure(record: SlackRecord, error: unknown, lastMessage: unknown): Promise<void> {
+  private sendStopFailure(record: SlackRecord, error: unknown, lastMessage: unknown): void {
     const message = typeof lastMessage === 'string' ? lastMessage.trim() : ''
-    if (error === 'rate_limit' && ((record.info.rollAccountIds?.length ?? 0) >= 1 || matchesLimitPhrase(message)))
-      return
     let text = message !== '' ? message : typeof error === 'string' && error !== '' ? error : 'unknown'
     if (text.length > EXCERPT_MAX) text = text.slice(0, EXCERPT_MAX) + '…'
-    await this.send(record, t(this.deps.lang(), 'slack.chat.turnFailed', { message: text }))
+    const post = (): void => void this.send(record, t(this.deps.lang(), 'slack.chat.turnFailed', { message: text }))
+    if (error !== 'rate_limit') return post()
+    if ((record.info.rollAccountIds?.length ?? 0) >= 1) return
+    const hookAt = this.now()
+    setTimeout(() => {
+      const seen = record.limitSeenAt
+      if (seen !== undefined && seen >= hookAt - LIMIT_SEEN_WINDOW_MS) return
+      post()
+    }, STOP_FAILURE_DELAY_MS)
   }
 
   /**

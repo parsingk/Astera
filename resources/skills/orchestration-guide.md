@@ -39,9 +39,9 @@ at once, pass `--run <run>` explicitly on every command (`task-create`, `tasks l
 accept it).
 
 **Passing `--run` on `task-create` is worth doing even with one Run of your own.** The default is
-whatever Run was created last across the whole app, so a Job someone makes in the sidebar between
-your `run-create` and your `task-create` becomes that default, and every Task you create after it
-lands in their Job. Nothing fails when this happens — the Tasks are simply somewhere else. Take the
+whatever run was started last across the whole app, so a Job someone runs from the sidebar (or a
+schedule that fires) between your `run-create` and your `task-create` becomes that default, and every
+Task you create after it lands in their run. Nothing fails when this happens — the Tasks are simply somewhere else. Take the
 id from `run-create --json` and pass it on every `task-create`.
 
 **"It does no scheduling or batching" above is true only for a Run made through the syntax this
@@ -935,7 +935,8 @@ meaningless and repeats the same failure indefinitely.
   (section 11).
 - Do not `sessions send` without a `sessions read` right before it. The text answers whatever prompt
   the other session shows, a folder-trust or first-run screen included (12.3).
-- Do not send anything again after exit `3` or `7`. Ask `requests show` first (4.10, 12.3).
+- Do not send anything again after exit `3` or `7`. Follow `nextSteps` in its order (4.10): after a
+  `7` that is `requests show`, after a `3` it is `astera host start` first, then `requests show`.
 
 ## 10. Environment variables
 
@@ -1085,7 +1086,8 @@ own Run.**
   it adds nothing a coordinator needs, and one vocabulary per Run is easier to read back.
 - **A Run someone laid out in the app gets no new Tasks from `tasks add` either** (section 1). Raise a
   plan you think is wrong with `gate-create`.
-- **A worker uses none of this.** `jobs create` and `tasks add` go through `run-create` and
+- **A worker uses none of this except `requests show`**, which answers a worker's own lost `send` or
+  `ask` the same way (4.10). `jobs create` and `tasks add` go through `run-create` and
   `task-create`, so a worker is refused them with exit `5`, the same boundary as section 6. A worker
   talks to its coordinator with `send` and `ask`, never by typing into a session.
 - **Do not type into your own workers.** A worker's next instruction is a Task, given with
@@ -1162,21 +1164,27 @@ to a file and send one short line that names the file.
 
 **A chat session takes a send as one turn.** With Astera open, a chat session that is waiting on an
 approval or a question card refuses the send with exit `6` and names the card; `sessions send` does
-not answer cards, and nothing was sent. A session that has ended is a `6` as well.
+not answer cards, and nothing was sent. **With Astera closed you cannot see a card**: `sessions read`
+has no `pending` then, and the send is not refused. Your turn waits behind the card in the agent and
+runs once someone answers it in Astera, so "sent" does not mean the other session has read it yet. A
+session that has ended is a `6` as well.
 
 **Pass `--request-id` on every send, with an id you choose.** A retry with the same id is replayed:
 the Host answers what it answered the first time and types nothing a second time.
 
 **Exit `3` and exit `7` mean "I do not know whether it was typed", not "it failed".** Do not send
-again. Ask the receipt, the way section 4.10 describes:
+again. Follow `nextSteps` in the order it gives them (4.10): after a `7` that is the receipt, after a
+`3` it is `astera host start` first, because with no Host the receipt question is a second `3`:
 
 ```bash
 astera requests show --id <requestId> --json
 ```
 
-A `completed` receipt means it was typed. A `pending` one means it is being typed right now: ask
-again in a moment. After an `absent`, read the screen before you decide anything, because the screen
-is then the only record of whether the text arrived.
+A `completed` receipt is the answer the send got, and that answer can be a recorded refusal: read
+`data.response`, which holds the Host's `status` and `body`. Only a `2xx` status whose body has
+`"sent": true` means it was typed; a `409` is a refusal, and nothing was sent. A `pending` one means
+it is being typed right now: ask again in a moment. After an `absent`, read the screen before you
+decide anything, because the screen is then the only record of whether the text arrived.
 
 ### 12.4 A missing skill: `skills list` and `skills install`
 

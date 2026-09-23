@@ -111,6 +111,12 @@ export function createAttentionState(): AttentionState {
         // API error (a limit, an auth failure, an overload) ends the turn. The turn is over either
         // way, and leaving the value standing would keep a `waiting` up with nobody waiting, so the
         // next real prompt would be no transition and the desktop notifier would miss it.
+        // **StopFailure is captured async (statusline.ts), so it can land late.** A prompt queued
+        // behind the failed turn starts at once; if that turn's synchronous PreToolUse is written
+        // before the StopFailure line (about 0.1 s through Git Bash), this branch ends the new turn
+        // early: idle while it works, and pendingPrompt and Slack drop its question capture. The
+        // payload carries no ordering key to tell a late turn end from a current one, so the narrow
+        // window is accepted rather than guessed around. Stop is synchronous and has no such race.
         // A stray Stop for a session never seen is already idle by default; only touch an existing
         // record, for the same reason as PostToolUse above.
         const record = sessions.get(sessionId)

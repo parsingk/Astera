@@ -51,7 +51,8 @@ export function createPendingPromptState(now: () => number = Date.now): PendingP
         if (current !== undefined && current.toolUseId === p.tool_use_id) set(sessionId, null)
       } else if (p.hook_event_name === 'Stop' || p.hook_event_name === 'StopFailure') {
         // StopFailure fires instead of Stop when an API error ends the turn; no question of it is on
-        // screen after that either.
+        // screen after that either. It is captured async and can land after the next turn's
+        // PreToolUse; see attention.ts for that window and why it is accepted.
         set(sessionId, null)
       }
     },

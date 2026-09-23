@@ -160,9 +160,10 @@ export class StatusLineManager {
       PreToolUse: [{ matcher: ASK_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }],
       PostToolUse: [{ matcher: ASK_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }],
       // A turn starting and a turn ended by an API error (a limit, an auth failure) — StopFailure fires
-      // *instead of* Stop then. Only `astera sessions list` reads them: the Host tells working from
-      // waiting off the last line (core/hooks/sessionState.ts); attention, pendingPrompt, Slack and
-      // rolling switch on the names they know and pass these by. `async`, so Claude Code does not
+      // *instead of* Stop then. The Host reads both for `astera sessions list`: it tells working from
+      // waiting off the last line (core/hooks/sessionState.ts). In the app, attention, pendingPrompt
+      // and Slack read StopFailure as a turn end, the same as Stop; nothing in the app reads
+      // UserPromptSubmit, and rolling reads neither. `async`, so Claude Code does not
       // wait on the capture's node process (about 0.1 s through Git Bash) before every prompt; it
       // honours that for both events (2.1.280 forces a hook synchronous only on its SessionStart,
       // Setup and MessageDisplay passes and on calls from a cloud session). A session reads this file

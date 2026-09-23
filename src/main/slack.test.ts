@@ -156,26 +156,94 @@ describe('SlackNotifier 훅 이벤트', () => {
     expect(h.sent).toEqual([])
   })
 
-  // 비롤링 세션은 화면 출력의 한도 문구로 "⛔ 한도 도달" 을 보낸다(handleData). 오류 문장이 그 문구면
-  // 그 알림이 이 턴의 끝을 말한다.
-  it('비롤링 세션에서 한도 문구인 rate_limit StopFailure 는 한도 알림 하나만 남긴다', async () => {
-    const h = setup()
-    h.notifier.register(info())
-    const text = "You've hit your session " + 'limit · resets 3pm'
-    h.notifier.onHookEvent('s-1', stopFailure('rate_limit', text))
-    h.notifier.handleData({ sessionId: 's-1', data: text })
-    await flush()
-    expect(h.sent).toEqual(['[myproj · work1] ⛔ 한도 도달 — 자동 재개 없음'])
-  })
+  // **비롤링 세션은 문구가 아니라 증거로 가른다.** 화면의 한도 감지(handleData)가 "⛔ 한도 도달" 을
+  // 냈으면 그것이 이 턴의 끝을 말한다. 오류 문장만 보고 가르면 감지가 무는 모양(대화상자만 뜬 화면,
+  // "Fable limit", 지출 한도)과 LIMIT_RE 가 어긋나 둘 다 나가거나 둘 다 안 나간다. 그래서 감지가 문
+  // 시각을 적어 두고, 훅이 온 뒤 몇 초 기다려 그 시각이 훅 전후 1분 안이면 보내지 않는다.
+  describe('비롤링 세션의 rate_limit StopFailure', () => {
+    const SCREEN_LIMIT = 'Claude usage limit ' + 'reached ∙ resets 5pm'
+    const FABLE = "You've hit your Fable " + 'limit · resets 5pm'
+    const run = async (body: (h: ReturnType<typeof setup>) => Promise<void>): Promise<void> => {
+      vi.useFakeTimers()
+      try {
+        const h = setup()
+        h.notifier.register(info())
+        await body(h)
+      } finally {
+        vi.useRealTimers()
+      }
+    }
 
-  // 한도 문구가 아닌 rate_limit(요청이 너무 잦다는 429 같은 것)은 출력 감지가 물지 않는다 — 알리는 것이
-  // 이것뿐이다.
-  it('비롤링 세션에서 한도 문구가 아닌 rate_limit StopFailure 는 턴 실패로 보낸다', async () => {
-    const h = setup()
-    h.notifier.register(info())
-    h.notifier.onHookEvent('s-1', stopFailure('rate_limit', 'API Error: Request rejected (429)'))
-    await flush()
-    expect(h.sent).toEqual(['[myproj · work1] ⚠️ 턴 실패 — API Error: Request rejected (429)'])
+    it('감지가 훅보다 먼저 물었으면 한도 알림 하나만 남긴다', () =>
+      run(async (h) => {
+        h.notifier.handleData({ sessionId: 's-1', data: SCREEN_LIMIT })
+        h.advance(2_000)
+        h.notifier.onHookEvent('s-1', stopFailure('rate_limit', FABLE))
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(h.sent).toEqual(['[myproj · work1] ⛔ 한도 도달 — 자동 재개 없음'])
+      }))
+
+    it('감지가 훅 뒤에, 기다리는 몇 초 안에 물어도 한도 알림 하나만 남긴다', () =>
+      run(async (h) => {
+        h.notifier.onHookEvent('s-1', stopFailure('rate_limit', FABLE))
+        h.advance(1_000)
+        await vi.advanceTimersByTimeAsync(1_000)
+        h.notifier.handleData({ sessionId: 's-1', data: SCREEN_LIMIT })
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(h.sent).toEqual(['[myproj · work1] ⛔ 한도 도달 — 자동 재개 없음'])
+      }))
+
+    // 10분 안의 두 번째 한도는 "⛔" 가 중복으로 걸러진다. 그래도 알린 것으로 친다 — 이미 한 번 알렸다.
+    it('중복으로 걸러진 한도 알림도 알린 것으로 친다', () =>
+      run(async (h) => {
+        h.notifier.handleData({ sessionId: 's-1', data: SCREEN_LIMIT })
+        await vi.advanceTimersByTimeAsync(0)
+        h.advance(5 * 60_000)
+        h.notifier.handleData({ sessionId: 's-1', data: SCREEN_LIMIT })
+        h.notifier.onHookEvent('s-1', stopFailure('rate_limit', FABLE))
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(h.sent).toEqual(['[myproj · work1] ⛔ 한도 도달 — 자동 재개 없음'])
+      }))
+
+    it('감지가 물지 않았으면 문구가 무엇이든 턴 실패를 보낸다', () =>
+      run(async (h) => {
+        const texts = [
+          FABLE,
+          "You've hit your monthly spend " + 'limit',
+          "You've hit your session " + 'limit · resets 3pm',
+          'API Error: Request rejected (429)'
+        ]
+        for (const text of texts) {
+          h.notifier.onHookEvent('s-1', stopFailure('rate_limit', text))
+          await vi.advanceTimersByTimeAsync(10_000)
+        }
+        expect(h.sent).toEqual(texts.map((t) => `[myproj · work1] ⚠️ 턴 실패 — ${t}`))
+      }))
+
+    it('감지가 1분보다 오래전에 물었으면 이번 턴의 것이 아니다 — 턴 실패를 보낸다', () =>
+      run(async (h) => {
+        h.notifier.handleData({ sessionId: 's-1', data: SCREEN_LIMIT })
+        await vi.advanceTimersByTimeAsync(0)
+        h.advance(2 * 60_000)
+        h.notifier.onHookEvent('s-1', stopFailure('rate_limit', FABLE))
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(h.sent).toEqual([
+          '[myproj · work1] ⛔ 한도 도달 — 자동 재개 없음',
+          `[myproj · work1] ⚠️ 턴 실패 — ${FABLE}`
+        ])
+      }))
+
+    it('rate_limit 이 아닌 오류는 기다리지 않고 턴 실패를 보낸다', () =>
+      run(async (h) => {
+        h.notifier.handleData({ sessionId: 's-1', data: SCREEN_LIMIT })
+        await vi.advanceTimersByTimeAsync(0)
+        h.notifier.onHookEvent('s-1', stopFailure('overloaded', 'API Error: Repeated 529 Overloaded errors'))
+        await vi.advanceTimersByTimeAsync(0)
+        expect(h.sent).toEqual([
+          '[myproj · work1] ⛔ 한도 도달 — 자동 재개 없음',
+          '[myproj · work1] ⚠️ 턴 실패 — API Error: Repeated 529 Overloaded errors'
+        ])
+      }))
   })
 
   it('Notification 훅 → 프리픽스 붙은 입력 필요 알림', async () => {
