@@ -178,8 +178,8 @@ const LISTING: Record<string, readonly string[]> = {
   'run-worktree-set': ['astera runs list'],
   'run-use': ['astera runs list'],
   // **회차다.** `--run` 에 Job id 도 통하지만 그것은 템플릿의 정의 Task 를 만드는 다른 일이다.
-  // `--deps`·`--parent` 가 못 찾는 것은 Task 다.
-  'task-create': ['astera runs list', 'astera tasks list'],
+  // `--deps`·`--parent` 가 못 찾는 것은 Task 다. `--account` 가 못 찾는 것은 계정이다.
+  'task-create': ['astera runs list', 'astera tasks list', 'astera accounts'],
   'task-update': ['astera tasks list'],
   // **Dispatch 를 통째로 세는 명령은 없다** — `dispatch-show` 는 Task 하나의 것만 준다. 그래서 두
   // 줄이고, 앞 줄이 뒷줄의 `<taskId>` 를 준다. 한 줄만 주면 채워질 길이 없는 자리표시자가 된다.

@@ -217,10 +217,12 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
 
   // **`--run` 에 Job id 는 통한다 — 그래서 더 나쁘다.** 회차가 아니라 템플릿에 정의 Task 가 생기고
   // 0 으로 끝난다. 실패하는 줄보다 조용히 다른 것을 만드는 줄이 나쁘다.
+  // `--account` 의 없는 계정도 404 다(6b403c7). 그 id 는 두 목록 어디에도 없다.
   it('task-create 는 회차 목록으로 간다, Job 목록이 아니라', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'task-create' })).toEqual([
       'astera runs list',
-      'astera tasks list'
+      'astera tasks list',
+      'astera accounts'
     ])
   })
 
