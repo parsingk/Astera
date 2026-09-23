@@ -175,7 +175,7 @@ describe('startHostServer', () => {
   it('answers a hello on the same protocol with its own version and pid', async () => {
     const h = await server()
     const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
-    expect(reply).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: process.pid, features: ['proc', 'ping', 'orch'] })
+    expect(reply).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: process.pid, features: ['proc', 'ping', 'orch', 'requests'] })
     expect((reply as { startedAt: string }).startedAt).toMatch(/^\d{4}-/)
   })
 
@@ -455,6 +455,9 @@ describe('startHostServer', () => {
     open.push(s)
     const [reply] = await talk(addr.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
     expect((reply as { features: string[] }).features).not.toContain('orch')
+    // 영수증도 같은 사실을 탄다 — 명령에 답하지 못하는 Host 는 그 명령을 답했다는 기록도 쥘 수 없다.
+    // 이것을 무조건 알리면, 부르는 쪽은 아무도 답하지 않을 호출이 보호받는다고 믿는다.
+    expect((reply as { features: string[] }).features).not.toContain('requests')
   })
 
   describe('orch-call', () => {

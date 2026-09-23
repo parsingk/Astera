@@ -38,6 +38,20 @@ export const HOST_FEATURE_PING = 'ping'
  *  it does not know — logged and ignored — rather than being retired for it. */
 export const HOST_FEATURE_ORCH = 'orch'
 
+/** Request receipts — `orch-call.request`, the `requests-show` command, and the replay that makes a
+ *  retry safe (request receipts design §8). Announced the same way and for the same reason as the
+ *  features above: the protocol number stays 3, because bumping it retires a Host that is running
+ *  perfectly well and kills its terminals with it.
+ *
+ *  **Why a feature flag is not optional for this one.** A Host from before it destructures
+ *  `{cmd, args, session}` and runs the command *unprotected* while the caller believes otherwise —
+ *  the silent drop this whole design is built against. So the CLI splits: a **presented**
+ *  `--request-id` against a Host that does not announce this is refused with exit 9 (the caller asked
+ *  for protection and is not getting it), while an **auto-minted** id is dropped and the command runs
+ *  exactly as it did before receipts existed. We refuse to break a promise we made, and we never
+ *  refuse over one we did not. */
+export const HOST_FEATURE_REQUESTS = 'requests'
+
 /** What the app needs to rebuild its own record for a session after a restart. The Host stores it
  *  and hands it back untouched — only the manager that wrote it knows how to read it (slice 2
  *  design §4).

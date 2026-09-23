@@ -5,7 +5,15 @@
 // idle — so this module can be started for real inside a test at an address of that test's own.
 import net from 'node:net'
 import { promises as fs } from 'node:fs'
-import { HOST_PROTOCOL, HOST_FEATURE_PROC, HOST_FEATURE_PING, HOST_FEATURE_ORCH, type ClientMessage, type HostMessage } from '../core/host/protocol'
+import {
+  HOST_PROTOCOL,
+  HOST_FEATURE_PROC,
+  HOST_FEATURE_PING,
+  HOST_FEATURE_ORCH,
+  HOST_FEATURE_REQUESTS,
+  type ClientMessage,
+  type HostMessage
+} from '../core/host/protocol'
 import { encodeLine, createLineReader } from './framing'
 import type { HostLog } from './log'
 import { AppUnreachable, type OrchCall, type OrchCaller } from '../core/host/orchProtocol'
@@ -229,7 +237,17 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
             // a caller that supplies no `orch` (several test call sites do not) would claim a
             // capability it cannot answer, and an `orch-call` sent to it would fall through to the
             // "unknown message" log below and never get a reply at all.
-            features: [HOST_FEATURE_PROC, HOST_FEATURE_PING, ...(deps.orch ? [HOST_FEATURE_ORCH] : [])]
+            //
+            // **HOST_FEATURE_REQUESTS rides the same condition**, because it is the same fact:
+            // receipts live inside the thing that answers `orch-call` (`createHostOrch`), so a Host
+            // with no `orch` can neither run a command nor remember having run it. Announcing it
+            // unconditionally would tell a caller that its presented `--request-id` protects a call
+            // that is never answered at all.
+            features: [
+              HOST_FEATURE_PROC,
+              HOST_FEATURE_PING,
+              ...(deps.orch ? [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS] : [])
+            ]
           })
           return
         }

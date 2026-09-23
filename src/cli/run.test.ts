@@ -13,6 +13,7 @@ import {
   argsForCall,
   liftRequestId,
   mintRequestId,
+  requestForHost,
   shownReceipt,
   callHost,
   connectFailureEnd,
@@ -240,6 +241,40 @@ describe('mintRequestId — 키를 안 단 호출도 id 를 싣는다', () => {
     expect(id.length).toBeGreaterThan(0)
     expect(id.length).toBeLessThanOrEqual(200)
     expect(id).toMatch(/^[0-9a-f-]+$/)
+  })
+})
+
+/**
+ * **두 갈래를 한 파일에 둔다**(설계 §13 단계 9). 앞쪽만 내보내면 옛 Host 를 향한 모든 명령이
+ * 깨지고, 뒤쪽만 내보내면 보호를 부탁한 사람이 보호받지 못한 채 그것을 모른다. 갈래가 갈리는
+ * 자리가 하나이므로 시험도 한 자리에 있어야 한다.
+ */
+describe('requestForHost — 실은 id 와 새긴 id 는 옛 Host 앞에서 갈라진다', () => {
+  const against = (features: string[], presented: boolean): ReturnType<typeof requestForHost> =>
+    requestForHost({ request: 'req-1', presented, features, address: '\\\\.\\pipe\\astera' })
+
+  it('영수증을 아는 Host 에는 둘 다 실려 나간다', () => {
+    expect(against(['orch', 'requests'], true)).toEqual({ send: 'req-1' })
+    // 키를 안 단 부름도 id 를 싣는다 — 그것이 8단계가 한 일이고, 전선에 닿는 자리가 여기다.
+    expect(against(['orch', 'requests'], false)).toEqual({ send: 'req-1' })
+  })
+
+  /** 조용히 흘리면 부르는 쪽은 보호받는다고 믿은 채 보호받지 못한다. 코드는 옆의
+   *  `HOST_FEATURE_ORCH` 검사와 같은 9 다 — 같은 사실(저쪽이 옛 빌드다)이기 때문이다. */
+  it('실은 id 는 조용히 버려지지 않고 9 로 끝난다', () => {
+    const r = against(['orch'], true)
+    expect(r).toEqual({ error: { code: 'VERSION_MISMATCH', message: expect.stringContaining('older build') } })
+    expect(exitCodeFor((r as { error: { code: 'VERSION_MISMATCH' } }).error.code)).toBe(9)
+    // 주소를 댄다 — 어느 Host 가 옛것인지 말하지 않으면 사람이 할 수 있는 일이 없다.
+    expect((r as { error: { message: string } }).error.message).toContain('\\\\.\\pipe\\astera')
+  })
+
+  /** 반대쪽으로 거절하면 옛 Host 를 향한 모든 명령이, 아무도 부탁한 적 없는 보호 때문에 깨진다. */
+  it('새긴 id 는 조용히 버려지고 명령은 예전 그대로 돈다', () => {
+    // 그리고 버려진 id 는 봉투에 칸조차 만들지 않는다 — 아래 callHost 묶음의 "id 가 없으면 그 칸을
+    // 만들지 않는다" 가 그 절반을 지킨다. 칸이 있고 값이 없는 것과 애초에 안 보낸 것을 저쪽이 가를
+    // 수 있어야 한다.
+    expect(against(['orch'], false)).toEqual({ send: undefined })
   })
 })
 

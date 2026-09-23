@@ -13,7 +13,7 @@ import { usageFor } from '../core/orchestration/cliUsage'
 import { humanFor, quietFor } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
-import { HOST_FEATURE_ORCH, HOST_FEATURE_PING } from '../core/host/protocol'
+import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS } from '../core/host/protocol'
 import { cliHostTarget, logToStderr, runHostCommand } from './host'
 import {
   CLI_PROTOCOL,
@@ -283,6 +283,41 @@ export function liftRequestId(
  * there is no counter here to carry: one CLI process asks one thing and exits.
  */
 export const mintRequestId = (): string => randomUUID()
+
+/**
+ * What the id does against the Host we actually reached (request receipts design §8).
+ *
+ * **Auto-minting forces two different degradations, and the split is the whole point.** A Host from
+ * before receipts destructures `{cmd, args, session}`, ignores a field it does not know, and runs the
+ * command unprotected.
+ *
+ * - A **presented** key is refused, and nothing is sent. Silence there is the dangerous half: the
+ *   caller typed the flag because of a belief about what happens next, and letting the command run
+ *   would make that belief false without telling anyone. Exit 9 is the same shape and code as the
+ *   `HOST_FEATURE_ORCH` check below it, because it is the same fact — this Host is an older build.
+ * - An **auto-minted** id is dropped and the command runs exactly as it did before receipts existed.
+ *   Refusing here would break every command against every older Host over a protection nobody asked
+ *   for.
+ *
+ * In one line: we refuse to break a promise we made, and we never refuse over one we did not.
+ */
+export function requestForHost(a: {
+  /** The id this invocation holds, presented or minted. */
+  request: string
+  /** True when the caller typed `--request-id`. */
+  presented: boolean
+  features: readonly string[]
+  address: string
+}): { send: string | undefined } | { error: CliError } {
+  if (a.features.includes(HOST_FEATURE_REQUESTS)) return { send: a.request }
+  if (!a.presented) return { send: undefined }
+  return {
+    error: {
+      code: codeForStatus(501),
+      message: `the Host at ${a.address} does not keep request receipts — it is an older build, and --request-id cannot protect this call against it`
+    }
+  }
+}
 
 /**
  * A receipt's recorded response, filtered as the command that produced it would have been filtered.
@@ -653,7 +688,10 @@ export async function main(): Promise<void> {
   const lifted = liftRequestId(args)
   if ('error' in lifted) fail({ code: 'INVALID_ARGUMENTS', message: lifted.error })
   args = lifted.args
-  /** **Every invocation carries an id, whether or not one was asked for** (`mintRequestId`, §8). */
+  /** **Every invocation carries an id, whether or not one was asked for** (`mintRequestId`, §8).
+   *  Which of the two it is matters in exactly one place, against a Host too old to keep receipts:
+   *  there a presented key is refused and a minted one is dropped (`requestForHost`). */
+  const presented = lifted.request !== undefined
   const request = lifted.request ?? mintRequestId()
 
   /** The Host could not be reached at all, and the command is not one the state file can answer.
@@ -765,6 +803,21 @@ export async function main(): Promise<void> {
       const code = codeForStatus(501)
       fail({ code, message: `the Host at ${address} does not answer orchestration commands` })
     }
+    // **A presented key against a Host that cannot keep receipts ends here, with nothing sent**
+    // (`requestForHost`, §8). Below the check above because both are the same question asked of the
+    // same handshake, and an older Host that answers no orchestration command at all has already been
+    // refused by the more general one.
+    //
+    // **`version` still answers**, the third time this file makes that exemption and for the reason
+    // it gives at the bottom: this command exists to say whether the two builds have diverged, and a
+    // Host too old for receipts is precisely that fact. Nothing is lost by it either — `version`
+    // reads, so it leaves no receipt against any Host, and the key it dropped was protecting nothing.
+    const carried = requestForHost({ request, presented, features: conn.hello.features, address })
+    if ('error' in carried) {
+      conn.close()
+      if (parsed.cmd === 'version') versionWithoutHost()
+      fail(carried.error)
+    }
     // **기다리는 명령만, 그리고 stderr 에만**(cliKeepalive.ts). 여기서 시작하고 답이 오면 끄는
     // 이유는 자리 하나다: 기다림은 이 한 줄이고, 그 밖의 모든 명령은 이 자리를 스쳐 지나간다.
     //
@@ -782,7 +835,7 @@ export async function main(): Promise<void> {
       cmd: parsed.cmd,
       args: argsForCall({ cmd: parsed.cmd, args, cwd: process.cwd() }),
       sessionId,
-      request,
+      request: carried.send,
       timeoutMs: clientTimeoutMs({ cmd: parsed.cmd, args })
     }).finally(() => keepalive.stop())
     conn.close()
