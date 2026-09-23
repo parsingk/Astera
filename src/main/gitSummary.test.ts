@@ -135,9 +135,10 @@ describe('readGitSummary', () => {
     await fs.writeFile(path.join(dir, name), 'x\n', 'utf8')
     run(dir, ['add', name])
 
-    // Every git call is recorded and carried in the assertion message. This test fails about one full
-    // suite run in ten, under load only, and a bare `null` said nothing about why — whether git failed
-    // (and what it wrote to stderr) or succeeded with empty output is the whole question.
+    // Every git call is recorded and carried in the assertion message, so a `null` summary says why —
+    // whether git failed (and what it wrote to stderr) or succeeded with empty output. It was added for
+    // a failure seen about one full suite run in ten; that one turned out to be another test run's
+    // teardown deleting this fixture mid-test (see vitest.globalSetup.ts), not anything in git.
     const calls: { args: string[]; result: GitResult }[] = []
     const recording: typeof git = async (args, opts) => {
       const result = await git(args, opts)
