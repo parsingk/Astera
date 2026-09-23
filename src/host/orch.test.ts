@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   createHostOrch,
+  fingerprintOf,
   OBSERVED,
   receiptsToEvict,
   RECEIPTS_PER_CALLER,
@@ -1330,6 +1331,110 @@ describe('요청 영수증', () => {
     await fill(orch, f, 'req-새것')
     expect((await show(orch, 'ses1', 'req-옛것')).body.state, '한 시간이 지났는데 남아 있다').toBe('absent')
     expect((await show(orch, 'ses1', 'req-새것')).body.state).toBe('completed')
+  })
+
+  // === 11단계 — 지문 ===
+  //
+  // **범위를 세션으로 좁힌 것이 충돌을 안전하게 만들지는 않는다**(설계 §5). 한 세션 안에서도 두
+  // 스크립트가 같은 `req-1` 을 고를 수 있고, `ASTERA_SESSION` 이 없는 쪽은 아예 한 통을 나눠 쓴다.
+  // 안전하게 만드는 것은 지문이다: 같은 id, 다른 부름이면 남의 답이 아니라 거절이 나간다.
+
+  it('같은 id 로 다른 인자를 보내면 400 이고, 그 id 가 무엇이었는지 말한다', async () => {
+    const c = counting()
+    const orch = orchOver({ act: c.act })
+    const first = await orch.call({
+      cmd: 'run-create',
+      args: { objective: '첫 번째', cwd: 'D:/p' },
+      sessionId: 'sesA',
+      request: 'req-1'
+    })
+    expect(first.status).toBe(200)
+    const clash = await orch.call({
+      cmd: 'run-create',
+      args: { objective: '두 번째', cwd: 'D:/p' },
+      sessionId: 'sesA',
+      request: 'req-1'
+    })
+    // 400 은 exit 2 다 — 부르는 쪽이 고칠 것은 인자(자기가 고른 id)이고, 그것이 이 코드의 뜻이다.
+    expect(clash.status).toBe(400)
+    expect(JSON.stringify(clash.body), '무슨 명령에 쓴 id 인지 말하지 않았다').toContain('run-create')
+    expect(clash.replayed, '거절에 재생 표시가 붙었다').toBeUndefined()
+    // 그리고 아무 일도 일어나지 않았다 — 거절이지 절반의 실행이 아니다.
+    expect((await savedState()).jobs).toHaveLength(1)
+  })
+
+  it('같은 id 로 다른 명령을 보내도 400 이다', async () => {
+    const c = counting()
+    const orch = orchOver({ act: c.act })
+    await orch.call({ cmd: 'run-create', args: { objective: 'o', cwd: 'D:/p' }, sessionId: 'sesA', request: 'req-1' })
+    const other = await orch.call({ cmd: 'jobs-list', args: {}, sessionId: 'sesA', request: 'req-1' })
+    expect(other.status).toBe(400)
+    expect(JSON.stringify(other.body)).toContain('run-create')
+  })
+
+  /**
+   * **시한만 다른 재시도는 같은 부름이다**(설계 §12/6). 더 기다리겠다는 말은 무엇을 할지를 바꾸지
+   * 않는다 — 그리고 이것을 거절하면, 답을 가장 잘 잃는 명령들(기다리는 명령들)에서 id 가 쓸모를
+   * 잃는다.
+   */
+  it('시한만 바꾼 재시도는 거절되지 않고 그 요청을 잇는다', async () => {
+    const f = await workerFixture()
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses1']) })
+    const first = await orch.call({ cmd: 'ask', args: askArgs(f), sessionId: 'ses1', request: 'req-1' })
+    expect((first.body as { timedOut: boolean }).timedOut).toBe(true)
+    const patient = await orch.call({
+      cmd: 'ask',
+      args: { ...askArgs(f), timeoutMs: 5 },
+      sessionId: 'ses1',
+      request: 'req-1'
+    })
+    expect(patient.status, '시한이 다르다고 다른 부름으로 봤다').toBe(200)
+    expect(patient.replayed).toBe(true)
+    expect((patient.body as { questionId: string }).questionId).toBe(
+      (first.body as { questionId: string }).questionId
+    )
+    // 질문은 여전히 하나다 — 이 시험이 지키는 것은 결국 그것이다.
+    expect((await savedState()).messages.filter((m) => m.type === 'question')).toHaveLength(1)
+  })
+})
+
+/**
+ * **지문 자체를 규칙으로 본다.** 위의 세 시험은 진짜 명령이 지나가는 길로 충돌과 그 문장을 지키고,
+ * 이쪽은 무엇을 같은 부름으로 볼 것인가라는 규칙을 잰다 — 명령 하나를 골라 그 인자로 재면 그 명령의
+ * 인자에 대한 시험이 되지, 정규화에 대한 시험이 되지 않는다.
+ */
+describe('fingerprintOf — 무엇이 같은 부름인가', () => {
+  it('객체의 키 순서는 부름을 바꾸지 않는다', () => {
+    expect(fingerprintOf('run-create', { objective: 'o', cwd: 'D:/p' })).toBe(
+      fingerprintOf('run-create', { cwd: 'D:/p', objective: 'o' })
+    )
+  })
+
+  /** 설계가 이름을 댄 자리다 — `--deps` 는 JSON 배열이고, 그 안의 객체 키 순서는 JSON.stringify 가
+   *  받은 순서를 그대로 쓰므로, 정규화하지 않으면 같은 값이 다른 해시가 된다. */
+  it('JSON 배열 안 객체의 키 순서도 부름을 바꾸지 않는다', () => {
+    expect(fingerprintOf('task-create', { deps: [{ id: 'a', kind: 'k' }] })).toBe(
+      fingerprintOf('task-create', { deps: [{ kind: 'k', id: 'a' }] })
+    )
+  })
+
+  /** **배열의 차례는 다르다.** 객체의 키 순서는 쓴 사람이 고르지 않은 것이지만 배열의 차례는 고른
+   *  것이다 — `ask --options` 는 사람에게 그 차례로 보인다. 정렬해 버리면 두 부름이 하나가 된다. */
+  it('배열의 차례가 다르면 다른 부름이다', () => {
+    expect(fingerprintOf('task-create', { deps: ['a', 'b'] })).not.toBe(
+      fingerprintOf('task-create', { deps: ['b', 'a'] })
+    )
+  })
+
+  it('시한과 요청 id 자신은 보지 않는다', () => {
+    const plain = fingerprintOf('ask', { question: 'q' })
+    expect(fingerprintOf('ask', { question: 'q', timeoutMs: 1 })).toBe(plain)
+    expect(fingerprintOf('ask', { question: 'q', timeoutMs: 600_000 })).toBe(plain)
+    expect(fingerprintOf('ask', { question: 'q', requestId: 'req-1' })).toBe(plain)
+  })
+
+  it('명령 이름이 다르면 인자가 같아도 다른 부름이다', () => {
+    expect(fingerprintOf('run-start', { id: 'x' })).not.toBe(fingerprintOf('run-delete', { id: 'x' }))
   })
 })
 

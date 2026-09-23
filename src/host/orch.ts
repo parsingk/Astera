@@ -1,6 +1,7 @@
 // The Host's orchestration: the real command layer over the real store (host control plane design
 // §5, §6). This is what replaces the wire slice's `version`-only stub — `server.ts` calls
 // `OrchCall.call` and did not change when it did.
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { handleCommand, type OrchServerDeps } from '../core/orchestration/command'
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
@@ -37,6 +38,55 @@ const badRequestId = (id: string): string | null =>
   id.length === 0 || id.length > REQUEST_ID_MAX || hasControlChar(id)
     ? `bad request id: it must be 1 to ${REQUEST_ID_MAX} characters with no control characters`
     : null
+
+/**
+ * **What the fingerprint refuses to look at, and why each one** (request receipts design §5, §12/6).
+ *
+ * The principle is Orca's and it is one line: *exclude what changes how long we wait, never what
+ * changes what we do.*
+ *
+ * - **`requestId`** because it is the key. It never reaches here through `args` today — the CLI lifts
+ *   it onto the envelope — but a client that put it in `args` as well would otherwise fingerprint the
+ *   id into the hash of the call the id names.
+ * - **`timeoutMs`** because a caller that retries with a longer deadline is asking the same thing
+ *   with more patience. Refusing that would make the id useless for exactly the commands that lose
+ *   answers most, the ones that wait.
+ *
+ * Whether the set is exactly these two is a question about how agents really retry, and the only way
+ * to learn it is to ship and watch: a mismatch is loud by design (400, and it names the command),
+ * which is what makes this safe to calibrate in the open.
+ */
+const FINGERPRINT_BLIND = new Set(['requestId', 'timeoutMs'])
+
+/** Object keys sorted, `undefined` dropped, **arrays left in the order they came**. Order inside an
+ *  array is the caller's statement — `ask --options` is a list a person will be shown — so reordering
+ *  one is a different call, while the order the keys of an object happen to be written in is not. */
+const canonical = (v: unknown): unknown => {
+  if (Array.isArray(v)) return v.map(canonical)
+  if (v === null || typeof v !== 'object') return v
+  const held = v as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(held).sort()) if (held[k] !== undefined) out[k] = canonical(held[k])
+  return out
+}
+
+/**
+ * **What this id was used for, as one string** (request receipts design §5).
+ *
+ * A receipt hands back a recorded response, so an id used for a second, different call must be
+ * refused rather than answered — two scripts that both pick `req-1` get an error instead of each
+ * other's answers. Auto-minting (§8) narrows what this has to defend without removing the need for
+ * it: a minted id is a UUID and never collides, so what is left here is exactly the ids a caller
+ * chose deliberately, which are the ones that collide.
+ *
+ * The command name is inside the hash rather than compared separately, because "the same arguments
+ * to a different command" is the same fault as "different arguments" and deserves the same sentence.
+ */
+export const fingerprintOf = (cmd: string, args: Record<string, unknown>): string => {
+  const kept: Record<string, unknown> = {}
+  for (const k of Object.keys(args)) if (!FINGERPRINT_BLIND.has(k)) kept[k] = args[k]
+  return createHash('sha256').update(JSON.stringify([cmd, canonical(kept)])).digest('hex')
+}
 
 /**
  * **The honest reading of each answer, shipped with the answer** (request receipts design §6). Copied
@@ -509,9 +559,12 @@ export function createHostOrch(a: {
      *  that lost an answer is usually holding an id and not much else, and "this id was `run-create`"
      *  is half of what it needs to know; `at` because it is the one fact that separates a claim taken
      *  a moment ago from one a long poll has been holding for an hour. `at` moves when the state does:
-     *  it is when this receipt reached the state it is in, not when the call arrived. */
-    | { state: 'pending'; cmd: string; at: string }
-    | { state: 'completed'; cmd: string; at: string; reply: Reply }
+     *  it is when this receipt reached the state it is in, not when the call arrived.
+     *
+     *  `fp` is `fingerprintOf` over the command and its arguments: what this id was used for, so an
+     *  id presented for a *different* call is refused rather than answered with somebody else's. */
+    | { state: 'pending'; cmd: string; at: string; fp: string }
+    | { state: 'completed'; cmd: string; at: string; fp: string; reply: Reply }
   >()
 
   /**
@@ -527,6 +580,11 @@ export function createHostOrch(a: {
    * hour on a call it already believes has failed, which is worse than the failure it was recovering
    * from. 409 is the code that already means "the current state makes this impossible"; there is no
    * eleventh exit code.
+   *
+   * **And an id presented for a different call is refused rather than answered** (§5). That check
+   * comes before both of the above, because "this id is not yours to reuse" is true whether the first
+   * call has finished or is still running, and answering a collision with somebody else's recorded
+   * response is the one failure a mechanism like this must never have.
    */
   const holdRequest = (
     sessionId: string,
@@ -535,12 +593,25 @@ export function createHostOrch(a: {
     args: Record<string, unknown>
   ):
     | { answer: Reply; replayed?: true }
-    | { observe: { key: string; recorded: Reply; args: Record<string, unknown> } }
-    | { key: string } => {
+    | { observe: { key: string; recorded: Reply; args: Record<string, unknown>; fp: string } }
+    | { key: string; fp: string } => {
     const bad = badRequestId(requestId)
     if (bad) return { answer: { status: 400, body: { error: bad } } }
     const key = `${sessionId}\u0000${requestId}`
+    const fp = fingerprintOf(cmd, args)
     const held = receipts.get(key)
+    // **A collision is a refusal, never a wrong answer.** The caller is told which command the id
+    // belongs to, because that is the half it does not have: it is holding an id it believed was
+    // free, and what it needs to know is what that id was spent on.
+    if (held && held.fp !== fp)
+      return {
+        answer: {
+          status: 400,
+          body: {
+            error: `request ${requestId} was already used for ${held.cmd} with different arguments — one request id names one call, so a different call needs a different id`
+          }
+        }
+      }
     if (held?.state === 'completed') {
       // **Observed rather than returned, when what was recorded is a stopwatch reading** (§7).
       //
@@ -552,8 +623,8 @@ export function createHostOrch(a: {
       // ids, only one of which anybody can ack.
       const observed = OBSERVED[cmd]
       if (observed?.stale(held.reply)) {
-        receipts.set(key, { state: 'pending', cmd, at: a.now() })
-        return { observe: { key, recorded: held.reply, args: observed.afresh(args, held.reply) } }
+        receipts.set(key, { state: 'pending', cmd, at: a.now(), fp })
+        return { observe: { key, recorded: held.reply, args: observed.afresh(args, held.reply), fp } }
       }
       // Byte for byte what the first attempt answered, including its status — the point of a replay
       // is that it is indistinguishable from having received the first answer. **The one thing that
@@ -570,8 +641,8 @@ export function createHostOrch(a: {
           }
         }
       }
-    receipts.set(key, { state: 'pending', cmd, at: a.now() })
-    return { key }
+    receipts.set(key, { state: 'pending', cmd, at: a.now(), fp })
+    return { key, fp }
   }
 
   /**
@@ -586,7 +657,10 @@ export function createHostOrch(a: {
    * **Nothing here can refuse anything.** The sweep runs after the command has already answered, and
    * no caller is told about it — see the caps above for why that is the rule and not an oversight.
    */
-  const remember = (key: string, entry: { state: 'completed'; cmd: string; at: string; reply: Reply }): void => {
+  const remember = (
+    key: string,
+    entry: { state: 'completed'; cmd: string; at: string; fp: string; reply: Reply }
+  ): void => {
     receipts.set(key, entry)
     const held = [...receipts].map(([k, v]) => ({ key: k, pending: v.state === 'pending', at: v.at }))
     for (const gone of receiptsToEvict(held, Date.parse(a.now()))) receipts.delete(gone)
@@ -602,12 +676,13 @@ export function createHostOrch(a: {
    * command answered, error envelope included, because a caller that lost that answer wants the
    * answer it lost.
    */
-  const settleRequest = (key: string, cmd: string, marks: CallMarks, reply: Reply): Reply => {
+  const settleRequest = (claim: { key: string; fp: string }, cmd: string, marks: CallMarks, reply: Reply): Reply => {
     // Deleted first even when a receipt follows: `Map.set` leaves an existing key where it was, and
     // the sweep reads insertion order as "how recently this was written". A receipt that kept its
     // claim's place would be evicted ahead of older ones that were merely claimed later.
-    receipts.delete(key)
-    if (marks.committed || marks.acted) remember(key, { state: 'completed', cmd, at: a.now(), reply })
+    receipts.delete(claim.key)
+    if (marks.committed || marks.acted)
+      remember(claim.key, { state: 'completed', cmd, at: a.now(), fp: claim.fp, reply })
     return reply
   }
 
@@ -627,9 +702,23 @@ export function createHostOrch(a: {
    * an error from re-asking is a fact about now, and it is returned to the caller, but it is not worth
    * the record.
    */
-  const settleObserved = (key: string, cmd: string, recorded: Reply, reply: Reply): Reply => {
-    receipts.delete(key)
-    remember(key, { state: 'completed', cmd, at: a.now(), reply: reply.status < 400 ? reply : recorded })
+  const settleObserved = (
+    observed: { key: string; fp: string },
+    cmd: string,
+    recorded: Reply,
+    reply: Reply
+  ): Reply => {
+    receipts.delete(observed.key)
+    remember(observed.key, {
+      state: 'completed',
+      cmd,
+      at: a.now(),
+      // The fingerprint of the call as it was **first** made, never of the observation: `ask`'s
+      // observed replay runs with `resume` added (`OBSERVED.ask.afresh`), and storing that would make
+      // the next ordinary retry of the same id look like a different call and answer 400.
+      fp: observed.fp,
+      reply: reply.status < 400 ? reply : recorded
+    })
     return reply
   }
 
@@ -693,11 +782,11 @@ export function createHostOrch(a: {
       /** The claim this call took, released on **every** way out below — including the catch, which
        *  is why it is declared out here. A claim nobody releases is a request that answers `pending`
        *  forever. */
-      let claimed: string | null = null
+      let claimed: { key: string; fp: string } | null = null
       /** Set instead of `claimed` when this call is an **observed** replay (§7): the receipt already
        *  holds an answer, and what is running is the fresh look the caller actually wanted. The
        *  recorded reply rides along because a failed observation must not destroy it. */
-      let observing: { key: string; recorded: Reply } | null = null
+      let observing: { key: string; fp: string; recorded: Reply } | null = null
       /** What the command is actually run with. The same `args` in every case but one: `ask`'s
        *  observed replay resumes the question the receipt names rather than asking a new one. */
       let runArgs = args
@@ -733,9 +822,9 @@ export function createHostOrch(a: {
           if ('answer' in held)
             return held.replayed === true ? { ...held.answer, replayed: true } : held.answer
           if ('observe' in held) {
-            observing = { key: held.observe.key, recorded: held.observe.recorded }
+            observing = { key: held.observe.key, fp: held.observe.fp, recorded: held.observe.recorded }
             runArgs = held.observe.args
-          } else claimed = held.key
+          } else claimed = held
         }
         // **Answered by the Host, like the two above — but on *this* side of the receipt line.**
         //
@@ -766,12 +855,12 @@ export function createHostOrch(a: {
         // body: this caller presented an id that had already taken effect, and the commit behind it
         // was not repeated. What is fresh is the observation (§7), which is the whole of what a
         // caller retrying a wait asked for — it just did not also ask for a second question.
-        if (observing) return { ...settleObserved(observing.key, cmd, observing.recorded, reply), replayed: true }
+        if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), replayed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         const reply = { status: marks.appRefused ? 409 : 500, body: { error: message } }
-        if (observing) return { ...settleObserved(observing.key, cmd, observing.recorded, reply), replayed: true }
+        if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), replayed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       }
     }
