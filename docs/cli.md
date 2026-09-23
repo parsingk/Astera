@@ -46,6 +46,11 @@ That refusal is the Host protecting work in progress. Stop the work first, then 
 refusal is exit 6 (`CONFLICT`), and the counts are in `error.details.sessions` and
 `error.details.runs`.
 
+A Host that accepts the stop first lets any worker or coordinator start it is in the middle of
+finish, for up to 20 seconds, and takes no new one. `host stop` therefore waits up to 35 seconds for
+it to go: those 20 seconds, then the 15 seconds of silence after which a Host is called stuck. A
+Host that is still there after that is exit 7 (`TIMEOUT`), with the wait in `error.details.waitedMs`.
+
 **The three `host` commands fail the way every other command does**, with `"ok": false`, an
 `error.code` and `error.nextSteps`, and with the `error:` sentence under `--human`. Until 2026-09-24
 their failures printed `"ok": true` with the details under `data` and only the exit code saying

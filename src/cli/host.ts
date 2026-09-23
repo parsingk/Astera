@@ -11,7 +11,7 @@ import { HOST_PROTOCOL } from '../core/host/protocol'
 import { connectHost, type HostConnection } from '../core/host/connect'
 import { hostSpawnPlan, resolveHostEntry, type HostCliPaths } from '../core/host/spawn'
 import { hostRuntimeBase, hostRuntimePaths } from '../core/host/runtime'
-import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
+import { HOST_STOP_WAIT_MS } from '../core/host/unresponsive'
 import { hostAddress, siblingHostAddresses } from '../host/address'
 import { answers } from '../host/server'
 import { resolveSkillsDir } from './skills'
@@ -330,9 +330,9 @@ export async function runHostCommand(a: {
   env: NodeJS.ProcessEnv
   platform: NodeJS.Platform
   home: string
-  /** Overrides `HOST_UNRESPONSIVE_MS` for `host-stop`'s wait. Test injection only, the same way
+  /** Overrides `HOST_STOP_WAIT_MS` for `host-stop`'s wait. Test injection only, the same way
    *  `HostServerDeps`'s `idleMs`/`helloMs` and `HostClientDeps`'s `pingMs` are — nothing waits out a
-   *  real 15s to prove a silent Host resolves rather than hangs. */
+   *  real 35s to prove a silent Host resolves rather than hangs. */
   stopTimeoutMs?: number
 }): Promise<HostCommandResult> {
   if (a.cmd !== 'host-status' && a.cmd !== 'host-start' && a.cmd !== 'host-stop')
@@ -391,7 +391,7 @@ export async function runHostCommand(a: {
         offClose()
         resolve(r)
       }
-      const waitedMs = a.stopTimeoutMs ?? HOST_UNRESPONSIVE_MS
+      const waitedMs = a.stopTimeoutMs ?? HOST_STOP_WAIT_MS
       const timer = setTimeout(() => settle(hostStopResult({ outcome: 'timeout', waitedMs })), waitedMs)
       timer.unref?.()
       offMessage = connected.onMessage((m) => {

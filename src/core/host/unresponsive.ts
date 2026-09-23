@@ -6,8 +6,9 @@
 //
 // One constant, not two independently chosen numbers that could drift apart: `main/host/client.ts`'s
 // heartbeat derives its `PING_MISSES` from this divided by `PING_MS`, and `cli/host.ts`'s `host stop`
-// times its wait for a `retire` reply by this directly. Both are asking the same question — has this
-// Host's event loop stopped turning — from the two different processes that ever have to ask it.
+// times its wait for a `retire` reply by this plus the Host's own settle (`HOST_STOP_WAIT_MS` below).
+// Both are asking the same question — has this Host's event loop stopped turning — from the two
+// different processes that ever have to ask it.
 export const HOST_UNRESPONSIVE_MS = 15_000
 
 /**
@@ -36,3 +37,10 @@ export const PING_MS = 5_000
  * a Host that is leaving waits this long for the spawns it already took (Host S2 design §8.4, R8). A
  * spawn the app would already have given up on is not one worth holding the exit for. */
 export const SPAWN_DEADLINE_MS = 20_000
+
+/** How long `astera host stop` waits for a retired Host to go (Host S2 fix round, ruling b). A Host
+ *  that is leaving first waits up to SPAWN_DEADLINE_MS for the spawns it already took (`leave()` in
+ *  host/index.ts), and only then closes; after that the usual rule applies, HOST_UNRESPONSIVE_MS of
+ *  silence before it is called stuck. The cost is that a wedged Host is reported after this long
+ *  rather than after HOST_UNRESPONSIVE_MS, even when nothing was in flight. */
+export const HOST_STOP_WAIT_MS = SPAWN_DEADLINE_MS + HOST_UNRESPONSIVE_MS

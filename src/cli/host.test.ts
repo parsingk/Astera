@@ -17,6 +17,7 @@ import { pendingReportsDirIn } from '../core/orchestration/pendingReports'
 import { hostAddress } from '../host/address'
 import { startHostServer, type HostServerDeps } from '../host/server'
 import { HOST_PROTOCOL } from '../core/host/protocol'
+import { HOST_STOP_WAIT_MS, HOST_UNRESPONSIVE_MS, SPAWN_DEADLINE_MS } from '../core/host/unresponsive'
 import { encodeLine } from '../host/framing'
 import { exitCodeFor } from '../core/orchestration/cliOutput'
 import { hostRuntimePaths } from '../core/host/runtime'
@@ -71,6 +72,16 @@ describe('hostStatus', () => {
       profile: 'D:/p',
       jobsInProfile: 3
     })
+  })
+})
+
+// Host S2 fix round, ruling (b): a Host that is leaving may wait up to SPAWN_DEADLINE_MS for its
+// spawns in flight before it closes, so `host stop` must outwait that and then still allow the usual
+// silence before it calls the Host stuck.
+describe('the wait host stop gives a retire', () => {
+  it("outlasts the Host's own settle for spawns in flight, plus the silence rule", () => {
+    expect(HOST_STOP_WAIT_MS).toBeGreaterThan(SPAWN_DEADLINE_MS)
+    expect(HOST_STOP_WAIT_MS).toBe(SPAWN_DEADLINE_MS + HOST_UNRESPONSIVE_MS)
   })
 })
 
