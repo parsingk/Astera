@@ -63,7 +63,13 @@ export const NOUNS = {
   jobs: ['list', 'get', 'wait', 'run'],
   runs: ['list', 'get', 'wait', 'stop', 'resume'],
   tasks: ['list'],
-  questions: ['list', 'get', 'answer']
+  questions: ['list', 'get', 'answer'],
+  // **요청 영수증**(request receipts design §8). 여기 있는 것은 공개 표면이어서가 아니라 —
+  // 답하는 것은 명령 층이 아니라 Host 다(host/orch.ts) — 이 모양이 그것을 `USAGE` 와
+  // `docs/cli.md` 에 함께 적히게 만들기 때문이다. `--request-id` 는 반대로 여기 없다: 그것은
+  // 한 명령의 동사가 아니라 모든 명령이 받는 전역 플래그이고, 그 자리는 cliAgentContext 의
+  // `globalFlags` 다(설계 §3 — 명령 목록을 손으로 들고 있으면 빠뜨린 명령이 조용히 무시한다).
+  requests: ['show']
 } as const
 
 /** The same table, keyed by a word the person typed rather than by one of the literal keys above.

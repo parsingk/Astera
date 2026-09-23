@@ -65,8 +65,22 @@ describe('agent-context — 무엇이 실리는가', () => {
       'human',
       'quiet',
       'no-keepalive',
+      'request-id',
       'help'
     ])
+  })
+
+  // **한 자리에 한 번 적힌다**(요청 영수증 설계 §3·§8). 명령마다 적는 쪽을 골랐다면 58 개를
+  // 손으로 들고 있어야 하고, 빠뜨린 명령은 키를 받아 조용히 버린다 — 부르는 쪽이 그 플래그를 단
+  // 이유가 다음에 무슨 일이 일어나는가에 대한 믿음이므로, 그것이 이 기능이 감당할 수 없는 실패다.
+  it('--request-id 는 전역 플래그로 한 번만 실리고 명령마다 실리지 않는다', () => {
+    const global = ctx.globalFlags.filter((f) => f.name === 'request-id')
+    expect(global.length).toBe(1)
+    expect(global[0].takesValue).toBe(true)
+    for (const c of ctx.commands)
+      expect(c.flags.map((f) => f.name), `${c.name} 이 --request-id 를 따로 싣고 있다`).not.toContain(
+        'request-id'
+      )
   })
 
   // 같은 이름이 둘이면 읽는 쪽이 어느 것을 믿을지 모른다
@@ -96,7 +110,8 @@ function casesInHandleCommand(): string[] {
   return [...new Set(labels)].sort()
 }
 
-/** 이 CLI 가 스스로 답하거나 switch 앞에서 답하는 명령들 — cliAgentContext.ts 의 `NOT_SWITCHED`
+/** 이 CLI 가 스스로 답하거나, switch 앞에서 답하거나, 명령 층 위에서 Host 가 답하는 명령들
+ *  (`requests-show`) — cliAgentContext.ts 의 `NOT_SWITCHED`
  *  와 같은 목록이고, 거기서 내보내지 않는 이유는 타입이 그것을 이미 쓰고 있어서다. 둘이 갈라지면
  *  아래 단언이 깨진다. */
 const NOT_SWITCHED = [
@@ -107,7 +122,8 @@ const NOT_SWITCHED = [
   'host-status',
   'host-stop',
   'browser-js',
-  'handoff'
+  'handoff',
+  'requests-show'
 ]
 
 describe('agent-context — 명령 집합은 handleCommand 가 실제로 가르는 것이다', () => {
@@ -123,7 +139,7 @@ describe('agent-context — 명령 집합은 handleCommand 가 실제로 가르�
     }
   })
 
-  // **`NOT_SWITCHED` 의 `satisfies` 는 이름이 스키마에 있다는 것만 증명한다.** 아홉 번째 이름을
+  // **`NOT_SWITCHED` 의 `satisfies` 는 이름이 스키마에 있다는 것만 증명한다.** 열 번째 이름을
   // 더하면 컴파일도 통과하고 위의 두 단언도 통과한 채, 실제로 치면 501 이 된다 — `case` 도 없고
   // 답하는 가지도 없기 때문이다.
   //
@@ -131,9 +147,13 @@ describe('agent-context — 명령 집합은 handleCommand 가 실제로 가르�
   // 어딘가의 **코드에서 비교된다**" 이지, "그 비교가 그 명령에 답한다" 가 아니다 — 둘은 다르고,
   // 글자로는 가를 수 없다. `run.ts` 의 `argsForCall` 이 `a.cmd === 'browser-js'` 로 stdin 모양만
   // 정하는 자리가 그 예다. 주석은 지우고 보므로 주석에 이름을 적어 통과시킬 수는 없다.
-  it('CLI 가 직접 답한다는 여덟은 세 파일의 코드에서 비교된다', () => {
+  // **네 번째 파일은 Host 다.** `requests-show` 는 CLI 가 답하지도, switch 앞에서 답하지도 않는다 —
+  // 영수증은 상태 파일이 아니라 Host 의 메모리에 있어서(설계 §4) `state-get`·`state-put` 옆에서
+  // 답한다. 이 목록에서 빠뜨리면 그 이름은 "아무 데서도 비교되지 않는" 것이 되고, 그것은 이
+  // 단언이 잡으려는 결함과 같은 모양의 거짓 경보다.
+  it('CLI 나 Host 가 직접 답한다는 아홉은 네 파일의 코드에서 비교된다', () => {
     const here = path.dirname(fileURLToPath(import.meta.url))
-    const stripped = ['../../cli/run.ts', '../../cli/host.ts', './command.ts']
+    const stripped = ['../../cli/run.ts', '../../cli/host.ts', './command.ts', '../../host/orch.ts']
       .map((rel) => readFileSync(path.resolve(here, rel), 'utf8'))
       // 블록 주석을 먼저 걷고 줄 주석을 걷는다 — 줄 끝에 붙은 `// 'doctor'` 도 함께 사라진다.
       .map((src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, ''))

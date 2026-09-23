@@ -198,6 +198,13 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     ]
   },
 
+  'requests-show': {
+    summary: 'did a call of mine land, and what did it answer',
+    detail:
+      'For a command whose answer was lost, which is exit 3 or exit 7 with the Host still there. Three states, and all three exit 0, because not finding a receipt is an answer rather than a failure: `completed` carries in `response` the envelope the command answered with, `pending` means a Host is running it right now, and `absent` means this Host holds no receipt for that id under your session, which is not proof that nothing happened. `interpretation` says which, in a sentence, and `hostStartedAt` says when this Host started: receipts live in its memory, so one that started after you sent the request never saw it. With no Host at all it is exit 3, because then there is no receipt to have and the question is answered by reading the state.',
+    flags: [ID('<requestId>', 'the id the call was sent with (--request-id)')]
+  },
+
   'browser-js': {
     summary: "run one script in this session's agent browser",
     detail:

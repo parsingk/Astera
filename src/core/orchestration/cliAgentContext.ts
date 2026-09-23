@@ -326,7 +326,7 @@ export type SessionCommand = keyof typeof SESSION
 export type AgentCommand = PublicCommand | SessionCommand
 
 /**
- * The commands `handleCommand`'s `switch` must **not** have a `case` for, each for one of two
+ * The commands `handleCommand`'s `switch` must **not** have a `case` for, each for one of three
  * reasons.
  *
  * *Answered by the CLI itself, so they never reach the command layer:* `help` and `browser-help`
@@ -337,12 +337,18 @@ export type AgentCommand = PublicCommand | SessionCommand
  * of the orchestration state the switch is built on, so `handleCommand` returns from an `if` above
  * it.
  *
+ * *Answered by the **Host**, above the command layer entirely:* `requests-show` reads a request
+ * receipt, and receipts live in the Host's memory rather than in the orchestration state (request
+ * receipts design §4), so there is nothing here for a `case` to read. It sits beside `state-get`
+ * and `state-put` in `src/host/orch.ts`, and a Host too old to know it answers 501 — exit 9 — for
+ * free.
+ *
  * **This is a hand-kept list, and `satisfies` is not the check it looks like.** It proves only that
- * these eight names exist in the schema, which keeps a typo from quietly widening
- * `SwitchedCommand`. It proves nothing about anything answering them: a ninth name added here would
+ * these nine names exist in the schema, which keeps a typo from quietly widening
+ * `SwitchedCommand`. It proves nothing about anything answering them: a tenth name added here would
  * compile, would pass the exhaustiveness check, and would 501 at runtime with no `case` and no
  * branch. cliAgentContext.test.ts carries the witness for that half — it asserts each name is
- * mentioned in one of the three files that can answer it. A text witness is weak, but it is the
+ * mentioned in one of the four files that can answer it. A text witness is weak, but it is the
  * difference between a claim and a check.
  */
 const NOT_SWITCHED = [
@@ -353,7 +359,8 @@ const NOT_SWITCHED = [
   'host-status',
   'host-stop',
   'browser-js',
-  'handoff'
+  'handoff',
+  'requests-show'
 ] as const satisfies readonly AgentCommand[]
 
 /**
@@ -422,7 +429,14 @@ const MEANING: Record<CliErrorCode, string> = {
 }
 
 /** The flags every command accepts. They are read by the parser and by the output layer rather than
- *  by any one command (cliArgs.ts, run.ts), so no entry above carries them. */
+ *  by any one command (cliArgs.ts, run.ts), so no entry above carries them.
+ *
+ *  **`--request-id` is here rather than on 58 command entries, and that is the design's own
+ *  argument** (request receipts design §3, §8): every command takes the key and the Host decides
+ *  afterwards whether there was anything to record. Naming the set instead would mean a list beside
+ *  a switch statement, and the command somebody forgets to add to it accepts the key and ignores
+ *  it — which is precisely the failure this feature cannot afford, because the caller's whole
+ *  reason for passing the flag is a belief about what happens next. */
 const GLOBAL: readonly AgentContextFlag[] = [
   { name: 'json', takesValue: false, required: false, about: 'the envelope — the default, so this changes nothing' },
   { name: 'human', takesValue: false, required: false, about: 'aligned columns for a person; never parse them' },
@@ -434,6 +448,13 @@ const GLOBAL: readonly AgentContextFlag[] = [
     takesValue: false,
     required: false,
     about: 'do not print the waiting line on stderr every 15s while a waiting command waits'
+  },
+  {
+    name: 'request-id',
+    takesValue: true,
+    required: false,
+    about:
+      'this call\'s own id. Present the same id again and a command that already took effect is not done twice: the Host replays what it answered the first time. `astera requests show --id <id>` asks what became of it.'
   },
   { name: 'help', takesValue: false, required: false, about: 'print usage and exit 0 instead of running' }
 ]

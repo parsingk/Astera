@@ -128,6 +128,8 @@ astera questions list  [--task <taskId>] [--status <open|resolved>]
 astera questions get    --id <questionId>
 astera questions answer --id <questionId> --answer <text>
 
+astera requests show   --id <requestId>
+
 astera help                              the orchestration guide, in full
 astera agent-context                     every command this binary can route, as JSON
 
@@ -175,6 +177,29 @@ held open on purpose.
 a question is open, or the run is paused. The exit code says which. The default deadline is one
 hour; `--timeout-ms` changes it, and reaching it is exit 7 with the progress so far, not a failure
 of the Job.
+
+**`--request-id <id>` is accepted by every command**, and it says that two calls are one request. A
+command can fail without telling you whether it landed: exit 3 when the connection dropped before
+the answer came back, exit 7 when the deadline passed with the Host still there. Both leave the
+question open, because the Host commits before it answers. Send the command again with the same id
+and one that already took effect is not done twice; the Host replays the answer it gave the first
+time, so a retrying script sees the run it created rather than a second one.
+
+**`requests show` asks what became of an id, and its three answers all exit 0**, because not finding
+a receipt is an answer rather than a failure. `completed` means this Host ran the request, and
+`data.response` carries the envelope it answered with, status and all. `pending` means a Host is
+running it right now: wait and ask again, and do not send the command again, because a second
+attempt while the first is in flight is refused with 6. `absent` means this Host holds no receipt
+for that id under your session.
+
+**`absent` is not proof that nothing happened.** Receipts live in the Host's memory, so compare
+`data.hostStartedAt` with when you sent the request: a Host that started later never saw it, and the
+one that did is gone. The id may also have been sent under a different `ASTERA_SESSION`, or the
+command may have changed nothing and so left nothing to record. `data.interpretation` is the
+runtime's own sentence for whichever of the three came back, which is why it is worth reading rather
+than deriving. Before retrying on an `absent`, look at the state instead: whether the run exists,
+whether the question is answered. With no Host at all, `requests show` is exit 3 like any other
+command that needs one, and for the same reason: there is no receipt to have.
 
 Commands the in-app coordinator agent uses, such as `worker-start`, `send`, `check` and `ask`, are
 not part of this surface and are not described here. `astera help` documents them.

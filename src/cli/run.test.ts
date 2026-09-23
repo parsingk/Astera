@@ -11,6 +11,7 @@ import {
   applyStdin,
   clientTimeoutMs,
   argsForCall,
+  liftRequestId,
   callHost,
   connectFailureEnd,
   SILENT_HOST_CODE,
@@ -134,6 +135,38 @@ describe('argsForCall — run-create의 --cwd 기본값 (task-13a)', () => {
   })
   it('run-create가 아닌 명령에는 CLI의 cwd를 채우지 않는다', () => {
     expect(argsForCall({ cmd: 'tasks-list', args: {}, cwd: 'D:/my-cwd' })).toEqual({})
+  })
+})
+
+// `--request-id` 는 명령의 인자가 아니라 이 부름에 대한 사실이다(요청 영수증 설계 §8). 봉투가
+// `session` 옆에 제 칸으로 싣고, `args` 에 남으면 handleCommand 가 그 명령의 플래그로 보게 된다 —
+// 못 보낸 보고의 큐 파일에도 그 명령의 플래그인 양 적힌다.
+describe('liftRequestId — --request-id 는 인자가 아니라 메시지를 탄다', () => {
+  it('실린 id 는 args 에서 빠져 request 로 간다', () => {
+    expect(liftRequestId({ objective: 'o', requestId: 'req-1' })).toEqual({
+      request: 'req-1',
+      args: { objective: 'o' }
+    })
+  })
+
+  it('없으면 args 를 그대로 둔다 — 키를 안 단 쪽은 아무것도 치르지 않는다', () => {
+    const args = { objective: 'o' }
+    const r = liftRequestId(args)
+    expect(r).toEqual({ args: { objective: 'o' } })
+    expect((r as { args: Record<string, unknown> }).args).toBe(args)
+  })
+
+  it('원본 args 를 변형하지 않는다', () => {
+    const args = { objective: 'o', requestId: 'req-1' }
+    liftRequestId(args)
+    expect(args.requestId).toBe('req-1')
+  })
+
+  // **조용히 버리는 것이 이 설계가 가장 피하려는 실패다.** 값 없는 `--request-id` 는 파서가 `true`
+  // 로 만들고, 그것을 무시하면 부르는 쪽은 보호받는다고 믿은 채 보호받지 못한다.
+  it('값 없는 --request-id 는 조용히 버리지 않고 거절한다', () => {
+    expect(liftRequestId({ requestId: true })).toEqual({ error: expect.stringContaining('--request-id') })
+    expect(liftRequestId({ requestId: '' })).toEqual({ error: expect.stringContaining('--request-id') })
   })
 })
 
@@ -467,6 +500,28 @@ describe('callHost — 명령 하나를 Host 에 묻는다', () => {
     expect(
       await callHost({ conn: f.conn, cmd: 'ask', args: {}, sessionId: '', timeoutMs: 10 })
     ).toEqual({ stuck: expect.stringContaining('within 10ms') })
+  })
+
+  // 요청 id 는 `args` 가 아니라 봉투를 탄다 — `call` 은 이 소켓에서의 이 시도를 가리키고,
+  // `request` 는 시도를 건너 같은 요청을 가리킨다(설계 §8).
+  it('실린 요청 id 는 봉투의 request 칸으로 나간다', () => {
+    const f = fakeConn()
+    void callHost({
+      conn: f.conn,
+      cmd: 'run-create',
+      args: { objective: 'o' },
+      sessionId: 'sess_1',
+      request: 'req-1',
+      timeoutMs: 1000
+    })
+    expect(f.sent[0]).toMatchObject({ t: 'orch-call', request: 'req-1', args: { objective: 'o' } })
+  })
+
+  // id 를 안 준 것과 빈 것을 저쪽이 가를 수 있어야 한다 — 칸을 만들어 보내면 그 둘이 한 모양이 된다.
+  it('id 가 없으면 그 칸을 만들지 않는다', () => {
+    const f = fakeConn()
+    void callHost({ conn: f.conn, cmd: 'jobs-list', args: {}, sessionId: '', timeoutMs: 1000 })
+    expect(Object.hasOwn(f.sent[0], 'request')).toBe(false)
   })
 
   // 끊긴 뒤에 오는 답은 없지만, 두 번 답하는 Host 에 두 번 resolve 되면 안 된다.

@@ -235,6 +235,34 @@ export function argsForCall(a: {
   return a.cmd === 'run-create' && !hasExplicitCwd ? { ...a.args, cwd: a.cwd } : a.args
 }
 
+/**
+ * `--request-id <id>` taken off the line, because it rides the **message** rather than the arguments
+ * (request receipts design §8).
+ *
+ * **Why it cannot stay in `args`.** Everything left there goes on the wire as an argument to the
+ * command that was typed, and no `case` in `handleCommand` reads this one: it is a fact about the
+ * call, which is why the envelope carries it in its own field beside `session`
+ * (core/host/protocol.ts). Left in `args` it would also be written into an undelivered report's
+ * queue file as if it were one of that report's own flags.
+ *
+ * **A flag with no value is refused rather than dropped.** `parseArgs` turns a bare `--request-id`
+ * into `true`, and quietly ignoring that is the exact fault this design is built against — Orca's
+ * `check --peek` takes the key and drops it, and "the caller's whole reason for passing the flag is
+ * a belief about what happens next" (§3).
+ */
+export function liftRequestId(
+  args: Record<string, unknown>
+): { request?: string; args: Record<string, unknown> } | { error: string } {
+  const given = args.requestId
+  // Nothing to lift, and the arguments are handed back as they came — a caller that passed no key
+  // pays not even a copy (§9).
+  if (given === undefined) return { args }
+  if (typeof given !== 'string' || given === '') return { error: '--request-id needs an id' }
+  const rest = { ...args }
+  delete rest.requestId
+  return { request: given, args: rest }
+}
+
 /** 한 명령을 Host 에 묻고 그 답을 기다린다 (host control plane design §5).
  *
  *  **닿지 못한 것과 답을 못 받은 것을 가른다.** 연결이 답 전에 끊기면 그 Host 는 사라진 것이므로
@@ -245,6 +273,10 @@ export function callHost(a: {
   cmd: string
   args: Record<string, unknown>
   sessionId: string
+  /** The id this request is known by, when `--request-id` gave one (`liftRequestId`). Absent from
+   *  the message when there is none: a Host that knows the field must be able to tell a caller that
+   *  named no id from one that named an empty one. */
+  request?: string
   timeoutMs: number
 }): Promise<{ status: number; body: unknown } | { unreachable: string } | { stuck: string }> {
   return new Promise((resolve) => {
@@ -272,7 +304,14 @@ export function callHost(a: {
     offClose = a.conn.onClose(() =>
       done({ unreachable: `the Host closed the connection before answering ${a.cmd}` })
     )
-    a.conn.call({ t: 'orch-call', call, cmd: a.cmd, args: a.args, session: a.sessionId })
+    a.conn.call({
+      t: 'orch-call',
+      call,
+      cmd: a.cmd,
+      args: a.args,
+      session: a.sessionId,
+      ...(a.request === undefined ? {} : { request: a.request })
+    })
   })
 }
 
@@ -557,6 +596,15 @@ export async function main(): Promise<void> {
     args = applyStdin({ args, keys: parsed.wantsStdin, text })
   }
 
+  // **`--request-id` leaves `args` here, before anything reads them** (liftRequestId): the queue
+  // below writes `args` into a file, `argsForCall` hands them to the command, and this flag belongs
+  // to neither. After stdin rather than before it, so `--request-id -` reads its id the way every
+  // other flag with a `-` does.
+  const lifted = liftRequestId(args)
+  if ('error' in lifted) fail({ code: 'INVALID_ARGUMENTS', message: lifted.error })
+  args = lifted.args
+  const request = lifted.request
+
   /** The Host could not be reached at all, and the command is not one the state file can answer.
    *  A report is written down and the agent is told so; everything else fails exactly as it did.
    *
@@ -668,6 +716,10 @@ export async function main(): Promise<void> {
     }
     // **기다리는 명령만, 그리고 stderr 에만**(cliKeepalive.ts). 여기서 시작하고 답이 오면 끄는
     // 이유는 자리 하나다: 기다림은 이 한 줄이고, 그 밖의 모든 명령은 이 자리를 스쳐 지나간다.
+    //
+    // **끄는 것은 `finally` 다.** `callHost` 가 거절하지 않는 것은 저쪽 함수의 성질이지 이 줄의
+    // 성질이 아니고, 결과가 나간 뒤에도 도는 타이머는 같은 셸에서 이어 치는 다음 명령의 출력에
+    // 줄을 섞는다. 언제나 꺼진다는 것이 이 자리에서 보여야 한다.
     const keepalive = startKeepalive({
       conn,
       cmd: parsed.cmd,
@@ -679,9 +731,9 @@ export async function main(): Promise<void> {
       cmd: parsed.cmd,
       args: argsForCall({ cmd: parsed.cmd, args, cwd: process.cwd() }),
       sessionId,
+      request,
       timeoutMs: clientTimeoutMs({ cmd: parsed.cmd, args })
-    })
-    keepalive.stop()
+    }).finally(() => keepalive.stop())
     conn.close()
     // **시한을 넘긴 것은 닿지 못한 것이 아니다.** 위의 시한은 분 단위이고, 그것을 넘겼다는 것은
     // 연결은 됐는데 저쪽이 멈췄다는 뜻이다 — 보고는 이미 적용됐을 수 있으므로 적어 두지 않는다.

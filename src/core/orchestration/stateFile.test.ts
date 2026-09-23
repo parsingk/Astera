@@ -32,6 +32,13 @@ describe('fileAnswerable', () => {
   it('모르는 명령은 파일로 답하지 않는다', () => {
     expect(fileAnswerable('something-new')).toBe(false)
   })
+
+  // **영수증은 이 파일에 없다**(요청 영수증 설계 §4·§8). Host 의 메모리에 있으므로 Host 가 없으면
+  // 가지고 있을 영수증도 없다 — 그래서 3 이 옳은 답이고, 파일을 읽어 `absent` 라고 답하면 그것은
+  // "이 Host 는 모른다" 가 아니라 "아무 Host 도 없었다" 를 영수증의 말투로 옮긴 거짓말이 된다.
+  it('requests-show 는 파일로 답하지 않는다 — Host 가 없으면 영수증도 없다', () => {
+    expect(fileAnswerable('requests-show')).toBe(false)
+  })
 })
 
 describe('readStateFile', () => {
