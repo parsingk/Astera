@@ -844,7 +844,7 @@ describe('요청 영수증', () => {
    * 재생하고 다시 치지 않는다. 진짜 레지스트리 위에서 — 가짜 줄 프로세스가 받은 줄을 센다.
    */
   describe('대화 세션의 sessions send', () => {
-    const chatRegistries = () => {
+    const chatRegistries = (restore: Record<string, unknown> = { provider: 'claude', threadId: 'th' }) => {
       const written: string[] = []
       const ptys = new PtyRegistry({ spawn: () => { throw new Error('no ptys here') }, log: () => {} })
       const procs = new ProcRegistry({
@@ -864,7 +864,7 @@ describe('요청 영수증', () => {
         file: 'claude',
         args: [],
         opts: { cwd: 'D:/p', env: {} },
-        meta: { kind: 'chat', id: 'chat-1', restore: { accountId: 'acc', cwd: 'D:/p', provider: 'claude', threadId: 'th' } }
+        meta: { kind: 'chat', id: 'chat-1', restore: { accountId: 'acc', cwd: 'D:/p', ...restore } }
       })
       const sessions = registrySessions({
         ptys,
@@ -872,7 +872,7 @@ describe('요청 영수증', () => {
         hookEventsDir: path.join(os.tmpdir(), 'astera-orch-test-no-hook-events'),
         accounts: async () => []
       })
-      return { written, sessions }
+      return { written, sessions, procs }
     }
     const args = { id: 'chat-1', text: '다음으로' }
 
@@ -901,8 +901,94 @@ describe('요청 영수증', () => {
       const second = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c2' })
       expect(first.status).toBe(200)
       expect(second.replayed).toBe(true)
-      expect(acts).toEqual([['chatSend', ['chat-1', '다음으로']]])
+      expect(acts.filter(([n]) => n === 'chatSend')).toEqual([['chatSend', ['chat-1', '다음으로']]])
       expect(written).toEqual([])
+    })
+
+    // M6: 첫 호출은 앱이 보냈고, 앱이 닫힌 뒤 같은 id 로 다시 왔다. 영수증은 Host 의 것이라 재생되고,
+    // Host 는 아무것도 쓰지 않는다 — 앱이 이미 보낸 턴을 한 번 더 보내지 않는다.
+    it('앱이 보낸 뒤 앱이 닫혀도 같은 요청 id 의 재시도는 재생이고 Host 는 쓰지 않는다', async () => {
+      const { written, sessions } = chatRegistries()
+      let app = true
+      const acts: string[] = []
+      const orch = orchOver({
+        sessions,
+        hasApp: () => app,
+        act: async (name) => {
+          acts.push(name)
+          return name === 'chatPending' ? null : { sent: true }
+        }
+      })
+      const first = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c6' })
+      app = false
+      const second = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c6' })
+      expect(first.status).toBe(200)
+      expect(second.replayed).toBe(true)
+      expect(answerOf(second)).toBe(answerOf(first))
+      expect(acts.filter((n) => n === 'chatSend')).toHaveLength(1)
+      expect(written, '앱이 이미 보낸 턴을 Host 가 또 썼다').toEqual([])
+    })
+
+    // I1: 카드 때문에 돌아선 호출은 영수증을 남기지 않는다. 카드에 답한 뒤 같은 id 로 다시 치면 한 번 간다.
+    it('카드로 거절된 요청 id 는 카드가 닫힌 뒤 다시 쳐서 한 번 간다', async () => {
+      const { written, sessions } = chatRegistries()
+      let card: unknown = { kind: 'approval', summary: 'Bash: npm test' }
+      const sent: unknown[] = []
+      const orch = orchOver({
+        sessions,
+        act: async (name, a) => {
+          if (name === 'chatPending') return card
+          sent.push(a)
+          return { sent: true }
+        }
+      })
+      const refused = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c7' })
+      expect(refused.status).toBe(409)
+      expect(JSON.stringify(refused.body)).toMatch(/waiting on an approval: Bash: npm test/)
+      card = null // 사람이 앱에서 답했다
+      const retried = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c7' })
+      expect(retried.status).toBe(200)
+      expect(retried.replayed, '거절이 영수증으로 남아 재생됐다').toBeFalsy()
+      const again = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c7' })
+      expect(again.replayed).toBe(true)
+      expect(sent).toEqual([['chat-1', '다음으로']])
+      expect(written).toEqual([])
+    })
+
+    // I1: 스레드가 없어 Host 가 쓰지 못한 호출도 영수증을 남기지 않는다. 스레드가 생긴 뒤 같은 id 로 한 번 쓴다.
+    it('Codex 스레드가 없어 거절된 요청 id 는 스레드가 생긴 뒤 다시 쳐서 한 번 쓴다', async () => {
+      const { written, sessions, procs } = chatRegistries({ provider: 'codex' })
+      const orch = orchOver({ sessions, hasApp: () => false })
+      const refused = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c8' })
+      expect(refused.status).toBe(409)
+      expect(JSON.stringify(refused.body)).toMatch(/no Codex thread yet/)
+      procs.note('proc-1', { threadId: 'thr-1' }) // 앱이 스레드를 열고 note 에 적었다
+      const retried = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c8' })
+      expect(retried.status).toBe(200)
+      expect(retried.replayed).toBeFalsy()
+      await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c8' })
+      expect(written).toHaveLength(1)
+      expect(JSON.parse(written[0])).toMatchObject({ method: 'turn/start', params: { threadId: 'thr-1' } })
+    })
+
+    // M2: 앱이 붙어 있지만 그 세션을 아직 되찾지 않았다 — 6 이고, 아무도 쓰지 않는다.
+    it('앱이 그 세션을 아직 쥐지 않았으면 409 이고 아무도 쓰지 않는다', async () => {
+      const { written, sessions } = chatRegistries()
+      const acts: string[] = []
+      const orch = orchOver({
+        sessions,
+        act: async (name) => {
+          acts.push(name)
+          return undefined
+        }
+      })
+      const r = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c9' })
+      expect(r.status).toBe(409)
+      expect(JSON.stringify(r.body)).toMatch(/try again in a moment/)
+      expect(acts).toEqual(['chatPending'])
+      expect(written).toEqual([])
+      const shown = await orch.call({ cmd: 'requests-show', args: { id: 'req-c9' }, sessionId: '' })
+      expect(shown.body).toMatchObject({ state: 'absent' })
     })
 
     // 카드에 답하는 것은 앱에서 사람이 한다 — 앱이 거절하면 6 이다(CONFLICT).
@@ -910,7 +996,8 @@ describe('요청 영수증', () => {
       const { written, sessions } = chatRegistries()
       const orch = orchOver({
         sessions,
-        act: async () => ({ sent: false, pending: { kind: 'approval', summary: 'Bash: npm test' } })
+        act: async (name) =>
+          name === 'chatPending' ? null : { sent: false, pending: { kind: 'approval', summary: 'Bash: npm test' } }
       })
       const r = await orch.call({ cmd: 'sessions-send', args, sessionId: '' })
       expect(r.status).toBe(409)

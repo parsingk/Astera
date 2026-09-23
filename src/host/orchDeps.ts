@@ -201,10 +201,26 @@ const HOST_SESSIONS = ['listSessions', 'readSession', 'sendSession', 'readChat']
  * is the app being required after all, and is refused the same way.
  *
  * Both routes run inside `HostSessions.serial`, so sends to one session go one at a time and in call
- * order whichever route each takes, and both are effects: the funnel marks the forwarded one, and
- * the local one is marked here before it writes.
+ * order whichever route each takes, and both are effects.
+ *
+ * **A send that delivered nothing leaves no receipt** (D4 review I1): a keyed refusal kept as a
+ * receipt would replay the refusal to a retry the world has since made valid, for an hour. So each
+ * route marks the effect only once nothing can refuse any more:
+ * - app route: the card is asked first, through `chatPending` (DEGRADES, not an effect). A card open,
+ *   or an app that does not hold the session or cannot say, is refused before anything is marked.
+ *   Only then is `chatSend` forwarded, and the funnel marks it. The app's own card check stays as
+ *   the backstop; a card that opens between the two calls is refused there, with a receipt, and that
+ *   rare race is accepted.
+ * - Host route: `sendChat` calls the mark right before it writes, after its own checks (no Codex
+ *   thread yet, an ended process).
  */
 const HOST_WHEN_ABSENT = ['chatSend'] as const
+
+/** DEGRADES members whose fallback is not logged when **no app is attached**, only when an attached
+ *  app failed to answer. `chatPending` with Astera closed is every chat read, and its fallback (the
+ *  field left out) already tells the caller; a line per read would bury the degradations that are
+ *  news (CLI phase D4 review M1). */
+const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending'])
 
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
 const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
@@ -412,7 +428,9 @@ export function hostOrchDeps(a: {
         const value = fallback(err.message)
         // Logged every time. A Gate that opened, or a retry that did not happen, because the app was
         // unreachable has to be traceable to that — otherwise it reads as a verdict about the work.
-        a.log(`${name} could not be asked (${err.message}) — answering ${JSON.stringify(value)}`)
+        // Except where no app is the ordinary state and the fallback says so by itself (QUIET_ABSENT).
+        if (a.hasApp() || !QUIET_ABSENT.has(name))
+          a.log(`${name} could not be asked (${err.message}) — answering ${JSON.stringify(value)}`)
         return value
       }
     }
@@ -460,13 +478,20 @@ export function hostOrchDeps(a: {
 
   /** HOST_WHEN_ABSENT: to the app when one is attached, else the Host's own write — see that group
    *  for why an app that fails mid-flight is refused rather than written for. */
+  const askPending = degrading('chatPending', DEGRADES.chatPending)
   const hostWhenAbsent = (name: (typeof HOST_WHEN_ABSENT)[number]) =>
     (id: string, text: string): Promise<unknown> =>
       a.sessions.serial(id, async () => {
-        if (a.hasApp()) return forward(name, true)(id, text)
-        if (EFFECTFUL[name]) a.onEffect?.()
+        if (a.hasApp()) {
+          const pending = await askPending(id)
+          if (pending === undefined) return { sent: false, reason: 'not-held' }
+          if (pending !== null) return { sent: false, pending }
+          return forward(name, true)(id, text)
+        }
         try {
-          await a.sessions.sendChat(id, text)
+          await a.sessions.sendChat(id, text, () => {
+            if (EFFECTFUL[name]) a.onEffect?.()
+          })
         } catch (err) {
           const refused = new AppUnreachable(
             `APP_REQUIRED: ${name} could not be done without the app: ${err instanceof Error ? err.message : String(err)}`

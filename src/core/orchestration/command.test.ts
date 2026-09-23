@@ -5820,6 +5820,14 @@ describe('sessions list / read / send', () => {
     expect(JSON.stringify(q.body)).toMatch(/waiting on a question: 어느 쪽\?/)
   })
 
+  // 앱이 붙어 있지만 그 세션을 아직 되찾지 않았다(재접속 중) — 지금 상태 때문이니 6 이다(M2).
+  it('앱이 세션을 아직 쥐지 않았다고 하면 409 이고 잠시 뒤 다시 하라고 말한다', async () => {
+    const { deps } = withSessions([chat])
+    const r = await call({ ...deps, chatSend: async () => ({ sent: false, reason: 'not-held' }) }, 'sessions-send', { id: 'chat-1', text: 'x' }, '')
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toMatch(/Astera .*chat-1.*try again in a moment/)
+  })
+
   it('끝난 대화 세션에는 치지 않는다 — 409 다', async () => {
     const { deps, chatSent } = withSessions([{ ...chat, alive: false }])
     const r = await call(deps, 'sessions-send', { id: 'chat-1', text: 'x' }, '')

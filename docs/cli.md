@@ -368,8 +368,9 @@ belongs to terminal sessions and `--turns` to chat sessions; giving a session th
 **`data.pending` is there only while Astera is open.** A chat session asks for approvals and
 questions through cards, and only the app holds them. With Astera open, `pending` is the card the
 session is waiting on (`kind` is `approval` or `question`, and `summary` is one line about it), or
-`null` when there is none. With Astera closed the field is left out, because the Host cannot see
-cards: a session waiting on one then looks like any other. `--human` prints each turn under its
+`null` when there is none; it is left out for a session Astera has not taken back yet after it
+starts. With Astera closed the field is left out, because the Host cannot see cards: a session
+waiting on one then looks like any other. `--human` prints each turn under its
 role, the tools as `[tool]` lines, and the card last.
 
 `sessions send` types `--text` into a terminal session and presses Enter 150ms later, which is how
@@ -388,12 +389,18 @@ rather than typed a second time.
 - **With Astera open, the app delivers the turn**, the same way it delivers a scheduled message, so
   the conversation view shows it as usual. If the session is waiting on a card (an approval or a
   question), the send is a 6 whose message names the card. `sessions send` does not answer cards:
-  open Astera and answer it there.
-- **With Astera closed, the Host writes the turn to the agent itself**, in the same form the app
-  would. It cannot see cards, so a turn sent while the session waits on one queues behind it in the
-  agent and runs once the card is answered. When Astera opens again it rebuilds the session from
-  the agent's output and transcript, and the turn is there. A Codex session that has not started
-  its first thread yet cannot take a turn from the Host, and that is a 6 that says so.
+  open Astera and answer it there. Nothing was sent then, so the same `--request-id` can be used again
+  once the card is answered. For a few seconds after Astera starts, a session it has not taken back
+  yet is a 6 too, with nothing sent; try again in a moment.
+- **With Astera closed, the Host writes the turn to the agent itself.** For a Claude session that is
+  the same line the app would write. For a Codex session the Host sends only the text on the
+  session's thread: no model, reasoning effort or plan mode, so whatever the thread currently has
+  applies, not what is picked in Astera's composer. The Host cannot see cards, so a turn sent while
+  the session waits on one queues behind it in the agent and runs once the card is answered. When
+  Astera opens again it rebuilds the session from the agent's output and transcript, and the turn
+  is there. A Codex session that has not started its first thread yet cannot take a turn from the
+  Host, and that is a 6 that says so; nothing was sent, so the same `--request-id` works once the
+  thread exists.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
 dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is

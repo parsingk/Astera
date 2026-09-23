@@ -4420,13 +4420,16 @@ export function registerIpc(
       },
       // `astera sessions read` 의 pending — 대화 세션이 열어 둔 카드는 어댑터의 프로토콜 상태에만
       // 있다(CLI phase D4). 모르는 id 에는 null 이다. Host 가 묻고, 앱이 없으면 칸을 싣지 않는다.
-      chatPending: async (sessionId) => chatPendingOf(core.chat.state(sessionId)?.request ?? null),
+      // 쥐지 않은 세션(재접속 중)은 카드를 모른다 — null(없음)이 아니라 undefined(모름)다.
+      chatPending: async (sessionId) =>
+        core.chat.has(sessionId) ? chatPendingOf(core.chat.state(sessionId)?.request ?? null) : undefined,
       // `astera sessions send` 가 대화 세션에 치는 턴. 스케줄러와 Slack 이 쓰는 그 세션 드라이버로
       // 넘겨 앱의 턴 상태가 제 것으로 남는다. 카드가 열려 있으면 치지 않고 그 카드를 돌려준다 —
       // 답은 앱에서 사람이 한다(R4.3). Slack 은 여기서 카드에 답하지만, 셸에서 온 글자를 승인이나
       // 질문의 답으로 읽는 것은 이 명령의 약속이 아니다.
       chatSend: async (sessionId, text) => {
-        if (!core.chat.has(sessionId)) throw new Error(`this app does not hold chat session ${sessionId}`)
+        // 아직 되찾지 않은 세션 — 지금 상태 때문이다. 오류(1)가 아니라 거절(6)로 돌려준다.
+        if (!core.chat.has(sessionId)) return { sent: false, reason: 'not-held' }
         const pending = chatPendingOf(core.chat.state(sessionId)?.request ?? null)
         if (pending !== null) return { sent: false, pending }
         if (!orchWiring) throw new Error('orchestration is not wired in this app')

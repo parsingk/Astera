@@ -517,6 +517,20 @@ describe('registrySessions — chat', () => {
     expect(odd.written).toEqual([])
   })
 
+  // The receipt mark goes on only when bytes are about to go out: a refusal before the write must
+  // leave nothing that says the send took effect (orchDeps passes onEffect here).
+  it('calls beforeWrite right before it writes, and never when it refuses', async () => {
+    const ok = chatHarness({ provider: 'claude', threadId: 'th' })
+    const seen: string[] = []
+    await ok.sessions.sendChat('chat-9', 'go', () => seen.push(`mark at ${ok.written.length}`))
+    expect(seen).toEqual(['mark at 0'])
+    expect(ok.written).toHaveLength(1)
+    const noThread = chatHarness({ provider: 'codex' })
+    let marked = 0
+    await expect(noThread.sessions.sendChat('chat-9', 'x', () => marked++)).rejects.toThrow(/no Codex thread yet/)
+    expect(marked).toBe(0)
+  })
+
   // What orchDeps runs both routes of a chat send through: one at a time per session, in call order,
   // and a failure does not hold up the next.
   it('serial runs one at a time per session, in order, past a failure', async () => {

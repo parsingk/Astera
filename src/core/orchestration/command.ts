@@ -131,7 +131,12 @@ export interface SessionScreen {
 /** What a turn sent to a chat session came to. The app refuses one while the session holds a card
  *  open (an approval or a question): answering it is the person's, in the app, and a turn typed at
  *  it would be read as the answer by nobody and queued behind it by the CLI. */
-export type ChatSendResult = { sent: true } | { sent: false; pending: ChatPending }
+export type ChatSendResult =
+  | { sent: true }
+  | { sent: false; pending: ChatPending }
+  /** The app is attached but does not hold the session yet (it is taking the Host's sessions back
+   *  after a start), or could not say whether a card is open. Nothing was sent; try again. */
+  | { sent: false; reason: 'not-held' }
 
 export interface OrchServerDeps {
   getState(): OrchState
@@ -409,7 +414,8 @@ export interface OrchServerDeps {
   /** The card a chat session holds open, or `null` for none. **Only the app can say**: the card is
    *  in its adapter's protocol state. The app injects it (`core.chat.state(id).request`); the Host
    *  forwards it, and answers `undefined` when the app cannot be asked, which means "not known" and
-   *  leaves `pending` out of the reply rather than claiming there is no card. */
+   *  leaves `pending` out of the reply rather than claiming there is no card. The app answers
+   *  `undefined` too for a session it does not hold (yet): it cannot know that session's card. */
   chatPending?(id: string): Promise<ChatPending | null | undefined>
   /** One turn into a chat session. With the app attached the app delivers it through its session
    *  driver (the scheduler's and Slack's), so its turn state stays its own, and refuses while a card
@@ -2570,6 +2576,8 @@ export async function handleCommand(
       // chatSend). 카드가 열려 있으면 앱이 거절한다 — 그 답은 앱에서 사람이 한다(R4.3).
       if (session.kind === 'chat') {
         const r = await deps.chatSend(id, text as string)
+        if (!r.sent && 'reason' in r)
+          return conflict(`Astera does not hold ${id} right now (it may still be taking its sessions back); nothing was sent, try again in a moment`)
         if (!r.sent)
           return conflict(
             `${id} is waiting on ${r.pending.kind === 'approval' ? 'an approval' : 'a question'}: ${r.pending.summary}. Answer it in Astera; a send does not answer it`

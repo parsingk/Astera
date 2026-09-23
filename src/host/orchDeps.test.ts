@@ -392,21 +392,66 @@ describe('hostOrchDeps', () => {
       expect(act).not.toHaveBeenCalled()
     })
 
-    it('앱이 있으면 치기는 앱으로 간다 — Host 는 아무것도 쓰지 않는다', async () => {
+    /** 앱의 두 답을 이름으로 가른다: 카드(chatPending)와 치기(chatSend). */
+    const appAnswers = (pending: unknown, sent: unknown = { sent: true }) =>
+      vi.fn(async (name: string) => (name === 'chatPending' ? pending : sent))
+
+    it('앱이 있으면 치기는 앱으로 간다 — 카드를 먼저 묻고, Host 는 아무것도 쓰지 않는다', async () => {
       const { written, sessions } = chatHost()
-      const act = vi.fn().mockResolvedValue({ sent: true })
+      const act = appAnswers(null)
       let acted = 0
       const deps = hostOrchDeps(base({ act, sessions, onEffect: () => acted++ }))
       expect(await deps.chatSend?.('chat-1', '다음')).toEqual({ sent: true })
-      expect(act).toHaveBeenCalledWith('chatSend', ['chat-1', '다음'])
+      expect(act.mock.calls).toEqual([
+        ['chatPending', ['chat-1']],
+        ['chatSend', ['chat-1', '다음']]
+      ])
       expect(written).toEqual([])
       expect(acted).toBe(1)
     })
 
-    it('앱이 카드 때문에 거절한 답은 그대로 돌아온다 — Host 가 대신 쓰지 않는다', async () => {
+    // **거절은 움직인 것이 아니다**(I1). 카드는 치기 전에 물으므로, 카드 때문에 돌아선 호출은 영수증을
+    // 남기지 않는다 — 카드에 답한 뒤 같은 요청 id 로 다시 치면 이번엔 간다.
+    it('카드가 열려 있으면 치기를 묻지도 않고 돌아선다 — 움직인 것이 아니다', async () => {
+      const { written, sessions } = chatHost()
+      const act = appAnswers({ kind: 'question', summary: '어느 쪽?' })
+      let acted = 0
+      const deps = hostOrchDeps(base({ act, sessions, onEffect: () => acted++ }))
+      expect(await deps.chatSend?.('chat-1', 'x')).toEqual({ sent: false, pending: { kind: 'question', summary: '어느 쪽?' } })
+      expect(act.mock.calls).toEqual([['chatPending', ['chat-1']]])
+      expect(written).toEqual([])
+      expect(acted).toBe(0)
+    })
+
+    // 앱이 붙어 있는데 그 세션을 아직 쥐지 않았다(되찾는 중) — 카드를 모른다(undefined). 치지 않고,
+    // 움직인 것도 아니다(M2). Host 도 쓰지 않는다: 앱이 붙어 있는 동안 쓰는 것은 앱뿐이다.
+    it('앱이 그 세션을 모르면 치지 않고 돌아선다 — 움직인 것도, Host 가 쓰는 것도 아니다', async () => {
+      const { written, sessions } = chatHost()
+      const act = appAnswers(undefined)
+      let acted = 0
+      const deps = hostOrchDeps(base({ act, sessions, onEffect: () => acted++ }))
+      expect(await deps.chatSend?.('chat-1', 'x')).toEqual({ sent: false, reason: 'not-held' })
+      expect(act.mock.calls).toEqual([['chatPending', ['chat-1']]])
+      expect([written, acted]).toEqual([[], 0])
+    })
+
+    // 카드를 묻다 앱이 사라졌다 — 아무것도 보내지 않았으므로 역시 움직인 것이 아니다.
+    it('카드를 묻지 못했으면 치지 않고 돌아선다', async () => {
+      const { written, sessions } = chatHost()
+      let acted = 0
+      const deps = hostOrchDeps(
+        base({ act: vi.fn().mockRejectedValue(new AppUnreachable('APP_REQUIRED: gone')), sessions, onEffect: () => acted++ })
+      )
+      expect(await deps.chatSend?.('chat-1', 'x')).toEqual({ sent: false, reason: 'not-held' })
+      expect([written, acted]).toEqual([[], 0])
+    })
+
+    // 드물게 두 호출 사이에 카드가 열리면 앱의 처리기가 막는다(뒷받침). 그때는 이미 물었으므로 움직인
+    // 것으로 센다 — 검토가 받아들인 경합이다.
+    it('앱이 치기 자리에서 카드로 거절한 답도 그대로 돌아온다', async () => {
       const { written, sessions } = chatHost()
       const refusal = { sent: false, pending: { kind: 'question', summary: '어느 쪽?' } }
-      const deps = hostOrchDeps(base({ act: vi.fn().mockResolvedValue(refusal), sessions }))
+      const deps = hostOrchDeps(base({ act: appAnswers(null, refusal), sessions }))
       expect(await deps.chatSend?.('chat-1', 'x')).toEqual(refusal)
       expect(written).toEqual([])
     })
@@ -436,15 +481,26 @@ describe('hostOrchDeps', () => {
       expect(written).toEqual([])
     })
 
+    // 스레드가 없어 Host 가 쓰지 못한 것은 움직인 것이 아니다(I1) — 스레드가 생긴 뒤 같은 id 로 다시 치면 간다.
+    it('Host 가 쓰지 못한 거절은 움직인 것이 아니다', async () => {
+      const { sessions } = chatHost({ provider: 'codex' })
+      let acted = 0
+      const deps = hostOrchDeps(base({ sessions, hasApp: () => false, onEffect: () => acted++ }))
+      await expect(deps.chatSend?.('chat-1', 'x')).rejects.toThrow(/no Codex thread yet/)
+      expect(acted).toBe(0)
+    })
+
     // **앱이 도중에 사라진 것은 "앱이 없다" 와 다르다.** 앱이 이미 보냈을 수 있다 — Host 가 이어서 쓰면
     // 같은 턴이 두 번 간다. 그래서 거절하고, 쓰지 않는다.
-    it('앱이 답하지 못했으면 Host 가 대신 쓰지 않고 거절한다', async () => {
+    it('앱이 치기에 답하지 못했으면 Host 가 대신 쓰지 않고 거절한다', async () => {
       const { written, sessions } = chatHost()
       const refused: string[] = []
       let acted = 0
-      const deps = hostOrchDeps(
-        base({ act: vi.fn().mockRejectedValue(new AppUnreachable('APP_REQUIRED: gone')), sessions, onEffect: () => acted++, onAppRequired: (n) => refused.push(n) })
-      )
+      const act = vi.fn(async (name: string) => {
+        if (name === 'chatPending') return null
+        throw new AppUnreachable('APP_REQUIRED: gone')
+      })
+      const deps = hostOrchDeps(base({ act, sessions, onEffect: () => acted++, onAppRequired: (n) => refused.push(n) }))
       await expect(deps.chatSend?.('chat-1', 'x')).rejects.toBeInstanceOf(AppUnreachable)
       expect(written).toEqual([])
       expect(refused).toEqual(['chatSend'])
@@ -455,21 +511,39 @@ describe('hostOrchDeps', () => {
     it('세션마다 차례대로 — 앞의 것이 끝나야 다음 것이 앱에 간다', async () => {
       const { sessions } = chatHost()
       let release: () => void = () => {}
-      const act = vi
-        .fn()
-        .mockImplementationOnce(() => new Promise((r) => (release = () => r({ sent: true }))))
-        .mockResolvedValue({ sent: true })
+      let held = false
+      const act = vi.fn(async (name: string) => {
+        if (name === 'chatPending') return null
+        if (!held) {
+          held = true
+          return new Promise((r) => (release = () => r({ sent: true })))
+        }
+        return { sent: true }
+      })
       const deps = hostOrchDeps(base({ act, sessions }))
       const a = deps.chatSend?.('chat-1', 'a')
       const b = deps.chatSend?.('chat-1', 'b')
       await new Promise((r) => setTimeout(r, 10))
-      expect(act.mock.calls).toEqual([['chatSend', ['chat-1', 'a']]])
+      expect(act.mock.calls.filter((c) => c[0] === 'chatSend')).toEqual([['chatSend', ['chat-1', 'a']]])
       release()
       await Promise.all([a, b])
-      expect(act.mock.calls).toEqual([
+      expect(act.mock.calls.filter((c) => c[0] === 'chatSend')).toEqual([
         ['chatSend', ['chat-1', 'a']],
         ['chatSend', ['chat-1', 'b']]
       ])
+    })
+
+    // 앱이 없을 때 카드를 모르는 것은 평소 일이다 — 읽을 때마다 로그에 남기지 않는다(M1). 앱이 붙어 있는데
+    // 답을 못 한 것만 남긴다.
+    it('앱이 없어 카드를 못 묻는 것은 로그에 남기지 않는다 — 앱이 답하지 못한 것만 남긴다', async () => {
+      const logs: string[] = []
+      await hostOrchDeps(base({ hasApp: () => false, log: (m) => logs.push(m) })).chatPending?.('chat-1')
+      expect(logs).toEqual([])
+      await hostOrchDeps(
+        base({ act: vi.fn().mockRejectedValue(new AppUnreachable('APP_REQUIRED: gone')), log: (m) => logs.push(m) })
+      ).chatPending?.('chat-1')
+      expect(logs).toHaveLength(1)
+      expect(logs[0]).toMatch(/chatPending could not be asked/)
     })
 
     it('앱이 없을 때도 차례대로 쓴다', async () => {

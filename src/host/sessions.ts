@@ -51,8 +51,10 @@ export interface HostSessions {
   /** One turn written to a chat session's process, in the bytes the app's adapter writes. **Not
    *  queued by itself**: orchDeps runs it inside `serial`, beside the route that asks the app instead,
    *  so both routes share one order. Rejects, writing nothing, when it cannot be written: no Codex
-   *  thread yet, a provider it does not know, a session that has ended. */
-  sendChat(id: string, text: string): Promise<void>
+   *  thread yet, a provider it does not know, a session that has ended. `beforeWrite` runs right
+   *  before the bytes go out, after every check, and never on a refusal: orchDeps passes the receipt
+   *  mark there, so a send that wrote nothing leaves no receipt. */
+  sendChat(id: string, text: string, beforeWrite?: () => void): Promise<void>
   /** Runs `run` after every earlier `serial` call for the same session id has settled. A rejection
    *  is the caller's and does not hold up the next one. */
   serial<T>(id: string, run: () => Promise<T>): Promise<T>
@@ -251,20 +253,21 @@ export function registrySessions(a: {
       const file = await findClaudeTranscript(account.configDir, threadId)
       return file === null ? [] : readChatTurns(file, 'claude', turns)
     },
-    sendChat: async (id, value) => {
+    sendChat: async (id, value, beforeWrite) => {
       const e = chatOf(id)
       if (e === null || !e.alive) throw new Error(`chat session ${id} has ended`)
       const restore = e.meta!.restore ?? {}
       if (restore.provider === 'claude') {
         // claudeAdapter.ts doSend's write. The registry adds the newline, as it does for proc-write.
+        beforeWrite?.()
         a.procs.write(e.id, encodeUserTurn(value))
         return
       }
       if (restore.provider === 'codex') {
         const threadId = text(restore.threadId)
         if (threadId === null) throw new Error(`chat session ${id} has no Codex thread yet; open Astera and let it start`)
-        // codexAdapter.ts doSend's request, with what only the app knows left out: the model and
-        // effort picked in the composer and plan mode. The thread keeps its own model then.
+        // codexAdapter.ts doSend's request with only the thread and the text: no model, effort or
+        // collaboration mode, which only the app's composer knows. The thread's current settings apply.
         const params = turnStartParams({
           threadId,
           text: value,
@@ -274,6 +277,7 @@ export function registrySessions(a: {
           planEffort: null,
           threadModel: null
         })
+        beforeWrite?.()
         a.procs.write(e.id, encodeRequest(mintId(), 'turn/start', params))
         return
       }
