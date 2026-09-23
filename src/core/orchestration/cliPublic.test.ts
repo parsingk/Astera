@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { publicFor } from './cliPublic'
 import type { Task } from './types'
 
@@ -143,5 +146,14 @@ describe('publicFor', () => {
   it('객체가 아닌 것은 그대로 둔다', () => {
     expect(publicFor('jobs-list', [])).toEqual([])
     expect(publicFor('questions-get', null)).toBe(null)
+  })
+})
+
+// **core 는 cli 도 main 도 가져오지 않는다.** 타입만 가져와도 그 줄이 값 가져오기로 바뀌는 날 core 가
+// 앱 쪽 모듈을 통째로 끌고 온다 — skills 의 답 타입은 그래서 core 에 있다(./skills).
+describe('cliPublic 의 가져오기', () => {
+  it('src/cli 와 src/main 에서 아무것도 가져오지 않는다', () => {
+    const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'cliPublic.ts'), 'utf8')
+    expect(src).not.toMatch(/from '\.\.\/\.\.\/(cli|main)\//)
   })
 })

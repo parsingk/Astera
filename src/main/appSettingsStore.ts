@@ -17,6 +17,66 @@ import {
   writableDesktopNotify,
   type DesktopNotifySettings
 } from '../core/notify/settings'
+import type { SkillSettings } from '../core/orchestration/skills'
+
+/** The file's text as `load` reads it: a JSON object, or a throw. Same guard as the sibling stores
+ *  (ProjectSettings, RunConfigStore) — typeof [] === 'object', so an array would otherwise pass
+ *  straight through. */
+function settingsObjectOf(text: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(text)
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid schema')
+  return parsed as Record<string, unknown>
+}
+
+/** The three settings that gate Astera's agent skills when the file does not say otherwise — a
+ *  missing file, a corrupt one, or an absent key. */
+export const SKILL_SETTINGS_DEFAULTS: SkillSettings = {
+  workUnitTrackingEnabled: false,
+  agentBrowserEnabled: false,
+  resumeStrategy: 'original'
+}
+
+/** The skill gates out of a parsed settings object, narrowed the way `load` narrows them. */
+function skillSettingsOf(parsed: Record<string, unknown>): SkillSettings {
+  return {
+    // Narrowed to === true — values like 'yes' or 1 must not slip through as truthy and turn an
+    // experimental feature on. It is the whole point of these toggles: default (and any untrusted
+    // file content) reads as off, so the feature stays off until the user explicitly turns it on.
+    workUnitTrackingEnabled: parsed.workUnitTrackingEnabled === true,
+    agentBrowserEnabled: parsed.agentBrowserEnabled === true,
+    // Narrowed to === 'smart' — the file is user-editable, so anything else ('ask', 42, null) reads as 'original'
+    resumeStrategy: parsed.resumeStrategy === 'smart' ? 'smart' : 'original'
+  }
+}
+
+/**
+ * The skill gates from `filePath`, **read-only**, for `astera skills` in the CLI process.
+ *
+ * `load` cannot be that read: on a file it cannot parse it copies it to `.bak`, and the app is the
+ * file's only writer. So this shares `load`'s parse and narrowing and differs only in what a bad
+ * file means:
+ *
+ * - **Missing file: the defaults**, as `load` reads it — a profile that has never saved a setting.
+ * - **Unreadable or not a JSON object: it throws** with a message that says what to do. It does not
+ *   answer the defaults, because "every skill is off" would be a confident false answer about a
+ *   setting that may be on — and `persist` writes in place, so a read racing it can see a torn file.
+ *   Retrying, or opening Astera (which repairs it), is the answer. The same rule accountsFile.ts
+ *   applies to accounts.json.
+ */
+export async function readSkillSettings(filePath: string): Promise<SkillSettings> {
+  let text: string
+  try {
+    text = await fs.readFile(filePath, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ...SKILL_SETTINGS_DEFAULTS }
+    throw new Error(`app-settings.json could not be read (${String(err)}); open Astera to repair it`)
+  }
+  try {
+    return skillSettingsOf(settingsObjectOf(text))
+  } catch {
+    throw new Error('app-settings.json is not a valid settings file; open Astera to repair it')
+  }
+}
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, the
  *  work unit tracking toggle, the agent browser toggle, the Job Continuity
@@ -28,8 +88,8 @@ export class AppSettingsStore {
   private lang: Lang | null = null
   /** The update campaign the user dismissed. The basis for not showing the same campaign again. */
   private dismissedCampaignId: string | null = null
-  private workUnitTrackingEnabled = false
-  private agentBrowserEnabled = false
+  private workUnitTrackingEnabled = SKILL_SETTINGS_DEFAULTS.workUnitTrackingEnabled
+  private agentBrowserEnabled = SKILL_SETTINGS_DEFAULTS.agentBrowserEnabled
   /** Ruling F62 — whether the one-time pause for work the old orchestration toggle had parked has
    *  already run on this profile. Written once and never cleared; see `orchAlwaysOnMigration`. It is
    *  also what tells `persist` to stop carrying `orchestrationEnabled` (ruling F67). */
@@ -52,7 +112,7 @@ export class AppSettingsStore {
   private githubPolling = true
   /** 설명을 누가·무엇으로 만드는가. 비어 있으면 생성하지 않는다 (설계 D2) */
   private generator: GeneratorSettings = {}
-  private resumeStrategy: ResumeStrategy = 'original'
+  private resumeStrategy: ResumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
   /** 에이전트를 권한 확인 없이 띄우는가. **기본은 'yolo'** — 그 근거는 AgentPermissionMode 에 있다.
    *  githubPolling 과 같은 방향의 좁히기다: 기본이 켜짐인 값이라 파일에 명시된 'manual' 만 끈다. */
   private agentPermissionMode: AgentPermissionMode = 'yolo'
@@ -87,22 +147,17 @@ export class AppSettingsStore {
 
   async load(): Promise<{ recovered: boolean }> {
     try {
-      const parsed: unknown = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
-      // Same guard as the sibling stores (ProjectSettings, RunConfigStore) — typeof [] === 'object', so an array
-      // would otherwise pass straight through
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid schema')
+      const parsed = settingsObjectOf(await fs.readFile(this.filePath, 'utf8'))
+      // The three skill gates are read by the same function `readSkillSettings` uses, so the CLI's
+      // `astera skills` and this store cannot narrow them differently.
+      const gates = skillSettingsOf(parsed)
       const v = (parsed as { lang?: unknown }).lang
       this.lang = isLang(v) ? v : null
       const dismissed = (parsed as { dismissedCampaignId?: unknown }).dismissedCampaignId
       this.dismissedCampaignId =
         typeof dismissed === 'string' && dismissed.trim() ? dismissed : null
-      // Narrowed to === true — values like 'yes' or 1 must not slip through as truthy and turn an
-      // experimental feature on. It is the whole point of this toggle: default (and any untrusted
-      // file content) reads as off, so detection stays off until the user explicitly turns it on.
-      this.workUnitTrackingEnabled =
-        (parsed as { workUnitTrackingEnabled?: unknown }).workUnitTrackingEnabled === true
-      this.agentBrowserEnabled =
-        (parsed as { agentBrowserEnabled?: unknown }).agentBrowserEnabled === true
+      this.workUnitTrackingEnabled = gates.workUnitTrackingEnabled
+      this.agentBrowserEnabled = gates.agentBrowserEnabled
       // **The absence of the key is what says "off"**, not a stored `false`: `persist` omitted falsy
       // values, so `orchestrationEnabled` was only ever written when it was on. A profile that never
       // used the feature at all reads the same way, which costs nothing — the pause finds no parked
@@ -122,9 +177,7 @@ export class AppSettingsStore {
       // these values become CLI arguments. Anything that does not survive reads as "not set", which
       // means the CLI default (or, for the account, no generation at all).
       this.generator = readGeneratorSettings((parsed as { generator?: unknown }).generator)
-      // Narrowed to === 'smart' — the file is user-editable, so anything else ('ask', 42, null) reads as 'original'
-      this.resumeStrategy =
-        (parsed as { resumeStrategy?: unknown }).resumeStrategy === 'smart' ? 'smart' : 'original'
+      this.resumeStrategy = gates.resumeStrategy
       // Narrowed the other way round, because the default is the other way round: only the explicit
       // 'manual' turns the bypass off, and anything else the user-editable file holds reads as 'yolo'.
       this.agentPermissionMode =
@@ -165,8 +218,8 @@ export class AppSettingsStore {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         this.lang = null
         this.dismissedCampaignId = null
-        this.workUnitTrackingEnabled = false
-        this.agentBrowserEnabled = false
+        this.workUnitTrackingEnabled = SKILL_SETTINGS_DEFAULTS.workUnitTrackingEnabled
+        this.agentBrowserEnabled = SKILL_SETTINGS_DEFAULTS.agentBrowserEnabled
         // No file means no toggle to have been off, and no orchestration state to have parked —
         // this profile has never run anything. The F62 pause must not fire here.
         this.oldOrchestrationToggle = 'unknown'
@@ -175,7 +228,7 @@ export class AppSettingsStore {
         this.githubPolling = true
         this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
         this.generator = {}
-        this.resumeStrategy = 'original'
+        this.resumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
         this.agentPermissionMode = 'yolo'
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
@@ -190,8 +243,8 @@ export class AppSettingsStore {
       this.dismissedCampaignId = null
       // The failure branch resets these too — otherwise, on a reload through the same instance, the previous value
       // survives the corrupt-file recovery and leaves a setting enabled that the file does not contain
-      this.workUnitTrackingEnabled = false
-      this.agentBrowserEnabled = false
+      this.workUnitTrackingEnabled = SKILL_SETTINGS_DEFAULTS.workUnitTrackingEnabled
+      this.agentBrowserEnabled = SKILL_SETTINGS_DEFAULTS.agentBrowserEnabled
       // A file this could not read cannot say what the toggle was, and the F62 pause is not something
       // to do on a guess — it stops Runs the person may be watching. Both stay false, so a recovered
       // profile is left alone in either direction.
@@ -201,7 +254,7 @@ export class AppSettingsStore {
       this.githubPolling = true
       this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
       this.generator = {}
-      this.resumeStrategy = 'original'
+      this.resumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
       this.agentPermissionMode = 'yolo'
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID

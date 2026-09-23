@@ -270,7 +270,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'skills-install': {
     summary: 'install the skills the current settings enable, in every account',
     detail:
-      'Writes what the settings in the app enable and nothing else: a skill whose setting is off is listed under notEnabled with the setting that turns it on. Each skill comes back written, unchanged, skipped-not-ours or failed. It removes nothing. Sessions already open do not pick up a new skill; open a new session. Run it after adding an account, which gets no skills until the app restarts. It needs no Host and no app.',
+      'Writes what the settings in the app enable and nothing else: a skill whose setting is off is listed under notEnabled with the setting that turns it on. Each skill comes back written, unchanged, skipped-not-ours or failed, and any failed makes it exit 1. It removes nothing. Sessions already open do not pick up a new skill; open a new session. Run it after adding an account, which gets no skills until the app restarts. It needs no Host and no app.',
     flags: [{ name: 'account', value: '<accountId>', about: 'only this account (from `accounts list`)' }]
   },
 

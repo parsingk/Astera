@@ -13,7 +13,7 @@
 // 이름을 대며 깨진다. 허용 목록의 유일한 실패 방식이 "낡는 것" 이고, 막을 것은 그것뿐이다.
 import type { Gate, Job, JobRun, Project, Task } from './types'
 import type { OrchAccount } from './command'
-import type { SkillInstalled, SkillListed, SkillNotEnabled, SkillsAccount } from '../../cli/skills'
+import type { SkillInstalled, SkillListed, SkillNotEnabled, SkillsAccount } from './skills'
 
 /** 두 목록이 그 타입의 칸을 전부 덮지 못하면 남은 이름이 여기 남는다. */
 type Unlisted<
@@ -136,7 +136,8 @@ type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT, []>>
 
 /** `astera skills` 의 답은 계정 목록 안에 스킬 목록이 접힌 모양이다(cli/skills.ts). 개체가 앱이
  *  아니라 CLI 가 지은 것이어도 적는다 — 계정 칸은 accounts.json 을 읽은 것이고, 거기엔 configDir 이
- *  있다. 두 겹 모두 이 목록으로 가린다(아래 `shapeSkills`). */
+ *  있다. 두 겹 모두 이 목록으로 가린다(아래 `shapeSkills`). 타입이 core 에 있는 것은 core 가 cli 를
+ *  가져오지 않게 하려는 것이다(./skills). */
 const SKILLS_ACCOUNT = ['id', 'label', 'provider', 'skills'] as const
 type _skillsAccount = NothingLeft<Unlisted<SkillsAccount, typeof SKILLS_ACCOUNT, []>>
 const SKILL_LISTED = ['name', 'enabled', 'installed'] as const

@@ -208,9 +208,9 @@ session about `astera`, and about the features switched on in the app. There are
 **Work unit tracking**, **Agent browser** and the **Smart Resume** resume strategy in Settings. The app
 installs them itself at launch and when a setting is turned on; these two commands are for checking,
 and for the times it has not yet done so. `--account <accountId>` narrows either to one account, and
-an id that is not in `accounts list` is a 4. A damaged `accounts.json` is a 6, and the message says
-to open Astera, which repairs it. A damaged `app-settings.json` reads as every setting off, which is
-how the app reads it too.
+an id that is not in `accounts list` is a 4. A damaged `accounts.json` or `app-settings.json` is a 6,
+and the message says to open Astera, which repairs it. Neither command writes to either file. A
+missing `app-settings.json` is not an error: it reads as every setting at its default, which is off.
 
 `skills list` reports, per account, every skill with `enabled` (whether its setting is on) and
 `installed`: `current`, `stale` (an older copy Astera wrote, which `install` would replace),
@@ -226,7 +226,8 @@ how the app reads it too.
 is off is never installed**, because the setting is your consent: the browser skill lets an agent
 drive a browser on your behalf. Each installed skill comes back with `result`: `written`, `unchanged`,
 `skipped-not-ours` (a file Astera did not write is left exactly as it is), or `failed` (the reason is
-on stderr). `data.notEnabled` names each skill left out and the setting that turns it on. It removes
+on stderr). **Any `failed` makes the command exit 1**, with the whole answer in `error.details`, so
+`astera skills install && …` stops there. `skipped-not-ours` is not a failure and exits 0. `data.notEnabled` names each skill left out and the setting that turns it on. It removes
 nothing, including a skill whose setting you have since turned off. Running it twice is safe: the
 second run is all `unchanged`.
 

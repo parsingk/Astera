@@ -10,7 +10,9 @@
 // **The same list and the same rules as the app.** Which skills exist and what gates each is
 // `skillStubs`, which the app's own install builds from; what counts as ours is `installStub`'s
 // ownership rule, and `list` reports with `stubStateOf`, the rule `install` acts on. The settings
-// are read by the app's own store, so its narrowing and its defaults are the ones used here.
+// are read with the app store's own parse, narrowing and defaults (`readSkillSettings`), but
+// read-only: the app is that file's only writer, so a file the CLI cannot read is refused (6), never
+// repaired or read as "all off".
 //
 // **It removes nothing.** A skill whose setting is off is not uninstalled (that is deleting a file
 // on a guess about the person's intent), and the stub under the pre-rebrand name is left for the
@@ -18,47 +20,18 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { CliError } from '../core/orchestration/cliOutput'
-import type { Account, Provider } from '../core/types'
+import type { Account } from '../core/types'
+import type {
+  SkillInstallResult,
+  SkillListed,
+  SkillNotEnabled,
+  SkillsAccount,
+  StubState
+} from '../core/orchestration/skills'
 import { providerOf } from '../core/providers/meta'
 import { readAccountEntries } from '../core/accounts/accountsFile'
-import { AppSettingsStore } from '../main/appSettingsStore'
-import {
-  installStub,
-  skillStubs,
-  stubStateOf,
-  stubTargetPath,
-  type StubState
-} from '../main/orchestration/stub'
-
-/** One skill in `skills list`. */
-export interface SkillListed {
-  name: string
-  /** Whether the current settings install it. */
-  enabled: boolean
-  installed: StubState
-}
-
-/** What `skills install` did with one skill in one account. `failed` is a write or read that threw;
- *  the reason is on stderr. */
-export type SkillInstallResult = 'written' | 'unchanged' | 'skipped-not-ours' | 'failed'
-
-export interface SkillInstalled {
-  name: string
-  result: SkillInstallResult
-}
-
-/** A skill `skills install` left out because its setting is off, and where that setting is. */
-export interface SkillNotEnabled {
-  name: string
-  setting: string
-}
-
-export interface SkillsAccount {
-  id: string
-  label: string
-  provider: Provider
-  skills: SkillListed[] | SkillInstalled[]
-}
+import { readSkillSettings } from '../main/appSettingsStore'
+import { installStub, skillStubs, stubStateOf, stubTargetPath } from '../main/orchestration/stub'
 
 /** Said on every install, because it is the question that follows one (design R2.5). */
 export const SKILLS_NOTE = 'Sessions already open do not pick up new skills; open a new session to use them.'
@@ -108,13 +81,13 @@ export async function skillsCommand(a: {
     if (accounts.length === 0) return { ok: false, error: { code: 'NOT_FOUND', message: `unknown account: ${wanted}` } }
   }
 
-  const settings = new AppSettingsStore(path.join(a.profileDir, 'app-settings.json'))
-  await settings.load()
-  const stubs = skillStubs(a.skillsDir, {
-    workUnitTrackingEnabled: settings.getWorkUnitTrackingEnabled(),
-    agentBrowserEnabled: settings.getAgentBrowserEnabled(),
-    resumeStrategy: settings.getResumeStrategy()
-  })
+  let settings
+  try {
+    settings = await readSkillSettings(path.join(a.profileDir, 'app-settings.json'))
+  } catch (err) {
+    return { ok: false, error: { code: 'CONFLICT', message: err instanceof Error ? err.message : String(err) } }
+  }
+  const stubs = skillStubs(a.skillsDir, settings)
   const head = (x: Account): Omit<SkillsAccount, 'skills'> => ({ id: x.id, label: x.label, provider: providerOf(x) })
 
   if (a.cmd === 'skills-list') {
@@ -162,4 +135,27 @@ export async function skillsCommand(a: {
     .filter((s) => !s.enabled)
     .map((s) => ({ name: s.skillName, setting: s.setting ?? '' }))
   return { ok: true, body: { accounts: rows, notEnabled, note: SKILLS_NOTE } }
+}
+
+/**
+ * The failure an install answer amounts to, or null. **An install that was asked for and did not
+ * happen fails the command** (exit 1), so `astera skills install && claude …` stops rather than open
+ * a session without its skills. The shaped answer rides in `details`, so the caller still sees which
+ * skill in which account. `skipped-not-ours` is not a failure: leaving a foreign file alone is the
+ * documented outcome.
+ */
+export function installFailureOf(body: unknown): CliError | null {
+  const accounts = (body as { accounts?: unknown } | null)?.accounts
+  let failed = 0
+  if (Array.isArray(accounts))
+    for (const x of accounts) {
+      const skills = (x as { skills?: unknown } | null)?.skills
+      if (Array.isArray(skills)) failed += skills.filter((s) => (s as { result?: unknown })?.result === 'failed').length
+    }
+  if (failed === 0) return null
+  return {
+    code: 'FAILED',
+    message: `${failed} skill install${failed === 1 ? '' : 's'} failed; the reasons are on stderr`,
+    details: body as Record<string, unknown>
+  }
 }

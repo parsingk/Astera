@@ -23,7 +23,7 @@
 // **`AGENTS.md` is left alone** — that is a user file and would need its own decision.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import type { ResumeStrategy } from '../../core/types'
+import type { SkillSettings, StubState } from '../../core/orchestration/skills'
 
 /** Marks the file as owned by the app. It sits in the first line of the body of
  *  `resources/skills/orchestration-stub.md`, and when a target file lacks it the file is **left
@@ -96,24 +96,14 @@ const ORCHESTRATION_SKILL_NAME = 'astera-orchestration'
 export const stubTargetPath = (configDir: string, skillName: string = ORCHESTRATION_SKILL_NAME): string =>
   path.join(configDir, 'skills', skillName, 'SKILL.md')
 
-/** What is at one stub's target, judged by the ownership rule `installStub` acts on (see there).
- *  `stale` is a file of ours that `installStub` would rewrite; `not-ours` is one it leaves alone.
- *  Exported so `astera skills list` reports with the same rule `astera skills install` writes by. */
-export type StubState = 'missing' | 'current' | 'stale' | 'not-ours'
-
+/** What is at one stub's target (`StubState`), judged by the ownership rule `installStub` acts on
+ *  (see there). Exported so `astera skills list` reports with the same rule `astera skills install`
+ *  writes by. */
 export const stubStateOf = (existing: string | null, content: string): StubState => {
   if (existing === null) return 'missing'
   if (existing === content) return 'current'
   const appOwned = existing.includes(STUB_MARKER) || withoutMarker(existing) === withoutMarker(content)
   return appOwned ? 'stale' : 'not-ours'
-}
-
-/** The settings that gate the stubs. Values rather than the store, so the CLI can hand in what it
- *  read from the profile's app-settings.json and the app what it holds in memory. */
-export interface SkillSettings {
-  workUnitTrackingEnabled: boolean
-  agentBrowserEnabled: boolean
-  resumeStrategy: ResumeStrategy
 }
 
 export interface SkillStub {

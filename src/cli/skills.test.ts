@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { resolveSkillsDir, skillsCommand } from './skills'
+import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { STUB_MARKER, stubTargetPath } from '../main/orchestration/stub'
 
 // The real stub sources, so a test fails if a shipped stub loses its marker or is renamed.
@@ -230,5 +230,62 @@ describe('resolveSkillsDir', () => {
     expect(resolveSkillsDir({ resourcesPath: undefined, cliEntry: '/x/out/main/cli.js', exists: has() })).toBe(
       undefined
     )
+  })
+})
+
+// The settings file is the app's, and the app is its only writer: the CLI reads it and never
+// repairs it (no .bak), exactly as it treats accounts.json. A file it cannot read is refused
+// rather than read as "every setting off", which would be a confident false answer.
+describe('an unreadable app-settings.json', () => {
+  for (const body of ['{not json', '[]', ''])
+    it(`is refused with 6 and left byte-identical: ${JSON.stringify(body)}`, async () => {
+      const file = path.join(profileDir, 'app-settings.json')
+      await fs.writeFile(file, body, 'utf8')
+      const before = await fs.stat(file)
+      for (const cmd of ['skills-list', 'skills-install'] as const) {
+        const r = await run(cmd)
+        expect(r).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+        if (!r.ok) expect(r.error.message).toMatch(/app-settings\.json.*open Astera to repair it/)
+      }
+      expect(await fs.readFile(file, 'utf8')).toBe(body)
+      expect((await fs.stat(file)).mtimeMs).toBe(before.mtimeMs)
+      expect((await fs.readdir(profileDir)).sort()).toEqual(['accounts.json', 'app-settings.json'])
+      expect(await fs.readdir(claudeDir)).toEqual([])
+    })
+})
+
+// An install that was asked for and did not happen is a failure of the command (exit 1), with the
+// shaped answer in details; a foreign file left alone is a deliberate outcome and is not.
+describe('installFailureOf', () => {
+  it('a failed result makes the command fail, carrying the answer', async () => {
+    // a config "folder" that is a file: the skills directory cannot be made under it
+    await fs.rm(codexDir, { recursive: true })
+    await fs.writeFile(codexDir, 'not a folder', 'utf8')
+    const body = await ok('skills-install')
+    expect(skillOf(body, 'acc_x', 'astera-orchestration')).toEqual({ name: 'astera-orchestration', result: 'failed' })
+    expect(skillOf(body, 'acc_c', 'astera-orchestration')).toMatchObject({ result: 'written' })
+    expect(installFailureOf(body)).toEqual({
+      code: 'FAILED',
+      message: '1 skill install failed; the reasons are on stderr',
+      details: body
+    })
+  })
+
+  it('skipped-not-ours, written and unchanged are not failures', async () => {
+    const foreign = stubTargetPath(claudeDir, 'astera-orchestration')
+    await fs.mkdir(path.dirname(foreign), { recursive: true })
+    await fs.writeFile(foreign, '# mine\n', 'utf8')
+    expect(installFailureOf(await ok('skills-install'))).toBe(null)
+    expect(installFailureOf(await ok('skills-install'))).toBe(null)
+  })
+
+  it('counts every failure', () => {
+    const body = {
+      accounts: [
+        { skills: [{ name: 'a', result: 'failed' }, { name: 'b', result: 'failed' }] },
+        { skills: [{ name: 'a', result: 'unchanged' }] }
+      ]
+    }
+    expect(installFailureOf(body)?.message).toBe('2 skill installs failed; the reasons are on stderr')
   })
 })

@@ -15,7 +15,7 @@ import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestra
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
 import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS } from '../core/host/protocol'
 import { cliHostTarget, logToStderr, runHostCommand } from './host'
-import { resolveSkillsDir, skillsCommand } from './skills'
+import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import {
   CLI_PROTOCOL,
   askTimeoutBody,
@@ -1016,7 +1016,11 @@ export async function main(): Promise<void> {
       fail({ code: 'FAILED', message: 'cannot find the skill sources (resources/skills) beside this build' })
     const done = await skillsCommand({ cmd: parsed.cmd, args, profileDir, skillsDir, log: logToStderr })
     if (!done.ok) fail(done.error)
-    out(renderOk(parsed.cmd, publicFor(parsed.cmd, done.body), mode))
+    const shaped = publicFor(parsed.cmd, done.body)
+    // 요청한 설치가 안 된 것은 명령의 실패다(1). 무엇이 안 됐는지는 가린 답 그대로 details 에 실린다.
+    const failed = installFailureOf(shaped)
+    if (failed !== null) fail(failed)
+    out(renderOk(parsed.cmd, shaped, mode))
     process.exit(0)
   }
 
