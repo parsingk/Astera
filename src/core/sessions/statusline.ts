@@ -88,7 +88,8 @@ const RENAME_BUSY = new Set(['EPERM', 'EACCES', 'EBUSY'])
 const RENAME_TRIES = 5
 
 /**
- * A script a running session may execute at any moment, put in place for this launch.
+ * A script a running session may execute at any moment, or a settings file a starting session may
+ * read, put in place for this launch.
  *
  * - **Unchanged content is not written at all.** Most launches write the same bytes, so a hook
  *   loading the file is never raced in the common case.
@@ -174,7 +175,7 @@ const ASK_MATCHER = 'AskUserQuestion'
 /** The tools whose calls the Pre/PostToolUse hooks watch in a Slack-notifying or rolling session. A
  *  superset of ASK_MATCHER on purpose: that file replaces the every-session file rather than layering on
  *  it, so the question capture must be in here too or those sessions would lose it. Both events share it
- *  so the capture and the invalidation cannot cover different sets — see the PostToolUse comment in init(). */
+ *  so the capture and the invalidation cannot cover different sets — see the PostToolUse comment in ensureFiles(). */
 const TOOL_MATCHER = `${ASK_MATCHER}|Bash|PowerShell|Write|Edit|NotebookEdit`
 
 export class StatusLineManager {
@@ -200,8 +201,15 @@ export class StatusLineManager {
     this.hookEventsDir = hookEventsDirIn(userDataDir)
   }
 
-  /** Writes the capture script and settings files, and resets the per-session output folder (removing leftovers from the previous run). */
+  /** The app's start: ensureFiles() then startupCleanup(). */
   async init(): Promise<void> {
+    await this.ensureFiles()
+    await this.startupCleanup()
+  }
+
+  /** Writes the capture scripts and both settings files, skipping identical content. Never deletes
+   *  anything. The Host calls this and only this: the hook events are its running sessions'. */
+  async ensureFiles(): Promise<void> {
     await fs.mkdir(this.userDataDir, { recursive: true })
     // Written whole and then swapped in: sessions still running from before this launch run these
     // scripts by path, and a hook that fires during an in-place write would load half a script.
@@ -273,7 +281,9 @@ export class StatusLineManager {
       },
       hooks: everySessionHooks
     }
-    await fs.writeFile(this.settingsFile, JSON.stringify(settings, null, 2), 'utf8')
+    // Through writeScript like the scripts: the app and the Host both write these files, and a
+    // session starting mid-write would read half a settings file.
+    await writeScript(this.settingsFile, JSON.stringify(settings, null, 2))
     // What only a Slack-notifying or rolling session pays for, on top: the write/execute family in the
     // tool pair, which fires per tool call and is therefore matcher-limited. The pair itself is already
     // in everySessionHooks for AskUserQuestion; this widens its matcher.
@@ -309,7 +319,12 @@ export class StatusLineManager {
         PostToolUse: [{ matcher: TOOL_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }]
       }
     }
-    await fs.writeFile(this.hooksSettingsFile, JSON.stringify(hooksSettings, null, 2), 'utf8')
+    await writeScript(this.hooksSettingsFile, JSON.stringify(hooksSettings, null, 2))
+  }
+
+  /** The app-start half: empties the hook events folder (a queue the app drains) and makes the
+   *  per-session output folder. The app alone calls it. */
+  async startupCleanup(): Promise<void> {
     // Hook events are a queue the app drains while it runs, so anything still sitting here was
     // written while it was away and is stale on arrival — a Notification from hours ago would push a
     // session into `waiting` over whatever is true now. Dropped, not replayed.

@@ -307,3 +307,45 @@ describe('StatusLineManager statusline payloads', () => {
     await expect(mgr.pruneExcept(new Set(['alive']))).resolves.toBeUndefined()
   })
 })
+
+describe('StatusLineManager.ensureFiles (the Host half)', () => {
+  let dir: string
+  beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-ensure-')) })
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
+
+  // Design §2.2: the Host must never erase the hook events of the sessions it is running.
+  it('never removes the hook events folder or anything in it', async () => {
+    const mgr = new StatusLineManager(dir)
+    const events = path.join(mgr.hookEventsDir, 'ses_live.jsonl')
+    await fs.mkdir(mgr.hookEventsDir, { recursive: true })
+    await fs.writeFile(events, '{"hook_event_name":"Stop"}\n')
+    await mgr.ensureFiles()
+    expect(await fs.readFile(events, 'utf8')).toBe('{"hook_event_name":"Stop"}\n')
+  })
+
+  it('writes both scripts and both settings files', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.ensureFiles()
+    for (const f of ['astera-statusline-capture.cjs', 'astera-hook-capture.cjs', 'astera-statusline-settings.json', 'astera-hooks-settings.json'])
+      await expect(fs.stat(path.join(dir, f))).resolves.toBeTruthy()
+  })
+
+  // Two processes write these files from S2 on; identical content is left alone (writeScript's rule).
+  it('does not rewrite a settings file whose content is already right', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.ensureFiles()
+    const spy = vi.spyOn(fs, 'writeFile')
+    try {
+      await mgr.ensureFiles()
+      expect(spy.mock.calls.filter(([p]) => String(p).endsWith('settings.json'))).toEqual([])
+    } finally { spy.mockRestore() }
+  })
+
+  it('startupCleanup empties the hook events folder, as init always has', async () => {
+    const mgr = new StatusLineManager(dir)
+    await fs.mkdir(mgr.hookEventsDir, { recursive: true })
+    await fs.writeFile(path.join(mgr.hookEventsDir, 'old.jsonl'), 'x\n')
+    await mgr.startupCleanup()
+    expect(await fs.readdir(mgr.hookEventsDir)).toEqual([])
+  })
+})
