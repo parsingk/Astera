@@ -12,7 +12,7 @@
 // **컴파일러가 빠짐을 잡는다.** 칸을 더하고 두 목록 중 어디에도 적지 않으면 타입 검사가 그
 // 이름을 대며 깨진다. 허용 목록의 유일한 실패 방식이 "낡는 것" 이고, 막을 것은 그것뿐이다.
 import type { Gate, Job, JobRun, Project, Task } from './types'
-import type { OrchAccount } from './command'
+import type { HostSession, OrchAccount } from './command'
 import type { SkillInstalled, SkillListed, SkillNotEnabled, SkillsAccount } from './skills'
 
 /** 두 목록이 그 타입의 칸을 전부 덮지 못하면 남은 이름이 여기 남는다. */
@@ -134,6 +134,15 @@ type _question = NothingLeft<Unlisted<Gate, typeof QUESTION, []>>
 const ACCOUNT = ['id', 'label', 'provider'] as const
 type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT, []>>
 
+/** 세션의 칸은 앱이 pty 에 남긴 note 에서 온다 — 앱이 자기에게 남긴 말이라 무엇이든 들 수 있고
+ *  (재개 id, 롤링 계정, 우회 권한), 그것이 공개 API 가 되면 안 된다. Host 가 이미 여섯 칸으로
+ *  추리지만(host/sessions.ts) 그래도 적는다 — ACCOUNT 와 같은 이유다. */
+const SESSION = ['id', 'kind', 'title', 'accountId', 'cwd', 'alive'] as const
+type _session = NothingLeft<Unlisted<HostSession, typeof SESSION, []>>
+/** `sessions read` 와 `sessions send` 의 답은 명령 층이 짓는 것이라 타입이 따로 없다(command.ts). */
+const SESSION_READ = ['id', 'alive', 'text'] as const
+const SESSION_SEND = ['id', 'sent', 'enter'] as const
+
 /** `astera skills` 의 답은 계정 목록 안에 스킬 목록이 접힌 모양이다(cli/skills.ts). 개체가 앱이
  *  아니라 CLI 가 지은 것이어도 적는다 — 계정 칸은 accounts.json 을 읽은 것이고, 거기엔 configDir 이
  *  있다. 두 겹 모두 이 목록으로 가린다(아래 `shapeSkills`). 타입이 core 에 있는 것은 core 가 cli 를
@@ -185,7 +194,10 @@ const SHAPE: Record<string, readonly string[]> = {
   'tasks-add': TASK,
   'questions-list': QUESTION,
   'questions-get': QUESTION,
-  'accounts-list': ACCOUNT
+  'accounts-list': ACCOUNT,
+  'sessions-list': SESSION,
+  'sessions-read': SESSION_READ,
+  'sessions-send': SESSION_SEND
 }
 
 /** 허용된 칸만 남긴다. **없는 칸은 만들지 않는다** — 없는 것을 `undefined` 로 찍으면 JSON 에서

@@ -518,7 +518,8 @@ describe('startHostServer', () => {
         act: async () => ({}),
         hasApp: () => false,
         onState: () => {},
-        log: () => {}
+        log: () => {},
+        sessions: { listSessions: () => [], readSession: () => '', writeSession: () => {} }
       })
       const h = await start({ orch })
       live = h.s

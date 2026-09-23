@@ -14,6 +14,7 @@ const base = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): Parameter
   log: () => {},
   onAppRequired: () => {},
   readAccounts: vi.fn().mockResolvedValue([]),
+  sessions: { listSessions: () => [], readSession: () => '', writeSession: () => {} },
   ...over
 })
 
@@ -219,6 +220,57 @@ describe('hostOrchDeps', () => {
       expect(err).toBeInstanceOf(AppUnreachable)
       expect(String(err)).toMatch(/open Astera to repair it/)
       expect(refused).toEqual(['listAccounts'])
+    })
+  })
+
+  /**
+   * **세션은 Host 가 제 레지스트리로 답한다 — 앱이 붙어 있어도**(CLI phase C, `astera sessions`).
+   * pty 를 쥐고 있는 것이 Host 이므로 앱에 물을 까닭이 없고, 앱이 닫혀 있어도 답해야 한다.
+   * 다만 `writeSession` 은 세션에 글자를 친다 — 두 번 치면 두 번 쳐진다. 그래서 영수증의 "움직였다"
+   * 표시를 남긴다(onEffect), 앱으로 나가는 행동이 act 깔때기에서 남기는 것과 같은 표시다.
+   */
+  describe('sessions — Host 가 스스로 답한다', () => {
+    const fake = () => ({
+      listSessions: vi.fn(() => [
+        { id: 's1', kind: 'terminal' as const, title: 't', accountId: 'a', cwd: 'D:/p', alive: true }
+      ]),
+      readSession: vi.fn(() => 'screen'),
+      writeSession: vi.fn()
+    })
+
+    it('앱이 없어도 앱에 묻지 않고 답하며, 앱 문제로 표시하지 않는다', async () => {
+      const sessions = fake()
+      const act = vi.fn()
+      const refused: string[] = []
+      const deps = hostOrchDeps(base({ sessions, act, hasApp: () => false, onAppRequired: (n) => refused.push(n) }))
+      expect(await deps.listSessions?.()).toEqual([
+        { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true }
+      ])
+      expect(await deps.readSession?.('s1')).toBe('screen')
+      await deps.writeSession?.('s1', 'echo hi')
+      expect(sessions.writeSession).toHaveBeenCalledWith('s1', 'echo hi')
+      expect(act).not.toHaveBeenCalled()
+      expect(refused).toEqual([])
+    })
+
+    it('앱이 있어도 앱에 묻지 않는다', async () => {
+      const sessions = fake()
+      const act = vi.fn()
+      const deps = hostOrchDeps(base({ sessions, act }))
+      await deps.listSessions?.()
+      await deps.readSession?.('s1')
+      await deps.writeSession?.('s1', 'x')
+      expect(act).not.toHaveBeenCalled()
+    })
+
+    it('치는 것만 움직인 것으로 센다 — 읽기와 목록은 아니다', async () => {
+      let n = 0
+      const deps = hostOrchDeps(base({ sessions: fake(), onEffect: () => n++ }))
+      await deps.listSessions?.()
+      await deps.readSession?.('s1')
+      expect(n).toBe(0)
+      await deps.writeSession?.('s1', 'x')
+      expect(n).toBe(1)
     })
   })
 

@@ -94,6 +94,7 @@ const LIST_FIELD: Record<string, string> = {
   'questions-list': 'questions',
   accounts: 'accounts',
   'accounts-list': 'accounts',
+  'sessions-list': 'sessions',
   // 아래 셋은 공개 표면이 아니지만 코디네이터가 읽는다. "약속 밖" 은 무엇을 돌려줄지
   // 고칠 수 있다는 뜻이지, 읽는 쪽에게 일부러 불친절해도 된다는 뜻이 아니다 — 세을 한 이름으로
   // 묶으면 가이드가 그 자리마다 "어떤 items 인가" 를 다시 설명해야 한다.

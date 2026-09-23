@@ -59,6 +59,7 @@ describe('dataFor', () => {
     expect(dataFor('jobs-list', [{ id: 'job_1' }])).toEqual({ jobs: [{ id: 'job_1' }] })
     expect(dataFor('projects-list', [])).toEqual({ projects: [] })
     expect(dataFor('questions-list', [])).toEqual({ questions: [] })
+    expect(dataFor('sessions-list', [])).toEqual({ sessions: [] })
   })
 
   // 공개 표면은 아니지만 코디네이터가 읽는다 — 세을 items 한 이름으로 묶으면 가이드가 그
@@ -244,6 +245,12 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
   it('skills 의 404 는 계정 목록으로 간다', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'skills-list' })).toEqual(['astera accounts list'])
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'skills-install' })).toEqual(['astera accounts list'])
+  })
+
+  // 명사 규칙 그대로다 — 못 찾는 것은 `--id` 의 세션 하나이고, 그 id 는 `sessions list` 가 준다.
+  it('sessions read·send 의 404 는 세션 목록으로 간다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'sessions-read' })).toEqual(['astera sessions list'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'sessions-send' })).toEqual(['astera sessions list'])
   })
 
   // **`--id` 가 Job 도 회차도 받고 지우는 것이 다르다.** Job 목록만 주면 회차 하나를 지우려던

@@ -238,6 +238,20 @@ describe('공개 표면 — 두 낱말 명령', () => {
     expect(parseArgs(['skills'])).toEqual({ error: 'skills needs one of: list, install' })
   })
 
+  // sessions 도 동사가 있어야 한다. `--no-enter` 는 다른 플래그처럼 camelCase 로 온다.
+  it('sessions list, read, send', () => {
+    expect(parseArgs(['sessions', 'list'])).toMatchObject({ cmd: 'sessions-list', args: {} })
+    expect(parseArgs(['sessions', 'read', '--id', 's1', '--lines', '50'])).toMatchObject({
+      cmd: 'sessions-read',
+      args: { id: 's1', lines: '50' }
+    })
+    expect(parseArgs(['sessions', 'send', '--id', 's1', '--text', 'echo hi', '--no-enter'])).toMatchObject({
+      cmd: 'sessions-send',
+      args: { id: 's1', text: 'echo hi', noEnter: true }
+    })
+    expect(parseArgs(['sessions'])).toEqual({ error: 'sessions needs one of: list, read, send' })
+  })
+
   // 코디네이터 전용 명령은 한 낱말 그대로다 — 개명이 가이드 재작성만 사고 아무것도 주지 않는다
   it('한 낱말 명령은 그대로 지나간다', () => {
     expect(parseArgs(['worker-start', '--task', 'tsk_1'])).toMatchObject({ cmd: 'worker-start' })

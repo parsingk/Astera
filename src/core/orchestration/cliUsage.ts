@@ -274,6 +274,32 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     flags: [{ name: 'account', value: '<accountId>', about: 'only this account (from `accounts list`)' }]
   },
 
+  // Answered by the Host out of its own registries, so the app may be closed; it needs a Host.
+  'sessions-list': {
+    summary: 'the agent sessions the Host holds, running and ended',
+    detail:
+      'Each with its id, which is the id `sessions read` and `sessions send` take and the one `ASTERA_SESSION` holds inside that session. `kind` is terminal (an agent CLI in a terminal) or chat. Plain shell tabs and run configurations are not sessions and are not listed. Answered by the Host, so it works with Astera closed.'
+  },
+  'sessions-read': {
+    summary: "the last lines of a terminal session's screen",
+    detail:
+      'Plain text, with the terminal escape codes taken out. The Host keeps about 256,000 characters of each running session and drops them when it ends. A chat session is refused with 6: reading one is not supported yet.',
+    flags: [
+      ID('<sessionId>', 'the session to read (from `sessions list`)'),
+      { name: 'lines', value: '<n>', about: 'how many lines, from the end (default 200)' }
+    ]
+  },
+  'sessions-send': {
+    summary: 'type into a terminal session, then press Enter',
+    detail:
+      'Writes the text, then Enter 150ms later, the way the app delivers a scheduled message. A session that has ended, or a chat session, is refused with 6. Any process running as you can do this to any session, agent sessions included. With --request-id a retry is not typed twice.',
+    flags: [
+      ID('<sessionId>', 'the session to type into (from `sessions list`)'),
+      { name: 'text', value: '<text|->', required: true, about: 'what to type (a value of `-` reads it from stdin)' },
+      { name: 'no-enter', about: 'type the text and do not press Enter' }
+    ]
+  },
+
   'requests-show': {
     summary: 'did a call of mine land, and what did it answer',
     detail:

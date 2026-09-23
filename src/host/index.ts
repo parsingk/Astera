@@ -22,6 +22,7 @@ import { ProcRegistry } from './procRegistry'
 import { nodeProcSpawn } from './nodeProc'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 import { createHostOrch } from './orch'
+import { registrySessions } from './sessions'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -163,7 +164,9 @@ async function main(): Promise<void> {
     // The command layer's own `deps.log?.()` calls end up here too (hostOrchDeps) — a limit probe
     // that could not run, an action that could not be forwarded. Otherwise the Host degrades in
     // silence, and a person looking for why nothing happened has nothing to read.
-    log: (m) => log.write(m)
+    log: (m) => log.write(m),
+    // `astera sessions` — answered from the same two registries, by the app's id for each session.
+    sessions: registrySessions({ ptys: registry, procs })
   })
   try {
     server = await startHostServer({

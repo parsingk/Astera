@@ -12,6 +12,7 @@ import { runningRunCount } from '../core/orchestration/running'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { hostOrchDeps } from './orchDeps'
 import { readAccountsFile } from '../core/accounts/accountsFile'
+import type { HostSessions } from './sessions'
 
 /** One reply — today's HTTP status and body, the shape `OrchCall.call` already answers with. Named
  *  only because the receipt store below holds one. */
@@ -313,6 +314,8 @@ export function createHostOrch(a: {
   onState(s: OrchState, version: number): void
   /** The Host's log. Handed to the command layer as well — see `hostOrchDeps`. */
   log(message: string): void
+  /** The agent sessions this Host holds, for `astera sessions` (orchDeps' HOST_SESSIONS). */
+  sessions: HostSessions
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
 
@@ -405,6 +408,7 @@ export function createHostOrch(a: {
       log: a.log,
       // 앱이 없을 때 계정 목록은 앱이 쓴 파일이 답한다(orchDeps 의 LOCAL_WHEN_ABSENT). 읽기만 한다.
       readAccounts: (provider) => readAccountsFile(path.join(a.profileDir, 'accounts.json'), provider),
+      sessions: a.sessions,
       onEffect: () => {
         marks.acted = true
       },

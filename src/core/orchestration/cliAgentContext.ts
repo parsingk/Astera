@@ -7,7 +7,7 @@
 // binary makes the answer as new as the build that gives it.
 //
 // **It covers everything the CLI can route, not just the public commands.** The public ones are the
-// 31 in `USAGE` (cliUsage.ts); the other 33 — `send`, `ask`, `check`, `worker-*`, `task-*`, `run-*`,
+// 34 in `USAGE` (cliUsage.ts); the other 33 — `send`, `ask`, `check`, `worker-*`, `task-*`, `run-*`,
 // `gate-*`, `session-task-*`, `handoff` — are what a coordinator or worker session actually calls,
 // and their contract lives only in the guide's prose. Closing that gap is the point, so `public` is
 // a field here rather than a filter.
@@ -434,7 +434,7 @@ const MEANING: Record<CliErrorCode, string> = {
 /** The flags every command accepts. They are read by the parser and by the output layer rather than
  *  by any one command (cliArgs.ts, run.ts), so no entry above carries them.
  *
- *  **`--request-id` is here rather than on 64 command entries, and that is the design's own
+ *  **`--request-id` is here rather than on 67 command entries, and that is the design's own
  *  argument** (request receipts design §3, §8): every command takes the key and the Host decides
  *  afterwards whether there was anything to record. Naming the set instead would mean a list beside
  *  a switch statement, and the command somebody forgets to add to it accepts the key and ignores
@@ -497,7 +497,7 @@ export function agentContext(): AgentContext {
       ok: '{"ok":true,"data":{…}}',
       error: '{"ok":false,"error":{"code":…,"message":…,"details":{…},"nextSteps":[…]}}',
       notes: [
-        'data is always an object. A list arrives under its own noun: data.jobs, data.tasks, data.questions, data.runs, data.projects, data.accounts; anything else is data.items.',
+        'data is always an object. A list arrives under its own noun: data.jobs, data.tasks, data.questions, data.runs, data.projects, data.accounts, data.sessions; anything else is data.items.',
         'error.code is for branching, error.message is for a person, and error.nextSteps is a list of command lines to try — empty when there is nothing general to run.',
         'A timeout from `check --wait` or `ask` is a success: exit 0, with data.timedOut set.',
         // 요청 영수증 설계 §8·§7. 세 줄인 이유는 읽는 쪽이 다르기 때문이다 — 앞의 둘은 답을 받은

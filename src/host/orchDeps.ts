@@ -6,6 +6,7 @@
 import type { OrchAccount, OrchServerDeps } from '../core/orchestration/command'
 import type { Provider } from '../core/types'
 import { AppUnreachable } from '../core/host/orchProtocol'
+import type { HostSessions } from './sessions'
 
 /** What the Host answers out of itself. `runningSessions` and `appVersion` look like app questions
  *  and are not: the Host knows its own version and its own session registry, and `status` and
@@ -155,6 +156,23 @@ const FIRE_AND_FORGET = [
  */
 const LOCAL_WHEN_ABSENT = ['listAccounts'] as const
 
+/**
+ * **Answered by the Host out of its own registries, with or without an app attached** (CLI phase C,
+ * `astera sessions`).
+ *
+ * Not OWNED, and the difference is the one member that acts. OWNED is state and facts about the Host
+ * itself, and its one effect, `setState`, is marked by the commit flag in `orch.ts`. These are the
+ * sessions the Host holds — the ptys live in this process, so there is nothing to forward even when
+ * the app is attached, and forwarding would only make `sessions list` fail when Astera is closed,
+ * which is when a shell most wants it. But **`writeSession` types into a session**, and nothing about
+ * that goes through `setState`: a retried `sessions send` would type the text a second time. So each
+ * of these is wrapped to call `onEffect` when EFFECTFUL says it acts — the same mark the `act` funnel
+ * leaves for a forwarded action, taken before the action for the same reason.
+ *
+ * Never refused, so never `onAppRequired`: nothing here needs the app.
+ */
+const HOST_SESSIONS = ['listSessions', 'readSession', 'writeSession'] as const
+
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
 const REMOTE = [...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING, ...LOCAL_WHEN_ABSENT]
 
@@ -169,6 +187,7 @@ type Classified =
   | keyof typeof NESTED
   | keyof typeof DEGRADES
   | (typeof LOCAL_WHEN_ABSENT)[number]
+  | (typeof HOST_SESSIONS)[number]
 
 /**
  * **Whether calling this dependency changes something outside the state** (request receipts design
@@ -233,7 +252,11 @@ const EFFECTFUL: Record<Classified, boolean> = {
   repairOnce: true,
   lang: false,
   // LOCAL_WHEN_ABSENT — a read either way, from the app or from its file.
-  listAccounts: false
+  listAccounts: false,
+  // HOST_SESSIONS. Reading a screen twice leaves it as it was; typing twice types twice.
+  listSessions: false,
+  readSession: false,
+  writeSession: true
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -291,6 +314,8 @@ export function hostOrchDeps(a: {
   /** `listAccounts` answered from the profile's accounts.json (LOCAL_WHEN_ABSENT). Rejects when the
    *  file cannot be read, with a message that says how to repair it. */
   readAccounts(provider?: Provider): Promise<OrchAccount[]>
+  /** The Host's own sessions (HOST_SESSIONS), out of its two registries (`host/sessions.ts`). */
+  sessions: HostSessions
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -388,6 +413,15 @@ export function hostOrchDeps(a: {
       void act(name, args).catch((err) => a.log(`${name} failed in the app: ${String(err)}`))
     }
 
+  /** HOST_SESSIONS: the Host's own answer, marked as an effect before it runs when it is one. */
+  const own = <K extends (typeof HOST_SESSIONS)[number]>(name: K): HostSessions[K] => {
+    const fn = a.sessions[name] as (...args: unknown[]) => unknown
+    return ((...args: unknown[]) => {
+      if (EFFECTFUL[name]) a.onEffect?.()
+      return fn(...args)
+    }) as HostSessions[K]
+  }
+
   const remote = Object.fromEntries(
     REMOTE.map((name) => {
       if ((FIRE_AND_FORGET as readonly string[]).includes(name)) return [name, forgetful(name)]
@@ -413,6 +447,9 @@ export function hostOrchDeps(a: {
     runningSessions: a.runningSessions,
     appVersion: a.appVersion,
     backup: a.backup,
+    listSessions: own('listSessions'),
+    readSession: own('readSession'),
+    writeSession: own('writeSession'),
     ...remote,
     ...nested
   } as unknown as OrchServerDeps

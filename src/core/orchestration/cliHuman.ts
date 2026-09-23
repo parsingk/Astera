@@ -181,6 +181,18 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
       return columns(
         asList(data, 'accounts').map((a) => [str(a.id), str(a.provider), str(a.label)])
       )
+    case 'sessions-list':
+      return columns(
+        asList(data, 'sessions').map((x) => [
+          x.alive === true ? 'ALIVE' : 'ENDED',
+          str(x.id),
+          str(x.kind),
+          str(x.title)
+        ])
+      )
+    // 읽으라고 부른 화면이다 — 표로 싸면 사람이 읽으려던 것을 가린다.
+    case 'sessions-read':
+      return typeof data.text === 'string' ? data.text : null
     // 계정×스킬 한 줄씩. install 은 설정이 꺼져 심지 않은 것과 그것을 켜는 설정, 그리고 이미 열린
     // 세션은 새 스킬을 못 본다는 한 줄을 표 아래에 붙인다(cli/skills.ts).
     case 'skills-list':
@@ -243,6 +255,7 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
     case 'questions-get':
     case 'jobs-create':
     case 'tasks-add':
+    case 'sessions-send':
     case 'status':
     case 'version':
     case 'host-status':

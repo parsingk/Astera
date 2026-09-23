@@ -912,7 +912,8 @@ describe('회복 줄은 진짜로 재생을 부른다', () => {
       act: async (name, callArgs) => (name === 'resolveProjectRoot' ? callArgs[0] : {}),
       hasApp: () => true,
       onState: () => {},
-      log: () => {}
+      log: () => {},
+      sessions: { listSessions: () => [], readSession: () => '', writeSession: () => {} }
     })
     // 키를 안 단 부름이고, **`--cwd` 도 안 단 부름이다**(§8, 그리고 `implicitArgs`). 일부러 그렇게
     // 둔다: `argsForCall` 이 메꾼 cwd 는 Host 가 지문에 넣는 값이므로, 회복 줄이 그것을 안 싣고

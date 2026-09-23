@@ -253,6 +253,25 @@ describe('humanFor', () => {
     expect(humanFor('tasks-add', { id: 't1', status: 'ready' })).toBe(['id      t1', 'status  ready'].join('\n'))
   })
 
+  it('sessions list 는 상태·id·종류·제목이다', () => {
+    expect(
+      humanFor('sessions-list', {
+        sessions: [
+          { id: 's1', kind: 'terminal', title: 'repo', alive: true },
+          { id: 's2', kind: 'chat', title: '대화', alive: false }
+        ]
+      })
+    ).toBe(['ALIVE  s1  terminal  repo', 'ENDED  s2  chat      대화'].join('\n'))
+  })
+
+  // 읽으라고 부른 것이므로 화면 그대로다 — 표로 싸면 사람이 읽으려던 것을 가린다.
+  it('sessions read 는 화면 글 그대로, sessions send 는 단건이다', () => {
+    expect(humanFor('sessions-read', { id: 's1', alive: true, text: 'a\nb' })).toBe('a\nb')
+    expect(humanFor('sessions-send', { id: 's1', sent: true, enter: true })).toBe(
+      ['id     s1', 'sent   true', 'enter  true'].join('\n')
+    )
+  })
+
   // 억지로 표를 씌우면 가이드가 시키는 것을 못 읽게 된다
   it('공개 표면이 아닌 명령은 null 이다', () => {
     expect(humanFor('dispatch-show', { id: 'd1' })).toBe(null)

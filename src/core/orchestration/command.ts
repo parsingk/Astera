@@ -76,6 +76,8 @@ import { parseHandoffBody } from '../handoff/parse'
 import type { HandoffBody } from '../handoff/types'
 import type { Lang } from '../i18n'
 import { isOverrideCompletion, policyOf } from './convergence'
+import { stripAnsi } from '../rolling/detect'
+import { ptyDriver } from '../sessions/sessionDriver'
 
 /** One row of `listAccounts`. Named only because the declaration below is a union and repeating the
  *  shape on both sides invites the two halves to drift. */
@@ -83,6 +85,23 @@ export interface OrchAccount {
   id: string
   label: string
   provider: Provider
+}
+
+/** One agent session the Host holds — a row of `sessions list` (CLI phase C).
+ *
+ *  **`id` is the app's id for the session**, not the Host's id for its pty: the app mints a pty id of
+ *  its own at spawn (main/host/ptyFactory.ts) and carries the session id in the note. The session id
+ *  is the one a person or an agent already has — `ASTERA_SESSION` inside the session, a Dispatch's
+ *  `sessionId` — so it is the one every command here takes. The other three fields come out of that
+ *  note, which the app writes and nothing checks, so each is `null` when it is not a string. */
+export interface HostSession {
+  id: string
+  /** `terminal` is an agent CLI in a pty; `chat` is a chat session's line process. */
+  kind: 'terminal' | 'chat'
+  title: string | null
+  accountId: string | null
+  cwd: string | null
+  alive: boolean
 }
 
 export interface OrchServerDeps {
@@ -344,6 +363,15 @@ export interface OrchServerDeps {
    *  The app's wiring always injects it and decides inside whether there is anything to do — the
    *  Job Continuity toggle is read there, not here. Optional so tests can leave it out. */
   onDispatchLost?(a: { dispatchId: string }): void
+  /** The agent sessions the Host holds, live and ended (`sessions list`). **Only the Host injects
+   *  the three below**, from its own registries (host/sessions.ts): it is the process that holds the
+   *  ptys, so it answers with or without an app. Absent, the three commands answer 409. */
+  listSessions?(): HostSession[]
+  /** A terminal session's scrollback, raw, by the app's session id — empty once it has ended. */
+  readSession?(id: string): string
+  /** Types into a terminal session by the app's session id. A write to one that has ended is dropped
+   *  by the registry, as every write is. */
+  writeSession?(id: string, data: string): void
 }
 
 type Reply = { status: number; body: unknown }
@@ -2399,6 +2427,50 @@ export async function handleCommand(
     case 'accounts-list': {
       const agent = str(args.agent)
       return okBody(await deps.listAccounts(agent === 'claude' || agent === 'codex' ? agent : undefined))
+    }
+    /**
+     * 세션을 보고, 읽고, 친다 — 공개 이름(phase C). 답은 Host 의 레지스트리다(`listSessions` 셋).
+     *
+     * **COORDINATOR_ONLY 에 넣지 않는다 — 사용자 결정이다.** 워커 세션도 부를 수 있다. 경계는 이
+     * CLI 의 나머지와 같은 OS 계정이고(docs/cli.md 의 Security), 그 안의 누구든 이미 이 세션들을 띄운
+     * 프로그램을 돌릴 수 있다.
+     *
+     * **`sessions send` 가 영수증에 남는 것은 커밋이 아니라 `writeSession` 때문이다** — 상태는 그대로다.
+     * host/orchDeps.ts 가 그 의존을 "움직인다" 로 적어 두었으므로 같은 `--request-id` 의 재시도는 한 번
+     * 더 치지 않고 첫 답을 재생한다.
+     */
+    case 'sessions-list':
+    case 'sessions-read':
+    case 'sessions-send': {
+      if (!deps.listSessions || !deps.readSession || !deps.writeSession)
+        return conflict('sessions are answered by the Astera Host, and this caller is not one')
+      if (routed === 'sessions-list') return okBody(deps.listSessions())
+      const id = str(args.id)
+      if (id === null) return bad('--id is required: a session id from `sessions list`')
+      const lines = routed === 'sessions-read' && args.lines !== undefined ? posInt(args.lines) : 200
+      if (lines === null) return bad('--lines must be a whole number, 1 or more')
+      const text = routed === 'sessions-send' ? str(args.text) : null
+      if (routed === 'sessions-send' && text === null)
+        return bad('--text is required: what to type (a value of `-` reads it from stdin)')
+      const session = deps.listSessions().find((x) => x.id === id)
+      if (!session) return notFound(`unknown session: ${id}`)
+      // 대화 세션은 줄 프로세스라 화면이 없고, 치는 길도 다르다(chatDriver). 이 조각은 터미널만이다.
+      if (session.kind === 'chat')
+        return conflict(
+          `${id} is a chat session, and ${routed === 'sessions-read' ? 'reading' : 'typing into'} chat sessions is not supported yet — only terminal sessions`
+        )
+      if (routed === 'sessions-read') {
+        // 줄은 화면의 줄이다 — ConPTY 는 \r\n 으로 끝낸다. 벗기기는 롤링이 한도 문구를 찾을 때 쓰는
+        // 그것이다(core/rolling/detect.ts).
+        const all = stripAnsi(deps.readSession(id)).split(/\r?\n/)
+        return okBody({ id, alive: session.alive, text: all.slice(-lines).join('\n') })
+      }
+      if (!session.alive) return conflict(`session ${id} has ended; there is nothing to type into`)
+      const enter = args.noEnter !== true
+      // 붙여 넣고 Enter — 앱의 스케줄러·롤링·Slack 이 쓰는 그 약속 그대로다(ptyDriver).
+      if (enter) await ptyDriver({ write: deps.writeSession }).deliver(id, text as string)
+      else deps.writeSession(id, text as string)
+      return okBody({ id, sent: true, enter })
     }
     case 'reset': {
       const open = s.dispatches.filter((d) => !d.endedAt)

@@ -62,7 +62,8 @@ questions list | get
 ```
 
 Everything else needs a Host and exits 3 without one. That includes every command that changes
-something (`jobs create`, `jobs run`, `tasks add`, `runs stop`, `runs resume`, `questions answer`)
+something (`jobs create`, `jobs run`, `tasks add`, `runs stop`, `runs resume`, `questions answer`,
+`sessions send`)
 and both waiting commands (`jobs wait`, `runs wait`), which a static file cannot answer however long
 they wait.
 
@@ -75,6 +76,11 @@ account's config folder, so they answer the same with Astera and the Host runnin
 When it is closed, the Host reads the profile's `accounts.json` instead, which is the file the app
 keeps them in. The Host only reads that file and never changes it. If the file is damaged, those
 three commands exit 6 and the message says to open Astera, which repairs it.
+
+**The sessions commands work with the app closed, and need a Host.** `sessions list`, `sessions read`
+and `sessions send` are answered by the Host out of the sessions it holds, because the Host is the
+process that runs them. That is true with Astera open as well: the app is not asked. With no Host
+there are no sessions to answer about, so they exit 3.
 
 ### Which Host, and which profile
 
@@ -141,6 +147,10 @@ astera accounts list  [--agent <claude|codex>]
 
 astera skills  list    [--account <accountId>]
 astera skills  install [--account <accountId>]
+
+astera sessions list
+astera sessions read   --id <sessionId> [--lines <n>]
+astera sessions send   --id <sessionId> --text <text|-> [--no-enter]
 
 astera questions list  [--task <taskId>] [--status <open|resolved>]
 astera questions get    --id <questionId>
@@ -240,6 +250,22 @@ second run is all `unchanged`.
 
 **Agent sessions read their skills when they start**, so a session already open does not see a
 skill installed after it, and `data.note` says so. Open a new session.
+
+**`sessions` reaches the agent sessions the Host holds**: each tab in which Astera runs Claude Code
+or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` holds inside it, and
+`sessions list` prints it beside `kind` (`terminal` or `chat`), `title`, `accountId`, `cwd` and
+`alive`. Ended sessions stay listed with `alive: false` until the Host stops. Plain shell tabs and run
+configurations are not agent sessions, and are not listed.
+
+`sessions read` prints the last `--lines` lines (default 200) of a terminal session's screen as plain
+text, with the terminal's escape codes taken out, in `data.text`. The Host keeps about 256,000
+characters of each session's output while it runs and drops them when it ends, so an ended session
+reads as empty. `sessions send` types `--text` into a terminal session and presses Enter 150ms later,
+which is how the app delivers a scheduled message; `--no-enter` types the text and stops there. It
+answers `{"id":…,"sent":true,"enter":true}` once the Enter has gone out. A session that has ended is
+a 6. Chat sessions are listed, but reading one or typing into one is a 6 for now: only terminal
+sessions are supported yet. With `--request-id`, a retried `sessions send` is replayed rather than
+typed a second time.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
 dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
@@ -351,7 +377,7 @@ not part of this surface and are not described here. `astera help` documents the
 
 `data` is always an object, never a bare array, so that a field can be added later without breaking
 every reader. A list arrives under its own noun: `data.jobs`, `data.runs`, `data.tasks`,
-`data.questions`, `data.projects`, `data.accounts`.
+`data.questions`, `data.projects`, `data.accounts`, `data.sessions`.
 
 `error.code` is for branching and `error.message` is for a person. The codes are the closed set in
 the exit code table below.
@@ -536,6 +562,10 @@ The boundary is your machine and your operating system account.
 - Every agent session Astera starts can reach this command, and through it can start worker sessions
   under any account the app holds. That is what orchestration is, and it is not something you switch
   on: an agent you run is an agent that can spend your accounts.
+- Any process running as you, including every agent session Astera starts, can read every session's
+  screen and type into every session with `astera sessions`. A worker can type into its coordinator
+  and into any other session. That is the chosen model, and the boundary is the same as for the rest
+  of this command: your operating system account.
 
 Anyone who can already run programs as you can run `astera`. Treat it with the same care as your
 shell.

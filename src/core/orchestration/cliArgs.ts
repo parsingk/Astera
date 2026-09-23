@@ -72,6 +72,9 @@ export const NOUNS = {
   // **CLI 프로세스 안에서 답한다 — Host 도 앱도 없이**(run.ts, `help` 와 같은 자리). 프로필의
   // accounts.json 과 app-settings.json 을 읽고 계정의 설정 폴더에 스킬 파일을 심는다(cli/skills.ts).
   skills: ['list', 'install'],
+  // **Host 가 제 레지스트리로 답한다 — 앱이 닫혀 있어도**(host/sessions.ts). pty 를 쥔 것이 Host 다.
+  // id 는 앱의 세션 id(`ASTERA_SESSION`)이고, 읽기와 치기는 아직 터미널 세션만이다.
+  sessions: ['list', 'read', 'send'],
   // **요청 영수증**(request receipts design §8). 여기 있는 것은 공개 표면이어서가 아니라 —
   // 답하는 것은 명령 층이 아니라 Host 다(host/orch.ts) — 이 모양이 그것을 `USAGE` 와
   // `docs/cli.md` 에 함께 적히게 만들기 때문이다. `--request-id` 는 반대로 여기 없다: 그것은

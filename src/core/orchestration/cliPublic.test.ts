@@ -137,6 +137,24 @@ describe('publicFor', () => {
     })
   })
 
+  // 세션의 note 는 앱이 자기에게 남긴 말이라 무엇이든 들 수 있다 — 여섯 칸만 나간다.
+  it('sessions 셋은 제 칸만 낸다', () => {
+    const row = { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, ptyId: 'p1' }
+    expect(publicFor('sessions-list', [row])).toEqual([
+      { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true }
+    ])
+    expect(publicFor('sessions-read', { id: 's1', alive: true, text: 'hi', raw: 'x' })).toEqual({
+      id: 's1',
+      alive: true,
+      text: 'hi'
+    })
+    expect(publicFor('sessions-send', { id: 's1', sent: true, enter: false, extra: 1 })).toEqual({
+      id: 's1',
+      sent: true,
+      enter: false
+    })
+  })
+
   // **코디네이터 전용 명령은 이 계약의 약속 밖이다.** 가리려 들면 가이드가 시키는 것을 못 읽는다
   it('표에 없는 명령은 그대로 지나간다', () => {
     const body = { dispatchId: 'd1', anything: { nested: true } }
