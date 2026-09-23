@@ -43,9 +43,6 @@ export interface HostServerDeps {
   /** A handler for messages the server does not own. Returns true when it handled one; false lets
    *  the server treat it as unknown. Slice 2's pty-* messages arrive here. */
   onMessage?(m: ClientMessage, send: (h: HostMessage) => void): boolean
-  /** Whether something is keeping the Host alive beyond its clients — a live terminal, from slice 2.
-   *  The idle timer checks it rather than only the connection count. */
-  holdsWork?(): boolean
   /** Sessions and Runs the Host is holding right now. One dep rather than two because a `retire`
    *  refusal always needs both counts together, to name them (public CLI spec §12: "Cannot stop Host:
    *  2 sessions and 1 run are still running"). Both halves are answered for real — `runs` counts the
@@ -56,7 +53,12 @@ export interface HostServerDeps {
    *  2 and collided with `astera host status`'s own `jobs` (the number of Jobs in the file). A Run is
    *  the thing that runs and the thing that holds this Host, so the word follows the unit — in the
    *  refusal message, in docs/cli.md, and beside the original sentence in
-   *  docs/ASTERA_PUBLIC_HEADLESS_CLI_IMPLEMENTATION_SPEC_20260919.md §12. */
+   *  docs/ASTERA_PUBLIC_HEADLESS_CLI_IMPLEMENTATION_SPEC_20260919.md §12.
+   *
+   *  **The idle timer asks this too**, so "does this Host hold work" has one answer. It used to ask a
+   *  separate `holdsWork` that counted only terminals, and a Host `astera host start` had started
+   *  left after `idleMs` with a run in flight while `host stop` would have refused to stop it
+   *  (conformance audit #100). A Host holding nothing still leaves. */
   liveCounts?(): { sessions: number; runs: number }
   /** Answers `orch-call` (design §5). Optional here only so a caller that never sends `orch-call`
    *  does not have to supply one; `host/index.ts` always does, because it always advertises
@@ -171,13 +173,14 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     if (closing) return
     if (idleTimer) clearTimeout(idleTimer)
     idleTimer = setTimeout(() => {
-      if (live === 0 && !(deps.holdsWork?.() ?? false)) {
+      const held = deps.liveCounts?.() ?? { sessions: 0, runs: 0 }
+      if (live === 0 && held.sessions === 0 && held.runs === 0) {
         deps.log.write(`idle for ${deps.idleMs}ms with no client — leaving`)
         deps.onIdle()
         return
       }
       // Still held. Look again after the same interval rather than never: the hold ends when the
-      // last terminal does, and nobody will call back to say so.
+      // last terminal or the last run in flight does, and nobody will call back to say so.
       if (live === 0) armIdle()
     }, deps.idleMs)
     // The Host should not be kept alive by this timer alone; the server handle is what holds it.

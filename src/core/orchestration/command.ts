@@ -71,6 +71,7 @@ import type { Provider } from '../providers/meta'
 import { isValidRule, type ScheduleRule } from '../scheduler/rule'
 import { parseCheckFlag } from '../workUnit/verification'
 import { outcomeOf, progressOf } from './view'
+import { runningRunCount } from './running'
 import type { RunOutcome } from '../types'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
@@ -2502,8 +2503,10 @@ export async function handleCommand(
         protocol: CLI_PROTOCOL,
         projects: s.projects.length,
         jobs: s.jobs.length,
-        // 도는 회차 — 끝나지 않은 것. outcomeOf 가 Task 에서 파생한다(view.ts), 저장된 값이 아니다.
-        runsRunning: s.runs.filter((r) => outcomeOf(s, r.id) === 'running').length,
+        // 일이 도는 회차 — `host stop` 의 거절과 Host 의 유휴 종료가 세는 것과 **같은 규칙**이다
+        // (running.ts 의 runningRunCount, 감사 #100). 예전에는 끝나지 않은 회차(outcomeOf)를 세어,
+        // 아직 시작하지 않은 계획도 도는 것으로 적으면서 Host 는 그 회차를 두고 떠났다.
+        runsRunning: runningRunCount(s),
         runsWaitingForInput: waiting.size,
         questionsOpen: openGates.length,
         sessionsRunning: deps.runningSessions?.() ?? null

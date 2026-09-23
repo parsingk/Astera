@@ -45,6 +45,14 @@ astera host stop       # ask the running Host to retire
 That refusal is the Host protecting work in progress. Stop the work first, then stop the Host.
 
 A run, not a Job: a Job with two runs going at once counts as two, because two things are running.
+A run is running while it has work in flight: a worker session open on one of its tasks, or a task
+being validated or reviewed. A run whose tasks have not started yet, or whose workers were stopped,
+is not. `astera status` reports the same count as `runsRunning`.
+
+A Host with no client connected leaves by itself after a minute, but only when it holds no sessions
+and no running run, by that same count. So a Host that `astera host start` started stays up while
+its work runs, and goes away once there is nothing left for it to hold.
+
 `astera host status` reports `jobsInProfile`, which is a different number — how many Jobs the
 profile's file holds, running or not.
 

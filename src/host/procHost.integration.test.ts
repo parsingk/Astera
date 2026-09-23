@@ -82,7 +82,7 @@ describe('proc-* over the Host server', () => {
       idleMs: 60_000,
       onIdle: () => {},
       onMessage: (m, send) => handle?.(m, send) ?? false,
-      holdsWork: () => procs.liveCount() > 0,
+      liveCounts: () => ({ sessions: procs.liveCount(), runs: 0 }),
       log: { write: (m) => logs.push(m), close: () => {} }
     })
     open.push(s)

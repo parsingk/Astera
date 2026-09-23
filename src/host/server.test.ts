@@ -30,7 +30,6 @@ const server = async (
     onIdle?: () => void
     profile?: string
     onMessage?: HostServerDeps['onMessage']
-    holdsWork?: HostServerDeps['holdsWork']
     liveCounts?: HostServerDeps['liveCounts']
     orch?: HostServerDeps['orch']
   } = {}
@@ -56,7 +55,6 @@ const server = async (
     helloMs: over.helloMs,
     onIdle: over.onIdle ?? ((): void => {}),
     onMessage: over.onMessage,
-    holdsWork: over.holdsWork,
     liveCounts: over.liveCounts,
     orch: over.orch ?? versionOnlyOrchCall({ version }),
     log: { write: (m) => logs.push(m), close: () => {} }
@@ -121,7 +119,6 @@ const messageChannel = (sock: net.Socket): { send(m: ClientMessage): void; next(
  */
 const start = async (
   over: {
-    holdsWork?: HostServerDeps['holdsWork']
     liveCounts?: HostServerDeps['liveCounts']
     /** The default is the version-only stub, which is what almost every test here wants. Overridden
      *  by the one test that has to talk to the real command layer over a real socket. */
@@ -424,11 +421,34 @@ describe('startHostServer', () => {
   it('does not leave on the idle timer while something is holding it', async () => {
     let idle = false
     let holding = true
-    const h = await server({ idleMs: 50, onIdle: () => { idle = true }, holdsWork: () => holding })
+    const h = await server({
+      idleMs: 50,
+      onIdle: () => { idle = true },
+      liveCounts: () => ({ sessions: holding ? 1 : 0, runs: 0 })
+    })
     await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
     await new Promise((r) => setTimeout(r, 300))
     expect(idle).toBe(false)
     holding = false
+    await new Promise((r) => setTimeout(r, 300))
+    expect(idle).toBe(true)
+  })
+
+  // Conformance audit #100: a Host `astera host start` started left after 60s with a run in flight,
+  // and the next write command exited 3. The idle timer now asks the question `host stop`'s refusal
+  // asks (`liveCounts`), so the two cannot disagree about whether this Host holds work.
+  it('does not leave on the idle timer while a run is in flight, even with no session', async () => {
+    let idle = false
+    let runs = 1
+    const h = await server({
+      idleMs: 50,
+      onIdle: () => { idle = true },
+      liveCounts: () => ({ sessions: 0, runs })
+    })
+    await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
+    await new Promise((r) => setTimeout(r, 300))
+    expect(idle).toBe(false)
+    runs = 0
     await new Promise((r) => setTimeout(r, 300))
     expect(idle).toBe(true)
   })

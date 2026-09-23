@@ -185,12 +185,12 @@ async function main(): Promise<void> {
       idleMs: IDLE_MS,
       onIdle: () => leave(),
       onMessage: (m, send) => (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false),
-      holdsWork: () => registry.liveCount() + procs.liveCount() > 0,
       // **Both halves are real now** (ruling F57). The Host owns the state, so it can answer the
       // question `docs/cli.md` already promises `astera host stop` answers: how many Runs have work
       // in flight. The rule is `runningRunCount`'s, which is the sidebar's rule over the state rather
       // than a second one — a Host that let you stop a Run the screen calls running would be the
-      // worse half of two answers.
+      // worse half of two answers. The idle timer asks the same question (server.ts), so a Host
+      // `astera host start` started stays while a run is in flight, and still leaves holding nothing.
       liveCounts: () => ({
         sessions: registry.liveCount() + procs.liveCount(),
         runs: orch.runningRuns()

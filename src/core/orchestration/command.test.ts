@@ -21,6 +21,7 @@ import {
 import { TaskValidator } from '../../main/orchestration/validator'
 import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project } from './types'
 import { parseArgs } from './cliArgs'
+import { runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
 import { checkConfigIdsOf } from './convergence'
 
@@ -6075,7 +6076,8 @@ describe('version / status — 공개 표면의 두 읽기', () => {
       version: '1.2.3',
       protocol: 1,
       jobs: 1,
-      runsRunning: 1,
+      // 태스크 없는 회차는 일이 돌지 않는다 — 아래 테스트가 규칙을 본다
+      runsRunning: 0,
       runsWaitingForInput: 0,
       questionsOpen: 0,
       sessionsRunning: 2
@@ -6092,6 +6094,27 @@ describe('version / status — 공개 표면의 두 읽기', () => {
     await call(deps, 'gate-create', { task: taskId, question: '어느 DB 를 쓸까요' })
     const s = await call(deps, 'status')
     expect(s.body).toMatchObject({ runsWaitingForInput: 1, questionsOpen: 1 })
+  })
+
+  // 감사 #100. `runsRunning` 은 `host stop` 의 거절과 Host 의 유휴 종료가 세는 것과 같은 규칙이다
+  // (running.ts 의 runningRunCount) — 일이 도는 회차. 아직 시작하지 않은 계획은 세지 않는다.
+  it('runsRunning 은 host stop 이 세는 규칙과 같다 — 일이 도는 회차만', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const empty = await call(deps, 'status')
+    expect(empty.body).toMatchObject({ runsRunning: 0 })
+    expect((empty.body as { runsRunning: number }).runsRunning).toBe(runningRunCount(deps.getState()))
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    const s = deps.getState()
+    await deps.setState({
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'validating' as const } : t))
+    })
+    const busy = await call(deps, 'status')
+    expect(busy.body).toMatchObject({ runsRunning: 1 })
+    expect((busy.body as { runsRunning: number }).runsRunning).toBe(runningRunCount(deps.getState()))
   })
 
   it('세션 수를 주입하지 않으면 그 칸만 비운다', async () => {
