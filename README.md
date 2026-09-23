@@ -49,7 +49,7 @@
 </div>
 
 **Smart Resume (experimental)**
-- Off by default. **Settings → General → Session resume strategy** chooses between the CLI's own
+- Off by default. **Settings → Agents → Session resume strategy** chooses between the CLI's own
   resume and this one
 - With it on, a usage limit that moves the work to the next account starts that session **blank** and
   hands it a compact checkpoint as its first message, instead of replaying the whole conversation
@@ -76,6 +76,14 @@
 <p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-schedule.mp4">▶ Full recording (22s)</a></p>
 </div>
 
+**The `astera` command**
+- Read and drive Jobs from a terminal, a CI pipeline or an agent: `astera jobs run`,
+  `astera runs wait`, `astera questions answer`. Every session Astera starts already has it
+- It keeps answering after you quit the app, because a background Host owns the work and outlives
+  the window. Workers keep running too
+- JSON by default and `--human` for reading, one meaning per exit code, and command lines to run
+  next on every error. See [the `astera` command](docs/cli.md)
+
 **Run**
 - A run configuration has a kind — Shell, npm, Node.js, Gradle, Maven, cargo, go, Python, pytest,
   Docker Compose, Dockerfile, .NET or Compound — and holds only the fields that kind actually has
@@ -92,6 +100,10 @@
 - It borrows the `gh` login you already have; no token is stored
 
 **How It Works (experimental)**
+
+Understand a finished change without reading every file. Open a work record to see what it does,
+what users will notice, its flow, the reasons behind it, and the files that implement it.
+
 - How It Works is for people who do not read code. Write down what you want done with the
   `/astera-task` skill and it starts getting ready to record from there; once the work is finished it
   reads what happened and writes it up
@@ -106,10 +118,28 @@
   the Run has finished
 - A piece of work that changed no files leaves no row. If you declared one and then only talked,
   there is nothing to write up
-- Off by default. Turn on **Work unit tracking** in settings, then pick the **Explanation account**
-  that will write the entries. It does not apply to sessions that are already open — only new
-  sessions get it
+- Off by default. Turn on **Work unit tracking** in **Settings → How It Works**, then pick the
+  **Explanation account** that will write the entries. It does not apply to sessions that are
+  already open — only new sessions get it
 - Only work done after you turned the feature on in settings is recorded
+
+<div align="center">
+<img src="assets/how-it-works-demo.gif" width="820" alt="How It Works walkthrough: follow a task in progress, read its completed explanation and flow diagram, then select a step to see its reasoning and implementation files" />
+<p>From work in progress to a readable explanation. Select a flow step to see what happens there and which files implement it.</p>
+</div>
+
+This 14-second walkthrough uses example data rendered with Astera's actual How It Works components
+in the Umbra theme. The explanatory header belongs to the walkthrough, not the app UI.
+
+To try it:
+
+1. In **Settings → How It Works**, enable **Work unit tracking** and choose an **Explanation account**.
+2. Open a **new session** in a git project and send `/astera-task` followed by your objective.
+3. Once the work finishes, open **How It Works** (`Ctrl`/`Cmd`+`Shift`+`H`) and select its record.
+4. Read the explanation, then select a flow step to narrow the reasoning and implementation list.
+
+See the [How It Works guide](docs/how-it-works.md) for record states, verification labels, and
+what to check when an explanation is missing.
 
 **Design Mode**
 - Turn on **Design Mode** on the web page tab and pick elements on the page. Hovering highlights one;
@@ -171,12 +201,13 @@
 
 ## Jobs
 
-Jobs is opt-in. Turn on **Agent orchestration** in settings to add the Jobs sidebar. A job is a
-dependency graph whose tasks can run under either vendor, and there are two ways to run one.
+Jobs is always there — the Jobs sidebar is part of the app, with nothing to switch on. A job is a
+dependency graph whose tasks can run under either vendor, and there are three ways to run one.
 
 <div align="center">
 <img src="assets/jobs.gif" width="820" alt="Diagram: a coordinator follows a job's dependency graph, starts the two ready tasks on both vendors at once, uses a test suite to prove one done, waits for both dependencies before continuing, and leaves an unresolved decision for a person" />
 <img src="assets/jobs-demo.gif" width="820" alt="Screen recording: a job advancing through its dependency graph — a worker hits a usage limit and resumes by itself, both dependencies report, and the last task passes a validation and a cross-vendor review" />
+<p>Recorded example: follow task dependencies, worker progress, usage-limit recovery, validation, and cross-vendor review in the Jobs view.</p>
 <p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-killer-demo.mp4">▶ Full recording (30s)</a></p>
 </div>
 
@@ -197,8 +228,8 @@ click **Merge**. See the [complete Job lifecycle](docs/jobs.md) for details.
 
 ### 2. Run it with the `astera-orchestration` skill — an agent coordinates
 
-Turn on **Agent orchestration before starting the coordinator session**. At startup that session
-receives the `astera` CLI on its `PATH` and the `astera-orchestration` skill. You can ask naturally:
+Every session Astera starts receives the `astera` CLI on its `PATH` and the `astera-orchestration`
+skill. You can ask naturally:
 
 > Use the `astera-orchestration` skill to coordinate this work: refactor the authentication module,
 > add regression tests after the refactor, and verify the test suite.
@@ -210,8 +241,9 @@ you. Runs created this way also appear in the Jobs sidebar when they belong to t
 with **Work unit tracking** on they land in How It Works as one row each when they finish, exactly
 like a Run you started yourself.
 
-Skills are loaded when a session starts, so enable Agent orchestration first and then open a new
-coordinator session. A simple one-off handoff does not need an orchestration run.
+Skills are loaded when a session starts, so a session that was already open before an upgrade does
+not have them — open a new coordinator session. A simple one-off handoff does not need an
+orchestration run.
 
 To read the coordinator CLI reference:
 
@@ -220,9 +252,28 @@ astera help
 ```
 
 If `astera` is not on `PATH`, use the path in the `ASTERA_CLI` environment variable (`"$ASTERA_CLI"` in
-bash or zsh, `$env:ASTERA_CLI` in PowerShell). An empty value means the session was not
-started by Astera, or that Agent orchestration, Work unit tracking and Agent browser are all off — the
-CLI is planted when any one of the three is on.
+bash or zsh, `$env:ASTERA_CLI` in PowerShell). An empty value means the session was not started by
+Astera: every session it starts gets the CLI.
+
+### 3. Drive it from a terminal, a script or an agent with the `astera` command
+
+The same Jobs can be listed, started, waited on and answered from an ordinary terminal, a CI pipeline
+or an agent. Install the command once from **Settings → Agents → Command line tool (astera)**. Sessions
+Astera starts already have it, so the agent in any of them can call the same commands. The command
+keeps answering after you quit the app, because the **Astera Host**, the background process that owns
+the work, outlives the window. `astera host start` brings one up if none is running.
+
+```bash
+astera --help                     # usage for every command (astera help, no dashes, is the agents' guide)
+astera jobs list --human          # readable columns instead of JSON
+run=$(astera jobs run --id job_123 | jq -r '.data.id')
+astera runs wait --id "$run"      # 0 done, 8 a person is needed, 10 failed, 7 deadline passed
+astera questions answer --id <questionId> --answer "use the existing migration"
+```
+
+Each exit code has one meaning, so a pipeline can tell a run that finished badly (10) from one waiting
+for a person (8). See [the `astera` command](docs/cli.md) for every command, the JSON format, exit
+codes, retrying a call safely, CI recipes and security notes.
 
 ## Install
 
@@ -303,6 +354,9 @@ and a full bundle build.
 
 ## Documentation
 
+- [Everyday usage guide](docs/usage-guide.md) — sessions, accounts, scheduling, files, previews, recovery, and settings
+- [How It Works](docs/how-it-works.md) — record a task, read its explanation, and follow the implementation
+- [Job lifecycle](docs/jobs.md) — tasks, worktrees, completion, merging, and scheduled runs
 - [The `astera` command](docs/cli.md) — driving Jobs from a shell or CI: install, commands, JSON, exit codes
 - [Slack bot setup](docs/slack-bot-setup.md) — creating the app, tokens, and permissions
 - [Releasing](docs/releasing.md) — how a version gets cut and published

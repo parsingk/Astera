@@ -25,7 +25,7 @@
 
 **Vista de conversación**
 - Una sesión se abre como terminal o como una interfaz de chat normal. Cuál de las dos queda decidido
-  al crearla y no cambia después. Con qué se abre una sesión nueva se elige en **Ajustes → General**
+  al crearla y no cambia después. Con qué se abre una sesión nueva se elige en **Configuración → General**
 - En una sesión de chat las preguntas y las aprobaciones llegan como tarjetas. El modelo y el modo de
   permisos se eligen junto al cuadro de redacción
 - Arrastra un archivo o pega una imagen y su ruta entra en el mensaje
@@ -48,7 +48,7 @@
 </div>
 
 **Reanudación inteligente (experimental)**
-- Desactivada por defecto. **Configuración → General → Estrategia de reanudación de sesión** elige entre el
+- Desactivada por defecto. **Configuración → Agentes → Estrategia de reanudación de sesión** elige entre el
   resume propio de la CLI y esta
 - Con ella activada, cuando un límite mueve el trabajo a la siguiente cuenta esa sesión arranca **en
   blanco** y recibe un punto de control compacto como primer mensaje, en vez de reproducir toda la
@@ -76,6 +76,14 @@
 <img src="assets/schedule-demo.gif" width="820" alt="Grabación de pantalla: una sesión mostrando su horario, y el comando entrando solo cuando llega la hora" />
 <p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-schedule.mp4">▶ Grabación completa (22s)</a></p>
 </div>
+
+**El comando `astera`**
+- Consulta y mueve Jobs desde una terminal, un pipeline de CI o un agente: `astera jobs run`,
+  `astera runs wait`, `astera questions answer`. Toda sesión que inicia Astera ya lo tiene
+- Sigue respondiendo después de cerrar la aplicación, porque un Host en segundo plano es dueño del
+  trabajo y vive más que la ventana. Las trabajadoras también siguen
+- JSON por defecto y `--human` para leer, un significado por código de salida y líneas de comando
+  para ejecutar a continuación en cada error. Consulta [el comando `astera`](docs/cli.md) (en inglés)
 
 **Ejecución**
 - Una configuración de ejecución tiene un tipo — Shell, npm, Node.js, Gradle, Maven, cargo, go, Python,
@@ -107,9 +115,9 @@
   Run ha terminado
 - Un trabajo que no cambió ningún archivo no deja línea. Si lo declaraste y solo hablaste, no hay
   nada que redactar
-- Desactivado por defecto. Activa el **seguimiento de unidades de trabajo** en los ajustes y elige
-  la **cuenta para explicaciones** que las escribirá. No se aplica a las sesiones que ya están
-  abiertas: funciona a partir de las sesiones nuevas
+- Desactivado por defecto. Activa el **seguimiento de unidades de trabajo** en **Configuración →
+  How It Works** y elige la **cuenta para explicaciones** que las escribirá. No se aplica a las
+  sesiones que ya están abiertas: funciona a partir de las sesiones nuevas
 - Solo se registra el trabajo hecho después de activar la función en los ajustes
 
 **Design Mode**
@@ -176,9 +184,9 @@
 
 ## Jobs
 
-Jobs es opcional. Activa **Orquestación de agentes** en los ajustes para mostrar su barra lateral.
+Jobs siempre está ahí: su barra lateral forma parte de la aplicación y no hay nada que activar.
 Un trabajo es un grafo de tareas con dependencias que pueden ejecutarse con cualquiera de los dos
-proveedores, y hay dos formas de ponerlo en marcha.
+proveedores, y hay tres formas de ponerlo en marcha.
 
 <div align="center">
 <img src="assets/jobs.gif" width="820" alt="Diagrama: una coordinadora sigue el grafo de dependencias, inicia dos tareas listas en proveedores distintos, comprueba una con pruebas, continúa cuando terminan sus dependencias y espera a una persona cuando hace falta una decisión" />
@@ -206,9 +214,8 @@ más detalles (actualmente solo en coreano).
 
 ### 2. Ejecutarlo con la skill `astera-orchestration` — un agente coordina
 
-Activa **Orquestación de agentes antes de iniciar la sesión coordinadora**. Al arrancar, esa sesión
-recibe la CLI `astera` en su `PATH` y la skill `astera-orchestration`. Puedes pedírselo con lenguaje
-natural, por ejemplo:
+Toda sesión que inicia Astera recibe la CLI `astera` en su `PATH` y la skill `astera-orchestration`.
+Puedes pedírselo con lenguaje natural, por ejemplo:
 
 > Usa la skill `astera-orchestration` para coordinar este trabajo: refactoriza el módulo de
 > autenticación, añade después pruebas de regresión y verifícalo con la suite de pruebas.
@@ -221,8 +228,9 @@ también aparecen en la barra lateral de Jobs y, con el **seguimiento de unidade
 activado, quedan en How It Works como una línea cada uno al terminar, igual que un Run que hayas
 iniciado tú.
 
-Las skills se cargan al iniciar una sesión: activa primero **Orquestación de agentes** y abre después
-una sesión coordinadora nueva. Una entrega sencilla y puntual no necesita un Run de orquestación.
+Las skills se cargan al iniciar una sesión, así que una sesión abierta antes de actualizar no las
+tiene: abre una sesión coordinadora nueva. Una entrega sencilla y puntual no necesita un Run de
+orquestación.
 
 Para leer la referencia de la CLI de coordinación:
 
@@ -232,9 +240,29 @@ astera help
 
 Si `astera` responde `command not found`, usa la ruta de la variable de entorno `ASTERA_CLI`
 (`"$ASTERA_CLI"` en bash o zsh, `$env:ASTERA_CLI` en PowerShell): son el mismo programa. Un valor vacío
-significa que la sesión no la inició Astera, o que la Orquestación de agentes, el Seguimiento de
-unidades de trabajo y el Navegador del agente están todos desactivados — la CLI se instala cuando
-cualquiera de los tres está activo.
+significa que la sesión no la inició Astera: toda sesión que inicia Astera recibe la CLI.
+
+### 3. Manejarlo desde una terminal, un script o un agente con el comando `astera`
+
+Los mismos Jobs se pueden listar, iniciar, esperar y responder desde una terminal normal, un pipeline
+de CI o un agente. Instala el comando una vez desde **Configuración → Agentes → Command line tool
+(astera)**. Las sesiones que inicia Astera ya lo tienen, así que el agente de cualquiera de ellas puede
+llamar a los mismos comandos. El comando sigue respondiendo después de cerrar la aplicación, porque el
+**Astera Host**, el proceso en segundo plano dueño del trabajo, vive más que la ventana. Si no hay
+ninguno en marcha, `astera host start` lo levanta.
+
+```bash
+astera --help                     # uso de cada comando (astera help, sin guiones, es la guía de los agentes)
+astera jobs list --human          # columnas legibles en lugar de JSON
+run=$(astera jobs run --id job_123 | jq -r '.data.id')
+astera runs wait --id "$run"      # 0 terminado, 8 hace falta una persona, 10 falló, 7 plazo vencido
+astera questions answer --id <questionId> --answer "use the existing migration"
+```
+
+Cada código de salida tiene un solo significado, así que un pipeline distingue un Run que terminó mal
+(10) de uno que espera a una persona (8). Consulta [el comando `astera`](docs/cli.md) (en inglés) para
+ver todos los comandos, el formato JSON, los códigos de salida, cómo reintentar una llamada sin riesgo,
+recetas de CI y notas de seguridad.
 
 ## Instalación
 
@@ -319,6 +347,7 @@ ejecuta la comprobación de tipos, la suite y una compilación completa del bund
 
 ## Documentación
 
+- [El comando `astera`](docs/cli.md) — manejar Jobs desde una shell o CI: instalación, comandos, JSON y códigos de salida (en inglés)
 - [Configuración del bot de Slack](docs/slack-bot-setup.md) — crear la aplicación, tokens y permisos
 - [Publicación de versiones](docs/releasing.md) — cómo se corta y publica una versión
 - [Política de firma de código](docs/code-signing.md) — quién firma las versiones, qué se firma y

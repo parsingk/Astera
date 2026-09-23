@@ -48,7 +48,7 @@
 </div>
 
 **스마트 재개 (실험)**
-- 기본값은 꺼져 있습니다. **설정 → 일반 → 세션 재개 방식** 에서 CLI 의 기존 Resume 과 이 방식 중
+- 기본값은 꺼져 있습니다. **설정 → 에이전트 → 세션 재개 방식** 에서 CLI 의 기존 Resume 과 이 방식 중
   하나를 고릅니다
 - 켜 두면, 한도에 걸려 다음 계정으로 넘어갈 때 그 세션을 **백지로** 띄우고 대화 전체를 재생하는
   대신 간결한 체크포인트를 첫 메시지로 건넵니다
@@ -73,6 +73,14 @@
 <img src="assets/schedule-demo.gif" width="820" alt="화면 녹화: 예약이 걸린 세션이 그 시각이 되면 아무도 타이핑하지 않아도 명령을 받아 작업을 시작한다" />
 <p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-schedule.mp4">▶ 전체 영상 (22초)</a></p>
 </div>
+
+**`astera` 명령**
+- 터미널, CI 파이프라인, 에이전트 어디서든 Job을 보고 움직일 수 있습니다: `astera jobs run`,
+  `astera runs wait`, `astera questions answer`. Astera가 시작한 세션에는 이미 들어 있습니다
+- 앱을 종료해도 계속 답합니다. 작업을 쥐고 있는 백그라운드 Host가 창보다 오래 살기 때문입니다.
+  워커도 계속 돕니다
+- 기본 출력은 JSON이고 사람이 읽을 때는 `--human`을 씁니다. 종료 코드마다 뜻이 하나이고, 모든 오류에
+  다음에 실행할 명령 줄이 붙습니다. [`astera` 명령](docs/cli.md)을 보세요
 
 **실행 구성**
 - 실행 구성은 Shell·npm·Node.js·Gradle·Maven·cargo·go·Python·pytest·Docker Compose·Dockerfile·
@@ -103,7 +111,7 @@
   분석이 시작됩니다
 - 파일이 하나도 바뀌지 않은 작업은 줄을 남기지 않습니다. 선언만 하고 이야기만 나눴다면 쓸
   내용이 없습니다
-- 기본값은 꺼짐입니다. 설정에서 **작업 단위 추적**을 켜고, 기록을 쓸 **설명 생성 계정**을
+- 기본값은 꺼짐입니다. **설정 → How It Works** 에서 **작업 단위 추적**을 켜고, 기록을 쓸 **설명 생성 계정**을
   고릅니다. 이미 열려 있는 세션에는 적용되지 않습니다 — 새 세션부터 동작합니다
 - 설정에서 이 기능을 켜고 난 뒤의 작업만 기록합니다
 
@@ -166,8 +174,8 @@
 
 ## Jobs
 
-Jobs는 선택 기능입니다. 설정에서 **에이전트 오케스트레이션**을 켜면 Jobs 사이드바가 나타납니다.
-Job은 Claude와 Codex에서 실행할 수 있는 Task의 의존성 그래프이며, 실행 방식은 두 가지입니다.
+Jobs는 켜고 끌 것 없이 늘 있습니다. Jobs 사이드바는 앱의 일부입니다. Job은 Claude와 Codex에서
+실행할 수 있는 Task의 의존성 그래프이며, 실행 방식은 세 가지입니다.
 
 <div align="center">
 <img src="assets/jobs.gif" width="820" alt="다이어그램: 코디네이터가 Job의 의존성 그래프를 따라 준비된 두 작업을 서로 다른 벤더에서 동시에 시작하고, 테스트로 하나의 완료를 증명하며, 두 의존 작업이 끝난 뒤 다음 작업을 진행하고, 스스로 정할 수 없는 결정은 사람을 기다린다" />
@@ -192,9 +200,8 @@ git worktree에서 실행할 수 있고, 완료 결과는 상세 화면에서 **
 
 ### 2. `astera-orchestration` 스킬로 실행 — 에이전트가 조율
 
-코디네이터 세션을 시작하기 **전에 에이전트 오케스트레이션을 켜세요**. 그러면 새 세션의 `PATH`에
-`astera` CLI가 올라가고 `astera-orchestration` 스킬이 함께 주어집니다. 다음처럼 자연어로 요청할 수
-있습니다.
+Astera가 시작하는 세션은 모두 `PATH`에 `astera` CLI가 올라가고 `astera-orchestration` 스킬을
+함께 받습니다. 다음처럼 자연어로 요청할 수 있습니다.
 
 > `astera-orchestration` 스킬을 사용해 인증 모듈을 리팩터링하고, 그 뒤 회귀 테스트를 추가한 다음,
 > 테스트 스위트로 검증하는 작업을 조율해 줘.
@@ -205,8 +212,8 @@ git worktree에서 실행할 수 있고, 완료 결과는 상세 화면에서 **
 사이드바에도 표시되고, **작업 단위 추적**을 켜 두었다면 끝날 때 How It Works 에 한 줄씩 남습니다 —
 직접 시작한 Run과 똑같습니다.
 
-스킬은 세션 시작 시 로드되므로 에이전트 오케스트레이션을 먼저 켠 뒤 새 코디네이터 세션을 여세요.
-한 번 넘기고 끝나는 단순 작업에는 오케스트레이션 Run이 필요하지 않습니다.
+스킬은 세션 시작 시 로드되므로, 업그레이드 전부터 열려 있던 세션에는 없습니다. 새 코디네이터 세션을
+여세요. 한 번 넘기고 끝나는 단순 작업에는 오케스트레이션 Run이 필요하지 않습니다.
 
 코디네이터 CLI 레퍼런스를 보려면:
 
@@ -215,9 +222,28 @@ astera help
 ```
 
 `astera`가 `PATH`에 없다면 환경변수 `ASTERA_CLI`의 경로를 사용하세요(bash·zsh 에서는 `"$ASTERA_CLI"`,
-PowerShell 에서는 `$env:ASTERA_CLI`). 값이 비어 있다면 그 세션은 Astera가
-시작한 것이 아니거나, 에이전트 오케스트레이션·작업 단위 추적·에이전트 브라우저가 모두 꺼져 있는
-것입니다 — 셋 중 하나만 켜져 있어도 CLI는 심어집니다.
+PowerShell 에서는 `$env:ASTERA_CLI`). 값이 비어 있다면 그 세션은 Astera가 시작한 것이 아닙니다.
+Astera가 시작하는 세션은 모두 CLI를 받습니다.
+
+### 3. 터미널, 스크립트, 에이전트에서 `astera` 명령으로 실행
+
+같은 Job을 평범한 터미널, CI 파이프라인, 에이전트에서 조회하고 시작하고 기다리고 답할 수 있습니다.
+**설정 → 에이전트 → 명령줄 도구 (astera)** 에서 한 번 설치합니다. Astera가 시작한 세션에는 이미
+들어 있으므로 그 안의 에이전트도 같은 명령을 부를 수 있습니다. 앱을 종료해도 명령은 계속 답합니다.
+작업을 쥐고 있는 백그라운드 프로세스 **Astera Host**가 창보다 오래 살기 때문입니다. Host가 떠 있지
+않으면 `astera host start`로 띄웁니다.
+
+```bash
+astera --help                     # 모든 명령의 사용법 (대시 없는 astera help 는 에이전트용 안내서)
+astera jobs list --human          # JSON 대신 읽기 쉬운 열
+run=$(astera jobs run --id job_123 | jq -r '.data.id')
+astera runs wait --id "$run"      # 0 완료, 8 사람이 필요, 10 실패, 7 기한 지남
+astera questions answer --id <questionId> --answer "use the existing migration"
+```
+
+종료 코드마다 뜻이 하나라서, 파이프라인이 나쁘게 끝난 Run(10)과 사람을 기다리는 Run(8)을 구별할 수
+있습니다. 모든 명령, JSON 형식, 종료 코드, 안전하게 다시 시도하는 법, CI 예시와 보안은
+[`astera` 명령](docs/cli.md)(영어)을 보세요.
 
 ## 설치
 
@@ -295,6 +321,7 @@ npm run dist:linux # Linux AppImage + deb
 
 ## 문서
 
+- [`astera` 명령](docs/cli.md) — 셸이나 CI에서 Job 다루기: 설치, 명령, JSON, 종료 코드 (영어)
 - [Slack 봇 설정](docs/slack-bot-setup.md) — 앱 생성, 토큰, 권한
 - [릴리스](docs/releasing.md) — 버전을 자르고 배포하는 방법
 - [코드 서명 정책](docs/code-signing.md) — 누가 릴리스에 서명하는지, 무엇에 서명하는지, 개인정보
