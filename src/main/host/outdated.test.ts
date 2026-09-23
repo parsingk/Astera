@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing } from './outdated'
+import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn } from './outdated'
 
 describe('hostIsOutdated', () => {
   it('is true when the Host is strictly older than the app', () => {
@@ -54,5 +54,13 @@ describe('hostSpeaksPing', () => {
 
   it('is false while disconnected — there is nothing to ping on', () => {
     expect(hostSpeaksPing({ connected: false, features: ['ping'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksSpawn', () => {
+  it('hostSpeaksSpawn is the spawn feature on a connected Host', () => {
+    expect(hostSpeaksSpawn({ connected: true, features: ['proc', 'spawn'] })).toBe(true)
+    expect(hostSpeaksSpawn({ connected: true, features: ['proc'] })).toBe(false)
+    expect(hostSpeaksSpawn({ connected: false, features: ['spawn'] })).toBe(false)
   })
 })

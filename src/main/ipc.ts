@@ -2234,6 +2234,10 @@ export function registerIpc(
     [path.join(app.getAppPath(), 'out', 'main', 'cli.js'), path.join(__dirname, 'cli.js')].find((p) =>
       existsSync(p)
     )
+  /** The skills folder the CLI's help reads (the skillsPath note in bootOrch below). One definition,
+   *  because the Host is started with it too (spawnHost) and the two must name the same folder. */
+  const appSkillsPath = (): string =>
+    app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(app.getAppPath(), 'resources', 'skills')
 
   const bootOrch = async (): Promise<void> => {
     // Pin down two paths first — the CLI entry point the shuttle (astera) runs, and the skills
@@ -2253,9 +2257,7 @@ export function registerIpc(
     //   under process.resourcesPath when packaged, inside the repo in development. The CLI's help reads
     //   orchestration-guide.md from there (see resolveGuidePath in src/cli/run.ts).
     const entryPath = cliEntryPath()
-    const skillsPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'skills')
-      : path.join(app.getAppPath(), 'resources', 'skills')
+    const skillsPath = appSkillsPath()
     // Starting with a wrong path makes every CLI call an agent issues fail with no discoverable reason — so it does not start at all
     if (!entryPath || !existsSync(skillsPath)) {
       orchLog(
@@ -6611,12 +6613,18 @@ export function registerIpc(
         // which is the first moment a missing file can actually be put back (design F6). Costs a
         // handful of `existsSync` calls on a runtime that is whole.
         runtime = prepareHostRuntimeFor(profileDir, hostLog)
+        // The three paths a Host needs to spawn workers itself (host S2 design §2.2). The same guard
+        // bootOrch applies: with either one missing the Host is started without any of them and
+        // spawns nothing, rather than being handed a path that is not there.
+        const cliEntry = cliEntryPath()
+        const skills = appSkillsPath()
         const plan = hostSpawnPlan({
           execPath: runtime?.paths.exePath ?? process.execPath,
           entryPath: runtime?.paths.entryPath ?? entry,
           profileDir,
           logPath: path.join(profileDir, 'host', 'host.log'),
-          version: app.getVersion()
+          version: app.getVersion(),
+          cli: cliEntry && existsSync(skills) ? { exec: process.execPath, entry: cliEntry, skills } : undefined
         })
         const child = spawn(plan.command, plan.args, plan.options)
         // A spawn that fails arrives as an async 'error' event, not a throw, and an unhandled one is

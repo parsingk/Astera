@@ -5,7 +5,7 @@
 // host.js until something ends it. This is the fact that tells the app there is a newer one to run,
 // so it can replace the old Host the first moment doing so costs nothing (§4).
 import { compareVersions } from '../updatePolicy'
-import { HOST_FEATURE_PROC, HOST_FEATURE_PING } from '../../core/host/protocol'
+import { HOST_FEATURE_PROC, HOST_FEATURE_PING, HOST_FEATURE_SPAWN } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
  *  cannot be parsed is **not** outdated: replacing a Host on a guess about what it is would be worse
@@ -33,4 +33,11 @@ export function hostSpeaksProcs(status: { connected: boolean; features: readonly
  *  a request that does have an answer instead. */
 export function hostSpeaksPing(status: { connected: boolean; features: readonly string[] }): boolean {
   return status.connected && status.features.includes(HOST_FEATURE_PING)
+}
+
+/** Whether the connected Host spawns orchestration sessions itself and sweeps the spec files on its
+ *  own load. The same capability check as the two above: a Host that did not announce it (an older
+ *  one, or one started without the CLI paths) spawns nothing, so the app keeps doing both. */
+export function hostSpeaksSpawn(status: { connected: boolean; features: readonly string[] }): boolean {
+  return status.connected && status.features.includes(HOST_FEATURE_SPAWN)
 }

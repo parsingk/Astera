@@ -52,6 +52,17 @@ export const HOST_FEATURE_ORCH = 'orch'
  *  refuse over one we did not. */
 export const HOST_FEATURE_REQUESTS = 'requests'
 
+/** The Host spawns orchestration sessions itself: `worker-start`, `worker-stop`, `worker-release`,
+ *  `worker-read` and a coordinator's start are carried out in its own pty registry when no app can
+ *  (host S2 design §2). Announced only by a Host that was started with all three CLI paths
+ *  (`hostCliPaths`), because without them it cannot build a worker's shuttle and does not guess one.
+ *
+ *  **What an app does with it.** It stops sweeping stale spec files at its own boot, because the Host
+ *  sweeps them on its load and a sweep in the app would delete the spec of a worker the Host has
+ *  just started; and it answers `pty-opened` by adopting that session. An app that sees no `spawn`
+ *  keeps doing both as it always has. Additive, so HOST_PROTOCOL stays 3. */
+export const HOST_FEATURE_SPAWN = 'spawn'
+
 /** What the app needs to rebuild its own record for a session after a restart. The Host stores it
  *  and hands it back untouched — only the manager that wrote it knows how to read it (slice 2
  *  design §4).
@@ -234,6 +245,11 @@ export type HostMessage =
   | { t: 'pty-data'; id: string; data: string }
   | { t: 'pty-exit'; id: string; exitCode: number }
   | { t: 'pty-listed'; entries: PtyEntry[] }
+  /** A pty the Host opened **itself** — a worker or coordinator it spawned for a CLI call — broadcast
+   *  to every greeted client so an attached app can adopt it the way it adopts sessions after a
+   *  restart. Never sent in reply to a `pty-spawn`: the client that asked already has `pty-spawned`,
+   *  and the session is its own. An older app ignores it, and adopts the session at its next boot. */
+  | { t: 'pty-opened'; entry: PtyEntry }
   | { t: 'proc-spawned'; id: string; pid: number }
   | { t: 'proc-failed'; id: string; error: string }
   /** One stdout line, live. `seq` counts from 1 per process and is never reused; a client that has

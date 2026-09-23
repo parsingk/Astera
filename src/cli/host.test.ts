@@ -541,6 +541,14 @@ describe('hostStartTargets', () => {
     })
     expect(t.candidates).toEqual(['D:/repo/out/main/host.js'])
   })
+
+  it("passes its own executable, its own entry and the skills folder as the Host's CLI paths", () => {
+    const t = hostStartTargets({ cliEntry: 'C:/app/out/main/cli.js', execPath: 'C:/app/Astera.exe', profileDir: 'C:/p', version: '1', skillsDir: 'C:/app/resources/skills' })
+    expect(t.cli).toEqual({ exec: 'C:/app/Astera.exe', entry: 'C:/app/out/main/cli.js', skills: 'C:/app/resources/skills' })
+  })
+  it('passes no CLI paths when the skills folder cannot be found', () => {
+    expect(hostStartTargets({ cliEntry: 'C:/app/out/main/cli.js', execPath: 'x', profileDir: 'C:/p', version: '1' }).cli).toBeUndefined()
+  })
 })
 
 describe('preparedRuntimeEntry', () => {

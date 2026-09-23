@@ -31,6 +31,34 @@ export function hostWorkerBaseEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return base
 }
 
+/** The three paths a Host needs before it can spawn a worker itself (§2.2): the binary and the
+ *  bundle the worker's `astera` shuttle runs, and the skills folder the CLI's help reads. The app and
+ *  `astera host start` know them; the Host, started as plain Node, cannot find them on its own. */
+export interface HostCliPaths {
+  exec: string
+  entry: string
+  skills: string
+}
+
+const HOST_CLI_ENV = { exec: 'ASTERA_HOST_CLI_EXEC', entry: 'ASTERA_HOST_CLI_ENTRY', skills: 'ASTERA_HOST_SKILLS' } as const
+
+/** The CLI paths this Host was started with, or the names of the variables that are unset, empty, or
+ *  name a path that is not there. **Any one missing means none**: the Host does not guess a path
+ *  (§2.2), so a Host started by an older app or CLI, which passes none of them, does not spawn. The
+ *  `ASTERA_HOST_` prefix is what keeps all three away from the workers (HOST_ONLY_ENV). */
+export function hostCliPaths(
+  env: NodeJS.ProcessEnv,
+  exists: (p: string) => boolean
+): HostCliPaths | { missing: string[] } {
+  const missing: string[] = []
+  for (const name of [HOST_CLI_ENV.exec, HOST_CLI_ENV.entry, HOST_CLI_ENV.skills]) {
+    const v = env[name]
+    if (!v || !exists(v)) missing.push(name)
+  }
+  if (missing.length > 0) return { missing }
+  return { exec: env[HOST_CLI_ENV.exec]!, entry: env[HOST_CLI_ENV.entry]!, skills: env[HOST_CLI_ENV.skills]! }
+}
+
 export interface HostSpawnPlan {
   command: string
   args: string[]
@@ -50,6 +78,8 @@ export function hostSpawnPlan(a: {
   logPath: string
   version: string
   env?: NodeJS.ProcessEnv
+  /** Absent from a caller that cannot name all three, and then the Host it starts does not spawn. */
+  cli?: HostCliPaths
 }): HostSpawnPlan {
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(a.env ?? process.env)) if (!notInherited(k)) env[k] = v
@@ -76,7 +106,14 @@ export function hostSpawnPlan(a: {
         ELECTRON_RUN_AS_NODE: '1',
         ASTERA_HOST_PROFILE_DIR: a.profileDir,
         ASTERA_HOST_LOG: a.logPath,
-        ASTERA_HOST_VERSION: a.version
+        ASTERA_HOST_VERSION: a.version,
+        ...(a.cli
+          ? {
+              [HOST_CLI_ENV.exec]: a.cli.exec,
+              [HOST_CLI_ENV.entry]: a.cli.entry,
+              [HOST_CLI_ENV.skills]: a.cli.skills
+            }
+          : {})
       }
     }
   }

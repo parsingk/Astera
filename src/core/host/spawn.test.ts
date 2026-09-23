@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { Account } from '../types'
 import { makeDescriptors } from '../providers/descriptor'
 import { cliEnvFor } from '../sessions/cliEnv'
-import { HOST_ONLY_ENV, hostSpawnPlan, hostWorkerBaseEnv, resolveHostEntry } from './spawn'
+import { HOST_ONLY_ENV, hostCliPaths, hostSpawnPlan, hostWorkerBaseEnv, resolveHostEntry } from './spawn'
 
 describe('resolveHostEntry', () => {
   it('takes the first candidate that exists', () => {
@@ -93,6 +93,35 @@ describe('hostWorkerBaseEnv', () => {
   it('removes everything hostSpawnPlan itself adds', () => {
     const plan = hostSpawnPlan({ execPath: 'x', entryPath: 'y', profileDir: 'p', logPath: 'l', version: 'v', env: {} })
     expect(hostWorkerBaseEnv(plan.options.env)).toEqual({})
+  })
+
+  // The CLI paths are the Host's own start-up settings too, and a worker must not see them (F1).
+  it('removes the CLI paths hostSpawnPlan adds as well', () => {
+    const plan = hostSpawnPlan({ execPath: 'x', entryPath: 'y', profileDir: 'p', logPath: 'l', version: 'v', env: {},
+      cli: { exec: 'e', entry: 'n', skills: 's' } })
+    expect(plan.options.env.ASTERA_HOST_CLI_EXEC).toBe('e')
+    expect(hostWorkerBaseEnv(plan.options.env)).toEqual({})
+  })
+})
+
+describe('the CLI paths the Host is started with', () => {
+  it('ride the environment when given', () => {
+    const plan = hostSpawnPlan({ execPath: 'x', entryPath: 'y', profileDir: 'p', logPath: 'l', version: 'v', env: {},
+      cli: { exec: 'C:/A/Astera.exe', entry: 'C:/A/out/main/cli.js', skills: 'C:/A/resources/skills' } })
+    expect(plan.options.env.ASTERA_HOST_CLI_EXEC).toBe('C:/A/Astera.exe')
+    expect(plan.options.env.ASTERA_HOST_CLI_ENTRY).toBe('C:/A/out/main/cli.js')
+    expect(plan.options.env.ASTERA_HOST_SKILLS).toBe('C:/A/resources/skills')
+  })
+  it('are absent when not given — an older caller starts a Host that does not spawn', () => {
+    const plan = hostSpawnPlan({ execPath: 'x', entryPath: 'y', profileDir: 'p', logPath: 'l', version: 'v', env: {} })
+    expect('ASTERA_HOST_CLI_EXEC' in plan.options.env).toBe(false)
+  })
+  it('read back as the three paths, or the names of the ones missing', () => {
+    const env = { ASTERA_HOST_CLI_EXEC: 'e', ASTERA_HOST_CLI_ENTRY: 'n', ASTERA_HOST_SKILLS: 's' }
+    expect(hostCliPaths(env, () => true)).toEqual({ exec: 'e', entry: 'n', skills: 's' })
+    expect(hostCliPaths({ ASTERA_HOST_CLI_EXEC: 'e' }, () => true)).toEqual({ missing: ['ASTERA_HOST_CLI_ENTRY', 'ASTERA_HOST_SKILLS'] })
+    // a path that is named but not there is missing too — the Host does not guess (§2.2)
+    expect(hostCliPaths(env, (p) => p !== 'n')).toEqual({ missing: ['ASTERA_HOST_CLI_ENTRY'] })
   })
 })
 

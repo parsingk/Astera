@@ -9,11 +9,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 import { connectHost, type HostConnection } from '../core/host/connect'
-import { hostSpawnPlan, resolveHostEntry } from '../core/host/spawn'
+import { hostSpawnPlan, resolveHostEntry, type HostCliPaths } from '../core/host/spawn'
 import { hostRuntimeBase, hostRuntimePaths } from '../core/host/runtime'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { hostAddress, siblingHostAddresses } from '../host/address'
 import { answers } from '../host/server'
+import { resolveSkillsDir } from './skills'
 import { nativePath, userDataDir } from '../core/orchestration/cliDiscovery'
 import type { CliError } from '../core/orchestration/cliOutput'
 
@@ -163,12 +164,18 @@ export function hostStartTargets(a: {
   profileDir: string
   version: string
   runtimeEntry?: string
-}): { execPath: string; candidates: string[]; logPath: string } {
+  /** `resolveSkillsDir`'s answer. Undefined when this build's skills cannot be found, and then no CLI
+   *  paths are passed at all: the Host started without them does not spawn rather than guess (§2.2). */
+  skillsDir?: string
+}): { execPath: string; candidates: string[]; logPath: string; cli?: HostCliPaths } {
   const beside = a.cliEntry.replace(/[^/\\]+$/, 'host.js')
   return {
     execPath: a.execPath,
     candidates: a.runtimeEntry ? [a.runtimeEntry, beside] : [beside],
-    logPath: `${a.profileDir.replace(/[\\/]+$/, '')}/host/host.log`
+    logPath: `${a.profileDir.replace(/[\\/]+$/, '')}/host/host.log`,
+    // This CLI's own binary and bundle are what a worker's `astera` shuttle runs: the same pair the
+    // app passes, so a Host started from either end spawns the same workers.
+    ...(a.skillsDir ? { cli: { exec: a.execPath, entry: a.cliEntry, skills: a.skillsDir } } : {})
   }
 }
 
@@ -419,7 +426,8 @@ export async function runHostCommand(a: {
       env: a.env,
       resourcesPath: process.resourcesPath,
       readFile: (p) => readFileSync(p, 'utf8')
-    })
+    }),
+    skillsDir: resolveSkillsDir({ resourcesPath: process.resourcesPath, cliEntry: process.argv[1] ?? '', exists: existsSync })
   })
   const entry = resolveHostEntry(targets.candidates, existsSync)
   if (!entry)
@@ -436,7 +444,8 @@ export async function runHostCommand(a: {
     entryPath: entry,
     profileDir,
     logPath: targets.logPath,
-    version: CLI_VERSION
+    version: CLI_VERSION,
+    cli: targets.cli
   })
   const child = spawn(plan.command, plan.args, plan.options)
   // A spawn that fails arrives as an async 'error' event, not a throw — see the same handling in
