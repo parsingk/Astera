@@ -415,7 +415,7 @@ export function createHostOrch(a: {
    *  design §3), and a receipt is kept only when one of them is set. They ride here rather than in a
    *  second object because this one is already built per call, and a flag that lives no longer than
    *  the call it belongs to cannot be read by the next one. */
-  type CallMarks = { appRefused: boolean; committed: boolean; acted: boolean; repair?: string }
+  type CallMarks = { appRefused: boolean; committed: boolean; acted: boolean; repair?: string; retry?: string }
 
   /** **Built per call**, because the marks above are. One object literal per call costs nothing
    *  beside running a command. */
@@ -459,15 +459,20 @@ export function createHostOrch(a: {
         // A profile file only the app can repair: the 409 names it (`repair`), so the CLI can say
         // there is no command to run rather than point at `astera status`.
         if (detail?.repair) marks.repair = detail.repair
+        // A Host that is leaving: the 409 says to retry (`retry`), so the CLI offers the same command.
+        if (detail?.retry) marks.retry = detail.retry
         // Said as what happened: with `detail` the Host refused it itself and asked nobody.
         a.log(detail ? `${name} refused by the Host: ${why}` : `${name} could not be put to the app: ${why}`)
       }
     })
 
-  /** A 409 body with the file to repair beside its error, when the refusal was one (`marks.repair`).
-   *  A field, so the CLI reads which file it is rather than matching the sentence. */
+  /** A 409 body with the file to repair (`marks.repair`), or the retry a leaving Host asks for
+   *  (`marks.retry`), beside its error. Fields, so the CLI reads which it is rather than matching the
+   *  sentence. */
   const withRepair = (body: unknown, marks: CallMarks): unknown =>
-    marks.repair && typeof body === 'object' && body !== null ? { ...body, repair: marks.repair } : body
+    (marks.repair || marks.retry) && typeof body === 'object' && body !== null
+      ? { ...body, ...(marks.repair ? { repair: marks.repair } : {}), ...(marks.retry ? { retry: marks.retry } : {}) }
+      : body
 
   /** The app handing over its whole state (design §5). Not part of `handleCommand`: it is not a
    *  command anybody types, it writes the state wholesale rather than through a transition, and only

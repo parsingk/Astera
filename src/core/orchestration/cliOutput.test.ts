@@ -556,3 +556,15 @@ describe('a CONFLICT that names a file to repair', () => {
     expect(nextStepsFor({ code: 'CONFLICT', cmd: 'worker-start' })).toEqual(['astera status'])
   })
 })
+
+// Host S2 fix round, ruling (a): a 409 from a Host that is leaving is retried, not repaired or
+// investigated. The step is the same command again (its line when the envelope carries one) once a
+// Host is up, which `astera host status` shows.
+describe('a CONFLICT a retiring Host answered', () => {
+  it('offers the retry line when there is one, then astera host status', () => {
+    expect(nextStepsFor({ code: 'CONFLICT', cmd: 'worker-start', details: { retry: 'host-retiring' } })).toEqual(['astera host status'])
+    expect(
+      nextStepsFor({ code: 'CONFLICT', cmd: 'worker-start', details: { retry: 'host-retiring', retryCommand: 'astera worker-start --task t1 --request-id rq-1' } })
+    ).toEqual(['astera worker-start --task t1 --request-id rq-1', 'astera host status'])
+  })
+})

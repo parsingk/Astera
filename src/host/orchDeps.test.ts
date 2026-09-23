@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { hostOrchDeps } from './orchDeps'
 import type { HostLocal } from './spawner'
 import { RepairNeeded } from '../core/settings/repairNeeded'
+import { HostRetiring } from '../core/host/hostRetiring'
 import { AppUnreachable } from '../core/host/orchProtocol'
 import os from 'node:os'
 import path from 'node:path'
@@ -810,6 +811,17 @@ describe('HOST_LOCAL (S2)', () => {
     expect(onAppRequired).toHaveBeenCalledWith('startWorker', needsRepair.message, { repair: 'accounts.json' })
     await expect(deps.releaseWorker({ dispatchId: 'd1' })).rejects.toThrow('boom')
     expect(onAppRequired).toHaveBeenCalledTimes(1)
+  })
+  // Fix round ruling (a): a spawn refused because the Host is leaving is a conflict the caller retries,
+  // flagged the way a repair refusal is, with `retry` instead of a file.
+  it('flags a local refusal from a retiring Host with retry, for the names that propagate', async () => {
+    const onAppRequired = vi.fn()
+    const retiring = new HostRetiring()
+    const deps = hostOrchDeps(base({ onAppRequired, local: fakeLocal({ startWorker: vi.fn().mockRejectedValue(retiring), startCoordinator: vi.fn().mockRejectedValue(retiring) }) }))
+    await expect(deps.startWorker({} as never)).rejects.toBe(retiring)
+    expect(onAppRequired).toHaveBeenCalledWith('startWorker', retiring.message, { retry: 'host-retiring' })
+    await expect(deps.startCoordinator!({} as never)).rejects.toBe(retiring)
+    expect(onAppRequired).toHaveBeenCalledWith('startCoordinator', retiring.message, { retry: 'host-retiring' })
   })
   it('flags a file read that needs repair with its file, when the app is absent', async () => {
     const onAppRequired = vi.fn()

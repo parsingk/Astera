@@ -590,6 +590,13 @@ It is also empty for a 6 that a damaged profile file caused. The app is the only
 writes `accounts.json`, `app-settings.json` and `run-configs.json`, and it repairs them when it
 starts. So when a command cannot read one, the step is to open Astera, and no command does that.
 `error.details.repair` names the file. Branch on that field, not on the wording of the message.
+
+A 6 from a Host that is on its way out is different again. A worker or coordinator start that
+reaches a Host after it began to leave is refused before anything is started, and the Dispatch it
+opened is rolled back. `error.details.retry` is `host-retiring`, and the step is the same command
+again once a Host is up: `error.nextSteps` offers `astera host status`. A retry with the same
+`--request-id` sent to the same leaving Host replays this refusal, and a new Host answers it fresh.
+
 Any other 6 still offers `astera status`.
 
 The steps depend on the command as well as the code, so a 4 from `jobs get` offers `astera jobs

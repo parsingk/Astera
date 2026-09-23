@@ -7,6 +7,7 @@ import type { OrchAccount, OrchRunConfig, OrchServerDeps } from '../core/orchest
 import type { Provider } from '../core/types'
 import { AppUnreachable } from '../core/host/orchProtocol'
 import { RepairNeeded } from '../core/settings/repairNeeded'
+import { HostRetiring } from '../core/host/hostRetiring'
 import type { HostSessions } from './sessions'
 import type { HostLocal, HostLocalName } from './spawner'
 
@@ -399,7 +400,7 @@ export function hostOrchDeps(a: {
    *  in it as `repair`. `orch.ts` answers that call CONFLICT on the strength of this, rather than by
    *  matching text in the reply. Never called for the other three groups — SWALLOWED, FIRE_AND_FORGET
    *  and DEGRADES: their refusal does not decide what the command answers. */
-  onAppRequired(name: string, why: string, detail?: { repair?: string }): void
+  onAppRequired(name: string, why: string, detail?: { repair?: string; retry?: string }): void
   /** Called when this command is about to ask the app for something that **changes something outside
    *  the state** — the other half of "did this call do anything", beside the commit flag (request
    *  receipts design §3). Optional: a caller that does not record receipts leaves it out, and the
@@ -561,8 +562,9 @@ export function hostOrchDeps(a: {
   }
 
   /** HOST_LOCAL: the spawner's answer when it owns this call, otherwise the route the name had before
-   *  S2. A local `RepairNeeded` is flagged with its file the way a propagating forward is flagged — and
-   *  only for the four that propagate, since a swallowed failure must not decide the status. */
+   *  S2. A local `RepairNeeded` is flagged with its file the way a propagating forward is flagged, and a
+   *  `HostRetiring` with `retry` — only for the four that propagate, since a swallowed failure must
+   *  not decide the status. */
   const hostLocal = (name: HostLocalName) => {
     const propagates = HOST_LOCAL_FALLBACK[name] === 'propagates'
     const fallback = forward(name, propagates)
@@ -574,6 +576,8 @@ export function hostOrchDeps(a: {
         return await (local[name] as (...xs: unknown[]) => Promise<unknown>)(...args)
       } catch (err) {
         if (propagates && err instanceof RepairNeeded) a.onAppRequired(name, err.message, { repair: err.file })
+        // A Host that is leaving refuses new starts; the caller retries once a Host is up (ruling a).
+        if (propagates && err instanceof HostRetiring) a.onAppRequired(name, err.message, { retry: HostRetiring.RETRY })
         throw err
       }
     }

@@ -435,6 +435,11 @@ describe('refusalDetailsOf — 요청을 이름 댄 거절만 그 id 를 싣는�
     expect(refusalDetailsOf({ jobId: 3 })).toBeUndefined()
   })
 
+  // Host S2 fix round, ruling (a): a spawn refused by a Host that is leaving says so as a field.
+  it('본문의 retry 도 details 로 올린다', () => {
+    expect(refusalDetailsOf({ error: 'failed to start worker: the Host is retiring', retry: 'host-retiring' })).toEqual({ retry: 'host-retiring' })
+  })
+
   // The Host's repair refusal names the profile file; `STEPS.CONFLICT` then offers no command.
   it('본문의 repair 도 details 로 올린다', () => {
     expect(refusalDetailsOf({ error: 'accounts.json is not valid JSON; open Astera to repair it', repair: 'accounts.json' })).toEqual({ repair: 'accounts.json' })

@@ -27,6 +27,7 @@ import {
 import { readAccountEntries } from '../core/accounts/accountsFile'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import { RepairNeeded } from '../core/settings/repairNeeded'
+import { HostRetiring } from '../core/host/hostRetiring'
 import { findRollout as findRolloutOnDisk } from '../core/rolling/codexLocate'
 import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
@@ -394,7 +395,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const settled = new Set<() => void>()
   const spawning = <A extends unknown[], R>(start: (...a: A) => Promise<R>) =>
     async (...args: A): Promise<R> => {
-      if (retiring) throw new Error('the Host is retiring — start the worker again once a Host is up')
+      if (retiring) throw new HostRetiring()
       spawnsInFlight += 1
       try {
         return await start(...args)
