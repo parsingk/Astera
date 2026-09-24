@@ -30,7 +30,7 @@ export interface Slot {
  * `pendingStart` 는 "아직 시작하지 않았다", `Job.paused` 는 "예약을 세워 뒀다", `run.paused` 는
  * "세울 때 함께 멈춘 회차" 다.
  */
-function appDriven(s: OrchState, run: JobRun): boolean {
+export function appDriven(s: OrchState, run: JobRun): boolean {
   const job = jobOf(s, run)
   if (!job?.autoDispatch) return false
   if (job.pendingStart) return false
