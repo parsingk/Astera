@@ -5,14 +5,15 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { handleCommand, handleExit, type OrchServerDeps } from '../core/orchestration/command'
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
-import { readPendingReports } from '../core/orchestration/pendingDrain'
-import { pendingReportsDirIn, reportedDispatchIdsOf } from '../core/orchestration/pendingReports'
-import { detachCoordinator, type OrchState } from '../core/orchestration/state'
+import { applyPendingReports, readPendingReports, type QueuedReport } from '../core/orchestration/pendingDrain'
+import { dispatchesHeldOnlyByReport, pendingReportsDirIn, reportedDispatchIdsOf } from '../core/orchestration/pendingReports'
+import { detachCoordinator, writeOffDispatch, type OrchState } from '../core/orchestration/state'
 import { runningRunCount } from '../core/orchestration/running'
 import { isPlaceholderSessionId } from '../core/orchestration/types'
 import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
+import { HOST_CALLER, type Driver } from '../core/host/driver'
 import { hostOrchDeps } from './orchDeps'
 import { readAccountsFile } from '../core/accounts/accountsFile'
 import { readRunConfigsFile } from '../core/run/runConfigsFile'
@@ -300,6 +301,18 @@ export interface HostOrch extends OrchCall {
    *  never loaded has closed nothing and started nothing, while loading would run the restart cleanup
    *  from an app leaving. */
   orphanedSessions(isAlive: (sessionId: string) => boolean): string[]
+  /** A command the Host issues for itself, after the load, under HOST_CALLER (R9). It answers exactly
+   *  as `call` would — the same 409 rewrite from the call's own marks, so a retiring spawner's refusal
+   *  arrives as 409 with `retry` (B1). No request id, so no receipt: the Host is not a caller that
+   *  retries a lost answer, it reads the state again. */
+  handle(cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }>
+  /** The Host's deps for its own doors: routed like a command's, marks read by nobody (R9). */
+  internalDeps(): OrchServerDeps
+  /** Whether the state is in memory: the load finished, or the app pushed a whole one. */
+  loaded(): boolean
+  /** Runs the drain once, if it has not run in this Host's life (C6): for a Host that was `'app'` at
+   *  its load and becomes `'host'` later. Re-reads the queue. Answers whether it ran. */
+  drainOnce(): Promise<boolean>
 }
 
 export function createHostOrch(a: {
@@ -355,6 +368,18 @@ export function createHostOrch(a: {
    *  Marks the run stopped and kills it, so its exit reads as "not proven" rather than a failure;
    *  true when `runId` was such a run. Absent: the call answers 501. */
   validationStop?(runId: string): boolean
+  /** Every commit this Host makes, after it has landed in memory and been pushed (R5): a command's,
+   *  the Host's own, and an accepted `state-put`. The driver's kick. Isolated: a throw is logged, and
+   *  the commit it followed stands. */
+  onCommit?(): void
+  /** Whether the drain may run at this load (driver === 'host'), computed on the spot. **Awaited**
+   *  inside ready() (N2): at the first load the driver's cached value may not exist yet. A rejection
+   *  is logged and read as no, which leaves the drain to `drainOnce`. */
+  mayDrain?(): Promise<boolean>
+  /** Called once, at the end of the load, after `loaded = true` (B2). Isolated: a throw is logged. */
+  onLoaded?(): void
+  /** The two status fields, or null when this Host does not drive (R6). */
+  driverStatus?(): { driver: Driver; appAttached: boolean } | null
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
 
@@ -385,9 +410,9 @@ export function createHostOrch(a: {
       // folder being the ordinary case — and `reportedDispatchIdsOf` is pure. A queue that cannot be
       // read costs the reports in it, never the load.
       //
-      // **Nothing is applied here**: applying a report reaches session spawning, which is the app's,
-      // and the app still reads and drains this same queue at its own boot. So two processes read
-      // this folder, and **reading it is not read-only** — `readPendingReports` also sweeps abandoned
+      // **Applied here only when this Host drives** (R4, below): otherwise applying a report reaches
+      // session spawning that is the app's, and the app still reads and drains this same queue at its
+      // own boot. So two processes read this folder, and **reading it is not read-only** — `readPendingReports` also sweeps abandoned
       // `.json.tmp` files and renames unreadable reports aside. Why the two sweeps cannot destroy
       // anything between them: the swept set (`.json.tmp`) and the read set (`.json`) are disjoint by
       // suffix; a working file is swept only after an hour untouched (`WORKING_FILE_TTL_MS`), so a
@@ -411,8 +436,41 @@ export function createHostOrch(a: {
         const removed = await sweepStaleSpecFiles({ dir: a.specsDir, state: store.get(), live: alive })
         if (removed.length > 0) a.log(`spec files — swept ${removed.length} stale file(s) at the Host's load`)
       }
+      // **The pending-report drain, inside the load, when this Host drives** (R4). Inside, so an app's
+      // `state-get` — which awaits `ready()` — is answered only after it, and the app's recovery sweep,
+      // which runs after that answer, never sees a Dispatch a report is about to close. Through
+      // `handleCommand` directly, never `call`, which awaits `ready()` and would wait on itself.
+      //
+      // **`mayDrain` is awaited** (N2): at the first load the driver's cached value may not exist
+      // yet, and a decision still being computed is not a no. When it is no — an old app caused this
+      // load and drives — the queue is that app's, as it always was, and `drainOnce` takes it later.
+      if (await mayDrainNow()) {
+        drained = true
+        // `applyPendingReports` already swallows every per-report failure; this catches what is left,
+        // because a load that rejects is memoized and would refuse every command this Host is asked.
+        await drain(queued).catch((err) => a.log(`pending reports — the drain at the Host's load failed: ${String(err)}`))
+      }
       loaded = true
+      // After `loaded`, so the pass it starts sees a loaded Host (B2). Once: this promise is memoized.
+      try {
+        a.onLoaded?.()
+      } catch (err) {
+        a.log(`the Host's after-load pass failed to start: ${String(err)}`)
+      }
     })())
+  /** Whether the drain has run in this Host's life (C6). Set before it runs, so a second caller that
+   *  arrives while it is running does not start another. */
+  let drained = false
+  /** `mayDrain`, with a throw or a rejection logged and read as no — a driver that cannot decide must
+   *  not cost the load. */
+  const mayDrainNow = async (): Promise<boolean> => {
+    try {
+      return (await a.mayDrain?.()) === true
+    } catch (err) {
+      a.log(`pending reports — could not tell whether this Host drives, so the queue is left: ${String(err)}`)
+      return false
+    }
+  }
 
   /** What one call did, filled in by the dependencies as it runs. Three flags, two questions.
    *
@@ -455,6 +513,7 @@ export function createHostOrch(a: {
         marks.commits += how?.rollsBack ? -1 : 1
         await store.save(next)
         a.onState(next, committed)
+        kickDriver()
       },
       now: a.now,
       runningSessions: a.runningSessions,
@@ -497,6 +556,87 @@ export function createHostOrch(a: {
     (marks.repair || marks.retry) && typeof body === 'object' && body !== null
       ? { ...body, ...(marks.repair ? { repair: marks.repair } : {}), ...(marks.retry ? { retry: marks.retry } : {}) }
       : body
+
+  /** The driver's kick after a commit (R5). Isolated (Constraint 14): the commit has landed and been
+   *  pushed, and a driver that throws must not turn it into a failed command. */
+  const kickDriver = (): void => {
+    try {
+      a.onCommit?.()
+    } catch (err) {
+      a.log(`the driver failed to take a commit: ${String(err)}`)
+    }
+  }
+
+  const driverStatusNow = (): { driver: Driver; appAttached: boolean } | null => {
+    try {
+      return a.driverStatus?.() ?? null
+    } catch (err) {
+      a.log(`status — the driver could not say who drives: ${String(err)}`)
+      return null
+    }
+  }
+
+  /** Marks nobody reads: the Host's own doors (R9), which have no reply to correct and no receipt. */
+  const throwaway = (): CallMarks => ({ appRefused: false, commits: 0, effects: 0 })
+
+  /** **One rewrite for both doors** (B1). A forwarded or local refusal that the command turned into its
+   *  own error status is a conflict, carrying its `repair` or `retry` field. Only an error reply is
+   *  rewritten: a command that carried on past a refusal it swallowed (the fire-and-forget ones)
+   *  succeeded, and a success is not a conflict. `handle` answers through this too, which is what lets
+   *  the loop read a retiring spawner's refusal as 409 with `retry` (R15) rather than a failed start. */
+  const answerOf = (r: Reply, marks: CallMarks): Reply =>
+    r.status >= 400 && marks.appRefused ? { status: 409, body: withRepair(r.body, marks) } : r
+  /** A command that threw: a conflict if a refusal is what stopped it, a 500 otherwise. */
+  const failureOf = (err: unknown, marks: CallMarks): Reply => {
+    const message = err instanceof Error ? err.message : String(err)
+    return { status: marks.appRefused ? 409 : 500, body: withRepair({ error: message }, marks) }
+  }
+
+  /**
+   * **The pending-report drain, the app's own, run by the Host** (R4). The same `applyPendingReports`
+   * and the same write-off the app's boot runs (`ipc.ts`, the drain block), so a report is applied —
+   * or refused, or given up on — by one rule whichever process drains it.
+   *
+   * **Each report runs under its worker's own session**, as the app runs it: `send` checks that the
+   * caller is the session the Dispatch names.
+   *
+   * **The held-only-by-report set is taken before the first report is applied**, for the app's
+   * reason: it names the Dispatches the restart cleanup left open only for a report, and asking again
+   * midway would catch Dispatches earlier reports in this very drain opened.
+   */
+  const drain = async (queued: readonly QueuedReport[]): Promise<void> => {
+    if (queued.length === 0) return
+    const heldOnlyByReport = dispatchesHeldOnlyByReport({
+      dispatches: store.get().dispatches,
+      reported: reportedDispatchIdsOf(queued.map((q) => q.report)),
+      alive: a.aliveSessionIds()
+    })
+    const drainedNow = await applyPendingReports({
+      queued,
+      apply: (r) =>
+        handleCommand(depsFor(throwaway()), { sessionId: r.sessionId }, r.cmd, r.args).then((reply) => ({
+          ok: reply.status >= 200 && reply.status < 300,
+          detail: `${reply.status} ${JSON.stringify(reply.body)}`
+        })),
+      writeOff: async (r) => {
+        const dispatchId = String(r.args.dispatchId)
+        if (!heldOnlyByReport.has(dispatchId)) return
+        const res = writeOffDispatch(store.get(), { dispatchId }, a.now())
+        if (!res.closed) return
+        await depsFor(throwaway()).setState(res.state)
+        a.log(
+          `pending reports — dispatch=${dispatchId} is written off: it was left open only for a report that could not be applied, and recovery can take its Task at this start` +
+            (res.interrupted === 'validation' ? '. Its Task was validating and is now gated' : '') +
+            (res.interrupted === 'review' ? '. Its Task was reviewing and is now gated' : '') +
+            (res.stuck ? '. Its Task could not be interrupted and was left as it was' : '')
+        )
+      },
+      log: a.log
+    })
+    a.log(
+      `pending reports — ${drainedNow.applied} applied, ${drainedNow.rejected} refused, ${drainedNow.kept} left for the next start, ${drainedNow.gaveUp} given up on`
+    )
+  }
 
   /** The app handing over its whole state (design §5). Not part of `handleCommand`: it is not a
    *  command anybody types, it writes the state wholesale rather than through a transition, and only
@@ -552,6 +692,9 @@ export function createHostOrch(a: {
     // To the others and not back to the sender: the state came from there, and an app that received
     // its own push would write its own state back over itself.
     from.toOthers({ t: 'orch-state', state, version: committed })
+    // An accepted whole state is a commit like any other (R5): the app may have just added the work
+    // the driver is to place. A refused one above changed nothing, so it kicks nothing.
+    kickDriver()
     return { status: 200, body: { ok: true, version: committed } }
   }
 
@@ -880,7 +1023,7 @@ export function createHostOrch(a: {
     sessionExited: async (e) => {
       await ready()
       // Marks nobody reads: this is not a command, so there is no reply to correct and no receipt.
-      const deps = depsFor({ appRefused: false, commits: 0, effects: 0 })
+      const deps = depsFor(throwaway())
       await handleExit(deps, e)
       // The slot rule is `releaseCoordinator`'s in the app, whole: an exit that only says the session
       // was lost sight of keeps the slot, as `handleExit` keeps the Dispatch. The Host's own registry
@@ -905,6 +1048,30 @@ export function createHostOrch(a: {
       for (const r of st.runs)
         if (r.coordinatorSessionId && !isAlive(r.coordinatorSessionId)) ids.add(r.coordinatorSessionId)
       return [...ids]
+    },
+    handle: async (cmd, args) => {
+      const marks: CallMarks = { appRefused: false, commits: 0, effects: 0 }
+      // Inside the try for `call`'s reason: the loop that asks this must be told, not thrown at.
+      try {
+        await ready()
+        return answerOf(await handleCommand(depsFor(marks), { sessionId: HOST_CALLER }, cmd, args), marks)
+      } catch (err) {
+        return failureOf(err, marks)
+      }
+    },
+    internalDeps: () => depsFor(throwaway()),
+    loaded: () => loaded,
+    drainOnce: async () => {
+      // The load first, and only then the question: a load this call triggers may drain by itself,
+      // and asking before it would drain the same queue twice.
+      await ready()
+      if (drained) return false
+      drained = true
+      // The queue read again: the load's reading is as old as the load, and the app may have drained
+      // some of it since.
+      const queued = await readPendingReports({ dir: pendingReportsDirIn(a.profileDir), log: a.log })
+      await drain(queued)
+      return true
     },
     call: async ({ cmd, args, sessionId, from, request }) => {
       // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
@@ -1005,9 +1172,15 @@ export function createHostOrch(a: {
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.
         await ready()
         const r = await handleCommand(depsFor(marks), { sessionId }, cmd, runArgs)
-        // Only an error reply is rewritten: a command that carried on past a refusal it swallowed
-        // (the fire-and-forget ones) succeeded, and a success is not a conflict.
-        const reply = r.status >= 400 && marks.appRefused ? { status: 409, body: withRepair(r.body, marks) } : r
+        const answered = answerOf(r, marks)
+        // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields
+        // exist only on a Host that drives, and their absence tells a script this one does not.
+        // A driver that cannot say costs the two fields, never the status itself.
+        const driving = cmd === 'status' && answered.status === 200 ? driverStatusNow() : null
+        const reply =
+          driving && typeof answered.body === 'object' && answered.body !== null
+            ? { ...answered, body: { ...answered.body, ...driving } }
+            : answered
         // **An observed replay says `observed`, not `replayed`** (§7, and `orch-result`'s comment).
         // The id had already taken effect and its commit was not repeated, which is what the caller
         // needs to know; but the command *did* run again and this body is what is true now, so the
@@ -1017,8 +1190,7 @@ export function createHostOrch(a: {
         if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), observed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        const reply = { status: marks.appRefused ? 409 : 500, body: withRepair({ error: message }, marks) }
+        const reply = failureOf(err, marks)
         if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), observed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
       }

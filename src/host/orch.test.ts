@@ -40,6 +40,8 @@ import { ProcRegistry } from './procRegistry'
 import { registrySessions } from './sessions'
 import { encodeUserTurn } from '../core/chat/claudeProtocol'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
+import { HostRetiring } from '../core/host/hostRetiring'
+import { pendingReportFileName, pendingReportsDirIn, serializePendingReport } from '../core/orchestration/pendingReports'
 
 const NOW = '2026-09-22T00:00:00.000Z'
 /** 이 Host 가 선 시각. `now` 보다 **앞**이어야 하는 값이다 — `requests show` 가 이것을 실어 주는
@@ -2713,5 +2715,164 @@ describe('the Host handles exits (S2)', () => {
     const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
     await orch.ready()
     expect(orch.orphanedSessions(() => false)).toEqual(['ses_c'])
+  })
+})
+
+describe('the driver’s hooks (R3–R6)', () => {
+  /** 워커 하나가 보고를 남기고 끝난 프로필 — 열린 Dispatch 가 하나, 그 세션은 살아 있지 않다. */
+  const seedOpenDispatch = async (): Promise<{ taskId: string; dispatchId: string; sessionId: string }> => {
+    const job = createJob(emptyState(), { objective: '무언가', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: '하나', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const sessionId = 'ses_gone'
+    const dsp = openDispatch(
+      task.state,
+      { taskId: task.value.id, provider: 'codex', accountId: 'accA', sessionId, cwd: 'D:/p', specPath: 'D:/p/s.md' },
+      NOW
+    )
+    if (!dsp.ok) throw new Error(dsp.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(dsp.state), 'utf8')
+    return { taskId: task.value.id, dispatchId: dsp.value.id, sessionId }
+  }
+  /** pendingDrain.test.ts 의 모양 그대로 — 워커가 앱에 닿지 못해 파일로 남긴 worker_done 하나. */
+  const writeQueuedDone = async (a: { taskId: string; dispatchId: string; sessionId: string }): Promise<void> => {
+    const queue = pendingReportsDirIn(dir)
+    await fs.mkdir(queue, { recursive: true })
+    await fs.writeFile(
+      path.join(queue, pendingReportFileName({ queuedAt: NOW, nonce: 'aaaaaaaa' })),
+      serializePendingReport({
+        queuedAt: NOW,
+        sessionId: a.sessionId,
+        cmd: 'send',
+        args: { type: 'worker_done', taskId: a.taskId, dispatchId: a.dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }
+      }),
+      'utf8'
+    )
+  }
+  const local = (over: Partial<HostLocal> = {}): HostLocal => ({
+    owns: () => true,
+    startWorker: vi.fn(async () => ({ sessionId: 'ses_host', cwd: 'D:/p', specPath: 'D:/specs/s.md' })),
+    startCoordinator: vi.fn(async () => ({ sessionId: 'ses_coord' })),
+    releaseWorker: vi.fn(async () => {}),
+    readWorker: vi.fn(async () => 'worker output'),
+    probeLimit: vi.fn(async () => null),
+    readReviewFile: vi.fn(async () => null),
+    makeRunWorktree: vi.fn(async () => 'D:/wt-run'),
+    mergeWorktrees: vi.fn(async () => ({ ok: true as const, merged: [], uncommitted: 0 })),
+    removeWorktrees: vi.fn(async () => ({ failed: [] })),
+    ...over
+  })
+  const worker = (taskId: string) => ({ task: taskId, agent: 'claude', account: 'acc1', worktree: 'current' })
+
+  it('calls onCommit after a command’s commit and after an accepted state-put, never after a refused one', async () => {
+    const { taskId } = await seed()
+    const onCommit = vi.fn()
+    const orch = orchOver({ onCommit })
+    // task-update's convergence-off commits once and asks nobody (task-create would need an account).
+    await orch.call({ cmd: 'task-update', args: { id: taskId, convergence: 'off' }, sessionId: '' })
+    expect(onCommit).toHaveBeenCalledTimes(1)
+    const got = await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })
+    const { state, version } = got.body as { state: OrchState; version: number }
+    const app = { role: 'app' as const, toOthers: () => {} }
+    await orch.call({ cmd: 'state-put', args: { state, version }, sessionId: '', from: app })
+    expect(onCommit).toHaveBeenCalledTimes(2)
+    await orch.call({ cmd: 'state-put', args: { state, version: 0 }, sessionId: '', from: app })
+    expect(onCommit).toHaveBeenCalledTimes(2)
+  })
+  it('drains the queued reports inside the load when it may, under each worker’s own session', async () => {
+    const { taskId, dispatchId, sessionId } = await seedOpenDispatch() // a Dispatch whose session is not alive
+    await writeQueuedDone({ taskId, dispatchId, sessionId }) // a worker_done in pending-reports, the pendingDrain.test.ts shape
+    const orch = orchOver({ mayDrain: async () => true })
+    // An app's state-get awaits ready(), so what it is handed already has the report applied (R4).
+    const got = await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })
+    expect((got.body as { state: OrchState }).state.tasks.find((t) => t.id === taskId)?.status).toBe('completed')
+    expect(await fs.readdir(pendingReportsDirIn(dir))).toEqual([])
+  })
+  it('awaits mayDrain: a decision that is still being computed is waited for, not read as no (N2)', async () => {
+    const { taskId, dispatchId, sessionId } = await seedOpenDispatch()
+    await writeQueuedDone({ taskId, dispatchId, sessionId })
+    const orch = orchOver({ mayDrain: () => new Promise((r) => setTimeout(() => r(true), 30)) })
+    await orch.ready()
+    expect(orch.state().tasks.find((t) => t.id === taskId)?.status).toBe('completed')
+  })
+  it('leaves the queue to the app when it may not (an old app caused the load), and drains it later once', async () => {
+    const { taskId, dispatchId, sessionId } = await seedOpenDispatch()
+    await writeQueuedDone({ taskId, dispatchId, sessionId })
+    const orch = orchOver({ mayDrain: async () => false })
+    await orch.ready()
+    expect(orch.state().tasks.find((t) => t.id === taskId)?.status).toBe('dispatched')
+    expect(await orch.drainOnce()).toBe(true)
+    expect(orch.state().tasks.find((t) => t.id === taskId)?.status).toBe('completed')
+    expect(await orch.drainOnce()).toBe(false) // once per Host life (C6)
+  })
+  it('calls onLoaded once, after the drain, with loaded() already true (B2)', async () => {
+    await seed()
+    const seen: boolean[] = []
+    const orch: ReturnType<typeof orchOver> = orchOver({ onLoaded: () => seen.push(orch.loaded()) })
+    await orch.ready(); await orch.ready()
+    expect(seen).toEqual([true])
+  })
+  it('adds driver and appAttached to status only when this Host drives (R6)', async () => {
+    await seed()
+    const withIt = orchOver({ driverStatus: () => ({ driver: 'host', appAttached: false }) })
+    expect((await withIt.call({ cmd: 'status', args: {}, sessionId: '' })).body).toMatchObject({ driver: 'host', appAttached: false })
+    const without = await orchOver().call({ cmd: 'status', args: {}, sessionId: '' })
+    expect(without.body).not.toHaveProperty('driver')
+  })
+  it('handle() runs a command under HOST_CALLER after the load', async () => {
+    const { taskId } = await seed()
+    const orch = orchOver()
+    const r = await orch.handle('task-update', { id: taskId, convergence: 'off' })
+    expect(r.status).toBe(200)
+    expect(orch.loaded()).toBe(true)
+    expect(orch.state().tasks.find((t) => t.id === taskId)?.convergenceOff).toBe(true)
+  })
+  // B1: the loop matches 409 + retry (R15), which only the rewrite produces.
+  it('handle() answers a retiring spawner’s refusal as 409 with retry, the way call does', async () => {
+    const { taskId } = await seed()
+    const l = local({ startWorker: vi.fn(async () => { throw refusedBeforeActing(new HostRetiring()) }) })
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const viaHandle = await orch.handle('worker-start', worker(taskId))
+    const viaCall = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
+    expect(viaHandle.status).toBe(409)
+    expect(viaHandle.body).toMatchObject({ retry: expect.any(String) })
+    expect(viaHandle).toEqual(viaCall)
+  })
+
+  // Constraint 14: the three hooks are the driver's, and a driver that throws costs nobody a commit or
+  // a load.
+  it('a throwing onCommit costs neither the command’s commit nor the state-put', async () => {
+    const { taskId } = await seed()
+    const orch = orchOver({ onCommit: () => { throw new Error('driver broke') } })
+    const r = await orch.call({ cmd: 'task-update', args: { id: taskId, convergence: 'off' }, sessionId: '' })
+    expect(r.status).toBe(200)
+    expect(orch.state().tasks.find((t) => t.id === taskId)?.convergenceOff).toBe(true)
+    const got = await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })
+    const { state, version } = got.body as { state: OrchState; version: number }
+    const put = await orch.call({ cmd: 'state-put', args: { state, version }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    expect(put.status).toBe(200)
+    expect(logs.some((l) => l.includes('driver broke'))).toBe(true)
+  })
+  it('a throwing onLoaded costs not the load', async () => {
+    const { jobId } = await seed()
+    const orch = orchOver({ onLoaded: () => { throw new Error('pass broke') } })
+    const r = await orch.call({ cmd: 'jobs-list', args: {}, sessionId: '' })
+    expect((r.body as { id: string }[]).map((j) => j.id)).toEqual([jobId])
+    expect(orch.loaded()).toBe(true)
+    expect(logs.some((l) => l.includes('pass broke'))).toBe(true)
+  })
+  it('a rejecting mayDrain is read as no and costs not the load', async () => {
+    const { taskId, dispatchId, sessionId } = await seedOpenDispatch()
+    await writeQueuedDone({ taskId, dispatchId, sessionId })
+    const orch = orchOver({ mayDrain: async () => { throw new Error('settings broke') } })
+    const r = await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })
+    expect(r.status).toBe(200)
+    expect(orch.state().tasks.find((t) => t.id === taskId)?.status).toBe('dispatched')
+    expect(logs.some((l) => l.includes('settings broke'))).toBe(true)
+    // Read as no, so the drain is still this Host's to run, once.
+    expect(await orch.drainOnce()).toBe(true)
   })
 })
