@@ -27,11 +27,12 @@ import {
   integrateWorktrees,
   reapWorktree,
   worktreeDeps,
+  type Integration,
   type ReapContext
 } from '../core/orchestration/exec/integrateGit'
 import { WorktreeRegistry, defaultWorktreeRoot, isRegistryFile } from '../core/worktrees/registry'
 import { git as realGit } from '../core/worktrees/git'
-import { isPathWithin } from '../core/files/tree'
+import { isPathWithin, isSamePath } from '../core/files/tree'
 import { hostMergesPathIn } from '../core/git/hostMerges'
 import { createMergeRecorder } from './mergeRecords'
 import { RepairNeeded } from '../core/settings/repairNeeded'
@@ -69,6 +70,16 @@ export interface HostWorktrees {
   makeRunWorktree: NonNullable<OrchServerDeps['makeRunWorktree']>
   mergeWorktrees: NonNullable<OrchServerDeps['mergeWorktrees']>
   removeWorktrees: NonNullable<OrchServerDeps['removeWorktrees']>
+  /** The dispatch loop's integration merge (Task 12): integrateWorktrees over this Host's git-op and
+   *  reap, the same pair `mergeWorktrees` sends. */
+  integrate(runRoot: string, merges: string[]): Promise<Integration>
+  /** The dispatch loop's child-run reap (Task 12): rule 11 over this Host's sessions. Never throws. */
+  reap(worktreePath: string): Promise<boolean>
+  /** Whether the registry lists this folder, by `isSamePath` — from memory, as the app's loop asks
+   *  `core.worktrees.list()`. */
+  isRegistered(p: string): boolean
+  /** The paths the registry holds, from memory — the Host path guard's third list (B5). */
+  paths(): string[]
   /** R8, the app's tags. */
   isPathInUse(p: string): string | null
   /** The four internal orch-calls, app only (R1). */
@@ -285,8 +296,12 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     }
   }
 
+  /** The one integrateWorktrees call both doors go through, so the loop's merges and `mergeWorktrees`
+   *  announce and record a merge alike. */
+  const integrateInto = (into: string, paths: string[], opts: Parameters<typeof integrateWorktrees>[2]): Promise<Integration> =>
+    integrateWorktrees(into, paths, opts, { log: d.log, gitOp, reap, git: d.git })
   const deps = worktreeDeps({
-    integrate: (into, paths, opts) => integrateWorktrees(into, paths, opts, { log: d.log, gitOp, reap, git: d.git }),
+    integrate: integrateInto,
     reap,
     log: d.log
   })
@@ -353,6 +368,15 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
       if (detached) throw refusedBeforeActing(new AppUnreachable(DETACHED_APP))
       return deps.removeWorktrees(paths)
     },
+    // No re-read, as `mergeWorktrees`: a merge never reads the registry. The loop's options are the
+    // app's own (`integrateWorktrees(runRoot, merges, {}, gitCtx)` in ipc.ts).
+    integrate: async (runRoot, merges) => {
+      await checkGit()
+      return integrateInto(runRoot, merges, {})
+    },
+    reap,
+    isRegistered: (p) => registry.list().some((w) => isSamePath(w.path, p)),
+    paths: () => registry.list().map((w) => w.path),
     isPathInUse,
     call: async (cmd, args, from) => {
       const handle = calls[cmd]

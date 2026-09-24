@@ -105,6 +105,14 @@ export interface HostSpawner extends HostLocal {
   closeAndSettle(ms: number): Promise<void>
   /** How many session records its SessionManager holds (M3): the live ones, once exits are forgotten. */
   trackedSessions(): number
+  /** The dispatch loop's busy verdict (Task 12): what this session's pty last printed as its title —
+   *  true busy, false idle, null for a session whose output never carried a title here. The raw
+   *  BusyScanner value, as the app's loop reads its own busyState. */
+  sessionBusy(sessionId: string): boolean | null
+  /** Writes into the live pty of this session. False when the registry holds no live pty for it. */
+  typeInto(sessionId: string, text: string): boolean
+  /** True from the moment `closeAndSettle` is called (R15): the driver starts nothing after that. */
+  isRetiring(): boolean
 }
 
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
@@ -637,6 +645,21 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       }
       return true
     },
-    trackedSessions: () => sessions.list().length
+    trackedSessions: () => sessions.list().length,
+    sessionBusy: (sessionId) => busyOf.get(sessionId)?.busy ?? null,
+    typeInto: (sessionId, text) => {
+      const p = registry.sessionPty(sessionId)
+      if (!p) return false
+      // A pty that went away under the write (ConPTY can throw here) is a nudge that did not land, not
+      // a failed pass: the loop's nudge has no catch of its own.
+      try {
+        registry.write(p, text)
+        return true
+      } catch (err) {
+        log(`could not type into session ${sessionId}: ${String(err)}`)
+        return false
+      }
+    },
+    isRetiring: () => retiring
   }
 }

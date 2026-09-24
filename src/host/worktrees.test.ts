@@ -511,3 +511,38 @@ describe('loadWorktreesIfSpawning', () => {
     expect(logs.some((l) => /worktrees\.json could not be loaded at Host start.*disk gone/.test(l))).toBe(true)
   })
 })
+
+// Task 12: the four members the Host's dispatch loop takes (integrate, reap, isRegisteredWorktree)
+// and the Host path guard's third list (paths(), B5).
+describe('createHostWorktrees — the loop’s members', () => {
+  it('paths() lists what fork registered, and isRegistered compares with isSamePath', async () => {
+    const h = rig()
+    expect(h.wt.paths()).toEqual([])
+    const a = await h.wt.fork({ repoPath: repo, name: 'a' })
+    expect(h.wt.paths()).toEqual([a])
+    expect(h.wt.isRegistered(a)).toBe(true)
+    // A spelling isSamePath folds (case on win32/darwin, a trailing separator everywhere) is the same folder.
+    const other = process.platform === 'linux' ? a + path.sep : a.toUpperCase()
+    expect(isSamePath(other, a)).toBe(true)
+    expect(h.wt.isRegistered(other)).toBe(true)
+    expect(h.wt.isRegistered(path.join(home, 'wt', 'nowhere'))).toBe(false)
+  })
+  it('integrate sends the same git-op pair mergeWorktrees does, around a real merge', async () => {
+    const sent: HostMessage[] = []
+    const h = rig({ broadcast: (m) => sent.push(m) })
+    const a = await h.wt.fork({ repoPath: repo, name: 'a' }); commitIn(a, 'a')
+    const headBefore = gitSync(repo, ['rev-parse', 'HEAD']).trim()
+    expect(await h.wt.integrate(repo, [a])).toEqual({ kind: 'merged', uncommitted: 0 })
+    expect(gitSync(repo, ['rev-parse', 'HEAD']).trim()).not.toBe(headBefore)
+    const ops = sent.filter((m): m is Extract<HostMessage, { t: 'git-op' }> => m.t === 'git-op')
+    expect(ops.map((m) => [m.phase, m.kind, m.cwd])).toEqual([['begin', 'job-merge', repo], ['end', 'job-merge', repo]])
+    expect(ops[0].op).toBe(ops[1].op)
+  })
+  it('reap removes a finished worktree the way the removal path does, and never throws', async () => {
+    const h = rig()
+    const a = await h.wt.fork({ repoPath: repo, name: 'a' })
+    expect(await h.wt.reap(a)).toBe(true)
+    expect(h.wt.paths()).toEqual([])
+    expect(await h.wt.reap(path.join(home, 'wt', 'nowhere'))).toBe(false)
+  })
+})

@@ -1251,6 +1251,9 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.failed': 'Could not create the job',
   'jobs.gate.noAccountAssigned': 'This Task has no account, so there is no way to tell which agent should run it — assign one',
   'jobs.gate.noAccount': 'No {provider} account is logged in, so this Task cannot start',
+  // The Host's lost-worker Gate (R16): a worker that ended unreported while no app was attached, in a Run
+  // with no coordinator. Nobody else will look after that Task, so a person is asked.
+  'jobs.gate.workerLostNoApp': 'The worker for this Task was lost (dispatch {dispatch}) while no Astera was open to recover it. Resolve this Gate to start it again.',
   // Fires when the **first** account in this Task's list cannot be used, and when nothing in the list
   // can — the first one is unusable either way, so one message covers both. The accounts after it are
   // never promoted into its place (dispatchAccount.ts: listing one later is consent to roll onto it

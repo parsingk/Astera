@@ -1196,6 +1196,7 @@ export const es: Catalog = {
   'jobs.new.failed': 'No se pudo crear el trabajo',
   'jobs.gate.noAccountAssigned': 'Esta tarea no tiene cuenta, así que no hay forma de saber qué agente debe ejecutarla — asigna una',
   'jobs.gate.noAccount': 'Ninguna cuenta de {provider} tiene la sesión iniciada, así que esta Task no puede empezar',
+  'jobs.gate.workerLostNoApp': 'El worker de esta Task se perdió (dispatch {dispatch}) mientras ningún Astera estaba abierto para recuperarlo. Resuelve esta Gate para volver a iniciarlo.',
   'jobs.gate.assignedAccountUnusable':
     'No se puede usar la primera cuenta asignada a esta Task, y las siguientes solo están ahí para pasar a ellas más tarde — vuelve a iniciar sesión en esa cuenta o cambia la lista de cuentas de esta Task',
   // NewTaskModal.tsx — el formulario en el que se convierte el panel inferior de RunDetail

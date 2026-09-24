@@ -1180,6 +1180,7 @@ export const ja: Catalog = {
   'jobs.new.failed': '作業を作れませんでした',
   'jobs.gate.noAccountAssigned': 'この Task にアカウントが指定されていないため、どのエージェントで起動するか判断できません — アカウントを指定してください',
   'jobs.gate.noAccount': '{provider} アカウントにログインしていないため、この Task を開始できません',
+  'jobs.gate.workerLostNoApp': 'この Task のワーカーは、復旧できる Astera が開いていない間に失われました（dispatch {dispatch}）。この Gate を解決すると、もう一度開始します。',
   'jobs.gate.assignedAccountUnusable':
     'この Task に指定された最初のアカウントが使用できず、その後ろのアカウントは後で切り替えるための順番にすぎません — そのアカウントに再ログインするか、この Task のアカウント一覧を変更してください',
   // NewTaskModal.tsx — Task を組み立てている間、詳細ウィンドウの下段(.detail-events)が変わるフォーム。

@@ -2,22 +2,18 @@
 // strategy, journals the decision, and hands it to execute.ts. Nothing here decides or carries out a
 // strategy — those live in core/recovery/decide.ts and main/recovery/execute.ts, the same split the
 // orchestration guide draws between "what happened", "what to do" and "doing it".
-import { jobOf, runGatedForTask, runIdOf, type OrchState } from '../../core/orchestration/state'
+import { jobOf, type OrchState } from '../../core/orchestration/state'
 import { checkConfigIdsOf, policyOf } from '../../core/orchestration/convergence'
-import { DEFAULT_CONCURRENCY, type Dispatch } from '../../core/orchestration/types'
+import { DEFAULT_CONCURRENCY } from '../../core/orchestration/types'
 import type { GitFacts, LostAttempt, RecoveryDecision } from '../../core/recovery/types'
 import { decideRecovery } from '../../core/recovery/decide'
 import type { ContinuityEvent, ContinuityEventType } from '../../core/continuity/events'
 import type { CheckpointRow, ContinuityJournal, JournalEventRow, RecoveryActionRow } from '../continuity/journal'
 import type { ExecuteResult } from './execute'
 
-/** What `candidates` found, before a decision has been asked for. */
-export interface LostAttemptSeed {
-  runId: string
-  taskId: string
-  /** The Dispatch that was lost — the new attempt (if any) links back to it through `retryOf`. */
-  dispatch: Dispatch
-}
+// `candidates` and its seed live in core now (the Host's lost-worker Gate asks the same question, R16).
+export { candidates, type LostAttemptSeed } from '../../core/recovery/candidates'
+import { candidates, type LostAttemptSeed } from '../../core/recovery/candidates'
 
 export interface ReconcilerDeps {
   getState(): OrchState
@@ -29,45 +25,6 @@ export interface ReconcilerDeps {
   log(m: string): void
   /** ISO clock. The journal holds no clock of its own — every write takes its time from the caller. */
   now(): string
-}
-
-/** A Dispatch this sweep can act on: closed on its own (no `closedBy` — a person's stop, abandon or
- *  pause is left alone), and with no reported outcome. */
-const isLost = (d: Dispatch): boolean =>
-  d.endedAt !== undefined && d.outcome === undefined && d.closedBy === undefined
-
-/** Every dispatched Task whose Run is live (not paused, not a schedule template) and whose most
- *  recent Dispatch was lost — one seed per Task, and none at all when the Task already has an open
- *  Dispatch (a fresh attempt is already running).
- *
- *  **The most recent Dispatch, then the lost test — not the most recent lost one.** Filtering the
- *  person-closed attempts out first would reach past a stop to an older crash: a worker crashes, the
- *  boot sweep restarts it, the person stops the restart they did not want, and the next boot
- *  recovers the original attempt anyway. That is exactly what `Dispatch.closedBy` exists to prevent,
- *  and through `worker-abandon` it would put a second agent in a worktree whose resources may still
- *  be live. */
-export function candidates(state: OrchState): LostAttemptSeed[] {
-  const out: LostAttemptSeed[] = []
-  for (const task of state.tasks) {
-    if (task.status !== 'dispatched') continue
-    // The Run gates, shared with the two other places that put a session on a Task
-    // (`runGatedForTask`, core/orchestration/state.ts). `pendingStart` is the one that looks
-    // redundant here — it is a one-way gate `startRun` clears, so a Run holding it cannot have
-    // dispatched anything to lose. The shared predicate keeps it all the same, because
-    // orchestration.json outlives the process and is hand-edited, and recovery is a second door into
-    // starting workers: it holds to the same standard.
-    if (runGatedForTask(state, task)) continue
-    const own = state.dispatches.filter((d) => d.taskId === task.id)
-    // A `dispatched` Task always has one — openDispatch writes the Dispatch and the status together.
-    // The guard is here because orchestration.json outlives the process and is hand-edited, the same
-    // reason schedule.ts refuses to infer a Task's account from the command that made it.
-    if (own.length === 0) continue
-    if (own.some((d) => d.endedAt === undefined)) continue
-    const latest = own.reduce((a, b) => (b.startedAt > a.startedAt ? b : a))
-    if (!isLost(latest)) continue
-    out.push({ runId: runIdOf(task), taskId: task.id, dispatch: latest })
-  }
-  return out
 }
 
 /** Recovery is a second door into starting workers, so it obeys the scheduler's concurrency rule too

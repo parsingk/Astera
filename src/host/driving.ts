@@ -1,0 +1,291 @@
+// The Host drives Jobs (S4+S5 design §4.1, §4.3, D2, D6; plan rulings R15–R17, R22, N1, N2, N4, N5).
+//
+// **What starts work, and when.** One dispatch loop — the app's own module (dispatchLoop.ts), built
+// here over the Host's doors — runs on four triggers:
+//
+// - **the load** (`onLoaded`, B2): the first command that needs the state loads it, and the pass
+//   after the load is what picks up the Tasks that were ready when the Host started;
+// - **every commit** (`kick`, R5): the Host's composition hands `orch.onCommit` to `kick`, so a
+//   command, the Host's own commit and an accepted `state-put` each run a pass;
+// - **an app attaching or leaving** (`appsChanged`, N1);
+// - **the 15-second tick** (`tick`), which picks up what nobody committed (a Task made ready behind
+//   the Host's back, the migration marker an app wrote), nudges sleeping coordinators, fires
+//   schedules (only with an app attached, D2), and sweeps stale spec files (R22).
+//
+// **Who drives is computed, never held** (`driverOf`, §4.3): an attached app that keeps dispatch
+// drives; otherwise the F62 marker decides. `last` is the value the last computation left, starts
+// `'parked'` (N2), and is what `drives()` answers synchronously for `drive.owns()` — so an app's hello
+// or close flips it in the same turn (N1) rather than a file read later.
+//
+// **The handover** — any change to `'host'` once the state is in memory, and the first time the
+// state is in memory while the Host drives (a Host whose first contact was an accepted `state-put`
+// never loads, so `onLoaded` never fires for it) — drains the pending reports once (not on the
+// not-migrated → migrated change, N4), runs the resume sweep, and starts any open repair Dispatch
+// whose start never happened (N1's belt; only with no app attached, see `takeOver`).
+//
+// **The lost-worker Gate** (D6, R16, N5) is asked on every pass, only while no app is attached: an app
+// has its own reconciler, which reads the journal the Host cannot (D8).
+//
+// Imports only core modules and node builtins: this bundles into the Host.
+import path from 'node:path'
+import { t } from '../core/i18n'
+import { HOST_YIELD_DISPATCH } from '../core/host/protocol'
+import { driverOf, readDispatchGate, type DispatchGate, type Driver } from '../core/host/driver'
+import { createDispatchLoop, ORCH_FIRE_TICK_MS } from '../core/orchestration/exec/dispatchLoop'
+import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
+import { lostWithNobody } from '../core/orchestration/lostGate'
+import type { HostChecks } from './checks'
+import type { HostOrch } from './orch'
+import type { PtyRegistry } from './registry'
+import type { HostSpawner } from './spawner'
+import type { HostWorktrees } from './worktrees'
+
+export interface HostDriving {
+  /** Computes now, reading the settings file (used by mayDrain, N2). */
+  driver(): Promise<Driver>
+  /** Synchronous, for owns(): the last value. Starts 'parked' (N2); flipped in the same turn as an
+   *  app's hello or close by appsChanged (N1); recomputed by every kick and tick. */
+  drives(): boolean
+  kick(why: string): void
+  appsChanged(): void
+  /** createHostOrch's onLoaded (B2): the after-load pass. */
+  onLoaded(): void
+  tick(): Promise<void>
+  status(): { driver: Driver; appAttached: boolean }
+  dispose(): void
+}
+
+export function createHostDriving(d: {
+  profileDir: string
+  orch: Pick<HostOrch, 'handle' | 'internalDeps' | 'loaded' | 'drainOnce' | 'state'>
+  server: { hasApp(): boolean; appsKeep(duty: string): boolean }
+  spawner: Pick<HostSpawner, 'sessionBusy' | 'typeInto' | 'isRetiring' | 'inFlight'>
+  worktrees: Pick<HostWorktrees, 'fork' | 'integrate' | 'reap' | 'isRegistered'>
+  /** B3: the loop's accounts, login and sync lang come from the checks. */
+  checks: Pick<HostChecks, 'resumeSweep' | 'accounts' | 'loginStatus' | 'langNow' | 'lang'>
+  /** The handover belt (N1): starts one open repair Dispatch that has no spec yet. */
+  startRepair(a: { dispatchId: string }): void
+  registry: Pick<PtyRegistry, 'sessionPty' | 'list'>
+  specsDir: string
+  log(m: string): void
+  nowMs(): number
+  /** Test seam; defaults to setInterval(ORCH_FIRE_TICK_MS), unref'd. */
+  every?(ms: number, fn: () => void): () => void
+  /** Test seam (B6); defaults to readDispatchGate. */
+  readGate?(settingsPath: string): Promise<DispatchGate>
+}): HostDriving {
+  const settingsPath = path.join(d.profileDir, 'app-settings.json')
+  const readGate = d.readGate ?? readDispatchGate
+  /** A log line never throws (constraint 14): the driver's work does not depend on the log. */
+  const log = (m: string): void => {
+    try {
+      d.log(m)
+    } catch {
+      /* nowhere to say it */
+    }
+  }
+
+  /** The driver the last computation left (N2: parked until the first one). */
+  let last: Driver = 'parked'
+  /** The gate the last computation read. `appsChanged` recomputes from it without reading the file. */
+  let lastGate: DispatchGate = 'no-settings'
+  /** Whether the handover has run for this stretch of driving. Cleared whenever the Host stops driving,
+   *  so each change back to `'host'` hands over again; set in the same turn as the change, so two
+   *  computations that both see it cannot both hand over. */
+  let handedOver = false
+  /** The handover in progress. A pass waits for it, so the drain it runs comes before any start. */
+  let handover: Promise<void> = Promise.resolve()
+  /** Which computation is the latest. One that started earlier and finished later is dropped, so an old
+   *  read of the settings file cannot overwrite a newer one. */
+  let computing = 0
+
+  /** The loop's own check, asked on entry and before each slot (§4.3). */
+  const mayStart = (): boolean => last === 'host' && !d.spawner.isRetiring() && d.orch.loaded()
+
+  const takeOver = async (why: string, drain: boolean): Promise<void> => {
+    // `drainOnce` answers false when the load already drained (C6), and logs a failure of its own.
+    if (drain) await d.orch.drainOnce()
+    try {
+      d.checks.resumeSweep(why)
+    } catch (err) {
+      log(`the resume sweep failed to start: ${String(err)}`)
+    }
+    // **N1's belt, only with no app attached.** A repair Dispatch opened by an app that then left
+    // before starting it is stranded: nobody else starts it. With an app attached it may be that app's
+    // own start in progress (a person's retry-once, R20), and `performRepair` has no in-flight guard, so
+    // starting it here as well would put two workers on one Dispatch.
+    if (d.server.hasApp()) return
+    for (const disp of d.orch.state().dispatches) {
+      if (!disp.repair || disp.endedAt || disp.specPath) continue
+      try {
+        log(`handover: starting the repair dispatch=${disp.id}, which was opened but never started`)
+        d.startRepair({ dispatchId: disp.id })
+      } catch (err) {
+        log(`handover: the repair dispatch=${disp.id} could not be started: ${String(err)}`)
+      }
+    }
+  }
+
+  /** Sets `last` **synchronously**, then hands over when this is the Host taking the drive with the
+   *  state in memory. `gates` is the change the computation saw (null from `appsChanged`, which reads
+   *  no file): the not-migrated → migrated change out of parked is the one handover with no drain (N4)
+   *  — the app that is migrating leaves the queue alone, and so does the Host. */
+  const apply = (next: Driver, gates: { was: DispatchGate; now: DispatchGate } | null, why: string): void => {
+    const was = last
+    last = next
+    if (next !== 'host') {
+      handedOver = false
+      return
+    }
+    if (handedOver || !d.orch.loaded()) return
+    handedOver = true
+    const migrating = was === 'parked' && gates?.was === 'not-migrated' && gates.now === 'migrated'
+    handover = handover
+      .then(() => takeOver(why, !migrating))
+      .catch((err) => log(`the handover failed: ${String(err)}`))
+  }
+
+  /** Reads the settings file and the language, then applies the driver. `checks.lang()` refreshes
+   *  `langNow` (B3), which is otherwise the OS locale for the Host's life; it is awaited beside the
+   *  gate so the Gate a pass writes next is in the profile's language. */
+  const compute = async (why = 'the Host drives now'): Promise<Driver> => {
+    const mine = ++computing
+    const [gate] = await Promise.all([
+      readGate(settingsPath),
+      d.checks.lang().catch((err: unknown) => log(`could not read the language: ${String(err)}`))
+    ])
+    if (mine !== computing) return last
+    const was = lastGate
+    lastGate = gate
+    apply(driverOf({ appKeepsDispatch: d.server.appsKeep(HOST_YIELD_DISPATCH), gate }), { was, now: gate }, why)
+    return last
+  }
+
+  /** A reap only while this Host still drives (the two-writers risk): the loop asks `mayStart` once
+   *  before its clean-up loop (Task 8 m5), and each reap awaits a session close and git, so an app that
+   *  takes the drive between two of them must not find the Host still removing folders it may remove
+   *  too. */
+  const reapWhileDriving = async (p: string): Promise<boolean> => {
+    if (!mayStart()) {
+      log(`worktree ${p} left for the process that drives now`)
+      return false
+    }
+    return d.worktrees.reap(p)
+  }
+
+  // C5: every member is read at the call, never copied at construction.
+  const loop = createDispatchLoop({
+    handle: (cmd, args) => d.orch.handle(cmd, args),
+    getState: () => d.orch.state(),
+    accounts: () => d.checks.accounts(),
+    loginStatus: (id) => d.checks.loginStatus(id),
+    lang: () => d.checks.langNow(),
+    forkRunWorktree: (a) => d.worktrees.fork(a),
+    integrate: (runRoot, merges) => d.worktrees.integrate(runRoot, merges),
+    reap: reapWhileDriving,
+    isRegisteredWorktree: (p) => d.worktrees.isRegistered(p),
+    sessionAlive: (id) => d.registry.sessionPty(id) !== null,
+    sessionBusy: (id) => d.spawner.sessionBusy(id),
+    typeInto: (id, text) => {
+      d.spawner.typeInto(id, text)
+    },
+    mayStart,
+    log,
+    nowMs: () => d.nowMs()
+  })
+
+  /** Whether a lost-worker pass is running: the Gate it opens commits, and that commit's pass must not
+   *  gate the same Task a second time while the first is still asking. */
+  let gating = false
+  /** D6/R16: a Gate on every lost worker nobody else will look after — only while no app is attached
+   *  (an app's reconciler decides then, journal in hand, D8). Asked again before each Gate. */
+  const gateLost = async (): Promise<void> => {
+    if (gating || d.server.hasApp()) return
+    gating = true
+    try {
+      for (const seed of lostWithNobody(d.orch.state())) {
+        if (!mayStart() || d.server.hasApp()) return
+        const question = t(d.checks.langNow(), 'jobs.gate.workerLostNoApp', { dispatch: seed.dispatch.id })
+        const r = await d.orch.handle('gate-create', { task: seed.taskId, question })
+        if (r.status >= 400) log(`lost worker task=${seed.taskId}: the Gate was refused (${r.status} ${JSON.stringify(r.body)})`)
+        else log(`lost worker task=${seed.taskId} dispatch=${seed.dispatch.id}: no Astera is open to recover it — gated`)
+      }
+    } finally {
+      gating = false
+    }
+  }
+
+  const pass = async (): Promise<void> => {
+    await handover
+    if (!mayStart()) return
+    await gateLost()
+    await loop.run()
+  }
+
+  const kick = (why: string): void => {
+    void (async () => {
+      await compute()
+      await pass()
+    })().catch((err) => log(`the driver's pass (${why}) failed: ${String(err)}`))
+  }
+
+  /** The live session ids this Host's registry holds — the spec sweep's live set. */
+  const liveSessions = (): Set<string> => {
+    const ids = new Set<string>()
+    for (const e of d.registry.list()) if (e.alive && e.meta?.kind === 'session') ids.add(e.meta.id)
+    return ids
+  }
+
+  const tick = async (): Promise<void> => {
+    try {
+      await compute()
+      if (mayStart()) {
+        await pass()
+        await loop.nudge()
+      }
+      // **D2 and R17.** Schedules fire only while an app is attached, and only from the process that
+      // drives; `fireTick` does not ask `mayStart` itself (Task 8 m6), so it is asked here, after the
+      // awaits above. Otherwise the arming is dropped, so the first tick that may fire again only arms
+      // — a time that passed while this Host did not fire is not fired late.
+      if (mayStart() && d.server.hasApp()) await loop.fireTick()
+      else loop.forgetArming()
+      // R22: the spec pile-up, narrowly — no app attached (an app writes specs too) and no spawn of
+      // this Host's in flight (its spec is on disk before its Dispatch names it).
+      if (!d.server.hasApp() && d.spawner.inFlight() === 0 && d.orch.loaded()) {
+        const removed = await sweepStaleSpecFiles({ dir: d.specsDir, state: d.orch.state(), live: liveSessions() })
+        if (removed.length > 0) log(`spec files — swept ${removed.length} stale file(s) on the tick`)
+      }
+    } catch (err) {
+      log(`tick failed: ${String(err)}`)
+    }
+  }
+
+  const every =
+    d.every ??
+    ((ms: number, fn: () => void): (() => void) => {
+      const h = setInterval(fn, ms)
+      h.unref?.()
+      return () => clearInterval(h)
+    })
+  const stop = every(ORCH_FIRE_TICK_MS, () => void tick())
+
+  return {
+    driver: () => compute(),
+    drives: () => last === 'host',
+    kick,
+    appsChanged: () => {
+      // N1: in the same turn as the hello or the close, from the gate already read.
+      apply(driverOf({ appKeepsDispatch: d.server.appsKeep(HOST_YIELD_DISPATCH), gate: lastGate }), null, 'the Host drives now')
+      kick('an app attached or left')
+    },
+    onLoaded: () => {
+      void (async () => {
+        await compute('the Host loaded')
+        await pass()
+      })().catch((err) => log(`the after-load pass failed: ${String(err)}`))
+    },
+    tick,
+    status: () => ({ driver: last, appAttached: d.server.hasApp() }),
+    dispose: () => stop()
+  }
+}

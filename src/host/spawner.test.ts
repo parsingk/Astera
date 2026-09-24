@@ -553,3 +553,39 @@ describe('createHostSpawner — retiring', () => {
     expect(h.spawner!.inFlight()).toBe(0)
   })
 })
+
+// Task 12: what the dispatch loop asks of a session, over this registry (the app answers the same
+// three from its own busyState, core.sessions.write, and whether its orch server stands).
+describe('createHostSpawner — the loop’s session doors', () => {
+  const BUSY = '\x1b]0;\u2802 Working\x07'
+  const IDLE = '\x1b]0;\u2733 Claude Code\x07'
+  it('reads a session busy from the braille title its pty printed, idle from ✳, and null for one it never saw', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    const r = await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    expect(h.spawner!.sessionBusy(r.sessionId)).toBeNull()
+    h.spawned[0].pty.emit(BUSY)
+    expect(h.spawner!.sessionBusy(r.sessionId)).toBe(true)
+    h.spawned[0].pty.emit(IDLE)
+    expect(h.spawner!.sessionBusy(r.sessionId)).toBe(false)
+    expect(h.spawner!.sessionBusy('never-here')).toBeNull()
+  })
+  it('types into the live pty of a session it holds, and answers false for one the registry does not hold', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    const r = await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    const write = vi.spyOn(h.registry, 'write')
+    expect(h.spawner!.typeInto(r.sessionId, 'hello')).toBe(true)
+    expect(write).toHaveBeenCalledWith(h.registry.sessionPty(r.sessionId), 'hello')
+    write.mockClear()
+    expect(h.spawner!.typeInto('never-here', 'hello')).toBe(false)
+    expect(write).not.toHaveBeenCalled()
+  })
+  it('says it is retiring from the moment closeAndSettle is called', async () => {
+    const h = rig()
+    expect(h.spawner!.isRetiring()).toBe(false)
+    const settling = h.spawner!.closeAndSettle(1_000)
+    expect(h.spawner!.isRetiring()).toBe(true)
+    await settling
+  })
+})
