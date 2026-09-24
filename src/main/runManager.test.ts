@@ -403,6 +403,18 @@ describe('RunManager', () => {
       spawned[1].pty.outlivesApp = true
       expect(mgr.runningAppOwned()).toEqual([{ cwd: 'D:/p', configName: 'dev' }])
     })
+
+    // Fix round 2, N1: `this.runs` keeps a finished run until its row is dismissed, so without this
+    // filter a merged worktree would read as still in use at every later reap until someone closed
+    // that row — runningAppOwned must agree with listActive() about what "still running" means.
+    it('runningAppOwned does not count an exited local run', () => {
+      const { mgr, spawned } = setup('linux')
+      mgr.start(startOpts({ projectPath: 'D:/p', command: 'npm run dev' }))
+      const finished = mgr.start(startOpts({ projectPath: 'D:/b', projectName: 'b', config: { ...cfg, name: 'build' } }))
+      spawned[1].pty.exitCb({ exitCode: 0 })
+      expect(mgr.get(finished.runId)?.status).toBe('exited') // still listed, just not "running"
+      expect(mgr.runningAppOwned()).toEqual([{ cwd: 'D:/p', configName: 'dev' }])
+    })
   })
 
   it('exit flips the status to exited with the code and a timestamp, and emits it', () => {

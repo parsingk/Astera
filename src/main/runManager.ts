@@ -375,8 +375,15 @@ export class RunManager {
    *  SessionManager.runningAppOwned, for the same reason: HOST_ACT_PATH_IN_USE (protocol.ts) asks what
    *  this app runs itself, and a Host-backed run is already visible to the Host that asked. `cwd`, not
    *  `projectPath`: a run configured with a working directory outside its project is in use where it
-   *  actually runs, matching how the Host itself counts a pty (isPathInUse, src/host/worktrees.ts). */
+   *  actually runs, matching how the Host itself counts a pty (isPathInUse, src/host/worktrees.ts).
+   *
+   *  **Excludes an exited run** (fix round 2, N1): `this.runs` keeps a finished run until its row is
+   *  dismissed, so without this a merged worktree would read as still in use at every later reap until
+   *  someone closed that row. `listActive()` excludes exited the same way; `stopping` stays counted in
+   *  both, because a process tree still being torn down still holds the folder. */
   runningAppOwned(): Array<{ cwd: string; configName: string }> {
-    return [...this.runs.values()].filter((r) => !r.pty.outlivesApp).map((r) => ({ cwd: r.cwd, configName: r.status.configName }))
+    return [...this.runs.values()]
+      .filter((r) => !r.pty.outlivesApp && r.status.status !== 'exited')
+      .map((r) => ({ cwd: r.cwd, configName: r.status.configName }))
   }
 }
