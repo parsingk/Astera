@@ -550,7 +550,8 @@ export function usageFor(
   }
   if (second !== undefined) return { error: `${first} takes no subcommand` }
   // Not a public command. The coordinator's own commands land here, and they have usage too: the
-  // entry `agent-context` prints (S4+S5 tidy: `host stop` refusals send a person to `worker-release`).
+  // entry `agent-context` prints (S4+S5 tidy: closing finished workers before `host stop` needs
+  // `worker-release`, and its `--help` said "no usage").
   // A typo lands here too, and the command table is one flag away.
   if (!Object.hasOwn(USAGE, first)) {
     const session = sessionUsage(first)
