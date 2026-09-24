@@ -18,6 +18,7 @@
 //
 // **Imports nothing from electron, src/main or src/renderer**: this runs on a plain node.exe in the
 // packaged app.
+import { execFile } from 'node:child_process'
 import path from 'node:path'
 import type { HostMessage } from '../core/host/protocol'
 import { hostWorkerBaseEnv } from '../core/host/spawn'
@@ -38,6 +39,7 @@ import { makeDescriptors } from '../core/providers/descriptor'
 import { hostPathGuard } from '../core/run/hostPathGuard'
 import { readStoredRunConfigs } from '../core/run/runConfigsFile'
 import { RunManager } from '../core/run/runManager'
+import { treeKillCommand } from '../core/run/kill'
 import { readFileRetrying } from '../core/renameRetry'
 import { settingsObjectOf } from '../core/settings/settingsObject'
 import type { Account } from '../core/types'
@@ -63,8 +65,17 @@ export interface HostChecks {
    *  no other door that stops a run, so both happen here, in that order, and the exit the kill causes
    *  is read as "not proven" rather than as a failed check. */
   stopValidation(runId: string): boolean
+  /** Kills every live validation run in this Host's registry that this Host's own RunManager did not
+   *  start (the app's, left behind when the app went), and waits for each to exit, up to
+   *  `FOREIGN_KILL_WAIT_MS`. Resolves with how many it killed. Their exits record nothing. Called by
+   *  the driver before the sweep it runs when an app leaves (Task 14 round 2). */
+  stopForeignValidations(): Promise<number>
   resumeSweep(why: string): void
 }
+
+/** How long stopForeignValidations waits for a killed run to exit. taskkill is asynchronous, and a
+ *  tree that will not die must not hold the sweep forever: after this the sweep runs anyway. */
+export const FOREIGN_KILL_WAIT_MS = 5000
 
 export interface HostChecksDeps {
   profileDir: string
@@ -87,6 +98,8 @@ export interface HostChecksDeps {
    *  the Host's own `killAll`, not the check's result, so it is handed to the validator as lost sight:
    *  nothing is recorded, and the Task stays `validating` for the successor (review of Task 13, I2). */
   retiring?: () => boolean
+  /** Test seam: FOREIGN_KILL_WAIT_MS. */
+  foreignKillWaitMs?: number
 }
 
 /** The OS locale as node reports it — what the app's `app.getLocale()` stands in for (R13). */
@@ -259,6 +272,73 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     }
   })
 
+  /** Who waits for which pty to exit (stopForeignValidations). One registry listener serves them all. */
+  const exitWaiters = new Map<string, () => void>()
+  registry.onExit((ptyId) => {
+    const done = exitWaiters.get(ptyId)
+    if (!done) return
+    exitWaiters.delete(ptyId)
+    done()
+  })
+  const killRunner = d.killRunner ?? ((cmd) => execFile(cmd.file, cmd.args, { windowsHide: true }, () => {}))
+
+  /**
+   * **The app's own validation runs, after the app has gone** (Task 14 round 2). The app's RunManager
+   * opens its runs through the Host's pty factory while the Host is live, so a validation the app's
+   * validator started (recovery's recheck, D8) is a pty in this registry and outlives the app. Nobody
+   * settles it any more: the app validator's pending entry and its timeout died with it, and this
+   * Host's validator ignores the exit of a run it did not start (the onExit handler above). Left, it
+   * clashes with the check the driver's sweep starts in the same folder, and a hung one runs forever
+   * and keeps the Host from being replaced.
+   *
+   * **The marker is the run's own note**: `kind: 'run'` and `restore.validation === true`, which the
+   * RunManager writes for a validation run and nothing else (runManager.ts; ▶'s decideStart and the
+   * app's run.stop read the same field). "Foreign" is `runs.get(id) === null`: this Host's RunManager
+   * knows every run it started, and only those. A person's ordinary run carries no `validation`, so it
+   * is never touched.
+   */
+  const stopForeignValidations = async (): Promise<number> => {
+    const foreign = registry
+      .list()
+      .filter(
+        (e) =>
+          e.alive &&
+          e.meta?.kind === 'run' &&
+          e.meta.restore?.validation === true &&
+          runs.get(e.meta.id) === null
+      )
+    if (foreign.length === 0) return 0
+    const bound = d.foreignKillWaitMs ?? FOREIGN_KILL_WAIT_MS
+    await Promise.all(
+      foreign.map((e) => {
+        const exited = new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => {
+            exitWaiters.delete(e.id)
+            resolve(false)
+          }, bound)
+          exitWaiters.set(e.id, () => {
+            clearTimeout(timer)
+            resolve(true)
+          })
+        })
+        log(`validation run=${e.meta!.id} was started by an app that has gone — killing it before this Host checks the Task`)
+        try {
+          const cmd = treeKillCommand(d.platform, e.pid)
+          if (cmd) killRunner(cmd)
+          else registry.kill(e.id)
+        } catch (err) {
+          log(`validation run=${e.meta!.id} could not be killed: ${String(err)}`)
+        }
+        // Already gone between the list and the kill: nothing to wait for.
+        if (registry.exitCodeOf(e.id) !== null) exitWaiters.get(e.id)?.()
+        return exited.then((ok) => {
+          if (!ok) log(`validation run=${e.meta!.id} did not exit within ${bound} ms of its kill — the sweep goes on`)
+        })
+      })
+    )
+    return foreign.length
+  }
+
   const startReview = (a: { taskId: string }): void => {
     void reviewBody(a).catch((e) => log(`startReview failed task=${a.taskId}: ${String(e)}`))
   }
@@ -290,6 +370,7 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
       runs.stop(runId)
       return true
     },
+    stopForeignValidations,
     resumeSweep: (why) => sweep.run(why)
   }
 }

@@ -42,6 +42,10 @@ interface RigOpts {
   exitEarly?: number
   /** An open repair Dispatch on the Task whose start has not happened yet (specPath ''). */
   openRepair?: boolean
+  /** A kill reaches nothing: the pty never exits (Task 14 round 2, the bounded wait). */
+  killsHang?: boolean
+  /** HostChecksDeps.foreignKillWaitMs. */
+  foreignKillWaitMs?: number
 }
 
 async function rig(o: RigOpts = {}) {
@@ -91,7 +95,10 @@ async function rig(o: RigOpts = {}) {
   /** A killed pty ends as a killed process would, with a non-zero code — a failure unless marked. */
   const endKilled = (pid: number): void => {
     killed.push(pid)
-    spawned.find((x) => x.pty.pid === pid)?.pty.exit(1)
+    if (o.killsHang) return
+    // As a real kill does, the exit comes a little later, not inside the kill call.
+    const p = spawned.find((x) => x.pty.pid === pid)?.pty
+    if (p) setTimeout(() => p.exit(1), 5)
   }
   const registry = new PtyRegistry({
     spawn: (_file, _args, opts) => {
@@ -136,7 +143,8 @@ async function rig(o: RigOpts = {}) {
     log: (m) => logs.push(m),
     now: () => NOW,
     // Never a real taskkill: the fake pids are numbers some real process may hold.
-    killRunner: (cmd) => endKilled(Number(cmd.args[cmd.args.indexOf('/pid') + 1]))
+    killRunner: (cmd) => endKilled(Number(cmd.args[cmd.args.indexOf('/pid') + 1])),
+    ...(o.foreignKillWaitMs !== undefined ? { foreignKillWaitMs: o.foreignKillWaitMs } : {})
   })
   if (o.onRunExitThrows)
     vi.spyOn(checks._validator, 'onRunExit').mockImplementation(() => {
@@ -144,11 +152,25 @@ async function rig(o: RigOpts = {}) {
     })
 
   const ours = () => spawned.slice(spawnedBefore)
+  /** A run pty another process's RunManager opened in this registry: the app's, which outlives it. */
+  const openForeignRun = (id: string, validation: boolean): { ptyId: string; pid: number } => {
+    const ptyId = `app-${id}`
+    registry.open({
+      id: ptyId,
+      file: 'x',
+      args: [],
+      opts: { cwd, cols: 80, rows: 24, env: {} },
+      meta: { kind: 'run', id, restore: { projectPath: cwd, ...(validation ? { validation: true } : {}) } }
+    })
+    return { ptyId, pid: spawned.at(-1)!.pty.pid }
+  }
   return {
     checks,
     taskId,
     cwd,
     logs,
+    registry,
+    openForeignRun,
     startWorker: (deps as unknown as { startWorker: ReturnType<typeof vi.fn> }).startWorker,
     task: () => state.tasks.find((x) => x.id === taskId)!,
     opened: (): PtyEntry[] => sent.flatMap((m) => (m.t === 'pty-opened' ? [m.entry] : [])),
@@ -189,6 +211,46 @@ describe('createHostChecks', () => {
     h.checks.startValidation({ taskId: h.taskId, cwd: path.join(os.tmpdir(), 'elsewhere') })
     await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
     expect(h.opened()).toHaveLength(0)
+  })
+
+  // Task 14 round 2: the validation run the app's validator started lives on in this registry after
+  // the app has gone, with nobody to settle it and no timeout. The Host kills it, waits for its exit
+  // (which records nothing), and only then may its own check start in that folder.
+  it('stopForeignValidations kills the app’s leftover validation run, waits for its exit, and records nothing', async () => {
+    const h = await rig()
+    const foreign = h.openForeignRun('run_app_1', true)
+    const n = await h.checks.stopForeignValidations()
+    expect(n).toBe(1)
+    expect(h.killed()).toEqual([foreign.pid])
+    // Resolved only after the exit, so the folder is free when the sweep runs.
+    expect(h.registry.exitCodeOf(foreign.ptyId)).not.toBeNull()
+    expect(h.task().status).toBe('validating')
+    h.checks.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.opened()).toHaveLength(1))
+    const liveChecks = h.registry
+      .list()
+      .filter((e) => e.alive && e.meta?.kind === 'run' && (e.meta.restore as { validation?: boolean }).validation === true)
+    expect(liveChecks).toHaveLength(1)
+  })
+
+  it('stopForeignValidations never touches an ordinary run, nor one of its own', async () => {
+    const h = await rig()
+    const ordinary = h.openForeignRun('run_app_play', false)
+    h.checks.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.opened()).toHaveLength(1))
+    expect(await h.checks.stopForeignValidations()).toBe(0)
+    expect(h.killed()).toEqual([])
+    expect(h.registry.exitCodeOf(ordinary.ptyId)).toBeNull()
+  })
+
+  it('stopForeignValidations gives up waiting after its bound when a killed pty never exits', async () => {
+    const h = await rig({ killsHang: true, foreignKillWaitMs: 50 })
+    const foreign = h.openForeignRun('run_app_hung', true)
+    const started = Date.now()
+    expect(await h.checks.stopForeignValidations()).toBe(1)
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(h.killed()).toEqual([foreign.pid])
+    expect(h.logs.join('\n')).toMatch(/did not exit/)
   })
 
   // validation-stop's body (Task 10): the mark and the kill, in that order, so the exit the kill

@@ -62,7 +62,7 @@ export function createHostDriving(d: {
   spawner: Pick<HostSpawner, 'sessionBusy' | 'typeInto' | 'isRetiring' | 'inFlight'>
   worktrees: Pick<HostWorktrees, 'fork' | 'integrate' | 'reap' | 'isRegistered'>
   /** B3: the loop's accounts, login and sync lang come from the checks. */
-  checks: Pick<HostChecks, 'resumeSweep' | 'accounts' | 'loginStatus' | 'langNow' | 'lang'>
+  checks: Pick<HostChecks, 'resumeSweep' | 'stopForeignValidations' | 'accounts' | 'loginStatus' | 'langNow' | 'lang'>
   /** The handover belt (N1): starts one open repair Dispatch that has no spec yet. */
   startRepair(a: { dispatchId: string }): void
   registry: Pick<PtyRegistry, 'sessionPty' | 'list'>
@@ -308,13 +308,22 @@ export function createHostDriving(d: {
       // the Task would stay validating or reviewing until the next Host load. One resume sweep picks
       // it up, after any handover in progress and only while this Host may still start work.
       //
+      // **The app's own check first** (round 2): its validation run lives on in this Host's registry
+      // with nobody to settle it, and the sweep would start a second check in the same folder beside
+      // it. With no app attached nothing else can be waiting on such a run, so it is killed and its
+      // exit awaited (bounded) before the sweep; its exit records nothing. With an app back by then,
+      // the run may be that app's to answer for, so nothing is killed.
+      //
       // Known limit (Task 16): the sweep covers only a convergence Run's validating and reviewing Tasks.
-      // Any other Task the app left mid-check is gated at the next Host load, not here. And the app's
-      // run may still be live in this Host's registry, so the sweep can start a second check beside it.
+      // Any other Task the app left mid-check is gated at the next Host load, not here.
       if (appLeft && was === 'host' && last === 'host')
         handover = handover
-          .then(() => {
+          .then(async () => {
             if (!mayStart()) return
+            if (!d.server.hasApp()) {
+              await d.checks.stopForeignValidations()
+              if (!mayStart()) return
+            }
             d.checks.resumeSweep('an app left')
           })
           .catch((err) => log(`the resume sweep after an app left failed: ${String(err)}`))

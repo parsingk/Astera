@@ -221,6 +221,9 @@ async function rig(o: RigOpts = {}) {
     return orch.handle(cmd, args)
   })
   const resumeSweep = vi.fn()
+  /** HostChecks.stopForeignValidations (Task 14 round 2): resolves at once unless a test holds it. */
+  const foreign = { hold: null as Promise<number> | null }
+  const stopForeignValidations = vi.fn(() => foreign.hold ?? Promise.resolve(0))
   const startRepair = vi.fn()
   let langNow: Lang = 'en'
   const lang = vi.fn(async () => {
@@ -248,7 +251,7 @@ async function rig(o: RigOpts = {}) {
       },
       isRegistered: (p) => childWorktrees().includes(p)
     },
-    checks: { resumeSweep, accounts: async () => [ACCOUNT], loginStatus: async () => true, langNow: () => langNow, lang },
+    checks: { resumeSweep, stopForeignValidations, accounts: async () => [ACCOUNT], loginStatus: async () => true, langNow: () => langNow, lang },
     startRepair,
     registry: {
       sessionPty: (id) => (o.sleepingCoordinator && id === 'coord-1' ? 'pty-coord' : null),
@@ -290,6 +293,8 @@ async function rig(o: RigOpts = {}) {
     spawner,
     logs,
     resumeSweep,
+    stopForeignValidations,
+    foreign,
     startRepair,
     drainOnce,
     lang,
@@ -685,6 +690,43 @@ describe('createHostDriving — review round 1', () => {
     expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left')
     await h.settle()
     expect(h.resumeSweep).toHaveBeenCalledTimes(2)
+  })
+  // Task 14 round 2: the app's own validation run may still be live in this Host's registry, and the
+  // sweep would start a second check in the same folder beside it. The foreign runs are killed, and
+  // their exits awaited, before the sweep.
+  it('kills the app’s leftover validation runs and waits for them before the sweep (Task 14 round 2)', async () => {
+    const h = await rig({ readyTasks: 0 })
+    await h.load()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(1))
+    h.server.app = true
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.stopForeignValidations).not.toHaveBeenCalled()
+    let release: (n: number) => void = () => {}
+    h.foreign.hold = new Promise<number>((r) => {
+      release = r
+    })
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.stopForeignValidations).toHaveBeenCalledTimes(1))
+    await h.settle()
+    expect(h.resumeSweep).toHaveBeenCalledTimes(1)
+    release(1)
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(2))
+    expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left')
+  })
+  it('kills nothing when an app is attached again by the time the sweep runs (Task 14 round 2)', async () => {
+    const h = await rig({ readyTasks: 0 })
+    await h.load()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(1))
+    h.server.app = true
+    h.driving.appsChanged()
+    await h.settle()
+    h.server.app = false
+    h.driving.appsChanged()
+    h.server.app = true // back within the same turn, before the chained sweep runs
+    await h.settle()
+    expect(h.stopForeignValidations).not.toHaveBeenCalled()
   })
   it('runs no such sweep when the Host is retiring as the app leaves (Task 14 I3)', async () => {
     const h = await rig({ readyTasks: 0 })
