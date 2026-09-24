@@ -29,7 +29,6 @@ const OWNED = ['getState', 'setState', 'now', 'log', 'runningSessions', 'appVers
  * by the refusal, so the call is answered CONFLICT (`orch.ts`'s `appRefused` mark).
  */
 const PROPAGATES = [
-  'mergeWorktrees', 'removeWorktrees', 'makeRunWorktree',
   'browserRun',
   // **The three toggles the app owns.** Each is read as the first thing its command does, before any
   // state is read and before anything has been committed, so a refusal costs nothing but the answer
@@ -224,21 +223,26 @@ const HOST_WHEN_ABSENT = ['chatSend'] as const
  *  field left out) already tells the caller; a line per read would bury the degradations that are
  *  news (CLI phase D4 review M1). */
 /**
- * **Answered by the Host's own spawner, with or without an app attached** (Host S2 design §1.4, §2.1).
- * The Host starts the worker or coordinator in its own pty registry, reads its output there, and
- * kills it there — so a coordinator's `worker-start`, `worker-stop`, `worker-release` and
- * `worker-read` work with no Astera window open.
+ * **Answered by the Host's own spawner, with or without an app attached** (Host S2 design §1.4, §2.1;
+ * Host S3 §3.1). The Host starts the worker or coordinator in its own pty registry, reads its output
+ * there, and kills it there — so a coordinator's `worker-start`, `worker-stop`, `worker-release` and
+ * `worker-read` work with no Astera window open. And it forks, merges and removes Job worktrees over
+ * its own registry — so `--worktree new`, `makeRunWorktree`, `mergeWorktrees` and `removeWorktrees`
+ * work the same way.
  *
  * **Per call, not per name (R1).** The spawner's `owns(name, args)` says whether this particular call
- * is the Host's. It says no to a start that needs a new worktree (S2 makes none; that is S3), to a read
- * of a tail the app holds, and to a stop or a `--terminal` reuse of a session the Host's registry never
- * held (an app-local pty: the app started it, so only the app can end it). A call the Host does not
- * own goes the way its name went before S2 (`HOST_LOCAL_FALLBACK`): the four that decide their
- * command as PROPAGATES, `probeLimit` and `readReviewFile` as SWALLOWED. So `worker-start --worktree
- * new` with no app is still 409 `APP_REQUIRED` with no Dispatch left, exactly as before.
+ * is the Host's. **The worktree names and `--worktree new` are the Host's unless an attached app still
+ * keeps them itself (R4)** — an app old enough to have no S3 worktree module of its own asks the Host
+ * to fork, merge and remove for it, exactly as it did before S3, and `owns` says so for as long as
+ * that app is attached. It also says no to a read of a tail the app holds, and to a stop or a
+ * `--terminal` reuse of a session the Host's registry never held (an app-local pty: the app started
+ * it, so only the app can end it). A call the Host does not own goes the way its name went before S2
+ * (`HOST_LOCAL_FALLBACK`): the seven that decide their command as PROPAGATES, `probeLimit` and
+ * `readReviewFile` as SWALLOWED. So `worker-start --worktree new` with no app and no attached app that
+ * keeps worktrees is still 409 `APP_REQUIRED` with no Dispatch left, exactly as before S3.
  *
  * **A Host started without the CLI paths has no spawner (`local: null`)**, and then every one of the
- * six takes its old route — that Host behaves exactly as a Host before S2.
+ * nine takes its old route — that Host behaves exactly as a Host before S2.
  *
  * A local call that acts calls `onEffect` before it runs, the rule the `act` funnel keeps. A local
  * refusal only the app can clear (a profile file the Host cannot read: accounts.json, app-settings.json)
@@ -246,7 +250,8 @@ const HOST_WHEN_ABSENT = ['chatSend'] as const
  * `repair: <file>` and the refusal's own words — never the 400 a failed start otherwise is.
  */
 const HOST_LOCAL = [
-  'startWorker', 'startCoordinator', 'releaseWorker', 'readWorker', 'probeLimit', 'readReviewFile'
+  'startWorker', 'startCoordinator', 'releaseWorker', 'readWorker', 'probeLimit', 'readReviewFile',
+  'makeRunWorktree', 'mergeWorktrees', 'removeWorktrees'
 ] as const satisfies readonly HostLocalName[]
 type _hostLocalIsWhole = NothingLeft<Exclude<HostLocalName, (typeof HOST_LOCAL)[number]>>
 
@@ -257,7 +262,10 @@ const HOST_LOCAL_FALLBACK: Record<HostLocalName, 'propagates' | 'swallowed'> = {
   releaseWorker: 'propagates',
   readWorker: 'propagates',
   probeLimit: 'swallowed',
-  readReviewFile: 'swallowed'
+  readReviewFile: 'swallowed',
+  makeRunWorktree: 'propagates',
+  mergeWorktrees: 'propagates',
+  removeWorktrees: 'propagates'
 }
 
 const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending'])
@@ -305,17 +313,18 @@ const EFFECTFUL: Record<Classified, boolean> = {
   runningSessions: false,
   appVersion: false,
   backup: true,
-  // HOST_LOCAL — the same values these names had in PROPAGATES and SWALLOWED before S2.
+  // HOST_LOCAL — the same values these names had in PROPAGATES and SWALLOWED before S2 (the six), and
+  // in PROPAGATES before S3 (the three worktree names).
   startWorker: true,
   startCoordinator: true,
   releaseWorker: true,
   readWorker: false,
   probeLimit: false,
   readReviewFile: false,
-  // PROPAGATES.
   mergeWorktrees: true,
   removeWorktrees: true,
   makeRunWorktree: true,
+  // PROPAGATES.
   browserRun: true,
   browserEnabled: false,
   handoffEnabled: false,
@@ -420,7 +429,7 @@ export function hostOrchDeps(a: {
    *  the local half and the per-session order of `chatSend` (HOST_WHEN_ABSENT). */
   sessions: HostSessions
   /** The Host's own spawner (HOST_LOCAL), or null/absent for a Host started without the CLI paths —
-   *  then the six names take their pre-S2 routes. */
+   *  then the nine names take their pre-S2 routes. */
   local?: HostLocal | null
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>

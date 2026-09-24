@@ -17,6 +17,7 @@ import { PENDING_START_WINDOW_MS } from '../core/orchestration/command'
 import {
   applyWorkerDone,
   attachCoordinator,
+  closeDispatch,
   createJob,
   createTask,
   emptyState,
@@ -31,6 +32,7 @@ import { codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
 import type { OrchCaller } from '../core/host/orchProtocol'
 import { createHostSpawner, type HostLocal } from './spawner'
 import type { HostMessage } from '../core/host/protocol'
+import { AppUnreachable } from '../core/host/orchProtocol'
 import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
 import { registrySessions } from './sessions'
@@ -1910,13 +1912,16 @@ describe('receiptsToEvict — 무엇이 떨어져 나가는가', () => {
 
 describe('Host-local spawn (S2)', () => {
   const local = (over: Partial<HostLocal> = {}): HostLocal => ({
-    owns: (name, args) => !(name === 'startWorker' && (args[0] as { worktree?: string; terminal?: string }).worktree === 'new' && !(args[0] as { terminal?: string }).terminal),
+    owns: () => true,
     startWorker: vi.fn(async () => ({ sessionId: 'ses_host', cwd: 'D:/p', specPath: 'D:/specs/s.md' })),
     startCoordinator: vi.fn(async () => ({ sessionId: 'ses_coord' })),
     releaseWorker: vi.fn(async () => {}),
     readWorker: vi.fn(async () => 'worker output'),
     probeLimit: vi.fn(async () => null),
     readReviewFile: vi.fn(async () => null),
+    makeRunWorktree: vi.fn(async () => 'D:/wt-run'),
+    mergeWorktrees: vi.fn(async () => ({ ok: true as const, merged: [], uncommitted: 0 })),
+    removeWorktrees: vi.fn(async () => ({ failed: [] })),
     ...over
   })
   const worker = (taskId: string, worktree = 'current') => ({ task: taskId, agent: 'claude', account: 'acc1', worktree })
@@ -1988,31 +1993,78 @@ describe('Host-local spawn (S2)', () => {
     expect(l.releaseWorker).not.toHaveBeenCalled()
     expect(orch.state().dispatches[0]).toMatchObject({ workerState: 'stopped', closedBy: 'stop' })
   })
-  // R1: S3 is not here yet.
-  it('still refuses --worktree new with no app, 409, leaving no Dispatch', async () => {
+  it('starts a --worktree new worker with no app attached', async () => {
     const { taskId } = await seed()
-    const l = local()
-    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const l = local(); const act = vi.fn()
+    const orch = orchOver({ hasApp: () => false, act, local: l })
     const r = await orch.call({ cmd: 'worker-start', args: { ...worker(taskId, 'new'), name: 'n' }, sessionId: '' })
-    expect(r.status).toBe(409)
-    expect(l.startWorker).not.toHaveBeenCalled()
-    expect(orch.state().dispatches).toEqual([])
+    expect(r.status).toBe(200)
+    expect(l.startWorker).toHaveBeenCalledWith(expect.objectContaining({ worktree: 'new', name: 'n' }))
+    expect(act).not.toHaveBeenCalled()
   })
-  // §1.2: a coordinator Job whose Run already has a worktree advances with no app; one without is refused before any spawn.
-  it('starts a coordinator with no app when the Run has its worktree, and refuses before spawning when it has none', async () => {
+  // §1.2's S3 line: a coordinator Job advances with no app in every placement.
+  it('runs the first jobs run of a coordinator Job with no app: makes the Run worktree, then starts the coordinator', async () => {
     const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p', coordinatorAccountId: 'acc1' }, NOW); if (!job.ok) throw new Error(job.error)
-    const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
-    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(run.state))
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(job.state))
     const l = local()
     const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
-    const refused = await orch.call({ cmd: 'run-start', args: { run: job.value.id }, sessionId: '' })
-    expect(refused.status).toBe(409)
-    expect(l.startCoordinator).not.toHaveBeenCalled()
-    const withTree = setRunWorktree(orch.state(), run.value.id, 'D:/wt'); if (!withTree.ok) throw new Error(withTree.error)
-    await orch.call({ cmd: 'state-put', args: { state: withTree.state }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
-    const started = await orch.call({ cmd: 'run-start', args: { run: job.value.id }, sessionId: '' })
-    expect(started.status).toBe(200)
+    const r = await orch.call({ cmd: 'run-start', args: { run: job.value.id }, sessionId: '' })
+    expect(r.status).toBe(200)
+    expect(l.makeRunWorktree).toHaveBeenCalledTimes(1)
     expect(l.startCoordinator).toHaveBeenCalledTimes(1)
+    const run = orch.state().runs.find((x) => x.jobId === job.value.id)!
+    expect(run).toMatchObject({ worktree: 'D:/wt-run', coordinatorSessionId: 'ses_coord' })
+  })
+  it('merges and removes a run\'s worktrees with no app, and a retried merge merges once', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW); if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW); if (!task.ok) throw new Error(task.error)
+    const opened = openDispatch(task.state, { taskId: task.value.id, provider: 'claude', accountId: 'acc1', sessionId: 'ses_w', cwd: 'D:/wt-a', specPath: '' }, NOW)
+    if (!opened.ok) throw new Error(opened.error)
+    const closed = closeDispatch(opened.state, { sessionId: 'ses_w', exitCode: 0 }, NOW); if (!closed.ok) throw new Error(closed.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(closed.state))
+    const l = local({ mergeWorktrees: vi.fn(async (_c: string, p: string[]) => ({ ok: true as const, merged: p, uncommitted: 0 })) })
+    const act = vi.fn()
+    const orch = orchOver({ hasApp: () => false, act, local: l })
+    const first = await orch.call({ cmd: 'run-merge', args: { run: run.value.id }, sessionId: 'sesA', request: 'req-m' })
+    const again = await orch.call({ cmd: 'run-merge', args: { run: run.value.id }, sessionId: 'sesA', request: 'req-m' })
+    expect(first).toMatchObject({ status: 200, body: { merged: ['D:/wt-a'], uncommitted: 0 } })
+    expect(again.replayed).toBe(true)
+    expect(l.mergeWorktrees).toHaveBeenCalledTimes(1)
+    expect(l.mergeWorktrees).toHaveBeenCalledWith('D:/p', ['D:/wt-a'])
+    const deleted = await orch.call({ cmd: 'run-delete', args: { id: run.value.id, removeWorktrees: true }, sessionId: '' })
+    expect(deleted.status).toBe(200)
+    expect(l.removeWorktrees).toHaveBeenCalledWith(['D:/wt-a'])
+    expect(act).not.toHaveBeenCalled()
+  })
+  // Fix round 2: the Host's own removeWorktrees throws AppUnreachable when an app is running but not
+  // attached (worktrees.ts's DETACHED_APP) — that app's pid names a live process, so this is not "the
+  // app could not be reached" and yet orchDeps maps it to the same conflict (4388931). End to end: the
+  // command answers 409 and deletes no state, the way a merge failure already refuses to delete.
+  it('answers 409 and deletes no state when the Host refuses removeWorktrees for an app it cannot ask', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW); if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW); if (!task.ok) throw new Error(task.error)
+    const opened = openDispatch(task.state, { taskId: task.value.id, provider: 'claude', accountId: 'acc1', sessionId: 'ses_w', cwd: 'D:/wt-a', specPath: '' }, NOW)
+    if (!opened.ok) throw new Error(opened.error)
+    const closed = closeDispatch(opened.state, { sessionId: 'ses_w', exitCode: 0 }, NOW); if (!closed.ok) throw new Error(closed.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(closed.state))
+    const detached = new AppUnreachable('Astera is running but not connected to this Host')
+    const l = local({ removeWorktrees: vi.fn(async () => { throw detached }) })
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const r = await orch.call({ cmd: 'run-delete', args: { id: run.value.id, removeWorktrees: true }, sessionId: '' })
+    expect(r.status).toBe(409)
+    expect(orch.state().runs.some((x) => x.id === run.value.id)).toBe(true)
+    expect(orch.state().jobs.some((x) => x.id === job.value.id)).toBe(true)
+  })
+  it('routes the worktree-* calls to the Host worktrees, app or not, and refuses a request id on them', async () => {
+    const call = vi.fn(async () => ({ status: 200, body: { file: { items: [] } } }))
+    const orch = orchOver({ worktrees: { call } })
+    const from = { role: 'app' as const, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'worktree-list', args: {}, sessionId: '', from })).status).toBe(200)
+    expect(call).toHaveBeenCalledWith('worktree-list', {}, from)
+    expect((await orch.call({ cmd: 'worktree-add', args: {}, sessionId: '', from, request: 'r1' })).status).toBe(400)
+    expect((await orchOver().call({ cmd: 'worktree-list', args: {}, sessionId: '', from })).status).toBe(501)
   })
   // Receipts replay safety.
   it('spawns once for a worker-start retried under the same request id', async () => {
@@ -2103,7 +2155,9 @@ describe('repair refusals (S2)', () => {
       registry,
       broadcast: () => {},
       getState: () => box.orch!.state(),
-      log: () => {}
+      log: () => {},
+      appKeepsWorktrees: () => false,
+      worktrees: { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() }
     })
     expect(spawner).not.toBeNull()
     box.orch = orchOver({ hasApp: () => false, act: vi.fn(), local: spawner })
@@ -2191,7 +2245,9 @@ describe('a retiring Host refuses new spawns (S2)', () => {
       registry,
       broadcast: () => {},
       getState: () => box.orch!.state(),
-      log: () => {}
+      log: () => {},
+      appKeepsWorktrees: () => false,
+      worktrees: { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() }
     })!
     box.orch = orchOver({ hasApp: () => false, act: vi.fn(), local: spawner })
     await spawner.closeAndSettle(1_000)

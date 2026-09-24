@@ -749,6 +749,9 @@ const fakeLocal = (over: Partial<HostLocal> = {}): HostLocal => ({
   readWorker: vi.fn().mockResolvedValue('tail'),
   probeLimit: vi.fn().mockResolvedValue(null),
   readReviewFile: vi.fn().mockResolvedValue(null),
+  makeRunWorktree: vi.fn().mockResolvedValue('D:/wt-run'),
+  mergeWorktrees: vi.fn().mockResolvedValue({ ok: true, merged: [], uncommitted: 0 }),
+  removeWorktrees: vi.fn().mockResolvedValue({ failed: [] }),
   ...over
 })
 describe('HOST_LOCAL (S2)', () => {
@@ -786,7 +789,7 @@ describe('HOST_LOCAL (S2)', () => {
     await expect(deps.readReviewFile!('D:/r.md')).rejects.toThrow(/APP_REQUIRED/)
     expect(onAppRequired).not.toHaveBeenCalled()
   })
-  it('with no local, every one of the six travels to the app exactly as before', async () => {
+  it('with no local, every one of the nine travels to the app exactly as before', async () => {
     const act = vi.fn().mockResolvedValue({})
     const deps = hostOrchDeps(base({ act, local: null }))
     await deps.startWorker({ dispatchId: 'd1' } as never)
@@ -837,5 +840,32 @@ describe('HOST_LOCAL (S2)', () => {
     const deps = hostOrchDeps(base({ hasApp: () => false, onAppRequired, readAccounts: vi.fn().mockRejectedValue(new RepairNeeded('accounts.json is not valid JSON; open Astera to repair it', 'accounts.json')) }))
     await expect(deps.listAccounts()).rejects.toThrow(/open Astera to repair it/)
     expect(onAppRequired).toHaveBeenCalledWith('listAccounts', expect.stringMatching(/open Astera/), { repair: 'accounts.json' })
+  })
+})
+
+describe('HOST_LOCAL worktree names (S3)', () => {
+  it('are answered by the Host with or without an app, and never asked of the app', async () => {
+    for (const hasApp of [true, false]) {
+      const act = vi.fn(); const local = fakeLocal()
+      const deps = hostOrchDeps(base({ act, hasApp: () => hasApp, local }))
+      expect(await deps.makeRunWorktree!({ repoPath: 'D:/p', name: 'n' })).toBe('D:/wt-run')
+      await deps.mergeWorktrees!('D:/p', ['D:/wt']); await deps.removeWorktrees!(['D:/wt'])
+      expect(act).not.toHaveBeenCalled()
+    }
+  })
+  it('mark the effect before they act', async () => {
+    const order: string[] = []
+    const local = fakeLocal({ mergeWorktrees: vi.fn(async () => { order.push('merge'); return { ok: true as const, merged: [], uncommitted: 0 } }) })
+    await hostOrchDeps(base({ local, onEffect: () => order.push('effect') })).mergeWorktrees!('D:/p', ['D:/wt'])
+    expect(order).toEqual(['effect', 'merge'])
+  })
+  // R4: an app that keeps worktrees is asked, as in S2, and none attached is refused, as in S2.
+  it('go to an app that keeps them, the S2 way', async () => {
+    const act = vi.fn().mockResolvedValue('D:/from-app'); const onAppRequired = vi.fn()
+    const local = fakeLocal({ owns: (name) => !['makeRunWorktree', 'mergeWorktrees', 'removeWorktrees'].includes(name) })
+    expect(await hostOrchDeps(base({ act, local })).makeRunWorktree!({ repoPath: 'D:/p', name: 'n' })).toBe('D:/from-app')
+    expect(act).toHaveBeenCalledWith('makeRunWorktree', [{ repoPath: 'D:/p', name: 'n' }])
+    await expect(hostOrchDeps(base({ hasApp: () => false, local, onAppRequired })).makeRunWorktree!({ repoPath: 'D:/p', name: 'n' })).rejects.toThrow(/APP_REQUIRED/)
+    expect(onAppRequired).toHaveBeenCalledWith('makeRunWorktree', expect.any(String))
   })
 })

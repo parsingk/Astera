@@ -31,7 +31,13 @@ afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
 
 type Spawned = { file: string; args: string[] | string; opts: { cwd: string; env: Record<string, string | undefined> }; pty: RegistryPty & { emit(d: string): void; exit(c: number): void; killed: boolean } }
 type LocateHooks = Pick<HostSpawnerDeps, 'findRollout' | 'locatePollMs' | 'locateForMs' | 'readAccounts'>
-const rig = (over: { env?: NodeJS.ProcessEnv; state?: () => OrchState; failSpawn?: boolean } & LocateHooks = {}) => {
+const rig = (over: {
+  env?: NodeJS.ProcessEnv
+  state?: () => OrchState
+  failSpawn?: boolean
+  appKeepsWorktrees?: HostSpawnerDeps['appKeepsWorktrees']
+  worktrees?: HostSpawnerDeps['worktrees']
+} & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
   const sent: HostMessage[] = []
@@ -49,7 +55,9 @@ const rig = (over: { env?: NodeJS.ProcessEnv; state?: () => OrchState; failSpawn
   const env = over.env ?? hostEnv()
   const spawner = createHostSpawner({ profileDir: profile, env, platform: process.platform, homeDir: path.join(dir, 'home'), registry,
     broadcast: (m) => sent.push(m), getState: over.state ?? (() => emptyState()), log: (m) => logs.push(m),
-    findRollout: over.findRollout, locatePollMs: over.locatePollMs, locateForMs: over.locateForMs, readAccounts: over.readAccounts })
+    findRollout: over.findRollout, locatePollMs: over.locatePollMs, locateForMs: over.locateForMs, readAccounts: over.readAccounts,
+    appKeepsWorktrees: over.appKeepsWorktrees ?? (() => false),
+    worktrees: over.worktrees ?? { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() } })
   return { spawner, registry, spawned, logs, sent }
 }
 const hostEnv = (): NodeJS.ProcessEnv => ({
@@ -236,11 +244,25 @@ describe('createHostSpawner', () => {
     expect(h.spawner!.owns('readWorker', [{ dispatchId }])).toBe(false)
   })
 
-  // R1: S2 makes no worktree.
-  it('does not own a start that needs a new worktree', () => {
-    const h = rig()
-    expect(h.spawner!.owns('startWorker', [{ worktree: 'new', name: 'x' }])).toBe(false)
-    expect(h.spawner!.owns('startWorker', [{ worktree: 'current' }])).toBe(true)
+  // R4: worktree work is the Host's unless an attached app still does it itself.
+  it('owns a start in a new worktree, and the three worktree deps, unless an attached app keeps them', () => {
+    for (const keeps of [false, true]) {
+      const h = rig({ appKeepsWorktrees: () => keeps })
+      expect(h.spawner!.owns('startWorker', [{ worktree: 'new', name: 'x' }])).toBe(!keeps)
+      for (const name of ['makeRunWorktree', 'mergeWorktrees', 'removeWorktrees'] as const)
+        expect(h.spawner!.owns(name, [])).toBe(!keeps)
+      expect(h.spawner!.owns('startWorker', [{ worktree: 'current' }])).toBe(true)
+    }
+  })
+  it('starts a --worktree new worker in the folder the Host forked for it', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const forked = path.join(dir, 'wt-a'); await fs.mkdir(forked)
+    const fork = vi.fn(async () => forked)
+    const h = rig({ state: () => s, worktrees: { fork, makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() } })
+    const r = await h.spawner!.startWorker({ ...startArgs(taskId, dispatchId, 'new'), name: 'a' })
+    expect(fork).toHaveBeenCalledWith({ repoPath: repo, name: 'a' })
+    expect(r.cwd).toBe(forked)
+    expect(h.spawned[0].opts.cwd).toBe(forked)
   })
 
   // Review M2 of Task 9: ownership follows who spawned the session. A `--terminal` reuse types into

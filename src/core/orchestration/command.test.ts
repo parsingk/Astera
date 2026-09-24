@@ -3512,6 +3512,28 @@ describe('run-start — 코디네이터 인계', () => {
     expect(deps.getState().runs).toEqual([])
   })
 
+  // Host S3 risk 6 — 워크트리는 만들었는데 코디네이터가 못 뜨면, 상태는 위 테스트처럼 하나도 안
+  // 바뀐다. 그러면 이 회차는 그 폴더를 다시 볼 길이 없고, 아무도 지우지 않는 고아 워크트리로 남는다.
+  it('코디네이터 기동이 실패하면 방금 만든 워크트리를 고아로 남기지 않고 지운다', async () => {
+    const removed: string[][] = []
+    const deps = coordDeps({
+      startCoordinator: async () => {
+        throw new Error('spawn failed')
+      },
+      removeWorktrees: async (paths: string[]) => {
+        removed.push(paths)
+        return { failed: [] }
+      }
+    })
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    const r = await call(deps, 'run-start', { run: runId })
+    expect(r.status).toBe(400)
+    expect(deps.made).toHaveLength(1)
+    expect(removed).toEqual([[`D:/wt/${deps.made[0]}`]])
+    // 코디네이터 실패는 여전히 상태를 하나도 바꾸지 않는다 — 지우는 것은 디스크 쪽 뒷정리일 뿐이다.
+    expect(deps.getState().runs).toEqual([])
+  })
+
   it('배선이 그 기능을 주입하지 않으면 워크트리 없이 넘긴다 — worker-start 가 소리 내어 거절한다', async () => {
     const deps = coordDeps({ makeRunWorktree: undefined })
     const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })

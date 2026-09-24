@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { makeRepo, gitSync, tempDir } from '../core/worktrees/testRepo'
 import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
-import { createHostWorktrees, type HostWorktreesDeps } from './worktrees'
+import { createHostWorktrees, loadWorktreesIfSpawning, type HostWorktreesDeps } from './worktrees'
 import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { Dispatch } from '../core/orchestration/types'
 import { RepairNeeded } from '../core/settings/repairNeeded'
@@ -392,5 +392,31 @@ describe('createHostWorktrees', () => {
       expect((await onDisk()).items).toEqual([])
       expect(states(h.sent)).toEqual([])
     })
+  })
+})
+
+// index.ts wiring, pulled into its own function so it can be tested without booting the real Host
+// (Host S3, R5, R10): `load()` — and so the healing it alone does — runs once at Host start, and only
+// when the Host spawns anything of its own.
+describe('loadWorktreesIfSpawning', () => {
+  const damage = () => fs.writeFile(path.join(profile, 'worktrees.json'), '{bad')
+  it('loads, and so heals a damaged file, only when a spawner is present', async () => {
+    await damage()
+    const h = rig()
+    const logs: string[] = []
+    loadWorktreesIfSpawning({ spawner: null, worktrees: h.wt, log: (m) => logs.push(m) })
+    // Nothing to wait for on the no-spawner side: the file must stay damaged for as long as this test
+    // runs, which the loaded-and-healed assertion below proves retroactively (the same call, spawning).
+    expect(await fs.readFile(path.join(profile, 'worktrees.json'), 'utf8')).toBe('{bad')
+    loadWorktreesIfSpawning({ spawner: {}, worktrees: h.wt, log: (m) => logs.push(m) })
+    await vi.waitFor(async () => expect(await onDisk()).toEqual({ items: [] }))
+    expect(await fs.readFile(path.join(profile, 'worktrees.json.bak'), 'utf8')).toBe('{bad')
+    expect(logs).toEqual([])
+  })
+  it('logs rather than throws when the load itself fails', async () => {
+    const logs: string[] = []
+    const failing = { load: async () => { throw new Error('disk gone') } }
+    loadWorktreesIfSpawning({ spawner: {}, worktrees: failing, log: (m) => logs.push(m) })
+    await vi.waitFor(() => expect(logs.some((l) => /worktrees\.json could not be loaded at Host start.*disk gone/.test(l))).toBe(true))
   })
 })

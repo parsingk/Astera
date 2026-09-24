@@ -6,7 +6,9 @@
 // and startCoordinatorSession are the start paths the app's registerIpc wiring calls. What this file
 // adds is only what the app supplies from its own state there: the account list (read-only from
 // accounts.json), the permission mode (read-only from app-settings.json), the environment (the Host's
-// own minus what its start added, D4), and the pty factory (the Host's registry, plus `pty-opened`).
+// own minus what its start added, D4), the pty factory (the Host's registry, plus `pty-opened`), and
+// worktrees (the Host's own registry, Host S3 §3.1) — the fork behind `--worktree new` and the three
+// `OrchServerDeps` this file no longer answers by refusing.
 import { existsSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -38,6 +40,7 @@ import { BusyScanner } from '../core/terminal/busy'
 import { previewShotsDir } from '../core/preview/shotsDir'
 import type { Account } from '../core/types'
 import type { PtyRegistry } from './registry'
+import type { HostWorktrees } from './worktrees'
 
 export type HostLocalName =
   | 'startWorker'
@@ -46,6 +49,9 @@ export type HostLocalName =
   | 'readWorker'
   | 'probeLimit'
   | 'readReviewFile'
+  | 'makeRunWorktree'
+  | 'mergeWorktrees'
+  | 'removeWorktrees'
 
 export interface HostLocal {
   startWorker: OrchServerDeps['startWorker']
@@ -54,6 +60,9 @@ export interface HostLocal {
   readWorker: OrchServerDeps['readWorker']
   probeLimit: NonNullable<OrchServerDeps['probeLimit']>
   readReviewFile: NonNullable<OrchServerDeps['readReviewFile']>
+  makeRunWorktree: NonNullable<OrchServerDeps['makeRunWorktree']>
+  mergeWorktrees: NonNullable<OrchServerDeps['mergeWorktrees']>
+  removeWorktrees: NonNullable<OrchServerDeps['removeWorktrees']>
   /** Whether this call is the Host's to answer (R1). */
   owns(name: HostLocalName, args: unknown[]): boolean
 }
@@ -67,6 +76,12 @@ export interface HostSpawnerDeps {
   broadcast(m: HostMessage): void
   getState(): OrchState
   log(m: string): void
+  /** The Host's own worktree registry (Host S3, §3.1): the fork behind `--worktree new`, and the three
+   *  `OrchServerDeps` names this file used to refuse. */
+  worktrees: Pick<HostWorktrees, 'fork' | 'makeRunWorktree' | 'mergeWorktrees' | 'removeWorktrees'>
+  /** Whether an attached app still does worktree work itself (`server.appKeeps`, ruling R4). Asked
+   *  fresh on every `owns` call — an app can attach or detach between two of them. */
+  appKeepsWorktrees(): boolean
   /** Test injection; defaults to existsSync. */
   exists?(p: string): boolean
   /** Test injection; defaults to the scan the app's CodexRolloutWatcher runs. */
@@ -373,8 +388,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         if (!account) return null
         return descriptorOf(descriptors, account).busyTitleReliable ? (busyOf.get(sid)?.busy ?? false) : null
       },
-      // `owns` sends every start that needs one to the app, so this is unreachable in S2.
-      createWorktree: () => Promise.reject(new Error("a new worktree is the app's to make until S3")),
+      // R4: the fork itself is the Host's own worktree registry's — same folder, same registry entry,
+      // whichever of `--worktree new` or a Run's own makeRunWorktree asked for it.
+      createWorktree: async (a) => ({ path: await d.worktrees.fork(a) }),
       accountProvider: (id) => {
         const a = accounts.find((x) => x.id === id)
         return a ? providerOf(a) : null
@@ -494,9 +510,16 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         throw e
       }
     },
+    // R4/§3.1: the same three names, the same registry `createWorktree` above forks into.
+    makeRunWorktree: (a) => d.worktrees.makeRunWorktree(a),
+    mergeWorktrees: (runCwd, paths) => d.worktrees.mergeWorktrees(runCwd, paths),
+    removeWorktrees: (paths) => d.worktrees.removeWorktrees(paths),
     owns: (name, args) => {
       const a = (args[0] ?? {}) as { terminal?: string; worktree?: string; dispatchId?: string }
-      if (name === 'startWorker') return a.terminal ? held(a.terminal) : a.worktree !== 'new'
+      // R4: worktree work is the Host's unless an attached app still does it itself.
+      const worktreesOurs = !d.appKeepsWorktrees()
+      if (name === 'startWorker') return a.terminal ? held(a.terminal) : a.worktree !== 'new' || worktreesOurs
+      if (name === 'makeRunWorktree' || name === 'mergeWorktrees' || name === 'removeWorktrees') return worktreesOurs
       if (name === 'releaseWorker') {
         const r = releaseArgsFor(d.getState().dispatches, a.dispatchId ?? '')
         // Unknown, retained, reused by a later Dispatch, or still pending: nothing is killed on either

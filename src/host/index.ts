@@ -21,9 +21,10 @@ import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_FEATURE_SPAWN, HOST_PROTOCOL } from '../core/host/protocol'
+import { HOST_FEATURE_SPAWN, HOST_FEATURE_WORKTREES, HOST_PROTOCOL, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostOrch } from './orch'
 import { createHostSpawner } from './spawner'
+import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostExits, ptyHeldBy } from './exits'
 import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
@@ -147,6 +148,25 @@ async function main(): Promise<void> {
   // answers never drift apart.
   const hostVersion = process.env.ASTERA_HOST_VERSION ?? '0.0.0'
 
+  // The Host's own worktree registry (Host S3 §3.1, §3.3, §3.4): forks, merges and removes Job
+  // worktrees over its own registry, whether or not an app is attached. Construction reads and writes
+  // nothing, so building it unconditionally keeps S2's "constructed, not loaded" rule — its registry
+  // is read only by `loadWorktreesIfSpawning` below, and only when there is a spawner (R5); with no
+  // spawner nothing else here ever reaches `worktrees` either, so nothing is read at all.
+  //
+  // `server` and `orch` are assigned below; its closures only run inside an operation, long after both
+  // exist.
+  const worktrees = createHostWorktrees({
+    profileDir,
+    homeDir: os.homedir(),
+    ptys: registry,
+    procs,
+    getState: () => orch.state(),
+    broadcast: (m) => server.broadcast(m),
+    log: (m) => log.write(m),
+    app: { hasApp: () => server.hasApp(), act: (name, args) => server.act(name, args) }
+  })
+
   // The Host's own spawn path (Host S2 design §2.1): orchestration workers and coordinators started in
   // this registry, so a coordinator's worker-start works with no Astera window open. Null when the
   // Host was started without the CLI paths, and then those commands go to the app as before (R1).
@@ -161,8 +181,17 @@ async function main(): Promise<void> {
     registry,
     broadcast: (m) => server.broadcast(m),
     getState: () => orch.state(),
-    log: (m) => log.write(m)
+    log: (m) => log.write(m),
+    worktrees,
+    // R4: an app old enough to have no S3 worktree module of its own still keeps doing this work
+    // itself, and says so in its `hello.yields` (HOST_YIELD_WORKTREES).
+    appKeepsWorktrees: () => server.appKeeps(HOST_YIELD_WORKTREES)
   })
+
+  // R10: the one read that may heal a damaged worktrees.json, done once — and only when the Host
+  // spawns anything of its own (`spawner !== null`, R5). With no spawner nothing built above ever
+  // reaches `worktrees`, so nothing is read here either, which is S2's rule kept whole in S3.
+  loadWorktreesIfSpawning({ spawner, worktrees, log: (m) => log.write(m) })
 
   // The orchestration state and the commands over it (host control plane design §5, §6).
   //
@@ -213,7 +242,10 @@ async function main(): Promise<void> {
     local: spawner,
     // The spec sweep goes with the spawner (§2.7): a Host that spawns writes specs and announces
     // `spawn`, and the app then leaves the sweep to this load. One that does not leaves it to the app.
-    specsDir: spawner ? path.join(profileDir, 'orch', 'specs') : undefined
+    specsDir: spawner ? path.join(profileDir, 'orch', 'specs') : undefined,
+    // The four `worktree-*` orch-calls (R1, R5): only with a spawner, so a Host too old — or too
+    // unconfigured — to own worktrees.json answers them 501 rather than ever reaching `worktrees`.
+    worktrees: spawner ? worktrees : undefined
   })
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and
@@ -257,8 +289,9 @@ async function main(): Promise<void> {
         runs: orch.runningRuns()
       }),
       orch,
-      // Announced only when there is a spawner, so an app can tell a Host that starts sessions itself.
-      features: spawner ? [HOST_FEATURE_SPAWN] : [],
+      // Announced only when there is a spawner, so an app can tell a Host that starts sessions itself,
+      // and that it also owns worktrees.json (R5: the one decision is `spawner !== null`).
+      features: spawner ? [HOST_FEATURE_SPAWN, HOST_FEATURE_WORKTREES] : [],
       log
     })
   } catch (err) {

@@ -1326,6 +1326,10 @@ export async function handleCommand(
       // 워크트리 없는 Run 을 보게 된다. 실패하면 아래 spawn 실패와 같은 처리다 — 아무것도 바꾸지
       // 않고 거절해서 `pendingStart` 를 남긴다.
       let withWorktree = started.state
+      // **고아가 되지 않는다.** 아래에서 코디네이터가 못 뜨면 상태는 하나도 안 바뀌므로(주석대로),
+      // 방금 여기서 만든 폴더만 실제로 남는다 — 그 회차는 그 폴더를 다시 볼 길이 없다. 그래서 기억해
+      // 두었다가 코디네이터 실패에서 지운다(Host S3, risk 6).
+      let freshWorktree: string | null = null
       if (!target.worktree && deps.makeRunWorktree) {
         try {
           const created = await deps.makeRunWorktree({
@@ -1335,6 +1339,7 @@ export async function handleCommand(
           const recorded = setRunWorktree(withWorktree, target.id, created)
           if (!recorded.ok) return bad(recorded.error)
           withWorktree = recorded.state
+          freshWorktree = created
         } catch (e) {
           return bad(`could not create the run worktree: ${String(e)}`)
         }
@@ -1367,6 +1372,20 @@ export async function handleCommand(
         // **`pendingStart` 를 그대로 둔다.** 걷어 버리면 실행 버튼이 사라져 사람이 다시 누를 수
         // 없고, 운전자도 없는 Run 이 남는다 — 아무것도 돌지 않는데 화면은 시작한 것처럼 보인다.
         // 그래서 이 실패는 상태를 하나도 바꾸지 않는다.
+        //
+        // **방금 만든 워크트리는 예외다 — 상태가 아니라 디스크에 남는다.** 상태를 안 바꾸므로 이
+        // 회차는 그 경로를 다시 보지 못하고, 그러면 `run-delete removeWorktrees` 도 결코 이 폴더를
+        // 겨누지 않는다: 아무도 지우지 않는 고아 워크트리다. 지우는 것 자체가 실패해도 원래 실패를
+        // 가리지 않는다 — 로그만 남기고 같은 거절을 낸다.
+        if (freshWorktree && deps.removeWorktrees) {
+          const orphan = freshWorktree
+          try {
+            const { failed } = await deps.removeWorktrees([orphan])
+            if (failed.length > 0) deps.log?.(`orphaned run worktree ${orphan} is still in use — left in place`)
+          } catch (removeErr) {
+            deps.log?.(`orphaned run worktree ${orphan} could not be removed: ${String(removeErr)}`)
+          }
+        }
         return bad(`could not start the coordinator: ${String(e)}`)
       }
       // autoDispatch 는 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이

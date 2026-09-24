@@ -340,3 +340,19 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     }
   }
 }
+
+/** `index.ts`'s wiring, pulled out so it can be tested without booting the real Host: `load()` once
+ *  at Host start, and only when the Host spawns anything of its own (`spawner !== null`, R5). With no
+ *  spawner nothing built there ever reaches `worktrees` — S2's rule, kept whole in S3 — so nothing
+ *  here reads the file either. A failed load is logged, not thrown: the per-operation `fresh()` above
+ *  still refuses a damaged file on its own, and a Host that could not heal it at start should still
+ *  come up and answer everything that does not touch worktrees.json. */
+export function loadWorktreesIfSpawning(a: {
+  /** Whatever `createHostSpawner` returned — only whether it is `null` matters here. */
+  spawner: unknown
+  worktrees: Pick<HostWorktrees, 'load'>
+  log(m: string): void
+}): void {
+  if (a.spawner === null) return
+  void a.worktrees.load().catch((err) => a.log(`worktrees.json could not be loaded at Host start: ${message(err)}`))
+}

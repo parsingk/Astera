@@ -18,6 +18,7 @@ import { readAccountsFile } from '../core/accounts/accountsFile'
 import { readRunConfigsFile } from '../core/run/runConfigsFile'
 import type { HostSessions } from './sessions'
 import type { HostLocal } from './spawner'
+import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
 
 /** One reply — today's HTTP status and body, the shape `OrchCall.call` already answers with. Named
  *  only because the receipt store below holds one. */
@@ -341,6 +342,11 @@ export function createHostOrch(a: {
    *  has a spawner and so announces `spawn`: from then on it writes specs itself, and the app leaves
    *  the sweep to it. Absent, nothing is swept here and the app's boot sweeps as before. */
   specsDir?: string
+  /** The Host's own worktree registry (Host S3, §3.1). Only `call` is asked here — the four
+   *  `worktree-*` names, answered on this side of the request-receipt line because none of them goes
+   *  through `handleCommand` (R1: the app is their only caller). Absent exactly when there is no
+   *  spawner (R5): with no spawner nothing built here ever reaches `worktrees`, so the four answer 501. */
+  worktrees?: Pick<HostWorktrees, 'call'>
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
 
@@ -910,13 +916,23 @@ export function createHostOrch(a: {
         // next". Unreachable today, because only the app sends these and it sends no key; written
         // anyway, because the thing that makes it unreachable is a fact about today's clients and not
         // a property of this code.
-        if ((cmd === 'state-put' || cmd === 'state-get') && request !== undefined)
+        if ((cmd === 'state-put' || cmd === 'state-get' || WORKTREE_CALLS.has(cmd)) && request !== undefined)
           return { status: 400, body: { error: `${cmd} does not take a request id` } }
         if (cmd === 'state-put') return await statePut(args, from)
         // Open to anyone: reading the state is something every CLI client can already do through
         // `jobs-list` and its neighbours, so a refusal here would be a new one nobody needs. The half
         // of it that is not a read — the boot findings — is the app's alone, inside.
         if (cmd === 'state-get') return await stateGet(args, from)
+        // **Answered here, beside the two above, and for the same reason (Host S3, §3.1).** None of
+        // the four `worktree-*` names goes through `handleCommand` — the app is their only caller
+        // (`HostWorktrees.call` itself checks `from?.role === 'app'`) — so a Host too old to own
+        // worktrees answers 501 rather than the coordinator's own commands ever seeing these names.
+        // Absent exactly when there is no spawner (R5): with no spawner nothing built in `index.ts`
+        // ever reaches `a.worktrees`.
+        if (WORKTREE_CALLS.has(cmd))
+          return a.worktrees
+            ? await a.worktrees.call(cmd, args, from)
+            : { status: 501, body: { error: 'this Host does not own worktrees.json' } }
         // **Request receipts, and still the same synchronous step the call entered in** — nothing
         // above has awaited on this path, so the lookup and the claim cannot be split by a second
         // `orch-call` arriving in between (§7). The two commands above are deliberately on the other
