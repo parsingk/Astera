@@ -1,7 +1,8 @@
-// What `startReview` (src/main/ipc.ts) does when it could not put a reviewer on a Task: hand the Task
-// to a person through a Gate, and drop the review Dispatch it may already have committed.
+// What `startReview` (review.ts's `createReviewStarter`, which the app and the Host both build) does
+// when it could not put a reviewer on a Task: hand the Task to a person through a Gate, and drop the
+// review Dispatch it may already have committed.
 //
-// **Moved out of `ipc.ts` unchanged, because a judgement was added to it and that judgement can only
+// **Moved out of `ipc.ts` (where startReview then lived) unchanged, because a judgement was added to it and that judgement can only
 // be checked against a state.** `openReviewDispatch` refuses for two different kinds of reason — a
 // real failure, and a race — and only one of them is a question for a person. "The race does not tear
 // the live review down" is a sentence about dispatches and task status, so the test that says it has

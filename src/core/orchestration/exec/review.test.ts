@@ -39,6 +39,8 @@ interface RigOpts {
   accounts: Account[]
   loggedIn: string[]
   convergence?: boolean
+  /** 손으로 고친 orchestration.json 의 `"convergence": null` — 정책이 없는 Run 이다(policyOf 가 null). */
+  convergenceNull?: boolean
   runPaused?: boolean
   startFails?: string
 }
@@ -82,6 +84,7 @@ function rig(o: RigOpts) {
   const taskId = t.value.id
   if (state.tasks.find((x) => x.id === taskId)?.status !== 'reviewing') throw new Error('rig: not reviewing')
   // 사람이 세운 회차(runs stop) — runGatedForTask 가 읽는 칸이다.
+  if (o.convergenceNull) state = { ...state, jobs: state.jobs.map((j) => ({ ...j, convergence: null as never })) }
   if (o.runPaused) state = { ...state, runs: state.runs.map((r) => ({ ...r, paused: true })) }
 
   const history: OrchState[] = []
@@ -155,6 +158,12 @@ describe('createReviewStarter', () => {
     // 같은 글자로 비교한다.
     expect(conv.specFile()).toContain(path.join(conv.specsDir, '').replace(/\\/g, '/'))
     expect(conv.specFile()).toMatch(/\.review\.json/)
+    // 판별식은 policyOf 이지 raw 칸이 아니다 — `.convergence !== undefined` 는 손으로 고친 null 을
+    // 정책 있음으로 잘못 읽는다(지워진 글자 가드가 지키던 셋째 절, review-task-7 I1).
+    const nulled = rig({ convergenceNull: true, accounts: [claude('c1'), codex('x1')], loggedIn: ['c1', 'x1'] })
+    await nulled.start({ taskId: nulled.taskId })
+    expect(nulled.startWorker).toHaveBeenCalledTimes(1)
+    expect(nulled.specFile()).not.toMatch(/\.review\.json/)
   })
 
   // F63, as behaviour (R28).

@@ -2781,6 +2781,7 @@ export function registerIpc(
       accounts: () => core.accounts.list(),
       loginStatus: (accountId) => core.accounts.loginStatus(accountId),
       assertAllowedPath: (p) => assertAllowedPath(p),
+      // `(w)` 는 일부러다 — ipcConvergenceWiring.test.ts 의 남은 가드가 첫 `startWorker: (a) =>` 에 닻을 내린다.
       startWorker: (w) => deps.startWorker(w),
       specsDir
     })
