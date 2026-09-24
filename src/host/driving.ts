@@ -87,8 +87,11 @@ export function createHostDriving(d: {
 
   /** The driver the last computation left (N2: parked until the first one). */
   let last: Driver = 'parked'
-  /** The gate the last computation read. `appsChanged` recomputes from it without reading the file. */
-  let lastGate: DispatchGate = 'no-settings'
+  /** The gate the last computation read, or null before the first read. `appsChanged` recomputes from
+   *  it without reading the file. **Null parks** (review I1): `'no-settings'` would read as "may drive",
+   *  so an app's hello before the first read would make a parked profile drive (N2, §4.6). And null is
+   *  not `'not-migrated'`, so the first `migrated` read is not taken for N4's change. */
+  let lastGate: DispatchGate | null = null
   /** Whether the handover has run for this stretch of driving. Cleared whenever the Host stops driving,
    *  so each change back to `'host'` hands over again; set in the same turn as the change, so two
    *  computations that both see it cannot both hand over. */
@@ -105,6 +108,13 @@ export function createHostDriving(d: {
   const takeOver = async (why: string, drain: boolean): Promise<void> => {
     // `drainOnce` answers false when the load already drained (C6), and logs a failure of its own.
     if (drain) await d.orch.drainOnce()
+    // **Asked again after the drain** (review I2): the drain is real I/O, and the drive can move inside
+    // it — an app that keeps dispatch attaching runs its own boot sweep, and a Host that began retiring
+    // would have the belt's start refused into a repairFailed Gate (R15). Whoever drives now hands over.
+    if (!mayStart()) {
+      log('handover: the drive moved during the drain — no sweep and no repair start from this Host')
+      return
+    }
     try {
       d.checks.resumeSweep(why)
     } catch (err) {
@@ -130,7 +140,7 @@ export function createHostDriving(d: {
    *  state in memory. `gates` is the change the computation saw (null from `appsChanged`, which reads
    *  no file): the not-migrated → migrated change out of parked is the one handover with no drain (N4)
    *  — the app that is migrating leaves the queue alone, and so does the Host. */
-  const apply = (next: Driver, gates: { was: DispatchGate; now: DispatchGate } | null, why: string): void => {
+  const apply = (next: Driver, gates: { was: DispatchGate | null; now: DispatchGate } | null, why: string): void => {
     const was = last
     last = next
     if (next !== 'host') {
@@ -154,11 +164,22 @@ export function createHostDriving(d: {
       readGate(settingsPath),
       d.checks.lang().catch((err: unknown) => log(`could not read the language: ${String(err)}`))
     ])
-    if (mine !== computing) return last
+    const next = driverOf({ appKeepsDispatch: d.server.appsKeep(HOST_YIELD_DISPATCH), gate })
+    // Superseded: a newer computation applies instead, and this one answers from **its own read**
+    // (review I1) — `last` may hold what `appsChanged` set in between, which this read did not see.
+    if (mine !== computing) return next
     const was = lastGate
     lastGate = gate
-    apply(driverOf({ appKeepsDispatch: d.server.appsKeep(HOST_YIELD_DISPATCH), gate }), { was, now: gate }, why)
+    apply(next, { was, now: gate }, why)
     return last
+  }
+
+  /** The driver from the gate already read, for `appsChanged`. An unread gate parks unless an app keeps
+   *  dispatch (which drives whatever the file says). */
+  const driverFromLastRead = (): Driver => {
+    const appKeepsDispatch = d.server.appsKeep(HOST_YIELD_DISPATCH)
+    if (lastGate === null) return appKeepsDispatch ? 'app' : 'parked'
+    return driverOf({ appKeepsDispatch, gate: lastGate })
   }
 
   /** A reap only while this Host still drives (the two-writers risk): the loop asks `mayStart` once
@@ -275,7 +296,7 @@ export function createHostDriving(d: {
     kick,
     appsChanged: () => {
       // N1: in the same turn as the hello or the close, from the gate already read.
-      apply(driverOf({ appKeepsDispatch: d.server.appsKeep(HOST_YIELD_DISPATCH), gate: lastGate }), null, 'the Host drives now')
+      apply(driverFromLastRead(), null, 'the Host drives now')
       kick('an app attached or left')
     },
     onLoaded: () => {

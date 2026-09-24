@@ -40,6 +40,8 @@ interface RigOpts {
   /** The fake pty delivers its exit in a microtask right after it is spawned, before the validator has
    *  recorded the run (Task 6's early-exit buffer). */
   exitEarly?: number
+  /** An open repair Dispatch on the Task whose start has not happened yet (specPath ''). */
+  openRepair?: boolean
 }
 
 async function rig(o: RigOpts = {}) {
@@ -72,6 +74,14 @@ async function rig(o: RigOpts = {}) {
   let state = unwrap(applyWorkerDone(d.state, { taskId: t.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
   const taskId = t.value.id
   if (state.tasks.find((x) => x.id === taskId)?.status !== 'validating') throw new Error('rig: not validating')
+  if (o.openRepair)
+    state = {
+      ...state,
+      dispatches: [
+        ...state.dispatches,
+        { id: 'dsp_rep', taskId, provider: 'codex', accountId: 'acc_fake', sessionId: 'pending:rep', cwd, specPath: '', startedAt: NOW, workerState: 'ready', retained: false, repair: 'check-failure' }
+      ]
+    }
 
   const logs: string[] = []
   const sent: HostMessage[] = []
@@ -139,6 +149,7 @@ async function rig(o: RigOpts = {}) {
     taskId,
     cwd,
     logs,
+    startWorker: (deps as unknown as { startWorker: ReturnType<typeof vi.fn> }).startWorker,
     task: () => state.tasks.find((x) => x.id === taskId)!,
     opened: (): PtyEntry[] => sent.flatMap((m) => (m.t === 'pty-opened' ? [m.entry] : [])),
     exitLast: (code: number) => ours().at(-1)!.pty.exit(code),
@@ -269,5 +280,23 @@ describe('createHostChecks', () => {
     expect(() => h.exitLast(0)).not.toThrow()
     expect(h.logs.join('\n')).toMatch(/validation exit could not be handled/)
     expect(h.logs.join('\n')).not.toMatch(/listener threw/)
+  })
+})
+
+// Review of Task 12, m1: one repair Dispatch, one start. performRepair re-reads the Dispatch only before
+// its startWorker, so two starts that overlap (the validator's and the driver's handover belt) would
+// both spawn: two agents in one worktree, and the second patch orphans the first session.
+describe('createHostChecks — one start per repair Dispatch', () => {
+  it('starts a repair Dispatch once when two starts of it overlap, and again once the first has settled', async () => {
+    const h = await rig({ openRepair: true })
+    h.checks.startRepair({ dispatchId: 'dsp_rep' })
+    h.checks.startRepair({ dispatchId: 'dsp_rep' })
+    await vi.waitFor(() => expect(h.startWorker).toHaveBeenCalledTimes(1))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(h.startWorker).toHaveBeenCalledTimes(1)
+    expect(h.logs.join('\n')).toMatch(/already being started/)
+    // Released when it settles: the fake answers specPath '', so the Dispatch still reads as unstarted.
+    h.checks.startRepair({ dispatchId: 'dsp_rep' })
+    await vi.waitFor(() => expect(h.startWorker).toHaveBeenCalledTimes(2))
   })
 })

@@ -170,6 +170,23 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     () => hostWorkerBaseEnv(d.env)
   )
 
+  /** The repair Dispatches being started right now (review of Task 12, m1). `performRepair` re-reads the
+   *  Dispatch only before its `startWorker`, so two starts that overlap — the validator's, and the
+   *  driver's handover belt — would both spawn: two agents in one worktree, and the second patch orphans
+   *  the first session. A second start of the same Dispatch while one is in flight is skipped. */
+  const repairing = new Set<string>()
+  const startRepairOnce = async (a: { dispatchId: string }): Promise<{ ok: true } | { ok: false; error: string }> => {
+    if (repairing.has(a.dispatchId)) {
+      log(`repair dispatch=${a.dispatchId} is already being started — this start is skipped`)
+      return { ok: true }
+    }
+    repairing.add(a.dispatchId)
+    try {
+      return await performRepair(repairDeps, a)
+    } finally {
+      repairing.delete(a.dispatchId)
+    }
+  }
   const repairDeps: RepairDeps = {
     getState: () => d.deps().getState(),
     setState: (n) => d.deps().setState(n),
@@ -206,7 +223,7 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     },
     isAlive,
     startReview: (a) => reviewBody(a),
-    startRepair: (a) => performRepair(repairDeps, a),
+    startRepair: (a) => startRepairOnce(a),
     // R12: the continuity journal is the app's (D8), so there is no diff base here.
     firstCheckpointHead: () => null,
     diffNames: async () => null
@@ -243,7 +260,7 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     startValidation: (a) => validation.startValidation(a),
     startReview,
     startRepair: (a) => {
-      void performRepair(repairDeps, a).catch((e) => log(`repair failed dispatch=${a.dispatchId}: ${String(e)}`))
+      void startRepairOnce(a).catch((e) => log(`repair failed dispatch=${a.dispatchId}: ${String(e)}`))
     },
     repairTargetFor: (taskId) => repairTargetFor(d.deps().getState(), taskId, isAlive),
     repairOnce: (a) => repairOnce(repairDeps, a),

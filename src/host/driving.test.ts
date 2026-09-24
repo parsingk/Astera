@@ -83,9 +83,15 @@ interface RigOpts {
   langOnRead?: Lang
   /** Two finished scheduled child Runs, each with a registered worktree the loop's clean-up reaps. */
   reapableChildren?: boolean
+  /** An open Dispatch whose worker still runs, with its spec file on disk. */
+  openDispatchSpec?: boolean
+  /** Run_1 has a live coordinator (`coord-1`, a pty in the registry) with unread upward mail older than
+   *  COORDINATOR_NUDGE_MS. */
+  sleepingCoordinator?: boolean
 }
 
-const CHILD_WORKTREES = ['/wt-child-1', '/wt-child-2']
+/** Under the test's own folder (review m7): never a literal path, should the fake ever resolve one. */
+const childWorktrees = (): string[] => [path.join(dir, 'wt-child-1'), path.join(dir, 'wt-child-2')]
 
 function fixture(o: RigOpts): OrchState {
   const jobs: Job[] = [{ id: 'job_1', objective: 'o', cwd: dir, createdAt: NOW, concurrency: 1, autoDispatch: true }]
@@ -101,15 +107,24 @@ function fixture(o: RigOpts): OrchState {
     tasks.push(task({ id: 'tsk_rep', status: 'validating' }))
     dispatches.push(dispatch({ id: 'dsp_rep', taskId: 'tsk_rep', sessionId: 'pending:rep', specPath: '', repair: 'check-failure', workerState: 'ready' }))
   }
-  const runs: OrchState['runs'] = [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: wt }]
+  if (o.openDispatchSpec) {
+    tasks.push(task({ id: 'tsk_live', status: 'dispatched' }))
+    dispatches.push(dispatch({ id: 'dsp_live', taskId: 'tsk_live', sessionId: 'ses_live', workerState: 'ready' }))
+  }
+  const runs: OrchState['runs'] = [
+    { id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: wt, ...(o.sleepingCoordinator ? { coordinatorSessionId: 'coord-1' } : {}) }
+  ]
+  const messages: OrchState['messages'] = o.sleepingCoordinator
+    ? [{ id: 'msg_up', runId: 'run_1', type: 'status', subject: 's', body: 'b', answered: false, createdAt: new Date(NOW_MS - 120_000).toISOString() }]
+    : []
   if (o.reapableChildren) {
     jobs.push({ id: 'job_rc', objective: 'scheduled', cwd: dir, createdAt: NOW, schedule: { kind: 'interval', minutes: 60 } })
-    CHILD_WORKTREES.forEach((w, i) => {
+    childWorktrees().forEach((w, i) => {
       runs.push({ id: `run_rc${i}`, jobId: 'job_rc', ordinal: i + 1, createdAt: NOW, worktree: w })
       tasks.push(task({ id: `tsk_rc${i}`, runId: `run_rc${i}`, jobId: 'job_rc', status: 'completed' }))
     })
   }
-  return { ...emptyState(), jobs, runs, tasks, dispatches }
+  return { ...emptyState(), jobs, runs, tasks, dispatches, messages }
 }
 
 async function rig(o: RigOpts = {}) {
@@ -141,8 +156,21 @@ async function rig(o: RigOpts = {}) {
     await fs.mkdir(specsDir, { recursive: true })
     await fs.writeFile(staleSpecPath, 'spec nobody reads', 'utf8')
   }
+  if (o.openDispatchSpec) {
+    await fs.mkdir(specsDir, { recursive: true })
+    await fs.writeFile(path.join(specsDir, 'dsp_live.md'), 'the spec a live worker reads', 'utf8')
+  }
 
   const server = { app: false, keeps: false }
+  const coordinator = { busy: false as boolean | null }
+  const typed: Array<[string, string]> = []
+  const typeInto = vi.fn((id: string, text: string) => {
+    typed.push([id, text])
+    return true
+  })
+  /** While set, every settings read waits in `heldReads` until the test releases it. */
+  const gateReads = { hold: false }
+  const heldReads: Array<() => void> = []
   const spawner = { retiring: false, inFlightCount: 0 }
   const logs: string[] = []
   let starts = 0
@@ -167,7 +195,8 @@ async function rig(o: RigOpts = {}) {
     hostStartedAt: () => NOW,
     runningSessions: () => 0,
     // The repair's placeholder is kept open through the load, as if its start were still to come.
-    aliveSessionIds: () => new Set(o.openRepairWithoutSpec ? ['pending:rep'] : []),
+    aliveSessionIds: () =>
+      new Set([...(o.openRepairWithoutSpec ? ['pending:rep'] : []), ...(o.openDispatchSpec ? ['ses_live'] : []), ...(o.sleepingCoordinator ? ['coord-1'] : [])]),
     act: async () => ({}),
     hasApp: () => server.app,
     onState: () => {},
@@ -180,7 +209,12 @@ async function rig(o: RigOpts = {}) {
     mayDrain: async () => (await box.driving!.driver()) === 'host',
     onLoaded: () => box.driving?.onLoaded()
   })
-  const drainOnce = vi.fn(() => orch.drainOnce())
+  /** Runs inside drainOnce, before the real one: what the world does while the drain is on disk. */
+  const drainHook = { during: (): void => {} }
+  const drainOnce = vi.fn(async () => {
+    drainHook.during()
+    return orch.drainOnce()
+  })
   const handled: string[] = []
   const handle = vi.fn((cmd: string, args: Record<string, unknown>) => {
     handled.push(cmd)
@@ -203,7 +237,7 @@ async function rig(o: RigOpts = {}) {
     profileDir: dir,
     orch: { handle, internalDeps: () => orch.internalDeps(), loaded: () => orch.loaded(), drainOnce, state: () => orch.state() },
     server: { hasApp: () => server.app, appsKeep: () => server.keeps },
-    spawner: { sessionBusy: () => null, typeInto: () => true, isRetiring: () => spawner.retiring, inFlight: () => spawner.inFlightCount },
+    spawner: { sessionBusy: (id) => (id === 'coord-1' ? coordinator.busy : null), typeInto, isRetiring: () => spawner.retiring, inFlight: () => spawner.inFlightCount },
     worktrees: {
       fork: async () => wt,
       integrate: async () => ({ kind: 'merged', uncommitted: 0 }),
@@ -212,11 +246,15 @@ async function rig(o: RigOpts = {}) {
         reapHook.onReap(p)
         return true
       },
-      isRegistered: (p) => CHILD_WORKTREES.includes(p)
+      isRegistered: (p) => childWorktrees().includes(p)
     },
     checks: { resumeSweep, accounts: async () => [ACCOUNT], loginStatus: async () => true, langNow: () => langNow, lang },
     startRepair,
-    registry: { sessionPty: () => null, list: () => [] },
+    registry: {
+      sessionPty: (id) => (o.sleepingCoordinator && id === 'coord-1' ? 'pty-coord' : null),
+      list: () =>
+        o.openDispatchSpec ? [{ id: 'pty-live', pid: 1, alive: true, meta: { kind: 'session', id: 'ses_live', restore: {} } }] : []
+    },
     specsDir,
     log: (m) => logs.push(m),
     nowMs: () => clock.now,
@@ -228,6 +266,7 @@ async function rig(o: RigOpts = {}) {
       }
     },
     readGate: async (p): Promise<DispatchGate> => {
+      if (gateReads.hold) await new Promise<void>((r) => heldReads.push(r))
       if (gateFailure) {
         const e = gateFailure
         gateFailure = null
@@ -264,6 +303,14 @@ async function rig(o: RigOpts = {}) {
     tickFn: () => tickFn,
     repairDispatchId: 'dsp_rep',
     reaped: () => reaped,
+    drainHook,
+    coordinator,
+    typed: () => typed,
+    gateReads,
+    /** Releases the i-th held settings read (in the order they were asked). */
+    releaseRead: (i: number) => heldReads[i](),
+    heldReads: () => heldReads.length,
+    liveSpecPath: path.join(specsDir, 'dsp_live.md'),
     reapHook,
     workerStarts: () => starts,
     handled: () => handled,
@@ -512,13 +559,13 @@ describe('createHostDriving', () => {
     await h.load()
     await vi.waitFor(() => expect(h.reaped()).toHaveLength(1))
     await h.settle()
-    expect(h.reaped()).toEqual([CHILD_WORKTREES[0]])
+    expect(h.reaped()).toEqual([childWorktrees()[0]])
     expect(h.logs.join('\n')).toMatch(/left for the process that drives now/)
   })
   it('reaps every finished child worktree while it keeps the drive', async () => {
     const h = await rig({ reapableChildren: true })
     await h.load()
-    await vi.waitFor(() => expect([...new Set(h.reaped())].sort()).toEqual([...CHILD_WORKTREES].sort()))
+    await vi.waitFor(() => expect([...new Set(h.reaped())].sort()).toEqual([...childWorktrees()].sort()))
   })
   // B6: the seam is what can make the body throw.
   it('a tick whose body throws is logged, and the next tick still runs (constraint 14)', async () => {
@@ -529,5 +576,119 @@ describe('createHostDriving', () => {
     expect(h.logs.join('\n')).toMatch(/tick failed/)
     await expect(h.tickNow()).resolves.toBeUndefined()
     expect(h.driving.status().driver).toBe('host')
+  })
+})
+
+// Review of Task 12 (review-task-12.md), the fix round.
+describe('createHostDriving — review round 1', () => {
+  // I1: the gate starts unread, and an unread gate parks unless an app keeps dispatch (N2, §4.6).
+  it('keeps a parked profile parked when a yielding app says hello before the first settings read (I1)', async () => {
+    const h = await rig({ readyTasks: 1, settings: { orchestrationEnabled: false } })
+    h.server.app = true // a new app: attached, yields dispatch
+    h.driving.appsChanged()
+    expect(h.driving.drives()).toBe(false)
+    expect(h.driving.status().driver).toBe('parked')
+    await h.settle()
+    expect(h.driving.drives()).toBe(false)
+  })
+  it('still answers app at once for an app that keeps dispatch, before any read (I1)', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.app = true
+    h.server.keeps = true
+    h.driving.appsChanged()
+    expect(h.driving.status().driver).toBe('app')
+  })
+  // I1, second half: a superseded driver() answers from its own read, never from `last`.
+  it('never hands the load’s drain check a host it did not read (I1)', async () => {
+    const h = await rig({ readyTasks: 0, queuedReport: true })
+    await h.tickNow() // gate read once: migrated, before any load
+    await h.writeSettings({ orchAlwaysOnMigrated: false }) // now the profile is parked
+    h.gateReads.hold = true
+    const loading = h.orch.call({ cmd: 'jobs-list', args: {}, sessionId: '' }) // the load asks mayDrain → driver()
+    await vi.waitFor(() => expect(h.heldReads()).toBe(1))
+    h.driving.appsChanged() // a yielding app's hello: last = host from the gate read before, then a kick reads again
+    await vi.waitFor(() => expect(h.heldReads()).toBe(2))
+    h.gateReads.hold = false
+    h.releaseRead(0) // the load's read finishes first, superseded by the kick's
+    await loading
+    h.releaseRead(1)
+    await h.settle()
+    expect(await h.queuedReports()).toHaveLength(1)
+    expect(h.driving.status().driver).toBe('parked')
+  })
+  // I2: the handover asks again after its drain.
+  it('runs no resume sweep when an app that keeps dispatch attaches during the handover’s drain (I2)', async () => {
+    const h = await rig({ readyTasks: 1 })
+    h.server.keeps = true
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    h.drainHook.during = () => {
+      h.server.keeps = true
+      h.server.app = true
+      h.driving.appsChanged()
+    }
+    h.server.keeps = false
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.drainOnce).toHaveBeenCalledTimes(1))
+    await h.settle()
+    expect(h.resumeSweep).not.toHaveBeenCalled()
+    expect(h.workerStarts()).toBe(0)
+  })
+  it('starts no repair, so opens no Gate, when the Host starts retiring during the handover’s drain (I2, R15)', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    h.server.keeps = true
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    h.drainHook.during = () => {
+      h.spawner.retiring = true
+    }
+    h.server.keeps = false
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.drainOnce).toHaveBeenCalledTimes(1))
+    await h.settle()
+    expect(h.startRepair).not.toHaveBeenCalled()
+    expect(h.resumeSweep).not.toHaveBeenCalled()
+    expect(h.orch.state().gates).toEqual([])
+  })
+  // I3/M1: every change back to host hands over again.
+  it('hands over again after a host → app → host flap: a second sweep and a second belt start (I3)', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    await h.load()
+    await vi.waitFor(() => expect(h.startRepair).toHaveBeenCalledTimes(1))
+    expect(h.resumeSweep).toHaveBeenCalledTimes(1)
+    h.server.keeps = true
+    h.server.app = true
+    h.driving.appsChanged() // an old app attaches
+    h.server.keeps = false
+    h.server.app = false
+    h.driving.appsChanged() // and leaves
+    await vi.waitFor(() => expect(h.startRepair).toHaveBeenCalledTimes(2))
+    expect(h.resumeSweep).toHaveBeenCalledTimes(2)
+  })
+  // I3/M2: before a load the state in memory is empty, and a sweep over it would take every spec.
+  it('a tick before any load deletes no spec file, not even one a live worker reads (I3)', async () => {
+    const h = await rig({ openDispatchSpec: true })
+    await h.tickNow()
+    expect(h.orch.loaded()).toBe(false)
+    expect(existsSync(h.liveSpecPath)).toBe(true)
+    await h.load()
+    await h.tickNow()
+    expect(existsSync(h.liveSpecPath)).toBe(true) // loaded: its Dispatch is open, so it is kept
+  })
+  // I3/M3: the tick nudges a sleeping coordinator through the Host's registry and spawner.
+  it('the tick types into a sleeping coordinator’s live pty, and leaves a busy one alone (I3)', async () => {
+    const h = await rig({ sleepingCoordinator: true })
+    await h.load()
+    h.coordinator.busy = true
+    await h.tickNow()
+    expect(h.typed()).toEqual([])
+    h.coordinator.busy = false
+    await h.tickNow()
+    expect(h.typed().map(([id]) => id)).toEqual(['coord-1', 'coord-1'])
+    expect(h.typed()[0][1]).toMatch(/unread message/)
   })
 })
