@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import type { PtyFactory, PtyLike, PtySpawnOptions } from '../core/sessions/pty'
+import type { PtyFactory, PtyLike, PtySpawnOptions } from '../sessions/pty'
 import { RunManager } from './runManager'
-import type { RunConfig, RunStatus } from '../core/run/config'
+import type { RunConfig, RunStatus } from './config'
 
 // node-pty 를 흉내낸다 — **종료된 pty 에 write/resize 를 부르면 던진다.** 이 더블이 그것을 no-op
 // 으로 두고 있었던 탓에, RunManager 가 끝난 실행에 resize 를 흘려보내 main 프로세스를 죽이는 결함이
@@ -536,6 +536,38 @@ describe('RunManager', () => {
         if (original === undefined) delete process.env.JAVA_HOME
         else process.env.JAVA_HOME = original
       }
+    })
+
+    // R11: RunManager 는 자기 process.env 를 직접 읽지 않는다 — 실행이 시작할 밑바탕은 생성자의 네 번째
+    // 인자가 준다. 기본값은 process.env(앱은 바뀌지 않는다)이고, Host 는 자기 것에서 HOST_ONLY_ENV 를
+    // 뺀 것을 준다(D4).
+    it('starts a run from the base environment it was given, with the config env over it (R11)', () => {
+      let seenEnv: Record<string, string | undefined> = {}
+      const factory: PtyFactory = (_file, _args, opts) => {
+        seenEnv = opts.env
+        return new FakePty()
+      }
+      const mgr = new RunManager(factory, 'linux', () => {}, () => ({ PATH: '/bin', KEEP: '1' }))
+      mgr.start(startOpts({ config: { ...cfg, env: { EXTRA: 'x' } } }))
+      expect(seenEnv).toMatchObject({ PATH: '/bin', KEEP: '1', EXTRA: 'x' })
+      expect(seenEnv.ELECTRON_RUN_AS_NODE).toBeUndefined()
+    })
+
+    it('reads the base environment at each start, not at construction', () => {
+      let base: NodeJS.ProcessEnv = { A: '1' }
+      let seen: Record<string, string | undefined> = {}
+      const mgr = new RunManager(
+        (_file, _args, opts) => {
+          seen = opts.env
+          return new FakePty()
+        },
+        'linux',
+        () => {},
+        () => base
+      )
+      base = { A: '2' }
+      mgr.start(startOpts())
+      expect(seen.A).toBe('2')
     })
   })
 

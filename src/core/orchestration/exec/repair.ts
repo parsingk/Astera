@@ -2,10 +2,10 @@
 // 끝내면, 여기가 spec 파일을 쓰고 세션에 넣거나 새 워커를 띄우고 자리표시자를 채운다 — worker-start 의
 // 서버 분기가 하는 것과 같은 순서(커밋 → 부수 효과 → 패치 → 실패면 롤백)다. ipc.ts 에는 테스트가 닿지
 // 않으므로 그 순서가 여기 있다.
-import { isSamePath } from '../../core/files/tree'
-import { t, type Lang } from '../../core/i18n'
-import { latestImplDispatch, policyOf, repairCountOf } from '../../core/orchestration/convergence'
-import { createGate, jobOf, openDispatch, type OrchState, type RepairTarget } from '../../core/orchestration/state'
+import { isSamePath } from '../../files/tree'
+import { t, type Lang } from '../../i18n'
+import { latestImplDispatch, policyOf, repairCountOf } from '../convergence'
+import { createGate, jobOf, openDispatch, type OrchState, type RepairTarget } from '../state'
 import {
   canTransition,
   FAILURE_LIMIT,
@@ -13,10 +13,10 @@ import {
   placeholderSessionId,
   type Dispatch,
   type Task
-} from '../../core/orchestration/types'
-import type { KnowledgeFiles } from '../../core/knowledge/detect'
-import { buildSpecFile, repairWorkerPrompt } from '../../core/orchestration/exec/coordinator'
-import type { OrchServerDeps } from '../../core/orchestration/command'
+} from '../types'
+import type { KnowledgeFiles } from '../../knowledge/detect'
+import { buildSpecFile, repairWorkerPrompt } from './coordinator'
+import type { OrchServerDeps } from '../command'
 
 export interface RepairDeps {
   getState(): OrchState

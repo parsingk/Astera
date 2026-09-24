@@ -62,9 +62,9 @@ import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
 import type { OrchLoadResult } from '../core/orchestration/store'
 import { createMirrorStore, OrchStateConflict } from './orchestration/mirrorStore'
-import { createResumeSweep, type ResumeSweep } from './orchestration/resumeSweep'
+import { createResumeSweep, type ResumeSweep } from '../core/orchestration/exec/resumeSweep'
 import { createOrchCommitHook } from './orchestration/commitHook'
-import { createReviewGate } from './orchestration/reviewGate'
+import { createReviewGate } from '../core/orchestration/exec/reviewGate'
 import { answerOrchAct } from './orchestration/answerAct'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { UnderstandingStore } from './understanding/store'
@@ -100,7 +100,7 @@ import {
   reportedDispatchIdsOf
 } from '../core/orchestration/pendingReports'
 import { ExitsBeforeTap, OrchRollTap } from './orchestration/rollTap'
-import { TaskValidator } from './orchestration/validator'
+import { TaskValidator } from '../core/orchestration/exec/validator'
 import {
   applyValidationResult,
   bindNativeSession,
@@ -139,7 +139,7 @@ import {
   policyOf,
   suspiciousCheckFiles
 } from '../core/orchestration/convergence'
-import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './orchestration/repair'
+import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
 import { accountToDispatchOn } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
 import { ensureProject } from '../core/orchestration/projects'
@@ -222,7 +222,7 @@ import { listJdks } from './jdkScanner'
 import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
-import { loadRunConfigs, prepareRun, prepareLaunch } from './run/prepare'
+import { loadRunConfigs, prepareRun, prepareLaunch } from '../core/run/prepare'
 import { allowingJobCwds, orchRunConfigOf } from '../core/run/runConfigsFile'
 import { seedKeyOf } from '../core/run/config'
 import { executeLaunch } from './run/launch'
@@ -2886,7 +2886,7 @@ export function registerIpc(
      *  "검토 못 함"이 화면에서 같아진다. **한 갈래만 예외이고 그것은 실패가 아니다**: 이미 검토가
      *  돌고 있다는 거절(reviewGate.onOpenRefused). */
     const startReview = async ({ taskId }: { taskId: string }): Promise<void> => {
-      /** Gate 로 넘긴다. 규칙과 그 이유는 `createReviewGate` 에 있다(main/orchestration/reviewGate.ts)
+      /** Gate 로 넘긴다. 규칙과 그 이유는 `createReviewGate` 에 있다(core/orchestration/exec/reviewGate.ts)
        *  — 이 자리에 있던 것을 그대로 옮겼고, 옮긴 이유는 그 파일의 머리말에 있다. */
       const gate = (reason: string): Promise<void> => reviewGate.gate({ taskId, reason })
       try {
@@ -5408,7 +5408,7 @@ export function registerIpc(
     const tr = (key: string, params?: Record<string, string | number>): string =>
       t(core.lang, key as MessageKey, params)
     // The plan and every step's command, before anything starts: a chain with a broken step must not
-    // leave the steps before it already running (main/run/prepare.ts).
+    // leave the steps before it already running (core/run/prepare.ts).
     const { plan, prepared, projectName } = await prepareLaunch({
       projectPath,
       rootId: configId,
@@ -5515,7 +5515,7 @@ export function registerIpc(
   })
   ipcMain.on('run.write', (_e, runId: string, data: string) => core.run.write(runId, data))
   ipcMain.on('run.resize', (_e, runId: string, cols: number, rows: number) => core.run.resize(runId, cols, rows))
-  // 저장 시점의 cwd 검사 — 규칙과 그 근거는 main/run/prepare.ts 의 resolveRunCwd 를 보라. 그 함수는
+  // 저장 시점의 cwd 검사 — 규칙과 그 근거는 core/run/prepare.ts 의 resolveRunCwd 를 보라. 그 함수는
   // prepareRun 이 id 로 구성을 찾는 일까지 하므로 저장 경로에서는 쓸 수 없어, 같은 규칙을 여기 따로 둔다.
   const assertConfigCwd = async (projectPath: string, cwd: unknown): Promise<void> => {
     if (cwd === undefined || cwd === null || cwd === '') return

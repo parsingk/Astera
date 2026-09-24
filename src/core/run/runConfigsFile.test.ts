@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { allowingJobCwds, readRunConfigsFile } from './runConfigsFile'
+import { allowingJobCwds, readRunConfigsFile, readStoredRunConfigs } from './runConfigsFile'
 import { RepairNeeded } from '../settings/repairNeeded'
 
 let dir: string
@@ -98,6 +98,26 @@ describe('allowingJobCwds', () => {
     await expect(allow('D:/later')).rejects.toThrow()
     jobs.push({ cwd: 'D:/later' })
     await expect(allow('D:/later')).resolves.toBe('D:/later')
+  })
+})
+
+// RunManager(core/run/runManager.ts)가 받는 baseEnv 와 같은 자리 — Host 가 앱 없이 저장된 구성 그대로를
+// 읽어야 하는 곳(run-configs list, tasks add --validate)에서 쓴다. readRunConfigsFile 과 달리 시드와
+// 합치지 않고 OrchRunConfig 로 좁히지도 않는다 — 저장된 구성 그대로다.
+describe('readStoredRunConfigs', () => {
+  it('readStoredRunConfigs answers the saved configurations of one project whole, and [] for none', async () => {
+    const file = path.join(dir, 'run-configs.json')
+    const project = path.join(dir, 'proj')
+    await fs.writeFile(file, JSON.stringify({ [project]: [{ id: 'c1', name: 'test', type: 'shell', command: 'npm test' }] }))
+    const got = await readStoredRunConfigs(file, project)
+    expect(got.map((c) => c.id)).toEqual(['c1'])
+    expect(await readStoredRunConfigs(file, path.join(dir, 'other'))).toEqual([])
+  })
+
+  it('readStoredRunConfigs refuses a damaged file as RepairNeeded, like readRunConfigsFile', async () => {
+    const file = path.join(dir, 'run-configs.json')
+    await fs.writeFile(file, '{ nope')
+    await expect(readStoredRunConfigs(file, dir)).rejects.toBeInstanceOf(RepairNeeded)
   })
 })
 

@@ -19,7 +19,7 @@ import {
   rekeyDispatch,
   type OrchState
 } from './state'
-import { TaskValidator } from '../../main/orchestration/validator'
+import { TaskValidator } from './exec/validator'
 import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project } from './types'
 import { parseArgs } from './cliArgs'
 import { runningRunCount } from './running'

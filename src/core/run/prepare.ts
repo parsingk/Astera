@@ -6,13 +6,13 @@
 // 답하고(CLI phase D), Host 는 main 을 가져오지 않는다. 여기서 다시 내보내 부르는 쪽은 그대로다.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import type { RunConfig } from '../../core/run/config'
-import { loadRunConfigs } from '../../core/run/load'
-import { buildCommand, buildRunContext } from '../../core/run/build'
-import { missingRequiredFields } from '../../core/run/migrate'
-import { isPathWithin } from '../../core/files/tree'
-import { planLaunch, type LaunchPlan } from '../../core/run/launch'
-import type { RunnableConfig } from '../../core/run/types'
+import type { RunConfig } from './config'
+import { loadRunConfigs } from './load'
+import { buildCommand, buildRunContext } from './build'
+import { missingRequiredFields } from './migrate'
+import { isPathWithin } from '../files/tree'
+import { planLaunch, type LaunchPlan } from './launch'
+import type { RunnableConfig } from './types'
 
 export { loadRunConfigs, readSeedTexts, type SeedTexts } from '../../core/run/load'
 

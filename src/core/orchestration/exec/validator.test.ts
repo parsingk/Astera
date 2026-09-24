@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { TaskValidator, type ValidatorRunner } from './validator'
-import { absPath } from '../../core/testPaths'
-import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
-import { CHECK_TIMEOUT_MS, type CheckResult } from '../../core/orchestration/types'
+import { absPath } from '../../testPaths'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../sessions/pty'
+import { CHECK_TIMEOUT_MS, type CheckResult } from '../types'
 
 const settledCalls = (): {
   onSettled: (a: { taskId: string; results: CheckResult[] }) => Promise<void>

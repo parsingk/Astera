@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createResumeSweep } from './resumeSweep'
-import { emptyState, type OrchState } from '../../core/orchestration/state'
-import type { Dispatch, Task } from '../../core/orchestration/types'
+import { emptyState, type OrchState } from '../state'
+import type { Dispatch, Task } from '../types'
 
 const NOW = '2026-09-22T00:00:00.000Z'
 

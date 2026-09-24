@@ -1,6 +1,6 @@
-import { stripAnsi } from '../../core/rolling/detect'
-import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
-import { CHECK_TIMEOUT_MS, type CheckResult } from '../../core/orchestration/types'
+import { stripAnsi } from '../../rolling/detect'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../sessions/pty'
+import { CHECK_TIMEOUT_MS, type CheckResult } from '../types'
 
 // Validation run sequencing. Knows neither RunManager nor OrchState — only a runner and two callbacks,
 // which is what lets tests reach it (inside ipc.ts they could not).

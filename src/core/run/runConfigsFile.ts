@@ -55,6 +55,16 @@ export async function readRunConfigsFile(filePath: string, projectPath: string):
   return configs.map(orchRunConfigOf)
 }
 
+/**
+ * `projectPath`'s saved configurations exactly as stored — no seeds merged in, no projection to
+ * `OrchRunConfig`. What RunManager.start needs a whole RunConfig for (a validation run picks one by
+ * id and runs it), where readRunConfigsFile's narrowed shape would lose the command, env and cwd.
+ * Same file, same damaged-file contract (RepairNeeded, never silently "no configurations").
+ */
+export async function readStoredRunConfigs(filePath: string, projectPath: string): Promise<RunConfig[]> {
+  return migrateRunConfigs((await readMap(filePath))[projectPath], { allowIncomplete: true })
+}
+
 async function readMap(filePath: string): Promise<Record<string, unknown>> {
   let text: string
   try {

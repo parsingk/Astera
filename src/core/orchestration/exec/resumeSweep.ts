@@ -12,8 +12,8 @@
 // **The predicate is not here.** It is `interruptedResumes` in core/orchestration/store.ts, which
 // `store.load` also calls — one function, because two copies would drift and the drifted copy would
 // leave a Task stuck with nothing on screen to say why.
-import { interruptedResumes } from '../../core/orchestration/store'
-import type { OrchState } from '../../core/orchestration/state'
+import { interruptedResumes } from '../store'
+import type { OrchState } from '../state'
 
 export interface ResumeSweep {
   /**

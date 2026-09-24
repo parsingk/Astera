@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { readSeedTexts, loadRunConfigs, prepareRun, prepareLaunch } from './prepare'
-import type { RunConfig } from '../../core/run/config'
+import type { RunConfig } from './config'
 
 let dir: string
 beforeEach(async () => {

@@ -3,8 +3,8 @@ import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './r
 import {
   applyValidationResult, applyWorkerDone, createGate, createJob,
   startJobRun, createTask, emptyState, openDispatch, resolveGate, type OrchState
-} from '../../core/orchestration/state'
-import type { CheckResult, Dispatch, Task } from '../../core/orchestration/types'
+} from '../state'
+import type { CheckResult, Dispatch, Task } from '../types'
 
 /** 예전의 createRun 한 번 — 이제 계획을 만들고 그 1회차를 시작하는 두 걸음이다. */
 const seedRun = (over: Parameters<typeof createJob>[1], now: string) => {

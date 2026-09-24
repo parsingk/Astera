@@ -1,12 +1,12 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import type { PtyFactory, PtyLike } from '../core/sessions/pty'
-import { treeKillCommand } from '../core/run/kill'
-import { shellSpawn } from '../core/run/shell'
-import { withJavaHomeOnPath } from '../core/run/jdk'
-import { placeNewRun } from '../core/run/instances'
-import type { RunConfig, RunStatus } from '../core/run/config'
-import { firstLoopbackUrl } from '../core/run/consoleLinks'
+import type { PtyFactory, PtyLike } from '../sessions/pty'
+import { treeKillCommand } from './kill'
+import { shellSpawn } from './shell'
+import { withJavaHomeOnPath } from './jdk'
+import { placeNewRun } from './instances'
+import type { RunConfig, RunStatus } from './config'
+import { firstLoopbackUrl } from './consoleLinks'
 
 const OUTPUT_LIMIT = 200_000 // Cap on the recent-output buffer kept for reconnects, per run
 /** How much of a run's tail is searched for its address. A dev server prints it in the first
@@ -57,7 +57,11 @@ export class RunManager {
   constructor(
     private ptyFactory: PtyFactory,
     private platform: NodeJS.Platform = process.platform,
-    private killRunner: KillRunner = (cmd) => execFile(cmd.file, cmd.args, { windowsHide: true }, () => {})
+    private killRunner: KillRunner = (cmd) => execFile(cmd.file, cmd.args, { windowsHide: true }, () => {}),
+    /** What a run's environment starts from before the config's own env is laid over it. The app's
+     *  process env by default; the Host passes its own minus HOST_ONLY_ENV (D4, R11). Read at each
+     *  start, not captured at construction — start() below calls it fresh. */
+    private baseEnv: () => NodeJS.ProcessEnv = () => process.env
   ) {}
 
   /** Starts a run. Its seat in the project's list comes from placeNewRun: the earliest finished run of
@@ -83,9 +87,9 @@ export class RunManager {
     const fromFields: Record<string, string> = {}
     if (c.javaHome) fromFields.JAVA_HOME = c.javaHome
     if (c.springProfiles) fromFields.SPRING_PROFILES_ACTIVE = c.springProfiles
-    // The config env overrides process.env, and fromFields overrides both — per-config overrides such as
-    // JAVA_HOME have to win.
-    const merged = { ...process.env, ...opts.config.env, ...fromFields }
+    // The config env overrides the base environment, and fromFields overrides both — per-config
+    // overrides such as JAVA_HOME have to win.
+    const merged = { ...this.baseEnv(), ...opts.config.env, ...fromFields }
     // When the config specified JAVA_HOME (via the field or, for shell configs migrated from v1, via env),
     // its bin is prepended to PATH so the chosen JDK also applies when the command invokes java directly.
     // This happens **only when the config specified it**: reacting to a JAVA_HOME the app merely inherited
