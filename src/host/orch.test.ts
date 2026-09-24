@@ -2790,6 +2790,8 @@ describe('the driver’s hooks (R3–R6)', () => {
     const got = await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })
     expect((got.body as { state: OrchState }).state.tasks.find((t) => t.id === taskId)?.status).toBe('completed')
     expect(await fs.readdir(pendingReportsDirIn(dir))).toEqual([])
+    // The load drained, so the after-load pass's drainOnce must not drain a second time (C6).
+    expect(await orch.drainOnce()).toBe(false)
   })
   it('awaits mayDrain: a decision that is still being computed is waited for, not read as no (N2)', async () => {
     const { taskId, dispatchId, sessionId } = await seedOpenDispatch()
@@ -2840,6 +2842,40 @@ describe('the driver’s hooks (R3–R6)', () => {
     expect(viaHandle.status).toBe(409)
     expect(viaHandle.body).toMatchObject({ retry: expect.any(String) })
     expect(viaHandle).toEqual(viaCall)
+  })
+
+  // A drain that fails as a whole is logged, not thrown: the driver awaits drainOnce before its resume
+  // sweep and its pass, and an escaping failure would cost both. The report stays for the next start.
+  it('drainOnce resolves when the drain itself throws, and leaves the report on disk', async () => {
+    const { taskId, dispatchId, sessionId } = await seedOpenDispatch()
+    await writeQueuedDone({ taskId, dispatchId, sessionId })
+    let asked = 0
+    // The load asks once; the drain's own held-only-by-report reading is the second ask.
+    const aliveSessionIds = (): ReadonlySet<string> => {
+      asked += 1
+      if (asked > 1) throw new Error('registry broke')
+      return new Set<string>()
+    }
+    const orch = orchOver({ mayDrain: async () => false, aliveSessionIds })
+    await orch.ready()
+    await expect(orch.drainOnce()).resolves.toBe(true)
+    expect(logs.some((l) => l.includes('registry broke'))).toBe(true)
+    expect(await fs.readdir(pendingReportsDirIn(dir))).toHaveLength(1)
+    expect(orch.state().tasks.find((t) => t.id === taskId)?.status).toBe('dispatched')
+  })
+  // A refused state-put changed nothing, so it must not stand in for the load: a fresh Host that
+  // refuses a stale first write would otherwise answer every later read with an empty state, and the
+  // app's next write, built from that, could be saved over the file (ruling F56's data-loss class).
+  it('a fresh Host that refuses a stale first state-put still loads the file', async () => {
+    const { jobId } = await seed()
+    const orch = orchOver()
+    const app = { role: 'app' as const, toOthers: () => {} }
+    const put = await orch.call({ cmd: 'state-put', args: { state: emptyState(), version: 7 }, sessionId: '', from: app })
+    expect(put.status).toBe(409)
+    // The refusal already carries the real state, so the app's mirror is put right from the file.
+    expect((put.body as { state: OrchState }).state.jobs.map((j) => j.id)).toEqual([jobId])
+    const got = await orch.call({ cmd: 'state-get', args: {}, sessionId: '', from: app })
+    expect((got.body as { state: OrchState }).state.jobs.map((j) => j.id)).toEqual([jobId])
   })
 
   // Constraint 14: the three hooks are the driver's, and a driver that throws costs nobody a commit or

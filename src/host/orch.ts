@@ -661,6 +661,15 @@ export function createHostOrch(a: {
     // **Ahead of the version check below, deliberately.** Everything from that check to the commit
     // has to be one synchronous step (see `reserveVersion`), and this is the last thing in this
     // function that can suspend.
+    //
+    // **A write that is about to be refused loads instead of standing in for the load.** On a fresh
+    // Host a stale version is certain to be refused below, and a refusal changes nothing — so it must
+    // not mark this Host as holding a state. Setting `loading` for it would leave memory empty for good:
+    // the refusal would hand the app an empty state, every later read would answer it, and the app's
+    // next write, built from it, could be saved over the file. Loading here first means the refusal
+    // carries the file's state, which is what the app's mirror needs.
+    const sent = args.version
+    if (!loading && typeof sent === 'number' && sent !== version) await ready()
     if (loading) await loading
     else loading = Promise.resolve()
     // **The write the app built is against a state this Host has since replaced** (ruling F56). It
@@ -675,7 +684,6 @@ export function createHostOrch(a: {
     // built before this field, or one writing before its first `state-get` — and refusing those would
     // be a new failure in place of the one being fixed. The check is a safety net over a client that
     // opts into it, which is what keeps this additive and the protocol at 3.
-    const sent = args.version
     if (typeof sent === 'number' && sent !== version)
       return {
         status: 409,
@@ -1070,7 +1078,10 @@ export function createHostOrch(a: {
       // The queue read again: the load's reading is as old as the load, and the app may have drained
       // some of it since.
       const queued = await readPendingReports({ dir: pendingReportsDirIn(a.profileDir), log: a.log })
-      await drain(queued)
+      // Caught for the load path's reason, and for one of the driver's: it awaits this before its
+      // resume sweep and its pass, so a failure that escaped would cost both. The reports stay on disk
+      // for the next start, as they do when the load's drain fails. It still ran, so the answer is true.
+      await drain(queued).catch((err) => a.log(`pending reports — the drain failed: ${String(err)}`))
       return true
     },
     call: async ({ cmd, args, sessionId, from, request }) => {
