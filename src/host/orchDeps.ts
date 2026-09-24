@@ -562,9 +562,9 @@ export function hostOrchDeps(a: {
   }
 
   /** HOST_LOCAL: the spawner's answer when it owns this call, otherwise the route the name had before
-   *  S2. A local `RepairNeeded` is flagged with its file the way a propagating forward is flagged, and a
-   *  `HostRetiring` with `retry` — only for the four that propagate, since a swallowed failure must
-   *  not decide the status. */
+   *  S2. A local `RepairNeeded` is flagged with its file the way a propagating forward is flagged, a
+   *  `HostRetiring` with `retry`, and a local `AppUnreachable` as it is — only for the names that
+   *  propagate, since a swallowed failure must not decide the status. */
   const hostLocal = (name: HostLocalName) => {
     const propagates = HOST_LOCAL_FALLBACK[name] === 'propagates'
     const fallback = forward(name, propagates)
@@ -578,6 +578,9 @@ export function hostOrchDeps(a: {
         if (propagates && err instanceof RepairNeeded) a.onAppRequired(name, err.message, { repair: err.file })
         // A Host that is leaving refuses new starts; the caller retries once a Host is up (ruling a).
         if (propagates && err instanceof HostRetiring) a.onAppRequired(name, err.message, { retry: HostRetiring.RETRY })
+        // The Host refused on its own for want of an app it could not ask (host/worktrees.ts: an
+        // app running but not attached): the same conflict as an app that could not be reached.
+        if (propagates && err instanceof AppUnreachable) a.onAppRequired(name, err.message, {})
         throw err
       }
     }

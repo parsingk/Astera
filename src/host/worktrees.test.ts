@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { makeRepo, gitSync, tempDir } from '../core/worktrees/testRepo'
 import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
@@ -85,7 +86,7 @@ describe('createHostWorktrees', () => {
       for (const [cmd, args] of [['worktree-list', {}], ['worktree-remove', { id: 'x' }], ['worktree-root', { root: null }]] as const) {
         const r = await h.wt.call(cmd, args, app)
         expect(r.status).toBe(409)
-        expect(r.body).toMatchObject({ repair: 'worktrees.json', error: expect.stringMatching(/unreadable/) })
+        expect(r.body).toMatchObject({ repair: 'worktrees.json', error: expect.stringMatching(/unreadable.*reopen Astera/) })
       }
       expect(await fs.readFile(path.join(profile, 'worktrees.json'), 'utf8')).toBe('{bad')
       await expect(fs.stat(path.join(profile, 'worktrees.json.bak'))).rejects.toThrow()
@@ -173,6 +174,34 @@ describe('createHostWorktrees', () => {
     expect(await h.wt.removeWorktrees([p])).toEqual({ failed: [p] })
     await fs.stat(p)
   })
+  // Review M3: a reap closes sessions only, and does not wait on what it may not close.
+  it('leaves a run and a shell in the folder running, and does not wait on them', async () => {
+    const h = rig({ closeTimeoutMs: 4_000 })
+    const p = await h.wt.fork({ repoPath: repo, name: 'a' })
+    h.open('pty_run', p, { kind: 'run', id: 'r1', restore: { configName: 'dev' } })
+    h.open('pty_sh', p, { kind: 'terminal', id: 't1', restore: {} })
+    const started = Date.now()
+    expect(await h.wt.removeWorktrees([p])).toEqual({ failed: [p] })
+    expect(Date.now() - started).toBeLessThan(2_000)
+    expect(h.ptys.liveEntries().map((e) => e.id)).toEqual(['pty_run', 'pty_sh'])
+  })
+  // Review M1: registries that cannot be read keep the folder.
+  it('counts a folder as in use when the live entries cannot be read', async () => {
+    const h = rig()
+    const p = await h.wt.fork({ repoPath: repo, name: 'a' })
+    const broken = rig({ ptys: { liveEntries: () => { throw new Error('registry gone') }, kill: () => {} } })
+    expect(broken.wt.isPathInUse(p)).toBe('UNKNOWN')
+    expect(await broken.wt.removeWorktrees([p])).toEqual({ failed: [p] })
+    await fs.stat(p)
+    void h
+  })
+  // Review M2: the folder a pty runs in is compared the way Windows compares paths.
+  it.runIf(process.platform === 'win32')('sees a pty whose folder is written in another case, with other separators', async () => {
+    const h = rig()
+    const p = path.join(home, 'wt', 'proj', 'a')
+    h.open('pty_t', path.join(p, 'src').toUpperCase().split(path.sep).join('/'), { kind: 'terminal', id: 't1', restore: { title: 'Shell' } })
+    expect(h.wt.isPathInUse(p)).toBe('SESSION:Shell')
+  })
   // Binding 6: by spawn folder, at or below the path, ptys of every kind and line processes too.
   it('counts any live pty or line process opened in the folder or below it as using it', async () => {
     const h = rig()
@@ -251,12 +280,68 @@ describe('createHostWorktrees', () => {
       expect((await onDisk()).items.map((w: { path: string }) => w.path)).toEqual([p])
       expect(h.logs.some((l) => /IN_USE: SESSION:opened meanwhile/.test(l))).toBe(true)
     })
+    // Review M8: the reap never throws, whatever the app side does.
+    it('keeps the folder when asking about the app throws', async () => {
+      const h = rig({ app: { hasApp: () => { throw new Error('server gone') }, act: async () => null } })
+      const p = await h.wt.fork({ repoPath: repo, name: 'a' })
+      expect(await h.wt.removeWorktrees([p])).toEqual({ failed: [p] })
+      await fs.stat(p)
+    })
     it('asks nobody when no app is attached', async () => {
       const a = appSays(async () => 'SESSION:x')
       const h = rig({ app: { ...a.app, hasApp: () => false } })
       const p = await h.wt.fork({ repoPath: repo, name: 'a' })
       expect(await h.wt.removeWorktrees([p])).toEqual({ failed: [] })
       expect(a.asked).toEqual([])
+    })
+  })
+  // Review I1: an app can be alive and not attached (it gave up on a stalled Host and runs its new
+  // sessions locally, or has not reconnected since a Host restart). Its sessions are invisible here.
+  describe('an app that is running but not attached', () => {
+    const appPid = (pid: number) => fs.writeFile(path.join(profile, 'app.pid'), String(pid))
+    const deadPid = (): Promise<number> =>
+      new Promise((resolve) => { const c = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' }); c.on('exit', () => resolve(c.pid!)) })
+    it('refuses the removal as a conflict, and keeps the folder and its sessions', async () => {
+      const h = rig()
+      const p = await h.wt.fork({ repoPath: repo, name: 'a' })
+      h.session('ses_w', p)
+      await appPid(process.pid)
+      const err = await h.wt.removeWorktrees([p]).then(() => null, (e: unknown) => e)
+      expect(err).toBeInstanceOf(AppUnreachable)
+      expect((err as Error).message).toBe('Astera is running but not connected to this Host; remove the worktree from the app, or quit Astera and retry')
+      expect(h.ptys.liveEntries()).toHaveLength(1)
+      await fs.stat(p)
+      expect((await onDisk()).items).toHaveLength(1)
+    })
+    it('proceeds when no app has said it is running', async () => {
+      const h = rig()
+      const p = await h.wt.fork({ repoPath: repo, name: 'a' })
+      expect(await h.wt.removeWorktrees([p])).toEqual({ failed: [] })
+      await expect(fs.stat(p)).rejects.toThrow()
+    })
+    it('proceeds when the app that said so has ended', async () => {
+      const h = rig()
+      const p = await h.wt.fork({ repoPath: repo, name: 'a' })
+      await appPid(await deadPid())
+      expect(await h.wt.removeWorktrees([p])).toEqual({ failed: [] })
+      await expect(fs.stat(p)).rejects.toThrow()
+    })
+    it('asks the app instead when it is attached', async () => {
+      const asked: unknown[] = []
+      const h = rig({ app: { hasApp: () => true, act: async (name, args) => { asked.push([name, args]); return null } } })
+      const p = await h.wt.fork({ repoPath: repo, name: 'a' })
+      await appPid(process.pid)
+      expect(await h.wt.removeWorktrees([p])).toEqual({ failed: [] })
+      expect(asked).toEqual([[HOST_ACT_PATH_IN_USE, [p]], [HOST_ACT_PATH_IN_USE, [p]]])
+    })
+    // The app can leave between the start of the removal and the folder itself.
+    it('keeps the folder when the app detaches during the removal', async () => {
+      let attached = true
+      const h = rig({ app: { hasApp: () => attached, act: async () => { attached = false; return null } } })
+      const p = await h.wt.fork({ repoPath: repo, name: 'a' })
+      await appPid(process.pid)
+      expect(await h.wt.removeWorktrees([p])).toEqual({ failed: [p] })
+      await fs.stat(p)
     })
   })
   describe('the app writes through the Host (R1)', () => {
@@ -283,6 +368,15 @@ describe('createHostWorktrees', () => {
       expect(states(sent).map((m) => m.seq)).toEqual([2, 3])
       expect(states(sent)[1].file).toEqual(await onDisk())
       expect(h.logs.some((l) => /worktrees-state/.test(l) && /socket gone/.test(l))).toBe(true)
+    })
+    // Review M12: an add retried after a lost reply does not list the worktree twice.
+    it('takes a second add of the same folder as the first', async () => {
+      const h = rig()
+      const first = await h.wt.call('worktree-add', { info: info('a1') }, app)
+      const again = await h.wt.call('worktree-add', { info: info('a1') }, app)
+      expect(again).toEqual(first)
+      expect((await onDisk()).items.map((w: { id: string }) => w.id)).toEqual(['a1'])
+      expect(states(h.sent)).toHaveLength(1)
     })
     it('answers nobody but the app, and refuses a malformed entry', async () => {
       const h = rig()

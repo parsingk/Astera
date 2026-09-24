@@ -823,6 +823,15 @@ describe('HOST_LOCAL (S2)', () => {
     await expect(deps.startCoordinator!({} as never)).rejects.toBe(retiring)
     expect(onAppRequired).toHaveBeenCalledWith('startCoordinator', retiring.message, { retry: 'host-retiring' })
   })
+  // Host S3 Task 6 fix round 2: the Host refusing on its own because an app it must ask is running
+  // but not attached is a conflict, as an app that could not be reached is.
+  it('flags a local refusal for want of the app, for the names that propagate', async () => {
+    const onAppRequired = vi.fn()
+    const detached = new AppUnreachable('Astera is running but not connected to this Host')
+    const deps = hostOrchDeps(base({ onAppRequired, local: fakeLocal({ startWorker: vi.fn().mockRejectedValue(detached) }) }))
+    await expect(deps.startWorker({} as never)).rejects.toBe(detached)
+    expect(onAppRequired).toHaveBeenCalledWith('startWorker', detached.message, {})
+  })
   it('flags a file read that needs repair with its file, when the app is absent', async () => {
     const onAppRequired = vi.fn()
     const deps = hostOrchDeps(base({ hasApp: () => false, onAppRequired, readAccounts: vi.fn().mockRejectedValue(new RepairNeeded('accounts.json is not valid JSON; open Astera to repair it', 'accounts.json')) }))

@@ -18,7 +18,8 @@
 
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { OrchCaller } from '../core/host/orchProtocol'
+import { AppUnreachable, type OrchCaller } from '../core/host/orchProtocol'
+import { liveAppPid } from '../core/host/pidFile'
 import { HOST_ACT_PATH_IN_USE, type HostMessage, type PtyMeta, type WorktreesSnapshot } from '../core/host/protocol'
 import type { OrchServerDeps } from '../core/orchestration/command'
 import type { OrchState } from '../core/orchestration/state'
@@ -31,7 +32,7 @@ import {
 } from '../core/orchestration/exec/integrateGit'
 import { WorktreeRegistry, defaultWorktreeRoot, isRegistryFile } from '../core/worktrees/registry'
 import { git as realGit } from '../core/worktrees/git'
-import { isPathWithin } from '../core/files/tree'
+import { isPathWithin, isSamePath } from '../core/files/tree'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import type { WorktreeInfo } from '../core/types'
 import type { PtyRegistry } from './registry'
@@ -181,12 +182,23 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     anyRunningIn: (p) => sessionsIn(p).length > 0
   }
 
-  /** The ruling on plan risk 3: an attached app may run something in the folder that the Host cannot
-   *  see, and a removal would delete the folder under it on macOS and Linux. The app is asked; an
-   *  app that does not answer, or answers what cannot be read, keeps the folder. With no app
-   *  attached there is nothing the Host cannot see. */
+  /** An app that is alive and not attached: one that gave up on this Host while its event loop
+   *  stalled (it then runs new sessions on local node-pty and does not reconnect), or one that has not
+   *  reconnected since a Host restart. Those sessions are invisible here, so no folder is removed
+   *  while such an app runs (review I1). Known from the pid file the app keeps in the profile
+   *  (core/host/pidFile.ts, which says what its pid-reuse residual costs). */
+  const DETACHED_APP =
+    'Astera is running but not connected to this Host; remove the worktree from the app, or quit Astera and retry'
+  const detachedApp = (): boolean => !d.app.hasApp() && liveAppPid(d.profileDir) !== null
+
+  /** Whether an app runs something in the folder the Host cannot see, as a reason, or null.
+   *  - Attached (the ruling on plan risk 3): the app is asked, and one that does not answer, or
+   *    answers what cannot be read, keeps the folder.
+   *  - Alive and not attached: kept, see DETACHED_APP.
+   *  - No app alive: nothing the Host cannot see. */
   const askApp = async (p: string): Promise<string | null> => {
-    if (!d.app.hasApp()) return null
+    // A throw here is caught by whoever asked: `reap` and reapWorktree's own try both keep the folder.
+    if (!d.app.hasApp()) return liveAppPid(d.profileDir) !== null ? DETACHED_APP : null
     try {
       const answer = await d.app.act(HOST_ACT_PATH_IN_USE, [p])
       if (answer === null || typeof answer === 'string') return answer
@@ -196,33 +208,40 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     }
   }
 
+  /** Rule 11 over the Host's own sessions. **Never throws** (review M8): integrateWorktrees' reap and
+   *  worktreeDeps' removal rely on it, and a throw there would turn a finished merge into a failure. */
   const reap = async (p: string): Promise<boolean> => {
-    const appUse = await askApp(p)
-    if (appUse !== null) {
-      d.log(`worktree ${p} is in use in the app (${appUse}) — left alone`)
-      return false
-    }
-    // The held check reads the Host's own Dispatches (retained, outcome, endedAt). Read here, not
-    // inside reapWorktree, so a state that cannot be read keeps the worktree instead of throwing
-    // out of a function whose callers rely on it never throwing.
-    let dispatches: OrchState['dispatches']
     try {
-      dispatches = d.getState().dispatches
+      const appUse = await askApp(p)
+      if (appUse !== null) {
+        d.log(`worktree ${p} is in use in the app (${appUse}) — left alone`)
+        return false
+      }
+      // The held check reads the Host's own Dispatches (retained, outcome, endedAt), read here so a
+      // state that cannot be read keeps the worktree.
+      let dispatches: OrchState['dispatches']
+      try {
+        dispatches = d.getState().dispatches
+      } catch (err) {
+        d.log(`worktree ${p} left alone: the Dispatches could not be read (${message(err)})`)
+        return false
+      }
+      return await reapWorktree(p, {
+        registry,
+        sessions,
+        dispatches: () => dispatches,
+        isPathInUse,
+        // Asked again at the removal itself: the first answer is up to the close timeout old by then,
+        // and the app may have attached or left in between.
+        beforeRemove: askApp,
+        log: d.log,
+        closeTimeoutMs: d.closeTimeoutMs,
+        pollMs: d.pollMs
+      })
     } catch (err) {
-      d.log(`worktree ${p} left alone: the Dispatches could not be read (${message(err)})`)
+      d.log(`worktree ${p} left alone: ${message(err)}`)
       return false
     }
-    return reapWorktree(p, {
-      registry,
-      sessions,
-      dispatches: () => dispatches,
-      isPathInUse,
-      // Asked again at the removal itself: the first answer is up to the close timeout old by then.
-      beforeRemove: askApp,
-      log: d.log,
-      closeTimeoutMs: d.closeTimeoutMs,
-      pollMs: d.pollMs
-    })
   }
 
   // ---- git-op (R7, §3.3) ----
@@ -259,7 +278,10 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     'worktree-list': async () => withFile(),
     'worktree-add': async (args) => {
       if (!isRegistryFile({ items: [args.info] })) return { status: 400, body: { error: 'worktree-add needs a whole worktree entry' } }
-      await registry.add(args.info as WorktreeInfo)
+      const info = args.info as WorktreeInfo
+      // An add retried after its reply was lost (review M12): the folder is already listed, and a
+      // second entry would be the same worktree twice. Nothing changes, so nothing is pushed.
+      if (!registry.list().some((w) => isSamePath(w.path, info.path))) await registry.add(info)
       return withFile()
     },
     'worktree-remove': async (args) => {
@@ -289,6 +311,16 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     },
     removeWorktrees: async (paths) => {
       await fresh()
+      // Refused whole, before anything is closed or removed, so the command answers a conflict (exit
+      // 6) and `run-delete` deletes nothing, rather than a list of folders that all failed.
+      // AppUnreachable because that is what it is: the app that must be asked cannot be.
+      let detached = false
+      try {
+        detached = detachedApp()
+      } catch {
+        /* the per-folder check in `reap` refuses on its own */
+      }
+      if (detached) throw new AppUnreachable(DETACHED_APP)
       return deps.removeWorktrees(paths)
     },
     isPathInUse,
