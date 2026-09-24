@@ -236,10 +236,13 @@ describe('argsForCall — run-create의 --cwd 기본값 (task-13a)', () => {
       cwd: 'D:/my-cwd'
     })
   })
+  // **명시한 값은 이 플랫폼의 절대 경로여야 그대로 간다.** 'D:/explicit' 는 posix 에서 상대 경로라
+  // CLI 의 cwd 에 대해 풀린다(바로 아래 상대 경로 시험) — 그래서 path.resolve 로 짓는다.
+  const explicit = path.resolve('/explicit')
   it('--cwd가 명시되면 CLI의 cwd보다 그것이 이긴다', () => {
     expect(
-      argsForCall({ cmd: 'run-create', args: { objective: 'o', cwd: 'D:/explicit' }, cwd: 'D:/my-cwd' })
-    ).toEqual({ objective: 'o', cwd: 'D:/explicit' })
+      argsForCall({ cmd: 'run-create', args: { objective: 'o', cwd: explicit }, cwd: 'D:/my-cwd' })
+    ).toEqual({ objective: 'o', cwd: explicit })
   })
   // jobs create 는 run-create 로 간다 — 같은 이유로 같은 기본값이다
   it('jobs create 에도 CLI의 cwd를 채우고, 명시한 것이 이긴다', () => {
@@ -248,8 +251,8 @@ describe('argsForCall — run-create의 --cwd 기본값 (task-13a)', () => {
       cwd: 'D:/my-cwd'
     })
     expect(
-      argsForCall({ cmd: 'jobs-create', args: { objective: 'o', cwd: 'D:/explicit' }, cwd: 'D:/my-cwd' })
-    ).toEqual({ objective: 'o', cwd: 'D:/explicit' })
+      argsForCall({ cmd: 'jobs-create', args: { objective: 'o', cwd: explicit }, cwd: 'D:/my-cwd' })
+    ).toEqual({ objective: 'o', cwd: explicit })
   })
   // **상대 경로는 CLI 의 cwd 에 대해 푼다.** 그대로 보내면 받는 프로세스(Host·앱)의 cwd 에 대해
   // 풀리고, 그 회차의 워커가 엉뚱한 폴더에서 뜬다.
@@ -980,7 +983,9 @@ describe('회복 줄은 진짜로 재생을 부른다', () => {
     const first = parseArgs(argv)
     if ('error' in first) throw new Error(first.error)
     const request = mintRequestId()
-    const sentArgs = argsForCall({ cmd: first.cmd, args: first.args, cwd: 'D:/where-it-ran' })
+    // 두 폴더는 이 플랫폼의 절대 경로다 — 진짜 process.cwd() 가 그렇다. 'D:/…' 는 posix 에서 상대
+    // 경로라, 회복 줄에 적힌 --cwd 가 다시 친 폴더에 대해 풀려 다른 인자가 된다.
+    const sentArgs = argsForCall({ cmd: first.cmd, args: first.args, cwd: path.resolve('/where-it-ran') })
     const sent = await orch.call({ cmd: first.cmd, args: sentArgs, sessionId: 'sesA', request })
     expect(sent.status).toBe(200)
     // …그리고 그 답이 오는 길에 사라졌다. 부르는 쪽이 손에 쥐는 것은 이 줄뿐이다.
@@ -996,7 +1001,7 @@ describe('회복 줄은 진짜로 재생을 부른다', () => {
     // 다시 친 줄은 **다른 폴더에서** 쳐진다 — 그것이 이 시험이 잡으려는 경우다.
     const again = await orch.call({
       cmd: retyped.cmd,
-      args: argsForCall({ cmd: retyped.cmd, args: lifted.args, cwd: 'D:/somewhere-else' }),
+      args: argsForCall({ cmd: retyped.cmd, args: lifted.args, cwd: path.resolve('/somewhere-else') }),
       sessionId: 'sesA',
       request: lifted.request
     })
