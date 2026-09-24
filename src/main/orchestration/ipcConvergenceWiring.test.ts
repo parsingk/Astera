@@ -7,6 +7,7 @@
 // **These guards are a scaffold, not the goal.** The real answer for property 5 is to extract
 // startValidation into an importable unit a test can call, as Task 5 of the Host S2 plan did for
 // startWorker. Until then, the guards check that the wrapper text does what it says.
+// property 5 is now validation.test.ts.
 //
 // Property 4 (a worker starts with the rolling chain built from its Task's own accounts) is now
 // proven by src/core/orchestration/exec/workerStart.test.ts, and the guard below only pins that the
@@ -50,19 +51,6 @@ describe('ipc.ts convergence wiring (source guard)', () => {
     // goes through this one wrapper (repair.ts's RepairDeps.startWorker JSDoc names it explicitly).
     const wrapper = sliceBetween(ipcSource, 'startWorker: (a) =>', 'releaseWorker: async (')
     expect(stripLineComments(wrapper)).toMatch(/startWorkerWithChain\(/)
-  })
-
-  it('startValidation checks policyOf before anything writes suspiciousFiles (property 5)', () => {
-    const wrapper = stripLineComments(
-      sliceBetween(ipcSource, 'startValidation: ({ taskId, cwd }) => {', 'startReview: ({ taskId }) => {')
-    )
-    const policyAt = wrapper.indexOf('policyOf(')
-    const writeAt = wrapper.indexOf('suspiciousFiles:')
-    expect(policyAt, 'policyOf(...) not found in the startValidation wrapper').toBeGreaterThanOrEqual(0)
-    expect(writeAt, 'a suspiciousFiles: write not found in the startValidation wrapper').toBeGreaterThanOrEqual(0)
-    // the guard the whole non-convergence compatibility promise rests on: a Run without convergence
-    // must return out of this wrapper before the line that writes suspiciousFiles is ever reached.
-    expect(policyAt).toBeLessThan(writeAt)
   })
 
   // 전체 브랜치 리뷰, Finding 1 — 이 브랜치의 유일한 무방비 진입점이었다: buildReviewSpecFile 에
