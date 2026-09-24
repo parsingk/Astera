@@ -23,7 +23,7 @@ reasoning; this list is what was chosen.
 | D4 | Worker environment | The Host's own environment minus a documented strip list | user |
 | D5 | New app, old Host holding work | The app keeps today's loop until that Host is replaced | controller |
 | D6 | A worker lost to a Host restart with no journal | Open a Gate at load | controller |
-| D7 | A usage limit with no app | A Gate carrying the reset time, so `runs wait` ends with 8 | controller |
+| D7 | A usage limit with no app | A Gate carrying the reset time, so `runs wait` ends with 8 (left out of S4+S5 by the user; S6, see Amendments A58) | controller |
 | D8 | Journal and reconciler | Stay in the app | controller |
 | D9 | A second app | Left as S1 recorded it | controller |
 | D10 | Release shape | S2 and S3 merge separately; S4 and S5 release together | controller |
@@ -427,9 +427,282 @@ pointing here at the sentence it replaces.
   damaged `worktrees.json` fork, and two concurrent starts sharing one rejection),
   `src/host/spawner.test.ts` and `src/core/host/orchProtocol.test.ts`.
 
+## Amendments (S4+S5 as shipped)
+
+S4 and S5 landed together on `develop` (D1, D10), through Task 15 at `d80492c`. The plan
+(`.superpowers/sdd/2026-09-24-host-s4s5/plan.md`, rulings R1 to R29 and the pre-flight rulings N1 to
+N11) and its execution ledger (`progress.md` in the same folder) changed or added to some statements
+above, and this list is the record, in A1's form. Every `file:line` is from `d80492c`. §4.1, §4.3,
+§4.4, §4.6, §5.1, §6, §7.2, §7.4, D7 and "Known limits after S3" each carry a short note pointing here
+at the sentence it replaces. What is still open is under "Known limits after S4+S5".
+
+**Who drives**
+
+- **A37. §4.3, the driver (plan ruling R1).** It said: `driver` is `'app'` when a `role:'app'` client
+  is attached and its hello did not say `yields: ['dispatch']`. The server's `appKeeps` looks only at
+  the first app socket. What shipped: a new `appsKeep(duty)` answers true when **any** attached app
+  lacks the yield (`src/host/server.ts:476-477`), and `driverOf` answers `'app'` first, then `'parked'`
+  from the settings gate, then `'host'` (`src/core/host/driver.ts:14-18`). `appKeeps` stays as S3
+  shipped it, for the callers that pick the app an `act` goes to. The value is recomputed at every
+  kick and tick, and set synchronously from the gate already read in the same turn as an app's hello
+  or close (`src/host/driving.ts:141-158,299-304`, N1). Before the first read it is `'parked'`, and an
+  unread gate parks unless an app keeps dispatch (`driving.ts:88-94,181-185`, N2 and Task 12 review
+  I1). Why: an app from before this feature runs its own loop on every push whether or not it is
+  first, and `'app'` beats `'parked'` because the Host does nothing either way and `status` should say
+  who drives. Pinned by `src/core/host/driver.test.ts`, `src/host/server.test.ts` and
+  `src/host/driving.test.ts`.
+- **A38. §4.6, what parks the Host (R2).** It said: parked when the file exists without the marker,
+  read with the app's own test. What shipped: an existing file without `orchAlwaysOnMigrated: true`
+  parks, a missing file does not (F64's correction), and a file that cannot be read or parsed parks
+  too (`src/core/host/driver.ts:21-33`). The read goes through `readFileRetrying`, so the app's own
+  tmp+rename does not read as damaged, and it is repeated at every computation, which is how the Host
+  notices a migration an app wrote after its last commit (`driving.ts:163-177`). Why: the app reads a
+  damaged file as `'unknown'` and never pauses on it, but the Host cannot repair it, and a damaged
+  file already refuses every Host spawn (A10). **Found in review (Task 14, m1):** the app yields to any
+  Host that announces `dispatch`, parked or not (`src/main/host/outdated.ts:70-76`), and nothing in the
+  app shows that the Host is parked. So while it is parked nobody dispatches and the app says nothing.
+  A settings file damaged while the app runs parks the Host until Astera restarts: the app's load keeps
+  a `.bak`, and its migration then writes the marker (`src/main/appSettingsStore.ts:237-248,336-346`).
+  Pinned by `src/core/host/driver.test.ts` and `src/host/driving.test.ts`.
+- **A39. §4.1 trigger 2, no eager load (R3).** It said: the loop runs at load, after `store.load` and
+  the drain. The Host never loads at start (`src/host/index.ts`, "Constructed, not loaded"), and S4
+  keeps that. What shipped: the first call that needs the state loads it, and `createHostOrch` calls
+  `onLoaded()` once at the end of that load, after `loaded = true` (`src/host/orch.ts:453-458`). The
+  driver's after-load pass hands over (drain, resume sweep, repair belt), gates lost workers and runs
+  the loop (`driving.ts:110-139,241-246,332-337`). A Host whose first contact is an accepted `state-put`
+  never loads, so the handover also runs the first time the state is in memory while the Host drives
+  (`driving.ts:152`). A Host started by `astera host start` with a Run in its file and nobody asking
+  stays idle and leaves after `IDLE_MS`, as before. Why: eager loading would run the restart cleanup
+  behind an app a second away from attaching. Pinned by `src/host/orch.test.ts` and
+  `src/host/driving.test.ts`.
+- **A40. §4.4, the pending-report drain (R4, N4).** It said: the drain runs at `ready()`, right after
+  `store.load`, and the app stops draining when the Host announces `dispatch`. What shipped: inside
+  the load, through `handleCommand` directly, and only when an awaited `mayDrain()` says the Host
+  drives at that moment (`orch.ts:439-452`). A Host that did not drive at its load drains once, at its
+  first handover (`drainOnce`, `orch.ts:1072-1086`, called from `driving.ts:110-112`). **Except the
+  not-migrated to migrated change out of `'parked'`**, which drains nothing (`driving.ts:154`): the
+  app's migrating launch leaves the queue alone ("The next start takes them"), and so does the Host.
+  Those reports then wait for the next Host start, or for this Host's next handover. Why: inside the
+  load, so an app's `state-get` is answered after the drain and its recovery never sees a Dispatch a
+  report is about to close. An old app that read the queue before the Host drained it applies a report
+  twice, and the second `applyWorkerDone` answers `alreadyReported`. Pinned by `src/host/orch.test.ts`
+  and `src/host/driving.test.ts`. The one gap is under "Known limits after S4+S5".
+- **A41. §4.1 trigger 1, every commit (R5).** It said: after every commit the Host makes, including an
+  accepted `state-put`. Only `depsFor`'s `setState` called anything. What shipped: an `onCommit()`
+  hook, called after that `setState` and after an accepted `state-put` (`orch.ts:516,705`, through
+  `kickDriver` at `:559-566`),
+  isolated so a driver that throws cannot fail the command. A refused `state-put` changed nothing and
+  kicks nothing. Pinned by `src/host/orch.test.ts`.
+- **A42. §7.2 and §7.4, `status` (R6, R7).** It said: the `status` body gains `driver` and
+  `appAttached`. What shipped: the Host's `call` merges the two into a 200 `status` reply
+  (`orch.ts:1186-1194`), so `command.ts` is not touched. The driver is built only with a spawner
+  (`src/host/index.ts:212-231`), the same one fact that announces `dispatch` (`index.ts:334`), so the
+  fields appear only from a Host that announces `dispatch`, and their absence tells a script this Host
+  does not drive. `astera status` passes them through (`cliPublic.ts` shapes no `status`). §7.4's
+  interim note is moot for such a Host. Pinned by `src/host/orch.test.ts` and
+  `src/host/driving.integration.test.ts`.
+- **A43. §1.4 and F58, the six S5 names (R8, R9).** It said: they become HOST_LOCAL in S5. What
+  shipped: their own group, `HOST_DRIVES`, answered per call by `drive.owns()`, read synchronously by
+  each wrapper, and otherwise the route each had before S5 (`src/host/orchDeps.ts:147-160,614-650`).
+  **F58 holds by construction**: `repairTargetFor` and `startRepair` switch on the same predicate in
+  the same turn. The F58 comment is rewritten at both ends (`orchDeps.ts:125-139`, and `startRepair`'s
+  doc in `command.ts`, Task 10 review I2). `repairOnce` is marked after acting, never over a
+  `{ ok: false }`, which it answers only before acting. The Host's own commands run under
+  `HOST_CALLER = 'astera:host'` (`src/core/host/driver.ts:9`, `orch.ts:1060-1069`). Pinned by
+  `src/host/orchDeps.test.ts`.
+
+**The Host's checks**
+
+- **A44. §5.1, a validation run's environment (R11).** Not stated. `RunManager` started from
+  `process.env`. What shipped: it takes an injected base environment (`src/core/run/runManager.ts:62-64,92`),
+  and the Host passes `hostWorkerBaseEnv(env)`, read at each start (`src/host/checks.ts:187-188`).
+  Why: D4's strip list applies, or a validation inherits `ELECTRON_RUN_AS_NODE=1`. Pinned by
+  `src/core/run/runManager.test.ts` and `src/host/checks.test.ts`.
+- **A45. §5.1, the path guard (R10).** Shipped as described: a Job's `cwd`, a Run's `worktree`, or a
+  path the Host's `worktrees.json` lists, each read at the call, an empty root skipped, containment by
+  `isPathWithin` (`src/core/run/hostPathGuard.ts:10-24`, wired at `checks.ts:159-167`). A Job whose
+  `cwd` is broad allows its whole subtree (Task 9 review m4, under "Known limits after S4+S5"). Pinned
+  by `src/core/run/hostPathGuard.test.ts`.
+- **A46. §5.1, the changed files (R12).** It said: `startValidation` computes suspicious files. They
+  need the journal's first checkpoint, which stays the app's (D8). What shipped: the Host passes no
+  diff base (`checks.ts:245-247`), so the calculation falls back to the Task's own `filesModified`.
+  A degradation, recorded. Pinned by `src/core/orchestration/exec/validation.test.ts` and
+  `src/host/checks.test.ts`.
+- **A47. §1.4, `lang` (R13).** It said: from `app-settings.json`. What shipped: the file's `lang`, else
+  `pickInitialLang` over the OS locale, and `'en'` for a file that cannot be read or parsed
+  (`checks.ts:122-151`). The moved bodies take a synchronous `lang()`, so the Host keeps the value it
+  last read (`langNow`), refreshed by every `lang()` call and every driver computation
+  (`driving.ts:163-168`). Pinned by `src/host/checks.test.ts` and `src/host/driving.test.ts`.
+- **A48. §5.1, `validation-stop`.** It said: the app forwards the stop and the Host's validator calls
+  `markStopped`. What shipped: the Host marks the run and then kills it (`checks.ts:366-372`), because
+  it has no other door that stops a run, and the app does **not** also kill it while the Host drives:
+  a kill from the app could land before the mark and read as a failed check
+  (`src/main/orchestration/yieldDispatch.ts:47-100`). An answer of `stopped: false` means the app's own
+  validator started the run, and the app stops it its own way; a 501, a failure, or no answer within
+  2 s makes the app mark and stop the run itself. The Host accepts the call from role app only
+  (`orch.ts:1136-1142`). Pinned by `src/main/orchestration/yieldDispatch.test.ts`,
+  `src/host/checks.test.ts` and `src/host/orch.test.ts`.
+- **A49. §1.3 and §9.3, one module per wiring (R28, N11).** It said: the modules move to `exec/`. What
+  shipped: the bodies that lived inline in `ipc.ts` are modules both processes build:
+  `startValidation` and `onSettled` in `src/core/orchestration/exec/validation.ts`, `startReview` in
+  `exec/review.ts`, and `runScheduler`, `gateSlot`, the fire tick and the nudges in
+  `exec/dispatchLoop.ts`. The Host composes its driving in one place, `src/host/drivingWiring.ts`,
+  which `index.ts` and the two-process rig (`src/host/driving.integration.test.ts`, in-process) both
+  use. The three text guards over `ipc.ts` (property 5, Finding 1, F63) became behaviour tests of the
+  modules; the property-4 guard stays, and N8 added two source guards that `ipc.ts` reaches every
+  yield through one `hostDrives()` closure (`src/main/orchestration/ipcConvergenceWiring.test.ts:59-81`).
+
+**Leaving, lost workers, and the app that yields**
+
+- **A50. §8.4 and the loop, a Host that is leaving (R15, and the ruling on Task 13).** §8.4 covered
+  retire mid spawn and said nothing about the loop or the checks. What shipped: the driving is
+  disposed first when retire starts (`src/host/index.ts:118-127`). From then on `drive.owns()` is false
+  (`src/host/drivingWiring.ts:136`), so the six S5 names take their not-driving routes together, and
+  `mayStart` is false (`drivingWiring.ts:117`), so a pass stops at its next slot. A 409 carrying `retry`
+  stops the loop's activation without a Gate (`src/core/orchestration/exec/dispatchLoop.ts:487-497`),
+  because the Host's own `handle()` answers through the same rewrite as `call` (`orch.ts:582-593,1060-1069`,
+  B1). **A leaving Host starts no validation, review or repair, and records none as failed**: a run it
+  kills on its way out hands the validator the lost-sight code, which settles nothing
+  (`checks.ts:254-267`). The Task stays `validating` or `reviewing`. The successor restarts it in a
+  convergence Job, through the resume sweep of its handover, and gates it otherwise, at its load (the
+  restart Gate, or blocked for review; `interruptStalledTask`, `src/core/orchestration/state.ts:1419-1431`).
+  Why: read as a result, the kill would be a failed check, a repair the leaving Host refuses, and a
+  blocked Task with a fix attempt spent. The ruling first said the successor restarts it in every Job;
+  that premise was only partly true and was corrected in review. Pinned by
+  `src/host/driving.integration.test.ts`, `src/host/checks.test.ts`,
+  `src/core/orchestration/exec/dispatchLoop.test.ts` and `src/host/orch.test.ts`.
+- **A51. D6, the lost-worker Gate (R16, N5).** D6 said: a Gate at load on a worker lost to a Host
+  restart with no journal. The Host cannot read the journal (D8), and the same stranding happens
+  without a restart. What shipped: on every pass while the Host drives **and no app is attached**, a
+  Gate on each Task that `candidates()` finds in a Run with no coordinator slot, through `gate-create`
+  (`src/core/orchestration/lostGate.ts:17-22`, `src/host/driving.ts:220-239`). A Run with a coordinator
+  is left to it, and with an app attached its reconciler decides. **Accepted reach (N5):** there is no
+  journal check, so a worker the app journalled before it closed, which its reconciler could have
+  resumed at its next start, gets a Gate instead. That goes past D6's "at load, no journal" into D8's
+  ground, and is accepted because the Gate is the safe direction: a person restarts it. Pinned by
+  `src/core/orchestration/lostGate.test.ts` and `src/host/driving.test.ts`.
+- **A52. §4.2, an app in front of a Host that does not answer (Task 14 review I1).** Not stated. What
+  shipped: the app keeps yielding while the Host is unresponsive, if that Host announced `dispatch`
+  (`src/main/host/outdated.ts:64-76`). The Host still sees a yielding app attached and still drives, so
+  an app that took the drive would nudge the same coordinator twice and kill a Host validation run with
+  no mark. The cost: a hung Host that keeps its pipe open leaves Jobs unmoved until it answers, dies,
+  or is restarted from Settings, Info. The status bar says "Host not answering"; the Jobs sidebar does
+  not say why nothing moves. Pinned by `src/main/host/outdated.test.ts`.
+- **A53. §5.3 and R21, the S5 starts forwarded to an app that yields (the m6 ruling, Task 14 review
+  I2).** R21 said: an app that yields dispatch may still be asked to validate, and answers correctly.
+  What shipped instead: an app that yields refuses `startValidation`, `startReview` and `startRepair`
+  forwarded to it, and answers `repairTargetFor` with `null`, so a review's verdict lands as the
+  `repairFailed` Gate rather than a half-opened repair (`src/main/orchestration/answerAct.ts:51-69`).
+  A Host forwards these only while it does not drive: parked, retiring, or an older app keeps dispatch.
+  **So R21 is false** with a new and an old app both attached: the forward reaches the first app, which
+  may be the new one, and the Task waits. It is restarted at the next handover in a convergence Job,
+  and gated at the next Host load otherwise. Why: it matches the ruling on Task 13, and the cost if
+  wrong is one Task waiting for the next Host. Pinned by `src/main/orchestration/answerAct.test.ts`.
+- **A54. §5.1, the resume sweep when an app leaves (Task 14 review I3, round 2).** It said: the Host
+  sweeps at load and at every change of `driver` to `host`. A yielding app that leaves does not change
+  the driver, yet it may have been running a validation or review itself (recovery, D8). What shipped:
+  when such an app leaves while the Host drives, the Host first tree-kills every live `run` pty in its
+  registry marked `validation` that its own `RunManager` did not start, waits for each exit up to
+  `FOREIGN_KILL_WAIT_MS` (5 s) and records nothing, then runs one resume sweep
+  (`driving.ts:305-329`, `checks.ts:285-340`). A person's ordinary runs carry no `validation` mark and
+  are never touched. Why: the app's validation runs open through the Host's pty factory and outlive
+  it, nobody settles them any more, and a second check would start beside them in the same folder. The
+  sweep covers convergence Runs only; see "Known limits after S4+S5". Pinned by
+  `src/host/driving.test.ts` and `src/host/checks.test.ts`.
+- **A55. §4.2, the renderer's commands (R20).** Shipped as the design said: they still run
+  `handleCommand` in the app and write with `state-put`, including a person's `retry-once`, which opens
+  and starts a repair from the app while the Host drives. The app's own deps answer the S5 names for
+  them (`src/main/ipc.ts:3143-3190`). Accepted: it is a person's click, it commits before it spawns,
+  and F56 refuses it if the Host committed first. Not pinned; recorded.
+
+**Schedules, the later run, and D7**
+
+- **A56. D2 and R17, schedules and the sidebar's next fire (N3).** It said: `orchFireTick` moves to the
+  Host subject to D2. What shipped: the Host's tick fires only while it drives and an app is attached,
+  and drops its arming otherwise, so the first tick that may fire again only arms
+  (`driving.ts:269-274`). In front of a driving Host the app's timer arms without firing (`armOnly`),
+  because the sidebar reads its next-fire time off that arming (`dispatchLoop.ts:604-610`,
+  `yieldDispatch.ts:26-45`). **Found while moving it (the F65 gap):** a fired run of a scheduled Job is
+  not placed by the loop, because `appDriven` needs `job.autoDispatch` (`src/core/orchestration/schedule.ts:33-44`)
+  and a schedule never carries it. That is the app's behaviour too, and is unchanged. Pinned by
+  `src/host/driving.test.ts`, `src/main/orchestration/yieldDispatch.test.ts` and
+  `src/core/orchestration/exec/dispatchLoop.test.ts`.
+- **A57. Carry 4, a later `jobs run` of a coordinator Job (R18, the user's Q2, N7).** The S3 known limit
+  said such a run is not driven until S4 moves the loop. The loop would not drive it either:
+  `run-start` deletes `autoDispatch` when it attaches a coordinator, and a later run went to
+  `run-spawn`, which starts no coordinator. What shipped, as the user decided: a later `jobs run` of a
+  Job with a coordinator account and no schedule starts that run's coordinator, as the first run does
+  (`src/core/orchestration/command.ts:992-1026`). A later run's failed start is not like a first run's:
+  `run-spawn` has already committed the run, so it stays with no coordinator, and the error names the
+  retry, `astera run-start --run <jobId>`, with `jobId` and `runId` in the body (N7). The CLI keeps
+  `runId` in `error.details` (`src/cli/run.ts:547-555`, Task 15 review M1). Pinned by
+  `src/core/orchestration/command.test.ts` and `src/cli/run.test.ts`.
+- **A58. §6 and D7, a worker at its usage limit (R19, the user's Q1).** D7 said: a Gate carrying the
+  reset time, so `runs wait` ends with 8. `createGate` refuses a Task with an open Dispatch, and a
+  stalled worker keeps its Dispatch open, so the Gate is reachable only by ending the worker. **The user
+  left D7 out of S4+S5; it moves to S6.** The worker stalls as §6 describes; `runs wait` ends at its
+  deadline with 7; when Astera opens it adopts the session and rolls it. Rolling stays in the app until
+  S6. A Task carries several accounts (`Task.accountIds`, `tasks add --account a,b`), and a session
+  rolls across them (`rollAccountIds`). No code; recorded.
+- **A59. A29 and M7, the spec pile-up (R22).** A29 deferred it to S4's tick. What shipped: the Host
+  sweeps `orch/specs` during its life only on a tick with no app attached and no spawn of its own in
+  flight (`driving.ts:275-280`), because an app still writes specs in front of a new Host (a person's
+  retry, an old app). Pinned by `src/host/driving.test.ts`.
+
+**Worktrees and merges**
+
+- **A60. The carried registry items (R23, carries 2 and 7a).** What shipped: `WorktreeRegistry.add` is
+  one add-or-replace. An entry whose id is listed changes nothing, and an entry at a path another names
+  replaces it in the same write (`src/core/worktrees/registry.ts:136-151`). `readForWrite` rides out a
+  Windows rename-busy read through `readFileRetrying` (`registry.ts:258-261`), which resolves the first
+  entry of "Known limits after S3". Why: the loop's lazy Run-worktree fork calls `fresh()` on every
+  headless Run, and a transient sharing violation there would open a Gate. Pinned by
+  `src/core/worktrees/registry.test.ts`.
+- **A61. Carry 1, the per-merge record (R24; Task 3 and Task 4 reviews).** A28 said a Host merge made
+  with nobody attached is announced to nobody and may read as an outside change. What shipped: the Host
+  writes each merge into `profile/host/merges.json`, with `headBefore` on disk before `git-op begin`
+  and `headAfter` in the `finally` that sends `end` (`src/host/worktrees.ts:271-296`,
+  `src/host/mergeRecords.ts:55-112`). It keeps the newest `HOST_MERGES_KEPT` (200) records. A missing
+  file is empty, a damaged one is kept as `.bak`, and any other read error skips the write. The Work
+  Unit collector counts a HEAD move as Astera's when a chain of completed records leads from its stored
+  head to the new one, or when a record for that folder is still open and between 0 and
+  `MERGE_OPEN_MAX_MS` (2 minutes) old (`src/core/git/hostMerges.ts:26-29,81-120`,
+  `src/main/workUnit/collector.ts:1398-1430`). Completed records count only while the branch is
+  unchanged, and only those that ended after the stored snapshot was captured (Task 4 review I1).
+  **This closes A28** and the matching entry of "Known limits after S3". Pinned by
+  `src/core/git/hostMerges.test.ts`, `src/host/mergeRecords.test.ts` and
+  `src/main/workUnit/collector.test.ts`.
+- **A62. Carry 3, the app's `discardRunWorktree` (R25).** What shipped: the app supplies it from
+  `reapWorktree` (`yieldDispatch.ts:123-134`, wired at `src/main/ipc.ts:2928`), so `run-start`'s cleanup
+  takes the same branch in both processes. `reapWorktree`'s `false` means not removed for any reason,
+  so the 400 says the folder "could not be removed" (C7). The fallback in `command.ts` stays for deps
+  that lack it. Pinned by `src/main/orchestration/yieldDispatch.test.ts`.
+- **A63. Carries 6 and 7, and A19 (R26, R27, R29).** Carry 6 stays out: after S4 the app forks only
+  for its own loop in front of an older Host (D5), and a `--worktree new` start from a shell or a
+  coordinator goes to the new Host, which cleans up. Carry 7's other limits stay as recorded: a pre-S3
+  app writes no `app.pid`, the ~2 s replacement window for the app's worktree writes, and A17's
+  conhost per self-exiting pty, which grows with long-lived headless Hosts. A19 (no `PROMPT_WRITE_*`
+  rows for Host-spawned workers) now covers every headless worker, and recovery's reason still reads
+  `promptNeverLeft` for them. No code; recorded.
+
+**Found while building it**
+
+- **A64. An exit that lands before the validator recorded its start (Task 6 review I1).** Not stated,
+  and older than S4. The app's pty factory queues an exit in a microtask while the socket is down, so
+  an exit could reach `onRunExit` before `startCheck` recorded the run, and that folder's queue stalled
+  forever. What shipped: the validator keeps such an exit while a start is in flight (at most 64) and
+  replays it once the run is recorded (`src/core/orchestration/exec/validator.ts:63-87,234-238`). Pinned
+  by `src/core/orchestration/exec/validator.test.ts`.
+- **A65. One start per repair Dispatch in the Host (Task 12 review m1).** Not stated. `performRepair`
+  re-reads the Dispatch only before its `startWorker`, so the validator's start and the handover's
+  belt could both spawn: two agents in one worktree. What shipped: a second start of the same Dispatch
+  while one is in flight is skipped (`checks.ts:191-207`). The belt itself runs only with no app
+  attached (`driving.ts:125-138`). Pinned by `src/host/checks.test.ts`.
+
 ## Known limits after S3
 
-- **`refresh()` does not retry a Windows rename-busy read.** `WorktreeRegistry.refresh()` reads through
+- **`refresh()` does not retry a Windows rename-busy read.** (resolved in S4+S5, see Amendments A60)
+  `WorktreeRegistry.refresh()` reads through
   `readForWrite()`, a plain `fs.readFile`; the rename-busy retry only guards `save()`'s write path. A
   read racing a rename can hit a transient sharing violation, which `refresh()` surfaces as a rejection
   rather than riding out. Safe, because nothing is wiped, but the app's mirror stays stale until the
@@ -442,10 +715,12 @@ pointing here at the sentence it replaces.
 - **One `conhost.exe` leaks per pty that exits on its own.** node-pty 1.1.0 closes the pseudo console
   only when a live pty is killed (A17). S3 makes Hosts that live long with the app closed more common,
   and so this leak more common with them, but does not change the underlying behaviour.
-- **A later `jobs run` of a coordinator Job starts a run that nothing drives.** Only the first run of a
+- **A later `jobs run` of a coordinator Job starts a run that nothing drives.** (resolved in S4+S5, see
+  Amendments A57: a later run starts its coordinator; the loop was never the fix) Only the first run of a
   coordinator Job works headless in S3 (its coordinator starts, and the Host makes its worktree). A Job
   that runs again has no scheduler in the Host to place its workers, until S4 moves the dispatch loop.
 - **A Host merge made while the app was closed may read as an outside change on the Work Unit screen.**
+  (resolved in S4+S5, see Amendments A61; one residue is under "Known limits after S4+S5")
   A28's answer for this slice: there is no persisted Host git-op journal, so the app's next open
   compares its stored snapshot to HEAD and records the move as external if that project had one. S4's
   per-merge record is the fix.
@@ -453,6 +728,58 @@ pointing here at the sentence it replaces.
   that writes the file, so a removal is not refused while a pre-S3 Astera runs unattached, the mixed
   version case in final review m1. Rare: it needs a downgrade, or a newer CLI's `host start`, while the
   older app stays open.
+
+## Known limits after S4+S5
+
+Each was found while building or reviewing S4+S5 and left as it is, with its reason. Checked at
+`d80492c`.
+
+- **A parked Host is silent in the app.** The app yields to any Host that announces `dispatch`, parked
+  or not, so while the Host is parked nothing dispatches, and nothing in the app says why (A38). A
+  settings file damaged while the app runs parks the Host until Astera restarts and repairs it.
+- **A hung Host that keeps its pipe open stops every Job.** The app keeps yielding to it (A52). Jobs do
+  not move until it answers, dies, or is restarted from Settings, Info. The status bar shows that the
+  Host is not answering; the Jobs sidebar does not say why nothing moves.
+- **A Task a closed app left mid-check, outside a convergence Job, waits for the next Host load.** When a
+  yielding app leaves, the Host's sweep restarts only a convergence Run's `validating` and `reviewing`
+  Tasks (A54). Any other Task the app was checking is gated at the Host's next load, not before. The
+  same holds for an S5 start a yielding app refused (A53) and for a Task a leaving Host left (A50):
+  convergence restarts at the next handover, anything else waits for a load.
+- **R21 is false with a new and an old app both attached** (A53). The forwarded S5 starts may reach the
+  new app, which refuses them. Two apps on one profile need a downgrade past the single-instance lock.
+- **A lost worker is gated even when the app journalled it** (A51, N5). While the Host drives with no
+  app attached, a worker lost in a Run with no coordinator gets a Gate, including one the app's
+  reconciler could have resumed at its next start.
+- **A worker at its usage limit with no app open stalls** (A58). `runs wait` ends at its deadline with 7,
+  and the app rolls the worker when it opens. Rolling stays in the app until S6.
+- **A `--terminal` start waits up to about 30 s before its Dispatch commits.** Repair's same-session
+  branch and a coordinator's `--terminal` start await `waitUntilIdle` (`DEFAULT_IDLE_WAIT_TIMEOUT_MS`,
+  `src/core/orchestration/exec/coordinator.ts:124`) and the Enter delay first. A terminal that dies
+  inside that wait leaves its exit matched to the older Dispatch, and the new one is committed onto a
+  dead session until the next load's cleanup; the lost-worker Gate cannot see it, since the Dispatch is
+  not ended. The same in the app; not new (Task 12 review m3).
+- **The `pending:` session window.** A started worker's or reviewer's Dispatch holds a `pending:` id
+  until the commit that records the real one, and exits are matched by session id after
+  `EXIT_DEFER_MS` (3 s, `src/core/orchestration/exec/exitOwner.ts:21`). On a fresh spawn the window
+  cannot exceed 3 s in the Host: `sessions.spawn` is synchronous, the steps after it are synchronous,
+  and the store sets its state before its first await (Task 12 carry 3). The `--terminal` path above is
+  the exception.
+- **A superseded settings read during the migration marker's write can drain on the migrating change.**
+  If the read that saw `not-migrated` was superseded, it never became the previous gate
+  (`src/host/driving.ts:170-176`), so the applied `migrated` read compares against nothing and drains
+  (A40, N4). The effect is reports applied early, not unsafe work (Task 12 re-review).
+- **The 200 merge records are shared by all projects** (`HOST_MERGES_KEPT`,
+  `src/host/mergeRecords.ts:64`). A busy project can push another's records out, and a HEAD move that
+  only a dropped record explained then reads as an outside change (Task 3 review m2).
+- **A broad Job `cwd` allows its whole subtree to the path guard** (A45,
+  `src/core/run/hostPathGuard.ts:20-21`). A Job whose `cwd` is a drive root lets a validation or review
+  run anywhere below it (Task 9 review m4).
+- **A worktree removal already in flight when the drive moves still finishes.** The loop asks
+  `mayStart` before each removal (`driving.ts:191-197`), but one already started goes on. It asks the
+  attached app first, two removals of one folder make one of them fail, and a removal never throws
+  (Task 12 review m2).
+- **Carried from S3, unchanged:** the ~2 s replacement window for the app's worktree writes, the conhost
+  per self-exiting pty (A17), and a pre-S3 app that writes no `app.pid` (A63).
 
 ## 0. The problem, measured
 
@@ -887,7 +1214,8 @@ with the Host's deps.
    (seven paths make a Task ready; the commit is the only door they share). It also retires F54's
    whole class of bug: the scheduler runs where the commit happens, so no push has to wake it.
 2. **At load**, after `store.load` and the pending-report drain (§4.4), the way `ipc.ts:4783` runs it
-   at app boot.
+   at app boot. (amended for S4+S5, see Amendments A39: the Host never loads eagerly; the pass runs
+   after whichever load happens, and on the first in-memory state while it drives)
 3. **At every ownership change to the Host** (§4.3), after the exit sweep (§2.6).
 4. **A 15-second tick** (`ipc.ts:3914`) for `nudgeSleepingCoordinators` (`ipc.ts:4856-4877`, with the
    Host's busy signal from §2.8) and, subject to D2, `orchFireTick` (`ipc.ts:3928-3964`).
@@ -915,7 +1243,9 @@ driver = 'host'  otherwise (no app attached, or the attached app yields)
 
 The new app says `yields: ['dispatch']` in its `hello` (an additive field, §7). An app that predates
 this says nothing, and the Host takes that to mean "this app will dispatch", because it will: its
-`runScheduler` runs on every push (`ipc.ts:2483`, `ipc.ts:4006`).
+`runScheduler` runs on every push (`ipc.ts:2483`, `ipc.ts:4006`). (amended for S4+S5, see Amendments
+A37: `'app'` when **any** attached app keeps dispatch, and A52: the app keeps yielding to a Host that
+announced `dispatch` and stopped answering)
 
 **The handover is synchronous in the Host's event loop.** `driver` is recomputed in the same turn that
 the server records a `hello` role (`src/host/server.ts:232`) or removes a closed socket
@@ -947,7 +1277,8 @@ spawning (`orch.ts:352-356`). After S2 it can. So the drain (`ipc.ts:4733-4774`)
 `ready()`, right after `store.load`, under the worker's own session id, with the `writeOff` half
 (`ipc.ts:4752-4768`) against the Host's own `heldOnlyByReport` set. The app stops draining when the
 Host announces `dispatch`. That also removes the two-process queue read described at
-`ipc.ts:2374-2391`.
+`ipc.ts:2374-2391`. (amended for S4+S5, see Amendments A40: only when the Host drives at its load,
+otherwise once at its first handover, and never on the not-migrated to migrated change)
 
 ### 4.5 `holdsWork` and the idle exit
 
@@ -969,11 +1300,13 @@ prevent. So the Host's `driver` has a third value:
 driver = 'parked'  if profile/app-settings.json exists and does not carry orchAlwaysOnMigrated: true
 ```
 
-read only, with the same test the app uses (`appSettingsStore.ts:321-331`). A profile with no
+read only, with the same test the app uses (`appSettingsStore.ts:321-331`; amended for S4+S5, see
+Amendments A38: a file that cannot be read or parsed parks too, and the app shows nothing). A profile with no
 settings file (a fresh CI profile) was never "off" and is not parked, matching the app's own rule
 (ruling F64's correction, ledger line 1282-1288). A parked Host dispatches nothing, drains nothing,
 fires nothing, and says so in `status` (§7.4) and in its log, until an app attaches, migrates, and the
-Host re-reads the file on that app's next commit.
+Host re-reads the file on that app's next commit. (amended for S4+S5, see Amendments A38: the file is
+re-read at every kick and every 15-second tick, not only on a commit)
 
 ## 5. S5: validation, convergence, recovery
 
@@ -991,13 +1324,17 @@ wrapper (`ipc.ts:4552-4561`). Validation is the heavier half: it runs a run conf
   so a Host-run validation appears in the app's run panel through `pty-opened` exactly as a session
   does.
 - `onSettled` and `onCannotRun` (`ipc.ts:2892-2945`), `startValidation` with the policy fingerprint
-  and suspicious files (`ipc.ts:4441-4484`, `ipc.ts:4011-4044`).
+  and suspicious files (`ipc.ts:4441-4484`, `ipc.ts:4011-4044`). (amended for S4+S5, see Amendments
+  A46: in the Host the suspicious files fall back to `filesModified`, and A44: the run starts from the
+  stripped environment)
 - `startReview` and `reviewGate` (`ipc.ts:2953-3133`, `reviewGate.ts` 127), `pickReviewer`
   (`src/core/orchestration/reviewer.ts`).
 - `repairTargetFor`, `startRepair`, `repairOnce`, `repairDeps` (`ipc.ts:4516-4534`, `ipc.ts:4552-4561`,
   `repair.ts` 239).
 - `resumeSweep` (`resumeSweep.ts`, 56), run by the Host at load and at every change of `driver` to
-  `host`, instead of by the app on attach (`ipc.ts:2494`, `ipc.ts:4807`).
+  `host`, instead of by the app on attach (`ipc.ts:2494`, `ipc.ts:4807`). (amended for S4+S5, see
+  Amendments A54: also when a yielding app leaves, after the app's orphaned validation runs are
+  killed)
 - `knowledgeIn` (`coordinator.ts:284`) comes with the coordinator in S2.
 
 **The path guard.** The runner calls `assertAllowedPath(cwd)` before starting a pty
@@ -1006,12 +1343,14 @@ history index knows (`ipc.ts:5255-5265`). The Host has no history index. Its gua
 (the `allowingJobCwds` rule, `src/core/run/runConfigsFile.ts:36`), registered worktrees (the Host
 owns the registry after S3, D3), and Run worktrees. A Dispatch cwd is always one of these, so the Host
 guard is narrower and still sufficient. A cwd outside it is `onCannotRun`, which is a Gate
-(`ipc.ts:2845-2847`).
+(`ipc.ts:2845-2847`). (amended for S4+S5, see Amendments A45: the three lists as built, and a broad
+Job `cwd` allows its whole subtree)
 
 **The one new message: a person stops a validation run.** The app's run panel stop button marks a
 validation run stopped so its exit reads as "could not prove it" rather than a failure
 (`ipc.ts:6019`, `validator.ts:53-55`). With the Host validating, the app forwards that as an internal
-`orch-call` `validation-stop {runId}` (role app only) and the Host's validator calls `markStopped`.
+`orch-call` `validation-stop {runId}` (role app only) and the Host's validator calls `markStopped`
+(amended for S4+S5, see Amendments A48: the Host marks and then kills, and the app does not kill it too).
 An older Host does not know the command and the stop degrades to today's "exit read as a result".
 
 ### 5.2 Recovery stays in the app, on purpose
@@ -1069,7 +1408,7 @@ That is a stall, not a corruption. What is worth adding in S4 without S6 is maki
 (D7): the Host already runs the limit probe locally after S2, and can open a Gate "the worker hit its
 usage limit; it resets at <time>; open Astera to roll it to another account" when a worker's
 statusline shows a limit and no app is attached. `runs wait` then ends `waiting` with a reason instead
-of timing out.
+of timing out. (D7 left out of S4+S5 by the user; S6. See Amendments A58)
 
 ## 7. Protocol
 
@@ -1096,7 +1435,7 @@ Host. No change here needs a bump:
 | S3 | internal `orch-call` `worktree-add`, `worktree-remove`, `worktree-root` (D3 option A) | app to Host, role app only |
 | S4 | feature `dispatch` | Host hello |
 | S4 | `hello.yields?: string[]` (`['dispatch']`) | app to Host |
-| S4 | `status` body gains `driver: 'host' \| 'app' \| 'parked'` and `appAttached: boolean` | orch-result |
+| S4 | `status` body gains `driver: 'host' \| 'app' \| 'parked'` and `appAttached: boolean` (only from a Host that announces `dispatch`, Amendments A42) | orch-result |
 | S5 | internal `orch-call` `validation-stop` | app to Host, role app only |
 
 (amended 2026-09-24, see Amendments A20: the S3 rows are not the whole mechanism; an internal
@@ -1123,7 +1462,8 @@ refused by `applyValidationResult`. The waste is one duplicate run; nothing is r
 `jobs run` still succeeds (the state transition is the Host's since S1), but with no driver it would
 wait forever. Until S4 ships, `jobs run` with no app attached and no `dispatch` feature adds a
 `details.note` and `nextSteps` saying workers start when Astera is open (the audit's interim proposal,
-`cli-spec-audit.md:140`). After S4, `status.driver` tells a script which case it is in.
+`cli-spec-audit.md:140`). After S4, `status.driver` tells a script which case it is in. (amended for
+S4+S5, see Amendments A42: moot for a Host that announces `dispatch`; the interim note was not built)
 
 ## 8. Failure modes
 
@@ -1323,7 +1663,8 @@ Each changes the design. Recommendation first.
   the `dispatched -> blocked` edge recovery added. Recommended: `runs wait` ends instead of hanging.
 - (b) Leave the Task `dispatched` as today; a person or a coordinator retries.
 
-**D7. A worker at its usage limit with no app attached.**
+**D7. A worker at its usage limit with no app attached.** (left out of S4+S5 by the user; S6, see
+Amendments A58)
 - (a) **The Host opens a Gate naming the reset time** when its local limit probe sees a limit and no
   app is attached; `runs wait` ends `waiting`. Recommended.
 - (b) Stall silently until an app opens or the wait times out.

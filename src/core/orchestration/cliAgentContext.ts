@@ -78,7 +78,7 @@ const SESSION = {
       },
       {
         name: 'convergence',
-        about: 'let the app repair failing Tasks instead of the coordinator retrying them'
+        about: 'repair failing Tasks for you instead of the coordinator retrying them'
       },
       { name: 'max-fix-attempts', value: '<n>', about: 'repairs per Task; needs --convergence' },
       { name: 'max-review-rounds', value: '<n>', about: 'review rounds per Task; needs --convergence' },
@@ -88,7 +88,7 @@ const SESSION = {
         about: 'which review findings block; needs --convergence'
       },
       { name: 'max-total-minutes', value: '<n>', about: 'time budget per Task; needs --convergence' },
-      { name: 'auto', about: "the app places this Job's workers, and it holds until `run-start`" }
+      { name: 'auto', about: "this Job's workers are placed for you, and it holds until `run-start`" }
     ]
   },
   'run-configs': {

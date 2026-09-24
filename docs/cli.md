@@ -63,8 +63,9 @@ A run is running while it has work in flight: a worker session open on one of it
 being validated or reviewed. A run whose tasks have not started yet is not. Neither is one whose
 workers were all stopped, unless one of its tasks is still being validated or reviewed. `runs stop`
 closes the run's worker sessions and pauses it, but it does not end a validation or a review, and a
-paused run with such a task still counts. The app finishes that task when it is next open. Until
-then `host stop` refuses over that run. `astera status` reports the same count as `runsRunning`.
+paused run with such a task still counts. The Host finishes that task itself (with a Host that does
+not announce `dispatch`, Astera does, when it is next open). Until then `host stop` refuses over that
+run. `astera status` reports the same count as `runsRunning`.
 
 A Host with no client connected leaves by itself after a minute, but only when it holds no sessions
 and no running run, by that same count. A worker the Host started is one of its sessions, so the Host
@@ -103,6 +104,14 @@ state file yet. A script that needs to know reads `.data.running`, or the exit c
 it looked at (`profile`, `jobsInProfile`) in `error.details`. When a Host of another protocol serves
 the profile, both `status` and `host status` answer 9 (see Exit codes).
 
+**From a Host that announces `dispatch`, `astera status` also says who places the work.**
+`data.driver` is `host` when the Host places workers and runs checks itself. It is `app` when an older
+Astera is open and does that work itself. It is `parked` when the Host waits for Astera to be opened
+once: the profile's settings still carry work that the old orchestration switch paused, and only
+Astera can release it. A damaged `app-settings.json` parks the Host too, until Astera is restarted and
+repairs the file. Astera itself does not show that the Host is parked. `data.appAttached` says whether
+Astera is connected. A Host that does not announce `dispatch` leaves both fields out.
+
 `skills list` and `skills install` are outside both lists: they never contact a Host and never need
 one. They read the profile's `accounts.json` and `app-settings.json` and work on files in each
 account's config folder, so they answer the same with Astera and the Host running or not.
@@ -130,36 +139,39 @@ about, so they exit 3.
 
 ### Workers with Astera closed
 
-**With Astera closed, the Host starts and stops workers itself.** These coordinator commands work
-from a shell with only a Host running: `worker-start`, `worker-start --worktree new`, `worker-stop`,
+**With Astera closed, the Host starts and stops workers itself.** These coordinator commands work from a
+shell with only a Host running: `worker-start`, `worker-start --worktree new`, `worker-stop`,
 `worker-release` and `worker-read`. So does `run-start`, which starts a Job's coordinator again, and
-the first `jobs run` of a Job with a coordinator account, which starts it for the first time. Either
-way, the Host makes the run's worktree itself if it does not have one yet. If the coordinator then
-fails to start, the Host removes that worktree again, and the failed start still answers the same way
-it always did. A `worker-start --worktree new` whose worker then fails to start has its new worktree
-removed the same way. A failed start that leaves nothing behind keeps no receipt: no agent started,
-and any new worktree it made was removed by the Host itself. Once the cause is fixed, such as a
-damaged `app-settings.json`, the same command with the same `--request-id` really starts. A failed
-start that left its worktree in place, because something was still using it, keeps its receipt and
-replays its answer. So does one whose worktree an older Astera removed, one that still makes and
-removes worktrees itself: the worktree is gone, but the receipt is kept, so use a new `--request-id`
-for the retry. They are the commands a coordinator session uses, and `astera help` describes them. The
-Host starts the agent in a session it holds, keeps its output, and ends it when asked. When such a
-worker ends on its own, its Dispatch is closed all the same: by the Host while Astera is closed, and by
-Astera once it has taken the session back. Open Astera later and it shows those workers as tabs. With
-Astera open, a worker the Host starts gets its tab at once.
+`jobs run` of a Job with a coordinator account and no schedule, which starts the new run's coordinator,
+for the first run and for every later one. If a later run's coordinator fails to start, that run stays
+without one, and the error names `astera run-start --run <jobId>`, which starts it. Either way, the Host
+makes the run's worktree itself if it does not have one yet. If the coordinator then fails to start, the
+Host removes that worktree again, and the failed start still answers the same way it always did. A
+`worker-start --worktree new` whose worker then fails to start has its new worktree removed the same
+way. A failed start that leaves nothing behind keeps no receipt: no agent started, and any new worktree
+it made was removed by the Host itself. Once the cause is fixed, such as a damaged `app-settings.json`,
+the same command with the same `--request-id` really starts. A failed start that left its worktree in
+place, because something was still using it, keeps its receipt and replays its answer. So does one whose
+worktree an older Astera removed, one that still makes and removes worktrees itself: the worktree is
+gone, but the receipt is kept, so use a new `--request-id` for the retry. They are the commands a
+coordinator session uses, and `astera help` describes them. The Host starts the agent in a session it
+holds, keeps its output, and ends it when asked. When such a worker ends on its own, its Dispatch is
+closed all the same: by the Host while Astera is closed, and by Astera once it has taken the session
+back. Open Astera later and it shows those workers as tabs. With Astera open, a worker the Host starts
+gets its tab at once.
 
 **The Host also merges and removes worktrees itself.** `run-merge`, and `run-delete --merge` or
 `--remove-worktrees`, all work the same way with only a Host running. A merge into the project folder
-follows the same checks whoever runs it, and one made while Astera is closed may show up on the Work
-Unit screen as a change from outside the next time Astera opens. `run-delete` on a Job that fires on a
-schedule closes its open workers and merges before a folder removal can be refused: after that
-refusal, nothing about the Job or its runs is deleted, but the workers are already closed and the merge
-has already happened.
+follows the same checks whoever runs it. The Host writes down each merge it makes, so one made while
+Astera is closed does not show on the Work Unit screen as a change from outside. `run-delete` on a Job
+that fires on a schedule closes its open workers and merges before a folder removal can be refused:
+after that refusal, nothing about the Job or its runs is deleted, but the workers are already closed and
+the merge has already happened.
 
 **`astera host status` says whether this Host can do this.** `spawn` in `data.features` means it can
 start and stop workers, and `worktrees` in `data.features` means it can make, merge and remove them
-itself. A Host started by an older Astera does not have either, and neither does one whose starter
+itself. `dispatch` means it also places the workers of a Job with no coordinator and runs their checks
+(see below). A Host started by an older Astera does not have these, and neither does one whose starter
 could not name the files a worker needs. With such a Host, these commands need the app as they did
 before.
 
@@ -199,15 +211,36 @@ doc).
 A worker Astera started in a Host session is the Host's to end, so with Astera closed `worker-stop`
 and `worker-release` still work on it.
 
-**Validation and review wait for Astera.** A task added with `--validate` or `--review` stays
-`validating` or `reviewing` after its worker reports done with Astera closed. Nothing checks it yet,
-and Astera starts the check when it next opens.
+**Jobs run with Astera closed.** With a Host that announces `dispatch`, a Job with no coordinator
+runs with Astera closed. The Host places its workers, merges their worktrees, and runs the `--validate`
+checks, the `--review` reviews and, in a `--convergence` Job, the repairs. So `runs wait` ends
+`completed`, or `waiting` (8) when a question needs a person. Scheduled Jobs still fire only while
+Astera is open, and a run that a schedule fires is not placed automatically. With a Host that does not
+announce `dispatch`, no worker is placed while Astera is closed, and a `runs wait` holds until its
+deadline and ends with 7.
 
-**Jobs do not move on their own with Astera closed.** When a Job has no coordinator, the app is what
-places its workers. With Astera closed, `jobs run` of such a Job starts the run and answers with its
-id, but no worker is placed, so **a `runs wait` on that run does not complete**. It holds until its deadline
-and ends with 7. Scheduled Jobs fire only while Astera is open. Until the Host learns to place workers
-itself, run Jobs with Astera open.
+**The Host runs the checks itself.** A task added with `--validate` or `--review` moves on after its
+worker reports done, with Astera open or closed. A validation run the Host starts appears in Astera's
+run panel when Astera opens, and stopping it there stops it in the Host. A Host that is stopped or
+replaced while a check runs does not count that check as failed. The next Host starts it again in a
+`--convergence` Job, and otherwise opens a question about it.
+
+**A worker lost while Astera is closed opens a question.** When a worker ends without reporting while
+Astera is closed, in a run with no coordinator session, the Host opens a question on its task, and
+`runs wait` ends with 8. That includes a worker Astera saw before it closed, which Astera might
+otherwise have started again by itself when it next opened. A run with a coordinator leaves the lost
+worker to the coordinator.
+
+**A worker that hits its usage limit while Astera is closed waits.** Its session stays open and its
+task stays in progress, so `runs wait` ends at its deadline with 7. When Astera opens, it takes the
+session back and moves it to the next account the task lists. Only Astera moves a session to another
+account. A task can list several accounts, in the order to move through: `tasks add --account a,b`.
+
+**While Astera shows the Host as not answering, Jobs wait.** Astera does not take over from a Host
+that announced `dispatch`, even while that Host is not answering, because the Host may still be
+working. So nothing is placed until the Host answers again or stops. The status bar says **Host not
+answering**; the Jobs sidebar does not say why nothing moves. If it stays that way, restart the Host
+from **Settings → Info**.
 
 **Stopping a worker.** `worker-stop --dispatch <id>` ends the worker's session and marks its Dispatch
 stopped. `runs stop --id <runId>` does the same for every open worker of a run, and pauses the run.
@@ -365,8 +398,8 @@ run it started, which is the id to pass to `runs wait`.
 **`jobs create` makes a plan and runs nothing.** It returns the Job, marked `pendingStart`, with no
 run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in
 the app does. `--cwd` defaults to the directory you ran the command from. Give `--coordinator-account`
-to have a coordinator session drive the Job once it runs; without it the app places the workers
-itself.
+to have a coordinator session drive the Job once it runs; without it the workers are placed for you,
+by the Host when Astera is closed (see "Workers with Astera closed").
 
 **`tasks add` takes exactly one of `--job` or `--run`**, and there is no default. `--job` adds a task
 to the plan, and `jobs run` copies it, with its `--deps` pointing at the copies, into every run it
@@ -969,6 +1002,10 @@ its own `astera host stop`), then run `astera host start` with the build you mea
 Reports a worker could not deliver are written into the profile's queue and applied when the
 orchestrator is next available. The command says where it wrote the file and exits 0, because there
 is nothing for the worker to do about it.
+A Host that announces `dispatch` applies them itself when it next starts, with Astera open or
+closed; with an older Host, Astera applies them when it next opens. One exception: the first time
+Astera opens on a profile that used the old orchestration switch, it leaves the queue alone, and so
+does the Host. Those reports are applied the next time the Host starts.
 
 ## See also
 

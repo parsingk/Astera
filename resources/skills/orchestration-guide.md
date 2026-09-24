@@ -779,8 +779,8 @@ server blocks `check` and `inbox` as coordinator-only (403).
   answer is `ok: true` with `data` = `{"queued":true,"applied":false,"path":"…"}` and exit code `0`.
   **`ok` there means the command ran, not that the report arrived** — `applied: false` is the half
   that says it did not. Read both halves: the
-  report is safe and the app applies it at the next start that has orchestration on, and nothing in
-  the Job has moved yet. Do not send it again and do not read it as the work having failed. Every
+  report is safe. The Host applies it the next time it starts, with the app open or closed (with an
+  older Host, the app applies it the next time it starts). Nothing in the Job has moved yet. Do not send it again and do not read it as the work having failed. Every
   other command still fails the way it always did — a file cannot answer an `ask`. A report the
   server would reject anyway (no `--outcome`, no `--task-id`, no `--dispatch-id`) is not queued: it
   fails as it always has, so fix it and send it again.
