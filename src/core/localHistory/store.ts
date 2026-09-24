@@ -4,10 +4,9 @@
 // and index.json.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { parentDir } from '../files/paths'
+import { legacyFoldedKey, parentDir } from '../files/paths'
 import { uniqueName } from '../files/ops'
 import { isPathWithin } from '../files/tree'
-import { legacyFoldedKey } from '../files/paths'
 import {
   normalizeProjectPath,
   projectKey,

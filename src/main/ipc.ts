@@ -192,8 +192,7 @@ import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/
 import { listSlashCommands, listCodexMentions } from './slashCommands'
 import { createFileIndex } from './fileIndex'
 import { filterFilePaths } from '../core/files/fileMatch'
-import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
-import { foldPathCase } from '../core/files/paths'
+import { sortEntries, isPathWithin, isSamePath, projectRootOf, renamePlan } from '../core/files/tree'
 import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { imageMime } from '../core/files/imageMime'
@@ -5631,11 +5630,12 @@ export function registerIpc(
     await assertAllowedPath(from)
     const to = path.join(path.dirname(from), newName)
     await assertAllowedPath(to)
-    if (path.resolve(from) === path.resolve(to)) return to // exactly the same — no-op
-    // A rename that only changes case can fail or no-op where the filesystem ignores case (win32,
-    // darwin), so it goes via a temporary name. On linux the two names are two files, so a case-only
-    // rename is an ordinary one and must hit the exists check below like any other.
-    const caseOnly = foldPathCase(from) === foldPathCase(to)
+    // renamePlan (core/files/tree.ts) decides: exactly the same is a no-op; a case-only change where the
+    // filesystem ignores case (win32, darwin) goes via a temporary name; anything else — on linux a
+    // case-only change too, since the two names are two files — hits the exists check first.
+    const plan = renamePlan(from, to)
+    if (plan === 'noop') return to
+    const caseOnly = plan === 'viaTemp'
     if (!caseOnly) {
       try {
         await fs.access(to)

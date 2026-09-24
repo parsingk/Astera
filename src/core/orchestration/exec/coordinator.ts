@@ -833,11 +833,10 @@ export class OrchCoordinator {
     // isSamePath (not ===) because a.runCwd and a.terminalCwd are recorded independently (Run.cwd
     // vs a Dispatch's cwd field) and can name the same folder with different casing or separators
     // (a Windows drive letter typed/stored as `d:` vs `D:`, or `\` vs `/`) without being different
-    // folders. isSamePath already carries this exact win32-first normalization for the same "same
-    // folder" question elsewhere (view.ts's project ownership check, ipc.ts's home-path check), so
-    // it is reused here rather than inventing a fresh comparison. This repository is win32-first
-    // (isPathWithin/isSamePath's own comment), so that normalization is the established answer, not
-    // a new judgment call being made here.
+    // folders. isSamePath already carries this normalization for the same "same folder" question
+    // elsewhere (view.ts's project ownership check, ipc.ts's home-path check), so it is reused here
+    // rather than inventing a fresh comparison: separators unified by path.resolve, case folded where
+    // the filesystem ignores it (win32, darwin — foldPathCase in core/files/paths.ts) and kept on linux.
     await fs.writeFile(
       specPath,
       // The caller may have assembled the file already (a review dispatch does — see

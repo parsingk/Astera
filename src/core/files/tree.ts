@@ -28,13 +28,12 @@ export function sortEntries(entries: DirEntry[]): DirEntry[] {
 export function comparablePath(p: string, platform: string = process.platform): string {
   return foldPathCase(path.resolve(p), platform)
 }
-const normalizePath = comparablePath
 
 /** Whether target is base itself or a path below it — the path guard for the files IPC.
  *  Requiring a separator boundary blocks false positives from sibling prefixes (D:\proj vs D:\proj2). */
 export function isPathWithin(base: string, target: string, platform: string = process.platform): boolean {
-  const b = normalizePath(base, platform)
-  const t = normalizePath(target, platform)
+  const b = comparablePath(base, platform)
+  const t = comparablePath(target, platform)
   return t === b || t.startsWith(b + path.sep)
 }
 
@@ -42,9 +41,26 @@ export function isPathWithin(base: string, target: string, platform: string = pr
  *  is right for a guard (the files IPC must not escape a root), but wrong for "does this Run belong
  *  to this project": isPathWithin(project, run.cwd) is also true for a nested repository below the
  *  project root, which silently pulls in a Run that belongs to a different, nested project. Shares
- *  normalizePath with isPathWithin, so it inherits the same case rule (folded on win32 and darwin only). */
+ *  comparablePath with isPathWithin, so it inherits the same case rule (folded on win32 and darwin only). */
 export function isSamePath(a: string, b: string, platform: string = process.platform): boolean {
-  return normalizePath(a, platform) === normalizePath(b, platform)
+  return comparablePath(a, platform) === comparablePath(b, platform)
+}
+
+/** How files.rename treats its target. 'noop' when both name the same path exactly. 'viaTemp' when
+ *  they differ only in case on a platform that folds case (win32, darwin): the two are one file, a direct
+ *  rename can fail or do nothing there, and the target "already exists" as the file itself — so the
+ *  exists check is skipped and the rename goes through a temporary name. 'checkThenRename' otherwise:
+ *  refuse when the target exists, then rename. On linux a case-only rename is that last kind — `A.txt`
+ *  beside `a.txt` is another file, and skipping the check would overwrite it.
+ *
+ *  The case comparison is on the strings as given, not resolved, as the handler always did. */
+export function renamePlan(
+  from: string,
+  to: string,
+  platform: string = process.platform
+): 'noop' | 'viaTemp' | 'checkThenRename' {
+  if (path.resolve(from) === path.resolve(to)) return 'noop'
+  return foldPathCase(from, platform) === foldPathCase(to, platform) ? 'viaTemp' : 'checkThenRename'
 }
 
 /** target을 담는 후보 중 **가장 깊은** 것. 담는 것이 없으면 target을 그대로 돌려준다.
@@ -67,7 +83,7 @@ export function projectRootOf(roots: string[], target: string): string {
   let best: string | null = null
   for (const root of roots) {
     if (!isPathWithin(root, target)) continue
-    if (best === null || normalizePath(root).length > normalizePath(best).length) best = root
+    if (best === null || comparablePath(root).length > comparablePath(best).length) best = root
   }
   return best ?? target
 }

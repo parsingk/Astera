@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
-import { sortEntries, isPathWithin, isSamePath, projectRootOf, buildIgnoreMatcher, type DirEntry } from './tree'
+import { sortEntries, isPathWithin, isSamePath, renamePlan, projectRootOf, buildIgnoreMatcher, type DirEntry } from './tree'
 import { absPath } from '../testPaths'
 
 const e = (name: string, isDir: boolean): DirEntry => ({ name, path: `D:\\p\\${name}`, isDir })
@@ -147,5 +147,32 @@ describe('buildIgnoreMatcher', () => {
   it('윈도우 역슬래시 경로도 판정한다', () => {
     expect(buildIgnoreMatcher(null)('a\\node_modules\\x')).toBe(true)
     expect(buildIgnoreMatcher(null)('src\\index.ts')).toBe(false)
+  })
+})
+
+describe('renamePlan — files.rename 이 대상을 어떻게 다루는가', () => {
+  // linux 에서 A.txt 와 a.txt 는 두 파일이다. 대소문자만 다른 이름으로 바꾸는 것을 "같은 파일의 철자
+  // 바꾸기" 로 보면 있는지 검사를 건너뛰고 임시 이름을 거쳐 다른 파일 A.txt 를 덮는다
+  it('linux: 대소문자만 다른 이름으로 바꾸기는 보통의 이름 바꾸기다 — 대상이 있으면 거절된다', () => {
+    expect(renamePlan('/p/a.txt', '/p/A.txt', 'linux')).toBe('checkThenRename')
+  })
+
+  it('win32: 같은 파일의 대소문자만 바꾸기는 임시 이름을 거친다', () => {
+    expect(renamePlan('D:\p\a.txt', 'D:\p\A.txt', 'win32')).toBe('viaTemp')
+  })
+
+  it('darwin 도 임시 이름을 거친다', () => {
+    expect(renamePlan('/p/a.txt', '/p/A.txt', 'darwin')).toBe('viaTemp')
+  })
+
+  it('정확히 같은 경로면 아무것도 하지 않는다', () => {
+    expect(renamePlan(absPath('p', 'a.txt'), absPath('p', 'a.txt'), 'linux')).toBe('noop')
+    expect(renamePlan(absPath('p', 'a.txt'), absPath('p', 'a.txt'), 'win32')).toBe('noop')
+  })
+
+  it('다른 이름이면 어디서나 검사 뒤 바꾼다', () => {
+    for (const platform of ['linux', 'win32', 'darwin']) {
+      expect(renamePlan(absPath('p', 'a.txt'), absPath('p', 'b.txt'), platform)).toBe('checkThenRename')
+    }
   })
 })
