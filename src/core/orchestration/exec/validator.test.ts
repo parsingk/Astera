@@ -55,6 +55,26 @@ describe('TaskValidator', () => {
     expect(cannot).not.toHaveBeenCalled()
   })
 
+  // Task 6 re-review m5 — 되돌려 준 exit 의 처리가 던져도 처리되지 않은 거절이 되지 않는다. Host 에서는
+  // 그것이 프로세스를 끝낸다. 던진 것은 로그에 남는다.
+  it('되돌려 준 exit 의 처리가 던지면 로그만 남기고 거절로 새지 않는다', async () => {
+    const log = vi.fn()
+    let v: TaskValidator | null = null
+    const runner: ValidatorRunner = {
+      start: async () => {
+        queueMicrotask(() => v!.onRunExit({ runId: 'run_early', exitCode: 1 }))
+        return { runId: 'run_early', name: 'CFG1' }
+      },
+      output: () => {
+        throw new Error('output gone')
+      },
+      stop: () => {}
+    }
+    v = new TaskValidator({ runner, onSettled: async () => {}, onCannotRun: async () => {}, log })
+    v.enqueue({ taskId: 'tsk_1', cwd: absPath('w1'), configIds: ['cfg1'] })
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining('early exit replay failed run=run_early')))
+  })
+
   it('start 도중 온 남의 run 의 exit 는 이 check 의 결과가 되지 않는다', async () => {
     const { onSettled, calls } = settledCalls()
     let v: TaskValidator | null = null

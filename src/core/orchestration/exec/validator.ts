@@ -313,8 +313,16 @@ export class TaskValidator {
       this.startsInFlight--
       if (this.startsInFlight === 0) this.earlyExits.clear()
     }
-    // Replayed outside the try: onRunExit's own failures are not "could not start".
-    if (early) this.onRunExit(early)
+    // Replayed outside the try: onRunExit's own failures are not "could not start". Caught all the same —
+    // this runs inside an async method nobody awaits, so a throw here would be an unhandled rejection,
+    // and in the Host that ends the process (Task 6 re-review m5).
+    if (early) {
+      try {
+        this.onRunExit(early)
+      } catch (e) {
+        this.deps.log?.(`early exit replay failed run=${early.runId} task=${head.taskId}: ${String(e)}`)
+      }
+    }
     // An entry that is no longer work leaves quietly — no onCannotRun, no failure record. The queue has to
     // keep moving, so advance is called (its identity check drops exactly this entry). The point is that a
     // stale validation must not undo a person's rescue; the purpose of the check itself — not running a
