@@ -73,16 +73,39 @@ const DEGRADES = {
 } as const
 
 /**
- * **Forwarded, and the command layer deliberately swallows a failure.** `resolveProjectRoot` logs and
- * keeps the path it was given. `probeLimit` (logs and carries on with no limit detected) and
- * `readReviewFile` (records the verdict file as malformed) were here until S2; they are HOST_LOCAL now,
- * and a call of theirs the Host does not own is still forwarded this way.
+ * **Forwarded, and the command layer deliberately swallows a failure.** `probeLimit` (logs and
+ * carries on with no limit detected) and `readReviewFile` (records the verdict file as malformed) were
+ * here until S2; they are HOST_LOCAL now, and a call of theirs the Host does not own is still forwarded
+ * this way. `resolveProjectRoot` (logs and keeps the path it was given) was here until the Host could
+ * answer it; it is HOST_RESOLVES now, and takes this route whenever the Host does not answer it.
  *
  * **So these must not decide the status.** The command goes on to succeed or to fail for its own
  * reasons, and rewriting that later failure as CONFLICT tells a script "the app is missing" when the
  * truth was a bad id — the same lie the substring match used to tell, wearing a flag instead.
  */
-const SWALLOWED = ['resolveProjectRoot'] as const
+const SWALLOWED = [] as const
+
+/**
+ * **Answered by the Host itself when no app is attached, or while the Host drives; forwarded to an
+ * attached app that does not yield** (the project-root amendment to the S2–S6 design).
+ *
+ * `resolveProjectRoot` normalises a Job's `--cwd` to its project root before `run-create` stores it,
+ * and the sidebar's ownership test is exact, so a Job made in a subfolder with the app closed used to
+ * show in no project list: the Host forwarded, got APP_REQUIRED, and the command layer swallowed it
+ * and kept the subfolder. The Host now answers with the app's own rule (`resolveProjectRootFrom`) over
+ * its own worktree registry and the profile's accounts' transcripts (`host/projectRoots.ts`).
+ *
+ * **Why an attached app still answers when the Host does not drive.** Its HistoryIndex is watched and
+ * knows accounts the Host does not (the ghost accounts it found on disk), so while it is there and in
+ * charge its answer is the better one. An app that stops answering mid-question is the same fact as no
+ * app, as in LOCAL_WHEN_ABSENT, and the Host answers.
+ *
+ * **Still swallowed, never `onAppRequired`.** A failure — the local one (a damaged accounts.json)
+ * included — is logged by the command layer, which keeps the path it was given; it must not decide the
+ * status, for SWALLOWED's reason. A Host built without the local resolver (`resolveProjectRoot`
+ * absent) forwards exactly as before, by SWALLOWED's route.
+ */
+const HOST_RESOLVES = ['resolveProjectRoot'] as const
 
 /**
  * **Called as a bare statement — nobody holds the result.**
@@ -324,7 +347,7 @@ const MARKS_AFTER_ACTING = new Set<HostLocalName>(['removeWorktrees', 'makeRunWo
 const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending'])
 
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
-const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...HOST_DRIVES, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
+const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ...FIRE_AND_FORGET, ...HOST_DRIVES, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
 
 /** Not forwarded through the generic funnel at all (fix round 1, I1): `discardRunWorktree` is built by
  *  hand inside `hostOrchDeps` (its own `const discardRunWorktree`, further down, right before it is
@@ -340,6 +363,7 @@ type Classified =
   | (typeof HOST_LOCAL)[number]
   | (typeof PROPAGATES)[number]
   | (typeof SWALLOWED)[number]
+  | (typeof HOST_RESOLVES)[number]
   | (typeof FIRE_AND_FORGET)[number]
   | HostDrivesName
   | keyof typeof NESTED
@@ -390,7 +414,7 @@ const EFFECTFUL: Record<Classified, boolean> = {
   browserEnabled: false,
   handoffEnabled: false,
   trackingEnabled: false,
-  // SWALLOWED — a question about what is already there.
+  // HOST_RESOLVES — a question about what is already there, on either route.
   resolveProjectRoot: false,
   // FIRE_AND_FORGET — every one of them starts or ends something, which is why nobody holds the
   // result. That the caller does not wait for them does not make them free to do twice.
@@ -474,8 +498,8 @@ export function hostOrchDeps(a: {
    *  refused for want of the app. That last case carries `detail` (so the log says the Host refused,
    *  not that the app was asked), and a profile file only the app can repair (`RepairNeeded`) rides
    *  in it as `repair`. `orch.ts` answers that call CONFLICT on the strength of this, rather than by
-   *  matching text in the reply. Never called for the other three groups — SWALLOWED, FIRE_AND_FORGET
-   *  and DEGRADES: their refusal does not decide what the command answers. */
+   *  matching text in the reply. Never called for SWALLOWED, HOST_RESOLVES, FIRE_AND_FORGET and
+   *  DEGRADES: their refusal does not decide what the command answers. */
   onAppRequired(name: string, why: string, detail?: { repair?: string; retry?: string }): void
   /** Called when this command is about to ask the app for something that **changes something outside
    *  the state** — the other half of "did this call do anything", beside the commit flag (request
@@ -508,6 +532,9 @@ export function hostOrchDeps(a: {
   /** The Host's own checks (HOST_DRIVES), and whether the Host drives right now, asked at every
    *  call. Null or absent: the six names take their pre-S5 routes. */
   drive?: { owns(): boolean; checks: HostChecks } | null
+  /** The Host's own project-root resolver (HOST_RESOLVES, `host/projectRoots.ts`). Absent: the name
+   *  is forwarded as before, by SWALLOWED's route. */
+  resolveProjectRoot?: (cwd: string) => Promise<string>
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -765,6 +792,25 @@ export function hostOrchDeps(a: {
     }
   }
 
+  /** HOST_RESOLVES: the Host's own resolver when no app is attached or the Host drives, else the app,
+   *  and the Host again when that app cannot be asked. A failure is thrown as it is, never flagged:
+   *  the command layer swallows it (see HOST_RESOLVES). */
+  const hostResolves = (name: (typeof HOST_RESOLVES)[number]) => {
+    const fallback = forward(name, false)
+    return async (cwd: string): Promise<unknown> => {
+      const local = a.resolveProjectRoot
+      if (!local) return fallback(cwd)
+      if (!a.hasApp() || a.drive?.owns()) return local(cwd)
+      try {
+        return await act(name, [cwd])
+      } catch (err) {
+        if (!(err instanceof AppUnreachable)) throw err
+        a.log(`${name} answered by the Host (${err.message})`)
+        return local(cwd)
+      }
+    }
+  }
+
   const remote = Object.fromEntries(
     REMOTE.map((name) => {
       if (name === 'makeRunWorktree') {
@@ -779,6 +825,8 @@ export function hostOrchDeps(a: {
         ]
       }
       if ((HOST_LOCAL as readonly string[]).includes(name)) return [name, hostLocal(name as HostLocalName)]
+      if ((HOST_RESOLVES as readonly string[]).includes(name))
+        return [name, hostResolves(name as (typeof HOST_RESOLVES)[number])]
       if ((FIRE_AND_FORGET as readonly string[]).includes(name)) return [name, forgetful(name)]
       if ((HOST_DRIVES as readonly string[]).includes(name)) return [name, hostDrives(name as HostDrivesName)]
       if (name in DEGRADES) return [name, degrading(name, DEGRADES[name as keyof typeof DEGRADES])]

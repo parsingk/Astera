@@ -42,6 +42,7 @@ import { encodeUserTurn } from '../core/chat/claudeProtocol'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { HostRetiring } from '../core/host/hostRetiring'
 import { pendingReportFileName, pendingReportsDirIn, serializePendingReport } from '../core/orchestration/pendingReports'
+import { createHostProjectRoots } from './projectRoots'
 
 const NOW = '2026-09-22T00:00:00.000Z'
 /** 이 Host 가 선 시각. `now` 보다 **앞**이어야 하는 값이다 — `requests show` 가 이것을 실어 주는
@@ -1028,6 +1029,36 @@ describe('요청 영수증', () => {
       const q = await noApp.call({ cmd: 'sessions-read', args: { id: 'chat-1' }, sessionId: '' })
       expect(q.body).toEqual({ id: 'chat-1', kind: 'chat', alive: true, turns: [] })
     })
+  })
+
+  // 앱이 닫힌 채 하위 폴더에서 만든 Job 이 어느 프로젝트 목록에도 안 보이던 자리다. 앱에 물어
+  // APP_REQUIRED 를 받고 명령 층이 그것을 삼켜, 받은 하위 폴더를 그대로 저장했다.
+  it('앱이 없으면 jobs create --cwd <알려진 프로젝트의 하위 폴더> 가 프로젝트 루트를 저장한다', async () => {
+    const project = path.join(dir, 'work', 'proj')
+    const configDir = path.join(dir, 'cfg', 'acc1')
+    await fs.writeFile(
+      path.join(dir, 'accounts.json'),
+      JSON.stringify({ accounts: [{ id: 'acc1', label: '일', configDir, color: '#fff', createdAt: 'T', provider: 'claude' }] }),
+      'utf8'
+    )
+    const slug = path.join(configDir, 'projects', 'proj')
+    await fs.mkdir(slug, { recursive: true })
+    await fs.writeFile(
+      path.join(slug, 's1.jsonl'),
+      JSON.stringify({ type: 'user', sessionId: 's1', cwd: project, message: { role: 'user', content: 'hi' } }),
+      'utf8'
+    )
+    const act = vi.fn()
+    const roots = createHostProjectRoots({ profileDir: dir, repoPaths: () => [], repoRoot: async () => null })
+    const orch = orchOver({ act, hasApp: () => false, resolveProjectRoot: roots.resolve })
+    const job = await orch.call({
+      cmd: 'jobs-create',
+      args: { objective: 'o', cwd: path.join(project, 'src', 'deep') },
+      sessionId: ''
+    })
+    expect(job.status).toBe(200)
+    expect(orch.state().jobs.map((j) => j.cwd)).toEqual([project])
+    expect(act).not.toHaveBeenCalled()
   })
 
   // 앱이 닫혀 있어도 셸이 계획을 짤 수 있다 — 계정 목록은 프로필의 accounts.json 이 답한다.

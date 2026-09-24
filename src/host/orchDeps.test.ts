@@ -971,3 +971,77 @@ describe('HOST_DRIVES (R8)', () => {
     expect(await build({ hasApp: () => false }).lang!()).toBe('en')
   })
 })
+
+/**
+ * **`resolveProjectRoot` 는 앱이 없거나 Host 가 몰 때 Host 가 답한다.** 앱이 닫힌 채 하위 폴더에서
+ * 만든 Job 이 어느 프로젝트 목록에도 안 보이던 것이 이것 때문이었다 — 앱에 물어 APP_REQUIRED 를
+ * 받고, 명령 층이 그것을 삼켜 받은 경로를 그대로 저장했다.
+ */
+describe('HOST_RESOLVES', () => {
+  const driving = (owns: boolean) => ({ owns: () => owns, checks: {} as HostChecks })
+
+  it('앱이 없으면 Host 의 해석기가 답하고 앱에 묻지 않는다', async () => {
+    const act = vi.fn()
+    const refused: string[] = []
+    const local = vi.fn().mockResolvedValue('D:/proj')
+    const deps = hostOrchDeps(
+      base({ act, hasApp: () => false, resolveProjectRoot: local, onAppRequired: (n) => refused.push(n) })
+    )
+    expect(await deps.resolveProjectRoot?.('D:/proj/src')).toBe('D:/proj')
+    expect(local).toHaveBeenCalledWith('D:/proj/src')
+    expect(act).not.toHaveBeenCalled()
+    expect(refused).toEqual([])
+  })
+
+  it('Host 가 몰면 앱이 붙어 있어도 Host 가 답한다', async () => {
+    const act = vi.fn()
+    const local = vi.fn().mockResolvedValue('D:/proj')
+    const deps = hostOrchDeps(base({ act, hasApp: () => true, resolveProjectRoot: local, drive: driving(true) }))
+    expect(await deps.resolveProjectRoot?.('D:/proj/src')).toBe('D:/proj')
+    expect(act).not.toHaveBeenCalled()
+  })
+
+  it('양보하지 않는 앱이 붙어 있으면 전처럼 앱에 묻는다', async () => {
+    const act = vi.fn().mockResolvedValue('D:/app-root')
+    const local = vi.fn()
+    const deps = hostOrchDeps(base({ act, hasApp: () => true, resolveProjectRoot: local, drive: driving(false) }))
+    expect(await deps.resolveProjectRoot?.('D:/proj/src')).toBe('D:/app-root')
+    expect(act).toHaveBeenCalledWith('resolveProjectRoot', ['D:/proj/src'])
+    expect(local).not.toHaveBeenCalled()
+  })
+
+  // 앱이 물음 도중 떠나거나 기한을 넘기면 "앱이 없다"와 같은 사실이다 — LOCAL_WHEN_ABSENT 처럼 Host 가 답한다.
+  it('붙어 있던 앱이 답하지 못하면 Host 가 답한다', async () => {
+    const act = vi.fn().mockRejectedValue(new AppUnreachable('APP_REQUIRED: gone'))
+    const local = vi.fn().mockResolvedValue('D:/proj')
+    const refused: string[] = []
+    const deps = hostOrchDeps(
+      base({ act, hasApp: () => true, resolveProjectRoot: local, onAppRequired: (n) => refused.push(n) })
+    )
+    expect(await deps.resolveProjectRoot?.('D:/proj/src')).toBe('D:/proj')
+    expect(refused).toEqual([])
+  })
+
+  // 명령 층이 삼키는 실패다. 답을 정하면 제 이유로 실패한 명령이 "앱이 없다"로 둔갑한다.
+  it('Host 의 해석이 실패해도 앱 문제로 표시하지 않는다', async () => {
+    const refused: string[] = []
+    const deps = hostOrchDeps(
+      base({
+        hasApp: () => false,
+        resolveProjectRoot: vi.fn().mockRejectedValue(new Error('accounts.json is not valid JSON')),
+        onAppRequired: (n) => refused.push(n)
+      })
+    )
+    await expect(deps.resolveProjectRoot?.('D:/p')).rejects.toThrow(/accounts\.json/)
+    expect(refused).toEqual([])
+  })
+
+  it('읽기이므로 영수증을 남기지 않는다', async () => {
+    let effects = 0
+    const deps = hostOrchDeps(
+      base({ hasApp: () => false, resolveProjectRoot: async (c) => c, onEffect: () => effects++ })
+    )
+    await deps.resolveProjectRoot?.('D:/p')
+    expect(effects).toBe(0)
+  })
+})

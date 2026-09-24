@@ -723,6 +723,35 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
   while one is in flight is skipped (`checks.ts:191-207`). The belt itself runs only with no app
   attached (`driving.ts:125-138`). Pinned by `src/host/checks.test.ts`.
 
+**Found after S4+S5 shipped**
+
+- **A66. §1.4, `resolveProjectRoot` with the app closed (final review M3).** It said: `resolveProjectRoot`
+  becomes HOST_LOCAL in S3, over the worktree list plus Job cwds. It did not: it stayed SWALLOWED, so
+  with the app closed the Host forwarded it, got APP_REQUIRED, and `run-create` kept the path it was
+  given. A Job made with `--cwd` in a subfolder of a project then showed in no project list, because
+  ownership is an exact match. What shipped: a new orchDeps group, HOST_RESOLVES
+  (`src/host/orchDeps.ts`). The Host answers when no app is attached, or while it drives. An attached
+  app that does not yield is still asked, and if it cannot answer the Host does. A failure is still
+  swallowed and never answers CONFLICT. The rule is one function for both processes,
+  `resolveProjectRootFrom` in `src/core/files/tree.ts`, next to `projectRootOf`. The worktree
+  repoPaths come first, the walk stops at `repoRoot(cwd)`, there is no boundary outside a repository,
+  and the given cwd comes back when nothing holds it. `ipc.ts` now calls that function. The Host's
+  candidates are its own registry's repoPaths plus the projects that the transcripts of the
+  accounts.json accounts name (`src/host/projectRoots.ts`). The listing moved out of
+  `core/history/index.ts` into `src/core/history/projects.ts`, which has no watcher and no chokidar
+  import. HistoryIndex keeps its watcher and caches and calls the new module. The Host's
+  `ProjectPathListing` keys a claude folder's cwd on its mtime signature, the key `dirCache` uses, so
+  an unchanged folder is not parsed again. It opens `session-cwd.json` read-only
+  (`SessionCwdCache`'s `readOnly`), so the app's file is never written, not even as a `.bak`. Why
+  not Job cwds: a stored one may itself be a subfolder that was never normalised (any Job made with
+  the app closed before this), and a subfolder candidate pins every later Job below it there. So the
+  Host keeps the app's two lists. Why not the app's `HistoryIndex`: the chokidar import would add a package to the Host bundle, and
+  nothing but its watcher ever clears its project cache. What the Host does not see: the ghost
+  accounts the app finds on disk, which are not in accounts.json. A Job made from one of those
+  folders with the app closed is left at its subfolder. Pinned by `src/core/files/tree.test.ts`,
+  `src/core/history/projects.test.ts`, `src/core/history/sessionCwdCache.test.ts`,
+  `src/host/projectRoots.test.ts`, `src/host/orchDeps.test.ts` and `src/host/orch.test.ts`.
+
 ## Known limits after S3
 
 - **`refresh()` does not retry a Windows rename-busy read.** (resolved in S4+S5, see Amendments A60)
@@ -951,7 +980,7 @@ itself whether or not an app is attached.
 | `probeLimit` | SWALLOWED | HOST_LOCAL in S2 (pure file reads, `limitProbe.ts:17-23`) |
 | `readReviewFile` | SWALLOWED | HOST_LOCAL in S2 (a read of the Host's own specs dir) |
 | `makeRunWorktree`, `mergeWorktrees`, `removeWorktrees` | PROPAGATES | HOST_LOCAL in S3 |
-| `resolveProjectRoot` | SWALLOWED | HOST_LOCAL in S3 (worktree list plus Job cwds; still degrades) |
+| `resolveProjectRoot` | SWALLOWED | HOST_LOCAL in S3 (worktree list plus Job cwds; still degrades) (amended 2026-09-25, see Amendments A66: it stayed SWALLOWED through S4+S5, and is HOST_RESOLVES now) |
 | `startValidation`, `startReview`, `startRepair` | FIRE_AND_FORGET | HOST_LOCAL in S5 |
 | `repairTargetFor`, `repairOnce`, `lang` | DEGRADES | HOST_LOCAL in S5 (`lang` from `app-settings.json`) |
 | `listRunConfigs` | LOCAL_WHEN_ABSENT | unchanged |

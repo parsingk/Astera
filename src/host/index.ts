@@ -32,6 +32,7 @@ import { createHostOrch } from './orch'
 import { composeHostDriving } from './drivingWiring'
 import { createHostSpawner } from './spawner'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
+import { createHostProjectRoots } from './projectRoots'
 import { createHostExits, ptyHeldBy } from './exits'
 import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
@@ -284,6 +285,11 @@ async function main(): Promise<void> {
     worktrees: spawner ? worktrees : undefined,
     // The driver's hooks (drive, onCommit, mayDrain, onLoaded, driverStatus, validationStop): absent with
     // no spawner, and then validation, review and repair take their pre-S5 routes to the app.
+    // `resolveProjectRoot` with no app attached, or while this Host drives (orchDeps' HOST_RESOLVES): the
+    // app's rule over this Host's worktree registry and the profile's accounts' transcripts, read
+    // only. With no spawner the registry is never loaded, so its list is empty and the transcripts
+    // alone answer.
+    resolveProjectRoot: createHostProjectRoots({ profileDir, repoPaths: () => worktrees.repoPaths() }).resolve,
     ...(wiring?.orchHooks ?? {})
   })
 

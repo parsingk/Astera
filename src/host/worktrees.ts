@@ -80,6 +80,9 @@ export interface HostWorktrees {
   isRegistered(p: string): boolean
   /** The paths the registry holds, from memory — the Host path guard's third list (B5). */
   paths(): string[]
+  /** The repositories the registry's worktrees were forked from, from memory — `resolveProjectRoot`'s
+   *  first candidate list, as the app's is `core.worktrees.list().map((w) => w.repoPath)`. */
+  repoPaths(): string[]
   /** R8, the app's tags. */
   isPathInUse(p: string): string | null
   /** The four internal orch-calls, app only (R1). */
@@ -377,6 +380,7 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     reap,
     isRegistered: (p) => registry.list().some((w) => isSamePath(w.path, p)),
     paths: () => registry.list().map((w) => w.path),
+    repoPaths: () => registry.list().map((w) => w.repoPath),
     isPathInUse,
     call: async (cmd, args, from) => {
       const handle = calls[cmd]
