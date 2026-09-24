@@ -370,26 +370,26 @@ pointing here at the sentence it replaces.
   - `startCoordinator` joins `MARKS_AFTER_ACTING` (`src/host/orchDeps.ts:291-294`). The Host spawner
     tags every failure that came before a pty was opened as `refusedBeforeActing`: the settings
     refusal, an unknown account, a spawn the registry refused, and a retiring Host
-    (`src/host/spawner.ts:446,537-561`). Whether a pty was opened is read from a count the pty factory
-    moves, taken around the synchronous `sessions.spawn` (`src/host/spawner.ts:223,368-388`), so it
+    (`src/host/spawner.ts:457,555-579`). Whether a pty was opened is read from a count the pty factory
+    moves, taken around the synchronous `sessions.spawn` (`src/host/spawner.ts:225,379-399`), so it
     answers for that one call even with other starts in flight. A failure after a pty opened is not
     tagged, and stays marked.
   - A `discardRunWorktree` that answers `removed: true` withdraws the one mark that this same call's
     `makeRunWorktree` made for that path (`src/host/orchDeps.ts:672-685`). A folder left in place, in
     use or not removable, keeps its mark.
   - The fork of a `--worktree new` start is removed again when the start fails before any pty opened
-    (`src/host/spawner.ts:481-535`, with the folder recorded at `:420-424`), best effort and logged, with the start's own error thrown
+    (`src/host/spawner.ts:492-554`, with the folder recorded at `:431-435`), best effort and logged, with the start's own error thrown
     unchanged: the risk 6 pattern. Only when the folder is gone is the error tagged with the new
-    `undoneBeforeFailing` (`src/core/host/orchProtocol.ts:41-62`), and then `hostLocal` withdraws the
+    `undoneBeforeFailing` (`src/core/host/orchProtocol.ts:34-84`), and then `hostLocal` withdraws the
     mark it made before `startWorker` ran (`src/host/orchDeps.ts:644`).
   - `worker-start` commits its Dispatch before it starts the worker, so a withdrawn effect alone still
     left a receipt. Its failure rollback now says it is one (`setState(next, { rollsBack: true })`,
-    `src/core/orchestration/command.ts:146-151,1960-1975`) when, and only when, the start's error says
+    `src/core/orchestration/command.ts:146-151,1960-1978`) when, and only when, the start's error says
     it left nothing (`leftNothingBehind`). The Host counts that commit as taking back the first. That
     tag also covers a start the Host refused before touching anything: a retiring Host, or a fork
     refused by a damaged `worktrees.json`, so those keep no receipt either. Every other failed
     `worker-start` keeps its receipt as before, including one refused for want of the app, which the
-    receipts design pinned on purpose (`src/host/orch.test.ts:1257-1285`).
+    receipts design pinned on purpose (`src/host/orch.test.ts:1258-1286`).
 
   The result: a failed keyed `run-start` whose worktree was removed and whose coordinator started no
   process keeps no receipt, and neither does a failed `--worktree new` start whose fork was removed.
@@ -407,6 +407,25 @@ pointing here at the sentence it replaces.
   marked. Pinned by `src/host/orch.test.ts` (the three keyed receipts through the real spawner) and
   `src/host/spawner.test.ts` (the tags, the fork removal, and the two cases that must keep their
   mark).
+
+  **Follow-up round (review of A36).** Four changes, no change to the result above except the first:
+  - A `worker-start` with no fork (`--worktree current`, or an explicit path) refused by the permission
+    setting is tagged `refusedBeforeActing` too, since it comes before `sessions.spawn` and nothing was
+    forked (`src/host/spawner.ts:368-377,545-551`). It keeps no receipt, and the retry after the repair
+    starts. The same refusal after a fork that is still on disk stays untagged.
+  - The tags go on a copy of the error, never on the caught object (`taggedCopy`,
+    `src/core/host/orchProtocol.ts:36-57`). The spawner's `once()` setup promises hand every waiting
+    start the same rejection, so a tag on that object could make a start whose fork is still on disk
+    read as having left nothing. The copy keeps the class, message, stack, cause and own fields.
+  - The wider effect (a retiring Host, and a fork a damaged `worktrees.json` refused) is pinned by
+    tests, so it cannot flip back unnoticed.
+  - cli.md says the no receipt case holds when the Host removes the worktree itself. When an older
+    Astera that still keeps worktrees does the removal, the forwarded removal is marked as an effect
+    and the receipt is kept, the safe direction.
+
+  Pinned by `src/host/orch.test.ts` (the no fork settings refusal, the two retiring Host cases, the
+  damaged `worktrees.json` fork, and two concurrent starts sharing one rejection),
+  `src/host/spawner.test.ts` and `src/core/host/orchProtocol.test.ts`.
 
 ## Known limits after S3
 
