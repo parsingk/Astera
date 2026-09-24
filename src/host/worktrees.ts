@@ -105,8 +105,8 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
       (err: unknown) => d.log(`git: cannot run git (${message(err)})`)
     ))
 
-  /** The start of every operation: the file as it is now (R2), so an entry the app wrote in its
-   *  local mode is seen. **Never load()**: load heals a damaged file by writing an empty list, which
+  /** The start of every operation that reads or writes the registry: the file as it is now (R2),
+   *  so an entry the app wrote in its local mode is seen. **Never load()**: load heals a damaged file by writing an empty list, which
    *  is right once at a process start and wrong in the middle of a life (Task 1 N1). A damaged file
    *  refuses here as `RepairNeeded`, and file and memory stay as they were. */
   const fresh = async (): Promise<void> => {
@@ -217,6 +217,8 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
       sessions,
       dispatches: () => dispatches,
       isPathInUse,
+      // Asked again at the removal itself: the first answer is up to the close timeout old by then.
+      beforeRemove: askApp,
       log: d.log,
       closeTimeoutMs: d.closeTimeoutMs,
       pollMs: d.pollMs
@@ -279,8 +281,10 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     },
     fork,
     makeRunWorktree: (a) => fork(a),
+    // No re-read: a merge never reads the registry (rule 5 asks git for the branches), so a damaged
+    // worktrees.json must not stop one. Only what reads or writes the registry re-reads it.
     mergeWorktrees: async (runCwd, paths) => {
-      await fresh()
+      await checkGit()
       return deps.mergeWorktrees(runCwd, paths)
     },
     removeWorktrees: async (paths) => {

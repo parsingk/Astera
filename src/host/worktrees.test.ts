@@ -81,7 +81,6 @@ describe('createHostWorktrees', () => {
       expect(err).toBeInstanceOf(RepairNeeded)
       expect((err as RepairNeeded).file).toBe('worktrees.json')
       await expect(h.wt.removeWorktrees([repo])).rejects.toBeInstanceOf(RepairNeeded)
-      await expect(h.wt.mergeWorktrees(repo, [repo])).rejects.toBeInstanceOf(RepairNeeded)
       const app = { role: 'app' as const, toOthers: () => {} }
       for (const [cmd, args] of [['worktree-list', {}], ['worktree-remove', { id: 'x' }], ['worktree-root', { root: null }]] as const) {
         const r = await h.wt.call(cmd, args, app)
@@ -92,6 +91,15 @@ describe('createHostWorktrees', () => {
       await expect(fs.stat(path.join(profile, 'worktrees.json.bak'))).rejects.toThrow()
       expect(gitSync(repo, ['worktree', 'list']).split('\n')).toHaveLength(1)
       expect(states(h.sent)).toEqual([])
+    })
+    // Fix round 1: a merge never reads the registry, so a damaged one does not stop it.
+    it('still merges, and leaves the damaged file as it is', async () => {
+      const h = rig()
+      const a = await h.wt.fork({ repoPath: repo, name: 'a' }); commitIn(a, 'a')
+      await damage()
+      expect(await h.wt.mergeWorktrees(repo, [a])).toEqual({ ok: true, merged: [a], uncommitted: 0 })
+      expect(await fs.readFile(path.join(profile, 'worktrees.json'), 'utf8')).toBe('{bad')
+      await expect(fs.stat(path.join(profile, 'worktrees.json.bak'))).rejects.toThrow()
     })
     it('heals only at the Host start (load)', async () => {
       await damage()
@@ -209,7 +217,7 @@ describe('createHostWorktrees', () => {
       const h = rig({ app: a.app })
       const p = await h.wt.fork({ repoPath: repo, name: 'a' })
       expect(await h.wt.removeWorktrees([p])).toEqual({ failed: [] })
-      expect(a.asked).toEqual([[HOST_ACT_PATH_IN_USE, [p]]])
+      expect(a.asked).toEqual([[HOST_ACT_PATH_IN_USE, [p]], [HOST_ACT_PATH_IN_USE, [p]]])
     })
     it('keeps the folder, and closes nothing, when the app runs something there', async () => {
       const a = appSays(async () => 'SESSION:local shell')
@@ -228,6 +236,20 @@ describe('createHostWorktrees', () => {
         expect(await h.wt.removeWorktrees([p])).toEqual({ failed: [p] })
         await fs.stat(p)
       }
+    })
+    // Fix round 1: asked again right before the folder goes, after the sessions are closed.
+    it('keeps the folder when the app says free at first and busy right before the removal', async () => {
+      const answers: (string | null)[] = [null, 'SESSION:opened meanwhile']
+      const a = appSays(async () => answers.shift() ?? null)
+      const h = rig({ app: a.app })
+      const p = await h.wt.fork({ repoPath: repo, name: 'a' })
+      h.session('ses_w', p)
+      expect(await h.wt.removeWorktrees([p])).toEqual({ failed: [p] })
+      expect(a.asked).toHaveLength(2)
+      expect(h.ptys.liveEntries()).toEqual([])
+      await fs.stat(p)
+      expect((await onDisk()).items.map((w: { path: string }) => w.path)).toEqual([p])
+      expect(h.logs.some((l) => /IN_USE: SESSION:opened meanwhile/.test(l))).toBe(true)
     })
     it('asks nobody when no app is attached', async () => {
       const a = appSays(async () => 'SESSION:x')

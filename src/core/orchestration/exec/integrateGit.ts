@@ -378,6 +378,10 @@ export interface ReapContext {
   dispatches(): readonly { sessionId: string; retained?: boolean; outcome?: unknown; endedAt?: string }[]
   isPathInUse(p: string): string | null
   log(m: string): void
+  /** Asked right before the folder is removed, after its sessions are closed: a tag of what still
+   *  uses it, or null. A tag refuses the removal as IN_USE does. The Host asks the attached app here
+   *  (what the app runs itself is invisible to the Host); the app leaves it out. */
+  beforeRemove?(worktreePath: string): Promise<string | null>
   /** Test seams; default to WORKTREE_CLOSE_TIMEOUT_MS and 50 ms. */
   closeTimeoutMs?: number
   pollMs?: number
@@ -423,6 +427,10 @@ export async function reapWorktree(worktreePath: string, ctx: ReapContext): Prom
     return false
   }
   try {
+    if (ctx.beforeRemove) {
+      const busy = await ctx.beforeRemove(worktreePath)
+      if (busy !== null) throw new Error(`IN_USE: ${busy}`)
+    }
     const removed = await removeWorktree({
       id: entry.id,
       force: true,
