@@ -136,7 +136,11 @@ from a shell with only a Host running: `worker-start`, `worker-start --worktree 
 the first `jobs run` of a Job with a coordinator account, which starts it for the first time. Either
 way, the Host makes the run's worktree itself if it does not have one yet. If the coordinator then
 fails to start, the Host removes that worktree again, and the failed start still answers the same way
-it always did. They are the commands a coordinator session uses, and `astera help` describes them. The
+it always did. A `worker-start --worktree new` whose worker then fails to start has its new worktree
+removed the same way. A failed start that leaves nothing behind, with its new worktree removed and no
+agent started, keeps no receipt: once the cause is fixed, such as a damaged `app-settings.json`, the
+same command with the same `--request-id` really starts. A failed start that left its worktree in
+place, because something was still using it, keeps its receipt and replays its answer. They are the commands a coordinator session uses, and `astera help` describes them. The
 Host starts the agent in a session it holds, keeps its output, and ends it when asked. When such a
 worker ends on its own, its Dispatch is closed all the same: by the Host while Astera is closed, and by
 Astera once it has taken the session back. Open Astera later and it shows those workers as tabs. With

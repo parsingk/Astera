@@ -355,6 +355,59 @@ pointing here at the sentence it replaces.
   Why: a long-lived Host would otherwise grow one record per worker for as long as it runs. Pinned by
   `src/host/spawner.test.ts`.
 
+**Follow-ups after S3 shipped**
+
+- **A36. Receipts over failed starts that left nothing (A30's cleanup, and the same cleanup for
+  `--worktree new`).** A30 said: a coordinator failure in `run-start` best effort removes the fresh Run
+  worktree, and the command had already marked its effect through the `makeRunWorktree` that made
+  the folder. So a keyed `run-start` whose coordinator failed kept its request receipt even when the
+  folder was removed again and no process ran, and a retry with the same `--request-id` after the
+  cause was fixed (a damaged `app-settings.json` repaired, say) replayed the old failure instead of
+  starting. And a `worker-start --worktree new` whose spawn failed after the fork left the forked
+  folder on disk, with its Dispatch rolled back so nothing would ever target it. What shipped:
+  - The effect marks are counted, not a flag (`src/host/orch.ts:420-429,447,466-471,781`), and
+    `hostOrchDeps` gains `withdrawEffect` to take one back (`src/host/orchDeps.ts:458-464`).
+  - `startCoordinator` joins `MARKS_AFTER_ACTING` (`src/host/orchDeps.ts:291-294`). The Host spawner
+    tags every failure that came before a pty was opened as `refusedBeforeActing`: the settings
+    refusal, an unknown account, a spawn the registry refused, and a retiring Host
+    (`src/host/spawner.ts:446,537-561`). Whether a pty was opened is read from a count the pty factory
+    moves, taken around the synchronous `sessions.spawn` (`src/host/spawner.ts:223,368-388`), so it
+    answers for that one call even with other starts in flight. A failure after a pty opened is not
+    tagged, and stays marked.
+  - A `discardRunWorktree` that answers `removed: true` withdraws the one mark that this same call's
+    `makeRunWorktree` made for that path (`src/host/orchDeps.ts:672-685`). A folder left in place, in
+    use or not removable, keeps its mark.
+  - The fork of a `--worktree new` start is removed again when the start fails before any pty opened
+    (`src/host/spawner.ts:481-535`, with the folder recorded at `:420-424`), best effort and logged, with the start's own error thrown
+    unchanged: the risk 6 pattern. Only when the folder is gone is the error tagged with the new
+    `undoneBeforeFailing` (`src/core/host/orchProtocol.ts:41-62`), and then `hostLocal` withdraws the
+    mark it made before `startWorker` ran (`src/host/orchDeps.ts:644`).
+  - `worker-start` commits its Dispatch before it starts the worker, so a withdrawn effect alone still
+    left a receipt. Its failure rollback now says it is one (`setState(next, { rollsBack: true })`,
+    `src/core/orchestration/command.ts:146-151,1960-1975`) when, and only when, the start's error says
+    it left nothing (`leftNothingBehind`). The Host counts that commit as taking back the first. That
+    tag also covers a start the Host refused before touching anything: a retiring Host, or a fork
+    refused by a damaged `worktrees.json`, so those keep no receipt either. Every other failed
+    `worker-start` keeps its receipt as before, including one refused for want of the app, which the
+    receipts design pinned on purpose (`src/host/orch.test.ts:1257-1285`).
+
+  The result: a failed keyed `run-start` whose worktree was removed and whose coordinator started no
+  process keeps no receipt, and neither does a failed `--worktree new` start whose fork was removed.
+  One that left an orphan folder, or whose process did start, keeps its receipt. Why: a receipt over a
+  call that left nothing replays a refusal to a retry the world has since made valid, the reason
+  `refusedBeforeActing` exists (I2). **Host only.** The app path is unchanged: its fork runs through
+  its own `forkWorktree`, and cleaning up there would need an in-use check the shared
+  `OrchCoordinator` does not have, so the cleanup lives in the Host's own start wrapper rather than in
+  shared code. **Found while checking, and not fixed:** `startCoordinator` cannot throw after its pty
+  opened in practice, since everything after that point (the factory's announcement, whose failure is
+  caught, the session bookkeeping, and the Host log, which never throws) does not throw. If it ever
+  did, the coordinator would keep running while `run-start` answers 400, leaves the state unchanged
+  and removes the Run worktree, so a live coordinator would be left with no Run naming it. The same
+  holds for a worker whose start throws after its pty opened. The tests pin that such a failure stays
+  marked. Pinned by `src/host/orch.test.ts` (the three keyed receipts through the real spawner) and
+  `src/host/spawner.test.ts` (the tags, the fork removal, and the two cases that must keep their
+  mark).
+
 ## Known limits after S3
 
 - **`refresh()` does not retry a Windows rename-busy read.** `WorktreeRegistry.refresh()` reads through
