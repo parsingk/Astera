@@ -362,3 +362,40 @@ describe('createHostChecks — one start per repair Dispatch', () => {
     await vi.waitFor(() => expect(h.startWorker).toHaveBeenCalledTimes(2))
   })
 })
+
+// The final review of S4+S5, I1: the driver gates a Task left validating or reviewing only when none of
+// this Host's checks holds it. `checking` is that answer.
+describe('createHostChecks — checking (final review I1)', () => {
+  it('holds a Task from its validation start until the check settles', async () => {
+    const h = await rig()
+    expect(h.checks.checking(h.taskId)).toBe(false)
+    h.checks.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    expect(h.checks.checking(h.taskId)).toBe(true) // queued, before the pty opens
+    await vi.waitFor(() => expect(h.opened()).toHaveLength(1))
+    expect(h.checks.checking(h.taskId)).toBe(true)
+    h.exitLast(0)
+    await vi.waitFor(() => expect(h.task().status).toBe('completed'))
+    await vi.waitFor(() => expect(h.checks.checking(h.taskId)).toBe(false))
+  })
+
+  it('holds every Task while a gone app’s validation run is still alive in the registry', async () => {
+    const h = await rig()
+    const foreign = h.openForeignRun('run_app_1', true)
+    expect(h.checks.checking(h.taskId)).toBe(true)
+    h.registry.kill(foreign.ptyId)
+    await vi.waitFor(() => expect(h.checks.checking(h.taskId)).toBe(false))
+  })
+
+  it('does not count a person’s ordinary run', async () => {
+    const h = await rig()
+    h.openForeignRun('run_app_play', false)
+    expect(h.checks.checking(h.taskId)).toBe(false)
+  })
+
+  it('holds a Task while its review start is in flight', async () => {
+    const h = await rig()
+    h.checks.startReview({ taskId: h.taskId })
+    expect(h.checks.checking(h.taskId)).toBe(true)
+    await vi.waitFor(() => expect(h.checks.checking(h.taskId)).toBe(false))
+  })
+})

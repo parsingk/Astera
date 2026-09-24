@@ -119,6 +119,14 @@ export class TaskValidator {
     void this.startHead(a.cwd)
   }
 
+  /** Whether a validation of this Task is queued or running here, settling included: an entry leaves
+   *  its queue only once its `onSettled` or `onCannotRun` has committed (`advance`). The Host's driver
+   *  asks this before it gates a Task left `validating` (final review I1). */
+  holds(taskId: string): boolean {
+    for (const q of this.queues.values()) if (q.some((e) => e.taskId === taskId)) return true
+    return false
+  }
+
   /** Fed from RunManager's onStatus. Every run's exit comes through — the user's own, a validation that
    *  already settled — so anything that is not a queue head is ignored. */
   onRunExit(a: { runId: string; exitCode: number }): void {

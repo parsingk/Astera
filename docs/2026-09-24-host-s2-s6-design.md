@@ -595,20 +595,31 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
   `repairFailed` Gate rather than a half-opened repair (`src/main/orchestration/answerAct.ts:51-69`).
   A Host forwards these only while it does not drive: parked, retiring, or an older app keeps dispatch.
   **So R21 is false** with a new and an old app both attached: the forward reaches the first app, which
-  may be the new one, and the Task waits. It is restarted at the next handover in a convergence Job,
-  and gated at the next Host load otherwise. Why: it matches the ruling on Task 13, and the cost if
+  may be the new one, and the Task waits. It is restarted at the next handover in a convergence Job.
+  Otherwise it gets the restart Gate once no app is attached (A54). Why: it matches the ruling on Task 13, and the cost if
   wrong is one Task waiting for the next Host. Pinned by `src/main/orchestration/answerAct.test.ts`.
-- **A54. §5.1, the resume sweep when an app leaves (Task 14 review I3, round 2).** It said: the Host
-  sweeps at load and at every change of `driver` to `host`. A yielding app that leaves does not change
-  the driver, yet it may have been running a validation or review itself (recovery, D8). What shipped:
-  when such an app leaves while the Host drives, the Host first tree-kills every live `run` pty in its
-  registry marked `validation` that its own `RunManager` did not start, waits for each exit up to
-  `FOREIGN_KILL_WAIT_MS` (5 s) and records nothing, then runs one resume sweep
-  (`driving.ts:305-329`, `checks.ts:285-340`). A person's ordinary runs carry no `validation` mark and
-  are never touched. Why: the app's validation runs open through the Host's pty factory and outlive
-  it, nobody settles them any more, and a second check would start beside them in the same folder. The
-  sweep covers convergence Runs only; see "Known limits after S4+S5". Pinned by
-  `src/host/driving.test.ts` and `src/host/checks.test.ts`.
+- **A54. §5.1, the resume sweep when an app leaves (Task 14 review I3, round 2; final review I1, I2,
+  M1).** It said: the Host sweeps at load and at every change of `driver` to `host`. A yielding app
+  that leaves does not change the driver, yet it may have been running a validation or review itself
+  (recovery, D8). What shipped: the handover and a yielding app leaving run the same steps
+  (`afterDriveChange`, `driving.ts:197-230`), the handover after its drain. With no app attached, the
+  Host first tree-kills every live `run` pty in its registry marked `validation` that its own
+  `RunManager` did not start, waits for each exit up to `FOREIGN_KILL_WAIT_MS` (5 s) and records
+  nothing (`checks.ts:330-380`). This covers an older app that drove and left (the handover) as well
+  as a yielding one. Then it runs one resume sweep, which restarts a convergence Run's `validating` and
+  `reviewing` Tasks, and starts any repair Dispatch that was opened and never started (N1's belt).
+  Last, it arms the restart Gate for every other Task left `validating` or `reviewing` with no open
+  Dispatch and nothing of this Host's checking it (`checking`: its validator, a review start in
+  flight, or any foreign validation run still alive). A tick at least `STALL_CONFIRM_MS` (5 s) later
+  opens the load's own restart Gate (`interruptStalledTask`) for each such Task that is unchanged and
+  still unchecked, with no app attached (`driving.ts:132-176,367`). A person's ordinary runs carry no
+  `validation` mark and are never touched. Why: the app's validation runs open through the Host's pty
+  factory and outlive it, nobody settles them any more, and a second check would start beside them in
+  the same folder. The Gate waits for a tick because the Host's own `worker_done` commits `validating`
+  before it starts the check, and a Task caught in that gap must not be gated. Without the Gate such a
+  Task kept its Run running for good: the Host never idled, `host stop` refused, and no load came to
+  gate it (final review I1). Pinned by `src/host/driving.test.ts`, `src/host/checks.test.ts` and
+  `src/host/driving.integration.test.ts`.
 - **A55. §4.2, the renderer's commands (R20).** Shipped as the design said: they still run
   `handleCommand` in the app and write with `state-put`, including a person's `retry-once`, which opens
   and starts a repair from the app while the Host drives. The app's own deps answer the S5 names for
@@ -740,11 +751,20 @@ Each was found while building or reviewing S4+S5 and left as it is, with its rea
 - **A hung Host that keeps its pipe open stops every Job.** The app keeps yielding to it (A52). Jobs do
   not move until it answers, dies, or is restarted from Settings, Info. The status bar shows that the
   Host is not answering; the Jobs sidebar does not say why nothing moves.
-- **A Task a closed app left mid-check, outside a convergence Job, waits for the next Host load.** When a
-  yielding app leaves, the Host's sweep restarts only a convergence Run's `validating` and `reviewing`
-  Tasks (A54). Any other Task the app was checking is gated at the Host's next load, not before. The
-  same holds for an S5 start a yielding app refused (A53) and for a Task a leaving Host left (A50):
-  convergence restarts at the next handover, anything else waits for a load.
+- **A Task a closed app left mid-check, outside a convergence Job, is gated, not restarted.** The resume
+  sweep restarts only a convergence Run's `validating` and `reviewing` Tasks (A54). Any other Task left
+  so with nothing checking it gets the restart Gate on a tick at least 5 s after the handover or the
+  last app leaving, and a person decides. The same holds for an S5 start a yielding app refused (A53).
+  A Task a leaving Host left (A50) is gated by its successor's load. While any app is attached nothing
+  is gated: that app may be checking the Task itself. If the Host's own store write between a
+  `worker_done` commit and its check's start took longer than 5 s, such a Task could be gated beside
+  its starting check; the check then finds it no longer `validating` and skips.
+- **An older app that attaches beside a running Host check can start a second one.** Its own "the Host
+  attached" sweep (the S3 app's `ipc.ts`) restarts a convergence Run's `validating` Tasks from its
+  mirror, and knows nothing of a check the Host is already running in the same folder. The Host cannot
+  stop it: the old app does not ask. The second check may interfere with the first. It needs an app
+  from before S4 attached to a Host that drives. The other direction, an older app leaving mid-check,
+  is handled (A54).
 - **R21 is false with a new and an old app both attached** (A53). The forwarded S5 starts may reach the
   new app, which refuses them. Two apps on one profile need a downgrade past the single-instance lock.
 - **A lost worker is gated even when the app journalled it** (A51, N5). While the Host drives with no

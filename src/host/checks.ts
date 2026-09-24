@@ -70,6 +70,12 @@ export interface HostChecks {
    *  `FOREIGN_KILL_WAIT_MS`. Resolves with how many it killed. Their exits record nothing. Called by
    *  the driver before the sweep it runs when an app leaves (Task 14 round 2). */
   stopForeignValidations(): Promise<number>
+  /** Whether one of this Host's checks holds this Task now (final review I1): a validation of it queued
+   *  or running in this Host's validator, a review start of it in flight, or **any** foreign validation
+   *  run still alive in the registry (a gone app's check that would not die; its run does not say
+   *  which Task it checks, so it holds them all). The driver opens a Task's restart Gate only when
+   *  this is false. */
+  checking(taskId: string): boolean
   resumeSweep(why: string): void
 }
 
@@ -215,7 +221,7 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     log,
     now: d.now
   }
-  const reviewBody = createReviewStarter({
+  const reviewStarter = createReviewStarter({
     getState: () => d.deps().getState(),
     setState: (n) => d.deps().setState(n),
     now: d.now,
@@ -226,6 +232,20 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     startWorker: (w) => d.deps().startWorker(w),
     specsDir: d.specsDir
   })
+  /** The review starts in flight, by Task (`checking`). Both callers, the validator's `onSettled` and
+   *  the driver's doors, go through this, so a Task is held from the call until the start has opened
+   *  its Dispatch or its Gate. */
+  const reviewStarts = new Map<string, number>()
+  const reviewBody = async (a: { taskId: string }): Promise<void> => {
+    reviewStarts.set(a.taskId, (reviewStarts.get(a.taskId) ?? 0) + 1)
+    try {
+      await reviewStarter(a)
+    } finally {
+      const n = (reviewStarts.get(a.taskId) ?? 1) - 1
+      if (n > 0) reviewStarts.set(a.taskId, n)
+      else reviewStarts.delete(a.taskId)
+    }
+  }
   const validation = createTaskValidation({
     getState: () => d.deps().getState(),
     setState: (n) => d.deps().setState(n),
@@ -297,8 +317,8 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
    * knows every run it started, and only those. A person's ordinary run carries no `validation`, so it
    * is never touched.
    */
-  const stopForeignValidations = async (): Promise<number> => {
-    const foreign = registry
+  const liveForeignValidations = () =>
+    registry
       .list()
       .filter(
         (e) =>
@@ -307,6 +327,8 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
           e.meta.restore?.validation === true &&
           runs.get(e.meta.id) === null
       )
+  const stopForeignValidations = async (): Promise<number> => {
+    const foreign = liveForeignValidations()
     if (foreign.length === 0) return 0
     const bound = d.foreignKillWaitMs ?? FOREIGN_KILL_WAIT_MS
     await Promise.all(
@@ -371,6 +393,8 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
       return true
     },
     stopForeignValidations,
+    checking: (taskId) =>
+      validation.validator.holds(taskId) || reviewStarts.has(taskId) || liveForeignValidations().length > 0,
     resumeSweep: (why) => sweep.run(why)
   }
 }

@@ -107,6 +107,8 @@ async function rig(o: RigOpts) {
   )
   await fs.writeFile(path.join(profileDir, 'accounts.json'), JSON.stringify({ accounts }))
 
+  /** Moves the driver's clock forward (the restart Gate's confirmation, final review I1). */
+  const skew = { ms: 0 }
   const logs: string[] = []
   const log = (m: string): void => {
     logs.push(m)
@@ -257,8 +259,9 @@ async function rig(o: RigOpts) {
     server: () => server,
     log,
     now: () => new Date().toISOString(),
-    nowMs: () => Date.now(),
-    // No tick: every pass here comes from a load, a commit or an app coming or going.
+    nowMs: () => Date.now() + skew.ms,
+    // No tick: every pass here comes from a load, a commit or an app coming or going, or a test's own
+    // `tick()`.
     every: () => () => {},
     readGate: track((p: string) => readDispatchGate(p)),
     // Never a real taskkill: the fake pids are numbers some real process may hold.
@@ -422,6 +425,7 @@ async function rig(o: RigOpts) {
     openGates: () => state().gates.filter((g) => g.status === 'open'),
     runOutcome: () => outcomeOf(state(), latestRunId()),
     runPtys,
+    skew,
     /** A validation run an app's RunManager opened in this registry: the app's check, which outlives it. */
     openAppValidation: (id: string) =>
       registry.open({ id: `app-${id}`, file: 'x', args: [], opts: { cwd: repo, cols: 80, rows: 24, env: {} }, meta: { kind: 'run', id, restore: { projectPath: repo, validation: true } } }),
@@ -567,6 +571,79 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     await until(() => expect(h.task(h.onlyTaskId).status).not.toBe('reviewing'))
     expect(h.runOutcome()).not.toBe('completed')
     expect(JSON.stringify(h.task(h.onlyTaskId))).toMatch(/the rig found a blocking bug/)
+  })
+
+  // The final review of S4+S5, I1: a Task outside a convergence Run left validating with nothing
+  // checking it gets the load's restart Gate, armed when the Host takes the Task over.
+  it('an older app that drove leaves a Task validating whose start it never ran: the Host gates it after the handover (I1)', async () => {
+    const h = await rig({ tasks: 1, validate: ['seed:npm:test'] })
+    await h.cli('jobs-run', { id: h.jobId })
+    await until(() => expect(h.spawns()).toHaveLength(1))
+    h.server.app = true // an older app attaches and drives
+    h.server.keeps = true
+    h.wiring.serverHooks.onAppsChanged()
+    await h.workerReports(h.spawns()[0], 'succeeded') // the start is forwarded to it, and goes nowhere
+    await h.settle()
+    expect(h.task(h.onlyTaskId).status).toBe('validating')
+    expect(h.runPtys()).toHaveLength(0)
+    h.server.app = false // it closes
+    h.server.keeps = false
+    h.wiring.serverHooks.onAppsChanged()
+    await h.settle()
+    await h.wiring.driving.tick()
+    expect(h.openGates()).toHaveLength(0) // armed, not yet confirmed
+    h.skew.ms = 6_000
+    await h.wiring.driving.tick()
+    expect(h.task(h.onlyTaskId).status).toBe('blocked')
+    expect(h.openGates()).toHaveLength(1)
+    expect(h.openGates()[0].question).toMatch(/검증이 중단되었습니다/)
+  })
+
+  // A53: an older app and a newer one together. The start goes to an app that does not run it; the older
+  // one then leaves (the handover, with the newer still attached: nothing is gated), then the newer one
+  // (the app-left path, which arms the Gate).
+  it('a start a yielding app refused leaves a Task validating: gated once the last app leaves (I1)', async () => {
+    const h = await rig({ tasks: 1, validate: ['seed:npm:test'] })
+    await h.cli('jobs-run', { id: h.jobId })
+    await until(() => expect(h.spawns()).toHaveLength(1))
+    h.server.app = true
+    h.server.keeps = true
+    h.wiring.serverHooks.onAppsChanged()
+    await h.workerReports(h.spawns()[0], 'succeeded')
+    await h.settle()
+    h.server.keeps = false // the older app leaves, the newer (yielding) one stays
+    h.wiring.serverHooks.onAppsChanged()
+    await h.settle()
+    h.skew.ms = 6_000
+    await h.wiring.driving.tick()
+    expect(h.task(h.onlyTaskId).status).toBe('validating') // an app is attached: nothing is gated
+    h.server.app = false
+    h.wiring.serverHooks.onAppsChanged()
+    await h.settle()
+    h.skew.ms = 12_000
+    await h.wiring.driving.tick()
+    expect(h.task(h.onlyTaskId).status).toBe('blocked')
+    expect(h.openGates()[0].question).toMatch(/검증이 중단되었습니다/)
+  })
+
+  it('never gates a Task whose check this Host is running (I1)', async () => {
+    const h = await rig({ tasks: 1, validate: ['seed:npm:test'] })
+    await h.cli('jobs-run', { id: h.jobId })
+    await until(() => expect(h.spawns()).toHaveLength(1))
+    await h.workerReports(h.spawns()[0], 'succeeded')
+    await until(() => expect(h.runPtys()).toHaveLength(1))
+    h.server.app = true // a yielding app comes and goes while the Host's check runs
+    h.wiring.serverHooks.onAppsChanged()
+    await h.settle()
+    h.server.app = false
+    h.wiring.serverHooks.onAppsChanged()
+    await h.settle()
+    h.skew.ms = 6_000
+    await h.wiring.driving.tick()
+    expect(h.task(h.onlyTaskId).status).toBe('validating')
+    expect(h.openGates()).toHaveLength(0)
+    h.exitRunPty(0)
+    await until(() => expect(h.runOutcome()).toBe('completed'))
   })
 
   // I2: the older app was checking the Task itself when it left. Its run lives on in this registry; the

@@ -225,6 +225,10 @@ async function rig(o: RigOpts = {}) {
   const foreign = { hold: null as Promise<number> | null }
   const stopForeignValidations = vi.fn(() => foreign.hold ?? Promise.resolve(0))
   const startRepair = vi.fn()
+  /** HostChecks.checking: the Tasks this Host's checks hold (a queued or running validation, a review
+   *  start in flight, or any foreign validation run still alive). */
+  const checkingIds = new Set<string>()
+  const checking = vi.fn((id: string) => checkingIds.has(id))
   let langNow: Lang = 'en'
   const lang = vi.fn(async () => {
     if (o.langOnRead) langNow = o.langOnRead
@@ -251,7 +255,7 @@ async function rig(o: RigOpts = {}) {
       },
       isRegistered: (p) => childWorktrees().includes(p)
     },
-    checks: { resumeSweep, stopForeignValidations, accounts: async () => [ACCOUNT], loginStatus: async () => true, langNow: () => langNow, lang },
+    checks: { resumeSweep, stopForeignValidations, checking, accounts: async () => [ACCOUNT], loginStatus: async () => true, langNow: () => langNow, lang },
     startRepair,
     registry: {
       sessionPty: (id) => (o.sleepingCoordinator && id === 'coord-1' ? 'pty-coord' : null),
@@ -341,6 +345,23 @@ async function rig(o: RigOpts = {}) {
     queuedReports: async () => (await fs.readdir(pendingReportsDirIn(dir)).catch((): string[] => [])).filter((f) => f.endsWith('.json')),
     specExists: async () => existsSync(staleSpecPath),
     taskStatus: () => orch.state().tasks.find((t) => t.id === 'tsk_lost')?.status,
+    checkingIds,
+    /** A non-convergence Task left `validating` or `reviewing` after the load, its implementation
+     *  Dispatch reported and closed: what a closed app's check, or a forwarded start nobody ran, leaves. */
+    putStalled: async (id: string, status: 'validating' | 'reviewing'): Promise<void> => {
+      const s = orch.state()
+      await orch.internalDeps().setState({
+        ...s,
+        tasks: [...s.tasks, task({ id, status })],
+        dispatches: [...s.dispatches, dispatch({ id: `dsp_${id}`, taskId: id, outcome: 'succeeded', endedAt: NOW, workerState: 'stopped' })]
+      })
+    },
+    statusOf: (id: string) => orch.state().tasks.find((t) => t.id === id)?.status,
+    touch: async (id: string): Promise<void> => {
+      const s = orch.state()
+      await orch.internalDeps().setState({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, updatedAt: '2026-09-25T00:00:09.000Z' } : t)) })
+    },
+    gates: () => openGates(),
     openGateQuestion: () => openGates()[0]?.question ?? ''
   }
 }
@@ -819,5 +840,109 @@ describe('createHostDriving — a yielding app leaving (final review M1)', () =>
     h.driving.appsChanged()
     await vi.waitFor(() => expect(h.startRepair).toHaveBeenCalledWith({ dispatchId: h.repairDispatchId }))
     expect(h.startRepair).toHaveBeenCalledTimes(1)
+  })
+})
+
+// The final review of S4+S5, I1: a non-convergence Task left validating or reviewing with nothing
+// checking it is stuck for good (its Run counts as running, so the Host never idles and `host stop`
+// refuses). The Host opens the load's own restart Gate for it, armed at the handover and when an app
+// leaves, and confirmed on a tick at least STALL_CONFIRM_MS later with the Task unchanged and still
+// held by no check: the Host's own worker_done may be between its commit and its check's start.
+describe('createHostDriving — a Task nobody is checking (final review I1)', () => {
+  it('gates a Task an older app left validating, on a tick after the handover, with the load’s question', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.keeps = true
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.putStalled('tsk_v', 'validating')
+    await h.settle()
+    h.server.keeps = false
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalled())
+    await h.settle()
+    await h.tickNow()
+    expect(h.gates()).toHaveLength(0) // armed, not yet confirmed
+    h.clock = NOW_MS + 6_000
+    await h.tickNow()
+    expect(h.statusOf('tsk_v')).toBe('blocked')
+    expect(h.gates()).toHaveLength(1)
+    expect(h.openGateQuestion()).toMatch(/검증이 중단되었습니다/)
+    await h.tickNow()
+    expect(h.gates()).toHaveLength(1) // once
+  })
+
+  it('gates a Task left reviewing when a yielding app leaves (the app-left path)', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.app = true // yields: the Host drives
+    await h.load()
+    h.driving.appsChanged()
+    await h.putStalled('tsk_r', 'reviewing')
+    await h.settle()
+    h.clock = NOW_MS + 6_000
+    await h.tickNow()
+    expect(h.gates()).toHaveLength(0) // nothing armed while an app is attached
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left'))
+    await h.settle()
+    h.clock = NOW_MS + 12_000
+    await h.tickNow()
+    expect(h.statusOf('tsk_r')).toBe('blocked')
+    expect(h.openGateQuestion()).toMatch(/검토가 중단되었습니다/)
+  })
+
+  it('never gates a Task this Host is checking', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.putStalled('tsk_v', 'validating')
+    h.checkingIds.add('tsk_v')
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left'))
+    await h.settle()
+    h.clock = NOW_MS + 6_000
+    await h.tickNow()
+    expect(h.statusOf('tsk_v')).toBe('validating')
+    expect(h.gates()).toHaveLength(0)
+  })
+
+  it('does not gate a Task that moved between the arming and the tick, nor one a check took up meanwhile', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.putStalled('tsk_a', 'validating')
+    await h.putStalled('tsk_b', 'validating')
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left'))
+    await h.settle()
+    await h.touch('tsk_a')
+    h.checkingIds.add('tsk_b')
+    h.clock = NOW_MS + 6_000
+    await h.tickNow()
+    expect(h.gates()).toHaveLength(0)
+  })
+
+  it('gates nothing once an app is attached again before the tick', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.putStalled('tsk_v', 'validating')
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left'))
+    await h.settle()
+    h.server.app = true
+    h.driving.appsChanged()
+    await h.settle()
+    h.clock = NOW_MS + 6_000
+    await h.tickNow()
+    expect(h.gates()).toHaveLength(0)
   })
 })

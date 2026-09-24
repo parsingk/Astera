@@ -23,8 +23,16 @@
 // not-migrated → migrated change, N4), and then, with no app attached, stops the validation runs a
 // gone app left in this Host's registry before the resume sweep (final review I2). It then runs the
 // resume sweep, and with no app attached starts any open repair Dispatch whose start never happened
-// (N1's belt). A yielding app leaving does the same, less the drain (`afterDriveChange`, final review
-// M1).
+// (N1's belt) and arms the restart Gate for the Tasks nobody is checking (final review I1). A yielding
+// app leaving does the same, less the drain (`afterDriveChange`).
+//
+// **The restart Gate, on a tick** (final review I1). A Task outside a convergence Run left
+// `validating` or `reviewing` with nothing checking it (a closed app's check, a forwarded start an app
+// refused) is not restarted by the sweep, and it keeps its Run running, so the Host never idles and
+// `host stop` refuses. The load's own restart Gate (`interruptStalledTask`) is opened for it, armed at
+// the moment above and confirmed on a tick at least `STALL_CONFIRM_MS` later with the Task unchanged
+// and still held by none of this Host's checks: in between, the Host's own worker_done may sit between
+// its commit and its check's start.
 //
 // **The lost-worker Gate** (D6, R16, N5) is asked on every pass, only while no app is attached: an app
 // has its own reconciler, which reads the journal the Host cannot (D8).
@@ -37,6 +45,8 @@ import { driverOf, readDispatchGate, type DispatchGate, type Driver } from '../c
 import { createDispatchLoop, ORCH_FIRE_TICK_MS } from '../core/orchestration/exec/dispatchLoop'
 import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
 import { lostWithNobody } from '../core/orchestration/lostGate'
+import { policyOf } from '../core/orchestration/convergence'
+import { interruptStalledTask, type OrchState } from '../core/orchestration/state'
 import type { HostChecks } from './checks'
 import type { HostOrch } from './orch'
 import type { PtyRegistry } from './registry'
@@ -58,6 +68,11 @@ export interface HostDriving {
   dispose(): void
 }
 
+/** How long a Task nobody is checking must stay exactly as it was before its restart Gate opens
+ *  (final review I1). Longer than the Host's own commit-to-start gap (a store write), shorter than a
+ *  tick, so the first tick past it decides. */
+export const STALL_CONFIRM_MS = 5000
+
 export function createHostDriving(d: {
   profileDir: string
   orch: Pick<HostOrch, 'handle' | 'internalDeps' | 'loaded' | 'drainOnce' | 'state'>
@@ -65,7 +80,7 @@ export function createHostDriving(d: {
   spawner: Pick<HostSpawner, 'sessionBusy' | 'typeInto' | 'isRetiring' | 'inFlight'>
   worktrees: Pick<HostWorktrees, 'fork' | 'integrate' | 'reap' | 'isRegistered'>
   /** B3: the loop's accounts, login and sync lang come from the checks. */
-  checks: Pick<HostChecks, 'resumeSweep' | 'stopForeignValidations' | 'accounts' | 'loginStatus' | 'langNow' | 'lang'>
+  checks: Pick<HostChecks, 'resumeSweep' | 'stopForeignValidations' | 'checking' | 'accounts' | 'loginStatus' | 'langNow' | 'lang'>
   /** The handover belt (N1): starts one open repair Dispatch that has no spec yet. */
   startRepair(a: { dispatchId: string }): void
   registry: Pick<PtyRegistry, 'sessionPty' | 'list'>
@@ -110,6 +125,56 @@ export function createHostDriving(d: {
   /** The loop's own check, asked on entry and before each slot (§4.3). */
   const mayStart = (): boolean => last === 'host' && !d.spawner.isRetiring() && d.orch.loaded()
 
+  /** The Tasks outside a convergence Run left `validating` or `reviewing` that nothing is checking:
+   *  no open Dispatch (a live reviewer or repair) and none of this Host's checks (`checking`: its own
+   *  validator, a review start in flight, or a foreign validation run still alive). Exactly the Tasks
+   *  the load gates (`interruptStalledTask` with no `resume`), less the ones with work under way. */
+  const unchecked = (s: OrchState): OrchState['tasks'] =>
+    s.tasks.filter(
+      (t) =>
+        (t.status === 'validating' || t.status === 'reviewing') &&
+        policyOf(s, t) === null &&
+        !s.dispatches.some((x) => x.taskId === t.id && !x.outcome && !x.endedAt) &&
+        !d.checks.checking(t.id)
+    )
+  /** Armed Tasks, by id: what each looked like when armed, and when. */
+  const suspects = new Map<string, { status: string; updatedAt: string; armedAt: number }>()
+  const armStalled = (why: string): void => {
+    if (d.server.hasApp()) return
+    const at = d.nowMs()
+    for (const t of unchecked(d.orch.state()))
+      if (!suspects.has(t.id)) {
+        suspects.set(t.id, { status: t.status, updatedAt: t.updatedAt, armedAt: at })
+        log(`task=${t.id} is ${t.status} with nothing checking it (${why}) — its restart Gate opens at a later tick if it stays so`)
+      }
+  }
+  /** The tick's half: gates each armed Task that is still exactly as armed, `STALL_CONFIRM_MS` on. The
+   *  read and the commit are one synchronous step (no await between `getState` and `setState`'s own
+   *  synchronous memory move), so nothing commits in between. */
+  const gateStalled = async (): Promise<void> => {
+    if (suspects.size === 0) return
+    if (!mayStart() || d.server.hasApp()) {
+      suspects.clear()
+      return
+    }
+    for (const [id, seen] of [...suspects]) {
+      if (d.nowMs() - seen.armedAt < STALL_CONFIRM_MS) continue
+      suspects.delete(id)
+      if (!mayStart() || d.server.hasApp()) return
+      const deps = d.orch.internalDeps()
+      const s = deps.getState()
+      const t = unchecked(s).find((x) => x.id === id)
+      if (!t || t.status !== seen.status || t.updatedAt !== seen.updatedAt) continue
+      const r = interruptStalledTask(s, { taskId: id }, new Date(d.nowMs()).toISOString())
+      if (!r.interrupted) {
+        log(`task=${id} is ${t.status} with nothing checking it, and its restart Gate was refused`)
+        continue
+      }
+      await deps.setState(r.state)
+      log(`task=${id} was left ${t.status} with nothing checking it — gated (the restart Gate the load opens)`)
+    }
+  }
+
   /** N1's belt: every open repair Dispatch that has no spec yet, started. **Only with no app attached**:
    *  with an app attached it may be that app's own start in progress (a person's retry-once, R20), and
    *  `performRepair` has no in-flight guard, so starting it here as well would put two workers on one
@@ -128,7 +193,7 @@ export function createHostDriving(d: {
   }
 
   /** What follows a change of drive to this Host (the handover) and a yielding app leaving: the gone
-   *  app's checks stopped, the resume sweep and the belt. */
+   *  app's checks stopped, the resume sweep, the belt and the restart Gate's arming. */
   const afterDriveChange = async (why: string, label: string): Promise<void> => {
     // **The gone app's own checks first** (Task 14 round 2; final review I2 for the handover): its
     // validation runs live on in this Host's registry with nobody to settle them, and the sweep would
@@ -148,6 +213,7 @@ export function createHostDriving(d: {
       log(`the resume sweep failed to start: ${String(err)}`)
     }
     startStrandedRepairs(label)
+    armStalled(why)
   }
 
   const takeOver = async (why: string, drain: boolean): Promise<void> => {
@@ -297,6 +363,8 @@ export function createHostDriving(d: {
       // — a time that passed while this Host did not fire is not fired late.
       if (mayStart() && d.server.hasApp()) await loop.fireTick()
       else loop.forgetArming()
+      // Final review I1: the restart Gate for the Tasks armed at a handover or an app leaving.
+      await gateStalled()
       // R22: the spec pile-up, narrowly — no app attached (an app writes specs too) and no spawn of
       // this Host's in flight (its spec is on disk before its Dispatch names it).
       if (!d.server.hasApp() && d.spawner.inFlight() === 0 && d.orch.loaded()) {
@@ -332,11 +400,9 @@ export function createHostDriving(d: {
       // (recovery still starts them in the app, D8), and its run's exit is not this Host's validator's.
       // So the handover's own steps run here, less the drain (`afterDriveChange`): the app's leftover
       // checks are stopped (round 2), the resume sweep restarts a convergence Run's Tasks, the belt
-      // starts a repair the app opened and never started (final review M1). After any handover in
-      // progress, and only while this Host may still start work.
-      //
-      // Known limit (Task 16): the sweep covers only a convergence Run's validating and reviewing Tasks.
-      // Any other Task the app left mid-check is gated at the next Host load, not here.
+      // starts a repair the app opened and never started (final review M1), and any other Task the app
+      // left mid-check is armed for the restart Gate (final review I1). After any handover in progress,
+      // and only while this Host may still start work.
       if (appLeft && was === 'host' && last === 'host')
         handover = handover
           .then(async () => {
