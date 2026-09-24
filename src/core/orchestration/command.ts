@@ -2024,6 +2024,15 @@ export async function handleCommand(
       // coordinator a concurrent change such as another worker's worker_done may have landed on that
       // dispatch, and the patch must not overwrite those fields (outcome, endedAt, workerState) —
       // only the three fields sessionId, cwd and specPath are carried over.
+      //
+      // **The spec sweep reads this invariant** (host/driving.ts's tick, R22; final review M2). The
+      // Host's tick sweeps `orch/specs` only while its spawner has no start in flight, and a spec
+      // stays only while an open Dispatch names it. The spawner's in-flight count drops as its start
+      // returns, before this patch names the spec, so the patch must land with nothing but microtask
+      // hops after that: `startWorker`'s return, the `getState()` here, and `setState`, whose store
+      // moves memory before its first await. An `await` of real I/O put between the start and this
+      // patch (a log flush, a git probe) lets a tick land in the gap and delete the spec the worker was
+      // just told to read. review.ts and repair.ts patch the same way and carry the same constraint.
       const latest = deps.getState()
       await deps.setState({
         ...latest,
