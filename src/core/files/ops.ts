@@ -1,7 +1,7 @@
 // File-operation rules (pure module). The renderer (immediate feedback) and the IPC layer (the
 // trust boundary) share the same rules — two copies would inevitably drift apart. Like paths.ts, it
 // uses string operations only, no node:path (because it is imported from the renderer's web tsconfig).
-import { parentDir } from './paths'
+import { foldPathCase, parentDir, runtimePlatform } from './paths'
 import type { Message } from '../i18n'
 
 // The win32 rules are applied on every platform — this app is win32-first, and if the rules varied
@@ -47,29 +47,37 @@ export function uniqueName(existing: string[], base: string): string {
   }
 }
 
-// Path normalization — unify separators, lowercase, drop the trailing separator. Mimics the win32
-// case-insensitive rule without node:path.
-const norm = (p: string): string => p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+// Path normalization — unify separators, drop the trailing separator, and fold case where the platform
+// ignores it (foldPathCase: win32 and darwin fold, linux does not). Mimics isPathWithin in tree.ts
+// without node:path. platform defaults to where the code runs — in the renderer that is the preload's
+// window.api.platform (runtimePlatform in paths.ts), so the callers there need not pass it.
+const norm = (p: string, platform: string): string =>
+  foldPathCase(p.replace(/\//g, '\\').replace(/\\+$/, ''), platform)
 
 /** Whether target is base itself or below it — the renderer-safe counterpart of isPathWithin in tree.ts. */
-export function isSubPath(base: string, target: string): boolean {
-  const b = norm(base)
-  const t = norm(target)
+export function isSubPath(base: string, target: string, platform: string = runtimePlatform()): boolean {
+  const b = norm(base, platform)
+  const t = norm(target, platform)
   return t === b || t.startsWith(b + '\\')
 }
 
 /** If p is fromBase itself or below it, replaces that part with toBase. Otherwise returns p unchanged.
  *  Used to update the paths of open tabs on rename/move. Keeps the original separators. */
-export function rebasePath(p: string, fromBase: string, toBase: string): string {
-  if (!isSubPath(fromBase, p)) return p
+export function rebasePath(
+  p: string,
+  fromBase: string,
+  toBase: string,
+  platform: string = runtimePlatform()
+): string {
+  if (!isSubPath(fromBase, p, platform)) return p
   const rest = p.slice(fromBase.length) // includes the leading separator
   return toBase + rest
 }
 
 /** Whether src can be moved into destDir. Returns the reason it cannot (a Message) or null. */
-export function canMove(src: string, destDir: string): Message | null {
-  if (isSubPath(src, destDir)) return { key: 'files.move.intoSelf' }
-  if (norm(parentDir(src)) === norm(destDir)) return { key: 'files.move.alreadyThere' }
+export function canMove(src: string, destDir: string, platform: string = runtimePlatform()): Message | null {
+  if (isSubPath(src, destDir, platform)) return { key: 'files.move.intoSelf' }
+  if (norm(parentDir(src), platform) === norm(destDir, platform)) return { key: 'files.move.alreadyThere' }
   return null
 }
 
@@ -78,8 +86,8 @@ export function canMove(src: string, destDir: string): Message | null {
  *  appending ' copy' via uniqueName, so it works as intended. The only thing to block is a copy into
  *  itself or its own descendants (a cycle). Node's fs.cp throws EINVAL in that case too, but we
  *  reject it here first and hand back a Message so its raw English error never reaches the user. */
-export function canCopy(src: string, destDir: string): Message | null {
-  if (isSubPath(src, destDir)) return { key: 'files.copy.intoSelf' }
+export function canCopy(src: string, destDir: string, platform: string = runtimePlatform()): Message | null {
+  if (isSubPath(src, destDir, platform)) return { key: 'files.copy.intoSelf' }
   return null
 }
 
@@ -89,8 +97,8 @@ export function canCopy(src: string, destDir: string): Message | null {
  *  Only a *strict* ancestor removes a path (q contains p and p does not contain q) — mutual
  *  containment means they are the same path, and this keeps two duplicates differing only in
  *  separators or case from cancelling each other out and both disappearing. */
-export function topLevelOnly(paths: string[]): string[] {
+export function topLevelOnly(paths: string[], platform: string = runtimePlatform()): string[] {
   return paths.filter(
-    (p, i) => !paths.some((q, j) => j !== i && isSubPath(q, p) && !isSubPath(p, q))
+    (p, i) => !paths.some((q, j) => j !== i && isSubPath(q, p, platform) && !isSubPath(p, q, platform))
   )
 }

@@ -14,6 +14,7 @@ import { emptyState, type OrchState } from './state'
 import type { Dispatch, Task } from './types'
 import { stateFromLegacy } from './legacyState'
 import type { LegacyRun } from './legacy'
+import { foldsCaseHere } from '../testPaths'
 
 const RUN_CWD = '/p'
 const WT_A = '/p-worktrees/a'
@@ -107,7 +108,8 @@ describe('pendingMerges', () => {
     expect(pendingMerges(s, 't2')).toEqual([WT_A])
   })
 
-  it('대소문자만 다른 cwd 는 같은 워크트리다 — 두 값은 따로 기록된다', () => {
+  // 대소문자를 접는 것은 win32 와 darwin 뿐이다 — linux 에서 대소문자만 다른 cwd 는 다른 폴더다
+  it('대소문자만 다른 cwd 는 같은 워크트리다 — 두 값은 따로 기록된다 (대소문자를 접는 플랫폼에서)', () => {
     const s = state({
       tasks: [task('t1', { status: 'completed' }), task('t2', { deps: ['t1'] })],
       dispatches: [
@@ -115,15 +117,15 @@ describe('pendingMerges', () => {
         dispatch('dsp_2', { taskId: 't1', cwd: WT_A.toUpperCase() })
       ]
     })
-    expect(pendingMerges(s, 't2')).toEqual([WT_A])
+    expect(pendingMerges(s, 't2')).toEqual(foldsCaseHere ? [WT_A] : [WT_A, WT_A.toUpperCase()])
   })
 
-  it('프로젝트 폴더를 대소문자만 다르게 적은 Dispatch 도 합칠 것이 없다', () => {
+  it('프로젝트 폴더를 대소문자만 다르게 적은 Dispatch 도 합칠 것이 없다 (대소문자를 접는 플랫폼에서)', () => {
     const s = state({
       tasks: [task('t1', { status: 'completed' }), task('t2', { deps: ['t1'] })],
       dispatches: [dispatch('dsp_1', { taskId: 't1', cwd: RUN_CWD.toUpperCase() })]
     })
-    expect(pendingMerges(s, 't2')).toEqual([])
+    expect(pendingMerges(s, 't2')).toEqual(foldsCaseHere ? [] : [RUN_CWD.toUpperCase()])
   })
 
   it('끝나지 않은 Dispatch 는 세지 않는다 — 아직 합칠 것이 없다', () => {

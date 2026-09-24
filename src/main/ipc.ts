@@ -193,6 +193,7 @@ import { listSlashCommands, listCodexMentions } from './slashCommands'
 import { createFileIndex } from './fileIndex'
 import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
+import { foldPathCase } from '../core/files/paths'
 import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { imageMime } from '../core/files/imageMime'
@@ -5631,8 +5632,10 @@ export function registerIpc(
     const to = path.join(path.dirname(from), newName)
     await assertAllowedPath(to)
     if (path.resolve(from) === path.resolve(to)) return to // exactly the same — no-op
-    // A rename that only changes case can fail or no-op on win32, so it goes via a temporary name
-    const caseOnly = from.toLowerCase() === to.toLowerCase()
+    // A rename that only changes case can fail or no-op where the filesystem ignores case (win32,
+    // darwin), so it goes via a temporary name. On linux the two names are two files, so a case-only
+    // rename is an ordinary one and must hit the exists check below like any other.
+    const caseOnly = foldPathCase(from) === foldPathCase(to)
     if (!caseOnly) {
       try {
         await fs.access(to)

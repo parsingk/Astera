@@ -6,6 +6,7 @@ import type { Account, Provider } from '../types'
 import { HistoryIndex } from './index'
 import { SessionCwdCache } from './sessionCwdCache'
 import { makeDescriptors, type ProviderDescriptor } from '../providers/descriptor'
+import { foldsCaseHere } from '../testPaths'
 
 /** 워처의 디바운스 상한 테스트는 이벤트가 append마다 오는 native 경로에서만 뜻이 있다. chokidar
  *  폴백은 awaitWriteFinish 로 쓰는 중에는 아예 조용하므로(그것이 폴백인 이유이기도 하다) 건너뛴다. */
@@ -568,8 +569,9 @@ describe('HistoryIndex (lazy)', () => {
     index = new HistoryIndex(() => [a])
 
     const target = (await index.projectsPage()).projects[0].projectPath
+    // 대소문자를 접는 것은 win32 와 darwin 뿐 — linux 에서 대문자로 바꾼 경로는 다른 프로젝트라 숨기지 않는다
     const shouted = await index.projectsPage({ hiddenPaths: [target.toUpperCase()] })
-    expect(shouted.total).toBe(0)
+    expect(shouted.total).toBe(foldsCaseHere ? 0 : 1)
 
     // 구분자 바꿔치기는 win32에서만 같은 경로다. POSIX에서 `\`는 이름에 쓸 수 있는 글자라, 슬래시로
     // 바꾼 문자열은 같은 경로가 아니라 아예 다른 경로가 된다

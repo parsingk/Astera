@@ -3,7 +3,7 @@
  *  list without threading props through App.tsx. Same module-singleton shape as worktreeBus.ts
  *  (Set<listener> + emit).
  *  Paths are stored exactly as ProjectSummary.projectPath handed them over. Comparison-time
- *  normalization belongs to the main process (norm() in core/history/index.ts); a second rule here
+ *  normalization belongs to the main process (comparablePath() via core/history/index.ts); a second rule here
  *  would let the two drift with no way to tell which one is wrong. */
 
 const KEY = 'cm.historyHidden'

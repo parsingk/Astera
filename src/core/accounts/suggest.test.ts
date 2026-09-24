@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import type { DetectCandidate } from './detect'
 import { suggestableCandidates } from './suggest'
+import { foldsCaseHere } from '../testPaths'
 
 const home = path.join('C:', 'Users', 'me')
 const claudeRoot = path.join(home, '.claude-accounts')
@@ -50,12 +51,13 @@ describe('suggestableCandidates', () => {
     expect(res).toEqual([sibling])
   })
 
-  it('대소문자·구분자 표기가 달라도 root 하위로 인식한다', () => {
+  // 대소문자를 접는 것은 win32 와 darwin 뿐 — linux 에서 대소문자만 다른 경로는 root 밖의 다른 폴더다
+  it('대소문자·구분자 표기가 달라도 root 하위로 인식한다 (대소문자를 접는 플랫폼에서)', () => {
     const res = suggestableCandidates([cand('C:/USERS/ME/.CLAUDE-ACCOUNTS/gone')], {
       accountsRoots: roots,
       registeredCount: 1
     })
-    expect(res).toEqual([])
+    expect(res.length).toBe(foldsCaseHere ? 0 : 1)
   })
 
   it('등록된 계정이 하나도 없으면 아무것도 걸러내지 않는다', () => {

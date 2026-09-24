@@ -1,7 +1,7 @@
 // The registered repositories (design §6).
 //
 // **Not in state.ts, for one reason:** every question here is a question about paths, and paths mean
-// `isSamePath` — win32-first case-insensitivity and separator normalisation, which pull `node:path`
+// `isSamePath` — case folding where the filesystem ignores case and separator normalisation, which pull `node:path`
 // in. `state.ts` is listed in tsconfig.web.json and the renderer imports it, so it cannot have that.
 // The state operations that need a path live here instead; `OrchState.projects` is still just an
 // array on the state those functions return.

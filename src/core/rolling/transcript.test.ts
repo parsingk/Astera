@@ -54,10 +54,14 @@ describe('copyTranscript', () => {
 // 복사 대상은 **대상 계정의** configDir 로 만들어지므로, 원본과 같으면 그 재개는 계정을 넘지 않았다는
 // 뜻이다. codex 재개가 파일의 한도 기록을 믿어도 되는지가 그 답에 걸려 있다(codexRolling.register).
 describe('samePath', () => {
-  it('같은 파일이면 true — 대소문자 차이는 무시한다 (Windows 우선)', () => {
+  it('같은 파일이면 true — win32 에서는 대소문자 차이를 무시한다', () => {
     const f = path.join('C:\\Users\\me\\.codex', 'sessions', '2026', '07', '09', 'r.jsonl')
     expect(samePath(f, f)).toBe(true)
-    expect(samePath(f, f.toLowerCase())).toBe(true)
+    expect(samePath(f, f.toLowerCase(), 'win32')).toBe(true)
+  })
+
+  it('linux 에서는 대소문자만 다른 두 파일이 다른 파일이다', () => {
+    expect(samePath('/home/u/.codex/R.jsonl', '/home/u/.codex/r.jsonl', 'linux')).toBe(false)
   })
 
   it('계정 폴더가 다르면 false — 이것이 계정을 넘은 재개다', () => {

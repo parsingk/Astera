@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import os from 'node:os'
+import { foldPathCase } from '../core/files/paths'
 import { jdkSearchPaths, candidateJdkHome, parseJavaVersion, type Jdk } from '../core/run/jdk'
 
 /** JDK discovery. The pure decisions (path computation, output parsing) live in core/run/jdk.ts; this is the
@@ -110,7 +111,7 @@ export function listJdks(): Promise<Jdk[]> {
       const byPath = new Map<string, Jdk>()
       for (const jdk of verified) {
         if (!jdk) continue
-        const key = process.platform === 'win32' ? jdk.path.toLowerCase() : jdk.path
+        const key = foldPathCase(jdk.path, process.platform)
         if (!byPath.has(key)) byPath.set(key, jdk)
       }
       return [...byPath.values()].sort((a, b) => compareVersionsDesc(a.version, b.version))

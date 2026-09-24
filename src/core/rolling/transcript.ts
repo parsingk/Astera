@@ -2,17 +2,18 @@
 // the per-provider history strategy — the side that knows the disk layout builds the path.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { isSamePath } from '../files/tree'
 
 /** Whether the two paths name the same file. For an ambient account the path Claude resolved and the
- *  registry configDir can differ in case, so the comparison is case-insensitive per the project-wide
- *  rule (normalizePath in manager.ts) — Windows first.
+ *  registry configDir can differ in case, so the comparison is case-insensitive where the filesystem is
+ *  (isSamePath in core/files/tree.ts — win32 and darwin fold case, linux does not).
  *
  *  **Two callers, and the second is why it is exported.** copyTranscript below skips a self-copy with
  *  it. And ipc's resume wiring reads the very same identity as a different fact: the copy target is
  *  built from the *target* account's configDir, so it equals the source exactly when the resume did not
  *  cross accounts. Both questions are "is this one file or two", so they must not answer differently. */
-export function samePath(a: string, b: string): boolean {
-  return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
+export function samePath(a: string, b: string, platform: string = process.platform): boolean {
+  return isSamePath(a, b, platform)
 }
 
 /** Creates the target folder, then copies (overwriting). On Windows the history watcher can hold the

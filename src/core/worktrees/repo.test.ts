@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { repoPathOf } from './repo'
-import { absPath } from '../testPaths'
+import { absPath, foldsCaseHere } from '../testPaths'
 import type { WorktreeInfo } from '../types'
 
 const wt = (repoPath: string, p: string): WorktreeInfo => ({
@@ -46,14 +46,12 @@ describe('repoPathOf', () => {
     expect(repoPathOf(list, nested)).toBe(nested)
   })
 
-  it('대소문자만 다른 같은 경로도 되돌린다 — isSamePath 의 win32-first 규칙을 따른다', () => {
+  it('대소문자만 다른 같은 경로도 되돌린다 — isSamePath 의 규칙을 따른다 (대소문자를 접는 플랫폼에서)', () => {
     const list = [wt(absPath('repos', 'app'), absPath('wt', 'app', 'feature'))]
     const shouted = absPath('wt', 'app', 'feature').toUpperCase()
-    // 플랫폼을 타지 않는다. isSamePath 의 normalizePath 는 어디서나 resolve().toLowerCase() 라서
-    // (files/tree.ts 의 "win32-first" 주석) POSIX 에서도 대소문자만 다른 경로는 같은 경로다.
-    // 플랫폼을 타는 것은 구분자 쪽이고, history/index.test.ts 의 hiddenPaths 테스트가 그 둘을
-    // 갈라 둔 참고 사례다 — 대소문자는 무조건, `\`→`/` 치환은 win32 에서만.
-    expect(repoPathOf(list, shouted)).toBe(absPath('repos', 'app'))
+    // 플랫폼을 탄다. isSamePath 는 win32 와 darwin 에서만 대소문자를 접는다(files/paths.ts 의
+    // foldPathCase) — linux 에서 대문자로 바꾼 경로는 등록되지 않은 다른 폴더라 그대로 돌아온다.
+    expect(repoPathOf(list, shouted)).toBe(foldsCaseHere ? absPath('repos', 'app') : shouted)
   })
 
   it('첫 번째로 일치하는 등록을 쓴다', () => {

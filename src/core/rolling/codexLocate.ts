@@ -4,10 +4,10 @@
 // yesterday's date folders.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { comparablePath } from '../files/tree'
 import { isExecRollout, parseCodexMeta, ROLLOUT_UUID_RE } from '../history/codexParser'
 
-// win32 first: ignore differences in path case and separators (project-wide rule)
-const norm = (p: string): string => path.resolve(p).toLowerCase()
+// Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
 // Tolerance between the file timestamp and Date.now(). codex always creates the rollout after spawn
 // (=since), but the file time can lag by as much as the system clock resolution (measured ~1ms on
@@ -83,10 +83,10 @@ export async function findRollout(opts: {
     seen.add(key)
     files.push(...(await jsonlIn(path.join(root, y, m, d))))
   }
-  const excluded = new Set((opts.excludePaths ?? []).map(norm))
+  const excluded = new Set((opts.excludePaths ?? []).map((p) => comparablePath(p)))
   let best: { path: string; sessionId: string; bornAt: number } | null = null
   for (const file of files) {
-    if (excluded.has(norm(file))) continue
+    if (excluded.has(comparablePath(file))) continue
     let bornAt: number
     try {
       bornAt = createdAt(await fs.stat(file))
@@ -100,7 +100,7 @@ export async function findRollout(opts: {
     } catch {
       continue
     }
-    if (!meta.cwd || norm(meta.cwd) !== norm(opts.cwd)) continue
+    if (!meta.cwd || comparablePath(meta.cwd) !== comparablePath(opts.cwd)) continue
     // This app's own `codex exec` runs land in the same account and folder and are newer than the
     // session that is looking for its file, so without this they win the "newest wins" contest below
     // (see isExecRollout). A session is never spawned through exec, so no real candidate is lost.

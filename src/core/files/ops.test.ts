@@ -93,8 +93,14 @@ describe('isSubPath', () => {
     expect(isSubPath('D:\\proj', 'D:\\proj2\\a.ts')).toBe(false)
   })
 
-  it('구분자·대소문자 차이를 무시한다', () => {
-    expect(isSubPath('d:/PROJ', 'D:\\proj\\a.ts')).toBe(true)
+  it('구분자·대소문자 차이를 무시한다 (win32, darwin)', () => {
+    expect(isSubPath('d:/PROJ', 'D:\\proj\\a.ts', 'win32')).toBe(true)
+    expect(isSubPath('/Users/u/PROJ', '/Users/u/proj/a.ts', 'darwin')).toBe(true)
+  })
+
+  it('linux 에서는 대소문자만 다른 형제가 하위가 아니다', () => {
+    expect(isSubPath('/home/u/proj', '/home/u/PROJ/x', 'linux')).toBe(false)
+    expect(isSubPath('/home/u/proj', '/home/u/proj/x', 'linux')).toBe(true)
   })
 })
 
@@ -120,6 +126,12 @@ describe('canMove', () => {
 
   it('같은 부모로의 이동은 no-op 사유를 준다', () => {
     expect(canMove('D:\\proj\\src\\a.ts', 'D:\\proj\\src')).toEqual({ key: 'files.move.alreadyThere' })
+  })
+
+  it('linux 에서는 대소문자만 다른 폴더로의 이동이 진짜 이동이다', () => {
+    expect(canMove('/p/src/a.ts', '/p/SRC', 'linux')).toBeNull()
+    expect(canMove('/p/src', '/p/SRC/inner', 'linux')).toBeNull()
+    expect(canMove('/p/src/a.ts', '/p/SRC', 'win32')).toEqual({ key: 'files.move.alreadyThere' })
   })
 
   it('정상 이동은 통과한다', () => {
@@ -169,8 +181,12 @@ describe('topLevelOnly', () => {
     expect(topLevelOnly(['D:\\p\\a', 'D:\\p\\a2\\x.ts'])).toEqual(['D:\\p\\a', 'D:\\p\\a2\\x.ts'])
   })
 
-  it('구분자·대소문자가 달라도 부모-자식을 알아본다', () => {
-    expect(topLevelOnly(['d:/P/a', 'D:\\p\\A\\b.ts'])).toEqual(['d:/P/a'])
+  it('구분자·대소문자가 달라도 부모-자식을 알아본다 (win32)', () => {
+    expect(topLevelOnly(['d:/P/a', 'D:\\p\\A\\b.ts'], 'win32')).toEqual(['d:/P/a'])
+  })
+
+  it('linux 에서는 대소문자만 다른 폴더의 항목을 지우지 않는다', () => {
+    expect(topLevelOnly(['/p/a', '/p/A/b.ts'], 'linux')).toEqual(['/p/a', '/p/A/b.ts'])
   })
 
   it('빈 배열은 빈 배열', () => {

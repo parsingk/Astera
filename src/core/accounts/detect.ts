@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { comparablePath } from '../files/tree'
 
 export interface DetectCandidate {
   configDir: string
@@ -18,8 +19,7 @@ export interface DetectCandidate {
  *  mean keeping a stable sentinel here and localising at display time — a separate change. */
 export const DEFAULT_ACCOUNT_PLACEHOLDER_LABEL = 'Default account'
 
-// win32 first: ignores path case (the same rule as normalize in ProjectSettings)
-const normalize = (p: string): string => path.resolve(p).toLowerCase()
+// Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -71,7 +71,7 @@ async function readEmailAddress(dir: string): Promise<string | null> {
 export async function readAccountEmail(configDir: string, homeDir: string): Promise<string | null> {
   const direct = await readEmailAddress(configDir)
   if (direct) return direct
-  if (normalize(configDir) === normalize(path.join(homeDir, '.claude'))) {
+  if (comparablePath(configDir) === comparablePath(path.join(homeDir, '.claude'))) {
     return readEmailAddress(homeDir) // the sidecar: <homeDir>/.claude.json
   }
   return null
@@ -80,7 +80,7 @@ export async function readAccountEmail(configDir: string, homeDir: string): Prom
 async function suggestLabel(configDir: string, homeDir: string): Promise<string> {
   const email = await readAccountEmail(configDir, homeDir)
   if (email) return email
-  if (normalize(configDir) === normalize(path.join(homeDir, '.claude'))) {
+  if (comparablePath(configDir) === comparablePath(path.join(homeDir, '.claude'))) {
     return DEFAULT_ACCOUNT_PLACEHOLDER_LABEL
   }
   return path.basename(configDir)
@@ -128,15 +128,15 @@ export async function detectConfigDirs(opts: {
   const { homeDir, excludeDirs } = opts
   const isLoggedIn =
     opts.isLoggedIn ?? ((dir: string) => exists(path.join(dir, '.credentials.json')))
-  const excludeSet = new Set(excludeDirs.map(normalize))
-  const homeClaudeNorm = normalize(path.join(homeDir, '.claude'))
+  const excludeSet = new Set(excludeDirs.map((p) => comparablePath(p)))
+  const homeClaudeNorm = comparablePath(path.join(homeDir, '.claude'))
 
   const candidateDirs = await collectCandidateDirs(homeDir)
   const seen = new Set<string>()
   const results: DetectCandidate[] = []
 
   for (const dir of candidateDirs) {
-    const norm = normalize(dir)
+    const norm = comparablePath(dir)
     if (seen.has(norm) || excludeSet.has(norm)) continue
     seen.add(norm)
 
@@ -151,8 +151,8 @@ export async function detectConfigDirs(opts: {
   }
 
   results.sort((a, b) => {
-    const aIsHome = normalize(a.configDir) === homeClaudeNorm
-    const bIsHome = normalize(b.configDir) === homeClaudeNorm
+    const aIsHome = comparablePath(a.configDir) === homeClaudeNorm
+    const bIsHome = comparablePath(b.configDir) === homeClaudeNorm
     if (aIsHome !== bIsHome) return aIsHome ? -1 : 1
     return a.configDir.localeCompare(b.configDir)
   })

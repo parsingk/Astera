@@ -6,7 +6,7 @@ import { PTY_LOST_SIGHT_EXIT_CODE, type PtyFactory, type PtyLike, type PtySpawnO
 import { SessionManager, prependToPath } from './manager'
 import { buildClaudeCommand, buildCodexCommand } from './commands'
 import { makeDescriptors } from '../providers/descriptor'
-import { absPath } from '../testPaths'
+import { absPath, foldsCaseHere } from '../testPaths'
 
 class FakePty implements PtyLike {
   pid = 4242
@@ -168,12 +168,13 @@ describe('SessionManager', () => {
     expect('CLAUDE_CONFIG_DIR' in spawned[0].opts.env).toBe(false)
   })
 
-  it('기본 계정 판정은 경로 대소문자 차이를 무시한다', () => {
+  // 대소문자를 접는 것은 win32 와 darwin 뿐 — linux 에서 대소문자만 다른 폴더는 홈 기본 폴더가 아니라 격리 계정이다
+  it('기본 계정 판정은 대소문자를 접는 플랫폼에서 경로 대소문자 차이를 무시한다', () => {
     const homeDir = absPath('Users', 'tester')
     const defaultAccount: Account = { ...account, configDir: absPath('Users', 'Tester', '.CLAUDE') }
     const { manager, spawned } = setup(100, 20, homeDir)
     manager.spawn({ account: defaultAccount, cwd: process.cwd() })
-    expect('CLAUDE_CONFIG_DIR' in spawned[0].opts.env).toBe(false)
+    expect('CLAUDE_CONFIG_DIR' in spawned[0].opts.env).toBe(!foldsCaseHere)
   })
 
   it('격리 계정(<home>/.claude 아님)은 기존대로 CLAUDE_CONFIG_DIR을 주입한다', () => {
@@ -360,10 +361,17 @@ describe('SessionManager', () => {
   })
 
   it('ambient codex 계정(~/.codex)은 CODEX_HOME을 주입하지 않는다', () => {
-    const ambient: Account = { ...codexAccount, configDir: absPath('Users', 'Tester', '.CODEX') }
+    const ambient: Account = { ...codexAccount, configDir: absPath('Users', 'tester', '.codex') }
     const { manager, spawned } = setup(100, 20, absPath('Users', 'tester'))
     manager.spawn({ account: ambient, cwd: process.cwd() })
     expect('CODEX_HOME' in spawned[0].opts.env).toBe(false)
+  })
+
+  it('ambient codex 판정도 대소문자는 접는 플랫폼에서만 무시한다', () => {
+    const ambient: Account = { ...codexAccount, configDir: absPath('Users', 'Tester', '.CODEX') }
+    const { manager, spawned } = setup(100, 20, absPath('Users', 'tester'))
+    manager.spawn({ account: ambient, cwd: process.cwd() })
+    expect('CODEX_HOME' in spawned[0].opts.env).toBe(!foldsCaseHere)
   })
 
   it('codex 세션에는 statusLine provider를 태우지 않는다', () => {

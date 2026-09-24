@@ -21,9 +21,9 @@ import { limitStateFromLines, type CodexLimitState } from '../core/rolling/codex
 import { tailLines } from '../core/rolling/tailLines'
 import { contextFromLines, sessionUsageOf } from '../core/usage/codex'
 import path from 'node:path'
+import { comparablePath } from '../core/files/tree'
 
-/** win32 first: two paths that differ only in case or separator are the same folder (project-wide rule) */
-const norm = (p: string): string => path.resolve(p).toLowerCase()
+// Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
 const POLL_MS = 1_000 // Same value as LOCATE_POLL_MS in codexRolling.ts (which is not exported there)
 
@@ -269,7 +269,7 @@ export class CodexRolloutWatcher {
     for (const e of this.entries.values()) {
       if (e === self || e.disposed || e.rolloutPath) continue
       if (e.accountId !== self.accountId) continue
-      if (norm(e.cwd) !== norm(self.cwd)) continue
+      if (comparablePath(e.cwd) !== comparablePath(self.cwd)) continue
       if (e.since > self.since) return false
     }
     return true
@@ -296,7 +296,7 @@ export class CodexRolloutWatcher {
     entry.rescanAt = this.now() + RESCAN_MS
     for (const e of this.entries.values()) {
       if (e === entry || e.disposed) continue
-      if (e.accountId === entry.accountId && norm(e.cwd) === norm(entry.cwd)) return
+      if (e.accountId === entry.accountId && comparablePath(e.cwd) === comparablePath(entry.cwd)) return
     }
     const account = this.deps.getAccount(entry.accountId)
     if (!account) return

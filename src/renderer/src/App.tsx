@@ -73,7 +73,7 @@ import {
 import { installOutcomeNotice } from '../../core/update/manualInstallNotice'
 import { applyEol, classifyExternalChange, detectEol, toLf, type Eol } from '../../core/files/edit'
 import { isSubPath, rebasePath } from '../../core/files/ops'
-import { parentDir } from '../../core/files/paths'
+import { foldPathCase, parentDir } from '../../core/files/paths'
 import { cycleViewMode, isMdViewMode, type MdViewMode } from '../../core/files/markdownView'
 import type { UndoEntry } from '../../core/files/undo'
 import * as sessionBus from './lib/sessionBus'
@@ -3217,7 +3217,7 @@ export default function App(): React.JSX.Element {
       // Same situation for 'dockerfile' — no seed, but its presence flips the picker's detection (hasDockerfile)
       'Dockerfile'
     ])
-    const norm = (p: string): string => p.replace(/\\/g, '/').toLowerCase()
+    const norm = (p: string): string => foldPathCase(p.replace(/\\/g, '/'), window.api.platform)
     const off = window.api.on('files:changed', (c) => {
       const root = currentProjectRef.current
       if (!root) return
@@ -3394,7 +3394,7 @@ export default function App(): React.JSX.Element {
    *  탭 활성화로 끝나므로 이 줄에 도달하지 않는다 — 즉 이기지 못하는 자리에서 이기려 하지 않는다.
    *  경로는 run.listActive 가 준 것이라 main 의 가드가 이미 허용한 값이다. */
   const runJump = (projectPath: string): void => {
-    const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    const norm = (p: string): string => foldPathCase(p.replace(/\\/g, '/').replace(/\/+$/, ''), window.api.platform)
     const target = norm(projectPath)
     const session = sessionsRef.current.find((s) => norm(s.cwd) === target)
     if (session) {

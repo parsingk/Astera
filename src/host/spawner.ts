@@ -11,6 +11,7 @@
 // `OrchServerDeps` this file no longer answers by refusing.
 import { existsSync, promises as fs } from 'node:fs'
 import path from 'node:path'
+import { comparablePath } from '../core/files/tree'
 import { randomUUID } from 'node:crypto'
 import type { HostMessage, PtyEntry } from '../core/host/protocol'
 import { hostCliPaths, hostWorkerBaseEnv } from '../core/host/spawn'
@@ -273,7 +274,6 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
    *  into or to kill (review M2). */
   const held = (sessionId: string): boolean =>
     registry.list().some((e) => e.meta?.kind === 'session' && e.meta.id === sessionId)
-  const norm = (p: string): string => path.resolve(p).toLowerCase()
   const alive = (ptyId: string): boolean => registry.list().some((e) => e.id === ptyId && e.alive)
   /** The watcher's claimed(): every rollout a live session's note already holds, other than this pty's.
    *  The notes are the one list both processes write to: the Host here, the app's watcher through
@@ -292,7 +292,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const mayClaim = (ptyId: string): boolean => {
     const self = looking.get(ptyId)!
     for (const [id, e] of looking)
-      if (id !== ptyId && e.accountId === self.accountId && norm(e.cwd) === norm(self.cwd) && e.seq > self.seq)
+      if (id !== ptyId && e.accountId === self.accountId && comparablePath(e.cwd) === comparablePath(self.cwd) && e.seq > self.seq)
         return false
     return true
   }

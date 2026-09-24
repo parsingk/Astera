@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { comparablePath } from '../files/tree'
 import { randomUUID } from 'node:crypto'
 import type { Account, Provider } from '../types'
 import { isProvider, providerOf } from '../providers/meta'
@@ -7,10 +8,7 @@ import { descriptorOf, makeDescriptors, type ProviderDescriptor } from '../provi
 import { DEFAULT_ACCOUNT_PLACEHOLDER_LABEL } from './detect'
 import { nextAccountColor } from './colors'
 
-/** Same rule as detect.ts's own normalize (and descriptor.ts's normalizePath) — kept local because those
- *  are too, and it must stay in step with them: detect.ts is what compares these paths for the exclusion.
- *  Used here only to keep dismissedDirs free of case-variant duplicates. */
-const normalizeDir = (p: string): string => path.resolve(p).toLowerCase()
+// Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
 function slugify(label: string): string {
   const s = label
@@ -131,8 +129,8 @@ export class AccountRegistry {
   async remove(id: string): Promise<void> {
     const account = this.get(id) // verifies it exists
     this.accounts = this.accounts.filter((a) => a.id !== id)
-    const norm = normalizeDir(account.configDir)
-    if (!this.dismissed.some((d) => normalizeDir(d) === norm)) this.dismissed.push(account.configDir)
+    const norm = comparablePath(account.configDir)
+    if (!this.dismissed.some((d) => comparablePath(d) === norm)) this.dismissed.push(account.configDir)
     await this.save()
   }
 
@@ -204,7 +202,7 @@ export class AccountRegistry {
     this.accounts.push(account)
     // Registering this directory again overrides the earlier unregister — a registered account must never
     // sit in the exclusion list, or re-adding it by hand would leave detection permanently blind to it
-    this.dismissed = this.dismissed.filter((d) => normalizeDir(d) !== normalizeDir(configDir))
+    this.dismissed = this.dismissed.filter((d) => comparablePath(d) !== comparablePath(configDir))
     await this.save()
     return account
   }

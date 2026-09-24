@@ -46,9 +46,18 @@ describe('upsertProjectTrust', () => {
   // append a second block for the folder that already has one.
   it('matches an existing block case-insensitively on win32-shaped paths', () => {
     const before = '[projects."d:\\\\p\\\\a"]\ntrust_level = "untrusted"\n'
-    const after = upsertProjectTrust(before, 'D:\\P\\A')
+    const after = upsertProjectTrust(before, 'D:\\P\\A', 'trusted', 'win32')
     expect(after.match(/\[projects\./g)).toHaveLength(1)
     expect(after).toContain('trust_level = "trusted"')
+  })
+
+  // On linux a folder spelled with different case is a different folder. Taking its block for ours
+  // would leave ours untrusted and flip somebody else's.
+  it('on linux, gives a folder differing only in case a block of its own', () => {
+    const before = '[projects."/home/u/Proj"]\ntrust_level = "untrusted"\n'
+    const after = upsertProjectTrust(before, '/home/u/proj', 'trusted', 'linux')
+    expect(after).toContain('[projects."/home/u/Proj"]\ntrust_level = "untrusted"\n')
+    expect(after).toContain('[projects."/home/u/proj"]\ntrust_level = "trusted"\n')
   })
 
   // A header inside a multi-line string is text, not a table. Treating it as one would edit the middle

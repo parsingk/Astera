@@ -4,14 +4,14 @@
 // 이 파일이 따로 있는 이유는 지우는 쪽의 실수가 되돌릴 수 없기 때문이다. 경로를 고르는 규칙만
 // 떼어 두면 그 규칙에 테스트를 붙일 수 있고, 삭제를 부르는 코드는 여기를 통과한 것만 만진다.
 import path from 'node:path'
-import { isPathWithin, isSamePath } from '../files/tree'
+import { comparablePath, isPathWithin, isSamePath } from '../files/tree'
 
 /** 같은 경로가 표기만 달리해 두 번 들어와도 한 번만 남긴다. 키는 정규화한 값이지만 돌려주는 것은
  *  받은 문자열 그대로다 — 삭제는 원본 경로로 해야 한다. */
 function dedupe(paths: string[]): string[] {
   const seen = new Set<string>()
   return paths.filter((p) => {
-    const key = path.resolve(p).toLowerCase()
+    const key = comparablePath(p)
     if (seen.has(key)) return false
     seen.add(key)
     return true

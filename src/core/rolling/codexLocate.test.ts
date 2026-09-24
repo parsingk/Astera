@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { findRollout } from './codexLocate'
-import { absPath } from '../testPaths'
+import { absPath, foldsCaseHere } from '../testPaths'
 
 let home: string
 const NOW = Date.parse('2026-07-09T10:00:00Z') // 고정 '현재' — 오늘=2026/07/09, 어제=2026/07/08
@@ -134,7 +134,8 @@ describe('findRollout', () => {
     ).toBeNull()
   })
 
-  it('cwd 비교는 대소문자 차이를 무시한다', async () => {
+  // 대소문자를 접는 것은 win32 와 darwin 뿐 — linux 에서 대소문자만 다른 cwd 는 다른 폴더의 세션이다
+  it('cwd 비교는 대소문자를 접는 플랫폼에서 대소문자 차이를 무시한다', async () => {
     await makeRollout({
       y: '2026', m: '07', d: '09',
       uuid: '019f4524-e0ac-7571-a8af-5585504f0d35',
@@ -144,7 +145,7 @@ describe('findRollout', () => {
     const r = await findRollout({
       configDir: home, cwd: absPath('work', 'p'), since: NOW - 5_000, now: () => NOW
     })
-    expect(r?.sessionId).toBe('019f4524-e0ac-7571-a8af-5585504f0d35')
+    expect(r?.sessionId).toBe(foldsCaseHere ? '019f4524-e0ac-7571-a8af-5585504f0d35' : undefined)
   })
 
   // 구분자 무시는 win32에서만 의미가 있다 — POSIX에서 `\`는 이름에 쓸 수 있는 글자다
@@ -242,7 +243,9 @@ describe('findRollout', () => {
     ).toBeNull()
   })
 
-  it('excludePaths 비교는 대소문자·구분자 차이를 무시한다', async () => {
+  // 대문자로 바꾼 경로가 같은 파일인 것은 대소문자를 접는 플랫폼뿐이라 그 밖에서는 건너뛴다 — 구분자
+  // 바꿔치기도 win32 에서만 같은 경로다
+  it.runIf(foldsCaseHere)('excludePaths 비교는 대소문자·구분자 차이를 무시한다', async () => {
     const copied = await makeRollout({
       y: '2026', m: '07', d: '09',
       uuid: '019f4524-e0ac-7571-a8af-5585504f0d42',

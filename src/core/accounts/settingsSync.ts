@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { comparablePath } from '../files/tree'
 
 type JsonObject = Record<string, unknown>
 
@@ -9,8 +10,7 @@ export interface SyncResult {
   contentApplied: string[] // the names of the personal content directories whose files were copied (skills/commands/agents)
 }
 
-// win32 first: ignores differences in path case and separator (the same rule as normalizePath in sessions/manager.ts)
-const normalizePath = (p: string): string => path.resolve(p).toLowerCase()
+// Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
 /** Whether configDir is the home (ambient, <home>/.claude) directory — the same rule as isAmbientDir in
  *  providers/descriptor.ts. It is not imported from there because that module imports this one.
@@ -19,7 +19,7 @@ const normalizePath = (p: string): string => path.resolve(p).toLowerCase()
  *  derived from registration order (accounts/defaultAccount.ts) and the home dir gets no special status.
  *  The one thing still riding on it is where claude keeps user-scope MCP, which genuinely differs. */
 export function isHomeClaudeDir(homeDir: string, configDir: string): boolean {
-  return normalizePath(configDir) === normalizePath(path.join(homeDir, '.claude'))
+  return comparablePath(configDir) === comparablePath(path.join(homeDir, '.claude'))
 }
 
 function isPlainObject(v: unknown): v is JsonObject {

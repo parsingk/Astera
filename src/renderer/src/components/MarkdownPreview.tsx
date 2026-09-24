@@ -21,7 +21,7 @@ import {
   type MdBlock, type MdInline, type MdAttrs, type MdHref
 } from '../../../core/files/markdownTree'
 import type { LangKey } from '../../../core/files/edit'
-import { resolveRelative, decodeUriPath } from '../../../core/files/paths'
+import { resolveRelative, decodeUriPath, foldPathCase, runtimePlatform } from '../../../core/files/paths'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 
@@ -194,19 +194,18 @@ const imageDataUrlCache = new Map<string, string>()
  *  FileWatcher, chokidar) reflects the actual on-disk entry name. On a case-preserving-but-insensitive
  *  filesystem (Windows NTFS, default macOS) those two strings can differ only in case for the exact same
  *  file — `assets/Diagram.PNG` in the markdown vs. `Diagram.png` chokidar reports — and a case-sensitive
- *  comparison would silently miss the invalidation. Lowercasing unconditionally, on every platform, is
- *  the same call this codebase already made for the same reason (isPathWithin's normalizePath,
- *  core/files/tree.ts, "win32-first: ignore differences in path case and separators") — on a genuinely
- *  case-sensitive filesystem (Linux) it is a harmless no-op, since a real casing mismatch there means
- *  the image never opened in the first place (fs.open is case-sensitive, so no cache entry would exist
- *  under the mismatched key to begin with). Separators are not normalised here: resolveImageSrc always
- *  uses docPath's own separator, and a files:changed path is native-separator too (fileWatcher.ts), so
- *  on any one platform both sides already agree.
+ *  comparison would silently miss the invalidation. Case is folded by the project-wide rule
+ *  (foldPathCase in core/files/paths.ts): on win32 and darwin, not on linux, where a real casing mismatch
+ *  means the image never opened in the first place (fs.open is case-sensitive, so no cache entry would
+ *  exist under the mismatched key to begin with) and `A.png` and `a.png` are two images. The platform
+ *  comes from the preload (window.api.platform) through runtimePlatform. Separators are not normalised
+ *  here: resolveImageSrc always uses docPath's own separator, and a files:changed path is
+ *  native-separator too (fileWatcher.ts), so on any one platform both sides already agree.
  *
  *  Exported for its own unit test (Finding 2) — everywhere else in this file compares paths through this
  *  function rather than importing it directly. */
-export function sameAbsPath(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase()
+export function sameAbsPath(a: string, b: string, platform: string = runtimePlatform()): boolean {
+  return foldPathCase(a, platform) === foldPathCase(b, platform)
 }
 
 /** Module-scope, per-path listeners a mounted LocalImage registers so invalidateImageCache can reach it.

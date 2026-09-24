@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import { emptyState } from './state'
 import { ensureProject, findProject, findProjectByPath, nameFromPath, renameProject } from './projects'
+import { foldsCaseHere } from '../testPaths'
 
 /** An absolute path this platform actually produces, so the case and separator rules under test are
  *  the real ones rather than a win32 string a posix runner never sees. */
@@ -42,10 +43,12 @@ describe('ensureProject', () => {
 
   // The same repository arrives spelled differently — the renderer sends the active tab's cwd and
   // win32 ignores case. Two entries for one repository would give the CLI two ids for one thing.
-  it('matches a path that differs only in case or separator', () => {
+  // Case is folded only where the filesystem ignores it (win32, darwin); on linux a differently cased
+  // path is another folder, so it finds nothing.
+  it('matches a path that differs only in case where the platform folds case', () => {
     const first = ensureProject(emptyState(), { path: abs('Work', 'Astera'), now: 'T0' })
     const again = findProjectByPath(first.state, abs('Work', 'Astera').toLowerCase())
-    expect(again?.id).toBe(first.project.id)
+    expect(again?.id).toBe(foldsCaseHere ? first.project.id : undefined)
   })
 
   it('keeps separate entries for sibling folders that share a prefix', () => {

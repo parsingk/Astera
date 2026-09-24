@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { detectConfigDirs, readAccountEmail } from './detect'
+import { foldsCaseHere } from '../testPaths'
 
 let tmp: string
 let home: string
@@ -46,14 +47,15 @@ describe('detectConfigDirs', () => {
     expect(dirs).not.toContain(accountsRoot)
   })
 
-  it('excludeDirs에 있는 경로는 대소문자가 달라도 제외한다 (win32 정규화)', async () => {
+  // 대소문자를 접는 것은 win32 와 darwin 뿐이다 — linux 에서 대소문자만 다른 경로는 다른 폴더라 제외되지 않는다
+  it('excludeDirs에 있는 경로는 대소문자가 달라도 제외한다 (win32·darwin, linux 는 다른 폴더)', async () => {
     const dir = path.join(home, '.claude-work')
     await fs.mkdir(dir, { recursive: true })
     await fs.writeFile(path.join(dir, 'settings.json'), '{}', 'utf8')
 
     const differentCase = dir.toUpperCase()
     const candidates = await detectConfigDirs({ homeDir: home, excludeDirs: [differentCase] })
-    expect(candidates.map((c) => c.configDir)).not.toContain(dir)
+    expect(candidates.map((c) => c.configDir).includes(dir)).toBe(!foldsCaseHere)
   })
 
   it('.claude.json의 oauthAccount.emailAddress를 라벨로 제안한다', async () => {

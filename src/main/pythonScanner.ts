@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
+import { foldPathCase } from '../core/files/paths'
 import {
   venvInterpreterPaths,
   pythonBinNames,
@@ -69,7 +70,7 @@ function pathPythons(): Promise<string[]> {
 }
 
 /** The detected Python interpreters for one project: its venv (if any) plus whatever pythonBinNames
- *  resolves to on PATH. Verified in parallel, deduped by resolved path (case ignored on win32 only —
+ *  resolves to on PATH. Verified in parallel, deduped by resolved path (case ignored where the filesystem ignores it, foldPathCase —
  *  the same interpreter can turn up twice, once from the venv scan and once via PATH). */
 export async function listPythonInterpreters(projectPath: string): Promise<PythonInterpreter[]> {
   const candidates = [...venvInterpreterPaths(projectPath, process.platform), ...(await pathPythons())]
@@ -77,7 +78,7 @@ export async function listPythonInterpreters(projectPath: string): Promise<Pytho
   const byPath = new Map<string, PythonInterpreter>()
   for (const py of verified) {
     if (!py) continue
-    const key = process.platform === 'win32' ? py.path.toLowerCase() : py.path
+    const key = foldPathCase(py.path, process.platform)
     if (!byPath.has(key)) byPath.set(key, py)
   }
   return [...byPath.values()]

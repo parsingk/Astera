@@ -1,11 +1,8 @@
 import { existsSync } from 'node:fs'
-import path from 'node:path'
+import { isSamePath } from '../files/tree'
 import type { WorktreeListItem, WorktreeStatus } from '../types'
 import { git, listGitWorktrees } from './git'
 import type { WorktreeStore } from './registry'
-
-const samePath = (a: string, b: string): boolean =>
-  path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
 
 /**
  * Status from cross-checking the registry against git worktree list. git is called once per repo.
@@ -45,7 +42,7 @@ export async function listWithStatus(registry: WorktreeStore): Promise<WorktreeL
     .filter((w) => !deadIds.has(w.id))
     .map((w) => {
       const rows = rowsByRepo.get(w.repoPath)
-      const registered = rows?.some((r) => samePath(r.path, w.path)) ?? false
+      const registered = rows?.some((r) => isSamePath(r.path, w.path)) ?? false
       // 여기 오는 항목은 폴더가 있다(위에서 걸렀다) — 남은 질문은 git 이 아는가 하나다
       const status: WorktreeStatus = registered ? 'ok' : 'orphan-dir'
       return { ...w, status }

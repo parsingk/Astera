@@ -55,9 +55,16 @@ describe('hostKillPlan', () => {
     ).toBe('kill')
   })
 
-  it('keeps case on posix, where two names that differ in case are two files', () => {
+  it('keeps case on linux, where two names that differ in case are two files', () => {
     expect(hostKillPlan({ platform: 'linux', expectedExe: '/opt/astera/astera', actualExe: '/opt/astera/Astera' })).toBe(
       'skip-mismatch'
+    )
+  })
+
+  // darwin's default APFS volume ignores case like NTFS does — the project-wide rule (foldPathCase).
+  it('ignores case on darwin', () => {
+    expect(hostKillPlan({ platform: 'darwin', expectedExe: '/opt/astera/astera', actualExe: '/opt/astera/Astera' })).toBe(
+      'kill'
     )
   })
 

@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { detectCodexConfigDirs, readCodexEmail, isAmbientCodexDir } from './detectCodex'
-import { absPath } from '../testPaths'
+import { absPath, foldsCaseHere } from '../testPaths'
 
 let home: string
 
@@ -82,20 +82,21 @@ describe('detectCodexConfigDirs', () => {
     expect(by[path.join(home, '.codex-extra')].loggedIn).toBe(false)
   })
 
-  it('excludeDirs는 대소문자 무시로 제외한다', async () => {
+  it('excludeDirs는 대소문자를 접는 플랫폼에서 대소문자 무시로 제외한다 (linux 는 다른 폴더)', async () => {
     await makeCodexDir(path.join(home, '.codex'), { auth: {} })
     const r = await detectCodexConfigDirs({
       homeDir: home,
       excludeDirs: [path.join(home, '.CODEX')]
     })
-    expect(r).toEqual([])
+    expect(r.length).toBe(foldsCaseHere ? 0 : 1)
   })
 })
 
 describe('isAmbientCodexDir', () => {
-  it('~/.codex만 ambient, 대소문자 무시', () => {
+  it('~/.codex만 ambient, 대소문자는 접는 플랫폼에서만 무시', () => {
     const home = absPath('Users', 't')
-    expect(isAmbientCodexDir(home, path.join(absPath('Users', 'T'), '.CODEX'))).toBe(true)
+    expect(isAmbientCodexDir(home, path.join(home, '.codex'))).toBe(true)
+    expect(isAmbientCodexDir(home, path.join(absPath('Users', 'T'), '.CODEX'))).toBe(foldsCaseHere)
     expect(isAmbientCodexDir(home, path.join(home, '.codex-accounts', 'a'))).toBe(false)
   })
 

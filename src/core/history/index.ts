@@ -1,5 +1,6 @@
 import { promises as fs, watch as fsWatch } from 'node:fs'
 import path from 'node:path'
+import { comparablePath } from '../files/tree'
 import chokidar from 'chokidar'
 import type { Account, HistoryEntry, ProjectSummary, Provider, TranscriptPreview } from '../types'
 import { parseTranscriptMeta } from './parser'
@@ -8,9 +9,7 @@ import { descriptorOf, makeDescriptors, type ProviderDescriptor } from '../provi
 import type { HistoryIo, HistoryStrategy } from './strategies/types'
 import type { SessionCwdCache } from './sessionCwdCache'
 
-// win32 first: ignore path case and separator differences (the same rule as normalizePath in
-// sessions/manager.ts)
-const norm = (p: string): string => path.resolve(p).toLowerCase()
+// Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
 /** The renderer is notified this long after the last file event. A transcript is appended to
  *  continuously while a session runs, so coalescing is what keeps the sidebar from rebuilding the
@@ -127,11 +126,11 @@ export class HistoryIndex {
     subdirs: (dir) => this.subdirs(dir),
     resolveProjectCwd: (dir, files) => this.resolveProjectCwd(dir, files),
     cwdMemo: (files, parse) => this.cwdMemo(files, parse),
-    samePath: (a, b) => norm(a) === norm(b),
-    pathKey: (p) => norm(p),
+    samePath: (a, b) => comparablePath(a) === comparablePath(b),
+    pathKey: (p) => comparablePath(p),
     cacheDirForProject: (accountId, projectPath, dir) => {
-      this.dirByProject.set(accountId + '\0' + norm(projectPath), dir)
-      this.projectByDir.set(accountId + '\0' + norm(dir), projectPath)
+      this.dirByProject.set(accountId + '\0' + comparablePath(projectPath), dir)
+      this.projectByDir.set(accountId + '\0' + comparablePath(dir), projectPath)
     }
   }
 
@@ -219,9 +218,9 @@ export class HistoryIndex {
     const byAccount = req?.accountId ? all.filter((p) => p.accountId === req.accountId) : all
     // Hidden projects drop out here rather than in the renderer: total comes from this list, and a
     // renderer-side filter would leave it counting hidden rows, so the infinite-scroll sentinel would
-    // never resolve. norm() is the one comparison rule (Windows case and separators).
-    const hidden = new Set((req?.hiddenPaths ?? []).map(norm))
-    const filtered = hidden.size ? byAccount.filter((p) => !hidden.has(norm(p.projectPath))) : byAccount
+    // never resolve. comparablePath() is the one comparison rule (separators on win32, case on win32 and darwin).
+    const hidden = new Set((req?.hiddenPaths ?? []).map((p) => comparablePath(p)))
+    const filtered = hidden.size ? byAccount.filter((p) => !hidden.has(comparablePath(p.projectPath))) : byAccount
     // The same folder used by several accounts produces one entry per account, so merge by
     // normalized path (the newest one represents them) — in the unified view a project is one row
     // per folder. With an accountId filter it is a single account, so this is effectively a no-op
@@ -268,7 +267,7 @@ export class HistoryIndex {
   private dedupeByProjectPath(list: ProjectSummary[]): ProjectSummary[] {
     const byPath = new Map<string, ProjectSummary>()
     for (const p of list) {
-      const key = norm(p.projectPath)
+      const key = comparablePath(p.projectPath)
       const cur = byPath.get(key)
       if (!cur || p.updatedAt > cur.updatedAt) byPath.set(key, p)
     }
@@ -285,7 +284,7 @@ export class HistoryIndex {
       for (const dir of await this.dirsForProject(account, projectPath)) {
         const entries = await this.parseDir(account, dir)
         all.push(
-          ...(projectPath ? entries.filter((e) => norm(e.projectPath) === norm(projectPath)) : entries)
+          ...(projectPath ? entries.filter((e) => comparablePath(e.projectPath) === comparablePath(projectPath)) : entries)
         )
       }
     }
@@ -431,7 +430,7 @@ export class HistoryIndex {
   private async dirsForProject(account: Account, projectPath?: string): Promise<string[]> {
     const s = this.strategyFor(account)
     if (!projectPath || !s.filtersByProject) return s.allDirs(account, this.io)
-    const cached = this.dirByProject.get(account.id + '\0' + norm(projectPath))
+    const cached = this.dirByProject.get(account.id + '\0' + comparablePath(projectPath))
     if (cached) return [cached]
     return s.dirsMatchingProject(account, projectPath, this.io)
   }
@@ -440,7 +439,7 @@ export class HistoryIndex {
   private async parseDir(account: Account, dir: string): Promise<HistoryEntry[]> {
     const files = await this.jsonlFilesByMtimeDesc(dir)
     const sig = files.map((f) => `${f.name}:${f.mtimeMs}`).join('|')
-    const cacheKey = account.id + '\0' + norm(dir)
+    const cacheKey = account.id + '\0' + comparablePath(dir)
     const cached = this.dirCache.get(cacheKey)
     if (cached && cached.sig === sig) return cached.entries
     // Per-file parsing (meta + a 256KB tail) in parallel up to the concurrency ceiling — sequential
@@ -566,10 +565,10 @@ export class HistoryIndex {
     const account = this.ownerOf(filePath)
     // The session cache is per directory and keyed on the file mtimes, so dropping the one directory
     // is all it needs
-    this.dirCache.delete((account?.id ?? '') + '\0' + norm(dir))
+    this.dirCache.delete((account?.id ?? '') + '\0' + comparablePath(dir))
     // The project row is repaired in flushPendingDirs, just before the notification goes out. Doing it
     // here would mean a disk read per event, and a busy session emits one per append.
-    if (account) this.pendingDirs.set(account.id + '\0' + norm(dir), { account, dir })
+    if (account) this.pendingDirs.set(account.id + '\0' + comparablePath(dir), { account, dir })
     else this.projectsCache = null // outside every scan root: no idea what to patch, so reread it all
     this.emitUpdated()
   }
@@ -597,20 +596,20 @@ export class HistoryIndex {
         this.projectsByAccount.delete(account.id)
         continue
       }
-      const dirKey = account.id + '\0' + norm(dir)
+      const dirKey = account.id + '\0' + comparablePath(dir)
       const was = this.projectByDir.get(dirKey)
       const next = await forDir(account, dir, this.io)
       if (gen !== this.generation) return // a full invalidate cut in; its reread wins
       // The row this directory used to stand for goes first — its cwd may have moved, or the directory
       // may have stopped being a project at all
-      let updated = was ? rows.filter((p) => norm(p.projectPath) !== norm(was)) : rows
+      let updated = was ? rows.filter((p) => comparablePath(p.projectPath) !== comparablePath(was)) : rows
       if (next) {
         updated = [...updated, next] // forDir already refreshed both directory maps
       } else {
         // Drop both directions, or dirsForProject would keep handing page() a directory that no
         // longer holds that project
         this.projectByDir.delete(dirKey)
-        if (was) this.dirByProject.delete(account.id + '\0' + norm(was))
+        if (was) this.dirByProject.delete(account.id + '\0' + comparablePath(was))
       }
       this.projectsByAccount.set(account.id, updated)
     }

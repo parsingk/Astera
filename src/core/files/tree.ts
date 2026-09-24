@@ -1,5 +1,6 @@
 import path from 'node:path'
 import ignore from 'ignore'
+import { foldPathCase } from './paths'
 
 /** A directory entry. path is the absolute path main joined and sent down — the renderer never has to join paths. */
 export interface DirEntry {
@@ -20,14 +21,20 @@ export function sortEntries(entries: DirEntry[]): DirEntry[] {
   })
 }
 
-// win32-first: ignore differences in path case and separators (the same rule as normalizePath in sessions/manager.ts)
-const normalizePath = (p: string): string => path.resolve(p).toLowerCase()
+/** A path in the form two spellings of one entry share: resolved (which on win32 also unifies the
+ *  separators), then case-folded where the platform ignores case (foldPathCase in paths.ts — win32 and
+ *  darwin fold, linux compares exactly). The main-side comparison key; the node-free modules the
+ *  renderer imports call foldPathCase directly. */
+export function comparablePath(p: string, platform: string = process.platform): string {
+  return foldPathCase(path.resolve(p), platform)
+}
+const normalizePath = comparablePath
 
 /** Whether target is base itself or a path below it — the path guard for the files IPC.
  *  Requiring a separator boundary blocks false positives from sibling prefixes (D:\proj vs D:\proj2). */
-export function isPathWithin(base: string, target: string): boolean {
-  const b = normalizePath(base)
-  const t = normalizePath(target)
+export function isPathWithin(base: string, target: string, platform: string = process.platform): boolean {
+  const b = normalizePath(base, platform)
+  const t = normalizePath(target, platform)
   return t === b || t.startsWith(b + path.sep)
 }
 
@@ -35,9 +42,9 @@ export function isPathWithin(base: string, target: string): boolean {
  *  is right for a guard (the files IPC must not escape a root), but wrong for "does this Run belong
  *  to this project": isPathWithin(project, run.cwd) is also true for a nested repository below the
  *  project root, which silently pulls in a Run that belongs to a different, nested project. Shares
- *  normalizePath with isPathWithin, so it inherits the same win32-first case-insensitivity. */
-export function isSamePath(a: string, b: string): boolean {
-  return normalizePath(a) === normalizePath(b)
+ *  normalizePath with isPathWithin, so it inherits the same case rule (folded on win32 and darwin only). */
+export function isSamePath(a: string, b: string, platform: string = process.platform): boolean {
+  return normalizePath(a, platform) === normalizePath(b, platform)
 }
 
 /** target을 담는 후보 중 **가장 깊은** 것. 담는 것이 없으면 target을 그대로 돌려준다.

@@ -6,6 +6,7 @@ import { makeDescriptors, descriptorOf, isAmbientDir } from './descriptor'
 import type { KeychainHas } from '../accounts/keychain'
 import { claudeLoginProbe } from '../accounts/loginStatus'
 import { PROVIDERS } from './meta'
+import { foldsCaseHere } from '../testPaths'
 
 describe('provider descriptor', () => {
   it('모든 provider에 대해 값 필드가 채워진다', () => {
@@ -52,11 +53,11 @@ describe('provider descriptor', () => {
     expect(descriptorOf(t, { provider: 'codex' }).cliFile).toBe('codex')
   })
 
-  it('isAmbientDir는 홈 기본 디렉토리만 참이고 대소문자·구분자 차이를 무시한다', () => {
+  it('isAmbientDir는 홈 기본 디렉토리만 참이고 대소문자 차이는 접는 플랫폼에서만 무시한다', () => {
     const t = makeDescriptors('win32')
     const home = path.join('C:', 'Users', 'tester')
     expect(isAmbientDir(t.claude, home, path.join(home, '.claude'))).toBe(true)
-    expect(isAmbientDir(t.claude, home, path.join(home, '.CLAUDE'))).toBe(true)
+    expect(isAmbientDir(t.claude, home, path.join(home, '.CLAUDE'))).toBe(foldsCaseHere)
     expect(isAmbientDir(t.claude, home, path.join(home, '.claude-accounts', 'a'))).toBe(false)
     expect(isAmbientDir(t.codex, home, path.join(home, '.codex'))).toBe(true)
     // provider가 다르면 서로의 ambient를 인정하지 않는다

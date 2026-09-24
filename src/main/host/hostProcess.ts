@@ -14,6 +14,7 @@
 // Pure, with the platform as an argument, for the reason `address.ts` and `runtime.ts` give: these
 // tests run on windows, macos and ubuntu.
 import path from 'node:path'
+import { foldPathCase } from '../../core/files/paths'
 
 /** What to run to learn a pid's executable, or null on a platform that needs no command — linux
  *  answers from `/proc/<pid>/exe`, which the caller reads directly. */
@@ -54,11 +55,12 @@ export function hostKillPlan(a: {
   return samePath(a.platform, a.expectedExe, a.actualExe) ? 'kill' : 'skip-mismatch'
 }
 
-/** One file or two. Separators and case are not differences on win32, and both are on posix. */
+/** One file or two. Separators are not differences on win32 and are on posix; case follows the
+ *  filesystem (foldPathCase: folded on win32 and darwin, kept on linux). */
 function samePath(platform: NodeJS.Platform, a: string, b: string): boolean {
   const norm = (p: string): string => {
     const resolved = path.resolve(p.trim())
-    return platform === 'win32' ? resolved.replace(/\//g, '\\').toLowerCase() : resolved
+    return foldPathCase(platform === 'win32' ? resolved.replace(/\//g, '\\') : resolved, platform)
   }
   return norm(a) === norm(b)
 }

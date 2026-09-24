@@ -70,16 +70,24 @@ describe('upsertClaudeTrust', () => {
   // 두 항목이 한 폴더를 가리키면 그 파일의 뜻은 claude 가 어느 것을 읽는지에 달린다
   it('철자가 다른 기존 항목을 중복하지 않는다', () => {
     const before = { projects: { 'C:/Users/Me/WT': { hasTrustDialogAccepted: false } } }
-    const out = JSON.parse(upsertClaudeTrust(JSON.stringify(before), 'c:\\users\\me\\wt'))
+    const out = JSON.parse(upsertClaudeTrust(JSON.stringify(before), 'c:\\users\\me\\wt', 'win32'))
     expect(Object.keys(out.projects)).toEqual(['C:/Users/Me/WT'])
     expect(out.projects['C:/Users/Me/WT'].hasTrustDialogAccepted).toBe(true)
+  })
+
+  // linux 에서는 대소문자만 다른 폴더가 다른 폴더다 — 그 항목을 우리 것으로 알면 우리 폴더는 신뢰받지 못한다
+  it('linux 에서는 대소문자만 다른 기존 항목을 제 것으로 삼지 않는다', () => {
+    const src = JSON.stringify({ projects: { '/home/u/Proj': { hasTrustDialogAccepted: true } } })
+    const out = JSON.parse(upsertClaudeTrust(src, '/home/u/proj', 'linux'))
+    expect(out.projects['/home/u/proj']).toEqual({ hasTrustDialogAccepted: true })
+    expect(Object.keys(out.projects).sort()).toEqual(['/home/u/Proj', '/home/u/proj'])
   })
 
   // 같은 문자열을 돌려주는 것이 부르는 쪽이 쓰기를 건너뛰는 근거다
   it('이미 신뢰면 입력과 같은 문자열이다', () => {
     const src = JSON.stringify({ projects: { 'D:/a': { hasTrustDialogAccepted: true } } }, null, 2)
     expect(upsertClaudeTrust(src, 'D:/a')).toBe(src)
-    expect(upsertClaudeTrust(src, 'd:\\a')).toBe(src)
+    expect(upsertClaudeTrust(src, 'd:\\a', 'win32')).toBe(src)
   })
 
   it('빈 파일과 BOM 을 받는다', () => {

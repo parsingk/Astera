@@ -1,10 +1,10 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { comparablePath } from '../files/tree'
 import type { DetectCandidate } from './detect'
 import { DEFAULT_ACCOUNT_PLACEHOLDER_LABEL } from './detect'
 
-// win32 first: ignores path case (the same rule as detect.ts)
-const normalize = (p: string): string => path.resolve(p).toLowerCase()
+// Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -25,7 +25,7 @@ async function isDirectory(p: string): Promise<boolean> {
 
 /** Whether it is ~/.codex (the default CODEX_HOME) — shared by SessionManager's ambient verdict and the detect label */
 export function isAmbientCodexDir(homeDir: string, configDir: string): boolean {
-  return normalize(configDir) === normalize(path.join(homeDir, '.codex'))
+  return comparablePath(configDir) === comparablePath(path.join(homeDir, '.codex'))
 }
 
 // The markers that identify a codex config dir: auth.json, config.toml or a sessions directory
@@ -120,14 +120,14 @@ export async function detectCodexConfigDirs(opts: {
 }): Promise<DetectCandidate[]> {
   const { homeDir, excludeDirs } = opts
   const isLoggedIn = opts.isLoggedIn ?? ((dir: string) => exists(path.join(dir, 'auth.json')))
-  const excludeSet = new Set(excludeDirs.map(normalize))
+  const excludeSet = new Set(excludeDirs.map((p) => comparablePath(p)))
 
   const candidateDirs = await collectCandidateDirs(homeDir)
   const seen = new Set<string>()
   const results: DetectCandidate[] = []
 
   for (const dir of candidateDirs) {
-    const norm = normalize(dir)
+    const norm = comparablePath(dir)
     if (seen.has(norm) || excludeSet.has(norm)) continue
     seen.add(norm)
 

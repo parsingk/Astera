@@ -48,7 +48,7 @@ export function isOnPath(a: {
   pathVar: string
   platform: NodeJS.Platform
 }): boolean {
-  return pathEntries(a).some((e) => isSamePath(e, a.dir))
+  return pathEntries(a).some((e) => isSamePath(e, a.dir, a.platform))
 }
 
 /**

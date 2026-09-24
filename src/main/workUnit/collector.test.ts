@@ -24,6 +24,7 @@ import {
 import { OPERATION_GRACE_MS } from '../../core/git/provenance'
 import type { GitRef } from '../../core/git/types'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
+import { foldsCaseHere } from '../../core/testPaths'
 
 let dir: string
 let storeFile: string
@@ -930,7 +931,8 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
   // ipc.ts 의 mergeInto(run.worktree ?? run.cwd)와 이 프로젝트의 cwd 는 따로 기록되고, 대소문자나
   // 구분자만 다르게 적힐 수 있다(core/orchestration/integrate.ts 의 worktreeDeps 주석과 같은 문제) —
   // isAsteraOperation 에 isSamePath 를 넘기지 않으면 이 등록은 아무 것도 못 막는다.
-  it('등록된 경로 표기가 달라도(대소문자) Astera 의 병합으로 본다', async () => {
+  // 대소문자를 접는 것은 win32 와 darwin 뿐 — linux 에서 대문자로 바꾼 경로는 다른 폴더의 병합이다
+  it('등록된 경로 표기가 달라도(대소문자) Astera 의 병합으로 본다 (대소문자를 접는 플랫폼에서)', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
     const { collector, store } = await makeCollector(fake)
@@ -945,7 +947,7 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     await collector.flush()
     collector.endGitOperation(opId)
 
-    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
+    expect(store.get(projectPath)!.externalGitChanges.length === 0).toBe(foldsCaseHere)
   })
 
   // beginGitOperation 의 프룬(pending 목록에서 유예 지난 것을 치우는 자리)은 규칙이 둘이고 서로

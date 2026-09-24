@@ -442,7 +442,10 @@ describe('toRelativeCwd', () => {
     expect(toRelativeCwd('D:\\proj', 'D:\\proj')).toBe('')
   })
   it('대소문자가 달라도 하위 경로로 인식한다 (win32 드라이브 문자·다이얼로그 경로차)', () => {
-    expect(toRelativeCwd('d:\\Proj\\Backend', 'D:\\proj')).toBe('Backend')
+    expect(toRelativeCwd('d:\\Proj\\Backend', 'D:\\proj', 'win32')).toBe('Backend')
+  })
+  it('linux 에서는 대소문자만 다른 폴더를 하위 경로로 보지 않는다', () => {
+    expect(toRelativeCwd('/home/me/Proj/backend', '/home/me/proj', 'linux')).toBe('/home/me/Proj/backend')
   })
   it('프로젝트 밖이면 절대 경로를 그대로 돌려준다 (저장 시점에 거부되게)', () => {
     expect(toRelativeCwd('D:\\other', 'D:\\proj')).toBe('D:\\other')

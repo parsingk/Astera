@@ -2,12 +2,9 @@ import { promises as fs, existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { WorktreeRemoveResult } from '../types'
-import { isPathWithin } from '../files/tree'
+import { isPathWithin, isSamePath } from '../files/tree'
 import { git, gitVersionAtLeast, isCleanWorktree, listGitWorktrees } from './git'
 import type { WorktreeStore } from './registry'
-
-const samePath = (a: string, b: string): boolean =>
-  path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
 
 /** Dangerous paths: the repo itself, a parent that contains the repo, home, a parent that contains home, the filesystem root */
 export function isDangerousRemovalPath(
@@ -16,9 +13,9 @@ export function isDangerousRemovalPath(
   homeDir: string
 ): boolean {
   const p = path.resolve(worktreePath)
-  if (samePath(p, repoPath) || samePath(p, homeDir)) return true
+  if (isSamePath(p, repoPath) || isSamePath(p, homeDir)) return true
   if (isPathWithin(p, repoPath) || isPathWithin(p, homeDir)) return true // p is an ancestor of them
-  if (samePath(p, path.parse(p).root)) return true
+  if (isSamePath(p, path.parse(p).root)) return true
   return false
 }
 
@@ -64,7 +61,7 @@ async function countOrphanEntries(
  *  since it can be a path the user chose for other things too. */
 async function pruneEmptyRepoDir(worktreePath: string, root: string): Promise<void> {
   const parent = path.dirname(path.resolve(worktreePath))
-  if (samePath(parent, root) || !isPathWithin(root, parent)) return
+  if (isSamePath(parent, root) || !isPathWithin(root, parent)) return
   await fs.rmdir(parent).catch(() => {}) // ENOTEMPTY / ENOENT / EACCES all mean "leave it"
 }
 
@@ -129,7 +126,7 @@ export async function removeWorktree(args: {
     }
     throw new Error(`ORPHAN_UNPROVEN: cannot inspect the original repo (${info.repoPath})`)
   }
-  const row = rows.find((r) => samePath(r.path, info.path))
+  const row = rows.find((r) => isSamePath(r.path, info.path))
 
   let branchDeleted = false
   let branchPreserved: { branch: string; head: string } | undefined

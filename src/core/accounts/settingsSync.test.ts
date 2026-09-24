@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { isHomeClaudeDir, syncClaudeSettings, syncCodexSettings } from './settingsSync'
+import { foldsCaseHere } from '../testPaths'
 
 let home: string
 let target: string
@@ -27,9 +28,9 @@ async function readTarget(name: string): Promise<Record<string, unknown>> {
 }
 
 describe('isHomeClaudeDir', () => {
-  it('<home>/.claude만 홈 디렉토리로 판정한다 (대소문자·구분자 무시)', () => {
+  it('<home>/.claude만 홈 디렉토리로 판정한다 (대소문자는 접는 플랫폼에서만 무시)', () => {
     expect(isHomeClaudeDir(home, path.join(home, '.claude'))).toBe(true)
-    expect(isHomeClaudeDir(home, path.join(home, '.CLAUDE'))).toBe(true)
+    expect(isHomeClaudeDir(home, path.join(home, '.CLAUDE'))).toBe(foldsCaseHere)
     expect(isHomeClaudeDir(home, target)).toBe(false)
   })
 })

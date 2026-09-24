@@ -22,7 +22,7 @@ export interface HiddenProjectsView {
 
 /** 대소문자와 경로 구분자를 지운 비교용 문자열. 사용자가 경로를 `\`로 치는지 `/`로 치는지는 그때그때
  *  다르고, 그 차이로 목록에 있는 항목이 안 잡히면 없는 것처럼 보인다.
- *  core/history 의 norm()과 규칙이 겹쳐 보이지만 일부러 따로 둔다 — 그쪽은 두 경로가 같은 프로젝트인지
+ *  core/history 의 comparablePath()와 규칙이 겹쳐 보이지만 일부러 따로 둔다 — 그쪽은 두 경로가 같은 프로젝트인지
  *  판정하는 것이고 이쪽은 부분 문자열 검색이라, 한쪽 규칙이 바뀌어도 다른 쪽이 끌려가면 안 된다. */
 function cmp(s: string): string {
   return s.toLowerCase().replace(/\\/g, '/')

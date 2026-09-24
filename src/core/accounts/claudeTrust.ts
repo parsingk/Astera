@@ -23,6 +23,7 @@
 // forge: the path marked is the one the app made seconds earlier and is about to spawn into.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { foldPathCase } from '../files/paths'
 
 /** The name claude keeps its own state under, inside a config directory or the home root. */
 export const CLAUDE_CONFIG_FILE = '.claude.json'
@@ -39,9 +40,11 @@ export function claudeProjectKey(p: string): string {
   return /^[a-z]:/.test(slashed) ? slashed[0].toUpperCase() + slashed.slice(1) : slashed
 }
 
-/** Case- and separator-insensitive comparison key, for "does this file already say so". The same
- *  reason codexTrust has one: the same folder reaches us spelled several ways on win32. */
-const sameKey = (p: string): string => claudeProjectKey(p).toLowerCase()
+/** Separator-insensitive comparison key, case-insensitive where the filesystem is (foldPathCase —
+ *  win32 and darwin), for "does this file already say so". The same reason codexTrust has one: the
+ *  same folder reaches us spelled several ways on win32. On linux a differently cased key is a
+ *  different folder, and taking its entry for ours would leave ours untrusted. */
+const sameKey = (p: string, platform: string): string => foldPathCase(claudeProjectKey(p), platform)
 
 /** The file claude reads for this account.
  *
@@ -70,14 +73,18 @@ export function claudeConfigFileFor(a: {
  * Everything else is preserved: the object is spread, not rebuilt. Unchanged input returns the
  * identical string, which is what lets the caller skip the write entirely.
  */
-export function upsertClaudeTrust(existing: string, projectPath: string): string {
+export function upsertClaudeTrust(
+  existing: string,
+  projectPath: string,
+  platform: string = process.platform
+): string {
   const key = claudeProjectKey(projectPath)
   const text = existing.charCodeAt(0) === 0xfeff ? existing.slice(1) : existing
   const root: Record<string, unknown> = text.trim() === '' ? {} : (JSON.parse(text) as Record<string, unknown>)
   const projects = (root.projects ?? {}) as Record<string, Record<string, unknown>>
   // An entry already spelled some other way is honoured rather than duplicated — two entries for
   // one folder is a file whose meaning depends on which one claude reads.
-  const found = Object.keys(projects).find((k) => sameKey(k) === sameKey(key))
+  const found = Object.keys(projects).find((k) => sameKey(k, platform) === sameKey(key, platform))
   const target = found ?? key
   const entry = projects[target] ?? {}
   if (entry.hasTrustDialogAccepted === true) return existing

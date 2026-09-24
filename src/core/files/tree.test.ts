@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
-import { sortEntries, isPathWithin, projectRootOf, buildIgnoreMatcher, type DirEntry } from './tree'
+import { sortEntries, isPathWithin, isSamePath, projectRootOf, buildIgnoreMatcher, type DirEntry } from './tree'
 import { absPath } from '../testPaths'
 
 const e = (name: string, isDir: boolean): DirEntry => ({ name, path: `D:\\p\\${name}`, isDir })
@@ -41,8 +41,22 @@ describe('isPathWithin', () => {
     expect(isPathWithin(base, absPath('work', 'proj', 'src', 'a.ts'))).toBe(true)
   })
 
-  it('대소문자 차이를 무시한다', () => {
-    expect(isPathWithin(base, absPath('WORK', 'proj', 'src'))).toBe(true)
+  // 대소문자는 플랫폼마다 답이 다르다 — platform 을 넘겨 어느 OS 에서든 세 가지를 다 본다
+  it('win32 와 darwin 에서는 대소문자 차이를 무시한다', () => {
+    expect(isPathWithin(base, absPath('WORK', 'proj', 'src'), 'win32')).toBe(true)
+    expect(isPathWithin(base, absPath('WORK', 'proj', 'src'), 'darwin')).toBe(true)
+    expect(isSamePath(base, absPath('work', 'PROJ'), 'win32')).toBe(true)
+  })
+
+  it('linux 에서는 대소문자만 다른 형제가 안에 있지 않다', () => {
+    // /home/u/proj 와 /home/u/PROJ 는 linux 에서 서로 다른 두 폴더다
+    expect(isPathWithin(absPath('home', 'u', 'proj'), absPath('home', 'u', 'PROJ', 'x'), 'linux')).toBe(false)
+    expect(isSamePath(absPath('home', 'u', 'Proj'), absPath('home', 'u', 'proj'), 'linux')).toBe(false)
+    expect(isPathWithin(absPath('home', 'u', 'proj'), absPath('home', 'u', 'proj', 'x'), 'linux')).toBe(true)
+  })
+
+  it('win32 에서는 대소문자만 다른 형제가 여전히 안에 있다', () => {
+    expect(isPathWithin(absPath('home', 'u', 'proj'), absPath('home', 'u', 'PROJ', 'x'), 'win32')).toBe(true)
   })
 
   // 구분자 무시는 win32에서만 의미가 있다 — POSIX에서 `\`는 구분자가 아니라 이름에 쓸 수 있는 글자다

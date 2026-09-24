@@ -121,12 +121,16 @@ describe('sameAbsPath — image cache invalidation key comparability (Finding 2)
   // on-disk directory listing — while a files:changed path (chokidar, via main's FileWatcher) reflects
   // the actual on-disk entry name. On Windows (and default macOS) those can differ only in case for the
   // exact same file, and a case-sensitive comparison would silently fail to invalidate.
-  it('Windows 스타일 경로에서 대소문자만 다르면 같은 파일로 본다', () => {
-    expect(sameAbsPath('C:\\proj\\assets\\Diagram.PNG', 'C:\\proj\\assets\\diagram.png')).toBe(true)
+  it('win32 에서 대소문자만 다르면 같은 파일로 본다', () => {
+    expect(sameAbsPath('C:\\proj\\assets\\Diagram.PNG', 'C:\\proj\\assets\\diagram.png', 'win32')).toBe(true)
   })
 
-  it('POSIX 스타일 경로에서도 대소문자만 다르면 같은 파일로 본다', () => {
-    expect(sameAbsPath('/proj/assets/Diagram.PNG', '/proj/assets/diagram.png')).toBe(true)
+  it('darwin 에서도 대소문자만 다르면 같은 파일로 본다', () => {
+    expect(sameAbsPath('/proj/assets/Diagram.PNG', '/proj/assets/diagram.png', 'darwin')).toBe(true)
+  })
+
+  it('linux 에서는 대소문자만 다른 두 이름이 두 파일이다', () => {
+    expect(sameAbsPath('/proj/assets/Diagram.PNG', '/proj/assets/diagram.png', 'linux')).toBe(false)
   })
 
   it('실제로 다른 파일은 다르게 본다', () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { localPathInUse, appPathInUse, type LocalUseEntry, type AppOwnedManagers } from './localPathInUse'
+import { foldsCaseHere } from '../../core/testPaths'
 
 const entry = (cwd: string, tag: string): LocalUseEntry => ({ cwd, tag })
 
@@ -14,6 +15,13 @@ describe('localPathInUse', () => {
 
   it('does not count a sibling folder that merely shares a prefix', () => {
     expect(localPathInUse([entry('D:/r-sibling', 'SESSION:other')], 'D:/r')).toBeNull()
+  })
+
+  // The answer decides whether a folder may be deleted. On linux `/r/PROJ` is another folder than
+  // `/r/proj`, so a session there must not keep `/r/proj` from being removed — nor, on win32 and darwin,
+  // may a differently cased spelling of the same folder let it be removed under a running session.
+  it('counts a session in a differently cased spelling only where the platform folds case', () => {
+    expect(localPathInUse([entry('/r/PROJ/x', 'SESSION:s')], '/r/proj')).toBe(foldsCaseHere ? 'SESSION:s' : null)
   })
 
   it('answers null when nothing is running there at all', () => {

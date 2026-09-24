@@ -5,6 +5,7 @@
 // still has one import.
 export type { RunConfig, RunConfigType, SaveReason, SaveConfigsResult } from './types'
 import type { RunConfig, RunConfigType } from './types'
+import { foldPathCase, runtimePlatform } from '../files/paths'
 
 // Live run state — one per run, addressed everywhere by runId. Used by the renderer's run list,
 // the toolbar and the global badge.
@@ -314,14 +315,14 @@ export function formatEnvLines(env: Record<string, string> | undefined): string 
  *  those paths at assembly time would be the more surprising rule — a tool resolving its arguments
  *  against its own working directory is what every shell already does — so the mismatch is recorded
  *  here rather than papered over.
- *  The prefix comparison ignores case — unlike useFileOps.copyPath(p.slice(root.length)...), whose input comes from
+ *  The prefix comparison ignores case where the filesystem does (foldPathCase: win32, darwin) — unlike useFileOps.copyPath(p.slice(root.length)...), whose input comes from
  *  the explorer tree, the input here is whatever the OS folder picker returned, and on win32 the drive letter and path
  *  casing it returns can differ from the project root string (same reasoning as isPathWithin in core/files/tree.ts).
  *  The slice is taken from the original (non-lowercased) string, so the casing of the returned relative path is preserved.
  *  A path outside the project is returned as-is, still absolute — run.saveConfigs rejects it at save time. */
-export function toRelativeCwd(picked: string, projectPath: string): string {
-  const p = picked.toLowerCase()
-  const root = projectPath.toLowerCase()
+export function toRelativeCwd(picked: string, projectPath: string, platform: string = runtimePlatform()): string {
+  const p = foldPathCase(picked, platform)
+  const root = foldPathCase(projectPath, platform)
   if (p === root) return ''
   if (p.startsWith(root + '\\') || p.startsWith(root + '/')) {
     return picked.slice(projectPath.length).replace(/^[\\/]/, '')
