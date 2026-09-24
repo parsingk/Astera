@@ -471,3 +471,33 @@ describe('the .bak holds what was read, and says when it was kept (Task 6 fix ro
 })
 const onDiskIds = async (file: string): Promise<string[]> =>
   (JSON.parse(await fs.readFile(file, 'utf8')) as { items: WorktreeInfo[] }).items.map((w) => w.id)
+
+describe('a read that gets no bytes at all does not heal (final review N1)', () => {
+  // fs.readFile can fail before this process ever saw a byte (EBUSY, EPERM, EACCES, …), which is a
+  // different case from a read that succeeded on damaged JSON. There is nothing to judge a .bak
+  // against and nothing to heal over, even when a .bak happens to be at least as new as the file.
+  it('does not heal, and does not claim a .bak was kept, when the read itself fails', async () => {
+    const logs: string[] = []
+    const file = path.join(tmp, 'worktrees.json')
+    const original = JSON.stringify({ items: [wt('untouched')] })
+    await fs.writeFile(file, original, 'utf8')
+    await fs.writeFile(file + '.bak', '{old-bak', 'utf8')
+    const t = Date.now() / 1000
+    await fs.utimes(file, t, t)
+    await fs.utimes(file + '.bak', t, t) // as new as the file: the case that healed before the fix
+    const read = vi
+      .spyOn(fs, 'readFile')
+      .mockRejectedValueOnce(Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' }))
+    let result: { recovered: boolean }
+    try {
+      result = await new WorktreeRegistry(file, 'D:/root', (m) => logs.push(m)).load()
+    } finally {
+      read.mockRestore()
+    }
+    expect(result.recovered).toBe(false)
+    expect(await fs.readFile(file, 'utf8')).toBe(original)
+    expect(await fs.readFile(file + '.bak', 'utf8')).toBe('{old-bak')
+    expect(logs.join('\n')).not.toMatch(/kept/)
+    expect(logs.join('\n')).toMatch(/could not be read.*resource busy/)
+  })
+})

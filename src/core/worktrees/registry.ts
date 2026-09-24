@@ -79,21 +79,29 @@ export class WorktreeRegistry {
       return { recovered: false }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false }
+      // **Nothing read, nothing healed.** `fs.readFile` itself can fail (EBUSY, EPERM, EACCES, …)
+      // before this process ever saw a byte of the file. There is then nothing to judge a `.bak`
+      // against and nothing to heal over: healing here would say a copy was kept when none was made,
+      // and would replace a file this process never looked at with an empty list. Leave the file, any
+      // `.bak` and memory untouched; the next load() — a process restart — tries again (final review N1).
+      if (text === undefined) {
+        this.log?.(`worktrees.json could not be read: ${err instanceof Error ? err.message : String(err)}`)
+        return { recovered: false }
+      }
       // **The .bak gets the bytes this process read**, not a copy of the file as it is by then: two
       // processes (the Host and an app) can start together and both find the damage, and the second
       // could otherwise copy the first one's healed empty list over the only record of what was lost.
       // **A .bak at least as new as the damage is already a copy of it, and is kept.** An older one
-      // is from an earlier damage and is replaced. A read that failed outright gave no bytes to keep,
-      // so nothing is kept and nothing is healed over it.
+      // is from an earlier damage and is replaced. (text is defined here — the read-failed case above
+      // already returned.)
       const bakAt = await fs.stat(this.filePath + '.bak').then((st) => st.mtimeMs, () => null)
       const newerBak = readAt !== null && bakAt !== null && bakAt >= readAt
       const kept =
         newerBak ||
-        (text !== undefined &&
-          (await fs.writeFile(this.filePath + '.bak', text, 'utf8').then(
-            () => true,
-            () => false
-          )))
+        (await fs.writeFile(this.filePath + '.bak', text, 'utf8').then(
+          () => true,
+          () => false
+        ))
       this.root = null
       this.items = []
       this.log?.(
