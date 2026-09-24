@@ -34,6 +34,7 @@ const server = async (
     orch?: HostServerDeps['orch']
     features?: HostServerDeps['features']
     onClientGone?: HostServerDeps['onClientGone']
+    onAppsChanged?: HostServerDeps['onAppsChanged']
   } = {}
 ): Promise<{
   s: HostServer
@@ -61,6 +62,7 @@ const server = async (
     orch: over.orch ?? versionOnlyOrchCall({ version }),
     features: over.features,
     onClientGone: over.onClientGone,
+    onAppsChanged: over.onAppsChanged,
     log: { write: (m) => logs.push(m), close: () => {} }
   })
   open.push(s)
@@ -129,6 +131,7 @@ const start = async (
     orch?: HostServerDeps['orch']
     onMessage?: HostServerDeps['onMessage']
     onClientGone?: HostServerDeps['onClientGone']
+    onAppsChanged?: HostServerDeps['onAppsChanged']
   } = {}
 ): Promise<{
   address: string
@@ -696,6 +699,51 @@ describe('startHostServer', () => {
       const h = await start()
       await h.connect('cli')
       expect(h.s.appKeeps('worktrees')).toBe(false)
+    })
+
+    it('says any attached app keeps a duty when even one of them did not yield it (R1)', async () => {
+      const changed: string[] = []
+      const h = await server({ onAppsChanged: () => changed.push(String(h.s.appsKeep('dispatch'))) })
+      const hello = async (extra: Record<string, unknown>): Promise<net.Socket> => {
+        const sock = net.connect(h.address)
+        await new Promise((r) => sock.once('connect', r))
+        const ch = messageChannel(sock)
+        ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app', ...extra } as ClientMessage)
+        await ch.next()
+        return sock
+      }
+      expect(h.s.appsKeep('dispatch')).toBe(false)
+      const fresh = await hello({ yields: ['worktrees', 'dispatch'] })
+      expect(h.s.appsKeep('dispatch')).toBe(false)
+      const old = await hello({ yields: ['worktrees'] }) // second socket, an S3 app
+      expect(h.s.appsKeep('dispatch')).toBe(true)
+      expect(h.s.appKeeps('dispatch')).toBe(false) // the S3 question is still about the first app only
+      old.end()
+      await vi.waitFor(() => expect(h.s.appsKeep('dispatch')).toBe(false))
+      fresh.end()
+      await vi.waitFor(() => expect(h.s.hasApp()).toBe(false))
+      // Told on each app hello and each app close, in the same turn (§4.3): two hellos, two closes.
+      expect(changed).toEqual(['false', 'true', 'false', 'false'])
+    })
+
+    it('does not tell anyone about a CLI coming or going', async () => {
+      const onAppsChanged = vi.fn()
+      const h = await start({ onAppsChanged })
+      const cli = await h.connect('cli')
+      cli.socket.end()
+      await new Promise((r) => setTimeout(r, 100))
+      expect(onAppsChanged).not.toHaveBeenCalled()
+    })
+
+    it('a throwing onAppsChanged is logged and costs the handshake nothing', async () => {
+      const h = await server({ onAppsChanged: () => { throw new Error('boom') } })
+      const sock = net.connect(h.address)
+      await new Promise((r) => sock.once('connect', r))
+      const ch = messageChannel(sock)
+      ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' } as ClientMessage)
+      expect(await ch.next()).toMatchObject({ t: 'hello' })
+      expect(h.logs.join('\n')).toMatch(/boom/)
+      sock.end()
     })
 
     // call 은 세는 수라 누구나 맞힐 수 있다 — 물어본 소켓이 아닌 곳의 답을 받으면 앱이 내지도

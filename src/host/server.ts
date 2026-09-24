@@ -56,6 +56,12 @@ export interface HostServerDeps {
   /** A client that had said hello has closed. Not called for a peer that never did: it was never
    *  anybody, and held nothing. */
   onClientGone?(from: ClientRef): void
+  /** An app's `yields` changed shape — one attached, one left, or the roster of who is keeping what
+   *  duty otherwise moved (§4.3). Never fired for a CLI: only an app's yields decide who drives.
+   *  Called in the same turn as the record that caused it, so a reader inside this callback sees the
+   *  new state already in place. A throw is caught and logged; the handshake or close it rode in on
+   *  is not affected. */
+  onAppsChanged?(): void
   /** Feature names announced in `hello` after the built-in ones. Given only by a caller that serves
    *  them: advertising a feature and being able to serve it are the same fact, as the `orch`
    *  condition below says. */
@@ -119,6 +125,9 @@ export interface HostServer {
   act(name: string, args: unknown): Promise<unknown>
   /** An app is attached and its hello did not yield `duty`: that app still does it itself (ruling R4). */
   appKeeps(duty: string): boolean
+  /** Any attached app — not just the first — has not yielded `duty` (ruling R1): one S3 app among
+   *  several is enough to keep the Host from driving that duty. */
+  appsKeep(duty: string): boolean
 }
 
 /** How long a peer that has connected but said nothing gets before the Host hangs up on it. */
@@ -201,6 +210,15 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     for (const s of greetedSockets) if (roles.get(s) === 'app' && !s.destroyed) return s
     return null
   }
+  /** Wraps `deps.onAppsChanged` so a caller's throw costs the handshake or close it rode in on
+   *  nothing — logged instead, the same as `onClientGone`'s own guard below. */
+  const tellAppsChanged = (): void => {
+    try {
+      deps.onAppsChanged?.()
+    } catch (err) {
+      deps.log.write(`onAppsChanged failed: ${String(err)}`)
+    }
+  }
   // Set at the top of close(), before any socket is destroyed. A destroyed socket's 'close' event
   // arrives asynchronously, after close() has already returned — without this flag that deferred
   // event would re-arm the idle timer on a server that is already gone, and onIdle() would fire again.
@@ -276,6 +294,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // Junk entries are dropped rather than refused: a hello is not the place to turn a client
           // away over a field that only ever narrows what it keeps.
           yields.set(socket, new Set(Array.isArray(m.yields) ? m.yields.filter((x): x is string => typeof x === 'string') : []))
+          if (roles.get(socket) === 'app') tellAppsChanged()
           send({
             t: 'hello',
             protocol: HOST_PROTOCOL,
@@ -390,6 +409,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       const role = roles.get(socket) ?? 'cli'
       roles.delete(socket)
       yields.delete(socket)
+      if (wasGreeted && role === 'app') tellAppsChanged()
       // Whatever this socket was asked and never answered is refused now. Left in the map it would
       // be a promise nothing can ever settle, and the CLI call waiting behind it would hang for as
       // long as the Host lives.
@@ -453,6 +473,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       const s = appSocket()
       return s !== null && !(yields.get(s)?.has(duty) ?? false)
     },
+    appsKeep: (duty) =>
+      [...greetedSockets].some((s) => roles.get(s) === 'app' && !s.destroyed && !(yields.get(s)?.has(duty) ?? false)),
     act: (name, args) =>
       new Promise((resolve, reject) => {
         const sock = appSocket()
