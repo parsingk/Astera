@@ -20,7 +20,8 @@
 // **The handover** — any change to `'host'` once the state is in memory, and the first time the
 // state is in memory while the Host drives (a Host whose first contact was an accepted `state-put`
 // never loads, so `onLoaded` never fires for it) — drains the pending reports once (not on the
-// not-migrated → migrated change, N4), runs the resume sweep, and starts any open repair Dispatch
+// not-migrated → migrated change, N4), with no app attached stops the validation runs a gone app left
+// in this Host's registry (final review I2), runs the resume sweep, and starts any open repair Dispatch
 // whose start never happened (N1's belt; only with no app attached, see `takeOver`).
 //
 // **The lost-worker Gate** (D6, R16, N5) is asked on every pass, only while no app is attached: an app
@@ -116,6 +117,18 @@ export function createHostDriving(d: {
     if (!mayStart()) {
       log('handover: the drive moved during the drain — no sweep and no repair start from this Host')
       return
+    }
+    // **The gone app's own checks first** (final review I2), as the app-left path below does: an older
+    // app that drove and has now left may have been checking a Task itself, and its validation run lives
+    // on in this Host's registry with nobody to settle it. The sweep would start a second check in the
+    // same folder beside it. With no app attached nothing else can be waiting on such a run, so it is
+    // killed and its exit awaited (bounded); with an app attached, nothing is killed.
+    if (!d.server.hasApp()) {
+      await d.checks.stopForeignValidations()
+      if (!mayStart()) {
+        log('handover: the drive moved while the gone app’s checks were stopped — no sweep from this Host')
+        return
+      }
     }
     try {
       d.checks.resumeSweep(why)

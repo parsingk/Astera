@@ -701,14 +701,14 @@ describe('createHostDriving — review round 1', () => {
     h.server.app = true
     h.driving.appsChanged()
     await h.settle()
-    expect(h.stopForeignValidations).not.toHaveBeenCalled()
+    expect(h.stopForeignValidations).toHaveBeenCalledTimes(1) // the load's handover, with no app attached (final review I2)
     let release: (n: number) => void = () => {}
     h.foreign.hold = new Promise<number>((r) => {
       release = r
     })
     h.server.app = false
     h.driving.appsChanged()
-    await vi.waitFor(() => expect(h.stopForeignValidations).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(h.stopForeignValidations).toHaveBeenCalledTimes(2))
     await h.settle()
     expect(h.resumeSweep).toHaveBeenCalledTimes(1)
     release(1)
@@ -726,7 +726,7 @@ describe('createHostDriving — review round 1', () => {
     h.driving.appsChanged()
     h.server.app = true // back within the same turn, before the chained sweep runs
     await h.settle()
-    expect(h.stopForeignValidations).not.toHaveBeenCalled()
+    expect(h.stopForeignValidations).toHaveBeenCalledTimes(1) // the load's handover only
   })
   it('runs no such sweep when the Host is retiring as the app leaves (Task 14 I3)', async () => {
     const h = await rig({ readyTasks: 0 })
@@ -763,5 +763,45 @@ describe('createHostDriving — review round 1', () => {
     await h.tickNow()
     expect(h.typed().map(([id]) => id)).toEqual(['coord-1', 'coord-1'])
     expect(h.typed()[0][1]).toMatch(/unread message/)
+  })
+})
+
+// The final review of S4+S5, I2: the handover after an older app leaves runs the resume sweep, and that
+// app's validation run may still be live in this Host's registry.
+describe('createHostDriving — the handover stops a gone app’s checks (final review I2)', () => {
+  // I2: an older app's validation run is a pty in this Host's registry and outlives it. The handover's
+  // sweep must not start a second check beside it.
+  it('kills an older app’s leftover validation runs and waits for them before the handover’s sweep (I2)', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.keeps = true
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    let release: (n: number) => void = () => {}
+    h.foreign.hold = new Promise<number>((r) => {
+      release = r
+    })
+    h.server.keeps = false
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.stopForeignValidations).toHaveBeenCalledTimes(1))
+    await h.settle()
+    expect(h.resumeSweep).not.toHaveBeenCalled()
+    release(1)
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(1))
+  })
+
+  it('kills nothing at a handover with an app still attached (I2)', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.keeps = true
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    h.server.keeps = false // the old app left, a new one that yields stays
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(1))
+    expect(h.stopForeignValidations).not.toHaveBeenCalled()
   })
 })

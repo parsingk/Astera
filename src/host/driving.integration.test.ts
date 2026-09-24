@@ -260,7 +260,13 @@ async function rig(o: RigOpts) {
     nowMs: () => Date.now(),
     // No tick: every pass here comes from a load, a commit or an app coming or going.
     every: () => () => {},
-    readGate: track((p: string) => readDispatchGate(p))
+    readGate: track((p: string) => readDispatchGate(p)),
+    // Never a real taskkill: the fake pids are numbers some real process may hold.
+    killRunner: (cmd) => {
+      const pid = Number(cmd.args[cmd.args.indexOf('/pid') + 1])
+      const p = ptys.get(pid)
+      if (p) setTimeout(() => p.exit(1), 5)
+    }
   })
   box.wiring = wiring
 
@@ -416,6 +422,10 @@ async function rig(o: RigOpts) {
     openGates: () => state().gates.filter((g) => g.status === 'open'),
     runOutcome: () => outcomeOf(state(), latestRunId()),
     runPtys,
+    /** A validation run an app's RunManager opened in this registry: the app's check, which outlives it. */
+    openAppValidation: (id: string) =>
+      registry.open({ id: `app-${id}`, file: 'x', args: [], opts: { cwd: repo, cols: 80, rows: 24, env: {} }, meta: { kind: 'run', id, restore: { projectPath: repo, validation: true } } }),
+    liveValidations: () => registry.list().filter((e) => e.alive && e.meta?.kind === 'run' && (e.meta.restore as { validation?: boolean }).validation === true),
     /** Ends the newest validation run's pty with this exit code. */
     exitRunPty: (code: number) => {
       const entry = runPtys().at(-1)
@@ -557,6 +567,29 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     await until(() => expect(h.task(h.onlyTaskId).status).not.toBe('reviewing'))
     expect(h.runOutcome()).not.toBe('completed')
     expect(JSON.stringify(h.task(h.onlyTaskId))).toMatch(/the rig found a blocking bug/)
+  })
+
+  // I2: the older app was checking the Task itself when it left. Its run lives on in this registry; the
+  // handover kills it and waits before its sweep, so exactly one check runs.
+  it('an older app leaves mid-check: its run is stopped before the handover’s sweep, and exactly one check runs (I2)', async () => {
+    const h = await rig({ tasks: 1, validate: ['seed:npm:test'], convergence: { maxFixAttempts: 1 } })
+    await h.cli('jobs-run', { id: h.jobId })
+    await until(() => expect(h.spawns()).toHaveLength(1))
+    h.server.app = true
+    h.server.keeps = true
+    h.wiring.serverHooks.onAppsChanged()
+    await h.workerReports(h.spawns()[0], 'succeeded')
+    await h.settle()
+    const opened = h.openAppValidation('run_app_check') // the older app's own check of that Task
+    expect(opened.ok).toBe(true)
+    expect(h.liveValidations()).toHaveLength(1)
+    h.server.app = false
+    h.server.keeps = false
+    h.wiring.serverHooks.onAppsChanged()
+    await until(() => expect(h.runPtys().filter((e) => e.meta?.id !== 'run_app_check')).toHaveLength(1)) // the Host's own
+    await h.settle()
+    expect(h.liveValidations()).toHaveLength(1)
+    expect(h.liveValidations()[0].meta?.id).not.toBe('run_app_check')
   })
 
   it('a validation guard allows a registered task worktree, through worktrees.paths() (B5)', async () => {

@@ -63,6 +63,8 @@ export function composeHostDriving(a: {
   /** Test seams, passed through to createHostDriving. */
   every?(ms: number, fn: () => void): () => void
   readGate?(settingsPath: string): Promise<DispatchGate>
+  /** Test seam, passed through to createHostChecks: the tree kill of a foreign validation run. */
+  killRunner?: (cmd: { file: string; args: string[] }) => void
 }): HostDrivingWiring {
   const specsDir = path.join(a.profileDir, 'orch', 'specs')
   /** A log line never throws (constraint 14). */
@@ -90,7 +92,8 @@ export function composeHostDriving(a: {
     specsDir,
     log,
     now: () => a.now(),
-    retiring: () => disposed
+    retiring: () => disposed,
+    ...(a.killRunner ? { killRunner: a.killRunner } : {})
   })
 
   const driving = createHostDriving({
