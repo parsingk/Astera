@@ -220,8 +220,10 @@ export interface OrchServerDeps {
    *  `hostOrchDeps`, never calls the app-required flag for it) and left as an orphan on disk; the
    *  command keeps its own 400 and its own reason (Host S3 fix round 1, I1). `inUse` says which kind
    *  of "not removed" it was — still busy, or an outright failure — so the 400's own note can say
-   *  which (fix round 2, R2). Optional: without it (or with `removeWorktrees` alone) the cleanup falls
-   *  back to that, the plain best-effort try/catch this file already had — see the `run-start` case. */
+   *  which (fix round 2, R2). Optional: without it, the cleanup falls back to `removeWorktrees` alone
+   *  if that is wired — see the `run-start` case. **That fallback is new in 88f2700 (Host S3 Task 7),
+   *  not something this file always did**: before it, a coordinator that failed to start left `bad(…)`
+   *  with no cleanup at all, and the fresh Run worktree was simply orphaned (final review m4). */
   discardRunWorktree?(path: string): Promise<{ removed: boolean; inUse: boolean }>
   /** 이 Run 을 관리할 코디네이터 세션을 띄운다. **`startWorker` 와 같은 꼴이다** — 배선이 채우고,
    *  세션 프로세스만 만들고 OrchState 는 건드리지 않는다(서버가 상태를 소유한다). 첫 입력으로
