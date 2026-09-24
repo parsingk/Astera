@@ -48,6 +48,9 @@ export interface HostExits {
   heldBy(ptyId: string, socket: number): void
   /** A socket closed: its marks go, and if it ever held a pty the handover runs after the defer. */
   appGone(socket: number): void
+  /** The sockets holding this pty right now, as a copy (S6 R1): none for a pty nobody holds, one that
+   *  has exited, or one this Host never heard of. */
+  holdersOf(ptyId: string): number[]
 }
 
 export function createHostExits(d: HostExitsDeps): HostExits {
@@ -86,6 +89,7 @@ export function createHostExits(d: HostExitsDeps): HostExits {
   })
 
   return {
+    holdersOf: (ptyId) => [...(holders.get(ptyId) ?? [])],
     heldBy(ptyId, socket) {
       // A pty that has already ended is not held (T12-review M5): the attach that arrives after the
       // exit (A3) is answered with that exit, no exit will ever release this mark, and the pty's end

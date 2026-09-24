@@ -695,6 +695,27 @@ describe('startHostServer', () => {
       fresh.end()
     })
 
+    it('answers what a greeted socket yielded, by its number, and null once it is gone (S6 R1)', async () => {
+      const seen: number[] = []
+      const h = await server({
+        onMessage: (m, _send, from) => {
+          if (m.t === 'pty-list') seen.push(from.socket)
+          return false
+        }
+      })
+      const sock = net.connect(h.address)
+      await new Promise((r) => sock.once('connect', r))
+      const ch = messageChannel(sock)
+      ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app', yields: ['worktrees', 'rolling', 3] } as ClientMessage)
+      await ch.next()
+      ch.send({ t: 'pty-list' })
+      await vi.waitFor(() => expect(seen).toHaveLength(1))
+      expect([...(h.s.yieldsOf(seen[0]) ?? [])].sort()).toEqual(['rolling', 'worktrees'])
+      expect(h.s.yieldsOf(seen[0] + 1000)).toBeNull()
+      sock.end()
+      await vi.waitFor(() => expect(h.s.yieldsOf(seen[0])).toBeNull())
+    })
+
     it('does not count a CLI as an app that keeps anything', async () => {
       const h = await start()
       await h.connect('cli')

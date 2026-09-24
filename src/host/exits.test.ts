@@ -263,3 +263,18 @@ describe('createHostExits', () => {
     expect(orphaned).not.toHaveBeenCalled()
   })
 })
+
+describe('holdersOf (S6 R1)', () => {
+  it('names the sockets holding a pty, forgets a socket that closes, and forgets them all at the exit', () => {
+    const r = rig()
+    r.open('p1', { kind: 'session', id: 's1', restore: {} })
+    r.exits.heldBy('p1', 3)
+    r.exits.heldBy('p1', 5)
+    expect(r.exits.holdersOf('p1').sort()).toEqual([3, 5])
+    r.exits.appGone(3)
+    expect(r.exits.holdersOf('p1')).toEqual([5])
+    r.exit('p1', 0)
+    expect(r.exits.holdersOf('p1')).toEqual([])
+    expect(r.exits.holdersOf('nope')).toEqual([])
+  })
+})

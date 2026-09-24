@@ -128,6 +128,11 @@ export interface HostServer {
   /** Any attached app — not just the first — has not yielded `duty` (ruling R1): one S3 app among
    *  several is enough to keep the Host from driving that duty. */
   appsKeep(duty: string): boolean
+  /** The yields a greeted socket declared in its hello, or null once it is gone or never greeted (S6
+   *  R1). By the socket number `onMessage` and `onClientGone` hand out, which is what `exits.holdersOf`
+   *  names. Whatever role the socket gave: an app old enough to send no role greets as a CLI and still
+   *  holds ptys, and it yielded nothing, so it keeps every duty. */
+  yieldsOf(socketNo: number): ReadonlySet<string> | null
 }
 
 /** How long a peer that has connected but said nothing gets before the Host hangs up on it. */
@@ -196,6 +201,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   /** What each greeted socket's hello yielded to this Host (`hello.yields`, ruling R4). Written and
    *  deleted beside `roles`, for the same reason it is kept beside the set rather than inside it. */
   const yields = new Map<net.Socket, ReadonlySet<string>>()
+  /** Every connected socket by its number, so `yieldsOf` can answer for the number `exits` keeps.
+   *  Set when the number is handed out and deleted in `gone`. */
+  const socketByNo = new Map<number, net.Socket>()
   let socketSeq = 0
   /** The `orch-act`s that have gone out and not been answered, by call id. The socket is kept with
    *  each one so that a disconnect can refuse exactly the questions it left unanswered. */
@@ -252,6 +260,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     live += 1
     const socketNo = ++socketSeq
     sockets.add(socket)
+    socketByNo.set(socketNo, socket)
     if (idleTimer) clearTimeout(idleTimer)
     socket.setEncoding('utf8')
     // A peer that connects and never speaks holds `live` above zero for good, and the idle shutdown —
@@ -404,6 +413,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       // logged against it after it has already gone.
       greeted()
       sockets.delete(socket)
+      socketByNo.delete(socketNo)
       // Read before the two deletes below: they are what says who this was.
       const wasGreeted = greetedSockets.delete(socket)
       const role = roles.get(socket) ?? 'cli'
@@ -475,6 +485,11 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     },
     appsKeep: (duty) =>
       [...greetedSockets].some((s) => roles.get(s) === 'app' && !s.destroyed && !(yields.get(s)?.has(duty) ?? false)),
+    yieldsOf: (socketNo) => {
+      const s = socketByNo.get(socketNo)
+      if (!s || s.destroyed || !greetedSockets.has(s)) return null
+      return yields.get(s) ?? null
+    },
     act: (name, args) =>
       new Promise((resolve, reject) => {
         const sock = appSocket()
@@ -535,6 +550,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         greetedSockets.clear()
         roles.clear()
         yields.clear()
+        socketByNo.clear()
         // Destroying a socket fires its 'close' asynchronously, so the refusals `gone` sends would
         // arrive after this Host has already gone. Refused here instead, while there is still
         // somebody to tell.

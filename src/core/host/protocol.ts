@@ -73,6 +73,11 @@ export const HOST_FEATURE_WORKTREES = 'worktrees'
  *  Host that also announces `spawn` (ruling R7). Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_DISPATCH = 'dispatch'
 
+/** The Host rolls the sessions it owns at their usage limit (S6): the ones it spawned, and the ones
+ *  it took over from an app that is gone. Only a Host that also announces `spawn` (R17). Additive, so
+ *  HOST_PROTOCOL stays 3. */
+export const HOST_FEATURE_ROLLING = 'rolling'
+
 /** worktrees.json as the Host holds it, stamped with where it stands in this Host's changes. The
  *  `worktrees-state` push carries it, and so does the body of **every** `worktree-*` orch-call reply
  *  (`worktree-add`, `worktree-remove`, `worktree-root`, `worktree-list`), so a receiver can order a
@@ -96,6 +101,9 @@ export interface WorktreesSnapshot {
 export const HOST_YIELD_WORKTREES = 'worktrees'
 /** `hello.yields` value: this app does not dispatch while its Host announces `dispatch`. */
 export const HOST_YIELD_DISPATCH = 'dispatch'
+/** `hello.yields` value: this app does not roll a session whose note says `rolledBy: 'host'` while its
+ *  Host announces `rolling`, and it leaves the Host's chains alone for every pty it holds. */
+export const HOST_YIELD_ROLLING = 'rolling'
 
 /** The `orch-act` a Host sends an attached app before it removes a worktree folder (S3, the ruling
  *  on plan risk 3). Args `[path]`. The app answers the tag of anything **it runs itself, not
