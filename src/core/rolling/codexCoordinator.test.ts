@@ -3,9 +3,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHook } from 'node:async_hooks'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import type { Account, SessionInfo } from '../core/types'
-import { BlockRegistry } from '../core/rolling/blockRegistry'
-import { CodexRollingCoordinator, type CodexRollingDeps } from './codexRolling'
+import type { Account, SessionInfo } from '../types'
+import { BlockRegistry } from './blockRegistry'
+import { CodexRollingCoordinator, type CodexRollingDeps } from './codexCoordinator'
 
 let tmp: string
 

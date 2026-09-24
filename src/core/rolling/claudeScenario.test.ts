@@ -4,9 +4,9 @@
 // 부작용(spawn/kill/copy/write/state/log)은 전부 주입된 deps로 기록만 하고 실제로는 아무것도 하지 않는다.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import path from 'node:path'
-import type { Account, SessionInfo } from '../core/types'
-import { BlockRegistry } from '../core/rolling/blockRegistry'
-import { RollingCoordinator, type RollingDeps } from './rolling'
+import type { Account, SessionInfo } from '../types'
+import { BlockRegistry } from './blockRegistry'
+import { RollingCoordinator, type RollingDeps } from './claudeCoordinator'
 
 const MIN = 60_000
 const CFG = 'D:\\mock-cfg'

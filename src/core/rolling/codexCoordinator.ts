@@ -2,7 +2,8 @@
 // "<prompt>"` on the next account. The skeleton is the same as the claude coordinator (rolling.ts) but
 // it is far shorter because none of the statusLine-specific problems (a stale snapshot, readiness
 // polling, auto-accepting trust) apply. Every side effect is injected through deps — it does not depend
-// on electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
+// on electron, so it is verified with vitest. The app's wiring is in src/main/index.ts; the Host's in
+// src/host/rolling.ts (S6).
 import type {
   Account,
   Attention,
@@ -10,22 +11,22 @@ import type {
   RollStateEvent,
   SessionInfo,
   SessionKind
-} from '../core/types'
-import type { RollConfig } from '../core/rolling/config'
-import { RollCycle } from '../core/rolling/cycle'
+} from '../types'
+import type { RollConfig } from './config'
+import { RollCycle } from './cycle'
 import {
   laterBlock,
   pickAvailable,
   planRetry,
   type BlockRecord,
   type RetryState
-} from '../core/rolling/retry'
-import { BlockRegistry } from '../core/rolling/blockRegistry'
-import { sanitizeResumePrompt } from '../core/sessions/commands'
-import { sessionKindOf } from '../core/sessions/kind'
-import { copyTranscript } from '../core/rolling/transcript'
-import { codexHistoryStrategy } from '../core/history/strategies/codex'
-import { findRollout } from '../core/rolling/codexLocate'
+} from './retry'
+import { BlockRegistry } from './blockRegistry'
+import { sanitizeResumePrompt } from '../sessions/commands'
+import { sessionKindOf } from '../sessions/kind'
+import { copyTranscript } from './transcript'
+import { codexHistoryStrategy } from '../history/strategies/codex'
+import { findRollout } from './codexLocate'
 import {
   CodexLimitScanner,
   CodexModelChoiceScanner,
@@ -37,8 +38,8 @@ import {
   rolloutSize,
   worstResetAt,
   type CodexLimitState
-} from '../core/rolling/codexSignal'
-import { t, type Lang } from '../core/i18n'
+} from './codexSignal'
+import { t, type Lang } from '../i18n'
 
 const TICK_MS = 15_000 // how often state is refreshed and the fallback trigger checked (mirrors rolling.ts)
 const LOCATE_POLL_MS = 1_000 // how often we poll to map the rollout

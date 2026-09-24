@@ -1,7 +1,8 @@
 // The account rolling coordinator. Limit detection → transcript copy → kill → --resume on the next
 // account → auto-accepting the trust prompt → automatically sending "carry on with the work". The pure
 // decisions live in core/rolling and every side effect is injected through deps — it does not depend on
-// electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
+// electron, so it is verified with vitest. The app's wiring is in src/main/index.ts; the Host's in
+// src/host/rolling.ts (S6).
 //
 // A chain whose session is a chat session (kind 'chat') rolls through the same middle and differs only
 // at the two ends, because it has no terminal: the identity a statusLine would report is pushed in by
@@ -17,38 +18,38 @@ import type {
   SessionKind,
   RollStateEvent,
   SessionUsage
-} from '../core/types'
-import type { RateLimitInfo } from '../core/chat/types'
-import { sessionKindOf } from '../core/sessions/kind'
-import type { RollConfig } from '../core/rolling/config'
+} from '../types'
+import type { RateLimitInfo } from '../chat/types'
+import { sessionKindOf } from '../sessions/kind'
+import type { RollConfig } from './config'
 import {
   OutputScanner,
   findWaitChoice,
   hasWaitChoiceLabel,
   looksLikeChoicePrompt,
   maskLimitPhrase
-} from '../core/rolling/detect'
-import { RollCycle } from '../core/rolling/cycle'
+} from './detect'
+import { RollCycle } from './cycle'
 import {
   laterBlock,
   pickAvailable,
   planRetry,
   type BlockRecord,
   type RetryState
-} from '../core/rolling/retry'
-import { BlockRegistry } from '../core/rolling/blockRegistry'
-import { copyTranscript } from '../core/rolling/transcript'
-import { claudeHistoryStrategy } from '../core/history/strategies/claude'
-import { parseStatusLinePayload, extractStatusLineSession } from '../core/usage/statusline'
-import { lastActivityAt, readPendingWorkflowCount } from '../core/rolling/activity'
+} from './retry'
+import { BlockRegistry } from './blockRegistry'
+import { copyTranscript } from './transcript'
+import { claudeHistoryStrategy } from '../history/strategies/claude'
+import { parseStatusLinePayload, extractStatusLineSession } from '../usage/statusline'
+import { lastActivityAt, readPendingWorkflowCount } from './activity'
 import {
   isIdleNotification,
   isUnknownNotificationType,
   type NotificationPayload
-} from '../core/hooks/notification'
-import { t, type Lang } from '../core/i18n'
-import { ClaudeTranscriptTail } from '../core/rolling/claudeSignal'
-import { parseResetTime } from '../core/rolling/resetTime'
+} from '../hooks/notification'
+import { t, type Lang } from '../i18n'
+import { ClaudeTranscriptTail } from './claudeSignal'
+import { parseResetTime } from './resetTime'
 
 const GATE_PCT = 90 // The bar for choosing which window goes into a block record — only the reset of a window exhausted at or above this is kept by recordRecovery (it is no longer used as a gate for accepting a limit phrase)
 const FALLBACK_SILENCE_MS = 30_000 // the fallback trigger: five_hour at 100% plus this long with no output
