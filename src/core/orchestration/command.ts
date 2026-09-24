@@ -383,12 +383,14 @@ export interface OrchServerDeps {
    *  효과와 같은 순서(Dispatch 먼저, 세션은 그다음)다.
    *
    *  **Host 가 앱 없이 이 명령을 받아도 안전한 이유는 이 칸이 아니라 `repairTargetFor` 다**
-   *  (ruling F58). 이 훅은 전달된다 — host/orchDeps.ts 의 FIRE_AND_FORGET 에 있어서, 앱이 붙어
-   *  있으면 소켓으로 나가고 없으면 로그만 남기고 삼켜진다. 그러니 "앱이 없으면 부수 효과가 빠진
-   *  반쪽 repair 가 남는다" 가 될 수 있는데, 그렇게 되지 않는 이유는 그 위에 있다: `repairTargetFor`
-   *  가 DEGRADES 로 `null` 을 답해 판정이 애초에 repair Dispatch 를 열지 않고 `repairFailed` Gate 를
-   *  연다. **삼켜질 훅이 가리킬 Dispatch 가 존재하지 않는 것이지, 훅이 안 가는 것이 아니다 — 그
-   *  칸이 DEGRADES 에서 나가는 날 이 문장도 거짓이 된다.** */
+   *  (ruling F58). 둘 다 host/orchDeps.ts 의 HOST_DRIVES 에 있고, 호출마다 같은 술어
+   *  `drive.owns()` 를 동기로 묻는다(S4+S5 R8). Host 가 몰면 둘 다 Host 가 답한다: 대상은 Host 의
+   *  레지스트리로 판정하고, 이 훅은 Host 가 직접 spec 을 쓰고 세션을 띄운다. 몰지 않으면 둘 다 S5
+   *  이전의 길로 간다: 이 훅은 앱으로 전달되거나, 앱이 없으면 로그만 남기고 삼켜지며,
+   *  `repairTargetFor` 는 앱에 묻고 물을 수 없으면 `null` 을 답해 판정이 repair Dispatch 를 열지
+   *  않고 `repairFailed` Gate 를 연다. **그러니 삼켜지는 갈래에는 가리킬 Dispatch 가 없다.** 앱이
+   *  대상을 답한 뒤 이 훅 전에 떠나면, 운전이 그 사이 Host 로 넘어와 Host 가 띄운다. **두 칸을
+   *  다른 묶음이나 다른 술어로 나누는 날 이 문장은 거짓이 된다.** */
   startRepair?(a: { dispatchId: string }): void
   /** 소진 Gate(kind: 'convergence-exhausted')의 retry-once 답(repair.ts 의 repairOnce) — 예산 밖의
    *  repair 를 정확히 하나 연다. gate-resolve 가 그 kind 의 Gate 를 이 답으로 풀 때만 부른다.

@@ -128,8 +128,11 @@ const FIRE_AND_FORGET = ['unregisterRolling', 'onDispatchLost'] as const
  * `null` one layer up: the verdict never opens a repair Dispatch at all. Both ends are in this one
  * group now, and **both switch on one predicate in one turn**: the same `drive.owns()`, asked
  * synchronously by each wrapper when the command calls it. So the Host never answers a real repair
- * target while the start that must follow it is swallowed, and never runs a start whose target it
- * did not answer. **Split these two across groups, or give them different predicates, and that hole
+ * target while the start that must follow it is swallowed. The one case where the two ends take
+ * different routes is safe and intended: an app answers the target and then leaves before the start
+ * (the review report awaits `repairTargetFor`, `lang` and a commit in between). The driver becomes
+ * the Host in the turn the app's socket closes, so the Host starts the repair the app's answer
+ * opened, and it is not swallowed. **Split these two across groups, or give them different predicates, and that hole
  * opens**, silently, at a call site that says nothing about it.
  *
  * **Receipts** keep the rule the other local groups keep: a name that acts marks its effect before

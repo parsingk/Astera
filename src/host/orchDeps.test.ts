@@ -921,6 +921,19 @@ describe('HOST_DRIVES (R8)', () => {
     expect(act).toHaveBeenCalledTimes(1)
     expect(c.startReview).toHaveBeenCalledWith({ taskId: 'b' })
   })
+  // Review I1: the async half asks at each call too. F58 needs repairTargetFor and startRepair on
+  // the same predicate at the call, never one read when the deps were built.
+  it('asks owns() at each call for the async names too: true, then false, then true', async () => {
+    let mine = true
+    const c = checks()
+    const d = build({ hasApp: () => false, drive: { owns: () => mine, checks: c } })
+    expect(await d.repairTargetFor!('a')).toEqual({ kind: 'fresh' })
+    mine = false
+    expect(await d.repairTargetFor!('b')).toBeNull() // the old route: no app, so DEGRADES' null
+    mine = true
+    expect(await d.repairTargetFor!('c')).toEqual({ kind: 'fresh' })
+    expect((c.repairTargetFor as ReturnType<typeof vi.fn>).mock.calls).toEqual([['a'], ['c']])
+  })
   // The void three are bare statements in handleCommand: a throw from the Host's own body is logged,
   // never thrown into the command (FIRE_AND_FORGET's reason).
   it('logs a void check that throws, and does not throw into the command', () => {
