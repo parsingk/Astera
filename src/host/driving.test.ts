@@ -805,3 +805,19 @@ describe('createHostDriving — the handover stops a gone app’s checks (final 
     expect(h.stopForeignValidations).not.toHaveBeenCalled()
   })
 })
+
+describe('createHostDriving — a yielding app leaving (final review M1)', () => {
+  // M1: a repair an app opened and never started is stranded when that app, yielding, leaves.
+  it('starts an open repair Dispatch that has no spec yet when a yielding app leaves (M1)', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.startRepair).not.toHaveBeenCalled()
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.startRepair).toHaveBeenCalledWith({ dispatchId: h.repairDispatchId }))
+    expect(h.startRepair).toHaveBeenCalledTimes(1)
+  })
+})

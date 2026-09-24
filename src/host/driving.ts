@@ -20,9 +20,11 @@
 // **The handover** — any change to `'host'` once the state is in memory, and the first time the
 // state is in memory while the Host drives (a Host whose first contact was an accepted `state-put`
 // never loads, so `onLoaded` never fires for it) — drains the pending reports once (not on the
-// not-migrated → migrated change, N4), with no app attached stops the validation runs a gone app left
-// in this Host's registry (final review I2), runs the resume sweep, and starts any open repair Dispatch
-// whose start never happened (N1's belt; only with no app attached, see `takeOver`).
+// not-migrated → migrated change, N4), and then, with no app attached, stops the validation runs a
+// gone app left in this Host's registry before the resume sweep (final review I2). It then runs the
+// resume sweep, and with no app attached starts any open repair Dispatch whose start never happened
+// (N1's belt). A yielding app leaving does the same, less the drain (`afterDriveChange`, final review
+// M1).
 //
 // **The lost-worker Gate** (D6, R16, N5) is asked on every pass, only while no app is attached: an app
 // has its own reconciler, which reads the journal the Host cannot (D8).
@@ -108,6 +110,46 @@ export function createHostDriving(d: {
   /** The loop's own check, asked on entry and before each slot (§4.3). */
   const mayStart = (): boolean => last === 'host' && !d.spawner.isRetiring() && d.orch.loaded()
 
+  /** N1's belt: every open repair Dispatch that has no spec yet, started. **Only with no app attached**:
+   *  with an app attached it may be that app's own start in progress (a person's retry-once, R20), and
+   *  `performRepair` has no in-flight guard, so starting it here as well would put two workers on one
+   *  Dispatch. A repair opened by an app that then left before starting it is stranded otherwise. */
+  const startStrandedRepairs = (why: string): void => {
+    if (d.server.hasApp()) return
+    for (const disp of d.orch.state().dispatches) {
+      if (!disp.repair || disp.endedAt || disp.specPath) continue
+      try {
+        log(`${why}: starting the repair dispatch=${disp.id}, which was opened but never started`)
+        d.startRepair({ dispatchId: disp.id })
+      } catch (err) {
+        log(`${why}: the repair dispatch=${disp.id} could not be started: ${String(err)}`)
+      }
+    }
+  }
+
+  /** What follows a change of drive to this Host (the handover) and a yielding app leaving: the gone
+   *  app's checks stopped, the resume sweep and the belt. */
+  const afterDriveChange = async (why: string, label: string): Promise<void> => {
+    // **The gone app's own checks first** (Task 14 round 2; final review I2 for the handover): its
+    // validation runs live on in this Host's registry with nobody to settle them, and the sweep would
+    // start a second check in the same folder beside one. With no app attached nothing else can be
+    // waiting on such a run, so it is killed and its exit awaited (bounded); its exit records nothing.
+    // With an app attached, a run may be that app's to answer for, so nothing is killed.
+    if (!d.server.hasApp()) {
+      await d.checks.stopForeignValidations()
+      if (!mayStart()) {
+        log(`${label}: the drive moved while the gone app's checks were stopped — no sweep from this Host`)
+        return
+      }
+    }
+    try {
+      d.checks.resumeSweep(why)
+    } catch (err) {
+      log(`the resume sweep failed to start: ${String(err)}`)
+    }
+    startStrandedRepairs(label)
+  }
+
   const takeOver = async (why: string, drain: boolean): Promise<void> => {
     // `drainOnce` answers false when the load already drained (C6), and logs a failure of its own.
     if (drain) await d.orch.drainOnce()
@@ -118,37 +160,7 @@ export function createHostDriving(d: {
       log('handover: the drive moved during the drain — no sweep and no repair start from this Host')
       return
     }
-    // **The gone app's own checks first** (final review I2), as the app-left path below does: an older
-    // app that drove and has now left may have been checking a Task itself, and its validation run lives
-    // on in this Host's registry with nobody to settle it. The sweep would start a second check in the
-    // same folder beside it. With no app attached nothing else can be waiting on such a run, so it is
-    // killed and its exit awaited (bounded); with an app attached, nothing is killed.
-    if (!d.server.hasApp()) {
-      await d.checks.stopForeignValidations()
-      if (!mayStart()) {
-        log('handover: the drive moved while the gone app’s checks were stopped — no sweep from this Host')
-        return
-      }
-    }
-    try {
-      d.checks.resumeSweep(why)
-    } catch (err) {
-      log(`the resume sweep failed to start: ${String(err)}`)
-    }
-    // **N1's belt, only with no app attached.** A repair Dispatch opened by an app that then left
-    // before starting it is stranded: nobody else starts it. With an app attached it may be that app's
-    // own start in progress (a person's retry-once, R20), and `performRepair` has no in-flight guard, so
-    // starting it here as well would put two workers on one Dispatch.
-    if (d.server.hasApp()) return
-    for (const disp of d.orch.state().dispatches) {
-      if (!disp.repair || disp.endedAt || disp.specPath) continue
-      try {
-        log(`handover: starting the repair dispatch=${disp.id}, which was opened but never started`)
-        d.startRepair({ dispatchId: disp.id })
-      } catch (err) {
-        log(`handover: the repair dispatch=${disp.id} could not be started: ${String(err)}`)
-      }
-    }
+    await afterDriveChange(why, 'handover')
   }
 
   /** Sets `last` **synchronously**, then hands over when this is the Host taking the drive with the
@@ -317,15 +329,11 @@ export function createHostDriving(d: {
       apply(driverFromLastRead(), null, 'the Host drives now')
       // **A yielding app that leaves while this Host drives** (Task 14 review I3): the driver stays
       // 'host', so no handover runs. But that app may have been running a validation or review itself
-      // (recovery still starts them in the app, D8), and its run's exit is not this Host's validator's:
-      // the Task would stay validating or reviewing until the next Host load. One resume sweep picks
-      // it up, after any handover in progress and only while this Host may still start work.
-      //
-      // **The app's own check first** (round 2): its validation run lives on in this Host's registry
-      // with nobody to settle it, and the sweep would start a second check in the same folder beside
-      // it. With no app attached nothing else can be waiting on such a run, so it is killed and its
-      // exit awaited (bounded) before the sweep; its exit records nothing. With an app back by then,
-      // the run may be that app's to answer for, so nothing is killed.
+      // (recovery still starts them in the app, D8), and its run's exit is not this Host's validator's.
+      // So the handover's own steps run here, less the drain (`afterDriveChange`): the app's leftover
+      // checks are stopped (round 2), the resume sweep restarts a convergence Run's Tasks, the belt
+      // starts a repair the app opened and never started (final review M1). After any handover in
+      // progress, and only while this Host may still start work.
       //
       // Known limit (Task 16): the sweep covers only a convergence Run's validating and reviewing Tasks.
       // Any other Task the app left mid-check is gated at the next Host load, not here.
@@ -333,11 +341,7 @@ export function createHostDriving(d: {
         handover = handover
           .then(async () => {
             if (!mayStart()) return
-            if (!d.server.hasApp()) {
-              await d.checks.stopForeignValidations()
-              if (!mayStart()) return
-            }
-            d.checks.resumeSweep('an app left')
+            await afterDriveChange('an app left', 'an app left')
           })
           .catch((err) => log(`the resume sweep after an app left failed: ${String(err)}`))
       kick('an app attached or left')
