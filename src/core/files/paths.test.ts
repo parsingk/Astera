@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parentDir, resolveRelative, decodeUriPath } from './paths'
+import { parentDir, resolveRelative, decodeUriPath, foldsPathCase, foldPathCase, legacyFoldedKey, runtimePlatform } from './paths'
 
 describe('parentDir', () => {
   it('마지막 구분자 앞까지 돌려준다 (역슬래시/슬래시 모두)', () => {
@@ -57,5 +57,59 @@ describe('decodeUriPath', () => {
   it('망가진 이스케이프는 원본을 그대로 돌려준다 (decodeURIComponent 는 여기서 던진다)', () => {
     expect(decodeUriPath('a%zzb')).toBe('a%zzb')
     expect(decodeUriPath('lone%')).toBe('lone%')
+  })
+})
+
+describe('foldPathCase — 대소문자를 접는 것은 win32 와 darwin 뿐', () => {
+  it('win32 는 접는다 (지금까지와 같다)', () => {
+    expect(foldsPathCase('win32')).toBe(true)
+    expect(foldPathCase('D:\\Work\\Proj', 'win32')).toBe('d:\\work\\proj')
+  })
+  it('darwin 도 접는다 — 기본 APFS 는 대소문자를 가리지 않는다', () => {
+    expect(foldsPathCase('darwin')).toBe(true)
+    expect(foldPathCase('/Users/u/Proj', 'darwin')).toBe('/users/u/proj')
+  })
+  it('linux 는 그대로 둔다 — /home/u/Proj 와 /home/u/proj 는 다른 폴더다', () => {
+    expect(foldsPathCase('linux')).toBe(false)
+    expect(foldPathCase('/home/u/Proj', 'linux')).toBe('/home/u/Proj')
+    expect(foldPathCase('/home/u/Proj', 'linux')).not.toBe(foldPathCase('/home/u/proj', 'linux'))
+  })
+  it('그 밖의 플랫폼도 그대로 둔다', () => {
+    expect(foldPathCase('/home/u/Proj', 'freebsd')).toBe('/home/u/Proj')
+  })
+  it('대소문자만 건드린다 — 구분자와 끝 슬래시는 부르는 쪽의 몫이다', () => {
+    expect(foldPathCase('D:/A\\B/', 'win32')).toBe('d:/a\\b/')
+  })
+})
+
+describe('legacyFoldedKey — 예전 빌드가 디스크에 남긴 소문자 키', () => {
+  it('linux 에서는 대문자가 있으면 소문자 키를 돌려준다', () => {
+    expect(legacyFoldedKey('/home/u/Proj', 'linux')).toBe('/home/u/proj')
+  })
+  it('linux 라도 이미 소문자면 null — 같은 키를 두 번 찾지 않는다', () => {
+    expect(legacyFoldedKey('/home/u/proj', 'linux')).toBeNull()
+  })
+  it('win32 와 darwin 은 바뀐 것이 없으니 null', () => {
+    expect(legacyFoldedKey('D:\\Proj', 'win32')).toBeNull()
+    expect(legacyFoldedKey('/Users/u/Proj', 'darwin')).toBeNull()
+  })
+})
+
+describe('runtimePlatform', () => {
+  it('렌더러처럼 globalThis.api.platform 이 있으면 그것을 쓴다', () => {
+    const g = globalThis as { api?: unknown }
+    const had = 'api' in g
+    const prev = g.api
+    g.api = { platform: 'linux' }
+    try {
+      expect(runtimePlatform()).toBe('linux')
+      expect(foldPathCase('/home/u/Proj')).toBe('/home/u/Proj')
+    } finally {
+      if (had) g.api = prev
+      else delete g.api
+    }
+  })
+  it('없으면 node 의 process.platform', () => {
+    expect(runtimePlatform()).toBe(process.platform)
   })
 })

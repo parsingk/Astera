@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { foldsPathCase } from './files/paths'
 
 /** 지금 도는 플랫폼의 절대 경로를 만든다 — win32면 `D:\a\b`, 그 외에는 `/a/b`.
  *
@@ -15,3 +16,9 @@ export const absPath = (...segments: string[]): string =>
 
 /** absPath와 같은 경로를 홈 디렉터리 아래로 만든다 — 계정 판정처럼 홈 기준인 곳에서 쓴다 */
 export const homePath = (home: string, ...segments: string[]): string => path.join(home, ...segments)
+
+/** Whether the platform the suite runs on treats two paths differing only in case as one
+ *  (foldPathCase: win32 and darwin yes, linux no). A test of "a differently cased spelling is the same
+ *  folder" states the product rule for the platform it is on by expecting this value, rather than
+ *  asserting the win32 answer everywhere. */
+export const foldsCaseHere: boolean = foldsPathCase(process.platform)

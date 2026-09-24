@@ -44,3 +44,42 @@ export function decodeUriPath(p: string): string {
     return p
   }
 }
+
+/** Where this code is running, for the path-case rule below. The main process, the Host and tests
+ *  have node's `process.platform`; the renderer has no `process` and learns the platform from the
+ *  preload bridge instead (`window.api.platform`, set from the main side's process.platform), which on
+ *  `window` is also `globalThis.api`. Read at call time rather than at import so a test can stub it.
+ *  When neither is there the answer is win32, which folds case — the rule every caller had before. */
+export function runtimePlatform(): string {
+  const g = globalThis as { api?: { platform?: unknown }; process?: { platform?: unknown } }
+  if (typeof g.api?.platform === 'string') return g.api.platform
+  if (typeof g.process?.platform === 'string') return g.process.platform
+  return 'win32'
+}
+
+/** Whether two paths that differ only in letter case name the same entry on this platform. win32
+ *  (NTFS) and darwin (APFS/HFS+ as formatted by default) are case-insensitive; linux and every other
+ *  platform are case-sensitive, where `/home/u/Proj` and `/home/u/proj` are two different folders.
+ *  A darwin volume formatted case-sensitive is still folded — that is a rare setup, and folding there
+ *  errs toward "same", which is what every caller did before on every platform. */
+export function foldsPathCase(platform: string = runtimePlatform()): boolean {
+  return platform === 'win32' || platform === 'darwin'
+}
+
+/** The one case rule for comparing paths: lower-cased where the filesystem ignores case, returned
+ *  untouched where it does not. Only the case — separators, trailing slashes and resolving stay each
+ *  caller's own business, because they differ from caller to caller on purpose. */
+export function foldPathCase(p: string, platform: string = runtimePlatform()): string {
+  return foldsPathCase(platform) ? p.toLowerCase() : p
+}
+
+/** For a store that saved `foldPathCase(...)` keys to disk: the key an older build wrote for `key`,
+ *  when it differs from what this build writes. Older builds lower-cased on every platform, so on a
+ *  case-sensitive one a file written then holds `/home/u/proj` for `/home/u/Proj`; a lookup that
+ *  also tries this key still finds it. null where nothing changed (win32, darwin) or the key has no
+ *  upper case to lose. */
+export function legacyFoldedKey(key: string, platform: string = runtimePlatform()): string | null {
+  if (foldsPathCase(platform)) return null
+  const lower = key.toLowerCase()
+  return lower === key ? null : lower
+}
