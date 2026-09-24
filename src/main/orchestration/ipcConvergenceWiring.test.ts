@@ -52,4 +52,31 @@ describe('ipc.ts convergence wiring (source guard)', () => {
     const wrapper = sliceBetween(ipcSource, 'startWorker: (a) =>', 'releaseWorker: async (')
     expect(stripLineComments(wrapper)).toMatch(/startWorkerWithChain\(/)
   })
+
+  // N8: one `hostDrives()` closure in bootOrch, and every boot step that starts work asks it. The
+  // behaviour each branch leads to is tested in yieldDispatch.test.ts and answerAct.test.ts; these pin
+  // that ipc.ts reaches those seams through the one closure.
+  it('the boot drain and the boot loop run only when the Host does not drive', () => {
+    const boot = stripLineComments(sliceBetween(ipcSource, 'const bootOrch = async', 'releaseCoordinator = async'))
+    expect(boot).toMatch(/const hostDrives = \(\): boolean => hostSpeaksDispatch\(/)
+    expect(boot).toMatch(/if \(!hostDrives\(\)\)[\s\S]{0,400}applyPendingReports\(/)
+    expect(boot).toMatch(/if \(!hostDrives\(\)\)[\s\S]{0,200}loop\.run\(\)/)
+  })
+
+  it('the resume sweeps, the loop, the timer, the forwarded starts and the stop button ask the one closure', () => {
+    const boot = stripLineComments(sliceBetween(ipcSource, 'const bootOrch = async', 'releaseCoordinator = async'))
+    expect(boot.match(/const hostDrives = /g)).toHaveLength(1)
+    expect(boot).toMatch(/if \(!hostDrives\(\)\)[\s\S]{0,200}resumeSweep\.run\('this app started'\)/)
+    expect(boot).toMatch(/if \(!hostDrives\(\)\)[\s\S]{0,200}resumeSweep\?\.run\('the Host attached'\)/)
+    expect(boot).toMatch(/mayStart: \(\) => orch !== null && !hostDrives\(\)/)
+    expect(boot).toMatch(/discardRunWorktree: appDiscardRunWorktree\(reapWorktree\)/)
+    expect(boot).toMatch(/orchHostDrives = hostDrives/)
+    const rest = stripLineComments(ipcSource.slice(ipcSource.indexOf('releaseCoordinator = async')))
+    expect(rest).toMatch(/appTimerTick\(loop, \{ serving: orch !== null, hostDrives: hostDrives\(\)/)
+    expect(rest).toMatch(/answerOrchAct\(\{ deps: orch\?\.deps \?\? null, act: m\.act, args: m\.args, yieldsDispatch: orchHostDrives\(\) \}\)/)
+    const stop = stripLineComments(sliceBetween(ipcSource, "ipcMain.handle('run.stop'", "ipcMain.handle('run.dismiss'"))
+    expect(stop).toMatch(/stopRunFromPanel\(\{[\s\S]*hostDrives: orchHostDrives\(\)/)
+    expect(stop).toMatch(/cmd: 'validation-stop'/)
+    expect(stop).not.toMatch(/core\.run\.stop\(runId\)\s*$/m)
+  })
 })

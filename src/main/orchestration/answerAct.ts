@@ -24,6 +24,9 @@ export function orchActionOf(
   return typeof fn === 'function' ? (fn as (...a: unknown[]) => unknown).bind(owner) : null
 }
 
+/** The S5 starts an app that yields dispatch does not run for the Host (the m6 ruling). */
+const YIELDED_STARTS: ReadonlySet<string> = new Set(['startValidation', 'startReview', 'startRepair'])
+
 /**
  * Runs one action and shapes the reply the `orch-acted` message carries.
  *
@@ -43,7 +46,21 @@ export async function answerOrchAct(a: {
   deps: OrchServerDeps | null
   act: string
   args: unknown
+  /** This app yields dispatch to the Host that asked (it announced `dispatch`). Read at the ask. */
+  yieldsDispatch?: boolean
 }): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
+  // **The m6 ruling (S4+S5 Task 14).** A Host that announces `dispatch` forwards the three S5 starts to
+  // the app only while it does not drive: it is parked, or retiring, or an older app keeps dispatch.
+  // An app that yields dispatch does not run them then: the Task stays validating or reviewing, or its
+  // repair Dispatch stays unstarted, and the Host that drives next restarts it (its handover's resume
+  // sweep and repair belt, Task 12), the same way a retiring Host leaves it (Task 13). The cost if this
+  // is wrong is one Task waiting for the next Host start. The two reads (`repairTargetFor`,
+  // `repairOnce`) and everything else are answered as before.
+  if (a.yieldsDispatch === true && YIELDED_STARTS.has(a.act))
+    return {
+      ok: false,
+      error: `this app yields dispatch to the Host, so it does not run ${a.act}; the Task is left for the Host that drives next`
+    }
   const fn = orchActionOf(a.deps, a.act)
   if (!fn)
     return {

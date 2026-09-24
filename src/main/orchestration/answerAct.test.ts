@@ -77,6 +77,40 @@ describe('answerOrchAct', () => {
     expect((r as { error: string }).error).toContain('orchestration is not running')
   })
 
+  // The m6 ruling (S4+S5 Task 13 review → Task 14): an app that yields dispatch to a Host announcing
+  // it does not run the S5 starts that Host forwards to it. It leaves the Task for the Host that drives
+  // next, the same way a retiring Host leaves it (Task 13).
+  it.each(['startValidation', 'startReview', 'startRepair'])(
+    'an app that yields dispatch does not run a forwarded %s, and says why',
+    async (act) => {
+      const start = vi.fn()
+      const r = await answerOrchAct({ deps: depsWith({ [act]: start }), act, args: [{ taskId: 't', dispatchId: 'd' }], yieldsDispatch: true })
+      expect(start).not.toHaveBeenCalled()
+      expect(r.ok).toBe(false)
+      expect((r as { error: string }).error).toMatch(/yields dispatch/)
+    }
+  )
+
+  // Mixed versions (D5): in front of an older Host the app keeps its validator, review and repair.
+  it.each(['startValidation', 'startReview', 'startRepair'])(
+    'an app that does not yield dispatch runs a forwarded %s as before',
+    async (act) => {
+      const start = vi.fn()
+      const r = await answerOrchAct({ deps: depsWith({ [act]: start }), act, args: [{ taskId: 't' }], yieldsDispatch: false })
+      expect(start).toHaveBeenCalledWith({ taskId: 't' })
+      expect(r.ok).toBe(true)
+    }
+  )
+
+  it('yielding dispatch touches only the three starts', async () => {
+    const startWorker = vi.fn().mockResolvedValue({ sessionId: 's' })
+    const repairTargetFor = vi.fn().mockReturnValue(null)
+    expect((await answerOrchAct({ deps: depsWith({ startWorker }), act: 'startWorker', args: [{}], yieldsDispatch: true })).ok).toBe(true)
+    expect((await answerOrchAct({ deps: depsWith({ repairTargetFor }), act: 'repairTargetFor', args: ['t'], yieldsDispatch: true })).ok).toBe(true)
+    expect(startWorker).toHaveBeenCalled()
+    expect(repairTargetFor).toHaveBeenCalled()
+  })
+
   it('함수가 아닌 속성은 행동이 아니다', () => {
     expect(orchActionOf(depsWith({ handoffs: {} }), 'handoffs.save')).toBeNull()
     expect(orchActionOf(depsWith({ lang: 'ko' }), 'lang')).toBeNull()

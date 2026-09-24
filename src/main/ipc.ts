@@ -38,7 +38,7 @@ import { hostPidFilePath, parseHostPidFile } from '../core/host/pidFile'
 import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
-import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn } from './host/outdated'
+import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch } from './host/outdated'
 import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute } from './host/worktreeRoute'
 import { createHostGitOps } from './host/hostGitOps'
@@ -71,6 +71,7 @@ import {
   type DispatchLoop
 } from '../core/orchestration/exec/dispatchLoop'
 import { answerOrchAct } from './orchestration/answerAct'
+import { appDiscardRunWorktree, appTimerTick, stopRunFromPanel } from './orchestration/yieldDispatch'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { UnderstandingStore } from './understanding/store'
 import { WorkUnitStore } from './workUnit/store'
@@ -1229,6 +1230,9 @@ export function registerIpc(
    *  메모리에 들고 있다: 재시작하면 비어 있고, 그것이 "앱이 꺼져 있던 동안의 발화는 버린다" 는
    *  규칙의 구현이다(그 이유는 루프의 `armed` 에 있다). */
   let orchLoop: DispatchLoop | null = null
+  /** bootOrch's `hostDrives` (N8), for the two places outside it that must ask the same thing: the
+   *  run panel's stop button and the `orch-act` answer. Assigned, never re-derived: one predicate. */
+  let orchHostDrives: () => boolean = () => false
   let orchFireTimer: ReturnType<typeof setInterval> | null = null
   /** A bounded per-dispatch tail of worker output — what worker-read reads. The append, cap, eviction,
    *  and limit rules, along with "when does it get cleared", live in orchestration/tail.ts (its tests
@@ -2257,6 +2261,16 @@ export function registerIpc(
     app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(app.getAppPath(), 'resources', 'skills')
 
   const bootOrch = async (): Promise<void> => {
+    // **The one question every step below that starts work asks** (S4+S5 §4.2, D5, ruling N8): does
+    // the connected Host drive Jobs? A Host that announces `dispatch` does — this app's hello yields
+    // it (`HOST_YIELD_DISPATCH`) — so the app's dispatch loop, its pending-report drain, its resume
+    // sweeps, its schedule fires and its coordinator nudges all stand down, and the Host does each.
+    // In front of an older Host (S3, S2) or none, the app drives exactly as it did.
+    //
+    // **Read live at every call, never cached** (F58): the status flips in the same turn as the
+    // handshake or the drop, so there is no window where both processes start work.
+    const hostDrives = (): boolean => hostSpeaksDispatch(hostClient?.status() ?? { connected: false, features: [] })
+    orchHostDrives = hostDrives
     // Pin down two paths first — the CLI entry point the shuttle (astera) runs, and the skills
     // directory help reads.
     //
@@ -2459,7 +2473,8 @@ export function registerIpc(
           // After the hook, not before: the sweep drives the Tasks nothing else will, and the hook's
           // scheduler drives the ones the state already makes ready. Running the sweep first would
           // have it decide against a mirror the hook is about to act on.
-          resumeSweep?.run('the Host attached')
+          if (!hostDrives()) resumeSweep?.run('the Host attached')
+          else orchLog('resume sweep — the Host drives dispatch and runs its own after it attaches')
         })
         .catch((e) => orchLog(`could not refill the orchestration mirror after reconnecting: ${String(e)}`))
     }
@@ -2821,8 +2836,9 @@ export function registerIpc(
       sessionAlive: (id) => core.sessions.list().some((x) => x.id === id && x.status !== 'exited'),
       sessionBusy: (id) => busyState.get(id) ?? null,
       typeInto: (id, text) => core.sessions.write(id, text),
-      // 앱에서 "운전해도 되는가" 는 서버가 서 있는가다 — 옮기기 전의 `if (!orch) return` 과 같은 뜻이다.
-      mayStart: () => orch !== null,
+      // 앱에서 "운전해도 되는가" 는 서버가 서 있고, dispatch 를 알리는 Host 가 몰지 않는가다(§4.2, N8).
+      // 슬롯마다 다시 묻으므로, 한 바퀴 도중에 그런 Host 가 붙으면 그 자리에서 멈춘다.
+      mayStart: () => orch !== null && !hostDrives(),
       log: orchLog,
       nowMs: () => Date.now()
     })
@@ -2906,6 +2922,10 @@ export function registerIpc(
         reap: reapWorktree,
         log: orchLog
       }),
+      // run-start's cleanup of a fresh Run worktree whose coordinator failed to start (R25): the same
+      // branch the Host takes, with reapWorktree's in-use check. Its false is "not removed", never
+      // "in use", so the 400 says the folder could not be removed (C7).
+      discardRunWorktree: appDiscardRunWorktree(reapWorktree),
       /** 이 Run 이 일할 워크트리를 하나 만든다 — 인계 시점에 서버가 부른다(run-start).
        *
        *  **forkWorktree 를 그대로 쓴다.** 프로젝트가 **서 있는 브랜치**에서 갈라 주는 판단이 그
@@ -3374,46 +3394,53 @@ export function registerIpc(
           `start takes them.`
       )
     else if (pendingReports.length > 0) {
-      const drained = await applyPendingReports({
-        queued: pendingReports,
-        apply: async (r) => {
-          const reply = await orchHandleCommand(deps, { sessionId: r.sessionId }, r.cmd, r.args)
-          return {
-            ok: reply.status >= 200 && reply.status < 300,
-            detail: `${reply.status} ${JSON.stringify(reply.body)}`
-          }
-        },
-        // The other half of `heldOnlyByReport` above: a Dispatch the restart cleanup left open only
-        // because this report spoke for it, and the report has just turned out to be undeliverable.
-        // Closing it here is putting the boot where it would have been had the report never been
-        // queued — and it has to be *here*, because the recovery sweep that can then take the Task
-        // runs a few lines below and `candidates` skips a Task with any open Dispatch.
-        //
-        // **The set is the boot's, not a fresh read.** It was computed against the state the
-        // cleanup produced, so it holds the cleanup's own three reasons; asking again now would
-        // catch Dispatches that earlier reports in this very drain opened.
-        writeOff: async (r) => {
-          const dispatchId = String(r.args.dispatchId)
-          if (!heldOnlyByReport.has(dispatchId)) return
-          const res = writeOffDispatch(
-            deps.getState(),
-            { dispatchId },
-            new Date().toISOString()
-          )
-          if (!res.closed) return
-          await deps.setState(res.state)
-          orchLog(
-            `pending reports — dispatch=${dispatchId} is written off: it was left open only for a report that could not be applied, and recovery can take its Task at this start` +
-              (res.interrupted === 'validation' ? '. Its Task was validating and is now gated' : '') +
-              (res.interrupted === 'review' ? '. Its Task was reviewing and is now gated' : '') +
-              (res.stuck ? '. Its Task could not be interrupted and was left as it was' : '')
-          )
-        },
-        log: orchLog
-      })
-      orchLog(
-        `pending reports — ${drained.applied} applied, ${drained.rejected} refused, ${drained.kept} left for the next start, ${drained.gaveUp} given up on`
-      )
+      // **Not in front of a Host that drives** (§4.2): its handover drains the same queue (Task 11's
+      // drainOnce), and two drains would apply one report twice. The files are left for it.
+      if (!hostDrives()) {
+        const drained = await applyPendingReports({
+          queued: pendingReports,
+          apply: async (r) => {
+            const reply = await orchHandleCommand(deps, { sessionId: r.sessionId }, r.cmd, r.args)
+            return {
+              ok: reply.status >= 200 && reply.status < 300,
+              detail: `${reply.status} ${JSON.stringify(reply.body)}`
+            }
+          },
+          // The other half of `heldOnlyByReport` above: a Dispatch the restart cleanup left open only
+          // because this report spoke for it, and the report has just turned out to be undeliverable.
+          // Closing it here is putting the boot where it would have been had the report never been
+          // queued — and it has to be *here*, because the recovery sweep that can then take the Task
+          // runs a few lines below and `candidates` skips a Task with any open Dispatch.
+          //
+          // **The set is the boot's, not a fresh read.** It was computed against the state the
+          // cleanup produced, so it holds the cleanup's own three reasons; asking again now would
+          // catch Dispatches that earlier reports in this very drain opened.
+          writeOff: async (r) => {
+            const dispatchId = String(r.args.dispatchId)
+            if (!heldOnlyByReport.has(dispatchId)) return
+            const res = writeOffDispatch(
+              deps.getState(),
+              { dispatchId },
+              new Date().toISOString()
+            )
+            if (!res.closed) return
+            await deps.setState(res.state)
+            orchLog(
+              `pending reports — dispatch=${dispatchId} is written off: it was left open only for a report that could not be applied, and recovery can take its Task at this start` +
+                (res.interrupted === 'validation' ? '. Its Task was validating and is now gated' : '') +
+                (res.interrupted === 'review' ? '. Its Task was reviewing and is now gated' : '') +
+                (res.stuck ? '. Its Task could not be interrupted and was left as it was' : '')
+            )
+          },
+          log: orchLog
+        })
+        orchLog(
+          `pending reports — ${drained.applied} applied, ${drained.rejected} refused, ${drained.kept} left for the next start, ${drained.gaveUp} given up on`
+        )
+      } else
+        orchLog(
+          `pending reports — ${pendingReports.length} left for the Host: it drives dispatch and drains them itself`
+        )
     }
     // One push for the state that was just loaded off disk. Startup races the renderer's first
     // orch.list (both happen at app start) and the settings toggle boots this long after it, and in
@@ -3423,7 +3450,9 @@ export function registerIpc(
     // 재시작 뒤 ready 인 Task 가 남아 있을 수 있다. 아무도 돌지 않으면 사용자가 앱을 켠 채로
     // 아무 일도 일어나지 않고, 그 이유는 화면 어디에도 없다.
     // **orch 대입 뒤에 있어야 한다** — 앞에 두면 orch 가 아직 null 이라 아무 일도 하지 않는다.
-    void loop.run().catch((e) => orchLog(`scheduler failed at startup: ${String(e)}`))
+    // 앞에 dispatch 를 알리는 Host 가 있으면 돌리지 않는다 — 그 Host 가 제 load 와 넘겨받기에서 돈다.
+    if (!hostDrives()) void loop.run().catch((e) => orchLog(`scheduler failed at startup: ${String(e)}`))
+    else orchLog('scheduler — the Host drives dispatch, so this app does not run its loop at startup')
     // Job Continuity P1: decide what to do about every worker the restart lost. It reads the state,
     // the journal and the worktrees, and acts; a failure inside is logged per attempt and never
     // stops the boot.
@@ -3447,7 +3476,8 @@ export function registerIpc(
     //
     // 판정식은 load 와 같은 함수 하나다(core/orchestration/store.ts 의 interruptedResumes) — Run
     // 게이트(일시 중지·예약 템플릿·pendingStart)와 열린 Dispatch 를 그쪽이 거른다.
-    resumeSweep.run('this app started')
+    if (!hostDrives()) resumeSweep.run('this app started')
+    else orchLog('resume sweep — the Host drives dispatch and runs its own at its load and handover')
     // 예약 템플릿의 발화. **첫 바퀴는 무장만 한다**(firesDue) — 앱을 켤 때마다 한 회차가 도는
     // 것을 막는 장치가 그것이고, 그래서 여기서 즉시 한 번 부르지 않는다.
     /** 코디네이터 세션이 사라졌을 때 그 Run 의 관리자 칸을 비운다. **다시 띄우지는 않는다.**
@@ -3489,10 +3519,9 @@ export function registerIpc(
 
     orchFireTimer = setInterval(() => {
       // 서버가 서 있지 않으면 발화하지 않고 **무장을 버린다** — 그 이유는 forgetArming 에 있다
-      // (core/orchestration/exec/dispatchLoop.ts).
-      if (!orch) loop.forgetArming()
-      else void loop.fireTick().catch((e) => orchLog(`fire tick failed: ${String(e)}`))
-      void loop.nudge().catch((e) => orchLog(`nudge failed: ${String(e)}`))
+      // (core/orchestration/exec/dispatchLoop.ts). 앞에 모는 Host 가 있으면 발화도 깨우기도 그 Host 가
+      // 하고, 앱은 **무장만 한다** — 사이드바의 다음 발화 시각이 그 무장에서 온다(N3, appTimerTick).
+      appTimerTick(loop, { serving: orch !== null, hostDrives: hostDrives(), log: orchLog })
     }, ORCH_FIRE_TICK_MS)
     // Installing the discovery stub(s) — without one there is no path by which an agent finds the
     // matching feature. **Done for every claude and codex account**: the path is the same
@@ -4630,9 +4659,18 @@ export function registerIpc(
   ipcMain.handle('run.stop', async (_e, runId: string) => {
     // A user stopping a validation run is "could not prove it", not "the work is wrong" — leave the mark
     // so the exit that follows goes to the Gate rather than being settled as a failure
-    // (TaskValidator.markStopped).
-    if (core.run.get(runId)?.validation) orchValidator?.markStopped(runId)
-    return core.run.stop(runId)
+    // (TaskValidator.markStopped). While a Host that drives runs the validation, the mark is its
+    // validator's: the stop goes to it as `validation-stop`, which marks and kills, and the app does
+    // not kill the run as well (the rules, and the degraded path, are stopRunFromPanel's).
+    await stopRunFromPanel({
+      runId,
+      isValidation: core.run.get(runId)?.validation === true,
+      hostDrives: orchHostDrives(),
+      askHost: (id) => orchCall({ cmd: 'validation-stop', args: { runId: id }, sessionId: '' }),
+      markStopped: (id) => orchValidator?.markStopped(id),
+      stop: (id) => core.run.stop(id),
+      log: orchLog
+    })
   })
   // The run list's ✕. Like run.stop this acts on a run that already exists, so there is no path guard —
   // an unknown id does nothing.
@@ -5509,7 +5547,9 @@ export function registerIpc(
       // table it is answered from is `orch.deps`, the one this process builds for the command layer;
       // `answerOrchAct` has the reasoning, and never throws, because a rejection here would leave the
       // Host waiting for a reply that is never coming.
-      void answerOrchAct({ deps: orch?.deps ?? null, act: m.act, args: m.args }).then((r) =>
+      // `yieldsDispatch`: the three S5 starts are not run for a Host that drives dispatch (m6 ruling,
+      // answerOrchAct's comment), read at the ask like every other `hostDrives()` answer.
+      void answerOrchAct({ deps: orch?.deps ?? null, act: m.act, args: m.args, yieldsDispatch: orchHostDrives() }).then((r) =>
         client.send(
           r.ok
             ? { t: 'orch-acted', call: m.call, ok: true, value: r.value }

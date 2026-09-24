@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees } from './outdated'
+import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch } from './outdated'
 
 describe('hostIsOutdated', () => {
   it('is true when the Host is strictly older than the app', () => {
@@ -70,5 +70,13 @@ describe('hostSpeaksWorktrees', () => {
     expect(hostSpeaksWorktrees({ connected: true, features: ['spawn', 'worktrees'] })).toBe(true)
     expect(hostSpeaksWorktrees({ connected: true, features: ['spawn'] })).toBe(false)
     expect(hostSpeaksWorktrees({ connected: false, features: ['spawn', 'worktrees'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksDispatch', () => {
+  it('hostSpeaksDispatch needs a connected Host that announced dispatch', () => {
+    expect(hostSpeaksDispatch({ connected: true, features: ['spawn', 'worktrees', 'dispatch'] })).toBe(true)
+    expect(hostSpeaksDispatch({ connected: true, features: ['spawn', 'worktrees'] })).toBe(false) // an S3 Host (D5)
+    expect(hostSpeaksDispatch({ connected: false, features: ['dispatch'] })).toBe(false)
   })
 })

@@ -5,7 +5,13 @@
 // host.js until something ends it. This is the fact that tells the app there is a newer one to run,
 // so it can replace the old Host the first moment doing so costs nothing (§4).
 import { compareVersions } from '../updatePolicy'
-import { HOST_FEATURE_PROC, HOST_FEATURE_PING, HOST_FEATURE_SPAWN, HOST_FEATURE_WORKTREES } from '../../core/host/protocol'
+import {
+  HOST_FEATURE_PROC,
+  HOST_FEATURE_PING,
+  HOST_FEATURE_SPAWN,
+  HOST_FEATURE_WORKTREES,
+  HOST_FEATURE_DISPATCH
+} from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
  *  cannot be parsed is **not** outdated: replacing a Host on a guess about what it is would be worse
@@ -47,4 +53,13 @@ export function hostSpeaksSpawn(status: { connected: boolean; features: readonly
  *  file itself, as it always has. */
 export function hostSpeaksWorktrees(status: { connected: boolean; features: readonly string[] }): boolean {
   return status.connected && status.features.includes(HOST_FEATURE_WORKTREES)
+}
+
+/** Whether the connected Host drives Jobs itself (S4+S5 §4.2, D5): the dispatch loop, the pending
+ *  reports, the resume sweep, the schedule fires, the coordinator nudges, and the validation, review and
+ *  repair that follow a report. The app yields all of that to such a Host (its hello says
+ *  `HOST_YIELD_DISPATCH`) and keeps doing it in front of one that did not announce it (an S3 or S2
+ *  Host, or none). Read live from the status, so it changes in the same turn the handshake does. */
+export function hostSpeaksDispatch(status: { connected: boolean; features: readonly string[] }): boolean {
+  return status.connected && status.features.includes(HOST_FEATURE_DISPATCH)
 }
