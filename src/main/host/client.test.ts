@@ -296,9 +296,20 @@ describe('HostClient', () => {
       expect(c.status().problem).toContain('stopped answering')
       expect(h.got.filter((m) => m.t === 'ping').length).toBeGreaterThanOrEqual(3)
       // A late answer is the one thing that takes the state back — which is why the pings do not stop.
+      //
+      // **Caught as the status change, not polled.** This peer never answers the pings after it, so the
+      // heartbeat calls it unresponsive again `pingMisses` intervals later: the recovered state lasts
+      // about 60ms here. `settled` samples every 50ms, and on a loaded runner (ubuntu CI, or WSL under
+      // load: 19 of 20 runs) it lands on both sides of that window and never sees it.
+      const back = new Promise<ReturnType<HostClient['status']>>((resolve) => {
+        const off = c.onStatusChange((s) => {
+          if (!s.connected || s.unresponsive) return
+          off()
+          resolve(s)
+        })
+      })
       h.sockets[0].write(encodeLine({ t: 'pong', seq: 1 }))
-      await settled(c, (s) => s.connected)
-      expect(c.status()).toMatchObject({ connected: true, unresponsive: false, problem: null })
+      expect(await back).toMatchObject({ connected: true, unresponsive: false, problem: null })
       expect(seen).toContain(true)
       expect(seen).toContain(false)
       await c.stop()
