@@ -23,6 +23,7 @@ import {
 } from './collector'
 import { OPERATION_GRACE_MS } from '../../core/git/provenance'
 import type { GitRef } from '../../core/git/types'
+import type { HostMergeRecord } from '../../core/git/hostMerges'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
 import { foldsCaseHere } from '../../core/testPaths'
 
@@ -985,6 +986,35 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     const ops = collector.getPendingGitOps()
     expect(ops.some((o) => o.id === first)).toBe(true)
     expect(ops.some((o) => o.id === second)).toBe(true)
+  })
+
+  it('a HEAD move the Host recorded as its own merge, made while the app was closed, is not an outside change (carry 1)', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const records: HostMergeRecord[] = []
+    const { collector, store } = await makeCollector(fake, storeFile, undefined, { hostMerges: async () => records })
+    await collector.start()
+    collector.onGitChanged() // baseline at c0
+    await collector.flush()
+    records.push({ id: 'm1', projectPath, headBefore: 'c0', headAfter: 'c1', startedAt: new Date(fake.clock - 60_000).toISOString(), endedAt: new Date(fake.clock - 59_000).toISOString() })
+    fake.clock += OPERATION_GRACE_MS * 10 // long after any grace
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
+  })
+  it('a move the records do not explain is still recorded (the control)', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake, storeFile, undefined, { hostMerges: async () => [] })
+    await collector.start()
+    collector.onGitChanged()
+    await collector.flush()
+    fake.clock += OPERATION_GRACE_MS * 10
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(1)
   })
 })
 

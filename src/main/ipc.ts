@@ -197,6 +197,7 @@ import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { imageMime } from '../core/files/imageMime'
 import { parsePorcelainZ, type GitState } from '../core/git/status'
+import { readHostMerges, hostMergesPathIn } from '../core/git/hostMerges'
 import { FileWatcher } from './fileWatcher'
 import { GitWatcher } from './gitWatcher'
 import { createWorktree } from '../core/worktrees/create'
@@ -5271,6 +5272,7 @@ export function registerIpc(
     git: { readRef: readGitRef, isAncestor: isAncestorOf, changedFiles: readChangedFiles, readRange },
     now: () => Date.now(),
     pendingGitOps: () => workUnitCollector.getPendingGitOps(),
+    hostMerges: () => readHostMerges(hostMergesPathIn(app.getPath('userData'))),
     // **수집기가 자기 `.git` 감시자를 갖는다.** 아래(git.watch)의 감시자는 탐색기의 것이고,
     // 탐색기 패널이 떠 있을 때만 산다 — 렌더러의 useGitStatus 가 언마운트에서 git.unwatch 를
     // 부르므로, 사이드바를 Jobs 로 바꾸면 수집기는 git 이벤트를 하나도 받지 못했다. 트랜스크립트

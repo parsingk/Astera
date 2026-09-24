@@ -66,3 +66,42 @@ export async function readHostMerges(file: string): Promise<HostMergeRecord[]> {
     return []
   }
 }
+
+/** Does the Host's own record of its merges explain this HEAD move — so the Work Unit collector
+ *  does not write it down again as an outside change (Task 4, carry 1)?
+ *
+ *  **Two shapes of "yes".** An open record (no `endedAt`) younger than `MERGE_OPEN_MAX_MS` explains
+ *  *any* move of its folder, without looking at the heads at all — the app attached mid-merge and so
+ *  never saw `git-op begin` for it, and per the Task 3 review (m3) the Host broadcasts `git-op end`
+ *  *before* it finishes writing `headAfter`, so a record whose `end` was just announced can still be
+ *  open here. A round with no such record instead walks a chain of *completed* records for the
+ *  folder from `fromHead`, newest first (a Host that merged twice writes two records, and the second
+ *  one's `headBefore` is the first one's `headAfter`), stepping until it reaches `toHead` or runs out
+ *  — a `Set` of consumed ids stops a cycle from looping forever. */
+export function explainedByHostMerges(a: {
+  projectPath: string
+  fromHead: string | null
+  toHead: string | null
+  records: readonly HostMergeRecord[]
+  nowMs: number
+  samePath(a: string, b: string): boolean
+}): boolean {
+  if (a.fromHead === null || a.toHead === null) return false
+  const mine = a.records.filter((r) => a.samePath(r.projectPath, a.projectPath))
+  const openExplains = mine.some(
+    (r) => r.endedAt === undefined && a.nowMs - Date.parse(r.startedAt) <= MERGE_OPEN_MAX_MS
+  )
+  if (openExplains) return true
+
+  const completed = mine.filter((r) => r.endedAt !== undefined)
+  const used = new Set<string>()
+  let at: string | null = a.fromHead
+  for (;;) {
+    const next = completed.find((r) => !used.has(r.id) && r.headBefore === at)
+    if (!next) return false
+    used.add(next.id)
+    at = next.headAfter ?? null
+    if (at === a.toHead) return true
+    if (at === null) return false
+  }
+}

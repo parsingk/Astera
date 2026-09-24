@@ -34,6 +34,7 @@ import { randomUUID } from 'node:crypto'
 import type { ExternalGitChange, GitRef, PendingGitOperation } from '../../core/git/types'
 import { classifyTransition } from '../../core/git/transition'
 import { isAsteraOperation, OPERATION_GRACE_MS } from '../../core/git/provenance'
+import { explainedByHostMerges, type HostMergeRecord } from '../../core/git/hostMerges'
 import { isSamePath } from '../../core/files/tree'
 import type { SessionCheck, SessionWorkUnit } from '../../core/workUnit/types'
 import type { OpenSessionTask } from '../../core/types'
@@ -105,6 +106,13 @@ export interface CollectorDeps {
    *  유예 경계(이 파일의 collector.test.ts)와 판정 자체(provenance.test.ts)를 각각 따로 확인할 수
    *  있게 하기 위해서다. 넘기지 않으면(`undefined`) 빈 목록으로 본다. */
   pendingGitOps?: () => readonly PendingGitOperation[]
+  /** The Host's own record of the merges it made (Task 3, `src/core/git/hostMerges.ts`). Read only
+   *  when a HEAD move needs explaining and `isAsteraOperation` already said no — that covers a merge
+   *  the Host made while this app was closed (no registration was ever opened for it here) and one it
+   *  made while the app attached mid-merge (`git-op begin` was missed). Not passed means no records,
+   *  and then a Host merge this app did not see is recorded as an outside change, same as before this
+   *  task. */
+  hostMerges?: () => Promise<readonly HostMergeRecord[]>
   /** 프로젝트 하나의 `.git` 을 보기 시작한다. 돌려주는 함수가 그 감시를 닫고, **`null` 은 볼 것이
    *  없었다는 답이다**(아직 저장소가 아닌 프로젝트) — 그때 수집기는 자리를 잡지 않고 다음 회차에
    *  다시 묻는다.
@@ -1383,6 +1391,20 @@ export class WorkUnitCollector {
     // 구간(`commit`, onSessionBusy). 둘 다 "이 이동은 이 앱 안에서 벌어진 일이다"라는 같은 뜻이고,
     // 판정은 그 구분을 하지 않는다.
     if (!isAsteraOperation(projectPath, this.deps.now(), this.ops(), OPERATION_GRACE_MS, isSamePath)) {
+      // **세 번째 설명, 이 앱이 전혀 열지 않은 등록.** Host 가 앱이 닫혀 있는 동안 병합했거나, 병합
+      // 도중에 앱이 붙어 `git-op begin` 을 놓쳤다면 위 등록 목록에는 아무 것도 없다 — Host 는 자기
+      // 병합을 host/merges.json 에 따로 적어 두고(Task 3), 여기서는 그 기록이 이 이동을 설명하는지만
+      // 묻는다(explainedByHostMerges, hostMerges.ts). **isAsteraOperation 이 아니라고 한 뒤에만 읽는다**
+      // — 등록만으로 이미 설명되는 회차(대부분)는 파일을 열지 않는다.
+      const recorded = explainedByHostMerges({
+        projectPath,
+        fromHead: before.head,
+        toHead: after.head,
+        records: (await this.deps.hostMerges?.()) ?? [],
+        nowMs: this.deps.now(),
+        samePath: isSamePath
+      })
+      if (recorded) return true
       // **돌려받은 둘은 믿을 수 있는 정도가 다르고, 그래서 버리는 것도 한쪽뿐이다.**
       // `git log before..after` 는 fast-forward 가 아니면 뜻이 없다 — 그 밖의 전이에서 이 범위를
       // 신뢰할 수 없다(types.ts 의 ExternalGitChange.commits 주석). 그러나 `changedFiles` 를 내는
