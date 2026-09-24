@@ -158,7 +158,7 @@ describe('renamePlan — files.rename 이 대상을 어떻게 다루는가', () 
   })
 
   it('win32: 같은 파일의 대소문자만 바꾸기는 임시 이름을 거친다', () => {
-    expect(renamePlan('D:\p\a.txt', 'D:\p\A.txt', 'win32')).toBe('viaTemp')
+    expect(renamePlan('D:\\p\\a.txt', 'D:\\p\\A.txt', 'win32')).toBe('viaTemp')
   })
 
   it('darwin 도 임시 이름을 거친다', () => {
