@@ -47,7 +47,12 @@ export class SessionCwdCache {
 
   constructor(
     private filePath: string,
-    private platform: string = process.platform
+    private platform: string = process.platform,
+    /** **Read-only: the file is read at load and never written** — neither by flush nor by the
+     *  `.bak` a corrupt file gets. For the Host (host/projectRoots.ts), which lists the same projects
+     *  with Astera closed: the file is the app's, and a second writer could interleave with the app's
+     *  own flush. A miss is still parsed and remembered in memory, for the life of this object. */
+    private opts: { readOnly?: boolean } = {}
   ) {}
 
   private keyOf(p: string): string {
@@ -68,7 +73,7 @@ export class SessionCwdCache {
       return { recovered: false }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false }
-      await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
+      if (!this.opts.readOnly) await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.map.clear()
       return { recovered: true }
     }
@@ -92,7 +97,7 @@ export class SessionCwdCache {
   /** Writes once per pass, and only when something was actually added. A write failure is swallowed —
    *  the next start just pays the parse again. */
   async flush(): Promise<void> {
-    if (!this.dirty) return
+    if (!this.dirty || this.opts.readOnly) return
     this.dirty = false
     if (this.map.size > MAX_ENTRIES) {
       const kept = [...this.map.entries()].sort((a, b) => b[1][0] - a[1][0]).slice(0, MAX_ENTRIES)

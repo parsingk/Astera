@@ -168,4 +168,28 @@ describe('SessionCwdCache', () => {
     expect(reloaded.get(sessionPath('a', 'f10049.jsonl'), 10_049, 1)).toBe('D:\\proj\\p10049')
     expect(reloaded.get(sessionPath('a', 'f0.jsonl'), 0, 1)).toBeUndefined()
   })
+
+  // Host 가 쓰는 모드다. 파일은 앱의 것이라 두 번째 프로세스가 쓰면 앱의 flush 와 엇갈린다.
+  it('읽기 전용이면 읽어서 쓰되 파일은 건드리지 않는다', async () => {
+    const known = sessionPath('a', 'known.jsonl')
+    const text = JSON.stringify({ [keyOf(known)]: [100, 20, CWD_A] })
+    await fs.writeFile(filePath(), text, 'utf8')
+    const c = new SessionCwdCache(filePath(), process.platform, { readOnly: true })
+    await c.load()
+    expect(c.get(known, 100, 20)).toBe(CWD_A)
+    c.set(sessionPath('a', 'fresh.jsonl'), 1, 2, CWD_B)
+    await c.flush()
+    expect(c.get(sessionPath('a', 'fresh.jsonl'), 1, 2)).toBe(CWD_B) // 메모리에는 남는다
+    expect(await fs.readFile(filePath(), 'utf8')).toBe(text)
+  })
+
+  it('읽기 전용이면 깨진 파일에 .bak 도 만들지 않는다', async () => {
+    await fs.writeFile(filePath(), '{ this is not json', 'utf8')
+    const c = new SessionCwdCache(filePath(), process.platform, { readOnly: true })
+    expect(await c.load()).toEqual({ recovered: true })
+    c.set(sessionPath('a', 'x.jsonl'), 1, 2, CWD_A)
+    await c.flush()
+    expect(await fs.readdir(tmp)).toEqual(['session-cwd.json'])
+    expect(await fs.readFile(filePath(), 'utf8')).toBe('{ this is not json')
+  })
 })

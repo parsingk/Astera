@@ -1,13 +1,21 @@
-import { promises as fs, watch as fsWatch } from 'node:fs'
+import { watch as fsWatch } from 'node:fs'
 import path from 'node:path'
 import { comparablePath } from '../files/tree'
 import chokidar from 'chokidar'
 import type { Account, HistoryEntry, ProjectSummary, Provider, TranscriptPreview } from '../types'
-import { parseTranscriptMeta } from './parser'
 import { metaOf } from '../providers/meta'
 import { descriptorOf, makeDescriptors, type ProviderDescriptor } from '../providers/descriptor'
 import type { HistoryIo, HistoryStrategy } from './strategies/types'
 import type { SessionCwdCache } from './sessionCwdCache'
+import {
+  cwdMemo,
+  jsonlFilesByMtimeDesc,
+  mapWithConcurrency,
+  projectSummariesOf,
+  resolveProjectCwd,
+  signatureOf,
+  subdirs
+} from './projects'
 
 // Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
@@ -57,25 +65,6 @@ function dedupeBySessionId(entries: HistoryEntry[]): HistoryEntry[] {
 const byUpdatedDesc = (x: { updatedAt: string }, y: { updatedAt: string }): number =>
   x.updatedAt < y.updatedAt ? 1 : x.updatedAt > y.updatedAt ? -1 : 0
 
-/** Parallel map with a concurrency ceiling (input order preserved). Overlaps I/O-bound parsing to
- *  make the first expand fast. */
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results = new Array<R>(items.length)
-  let next = 0
-  const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const idx = next++
-      results[idx] = await fn(items[idx])
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()))
-  return results
-}
-
 /**
  * History index (lazy).
  *
@@ -122,10 +111,11 @@ export class HistoryIndex {
   // The narrow interface handed to a strategy — ownership of the cache and file traversal stays here
   private readonly io: HistoryIo = {
     parseDir: (account, dir) => this.parseDir(account, dir),
-    jsonlByMtimeDesc: (dir) => this.jsonlFilesByMtimeDesc(dir),
-    subdirs: (dir) => this.subdirs(dir),
-    resolveProjectCwd: (dir, files) => this.resolveProjectCwd(dir, files),
-    cwdMemo: (files, parse) => this.cwdMemo(files, parse),
+    jsonlByMtimeDesc: (dir) => jsonlFilesByMtimeDesc(dir),
+    subdirs: (dir) => subdirs(dir),
+    resolveProjectCwd: (dir, files) => resolveProjectCwd(dir, files),
+    // The persisted memo, when there is one (see projects.ts's cwdMemo and sessionCwdCache.ts)
+    cwdMemo: (files, parse) => cwdMemo(files, parse, this.cwdCache),
     samePath: (a, b) => comparablePath(a) === comparablePath(b),
     pathKey: (p) => comparablePath(p),
     cacheDirForProject: (accountId, projectPath, dir) => {
@@ -193,16 +183,6 @@ export class HistoryIndex {
     return this.strategyFor(account).scanRoot(account)
   }
 
-  private async subdirs(dir: string): Promise<string[]> {
-    try {
-      return (await fs.readdir(dir, { withFileTypes: true }))
-        .filter((e) => e.isDirectory())
-        .map((e) => path.join(dir, e.name))
-    } catch {
-      return [] // absent = no history (normal)
-    }
-  }
-
   /** Per-project summary list — built cheaply from directory enumeration + mtime + the newest file's
    *  meta (cwd) alone (sessions are not parsed). */
   async projectsPage(req?: {
@@ -250,7 +230,7 @@ export class HistoryIndex {
         projects.push(...cached)
         continue
       }
-      const rows = await this.strategyFor(account).projectSummaries(account, this.io)
+      const rows = await projectSummariesOf(account, this.descriptors, this.io)
       if (gen === this.generation) this.projectsByAccount.set(account.id, rows)
       projects.push(...rows)
     }
@@ -348,7 +328,7 @@ export class HistoryIndex {
     if (!metaOf(account).usesStatusLine) return null
     let best: { path: string; mtimeMs: number } | null = null
     for (const dir of await this.dirsForProject(account, cwd)) {
-      for (const f of await this.jsonlFilesByMtimeDesc(dir)) {
+      for (const f of await jsonlFilesByMtimeDesc(dir)) {
         if (!best || f.mtimeMs > best.mtimeMs) best = { path: path.join(dir, f.name), mtimeMs: f.mtimeMs }
       }
     }
@@ -357,72 +337,8 @@ export class HistoryIndex {
 
   // ---- internal helpers ------------------------------------------------
 
-  /** The directory's .jsonl files in descending mtime order. Files whose stat fails are excluded.
-   *  size rides along because the stat is already being paid for and cwdMemo keys on it. */
-  private async jsonlFilesByMtimeDesc(
-    dir: string
-  ): Promise<{ name: string; mtimeMs: number; size: number }[]> {
-    let names: string[]
-    try {
-      names = (await fs.readdir(dir)).filter((f) => f.endsWith('.jsonl'))
-    } catch {
-      return []
-    }
-    const stats = await Promise.all(
-      names.map(async (name) => {
-        try {
-          const st = await fs.stat(path.join(dir, name))
-          return { name, mtimeMs: st.mtimeMs, size: st.size }
-        } catch {
-          return null
-        }
-      })
-    )
-    return stats
-      .filter((s): s is { name: string; mtimeMs: number; size: number } => s !== null)
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
-  }
-
-  /** Resolves the cwd of many session files at once. A hit in the persisted memo skips the parse
-   *  entirely, which is what takes the codex project list off the startup path from the second run
-   *  on — see sessionCwdCache.ts for why only codex needs it. Runs at the same concurrency as
-   *  parseDir; the codex summary loop used to be sequential. */
-  private async cwdMemo(
-    files: { path: string; mtimeMs: number; size: number }[],
-    parse: (filePath: string) => Promise<string | null>
-  ): Promise<(string | null)[]> {
-    const out = await mapWithConcurrency(files, 24, async (f) => {
-      const hit = this.cwdCache?.get(f.path, f.mtimeMs, f.size)
-      if (hit !== undefined) return hit
-      let cwd: string | null = null
-      try {
-        cwd = await parse(f.path)
-      } catch {
-        cwd = null // unreadable or broken = no project, the same rule buildEntry applies
-      }
-      this.cwdCache?.set(f.path, f.mtimeMs, f.size, cwd)
-      return cwd
-    })
-    await this.cwdCache?.flush()
-    return out
-  }
-
-  /** Reads the meta of up to 8 files, newest first, to find the real cwd. On a helper/sidechain or a
-   *  missing cwd, moves to the next file. */
-  private async resolveProjectCwd(dir: string, filesNewestFirst: string[]): Promise<string | null> {
-    const cap = Math.min(filesNewestFirst.length, 8)
-    for (let i = 0; i < cap; i++) {
-      let meta
-      try {
-        meta = await parseTranscriptMeta(path.join(dir, filesNewestFirst[i]))
-      } catch {
-        continue
-      }
-      if (meta.isSidechain || meta.isHelper) continue
-      if (meta.cwd) return meta.cwd
-    }
-    return null
-  }
+  // The file traversal (the directory listing, the cwd resolution and the cwd memo) lives in
+  // projects.ts, which has no watcher, so the Host can list the same projects with Astera closed.
 
   /** The slug directories corresponding to projectPath. The dirByProject cache first; on a miss,
    *  found by enumeration + cwd resolution. With projectPath unspecified, every project directory of
@@ -437,8 +353,8 @@ export class HistoryIndex {
 
   /** Parses every session in one slug directory (before grouping). Cached by the file mtime signature. */
   private async parseDir(account: Account, dir: string): Promise<HistoryEntry[]> {
-    const files = await this.jsonlFilesByMtimeDesc(dir)
-    const sig = files.map((f) => `${f.name}:${f.mtimeMs}`).join('|')
+    const files = await jsonlFilesByMtimeDesc(dir)
+    const sig = signatureOf(files)
     const cacheKey = account.id + '\0' + comparablePath(dir)
     const cached = this.dirCache.get(cacheKey)
     if (cached && cached.sig === sig) return cached.entries
