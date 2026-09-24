@@ -987,7 +987,7 @@ review finds a blocking issue, Astera sends the failure back to the **same worke
 section of its spec file and reruns the Task's checks; a `worker-start --retry-of` from you never
 happens for this Task. You see this as a `status` message whose body says
 `repair <k> of <maxFixAttempts>`. That is Astera working, not a report going missing.
-**Do not start a worker for a converging Task, and do not try to retry it yourself** — there is
+**Do not start a worker for a converging Task, and do not try to retry it yourself.** There is
 nothing for you to retry; wait for the next message.
 
 **Turning it on.**
