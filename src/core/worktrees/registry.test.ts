@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { WorktreeRegistry, defaultWorktreeRoot } from './registry'
 import { tempDir } from './testRepo'
+import { RepairNeeded } from '../settings/repairNeeded'
 import type { WorktreeInfo } from '../types'
 
 let tmp: string
@@ -351,3 +352,81 @@ describe('a damaged worktrees.json heals at load, a busy rename is retried, and 
 it('defaultWorktreeRoot is the folder the app has always used', () => {
   expect(defaultWorktreeRoot('C:/Users/x')).toBe(path.join('C:/Users/x', 'astera-worktrees'))
 })
+describe('a re-read per operation, and a .bak two healers share (Host S3 Task 6)', () => {
+  // The Host re-reads before every worktree operation (R2), and must not heal by wiping there (N1).
+  it('refresh takes what another process wrote, and hears no change of its own', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, 'D:/root'); await r.load()
+    const heard: string[][] = []
+    r.onChange((f) => heard.push(f.items.map((w) => w.id)))
+    await fs.writeFile(file, JSON.stringify({ root: 'D:/elsewhere', items: [wt('by-app')] }), 'utf8')
+    await r.refresh()
+    expect(r.list().map((w) => w.id)).toEqual(['by-app'])
+    expect(r.getRoot()).toBe('D:/elsewhere')
+    expect(heard).toEqual([])
+  })
+  it('refresh refuses a damaged file as a RepairNeeded naming it, and leaves file and memory alone', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, 'D:/root'); await r.load()
+    await r.add(wt('kept'))
+    await fs.writeFile(file, '{bad', 'utf8')
+    const err = await r.refresh().then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(RepairNeeded)
+    expect((err as RepairNeeded).file).toBe('worktrees.json')
+    expect(r.list().map((w) => w.id)).toEqual(['kept'])
+    expect(await fs.readFile(file, 'utf8')).toBe('{bad')
+    await expect(fs.stat(file + '.bak')).rejects.toThrow()
+  })
+  it('a local write over a damaged file is refused the same way', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, 'D:/root'); await r.load()
+    await fs.writeFile(file, '{bad', 'utf8')
+    await expect(r.add(wt('x'))).rejects.toBeInstanceOf(RepairNeeded)
+  })
+  // N4: a second process healing the same damage must not put the healed file (or anything else)
+  // over the .bak the first one kept.
+  it('load keeps a .bak that is newer than the damaged file', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    await fs.writeFile(file, '{second-damage', 'utf8')
+    await fs.writeFile(file + '.bak', '{the-original', 'utf8')
+    const t = Date.now() / 1000
+    await fs.utimes(file, t - 60, t - 60)
+    await fs.utimes(file + '.bak', t - 30, t - 30)
+    expect((await new WorktreeRegistry(file, 'D:/root').load()).recovered).toBe(true)
+    expect(await fs.readFile(file + '.bak', 'utf8')).toBe('{the-original')
+    expect(await onDiskIds(file)).toEqual([])
+  })
+  it('load replaces a .bak older than the damaged file', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    await fs.writeFile(file, '{new-damage', 'utf8')
+    await fs.writeFile(file + '.bak', '{an-old-one', 'utf8')
+    const t = Date.now() / 1000
+    await fs.utimes(file + '.bak', t - 60, t - 60)
+    await fs.utimes(file, t - 30, t - 30)
+    expect((await new WorktreeRegistry(file, 'D:/root').load()).recovered).toBe(true)
+    expect(await fs.readFile(file + '.bak', 'utf8')).toBe('{new-damage')
+  })
+  // The race itself: the first healer kept the damage in .bak and healed the file; the second read
+  // the damage before that heal and copies after it. Its copy would be the healed file.
+  it('a second healer that read the damage before the first one healed keeps the first one’s .bak', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    await fs.writeFile(file, '{bad', 'utf8')
+    const t = Date.now() / 1000
+    await fs.utimes(file, t - 60, t - 60)
+    const real = fs.readFile.bind(fs)
+    const read = vi.spyOn(fs, 'readFile').mockImplementationOnce(async (...args: Parameters<typeof fs.readFile>) => {
+      const text = await real(...args)
+      // the first healer, between this read and this process's copy
+      expect((await new WorktreeRegistry(file, 'D:/root').load()).recovered).toBe(true)
+      return text
+    })
+    try {
+      expect((await new WorktreeRegistry(file, 'D:/root').load()).recovered).toBe(true)
+    } finally {
+      read.mockRestore()
+    }
+    expect(await fs.readFile(file + '.bak', 'utf8')).toBe('{bad')
+  })
+})
+const onDiskIds = async (file: string): Promise<string[]> =>
+  (JSON.parse(await fs.readFile(file, 'utf8')) as { items: WorktreeInfo[] }).items.map((w) => w.id)

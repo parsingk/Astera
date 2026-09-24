@@ -3,6 +3,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { WorktreeInfo } from '../types'
 import { renameRetrying } from '../renameRetry'
+import { RepairNeeded } from '../settings/repairNeeded'
 
 export interface RegistryFile {
   root?: string
@@ -66,6 +67,8 @@ export class WorktreeRegistry {
   ) {}
 
   async load(): Promise<{ recovered: boolean }> {
+    // Taken before the read, so it is no newer than the bytes read — see the .bak rule below.
+    const readAt = await fs.stat(this.filePath).then((st) => st.mtimeMs, () => null)
     try {
       const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
       if (!isRegistryFile(parsed)) throw new Error('invalid schema')
@@ -74,10 +77,20 @@ export class WorktreeRegistry {
       return { recovered: false }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false }
-      const kept = await fs.copyFile(this.filePath, this.filePath + '.bak').then(
-        () => true,
-        () => false
-      )
+      // **A .bak at least as new as the damage is already the copy of it, and is kept.** Two
+      // processes (the Host and an app) can start together and both find the damage; the one that
+      // copies second may copy after the first has healed, and its copy would put the healed empty
+      // list over the only record of what was lost. copyFile keeps the source's time on Windows and
+      // stamps the copy's on posix, so "at least as new" covers both. An older .bak is from an
+      // earlier damage and is replaced.
+      const bakAt = await fs.stat(this.filePath + '.bak').then((st) => st.mtimeMs, () => null)
+      const kept =
+        readAt !== null && bakAt !== null && bakAt >= readAt
+          ? true
+          : await fs.copyFile(this.filePath, this.filePath + '.bak').then(
+              () => true,
+              () => false
+            )
       this.root = null
       this.items = []
       this.log?.('worktrees.json was unreadable — kept it as worktrees.json.bak and started an empty list')
@@ -145,6 +158,17 @@ export class WorktreeRegistry {
     return true
   }
 
+  /**
+   * Re-read the file into memory, in its turn after the writes queued before it. What a process
+   * that is not the only writer does before it acts on the list (the Host, at the start of every
+   * worktree operation, R2). No disk write and no listener: nothing changed here. A damaged file is
+   * refused as a write refuses it (`RepairNeeded`) and never healed here — healing wipes the list,
+   * and only load() at a process start may do that.
+   */
+  refresh(): Promise<void> {
+    return this.enqueue(async () => this.hold(await this.readForWrite()))
+  }
+
   /** What save() would write. */
   file(): RegistryFile {
     return { ...(this.root ? { root: this.root } : {}), items: [...this.items] }
@@ -209,7 +233,8 @@ export class WorktreeRegistry {
     if (!isRegistryFile(parsed)) {
       const msg = 'worktrees.json is unreadable — refused to write over it, and left it as it is'
       this.log?.(msg)
-      throw new Error(msg)
+      // Typed, so the Host answers it as a file to repair (409 with `repair`) rather than a failure.
+      throw new RepairNeeded(msg, path.basename(this.filePath))
     }
     const root = normalRoot(parsed.root)
     return { ...(root ? { root } : {}), items: parsed.items }
