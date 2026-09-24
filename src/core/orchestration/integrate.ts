@@ -1,7 +1,8 @@
 // 워크트리에서 끝난 일을 **이 Run 이 일하는 뿌리**(runRootOf — 워크트리가 있으면 그것, 없으면
 // 프로젝트 폴더)로 합쳐야 하는가에 대한 **순수 판정**. git 을 부르지 않고
 // fs 도 만지지 않는다 — 상태만 보고 답하므로 테스트가 되고, 실제 병합(그리고 그 실패의 되돌리기)은
-// 배선(src/main/ipc.ts)이 한다. slotsToFill 이 지키는 것과 같은 경계다.
+// 배선(src/core/orchestration/exec/integrateGit.ts, 앱은 src/main/ipc.ts 에서 Host 는
+// src/host/worktrees.ts 에서 부른다)이 한다. slotsToFill 이 지키는 것과 같은 경계다.
 //
 // **판정이 먼저이고 git 이 나중인 이유는 값이다.** runScheduler 는 모든 setState 뒤에 돌고 그 대부분은
 // 띄울 것이 없는 저장이다. pendingMerges 가 비면 git 프로세스가 하나도 뜨지 않는다 — 저장마다 git 을

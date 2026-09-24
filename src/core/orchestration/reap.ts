@@ -1,5 +1,6 @@
 // 다 끝난 예약 회차의 워크트리를 걷어도 되는가에 대한 **순수 판정**. 실제 삭제는 배선이 한다
-// (src/main/ipc.ts 의 reapWorktree) — integrate.ts 가 병합 판정과 실제 병합을 나눈 것과 같은 경계다.
+// (src/core/orchestration/exec/integrateGit.ts 의 reapWorktree, src/main/ipc.ts 가 부른다) —
+// integrate.ts 가 병합 판정과 실제 병합을 나눈 것과 같은 경계다.
 //
 // **왜 이 파일이 따로 있는가.** 이 판정은 outcomeOf(view.ts)와 runWorktrees(integrate.ts)를 함께
 // 봐야 하는데, view.ts 가 integrate.ts 를 임포트한다. integrate.ts 에 두면 순환이 되고, view.ts 에

@@ -131,35 +131,58 @@ about, so they exit 3.
 ### Workers with Astera closed
 
 **With Astera closed, the Host starts and stops workers itself.** These coordinator commands work
-from a shell with only a Host running: `worker-start`, `worker-stop`, `worker-release` and
-`worker-read`. So does `run-start`, which starts a Job's coordinator again, once the Job's run has its
-worktree. They are the commands a coordinator session uses, and `astera help` describes them. The Host
-starts the agent in a session it holds, keeps its output, and ends it when asked. When such a worker
-ends on its own, its Dispatch is closed all the same: by the Host while Astera is closed, and by
+from a shell with only a Host running: `worker-start`, `worker-start --worktree new`, `worker-stop`,
+`worker-release` and `worker-read`. So does `run-start`, which starts a Job's coordinator again, and
+the first `jobs run` of a Job with a coordinator account, which starts it for the first time. Either
+way, the Host makes the run's worktree itself if it does not have one yet. If the coordinator then
+fails to start, the Host removes that worktree again, and the failed start still answers the same way
+it always did. They are the commands a coordinator session uses, and `astera help` describes them. The
+Host starts the agent in a session it holds, keeps its output, and ends it when asked. When such a
+worker ends on its own, its Dispatch is closed all the same: by the Host while Astera is closed, and by
 Astera once it has taken the session back. Open Astera later and it shows those workers as tabs. With
 Astera open, a worker the Host starts gets its tab at once.
 
-**`astera host status` says whether this Host can do this.** `spawn` in `data.features` means it
-can. A Host started by an older Astera does not have it, and neither does one whose starter could not
-name the files a worker needs. With such a Host, these commands need the app as they did before.
+**The Host also merges and removes worktrees itself.** `run-merge`, and `run-delete --merge` or
+`--remove-worktrees`, all work the same way with only a Host running. A merge into the project folder
+follows the same checks whoever runs it, and one made while Astera is closed may show up on the Work
+Unit screen as a change from outside the next time Astera opens. `run-delete` on a Job that fires on a
+schedule closes its open workers and merges before a folder removal can be refused: after that
+refusal, nothing about the Job or its runs is deleted, but the workers are already closed and the merge
+has already happened.
+
+**`astera host status` says whether this Host can do this.** `spawn` in `data.features` means it can
+start and stop workers, and `worktrees` in `data.features` means it can make, merge and remove them
+itself. A Host started by an older Astera does not have either, and neither does one whose starter
+could not name the files a worker needs. With such a Host, these commands need the app as they did
+before.
 
 The Host reads the permission setting, **Run agents without permission checks**, from the profile's
 `app-settings.json` at every start. With no such file it uses the app's default, which is on. A
 damaged file refuses the start with exit 6 and `error.details.repair`, rather than guessing. A start
 that reaches a Host that is stopping is refused with 6 and `error.details.retry` (see Output).
 
+A damaged `worktrees.json` refuses every one of these worktree commands the same way, with exit 6 and
+`error.details.repair` naming the file. Open Astera to repair it.
+
 **What still needs the app.** Each of these is exit 6 with a message that says the app is needed,
 and nothing is started or changed:
 
-- `worker-start --worktree new`. The app is what makes worktrees, so a worker that needs a new one
-  waits for it. No Dispatch is left behind.
-- The first `jobs run` of a Job with a coordinator account. It starts the coordinator in a new
-  worktree, which the app makes. The Job keeps `pendingStart`, so it can be run again once Astera is
-  open.
 - `worker-read` of a worker Astera started. Astera keeps that output, not the Host. The Host reads
   only the workers it started.
 - `worker-stop` and `worker-release` of a worker that ran inside Astera itself, which Astera does only
   when it could not reach the Host. Only Astera can end it. Its Dispatch is not marked stopped.
+
+With an older Astera open, one that does not yet make and merge worktrees itself, worktree work is
+still that Astera's. It, not the Host, makes and merges the worktrees these commands need.
+
+**Removing a worktree folder is refused while Astera is running somewhere but not connected to this
+Host.** The Host cannot see what a session, a terminal or a run that app is driving on its own is
+doing in that folder, so it will not delete the folder out from under it. The message says to remove
+the worktree from the app instead, or to quit Astera and try again. This refusal happens before
+anything is touched, so it leaves no receipt behind: quitting Astera and running the same command with
+the same `--request-id` then really removes the folder. A refusal that comes after some folders were
+already removed does leave a receipt, since the command has acted by then. A crashed Astera does not
+count as running, so this only happens while Astera is genuinely still open somewhere.
 
 A worker Astera started in a Host session is the Host's to end, so with Astera closed `worker-stop`
 and `worker-release` still work on it.

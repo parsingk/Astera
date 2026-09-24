@@ -200,7 +200,8 @@ export interface JobRun {
    *  그동안 워커의 질문은 앱의 그물이 풀어 준다(inbox.ts). */
   coordinatorSessionId?: string
   /** 이 회차의 워커들이 일하는 워크트리. **없으면 아직 만들어지지 않았다** — 첫 워커를 띄우기
-   *  직전에 배선이 만들고 `run-worktree-set` 으로 기록한다(src/main/ipc.ts).
+   *  직전에 만들고 기록한다: 예약의 게으른 포크는 배선이 `run-worktree-set` 으로(src/main/ipc.ts),
+   *  코디네이터가 있는 Job 의 첫 실행은 command.ts 가 직접(Host 도 만든다, Host S3).
    *
    *  **Job.cwd 를 덮어쓰지 않고 따로 두는 이유가 이 칸의 존재 이유다.** `cwd` 는 어느 프로젝트의
    *  것인가를 정하고(runsForProject → repoPathOf, view.ts), 그 판정은 워크트리 레지스트리 항목이

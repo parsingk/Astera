@@ -81,8 +81,9 @@ entry gives the section, what it said, what shipped, why, and the tests that pin
   `worker-start` with `worktree: 'new'` and no terminal, because the Host creates no worktree until
   S3. The Host's `owns(name, args)` answers false for those, for a `--terminal` it does not hold,
   and for the release of a session it does not hold, and such a call takes its old route
-  (`APP_REQUIRED` with no app attached; plan ruling R1). S3 removes the worktree case and S4 the
-  scheduler's. Pinned by `src/host/spawner.test.ts` and `src/host/orchDeps.test.ts`.
+  (`APP_REQUIRED` with no app attached; plan ruling R1). S3 removes the worktree case (done, see
+  Amendments A22 and A24) and S4 the scheduler's. Pinned by `src/host/spawner.test.ts` and
+  `src/host/orchDeps.test.ts`.
 - **A5. §1.4, `readWorker` after a roll.** The table makes `readWorker` Host-local in S2. The Host
   answers it only for a Dispatch it started, while that Dispatch still names the session it started
   on (or a `pending:` id). Once a roll has moved the Dispatch to another session, the call goes to
@@ -182,6 +183,192 @@ entry gives the section, what it said, what shipped, why, and the tests that pin
   is the app's (D8). This holds with the app attached too, not only with it closed. Recovery reaches
   the same decision, `redispatch/safe`, but its reason reads `promptNeverLeft`, which is untrue for
   these workers. For the S4 notes.
+
+## Amendments (S3 as shipped)
+
+S3 landed on `develop` at `03b75be` (Task 9 shipped). Its plan and its execution ledger
+(`.superpowers/sdd/2026-09-24-host-s3/progress.md`) changed or added to some statements above, and this
+list is the record, in A1's form. `§3.4`, `§3.5`, `§7.2` and `§7.3` row 3 each carry a short note
+pointing here at the sentence it replaces.
+
+**Worktrees, who owns them**
+
+- **A20. §3.4 and §7.2, D3's two added messages (plan ruling R1).** The design named three internal
+  `orch-call`s the app would use to write through the Host, `worktree-add`, `worktree-remove`,
+  `worktree-root`, and left out how the app's mirror would learn what the Host wrote on its own. What
+  shipped adds the two pieces the design left out: an internal `orch-call` `worktree-list`, which fills
+  the mirror at every handshake the way `state-get` fills the orch mirror (`src/host/worktrees.ts:42,
+  284-305`, routed at `src/host/orch.ts:919,932`), and a push `{ t: 'worktrees-state', seq, file }`
+  after every Host write (`src/core/host/protocol.ts:308`, sent from `registry.onChange` at
+  `src/host/worktrees.ts:95-98`). Why: without a fill and a push, a worktree the Host made while the
+  app was open would be missing from the Explorer panel and its Delete would answer `NOT_MANAGED`.
+  Pinned by `src/host/worktrees.test.ts` and `src/main/host/worktreeRoute.test.ts`.
+- **A21. §3.4, every registry write is read-modify-write (plan ruling R2).** The design named the
+  two-writer problem and recommended the Host own the file; it did not say how a write avoids losing
+  an entry another process just added. What shipped: `WorktreeRegistry.add`, `removeEntry` and
+  `setRoot` all re-read the file before they apply (`mutate`, `src/core/worktrees/registry.ts`), in
+  both processes, and a write's re-read refuses on a damaged file (`RepairNeeded`) rather than healing
+  it, which only `load()` at a process start does (A26). Why: two registries on one file, each adding
+  an entry, both survive only if neither rewrites the other's entry away; the design's own §9.2 test
+  names exactly this failure on the code before S3. Pinned by
+  `src/core/worktrees/registry.test.ts`, describe block "one worktrees.json, more than one writer".
+- **A22. §3.4 and §7.2, `hello.yields` decides who owns worktree operations (plan ruling R4).** The
+  design did not say what happens when an app from before this feature attaches to an S3 Host. What
+  shipped: the new app says `yields: ['worktrees']` in its `hello` (`src/main/host/client.ts:505-512`);
+  the Host remembers each socket's `yields` and answers `appKeeps(duty)`
+  (`src/host/server.ts:187-189,452-454`); the spawner's `owns` answers `--worktree new`,
+  `makeRunWorktree`, `mergeWorktrees` and `removeWorktrees` for itself only when no attached app keeps
+  worktrees for itself (`src/host/spawner.ts:525-527`). An app that says nothing (one from before S3,
+  or a role-less app v1.3.17-25) keeps doing its own worktree work, exactly as before S3. Why: such an
+  app writes `worktrees.json` whole from its own memory and does not understand `git-op`, so a Host
+  that forked or merged behind it would have its entry erased and its merge recorded as an outside
+  change. Pinned by `src/host/spawner.test.ts`, `src/host/server.test.ts` and
+  `src/main/host/client.test.ts`.
+- **A23. §3.1, `worktrees` is announced only by a Host with a spawner (plan ruling R5).** Not stated
+  before. What shipped: `src/host/index.ts` announces `features: [HOST_FEATURE_SPAWN,
+  HOST_FEATURE_WORKTREES]` only when it built a spawner, the same one fact `spawn` itself is (S2). Why:
+  a Host with worktrees and no spawner would create a Run worktree in `run-start` and then fail
+  `startCoordinator` with no app, leaving a registered worktree no Run records on every retry. Not
+  pinned by a dedicated test; read directly from `src/host/index.ts:249,295`, the way A15 was measured
+  rather than pinned.
+- **A24. §3.5, what the app becomes for worktrees, and what moved (plan ruling R6).** The design read
+  as if the whole scheduler moved with `run-merge`. What shipped: only the three deps
+  (`makeRunWorktree`, `mergeWorktrees`, `removeWorktrees`) and `--worktree new` move to the Host
+  (`src/host/orchDeps.ts:258-261`); the app's `runScheduler` keeps its own lazy Run-worktree fork, its
+  integration merge and its child-run reap in `src/main/ipc.ts` until S4, now pointed at
+  `src/core/orchestration/exec/integrateGit.ts`, with their registry writes going through the Host
+  (A21). `run-merge` becomes Host-local exactly as the design said, because the CLI's `run-merge`
+  already reached `handleCommand`'s `mergeWorktrees` dep, which is one of the three that moved. Pinned
+  by `src/host/orchDeps.test.ts` and `src/core/orchestration/command.test.ts`'s `run-merge` suite.
+- **A25. §3.1, the Host's `isPathInUse` (plan ruling R8).** The design said the Host answers from its
+  registry; it did not say the registry only has entries for session ptys. What shipped:
+  `PtyRegistry`/`ProcRegistry` keep the `cwd` each entry was spawned with, tagged `SESSION:<title or
+  id>` for a session, terminal or chat, and `RUN:<configName or id>` for a run, matching the app's own
+  tags (`src/host/worktrees.ts:140-156`). Why: without a `cwd` on every kind, the Host would treat a
+  live run or a shell tab in the folder as free to delete under. Pinned by `src/host/worktrees.test.ts`.
+- **A26. §3.4 and §9.2, a damaged `worktrees.json` (plan ruling R10).** The design said the Host
+  recovers a damaged file the way the app does, `.bak` then an empty list, because refusing would leave
+  every worktree operation stuck. Task 1's review found that instinct wrong when applied to *every*
+  read: healing on every read means a file damaged mid-life is wiped without warning. What shipped
+  instead: only `load()`, run once at Host start and only when the Host can spawn
+  (`src/host/worktrees.ts:307-310`, `loadWorktreesIfSpawning`, `src/host/worktrees.ts:353-368`), keeps
+  `.bak` of the bytes it read and rewrites the file; every later read or write goes through
+  `refresh()`/`readForWrite()`, which throws `RepairNeeded` rather than healing
+  (`src/core/worktrees/registry.ts:175-176,226-246`), and the Host answers it as a 409 naming the file
+  to repair (`src/host/worktrees.ts:340-348`). The app's own fallback from Host to local mirrors this:
+  it calls the registry's queued `refresh()`, not `load()`, so a file damaged while the Host owned it
+  is not silently wiped the moment the app takes the file back (`src/main/host/worktreeRoute.ts`, Task
+  9 ruling I3). Why `load()` only at start: healing rewrites the list, and doing that in the middle of
+  a Host's life would erase entries nobody asked to lose. Pinned by
+  `src/core/worktrees/registry.test.ts` and `src/host/worktrees.test.ts`'s `RepairNeeded` suite.
+- **A27. §3.2, rules 1-11 move with tests, 12-14 stay (plan ruling R11).** What shipped exactly as
+  ruled: rules 1 through 10 (never merge into an unreachable folder, onto a detached HEAD,
+  mid-operation, over tracked changes; branch matching; the git-version pre-check; probe-then-merge;
+  `--no-edit`; abort on failure; counting uncommitted changes) and rule 11 (reap only registered
+  worktrees with no held or working session) moved verbatim into
+  `src/core/orchestration/exec/integrateGit.ts` and gained their first tests there. Rules 12 and 13
+  (`isIntegrationTask`, `integrationTaskFor`, `workingInRunRoot`) stay the app scheduler's, in
+  `src/main/ipc.ts` and `src/core/orchestration/integrate.ts`. Rule 14 (a worker never runs in the
+  project folder of an app-driven Run) stays `handleCommand`'s, in
+  `src/core/orchestration/command.ts:1829-1837`. Why: rules 12-14 are about *when* the scheduler or
+  `handleCommand` may call the merge, not about the merge itself, and neither moves to the Host until
+  S4. Pinned by `src/core/orchestration/exec/integrateGit.test.ts`,
+  `src/core/orchestration/integrate.test.ts` and `src/core/orchestration/command.test.ts`.
+- **A28. §3.3, a Host merge made with no app attached (plan ruling R13).** The design's `git-op`
+  message covers only a merge made while an app is attached. What shipped matches the plan's own
+  recording of this as a known gap, not a design change: a Host merge with nobody attached is announced
+  to nobody, and the next app to open compares the project's stored snapshot against its HEAD
+  (`src/main/workUnit/collector.ts:1322-1325`) and records the move as an outside change if that
+  project had a snapshot. Why: a persisted Host git-op journal would be new design, not this slice's.
+  Not yet measured as of this task; Task 11 measures it. No test pins this; it is the documented cost
+  of not building that journal.
+- **A29. §11, the carried items taken and not taken (plan ruling R14).** M4 (registry growth) is
+  taken: `PtyRegistry` and `ProcRegistry` each keep at most `DEAD_ENTRIES_KEPT = 64` ended non-session
+  entries, dropping the oldest ended one first (`src/host/registry.ts:61,188,202,209`,
+  `src/host/procRegistry.ts:112,150`); live entries and ended session entries are never dropped. M7
+  (the spec pile-up) is not taken: a sweep during the Host's life would race every spawn in flight in
+  both processes while the app still spawns its scheduler's workers, so it waits for S4, when the app
+  yields `dispatch` and the Host becomes the only writer of `orch/specs`. Pinned by
+  `src/host/registry.test.ts` and `src/host/procRegistry.test.ts`.
+- **A30. `command.ts`'s `startCoordinator`, risk 6 (plan ruling R16, corrected).** The plan said
+  `handleCommand` stays untouched and this gap, a coordinator that fails to start after `run-start`
+  made its Run worktree leaves that worktree with no Run to record it, stays recorded but unfixed. The
+  controller's own ruling on the plan's risk 6 reversed this before Task 7 began: "record the Run
+  worktree before starting the coordinator, or remove it on start failure." What shipped: a new
+  optional dep, `discardRunWorktree(path)`, called only when the coordinator's start throws, after the
+  Run worktree was already made (`src/core/orchestration/command.ts:222,1390-1399`); the Host supplies
+  a real one (`src/host/orchDeps.ts:649`) that best-effort removes the orphaned folder and is never
+  marked as "needs the app" even when it is refused, so a coordinator failure never reads as a 409
+  asking for Astera. The failed start still answers its own 400 whether or not the cleanup succeeded
+  (fix round 1, I1). The app's own code path has no `discardRunWorktree` and keeps the older
+  `removeWorktrees` fallback it always had; this duplication is known and left for a later slice.
+  Pinned by `src/core/orchestration/command.test.ts` and `src/host/orchDeps.test.ts`.
+
+**Not in the design or the plan, found while building it**
+
+- **A31. The detached-app guard.** While Astera runs, it writes its pid to `app.pid` in the profile
+  and removes it on a clean quit (`src/core/host/pidFile.ts:74-95`, called from
+  `src/main/index.ts:386,1397`). Before the Host removes a worktree folder, it checks that file: an app
+  that is alive but not attached to this Host (one that gave up on a stalled Host, or has not
+  reconnected since a restart) runs sessions the Host cannot see, so the removal is refused with 409
+  (exit 6), `Astera is running but not connected to this Host; remove the worktree from the app, or
+  quit Astera and retry` (`src/host/worktrees.ts:192-199,326-333`). A crashed app's stale pid is not
+  read as alive: the check signals the pid, and a process that no longer exists reads as no app
+  (`src/core/host/pidFile.ts:97-114`). Pid reuse is not guarded against, and that fails toward keeping
+  the folder, the safe direction, at the cost of one manual quit-and-retry. The refusal is tagged
+  `refusedBeforeActing`, so it leaves no request receipt; quitting Astera and repeating the same
+  command with the same `--request-id` really removes the folder. A refusal that lands after some
+  folders were already removed keeps its receipt, because the command acted before it failed. Pinned
+  by `src/host/worktrees.test.ts` and `src/core/host/pidFile.test.ts`.
+- **A32. `worktreePathInUse` (the ruling on plan risk 3).** Before removing a folder, an attached app
+  is asked `worktreePathInUse` (`src/core/host/protocol.ts:94-101`, `HOST_ACT_PATH_IN_USE`). The app
+  answers with only what it runs itself through local, non-Host ptys: sessions, terminals, runs that
+  have not exited, and chat sessions (`src/main/host/localPathInUse.ts`, `appPathInUse`). An app that
+  does not answer, or answers something that is not a string or null, costs the removal: the folder is
+  kept. Why: on macOS and Linux a removal deletes the folder out from under a live process, and the
+  Host cannot see a session the app is running on its own fallback pty. Pinned by
+  `src/main/host/localPathInUse.test.ts` and `src/host/worktrees.test.ts`.
+- **A33. `WorktreesSnapshot.seq` (review of Tasks 4-5).** Every `worktree-*` reply and the
+  `worktrees-state` push carry `{ seq, file }`, one counter per Host life
+  (`src/core/host/protocol.ts:72-89`, `src/host/worktrees.ts:82-85`). The receiver keeps the last `seq`
+  it applied per connection, resets it on every refill from `worktree-list`, and ignores anything lower
+  (`src/main/host/worktreeRoute.ts:43,49-51,106,126`). Why: without a counter, a Host restart's low
+  numbers could roll back state a longer-lived push already advanced, or a reply racing a refill could
+  apply out of order. Pinned by `src/main/host/worktreeRoute.test.ts`.
+- **A34. `run-delete` on a scheduled Job, ordering that predates S3.** Not new to S3, but now reachable
+  headless and worth recording here: `run-delete` on a Job that fires on a schedule closes its open
+  workers and, if asked, merges its worktrees before it reaches the worktree removal S3 can refuse
+  (`src/core/orchestration/command.ts:1200-1279`). After a 409 from `removeWorktrees`, nothing about
+  the Job or its runs is deleted, but the workers are already closed and the merge has already
+  happened. Documented in `docs/cli.md`.
+- **A35. The Host forgets exited worker session records (Task 8).** The Host's `SessionManager` drops
+  an exited session's record on its exit (`src/host/spawner.ts:238`, `sessions.forget`,
+  `src/core/sessions/manager.ts:483`), unlike the app's, which keeps one so a session can be resumed.
+  Why: a long-lived Host would otherwise grow one record per worker for as long as it runs. Pinned by
+  `src/host/spawner.test.ts`.
+
+## Known limits after S3
+
+- **`refresh()` does not retry a Windows rename-busy read.** `WorktreeRegistry.refresh()` reads through
+  `readForWrite()`, a plain `fs.readFile`; the rename-busy retry only guards `save()`'s write path. A
+  read racing a rename can hit a transient sharing violation, which `refresh()` surfaces as a rejection
+  rather than riding out. Safe, because nothing is wiped, but the app's mirror stays stale until the
+  next local write or refill (task-9-report.md).
+- **A registry write during a Host replacement window fails rather than falling back to local.** For
+  about `RETIRE_SETTLE_MS` (2s) around a Host's `retire({announce:true})` → `stop()` → `restart()`, the
+  app's write-through route still reads `mode: 'host'`, so a write in that window answers "there is no
+  connection to the Host" instead of writing the file itself. Nothing is lost silently; the caller sees
+  the error (task-9-report.md, M1).
+- **One `conhost.exe` leaks per pty that exits on its own.** node-pty 1.1.0 closes the pseudo console
+  only when a live pty is killed (A17). S3 makes Hosts that live long with the app closed more common,
+  and so this leak more common with them, but does not change the underlying behaviour.
+- **A later `jobs run` of a coordinator Job starts a run that nothing drives.** Only the first run of a
+  coordinator Job works headless in S3 (its coordinator starts, and the Host makes its worktree). A Job
+  that runs again has no scheduler in the Host to place its workers, until S4 moves the dispatch loop.
+- **A Host merge made while the app was closed may read as an outside change on the Work Unit screen.**
+  A28's answer for this slice: there is no persisted Host git-op journal, so the app's next open
+  compares its stored snapshot to HEAD and records the move as external if that project had one. S4's
+  per-merge record is the fix.
 
 ## 0. The problem, measured
 
@@ -587,12 +774,16 @@ it. Being listed is what authorises deletion (`registry.ts:26`), so a lost entry
 may remove again. D3 has the options; the recommendation is that **the Host owns `worktrees.json`**
 and the app's registry becomes a mirror whose `add`, `removeEntry` and `setRoot` are internal
 `orch-call`s answered only for `role: 'app'`, the same pattern as `state-put` (`src/host/orch.ts:426-440`).
+(amended 2026-09-24, see Amendments A20 and A21: the mechanism needs two more pieces, a `worktree-list`
+fill and a `worktrees-state` push, and every write on both sides is read-modify-write)
 
 ### 3.5 What the app becomes for worktrees
 
 A client. Its Explorer worktree panel keeps its buttons; they go to the Host. `run-merge` (the detail
 view's merge button) already goes through `handleCommand` with `mergeWorktrees`, so it becomes
 Host-local with no UI change.
+(amended 2026-09-24, see Amendments A24: only the three deps and `--worktree new` move; the
+scheduler's own fork, merge and reap stay the app's, in `src/main/ipc.ts`, until S4)
 
 ## 4. S4: the dispatch loop
 
@@ -824,13 +1015,17 @@ Host. No change here needs a bump:
 | S4 | `status` body gains `driver: 'host' \| 'app' \| 'parked'` and `appAttached: boolean` | orch-result |
 | S5 | internal `orch-call` `validation-stop` | app to Host, role app only |
 
+(amended 2026-09-24, see Amendments A20: the S3 rows are not the whole mechanism; an internal
+`orch-call` `worktree-list` (app to Host, role app only) and a push `{ t: 'worktrees-state', seq, file
+}` (Host to all greeted clients) are additive too)
+
 ### 7.3 Version skew
 
 | App | Host | What happens |
 |---|---|---|
 | new | new | The Host spawns, owns worktrees, drives. The app yields, adopts, displays. |
 | new | old (no `spawn`/`dispatch`) | The app keeps today's code path: its own spawn, worktrees, loop, validator. **This is why the app's copies are kept, not deleted, in S2 to S5**: the shared `exec/` modules make that a second construction, not a second implementation. The automatic replacement (`hostReplaceDue`) swaps the old Host the first time it holds nothing. |
-| old | new | The old app sends no `yields`, so `driver = 'app'`: the Host parks its loop and every other door into starting work while that app is attached, and the old app dispatches as today. Host-local spawns for commands the Host answers (a coordinator's `worker-start`) still happen in the Host; the old app ignores `pty-opened` and adopts them at its next reattach sweep (amended 2026-09-24, see Amendments A18: its Stop button before that sweep). When the old app detaches, `driver` becomes `host` and the handover sweep runs. |
+| old | new | The old app sends no `yields`, so `driver = 'app'`: the Host parks its loop and every other door into starting work while that app is attached, and the old app dispatches as today. Host-local spawns for commands the Host answers (a coordinator's `worker-start`) still happen in the Host; the old app ignores `pty-opened` and adopts them at its next reattach sweep (amended 2026-09-24, see Amendments A18: its Stop button before that sweep; and A22: an old app keeps its own worktree work too, because it never says `yields: ['worktrees']`). When the old app detaches, `driver` becomes `host` and the handover sweep runs. |
 | old | old | Today. |
 
 One subtle case in row 3: the old app also handles exits (it is attached, §2.6; amended 2026-09-24,

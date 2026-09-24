@@ -100,7 +100,8 @@ export interface CollectorDeps {
   /** 지금 열려 있는 등록들 (EG §26) — Astera 자신의 git 동작과 세션이 바쁜 구간, 둘 다다. ipc.ts 는
    *  이 수집기 자신의 `getPendingGitOps()` 를 그대로 넘긴다 — 그 목록은
    *  `beginGitOperation`/`endGitOperation` 이 채운다(ipc.ts 의 job-merge 자리와 `onSessionBusy` 가
-   *  부른다). 주입 가능하게 남겨 둔 이유는 테스트가 가짜 목록으로
+   *  부르고, Host 가 대신 병합해 알려올 때는 그 알림을 받는 hostGitOps.ts 도 부른다). 주입 가능하게
+   *  남겨 둔 이유는 테스트가 가짜 목록으로
    *  유예 경계(이 파일의 collector.test.ts)와 판정 자체(provenance.test.ts)를 각각 따로 확인할 수
    *  있게 하기 위해서다. 넘기지 않으면(`undefined`) 빈 목록으로 본다. */
   pendingGitOps?: () => readonly PendingGitOperation[]
@@ -560,9 +561,10 @@ export class WorkUnitCollector {
 
   // ── Astera 자신의 git 동작 등록 (EG §26) ───────────────────────────────
 
-  /** "이 이동은 이 앱 안에서 벌어진 일이다"라고 말할 구간 하나를 등록한다. 부르는 자리가 둘이다 —
-   *  Astera 자신의 git 조작을 시작하기 **직전에**(ipc.ts 의 job-merge 자리)와, 세션이 바빠진
-   *  순간(`onSessionBusy`). `startedAt` 은 주입된 시각(deps.now)을 쓴다. **꺼져 있으면 아무 일도 하지 않는다** — 부르는
+  /** "이 이동은 이 앱 안에서 벌어진 일이다"라고 말할 구간 하나를 등록한다. 부르는 자리가 셋이다 —
+   *  Astera 자신의 git 조작을 시작하기 **직전에**(ipc.ts 의 job-merge 자리), Host 가 대신 병합해
+   *  알려올 때(hostGitOps.ts, Host S3), 그리고 세션이 바빠진 순간(`onSessionBusy`). `startedAt` 은
+   *  주입된 시각(deps.now)을 쓴다. **꺼져 있으면 아무 일도 하지 않는다** — 부르는
    *  쪽이 토글을 신경 쓰지 않아도 된다(`endGitOperation` 이 토글과 무관하게 항상 닫는 것으로 그 몫까지
    *  진다 — 아래 주석).
    *
@@ -1372,7 +1374,8 @@ export class WorkUnitCollector {
     // **endHead 를 덮기 전에 가른다** — 바로 아래 줄이 그 값을 after.head 로 바꾼다.
     const encountered = open.filter((u) => (u.git.endHead ?? u.git.startHead) === before.head)
     for (const u of open) u.git.endHead = after.head
-    // samePath: 등록 쪽(ipc.ts 의 mergeInto)과 이 projectPath(세션의 cwd 에서 뽑았다)는 따로
+    // samePath: 등록 쪽(ipc.ts 의 job-merge 자리, 또는 Host 가 병합했을 때 hostGitOps.ts 가 넘기는
+    // mergeInto)과 이 projectPath(세션의 cwd 에서 뽑았다)는 따로
     // 기록되어 대소문자·구분자가 다를 수 있다(provenance.ts 의 isAsteraOperation 주석). 그 비교를
     // provenance.ts 는 직접 하지 못하므로(node: 없음) 여기서 isSamePath 를 넘긴다.
     //

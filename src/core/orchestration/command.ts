@@ -196,9 +196,12 @@ export interface OrchServerDeps {
   /** 이 Run 의 워크트리 브랜치들을 프로젝트 폴더에 합친다 — `run-merge`(사람이 상세 창에서 누른다)
    *  와 `run-delete --merge` 가 부른다. 실패하면 사람이 읽을 이유를 돌려주고, 그때 삭제는 일어나지
    *  않는다(그 case 의 주석). 둘 다 **합친 워크트리를 걷지 않는다** — 폴더 정리는 삭제 모달의
-   *  체크박스가 따로 하는 일이다(배선의 reap 옵션, src/main/ipc.ts).
-   *  주입인 이유: 실제 병합은 git 을 돌리고 Gate 문구까지 만드는 배선의 일이라 src/main/ipc.ts 에
-   *  있고, 이 파일은 그것을 호출만 한다 — now?/backup? 과 같은 관례로 optional 이다(주입되지 않으면
+   *  체크박스가 따로 하는 일이다(배선의 reap 옵션, src/core/orchestration/exec/integrateGit.ts 의
+   *  worktreeDeps).
+   *  주입인 이유: 실제 병합은 git 을 돌리고 Gate 문구까지 만드는 배선의 일이라
+   *  src/core/orchestration/exec/integrateGit.ts 에 있고(앱은 src/main/ipc.ts 에서, Host 는
+   *  src/host/worktrees.ts 에서 그것을 부른다), 이 파일은 그것을 호출만 한다 — now?/backup? 과 같은
+   *  관례로 optional 이다(주입되지 않으면
    *  병합을 요청받아도 할 수 없으므로 거절한다).
    *  `merged` 는 넘긴 `paths` 중 폴더가 아직 남아 있던 것들의 부분집합이다(이미 사라진 폴더는
    *  배선이 조용히 걸러 낸다) — 호출자는 이 값을 그대로 사람에게 보여야 한다, 넘긴 목록을 그대로
