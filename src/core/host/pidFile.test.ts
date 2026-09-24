@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -96,6 +96,21 @@ describe('the app pid file', () => {
     clearAppRunning(dir, process.pid)
     expect(existsSync(appPidFilePath(dir))).toBe(false)
     clearAppRunning(dir, process.pid)
+  })
+  // Final review N3: an EPERM from process.kill means the pid exists but this process may not signal
+  // it (another user, or higher integrity) — not that it is dead. Only the regression direction
+  // (reading EPERM as dead) is unsafe, so this pins the branch that keeps the app alive on EPERM.
+  it('reads a pid the process table refuses to signal (EPERM) as a live app, not a dead one', async () => {
+    const dir = await tempDir('astera-apppid-')
+    markAppRunning(dir, process.pid)
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
+    })
+    try {
+      expect(liveAppPid(dir)).toBe(process.pid)
+    } finally {
+      kill.mockRestore()
+    }
   })
   it('never throws, even with no profile folder', () => {
     const nowhere = path.join(tmpdir(), `astera-apppid-missing-${process.pid}`, 'deeper')
