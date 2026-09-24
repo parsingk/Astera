@@ -21,6 +21,7 @@ export default defineConfig({
       'src/main/**/*.test.ts',
       'src/renderer/**/*.test.ts',
       'src/cli/**/*.test.ts',
+      'scripts/**/*.test.mjs',
       'vitest.globalSetup.test.ts'
     ],
     environment: 'node',

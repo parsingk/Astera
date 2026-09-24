@@ -15,9 +15,9 @@
 //   node scripts/host-runtime.mjs --force    # assemble anyway (inspecting the payload elsewhere)
 import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { isBuiltin } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { bundlePackages } from './host-runtime-scan.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = join(ROOT, 'resources', 'host-runtime')
@@ -137,43 +137,11 @@ async function main() {
     filter: (src) => !src.endsWith('.pdb')
   })
 
-  // **Every other package the Host bundle requires, read out of the bundle itself.**
-  //
+  // **Every other package the Host bundle loads** (`bundlePackages`, scripts/host-runtime-scan.mjs).
   // node-pty above used to be the whole list. The Host runs the orchestration command layer now, and
-  // that reaches `ignore` through core/files/tree.ts — `externalizeDepsPlugin` leaves every dependency
-  // as a bare `require`, and the node.exe beside this tree resolves those against *this* directory,
-  // not against the app's asar. A missing one is not a degraded Host: it is MODULE_NOT_FOUND on the
-  // first line, before the log file is even open, and the app finds no Host at all.
-  //
-  // Read from the emitted files rather than listed here, for the same reason the manifest below is
-  // walked rather than typed out: a hand-kept list goes stale the first time an import changes, and
-  // nothing notices until a packaged build is installed. Only the chunks host.js actually reaches are
-  // scanned — the copy below takes the whole chunks directory, and some of it belongs to the app.
-  const reachable = (entry) => {
-    const seen = new Set()
-    const stack = [entry]
-    while (stack.length > 0) {
-      const file = stack.pop()
-      if (seen.has(file)) continue
-      seen.add(file)
-      // Both quote styles here too. A single-quoted relative require the walk cannot see ends the
-      // walk at host.js, the package scan below then reads one file, and a runtime ships without the
-      // packages its chunks need — the failure this whole block exists to prevent, arrived by the
-      // one path that looks like it is covered.
-      for (const m of readFileSync(file, 'utf8').matchAll(/require\(\s*(?:"(\.[^"]*)"|'(\.[^']*)')\s*\)/g))
-        stack.push(join(dirname(file), m[1] ?? m[2]))
-    }
-    return [...seen]
-  }
-  const packages = new Set()
-  for (const file of reachable(join(built, 'host.js')))
-    // Both quote styles: which one the bundler emits is its own business, and a scan that sees only
-    // one of them fails silently — the package is simply never shipped.
-    for (const m of readFileSync(file, 'utf8').matchAll(/require\(\s*(?:"([^".][^"]*)"|'([^'.][^']*)')\s*\)/g)) {
-      const name = m[1] ?? m[2]
-      if (!isBuiltin(name) && name !== 'node-pty') packages.add(name)
-    }
-  for (const name of [...packages].sort()) {
+  // that reaches `ignore` through core/files/tree.ts.
+  const packages = bundlePackages(join(built, 'host.js')).filter((name) => name !== 'node-pty')
+  for (const name of packages) {
     const from = join(ROOT, 'node_modules', name)
     if (!existsSync(from)) throw new Error(`the Host bundle requires ${name}, which is not installed — run npm install`)
     // One level deep on purpose. A package with dependencies of its own needs a real resolver, and a
