@@ -33,6 +33,51 @@ const fakeRunner = (): ValidatorRunner & {
 }
 
 describe('TaskValidator', () => {
+  // Review I1 — 러너가 start 안에서 exit 를 마이크로태스크로 줄 세우면(앱의 Host pty 팩토리가 소켓이
+  // 끊긴 채 spawn 할 때) 그 exit 는 startCheck 가 runId 를 적기 전에 onRunExit 에 닿는다. 예전에는
+  // 버려져 onSettled 도 onCannotRun 도 불리지 않았고, 그 cwd 의 큐가 멈췄다.
+  it('start 가 돌아오기 전에 마이크로태스크로 온 exit 도 잃지 않고 정산한다', async () => {
+    const { onSettled, calls } = settledCalls()
+    const cannot = vi.fn(async () => {})
+    let v: TaskValidator | null = null
+    const runner: ValidatorRunner = {
+      start: async () => {
+        queueMicrotask(() => v!.onRunExit({ runId: 'run_early', exitCode: 1 }))
+        return { runId: 'run_early', name: 'CFG1' }
+      },
+      output: () => '',
+      stop: () => {}
+    }
+    v = new TaskValidator({ runner, onSettled, onCannotRun: cannot })
+    v.enqueue({ taskId: 'tsk_1', cwd: absPath('w1'), configIds: ['cfg1'] })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].results[0]).toMatchObject({ configId: 'cfg1', status: 'failed', exitCode: 1 })
+    expect(cannot).not.toHaveBeenCalled()
+  })
+
+  it('start 도중 온 남의 run 의 exit 는 이 check 의 결과가 되지 않는다', async () => {
+    const { onSettled, calls } = settledCalls()
+    let v: TaskValidator | null = null
+    const runner: ValidatorRunner = {
+      start: async () => {
+        queueMicrotask(() => v!.onRunExit({ runId: 'someone_else', exitCode: 0 }))
+        return { runId: 'run_mine', name: 'CFG1' }
+      },
+      output: () => '',
+      stop: () => {}
+    }
+    v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: absPath('w1'), configIds: ['cfg1'] })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(calls).toHaveLength(0)
+    // 그 exit 는 버려졌다 — 같은 id 로 다시 와도 이 head 의 것이 아니다. 이 run 의 exit 만 정산한다.
+    v.onRunExit({ runId: 'someone_else', exitCode: 0 })
+    expect(calls).toHaveLength(0)
+    v.onRunExit({ runId: 'run_mine', exitCode: 0 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].results[0]).toMatchObject({ status: 'passed' })
+  })
+
   it('큐에 넣으면 러너를 시작한다', async () => {
     const runner = fakeRunner()
     const { onSettled } = settledCalls()

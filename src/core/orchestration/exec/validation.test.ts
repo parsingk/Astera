@@ -30,6 +30,9 @@ interface RigOpts {
   filesModified?: string[]
   guard?: (p: string) => Promise<string>
   stopThrows?: boolean
+  /** runs.start 가 돌아오기 **전에** 마이크로태스크로 이 exit 코드를 배달한다 — 앱의 Host pty 팩토리가
+   *  소켓이 끊긴 채 spawn 할 때(src/main/host/ptyFactory.ts 의 startDead) 하는 그대로다(review I1). */
+  exitInMicrotask?: number
 }
 
 function rig(o: RigOpts = {}) {
@@ -54,7 +57,9 @@ function rig(o: RigOpts = {}) {
         title: 'T',
         spec: 'do it',
         deps: [],
-        validateConfigIds: ['c1'],
+        // 실재하는 구성이다(package.json 의 test 스크립트) — startValidation 이 큐에 넣는 check 가 진짜로
+        // 떠서, finish() 가 그 run 을 끝내 치울 수 있다(review m3).
+        validateConfigIds: ['seed:npm:test'],
         ...(o.review ? { reviewRequested: true } : {})
       },
       NOW
@@ -104,7 +109,10 @@ function rig(o: RigOpts = {}) {
     runs: {
       start: (opts) => {
         startedOpts.push(opts)
-        return { runId: `r${startedOpts.length}` }
+        const runId = `r${startedOpts.length}`
+        const code = o.exitInMicrotask
+        if (code !== undefined) queueMicrotask(() => validation.validator.onRunExit({ runId, exitCode: code }))
+        return { runId }
       },
       recentOutput: () => '',
       stop: () => {
@@ -128,9 +136,11 @@ function rig(o: RigOpts = {}) {
     startReview,
     startRepair,
     diffNames,
-    // 다음 runs.start 가 본 StartOpts. **start 가 돌아온 뒤에야 풀린다** — 가짜 start 안에서 바로
-    // 풀면 validator 가 head.runId 를 적기 전에 테스트가 onRunExit 을 배달해, 그 exit 가 남의 실행으로
-    // 읽혀 버려진다(validator.ts 의 startCheck).
+    // 다음 runs.start 가 본 StartOpts. **start 가 돌아온 뒤에야 풀린다**, 그리고 이 모형은 exit 가
+    // **이벤트 루프에서** 온다고 가정한다(node-pty 가 그렇다) — 그래서 테스트가 배달하는 exit 는 언제나
+    // validator 가 head.runId 를 적은 뒤에 닿는다. start 와 같은 틱(마이크로태스크)에 오는 exit 는 다른
+    // 경로다: 앱의 Host pty 팩토리가 소켓이 끊긴 채 spawn 하면 그렇게 온다. 그 경우는 `exitInMicrotask`
+    // 로 따로 시험하고, validator.ts 가 그런 exit 를 잃지 않는다(review I1 의 수정, TaskValidator.early).
     started: async (): Promise<StartOpts> => {
       const n = startedOpts.length
       await vi.waitFor(() => {
@@ -144,6 +154,18 @@ function rig(o: RigOpts = {}) {
     state: () => state,
     runsStarted: () => startedOpts.length,
     stopCalls: () => stops,
+    /** 떠 있는 검증 실행을 끝낸다 — 마지막으로 뜬 run 에 exit 를 배달하고 Task 가 validating 을
+     *  떠날 때까지 기다린다. 테스트가 끝나 afterEach 가 임시 폴더를 지우기 전에 validator 의 head 와
+     *  그 타이머를 치운다(review m3). 가짜 타이머 아래에서도 돈다(vi.waitFor 만 쓴다). runs.start 가
+     *  불린 직후, validator 가 runId 를 적기 전에 배달될 수 있지만 그래도 잃지 않는다 — start 가 도는
+     *  동안 온 exit 는 TaskValidator.earlyExits 가 붙잡는다(review I1). */
+    finish: async (exitCode = 0) => {
+      await vi.waitFor(() => {
+        if (startedOpts.length === 0) throw new Error('runs.start not called yet')
+      })
+      validation.validator.onRunExit({ runId: `r${startedOpts.length}`, exitCode })
+      await vi.waitFor(() => expect(state.tasks.find((x) => x.id === taskId)!.status).not.toBe('validating'))
+    },
     settle: async () => {
       await new Promise((r) => setTimeout(r, 0))
       await new Promise((r) => setTimeout(r, 0))
@@ -198,11 +220,16 @@ describe('createTaskValidation', () => {
   it('writes suspiciousFiles only on a convergence Run', async () => {
     const plain = rig({ filesModified: ['vitest.config.ts'] })
     plain.validation.startValidation({ taskId: plain.taskId, cwd: plain.cwd })
+    await plain.finish()
     await plain.settle()
     expect(plain.task().suspiciousFiles).toBeUndefined()
+    // 같은 조기 반환이 완료 정책 지문도 막는다(review m2) — 아래 convergence 쪽은 그것을 찍는다.
+    expect(plain.task().policySnapshot).toBeUndefined()
     const conv = rig({ convergence: true, filesModified: ['vitest.config.ts'] })
     conv.validation.startValidation({ taskId: conv.taskId, cwd: conv.cwd })
     await vi.waitFor(() => expect(conv.task().suspiciousFiles).toEqual(['vitest.config.ts']))
+    await vi.waitFor(() => expect(conv.task().policySnapshot).toBeDefined())
+    await conv.finish()
   })
 
   it('with no checkpoint head it uses the Task’s filesModified and never runs git (R12)', async () => {
@@ -210,6 +237,7 @@ describe('createTaskValidation', () => {
     conv.validation.startValidation({ taskId: conv.taskId, cwd: conv.cwd })
     await vi.waitFor(() => expect(conv.task().suspiciousFiles).toEqual(['vitest.config.ts']))
     expect(conv.diffNames).not.toHaveBeenCalled()
+    await conv.finish()
   })
 
   // B7: the validator's own timeout calls runner.stop, which is the module's wrapper around ctx.runs.stop.
@@ -223,8 +251,26 @@ describe('createTaskValidation', () => {
       expect(() => vi.advanceTimersByTime(CHECK_TIMEOUT_MS + 1)).not.toThrow()
       expect(h.stopCalls()).toBe(1)
       expect(h.logs.join('\n')).toMatch(/run.stop failed/)
+      // 치운다(review m3): 멈춘 run 의 exit 가 첫 timeout 으로 읽혀 같은 check 가 다시 뜨고(r2),
+      // 그 exit 로 Task 가 validating 을 떠난다 — head 와 그 타이머가 남지 않는다.
+      h.validation.validator.onRunExit({ runId: 'r1', exitCode: 1 })
+      await vi.waitFor(() => expect(h.runsStarted()).toBe(2))
+      await h.finish()
+      expect(h.task().status).toBe('completed')
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // Review I1: 앱의 Host pty 팩토리는 소켓이 끊긴 채 spawn 하면 exit 를 RunManager.start 안에서
+  // 마이크로태스크로 줄 세운다 — runner.start 가 돌아오기 전에, 그래서 startCheck 가 head.runId 를 적기
+  // 전에 onRunExit 에 닿는다. 그 exit 를 버리면 timeout 의 stop 은 이미 끝난 run 에 no-op 이고, 둘째
+  // exit 는 오지 않으므로 그 폴더의 검증 큐가 앱을 다시 켤 때까지 멈춘다.
+  it('an exit delivered in the same tick as the start still settles the check', async () => {
+    const h = rig({ exitInMicrotask: 1 })
+    h.validation.validator.enqueue({ taskId: h.taskId, cwd: h.cwd, configIds: ['seed:npm:test'] })
+    await vi.waitFor(() => expect(h.task().status).not.toBe('validating'))
+    expect(h.runsStarted()).toBe(1)
+    expect(h.logs.join(' | ')).not.toMatch(/could not start|rejected/)
   })
 })

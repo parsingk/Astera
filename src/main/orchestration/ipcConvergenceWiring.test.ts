@@ -1,13 +1,14 @@
 // Text guards over src/main/ipc.ts's convergence wiring, the same kind as
-// src/main/lineNumberCitations.test.ts and src/main/packagedDeps.test.ts. The startValidation and
-// startReview wrappers still live inside registerIpc, where no unit test reaches them, and
-// convergence.integration.test.ts reimplements their contract rather than running ipc.ts (see its
-// rig() header).
+// src/main/lineNumberCitations.test.ts and src/main/packagedDeps.test.ts. The startReview wrapper
+// still lives inside registerIpc, where no unit test reaches it, and convergence.integration.test.ts
+// reimplements its contract rather than running ipc.ts (see its rig() header).
 //
-// **These guards are a scaffold, not the goal.** The real answer for property 5 is to extract
-// startValidation into an importable unit a test can call, as Task 5 of the Host S2 plan did for
-// startWorker. Until then, the guards check that the wrapper text does what it says.
-// property 5 is now validation.test.ts.
+// **These guards are a scaffold, not the goal.** The real answer is to extract a wrapper into an
+// importable unit a test can call — as Task 5 of the Host S2 plan did for startWorker, and as Task 6
+// of the Host S4+S5 plan did for startValidation: property 5 (no suspiciousFiles or policy snapshot on
+// a Run without convergence) is now proven by src/core/orchestration/exec/validation.test.ts, and its
+// guard is gone from this file. Until the rest is extracted, the guards check that the wrapper text
+// does what it says.
 //
 // Property 4 (a worker starts with the rolling chain built from its Task's own accounts) is now
 // proven by src/core/orchestration/exec/workerStart.test.ts, and the guard below only pins that the

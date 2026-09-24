@@ -60,12 +60,32 @@ interface Pending {
   timer: ReturnType<typeof setTimeout> | null
 }
 
+/** How many early exits (see TaskValidator.earlyExits) are kept at most. Only exits that land while a
+ *  start is in flight are kept, and the map is emptied as soon as no start is, so this is a backstop
+ *  against a burst of other runs' exits, not the working bound. */
+const EARLY_EXIT_LIMIT = 64
+
 /** The reason a stopped validation leaves in the Gate. blockForValidation prefixes it with a sentence */
 const STOPPED_REASON = '사용자가 검증 실행을 정지했습니다'
 
 export class TaskValidator {
   /** cwd -> queue. The head is the one running now */
   private queues = new Map<string, Pending[]>()
+  /** **Exits that arrived before their run's id was known** (review I1). startCheck learns the runId only
+   *  in the continuation after `await runner.start(...)`, but an exit can be queued as a microtask
+   *  *inside* that start — the app's Host pty factory does exactly that when it spawns while the socket
+   *  is down (src/main/host/ptyFactory.ts, startDead) — and so reach onRunExit first, naming no head.
+   *  Dropping it was a stall: the timeout's stop is then a no-op on a run that has already gone, no
+   *  second exit ever comes, and that cwd's queue waits until the app restarts.
+   *
+   *  So an exit naming no head is kept here, **but only while some start is in flight**
+   *  (startsInFlight), and startCheck takes its own run's exit out as it records the runId and replays
+   *  it. When the last in-flight start finishes the map is emptied — anything left was some other run's
+   *  exit (the user's own, a settled validation's duplicate), which onRunExit ignores anyway. runIds are
+   *  unique, so a kept exit can only ever be applied to the run that produced it. */
+  private earlyExits = new Map<string, number>()
+  /** runner.start calls not yet returned — the window in which earlyExits collects. */
+  private startsInFlight = 0
   private readonly timeoutMs: number
 
   constructor(
@@ -103,7 +123,10 @@ export class TaskValidator {
    *  already settled — so anything that is not a queue head is ignored. */
   onRunExit(a: { runId: string; exitCode: number }): void {
     const found = this.headFor(a.runId)
-    if (!found) return
+    if (!found) {
+      this.rememberEarlyExit(a)
+      return
+    }
     const { cwd, head } = found
     // **An exit that only says the app lost sight of the run is not a result.** The socket to the Host
     // dropped; the build is still running there and the reconnect re-adopts it under the same runId, so
@@ -208,6 +231,17 @@ export class TaskValidator {
     if (found) found.head.stopped = true
   }
 
+  /** Keeps an exit that names no head, while a start is in flight (earlyExits). A lost-sight exit is not
+   *  kept: it is not a result (onRunExit), and the real exit follows under the same runId. */
+  private rememberEarlyExit(a: { runId: string; exitCode: number }): void {
+    if (this.startsInFlight === 0 || a.exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
+    this.earlyExits.set(a.runId, a.exitCode)
+    if (this.earlyExits.size > EARLY_EXIT_LIMIT) {
+      const oldest = this.earlyExits.keys().next().value
+      if (oldest !== undefined) this.earlyExits.delete(oldest)
+    }
+  }
+
   private clearTimer(head: Pending): void {
     if (head.timer) clearTimeout(head.timer)
     head.timer = null
@@ -244,11 +278,17 @@ export class TaskValidator {
     // Carried out of the try so advance is called after it, not inside
     let brokenReason: string | null = null
     let skipped = false
+    /** This run's exit, if it arrived before the runId below was recorded (earlyExits). */
+    let early: { runId: string; exitCode: number } | null = null
+    this.startsInFlight++
     try {
       const outcome = await this.deps.runner.start({ cwd, taskId: head.taskId, configId })
       if (outcome === 'skip') skipped = true
-      // The exit cannot beat this assignment: RunManager.start returns synchronously and node-pty's
-      // exit is delivered from the event loop, after this continuation's microtask.
+      // **The exit can beat this assignment.** node-pty delivers its exit from the event loop, after this
+      // continuation — but a runner may queue it as a microtask inside start (the app's Host pty factory
+      // does, for a spawn that never reached the Host), and that microtask runs before this continuation.
+      // onRunExit then finds no head and keeps the exit in earlyExits; it is taken out and replayed below,
+      // once the runId and the timer are in place (review I1).
       else {
         head.runId = outcome.runId
         head.name = outcome.name
@@ -259,12 +299,22 @@ export class TaskValidator {
           this.deps.log?.(`check "${outcome.name}" task=${head.taskId} exceeded ${this.timeoutMs}ms — stopping it`)
           this.deps.runner.stop(outcome.runId)
         }, this.timeoutMs)
+        const code = this.earlyExits.get(outcome.runId)
+        if (code !== undefined) {
+          this.earlyExits.delete(outcome.runId)
+          early = { runId: outcome.runId, exitCode: code }
+        }
       }
     } catch (e) {
       // It never started, so no exit will come. Not advancing here would block that cwd for ever.
       this.deps.log?.(`validation could not start task=${head.taskId}: ${String(e)}`)
       brokenReason = String(e)
+    } finally {
+      this.startsInFlight--
+      if (this.startsInFlight === 0) this.earlyExits.clear()
     }
+    // Replayed outside the try: onRunExit's own failures are not "could not start".
+    if (early) this.onRunExit(early)
     // An entry that is no longer work leaves quietly — no onCannotRun, no failure record. The queue has to
     // keep moving, so advance is called (its identity check drops exactly this entry). The point is that a
     // stale validation must not undo a person's rescue; the purpose of the check itself — not running a
