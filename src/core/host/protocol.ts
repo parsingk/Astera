@@ -69,6 +69,25 @@ export const HOST_FEATURE_SPAWN = 'spawn'
  *  announces `spawn` (ruling R5). Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_WORKTREES = 'worktrees'
 
+/** worktrees.json as the Host holds it, stamped with where it stands in this Host's changes. The
+ *  `worktrees-state` push carries it, and so does the body of **every** `worktree-*` orch-call reply
+ *  (`worktree-add`, `worktree-remove`, `worktree-root`, `worktree-list`), so a receiver can order a
+ *  push against a reply as well as against another push (review of Tasks 4-5, I1).
+ *
+ *  **The contract.**
+ *  - The Host keeps **one counter per Host life**, bumped on every change to its registry, and puts
+ *    its current value on each push and each reply. It restarts with the Host, so a value means
+ *    nothing across Hosts.
+ *  - The receiver keeps the last `seq` it applied, **per connection**. It resets it whenever it
+ *    refills from `worktree-list`, which it does on every new handshake, and takes that fill's `seq`.
+ *    A replaced or restarted Host is therefore never judged by the old Host's numbers.
+ *  - A push or a reply whose `seq` is lower than the last one applied is ignored: it is an older file
+ *    than the one the receiver already holds. */
+export interface WorktreesSnapshot {
+  seq: number
+  file: { root?: string; items: WorktreeInfo[] }
+}
+
 /** What an app hands the Host in `hello.yields`: "you do this, not me" (§7.2). S3: worktrees. S4 adds dispatch. */
 export const HOST_YIELD_WORKTREES = 'worktrees'
 
@@ -274,11 +293,10 @@ export type HostMessage =
   | { t: 'git-op'; op: string; phase: 'begin' | 'end'; kind: 'job-merge'; cwd: string }
   /** The whole worktrees.json as the Host just wrote it, pushed after every Host write so the app's
    *  registry mirror learns an entry it did not make (host S3 ruling R1). An older app ignores it.
-   *
-   *  **`seq` counts the Host's pushes and only ever rises** (Task 1 re-review, N2). A push and a
-   *  write's reply can cross, so the receiver ignores a push whose `seq` is below the one it last
-   *  took, rather than letting an older file overwrite a newer one. */
-  | { t: 'worktrees-state'; seq: number; file: { root?: string; items: WorktreeInfo[] } }
+   *  `seq` follows WorktreesSnapshot's contract (Task 1 re-review N2, review of Tasks 4-5 I1): one
+   *  counter per Host life, shared with the `worktree-*` replies, reset by the receiver at each
+   *  handshake's `worktree-list` fill, and a lower value than the last applied is ignored. */
+  | ({ t: 'worktrees-state' } & WorktreesSnapshot)
   | { t: 'proc-spawned'; id: string; pid: number }
   | { t: 'proc-failed'; id: string; error: string }
   /** One stdout line, live. `seq` counts from 1 per process and is never reused; a client that has
