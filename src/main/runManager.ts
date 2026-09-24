@@ -370,4 +370,13 @@ export class RunManager {
   stopAppOwned(): void {
     for (const [runId, live] of this.runs) if (!live.pty.outlivesApp) this.stop(runId)
   }
+
+  /** The runs whose pty is this process's own child, not the Host's — same split as
+   *  SessionManager.runningAppOwned, for the same reason: HOST_ACT_PATH_IN_USE (protocol.ts) asks what
+   *  this app runs itself, and a Host-backed run is already visible to the Host that asked. `cwd`, not
+   *  `projectPath`: a run configured with a working directory outside its project is in use where it
+   *  actually runs, matching how the Host itself counts a pty (isPathInUse, src/host/worktrees.ts). */
+  runningAppOwned(): Array<{ cwd: string; configName: string }> {
+    return [...this.runs.values()].filter((r) => !r.pty.outlivesApp).map((r) => ({ cwd: r.cwd, configName: r.status.configName }))
+  }
 }

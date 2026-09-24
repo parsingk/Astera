@@ -19,6 +19,13 @@ export function createHostGitOps(collector: {
       if (m.t !== 'git-op') return
       if (m.kind !== 'job-merge') return // not a kind this app knows — nothing to register
       if (m.phase === 'begin') {
+        // M4 (fix round 1): a repeated begin for the same op must not leak the first registration —
+        // op ids are unique per Host life, so this should not happen, but overwriting the Map entry
+        // without ending it first would leave a Work Unit operation open forever (isAsteraOperation
+        // reads one with no endedAt as still running), silently swallowing every outside change in
+        // that project for the rest of this process's life.
+        const prev = open.get(m.op)
+        if (prev !== undefined) collector.endGitOperation(prev)
         open.set(m.op, collector.beginGitOperation(m.kind, m.cwd))
         return
       }

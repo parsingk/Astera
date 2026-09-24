@@ -156,6 +156,17 @@ describe('TerminalManager', () => {
     expect(mgr.list('D:\\two').map((t) => t.id)).toEqual([kept.id])
   })
 
+  // Fix round 1, I4: HOST_ACT_PATH_IN_USE needs a terminal counted only while its pty is this app's
+  // own — a Host-backed one is already visible to the Host that asked. Mutation-proof: removing the
+  // `!t.pty.outlivesApp` filter in runningAppOwned would make this see both terminals.
+  it('runningAppOwned answers the local terminal only', () => {
+    const { mgr, spawned } = setup()
+    const local = mgr.open('D:\\one')
+    mgr.open('D:\\two')
+    spawned[1].pty.outlivesApp = true
+    expect(mgr.runningAppOwned()).toEqual([{ id: local.id, projectPath: 'D:\\one' }])
+  })
+
   it('non-win32에서는 envShell을 쓴다', () => {
     const spawned: { file: string }[] = []
     const factory: PtyFactory = (file) => {

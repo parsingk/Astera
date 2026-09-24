@@ -71,6 +71,20 @@ describe('createHostWorktrees', () => {
     await h.wt.fork({ repoPath: repo, name: 'b' })
     expect((await onDisk()).items.map((w: { id: string }) => w.id)).toContain('written-by-app')
   })
+  // Task 9 fix round 1, I5: worktree-list must see a file another writer touched since the Host's
+  // last operation, the same as every other call already does (the test above, for fork) — R2. It
+  // already does, through the same `call()` wrapper's `await fresh()` every `calls[cmd]` runs behind;
+  // `'worktree-list'` is not special-cased out of it. Kept as its own test because the app's refill
+  // (worktreeRoute.ts) depends on this specific command re-reading, not merely on fork doing so.
+  it('worktree-list sees an entry someone else wrote to the file since its last operation', async () => {
+    const h = rig()
+    await h.wt.fork({ repoPath: repo, name: 'a' })
+    const file = await onDisk()
+    file.items.push({ ...file.items[0], id: 'written-by-app', path: path.join(home, 'wt', 'x'), name: 'x', branch: 'u/x' })
+    await fs.writeFile(path.join(profile, 'worktrees.json'), JSON.stringify(file))
+    const r = await h.wt.call('worktree-list', {}, { role: 'app', toOthers: () => {} })
+    expect((r.body as { file: { items: { id: string }[] } }).file.items.map((w) => w.id)).toContain('written-by-app')
+  })
   // Binding 1 (Task 1 N1): a per-operation re-read refuses a damaged file; it never heals by wiping.
   describe('a worktrees.json damaged after the Host started', () => {
     const damage = () => fs.writeFile(path.join(profile, 'worktrees.json'), '{bad')

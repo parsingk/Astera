@@ -2,7 +2,8 @@
 // Host's own pushes come back in (host S3 ruling R1, R3). Local-mode behaviour — a plain file read
 // and write through WorktreeRegistry — never moves: this only decides, on every status change,
 // whether the registry's writes are redirected to the Host or run against the file here as they
-// always have.
+// always have. More than one process can hold the file this way (the Host and this app, D3), which is
+// exactly why every switch back to local re-reads rather than trusting what memory already has.
 //
 // **The seq contract (protocol.ts's WorktreesSnapshot).** The Host keeps one counter per its life,
 // bumped on every change, and carries it on every `worktrees-state` push and on the body of every
@@ -27,7 +28,7 @@ interface SnapshotBody {
 }
 
 export function createWorktreeRoute(a: {
-  registry: Pick<WorktreeRegistry, 'writeThrough' | 'accept' | 'load'>
+  registry: Pick<WorktreeRegistry, 'writeThrough' | 'accept' | 'refresh'>
   call: Call
   log(m: string): void
 }): {
@@ -42,11 +43,12 @@ export function createWorktreeRoute(a: {
   let lastSeq: number | null = null
 
   /** Applies a snapshot's file if its seq is not older than the last one this connection took — the
-   *  one rule a push and a write reply are both judged by (protocol.ts's contract). */
+   *  one rule a push and a write reply are both judged by (protocol.ts's contract). Advances `lastSeq`
+   *  only when `accept` actually took the file (fix round 1, M3): a malformed one must not move the
+   *  counter past a good file a later, in-order message could still apply. */
   const takeIfNewer = (seq: number, file: unknown): void => {
     if (lastSeq !== null && seq < lastSeq) return
-    lastSeq = seq
-    a.registry.accept(file)
+    if (a.registry.accept(file)) lastSeq = seq
   }
 
   const write = (cmd: string, args: Record<string, unknown>): Promise<RegistryFile> =>
@@ -54,8 +56,10 @@ export function createWorktreeRoute(a: {
       const body = r.body as SnapshotBody
       if (r.status >= 400) throw new Error(body?.error ?? String(r.status))
       // The reply carries the same snapshot a push would, applied by the same rule, so this
-      // connection's mirror holds its own write before the push for it ever arrives.
-      if (typeof body?.seq === 'number' && body.file !== undefined) takeIfNewer(body.seq, body.file)
+      // connection's mirror holds its own write before the push for it ever arrives. Guarded on
+      // `mode` (fix round 1, M3): a write already in flight to the Host when the route falls back to
+      // local must not have its reply overwrite whatever `refresh()` just re-read from disk.
+      if (mode === 'host' && typeof body?.seq === 'number' && body.file !== undefined) takeIfNewer(body.seq, body.file)
       return body?.file as RegistryFile
     })
 
@@ -77,10 +81,21 @@ export function createWorktreeRoute(a: {
           a.log(`worktree-list refused (${r.status}): ${body?.error ?? ''} — the next push or handshake fills it instead`)
           return
         }
-        // A refill, not a push: it resets the counter to this fill's value regardless of what a
-        // previous Host life's numbers were (protocol.ts's contract).
-        if (typeof body?.seq === 'number') lastSeq = body.seq
-        a.registry.accept(body?.file)
+        // Guarded on `mode` (fix round 1, M6/M3 pattern): a `status(off)` racing ahead of this same
+        // reply — the list is still in flight when the Host goes unresponsive or disconnects — must
+        // not have this fill overwrite what `refresh()` already re-read from disk on the way back to
+        // local. Only relevant while still host does the seq check make sense at all: `lastSeq` means
+        // nothing once the route has left and reset it.
+        if (mode === 'host') {
+          // Judged by the same rule a push is (fix round 1, I2), not applied outright: the list
+          // request and a push can both be in flight at once, and the reply's `await` continuation
+          // only resumes in a microtask, after every line already in the socket's buffer — including
+          // a newer push — has run. `lastSeq` is null on every local→host switch (reset below on the
+          // way back to local), so with nothing racing this still takes the fill unconditionally,
+          // exactly as a refill should; it only refuses to roll back a push that got there first.
+          if (typeof body?.seq === 'number') takeIfNewer(body.seq, body.file)
+          else a.registry.accept(body?.file)
+        }
       } catch (err) {
         a.log(`worktree-list failed: ${err instanceof Error ? err.message : String(err)} — the next push or handshake fills it instead`)
       }
@@ -90,7 +105,18 @@ export function createWorktreeRoute(a: {
       mode = 'local'
       lastSeq = null // a different Host life would mean nothing by the old numbers
       a.registry.writeThrough(null)
-      await a.registry.load()
+      // refresh(), not load() (fix round 1, I3): load() heals a damaged file by wiping it, which is
+      // right once at process start and wrong in the middle of the app's life (WorktreeRegistry's own
+      // doc comment on refresh(), and the Host's `fresh()` repeats the same rule, Task 1 N1) — a rule
+      // the codebase already holds itself to, and one this route's brief did not know to ask for.
+      // refresh() is queued behind any local write already waiting its turn and refuses a damaged
+      // file as `RepairNeeded` instead of wiping it; caught and logged rather than left to reject
+      // `status()` itself, which the caller (ipc.ts) would otherwise have to know to expect.
+      try {
+        await a.registry.refresh()
+      } catch (err) {
+        a.log(`worktrees.json could not be re-read after returning to local: ${err instanceof Error ? err.message : String(err)}`)
+      }
     }
   }
 

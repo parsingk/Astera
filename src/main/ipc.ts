@@ -42,7 +42,7 @@ import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn } from './host/outdate
 import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute } from './host/worktreeRoute'
 import { createHostGitOps } from './host/hostGitOps'
-import { localPathInUse } from './host/localPathInUse'
+import { appPathInUse } from './host/localPathInUse'
 import { HOST_PROTOCOL, HOST_ACT_PATH_IN_USE, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
@@ -6342,22 +6342,25 @@ export function registerIpc(
       if (m.t !== 'orch-act') return
       // Asked before the Host removes a worktree folder (host S3, the ruling on plan risk 3):
       // whatever this app runs itself, not through the Host, in or below the path — a local fallback
-      // session or terminal spawned while the Host was not answering. Not an `OrchServerDeps` name
-      // (protocol.ts's doc comment on HOST_ACT_PATH_IN_USE), so it is answered here rather than
-      // through the table below.
+      // session, terminal, run or chat session spawned while the Host was not answering. Not an
+      // `OrchServerDeps` name (protocol.ts's doc comment on HOST_ACT_PATH_IN_USE), so it is answered
+      // here rather than through the table below. The aggregation itself is `appPathInUse`
+      // (src/main/host/localPathInUse.ts), tested there; this is only the wiring.
       if (m.act === HOST_ACT_PATH_IN_USE) {
         const [p] = Array.isArray(m.args) ? m.args : []
-        const value =
-          typeof p === 'string'
-            ? localPathInUse(
-                [
-                  ...core.sessions.runningAppOwned().map((s) => ({ cwd: s.cwd, tag: `SESSION:${s.title}`, outlivesApp: false })),
-                  ...core.terminal.runningAppOwned().map((t) => ({ cwd: t.projectPath, tag: `TERMINAL:${t.id}`, outlivesApp: false }))
-                ],
-                p
-              )
-            : null
-        client.send({ t: 'orch-acted', call: m.call, ok: true, value })
+        // Fix round 1, M2: a malformed ask, or `appPathInUse` throwing, answers `ok:false` rather than
+        // `null` — `null` means "free", and the Host keeps the folder on anything but a clean answer
+        // (askApp in src/host/worktrees.ts turns a rejection into a reason to keep it).
+        if (typeof p !== 'string') {
+          client.send({ t: 'orch-acted', call: m.call, ok: false, error: `${HOST_ACT_PATH_IN_USE} needs a path` })
+          return
+        }
+        try {
+          const value = appPathInUse({ sessions: core.sessions, terminal: core.terminal, run: core.run, chat: core.chat }, p)
+          client.send({ t: 'orch-acted', call: m.call, ok: true, value })
+        } catch (err) {
+          client.send({ t: 'orch-acted', call: m.call, ok: false, error: err instanceof Error ? err.message : String(err) })
+        }
         return
       }
       // One thing the Host cannot do itself — spawn a session, touch a worktree (design §5). The

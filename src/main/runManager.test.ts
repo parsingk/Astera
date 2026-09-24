@@ -392,6 +392,17 @@ describe('RunManager', () => {
       expect(spawned.map((s) => s.pty.killed)).toEqual([false, false]) // win32 kills the tree, not the pty
       expect(mgr.listActive().map((r) => r.status)).toEqual(['stopping', 'running'])
     })
+
+    // Fix round 1, I1/I4: HOST_ACT_PATH_IN_USE needs a run counted only while its pty is this app's
+    // own — a Host-backed run is already visible to the Host that asked. Mutation-proof: removing the
+    // `!r.pty.outlivesApp` filter would make this see both runs.
+    it('runningAppOwned answers the local run only, with its cwd and config name', () => {
+      const { mgr, spawned } = setup('linux')
+      mgr.start(startOpts({ projectPath: 'D:/p', command: 'npm run dev' }))
+      mgr.start(startOpts({ projectPath: 'D:/b', projectName: 'b', config: { ...cfg, name: 'build' } }))
+      spawned[1].pty.outlivesApp = true
+      expect(mgr.runningAppOwned()).toEqual([{ cwd: 'D:/p', configName: 'dev' }])
+    })
   })
 
   it('exit flips the status to exited with the code and a timestamp, and emits it', () => {

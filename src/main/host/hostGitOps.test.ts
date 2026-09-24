@@ -42,3 +42,15 @@ it('ignores an end it never saw begin, and a kind it does not know', () => {
   g.pushed({ t: 'git-op', op: 'y', phase: 'begin', kind: 'rebase', cwd: 'D:/p' } as never)
   expect(c.seq).toBe(0)
 })
+
+// M4 (fix round 1): op ids are unique per Host life, so this should not happen — but a repeated begin
+// must not leak the first registration by overwriting the Map entry out from under it.
+it('ends the previous registration before a repeated begin for the same op', () => {
+  const c = collector()
+  const g = createHostGitOps(c)
+  g.pushed({ t: 'git-op', op: 'h1', phase: 'begin', kind: 'job-merge', cwd: 'D:/p' })
+  g.pushed({ t: 'git-op', op: 'h1', phase: 'begin', kind: 'job-merge', cwd: 'D:/p' })
+  expect([...c.open]).toEqual(['local2']) // local1 was ended, not left open forever
+  g.pushed({ t: 'git-op', op: 'h1', phase: 'end', kind: 'job-merge', cwd: 'D:/p' })
+  expect(c.open.size).toBe(0)
+})
