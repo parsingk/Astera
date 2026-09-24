@@ -478,6 +478,15 @@ export class SessionManager {
     return [...this.sessions.values()].map((s) => ({ ...s.info }))
   }
 
+  /** Drops the record of a session that has exited; a running one is kept and false is answered. For a
+   *  process that never lists exited sessions (the Host); the app keeps them for resume and tab lookup. */
+  forget(id: string): boolean {
+    const live = this.sessions.get(id)
+    if (!live || live.info.status !== 'exited') return false
+    this.sessions.delete(id)
+    return true
+  }
+
   /** The running sessions this app has to end when it quits: the ones whose pty is this process's own
    *  child, which is every one of them with no Host and, with a Host, the ones spawned in the window
    *  before it answered.

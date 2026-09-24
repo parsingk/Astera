@@ -100,6 +100,8 @@ export interface HostSpawner extends HostLocal {
   /** From now on startWorker/startCoordinator reject with "the Host is retiring…"; resolves when every
    *  spawn in flight has settled, or after `ms`, whichever is first. */
   closeAndSettle(ms: number): Promise<void>
+  /** How many session records its SessionManager holds (M3): the live ones, once exits are forgotten. */
+  trackedSessions(): number
 }
 
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
@@ -232,6 +234,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     [previewShotsDir(profileDir)],
     hostWorkerBaseEnv(d.env)
   )
+  sessions.onExit = (e) => {
+    sessions.forget(e.sessionId)
+  }
 
   // Output taps. Keyed by the session id in the note, which is what the tails and the busy verdict
   // are asked by. Neither can throw, and the registry isolates its listeners anyway.
@@ -537,6 +542,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         return disp.sessionId === startedOn.get(id) || disp.sessionId.startsWith('pending:')
       }
       return true
-    }
+    },
+    trackedSessions: () => sessions.list().length
   }
 }

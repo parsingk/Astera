@@ -387,6 +387,15 @@ describe('createHostSpawner', () => {
     await expect(h.spawner!.startWorker(startArgs(taskId, dispatchId))).rejects.toThrow(/node-pty is incomplete/)
     expect(h.sent).toEqual([])
   })
+
+  it('holds no record of a worker whose pty has exited (M3)', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    expect(h.spawner!.trackedSessions()).toBe(1)
+    h.spawned[0].pty.exit(0)
+    expect(h.spawner!.trackedSessions()).toBe(0)
+  })
 })
 
 // §8.4, R8: a Host on its way out lets the spawns it already took finish, and takes no new one.

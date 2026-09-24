@@ -29,6 +29,7 @@ class FakePty implements PtyLike {
   pause() { this.paused = true; this.pauseCalls++ }
   resume() { this.paused = false; this.resumeCalls++ }
   remember(patch: Record<string, unknown>) { this.remembered.push(patch) }
+  emitExit(exitCode: number) { this.exitCb({ exitCode }) }
   /** What `createPtyRouter` stamps on a real handle — set by the tests that care which
    *  factory made the pty. Absent is a pty this process owns, which is what the router
    *  writes with no Host and what every other test here wants. */
@@ -1031,6 +1032,16 @@ describe('SessionManager', () => {
   // which the app makes some of its own before the Host answers. Splitting the running sessions by
   // who owns their pty is what lets the quit path end the app's own children — which die with the
   // app anyway — while leaving the Host's alone.
+  it('forgets an exited session and keeps a running one', () => {
+    const ptys: FakePty[] = []
+    const m = new SessionManager((_f, _a, _o) => { const p = new FakePty(); ptys.push(p); return p }, makeDescriptors(process.platform))
+    const a = m.spawn({ account, cwd: process.cwd() }); const b = m.spawn({ account, cwd: process.cwd() })
+    ptys[0].emitExit(0)
+    expect(m.forget(a.id)).toBe(true)
+    expect(m.forget(b.id)).toBe(false)
+    expect(m.list().map((s) => s.id)).toEqual([b.id])
+  })
+
   describe('who a running session belongs to', () => {
     it('splits the running sessions into the ones the app owns and the ones that outlive it', () => {
       const { manager, spawned } = setup()
