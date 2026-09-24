@@ -14,7 +14,7 @@ import { isPathWithin } from '../files/tree'
 import { planLaunch, type LaunchPlan } from './launch'
 import type { RunnableConfig } from './types'
 
-export { loadRunConfigs, readSeedTexts, type SeedTexts } from '../../core/run/load'
+export { loadRunConfigs, readSeedTexts, type SeedTexts } from './load'
 
 export interface PrepareRunArgs {
   /** 구성을 찾을 프로젝트 */
