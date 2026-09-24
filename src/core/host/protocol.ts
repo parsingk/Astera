@@ -91,6 +91,15 @@ export interface WorktreesSnapshot {
 /** What an app hands the Host in `hello.yields`: "you do this, not me" (§7.2). S3: worktrees. S4 adds dispatch. */
 export const HOST_YIELD_WORKTREES = 'worktrees'
 
+/** The `orch-act` a Host sends an attached app before it removes a worktree folder (S3, the ruling
+ *  on plan risk 3). Args `[path]`. The app answers the tag of anything **it runs itself, not
+ *  through this Host,** in or below `path` (a fallback session it started while the Host was not
+ *  answering), or null. The Host cannot see those, and on macOS and Linux a removal would delete the
+ *  folder under the live process. Not an `OrchServerDeps` name: the app answers it beside
+ *  `answerOrchAct`. An app that does not answer, or answers anything but a string or null, costs the
+ *  removal: the Host keeps the folder. */
+export const HOST_ACT_PATH_IN_USE = 'worktreePathInUse'
+
 /** What the app needs to rebuild its own record for a session after a restart. The Host stores it
  *  and hands it back untouched — only the manager that wrote it knows how to read it (slice 2
  *  design §4).
