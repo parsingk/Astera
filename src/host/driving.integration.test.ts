@@ -263,6 +263,11 @@ async function rig(o: RigOpts) {
     // No tick: every pass here comes from a load, a commit or an app coming or going, or a test's own
     // `tick()`.
     every: () => () => {},
+    // The app-left grace (APP_LEFT_GRACE_MS) passes at once here: these tests are about what follows it.
+    after: (_ms: number, fn: () => void) => {
+      const h = setTimeout(fn, 0)
+      return () => clearTimeout(h)
+    },
     readGate: track((p: string) => readDispatchGate(p)),
     // Never a real taskkill: the fake pids are numbers some real process may hold.
     killRunner: (cmd) => {

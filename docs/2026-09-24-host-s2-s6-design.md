@@ -602,8 +602,11 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
   M1).** It said: the Host sweeps at load and at every change of `driver` to `host`. A yielding app
   that leaves does not change the driver, yet it may have been running a validation or review itself
   (recovery, D8). What shipped: the handover and a yielding app leaving run the same steps
-  (`afterDriveChange`, `driving.ts:197-230`), the handover after its drain. With no app attached, the
-  Host first tree-kills every live `run` pty in its registry marked `validation` that its own
+  (`afterDriveChange`, `driving.ts:197-230`), the handover after its drain, and a yielding app leaving
+  only once it has stayed gone for `APP_LEFT_GRACE_MS` (5 s): a socket that drops while its app lives
+  reads as a leaving app, and that app reconnects after a 1 s backoff, perhaps still starting a
+  person's retry-once or settling a check. An app attaching within the grace cancels the steps. With
+  no app attached, the Host first tree-kills every live `run` pty in its registry marked `validation` that its own
   `RunManager` did not start, waits for each exit up to `FOREIGN_KILL_WAIT_MS` (5 s) and records
   nothing (`checks.ts:330-380`). This covers an older app that drove and left (the handover) as well
   as a yielding one. Then it runs one resume sweep, which restarts a convergence Run's `validating` and
@@ -771,6 +774,11 @@ Each was found while building or reviewing S4+S5 and left as it is, with its rea
   is gated: that app may be checking the Task itself. If the Host's own store write between a
   `worker_done` commit and its check's start took longer than 5 s, such a Task could be gated beside
   its starting check; the check then finds it no longer `validating` and skips.
+- **An app whose socket drops for longer than 5 s is taken for gone.** A yielding app that is still
+  alive but stays unreachable past `APP_LEFT_GRACE_MS` (A54) has its leftover checks killed and a
+  repair it was starting started by the Host. If it then reconnects in the middle of that repair's
+  start, two agents can land on one Dispatch. The same shape remains at a handover: an older app that
+  keeps dispatch and drops its socket hands the drive to the Host at once, with no grace.
 - **An older app that attaches beside a running Host check can start a second one.** Its own "the Host
   attached" sweep (the S3 app's `ipc.ts`) restarts a convergence Run's `validating` Tasks from its
   mirror, and knows nothing of a check the Host is already running in the same folder. The Host cannot

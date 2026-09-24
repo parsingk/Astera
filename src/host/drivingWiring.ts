@@ -62,6 +62,7 @@ export function composeHostDriving(a: {
   nowMs(): number
   /** Test seams, passed through to createHostDriving. */
   every?(ms: number, fn: () => void): () => void
+  after?(ms: number, fn: () => void): () => void
   readGate?(settingsPath: string): Promise<DispatchGate>
   /** Test seam, passed through to createHostChecks: the tree kill of a foreign validation run. */
   killRunner?: (cmd: { file: string; args: string[] }) => void
@@ -127,6 +128,7 @@ export function composeHostDriving(a: {
     log,
     nowMs: () => a.nowMs(),
     ...(a.every ? { every: a.every } : {}),
+    ...(a.after ? { after: a.after } : {}),
     ...(a.readGate ? { readGate: a.readGate } : {})
   })
 

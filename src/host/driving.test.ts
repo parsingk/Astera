@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs, existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createHostDriving, type HostDriving } from './driving'
+import { APP_LEFT_GRACE_MS, createHostDriving, type HostDriving } from './driving'
 import { createHostOrch, type HostOrch } from './orch'
 import type { HostLocal } from './spawner'
 import { emptyState, type OrchState } from '../core/orchestration/state'
@@ -238,6 +238,8 @@ async function rig(o: RigOpts = {}) {
   let tickFn: (() => void) | null = null
   let everyMs: number | null = null
   const clock = { now: NOW_MS }
+  /** While `hold` is set, the app-left grace waits in `pending` until `fireGrace`. */
+  const grace = { hold: false, pending: [] as Array<{ ms: number; fn: () => void; cancelled: boolean }> }
   const reaped: string[] = []
   const reapHook = { onReap: (_p: string): void => {} }
   const driving = createHostDriving({
@@ -265,6 +267,17 @@ async function rig(o: RigOpts = {}) {
     specsDir,
     log: (m) => logs.push(m),
     nowMs: () => clock.now,
+    // The app-left grace: runs at once (the next macrotask) unless a test holds it to fire by hand.
+    after: (ms, fn) => {
+      const entry = { ms, fn, cancelled: false }
+      if (grace.hold) grace.pending.push(entry)
+      else setTimeout(() => {
+        if (!entry.cancelled) fn()
+      }, 0)
+      return () => {
+        entry.cancelled = true
+      }
+    },
     every: (ms, fn) => {
       everyMs = ms
       tickFn = fn
@@ -309,6 +322,13 @@ async function rig(o: RigOpts = {}) {
       clock.now = v
     },
     everyMs: () => everyMs,
+    grace,
+    /** Fires every held grace that was not cancelled; answers how many it fired. */
+    fireGrace: (): number => {
+      const live = grace.pending.splice(0).filter((e) => !e.cancelled)
+      for (const e of live) e.fn()
+      return live.length
+    },
     tickFn: () => tickFn,
     repairDispatchId: 'dsp_rep',
     reaped: () => reaped,
@@ -1030,5 +1050,49 @@ describe('createHostDriving — the restart Gate is armed again on a driving tic
     h.clock = NOW_MS + 13_000
     await h.tickNow()
     expect(h.statusOf('tsk_v')).toBe('blocked')
+  })
+})
+
+// S4+S5 tidy, item 3 (re-review R-m4): a socket that drops while its app lives reads as that app
+// leaving. The Host waits APP_LEFT_GRACE_MS before it takes up what the app left, so a person's
+// retry-once the app was starting is not started a second time by the belt.
+describe('createHostDriving — the app-left grace (S4+S5 tidy)', () => {
+  it('starts no repair, kills nothing and sweeps nothing when the app is back within the grace', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    const sweepsBefore = h.resumeSweep.mock.calls.length // the load's handover swept once
+    h.grace.hold = true
+    h.server.app = false // the socket drops
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.grace.pending.map((e) => e.ms)).toEqual([APP_LEFT_GRACE_MS])
+    h.server.app = true // and the same app reconnects
+    h.driving.appsChanged()
+    expect(h.fireGrace()).toBe(0)
+    await h.settle()
+    expect(h.startRepair).not.toHaveBeenCalled()
+    expect(h.stopForeignValidations).not.toHaveBeenCalled()
+    expect(h.resumeSweep).toHaveBeenCalledTimes(sweepsBefore)
+  })
+
+  it('takes up what a really gone app left once the grace has passed', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    h.grace.hold = true
+    h.server.app = false
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.startRepair).not.toHaveBeenCalled() // not before the grace
+    expect(h.fireGrace()).toBe(1)
+    await vi.waitFor(() => expect(h.startRepair).toHaveBeenCalledWith({ dispatchId: h.repairDispatchId }))
+    expect(h.startRepair).toHaveBeenCalledTimes(1)
+    expect(h.stopForeignValidations).toHaveBeenCalledTimes(1)
+    expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left')
   })
 })

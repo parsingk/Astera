@@ -24,7 +24,7 @@
 // gone app left in this Host's registry before the resume sweep (final review I2). It then runs the
 // resume sweep, and with no app attached starts any open repair Dispatch whose start never happened
 // (N1's belt) and arms the restart Gate for the Tasks nobody is checking (final review I1). A yielding
-// app leaving does the same, less the drain (`afterDriveChange`).
+// app leaving does the same, less the drain, once it has stayed gone `APP_LEFT_GRACE_MS` (`afterDriveChange`).
 //
 // **The restart Gate, on a tick** (final review I1). A Task outside a convergence Run left
 // `validating` or `reviewing` with nothing checking it (a closed app's check, a forwarded start an app
@@ -74,6 +74,14 @@ export interface HostDriving {
  *  tick, so the first tick past it decides. */
 export const STALL_CONFIRM_MS = 5000
 
+/** How long a yielding app must stay gone before the Host takes up what it left (S4+S5 tidy, re-review
+ *  R-m4). A socket that drops while its app lives counts as the app leaving, and that app reconnects
+ *  after its first backoff (1 s, `BACKOFF_MS` in src/main/host/client.ts). Taken up at once, a repair
+ *  that app was starting (a person's retry-once) would be started by both, two agents on one
+ *  Dispatch, and a check it was about to settle would be killed. Long enough for the first two
+ *  reconnect attempts, short beside a tick. */
+export const APP_LEFT_GRACE_MS = 5000
+
 export function createHostDriving(d: {
   profileDir: string
   orch: Pick<HostOrch, 'handle' | 'internalDeps' | 'loaded' | 'drainOnce' | 'state'>
@@ -90,6 +98,8 @@ export function createHostDriving(d: {
   nowMs(): number
   /** Test seam; defaults to setInterval(ORCH_FIRE_TICK_MS), unref'd. */
   every?(ms: number, fn: () => void): () => void
+  /** Test seam; defaults to setTimeout, unref'd. Answers a cancel. */
+  after?(ms: number, fn: () => void): () => void
   /** Test seam (B6); defaults to readDispatchGate. */
   readGate?(settingsPath: string): Promise<DispatchGate>
 }): HostDriving {
@@ -396,6 +406,15 @@ export function createHostDriving(d: {
       return () => clearInterval(h)
     })
   const stop = every(ORCH_FIRE_TICK_MS, () => void tick())
+  const after =
+    d.after ??
+    ((ms: number, fn: () => void): (() => void) => {
+      const h = setTimeout(fn, ms)
+      h.unref?.()
+      return () => clearTimeout(h)
+    })
+  /** The app-left steps waiting out `APP_LEFT_GRACE_MS`, as a cancel; null when none waits. */
+  let appLeftPending: (() => void) | null = null
 
   return {
     driver: () => compute(),
@@ -415,13 +434,28 @@ export function createHostDriving(d: {
       // starts a repair the app opened and never started (final review M1), and any other Task the app
       // left mid-check is armed for the restart Gate (final review I1). After any handover in progress,
       // and only while this Host may still start work.
-      if (appLeft && was === 'host' && last === 'host')
-        handover = handover
-          .then(async () => {
-            if (!mayStart()) return
-            await afterDriveChange('an app left', 'an app left')
-          })
-          .catch((err) => log(`the resume sweep after an app left failed: ${String(err)}`))
+      //
+      // **Only once the app has stayed gone for `APP_LEFT_GRACE_MS`** (S4+S5 tidy, R-m4): a dropped
+      // socket whose app lives on reads as a leaving app, and that app, back after its backoff, may
+      // still be starting a repair or settling a check itself. An app attaching meanwhile cancels the
+      // steps; when the last app leaves again they wait out a fresh grace.
+      if (appLeftPending && d.server.hasApp()) {
+        appLeftPending()
+        appLeftPending = null
+        log('an app attached again within the grace — what the gone app left stays with the apps')
+      }
+      if (appLeft && was === 'host' && last === 'host') {
+        appLeftPending?.()
+        appLeftPending = after(APP_LEFT_GRACE_MS, () => {
+          appLeftPending = null
+          handover = handover
+            .then(async () => {
+              if (!mayStart() || d.server.hasApp()) return
+              await afterDriveChange('an app left', 'an app left')
+            })
+            .catch((err) => log(`the resume sweep after an app left failed: ${String(err)}`))
+        })
+      }
       kick('an app attached or left')
     },
     onLoaded: () => {
@@ -432,6 +466,10 @@ export function createHostDriving(d: {
     },
     tick,
     status: () => ({ driver: last, appAttached: d.server.hasApp() }),
-    dispose: () => stop()
+    dispose: () => {
+      stop()
+      appLeftPending?.()
+      appLeftPending = null
+    }
   }
 }
