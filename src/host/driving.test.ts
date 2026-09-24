@@ -669,6 +669,37 @@ describe('createHostDriving — review round 1', () => {
     await vi.waitFor(() => expect(h.startRepair).toHaveBeenCalledTimes(2))
     expect(h.resumeSweep).toHaveBeenCalledTimes(2)
   })
+  // Task 14 review I3: a yielding app leaving does not change the driver, so no handover runs; the
+  // validation or review that app was running itself (recovery, D8) would then never be re-driven.
+  it('runs the resume sweep once when a yielding app leaves while the Host drives (Task 14 I3)', async () => {
+    const h = await rig({ readyTasks: 0 })
+    await h.load()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(1))
+    h.server.app = true // a new app attaches and yields: the driver stays host
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.resumeSweep).toHaveBeenCalledTimes(1)
+    h.server.app = false // and leaves
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(2))
+    expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left')
+    await h.settle()
+    expect(h.resumeSweep).toHaveBeenCalledTimes(2)
+  })
+  it('runs no such sweep when the Host is retiring as the app leaves (Task 14 I3)', async () => {
+    const h = await rig({ readyTasks: 0 })
+    await h.load()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(1))
+    h.server.app = true
+    h.driving.appsChanged()
+    await h.settle()
+    h.spawner.retiring = true
+    h.server.app = false
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.resumeSweep).toHaveBeenCalledTimes(1)
+  })
+
   // I3/M2: before a load the state in memory is empty, and a sweep over it would take every spec.
   it('a tick before any load deletes no spec file, not even one a live worker reads (I3)', async () => {
     const h = await rig({ openDispatchSpec: true })

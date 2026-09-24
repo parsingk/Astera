@@ -98,6 +98,8 @@ export function createHostDriving(d: {
   let handedOver = false
   /** The handover in progress. A pass waits for it, so the drain it runs comes before any start. */
   let handover: Promise<void> = Promise.resolve()
+  /** Whether an app was attached at the last `appsChanged`, so the next one can tell a leaving app. */
+  let appWasAttached = false
   /** Which computation is the latest. One that started earlier and finished later is dropped, so an old
    *  read of the settings file cannot overwrite a newer one. */
   let computing = 0
@@ -295,8 +297,27 @@ export function createHostDriving(d: {
     drives: () => last === 'host',
     kick,
     appsChanged: () => {
+      const was = last
+      const appLeft = appWasAttached && !d.server.hasApp()
+      appWasAttached = d.server.hasApp()
       // N1: in the same turn as the hello or the close, from the gate already read.
       apply(driverFromLastRead(), null, 'the Host drives now')
+      // **A yielding app that leaves while this Host drives** (Task 14 review I3): the driver stays
+      // 'host', so no handover runs. But that app may have been running a validation or review itself
+      // (recovery still starts them in the app, D8), and its run's exit is not this Host's validator's:
+      // the Task would stay validating or reviewing until the next Host load. One resume sweep picks
+      // it up, after any handover in progress and only while this Host may still start work.
+      //
+      // Known limit (Task 16): the sweep covers only a convergence Run's validating and reviewing Tasks.
+      // Any other Task the app left mid-check is gated at the next Host load, not here. And the app's
+      // run may still be live in this Host's registry, so the sweep can start a second check beside it.
+      if (appLeft && was === 'host' && last === 'host')
+        handover = handover
+          .then(() => {
+            if (!mayStart()) return
+            d.checks.resumeSweep('an app left')
+          })
+          .catch((err) => log(`the resume sweep after an app left failed: ${String(err)}`))
       kick('an app attached or left')
     },
     onLoaded: () => {
