@@ -168,7 +168,7 @@ import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/
 import { listSlashCommands, listCodexMentions } from './slashCommands'
 import { createFileIndex } from './fileIndex'
 import { filterFilePaths } from '../core/files/fileMatch'
-import { sortEntries, isPathWithin, isSamePath, projectRootOf, renamePlan } from '../core/files/tree'
+import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFrom } from '../core/files/tree'
 import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { imageMime } from '../core/files/imageMime'
@@ -3071,41 +3071,17 @@ export function registerIpc(
         },
         log: orchLog
       }),
-      // run-create 가 --cwd 를 저장하기 전에 통과시키는 해석기. 후보는 두 곳에서 온다.
-      //
-      // **세션 cwd 는 후보가 아니다.** assertAllowedPath 는 그것을 첫 번째로 보지만, 워커 세션의
-      // cwd 는 워크트리라서 후보에 넣으면 Run.cwd 가 워크트리 **안으로** 내려간다 — 정규화가
-      // 하려는 것과 정반대 방향이다.
-      //
-      // 워크트리는 path 가 아니라 repoPath 를 넣는다. path 를 넣으면 Run.cwd 가 워크트리가 되고,
-      // 그 값은 worker-start 가 runCwd 로도 쓰므로 워커가 도는 자리까지 바뀐다. 다만 이 후보가
-      // **워크트리 안에서 만든 Run 을 저장소로 올려 주지는 않는다** — 워크트리는 레지스트리
-      // 루트(기본 ~/astera-worktrees) 아래, 저장소 밖에 있어서 projectRootOf 의 포함 판정에 걸리지
-      // 않기 때문이다. 그 경우의 소유 판정은 읽는 쪽에서 한다(core/orchestration/view.ts 의
-      // runsForProject 가 r.cwd 를 repoPathOf 로 되돌린다). 여기서 repoPath 가 하는 일은, 저장소
-      // 루트가 knownProjectPaths 에 아직 없을 때 그 자리를 채워 주는 것이다.
-      resolveProjectRoot: async (cwd) => {
-        const candidates = [
-          ...core.worktrees.list().map((w) => w.repoPath),
-          ...(await core.history.knownProjectPaths())
-        ]
-        // 걷기를 git 저장소 경계에서 멈춘다. Run.cwd 는 표시용 값이 아니다 — worker-start 가
-        // runCwd 로 넘겨 `--worktree current` 는 그 자리에서 워커를 돌리고 `--worktree new` 는
-        // 그 경로의 저장소로 워크트리를 만든다. 세션을 연 적 없는 중첩 저장소(서브모듈, 벤더링된
-        // 클론)에서 run-create 를 부르면 그 저장소는 후보가 아니고 부모만 후보라서, 경계가 없으면
-        // 정규화가 저장소 밖으로 올라가고 워커가 엉뚱한 저장소에서 돈다.
-        const root = await repoRoot(cwd)
-        // 후보 하나하나에 git 을 부르지 않는다. projectRootOf 는 target 을 담는 후보만 고르므로,
-        // 남은 판정은 "그 후보가 target 의 저장소 루트 아래인가"뿐이다 — 저장소 루트와 target
-        // 사이의 디렉터리에는 .git 이 있을 수 없고(있었다면 그것이 target 의 저장소 루트다),
-        // 따라서 그 구간의 후보는 전부 같은 저장소다. git 호출은 target 에 대해 한 번뿐이다.
-        //
-        // cwd 가 저장소가 아니면(root === null) 경계 자체가 없다. 이때 후보를 전부 버리면 정규화가
-        // 통째로 사라져 하위 디렉터리 Run 이 다시 보이지 않게 되는데, 막으려는 피해(워커가 다른
-        // 저장소에서 도는 것)는 저장소 안에서만 생긴다. 그래서 이 경우에는 경계를 걸지 않는다.
-        const bounded = root === null ? candidates : candidates.filter((c) => isPathWithin(root, c))
-        return projectRootOf(bounded, cwd)
-      },
+      // run-create 가 --cwd 를 저장하기 전에 통과시키는 해석기. 규칙(후보의 순서, 저장소 경계,
+      // 받은 cwd 로의 폴백)은 Host 와 같이 쓰는 resolveProjectRootFrom(core/files/tree.ts)에 있고,
+      // 여기서는 앱의 두 후보 목록을 모아 넘긴다. 앱이 없을 때는 Host 가 제 워크트리 레지스트리와
+      // 감시자 없는 기록 목록으로 같은 함수를 부른다(host/projectRoots.ts).
+      resolveProjectRoot: async (cwd) =>
+        resolveProjectRootFrom({
+          cwd,
+          repoPaths: core.worktrees.list().map((w) => w.repoPath),
+          projectPaths: await core.history.knownProjectPaths(),
+          repoRoot
+        }),
       // 코디네이터가 --validate 에 넣을 목록. 조립은 하지 않으므로
       // loadRunConfigs 만 부른다.
       // `astera status` 가 세는 값 둘. 세션은 SessionManager 의 것이고 버전은 Electron 의

@@ -1,7 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
-import { sortEntries, isPathWithin, isSamePath, renamePlan, projectRootOf, buildIgnoreMatcher, type DirEntry } from './tree'
-import { absPath } from '../testPaths'
+import {
+  sortEntries,
+  isPathWithin,
+  isSamePath,
+  renamePlan,
+  projectRootOf,
+  resolveProjectRootFrom,
+  buildIgnoreMatcher,
+  type DirEntry
+} from './tree'
+import { absPath, foldsCaseHere } from '../testPaths'
 
 const e = (name: string, isDir: boolean): DirEntry => ({ name, path: `D:\\p\\${name}`, isDir })
 
@@ -117,6 +126,115 @@ describe('projectRootOf', () => {
   // 이 값이 Run.cwd 로 저장되므로 실제로 존재하는 경로 표기를 유지해야 한다
   it.runIf(process.platform === 'win32')('win32에서 대소문자 차이를 무시하고, 후보의 원본 표기를 돌려준다', () => {
     expect(projectRootOf(['D:\\Work\\Proj'], 'd:\\work\\proj\\src')).toBe('D:\\Work\\Proj')
+  })
+})
+
+// 앱(ipc.ts)과 Host 가 같이 부르는 해석기. 앱 쪽 주석의 두 경우 — 저장소 경계와 중첩 저장소 — 가
+// 여기서 규칙으로 고정된다.
+describe('resolveProjectRootFrom', () => {
+  const rootIs = (root: string | null) => {
+    const asked: string[] = []
+    return {
+      asked,
+      repoRoot: async (dir: string): Promise<string | null> => {
+        asked.push(dir)
+        return root
+      }
+    }
+  }
+
+  it('알려진 프로젝트의 하위 폴더는 그 프로젝트로 올린다', async () => {
+    const git = rootIs(absPath('work', 'proj'))
+    const cwd = absPath('work', 'proj', 'src', 'main')
+    expect(
+      await resolveProjectRootFrom({ cwd, repoPaths: [], projectPaths: [absPath('work', 'proj')], repoRoot: git.repoRoot })
+    ).toBe(absPath('work', 'proj'))
+    // git 은 target 에 대해 한 번만 부른다 — 후보마다 부르지 않는다
+    expect(git.asked).toEqual([cwd])
+  })
+
+  // 세션을 연 적 없는 중첩 저장소(서브모듈, 벤더링된 클론). 그 저장소는 후보가 아니고 부모만
+  // 후보다 — 경계가 없으면 정규화가 저장소 밖으로 올라가 워커가 엉뚱한 저장소에서 돈다.
+  it('후보가 cwd 의 저장소 루트 밖이면 올리지 않는다', async () => {
+    const cwd = absPath('work', 'proj', 'vendor', 'lib', 'src')
+    const git = rootIs(absPath('work', 'proj', 'vendor', 'lib'))
+    expect(
+      await resolveProjectRootFrom({ cwd, repoPaths: [], projectPaths: [absPath('work', 'proj')], repoRoot: git.repoRoot })
+    ).toBe(cwd)
+  })
+
+  it('중첩 저장소 자신이 후보면 부모가 아니라 그것으로 올린다', async () => {
+    const cwd = absPath('work', 'proj', 'vendor', 'lib', 'src')
+    const git = rootIs(absPath('work', 'proj', 'vendor', 'lib'))
+    expect(
+      await resolveProjectRootFrom({
+        cwd,
+        repoPaths: [],
+        projectPaths: [absPath('work', 'proj'), absPath('work', 'proj', 'vendor', 'lib')],
+        repoRoot: git.repoRoot
+      })
+    ).toBe(absPath('work', 'proj', 'vendor', 'lib'))
+  })
+
+  // 저장소 루트와 cwd 사이의 후보는 같은 저장소다 — 그 구간에는 .git 이 있을 수 없다.
+  it('저장소 루트 아래의 더 깊은 후보를 고른다', async () => {
+    const cwd = absPath('work', 'mono', 'pkg', 'a', 'src')
+    const git = rootIs(absPath('work', 'mono'))
+    expect(
+      await resolveProjectRootFrom({
+        cwd,
+        repoPaths: [],
+        projectPaths: [absPath('work'), absPath('work', 'mono'), absPath('work', 'mono', 'pkg', 'a')],
+        repoRoot: git.repoRoot
+      })
+    ).toBe(absPath('work', 'mono', 'pkg', 'a'))
+  })
+
+  // 경계가 막으려는 피해는 저장소 안에서만 생긴다. 후보를 다 버리면 하위 폴더 Run 이 다시 안 보인다.
+  it('cwd 가 저장소가 아니면 경계 없이 올린다', async () => {
+    const git = rootIs(null)
+    expect(
+      await resolveProjectRootFrom({
+        cwd: absPath('work', 'plain', 'docs'),
+        repoPaths: [],
+        projectPaths: [absPath('work', 'plain')],
+        repoRoot: git.repoRoot
+      })
+    ).toBe(absPath('work', 'plain'))
+  })
+
+  it('담는 후보가 없으면 받은 cwd 를 그대로 돌려준다', async () => {
+    const cwd = absPath('elsewhere', 'x')
+    expect(
+      await resolveProjectRootFrom({ cwd, repoPaths: [absPath('work', 'proj')], projectPaths: [], repoRoot: rootIs(cwd).repoRoot })
+    ).toBe(cwd)
+  })
+
+  // 워크트리의 repoPath 는 knownProjectPaths 에 저장소 루트가 아직 없을 때 그 자리를 채운다.
+  it('워크트리 레지스트리의 repoPath 도 후보다', async () => {
+    const git = rootIs(absPath('work', 'fresh'))
+    expect(
+      await resolveProjectRootFrom({
+        cwd: absPath('work', 'fresh', 'src'),
+        repoPaths: [absPath('work', 'fresh')],
+        projectPaths: [],
+        repoRoot: git.repoRoot
+      })
+    ).toBe(absPath('work', 'fresh'))
+  })
+
+  // 같은 폴더가 두 표기로 오면 앞선 목록(워크트리 repoPath)의 표기가 저장된다 — 앱의 순서 그대로.
+  it.runIf(foldsCaseHere)('같은 폴더의 두 표기는 repoPaths 의 표기를 돌려준다', async () => {
+    const lower = absPath('work', 'proj')
+    const upper = absPath('WORK', 'PROJ')
+    expect(
+      await resolveProjectRootFrom({
+        cwd: absPath('work', 'proj', 'src'),
+        repoPaths: [upper],
+        projectPaths: [lower],
+        repoRoot: rootIs(lower).repoRoot
+      })
+    ).toBe(upper)
   })
 })
 
