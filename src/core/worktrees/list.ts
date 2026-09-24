@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { WorktreeListItem, WorktreeStatus } from '../types'
 import { git, listGitWorktrees } from './git'
-import type { WorktreeRegistry } from './registry'
+import type { WorktreeStore } from './registry'
 
 const samePath = (a: string, b: string): boolean =>
   path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
@@ -23,7 +23,7 @@ const samePath = (a: string, b: string): boolean =>
  * 브랜치는 그대로 남으므로 잃는 것은 "앱이 이것을 관리한다"는 기록뿐이고, 되돌리려면 그 폴더를
  * 지우거나 다시 만들면 된다. 그 드문 경우를 위해 "폴더 없음" 줄을 늘 남겨 두는 것보다 낫다고 보았다.
  */
-export async function listWithStatus(registry: WorktreeRegistry): Promise<WorktreeListItem[]> {
+export async function listWithStatus(registry: WorktreeStore): Promise<WorktreeListItem[]> {
   const items = registry.list()
   const repos = [...new Set(items.map((w) => w.repoPath))]
   const rowsByRepo = new Map<string, Array<{ path: string }> | null>()

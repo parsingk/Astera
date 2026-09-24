@@ -4,7 +4,7 @@ import path from 'node:path'
 import type { WorktreeRemoveResult } from '../types'
 import { isPathWithin } from '../files/tree'
 import { git, gitVersionAtLeast, isCleanWorktree, listGitWorktrees } from './git'
-import type { WorktreeRegistry } from './registry'
+import type { WorktreeStore } from './registry'
 
 const samePath = (a: string, b: string): boolean =>
   path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
@@ -106,7 +106,7 @@ async function isBranchMerged(repo: string, branch: string): Promise<boolean> {
 export async function removeWorktree(args: {
   id: string
   force?: boolean
-  registry: WorktreeRegistry
+  registry: WorktreeStore
   isPathInUse: (worktreePath: string) => string | null
 }): Promise<WorktreeRemoveResult> {
   const info = args.registry.get(args.id)

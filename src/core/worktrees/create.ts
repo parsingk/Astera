@@ -10,7 +10,7 @@ import {
   autoName, branchNameFor, candidateName, slugify, worktreePathFor, MAX_SUFFIX_ATTEMPTS
 } from './naming'
 import { copyWorktreeInclude } from './include'
-import type { WorktreeRegistry } from './registry'
+import type { WorktreeStore } from './registry'
 import type { Message } from '../i18n'
 
 const WORKTREE_ADD_TIMEOUT_MS = 180_000
@@ -21,7 +21,7 @@ export async function createWorktree(args: {
   /** The branch to fork from, in short form ('develop' or 'origin/develop'). Optional: the orchestration
    *  path creates worker worktrees without a user in the loop and keeps the automatic detection. */
   baseRef?: string
-  registry: WorktreeRegistry
+  registry: WorktreeStore
 }): Promise<{ info: WorktreeInfo; warnings: Message[] }> {
   const repo = await repoRoot(args.repoPath)
   if (!repo) throw new Error(`NOT_GIT_REPO: ${args.repoPath}`)

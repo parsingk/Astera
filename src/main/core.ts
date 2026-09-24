@@ -26,7 +26,7 @@ import { SchedulerConfigStore } from '../core/scheduler/config'
 import { RunConfigStore } from './runConfigStore'
 import { RunManager } from './runManager'
 import { TerminalManager } from './terminalManager'
-import { WorktreeRegistry } from '../core/worktrees/registry'
+import { WorktreeRegistry, defaultWorktreeRoot } from '../core/worktrees/registry'
 import { LocalHistoryStore } from '../core/localHistory/store'
 import { ghostAccounts } from '../core/accounts/ghosts'
 import { suggestableCandidates } from '../core/accounts/suggest'
@@ -277,7 +277,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     path.join(userDataDir, 'worktrees.json'),
     // The default root carries the app name. It only steers new worktrees — a root saved in
     // worktrees.json wins over it, and existing entries keep the absolute path they were created at
-    path.join(os.homedir(), 'astera-worktrees')
+    defaultWorktreeRoot(os.homedir())
   )
   await worktrees.load()
   const localHistory = new LocalHistoryStore(path.join(userDataDir, 'local-history'))
