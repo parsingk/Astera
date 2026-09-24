@@ -18,7 +18,7 @@
 
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { AppUnreachable, type OrchCaller } from '../core/host/orchProtocol'
+import { AppUnreachable, refusedBeforeActing, type OrchCaller } from '../core/host/orchProtocol'
 import { liveAppPid } from '../core/host/pidFile'
 import { HOST_ACT_PATH_IN_USE, type HostMessage, type PtyMeta, type WorktreesSnapshot } from '../core/host/protocol'
 import type { OrchServerDeps } from '../core/orchestration/command'
@@ -109,10 +109,17 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
   /** The start of every operation that reads or writes the registry: the file as it is now (R2),
    *  so an entry the app wrote in its local mode is seen. **Never load()**: load heals a damaged file by writing an empty list, which
    *  is right once at a process start and wrong in the middle of a life (Task 1 N1). A damaged file
-   *  refuses here as `RepairNeeded`, and file and memory stay as they were. */
+   *  refuses here as `RepairNeeded`, and file and memory stay as they were.
+   *
+   *  Tagged `refusedBeforeActing` (fix round 1, I2): every caller reaches this before it has closed,
+   *  removed or created anything, so a `RepairNeeded` from here means nothing happened yet. */
   const fresh = async (): Promise<void> => {
     await checkGit()
-    await registry.refresh()
+    try {
+      await registry.refresh()
+    } catch (err) {
+      throw refusedBeforeActing(err as Error)
+    }
   }
 
   // ---- in use (R8) ----
@@ -313,14 +320,16 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
       await fresh()
       // Refused whole, before anything is closed or removed, so the command answers a conflict (exit
       // 6) and `run-delete` deletes nothing, rather than a list of folders that all failed.
-      // AppUnreachable because that is what it is: the app that must be asked cannot be.
+      // AppUnreachable because that is what it is: the app that must be asked cannot be. Tagged
+      // `refusedBeforeActing` (fix round 1, I2) for the same reason `fresh()`'s is: nothing has been
+      // closed or removed yet, so a caller may keep no receipt over this one.
       let detached = false
       try {
         detached = detachedApp()
       } catch {
         /* the per-folder check in `reap` refuses on its own */
       }
-      if (detached) throw new AppUnreachable(DETACHED_APP)
+      if (detached) throw refusedBeforeActing(new AppUnreachable(DETACHED_APP))
       return deps.removeWorktrees(paths)
     },
     isPathInUse,
@@ -342,17 +351,26 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
 }
 
 /** `index.ts`'s wiring, pulled out so it can be tested without booting the real Host: `load()` once
- *  at Host start, and only when the Host spawns anything of its own (`spawner !== null`, R5). With no
- *  spawner nothing built there ever reaches `worktrees` — S2's rule, kept whole in S3 — so nothing
- *  here reads the file either. A failed load is logged, not thrown: the per-operation `fresh()` above
- *  still refuses a damaged file on its own, and a Host that could not heal it at start should still
- *  come up and answer everything that does not touch worktrees.json. */
-export function loadWorktreesIfSpawning(a: {
-  /** Whatever `createHostSpawner` returned — only whether it is `null` matters here. */
-  spawner: unknown
+ *  at Host start, and only when the Host spawns anything of its own (R5). With no spawner nothing
+ *  built there ever reaches `worktrees` — S2's rule, kept whole in S3 — so nothing here reads the file
+ *  either. A failed load is logged, not thrown: the per-operation `fresh()` above still refuses a
+ *  damaged file on its own, and a Host that could not heal it at start should still come up and answer
+ *  everything that does not touch worktrees.json.
+ *
+ *  **Awaited by `index.ts`, before it starts listening (fix round 1, M2).** `load()` is the one read
+ *  that may heal a damaged file; an operation that reached `fresh()` first would read it still damaged
+ *  and answer 409 `repair: worktrees.json` for no reason. The window was already narrow — this load
+ *  starts before the address is bound — and awaiting it here closes it for a few milliseconds of start. */
+export async function loadWorktreesIfSpawning(a: {
+  /** Whether `createHostSpawner` returned a real spawner rather than `null` (R5). */
+  hasSpawner: boolean
   worktrees: Pick<HostWorktrees, 'load'>
   log(m: string): void
-}): void {
-  if (a.spawner === null) return
-  void a.worktrees.load().catch((err) => a.log(`worktrees.json could not be loaded at Host start: ${message(err)}`))
+}): Promise<void> {
+  if (!a.hasSpawner) return
+  try {
+    await a.worktrees.load()
+  } catch (err) {
+    a.log(`worktrees.json could not be loaded at Host start: ${message(err)}`)
+  }
 }

@@ -32,7 +32,7 @@ import { codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
 import type { OrchCaller } from '../core/host/orchProtocol'
 import { createHostSpawner, type HostLocal } from './spawner'
 import type { HostMessage } from '../core/host/protocol'
-import { AppUnreachable } from '../core/host/orchProtocol'
+import { AppUnreachable, refusedBeforeActing } from '../core/host/orchProtocol'
 import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
 import { registrySessions } from './sessions'
@@ -1993,13 +1993,43 @@ describe('Host-local spawn (S2)', () => {
     expect(l.releaseWorker).not.toHaveBeenCalled()
     expect(orch.state().dispatches[0]).toMatchObject({ workerState: 'stopped', closedBy: 'stop' })
   })
-  it('starts a --worktree new worker with no app attached', async () => {
+  // Fix round 1, M3: through the real spawner, not the fake `local()` above — that fake always owns
+  // everything, so this test could not have failed before spawner.ts's own `owns()` actually let
+  // `--worktree new` through with no app (spawner.test.ts's `owns` test carries that claim on its
+  // own). This one proves the whole path really wires through: command.ts, orchDeps.ts, orch.ts and
+  // the real spawner together, ending in a worker spawned in the folder the fork returned.
+  it('starts a --worktree new worker with no app attached, through the real spawner', async () => {
     const { taskId } = await seed()
-    const l = local(); const act = vi.fn()
-    const orch = orchOver({ hasApp: () => false, act, local: l })
-    const r = await orch.call({ cmd: 'worker-start', args: { ...worker(taskId, 'new'), name: 'n' }, sessionId: '' })
+    for (const f of ['Astera.exe', 'cli.js']) await fs.writeFile(path.join(dir, f), '')
+    await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
+    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: 'D:/cfg', color: '#888', createdAt: NOW, provider: 'claude' }] }))
+    const forkedDir = path.join(dir, 'wt-a'); await fs.mkdir(forkedDir)
+    const spawned: { cwd: string }[] = []
+    const registry = new PtyRegistry({
+      spawn: (file, args, opts) => {
+        spawned.push({ cwd: opts.cwd })
+        return { pid: 1, onData() {}, onExit() {}, write() {}, resize() {}, kill() {}, pause() {}, resume() {} }
+      },
+      log: () => {}
+    })
+    const box: { orch?: ReturnType<typeof orchOver> } = {}
+    const act = vi.fn()
+    const spawner = createHostSpawner({
+      profileDir: dir,
+      env: { PATH: process.env.PATH, ASTERA_HOST_CLI_EXEC: path.join(dir, 'Astera.exe'), ASTERA_HOST_CLI_ENTRY: path.join(dir, 'cli.js'), ASTERA_HOST_SKILLS: path.join(dir, 'skills') },
+      platform: process.platform,
+      homeDir: path.join(dir, 'home'),
+      registry,
+      broadcast: () => {},
+      getState: () => box.orch!.state(),
+      log: () => {},
+      appKeepsWorktrees: () => false,
+      worktrees: { fork: async () => forkedDir, makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() }
+    })
+    box.orch = orchOver({ hasApp: () => false, act, local: spawner })
+    const r = await box.orch.call({ cmd: 'worker-start', args: { ...worker(taskId, 'new'), name: 'n' }, sessionId: '' })
     expect(r.status).toBe(200)
-    expect(l.startWorker).toHaveBeenCalledWith(expect.objectContaining({ worktree: 'new', name: 'n' }))
+    expect(spawned).toEqual([{ cwd: forkedDir }])
     expect(act).not.toHaveBeenCalled()
   })
   // §1.2's S3 line: a coordinator Job advances with no app in every placement.
@@ -2014,6 +2044,24 @@ describe('Host-local spawn (S2)', () => {
     expect(l.startCoordinator).toHaveBeenCalledTimes(1)
     const run = orch.state().runs.find((x) => x.jobId === job.value.id)!
     expect(run).toMatchObject({ worktree: 'D:/wt-run', coordinatorSessionId: 'ses_coord' })
+  })
+  // Fix round 1, I1: risk-6's cleanup calls the Host's own removeWorktrees, which can itself throw
+  // AppUnreachable (an unattached app is alive). That must never turn a spawn failure into a 409 —
+  // "could not start the coordinator" is the true reason, and the app has nothing to do with it.
+  it('keeps 400 for a failed coordinator start even when the risk-6 cleanup is itself refused', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p', coordinatorAccountId: 'acc1' }, NOW); if (!job.ok) throw new Error(job.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(job.state))
+    const detached = new AppUnreachable('Astera is running but not connected to this Host')
+    const l = local({
+      startCoordinator: vi.fn(async () => { throw new Error('spawn failed') }),
+      removeWorktrees: vi.fn(async () => { throw detached })
+    })
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const r = await orch.call({ cmd: 'run-start', args: { run: job.value.id }, sessionId: '' })
+    expect(r.status).toBe(400)
+    expect((r.body as { error: string }).error).toMatch(/could not start the coordinator: Error: spawn failed/)
+    expect((r.body as { error: string }).error).toMatch(/could not be removed/)
+    expect(orch.state().runs).toEqual([])
   })
   it('merges and removes a run\'s worktrees with no app, and a retried merge merges once', async () => {
     const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW); if (!job.ok) throw new Error(job.error)
@@ -2056,6 +2104,54 @@ describe('Host-local spawn (S2)', () => {
     expect(r.status).toBe(409)
     expect(orch.state().runs.some((x) => x.id === run.value.id)).toBe(true)
     expect(orch.state().jobs.some((x) => x.id === job.value.id)).toBe(true)
+  })
+  // Fix round 1, I2: a refusal that closed or removed nothing yet keeps no receipt, so the same keyed
+  // `run-delete` really does the removal once the reason clears (Astera quits) rather than replaying
+  // the stale 409 for the rest of the Host's life.
+  it('keeps no receipt for a keyed run-delete refused up front by a detached app, and the retry after it quits really removes the folder', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW); if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW); if (!task.ok) throw new Error(task.error)
+    const opened = openDispatch(task.state, { taskId: task.value.id, provider: 'claude', accountId: 'acc1', sessionId: 'ses_w', cwd: 'D:/wt-a', specPath: '' }, NOW)
+    if (!opened.ok) throw new Error(opened.error)
+    const closed = closeDispatch(opened.state, { sessionId: 'ses_w', exitCode: 0 }, NOW); if (!closed.ok) throw new Error(closed.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(closed.state))
+    let appAlive = true
+    const l = local({
+      removeWorktrees: vi.fn(async () => {
+        if (appAlive) throw refusedBeforeActing(new AppUnreachable('Astera is running but not connected to this Host'))
+        return { failed: [] }
+      })
+    })
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const first = await orch.call({ cmd: 'run-delete', args: { id: run.value.id, removeWorktrees: true }, sessionId: 'sesA', request: 'req-d' })
+    expect(first.status).toBe(409)
+    // The app quits: the same reason no longer applies, and the same request id is sent again, as the
+    // refusal itself said to.
+    appAlive = false
+    const again = await orch.call({ cmd: 'run-delete', args: { id: run.value.id, removeWorktrees: true }, sessionId: 'sesA', request: 'req-d' })
+    expect(again.status).toBe(200)
+    expect(again.replayed).toBeUndefined()
+    expect(l.removeWorktrees).toHaveBeenCalledTimes(2)
+    expect(orch.state().runs.some((x) => x.id === run.value.id)).toBe(false)
+  })
+  // The other half: a refusal that is not tagged might have half-acted, and keeps its receipt exactly
+  // as every other HOST_LOCAL name's does.
+  it('keeps its receipt for a keyed run-delete that failed after already acting', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW); if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW); if (!task.ok) throw new Error(task.error)
+    const opened = openDispatch(task.state, { taskId: task.value.id, provider: 'claude', accountId: 'acc1', sessionId: 'ses_w', cwd: 'D:/wt-a', specPath: '' }, NOW)
+    if (!opened.ok) throw new Error(opened.error)
+    const closed = closeDispatch(opened.state, { sessionId: 'ses_w', exitCode: 0 }, NOW); if (!closed.ok) throw new Error(closed.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(closed.state))
+    const l = local({ removeWorktrees: vi.fn(async () => { throw new Error('git left the tree dirty') }) })
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const first = await orch.call({ cmd: 'run-delete', args: { id: run.value.id, removeWorktrees: true }, sessionId: 'sesA', request: 'req-y' })
+    expect(first.status).toBe(500)
+    const again = await orch.call({ cmd: 'run-delete', args: { id: run.value.id, removeWorktrees: true }, sessionId: 'sesA', request: 'req-y' })
+    expect(again.replayed).toBe(true)
+    expect(l.removeWorktrees).toHaveBeenCalledTimes(1)
   })
   it('routes the worktree-* calls to the Host worktrees, app or not, and refuses a request id on them', async () => {
     const call = vi.fn(async () => ({ status: 200, body: { file: { items: [] } } }))

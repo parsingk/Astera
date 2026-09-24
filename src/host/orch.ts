@@ -935,10 +935,9 @@ export function createHostOrch(a: {
             : { status: 501, body: { error: 'this Host does not own worktrees.json' } }
         // **Request receipts, and still the same synchronous step the call entered in** — nothing
         // above has awaited on this path, so the lookup and the claim cannot be split by a second
-        // `orch-call` arriving in between (§7). The two commands above are deliberately on the other
-        // side of this line: neither goes through `handleCommand`, the app is the only client that
-        // sends them, and `state-put` has its own answer to the same problem in ruling F56's version
-        // check.
+        // `orch-call` arriving in between (§7). The three groups above are deliberately on the other
+        // side of this line: none of them goes through `handleCommand`, and `state-put` has its own
+        // answer to the same problem in ruling F56's version check.
         //
         // **A caller that sent no id skips all of it** and gets the same answer, the same exit code
         // and the same order as before this existed (§9).

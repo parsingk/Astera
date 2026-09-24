@@ -400,23 +400,29 @@ describe('createHostWorktrees', () => {
 // when the Host spawns anything of its own.
 describe('loadWorktreesIfSpawning', () => {
   const damage = () => fs.writeFile(path.join(profile, 'worktrees.json'), '{bad')
-  it('loads, and so heals a damaged file, only when a spawner is present', async () => {
+  // Fix round 1, M1: a mock `load()` lets "not called" be asserted the moment the call returns, with
+  // no race against its own I/O — the file-content version raced that I/O and stayed green three runs
+  // out of three even with the `hasSpawner` guard deleted.
+  it('calls load() only when a spawner is present', async () => {
+    const load = vi.fn().mockResolvedValue(undefined)
+    const logs: string[] = []
+    await loadWorktreesIfSpawning({ hasSpawner: false, worktrees: { load }, log: (m) => logs.push(m) })
+    expect(load).not.toHaveBeenCalled()
+    await loadWorktreesIfSpawning({ hasSpawner: true, worktrees: { load }, log: (m) => logs.push(m) })
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(logs).toEqual([])
+  })
+  it('really heals a damaged file through the real registry, when a spawner is present', async () => {
     await damage()
     const h = rig()
-    const logs: string[] = []
-    loadWorktreesIfSpawning({ spawner: null, worktrees: h.wt, log: (m) => logs.push(m) })
-    // Nothing to wait for on the no-spawner side: the file must stay damaged for as long as this test
-    // runs, which the loaded-and-healed assertion below proves retroactively (the same call, spawning).
-    expect(await fs.readFile(path.join(profile, 'worktrees.json'), 'utf8')).toBe('{bad')
-    loadWorktreesIfSpawning({ spawner: {}, worktrees: h.wt, log: (m) => logs.push(m) })
-    await vi.waitFor(async () => expect(await onDisk()).toEqual({ items: [] }))
+    await loadWorktreesIfSpawning({ hasSpawner: true, worktrees: h.wt, log: () => {} })
+    expect(await onDisk()).toEqual({ items: [] })
     expect(await fs.readFile(path.join(profile, 'worktrees.json.bak'), 'utf8')).toBe('{bad')
-    expect(logs).toEqual([])
   })
   it('logs rather than throws when the load itself fails', async () => {
     const logs: string[] = []
     const failing = { load: async () => { throw new Error('disk gone') } }
-    loadWorktreesIfSpawning({ spawner: {}, worktrees: failing, log: (m) => logs.push(m) })
-    await vi.waitFor(() => expect(logs.some((l) => /worktrees\.json could not be loaded at Host start.*disk gone/.test(l))).toBe(true))
+    await loadWorktreesIfSpawning({ hasSpawner: true, worktrees: failing, log: (m) => logs.push(m) })
+    expect(logs.some((l) => /worktrees\.json could not be loaded at Host start.*disk gone/.test(l))).toBe(true)
   })
 })

@@ -150,9 +150,9 @@ async function main(): Promise<void> {
 
   // The Host's own worktree registry (Host S3 §3.1, §3.3, §3.4): forks, merges and removes Job
   // worktrees over its own registry, whether or not an app is attached. Construction reads and writes
-  // nothing, so building it unconditionally keeps S2's "constructed, not loaded" rule — its registry
-  // is read only by `loadWorktreesIfSpawning` below, and only when there is a spawner (R5); with no
-  // spawner nothing else here ever reaches `worktrees` either, so nothing is read at all.
+  // nothing, so building it unconditionally keeps S2's "constructed, not loaded" rule — at start its
+  // registry is read only by `loadWorktreesIfSpawning` below, and only when there is a spawner (R5);
+  // with no spawner nothing else here ever reaches `worktrees` either, so nothing is read at all.
   //
   // `server` and `orch` are assigned below; its closures only run inside an operation, long after both
   // exist.
@@ -189,9 +189,10 @@ async function main(): Promise<void> {
   })
 
   // R10: the one read that may heal a damaged worktrees.json, done once — and only when the Host
-  // spawns anything of its own (`spawner !== null`, R5). With no spawner nothing built above ever
-  // reaches `worktrees`, so nothing is read here either, which is S2's rule kept whole in S3.
-  loadWorktreesIfSpawning({ spawner, worktrees, log: (m) => log.write(m) })
+  // spawns anything of its own (R5). With no spawner nothing built above ever reaches `worktrees`, so
+  // nothing is read here either, which is S2's rule kept whole in S3. Awaited (fix round 1, M2): an
+  // operation that reached the registry before this heal finished would read it still damaged.
+  await loadWorktreesIfSpawning({ hasSpawner: spawner !== null, worktrees, log: (m) => log.write(m) })
 
   // The orchestration state and the commands over it (host control plane design §5, §6).
   //

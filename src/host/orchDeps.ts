@@ -5,7 +5,7 @@
 // `handleCommand` did not.
 import type { OrchAccount, OrchRunConfig, OrchServerDeps } from '../core/orchestration/command'
 import type { Provider } from '../core/types'
-import { AppUnreachable } from '../core/host/orchProtocol'
+import { AppUnreachable, wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
 import type { HostSessions } from './sessions'
@@ -228,26 +228,32 @@ const HOST_WHEN_ABSENT = ['chatSend'] as const
  * there, and kills it there — so a coordinator's `worker-start`, `worker-stop`, `worker-release` and
  * `worker-read` work with no Astera window open. And it forks, merges and removes Job worktrees over
  * its own registry — so `--worktree new`, `makeRunWorktree`, `mergeWorktrees` and `removeWorktrees`
- * work the same way.
+ * work the same way, with no app attached at all.
  *
  * **Per call, not per name (R1).** The spawner's `owns(name, args)` says whether this particular call
  * is the Host's. **The worktree names and `--worktree new` are the Host's unless an attached app still
- * keeps them itself (R4)** — an app old enough to have no S3 worktree module of its own asks the Host
- * to fork, merge and remove for it, exactly as it did before S3, and `owns` says so for as long as
- * that app is attached. It also says no to a read of a tail the app holds, and to a stop or a
+ * keeps them itself (R4)** — an app old enough to have no S3 worktree module of its own still does
+ * this work itself, and the Host asks *that app* for it, exactly as it did in S2, for as long as the
+ * app stays attached. `owns` also says no to a read of a tail the app holds, and to a stop or a
  * `--terminal` reuse of a session the Host's registry never held (an app-local pty: the app started
  * it, so only the app can end it). A call the Host does not own goes the way its name went before S2
  * (`HOST_LOCAL_FALLBACK`): the seven that decide their command as PROPAGATES, `probeLimit` and
- * `readReviewFile` as SWALLOWED. So `worker-start --worktree new` with no app and no attached app that
- * keeps worktrees is still 409 `APP_REQUIRED` with no Dispatch left, exactly as before S3.
+ * `readReviewFile` as SWALLOWED. So `worker-start --worktree new` with **no app at all** now succeeds,
+ * started by the Host itself (`owns` has nobody to defer to) — the 409 `APP_REQUIRED` it used to
+ * answer unconditionally is what a Host with no spawner at all still answers, below.
  *
  * **A Host started without the CLI paths has no spawner (`local: null`)**, and then every one of the
  * nine takes its old route — that Host behaves exactly as a Host before S2.
  *
- * A local call that acts calls `onEffect` before it runs, the rule the `act` funnel keeps. A local
- * refusal only the app can clear (a profile file the Host cannot read: accounts.json, app-settings.json)
- * arrives as `RepairNeeded` and is flagged with its file, so the command answers CONFLICT carrying
- * `repair: <file>` and the refusal's own words — never the 400 a failed start otherwise is.
+ * A local call that acts calls `onEffect` before it runs, the rule the `act` funnel keeps — **except
+ * `removeWorktrees` and `makeRunWorktree`, marked only once they are past their own up-front refusals**
+ * (fix round 1, I2): both can refuse whole, before anything is closed, removed or created
+ * (`worktrees.ts`'s `fresh()` and its detached-app check), and a refusal tagged `refusedBeforeActing`
+ * marks no effect at all, so a keyed retry once the reason clears still has everything left to do. A
+ * local refusal only the app can clear (a profile file the Host cannot read: accounts.json,
+ * app-settings.json) arrives as `RepairNeeded` and is flagged with its file, so the command answers
+ * CONFLICT carrying `repair: <file>` and the refusal's own words — never the 400 a failed start
+ * otherwise is.
  */
 const HOST_LOCAL = [
   'startWorker', 'startCoordinator', 'releaseWorker', 'readWorker', 'probeLimit', 'readReviewFile',
@@ -268,10 +274,30 @@ const HOST_LOCAL_FALLBACK: Record<HostLocalName, 'propagates' | 'swallowed'> = {
   removeWorktrees: 'propagates'
 }
 
+/**
+ * **HOST_LOCAL names whose own body can refuse whole before it has done anything at all** (fix round
+ * 1, I2): `removeWorktrees`'s detached-app check and `worktrees.ts`'s shared `fresh()` (a damaged
+ * `worktrees.json`), which `makeRunWorktree`'s fork also runs through first. `mergeWorktrees` is not
+ * here — its merge can partially land before any failure, so a failure of its might have half-acted
+ * and is marked the ordinary way, before it runs.
+ *
+ * For the names in this set, `hostLocal` marks the effect only once it knows the call ran past that
+ * up-front refusal: on success, or on any failure that is not tagged `refusedBeforeActing`. Marking
+ * before running, as every other HOST_LOCAL name still does, would keep a receipt over a refusal that
+ * closed, removed or created nothing — and a keyed retry once the reason clears (the app quits, the
+ * file is repaired) would then replay the stale refusal instead of really doing the work.
+ */
+const MARKS_AFTER_ACTING = new Set<HostLocalName>(['removeWorktrees', 'makeRunWorktree'])
+
 const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending'])
 
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
 const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
+
+/** Not forwarded through the generic funnel at all (fix round 1, I1): `discardRunWorktree` is built by
+ *  hand, right above, so that its own failure can never reach `onAppRequired`. Declared here only for
+ *  the compiler check below. */
+const NOT_FORWARDED = ['discardRunWorktree'] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
  *  synchronous getters became `T | Promise<T>` in `command.ts` and are awaited at their one call site
@@ -287,6 +313,7 @@ type Classified =
   | (typeof LOCAL_WHEN_ABSENT)[number]
   | (typeof HOST_SESSIONS)[number]
   | (typeof HOST_WHEN_ABSENT)[number]
+  | (typeof NOT_FORWARDED)[number]
 
 /**
  * **Whether calling this dependency changes something outside the state** (request receipts design
@@ -361,7 +388,10 @@ const EFFECTFUL: Record<Classified, boolean> = {
   sendSession: true,
   readChat: false,
   // HOST_WHEN_ABSENT — a turn, on either route.
-  chatSend: true
+  chatSend: true,
+  // NOT_FORWARDED — never read: `discardRunWorktree` marks nothing itself (I1), and it never reaches
+  // `REMOTE`, so this value is here only to satisfy the `Record<Classified, boolean>` check.
+  discardRunWorktree: false
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -573,17 +603,27 @@ export function hostOrchDeps(a: {
   /** HOST_LOCAL: the spawner's answer when it owns this call, otherwise the route the name had before
    *  S2. A local `RepairNeeded` is flagged with its file the way a propagating forward is flagged, a
    *  `HostRetiring` with `retry`, and a local `AppUnreachable` as it is — only for the names that
-   *  propagate, since a swallowed failure must not decide the status. */
+   *  propagate, since a swallowed failure must not decide the status.
+   *
+   *  **The effect is marked before the call runs, except for `MARKS_AFTER_ACTING` (fix round 1, I2).**
+   *  Those two are marked only once the call is past its own up-front refusal — on success, or on any
+   *  failure not tagged `refusedBeforeActing` — so a refusal that closed, removed or created nothing
+   *  keeps no receipt. Every other HOST_LOCAL name keeps the general rule (`act` funnel's own
+   *  reasoning): a call that might have half-acted before it threw is marked as if it had. */
   const hostLocal = (name: HostLocalName) => {
     const propagates = HOST_LOCAL_FALLBACK[name] === 'propagates'
     const fallback = forward(name, propagates)
+    const marksAfter = MARKS_AFTER_ACTING.has(name)
     return async (...args: unknown[]): Promise<unknown> => {
       const local = a.local
       if (!local || !local.owns(name, args)) return fallback(...args)
-      if (EFFECTFUL[name]) a.onEffect?.()
+      if (EFFECTFUL[name] && !marksAfter) a.onEffect?.()
       try {
-        return await (local[name] as (...xs: unknown[]) => Promise<unknown>)(...args)
+        const result = await (local[name] as (...xs: unknown[]) => Promise<unknown>)(...args)
+        if (EFFECTFUL[name] && marksAfter) a.onEffect?.()
+        return result
       } catch (err) {
+        if (EFFECTFUL[name] && marksAfter && !wasRefusedBeforeActing(err)) a.onEffect?.()
         if (propagates && err instanceof RepairNeeded) a.onAppRequired(name, err.message, { repair: err.file })
         // A Host that is leaving refuses new starts; the caller retries once a Host is up (ruling a).
         if (propagates && err instanceof HostRetiring) a.onAppRequired(name, err.message, { retry: HostRetiring.RETRY })
@@ -592,6 +632,32 @@ export function hostOrchDeps(a: {
         if (propagates && err instanceof AppUnreachable) a.onAppRequired(name, err.message, {})
         throw err
       }
+    }
+  }
+
+  /**
+   * **Risk-6's orphan cleanup (`command.ts`'s `run-start`), and never the app being required — fix
+   * round 1, I1.** A Run worktree this same command just made is best-effort removed once starting
+   * its coordinator has failed. Routed the way `removeWorktrees` itself would be (Host-local when the
+   * Host owns worktree work, the app when it does not and is attached), but **outside `hostLocal` and
+   * `forward`'s flagging entirely**: whatever happens here is logged, never handed to `onAppRequired`,
+   * because this call is not the reason the command failed and must never decide its status. The
+   * command already marked its own effect through the `makeRunWorktree` that made the folder, so this
+   * one marks nothing either.
+   */
+  const discardRunWorktree = async (path: string): Promise<{ removed: boolean }> => {
+    const local = a.local
+    const remove: (paths: string[]) => Promise<{ failed: string[] }> =
+      local && local.owns('removeWorktrees', [])
+        ? (paths) => local.removeWorktrees(paths)
+        : (forward('removeWorktrees', false) as (paths: string[]) => Promise<{ failed: string[] }>)
+    try {
+      const { failed } = await remove([path])
+      if (failed.length > 0) a.log(`orphaned run worktree ${path} is still in use — left in place`)
+      return { removed: failed.length === 0 }
+    } catch (err) {
+      a.log(`orphaned run worktree ${path} could not be removed: ${err instanceof Error ? err.message : String(err)}`)
+      return { removed: false }
     }
   }
 
@@ -628,6 +694,7 @@ export function hostOrchDeps(a: {
     readSession: own('readSession'),
     sendSession: own('sendSession'),
     readChat: own('readChat'),
+    discardRunWorktree,
     ...remote,
     ...nested
   } as unknown as OrchServerDeps

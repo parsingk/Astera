@@ -16,6 +16,28 @@ import { HOST_PROTOCOL, type HostMessage } from './protocol'
  *  into a conflict and a script reads exit 6 where exit 4 is the truth. */
 export class AppUnreachable extends Error {}
 
+/**
+ * Tags `err`: thrown before this call closed, removed or created anything at all (Host S3 fix round 1,
+ * I2). `worktrees.ts`'s up-front refusals — an app running but not attached, or a damaged
+ * `worktrees.json` — tag themselves this way before any folder is touched.
+ *
+ * **Why the tag lives on the error and not in `orchDeps.ts`.** Whether a given `AppUnreachable` or
+ * `RepairNeeded` means "nothing happened yet" or "some of it already did" depends on where in the
+ * local call it was thrown, which only the thing that threw it knows; guessing from the error's class
+ * or message at the command layer would be right by accident. A caller may keep no receipt over a
+ * tagged refusal — a retry once the reason clears (the app quits, the file is repaired) still has
+ * everything left to do, unlike a refusal that comes after some of the work already happened, which
+ * keeps its receipt like any other failure that acted.
+ */
+export function refusedBeforeActing<E extends Error>(err: E): E {
+  return Object.assign(err, { beforeActing: true as const })
+}
+
+/** Whether `err` carries that tag. */
+export function wasRefusedBeforeActing(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { beforeActing?: unknown }).beforeActing === true
+}
+
 /** The client behind one `orch-call`. Supplied by `server.ts`, which is the only place that knows
  *  which socket asked — the command table cannot work it out from `{cmd, args}`. */
 export interface OrchCaller {

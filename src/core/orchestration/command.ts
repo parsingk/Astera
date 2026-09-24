@@ -211,6 +211,14 @@ export interface OrchServerDeps {
    *  도는 세션을 닫는 일까지 배선이 한다(removeWorktree 의 isPathInUse 가 그러지 않으면 거절한다).
    *  실패한 경로는 돌려준다 — 삭제를 막지는 않지만 응답에 실어 사람이 알 수 있게 한다. */
   removeWorktrees?(paths: string[]): Promise<{ failed: string[] }>
+  /** Risk-6's orphan cleanup: best-effort removal of a Run worktree `run-start` just made with
+   *  `makeRunWorktree`, once starting the coordinator then failed. **Never decides that command's
+   *  status** — a refused or failed cleanup is logged wherever it is wired (the Host's own version,
+   *  `hostOrchDeps`, never calls the app-required flag for it) and left as an orphan on disk; the
+   *  command keeps its own 400 and its own reason (Host S3 fix round 1, I1). Optional: without it (or
+   *  with `removeWorktrees` alone) the cleanup falls back to that, the plain best-effort try/catch this
+   *  file already had — see the `run-start` case. */
+  discardRunWorktree?(path: string): Promise<{ removed: boolean }>
   /** 이 Run 을 관리할 코디네이터 세션을 띄운다. **`startWorker` 와 같은 꼴이다** — 배선이 채우고,
    *  세션 프로세스만 만들고 OrchState 는 건드리지 않는다(서버가 상태를 소유한다). 첫 입력으로
    *  인수 프롬프트를 받는다(core/orchestration/handover.ts).
@@ -1375,18 +1383,34 @@ export async function handleCommand(
         //
         // **방금 만든 워크트리는 예외다 — 상태가 아니라 디스크에 남는다.** 상태를 안 바꾸므로 이
         // 회차는 그 경로를 다시 보지 못하고, 그러면 `run-delete removeWorktrees` 도 결코 이 폴더를
-        // 겨누지 않는다: 아무도 지우지 않는 고아 워크트리다. 지우는 것 자체가 실패해도 원래 실패를
-        // 가리지 않는다 — 로그만 남기고 같은 거절을 낸다.
-        if (freshWorktree && deps.removeWorktrees) {
+        // 겨누지 않는다: 아무도 지우지 않는 고아 워크트리다.
+        //
+        // **지우는 것 자체가 거절되거나 실패해도 이 400 은 절대 바뀌지 않는다**(fix round 1, I1).
+        // `deps.discardRunWorktree` 가 있으면 그것만 쓴다 — Host 쪽 배선은 그 실패를 결코
+        // `onAppRequired` 로 표시하지 않아, "코디네이터를 못 띄웠다"는 이 실패가 "앱이 필요하다"는
+        // 409 로 둔갑하지 않는다. 없으면(예: 앱이 직접 도는 옛 배선) `removeWorktrees` 로 대신한다 —
+        // 그쪽에는 그런 표시가 없으니 안전하다. 어느 쪽이든 실패는 로그만 남기고, 고아가 남았다는
+        // 말은 이 400 자신의 문구에 싣는다 — 사람이 볼 자연스러운 자리가 그것뿐이다.
+        let orphanNote = ''
+        if (freshWorktree) {
           const orphan = freshWorktree
-          try {
-            const { failed } = await deps.removeWorktrees([orphan])
-            if (failed.length > 0) deps.log?.(`orphaned run worktree ${orphan} is still in use — left in place`)
-          } catch (removeErr) {
-            deps.log?.(`orphaned run worktree ${orphan} could not be removed: ${String(removeErr)}`)
+          if (deps.discardRunWorktree) {
+            const { removed } = await deps.discardRunWorktree(orphan)
+            if (!removed) orphanNote = ` — its fresh run worktree ${orphan} could not be removed and was left behind`
+          } else if (deps.removeWorktrees) {
+            try {
+              const { failed } = await deps.removeWorktrees([orphan])
+              if (failed.length > 0) {
+                deps.log?.(`orphaned run worktree ${orphan} is still in use — left in place`)
+                orphanNote = ` — its fresh run worktree ${orphan} is still in use and was left behind`
+              }
+            } catch (removeErr) {
+              deps.log?.(`orphaned run worktree ${orphan} could not be removed: ${String(removeErr)}`)
+              orphanNote = ` — its fresh run worktree ${orphan} could not be removed and was left behind`
+            }
           }
         }
-        return bad(`could not start the coordinator: ${String(e)}`)
+        return bad(`could not start the coordinator: ${String(e)}${orphanNote}`)
       }
       // autoDispatch 는 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이
       // 코드베이스는 해당 없는 칸을 두지 않는다(startRun 이 pendingStart 를 지우는 것과 같다).
