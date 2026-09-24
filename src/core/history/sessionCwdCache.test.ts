@@ -74,6 +74,24 @@ describe('SessionCwdCache', () => {
     expect(c.get(sessionPath('A', 'x.jsonl'), 100, 20)).toBeUndefined()
   })
 
+  // 반대 방향: 이 빌드가 적은 소문자 파일의 행은 옛 행과 구별되지 않아 대문자 형제의 조회도 그 행을
+  // 본다. 그래도 적중은 (mtimeMs, size) 가 같아야 하므로, 다른 파일이면 빗나간다. 둘 다 같은 두
+  // 파일 — 밀리초 이하까지 같은 mtime 과 같은 크기, 게다가 UUID 이름이 대소문자만 다른 것 — 만 남는다.
+  it('linux: 이 빌드가 적은 소문자 파일의 행은 대문자 형제의 (mtime, size) 로는 빗나간다', async () => {
+    const c = new SessionCwdCache(filePath(), 'linux')
+    await c.load()
+    const lower = path.join(path.resolve(sessionPath('a')).toLowerCase(), 'x.jsonl')
+    const upper = path.join(path.dirname(lower), 'X.jsonl')
+    c.set(lower, 100, 20, CWD_A)
+    expect(c.get(upper, 101, 20)).toBeUndefined()
+    expect(c.get(upper, 100, 21)).toBeUndefined()
+    await c.flush()
+    const again = new SessionCwdCache(filePath(), 'linux')
+    await again.load()
+    expect(again.get(upper, 101, 20)).toBeUndefined()
+    expect(again.get(lower, 100, 20)).toBe(CWD_A)
+  })
+
   it('linux: 예전 빌드가 소문자로 적은 키도 찾고, 새로 적는 키는 원래 철자다', async () => {
     const p = sessionPath('A', 'X.jsonl')
     await fs.writeFile(filePath(), JSON.stringify({ [keyOf(p)]: [100, 20, CWD_A] }), 'utf8')
