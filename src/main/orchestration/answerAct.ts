@@ -52,9 +52,10 @@ export async function answerOrchAct(a: {
   // **The m6 ruling (S4+S5 Task 14).** A Host that announces `dispatch` forwards the three S5 starts to
   // the app only while it does not drive: it is parked, or retiring, or an older app keeps dispatch.
   // An app that yields dispatch does not run them then: the Task stays validating or reviewing, or its
-  // repair Dispatch stays unstarted, and the Host that drives next restarts it (its handover's resume
-  // sweep and repair belt, Task 12), the same way a retiring Host leaves it (Task 13). The cost if this
-  // is wrong is one Task waiting for the next Host start. `repairTargetFor` answers null (below);
+  // repair Dispatch stays unstarted, and the Host that drives next picks it up the same way it picks up
+  // what a retiring Host leaves (Task 13): its handover's resume sweep restarts the check in a convergence
+  // Job, and its load gates the Task otherwise; the repair belt (Task 12) starts a repair Dispatch left
+  // with no spec. The cost if this is wrong is one Task waiting for the next Host start. `repairTargetFor` answers null (below);
   // `repairOnce`, a person's retry (R20), and everything else are answered as before.
   if (a.yieldsDispatch === true && YIELDED_STARTS.has(a.act))
     return {
