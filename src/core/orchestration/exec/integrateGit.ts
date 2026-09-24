@@ -8,10 +8,12 @@
 
 import { existsSync } from 'node:fs'
 import path from 'node:path'
+import type { OrchServerDeps } from '../command'
 import { isSamePath } from '../../files/tree'
 import { createWorktree } from '../../worktrees/create'
 import { workerBaseFailure } from '../../worktrees/base'
 import { git as realGit, gitDir, gitVersionAtLeast, listGitWorktrees } from '../../worktrees/git'
+import { removeWorktree } from '../../worktrees/remove'
 import type { WorktreeStore } from '../../worktrees/registry'
 
 /** 프로젝트 폴더가 **서 있는 브랜치**에서 워크트리를 하나 만들고 그 경로를 낸다.
@@ -363,4 +365,135 @@ export async function integrateWorktrees(
     if (reap) await ctx.reap(target.path)
   }
   return { kind: 'merged', uncommitted }
+}
+
+export interface ReapContext {
+  registry: WorktreeStore
+  /** The sessions a reap may close in this folder, and whether anything still runs there. */
+  sessions: {
+    inTree(worktreePath: string): { id: string }[]
+    anyRunningIn(worktreePath: string): boolean
+    kill(id: string): void
+  }
+  dispatches(): readonly { sessionId: string; retained?: boolean; outcome?: unknown; endedAt?: string }[]
+  isPathInUse(p: string): string | null
+  log(m: string): void
+  /** Test seams; default to WORKTREE_CLOSE_TIMEOUT_MS and 50 ms. */
+  closeTimeoutMs?: number
+  pollMs?: number
+}
+
+/** 워크트리의 세션이 닫히기를 기다리는 상한. pty.kill 은 비동기이고 상태는 exit 이벤트가 와야
+ *  바뀐다 — 고정 대기가 아니라 조건을 폴링하고(coordinator 의 waitUntilIdle 과 같은 관례) 이
+ *  시간을 넘기면 정리를 건너뛴다. 살아 있는 프로세스 밑의 폴더는 지우지 않는다. */
+export const WORKTREE_CLOSE_TIMEOUT_MS = 5_000
+/**
+ * 워크트리 하나를 폴더째 지운다 — 그 안에서 도는 세션을 먼저 닫고. true = 지워졌다.
+ *
+ * **두 곳이 이것을 쓴다**: 병합 직후의 자동 정리와 `run-delete --remove-worktrees`. 복제하면
+ * "무엇을 닫아도 되는가" 의 답이 두 벌이 되고, 한쪽만 고쳐지는 날 다른 쪽이 살아 있는 세션 밑의
+ * 폴더를 지운다.
+ *
+ * **세션을 먼저 닫는 이유**: 끝난 워커의 세션은 스스로 죽지 않는다 — worker-release 는 코디네이터가
+ * 부르는 명령이고 앱이 자동으로 부르는 자리가 없다. 닫지 않으면 removeWorktree 의 isPathInUse 가
+ * 늘 IN_USE 를 내고 이 정리는 사실상 한 번도 돌지 않는다.
+ *
+ * **닫지 않는 두 경우**: 붙잡아 둔 세션(worker-retain — 사람이 살려 두라고 말한 것)과 아직 열려
+ * 있는 Dispatch 의 세션(지금 일하는 중이다). 그때는 아무것도 닫지 않고 그 워크트리를 그대로 둔다 —
+ * removeWorktree 가 IN_USE 로 거절하는 것이 그 결과다. run-delete 가 retained 에 같은 예외를 둔다.
+ */
+export async function reapWorktree(worktreePath: string, ctx: ReapContext): Promise<boolean> {
+  const inTree = ctx.sessions.inTree(worktreePath)
+  const held = ctx.dispatches().some(
+    (d) =>
+      (d.retained || (!d.outcome && !d.endedAt)) && inTree.some((x) => x.id === d.sessionId)
+  )
+  if (held) {
+    ctx.log(`worktree ${worktreePath} has a held or working session — left alone`)
+    return false
+  }
+  for (const x of inTree) ctx.sessions.kill(x.id)
+  // 조건 폴링. 상태가 바뀌는 것을 기다리는 것이지 정해진 시간을 자는 것이 아니다
+  const deadline = Date.now() + (ctx.closeTimeoutMs ?? WORKTREE_CLOSE_TIMEOUT_MS)
+  while (Date.now() < deadline && ctx.sessions.anyRunningIn(worktreePath))
+    await new Promise((r) => setTimeout(r, ctx.pollMs ?? 50))
+  const entry = ctx.registry.list().find((w) => isSamePath(w.path, worktreePath))
+  if (!entry) {
+    ctx.log(`${worktreePath} is not an app worktree — left alone`)
+    return false
+  }
+  try {
+    const removed = await removeWorktree({
+      id: entry.id,
+      force: true,
+      registry: ctx.registry,
+      isPathInUse: ctx.isPathInUse
+    })
+    ctx.log(`removed worktree ${worktreePath} (branch deleted=${removed.branchDeleted})`)
+    return true
+  } catch (e) {
+    ctx.log(`worktree cleanup skipped for ${worktreePath}: ${String(e)}`)
+    return false
+  }
+}
+
+/** The two OrchServerDeps bodies that merge and remove a Run's worktrees, over one context. */
+export function worktreeDeps(ctx: {
+  integrate(into: string, paths: string[], opts: { reap?: boolean }): Promise<Integration>
+  reap(p: string): Promise<boolean>
+  log(m: string): void
+  /** Test seam; defaults to existsSync. */
+  exists?(p: string): boolean
+}): {
+  mergeWorktrees: NonNullable<OrchServerDeps['mergeWorktrees']>
+  removeWorktrees: NonNullable<OrchServerDeps['removeWorktrees']>
+} {
+  return {
+    // `run-merge`(사람이 상세 창에서 누른다)와 `run-delete --merge` 가 부른다.
+    // integrateWorktrees 의 'agent'(충돌 → 에이전트에게 넘김)도 여기서는 실패다 — 사람이 결과를
+    // 기다리고 있고, 지우는 경로에서는 넘길 Run 자체가 사라지는 중이라 통합 Task 를 붙일 자리가
+    // 없다. 두 경우 모두 이유를 그대로 올려 보내 사람이 무엇을 해야 하는지 읽게 한다.
+    //
+    // **`reap: false`** — 이 두 호출자는 폴더를 남긴다(그 이유는 integrateWorktrees 의 주석).
+    //
+    // **폴더가 있는지로 거른다 — 레지스트리 등록 여부가 아니다.** "합칠 수 있는가"와 "앱이 지워도
+    // 되는가"는 다른 질문이다. 뒤쪽만 레지스트리의 것이다(reapableChildRuns 의 isAppWorktree — 그
+    // 판정은 이 이유로 바뀌지 않는다). integrateWorktrees 는 git 자신의 `worktree list`에서 브랜치를
+    // 찾으므로, 앱이 만들었지만 아직(또는 더 이상) 레지스트리에 없는 워크트리도 git 에게는 멀쩍이
+    // 합칠 수 있는 대상이다 — 오케스트레이터가 스스로 만들어 `worker-start --worktree <path>` 로
+    // 띄워 넣은, 살아서 일하고 있는 워크트리가 레지스트리 필터 때문에 조용히 걸러지던 것이 바로
+    // 그 결함이었다. 재료 `paths`(runWorktrees, `Dispatch.cwd` 를 본다)에 남을 수 있는 건 이제
+    // 하나뿐이다: 폴더 자체가 사라진 경우(통합 병합이 이미 걷어 갔거나 예약 회차가 걷혔다) —
+    // 그것만 거른다. 존재 확인은 동기다: 폴더가 없으면 합칠 것이 없고, 있으면 그 뒤는 git 의 일이다.
+    mergeWorktrees: async (runCwd, paths) => {
+      const alive = paths.filter((p) => (ctx.exists ?? existsSync)(p))
+      const gone = paths.filter((p) => !(ctx.exists ?? existsSync)(p))
+      if (gone.length > 0)
+        ctx.log(`merge: skipping ${gone.length} removed worktree(s): ${gone.join(', ')}`)
+      // 남은 것이 없으면 성공이다 — 합칠 것이 없는 것은 실패가 아니고, 여기서 실패로 내면 사람이
+      // 손쓸 수 없는 이유로 병합 버튼과 삭제가 막힌다.
+      if (alive.length === 0) return { ok: true, merged: [], uncommitted: 0 }
+      const r = await ctx.integrate(runCwd, alive, { reap: false })
+      return r.kind === 'merged'
+        ? { ok: true, merged: alive, uncommitted: r.uncommitted }
+        : { ok: false, reason: r.reason }
+    },
+    // `run-delete --remove-worktrees` 가 부른다. 순차로 지운다 — reapWorktree 가 세션을 닫고
+    // 상태가 바뀌기를 기다리므로, 병렬로 돌리면 서로의 폴링이 남의 세션을 기다린다.
+    removeWorktrees: async (paths) => {
+      const failed: string[] = []
+      for (const p of paths) {
+        // **이미 없는 폴더는 실패가 아니다.** Dispatch 의 cwd 는 워크트리를 지운 뒤에도 상태에 남으므로
+        // 그런 경로가 여기까지 온다 — reapWorktree 는 그것을 "앱 워크트리가 아니다" 로 거절하고 false 를
+        // 내는데, 그것을 failed 에 담으면 사용자에게 "이 폴더를 지우지 못했습니다" 로 보고된다.
+        // 요청한 끝 상태는 이미 그것이다. mergeWorktrees 가 같은 이유로 같은 판정을 한다.
+        if (!(ctx.exists ?? existsSync)(p)) {
+          ctx.log(`remove: skipping already removed worktree ${p}`)
+          continue
+        }
+        if (!(await ctx.reap(p))) failed.push(p)
+      }
+      return { failed }
+    }
+  }
 }

@@ -4,7 +4,14 @@ import path from 'node:path'
 import { makeRepo, gitSync, tempDir } from '../../worktrees/testRepo'
 import { WorktreeRegistry } from '../../worktrees/registry'
 import { git } from '../../worktrees/git'
-import { forkWorktree, integrateWorktrees, type IntegrateContext } from './integrateGit'
+import {
+  forkWorktree,
+  integrateWorktrees,
+  reapWorktree,
+  worktreeDeps,
+  type IntegrateContext,
+  type ReapContext
+} from './integrateGit'
 
 let repo: string, registry: WorktreeRegistry, logs: string[], ops: string[], reaped: string[]
 beforeEach(async () => {
@@ -171,5 +178,73 @@ describe('integrateWorktrees — the rules of the one automatic writer into a re
     const a = await worked('a'); await fs.writeFile(path.join(a, 'forgot.txt'), 'x')
     expect(await integrateWorktrees(repo, [a], { reap: false }, ctx())).toEqual({ kind: 'merged', uncommitted: 1 })
     expect(logs.join('\n')).toMatch(/1 uncommitted change\(s\) — not merged/)
+  })
+})
+
+describe('reapWorktree (rule 11)', () => {
+  /** `exitAfterMs` makes a kill land later, as pty.kill does: the session is gone only on its exit event. */
+  const sessions = (live: Array<{ id: string; cwd: string }>, exitAfterMs = 0) => ({
+    live,
+    inTree: (p: string) => live.filter((s) => s.cwd.toLowerCase().startsWith(p.toLowerCase())),
+    anyRunningIn: (p: string) => live.some((s) => s.cwd.toLowerCase().startsWith(p.toLowerCase())),
+    kill(id: string) {
+      const gone = (): void => { const i = live.findIndex((s) => s.id === id); if (i >= 0) live.splice(i, 1) }
+      if (exitAfterMs > 0) setTimeout(gone, exitAfterMs); else gone()
+    }
+  })
+  const reapCtx = (over: Partial<ReapContext> = {}): ReapContext => ({
+    registry, sessions: sessions([]), dispatches: () => [], isPathInUse: () => null, log: (m) => logs.push(m), closeTimeoutMs: 300, pollMs: 10, ...over
+  })
+  it('leaves alone a worktree where a working or retained session is', async () => {
+    const a = await worked('a')
+    for (const d of [{ sessionId: 's1' }, { sessionId: 's1', endedAt: 'T', retained: true }]) {
+      const s = sessions([{ id: 's1', cwd: a }])
+      expect(await reapWorktree(a, reapCtx({ sessions: s, dispatches: () => [d] }))).toBe(false)
+      expect(s.live).toHaveLength(1)
+    }
+    await expect(fs.stat(a)).resolves.toBeTruthy()
+  })
+  it('closes the finished sessions in it, waits for them, then removes folder and entry', async () => {
+    const a = await worked('a')
+    const s = sessions([{ id: 's1', cwd: a }], 40)
+    // The app's isPathInUse sees the same live sessions, so removing before they are gone is refused.
+    const inUse = (p: string): string | null => (s.anyRunningIn(p) ? 'SESSION:s1' : null)
+    expect(await reapWorktree(a, reapCtx({ sessions: s, isPathInUse: inUse, dispatches: () => [{ sessionId: 's1', endedAt: 'T', outcome: 'succeeded' }] }))).toBe(true)
+    expect(s.live).toEqual([])
+    await expect(fs.stat(a)).rejects.toThrow()
+    expect(registry.list()).toEqual([])
+  })
+  it('removes nothing while something else still holds the folder', async () => {
+    const a = await worked('a')
+    expect(await reapWorktree(a, reapCtx({ isPathInUse: () => 'RUN:dev' }))).toBe(false)
+    expect(logs.join('\n')).toMatch(/IN_USE: RUN:dev/)
+    await expect(fs.stat(a)).resolves.toBeTruthy()
+  })
+  it('refuses a folder the registry does not list', async () => {
+    const plain = await tempDir('astera-integrate-notwt-')
+    expect(await reapWorktree(plain, reapCtx())).toBe(false)
+    expect(logs.join('\n')).toMatch(/is not an app worktree/)
+  })
+})
+describe('worktreeDeps', () => {
+  it('mergeWorktrees skips folders already gone, and nothing left is success', async () => {
+    const calls: unknown[] = []
+    const d = worktreeDeps({ integrate: async (...a) => { calls.push(a); return { kind: 'merged', uncommitted: 0 } }, reap: async () => true, log: (m) => logs.push(m), exists: () => false })
+    expect(await d.mergeWorktrees('D:/p', ['D:/gone'])).toEqual({ ok: true, merged: [], uncommitted: 0 })
+    expect(calls).toEqual([])   // no git runs over an empty list (it would still check the folder)
+    expect(logs.join('\n')).toMatch(/skipping 1 removed worktree/)
+  })
+  it('mergeWorktrees merges without reaping and turns a refusal into a reason', async () => {
+    const calls: unknown[] = []
+    const d = worktreeDeps({ integrate: async (into, paths, opts) => { calls.push([into, paths, opts]); return { kind: 'human', reason: 'dirty' } }, reap: async () => true, log: () => {}, exists: () => true })
+    expect(await d.mergeWorktrees('D:/p', ['D:/a'])).toEqual({ ok: false, reason: 'dirty' })
+    expect(calls).toEqual([['D:/p', ['D:/a'], { reap: false }]])
+  })
+  it('removeWorktrees does not count a folder already gone as failed, and reports the ones it could not remove', async () => {
+    // A real reap refuses a folder that is gone ("not an app worktree"), so only the skip keeps it out of failed.
+    const tried: string[] = []
+    const d = worktreeDeps({ integrate: async () => ({ kind: 'merged', uncommitted: 0 }), reap: async (p) => { tried.push(p); return p === 'D:/ok' }, log: () => {}, exists: (p) => p !== 'D:/gone' })
+    expect(await d.removeWorktrees(['D:/gone', 'D:/ok', 'D:/stuck'])).toEqual({ failed: ['D:/stuck'] })
+    expect(tried).toEqual(['D:/ok', 'D:/stuck'])
   })
 })
