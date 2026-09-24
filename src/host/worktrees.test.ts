@@ -415,6 +415,15 @@ describe('createHostWorktrees', () => {
       expect((await onDisk()).items.map((w: { id: string }) => w.id)).toEqual(['a1'])
       expect(states(h.sent)).toHaveLength(1)
     })
+    // Carry 2: two concurrent identical adds are one queued write in the registry, not two racing
+    // reads of `registry.get` and `registry.add` a turn apart.
+    it('two worktree-add calls for one entry, started together, leave one entry (carry 2)', async () => {
+      const h = rig()
+      const i = info('w1')
+      await Promise.all([h.wt.call('worktree-add', { info: i }, app), h.wt.call('worktree-add', { info: i }, app)])
+      const listed = await h.wt.call('worktree-list', {}, app)
+      expect((listed.body as { file: { items: { id: string }[] } }).file.items.map((x) => x.id)).toEqual(['w1'])
+    })
     // Review N2/m6: the retry check must match by id, not by path — a genuine re-create at a path
     // whose stale entry survives (M10) gets a new id and must replace the stale entry, not be dropped.
     it('replaces a stale entry when a re-create reuses its path under a new id', async () => {
@@ -425,9 +434,9 @@ describe('createHostWorktrees', () => {
       const second = await h.wt.call('worktree-add', { info: reused }, app)
       expect(second.status).toBe(200)
       expect((await onDisk()).items).toEqual([reused])
-      // one push for the first add, then one for the removal of the stale entry and one for the add
-      // that replaces it — the mirror sees both, in order, not a single combined change.
-      expect(states(h.sent)).toHaveLength(3)
+      // one push for the first add, one for the second — carry 2 (R23) folds the stale entry's
+      // removal and its replacement into the one write `registry.add` now makes.
+      expect(states(h.sent)).toHaveLength(2)
     })
     it('answers nobody but the app, and refuses a malformed entry', async () => {
       const h = rig()

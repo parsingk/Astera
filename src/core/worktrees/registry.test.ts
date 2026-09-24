@@ -501,3 +501,52 @@ describe('a read that gets no bytes at all does not heal (final review N1)', () 
     expect(logs.join('\n')).toMatch(/could not be read.*resource busy/)
   })
 })
+describe('one add-or-replace (carry 2, R23)', () => {
+  const at = (id: string, p: string): WorktreeInfo => ({
+    id, repoPath: path.join(tmp, 'repo'), path: p, name: id, branch: `u/${id}`, baseRef: 'main', createdAt: '2026-09-24T00:00:00.000Z'
+  })
+  it('two identical adds started together leave one entry', async () => {
+    const r = new WorktreeRegistry(path.join(tmp, 'worktrees.json'), tmp); await r.load()
+    const info = at('w1', path.join(tmp, 'wt', 'w1'))
+    await Promise.all([r.add(info), r.add(info)])
+    const fresh = new WorktreeRegistry(path.join(tmp, 'worktrees.json'), tmp); await fresh.load()
+    expect(fresh.list().map((w) => w.id)).toEqual(['w1'])
+  })
+  it('an add of an id already listed writes nothing and tells nobody', async () => {
+    const r = new WorktreeRegistry(path.join(tmp, 'worktrees.json'), tmp); await r.load()
+    const seen: number[] = []
+    r.onChange((f) => seen.push(f.items.length))
+    const info = at('w1', path.join(tmp, 'wt', 'w1'))
+    await r.add(info)
+    await r.add(info)
+    expect(seen).toEqual([1])
+  })
+  it('an add at a path a stale entry still names replaces it in one write, whoever adds', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, tmp); await r.load()
+    await r.add(at('old', path.join(tmp, 'wt', 'same')))
+    await r.add(at('new', path.join(tmp, 'wt', 'same')))
+    const fresh = new WorktreeRegistry(file, tmp); await fresh.load()
+    expect(fresh.list().map((w) => w.id)).toEqual(['new'])
+  })
+})
+
+describe('a read that meets a busy file (carry 7, R23)', () => {
+  it('refresh() rides out two EBUSY reads and then reads the file', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, tmp); await r.load()
+    await r.add(wt('a1'))
+    const real = fs.readFile
+    let busy = 2
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation((async (...args: Parameters<typeof real>) => {
+      if (busy-- > 0) throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' })
+      return real(...args)
+    }) as typeof real)
+    try {
+      await r.refresh()
+    } finally {
+      spy.mockRestore()
+    }
+    expect(r.list().map((w) => w.id)).toEqual(['a1'])
+  })
+})

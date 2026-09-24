@@ -2,8 +2,9 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { WorktreeInfo } from '../types'
-import { renameRetrying } from '../renameRetry'
+import { renameRetrying, readFileRetrying } from '../renameRetry'
 import { RepairNeeded } from '../settings/repairNeeded'
+import { isSamePath } from '../files/tree'
 
 export interface RegistryFile {
   root?: string
@@ -131,10 +132,22 @@ export class WorktreeRegistry {
 
   // Which way a write goes is decided when its turn comes, so a write queued before a mode switch
   // follows the mode it runs in.
+  //
+  // One add-or-replace, decided from the file this queued turn reads (carry 2, R23): the same id
+  // already listed is a retried add (the reply of an earlier one was lost) — nothing changed, so
+  // nothing is written and no listener hears it. Otherwise a different id at a path `isSamePath` to
+  // `info.path` names a stale entry (the folder it named is gone, but the entry is not, M10) and is
+  // replaced by this one in the same write; anything else is appended. Two identical adds started
+  // together queue one after the other, so the second sees the first's write and is the no-op case —
+  // never two appends.
   add(info: WorktreeInfo): Promise<void> {
     return this.enqueue(async () => {
       if (this.writer) return this.adopt(await this.writer.add(info))
-      await this.mutate((f) => ({ ...f, items: [...f.items, info] }))
+      await this.mutateOrKeep((f) =>
+        f.items.some((w) => w.id === info.id)
+          ? null
+          : { ...f, items: [...f.items.filter((w) => !isSamePath(w.path, info.path)), info] }
+      )
     })
   }
 
@@ -214,7 +227,18 @@ export class WorktreeRegistry {
   // Runs inside the queue. Memory changes only once the file on disk says so (constraint 13), and
   // listeners hear the list this write made, not whatever memory holds by then.
   private async mutate(apply: (f: RegistryFile) => RegistryFile): Promise<void> {
-    const next = apply(await this.readForWrite())
+    await this.mutateOrKeep(apply)
+  }
+
+  // mutate's general form: `apply` may answer null for "nothing changed" — the file just read is
+  // held (so a re-read that ran to get here is not wasted) and neither `save` nor a listener runs.
+  private async mutateOrKeep(apply: (f: RegistryFile) => RegistryFile | null): Promise<void> {
+    const f = await this.readForWrite()
+    const next = apply(f)
+    if (next === null) {
+      this.hold(f)
+      return
+    }
     await this.save(next)
     this.hold(next)
     for (const cb of this.listeners) {
@@ -234,7 +258,7 @@ export class WorktreeRegistry {
   private async readForWrite(): Promise<RegistryFile> {
     let text: string
     try {
-      text = await fs.readFile(this.filePath, 'utf8')
+      text = await readFileRetrying(this.filePath)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { items: [] }
       throw err

@@ -32,7 +32,7 @@ import {
 } from '../core/orchestration/exec/integrateGit'
 import { WorktreeRegistry, defaultWorktreeRoot, isRegistryFile } from '../core/worktrees/registry'
 import { git as realGit } from '../core/worktrees/git'
-import { isPathWithin, isSamePath } from '../core/files/tree'
+import { isPathWithin } from '../core/files/tree'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import type { WorktreeInfo } from '../core/types'
 import type { PtyRegistry } from './registry'
@@ -286,19 +286,13 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     'worktree-add': async (args) => {
       if (!isRegistryFile({ items: [args.info] })) return { status: 400, body: { error: 'worktree-add needs a whole worktree entry' } }
       const info = args.info as WorktreeInfo
-      // An add retried after its reply was lost (review M12) carries the same id the app already
-      // made: nothing changes, so nothing is pushed. Matching by id rather than by path (review N2,
-      // m6) is what tells the two apart from a genuine re-create that reuses a stale entry's path —
-      // createWorktree checks only disk and branch, not the registry, so it can hand out a fresh id
-      // at a path some earlier entry still names (M10: the folder is gone but the entry is not).
-      // That entry is stale, not a duplicate, so it is replaced rather than left to shadow the new
-      // one: removeEntry and add are each queued in order on the same registry, so the add always
-      // reads a file the removal has already left.
-      if (!registry.get(info.id)) {
-        const stale = registry.list().find((w) => isSamePath(w.path, info.path))
-        if (stale) await registry.removeEntry(stale.id)
-        await registry.add(info)
-      }
+      // The registry now decides duplicates and stale paths in one queued write (carry 2, R23):
+      // `registry.add` reads the file inside its own queued turn, so an add retried after its reply
+      // was lost (review M12) and a genuine re-create that reuses a stale entry's path (review N2,
+      // m6; M10) are both settled there — including two identical adds started together, which used
+      // to be two racing turns here (this file's own id check, then the add) and could each see no
+      // entry yet and both append.
+      await registry.add(info)
       return withFile()
     },
     'worktree-remove': async (args) => {
