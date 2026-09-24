@@ -731,7 +731,8 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
   given. A Job made with `--cwd` in a subfolder of a project then showed in no project list, because
   ownership is an exact match. What shipped: a new orchDeps group, HOST_RESOLVES
   (`src/host/orchDeps.ts`). The Host answers when no app is attached, or while it drives. An attached
-  app that does not yield is still asked, and if it cannot answer the Host does. A failure is still
+  app that does not yield is still asked, and if that app cannot be reached the Host answers instead;
+  an app that answers with an error is not overruled, so the given subfolder is kept. A failure is still
   swallowed and never answers CONFLICT. The rule is one function for both processes,
   `resolveProjectRootFrom` in `src/core/files/tree.ts`, next to `projectRootOf`. The worktree
   repoPaths come first, the walk stops at `repoRoot(cwd)`, there is no boundary outside a repository,
@@ -748,7 +749,10 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
   Host keeps the app's two lists. Why not the app's `HistoryIndex`: the chokidar import would add a package to the Host bundle, and
   nothing but its watcher ever clears its project cache. What the Host does not see: the ghost
   accounts the app finds on disk, which are not in accounts.json. A Job made from one of those
-  folders with the app closed is left at its subfolder. Pinned by `src/core/files/tree.test.ts`,
+  folders with the app closed is left at its subfolder. The cost is one stat per transcript across
+  every account on each call, so it grows with history size with no upper bound: measured at about
+  130 ms per `jobs create` (about 1 s on the first) with 6 accounts and about 11,000 transcripts. The
+  Host's memo maps are never pruned for its life; they grow slowly. Pinned by `src/core/files/tree.test.ts`,
   `src/core/history/projects.test.ts`, `src/core/history/sessionCwdCache.test.ts`,
   `src/host/projectRoots.test.ts`, `src/host/orchDeps.test.ts` and `src/host/orch.test.ts`.
 

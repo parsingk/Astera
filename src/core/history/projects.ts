@@ -166,7 +166,9 @@ export class MemoryCwdStore implements CwdStore {
  */
 export class ProjectPathListing {
   /** dirKey → the file list `jsonlByMtimeDesc` last answered for it, so `resolveProjectCwd` can key
-   *  its memo on the signature of exactly the list the strategy is resolving from. */
+   *  its memo on the signature of exactly the list the strategy is resolving from. This relies on a
+   *  strategy calling `jsonlByMtimeDesc` for a directory before `resolveProjectCwd` for it, as the
+   *  claude strategy does; one that does not only loses the memo (it re-parses), it is never wrong. */
   private lastFiles = new Map<string, JsonlFile[]>()
   /** dirKey → the cwd resolved for that directory at signature `sig`. */
   private cwdByDir = new Map<string, { sig: string; cwd: string | null }>()
