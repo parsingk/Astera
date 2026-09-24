@@ -4987,12 +4987,18 @@ describe('projects / runs / questions — 공개 읽기 표면', () => {
 
   // **셸에서 치는 쪽은 id 를 모르고 자기가 선 폴더를 안다.** win32 은 대소문자를 가리지 않고,
   // 같은 저장소가 여러 철자로 들어온다 — 그래서 비교가 isSamePath 여야 한다.
+  //
+  // **철자는 이 플랫폼의 것으로 짓는다.** posix 에서 'd:\\work\\proj' 는 경로가 아니라 이름 하나이고
+  // 'D:/work/proj' 는 상대 경로라, 둘은 처음부터 다른 폴더다. 여기서 재는 것은 "같은 폴더의 다른
+  // 철자" 이지 win32 의 철자가 아니다 — posix 에서는 겹 구분자와 끝 구분자로 쓴다.
   it('projects find 는 경로로 찾고, 철자가 달라도 같은 것으로 본다', async () => {
-    const deps = withProject()
-    const r = await call(deps, 'projects-find', { path: 'd:\\work\\proj' })
+    const win = process.platform === 'win32'
+    const { state } = ensureProject(emptyState(), { path: win ? 'D:/work/proj' : '/work/proj', now: NOW })
+    const deps = makeDeps(state)
+    const r = await call(deps, 'projects-find', { path: win ? 'd:\\work\\proj' : '/work//proj/' })
     expect(r.status).toBe(200)
     expect((r.body as Project).name).toBe('proj')
-    expect((await call(deps, 'projects-find', { path: 'D:/other' })).status).toBe(404)
+    expect((await call(deps, 'projects-find', { path: win ? 'D:/other' : '/other' })).status).toBe(404)
     expect((await call(deps, 'projects-find')).status).toBe(400)
   })
 
