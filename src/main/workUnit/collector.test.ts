@@ -1059,6 +1059,83 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     await collector.flush()
     expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
   })
+
+  // fix round 2 (review N1) — I1's logic is proven at the pure explainedByHostMerges level, but nothing
+  // proved gitRound actually threads `sameBranch`/`sinceMs` through to it: a refactor that drops
+  // `sameBranch` or passes `0` for `sinceMs` brought I1 back with the whole suite green (the reviewer's
+  // own mutation). These two pin the wiring itself.
+  it('a same-head branch switch after an aborted or no-op merge\'s a→a record is still recorded (N1, I1)', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const records: HostMergeRecord[] = [
+      { id: 'm1', projectPath, headBefore: 'c0', headAfter: 'c0', startedAt: new Date(fake.clock).toISOString(), endedAt: new Date(fake.clock).toISOString() }
+    ]
+    const { collector, store } = await makeCollector(fake, storeFile, undefined, { hostMerges: async () => records })
+    await collector.start()
+    collector.onGitChanged() // baseline at main@c0
+    await collector.flush()
+    fake.git.ref = { branch: 'feature', head: 'c0' } // branch switch only — HEAD unchanged
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(1)
+  })
+  it('a redo — HEAD moved back to a head the Host once produced, after the app already caught up past it — is still recorded (N1, I1)', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const records: HostMergeRecord[] = [
+      { id: 'm1', projectPath, headBefore: 'c0', headAfter: 'c1', startedAt: new Date(fake.clock).toISOString(), endedAt: new Date(fake.clock).toISOString() }
+    ]
+    const { collector, store } = await makeCollector(fake, storeFile, undefined, { hostMerges: async () => records })
+    await collector.start()
+    collector.onGitChanged() // baseline at main@c0
+    await collector.flush()
+
+    // 1. The app sees c1 — explained by the Host's completed record, so nothing is recorded yet.
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
+
+    // Time passes before the person resets, so the snapshot this round captures (and step 3's sinceMs
+    // reads) lands after the Host record's endedAt — otherwise every timestamp in this test ties at the
+    // same instant and the `>=` in the sinceMs check would trivially let the old record through again.
+    fake.clock += 60_000
+
+    // 2. HEAD is reset back to c0 — a real, unrelated move (nothing in the records explains c1→c0).
+    fake.git.ancestor = false // c1 is not an ancestor of c0 — a reset, not a fast-forward
+    fake.git.ref = { branch: 'main', head: 'c0' }
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(1)
+
+    // 3. HEAD moves to c1 again — the same heads the old record already explained once, but the
+    //    snapshot has since moved past that record's endedAt (step 2 captured a new one), so it must
+    //    not explain this new move too.
+    fake.git.ancestor = true
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(2)
+  })
+
+  // fix round 2 (review m5) — readRef spawns processes and can take tens of milliseconds; stamping
+  // capturedAt only after it returns would let a Host merge that ends while the read is still in
+  // flight land after the stamp, failing the sinceMs check on the very move it should explain.
+  it('capturedAt is stamped from before the HEAD read, not after it returns (m5)', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+    const beforeRead = fake.clock
+    const originalReadRef = fake.git.readRef
+    fake.git.readRef = async (repoPath: string) => {
+      fake.clock += 5_000 // time passes while the read is "in flight"
+      return originalReadRef(repoPath)
+    }
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.gitSnapshot?.capturedAt).toBe(new Date(beforeRead).toISOString())
+  })
 })
 
 // ── 에이전트가 도는 동안의 HEAD 이동 (task 17) ──────────────────────────

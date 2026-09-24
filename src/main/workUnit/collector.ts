@@ -1331,6 +1331,12 @@ export class WorkUnitCollector {
 
   /** `.git` 이 움직였다. 전이를 판정하고, Astera 가 한 일이 아니면 외부 변경으로 남긴다 */
   private async gitRound(state: WorkUnitState, projectPath: string): Promise<boolean> {
+    // **`readRef` 를 부르기 전에 찍는다 (fix round 2, review m5).** `readRef` 는 프로세스를 띄우고
+    // 몇 십 ms 가 걸릴 수 있다 — 그 사이에 Host 의 병합이 끝나 `endedAt` 을 적었는데, 다 돌아온
+    // 뒤에 찍으면 그 `endedAt` 이 이 스냅샷의 `capturedAt` 보다 먼저가 되어 `sinceMs` 경계
+    // (`explainedByHostMerges` 호출부의 주석)에 걸려 걸러진다. 읽기 전에 찍으면 그런 경합에서도
+    // 항상 앞선다.
+    const capturedAt = this.nowIso()
     const after = await this.deps.git.readRef(projectPath)
     // **앞은 저장된 스냅샷이 먼저다.** 그것이 "Astera 가 마지막으로 견준 상태"이고, 앱이 꺼져 있던
     // 동안의 pull·브랜치 전환·rebase 가 다시 켠 첫 회차에서 **보통의 전이**로 판정되는 이유다
@@ -1352,7 +1358,7 @@ export class WorkUnitCollector {
         projectPath,
         branch: after.branch,
         head: after.head,
-        capturedAt: this.nowIso()
+        capturedAt
       }
       dirty = true
     }
@@ -1413,8 +1419,12 @@ export class WorkUnitCollector {
         // 저장된 스냅샷 자신의 capturedAt — **이 라운드가 덮어쓰기 전** 값이다(`snapshot`, 위
         // 1345 줄에서 옮기기 전에 잡아 둔 참조). 이보다 먼저 끝난 완료 기록은 그 스냅샷을 찍을 때
         // 이미 반영이 끝난 일이라, 나중에 같은 HEAD 로 되돌아온 것(되돌리기, 또는 그 HEAD 를 나중에
-        // 가리키게 된 다른 브랜치)을 설명하지 못한다(review I1). 못 읽으면(스냅샷이 없던 첫 라운드는
-        // 여기 닿지 않지만, 방어적으로) 아무 완료 기록도 세지 않는 쪽 — "모르면 바깥으로"다.
+        // 가리키게 된 다른 브랜치)을 설명하지 못한다(review I1). **못 읽으면 실제로 일어난다(fix
+        // round 2, review m6)** — `refOf`(아래)는 스냅샷을 쓰지 않고 `lastRef` 만 채우고, Unit 이
+        // 열릴 때(419 줄) 그것부터 부른다. 그래서 스냅샷이 아직 없는 프로젝트라도 첫 git 회차 전에
+        // Unit 이 먼저 열리면 `before` 는 `lastRef` 로 채워지는데 `snapshot`(= `state.gitSnapshot`)
+        // 은 여전히 없다 — 딱 그 한 회차에서 아무 완료 기록도 세지 않는 쪽("모르면 바깥으로")으로
+        // 떨어진다. 안전한 방향이고, 열린 기록의 규칙은 이 값과 무관하게 그대로 적용된다.
         sinceMs: snapshot?.capturedAt !== undefined ? Date.parse(snapshot.capturedAt) : Infinity,
         samePath: isSamePath
       })
