@@ -30,6 +30,7 @@ import { readAccountEntries } from '../core/accounts/accountsFile'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
+import { refusedBeforeActing, undoneBeforeFailing } from '../core/host/orchProtocol'
 import { findRollout as findRolloutOnDisk } from '../core/rolling/codexLocate'
 import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
@@ -105,6 +106,14 @@ export interface HostSpawner extends HostLocal {
 }
 
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
+
+/** What one start did, filled in as it runs (Host S3 follow-up A36): whether its own pty was opened,
+ *  and the folder a `--worktree new` fork made for it. Built per start, because two starts can be in
+ *  flight at once and each must answer only for itself. */
+interface StartTrace {
+  opened: boolean
+  forked: string | null
+}
 
 const LOCATE_POLL_MS = 1_000
 const LOCATE_FOR_MS = 10 * 60_000
@@ -209,9 +218,13 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const looking = new Map<string, { accountId: string; cwd: string; seq: number }>()
   let lookSeq = 0
 
+  /** How many ptys this spawner has opened. Read around `sessions.spawn`, which is synchronous, so the
+   *  count can only move there by that call's own pty (A36's "was a process started"). */
+  let opens = 0
   const factory = hostPtyFactory({
     registry,
     onOpened: (entry) => {
+      opens += 1
       // The pty is already running, so a broadcast that throws must not fail the spawn: the Dispatch
       // would roll back over a live worker. The app finds the session on its next reattach sweep.
       try {
@@ -345,14 +358,17 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
 
   /** The coordinator's spawn adapter: field for field what the app's coordinator adapter hands its
    *  spawnSession, and what that hands core.sessions.spawn. */
-  const spawnSession = async (o: SpawnOpts, accounts: Account[]): Promise<{ id: string }> => {
+  const spawnSession = async (o: SpawnOpts, accounts: Account[], trace?: StartTrace): Promise<{ id: string }> => {
     const account = accountIn(accounts, o.accountId)
     await preTrustWorkspace({ account, cwd: o.cwd, homeDir, descriptors, log })
     await ensured()
     const cliPath = await shuttlePath()
     const bypass = o.bypassPermissions ?? (await bypassFromSettings())
     const rollProviders = o.rollAccountIds.map((rid) => providerOf(accounts.find((x) => x.id === rid) ?? account))
-    const info = sessions.spawn({
+    const opensBefore = opens
+    let info: ReturnType<SessionManager['spawn']>
+    try {
+      info = sessions.spawn({
       account,
       cwd: o.cwd,
       bypassPermissions: bypass,
@@ -364,7 +380,12 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       resumePrompt: o.resumePrompt,
       rollProviders,
       orchEnv: { cliPath, skillsPath: cli.skills, profileDir }
-    })
+      })
+    } finally {
+      // Whether it returned or threw, a moved count means a process is running (A36). A throw before
+      // the pty (CWD_MISSING, a mixed chain) or the registry's own refusal leaves it where it was.
+      if (trace && opens !== opensBefore) trace.opened = true
+    }
     // The app registers every codex session with its watcher right after core.sessions.spawn.
     if (providerOf(account) === 'codex') {
       const ptyId = registry.sessionPty(info.id)
@@ -373,9 +394,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     return info
   }
 
-  const coordinatorFor = (accounts: Account[]): OrchCoordinator =>
+  const coordinatorFor = (accounts: Account[], trace?: StartTrace): OrchCoordinator =>
     new OrchCoordinator({
-      spawnSession: (o) => spawnSession(o, accounts),
+      spawnSession: (o) => spawnSession(o, accounts, trace),
       writeToSession: (sid, data) => {
         const p = registry.sessionPty(sid)
         if (p) registry.write(p, data)
@@ -395,7 +416,12 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       },
       // R4: the fork itself is the Host's own worktree registry's — same folder, same registry entry,
       // whichever of `--worktree new` or a Run's own makeRunWorktree asked for it.
-      createWorktree: async (a) => ({ path: await d.worktrees.fork(a) }),
+      // The trace keeps the folder, so a start whose spawn then fails can remove it again (A36).
+      createWorktree: async (a) => {
+        const forked = await d.worktrees.fork(a)
+        if (trace) trace.forked = forked
+        return { path: forked }
+      },
       accountProvider: (id) => {
         const a = accounts.find((x) => x.id === id)
         return a ? providerOf(a) : null
@@ -416,7 +442,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const settled = new Set<() => void>()
   const spawning = <A extends unknown[], R>(start: (...a: A) => Promise<R>) =>
     async (...args: A): Promise<R> => {
-      if (retiring) throw new HostRetiring()
+      // Refused before anything is touched, so tagged: a keyed call keeps no receipt over it (A36).
+      if (retiring) throw refusedBeforeActing(new HostRetiring())
       spawnsInFlight += 1
       try {
         return await start(...args)
@@ -425,6 +452,47 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         if (spawnsInFlight === 0) for (const done of [...settled]) done()
       }
     }
+
+  /** The worker start itself: the app's own start path (startWorkerWithChain), over this Host's
+   *  accounts and coordinator, with `trace` watching what it does. */
+  const startWorkerIn = async (
+    a: Parameters<HostLocal['startWorker']>[0],
+    trace: StartTrace
+  ): Promise<Awaited<ReturnType<HostLocal['startWorker']>>> => {
+    const accounts = await readAccounts(accountsPath)
+    const started = await startWorkerWithChain(
+      {
+        getState: d.getState,
+        accounts: async () => accounts,
+        loginStatus: async (id) => {
+          const x = accounts.find((y) => y.id === id)
+          return x ? descriptorOf(descriptors, x).isLoggedIn(x.configDir) : false
+        },
+        coordinator: coordinatorFor(accounts, trace),
+        tails,
+        log
+      },
+      a
+    )
+    startedOn.set(a.dispatchId, started.sessionId)
+    return started
+  }
+
+  /** Removes the fresh fork of a worker start that failed (A36). True only when the folder is gone.
+   *  Never throws: the start's own failure is what the command answers, and this is only cleanup. */
+  const discardFork = async (forked: string): Promise<boolean> => {
+    try {
+      const { failed } = await d.worktrees.removeWorktrees([forked])
+      if (failed.length === 0) {
+        log(`worker-start: the spawn failed, so removed the fresh worktree ${forked}`)
+        return true
+      }
+      log(`worker-start: the fresh worktree ${forked} of a failed spawn is still in use — left in place`)
+    } catch (err) {
+      log(`worker-start: the fresh worktree ${forked} of a failed spawn could not be removed — left in place: ${String(err)}`)
+    }
+    return false
+  }
 
   return {
     inFlight: () => spawnsInFlight,
@@ -452,39 +520,45 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       })
     },
     startWorker: spawning(async (a) => {
-      const accounts = await readAccounts(accountsPath)
-      const started = await startWorkerWithChain(
-        {
-          getState: d.getState,
-          accounts: async () => accounts,
-          loginStatus: async (id) => {
-            const x = accounts.find((y) => y.id === id)
-            return x ? descriptorOf(descriptors, x).isLoggedIn(x.configDir) : false
-          },
-          coordinator: coordinatorFor(accounts),
-          tails,
-          log
-        },
-        a
-      )
-      startedOn.set(a.dispatchId, started.sessionId)
-      return started
+      const trace: StartTrace = { opened: false, forked: null }
+      try {
+        return await startWorkerIn(a, trace)
+      } catch (err) {
+        // **A fork nothing will ever target is removed** (A36, the risk-6 pattern). worker-start
+        // rolls its Dispatch back on this throw, so no state names the folder, and `run-delete
+        // --remove-worktrees` would never reach it. Best effort and logged, and the error thrown is
+        // this one whatever the removal does. Only when the folder is gone and no process was
+        // started is the error tagged as having left nothing, which withdraws the call's mark.
+        if (trace.forked !== null && !trace.opened && (await discardFork(trace.forked)) && err instanceof Error)
+          throw undoneBeforeFailing(err)
+        throw err
+      }
     }),
     startCoordinator: spawning(async (a) => {
-      const accounts = await readAccounts(accountsPath)
-      // The app makes this folder at boot; the Host may be the first to write into it.
-      await fs.mkdir(specsDir, { recursive: true })
-      return startCoordinatorSession(
-        {
-          specsDir,
-          preTrust: async (accountId, cwd) =>
-            preTrustWorkspace({ account: accountIn(accounts, accountId), cwd, homeDir, descriptors, log }),
-          bypassPermissions: bypassFromSettings,
-          spawn: (o) => spawnSession(o, accounts),
-          log
-        },
-        a
-      )
+      const trace: StartTrace = { opened: false, forked: null }
+      try {
+        const accounts = await readAccounts(accountsPath)
+        // The app makes this folder at boot; the Host may be the first to write into it.
+        await fs.mkdir(specsDir, { recursive: true })
+        return await startCoordinatorSession(
+          {
+            specsDir,
+            preTrust: async (accountId, cwd) =>
+              preTrustWorkspace({ account: accountIn(accounts, accountId), cwd, homeDir, descriptors, log }),
+            bypassPermissions: bypassFromSettings,
+            spawn: (o) => spawnSession(o, accounts, trace),
+            log
+          },
+          a
+        )
+      } catch (err) {
+        // **No process, no effect** (A36): a settings refusal, an unknown account, or a spawn the
+        // registry refused all come here before any pty opened, and are tagged so a keyed run-start
+        // keeps no receipt over them. The brief file may already be written; a retry writes it
+        // again, and the boot sweep removes it. A failure after the pty opened is not tagged: that
+        // coordinator is running, and the call is marked as having acted.
+        throw !trace.opened && err instanceof Error ? refusedBeforeActing(err) : err
+      }
     }),
     releaseWorker: async ({ dispatchId }) => {
       const args = releaseArgsFor(d.getState().dispatches, dispatchId)

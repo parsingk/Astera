@@ -80,6 +80,7 @@ import { parseHandoffBody } from '../handoff/parse'
 import type { HandoffBody } from '../handoff/types'
 import type { Lang } from '../i18n'
 import { isOverrideCompletion, policyOf } from './convergence'
+import { leftNothingBehind } from '../host/orchProtocol'
 
 /** One row of `listAccounts`. Named only because the declaration below is a union and repeating the
  *  shape on both sides invites the two halves to drift. */
@@ -142,7 +143,12 @@ export type ChatSendResult =
 
 export interface OrchServerDeps {
   getState(): OrchState
-  setState(next: OrchState): Promise<void>
+  /** `rollsBack`: this commit undoes an earlier commit of **the same command**, and the command left
+   *  nothing else behind either (Host S3 follow-up A36). Only worker-start's failure rollback says
+   *  so, after its own `openDispatch`, and only when `startWorker`'s error says the start left
+   *  nothing (`leftNothingBehind`). The Host's receipts then count the two commits as none. Every
+   *  other wiring may ignore it: it changes nothing about what is written. */
+  setState(next: OrchState, how?: { rollsBack: true }): Promise<void>
   /** Filled in by the wiring that wraps the coordinator (OrchCoordinator.startWorker). worker-start
    *  has already created the dispatchId (after committing openDispatch) and passes it in — this
    *  function only creates the session process, the worktree and the spec file, and never touches
@@ -1950,14 +1956,23 @@ export async function handleCommand(
         // pre-openDispatch status. It also leaves no bogus status message (recording "ended without
         // reporting" when the session never even existed) — the cause of the failure is carried in
         // the bad(...) of this response.
+        //
+        // **Said to be a rollback only when the start says it left nothing** (`rollsBack`, A36): a
+        // `--worktree new` fork the Host removed again after its spawn failed. Then the Dispatch is
+        // gone, the Task is back where it was, and nothing on disk names this call, so a keyed call
+        // keeps no receipt and the same id can really start once the cause is fixed. Any other
+        // failure stays an ordinary commit and keeps its receipt, which is what the receipts design
+        // pinned for a start refused for want of the app (host/orch.test.ts).
         const latest = deps.getState()
-        await deps.setState({
+        const rolledBack: OrchState = {
           ...latest,
           dispatches: latest.dispatches.filter((d) => d.id !== dispatchId),
           tasks: latest.tasks.map((t) =>
             t.id === taskId ? { ...t, status: previousStatus, updatedAt: now } : t
           )
-        })
+        }
+        if (leftNothingBehind(e)) await deps.setState(rolledBack, { rollsBack: true })
+        else await deps.setState(rolledBack)
         return bad(`failed to start worker: ${e instanceof Error ? e.message : String(e)}`)
       }
 

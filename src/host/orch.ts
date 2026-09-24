@@ -417,18 +417,23 @@ export function createHostOrch(a: {
    *  paths fill with ids and titles the caller supplied: an id with APP_REQUIRED in it turned a 404
    *  into a 409 and a script read exit 6 where exit 4 was the truth.
    *
-   *  **`committed` and `acted` are the two halves of "did this call do anything"** (request receipts
+   *  **`commits` and `effects` are the two halves of "did this call do anything"** (request receipts
    *  design §3), and a receipt is kept only when one of them is set. They ride here rather than in a
    *  second object because this one is already built per call, and a flag that lives no longer than
-   *  the call it belongs to cannot be read by the next one. */
-  type CallMarks = { appRefused: boolean; committed: boolean; acted: boolean; repair?: string; retry?: string }
+   *  the call it belongs to cannot be read by the next one.
+   *
+   *  **Counts, not flags** (Host S3 follow-up A36). A mark can be taken back once what it marked is
+   *  known to be undone: a Run worktree removed again, a start that left nothing, a rollback commit
+   *  that undoes this call's own earlier commit. The call did something when either count ends above
+   *  zero. */
+  type CallMarks = { appRefused: boolean; commits: number; effects: number; repair?: string; retry?: string }
 
   /** **Built per call**, because the marks above are. One object literal per call costs nothing
    *  beside running a command. */
   const depsFor = (marks: CallMarks): OrchServerDeps =>
     hostOrchDeps({
       getState: () => store.get(),
-      setState: async (next) => {
+      setState: async (next, how) => {
         // Reserved before the write, for `reserveVersion`'s reason and for one that is this path's
         // own: a `state-put` arriving while this commit is still writing would otherwise read the
         // pre-commit number, pass the check, and land a whole state that does not contain this
@@ -438,7 +443,8 @@ export function createHostOrch(a: {
         // takes: `store.save` moves memory before it queues the disk write, so this state is the one
         // every later command reads even if the file write then fails. A receipt that said otherwise
         // would let a retry re-run a command whose effect the next command can already see.
-        marks.committed = true
+        // A rollback of this call's own earlier commit takes that one back instead (A36).
+        marks.commits += how?.rollsBack ? -1 : 1
         await store.save(next)
         a.onState(next, committed)
       },
@@ -458,7 +464,10 @@ export function createHostOrch(a: {
       sessions: a.sessions,
       local: a.local ?? null,
       onEffect: () => {
-        marks.acted = true
+        marks.effects += 1
+      },
+      withdrawEffect: () => {
+        marks.effects -= 1
       },
       onAppRequired: (name, why, detail) => {
         marks.appRefused = true
@@ -769,7 +778,7 @@ export function createHostOrch(a: {
     // the sweep reads insertion order as "how recently this was written". A receipt that kept its
     // claim's place would be evicted ahead of older ones that were merely claimed later.
     receipts.delete(claim.key)
-    if (marks.committed || marks.acted)
+    if (marks.commits > 0 || marks.effects > 0)
       remember(claim.key, { state: 'completed', cmd, at: a.now(), fp: claim.fp, reply })
     return reply
   }
@@ -862,7 +871,7 @@ export function createHostOrch(a: {
     sessionExited: async (e) => {
       await ready()
       // Marks nobody reads: this is not a command, so there is no reply to correct and no receipt.
-      const deps = depsFor({ appRefused: false, committed: false, acted: false })
+      const deps = depsFor({ appRefused: false, commits: 0, effects: 0 })
       await handleExit(deps, e)
       // The slot rule is `releaseCoordinator`'s in the app, whole: an exit that only says the session
       // was lost sight of keeps the slot, as `handleExit` keeps the Dispatch. The Host's own registry
@@ -896,7 +905,7 @@ export function createHostOrch(a: {
       // could reject for real: `store.save` is an unguarded mkdir/writeFile/rename, and `state-put`
       // is the app's first message after it connects. The HTTP shell has always turned a throw into
       // a 500 the same way.
-      const marks: CallMarks = { appRefused: false, committed: false, acted: false }
+      const marks: CallMarks = { appRefused: false, commits: 0, effects: 0 }
       /** The claim this call took, released on **every** way out below — including the catch, which
        *  is why it is declared out here. A claim nobody releases is a request that answers `pending`
        *  forever. */

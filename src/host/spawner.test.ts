@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHostSpawner, type HostSpawnerDeps } from './spawner'
 import { RepairNeeded } from '../core/settings/repairNeeded'
+import { leftNothingBehind, wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import { PtyRegistry, type RegistryPty } from './registry'
 import type { HostMessage } from '../core/host/protocol'
 import { HOST_ONLY_ENV } from '../core/host/spawn'
@@ -386,6 +387,75 @@ describe('createHostSpawner', () => {
     const h = rig({ state: () => s, failSpawn: true })
     await expect(h.spawner!.startWorker(startArgs(taskId, dispatchId))).rejects.toThrow(/node-pty is incomplete/)
     expect(h.sent).toEqual([])
+  })
+
+  // Host S3 follow-up A36: a coordinator start that started no process says so, so a keyed run-start
+  // keeps no receipt over it; one that did start a process never does.
+  it('tags a coordinator start refused by the settings file, or by the registry, as refused before acting', async () => {
+    await fs.writeFile(path.join(profile, 'app-settings.json'), '{ not json')
+    const refused = await rig().spawner!.startCoordinator({ runId: 'run_1', cwd: repo, accountId: 'acc1', brief: 'b' }).catch((e: unknown) => e)
+    expect(refused).toBeInstanceOf(RepairNeeded)
+    expect(wasRefusedBeforeActing(refused)).toBe(true)
+    await fs.rm(path.join(profile, 'app-settings.json'))
+    const h = rig({ failSpawn: true })
+    const failed = await h.spawner!.startCoordinator({ runId: 'run_1', cwd: repo, accountId: 'acc1', brief: 'b' }).catch((e: unknown) => e)
+    expect(String(failed)).toMatch(/node-pty is incomplete/)
+    expect(wasRefusedBeforeActing(failed)).toBe(true)
+    expect(h.spawned).toHaveLength(0)
+  })
+  it('does not tag a coordinator start that failed after its process was started', async () => {
+    const h = rig()
+    const logs: string[] = []
+    const spawner = createHostSpawner({ profileDir: profile, env: hostEnv(), platform: process.platform, homeDir: path.join(dir, 'home'), registry: h.registry,
+      broadcast: () => {}, getState: () => emptyState(), appKeepsWorktrees: () => false,
+      worktrees: { fork: vi.fn(), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() },
+      log: (m) => { if (m.startsWith('coordinator started')) throw new Error('log is gone'); logs.push(m) } })
+    const err = await spawner!.startCoordinator({ runId: 'run_1', cwd: repo, accountId: 'acc1', brief: 'b' }).catch((e: unknown) => e)
+    expect(String(err)).toMatch(/log is gone/)
+    expect(wasRefusedBeforeActing(err)).toBe(false)
+    // The process that was started is still running: nothing in this path ends it (A36 reports this).
+    expect(h.spawned).toHaveLength(1)
+    expect(h.registry.list()[0].alive).toBe(true)
+  })
+  it('removes the fork of a --worktree new worker whose spawn failed, and says the start left nothing', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const forked = path.join(dir, 'wt-a'); await fs.mkdir(forked)
+    const removeWorktrees = vi.fn(async () => ({ failed: [] as string[] }))
+    const h = rig({ state: () => s, failSpawn: true, worktrees: { fork: vi.fn(async () => forked), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees } })
+    const err = await h.spawner!.startWorker({ ...startArgs(taskId, dispatchId, 'new'), name: 'a' }).catch((e: unknown) => e)
+    expect(String(err)).toBe('Error: Error: node-pty is incomplete')
+    expect(removeWorktrees).toHaveBeenCalledWith([forked])
+    expect(leftNothingBehind(err)).toBe(true)
+    expect(h.logs.some((l) => l.includes(`removed the fresh worktree ${forked}`))).toBe(true)
+  })
+  it('keeps the error and says nothing was undone when the fork it could not start in cannot be removed', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const forked = path.join(dir, 'wt-a'); await fs.mkdir(forked)
+    for (const removeWorktrees of [vi.fn(async (p: string[]) => ({ failed: p })), vi.fn(async () => { throw new Error('git is gone') })]) {
+      const h = rig({ state: () => s, failSpawn: true, worktrees: { fork: vi.fn(async () => forked), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees } })
+      const err = await h.spawner!.startWorker({ ...startArgs(taskId, dispatchId, 'new'), name: 'a' }).catch((e: unknown) => e)
+      expect(String(err)).toBe('Error: Error: node-pty is incomplete')
+      expect(leftNothingBehind(err)).toBe(false)
+      expect(h.logs.some((l) => l.includes(forked) && l.includes('left in place'))).toBe(true)
+    }
+  })
+  // The fork is removed only when no process was started. Here the pty opened, and the start still
+  // threw after it (the announcement and then the log failing, inside the spawn): the worker in that
+  // folder is running, so the folder stays and the error is not tagged.
+  it("leaves the fork alone when its worker's pty was opened and the start still failed", async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const forked = path.join(dir, 'wt-a'); await fs.mkdir(forked)
+    const removeWorktrees = vi.fn(async () => ({ failed: [] as string[] }))
+    const h = rig({ state: () => s })
+    const spawner = createHostSpawner({ profileDir: profile, env: hostEnv(), platform: process.platform, homeDir: path.join(dir, 'home'), registry: h.registry,
+      broadcast: () => { throw new Error('no socket') }, getState: () => s, appKeepsWorktrees: () => false,
+      worktrees: { fork: vi.fn(async () => forked), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees },
+      log: (m) => { if (m.startsWith('pty-opened broadcast failed')) throw new Error('log is gone') } })
+    const err = await spawner!.startWorker({ ...startArgs(taskId, dispatchId, 'new'), name: 'a' }).catch((e: unknown) => e)
+    expect(String(err)).toMatch(/log is gone/)
+    expect(h.spawned).toHaveLength(1)
+    expect(removeWorktrees).not.toHaveBeenCalled()
+    expect(leftNothingBehind(err)).toBe(false)
   })
 
   it('holds no record of a worker whose pty has exited (M3)', async () => {

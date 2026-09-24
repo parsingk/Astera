@@ -30,7 +30,7 @@ import {
 import { outcomeOf } from '../core/orchestration/view'
 import { codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
 import type { OrchCaller } from '../core/host/orchProtocol'
-import { createHostSpawner, type HostLocal } from './spawner'
+import { createHostSpawner, type HostLocal, type HostSpawnerDeps } from './spawner'
 import type { HostMessage } from '../core/host/protocol'
 import { AppUnreachable, refusedBeforeActing } from '../core/host/orchProtocol'
 import { PtyRegistry } from './registry'
@@ -2152,6 +2152,100 @@ describe('Host-local spawn (S2)', () => {
     const again = await orch.call({ cmd: 'run-delete', args: { id: run.value.id, removeWorktrees: true }, sessionId: 'sesA', request: 'req-y' })
     expect(again.replayed).toBe(true)
     expect(l.removeWorktrees).toHaveBeenCalledTimes(1)
+  })
+  // Host S3 follow-up A36: the three receipts below go through the real spawner, because what they
+  // pin is where the spawner says "no process was started" and how the counted marks net out.
+  /** A real Host spawner over a fake pty layer and fake worktrees, with the orchestration on top. */
+  const realSpawner = async (worktrees: HostSpawnerDeps['worktrees'], spawnFails: () => boolean = () => false) => {
+    for (const f of ['Astera.exe', 'cli.js']) await fs.writeFile(path.join(dir, f), '')
+    await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
+    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg'), color: '#888', createdAt: NOW, provider: 'claude' }] }))
+    const spawned: { cwd: string }[] = []
+    const registry = new PtyRegistry({
+      spawn: (_file, _args, opts) => {
+        if (spawnFails()) throw new Error('node-pty is incomplete')
+        spawned.push({ cwd: opts.cwd })
+        return { pid: 1, onData() {}, onExit() {}, write() {}, resize() {}, kill() {}, pause() {}, resume() {} }
+      },
+      log: () => {}
+    })
+    const box: { orch?: ReturnType<typeof orchOver> } = {}
+    const spawner = createHostSpawner({
+      profileDir: dir,
+      env: { PATH: process.env.PATH, ASTERA_HOST_CLI_EXEC: path.join(dir, 'Astera.exe'), ASTERA_HOST_CLI_ENTRY: path.join(dir, 'cli.js'), ASTERA_HOST_SKILLS: path.join(dir, 'skills') },
+      platform: process.platform,
+      homeDir: path.join(dir, 'home'),
+      registry,
+      broadcast: () => {},
+      getState: () => box.orch!.state(),
+      log: (m) => logs.push(m),
+      appKeepsWorktrees: () => false,
+      worktrees
+    })
+    box.orch = orchOver({ hasApp: () => false, act: vi.fn(), local: spawner })
+    return { orch: box.orch, spawned }
+  }
+  const coordinatorJob = async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: dir, coordinatorAccountId: 'acc1' }, NOW); if (!job.ok) throw new Error(job.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(job.state))
+    return job.value.id
+  }
+  it('keeps no receipt for a keyed run-start whose coordinator was refused before spawning and whose fresh worktree was removed, and the retry after the repair really starts', async () => {
+    const jobId = await coordinatorJob()
+    await fs.writeFile(path.join(dir, 'app-settings.json'), '{ not json')
+    const runWt = path.join(dir, 'wt-run')
+    const worktrees = { fork: vi.fn(), makeRunWorktree: vi.fn(async () => runWt), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn(async () => ({ failed: [] as string[] })) }
+    const { orch, spawned } = await realSpawner(worktrees)
+    const first = await orch.call({ cmd: 'run-start', args: { run: jobId }, sessionId: 'sesA', request: 'req-rs' })
+    expect(first.status).toBe(409)
+    expect(first.body).toMatchObject({ repair: 'app-settings.json' })
+    expect(worktrees.removeWorktrees).toHaveBeenCalledWith([runWt])
+    expect(spawned).toEqual([])
+    // The person repairs the file and sends the same request again, as the refusal said to.
+    await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'yolo' }))
+    const again = await orch.call({ cmd: 'run-start', args: { run: jobId }, sessionId: 'sesA', request: 'req-rs' })
+    expect(again.status).toBe(200)
+    expect(again.replayed).toBeUndefined()
+    expect(worktrees.makeRunWorktree).toHaveBeenCalledTimes(2)
+    expect(spawned).toEqual([{ cwd: dir }])
+    expect(orch.state().runs.find((r) => r.jobId === jobId)).toMatchObject({ worktree: runWt })
+  })
+  // The other half: a removal the in-use check refused leaves the fresh folder on disk, so that call
+  // did leave something, and its receipt is kept.
+  it('keeps its receipt for a keyed run-start whose coordinator was refused but whose fresh worktree is still in use', async () => {
+    const jobId = await coordinatorJob()
+    await fs.writeFile(path.join(dir, 'app-settings.json'), '{ not json')
+    const runWt = path.join(dir, 'wt-run')
+    const worktrees = { fork: vi.fn(), makeRunWorktree: vi.fn(async () => runWt), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn(async (p: string[]) => ({ failed: p })) }
+    const { orch, spawned } = await realSpawner(worktrees)
+    const first = await orch.call({ cmd: 'run-start', args: { run: jobId }, sessionId: 'sesA', request: 'req-rs' })
+    expect(first.status).toBe(409)
+    expect((first.body as { error: string }).error).toMatch(/is still in use and was left behind/)
+    await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'yolo' }))
+    const again = await orch.call({ cmd: 'run-start', args: { run: jobId }, sessionId: 'sesA', request: 'req-rs' })
+    expect(again.replayed).toBe(true)
+    expect(again.body).toEqual(first.body)
+    expect(worktrees.makeRunWorktree).toHaveBeenCalledTimes(1)
+    expect(spawned).toEqual([])
+  })
+  it('removes the fork of a keyed --worktree new worker whose spawn failed, answers the same error, and keeps no receipt', async () => {
+    const { taskId } = await seed()
+    const forkedDir = path.join(dir, 'wt-a'); await fs.mkdir(forkedDir)
+    let failing = true
+    const worktrees = { fork: vi.fn(async () => forkedDir), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn(async () => ({ failed: [] as string[] })) }
+    const { orch, spawned } = await realSpawner(worktrees, () => failing)
+    const args = { ...worker(taskId, 'new'), name: 'n' }
+    const first = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-w' })
+    expect(first.status).toBe(400)
+    expect((first.body as { error: string }).error).toBe('failed to start worker: Error: node-pty is incomplete')
+    expect(worktrees.removeWorktrees).toHaveBeenCalledWith([forkedDir])
+    expect(orch.state().dispatches).toEqual([])
+    failing = false
+    const again = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-w' })
+    expect(again.status).toBe(200)
+    expect(again.replayed).toBeUndefined()
+    expect(worktrees.fork).toHaveBeenCalledTimes(2)
+    expect(spawned).toEqual([{ cwd: forkedDir }])
   })
   it('routes the worktree-* calls to the Host worktrees, app or not, and refuses a request id on them', async () => {
     const call = vi.fn(async () => ({ status: 200, body: { file: { items: [] } } }))

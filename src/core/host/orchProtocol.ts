@@ -38,6 +38,29 @@ export function wasRefusedBeforeActing(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { beforeActing?: unknown }).beforeActing === true
 }
 
+/**
+ * Tags `err`: this call did act, and then undid what it did before it threw, so nothing it made is
+ * left (Host S3 follow-up A36). The Host's `startWorker` is the one user: a `--worktree new` fork
+ * whose spawn then failed is removed again, and no process was started.
+ *
+ * **A different tag from `refusedBeforeActing`, because the claim is different.** That one says the
+ * call never got as far as touching anything, and a caller that marks an effect only after the call
+ * (`MARKS_AFTER_ACTING`) relies on exactly that. This one says the call touched something and put it
+ * back, so it is only good for withdrawing a mark already made, which is what `orchDeps.ts` does with
+ * it. `leftNothingBehind` below reads either.
+ */
+export function undoneBeforeFailing<E extends Error>(err: E): E {
+  return Object.assign(err, { undone: true as const })
+}
+
+/** Whether `err` says the call leaves nothing behind: it was refused before acting, or it undid itself. */
+export function leftNothingBehind(err: unknown): boolean {
+  return (
+    wasRefusedBeforeActing(err) ||
+    (typeof err === 'object' && err !== null && (err as { undone?: unknown }).undone === true)
+  )
+}
+
 /** The client behind one `orch-call`. Supplied by `server.ts`, which is the only place that knows
  *  which socket asked — the command table cannot work it out from `{cmd, args}`. */
 export interface OrchCaller {

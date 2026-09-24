@@ -5,7 +5,7 @@
 // `handleCommand` did not.
 import type { OrchAccount, OrchRunConfig, OrchServerDeps } from '../core/orchestration/command'
 import type { Provider } from '../core/types'
-import { AppUnreachable, wasRefusedBeforeActing } from '../core/host/orchProtocol'
+import { AppUnreachable, leftNothingBehind, wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
 import type { HostSessions } from './sessions'
@@ -249,7 +249,8 @@ const HOST_WHEN_ABSENT = ['chatSend'] as const
  * `removeWorktrees` and `makeRunWorktree`, marked only once they are past their own up-front refusals**
  * (fix round 1, I2): both can refuse whole, before anything is closed, removed or created
  * (`worktrees.ts`'s `fresh()` and its detached-app check), and a refusal tagged `refusedBeforeActing`
- * marks no effect at all, so a keyed retry once the reason clears still has everything left to do. A
+ * marks no effect at all, so a keyed retry once the reason clears still has everything left to do.
+ * `startCoordinator` is marked the same way since Host S3 follow-up A36 (see `MARKS_AFTER_ACTING`). A
  * local refusal only the app can clear (a profile file the Host cannot read: accounts.json,
  * app-settings.json) arrives as `RepairNeeded` and is flagged with its file, so the command answers
  * CONFLICT carrying `repair: <file>` and the refusal's own words — never the 400 a failed start
@@ -287,7 +288,10 @@ const HOST_LOCAL_FALLBACK: Record<HostLocalName, 'propagates' | 'swallowed'> = {
  * closed, removed or created nothing — and a keyed retry once the reason clears (the app quits, the
  * file is repaired) would then replay the stale refusal instead of really doing the work.
  */
-const MARKS_AFTER_ACTING = new Set<HostLocalName>(['removeWorktrees', 'makeRunWorktree'])
+/* `startCoordinator` joined in Host S3 follow-up A36: the spawner tags every failure that came before
+ * a pty was opened (the settings refusal, an unknown account, a spawn the registry refused, a
+ * retiring Host), and leaves a failure after one untagged, since that coordinator is running. */
+const MARKS_AFTER_ACTING = new Set<HostLocalName>(['removeWorktrees', 'makeRunWorktree', 'startCoordinator'])
 
 const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending'])
 
@@ -390,8 +394,9 @@ const EFFECTFUL: Record<Classified, boolean> = {
   readChat: false,
   // HOST_WHEN_ABSENT — a turn, on either route.
   chatSend: true,
-  // NOT_FORWARDED — never read: `discardRunWorktree` marks nothing itself (I1), and it never reaches
-  // `REMOTE`, so this value is here only to satisfy the `Record<Classified, boolean>` check.
+  // NOT_FORWARDED — never read: `discardRunWorktree` marks nothing itself (I1; since A36 it may take
+  // back the mark its `makeRunWorktree` made), and it never reaches `REMOTE`, so this value is here
+  // only to satisfy the `Record<Classified, boolean>` check.
   discardRunWorktree: false
 }
 
@@ -448,8 +453,15 @@ export function hostOrchDeps(a: {
    *
    *  **Before the action, not after it.** `a.act` rejects when the app goes away mid-question or
    *  holds it past the deadline, and neither says the app did not do it — a request that may have
-   *  landed has to read as one that did. */
+   *  landed has to read as one that did.
+   *
+   *  **Counted, not a flag** (Host S3 follow-up A36): each call adds one, and `withdrawEffect` takes
+   *  one back. A call has acted when the count it ends with is above zero. */
   onEffect?(): void
+  /** Takes back one `onEffect` this same call made, once what it marked is known to be undone: a
+   *  Run worktree `discardRunWorktree` removed again, or a start that says it left nothing behind
+   *  (`leftNothingBehind`). Never called without a mark of its own to take back. */
+  withdrawEffect?(): void
   /** `listAccounts` answered from the profile's accounts.json (LOCAL_WHEN_ABSENT). Rejects when the
    *  file cannot be read, with a message that says how to repair it. */
   readAccounts(provider?: Provider): Promise<OrchAccount[]>
@@ -610,7 +622,9 @@ export function hostOrchDeps(a: {
    *  Those two are marked only once the call is past its own up-front refusal — on success, or on any
    *  failure not tagged `refusedBeforeActing` — so a refusal that closed, removed or created nothing
    *  keeps no receipt. Every other HOST_LOCAL name keeps the general rule (`act` funnel's own
-   *  reasoning): a call that might have half-acted before it threw is marked as if it had. */
+   *  reasoning): a call that might have half-acted before it threw is marked as if it had, **unless
+   *  its error says it left nothing behind** (`leftNothingBehind`, A36), and then the mark it made is
+   *  withdrawn. */
   const hostLocal = (name: HostLocalName) => {
     const propagates = HOST_LOCAL_FALLBACK[name] === 'propagates'
     const fallback = forward(name, propagates)
@@ -625,6 +639,9 @@ export function hostOrchDeps(a: {
         return result
       } catch (err) {
         if (EFFECTFUL[name] && marksAfter && !wasRefusedBeforeActing(err)) a.onEffect?.()
+        // Marked before it ran, and it says now that nothing it did is left (A36: a `--worktree new`
+        // fork removed again after its spawn failed). The mark is taken back.
+        if (EFFECTFUL[name] && !marksAfter && leftNothingBehind(err)) a.withdrawEffect?.()
         if (propagates && err instanceof RepairNeeded) a.onAppRequired(name, err.message, { repair: err.file })
         // A Host that is leaving refuses new starts; the caller retries once a Host is up (ruling a).
         if (propagates && err instanceof HostRetiring) a.onAppRequired(name, err.message, { retry: HostRetiring.RETRY })
@@ -645,7 +662,16 @@ export function hostOrchDeps(a: {
    * because this call is not the reason the command failed and must never decide its status. The
    * command already marked its own effect through the `makeRunWorktree` that made the folder, so this
    * one marks nothing either.
+   *
+   * **And a removal that worked takes that mark back** (Host S3 follow-up A36). The folder is gone,
+   * and with it the one thing that call left, so a keyed run-start whose coordinator also started
+   * nothing keeps no receipt, and the retry once the cause is fixed really starts. Only a path this
+   * same call's `makeRunWorktree` returned is withdrawn for (`madeHere`), once: a folder left in
+   * place (in use, or a removal that failed) keeps its mark, because it is still there.
    */
+  /** The Run worktrees `makeRunWorktree` made in this call, each carrying one mark (A36). Either route
+   *  marks it exactly once: `hostLocal` on success, or the `act` funnel before forwarding. */
+  const madeHere = new Set<string>()
   const discardRunWorktree = async (path: string): Promise<{ removed: boolean; inUse: boolean }> => {
     const local = a.local
     const remove: (paths: string[]) => Promise<{ failed: string[] }> =
@@ -656,6 +682,7 @@ export function hostOrchDeps(a: {
       const { failed } = await remove([path])
       const inUse = failed.length > 0
       if (inUse) a.log(`orphaned run worktree ${path} is still in use — left in place`)
+      else if (madeHere.delete(path)) a.withdrawEffect?.()
       return { removed: !inUse, inUse }
     } catch (err) {
       a.log(`orphaned run worktree ${path} could not be removed: ${err instanceof Error ? err.message : String(err)}`)
@@ -665,6 +692,17 @@ export function hostOrchDeps(a: {
 
   const remote = Object.fromEntries(
     REMOTE.map((name) => {
+      if (name === 'makeRunWorktree') {
+        const make = hostLocal(name)
+        return [
+          name,
+          async (...args: unknown[]): Promise<unknown> => {
+            const made = await make(...args)
+            if (typeof made === 'string') madeHere.add(made)
+            return made
+          }
+        ]
+      }
       if ((HOST_LOCAL as readonly string[]).includes(name)) return [name, hostLocal(name as HostLocalName)]
       if ((FIRE_AND_FORGET as readonly string[]).includes(name)) return [name, forgetful(name)]
       if (name in DEGRADES) return [name, degrading(name, DEGRADES[name as keyof typeof DEGRADES])]
