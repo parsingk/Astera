@@ -760,8 +760,10 @@ Each was found while building or reviewing S4+S5 and left as it is, with its rea
   Host is not answering; the Jobs sidebar does not say why nothing moves.
 - **A Task a closed app left mid-check, outside a convergence Job, is gated, not restarted.** The resume
   sweep restarts only a convergence Run's `validating` and `reviewing` Tasks (A54). Any other Task left
-  so with nothing checking it gets the restart Gate on a tick at least 5 s after the handover or the
-  last app leaving, and a person decides. The same holds for an S5 start a yielding app refused (A53).
+  so with nothing checking it is armed at the handover, when the last app leaves, and again on every
+  tick that drives with no app attached. It gets the restart Gate on a later tick at least 5 s after
+  it was armed, still unchanged, and a person decides. A tick that briefly does not drive drops the
+  arming, and the next tick that drives arms it again. The same holds for an S5 start a yielding app refused (A53).
   A Task a leaving Host left (A50) is gated by its successor's load. While any app is attached nothing
   is gated: that app may be checking the Task itself. If the Host's own store write between a
   `worker_done` commit and its check's start took longer than 5 s, such a Task could be gated beside

@@ -946,3 +946,64 @@ describe('createHostDriving — a Task nobody is checking (final review I1)', ()
     expect(h.gates()).toHaveLength(0)
   })
 })
+
+// S4+S5 tidy, item 1 (re-review R-m3 a): a tick that briefly finds the Host not driving clears every
+// armed Task. The arming is redone on each later tick that may start work with no app attached, so the
+// Task is still gated, and still only after STALL_CONFIRM_MS unchanged.
+describe('createHostDriving — the restart Gate is armed again on a driving tick (S4+S5 tidy)', () => {
+  it('re-arms a Task after a tick that found the Host not driving, and gates it a confirmed tick later', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.putStalled('tsk_v', 'validating')
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left'))
+    await h.settle()
+    h.spawner.retiring = true // a tick that does not drive: the armed Task is dropped
+    h.clock = NOW_MS + 6_000
+    await h.tickNow()
+    expect(h.gates()).toHaveLength(0)
+    h.spawner.retiring = false
+    h.clock = NOW_MS + 7_000
+    await h.tickNow() // armed again here
+    expect(h.gates()).toHaveLength(0)
+    h.clock = NOW_MS + 11_000 // 4 s on: not yet
+    await h.tickNow()
+    expect(h.gates()).toHaveLength(0)
+    h.clock = NOW_MS + 12_500
+    await h.tickNow()
+    expect(h.statusOf('tsk_v')).toBe('blocked')
+    expect(h.gates()).toHaveLength(1)
+  })
+
+  it('arms a Task that stalls while the Host drives with no drive change at all', async () => {
+    const h = await rig({ readyTasks: 0 })
+    await h.load()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(1))
+    await h.putStalled('tsk_r', 'reviewing') // after the handover's arming
+    await h.settle()
+    await h.tickNow()
+    expect(h.gates()).toHaveLength(0)
+    h.clock = NOW_MS + 6_000
+    await h.tickNow()
+    expect(h.statusOf('tsk_r')).toBe('blocked')
+  })
+
+  it('arms nothing on a tick with an app attached', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.putStalled('tsk_v', 'validating')
+    await h.settle()
+    await h.tickNow()
+    h.clock = NOW_MS + 6_000
+    await h.tickNow()
+    h.clock = NOW_MS + 12_000
+    await h.tickNow()
+    expect(h.statusOf('tsk_v')).toBe('validating')
+    expect(h.gates()).toHaveLength(0)
+  })
+})

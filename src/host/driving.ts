@@ -30,9 +30,10 @@
 // `validating` or `reviewing` with nothing checking it (a closed app's check, a forwarded start an app
 // refused) is not restarted by the sweep, and it keeps its Run running, so the Host never idles and
 // `host stop` refuses. The load's own restart Gate (`interruptStalledTask`) is opened for it, armed at
-// the moment above and confirmed on a tick at least `STALL_CONFIRM_MS` later with the Task unchanged
-// and still held by none of this Host's checks: in between, the Host's own worker_done may sit between
-// its commit and its check's start.
+// the moment above and again on every tick that may start work with no app attached, and confirmed on
+// a tick at least `STALL_CONFIRM_MS` later with the Task unchanged and still held by none of this
+// Host's checks: in between, the Host's own worker_done may sit between its commit and its check's
+// start.
 //
 // **The lost-worker Gate** (D6, R16, N5) is asked on every pass, only while no app is attached: an app
 // has its own reconciler, which reads the journal the Host cannot (D8).
@@ -139,11 +140,15 @@ export function createHostDriving(d: {
     )
   /** Armed Tasks, by id: what each looked like when armed, and when. */
   const suspects = new Map<string, { status: string; updatedAt: string; armedAt: number }>()
+  /** Tasks whose restart Gate was refused, by id, as they looked then: not armed again until they
+   *  change, so a refusal is not retried and logged on every tick. */
+  const refused = new Map<string, string>()
+  const seenAs = (t: { status: string; updatedAt: string }): string => `${t.status} ${t.updatedAt}`
   const armStalled = (why: string): void => {
     if (d.server.hasApp()) return
     const at = d.nowMs()
     for (const t of unchecked(d.orch.state()))
-      if (!suspects.has(t.id)) {
+      if (!suspects.has(t.id) && refused.get(t.id) !== seenAs(t)) {
         suspects.set(t.id, { status: t.status, updatedAt: t.updatedAt, armedAt: at })
         log(`task=${t.id} is ${t.status} with nothing checking it (${why}) — its restart Gate opens at a later tick if it stays so`)
       }
@@ -167,6 +172,7 @@ export function createHostDriving(d: {
       if (!t || t.status !== seen.status || t.updatedAt !== seen.updatedAt) continue
       const r = interruptStalledTask(s, { taskId: id }, new Date(d.nowMs()).toISOString())
       if (!r.interrupted) {
+        refused.set(id, seenAs(t))
         log(`task=${id} is ${t.status} with nothing checking it, and its restart Gate was refused`)
         continue
       }
@@ -363,8 +369,13 @@ export function createHostDriving(d: {
       // — a time that passed while this Host did not fire is not fired late.
       if (mayStart() && d.server.hasApp()) await loop.fireTick()
       else loop.forgetArming()
-      // Final review I1: the restart Gate for the Tasks armed at a handover or an app leaving.
+      // Final review I1: the restart Gate for the Tasks armed earlier. **Then armed again on every
+      // tick that may start work with no app attached** (S4+S5 tidy): a tick that found the Host not
+      // driving cleared every armed Task, and a Task a foreign run held was never armed, and nothing
+      // but the next change of drive armed either again. A Task armed here is confirmed on a later
+      // tick, `STALL_CONFIRM_MS` on at the least, as before.
       await gateStalled()
+      if (mayStart() && !d.server.hasApp()) armStalled('a tick')
       // R22: the spec pile-up, narrowly — no app attached (an app writes specs too) and no spawn of
       // this Host's in flight (its spec is on disk before its Dispatch names it).
       if (!d.server.hasApp() && d.spawner.inFlight() === 0 && d.orch.loaded()) {
