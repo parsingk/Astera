@@ -251,11 +251,11 @@ pointing here at the sentence it replaces.
   every worktree operation stuck. Task 1's review found that instinct wrong when applied to *every*
   read: healing on every read means a file damaged mid-life is wiped without warning. What shipped
   instead: only `load()`, run once at Host start and only when the Host can spawn
-  (`src/host/worktrees.ts:307-310`, `loadWorktreesIfSpawning`, `src/host/worktrees.ts:353-368`), keeps
+  (`src/host/worktrees.ts:318-320`, `loadWorktreesIfSpawning`, `src/host/worktrees.ts:374-386`), keeps
   `.bak` of the bytes it read and rewrites the file; every later read or write goes through
   `refresh()`/`readForWrite()`, which throws `RepairNeeded` rather than healing
-  (`src/core/worktrees/registry.ts:175-176,226-246`), and the Host answers it as a 409 naming the file
-  to repair (`src/host/worktrees.ts:340-348`). The app's own fallback from Host to local mirrors this:
+  (`src/core/worktrees/registry.ts:183-184,234-254`), and the Host answers it as a 409 naming the file
+  to repair (`src/host/worktrees.ts:346-357`). The app's own fallback from Host to local mirrors this:
   it calls the registry's queued `refresh()`, not `load()`, so a file damaged while the Host owned it
   is not silently wiped the moment the app takes the file back (`src/main/host/worktreeRoute.ts`, Task
   9 ruling I3). Why `load()` only at start: healing rewrites the list, and doing that in the middle of
@@ -270,7 +270,7 @@ pointing here at the sentence it replaces.
   (`isIntegrationTask`, `integrationTaskFor`, `workingInRunRoot`) stay the app scheduler's, in
   `src/main/ipc.ts` and `src/core/orchestration/integrate.ts`. Rule 14 (a worker never runs in the
   project folder of an app-driven Run) stays `handleCommand`'s, in
-  `src/core/orchestration/command.ts:1829-1837`. Why: rules 12-14 are about *when* the scheduler or
+  `src/core/orchestration/command.ts:1850-1858`. Why: rules 12-14 are about *when* the scheduler or
   `handleCommand` may call the merge, not about the merge itself, and neither moves to the Host until
   S4. Pinned by `src/core/orchestration/exec/integrateGit.test.ts`,
   `src/core/orchestration/integrate.test.ts` and `src/core/orchestration/command.test.ts`.
@@ -278,8 +278,8 @@ pointing here at the sentence it replaces.
   message covers only a merge made while an app is attached. What shipped matches the plan's own
   recording of this as a known gap, not a design change: a Host merge with nobody attached is announced
   to nobody, and the next app to open compares the project's stored snapshot against its HEAD
-  (`src/main/workUnit/collector.ts:1322-1325`) and records the move as an outside change if that
-  project had a snapshot. Why: a persisted Host git-op journal would be new design, not this slice's.
+  (`src/main/workUnit/collector.ts:1326-1332`, `gitRound`) and records the move as an outside change if
+  that project had a snapshot. Why: a persisted Host git-op journal would be new design, not this slice's.
   Not yet measured as of this task; Task 11 measures it. No test pins this; it is the documented cost
   of not building that journal.
 - **A29. §11, the carried items taken and not taken (plan ruling R14).** M4 (registry growth) is
@@ -296,37 +296,45 @@ pointing here at the sentence it replaces.
   controller's own ruling on the plan's risk 6 reversed this before Task 7 began: "record the Run
   worktree before starting the coordinator, or remove it on start failure." What shipped: a new
   optional dep, `discardRunWorktree(path)`, called only when the coordinator's start throws, after the
-  Run worktree was already made (`src/core/orchestration/command.ts:222,1390-1399`); the Host supplies
+  Run worktree was already made (`src/core/orchestration/command.ts:227,1400-1408`); the Host supplies
   a real one (`src/host/orchDeps.ts:649`) that best-effort removes the orphaned folder and is never
   marked as "needs the app" even when it is refused, so a coordinator failure never reads as a 409
   asking for Astera. The failed start still answers its own 400 whether or not the cleanup succeeded
-  (fix round 1, I1). The app's own code path has no `discardRunWorktree` and keeps the older
-  `removeWorktrees` fallback it always had; this duplication is known and left for a later slice.
-  Pinned by `src/core/orchestration/command.test.ts` and `src/host/orchDeps.test.ts`.
+  (fix round 1, I1). **This whole cleanup is new**, not something `run-start` always had: at 02bef5a a
+  coordinator's start failure returned its 400 with no cleanup at all, and the fresh Run worktree was
+  simply orphaned. The app's own code path has no `discardRunWorktree`, so it falls back to
+  `removeWorktrees` alone when that is wired (`command.ts:1409-1420`), which is the same new cleanup
+  minus the tag, not an older behaviour (final review m4). This duplication of the two branches is
+  known and left for a later slice. Pinned by `src/core/orchestration/command.test.ts` and
+  `src/host/orchDeps.test.ts`.
 
 **Not in the design or the plan, found while building it**
 
 - **A31. The detached-app guard.** While Astera runs, it writes its pid to `app.pid` in the profile
-  and removes it on a clean quit (`src/core/host/pidFile.ts:74-95`, called from
+  and removes it on a clean quit (`src/core/host/pidFile.ts:79-95`, called from
   `src/main/index.ts:386,1397`). Before the Host removes a worktree folder, it checks that file: an app
   that is alive but not attached to this Host (one that gave up on a stalled Host, or has not
   reconnected since a restart) runs sessions the Host cannot see, so the removal is refused with 409
   (exit 6), `Astera is running but not connected to this Host; remove the worktree from the app, or
-  quit Astera and retry` (`src/host/worktrees.ts:192-199,326-333`). A crashed app's stale pid is not
+  quit Astera and retry` (`src/host/worktrees.ts:197-199,329-342`). A crashed app's stale pid is not
   read as alive: the check signals the pid, and a process that no longer exists reads as no app
   (`src/core/host/pidFile.ts:97-114`). Pid reuse is not guarded against, and that fails toward keeping
   the folder, the safe direction, at the cost of one manual quit-and-retry. The refusal is tagged
   `refusedBeforeActing`, so it leaves no request receipt; quitting Astera and repeating the same
   command with the same `--request-id` really removes the folder. A refusal that lands after some
-  folders were already removed keeps its receipt, because the command acted before it failed. Pinned
+  folders were already removed keeps its receipt, because the command acted before it failed. **Only
+  an Astera from this version on writes `app.pid`**; a pre-S3 app running but not attached is invisible
+  to this check (final review m1, "Known limits after S3"). Pinned
   by `src/host/worktrees.test.ts` and `src/core/host/pidFile.test.ts`.
 - **A32. `worktreePathInUse` (the ruling on plan risk 3).** Before removing a folder, an attached app
   is asked `worktreePathInUse` (`src/core/host/protocol.ts:94-101`, `HOST_ACT_PATH_IN_USE`). The app
   answers with only what it runs itself through local, non-Host ptys: sessions, terminals, runs that
   have not exited, and chat sessions (`src/main/host/localPathInUse.ts`, `appPathInUse`). An app that
   does not answer, or answers something that is not a string or null, costs the removal: the folder is
-  kept. Why: on macOS and Linux a removal deletes the folder out from under a live process, and the
-  Host cannot see a session the app is running on its own fallback pty. Pinned by
+  kept. Why: the Host cannot see a session the app is running on its own fallback pty, and this
+  in-use check, together with the Host's own (A25), is what keeps a removal from touching a folder a
+  live process is using, on every OS (final review m2; the plan's "Windows fails rather than deleting
+  under a live process" is not something the code relies on). Pinned by
   `src/main/host/localPathInUse.test.ts` and `src/host/worktrees.test.ts`.
 - **A33. `WorktreesSnapshot.seq` (review of Tasks 4-5).** Every `worktree-*` reply and the
   `worktrees-state` push carry `{ seq, file }`, one counter per Host life
@@ -369,6 +377,10 @@ pointing here at the sentence it replaces.
   A28's answer for this slice: there is no persisted Host git-op journal, so the app's next open
   compares its stored snapshot to HEAD and records the move as external if that project had one. S4's
   per-merge record is the fix.
+- **An Astera from before S3 does not write `app.pid`.** The detached-app guard (A31) only sees an app
+  that writes the file, so a removal is not refused while a pre-S3 Astera runs unattached, the mixed
+  version case in final review m1. Rare: it needs a downgrade, or a newer CLI's `host start`, while the
+  older app stays open.
 
 ## 0. The problem, measured
 
