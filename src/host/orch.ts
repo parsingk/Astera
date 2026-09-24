@@ -16,6 +16,7 @@ import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { hostOrchDeps } from './orchDeps'
 import { readAccountsFile } from '../core/accounts/accountsFile'
 import { readRunConfigsFile } from '../core/run/runConfigsFile'
+import type { HostChecks } from './checks'
 import type { HostSessions } from './sessions'
 import type { HostLocal } from './spawner'
 import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
@@ -347,6 +348,13 @@ export function createHostOrch(a: {
    *  through `handleCommand` (R1: the app is their only caller). Absent exactly when there is no
    *  spawner (R5): with no spawner nothing built here ever reaches `worktrees`, so the four answer 501. */
   worktrees?: Pick<HostWorktrees, 'call'>
+  /** The Host's own checks and whether it drives now (orchDeps' HOST_DRIVES), passed through to
+   *  `hostOrchDeps`. Absent: validation, review and repair take their pre-S5 routes. */
+  drive?: { owns(): boolean; checks: HostChecks } | null
+  /** `validation-stop`: the app's stop button on a validation run this Host started (S4+S5 §5.1).
+   *  Marks the run stopped and kills it, so its exit reads as "not proven" rather than a failure;
+   *  true when `runId` was such a run. Absent: the call answers 501. */
+  validationStop?(runId: string): boolean
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
 
@@ -463,6 +471,7 @@ export function createHostOrch(a: {
       readRunConfigs: (projectPath) => readRunConfigsFile(path.join(a.profileDir, 'run-configs.json'), projectPath),
       sessions: a.sessions,
       local: a.local ?? null,
+      drive: a.drive ?? null,
       onEffect: () => {
         marks.effects += 1
       },
@@ -925,7 +934,7 @@ export function createHostOrch(a: {
         // next". Unreachable today, because only the app sends these and it sends no key; written
         // anyway, because the thing that makes it unreachable is a fact about today's clients and not
         // a property of this code.
-        if ((cmd === 'state-put' || cmd === 'state-get' || WORKTREE_CALLS.has(cmd)) && request !== undefined)
+        if ((cmd === 'state-put' || cmd === 'state-get' || cmd === 'validation-stop' || WORKTREE_CALLS.has(cmd)) && request !== undefined)
           return { status: 400, body: { error: `${cmd} does not take a request id` } }
         if (cmd === 'state-put') return await statePut(args, from)
         // Open to anyone: reading the state is something every CLI client can already do through
@@ -942,6 +951,18 @@ export function createHostOrch(a: {
           return a.worktrees
             ? await a.worktrees.call(cmd, args, from)
             : { status: 501, body: { error: 'this Host does not own worktrees.json' } }
+        // **Beside the worktree-* names, for their reason** (S4+S5 §5.1): the app is the only caller,
+        // when a person stops a validation run the Host started, and nothing in `handleCommand` knows
+        // the name. Above the receipt line: it acts on a pty, not on the state, and the app sends no
+        // key. A Host with no checks answers 501, and the app's stop then degrades as §5.1 says.
+        if (cmd === 'validation-stop') {
+          if (from?.role !== 'app') return { status: 403, body: { error: 'validation-stop is the app’s to send' } }
+          if (!a.validationStop) return { status: 501, body: { error: 'this Host does not run validations' } }
+          const runId = args.runId
+          if (typeof runId !== 'string' || runId === '')
+            return { status: 400, body: { error: 'validation-stop needs a runId' } }
+          return { status: 200, body: { stopped: a.validationStop(runId) } }
+        }
         // **Request receipts, and still the same synchronous step the call entered in** — nothing
         // above has awaited on this path, so the lookup and the claim cannot be split by a second
         // `orch-call` arriving in between (§7). The three groups above are deliberately on the other

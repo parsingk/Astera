@@ -8,6 +8,7 @@ import type { Provider } from '../core/types'
 import { AppUnreachable, leftNothingBehind, wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
+import type { HostChecks } from './checks'
 import type { HostSessions } from './sessions'
 import type { HostLocal, HostLocalName } from './spawner'
 
@@ -33,7 +34,7 @@ const PROPAGATES = [
   // **The three toggles the app owns.** Each is read as the first thing its command does, before any
   // state is read and before anything has been committed, so a refusal costs nothing but the answer
   // "not now" — which is the truth, and better than telling a person the feature is off when it is
-  // their app that is missing. (`lang` is the fourth of this shape and is *not* here: see DEGRADES.)
+  // their app that is missing. (`lang` is the fourth of this shape and is *not* here: see HOST_DRIVES.)
   'browserEnabled', 'handoffEnabled', 'trackingEnabled'
 ] as const
 
@@ -54,44 +55,15 @@ const NESTED = {
 /**
  * **Forwarded, and when it cannot be asked it answers the value its own contract already has.**
  *
- * The two members where refusing costs more than degrading, because the command has already done
- * something by the time they are called:
+ * A refusal here would cost more than the stand-in, because the command has something to give
+ * without this answer. The value is a function of the reason, so what a caller is handed says why.
+ * **Cannot-be-asked is one condition**: no app attached and an app that will not answer are the same
+ * fact here, and both are logged.
  *
- * - `repairTargetFor`: a refusal makes a review report answer CONFLICT, and then the reviewer's
- *   verdict is recorded **nowhere** — the worker reported and nothing is left of it. `null` is this
- *   dependency's own word for "no repair target", and the pure layer's answer to it is documented
- *   where the dependency is declared: it opens the `repairFailed` Gate, which a person sees. A Gate
- *   beats a lost verdict.
- *
- *   **This entry is also what makes `startRepair` safe with no app, and that is not obvious**
- *   (ruling F58). `startRepair` *is* forwarded — it is in FIRE_AND_FORGET below, so with an app it
- *   goes out over the socket and without one it is logged and swallowed. Swallowed is what would
- *   leave a half-opened repair: a Dispatch committed with no spec file and no worker, which nothing
- *   would ever finish. What stops that is this `null` one layer up — the verdict never opens a repair
- *   Dispatch at all, so the swallowed call has no Dispatch to have abandoned. **Move
- *   `repairTargetFor` out of this group and that hole opens**, silently, at a call site that says
- *   nothing about it — which is why it is written down at both ends.
- * - `repairOnce`: `gate-resolve` commits the Gate resolution **before** calling it, so a refusal
- *   answers CONFLICT for a command whose main effect has already landed — a script reads "nothing
- *   happened" about something that did. `{ ok: false, error }` is this dependency's own way of saying
- *   the retry did not open, and the call site already carries it to the caller as `retryOnceFailed`
- *   in a 200 body, for exactly this: the person's "one more try" quietly not happening.
- * - `lang`: read one line below `repairTargetFor`, in the same review report, for the same reason —
- *   both feed `applyReviewResult`. Refusing here would 409 the very command the line above degrades
- *   to keep, so the degradation above would buy nothing. `'en'` is this dependency's own documented
- *   absent value ("주입되지 않으면 영어다"): a Gate in the wrong language is a Gate a person can still
- *   read and act on, and a lost verdict is not.
- *
- * So these are the contracts the call sites were written against rather than behaviour invented for
- * the Host — and a group rather than two special cases, so they cannot drift back out of the guard.
- * The value is a function of the reason, so what a caller is handed says why. **Cannot-be-asked is
- * one condition**: no app attached and an app that will not answer are the same fact here, and both
- * are logged.
+ * `repairTargetFor`, `repairOnce` and `lang` took this route until S5, and still do whenever the
+ * Host does not drive: they are HOST_DRIVES now, and their fallbacks are `HOST_DRIVES_FALLBACK`.
  */
 const DEGRADES = {
-  repairTargetFor: () => null,
-  repairOnce: (why: string) => ({ ok: false as const, error: why }),
-  lang: () => 'en',
   // **`chatPending` joined in CLI phase D4.** The card a chat session holds open is in the app's
   // adapter and nowhere the Host can read. `undefined` is this dependency's own word for "could not
   // be asked" (command.ts): `sessions read` then leaves `pending` out, rather than answering `null`,
@@ -115,8 +87,9 @@ const SWALLOWED = ['resolveProjectRoot'] as const
 /**
  * **Called as a bare statement — nobody holds the result.**
  *
- * `unregisterRolling` is declared `(sessionId: string): void`, and `startValidation`, `startReview`,
- * `startRepair` and `onDispatchLost` are the same shape. An `async` wrapper on any of them hands Node
+ * `unregisterRolling` is declared `(sessionId: string): void`, and `onDispatchLost` is the same shape
+ * (so are `startValidation`, `startReview` and `startRepair`, which take this route whenever the
+ * Host does not drive: HOST_DRIVES). An `async` wrapper on any of them hands Node
  * a rejected promise nobody holds, and there is no `unhandledRejection` handler in the Host — so the
  * default takes the whole process down, and every terminal it owns with it. `unregisterRolling` is
  * reached by `send worker_done`, the commonest worker path, in exactly the no-app case this design
@@ -125,9 +98,61 @@ const SWALLOWED = ['resolveProjectRoot'] as const
  * Swallowing is what these call sites already expect of an absent dependency, but it is logged here,
  * never silent — and it does not decide the status either, for SWALLOWED's reason.
  */
-const FIRE_AND_FORGET = [
-  'unregisterRolling', 'startValidation', 'startReview', 'startRepair', 'onDispatchLost'
-] as const
+const FIRE_AND_FORGET = ['unregisterRolling', 'onDispatchLost'] as const
+
+/**
+ * **Answered by the Host's own checks while the Host drives, and by the app otherwise** (S4+S5
+ * §1.4, R8). The six names validation, review and repair travel under: the Host runs the check in
+ * its own pty registry, starts the reviewer and the repair itself, and reads the language itself
+ * (`HostChecks`, `host/checks.ts`). **Per call, not once**: `drive.owns()` is asked at every call,
+ * because the driver changes while the Host runs (an app that drives attaches, or leaves).
+ *
+ * While the Host does not drive, or has no checks (`drive` null or absent), each name takes the
+ * route it had before S5 (`HOST_DRIVES_FALLBACK`): the three void starts are FIRE_AND_FORGET, and the
+ * other three DEGRADE to the value their own contract already has:
+ *
+ * - `repairTargetFor` answers `null`: a refusal would make a review report answer CONFLICT, and then
+ *   the reviewer's verdict is recorded **nowhere**. `null` is this dependency's own word for "no
+ *   repair target", and the pure layer's answer to it (documented where the dependency is declared)
+ *   is the `repairFailed` Gate, which a person sees. A Gate beats a lost verdict.
+ * - `repairOnce` answers `{ ok: false, error }`: `gate-resolve` commits the Gate resolution
+ *   **before** calling it, so a refusal would answer CONFLICT for a command whose main effect has
+ *   already landed. The call site already carries this value to the caller as `retryOnceFailed` in a
+ *   200 body.
+ * - `lang` answers `'en'`: read one line below `repairTargetFor`, in the same review report, for the
+ *   same reason. `'en'` is this dependency's own documented absent value ("주입되지 않으면 영어다").
+ *
+ * **Ruling F58, and why it still stands.** `startRepair` with nobody to run it is logged and
+ * swallowed, and swallowed is what would leave a half-opened repair: a Dispatch committed with no
+ * spec file and no worker, which nothing would ever finish. What stops that is `repairTargetFor`'s
+ * `null` one layer up: the verdict never opens a repair Dispatch at all. Both ends are in this one
+ * group now, and **both switch on one predicate in one turn**: the same `drive.owns()`, asked
+ * synchronously by each wrapper when the command calls it. So the Host never answers a real repair
+ * target while the start that must follow it is swallowed, and never runs a start whose target it
+ * did not answer. **Split these two across groups, or give them different predicates, and that hole
+ * opens**, silently, at a call site that says nothing about it.
+ *
+ * **Receipts** keep the rule the other local groups keep: a name that acts marks its effect before
+ * it runs (`startValidation`, `startReview`, `startRepair`), and the two reads mark nothing.
+ * **Except `repairOnce`, marked only once it opened the repair**: its `{ ok: false }` answers all
+ * come before its commit (`repair.ts`: an unknown Task, no implementation Dispatch, a Dispatch that
+ * could not open), so marking one would keep a receipt over a refusal that did nothing, the case
+ * `MARKS_AFTER_ACTING` exists for below. A throw is marked, since it may have come after the commit.
+ * The three void calls are bare statements in `handleCommand`, so each runs inside a try/catch that
+ * logs: it must never throw into the command.
+ */
+const HOST_DRIVES = ['startValidation', 'startReview', 'startRepair', 'repairTargetFor', 'repairOnce', 'lang'] as const satisfies readonly (keyof HostChecks)[]
+type HostDrivesName = (typeof HOST_DRIVES)[number]
+
+/** The route each HOST_DRIVES name takes while the Host does not drive: the one it had before S5. */
+const HOST_DRIVES_FALLBACK: Record<HostDrivesName, 'forgetful' | ((why: string) => unknown)> = {
+  startValidation: 'forgetful',
+  startReview: 'forgetful',
+  startRepair: 'forgetful',
+  repairTargetFor: () => null,
+  repairOnce: (why: string) => ({ ok: false as const, error: why }),
+  lang: () => 'en'
+}
 
 /**
  * **Forwarded when the app is there, and answered from the profile when it is not** (CLI phase C).
@@ -296,7 +321,7 @@ const MARKS_AFTER_ACTING = new Set<HostLocalName>(['removeWorktrees', 'makeRunWo
 const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending'])
 
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
-const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
+const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...HOST_DRIVES, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
 
 /** Not forwarded through the generic funnel at all (fix round 1, I1): `discardRunWorktree` is built by
  *  hand inside `hostOrchDeps` (its own `const discardRunWorktree`, further down, right before it is
@@ -313,6 +338,7 @@ type Classified =
   | (typeof PROPAGATES)[number]
   | (typeof SWALLOWED)[number]
   | (typeof FIRE_AND_FORGET)[number]
+  | HostDrivesName
   | keyof typeof NESTED
   | keyof typeof DEGRADES
   | (typeof LOCAL_WHEN_ABSENT)[number]
@@ -366,10 +392,15 @@ const EFFECTFUL: Record<Classified, boolean> = {
   // FIRE_AND_FORGET — every one of them starts or ends something, which is why nobody holds the
   // result. That the caller does not wait for them does not make them free to do twice.
   unregisterRolling: true,
+  onDispatchLost: true,
+  // HOST_DRIVES: the values these names had in FIRE_AND_FORGET and DEGRADES before S5, on either
+  // route. The three starts and the retry act; the target and the language are reads.
   startValidation: true,
   startReview: true,
   startRepair: true,
-  onDispatchLost: true,
+  repairTargetFor: false,
+  repairOnce: true,
+  lang: false,
   // NESTED, **by group and not by method**: `handoffs.save` writes the memo, and the three
   // `sessionTasks.*` each record a work unit. A method added to either object inherits its group's
   // flag with no compiler stop — the check below is over `OrchServerDeps`'s own keys, and these two
@@ -380,9 +411,6 @@ const EFFECTFUL: Record<Classified, boolean> = {
   handoffs: true,
   sessionTasks: true,
   // DEGRADES.
-  repairTargetFor: false,
-  repairOnce: true,
-  lang: false,
   chatPending: false,
   // LOCAL_WHEN_ABSENT — a read either way, from the app or from its file.
   listAccounts: false,
@@ -474,6 +502,9 @@ export function hostOrchDeps(a: {
   /** The Host's own spawner (HOST_LOCAL), or null/absent for a Host started without the CLI paths —
    *  then the nine names take their pre-S2 routes. */
   local?: HostLocal | null
+  /** The Host's own checks (HOST_DRIVES), and whether the Host drives right now, asked at every
+   *  call. Null or absent: the six names take their pre-S5 routes. */
+  drive?: { owns(): boolean; checks: HostChecks } | null
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -576,6 +607,47 @@ export function hostOrchDeps(a: {
       }
       void act(name, args).catch((err) => a.log(`${name} failed in the app: ${String(err)}`))
     }
+
+  /** HOST_DRIVES: the Host's own checks while it drives, else the name's pre-S5 route. `a.drive` and
+   *  its `owns()` are read at each call, synchronously, so the six switch together (F58). */
+  const hostDrives = (name: HostDrivesName) => {
+    const old = HOST_DRIVES_FALLBACK[name]
+    const driving = (): HostChecks | null => {
+      const d = a.drive
+      return d && d.owns() ? d.checks : null
+    }
+    if (old === 'forgetful') {
+      const fallback = forgetful(name)
+      return (...args: unknown[]): void => {
+        const checks = driving()
+        if (!checks) return fallback(...args)
+        if (EFFECTFUL[name]) a.onEffect?.()
+        try {
+          ;(checks[name] as (...xs: unknown[]) => void)(...args)
+        } catch (err) {
+          a.log(`${name} failed in the Host: ${String(err)}`)
+        }
+      }
+    }
+    const fallback = degrading(name, old)
+    return async (...args: unknown[]): Promise<unknown> => {
+      const checks = driving()
+      if (!checks) return fallback(...args)
+      const call = checks[name] as (...xs: unknown[]) => unknown
+      if (name !== 'repairOnce') return await call(...args)
+      // Marked once it opened the repair, or once it threw (it may have been past its commit), and
+      // never over a `{ ok: false }`, which it answers only before acting (see HOST_DRIVES).
+      let result: unknown
+      try {
+        result = await call(...args)
+      } catch (err) {
+        if (EFFECTFUL[name]) a.onEffect?.()
+        throw err
+      }
+      if (EFFECTFUL[name] && (result as { ok?: unknown } | null)?.ok !== false) a.onEffect?.()
+      return result
+    }
+  }
 
   /** HOST_WHEN_ABSENT: to the app when one is attached, else the Host's own write — see that group
    *  for why an app that fails mid-flight is refused rather than written for. */
@@ -705,6 +777,7 @@ export function hostOrchDeps(a: {
       }
       if ((HOST_LOCAL as readonly string[]).includes(name)) return [name, hostLocal(name as HostLocalName)]
       if ((FIRE_AND_FORGET as readonly string[]).includes(name)) return [name, forgetful(name)]
+      if ((HOST_DRIVES as readonly string[]).includes(name)) return [name, hostDrives(name as HostDrivesName)]
       if (name in DEGRADES) return [name, degrading(name, DEGRADES[name as keyof typeof DEGRADES])]
       if (name === 'listAccounts') return [name, localWhenAbsent(name, a.readAccounts)]
       if (name === 'listRunConfigs') return [name, localWhenAbsent(name, a.readRunConfigs)]

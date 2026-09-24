@@ -57,7 +57,10 @@ export interface HostChecks {
   /** accounts.json, read each call (B3): the loop and the review start take these. */
   accounts(): Promise<Account[]>
   loginStatus(accountId: string): Promise<boolean>
-  /** validation-stop: true when the run was a validation run this Host started. */
+  /** validation-stop: true when the run was a validation run this Host started. **Marks it stopped,
+   *  then kills it** (Task 10): the app's run.stop does the two as separate steps, and the Host has
+   *  no other door that stops a run, so both happen here, in that order, and the exit the kill causes
+   *  is read as "not proven" rather than as a failed check. */
   stopValidation(runId: string): boolean
   resumeSweep(why: string): void
 }
@@ -77,6 +80,8 @@ export interface HostChecksDeps {
   now(): string
   /** Test seam; defaults to reading accounts.json. */
   readAccounts?: () => Promise<Account[]>
+  /** Test seam: RunManager's tree kill (taskkill on win32). Defaults to running it. */
+  killRunner?: (cmd: { file: string; args: string[] }) => void
 }
 
 /** The OS locale as node reports it — what the app's `app.getLocale()` stands in for (R13). */
@@ -160,7 +165,7 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
       }
     }),
     d.platform,
-    undefined,
+    d.killRunner,
     // D4, R11: read at each start, so the run starts from the Host's env as it is then.
     () => hostWorkerBaseEnv(d.env)
   )
@@ -249,6 +254,8 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     stopValidation: (runId) => {
       if (runs.get(runId)?.validation !== true) return false
       validation.validator.markStopped(runId)
+      // After the mark, so the exit this kill causes finds it (run.stop's order in the app).
+      runs.stop(runId)
       return true
     },
     resumeSweep: (why) => sweep.run(why)

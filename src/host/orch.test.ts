@@ -28,6 +28,7 @@ import {
   type OrchState
 } from '../core/orchestration/state'
 import { outcomeOf } from '../core/orchestration/view'
+import type { HostChecks } from './checks'
 import { codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
 import type { OrchCaller } from '../core/host/orchProtocol'
 import { createHostSpawner, type HostLocal, type HostSpawner, type HostSpawnerDeps } from './spawner'
@@ -2386,14 +2387,21 @@ describe('Host-local spawn (S2)', () => {
     expect(second.replayed).toBe(true)
     expect(l.startWorker).toHaveBeenCalledTimes(1)
   })
-  // R10: nothing reads as validated with no app.
-  it('leaves a --validate Task validating after its Host-spawned worker reports, with no app', async () => {
+  /** The six HOST_DRIVES names as no-ops, and the rest of HostChecks beside them so the type holds. */
+  const noChecks = (): HostChecks => ({
+    startValidation: vi.fn(), startReview: vi.fn(), startRepair: vi.fn(),
+    repairTargetFor: vi.fn(() => null), repairOnce: vi.fn(async () => ({ ok: true as const })), lang: vi.fn(async () => 'en' as const),
+    stopValidation: vi.fn(() => false), resumeSweep: vi.fn(), langNow: vi.fn(() => 'en' as const),
+    accounts: vi.fn(async () => []), loginStatus: vi.fn(async () => false)
+  })
+  /** R10's fixture: a --validate Task whose Host-spawned worker has just reported, with no app. */
+  const reportWithNoApp = async (drive: Parameters<typeof createHostOrch>[0]['drive']) => {
     const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW); if (!job.ok) throw new Error(job.error)
     const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
     const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [], validateConfigIds: ['seed:npm:test'] }, NOW)
     if (!task.ok) throw new Error(task.error)
     await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(task.state))
-    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: local() })
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: local(), drive })
     const started = await orch.call({ cmd: 'worker-start', args: worker(task.value.id), sessionId: '' })
     expect(started.status).toBe(200)
     const dispatchId = (started.body as { dispatchId: string }).dispatchId
@@ -2403,10 +2411,38 @@ describe('Host-local spawn (S2)', () => {
       sessionId: 'ses_host'
     })
     expect(done.status).toBe(200)
+    return { orch, task, run }
+  }
+  // R10's successor: with no app, the Host runs the check itself, and the Task reads validated only
+  // after the check passed.
+  it('validates a --validate Task in the Host after its worker reports, with no app', async () => {
+    const startValidation = vi.fn()
+    const { orch, task } = await reportWithNoApp({ owns: () => true, checks: { ...noChecks(), startValidation } })
+    expect(orch.state().tasks.find((t) => t.id === task.value.id)?.status).toBe('validating')
+    expect(startValidation).toHaveBeenCalledWith({ taskId: task.value.id, cwd: expect.any(String) })
+    expect(logs.some((l) => l.startsWith('startValidation was not forwarded'))).toBe(false)
+  })
+  it('still leaves it validating, and says so, when the Host does not drive and no app is attached', async () => {
+    const checks = noChecks()
+    const { orch, task, run } = await reportWithNoApp({ owns: () => false, checks })
     expect(orch.state().tasks.find((t) => t.id === task.value.id)?.status).toBe('validating')
     expect(outcomeOf(orch.state(), run.value.id)).toBe('running')
-    // The validation itself is the app's until S5: logged as not forwarded, never run or faked here.
+    // Nobody drives, so nothing runs the check or fakes one: logged as not forwarded.
     expect(logs.some((l) => l.startsWith('startValidation was not forwarded'))).toBe(true)
+    expect(checks.startValidation).not.toHaveBeenCalled()
+  })
+  it('answers validation-stop for the app only', async () => {
+    const validationStop = vi.fn(() => true)
+    const orch = orchOver({ validationStop })
+    const app = { role: 'app' as const, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'validation-stop', args: { runId: 'r1' }, sessionId: '', from: app })).body).toEqual({ stopped: true })
+    expect((await orch.call({ cmd: 'validation-stop', args: { runId: 'r1' }, sessionId: '', from: { role: 'cli', toOthers: () => {} } })).status).toBe(403)
+    expect((await orchOver().call({ cmd: 'validation-stop', args: { runId: 'r1' }, sessionId: '', from: app })).status).toBe(501)
+    // Beside the worktree-* calls: no string runId is a bad call, and a request id on it is refused.
+    expect((await orch.call({ cmd: 'validation-stop', args: {}, sessionId: '', from: app })).status).toBe(400)
+    expect((await orch.call({ cmd: 'validation-stop', args: { runId: 'r1' }, sessionId: '', from: app, request: 'q1' })).status).toBe(400)
+    expect(validationStop).toHaveBeenCalledTimes(1)
+    expect(validationStop).toHaveBeenCalledWith('r1')
   })
   // Review M2 of Task 9: a worker whose pty is app-local is the app's to kill. With no app the stop is
   // refused, and the Dispatch is not marked stopped over a worker that is still running.

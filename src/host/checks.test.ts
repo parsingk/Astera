@@ -76,6 +76,13 @@ async function rig(o: RigOpts = {}) {
   const logs: string[] = []
   const sent: HostMessage[] = []
   const spawned: Array<{ opts: { env: Record<string, string | undefined> }; pty: FakePty }> = []
+  /** The pids a stop reached, by either of RunManager's routes: the tree kill (win32) or pty.kill(). */
+  const killed: number[] = []
+  /** A killed pty ends as a killed process would, with a non-zero code — a failure unless marked. */
+  const endKilled = (pid: number): void => {
+    killed.push(pid)
+    spawned.find((x) => x.pty.pid === pid)?.pty.exit(1)
+  }
   const registry = new PtyRegistry({
     spawn: (_file, _args, opts) => {
       let onExit: (e: { exitCode: number }) => void = () => {}
@@ -83,7 +90,7 @@ async function rig(o: RigOpts = {}) {
         pid: 2000 + spawned.length,
         onData: () => {},
         onExit: (cb) => { onExit = cb },
-        write() {}, resize() {}, kill() {}, pause() {}, resume() {},
+        write() {}, resize() {}, kill: () => endKilled(pty.pid), pause() {}, resume() {},
         exit: (c) => onExit({ exitCode: c })
       }
       spawned.push({ opts, pty })
@@ -117,7 +124,9 @@ async function rig(o: RigOpts = {}) {
     registeredWorktrees: () => [],
     specsDir: path.join(profileDir, 'orch', 'specs'),
     log: (m) => logs.push(m),
-    now: () => NOW
+    now: () => NOW,
+    // Never a real taskkill: the fake pids are numbers some real process may hold.
+    killRunner: (cmd) => endKilled(Number(cmd.args[cmd.args.indexOf('/pid') + 1]))
   })
   if (o.onRunExitThrows)
     vi.spyOn(checks._validator, 'onRunExit').mockImplementation(() => {
@@ -133,6 +142,8 @@ async function rig(o: RigOpts = {}) {
     task: () => state.tasks.find((x) => x.id === taskId)!,
     opened: (): PtyEntry[] => sent.flatMap((m) => (m.t === 'pty-opened' ? [m.entry] : [])),
     exitLast: (code: number) => ours().at(-1)!.pty.exit(code),
+    killed: () => killed,
+    lastPid: () => ours().at(-1)!.pty.pid,
     spawnedEnv: () => ours().at(-1)?.opts.env as Record<string, string | undefined>
   }
 }
@@ -169,16 +180,20 @@ describe('createHostChecks', () => {
     expect(h.opened()).toHaveLength(0)
   })
 
-  it('stopValidation marks a validation run stopped, so its exit reads as not proven, and answers false for any other run id', async () => {
+  // validation-stop's body (Task 10): the mark and the kill, in that order, so the exit the kill
+  // causes is read as stopped. Only marking would leave the check running until it ended by itself.
+  it('stopValidation marks a validation run stopped and kills its pty, so the Task ends not proven, and answers false for any other run id', async () => {
     const h = await rig()
     h.checks.startValidation({ taskId: h.taskId, cwd: h.cwd })
     await vi.waitFor(() => expect(h.opened()).toHaveLength(1))
     expect(h.checks.stopValidation('not-a-run')).toBe(false)
+    expect(h.killed()).toEqual([])
     expect(h.checks.stopValidation(h.opened()[0].meta!.id)).toBe(true)
-    // Not proven: the stopped run's exit is a Gate for a person, not a failed check (review m6).
-    h.exitLast(1)
+    expect(h.killed()).toEqual([h.lastPid()])
+    // Not proven: the killed run's exit is a Gate for a person, not a failed check (review m6).
     await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
     expect(h.task().consecutiveFailures).toBe(0)
+    expect(h.task().checks ?? []).toEqual([])
   })
 
   it('a validation pty that ends with no exit code is recorded as exit 1, as the app records it (review m5)', async () => {

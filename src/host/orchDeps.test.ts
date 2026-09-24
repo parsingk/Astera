@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { hostOrchDeps } from './orchDeps'
 import type { HostLocal } from './spawner'
+import type { HostChecks } from './checks'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
 import { AppUnreachable } from '../core/host/orchProtocol'
@@ -867,5 +868,93 @@ describe('HOST_LOCAL worktree names (S3)', () => {
     expect(act).toHaveBeenCalledWith('makeRunWorktree', [{ repoPath: 'D:/p', name: 'n' }])
     await expect(hostOrchDeps(base({ hasApp: () => false, local, onAppRequired })).makeRunWorktree!({ repoPath: 'D:/p', name: 'n' })).rejects.toThrow(/APP_REQUIRED/)
     expect(onAppRequired).toHaveBeenCalledWith('makeRunWorktree', expect.any(String))
+  })
+})
+
+describe('HOST_DRIVES (R8)', () => {
+  const build = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): ReturnType<typeof hostOrchDeps> => hostOrchDeps(base(over))
+  const checks = (): HostChecks => ({
+    startValidation: vi.fn(), startReview: vi.fn(), startRepair: vi.fn(),
+    repairTargetFor: vi.fn(() => ({ kind: 'fresh' } as never)),
+    repairOnce: vi.fn(async () => ({ ok: true as const })), lang: vi.fn(async () => 'ko' as const),
+    stopValidation: vi.fn(() => false), resumeSweep: vi.fn(), langNow: vi.fn(() => 'ko' as const),
+    accounts: vi.fn(async () => []), loginStatus: vi.fn(async () => true)
+  })
+  it('answers all six from the Host while it drives, and forwards nothing', async () => {
+    const c = checks()
+    const act = vi.fn()
+    const d = build({ hasApp: () => true, act, drive: { owns: () => true, checks: c } })
+    d.startValidation!({ taskId: 't', cwd: 'x' })
+    d.startReview!({ taskId: 't' })
+    d.startRepair!({ dispatchId: 'd' })
+    expect(await d.repairTargetFor!('t')).toEqual({ kind: 'fresh' })
+    expect(await d.repairOnce!({ taskId: 't' })).toEqual({ ok: true })
+    expect(await d.lang!()).toBe('ko')
+    expect(c.startValidation).toHaveBeenCalledWith({ taskId: 't', cwd: 'x' })
+    expect(act).not.toHaveBeenCalled()
+  })
+  // N9: record, then assert — an expect inside the mock would be swallowed by the wrapper's catch.
+  it('marks an effect for the ones that act, before they run', () => {
+    const order: string[] = []
+    const c = checks()
+    ;(c.startValidation as ReturnType<typeof vi.fn>).mockImplementation(() => { order.push('call') })
+    const d = build({ onEffect: () => order.push('effect'), drive: { owns: () => true, checks: c } })
+    d.startValidation!({ taskId: 't', cwd: 'x' })
+    expect(order).toEqual(['effect', 'call'])
+  })
+  it('takes exactly today’s routes while an app drives: forwarded, and degraded with no answer', async () => {
+    const act = vi.fn(async () => undefined)
+    const d = build({ hasApp: () => true, act, drive: { owns: () => false, checks: checks() } })
+    d.startValidation!({ taskId: 't', cwd: 'x' })
+    expect(act).toHaveBeenCalledWith('startValidation', [{ taskId: 't', cwd: 'x' }])
+    const none = build({ hasApp: () => false, act, drive: { owns: () => false, checks: checks() } })
+    expect(await none.repairTargetFor!('t')).toBeNull() // F58: no target, so no half-opened repair
+  })
+  it('asks owns() at each call, not once', () => {
+    let mine = false
+    const c = checks()
+    const act = vi.fn(async () => undefined)
+    const d = build({ hasApp: () => true, act, drive: { owns: () => mine, checks: c } })
+    d.startReview!({ taskId: 'a' })
+    mine = true
+    d.startReview!({ taskId: 'b' })
+    expect(act).toHaveBeenCalledTimes(1)
+    expect(c.startReview).toHaveBeenCalledWith({ taskId: 'b' })
+  })
+  // The void three are bare statements in handleCommand: a throw from the Host's own body is logged,
+  // never thrown into the command (FIRE_AND_FORGET's reason).
+  it('logs a void check that throws, and does not throw into the command', () => {
+    const logs: string[] = []
+    const c = checks()
+    ;(c.startRepair as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new Error('boom') })
+    const d = build({ log: (m) => logs.push(m), drive: { owns: () => true, checks: c } })
+    expect(() => d.startRepair!({ dispatchId: 'd' })).not.toThrow()
+    expect(logs.some((l) => l.includes('startRepair') && l.includes('boom'))).toBe(true)
+  })
+  // Receipt rules: the reads mark nothing; repairOnce marks once when it opened the repair, and a
+  // refusal it made before opening anything (`{ ok: false }`, which repair.ts returns only before its
+  // commit) leaves no mark, so a keyed retry once the reason clears still has the work to do.
+  it('marks repairOnce only when it acted, and never the reads', async () => {
+    let n = 0
+    const c = checks()
+    const d = build({ onEffect: () => n++, drive: { owns: () => true, checks: c } })
+    await d.repairTargetFor!('t')
+    await d.lang!()
+    expect(n).toBe(0)
+    ;(c.repairOnce as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, error: 'no implementation dispatch' })
+    expect(await d.repairOnce!({ taskId: 't' })).toEqual({ ok: false, error: 'no implementation dispatch' })
+    expect(n).toBe(0)
+    await d.repairOnce!({ taskId: 't' })
+    expect(n).toBe(1)
+    ;(c.repairOnce as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('half-way'))
+    await expect(d.repairOnce!({ taskId: 't' })).rejects.toThrow(/half-way/)
+    expect(n).toBe(2)
+  })
+  it('takes the old routes with no drive at all', async () => {
+    const act = vi.fn(async () => undefined)
+    const d = build({ hasApp: () => true, act, drive: null })
+    d.startRepair!({ dispatchId: 'd' })
+    expect(act).toHaveBeenCalledWith('startRepair', [{ dispatchId: 'd' }])
+    expect(await build({ hasApp: () => false }).lang!()).toBe('en')
   })
 })
