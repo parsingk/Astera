@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { GitWatcher } from './gitWatcher'
-import { makeRepo } from '../core/worktrees/testRepo'
+import { makeRepo, gitSync, addOrigin } from '../core/worktrees/testRepo'
 import { gitDir } from '../core/worktrees/git'
 
 const watchers: GitWatcher[] = []
@@ -129,5 +129,79 @@ describe('GitWatcher', () => {
     const dir = (await gitDir(repo)) as string
     await fs.writeFile(path.join(dir, 'index'), 'y', 'utf8')
     expect(await waitFor(() => hits > 0, 1200)).toBe(false)
+  })
+
+  // gitwatch-probe.cjs로 git 2.45.1에서 측정: 이 다섯 조작은 HEAD의 커밋을 옮기면서도 index와
+  // 최상위 HEAD 파일을 둘 다 건드리지 않는다 — 흔적은 logs/HEAD(reflog)에만 남는다. logs/HEAD를
+  // 보기 전에는 이 테스트가 첫 단계(allow-empty)에서 반드시 실패한다.
+  it('index도 HEAD 파일도 건드리지 않는 HEAD 이동에도 emit한다 — allow-empty·amend·soft reset·재커밋·update-ref', async () => {
+    const repo = await makeRepo()
+    let hits = 0
+    const w = new GitWatcher(() => hits++)
+    watchers.push(w)
+    await w.watch(repo)
+
+    const step = async (args: string[]): Promise<void> => {
+      hits = 0
+      gitSync(repo, args)
+      expect(await waitFor(() => hits > 0)).toBe(true)
+    }
+    // 매 단계 트리가 부모와 똑같은 빈 커밋 체인이라, amend와 재커밋에도 --allow-empty가 필요하다
+    // (아니면 git이 "내용 없는 커밋"으로 보고 거부한다) — reflog에 남는지가 관심사일 뿐 이 플래그가
+    // "index를 건드리지 않는다"는 성질 자체는 바꾸지 않는다(probe의 commit --allow-empty 측정과 같다).
+    await step(['commit', '--allow-empty', '-m', 'empty'])
+    await step(['commit', '--amend', '--allow-empty', '-m', 'amended message only'])
+    await step(['reset', '--soft', 'HEAD~1'])
+    await step(['commit', '--allow-empty', '-m', 're-commit after soft reset'])
+    await step(['update-ref', 'refs/heads/main', 'HEAD~1'])
+  })
+
+  it('링크된 worktree의 git dir(.git/worktrees/<name>)에서도 같다', async () => {
+    const repo = await makeRepo()
+    const wt = path.join(repo, '..', `wt-gw-${path.basename(repo)}`)
+    gitSync(repo, ['worktree', 'add', '-b', 'gw-feat', wt])
+    let hits = 0
+    const w = new GitWatcher(() => hits++)
+    watchers.push(w)
+    await w.watch(wt)
+    const dir = (await gitDir(wt)) as string
+    expect(dir.includes('worktrees')).toBe(true) // 워크트리 전용 git dir을 보고 있는지 확인
+    gitSync(wt, ['commit', '--allow-empty', '-m', 'wt-empty'])
+    expect(await waitFor(() => hits > 0)).toBe(true)
+    hits = 0
+    gitSync(wt, ['update-ref', 'refs/heads/gw-feat', 'HEAD~1'])
+    expect(await waitFor(() => hits > 0)).toBe(true)
+    gitSync(repo, ['worktree', 'remove', '--force', wt])
+  })
+
+  it('watch 시작 시 logs/가 없던 저장소도 첫 커밋에서 emit한다', async () => {
+    // makeRepo()가 이미 커밋 1개를 만들어서 index는 존재한다 — 커밋이 한 번도 없던 저장소로
+    // 시험하면(진짜 fresh init) 첫 커밋이 index 파일 자체를 새로 만들어 내면서 구현 이전 코드도
+    // 우연히 emit해 버린다(index가 WATCHED라서). logs/만 지워 "감시 시작 시 logs/ 없음"을
+    // 재현하고, 그 뒤의 조작은 index도 HEAD 파일도 건드리지 않는 allow-empty로 골라 옛 코드에서는
+    // 반드시 실패하게 한다.
+    const repo = await makeRepo()
+    const gd = (await gitDir(repo)) as string
+    await fs.rm(path.join(gd, 'logs'), { recursive: true, force: true })
+    await expect(fs.stat(path.join(gd, 'logs', 'HEAD'))).rejects.toThrow()
+
+    let hits = 0
+    const w = new GitWatcher(() => hits++)
+    watchers.push(w)
+    await w.watch(repo)
+    gitSync(repo, ['commit', '--allow-empty', '-m', 'after logs/ was removed'])
+    expect(await waitFor(() => hits > 0)).toBe(true)
+  })
+
+  it('git fetch는 HEAD를 옮기지 않으므로 emit하지 않는다', async () => {
+    const repo = await makeRepo()
+    await addOrigin(repo)
+    let hits = 0
+    const w = new GitWatcher(() => hits++)
+    watchers.push(w)
+    await w.watch(repo)
+    gitSync(repo, ['fetch', 'origin'])
+    expect(await waitFor(() => hits > 0, 1200)).toBe(false)
+    expect(hits).toBe(0)
   })
 })
