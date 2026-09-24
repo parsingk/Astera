@@ -161,8 +161,10 @@ The Host reads the permission setting, **Run agents without permission checks**,
 damaged file refuses the start with exit 6 and `error.details.repair`, rather than guessing. A start
 that reaches a Host that is stopping is refused with 6 and `error.details.retry` (see Output).
 
-A damaged `worktrees.json` refuses every one of these worktree commands the same way, with exit 6 and
-`error.details.repair` naming the file. Open Astera to repair it.
+A damaged `worktrees.json` refuses the commands that make or remove a worktree the same way, with exit
+6 and `error.details.repair` naming the file. Quit and reopen Astera, or restart the Host, to repair
+it. A copy of the damaged file is kept as `worktrees.json.bak`. Merging does not read that file, so
+`run-merge` still works while it is damaged.
 
 **What still needs the app.** Each of these is exit 6 with a message that says the app is needed,
 and nothing is started or changed:
@@ -177,7 +179,8 @@ still that Astera's. It, not the Host, makes and merges the worktrees these comm
 
 **Removing a worktree folder is refused while Astera is running somewhere but not connected to this
 Host.** The Host cannot see what a session, a terminal or a run that app is driving on its own is
-doing in that folder, so it will not delete the folder out from under it. The message says to remove
+doing in that folder, so it will not delete the folder out from under it. The command ends with exit 6,
+and the message says to remove
 the worktree from the app instead, or to quit Astera and try again. This refusal happens before
 anything is touched, so it leaves no receipt behind: quitting Astera and running the same command with
 the same `--request-id` then really removes the folder. A refusal that comes after some folders were
