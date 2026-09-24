@@ -146,7 +146,7 @@ export interface OrchServerDeps {
   /** `rollsBack`: this commit undoes an earlier commit of **the same command**, and the command left
    *  nothing else behind either (Host S3 follow-up A36). Only worker-start's failure rollback says
    *  so, after its own `openDispatch`, and only when `startWorker`'s error says the start left
-   *  nothing (`leftNothingBehind`). The Host's receipts then count the two commits as none. Every
+   *  nothing (`leftNothingBehind`: refused before acting, or undone before failing). The Host's receipts then count the two commits as none. Every
    *  other wiring may ignore it: it changes nothing about what is written. */
   setState(next: OrchState, how?: { rollsBack: true }): Promise<void>
   /** Filled in by the wiring that wraps the coordinator (OrchCoordinator.startWorker). worker-start
@@ -1957,12 +1957,15 @@ export async function handleCommand(
         // reporting" when the session never even existed) — the cause of the failure is carried in
         // the bad(...) of this response.
         //
-        // **Said to be a rollback only when the start says it left nothing** (`rollsBack`, A36): a
-        // `--worktree new` fork the Host removed again after its spawn failed. Then the Dispatch is
-        // gone, the Task is back where it was, and nothing on disk names this call, so a keyed call
-        // keeps no receipt and the same id can really start once the cause is fixed. Any other
-        // failure stays an ordinary commit and keeps its receipt, which is what the receipts design
-        // pinned for a start refused for want of the app (host/orch.test.ts).
+        // **Said to be a rollback only when the start says it left nothing** (`rollsBack`, A36):
+        // `leftNothingBehind(e)` is true for either tag. `undoneBeforeFailing` is a `--worktree new`
+        // fork the Host removed again after its spawn failed. `refusedBeforeActing` is a start the
+        // Host refused before touching anything: a retiring Host, a fork a damaged worktrees.json
+        // refused, or the permission setting refusing a start with no fork (follow-up round m6).
+        // Then the Dispatch is gone, the Task is back where it was, and nothing on disk names this
+        // call, so a keyed call keeps no receipt and the same id can really start once the cause is
+        // fixed. Any other failure stays an ordinary commit and keeps its receipt, which is what the
+        // receipts design pinned for a start refused for want of the app (host/orch.test.ts).
         const latest = deps.getState()
         const rolledBack: OrchState = {
           ...latest,

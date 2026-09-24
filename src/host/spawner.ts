@@ -108,11 +108,13 @@ export interface HostSpawner extends HostLocal {
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
 
 /** What one start did, filled in as it runs (Host S3 follow-up A36): whether its own pty was opened,
- *  and the folder a `--worktree new` fork made for it. Built per start, because two starts can be in
- *  flight at once and each must answer only for itself. */
+ *  the folder a `--worktree new` fork made for it, and whether the permission setting refused the
+ *  spawn (follow-up round m6). Built per start, because two starts can be in flight at once and each
+ *  must answer only for itself. */
 interface StartTrace {
   opened: boolean
   forked: string | null
+  settingsRefused: boolean
 }
 
 const LOCATE_POLL_MS = 1_000
@@ -363,7 +365,16 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     await preTrustWorkspace({ account, cwd: o.cwd, homeDir, descriptors, log })
     await ensured()
     const cliPath = await shuttlePath()
-    const bypass = o.bypassPermissions ?? (await bypassFromSettings())
+    let bypass = o.bypassPermissions
+    if (bypass === undefined) {
+      try {
+        bypass = await bypassFromSettings()
+      } catch (err) {
+        // Refused before `sessions.spawn`, so no process (m6). The worker start reads this.
+        if (trace) trace.settingsRefused = true
+        throw err
+      }
+    }
     const rollProviders = o.rollAccountIds.map((rid) => providerOf(accounts.find((x) => x.id === rid) ?? account))
     const opensBefore = opens
     let info: ReturnType<SessionManager['spawn']>
@@ -520,7 +531,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       })
     },
     startWorker: spawning(async (a) => {
-      const trace: StartTrace = { opened: false, forked: null }
+      const trace: StartTrace = { opened: false, forked: null, settingsRefused: false }
       try {
         return await startWorkerIn(a, trace)
       } catch (err) {
@@ -531,11 +542,18 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         // started is the error tagged as having left nothing, which withdraws the call's mark.
         if (trace.forked !== null && !trace.opened && (await discardFork(trace.forked)) && err instanceof Error)
           throw undoneBeforeFailing(err)
+        // **With no fork, a settings refusal left nothing either** (follow-up round m6): it comes
+        // before `sessions.spawn`, so no process was started, the same refusal a coordinator's start
+        // is tagged for. A `--terminal` reuse never reaches the spawn, so it can never land here, and
+        // it types into a live session, which is not nothing. A fork still on disk is something left,
+        // so that case stays untagged (the branch above did not throw).
+        if (trace.forked === null && !trace.opened && trace.settingsRefused && err instanceof Error)
+          throw refusedBeforeActing(err)
         throw err
       }
     }),
     startCoordinator: spawning(async (a) => {
-      const trace: StartTrace = { opened: false, forked: null }
+      const trace: StartTrace = { opened: false, forked: null, settingsRefused: false }
       try {
         const accounts = await readAccounts(accountsPath)
         // The app makes this folder at boot; the Host may be the first to write into it.

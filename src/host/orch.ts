@@ -418,9 +418,9 @@ export function createHostOrch(a: {
    *  into a 409 and a script read exit 6 where exit 4 was the truth.
    *
    *  **`commits` and `effects` are the two halves of "did this call do anything"** (request receipts
-   *  design §3), and a receipt is kept only when one of them is set. They ride here rather than in a
-   *  second object because this one is already built per call, and a flag that lives no longer than
-   *  the call it belongs to cannot be read by the next one.
+   *  design §3), and a receipt is kept only when one of them ends the call above zero. They ride
+   *  here rather than in a second object because this one is already built per call, and a count
+   *  that lives no longer than the call it belongs to cannot be read by the next one.
    *
    *  **Counts, not flags** (Host S3 follow-up A36). A mark can be taken back once what it marked is
    *  known to be undone: a Run worktree removed again, a start that left nothing, a rollback commit

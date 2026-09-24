@@ -30,9 +30,10 @@ import {
 import { outcomeOf } from '../core/orchestration/view'
 import { codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
 import type { OrchCaller } from '../core/host/orchProtocol'
-import { createHostSpawner, type HostLocal, type HostSpawnerDeps } from './spawner'
+import { createHostSpawner, type HostLocal, type HostSpawner, type HostSpawnerDeps } from './spawner'
 import type { HostMessage } from '../core/host/protocol'
-import { AppUnreachable, refusedBeforeActing } from '../core/host/orchProtocol'
+import { AppUnreachable, leftNothingBehind, refusedBeforeActing, wasRefusedBeforeActing } from '../core/host/orchProtocol'
+import { RepairNeeded } from '../core/settings/repairNeeded'
 import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
 import { registrySessions } from './sessions'
@@ -2169,8 +2170,8 @@ describe('Host-local spawn (S2)', () => {
       },
       log: () => {}
     })
-    const box: { orch?: ReturnType<typeof orchOver> } = {}
-    const spawner = createHostSpawner({
+    const box: { orch?: ReturnType<typeof orchOver>; current?: HostSpawner } = {}
+    const make = (): HostSpawner => createHostSpawner({
       profileDir: dir,
       env: { PATH: process.env.PATH, ASTERA_HOST_CLI_EXEC: path.join(dir, 'Astera.exe'), ASTERA_HOST_CLI_ENTRY: path.join(dir, 'cli.js'), ASTERA_HOST_SKILLS: path.join(dir, 'skills') },
       platform: process.platform,
@@ -2181,9 +2182,18 @@ describe('Host-local spawn (S2)', () => {
       log: (m) => logs.push(m),
       appKeepsWorktrees: () => false,
       worktrees
+    })!
+    box.current = make()
+    // The orchestration talks to whichever spawner is current, so a test can put a fresh one in
+    // place of one that is retiring: the next Host, with the same receipts.
+    const local = new Proxy({} as HostLocal, {
+      get: (_t, k) => {
+        const v = (box.current as unknown as Record<string | symbol, unknown>)[k]
+        return typeof v === 'function' ? (v as (...xs: unknown[]) => unknown).bind(box.current) : v
+      }
     })
-    box.orch = orchOver({ hasApp: () => false, act: vi.fn(), local: spawner })
-    return { orch: box.orch, spawned }
+    box.orch = orchOver({ hasApp: () => false, act: vi.fn(), local })
+    return { orch: box.orch, spawned, spawner: () => box.current!, replaceSpawner: () => { box.current = make() } }
   }
   const coordinatorJob = async () => {
     const job = createJob(emptyState(), { objective: 'o', cwd: dir, coordinatorAccountId: 'acc1' }, NOW); if (!job.ok) throw new Error(job.error)
@@ -2246,6 +2256,115 @@ describe('Host-local spawn (S2)', () => {
     expect(again.replayed).toBeUndefined()
     expect(worktrees.fork).toHaveBeenCalledTimes(2)
     expect(spawned).toEqual([{ cwd: forkedDir }])
+  })
+  // Follow-up round m6: a worker-start with no fork, refused by the settings file before any process
+  // was started, is the same bug class as bug 1. Once the file is repaired the same id really starts.
+  it('keeps no receipt for a keyed worker-start with no fork refused by a damaged settings file, and the retry after the repair starts', async () => {
+    const { taskId } = await seed()
+    await fs.writeFile(path.join(dir, 'app-settings.json'), '{ not json')
+    const worktrees = { fork: vi.fn(), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() }
+    const { orch, spawned } = await realSpawner(worktrees)
+    const args = worker(taskId, dir)
+    const first = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-s' })
+    expect(first.status).toBe(409)
+    expect(first.body).toMatchObject({ repair: 'app-settings.json' })
+    expect(spawned).toEqual([])
+    await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'yolo' }))
+    const again = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-s' })
+    expect(again.status).toBe(200)
+    expect(again.replayed).toBeUndefined()
+    expect(spawned).toEqual([{ cwd: dir }])
+  })
+  // Follow-up round m2: the wider effect A36 accepted, pinned the way the no-app case is pinned the
+  // other way. A start a retiring Host refused touched nothing, so the same id acts on the next Host.
+  it('keeps no receipt for a keyed worker-start a retiring Host refused, and the retry on the next Host starts', async () => {
+    const { taskId } = await seed()
+    const worktrees = { fork: vi.fn(), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() }
+    const { orch, spawned, spawner, replaceSpawner } = await realSpawner(worktrees)
+    await spawner().closeAndSettle(1_000)
+    const args = worker(taskId, dir)
+    const first = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-r' })
+    expect(first.status).toBe(409)
+    expect(first.body).toMatchObject({ retry: 'host-retiring' })
+    replaceSpawner()
+    const again = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-r' })
+    expect(again.status).toBe(200)
+    expect(again.replayed).toBeUndefined()
+    expect(spawned).toEqual([{ cwd: dir }])
+  })
+  it('keeps no receipt for a keyed run-start a retiring Host refused, and the retry on the next Host starts', async () => {
+    const jobId = await coordinatorJob()
+    const runWt = path.join(dir, 'wt-run')
+    const worktrees = { fork: vi.fn(), makeRunWorktree: vi.fn(async () => runWt), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn(async () => ({ failed: [] as string[] })) }
+    const { orch, spawned, spawner, replaceSpawner } = await realSpawner(worktrees)
+    await spawner().closeAndSettle(1_000)
+    const first = await orch.call({ cmd: 'run-start', args: { run: jobId }, sessionId: 'sesA', request: 'req-rr' })
+    expect(first.status).toBe(409)
+    expect(worktrees.removeWorktrees).toHaveBeenCalledWith([runWt])
+    replaceSpawner()
+    const again = await orch.call({ cmd: 'run-start', args: { run: jobId }, sessionId: 'sesA', request: 'req-rr' })
+    expect(again.status).toBe(200)
+    expect(again.replayed).toBeUndefined()
+    expect(spawned).toEqual([{ cwd: dir }])
+  })
+  // The damaged worktrees.json refusal is tagged in worktrees.ts's fresh() (worktrees.test.ts pins the
+  // tag); here the fork throws it the way fresh() does, and the start passes it through.
+  it('keeps no receipt for a keyed --worktree new worker whose fork a damaged worktrees.json refused, and the retry forks and starts', async () => {
+    const { taskId } = await seed()
+    const forkedDir = path.join(dir, 'wt-a'); await fs.mkdir(forkedDir)
+    let damaged = true
+    const fork = vi.fn(async () => {
+      if (damaged) throw refusedBeforeActing(new RepairNeeded('worktrees.json is damaged; quit and reopen Astera', 'worktrees.json'))
+      return forkedDir
+    })
+    const worktrees = { fork, makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn(async () => ({ failed: [] as string[] })) }
+    const { orch, spawned } = await realSpawner(worktrees)
+    const args = { ...worker(taskId, 'new'), name: 'n' }
+    const first = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-f' })
+    expect(first.status).toBe(409)
+    expect(first.body).toMatchObject({ repair: 'worktrees.json' })
+    damaged = false
+    const again = await orch.call({ cmd: 'worker-start', args, sessionId: 'sesA', request: 'req-f' })
+    expect(again.status).toBe(200)
+    expect(again.replayed).toBeUndefined()
+    expect(worktrees.removeWorktrees).not.toHaveBeenCalled()
+    expect(spawned).toEqual([{ cwd: forkedDir }])
+  })
+  // Follow-up round m1: two concurrent starts receive one and the same rejection, the way two first
+  // spawns share a `once()` setup promise. The start that left nothing is tagged; the other, standing
+  // in for a start whose fork is still on disk, must keep its receipt.
+  it('tags only the start that left nothing when two concurrent starts share one rejection', async () => {
+    const jobId = await coordinatorJob()
+    const seeded = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+    const job = createJob(seeded, { objective: 'w', cwd: 'D:/p' }, NOW); if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW); if (!task.ok) throw new Error(task.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(task.state))
+    const shared = new Error('statusline files could not be written')
+    let coordinatorThrew!: () => void
+    const coordinatorDone = new Promise<void>((r) => { coordinatorThrew = r })
+    const tagged: unknown[] = []
+    const l = local({
+      startCoordinator: vi.fn(async () => {
+        const err = refusedBeforeActing(shared)
+        tagged.push(err)
+        coordinatorThrew()
+        throw err
+      }),
+      startWorker: vi.fn(async () => { await coordinatorDone; throw shared })
+    })
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), local: l })
+    const [started, worked] = await Promise.all([
+      orch.call({ cmd: 'run-start', args: { run: jobId }, sessionId: 'sesA', request: 'req-c' }),
+      orch.call({ cmd: 'worker-start', args: worker(task.value.id), sessionId: 'sesA', request: 'req-w' })
+    ])
+    expect(started.status).toBe(400)
+    expect(worked.status).toBe(400)
+    expect(wasRefusedBeforeActing(tagged[0])).toBe(true)
+    expect(leftNothingBehind(shared)).toBe(false)
+    const again = await orch.call({ cmd: 'worker-start', args: worker(task.value.id), sessionId: 'sesA', request: 'req-w' })
+    expect(again.replayed).toBe(true)
+    expect(l.startWorker).toHaveBeenCalledTimes(1)
   })
   it('routes the worktree-* calls to the Host worktrees, app or not, and refuses a request id on them', async () => {
     const call = vi.fn(async () => ({ status: 200, body: { file: { items: [] } } }))

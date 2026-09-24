@@ -403,6 +403,28 @@ describe('createHostSpawner', () => {
     expect(wasRefusedBeforeActing(failed)).toBe(true)
     expect(h.spawned).toHaveLength(0)
   })
+  // Follow-up round m6: the same refusal for a worker with no fork. Nothing was forked and no process
+  // started, so it is tagged the way the coordinator's is.
+  it('tags a worker start with no fork refused by the settings file as refused before acting', async () => {
+    await fs.writeFile(path.join(profile, 'app-settings.json'), '{ not json')
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    const err = await h.spawner!.startWorker(startArgs(taskId, dispatchId)).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(RepairNeeded)
+    expect(wasRefusedBeforeActing(err)).toBe(true)
+    expect(h.spawned).toHaveLength(0)
+  })
+  // A fork that stays on disk is something left: the same settings refusal after a fork that could not
+  // be removed is not tagged.
+  it('does not tag the settings refusal of a --worktree new start whose fork is still there', async () => {
+    await fs.writeFile(path.join(profile, 'app-settings.json'), '{ not json')
+    const { s, taskId, dispatchId } = seeded()
+    const forked = path.join(dir, 'wt-a'); await fs.mkdir(forked)
+    const h = rig({ state: () => s, worktrees: { fork: vi.fn(async () => forked), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn(async (p: string[]) => ({ failed: p })) } })
+    const err = await h.spawner!.startWorker({ ...startArgs(taskId, dispatchId, 'new'), name: 'a' }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(RepairNeeded)
+    expect(leftNothingBehind(err)).toBe(false)
+  })
   it('does not tag a coordinator start that failed after its process was started', async () => {
     const h = rig()
     const logs: string[] = []

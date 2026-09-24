@@ -28,9 +28,31 @@ export class AppUnreachable extends Error {}
  * tagged refusal — a retry once the reason clears (the app quits, the file is repaired) still has
  * everything left to do, unlike a refusal that comes after some of the work already happened, which
  * keeps its receipt like any other failure that acted.
+ *
+ * Returns a tagged copy and leaves `err` as it was (`taggedCopy`, below).
  */
 export function refusedBeforeActing<E extends Error>(err: E): E {
-  return Object.assign(err, { beforeActing: true as const })
+  return taggedCopy(err, { beforeActing: true })
+}
+
+/**
+ * **A copy for this call, never the caught object itself** (Host S3 follow-up round, m1). An error
+ * can be shared: a `once()` setup promise in the Host spawner hands every start waiting on it the
+ * same rejection. A tag written onto that object would be read by every other start that caught it,
+ * so a start whose fork is still on disk could read as having left nothing. The copy keeps the class
+ * (`instanceof` still decides CONFLICT for `RepairNeeded`, `HostRetiring`, `AppUnreachable`), the
+ * message, the stack, the cause and every field of its own, such as `RepairNeeded.file`, plus any tag
+ * the original already carried.
+ */
+function taggedCopy<E extends Error>(err: E, tag: { beforeActing?: true; undone?: true }): E {
+  const copy = Object.create(Object.getPrototypeOf(err)) as E
+  for (const key of Reflect.ownKeys(err)) {
+    const d = Object.getOwnPropertyDescriptor(err, key)
+    if (d) Object.defineProperty(copy, key, d)
+  }
+  // V8 keeps `stack` behind an accessor bound to the original, which answers nothing on the copy.
+  Object.defineProperty(copy, 'stack', { value: err.stack, writable: true, configurable: true, enumerable: false })
+  return Object.assign(copy, tag)
 }
 
 /** Whether `err` carries that tag. */
@@ -50,7 +72,7 @@ export function wasRefusedBeforeActing(err: unknown): boolean {
  * it. `leftNothingBehind` below reads either.
  */
 export function undoneBeforeFailing<E extends Error>(err: E): E {
-  return Object.assign(err, { undone: true as const })
+  return taggedCopy(err, { undone: true })
 }
 
 /** Whether `err` says the call leaves nothing behind: it was refused before acting, or it undid itself. */

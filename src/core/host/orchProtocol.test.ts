@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { versionOnlyOrchCall } from './orchProtocol'
+import { leftNothingBehind, refusedBeforeActing, undoneBeforeFailing, versionOnlyOrchCall, wasRefusedBeforeActing } from './orchProtocol'
+import { RepairNeeded } from '../settings/repairNeeded'
 import { HOST_PROTOCOL } from './protocol'
 
 describe('versionOnlyOrchCall', () => {
@@ -19,5 +20,30 @@ describe('versionOnlyOrchCall', () => {
       status: 501,
       body: { error: 'unknown command: bogus' }
     })
+  })
+})
+
+// Follow-up round m1: an error can be shared by concurrent calls (a `once()` setup promise hands every
+// waiter the same rejection), so a tag goes on a copy for this call and never on the shared object.
+describe('refusedBeforeActing and undoneBeforeFailing', () => {
+  it('tag a copy that keeps the class, the message, the fields and the cause, and leave the original alone', () => {
+    const cause = new Error('root')
+    const shared = new RepairNeeded('app-settings.json is damaged', 'app-settings.json')
+    Object.defineProperty(shared, 'cause', { value: cause, configurable: true, writable: true })
+    for (const [tag, read] of [
+      [refusedBeforeActing, wasRefusedBeforeActing],
+      [undoneBeforeFailing, leftNothingBehind]
+    ] as const) {
+      const mine = tag(shared)
+      expect(mine).not.toBe(shared)
+      expect(read(mine)).toBe(true)
+      expect(leftNothingBehind(shared)).toBe(false)
+      expect(mine).toBeInstanceOf(RepairNeeded)
+      expect(mine.message).toBe(shared.message)
+      expect(mine.file).toBe('app-settings.json')
+      expect(mine.stack).toBe(shared.stack)
+      expect((mine as Error & { cause?: unknown }).cause).toBe(cause)
+      expect(String(mine)).toBe(String(shared))
+    }
   })
 })
