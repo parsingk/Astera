@@ -415,6 +415,20 @@ describe('createHostWorktrees', () => {
       expect((await onDisk()).items.map((w: { id: string }) => w.id)).toEqual(['a1'])
       expect(states(h.sent)).toHaveLength(1)
     })
+    // Review N2/m6: the retry check must match by id, not by path — a genuine re-create at a path
+    // whose stale entry survives (M10) gets a new id and must replace the stale entry, not be dropped.
+    it('replaces a stale entry when a re-create reuses its path under a new id', async () => {
+      const h = rig()
+      const first = await h.wt.call('worktree-add', { info: info('a1') }, app)
+      expect(first.status).toBe(200)
+      const reused = { ...info('a1'), id: 'a2', createdAt: '2026-09-24T01:00:00.000Z' }
+      const second = await h.wt.call('worktree-add', { info: reused }, app)
+      expect(second.status).toBe(200)
+      expect((await onDisk()).items).toEqual([reused])
+      // one push for the first add, then one for the removal of the stale entry and one for the add
+      // that replaces it — the mirror sees both, in order, not a single combined change.
+      expect(states(h.sent)).toHaveLength(3)
+    })
     it('answers nobody but the app, and refuses a malformed entry', async () => {
       const h = rig()
       const cli = { role: 'cli' as const, toOthers: () => {} }

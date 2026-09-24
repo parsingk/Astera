@@ -286,9 +286,19 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     'worktree-add': async (args) => {
       if (!isRegistryFile({ items: [args.info] })) return { status: 400, body: { error: 'worktree-add needs a whole worktree entry' } }
       const info = args.info as WorktreeInfo
-      // An add retried after its reply was lost (review M12): the folder is already listed, and a
-      // second entry would be the same worktree twice. Nothing changes, so nothing is pushed.
-      if (!registry.list().some((w) => isSamePath(w.path, info.path))) await registry.add(info)
+      // An add retried after its reply was lost (review M12) carries the same id the app already
+      // made: nothing changes, so nothing is pushed. Matching by id rather than by path (review N2,
+      // m6) is what tells the two apart from a genuine re-create that reuses a stale entry's path —
+      // createWorktree checks only disk and branch, not the registry, so it can hand out a fresh id
+      // at a path some earlier entry still names (M10: the folder is gone but the entry is not).
+      // That entry is stale, not a duplicate, so it is replaced rather than left to shadow the new
+      // one: removeEntry and add are each queued in order on the same registry, so the add always
+      // reads a file the removal has already left.
+      if (!registry.get(info.id)) {
+        const stale = registry.list().find((w) => isSamePath(w.path, info.path))
+        if (stale) await registry.removeEntry(stale.id)
+        await registry.add(info)
+      }
       return withFile()
     },
     'worktree-remove': async (args) => {
