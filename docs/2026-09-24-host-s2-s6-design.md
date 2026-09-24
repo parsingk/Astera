@@ -602,13 +602,18 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
   M1).** It said: the Host sweeps at load and at every change of `driver` to `host`. A yielding app
   that leaves does not change the driver, yet it may have been running a validation or review itself
   (recovery, D8). What shipped: the handover and a yielding app leaving run the same steps
-  (`afterDriveChange`, `driving.ts:197-230`), the handover after its drain, and a yielding app leaving
-  only once it has stayed gone for `APP_LEFT_GRACE_MS` (5 s): a socket that drops while its app lives
-  reads as a leaving app, and that app reconnects after a 1 s backoff, perhaps still starting a
-  person's retry-once or settling a check. An app attaching within the grace cancels the steps. With
-  no app attached, the Host first tree-kills every live `run` pty in its registry marked `validation` that its own
-  `RunManager` did not start, waits for each exit up to `FOREIGN_KILL_WAIT_MS` (5 s) and records
-  nothing (`checks.ts:330-380`). This covers an older app that drove and left (the handover) as well
+  (`afterDriveChange`, `driving.ts:225-246`), the handover after its drain. A yielding app leaving
+  is decided at the end of `APP_LEFT_GRACE_MS` (5 s), or when an app attaches within it
+  (`decideAppLeft`, `driving.ts:436-453`). A socket that drops while its app lives reads as a leaving
+  app, and that app reconnects after a 1 s backoff, perhaps still starting a person's retry-once or
+  settling a check. The profile's `app.pid` (S3) tells the two apart: the pid it named when the app
+  left is read again, and the same live pid is the same app, which keeps what it left. Another pid,
+  or none, is a new instance (`system.relaunch` starts one at once) or a quit, and the steps run,
+  even beside the new instance, which yields and so runs no resume sweep of its own. With no app
+  attached, the Host first tree-kills every live `run` pty in its registry marked `validation` that
+  its own `RunManager` did not start, waits for each exit up to `FOREIGN_KILL_WAIT_MS` (5 s) and
+  records nothing (`checks.ts:322-371`). Beside a new instance it kills only the runs whose note says
+  they started before the old one left, so the new one's own runs are spared. This covers an older app that drove and left (the handover) as well
   as a yielding one. Then it runs one resume sweep, which restarts a convergence Run's `validating` and
   `reviewing` Tasks, and starts any repair Dispatch that was opened and never started (N1's belt).
   Last, it arms the restart Gate for every other Task left `validating` or `reviewing` with no open
@@ -616,9 +621,9 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
   flight, or a foreign validation run still alive in a folder the Task's Dispatches work in, or in any
   folder when the run or the Task does not name one). Every later tick that drives with no app
   attached arms again, so a Task such a run held is armed once the run is gone. A tick at least
-  `STALL_CONFIRM_MS` (5 s) later
-  opens the load's own restart Gate (`interruptStalledTask`) for each such Task that is unchanged and
-  still unchecked, with no app attached (`driving.ts:132-176,367`). A person's ordinary runs carry no
+  `STALL_CONFIRM_MS` (5 s) later opens the load's own restart Gate (`interruptStalledTask`) for each
+  such Task that is unchanged and still unchecked, with no app attached (`driving.ts:149-198,400-401`).
+  An app attaching drops every armed Task. A person's ordinary runs carry no
   `validation` mark and are never touched. Why: the app's validation runs open through the Host's pty
   factory and outlive it, nobody settles them any more, and a second check would start beside them in
   the same folder. The Gate waits for a tick because the Host's own `worker_done` commits `validating`
@@ -774,11 +779,16 @@ Each was found while building or reviewing S4+S5 and left as it is, with its rea
   is gated: that app may be checking the Task itself. If the Host's own store write between a
   `worker_done` commit and its check's start took longer than 5 s, such a Task could be gated beside
   its starting check; the check then finds it no longer `validating` and skips.
-- **An app whose socket drops for longer than 5 s is taken for gone.** A yielding app that is still
-  alive but stays unreachable past `APP_LEFT_GRACE_MS` (A54) has its leftover checks killed and a
-  repair it was starting started by the Host. If it then reconnects in the middle of that repair's
-  start, two agents can land on one Dispatch. The same shape remains at a handover: an older app that
-  keeps dispatch and drops its socket hands the drive to the Host at once, with no grace.
+- **The app-left grace covers only the app-left steps.** An app whose socket drops is told from a new
+  instance by `app.pid` (A54), so a live app that reconnects keeps what it left, however long it takes.
+  Three things are outside that guard. First, an app whose `app.pid` is missing or unreadable (a
+  profile it could not write) is taken for gone after 5 s, and if it then reconnects in the middle of
+  a repair start the Host began, two agents can land on one Dispatch. Second, the tick's own no-app
+  steps do not wait for the grace: the lost-worker Gate, the spec sweep and the restart Gate's arming
+  (`driving.ts:345,401,405`) run on any tick with no app attached, a dropped socket included. Third,
+  at a handover, an older app that keeps dispatch and drops its socket hands the drive to the Host at
+  once, with no grace. In the first and the third, the Host kills that app's leftover checks, and the
+  app, once reconnected, may read the kill as a failed check.
 - **An older app that attaches beside a running Host check can start a second one.** Its own "the Host
   attached" sweep (the S3 app's `ipc.ts`) restarts a convergence Run's `validating` Tasks from its
   mirror, and knows nothing of a check the Host is already running in the same folder. The Host cannot

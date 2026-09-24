@@ -155,14 +155,14 @@ async function rig(o: RigOpts = {}) {
   /** A run pty another process's RunManager opened in this registry: the app's, which outlives it. */
   /** `projectPath` is the folder the app's validator started it for: the Task's own by default, null
    *  for none (a run whose note does not say). */
-  const openForeignRun = (id: string, validation: boolean, projectPath: string | null = cwd): { ptyId: string; pid: number } => {
+  const openForeignRun = (id: string, validation: boolean, projectPath: string | null = cwd, startedAt?: number): { ptyId: string; pid: number } => {
     const ptyId = `app-${id}`
     registry.open({
       id: ptyId,
       file: 'x',
       args: [],
       opts: { cwd, cols: 80, rows: 24, env: {} },
-      meta: { kind: 'run', id, restore: { ...(projectPath === null ? {} : { projectPath }), ...(validation ? { validation: true } : {}) } }
+      meta: { kind: 'run', id, restore: { ...(projectPath === null ? {} : { projectPath }), ...(validation ? { validation: true } : {}), ...(startedAt === undefined ? {} : { startedAt }) } }
     })
     return { ptyId, pid: spawned.at(-1)!.pty.pid }
   }
@@ -177,6 +177,10 @@ async function rig(o: RigOpts = {}) {
     task: () => state.tasks.find((x) => x.id === taskId)!,
     opened: (): PtyEntry[] => sent.flatMap((m) => (m.t === 'pty-opened' ? [m.entry] : [])),
     exitLast: (code: number) => ours().at(-1)!.pty.exit(code),
+    /** The state with no Dispatch at all: a Task whose folder cannot be told. */
+    dropDispatches: () => {
+      state = { ...state, dispatches: [] }
+    },
     killed: () => killed,
     lastPid: () => ours().at(-1)!.pty.pid,
     spawnedEnv: () => ours().at(-1)?.opts.env as Record<string, string | undefined>
@@ -233,6 +237,17 @@ describe('createHostChecks', () => {
       .list()
       .filter((e) => e.alive && e.meta?.kind === 'run' && (e.meta.restore as { validation?: boolean }).validation === true)
     expect(liveChecks).toHaveLength(1)
+  })
+
+  // The tidy's review: a relaunched app attached within the grace; its own runs are spared.
+  it('stopForeignValidations with startedBefore kills only the runs started before it', async () => {
+    const h = await rig()
+    const old = h.openForeignRun('run_app_old', true, h.cwd, 1_000)
+    const unsaid = h.openForeignRun('run_app_unsaid', true, h.cwd)
+    const fresh = h.openForeignRun('run_app_new', true, h.cwd, 5_000)
+    expect(await h.checks.stopForeignValidations({ startedBefore: 5_000 })).toBe(2)
+    expect(h.killed().sort()).toEqual([old.pid, unsaid.pid].sort())
+    expect(h.registry.exitCodeOf(fresh.ptyId)).toBeNull()
   })
 
   it('stopForeignValidations never touches an ordinary run, nor one of its own', async () => {
@@ -394,6 +409,13 @@ describe('createHostChecks — checking (final review I1)', () => {
     h.registry.kill(same.ptyId)
     await vi.waitFor(() => expect(h.checks.checking(h.taskId)).toBe(false))
     h.openForeignRun('run_app_unsaid', true, null)
+    expect(h.checks.checking(h.taskId)).toBe(true)
+  })
+
+  it('holds a Task with no Dispatch while any gone app’s validation run lives, whatever its folder', async () => {
+    const h = await rig()
+    h.dropDispatches()
+    h.openForeignRun('run_app_other', true, path.join(path.dirname(h.cwd), 'other-proj'))
     expect(h.checks.checking(h.taskId)).toBe(true)
   })
 

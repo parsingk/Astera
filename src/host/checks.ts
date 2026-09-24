@@ -70,7 +70,7 @@ export interface HostChecks {
    *  start (the app's, left behind when the app went), and waits for each to exit, up to
    *  `FOREIGN_KILL_WAIT_MS`. Resolves with how many it killed. Their exits record nothing. Called by
    *  the driver before the sweep it runs when an app leaves (Task 14 round 2). */
-  stopForeignValidations(): Promise<number>
+  stopForeignValidations(o?: { startedBefore?: number }): Promise<number>
   /** Whether one of this Host's checks holds this Task now (final review I1): a validation of it queued
    *  or running in this Host's validator, a review start of it in flight, or a foreign validation run
    *  still alive in the registry in a folder this Task works in (a gone app's check that would not
@@ -329,8 +329,15 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
           e.meta.restore?.validation === true &&
           runs.get(e.meta.id) === null
       )
-  const stopForeignValidations = async (): Promise<number> => {
-    const foreign = liveForeignValidations()
+  /** `startedBefore` (ms): only the runs whose note says they started before it. The driver passes it
+   *  when a new app instance attached after the one that left, so that instance's own runs are spared.
+   *  A run whose note has no start time is taken for the old one's. */
+  const stopForeignValidations = async (o?: { startedBefore?: number }): Promise<number> => {
+    const cut = o?.startedBefore
+    const foreign = liveForeignValidations().filter((e) => {
+      const at = e.meta?.restore?.startedAt
+      return cut === undefined || typeof at !== 'number' || at < cut
+    })
     if (foreign.length === 0) return 0
     const bound = d.foreignKillWaitMs ?? FOREIGN_KILL_WAIT_MS
     await Promise.all(

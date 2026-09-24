@@ -88,6 +88,8 @@ interface RigOpts {
   /** Run_1 has a live coordinator (`coord-1`, a pty in the registry) with unread upward mail older than
    *  COORDINATOR_NUDGE_MS. */
   sleepingCoordinator?: boolean
+  /** Every restart Gate the tick asks for is refused (interruptStalledTask answers not interrupted). */
+  refuseGates?: boolean
 }
 
 /** Under the test's own folder (review m7): never a literal path, should the fake ever resolve one. */
@@ -238,6 +240,8 @@ async function rig(o: RigOpts = {}) {
   let tickFn: (() => void) | null = null
   let everyMs: number | null = null
   const clock = { now: NOW_MS }
+  /** What the profile's app.pid names now (liveAppPid): null for none. */
+  const appPid = { value: null as number | null }
   /** While `hold` is set, the app-left grace waits in `pending` until `fireGrace`. */
   const grace = { hold: false, pending: [] as Array<{ ms: number; fn: () => void; cancelled: boolean }> }
   const reaped: string[] = []
@@ -267,6 +271,10 @@ async function rig(o: RigOpts = {}) {
     specsDir,
     log: (m) => logs.push(m),
     nowMs: () => clock.now,
+    appPid: () => appPid.value,
+    ...(o.refuseGates
+      ? { interruptStalled: (st: OrchState) => ({ state: st, interrupted: null, resume: null, stuck: true }) }
+      : {}),
     // The app-left grace: runs at once (the next macrotask) unless a test holds it to fire by hand.
     after: (ms, fn) => {
       const entry = { ms, fn, cancelled: false }
@@ -323,6 +331,7 @@ async function rig(o: RigOpts = {}) {
     },
     everyMs: () => everyMs,
     grace,
+    appPid,
     /** Fires every held grace that was not cancelled; answers how many it fired. */
     fireGrace: (): number => {
       const live = grace.pending.splice(0).filter((e) => !e.cancelled)
@@ -758,6 +767,7 @@ describe('createHostDriving — review round 1', () => {
   })
   it('kills nothing when an app is attached again by the time the sweep runs (Task 14 round 2)', async () => {
     const h = await rig({ readyTasks: 0 })
+    h.appPid.value = 4242 // the same app, by app.pid (the tidy's review)
     await h.load()
     await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(1))
     h.server.app = true
@@ -1057,8 +1067,9 @@ describe('createHostDriving — the restart Gate is armed again on a driving tic
 // leaving. The Host waits APP_LEFT_GRACE_MS before it takes up what the app left, so a person's
 // retry-once the app was starting is not started a second time by the belt.
 describe('createHostDriving — the app-left grace (S4+S5 tidy)', () => {
-  it('starts no repair, kills nothing and sweeps nothing when the app is back within the grace', async () => {
+  it('starts no repair, kills nothing and sweeps nothing when the same app is back within the grace', async () => {
     const h = await rig({ openRepairWithoutSpec: true })
+    h.appPid.value = 4242 // app.pid names the live app, before and after the drop
     h.server.app = true
     await h.load()
     h.driving.appsChanged()
@@ -1094,5 +1105,110 @@ describe('createHostDriving — the app-left grace (S4+S5 tidy)', () => {
     expect(h.startRepair).toHaveBeenCalledTimes(1)
     expect(h.stopForeignValidations).toHaveBeenCalledTimes(1)
     expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left')
+  })
+
+  // Review of the tidy, Important: `system.relaunch` quits and starts a new instance at once. The new
+  // one yields, so it skips its own resume sweep; the gone instance's steps must still run.
+  it('runs the gone app’s steps once when a new instance (another pid) attaches within the grace', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    h.appPid.value = 4242
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    const sweepsBefore = h.resumeSweep.mock.calls.length
+    h.grace.hold = true
+    h.server.app = false // the old instance quits
+    h.appPid.value = null
+    h.driving.appsChanged()
+    await h.settle()
+    h.appPid.value = 5151 // the relaunched instance
+    h.server.app = true
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.startRepair).toHaveBeenCalledWith({ dispatchId: h.repairDispatchId }))
+    expect(h.stopForeignValidations).toHaveBeenCalledTimes(1)
+    expect(h.stopForeignValidations).toHaveBeenCalledWith({ startedBefore: NOW_MS })
+    expect(h.resumeSweep).toHaveBeenCalledTimes(sweepsBefore + 1)
+    expect(h.fireGrace()).toBe(0) // decided at the attach, not again at the grace's end
+    await h.settle()
+    expect(h.startRepair).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs the steps after the grace when the app really quit (app.pid gone), and not before', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    h.appPid.value = 4242
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    h.grace.hold = true
+    h.server.app = false
+    h.appPid.value = null
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.startRepair).not.toHaveBeenCalled()
+    expect(h.fireGrace()).toBe(1)
+    await vi.waitFor(() => expect(h.startRepair).toHaveBeenCalledTimes(1))
+    expect(h.stopForeignValidations).toHaveBeenCalledWith()
+  })
+
+  it('leaves the steps to a same-pid app whose socket stays down past the grace', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    h.appPid.value = 4242
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    h.grace.hold = true
+    h.server.app = false
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.fireGrace()).toBe(1)
+    await h.settle()
+    expect(h.startRepair).not.toHaveBeenCalled()
+    expect(h.stopForeignValidations).not.toHaveBeenCalled()
+  })
+
+  // Review minor: a Task armed before an app attached must not be gated inside a later grace.
+  it('drops the arming when an app attaches, so a later grace gates nothing armed before it', async () => {
+    const h = await rig({ readyTasks: 0 })
+    await h.load()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(1))
+    await h.putStalled('tsk_v', 'validating')
+    await h.tickNow() // armed at NOW
+    h.server.app = true
+    h.driving.appsChanged()
+    await h.settle()
+    h.grace.hold = true
+    h.server.app = false
+    h.driving.appsChanged()
+    await h.settle()
+    h.clock = NOW_MS + 6_000 // past STALL_CONFIRM_MS since that arming, inside the grace
+    await h.tickNow()
+    expect(h.statusOf('tsk_v')).toBe('validating')
+    expect(h.gates()).toHaveLength(0)
+  })
+})
+
+// Review minor: a refused restart Gate is remembered, so it is not asked and logged on every tick.
+describe('createHostDriving — a refused restart Gate (S4+S5 tidy)', () => {
+  it('asks once for a Task whose Gate was refused, and again only once the Task changes', async () => {
+    const h = await rig({ readyTasks: 0, refuseGates: true })
+    await h.load()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(1))
+    await h.putStalled('tsk_v', 'validating')
+    const refusals = () => h.logs.filter((m) => m.includes('task=tsk_v') && m.includes('was refused')).length
+    await h.tickNow()
+    for (const at of [6_000, 12_000, 18_000, 24_000]) {
+      h.clock = NOW_MS + at
+      await h.tickNow()
+    }
+    expect(refusals()).toBe(1)
+    await h.touch('tsk_v')
+    for (const at of [30_000, 36_000]) {
+      h.clock = NOW_MS + at
+      await h.tickNow()
+    }
+    expect(refusals()).toBe(2)
   })
 })
