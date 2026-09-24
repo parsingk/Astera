@@ -56,9 +56,19 @@ export function createWorktreeRoute(a: {
       const body = r.body as SnapshotBody
       if (r.status >= 400) throw new Error(body?.error ?? String(r.status))
       // The reply carries the same snapshot a push would, applied by the same rule, so this
-      // connection's mirror holds its own write before the push for it ever arrives. Guarded on
-      // `mode` (fix round 1, M3): a write already in flight to the Host when the route falls back to
-      // local must not have its reply overwrite whatever `refresh()` just re-read from disk.
+      // connection's mirror can hold its own write before the push for it ever arrives. Guarded on
+      // `mode` (fix round 1, M3) for *this* call: a write already in flight to the Host when the
+      // route falls back to local must not have this reply's `takeIfNewer` overwrite whatever
+      // `refresh()` just re-read from disk.
+      //
+      // **What this guard does not do (final review m3).** It only decides whether `takeIfNewer` (and
+      // so `accept`) runs for this reply — it is not what keeps the registry itself right. Whichever
+      // WorktreeRegistry method made this call (`add`/`removeEntry`/`setRoot`) applies whatever file
+      // this promise resolves to unconditionally, mode or no mode (`adopt`, registry.ts). What
+      // actually protects the registry's real state is the registry's own write queue: a `refresh()`
+      // begun after this write was already in flight is queued behind it, so it runs — and re-reads
+      // disk — after this reply lands, not before. This guard is only ever redundant with that
+      // ordering, never a substitute for it.
       if (mode === 'host' && typeof body?.seq === 'number' && body.file !== undefined) takeIfNewer(body.seq, body.file)
       return body?.file as RegistryFile
     })
