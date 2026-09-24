@@ -9,7 +9,7 @@ import { createHostWorktrees, loadWorktreesIfSpawning, type HostWorktreesDeps } 
 import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { Dispatch } from '../core/orchestration/types'
 import { RepairNeeded } from '../core/settings/repairNeeded'
-import { AppUnreachable } from '../core/host/orchProtocol'
+import { AppUnreachable, wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import { HOST_ACT_PATH_IN_USE, type HostMessage, type PtyMeta } from '../core/host/protocol'
 
 let profile: string, home: string, repo: string
@@ -92,6 +92,18 @@ describe('createHostWorktrees', () => {
       await expect(fs.stat(path.join(profile, 'worktrees.json.bak'))).rejects.toThrow()
       expect(gitSync(repo, ['worktree', 'list']).split('\n')).toHaveLength(1)
       expect(states(h.sent)).toEqual([])
+    })
+    // Fix round 2, R1: the production tag itself, not only the fake the orch tests build by hand —
+    // checked against the real throw sites so a regression that silently drops the tag is caught here.
+    it('tags a damaged file\'s refusal as refused before acting, on both fork and removeWorktrees', async () => {
+      const h = rig()
+      await damage()
+      const forkErr = await h.wt.fork({ repoPath: repo, name: 'a' }).then(() => null, (e: unknown) => e)
+      expect(forkErr).toBeInstanceOf(RepairNeeded)
+      expect(wasRefusedBeforeActing(forkErr)).toBe(true)
+      const removeErr = await h.wt.removeWorktrees([repo]).then(() => null, (e: unknown) => e)
+      expect(removeErr).toBeInstanceOf(RepairNeeded)
+      expect(wasRefusedBeforeActing(removeErr)).toBe(true)
     })
     // Fix round 1: a merge never reads the registry, so a damaged one does not stop it.
     it('still merges, and leaves the damaged file as it is', async () => {
@@ -312,6 +324,17 @@ describe('createHostWorktrees', () => {
       expect(h.ptys.liveEntries()).toHaveLength(1)
       await fs.stat(p)
       expect((await onDisk()).items).toHaveLength(1)
+    })
+    // Fix round 2, R1: the same production tag, for the detached-app refusal specifically — nothing
+    // was closed or removed before it, so a caller may keep no receipt over it.
+    it('tags the detached-app refusal as refused before acting too', async () => {
+      const h = rig()
+      const p = await h.wt.fork({ repoPath: repo, name: 'a' })
+      h.session('ses_w', p)
+      await appPid(process.pid)
+      const err = await h.wt.removeWorktrees([p]).then(() => null, (e: unknown) => e)
+      expect(err).toBeInstanceOf(AppUnreachable)
+      expect(wasRefusedBeforeActing(err)).toBe(true)
     })
     it('proceeds when no app has said it is running', async () => {
       const h = rig()

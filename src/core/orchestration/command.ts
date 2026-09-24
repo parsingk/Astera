@@ -215,10 +215,11 @@ export interface OrchServerDeps {
    *  `makeRunWorktree`, once starting the coordinator then failed. **Never decides that command's
    *  status** — a refused or failed cleanup is logged wherever it is wired (the Host's own version,
    *  `hostOrchDeps`, never calls the app-required flag for it) and left as an orphan on disk; the
-   *  command keeps its own 400 and its own reason (Host S3 fix round 1, I1). Optional: without it (or
-   *  with `removeWorktrees` alone) the cleanup falls back to that, the plain best-effort try/catch this
-   *  file already had — see the `run-start` case. */
-  discardRunWorktree?(path: string): Promise<{ removed: boolean }>
+   *  command keeps its own 400 and its own reason (Host S3 fix round 1, I1). `inUse` says which kind
+   *  of "not removed" it was — still busy, or an outright failure — so the 400's own note can say
+   *  which (fix round 2, R2). Optional: without it (or with `removeWorktrees` alone) the cleanup falls
+   *  back to that, the plain best-effort try/catch this file already had — see the `run-start` case. */
+  discardRunWorktree?(path: string): Promise<{ removed: boolean; inUse: boolean }>
   /** 이 Run 을 관리할 코디네이터 세션을 띄운다. **`startWorker` 와 같은 꼴이다** — 배선이 채우고,
    *  세션 프로세스만 만들고 OrchState 는 건드리지 않는다(서버가 상태를 소유한다). 첫 입력으로
    *  인수 프롬프트를 받는다(core/orchestration/handover.ts).
@@ -1395,8 +1396,11 @@ export async function handleCommand(
         if (freshWorktree) {
           const orphan = freshWorktree
           if (deps.discardRunWorktree) {
-            const { removed } = await deps.discardRunWorktree(orphan)
-            if (!removed) orphanNote = ` — its fresh run worktree ${orphan} could not be removed and was left behind`
+            const { removed, inUse } = await deps.discardRunWorktree(orphan)
+            if (!removed)
+              orphanNote = inUse
+                ? ` — its fresh run worktree ${orphan} is still in use and was left behind`
+                : ` — its fresh run worktree ${orphan} could not be removed and was left behind`
           } else if (deps.removeWorktrees) {
             try {
               const { failed } = await deps.removeWorktrees([orphan])

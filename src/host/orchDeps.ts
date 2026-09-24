@@ -295,8 +295,9 @@ const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
 const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...FIRE_AND_FORGET, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
 
 /** Not forwarded through the generic funnel at all (fix round 1, I1): `discardRunWorktree` is built by
- *  hand, right above, so that its own failure can never reach `onAppRequired`. Declared here only for
- *  the compiler check below. */
+ *  hand inside `hostOrchDeps` (its own `const discardRunWorktree`, further down, right before it is
+ *  added to the returned object), so that its own failure can never reach `onAppRequired`. Declared
+ *  here only for the compiler check below. */
 const NOT_FORWARDED = ['discardRunWorktree'] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
@@ -645,7 +646,7 @@ export function hostOrchDeps(a: {
    * command already marked its own effect through the `makeRunWorktree` that made the folder, so this
    * one marks nothing either.
    */
-  const discardRunWorktree = async (path: string): Promise<{ removed: boolean }> => {
+  const discardRunWorktree = async (path: string): Promise<{ removed: boolean; inUse: boolean }> => {
     const local = a.local
     const remove: (paths: string[]) => Promise<{ failed: string[] }> =
       local && local.owns('removeWorktrees', [])
@@ -653,11 +654,12 @@ export function hostOrchDeps(a: {
         : (forward('removeWorktrees', false) as (paths: string[]) => Promise<{ failed: string[] }>)
     try {
       const { failed } = await remove([path])
-      if (failed.length > 0) a.log(`orphaned run worktree ${path} is still in use — left in place`)
-      return { removed: failed.length === 0 }
+      const inUse = failed.length > 0
+      if (inUse) a.log(`orphaned run worktree ${path} is still in use — left in place`)
+      return { removed: !inUse, inUse }
     } catch (err) {
       a.log(`orphaned run worktree ${path} could not be removed: ${err instanceof Error ? err.message : String(err)}`)
-      return { removed: false }
+      return { removed: false, inUse: false }
     }
   }
 
