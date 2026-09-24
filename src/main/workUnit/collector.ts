@@ -1395,13 +1395,27 @@ export class WorkUnitCollector {
       // 도중에 앱이 붙어 `git-op begin` 을 놓쳤다면 위 등록 목록에는 아무 것도 없다 — Host 는 자기
       // 병합을 host/merges.json 에 따로 적어 두고(Task 3), 여기서는 그 기록이 이 이동을 설명하는지만
       // 묻는다(explainedByHostMerges, hostMerges.ts). **isAsteraOperation 이 아니라고 한 뒤에만 읽는다**
-      // — 등록만으로 이미 설명되는 회차(대부분)는 파일을 열지 않는다.
+      // — 등록만으로 이미 설명되는 회차(대부분)는 파일을 열지 않는다. **던지면 기록이 없는 것으로
+      // 본다(fix round 1, review m2)** — 그때까지 이미 옮겨 둔 스냅샷·endHead 를 되돌리지 않으므로,
+      // 여기서 그냥 던지면 이 라운드가 중단돼 이 변경이 다음 라운드에서도 다시는 보이지 않는다(그때는
+      // before === after 라 `type: 'none'`).
       const recorded = explainedByHostMerges({
         projectPath,
         fromHead: before.head,
         toHead: after.head,
-        records: (await this.deps.hostMerges?.()) ?? [],
+        records: await this.hostMergeRecords(),
         nowMs: this.deps.now(),
+        // Host 는 체크아웃된 브랜치로만 병합하고 브랜치를 스스로 갈아타지 않는다(mergeRecords.ts 의
+        // mergeInto). 그래서 완료된 기록의 연쇄는 브랜치가 그대로일 때만 묻는다 — 아니면 실패했거나
+        // 아무 일도 없었던 병합의 a→a 기록이 사람이 뒤에 한 진짜 브랜치 전환을 삼킨다(review I1).
+        // 연 채로 있는 기록의 규칙은 이 값을 보지 않는다(explainedByHostMerges 의 주석).
+        sameBranch: before.branch === after.branch,
+        // 저장된 스냅샷 자신의 capturedAt — **이 라운드가 덮어쓰기 전** 값이다(`snapshot`, 위
+        // 1345 줄에서 옮기기 전에 잡아 둔 참조). 이보다 먼저 끝난 완료 기록은 그 스냅샷을 찍을 때
+        // 이미 반영이 끝난 일이라, 나중에 같은 HEAD 로 되돌아온 것(되돌리기, 또는 그 HEAD 를 나중에
+        // 가리키게 된 다른 브랜치)을 설명하지 못한다(review I1). 못 읽으면(스냅샷이 없던 첫 라운드는
+        // 여기 닿지 않지만, 방어적으로) 아무 완료 기록도 세지 않는 쪽 — "모르면 바깥으로"다.
+        sinceMs: snapshot?.capturedAt !== undefined ? Date.parse(snapshot.capturedAt) : Infinity,
         samePath: isSamePath
       })
       if (recorded) return true
@@ -1627,6 +1641,21 @@ export class WorkUnitCollector {
 
   private ops(): readonly PendingGitOperation[] {
     return this.deps.pendingGitOps?.() ?? []
+  }
+
+  /** `deps.hostMerges` 를 읽는다. **던져도 삼킨다** — 실제 배선(ipc.ts)의 `readHostMerges` 는 파일이
+   *  없거나 망가졌거나 읽기가 실패해도 늘 `[]` 로 답해 절대 던지지 않지만, 이 의존은 주입되는 함수라
+   *  그 계약이 타입으로 강제되지는 않는다. 여기서 삼키지 않으면 gitRound 가 그 예외로 중단되고, 이미
+   *  옮겨 둔 스냅샷 때문에 이 HEAD 이동은 다음 라운드에 다시는 보이지 않는다(review m2) — 던진 것도
+   *  "기록이 없다"와 같은 뜻으로 읽어, 오늘처럼 바깥 변경으로 남긴다. */
+  private async hostMergeRecords(): Promise<readonly HostMergeRecord[]> {
+    if (!this.deps.hostMerges) return []
+    try {
+      return await this.deps.hostMerges()
+    } catch (err) {
+      this.log(`host merge records could not be read: ${String(err)}`)
+      return []
+    }
   }
 
   private nowIso(): string {

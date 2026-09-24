@@ -994,9 +994,12 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     const records: HostMergeRecord[] = []
     const { collector, store } = await makeCollector(fake, storeFile, undefined, { hostMerges: async () => records })
     await collector.start()
-    collector.onGitChanged() // baseline at c0
+    collector.onGitChanged() // baseline at c0 — stamps gitSnapshot.capturedAt at fake.clock
     await collector.flush()
-    records.push({ id: 'm1', projectPath, headBefore: 'c0', headAfter: 'c1', startedAt: new Date(fake.clock - 60_000).toISOString(), endedAt: new Date(fake.clock - 59_000).toISOString() })
+    // The merge ran (and ended) *after* the baseline was captured — while the app was closed, not
+    // before it (fix round 1, review I1's sinceMs bound: a record older than the stored snapshot's own
+    // capturedAt cannot explain a move discovered later).
+    records.push({ id: 'm1', projectPath, headBefore: 'c0', headAfter: 'c1', startedAt: new Date(fake.clock + 1_000).toISOString(), endedAt: new Date(fake.clock + 2_000).toISOString() })
     fake.clock += OPERATION_GRACE_MS * 10 // long after any grace
     fake.git.ref = { branch: 'main', head: 'c1' }
     collector.onGitChanged()
@@ -1015,6 +1018,46 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     collector.onGitChanged()
     await collector.flush()
     expect(store.get(projectPath)!.externalGitChanges).toHaveLength(1)
+  })
+
+  // fix round 1 (review m2) — the production reader (readHostMerges) never throws, but the injected
+  // dep's contract does not say it must not, and the round has already advanced state.gitSnapshot and
+  // every open unit's endHead by the time it is called.
+  it('a throwing hostMerges dep does not lose the change — a throw reads as no records (m2)', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake, storeFile, undefined, {
+      hostMerges: async () => {
+        throw new Error('merges.json is being written')
+      }
+    })
+    await collector.start()
+    collector.onGitChanged()
+    await collector.flush()
+    fake.clock += OPERATION_GRACE_MS * 10
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(1)
+  })
+
+  // fix round 1 (review m4) — the collector-level pin for the mid-merge attach the commit subject
+  // claims: an open record (no endedAt) present at the moment the move is seen, not one completed
+  // before the round even started (that is the "made while closed" test above).
+  it('an open record at the moment the move is seen explains it — the app attached mid-merge (m4)', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const records: HostMergeRecord[] = []
+    const { collector, store } = await makeCollector(fake, storeFile, undefined, { hostMerges: async () => records })
+    await collector.start()
+    collector.onGitChanged() // baseline at c0
+    await collector.flush()
+    records.push({ id: 'm1', projectPath, headBefore: 'c0', startedAt: new Date(fake.clock).toISOString() }) // still open
+    fake.clock += OPERATION_GRACE_MS * 10 // well short of MERGE_OPEN_MAX_MS
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
   })
 })
 
