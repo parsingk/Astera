@@ -567,4 +567,11 @@ describe('a CONFLICT a retiring Host answered', () => {
       nextStepsFor({ code: 'CONFLICT', cmd: 'worker-start', details: { retry: 'host-retiring', retryCommand: 'astera worker-start --task t1 --request-id rq-1' } })
     ).toEqual(['astera worker-start --task t1 --request-id rq-1', 'astera host status'])
   })
+  // The final review of S4+S5, M6: a later `jobs run` made its run and then had its coordinator start
+  // refused. The same `jobs run` again would make another run, so the step is the one its message names.
+  it('for a later jobs run whose coordinator was refused, offers run-start for that Job, not the same command', () => {
+    expect(
+      nextStepsFor({ code: 'CONFLICT', cmd: 'jobs-run', details: { retry: 'host-retiring', jobId: 'job_1', runId: 'run_2' } })
+    ).toEqual(['astera host status', 'astera run-start --run job_1'])
+  })
 })

@@ -144,7 +144,8 @@ shell with only a Host running: `worker-start`, `worker-start --worktree new`, `
 `worker-release` and `worker-read`. So does `run-start`, which starts a Job's coordinator again, and
 `jobs run` of a Job with a coordinator account and no schedule, which starts the new run's coordinator,
 for the first run and for every later one. If a later run's coordinator fails to start, that run stays
-without one, and the error names `astera run-start --run <jobId>`, which starts it. Either way, the Host
+without one, and the error names `astera run-start --run <jobId>`, which starts it. Do not run `jobs run`
+again for it: that makes another run. Either way, the Host
 makes the run's worktree itself if it does not have one yet. If the coordinator then fails to start, the
 Host removes that worktree again, and the failed start still answers the same way it always did. A
 `worker-start --worktree new` whose worker then fails to start has its new worktree removed the same
@@ -398,8 +399,9 @@ run it started, which is the id to pass to `runs wait`.
 **`jobs create` makes a plan and runs nothing.** It returns the Job, marked `pendingStart`, with no
 run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in
 the app does. `--cwd` defaults to the directory you ran the command from. Give `--coordinator-account`
-to have a coordinator session drive the Job once it runs; without it the workers are placed for you,
-by the Host when Astera is closed (see "Workers with Astera closed").
+to have a coordinator session drive the Job once it runs; without it the workers are placed for you.
+A Host that announces `dispatch` places them whether Astera is open or closed, and otherwise Astera
+does (see "Jobs run with Astera closed").
 
 **`tasks add` takes exactly one of `--job` or `--run`**, and there is no default. `--job` adds a task
 to the plan, and `jobs run` copies it, with its `--deps` pointing at the copies, into every run it
@@ -733,7 +735,10 @@ starts. So when a command cannot read one, the step is to open Astera, and no co
 A 6 from a Host that is on its way out is different again. A worker or coordinator start that
 reaches a Host after it began to leave is refused before anything is started, and the Dispatch it
 opened is rolled back. `error.details.retry` is `host-retiring`, and the step is the same command
-again once a Host is up: `error.nextSteps` offers `astera host status`. A leaving Host takes no new
+again once a Host is up: `error.nextSteps` offers `astera host status`. One command is the exception.
+A later `jobs run` whose coordinator was refused has already made its run, so the same command again
+would make another. Its `error.details` carries `runId`, and its steps are `astera host status` and then
+`astera run-start --run <jobId>`. A leaving Host takes no new
 connections, so a retry made while it is still on its way out ends with 3 rather than this 6 again.
 Once it has gone, the same command with the same `--request-id` reaches the next Host, which answers
 it fresh.

@@ -138,7 +138,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'jobs-create': {
     summary: 'create a Job with no run yet',
     detail:
-      'Returns the Job. Nothing runs until `jobs run`: add its tasks first with `tasks add --job`. Without --cwd the Job belongs to the directory this command was run from. With --coordinator-account a coordinator session starts on that account when the Job runs; without it the workers are placed for you (by the Host when Astera is closed).',
+      'Returns the Job. Nothing runs until `jobs run`: add its tasks first with `tasks add --job`. Without --cwd the Job belongs to the directory this command was run from. With --coordinator-account a coordinator session starts on that account when the Job runs; without it the workers are placed for you. A Host that announces dispatch places them whether Astera is open or closed, and otherwise Astera does.',
     flags: [
       { name: 'objective', value: '<text>', required: true, about: 'what this Job is for' },
       { name: 'cwd', value: '<path>', about: 'the repository root this Job belongs to (default: here)' },

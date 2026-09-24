@@ -312,8 +312,14 @@ const STEPS: Record<
         ? []
         : // A Host that is leaving refused a start (Host S2, ruling a): the same command again once a
           // Host is up. Its line when the envelope carries one; `host status` says when there is one.
+          //
+          // **Except a later `jobs run` whose coordinator was refused** (final review M6): its run is
+          // already made, and the same command again would make another. Its message names
+          // `run-start` for the Job, and so does this, once a Host is up.
           typeof details.retry === 'string'
-          ? [...(typeof details.retryCommand === 'string' ? [details.retryCommand] : []), 'astera host status']
+          ? typeof details.runId === 'string' && typeof details.jobId === 'string'
+            ? ['astera host status', `astera run-start --run ${details.jobId}`]
+            : [...(typeof details.retryCommand === 'string' ? [details.retryCommand] : []), 'astera host status']
           : [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
   // 시한을 넘긴 것과 Host 가 살아서 답하지 않는 것이 같은 코드다(run.ts 의 SILENT_HOST_CODE).
   // 둘을 가르는 명령이 이것이다 — 앞의 경우에는 답하고 뒤의 경우에는 답하지 않는다(docs/cli.md).

@@ -5383,6 +5383,8 @@ describe('jobs run / questions answer', () => {
     expect(runs).toHaveLength(2)
     expect(runs[1].coordinatorSessionId).toBeUndefined()
     expect((r.body as { error: string }).error).toContain(`astera run-start --run ${jobId}`)
+    // M6 (final review): one instruction. `jobs run` again would make yet another run.
+    expect((r.body as { error: string }).error).toMatch(/not run `jobs run` again/)
     expect(r.body).toMatchObject({ jobId, runId: runs[1].id })
 
     // 그 오류가 말하는 재시도가 실제로 이 회차를 다시 겨눈다

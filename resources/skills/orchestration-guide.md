@@ -85,11 +85,11 @@ different provider judges it.
 | `validating` | `completed` | the validation run exits `0`, and the Task has no `--review` |
 | `validating` | `reviewing` | the validation run exits `0`, and the Task has `--review` (4.2) |
 | `validating` | `failed` | the validation run exits non-zero, **on a Run with no convergence policy** — the same retry path as any other failure. On a convergence Run (section 11) a failure is never routed here directly: it reaches `blocked` (an exhausted or unopenable repair, as a Gate) or back to `dispatched` (a repair) instead, and the only way this exact edge is taken is `task-update` — never `gate-resolve mark-failed`, whose own edge is `blocked` → `failed` below |
-| `validating` | `dispatched` | **convergence Runs only** (section 11) — a check failed and the app opened a repair Dispatch on the same worker, through `openRepairDispatch`. You did nothing to cause this edge and there is nothing to do about it but wait |
+| `validating` | `dispatched` | **convergence Runs only** (section 11). A check failed and Astera (the app, or the Host while the app is closed) opened a repair Dispatch on the same worker, through `openRepairDispatch`. You did nothing to cause this edge and there is nothing to do about it but wait |
 | `validating` | `blocked` | the validation cannot run at all — a Gate opens automatically. On a convergence Run this edge also covers a paused Run, a Task with `--convergence off`, a repair the app could not start, and the repair budget running out (section 11) |
 | `reviewing` | `completed` | the reviewer reports `worker_done --outcome succeeded` |
 | `reviewing` | `failed` | the reviewer reports `worker_done --outcome failed`, **on a Run with no convergence policy** — the same retry path as any other failure. On a convergence Run (section 11) this edge is reached the same restricted way as `validating` → `failed` above |
-| `reviewing` | `dispatched` | **convergence Runs only** (section 11) — the review found a blocking issue and the app opened a repair Dispatch, through `openRepairDispatch` |
+| `reviewing` | `dispatched` | **convergence Runs only** (section 11). The review found a blocking issue and Astera opened a repair Dispatch, through `openRepairDispatch` |
 | `reviewing` | `blocked` | the review cannot run at all (no other provider has a usable account, or the reviewer dies without reporting) — a Gate opens automatically. Same convergence additions as `validating` → `blocked` above |
 | `failed` | `dispatched` | `worker-start --retry-of <dsp>` (fewer than 3 consecutive failures) |
 | `failed` | (terminal) | 3 consecutive failures — circuit break, no further retries |
@@ -982,12 +982,13 @@ a Task with neither `--validate` nor `--review` is unaffected too: convergence o
 happens when a check or a review fails.
 
 **What it means.** On a convergence Run, a Task with `--validate` and/or `--review` does not settle
-its own failure — the app does. When a check fails, or a review finds a blocking issue, the app sends
-the failure back to the **same worker session** as a new section of its spec file and reruns the
-Task's checks; a `worker-start --retry-of` from you never happens for this Task. You see this as a
-`status` message whose body says `repair <k> of <maxFixAttempts>` — that is the app working, not a
-report going missing. **Do not start a worker for a converging Task, and do not try to retry it
-yourself** — there is nothing for you to retry; wait for the next message.
+its own failure. Astera does, the app or, while the app is closed, the Host. When a check fails, or a
+review finds a blocking issue, Astera sends the failure back to the **same worker session** as a new
+section of its spec file and reruns the Task's checks; a `worker-start --retry-of` from you never
+happens for this Task. You see this as a `status` message whose body says
+`repair <k> of <maxFixAttempts>`. That is Astera working, not a report going missing.
+**Do not start a worker for a converging Task, and do not try to retry it yourself** — there is
+nothing for you to retry; wait for the next message.
 
 **Turning it on.**
 ```
