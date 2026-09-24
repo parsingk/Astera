@@ -40,6 +40,7 @@ import { hostPathGuard } from '../core/run/hostPathGuard'
 import { readStoredRunConfigs } from '../core/run/runConfigsFile'
 import { RunManager } from '../core/run/runManager'
 import { treeKillCommand } from '../core/run/kill'
+import { isSamePath } from '../core/files/tree'
 import { readFileRetrying } from '../core/renameRetry'
 import { settingsObjectOf } from '../core/settings/settingsObject'
 import type { Account } from '../core/types'
@@ -71,10 +72,11 @@ export interface HostChecks {
    *  the driver before the sweep it runs when an app leaves (Task 14 round 2). */
   stopForeignValidations(): Promise<number>
   /** Whether one of this Host's checks holds this Task now (final review I1): a validation of it queued
-   *  or running in this Host's validator, a review start of it in flight, or **any** foreign validation
-   *  run still alive in the registry (a gone app's check that would not die; its run does not say
-   *  which Task it checks, so it holds them all). The driver opens a Task's restart Gate only when
-   *  this is false. */
+   *  or running in this Host's validator, a review start of it in flight, or a foreign validation run
+   *  still alive in the registry in a folder this Task works in (a gone app's check that would not
+   *  die; its run does not say which Task it checks, so it holds every Task in its folder, and every
+   *  Task when it does not say its folder). The driver opens a Task's restart Gate only when this is
+   *  false. */
   checking(taskId: string): boolean
   resumeSweep(why: string): void
 }
@@ -361,6 +363,28 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     return foreign.length
   }
 
+  /**
+   * **Whether a foreign validation run is alive in a folder this Task works in** (S4+S5 tidy; the
+   * cautious rule of final review I1, narrowed). A run is in the folder its validator started it for
+   * (`restore.projectPath`, the Dispatch cwd `startValidation` was given), and a Task works in its
+   * Dispatches' cwds. **Cautious where it cannot tell**: a foreign run with no `projectPath`, or a Task
+   * with no Dispatch, holds the Task whatever the folder.
+   */
+  const foreignRunIn = (taskId: string): boolean => {
+    const foreign = liveForeignValidations()
+    if (foreign.length === 0) return false
+    const folders = d
+      .deps()
+      .getState()
+      .dispatches.filter((x) => x.taskId === taskId && x.cwd !== '')
+      .map((x) => x.cwd)
+    if (folders.length === 0) return true
+    return foreign.some((e) => {
+      const at = e.meta?.restore?.projectPath
+      return typeof at !== 'string' || at === '' || folders.some((f) => isSamePath(f, at))
+    })
+  }
+
   const startReview = (a: { taskId: string }): void => {
     void reviewBody(a).catch((e) => log(`startReview failed task=${a.taskId}: ${String(e)}`))
   }
@@ -394,7 +418,7 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     },
     stopForeignValidations,
     checking: (taskId) =>
-      validation.validator.holds(taskId) || reviewStarts.has(taskId) || liveForeignValidations().length > 0,
+      validation.validator.holds(taskId) || reviewStarts.has(taskId) || foreignRunIn(taskId),
     resumeSweep: (why) => sweep.run(why)
   }
 }

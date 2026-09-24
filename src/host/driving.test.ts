@@ -226,7 +226,7 @@ async function rig(o: RigOpts = {}) {
   const stopForeignValidations = vi.fn(() => foreign.hold ?? Promise.resolve(0))
   const startRepair = vi.fn()
   /** HostChecks.checking: the Tasks this Host's checks hold (a queued or running validation, a review
-   *  start in flight, or any foreign validation run still alive). */
+   *  start in flight, or a foreign validation run still alive in its folder). */
   const checkingIds = new Set<string>()
   const checking = vi.fn((id: string) => checkingIds.has(id))
   let langNow: Lang = 'en'
@@ -1005,5 +1005,30 @@ describe('createHostDriving — the restart Gate is armed again on a driving tic
     await h.tickNow()
     expect(h.statusOf('tsk_v')).toBe('validating')
     expect(h.gates()).toHaveLength(0)
+  })
+
+  // Item 2 (re-review R-m3 b): a gone app's validation run that survives its kill holds its Task, so
+  // nothing is armed at the app leaving. Once the run exits, the next driving tick arms it.
+  it('arms a Task once the foreign run that held it has gone, and gates it a confirmed tick later', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.putStalled('tsk_v', 'validating')
+    h.checkingIds.add('tsk_v') // the foreign run in its folder is still alive
+    h.server.app = false
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left'))
+    await h.settle()
+    h.clock = NOW_MS + 6_000
+    await h.tickNow()
+    expect(h.gates()).toHaveLength(0)
+    h.checkingIds.delete('tsk_v') // it exits
+    h.clock = NOW_MS + 7_000
+    await h.tickNow()
+    expect(h.gates()).toHaveLength(0)
+    h.clock = NOW_MS + 13_000
+    await h.tickNow()
+    expect(h.statusOf('tsk_v')).toBe('blocked')
   })
 })

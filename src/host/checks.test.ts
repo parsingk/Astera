@@ -153,14 +153,16 @@ async function rig(o: RigOpts = {}) {
 
   const ours = () => spawned.slice(spawnedBefore)
   /** A run pty another process's RunManager opened in this registry: the app's, which outlives it. */
-  const openForeignRun = (id: string, validation: boolean): { ptyId: string; pid: number } => {
+  /** `projectPath` is the folder the app's validator started it for: the Task's own by default, null
+   *  for none (a run whose note does not say). */
+  const openForeignRun = (id: string, validation: boolean, projectPath: string | null = cwd): { ptyId: string; pid: number } => {
     const ptyId = `app-${id}`
     registry.open({
       id: ptyId,
       file: 'x',
       args: [],
       opts: { cwd, cols: 80, rows: 24, env: {} },
-      meta: { kind: 'run', id, restore: { projectPath: cwd, ...(validation ? { validation: true } : {}) } }
+      meta: { kind: 'run', id, restore: { ...(projectPath === null ? {} : { projectPath }), ...(validation ? { validation: true } : {}) } }
     })
     return { ptyId, pid: spawned.at(-1)!.pty.pid }
   }
@@ -378,7 +380,24 @@ describe('createHostChecks — checking (final review I1)', () => {
     await vi.waitFor(() => expect(h.checks.checking(h.taskId)).toBe(false))
   })
 
-  it('holds every Task while a gone app’s validation run is still alive in the registry', async () => {
+  // S4+S5 tidy, item 2: narrowed to the folder, cautious where the run does not say its folder.
+  it('does not hold a Task in another folder while a gone app’s validation run lives elsewhere', async () => {
+    const h = await rig()
+    h.openForeignRun('run_app_other', true, path.join(path.dirname(h.cwd), 'other-proj'))
+    expect(h.checks.checking(h.taskId)).toBe(false)
+  })
+
+  it('holds the Task in the run’s folder however the path is spelled, and any Task when the run names no folder', async () => {
+    const h = await rig()
+    const same = h.openForeignRun('run_app_same', true, h.cwd + path.sep)
+    expect(h.checks.checking(h.taskId)).toBe(true)
+    h.registry.kill(same.ptyId)
+    await vi.waitFor(() => expect(h.checks.checking(h.taskId)).toBe(false))
+    h.openForeignRun('run_app_unsaid', true, null)
+    expect(h.checks.checking(h.taskId)).toBe(true)
+  })
+
+  it('holds its Task while a gone app’s validation run is still alive in its folder', async () => {
     const h = await rig()
     const foreign = h.openForeignRun('run_app_1', true)
     expect(h.checks.checking(h.taskId)).toBe(true)

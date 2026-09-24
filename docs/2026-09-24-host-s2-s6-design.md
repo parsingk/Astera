@@ -610,7 +610,10 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
   `reviewing` Tasks, and starts any repair Dispatch that was opened and never started (N1's belt).
   Last, it arms the restart Gate for every other Task left `validating` or `reviewing` with no open
   Dispatch and nothing of this Host's checking it (`checking`: its validator, a review start in
-  flight, or any foreign validation run still alive). A tick at least `STALL_CONFIRM_MS` (5 s) later
+  flight, or a foreign validation run still alive in a folder the Task's Dispatches work in, or in any
+  folder when the run or the Task does not name one). Every later tick that drives with no app
+  attached arms again, so a Task such a run held is armed once the run is gone. A tick at least
+  `STALL_CONFIRM_MS` (5 s) later
   opens the load's own restart Gate (`interruptStalledTask`) for each such Task that is unchanged and
   still unchecked, with no app attached (`driving.ts:132-176,367`). A person's ordinary runs carry no
   `validation` mark and are never touched. Why: the app's validation runs open through the Host's pty

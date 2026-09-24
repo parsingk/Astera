@@ -128,7 +128,8 @@ export function createHostDriving(d: {
 
   /** The Tasks outside a convergence Run left `validating` or `reviewing` that nothing is checking:
    *  no open Dispatch (a live reviewer or repair) and none of this Host's checks (`checking`: its own
-   *  validator, a review start in flight, or a foreign validation run still alive). Exactly the Tasks
+   *  validator, a review start in flight, or a foreign validation run alive in its folder). Once that
+   *  run is gone, the next tick that drives arms the Task (`tick`). Exactly the Tasks
    *  the load gates (`interruptStalledTask` with no `resume`), less the ones with work under way. */
   const unchecked = (s: OrchState): OrchState['tasks'] =>
     s.tasks.filter(
