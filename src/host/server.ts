@@ -117,6 +117,8 @@ export interface HostServer {
    *  nothing for HOST_UNRESPONSIVE_MS: a caller waiting on an answer that cannot arrive is the one
    *  outcome worse than a refusal. */
   act(name: string, args: unknown): Promise<unknown>
+  /** An app is attached and its hello did not yield `duty`: that app still does it itself (ruling R4). */
+  appKeeps(duty: string): boolean
 }
 
 /** How long a peer that has connected but said nothing gets before the Host hangs up on it. */
@@ -182,6 +184,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
    *  set's element because the set is what `broadcast` walks and that must not change shape.
    *  A socket that is in `greetedSockets` is always in here too — both are written in one place. */
   const roles = new Map<net.Socket, 'app' | 'cli'>()
+  /** What each greeted socket's hello yielded to this Host (`hello.yields`, ruling R4). Written and
+   *  deleted beside `roles`, for the same reason it is kept beside the set rather than inside it. */
+  const yields = new Map<net.Socket, ReadonlySet<string>>()
   let socketSeq = 0
   /** The `orch-act`s that have gone out and not been answered, by call id. The socket is kept with
    *  each one so that a disconnect can refuse exactly the questions it left unanswered. */
@@ -268,6 +273,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // APP_REQUIRED instead of being sent an `orch-act` it cannot answer, which would leave the
           // caller waiting forever (protocol.ts's `hello` has the whole reason).
           roles.set(socket, m.role === 'app' ? 'app' : 'cli')
+          // Junk entries are dropped rather than refused: a hello is not the place to turn a client
+          // away over a field that only ever narrows what it keeps.
+          yields.set(socket, new Set(Array.isArray(m.yields) ? m.yields.filter((x): x is string => typeof x === 'string') : []))
           send({
             t: 'hello',
             protocol: HOST_PROTOCOL,
@@ -381,6 +389,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       const wasGreeted = greetedSockets.delete(socket)
       const role = roles.get(socket) ?? 'cli'
       roles.delete(socket)
+      yields.delete(socket)
       // Whatever this socket was asked and never answered is refused now. Left in the map it would
       // be a promise nothing can ever settle, and the CLI call waiting behind it would hang for as
       // long as the Host lives.
@@ -438,6 +447,12 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     startedAt,
     clients: () => live,
     hasApp: () => appSocket() !== null,
+    // The same "first app socket" `act` sends to: the app that keeps a duty is the one that would be
+    // asked to do it.
+    appKeeps: (duty) => {
+      const s = appSocket()
+      return s !== null && !(yields.get(s)?.has(duty) ?? false)
+    },
     act: (name, args) =>
       new Promise((resolve, reject) => {
         const sock = appSocket()
@@ -497,6 +512,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         sockets.clear()
         greetedSockets.clear()
         roles.clear()
+        yields.clear()
         // Destroying a socket fires its 'close' asynchronously, so the refusals `gone` sends would
         // arrive after this Host has already gone. Refused here instead, while there is still
         // somebody to tell.

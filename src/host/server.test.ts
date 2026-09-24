@@ -671,6 +671,33 @@ describe('startHostServer', () => {
       expect(h.s.hasApp()).toBe(true)
     })
 
+    it('says an attached app keeps a duty it did not yield, and not one it did (ruling R4)', async () => {
+      const h = await server()
+      expect(h.s.appKeeps('worktrees')).toBe(false) // no app at all: nothing is kept
+      const hello = async (extra: Record<string, unknown>): Promise<net.Socket> => {
+        const sock = net.connect(h.address)
+        await new Promise((r) => sock.once('connect', r))
+        const ch = messageChannel(sock)
+        ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app', ...extra } as ClientMessage)
+        await ch.next()
+        return sock
+      }
+      const old = await hello({}) // an S2 app: yields nothing
+      expect(h.s.appKeeps('worktrees')).toBe(true)
+      old.end()
+      await vi.waitFor(() => expect(h.s.hasApp()).toBe(false))
+      const fresh = await hello({ yields: ['worktrees', 42] }) // junk entries are ignored
+      expect(h.s.appKeeps('worktrees')).toBe(false)
+      expect(h.s.appKeeps('dispatch')).toBe(true)
+      fresh.end()
+    })
+
+    it('does not count a CLI as an app that keeps anything', async () => {
+      const h = await start()
+      await h.connect('cli')
+      expect(h.s.appKeeps('worktrees')).toBe(false)
+    })
+
     // call 은 세는 수라 누구나 맞힐 수 있다 — 물어본 소켓이 아닌 곳의 답을 받으면 앱이 내지도
     // 않은 결과 위에서 명령 층이 움직인다.
     it('물어본 소켓이 아닌 곳의 답은 받지 않는다', async () => {

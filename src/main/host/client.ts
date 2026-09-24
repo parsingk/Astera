@@ -2,7 +2,7 @@
 // `status()`: nothing else in slice 1 depends on the Host being there, and every failure ends here,
 // as a sentence somebody can read, rather than reaching a caller.
 import net from 'node:net'
-import { HOST_PROTOCOL, type ClientMessage, type HostMessage } from '../../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, type ClientMessage, type HostMessage } from '../../core/host/protocol'
 import { HOST_UNRESPONSIVE_MS, PING_MS } from '../../core/host/unresponsive'
 import { hostIsOutdated, hostSpeaksPing } from './outdated'
 import { encodeLine, createLineReader } from '../../host/framing'
@@ -502,7 +502,15 @@ export class HostClient {
     socket.on('error', (err) => this.deps.log(`connection error: ${String(err)}`))
     // `role` is what makes this client the one the Host sends `orch-act` to; `app` cannot say it,
     // because the CLI's hello carries a version string in the same field (core/host/connect.ts).
-    this.send({ t: 'hello', protocol: this.deps.protocol ?? HOST_PROTOCOL, app: this.deps.appVersion, role: 'app' })
+    // `yields` hands the Host the Job worktrees (host S3 ruling R4): this app writes worktrees.json
+    // through a Host that announces `worktrees` and understands `git-op`. S4 adds `dispatch`.
+    this.send({
+      t: 'hello',
+      protocol: this.deps.protocol ?? HOST_PROTOCOL,
+      app: this.deps.appVersion,
+      role: 'app',
+      yields: [HOST_YIELD_WORKTREES]
+    })
   }
 
   private handleHostMessage(m: HostMessage): void {

@@ -144,6 +144,17 @@ describe('HostClient', () => {
     await c.stop()
   })
 
+  it('says hello as the app and yields worktrees to the Host (S3 ruling R4)', async () => {
+    const addr = addressFor('yields')
+    const host = await rawHost(addr, [])
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    c.start()
+    await waitFor(() => host.got.some((m) => m.t === 'hello'))
+    expect(host.got.find((m) => m.t === 'hello')).toMatchObject({ role: 'app', yields: ['worktrees'] })
+    await c.stop()
+    await host.close()
+  })
+
   // An older Host's hello carries no `features` at all — absent means none, not a parse failure.
   it('defaults to no features for a hello that does not name any', async () => {
     const addr = addressFor('no-features')

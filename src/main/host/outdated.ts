@@ -5,7 +5,7 @@
 // host.js until something ends it. This is the fact that tells the app there is a newer one to run,
 // so it can replace the old Host the first moment doing so costs nothing (§4).
 import { compareVersions } from '../updatePolicy'
-import { HOST_FEATURE_PROC, HOST_FEATURE_PING, HOST_FEATURE_SPAWN } from '../../core/host/protocol'
+import { HOST_FEATURE_PROC, HOST_FEATURE_PING, HOST_FEATURE_SPAWN, HOST_FEATURE_WORKTREES } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
  *  cannot be parsed is **not** outdated: replacing a Host on a guess about what it is would be worse
@@ -40,4 +40,11 @@ export function hostSpeaksPing(status: { connected: boolean; features: readonly 
  *  one, or one started without the CLI paths) spawns nothing, so the app keeps doing both. */
 export function hostSpeaksSpawn(status: { connected: boolean; features: readonly string[] }): boolean {
   return status.connected && status.features.includes(HOST_FEATURE_SPAWN)
+}
+
+/** Whether the connected Host owns worktrees.json and runs the worktree git (host S3 ruling R3). The
+ *  app writes its registry through the Host only then; otherwise (an S2 Host, or none) it writes the
+ *  file itself, as it always has. */
+export function hostSpeaksWorktrees(status: { connected: boolean; features: readonly string[] }): boolean {
+  return status.connected && status.features.includes(HOST_FEATURE_WORKTREES)
 }

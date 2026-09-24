@@ -5,6 +5,7 @@
 // JSON string escaping is what will carry it, the same way the app already ships PTY output to the
 // renderer.
 import type { OrchState } from '../orchestration/state'
+import type { WorktreeInfo } from '../types'
 
 /** Bumped whenever a message changes shape. A Host and an app that disagree do not talk (design §6).
  *  2 added the pty-* messages: the Host owns the terminals now. 3 added pty-note — an older Host
@@ -63,6 +64,14 @@ export const HOST_FEATURE_REQUESTS = 'requests'
  *  keeps doing both as it always has. Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_SPAWN = 'spawn'
 
+/** The Host owns worktrees.json and runs the worktree git itself (host S3 design §3): the app writes
+ *  its registry through `worktree-*` orch-calls and mirrors `worktrees-state`. Only a Host that also
+ *  announces `spawn` (ruling R5). Additive, so HOST_PROTOCOL stays 3. */
+export const HOST_FEATURE_WORKTREES = 'worktrees'
+
+/** What an app hands the Host in `hello.yields`: "you do this, not me" (§7.2). S3: worktrees. S4 adds dispatch. */
+export const HOST_YIELD_WORKTREES = 'worktrees'
+
 /** What the app needs to rebuild its own record for a session after a restart. The Host stores it
  *  and hands it back untouched — only the manager that wrote it knows how to read it (slice 2
  *  design §4).
@@ -112,8 +121,15 @@ export type ClientMessage =
    *  a client that called itself the app; an older app that sends no role is therefore refused with
    *  APP_REQUIRED rather than handed an `orch-act` it has never heard of and cannot answer, which
    *  would leave the caller waiting for a reply that is never coming. Additive, so HOST_PROTOCOL
-   *  stays 3 — bumping it retires a running Host and takes its terminals with it. */
-  | { t: 'hello'; protocol: number; app: string; role?: 'app' | 'cli' }
+   *  stays 3 — bumping it retires a running Host and takes its terminals with it.
+   *
+   *  **`yields` names the duties this app hands to the Host** (host S3 ruling R4, §7.2): with
+   *  HOST_YIELD_WORKTREES in it, the Host forks, merges and removes Job worktrees itself while this
+   *  app is attached. Absent means none, which is what an S2 app sends: the Host then keeps sending
+   *  that work to it, because such an app writes worktrees.json whole and would erase an entry the
+   *  Host made behind it. An older Host ignores the field, so a new app in front of one keeps S2's
+   *  behaviour. Additive, so HOST_PROTOCOL stays 3. */
+  | { t: 'hello'; protocol: number; app: string; role?: 'app' | 'cli'; yields?: string[] }
   /** Leave. Sent when the app finds a Host on another protocol; in slice 1 the Host holds nothing,
    *  so leaving costs nothing. This message's meaning is revisited in slice 2.
    *
@@ -250,6 +266,19 @@ export type HostMessage =
    *  restart. Never sent in reply to a `pty-spawn`: the client that asked already has `pty-spawned`,
    *  and the session is its own. An older app ignores it, and adopts the session at its next boot. */
   | { t: 'pty-opened'; entry: PtyEntry }
+  /** A merge the Host runs in a repository the app may be watching (host S3 ruling R7, §3.3):
+   *  `begin` right before `git merge` into `cwd`, `end` in the `finally` after it. `op` is the Host's
+   *  own id and pairs the two. The app registers it as its own git operation, so its Work Unit screen
+   *  does not record the HEAD move as a change from outside, and ends every open one when the socket
+   *  drops. An older app ignores it (subscribers filter on `m.t`, §7.1). */
+  | { t: 'git-op'; op: string; phase: 'begin' | 'end'; kind: 'job-merge'; cwd: string }
+  /** The whole worktrees.json as the Host just wrote it, pushed after every Host write so the app's
+   *  registry mirror learns an entry it did not make (host S3 ruling R1). An older app ignores it.
+   *
+   *  **`seq` counts the Host's pushes and only ever rises** (Task 1 re-review, N2). A push and a
+   *  write's reply can cross, so the receiver ignores a push whose `seq` is below the one it last
+   *  took, rather than letting an older file overwrite a newer one. */
+  | { t: 'worktrees-state'; seq: number; file: { root?: string; items: WorktreeInfo[] } }
   | { t: 'proc-spawned'; id: string; pid: number }
   | { t: 'proc-failed'; id: string; error: string }
   /** One stdout line, live. `seq` counts from 1 per process and is never reused; a client that has
