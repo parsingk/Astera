@@ -19,6 +19,7 @@ import type { AppUpdater } from 'electron-updater'
 import iconAsset from '../../resources/icon.png?asset'
 import trayAsset from '../../resources/tray.png?asset'
 import { createCore, type Core } from './core'
+import { clearAppRunning, markAppRunning } from '../core/host/pidFile'
 import { applyLoginPath } from './loginPath'
 import { shouldForceWaylandOzone } from './ozone'
 import { registerIpc, parseAllowedExternalUrl, type OrchHandle } from './ipc'
@@ -380,6 +381,9 @@ app.on('activate', () => {
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return // second instance — waits for quit without initializing
+  // Tells a Host this app is not attached to that an app is alive and may be running sessions the
+  // Host cannot see, so it refuses to remove a worktree folder under them (core/host/pidFile.ts).
+  markAppRunning(app.getPath('userData'), process.pid)
   // Windows delivers a toast against the process's AppUserModelID and silently drops it when that
   // does not match a shortcut's — indistinguishable from the OS-refusal case DesktopNotifierDeps's
   // `show` already expects to swallow (design doc §9). Called unconditionally rather than guarded to
@@ -1389,6 +1393,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 app.on('will-quit', () => {
+  // Only removes a file naming this process, so the instance that lost the lock leaves the other's.
+  clearAppRunning(app.getPath('userData'), process.pid)
   if (!core) return
   // **Whether quitting ends a pty is now a question, and it is asked per pty** (slice 2 design §1).
   // While they were all this process's own children, ending them here was the only honest thing to
