@@ -194,6 +194,16 @@ describe('integrateWorktrees — the rules of the one automatic writer into a re
     expect(r.kind).toBe('merged')
     expect(order).toEqual(['begin', 'merge', 'end', 'reap'])
   })
+  // Review m4: an end that throws synchronously, from inside the finally. Mutation check: the brief's
+  // `await Promise.resolve(ctx.gitOp.end(id)).catch(...)` lets this throw escape; red.
+  it('a gitOp.end that throws synchronously is logged and the merge still reports its own result (R24)', async () => {
+    const a = await worked('a')
+    const r = await integrateWorktrees(repo, [a], {}, ctx({
+      gitOp: { begin: () => 'op1', end: () => { throw new Error('sync gone') } }
+    }))
+    expect(r).toEqual({ kind: 'merged', uncommitted: 0 })
+    expect(logs.some((l) => /git-op end failed/.test(l) && /sync gone/.test(l))).toBe(true)
+  })
   it('a gitOp.end that rejects is logged and costs the merge nothing (R24)', async () => {
     const a = await worked('a')
     const r = await integrateWorktrees(repo, [a], {}, ctx({

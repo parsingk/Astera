@@ -11,8 +11,8 @@
 import path from 'node:path'
 import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { HOST_MERGES_KEPT, readHostMerges, type HostMergeRecord } from '../core/git/hostMerges'
-import { renameRetrying } from '../core/renameRetry'
+import { HOST_MERGES_KEPT, parseHostMerges, type HostMergeRecord } from '../core/git/hostMerges'
+import { readFileRetrying, renameRetrying } from '../core/renameRetry'
 
 export interface MergeRecorder {
   begin(projectPath: string): Promise<string>
@@ -20,6 +20,17 @@ export interface MergeRecorder {
 }
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/** Whether the text is the record file at all: `{ "merges": [...] }`. Entries inside it that are not
+ *  records are dropped by parseHostMerges, as the reader drops them; the file is not damaged for that. */
+const isHostMergesFile = (text: string): boolean => {
+  try {
+    const v: unknown = JSON.parse(text)
+    return typeof v === 'object' && v !== null && !Array.isArray(v) && Array.isArray((v as { merges?: unknown }).merges)
+  } catch {
+    return false
+  }
+}
 
 export function createMergeRecorder(a: {
   file: string
@@ -30,8 +41,27 @@ export function createMergeRecorder(a: {
   /** One chain, so the writes run in order: each reads the file the previous one left. */
   let chain: Promise<void> = Promise.resolve()
 
+  /** What is on disk before a write (review m1). Not readHostMerges, whose "[] on any failure" is right
+   *  for the app's reader and wrong here: one failed read would rewrite the file as a list of one and
+   *  drop every earlier record. So only a missing file is empty; a damaged one is kept as `.bak` and
+   *  the history starts over, said in the log; any other read error throws, and the write is skipped. */
+  const current = async (): Promise<HostMergeRecord[]> => {
+    let text: string
+    try {
+      text = await readFileRetrying(a.file)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw new Error(`${path.basename(a.file)} could not be read, so it is left as it is: ${message(err)}`)
+    }
+    if (isHostMergesFile(text)) return parseHostMerges(text)
+    const bak = `${a.file}.bak`
+    await fs.writeFile(bak, text, 'utf8')
+    a.log(`${path.basename(a.file)} was damaged; kept as ${path.basename(bak)}, and the merge history starts fresh`)
+    return []
+  }
+
   const write = async (change: (records: HostMergeRecord[]) => HostMergeRecord[]): Promise<void> => {
-    const next = change(await readHostMerges(a.file)).slice(-HOST_MERGES_KEPT)
+    const next = change(await current()).slice(-HOST_MERGES_KEPT)
     await fs.mkdir(path.dirname(a.file), { recursive: true })
     // Atomic (tmp + rename), as the other profile stores are: the app may be reading it right now.
     const tmp = `${a.file}.${randomUUID()}.tmp`
