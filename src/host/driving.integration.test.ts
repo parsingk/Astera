@@ -73,6 +73,7 @@ interface Spawn {
   worktree: string
   terminal?: string
   cwd: string
+  specPath: string
 }
 
 type FakePty = RegistryPty & { exit(code: number): void }
@@ -208,14 +209,27 @@ async function rig(o: RigOpts) {
         })
         if (!opened.ok) throw new Error(opened.error)
       }
-      spawns.push({ dispatchId: a.dispatchId, taskId: a.taskId, sessionId, provider: a.provider, accountId: a.accountId, worktree: a.worktree, terminal: a.terminal, cwd })
-      return { sessionId, cwd, specPath: path.join(profileDir, 'orch', 'specs', `${a.dispatchId}.md`) }
+      // The spec is written where the real spawner writes it (review of S4+S5, M7): the tick's sweep
+      // meets the same files in the same folder, so a rule that deletes a live one fails here.
+      const specPath = path.join(profileDir, 'orch', 'specs', `${a.dispatchId}.md`)
+      await fs.mkdir(path.dirname(specPath), { recursive: true })
+      await fs.writeFile(specPath, `the rig's spec for ${a.taskId}`)
+      spawns.push({ dispatchId: a.dispatchId, taskId: a.taskId, sessionId, provider: a.provider, accountId: a.accountId, worktree: a.worktree, terminal: a.terminal, cwd, specPath })
+      return { sessionId, cwd, specPath }
     }),
     startCoordinator: async () => ({ sessionId: 'ses_coord' }),
     releaseWorker: async () => {},
     readWorker: async () => '',
     probeLimit: async () => null,
-    readReviewFile: async () => null,
+    // The real spawner's body: a missing file is null, any other failure throws.
+    readReviewFile: async (p) => {
+      try {
+        return await fs.readFile(p, 'utf8')
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw e
+      }
+    },
     makeRunWorktree: (a) => worktrees.makeRunWorktree(a),
     mergeWorktrees: (runCwd, paths) => worktrees.mergeWorktrees(runCwd, paths),
     removeWorktrees: (paths) => worktrees.removeWorktrees(paths)
@@ -521,6 +535,28 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     expect(h.spawns()[1]).toMatchObject({ provider: 'codex', worktree: 'current' })
     await h.workerReports(h.spawns()[1], 'succeeded')
     await until(() => expect(h.runOutcome()).toBe('completed'))
+  })
+
+  // The review of S4+S5, C1: a convergence reviewer writes its verdict beside its spec a few seconds
+  // before it reports. A tick landing in that gap (no app attached, no spawn in flight) must leave the
+  // verdict where `worker-done` reads it, so a blocking finding on a "succeeded" report still blocks.
+  it('a tick between the reviewer writing its verdict and reporting keeps the verdict, and its blocking finding is honoured (C1)', async () => {
+    const h = await rig({ tasks: 1, review: true, accounts: ['claude', 'codex'], convergence: { maxFixAttempts: 1 } })
+    await h.cli('jobs-run', { id: h.jobId })
+    await until(() => expect(h.spawns()).toHaveLength(1))
+    await h.workerReports(h.spawns()[0], 'succeeded')
+    await until(() => expect(h.spawns()).toHaveLength(2))
+    const reviewer = h.spawns()[1]
+    await until(() => expect(h.orch.state().dispatches.find((x) => x.id === reviewer.dispatchId)?.specPath).toBe(reviewer.specPath))
+    const verdict = `${reviewer.specPath}.review.json`
+    await fs.writeFile(verdict, JSON.stringify({ issues: [{ severity: 'high', title: 'the rig found a blocking bug' }] }))
+    await h.settle()
+    await h.wiring.driving.tick()
+    expect(readFileSync(verdict, 'utf8')).toMatch(/blocking bug/)
+    await h.workerReports(reviewer, 'succeeded')
+    await until(() => expect(h.task(h.onlyTaskId).status).not.toBe('reviewing'))
+    expect(h.runOutcome()).not.toBe('completed')
+    expect(JSON.stringify(h.task(h.onlyTaskId))).toMatch(/the rig found a blocking bug/)
   })
 
   it('a validation guard allows a registered task worktree, through worktrees.paths() (B5)', async () => {

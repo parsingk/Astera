@@ -24,6 +24,9 @@ export const coordinatorBriefName = (runId: string): string => `coordinator-${ru
  *   existed; with `'unknown'` every Run that has a coordinator keeps its brief, for the same reason
  *   the cleanup leaves Dispatches open on that answer.
  *
+ * - A file written beside a kept one, `<kept name>.<suffix>`, kept with it. Today that is a convergence
+ *   reviewer's verdict, `<spec>.review.json`: it lives exactly as long as the spec it answers.
+ *
  * Matching is on the file name alone. `Dispatch.specPath` is an absolute path written by whichever
  * platform produced it, and orchestration.json is hand-edited, so both separators turn up; the names
  * themselves are unique. Taking a worker's name from the stored path rather than rebuilding it from
@@ -54,7 +57,14 @@ export function staleSpecFiles(a: {
   // fills it in once the worker is actually up, so a Dispatch caught in that window would otherwise
   // hold an empty name that must not be allowed to match anything.
   const live = new Set(keep.filter((n) => n !== ''))
-  return a.files.filter((f) => !live.has(f))
+  // A kept name keeps the files written beside it too: `<name>.<anything>`. The one the product writes
+  // today is a convergence reviewer's verdict, `<spec>.review.json` (review.ts builds the path, and
+  // `worker-done` reads it). It is written a few seconds before the reviewer reports, and a missing
+  // one reads as "no issues", so sweeping it while the review is open would record a blocking finding
+  // as passed. The suffix is left open (`.review.json.tmp` from an agent that writes atomically counts
+  // too) because every such file is the reader's, and it lives as long as the spec does.
+  const beside = (f: string): boolean => [...live].some((n) => f.startsWith(`${n}.`))
+  return a.files.filter((f) => !live.has(f) && !beside(f))
 }
 
 /**
