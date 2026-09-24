@@ -120,7 +120,10 @@ async function main(): Promise<void> {
     if (why) log.write(`${why} — leaving`)
     // **The driver stops first** (S4+S5, the review of Task 12): no tick from here on, no commit, load
     // or app coming or going starts a pass, and a pass already under way stops at its next `mayStart`
-    // (drivingWiring.ts) — before the spawner's own retiring flag is set below. Never throws.
+    // (drivingWiring.ts) — before the spawner's own retiring flag is set below. From here on this Host
+    // also starts no validation, review or repair, and the `killAll` below is not read as a failed
+    // check: the Task stays validating or reviewing, and the next Host restarts it (a convergence Job)
+    // or gates it (otherwise). Never throws.
     wiring?.dispose()
     // Before the close, so a Host that is on its way out is not offered up as one to end. A failure
     // here costs nothing: the app checks the executable behind the pid before acting on it, and a

@@ -11,6 +11,13 @@
 // or going starts a pass, no load drains, and a pass already under way stops at its next `mayStart`
 // (the loop asks before each slot, R15) — in the same turn, not once the server has closed.
 //
+// **A leaving Host starts no validation, review or repair, and records none as failed** (the ruling on
+// Task 13). `drive.owns()` turns false at dispose, so the six S5 names switch together (F58) and the
+// three starts are logged and dropped; a run the Host kills on its way out is not read as a result
+// (checks' `retiring`). The Task is left `validating` or `reviewing`, and the successor restarts it in a
+// convergence Job (its resume sweep) or gates it otherwise (its load: the restart Gate, or blocked for
+// review).
+//
 // Imports only core modules, node builtins and the Host's own modules: this bundles into the Host.
 import path from 'node:path'
 import type { DispatchGate, Driver } from '../core/host/driver'
@@ -82,7 +89,8 @@ export function composeHostDriving(a: {
     registeredWorktrees: () => a.worktrees.paths(),
     specsDir,
     log,
-    now: () => a.now()
+    now: () => a.now(),
+    retiring: () => disposed
   })
 
   const driving = createHostDriving({
@@ -123,7 +131,9 @@ export function composeHostDriving(a: {
     checks,
     driving,
     orchHooks: {
-      drive: { owns: () => driving.drives(), checks },
+      // False from dispose on (review of Task 13, I1): `driving.drives()` keeps the last driver, and a
+      // leaving Host must start none of the three.
+      drive: { owns: () => !disposed && driving.drives(), checks },
       onCommit: () => {
         if (!disposed) driving.kick('a commit')
       },

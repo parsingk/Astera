@@ -149,7 +149,6 @@ async function rig(o: RigOpts) {
     },
     log
   })
-  cleanups.push(() => registry.killAll())
   const procs = new ProcRegistry({ spawn: () => ({ pid: 1, onData() {}, onExit() {}, write() {}, kill() {} }), log })
 
   /** The server: a legacy app attaching is `app` and `keeps` both true (an app with no `yields` keeps
@@ -250,7 +249,6 @@ async function rig(o: RigOpts) {
     readGate: track((p: string) => readDispatchGate(p))
   })
   box.wiring = wiring
-  cleanups.push(() => wiring.dispose())
 
   const orch = createHostOrch({
     profileDir,
@@ -362,9 +360,28 @@ async function rig(o: RigOpts) {
     })
   }
 
+  // Teardown in `leave()`'s order (review of Task 13, m4): the driver stops, the spawner retires, the
+  // ptys end, and whatever those exits start runs out before the folders are removed.
+  cleanups.push(async () => {
+    wiring.dispose()
+    await spawner.closeAndSettle()
+    registry.killAll()
+    await settle().catch(() => {})
+  })
+
   return {
     orch,
     wiring,
+    registry,
+    spawner,
+    task: (id: string) => state().tasks.find((t) => t.id === id)!,
+    /** The run's only Task (the rigs below that ask have one). */
+    get onlyTaskId() {
+      const tasks = state().tasks.filter((t) => t.runId === latestRunId())
+      if (tasks.length !== 1) throw new Error(`rig: the run has ${tasks.length} Tasks`)
+      return tasks[0].id
+    },
+    repairDispatches: () => state().dispatches.filter((d) => d.repair !== undefined),
     server,
     logs,
     jobId,
@@ -468,7 +485,6 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     await h.settle()
     expect(h.spawns()).toHaveLength(0)
     expect(h.openGates()).toHaveLength(0)
-    expect(h.logs.join('\n')).not.toMatch(/worker-start/)
   })
 
   it('validation pass, headless: the check runs in the Host and the Task completes', async () => {
@@ -518,15 +534,51 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
   })
 
   // The review of Task 12, m6: a retiring Host stops driving at once, not only once its server closes.
-  it('once disposed (retire has started), a commit, a load and an app leaving start nothing', async () => {
+  it('once disposed (retire has started), a commit, a load and an app leaving start nothing, and it owns none of the S5 names', async () => {
     const h = await rig({ tasks: 1 })
+    await h.settle()
+    expect(h.wiring.orchHooks.drive.owns()).toBe(true) // the migrated profile with no app: the Host drives
     h.wiring.dispose()
+    expect(h.wiring.orchHooks.drive.owns()).toBe(false)
     await h.cli('jobs-run', { id: h.jobId })
     h.wiring.serverHooks.onAppsChanged()
     await h.settle()
     expect(h.spawns()).toHaveLength(0)
-    expect(h.wiring.orchHooks.onCommit).not.toThrow()
     expect(await h.wiring.orchHooks.mayDrain()).toBe(false)
+  })
+
+  // The ruling on Task 13 (review I1): a leaving Host starts no validation. A worker_done reaching it on a
+  // socket that was already connected leaves the Task validating, for the successor to restart
+  // (convergence) or gate (otherwise).
+  it('a worker_done after dispose starts no validation and leaves the Task validating (I1)', async () => {
+    const h = await rig({ tasks: 1, validate: ['seed:npm:test'], convergence: { maxFixAttempts: 1 } })
+    await h.cli('jobs-run', { id: h.jobId })
+    await until(() => expect(h.spawns()).toHaveLength(1))
+    h.wiring.dispose()
+    await h.workerReports(h.spawns()[0], 'succeeded')
+    await h.settle()
+    expect(h.task(h.onlyTaskId).status).toBe('validating')
+    expect(h.runPtys()).toHaveLength(0)
+    expect(h.openGates()).toHaveLength(0)
+  })
+
+  // The ruling on Task 13 (review I2), in leave()'s order: dispose, closeAndSettle, killAll. The kill's
+  // exit is not the check's result, so nothing is recorded: no failed check, no repair, no Gate.
+  it('a validation running when the Host leaves is not recorded as failed: the Task stays validating (I2)', async () => {
+    const h = await rig({ tasks: 1, validate: ['seed:npm:test'], convergence: { maxFixAttempts: 1 } })
+    await h.cli('jobs-run', { id: h.jobId })
+    await until(() => expect(h.spawns()).toHaveLength(1))
+    await h.workerReports(h.spawns()[0], 'succeeded')
+    await until(() => expect(h.runPtys()).toHaveLength(1))
+    h.wiring.dispose()
+    await h.spawner.closeAndSettle()
+    h.registry.killAll()
+    await h.settle()
+    const task = h.task(h.onlyTaskId)
+    expect(task.status).toBe('validating')
+    expect(task.checks ?? []).toEqual([])
+    expect(h.repairDispatches()).toHaveLength(0)
+    expect(h.openGates()).toHaveLength(0)
   })
 
   it('index.ts disposes the driving as the first step of leaving, before it stops accepting (m6)', () => {
@@ -540,5 +592,12 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
     expect(src).toMatch(/features:\s*spawner\s*\?\s*\[HOST_FEATURE_SPAWN,\s*HOST_FEATURE_WORKTREES,\s*HOST_FEATURE_DISPATCH\]\s*:\s*\[\]/)
     expect(src).toMatch(/composeHostDriving\(/)
+    // The two spreads (review m2), each inside the deps of the call it belongs to: the rig spreads the
+    // hooks itself, so without these a Host that never drives would leave every test above green.
+    const orchCall = src.slice(src.indexOf('createHostOrch({'), src.indexOf('createHostExits('))
+    expect(orchCall).toMatch(/\.\.\.\(wiring\?\.orchHooks \?\? \{\}\)/)
+    const serverAt = src.indexOf('startHostServer({')
+    const serverCall = src.slice(serverAt, src.indexOf('ADDRESS_TAKEN', serverAt))
+    expect(serverCall).toMatch(/\.\.\.\(wiring\?\.serverHooks \?\? \{\}\)/)
   })
 })

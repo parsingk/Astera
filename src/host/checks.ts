@@ -21,6 +21,7 @@
 import path from 'node:path'
 import type { HostMessage } from '../core/host/protocol'
 import { hostWorkerBaseEnv } from '../core/host/spawn'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { isLang, t, type Lang } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import type { OrchServerDeps } from '../core/orchestration/command'
@@ -82,6 +83,10 @@ export interface HostChecksDeps {
   readAccounts?: () => Promise<Account[]>
   /** Test seam: RunManager's tree kill (taskkill on win32). Defaults to running it. */
   killRunner?: (cmd: { file: string; args: string[] }) => void
+  /** True once this Host has started to leave (the wiring's dispose). From then on a run pty's exit is
+   *  the Host's own `killAll`, not the check's result, so it is handed to the validator as lost sight:
+   *  nothing is recorded, and the Task stays `validating` for the successor (review of Task 13, I2). */
+  retiring?: () => boolean
 }
 
 /** The OS locale as node reports it — what the app's `app.getLocale()` stands in for (R13). */
@@ -237,6 +242,16 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     const meta = registry.metaOf(ptyId)
     if (meta?.kind !== 'run' || runs.get(meta.id) === null) return
     try {
+      // **A leaving Host records no check** (the ruling on Task 13): the exit of a run it is killing on
+      // its way out says nothing about the build. Lost sight settles nothing and advances nothing, so the
+      // Task stays `validating`; the successor then restarts it (a convergence Job's resume sweep) or
+      // gates it (its load's restart Gate). Read as a result, it would be a failed check, a repair the
+      // leaving Host refuses, and a blocked Task with a fix attempt spent.
+      if (d.retiring?.() === true) {
+        log(`validation run=${meta.id} ended while the Host is leaving — not recorded, left for the next Host`)
+        validation.validator.onRunExit({ runId: meta.id, exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+        return
+      }
       // `?? 1`, as the app's hook does: node-pty can end a pty with no code, and that is not a pass.
       validation.validator.onRunExit({ runId: meta.id, exitCode: exitCode ?? 1 })
     } catch (err) {
