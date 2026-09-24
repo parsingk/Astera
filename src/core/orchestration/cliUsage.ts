@@ -451,12 +451,25 @@ export function nounUsage(noun: string, verbs: readonly string[]): string {
 
 /** Level 3: one command, what it does, and its flags. */
 export function commandUsage(cmd: PublicCommand): string {
-  const entry = USAGE[cmd]
+  return usageText(invocation(cmd), USAGE[cmd])
+}
+
+/** Level 3 for a command `USAGE` does not carry, one a coordinator or worker session uses
+ *  (`worker-release`, say): the entry `agent-context` prints for it, laid out the same way. */
+export function sessionCommandUsage(cmd: string, entry: CommandUsage): string {
+  return usageText(invocationLine(cmd, entry.flags ?? []), entry, [
+    '',
+    '  A command a coordinator or worker session uses. `astera help` documents it.'
+  ])
+}
+
+function usageText(first: string, entry: CommandUsage, note: readonly string[] = []): string {
   const flags = entry.flags ?? []
   return [
-    invocation(cmd),
+    first,
     '',
     `  ${entry.summary}`,
+    ...note,
     ...(entry.detail === undefined ? [] : ['', ...wrapped(entry.detail)]),
     ...(flags.length === 0
       ? []
@@ -506,7 +519,12 @@ const HELP_TOKENS = new Set(['--help', '-h'])
  * one of: …`, and `jobs list --help` was worst of all — `--help` parsed as an ordinary flag, went to
  * the server, was ignored, and the command ran. Asking for help silently did the thing.
  */
-export function usageFor(argv: string[]): { text: string } | { error: string } | null {
+export function usageFor(
+  argv: string[],
+  /** The usage of a session-only command, by name (cliAgentContext's `sessionUsage`). Passed in rather
+   *  than imported, because cliAgentContext.ts imports this file. */
+  sessionUsage: (name: string) => CommandUsage | undefined = () => undefined
+): { text: string } | { error: string } | null {
   if (!argv.some((t) => HELP_TOKENS.has(t))) return null
   const words: string[] = []
   for (const tok of argv) {
@@ -531,13 +549,16 @@ export function usageFor(argv: string[]): { text: string } | { error: string } |
     return { text: commandUsage(`${first}-${second}` as PublicCommand) }
   }
   if (second !== undefined) return { error: `${first} takes no subcommand` }
-  // Not a public command. The coordinator's own commands land here, and pointing at the guide is
-  // the true answer for them: it is where they are documented. A typo lands here too, and the
-  // command table is one flag away.
-  if (!Object.hasOwn(USAGE, first))
+  // Not a public command. The coordinator's own commands land here, and they have usage too: the
+  // entry `agent-context` prints (S4+S5 tidy: `host stop` refusals send a person to `worker-release`).
+  // A typo lands here too, and the command table is one flag away.
+  if (!Object.hasOwn(USAGE, first)) {
+    const session = sessionUsage(first)
+    if (session !== undefined) return { text: sessionCommandUsage(first, session) }
     return {
       error: `no usage for ${first} (astera --help lists the commands, astera help documents the ones agents use)`
     }
+  }
   return { text: commandUsage(first as PublicCommand) }
 }
 

@@ -323,6 +323,11 @@ const SESSION = {
 /** A command this CLI routes that a shell is not meant to type. */
 export type SessionCommand = keyof typeof SESSION
 
+/** The usage of one session-only command, for `--help` (cliUsage.ts's `usageFor`); undefined for any
+ *  other name. `Object.hasOwn`, so `constructor` and the like are not taken for commands. */
+export const sessionUsage = (name: string): CommandUsage | undefined =>
+  Object.hasOwn(SESSION, name) ? (SESSION as Record<string, CommandUsage>)[name] : undefined
+
 /** Every command this binary can route, public and session-only. */
 export type AgentCommand = PublicCommand | SessionCommand
 

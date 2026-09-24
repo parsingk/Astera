@@ -383,6 +383,10 @@ astera jobs wait --help       that one command, what it does, and its flags
 `-h` is the same as `--help`. Note that `astera help`, with no dashes, is a different command: it
 prints the whole orchestration guide, which is a reference for agents rather than usage text.
 
+A command a coordinator or worker session uses answers `--help` as well, with the entry
+`agent-context` prints for it: `astera worker-release --help` shows its flags, which is where a
+refused `host stop` sends a person.
+
 **`jobs get` takes either id.** Give it a Job and it folds in that Job's latest run; give it a run
 and it folds in that one. A Job is the plan, a run is one execution of it. Jobs that only ever run
 once never need the `runs` commands.

@@ -38,7 +38,7 @@ import {
   keepaliveLine,
   waitingCommand
 } from '../core/orchestration/cliKeepalive'
-import { agentContext } from '../core/orchestration/cliAgentContext'
+import { agentContext, sessionUsage } from '../core/orchestration/cliAgentContext'
 
 /** 빌드가 박아 넣은 이 프로그램의 버전(electron.vite.config.ts). 앱과 CLI 는 한 프로그램이므로
  *  값이 하나이고, 그래서 둘이 갈라질 수가 없다. */
@@ -826,7 +826,7 @@ export async function main(): Promise<void> {
   // id appended (`retryCommandLine`), and a second read of the same array would be a second chance
   // for the two to disagree.
   const argv = process.argv.slice(2)
-  const help = usageFor(argv)
+  const help = usageFor(argv, sessionUsage)
   if (help !== null) {
     if ('error' in help) {
       out(errorOutput(help.error, 'INVALID_ARGUMENTS'))

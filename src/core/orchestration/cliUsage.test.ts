@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { BROWSER_VERBS, NOUNS, camel, parseArgs, verbsOf } from './cliArgs'
 import { GLOBAL_FLAGS, USAGE, spelledCommand, unknownFlagError, usageFor, type PublicCommand } from './cliUsage'
-import { agentContext } from './cliAgentContext'
+import { agentContext, sessionUsage } from './cliAgentContext'
 
 /** 사람이 치는 모양(`jobs wait`)이 아니라 표의 키(`jobs-wait`). */
 const commandsFromNouns = (): string[] =>
@@ -111,6 +111,25 @@ describe('cliUsage — 세 층', () => {
     expect(usageFor(['worker-start', '--help'])).toEqual({
       error: expect.stringContaining('no usage for worker-start')
     })
+    expect(usageFor(['bogus-cmd', '--help'], sessionUsage)).toEqual({
+      error: expect.stringContaining('no usage for bogus-cmd')
+    })
+  })
+
+  // S4+S5 tidy: `host stop` refusals send a person to `worker-release`, and `--help` on it said
+  // "no usage". A session-only command answers with the entry `agent-context` prints for it.
+  it('세션 전용 명령도 --help 에 agent-context 와 같은 사용법을 준다', () => {
+    const release = (usageFor(['worker-release', '--help'], sessionUsage) as { text: string }).text
+    expect(release).toContain('astera worker-release --dispatch <dispatchId>')
+    expect(release).toContain("close a finished worker's session")
+    expect(release).toContain('astera help')
+    const stop = (usageFor(['worker-stop', '-h'], sessionUsage) as { text: string }).text
+    expect(stop).toContain('astera worker-stop --dispatch <dispatchId>')
+    // A session command spelled like a noun (`accounts`) keeps the noun's level, as before.
+    for (const c of agentContext().commands.filter((x) => !x.public && verbsOf(x.name) === undefined)) {
+      const got = usageFor([c.name, '--help'], sessionUsage)
+      expect(got, c.name).toEqual({ text: expect.stringContaining(c.usage) })
+    }
   })
 
   // 옛 이름을 들고 오는 것은 사람이 아니라 매번 `astera help` 를 읽고 시작하는 에이전트이고
@@ -126,7 +145,7 @@ describe('cliUsage — 세 층', () => {
   // 종료 코드 2 가 아니라 처리되지 않은 예외가 된다.
   it('constructor·toString 같은 이름도 조용히 2로 끝난다', () => {
     for (const name of ['constructor', 'toString', 'valueOf', 'hasOwnProperty']) {
-      expect(usageFor([name, '--help']), name).toEqual({
+      expect(usageFor([name, '--help'], sessionUsage), name).toEqual({
         error: expect.stringContaining(`no usage for ${name}`)
       })
     }
@@ -490,8 +509,9 @@ describe('문서가 보여 주는 명령 줄은 전부 파서와 플래그 검�
       const argv = shellLine(line)
       // `astera <noun> <verb> --help` 처럼 명령 자리부터 자리표시자인 줄은 명령이 아니라 모양이다.
       if (argv.length === 0 || argv[0].startsWith('-') || argv[0] === 'X') continue
+      // run.ts 가 하듯 세션 전용 명령의 표를 넘긴다.
       if (usageFor(argv) !== null) {
-        expect(usageFor(argv), `${file}: astera ${line}`).not.toHaveProperty('error')
+        expect(usageFor(argv, sessionUsage), `${file}: astera ${line}`).not.toHaveProperty('error')
         continue
       }
       const parsed = parseArgs(argv)
