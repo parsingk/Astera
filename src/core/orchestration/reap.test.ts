@@ -50,7 +50,7 @@ const completedChild = (over: Partial<LegacyRun> = {}): OrchState =>
   stateFromLegacy({
     // 부모 예약과 그 회차 하나. 예약이 만든 회차만 걷는 규칙이라 부모가 있어야 한다.
     runs: [
-      { id: 'run_tmpl', objective: 'o', cwd: 'D:/p', createdAt: '2026-08-21T00:00:00.000Z', schedule: { kind: 'daily', time: '09:00' } },
+      { id: 'run_tmpl', objective: 'o', cwd: '/p', createdAt: '2026-08-21T00:00:00.000Z', schedule: { kind: 'daily', time: '09:00' } },
       run({ templateId: 'run_tmpl', worktree: WT, ...over })
     ],
     tasks: [task('t1')],
@@ -120,16 +120,19 @@ describe('reapableChildRuns', () => {
 
   it('레지스트리에 있는 것만 낸다', () => {
     const s: OrchState = stateFromLegacy({
-      runs: [{ id: 'run_tmpl', objective: 'o', cwd: 'D:/p', createdAt: '2026-08-21T00:00:00.000Z', schedule: { kind: 'daily' as const, time: '09:00' } }, run({ templateId: 'run_tmpl', worktree: WT })],
+      runs: [{ id: 'run_tmpl', objective: 'o', cwd: '/p', createdAt: '2026-08-21T00:00:00.000Z', schedule: { kind: 'daily' as const, time: '09:00' } }, run({ templateId: 'run_tmpl', worktree: WT })],
       tasks: [task('t1'), task('t2')],
       dispatches: [dispatch({ cwd: WT }), dispatch({ id: 'd2', taskId: 't2', cwd: '/gone' })]
     })
     expect(reapableChildRuns(s, (p) => p === WT)).toEqual([{ runId: 'run_1', worktrees: [WT] }])
   })
 
+  // **프로젝트 폴더는 예약(부모)의 cwd 다**(runWorktrees 가 jobOf 로 읽는다). 그것과 Dispatch 의 cwd 가
+  // 한 폴더여야 "워크트리를 안 썼다" 가 된다 — 'D:/p' 와 '/p' 는 win32 에서만, 그것도 이 저장소가
+  // D: 에 있을 때만 같은 폴더로 풀렸다.
   it('쓴 워크트리가 없으면 낼 것이 없다', () => {
     const s: OrchState = stateFromLegacy({
-      runs: [{ id: 'run_tmpl', objective: 'o', cwd: 'D:/p', createdAt: '2026-08-21T00:00:00.000Z', schedule: { kind: 'daily' as const, time: '09:00' } }, run({ templateId: 'run_tmpl' })],
+      runs: [{ id: 'run_tmpl', objective: 'o', cwd: '/p', createdAt: '2026-08-21T00:00:00.000Z', schedule: { kind: 'daily' as const, time: '09:00' } }, run({ templateId: 'run_tmpl' })],
       tasks: [task('t1')],
       dispatches: [dispatch({ cwd: '/p' })]
     })
