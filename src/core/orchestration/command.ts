@@ -1019,9 +1019,10 @@ export async function handleCommand(
               error:
                 // One instruction (final review M6): a refusal from a retiring Host also says "start
                 // it again", and the CLI's own step for such a refusal is the same command. Here the
-                // same command would make another run, so the message says which one to use instead.
+                // same command does not help: the new run has Tasks, so it counts as running and a
+                // second `jobs run` is refused as already running. The message names the one that works.
                 `${failed.error ?? ''}. The new run ${runId} has no coordinator. Do not run \`jobs run\` ` +
-                `again, which would make another run; start this one with: astera run-start --run ${id}`,
+                `again, which is refused while this run is running; start this one with: astera run-start --run ${id}`,
               jobId: id,
               runId
             }

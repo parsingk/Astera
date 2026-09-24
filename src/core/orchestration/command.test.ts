@@ -5383,7 +5383,7 @@ describe('jobs run / questions answer', () => {
     expect(runs).toHaveLength(2)
     expect(runs[1].coordinatorSessionId).toBeUndefined()
     expect((r.body as { error: string }).error).toContain(`astera run-start --run ${jobId}`)
-    // M6 (final review): one instruction. `jobs run` again would make yet another run.
+    // M6 (final review): one instruction. `jobs run` again is refused while this run is running.
     expect((r.body as { error: string }).error).toMatch(/not run `jobs run` again/)
     expect(r.body).toMatchObject({ jobId, runId: runs[1].id })
 

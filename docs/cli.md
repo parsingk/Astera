@@ -144,8 +144,8 @@ shell with only a Host running: `worker-start`, `worker-start --worktree new`, `
 `worker-release` and `worker-read`. So does `run-start`, which starts a Job's coordinator again, and
 `jobs run` of a Job with a coordinator account and no schedule, which starts the new run's coordinator,
 for the first run and for every later one. If a later run's coordinator fails to start, that run stays
-without one, and the error names `astera run-start --run <jobId>`, which starts it. Do not run `jobs run`
-again for it: that makes another run. Either way, the Host
+without one, and the error names `astera run-start --run <jobId>`, which starts it. Running `jobs run`
+again does not help, because it is refused while that run is running. Either way, the Host
 makes the run's worktree itself if it does not have one yet. If the coordinator then fails to start, the
 Host removes that worktree again, and the failed start still answers the same way it always did. A
 `worker-start --worktree new` whose worker then fails to start has its new worktree removed the same

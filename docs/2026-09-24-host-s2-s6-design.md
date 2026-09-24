@@ -745,6 +745,13 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
 Each was found while building or reviewing S4+S5 and left as it is, with its reason. Checked at
 `d80492c`.
 
+- **A review whose verdict file is missing counts as no issues** (§8.2, kept by ruling). The final
+  review's C1 removed the cause it found (the spec sweep deleted an open review's `<spec>.review.json`);
+  any other loss of that file would still read a blocking finding as passed.
+- **A Task nobody checks stays `validating` or `reviewing` while any app is attached.** The Host opens
+  its restart Gate for it only once the last app has left (final review I1), and the app does not
+  recover it either: in front of a Host that drives, its resume sweep is off and it gates only at a
+  Host load it caused. The Gate comes within about 5 to 20 s of the last app closing.
 - **A parked Host is silent in the app.** The app yields to any Host that announces `dispatch`, parked
   or not, so while the Host is parked nothing dispatches, and nothing in the app says why (A38). A
   settings file damaged while the app runs parks the Host until Astera restarts and repairs it.
