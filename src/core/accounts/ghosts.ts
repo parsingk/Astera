@@ -20,7 +20,8 @@ const GHOST_CREATED_AT = new Date(0).toISOString()
  *  is not a comparison but an identifier that is stored: history entry ids embed it
  *  (`<accountId>:<sessionId>`), and the renderer keeps those ids in localStorage as the seen marks
  *  (HistoryBrowser, `cm.historySeen`). Folding on linux too keeps every stored mark pointing at its
- *  ghost; the cost is that two linux config dirs differing only in case would share a ghost id. */
+ *  ghost; the cost is that two linux config dirs differing only in case would share a ghost id, and
+ *  ghostAccounts keeps only the first of them (see there). */
 const normalizeDir = (p: string): string => path.resolve(p).toLowerCase()
 
 /**
@@ -33,14 +34,32 @@ const normalizeDir = (p: string): string => path.resolve(p).toLowerCase()
  * The caller decides what counts as a candidate. It must exclude registered directories (a registered
  * account already has a real Account) but NOT the dismissed ones: declining to suggest an account again
  * and showing its past history are separate requests.
+ *
+ * **One ghost per id, the first one kept.** On linux detection keeps `~/.claude-x` and `~/.Claude-x`
+ * apart, but their ids fold to one (normalizeDir). Two accounts with one id would have the second
+ * overwrite the first wherever the index groups by account id, and an entry id would resolve to a ghost
+ * whose folder does not hold that session. Keeping the first is what happened before detection learnt
+ * case on linux — it merged the two then. A per-folder exact-case id for the second was the other way
+ * out, but an id that depends on which of the two detection lists first is not stable across restarts,
+ * and stability is the point of the id.
  */
 export function ghostAccounts(candidates: DetectCandidate[]): Account[] {
-  return candidates.map((c) => ({
-    id: GHOST_ID_PREFIX + normalizeDir(c.configDir),
+  const seen = new Set<string>()
+  return candidates.flatMap((c) => {
+    const id = GHOST_ID_PREFIX + normalizeDir(c.configDir)
+    if (seen.has(id)) return []
+    seen.add(id)
+    return [ghostOf(id, c)]
+  })
+}
+
+function ghostOf(id: string, c: DetectCandidate): Account {
+  return {
+    id,
     label: c.suggestedLabel,
     configDir: c.configDir,
     provider: c.provider,
     color: GHOST_COLOR,
     createdAt: GHOST_CREATED_AT
-  }))
+  }
 }

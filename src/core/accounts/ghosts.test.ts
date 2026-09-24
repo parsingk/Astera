@@ -74,6 +74,16 @@ describe('ghostAccounts', () => {
     expect(Number.isNaN(Date.parse(a.createdAt))) .toBe(false) // 포맷터가 깨지지 않는 유효한 ISO
   })
 
+  // linux 의 감지는 대소문자만 다른 두 폴더를 따로 내지만 ghost id 는 접힌다. 같은 id 의 계정이 둘이면
+  // HistoryIndex 가 계정 id 로 모으는 목록에서 뒤의 것이 앞의 것을 덮는다 — 그래서 먼저 온 하나만 남긴다
+  it('id 가 같은 후보가 둘이면 먼저 온 것 하나만 남긴다', () => {
+    const first = candidate({ configDir: absPath('home', 'u', '.claude-x'), suggestedLabel: 'first' })
+    const second = candidate({ configDir: absPath('home', 'u', '.Claude-x'), suggestedLabel: 'second' })
+    const out = ghostAccounts([first, second])
+    expect(out.map((g) => g.label)).toEqual(['first'])
+    expect(new Set(out.map((g) => g.id)).size).toBe(out.length)
+  })
+
   it('후보가 없으면 빈 배열', () => {
     expect(ghostAccounts([])).toEqual([])
   })
