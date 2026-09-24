@@ -1334,8 +1334,10 @@ export async function handleCommand(
         ...(worktreesFailed.length > 0 ? { worktreesFailed } : {})
       })
     }
-    // 예약 템플릿의 한 회차를 만든다. **부르는 것은 앱의 ticker 뿐이다**(src/main/ipc.ts) —
-    // 코디네이터에게 이 명령을 광고하지 않는다. 그래도 명령으로 두는 이유는 이 파일이 지키는
+    // 예약 템플릿의 한 회차를 만든다. **부르는 것은 예약의 발화와 jobs-run 의 뒤 회차뿐이다** — 발화는
+    // core/orchestration/exec/dispatchLoop.ts 의 fireTick 이고, 앱의 타이머(src/main/ipc.ts)와 앱이
+    // 붙어 있을 때의 Host tick(src/host/driving.ts)이 그것을 돌린다. 코디네이터에게는 이 명령을
+    // 광고하지 않는다. 그래도 명령으로 두는 이유는 이 파일이 지키는
     // 규율이다: 상태를 쓰는 문은 하나이고, 그 문이 검증·커밋·감사 로그를 함께 지난다.
     // 사람이 '실행' 을 눌렀다. **부르는 것은 UI 뿐이다** — 코디네이터 Run 에는 pendingStart 가
     // 없으므로 이 명령이 할 일도 없다(startRun 이 그때 아무것도 바꾸지 않는다).
@@ -1414,7 +1416,7 @@ export async function handleCommand(
             // policyOf 로 판정한다, target.convergence !== undefined 가 아니다 — 손으로 고친
             // "convergence": null 은 !== undefined 로는 정책이 있다고 잘못 읽혀 코디네이터 브리핑이
             // "수렴 중인 Task 는 건드리지 말라"는 문단을 얻는데, 다른 모든 관문(reconciler.ts,
-            // ipc.ts 의 startValidation)은 이미 이 실수를 policyOf 로 고쳐 두었다 — 여기만 남아
+            // core/orchestration/exec/validation.ts 의 startValidation)은 이미 이 실수를 policyOf 로 고쳐 두었다 — 여기만 남아
             // 있었다(전체 브랜치 리뷰, Finding 2).
             // **`s` 가 아니라 방금 만든 회차가 들어 있는 상태로 묻는다.** `s` 는 명령 진입 시점의
             // 스냅샷이라 이 회차가 없고, 그러면 policyOf 가 회차를 찾지 못해 정책이 걸린 Job 도
@@ -1869,8 +1871,8 @@ export async function handleCommand(
       // 있다: CLI 에서 사람이 `--worktree current` 를 직접 쓸 수 있다.
       //
       // **다만 앱이 스스로 돌리는 Run(`run.autoDispatch`) 은 그 분기를 타면 안 된다.** 그런 Run 은
-      // 코디네이터가 없고, 앱이 언젠가 워크트리를 만들어 준다(runScheduler 가 첫 슬롯을 채우기
-      // 직전에) — `run.worktree` 가 아직 없다는 것은 "코디네이터가 원래부터 안 만든다"가 아니라
+      // 코디네이터가 없고, 앱이나 Host 가 언젠가 워크트리를 만들어 준다(exec/dispatchLoop.ts 의
+      // runScheduler 가 첫 슬롯을 채우기 직전에) — `run.worktree` 가 아직 없다는 것은 "코디네이터가 원래부터 안 만든다"가 아니라
       // "아직 시작 전"이라는 뜻이다. 그 상태에서 `--worktree` 없이 이 명령이 들어오면 위 로직대로
       // `'current'` 로 떨어져 워커가 프로젝트 폴더에서 돌게 된다 — 설계 2절이 금지하는 바로 그것
       // 이다. 되돌아갈 자리가 없으니 거절한다: `--worktree` 를 **명시적으로** 준 호출(값이 무엇이든,
@@ -2350,7 +2352,7 @@ export async function handleCommand(
         if (result.value === 'accepted' && settled?.status === 'validating' && dispatch)
           deps.startValidation?.({ taskId, cwd: dispatch.cwd })
         // 검증이 걸리지 않고 검토만 걸린 Task 는 여기서 곧바로 reviewing 이다. 검증이 걸린 Task 는
-        // 검증이 통과한 뒤 배선의 onSettled 가 같은 일을 한다(ipc.ts).
+        // 검증이 통과한 뒤 배선의 onSettled 가 같은 일을 한다(core/orchestration/exec/validation.ts).
         else if (result.value === 'accepted' && settled?.status === 'reviewing')
           deps.startReview?.({ taskId })
         return okBody(result.value)

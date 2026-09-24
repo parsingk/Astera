@@ -7,9 +7,11 @@
 // **rig() 는 src/main/ipc.ts 의 실제 배선(bootOrch)을 그대로 흉내 낸다** — task-14-brief.md 의 초안이
 // 아니라, 그 초안이 쓰인 뒤 아홉 개의 Task 가 인터페이스를 바꾼 지금의 ipc.ts 를 읽고 다시 짰다:
 //   - onSettled: repairTargetFor → applyValidationResult → **커밋** → (reviewing 이면 startReview,
-//     아니면 새 repair Dispatch 를 찾아 performRepair) — 커밋이 부수 효과보다 먼저다(ipc.ts 의 onSettled).
+//     아니면 새 repair Dispatch 를 찾아 performRepair) — 커밋이 부수 효과보다 먼저다(onSettled, 지금은
+//     core/orchestration/exec/validation.ts 에 있고 앱과 Host 가 같이 짓는다).
 //   - startReview: 검토 Dispatch 를 **커밋한 뒤에만** startWorker 를 부르고, 그 뒤에 sessionId·cwd·
-//     specPath 를 되읽어 patch 한다(ipc.ts 의 startReview) — performRepair 와 같은 규율. spec 본문은
+//     specPath 를 되읽어 patch 한다(createReviewStarter, 지금은 core/orchestration/exec/review.ts 에
+//     있다 — 아래의 사본은 그 함수를 부르지 않는다) — performRepair 와 같은 규율. spec 본문은
 //     production 의 buildReviewSpecFile·specFileName 을 그대로 불러 쓴다(review.json 경로가 앞뒤로
 //     일치하는지 확인하려면 손으로 흉내 낸 문자열이 아니라 진짜 조립기가 필요하다).
 //   - readReviewFile: 완성된 경로(`${specPath}.review.json`)를 받는다. suffix 를 붙이는 자리는
@@ -54,7 +56,7 @@ import type { Account } from '../../core/types'
 import type { Provider } from '../../core/providers/meta'
 
 // 세 계정, 두 provider. accA·accA2 는 구현자의 롤링 체인(계정을 갈아탈 순서, property 4) 이고,
-// accC 는 유일한 codex 계정이라 검토자로 뽑힌다 — ipc.ts 의 startReview 가 구현자와 다른 provider
+// accC 는 유일한 codex 계정이라 검토자로 뽑힌다 — exec/review.ts 의 createReviewStarter 가 구현자와 다른 provider
 // 에서만 검토자를 고르는 것과 같은 모양이다.
 const fullAccounts: Account[] = [
   { id: 'accA', label: 'A', provider: 'claude', configDir: 'C:/accA', color: '#111111', createdAt: '2026-01-01T00:00:00.000Z' },
@@ -157,7 +159,7 @@ function rig(initial: OrchState = emptyState()) {
     now: () => new Date().toISOString()
   }
 
-  // ipc.ts 의 startReview — 검토 Dispatch 를 **커밋한 뒤에만** startWorker 를 부르고, 그 뒤에
+  // exec/review.ts 의 createReviewStarter 를 본뜬 사본 — 검토 Dispatch 를 **커밋한 뒤에만** startWorker 를 부르고, 그 뒤에
   // sessionId·cwd·specPath 를 되읽어 patch 한다(property 1). spec 본문은 production 의
   // buildReviewSpecFile 을 그대로 부른다 — resultPath 를 그 함수가 실제로 문서에 박아 넣는 문자열
   // 그대로 얻어야, "그 문서가 말하는 자리" 와 "server.ts 가 실제로 읽는 자리" 가 같은지(property 2,
@@ -166,7 +168,7 @@ function rig(initial: OrchState = emptyState()) {
     const task = box.state.tasks.find((t) => t.id === taskId)
     if (task?.status !== 'reviewing') return
     // ruling F63 — 회차 게이트. **여기는 production 코드 그대로다**(createReviewGate 를 실제로 부른다):
-    // 판정도 거절도 그 파일이 들고 있고, ipc.ts 의 startReview 가 부르는 것과 같은 한 줄이다.
+    // 판정도 거절도 그 파일이 들고 있고, exec/review.ts 의 createReviewStarter 가 부르는 것과 같은 한 줄이다.
     if (await reviewGate.refuseIfRunGated({ taskId })) return
     const impl = box.state.dispatches
       .filter((d) => d.taskId === taskId && !d.review)
@@ -189,7 +191,7 @@ function rig(initial: OrchState = emptyState()) {
     )
     if (!opened.ok) return
     await setState(opened.state)
-    // ipc.ts 는 `<specsDir>/<specFileName(taskId, dispatchId)>.review.json` 을 짓는다 — 아래
+    // exec/review.ts 는 `<specsDir>/<specFileName(taskId, dispatchId)>.review.json` 을 짓는다 — 아래
     // startWorker 가 이 Dispatch 의 specPath 로 내는 값과 같은 함수·같은 인자를 쓴다.
     const resultPath = `${SPECS_DIR}/${specFileName(taskId, opened.value.id)}.review.json`
     const specFileContent = buildReviewSpecFile({

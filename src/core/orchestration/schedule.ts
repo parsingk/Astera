@@ -92,7 +92,7 @@ export function slotsToFill(s: OrchState): Slot[] {
  *
  *  **왜 따로 내는가.** slotsToFill 은 "지금 띄울 자리"를 내고, 계정 없는 Task 는 그 자리가 아니다.
  *  그런데 그것을 그냥 빼고 끝내면 Run 이 이유 없이 서 있는다 — 이 하위 시스템이 없애려는 증상
- *  그대로다(ipc.ts 의 gateSlot 주석). 그래서 같은 Run 필터를 지나되 답이 다른 두 함수로 가른다.
+ *  그대로다(core/orchestration/exec/dispatchLoop.ts 의 gateSlot 주석). 그래서 같은 Run 필터를 지나되 답이 다른 두 함수로 가른다.
  *
  *  **한 번만 열린다.** Gate 가 열리면 Task 는 blocked 로 가고(state.ts 의 createGate) 이 판정은
  *  ready 만 보므로 다음 바퀴에는 나오지 않는다. 사람이 계정을 넣고 Gate 를 풀면 다시 ready 가 되고

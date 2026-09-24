@@ -38,7 +38,7 @@ const usableIn =
  *
  * **지정이 있으면 그것이 이긴다.** 사람이 계정을 고른 것은 다른 계정을 피하려는 뜻일 수 있으므로,
  * 그 계정을 못 쓸 때 말없이 기본 계정으로 갈아타지 않는다 — 아끼려던 계정에 일이 가는 것은 고르지
- * 않은 것보다 나쁘다. 실패로 답하고, 부르는 쪽이 Gate 를 연다(ipc.ts 의 gateSlot — 스케줄러가
+ * 않은 것보다 나쁘다. 실패로 답하고, 부르는 쪽이 Gate 를 연다(core/orchestration/exec/dispatchLoop.ts 의 gateSlot — 스케줄러가
  * "로그인된 계정이 없다"에 이미 그렇게 한다).
  *
  * **provider 가 어긋난 지정은 체인에서 빠진다.** task-create 가 그 조합을 거절하지만 입력은 명령이
@@ -101,9 +101,9 @@ export function accountToDispatchOn(a: {
  * 순서다. 배선이 세션을 띄우기 직전에 이것을 물어 spawnSession 의 rollAccountIds 로 넘긴다.
  *
  * **요청된 계정과 Task 의 계정들을 합치는 규칙이 여기 하나로 있다.** 워커를 띄우는 길은 셋인데
- * (자동 배치, CLI 의 worker-start, 검토 Dispatch) 전부 배선의 한 래퍼로 모이고, 그 래퍼는 테스트가
- * 닿지 않는 파일에 있다(src/main/ipc.ts). 규칙이 그 안에 있으면 기계가 지킬 수 없으므로 순수 함수로
- * 꺼내 둔다 — accountToDispatchOn 과 같은 모양으로 계정 목록과 로그인 여부를 받는다.
+ * (자동 배치, CLI 의 worker-start, 검토 Dispatch) 전부 배선의 한 래퍼로 모인다(startWorkerWithChain,
+ * core/orchestration/exec/workerStart.ts). 이 규칙은 그 래퍼가 아직 테스트가 닿지 않는 src/main/ipc.ts
+ * 안에 있던 때, 기계가 지킬 수 있게 순수 함수로 꺼냈다 — accountToDispatchOn 과 같은 모양으로 계정 목록과 로그인 여부를 받는다.
  *
  * **요청된 계정이 언제나 첫 칸이다.** Dispatch 에 기록된 계정이 그것이므로, 체인의 첫 칸이 다른
  * 계정이면 롤링이 아는 "지금 계정"과 상태에 적힌 계정이 어긋난다. 그것을 지키는 것은 이제

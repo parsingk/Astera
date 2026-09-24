@@ -5,8 +5,8 @@
 // 이 파일의 rig 는 이제 두 프로세스다. **Host 쪽**은 core 의 `handleCommand` 를 그대로 돌린다 —
 // src/host/orch.ts 가 하는 일과 같다. **앱 쪽**은 `orch-state` 푸시를 받아 거울을 바꾸고
 // `createOrchCommitHook` 을 부른다(ipc.ts 의 그 핸들러와 같은 두 줄), 그리고 그 훅의 `schedule` 이
-// 진짜 `slotsToFill` 로 자리를 찾아 `worker-start` 를 보낸다 — ipc.ts 의 runScheduler 가 하는 일의
-// 핵심만. 가짜는 세션을 실제로 띄우는 `startWorker` 하나뿐이다.
+// 진짜 `slotsToFill` 로 자리를 찾아 `worker-start` 를 보낸다 — core/orchestration/exec/dispatchLoop.ts
+// 의 runScheduler 가 하는 일의 핵심만. 가짜는 세션을 실제로 띄우는 `startWorker` 하나뿐이다.
 import { describe, it, expect, vi } from 'vitest'
 import { createOrchCommitHook } from './commitHook'
 import { handleCommand, type OrchServerDeps } from '../../core/orchestration/command'
@@ -109,13 +109,14 @@ function rig(a: { wireCommitHook: boolean }): {
       appVersion: () => '1.0.0'
     }) as unknown as OrchServerDeps
 
-  /** ipc.ts 의 runScheduler 가 하는 일의 핵심 — 진짜 `slotsToFill` 로 자리를 찾아 `worker-start`
-   *  를 보낸다. 명령은 Host 의 command layer 가 받는다(지금 그쪽이 그 명령의 주인이다). */
+  /** core/orchestration/exec/dispatchLoop.ts 의 runScheduler 가 하는 일의 핵심 — 진짜 `slotsToFill` 로
+   *  자리를 찾아 `worker-start` 를 보낸다. 명령은 Host 의 command layer 가 받는다(지금 그쪽이 그
+   *  명령의 주인이다). */
   const schedule = (): void => {
     scheduleCount++
     void (async () => {
       for (const slot of slotsToFill(mirror.state)) {
-        // ipc.ts 의 그 호출과 같은 인자다(task·agent·account) — provider 는 계정 목록이 정한다.
+        // dispatchLoop.ts 의 그 호출과 같은 인자다(task·agent·account) — provider 는 계정 목록이 정한다.
         const rep = await handleCommand(hostDeps(), { sessionId: UI }, 'worker-start', {
           task: slot.taskId,
           agent: 'claude',

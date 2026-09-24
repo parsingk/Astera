@@ -1063,7 +1063,7 @@ describe('buildReviewSpecFile — 수렴 절', () => {
     expect(spec.indexOf('## Structured verdict')).toBeLessThan(spec.indexOf('## Reporting obligation'))
   })
 
-  // 전체 브랜치 리뷰, Finding 1 — resultPath 는 convergence Run 에서만 넘어온다(ipc.ts 의 startReview,
+  // 전체 브랜치 리뷰, Finding 1 — resultPath 는 convergence Run 에서만 넘어온다(exec/review.ts 의 createReviewStarter,
   // policyOf(...) !== null). 없는 Run 의 검토자에게 이 절을 실으면 아무도 읽지 않는 .review.json 을
   // 쓰라고 시키고, "파싱 실패는 사람에게 간다" 는 거짓을 말하게 된다 — 이 브랜치가 만드는 유일한
   // 무방비 진입점이었다.

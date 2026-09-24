@@ -453,7 +453,7 @@ export function RunDetail({
     setSelected((prev) => (prev === id ? null : id))
   }
 
-  /** 계정을 고른다 — 스케줄러(src/main/ipc.ts 의 runScheduler)와 같은 방법이다: 계정 목록과
+  /** 계정을 고른다 — 스케줄러(src/core/orchestration/exec/dispatchLoop.ts 의 runScheduler)와 같은 방법이다: 계정 목록과
    *  로그인 여부를 병렬로 확인한 뒤 defaultAccountIdOf(그 규칙을 정하는 단 하나의 함수)에게
    *  넘긴다. 로그인 조회를 계정마다 차례로 기다리면 계정 수만큼 느려지므로 Promise.all 로 편다. */
   const accountFor = async (
