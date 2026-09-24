@@ -8,6 +8,7 @@ import { startHostServer, type HostServer } from '../../host/server'
 import { encodeLine, createLineReader } from '../../host/framing'
 import { HOST_PROTOCOL, type HostMessage } from '../../core/host/protocol'
 import { HostClient } from './client'
+import { hostSpeaksDispatch } from './outdated'
 
 let dir: string
 let servers: HostServer[] = []
@@ -166,6 +167,28 @@ describe('HostClient', () => {
     expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toEqual(['worktrees', 'dispatch'])
     await c.stop()
     await host.close()
+  })
+
+  // Task 14 review I1: the app's `hostDrives()` over the real status. An unresponsive Host that announced
+  // dispatch is still driving, so the app keeps yielding; a real drop hands the drive back in the same
+  // turn the close is seen (the disconnect subscribers run after the status is set).
+  it('keeps a dispatch Host driving while unresponsive, and gives the drive back in the turn it drops', async () => {
+    const addr = addressFor('dispatch-drop')
+    const host = await rawHost(addr, ['proc', 'ping', 'spawn', 'worktrees', 'dispatch'])
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    c.start()
+    await settled(c, (st) => st.connected)
+    expect(hostSpeaksDispatch(c.status())).toBe(true)
+    c.markUnresponsive('the Host did not answer a ping')
+    expect(hostSpeaksDispatch(c.status())).toBe(true)
+    let atDrop: boolean | null = null
+    c.onDisconnect(() => {
+      atDrop ??= hostSpeaksDispatch(c.status())
+    })
+    await host.close()
+    await waitFor(() => atDrop !== null)
+    expect(atDrop).toBe(false)
+    await c.stop()
   })
 
   // An older Host's hello carries no `features` at all — absent means none, not a parse failure.

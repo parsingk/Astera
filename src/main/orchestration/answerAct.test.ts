@@ -102,13 +102,25 @@ describe('answerOrchAct', () => {
     }
   )
 
-  it('yielding dispatch touches only the three starts', async () => {
+  // Task 14 review I2: a real target with the start refused would leave a repair Dispatch open with no
+  // worker and no Gate. Null is the Host's own not-driving answer, and the verdict becomes the
+  // repairFailed Gate a person sees. Not `ok: false`: a refusal would lose the verdict.
+  it('an app that yields dispatch answers repairTargetFor with null, not a real target', async () => {
+    const repairTargetFor = vi.fn().mockReturnValue({ kind: 'same-session', sessionId: 's1' })
+    const r = await answerOrchAct({ deps: depsWith({ repairTargetFor }), act: 'repairTargetFor', args: ['t'], yieldsDispatch: true })
+    expect(r).toEqual({ ok: true, value: null })
+    expect(repairTargetFor).not.toHaveBeenCalled()
+    const before = await answerOrchAct({ deps: depsWith({ repairTargetFor }), act: 'repairTargetFor', args: ['t'], yieldsDispatch: false })
+    expect(before).toEqual({ ok: true, value: { kind: 'same-session', sessionId: 's1' } })
+  })
+
+  it('yielding dispatch leaves every other name alone, repairOnce included (R20)', async () => {
     const startWorker = vi.fn().mockResolvedValue({ sessionId: 's' })
-    const repairTargetFor = vi.fn().mockReturnValue(null)
+    const repairOnce = vi.fn().mockResolvedValue({ ok: true })
     expect((await answerOrchAct({ deps: depsWith({ startWorker }), act: 'startWorker', args: [{}], yieldsDispatch: true })).ok).toBe(true)
-    expect((await answerOrchAct({ deps: depsWith({ repairTargetFor }), act: 'repairTargetFor', args: ['t'], yieldsDispatch: true })).ok).toBe(true)
+    expect((await answerOrchAct({ deps: depsWith({ repairOnce }), act: 'repairOnce', args: [{ taskId: 't' }], yieldsDispatch: true })).ok).toBe(true)
     expect(startWorker).toHaveBeenCalled()
-    expect(repairTargetFor).toHaveBeenCalled()
+    expect(repairOnce).toHaveBeenCalled()
   })
 
   it('함수가 아닌 속성은 행동이 아니다', () => {

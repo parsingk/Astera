@@ -3391,7 +3391,7 @@ export function registerIpc(
       orchLog(
         `pending reports — ${pendingReports.length} left untouched: this launch paused work the old ` +
           `orchestration setting had parked, and applying a report can open a review on it. The next ` +
-          `start takes them.`
+          `start takes them, or, in front of a Host that drives dispatch, that Host's next load or handover.`
       )
     else if (pendingReports.length > 0) {
       // **Not in front of a Host that drives** (§4.2): its handover drains the same queue (Task 11's

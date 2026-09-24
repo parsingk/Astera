@@ -59,7 +59,18 @@ export function hostSpeaksWorktrees(status: { connected: boolean; features: read
  *  reports, the resume sweep, the schedule fires, the coordinator nudges, and the validation, review and
  *  repair that follow a report. The app yields all of that to such a Host (its hello says
  *  `HOST_YIELD_DISPATCH`) and keeps doing it in front of one that did not announce it (an S3 or S2
- *  Host, or none). Read live from the status, so it changes in the same turn the handshake does. */
-export function hostSpeaksDispatch(status: { connected: boolean; features: readonly string[] }): boolean {
-  return status.connected && status.features.includes(HOST_FEATURE_DISPATCH)
+ *  Host, or none). Read live from the status, so it changes in the same turn the handshake does.
+ *
+ *  **An unresponsive Host still counts** (Task 14 review I1). `markUnresponsive` sets `connected: false`
+ *  but keeps the socket and the features: the Host still sees a yielding app attached and still
+ *  drives, so an app that took the drive here would nudge the same coordinator twice and kill a Host
+ *  validation run with no mark. Nobody drives until the Host answers again, is replaced (a new hello
+ *  sets the features) or the connection drops (the close sets `unresponsive: false`, and the app
+ *  drives in that same turn). That is the safe side: every spawn goes through that Host anyway. */
+export function hostSpeaksDispatch(status: {
+  connected: boolean
+  unresponsive?: boolean
+  features: readonly string[]
+}): boolean {
+  return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_DISPATCH)
 }

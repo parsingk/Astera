@@ -54,13 +54,19 @@ export async function answerOrchAct(a: {
   // An app that yields dispatch does not run them then: the Task stays validating or reviewing, or its
   // repair Dispatch stays unstarted, and the Host that drives next restarts it (its handover's resume
   // sweep and repair belt, Task 12), the same way a retiring Host leaves it (Task 13). The cost if this
-  // is wrong is one Task waiting for the next Host start. The two reads (`repairTargetFor`,
-  // `repairOnce`) and everything else are answered as before.
+  // is wrong is one Task waiting for the next Host start. `repairTargetFor` answers null (below);
+  // `repairOnce`, a person's retry (R20), and everything else are answered as before.
   if (a.yieldsDispatch === true && YIELDED_STARTS.has(a.act))
     return {
       ok: false,
       error: `this app yields dispatch to the Host, so it does not run ${a.act}; the Task is left for the Host that drives next`
     }
+  // **And no repair target** (Task 14 review I2). `repairTargetFor` and `startRepair` switch together
+  // (the HOST_DRIVES comment in src/host/orchDeps.ts): a real target here opens a repair Dispatch whose
+  // start the line above then refuses, leaving it open with no worker and no Gate. Null is the Host's
+  // own not-driving answer (HOST_DRIVES_FALLBACK), so the verdict lands as the repairFailed Gate a
+  // person sees. Not `ok: false`: a refusal answers CONFLICT and the verdict is lost.
+  if (a.yieldsDispatch === true && a.act === 'repairTargetFor') return { ok: true, value: null }
   const fn = orchActionOf(a.deps, a.act)
   if (!fn)
     return {

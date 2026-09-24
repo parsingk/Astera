@@ -79,4 +79,11 @@ describe('hostSpeaksDispatch', () => {
     expect(hostSpeaksDispatch({ connected: true, features: ['spawn', 'worktrees'] })).toBe(false) // an S3 Host (D5)
     expect(hostSpeaksDispatch({ connected: false, features: ['dispatch'] })).toBe(false)
   })
+  // Task 14 review I1: an unresponsive Host still drives (it sees a yielding app attached), so the app
+  // keeps yielding until it answers, is replaced, or the connection drops.
+  it('hostSpeaksDispatch stays true while a Host that announced dispatch is unresponsive', () => {
+    expect(hostSpeaksDispatch({ connected: false, unresponsive: true, features: ['spawn', 'worktrees', 'dispatch'] })).toBe(true)
+    expect(hostSpeaksDispatch({ connected: false, unresponsive: true, features: ['spawn', 'worktrees'] })).toBe(false)
+    expect(hostSpeaksDispatch({ connected: false, unresponsive: false, features: ['spawn', 'worktrees', 'dispatch'] })).toBe(false)
+  })
 })
