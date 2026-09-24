@@ -177,15 +177,17 @@ and nothing is started or changed:
 With an older Astera open, one that does not yet make and merge worktrees itself, worktree work is
 still that Astera's. It, not the Host, makes and merges the worktrees these commands need.
 
-**Removing a worktree folder is refused while Astera is running somewhere but not connected to this
-Host.** The Host cannot see what a session, a terminal or a run that app is driving on its own is
-doing in that folder, so it will not delete the folder out from under it. The command ends with exit 6,
-and the message says to remove
-the worktree from the app instead, or to quit Astera and try again. This refusal happens before
-anything is touched, so it leaves no receipt behind: quitting Astera and running the same command with
-the same `--request-id` then really removes the folder. A refusal that comes after some folders were
-already removed does leave a receipt, since the command has acted by then. A crashed Astera does not
-count as running, so this only happens while Astera is genuinely still open somewhere.
+**Removing a worktree folder is refused while an Astera that writes `app.pid` is running somewhere but
+not connected to this Host.** The Host cannot see what a session, a terminal or a run that app is
+driving on its own is doing in that folder, so it will not delete the folder out from under it. The
+command ends with exit 6, and the message says to remove the worktree from the app instead, or to quit
+Astera and try again. This refusal happens before anything is touched, so it leaves no receipt behind:
+quitting Astera and running the same command with the same `--request-id` then really removes the
+folder. A refusal that comes after some folders were already removed does leave a receipt, since the
+command has acted by then. A crashed Astera does not count as running, so this only happens while
+Astera is genuinely still open somewhere. Only this version of Astera and newer write `app.pid`; an
+older Astera running unattached is invisible to this check (see "Known limits after S3" in the design
+doc).
 
 A worker Astera started in a Host session is the Host's to end, so with Astera closed `worker-stop`
 and `worker-release` still work on it.
