@@ -13,7 +13,10 @@ const SPEC =
 
 const resolveFrom = (file: string, spec: string): string | null => {
   const base = path.resolve(path.dirname(file), spec)
-  for (const c of [`${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts'), base])
+  // `./x.js` names `./x.ts`, the way the bundler's resolution reads it.
+  const js = /\.(m|c)?js$/.exec(base)
+  const source = js ? [base.slice(0, -js[0].length) + '.ts', base.slice(0, -js[0].length) + '.tsx'] : []
+  for (const c of [...source, `${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts'), base])
     if (existsSync(c) && /\.(ts|tsx|js|mjs|cjs)$/.test(c)) return c
   return null
 }
@@ -25,7 +28,9 @@ export function fenceViolations(srcRoot: string, starts: string[]): string[] {
   const walk = (file: string, chain: string[]): void => {
     if (seen.has(file)) return
     seen.add(file)
-    const text = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    // Line comments only. A block-comment strip reads the `/*` in a string such as a glob as a
+    // comment's start and removes every import up to the next `*/` (review of Task 1).
+    const text = readFileSync(file, 'utf8').replace(/^\s*\/\/.*$/gm, '')
     for (const m of text.matchAll(SPEC)) {
       if (m[2]) continue // `import type` / `export type`
       const spec = m[3] ?? m[4] ?? m[5] ?? m[6]
@@ -37,7 +42,11 @@ export function fenceViolations(srcRoot: string, starts: string[]): string[] {
       }
       if (!spec.startsWith('.')) continue
       const r = resolveFrom(file, spec)
-      if (!r) continue
+      // A file the walk cannot find is a file it did not read, so it cannot be called clean.
+      if (!r) {
+        out.push(`${here.join(' -> ')} -> ${spec} (unresolved)`)
+        continue
+      }
       const top = path.relative(srcRoot, r).split(path.sep)[0]
       if (top === 'main' || top === 'renderer') {
         out.push(`${here.join(' -> ')} -> ${path.relative(srcRoot, r)}`)
@@ -77,6 +86,36 @@ describe('the Host import fence (constraint 10)', () => {
       expect(v.join('\n')).toMatch(/chokidar/)
       expect(v.join('\n')).toMatch(/main[\\/]m\.ts/)
       expect(v.join('\n')).not.toMatch(/main[\\/]x\.ts/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Review of Task 1: a relative import the walk cannot find is a file it did not read, so it must
+  // not pass. A `.js` specifier names its `.ts` source, as the bundler resolves it.
+  it('reports a relative import it cannot resolve, and follows a .js specifier to its .ts source', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'astera-fence-'))
+    try {
+      for (const d of ['host', 'core']) mkdirSync(path.join(dir, d))
+      writeFileSync(path.join(dir, 'host', 'a.ts'), "import { a } from '../main/host/client.js'\nimport { b } from '../core/b.js'\n")
+      writeFileSync(path.join(dir, 'core', 'b.ts'), "import { net } from 'electron'\nexport const b = net\n")
+      const v = fenceViolations(dir, [path.join(dir, 'host', 'a.ts')])
+      expect(v).toHaveLength(2)
+      expect(v.join('\n')).toMatch(/main\/host\/client\.js/)
+      expect(v.join('\n')).toMatch(/core[\\/]b\.ts -> electron/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Review of Task 1: a `/*` inside a string is not a comment. Stripping block comments ran from it
+  // to the next `*/` and hid the require between them.
+  it('does not lose an import behind a string that contains /*', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'astera-fence-'))
+    try {
+      mkdirSync(path.join(dir, 'host'))
+      writeFileSync(path.join(dir, 'host', 'a.ts'), "export const glob = 'src/*'\nrequire('electron')\n/** doc */\nexport const x = 1\n")
+      expect(fenceViolations(dir, [path.join(dir, 'host', 'a.ts')])).toEqual([`${path.join('host', 'a.ts')} -> electron`])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

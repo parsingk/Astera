@@ -133,6 +133,11 @@ export interface HostServer {
    *  names. Whatever role the socket gave: an app old enough to send no role greets as a CLI and still
    *  holds ptys, and it yielded nothing, so it keeps every duty. */
   yieldsOf(socketNo: number): ReadonlySet<string> | null
+  /** How many sockets the number index behind `yieldsOf` holds: every connection, greeted or not,
+   *  until it closes. For the tests: `yieldsOf` answers null for a closed socket either way, so only
+   *  this count shows the index forgetting it, and an index that did not would grow by one for every
+   *  CLI call for as long as the Host lives. */
+  knownSockets(): number
 }
 
 /** How long a peer that has connected but said nothing gets before the Host hangs up on it. */
@@ -490,6 +495,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       if (!s || s.destroyed || !greetedSockets.has(s)) return null
       return yields.get(s) ?? null
     },
+    knownSockets: () => socketByNo.size,
     act: (name, args) =>
       new Promise((resolve, reject) => {
         const sock = appSocket()

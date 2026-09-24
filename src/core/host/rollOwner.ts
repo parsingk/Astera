@@ -7,7 +7,7 @@ export interface MayActInput {
   retiring: boolean
   /** The sockets holding the pty (exits.holdersOf). */
   holders: readonly number[]
-  /** What a socket yielded in its hello, or null for a socket that is gone. */
+  /** What a socket yielded in its hello, or null for a socket that is gone or never greeted. */
   yieldsOf(socket: number): ReadonlySet<string> | null
 }
 

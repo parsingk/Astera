@@ -716,6 +716,44 @@ describe('startHostServer', () => {
       await vi.waitFor(() => expect(h.s.yieldsOf(seen[0])).toBeNull())
     })
 
+    it('forgets a socket by its number when it closes, greeted or not (S6 R1, review of Task 1)', async () => {
+      const h = await server()
+      expect(h.s.knownSockets()).toBe(0)
+      const greetedSock = net.connect(h.address)
+      await new Promise((r) => greetedSock.once('connect', r))
+      const ch = messageChannel(greetedSock)
+      ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app', yields: ['rolling'] } as ClientMessage)
+      await ch.next()
+      const silent = net.connect(h.address)
+      await new Promise((r) => silent.once('connect', r))
+      await vi.waitFor(() => expect(h.s.knownSockets()).toBe(2))
+      greetedSock.end()
+      silent.end()
+      await vi.waitFor(() => expect(h.s.knownSockets()).toBe(0))
+    })
+
+    it('answers null for every socket once the server has closed (S6 R1, review of Task 1)', async () => {
+      const seen: number[] = []
+      const h = await server({
+        onMessage: (m, _send, from) => {
+          if (m.t === 'pty-list') seen.push(from.socket)
+          return false
+        }
+      })
+      const sock = net.connect(h.address)
+      sock.on('error', () => {})
+      await new Promise((r) => sock.once('connect', r))
+      const ch = messageChannel(sock)
+      ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app', yields: ['rolling'] } as ClientMessage)
+      await ch.next()
+      ch.send({ t: 'pty-list' })
+      await vi.waitFor(() => expect(seen).toHaveLength(1))
+      expect(h.s.yieldsOf(seen[0])?.has('rolling')).toBe(true)
+      await h.s.close()
+      expect(h.s.yieldsOf(seen[0])).toBeNull()
+      expect(h.s.knownSockets()).toBe(0)
+    })
+
     it('does not count a CLI as an app that keeps anything', async () => {
       const h = await start()
       await h.connect('cli')
