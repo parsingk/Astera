@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ProcRegistry, PROC_BUFFER_CHARS, type RegistryProc } from './procRegistry'
+import { ProcRegistry, PROC_BUFFER_CHARS, DEAD_ENTRIES_KEPT, type RegistryProc } from './procRegistry'
 import type { PtyMeta } from '../core/host/protocol'
 
 const meta = (over: Partial<PtyMeta> = {}): PtyMeta => ({ kind: 'chat', id: 'chat_1', restore: { accountId: 'a1' }, ...over })
@@ -166,5 +166,83 @@ describe('ProcRegistry — notes, kill, killAll', () => {
     h.registry.killAll()
     expect(h.procs[1].killed).toBe(true)
     expect(h.logs.some((l) => l.includes('proc p1 could not be killed'))).toBe(true)
+  })
+})
+
+// Host S3 R8 and the M4 carry, for line processes: the same two questions PtyRegistry answers.
+describe('ProcRegistry — what each live process runs in, and how many ended ones are kept', () => {
+  /** A registry whose processes the test ends by id. */
+  const rig = (): { reg: ProcRegistry; exit(id: string, code: number): void } => {
+    const procs = new Map<string, ReturnType<typeof fakeProc>>()
+    let opening = ''
+    const reg = new ProcRegistry({
+      spawn: () => {
+        const p = fakeProc()
+        procs.set(opening, p)
+        return p
+      },
+      log: () => {}
+    })
+    const open = reg.open.bind(reg)
+    reg.open = (a) => {
+      opening = a.id
+      return open(a)
+    }
+    return { reg, exit: (id, code) => procs.get(id)!.exit(code) }
+  }
+
+  it('names the folder each live process was opened in, and forgets it once it ends', () => {
+    const { reg, exit } = rig()
+    reg.open({ id: 'p1', file: 'x', args: [], opts: { cwd: 'D:/wt/a', env: {} }, meta: { kind: 'chat', id: 'c1', restore: { title: 't' } } })
+    reg.open({ id: 'p2', file: 'x', args: [], opts: { cwd: 'D:/p', env: {} } })
+    expect(reg.liveEntries()).toEqual([
+      { id: 'p1', cwd: 'D:/wt/a', meta: { kind: 'chat', id: 'c1', restore: { title: 't' } } },
+      { id: 'p2', cwd: 'D:/p', meta: null }
+    ])
+    exit('p1', 0)
+    expect(reg.liveEntries().map((e) => e.id)).toEqual(['p2'])
+  })
+
+  // An ended chat is read by its session id: `sessions list` shows it, and `sessions read` finds its
+  // transcript through its note (host/sessions.ts `chatOf`). So a chat is kept the way a pty session
+  // is, and only the other ended entries are capped.
+  it('keeps only the newest ended entries that are not sessions, and every ended chat', () => {
+    const { reg, exit } = rig()
+    const open = (id: string, m: PtyMeta | undefined): void => {
+      reg.open({ id, file: 'x', args: [], opts: { cwd: 'D:/p', env: {} }, meta: m })
+    }
+    open('c0', { kind: 'chat', id: 'm_c0', restore: {} })
+    exit('c0', 1)
+    open('first', undefined)
+    for (let i = 0; i < DEAD_ENTRIES_KEPT + 6; i++) {
+      open(`r${i}`, i % 2 === 0 ? undefined : { kind: 'run', id: `m_r${i}`, restore: {} })
+      exit(`r${i}`, 0)
+    }
+    open('live', undefined)
+    const ids = reg.list().map((e) => e.id)
+    expect(ids).toContain('c0')
+    expect(ids).toContain('first')
+    expect(ids).toContain('live')
+    expect(ids.filter((id) => /^r\d+$/.test(id))).toHaveLength(DEAD_ENTRIES_KEPT)
+    expect(ids).not.toContain('r0')
+    expect(ids).not.toContain('r5')
+    expect(ids).toContain('r6')
+  })
+
+  it('drops the entry that ended longest ago, not the one opened first', () => {
+    const { reg, exit } = rig()
+    const open = (id: string): void => {
+      reg.open({ id, file: 'x', args: [], opts: { cwd: 'D:/p', env: {} } })
+    }
+    open('long')
+    for (let i = 0; i < DEAD_ENTRIES_KEPT; i++) {
+      open(`r${i}`)
+      exit(`r${i}`, 0)
+    }
+    exit('long', 1)
+    const ids = reg.list().map((e) => e.id)
+    expect(ids).toContain('long')
+    expect(ids).not.toContain('r0')
+    expect(ids).toHaveLength(DEAD_ENTRIES_KEPT)
   })
 })

@@ -56,11 +56,19 @@ export type RegistrySpawn = (file: string, args: string[] | string, opts: PtyOpe
  *  2,500 lines of 100 characters. */
 export const SCROLLBACK_CHARS = 256_000
 
+/** How many ended entries that are not agent sessions are kept (M4). Ended sessions are always kept:
+ *  the spawner's `held`, `sessionExitCode` and the handover sweep read them. */
+export const DEAD_ENTRIES_KEPT = 64
+
 interface Entry {
   id: string
   pty: RegistryPty
   pid: number
   meta: PtyMeta | null
+  /** The folder this pty was opened in (`opts.cwd`). The Host's "is this folder in use" reads it
+   *  (host S3 ruling R8): only a session's note carries a cwd, and a run or a shell tab in a worktree
+   *  holds that folder just as much. */
+  cwd: string
   buffer: string
   alive: boolean
   /** The size the app last gave this pty — at spawn, then at every resize. `sessions read` renders
@@ -89,6 +97,8 @@ export interface PtyRegistryDeps {
 
 export class PtyRegistry {
   private readonly entries = new Map<string, Entry>()
+  /** The ended entries that are not sessions, oldest ending first (`pruneEnded`). */
+  private readonly endedOrder = new Set<string>()
   // Sets, not single slots: attachPtyHost broadcasts to the clients and the Host's own spawner reads
   // the same output and exits, and a second subscriber must not silently disconnect the first.
   private readonly dataCbs = new Set<(id: string, data: string) => void>()
@@ -139,6 +149,7 @@ export class PtyRegistry {
       pty,
       pid: pty.pid,
       meta: a.meta ?? null,
+      cwd: a.opts.cwd,
       buffer: '',
       alive: true,
       cols: a.opts.cols,
@@ -167,14 +178,35 @@ export class PtyRegistry {
       // The scrollback goes with the session. The Host outlives the app, so an entry kept for the rest
       // of the Host's life is a quarter of a million characters kept for the rest of the Host's life,
       // and a project that runs a build every minute would leave a great many of them. The entry
-      // itself stays: it is a few fields, and `list` reporting a session as gone is how the app tells
-      // "it ended while I was away" from "it was never here".
+      // itself stays for a while: it is a few fields, and `list` reporting a pty as gone is how the
+      // app tells "it ended while I was away" from "it was never here", and how a late `pty-attach`
+      // is answered with the exit it missed. **An ended session stays for good**, because the
+      // spawner's `held`, `sessionExitCode` and the handover sweep ask for it by session id at any
+      // later time; any other ended entry stays until DEAD_ENTRIES_KEPT newer ones have ended
+      // (`pruneEnded`, M4).
       entry.buffer = ''
       this.deps.log(`pty ${a.id} exited ${exitCode}`)
       for (const cb of this.exitCbs) this.tell(cb, 'exit', a.id, () => cb(a.id, exitCode))
+      // After the listeners, which read this entry's note. It is the newest ended one now, so it is
+      // never the one that goes.
+      if (entry.meta?.kind !== 'session') this.pruneEnded(a.id)
     })
     this.deps.log(`pty ${a.id} started, pid ${pty.pid}`)
     return { ok: true, pid: pty.pid }
+  }
+
+  /** Records that `id`, an entry that is not a session, has just ended, and drops the one that ended
+   *  longest ago once more than DEAD_ENTRIES_KEPT have (M4). **By ending order, not opening order**:
+   *  a dev server opened at the Host's start and ending after a day of builds is the newest ended
+   *  entry, and a late `pty-attach` for it must still be answered with its exit. Set and Map
+   *  operations only, so nothing here can throw into node-pty's exit callback. */
+  private pruneEnded(id: string): void {
+    this.endedOrder.add(id)
+    for (const old of this.endedOrder) {
+      if (this.endedOrder.size <= DEAD_ENTRIES_KEPT) return
+      this.endedOrder.delete(old)
+      this.entries.delete(old)
+    }
   }
 
   /** Calls one listener and keeps its throw to itself. **The registry owns the fan-out, so it is the
@@ -310,6 +342,14 @@ export class PtyRegistry {
 
   list(): PtyEntry[] {
     return [...this.entries.values()].map((e) => ({ id: e.id, pid: e.pid, meta: e.meta, alive: e.alive }))
+  }
+
+  /** Every live entry with the folder it was opened in (`opts.cwd`) and its note. For "is this folder
+   *  in use" (host/worktrees.ts) and for closing the sessions in a worktree. */
+  liveEntries(): Array<{ id: string; cwd: string; meta: PtyMeta | null }> {
+    const out: Array<{ id: string; cwd: string; meta: PtyMeta | null }> = []
+    for (const e of this.entries.values()) if (e.alive) out.push({ id: e.id, cwd: e.cwd, meta: e.meta })
+    return out
   }
 
   liveCount(): number {

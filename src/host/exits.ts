@@ -34,7 +34,7 @@ export function ptyHeldBy(m: ClientMessage): string | null {
 }
 
 export interface HostExitsDeps {
-  registry: Pick<PtyRegistry, 'onExit' | 'metaOf' | 'sessionPty' | 'sessionExitCode'>
+  registry: Pick<PtyRegistry, 'onExit' | 'metaOf' | 'sessionPty' | 'sessionExitCode' | 'exitCodeOf'>
   sessionExited(e: { sessionId: string; exitCode: number }): Promise<void>
   orphanedSessions(isAlive: (sessionId: string) => boolean): string[]
   log(m: string): void
@@ -43,7 +43,8 @@ export interface HostExitsDeps {
 }
 
 export interface HostExits {
-  /** A socket spawned or attached this pty (`ptyHeldBy`), so its exit is that client's. */
+  /** A socket spawned or attached this pty (`ptyHeldBy`), so its exit is that client's. A pty that
+   *  has already ended makes no mark. */
   heldBy(ptyId: string, socket: number): void
   /** A socket closed: its marks go, and if it ever held a pty the handover runs after the defer. */
   appGone(socket: number): void
@@ -86,6 +87,10 @@ export function createHostExits(d: HostExitsDeps): HostExits {
 
   return {
     heldBy(ptyId, socket) {
+      // A pty that has already ended is not held (T12-review M5): the attach that arrives after the
+      // exit (A3) is answered with that exit, no exit will ever release this mark, and the pty's end
+      // was already handed to whoever held it then or handled here.
+      if (d.registry.exitCodeOf(ptyId) !== null) return
       const set = holders.get(ptyId) ?? new Set<number>()
       set.add(socket)
       holders.set(ptyId, set)

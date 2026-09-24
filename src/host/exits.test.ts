@@ -248,4 +248,18 @@ describe('createHostExits', () => {
     expect(h.logs.join('\n')).toMatch(/sweep broke/)
     expect(rejecting.logs.join('\n')).toMatch(/exit rejected/)
   })
+
+  // T12-review M5: a pty-attach that arrives after the exit (A3) marked the socket as a holder of a pty
+  // that can never exit again, so the mark was never released by an exit and the socket's close ran a
+  // sweep that had nothing of its own to hand over.
+  it('makes no mark, and so runs no handover, for a socket that only attached a pty that had ended', async () => {
+    const orphaned = vi.fn(() => [])
+    const h = rig({ orphaned })
+    h.open('p1', { kind: 'session', id: 'ses_1', restore: {} })
+    h.exit('p1', 0)
+    h.exits.heldBy('p1', 7) // the pty-attach that arrived after the exit (A3)
+    h.exits.appGone(7)
+    await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS)
+    expect(orphaned).not.toHaveBeenCalled()
+  })
 })

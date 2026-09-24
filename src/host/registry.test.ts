@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { PtyRegistry, SCROLLBACK_CHARS, type RegistryPty } from './registry'
+import { PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, type RegistryPty } from './registry'
 import type { PtyMeta } from '../core/host/protocol'
 
 const meta = (over: Partial<PtyMeta> = {}): PtyMeta => ({ kind: 'terminal', id: 'trm_1', restore: { projectPath: 'D:/p' }, ...over })
@@ -447,5 +447,91 @@ describe('the last screen of a session that ended badly', () => {
     p.exit(undefined as unknown as number)
     expect(h.r.sessionExitCode('ses_1')).toEqual({ code: null })
     expect(h.r.sessionExitCode('nope')).toBeNull()
+  })
+})
+
+// Host S3 R8 and the M4 carry: the Host judges "is this folder in use" from what its live ptys were
+// opened in, and a Host that outlives many builds must not keep every one of them.
+describe('what each live pty runs in, and how many ended ones are kept', () => {
+  /** A registry whose ptys the test ends by id. */
+  const rig = (): { reg: PtyRegistry; exit(id: string, code: number): void } => {
+    const ptys = new Map<string, ReturnType<typeof fakePty>>()
+    let opening = ''
+    const reg = new PtyRegistry({
+      spawn: () => {
+        const p = fakePty()
+        ptys.set(opening, p)
+        return p
+      },
+      log: () => {}
+    })
+    const open = reg.open.bind(reg)
+    reg.open = (a) => {
+      opening = a.id
+      return open(a)
+    }
+    return { reg, exit: (id, code) => ptys.get(id)!.exit(code) }
+  }
+
+  it('names the folder each live pty was opened in, and forgets it once it ends', () => {
+    const { reg, exit } = rig()
+    reg.open({ id: 'p1', file: 'x', args: [], opts: { cwd: 'D:/wt/a', cols: 80, rows: 24, env: {} }, meta: { kind: 'run', id: 'r1', restore: { configName: 'dev' } } })
+    reg.open({ id: 'p2', file: 'x', args: [], opts: { cwd: 'D:/p', cols: 80, rows: 24, env: {} } })
+    expect(reg.liveEntries()).toEqual([
+      { id: 'p1', cwd: 'D:/wt/a', meta: { kind: 'run', id: 'r1', restore: { configName: 'dev' } } },
+      { id: 'p2', cwd: 'D:/p', meta: null }
+    ])
+    exit('p1', 0)
+    expect(reg.liveEntries().map((e) => e.id)).toEqual(['p2'])
+  })
+
+  // M4: a project that runs a build every minute must not grow the Host for the rest of its life.
+  it('keeps only the newest ended entries that are not sessions, and every ended session', () => {
+    const { reg, exit } = rig()
+    const open = (id: string, kind: 'run' | 'session'): void => {
+      reg.open({ id, file: 'x', args: [], opts: { cwd: 'D:/p', cols: 80, rows: 24, env: {} }, meta: { kind, id: `m_${id}`, restore: {} } })
+    }
+    open('s0', 'session')
+    exit('s0', 1)
+    // Live and older than every ended one: age alone never evicts.
+    open('first', 'run')
+    for (let i = 0; i < DEAD_ENTRIES_KEPT + 6; i++) {
+      open(`r${i}`, 'run')
+      exit(`r${i}`, 0)
+    }
+    open('live', 'run')
+    const ids = reg.list().map((e) => e.id)
+    expect(ids).toContain('s0')
+    expect(ids).toContain('first')
+    expect(ids).toContain('live')
+    expect(ids.filter((id) => /^r\d+$/.test(id))).toHaveLength(DEAD_ENTRIES_KEPT)
+    expect(ids).not.toContain('r0')
+    expect(ids).not.toContain('r5')
+    expect(ids).toContain('r6')
+    expect(reg.sessionExitCode('m_s0')).toEqual({ code: 1 })
+    // The pty that just ended is the newest ended one, so a late attach still hears its exit.
+    expect(reg.exitCodeOf(`r${DEAD_ENTRIES_KEPT + 5}`)).toEqual({ code: 0 })
+  })
+
+  // Opening order is not ending order: a dev server opened at the Host's start that ends after a day
+  // of builds is the newest ended entry, and a late pty-attach for it must still hear its exit.
+  it('drops the entry that ended longest ago, not the one opened first', () => {
+    const { reg, exit } = rig()
+    const open = (id: string): void => {
+      reg.open({ id, file: 'x', args: [], opts: { cwd: 'D:/p', cols: 80, rows: 24, env: {} }, meta: { kind: 'run', id: `m_${id}`, restore: {} } })
+    }
+    open('server')
+    for (let i = 0; i < DEAD_ENTRIES_KEPT; i++) {
+      open(`r${i}`)
+      exit(`r${i}`, 0)
+    }
+    exit('server', 1)
+    expect(reg.exitCodeOf('server')).toEqual({ code: 1 })
+    expect(reg.exitCodeOf('r0')).toBeNull()
+    expect(reg.list()).toHaveLength(DEAD_ENTRIES_KEPT)
+  })
+
+  it('keeps the cap the design fixed', () => {
+    expect(DEAD_ENTRIES_KEPT).toBe(64)
   })
 })

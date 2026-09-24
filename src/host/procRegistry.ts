@@ -2,10 +2,17 @@
 // restarts the way PtyRegistry keeps ptys (chat-sessions design §6.5). The same shape as that
 // registry with the terminal parts removed — no size, no pause — and lines where it has bytes.
 //
-// Imports nothing outside core/host, for the reason registry.ts states: this bundles into the Host's
-// own executable.
+// Imports nothing outside core/host and this folder, for the reason registry.ts states: this bundles
+// into the Host's own executable.
 import type { PtyEntry, PtyMeta, ProcOpenOptions } from '../core/host/protocol'
 import { createLineSplitter, type LineSplitter } from '../core/host/lines'
+import { DEAD_ENTRIES_KEPT } from './registry'
+
+/** The same cap as PtyRegistry's (M4), one number for both. **Here an ended chat is what is always
+ *  kept**, where PtyRegistry keeps an ended session: `sessions list` shows an ended chat and
+ *  `sessions read` finds its transcript through its note, both by its session id (host/sessions.ts
+ *  `chatOf`). Every other ended entry is capped. */
+export { DEAD_ENTRIES_KEPT }
 
 /** The process surface the registry needs. child_process's ChildProcess is wrapped into it by
  *  nodeProc.ts; a test's fake satisfies it directly. Output arrives as chunks — the registry, not the
@@ -30,6 +37,8 @@ interface Entry {
   proc: RegistryProc
   pid: number
   meta: PtyMeta | null
+  /** The folder this process was opened in (`opts.cwd`), for "is this folder in use" (host S3 R8). */
+  cwd: string
   lines: Array<{ seq: number; line: string }>
   /** The last seq stamped; the next line gets seq + 1. */
   seq: number
@@ -48,6 +57,8 @@ export interface ProcRegistryDeps {
 
 export class ProcRegistry {
   private readonly entries = new Map<string, Entry>()
+  /** The ended entries that are not chats, oldest ending first (`pruneEnded`). */
+  private readonly endedOrder = new Set<string>()
   private lineCb: (id: string, seq: number, line: string) => void = () => {}
   private exitCb: (id: string, exitCode: number, stderrTail?: string) => void = () => {}
   private readonly deps: ProcRegistryDeps
@@ -80,6 +91,7 @@ export class ProcRegistry {
       proc,
       pid: proc.pid,
       meta: a.meta ?? null,
+      cwd: a.opts.cwd,
       lines: [],
       seq: 0,
       chars: 0,
@@ -96,10 +108,14 @@ export class ProcRegistry {
       entry.alive = false
       // The buffer goes with the process, as a pty's scrollback does: the entry stays so `list` can
       // say "it ended while you were away", but a million characters per ended process would be kept
-      // for the rest of the Host's life otherwise.
+      // for the rest of the Host's life otherwise. An ended chat stays for good; any other ended
+      // entry until DEAD_ENTRIES_KEPT newer ones have ended (`pruneEnded`, M4).
       entry.lines = []
       entry.chars = 0
       this.deps.log(`proc ${a.id} exited ${exitCode}`)
+      // Before the listener, which is a single slot nothing isolates: a throw there must not leave
+      // this entry uncounted. It is the newest ended one, so the listener still finds it.
+      if (entry.meta?.kind !== 'chat') this.pruneEnded(a.id)
       this.exitCb(a.id, exitCode, stderrTail)
     })
     this.deps.log(`proc ${a.id} started, pid ${proc.pid}`)
@@ -120,6 +136,16 @@ export class ProcRegistry {
       entry.truncated = true
     }
     this.lineCb(entry.id, seq, line)
+  }
+
+  /** PtyRegistry.pruneEnded's rule: by ending order, Set and Map operations only. */
+  private pruneEnded(id: string): void {
+    this.endedOrder.add(id)
+    for (const old of this.endedOrder) {
+      if (this.endedOrder.size <= DEAD_ENTRIES_KEPT) return
+      this.endedOrder.delete(old)
+      this.entries.delete(old)
+    }
   }
 
   private live(id: string): Entry | null {
@@ -152,6 +178,14 @@ export class ProcRegistry {
 
   list(): PtyEntry[] {
     return [...this.entries.values()].map((e) => ({ id: e.id, pid: e.pid, meta: e.meta, alive: e.alive, truncated: e.truncated }))
+  }
+
+  /** Every live entry with the folder it was opened in (`opts.cwd`) and its note. For "is this folder
+   *  in use" (host/worktrees.ts). */
+  liveEntries(): Array<{ id: string; cwd: string; meta: PtyMeta | null }> {
+    const out: Array<{ id: string; cwd: string; meta: PtyMeta | null }> = []
+    for (const e of this.entries.values()) if (e.alive) out.push({ id: e.id, cwd: e.cwd, meta: e.meta })
+    return out
   }
 
   liveCount(): number {
