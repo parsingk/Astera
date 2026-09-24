@@ -62,6 +62,8 @@ interface RigOpts {
   coordinatorMail?: boolean
   /** Run 워크트리가 아직 없다 — 루프가 게으르게 만든다. */
   runWithoutWorktree?: boolean
+  /** 끝난 예약 회차 하나 — 워크트리를 걷을 대상이다(reapableChildRuns). */
+  reapableChild?: boolean
 }
 
 const TEMPLATE_ID = 'job_sched'
@@ -122,6 +124,12 @@ function fixture(o: RigOpts): OrchState {
       message({ id: 'msg_up', type: 'status', createdAt: new Date(NOW_MS - 120_000).toISOString() })
     ]
   }
+  if (o.reapableChild) {
+    // 예약 Job 의 회차 하나. Task 가 전부 completed 이고 열린 Dispatch 가 없으므로 outcomeOf 가 completed 다.
+    state.jobs = [...state.jobs, { id: 'job_rc', objective: 'scheduled', cwd: '/p', createdAt: NOW, schedule: { kind: 'interval', minutes: 60 } }]
+    state.runs = [...state.runs, { id: 'run_rc', jobId: 'job_rc', ordinal: 1, createdAt: NOW, worktree: '/wt-child' }]
+    state.tasks = [...state.tasks, task({ id: 'tsk_rc', runId: 'run_rc', jobId: 'job_rc', status: 'completed' })]
+  }
   return state
 }
 
@@ -131,6 +139,7 @@ function rig(o: RigOpts = {}) {
   let state = fixture(o)
   const cmds: string[] = []
   const typed: string[] = []
+  const reaped: string[] = []
   const forked: { repoPath: string; name: string }[] = []
   let calls = 0
   let inFlight = 0
@@ -181,8 +190,11 @@ function rig(o: RigOpts = {}) {
       return '/wt-forked'
     },
     integrate: async () => ({ kind: 'clean' }) as never,
-    reap: async () => true,
-    isRegisteredWorktree: () => false,
+    reap: async (p) => {
+      reaped.push(p)
+      return true
+    },
+    isRegisteredWorktree: (p) => p === '/wt-child',
     sessionAlive: () => true,
     sessionBusy: () => false,
     typeInto: (_id, text) => {
@@ -214,6 +226,7 @@ function rig(o: RigOpts = {}) {
     real,
     startWorker,
     typed,
+    reaped,
     forked,
     templateRunId: TEMPLATE_ID,
     state: () => state,
@@ -391,5 +404,84 @@ describe('createDispatchLoop', () => {
     await h.settle()
     expect(h.forked).toHaveLength(1)
     expect(h.handled().slice(0, 2)).toEqual(['run-worktree-set', 'worker-start'])
+  })
+
+  // Review m3: the re-read after run-worktree-set is what puts the first worker in the new Run worktree.
+  // A stale `run` has no worktree, so runRootOf answers the project folder (/p).
+  it('starts the first worker of a lazily forked Run in the Run worktree, not the project folder', async () => {
+    const h = rig({ runWithoutWorktree: true })
+    await h.loop.run()
+    await h.settle()
+    expect(h.startWorker).toHaveBeenCalledTimes(1)
+    expect(h.startWorker.mock.calls[0][0].worktree).toBe('/wt-forked')
+  })
+
+  // Review m2: the `finally` that clears the re-entrancy flag. A pass that throws must not leave the
+  // loop believing it is still running, or no later pass would ever run.
+  it('a pass that throws does not block every later pass (the finally)', async () => {
+    const h = rig()
+    const accounts = h.ctx.accounts
+    h.ctx.accounts = () => {
+      throw new Error('accounts unreadable')
+    }
+    await expect(h.loop.run()).rejects.toThrow('accounts unreadable')
+    expect(h.startWorker).not.toHaveBeenCalled()
+    h.ctx.accounts = accounts
+    await h.loop.run()
+    await h.settle()
+    expect(h.startWorker).toHaveBeenCalledTimes(1)
+  })
+
+  // Review m4: the arming is replaced before the run-spawn awaits. A second tick that starts while the
+  // first tick's run-spawn is still open must see the new arming and fire nothing.
+  it('two overlapping ticks fire a due template once (the arming is replaced before the awaits)', async () => {
+    const h = rig({ schedule: { every: 'minute' } })
+    let release!: () => void
+    const held = new Promise<void>((r) => {
+      release = r
+    })
+    h.ctx.handle = async (cmd, args) => {
+      if (cmd !== 'run-spawn') return h.real(cmd, args)
+      await held
+      return { status: 200, body: {} }
+    }
+    await h.loop.fireTick() // arms only
+    h.clock += 61_000
+    const first = h.loop.fireTick() // fires, and waits on run-spawn
+    const second = h.loop.fireTick() // overlaps it
+    release()
+    await Promise.all([first, second])
+    expect(h.handled().filter((c) => c === 'run-spawn')).toHaveLength(1)
+  })
+
+  // Review m1: the same as the attempted-set test above, with room for both Tasks — once per Task.
+  it('never retries the same Task twice in one activation, with room for both Tasks', async () => {
+    const h = rig({ concurrency: 2, startFailsFor: 'all', gateRefused: true })
+    await h.loop.run()
+    await h.settle()
+    expect(h.startWorker.mock.calls.map((c) => c[0].taskId)).toEqual(['tsk_1', 'tsk_2'])
+  })
+
+  // The fixture reaches the reap: a finished scheduled child Run's worktree is removed after the pass.
+  it('removes a finished scheduled child Run’s worktree after the pass', async () => {
+    const h = rig({ reapableChild: true })
+    await h.loop.run()
+    await h.settle()
+    expect(h.reaped).toEqual(['/wt-child'])
+  })
+
+  // Review m5: a process that stopped driving mid-pass does not go on to the reap — the new driver's
+  // first pass reaps, and two processes must not remove the same worktree at once.
+  it('a driver that changes mid-pass does not reap', async () => {
+    const h = rig({ concurrency: 2, reapableChild: true })
+    // The start answers 2xx without committing, so nothing sets scheduleAgain: the pass ends on the
+    // per-slot break itself, not on the next pass's entry check — the case where the reap would still run.
+    h.ctx.handle = async (cmd, args) => (cmd === 'worker-start' ? { status: 200, body: {} } : h.real(cmd, args))
+    let allowed = 2 // the entry check, then the first slot
+    h.ctx.mayStart = () => allowed-- > 0
+    await h.loop.run()
+    await h.settle()
+    expect(h.handled()).toEqual(['worker-start'])
+    expect(h.reaped).toEqual([])
   })
 })

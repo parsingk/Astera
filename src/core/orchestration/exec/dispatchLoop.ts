@@ -519,6 +519,11 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       // **try/catch 를 두지 않는다.** reapWorktree 는 던지지 않는다 — boolean 을 돌려주고 실패는
       // 스스로 로그에 남긴다(reapWorktree 안의 catch 가 로그를 부른다; c.reap 이 그것이다). 감싸면 절대 실행되지
       // 않는 catch 가 하나 생기고, 다음에 읽는 사람은 그것을 "여기서 던질 수 있다"는 신호로 읽는다.
+      // **운전자에게 한 번 더 묻는다.** 슬롯마다의 확인이 이 활성화를 break 로 끝냈다면 운전은 이미 다른
+      // 프로세스로 넘어갔고, 그 새 운전자의 첫 바퀴가 같은 회차를 걷는다 — 두 프로세스가 같은 워크트리의
+      // 세션을 닫고 `git worktree remove` 를 함께 돌리게 된다. 운전하지 않는 프로세스는 일을 하지 않는다.
+      // 앱에서는 mayStart 가 언제나 참이므로(orch 는 한 번 서면 내려가지 않는다) 앱의 동작은 그대로다.
+      if (!c.mayStart()) return
       // 앱이 등록한 워크트리인가 — 앱에서는 core.worktrees, Host 에서는 자기 레지스트리다(c.isRegisteredWorktree).
       for (const r of reapableChildRuns(c.getState(), (p) => c.isRegisteredWorktree(p)))
         for (const w of r.worktrees) await c.reap(w)
