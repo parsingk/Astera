@@ -89,7 +89,9 @@ export type Integration =
 export interface IntegrateContext {
   log(m: string): void
   /** Who is told Astera is moving HEAD (EG §26): the app's collector in the app, `git-op` in the Host (R7). */
-  gitOp: { begin(kind: 'job-merge', cwd: string): string; end(id: string): void }
+  /** Either may be async (R24): the Host's begin writes the merge record before it answers, and the
+   *  merge waits for it. A rejecting end is logged; it never costs the merge. */
+  gitOp: { begin(kind: 'job-merge', cwd: string): string | Promise<string>; end(id: string): void | Promise<void> }
   /** Removes one merged worktree; never throws (reapWorktree). */
   reap(worktreePath: string): Promise<boolean>
   /** Test seams for rules 6 and 8 of the design's §3.2: an old git and the merge's argv cannot be
@@ -321,7 +323,9 @@ export async function integrateWorktrees(
     // 변경이 "외부에서 저장소가 바뀌었다"로 기록된다(EG §41-9). `finally` 로 닫는 이유는 아래
     // 실패 분기가 그 안에서 그대로 `return` 하기 때문이다 — try 없이 두면 그 경로로 나갈 때
     // 등록이 영원히 "진행 중"으로 남고, 그날부터 이 프로젝트의 모든 외부 변경이 조용히 삼켜진다.
-    const mergeOpId = ctx.gitOp.begin('job-merge', mergeInto)
+    // Awaited (R24): in the Host, begin first writes the HEAD before the merge to host/merges.json, so
+    // an app that opens or attaches while the merge runs finds it there.
+    const mergeOpId = await ctx.gitOp.begin('job-merge', mergeInto)
     try {
       const merged = await (ctx.git ?? realGit)(['merge', '--no-edit', ref], { cwd: mergeInto })
       if (!merged.ok) {
@@ -342,7 +346,10 @@ export async function integrateWorktrees(
         }
       }
     } finally {
-      ctx.gitOp.end(mergeOpId)
+      // A rejecting end is logged, not thrown: from a finally it would replace the merge's result.
+      await Promise.resolve()
+        .then(() => ctx.gitOp.end(mergeOpId))
+        .catch((e: unknown) => ctx.log(`git-op end failed: ${String(e)}`))
     }
     ctx.log(`scheduler: merged ${ref} into ${mergeInto}`)
     // 합친 워크트리는 여기서 지운다 — **폴더까지. 단 `reap` 일 때만이다**(위 주석: 사람이 누른

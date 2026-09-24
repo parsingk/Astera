@@ -17,7 +17,6 @@
 // whatever is on PATH (R12 says once whether it runs).
 
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { AppUnreachable, refusedBeforeActing, type OrchCaller } from '../core/host/orchProtocol'
 import { liveAppPid } from '../core/host/pidFile'
 import { HOST_ACT_PATH_IN_USE, type HostMessage, type PtyMeta, type WorktreesSnapshot } from '../core/host/protocol'
@@ -33,6 +32,8 @@ import {
 import { WorktreeRegistry, defaultWorktreeRoot, isRegistryFile } from '../core/worktrees/registry'
 import { git as realGit } from '../core/worktrees/git'
 import { isPathWithin } from '../core/files/tree'
+import { hostMergesPathIn } from '../core/git/hostMerges'
+import { createMergeRecorder } from './mergeRecords'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import type { WorktreeInfo } from '../core/types'
 import type { PtyRegistry } from './registry'
@@ -56,6 +57,8 @@ export interface HostWorktreesDeps {
   closeTimeoutMs?: number
   pollMs?: number
   git?: typeof realGit
+  /** The clock of the merge records (R24); an ISO string. */
+  now?: () => string
 }
 
 export interface HostWorktrees {
@@ -254,17 +257,31 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
   // ---- git-op (R7, §3.3) ----
   // The `end` message names the folder its `begin` did; integrateGit hands `end` only the op.
   const opCwd = new Map<string, string>()
+  // Each merge is also written down (carry 1, R24): the record goes to disk before `begin` is sent,
+  // so an app that attaches after that message, or opens after the Host is done, still finds the
+  // merge (final review m7). The record's id is the git-op's `op`, so the two match in a log. The
+  // recorder never throws; a record it cannot write is logged and the merge goes on.
+  const merges = createMergeRecorder({
+    file: hostMergesPathIn(d.profileDir),
+    headOf: async (cwd) => {
+      const r = await (d.git ?? realGit)(['rev-parse', 'HEAD'], { cwd })
+      return r.ok ? r.stdout.trim() : null
+    },
+    now: d.now ?? (() => new Date().toISOString()),
+    log: d.log
+  })
   const gitOp = {
-    begin: (kind: 'job-merge', cwd: string): string => {
-      const op = randomUUID()
+    begin: async (kind: 'job-merge', cwd: string): Promise<string> => {
+      const op = await merges.begin(cwd)
       tell({ t: 'git-op', op, phase: 'begin', kind, cwd })
       opCwd.set(op, cwd)
       return op
     },
-    end: (op: string): void => {
+    end: async (op: string): Promise<void> => {
       const cwd = opCwd.get(op) ?? ''
       opCwd.delete(op)
       tell({ t: 'git-op', op, phase: 'end', kind: 'job-merge', cwd })
+      await merges.end(op)
     }
   }
 

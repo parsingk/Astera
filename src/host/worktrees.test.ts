@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { promises as fs, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { makeRepo, gitSync, tempDir } from '../core/worktrees/testRepo'
@@ -11,6 +11,8 @@ import type { Dispatch } from '../core/orchestration/types'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { AppUnreachable, wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import { HOST_ACT_PATH_IN_USE, type HostMessage, type PtyMeta } from '../core/host/protocol'
+import { parseHostMerges, type HostMergeRecord } from '../core/git/hostMerges'
+import { isSamePath } from '../core/files/tree'
 
 let profile: string, home: string, repo: string
 beforeEach(async () => {
@@ -139,13 +141,36 @@ describe('createHostWorktrees', () => {
   // §3.3 and R7.
   it('announces each merge with a git-op begin and end, and a throwing broadcast does not cost the merge', async () => {
     const sent: HostMessage[] = []
-    const h = rig({ broadcast: (m) => { sent.push(m); if (m.t === 'git-op') throw new Error('socket gone') } })
+    const mergesFile = path.join(profile, 'host', 'merges.json')
+    // R24 / final review m7: what the record said when `git-op begin` went out. An app that attaches
+    // after that message still finds the merge, open, in the file.
+    let atBegin: HostMergeRecord[] | null = null
+    const h = rig({ broadcast: (m) => {
+      sent.push(m)
+      if (m.t === 'git-op' && m.phase === 'begin') atBegin = parseHostMerges(readFileSync(mergesFile, 'utf8'))
+      if (m.t === 'git-op') throw new Error('socket gone')
+    } })
     const a = await h.wt.fork({ repoPath: repo, name: 'a' }); commitIn(a, 'a')
+    const headBefore = gitSync(repo, ['rev-parse', 'HEAD']).trim()
     expect(await h.wt.mergeWorktrees(repo, [a])).toEqual({ ok: true, merged: [a], uncommitted: 0 })
+    const headAfter = gitSync(repo, ['rev-parse', 'HEAD']).trim()
+    expect(headAfter).not.toBe(headBefore)
     const ops = sent.filter((m): m is Extract<HostMessage, { t: 'git-op' }> => m.t === 'git-op')
     expect(ops.map((m) => [m.phase, m.kind, m.cwd])).toEqual([['begin', 'job-merge', repo], ['end', 'job-merge', repo]])
     expect(ops[0].op).toBe(ops[1].op)
     expect(h.logs.some((l) => /git-op/.test(l) && /socket gone/.test(l))).toBe(true)
+    // The record: one, for the merge target, the heads either side, under the git-op's own id.
+    const records = parseHostMerges(readFileSync(mergesFile, 'utf8'))
+    expect(records).toHaveLength(1)
+    expect(isSamePath(records[0].projectPath, repo)).toBe(true)
+    expect(records[0]).toMatchObject({ id: ops[0].op, headBefore, headAfter })
+    expect(typeof records[0].endedAt).toBe('string')
+    // Written before the begin went out, still open then.
+    expect(atBegin).not.toBeNull()
+    expect(atBegin!).toHaveLength(1)
+    expect(atBegin![0]).toMatchObject({ id: ops[0].op, headBefore })
+    expect(atBegin![0].headAfter).toBeUndefined()
+    expect(atBegin![0].endedAt).toBeUndefined()
   })
   // Binding 8: begin goes out right before `git merge`, end right after it.
   it('brackets the git merge itself with the git-op', async () => {

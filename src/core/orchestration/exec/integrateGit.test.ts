@@ -178,6 +178,30 @@ describe('integrateWorktrees — the rules of the one automatic writer into a re
     expect(at(begin)).toBe(at(merge) - 1)
     expect(at(end)).toBeGreaterThan(at(merge))
   })
+  // R24: the Host's begin writes the merge record before it answers, so the merge must wait for it.
+  // Mutation check: drop the await on gitOp.begin (or on end); red.
+  it('waits for an async gitOp.begin before it runs git merge, and awaits end in the finally (R24)', async () => {
+    const a = await worked('a')
+    const order: string[] = []
+    const r = await integrateWorktrees(repo, [a], {}, ctx({
+      gitOp: {
+        begin: async () => { await new Promise((res) => setTimeout(res, 20)); order.push('begin'); return 'op1' },
+        end: async () => { await new Promise((res) => setTimeout(res, 20)); order.push('end') }
+      },
+      git: async (args, opts) => { if (args[0] === 'merge') order.push('merge'); return git(args, opts) },
+      reap: async () => { order.push('reap'); return true }
+    }))
+    expect(r.kind).toBe('merged')
+    expect(order).toEqual(['begin', 'merge', 'end', 'reap'])
+  })
+  it('a gitOp.end that rejects is logged and costs the merge nothing (R24)', async () => {
+    const a = await worked('a')
+    const r = await integrateWorktrees(repo, [a], {}, ctx({
+      gitOp: { begin: () => 'op1', end: async () => { throw new Error('disk gone') } }
+    }))
+    expect(r).toEqual({ kind: 'merged', uncommitted: 0 })
+    expect(logs.some((l) => /git-op end failed/.test(l) && /disk gone/.test(l))).toBe(true)
+  })
   // Rule 9: a merge that fails after its probe passed is aborted, the abort is checked, and the Gate says so.
   it('aborts a merge git refuses, checks the abort, and says the folder is as it was', async () => {
     const a = await worked('a', 'clash.txt', 'tracked in a')
