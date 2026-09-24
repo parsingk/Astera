@@ -1,11 +1,11 @@
 // createHostChecks(checks.ts) — the Host's own validation, review, repair, lang and accounts (§5.1,
 // R10, R11, R13, B3). A real PtyRegistry over a fake spawn (spawner.test.ts's pattern): the checks'
 // RunManager opens its validation pty there, and the rig ends it by hand.
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import fs from 'node:fs'
+import { describe, it, expect, expectTypeOf, vi, afterEach } from 'vitest'
+import fs, { promises as fsp } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createHostChecks } from './checks'
+import { createHostChecks, createHostChecksForTest, type HostChecks } from './checks'
 import { PtyRegistry, type RegistryPty } from './registry'
 import type { HostMessage, PtyEntry } from '../core/host/protocol'
 import type { OrchServerDeps } from '../core/orchestration/command'
@@ -107,7 +107,7 @@ async function rig(o: RigOpts = {}) {
     startWorker: vi.fn(async () => ({ sessionId: 'new', cwd, specPath: '' }))
   } as unknown as OrchServerDeps
 
-  const checks = createHostChecks({
+  const checks = createHostChecksForTest({
     profileDir,
     platform: process.platform,
     env: o.env ?? { PATH: process.env.PATH },
@@ -138,6 +138,11 @@ async function rig(o: RigOpts = {}) {
 }
 
 describe('createHostChecks', () => {
+  // Review m3: the seam is in createHostChecksForTest's type only; the wiring's type is HostChecks.
+  it('answers HostChecks, with no test seam in its type', () => {
+    expectTypeOf<ReturnType<typeof createHostChecks>>().toEqualTypeOf<HostChecks>()
+  })
+
   it('runs a validation in the Host’s registry, announced as a run pty with validation: true (§5.1)', async () => {
     const h = await rig()
     h.checks.startValidation({ taskId: h.taskId, cwd: h.cwd })
@@ -170,6 +175,19 @@ describe('createHostChecks', () => {
     await vi.waitFor(() => expect(h.opened()).toHaveLength(1))
     expect(h.checks.stopValidation('not-a-run')).toBe(false)
     expect(h.checks.stopValidation(h.opened()[0].meta!.id)).toBe(true)
+    // Not proven: the stopped run's exit is a Gate for a person, not a failed check (review m6).
+    h.exitLast(1)
+    await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+    expect(h.task().consecutiveFailures).toBe(0)
+  })
+
+  it('a validation pty that ends with no exit code is recorded as exit 1, as the app records it (review m5)', async () => {
+    const h = await rig()
+    h.checks.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.opened()).toHaveLength(1))
+    h.exitLast(undefined as unknown as number)
+    await vi.waitFor(() => expect(h.task().status).toBe('failed'))
+    expect(h.task().checks?.[0]).toMatchObject({ exitCode: 1 })
   })
 
   // Task 6's early-exit buffer, reached through the Host's registry and pty factory.
@@ -188,6 +206,21 @@ describe('createHostChecks', () => {
     expect(await none.checks.lang()).toBe(osLang())
     const unknown = await rig({ settings: { lang: 'xx' } })
     expect(await unknown.checks.lang()).toBe(osLang())
+  })
+
+  it('lang rides out a busy read during the app’s rename instead of speaking en (review m2)', async () => {
+    const h = await rig({ settings: { lang: 'ko' } })
+    const real = fsp.readFile
+    let busy = 1
+    const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (...args: Parameters<typeof real>) => {
+      if (busy-- > 0) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' })
+      return real(...args)
+    }) as typeof real)
+    try {
+      expect(await h.checks.lang()).toBe('ko')
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('langNow answers synchronously: the OS locale before any read, then what lang() last read (B3)', async () => {

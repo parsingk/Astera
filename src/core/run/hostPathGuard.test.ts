@@ -32,3 +32,16 @@ describe('hostPathGuard, the lists it reads', () => {
     expect(await g(path.join(root, 'late', 'x'))).toBe(path.join(root, 'late'))
   })
 })
+
+describe('hostPathGuard, paths that are not normalised (review m7)', () => {
+  it('a raw `..` cannot climb out of a root into a sibling, and one that stays inside is allowed', async () => {
+    await expect(guard(`${root}${path.sep}proj${path.sep}..${path.sep}proj2`)).rejects.toThrow('path not allowed')
+    await expect(guard(`${root}/proj/../proj2`)).rejects.toThrow('path not allowed')
+    await expect(guard(`${root}${path.sep}proj${path.sep}..`)).rejects.toThrow('path not allowed')
+    expect(await guard(`${root}${path.sep}proj${path.sep}a${path.sep}..${path.sep}b`)).toBe(path.join(root, 'proj'))
+  })
+  it('a relative path resolves against the process cwd, not against a root', async () => {
+    await expect(guard('proj')).rejects.toThrow('path not allowed')
+    await expect(guard(path.join('proj', 'sub'))).rejects.toThrow('path not allowed')
+  })
+})

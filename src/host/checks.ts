@@ -18,7 +18,6 @@
 //
 // **Imports nothing from electron, src/main or src/renderer**: this runs on a plain node.exe in the
 // packaged app.
-import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { HostMessage } from '../core/host/protocol'
 import { hostWorkerBaseEnv } from '../core/host/spawn'
@@ -38,6 +37,7 @@ import { makeDescriptors } from '../core/providers/descriptor'
 import { hostPathGuard } from '../core/run/hostPathGuard'
 import { readStoredRunConfigs } from '../core/run/runConfigsFile'
 import { RunManager } from '../core/run/runManager'
+import { readFileRetrying } from '../core/renameRetry'
 import { settingsObjectOf } from '../core/settings/settingsObject'
 import type { Account } from '../core/types'
 import type { PtyRegistry } from './registry'
@@ -82,10 +82,13 @@ export interface HostChecksDeps {
 /** The OS locale as node reports it — what the app's `app.getLocale()` stands in for (R13). */
 const osLang = (): Lang => pickInitialLang(Intl.DateTimeFormat().resolvedOptions().locale)
 
-export function createHostChecks(d: HostChecksDeps): HostChecks & {
-  /** For tests only: the validator whose onRunExit the run-pty exit handler calls (C11). */
-  _validator: TaskValidator
-} {
+export function createHostChecks(d: HostChecksDeps): HostChecks {
+  return createHostChecksForTest(d)
+}
+
+/** createHostChecks, with its test seam in the type: the validator whose onRunExit the run-pty exit
+ *  handler calls (C11). **Tests only** — the wiring calls createHostChecks, whose type has no seam. */
+export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _validator: TaskValidator } {
   const { registry, log } = d
   const accountsPath = path.join(d.profileDir, 'accounts.json')
   const settingsPath = path.join(d.profileDir, 'app-settings.json')
@@ -101,7 +104,9 @@ export function createHostChecks(d: HostChecksDeps): HostChecks & {
   const readLang = async (): Promise<Lang> => {
     let text: string
     try {
-      text = await fs.readFile(settingsPath, 'utf8')
+      // Retried while the app's rename-replace holds the file (EBUSY/EPERM on win32), as the Host's
+      // other reader of this file does (core/host/driver.ts, C12); ENOENT still means "no file".
+      text = await readFileRetrying(settingsPath)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return osLang()
       log(`app-settings.json could not be read, so the Host speaks en: ${String(err)}`)
@@ -210,7 +215,8 @@ export function createHostChecks(d: HostChecksDeps): HostChecks & {
     const meta = registry.metaOf(ptyId)
     if (meta?.kind !== 'run' || runs.get(meta.id) === null) return
     try {
-      validation.validator.onRunExit({ runId: meta.id, exitCode })
+      // `?? 1`, as the app's hook does: node-pty can end a pty with no code, and that is not a pass.
+      validation.validator.onRunExit({ runId: meta.id, exitCode: exitCode ?? 1 })
     } catch (err) {
       log(`validation exit could not be handled run=${meta.id}: ${String(err)}`)
     }
