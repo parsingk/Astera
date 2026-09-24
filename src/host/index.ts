@@ -21,8 +21,15 @@ import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_FEATURE_SPAWN, HOST_FEATURE_WORKTREES, HOST_PROTOCOL, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import {
+  HOST_FEATURE_DISPATCH,
+  HOST_FEATURE_SPAWN,
+  HOST_FEATURE_WORKTREES,
+  HOST_PROTOCOL,
+  HOST_YIELD_WORKTREES
+} from '../core/host/protocol'
 import { createHostOrch } from './orch'
+import { composeHostDriving } from './drivingWiring'
 import { createHostSpawner } from './spawner'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostExits, ptyHeldBy } from './exits'
@@ -111,6 +118,10 @@ async function main(): Promise<void> {
   const leave = (why?: string): void => {
     // The idle and retire paths have already said why in the server's own log line; a signal has not.
     if (why) log.write(`${why} — leaving`)
+    // **The driver stops first** (S4+S5, the review of Task 12): no tick from here on, no commit, load
+    // or app coming or going starts a pass, and a pass already under way stops at its next `mayStart`
+    // (drivingWiring.ts) — before the spawner's own retiring flag is set below. Never throws.
+    wiring?.dispose()
     // Before the close, so a Host that is on its way out is not offered up as one to end. A failure
     // here costs nothing: the app checks the executable behind the pid before acting on it, and a
     // record this Host left behind names a pid that is about to stop existing.
@@ -194,6 +205,27 @@ async function main(): Promise<void> {
   // operation that reached the registry before this heal finished would read it still damaged.
   await loadWorktreesIfSpawning({ hasSpawner: spawner !== null, worktrees, log: (m) => log.write(m) })
 
+  // **The Host drives Jobs** (S4+S5 §4, §5.1): its own checks, the dispatch loop and its triggers, and
+  // the hooks they hand `createHostOrch` and `startHostServer` — one composition, which the integration
+  // rig builds too (N11). **Only with a spawner** (R7): a Host that cannot start a worker cannot place
+  // one, and one that announced `dispatch` anyway would stop the app's own loop in front of a Host that
+  // places nothing. `orch` and `server` are assigned below; every closure here runs long after both.
+  const wiring = spawner
+    ? composeHostDriving({
+        profileDir,
+        platform: process.platform,
+        env: process.env,
+        registry,
+        spawner,
+        worktrees,
+        orch: () => orch,
+        server: () => server,
+        log: (m) => log.write(m),
+        now: () => new Date().toISOString(),
+        nowMs: () => Date.now()
+      })
+    : null
+
   // The orchestration state and the commands over it (host control plane design §5, §6).
   //
   // **Constructed, not loaded.** `ready()` is deliberately not called here: the app still builds its
@@ -246,7 +278,10 @@ async function main(): Promise<void> {
     specsDir: spawner ? path.join(profileDir, 'orch', 'specs') : undefined,
     // The four `worktree-*` orch-calls (R1, R5): only with a spawner, so a Host too old — or too
     // unconfigured — to own worktrees.json answers them 501 rather than ever reaching `worktrees`.
-    worktrees: spawner ? worktrees : undefined
+    worktrees: spawner ? worktrees : undefined,
+    // The driver's hooks (drive, onCommit, mayDrain, onLoaded, driverStatus, validationStop): absent with
+    // no spawner, and then validation, review and repair take their pre-S5 routes to the app.
+    ...(wiring?.orchHooks ?? {})
   })
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and
@@ -291,8 +326,11 @@ async function main(): Promise<void> {
       }),
       orch,
       // Announced only when there is a spawner, so an app can tell a Host that starts sessions itself,
-      // and that it also owns worktrees.json (R5: the one decision is `spawner !== null`).
-      features: spawner ? [HOST_FEATURE_SPAWN, HOST_FEATURE_WORKTREES] : [],
+      // that it also owns worktrees.json (R5: the one decision is `spawner !== null`), and that it
+      // drives Jobs (R7) — the same one fact.
+      features: spawner ? [HOST_FEATURE_SPAWN, HOST_FEATURE_WORKTREES, HOST_FEATURE_DISPATCH] : [],
+      // An app's hello and its socket's close (N1). The server isolates the call too (`tellAppsChanged`).
+      ...(wiring?.serverHooks ?? {}),
       log
     })
   } catch (err) {
