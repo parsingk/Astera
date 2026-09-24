@@ -130,4 +130,11 @@ export class TerminalManager {
   closeAppOwned(): void {
     for (const [id, live] of [...this.terminals]) if (!live.pty.outlivesApp) this.close(id)
   }
+
+  /** The terminals whose pty is this process's own child, not the Host's — same split as
+   *  SessionManager.runningAppOwned, and for the same reason: HOST_ACT_PATH_IN_USE (protocol.ts) asks
+   *  what this app runs itself, and a Host-backed terminal is already visible to the Host that asked. */
+  runningAppOwned(): TerminalInfo[] {
+    return [...this.terminals.values()].filter((t) => !t.pty.outlivesApp).map((t) => ({ id: t.id, projectPath: t.projectPath }))
+  }
 }

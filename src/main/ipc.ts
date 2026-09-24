@@ -40,7 +40,10 @@ import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
 import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn } from './host/outdated'
 import { reattachSessions, type ReattachResult } from './host/reattach'
-import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
+import { createWorktreeRoute } from './host/worktreeRoute'
+import { createHostGitOps } from './host/hostGitOps'
+import { localPathInUse } from './host/localPathInUse'
+import { HOST_PROTOCOL, HOST_ACT_PATH_IN_USE, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchHostGate, OrchSnapshot, Provider, RateLimitWindow, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
@@ -6300,6 +6303,12 @@ export function registerIpc(
     })
     hostClient = client
 
+    // Host S3: the app's worktree registry writes through the Host once it announces it owns
+    // worktrees.json, and mirrors the file it pushes back (ruling R1, R3); a merge the Host runs is
+    // registered as this app's own Work Unit operation the same way (ruling R7, §3.3).
+    const worktreeRoute = createWorktreeRoute({ registry: core.worktrees, call: orchCall, log: (m) => hostLog(`host: ${m}`) })
+    const hostGitOps = createHostGitOps(workUnitCollector)
+
     client.onMessage((m) => {
       // Every commit the Host made, pushed (design §5). The mirror swaps, and then this app pays the
       // commit everything it owes — **the same list as for a commit it made itself** (ruling F54).
@@ -6330,11 +6339,31 @@ export function registerIpc(
         waiting.resolve({ status: m.status, body: m.body })
         return
       }
+      if (m.t !== 'orch-act') return
+      // Asked before the Host removes a worktree folder (host S3, the ruling on plan risk 3):
+      // whatever this app runs itself, not through the Host, in or below the path — a local fallback
+      // session or terminal spawned while the Host was not answering. Not an `OrchServerDeps` name
+      // (protocol.ts's doc comment on HOST_ACT_PATH_IN_USE), so it is answered here rather than
+      // through the table below.
+      if (m.act === HOST_ACT_PATH_IN_USE) {
+        const [p] = Array.isArray(m.args) ? m.args : []
+        const value =
+          typeof p === 'string'
+            ? localPathInUse(
+                [
+                  ...core.sessions.runningAppOwned().map((s) => ({ cwd: s.cwd, tag: `SESSION:${s.title}`, outlivesApp: false })),
+                  ...core.terminal.runningAppOwned().map((t) => ({ cwd: t.projectPath, tag: `TERMINAL:${t.id}`, outlivesApp: false }))
+                ],
+                p
+              )
+            : null
+        client.send({ t: 'orch-acted', call: m.call, ok: true, value })
+        return
+      }
       // One thing the Host cannot do itself — spawn a session, touch a worktree (design §5). The
       // table it is answered from is `orch.deps`, the one this process builds for the command layer;
       // `answerOrchAct` has the reasoning, and never throws, because a rejection here would leave the
       // Host waiting for a reply that is never coming.
-      if (m.t !== 'orch-act') return
       void answerOrchAct({ deps: orch?.deps ?? null, act: m.act, args: m.args }).then((r) =>
         client.send(
           r.ok
@@ -6344,8 +6373,12 @@ export function registerIpc(
       )
     })
     // Nothing is coming back on a socket that is gone. Armed before `start()` so the very first
-    // connection's drop is covered too.
-    client.onDisconnect(() => failPendingOrchCalls('the connection to the Host dropped'))
+    // connection's drop is covered too. §3.3: also closes every Work Unit operation a merge's `begin`
+    // opened and whose `end` will now never come.
+    client.onDisconnect(() => {
+      failPendingOrchCalls('the connection to the Host dropped')
+      hostGitOps.hostGone()
+    })
     client.start()
 
     const transport = {
@@ -6583,6 +6616,17 @@ export function registerIpc(
         void takeSessionsBack('the Host opened a session', m.entry.id).catch((e) =>
           hostLog(`host: could not take back the session the Host opened: ${String(e)}`)
         )
+    })
+    // Host S3 (R1, R7, §3.3): the file the Host just wrote, and a merge it ran. Neither throws, but
+    // wrapped anyway — a listener that threw here would be an uncaught exception in the main process,
+    // the same reasoning every other `onMessage` callback in this file is held to.
+    client.onMessage((m) => {
+      try {
+        worktreeRoute.pushed(m)
+        hostGitOps.pushed(m)
+      } catch (err) {
+        hostLog(`host: a worktrees-state or git-op push could not be applied: ${String(err)}`)
+      }
     })
 
     /** One sweep: ask the Host what it is holding, hand each entry to the manager its note names,
@@ -6920,6 +6964,9 @@ export function registerIpc(
     }
     client.onStatusChange((s) => {
       routeByStatus(s)
+      // Host S3 (R1, R3): the same transition this status subscription already drives ptyRouter and
+      // procRouter by also decides whether worktrees.json writes go to the Host or to the file here.
+      void worktreeRoute.status(s).catch((err) => hostLog(`host: worktrees status change failed: ${String(err)}`))
       // **Pushed, not left to the Info tab's poll.** That poll runs every thirty seconds, which is
       // fine for a Host that is merely outdated and wrong for one that has stopped answering: the
       // person is looking at the screen at that exact moment, because a session did not open, and
