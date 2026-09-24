@@ -205,7 +205,13 @@ export function preparedRuntimeEntry(a: {
   // `userDataDir`'s last path segment is the app's own name (`astera` or `astera-dev`) — the CLI has
   // no `app.getName()` to ask, and this is the one place written down instead of hardcoding either
   // string.
-  const appName = path.basename(a.profileDir)
+  //
+  // **The path rules are `a.platform`'s, not this process's** — the same reason `platform` is a
+  // parameter at all. Only win32 ever gets past `hostRuntimeBase`, whose own joins are `path.win32`;
+  // with the host's `path` a win32 profile read on posix is one segment with no basename, and the
+  // manifest path is joined with `/` (found by running this file's tests on Linux CI).
+  const p = a.platform === 'win32' ? path.win32 : path.posix
+  const appName = p.basename(a.profileDir)
   const base = hostRuntimeBase({
     platform: a.platform,
     localAppData: a.env.LOCALAPPDATA,
@@ -214,7 +220,7 @@ export function preparedRuntimeEntry(a: {
   })
   if (!base || !a.resourcesPath) return undefined
   try {
-    const manifest = JSON.parse(a.readFile(path.join(a.resourcesPath, 'host-runtime', 'runtime.json'))) as {
+    const manifest = JSON.parse(a.readFile(p.join(a.resourcesPath, 'host-runtime', 'runtime.json'))) as {
       node?: unknown
     }
     const nodeVersion = typeof manifest.node === 'string' ? manifest.node.trim() : ''
