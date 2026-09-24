@@ -665,8 +665,10 @@ starts. So when a command cannot read one, the step is to open Astera, and no co
 A 6 from a Host that is on its way out is different again. A worker or coordinator start that
 reaches a Host after it began to leave is refused before anything is started, and the Dispatch it
 opened is rolled back. `error.details.retry` is `host-retiring`, and the step is the same command
-again once a Host is up: `error.nextSteps` offers `astera host status`. A retry with the same
-`--request-id` sent to the same leaving Host replays this refusal, and a new Host answers it fresh.
+again once a Host is up: `error.nextSteps` offers `astera host status`. A leaving Host takes no new
+connections, so a retry made while it is still on its way out ends with 3 rather than this 6 again.
+Once it has gone, the same command with the same `--request-id` reaches the next Host, which answers
+it fresh.
 
 Any other 6 still offers `astera status`.
 
