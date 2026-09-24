@@ -5327,6 +5327,70 @@ describe('jobs run / questions answer', () => {
     expect((again.body as { ordinal: number }).ordinal).toBe(2)
   })
 
+  // Task 15 (carry 4, R18, N7). **계정은 하나, 'accA' 뿐** — 두 테스트가 함께 쓴다.
+  const coordJobDeps = (): OrchServerDeps & {
+    state: OrchState
+    startCoordinator: ReturnType<typeof vi.fn>
+  } => {
+    const startCoordinator = vi.fn(async (a: { runId: string; brief: string }) => ({
+      sessionId: `coord-${a.runId}`
+    }))
+    return Object.assign(makeDeps(), {
+      listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }],
+      makeRunWorktree: async (a: { repoPath: string; name: string }) => `D:/wt/${a.name}`,
+      startCoordinator
+    }) as never
+  }
+  // Task 가 없는 회차는 outcomeOf 가 'running' 으로 읽는다(view.ts) — 하나 만들어 곧바로
+  // 끝내야 다음 `jobs run` 이 "이미 도는 중" 을 답하지 않는다.
+  const finishRun = async (deps: OrchServerDeps, runId: string): Promise<void> => {
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'accA' })
+    await call(deps, 'task-update', { id: (t.body as { id: string }).id, status: 'completed' })
+  }
+
+  it('코디네이터 계정이 있는 계획의 두 번째 jobs run 도 새 회차에 코디네이터를 띄운다 (carry 4)', async () => {
+    const deps = coordJobDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, coordinatorAccount: 'accA' })
+    const jobId = deps.getState().jobs[0].id
+    const first = await call(deps, 'jobs-run', { id: jobId })
+    expect(first.status).toBe(200)
+    const firstRunId = (first.body as { id: string }).id
+    await finishRun(deps, firstRunId)
+    const second = await call(deps, 'jobs-run', { id: jobId })
+    expect(second.status).toBe(200)
+    const secondRunId = (second.body as { id: string }).id
+    expect(secondRunId).not.toBe(firstRunId)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(2)
+    expect(deps.startCoordinator.mock.calls[1][0]).toMatchObject({ runId: secondRunId })
+    expect(deps.getState().runs.find((r) => r.id === secondRunId)?.coordinatorSessionId).toBe(
+      `coord-${secondRunId}`
+    )
+  })
+
+  // N7.
+  it('뒤 회차의 코디네이터가 못 뜨면 그 회차는 그대로 남고, 오류가 재시도 명령을 말한다', async () => {
+    const deps = coordJobDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, coordinatorAccount: 'accA' })
+    const jobId = deps.getState().jobs[0].id
+    const first = await call(deps, 'jobs-run', { id: jobId })
+    const firstRunId = (first.body as { id: string }).id
+    await finishRun(deps, firstRunId)
+
+    deps.startCoordinator.mockRejectedValueOnce(new Error('spawn refused'))
+    const r = await call(deps, 'jobs-run', { id: jobId })
+    expect(r.status).toBe(400)
+    const runs = deps.getState().runs.filter((x) => x.jobId === jobId)
+    expect(runs).toHaveLength(2)
+    expect(runs[1].coordinatorSessionId).toBeUndefined()
+    expect((r.body as { error: string }).error).toContain(`astera run-start --run ${jobId}`)
+    expect(r.body).toMatchObject({ jobId, runId: runs[1].id })
+
+    // 그 오류가 말하는 재시도가 실제로 이 회차를 다시 겨눈다
+    const again = await call(deps, 'run-start', { run: jobId })
+    expect(again.status).toBe(200)
+    expect(deps.getState().runs.find((x) => x.id === runs[1].id)?.coordinatorSessionId).toBeDefined()
+  })
+
   // "지금 돌려라" 는 한 회차를 지금 만들라는 말이지 "이 예약을 켜라" 가 아니다
   it('예약은 무장을 건드리지 않고 한 회차만 만든다', async () => {
     const deps = makeDeps()

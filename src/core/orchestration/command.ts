@@ -992,6 +992,39 @@ export async function handleCommand(
       const first = job.schedule === undefined && (job.pendingStart === true || latest === undefined)
       const reply = await handleCommand(deps, caller, first ? 'run-start' : 'run-spawn', { run: id })
       if (reply.status < 200 || reply.status >= 300) return reply
+      // **carry 4 (R18, 사용자의 Q2): 뒤 회차도 앞 회차와 같이 코디네이터를 띄운다.** `first` 가
+      // 거짓이면 방금 부른 것은 `run-spawn` 뿐이라 회차만 생기고 아무도 그것을 몰지 않는다 —
+      // `run-start` 가 그 회차를 몰기 시작하는 자리이고, 앞 회차는 `first` 분기에서 이미 그것을
+      // 거쳤다. 이 계정·예약 조건은 `run-start` 자신이 코디네이터를 붙일지 거르는 조건과 같다
+      // (`accountId` 절) — 여기서 다시 걸러 두는 이유는 조건이 거짓일 때 `run-start` 를 괜히
+      // 다시 부르지 않기 위해서다(예약 템플릿의 게이트를 다시 걷는 것 자체는 무해하지만, 이
+      // 계획에는 걷힐 게이트가 없다).
+      //
+      // **N7 — 뒤 회차의 실패는 첫 회차의 실패가 아니다.** `run-spawn` 이 이미 그 회차를 커밋한
+      // 뒤이므로, 여기서 `run-start` 가 실패해도(코디네이터를 못 띄우거나 워크트리를 못 만들거나)
+      // 그 회차는 코디네이터 없이 그대로 남는다 — `run-start` 자신의 실패가 아무것도 커밋하지
+      // 않는 것과 다르다(그 케이스의 주석대로). 그래서 실패 문구에 재시도할 명령을 직접 박아
+      // 둔다: CLI 의 `nextSteps` 표는 명령이 아니라 종료 코드로 갈라(cliOutput.ts) 이 명령만의
+      // 다음 걸음을 싣지 못하고, `run-start` 는 언제나 그 계획의 최신 회차(방금 `run-spawn` 이
+      // 커밋한 그 회차)를 목표로 삼으므로 이 문구가 말하는 재시도는 실제로 이 회차를 다시 겨눈다.
+      if (!first && job.coordinatorAccountId && job.schedule === undefined && deps.startCoordinator) {
+        const runId = (reply.body as { id: string }).id
+        const coordReply = await handleCommand(deps, caller, 'run-start', { run: id })
+        if (coordReply.status < 200 || coordReply.status >= 300) {
+          const failed = coordReply.body as { error?: string }
+          return {
+            status: coordReply.status,
+            body: {
+              ...failed,
+              error:
+                `${failed.error ?? ''} — the new run ${runId} has no coordinator; ` +
+                `start it with: astera run-start --run ${id}`,
+              jobId: id,
+              runId
+            }
+          }
+        }
+      }
       // **돌려주는 것은 언제나 회차다.** 이 명령이 있는 이유가 받은 id 를 `runs wait` 에 넘기는
       // 것인데, run-start 는 계획을 돌려준다(사이드바의 '실행' 이 그것을 쓴다). 실제로 그 id 를
       // `task-create --run` 에 넘겨 봤더니 Task 가 회차가 아니라 계획에 붙어 이번 회차에서는
