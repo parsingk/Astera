@@ -93,6 +93,28 @@ describe('integrateWorktrees — the rules of the one automatic writer into a re
       expect(r).toMatchObject({ kind: 'human' }); expect((r as { reason: string }).reason).toContain(marker)
       expect(ops).toEqual([])
     })
+  // Rule 3 where the scheduler merges: into a Run worktree, whose `.git` is a file and whose markers live
+  // in <main>/.git/worktrees/<name>. Mutation check: read markers under `<mergeInto>/.git`; red.
+  it('never merges into a worktree in the middle of another operation (its own git dir)', async () => {
+    const root = await forkWorktree({ repoPath: repo, name: 'root' }, { registry, log: () => {} })
+    const a = await worked('a')
+    const dir = gitSync(root, ['rev-parse', '--absolute-git-dir'])
+    expect((await fs.stat(path.join(root, '.git'))).isFile()).toBe(true)
+    await fs.writeFile(path.join(dir, 'CHERRY_PICK_HEAD'), 'x')
+    const r = await integrateWorktrees(root, [a], {}, ctx())
+    expect(r).toMatchObject({ kind: 'human' }); expect((r as { reason: string }).reason).toContain('CHERRY_PICK_HEAD')
+    expect(ops).toEqual([])
+  })
+  // Rule 4's other half: a status that could not be read is said as such, not read as clean.
+  // Mutation check: drop the `!status.ok` refusal; red.
+  it('never merges when the folder status cannot be read', async () => {
+    const a = await worked('a')
+    const failingStatus: typeof git = (args, opts) =>
+      args[0] === 'status' && opts?.cwd === repo ? Promise.resolve({ ok: false, stdout: '', stderr: 'boom' }) : git(args, opts)
+    const r = await integrateWorktrees(repo, [a], {}, ctx({ git: failingStatus }))
+    expect(r).toMatchObject({ kind: 'human' }); expect((r as { reason: string }).reason).toContain('상태를 읽을 수 없어')
+    expect(ops).toEqual([])
+  })
   // Rule 4.
   it('never merges over tracked uncommitted changes, and lets an untracked file through', async () => {
     const a = await worked('a')
@@ -109,6 +131,13 @@ describe('integrateWorktrees — the rules of the one automatic writer into a re
     expect(r).toMatchObject({ kind: 'agent', worktrees: [{ path: plain, branch: null }] })
     // Said as what it is, before any probe runs against a made-up `refs/heads/null`.
     expect((r as { reason: string }).reason).toMatch(/could not work out which branch belongs to/)
+  })
+  // Rule 5 compares paths as the file system does: on Windows a stored path may differ from git's in case.
+  // Mutation check: compare with path.resolve only (case-sensitive); red.
+  it.runIf(process.platform === 'win32')('finds the branch of a path given in another letter case (Windows)', async () => {
+    const a = await worked('a')
+    const r = await integrateWorktrees(repo, [a.toUpperCase()], {}, ctx())
+    expect(r).toEqual({ kind: 'merged', uncommitted: 0 })
   })
   // Rule 6, through the seam (R11).
   it('hands the work to an agent when git cannot test a merge first (older than 2.38)', async () => {
@@ -134,13 +163,20 @@ describe('integrateWorktrees — the rules of the one automatic writer into a re
     expect(r).toMatchObject({ kind: 'agent' }); expect((r as { reason: string }).reason).toMatch(/^the app could not test whether/)
   })
   // Rules 7 (full refs) and 8 (--no-edit), through the seam. Mutation check: drop '--no-edit'; red.
-  it('merges the full branch ref with --no-edit', async () => {
+  // Also R7 / EG §26: the merge is announced before HEAD moves and closed after it, in one log with the git.
+  // Mutation check: move gitOp.begin after the merge; red.
+  it('merges the full branch ref with --no-edit, announced before and closed after', async () => {
     const a = await worked('a')
     const argv: string[][] = []
     const recording: typeof git = (args, opts) => { argv.push(args); return git(args, opts) }
-    await integrateWorktrees(repo, [a], {}, ctx({ git: recording }))
+    const gitOp: IntegrateContext['gitOp'] = { begin: () => { argv.push(['<begin>']); return 'op' }, end: () => { argv.push(['<end>']) } }
+    await integrateWorktrees(repo, [a], {}, ctx({ git: recording, gitOp }))
     const merge = argv.find((x) => x[0] === 'merge')!
     expect(merge).toEqual(['merge', '--no-edit', `refs/heads/${registry.list()[0].branch}`])
+    const at = (x: string[]): number => argv.indexOf(x)
+    const begin = argv.find((x) => x[0] === '<begin>')!, end = argv.find((x) => x[0] === '<end>')!
+    expect(at(begin)).toBe(at(merge) - 1)
+    expect(at(end)).toBeGreaterThan(at(merge))
   })
   // Rule 9: a merge that fails after its probe passed is aborted, the abort is checked, and the Gate says so.
   it('aborts a merge git refuses, checks the abort, and says the folder is as it was', async () => {
@@ -219,6 +255,20 @@ describe('reapWorktree (rule 11)', () => {
     expect(await reapWorktree(a, reapCtx({ isPathInUse: () => 'RUN:dev' }))).toBe(false)
     expect(logs.join('\n')).toMatch(/IN_USE: RUN:dev/)
     await expect(fs.stat(a)).resolves.toBeTruthy()
+  })
+  // Only a session in this worktree holds it. Mutation check: any open Dispatch anywhere holds; red.
+  it('is not held by a working session in another folder', async () => {
+    const a = await worked('a'); const elsewhere = await tempDir('astera-integrate-elsewhere-')
+    const s = sessions([{ id: 's2', cwd: elsewhere }])
+    expect(await reapWorktree(a, reapCtx({ sessions: s, dispatches: () => [{ sessionId: 's2' }] }))).toBe(true)
+    expect(s.live).toHaveLength(1)
+    await expect(fs.stat(a)).rejects.toThrow()
+  })
+  // The registry lookup compares as the file system does. Mutation check: `w.path === worktreePath`; red.
+  it.runIf(process.platform === 'win32')('finds the entry of a path given in another letter case (Windows)', async () => {
+    const a = await worked('a')
+    expect(await reapWorktree(a.toUpperCase(), reapCtx())).toBe(true)
+    expect(registry.list()).toEqual([])
   })
   it('refuses a folder the registry does not list', async () => {
     const plain = await tempDir('astera-integrate-notwt-')
