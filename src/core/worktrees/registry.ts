@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { WorktreeInfo } from '../types'
+import { renameRetrying } from '../renameRetry'
 
 export interface RegistryFile {
   root?: string
@@ -47,6 +48,8 @@ const normalRoot = (root: string | null | undefined): string | null =>
  * More than one process may write the file (the Host and an app, D3), so a local write re-reads it
  * first and applies its one change to what it found; the writes of one instance run one at a time.
  * With a writer set, writes go there instead and this instance holds only what the writer answered.
+ * Local writes, writer answers and pushed files all take their turn in one queue, so a push that
+ * arrives during a write is held after it rather than being overwritten by it or overwriting it.
  */
 export class WorktreeRegistry {
   private root: string | null = null
@@ -54,6 +57,7 @@ export class WorktreeRegistry {
   private writer: WorktreeWriter | null = null
   private listeners: ((f: RegistryFile) => void)[] = []
   private queue: Promise<unknown> = Promise.resolve()
+  private queued = 0
 
   constructor(
     private filePath: string,
@@ -70,10 +74,21 @@ export class WorktreeRegistry {
       return { recovered: false }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false }
-      await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
+      const kept = await fs.copyFile(this.filePath, this.filePath + '.bak').then(
+        () => true,
+        () => false
+      )
       this.root = null
       this.items = []
       this.log?.('worktrees.json was unreadable — kept it as worktrees.json.bak and started an empty list')
+      // The recovery is written, or every later write's re-read would find the same damaged bytes and
+      // refuse, restart after restart. Only once the .bak holds the original. A failure is swallowed
+      // (as SchedulerConfigStore.load does) so the app still starts, and logged; the next start retries.
+      if (kept) {
+        await this.save({ items: [] }).catch((e: unknown) =>
+          this.log?.(`could not write the recovered worktrees.json: ${e instanceof Error ? e.message : String(e)}`)
+        )
+      }
       return { recovered: true }
     }
   }
@@ -86,24 +101,32 @@ export class WorktreeRegistry {
     return this.items.find((w) => w.id === id) ?? null
   }
 
-  async add(info: WorktreeInfo): Promise<void> {
-    if (this.writer) return this.adopt(await this.writer.add(info))
-    await this.mutate((f) => ({ ...f, items: [...f.items, info] }))
+  // Which way a write goes is decided when its turn comes, so a write queued before a mode switch
+  // follows the mode it runs in.
+  add(info: WorktreeInfo): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.writer) return this.adopt(await this.writer.add(info))
+      await this.mutate((f) => ({ ...f, items: [...f.items, info] }))
+    })
   }
 
-  async removeEntry(id: string): Promise<void> {
-    if (this.writer) return this.adopt(await this.writer.removeEntry(id))
-    await this.mutate((f) => ({ ...f, items: f.items.filter((w) => w.id !== id) }))
+  removeEntry(id: string): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.writer) return this.adopt(await this.writer.removeEntry(id))
+      await this.mutate((f) => ({ ...f, items: f.items.filter((w) => w.id !== id) }))
+    })
   }
 
   getRoot(): string {
     return this.root ?? this.defaultRoot
   }
 
-  async setRoot(root: string | null): Promise<void> {
-    if (this.writer) return this.adopt(await this.writer.setRoot(root))
-    const next = normalRoot(root)
-    await this.mutate((f) => ({ ...(next ? { root: next } : {}), items: f.items }))
+  setRoot(root: string | null): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.writer) return this.adopt(await this.writer.setRoot(root))
+      const next = normalRoot(root)
+      await this.mutate((f) => ({ ...(next ? { root: next } : {}), items: f.items }))
+    })
   }
 
   /** Send writes to `w` from now on; null writes the file here again (re-reading it first, as always). */
@@ -111,10 +134,14 @@ export class WorktreeRegistry {
     this.writer = w
   }
 
-  /** Take a file the Host pushed. Not a write here: no disk write and no listener. False if malformed. */
+  /**
+   * Take a file the Host pushed. Not a write here: no disk write and no listener. False if malformed.
+   * Held at once when nothing is queued, otherwise after the writes queued before it.
+   */
   accept(file: unknown): boolean {
     if (!isRegistryFile(file)) return false
-    this.hold(file)
+    if (this.queued === 0) this.hold(file)
+    else void this.enqueue(async () => this.hold(file))
     return true
   }
 
@@ -138,21 +165,26 @@ export class WorktreeRegistry {
     this.items = [...file.items]
   }
 
-  private mutate(apply: (f: RegistryFile) => RegistryFile): Promise<void> {
-    const run = this.queue.then(async () => {
-      this.hold(apply(await this.readForWrite()))
-      await this.save()
-      const snapshot = this.file()
-      for (const cb of this.listeners) {
-        try {
-          cb(snapshot)
-        } catch (err) {
-          this.log?.(`a worktrees.json listener threw: ${err instanceof Error ? err.message : String(err)}`)
-        }
-      }
-    })
+  private enqueue(job: () => Promise<void>): Promise<void> {
+    this.queued++
+    const run = this.queue.then(job).finally(() => this.queued--)
     this.queue = run.catch(() => {})
     return run
+  }
+
+  // Runs inside the queue. Memory changes only once the file on disk says so (constraint 13), and
+  // listeners hear the list this write made, not whatever memory holds by then.
+  private async mutate(apply: (f: RegistryFile) => RegistryFile): Promise<void> {
+    const next = apply(await this.readForWrite())
+    await this.save(next)
+    this.hold(next)
+    for (const cb of this.listeners) {
+      try {
+        cb({ ...next, items: [...next.items] })
+      } catch (err) {
+        this.log?.(`a worktrees.json listener threw: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
   }
 
   /**
@@ -183,12 +215,17 @@ export class WorktreeRegistry {
     return { ...(root ? { root } : {}), items: parsed.items }
   }
 
-  private async save(): Promise<void> {
-    const file = this.file()
+  private async save(file: RegistryFile): Promise<void> {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-    // atomic write (tmp+rename) — prevents a torn write (same pattern as AccountRegistry.save)
+    // atomic write (tmp+rename) — prevents a torn write (same pattern as AccountRegistry.save). The
+    // other process's re-read holds the file open for a moment, which Windows answers with EPERM, so a
+    // busy rename is retried; after that the write is refused, never done in place.
     const tmp = `${this.filePath}.${randomUUID()}.tmp`
-    await fs.writeFile(tmp, JSON.stringify(file, null, 2), 'utf8')
-    await fs.rename(tmp, this.filePath)
+    try {
+      await fs.writeFile(tmp, JSON.stringify(file, null, 2), 'utf8')
+      await renameRetrying(tmp, this.filePath)
+    } finally {
+      await fs.rm(tmp, { force: true }).catch(() => {})
+    }
   }
 }

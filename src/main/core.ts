@@ -277,7 +277,16 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     path.join(userDataDir, 'worktrees.json'),
     // The default root carries the app name. It only steers new worktrees — a root saved in
     // worktrees.json wins over it, and existing entries keep the absolute path they were created at
-    defaultWorktreeRoot(os.homedir())
+    defaultWorktreeRoot(os.homedir()),
+    // A recovery at load, a write refused over a damaged file and a throwing listener are recorded in
+    // their own file, as chat.log is; nothing else would show them. Never throws.
+    (m) => {
+      try {
+        appendFileSync(path.join(userDataDir, 'worktrees.log'), `${new Date().toISOString()} ${m}\n`)
+      } catch {
+        /* a failed log write blocks nothing */
+      }
+    }
   )
   await worktrees.load()
   const localHistory = new LocalHistoryStore(path.join(userDataDir, 'local-history'))

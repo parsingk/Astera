@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type { Account } from '../types'
 import { hookEventsDirIn, hookEventsFileIn } from '../hooks/sessionState'
 import { HOOK_EVENT_AT } from '../hooks/eventTime'
+import { renameRetrying } from '../renameRetry'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -82,11 +83,6 @@ process.stdin.on('end', finish)
 process.stdin.on('error', finish)
 `
 
-/** The rename errors Windows gives while another process holds the target open: a hook loading the
- *  script, or a scanner. The handle lasts milliseconds, so they are retried. */
-const RENAME_BUSY = new Set(['EPERM', 'EACCES', 'EBUSY'])
-const RENAME_TRIES = 5
-
 /**
  * A script a running session may execute at any moment, or a settings file a starting session may
  * read, put in place for this launch.
@@ -97,7 +93,7 @@ const RENAME_TRIES = 5
  *   stores write (core/scheduler/config.ts), so a reader sees the old file or the new one and never
  *   half of one. Written in place, a hook that fired mid-write loaded a torn script (measured in the
  *   task F review: 251 torn reads in 1653 runs).
- * - **A busy rename is retried** (RENAME_BUSY, RENAME_TRIES, 20 to 50 ms apart). Measured on Windows,
+ * - **A busy rename is retried** (renameRetrying: RENAME_BUSY, RENAME_TRIES, 20 to 50 ms apart). Measured on Windows,
  *   5 to 8% of renames over a script being loaded fail with EPERM.
  * - **If it still fails, the script is written in place**, the old behaviour: a torn read is possible
  *   but rare.
@@ -115,16 +111,7 @@ async function writeScript(file: string, content: string): Promise<void> {
   const tmp = `${file}.${randomUUID()}.tmp`
   try {
     await fs.writeFile(tmp, content, 'utf8')
-    for (let attempt = 1; ; attempt++) {
-      try {
-        await fs.rename(tmp, file)
-        return
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code ?? ''
-        if (attempt >= RENAME_TRIES || !RENAME_BUSY.has(code)) throw err
-        await new Promise((r) => setTimeout(r, 10 + attempt * 10))
-      }
-    }
+    await renameRetrying(tmp, file)
   } catch (err) {
     console.warn(`astera: could not swap in ${path.basename(file)} (${(err as Error).message}); writing it in place`)
     try {

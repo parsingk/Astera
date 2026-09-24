@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { WorktreeRegistry, defaultWorktreeRoot } from './registry'
@@ -178,6 +178,174 @@ describe('one worktrees.json, more than one writer (Host S3, D3)', () => {
     const r = new WorktreeRegistry(file, 'D:/root', (m) => logs.push(m))
     expect((await r.load()).recovered).toBe(true)
     expect(logs).toEqual(['worktrees.json was unreadable — kept it as worktrees.json.bak and started an empty list'])
+  })
+})
+describe('a damaged worktrees.json heals at load, a busy rename is retried, and a push keeps its place (Task 1 fix round)', () => {
+  const eperm = (): Error => Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })
+  const tmps = async (): Promise<string[]> => (await fs.readdir(tmp)).filter((n) => n.endsWith('.tmp'))
+  const onDisk = async (file: string): Promise<string[]> =>
+    (JSON.parse(await fs.readFile(file, 'utf8')) as { items: WorktreeInfo[] }).items.map((w) => w.id)
+
+  it('load writes the recovered empty file, so the next add succeeds and the next start is clean', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    await fs.writeFile(file, '{"items":[{"id":"x"', 'utf8')
+    const r = new WorktreeRegistry(file, 'D:/root')
+    expect((await r.load()).recovered).toBe(true)
+    expect(await fs.readFile(file + '.bak', 'utf8')).toBe('{"items":[{"id":"x"')
+    expect(await onDisk(file)).toEqual([])
+    await r.add(wt('after'))
+    const next = new WorktreeRegistry(file, 'D:/root')
+    expect((await next.load()).recovered).toBe(false)
+    expect(next.list().map((w) => w.id)).toEqual(['after'])
+  })
+  it('a restart after a refused write heals the file', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, 'D:/root'); await r.load()
+    await r.add(wt('kept'))
+    await fs.writeFile(file, '{bad', 'utf8')
+    await expect(r.add(wt('refused'))).rejects.toThrow(/unreadable/)
+    expect(r.list().map((w) => w.id)).toEqual(['kept'])
+    expect(await fs.readFile(file, 'utf8')).toBe('{bad')
+    const restarted = new WorktreeRegistry(file, 'D:/root')
+    expect((await restarted.load()).recovered).toBe(true)
+    await restarted.add(wt('later'))
+    expect(await onDisk(file)).toEqual(['later'])
+  })
+  it('does not overwrite the damaged file when the .bak copy fails', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    await fs.writeFile(file, '{bad', 'utf8')
+    const copy = vi.spyOn(fs, 'copyFile').mockRejectedValue(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }))
+    try {
+      expect((await new WorktreeRegistry(file, 'D:/root').load()).recovered).toBe(true)
+    } finally {
+      copy.mockRestore()
+    }
+    expect(await fs.readFile(file, 'utf8')).toBe('{bad')
+  })
+  it('a heal that cannot be written is logged and load still resolves', async () => {
+    const logs: string[] = []
+    const file = path.join(tmp, 'worktrees.json')
+    await fs.writeFile(file, '{bad', 'utf8')
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValue(eperm())
+    try {
+      expect((await new WorktreeRegistry(file, 'D:/root', (m) => logs.push(m)).load()).recovered).toBe(true)
+    } finally {
+      rename.mockRestore()
+    }
+    expect(logs.join('\n')).toMatch(/could not write the recovered worktrees\.json.*EPERM/)
+    expect(await tmps()).toEqual([])
+  })
+  it('retries a rename that fails with EPERM a few times', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, 'D:/root'); await r.load()
+    const rename = vi.spyOn(fs, 'rename')
+    rename.mockRejectedValueOnce(eperm()).mockRejectedValueOnce(eperm()).mockRejectedValueOnce(eperm())
+    try {
+      await r.add(wt('a1'))
+    } finally {
+      rename.mockRestore()
+    }
+    expect(await onDisk(file)).toEqual(['a1'])
+    expect(await tmps()).toEqual([])
+  })
+  it('a rename that never succeeds rejects, leaves memory as it was and no tmp behind', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, 'D:/root'); await r.load()
+    await r.add(wt('kept'))
+    const seen: string[][] = []
+    r.onChange((f) => seen.push(f.items.map((w) => w.id)))
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValue(eperm())
+    try {
+      await expect(r.add(wt('lost'))).rejects.toThrow(/EPERM/)
+    } finally {
+      rename.mockRestore()
+    }
+    expect(r.list().map((w) => w.id)).toEqual(['kept'])
+    expect(seen).toEqual([])
+    expect(await onDisk(file)).toEqual(['kept'])
+    expect(await tmps()).toEqual([])
+  })
+  // A push that lands while a local add is between its re-read and its save.
+  it('a push arriving during the re-read of a local add loses neither the push nor the add', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, 'D:/root'); await r.load()
+    const seen: string[][] = []
+    r.onChange((f) => seen.push(f.items.map((w) => w.id)))
+    const real = fs.readFile.bind(fs)
+    let release!: () => void
+    const gate = new Promise<void>((res) => (release = res))
+    let reached!: () => void
+    const atRead = new Promise<void>((res) => (reached = res))
+    const read = vi.spyOn(fs, 'readFile').mockImplementation((async (...a: Parameters<typeof real>) => {
+      reached()
+      await gate
+      return real(...a)
+    }) as typeof fs.readFile)
+    try {
+      const adding = r.add(wt('a1'))
+      await atRead
+      expect(r.accept({ items: [wt('h1')] })).toBe(true)
+      release()
+      await adding
+    } finally {
+      read.mockRestore()
+    }
+    expect(seen).toEqual([['a1']])
+    expect(await onDisk(file)).toEqual(['a1'])
+    expect(r.list().map((w) => w.id)).toEqual(['h1'])
+  })
+  it('a push arriving during the save of a local add loses neither the push nor the add', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, 'D:/root'); await r.load()
+    const seen: string[][] = []
+    r.onChange((f) => seen.push(f.items.map((w) => w.id)))
+    const real = fs.rename.bind(fs)
+    let release!: () => void
+    const gate = new Promise<void>((res) => (release = res))
+    let reached!: () => void
+    const atRename = new Promise<void>((res) => (reached = res))
+    const rename = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      reached()
+      await gate
+      return real(from, to)
+    })
+    try {
+      const adding = r.add(wt('a1'))
+      await atRename
+      expect(r.accept({ items: [wt('h1')] })).toBe(true)
+      release()
+      await adding
+    } finally {
+      rename.mockRestore()
+    }
+    expect(seen).toEqual([['a1']])
+    expect(await onDisk(file)).toEqual(['a1'])
+    expect(r.list().map((w) => w.id)).toEqual(['h1'])
+  })
+  it('a writer answer waits for a local write started before it', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, 'D:/root'); await r.load()
+    const real = fs.rename.bind(fs)
+    let release!: () => void
+    const gate = new Promise<void>((res) => (release = res))
+    let reached!: () => void
+    const atRename = new Promise<void>((res) => (reached = res))
+    const rename = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      reached()
+      await gate
+      return real(from, to)
+    })
+    try {
+      const local = r.add(wt('a1'))
+      await atRename
+      r.writeThrough({ add: async (w) => ({ items: [wt('h1'), w] }), removeEntry: async () => ({ items: [] }), setRoot: async () => ({ items: [] }) })
+      const through = r.add(wt('t1'))
+      release()
+      await Promise.all([local, through])
+    } finally {
+      rename.mockRestore()
+    }
+    expect(r.list().map((w) => w.id)).toEqual(['h1', 't1'])
   })
 })
 it('defaultWorktreeRoot is the folder the app has always used', () => {
