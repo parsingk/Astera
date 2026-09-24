@@ -69,31 +69,38 @@ export class WorktreeRegistry {
   async load(): Promise<{ recovered: boolean }> {
     // Taken before the read, so it is no newer than the bytes read — see the .bak rule below.
     const readAt = await fs.stat(this.filePath).then((st) => st.mtimeMs, () => null)
+    let text: string | undefined
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
+      text = await fs.readFile(this.filePath, 'utf8')
+      const parsed = JSON.parse(text)
       if (!isRegistryFile(parsed)) throw new Error('invalid schema')
       this.root = normalRoot(parsed.root)
       this.items = parsed.items
       return { recovered: false }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false }
-      // **A .bak at least as new as the damage is already the copy of it, and is kept.** Two
-      // processes (the Host and an app) can start together and both find the damage; the one that
-      // copies second may copy after the first has healed, and its copy would put the healed empty
-      // list over the only record of what was lost. copyFile keeps the source's time on Windows and
-      // stamps the copy's on posix, so "at least as new" covers both. An older .bak is from an
-      // earlier damage and is replaced.
+      // **The .bak gets the bytes this process read**, not a copy of the file as it is by then: two
+      // processes (the Host and an app) can start together and both find the damage, and the second
+      // could otherwise copy the first one's healed empty list over the only record of what was lost.
+      // **A .bak at least as new as the damage is already a copy of it, and is kept.** An older one
+      // is from an earlier damage and is replaced. A read that failed outright gave no bytes to keep,
+      // so nothing is kept and nothing is healed over it.
       const bakAt = await fs.stat(this.filePath + '.bak').then((st) => st.mtimeMs, () => null)
+      const newerBak = readAt !== null && bakAt !== null && bakAt >= readAt
       const kept =
-        readAt !== null && bakAt !== null && bakAt >= readAt
-          ? true
-          : await fs.copyFile(this.filePath, this.filePath + '.bak').then(
-              () => true,
-              () => false
-            )
+        newerBak ||
+        (text !== undefined &&
+          (await fs.writeFile(this.filePath + '.bak', text, 'utf8').then(
+            () => true,
+            () => false
+          )))
       this.root = null
       this.items = []
-      this.log?.('worktrees.json was unreadable — kept it as worktrees.json.bak and started an empty list')
+      this.log?.(
+        newerBak
+          ? 'worktrees.json was unreadable — a newer worktrees.json.bak was already there and was kept; started an empty list'
+          : 'worktrees.json was unreadable — kept it as worktrees.json.bak and started an empty list'
+      )
       // The recovery is written, or every later write's re-read would find the same damaged bytes and
       // refuse, restart after restart. Only once the .bak holds the original. A failure is swallowed
       // (as SchedulerConfigStore.load does) so the app still starts, and logged; the next start retries.
@@ -231,7 +238,9 @@ export class WorktreeRegistry {
       parsed = undefined
     }
     if (!isRegistryFile(parsed)) {
-      const msg = 'worktrees.json is unreadable — refused to write over it, and left it as it is'
+      const msg =
+        'worktrees.json is unreadable — refused to write over it, and left it as it is; ' +
+        'quit and reopen Astera (or restart the Host) to repair it, keeping a copy as worktrees.json.bak'
       this.log?.(msg)
       // Typed, so the Host answers it as a file to repair (409 with `repair`) rather than a failure.
       throw new RepairNeeded(msg, path.basename(this.filePath))

@@ -215,7 +215,11 @@ describe('a damaged worktrees.json heals at load, a busy rename is retried, and 
   it('does not overwrite the damaged file when the .bak copy fails', async () => {
     const file = path.join(tmp, 'worktrees.json')
     await fs.writeFile(file, '{bad', 'utf8')
-    const copy = vi.spyOn(fs, 'copyFile').mockRejectedValue(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }))
+    const realWrite = fs.writeFile.bind(fs)
+    const copy = vi.spyOn(fs, 'writeFile').mockImplementation(async (...args: Parameters<typeof fs.writeFile>) => {
+      if (String(args[0]).endsWith('.bak')) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' })
+      return realWrite(...args)
+    })
     try {
       expect((await new WorktreeRegistry(file, 'D:/root').load()).recovered).toBe(true)
     } finally {
@@ -426,6 +430,43 @@ describe('a re-read per operation, and a .bak two healers share (Host S3 Task 6)
       read.mockRestore()
     }
     expect(await fs.readFile(file + '.bak', 'utf8')).toBe('{bad')
+  })
+})
+describe('the .bak holds what was read, and says when it was kept (Task 6 fix round 2, M4 and M9)', () => {
+  // The window left by copying the live file: this process found no .bak, then another healed the
+  // file (and wrote its own .bak) before this one copied — the copy would be the healed empty list.
+  it('writes the bytes this process read, not whatever the file holds by then', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    await fs.writeFile(file, '{bad', 'utf8')
+    const real = fs.stat.bind(fs)
+    const stat = vi.spyOn(fs, 'stat').mockImplementation(async (p: Parameters<typeof fs.stat>[0]) => {
+      if (String(p).endsWith('.bak')) await fs.writeFile(file, JSON.stringify({ items: [] }), 'utf8')
+      return real(p)
+    })
+    try {
+      expect((await new WorktreeRegistry(file, 'D:/root').load()).recovered).toBe(true)
+    } finally {
+      stat.mockRestore()
+    }
+    expect(await fs.readFile(file + '.bak', 'utf8')).toBe('{bad')
+  })
+  it('logs a .bak it kept rather than wrote', async () => {
+    const logs: string[] = []
+    const file = path.join(tmp, 'worktrees.json')
+    await fs.writeFile(file, '{bad', 'utf8')
+    await fs.writeFile(file + '.bak', '{older-copy', 'utf8')
+    const t = Date.now() / 1000
+    await fs.utimes(file, t - 60, t - 60)
+    await new WorktreeRegistry(file, 'D:/root', (m) => logs.push(m)).load()
+    expect(logs).toEqual([
+      'worktrees.json was unreadable — a newer worktrees.json.bak was already there and was kept; started an empty list'
+    ])
+  })
+  it('a refused write says what repairs the file', async () => {
+    const file = path.join(tmp, 'worktrees.json')
+    const r = new WorktreeRegistry(file, 'D:/root'); await r.load()
+    await fs.writeFile(file, '{bad', 'utf8')
+    await expect(r.add(wt('x'))).rejects.toThrow(/unreadable.*reopen Astera/)
   })
 })
 const onDiskIds = async (file: string): Promise<string[]> =>
