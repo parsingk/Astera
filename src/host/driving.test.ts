@@ -1169,6 +1169,62 @@ describe('createHostDriving — the app-left grace (S4+S5 tidy)', () => {
     expect(h.stopForeignValidations).not.toHaveBeenCalled()
   })
 
+  // Last round (a): a same-pid app that stays detached past the grace and then quits without
+  // reconnecting. Its kept steps run on the next tick with no app attached once app.pid no longer
+  // names it.
+  it('runs the kept steps once on a no-app tick after the kept app has gone without reconnecting', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    h.appPid.value = 4242
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    h.grace.hold = true
+    h.server.app = false
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.fireGrace()).toBe(1) // same pid: kept
+    await h.tickNow()
+    await h.settle()
+    expect(h.startRepair).not.toHaveBeenCalled()
+    h.appPid.value = null // it quits
+    await h.tickNow()
+    await vi.waitFor(() => expect(h.startRepair).toHaveBeenCalledTimes(1))
+    expect(h.stopForeignValidations).toHaveBeenCalledTimes(1)
+    expect(h.stopForeignValidations).toHaveBeenCalledWith()
+    expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left')
+    await h.tickNow()
+    await h.settle()
+    expect(h.startRepair).toHaveBeenCalledTimes(1) // once
+    expect(h.stopForeignValidations).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops the kept steps when that same app reconnects later', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    h.appPid.value = 4242
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    h.grace.hold = true
+    h.server.app = false
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.fireGrace()).toBe(1)
+    h.server.app = true // the same app, back after the grace
+    h.driving.appsChanged()
+    await h.settle()
+    h.server.app = false // it quits for good; its own leave is decided afresh
+    h.appPid.value = null
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.fireGrace()).toBe(1)
+    await vi.waitFor(() => expect(h.startRepair).toHaveBeenCalledTimes(1))
+    await h.tickNow()
+    await h.settle()
+    expect(h.startRepair).toHaveBeenCalledTimes(1)
+  })
+
   // Review minor: a Task armed before an app attached must not be gated inside a later grace.
   it('drops the arming when an app attaches, so a later grace gates nothing armed before it', async () => {
     const h = await rig({ readyTasks: 0 })

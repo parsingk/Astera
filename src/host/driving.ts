@@ -399,6 +399,8 @@ export function createHostDriving(d: {
       // tick, `STALL_CONFIRM_MS` on at the least, as before.
       await gateStalled()
       if (mayStart() && !d.server.hasApp()) armStalled('a tick')
+      // Last round (a): steps a same-pid app kept, once app.pid shows it gone.
+      if (mayStart() && !d.server.hasApp()) settleKept('a tick')
       // R22: the spec pile-up, narrowly — no app attached (an app writes specs too) and no spawn of
       // this Host's in flight (its spec is on disk before its Dispatch names it).
       if (!d.server.hasApp() && d.spawner.inFlight() === 0 && d.orch.loaded()) {
@@ -441,9 +443,29 @@ export function createHostDriving(d: {
     const now = appPid()
     if (p.pid !== null && now === p.pid) {
       log(`${at} and app.pid still names pid ${now}: the same app, so what it left stays with it`)
+      // Kept, not dropped (last round, a): that app may stay detached and then quit without ever
+      // reconnecting, and nothing else would decide these steps again. `settleKept` does.
+      if (!d.server.hasApp()) kept = { pid: p.pid, at: p.at }
       return
     }
-    const goneAt = d.server.hasApp() ? p.at : undefined
+    runAppLeftSteps(d.server.hasApp() ? p.at : undefined)
+  }
+  /** The steps a same-pid app kept at the end of its grace: the pid, and when it left. */
+  let kept: { pid: number; at: number } | null = null
+  /** Decides kept steps again: at an attach (the same pid is that app back, and they are its own; any
+   *  other pid is a new instance, and they run beside it) and on a tick with no app attached (app.pid
+   *  no longer naming a live `kept.pid` is that app gone, and they run once). */
+  const settleKept = (at: 'an app attached' | 'a tick'): void => {
+    const k = kept
+    if (!k) return
+    const now = appPid()
+    if (at === 'a tick' && now === k.pid) return
+    kept = null
+    if (now === k.pid) return
+    log(`${at}: the app that kept what it left (pid ${k.pid}) is gone — its steps run now`)
+    runAppLeftSteps(d.server.hasApp() ? k.at : undefined)
+  }
+  const runAppLeftSteps = (goneAt: number | undefined): void => {
     handover = handover
       .then(async () => {
         if (!mayStart()) return
@@ -480,8 +502,10 @@ export function createHostDriving(d: {
         // inside a later grace, before anything has looked at it again.
         suspects.clear()
         decideAppLeft('an app attached')
+        settleKept('an app attached')
       }
       if (appLeft && was === 'host' && last === 'host') {
+        kept = null // a fresh leave: decided afresh
         appLeftPending?.cancel()
         const cancel = after(APP_LEFT_GRACE_MS, () => decideAppLeft('the grace ended'))
         appLeftPending = { cancel, pid: appPid(), at: d.nowMs() }
@@ -500,6 +524,7 @@ export function createHostDriving(d: {
       stop()
       appLeftPending?.cancel()
       appLeftPending = null
+      kept = null
     }
   }
 }
