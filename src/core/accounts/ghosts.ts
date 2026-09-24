@@ -13,8 +13,14 @@ const GHOST_COLOR = '#6b7280'
  *  (a test can compare two calls) and still parses, so any date formatter that reaches it survives. */
 const GHOST_CREATED_AT = new Date(0).toISOString()
 
-/** Same rule as detect.ts's normalize — the id has to survive a restart and must not change when the
- *  same directory arrives spelled differently (drive-letter case, forward slashes). */
+/** The id has to survive a restart and must not change when the same directory arrives spelled
+ *  differently (drive-letter case, forward slashes).
+ *
+ *  **Case is folded here on every platform, linux included — on purpose, unlike comparablePath.** This
+ *  is not a comparison but an identifier that is stored: history entry ids embed it
+ *  (`<accountId>:<sessionId>`), and the renderer keeps those ids in localStorage as the seen marks
+ *  (HistoryBrowser, `cm.historySeen`). Folding on linux too keeps every stored mark pointing at its
+ *  ghost; the cost is that two linux config dirs differing only in case would share a ghost id. */
 const normalizeDir = (p: string): string => path.resolve(p).toLowerCase()
 
 /**

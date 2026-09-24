@@ -7,6 +7,7 @@ import path from 'node:path'
 import { parentDir } from '../files/paths'
 import { uniqueName } from '../files/ops'
 import { isPathWithin } from '../files/tree'
+import { legacyFoldedKey } from '../files/paths'
 import {
   normalizeProjectPath,
   projectKey,
@@ -104,7 +105,31 @@ export class LocalHistoryStore {
   // out — always use this key.
   private byProject: Record<string, HistoryEntry[]> = {}
 
-  constructor(private rootDir: string) {}
+  constructor(
+    private rootDir: string,
+    private platform: string = process.platform
+  ) {}
+
+  /** The index key for projectPath, after moving over what an older build filed for it under the
+   *  lower-cased key (normalizeProjectPath's note). Only on a platform that does not fold case, and
+   *  only the entries whose originalPath is actually under projectPath: on linux the old key was shared
+   *  by every folder spelled the same apart from case, and a sibling's entries stay where they are
+   *  until that sibling asks for them. The move is in memory; the next save() writes it, and until then
+   *  a restart simply moves it again. Nothing is dropped — an entry leaves the old key only by being
+   *  put under the new one. */
+  private adopt(projectPath: string): string {
+    const key = normalizeProjectPath(projectPath, this.platform)
+    const legacy = legacyFoldedKey(key, this.platform)
+    const old = legacy === null ? undefined : this.byProject[legacy]
+    if (legacy === null || !old) return key
+    const mine = old.filter((e) => isPathWithin(projectPath, e.originalPath, this.platform))
+    if (mine.length === 0) return key
+    const rest = old.filter((e) => !mine.includes(e))
+    this.byProject[key] = [...mine, ...(this.byProject[key] ?? [])].sort((a, b) => a.deletedAt - b.deletedAt)
+    if (rest.length === 0) delete this.byProject[legacy]
+    else this.byProject[legacy] = rest
+    return key
+  }
 
   private get indexPath(): string {
     return path.join(this.rootDir, INDEX_FILE)
@@ -133,7 +158,7 @@ export class LocalHistoryStore {
    *  (a hash) could let entries from another project with a colliding hash come out mixed in. Returned
    *  in stored order, not oldest first (sorting is the caller's job). */
   list(projectPath: string): HistoryEntry[] {
-    return [...(this.byProject[normalizeProjectPath(projectPath)] ?? [])]
+    return [...(this.byProject[this.adopt(projectPath)] ?? [])]
   }
 
   /** The snapshot taken just before files.remove. On tooLarge it does nothing and returns null (the
@@ -146,7 +171,7 @@ export class LocalHistoryStore {
   async snapshot(projectPath: string, targetPath: string, isDir: boolean): Promise<HistoryEntry | null> {
     const size = await measureSize(targetPath)
     if (tooLarge(size)) return null
-    const key = normalizeProjectPath(projectPath)
+    const key = this.adopt(projectPath)
     const projectDir = path.join(this.rootDir, projectKey(projectPath))
     await fs.mkdir(projectDir, { recursive: true })
     // The taken list used to avoid id collisions comes from this hash directory's actual children (the
@@ -215,7 +240,7 @@ export class LocalHistoryStore {
     id: string,
     validateDest?: (dest: string) => Promise<void>
   ): Promise<string> {
-    const key = normalizeProjectPath(projectPath)
+    const key = this.adopt(projectPath)
     const entry = (this.byProject[key] ?? []).find((e) => e.id === id)
     if (!entry) throw new Error('LOCAL_HISTORY_NOT_FOUND: history entry not found')
     // index.json is a file on disk the user can open and edit by hand, and load()'s isValidEntry only
@@ -226,7 +251,7 @@ export class LocalHistoryStore {
     // escapes projectPath. Every good entry snapshot() actually records is always under projectPath, so
     // this check does not block normal operation and only filters out hand-edited entries. It uses the
     // same "not found" message so as not to reveal that hand-editing was detected at all.
-    if (!isPathWithin(projectPath, entry.originalPath))
+    if (!isPathWithin(projectPath, entry.originalPath, this.platform))
       throw new Error('LOCAL_HISTORY_NOT_FOUND: history entry not found')
     const destParent = parentDir(entry.originalPath)
     // validateDest is called before mkdir/readdir — otherwise the destination's parent directory would
@@ -266,7 +291,7 @@ export class LocalHistoryStore {
    *  and only then is the disk removed — the same ordering principle as snapshot()'s eviction (a disk
    *  delete failing on a locked file and the like must not block the index update itself). */
   async discard(projectPath: string, id: string): Promise<void> {
-    const key = normalizeProjectPath(projectPath)
+    const key = this.adopt(projectPath)
     const list = this.byProject[key] ?? []
     if (!list.some((e) => e.id === id)) return
     this.byProject[key] = list.filter((e) => e.id !== id)

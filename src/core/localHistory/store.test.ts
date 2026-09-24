@@ -402,10 +402,10 @@ describe('LocalHistoryStore.list — 프로젝트 간 이력 격리', () => {
     expect(store.list(projB).some((e) => e.originalPath === fa)).toBe(false)
   })
 
-  it('같은 경로를 대소문자·구분자만 다르게 줘도 같은 프로젝트로 취급한다', async () => {
+  it('win32 에서는 같은 경로를 대소문자·구분자만 다르게 줘도 같은 프로젝트로 취급한다', async () => {
     const root = await tmp('astera-lh-list-norm-')
     const historyDir = path.join(root, 'local-history')
-    const store = new LocalHistoryStore(historyDir)
+    const store = new LocalHistoryStore(historyDir, 'win32')
     await store.load()
     const projDir = await tmp('astera-lh-list-norm-proj-')
     const f = path.join(projDir, 'x.txt')
@@ -415,6 +415,68 @@ describe('LocalHistoryStore.list — 프로젝트 간 이력 격리', () => {
     const upper = projDir.toUpperCase() + '\\' // 대소문자 다르고 끝 구분자 추가
     expect(store.list(upper).length).toBe(1)
   })
+
+  it('linux 에서는 대소문자만 다른 두 폴더가 서로의 이력을 보지 않는다', async () => {
+    const root = await tmp('astera-lh-list-linux-')
+    const store = new LocalHistoryStore(path.join(root, 'local-history'), 'linux')
+    await store.load()
+    const projDir = path.join(await tmp('astera-lh-list-linux-proj-'), 'Proj')
+    await fs.mkdir(projDir)
+    const f = path.join(projDir, 'x.txt')
+    await fs.writeFile(f, 'x', 'utf8')
+    await store.snapshot(projDir, f, false)
+
+    expect(store.list(projDir).length).toBe(1)
+    expect(store.list(path.join(path.dirname(projDir), 'proj'))).toEqual([])
+  })
+})
+
+describe('LocalHistoryStore — 예전 빌드가 소문자로 적은 index.json 키 (linux)', () => {
+  /** 예전 빌드의 키 규칙을 일부러 그대로 옮겨 둔다 — 디스크에 이미 있는 형식을 흉내 내는 것이라
+   *  모듈에서 가져오면 모듈이 바뀔 때 같이 바뀌어 버린다. */
+  const legacyKeyOf = (p: string): string => p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+
+  async function seedLegacy(): Promise<{ historyDir: string; projDir: string; target: string }> {
+    const root = await tmp('astera-lh-legacy-')
+    const historyDir = path.join(root, 'local-history')
+    const projDir = path.join(await tmp('astera-lh-legacy-proj-'), 'Proj')
+    await fs.mkdir(projDir)
+    const target = path.join(projDir, 'old.txt')
+    // 예전 빌드가 남긴 스냅샷: 해시 디렉터리 밑의 사본과, 소문자 키로 적힌 index.json
+    const id = '00000000000001-old.txt'
+    const snapDir = path.join(historyDir, projectKey(projDir), id)
+    await fs.mkdir(snapDir, { recursive: true })
+    await fs.writeFile(path.join(snapDir, 'old.txt'), 'old contents', 'utf8')
+    const entry = { id, originalPath: target, deletedAt: Date.now(), size: 12, isDir: false }
+    await fs.writeFile(path.join(historyDir, 'index.json'), JSON.stringify({ [legacyKeyOf(projDir)]: [entry] }), 'utf8')
+    return { historyDir, projDir, target }
+  }
+
+  it('옛 키의 항목은 그 폴더에서 보이고 복구되며, 대소문자만 다른 다른 폴더에서는 보이지 않는다', async () => {
+    const { historyDir, projDir, target } = await seedLegacy()
+    const store = new LocalHistoryStore(historyDir, 'linux')
+    await store.load()
+    expect(store.list(path.join(path.dirname(projDir), 'PROJ'))).toEqual([])
+    const listed = store.list(projDir)
+    expect(listed.map((e) => e.originalPath)).toEqual([target])
+    expect(await store.restore(projDir, listed[0].id)).toBe(target)
+    expect(await fs.readFile(target, 'utf8')).toBe('old contents')
+  })
+
+  it('다음 snapshot 이 옛 항목을 원래 철자의 키로 옮겨 적는다', async () => {
+    const { historyDir, projDir } = await seedLegacy()
+    const store = new LocalHistoryStore(historyDir, 'linux')
+    await store.load()
+    const f = path.join(projDir, 'new.txt')
+    await fs.writeFile(f, 'new', 'utf8')
+    await store.snapshot(projDir, f, false)
+
+    const onDisk = JSON.parse(await fs.readFile(path.join(historyDir, 'index.json'), 'utf8')) as Record<string, unknown[]>
+    const exactKey = projDir.replace(/\//g, '\\').replace(/\\+$/, '')
+    expect(Object.keys(onDisk)).toEqual([exactKey])
+    expect(onDisk[exactKey]).toHaveLength(2)
+  })
+
 })
 
 describe('LocalHistoryStore.restore', () => {

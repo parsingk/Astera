@@ -27,6 +27,11 @@ describe('projectKey', () => {
     expect(projectKey('d:/PROJ')).toBe(projectKey('D:\\proj'))
   })
 
+  it('디스크의 디렉터리 이름이라 모든 플랫폼에서 대소문자를 접는다 — 예전 스냅샷을 그 자리에서 찾는다', () => {
+    // 플랫폼 인자가 없다: linux 에서도 /home/u/Proj 의 스냅샷은 예전 빌드가 만든 그 디렉터리에 있다
+    expect(projectKey('/home/u/Proj')).toBe(projectKey('/home/u/proj'))
+  })
+
   it('끝 구분자를 무시한다', () => {
     expect(projectKey('D:\\proj\\')).toBe(projectKey('D:\\proj'))
   })
@@ -129,8 +134,14 @@ describe('selectEvictions', () => {
 })
 
 describe('normalizeProjectPath', () => {
-  it('구분자·대소문자·끝 구분자를 정규화한다 — index.json의 키가 된다', () => {
-    expect(normalizeProjectPath('d:/PROJ\\')).toBe(normalizeProjectPath('D:\\proj'))
+  it('구분자·대소문자·끝 구분자를 정규화한다 — index.json의 키가 된다 (win32, darwin)', () => {
+    expect(normalizeProjectPath('d:/PROJ\\', 'win32')).toBe(normalizeProjectPath('D:\\proj', 'win32'))
+    expect(normalizeProjectPath('/Users/u/PROJ/', 'darwin')).toBe(normalizeProjectPath('/users/u/proj', 'darwin'))
+  })
+
+  it('linux 에서는 대소문자를 접지 않는다 — 구분자와 끝 구분자만 정규화한다', () => {
+    expect(normalizeProjectPath('/home/u/Proj/', 'linux')).toBe(normalizeProjectPath('/home/u/Proj', 'linux'))
+    expect(normalizeProjectPath('/home/u/Proj', 'linux')).not.toBe(normalizeProjectPath('/home/u/proj', 'linux'))
   })
 
   it('다른 프로젝트는 다른 키 (해시와 달리 충돌하지 않는다)', () => {

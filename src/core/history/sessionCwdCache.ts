@@ -10,10 +10,16 @@
 // transcripts between accounts, and a replaced file has to miss.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { foldPathCase, legacyFoldedKey } from '../files/paths'
 
-// win32 first: the same rule as `norm` in index.ts, so a key survives a drive-letter or separator
-// difference between two runs.
-const keyOf = (p: string): string => path.resolve(p).toLowerCase()
+// The same rule as `norm` in index.ts, so a key survives a drive-letter or separator difference
+// between two runs: resolved, and case-folded where the platform ignores case (foldPathCase).
+//
+// Older builds folded case on every platform, so on linux the file can hold `/a/x.jsonl` for
+// `/a/X.jsonl`. get also tries that key — a hit still has to match (mtimeMs, size), so a legacy row
+// of a different file that only shares the lower-cased name misses as it should. set writes the exact
+// key and leaves the old row alone: it is a cache, the row costs a few bytes, and MAX_ENTRIES prunes it
+// in time. Nothing changes on win32 or darwin.
 
 /** [mtimeMs, size, cwd]. A null cwd is stored too, on purpose — a non-conversation record never gains
  *  one, and leaving it out would mean re-reading exactly those files on every pass. */
@@ -39,7 +45,14 @@ export class SessionCwdCache {
   private map = new Map<string, Entry>()
   private dirty = false
 
-  constructor(private filePath: string) {}
+  constructor(
+    private filePath: string,
+    private platform: string = process.platform
+  ) {}
+
+  private keyOf(p: string): string {
+    return foldPathCase(path.resolve(p), this.platform)
+  }
 
   /** Same contract as the other stores: absent = empty, corrupt = keep a .bak and start empty. A
    *  cache is not worth failing startup over, so neither case throws. */
@@ -64,13 +77,15 @@ export class SessionCwdCache {
   /** The memoized cwd, or undefined on a miss. A hit can legitimately be null (no cwd in the file),
    *  which is why a miss is undefined rather than null. */
   get(filePath: string, mtimeMs: number, size: number): string | null | undefined {
-    const hit = this.map.get(keyOf(filePath))
+    const key = this.keyOf(filePath)
+    const legacy = legacyFoldedKey(key, this.platform)
+    const hit = this.map.get(key) ?? (legacy === null ? undefined : this.map.get(legacy))
     if (!hit || hit[0] !== mtimeMs || hit[1] !== size) return undefined
     return hit[2]
   }
 
   set(filePath: string, mtimeMs: number, size: number, cwd: string | null): void {
-    this.map.set(keyOf(filePath), [mtimeMs, size, cwd])
+    this.map.set(this.keyOf(filePath), [mtimeMs, size, cwd])
     this.dirty = true
   }
 

@@ -4,7 +4,8 @@
 // be verified (the same reason as explorerState.ts).
 // It uses neither node:path nor node:crypto — the renderer has to see the same rules when it shows
 // the history list.
-// There are no imports — this module is entirely self-contained.
+// Its one import is paths.ts, which is node-free for the same reason.
+import { foldPathCase, runtimePlatform } from './paths'
 
 /** Cap on total snapshot bytes per project. Past it, the oldest go first */
 export const MAX_TOTAL_BYTES = 200 * 1024 * 1024
@@ -24,14 +25,20 @@ export interface HistoryEntry {
   isDir: boolean
 }
 
-// Path normalization — unify separators, lowercase, drop the trailing separator. The same rule as
-// norm in ops.ts (win32 case-insensitive).
-const norm = (p: string): string => p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+// Path normalization — unify separators, drop the trailing separator, and fold case where the
+// platform ignores it (foldPathCase: win32 and darwin fold, linux does not). The same rule as norm in
+// ops.ts.
+const unifySeparators = (p: string): string => p.replace(/\//g, '\\').replace(/\\+$/, '')
+const norm = (p: string, platform: string): string => foldPathCase(unifySeparators(p), platform)
 
 /** The key in index.json. It is the full normalized path, not a hash, so it can never collide.
- *  This is what guarantees history never gets mixed up between projects. */
-export function normalizeProjectPath(rootPath: string): string {
-  return norm(rootPath)
+ *  This is what guarantees history never gets mixed up between projects.
+ *
+ *  Older builds lower-cased this key on every platform; on linux an index.json written then holds
+ *  `\home\u\proj` for `/home/u/Proj`. The store finds such a key with legacyFoldedKey and moves its
+ *  entries over (store.ts, adopt). */
+export function normalizeProjectPath(rootPath: string, platform: string = runtimePlatform()): string {
+  return norm(rootPath, platform)
 }
 
 /** Project path -> the **directory name** under the store. node:crypto is unavailable, so this uses
@@ -39,9 +46,15 @@ export function normalizeProjectPath(rootPath: string): string {
  *  key in index.json is normalizeProjectPath. A collision merely means two projects share a
  *  directory — the snapshots inside are unique by timestamp + name and list() filters by the
  *  normalized path, so correctness does not break.
- *  The result holds only [0-9a-z], so it is usable as a directory name on any filesystem. */
+ *  The result holds only [0-9a-z], so it is usable as a directory name on any filesystem.
+ *
+ *  **Case is folded here on every platform, linux included, unlike normalizePath.** This names
+ *  directories that already exist on disk: every snapshot an older build took sits under the folded
+ *  hash, and restore finds it by recomputing this value. Folding costs nothing but the sharing this
+ *  comment already allows for — two linux projects differing only in case share a directory, and the
+ *  index key (case-exact on linux) keeps their entries apart. */
 export function projectKey(rootPath: string): string {
-  const s = norm(rootPath)
+  const s = unifySeparators(rootPath).toLowerCase()
   let h = 0x811c9dc5
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i)

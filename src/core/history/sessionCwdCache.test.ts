@@ -58,12 +58,33 @@ describe('SessionCwdCache', () => {
     expect(c.get(p, 100, 21)).toBeUndefined()
   })
 
-  it('대소문자 표기가 달라도 같은 파일로 본다', async () => {
-    const c = new SessionCwdCache(filePath())
+  it('win32 에서는 대소문자 표기가 달라도 같은 파일로 본다', async () => {
+    const c = new SessionCwdCache(filePath(), 'win32')
     await c.load()
     const p = sessionPath('A', 'X.jsonl')
     c.set(p, 100, 20, CWD_A)
     expect(c.get(p.toLowerCase(), 100, 20)).toBe(CWD_A)
+  })
+
+  it('linux 에서는 대소문자만 다른 두 파일을 따로 기억한다', async () => {
+    const c = new SessionCwdCache(filePath(), 'linux')
+    await c.load()
+    const p = sessionPath('A', 'X.jsonl')
+    c.set(p, 100, 20, CWD_A)
+    expect(c.get(sessionPath('A', 'x.jsonl'), 100, 20)).toBeUndefined()
+  })
+
+  it('linux: 예전 빌드가 소문자로 적은 키도 찾고, 새로 적는 키는 원래 철자다', async () => {
+    const p = sessionPath('A', 'X.jsonl')
+    await fs.writeFile(filePath(), JSON.stringify({ [keyOf(p)]: [100, 20, CWD_A] }), 'utf8')
+    const c = new SessionCwdCache(filePath(), 'linux')
+    await c.load()
+    expect(c.get(p, 100, 20)).toBe(CWD_A)
+    c.set(p, 200, 30, CWD_B)
+    await c.flush()
+    const stored = JSON.parse(await fs.readFile(filePath(), 'utf8')) as Record<string, unknown>
+    expect(stored[path.resolve(p)]).toEqual([200, 30, CWD_B])
+    expect(c.get(p, 200, 30)).toBe(CWD_B)
   })
 
   // 구분자를 무시하는 것은 path.resolve 가 win32 에서만 주는 성질이고, 두 표기가 실제로 섞여 들어오는
