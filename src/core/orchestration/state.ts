@@ -1965,6 +1965,17 @@ export function attachCoordinator(
   return ok({ ...s, runs: replace(s.runs, next) }, next)
 }
 
+/** A roll respawned the session a Run's coordinator slot names: the slot follows it (S6 R14). */
+export function rekeyCoordinator(
+  s: OrchState,
+  a: { oldSessionId: string; newSessionId: string }
+): Res<JobRun | null> {
+  const run = s.runs.find((r) => r.coordinatorSessionId === a.oldSessionId)
+  if (!run) return ok(s, null)
+  const next: JobRun = { ...run, coordinatorSessionId: a.newSessionId }
+  return ok({ ...s, runs: replace(s.runs, next) }, next)
+}
+
 /** 코디네이터 세션을 뗀다. **왜 사라졌는지 묻지 않는다** — 사람이 닫았는지 크래시인지 구별할
  *  방법이 없고(`SessionManager.kill` 은 표시를 남기지 않는다), 어느 쪽이든 앱이 하는 일은 같다:
  *  이 칸을 지우고 사람이 다시 띄울 버튼을 내보인다(Run.coordinatorSessionId 의 주석). */

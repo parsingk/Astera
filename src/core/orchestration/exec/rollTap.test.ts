@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { OrchRollTap, EXIT_DEFER_MS, ExitsBeforeTap, EXITS_BEFORE_TAP_MAX } from './rollTap'
-import type { OrchServerDeps } from '../../core/orchestration/command'
-import type { RollStateEvent } from '../../core/types'
-import type { git } from '../../core/worktrees/git'
-import { buildCheckpoint } from '../../core/orchestration/checkpoint'
+import type { OrchServerDeps } from '../command'
+import type { RollStateEvent } from '../../types'
+import type { git } from '../../worktrees/git'
+import { buildCheckpoint } from '../checkpoint'
 import {
 
   createJob,
@@ -12,7 +12,7 @@ import {
   openDispatch,
   emptyState,
   type OrchState
-} from '../../core/orchestration/state'
+} from '../state'
 
 /** 예전의 createRun 한 번 — 이제 계획을 만들고 그 1회차를 시작하는 두 걸음이다. */
 const seedRun = (over: Parameters<typeof createJob>[1], now: string) => {
@@ -656,5 +656,18 @@ describe('ExitsBeforeTap', () => {
     expect(before.hold({ sessionId: 'after', exitCode: 0 })).toBe('closed')
     expect(before.drainInto(tap)).toBe(0)
     expect(heard).toHaveLength(EXITS_BEFORE_TAP_MAX)
+  })
+})
+
+import { attachCoordinator } from '../state'
+
+describe('a roll that respawns a coordinator (S6 R14, a pre-existing defect)', () => {
+  it('moves the Run’s coordinator slot to the new session, so its exit does not detach it', async () => {
+    const run = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
+    const attached = unwrap<{ id: string }>(attachCoordinator(run.state, { runId: run.value.id, sessionId: 'coord-old' }) as never)
+    const deps = makeDeps(attached.state)
+    const tap = new OrchRollTap(deps)
+    await tap.onRolled('coord-old', { id: 'coord-new', accountId: 'acc1' })
+    expect(deps.state().runs[0].coordinatorSessionId).toBe('coord-new')
   })
 })

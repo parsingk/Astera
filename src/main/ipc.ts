@@ -103,7 +103,8 @@ import {
   dispatchesHeldOnlyByReport,
   reportedDispatchIdsOf
 } from '../core/orchestration/pendingReports'
-import { ExitsBeforeTap, OrchRollTap } from './orchestration/rollTap'
+import { ExitsBeforeTap, OrchRollTap } from '../core/orchestration/exec/rollTap'
+import { deferCoordinatorRelease } from './orchestration/releaseDefer'
 import type { TaskValidator } from '../core/orchestration/exec/validator'
 import { createTaskValidation } from '../core/orchestration/exec/validation'
 import {
@@ -1436,7 +1437,10 @@ export function registerIpc(
         .catch((err) => orchLog(`work unit exit failed: ${String(err)}`))
     // The exit code goes with the id: an exit that only means the app lost sight of the session must
     // not empty the slot. See `releaseCoordinator` itself for why refusing is the whole fix.
-    void releaseCoordinator?.(e.sessionId, e.exitCode) // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다
+    // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다 — 롤 창(EXIT_DEFER_MS)이 지난 뒤에: 롤이 다시
+    // 띄운 코디네이터라면 그 사이 롤 탭이 칸을 새 세션으로 옮겨 두어, 옛 id 로는 칸을 찾지 못한다 (S6 R14).
+    // The timer can fire after quit; `releaseCoordinator` returns at its own `if (!orch) return` then.
+    if (releaseCoordinator) deferCoordinatorRelease(releaseCoordinator, e, orchLog)
     // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
     // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
     // it fired for the *old* session a smart resume had just written the briefing under, while the

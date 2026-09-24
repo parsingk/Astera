@@ -27,6 +27,7 @@ import {
   latestRun,
   setRunWorktree,
   attachCoordinator,
+  rekeyCoordinator,
   detachCoordinator,
   bindNativeSession,
   beginValidation,
@@ -3369,5 +3370,21 @@ describe('stampPolicySnapshot', () => {
   it('없는 Task 면 그대로 돌려준다', () => {
     const { s } = armed()
     expect(stampPolicySnapshot(s, { taskId: 'nope', key: 'K1' }, NOW)).toBe(s)
+  })
+})
+
+describe('rekeyCoordinator (S6 R14)', () => {
+  it('moves the slot that names the old session, and nothing else', () => {
+    const planned = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!planned.ok) throw new Error(planned.error)
+    const started = startJobRun(planned.state, planned.value.id, NOW)
+    if (!started.ok) throw new Error(started.error)
+    const withSlot = attachCoordinator(started.state, { runId: started.value.id, sessionId: 'old' })
+    if (!withSlot.ok) throw new Error(withSlot.error)
+    const r = rekeyCoordinator(withSlot.state, { oldSessionId: 'old', newSessionId: 'new' })
+    expect(r.ok && r.value?.coordinatorSessionId).toBe('new')
+    const none = rekeyCoordinator(withSlot.state, { oldSessionId: 'other', newSessionId: 'new' })
+    expect(none.ok && none.value).toBeNull()
+    expect(none.ok && none.state).toBe(withSlot.state)
   })
 })

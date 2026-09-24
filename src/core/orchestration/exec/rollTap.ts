@@ -23,14 +23,15 @@ import {
   recordResume,
   recordStopHead,
   recordStopSnapshot,
+  rekeyCoordinator,
   rekeyDispatch,
   updateStopReset
-} from '../../core/orchestration/state'
-import type { Dispatch } from '../../core/orchestration/types'
-import type { RollStateEvent } from '../../core/types'
-import { git } from '../../core/worktrees/git'
-import { handleExit, type OrchServerDeps } from '../../core/orchestration/command'
-import { EXIT_DEFER_MS } from '../../core/orchestration/exec/exitOwner'
+} from '../state'
+import type { Dispatch } from '../types'
+import type { RollStateEvent } from '../../types'
+import { git } from '../../worktrees/git'
+import { handleExit, type OrchServerDeps } from '../command'
+import { EXIT_DEFER_MS } from './exitOwner'
 
 /** exit 처리를 미뤄 두는 창.
  *
@@ -133,7 +134,18 @@ export class OrchRollTap {
     // 재키잉이 어떻게 됐든 새 id 로 온다. 옮기지 않으면 옛 id 의 표시가 그것을 지울 'none' 을
     // 영원히 못 만나고, 새 id 는 표시가 없어 respawn 직후의 게시를 새 정지로 오인한다.
     if (this.stopped.delete(oldSessionId)) this.stopped.add(newInfo.id)
-    const now = this.deps.now?.() ?? new Date().toISOString()
+    // A coordinator's slot follows the roll too (S6 R14). Before the Dispatch branch, whose "not a
+    // worker" return every coordinator takes, and committed on its own: nothing below depends on it.
+    const slot = rekeyCoordinator(this.deps.getState(), { oldSessionId, newSessionId: newInfo.id })
+    if (slot.ok && slot.value) {
+      try {
+        await this.deps.setState(slot.state)
+        this.deps.log?.(`coordinator slot run=${slot.value.id} rekeyed ${oldSessionId} -> ${newInfo.id}`)
+      } catch (err) {
+        this.deps.log?.(`coordinator slot rekey commit failed run=${slot.value.id}: ${String(err)}`)
+      }
+    }
+    const now =this.deps.now?.() ?? new Date().toISOString()
     const r = rekeyDispatch(
       this.deps.getState(),
       { oldSessionId, newSessionId: newInfo.id, accountId: newInfo.accountId },
