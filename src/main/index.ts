@@ -55,6 +55,7 @@ import {
 } from './manualInstall'
 import type { SessionInfo, RollStateEvent, UpdateCampaignInfo, InstallOutcome } from '../core/types'
 import { providerOf } from '../core/providers/meta'
+import { USAGE_GATE_MAX_AGE_MS } from '../core/usage/rateLimitFetcher'
 
 // The dev (unpackaged) app uses a different userData folder than the installed one. The installer
 // writes to %APPDATA%\Astera, and because Windows is case-insensitive the dev build (app name
@@ -73,12 +74,6 @@ if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
 // scoped to WSLg alone. A command-line switch has to be appended before the app starts, hence here.
 if (shouldForceWaylandOzone(process.platform, process.env['WAYLAND_DISPLAY'], existsSync))
   app.commandLine.appendSwitch('ozone-platform', 'wayland')
-
-// The oldest usage figure the limit gate is allowed to decide on. RateLimitFetcher's default 5-minute
-// cache is fine for a status bar but fatal for a verdict — a reading taken just below the threshold
-// (96%, say) would reject a genuine limit 90 seconds later. The phrase re-matches on every chunk while
-// it is on screen, so this window doubles as the query throttle.
-const USAGE_GATE_MAX_AGE_MS = 10_000
 
 // The carriage return the rolling coordinators write to submit a prompt on a pty. The `write` routing
 // in their dep blocks below recognises it in order to drop it: a chat session is handed a whole

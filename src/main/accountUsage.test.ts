@@ -5,7 +5,7 @@ import path from 'node:path'
 import type { Account, AccountUsage, RateLimitUsage } from '../core/types'
 import { AccountUsageStore, type RememberedUsage } from './accountUsageStore'
 import { createAccountUsage } from './accountUsage'
-import { TTL_OK_MS } from './usageCache'
+import { TTL_OK_MS } from '../core/usage/usageCache'
 
 const HOUR = 3_600_000
 const NOW = Date.parse('2026-09-02T12:00:00.000Z')

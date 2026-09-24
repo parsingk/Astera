@@ -9,7 +9,7 @@ import {
   TTL_RATE_LIMITED_MS,
   UsageCache,
   type UsageAttempt
-} from './usageCache'
+} from '../core/usage/usageCache'
 
 /** The codex account-usage endpoint. `wham` is codex's own internal name for its backend and is the
  *  path the CLI actually calls — the newer alias it also carries, `/backend-api/api/codex/usage`,

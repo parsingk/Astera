@@ -2,9 +2,8 @@ import { promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
-import { net } from 'electron'
-import type { RateLimitUsage } from '../core/types'
-import { mapUsageResponse } from '../core/usage/rateLimit'
+import type { RateLimitUsage } from '../types'
+import { mapUsageResponse } from './rateLimit'
 import {
   ERROR_USAGE,
   parseRetryAfterMs,
@@ -17,7 +16,27 @@ import {
   keychainAccount,
   makeSecurityKeychainRead,
   type KeychainRead
-} from '../core/accounts/keychain'
+} from '../accounts/keychain'
+
+/** The shape of the network call RateLimitFetcher needs — just enough of the fetch surface (a URL, a
+ *  headers/signal init, and a status/ok/headers.get/json response) to be satisfied by either
+ *  electron's `net.fetch` or Node's global `fetch`, without importing electron's types into core. */
+export type FetchLike = (
+  url: string,
+  init: { headers: Record<string, string>; signal: AbortSignal }
+) => Promise<{
+  status: number
+  ok: boolean
+  headers: { get(name: string): string | null }
+  json(): Promise<unknown>
+}>
+
+/** The oldest usage figure the limit gate is allowed to decide on. RateLimitFetcher's default 5-minute
+ *  cache is fine for a status bar but fatal for a verdict — a reading taken just below the threshold
+ *  (96%, say) would reject a genuine limit 90 seconds later. The phrase re-matches on every chunk while
+ *  it is on screen, so this window doubles as the query throttle. Moved from src/main/index.ts, where
+ *  both coordinators' readUsage used it; the Host's readUsage uses it too (preflight R1). */
+export const USAGE_GATE_MAX_AGE_MS = 10_000
 
 // The same endpoint/header contract as Orca's claude-fetcher.
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
@@ -100,7 +119,8 @@ export async function readAccessToken(
  * Security guardrails:
  *  - the accessToken exists only inside this module (main) — what leaves is the percentage result
  *  - never logged (errors carry the status only) and never written to disk (the cache holds results only)
- *  - TLS verification stays on (net.fetch default, no bypass) with a 10-second timeout
+ *  - TLS verification stays on (the injected fetch's default; the app passes electron's net.fetch)
+ *    with a 10-second timeout
  *  - .credentials.json is read-only — no refresh, no write (claude refreshes the active account's token)
  *  - on darwin, the macOS Keychain fallback (readAccessToken above) is read-only too — `security` is
  *    never invoked with anything that writes or deletes an item — and that token likewise never leaves
@@ -115,7 +135,10 @@ export class RateLimitFetcher {
     private platform: NodeJS.Platform = process.platform,
     private homeDir: string = os.homedir(),
     private account: string = keychainAccount({ USER: process.env.USER }, os.userInfo().username),
-    private keychainRead: KeychainRead = makeSecurityKeychainRead(runSecurityRead)
+    private keychainRead: KeychainRead = makeSecurityKeychainRead(runSecurityRead),
+    /** The network call. Default: the global fetch (Node 24). The app passes electron's net.fetch,
+     *  which honours the system proxy and certificate store; plain Node does not (design §2.2). */
+    private fetchImpl: FetchLike = (u, i) => globalThis.fetch(u, i) as unknown as ReturnType<FetchLike>
   ) {
     this.cache = new UsageCache(now)
   }
@@ -135,7 +158,7 @@ export class RateLimitFetcher {
     )
     if (!token) return { result: ERROR_USAGE('unavailable') }
     try {
-      const res = await net.fetch(USAGE_URL, {
+      const res = await this.fetchImpl(USAGE_URL, {
         headers: {
           Authorization: `Bearer ${token}`,
           'anthropic-beta': BETA_HEADER,

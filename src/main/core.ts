@@ -2,7 +2,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { appendFileSync, existsSync } from 'node:fs'
-import { app } from 'electron'
+import { app, net } from 'electron'
 import { AccountRegistry } from '../core/accounts/registry'
 import { PROVIDERS, providerOf } from '../core/providers/meta'
 import { makeDescriptors, descriptorOf, isAmbientDir, type ProviderDescriptor } from '../core/providers/descriptor'
@@ -16,7 +16,7 @@ import { HistoryIndex } from '../core/history/index'
 import { SessionCwdCache } from '../core/history/sessionCwdCache'
 import { ProjectSettings } from '../core/projects/settings'
 import { StatusLineManager, resolveNodePath } from '../core/sessions/statusline'
-import { RateLimitFetcher } from './usage'
+import { RateLimitFetcher } from '../core/usage/rateLimitFetcher'
 import { CodexUsageFetcher } from './codexUsage'
 import { AccountUsageStore } from './accountUsageStore'
 import { parseStatusLinePayload } from '../core/usage/statusline'
@@ -293,7 +293,10 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   await localHistory.load()
   const appSettings = new AppSettingsStore(path.join(userDataDir, 'app-settings.json'))
   await appSettings.load()
-  const usageFetcher = new RateLimitFetcher()
+  // electron's net.fetch, not Node's: it honours the system proxy and certificate store (S6 design §2.2).
+  const usageFetcher = new RateLimitFetcher(undefined, undefined, undefined, undefined, undefined, (u, i) =>
+    net.fetch(u, i) as unknown as ReturnType<import('../core/usage/rateLimitFetcher').FetchLike>
+  )
   const codexUsageFetcher = new CodexUsageFetcher()
   const accountUsage = new AccountUsageStore(path.join(userDataDir, 'account-usage.json'))
   // A cache, so a failed load is an empty cache and nothing more — there is no recovered flag to

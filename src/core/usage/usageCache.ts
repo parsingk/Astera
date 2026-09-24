@@ -1,9 +1,9 @@
-import type { RateLimitUsage } from '../core/types'
+import type { RateLimitUsage } from '../types'
 
-// The caching policy shared by both providers' usage fetchers (usage.ts for claude, codexUsage.ts for
-// codex). Two accounts of different providers are two rows of the same list refreshed by the same
-// tick, so a second copy of these numbers would be a copy that drifts — and the reasons the numbers
-// are what they are (below) apply to whichever endpoint is being asked.
+// The caching policy shared by both providers' usage fetchers (rateLimitFetcher.ts for claude,
+// codexUsage.ts for codex). Two accounts of different providers are two rows of the same list refreshed
+// by the same tick, so a second copy of these numbers would be a copy that drifts — and the reasons the
+// numbers are what they are (below) apply to whichever endpoint is being asked.
 //
 // Extracted when the codex fetcher arrived. Only the cache shell lives here: reading credentials,
 // the URL, the headers and the response mapping stay with each provider, because that is the part

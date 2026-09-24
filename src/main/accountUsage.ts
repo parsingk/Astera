@@ -1,6 +1,6 @@
 import type { Account, AccountUsage, RateLimitUsage } from '../core/types'
 import { providerOf } from '../core/providers/meta'
-import { TTL_OK_MS } from './usageCache'
+import { TTL_OK_MS } from '../core/usage/usageCache'
 import type { AccountUsageStore } from './accountUsageStore'
 
 /** The tick is exactly the fetcher's own success TTL, so every tick is the first ask its cache will
