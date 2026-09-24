@@ -4,9 +4,10 @@ import { comparablePath } from '../files/tree'
 import { randomUUID } from 'node:crypto'
 import type { Account, Provider } from '../types'
 import { isProvider, providerOf } from '../providers/meta'
-import { descriptorOf, makeDescriptors, type ProviderDescriptor } from '../providers/descriptor'
+import { makeDescriptors, type ProviderDescriptor } from '../providers/descriptor'
 import { DEFAULT_ACCOUNT_PLACEHOLDER_LABEL } from './detect'
 import { nextAccountColor } from './colors'
+import { isLoggedIn } from './loginCheck'
 
 // Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
@@ -181,8 +182,9 @@ export class AccountRegistry {
   async loginStatus(id: string): Promise<boolean> {
     const account = this.get(id)
     // The evidence differs per provider and platform — claude is .credentials.json or macOS
-    // Keychain, codex is auth.json. accounts/loginStatus.ts owns that branching.
-    return descriptorOf(this.descriptors, account).isLoggedIn(account.configDir)
+    // Keychain, codex is auth.json. accounts/loginStatus.ts owns that branching; loginCheck.ts is the
+    // one rule the Host's spawner and checks share with this (C8).
+    return isLoggedIn(account, this.descriptors)
   }
 
   private async add(

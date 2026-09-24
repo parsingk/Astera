@@ -28,6 +28,7 @@ import {
   startWorkerWithChain
 } from '../core/orchestration/exec/workerStart'
 import { readAccountEntries } from '../core/accounts/accountsFile'
+import { isLoggedIn } from '../core/accounts/loginCheck'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
@@ -475,9 +476,10 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       {
         getState: d.getState,
         accounts: async () => accounts,
+        // The one login rule (C8), the one AccountRegistry and the Host's checks answer by.
         loginStatus: async (id) => {
           const x = accounts.find((y) => y.id === id)
-          return x ? descriptorOf(descriptors, x).isLoggedIn(x.configDir) : false
+          return x ? isLoggedIn(x, descriptors) : false
         },
         coordinator: coordinatorFor(accounts, trace),
         tails,
