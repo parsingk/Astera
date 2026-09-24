@@ -246,6 +246,21 @@ describe('PtyRegistry', () => {
     expect(h.r.list()).toEqual([{ id: 'p1', pid: p.pid, meta: meta(), alive: false }])
   })
 
+  // ConPTY can deliver output after the exit. An ended entry is kept (a session for good), so output
+  // that landed in its buffer then would be kept for the rest of the Host's life, with no reader.
+  it('keeps no output that arrives after the exit, and still hands it to the listeners', () => {
+    const p = fakePty()
+    const h = registry({ pty: p })
+    const heard: string[] = []
+    h.r.onData((_, d) => heard.push(d))
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ kind: 'session', id: 'ses_1', restore: {} }) })
+    p.emit('before')
+    p.exit(0)
+    p.emit('after')
+    expect(h.r.buffer('p1')).toBe('')
+    expect(heard).toEqual(['before', 'after'])
+  })
+
   // Measured on win32: node-pty's ConPTY kill runs a helper process to enumerate the console's
   // processes, and that helper fails with "AttachConsole failed" under ELECTRON_RUN_AS_NODE. The throw
   // reaches here. Before this guard it ended the loop, so the Host kept the rest of its sessions alive

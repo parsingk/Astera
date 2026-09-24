@@ -159,8 +159,11 @@ export class PtyRegistry {
     }
     this.entries.set(a.id, entry)
     pty.onData((d) => {
-      // The same shape TerminalManager's own buffer uses: append, then keep the tail.
-      entry.buffer = (entry.buffer + d).slice(-this.scrollback)
+      // The same shape TerminalManager's own buffer uses: append, then keep the tail. **Only while
+      // alive**: ConPTY can deliver output after the exit, and an ended entry is kept (a session for
+      // good), so a buffer refilled then would be kept for the rest of the Host's life with no reader.
+      // The listeners still hear it.
+      if (entry.alive) entry.buffer = (entry.buffer + d).slice(-this.scrollback)
       for (const cb of this.dataCbs) this.tell(cb, 'data', a.id, () => cb(a.id, d))
     })
     pty.onExit(({ exitCode }) => {

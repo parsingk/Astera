@@ -143,6 +143,19 @@ describe('attachPtyHost', () => {
     h.send({ t: 'pty-attach', id: 'p1' })
     expect(h.replies.at(-1)).toEqual({ t: 'pty-exit', id: 'p1', exitCode: ENDED_WITHOUT_A_CODE })
   })
+
+  // The buffer of an ended pty is gone, and output after the exit is not kept either: the late
+  // attach is answered with the exit alone, not with a replay of whatever landed after it.
+  it('answers an attach to an ended pty with its exit alone, whatever it printed before or after', () => {
+    const h = harness()
+    h.send(spawnMsg)
+    h.pty.emit('before')
+    h.pty.exit(3)
+    h.pty.emit('after')
+    h.replies.length = 0
+    h.send({ t: 'pty-attach', id: 'p1' })
+    expect(h.replies).toEqual([{ t: 'pty-exit', id: 'p1', exitCode: 3 }])
+  })
   it('attaching to an empty or unknown session sends nothing', () => {
     const h = harness()
     h.send(spawnMsg)

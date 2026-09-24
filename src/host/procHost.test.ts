@@ -88,6 +88,15 @@ describe('attachProcHost', () => {
     h.send({ t: 'proc-attach', id: 'nope' })
     expect(h.replies.at(-1)).toEqual({ t: 'proc-attached', id: 'nope', lines: [] })
   })
+  it('proc-attach of an ended process replays nothing, including a line that arrived after its exit', () => {
+    const h = harness()
+    h.spawn()
+    h.proc.emit('a\nb\n')
+    h.proc.exit(0)
+    h.proc.emit('late' + String.fromCharCode(10))
+    h.send({ t: 'proc-attach', id: 'p1' })
+    expect(h.replies.at(-1)).toEqual({ t: 'proc-attached', id: 'p1', lines: [] })
+  })
   it('does not own pty-* or handshake messages', () => {
     const h = harness()
     expect(h.send({ t: 'pty-list' })).toBe(false)

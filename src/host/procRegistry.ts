@@ -128,12 +128,17 @@ export class ProcRegistry {
   private keep(entry: Entry, line: string): void {
     entry.seq += 1
     const seq = entry.seq
-    entry.lines.push({ seq, line })
-    entry.chars += line.length + 1
-    while (entry.chars > this.cap && entry.lines.length > 1) {
-      const dropped = entry.lines.shift() as { seq: number; line: string }
-      entry.chars -= dropped.line.length + 1
-      entry.truncated = true
+    // **Kept only while alive**: the exit can come from nodeProc's grace timer while a grandchild
+    // still holds stdout, and an ended chat is kept for good, so lines stored after the exit would
+    // sit here for the rest of the Host's life with no reader. The listener still hears them.
+    if (entry.alive) {
+      entry.lines.push({ seq, line })
+      entry.chars += line.length + 1
+      while (entry.chars > this.cap && entry.lines.length > 1) {
+        const dropped = entry.lines.shift() as { seq: number; line: string }
+        entry.chars -= dropped.line.length + 1
+        entry.truncated = true
+      }
     }
     this.lineCb(entry.id, seq, line)
   }

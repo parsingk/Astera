@@ -313,6 +313,18 @@ describe('registrySessions — state', () => {
  * size the tab has, and what comes back is what the tab shows.
  */
 describe('registrySessions — read renders the screen', () => {
+  // An ended session's scrollback is gone with its pty (registry.ts), and output after the exit is
+  // not kept either, so `sessions read` answers the blank screen it answers for nothing at all,
+  // rather than a stale screen or only the few bytes that landed after the end.
+  it('an ended terminal session reads as a blank screen, whatever it printed before or after', async () => {
+    const { sessions, agent } = harness()
+    const crlf = String.fromCharCode(13, 10)
+    agent.emit('before' + crlf)
+    agent.exit(0)
+    agent.emit('after' + crlf)
+    expect(await sessions.readSession('ses-1', 200)).toEqual(await sessions.readSession('nobody', 200))
+  })
+
   it('a ConPTY-style stream with cursor moves and no newlines renders as its lines', async () => {
     const { sessions, agent } = harness({ cols: 80, rows: 10 })
     agent.emit(

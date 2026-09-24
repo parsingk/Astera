@@ -136,6 +136,17 @@ describe('ProcRegistry — exit', () => {
     expect(h.registry.liveCount()).toBe(0)
     expect(h.logs.some((l) => l.includes('proc p1 exited 3'))).toBe(true)
   })
+
+  // The exit can come from the grace timer while a grandchild still holds stdout (nodeProc.ts), so
+  // lines can keep arriving for an ended entry, and an ended chat is kept for good.
+  it('keeps no line that arrives after the exit, and still reports it', () => {
+    const h = harness()
+    h.open()
+    h.procs[0].exit(0)
+    h.procs[0].emit(['late', 'later', ''].join(String.fromCharCode(10)))
+    expect(h.registry.buffer('p1')).toEqual([])
+    expect(h.lines).toEqual([['p1', 1, 'late'], ['p1', 2, 'later']])
+  })
 })
 
 describe('ProcRegistry — notes, kill, killAll', () => {
