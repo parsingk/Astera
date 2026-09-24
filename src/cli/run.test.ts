@@ -423,6 +423,14 @@ describe('refusalDetailsOf — 요청을 이름 댄 거절만 그 id 를 싣는�
     })
   })
 
+  // host S4+S5 Task 15: 코디네이터를 못 띄운 나중 jobs run 은 남긴 회차를 이름 댄다.
+  it('나중 jobs run 이 남긴 회차의 runId 도 jobId 와 함께 올린다', () => {
+    expect(refusalDetailsOf({ error: 'could not start the coordinator', jobId: 'job_1', runId: 'run_2' })).toEqual({
+      jobId: 'job_1',
+      runId: 'run_2'
+    })
+  })
+
   it('없거나 모양이 아니면 아무것도 올리지 않는다 — 없던 details 를 만들지 않는다', () => {
     expect(refusalDetailsOf({ error: 'unknown job: job_x' })).toBeUndefined()
     expect(refusalDetailsOf({ requestId: '' })).toBeUndefined()
