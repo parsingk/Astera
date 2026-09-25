@@ -752,8 +752,9 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
 
   it('announces dispatch exactly when it announces spawn, and index.ts builds the driving through composeHostDriving (R7, N11)', () => {
     const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
-    expect(src).toMatch(/features:\s*spawner\s*\?\s*\[HOST_FEATURE_SPAWN,\s*HOST_FEATURE_WORKTREES,\s*HOST_FEATURE_DISPATCH\]\s*:\s*\[\]/)
+    expect(src).toMatch(/features:\s*hostFeatures\(\{\s*spawns:\s*spawner !== null\s*\}\)/)
     expect(src).toMatch(/composeHostDriving\(/)
+    expect(src).toMatch(/composeHostRolling\(/)
     // The two spreads (review m2), each inside the deps of the call it belongs to: the rig spreads the
     // hooks itself, so without these a Host that never drives would leave every test above green.
     const orchCall = src.slice(src.indexOf('createHostOrch({'), src.indexOf('createHostExits('))

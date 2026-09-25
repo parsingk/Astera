@@ -21,15 +21,11 @@ import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { nodeProcSpawn } from './nodeProc'
-import {
-  HOST_FEATURE_DISPATCH,
-  HOST_FEATURE_SPAWN,
-  HOST_FEATURE_WORKTREES,
-  HOST_PROTOCOL,
-  HOST_YIELD_WORKTREES
-} from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostOrch } from './orch'
 import { composeHostDriving } from './drivingWiring'
+import { composeHostRolling } from './rollingWiring'
+import { hostFeatures } from './features'
 import { createHostSpawner } from './spawner'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
@@ -126,6 +122,10 @@ async function main(): Promise<void> {
     // check: the Task stays validating or reviewing, and the next Host restarts it (a convergence Job)
     // or gates it (otherwise). Never throws.
     wiring?.dispose()
+    // **The rolling stops with it** (S6 R16): its tick and the app-gone watch stop, so no takeover starts
+    // from here on, and every chain is quieted. No roll waits: `killAll` below ends every session, a roll
+    // in flight included, and the spawner refuses new respawns from `closeAndSettle` on. Never throws.
+    rollingWiring?.dispose()
     // Before the close, so a Host that is on its way out is not offered up as one to end. A failure
     // here costs nothing: the app checks the executable behind the pid before acting on it, and a
     // record this Host left behind names a pid that is about to stop existing.
@@ -230,6 +230,26 @@ async function main(): Promise<void> {
       })
     : null
 
+  // **The Host rolls its sessions** (S6 §2, §3A): the two coordinators over this registry, the roll tap, and
+  // the takeover of a gone app's sessions — one composition, which the S6 rig builds too. **Only with a
+  // spawner** (R17): a roll's respawn is the spawner's, and `rolling` is announced with `spawn` or not at
+  // all. `orch`, `server` and `exits` are assigned below; building reads none of them (preflight B2).
+  const rollingWiring =
+    spawner && wiring
+      ? composeHostRolling({
+          profileDir,
+          platform: process.platform,
+          registry,
+          spawner,
+          exits: () => exits!,
+          server: () => server,
+          orch: () => orch,
+          lang: () => wiring.checks.langNow(),
+          log: (m) => log.write(m),
+          nowIso: () => new Date().toISOString()
+        })
+      : null
+
   // The orchestration state and the commands over it (host control plane design §5, §6).
   //
   // **Constructed, not loaded.** `ready()` is deliberately not called here: the app still builds its
@@ -290,7 +310,10 @@ async function main(): Promise<void> {
     // only. With no spawner the registry is never loaded, so its list is empty and the transcripts
     // alone answer.
     resolveProjectRoot: createHostProjectRoots({ profileDir, repoPaths: () => worktrees.repoPaths() }).resolve,
-    ...(wiring?.orchHooks ?? {})
+    ...(wiring?.orchHooks ?? {}),
+    // The rolling's hooks (rolling, rolledInto, rekeyRolled): absent with no spawner, and then
+    // `unregisterRolling` only forwards to the app and a rolled-from exit closes as before.
+    ...(rollingWiring?.orchHooks ?? {})
   })
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and
@@ -335,11 +358,16 @@ async function main(): Promise<void> {
       }),
       orch,
       // Announced only when there is a spawner, so an app can tell a Host that starts sessions itself,
-      // that it also owns worktrees.json (R5: the one decision is `spawner !== null`), and that it
-      // drives Jobs (R7) — the same one fact.
-      features: spawner ? [HOST_FEATURE_SPAWN, HOST_FEATURE_WORKTREES, HOST_FEATURE_DISPATCH] : [],
+      // that it also owns worktrees.json (R5: the one decision is `spawner !== null`), that it drives
+      // Jobs (R7) and that it rolls its sessions (R17) — the same one fact.
+      features: hostFeatures({ spawns: spawner !== null }),
       // An app's hello and its socket's close (N1). The server isolates the call too (`tellAppsChanged`).
       ...(wiring?.serverHooks ?? {}),
+      // Both hear it: the driver's app-left rule and the rolling's app-gone watch. Each isolates itself.
+      onAppsChanged: () => {
+        wiring?.serverHooks.onAppsChanged()
+        rollingWiring?.onAppsChanged()
+      },
       log
     })
   } catch (err) {
