@@ -38,3 +38,47 @@ export function adoptForkOf(a: { restore: Record<string, unknown>; adopting: boo
   if (!rolledFrom || a.restore.forkSeen === rolledFrom || a.adopting) return null
   return rolledFrom
 }
+
+/** What the adopter does, handed in by ipc.ts, so the decisions below are pinned by tests and ipc.ts is
+ *  left with one closure each (Task 14 fix round 1, 5). `has`, `restore` and `registerAsBefore` are on
+ *  the session's own coordinator; `unregister` is on both. */
+export interface AdoptRollingActs {
+  has(): boolean
+  restore(snap: RollSnapshot, report: boolean): boolean
+  registerAsBefore(): void
+  unregister(): void
+  fork(from: string): void
+  rememberForkSeen(from: string): void
+}
+
+/** The adopter's rolling and its Work Unit fork, from its note (adoptRollingOf, adoptForkOf).
+ *  `pendingFork`: a forwarded Host rekey whose fork was made while the note could not take its forkSeen
+ *  (hostRollView.takePendingFork) — written now, and not forked again. */
+export function applyAdoptRolling(
+  a: { restore: Record<string, unknown>; hostRolls: boolean; rollAccounts: number; adopting: boolean; pendingFork: string | null },
+  d: AdoptRollingActs
+): AdoptRolling {
+  const decision = adoptRollingOf({ restore: a.restore, hostRolls: a.hostRolls, rollAccounts: a.rollAccounts, hasChain: d.has() })
+  if (decision.kind === 'restore') {
+    // `report` only for a chain the Host last ran (a Host-marked note in front of a Host that no longer
+    // rolls): its native id and roll config went into the Host's state, not this app's. A snapshot this
+    // app (or its earlier instance, which shares the state) wrote needs neither.
+    const ok = d.restore(decision.snap, a.restore.rolledBy === 'host')
+    // A refused restore (the snapshot does not describe this session) registers from zero — unless a
+    // chain exists by now after all, which a restore also refuses (C-I1).
+    if (!ok && !d.has()) d.registerAsBefore()
+  } else if (decision.kind === 'register') d.registerAsBefore()
+  else if (decision.kind === 'host') {
+    // The Host rolls it; this app shows it through hostRollView (S6 R3, ruling R8). The belt (preflight
+    // R11): a chain this app still held from before a socket drop (it was mid-roll then) goes now.
+    d.unregister()
+  }
+  // 'keep' and 'none' touch nothing.
+  const restore = a.pendingFork ? { ...a.restore, forkSeen: a.pendingFork } : a.restore
+  const forkFrom = adoptForkOf({ restore, adopting: a.adopting })
+  if (forkFrom) {
+    d.fork(forkFrom)
+    d.rememberForkSeen(forkFrom)
+  } else if (a.pendingFork) d.rememberForkSeen(a.pendingFork)
+  return decision
+}
