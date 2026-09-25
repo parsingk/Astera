@@ -6,7 +6,7 @@ import path from 'node:path'
 import { hostAddress } from '../../host/address'
 import { startHostServer, type HostServer } from '../../host/server'
 import { encodeLine, createLineReader } from '../../host/framing'
-import { HOST_PROTOCOL, type HostMessage } from '../../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, type HostMessage } from '../../core/host/protocol'
 import { HostClient } from './client'
 import { hostSpeaksDispatch } from './outdated'
 
@@ -157,15 +157,15 @@ describe('HostClient', () => {
     await host.close()
   })
 
-  // S4 (§4.2): the app hands the Host dispatch as well, and S6 (R3) rolling. An older Host ignores
-  // the names (D5).
-  it('says it yields dispatch and rolling as well as worktrees', async () => {
+  // S4 (§4.2): the app hands the Host dispatch as well, S6 (R3) rolling, and chat takeover its chat
+  // sessions. An older Host ignores the names (D5).
+  it('says it yields dispatch, rolling and chat-takeover as well as worktrees', async () => {
     const addr = addressFor('yields-dispatch')
     const host = await rawHost(addr, [])
     const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
     c.start()
     await waitFor(() => host.got.some((m) => m.t === 'hello'))
-    expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toEqual(['worktrees', 'dispatch', 'rolling'])
+    expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toEqual([HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER])
     await c.stop()
     await host.close()
   })

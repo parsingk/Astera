@@ -14,7 +14,8 @@ import {
   HOST_FEATURE_ROLLING,
   HOST_FEATURE_BLOCKS,
   HOST_FEATURE_ROLL_JOURNAL,
-  HOST_FEATURE_COORDINATOR_IDLE
+  HOST_FEATURE_COORDINATOR_IDLE,
+  HOST_FEATURE_CHAT_TAKEOVER
 } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
@@ -88,6 +89,18 @@ export function hostSpeaksRolling(status: {
   features: readonly string[]
 }): boolean {
   return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_ROLLING)
+}
+
+/** The connected Host takes over this app's chat sessions once the app is gone and rolls them (chat
+ *  takeover). Read live, by hostSpeaksRolling's rule: an unresponsive Host still holds and rolls what it
+ *  took, so the app keeps deferring to it until it answers, is replaced, or the connection drops. An
+ *  older Host is never asked (the note writes are storage and are not gated, plan ruling P9). */
+export function hostSpeaksChatTakeover(status: {
+  connected: boolean
+  unresponsive?: boolean
+  features: readonly string[]
+}): boolean {
+  return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_CHAT_TAKEOVER)
 }
 
 /** The connected Host exchanges usage-limit block records (S6 D4): the app sends its registry's changes

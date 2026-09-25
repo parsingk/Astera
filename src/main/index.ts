@@ -35,6 +35,8 @@ import { chatDriver, ptyDriver, routedDriver } from '../core/sessions/sessionDri
 import { CodexRollingCoordinator } from '../core/rolling/codexCoordinator'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
 import type { RollSnapshot } from '../core/rolling/snapshot'
+import { chatSpawnOptsOf } from '../core/chat/respawn'
+import { writeRollSnapshotTo } from './rollSnapshotSink'
 import { memoiseLoginStatus } from '../core/accounts/loginStatusCache'
 import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
@@ -827,38 +829,35 @@ app.whenReady().then(async () => {
       /* a desktop notification failure must not block rolling */
     }
   }
-  /** Where a chain's snapshot goes (S6 R4): written into the pty's note, for the Host to carry on if
-   *  this app goes away. A chat session has no Host pty note to write into, and a fallback session has
-   *  no Host at all: remember() does nothing for either. Shared by both coordinators. */
-  const writeRollSnapshot = (id: string, snap: RollSnapshot): void => {
-    if (core!.chat.has(id)) return
-    core!.sessions.remember(id, { roll: snap })
-  }
+  /** Where a chain's snapshot goes (S6 R4, chat takeover spec §3.3): written into the note of the
+   *  session's process, the pty's or the chat proc's, for the Host to carry on if this app goes away. A
+   *  fallback session has no Host at all: remember() does nothing there. Shared by both coordinators. */
+  const writeRollSnapshot = (id: string, snap: RollSnapshot): void =>
+    writeRollSnapshotTo(id, snap, {
+      isChat: (x) => core!.chat.has(x),
+      rememberChat: (x, p) => core!.chat.remember(x, p),
+      rememberPty: (x, p) => core!.sessions.remember(x, p)
+    })
   const rolling = new RollingCoordinator({
     // A chain's session may be a pty or a chat session (slice 4c); the coordinator says which through
     // `kind` and the rest is routed here, so neither coordinator imports a manager. A chat respawn
     // resumes by thread id — the same value a pty chain resumes by, under the chat manager's name for
-    // it — and carries the chain's carry-on prompt as its first turn.
+    // it — and carries the chain's carry-on prompt as its first turn. The options are built by
+    // chatSpawnOptsOf, the mapping the Host's roll uses too (chat takeover Task 2): it carries the
+    // chain's restoreExtra into the new chat proc's note, the person's model, and the old session's
+    // unattended policy.
     spawn: (opts) =>
       opts.kind === 'chat'
-        ? core!.chat.spawn({
-            account: opts.account,
-            cwd: opts.cwd,
-            resumeThreadId: opts.resumeSessionId,
-            initialPrompt: opts.initialPrompt,
-            rollAccountIds: opts.rollAccountIds,
-            rollPrompt: opts.rollPrompt,
-            slackNotify: opts.slackNotify,
-            bypassPermissions: opts.bypassPermissions,
-            title: opts.title,
-            model: opts.model,
-            // design F5 fix round 1 (Important 2/3): computed here, the same way ipc.ts's own
-            // spawnSession does — synchronously, off the cache core.ts warms once at startup — rather
-            // than threaded through RollingDeps.spawn's opts: this is a fact about the *target*
-            // account's CLI on this machine's PATH, not about the chain claudeCoordinator.ts is tracking.
-            bypassSignal: core!.bypassSignalFor(providerOf(opts.account)),
-            startWithBypass: opts.startWithBypass
-          })
+        ? core!.chat.spawn(
+            chatSpawnOptsOf(opts, {
+              unattendedOf: (x) => core!.chat.unattendedOf(x),
+              // design F5 fix round 1 (Important 2/3): computed here, the same way ipc.ts's own
+              // spawnSession does — synchronously, off the cache core.ts warms once at startup — rather
+              // than threaded through RollingDeps.spawn's opts: this is a fact about the *target*
+              // account's CLI on this machine's PATH, not about the chain claudeCoordinator.ts is tracking.
+              bypassSignal: core!.bypassSignalFor(providerOf(opts.account))
+            })
+          )
         : core!.sessions.spawn(opts),
     // What the roll above carries: the model the person picked, read off the session being rolled
     // before it is killed. Terminal chains never reach this — the manager only knows chat sessions.
@@ -915,9 +914,9 @@ app.whenReady().then(async () => {
       return u.status === 'ok' ? u.peak : null
     },
     send: (channel, payload) => fanOutRollEvent(channel, payload, { orchestration: true, codex: false }),
-    // S6 R4: the chain written into the pty's note, for the Host to carry on if this app goes away.
-    // A chat session has no Host pty note to write into, and a fallback session has no Host at all:
-    // remember() does nothing for either (writeRollSnapshot).
+    // S6 R4, chat takeover §3.3: the chain written into its process's note (the pty's or the chat
+    // proc's), for the Host to carry on if this app goes away. A fallback session has no Host at all:
+    // remember() does nothing there (writeRollSnapshot).
     snapshot: writeRollSnapshot,
     log: rollingLog,
     lang: () => core!.lang,
@@ -948,20 +947,13 @@ app.whenReady().then(async () => {
     // `initialPrompt` (codexCoordinator.ts's roll() sends only that one for a chat chain).
     spawn: (opts) =>
       opts.kind === 'chat'
-        ? core!.chat.spawn({
-            account: opts.account,
-            cwd: opts.cwd,
-            resumeThreadId: opts.resumeSessionId,
-            initialPrompt: opts.initialPrompt,
-            rollAccountIds: opts.rollAccountIds,
-            rollPrompt: opts.rollPrompt,
-            slackNotify: opts.slackNotify,
-            bypassPermissions: opts.bypassPermissions,
-            title: opts.title,
-            // design F5 fix round 1 (Important 2/3) — same as the claude coordinator's own callback.
-            bypassSignal: core!.bypassSignalFor(providerOf(opts.account)),
-            startWithBypass: opts.startWithBypass
-          })
+        ? core!.chat.spawn(
+            chatSpawnOptsOf(opts, {
+              unattendedOf: (x) => core!.chat.unattendedOf(x),
+              // design F5 fix round 1 (Important 2/3) — same as the claude coordinator's own callback.
+              bypassSignal: core!.bypassSignalFor(providerOf(opts.account))
+            })
+          )
         : core!.sessions.spawn(opts),
     // design F5 fix round 1 (Important 3): claudeCoordinator.ts's own dep, same contract.
     bypassedOf: (id) => core!.chat.bypassedOf(id),
@@ -999,9 +991,9 @@ app.whenReady().then(async () => {
     // cachedLoginStatus above for why this path is and the IPC one is not.
     loginStatus: cachedLoginStatus,
     send: (channel, payload) => fanOutRollEvent(channel, payload, { orchestration: true, codex: true }),
-    // S6 R4: the chain written into the pty's note, for the Host to carry on if this app goes away.
-    // A chat session has no Host pty note to write into, and a fallback session has no Host at all:
-    // remember() does nothing for either (writeRollSnapshot).
+    // S6 R4, chat takeover §3.3: the chain written into its process's note (the pty's or the chat
+    // proc's), for the Host to carry on if this app goes away. A fallback session has no Host at all:
+    // remember() does nothing there (writeRollSnapshot).
     snapshot: writeRollSnapshot,
     log: (m) => rollingLog(`[codex] ${m}`),
     lang: () => core!.lang,

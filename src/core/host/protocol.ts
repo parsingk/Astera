@@ -108,6 +108,10 @@ export const HOST_FEATURE_ROLL_JOURNAL = 'roll-journal'
  *  unknown. Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_COORDINATOR_IDLE = 'coordinator-idle'
 
+/** The Host takes over an app's chat sessions once that app is gone and rolls them (chat takeover).
+ *  Announced with `rolling`. Additive, so HOST_PROTOCOL stays 3. */
+export const HOST_FEATURE_CHAT_TAKEOVER = 'chat-takeover'
+
 /** One entry of the roll journal (D5). `seq` rises across the Host's restarts; `at` is ISO. A `rolled`
  *  entry names the new session in `sessionId` and the one it rolled from in `oldSessionId`, which is how
  *  a reader folds a chain onto its live id. A `state` entry carries the roll state and its fields. */
@@ -149,6 +153,9 @@ export const HOST_YIELD_DISPATCH = 'dispatch'
 /** `hello.yields` value: this app does not roll a session whose note says `rolledBy: 'host'` while its
  *  Host announces `rolling`, and it leaves the Host's chains alone for every pty it holds. */
 export const HOST_YIELD_ROLLING = 'rolling'
+/** `hello.yields` value: this app knows chat takeover. It defers a chat proc the Host is still starting,
+ *  leaves a Host-marked chat chain to the Host, and answers chatPrompts and chatAnswer. */
+export const HOST_YIELD_CHAT_TAKEOVER = 'chat-takeover'
 
 /** The `orch-act` a Host sends an attached app before it removes a worktree folder (S3, the ruling
  *  on plan risk 3). Args `[path]`. The app answers the tag of anything **it runs itself, not
@@ -386,7 +393,15 @@ export type HostMessage =
   | { t: 'roll-state'; event: RollStateEvent }
   /** A Host roll re-keyed a session (S6 §3.4). `ptyId` is the new session's pty, for the app to adopt
    *  before it forwards the rekey. `dest` is the codex copy the respawn appends to. Additive. */
-  | { t: 'session-rolled'; oldSessionId: string; info: SessionInfo; ptyId: string | null; dest?: string }
+  | {
+      t: 'session-rolled'
+      oldSessionId: string
+      info: SessionInfo
+      ptyId: string | null
+      dest?: string
+      /** The new chat session's proc (chat takeover), for the app to adopt before it forwards the rekey. */
+      procId?: string
+    }
   /** The Host's block records (HOST_FEATURE_BLOCKS): one change of its registry, broadcast, or the whole
    *  registry, sent once to an app right after its hello. The app absorbs it. Additive. */
   | ({ t: 'blocks' } & BlocksBody)

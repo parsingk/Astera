@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal } from './outdated'
+import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal, hostSpeaksChatTakeover } from './outdated'
+import { HOST_FEATURE_CHAT_TAKEOVER } from '../../core/host/protocol'
 
 describe('hostIsOutdated', () => {
   it('is true when the Host is strictly older than the app', () => {
@@ -99,6 +100,16 @@ describe('hostSpeaksRolling', () => {
     expect(hostSpeaksRolling({ connected: false, unresponsive: true, features: ['rolling'] })).toBe(true)
     expect(hostSpeaksRolling({ connected: false, unresponsive: true, features: ['dispatch'] })).toBe(false)
     expect(hostSpeaksRolling({ connected: false, unresponsive: false, features: ['rolling'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksChatTakeover', () => {
+  it('hostSpeaksChatTakeover follows hostSpeaksRolling: connected or unresponsive, with the feature', () => {
+    const f = [HOST_FEATURE_CHAT_TAKEOVER]
+    expect(hostSpeaksChatTakeover({ connected: true, features: f })).toBe(true)
+    expect(hostSpeaksChatTakeover({ connected: false, unresponsive: true, features: f })).toBe(true)
+    expect(hostSpeaksChatTakeover({ connected: false, features: f })).toBe(false)
+    expect(hostSpeaksChatTakeover({ connected: true, features: [] })).toBe(false)
   })
 })
 
