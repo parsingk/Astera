@@ -206,9 +206,10 @@ const LISTING: Record<string, readonly string[]> = {
   'worker-retain': ['astera tasks list', 'astera dispatch-show --task <taskId>'],
   'worker-stop': ['astera tasks list', 'astera dispatch-show --task <taskId>'],
   'worker-abandon': ['astera tasks list', 'astera dispatch-show --task <taskId>'],
-  // **워커가 만나는 404 다.** 메시지를 세는 명령(`inbox`)은 코디네이터 전용이라 이 자리에서는
-  // 부를 수 없다. 들고 있던 questionId 가 없다는 것은 그 질문이 사라졌다는 뜻이므로, 워커가
-  // 실제로 할 수 있는 일은 다시 묻는 것이다.
+  // **워커가 아닌 쪽이 만나는 404 다.** 워커의 `--resume` 은 없는 id 도 남의 질문과 같은 403 으로
+  // 답한다(R3, command.ts). 그래도 줄은 워커가 부를 수 있는 것이어야 한다: 메시지를 세는 명령
+  // (`inbox`)은 코디네이터 전용이라 `ask` 를 부른 쪽이 늘 칠 수 있지는 않다. 들고 있던 questionId
+  // 가 없다는 것은 그 질문이 사라졌다는 뜻이므로, 할 수 있는 일은 다시 묻는 것이다.
   ask: ['astera ask --task-id <taskId> --question <text>'],
   // **메시지다, Gate 가 아니다**(`applyReply` 의 `unknown question: <messageId>`, 그런 메시지가 없을
   // 때만이다. 있는데 질문이 아니면 400 이다). 이쪽은 부르는

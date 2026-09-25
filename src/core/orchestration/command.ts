@@ -2779,11 +2779,17 @@ export async function handleCommand(
         // and yields a wrong result); and does this session own that question's dispatch (the same
         // myDispatchIds boundary as the send and ask creation paths — otherwise a worker could peek
         // at the coordinator's answer to another worker's question).
+        //
+        // **For a worker, ownership comes first, and a missing id is answered the same** (R3): 403
+        // whether the message is not there or belongs to another dispatch, before the type is
+        // looked at. Otherwise the 404/400/403 split tells a worker which ids exist elsewhere and
+        // what kind of message each one is. A worker's own dispatch still gets the 400 for a
+        // message that is not a question. A non-worker (the coordinator, a shell) keeps 404 and 400.
         const q = s.messages.find((m) => m.id === questionId)
+        if (isWorker && (!q || !myDispatchIds.has(q.dispatchId ?? '')))
+          return denied('cannot resume a question for another dispatch')
         if (!q) return notFound(`unknown question: ${questionId}`)
         if (q.type !== 'question') return bad(`not a question: ${questionId}`)
-        if (isWorker && !myDispatchIds.has(q.dispatchId ?? ''))
-          return denied('cannot resume a question for another dispatch')
       } else {
         const taskId = str(args.taskId)
         const dispatchId = str(args.dispatchId) ?? myDispatch?.id ?? null

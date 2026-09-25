@@ -169,9 +169,22 @@ describe('ask --resume 검증', () => {
       resume: 'msg_doesnotexist',
       timeoutMs: 100
     })
-    // 없는 id 는 404 다 — 인자를 잘못 준 것(400)과 가른다(공개 CLI 설계 §8)
-    expect(r.status).toBe(404)
+    // 워커에게는 403 이다(R3) — 없는 id 와 남의 질문을 같은 답으로 가려, 다른 dispatch 에 어떤 id 가
+    // 있는지 새지 않게 한다. 워커가 아닌 쪽은 여전히 404 다(아래)
+    expect(r).toEqual({ status: 403, body: { error: 'cannot resume a question for another dispatch' } })
     expect(r.body).not.toMatchObject({ answered: true })
+  })
+
+  it('워커가 아닌 세션에게 없는 id 는 404 다 — 인자를 잘못 준 것(400)과 가른다(공개 CLI 설계 §8)', async () => {
+    const deps = makeDeps()
+    await seed(deps)
+    const before = deps.getState()
+    const r = await handleCommand(deps, { sessionId: 'coord' }, 'ask', {
+      resume: 'msg_doesnotexist',
+      timeoutMs: 100
+    })
+    expect(r).toEqual({ status: 404, body: { error: 'unknown question: msg_doesnotexist' } })
+    expect(deps.getState()).toBe(before)
   })
 
   it('question이 아닌 메시지 id를 가리키면 거부한다', async () => {
@@ -192,6 +205,30 @@ describe('ask --resume 검증', () => {
     })
     expect(r.status).toBe(400)
     expect(r.body).not.toMatchObject({ answered: true })
+  })
+
+  // R3: 남의 dispatch 의 메시지라면 질문이 아니어도 타입을 보기 전에 403 이다 — 400 으로 답하면 그
+  // id 가 있고 질문이 아니라는 것이 새어 나간다. 워커가 아닌 쪽은 여전히 400 을 받는다.
+  it('남의 dispatch 의 질문이 아닌 메시지 id 면 워커에게는 403, 워커가 아닌 쪽에는 400 이다', async () => {
+    const deps = makeDeps()
+    await seed(deps)
+    const foreign = {
+      id: 'msg_foreign',
+      runId: deps.getState().runs[0].id,
+      type: 'status' as const,
+      dispatchId: 'dsp_other',
+      subject: 's',
+      body: 'b',
+      answered: false,
+      createdAt: new Date().toISOString()
+    }
+    await deps.setState({ ...deps.getState(), messages: [...deps.getState().messages, foreign] })
+    const before = deps.getState()
+    const r = await handleCommand(deps, { sessionId: 'sess1' }, 'ask', { resume: foreign.id, timeoutMs: 100 })
+    expect(r).toEqual({ status: 403, body: { error: 'cannot resume a question for another dispatch' } })
+    expect(deps.getState()).toBe(before)
+    const coord = await handleCommand(deps, { sessionId: 'coord' }, 'ask', { resume: foreign.id, timeoutMs: 100 })
+    expect(coord).toEqual({ status: 400, body: { error: `not a question: ${foreign.id}` } })
   })
 
   it('다른 세션이 소유한 dispatch의 질문이면 거부한다', async () => {
