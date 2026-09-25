@@ -242,9 +242,10 @@ at a usage limit it moves the session to the next usable account the task lists,
 usable it waits, and resumes the session on whichever of its accounts resets first. A
 task can list several accounts, in the order to move through: `tasks add --account a,b`. The Dispatch
 follows the session, so the task stays in progress and `runs wait` goes on waiting. When every worker
-of a run is waiting for a reset, `runs wait` ends with 8 and `error.details.state` `limited`, naming
-the reset time in `error.details.resetsAt` (see Exit codes). The workers still resume by themselves
-then, so waiting again after that time can still end `completed`.
+of a run, and its coordinator too if it has one, is waiting for a reset, `runs wait` ends with 8 and
+`error.details.state` `limited`, naming the reset time in `error.details.resetsAt` (see Exit codes).
+The workers and the coordinator still resume by themselves then, so waiting again after that time can
+still end `completed`.
 
 **Once Astera has quit, the Host takes over Astera's own sessions too**, tabs included: every session
 Astera itself was rolling, such as a tab with account rolling turned on. The
@@ -419,8 +420,10 @@ has no runs". `nextSteps` is the list that gives the missing kind of id, `astera
 `astera runs list` respectively. `runs list --job` given no value (`--job ""`, as a script whose id
 came back empty would send) is a 2, not the list of every run.
 
-**`jobs run` refuses a Job that is already running** and names the run that is going. It returns the
-run it started, which is the id to pass to `runs wait`.
+**`jobs run` refuses a Job that is already running** and names the run that is going. A run that just
+ended `limited` still counts as going: its agents resume by themselves at the reset, so `jobs run`
+refuses it the same way rather than starting a second run beside it. It returns the run it started,
+which is the id to pass to `runs wait`.
 
 **`jobs create` makes a plan and runs nothing.** It returns the Job, marked `pendingStart`, with no
 run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in
@@ -864,14 +867,18 @@ waiting for a person", and both are legitimate non-zero endings of a wait.
 
 **An 8 has three causes, and `error.details` says which.** A question is open when
 `error.details.questionId` is set. The run is paused when `error.details.state` is `paused`. The third
-needs nobody: `error.details.state` is `limited` when every worker of the run is waiting for a usage
-limit to reset, and `error.details.resetsAt` says when (the earliest reset among the waiting workers).
-The workers resume by themselves at that time, so waiting again after it can still end `completed`;
-this ending only lets a script stop holding on. Its `nextSteps` are `astera runs wait --id <runId>` and
-`astera runs get --id <runId>`, not `questions answer` or `runs resume`. A run ends `limited` only when
-no task of it is ready to start and none is being validated or reviewed, since either could still move
-before the reset. A run whose coordinator, not a worker, is the one waiting for a reset is not seen by
-this rule and waits to its deadline (7).
+needs nobody: `error.details.state` is `limited` when every open worker Dispatch of the run is waiting
+for a usage limit to reset, and, if the run has a coordinator, its own stop counts too, as long as its
+reset is known and not more than ten minutes stale. `error.details.resetsAt` names the earliest of
+these resets. `limited` means nothing in the run moves on its own before that time, not that nothing
+can: a person can still start a ready task by hand, the same way a person answers a `waiting` run's
+question or resumes a `paused` one. The agents resume themselves at the reset, so waiting again after
+it can still end `completed`; this ending only lets a script stop holding on. Its `nextSteps` are
+`astera runs wait --id <runId>` and `astera runs get --id <runId>`, not `questions answer` or `runs
+resume`. A run ends `limited` only when no task of it is ready to start and none is being validated or
+reviewed, since either could still move before the reset, except in a run its coordinator drives: there
+only the coordinator places a task, so a ready one does not keep `limited` from firing while that
+coordinator waits for its own reset.
 
 **9 means two different builds.** The command on your `PATH` and the running Host came from
 different versions of Astera. Report it rather than working around it.

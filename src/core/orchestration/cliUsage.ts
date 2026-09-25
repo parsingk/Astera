@@ -165,7 +165,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'jobs-wait': {
     summary: "wait until this Job's latest run ends",
     detail:
-      'Five endings, and the exit code says which: finished well (0), a question is open, the run is paused or every worker is waiting for a usage limit to reset (8, `details` says which), the run failed (10). If the deadline passes first, it exits 7.',
+      'Five endings, and the exit code says which: finished well (0), a question is open, the run is paused or every worker, and its coordinator if it has one, is waiting for a usage limit to reset (8, `details` says which), the run failed (10). If the deadline passes first, it exits 7.',
     flags: [ID('<jobId>', 'the Job whose latest run to wait for'), TIMEOUT]
   },
 
@@ -177,7 +177,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'runs-wait': {
     summary: 'wait until this run ends',
     detail:
-      'Five endings, and the exit code says which: finished well (0), a question is open, the run is paused or every worker is waiting for a usage limit to reset (8, `details` says which), the run failed (10). If the deadline passes first, it exits 7.',
+      'Five endings, and the exit code says which: finished well (0), a question is open, the run is paused or every worker, and its coordinator if it has one, is waiting for a usage limit to reset (8, `details` says which), the run failed (10). If the deadline passes first, it exits 7.',
     flags: [ID('<runId>', 'the run to wait for'), TIMEOUT]
   },
   'runs-stop': {

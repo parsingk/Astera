@@ -23,7 +23,7 @@ reasoning; this list is what was chosen.
 | D4 | Worker environment | The Host's own environment minus a documented strip list | user |
 | D5 | New app, old Host holding work | The app keeps today's loop until that Host is replaced | controller |
 | D6 | A worker lost to a Host restart with no journal | Open a Gate at load | controller |
-| D7 | A usage limit with no app | A Gate carrying the reset time, so `runs wait` ends with 8 (left out of S4+S5 by the user; S6, see Amendments A58; replaced in S6 by the `limited` ending with no Gate, see Amendments A68) | controller |
+| D7 | A usage limit with no app | A Gate carrying the reset time, so `runs wait` ends with 8 (left out of S4+S5 by the user; S6, see Amendments A58; replaced in S6 by the `limited` ending with no Gate, see Amendments A68; the coordinator's own wait counts too, see Amendments A74) | controller |
 | D8 | Journal and reconciler | Stay in the app | controller |
 | D9 | A second app | Left as S1 recorded it | controller |
 | D10 | Release shape | S2 and S3 merge separately; S4 and S5 release together | controller |
@@ -937,6 +937,157 @@ pointing here. What is still open is under "Known limits after S6".
   throwing, then takes FIRE_AND_FORGET's route to an attached app, which ignores an unknown id. EFFECTFUL
   stays `true`, and the classification test names the group. Pinned by `src/host/orchDeps.test.ts`.
 
+## Amendments (S6 limits follow-up, 2026-09-25)
+
+The follow-up plan `.superpowers/sdd/2026-09-25-s6-limits/plan.md` (Decisions D1 to D7, in that plan's
+own numbering) closed three entries of "Known limits after S6": a coordinator's own wait was not a
+`limited` ending; a Host roll made with no app attached was never announced in Slack or in a desktop
+notice; and block knowledge was per process. Its execution ledger is `progress.md` in the same folder,
+and its five tasks' reports are `task-1-report.md` through `task-5-report.md`. Landed on `develop` from
+`2d8685e3` through `5338222f`. This list is the record, in A1's form; the closed entries under "Known
+limits after S6" point back here, and the limits it found along the way are under "Known limits after
+the S6 limits follow-up".
+
+- **A74. "A coordinator's own wait is not a `limited` ending" (Known limits after S6; plan D1, D2).** The
+  rule looked at open Dispatches only, and a coordinator is a Run's slot, not a Dispatch, so such a Run
+  waited to its deadline (7). What shipped: `JobRun.coordinatorStop?: { since: string; resetsAt?: string
+  }` (`src/core/orchestration/types.ts`). `recordCoordinatorStop(s, { runId | sessionId, resetsAt? },
+  now)` sets the field when it is absent and only patches `resetsAt` on a repeat, leaving `since` alone;
+  `clearCoordinatorStop(s, { sessionId })` drops it (`state.ts`). `rekeyCoordinator` carries the field
+  across a rekey, `attachCoordinator` starts without one, and `detachCoordinator` drops it, which is also
+  the load clearing D2 asked for: the restart cleanup already detaches a coordinator whose session is not
+  alive through `detachCoordinator`. In `exec/rollTap.ts`, `recordStop` with no Dispatch now records the
+  stop on the coordinator slot, and clears it on `nudged`, `none`, `stalled` and in `onRolled` together
+  with the slot's rekey; a restored reattach `waiting` records the stop too, when the coordinator has
+  none on record yet and the event carries a reset, which covers an older app that owned a waiting
+  coordinator the Host then took over. `limitedUntil` (`command.ts`) counts the coordinator when it is
+  stopped with a known reset that is not more than 10 minutes stale (`coordinatorResetOf`); the Run is
+  `limited` when the coordinator counts and every open Dispatch is also limited or none is open, and the
+  answer is the earliest reset among them. A `ready` Task no longer holds `limited` back in a
+  coordinator-driven Run (`autoDispatch` off), because only the stopped coordinator can start it; it
+  still holds `limited` back everywhere else, since the dispatch loop could still place it. `limited`
+  means nothing moves on its own before the reset, not that nothing can: a person can still start a ready
+  Task by hand, the same way a person answers a `waiting` Run's question or resumes a `paused` one. A
+  second bug came with it: `jobs-run` decided a Job was already running by asking whether
+  `waitEndingFor(...)` was `null`, and `limited` is not `null`, so a cron `jobs run` during a usage wait
+  started a second Run beside the one already waiting, a bug S6 shipped with too for its case where every
+  worker of a Run is limited at once. `jobs-run` now refuses (409) when the ending is `null` or
+  `limited`; `waiting` and `paused` keep their old behaviour, since those need a person and a second
+  `jobs run` cannot help either. Pinned by `src/core/orchestration/state.test.ts`,
+  `src/core/orchestration/exec/rollTap.test.ts`, `src/core/orchestration/command.test.ts`,
+  `src/core/orchestration/store.test.ts` and `src/host/rolling.integration.test.ts` (a Host coordinator
+  wait reaching `limited`).
+- **A75. BlockRegistry gains the exchange primitives (plan D3).** Preparation for A76: a `BlockRegistry`
+  had no way to tell another process about a change, or to accept one without re-announcing it.
+  `onChange(fn)` (`src/core/rolling/blockRegistry.ts`) returns an unsubscribe and fires from `record`
+  (the merged value) and `clear` (`rec: null`), never from the two additions below. `absorb(accountId,
+  rec, now)` merges a remote record exactly as `record` does, but fires nothing; `absorbClear(accountId,
+  at)` clears without firing and remembers the clear time in a `clearedAt` map, local or remote, so an
+  incoming record whose `since` is no later than the account's last clear is ignored. `record` itself
+  never consults `clearedAt`, so a local record made after a clear always applies. `clear`'s `now` became
+  an optional third argument, defaulting to `Date.now()`, so its two existing production callers
+  (`claudeCoordinator.ts`'s and `codexCoordinator.ts`'s `declareHealthy`) kept compiling unchanged; A76
+  later threads `this.now()` through both. Pinned by `src/core/rolling/blockRegistry.test.ts`.
+- **A76. "Block knowledge is per process" (Known limits after S6, its §4.8; plan D4).** The app's chains
+  and the Host's did not share a `BlockRegistry`, so each side paid one kill and respawn per account to
+  learn a block the other already knew. What shipped: `HOST_FEATURE_BLOCKS = 'blocks'` and a `{ t:
+  'blocks', records, cleared }` message in both `ClientMessage` and `HostMessage`
+  (`src/core/host/protocol.ts`; the record shape is written inline there rather than imported, because
+  `tsconfig.web.json` compiles `protocol.ts` but not `core/rolling`). `BlockRegistry.snapshot(now)`
+  answers every live record plus every remembered clear time. The shared `src/core/rolling/blockWire.ts`
+  reads a pushed or sent payload with `parseBlocks(v, now)`, which never throws: it keeps only
+  well-shaped entries, drops a record whose `since` is more than 60 seconds ahead of `now`
+  (`BLOCKS_MAX_FUTURE_MS`), and reads at most 256 records and 256 clears per message
+  (`BLOCKS_MAX_ENTRIES`). `absorbBlocks(reg, p, now)` applies clears first, then records, and skips a
+  clear older than the `since` of the record already held, so a late clear cannot erase a newer block;
+  when it skips one it still raises the registry's remembered clear time through the new
+  `BlockRegistry.noteCleared(accountId, at)`, so a later remote record observed before that clear stays
+  ignored. On the Host, `rollingWiring` broadcasts `blocks` on the registry's `onChange`, sends the whole
+  snapshot once after every app's hello (`appGreeted`), and absorbs an app's own `blocks` message
+  (`blocksFromApp`); `server.ts` gained the `onAppGreeted` dep, called for role `app` only, after the
+  hello reply; `index.ts` routes `t: 'blocks'` from a greeted app to it; `features.ts` announces `blocks`
+  alongside `rolling`. In the app, `hostSpeaksBlocks` (`src/main/host/outdated.ts`) follows
+  `hostSpeaksRolling`'s rule, and the new `src/main/host/blockSync.ts` sends on a local change only when
+  the Host speaks `blocks`, sends the whole registry again after every connect (so a restarted or
+  replacement Host learns what the app knows), and absorbs a `blocks` push; both sides' coordinators
+  (`claudeCoordinator.ts`, `codexCoordinator.ts`) now call `clear(id, this.now())`. The message is a new
+  fire-and-forget entry in `ClientMessage`/`HostMessage`, not an `orch-call`: it needs no reply, and the
+  server already hands an unrecognised `t` to `onMessage` with `from` (role, greeted), which is exactly
+  the gate needed; an older Host never receives the app's message, since the app gates on the feature.
+  The Host still broadcasts over the same channel `roll-state` uses, which also reaches CLI sockets; both
+  sides' push handlers filter by `t`, so this is harmless, but a future need for "apps only" would need a
+  `broadcastApps`. Pinned by `src/core/rolling/blockWire.test.ts`,
+  `src/core/rolling/blockRegistry.test.ts`, `src/host/features.test.ts`, `src/host/server.test.ts`,
+  `src/host/rolling.integration.test.ts` (the rig, including an end-to-end round trip through a real
+  `blockSync`), `src/main/host/outdated.test.ts` and `src/main/host/blockSync.test.ts`.
+- **A77. The Host journals a roll made with no app attached (plan D5).** New `RollJournalEntry { seq, at,
+  kind: 'rolled' | 'state', sessionId, oldSessionId?, state?, accountLabel?, nextRetryAt?, scope? }` and
+  `HOST_FEATURE_ROLL_JOURNAL = 'roll-journal'` live in `src/core/host/protocol.ts`, not `src/host`, so
+  the app (A78) can import the type without reaching into the Host's own tree. `src/host/rollJournal.ts`:
+  `journalEntryOf(e)` keeps `waiting` (with `nextRetryAt`, `scope`), `switching` (with `accountLabel`),
+  `nudged`, `stalled` and every session `rolled` link, and drops `trust`, `none`, `adopted` and any
+  `reattach` event, waiting or switching alike, since both are re-publishes of something already told.
+  `boundEntries` bounds the entries to 7 days old, then the newest 64 per roll chain (a union-find over
+  the `rolled` links), then the newest 1024 overall, applied on both append and load. `createRollJournal`
+  writes `<profile>/host/roll-journal.json` as `{ v: 1, lastSeq, entries }`, atomically (tmp then
+  rename), behind one promise queue so load, `append` and `take(ack?)` never race; every step is caught,
+  so a journal failure cannot produce an unhandled rejection (R3). `take` prunes entries with `seq <=
+  ack`, saving only if something was pruned, and answers the rest plus `lastSeq`. A damaged file, or one
+  whose top level is not the expected shape, loads as empty rather than refusing, is logged, and is
+  copied to `.bak`; a single bad entry inside an otherwise good file is dropped on its own (see Known
+  limits below for what a damaged file does to `lastSeq`). `rollingWiring` builds the journal at that
+  path and, beside its existing broadcast, appends an entry in its own try whenever
+  `!server().hasApp()`; an append after the wiring is disposed at retire still runs, harmlessly, since it
+  only journals what no app heard. `src/host/orch.ts` answers the app-only `roll-journal { ack? }` call
+  beside `roll-state`/`roll-force`: 403 for a non-app caller, 501 with no journal configured, 400 for an
+  `ack` that is not a safe non-negative integer, 200 `{ entries, lastSeq }` otherwise. `features.ts`
+  announces `roll-journal` after `blocks`. Pinned by `src/host/rollJournal.test.ts`,
+  `src/host/orch.test.ts`, `src/host/rolling.integration.test.ts` (no app: a roll journals `switching`
+  and `rolled`, and an ack empties the file; app attached: the same roll broadcasts and journals nothing)
+  and `src/host/features.test.ts`.
+- **A78. "A Host roll is silent in Slack and in desktop notices until an app attaches" (Known limits after
+  S6; plan D6, D7).** What shipped: the app reads A77's journal once after its startup adoption sweep and
+  after each reconnect sweep, and announces what it learns instead of replaying it through
+  `onRollState`. `src/main/host/rollJournalSummary.ts` (pure) folds the entries: `foldRollChains` sorts by
+  `seq` and follows `rolled` links old to new (cycle-safe) to group every entry under its chain's newest
+  session id; `chainText` renders one line per chain (a run of `waiting` is one limit naming the first
+  wait and the last reset, a run of `stalled` is one, `switching` names its account or, with none of its
+  own, falls back to the live session's account when it is the chain's last switch, `nudged` reads
+  "resumed at", and a bare roll link says nothing on its own); `summarizeRollJournal` answers `{
+  sessions: [{ sessionId, text, seq }] }` for chains with a live session id (what Slack needs, a thread
+  to post into), a `total`, and `limited: [{ sessionId, seq }]` for every chain with a `waiting`,
+  `switching` or `rolled` entry, live or not (the desktop count; a stall alone does not count). New
+  `SlackNotifier.announceOffline(sessionId, text)` (`src/main/slack.ts`) posts once into that session's
+  thread, answers `false` when the session has no Slack record, and rejects, rather than swallowing,
+  a failed post or a not-yet-ready transport, so the caller knows not to ack; a new
+  `SlackNotifier.onTransportReady(fn)` fires on every swap to a real transport
+  (`applyConfig`/`setWebhookUrl`/`setTransport`), so a later Slack setup can retry what a first attempt
+  could not send. The desktop's own `announceOffline(count, sessionId?)`
+  (`src/main/desktopNotifier.ts`) shows one aggregated notice, gated on the `limitWaiting` setting alone,
+  not held back by window focus, and its click opens the first live chain. D7: both `onRollState`
+  handlers skip a `waiting` that carries `reattach`, since a restored wait is not a new limit, it was
+  already announced by whichever app first saw it, or it is folded into this summary. New
+  `src/main/host/offlineRolls.ts`: `createOfflineRolls(...).swept(why, result)` never rejects; it runs
+  only after a sweep that answered a real reattach result (not `null` or `'unknown'`) and only when the
+  Host speaks `roll-journal`, fetches the journal, sends the Slack line for every live session in order,
+  then the one desktop notice, then acks with the `lastSeq` it fetched; any failure along the way, a
+  non-200 answer, a bad body, a Slack rejection, a desktop throw, or the call itself throwing, is logged
+  and the ack is withheld, except that a desktop throw no longer withholds it once the Slack lines that
+  could be sent were tried. Only one sweep's fetch runs at a time; a sweep that lands mid-run queues one
+  more run right after. The ack itself is never persisted; an in-memory per-chain mark (`postedThrough`
+  for Slack, `countedThrough` for desktop, both by the chain's newest `seq`) keeps a retry inside the
+  same app run from repeating a line it already sent. `offlineRolls.attached(why)` fetches with no sweep
+  result at all, for the `other-host` handshake (a new Host replaced a dead one, which runs no sweep) and
+  for a `first` handshake whose own startup chain gave up before any sweep ran. `ipc.ts` wires `swept`
+  after both `takeSessionsBack('at startup')` and `takeSessionsBack('after a reconnect')`, without
+  awaiting the startup one, so the boot cleanup's own answer is unchanged, and subscribes
+  `offlineRolls.slackReady()` to `onTransportReady`. i18n gained `slack.offline.*` and
+  `notify.offlineRolls` (ko, en; ja and es fall back, as the catalog allows). A ruling from the task's
+  review: a `rolled` entry with no `switching` entry, a same-account respawn, says nothing about the roll
+  itself, since a roll link alone is not evidence of an account switch. Pinned by
+  `src/main/host/rollJournalSummary.test.ts`, `src/main/slack.test.ts`, `src/main/desktopNotifier.test.ts`,
+  `src/main/host/offlineRolls.test.ts` and `src/main/host/outdated.test.ts`.
+
 ## Known limits after S3
 
 - **`refresh()` does not retry a Windows rename-busy read.** (resolved in S4+S5, see Amendments A60)
@@ -1059,19 +1210,22 @@ Amendments (S6 as shipped) preamble).
 
 **Who rolls, and who is told**
 
-- **Block knowledge is per process** (the S6 design's §4.8). The app's chains and the Host's do not
-  share a `BlockRegistry`. A tab rolling off an account does not tell the Host's workers, so each side
-  pays one kill and respawn per account to learn a block the other knew. It costs efficiency, not
-  correctness. A takeover carries the chain's own accounts' blocks in its snapshot.
+- **Block knowledge is per process** (the S6 design's §4.8). (resolved in the S6 limits follow-up, see
+  Amendments A75 and A76: the two `BlockRegistry`s exchange records over the wire) The app's chains and
+  the Host's did not share a `BlockRegistry`. A tab rolling off an account did not tell the Host's
+  workers, so each side paid one kill and respawn per account to learn a block the other knew. It cost
+  efficiency, not correctness. A takeover carries the chain's own accounts' blocks in its snapshot.
 - **An older app's sessions are not taken over.** An app from before S6 writes no snapshot, so its
   sessions stall at a limit once it is gone, as before (the S6 design's §3A.2). So does a session an
   older app rolled away from a Host chain: its respawn is the app's, and nobody rolls it once that app
   leaves.
 - **Chat sessions are not taken over.** They are line processes whose protocol adapter lives in the
   app, so with the app gone nothing can drive a turn (plan R20).
-- **A Host roll is silent in Slack and in desktop notices until an app attaches.** Both live in the app.
-  An attached app forwards the Host's pushes to them; a roll made with no app attached announces nothing
-  there, then or later.
+- **A Host roll is silent in Slack and in desktop notices until an app attaches.** (resolved in the S6
+  limits follow-up, see Amendments A77 and A78: the Host journals a roll made with no app attached, and
+  the app announces it, one Slack summary per session and one desktop notice, once it starts or
+  reconnects) Both live in the app. An attached app forwards the Host's pushes to them; a roll made with
+  no app attached announced nothing there, then or later.
 - **A tab the Host respawns runs in D4's environment**, the Host's own minus the strip list, not the
   app's (the S6 design's §3A.6). It keeps its title, Slack choice, permission choice and rolling
   accounts. Its schedules do not fire until the app returns (D2). With Smart Resume on, the Host never
@@ -1142,10 +1296,14 @@ Amendments (S6 as shipped) preamble).
 
 **`runs wait` and the usage lookup**
 
-- **A coordinator's own wait is not a `limited` ending.** The rule looks at open Dispatches, and a
-  coordinator is a Run's slot, not a Dispatch, so such a Run waits to its deadline (7).
+- **A coordinator's own wait is not a `limited` ending.** (resolved in the S6 limits follow-up, see
+  Amendments A74: the coordinator's stop now counts, on the Run's `coordinatorStop`) The rule looked at
+  open Dispatches only, and a coordinator is a Run's slot, not a Dispatch, so such a Run waited to its
+  deadline (7).
 - **`runs wait` ends `limited` only when no Task of the Run is ready to start and no check is running.**
-  The reset it names is the earliest among the waiting workers (A68).
+  The reset it names is the earliest among the waiting workers (A68), and, since A74, among the
+  coordinator's own stop too; a ready Task no longer holds `limited` back in a Run a coordinator drives,
+  since only that stopped coordinator can start it.
 - **The Host's usage lookup goes without the system proxy and the OS certificate store.** Node's
   `fetch` honours neither by default, so behind a corporate proxy the lookup fails, and a failed lookup
   accepts the limit (Q4): detection is kept, and the brake against a false roll is weaker, as in the app
@@ -1154,6 +1312,40 @@ Amendments (S6 as shipped) preamble).
   account: the standing rule forbids copying a person's accounts or credentials into a scratch profile.
 - **The Host's usage gate reads the claude credentials file or Keychain for the usage lookup**, the same
   as the app does (preflight R1, plan R28, the S6 design's §2.1).
+
+## Known limits after the S6 limits follow-up
+
+Each was found while building or reviewing the S6 limits follow-up and left as it is, with its reason.
+Checked at `5338222f`.
+
+- **A Slack offline summary can repeat.** (task-5-report.md; Amendments A78) When a sweep's Slack sends
+  fail partway through, the ack is withheld, so the next sweep or reconnect fetches the journal again and
+  resends every line that sweep did not confirm, not only the one that failed; a whole app restart
+  forgets the in-memory `postedThrough` mark too, so the next attach can resend a session's line again
+  even though it once went out. What bounds a repeat is the journal itself (A77), not the summary: 7
+  days old, the newest 64 entries per roll chain, the newest 1024 overall, so it can echo at most that
+  much, never a session's whole history. This is accepted (at least once), not a defect to fix.
+- **A damaged roll journal resets `lastSeq` to 0.** (task-4-report.md; Amendments A77) There is nothing
+  to salvage a sequence counter from once the file cannot be parsed, so the next entries start again from
+  `seq` 1. An app that remembered an ack across its own restart could then think it has already seen the
+  new low `seq`s and skip them, but the app never persists an ack (A78), so this is harmless as shipped;
+  a future caller that does persist one would need to treat a `lastSeq` drop as "read the journal from
+  the start again".
+- **A same-account respawn with no `switching` entry stays silent.** (the controller's ruling,
+  progress.md, Task 5 review; Amendments A78) `journalEntryOf` keeps a `rolled` link for every session
+  rekey, including one a coordinator's in-place fallback causes with no account change, but `chainText`
+  says nothing for a bare roll link on its own. By ruling, a `rolled` link alone is not evidence of an
+  account switch, so the offline summary a person reads only ever names a wait, a switch or a resume,
+  never the respawn underneath one.
+- **The coordinator's stale-stop rule is ten minutes, and covers only the coordinator.** (Amendments A74)
+  A coordinator's stop is ignored by `limitedUntil` once its `resetsAt` is more than
+  `STALE_COORDINATOR_STOP_MS` (10 minutes) in the past, so a missed clear cannot leave every wait on that
+  Run ending `limited` forever. A worker Dispatch's own stop carries no such staleness check, unchanged
+  from A68.
+- **A person can still start a ready Task by hand while its Run is `limited`.** (Amendments A74) `limited`
+  means nothing moves on its own before the reset, not that nothing can: the same as `waiting` and
+  `paused`, a person may start a ready Task from RunDetail or `worker-start`, and that does not end the
+  `limited` state early or contradict it.
 
 ## 0. The problem, measured
 
