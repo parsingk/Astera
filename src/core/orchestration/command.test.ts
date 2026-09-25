@@ -5540,13 +5540,15 @@ describe('jobs run / questions answer', () => {
     expect(deps.getState().jobs[0].pendingStart).toBe(true)
   })
 
-  // 한 계획에 두 회차가 동시에 도는 것을 손이 미끄러져 만들지 않게 한다
+  // 한 계획에 두 회차가 동시에 도는 것을 손이 미끄러져 만들지 않게 한다. **무언가가 그 회차를 움직이고
+  // 있어야 도는 것이다**(fix round 1, C1): 여기서는 워커 하나가 그 Task 에서 일하는 중이다.
   it('돌고 있는 것은 거절하고 무엇이 도는지 말한다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const jobId = deps.getState().jobs[0].id
     const runId = deps.getState().runs[0].id
-    await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    await call(deps, 'worker-start', { task: (t.body as { id: string }).id, agent: 'codex', account: 'acc1', worktree: 'current' })
     const r = await call(deps, 'jobs-run', { id: jobId })
     expect(r.status).toBe(409)
     expect(JSON.stringify(r.body)).toContain(runId)
@@ -6687,5 +6689,177 @@ describe('the hand-over of a fired Run lands on the current state', () => {
     const runId = (r.body as { id: string }).id
     expect(deps.getState().runs.find((x) => x.id === runId)?.coordinatorSessionId).toBe(`coord-${runId}`)
     expect(deps.getState().jobs.find((j) => j.id === jobId)?.objective).toBe('changed meanwhile')
+  })
+})
+
+// Task 1 fix round 1. C1: a Run counts as running only while something can still move it (one rule
+// for `jobs run` and for a fire's --unless-running). I1: a coordinator start in flight is marked on the
+// Run, so a ▶ does not start a second one. I2: a hand-over that finds another slot stops its own
+// session. I3: ▶ on a finished Run does nothing.
+describe('fix round 1: what counts as running, and one coordinator per Run', () => {
+  const coordDeps = () => {
+    const stopped: string[] = []
+    const logs: string[] = []
+    const deps = makeDeps()
+    const startCoordinator = vi.fn(async (a: { runId: string }) => ({ sessionId: `coord-${a.runId}` }))
+    Object.assign(deps, {
+      listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }],
+      startCoordinator,
+      stopCoordinator: async (sessionId: string) => {
+        stopped.push(sessionId)
+      },
+      log: (m: string) => {
+        logs.push(m)
+      }
+    })
+    return Object.assign(deps, { startCoordinator, stopped, logs })
+  }
+  const scheduledJob = async (deps: OrchServerDeps): Promise<string> => {
+    const r = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      auto: true,
+      coordinatorAccount: 'accA',
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const jobId = (r.body as { id: string }).id
+    await call(deps, 'run-start', { run: jobId })
+    return jobId
+  }
+  const fire = (deps: OrchServerDeps, jobId: string) => call(deps, 'run-spawn', { run: jobId, unlessRunning: true })
+  const patchRun = async (deps: OrchServerDeps, runId: string, f: (r: JobRun) => JobRun): Promise<void> => {
+    const s = deps.getState()
+    await deps.setState({ ...s, runs: s.runs.map((r) => (r.id === runId ? f(r) : r)) })
+  }
+  const detach = ({ coordinatorSessionId: _gone, ...r }: JobRun): JobRun => r
+
+  it('C1(a): a fire after the coordinator failed to start still makes the next Run', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    deps.startCoordinator.mockRejectedValueOnce(new Error('spawn refused'))
+    expect((await fire(deps, jobId)).status).toBe(400)
+    const r = await fire(deps, jobId)
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs.filter((x) => x.jobId === jobId)).toHaveLength(2)
+  })
+
+  it('C1(b): a fire after the coordinator was released with no Tasks makes one', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    await patchRun(deps, first.id, detach)
+    expect((await fire(deps, jobId)).status).toBe(200)
+  })
+
+  it('C1(c): a fire after the coordinator died leaving ready Tasks nothing places makes one', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    await call(deps, 'task-create', { run: first.id, title: 't', spec: 's', account: 'accA' })
+    await patchRun(deps, first.id, detach)
+    expect(deps.getState().tasks.find((t) => t.runId === first.id)?.status).toBe('ready')
+    expect((await fire(deps, jobId)).status).toBe(200)
+  })
+
+  it('C1: jobs run is allowed in the same cases, and blocked while the coordinator is alive', async () => {
+    const deps = coordDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, coordinatorAccount: 'accA' })
+    const jobId = deps.getState().jobs[0].id
+    const first = (await call(deps, 'jobs-run', { id: jobId })).body as { id: string }
+    await call(deps, 'task-create', { run: first.id, title: 't', spec: 's', account: 'accA' })
+    expect((await call(deps, 'jobs-run', { id: jobId })).status).toBe(409)
+    await patchRun(deps, first.id, detach)
+    // Gone, with a ready Task nothing places: nothing moves it.
+    expect((await call(deps, 'jobs-run', { id: jobId })).status).toBe(200)
+  })
+
+  it('C1: a Run whose coordinator is alive still blocks the fire, even with no Tasks', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    expect(deps.getState().runs.find((r) => r.id === first.id)?.coordinatorSessionId).toBeDefined()
+    const r = await fire(deps, jobId)
+    expect(r.status).toBe(409)
+    expect(r.body).toMatchObject({ running: first.id })
+  })
+
+  it('I1: the Run is committed marked as starting its coordinator, and the attach clears the mark', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    let seen: string | undefined
+    deps.startCoordinator.mockImplementationOnce(async (a: { runId: string }) => {
+      seen = deps.getState().runs.find((r) => r.id === a.runId)?.coordinatorStartingAt
+      return { sessionId: `coord-${a.runId}` }
+    })
+    const run = (await fire(deps, jobId)).body as JobRun
+    expect(seen).toBe(NOW)
+    expect(run).not.toHaveProperty('coordinatorStartingAt')
+    expect(deps.getState().runs.find((r) => r.id === run.id)).not.toHaveProperty('coordinatorStartingAt')
+  })
+
+  it('I1: a failed start clears the mark, so the ▶ can start it', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    deps.startCoordinator.mockRejectedValueOnce(new Error('spawn refused'))
+    await fire(deps, jobId)
+    const run = deps.getState().runs.find((r) => r.jobId === jobId)!
+    expect(run).not.toHaveProperty('coordinatorStartingAt')
+    expect((await call(deps, 'run-start', { run: run.id })).status).toBe(200)
+    expect(deps.getState().runs.find((r) => r.id === run.id)?.coordinatorSessionId).toBe(`coord-${run.id}`)
+  })
+
+  it('I1: ▶ while a start is in flight answers 200 and starts nothing; a mark past the window is ignored', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    deps.startCoordinator.mockRejectedValueOnce(new Error('spawn refused'))
+    await fire(deps, jobId)
+    const run = deps.getState().runs.find((r) => r.jobId === jobId)!
+    deps.startCoordinator.mockClear()
+    await patchRun(deps, run.id, (r) => ({ ...r, coordinatorStartingAt: NOW }))
+    expect((await call(deps, 'run-start', { run: run.id })).status).toBe(200)
+    expect(deps.startCoordinator).not.toHaveBeenCalled()
+    // A crash left the mark: past the window it no longer holds anything.
+    await patchRun(deps, run.id, (r) => ({ ...r, coordinatorStartingAt: '2026-08-03T00:00:00.000Z' }))
+    expect((await call(deps, 'run-start', { run: run.id })).status).toBe(200)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(1)
+  })
+
+  it('I1: a fire while the latest Run is still starting its coordinator is skipped', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    deps.startCoordinator.mockRejectedValueOnce(new Error('spawn refused'))
+    await fire(deps, jobId)
+    const run = deps.getState().runs.find((r) => r.jobId === jobId)!
+    await patchRun(deps, run.id, (r) => ({ ...r, coordinatorStartingAt: NOW }))
+    expect((await fire(deps, jobId)).status).toBe(409)
+  })
+
+  it('I2: a hand-over that finds another coordinator in the slot stops its own session and keeps the slot', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    deps.startCoordinator.mockImplementationOnce(async (a: { runId: string }) => {
+      await patchRun(deps, a.runId, (r) => ({ ...r, coordinatorSessionId: 'coord-other' }))
+      return { sessionId: 'coord-mine' }
+    })
+    const r = await fire(deps, jobId)
+    expect(r.status).toBe(200)
+    const run = deps.getState().runs.find((x) => x.jobId === jobId)!
+    expect(run.coordinatorSessionId).toBe('coord-other')
+    expect(run).not.toHaveProperty('coordinatorStartingAt')
+    expect(deps.stopped).toEqual(['coord-mine'])
+    expect(deps.logs.join('\n')).toMatch(/coord-mine/)
+  })
+
+  it('I3: ▶ on a finished Run answers 200 and starts nothing', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    deps.startCoordinator.mockRejectedValueOnce(new Error('spawn refused'))
+    await fire(deps, jobId)
+    const run = deps.getState().runs.find((r) => r.jobId === jobId)!
+    const t = await call(deps, 'task-create', { run: run.id, title: 't', spec: 's', account: 'accA' })
+    await call(deps, 'task-update', { id: (t.body as { id: string }).id, status: 'completed' })
+    deps.startCoordinator.mockClear()
+    expect((await call(deps, 'run-start', { run: run.id })).status).toBe(200)
+    expect(deps.startCoordinator).not.toHaveBeenCalled()
   })
 })

@@ -3076,6 +3076,9 @@ export function registerIpc(
           },
           a
         ),
+      // A coordinator a hand-over started and cannot use: another one already holds the Run's slot
+      // (Task 1 fix round 1, I2). Killed the way worker-stop kills a worker, the app's or the Host's pty.
+      stopCoordinator: (sessionId) => coordinator.stopSession(sessionId),
       // Every worker start goes through this one wrapper — the auto-dispatch loop, the CLI's
       // worker-start and review Dispatches alike. The chain rule and the tail are
       // startWorkerWithChain's (core/orchestration/exec/workerStart.ts), which the Host will call

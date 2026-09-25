@@ -38,6 +38,7 @@ import {
   resumeRun,
   setRunWorktree,
   placedByApp,
+  coordinatorStarting,
   type OrchState,
   type RepairTarget,
   type Res
@@ -72,7 +73,7 @@ import { nameForRun } from '../worktrees/naming'
 import type { Provider } from '../providers/meta'
 import { isValidRule, type ScheduleRule } from '../scheduler/rule'
 import { parseCheckFlag } from '../workUnit/verification'
-import { outcomeOf, progressOf } from './view'
+import { isTerminal as taskFinished, outcomeOf, progressOf } from './view'
 import { runningRunCount } from './running'
 import { appDriven } from './schedule'
 import type { RunOutcome } from '../types'
@@ -247,6 +248,10 @@ export interface OrchServerDeps {
      *  넣는다(handover.ts 의 coordinatorLaunchPrompt) — 여러 줄은 argv 를 지나갈 수 없다. */
     brief: string
   }): Promise<{ sessionId: string }>
+  /** Stops a coordinator session `startCoordinator` opened, when the hand-over finds another one
+   *  already in the Run's slot (Task 1 fix round 1, I2). Optional: without it that session is left
+   *  running and the command says so in the log. */
+  stopCoordinator?(sessionId: string): Promise<void>
   /** 이 Run 이 일할 워크트리를 하나 만들고 그 경로를 낸다. **`startCoordinator` 와 같은 꼴** —
    *  배선이 채우고, 디스크만 만들고 OrchState 는 건드리지 않는다(기록은 setRunWorktree 가 한다).
    *
@@ -519,16 +524,36 @@ const latestRunOf = (s: OrchState, job: Job): JobRun | undefined =>
 
 /** The Job's latest Run **while it still runs**, else undefined. `jobs run` refuses on it, and a fire
  *  skips on it (`run-spawn --unless-running`; the user's ruling of 2026-09-25 on U1): the same test in
- *  both, so a schedule never starts a second Run of a Job beside one `jobs run` would count as running.
- *
- *  **`limited` still runs** (Task 1 review Minor 3). It ends `runs wait` so a script can stop holding
- *  on, but nothing about the Run is over: its agents resume by themselves at the reset. `waiting` and
- *  `paused` need a person, so they do not count. */
+ *  both, so a schedule never starts a second Run of a Job beside one `jobs run` would count as running. */
 const runningRunOf = (s: OrchState, job: Job, now: string): JobRun | undefined => {
   const latest = latestRunOf(s, job)
-  if (!latest) return undefined
-  const ending = waitEndingFor(s, latest.id, now)
-  return ending === null || ending.state === 'limited' ? latest : undefined
+  return latest && runMoves(s, job, latest, now) ? latest : undefined
+}
+
+/**
+ * **Whether something can still move this Run** (Task 1 fix round 1, C1). "Its outcome is `running`"
+ * was the test, and it is true of a Run nothing will ever move: one with no Tasks (`outcomeOf` reads
+ * that as running, so a just-made Run is not `completed`), one whose coordinator failed to start, or
+ * died before it made a Task, or died leaving `ready` Tasks no loop places. Each of those stopped every
+ * later fire of its schedule, and every later `jobs run` of its Job, for good.
+ *
+ * Not running: a finished Run (every Task done), and a paused one (a person resumes it; unchanged from
+ * before). Otherwise it runs when any of these holds:
+ * - a coordinator is attached, or its start is in flight (`coordinatorStarting`, I1);
+ * - the app places it (`placedByApp`) and a Task is unfinished, so the loop will pick it up;
+ * - a worker is at work on it (an open Dispatch), or it waits on a person (an open Gate);
+ * - it is `limited`: its agents resume by themselves at the reset (Task 1 review Minor 3).
+ */
+const runMoves = (s: OrchState, job: Job, run: JobRun, now: string): boolean => {
+  const tasks = s.tasks.filter((t) => t.runId === run.id)
+  if (tasks.length > 0 && tasks.every(taskFinished)) return false
+  if (run.paused === true || job.paused === true) return false
+  if (run.coordinatorSessionId !== undefined || coordinatorStarting(run, Date.parse(now))) return true
+  if (placedByApp(job, run) && tasks.some((t) => !taskFinished(t))) return true
+  const ids = new Set(tasks.map((t) => t.id))
+  if (s.dispatches.some((d) => ids.has(d.taskId) && !d.outcome && !d.endedAt)) return true
+  if (s.gates.some((g) => g.status === 'open' && g.runId === run.id)) return true
+  return limitedUntil(s, run.id, now) !== null
 }
 
 /** 회차가 없으면 계획의 정의 Task 를 센다 — tasksOwnedBy 가 두 id 를 다 받는다(view.ts). */
@@ -854,13 +879,59 @@ export async function handleCommand(
    * which a fire calls every time a schedule is due, and the ▶ on a Run row, and a Job-id `run-start`
    * that has nothing to release. One that releases a gate or makes the first Run cannot, since those
    * exist only in `base`, and keeps committing `base` as before.
+   *
+   * **A rebased hand-over claims the start first** (fix round 1, I1): it commits the Run's
+   * `coordinatorStartingAt` on the current state before it starts anything, unless the Run already
+   * has a coordinator or a start in flight, which it then answers 200 and leaves alone. That mark is
+   * what stops a ▶ in the app from starting a second coordinator beside a fire's in the Host: the two
+   * run in two processes, and the state is the one thing both read. `marked` says the caller already
+   * committed the mark (a fire does, in the commit that makes the Run). A failure drops the mark; the
+   * attach drops it (attachCoordinator).
+   *
+   * Routing the app's ▶ to the driving process instead was considered and is not enough on its own:
+   * within one process a fire's start and a ▶ still interleave across the start's awaits, so the mark
+   * is needed there too, and with it the routing adds nothing.
    */
   const handToCoordinator = async (
     base: OrchState,
     job: Job,
     target: JobRun,
     accountId: string,
-    rebase = false
+    rebase = false,
+    marked = false
+  ): Promise<Reply> => {
+    if (!rebase) return startAndAttach(base, job, target, accountId, false)
+    if (!marked) {
+      const current = deps.getState()
+      const run = current.runs.find((r) => r.id === target.id)
+      if (!run) return notFound(`unknown run: ${target.id}`)
+      if (run.coordinatorSessionId !== undefined || coordinatorStarting(run, Date.parse(now))) return okBody(run)
+      await deps.setState({
+        ...current,
+        runs: current.runs.map((r) => (r.id === target.id ? { ...r, coordinatorStartingAt: now } : r))
+      })
+    }
+    const reply = await startAndAttach(deps.getState(), job, target, accountId, true)
+    if (reply.status < 200 || reply.status >= 300) await dropStartMark(target.id)
+    return reply
+  }
+
+  /** Drops a Run's `coordinatorStartingAt`, on the state as it is now (I1). Nothing when it has none. */
+  const dropStartMark = async (runId: string): Promise<void> => {
+    const current = deps.getState()
+    const run = current.runs.find((r) => r.id === runId)
+    if (!run || run.coordinatorStartingAt === undefined) return
+    const { coordinatorStartingAt: _mark, ...rest } = run
+    await deps.setState({ ...current, runs: current.runs.map((r) => (r.id === runId ? rest : r)) })
+  }
+
+  /** The body of `handToCoordinator`: the worktree, the session, the attach. */
+  const startAndAttach = async (
+    base: OrchState,
+    job: Job,
+    target: JobRun,
+    accountId: string,
+    rebase: boolean
   ): Promise<Reply> => {
     // Both callers ask first and take their own no-coordinator path; this is for the compiler.
     if (!deps.startCoordinator) return bad('starting a coordinator is not available in this build')
@@ -955,6 +1026,26 @@ export async function handleCommand(
     let onto = withWorktree
     if (rebase) {
       onto = deps.getState()
+      // **Another coordinator got the slot meanwhile** (fix round 1, I2): only a start that outlived its
+      // mark's window, or a hand-edited file, gets here. The slot stays as it is, and the session this
+      // call started is stopped, so the Run does not end up with two agents driving it.
+      const current = onto.runs.find((r) => r.id === target.id)
+      if (current?.coordinatorSessionId !== undefined && current.coordinatorSessionId !== sessionId) {
+        deps.log?.(
+          `run ${target.id} already has coordinator ${current.coordinatorSessionId}; ` +
+            `stopping the one this start opened (${sessionId})`
+        )
+        try {
+          if (deps.stopCoordinator) await deps.stopCoordinator(sessionId)
+          else deps.log?.(`coordinator ${sessionId} could not be stopped: nothing here can stop a session`)
+        } catch (e) {
+          deps.log?.(`coordinator ${sessionId} could not be stopped: ${String(e)}`)
+        }
+        if (freshWorktree && current.worktree !== freshWorktree && deps.discardRunWorktree)
+          await deps.discardRunWorktree(freshWorktree)
+        await dropStartMark(target.id)
+        return okBody(deps.getState().runs.find((r) => r.id === target.id) ?? current)
+      }
       if (freshWorktree) {
         const recorded = setRunWorktree(onto, target.id, freshWorktree)
         if (recorded.ok) onto = recorded.state
@@ -1560,7 +1651,16 @@ export async function handleCommand(
       if (namedRun) {
         const runJob = jobOf(s, namedRun)
         if (!runJob) return notFound(`unknown job for run: ${id}`)
-        if (namedRun.coordinatorSessionId || !runJob.coordinatorAccountId || !deps.startCoordinator)
+        // **A finished Run gets no coordinator** (fix round 1, I3): there is nothing left for one to
+        // manage, and starting it spends an account on a session that only reads a closed Run. The view
+        // shows no ▶ for it either (view.ts's rowFor). A start in flight is answered the same way, by
+        // handToCoordinator (I1).
+        if (
+          namedRun.coordinatorSessionId ||
+          !runJob.coordinatorAccountId ||
+          !deps.startCoordinator ||
+          outcomeOf(s, namedRun.id) !== 'running'
+        )
           return okBody(namedRun)
         return handToCoordinator(s, runJob, namedRun, runJob.coordinatorAccountId, true)
       }
@@ -1597,6 +1697,8 @@ export async function handleCommand(
       // 다시 띄우는 버튼이 함께 쓴다 — 뜻은 "이 Run 에 관리자가 있게 하라" 이고, 두 번 눌러도 두
       // 세션이 뜨지 않아야 한다.
       if (target.coordinatorSessionId) return commit(started)
+      // A Run that was already there and has finished: the same as its own row's ▶ (I3).
+      if (s.runs.some((r) => r.id === target.id) && outcomeOf(s, target.id) !== 'running') return commit(started)
       const accountId = job.schedule ? undefined : job.coordinatorAccountId
       if (!accountId || !deps.startCoordinator) return commit(started)
       // Rebased when this call changes nothing on its own (no gate to release, no first Run): the ▶
@@ -1716,14 +1818,24 @@ export async function handleCommand(
             body: { error: `job ${id} is still running (run ${running.id}); this run was not made`, jobId: id, running: running.id }
           }
       }
-      const spawned = startJobRun(s, id, now)
+      const made = startJobRun(s, id, now)
+      // **The Run is committed already marked "coordinator starting"** when it will get one (I1): there
+      // is no moment in which a ▶ sees it with neither a coordinator nor a start in flight.
+      const willHandOver = made.ok && s.jobs.find((j) => j.id === id)?.coordinatorAccountId !== undefined && deps.startCoordinator !== undefined
+      const spawned: typeof made =
+        made.ok && willHandOver
+          ? (() => {
+              const marked: JobRun = { ...made.value, coordinatorStartingAt: now }
+              return { ...made, state: { ...made.state, runs: made.state.runs.map((r) => (r.id === marked.id ? marked : r)) }, value: marked }
+            })()
+          : made
       const reply = await commit(spawned)
       if (!spawned.ok || reply.status >= 300) return reply
       const after = deps.getState()
       const job = after.jobs.find((j) => j.id === id)
       const run = after.runs.find((r) => r.id === spawned.value.id)
-      if (!job?.coordinatorAccountId || !deps.startCoordinator || !run) return reply
-      const handed = await handToCoordinator(after, job, run, job.coordinatorAccountId, true)
+      if (!willHandOver || !job?.coordinatorAccountId || !run) return reply
+      const handed = await handToCoordinator(after, job, run, job.coordinatorAccountId, true, true)
       if (handed.status >= 200 && handed.status < 300) {
         const withCoordinator = deps.getState().runs.find((r) => r.id === run.id)
         return withCoordinator ? okBody(withCoordinator) : reply

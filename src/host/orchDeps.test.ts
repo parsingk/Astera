@@ -1072,3 +1072,33 @@ describe('HOST_ROLLS (S6 R8)', () => {
     expect(logs.some((l) => l.includes('unregisterRolling') && l.includes('boom'))).toBe(true)
   })
 })
+
+// Task 1 fix round 1, I2: the hand-over stops a coordinator it cannot use.
+describe('stopCoordinator', () => {
+  it('kills the Host’s own pty when its registry holds the session, and asks nobody', async () => {
+    const act = vi.fn()
+    const stopSession = vi.fn(() => true)
+    const deps = hostOrchDeps(base({ act, local: fakeLocal({ stopSession }) }))
+    await deps.stopCoordinator!('ses_c')
+    expect(stopSession).toHaveBeenCalledWith('ses_c')
+    expect(act).not.toHaveBeenCalled()
+  })
+  it('asks the attached app for a session the Host does not hold, and only logs a failure', async () => {
+    const act = vi.fn().mockRejectedValue(new Error('gone'))
+    const logs: string[] = []
+    const onAppRequired = vi.fn()
+    const deps = hostOrchDeps(base({ act, onAppRequired, log: (m) => logs.push(m), local: fakeLocal({ stopSession: () => false }) }))
+    await deps.stopCoordinator!('ses_app')
+    expect(act).toHaveBeenCalledWith('stopCoordinator', ['ses_app'])
+    expect(onAppRequired).not.toHaveBeenCalled()
+    expect(logs.join('\n')).toMatch(/ses_app/)
+  })
+  it('with no app and no pty of its own, logs that it could not', async () => {
+    const act = vi.fn()
+    const logs: string[] = []
+    const deps = hostOrchDeps(base({ act, hasApp: () => false, log: (m) => logs.push(m), local: null }))
+    await deps.stopCoordinator!('ses_x')
+    expect(act).not.toHaveBeenCalled()
+    expect(logs.join('\n')).toMatch(/could not be stopped/)
+  })
+})

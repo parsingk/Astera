@@ -953,4 +953,10 @@ export class OrchCoordinator {
     if (!a.isLatestOwner) return
     await this.deps.killSession(a.sessionId)
   }
+
+  /** Ends a coordinator session a hand-over just started and cannot use, because another coordinator
+   *  already holds the Run's slot (Task 1 fix round 1, I2). The server decided; this only kills. */
+  async stopSession(sessionId: string): Promise<void> {
+    await this.deps.killSession(sessionId)
+  }
 }

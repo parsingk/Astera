@@ -364,7 +364,7 @@ const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ..
  *  hand inside `hostOrchDeps` (its own `const discardRunWorktree`, further down, right before it is
  *  added to the returned object), so that its own failure can never reach `onAppRequired`. Declared
  *  here only for the compiler check below. */
-const NOT_FORWARDED = ['discardRunWorktree'] as const
+const NOT_FORWARDED = ['discardRunWorktree', 'stopCoordinator'] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
  *  synchronous getters became `T | Promise<T>` in `command.ts` and are awaited at their one call site
@@ -465,7 +465,10 @@ const EFFECTFUL: Record<Classified, boolean> = {
   // NOT_FORWARDED — never read: `discardRunWorktree` marks nothing itself (I1; since A36 it may take
   // back the mark its `makeRunWorktree` made), and it never reaches `REMOTE`, so this value is here
   // only to satisfy the `Record<Classified, boolean>` check.
-  discardRunWorktree: false
+  discardRunWorktree: false,
+  // NOT_FORWARDED as well (Task 1 fix round 1, I2): built by hand below. It stops a session its own
+  // command's `startCoordinator` just opened, which that call has already marked.
+  stopCoordinator: false
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -808,6 +811,26 @@ export function hostOrchDeps(a: {
     }
   }
 
+  /**
+   * **Stops a coordinator session this command's own start opened** (Task 1 fix round 1, I2): the
+   * hand-over found another coordinator already in the Run's slot. The Host's own pty when its registry
+   * holds the session (`local.stopSession`, which answers whether it did); otherwise the app, which
+   * started it, is asked, best-effort. Never flagged as the app being required: the command has
+   * already decided its answer (the slot it kept), and this only tidies up.
+   */
+  const stopCoordinator = async (sessionId: string): Promise<void> => {
+    if (a.local?.stopSession?.(sessionId)) return
+    if (!a.hasApp()) {
+      a.log(`coordinator ${sessionId} could not be stopped: this Host does not hold it and no app is attached`)
+      return
+    }
+    try {
+      await a.act('stopCoordinator', [sessionId])
+    } catch (err) {
+      a.log(`coordinator ${sessionId} could not be stopped by the app: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   /** HOST_RESOLVES: the Host's own resolver when no app is attached or the Host drives, else the app,
    *  and the Host again when that app cannot be asked. A failure is thrown as it is, never flagged:
    *  the command layer swallows it (see HOST_RESOLVES). */
@@ -889,6 +912,7 @@ export function hostOrchDeps(a: {
     sendSession: own('sendSession'),
     readChat: own('readChat'),
     discardRunWorktree,
+    stopCoordinator,
     ...remote,
     ...nested
   } as unknown as OrchServerDeps
