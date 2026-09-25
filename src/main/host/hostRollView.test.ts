@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced } from './hostRollView'
+import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced, announcesAdopted } from './hostRollView'
 import type { OrchState } from '../../core/orchestration/state'
 import type { HostMessage } from '../../core/host/protocol'
 
@@ -185,5 +185,33 @@ describe('hostForced (S6 final review M1)', () => {
     expect(hostForced({}, 's1', log)).toBe(true)
     expect(hostForced(null, 's1', log)).toBe(true)
     expect(log).not.toHaveBeenCalled()
+  })
+})
+
+// Task 18 e2e (B2): the new half of a Host roll came up as a second tab beside the old one. The adopter's
+// `session:created` built a tab, then `session:rolled` re-pointed the old tab at the same id.
+describe('announcesAdopted (S6 §3.4)', () => {
+  const info = { id: 's2', accountId: 'a2', cwd: 'D:/p', status: 'running' as const, title: 't' }
+  it('does not announce the new half of a Host roll whose old session the app shows', () => {
+    let finish: () => void = () => {}
+    const v = createHostRollView({ adopt: () => new Promise<void>((r) => { finish = r }), forward: () => {}, log: () => {} })
+    v.pushed({ t: 'session-rolled', oldSessionId: 's1', info, ptyId: 'p2' })
+    expect(v.rolledFrom('s2')).toBe('s1')
+    expect(announcesAdopted(v, 's2', (id) => id === 's1')).toBe(false)
+    finish()
+  })
+  it('announces it when the app never showed the old session: nothing would re-point a tab', () => {
+    const v = createHostRollView({ adopt: () => new Promise<void>(() => {}), forward: () => {}, log: () => {} })
+    v.pushed({ t: 'session-rolled', oldSessionId: 's1', info, ptyId: 'p2' })
+    expect(announcesAdopted(v, 's2', () => false)).toBe(true)
+  })
+  it('announces every other adopted session, and a roll no longer in flight', async () => {
+    const v = createHostRollView({ adopt: async () => {}, forward: () => {}, log: () => {} })
+    expect(v.rolledFrom('s9')).toBeNull()
+    expect(announcesAdopted(v, 's9', () => true)).toBe(true)
+    v.pushed({ t: 'session-rolled', oldSessionId: 's1', info, ptyId: 'p2' })
+    await vi.waitFor(() => expect(v.adopting('s2')).toBe(false))
+    expect(v.rolledFrom('s2')).toBeNull()
+    expect(announcesAdopted(v, 's2', () => true)).toBe(true)
   })
 })

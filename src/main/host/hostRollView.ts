@@ -34,6 +34,9 @@ export interface HostRollView {
   hold(e: Exit, deliver: (e: Exit) => void): void
   /** Whether this session is being adopted as the new half of a pushed Host roll (preflight C10). */
   adopting(sessionId: string): boolean
+  /** The old session id of the pushed Host roll this session is the new half of, while it is being
+   *  adopted; null otherwise. */
+  rolledFrom(sessionId: string): string | null
   /** The old session id of a forwarded rekey whose new session was not adopted (fix round 1, 3): its
    *  Work Unit fork was made but no note took the forkSeen. Handed out once, to the adopter. */
   takePendingFork(sessionId: string): string | null
@@ -56,7 +59,8 @@ export function createHostRollView(d: {
   const pollMs = d.pollMs ?? HOST_ROLL_POLL_MS
   const last = new Map<string, RollStateEvent>()
   const replacing = new Map<string, Array<() => void>>()
-  const inFlight = new Set<string>()
+  /** New session id → the old one, while the new half is being adopted. */
+  const inFlight = new Map<string, string>()
   const known = new Set<string>()
   const pendingFork = new Map<string, string>()
   /** Old session id → the check that releases its exits once the mirror moved (I2). */
@@ -122,7 +126,7 @@ export function createHostRollView(d: {
       known.add(m.oldSessionId)
       known.add(m.info.id)
       replacing.set(m.oldSessionId, replacing.get(m.oldSessionId) ?? [])
-      inFlight.add(m.info.id)
+      inFlight.set(m.info.id, m.oldSessionId)
       // Wrapped so a synchronous throw from adopt is the same failed adoption as a rejection.
       void Promise.resolve()
         .then(() => d.adopt(m.ptyId))
@@ -148,6 +152,7 @@ export function createHostRollView(d: {
     knows: (id) => known.has(id),
     holds: (id) => replacing.has(id),
     adopting: (id) => inFlight.has(id),
+    rolledFrom: (id) => inFlight.get(id) ?? null,
     takePendingFork: (id) => {
       const old = pendingFork.get(id) ?? null
       pendingFork.delete(id)
@@ -169,6 +174,20 @@ export function withHostRollHold(view: Pick<HostRollView, 'holds' | 'hold'>, han
     handler(e)
   }
   return wrapped
+}
+
+/** Whether the adopter announces this session to the renderer with `session:created`. Not the new half
+ *  of a Host roll whose old session the app holds: the forwarded `session:rolled` re-points the old tab
+ *  at it, as the app's own roll does, and a created tab beside it is a second tab for one session
+ *  (Task 18 e2e, B2). Announced when the app never held the old session, since then nothing re-points a
+ *  tab. */
+export function announcesAdopted(
+  view: Pick<HostRollView, 'rolledFrom'>,
+  sessionId: string,
+  appHolds: (sessionId: string) => boolean
+): boolean {
+  const old = view.rolledFrom(sessionId)
+  return old === null || !appHolds(old)
 }
 
 /** Fix round 1, I2: whether the mirror still names this session — an open Dispatch on it (the same

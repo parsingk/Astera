@@ -39,7 +39,7 @@ import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
 import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling } from './host/outdated'
-import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced } from './host/hostRollView'
+import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced, announcesAdopted } from './host/hostRollView'
 import { findHostHeldNative, nativeOfForwardedRekey } from './host/hostNativeGuard'
 import { applyAdoptRolling } from './host/adoptRolling'
 import { reattachSessions, type ReattachResult } from './host/reattach'
@@ -6149,8 +6149,11 @@ export function registerIpc(
               scheduler?.register({ ...info, schedule }, providerOf(core.accounts.get(info.accountId)))
               hostLog(`host: re-armed the schedule of session ${info.id}`)
             })().catch((err) => hostLog(`host: could not re-arm the schedule of session ${info.id}: ${String(err)}`))
+            // The new half of a Host roll gets its tab from the forwarded `session:rolled`, which
+            // re-points the old one (announcesAdopted); a created event here put a second tab beside it.
             try {
-              send('session:created', info)
+              if (announcesAdopted(hostRollView, info.id, (old) => core.sessions.list().some((x) => x.id === old)))
+                send('session:created', info)
             } catch (err) {
               orchLog(`session:created emit failed session=${info.id}: ${String(err)}`)
             }
