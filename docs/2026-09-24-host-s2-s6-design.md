@@ -963,7 +963,9 @@ the S6 limits follow-up".
   coordinator the Host then took over. `limitedUntil` (`command.ts`) counts the coordinator when it is
   stopped with a known reset that is not more than 10 minutes stale (`coordinatorResetOf`); the Run is
   `limited` when the coordinator counts and every open Dispatch is also limited or none is open, and the
-  answer is the earliest reset among them. A `ready` Task no longer holds `limited` back in a
+  answer is the earliest reset among them. Only a Run still `running` can be `limited` (final review
+  I1): `coordinatorSessionId` outlives the Run's finish, so without that check a coordinator that hit a
+  limit after its closing summary turned `completed` into `limited` and made `jobs run` refuse the Job. A `ready` Task no longer holds `limited` back in a
   coordinator-driven Run (`autoDispatch` off), because only the stopped coordinator can start it; it
   still holds `limited` back everywhere else, since the dispatch loop could still place it. `limited`
   means nothing moves on its own before the reset, not that nothing can: a person can still start a ready
@@ -1055,11 +1057,15 @@ the S6 limits follow-up".
   own, falls back to the live session's account when it is the chain's last switch, `nudged` reads
   "resumed at", and a bare roll link says nothing on its own); `summarizeRollJournal` answers `{
   sessions: [{ sessionId, text, seq }] }` for chains with a live session id (what Slack needs, a thread
-  to post into), a `total`, and `limited: [{ sessionId, seq }]` for every chain with a `waiting`,
-  `switching` or `rolled` entry, live or not (the desktop count; a stall alone does not count). New
+  to post into), and `limited: [{ sessionId, seq }]` for every chain with a `waiting` or `switching`
+  entry, live or not (the desktop count; a stall alone does not count, and neither does a `rolled` link
+  with no `switching`, the same-account respawn the ruling below keeps silent). New
   `SlackNotifier.announceOffline(sessionId, text)` (`src/main/slack.ts`) posts once into that session's
   thread, answers `false` when the session has no Slack record, and rejects, rather than swallowing,
-  a failed post or a not-yet-ready transport, so the caller knows not to ack; a new
+  a failed post or a not-yet-ready transport, so the caller knows not to ack. "Not yet ready" means no
+  config has been applied at all (slack.json still loading); once one has, a null transport is a user who
+  turned Slack off, and `announceOffline` answers `false` like a session with no record, so the journal
+  is acked instead of withheld on every start (final review I2). A
   `SlackNotifier.onTransportReady(fn)` fires on every swap to a real transport
   (`applyConfig`/`setWebhookUrl`/`setTransport`), so a later Slack setup can retry what a first attempt
   could not send. The desktop's own `announceOffline(count, sessionId?)`
@@ -1084,7 +1090,10 @@ the S6 limits follow-up".
   `offlineRolls.slackReady()` to `onTransportReady`. i18n gained `slack.offline.*` and
   `notify.offlineRolls` (ko, en; ja and es fall back, as the catalog allows). A ruling from the task's
   review: a `rolled` entry with no `switching` entry, a same-account respawn, says nothing about the roll
-  itself, since a roll link alone is not evidence of an account switch. Pinned by
+  itself, since a roll link alone is not evidence of an account switch, and the desktop count leaves it
+  out as well. The offline strings say "While Astera was away from the Host" ("Astera 가 Host 와 끊겨
+  있던 사이"), since a reconnect after a dropped socket fetches the journal too while the app stayed
+  open. Pinned by
   `src/main/host/rollJournalSummary.test.ts`, `src/main/slack.test.ts`, `src/main/desktopNotifier.test.ts`,
   `src/main/host/offlineRolls.test.ts` and `src/main/host/outdated.test.ts`.
 
@@ -1336,7 +1345,11 @@ Checked at `5338222f`.
   rekey, including one a coordinator's in-place fallback causes with no account change, but `chainText`
   says nothing for a bare roll link on its own. By ruling, a `rolled` link alone is not evidence of an
   account switch, so the offline summary a person reads only ever names a wait, a switch or a resume,
-  never the respawn underneath one.
+  never the respawn underneath one. The desktop notice does not count it either.
+- **A roll event between an app's hello and its adoption sweep reaches neither Slack nor the journal.**
+  (final review M2) Once the hello lands, the Host sees an app attached and stops journaling, but the
+  sweep has not yet registered the session's Slack record, so `SlackNotifier.onRollState` drops a
+  `waiting` pushed in that gap. The gap is short, and S6 already had it for live pushes.
 - **The coordinator's stale-stop rule is ten minutes, and covers only the coordinator.** (Amendments A74)
   A coordinator's stop is ignored by `limitedUntil` once its `resetsAt` is more than
   `STALE_COORDINATOR_STOP_MS` (10 minutes) in the past, so a missed clear cannot leave every wait on that

@@ -241,9 +241,12 @@ sessions it started (every worker, reviewer, repair worker and coordinator) for 
 at a usage limit it moves the session to the next usable account the task lists, and when none is
 usable it waits, and resumes the session on whichever of its accounts resets first. A
 task can list several accounts, in the order to move through: `tasks add --account a,b`. The Dispatch
-follows the session, so the task stays in progress and `runs wait` goes on waiting. When every worker
-of a run, and its coordinator too if it has one, is waiting for a reset, `runs wait` ends with 8 and
-`error.details.state` `limited`, naming the reset time in `error.details.resetsAt` (see Exit codes).
+follows the session, so the task stays in progress and `runs wait` goes on waiting. When a run is
+still running and every open worker of it, and its coordinator when that is stopped, is waiting for a
+reset, `runs wait` ends with 8 and `error.details.state` `limited`, naming the reset time in
+`error.details.resetsAt` (see Exit codes). A coordinator that is still working does not hold this back,
+and a stopped coordinator with no open worker is enough on its own. A run whose tasks have all finished
+ends with its own outcome, even if its coordinator then waits for a reset.
 The workers and the coordinator still resume by themselves then, so waiting again after that time can
 still end `completed`.
 
@@ -878,7 +881,9 @@ it can still end `completed`; this ending only lets a script stop holding on. It
 resume`. A run ends `limited` only when no task of it is ready to start and none is being validated or
 reviewed, since either could still move before the reset, except in a run its coordinator drives: there
 only the coordinator places a task, so a ready one does not keep `limited` from firing while that
-coordinator waits for its own reset.
+coordinator waits for its own reset. And only a run still in progress can end `limited`: once every
+task of it has finished, the wait ends `completed` or `failed`, even if its coordinator then waits for a
+reset, and `jobs run` starts the next run.
 
 **9 means two different builds.** The command on your `PATH` and the running Host came from
 different versions of Astera. Report it rather than working around it.
