@@ -145,10 +145,13 @@ about, so they exit 3.
 shell with only a Host running: `worker-start`, `worker-start --worktree new`, `worker-stop`,
 `worker-release` and `worker-read`. So does `run-start`, which starts a Job's coordinator again, or,
 given a run id instead of a Job id, restarts that one run's coordinator without touching the Job's gate.
+On a finished run, or while a start of that run's coordinator is already in flight, it does nothing
+and exits 0.
 So does `jobs run` of a Job with a coordinator account, scheduled or not, which starts the new run's
 coordinator, for the first run and for every later one. If a later run's coordinator fails to start,
 that run stays without one, and the error names `astera run-start --run <runId>`, which starts it.
-Running `jobs run` again does not help, because it is refused while that run is running. Either way, the
+Running `jobs run` again does not help: that run has no coordinator, so it does not count as running,
+and `jobs run` would start another run beside it. Either way, the
 Host makes the run's worktree itself if it does not have one yet. If the coordinator then fails to
 start, the Host removes that worktree again, and the failed start still answers the same way it always
 did. A `worker-start --worktree new` whose worker then fails to start has its new worktree removed the
@@ -232,6 +235,14 @@ client and no work still leaves a minute after the last one, so an armed schedul
 keep a Host running. A fire is skipped, and logged once, while the Job's latest run is still running,
 the same rule that makes `jobs run` refuse a Job that is already going (see "the still running rule"
 below).
+
+**A scheduled Job does not pile up coordinators.** When a run of a scheduled Job finishes, which means
+every one of its tasks is done, the process that drives stops that run's coordinator. A run that
+`jobs run` started for a Job with no schedule keeps its coordinator, because you may be reading its tab.
+At a fire, a latest run whose coordinator is the only thing left is replaced: it has no open worker, no
+open question, no check under way and no task its coordinator can still start, as with a run made from
+an objective alone. Its coordinator is stopped, the run is paused the way `runs stop` pauses one, and the
+new run starts. `runs resume` takes the old run back. A run that is still working is skipped as before.
 
 **The Host runs the checks itself.** A task added with `--validate` or `--review` moves on after its
 worker reports done, with Astera open or closed. A validation run the Host starts appears in Astera's
@@ -436,13 +447,18 @@ came back empty would send) is a 2, not the list of every run.
 run it started, which is the id to pass to `runs wait`.
 
 **The still running rule.** A run counts as running while something can still move it: a coordinator
-attached to it, or one still starting; a run the app or the Host places that has a task still
-unfinished; an open Dispatch or an open Gate; a task under check, `validating` or `reviewing`; or a run
+still starting; a coordinator attached to it, or the app or the Host placing it, with a task it can
+still start; an open Dispatch or an open Gate; a task under check, `validating` or `reviewing`; or a run
 that just ended `limited`, since its agents resume by themselves at the reset. A paused run does not
-count, and neither does a run nothing can move at all. The same rule decides whether a schedule's fire
-is skipped, above, so `jobs run` and a fire both refuse to start beside a run it still calls running. A
-run only waiting on a Gate now counts as running, so `jobs run` refuses it, where it once allowed it; a
-run nothing can move does not count, so `jobs run` is free to start over one.
+count, and neither does a run nothing can move at all. A task it can still start is a `ready` one, a
+`pending` one whose dependencies can all still complete, or, for a coordinator only, a failed one it
+can retry. So a placed run whose only unfinished task failed once, or waits behind a task that failed
+for good, does not count, and neither does a coordinator with no task it can start. The same rule
+decides whether a schedule's fire is skipped, above, so `jobs run` and a fire both refuse to start
+beside a run it still calls running. A run only waiting on a Gate now counts as running, so `jobs run`
+refuses it, where it once allowed it; a run nothing can move does not count, so `jobs run` is free to
+start over one. A run whose coordinator is the only thing left does not count either: `jobs run` starts
+the next run beside it and leaves that coordinator alone, while a fire replaces it, as above.
 
 **`jobs create` makes a plan and runs nothing.** It returns the Job, marked `pendingStart`, with no
 run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in

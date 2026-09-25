@@ -392,8 +392,8 @@ accounts [--agent <claude|codex>] [--json]
   way it is refused, only the message differs. Read section 11 in full before driving a convergence
   Run; this bullet is the pointer, not the reference.
 - **A Task whose Run does not exist is refused `400 unknown run for task: <id>`**, the same code `send`
-  already answers for it: a definition Task of a scheduled Job's template has no Run of its own, and a
-  dangling id is the other way there. A Task the app or a coordinator gave you always has one.
+  already answers for it: a Job's definition Task has no Run of its own, and a dangling id is the other
+  way there. A Task the app or a coordinator gave you always has one.
 - `--terminal <sessionId>` reuses an existing worker session. This is the only case where a new Task
   can be handed to the same session without `--retry-of` (see the example in section 5). The session
   must belong to a worker of the **same Run** as the Task being started; a session of another Run is

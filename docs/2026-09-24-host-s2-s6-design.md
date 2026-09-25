@@ -1104,7 +1104,8 @@ The follow-up plan `.superpowers/sdd/2026-09-25-cp-followups/plan.md` (Decisions
 plan's own numbering) closed the F65 gap A56 above found: a fired run of a scheduled Job started no
 coordinator, and nobody placed its Tasks. Its execution ledger is `progress.md` in the same folder, and
 its two tasks' reports are `task-1-report.md` and `task-2-report.md`. Landed on `develop` from
-`8296d9ba` through `bf479b4e`. This list is the record, in A1's form; A56 and D2 point back here.
+`8296d9ba` through `bf479b4e`, with the final review's fixes after `960708ab` (`final-fix-report.md`,
+A83 and A84). This list is the record, in A1's form; A56 and D2 point back here.
 
 - **A79. U1: a schedule's fire runs a Job exactly the way `jobs run` runs one (plan U1, R1, R2).** The
   gap A56 found: `appDriven` needed `job.autoDispatch`, and a schedule never carried it, so a fired run
@@ -1161,6 +1162,41 @@ its two tasks' reports are `task-1-report.md` and `task-2-report.md`. Landed on 
   for the same Run answers 200 and starts nothing; a finished Run's ▶ does the same, since there is
   nothing left for a coordinator to manage. Pinned by `command.test.ts`, `view.test.ts`,
   `dispatchLoop.test.ts` and `orchDeps.test.ts` (task-1-report.md, fix rounds 1 and 2).
+- **A83. A82's driver clauses ask whether the driver can still start a Task (final review I1, and the
+  user's U4).** A82 counted a Run as running while `placedByApp` held and some Task was unfinished, and
+  while a coordinator slot was attached at all. Both were too broad. In a Run the app places, nothing
+  starts a failed Task again: `slotsToFill` takes `ready` Tasks only, and recovery acts on open
+  Dispatches alone. And `recomputeReady` never frees a `pending` Task behind a dependency that failed
+  for good. So one worker failure made the Run count as running for ever, and every later fire and
+  `jobs run` was refused, which is C1 again by another road. A live coordinator on a Run with no Task it
+  can start did the same: a Run made from an objective alone has no Task, and its coordinator is told not
+  to make any (`handover.ts`). What shipped: the two clauses became one, "its driver can still start one
+  of its Tasks" (`startable`, `command.ts`). The driver is the live coordinator, or else the app's loop
+  when `placedByApp` holds. A Task it can start is `ready` under the circuit break, `pending` with every
+  dependency still able to complete, or, for a coordinator only, `failed` under the circuit break or
+  `dispatched` with its Dispatch closed, since only a coordinator retries (`worker-start --retry-of`).
+  The start mark, open Dispatches, open Gates, checks under way and `limited` count as before. Pinned by
+  `command.test.ts` (final-fix-report.md).
+- **A84. U4: a scheduled Job's finished Run has its coordinator stopped, and a fire replaces a Run that
+  has only its coordinator left (the user's ruling of 2026-09-25).** A79 costs one coordinator per fire,
+  and nothing ever stopped one: each looped on `check --wait` after its Run finished, and each counted in
+  the Host's live sessions, so a frequent schedule grew them without bound. What shipped, in three parts.
+  (1) A new session command, `run-coordinator-stop --run <runId>`: it stops the Run's coordinator through
+  the `stopCoordinator` dep Task 1 added, and empties the slot. It answers 409 while the Run still moves
+  (A83), and 200 with `stopped: null` when no coordinator is attached. (2) The dispatch loop of the
+  process that drives sends it once for each finished Run of a scheduled Job that still has a
+  coordinator, after the slot pass and before the reap, asking `mayStart` before each stop, so the app
+  and the Host never both stop one coordinator. (3) A fire (`run-spawn --unless-running`) of a scheduled
+  Job whose latest Run is not running but still has a coordinator stops that coordinator and empties
+  its slot. An unfinished Run is also paused, the way `runs stop` ends a Run, so it reads as stopped and
+  `runs resume` takes it back. Then the fire makes the new Run on the state as it is after that. A
+  stop that fails is logged and never thrown, and the slot is emptied anyway, so the Host has no
+  unhandled rejection and a replaced Run does not keep a dead slot. **Scope (the controller's ruling):**
+  only scheduled Jobs. A Run that `jobs run` starts for a Job with no schedule keeps its coordinator
+  when it finishes, because a person may be reading its tab. **One rule for both callers:** a Run the
+  fire would replace is one A83 already calls not running, so `jobs run` does not refuse on it either;
+  it starts the next Run beside it and leaves that coordinator alone. Pinned by `command.test.ts` and
+  `dispatchLoop.test.ts` (final-fix-report.md).
 
 ## Known limits after S3
 
@@ -1448,6 +1484,19 @@ reason. Checked at `bf479b4e`.
   longer than that. So can, on a Host with no local spawner of its own, a `startCoordinator` call that
   Host forwards to an attached app whose own reply never comes. Either way the marker goes stale while
   its start is still in flight, and a second start can then be begun beside the first.
+- **A replaced or finished Run can still show ▶.** (Amendments A84) The Jobs list shows ▶ on a Run of a
+  coordinator Job that has no coordinator and whose outcome is `running`. A Run the fire replaced is
+  paused but, with no Task finished, still reads `running`, so its row keeps ▶, and pressing it starts
+  a coordinator on a Run nobody means to go on with. Old fired Runs from before A84 show ▶ the same way
+  (final review M3).
+- **A coordinator stop that fails leaves the session alive, with no slot.** (Amendments A84) The stop is
+  best effort: a Host that does not hold the pty and has no app attached cannot stop it, and logs that.
+  The slot is emptied anyway, so nothing asks again. The session then loops on `check --wait` on a
+  finished Run until someone closes it.
+- **The loop asks each finished coordinator to stop once per process.** (Amendments A84) A refused or
+  failed `run-coordinator-stop` is not sent again by that process, so a transient failure waits for the
+  Job's next fire, which stops the coordinator of a finished latest Run it finds still attached, or for
+  a restart.
 
 ## 0. The problem, measured
 
