@@ -17,7 +17,7 @@ import { chatAnswerFailureOf, chatPromptsOf, type ChatAnswerResult, type ChatPro
 import type { ProcRegistry } from './procRegistry'
 import type { ProcHolders } from './procHolders'
 import { createHostProcs, type HostProcHandle, type HostProcsDeps } from './hostProcs'
-import { createChatPolicy } from './chatPolicy'
+import { createChatPolicy, UNATTENDED_DENY_MESSAGE } from './chatPolicy'
 import { CHAT_REQUEST_TIMEOUT_MS } from '../core/chat/adapterCore'
 
 /** How long `started()` waits for a Host-spawned proc's handshake and carry-on (plan ruling P5). A bound,
@@ -163,7 +163,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     answered: (id) => answeredOf(id),
     // Through the adapter's normal answer path, so its state stays honest; a NotWriterError (an app took
     // the proc between the check and the write) rejects here and the policy logs it.
-    deny: (sid, rid) => manager.answer(sid, rid, { kind: 'approval', decision: 'decline' }),
+    deny: (sid, rid) => manager.answer(sid, rid, { kind: 'approval', decision: 'decline', message: UNATTENDED_DENY_MESSAGE }),
     log: d.log,
     ...(d.after ? { after: d.after } : {})
   })

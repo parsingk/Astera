@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { ProcRegistry, type RegistryProc } from './procRegistry'
 import { createProcHolders } from './procHolders'
 import { createHostChats, CHAT_START_PUSH_MS } from './hostChats'
+import { UNATTENDED_DENY_MESSAGE } from './chatPolicy'
 import { CHAT_REQUEST_TIMEOUT_MS } from '../core/chat/adapterCore'
 import * as F from '../core/chat/claudeFixtures'
 import type { Account } from '../core/types'
@@ -504,6 +505,24 @@ describe('createHostChats — the unattended permission policy (Task 7)', () => 
       held.chats.adopt(held.entry())
       await vi.advanceTimersByTimeAsync(10 * 60_000)
       expect(held.procs[0].sent.join('')).not.toContain('"behavior":"deny"')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Chat takeover e2e E2: the CLI (and the model) was told a person declined. It is told the truth.
+  it('an unattended deny tells the CLI no one answered within 60 s, not that a person declined', async () => {
+    vi.useFakeTimers()
+    try {
+      const r = rig({ unattendedPermission: 'deny-after-60s' })
+      r.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n`)
+      r.chats.adopt(r.entry())
+      await vi.advanceTimersByTimeAsync(60_000)
+      const frame = JSON.parse(r.procs[0].sent.find((l) => l.includes('"behavior":"deny"'))!) as { response: { response: { message: string } } }
+      expect(frame.response.response.message).toBe(UNATTENDED_DENY_MESSAGE)
+      expect(UNATTENDED_DENY_MESSAGE).toMatch(/no one answered/i)
+      expect(UNATTENDED_DENY_MESSAGE).toMatch(/60 seconds/)
+      expect(UNATTENDED_DENY_MESSAGE).not.toMatch(/user declined/i)
     } finally {
       vi.useRealTimers()
     }

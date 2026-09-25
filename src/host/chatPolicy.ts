@@ -12,6 +12,11 @@ import type { ChatRequest, UnattendedPermission } from '../core/chat/types'
 
 export const UNATTENDED_DENY_MS = 60_000
 
+/** What the CLI, and so the model, is told with an unattended deny (chat takeover e2e E2). The encoder's
+ *  own text says a person declined, which nobody did here. */
+export const UNATTENDED_DENY_MESSAGE =
+  'No one answered this permission prompt within 60 seconds, so Astera denied it automatically (the session is set to deny after 60 s when no one is there).'
+
 export interface ChatPolicy {
   /** Arms a timer for each open approval of this session that the policy covers, cancels the rest. */
   review(sessionId: string): void

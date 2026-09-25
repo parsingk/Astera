@@ -13,7 +13,9 @@ export type ChatRequest =
   | { id: string; kind: 'question'; form: AskForm }
 
 export type ChatAnswer =
-  | { kind: 'approval'; decision: ApprovalDecision }
+  /** `message`: for a decline, what the CLI is told instead of its encoder's "a person declined"
+   *  (claude only; codex's answer carries no text). The unattended deny passes its own. */
+  | { kind: 'approval'; decision: ApprovalDecision; message?: string }
   | { kind: 'question'; answers: Answer[] }
 
 /** How much the CLI may do without asking. Claude calls it a permission mode and codex a

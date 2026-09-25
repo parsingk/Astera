@@ -156,7 +156,7 @@ export function encodeClaudeAnswer(frame: Extract<ClaudeFrame, { kind: 'control_
     return encodeControlSuccess(frame.requestId, { behavior: 'allow', updatedInput: input, updatedPermissions: decoded.suggestions ?? [] })
   }
   if (answer.decision === 'decline') {
-    return encodeControlSuccess(frame.requestId, { behavior: 'deny', message: 'User declined in Astera' })
+    return encodeControlSuccess(frame.requestId, { behavior: 'deny', message: answer.message ?? 'User declined in Astera' })
   }
   return encodeControlSuccess(frame.requestId, { behavior: 'allow', updatedInput: input })
 }

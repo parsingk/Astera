@@ -124,6 +124,10 @@ describe('decodeClaudeRequest', () => {
     expect(JSON.parse(encodeClaudeAnswer(frame, d, { kind: 'approval', decision: 'decline' }))).toMatchObject({
       response: { response: { behavior: 'deny', message: 'User declined in Astera' } }
     })
+    // Chat takeover e2e E2: a deny nobody chose carries its own words.
+    expect(JSON.parse(encodeClaudeAnswer(frame, d, { kind: 'approval', decision: 'decline', message: 'no one answered' }))).toMatchObject({
+      response: { response: { behavior: 'deny', message: 'no one answered' } }
+    })
     const forSession = JSON.parse(encodeClaudeAnswer(frame, d, { kind: 'approval', decision: 'acceptForSession' }))
     expect(forSession.response.response.updatedPermissions).toEqual([{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }])
   })
