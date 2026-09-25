@@ -1197,8 +1197,20 @@ A83 and A84). This list is the record, in A1's form; A56 and D2 point back here.
   fire would replace is one A83 already calls not running, so `jobs run` does not refuse on it either;
   it starts the next Run beside it and leaves that coordinator alone. **A paused Run shows no ▶**, and
   `run-start --run` on one answers 200 and starts nothing, so a replaced Run gets no coordinator by
-  accident; `runs resume` takes it back. Pinned by `command.test.ts`, `view.test.ts` and
-  `dispatchLoop.test.ts` (final-fix-report.md).
+  accident; `runs resume` takes it back. **The idle rule (final round 2, I-A):** state alone cannot tell
+  a coordinator parked in `check --wait` from one doing the work itself on an objective-only Job, and a
+  title spinner cannot either. So an unfinished Run is replaced at a fire, and `run-coordinator-stop`
+  stops an unfinished Run's coordinator (a Run with no Tasks), only when the optional dep
+  `coordinatorIdle(runId, sessionId)` answers `true`: that session has a `check --wait` for that Run in
+  flight in the process that serves it. `false`, `null` or no dep keeps the plain U3 skip (409, logged
+  "coordinator busy or unknown, skipped"). A finished Run needs no such check. The waits are recorded
+  where `check --wait` is served: every CLI call reaches the Host, so the Host's command server holds one
+  tracker for its life (`checkWaits.ts`, wired through `hostOrchDeps`), and a fire or loop stop the Host
+  drives reads it. The app serves no session's `check` and wires neither dep, so when the app drives it
+  answers unknown and skips. Also: a replaced Run is paused even when the exit release emptied its slot
+  during the stop, and `run-coordinator-stop` asks `runMoves` again on the state after the stop and
+  writes nothing (409) when the Run gained work meanwhile. Pinned by `command.test.ts`, `view.test.ts`,
+  `dispatchLoop.test.ts`, `checkWaits.test.ts` and `host/orch.test.ts` (final-fix-report.md).
 
 ## Known limits after S3
 
@@ -1494,6 +1506,17 @@ reason. Checked at `bf479b4e`.
   failed `run-coordinator-stop` is not sent again by that process, so a transient failure waits for the
   Job's next fire, which stops the coordinator of a finished latest Run it finds still attached, or for
   a restart.
+- **A Run with only its coordinator left is replaced only while that coordinator is parked.**
+  (Amendments A84, the idle rule) A fire that finds the coordinator between two `check --wait` calls, or
+  thinking, skips; so does every fire while the app drives, since the app cannot see the Host's waits.
+  So with Astera driving in front of a Host, an objective-only scheduled Job whose coordinator never
+  ends is skipped at each fire, as before U4, until its Run is stopped by hand. With the Host driving, a
+  coordinator that parks in `check --wait` between turns is replaced at the first fire that meets it
+  parked. The same goes for `run-coordinator-stop` on a Run with no Tasks.
+- **`jobs run` does not ask the idle rule.** (Amendments A83, A84) A Run with only its coordinator left
+  does not count as running whether or not that coordinator is busy, so `jobs run` starts the next Run
+  beside a coordinator that may still be doing the work itself. It stops nothing, so nothing is lost,
+  but two Runs of one Job can then be going at once.
 
 ## 0. The problem, measured
 

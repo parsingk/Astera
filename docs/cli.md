@@ -241,8 +241,12 @@ every one of its tasks is done, the process that drives stops that run's coordin
 `jobs run` started for a Job with no schedule keeps its coordinator, because you may be reading its tab.
 At a fire, a latest run whose coordinator is the only thing left is replaced: it has no open worker, no
 open question, no check under way and no task its coordinator can still start, as with a run made from
-an objective alone. Its coordinator is stopped, the run is paused the way `runs stop` pauses one, and the
-new run starts. `runs resume` takes the old run back. A run that is still working is skipped as before.
+an objective alone. It is replaced only while its coordinator is parked in `check --wait`, which is the
+one sure sign that the coordinator is waiting rather than doing the work itself; the Host sees that
+wait, because every CLI call reaches the Host. Then its coordinator is stopped, the run is paused the
+way `runs stop` pauses one, and the new run starts. `runs resume` takes the old run back. When the
+coordinator is busy, or when the process that fires cannot tell, which is Astera driving in front of a
+Host, the fire is skipped and logged as before. A run that is still working is skipped as well.
 
 **The Host runs the checks itself.** A task added with `--validate` or `--review` moves on after its
 worker reports done, with Astera open or closed. A validation run the Host starts appears in Astera's
@@ -458,7 +462,8 @@ decides whether a schedule's fire is skipped, above, so `jobs run` and a fire bo
 beside a run it still calls running. A run only waiting on a Gate now counts as running, so `jobs run`
 refuses it, where it once allowed it; a run nothing can move does not count, so `jobs run` is free to
 start over one. A run whose coordinator is the only thing left does not count either: `jobs run` starts
-the next run beside it and leaves that coordinator alone, while a fire replaces it, as above.
+the next run beside it and leaves that coordinator alone, while a fire replaces it when that coordinator
+is parked in `check --wait`, and skips otherwise, as above.
 
 **`jobs create` makes a plan and runs nothing.** It returns the Job, marked `pendingStart`, with no
 run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in
