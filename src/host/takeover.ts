@@ -99,14 +99,29 @@ export function takeOverChats(d: {
   unregister(sessionId: string): void
   adopt(entry: PtyEntry): boolean
   log(m: string): void
+  /** Fix round 1 (Minor 1): proc id → the note it failed to adopt with. Such a proc is not tried again
+   *  (a restore has side effects: its roll config, onNativeSession) until it ends or its note changes.
+   *  The caller keeps the map across passes. */
+  adoptFailed?: Map<string, string>
 }): { taken: string[]; adopted: string[]; skipped: Array<{ sessionId: string; why: string }> } {
   const taken: string[] = []
   const adopted: string[] = []
   const skipped: Array<{ sessionId: string; why: string }> = []
   if (d.hasApp() || !d.announces() || d.retiring()) return { taken, adopted, skipped }
-  for (const e of d.entries()) {
+  const entries = d.entries()
+  const failed = d.adoptFailed
+  if (failed) {
+    const live = new Set(entries.filter((e) => e.alive).map((e) => e.id))
+    for (const p of [...failed.keys()]) if (!live.has(p)) failed.delete(p)
+  }
+  for (const e of entries) {
     if (!e.alive || e.meta?.kind !== 'chat') continue
     const id = e.meta.id
+    const key = failed ? noteKey(e.meta.restore) : ''
+    if (failed?.has(e.id)) {
+      if (failed.get(e.id) === key) continue
+      failed.delete(e.id)
+    }
     const skip = (why: string): void => {
       skipped.push({ sessionId: id, why })
     }
@@ -165,6 +180,10 @@ export function takeOverChats(d: {
         d.note(e.id, { rolledBy: null })
       }
       skip('the Host could not take an adapter on it')
+      if (failed) {
+        failed.set(e.id, key)
+        d.log(`takeover: chat ${id} could not be adopted — not tried again until its proc ends or its note changes`)
+      }
       continue
     }
     adopted.push(id)
@@ -173,4 +192,11 @@ export function takeOverChats(d: {
   if (taken.length > 0) d.log(`takeover: the Host now rolls chat ${taken.join(', ')} (the app that held them is gone)`)
   if (adopted.length > 0) d.log(`takeover: the Host now carries chat ${adopted.join(', ')} (the app that held them is gone)`)
   return { taken, adopted, skipped }
+}
+
+/** The note as the chat pass compares it across passes: without `rolledBy`, the one key the pass writes
+ *  itself (a failed adopt takes its mark back, and that must not read as a change). */
+function noteKey(restore: Record<string, unknown>): string {
+  const { rolledBy: _rolledBy, ...rest } = restore
+  return JSON.stringify(rest)
 }

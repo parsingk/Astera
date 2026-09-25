@@ -83,7 +83,7 @@ describe('takeOverSessions (S6 R2, design §3A.3)', () => {
 const chatEntry = (id: string, restore: Record<string, unknown>, alive = true) =>
   entry(id, { provider: 'claude', unattendedPermission: 'hold', ...restore }, alive, 'chat')
 
-const chatRig = (entries: PtyEntry[], over: { hasApp?: boolean; holders?: Record<string, number[]>; chains?: string[]; held?: string[]; restoreOk?: boolean; adoptOk?: boolean } = {}) => {
+const chatRig = (entries: PtyEntry[], over: { hasApp?: boolean; holders?: Record<string, number[]>; chains?: string[]; held?: string[]; restoreOk?: boolean; restoreThrows?: boolean; adoptOk?: boolean; adoptFailed?: Map<string, string>; logs?: string[] } = {}) => {
   const order: string[] = []
   const r = takeOverChats({
     hasApp: () => over.hasApp ?? false, announces: () => true, retiring: () => false,
@@ -92,10 +92,11 @@ const chatRig = (entries: PtyEntry[], over: { hasApp?: boolean; holders?: Record
     note: (p, patch) => order.push(`note ${p} ${JSON.stringify(patch)}`),
     hasChain: (id) => (over.chains ?? []).includes(id),
     held: (id) => (over.held ?? []).includes(id),
-    restore: (info) => { order.push(`restore ${info.id} ${info.kind}`); return over.restoreOk ?? true },
+    restore: (info) => { order.push(`restore ${info.id} ${info.kind}`); if (over.restoreThrows) throw new Error('boom'); return over.restoreOk ?? true },
     unregister: (id) => order.push(`unregister ${id}`),
     adopt: (e) => { order.push(`adopt ${e.id}`); return over.adoptOk ?? true },
-    log: () => {}
+    ...(over.adoptFailed ? { adoptFailed: over.adoptFailed } : {}),
+    log: (m) => { over.logs?.push(m) }
   })
   return { r, order }
 }
@@ -138,5 +139,40 @@ describe('takeOverChats (chat takeover spec §3.3)', () => {
   it('restores no second chain for a proc the Host already rolls, but still adopts it', () => {
     const { order } = chatRig([chatEntry('c1', { roll: snap(), rolledBy: 'host' })], { chains: ['c1'] })
     expect(order).toEqual(['adopt p-c1'])
+  })
+  // Minor 3, M10: the chat pass takes its mark back on a refused or a throwing restore, and still adopts.
+  it.each([
+    ['refuses', { restoreOk: false }],
+    ['throws', { restoreThrows: true }]
+  ])('takes the mark back when the restore %s, and still adopts', (_why, over) => {
+    const { r, order } = chatRig([chatEntry('c1', { roll: snap() })], over)
+    expect(r.taken).toEqual([])
+    expect(r.adopted).toEqual(['c1'])
+    expect(order).toEqual(['note p-c1 {"rolledBy":"host"}', 'restore c1 chat', 'note p-c1 {"rolledBy":null}', 'adopt p-c1'])
+  })
+  // Minor 1: an adopt that failed is not tried again on every tick, until the proc's note changes or it ends.
+  it('does not retry a failed adopt on a later pass until the note changes, and says so once', () => {
+    const failed = new Map<string, string>()
+    const logs: string[] = []
+    const e1 = chatEntry('c1', { roll: snap() })
+    const first = chatRig([e1], { adoptOk: false, adoptFailed: failed, logs })
+    expect(first.order).toContain('adopt p-c1')
+    const again = chatRig([e1], { adoptOk: false, adoptFailed: failed, logs })
+    expect(again.order).toEqual([])
+    expect(logs.filter((m) => /not tried again/.test(m))).toHaveLength(1)
+    // The mark the failure took back is not a change of the note.
+    const unmarked = chatEntry('c1', { roll: snap(), rolledBy: null })
+    expect(chatRig([unmarked], { adoptOk: false, adoptFailed: failed, logs }).order).toEqual([])
+    // A changed note is tried again.
+    const changed = chatEntry('c1', { roll: snap(), unattendedPermission: 'deny-after-60s' })
+    expect(chatRig([changed], { adoptFailed: failed }).order).toContain('adopt p-c1')
+    expect(failed.size).toBe(0)
+  })
+  it('forgets a failed adopt once its proc has ended', () => {
+    const failed = new Map<string, string>()
+    chatRig([chatEntry('c1', {})], { adoptOk: false, adoptFailed: failed })
+    expect(failed.has('p-c1')).toBe(true)
+    chatRig([chatEntry('c1', {}, false)], { adoptFailed: failed })
+    expect(failed.has('p-c1')).toBe(false)
   })
 })

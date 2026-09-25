@@ -207,6 +207,8 @@ export function composeHostRolling(a: {
 
   /** Each skipped (session, reason) once: the watch runs the pass again on every no-app tick (R13). */
   const skipsLogged = new Set<string>()
+  /** Chat procs whose adopt failed, by the note they failed with (fix round 1, Minor 1). */
+  const chatAdoptFailed = new Map<string, string>()
   let unreadLogged = false
   const takeOver = (): void => {
     if (disposed) return
@@ -243,6 +245,7 @@ export function composeHostRolling(a: {
       restore: (info, snap) => rolling.restore(info, snap),
       unregister: (id) => rolling.unregister(id),
       adopt: (e) => chats.adopt(e) !== null,
+      adoptFailed: chatAdoptFailed,
       log
     })
     for (const s of [...skipped, ...chatPass.skipped]) {
