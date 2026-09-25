@@ -480,6 +480,43 @@ describe('OrchRollTap 재개 기록', () => {
     expect(resumes).toHaveLength(1)
     expect(resumes?.[0].resumedAt).toBeUndefined()
   })
+
+  // S6 final review I1: a restored wait (the Host's takeover, or a new app instance) publishes
+  // 'waiting' with reattach to a tap that never saw the stop. The in-place resume that follows must
+  // still close the stop the first owner recorded, or `runs wait` reads it as live forever.
+  it("a restored 'waiting' (reattach) lets the later 'nudged' close the stop already on record, adding none", async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    // The first owner records the stop, then goes away.
+    const first = new OrchRollTap(deps, { git: fakeGit(['head-at-limit']).git })
+    first.onRollState(rollState({ sessionId: 'sess1', state: 'waiting', nextRetryAt: '2026-08-25T03:00:00.000Z' }))
+    await vi.advanceTimersByTimeAsync(0)
+    first.dispose()
+    expect(resumesOf(deps, dispatchId)).toHaveLength(1)
+    // The new owner's tap starts empty and hears the restored wait, then the in-place resume.
+    const next = new OrchRollTap(deps, { git: fakeGit(['head-later']).git })
+    next.onRollState(
+      rollState({ sessionId: 'sess1', state: 'waiting', nextRetryAt: '2026-08-25T03:00:00.000Z', reattach: true })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(resumesOf(deps, dispatchId)).toHaveLength(1)
+    next.onRollState(rollState({ sessionId: 'sess1', state: 'nudged' }))
+    await vi.advanceTimersByTimeAsync(0)
+    const resumes = resumesOf(deps, dispatchId)
+    expect(resumes).toHaveLength(1)
+    expect(resumes?.[0].resumedAt).toBe(NOW)
+    expect(resumes?.[0].toAccountId).toBe('acc1')
+  })
+
+  it("a restored 'waiting' with no open stop on record does not make the later 'nudged' a resume", async () => {
+    const { s } = seed()
+    const deps = makeDeps(s)
+    const tap = new OrchRollTap(deps)
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting', reattach: true }))
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'nudged' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deps.state()).toBe(s)
+  })
 })
 
 // final round — C1: HEAD 읽기는 프로세스를 띄우는 일(Windows 에서 20~60ms)이고, 롤이 'switching'

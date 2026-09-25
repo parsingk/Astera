@@ -267,7 +267,17 @@ export class OrchRollTap {
       return
     }
     if (e.state !== 'waiting' && e.state !== 'switching') return
-    if (e.reattach) return
+    if (e.reattach) {
+      // A restored wait (S6 final review I1). `restore` on the Host's takeover, or in a new app
+      // instance, republishes 'waiting' with reattach to a tap whose `stopped` is empty: the stop
+      // was recorded by the previous owner. Record nothing new, but enter the episode when that stop
+      // is still open, so the in-place resume's 'nudged' closes it. Without the mark the resume is
+      // dropped, the entry keeps its resetsAt with no resumedAt, and `runs wait` (limitedUntil)
+      // ends `limited` again and again while the worker works. A reattach 'switching' comes after a
+      // roll, whose onRolled already moved or closed the episode, so it stays dropped.
+      if (e.state === 'waiting' && this.lastStopOpen(e.sessionId)) this.stopped.add(e.sessionId)
+      return
+    }
     if (this.stopped.has(e.sessionId)) {
       // Still the same episode. A repeat 'switching' carries nothing new (no reset time) and stays
       // dropped, same as before. A repeat 'waiting' can carry a fresher nextRetryAt — the aborted-roll
@@ -339,6 +349,15 @@ export class OrchRollTap {
     })
     if (!patched.ok || patched.value === null) return
     await this.deps.setState(patched.state)
+  }
+
+  /** Whether the session's open Dispatch has a last `resumes` entry with no resumedAt, which is a
+   *  stop some owner recorded and nobody closed yet. A coordinator has no Dispatch, so no entry: its
+   *  stops are never recorded (recordStop looks for a Dispatch too), and there is nothing to close. */
+  private lastStopOpen(sessionId: string): boolean {
+    const dispatch = this.deps.getState().dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
+    const last = dispatch?.resumes?.[dispatch.resumes.length - 1]
+    return last !== undefined && last.resumedAt === undefined
   }
 
   /** 같은 에피소드 안에서 갱신된 리셋 시각을 이미 있는 항목에 적어 넣는다 — 새 항목을 쌓지 않는다.

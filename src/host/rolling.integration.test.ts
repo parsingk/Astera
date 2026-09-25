@@ -185,6 +185,8 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
     exitsHandoverRuns: async () => { await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS + 100); await vi.waitFor(() => undefined) },
     dispatch: () => orch.state().dispatches[0],
     run: () => orch.state().runs[0],
+    /** `runs wait` over the Run, probed once (timeout 0): its ending now, or `timeout`. */
+    runsWait: () => orch.handle('runs-wait', { id: orch.state().runs[0].id, timeoutMs: 0 }),
     note: (p: string) => registry.metaOf(p)?.restore ?? {},
     typedInto: (p: string) => ptys.get(p)?.typed ?? []
   }
@@ -352,6 +354,26 @@ describe('the Host rolls, with and without an app (S6 rig)', () => {
     await h.settle()
     await vi.waitFor(() => expect(h.note('p1').rolledBy).toBe('host'))
     expect(h.dispatch().resumes).toHaveLength(1)
+  })
+  it('a restored wait that resumes in place closes the app’s stop, so runs wait stops ending limited (final review I1)', async () => {
+    const h = await rig({ appPid: 100, openStop: true }) // the app recorded the stop, then went away
+    h.attachApp(3, ['worktrees', 'dispatch', 'rolling'], [])
+    await h.openAppSession('p1', 's1', ['a1'], { wait: { retryAt: h.now() + 30_000, target: 0, weekly: false } })
+    h.detachApp(3)
+    h.setAppPid(null)
+    h.graceEnds()
+    await vi.waitFor(() => expect(h.note('p1').rolledBy).toBe('host'))
+    // While the worker waits, `runs wait` rightly ends limited.
+    expect((await h.runsWait()).body).toMatchObject({ state: 'limited' })
+    await h.advance(31_000)
+    // Resumed in place, same session. The update line is built from the Dispatch's packet on disk
+    // first, so the Enter lands after real I/O.
+    await vi.waitFor(() => expect(h.typedInto('p1').some((d) => d === '\r')).toBe(true))
+    await vi.waitFor(() => expect(h.dispatch().resumes?.[0].resumedAt).toBeDefined())
+    expect(h.dispatch().resumes).toHaveLength(1)
+    expect(h.dispatch().resumes?.[0].toAccountId).toBe('a1')
+    // The worker works again: `runs wait` keeps waiting instead of ending limited on a past reset.
+    expect((await h.runsWait()).body).toMatchObject({ state: 'timeout' })
   })
   it('a session skipped at the gone decision is taken on a later tick (preflight R13)', async () => {
     const h = await rig({ appPid: 100 })
