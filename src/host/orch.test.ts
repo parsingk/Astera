@@ -2780,6 +2780,22 @@ describe('the Host handles exits (S2)', () => {
     expect(rekeyRolled).toHaveBeenCalledWith('ses_old', { id: 'ses_new', accountId: 'acc2' })
     expect(orch.state().dispatches.find((x) => x.sessionId === 'ses_old')?.endedAt).toBeUndefined()
   })
+  // Task 11 review, carried to Task 16: a rekey that left the Dispatch on the old id is not reported as
+  // one that landed.
+  it('a rekey that leaves the Dispatch on the old id says the rekey did not land (Task 11 review)', async () => {
+    const { state } = withDispatches(['ses_old'])
+    await write(state)
+    const orch = orchOver({
+      hasApp: () => false,
+      act: vi.fn(),
+      aliveSessionIds: () => new Set(['ses_old']),
+      rolledInto: (id) => (id === 'ses_old' ? { id: 'ses_new', accountId: 'acc2' } : null),
+      rekeyRolled: vi.fn(async () => {})
+    })
+    await orch.sessionExited({ sessionId: 'ses_old', exitCode: 1 })
+    expect(logs.some((m) => m.includes('rekeyed, not closed'))).toBe(false)
+    expect(logs).toContain('session ses_old was rolled into ses_new — the rekey did not land, the Dispatch stays on the old id')
+  })
   it('with nothing rolled from it, the exit closes the Dispatch as before', async () => {
     const { state } = withDispatches(['ses_x'])
     await write(state)

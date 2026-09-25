@@ -1052,11 +1052,18 @@ export function createHostOrch(a: {
       if (into && a.rekeyRolled) {
         // Every Host respawn carries rolledFrom, so this also runs after the Host's own rolls, whose tap
         // rekeyed already: then there is nothing left on the old id, and it says so (preflight C13).
-        const st = store.get()
-        const left = st.dispatches.some((x) => x.sessionId === e.sessionId && !x.endedAt) || st.runs.some((r) => r.coordinatorSessionId === e.sessionId)
-        if (left) {
+        const leftOn = (): boolean => {
+          const st = store.get()
+          return st.dispatches.some((x) => x.sessionId === e.sessionId && !x.endedAt) || st.runs.some((r) => r.coordinatorSessionId === e.sessionId)
+        }
+        if (leftOn()) {
+          // A coordinator's slot follows through the same tap but gets no retarget: retarget is keyed by
+          // a Dispatch, and a coordinator has none.
           await a.rekeyRolled(e.sessionId, into)
-          a.log(`session ${e.sessionId} was rolled into ${into.id} — rekeyed, not closed`)
+          // Asked again (Task 11 review): the tap swallows a refused rekey or a failed commit, so the
+          // call returning says nothing about whether the old id was let go.
+          if (leftOn()) a.log(`session ${e.sessionId} was rolled into ${into.id} — the rekey did not land, the Dispatch stays on the old id`)
+          else a.log(`session ${e.sessionId} was rolled into ${into.id} — rekeyed, not closed`)
         } else {
           a.log(`session ${e.sessionId} was rolled into ${into.id} — already rekeyed, nothing left on the old id`)
         }

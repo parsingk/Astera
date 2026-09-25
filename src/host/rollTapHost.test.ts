@@ -34,4 +34,25 @@ describe('createHostRollTap (S6 Task 11)', () => {
     expect(d.accountId).toBe('a2')
     expect(retarget).toHaveBeenCalledWith({ dispatchId: d.id, sessionId: 's2', previousSessionId: 's1' })
   })
+  // C13 in reverse (Task 11 review, carried to Task 16): the old pty's exit rekeyed first, so the tap's own
+  // onRolled finds nothing on the old id and the Dispatch already on the new one, and says so.
+  it('after the exit already rekeyed, onRolled says so and retargets nothing (C13, reverse order)', async () => {
+    let state = seeded()
+    state = { ...state, dispatches: state.dispatches.map((x) => ({ ...x, sessionId: 's2', accountId: 'a2' })) }
+    const logs: string[] = []
+    const retarget = vi.fn()
+    const tap = createHostRollTap({
+      orch: () => ({
+        ready: async () => {},
+        state: () => state,
+        internalDeps: () => ({ getState: () => state, setState: async (s: OrchState) => { state = s }, log: () => {}, now: () => NOW }) as never
+      }),
+      retarget,
+      log: (m) => logs.push(m),
+      now: () => NOW
+    })
+    await tap.onRolled('s1', { id: 's2', accountId: 'a2' })
+    expect(retarget).not.toHaveBeenCalled()
+    expect(logs).toContain('roll tap: s1 -> s2 already rekeyed (the old session’s exit came first), nothing left on the old id')
+  })
 })

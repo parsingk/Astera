@@ -29,8 +29,15 @@ export function createHostRollTap(d: {
     onRolled: async (oldSessionId, info) => {
       try {
         await d.orch().ready()
+        // C13 in reverse (Task 11 review): the old pty's exit can reach orch's rolledFrom branch first and
+        // rekey through this same tap, and then this call finds nothing. Read before the tap, so a
+        // coordinator slot the tap itself moves is not taken for one moved already.
+        const before = d.orch().state()
+        const onOld = before.dispatches.some((x) => x.sessionId === oldSessionId && !x.endedAt) || before.runs.some((r) => r.coordinatorSessionId === oldSessionId)
+        const onNew = before.dispatches.some((x) => x.sessionId === info.id && !x.endedAt) || before.runs.some((r) => r.coordinatorSessionId === info.id)
         const dispatch = await tap.onRolled(oldSessionId, info)
         if (dispatch) d.retarget({ dispatchId: dispatch.id, sessionId: info.id, previousSessionId: oldSessionId })
+        else if (!onOld && onNew) d.log(`roll tap: ${oldSessionId} -> ${info.id} already rekeyed (the old session’s exit came first), nothing left on the old id`)
       } catch (err) {
         d.log(`roll tap: ${oldSessionId} -> ${info.id} failed: ${String(err)}`)
       }
