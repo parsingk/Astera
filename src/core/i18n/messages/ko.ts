@@ -1206,7 +1206,7 @@ export const ko = {
   'slack.choice.singleOnlyAt': '{index}번째 질문: 하나만 고를 수 있습니다',
   'slack.choice.outOfRange': '{n}번은 없습니다 (1~{max})',
   'slack.choice.outOfRangeAt': '{index}번째 질문: {n}번은 없습니다 (1~{max})',
-  // slackInbox.ts — the notice left in the thread when a thread reply could not be injected into the session
+  // core/slack/inbox.ts — the notice left in the thread when a thread reply could not be injected into the session
   'slack.inbox.tooLong': '⚠️ 답장이 너무 길어 전달하지 않았습니다 ({max}자 이하만 가능)',
   'slack.inbox.sessionEnded': '⚠️ 이 세션은 종료되어 입력을 전달하지 못했습니다',
   'slack.inbox.injectFailed': '⚠️ 입력을 전달하지 못했습니다',

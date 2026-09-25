@@ -120,7 +120,7 @@ export function NewSessionDialog({
 
   useEffect(() => {
     // isSlackReady (core/slack/ready.ts) shares its criteria with SlackNotifier.applyConfig() in
-    // src/main/slack.ts — under the old condition that only looked at webhookUrl, a user who had set
+    // src/core/slack/notifier.ts — under the old condition that only looked at webhookUrl, a user who had set
     // only botToken + channelId could not tick the checkbox even though the bot path was actually on.
     void window.api.slack.getConfig().then((c) => setSlackReady(isSlackReady(c)))
     void window.api.settings

@@ -963,9 +963,9 @@ export const es: Catalog = {
   // claudeCoordinator.ts and codexCoordinator.ts — the default resume prompt. Must stay identical to
   // session.new.rollPromptPlaceholder, which shows this value as its placeholder.
   'rolling.continuePrompt': 'Continúa con el trabajo',
-  // slack.ts — the notification text that goes out to Slack
+  // notifier.ts — the notification text that goes out to Slack
   'slack.turnDone': '✅ Respuesta completada',
-  // {at} is HH:MM for the 5-hour scope but M/D HH:MM for the weekly one (fmtAt in main/slack.ts),
+  // {at} is HH:MM for the 5-hour scope but M/D HH:MM for the weekly one (fmtAt in core/slack/notifier.ts),
   // so no preposition can precede it
   'slack.limitWaiting': '⏸ Límite alcanzado — reanudación: {at} (límite {scope})',
   'slack.limitScope.weekly': 'semanal',
@@ -989,7 +989,7 @@ export const es: Catalog = {
   'slack.choice.singleOnlyAt': 'Pregunta {index}: solo se puede elegir una opción',
   'slack.choice.outOfRange': 'No existe la opción {n} (1-{max})',
   'slack.choice.outOfRangeAt': 'Pregunta {index}: no existe la opción {n} (1-{max})',
-  // slackInbox.ts — the notice left in the thread when a reply could not be injected
+  // core/slack/inbox.ts — the notice left in the thread when a reply could not be injected
   'slack.inbox.tooLong':
     '⚠️ La respuesta era demasiado larga y no se entregó (máximo {max} caracteres)',
   'slack.inbox.sessionEnded': '⚠️ Esta sesión finalizó, así que no se pudo entregar la entrada',

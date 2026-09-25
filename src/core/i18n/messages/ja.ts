@@ -977,7 +977,7 @@ export const ja: Catalog = {
   'slack.choice.singleOnlyAt': '{index} 番目の質問: 1つだけ選べます',
   'slack.choice.outOfRange': '{n} 番はありません (1〜{max})',
   'slack.choice.outOfRangeAt': '{index} 番目の質問: {n} 番はありません (1〜{max})',
-  // slackInbox.ts — the notice left in the thread when a reply could not be injected
+  // core/slack/inbox.ts — the notice left in the thread when a reply could not be injected
   'slack.inbox.tooLong': '⚠️ 返信が長すぎるため転送しませんでした ({max} 文字以下のみ)',
   'slack.inbox.sessionEnded': '⚠️ このセッションは終了しているため入力を転送できませんでした',
   'slack.inbox.injectFailed': '⚠️ 入力を転送できませんでした',

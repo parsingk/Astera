@@ -247,7 +247,7 @@ function truncate(text: string, max: number): string {
  *  **탭 브리핑(tabResume.ts)도 이 게이트째로 재사용한다** — 그쪽이 싣는 최근 요청·대화 꼬리·명령
  *  결과 발췌도 똑같이 사람/에이전트의 자유 형식 텍스트이고, 아래 사고(산문을 망치는 것보다 없던
  *  자격 증명이 있었던 것처럼 보이게 만드는 것이 더 나쁘다)는 그 텍스트에도 그대로 적용된다. 새
- *  규칙을 또 만들면 이 사고를 다시 만든다. Slack 의 "⚠️ 턴 실패" 줄(main/slack.ts sendStopFailure)도
+ *  규칙을 또 만들면 이 사고를 다시 만든다. Slack 의 "⚠️ 턴 실패" 줄(core/slack/notifier.ts sendStopFailure)도
  *  API 오류 문장에 이것을 댄다.
  *
  *  URL 의 두 자리(userinfo 의 password, 이름이 자격 증명인 query 값)는 값 모양을 보지 않고 가린다 —
