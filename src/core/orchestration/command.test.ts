@@ -5206,6 +5206,42 @@ describe('jobs wait / runs wait', () => {
     expect((await call(deps, 'jobs-wait', { id: 'nope' })).status).toBe(404)
     expect((await call(deps, 'runs-wait')).status).toBe(400)
   })
+
+  const waitingOnReset = async (resetsAt: string | undefined, resumed = false) => {
+    const { deps, runId, taskId } = await seeded()
+    const cur = deps.getState()
+    await deps.setState({
+      ...cur,
+      tasks: cur.tasks.map((t) => (t.id === taskId ? { ...t, status: 'dispatched' as const } : t)),
+      dispatches: [
+        ...cur.dispatches,
+        {
+          id: 'dsp_w', taskId, provider: 'claude' as const, accountId: 'acc1', sessionId: 's1', cwd: 'D:/p', specPath: 'D:/p/s.md',
+          startedAt: NOW, workerState: 'ready' as const, retained: false,
+          resumes: [{ stoppedAt: NOW, reason: 'waiting' as const, fromAccountId: 'acc1', ...(resetsAt ? { resetsAt } : {}), ...(resumed ? { resumedAt: NOW, toAccountId: 'acc1' } : {}) }]
+        }
+      ]
+    })
+    return { deps, runId }
+  }
+  it('ends limited, naming the reset, when every open worker waits for one (Q3)', async () => {
+    const { deps, runId } = await waitingOnReset('2026-09-25T15:00:00.000Z')
+    const r = await call(deps, 'runs-wait', { id: runId, timeoutMs: 500 })
+    expect(r.body).toMatchObject({ state: 'limited', runId, resetsAt: '2026-09-25T15:00:00.000Z' })
+  })
+  it('keeps waiting when the reset is unknown, or the stop already resumed', async () => {
+    const unknown = await waitingOnReset(undefined)
+    expect((await call(unknown.deps, 'runs-wait', { id: unknown.runId, timeoutMs: 120 })).body).toMatchObject({ state: 'timeout' })
+    const resumed = await waitingOnReset('2026-09-25T15:00:00.000Z', true)
+    expect((await call(resumed.deps, 'runs-wait', { id: resumed.runId, timeoutMs: 120 })).body).toMatchObject({ state: 'timeout' })
+  })
+  it('an open question still comes first', async () => {
+    const { deps, runId } = await waitingOnReset('2026-09-25T15:00:00.000Z')
+    // createGate refuses a Task with an open Dispatch (state.ts, A58), so the question is on a second Task.
+    const second = await call(deps, 'task-create', { run: runId, title: 't2', spec: 's', account: 'acc1' })
+    await call(deps, 'gate-create', { task: (second.body as { id: string }).id, question: 'q' })
+    expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 500 })).body).toMatchObject({ state: 'waiting' })
+  })
 })
 
 describe('runs stop', () => {

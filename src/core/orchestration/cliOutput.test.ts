@@ -166,6 +166,18 @@ describe('waitEnd', () => {
     expect(waitEnd({})?.code).toBe('FAILED')
     expect(waitEnd(null)?.code).toBe('FAILED')
   })
+
+  it('a usage-reset wait is 8, and says when it resumes (Q3)', () => {
+    const l = waitEnd({ state: 'limited', runId: 'run_1', resetsAt: '2026-09-25T15:00:00.000Z', progress: { done: 0, total: 1 } })
+    expect(l?.code).toBe('WAITING_FOR_INPUT')
+    expect(l?.message).toMatch(/2026-09-25T15:00:00\.000Z/)
+    expect(l?.details).toMatchObject({ state: 'limited', resetsAt: '2026-09-25T15:00:00.000Z' })
+    expect(exitCodeFor('WAITING_FOR_INPUT')).toBe(8)
+    expect(nextStepsFor({ code: 'WAITING_FOR_INPUT', cmd: 'runs-wait', details: { state: 'limited' } })).toEqual([
+      'astera runs wait --id <runId>',
+      'astera runs get --id <runId>'
+    ])
+  })
 })
 
 describe('nextStepsFor — 무엇을 치면 되는가', () => {

@@ -338,12 +338,21 @@ const STEPS: Record<
         : 'astera ask --resume <questionId>'
     return [resume, 'astera host status']
   },
-  // 8 은 질문이 열린 것과 회차가 멈춘 것, 둘 다다. 어느 쪽인지는 `details.state` 가 말한다.
-  WAITING_FOR_INPUT: () => [
-    'astera questions list --status open',
-    'astera questions answer --id <questionId> --answer <text>',
-    'astera runs resume --id <runId>'
-  ],
+  // 8 은 질문이 열린 것과 회차가 멈춘 것, 그리고 사용 한도가 스스로 풀리기를 기다리는 것,
+  // 셋이다. 어느 것인지는 `details.state` 가 말한다.
+  //
+  // **`limited` 만 다른 줄을 낸다.** 앞의 둘은 사람이 손대야 풀리지만(질문에 답하거나
+  // `runs resume`), 사용 한도는 워커가 리셋에 스스로 이어간다(Q3, A58) — 사람에게 답하라거나
+  // 재개하라고 하면 아무것도 아닌 회차를 재개하려다 거절만 돌아온다. 다시 기다리거나
+  // 지금 상태를 보는 것 말고 칠 것이 없다.
+  WAITING_FOR_INPUT: (cmd, details) =>
+    details?.state === 'limited'
+      ? ['astera runs wait --id <runId>', 'astera runs get --id <runId>']
+      : [
+          'astera questions list --status open',
+          'astera questions answer --id <questionId> --answer <text>',
+          'astera runs resume --id <runId>'
+        ],
   // 두 빌드가 갈렸다. 무엇과 무엇이 갈렸는지 보고, 옛 Host 를 물린다(docs/cli.md 의 Exit 9).
   //
   // **다른 판의 Host 를 주소에서 찾은 9 는 `host stop` 이 아니다**(cli/host.ts 의 siblingHostError). 그
@@ -442,7 +451,14 @@ export function messageFrom(body: unknown, fallback: string): string {
  * `state` 가 가른다.
  */
 export function waitEnd(body: unknown): CliError | null {
-  const b = (body ?? {}) as { state?: unknown; questionId?: unknown; taskId?: unknown; runId?: unknown; progress?: unknown }
+  const b = (body ?? {}) as {
+    state?: unknown
+    questionId?: unknown
+    taskId?: unknown
+    runId?: unknown
+    progress?: unknown
+    resetsAt?: unknown
+  }
   const at = (): Record<string, unknown> => ({ runId: b.runId ?? null, progress: b.progress ?? null })
   switch (b.state) {
     case 'completed':
@@ -460,6 +476,12 @@ export function waitEnd(body: unknown): CliError | null {
         code: 'WAITING_FOR_INPUT',
         message: 'it is paused and nothing moves until someone resumes it',
         details: { ...at(), state: 'paused' }
+      }
+    case 'limited':
+      return {
+        code: 'WAITING_FOR_INPUT',
+        message: `every worker is waiting for a usage limit to reset at ${String(b.resetsAt)}; they resume by themselves then`,
+        details: { ...at(), state: 'limited', resetsAt: b.resetsAt ?? null }
       }
     case 'timeout':
       return { code: 'TIMEOUT', message: 'it had not finished when the deadline passed', details: at() }

@@ -539,8 +539,28 @@ const waitEndingFor = (s: OrchState, runId: string): Record<string, unknown> | n
   const open = s.gates.find((g) => g.status === 'open' && g.runId === runId)
   if (open) return { ...base, state: 'waiting', questionId: open.id, taskId: open.taskId }
   if (run.paused === true || job?.paused === true) return { ...base, state: 'paused' }
+  // Q3 (S6): every worker of this Run waits for a usage limit to reset, so nothing moves before then.
+  // The worker resumes by itself at the reset; this only lets a script stop holding on. No Gate (A58).
+  const limited = limitedUntil(s, runId)
+  if (limited) return { ...base, state: 'limited', resetsAt: limited }
   const outcome = outcomeOf(s, runId)
   return outcome === 'running' ? null : { ...base, state: outcome }
+}
+
+/** The earliest reset every open Dispatch of the Run is waiting for, or null when any open one is not
+ *  waiting on a known reset, or a check is running, or nothing is open. */
+const limitedUntil = (s: OrchState, runId: string): string | null => {
+  const tasks = new Set(s.tasks.filter((t) => t.runId === runId).map((t) => t.id))
+  if (s.tasks.some((t) => tasks.has(t.id) && (t.status === 'validating' || t.status === 'reviewing'))) return null
+  const open = s.dispatches.filter((d) => tasks.has(d.taskId) && !d.endedAt && !d.outcome)
+  if (open.length === 0) return null
+  let earliest: string | null = null
+  for (const d of open) {
+    const last = d.resumes?.[d.resumes.length - 1]
+    if (!last || last.resumedAt !== undefined || last.resetsAt === undefined) return null
+    if (earliest === null || Date.parse(last.resetsAt) < Date.parse(earliest)) earliest = last.resetsAt
+  }
+  return earliest
 }
 
 const runView = (s: OrchState, run: JobRun): Record<string, unknown> => ({
