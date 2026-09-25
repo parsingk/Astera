@@ -34,6 +34,7 @@ import { SchedulerCoordinator } from './scheduler'
 import { chatDriver, ptyDriver, routedDriver } from '../core/sessions/sessionDriver'
 import { CodexRollingCoordinator } from '../core/rolling/codexCoordinator'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
+import type { RollSnapshot } from '../core/rolling/snapshot'
 import { memoiseLoginStatus } from '../core/accounts/loginStatusCache'
 import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
@@ -668,6 +669,171 @@ app.whenReady().then(async () => {
   const cachedLoginStatus = memoiseLoginStatus((id) => core!.accounts.loginStatus(id), {
     ttlMs: 10_000
   })
+  /** What a roll event costs the app, for both coordinators' `send` and for the Host's rolls (S6 Task
+   *  14, design §3.4): the renderer, the Work Unit collector, the scheduler, orchestration, Slack and the
+   *  desktop sink, each isolated in its own try so one tap's throw does not block the rest or the roll.
+   *  `orchestration` is false for a roll the Host made and pushed: the Host already rekeyed the Dispatch
+   *  and the coordinator slot, so the app's tap must not do it a second time over the mirror. `codex`
+   *  adds the codex rollout watcher's re-register, which only a codex roll needs. */
+  const fanOutRollEvent = (
+    channel: 'session:rolled' | 'session:rollState',
+    payload: unknown,
+    opts: { orchestration: boolean; codex: boolean }
+  ): void => {
+    try {
+      if (!win.isDestroyed()) win.webContents.send(channel, payload)
+    } catch {
+      /* renderer send failures are ignored */
+    }
+    // Work Unit 수집기도 롤을 탭한다. 굴린 세션은 새 세션 id 를 받고, `--resume` 이 그
+    // 세션의 트랜스크립트에 이전 대화를 통째로 다시 적는다 — 알리지 않으면 수집기가 처음 보는
+    // 세션으로 여겨 그 파일을 0 부터 읽고, 그것이 곧 켜기 전의 대화다(스펙 §16.1).
+    // **claude 에서는 경로를 건네지 않는다.** 이 게시의 payload 에는 없고, 굴려서 띄운 프로세스가
+    // 어느 파일을 쓸지는 그 세션의 statusLine 이 도착해야 정해진다(rolling.ts 의 applyMeta 가 그것을
+    // 기다린다). 추측 대신 세션 id 만 알리고, 파일 끝을 잡는 일은 수집기가 그 세션을 처음 보는
+    // 회차로 미룬다. **codex 에서는 건네줄 수 있다**: 재개된 codex 는 새 파일을 만들지 않고 바로 이
+    // dest 에 이어 쓰므로(아래 주석) 그 순간의 파일 끝이 곧 되쓰기가 끝난 자리다. 빈 대화로 굴릴 때는
+    // `undefined` 이고, 그때는 claude 쪽처럼 수집기가 다음 회차에 끝을 잡는다.
+    // **`oldSessionId` goes along too (Important 3).** The killed session's open task has to be
+    // re-keyed onto the new one, or that session's exit event — which follows this — would
+    // interrupt it for no reason: a usage limit is not a completion. rolling.ts's roll() goes
+    // kill → spawn → this publish with no await in between, so the killed session's real
+    // (asynchronous) exit event is guaranteed to arrive after this notification. (A Host roll's exit
+    // is held until this has run — hostRollView.) **codex sessions do not create a Unit today** (see
+    // collector.ts's header comment for why), so passing `oldSessionId` there has nothing to re-key and
+    // quietly does nothing for now. Passed anyway, because an asymmetry caught on only one side becomes
+    // a silent bug the day codex support arrives.
+    try {
+      if (channel === 'session:rolled') {
+        const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
+        workUnitForkRef?.(p.info.id, p.dest, p.oldSessionId)
+      }
+    } catch {
+      /* a Work Unit tap failure must not block rolling */
+    }
+    // The fork above is made once per roll (preflight C10), and the new pty's note records it: the note
+    // keeps `rolledFrom` for the pty's life, so the adopter of a later app instance would otherwise fork
+    // again and skip the transcript lines written while the app was closed. remember() does nothing for
+    // a chat session (no pty note) or a fallback session (no Host).
+    try {
+      if (channel === 'session:rolled') {
+        const p = payload as { oldSessionId: string; info: SessionInfo }
+        core!.sessions.remember(p.info.id, { forkSeen: p.oldSessionId })
+      }
+    } catch {
+      /* a note failure must not block rolling */
+    }
+    // The scheduler taps rolling events too — isolated in its own try, separate from the Slack
+    // tap, so a throw out of rekey does not silently swallow the Slack notification (rolled) below.
+    try {
+      if (channel === 'session:rolled') {
+        const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
+        scheduler.rekey(p.oldSessionId, p.info.id) // the schedule follows the roll chain
+        if (opts.codex) {
+          // dest: the rollout path copied into the target account just before an ordinary roll
+          // (codexRolling.roll() carries it along). The respawn resumes, so codex appends to that very
+          // file instead of creating a new one — it is what the watcher has to tail, and searching for a
+          // newly created file would find nothing at all. It is handed over directly; the watcher starts
+          // at the end of it so the turns from before the roll are not reported again. **`undefined` on
+          // a blank-slate roll (Smart Resume)** — that respawn is a fresh `codex` with no rollout to
+          // copy or hand over yet, so `register` below falls back to its own search, the same path a
+          // brand-new session already takes (codexRolling.ts's `roll()` documents the same fallback at
+          // its own `send('session:rolled', ...)` call).
+          //
+          // When rolling switches accounts the session respawns under a new sessionId and a new
+          // rollout file appears — without re-registering, both turn-completion notifications and the
+          // usage chips stop for good after the switch. `opts.codex` says this is a codex roll (the
+          // codex coordinator's own send, or a Host roll of a codex session — ipc.ts asks the account),
+          // so re-checking the provider is unnecessary. Unconditional for a pty session, matching
+          // the spawn path: the chips are needed whether or not this session asked for Slack, and the
+          // watcher gates the turn callback on info.slackNotify itself.
+          //
+          // **A chat session is registered here too, not just by its own `ready`.** A rolled chat
+          // session's `ready` only fires ~1–3s later, once the respawned CLI completes its handshake,
+          // and until then nothing in the watcher knows this session at all. What that costs is not
+          // notifications — they are off for a chat session (`{ notifyTurns: false }`, below: it
+          // announces its own turn ends from the protocol, so a watcher callback would make it two) —
+          // nor the usage chips, which `register` resets along with `limits`/`context` anyway. It is
+          // that `codexSessionIdFor` and `rolloutPathFor` have no answer for the new id during that
+          // window, and everything that asks them (the history-resume guard, the rollout lookups) is
+          // told this session does not exist. Registering here closes exactly that gap. `register`
+          // replaces the entry wholesale (codexRolloutWatcher.ts), so `ready`'s later re-register does
+          // not drift the flag back to its default; that is why the old Ruling 4c-6 skip is no longer
+          // needed here.
+          //
+          // The old registration's native id is read before it is dropped — `unregister` erases it —
+          // **and only when `p.dest` is there**, i.e. when this roll resumed the same thread onto a
+          // copied rollout. A blank-slate roll (Smart Resume) starts a *different* thread and
+          // codexRolling nulls `chain.codexSessionId` for it, so handing the old id over would have the
+          // watcher's own `findRollout` narrow its search to the dead thread and hide the new rollout
+          // for the whole handshake window.
+          const rolledChatId = core!.chat.has(p.info.id)
+            ? p.dest
+              ? codexRollout.codexSessionIdFor(p.oldSessionId) ?? undefined
+              : undefined
+            : null
+          codexRollout.unregister(p.oldSessionId)
+          if (rolledChatId !== null) codexRollout.register(p.info, p.dest, rolledChatId, { notifyTurns: false })
+          else if (!core!.chat.has(p.info.id)) codexRollout.register(p.info, p.dest)
+        }
+      } else if (channel === 'session:rollState') {
+        // Suppress schedule firing during the roll-resume window (switching/trust/waiting/nudged).
+        // codex rolling sends session:rollState too (switching/waiting/adopted/none). 'adopted' is not
+        // one of the states that suppresses: it says a chain taken back from the Host cannot judge its
+        // own limit, which is not a resume window, and the switch in handleRollState leaves it to the
+        // default on purpose.
+        scheduler.handleRollState(payload as RollStateEvent)
+      }
+    } catch {
+      /* a schedule tap failure must not block rolling or the Slack notification */
+    }
+    // 오케스트레이션도 롤링 이벤트를 탭한다. 워커 세션이 롤되면 그 Dispatch 의 sessionId 를 새
+    // 세션으로 옮겨야 한다 — 그 값이 worker_done 을 되돌려 묶는 유일한 키다. 다른 탭들과 같은
+    // 이유로 자기 try 안에 격리한다. Host 가 굴린 롤은 건너뛴다(`opts.orchestration`): Host 가
+    // 이미 옮겼다.
+    try {
+      if (opts.orchestration) {
+        if (channel === 'session:rolled') {
+          const p = payload as { oldSessionId: string; info: SessionInfo }
+          orchRef?.onRolled(p.oldSessionId, p.info)
+        } else if (channel === 'session:rollState') {
+          // 정지 시점 스냅샷 — 이벤트를 통째로 넘긴다. 어떤 게시가 정지 에피소드의 시작인지
+          // 가르는 일과 세션별 기억은 OrchRollTap 이 갖는다(core/orchestration/exec/rollTap.ts).
+          orchRef?.onRollState(payload as RollStateEvent)
+        }
+      }
+    } catch {
+      /* an orchestration tap failure must not block rolling */
+    }
+    // Slack notifications tap rolling events too, for both providers. Isolated so a tap exception does
+    // not block rolling. Without this the SlackNotifier record stays on the old id, so turn
+    // notifications stop after the switch, onRolled cannot cancel the scheduled exit timer so a false
+    // session-exit goes out, and limit-reached, account-switch and reset notifications never arrive.
+    try {
+      if (channel === 'session:rolled') {
+        const p = payload as { oldSessionId: string; info: SessionInfo }
+        slack.onRolled(p.oldSessionId, p.info)
+      } else if (channel === 'session:rollState') {
+        slack.onRollState(payload as RollStateEvent)
+      }
+    } catch {
+      /* a Slack tap failure must not block rolling */
+    }
+    // The desktop sink taps rolling events too, mirroring the Slack tap above. Isolated so an
+    // exception here does not block rolling.
+    try {
+      if (channel === 'session:rollState') desktop.onRollState(payload as RollStateEvent)
+    } catch {
+      /* a desktop notification failure must not block rolling */
+    }
+  }
+  /** Where a chain's snapshot goes (S6 R4): written into the pty's note, for the Host to carry on if
+   *  this app goes away. A chat session has no Host pty note to write into, and a fallback session has
+   *  no Host at all: remember() does nothing for either. Shared by both coordinators. */
+  const writeRollSnapshot = (id: string, snap: RollSnapshot): void => {
+    if (core!.chat.has(id)) return
+    core!.sessions.remember(id, { roll: snap })
+  }
   const rolling = new RollingCoordinator({
     // A chain's session may be a pty or a chat session (slice 4c); the coordinator says which through
     // `kind` and the rest is routed here, so neither coordinator imports a manager. A chat respawn
@@ -748,79 +914,11 @@ app.whenReady().then(async () => {
       // printed and the statusLine snapshot is frozen by then (see RateLimitPeak).
       return u.status === 'ok' ? u.peak : null
     },
-    send: (channel, payload) => {
-      try {
-        if (!win.isDestroyed()) win.webContents.send(channel, payload)
-      } catch {
-        /* renderer send failures are ignored */
-      }
-      // Work Unit 수집기도 롤을 탭한다. 굴린 세션은 새 세션 id 를 받고, `--resume` 이 그
-      // 세션의 트랜스크립트에 이전 대화를 통째로 다시 적는다 — 알리지 않으면 수집기가 처음 보는
-      // 세션으로 여겨 그 파일을 0 부터 읽고, 그것이 곧 켜기 전의 대화다(스펙 §16.1).
-      // **경로는 건네지 않는다.** 이 게시의 payload 에는 없고, 굴려서 띄운 프로세스가 어느 파일을
-      // 쓸지는 그 세션의 statusLine 이 도착해야 정해진다(rolling.ts 의 applyMeta 가 그것을
-      // 기다린다). 추측 대신 세션 id 만 알리고, 파일 끝을 잡는 일은 수집기가 그 세션을 처음
-      // 보는 회차로 미룬다. 다른 탭들과 같은 이유로 자기 try 안에 격리한다.
-      // **`oldSessionId` goes along too (Important 3).** The killed session's open task has to be
-      // re-keyed onto the new one, or that session's exit event — which follows this — would
-      // interrupt it for no reason: a usage limit is not a completion. rolling.ts's roll() goes
-      // kill → spawn → this publish with no await in between, so the killed session's real
-      // (asynchronous) exit event is guaranteed to arrive after this notification.
-      try {
-        if (channel === 'session:rolled') {
-          const p = payload as { oldSessionId: string; info: SessionInfo }
-          workUnitForkRef?.(p.info.id, undefined, p.oldSessionId)
-        }
-      } catch {
-        /* a Work Unit tap failure must not block rolling */
-      }
-      // The scheduler taps rolling events too — isolated in its own try, separate from the Slack
-      // tap, so a throw out of rekey does not silently swallow the Slack notification (rolled) below.
-      try {
-        if (channel === 'session:rolled') {
-          const p = payload as { oldSessionId: string; info: SessionInfo }
-          scheduler.rekey(p.oldSessionId, p.info.id) // the schedule follows the roll chain
-        } else if (channel === 'session:rollState') {
-          // Suppress schedule firing during the roll-resume window (switching/trust/waiting/nudged)
-          scheduler.handleRollState(payload as RollStateEvent)
-        }
-      } catch {
-        /* a schedule tap failure must not block rolling or the Slack notification */
-      }
-      // 오케스트레이션도 롤링 이벤트를 탭한다. 워커 세션이 롤되면 그 Dispatch 의 sessionId 를 새
-      // 세션으로 옮겨야 한다 — 그 값이 worker_done 을 되돌려 묶는 유일한 키다. 다른 탭들과 같은
-      // 이유로 자기 try 안에 격리한다.
-      try {
-        if (channel === 'session:rolled') {
-          const p = payload as { oldSessionId: string; info: SessionInfo }
-          orchRef?.onRolled(p.oldSessionId, p.info)
-        } else if (channel === 'session:rollState') {
-          // 정지 시점 스냅샷 — 이벤트를 통째로 넘긴다. 어떤 게시가 정지 에피소드의 시작인지
-          // 가르는 일과 세션별 기억은 OrchRollTap 이 갖는다(core/orchestration/exec/rollTap.ts).
-          orchRef?.onRollState(payload as RollStateEvent)
-        }
-      } catch {
-        /* an orchestration tap failure must not block rolling */
-      }
-      // Slack notifications tap rolling events too. Isolated so a tap exception does not block rolling.
-      try {
-        if (channel === 'session:rolled') {
-          const p = payload as { oldSessionId: string; info: SessionInfo }
-          slack.onRolled(p.oldSessionId, p.info)
-        } else if (channel === 'session:rollState') {
-          slack.onRollState(payload as RollStateEvent)
-        }
-      } catch {
-        /* a Slack tap failure must not block rolling */
-      }
-      // The desktop sink taps rolling events too, mirroring the Slack tap above. Isolated so an
-      // exception here does not block rolling.
-      try {
-        if (channel === 'session:rollState') desktop.onRollState(payload as RollStateEvent)
-      } catch {
-        /* a desktop notification failure must not block rolling */
-      }
-    },
+    send: (channel, payload) => fanOutRollEvent(channel, payload, { orchestration: true, codex: false }),
+    // S6 R4: the chain written into the pty's note, for the Host to carry on if this app goes away.
+    // A chat session has no Host pty note to write into, and a fallback session has no Host at all:
+    // remember() does nothing for either (writeRollSnapshot).
+    snapshot: writeRollSnapshot,
     log: rollingLog,
     lang: () => core!.lang,
     blocks,
@@ -900,126 +998,11 @@ app.whenReady().then(async () => {
     // account copied the transcript and respawned into a CLI that immediately failed. Memoised: see
     // cachedLoginStatus above for why this path is and the IPC one is not.
     loginStatus: cachedLoginStatus,
-    send: (channel, payload) => {
-      try {
-        if (!win.isDestroyed()) win.webContents.send(channel, payload)
-      } catch {
-        /* renderer send failures are ignored */
-      }
-      // Work Unit 수집기도 롤을 탭한다 — claude 쪽과 같은 자리, 같은 이유다. **여기서는 경로를
-      // 건네줄 수 있다**: 재개된 codex 는 새 파일을 만들지 않고 바로 이 dest 에 이어 쓰므로(아래
-      // 주석) 그 순간의 파일 끝이 곧 되쓰기가 끝난 자리다. 빈 대화로 굴릴 때는 `undefined` 이고,
-      // 그때는 claude 쪽처럼 수집기가 다음 회차에 끝을 잡는다.
-      // **codex sessions do not create a Unit today** (see collector.ts's header comment for why),
-      // so passing `oldSessionId` has nothing to re-key and quietly does nothing for now. Passed
-      // anyway, same as the path above, because an asymmetry caught on only one side becomes a
-      // silent bug the day codex support arrives.
-      // 자기 try 안에 두는 것도 claude 쪽과 같다 — 아래 블록의 rekey 와 rollout 재등록이 이
-      // 호출의 예외에 함께 쓸려 가지 않게 한다.
-      try {
-        if (channel === 'session:rolled') {
-          const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
-          workUnitForkRef?.(p.info.id, p.dest, p.oldSessionId)
-        }
-      } catch {
-        /* a Work Unit tap failure must not block codex rolling */
-      }
-      try {
-        if (channel === 'session:rolled') {
-          // dest: the rollout path copied into the target account just before an ordinary roll
-          // (codexRolling.roll() carries it along). The respawn resumes, so codex appends to that very
-          // file instead of creating a new one — it is what the watcher has to tail, and searching for a
-          // newly created file would find nothing at all. It is handed over directly; the watcher starts
-          // at the end of it so the turns from before the roll are not reported again. **`undefined` on
-          // a blank-slate roll (Smart Resume)** — that respawn is a fresh `codex` with no rollout to
-          // copy or hand over yet, so `register` below falls back to its own search, the same path a
-          // brand-new session already takes (codexRolling.ts's `roll()` documents the same fallback at
-          // its own `send('session:rolled', ...)` call).
-          const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
-          scheduler.rekey(p.oldSessionId, p.info.id) // the schedule follows the roll chain
-          // When rolling switches accounts the session respawns under a new sessionId and a new
-          // rollout file appears — without re-registering, both turn-completion notifications and the
-          // usage chips stop for good after the switch. codexRolling is the codex-only coordinator
-          // (ipc.ts's spawn branch already splits on provider), so every session reaching here is
-          // codex — re-checking the provider is unnecessary. Unconditional for a pty session, matching
-          // the spawn path: the chips are needed whether or not this session asked for Slack, and the
-          // watcher gates the turn callback on info.slackNotify itself.
-          //
-          // **A chat session is registered here too, not just by its own `ready`.** A rolled chat
-          // session's `ready` only fires ~1–3s later, once the respawned CLI completes its handshake,
-          // and until then nothing in the watcher knows this session at all. What that costs is not
-          // notifications — they are off for a chat session (`{ notifyTurns: false }`, below: it
-          // announces its own turn ends from the protocol, so a watcher callback would make it two) —
-          // nor the usage chips, which `register` resets along with `limits`/`context` anyway. It is
-          // that `codexSessionIdFor` and `rolloutPathFor` have no answer for the new id during that
-          // window, and everything that asks them (the history-resume guard, the rollout lookups) is
-          // told this session does not exist. Registering here closes exactly that gap. `register`
-          // replaces the entry wholesale (codexRolloutWatcher.ts), so `ready`'s later re-register does
-          // not drift the flag back to its default; that is why the old Ruling 4c-6 skip is no longer
-          // needed here.
-          //
-          // The old registration's native id is read before it is dropped — `unregister` erases it —
-          // **and only when `p.dest` is there**, i.e. when this roll resumed the same thread onto a
-          // copied rollout. A blank-slate roll (Smart Resume) starts a *different* thread and
-          // codexRolling nulls `chain.codexSessionId` for it, so handing the old id over would have the
-          // watcher's own `findRollout` narrow its search to the dead thread and hide the new rollout
-          // for the whole handshake window.
-          const rolledChatId = core!.chat.has(p.info.id)
-            ? p.dest
-              ? codexRollout.codexSessionIdFor(p.oldSessionId) ?? undefined
-              : undefined
-            : null
-          codexRollout.unregister(p.oldSessionId)
-          if (rolledChatId !== null) codexRollout.register(p.info, p.dest, rolledChatId, { notifyTurns: false })
-          else if (!core!.chat.has(p.info.id)) codexRollout.register(p.info, p.dest)
-        } else if (channel === 'session:rollState') {
-          // codex rolling sends session:rollState too (switching/waiting/adopted/none) — suppress the
-          // resume window. 'adopted' is not one of the states that suppresses: it says a chain taken
-          // back from the Host cannot judge its own limit, which is not a resume window, and the
-          // switch in handleRollState leaves it to the default on purpose.
-          scheduler.handleRollState(payload as RollStateEvent)
-        }
-      } catch {
-        /* a tap failure must not block rolling */
-      }
-      // 오케스트레이션도 롤링 이벤트를 탭한다. 워커 세션이 롤되면 그 Dispatch 의 sessionId 를 새
-      // 세션으로 옮겨야 한다 — 그 값이 worker_done 을 되돌려 묶는 유일한 키다. 다른 탭들과 같은
-      // 이유로 자기 try 안에 격리한다.
-      try {
-        if (channel === 'session:rolled') {
-          const p = payload as { oldSessionId: string; info: SessionInfo }
-          orchRef?.onRolled(p.oldSessionId, p.info)
-        } else if (channel === 'session:rollState') {
-          // 정지 시점 스냅샷 — 이벤트를 통째로 넘긴다. 어떤 게시가 정지 에피소드의 시작인지
-          // 가르는 일과 세션별 기억은 OrchRollTap 이 갖는다(core/orchestration/exec/rollTap.ts).
-          orchRef?.onRollState(payload as RollStateEvent)
-        }
-      } catch {
-        /* an orchestration tap failure must not block rolling */
-      }
-      // Slack notifications tap codex rolling events too (mirroring the claude side) — isolated so a
-      // tap exception does not block rolling. Without this the SlackNotifier record stays on the old
-      // id, so turn notifications stop after the switch, onRolled cannot cancel the scheduled exit
-      // timer so a false session-exit goes out, and limit-reached, account-switch and reset
-      // notifications never arrive for codex at all.
-      try {
-        if (channel === 'session:rolled') {
-          const p = payload as { oldSessionId: string; info: SessionInfo }
-          slack.onRolled(p.oldSessionId, p.info)
-        } else if (channel === 'session:rollState') {
-          slack.onRollState(payload as RollStateEvent)
-        }
-      } catch {
-        /* a Slack tap failure must not block rolling */
-      }
-      // The desktop sink taps rolling events too, mirroring the Slack tap above. Isolated so an
-      // exception here does not block rolling.
-      try {
-        if (channel === 'session:rollState') desktop.onRollState(payload as RollStateEvent)
-      } catch {
-        /* a desktop notification failure must not block rolling */
-      }
-    },
+    send: (channel, payload) => fanOutRollEvent(channel, payload, { orchestration: true, codex: true }),
+    // S6 R4: the chain written into the pty's note, for the Host to carry on if this app goes away.
+    // A chat session has no Host pty note to write into, and a fallback session has no Host at all:
+    // remember() does nothing for either (writeRollSnapshot).
+    snapshot: writeRollSnapshot,
     log: (m) => rollingLog(`[codex] ${m}`),
     lang: () => core!.lang,
     blocks,
@@ -1098,6 +1081,9 @@ app.whenReady().then(async () => {
     agentGuests,
     {
       log: hostLog,
+      // A roll the Host made and pushed (S6 §3.4) costs the app what its own rolls cost, except the
+      // orchestration tap: the Host already rekeyed the Dispatch (hostRollView in ipc.ts).
+      fanOutRollEvent: (channel, payload, codex) => fanOutRollEvent(channel, payload, { orchestration: false, codex }),
       // Handed over as soon as the client exists, whether or not a Host is ever reached — the same
       // shape as onTabResumeReady above. Read from will-quit.
       onHostClientReady: ({ stop, retire, survivesUpdate }) => {
