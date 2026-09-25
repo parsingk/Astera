@@ -133,10 +133,10 @@ export function runGatedForTask(s: OrchState, task: Pick<Task, 'runId'>): boolea
   return run.paused === true || job.paused === true || job.pendingStart === true
 }
 
-/** How long a `coordinatorStartingAt` mark holds (I1). A start waits at most a spawn deadline plus the
- *  coordinator's idle wait before its prompt, plus trust and account reads; the same two minutes as
- *  `PENDING_START_WINDOW_MS` (command.ts) gives a worker's start in flight, for the same reason. Past
- *  it the mark is a start that died with its process. */
+/** How long a `coordinatorStartingAt` mark holds (I1). A coordinator start is bounded by the spawn
+ *  deadline, plus the Run worktree it makes first and the trust and account reads; two minutes, the
+ *  same bound `PENDING_START_WINDOW_MS` (command.ts) gives a worker's start in flight, leaves room to
+ *  spare. Past it the mark is a start that died with its process. */
 export const COORDINATOR_START_WINDOW_MS = 2 * 60_000
 
 /** Whether a coordinator start for this Run is in flight: its mark is set and younger than the window. */

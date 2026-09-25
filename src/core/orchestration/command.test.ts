@@ -6863,3 +6863,72 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect(deps.startCoordinator).not.toHaveBeenCalled()
   })
 })
+
+// Task 1 small round 2: the clauses of runMoves each pinned, and a start drops only its own mark.
+describe('fix round 2: each clause of what counts as running', () => {
+  const noCoordDeps = () =>
+    Object.assign(makeDeps(), { listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }] })
+
+  it('an app-placed Run with a ready Task and no worker open counts as running: the fire skips', async () => {
+    const deps = noCoordDeps()
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, schedule: { kind: 'daily', time: '09:00' } })
+    const jobId = (c.body as { id: string }).id
+    await call(deps, 'task-create', { run: jobId, title: 't', spec: 's', account: 'accA' })
+    await call(deps, 'run-start', { run: jobId })
+    const first = await call(deps, 'run-spawn', { run: jobId, unlessRunning: true })
+    expect(first.status).toBe(200)
+    const runId = (first.body as { id: string; autoDispatch?: boolean }).id
+    expect((first.body as { autoDispatch?: boolean }).autoDispatch).toBe(true)
+    expect(deps.getState().tasks.find((t) => t.runId === runId)?.status).toBe('ready')
+    expect(deps.getState().dispatches).toHaveLength(0)
+    const r = await call(deps, 'run-spawn', { run: jobId, unlessRunning: true })
+    expect(r.status).toBe(409)
+    expect(r.body).toMatchObject({ running: runId })
+  })
+
+  it('a Run waiting on a Gate counts as running', async () => {
+    const deps = noCoordDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const jobId = deps.getState().jobs[0].id
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'accA' })
+    expect((await call(deps, 'gate-create', { task: (t.body as { id: string }).id, question: 'which one?' })).status).toBe(200)
+    const r = await call(deps, 'jobs-run', { id: jobId })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain(runId)
+  })
+
+  it.each(['validating', 'reviewing'] as const)('a Run with a Task %s counts as running: a check is under way', async (status) => {
+    const deps = noCoordDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const jobId = deps.getState().jobs[0].id
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'accA' })
+    const s = deps.getState()
+    await deps.setState({ ...s, tasks: s.tasks.map((x) => (x.id === (t.body as { id: string }).id ? { ...x, status } : x)) })
+    expect((await call(deps, 'jobs-run', { id: jobId })).status).toBe(409)
+  })
+
+  it('a failed start drops only the mark it wrote, not a later one', async () => {
+    const deps = noCoordDeps()
+    const later = '2026-08-04T00:05:00.000Z'
+    const startCoordinator = vi.fn(async (a: { runId: string }) => {
+      // The start outlived its window, and a ▶ has marked the Run since.
+      const s = deps.getState()
+      await deps.setState({ ...s, runs: s.runs.map((r) => (r.id === a.runId ? { ...r, coordinatorStartingAt: later } : r)) })
+      throw new Error('spawn refused')
+    })
+    Object.assign(deps, { startCoordinator })
+    const c = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      auto: true,
+      coordinatorAccount: 'accA',
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const jobId = (c.body as { id: string }).id
+    await call(deps, 'run-start', { run: jobId })
+    expect((await call(deps, 'run-spawn', { run: jobId })).status).toBe(400)
+    expect(deps.getState().runs.find((r) => r.jobId === jobId)?.coordinatorStartingAt).toBe(later)
+  })
+})

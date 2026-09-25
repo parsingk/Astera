@@ -541,7 +541,8 @@ const runningRunOf = (s: OrchState, job: Job, now: string): JobRun | undefined =
  * before). Otherwise it runs when any of these holds:
  * - a coordinator is attached, or its start is in flight (`coordinatorStarting`, I1);
  * - the app places it (`placedByApp`) and a Task is unfinished, so the loop will pick it up;
- * - a worker is at work on it (an open Dispatch), or it waits on a person (an open Gate);
+ * - a worker is at work on it (an open Dispatch), a check is (a Task `validating` or `reviewing`),
+ *   or it waits on a person (an open Gate);
  * - it is `limited`: its agents resume by themselves at the reset (Task 1 review Minor 3).
  */
 const runMoves = (s: OrchState, job: Job, run: JobRun, now: string): boolean => {
@@ -552,6 +553,7 @@ const runMoves = (s: OrchState, job: Job, run: JobRun, now: string): boolean => 
   if (placedByApp(job, run) && tasks.some((t) => !taskFinished(t))) return true
   const ids = new Set(tasks.map((t) => t.id))
   if (s.dispatches.some((d) => ids.has(d.taskId) && !d.outcome && !d.endedAt)) return true
+  if (tasks.some((t) => t.status === 'validating' || t.status === 'reviewing')) return true
   if (s.gates.some((g) => g.status === 'open' && g.runId === run.id)) return true
   return limitedUntil(s, run.id, now) !== null
 }
@@ -912,15 +914,17 @@ export async function handleCommand(
       })
     }
     const reply = await startAndAttach(deps.getState(), job, target, accountId, true)
-    if (reply.status < 200 || reply.status >= 300) await dropStartMark(target.id)
+    if (reply.status < 200 || reply.status >= 300) await dropStartMark(target.id, now)
     return reply
   }
 
-  /** Drops a Run's `coordinatorStartingAt`, on the state as it is now (I1). Nothing when it has none. */
-  const dropStartMark = async (runId: string): Promise<void> => {
+  /** Drops a Run's `coordinatorStartingAt`, on the state as it is now (I1), **only when it is the
+   *  mark this call wrote** (`stamp`, this command's `now`). A start that outlived the window may find
+   *  a later ▶'s mark there, and erasing it would let a third start through beside that one. */
+  const dropStartMark = async (runId: string, stamp: string): Promise<void> => {
     const current = deps.getState()
     const run = current.runs.find((r) => r.id === runId)
-    if (!run || run.coordinatorStartingAt === undefined) return
+    if (!run || run.coordinatorStartingAt !== stamp) return
     const { coordinatorStartingAt: _mark, ...rest } = run
     await deps.setState({ ...current, runs: current.runs.map((r) => (r.id === runId ? rest : r)) })
   }
@@ -1043,7 +1047,7 @@ export async function handleCommand(
         }
         if (freshWorktree && current.worktree !== freshWorktree && deps.discardRunWorktree)
           await deps.discardRunWorktree(freshWorktree)
-        await dropStartMark(target.id)
+        await dropStartMark(target.id, now)
         return okBody(deps.getState().runs.find((r) => r.id === target.id) ?? current)
       }
       if (freshWorktree) {
