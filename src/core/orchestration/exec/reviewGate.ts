@@ -91,9 +91,12 @@ export function createReviewGate(deps: {
       if (!task || !runGatedForTask(deps.getState(), task)) return false
       await gate({
         taskId,
+        // Only what can be true of a Task that reaches a review (R1): its Run is paused, or its Job is
+        // paused or not yet started. A schedule's definition is not one of them; its Tasks have no Run
+        // and never reach a review, and a Run a schedule fired runs like any other.
         reason:
-          "this task's run is not one the app starts work on right now — it is paused, a schedule " +
-          'template, or not yet started. Resume the run to have it reviewed.'
+          "this task's run is not one the app starts work on right now: the run or its job is paused, " +
+          'or the job has not been started yet. Resume or start it to have this task reviewed.'
       })
       return true
     },

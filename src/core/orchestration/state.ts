@@ -115,35 +115,31 @@ export const jobOf = (s: OrchState, run: JobRun): Job | undefined =>
  * **`run.paused`·`job.paused`** 는 사람이 세운 것이고(`runs stop`·`pauseSchedule`), **`pendingStart`**
  * 는 아직 시작하지 않은 초안이다.
  *
- * **`job.schedule !== undefined` 가 실제로 거르는 것은 발화가 만든 자식 회차다**(ruling F65). 템플릿
- * 자신이 아니다 — 템플릿의 Task 는 바로 위 "회차를 찾을 수 없다" 에서 이미 걸린다. 자식 회차는
- * `jobId` 가 여전히 템플릿 Job 이므로 여기 `job` 이 그 템플릿이고, 이 줄이 그것을 붙잡는다.
- *
- * **오늘 그 줄은 아무것도 바꾸지 않는다.** `run-create` 가 예약이 있으면 `autoDispatch` 를 켜지
- * 않고(`command.ts`), `appDriven` 이 그것을 요구하므로 예약의 회차는 애초에 앱이 배치하지 않는다 —
- * 그래서 이 세 소비자에 닿는 예약 Task 가 없다. 의미를 바꾸지 않고 줄을 남겨 둔 이유는 그것이다:
- * 아무도 지나지 않는 길에서 방금 하나로 모은 셋을 다시 갈라 놓는 값이 더 크다.
- *
- * **예약 Job 이 언젠가 `autoDispatch` 를 갖게 되면 이 줄이 살아난다**, 그리고 그때 `refuseIfRunGated`
- * 가 여는 Gate 문구("paused, a schedule template, or not yet started")는 자식 회차에 대해 거짓이
- * 된다 — 그 회차는 템플릿이 아니라 템플릿이 만든 회차다. 그 변경을 하는 사람이 이 사실을 만나도록
- * `command.ts` 의 `autoDispatch` 를 켜는 자리에도 같은 말을 적어 두었다.
+ * **A schedule does not gate a Run** (R1, F65). A Run of a scheduled Job is what a fire made, and it
+ * runs like any other Run (U1: a fire behaves like `jobs run`). The one thing a schedule holds back is
+ * its definition, and a definition Task has no Run, so the first clause already refuses it. This
+ * function once also refused every Run whose Job had a schedule. That changed nothing while fired
+ * Runs were never placed; now that they are, it would send each fired Run's reviews to a Gate.
  *
  * **`schedule.ts` 의 `appDriven` 은 이것과 다른 물음이라 합치지 않았다.** 그쪽은 "이 회차를 누가
- * 운전하는가" 를 묻는다 — `autoDispatch` 를 요구하고(코디네이터가 끄는 회차는 앱이 배치하지
- * 않는다), `job.schedule` 은 **보지 않는다**. 두 조건이 겹치는 것은 우연이 아니라 둘 다 "사람이
- * 세운 것" 을 존중하기 때문이고, 다른 두 칸이 그 둘을 갈라 놓는다.
+ * 운전하는가" 를 묻는다 — `placedByApp` 을 요구한다(코디네이터가 모는 회차는 앱이 배치하지
+ * 않는다). 두 조건이 겹치는 것은 우연이 아니라 둘 다 "사람이 세운 것" 을 존중하기 때문이고, 다른
+ * 칸이 그 둘을 갈라 놓는다.
  */
 export function runGatedForTask(s: OrchState, task: Pick<Task, 'runId'>): boolean {
   const run = s.runs.find((r) => r.id === task.runId)
   const job = run && jobOf(s, run)
   if (!run || !job) return true
-  return (
-    run.paused === true ||
-    job.paused === true ||
-    job.schedule !== undefined ||
-    job.pendingStart === true
-  )
+  return run.paused === true || job.paused === true || job.pendingStart === true
+}
+
+/** Whether the app (or the Host) places this Run's Tasks itself, rather than a coordinator: the Job's
+ *  `autoDispatch`, or the Run's own, which `startJobRun` stamps on a Run of a scheduled Job with no
+ *  coordinator account (U1). **Every reader of "who drives this Run" asks this**, so the two fields
+ *  cannot be read apart: the loop's `appDriven`, the recovery reconciler, worker-start's placement
+ *  refusal. It says nothing about paused or not yet started; `appDriven` adds those. */
+export function placedByApp(job: Job | undefined, run: JobRun): boolean {
+  return job?.autoDispatch === true || run.autoDispatch === true
 }
 
 /**
@@ -296,7 +292,11 @@ export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRu
     id: newId('run'),
     jobId,
     ordinal,
-    createdAt: now
+    createdAt: now,
+    // U1 and R2: a Run of a scheduled Job with no coordinator account is placed automatically, as
+    // `jobs run` places one of a Job without a coordinator. Decided here, from the Job as it is now,
+    // and stamped on this Run only (JobRun.autoDispatch says why not on the Job).
+    ...(job.schedule !== undefined && job.coordinatorAccountId === undefined ? { autoDispatch: true } : {})
   }
   // createdAt 오름차순 — snapshotFor 가 쓰는 순서이고, 의존 사슬을 읽는 순서다
   const byCreated = (a: Task, b: Task): number => a.createdAt.localeCompare(b.createdAt)

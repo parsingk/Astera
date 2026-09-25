@@ -36,6 +36,7 @@ import {
   writeOffDispatch,
   openRepairDispatch,
   interruptStalledTask,
+  runGatedForTask,
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate, type Dispatch, type CheckResult } from './types'
@@ -3440,5 +3441,40 @@ describe('rekeyCoordinator (S6 R14)', () => {
     const none = rekeyCoordinator(withSlot.state, { oldSessionId: 'other', newSessionId: 'new' })
     expect(none.ok && none.value).toBeNull()
     expect(none.ok && none.state).toBe(withSlot.state)
+  })
+})
+
+// F65, U1, R1, R2: a schedule firing behaves like `jobs run` of that Job.
+describe('a fired Run of a scheduled Job', () => {
+  it('runGatedForTask lets a fired Run’s Tasks through: only the definition is gated (R1)', () => {
+    const { s, templateId, aId } = template()
+    const { state, value: child } = unwrap<{ id: string }>(startJobRun(s, templateId, FIRE) as never)
+    const copy = state.tasks.find((t) => t.runId === child.id && t.title === 'A')!
+    expect(runGatedForTask(state, copy)).toBe(false)
+    // The definition Task has no Run, and that alone gates it.
+    expect(runGatedForTask(state, state.tasks.find((t) => t.id === aId)!)).toBe(true)
+  })
+
+  it('a Run of a scheduled Job with no coordinator account is placed by the app, decided when it starts (R2)', () => {
+    const { s, templateId } = template()
+    // The template carries no autoDispatch, as every scheduled Job on disk does.
+    expect(s.jobs.find((j) => j.id === templateId)!.autoDispatch).toBeUndefined()
+    const { state, value: child } = unwrap<{ id: string }>(startJobRun(s, templateId, FIRE) as never)
+    expect(state.runs.find((r) => r.id === child.id)!.autoDispatch).toBe(true)
+  })
+
+  it('a Run of a scheduled Job with a coordinator account is left to its coordinator', () => {
+    const { s, templateId } = template()
+    const withCoordinator: OrchState = {
+      ...s,
+      jobs: s.jobs.map((j) => (j.id === templateId ? { ...j, coordinatorAccountId: 'acc1' } : j))
+    }
+    const { state, value: child } = unwrap<{ id: string }>(startJobRun(withCoordinator, templateId, FIRE) as never)
+    expect(state.runs.find((r) => r.id === child.id)).not.toHaveProperty('autoDispatch')
+  })
+
+  it('a Run of a Job with no schedule carries nothing of its own: the Job says who drives it', () => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
+    expect(state.runs.find((r) => r.id === run.id)).not.toHaveProperty('autoDispatch')
   })
 })

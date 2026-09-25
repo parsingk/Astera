@@ -225,6 +225,20 @@ export interface JobRun {
    *  자리에 그 회차의 다음 ready Task 가 곧바로 뜬다. 재개는 Job 의 것만 걷으므로 멈춘 회차는
    *  이어지지 않는다. */
   paused?: boolean
+  /** The app (or the Host) places this Run's Tasks itself, although its Job has no `autoDispatch`.
+   *  **Only a Run of a scheduled Job with no coordinator account has it**, stamped by `startJobRun`
+   *  as the Run is made (U1: a fire behaves like `jobs run`, which a Job without a coordinator account
+   *  has placed automatically). Read through `placedByApp` (state.ts), never on its own.
+   *
+   *  **Why the Run, when `Job.autoDispatch` says the plan's field is the Job's.** Two reasons, both
+   *  about what is already on disk (R2). A scheduled Job never carried `autoDispatch` (run-create
+   *  withheld it), so a rule that needs the Job's field needs a migration. And a rule derived from
+   *  the Job alone (`schedule` and no coordinator account) would reach back to every Run those Jobs
+   *  fired before this field existed: their Tasks sat `ready` with nobody placing them, and they would
+   *  all start at once on the first pass after an upgrade. Deciding at the fire and stamping the Run
+   *  places only what fires from now on. Before the Job/Run split every fired Run carried the same
+   *  flag (`spawnScheduledRun`), so this is the old shape back, for this one case. */
+  autoDispatch?: boolean
 }
 
 export interface Task {

@@ -1,5 +1,5 @@
 import { DEFAULT_CONCURRENCY, FAILURE_LIMIT, type JobRun } from './types'
-import { jobOf, type OrchState } from './state'
+import { jobOf, placedByApp, type OrchState } from './state'
 
 /** 지금 워커를 띄워야 할 자리 하나.
  *
@@ -26,13 +26,14 @@ export interface Slot {
  * "하나라도 어긋나면 앱이 돌리지 않는 Run 의 Task 에 Gate 가 열린다" 는 경고가 적혀 있었다 —
  * 어긋날 수 없게 하는 편이 경고보다 낫다.
  *
- * 세 가지는 계획의 것이고 하나는 회차의 것이다. `autoDispatch` 는 "누가 이 계획을 운전하는가",
- * `pendingStart` 는 "아직 시작하지 않았다", `Job.paused` 는 "예약을 세워 뒀다", `run.paused` 는
+ * `placedByApp` 은 "누가 이 회차를 운전하는가" 다: 계획의 `autoDispatch`, 또는 코디네이터 계정이
+ * 없는 예약 Job 의 회차에 발화가 찍은 회차의 `autoDispatch`(U1, JobRun.autoDispatch). 나머지는
+ * `pendingStart` 가 "아직 시작하지 않았다", `Job.paused` 가 "예약을 세워 뒀다", `run.paused` 가
  * "세울 때 함께 멈춘 회차" 다.
  */
 export function appDriven(s: OrchState, run: JobRun): boolean {
   const job = jobOf(s, run)
-  if (!job?.autoDispatch) return false
+  if (!job || !placedByApp(job, run)) return false
   if (job.pendingStart) return false
   if (job.paused) return false
   // **세워 둔 회차도 배치하지 않는다.** 일시 중지가 도는 워커를 닫아도, 그 자리에 그 회차의 다음

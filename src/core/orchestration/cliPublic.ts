@@ -64,7 +64,9 @@ const RUN_FIELDS = [
   'createdAt',
   'coordinatorSessionId',
   'worktree',
-  'paused'
+  'paused',
+  // Public like the Job's own: a script can read who places this Run (U1, JobRun.autoDispatch).
+  'autoDispatch'
 ] as const
 /** Held back like TASK_HIDDEN: the roll tap's bookkeeping of a stopped coordinator. What a script
  *  needs from it, that the Run waits for a reset and until when, is the `limited` ending of `runs wait`. */

@@ -121,6 +121,8 @@ describe('createReviewGate', () => {
       expect(r.state().tasks[0].status).toBe('blocked')
       expect(r.state().gates).toHaveLength(1)
       expect(r.state().gates[0].question).toMatch(/paused/)
+      // Nothing about a schedule template: a Task with a Run is never one (R1).
+      expect(r.state().gates[0].question).not.toMatch(/template/)
     })
 
     it('세운 것이 계획 쪽이어도 같다', async () => {
@@ -130,10 +132,14 @@ describe('createReviewGate', () => {
       expect(r.state().tasks[0].status).toBe('blocked')
     })
 
-    it('예약 템플릿의 Task 도 거절한다 — 도는 것은 회차이지 템플릿이 아니다', async () => {
+    // R1 (F65): a Run of a scheduled Job is what a fire made, and it runs like any other Run. Only the
+    // definition is held back, and its Tasks have no Run (the case below).
+    it('예약 Job 의 회차(발화가 만든 회차)의 Task 는 거절하지 않는다', async () => {
       const s = reviewUnderWay()
-      const r = rig(paused({ jobs: [{ ...s.jobs[0], schedule: { kind: 'interval', minutes: 30 } }] }))
-      expect(await r.gate.refuseIfRunGated({ taskId: 'tsk_1' })).toBe(true)
+      const before = paused({ jobs: [{ ...s.jobs[0], schedule: { kind: 'interval', minutes: 30 } }] })
+      const r = rig(before)
+      expect(await r.gate.refuseIfRunGated({ taskId: 'tsk_1' })).toBe(false)
+      expect(r.state()).toBe(before)
     })
 
     it('아직 시작하지 않은 계획의 Task 도 거절한다', async () => {
