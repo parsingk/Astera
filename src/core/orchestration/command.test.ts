@@ -5540,9 +5540,15 @@ describe('jobs run / questions answer', () => {
     // The Run's own id (U1): `run-start` takes it as that Run's ▶, and a scheduled Job's id would only
     // release its gate.
     expect((r.body as { error: string }).error).toContain(`astera run-start --run ${runs[1].id}`)
-    // M6 (final review): one instruction. `jobs run` again is refused while this run is running.
-    expect((r.body as { error: string }).error).toMatch(/not run `jobs run` again/)
+    // M6 (final review): one instruction. The reason given is the true one (final review I3): a run
+    // whose coordinator failed does not count as running, so `jobs run` again is not refused, and it
+    // would start another run beside this one.
+    expect((r.body as { error: string }).error).toContain('`jobs run` again would start another run beside this one')
+    expect((r.body as { error: string }).error).not.toMatch(/refused while/)
     expect(r.body).toMatchObject({ jobId, runId: runs[1].id })
+    const beside = await call(deps, 'jobs-run', { id: jobId })
+    expect(beside.status).toBe(200)
+    expect(deps.getState().runs.filter((x) => x.jobId === jobId)).toHaveLength(3)
 
     // 그 오류가 말하는 재시도가 실제로 이 회차를 다시 겨눈다
     const again = await call(deps, 'run-start', { run: runs[1].id })
