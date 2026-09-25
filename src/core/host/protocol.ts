@@ -5,7 +5,7 @@
 // JSON string escaping is what will carry it, the same way the app already ships PTY output to the
 // renderer.
 import type { OrchState } from '../orchestration/state'
-import type { WorktreeInfo } from '../types'
+import type { RollStateEvent, SessionInfo, WorktreeInfo } from '../types'
 
 /** Bumped whenever a message changes shape. A Host and an app that disagree do not talk (design §6).
  *  2 added the pty-* messages: the Host owns the terminals now. 3 added pty-note — an older Host
@@ -333,3 +333,9 @@ export type HostMessage =
    *  does not have to move: bumping it retires a Host that is running perfectly well (design S4). */
   | { t: 'proc-exit'; id: string; exitCode: number; stderrTail?: string }
   | { t: 'proc-listed'; entries: PtyEntry[] }
+  /** A Host chain's banner state (S6 §3.4). An app forwards it to its renderer, scheduler, Slack and
+   *  desktop notices, and keeps the last lasting one per session. Additive. */
+  | { t: 'roll-state'; event: RollStateEvent }
+  /** A Host roll re-keyed a session (S6 §3.4). `ptyId` is the new session's pty, for the app to adopt
+   *  before it forwards the rekey. `dest` is the codex copy the respawn appends to. Additive. */
+  | { t: 'session-rolled'; oldSessionId: string; info: SessionInfo; ptyId: string | null; dest?: string }

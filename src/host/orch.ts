@@ -370,9 +370,10 @@ export function createHostOrch(a: {
    *  through to `hostOrchDeps`. Absent: `resolveProjectRoot` is forwarded to the app as before. */
   resolveProjectRoot?(cwd: string): Promise<string>
   /** The Host's own rolling (S6): `unregister` is passed through to `hostOrchDeps` (HOST_ROLLS, R8);
-   *  the other two members are for the roll tap and the app's calls (Tasks 11 and 13). Absent:
-   *  `unregisterRolling` only forwards to the app, as before. */
-  rolling?: Pick<HostRolling, 'unregister' | 'stateOf' | 'forceRoll'> | null
+   *  the other three members are for the roll tap and the app's calls (Tasks 11 and 13): `stateOf` and
+   *  `forceRoll` answer `roll-state`/`roll-force`, and `has` is `roll-force`'s 404 check for a session
+   *  this Host holds no chain for. Absent: `unregisterRolling` only forwards to the app, as before. */
+  rolling?: Pick<HostRolling, 'unregister' | 'stateOf' | 'forceRoll' | 'has'> | null
   /** R7: the live session a pty note says was rolled from this one, or null. */
   rolledInto?(sessionId: string): { id: string; accountId: string } | null
   /** R7: rekeys through the Host's roll tap instead of closing. */
@@ -1140,7 +1141,15 @@ export function createHostOrch(a: {
         // next". Unreachable today, because only the app sends these and it sends no key; written
         // anyway, because the thing that makes it unreachable is a fact about today's clients and not
         // a property of this code.
-        if ((cmd === 'state-put' || cmd === 'state-get' || cmd === 'validation-stop' || WORKTREE_CALLS.has(cmd)) && request !== undefined)
+        if (
+          (cmd === 'state-put' ||
+            cmd === 'state-get' ||
+            cmd === 'validation-stop' ||
+            cmd === 'roll-state' ||
+            cmd === 'roll-force' ||
+            WORKTREE_CALLS.has(cmd)) &&
+          request !== undefined
+        )
           return { status: 400, body: { error: `${cmd} does not take a request id` } }
         if (cmd === 'state-put') return await statePut(args, from)
         // Open to anyone: reading the state is something every CLI client can already do through
@@ -1168,6 +1177,19 @@ export function createHostOrch(a: {
           if (typeof runId !== 'string' || runId === '')
             return { status: 400, body: { error: 'validation-stop needs a runId' } }
           return { status: 200, body: { stopped: a.validationStop(runId) } }
+        }
+        // **Beside validation-stop, for the same reason (S6 §3.4).** The app's own reads and its own
+        // button on a Host chain — never a command layer command, so a Host too old to roll answers
+        // 501, exactly as a Host with no checks answers validation-stop.
+        if (cmd === 'roll-state' || cmd === 'roll-force') {
+          if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
+          if (!a.rolling) return { status: 501, body: { error: 'this Host does not roll sessions' } }
+          const sessionId = args.sessionId
+          if (typeof sessionId !== 'string' || sessionId === '') return { status: 400, body: { error: `${cmd} needs a sessionId` } }
+          if (cmd === 'roll-state') return { status: 200, body: { state: a.rolling.stateOf(sessionId) } }
+          if (!a.rolling.has(sessionId)) return { status: 404, body: { error: `no Host rolling chain for session ${sessionId}` } }
+          await a.rolling.forceRoll(sessionId)
+          return { status: 200, body: { forced: true } }
         }
         // **Request receipts, and still the same synchronous step the call entered in** — nothing
         // above has awaited on this path, so the lookup and the claim cannot be split by a second

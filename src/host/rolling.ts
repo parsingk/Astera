@@ -215,6 +215,17 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
       } catch (err) {
         log(`native session report failed session=${sessionId}: ${String(err)}`)
       }
+      // Task 13: the native id goes into the note too, so a returning app's history guard can see it —
+      // the same reason a codex roll's dest goes in above. Its own try: never lets a note failure cut
+      // the onNativeSession report short, nor the reverse.
+      const p = ptyOf(sessionId)
+      if (p) {
+        try {
+          d.registry.note(p, { nativeSessionId })
+        } catch (err) {
+          log(`native id note failed session=${sessionId}: ${String(err)}`)
+        }
+      }
     },
     // R22: the Job packet or note; a tab or a coordinator gets its own chain.prompt. The coordinators'
     // third argument (the tab fallback) has nothing to fall back to here: the Host has no tab briefing.

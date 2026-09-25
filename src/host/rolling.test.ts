@@ -224,6 +224,17 @@ describe('createHostRolling (S6 Task 9)', () => {
     r.rolling.dispose()
   })
 
+  it('writes the native session id into the note, so a returning app’s history guard can see it', async () => {
+    const r = await rig()
+    await r.rolling.refresh()
+    r.open('p1', 's1', { accountId: 'a1', cwd: os.tmpdir(), title: 't', rollAccountIds: ['a1', 'a2'] })
+    r.rolling.adoptSpawned(info('s1'), accounts[0])
+    r.payloads.set('s1', payload(10))
+    await vi.advanceTimersByTimeAsync(16_000)
+    expect(r.registry.metaOf('p1')?.restore.nativeSessionId).toBe('cs')
+    r.rolling.dispose()
+  })
+
   it('a second adoptSpawned of the same session is a no-op, so the chain keeps its timers (fix round 1)', async () => {
     const r = await rig()
     await r.rolling.refresh()

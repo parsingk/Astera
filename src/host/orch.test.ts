@@ -2480,6 +2480,20 @@ describe('Host-local spawn (S2)', () => {
     expect(validationStop).toHaveBeenCalledTimes(1)
     expect(validationStop).toHaveBeenCalledWith('r1')
   })
+  it('answers roll-state and roll-force for the app only (S6 §3.4)', async () => {
+    const event = { sessionId: 's1', state: 'waiting' as const, nextRetryAt: '2026-09-25T10:00:00.000Z' }
+    const rolling = { unregister: vi.fn(), stateOf: vi.fn((id: string) => (id === 's1' ? event : null)), forceRoll: vi.fn(async () => {}), has: (id: string) => id === 's1' }
+    const orch = orchOver({ rolling })
+    const app = { role: 'app' as const, toOthers: () => {} }
+    const cli = { role: 'cli' as const, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'roll-state', args: { sessionId: 's1' }, sessionId: '', from: app })).body).toEqual({ state: event })
+    expect((await orch.call({ cmd: 'roll-state', args: { sessionId: 's2' }, sessionId: '', from: app })).body).toEqual({ state: null })
+    expect((await orch.call({ cmd: 'roll-state', args: { sessionId: 's1' }, sessionId: '', from: cli })).status).toBe(403)
+    expect((await orch.call({ cmd: 'roll-force', args: { sessionId: 's1' }, sessionId: '', from: app })).body).toEqual({ forced: true })
+    expect((await orch.call({ cmd: 'roll-force', args: { sessionId: 's9' }, sessionId: '', from: app })).status).toBe(404)
+    expect((await orchOver().call({ cmd: 'roll-state', args: { sessionId: 's1' }, sessionId: '', from: app })).status).toBe(501)
+    expect((await orch.call({ cmd: 'roll-state', args: {}, sessionId: '', from: app })).status).toBe(400)
+  })
   // Review M2 of Task 9: a worker whose pty is app-local is the app's to kill. With no app the stop is
   // refused, and the Dispatch is not marked stopped over a worker that is still running.
   it('forwards the stop of a worker the Host does not hold, and refuses it honestly with no app', async () => {
