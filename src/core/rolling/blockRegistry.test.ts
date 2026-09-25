@@ -54,3 +54,104 @@ describe('BlockRegistry', () => {
     expect(r.size).toBe(1)
   })
 })
+
+describe('BlockRegistry — onChange / absorb / absorbClear', () => {
+  it('record 는 합쳐진 값으로 리스너를 부른다 (merge)', () => {
+    const r = new BlockRegistry()
+    const events: Array<{ accountId: string; rec: BlockRecord | null; at: number }> = []
+    r.onChange((e) => events.push(e))
+    r.record('a', rec(5_000), 0)
+    r.record('a', rec(1_000), 7) // 더 이른 것은 이기지 못한다 — 그래도 통지는 합쳐진 값(5_000)으로 온다
+    expect(events).toEqual([
+      { accountId: 'a', rec: rec(5_000), at: 0 },
+      { accountId: 'a', rec: rec(5_000), at: 7 },
+    ])
+  })
+
+  it('clear 는 null 로 리스너를 부른다', () => {
+    const r = new BlockRegistry()
+    const events: Array<{ accountId: string; rec: BlockRecord | null; at: number }> = []
+    r.record('a', rec(5_000), 0)
+    r.onChange((e) => events.push(e))
+    r.clear('a', 3_000)
+    expect(events).toEqual([{ accountId: 'a', rec: null, at: 3_000 }])
+  })
+
+  it('absorb 는 실제로 합치지만 리스너는 부르지 않는다 (no echo)', () => {
+    const r = new BlockRegistry()
+    const events: unknown[] = []
+    r.onChange((e) => events.push(e))
+    r.absorb('a', rec(5_000), 0)
+    expect(events).toEqual([])
+    expect(r.get('a', 0)).toEqual(rec(5_000))
+  })
+
+  it('absorbClear 는 지우기만 하고 리스너는 부르지 않는다', () => {
+    const r = new BlockRegistry()
+    const events: unknown[] = []
+    r.record('a', rec(5_000), 0)
+    r.onChange((e) => events.push(e))
+    r.absorbClear('a', 1_000)
+    expect(events).toEqual([])
+    expect(r.get('a', 0)).toBeNull()
+  })
+
+  it('clear 뒤에 도착한, 그보다 오래된 원격 기록은 무시한다 (로컬 clear → absorb)', () => {
+    const r = new BlockRegistry()
+    r.record('a', rec(5_000), 0)
+    r.clear('a', 1_000) // 로컬 clear, 1_000 을 기억
+    r.absorb('a', rec(9_000, 500), 2_000) // since=500 은 clear(1_000) 이전 → 무시
+    expect(r.get('a', 2_000)).toBeNull()
+  })
+
+  it('absorbClear 뒤에 도착한, 그보다 오래된 원격 기록도 무시한다 (원격 clear → absorb)', () => {
+    const r = new BlockRegistry()
+    r.record('a', rec(5_000), 0)
+    r.absorbClear('a', 1_000) // 원격 clear, 1_000 을 기억
+    r.absorb('a', rec(9_000, 500), 2_000) // since=500 은 clear(1_000) 이전 → 무시
+    expect(r.get('a', 2_000)).toBeNull()
+  })
+
+  it('clear 시각보다 늦은 since 를 가진 원격 기록은 무시하지 않는다', () => {
+    const r = new BlockRegistry()
+    r.clear('a', 1_000)
+    r.absorb('a', rec(9_000, 1_500), 2_000) // since=1_500 > clear(1_000) → 살아있다
+    expect(r.get('a', 2_000)).toEqual(rec(9_000, 1_500))
+  })
+
+  it('clear 뒤라도 새로운 로컬 record 는 그대로 먹는다', () => {
+    const r = new BlockRegistry()
+    r.record('a', rec(5_000), 0)
+    r.clear('a', 1_000)
+    r.record('a', rec(9_000, 2_000), 2_000) // 로컬 record 는 clear 시각과 무관하게 항상 적용된다
+    expect(r.get('a', 2_000)).toEqual(rec(9_000, 2_000))
+  })
+
+  it('리스너가 던져도 record/clear 는 끝까지 실행되고 다른 리스너도 불린다', () => {
+    const r = new BlockRegistry()
+    const calls: string[] = []
+    r.onChange(() => {
+      throw new Error('boom')
+    })
+    r.onChange(() => calls.push('second'))
+
+    expect(() => r.record('a', rec(5_000), 0)).not.toThrow()
+    expect(calls).toEqual(['second'])
+    expect(r.get('a', 0)).toEqual(rec(5_000))
+
+    calls.length = 0
+    expect(() => r.clear('a', 1_000)).not.toThrow()
+    expect(calls).toEqual(['second'])
+  })
+
+  it('구독 해지 함수는 그 리스너만 더는 부르지 않는다', () => {
+    const r = new BlockRegistry()
+    const calls: unknown[] = []
+    const unsubscribe = r.onChange((e) => calls.push(e))
+    r.record('a', rec(1_000), 0)
+    expect(calls.length).toBe(1)
+    unsubscribe()
+    r.record('a', rec(2_000), 100)
+    expect(calls.length).toBe(1)
+  })
+})
