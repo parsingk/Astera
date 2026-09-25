@@ -46,7 +46,7 @@ import type { BlockRegistry } from '../core/rolling/blockRegistry'
 import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced, announcesAdopted } from './host/hostRollView'
 import { findHostHeldNative, nativeOfForwardedRekey } from './host/hostNativeGuard'
 import { applyAdoptRolling } from './host/adoptRolling'
-import { chatAdoptPlan, hostStartingDefers } from './chatAdopt'
+import { chatAdoptPlan, hostCarryOnIsOurs, hostStartingDefers } from './chatAdopt'
 import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute } from './host/worktreeRoute'
 import { createHostGitOps } from './host/hostGitOps'
@@ -6434,6 +6434,12 @@ export function registerIpc(
         // P5: a chat proc the Host is still starting (its handshake and carry-on) is left to it; the
         // `session-rolled` push, which comes only after the key is cleared, takes it back.
         deferProc: (e) => e.meta?.kind === 'chat' && hostStartingDefers(e.meta.restore, hostSpeaksChatTakeover(client.status())),
+        // Final review I1: the carry-on of a proc the Host rolled and could not type into (the app held
+        // it when the handshake ended) goes out now that this app is its writer, once, by P4's rule.
+        afterAttachProc: (e) => {
+          if (e.meta?.kind === 'chat' && hostCarryOnIsOurs(e.meta.restore, hostSpeaksChatTakeover(client.status())))
+            core.chat.sendCarryOn(e.meta.id)
+        },
         only,
         onlyProc
       })

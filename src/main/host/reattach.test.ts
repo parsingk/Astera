@@ -251,6 +251,25 @@ describe('reattachSessions — line processes', () => {
     expect(r.chats).toEqual(['c9'])
     expect(r.refused).toBe(0)
   })
+  // Final review I1: the app is a chat proc's writer once its proc-attach is out, so the carry-on the
+  // Host left goes after it, and only for an adopted proc.
+  it('calls afterAttachProc right after the proc-attach of an adopted chat proc, and for no other', async () => {
+    const order: string[] = []
+    const h = deps({
+      list: async () => [],
+      listProcs: async () => [
+        { id: 'p1', pid: 1, alive: true, meta: { kind: 'chat', id: 'c1', restore: {} } },
+        { id: 'p2', pid: 2, alive: true, meta: { kind: 'chat', id: 'c2', restore: { hostStarting: true } } },
+        { id: 'p3', pid: 3, alive: true, meta: { kind: 'chat', id: 'c3', restore: { unreadable: true } } }
+      ],
+      sendAttachProc: (id: string) => { order.push(`attach ${id}`) },
+      deferProc: (e: PtyEntry) => e.meta?.restore.hostStarting === true,
+      afterAttachProc: (e: PtyEntry) => { order.push(`after ${e.meta?.id}`) }
+    })
+    h.d.adopters.chat = (a: { restore: Record<string, unknown> }) => a.restore.unreadable !== true
+    await reattachSessions(h.d as never)
+    expect(order).toEqual(['attach p1', 'after c1'])
+  })
   it('onlyProc takes back that one line process and lists no pty', async () => {
     const list = vi.fn(async () => [entry()])
     const chat = vi.fn((_a: { id: string }) => true)

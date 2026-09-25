@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chatAdoptPlan } from './chatAdopt'
+import { chatAdoptPlan, hostCarryOnIsOurs } from './chatAdopt'
 
 const plan = (over: Partial<Parameters<typeof chatAdoptPlan>[0]> = {}) =>
   chatAdoptPlan({ restore: {}, hostSpeaksChatTakeover: true, rollAccounts: 2, adopting: false, appHoldsOld: () => false, rolledFrom: null, ...over })
@@ -40,6 +40,21 @@ describe('chatAdoptPlan (chat takeover, the app side)', () => {
   })
 })
 
+describe('hostCarryOnIsOurs (final review I1)', () => {
+  const carry = { rolledBy: 'host', carryOn: 'carry on', carrySent: false }
+  it('is true for a Host-rolled proc whose carry-on nobody sent, in front of a chat-takeover Host', () => {
+    expect(hostCarryOnIsOurs(carry, true)).toBe(true)
+  })
+  it.each([
+    ['an older Host', carry, false],
+    ['a proc this app rolled', { ...carry, rolledBy: undefined }, true],
+    ['a carry-on already sent', { ...carry, carrySent: true }, true],
+    ['no carry-on', { rolledBy: 'host' }, true]
+  ])('is false for %s', (_why, restore, speaks) => {
+    expect(hostCarryOnIsOurs(restore as Record<string, unknown>, speaks as boolean)).toBe(false)
+  })
+})
+
 
 // registerIpc cannot run without Electron, so its chat takeover wiring is guarded by its text (the style
 // of offlineRolls.test.ts). Fix round 1, I1: each of these lines, deleted, turns one of them red.
@@ -68,10 +83,16 @@ describe('ipc.ts wires the chat adopter (chat takeover Task 9)', () => {
       /deferProc: \(e\) => e\.meta\?\.kind === 'chat' && hostStartingDefers\(e\.meta\.restore, hostSpeaksChatTakeover\(client\.status\(\)\)\)/
     )
   })
+  // Final review I1. Mutation: drop the afterAttachProc line, or its sendCarryOn call.
+  it('sends the carry-on the Host left once the proc-attach is out', () => {
+    expect(src.slice(end, end + 1600)).toMatch(
+      /afterAttachProc: \(e\) => \{\s*if \(e\.meta\?\.kind === 'chat' && hostCarryOnIsOurs\(e\.meta\.restore, hostSpeaksChatTakeover\(client\.status\(\)\)\)\)\s*core\.chat\.sendCarryOn\(e\.meta\.id\)/
+    )
+  })
   it("takes back a chat roll's new proc through the sweep queue", () => {
     expect(src).toMatch(/else if \(procId && takeBackRolledProc\) await takeBackRolledProc\(procId\)/)
     expect(src).toMatch(/takeBackRolledProc = \(procId\) => takeSessionsBack\('the Host rolled a chat session', undefined, procId\)/)
-    expect(src.slice(end, end + 800)).toMatch(/only,\s*onlyProc\s*\}\)/)
+    expect(src.slice(end, end + 1600)).toMatch(/only,\s*onlyProc\s*\}\)/)
   })
   it("guards a history resume with the Host's chat proc notes (carry 2)", () => {
     expect(src).toMatch(/listProcs: hostSpeaksChatTakeover\(hostClient\?\.status\(\) \?\? \{ connected: false, features: \[\] \}\) \? hostProcList : null/)

@@ -140,6 +140,41 @@ interface LiveChatSession {
   /** Settles once `adapter.start` and the carry-on send after it have settled, whichever way. Never
    *  rejects: the Host waits on it before telling the app about a proc it spawned (P5). */
   started: Promise<void>
+  /** How many lines this manager's handle put on the proc: a write that returned (a refused one throws). */
+  writes: () => number
+  /** Final review I1: an adopted note's carry-on nobody sent yet, for `sendCarryOn`, once. */
+  carryOn: string | null
+}
+
+/** Counts the lines `proc` took, for the mark-then-count rule of a carry-on (host/hostChats.ts
+ *  carryOnAfterAdopt): only a write that returned counts. Everything else goes straight through, with the
+ *  two plain fields read and written live, as watchFirstLine does. */
+function countWrites(proc: ProcLike): { proc: ProcLike; writes: () => number } {
+  let n = 0
+  const counted: ProcLike = {
+    get pid() {
+      return proc.pid
+    },
+    set pid(v) {
+      proc.pid = v
+    },
+    get outlivesApp() {
+      return proc.outlivesApp
+    },
+    set outlivesApp(v) {
+      proc.outlivesApp = v
+    },
+    onLine: (cb) => proc.onLine(cb),
+    onExit: (cb) => proc.onExit(cb),
+    write: (line) => {
+      proc.write(line)
+      n += 1
+    },
+    kill: () => proc.kill(),
+    ...(proc.remember ? { remember: (patch: Record<string, unknown>) => proc.remember?.(patch) } : {}),
+    ...(proc.mayWrite ? { mayWrite: () => proc.mayWrite?.() ?? true } : {})
+  }
+  return { proc: counted, writes: () => n }
 }
 
 export class ChatSessionManager {
@@ -341,7 +376,8 @@ export class ChatSessionManager {
     const chosenModel = typeof r.chosenModel === 'string' ? r.chosenModel : null
     const unattended: UnattendedPermission = isUnattendedPermission(r.unattendedPermission) ? r.unattendedPermission : 'hold'
 
-    const adapter = this.makeAdapter(a.proc, { mode: 'adopt', threadId, rolloutPath, truncated: a.truncated, answered }, provider)
+    const counted = countWrites(a.proc)
+    const adapter = this.makeAdapter(counted.proc, { mode: 'adopt', threadId, rolloutPath, truncated: a.truncated, answered }, provider)
     // design F5 fix round 1 (Critical 2): `bypassedToolchain` is read back the same defensive way
     // every other note field on this method is — a note is whatever a Host wrote, possibly an older
     // build's that never had this key at all, and an absent key must read as `false`, never a guess.
@@ -349,13 +385,17 @@ export class ChatSessionManager {
     // running when this app found it, so the offer's own preconditions (§ its own doc) can never hold
     // for it either way — there is nothing here for the durable mark to interact with beyond staying
     // visible to someone reading this session's results later.
-    this.track(a.id, info, a.proc, adapter, chosenModel, {
+    this.track(a.id, info, counted.proc, adapter, chosenModel, {
       spawnAt: Date.now(),
       sawLine: () => true,
       retry: null,
       managerSignal: null,
       bypassed: r.bypassedToolchain === true,
-      unattended
+      unattended,
+      writes: counted.writes,
+      // P4: a carry-on the note says nobody sent, and not one the Host is still starting (its own start
+      // sends that one). `sendCarryOn` sends it once, when the caller is the writer.
+      carryOn: typeof r.carryOn === 'string' && r.carrySent === false && r.hostStarting !== true ? r.carryOn : null
     })
     // Adopt mode's start() resolves at once (see codexAdapter.ts's doStart) — bypass is meaningless
     // here (a running thread was not just started with a bypass flag) so a neutral false is passed.
@@ -529,6 +569,8 @@ export class ChatSessionManager {
       managerSignal: BypassSignal
       bypassed: boolean
       unattended?: UnattendedPermission
+      writes?: () => number
+      carryOn?: string | null
     }
   ): void {
     const off = adapter.on((e) => this.handleEvent(id, e))
@@ -548,7 +590,9 @@ export class ChatSessionManager {
       bypassed: retryState?.bypassed ?? false,
       unattended: retryState?.unattended ?? 'hold',
       // Replaced by `spawn` and `respawnWithBypass` with their own start chain right after this.
-      started: Promise.resolve()
+      started: Promise.resolve(),
+      writes: retryState?.writes ?? (() => 0),
+      carryOn: retryState?.carryOn ?? null
     })
   }
 
@@ -602,6 +646,39 @@ export class ChatSessionManager {
     if (!live) return false
     live.unattended = v
     live.proc.remember?.({ unattendedPermission: v })
+    return true
+  }
+
+  /** Final review I1: sends the carry-on an adopted note says nobody sent (`carryOn` with `carrySent:
+   *  false`, not `hostStarting`), for a caller that is now the proc's writer: the app, once its
+   *  proc-attach is out, for a proc the Host rolled and could not type into. The P4 rule, as the Host's
+   *  takeover applies it: marked sent before the write, and the mark taken back when no line reached the
+   *  proc during the send's synchronous part (both adapters write there), so the next writer still has it.
+   *  One shot per adoption: a second call sends nothing. True when a line went out. */
+  sendCarryOn(id: string): boolean {
+    const live = this.sessions.get(id)
+    if (!live || live.carryOn === null) return false
+    if (live.proc.mayWrite?.() === false) return false
+    const text = live.carryOn
+    live.carryOn = null
+    live.proc.remember?.({ carrySent: true })
+    const before = live.writes()
+    let sent: Promise<void>
+    try {
+      sent = live.adapter.send(text)
+    } catch (err) {
+      sent = Promise.reject(err)
+    }
+    const errOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+    if (live.writes() === before) {
+      live.proc.remember?.({ carrySent: false })
+      sent.then(
+        () => this.deps.log(`chat carry-on left for the next writer session=${id}: nothing reached the proc`),
+        (err: unknown) => this.deps.log(`chat carry-on left for the next writer session=${id}: ${errOf(err)}`)
+      )
+      return false
+    }
+    sent.catch((err: unknown) => this.deps.log(`chat carry-on failed after it was written session=${id}: ${errOf(err)}`))
     return true
   }
 

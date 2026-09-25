@@ -70,6 +70,10 @@ export interface ReattachDeps {
   /** A chat proc this sweep must leave alone for now: neither adopted nor killed, no proc-attach sent,
    *  and reported live (chat takeover P5: the Host is still in its handshake and carry-on). */
   deferProc?(e: PtyEntry): boolean
+  /** Runs right after the proc-attach of a chat proc this sweep adopted, when this app has become its
+   *  writer: the moment the carry-on a Host roll could not type goes out (final review I1). A throw is
+   *  logged and changes nothing about the adoption. */
+  afterAttachProc?(e: PtyEntry): void
 }
 
 export interface ReattachResult {
@@ -188,6 +192,11 @@ export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResu
         deps.sendAttachProc(e.id)
         adopted += 1
         chats.push(e.meta.id)
+        try {
+          deps.afterAttachProc?.(e)
+        } catch (err) {
+          deps.log(`proc ${e.id}: the step after taking it back failed: ${String(err)}`)
+        }
       } catch (err) {
         deps.log(`proc ${e.id} could not be taken back: ${String(err)}`)
         deps.killProc(e.id)

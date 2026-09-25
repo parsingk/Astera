@@ -1130,3 +1130,77 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
     expect(factory.mock.calls[0][2].env.ONLY_HERE).toBe('1')
   })
 })
+
+describe('ChatSessionManager.sendCarryOn — the app sends a carry-on the Host left (final review I1)', () => {
+  /** An adapter whose send writes one line to the proc, or none when `refuse` says so. */
+  const writingAdapter = (order: string[], refuse = false): NonNullable<ChatManagerDeps['createAdapter']> => (a) => {
+    a.proc.onLine(() => {})
+    return {
+      start: () => Promise.resolve(),
+      send: (text) => {
+        if (refuse) return Promise.reject(new Error('no active thread'))
+        a.proc.write(`turn ${text}`)
+        return Promise.resolve()
+      },
+      interrupt: () => Promise.resolve(), answer: () => Promise.resolve(), setModel: () => Promise.resolve(),
+      setPermissionMode: () => Promise.resolve(), listPermissionModes: () => Promise.resolve([]),
+      listModels: () => Promise.resolve([]), state: () => ({}) as ChatState, on: () => () => {}, kill: () => { order.push('kill') }
+    }
+  }
+  const carrying = (over: Record<string, unknown> = {}) => ({
+    accountId: 'acc-cl', cwd: 'D:/p', title: 't', provider: 'claude', threadId: 'th', unattendedPermission: 'hold',
+    rolledBy: 'host', carryOn: 'carry on', carrySent: false, ...over
+  })
+  const build = (order: string[], refuse = false) => {
+    const proc = new FakeProc()
+    proc.remember = (patch) => order.push(`note ${JSON.stringify(patch)}`)
+    const realWrite = proc.write.bind(proc)
+    proc.write = (line) => { order.push(`write ${line}`); realWrite(line) }
+    const logs: string[] = []
+    const manager = new ChatSessionManager({ factory: () => new FakeProc(), descriptors: makeDescriptors('win32'), homeDir: path.join('home', 'tester'), platform: 'win32', version: '1.0.0', log: (m) => logs.push(m), createAdapter: writingAdapter(order, refuse) })
+    return { proc, manager, logs }
+  }
+
+  it('sends an adopted note\'s unsent carry-on exactly once, marked sent before the write', async () => {
+    const order: string[] = []
+    const { proc, manager } = build(order)
+    manager.adopt({ id: 'c1', proc, restore: carrying(), truncated: false })
+    expect(manager.sendCarryOn('c1')).toBe(true)
+    expect(manager.sendCarryOn('c1')).toBe(false)
+    await Promise.resolve()
+    expect(order).toEqual(['note {"carrySent":true}', 'write turn carry on'])
+  })
+
+  it('takes the mark back when nothing reached the proc, for the next writer', async () => {
+    const order: string[] = []
+    const { proc, manager, logs } = build(order, true)
+    manager.adopt({ id: 'c1', proc, restore: carrying(), truncated: false })
+    expect(manager.sendCarryOn('c1')).toBe(false)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(order).toEqual(['note {"carrySent":true}', 'note {"carrySent":false}'])
+    expect(logs.join(' ')).toMatch(/carry-on/)
+  })
+
+  it.each([
+    ['already sent', { carrySent: true }],
+    ['still being started by the Host', { hostStarting: true }],
+    ['carrying none', { carryOn: undefined }]
+  ])('sends nothing for a note %s', (_why, over) => {
+    const order: string[] = []
+    const { proc, manager } = build(order)
+    manager.adopt({ id: 'c1', proc, restore: carrying(over), truncated: false })
+    expect(manager.sendCarryOn('c1')).toBe(false)
+    expect(order).toEqual([])
+  })
+
+  it('sends nothing through a proc that may not write, and nothing for an unknown id', () => {
+    const order: string[] = []
+    const { proc, manager } = build(order)
+    Object.assign(proc, { mayWrite: () => false })
+    manager.adopt({ id: 'c1', proc, restore: carrying(), truncated: false })
+    expect(manager.sendCarryOn('c1')).toBe(false)
+    expect(manager.sendCarryOn('nope')).toBe(false)
+    expect(order).toEqual([])
+  })
+})

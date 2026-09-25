@@ -28,6 +28,14 @@ export function hostStartingDefers(restore: Record<string, unknown>, hostSpeaksC
   return hostSpeaksChatTakeover && restore.hostStarting === true
 }
 
+/** Final review I1: whether this app, having taken the proc back, sends the carry-on its note says nobody
+ *  sent. Only for a proc the Host rolled (`rolledBy: 'host'`), in front of a Host that takes chats over:
+ *  that is the proc whose carry-on the Host leaves for the writer. One this app spawned is its own start's
+ *  to send, and a Host takeover sends it when the app is gone. */
+export function hostCarryOnIsOurs(restore: Record<string, unknown>, hostSpeaksChatTakeover: boolean): boolean {
+  return hostSpeaksChatTakeover && restore.rolledBy === 'host' && typeof restore.carryOn === 'string' && restore.carrySent === false
+}
+
 export function chatAdoptPlan(a: {
   restore: Record<string, unknown>
   hostSpeaksChatTakeover: boolean
