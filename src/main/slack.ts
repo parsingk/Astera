@@ -752,7 +752,10 @@ export class SlackNotifier {
   onRollState(ev: RollStateEvent): void {
     const record = this.records.get(ev.sessionId)
     if (!record) return
-    if (ev.state === 'waiting' && ev.nextRetryAt) {
+    // D7 (S6 Task 5): a waiting with reattach is a restored wait, re-published for a session taken back
+    // after a restart. Its limit was announced by its first owner, or it is in the offline summary
+    // (announceOffline); announcing it here too was the double "limit reached".
+    if (ev.state === 'waiting' && ev.nextRetryAt && !ev.reattach) {
       const weekly = ev.scope === 'weekly'
       const at = Date.parse(ev.nextRetryAt)
       if (!Number.isFinite(at)) return
@@ -774,6 +777,18 @@ export class SlackNotifier {
       // instead of repeating the same attempt — this notification is the only path to a person in this design.
       void this.send(record, t(this.deps.lang(), 'slack.stalled'))
     }
+  }
+
+  /** What the Host rolled for this session while the app was closed (S6 D6), as one line in its thread.
+   *  True when it went out (or the same line went out moments ago), false when there is nowhere to post
+   *  it: no record for the session (Slack is off for it) or no transport. Rejects when the post itself
+   *  failed, so the caller leaves the journal un-acked and the next attach tries again. */
+  async announceOffline(sessionId: string, text: string): Promise<boolean> {
+    const record = this.records.get(sessionId)
+    if (!record || !this.transport) return false
+    const r = await this.send(record, text)
+    if (r === 'failed') throw new Error(`slack: the offline summary for ${sessionId} could not be posted`)
+    return r !== 'none'
   }
 
   /** Rolling tab swap — re-keys the record to the new liveId. A scheduled exit notification (the false positive from a rolling kill) is cancelled. */
@@ -1059,9 +1074,11 @@ export class SlackNotifier {
 
   /** The common send path: prefix, plus 10-minute dedup, plus transport.post (webhook or bot).
    *  Failures are only logged. */
-  private async send(record: SlackRecord, text: string): Promise<void> {
+  /** 'sent', 'dup' (the same text went out within DEDUP_MS), 'failed' (the post threw; logged) or
+   *  'none' (no transport). Every caller but announceOffline ignores it. */
+  private async send(record: SlackRecord, text: string): Promise<'sent' | 'dup' | 'failed' | 'none'> {
     const transport = this.transport
-    if (!transport) return
+    if (!transport) return 'none'
     const label = this.deps.getAccount(record.info.accountId)?.label
     const raw = `[${record.info.title}${label ? ` · ${label}` : ''}] ${text}`
     // The final truncation. With the display caps opened all the way to Slack's limit, a combination can
@@ -1070,7 +1087,7 @@ export class SlackNotifier {
     const full = raw.length > SLACK_TEXT_MAX ? `${raw.slice(0, SLACK_TEXT_MAX - 1)}…` : raw
     const now = this.now()
     const last = record.lastSent.get(full)
-    if (last !== undefined && now - last < DEDUP_MS) return
+    if (last !== undefined && now - last < DEDUP_MS) return 'dup'
     for (const [k, t] of record.lastSent) if (now - t >= DEDUP_MS) record.lastSent.delete(k) // expiry cleanup
     record.lastSent.set(full, now) // suppresses concurrent duplicate calls (check→set runs synchronously before the await — no race)
     // A null thread means "reset, or never there in the first place" — a reopen is attempted against the
@@ -1081,10 +1098,12 @@ export class SlackNotifier {
     try {
       const ts = await transport.post(full, threadTs)
       if (ts) this.rememberOwnPost(ts) // second line of loop defence
+      return 'sent'
     } catch (err) {
       record.lastSent.delete(full) // failure lifts the suppression: a recurrence may be sent again (this is not a retry)
       const reason = err instanceof SlackPostError ? err.reason : 'unknown'
       this.deps.log(`slack send failed ${reason} session=${record.info.id}`)
+      return 'failed'
     }
   }
 

@@ -18,6 +18,7 @@ interface HarnessNotifier {
   onHookEvent: (sessionId: string, payload: unknown) => void
   onRollState: (ev: RollStateEvent) => void
   setActiveSession: (sessionId: string | null) => void
+  announceOffline: (count: number, sessionId?: string) => void
 }
 
 interface Harness {
@@ -50,7 +51,8 @@ function harness(flags: Partial<DesktopNotifySettings> = {}, sessions = ['s1', '
     // the whole method went away with the per-event read it existed for).
     onHookEvent: (sessionId, payload) => attention.onHookEvent(sessionId, payload),
     onRollState: (ev) => real.onRollState(ev),
-    setActiveSession: (sessionId) => real.setActiveSession(sessionId)
+    setActiveSession: (sessionId) => real.setActiveSession(sessionId),
+    announceOffline: (count, sessionId) => real.announceOffline(count, sessionId)
   }
   return { notifier, shown, focused }
 }
@@ -358,5 +360,36 @@ describe('DesktopNotifier — what the notification carries', () => {
     const h = harness({ accountSwitched: true })
     h.notifier.onRollState(roll({ state: 'switching' }))
     expect(h.shown).toHaveLength(0)
+  })
+})
+
+describe('DesktopNotifier — the restored wait and the offline notice (S6 Task 5)', () => {
+  // D7: a waiting with reattach is the restored wait of a session taken back after a restart.
+  it('does not fire limitWaiting for a waiting that carries reattach', () => {
+    const h = harness()
+    h.notifier.onRollState(roll({ reattach: true }))
+    expect(h.shown).toEqual([])
+  })
+
+  it('shows one aggregated notice, even when focused on that session', () => {
+    const h = harness()
+    h.focused.value = true
+    h.notifier.setActiveSession('s1')
+    h.notifier.announceOffline(3, 's1')
+    expect(h.shown).toEqual([
+      { event: 'limitWaiting', sessionId: 's1', title: 'Astera', body: 'While Astera was closed, 3 session(s) hit a usage limit' }
+    ])
+  })
+
+  it('shows nothing for zero, or with both limit events off', () => {
+    const h = harness()
+    h.notifier.announceOffline(0)
+    expect(h.shown).toEqual([])
+    const off = harness({ limitWaiting: false, accountSwitched: false })
+    off.notifier.announceOffline(2)
+    expect(off.shown).toEqual([])
+    const switchOnly = harness({ limitWaiting: false, accountSwitched: true })
+    switchOnly.notifier.announceOffline(2)
+    expect(switchOnly.shown.length).toBe(1)
   })
 })

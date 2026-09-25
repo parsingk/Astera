@@ -1219,12 +1219,23 @@ export const ko = {
   'slack.chat.turnFailed': '⚠️ 턴 실패 — {message}',
   'slack.limitNoResume': '⛔ 한도 도달 — 자동 재개 없음',
   'slack.limitNoResumeAt': '⛔ 한도 도달 — 자동 재개 없음 (리셋 {at})',
+  // main/host/rollJournalSummary.ts — what the Host rolled while the app was closed, one line per session
+  // (S6 D6). {events} is the parts below joined by commas, in the order they happened.
+  'slack.offline.summary': '🕘 Astera 가 닫혀 있는 동안: {events}',
+  'slack.offline.limit': '{time} 한도 도달',
+  'slack.offline.limitUntil': '{time} 한도 도달 ({at} 재개 예정)',
+  'slack.offline.switched': '{label} 로 전환',
+  'slack.offline.switchedAnon': '계정 전환',
+  'slack.offline.resumed': '{time} 재개',
+  'slack.offline.stalled': '{time} 멈춤, 확인 필요',
   // Desktop notification bodies. They follow the app language, the same way Slack's already do. The
   // title is the session's own title, so the body says only what happened.
   'notify.inputNeeded': '사용자 확인이 필요합니다',
   'notify.limitWaiting': '한도에 걸려 재개를 기다립니다',
   'notify.accountSwitched': '계정을 {label} 로 전환했습니다',
   'notify.fallbackTitle': 'Astera',
+  // The one desktop notice for everything the Host rolled while the app was closed (S6 D6).
+  'notify.offlineRolls': 'Astera 가 닫혀 있는 동안 세션 {n}개가 한도에 걸렸습니다',
   // JobsView.tsx, App.tsx — the read-only Jobs sidebar (오케스트레이션 Run/Task 목록)
   // 'Jobs'는 번역하지 않는다 — '작업'은 이미 Task를 가리키는 말이라, 뷰 이름까지 '작업'이라 하면
   // 그 안의 Task 행들과 이름이 겹친다. catalog.test.ts의 LITERALS가 네 카탈로그 모두에서 그대로

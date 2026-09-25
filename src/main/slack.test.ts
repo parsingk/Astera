@@ -2339,3 +2339,66 @@ describe('SlackNotifier chat events', () => {
     expect(waits).toBe(0)
   })
 })
+
+// S6 Task 5, D7: a `waiting` with reattach is the restored wait of a session adopted after a restart.
+// Its limit was announced by its first owner, or goes into the offline summary (D6); a second "⏸ 한도 도달"
+// here was the double notice.
+describe('SlackNotifier — the restored wait and the offline summary (S6 Task 5)', () => {
+  it('does not announce a waiting that carries reattach', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    h.notifier.onRollState({
+      sessionId: 's-1', state: 'waiting', nextRetryAt: '2026-07-23T06:30:00.000Z', scope: 'session', reattach: true
+    })
+    await flush()
+    expect(h.sent).toEqual([])
+  })
+
+  it('announceOffline posts one message in the session thread, and nothing for a session it does not hold', async () => {
+    const h = threadSetup()
+    h.notifier.register(info())
+    h.notifier.register(info({ id: 's-2', title: 'other' }))
+    await flush()
+    const roots = h.posts.length
+    expect(await h.notifier.announceOffline('s-1', 'while closed: a')).toBe(true)
+    expect(await h.notifier.announceOffline('s-2', 'while closed: b')).toBe(true)
+    expect(await h.notifier.announceOffline('nobody', 'while closed: c')).toBe(false)
+    const after = h.posts.slice(roots)
+    expect(after).toEqual([
+      { text: '[myproj · work1] while closed: a', threadTs: 'ts-1' },
+      { text: '[other · work1] while closed: b', threadTs: 'ts-2' }
+    ])
+  })
+
+  it('announceOffline rejects when the post fails, so the journal stays un-acked', async () => {
+    const notifier = new SlackNotifier({
+      getAccount: () => account,
+      readStatusPayload: async () => null,
+      lang: () => 'ko',
+      log: () => undefined,
+      readFileTail: async () => null,
+      now: () => 1_000_000
+    })
+    notifier.setTransport({
+      supportsThreads: false,
+      post: async () => {
+        throw new SlackPostError('network')
+      }
+    })
+    notifier.register(info())
+    await expect(notifier.announceOffline('s-1', 'x')).rejects.toThrow()
+  })
+
+  it('announceOffline says false with no transport at all', async () => {
+    const notifier = new SlackNotifier({
+      getAccount: () => account,
+      readStatusPayload: async () => null,
+      lang: () => 'ko',
+      log: () => undefined,
+      readFileTail: async () => null,
+      now: () => 1_000_000
+    })
+    notifier.register(info())
+    expect(await notifier.announceOffline('s-1', 'x')).toBe(false)
+  })
+})

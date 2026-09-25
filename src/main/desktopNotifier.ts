@@ -103,7 +103,9 @@ export class DesktopNotifier {
    *  stopped", and the app itself — one click away, since clicking activates that tab — is where the
    *  schedule is. Slack's message carries the time because Slack is read where the app is not. */
   onRollState(ev: RollStateEvent): void {
-    if (ev.state === 'waiting') this.fire('limitWaiting', ev.sessionId)
+    // D7 (S6 Task 5): a waiting with reattach is a restored wait (a session taken back after a
+    // restart), not a new limit; its first owner announced it, or it is in the offline notice below.
+    if (ev.state === 'waiting' && !ev.reattach) this.fire('limitWaiting', ev.sessionId)
     // reattach is the re-publish that reattaches the banner to the new sessionId after a respawn — it
     // is not a new switch, and slack.ts excludes it at this same point for this same reason. A missing
     // accountLabel is excluded too, matching the identical guard in SlackNotifier's own onRollState:
@@ -111,6 +113,22 @@ export class DesktopNotifier {
     // every language.
     else if (ev.state === 'switching' && ev.accountLabel && !ev.reattach)
       this.fire('accountSwitched', ev.sessionId, ev.accountLabel)
+  }
+
+  /** The one notice for everything the Host rolled while the app was closed (S6 D6): `count` sessions,
+   *  live or not. Shown when either limit event is on, and not held back by focus: nobody at this
+   *  window saw any of it. `sessionId` is the tab a click opens (the first live one), or none. */
+  announceOffline(count: number, sessionId?: string): void {
+    if (!(count > 0)) return
+    const flags = this.deps.settings.getDesktopNotify()
+    if (!flags.limitWaiting && !flags.accountSwitched) return
+    const lang = this.deps.lang()
+    this.deps.show({
+      event: 'limitWaiting',
+      sessionId: sessionId ?? '',
+      title: t(lang, 'notify.fallbackTitle'),
+      body: t(lang, 'notify.offlineRolls', { n: count })
+    })
   }
 
   private fire(event: DesktopNotifyEvent, sessionId: string, accountLabel?: string): void {
