@@ -33,6 +33,28 @@ describe('createHostRollView (S6 §3.4)', () => {
     view.pushed({ t: 'session-rolled', oldSessionId: 'c1', info: { id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' }, ptyId: null, procId: 'p2' })
     await vi.waitFor(() => expect(order).toEqual(['adopt null p2', 'forward session:rolled']))
   })
+  // Fix round 1, M1: the adopter re-pointed the tab itself (the sweep beat the push); the push that
+  // follows adopts and settles as usual, and does not forward the same rekey a second time.
+  it('forwards an adopter re-point once, and a later push for that roll does not forward it again', async () => {
+    const order: string[] = []
+    const view = createHostRollView({
+      adopt: async (ptyId, procId) => { order.push(`adopt ${ptyId} ${procId}`) },
+      forward: (channel, p) => order.push(`forward ${channel} ${(p as { oldSessionId: string }).oldSessionId}`),
+      log: () => {}
+    })
+    const info = { id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running' as const, title: 't', kind: 'chat' as const }
+    view.repointed('c1', info)
+    expect(order).toEqual(['forward session:rolled c1'])
+    expect(view.knows('c2')).toBe(true)
+    view.pushed({ t: 'session-rolled', oldSessionId: 'c1', info, ptyId: null, procId: 'p2' })
+    const delivered: string[] = []
+    view.hold({ sessionId: 'c1', exitCode: 1 }, () => delivered.push('exit c1'))
+    await vi.waitFor(() => expect(delivered).toEqual(['exit c1']))
+    expect(order).toEqual(['forward session:rolled c1', 'adopt null p2'])
+    // A second roll of the same new id is a new roll, forwarded again.
+    view.pushed({ t: 'session-rolled', oldSessionId: 'c1', info, ptyId: null, procId: 'p2' })
+    await vi.waitFor(() => expect(order.filter((x) => x.startsWith('forward')).length).toBe(2))
+  })
   it('keeps the last lasting state per session, clears it on none, and follows a rekey', async () => {
     const v = createHostRollView({ adopt: async () => {}, forward: () => {}, log: () => {} })
     v.pushed({ t: 'roll-state', event: { sessionId: 's1', state: 'waiting', nextRetryAt: 'x' } })

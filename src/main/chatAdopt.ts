@@ -14,6 +14,12 @@ export interface ChatAdoptPlan {
    *  `decide`: applyAdoptRolling over the account's coordinator, with `hostRolls` the chat-takeover
    *  feature. */
   rolling: 'host' | 'decide'
+  /** Fix round 1, M1: the old session id whose tab the adopter re-points (hostRollView.repointed) rather
+   *  than announcing this one. A Host-marked note names the session this proc replaced (`rolledFrom`);
+   *  when the app holds that session and no push is adopting this one, the sweep's proc list beat the
+   *  `session-rolled` push, or no push is coming (the app was disconnected through the roll). Null
+   *  otherwise. */
+  repoint: string | null
 }
 
 /** P5's rule on its own, for reattach's `deferProc` (ipc.ts): a note saying `hostStarting: true`, in front
@@ -29,9 +35,15 @@ export function chatAdoptPlan(a: {
   adopting: boolean
   appHoldsOld: (sessionId: string) => boolean
   rolledFrom: string | null
+  /** Whether the app already had a record of this session before this adoption (a reconnect taking it
+   *  back again): its tab was re-pointed or created back then. */
+  appHeldNew?: boolean
 }): ChatAdoptPlan {
   const defer = hostStartingDefers(a.restore, a.hostSpeaksChatTakeover)
   const rolling = a.hostSpeaksChatTakeover && a.restore.rolledBy === 'host' ? 'host' : 'decide'
-  const announce = a.rolledFrom === null || !a.appHoldsOld(a.rolledFrom)
-  return { defer, announce, rolling }
+  const noted = a.restore.rolledBy === 'host' && typeof a.restore.rolledFrom === 'string' ? a.restore.rolledFrom : null
+  const repoint =
+    noted !== null && !a.adopting && a.rolledFrom === null && a.appHeldNew !== true && a.appHoldsOld(noted) ? noted : null
+  const announce = repoint === null && (a.rolledFrom === null || !a.appHoldsOld(a.rolledFrom))
+  return { defer, announce, rolling, repoint }
 }

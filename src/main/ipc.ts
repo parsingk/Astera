@@ -6292,6 +6292,8 @@ export function registerIpc(
           // session's. A note without the pair is left to that scan, which is safe here for the same
           // reason it is there — no mapping means the session had written no rollout to miss.
           chat: (a) => {
+            // Asked before the adoption replaces it: a record from before (a reconnect) had its tab.
+            const appHeldNew = core.chat.has(a.id)
             const info = core.chat.adopt(a)
             if (!info) return false
             // Chat takeover (Task 9): who rolls it (R8) and whether its tab is announced. `defer` is
@@ -6303,7 +6305,8 @@ export function registerIpc(
               rollAccounts: info.rollAccountIds?.length ?? 0,
               adopting: hostRollView.adopting(info.id),
               appHoldsOld: (old) => core.chat.has(old),
-              rolledFrom: hostRollView.rolledFrom(info.id)
+              rolledFrom: hostRollView.rolledFrom(info.id),
+              appHeldNew
             })
             const rolloutPath = typeof a.restore.rolloutPath === 'string' ? a.restore.rolloutPath : undefined
             const threadId = typeof a.restore.threadId === 'string' ? a.restore.threadId : undefined
@@ -6421,6 +6424,9 @@ export function registerIpc(
                 hostLog(`host: session:created emit failed chat=${info.id}: ${String(err)}`)
               }
             }
+            // Fix round 1, M1: the new half of a Host roll found before its push (or with no push
+            // coming) re-points the old tab now, through the view, which then forwards no second rekey.
+            else if (plan.repoint !== null) hostRollView.repointed(plan.repoint, info)
             return true
           }
         },

@@ -11,7 +11,7 @@
 // on a short poll, or until settleMs, after which it goes anyway and the log says so.
 import type { HostMessage } from '../../core/host/protocol'
 import type { OrchState } from '../../core/orchestration/state'
-import type { RollStateEvent } from '../../core/types'
+import type { RollStateEvent, SessionInfo } from '../../core/types'
 
 type Exit = { sessionId: string; exitCode: number }
 
@@ -40,6 +40,11 @@ export interface HostRollView {
   /** The old session id of a forwarded rekey whose new session was not adopted (fix round 1, 3): its
    *  Work Unit fork was made but no note took the forkSeen. Handed out once, to the adopter. */
   takePendingFork(sessionId: string): string | null
+  /** Fix round 1, M1: the chat adopter found the new half of a Host roll before its push (the sweep's
+   *  proc list landed first, or no push is coming) and re-points the old tab now, forwarding the rekey
+   *  as the push would. A push for the same roll that follows adopts and settles as usual and does not
+   *  forward it again. Never throws. */
+  repointed(oldSessionId: string, info: SessionInfo): void
 }
 
 export function createHostRollView(d: {
@@ -66,6 +71,8 @@ export function createHostRollView(d: {
   const pendingFork = new Map<string, string>()
   /** Old session id → the check that releases its exits once the mirror moved (I2). */
   const settling = new Map<string, () => void>()
+  /** New session ids whose rekey the adopter already forwarded (M1), by the old id it named. */
+  const repointedBy = new Map<string, string>()
   const safe = (what: string, fn: () => void): void => {
     try {
       fn()
@@ -136,18 +143,31 @@ export function createHostRollView(d: {
           const was = last.get(m.oldSessionId)
           last.delete(m.oldSessionId)
           if (was) last.set(m.info.id, { ...was, sessionId: m.info.id })
-          safe('forwarding a rekey', () =>
-            d.forward(
-              'session:rolled',
-              { oldSessionId: m.oldSessionId, info: m.info, ...(m.dest ? { dest: m.dest } : {}) },
-              { orchestration: false }
+          // M1: the adopter re-pointed this roll's tab already; the same rekey twice would be a second
+          // Slack notice and a second fork. Once: a later roll onto this id is its own.
+          if (repointedBy.get(m.info.id) === m.oldSessionId) repointedBy.delete(m.info.id)
+          else
+            safe('forwarding a rekey', () =>
+              d.forward(
+                'session:rolled',
+                { oldSessionId: m.oldSessionId, info: m.info, ...(m.dest ? { dest: m.dest } : {}) },
+                { orchestration: false }
+              )
             )
-          )
           inFlight.delete(m.info.id)
           // The fan-out's forkSeen found no session to write into: the adopter writes it later.
           if (d.isAdopted && !d.isAdopted(m.info.id)) pendingFork.set(m.info.id, m.oldSessionId)
           settle(m.oldSessionId)
         })
+    },
+    repointed: (oldId, info) => {
+      known.add(oldId)
+      known.add(info.id)
+      repointedBy.set(info.id, oldId)
+      const was = last.get(oldId)
+      last.delete(oldId)
+      if (was) last.set(info.id, { ...was, sessionId: info.id })
+      safe('forwarding a re-point', () => d.forward('session:rolled', { oldSessionId: oldId, info }, { orchestration: false }))
     },
     stateOf: (id) => last.get(id) ?? null,
     knows: (id) => known.has(id),
