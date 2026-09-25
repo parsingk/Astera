@@ -208,6 +208,14 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     const a = noteOf(id).answered
     return Array.isArray(a) ? a.filter((v): v is string => typeof v === 'string') : []
   }
+  /** The session's open requests less the ids the note lists answered (final review M2): the app answered
+   *  them and their echo has not reached this adapter yet. The one filter prompts() applies too. */
+  const openOf = (id: string): ChatRequest[] => {
+    const open = manager.pendingOf(id)
+    if (open.length === 0) return open
+    const answered = new Set(answeredOf(id))
+    return answered.size === 0 ? open : open.filter((r) => !answered.has(r.id))
+  }
 
   /** P4 (Review Focus 3): a roll's carry-on the note says was never sent is sent once, by the writer only,
    *  and marked sent before the write, so a later writer change never types it twice. A second adopt of
@@ -379,8 +387,8 @@ export function createHostChats(d: HostChatsDeps): HostChats {
         .catch((err: unknown) => d.log(`chat ${id}: the app's chatSend failed: ${errText(err)}`))
     },
     send,
-    requests: (id) => manager.pendingOf(id),
-    hasOpenRequest: (id) => manager.pendingOf(id).length > 0,
+    requests: (id) => openOf(id),
+    hasOpenRequest: (id) => openOf(id).length > 0,
     prompts(sid) {
       const out: ChatPrompt[] = []
       for (const s of manager.list()) {

@@ -95,6 +95,20 @@ describe('createHostChats — the writer rule (spec §3.2)', () => {
     expect(r.chats.prompts()).toEqual([])
   })
 
+  // Final review M2: the same filter for requests() and hasOpenRequest(), for an answer the app wrote
+  // into the note after the adopt, before its echo reached the Host's reader adapter.
+  it('leaves an answered prompt out of requests() and hasOpenRequest() as prompts() does', () => {
+    const id = (JSON.parse(F.CAN_USE_TOOL_WRITE) as { request_id: string }).request_id
+    const r = rig()
+    r.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n`)
+    r.chats.adopt(r.entry())
+    expect(r.chats.hasOpenRequest('c1')).toBe(true)
+    r.registry.note('p1', { answered: [id] })
+    expect(r.chats.requests('c1')).toEqual([])
+    expect(r.chats.hasOpenRequest('c1')).toBe(false)
+    expect(r.chats.prompts()).toEqual([])
+  })
+
   it('answers an open approval, 409-shaped for a closed one and for a question', async () => {
     const r = rig()
     r.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n${F.CAN_USE_TOOL_ASK}\n`)
