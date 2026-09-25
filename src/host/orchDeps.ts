@@ -280,6 +280,10 @@ const HOST_SESSIONS = ['listSessions', 'readSession', 'sendSession', 'readChat']
  *   rare race is accepted.
  * - Host route: `sendChat` calls the mark right before it writes, after its own checks (no Codex
  *   thread yet, an ended process).
+ *
+ * Chat takeover P10: a session the Host itself writes to (it holds an adapter and no app holds the proc)
+ * goes through that adapter before either route, app attached or not (final review M5), the same order
+ * `chatPending` reads it in.
  */
 const HOST_WHEN_ABSENT = ['chatSend'] as const
 
@@ -761,16 +765,12 @@ export function hostOrchDeps(a: {
   const hostWhenAbsent = (name: (typeof HOST_WHEN_ABSENT)[number]) =>
     (id: string, text: string): Promise<unknown> =>
       a.sessions.serial(id, async () => {
-        if (a.hasApp()) {
-          const pending = await askPending(id)
-          if (pending === undefined) return { sent: false, reason: 'not-held' }
-          if (pending !== null) return { sent: false, pending }
-          return forward(name, true)(id, text)
-        }
         // P10: a session the Host writes to goes through the Host adapter, so a turn never lands around
         // a card the adapter holds and the adapter's turn state moves with the write. An open card
         // refuses before anything is marked, as the app route does, and the mark is made only once a
         // line of the turn reached the proc (fix round 1: a send refused before the wire keeps no receipt).
+        // Asked before the app route (final review M5), as hostPending is: with an app attached, a
+        // session the app does not write (deferred under P5, or never adopted) is still the Host's.
         const chats = a.chats
         if (chats && chats.isWriter(id)) {
           const card = chats.requests(id)[0]
@@ -786,8 +786,14 @@ export function hostOrchDeps(a: {
             a.onAppRequired(name, refused.message, {})
             throw refused
           }
-          a.log(`${name} sent through the Host's own adapter (no app attached)`)
+          a.log(`${name} sent through the Host's own adapter (it is the session's writer)`)
           return { sent: true }
+        }
+        if (a.hasApp()) {
+          const pending = await askPending(id)
+          if (pending === undefined) return { sent: false, reason: 'not-held' }
+          if (pending !== null) return { sent: false, pending }
+          return forward(name, true)(id, text)
         }
         try {
           await a.sessions.sendChat(id, text, () => {

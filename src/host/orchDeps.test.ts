@@ -1164,6 +1164,21 @@ describe('hostOrchDeps — HOST_CHATS (chat takeover §3.5)', () => {
     expect(await deps.chatSend?.('c1', 'x')).toEqual({ sent: false, pending: { kind: 'approval', summary: 'Bash: ls' } })
     expect(c.send).not.toHaveBeenCalled()
   })
+  // Final review M5: with an app attached, a session the Host writes to (deferred under P5, or never
+  // adopted by the app) is sent the way chatPending reads it: by the Host adapter, never forwarded.
+  it('M5: with an app attached, a Host-writer session is sent through the Host adapter, and its card refuses', async () => {
+    const act = vi.fn().mockResolvedValue({ sent: false, reason: 'not-held' })
+    const c = chats(['c1'])
+    c.send.mockImplementation(async (_id: string, _text: string, mark?: () => void) => { mark?.() })
+    const deps = hostOrchDeps(base({ act, chats: c }))
+    expect(await deps.chatSend?.('c1', 'hi')).toEqual({ sent: true })
+    expect(c.send).toHaveBeenCalledWith('c1', 'hi', expect.any(Function))
+    expect(act).not.toHaveBeenCalled()
+    const card = { id: 'r1', kind: 'approval' as const, about: { tool: 'Bash', lines: ['ls'] }, decisions: ['accept' as const] }
+    const carded = hostOrchDeps(base({ act, chats: { ...chats(['c1']), requests: () => [card] } }))
+    expect(await carded.chatSend?.('c1', 'x')).toEqual({ sent: false, pending: { kind: 'approval', summary: 'Bash: ls' } })
+    expect(act).not.toHaveBeenCalled()
+  })
   it('P10: a Host-writer session with no card is sent through the Host adapter, not the raw write', async () => {
     const onEffect = vi.fn()
     const sendChat = vi.fn(async () => {})
