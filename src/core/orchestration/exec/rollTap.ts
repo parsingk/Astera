@@ -293,7 +293,23 @@ export class OrchRollTap {
       // dropped, the entry keeps its resetsAt with no resumedAt, and `runs wait` (limitedUntil)
       // ends `limited` again and again while the worker works. A reattach 'switching' comes after a
       // roll, whose onRolled already moved or closed the episode, so it stays dropped.
-      if (e.state === 'waiting' && this.lastStopOpen(e.sessionId)) this.stopped.add(e.sessionId)
+      if (e.state !== 'waiting') return
+      if (this.lastStopOpen(e.sessionId)) {
+        this.stopped.add(e.sessionId)
+        return
+      }
+      // **One exception, for a coordinator only** (Task 1 fix round 1). An app from before coordinator
+      // stops were recorded owned this waiting coordinator, and the Host took it over: nobody recorded
+      // the stop, and every post from here on is a reattach, so the rule above would leave `runs wait`
+      // blind to it for the whole wait. A restored wait with a reset is a stop, so record it and enter
+      // the episode. A worker keeps the rule above exactly: its stop is history (`resumes`), and an
+      // entry made here would count a stop its first owner may already have closed.
+      if (e.nextRetryAt !== undefined && this.coordinatorWithoutStop(e.sessionId)) {
+        this.stopped.add(e.sessionId)
+        void this.recordCoordinator(e.sessionId, e.nextRetryAt).catch((err) =>
+          this.deps.log?.(`coordinator stop record failed session=${e.sessionId}: ${String(err)}`)
+        )
+      }
       return
     }
     if (this.stopped.has(e.sessionId)) {
@@ -399,6 +415,13 @@ export class OrchRollTap {
     const r = clearCoordinatorStop(this.deps.getState(), { sessionId })
     if (!r.ok || r.value === null) return
     await this.deps.setState(r.state)
+  }
+
+  /** Whether this session is a Run's coordinator (no Dispatch) with no stop on record. */
+  private coordinatorWithoutStop(sessionId: string): boolean {
+    const state = this.deps.getState()
+    if (state.dispatches.some((d) => d.sessionId === sessionId && !d.endedAt)) return false
+    return state.runs.some((r) => r.coordinatorSessionId === sessionId && r.coordinatorStop === undefined)
   }
 
   /** Whether this session is a Run's coordinator (no Dispatch) with a stop on record. */

@@ -787,14 +787,41 @@ describe('a coordinator’s stop (S6 limits D1)', () => {
     expect(stopOf(deps)).toBeUndefined()
   })
 
-  it("a restored 'waiting' with no stop on record records none, and its 'nudged' commits nothing", async () => {
+  // Fix round 1, item 1: the upgrade case. An older app owned the waiting coordinator and never recorded
+  // its stop; the Host took it over, and every post it makes from then on is a reattach.
+  it("a restored 'waiting' with a reset and no stop on record records the coordinator's stop, and its 'nudged' clears it", async () => {
+    const deps = coordinated()
+    const tap = new OrchRollTap(deps)
+    tap.onRollState(rollState({ sessionId: 'coord1', state: 'waiting', nextRetryAt: RESET, reattach: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopOf(deps)).toEqual({ since: NOW, resetsAt: RESET })
+    // A second restored post is the same episode: no new stop, `since` unchanged.
+    tap.onRollState(rollState({ sessionId: 'coord1', state: 'waiting', nextRetryAt: RESET, reattach: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopOf(deps)).toEqual({ since: NOW, resetsAt: RESET })
+    tap.onRollState(rollState({ sessionId: 'coord1', state: 'nudged' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopOf(deps)).toBeUndefined()
+  })
+
+  it("a restored 'waiting' with no reset and no stop on record records none, and its 'nudged' commits nothing", async () => {
     const deps = coordinated()
     const before = deps.state()
     const tap = new OrchRollTap(deps)
-    tap.onRollState(rollState({ sessionId: 'coord1', state: 'waiting', nextRetryAt: RESET, reattach: true }))
+    tap.onRollState(rollState({ sessionId: 'coord1', state: 'waiting', reattach: true }))
     tap.onRollState(rollState({ sessionId: 'coord1', state: 'nudged' }))
     await vi.advanceTimersByTimeAsync(0)
     expect(deps.state()).toBe(before)
+  })
+
+  it("a restored 'waiting' of a worker with no open stop still records nothing (S6 final review I1)", async () => {
+    const { s } = seed()
+    const deps = makeDeps(s)
+    const tap = new OrchRollTap(deps)
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting', nextRetryAt: RESET, reattach: true }))
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'nudged' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deps.state()).toBe(s)
   })
 
   it('a user tab session’s stop and its end commit nothing', async () => {
