@@ -546,6 +546,14 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
     // 것이 앞선 것의 자식 Run 을 덮는다 — run-create 가 await 뒤에 getState() 를 다시 읽는 것과
     // 같은 위험이고, 그쪽은 한 명령 안의 await 를 다루지만 이쪽은 명령 사이의 await 다.
     for (const runId of fire) {
+      // **발화마다 운전자를 다시 묻는다**(fix round 1, M1). 앞 발화의 run-spawn 은 코디네이터 기동까지
+      // 기다리므로 그 사이 운전이 다른 프로세스로 넘어갈 수 있다. 넘어간 뒤의 발화는 버린다: 새 운전자의
+      // 무장이 그 시각을 이미 지났을 수 있고, 두 프로세스가 같은 시각을 함께 발화하는 것보다 한 번 잃는
+      // 편이 낫다(놓친 발화는 버린다는 규칙과 같은 쪽이다).
+      if (!c.mayStart()) {
+        log(`scheduled fire dropped job=${runId} — this process no longer drives`)
+        continue
+      }
       // 템플릿 하나의 실패가 나머지를 막아서는 안 된다 — 무장은 이미 다음 시각으로 넘어갔으므로,
       // 여기서 멈추면 뒤의 템플릿들은 이번 tick 에서 조용히 건너뛰어진다(재시도가 아니라 누락이다).
       try {

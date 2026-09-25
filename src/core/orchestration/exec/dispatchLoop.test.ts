@@ -602,3 +602,25 @@ describe('a fire while the Job’s latest Run still runs', () => {
     expect(skips(h)).toHaveLength(1)
   })
 })
+
+// Task 1 fix round 1, M1: the drive can move between two fires of one tick.
+describe('orchFireTick asks mayStart between fires', () => {
+  it('fires no further template once the drive has moved', async () => {
+    const h = rig({ schedule: { every: 'minute' } })
+    const s = h.state()
+    const second = { ...s.jobs.find((j) => j.id === TEMPLATE_ID)!, id: 'job_sched2' }
+    h.setState({ ...s, jobs: [...s.jobs, second] })
+    await h.loop.fireTick() // arms both
+    h.clock += 61_000
+    let allowed = true
+    const handle = h.ctx.handle
+    h.ctx.handle = async (cmd, args) => {
+      const r = await handle(cmd, args)
+      if (cmd === 'run-spawn') allowed = false // the drive moves after the first fire
+      return r
+    }
+    h.ctx.mayStart = () => allowed
+    await h.loop.fireTick()
+    expect(h.handled().filter((c) => c === 'run-spawn')).toHaveLength(1)
+  })
+})
