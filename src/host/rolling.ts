@@ -279,7 +279,10 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
       if (providerOf(account) === 'codex') codex.register(info, undefined, false, false)
       else claude.register(info)
     },
-    restore: (info, snap) => (snap.provider === 'codex' ? codex.restore(info, snap) : claude.restore(info, snap)),
+    // `report` (carry C-a): the Host never heard this chain's native id nor wrote its roll config — the
+    // app did, into its own state — so the restore tells onNativeSession and writes hostRollConfigPath.
+    restore: (info, snap) =>
+      snap.provider === 'codex' ? codex.restore(info, snap, { report: true }) : claude.restore(info, snap, { report: true }),
     attachFresh: (s, c, p) => codex.attachFresh(s, c, p),
     has: (id) => claude.has(id) || codex.has(id),
     unregister: (id) => {

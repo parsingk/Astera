@@ -552,8 +552,15 @@ export class RollingCoordinator {
    *  picks up at the byte the writer had reached, so a limit record already acted on is not read twice.
    *
    *  The snapshot is taken as given — the caller parses it with parseRollSnapshot, which refuses
-   *  anything partial, and registers from zero when that answers null. */
-  restore(info: SessionInfo, snap: RollSnapshot): boolean {
+   *  anything partial, and registers from zero when that answers null.
+   *
+   *  **`report` is the Host's takeover (Task 12, carry C-a).** A process that restores a chain it never
+   *  ran has neither heard its native session id nor written its roll config — the app that wrote the
+   *  snapshot did both into its own state. With `report`, a known session id is told to onNativeSession
+   *  and the config is persisted under it, as applyMeta does on first learning the id. Without it (an app
+   *  instance taking over a gone one's, which shares that state) nothing is reported, as before. A
+   *  snapshot with no session id yet reports nothing here: applyMeta does both when the statusline lands. */
+  restore(info: SessionInfo, snap: RollSnapshot, opts: { report?: boolean } = {}): boolean {
     const ids = info.rollAccountIds ?? []
     if (this.chains.has(info.id)) {
       this.deps.log(`chain restore refused — a chain already exists session=${info.id}`)
@@ -575,6 +582,10 @@ export class RollingCoordinator {
     if (c) {
       chain.claudeSessionId = c.sessionId
       chain.transcriptPath = c.transcriptPath
+      if (opts.report && c.sessionId) {
+        this.deps.persistConfig?.(c.sessionId, { accountIds: chain.accountIds, prompt: chain.prompt })
+        this.deps.onNativeSession?.(chain.liveId, c.sessionId)
+      }
       if (c.transcriptPath)
         chain.limitTail =
           c.tailOffset !== null

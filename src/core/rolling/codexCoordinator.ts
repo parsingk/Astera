@@ -525,8 +525,13 @@ export class CodexRollingCoordinator {
    *  no 'adopted' banner. The attach branch would publish one, and attach at the file's end besides; the
    *  snapshot knows better on both counts: the byte the writer had reached and the state it last read
    *  there, so the limit verdicts carry on as if the tail had never stopped. The unmapped register writes
-   *  a from-zero snapshot a moment before the real one, in the same turn; the last write wins. */
-  restore(info: SessionInfo, snap: RollSnapshot): boolean {
+   *  a from-zero snapshot a moment before the real one, in the same turn; the last write wins.
+   *
+   *  **`report` is the Host's takeover (Task 12, carry C-a)** — the claude side's option, same contract: a
+   *  thread id the snapshot names is told to onNativeSession and the roll config is persisted under it, as
+   *  the attach and locate paths do. A snapshot still waiting for its rollout reports nothing here; the
+   *  locate below does both when it finds the file. */
+  restore(info: SessionInfo, snap: RollSnapshot, opts: { report?: boolean } = {}): boolean {
     const ids = info.rollAccountIds ?? []
     if (this.chains.has(info.id)) {
       this.deps.log(`codex chain restore refused — a chain already exists session=${info.id}`)
@@ -548,6 +553,10 @@ export class CodexRollingCoordinator {
       chain.codexSessionId = c.sessionId
       chain.rolloutPath = c.rolloutPath
       chain.state = c.state
+      if (opts.report && c.sessionId) {
+        this.deps.persistConfig?.(c.sessionId, { accountIds: chain.accountIds, prompt: chain.prompt })
+        this.deps.onNativeSession?.(chain.liveId, c.sessionId)
+      }
       if (c.rolloutPath)
         chain.tail =
           c.tailOffset !== null

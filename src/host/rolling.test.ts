@@ -4,6 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { PtyRegistry, type RegistryPty } from './registry'
 import { createHostRolling, type HostRollEvent, type RollSpawnOpts } from './rolling'
+import { hostRollConfigPath, readRollConfigKey } from '../core/rolling/config'
+import type { RollSnapshot } from '../core/rolling/snapshot'
 import type { Account, RateLimitPeak, SessionInfo } from '../core/types'
 
 const LIMIT = 'Claude usage limit ' + 'reached ∙ resets 3am' // constraint 14: never one literal
@@ -52,6 +54,7 @@ type Over = {
   statusLinePayload?: (id: string) => Promise<unknown>
   resumeText?: () => Promise<string | null>
   isLoggedIn?: () => Promise<boolean>
+  onNativeSession?: (sessionId: string, nativeSessionId: string) => void
 }
 const rig = async (over: Over = {}) => {
   // Preflight C8: a profile per rig, removed after the test (the Host writes host/rolling.json there).
@@ -87,7 +90,7 @@ const rig = async (over: Over = {}) => {
     mayAct: over.mayAct ?? (() => true),
     tap: { onRolled: async (old, info) => { rolled.push(`${old}->${info.id}`) }, onRollState: () => {} },
     resumeText: over.resumeText ?? (async () => null),
-    onNativeSession: () => {},
+    onNativeSession: over.onNativeSession ?? (() => {}),
     onEvent: (e) => events.push(e),
     lang: () => 'en',
     readAccounts: async () => [...accounts, ...codexAccounts],
@@ -99,7 +102,7 @@ const rig = async (over: Over = {}) => {
     logCodex: () => {},
     watchHooks: false
   })
-  return { registry, ptys, open, payloads, spawned, events, rolled, rolling }
+  return { profileDir, registry, ptys, open, payloads, spawned, events, rolled, rolling }
 }
 
 const info = (id: string, accountId = 'a1'): SessionInfo => ({ id, accountId, cwd: os.tmpdir(), status: 'running', title: 't', rollAccountIds: ['a1', 'a2'] })
@@ -247,6 +250,49 @@ describe('createHostRolling (S6 Task 9)', () => {
     expect(r.rolling.has('s1')).toBe(true)
     r.ptys.get('p1')!.exit(0)
     expect(r.rolling.has('s1')).toBe(false)
+    r.rolling.dispose()
+  })
+})
+
+describe('HostRolling.restore wiring (S6 Task 12, carry C-a)', () => {
+  const base = (provider: 'claude' | 'codex', ids: string[]): Omit<RollSnapshot, 'claude' | 'codex'> => ({
+    v: 1, provider, accountIds: ids, currentIndex: 0, streak: 0, recovery: ids.map(() => null), blocks: {},
+    wait: null, inPlaceUsed: false, rolledAt: null, awaitingPrompt: false, writtenAt: Date.now()
+  })
+
+  it('a taken-over claude chain reports its native session and writes its roll config into the Host file', async () => {
+    vi.useRealTimers() // the config write is real file I/O, awaited below
+    const natives: string[] = []
+    const r = await rig({ onNativeSession: (s, n) => natives.push(`${s}=${n}`) })
+    await r.rolling.refresh()
+    r.open('p1', 's1', { accountId: 'a1', cwd: os.tmpdir(), title: 't', rollAccountIds: ['a1', 'a2'] })
+    const snap: RollSnapshot = {
+      ...base('claude', ['a1', 'a2']),
+      claude: { sessionId: 'cs-1', transcriptPath: null, tailOffset: null, tailSince: null }
+    }
+    expect(r.rolling.restore(info('s1'), snap)).toBe(true)
+    expect(natives).toEqual(['s1=cs-1'])
+    await vi.waitFor(async () => {
+      expect(await readRollConfigKey(hostRollConfigPath(r.profileDir), 'cs-1')).toMatchObject({ accountIds: ['a1', 'a2'] })
+    })
+    r.rolling.dispose()
+  })
+
+  it('a taken-over codex chain mapped from its snapshot does the same under its thread id', async () => {
+    vi.useRealTimers()
+    const natives: string[] = []
+    const r = await rig({ onNativeSession: (s, n) => natives.push(`${s}=${n}`) })
+    await r.rolling.refresh()
+    r.open('p1', 's1', { accountId: 'c1', cwd: os.tmpdir(), title: 't', rollAccountIds: ['c1', 'c2'] })
+    const snap: RollSnapshot = {
+      ...base('codex', ['c1', 'c2']),
+      codex: { sessionId: 'thread-1', rolloutPath: path.join(os.tmpdir(), 'astera-hr-none.jsonl'), tailOffset: 0, state: null }
+    }
+    expect(r.rolling.restore({ ...info('s1', 'c1'), rollAccountIds: ['c1', 'c2'] }, snap)).toBe(true)
+    expect(natives).toEqual(['s1=thread-1'])
+    await vi.waitFor(async () => {
+      expect(await readRollConfigKey(hostRollConfigPath(r.profileDir), 'thread-1')).toMatchObject({ accountIds: ['c1', 'c2'] })
+    })
     r.rolling.dispose()
   })
 })
