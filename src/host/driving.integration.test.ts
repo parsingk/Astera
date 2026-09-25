@@ -750,7 +750,7 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     expect(leave.indexOf('wiring?.dispose()')).toBeLessThan(leave.indexOf('server.stopAccepting()'))
   })
 
-  it('announces dispatch exactly when it announces spawn, and index.ts builds the driving through composeHostDriving (R7, N11)', () => {
+  it('announces dispatch and rolling exactly when it announces spawn, and index.ts builds the driving and the rolling through their compositions (R7, N11, S6 R17)', () => {
     const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
     expect(src).toMatch(/features:\s*hostFeatures\(\{\s*spawns:\s*spawner !== null\s*\}\)/)
     expect(src).toMatch(/composeHostDriving\(/)
@@ -762,5 +762,12 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     const serverAt = src.indexOf('startHostServer({')
     const serverCall = src.slice(serverAt, src.indexOf('ADDRESS_TAKEN', serverAt))
     expect(serverCall).toMatch(/\.\.\.\(wiring\?\.serverHooks \?\? \{\}\)/)
+    // The rolling's three (Task 16 review): the S6 rig builds its own orch and server and never runs
+    // index.ts, so without these a Host that never rolls, never hears an app leave, or keeps its rolling
+    // timers after retire starts would leave every rig test green.
+    expect(orchCall).toMatch(/\.\.\.\(rollingWiring\?\.orchHooks \?\? \{\}\)/)
+    expect(serverCall).toMatch(/rollingWiring\?\.onAppsChanged\(\)/)
+    const leave = src.slice(src.indexOf('const leave = '), src.indexOf('const hostVersion'))
+    expect(leave).toMatch(/rollingWiring\?\.dispose\(\)/)
   })
 })
