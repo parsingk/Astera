@@ -105,7 +105,7 @@ import {
   reportedDispatchIdsOf
 } from '../core/orchestration/pendingReports'
 import { ExitsBeforeTap, OrchRollTap } from '../core/orchestration/exec/rollTap'
-import { coordinatorReleaseOf, PendingCoordinatorReleases } from './orchestration/releaseDefer'
+import { coordinatorReleaseOf, PendingCoordinatorReleases } from '../core/orchestration/exec/releaseDefer'
 import type { TaskValidator } from '../core/orchestration/exec/validator'
 import { createTaskValidation } from '../core/orchestration/exec/validation'
 import {

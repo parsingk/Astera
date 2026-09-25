@@ -1,16 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { coordinatorReleaseOf, deferCoordinatorRelease, PendingCoordinatorReleases } from './releaseDefer'
-import { EXIT_DEFER_MS } from '../../core/orchestration/exec/exitOwner'
-import { OrchRollTap } from '../../core/orchestration/exec/rollTap'
-import type { OrchServerDeps } from '../../core/orchestration/command'
-import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
+import { EXIT_DEFER_MS } from './exitOwner'
+import { OrchRollTap } from './rollTap'
+import type { OrchServerDeps } from '../command'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../sessions/pty'
 import {
   attachCoordinator,
   createJob,
   emptyState,
   startJobRun,
   type OrchState
-} from '../../core/orchestration/state'
+} from '../state'
 
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())

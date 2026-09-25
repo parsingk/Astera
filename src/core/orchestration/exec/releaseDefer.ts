@@ -1,13 +1,16 @@
-// The app half of S6 R14: a coordinator's slot is released only after the same roll window every other
-// exit subscriber waits (EXIT_DEFER_MS), so a roll's rekey of the slot lands first.
-import { EXIT_DEFER_MS } from '../../core/orchestration/exec/exitOwner'
-import { detachCoordinator, type OrchState } from '../../core/orchestration/state'
-import type { JobRun } from '../../core/orchestration/types'
-import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
+// S6 R14: a coordinator's slot is released only after the same roll window every other exit subscriber
+// waits (EXIT_DEFER_MS), so a roll's rekey of the slot lands first. In core since Task 11, because both
+// processes release by one rule: the app defers here, and the Host's exit handler (host/orch.ts
+// `sessionExited`) is itself the deferred callback of host/exits.ts, so it applies the rule directly.
+import { EXIT_DEFER_MS } from './exitOwner'
+import { detachCoordinator, type OrchState } from '../state'
+import type { JobRun } from '../types'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../sessions/pty'
 
 /** What an exit does to the coordinator slot: the Run whose slot named this session, and the state
  *  with that slot emptied, or null when it keeps it. `releaseCoordinator` (ipc.ts) commits it; its
- *  comment has the why of the lost-sight rule. One function, so the tests read the rule ipc runs. */
+ *  comment has the why of the lost-sight rule. One function, so the tests read the rule ipc runs, and
+ *  the Host's `sessionExited` runs it too. */
 export function coordinatorReleaseOf(
   st: OrchState,
   sessionId: string,
