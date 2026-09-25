@@ -316,7 +316,7 @@ export function liftRequestId(
  * caller pays is one `randomUUID()`, 36 bytes on the wire, and — only if the command acted — one
  * bounded entry in a map that nothing reads.
  *
- * `randomUUID` rather than this repo's `a<8 hex>-<n>` convention (`chat/adapterCore.ts`) because
+ * `randomUUID` rather than this repo's `a<8 hex>-<n>` convention (`core/chat/adapterCore.ts`) because
  * there is no counter here to carry: one CLI process asks one thing and exits.
  */
 export const mintRequestId = (): string => randomUUID()

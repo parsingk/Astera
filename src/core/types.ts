@@ -772,7 +772,7 @@ export interface CoreEvents {
   /** A session's waiting tool call changed (main/pendingPrompt.ts's `subscribe`): captured, replaced, or
    *  cleared (`prompt: null`). Not gated on an open conversation, like 'conversation:attention'. */
   'conversation:pendingPrompt': { sessionId: string; prompt: PendingToolPrompt | null }
-  /** A chat session's adapter reported something (main/chat/manager.ts's `subscribe`). Not gated on an
+  /** A chat session's adapter reported something (core/chat/manager.ts's `subscribe`). Not gated on an
    *  open conversation, like conversation:attention. */
   'chat:event': { sessionId: string; event: ChatEvent }
 }

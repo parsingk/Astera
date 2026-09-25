@@ -120,4 +120,16 @@ describe('the Host import fence (constraint 10)', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  // Chat takeover Task 1 (spec §3.1): the adapters the Host runs live in core, inside the fence.
+  it('the chat adapters live in core/chat and are inside the fence', () => {
+    const moved = ['manager.ts', 'adapterCore.ts', 'claudeAdapter.ts', 'codexAdapter.ts'].map((f) =>
+      path.join(srcRoot, 'core', 'chat', f)
+    )
+    for (const f of moved) expect(existsSync(f), f).toBe(true)
+    expect(existsSync(path.join(srcRoot, 'main', 'chat', 'manager.ts'))).toBe(false)
+    // nodeProcFactory stays with the app: it is the no-Host fallback.
+    expect(existsSync(path.join(srcRoot, 'main', 'chat', 'nodeProcFactory.ts'))).toBe(true)
+    expect(fenceViolations(srcRoot, moved)).toEqual([])
+  })
 })

@@ -48,7 +48,7 @@ import { cliEnvFor } from '../../core/sessions/cliEnv'
 import { buildCodexAppServerCommand } from '../../core/sessions/commands'
 import type { ChatEvent, ChatRequest } from '../../core/chat/types'
 import type { Account } from '../../core/types'
-import { createCodexAdapter } from './codexAdapter'
+import { createCodexAdapter } from '../../core/chat/codexAdapter'
 import { nodeProcFactory } from './nodeProcFactory'
 
 const LIVE = process.env.ASTERA_LIVE_CODEX === '1'

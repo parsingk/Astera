@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createClaudeAdapter } from './claudeAdapter'
-import * as F from '../../core/chat/claudeFixtures'
-import type { ProcLike } from '../../core/sessions/proc'
-import type { ChatEvent } from '../../core/chat/types'
-import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
+import * as F from './claudeFixtures'
+import type { ProcLike } from '../sessions/proc'
+import type { ChatEvent } from './types'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 
 function fakeProc(): ProcLike & { written: string[]; feed(line: string): void; exit(code: number): void; exitWith(code: number, stderrTail?: string): void; notes: Record<string, unknown>[]; outlivesApp?: boolean } {
   let onLine: (l: string) => void = () => {}

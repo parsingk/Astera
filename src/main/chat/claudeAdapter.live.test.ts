@@ -43,7 +43,7 @@ import { buildClaudeChatCommand } from '../../core/sessions/commands'
 import type { ChatEvent, ChatRequest } from '../../core/chat/types'
 import type { ProcLike } from '../../core/sessions/proc'
 import type { Account } from '../../core/types'
-import { createClaudeAdapter } from './claudeAdapter'
+import { createClaudeAdapter } from '../../core/chat/claudeAdapter'
 import { nodeProcFactory } from './nodeProcFactory'
 
 const LIVE = process.env.ASTERA_LIVE_CLAUDE === '1'

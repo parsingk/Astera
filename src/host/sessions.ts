@@ -8,7 +8,7 @@
 //
 // **Which notes are sessions.** Four kinds reach the Host (core/host/protocol.ts `PtyMeta`):
 // - `session` — an agent CLI in a pty (core/sessions/manager.ts). Listed, as `terminal`.
-// - `chat` — a chat session's line process, in the other registry (main/chat/manager.ts). Listed.
+// - `chat` — a chat session's line process, in the other registry (core/chat/manager.ts). Listed.
 // - `terminal` — a plain shell tab (main/terminalManager.ts): no account, no agent. Not listed.
 // - `run` — a run configuration's process (main/runManager.ts), a build or a server. Not listed.
 //

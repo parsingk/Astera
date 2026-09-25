@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createAdapterCore, isRequestError, type AdapterCore, type AdapterMode, type RequestError } from './adapterCore'
-import type { ProcLike } from '../../core/sessions/proc'
-import type { ChatEvent } from '../../core/chat/types'
-import type { DecodedRequest } from '../../core/chat/codexProtocol'
+import type { ProcLike } from '../sessions/proc'
+import type { ChatEvent } from './types'
+import type { DecodedRequest } from './codexProtocol'
 
 // The same fake the Codex adapter's test uses, minus the parts only a protocol needs: the core never
 // reads a line and never registers for one — its owner (an adapter) does, and calls onExit() here.

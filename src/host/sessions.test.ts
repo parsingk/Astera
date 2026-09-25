@@ -92,7 +92,7 @@ const harness = (size: { cols: number; rows: number } = { cols: 80, rows: 24 }, 
   })
   const shell = open('pty-b', { kind: 'terminal', id: 'trm-1', restore: { projectPath: 'D:/repo' } })
   open('pty-c', { kind: 'run', id: 'run-1', restore: { projectPath: 'D:/repo', command: 'npm test' } })
-  // A chat session is a line process, in the other registry (main/chat/manager.ts).
+  // A chat session is a line process, in the other registry (core/chat/manager.ts).
   const openChat = (procId: string) =>
     procs.open({
       id: procId,
@@ -439,7 +439,7 @@ describe('registrySessions — send', () => {
 
 /**
  * **A chat session: the conversation from the file the agent CLI writes, and a turn in the app's own
- * bytes** (CLI phase D4). The line process is the one the app spawned (main/chat/manager.ts), and its
+ * bytes** (CLI phase D4). The line process is the one the app spawned (core/chat/manager.ts), and its
  * note carries what the Host needs: the provider, the account, the thread and, for Codex, the rollout.
  */
 describe('registrySessions — chat', () => {

@@ -9,20 +9,21 @@
 // and this manager's job is only to spawn/adopt that process, hold one adapter per session, keep
 // SessionInfo in step with what the adapter reports, and fan the adapter's events out to whoever is
 // watching (main/ipc.ts's chat:event bridge, in Task 6).
+// Lives in core/chat since the chat takeover (Task 1), so the Host runs the same adapters the app does.
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import type { Account, ScheduleConfig, SessionInfo } from '../../core/types'
-import type { Provider } from '../../core/providers/meta'
-import { providerOf } from '../../core/providers/meta'
-import { descriptorOf, type ProviderDescriptor } from '../../core/providers/descriptor'
-import type { ProcFactory, ProcLike } from '../../core/sessions/proc'
-import { cliEnvFor } from '../../core/sessions/cliEnv'
-import { buildCodexAppServerCommand, buildClaudeChatCommand } from '../../core/sessions/commands'
-import type { PtyMeta } from '../../core/host/protocol'
-import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState, PermissionMode, PermissionModeChoice } from '../../core/chat/types'
-import type { ModelDescriptor } from '../../core/models/types'
-import { BYPASS_ENV, looksLikeRefusal, watchFirstLine, type BypassSignal } from '../../core/sessions/retryBypass'
-import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
+import type { Account, ScheduleConfig, SessionInfo } from '../types'
+import type { Provider } from '../providers/meta'
+import { providerOf } from '../providers/meta'
+import { descriptorOf, type ProviderDescriptor } from '../providers/descriptor'
+import type { ProcFactory, ProcLike } from '../sessions/proc'
+import { cliEnvFor } from '../sessions/cliEnv'
+import { buildCodexAppServerCommand, buildClaudeChatCommand } from '../sessions/commands'
+import type { PtyMeta } from '../host/protocol'
+import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState, PermissionMode, PermissionModeChoice } from './types'
+import type { ModelDescriptor } from '../models/types'
+import { BYPASS_ENV, looksLikeRefusal, watchFirstLine, type BypassSignal } from '../sessions/retryBypass'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { createCodexAdapter, type AdapterMode } from './codexAdapter'
 import { createClaudeAdapter } from './claudeAdapter'
 

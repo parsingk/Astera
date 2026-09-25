@@ -4,16 +4,17 @@
 // that is not app-server's own wire (the ChatState and its coalesced emission, the client requests
 // waiting for a reply, the queue of open server requests, exit) lives in ./adapterCore.ts, which the
 // Claude adapter shares; read that file for why those pieces are shaped the way they are.
-import type { ProcLike } from '../../core/sessions/proc'
-import type { ChatAdapter, ChatAnswer, PermissionModeChoice } from '../../core/chat/types'
-import type { ModelDescriptor } from '../../core/models/types'
-import type { CodexFrame, FileChange, ProtocolEffect } from '../../core/chat/codexProtocol'
+// Lives in core/chat since the chat takeover (Task 1), so the Host runs the same adapters the app does.
+import type { ProcLike } from '../sessions/proc'
+import type { ChatAdapter, ChatAnswer, PermissionModeChoice } from './types'
+import type { ModelDescriptor } from '../models/types'
+import type { CodexFrame, FileChange, ProtocolEffect } from './codexProtocol'
 import {
   decodeFrame, encodeRequest, encodeNotification, encodeError, encodeAnswer, UNSUPPORTED_REQUEST,
   initializeParams, threadStartParams, threadResumeParams, threadOf, planEffortOf, modelsOf,
   permissionModesOf,
   turnStartParams, decodeServerRequest, effectsOf
-} from '../../core/chat/codexProtocol'
+} from './codexProtocol'
 import { createAdapterCore, safe, type AdapterMode } from './adapterCore'
 
 export type { AdapterMode }

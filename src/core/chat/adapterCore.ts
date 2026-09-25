@@ -13,11 +13,12 @@
 //    `queueMicrotask` flush that compares the merged state with what was last emitted and emits only
 //    what changed (by value, not by reference — a reset back to an already-emitted value emits
 //    nothing). `ready`, `error` and `exit` bypass this — they always emit at once.
+// Lives in core/chat since the chat takeover (Task 1), so the Host runs the same adapters the app does.
 import { randomUUID } from 'node:crypto'
-import type { ProcLike } from '../../core/sessions/proc'
-import type { ChatState, ChatEvent, ChatRequest, ChatModel } from '../../core/chat/types'
-import type { DecodedRequest, JsonRpcId } from '../../core/chat/codexProtocol'
-import type { Provider } from '../../core/providers/meta'
+import type { ProcLike } from '../sessions/proc'
+import type { ChatState, ChatEvent, ChatRequest, ChatModel } from './types'
+import type { DecodedRequest, JsonRpcId } from './codexProtocol'
+import type { Provider } from '../providers/meta'
 
 export type AdapterMode =
   | { mode: 'fresh' }

@@ -6696,7 +6696,7 @@ export function registerIpc(
     }
   })
 
-  // The chat pane (main/chat/manager.ts). The counterpart of the conversation block above for a
+  // The chat pane (core/chat/manager.ts). The counterpart of the conversation block above for a
   // session whose kind is 'chat': where a terminal session is driven by writing bytes into its pty,
   // this one is driven by these seven calls, and everything it says back arrives on 'chat:event'.
   //

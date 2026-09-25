@@ -17,16 +17,17 @@
 //  - A `can_use_tool` is settled on the wire only by the CLI's own `tool_result` echo, which lags our
 //    answer by the tool's run time. A request answered inside that window has no echo behind it in the
 //    replay, so it is skipped by id instead (`answered` below, ruling S3-7).
-import type { ProcLike } from '../../core/sessions/proc'
-import type { ChatAdapter, ChatAnswer, PermissionMode } from '../../core/chat/types'
-import { isPermissionMode } from '../../core/chat/types'
-import type { ModelDescriptor } from '../../core/models/types'
-import type { ClaudeFrame } from '../../core/chat/claudeProtocol'
-import type { ProtocolEffect } from '../../core/chat/codexProtocol'
+// Lives in core/chat since the chat takeover (Task 1), so the Host runs the same adapters the app does.
+import type { ProcLike } from '../sessions/proc'
+import type { ChatAdapter, ChatAnswer, PermissionMode } from './types'
+import { isPermissionMode } from './types'
+import type { ModelDescriptor } from '../models/types'
+import type { ClaudeFrame } from './claudeProtocol'
+import type { ProtocolEffect } from './codexProtocol'
 import {
   decodeClaudeFrame, decodeClaudeRequest, encodeClaudeAnswer, encodeControlError, encodeControlRequest,
   encodeUserTurn, claudeEffectsOf, claudeModelsOf
-} from '../../core/chat/claudeProtocol'
+} from './claudeProtocol'
 import { createAdapterCore, isRequestError, requestError, safe, type AdapterMode } from './adapterCore'
 
 export interface ClaudeAdapterDeps {
