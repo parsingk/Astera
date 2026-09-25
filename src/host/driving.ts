@@ -10,7 +10,7 @@
 // - **an app attaching or leaving** (`appsChanged`, N1);
 // - **the 15-second tick** (`tick`), which picks up what nobody committed (a Task made ready behind
 //   the Host's back, the migration marker an app wrote), nudges sleeping coordinators, fires
-//   schedules (only with an app attached, D2), and sweeps stale spec files (R22).
+//   schedules while it drives (R5, app or no app), and sweeps stale spec files (R22).
 //
 // **Who drives is computed, never held** (`driverOf`, §4.3): an attached app that keeps dispatch
 // drives; otherwise the F62 marker decides. `last` is the value the last computation left, starts
@@ -386,11 +386,16 @@ export function createHostDriving(d: {
         await pass()
         await loop.nudge()
       }
-      // **D2 and R17.** Schedules fire only while an app is attached, and only from the process that
-      // drives; `fireTick` does not ask `mayStart` itself (Task 8 m6), so it is asked here, after the
-      // awaits above. Otherwise the arming is dropped, so the first tick that may fire again only arms
-      // — a time that passed while this Host did not fire is not fired late.
-      if (mayStart() && d.server.hasApp()) await loop.fireTick()
+      // **R5 and R17.** Schedules fire from the process that drives (`driverOf`), whether or not an app
+      // is attached: a fired Run starts the way `jobs run` starts one (U1), and the Host does both
+      // halves of that headless, a coordinator through its spawner and a placement through this loop.
+      // It once fired only with an app attached (D2); with the app closed a schedule then fired nothing
+      // at all, since the app does not fire in front of a Host that announced dispatch. The app's timer
+      // fires only when this Host does not drive (appTimerTick), so the two never both fire.
+      // `fireTick` does not ask `mayStart` itself (Task 8 m6), so it is asked here, after the awaits
+      // above. Otherwise the arming is dropped, so the first tick that may fire again only arms: a time
+      // that passed while this Host did not fire is not fired late.
+      if (mayStart()) await loop.fireTick()
       else loop.forgetArming()
       // Final review I1: the restart Gate for the Tasks armed earlier. **Then armed again on every
       // tick that may start work with no app attached** (S4+S5 tidy): a tick that found the Host not

@@ -75,8 +75,13 @@ interface RigOpts {
   openRepairWithoutSpec?: boolean
   /** A dispatched Task whose latest Dispatch ended with no outcome and no closedBy, in a Run with no coordinator. */
   lostDispatch?: boolean
-  /** A Job with a one-minute schedule. */
+  /** A Job with a one-minute schedule, written as every scheduled Job on disk is: no autoDispatch,
+   *  no pendingStart (R2). */
   scheduledJob?: boolean
+  /** That Job has one definition Task, with an account, which each fire copies into its Run. */
+  scheduledTask?: boolean
+  /** That Job's coordinator account. */
+  scheduledCoordinator?: string
   /** A file in orch/specs that nothing names. */
   staleSpec?: boolean
   /** What checks.lang() reads, when it differs from langNow's first value. */
@@ -97,8 +102,20 @@ const childWorktrees = (): string[] => [path.join(dir, 'wt-child-1'), path.join(
 
 function fixture(o: RigOpts): OrchState {
   const jobs: Job[] = [{ id: 'job_1', objective: 'o', cwd: dir, createdAt: NOW, concurrency: 1, autoDispatch: true }]
-  if (o.scheduledJob) jobs.push({ id: 'job_sched', objective: 'every minute', cwd: dir, createdAt: NOW, schedule: { kind: 'interval', minutes: 1 } })
+  if (o.scheduledJob)
+    jobs.push({
+      id: 'job_sched',
+      objective: 'every minute',
+      cwd: dir,
+      createdAt: NOW,
+      schedule: { kind: 'interval', minutes: 1 },
+      ...(o.scheduledCoordinator ? { coordinatorAccountId: o.scheduledCoordinator } : {})
+    })
   const tasks: Task[] = []
+  if (o.scheduledTask) {
+    const { runId: _none, ...def } = task({ id: 'tsk_def', jobId: 'job_sched', status: 'pending' })
+    tasks.push(def as Task)
+  }
   for (let i = 0; i < (o.readyTasks ?? 0); i++) tasks.push(task({ id: `tsk_${i}` }))
   const dispatches: Dispatch[] = []
   if (o.lostDispatch) {
@@ -314,6 +331,7 @@ async function rig(o: RigOpts = {}) {
   return {
     orch,
     driving,
+    local,
     server,
     spawner,
     logs,
@@ -558,19 +576,82 @@ describe('createHostDriving', () => {
     await h.settle()
     expect(h.taskStatus()).toBe('dispatched')
   })
-  it('fires schedules only on a tick with an app attached, and only arms on the first such tick (D2, R17)', async () => {
+  // R5 (replaces D2's "only with an app attached"): the process that drives fires, app or no app.
+  it('fires schedules on a tick while it drives, with no app attached, and only arms on the first tick (R5, R17)', async () => {
     const h = await rig({ scheduledJob: true })
+    await h.load()
+    expect(h.driving.status()).toEqual({ driver: 'host', appAttached: false })
+    await h.tickNow()
+    expect(h.handled()).not.toContain('run-spawn') // the first tick arms
+    h.clock += 61_000
+    await h.tickNow()
+    expect(h.handled().filter((c) => c === 'run-spawn')).toHaveLength(1)
+    // An app attaching that yields changes nothing: the Host still drives, and still fires.
+    h.server.app = true
+    h.driving.appsChanged()
+    h.clock += 61_000
+    await h.tickNow()
+    expect(h.handled().filter((c) => c === 'run-spawn')).toHaveLength(2)
+  })
+
+  // U1 with no app (R5): the fired Run starts headless, the way `jobs run` starts one.
+  it('with no app, places the fired Run of an old on-disk scheduled Job that has no coordinator account (U1, R2)', async () => {
+    const h = await rig({ scheduledJob: true, scheduledTask: true })
     await h.load()
     await h.tickNow()
     h.clock += 61_000
     await h.tickNow()
-    expect(h.handled()).not.toContain('run-spawn') // no app: never fires
-    h.server.app = true
+    await h.settle()
+    const child = h.orch.state().runs.find((r) => r.jobId === 'job_sched')!
+    const copy = h.orch.state().tasks.find((t) => t.runId === child.id)!
+    expect(copy.status).toBe('dispatched')
+    expect(h.local.startWorker).toHaveBeenCalledWith(expect.objectContaining({ taskId: copy.id }))
+    expect(h.local.startCoordinator).not.toHaveBeenCalled()
+  })
+
+  it('with no app, starts the fired Run’s own coordinator when the Job has a coordinator account (U1)', async () => {
+    const h = await rig({ scheduledJob: true, scheduledTask: true, scheduledCoordinator: 'accA' })
+    await h.load()
     await h.tickNow()
-    expect(h.handled()).not.toContain('run-spawn') // first tick with an app: arms
     h.clock += 61_000
     await h.tickNow()
-    expect(h.handled()).toContain('run-spawn')
+    await h.settle()
+    const child = h.orch.state().runs.find((r) => r.jobId === 'job_sched')!
+    expect(h.local.startCoordinator).toHaveBeenCalledTimes(1)
+    expect(h.local.startCoordinator).toHaveBeenCalledWith(expect.objectContaining({ runId: child.id, accountId: 'accA' }))
+    expect(child.coordinatorSessionId).toBe('ses_coord')
+    // One driver per Run: the loop places nothing of it.
+    const copy = h.orch.state().tasks.find((t) => t.runId === child.id)!
+    expect(copy.status).toBe('ready')
+  })
+
+  // The other half of "never both" is the app's timer, which only arms while a Host that announced
+  // dispatch is connected (appTimerTick, src/main/orchestration/yieldDispatch.test.ts). This is the
+  // Host's half: it fires exactly while it drives, and not while an attached app keeps dispatch, which is
+  // exactly when that app's own timer fires. Across the three cases one due time fires one run.
+  it('fires one run per due time whoever is attached: never beside an app that keeps dispatch (R5)', async () => {
+    const h = await rig({ scheduledJob: true })
+    await h.load()
+    /** What the app's own timer fires: only an app that keeps dispatch drives, and so fires. */
+    let appFires = 0
+    const due = async (): Promise<void> => {
+      h.clock += 61_000
+      await h.tickNow()
+      if (h.server.app && h.server.keeps) appFires++
+    }
+    const total = (): number => h.handled().filter((c) => c === 'run-spawn').length + appFires
+    await h.tickNow() // arms
+    await due() // no app
+    expect(total()).toBe(1)
+    h.server.app = true // a yielding app
+    h.driving.appsChanged()
+    await due()
+    expect(total()).toBe(2)
+    h.server.keeps = true // an app that keeps dispatch
+    h.driving.appsChanged()
+    await due()
+    expect(h.handled().filter((c) => c === 'run-spawn')).toHaveLength(2)
+    expect(total()).toBe(3)
   })
   // Carry (Task 8 m6): fireTick does not ask mayStart, so the tick must.
   it('fires no schedule while it does not drive, even with an app attached, and re-arms when it drives again', async () => {
