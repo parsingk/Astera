@@ -2637,3 +2637,110 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     h.coord.stop()
   })
 })
+
+describe('mayAct quiets a chain (S6 R1, Review Focus 4)', () => {
+  it('a limit does nothing while mayAct is false, and the chain acts again once it is true', async () => {
+    let may = false
+    const h = harness({ mayAct: () => may })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-q1', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(60_000) // the phrase and four ticks, all quiet
+    expect(h.events).toEqual([])
+    expect(h.written).toEqual([])
+    may = true
+    // The quiet ticks dropped the record already seen (R27), so waking takes a limit of its own.
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    h.coord.stop()
+  })
+
+  it('a wait that fires while mayAct is false re-arms for a tick instead of resuming', async () => {
+    let may = true
+    const h = harness({ mayAct: () => may })
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000)
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-q2', cwd: single.cwd, primary: 99, primaryReset: resetSec })
+    h.coord.register(single)
+    await advance(1_500)
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    may = false
+    await advance(400_000)
+    expect(h.written).toEqual([])
+    may = true
+    await advanceIntoResume(16_000)
+    expect(h.written.some(([, d]) => d === '\r')).toBe(true)
+    expect(h.events).toEqual([]) // resumed in place: the quiet fires did not spend the in-place resume
+    h.coord.stop()
+  })
+
+  it('has() answers for the chains', () => {
+    const h = harness()
+    h.coord.register(h.info1)
+    expect(h.coord.has('s1')).toBe(true)
+    expect(h.coord.has('nope')).toBe(false)
+    h.coord.stop()
+  })
+
+  it('a settleInPlace respawn neither kills nor spawns while mayAct is false (preflight B1)', async () => {
+    let may = true
+    const h = harness({ mayAct: () => may })
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 120_000) / 1000)
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-q4', cwd: single.cwd, primary: 99, primaryReset: resetSec })
+    h.coord.register(single)
+    await advance(1_500)
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    await advanceIntoResume(188_400) // the wait (reset + 60 s), then the resume in place
+    expect(h.written.length).toBe(2)
+    may = false
+    await advance(60_000) // the rollout did not grow: settleInPlace would copy, kill and respawn here
+    expect(h.events).toEqual([])
+    may = true
+    await advance(16_000) // re-armed for a tick; now it may act
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c1'])
+    h.coord.stop()
+  })
+
+  it('a roll that became quiet during its own awaits stops before the kill (preflight B1)', async () => {
+    let may = true
+    const h = harness({ mayAct: () => may, prepareSpawn: async () => { may = false } })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-q5', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500)
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toEqual(['copy'])
+    h.coord.stop()
+  })
+
+  // Preflight R2: the quiet tick reads the rollout and drops the event half of the state, so a record the
+  // process holding the pty already handled is not acted on at wake. The tail's own cache hands a record
+  // back on every read that finds no new line, so it has to forget the event too.
+  it('a usage_limit_exceeded record written while quiet does not roll after wake (preflight R2)', async () => {
+    let may = false
+    const h = harness({ mayAct: () => may })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-q6', cwd: h.info1.cwd, primary: 50 })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    await advance(15_000) // a quiet tick
+    await appendLimitError(src)
+    await advance(15_000) // the quiet tick reads the record and drops it
+    expect(h.events).toEqual([])
+    may = true
+    await advance(15_000)
+    await advance(15_000)
+    expect(h.events).toEqual([])
+    h.coord.stop()
+  })
+})

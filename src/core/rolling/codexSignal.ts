@@ -274,6 +274,13 @@ export class CodexRolloutTail {
     return this.tail.positioned
   }
 
+  /** Drops the event half of the cached state (the limit error and the reached type), keeping the
+   *  windows: a chain that read a record while another process held its pty (S6 R27) must not be handed
+   *  that record back by the next read that finds no new line. */
+  forgetEvent(): void {
+    if (this.last) this.last = { ...this.last, error: null, reachedType: null }
+  }
+
   /** With no new lines, returns the previous state unchanged (state does not disappear). Missing file or error gives null. */
   async read(): Promise<CodexLimitState | null> {
     if (this.seed) {

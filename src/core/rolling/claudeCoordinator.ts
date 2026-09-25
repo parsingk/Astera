@@ -241,6 +241,11 @@ export interface RollingDeps {
    *  instead of starting it from zero. Called only when something a restore reads changed (snapshotKey).
    *  Optional: without it nothing is written and a takeover registers from zero, as before. */
   snapshot?(sessionId: string, snap: RollSnapshot): void
+  /** Whether this process may act on this session's chain right now (S6 R1): false quiets the chain.
+   *  A quiet chain still reads its tails and statusline and learns identity (R27), but takes no action:
+   *  no roll (gated inside roll() at entry and again right before the kill, R26), no wait resume, no
+   *  typing, no recorded block. A roll already past its kill finishes. Absent: always true (the app). */
+  mayAct?(sessionId: string): boolean
 }
 
 interface Chain {
@@ -678,7 +683,7 @@ export class RollingCoordinator {
     }
     // If the choice list was not yet on screen when the limit phrase matched, keep looking in later chunks.
     // A hit.limit chunk is excluded because the branch below handles it directly — the same text is not tried twice.
-    if (!hit.limit && chain.choiceWatchUntil !== null) this.watchLimitChoice(chain, hit.text)
+    if (!hit.limit && chain.choiceWatchUntil !== null && this.acts(chain)) this.watchLimitChoice(chain, hit.text)
     // The cooldown right after a switch: limit phrases are ignored while awaitingReady (i.e. the window
     // where statusLine is absent and the resume replays), preventing a replay false positive from re-rolling
     if (hit.limit && !chain.awaitingReady) {
@@ -692,6 +697,10 @@ export class RollingCoordinator {
       // wait, and in that state statusLine freezes and every subsequent detection dies.
       // No prompt is sent — sending one before the reset would just hit the limit again. Waiting and
       // resuming are planRetry's job.
+      //
+      // A quiet chain (S6 R1) does neither: the process that holds this pty sees the same bytes and
+      // answers them itself, and two answers would be two keystrokes.
+      if (!this.acts(chain)) return
       this.answerLimitChoice(chain, hit.text)
       void this.onLimitCandidate(chain, hit.text)
     }
@@ -872,7 +881,28 @@ export class RollingCoordinator {
     return { ...chain.lastState, sessionId: chain.liveId }
   }
 
+  /** Whether a live chain answers to this session id (S6: the Host asks before it restores or forces). */
+  has(sessionId: string): boolean {
+    const chain = this.chains.get(sessionId)
+    return chain !== undefined && !chain.disposed
+  }
+
+  /** Every chain disposed and the ticker cleared — the Host's dispose, and the codex side's `stop`. */
+  stop(): void {
+    for (const chain of [...this.chains.values()]) this.disposeChain(chain)
+    if (this.ticker) {
+      clearInterval(this.ticker)
+      this.ticker = null
+    }
+  }
+
   // ---- internals -------------------------------------------------------
+
+  /** S6 R1: whether this process may act on the chain now. Asked by the live id, which is what the
+   *  wiring can map to a pty. */
+  private acts(chain: Chain): boolean {
+    return this.deps.mayAct?.(chain.liveId) ?? true
+  }
 
   /** Dismisses the limit choice dialog by pressing the number of the "Wait for limit to reset" item.
    *  If the item cannot be found, nothing is written — pressing Enter on an unknown choice approves
@@ -971,6 +1001,7 @@ export class RollingCoordinator {
    *  which asks the account directly instead of trusting a snapshot that freezes the moment it matters. */
   private async onLimitCandidate(chain: Chain, text?: string): Promise<void> {
     if (chain.rolling || chain.waitTimer) return // ignore a re-trigger while rolling or waiting
+    if (!this.acts(chain)) return // quiet (S6 R1): chat limits come here without passing handleData
     const payload = await this.deps.readStatusPayload(chain.liveId)
     if (payload) this.applyMeta(chain, payload, parseStatusLinePayload(payload))
     // An old phrase echoed back by the replay right after a roll is cut off here. The verdict is made at
@@ -1010,6 +1041,8 @@ export class RollingCoordinator {
     // session from the old phrase and roll again immediately.
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
     if (chain.liveId !== liveId) return
+    // The lookup is an await, and another process may have attached this pty inside it (S6 R1): no record.
+    if (!this.acts(chain)) return
     // **화면에 한도 선택 대화상자가 떠 있으면 사용량 수치로 기각하지 않는다.**
     //
     // 게이트가 막으려는 것은 "문서나 도구 출력에 우연히 한도 문구가 있는 것" 이다. 그런 텍스트는
@@ -1152,6 +1185,8 @@ export class RollingCoordinator {
     // mirrors the same cooldown the PTY path in handleData already applies (the !chain.awaitingReady in
     // the hit.limit branch above).
     if (chain.rolling || chain.waitTimer || chain.disposed || chain.awaitingReady) return
+    // Quiet (S6 R1): no verdict, no shared record, no roll or wait. forceRoll and the tick reach here too.
+    if (!this.acts(chain)) return
     if (chain.healthyTimer) {
       clearTimeout(chain.healthyTimer)
       chain.healthyTimer = null
@@ -1231,19 +1266,36 @@ export class RollingCoordinator {
       // re-publish, so the roll tap (it skips reattach) and Slack do not record it a second time.
       ...(opts.reattach ? { reattach: true } : {})
     })
-    chain.waitTimer = setTimeout(
-      () => {
-        chain.waitTimer = null
-        chain.waitPlan = null
-        // Written twice: once for what the resume changed synchronously (the wait gone, the in-place
-        // latch, a rebuilt tail), once when it settles (a roll's re-key or its own new wait). The key
-        // dedup drops whichever says nothing new.
-        const resumed = this.resumeAfterWait(chain, plan.target)
-        this.snap(chain)
-        void resumed.finally(() => this.snap(chain))
-      },
-      Math.max(0, plan.retryAt - this.now())
-    )
+    chain.waitTimer = setTimeout(() => this.fireWait(chain, plan), Math.max(0, plan.retryAt - this.now()))
+    this.snap(chain)
+  }
+
+  /** A planned wait's end. Quiet (S6 R1), it keeps the plan and looks again in a tick rather than resume
+   *  under another process that holds this pty; the plan stays in the snapshot meanwhile. */
+  private fireWait(chain: Chain, plan: { target: number; retryAt: number; weekly: boolean }): void {
+    chain.waitTimer = null
+    if (chain.disposed) return
+    if (!this.acts(chain)) {
+      chain.waitTimer = setTimeout(() => this.fireWait(chain, plan), TICK_MS)
+      return
+    }
+    chain.waitPlan = null
+    // Written twice: once for what the resume changed synchronously (the wait gone, the in-place
+    // latch, a rebuilt tail), once when it settles (a roll's re-key or its own new wait). The key
+    // dedup drops whichever says nothing new.
+    const resumed = this.resumeAfterWait(chain, plan.target)
+    this.snap(chain)
+    void resumed.finally(() => this.snap(chain))
+  }
+
+  /** A same-account resume the chain may not make now (S6 R26): no banner, no typing, and the episode's
+   *  one in-place resume not spent — the same wait, looked at again in a tick through `fireWait`. */
+  private requeueResume(chain: Chain, why: string): void {
+    if (chain.waitTimer || chain.disposed) return
+    this.deps.log(`resume in place held — another process holds this pty (${why}) session=${chain.liveId}`)
+    const plan = { target: chain.cycle.currentIndex, retryAt: this.now() + TICK_MS, weekly: false }
+    chain.waitPlan = plan
+    chain.waitTimer = setTimeout(() => this.fireWait(chain, plan), TICK_MS)
     this.snap(chain)
   }
 
@@ -1347,6 +1399,7 @@ export class RollingCoordinator {
    *  the copy, re-keying, auto-accepting trust, the ready polling, the replay grace) does not apply here
    *  and is therefore not done. */
   private async resumeInPlace(chain: Chain): Promise<void> {
+    if (!this.acts(chain)) return this.requeueResume(chain, 'quiet at entry')
     // Through the wait, tick() skipped this chain (the waitTimer guard) so limitTailCheck never ran.
     // JsonlTail hands the bytes accumulated in the meantime to the next read, and since is the tail's
     // creation time (much earlier), so the first tick after the resume would read the very record that
@@ -1374,6 +1427,13 @@ export class RollingCoordinator {
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as elsewhere
     const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
+    // The prompt build is an await, and another process may have attached this pty inside it (S6 R26).
+    // Nothing was typed, so the episode's one in-place resume is given back.
+    if (!this.acts(chain)) {
+      chain.inPlaceUsed = false
+      this.requeueResume(chain, 'quiet before the write')
+      return
+    }
     this.deps.write(liveId, prompt)
     this.snap(chain)
     setTimeout(() => {
@@ -1548,6 +1608,8 @@ export class RollingCoordinator {
    *  branch below). */
   private async roll(chain: Chain, toIndex: number): Promise<void> {
     if (chain.rolling || chain.disposed) return
+    // S6 R26: settleInPlace, resumeAfterWait and forceRoll reach here without passing onLimit.
+    if (!this.acts(chain)) return this.requeueRoll(chain, toIndex, 'quiet at entry')
     chain.rolling = true
     if (chain.promptTimer) {
       clearTimeout(chain.promptTimer)
@@ -1649,8 +1711,14 @@ export class RollingCoordinator {
           return
         }
       }
-      // ── The last await before the kill is behind us. Anything that must be re-checked after it (S6
-      // Task 9's mayAct gate) goes here, in this one place — from the next line on there is no await. ──
+      // ── The last await before the kill is behind us. Anything that must be re-checked after it goes
+      // here, in this one place — from the next line on there is no await. ──
+      // The copy and prepareSpawn were awaited, and an older app may have attached the pty in between
+      // (S6 R26): the roll is looked at again in a tick instead of killing a pty another process holds.
+      if (!this.acts(chain)) {
+        this.requeueRoll(chain, toIndex, 'quiet before the kill')
+        return
+      }
       // ② kill the existing PTY → ③ respawn under the same ID. There is no await from here until
       // re-keying — even if the exit event arrives under the old key, the chain has already moved to the
       // new one, so disposeChain does not misfire. A blank-slate roll omits resumeSessionId entirely —
@@ -1800,6 +1868,17 @@ export class RollingCoordinator {
     } finally {
       chain.rolling = false
     }
+  }
+
+  /** A roll the chain may not make now (S6 R26): looked at again in a tick, with no banner, no record and
+   *  no kill. Called from inside roll(), whose finally clears `rolling` before the tick fires. */
+  private requeueRoll(chain: Chain, toIndex: number, why: string): void {
+    if (chain.waitTimer || chain.disposed) return
+    this.deps.log(`roll held — another process holds this pty (${why}) session=${chain.liveId}`)
+    chain.waitTimer = setTimeout(() => {
+      chain.waitTimer = null
+      void this.roll(chain, toIndex).catch((err) => this.deps.log(`requeued roll failed: ${String(err)}`))
+    }, TICK_MS)
   }
 
   /** Polls for the ready signal after a respawn (the first statusline record) and then sends the carry-on
@@ -2037,12 +2116,16 @@ export class RollingCoordinator {
     // The **shared** clear is passed only on the first clean turn after an arrival (Ruling 4d-7). It is
     // latched here rather than inside declareHealthy so the pty timer path stays exactly what it was —
     // that path arms its timer once per arrival and so is its own latch already.
-    if (chain.kind === 'chat' && chain.chatTurnDone) {
+    //
+    // A quiet chain (S6 R27) skips the health, the nudge and the fallback below, and still reads the
+    // statusline for identity and usage, so it wakes knowing what the process that held the pty learned.
+    const quiet = !this.acts(chain)
+    if (!quiet && chain.kind === 'chat' && chain.chatTurnDone) {
       chain.chatTurnDone = false
       this.declareHealthy(chain, !chain.chatValveSpent)
       chain.chatValveSpent = true
     }
-    void this.idleNudgeCheck(chain) // independent of statusLine — does not wait for a payload
+    if (!quiet) void this.idleNudgeCheck(chain) // independent of statusLine — does not wait for a payload
     const payload = await this.deps.readStatusPayload(chain.liveId)
     if (chain.disposed) return
     if (!payload) {
@@ -2060,6 +2143,10 @@ export class RollingCoordinator {
     // nothing on this tick, and that is exactly what 'none' means.
     const tailState = chain.limitTail ? (chain.limitTail.readFailed ? 'readFailed' : 'ok') : 'none'
     this.applyMeta(chain, payload, u)
+    if (!this.acts(chain)) {
+      this.snap(chain)
+      return
+    }
     const five = u?.session?.usedPercent
     const seven = u?.weekly?.usedPercent
     const maxed =
@@ -2133,6 +2220,12 @@ export class RollingCoordinator {
     }
     // The across-await state guard — a roll may have started or a wait been set while probing
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
+    // Read past and dropped while quiet (S6 R27, preflight R2): the tail has moved beyond the record, so
+    // this chain does not act on it again at wake — the process that holds the pty answers it now.
+    if (!this.acts(chain)) {
+      this.deps.log(`limit record seen while quiet — the process that holds this pty handles it session=${chain.liveId}`)
+      return
+    }
     // hit.text (the excerpt of the original) is not put in the log — with source=main that excerpt is the
     // user-facing limit phrase verbatim. Writing that phrase into the log makes rolling.log itself a new
     // trigger source: once a real limit fires, the phrase is embedded in this file, and from then on merely
@@ -2145,6 +2238,7 @@ export class RollingCoordinator {
     )
     const payload = await this.deps.readStatusPayload(chain.liveId)
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
+    if (!this.acts(chain)) return
     // hit.at (the record's own timestamp) is passed as the reference time — using this.now() (the moment of
     // detection) comes after a 15-second tick plus the await above, and would misjudge a record written a
     // few seconds before its own reset time as "already past" and add a whole day.
@@ -2214,6 +2308,7 @@ export class RollingCoordinator {
    *  still has to prove it is a limit before anything is sent. */
   private async idleNudgeCheck(chain: Chain): Promise<void> {
     if (chain.idleSince === null || chain.idleHandled) return
+    if (!this.acts(chain)) return // quiet (S6 R1): the process that holds the pty nudges, if anyone does
     const now = this.now()
     if (now - chain.idleSince < IDLE_STALL_MS) return
     if (now - chain.lastOutputAt < IDLE_STALL_MS) return
@@ -2237,6 +2332,7 @@ export class RollingCoordinator {
     // The across-await state guard — a roll may have started or activity resumed while probing
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
     if (chain.idleSince === null || chain.idleHandled) return
+    if (!this.acts(chain)) return
     const nudged = chain.idleNudgedAt !== null
     if (nudged) {
       chain.idleHandled = true
@@ -2252,6 +2348,7 @@ export class RollingCoordinator {
     const stateSeq = chain.stateSeq // captures the generation at scheduling time
     const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
+    if (!this.acts(chain)) return
     this.deps.write(liveId, prompt)
     setTimeout(() => {
       if (!chain.disposed && chain.liveId === liveId) {
@@ -2390,6 +2487,7 @@ export class RollingCoordinator {
    *  failed self-recovery → send only a prompt to the live PTY (no kill, no resume, no transcript copy — non-destructive). */
   private async resetAnchorCheck(chain: Chain, resetAt: number): Promise<void> {
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
+    if (!this.acts(chain)) return // quiet (S6 R1)
     if (!chain.transcriptPath) return
     if (!this.limitEvidence(chain)) {
       // This path fires on reaching the reset time and nothing else. With no trace of a limit block that
@@ -2413,12 +2511,14 @@ export class RollingCoordinator {
       return
     }
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return // the across-await state guard
+    if (!this.acts(chain)) return
     this.deps.log(`reset-anchor: limit stall + no self-recovery → nudge session=${chain.liveId}`)
     this.pushState(chain, 'nudged') // a momentary event for the Slack notification — the renderer leaves it out of the banner
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
     const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
+    if (!this.acts(chain)) return
     this.deps.write(liveId, prompt)
     setTimeout(() => {
       if (!chain.disposed && chain.liveId === liveId) {

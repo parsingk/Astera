@@ -1769,6 +1769,22 @@ describe('transcript 한도 감지', () => {
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
   })
 
+  // S6 preflight R2: a quiet chain still reads its tail (R27), so the record another process already
+  // acted on is behind the tail by the time this chain may act again, and nothing replays at wake.
+  it('a limit record written while quiet does not roll after wake (preflight R2)', async () => {
+    let may = false
+    const h = harness({ mayAct: () => may })
+    h.payloads.set('s1', payloadAt(tPath))
+    h.coord.register(h.info1)
+    await advanceIo(20_000) // quiet, but it still learns the identity and builds the tail (R27)
+    await fsp.appendFile(tPath, limitLine(Date.now() + 1000) + '\n', 'utf8')
+    await advanceIo(20_000) // the quiet tick reads past the record and takes no action
+    expect(h.events).toEqual([])
+    may = true
+    await advanceIo(40_000) // awake: the record is behind the tail, so nothing replays
+    expect(h.events).toEqual([])
+  })
+
   it('폴백 트리거 로그에 전사 식별자와 tail 상태를 담는다 — ①의 커버리지 사후 측정용', async () => {
     // tickChain이 이제 limitTailCheck(①)를 await한 뒤에야 폴백을 평가하므로(rolling.ts의
     // 수정, rolling.ts) ②가 발화했다는 것은 그 시점 ①이 잡지 못했다는 뜻이 실제로 보장된다. 그
@@ -3934,5 +3950,116 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     expect(h.events).toEqual(['kill:s1', 'spawn:s2:a2']) // the blank-slate path: no copy
     const extra = h.spawnedOpts[0].restoreExtra!
     expect(parseRollSnapshot(extra.roll)?.claude).toMatchObject({ sessionId: null, transcriptPath: null })
+  })
+})
+
+describe('mayAct quiets a chain (S6 R1, Review Focus 4)', () => {
+  it('a limit phrase does nothing while mayAct is false, and the chain acts again once it is true', async () => {
+    let may = false
+    const h = harness({ mayAct: () => may })
+    h.payloads.set('s1', payload(100))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(h.events).toEqual([])
+    expect(h.written).toEqual([])
+    may = true
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+  })
+
+  it('a wait that fires while mayAct is false re-arms for a tick instead of resuming', async () => {
+    let may = true
+    const h = harness({ mayAct: () => may })
+    h.payloads.set('s1', payload(100))
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '3pm') })
+    await flush()
+    may = false
+    await vi.advanceTimersByTimeAsync(24 * 3_600_000)
+    expect(h.written).toEqual([])
+    may = true
+    await vi.advanceTimersByTimeAsync(16_000)
+    expect(h.written.some((w) => w.data === '\r')).toBe(true)
+  })
+
+  it('has() answers for the chains', () => {
+    const h = harness()
+    h.coord.register(h.info1)
+    expect(h.coord.has('s1')).toBe(true)
+    expect(h.coord.has('nope')).toBe(false)
+  })
+
+  it('a settleInPlace fallback neither kills nor spawns while mayAct is false (preflight B1)', async () => {
+    let may = true
+    const h = harness({ mayAct: () => may })
+    // A reopened conversation: the seed lets roll() respawn, while settleInPlace, which never reads the
+    // seed, finds no learned identity and falls back to roll() 60 s after the resume in place.
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'], resumeSessionId: 'cs-seed' }, path.join(os.tmpdir(), 'astera-seed.jsonl'))
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    const retryAt = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    await vi.advanceTimersByTimeAsync(retryAt - Date.now() + 1_000) // the planned wait, then the resume in place
+    expect(h.written.some((w) => w.data === '\r')).toBe(true)
+    may = false
+    await vi.advanceTimersByTimeAsync(61_000) // settleInPlace would copy, kill and respawn here
+    expect(h.events).toEqual([])
+    may = true
+    await vi.advanceTimersByTimeAsync(16_000) // re-armed for a tick; now it may act
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a1'])
+  })
+
+  it('a roll that became quiet during its own awaits stops before the kill (preflight B1)', async () => {
+    let may = true
+    const h = harness({ mayAct: () => may, prepareSpawn: async () => { may = false } })
+    h.payloads.set('s1', payload(100))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy'])
+  })
+
+  it('a resume in place that turns quiet across its own await types nothing and tries again in a tick', async () => {
+    let may = true
+    let release: () => void = () => {}
+    const h = harness({
+      mayAct: () => may,
+      resumeText: () => new Promise<string | null>((r) => { release = () => r(null) })
+    })
+    h.payloads.set('s1', payload(100))
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '3pm') })
+    await flush()
+    const retryAt = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    await vi.advanceTimersByTimeAsync(retryAt - Date.now() + 1_000) // the wait fires; the prompt is being built
+    may = false
+    release()
+    await flush()
+    expect(h.written).toEqual([])
+    may = true
+    await vi.advanceTimersByTimeAsync(16_000)
+    release()
+    await vi.advanceTimersByTimeAsync(1_000)
+    // resumed in place, not respawned: the quiet attempt did not spend the episode's in-place resume
+    expect(h.events).toEqual([])
+    expect(h.written.some((w) => w.data === '\r')).toBe(true)
+  })
+})
+
+describe('stop (S6, the Host)', () => {
+  it('disposes every chain and clears the ticker', async () => {
+    const h = harness()
+    h.payloads.set('s1', payload(100))
+    h.coord.register(h.info1)
+    h.coord.stop()
+    expect(h.coord.has('s1')).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.events).toEqual([])
   })
 })

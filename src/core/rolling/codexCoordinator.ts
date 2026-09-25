@@ -184,6 +184,11 @@ export interface CodexRollingDeps {
    *  contract: written into the session's pty note so another process can `restore` the chain rather
    *  than start it from zero, and only when something a restore reads changed. Optional. */
   snapshot?(sessionId: string, snap: RollSnapshot): void
+  /** Whether this process may act on this session's chain right now (S6 R1) — the claude side's dep of
+   *  the same name, same contract: a quiet chain still reads its rollout and learns identity (R27), and
+   *  takes no action (no roll, gated inside roll() at entry and right before the kill, R26; no wait
+   *  resume; no typing; no recorded block). A roll already past its kill finishes. Absent: always true. */
+  mayAct?(sessionId: string): boolean
 }
 
 interface Chain {
@@ -655,10 +660,11 @@ export class CodexRollingCoordinator {
     // The model-switch prompt is a *warning*, not a limit — it has its own scanner and its own answer,
     // and it must be handled even when no limit ever arrives (an unanswered prompt stops the session)
     const keep = chain.modelChoice.push(e.data)
-    if (keep !== null) this.answerModelChoice(chain, keep)
+    // Quiet (S6 R1): the process that holds this pty sees the same bytes and answers them itself.
+    if (keep !== null && this.acts(chain)) this.answerModelChoice(chain, keep)
     if (chain.scanner.push(e.data)) {
       chain.textHit = true
-      void this.evaluate(chain)
+      if (this.acts(chain)) void this.evaluate(chain)
     }
   }
 
@@ -707,6 +713,12 @@ export class CodexRollingCoordinator {
     return { ...chain.lastState, sessionId: chain.liveId }
   }
 
+  /** Whether a live chain answers to this session id (S6: the Host asks before it restores or forces). */
+  has(sessionId: string): boolean {
+    const chain = this.chains.get(sessionId)
+    return chain !== undefined && !chain.disposed
+  }
+
   /** App shutdown and test cleanup — clears every timer */
   stop(): void {
     for (const chain of [...this.chains.values()]) this.disposeChain(chain)
@@ -717,6 +729,11 @@ export class CodexRollingCoordinator {
   }
 
   // ---- internals -------------------------------------------------------
+
+  /** S6 R1: whether this process may act on the chain now, asked by the live id. */
+  private acts(chain: Chain): boolean {
+    return this.deps.mayAct?.(chain.liveId) ?? true
+  }
 
   private cycleIndexOf(chain: Chain): number {
     return chain.cycle.currentIndex
@@ -908,6 +925,7 @@ export class CodexRollingCoordinator {
     if (chain.rolling || chain.waitTimer || chain.disposed) return
     await this.refresh(chain)
     if (chain.rolling || chain.waitTimer || chain.disposed) return // the across-await state guard
+    if (!this.acts(chain)) return // the read is an await; another process may hold the pty now (S6 R1)
     if (this.judgedByPriorBlock(chain)) return
     if (!limitReached(chain.state)) {
       // Record exactly why it was ignored — logging an unmapped rollout as "usage below the gate" (the old
@@ -1055,6 +1073,8 @@ export class CodexRollingCoordinator {
 
   private onLimit(chain: Chain, reason: LimitReason): void {
     if (chain.rolling || chain.waitTimer || chain.disposed) return
+    // Quiet (S6 R1): no verdict, no shared record, no roll or wait. forceRoll reaches here too.
+    if (!this.acts(chain)) return
     if (!chain.codexSessionId || !chain.rolloutPath) {
       // An unmapped state does not resolve itself — logging on every repeat detection fills the log with the same line
       if (!chain.unmappedWarned) {
@@ -1137,18 +1157,35 @@ export class CodexRollingCoordinator {
       // re-publish, so the roll tap (it skips reattach) and Slack do not record it a second time.
       ...(opts.reattach ? { reattach: true } : {})
     })
-    chain.waitTimer = setTimeout(
-      () => {
-        chain.waitTimer = null
-        chain.waitPlan = null
-        // Written now for what the resume changed synchronously, and again when it settles (the claude
-        // side's armWait says why); the key dedup drops whichever says nothing new.
-        const resumed = this.resumeAfterWait(chain, plan.target)
-        this.snap(chain)
-        void resumed.finally(() => this.snap(chain))
-      },
-      Math.max(0, plan.retryAt - this.now())
-    )
+    chain.waitTimer = setTimeout(() => this.fireWait(chain, plan), Math.max(0, plan.retryAt - this.now()))
+    this.snap(chain)
+  }
+
+  /** A planned wait's end — the claude side's `fireWait`, same shape: quiet (S6 R1), it keeps the plan
+   *  and looks again in a tick rather than resume under another process that holds this pty. */
+  private fireWait(chain: Chain, plan: { target: number; retryAt: number; weekly: boolean }): void {
+    chain.waitTimer = null
+    if (chain.disposed) return
+    if (!this.acts(chain)) {
+      chain.waitTimer = setTimeout(() => this.fireWait(chain, plan), TICK_MS)
+      return
+    }
+    chain.waitPlan = null
+    // Written now for what the resume changed synchronously, and again when it settles (the claude
+    // side's armWait says why); the key dedup drops whichever says nothing new.
+    const resumed = this.resumeAfterWait(chain, plan.target)
+    this.snap(chain)
+    void resumed.finally(() => this.snap(chain))
+  }
+
+  /** A same-account resume the chain may not make now (S6 R26) — the claude side's `requeueResume`: no
+   *  banner, no typing, the episode's one in-place resume not spent, looked at again in a tick. */
+  private requeueResume(chain: Chain, why: string): void {
+    if (chain.waitTimer || chain.disposed) return
+    this.deps.log(`codex resume in place held — another process holds this pty (${why}) session=${chain.liveId}`)
+    const plan = { target: chain.cycle.currentIndex, retryAt: this.now() + TICK_MS, weekly: false }
+    chain.waitPlan = plan
+    chain.waitTimer = setTimeout(() => this.fireWait(chain, plan), TICK_MS)
     this.snap(chain)
   }
 
@@ -1278,6 +1315,7 @@ export class CodexRollingCoordinator {
    *  would be left published as 'nudged' with the scheduler's suppression still on. The realistic case
    *  is deps.write throwing on a PTY that died during the wait. */
   private async resumeInPlace(chain: Chain): Promise<void> {
+    if (!this.acts(chain)) return this.requeueResume(chain, 'quiet at entry')
     try {
       if (chain.rolloutPath && chain.codexSessionId)
         this.attachRollout(chain, chain.codexSessionId, chain.rolloutPath) // ①
@@ -1311,6 +1349,13 @@ export class CodexRollingCoordinator {
         : null
       const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
       if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
+      // The two reads are awaits, and another process may have attached this pty inside them (S6 R26).
+      // Nothing was typed, so the episode's one in-place resume is given back.
+      if (!this.acts(chain)) {
+        chain.inPlaceUsed = false
+        this.requeueResume(chain, 'quiet before the write')
+        return
+      }
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as the claude side
       this.deps.write(liveId, prompt)
       this.snap(chain)
@@ -1451,6 +1496,8 @@ export class CodexRollingCoordinator {
    *  session starts blank, carrying only the briefing (see the `smart` branch below). */
   private async roll(chain: Chain, toIndex: number): Promise<void> {
     if (chain.rolling || chain.disposed) return
+    // S6 R26: settleInPlace, resumeAfterWait and forceRoll reach here without passing onLimit.
+    if (!this.acts(chain)) return this.requeueRoll(chain, toIndex, 'quiet at entry')
     chain.rolling = true
     try {
       const target = this.deps.getAccount(chain.accountIds[toIndex])
@@ -1566,8 +1613,14 @@ export class CodexRollingCoordinator {
           return
         }
       }
-      // ── The last await before the kill is behind us. Anything that must be re-checked after it (S6
-      // Task 9's mayAct gate) goes here, in this one place — from the next line on there is no await. ──
+      // ── The last await before the kill is behind us. Anything that must be re-checked after it goes
+      // here, in this one place — from the next line on there is no await. ──
+      // The prompt, the copy and prepareSpawn were awaited, and an older app may have attached the pty in
+      // between (S6 R26): the roll is looked at again in a tick instead of killing a pty another holds.
+      if (!this.acts(chain)) {
+        this.requeueRoll(chain, toIndex, 'quiet before the kill')
+        return
+      }
       // ② kill → ③ respawn in the same slot. The prompt is a CLI argument, so there is no PTY typing.
       // A blank-slate roll passes neither resumeSessionId nor resumePrompt — the new process is a fresh
       // `codex`, not a `codex resume`, and the briefing rides as initialPrompt instead (see the spawn dep's
@@ -1723,6 +1776,17 @@ export class CodexRollingCoordinator {
     }
   }
 
+  /** A roll the chain may not make now (S6 R26) — the claude side's `requeueRoll`: looked at again in a
+   *  tick, with no record and no kill. Called from inside roll(), whose finally clears `rolling` first. */
+  private requeueRoll(chain: Chain, toIndex: number, why: string): void {
+    if (chain.waitTimer || chain.disposed) return
+    this.deps.log(`codex roll held — another process holds this pty (${why}) session=${chain.liveId}`)
+    chain.waitTimer = setTimeout(() => {
+      chain.waitTimer = null
+      void this.roll(chain, toIndex).catch((err) => this.deps.log(`codex requeued roll failed: ${String(err)}`))
+    }, TICK_MS)
+  }
+
   /** Refreshes `chain.loggedOut` from the login probe. Fire-and-forget from the tick: the verdict is a
    *  filter, not a gate, so a refresh that lands a tick late costs one attempt at most — the same
    *  attempt the chain made before this existed. Guarded across the await like every other tick worker:
@@ -1777,6 +1841,16 @@ export class CodexRollingCoordinator {
       if (!chain.tail) continue
       void this.refresh(chain).then(() => {
         if (chain.disposed || chain.rolling || chain.waitTimer) return
+        if (!this.acts(chain)) {
+          // Quiet (S6 R27, preflight R2): the rollout was read, and the event half of what it said is
+          // dropped — in the tail's cache too, which hands a record back on every read that finds no new
+          // line — so a limit the process holding the pty already handled is not acted on at wake. The
+          // windows stay: they are facts about the account, not events.
+          chain.tail?.forgetEvent()
+          chain.state = chain.state ? { ...chain.state, error: null, reachedType: null } : null
+          this.snap(chain)
+          return
+        }
         if (this.judgedByPriorBlock(chain)) return
         if (limitReached(chain.state)) {
           this.recordRecovery(chain)
