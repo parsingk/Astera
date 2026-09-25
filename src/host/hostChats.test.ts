@@ -234,6 +234,16 @@ describe('createHostChats — a roll reads the note, not the copy taken at adopt
   })
 })
 
+describe('createHostChats — the Host spawn path (final review I3)', () => {
+  it('a chat CLI the Host spawns for a roll carries ASTERA_SESSION, its own session id', () => {
+    const envs: Array<Record<string, string | undefined>> = []
+    const registry = new ProcRegistry({ spawn: (_f, _a, o) => { envs.push(o.env); return fake() }, log: () => {} })
+    const chats = createHostChats({ procs: registry, holders: createProcHolders(), platform: 'win32', homeDir: 'home', version: '0.0.0', baseEnv: {}, askApp: async () => ({ sent: true }), log: () => {} })
+    const info = chats.spawn({ account, cwd: 'D:/p', restoreExtra: { rolledFrom: 'c1' } })
+    expect(envs.at(-1)?.ASTERA_SESSION).toBe(info.id)
+  })
+})
+
 describe('createHostChats — a dropped session hears nothing (Task 2 review carry)', () => {
   const heardRig = () => {
     const procs: ReturnType<typeof fake>[] = []

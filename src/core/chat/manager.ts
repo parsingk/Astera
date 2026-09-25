@@ -242,7 +242,14 @@ export class ChatSessionManager {
     // path never passes `startWithBypass` at all, so S7's default holds exactly as before.
     const env = {
       ...cliEnvFor({ base: this.deps.baseEnv ?? process.env, account: opts.account, descriptor, homeDir: this.deps.homeDir }),
-      ...(opts.startWithBypass ? BYPASS_ENV : {})
+      ...(opts.startWithBypass ? BYPASS_ENV : {}),
+      // The caller's identity for `astera`, as a pty session has it (core/sessions/manager.ts; cliEnvFor
+      // cleared any inherited one above). Without it every chat agent read as the shell, and the check
+      // that keeps `chats answer` from an agent passed it (final review I3). Unlike the pty's, it is set
+      // whether or not orchestration is on: it names the session and grants nothing, and the check is
+      // what needs it. Like every role check here it reads the environment, so an agent that clears its
+      // own gets past it (docs/cli.md).
+      ASTERA_SESSION: id
     }
     // Codex resumes over the app-server protocol (thread/resume, sent by the adapter once the process is
     // up); Claude has no such call, so its resume id is argv (--resume=<id>) instead — buildClaudeChatCommand

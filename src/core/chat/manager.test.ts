@@ -1204,3 +1204,16 @@ describe('ChatSessionManager.sendCarryOn — the app sends a carry-on the Host l
     expect(order).toEqual([])
   })
 })
+
+describe('ChatSessionManager.spawn — the session id in the CLI env (final review I3)', () => {
+  // `astera chats answer` refuses a caller inside an agent session by ASTERA_SESSION, which a chat CLI
+  // did not get: a pty session gets it (core/sessions/manager.ts), and cliEnvFor strips an inherited one.
+  it('sets ASTERA_SESSION to the new session id, over an inherited one', () => {
+    const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
+    const manager = new ChatSessionManager({ factory, descriptors: makeDescriptors('win32'), homeDir: path.join('home', 'tester'), platform: 'win32', version: '1', log: () => {}, baseEnv: { ASTERA_SESSION: 'someone-else' }, createAdapter: makeAdapterFactory().createAdapter })
+    const claude = manager.spawn({ account: claudeAccount, cwd: 'D:/p' })
+    const codex = manager.spawn({ account: codexAccount, cwd: 'D:/p' })
+    expect(factory.mock.calls[0][2].env.ASTERA_SESSION).toBe(claude.id)
+    expect(factory.mock.calls[1][2].env.ASTERA_SESSION).toBe(codex.id)
+  })
+})
