@@ -542,7 +542,8 @@ export function lostAnswerDetails(a: {
  *  request already in flight), `jobId` (`tasks add --validate`'s unknown configuration, CLI phase
  *  D), `repair` (the profile file a 409 says only the app can repair, Host S2) and `retry` (a 409
  *  from a Host that is leaving, which the same command retried once a Host is up clears) and `runId` (a
- *  later `jobs run` whose coordinator did not start: the run it left behind, host S4+S5 Task 15). Undefined
+ *  later `jobs run` whose coordinator did not start: the run it left behind, host S4+S5 Task 15; and the
+ *  Run a `check --ack` of no such batch was checked against, for its `check --run <runId>` step). Undefined
  *  rather than an empty object so a failure that names none prints `details: {}` exactly as it did before. */
 export function refusalDetailsOf(body: unknown): Record<string, unknown> | undefined {
   if (body === null || typeof body !== 'object') return undefined

@@ -2714,7 +2714,10 @@ export async function handleCommand(
       if (!s.runs.some((r) => r.id === runId)) return notFound(`unknown run: ${runId}`)
       if (str(args.ack)) {
         const acked = ackDelivery(s, { deliveryId: str(args.ack)! }, now)
-        if (!acked.ok) return refused(acked)
+        // **The 404 carries the Run it was checked against**, so the CLI's next step can be
+        // `check --run <runId>` (cliOutput.ts, STEPS.NOT_FOUND), which hands back the batch still
+        // unacknowledged and its deliveryId. The `--run` 404 above carries none: that Run is not there.
+        if (!acked.ok) return acked.missing ? { status: 404, body: { error: acked.error, runId } } : bad(acked.error)
         await deps.setState(acked.state)
       }
       const types =

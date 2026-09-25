@@ -6272,7 +6272,8 @@ describe('없는 id 는 404 — 순수 층의 거절을 내보내던 자리들',
     await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const before = deps.getState()
     const r = await call(deps, 'check', { ack: 'dlv_nope' })
-    expect(r).toEqual({ status: 404, body: { error: 'unknown delivery: dlv_nope' } })
+    // The Run it was checked against rides along, for the CLI's `check --run <runId>` next step
+    expect(r).toEqual({ status: 404, body: { error: 'unknown delivery: dlv_nope', runId: before.runs[0].id } })
     expect(deps.getState()).toBe(before)
   })
 

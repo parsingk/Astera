@@ -218,13 +218,13 @@ const LISTING: Record<string, readonly string[]> = {
   // **A Gate, not a message** — the opposite of `reply`. resolveGate looks in `s.gates`, and
   // `questions list` lists `s.gates` (`gat_…`). It is public, not coordinator-only.
   'gate-resolve': ['astera questions list'],
-  // **Two things can be missing, so two alternative lines.** `--run`: `runs list` gives run ids,
-  // and it is not coordinator-only. `--ack`: `check` again hands back the batch still
-  // unacknowledged, and its `deliveryId` (`dlv_…`) is the id to ack; it acks nothing itself, so
-  // nothing is lost. `check` is coordinator-only, and so is the command that hit this 404. Neither
-  // line changes anything, so a caller that runs both in order, not knowing which applied, loses
-  // nothing either.
-  check: ['astera runs list', 'astera check'],
+  // **Two things can be missing, and the answer says which.** `--run`: `runs list` gives run ids,
+  // and it is not coordinator-only; that is this line. `--ack`: the 404 carries the `runId` it was
+  // checked against, and STEPS.NOT_FOUND below answers `check --run <runId>` instead, which hands
+  // back that Run's batch still unacknowledged; its `deliveryId` (`dlv_…`) is the id to ack. It acks
+  // nothing itself, so nothing is lost. `check` is coordinator-only, and so is the command that hit
+  // this 404.
+  check: ['astera runs list'],
   // **The Run of `--run`, not a Task.** The noun rule would offer `tasks list` again, which gives
   // Task ids; `runs list` gives run ids and is public.
   'tasks-list': ['astera runs list'],
@@ -287,10 +287,16 @@ const STEPS: Record<
   // **`tasks add --validate` 의 없는 구성 id 는 그 계획의 목록 한 줄이다**(phase D). 그 404 만 답에
   // 계획 id 를 싣고 오고(command.ts, run.ts 가 `details` 로 옮긴다), 채워진 줄은 그대로 칠 수 있다.
   // 문구가 아니라 칸으로 가른다 — CONFLICT 의 `requestId` 와 같은 판단이다.
+  //
+  // **`check --ack` 의 없는 배치도 같은 모양이다.** 그 404 는 확인한 회차의 `runId` 를 싣고 오고,
+  // 그 회차의 `check` 가 아직 ack 되지 않은 배치(와 그 deliveryId)를 다시 준다. `--run` 의 회차가
+  // 없던 404 는 runId 를 싣지 않으므로 회차 목록(LISTING)으로 간다.
   NOT_FOUND: (cmd, details) =>
     cmd === 'tasks-add' && typeof details.jobId === 'string'
       ? ['astera run-configs list --job <jobId>']
-      : listingFor(cmd),
+      : cmd === 'check' && typeof details.runId === 'string'
+        ? ['astera check --run <runId>']
+        : listingFor(cmd),
   // 403 은 "이 세션에는 허락되지 않는다" 다. 대개 COORDINATOR_ONLY 명령을 워커가 부른 것이고
   // (command.ts), `worker-start --terminal` 에 다른 회차의 세션을 준 것도 403 이다(phase D). 어느
   // 쪽이든 무엇이 허락되는지는 가이드에 적혀 있고, 그것을 읽는 것 말고 칠 것이 없다.

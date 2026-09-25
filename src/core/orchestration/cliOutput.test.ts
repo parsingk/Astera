@@ -242,9 +242,12 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
   // **이 셋은 이제 404 를 낸다** — 순수 층의 거절을 400 으로 내보내던 자리가 없는 id 를 404 로
   // 말하게 되었다. 각 줄은 못 찾은 것과 같은 종류의 id 를 내놓고, 그 명령을 부른 쪽이 칠 수 있다.
   it('check·send·gate-resolve 의 404 는 못 찾은 것의 목록으로 간다', () => {
-    // 두 가지를 못 찾는다: `--run` 의 회차, 그리고 `--ack` 의 배치. 회차 목록이 먼저고, 다시 부른
-    // check 가 열린 배치의 deliveryId 를 준다 — 둘은 서로 다른 경우의 대안이다
-    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'check' })).toEqual(['astera runs list', 'astera check'])
+    // 두 가지를 못 찾는다: `--run` 의 회차(runId 없이 온다 — 회차 목록), 그리고 `--ack` 의 배치(그
+    // 404 는 확인한 회차의 runId 를 싣는다 — 그 회차의 check 가 열린 배치의 deliveryId 를 다시 준다)
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'check' })).toEqual(['astera runs list'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'check', details: { runId: 'run_1' } })).toEqual([
+      'astera check --run run_1'
+    ])
     // worker_done 의 Task 나 Dispatch — worker-* 와 같은 두 줄, 둘 다 워커가 부를 수 있다
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'send' })).toEqual([
       'astera tasks list',

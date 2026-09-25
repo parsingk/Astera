@@ -446,6 +446,12 @@ describe('refusalDetailsOf — 요청을 이름 댄 거절만 그 id 를 싣는�
     expect(refusalDetailsOf({ jobId: 3 })).toBeUndefined()
   })
 
+  // `check --ack` of no such batch answers 404 with the Run it was checked against; nextSteps fills
+  // `check --run <runId>` with it (cliOutput).
+  it('check --ack 의 404 가 싣는 runId 를 details 로 올린다', () => {
+    expect(refusalDetailsOf({ error: 'unknown delivery: dlv_nope', runId: 'run_1' })).toEqual({ runId: 'run_1' })
+  })
+
   // Host S2 fix round, ruling (a): a spawn refused by a Host that is leaving says so as a field.
   it('본문의 retry 도 details 로 올린다', () => {
     expect(refusalDetailsOf({ error: 'failed to start worker: the Host is retiring', retry: 'host-retiring' })).toEqual({ retry: 'host-retiring' })
