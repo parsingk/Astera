@@ -3951,6 +3951,40 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     const extra = h.spawnedOpts[0].restoreExtra!
     expect(parseRollSnapshot(extra.roll)?.claude).toMatchObject({ sessionId: null, transcriptPath: null })
   })
+
+  // Carry C-c: the blank-slate session knows nothing, so a takeover that types the ordinary handover line
+  // into it hands over nothing. The snapshot says which prompt is owed, and the restore asks for that one.
+  it('a smart roll’s snapshot restored elsewhere is briefed; an ordinary one gets the handover line (carry C-c)', async () => {
+    const got: { id: string; s: RollSnapshot }[] = []
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve('BRIEFING TEXT'),
+      snapshot: (id, s) => got.push({ id, s })
+    })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(parseRollSnapshot(h.spawnedOpts[0].restoreExtra!.roll)?.claude?.promptKind).toBe('briefing')
+    const smartSnap = parseRollSnapshot(JSON.parse(JSON.stringify(got.filter((x) => x.id === 's2').at(-1)!.s)))!
+    expect(smartSnap).toMatchObject({ awaitingPrompt: true, claude: { promptKind: 'briefing' } })
+    h.coord.stop() // the app dies before the new session's statusline, so the briefing was never typed
+
+    // In another process: the tab briefing comes only with tabFallback, as roll() asked for it.
+    const restoreIn = async (snap: RollSnapshot): Promise<string[]> => {
+      const h2 = harness({ resumeText: (_id, _form, tab) => Promise.resolve(tab ? 'BRIEFING TEXT' : null) })
+      const info = { ...h2.info1, id: 's2', accountId: 'a2', rollPrompt: 'carry on' }
+      expect(h2.coord.restore(info, snap)).toBe(true)
+      h2.payloads.set('s2', payload(20))
+      await advanceIo(2_000)
+      h2.coord.stop()
+      return h2.written.filter((w) => w.data !== '\r').map((w) => w.data)
+    }
+    expect(await restoreIn(smartSnap)).toEqual(['BRIEFING TEXT'])
+    const { promptKind: _k, ...plainClaude } = smartSnap.claude!
+    expect(await restoreIn({ ...smartSnap, claude: plainClaude })).toEqual(['carry on'])
+  })
 })
 
 describe('mayAct quiets a chain (S6 R1, Review Focus 4)', () => {

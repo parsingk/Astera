@@ -273,6 +273,9 @@ interface Chain {
   lastOutputAt: number
   rolling: boolean // the re-trigger guard while a roll is running
   awaitingReady: boolean // true from a respawn until the automatic prompt (auto-accepting trust is limited to this window too)
+  /** Which prompt the respawn awaiting it is owed (S6 Task 12, carry C-c): 'briefing' after a blank-slate
+   *  roll, 'handover' otherwise. Read only while awaitingReady holds; written into the snapshot for it. */
+  promptKind: 'handover' | 'briefing'
   trustSeen: boolean
   /** The most recent stripped screen text. The automatic prompt's fallback reads it to see whether a
    *  dialog is still waiting, and logs it when it types anyway — a trust prompt we fail to recognise
@@ -495,6 +498,7 @@ export class RollingCoordinator {
       lastOutputAt: this.now(),
       rolling: false,
       awaitingReady: false, // the first session — the user answers the trust prompt themselves
+      promptKind: 'handover',
       trustSeen: false,
       lastScreen: '',
       waitTimer: null,
@@ -599,7 +603,10 @@ export class RollingCoordinator {
     if (snap.wait) this.armWait(chain, snap.wait, { reattach: true })
     else if (snap.awaitingPrompt && chain.kind !== 'chat') {
       chain.awaitingReady = true
-      this.scheduleAutoPrompt(chain)
+      // Carry C-c: a blank-slate respawn is owed its briefing, which the writer never got to type and
+      // the snapshot does not carry — so it is asked for again, the way roll() asked for it.
+      chain.promptKind = c?.promptKind ?? 'handover'
+      this.scheduleAutoPrompt(chain, undefined, chain.promptKind)
     }
     this.snap(chain)
     return true
@@ -1793,7 +1800,9 @@ export class RollingCoordinator {
               sessionId: smart ? null : sessionId,
               transcriptPath: dest ?? null,
               tailOffset: null,
-              tailSince: this.now()
+              tailSince: this.now(),
+              // Carry C-c: the blank slate is owed the briefing, not the handover line.
+              ...(smart ? { promptKind: 'briefing' as const } : {})
             }
           } satisfies RollSnapshot
         }
@@ -1828,6 +1837,7 @@ export class RollingCoordinator {
       chain.lastOutputAt = this.now()
       chain.trustSeen = false
       chain.awaitingReady = true
+      chain.promptKind = smart ? 'briefing' : 'handover'
       chain.lastScreen = '' // kill wiped the screen — the old session's dialog must not gate the new one's prompt
       // The reference point of the replay grace. A new roll has to be able to report its grace again, so
       // the throttle is released too. The choice watch is dropped — kill removed the old screen, so that
@@ -1936,12 +1946,15 @@ export class RollingCoordinator {
    *  for one anyway would replace `chain.prompt` (possibly the user's own text from the New Session
    *  dialog) with a pointer to a briefing file nobody needs. A Job worker's packet refresh is
    *  unaffected — `tabFallback` only gates the tab-session fallback, not the Job Dispatch lookup. */
-  private scheduleAutoPrompt(chain: Chain, briefing?: string): void {
+  private scheduleAutoPrompt(chain: Chain, briefing?: string, kind: 'handover' | 'briefing' = 'handover'): void {
     const liveId = chain.liveId
     const startedAt = this.now()
     const sendPrompt = async (): Promise<void> => {
       if (chain.disposed || chain.liveId !== liveId) return
-      const prompt = briefing ?? (await this.resumePromptFor(chain, liveId, 'handover', false)).prompt
+      // `kind` 'briefing' is a restore's (carry C-c): the blank slate's briefing was never typed, and it
+      // is asked for as roll()'s smart branch asked — tabFallback true — rather than as the handover a
+      // `--resume`d process gets. The id is the live one now; the old session is gone.
+      const prompt = briefing ?? (await this.resumePromptFor(chain, liveId, 'handover', kind === 'briefing')).prompt
       if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
       this.deps.write(liveId, prompt)
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
@@ -2480,7 +2493,8 @@ export class RollingCoordinator {
         sessionId: chain.claudeSessionId,
         transcriptPath: chain.transcriptPath,
         tailOffset: chain.limitTail?.offset ?? null,
-        tailSince: chain.limitTail?.sinceMs ?? null
+        tailSince: chain.limitTail?.sinceMs ?? null,
+        ...(chain.kind !== 'chat' && chain.awaitingReady && chain.promptKind === 'briefing' ? { promptKind: 'briefing' as const } : {})
       },
       writtenAt: now
     }
