@@ -97,6 +97,9 @@ export interface HostRolling {
   forceRoll(sessionId: string): Promise<void>
   /** The accounts snapshot and the resume strategy, read again (the tick, and at start). */
   refresh(): Promise<void>
+  /** Whether accounts.json has ever been read (R23). Until it has, no account resolves, and a takeover's
+   *  restore would map nothing (Task 16 review): the wiring holds the takeover until this is true. */
+  accountsRead(): boolean
   onHookEvent(sessionId: string, payload: unknown): void
   dispose(): void
 }
@@ -312,6 +315,7 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
       }
       strategy = await readStrategy().catch(() => 'original' as const)
     },
+    accountsRead: () => accountsRead,
     onHookEvent: (sid, p) => claude.onHookEvent(sid, p),
     dispose: () => {
       hooks?.stop()

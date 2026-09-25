@@ -55,6 +55,7 @@ type Over = {
   resumeText?: () => Promise<string | null>
   isLoggedIn?: () => Promise<boolean>
   onNativeSession?: (sessionId: string, nativeSessionId: string) => void
+  readAccounts?: () => Promise<Account[]>
 }
 const rig = async (over: Over = {}) => {
   // Preflight C8: a profile per rig, removed after the test (the Host writes host/rolling.json there).
@@ -93,7 +94,7 @@ const rig = async (over: Over = {}) => {
     onNativeSession: over.onNativeSession ?? (() => {}),
     onEvent: (e) => events.push(e),
     lang: () => 'en',
-    readAccounts: async () => [...accounts, ...codexAccounts],
+    readAccounts: over.readAccounts ?? (async () => [...accounts, ...codexAccounts]),
     readStrategy: async () => 'original',
     isLoggedIn: over.isLoggedIn ?? (async () => true),
     fetchUsage: over.fetchUsage ?? (async () => null), // no network in a unit test; null is "unavailable"
@@ -304,6 +305,20 @@ describe('HostRolling.restore wiring (S6 Task 12, carry C-a)', () => {
     await vi.waitFor(async () => {
       expect(await readRollConfigKey(hostRollConfigPath(r.profileDir), 'thread-1')).toMatchObject({ accountIds: ['c1', 'c2'] })
     })
+    r.rolling.dispose()
+  })
+  it('accountsRead answers whether a read of accounts.json ever succeeded (Task 16 review)', async () => {
+    let fail = true
+    const r = await rig({ readAccounts: async () => { if (fail) throw new Error('mid-write'); return accounts } })
+    expect(r.rolling.accountsRead()).toBe(false)
+    await r.rolling.refresh()
+    expect(r.rolling.accountsRead()).toBe(false)
+    fail = false
+    await r.rolling.refresh()
+    expect(r.rolling.accountsRead()).toBe(true)
+    fail = true
+    await r.rolling.refresh() // the last good read stands (R23)
+    expect(r.rolling.accountsRead()).toBe(true)
     r.rolling.dispose()
   })
 })

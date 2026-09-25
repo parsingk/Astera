@@ -46,7 +46,7 @@ const quietDeps = (accounts: () => Promise<Account[]>) => ({
   watchHooks: false
 })
 
-async function rig(o: { appPid?: number | null; coordinator?: string; openStop?: boolean; accountsGate?: Promise<void> } = {}) {
+async function rig(o: { appPid?: number | null; coordinator?: string; openStop?: boolean; accountsGate?: Promise<void>; accountsFail?: number } = {}) {
   vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
   const profileDir = await tempDir('astera-s6-rig-')
   dirs.push(profileDir)
@@ -104,6 +104,7 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
     isRetiring: () => false
   }
   const afters: Array<() => void> = []
+  let reads = 0
   const logs: string[] = []
   // Built first, as index.ts builds it: `orch` and `exits` do not exist yet, and every closure that names
   // them runs only once both do (preflight B2).
@@ -113,7 +114,11 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
     orch: () => box.orch!, lang: () => 'en', log: (m) => logs.push(m), nowIso: () => new Date().toISOString(),
     after: (_ms, fn) => { afters.push(fn); return () => { const i = afters.indexOf(fn); if (i >= 0) afters.splice(i, 1) } },
     appPid: () => appPid,
-    rollingDeps: quietDeps(async () => { await o.accountsGate; return accounts })
+    rollingDeps: quietDeps(async () => {
+      await o.accountsGate
+      if (reads++ < (o.accountsFail ?? 0)) throw new Error('accounts.json is being written')
+      return accounts
+    })
   })
   cleanups.push(() => wiring.dispose())
   const orch = createHostOrch({
@@ -263,6 +268,18 @@ describe('the Host rolls, with and without an app (S6 rig)', () => {
     release()
     await h.advance(0)
     await vi.waitFor(() => expect(h.note('p9').rolledBy).toBe('host'))
+  })
+  it('a failed first accounts read takes nothing over; a later good read lets the next pass run (Task 16 review)', async () => {
+    const h = await rig({ appPid: 100, accountsFail: 1 })
+    h.attachApp(3, ['worktrees', 'dispatch', 'rolling'], [])
+    await h.openAppSession('p9', 't9', ['a1'], {})
+    h.detachApp(3)
+    h.setAppPid(null)
+    h.graceEnds()
+    expect(h.note('p9').rolledBy).toBeUndefined() // the read failed: no account would resolve
+    expect(h.logs.filter((m) => m.includes('accounts.json was never read'))).toHaveLength(1)
+    await h.tick() // the tick reads again, and this time the read succeeds
+    expect(h.note('p9').rolledBy).toBe('host')
   })
   it('a dropped socket whose app lives takes nothing, however long it stays away (Review Focus 1)', async () => {
     const h = await rig({ appPid: 100 })

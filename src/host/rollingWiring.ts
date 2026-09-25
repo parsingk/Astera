@@ -9,7 +9,8 @@
 //
 // **The accounts are read before the first takeover** (Task 12's hard carry): a restore's codex locate
 // with no accounts loaded aborts for good, and the takeover never retries a chain it restored. So a gone
-// decision that lands before the first `refresh()` has finished waits for it.
+// decision that lands before the first `refresh()` has finished waits for it, and a takeover is held
+// until a read has succeeded (`accountsRead`, the Task 16 review).
 //
 // **Disposed when retire starts** (index.ts's `leave`): the tick and the app-gone watch stop, a takeover
 // still waiting on that first read never runs, no newly spawned session is adopted, every chain is
@@ -148,8 +149,17 @@ export function composeHostRolling(a: {
 
   /** Each skipped (session, reason) once: the watch runs the pass again on every no-app tick (R13). */
   const skipsLogged = new Set<string>()
+  let unreadLogged = false
   const takeOver = (): void => {
     if (disposed) return
+    // Task 16 review: the first read finishing is not enough, it must have succeeded — with no accounts a
+    // codex restore's locate aborts for good. The watch runs the pass again on every no-app tick (R13),
+    // and the tick reads the accounts first, so the pass runs as soon as a read succeeds.
+    if (!rolling.accountsRead()) {
+      if (!unreadLogged) log('takeover held: accounts.json was never read — it runs once a read succeeds')
+      unreadLogged = true
+      return
+    }
     const { skipped } = takeOverSessions({
       hasApp: () => a.server().hasApp(),
       announces: () => true,
@@ -199,15 +209,21 @@ export function composeHostRolling(a: {
     ...(a.after ? { after: a.after } : {})
   })
 
-  // Each isolated: a failed read must not cost the watch its tick, nor the reverse.
+  // Each isolated: a failed read must not cost the watch its tick, nor the reverse. The watch ticks after
+  // the read settles, so a takeover held for want of accounts runs on the tick whose read succeeded.
   const stopTick = every(ROLLING_TICK_MS, () => {
     if (disposed) return
-    void rolling.refresh().catch((err) => log(`rolling refresh failed: ${String(err)}`))
-    try {
-      watch.tick()
-    } catch (err) {
-      log(`the app-gone watch could not tick: ${String(err)}`)
-    }
+    void rolling
+      .refresh()
+      .catch((err) => log(`rolling refresh failed: ${String(err)}`))
+      .finally(() => {
+        if (disposed) return
+        try {
+          watch.tick()
+        } catch (err) {
+          log(`the app-gone watch could not tick: ${String(err)}`)
+        }
+      })
   })
 
   return {
