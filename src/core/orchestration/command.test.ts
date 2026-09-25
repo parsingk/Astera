@@ -6960,3 +6960,67 @@ describe('fix round 2: each clause of what counts as running', () => {
     expect(deps.getState().runs.find((r) => r.jobId === jobId)?.coordinatorStartingAt).toBe(later)
   })
 })
+
+// R4 (2026-09-25): a pure-layer refusal is a 404 only when state.ts marks it `missing`. commit() used
+// to answer 404 to any refusal whose words began `unknown `.
+describe('handleCommand — 404 는 missing 표시로만 난다 (R4)', () => {
+  const seedWorker = async (): Promise<OrchServerDeps & { state: OrchState }> => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    return deps
+  }
+
+  it('reply: 없는 메시지는 404, 있는데 질문이 아닌 메시지는 400 이다 (applyReply 의 두 갈래)', async () => {
+    const deps = await seedWorker()
+    const d = deps.getState().dispatches[0]
+    const sent = await call(deps, 'send', { type: 'status', taskId: d.taskId, dispatchId: d.id, subject: 's', body: 'b' }, 'sess1')
+    expect(sent.status).toBe(200)
+    const status = deps.getState().messages.find((m) => m.type === 'status')!
+    expect(await call(deps, 'reply', { id: 'msg_nope', body: 'x' })).toEqual({
+      status: 404,
+      body: { error: 'unknown question: msg_nope' }
+    })
+    const before = deps.getState()
+    expect(await call(deps, 'reply', { id: status.id, body: 'x' })).toEqual({
+      status: 400,
+      body: { error: `not a question: ${status.id}` }
+    })
+    expect(deps.getState()).toBe(before)
+  })
+
+  // The words do not decide: applyWorkerDone's `unknown run for task` (a Task whose Run is gone) is not
+  // marked missing, so it is a 400 even though it starts `unknown `.
+  it('"unknown " 으로 시작해도 missing 이 아닌 거절은 400 이다', async () => {
+    const deps = await seedWorker()
+    const d = deps.getState().dispatches[0]
+    await deps.setState({
+      ...deps.getState(),
+      tasks: deps.getState().tasks.map((t) => (t.id === d.taskId ? { ...t, runId: 'run_gone' } : t))
+    })
+    const before = deps.getState()
+    const r = await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId: d.taskId, dispatchId: d.id, outcome: 'succeeded', subject: 'a', body: 'b' },
+      'sess1'
+    )
+    expect(r).toEqual({ status: 400, body: { error: `unknown run for task: ${d.taskId}` } })
+    expect(deps.getState()).toBe(before)
+  })
+
+  it('commit 을 지나는 없는 id 는 여전히 404 다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    expect((await call(deps, 'task-create', { account: 'acc1', runId: 'run_nope', title: 't', spec: 's' })).status).toBe(404)
+    expect((await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's', deps: ['tsk_nope'] })).status).toBe(404)
+    expect((await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's', parent: 'tsk_nope' })).status).toBe(404)
+    expect((await call(deps, 'gate-create', { task: 'tsk_nope', question: 'q?' })).status).toBe(404)
+    expect((await call(deps, 'runs-resume', { id: 'run_nope' })).status).toBe(404)
+    expect((await call(deps, 'run-worktree-set', { run: 'run_nope', worktree: 'D:/w' })).status).toBe(404)
+  })
+})

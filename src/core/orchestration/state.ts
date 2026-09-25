@@ -67,8 +67,11 @@ export const emptyState = (): OrchState => ({
 
 /** `missing` marks the refusal that means **the id the caller named is not there** — set where the
  *  refusal is made (`gone` below), so a caller can answer it 404 without reading it off the words.
- *  Only the refusals a command hands straight to its caller carry it; `commit()` in command.ts still
- *  decides the rest by their `unknown …` prefix. */
+ *  **It is the only thing that makes a 404** (R4): command.ts answers every pure-layer refusal through
+ *  `refused()`, and `commit()` no longer reads an `unknown …` prefix, so a not-found refusal a command
+ *  can reach must be a `gone`. An `err` that happens to start with `unknown ` is a 400. The `err`
+ *  ones left with that prefix are not reached by a command, or name a dangling reference (the Run a
+ *  Task points at) rather than the id the caller gave. */
 export type Res<T> =
   | { ok: true; state: OrchState; value: T }
   | { ok: false; error: string; missing?: true }
@@ -396,7 +399,7 @@ export function latestRun(s: OrchState): JobRun | undefined {
  */
 export function pauseSchedule(s: OrchState, jobId: string, now: string): Res<Job> {
   const job = s.jobs.find((j) => j.id === jobId)
-  if (!job) return err(`unknown job: ${jobId}`)
+  if (!job) return gone(`unknown job: ${jobId}`)
   if (!job.schedule) return err(`job is not scheduled: ${jobId}`)
   const runIds = new Set(s.runs.filter((r) => r.jobId === jobId).map((r) => r.id))
   const taskIds = new Set(
@@ -433,7 +436,7 @@ export function pauseSchedule(s: OrchState, jobId: string, now: string): Res<Job
  */
 export function resumeSchedule(s: OrchState, jobId: string): Res<Job> {
   const job = s.jobs.find((j) => j.id === jobId)
-  if (!job) return err(`unknown job: ${jobId}`)
+  if (!job) return gone(`unknown job: ${jobId}`)
   if (!job.schedule) return err(`job is not scheduled: ${jobId}`)
   if (!job.paused) return ok(s, job)
   // paused 를 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이 코드베이스는
@@ -454,7 +457,7 @@ export function resumeSchedule(s: OrchState, jobId: string): Res<Job> {
  */
 export function resumeRun(s: OrchState, runId: string): Res<JobRun> {
   const run = s.runs.find((r) => r.id === runId)
-  if (!run) return err(`unknown run: ${runId}`)
+  if (!run) return gone(`unknown run: ${runId}`)
   if (!run.paused) return ok(s, run)
   const { paused: _drop, ...resumed } = run
   return ok({ ...s, runs: s.runs.map((r) => (r.id === runId ? resumed : r)) }, resumed)
@@ -462,7 +465,7 @@ export function resumeRun(s: OrchState, runId: string): Res<JobRun> {
 
 export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<JobRun> {
   const run = s.runs.find((r) => r.id === id)
-  if (!run) return err(`unknown run: ${id}`)
+  if (!run) return gone(`unknown run: ${id}`)
   if (run.worktree !== undefined)
     return err(`run ${id} already has a worktree: ${run.worktree}`)
   const next = { ...run, worktree }
@@ -501,14 +504,14 @@ export function createTask(
   if ((a.runId === undefined) === (a.jobId === undefined))
     return err('exactly one of runId or jobId is required')
   if (a.runId !== undefined && !s.runs.some((r) => r.id === a.runId))
-    return err(`unknown run: ${a.runId}`)
+    return gone(`unknown run: ${a.runId}`)
   if (a.jobId !== undefined && !s.jobs.some((j) => j.id === a.jobId))
-    return err(`unknown job: ${a.jobId}`)
+    return gone(`unknown job: ${a.jobId}`)
   if (!a.spec.trim()) return err('spec is required')
   const known = new Set(s.tasks.map((t) => t.id))
   const missing = a.deps.filter((d) => !known.has(d))
-  if (missing.length) return err(`unknown deps: ${missing.join(',')}`)
-  if (a.parentId && !known.has(a.parentId)) return err(`unknown parent: ${a.parentId}`)
+  if (missing.length) return gone(`unknown deps: ${missing.join(',')}`)
+  if (a.parentId && !known.has(a.parentId)) return gone(`unknown parent: ${a.parentId}`)
   const task: Task = {
     id: newId('tsk'),
     // 없는 칸은 싣지 않는다 — 소유가 둘 중 하나라는 것이 값으로도 보여야 한다
@@ -1817,7 +1820,10 @@ export function applyReply(
   now: string
 ): Res<'accepted' | 'alreadyAnswered'> {
   const q = s.messages.find((m) => m.id === a.messageId)
-  if (!q || q.type !== 'question') return err(`unknown question: ${a.messageId}`)
+  // Two refusals (R4): no such message is the 404; a message that is there but is not a question is
+  // the caller's mistake, a 400. Both used to read `unknown question`, which commit() turned into 404.
+  if (!q) return gone(`unknown question: ${a.messageId}`)
+  if (q.type !== 'question') return err(`not a question: ${a.messageId}`)
   if (q.answered) return ok(s, 'alreadyAnswered')
   const next: Message = { ...q, answered: true, answerBody: a.body }
   let state: OrchState = { ...s, messages: replace(s.messages, next) }
@@ -1844,7 +1850,7 @@ export function createGate(
   now: string
 ): Res<Gate> {
   const task = s.tasks.find((t) => t.id === a.taskId)
-  if (!task) return err(`unknown task: ${a.taskId}`)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
   // A Gate is for deciding the task DAG — it is not a device for stopping a worker that is already
   // running (that is worker-stop). Creating a Gate at all is rejected when a dispatch is open.
   const openDisp = s.dispatches.find((d) => d.taskId === a.taskId && !d.outcome && !d.endedAt)
@@ -1973,7 +1979,7 @@ export function attachCoordinator(
   a: { runId: string; sessionId: string }
 ): Res<JobRun> {
   const run = s.runs.find((r) => r.id === a.runId)
-  if (!run) return err(`unknown run: ${a.runId}`)
+  if (!run) return gone(`unknown run: ${a.runId}`)
   // A new coordinator starts with no stop on record: a stop belonged to the session that had it. Its
   // start is over, so the mark goes (I1), and so does the Run's own `autoDispatch` (fix round 1 M4): one
   // driver per Run, as the hand-over drops the Job's.
@@ -2000,7 +2006,7 @@ export function rekeyCoordinator(
  *  이 칸을 지우고 사람이 다시 띄울 버튼을 내보인다(Run.coordinatorSessionId 의 주석). */
 export function detachCoordinator(s: OrchState, a: { runId: string }): Res<JobRun> {
   const run = s.runs.find((r) => r.id === a.runId)
-  if (!run) return err(`unknown run: ${a.runId}`)
+  if (!run) return gone(`unknown run: ${a.runId}`)
   const next: JobRun = { ...run }
   delete next.coordinatorSessionId
   // With no coordinator there is nobody stopped: a stop left behind would make `runs wait` end

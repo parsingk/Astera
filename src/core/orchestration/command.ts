@@ -852,10 +852,11 @@ export async function handleCommand(
   )
 
   const commit = async <T>(r: Res<T>): Promise<Reply> => {
-    // **순수 층의 "unknown …" 도 404 다.** state.ts 는 지목한 것이 없을 때 언제나 이 접두사로
-    // 말한다(err(`unknown run: …`) 서른 곳). 문구로 가르는 것이 좋아서가 아니라, 갈래를 여기
-    // 한 곳에만 두기 위해서다 — 서른 곳의 반환 타입을 바꾸는 것은 이 구분이 살 값이 아니다.
-    if (!r.ok) return r.error.startsWith('unknown ') ? notFound(r.error) : bad(r.error)
+    // **404 is what state.ts marked `missing`, nothing else** (R4). This used to read the words: any
+    // refusal starting `unknown ` was a 404. That made the status depend on how a message was phrased,
+    // and it answered 404 to a refusal whose id was there all along (applyReply's "not a question").
+    // Now the refusal says it (`gone` in state.ts), the same way `refused` reads every other one.
+    if (!r.ok) return refused(r)
     await deps.setState(r.state)
     return okBody(r.value)
   }
@@ -1753,8 +1754,8 @@ export async function handleCommand(
       const worktree = str(args.worktree)
       if (!worktree) return bad('--worktree is required')
       // **Only "already has one" is answered 409, on its own.** setRunWorktree refuses the same thing,
-      // but that layer knows no HTTP, and `commit` (above) answers its `unknown run` with 404 and
-      // every other refusal with 400 — so a second record would come out as a plain 400, not told
+      // but that layer knows no HTTP, and `commit` (above) answers its `unknown run` (marked missing)
+      // with 404 and every other refusal with 400 — so a second record would come out as a plain 400, not told
       // apart in the log from a malformed call. It means the wiring **made two worktrees**, one of
       // which stays on disk as a folder nobody remembers.
       //

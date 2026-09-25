@@ -24,6 +24,8 @@ import {
   resolveGate,
   deleteRuns,
   pauseSchedule,
+  resumeSchedule,
+  resumeRun,
   latestRun,
   setRunWorktree,
   attachCoordinator,
@@ -3492,5 +3494,85 @@ describe('attachCoordinator — fix round 1', () => {
     expect(attached.coordinatorSessionId).toBe('c1')
     expect(attached).not.toHaveProperty('autoDispatch')
     expect(attached).not.toHaveProperty('coordinatorStartingAt')
+  })
+})
+
+// R4 (2026-09-25): command.ts's commit() no longer reads an `unknown ` prefix; a refusal is a 404 only
+// when it is marked `missing` here. Every not-found refusal commit() can reach must carry the mark, or
+// that command drops silently from 404 (exit 4) to 400 (exit 2).
+describe('없는 id 의 거절은 missing 을 싣는다 (R4)', () => {
+  const refusal = (r: { ok: boolean }): { error: string; missing?: true } => {
+    expect(r.ok).toBe(false)
+    return r as unknown as { error: string; missing?: true }
+  }
+  const scheduled = (): { s: OrchState; jobId: string } => {
+    const planned = unwrap<{ id: string }>(
+      createJob(emptyState(), { objective: 'o', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } }, NOW) as never
+    )
+    return { s: planned.state, jobId: planned.value.id }
+  }
+
+  it('pauseSchedule·resumeSchedule: 없는 Job 은 missing, 예약이 아닌 Job 은 아니다', () => {
+    const { s } = seed()
+    expect(refusal(pauseSchedule(s, 'job_nope', NOW))).toEqual({ ok: false, error: 'unknown job: job_nope', missing: true })
+    expect(refusal(resumeSchedule(s, 'job_nope'))).toEqual({ ok: false, error: 'unknown job: job_nope', missing: true })
+    const plain = s.jobs[0].id
+    expect(refusal(pauseSchedule(s, plain, NOW)).missing).toBeUndefined()
+    expect(refusal(resumeSchedule(s, plain)).missing).toBeUndefined()
+  })
+
+  it('resumeRun·setRunWorktree: 없는 회차는 missing, 이미 있는 worktree 는 아니다', () => {
+    const { s, runId } = seed()
+    expect(refusal(resumeRun(s, 'run_nope'))).toEqual({ ok: false, error: 'unknown run: run_nope', missing: true })
+    expect(refusal(setRunWorktree(s, 'run_nope', 'D:/w'))).toEqual({ ok: false, error: 'unknown run: run_nope', missing: true })
+    const once = unwrap(setRunWorktree(s, runId, 'D:/w') as never)
+    expect(refusal(setRunWorktree(once.state, runId, 'D:/w2')).missing).toBeUndefined()
+  })
+
+  it('createTask: 없는 회차·Job·deps·parent 는 모두 missing, 빈 spec 은 아니다', () => {
+    const { s, runId } = seed()
+    const base = { title: 't', spec: 's', deps: [] as string[] }
+    expect(refusal(createTask(s, { ...base, runId: 'run_nope' }, NOW))).toEqual({ ok: false, error: 'unknown run: run_nope', missing: true })
+    expect(refusal(createTask(s, { ...base, jobId: 'job_nope' }, NOW))).toEqual({ ok: false, error: 'unknown job: job_nope', missing: true })
+    expect(refusal(createTask(s, { ...base, runId, deps: ['tsk_nope'] }, NOW))).toEqual({ ok: false, error: 'unknown deps: tsk_nope', missing: true })
+    expect(refusal(createTask(s, { ...base, runId, parentId: 'tsk_nope' }, NOW))).toEqual({ ok: false, error: 'unknown parent: tsk_nope', missing: true })
+    expect(refusal(createTask(s, { ...base, runId, spec: ' ' }, NOW)).missing).toBeUndefined()
+    // a scheduled Job's definition Task goes the same way
+    const sch = scheduled()
+    expect(refusal(createTask(sch.s, { ...base, jobId: 'job_nope' }, NOW)).missing).toBe(true)
+  })
+
+  it('applyReply: 없는 메시지는 missing, 있는데 질문이 아닌 메시지는 missing 이 아닌 400 감이다', () => {
+    const { s, runId } = seed()
+    expect(refusal(applyReply(s, { messageId: 'msg_nope', body: 'x' }, NOW))).toEqual({
+      ok: false,
+      error: 'unknown question: msg_nope',
+      missing: true
+    })
+    const status = { id: 'msg_status', runId, type: 'status' as const, subject: 's', body: 'b', answered: false, createdAt: NOW }
+    const withStatus: OrchState = { ...s, messages: [...s.messages, status] }
+    const r = refusal(applyReply(withStatus, { messageId: 'msg_status', body: 'x' }, NOW))
+    expect(r).toEqual({ ok: false, error: 'not a question: msg_status' })
+    expect(r.missing).toBeUndefined()
+  })
+
+  it('createGate: 없는 Task 는 missing, 열린 Dispatch 가 있는 Task 는 아니다', () => {
+    const { s, taskId } = seed()
+    expect(refusal(createGate(s, { taskId: 'tsk_nope', question: 'q?' }, NOW))).toEqual({
+      ok: false,
+      error: 'unknown task: tsk_nope',
+      missing: true
+    })
+    expect(refusal(createGate(s, { taskId, question: 'q?' }, NOW)).missing).toBeUndefined()
+  })
+
+  it('attachCoordinator·detachCoordinator: 없는 회차는 missing', () => {
+    const { s } = seed()
+    expect(refusal(attachCoordinator(s, { runId: 'run_nope', sessionId: 'sessC' }))).toEqual({
+      ok: false,
+      error: 'unknown run: run_nope',
+      missing: true
+    })
+    expect(refusal(detachCoordinator(s, { runId: 'run_nope' }))).toEqual({ ok: false, error: 'unknown run: run_nope', missing: true })
   })
 })

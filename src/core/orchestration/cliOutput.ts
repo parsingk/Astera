@@ -146,12 +146,12 @@ export const okEnvelope = (cmd: string, body: unknown, mark: ReplayMark = null):
  *
  * **항목 하나를 적기 전에 세 가지를 묻는다. 셋 다 실제로 한 번씩 틀렸다.**
  *
- * 1. *Does this command return 404 at all?* A missing id reaches the caller three ways: a direct
- *    `notFound(...)`, `commit()` mapping `unknown …` to 404, and a pure-layer refusal handed
- *    straight on. The third used to be `bad()` (400 → 2), and three entries written without
- *    noticing it were dead and were removed. It is now `refused()`, which answers 404 for a refusal
- *    state.ts marks `missing`, so `check --ack`, `send`'s worker_done and `gate-resolve` do return
- *    404 and have entries again. `worker-read` and `worker-release` check no existence at all
+ * 1. *Does this command return 404 at all?* A missing id reaches the caller two ways: a direct
+ *    `notFound(...)`, and a pure-layer refusal state.ts marks `missing` (its `gone`), which both
+ *    `refused()` and `commit()` answer 404. The words decide nothing: `commit()` used to map any
+ *    `unknown …` to 404, and a refusal handed straight on used to be `bad()` (400 → 2), so three
+ *    entries written without noticing that were dead and were removed. `check --ack`, `send`'s
+ *    worker_done and `gate-resolve` do return 404 now and have entries again. `worker-read` and `worker-release` check no existence at all
  *    (command.ts, the worker-release note), so they have nowhere to return 404 from.
  * 2. *권하는 명령이 같은 종류의 id 를 내놓는가.* `ask --resume` 은 id 를 `s.messages` 에서
  *    찾는데(`msg_…`) `questions list` 는 `s.gates` 를 준다(`gat_…`) — 줄은 잘 돌고, 거기서 고른
@@ -210,7 +210,8 @@ const LISTING: Record<string, readonly string[]> = {
   // 부를 수 없다. 들고 있던 questionId 가 없다는 것은 그 질문이 사라졌다는 뜻이므로, 워커가
   // 실제로 할 수 있는 일은 다시 묻는 것이다.
   ask: ['astera ask --task-id <taskId> --question <text>'],
-  // **메시지다, Gate 가 아니다**(`applyReply` 의 `unknown question: <messageId>`). 이쪽은 부르는
+  // **메시지다, Gate 가 아니다**(`applyReply` 의 `unknown question: <messageId>`, 그런 메시지가 없을
+  // 때만이다. 있는데 질문이 아니면 400 이다). 이쪽은 부르는
   // 쪽이 코디네이터이므로 `inbox` 를 부를 수 있다.
   reply: ['astera inbox'],
   'gate-create': ['astera tasks list'],
