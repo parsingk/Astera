@@ -136,12 +136,18 @@ export function takeOverChats(d: {
       skip('a socket still holds it')
       continue
     }
-    if (d.held(id)) continue
+    // Final review M1: an adapter the Host already holds does not end the pass for this proc. A first
+    // pass may have adopted it with its chain part skipped (say the snapshot sat on another account mid
+    // roll); an app that reopened, kept it and quit again leaves it chainless, so the chain part runs
+    // again, and only the adopt is not repeated.
+    const alreadyHeld = d.held(id)
+    const ids = info.rollAccountIds ?? []
+    const wantsChain = ids.length >= 1 && r.rolledBy !== 'host' && !d.hasChain(id)
+    if (alreadyHeld && !wantsChain) continue
 
     // The chain part: only for a chain the Host does not roll yet.
     let chained = false
-    const ids = info.rollAccountIds ?? []
-    if (ids.length >= 1 && r.rolledBy !== 'host' && !d.hasChain(id)) {
+    if (wantsChain) {
       const snap = parseRollSnapshot(r.roll)
       if (!snap) {
         skip('no snapshot (an app from before chat takeover) — it stalls at a limit, as before')
@@ -164,6 +170,11 @@ export function takeOverChats(d: {
           skip('the chain could not be restored from its snapshot')
         }
       }
+    }
+
+    if (alreadyHeld) {
+      if (chained) taken.push(id)
+      continue
     }
 
     // The adopt, always (P3: answering a held prompt from the CLI needs an adapter, chain or not).

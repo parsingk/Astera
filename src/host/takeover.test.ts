@@ -123,13 +123,29 @@ describe('takeOverChats (chat takeover spec §3.3)', () => {
     ['an app is attached', [chatEntry('c1', { roll: snap() })], { hasApp: true }],
     ['an app from before chat takeover wrote the note (no unattendedPermission)', [entry('c1', { provider: 'claude', roll: snap() }, true, 'chat')], {}],
     ['a socket still holds it', [chatEntry('c1', { roll: snap() })], { holders: { 'p-c1': [3] } }],
-    ['the Host already holds an adapter on it', [chatEntry('c1', { roll: snap() })], { held: ['c1'] }],
+    ['the Host already holds an adapter and a chain on it', [chatEntry('c1', { roll: snap() })], { held: ['c1'], chains: ['c1'] }],
     ['it has ended', [chatEntry('c1', { roll: snap() }, false)], {}]
   ])('takes nothing when %s', (_why, entries, over) => {
     const { r, order } = chatRig(entries as PtyEntry[], over)
     expect(r.taken).toEqual([])
     expect(r.adopted).toEqual([])
     expect(order).toEqual([])
+  })
+  // Final review M1: a first pass that adopted only (its chain part skipped) must not block the chain
+  // part for good. The adapter is there already, so it is not adopted a second time.
+  it('restores the chain of a proc the Host already holds an adapter on but rolls no chain for, without adopting again', () => {
+    const logs: string[] = []
+    const { r, order } = chatRig([chatEntry('c1', { roll: snap() })], { held: ['c1'], logs })
+    expect(order).toEqual(['note p-c1 {"rolledBy":"host"}', 'restore c1 chat'])
+    expect(r.taken).toEqual(['c1'])
+    expect(r.adopted).toEqual([])
+    expect(logs.join(' ')).toMatch(/now rolls chat c1/)
+  })
+  it('takes the mark back when that restore is refused, and adopts nothing', () => {
+    const { r, order } = chatRig([chatEntry('c1', { roll: snap() })], { held: ['c1'], restoreOk: false })
+    expect(order).toEqual(['note p-c1 {"rolledBy":"host"}', 'restore c1 chat', 'note p-c1 {"rolledBy":null}'])
+    expect(r.taken).toEqual([])
+    expect(r.adopted).toEqual([])
   })
   it('takes the mark back and drops the chain when the adopt fails after a restore', () => {
     const { r, order } = chatRig([chatEntry('c1', { roll: snap() })], { adoptOk: false })
