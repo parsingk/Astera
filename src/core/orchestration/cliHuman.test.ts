@@ -312,6 +312,18 @@ describe('humanFor', () => {
     expect(humanFor('sessions-read', { id: 'c1', kind: 'chat', alive: true, turns: [] })).toBe('(no turns yet)')
   })
 
+  it('chats pending is one row per prompt: session, id, kind, tool, summary', () => {
+    const out = humanFor('chats-pending', { prompts: [{ sessionId: 'c1', id: 'r1', kind: 'approval', tool: 'Bash', summary: 'Bash: ls' }], complete: true })
+    expect(out).toMatch(/c1\s+r1\s+approval\s+Bash\s+Bash: ls/)
+  })
+  it('says so when Astera could not be asked', () => {
+    expect(humanFor('chats-pending', { prompts: [], complete: false })).toMatch(/Astera could not be asked/)
+  })
+  it('says there are none for an empty complete list, and prints chats answer as fields', () => {
+    expect(humanFor('chats-pending', { prompts: [], complete: true })).toBe('(no open prompts)')
+    expect(humanFor('chats-answer', { sessionId: 'c1', id: 'r1', decision: 'deny', answered: true })).toMatch(/decision\s+deny/)
+  })
+
   // 억지로 표를 씌우면 가이드가 시키는 것을 못 읽게 된다
   it('공개 표면이 아닌 명령은 null 이다', () => {
     expect(humanFor('dispatch-show', { id: 'd1' })).toBe(null)

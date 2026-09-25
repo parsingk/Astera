@@ -312,6 +312,23 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       { name: 'no-enter', about: 'terminal: type the text and do not press Enter' }
     ]
   },
+  'chats-pending': {
+    summary: 'the permission prompts and questions chat sessions are waiting on',
+    detail:
+      'Each with its session, its prompt id (the id `chats answer` takes), its kind (approval or question), the tool it asks about and a one-line summary. Answered by the Host: it lists the sessions it writes to itself and asks Astera, when it is open, for the rest. `complete` is false when Astera is open but could not be asked, so the list may be short. Works with Astera closed.',
+    flags: [{ name: 'session', value: '<sessionId>', about: 'only this session (from `sessions list`)' }]
+  },
+  'chats-answer': {
+    summary: 'allow or deny one permission prompt a chat session is waiting on',
+    detail:
+      'The session that holds the prompt answers it, whether Astera or the Host writes to it, and the turn goes on. Exactly one of --allow and --deny. A question is not a permission prompt and is refused with 6: answer it in Astera. A prompt that is no longer open is refused with 6 and nothing is answered. A prompt id is per session, so an id open in two sessions needs --session (2 otherwise). With --request-id a retry is not answered twice.',
+    flags: [
+      ID('<promptId>', 'the prompt to answer (from `chats pending`)'),
+      { name: 'allow', about: 'let the tool run' },
+      { name: 'deny', about: 'refuse it; the turn goes on without it' },
+      { name: 'session', value: '<sessionId>', about: 'the session that holds the prompt' }
+    ]
+  },
 
   'requests-show': {
     summary: 'did a call of mine land, and what did it answer',

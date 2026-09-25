@@ -26,6 +26,7 @@ import { runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
 import { checkConfigIdsOf } from './convergence'
 import { createCheckWaits } from './checkWaits'
+import type { ChatAnswerResult, ChatPrompt, ChatPromptList } from '../sessions/chatRead'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -7384,4 +7385,62 @@ describe('handleCommand — 워커가 남의 dispatch 나 없는 dispatch 를 �
       expect(deps.getState()).toBe(before)
     })
   }
+})
+
+describe('handleCommand — chats pending and chats answer (chat takeover §3.5)', () => {
+  const p = (sessionId: string, id: string, kind: 'approval' | 'question' = 'approval'): ChatPrompt => ({ sessionId, id, kind, tool: kind === 'approval' ? 'Bash' : null, summary: 's' })
+  const withChats = (prompts: ChatPrompt[], answer: ChatAnswerResult = { answered: true }, complete = true, initial?: OrchState) => {
+    const answered: Array<[string, string, string]> = []
+    return {
+      answered,
+      deps: { ...makeDeps(initial), chatPrompts: async (sid?: string) => ({ prompts: prompts.filter((x) => !sid || x.sessionId === sid), complete }), chatAnswer: async (s: string, id: string, d: 'allow' | 'deny') => { answered.push([s, id, d]); return answer } } as OrchServerDeps
+    }
+  }
+  it('lists the open prompts, filtered by --session', async () => {
+    const { deps } = withChats([p('c1', 'r1'), p('c2', 'r2')])
+    expect(await call(deps, 'chats-pending', {}, '')).toEqual({ status: 200, body: { prompts: [p('c1', 'r1'), p('c2', 'r2')], complete: true } })
+    expect(((await call(deps, 'chats-pending', { session: 'c2' }, '')).body as ChatPromptList).prompts).toEqual([p('c2', 'r2')])
+  })
+  it('answers one prompt by its session’s writer', async () => {
+    const { deps, answered } = withChats([p('c1', 'r1')])
+    expect(await call(deps, 'chats-answer', { id: 'r1', deny: true }, '')).toEqual({ status: 200, body: { sessionId: 'c1', id: 'r1', decision: 'deny', answered: true } })
+    expect(answered).toEqual([['c1', 'r1', 'deny']])
+  })
+  it('is 409 for a prompt that is no longer open, before and after asking', async () => {
+    expect((await call(withChats([]).deps, 'chats-answer', { id: 'r1', allow: true }, '')).status).toBe(409)
+    expect((await call(withChats([p('c1', 'r1')], { answered: false, reason: 'not-open' }).deps, 'chats-answer', { id: 'r1', allow: true }, '')).status).toBe(409)
+  })
+  it('is 409 for a question (P6)', async () => {
+    const { deps, answered } = withChats([p('c1', 'q1', 'question')])
+    expect((await call(deps, 'chats-answer', { id: 'q1', deny: true }, '')).status).toBe(409)
+    expect(answered).toEqual([])
+  })
+  it('is 400 for an id open in two sessions without --session, and answers with it (P7)', async () => {
+    const { deps, answered } = withChats([p('c1', '0'), p('c2', '0')])
+    const r = await call(deps, 'chats-answer', { id: '0', allow: true }, '')
+    expect(r.status).toBe(400)
+    expect(JSON.stringify(r.body)).toMatch(/c1.*c2|--session/)
+    expect((await call(deps, 'chats-answer', { id: '0', allow: true, session: 'c2' }, '')).status).toBe(200)
+    expect(answered).toEqual([['c2', '0', 'allow']])
+  })
+  it('is 400 for neither or both of --allow and --deny, and for no --id', async () => {
+    const { deps } = withChats([p('c1', 'r1')])
+    expect((await call(deps, 'chats-answer', { id: 'r1' }, '')).status).toBe(400)
+    expect((await call(deps, 'chats-answer', { id: 'r1', allow: true, deny: true }, '')).status).toBe(400)
+    expect((await call(deps, 'chats-answer', { allow: true }, '')).status).toBe(400)
+  })
+  it('is 409 where no Host answers', async () => {
+    expect((await call(makeDeps(), 'chats-pending', {}, '')).status).toBe(409)
+  })
+  // Ruling (task 8): the brief is silent on roles. A worker session is refused `chats answer` (it would
+  // approve its own or another session's tool run); the shell, the app and a coordinator are not.
+  // `chats pending` is a read and stays open to every caller, like `sessions list`.
+  it('refuses chats answer from a worker session with 403, and lets it list', async () => {
+    const state = { ...emptyState(), dispatches: [{ id: 'd1', sessionId: 'w1', taskId: 't1', runId: 'r1', startedAt: NOW }] } as unknown as OrchState
+    const { deps, answered } = withChats([p('c1', 'r1')], { answered: true }, true, state)
+    expect((await call(deps, 'chats-answer', { id: 'r1', allow: true }, 'w1')).status).toBe(403)
+    expect(answered).toEqual([])
+    expect((await call(deps, 'chats-pending', {}, 'w1')).status).toBe(200)
+    expect((await call(deps, 'chats-answer', { id: 'r1', allow: true }, 'coordinator')).status).toBe(200)
+  })
 })

@@ -195,6 +195,14 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
           str(x.title)
         ])
       )
+    // 프롬프트 하나에 한 줄. 앱에 묻지 못했으면 목록이 짧을 수 있다고 표 아래에 적는다 — 빈 목록이
+    // "열린 것이 없다" 로 읽히면 안 된다.
+    case 'chats-pending': {
+      const rows = asList(data, 'prompts').map((x) => [str(x.sessionId), str(x.id), str(x.kind), str(x.tool), str(x.summary)])
+      const short = data.complete === false ? ['Astera could not be asked, so this list may be short'] : []
+      if (rows.length === 0) return short.length > 0 ? short[0] : '(no open prompts)'
+      return [columns(rows), ...short].join('\n')
+    }
     // 읽으라고 부른 화면이다 — 표로 싸면 사람이 읽으려던 것을 가린다.
     // 위의 줄들이 먼저, 그 아래 화면 — 터미널에서 보던 순서다.
     // 대화 세션은 화면이 아니라 턴이다 — 누가 말했는지 줄을 세우고, 글은 들여 쓰고, 도구는 한 줄씩.
@@ -276,6 +284,7 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
     case 'jobs-create':
     case 'tasks-add':
     case 'sessions-send':
+    case 'chats-answer':
     case 'status':
     case 'version':
     case 'host-status':

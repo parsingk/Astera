@@ -11,6 +11,7 @@ import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
 import { registrySessions } from './sessions'
 import { encodeUserTurn } from '../core/chat/claudeProtocol'
+import type { ChatPrompt } from '../core/sessions/chatRead'
 
 const base = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): Parameters<typeof hostOrchDeps>[0] => ({
   getState: () => ({}) as never,
@@ -1100,5 +1101,66 @@ describe('stopCoordinator', () => {
     await deps.stopCoordinator!('ses_x')
     expect(act).not.toHaveBeenCalled()
     expect(logs.join('\n')).toMatch(/could not be stopped/)
+  })
+})
+
+describe('hostOrchDeps — HOST_CHATS (chat takeover §3.5)', () => {
+  const prompt = (sessionId: string): ChatPrompt => ({ sessionId, id: 'r1', kind: 'approval', tool: 'Bash', summary: 's' })
+  const chats = (writerOf: string[]) => ({
+    prompts: vi.fn(() => writerOf.map(prompt)),
+    isWriter: (id: string) => writerOf.includes(id),
+    answer: vi.fn(async (_s: string, _r: string, _d: string, mark?: () => void) => { mark?.(); return { answered: true } as const }),
+    requests: () => [], send: vi.fn(async (_id: string, _text: string, _mark?: () => void) => {})
+  })
+  it('lists the Host’s own writer sessions with no app, complete', async () => {
+    const deps = hostOrchDeps(base({ hasApp: () => false, chats: chats(['c1']) }))
+    expect(await deps.chatPrompts?.()).toEqual({ prompts: [prompt('c1')], complete: true })
+  })
+  it('asks the app for the rest, and never lists a session twice', async () => {
+    const act = vi.fn().mockResolvedValue({ prompts: [prompt('c1'), prompt('c2')], complete: true })
+    const deps = hostOrchDeps(base({ act, chats: chats(['c1']) }))
+    expect((await deps.chatPrompts?.())?.prompts.map((x) => x.sessionId)).toEqual(['c1', 'c2'])
+    expect(act).toHaveBeenCalledWith('chatPrompts', [undefined])
+  })
+  it('an app that cannot be asked makes the list incomplete, not a failure', async () => {
+    const act = vi.fn().mockRejectedValue(new Error('this app cannot do chatPrompts'))
+    const deps = hostOrchDeps(base({ act, chats: chats(['c1']) }))
+    expect(await deps.chatPrompts?.()).toEqual({ prompts: [prompt('c1')], complete: false })
+  })
+  it('answers by the Host when it is the writer, marking the effect, and forwards otherwise', async () => {
+    const onEffect = vi.fn()
+    const act = vi.fn().mockResolvedValue({ answered: true })
+    const c = chats(['c1'])
+    const deps = hostOrchDeps(base({ act, onEffect, chats: c }))
+    expect(await deps.chatAnswer?.('c1', 'r1', 'deny')).toEqual({ answered: true })
+    expect(onEffect).toHaveBeenCalledTimes(1)
+    expect(act).not.toHaveBeenCalled()
+    await deps.chatAnswer?.('c2', 'r1', 'allow')
+    expect(act).toHaveBeenCalledWith('chatAnswer', ['c2', 'r1', 'allow'])
+  })
+  it('answers not-held with no writer anywhere', async () => {
+    const deps = hostOrchDeps(base({ hasApp: () => false, chats: chats([]) }))
+    expect(await deps.chatAnswer?.('c9', 'r1', 'allow')).toEqual({ answered: false, reason: 'not-held' })
+  })
+  it('P10: a Host-writer session answers its card and refuses a send behind it, with no app', async () => {
+    const card = { id: 'r1', kind: 'approval' as const, about: { tool: 'Bash', lines: ['ls'] }, decisions: ['accept' as const] }
+    const c = { ...chats(['c1']), requests: () => [card] }
+    const deps = hostOrchDeps(base({ hasApp: () => false, chats: c }))
+    expect(await deps.chatPending?.('c1')).toEqual({ kind: 'approval', summary: 'Bash: ls' })
+    expect(await deps.chatSend?.('c1', 'x')).toEqual({ sent: false, pending: { kind: 'approval', summary: 'Bash: ls' } })
+    expect(c.send).not.toHaveBeenCalled()
+  })
+  it('P10: a Host-writer session with no card is sent through the Host adapter, not the raw write', async () => {
+    const onEffect = vi.fn()
+    const sendChat = vi.fn(async () => {})
+    const c = chats(['c1'])
+    c.send.mockImplementation(async (_id: string, _text: string, mark?: () => void) => { mark?.() })
+    const b = base({ hasApp: () => false, onEffect, chats: c })
+    const deps = hostOrchDeps({ ...b, sessions: { ...b.sessions, sendChat } })
+    expect(await deps.chatPending?.('c1')).toBe(null)
+    expect(await deps.chatSend?.('c1', 'hi')).toEqual({ sent: true })
+    expect(c.send).toHaveBeenCalledWith('c1', 'hi', expect.any(Function))
+    expect(sendChat).not.toHaveBeenCalled()
+    expect(onEffect).toHaveBeenCalledTimes(1)
   })
 })

@@ -13,6 +13,8 @@ import type { HostChecks } from './checks'
 import type { HostSessions } from './sessions'
 import type { HostLocal, HostLocalName } from './spawner'
 import type { HostRolling } from './rolling'
+import type { HostChats } from './hostChats'
+import { chatPendingOf, type ChatPrompt, type ChatPromptList } from '../core/sessions/chatRead'
 
 /** What the Host answers out of itself. `runningSessions` and `appVersion` look like app questions
  *  and are not: the Host knows its own version and its own session registry, and `status` and
@@ -281,6 +283,30 @@ const HOST_SESSIONS = ['listSessions', 'readSession', 'sendSession', 'readChat']
  */
 const HOST_WHEN_ABSENT = ['chatSend'] as const
 
+/**
+ * **The chat prompts, by whichever process is each session's writer** (chat takeover §3.5, C3).
+ *
+ * The one-writer rule (constraint 3) decides who can see and answer a session's prompt: the process
+ * whose adapter may write to the proc. The Host answers the sessions it is the writer of out of its own
+ * adapters (`HostChats`), and an attached app answers the rest, which is every session the app holds.
+ * So `chatPrompts` is the Host's own list joined with the app's, less any app entry for a session the
+ * Host writes to (a proc has one writer, so the two lists can overlap only across a writer change, and
+ * the Host's view of its own session wins); `chatAnswer` goes to the Host adapter when the Host is the
+ * writer and is forwarded otherwise.
+ *
+ * **An app that cannot be asked degrades the list and propagates the answer.** A list with the app's
+ * half missing is still true of what it holds, so it is answered with `complete: false` (an older app's
+ * `this app cannot do chatPrompts` included, and logged), and the command says the list may be short. An
+ * answer cannot be degraded: nothing was answered, so a forwarded `chatAnswer` that fails is refused as
+ * PROPAGATES is. With no app and no Host writer, it is `not-held`.
+ *
+ * **The effect mark.** `chatAnswer` is an effect on either route: the Host adapter marks it right
+ * before its write (`HostChats.answer`'s `beforeWrite`, after its own not-held, not-open and question
+ * checks, so a refusal keeps no receipt), and the forward is marked by the funnel. `chatPrompts` is a
+ * read.
+ */
+const HOST_CHATS = ['chatPrompts', 'chatAnswer'] as const
+
 /** DEGRADES members whose fallback is not logged when **no app is attached**, only when an attached
  *  app failed to answer. `chatPending` with Astera closed is every chat read, and its fallback (the
  *  field left out) already tells the caller; a line per read would bury the degradations that are
@@ -359,7 +385,7 @@ const MARKS_AFTER_ACTING = new Set<HostLocalName>(['removeWorktrees', 'makeRunWo
 const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending'])
 
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
-const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ...FIRE_AND_FORGET, ...HOST_ROLLS, ...HOST_DRIVES, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
+const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ...FIRE_AND_FORGET, ...HOST_ROLLS, ...HOST_DRIVES, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT, ...HOST_CHATS]
 
 /** Not forwarded through the generic funnel at all (fix round 1, I1): `discardRunWorktree` is built by
  *  hand inside `hostOrchDeps` (its own `const discardRunWorktree`, further down, right before it is
@@ -384,6 +410,7 @@ type Classified =
   | (typeof LOCAL_WHEN_ABSENT)[number]
   | (typeof HOST_SESSIONS)[number]
   | (typeof HOST_WHEN_ABSENT)[number]
+  | (typeof HOST_CHATS)[number]
   | (typeof NOT_FORWARDED)[number]
 
 /**
@@ -463,6 +490,9 @@ const EFFECTFUL: Record<Classified, boolean> = {
   readChat: false,
   // HOST_WHEN_ABSENT — a turn, on either route.
   chatSend: true,
+  // HOST_CHATS: a list is a read; an answer lets a tool run or refuses it, on either route.
+  chatPrompts: false,
+  chatAnswer: true,
   // NOT_FORWARDED — never read: `discardRunWorktree` marks nothing itself (I1; since A36 it may take
   // back the mark its `makeRunWorktree` made), and it never reaches `REMOTE`, so this value is here
   // only to satisfy the `Record<Classified, boolean>` check.
@@ -563,6 +593,10 @@ export function hostOrchDeps(a: {
   /** The Host's own rolling (HOST_ROLLS, `host/rolling.ts`). Null or absent: `unregisterRolling` only
    *  forwards, as before S6. */
   rolling?: Pick<HostRolling, 'unregister'> | null
+  /** The Host's own chat sessions (HOST_CHATS, and P10's Host-writer routes of `chatPending` and
+   *  `chatSend`). Null or absent: the Host writes to no chat session, so both HOST_CHATS names only
+   *  forward, and `chatPending`/`chatSend` keep their D4 routes. */
+  chats?: Pick<HostChats, 'prompts' | 'isWriter' | 'answer' | 'requests' | 'send'> | null
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -710,6 +744,12 @@ export function hostOrchDeps(a: {
   /** HOST_WHEN_ABSENT: to the app when one is attached, else the Host's own write — see that group
    *  for why an app that fails mid-flight is refused rather than written for. */
   const askPending = degrading('chatPending', DEGRADES.chatPending)
+  /** P10: `chatPending` for a session the Host writes to is the Host adapter's own card; else DEGRADES. */
+  const hostPending = (id: string): Promise<unknown> => {
+    const chats = a.chats
+    if (chats && chats.isWriter(id)) return Promise.resolve(chatPendingOf(chats.requests(id)[0] ?? null))
+    return askPending(id)
+  }
   const hostWhenAbsent = (name: (typeof HOST_WHEN_ABSENT)[number]) =>
     (id: string, text: string): Promise<unknown> =>
       a.sessions.serial(id, async () => {
@@ -718,6 +758,27 @@ export function hostOrchDeps(a: {
           if (pending === undefined) return { sent: false, reason: 'not-held' }
           if (pending !== null) return { sent: false, pending }
           return forward(name, true)(id, text)
+        }
+        // P10: a session the Host writes to goes through the Host adapter, so a turn never lands around
+        // a card the adapter holds and the adapter's turn state moves with the write. An open card
+        // refuses before anything is marked, as the app route does.
+        const chats = a.chats
+        if (chats && chats.isWriter(id)) {
+          const card = chats.requests(id)[0]
+          if (card !== undefined) return { sent: false, pending: chatPendingOf(card) }
+          try {
+            await chats.send(id, text, () => {
+              if (EFFECTFUL[name]) a.onEffect?.()
+            })
+          } catch (err) {
+            const refused = new AppUnreachable(
+              `APP_REQUIRED: ${name} could not be done by the Host: ${err instanceof Error ? err.message : String(err)}`
+            )
+            a.onAppRequired(name, refused.message, {})
+            throw refused
+          }
+          a.log(`${name} sent through the Host's own adapter (no app attached)`)
+          return { sent: true }
         }
         try {
           await a.sessions.sendChat(id, text, () => {
@@ -733,6 +794,32 @@ export function hostOrchDeps(a: {
         a.log(`${name} written by the Host (no app attached)`)
         return { sent: true }
       })
+
+  /** HOST_CHATS: the Host's own writer sessions, then the app for the rest (see that group). */
+  const chatPrompts = async (sessionId?: string): Promise<ChatPromptList> => {
+    const chats = a.chats
+    const own: ChatPrompt[] = chats?.prompts(sessionId) ?? []
+    if (!a.hasApp()) return { prompts: own, complete: true }
+    try {
+      const theirs = (await act('chatPrompts', [sessionId])) as Partial<ChatPromptList> | null
+      const listed = Array.isArray(theirs?.prompts) ? theirs.prompts : []
+      const rest = listed.filter((p) => !chats?.isWriter(p.sessionId))
+      return { prompts: [...own, ...rest], complete: theirs?.complete !== false }
+    } catch (err) {
+      a.log(`chatPrompts could not be asked of the app (${err instanceof Error ? err.message : String(err)}): listing the Host's own sessions only`)
+      return { prompts: own, complete: false }
+    }
+  }
+  const forwardAnswer = forward('chatAnswer', true)
+  const chatAnswer = async (sessionId: string, requestId: string, decision: 'allow' | 'deny'): Promise<unknown> => {
+    const chats = a.chats
+    if (chats && chats.isWriter(sessionId))
+      return chats.answer(sessionId, requestId, decision, () => {
+        if (EFFECTFUL.chatAnswer) a.onEffect?.()
+      })
+    if (a.hasApp()) return forwardAnswer(sessionId, requestId, decision)
+    return { answered: false, reason: 'not-held' }
+  }
 
   /** HOST_SESSIONS: the Host's own answer, marked as an effect before it runs when it is one. */
   const own = <K extends (typeof HOST_SESSIONS)[number]>(name: K): HostSessions[K] => {
@@ -891,7 +978,10 @@ export function hostOrchDeps(a: {
         ]
       }
       if ((HOST_DRIVES as readonly string[]).includes(name)) return [name, hostDrives(name as HostDrivesName)]
+      if (name === 'chatPending') return [name, hostPending]
       if (name in DEGRADES) return [name, degrading(name, DEGRADES[name as keyof typeof DEGRADES])]
+      if (name === 'chatPrompts') return [name, chatPrompts]
+      if (name === 'chatAnswer') return [name, chatAnswer]
       if (name === 'listAccounts') return [name, localWhenAbsent(name, a.readAccounts)]
       if (name === 'listRunConfigs') return [name, localWhenAbsent(name, a.readRunConfigs)]
       if ((HOST_WHEN_ABSENT as readonly string[]).includes(name))

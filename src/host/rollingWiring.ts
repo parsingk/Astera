@@ -56,6 +56,8 @@ export interface HostRollingWiring {
     rekeyRolled(oldSessionId: string, info: { id: string; accountId: string }): Promise<void>
     /** The roll journal (S6 limits D5), for the app's `roll-journal` call. */
     rollJournal: RollJournal
+    /** The Host's chat sessions, for `chats pending`/`chats answer` and P10's Host-writer routes. */
+    chats: HostChats
   }
   /** Chained with the driving's onAppsChanged in index.ts. */
   onAppsChanged(): void
@@ -335,7 +337,8 @@ export function composeHostRolling(a: {
         return null
       },
       rekeyRolled: (oldSessionId, info) => tap.onRolled(oldSessionId, info),
-      rollJournal: journal
+      rollJournal: journal,
+      chats
     },
     // Isolated (constraint 14): this runs inside a hello or a socket close, and a throw must cost neither.
     onAppsChanged: () => {

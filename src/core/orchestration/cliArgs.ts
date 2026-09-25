@@ -78,6 +78,9 @@ export const NOUNS = {
   // **Host 가 제 레지스트리로 답한다 — 앱이 닫혀 있어도**(host/sessions.ts). pty 를 쥔 것이 Host 다.
   // id 는 앱의 세션 id(`ASTERA_SESSION`)이다. 대화 세션도 읽고 친다(phase D) — 치기는 앱이 열려 있으면 앱이 한다.
   sessions: ['list', 'read', 'send'],
+  // **Host 가 답한다 — 앱이 닫혀 있어도**(chat takeover §3.5). 대화 세션이 기다리는 권한 질문을 보고
+  // 답한다. 답은 그 세션의 쓰는 쪽(Host 또는 앱)이 한다(host/orchDeps.ts 의 HOST_CHATS).
+  chats: ['pending', 'answer'],
   // **요청 영수증**(request receipts design §8). 여기 있는 것은 공개 표면이어서가 아니라 —
   // 답하는 것은 명령 층이 아니라 Host 다(host/orch.ts) — 이 모양이 그것을 `USAGE` 와
   // `docs/cli.md` 에 함께 적히게 만들기 때문이다. `--request-id` 는 반대로 여기 없다: 그것은

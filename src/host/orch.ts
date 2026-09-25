@@ -22,6 +22,7 @@ import type { HostChecks } from './checks'
 import type { HostSessions } from './sessions'
 import type { HostLocal } from './spawner'
 import type { HostRolling } from './rolling'
+import type { HostChats } from './hostChats'
 import type { RollJournal } from './rollJournal'
 import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
 
@@ -376,6 +377,10 @@ export function createHostOrch(a: {
    *  `forceRoll` answer `roll-state`/`roll-force`, and `has` is `roll-force`'s 404 check for a session
    *  this Host holds no chain for. Absent: `unregisterRolling` only forwards to the app, as before. */
   rolling?: Pick<HostRolling, 'unregister' | 'stateOf' | 'forceRoll' | 'has'> | null
+  /** The Host's own chat sessions (chat takeover Task 8), passed through to `hostOrchDeps`: its
+   *  HOST_CHATS and the Host-writer routes of `chatPending` and `chatSend` (P10). Absent: the Host
+   *  answers no chat prompt of its own and forwards both names to the app. */
+  chats?: Pick<HostChats, 'prompts' | 'isWriter' | 'answer' | 'requests' | 'send'> | null
   /** The Host's roll journal (S6 limits D5; rollJournal.ts), for the app's `roll-journal` call. Absent
    *  exactly when there is no rolling: the call then answers 501. */
   rollJournal?: Pick<RollJournal, 'take'> | null
@@ -556,6 +561,7 @@ export function createHostOrch(a: {
       drive: a.drive ?? null,
       resolveProjectRoot: a.resolveProjectRoot,
       rolling: a.rolling ?? null,
+      chats: a.chats ?? null,
       onEffect: () => {
         marks.effects += 1
       },

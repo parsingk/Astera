@@ -396,6 +396,9 @@ astera sessions list
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
 astera sessions send   --id <sessionId> --text <text|-> [--no-enter]
 
+astera chats pending   [--session <sessionId>]
+astera chats answer    --id <promptId> [--allow | --deny] [--session <sessionId>]
+
 astera questions list  [--task <taskId>] [--status <open|resolved>]
 astera questions get    --id <questionId>
 astera questions answer --id <questionId> --answer <text>

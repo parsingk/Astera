@@ -49,7 +49,14 @@ import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath } from './projects'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
-import { CHAT_TURNS_DEFAULT, CHAT_TURNS_MAX, type ChatPending, type ChatTurn } from '../sessions/chatRead'
+import {
+  CHAT_TURNS_DEFAULT,
+  CHAT_TURNS_MAX,
+  type ChatAnswerResult,
+  type ChatPending,
+  type ChatPromptList,
+  type ChatTurn
+} from '../sessions/chatRead'
 import {
   DEFAULT_ASK_TIMEOUT_MS,
   DEFAULT_CHECK_TIMEOUT_MS,
@@ -464,6 +471,13 @@ export interface OrchServerDeps {
    *  is open. With no app the Host writes the adapter's own bytes to the process itself
    *  (host/orchDeps.ts `chatSend`). Either way one at a time per session. */
   chatSend?(id: string, text: string): Promise<ChatSendResult>
+  /** The open prompts, from the process that is each session's writer (chat takeover §3.5). The Host
+   *  answers its own writer sessions and asks an attached app for the rest; `complete` is false when the
+   *  app could not be asked. The app answers every session it holds, complete. */
+  chatPrompts?(sessionId?: string): Promise<ChatPromptList>
+  /** Allow or deny one open approval, by the session's writer. Never throws for a closed prompt: that is
+   *  `{ answered: false, reason: 'not-open' }`. */
+  chatAnswer?(sessionId: string, requestId: string, decision: 'allow' | 'deny'): Promise<ChatAnswerResult>
 }
 
 type Reply = { status: number; body: unknown }
@@ -742,6 +756,10 @@ const runView = (s: OrchState, run: JobRun): Record<string, unknown> => ({
  *  the body of a status message), and the spec and results of other Tasks. The remaining read
  *  commands (worker-show, worker-read, tasks-list, questions-list, accounts, jobs-list, jobs-get,
  *  dispatch-show) do not carry another worker's private conversation, so they are not blocked. */
+/* `chats-answer` joined in chat takeover Task 8 (a ruling: the brief was silent on roles). Approving
+ * or refusing a tool run in a chat session is a call for the person, the app or a coordinator, never for
+ * a worker. `chats-pending` is a read and stays open to every caller, as the `sessions` commands are.
+ * (Kept out of the set literal: cliAgentContext.test.ts reads the quoted names inside it.) */
 const COORDINATOR_ONLY = new Set([
   'run-create',
   'run-use',
@@ -765,7 +783,8 @@ const COORDINATOR_ONLY = new Set([
   'reply',
   'reset',
   'check',
-  'inbox'
+  'inbox',
+  'chats-answer'
 ])
 
 /** Session-task commands answer to the work-unit tracking toggle, not the orchestration one. They
@@ -3253,6 +3272,48 @@ export async function handleCommand(
       // 붙여 넣고 Enter 를 치는 약속(ptyDriver)과 세션마다 한 번에 하나씩은 Host 가 지킨다.
       await deps.sendSession(id, text as string, enter)
       return okBody({ id, sent: true, enter })
+    }
+    /**
+     * The permission prompts chat sessions wait on, and one answer to one of them (chat takeover §3.5).
+     * Both are answered by the Host: it lists the sessions it writes to itself and asks an attached app
+     * for the rest, and an answer goes to the session's writer (host/orchDeps.ts HOST_CHATS). Only an
+     * approval can be answered here (plan ruling P6); a prompt id is per process, so an id open in two
+     * sessions needs `--session` (P7).
+     */
+    case 'chats-pending':
+    case 'chats-answer': {
+      if (!deps.chatPrompts || !deps.chatAnswer)
+        return conflict('chat prompts are answered by the Astera Host, and this caller is not one')
+      const session = args.session === undefined ? undefined : str(args.session)
+      if (session === null) return bad('--session needs a session id (from `sessions list`)')
+      const list = await deps.chatPrompts(session)
+      if (routed === 'chats-pending') return okBody(list)
+      const id = str(args.id)
+      if (id === null) return bad('--id is required: a prompt id from `chats pending`')
+      const allow = args.allow === true
+      if (allow === (args.deny === true)) return bad('give exactly one of --allow and --deny')
+      const matches = list.prompts.filter((x) => x.id === id)
+      if (matches.length > 1)
+        return bad(`prompt ${id} is open in ${matches.map((x) => x.sessionId).join(' and ')}; say which with --session`)
+      const target = matches[0]
+      if (!target)
+        return conflict(
+          list.complete
+            ? `no open prompt ${id}${session ? ` in ${session}` : ''}; it may have been answered already (\`chats pending\` lists what is open)`
+            : `no open prompt ${id} that the Host can see, and Astera could not be asked; try again in a moment`
+        )
+      if (target.kind === 'question') return conflict(`${id} is a question, not a permission prompt; answer it in Astera`)
+      const decision = allow ? 'allow' : 'deny'
+      const r = await deps.chatAnswer(target.sessionId, id, decision)
+      if (!r.answered)
+        return conflict(
+          r.reason === 'not-held'
+            ? `nothing holds ${target.sessionId} right now (Astera may still be taking its sessions back); nothing was answered, try again in a moment`
+            : r.reason === 'question'
+              ? `${id} is a question, not a permission prompt; answer it in Astera`
+              : `prompt ${id} is no longer open; nothing was answered`
+        )
+      return okBody({ sessionId: target.sessionId, id, decision, answered: true })
     }
     case 'reset': {
       const open = s.dispatches.filter((d) => !d.endedAt)

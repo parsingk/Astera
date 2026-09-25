@@ -192,6 +192,12 @@ describe('publicFor', () => {
     expect(publicFor('dispatch-show', body)).toBe(body)
   })
 
+  it('chats pending keeps the five prompt fields and complete; chats answer its four', () => {
+    expect(publicFor('chats-pending', { prompts: [{ sessionId: 'c1', id: 'r1', kind: 'approval', tool: 'Bash', summary: 's', secret: 1 }], complete: true, extra: 1 }))
+      .toEqual({ prompts: [{ sessionId: 'c1', id: 'r1', kind: 'approval', tool: 'Bash', summary: 's' }], complete: true })
+    expect(publicFor('chats-answer', { sessionId: 'c1', id: 'r1', decision: 'deny', answered: true, extra: 1 }))
+      .toEqual({ sessionId: 'c1', id: 'r1', decision: 'deny', answered: true })
+  })
   it('객체가 아닌 것은 그대로 둔다', () => {
     expect(publicFor('jobs-list', [])).toEqual([])
     expect(publicFor('questions-get', null)).toBe(null)

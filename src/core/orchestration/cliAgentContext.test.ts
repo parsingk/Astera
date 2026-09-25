@@ -177,10 +177,12 @@ describe('nextSteps 가 가리키는 것은 실재하는 명령이다', () => {
     const tok = line.split(' ')
     if (tok[0] !== 'astera' || globals.has(tok[1])) return null
     const two = tok.slice(1, 3).join(' ')
-    const hit = ctx.commands.find((c) => {
-      const typed = c.usage.split(' ').slice(1).join(' ')
-      return typed === two || typed.startsWith(`${two} `) || typed === tok[1] || typed.startsWith(`${tok[1]} `)
-    })
+    const typedOf = (c: { usage: string }): string => c.usage.split(' ').slice(1).join(' ')
+    // The two-word match first: a noun's first verb must not answer for its second (`chats pending`
+    // read as `chats answer`, which only coordinators may call, chat takeover Task 8).
+    const hit =
+      ctx.commands.find((c) => typedOf(c) === two || typedOf(c).startsWith(`${two} `)) ??
+      ctx.commands.find((c) => typedOf(c) === tok[1] || typedOf(c).startsWith(`${tok[1]} `))
     return hit?.name ?? null
   }
 
