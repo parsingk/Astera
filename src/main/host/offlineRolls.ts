@@ -118,7 +118,7 @@ export function createOfflineRolls(d: {
     const ack = await d.call({ cmd: 'roll-journal', args: { ack: lastSeq }, sessionId: '' })
     if (ack.status !== 200) log(`host: the roll journal ack was refused (${ack.status}); it will be said again`)
     log(
-      `host: the Host rolled ${summary.limited.length} session(s) into a limit while the app was closed — ${posted} Slack message(s), ${entries.length} entries acked to ${lastSeq} (${why})`
+      `host: the Host rolled ${summary.limited.length} session(s) into a limit while no app was attached — ${posted} Slack message(s), ${entries.length} entries acked to ${lastSeq} (${why})`
     )
   }
 

@@ -63,7 +63,7 @@ describe('createOfflineRolls (S6 Task 5, D6)', () => {
     await h.rolls.swept('at startup', swept)
     expect(h.trail[0]).toBe('fetch')
     expect(h.trail.filter((x) => x.startsWith('slack')).map((x) => x.split(' ')[1])).toEqual(['b', 'c'])
-    expect(h.trail[1]).toMatch(/^slack b 🕘 While Astera was closed: hit the limit at .* \(resuming .*\), switched to home$/)
+    expect(h.trail[1]).toMatch(/^slack b 🕘 While Astera was away from the Host: hit the limit at .* \(resuming .*\), switched to home$/)
     // Counted: b and c met a limit; 'gone' only stalled, so it is not (fix round 1, M4).
     expect(h.trail.slice(-2)).toEqual(['desktop 2 b', 'ack 8'])
     expect(h.calls).toEqual([{}, { ack: 8 }])

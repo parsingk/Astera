@@ -1037,7 +1037,7 @@ export const en: Record<keyof typeof ko, string> = {
   'slack.chat.turnFailed': '⚠️ Turn failed — {message}',
   'slack.limitNoResume': '⛔ Limit reached — no auto-resume',
   'slack.limitNoResumeAt': '⛔ Limit reached — no auto-resume (resets {at})',
-  'slack.offline.summary': '🕘 While Astera was closed: {events}',
+  'slack.offline.summary': '🕘 While Astera was away from the Host: {events}',
   'slack.offline.limit': 'hit the limit at {time}',
   'slack.offline.limitUntil': 'hit the limit at {time} (resuming {at})',
   'slack.offline.switched': 'switched to {label}',
@@ -1048,7 +1048,7 @@ export const en: Record<keyof typeof ko, string> = {
   'notify.limitWaiting': 'Stopped on a limit, waiting to resume',
   'notify.accountSwitched': 'Switched to {label}',
   'notify.fallbackTitle': 'Astera',
-  'notify.offlineRolls': 'While Astera was closed, {n} session(s) hit a usage limit',
+  'notify.offlineRolls': 'While Astera was away from the Host, {n} session(s) hit a usage limit',
   // JobsView.tsx, App.tsx — the read-only Jobs sidebar (the orchestration Run/Task list)
   'jobs.rail.open': 'Jobs',
   'jobs.empty': 'No jobs started yet',

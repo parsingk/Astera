@@ -377,7 +377,7 @@ describe('DesktopNotifier — the restored wait and the offline notice (S6 Task 
     h.notifier.setActiveSession('s1')
     h.notifier.announceOffline(3, 's1')
     expect(h.shown).toEqual([
-      { event: 'limitWaiting', sessionId: 's1', title: 'Astera', body: 'While Astera was closed, 3 session(s) hit a usage limit' }
+      { event: 'limitWaiting', sessionId: 's1', title: 'Astera', body: 'While Astera was away from the Host, 3 session(s) hit a usage limit' }
     ])
   })
 
