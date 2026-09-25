@@ -260,8 +260,9 @@ export interface OrchServerDeps {
   /** Whether a Run's coordinator is parked: `true` only while that session has a `check --wait` for that
    *  Run in flight in the process that serves it (I-A). `false` or `null` (cannot tell) otherwise. Absent
    *  means `null`. A fire replaces an idle-only Run, and `run-coordinator-stop` stops an unfinished one,
-   *  only on `true`: nothing else tells "parked in check --wait" from "thinking". */
-  coordinatorIdle?(runId: string, sessionId: string): boolean | null
+   *  only on `true`: nothing else tells "parked in check --wait" from "thinking". **May be a Promise**
+   *  (final round 3): the app, when it drives, asks the Host, which serves the waits (`coordinator-idle`). */
+  coordinatorIdle?(runId: string, sessionId: string): boolean | null | Promise<boolean | null>
   /** 이 Run 이 일할 워크트리를 하나 만들고 그 경로를 낸다. **`startCoordinator` 와 같은 꼴** —
    *  배선이 채우고, 디스크만 만들고 OrchState 는 건드리지 않는다(기록은 setRunWorktree 가 한다).
    *
@@ -1965,7 +1966,7 @@ export async function handleCommand(
           // **An unfinished Run is replaced only while its coordinator is parked in `check --wait`**
           // (final round 2, I-A): state alone cannot tell that from a coordinator doing the work itself on
           // an objective-only Job. Busy or unknown (`false`, `null`, no dep), the plain U3 skip.
-          if (!finished && deps.coordinatorIdle?.(latest.id, latest.coordinatorSessionId) !== true) {
+          if (!finished && (await deps.coordinatorIdle?.(latest.id, latest.coordinatorSessionId)) !== true) {
             deps.log?.(`scheduled fire of job ${id}: run ${latest.id} has only its coordinator left, coordinator busy or unknown, skipped`)
             return {
               status: 409,
@@ -2033,7 +2034,7 @@ export async function handleCommand(
       // **An unfinished Run's coordinator is stopped only while parked in `check --wait`** (final round 2,
       // I-A): a Run with no Tasks, whose coordinator may be doing the work itself. A finished Run (every
       // Task terminal) needs no such check: there is nothing left for it to do.
-      if (outcomeOf(s, id) === 'running' && deps.coordinatorIdle?.(id, sessionId) !== true)
+      if (outcomeOf(s, id) === 'running' && (await deps.coordinatorIdle?.(id, sessionId)) !== true)
         return conflict(`run ${id}'s coordinator is busy or its state is unknown; it was left running`)
       // **Asked again on the state after the stop** (Minor 4): the Run may have gained work meanwhile.
       const moved = (current: OrchState): boolean => {

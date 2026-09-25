@@ -39,6 +39,7 @@ import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
 import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling } from './host/outdated'
+import { askHostCoordinatorIdle } from './host/coordinatorIdle'
 import { createBlockSync } from './host/blockSync'
 import { createOfflineRolls } from './host/offlineRolls'
 import type { BlockRegistry } from '../core/rolling/blockRegistry'
@@ -3079,6 +3080,11 @@ export function registerIpc(
       // A coordinator a hand-over started and cannot use: another one already holds the Run's slot
       // (Task 1 fix round 1, I2). Killed the way worker-stop kills a worker, the app's or the Host's pty.
       stopCoordinator: (sessionId) => coordinator.stopSession(sessionId),
+      // Whether a coordinator is parked in `check --wait` (final round 3, I-A). Those waits are served by the
+      // Host, which every CLI call reaches, so when this app drives it asks the Host; an older, absent or
+      // silent Host answers unknown, and the fire then skips (coordinatorIdle.ts).
+      coordinatorIdle: (runId, sessionId) =>
+        askHostCoordinatorIdle({ status: () => hostClient?.status() ?? null, call: orchCall, log: orchLog }, runId, sessionId),
       // Every worker start goes through this one wrapper — the auto-dispatch loop, the CLI's
       // worker-start and review Dispatches alike. The chain rule and the tail are
       // startWorkerWithChain's (core/orchestration/exec/workerStart.ts), which the Host will call

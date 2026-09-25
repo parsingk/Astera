@@ -3129,3 +3129,28 @@ describe('the Host sees a coordinator parked in check --wait (I-A)', () => {
     expect(act).toHaveBeenCalledWith('stopCoordinator', ['ses_c'])
   })
 })
+
+// Final round 3: the app, when it drives, asks the Host whether a coordinator is parked in check --wait.
+describe('coordinator-idle (final round 3)', () => {
+  it('answers the app from the Host’s record of check waits, and refuses anyone else 403', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(run.state, null, 2), 'utf8')
+    const orch = orchOver()
+    await orch.ready()
+    const runId = run.value.id
+    const app = { role: 'app' as const, toOthers: () => {} }
+    const ask = (from: { role: 'app' | 'cli'; toOthers: () => void }) =>
+      orch.call({ cmd: 'coordinator-idle', args: { runId, sessionId: 'ses_c' }, sessionId: '', from })
+    expect(await ask({ role: 'cli', toOthers: () => {} })).toMatchObject({ status: 403 })
+    expect(await ask(app)).toEqual({ status: 200, body: { idle: false } })
+    const waiting = orch.call({ cmd: 'check', args: { run: runId, wait: true, timeoutMs: 300 }, sessionId: 'ses_c' })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(await ask(app)).toEqual({ status: 200, body: { idle: true } })
+    await waiting
+    expect(await ask(app)).toEqual({ status: 200, body: { idle: false } })
+    expect(await orch.call({ cmd: 'coordinator-idle', args: { runId }, sessionId: '', from: app })).toMatchObject({ status: 400 })
+  })
+})

@@ -1164,6 +1164,7 @@ export function createHostOrch(a: {
             cmd === 'roll-state' ||
             cmd === 'roll-force' ||
             cmd === 'roll-journal' ||
+            cmd === 'coordinator-idle' ||
             WORKTREE_CALLS.has(cmd)) &&
           request !== undefined
         )
@@ -1216,6 +1217,18 @@ export function createHostOrch(a: {
               why: `the chain did not act (roll state: ${now}): it forces only when it is not rolling, waiting or settling after a roll, and no other process holds its pty`
             }
           }
+        }
+        // **Beside roll-state, for its reason (final round 3, I-A).** The app, when it drives, asks whether a
+        // coordinator is parked in `check --wait` here before a fire replaces its Run: every CLI call
+        // reaches the Host, so only this process's record (`checkWaits`) sees those waits. A read of
+        // memory, never a command layer command, and never a receipt.
+        if (cmd === 'coordinator-idle') {
+          if (from?.role !== 'app') return { status: 403, body: { error: 'coordinator-idle is the app’s to send' } }
+          const runId = args.runId
+          const idleSession = args.sessionId
+          if (typeof runId !== 'string' || runId === '' || typeof idleSession !== 'string' || idleSession === '')
+            return { status: 400, body: { error: 'coordinator-idle needs a runId and a sessionId' } }
+          return { status: 200, body: { idle: checkWaits.parked(runId, idleSession) } }
         }
         // **Beside roll-state, for its reason (S6 limits D5).** The app reads what the Host journaled while
         // no app was attached, once after its adoption sweep, and acks it. `ack` prunes the entries up to

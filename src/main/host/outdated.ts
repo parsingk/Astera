@@ -13,7 +13,8 @@ import {
   HOST_FEATURE_DISPATCH,
   HOST_FEATURE_ROLLING,
   HOST_FEATURE_BLOCKS,
-  HOST_FEATURE_ROLL_JOURNAL
+  HOST_FEATURE_ROLL_JOURNAL,
+  HOST_FEATURE_COORDINATOR_IDLE
 } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
@@ -106,4 +107,12 @@ export function hostSpeaksBlocks(status: {
  *  Host is never asked. */
 export function hostSpeaksRollJournal(status: { connected: boolean; features: readonly string[] }): boolean {
   return status.connected && status.features.includes(HOST_FEATURE_ROLL_JOURNAL)
+}
+
+/** The connected Host answers the app-only `coordinator-idle` call (final round 3, I-A): whether a
+ *  coordinator is parked in `check --wait` on it. **Connected only**, as for the roll journal: the
+ *  answer is needed, and an unresponsive Host would only run the call out. Read live, at each ask. An
+ *  older Host is never asked, and its answer is unknown. */
+export function hostSpeaksCoordinatorIdle(status: { connected: boolean; features: readonly string[] }): boolean {
+  return status.connected && status.features.includes(HOST_FEATURE_COORDINATOR_IDLE)
 }

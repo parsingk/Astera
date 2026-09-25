@@ -100,6 +100,14 @@ export interface BlocksBody {
  *  nothing to a Host without it. Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_ROLL_JOURNAL = 'roll-journal'
 
+/** The Host answers the app-only orch-call `coordinator-idle { runId, sessionId }` with `{ idle }`:
+ *  whether that coordinator session has a `check --wait` for that Run in flight on this Host (final
+ *  round 3, I-A). Every CLI call reaches the Host, so only the Host sees those waits; an app that drives
+ *  asks it before a fire replaces a Run that has only its coordinator left. Announced by every Host that
+ *  has it, with or without a spawner. An app asks nothing of a Host without it and reads the answer as
+ *  unknown. Additive, so HOST_PROTOCOL stays 3. */
+export const HOST_FEATURE_COORDINATOR_IDLE = 'coordinator-idle'
+
 /** One entry of the roll journal (D5). `seq` rises across the Host's restarts; `at` is ISO. A `rolled`
  *  entry names the new session in `sessionId` and the one it rolled from in `oldSessionId`, which is how
  *  a reader folds a chain onto its live id. A `state` entry carries the roll state and its fields. */
