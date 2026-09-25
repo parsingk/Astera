@@ -119,8 +119,9 @@ export interface HostServer {
    *  is this", whether it is answering or not. */
   startedAt: string
   /** Sends to every connected client. Slice 2's pty output takes this rather than a reply, because
-   *  the app that attaches after a restart is not the app that spawned. */
-  broadcast(m: HostMessage): void
+   *  the app that attaches after a restart is not the app that spawned. With `to`, only to the greeted
+   *  sockets whose hello yields pass it (final review M4: a push only a newer app can read). */
+  broadcast(m: HostMessage, to?: (yields: ReadonlySet<string>) => boolean): void
   /** Whether a client that announced `role: 'app'` is connected right now (design §5). The command
    *  layer asks this before it forwards an action, so that a command that needs the app is refused
    *  at once instead of waiting for one that may never come. */
@@ -547,9 +548,13 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         })
         sock.write(encodeLine({ t: 'orch-act', call, act: name, args }))
       }),
-    broadcast: (m) => {
+    broadcast: (m, to) => {
       const line = encodeLine(m)
-      for (const s of greetedSockets) if (!s.destroyed) s.write(line)
+      for (const s of greetedSockets) {
+        if (s.destroyed) continue
+        if (to && !to(yields.get(s) ?? new Set<string>())) continue
+        s.write(line)
+      }
     },
     stopAccepting: () => {
       if (!accepting) return

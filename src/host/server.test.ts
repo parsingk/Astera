@@ -697,6 +697,28 @@ describe('startHostServer', () => {
       fresh.end()
     })
 
+    // Final review M4: a push only an app that yields a duty can read goes to those apps alone.
+    it('broadcasts with a yields filter only to the greeted sockets that pass it', async () => {
+      const h = await server()
+      const hello = async (yields: string[]) => {
+        const sock = net.connect(h.address)
+        await new Promise((r) => sock.once('connect', r))
+        const ch = messageChannel(sock)
+        ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app', yields } as ClientMessage)
+        await ch.next()
+        return { sock, ch }
+      }
+      const fresh = await hello(['rolling', 'chat-takeover'])
+      const older = await hello(['rolling'])
+      h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'chat only' }, (y) => y.has('chat-takeover'))
+      h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'everyone' })
+      expect(await fresh.ch.next()).toEqual({ t: 'pty-data', id: 'p1', data: 'chat only' })
+      expect(await fresh.ch.next()).toEqual({ t: 'pty-data', id: 'p1', data: 'everyone' })
+      expect(await older.ch.next()).toEqual({ t: 'pty-data', id: 'p1', data: 'everyone' })
+      fresh.sock.end()
+      older.sock.end()
+    })
+
     it('answers what a greeted socket yielded, by its number, and null once it is gone (S6 R1)', async () => {
       const seen: number[] = []
       const h = await server({

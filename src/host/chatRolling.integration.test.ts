@@ -106,11 +106,16 @@ async function rig() {
 
   const apps = new Map<number, Set<string>>()
   const broadcasts: HostMessage[] = []
+  /** What each attached app received: [app number, message]. */
+  const delivered: Array<[number, HostMessage]> = []
   const acts: Array<[string, unknown[]]> = []
   const server = {
     hasApp: () => apps.size > 0,
     yieldsOf: (s: number) => apps.get(s) ?? null,
-    broadcast: (m: HostMessage) => { broadcasts.push(m) },
+    broadcast: (m: HostMessage, to?: (yields: ReadonlySet<string>) => boolean) => {
+      broadcasts.push(m)
+      for (const [no, y] of apps) if (!to || to(y)) delivered.push([no, m])
+    },
     act: async (name: string, args: unknown) => { acts.push([name, args as unknown[]]); return { sent: true } }
   }
   const spawner = {
@@ -156,7 +161,7 @@ async function rig() {
   box.exits = createHostExits({ registry, sessionExited: (e) => orch.sessionExited(e), orphanedSessions: (f) => orch.orphanedSessions(f), log: () => {} })
   await vi.advanceTimersByTimeAsync(0)
   return {
-    profileDir, wiring, holders, acts, broadcasts, logs, ptysOpened,
+    profileDir, wiring, holders, acts, broadcasts, delivered, logs, ptysOpened,
     openProc, proc, procsOpened, procList,
     appAttach: (socket: number, yields: string[]) => { apps.set(socket, new Set(yields)); wiring.onAppsChanged() },
     appLeave: (socket: number) => { apps.delete(socket); holders.appGone(socket); wiring.onAppsChanged() },
@@ -194,6 +199,22 @@ describe('the chat rig (chat takeover spec §5)', () => {
     expect(e.meta?.restore).toMatchObject({ rolledBy: 'host', rolledFrom: 'c1', carrySent: true, hostStarting: null })
     // Task 5 review hard carry: the chat chain rolled to a chat proc and never opened a pty.
     expect(h.ptysOpened).toEqual([])
+  })
+
+  // Final review M4: the chat roll push names a proc, which only an app that yields chat-takeover
+  // adopts as the new half of a roll. An older app attached beside it is not sent it.
+  it('sends the chat roll push only to the apps that yield chat-takeover', async () => {
+    const h = await rig()
+    const transcript = path.join(h.profileDir, 'th1.jsonl'); await fs.writeFile(transcript, '')
+    appChat(h, { transcript })
+    h.appAttach(1, [HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER]); h.appLeave(1); h.fireAfters()
+    await vi.waitFor(() => expect(h.wiring.chats.has('c1')).toBe(true))
+    h.appAttach(2, [HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER]); h.holders.heldBy('pa', 2)
+    h.appAttach(3, [HOST_YIELD_ROLLING])
+    h.proc('pa').say(rejected(Date.now() + 3_600_000))
+    await vi.waitFor(() => expect(h.broadcasts.some((x) => x.t === 'session-rolled')).toBe(true))
+    const rolledTo = h.delivered.filter(([, m]) => m.t === 'session-rolled').map(([no]) => no)
+    expect(rolledTo).toEqual([2])
   })
 
   it('with an app attached, the roll is pushed with the new proc after its handshake, and the app becomes its writer', async () => {

@@ -198,7 +198,11 @@ export function composeHostRolling(a: {
         return { ...x, ptyId, ...(procId !== null ? { procId } : {}) }
       }
       const m: HostMessage = e.t === 'session-rolled' ? rolledMessage(e) : e
-      a.server().broadcast(m)
+      // Final review M4: a chat roll's push names a proc, and only an app that yields chat-takeover
+      // adopts it as the new half of a roll. An older one would adopt the proc in its sweep, announce a
+      // tab, then re-point the old tab to it as well: two tabs for one session.
+      if (m.t === 'session-rolled' && m.procId !== undefined) a.server().broadcast(m, (y) => y.has(HOST_YIELD_CHAT_TAKEOVER))
+      else a.server().broadcast(m)
       try {
         if (!a.server().hasApp()) journal.append(e)
       } catch (err) {
