@@ -145,7 +145,7 @@ export class OrchRollTap {
         this.deps.log?.(`coordinator slot rekey commit failed run=${slot.value.id}: ${String(err)}`)
       }
     }
-    const now =this.deps.now?.() ?? new Date().toISOString()
+    const now = this.deps.now?.() ?? new Date().toISOString()
     const r = rekeyDispatch(
       this.deps.getState(),
       { oldSessionId, newSessionId: newInfo.id, accountId: newInfo.accountId },

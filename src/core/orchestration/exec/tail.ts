@@ -61,7 +61,7 @@ export class WorkerTails {
    * buffer stops growing and freezes in place.
    *
    * @param a.previousSessionId set only when a roll rekeyed this dispatch onto a new session id
-   *   (main/orchestration/rollTap.ts) — the owner entry for the old id is dropped so a dead session
+   *   (core/orchestration/exec/rollTap.ts) — the owner entry for the old id is dropped so a dead session
    *   id does not sit in the map forever. Harmless to skip in practice (a dead id never sees another
    *   push), but there is no reason to leave it either.
    * @param isEnded whether that dispatch reached a terminal state (endedAt or outcome). Used only

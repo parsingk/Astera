@@ -796,7 +796,7 @@ app.whenReady().then(async () => {
           orchRef?.onRolled(p.oldSessionId, p.info)
         } else if (channel === 'session:rollState') {
           // 정지 시점 스냅샷 — 이벤트를 통째로 넘긴다. 어떤 게시가 정지 에피소드의 시작인지
-          // 가르는 일과 세션별 기억은 OrchRollTap 이 갖는다(main/orchestration/rollTap.ts).
+          // 가르는 일과 세션별 기억은 OrchRollTap 이 갖는다(core/orchestration/exec/rollTap.ts).
           orchRef?.onRollState(payload as RollStateEvent)
         }
       } catch {
@@ -991,7 +991,7 @@ app.whenReady().then(async () => {
           orchRef?.onRolled(p.oldSessionId, p.info)
         } else if (channel === 'session:rollState') {
           // 정지 시점 스냅샷 — 이벤트를 통째로 넘긴다. 어떤 게시가 정지 에피소드의 시작인지
-          // 가르는 일과 세션별 기억은 OrchRollTap 이 갖는다(main/orchestration/rollTap.ts).
+          // 가르는 일과 세션별 기억은 OrchRollTap 이 갖는다(core/orchestration/exec/rollTap.ts).
           orchRef?.onRollState(payload as RollStateEvent)
         }
       } catch {

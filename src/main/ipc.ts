@@ -104,14 +104,13 @@ import {
   reportedDispatchIdsOf
 } from '../core/orchestration/pendingReports'
 import { ExitsBeforeTap, OrchRollTap } from '../core/orchestration/exec/rollTap'
-import { deferCoordinatorRelease } from './orchestration/releaseDefer'
+import { coordinatorReleaseOf, PendingCoordinatorReleases } from './orchestration/releaseDefer'
 import type { TaskValidator } from '../core/orchestration/exec/validator'
 import { createTaskValidation } from '../core/orchestration/exec/validation'
 import {
   bindNativeSession,
   writeOffDispatch
 } from '../core/orchestration/state'
-import { detachCoordinator } from '../core/orchestration/state'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { chatPendingOf } from '../core/sessions/chatRead'
 import type { ChatAnswer, ChatContextUsage, RateLimitInfo } from '../core/chat/types'
@@ -218,7 +217,7 @@ import { fillFromCommits } from '../core/github/fill'
  *
  *  **onRollState 도 롤링의 send 탭에서 부른다 — 그래서 역시 void 다.** `RollStateEvent` 를 통째로
  *  넘기고, 그 중 어떤 게시가 정지 에피소드의 시작인지 가르는 일과 정지 스냅샷을 남기는 일은
- *  `OrchRollTap` 이 한다(main/orchestration/rollTap.ts 의 onRollState). 통째로 넘기는 이유는 둘이다:
+ *  `OrchRollTap` 이 한다(core/orchestration/exec/rollTap.ts 의 onRollState). 통째로 넘기는 이유는 둘이다:
  *  같은 정지가 'switching' 을 두 번 게시하므로 `reattach` 를 봐야 하고, 리셋 시각(`nextRetryAt`)은
  *  이 이벤트에만 있어 여기서 버리면 브리핑이 그것을 되찾을 방법이 없다.
  *
@@ -1226,6 +1225,10 @@ export function registerIpc(
    *  있어야 orch·deps 를 닫아 쓸 수 있고, 부르는 자리(core.sessions.onExit)는 그 밖이다.
    *  orch·orchValidator 와 같은 관례다. */
   let releaseCoordinator: ((sessionId: string, exitCode: number) => Promise<void>) | null = null
+  /** The releases still inside their roll window (S6 R14). The server's `stop()` drops them, as it
+   *  drops the roll tap's deferred exits: `orch` is never reset, so nothing else stops one of them
+   *  from committing to a server that has gone. */
+  const coordinatorReleases = new PendingCoordinatorReleases()
   /** 배치 루프(core/orchestration/exec/dispatchLoop.ts). bootOrch 가 짓기 전에는 null 이다 — orchSnapshotOf
    *  가 예약 템플릿의 다음 발화 시각을 여기서 읽는다(nextFireOf). 무장은 상태에 저장하지 않고 루프가
    *  메모리에 들고 있다: 재시작하면 비어 있고, 그것이 "앱이 꺼져 있던 동안의 발화는 버린다" 는
@@ -1439,8 +1442,9 @@ export function registerIpc(
     // not empty the slot. See `releaseCoordinator` itself for why refusing is the whole fix.
     // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다 — 롤 창(EXIT_DEFER_MS)이 지난 뒤에: 롤이 다시
     // 띄운 코디네이터라면 그 사이 롤 탭이 칸을 새 세션으로 옮겨 두어, 옛 id 로는 칸을 찾지 못한다 (S6 R14).
-    // The timer can fire after quit; `releaseCoordinator` returns at its own `if (!orch) return` then.
-    if (releaseCoordinator) deferCoordinatorRelease(releaseCoordinator, e, orchLog)
+    // The server's `stop()` cancels the releases still waiting (`coordinatorReleases.cancelAll`), so none
+    // commits after it; before the first boot `releaseCoordinator` is null and nothing is armed.
+    if (releaseCoordinator) coordinatorReleases.defer(releaseCoordinator, e, orchLog)
     // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
     // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
     // it fired for the *old* session a smart resume had just written the briefing under, while the
@@ -3486,15 +3490,14 @@ export function registerIpc(
       // The cost, if the coordinator really did die with its Host: the slot stays attached to a session
       // that is gone and the restart button never appears. That is already what a plain app restart
       // leaves behind, since the slot is persisted and nothing at boot clears it.
-      if (exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
+      //
+      // The rule — this lost-sight refusal, then the Run whose slot names the session — is
+      // `coordinatorReleaseOf` (releaseDefer.ts), so its tests read the rule this runs.
       if (!orch) return
-      const st = orch.deps.getState()
-      const run = st.runs.find((r) => r.coordinatorSessionId === sessionId)
-      if (!run) return
-      const detached = detachCoordinator(st, { runId: run.id })
-      if (!detached.ok) return
-      await orch.deps.setState(detached.state)
-      orchLog(`coordinator gone run=${run.id} session=${sessionId} — restart it from the Jobs list`)
+      const released = coordinatorReleaseOf(orch.deps.getState(), sessionId, exitCode)
+      if (!released) return
+      await orch.deps.setState(released.state)
+      orchLog(`coordinator gone run=${released.run.id} session=${sessionId} — restart it from the Jobs list`)
     }
 
     orchFireTimer = setInterval(() => {
@@ -3523,6 +3526,8 @@ export function registerIpc(
         // 미뤄 둔 exit 를 버린다. 남겨 두면 서버가 내려간 뒤에 setState 가 돌 수 있다.
         orchRollTap?.dispose()
         orchRollTap = null
+        // 같은 이유로 창 안에 남은 코디네이터 칸 해제도 버린다(S6 R14, releaseDefer.ts).
+        coordinatorReleases.cancelAll()
         if (orchFireTimer) {
           clearInterval(orchFireTimer)
           orchFireTimer = null

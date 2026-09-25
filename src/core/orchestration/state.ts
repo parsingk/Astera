@@ -1563,7 +1563,7 @@ export function bindNativeSession(
  *
  *  열린 Dispatch 가 없으면 `ok(state, null)` 이다(`closeDispatch`·`rekeyDispatch` 와 같은 관례).
  *  두 번째 정지는 덮어쓴다 — Checkpoint 가 필요한 기준점은 **마지막** 정지의 것이다. 무엇이
- *  "두 번째 정지" 인지 가르는 것은 이 함수가 아니라 부르는 쪽이다(main/orchestration/rollTap.ts):
+ *  "두 번째 정지" 인지 가르는 것은 이 함수가 아니라 부르는 쪽이다(core/orchestration/exec/rollTap.ts):
  *  한 번의 정지는 롤 상태를 여러 번 게시하므로, 그 안에서 이 함수를 다시 부르면 기준점이 정지
  *  시점에서 재개 직전으로 밀려 worktreeMoved 가 아무것도 판정하지 못한다. */
 export function recordStopSnapshot(
@@ -1582,7 +1582,7 @@ export function recordStopSnapshot(
   //
   // **마지막 항목이 아직 열려 있어도 새 항목을 쌓는다.** 한동안은 그 경우 쌓지 않았다. 그 가드가
   // 막으려던 것(한 번의 정지가 롤 상태를 여러 번 게시하는 것)은 부르는 쪽에서 이미 걸러지고
-  // (main/orchestration/rollTap.ts 의 세션별 표식), 가드가 만든 해악이 더 컸다: 재개 없이 끝난
+  // (core/orchestration/exec/rollTap.ts 의 세션별 표식), 가드가 만든 해악이 더 컸다: 재개 없이 끝난
   // 에피소드가 하나라도 있으면 **그 뒤의 진짜 정지가 아무것도 남기지 못하고** — 리셋 시각이 화면까지
   // 오지 못한다 — 다음 재개가 몇 시간 전의 항목을 닫아, 타임라인이 그 사이의 실제 작업 시간을 통째로
   // 한 번의 정지 구간으로 그리고 횟수도 둘이 아니라 하나로 읽힌다. 열린 항목을 그대로 두고 새로
@@ -1620,7 +1620,7 @@ export function recordStopSnapshot(
 
 /** 정지 스냅샷의 `headCommit` 을 뒤늦게 채운다. **정지 자체는 이미 기록돼 있다** — 이 함수는 그때
  *  비워 둔 칸 하나만 메운다. 왜 두 걸음으로 나눠 기록하는지는 부르는 쪽에 적었다
- *  (main/orchestration/rollTap.ts 의 recordStop): HEAD 를 읽는 것은 프로세스 하나를 띄우는 일이고,
+ *  (core/orchestration/exec/rollTap.ts 의 recordStop): HEAD 를 읽는 것은 프로세스 하나를 띄우는 일이고,
  *  그것을 기다리는 사이에 롤이 Dispatch 의 세션 id 를 바꿔 치운다.
  *
  *  **세션 id 가 아니라 Dispatch id 로 찾는 이유가 바로 그것이다.** 재키잉을 지나도 Dispatch id 는
@@ -1628,7 +1628,7 @@ export function recordStopSnapshot(
  *
  *  **비워 둔 칸만 메운다 — 정확히는, 지금 그 칸이 null 일 때만 메운다.** 이것이 "다른 에피소드의
  *  스냅샷에는 못 쓴다" 는 것까지 보장하지는 않는다: 새 스냅샷도 매번 `headCommit: null` 로
- *  시작하기 때문이다(main/orchestration/rollTap.ts 의 recordStop, ~286행). 이 함수를 부르게 한 git
+ *  시작하기 때문이다(core/orchestration/exec/rollTap.ts 의 recordStop, ~286행). 이 함수를 부르게 한 git
  *  읽기가 다음 정지가 이미 커밋되고도 그 정지 자신의 git 읽기가 아직 답하기 전인 순간까지 늦게
  *  걸리면, 그 늦은 답은 다음 에피소드의(아직 비어 있는) 스냅샷에 옛 HEAD 를 써 넣는다 — git 이 한
  *  에피소드 전체를 건너뛸 만큼 멈춰 서야 하는 드문 경합이다. 방향은 안전한 쪽이다: 기준점이 실제보다
@@ -1652,7 +1652,7 @@ export function recordStopHead(
 /** A later `'waiting'` publication inside a stop episode already on record carries a fresher retry
  *  time than the one on file — the retry loop that follows an aborted roll (rolling.ts,
  *  codexRolling.ts) republishes `'waiting'` every round, each with its own `nextRetryAt`. The
- *  episode itself is deduped by the caller (main/orchestration/rollTap.ts's `stopped`), so this only
+ *  episode itself is deduped by the caller (core/orchestration/exec/rollTap.ts's `stopped`), so this only
  *  ever runs for a dispatch that already has an open entry — dropping the new time instead of
  *  recording it left the Jobs row and Checkpoint quoting the very first retry forever.
  *

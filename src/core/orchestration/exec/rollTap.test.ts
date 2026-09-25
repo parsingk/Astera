@@ -5,7 +5,7 @@ import type { RollStateEvent } from '../../types'
 import type { git } from '../../worktrees/git'
 import { buildCheckpoint } from '../checkpoint'
 import {
-
+  attachCoordinator,
   createJob,
   startJobRun,
   createTask,
@@ -658,8 +658,6 @@ describe('ExitsBeforeTap', () => {
     expect(heard).toHaveLength(EXITS_BEFORE_TAP_MAX)
   })
 })
-
-import { attachCoordinator } from '../state'
 
 describe('a roll that respawns a coordinator (S6 R14, a pre-existing defect)', () => {
   it('moves the Run’s coordinator slot to the new session, so its exit does not detach it', async () => {
