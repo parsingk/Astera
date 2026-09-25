@@ -8,6 +8,20 @@ import { hostRollConfigPath, readRollConfigKey } from '../core/rolling/config'
 import type { RollSnapshot } from '../core/rolling/snapshot'
 import type { Account, RateLimitPeak, SessionInfo } from '../core/types'
 
+// The chat chain harness below reads the deps createHostRolling hands the claude coordinator; the class
+// itself stays the real one, so every other test in this file runs as before.
+const captured = vi.hoisted(() => ({ deps: [] as unknown[] }))
+vi.mock('../core/rolling/claudeCoordinator', async (orig) => {
+  const m = await orig<typeof import('../core/rolling/claudeCoordinator')>()
+  class Recording extends m.RollingCoordinator {
+    constructor(d: ConstructorParameters<typeof m.RollingCoordinator>[0]) {
+      super(d)
+      captured.deps.push(d)
+    }
+  }
+  return { ...m, RollingCoordinator: Recording }
+})
+
 const LIMIT = 'Claude usage limit ' + 'reached ∙ resets 3am' // constraint 14: never one literal
 const cfg = (id: string): string => path.join(os.tmpdir(), 'astera-hr', id)
 const accounts: Account[] = [
@@ -320,5 +334,99 @@ describe('HostRolling.restore wiring (S6 Task 12, carry C-a)', () => {
     await r.rolling.refresh() // the last good read stands (R23)
     expect(r.rolling.accountsRead()).toBe(true)
     r.rolling.dispose()
+  })
+})
+
+describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
+  type Deps = {
+    write(id: string, d: string): void
+    kill(id: string): void
+    mayAct(id: string): boolean
+    spawn(o: RollSpawnOpts): SessionInfo
+    send(channel: 'session:rolled' | 'session:rollState', payload: unknown): void
+  }
+  const harness = (over: { chats: unknown; chatMayAct: (p: string) => boolean }) => {
+    const spawned: RollSpawnOpts[] = []
+    const events: HostRollEvent[] = []
+    const registry = new PtyRegistry({ spawn: () => fakePty(), log: () => {} })
+    const before = captured.deps.length
+    const rolling = createHostRolling({
+      profileDir: path.join(os.tmpdir(), 'astera-hr-chat-never-created'),
+      platform: process.platform,
+      registry,
+      spawner: {
+        prepareRollSpawn: async () => {},
+        rollSpawn: (o) => { spawned.push(o); throw new Error('a chat chain must never reach the pty spawner') },
+        statusLinePayload: async () => null
+      },
+      mayAct: () => true,
+      tap: { onRolled: async () => {}, onRollState: () => {} },
+      resumeText: async () => null,
+      onNativeSession: () => {},
+      onEvent: (e) => events.push(e),
+      lang: () => 'en',
+      readAccounts: async () => accounts,
+      readStrategy: async () => 'original',
+      isLoggedIn: async () => true,
+      fetchUsage: async () => null,
+      copy: async () => {},
+      log: () => {},
+      logCodex: () => {},
+      watchHooks: false,
+      chats: over.chats as never,
+      chatMayAct: over.chatMayAct
+    })
+    const deps = captured.deps[before] as Deps
+    disposers.push(() => rolling.dispose())
+    return {
+      accounts,
+      spawned,
+      events,
+      writeDep: (id: string, d: string) => deps.write(id, d),
+      killDep: (id: string) => deps.kill(id),
+      mayActDep: (id: string) => deps.mayAct(id),
+      spawnDep: (o: RollSpawnOpts) => deps.spawn(o),
+      sendDep: (channel: 'session:rolled' | 'session:rollState', payload: unknown) => deps.send(channel, payload)
+    }
+  }
+  const disposers: Array<() => void> = []
+  afterEach(() => { for (const d of disposers.splice(0)) d() })
+  const fakeChats = (open = false) => ({
+    has: (id: string) => id === 'c1', procOf: () => 'p1', info: () => null, spawn: vi.fn(() => ({ id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' }) as SessionInfo),
+    started: vi.fn(async () => {}), kill: vi.fn(), deliver: vi.fn(), hasOpenRequest: () => open,
+    chosenModelOf: () => 'opus', bypassedOf: () => false, subscribe: () => () => {}
+  })
+  it('routes a chat chain’s write through the writer, drops the Enter, and kills through chats', () => {
+    const chats = fakeChats()
+    const h = harness({ chats, chatMayAct: () => true })
+    h.writeDep('c1', 'carry on')
+    h.writeDep('c1', '\r')
+    h.killDep('c1')
+    expect(chats.deliver.mock.calls).toEqual([['c1', 'carry on']])
+    expect(chats.kill).toHaveBeenCalledWith('c1')
+  })
+  it('quiets a chat chain while a prompt is open or a holder did not yield chat-takeover', () => {
+    expect(harness({ chats: fakeChats(true), chatMayAct: () => true }).mayActDep('c1')).toBe(false)
+    expect(harness({ chats: fakeChats(false), chatMayAct: () => false }).mayActDep('c1')).toBe(false)
+    expect(harness({ chats: fakeChats(false), chatMayAct: () => true }).mayActDep('c1')).toBe(true)
+  })
+  it('spawns a chat respawn through chats with the session’s own bypass, never the settings', () => {
+    const chats = fakeChats()
+    const h = harness({ chats, chatMayAct: () => true })
+    h.spawnDep({ kind: 'chat', account: h.accounts[1], cwd: 'D:/p', resumeSessionId: 'th', restoreExtra: { rolledFrom: 'c1', roll: {} as never } })
+    expect(chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ bypassPermissions: false, resumeSessionId: 'th', restoreExtra: expect.objectContaining({ rolledBy: 'host' }) }))
+    // Task 5 review hard carry: a chat chain never opens a pty.
+    expect(h.spawned).toHaveLength(0)
+  })
+  it('announces a chat roll only once the new proc has started (P5)', async () => {
+    let started: () => void = () => {}
+    const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', started: vi.fn(() => new Promise<void>((r) => { started = r })) }
+    const h = harness({ chats, chatMayAct: () => true })
+    h.sendDep('session:rolled', { oldSessionId: 'c1', info: { id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' } })
+    await Promise.resolve()
+    expect(chats.started).toHaveBeenCalledWith('c2')
+    expect(h.events.filter((e) => e.t === 'session-rolled')).toEqual([])
+    started()
+    await vi.waitFor(() => expect(h.events.filter((e) => e.t === 'session-rolled')).toHaveLength(1))
   })
 })

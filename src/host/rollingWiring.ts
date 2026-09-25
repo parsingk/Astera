@@ -21,7 +21,7 @@ import os from 'node:os'
 import { liveAppPid } from '../core/host/pidFile'
 import { hostWorkerBaseEnv } from '../core/host/spawn'
 import { hostMayAct } from '../core/host/rollOwner'
-import type { HostMessage } from '../core/host/protocol'
+import { HOST_YIELD_CHAT_TAKEOVER, type HostMessage } from '../core/host/protocol'
 import { buildResumeNote, buildResumePacket } from '../core/orchestration/exec/resumePacket'
 import { absorbBlocks, blocksOfChange, parseBlocks } from '../core/rolling/blockWire'
 import { bindNativeSession } from '../core/orchestration/state'
@@ -119,6 +119,21 @@ export function composeHostRolling(a: {
   // S6 limits D5: what rolls while no app is attached is journaled, for the next app to announce.
   const journal = createRollJournal({ filePath: rollJournalPath(a.profileDir), log, nowIso: () => a.nowIso() })
 
+  // Chat takeover Task 5: the Host's chat adapters (built before the rolling, which rolls their chains:
+  // Task 6), over the same proc registry and holders the server
+  // feeds. A turn while the app is the writer goes to the app's chatSend (server.act), read at the call.
+  const chats = createHostChats({
+    procs: a.procs,
+    holders: a.procHolders,
+    platform: a.platform,
+    homeDir: os.homedir(),
+    version: a.version,
+    baseEnv: hostWorkerBaseEnv(process.env),
+    askApp: (n, args) => a.server().act(n, args),
+    log,
+    ...a.chatsDeps
+  })
+
   const rolling = createHostRolling({
     profileDir: a.profileDir,
     platform: a.platform,
@@ -131,6 +146,16 @@ export function composeHostRolling(a: {
         retiring: disposed || a.spawner.isRetiring(),
         holders: a.exits().holdersOf(pty),
         yieldsOf: (s) => a.server().yieldsOf(s)
+      }),
+    // Task 6: the same R1 for a chat proc, over its holders and the chat-takeover yield (P11).
+    chats,
+    chatMayAct: (p) =>
+      hostMayAct({
+        announces: true,
+        retiring: disposed || a.spawner.isRetiring(),
+        holders: a.procHolders.holdersOf(p),
+        yieldsOf: (s) => a.server().yieldsOf(s),
+        yieldName: HOST_YIELD_CHAT_TAKEOVER
       }),
     tap,
     // R22, the app's two forms (ipc.ts) over the Host's state — after the load, as the tap reads it: before
@@ -160,8 +185,14 @@ export function composeHostRolling(a: {
     // the app adopts before it forwards the rekey (Task 14).
     // With no app attached, the event is journaled too (D5): nobody else hears it. Its own try, after the
     // broadcast, so neither costs the other.
+    // A chat roll's push has no pty and names the new proc instead (Task 6), for the app to adopt it.
     onEvent: (e) => {
-      const m: HostMessage = e.t === 'session-rolled' ? { ...e, ptyId: a.registry.sessionPty(e.info.id) } : e
+      const rolledMessage = (x: Extract<typeof e, { t: 'session-rolled' }>): HostMessage => {
+        const ptyId = a.registry.sessionPty(x.info.id)
+        const procId = ptyId === null ? chats.procOf(x.info.id) : null
+        return { ...x, ptyId, ...(procId !== null ? { procId } : {}) }
+      }
+      const m: HostMessage = e.t === 'session-rolled' ? rolledMessage(e) : e
       a.server().broadcast(m)
       try {
         if (!a.server().hasApp()) journal.append(e)
@@ -171,20 +202,6 @@ export function composeHostRolling(a: {
     },
     lang: () => a.lang(),
     ...a.rollingDeps
-  })
-
-  // Chat takeover Task 5: the Host's chat adapters, over the same proc registry and holders the server
-  // feeds. A turn while the app is the writer goes to the app's chatSend (server.act), read at the call.
-  const chats = createHostChats({
-    procs: a.procs,
-    holders: a.procHolders,
-    platform: a.platform,
-    homeDir: os.homedir(),
-    version: a.version,
-    baseEnv: hostWorkerBaseEnv(process.env),
-    askApp: (n, args) => a.server().act(n, args),
-    log,
-    ...a.chatsDeps
   })
 
   // S6 D4: every change of the Host's block registry goes to the greeted clients. An absorb() fires no

@@ -1,6 +1,7 @@
 // The Host's rolling (S6 design §2, §3; plan R1, R10, R12, R20–R24): the two coordinators the app runs,
 // built over this Host's registry, statusline reader, hook events, accounts and state. The Host's own
 // sessions are registered at spawn (adoptSpawned); an app's are restored at takeover (restore).
+// Chat chains are rolled here too since the chat takeover, fed by `HostChats` through `chatRollFeed.ts`.
 //
 // Imports only core modules, node builtins and the Host's own modules: this bundles into the Host.
 import path from 'node:path'
@@ -17,15 +18,18 @@ import { makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
 import { readResumeStrategy } from '../core/settings/resumeStrategy'
 import { RateLimitFetcher, USAGE_GATE_MAX_AGE_MS } from '../core/usage/rateLimitFetcher'
+import { findClaudeTranscript } from '../core/history/strategies/claude'
 import type { RollSnapshot, RollSpawnExtra } from '../core/rolling/snapshot'
 import type { Lang } from '../core/i18n'
-import type { Account, RateLimitPeak, ResumeStrategy, RollStateEvent, SessionInfo } from '../core/types'
+import type { Account, RateLimitPeak, ResumeStrategy, RollStateEvent, SessionInfo, SessionKind } from '../core/types'
 import type { PtyRegistry } from './registry'
+import type { HostChats } from './hostChats'
+import { createChatRollFeed } from './chatRollFeed'
 import { hostRollingLog } from './rollingLog'
 
 export type HostRollEvent =
   | { t: 'roll-state'; event: RollStateEvent }
-  | { t: 'session-rolled'; oldSessionId: string; info: SessionInfo; dest?: string }
+  | { t: 'session-rolled'; oldSessionId: string; info: SessionInfo; dest?: string; procId?: string }
 
 /** What a roll's respawn is given (the spawner implements it in Task 10). */
 export interface RollSpawnOpts {
@@ -41,7 +45,20 @@ export interface RollSpawnOpts {
   title?: string
   /** The coordinators' closed shape (Task 7), with `rolledBy: 'host'` always set here (R6). */
   restoreExtra?: RollSpawnExtra
+  /** The chain's kind (chat takeover): 'chat' goes to HostChats, anything else to the spawner. */
+  kind?: SessionKind
+  /** Chat only, claude only: the model the chain carries (claudeCoordinator's chosenModelOf). */
+  model?: string | null
+  /** The toolchain bypass the chain was granted (design F5). */
+  startWithBypass?: boolean
 }
+
+/** What the rolling asks of the Host's chat sessions (chat takeover Task 6). `info` answers the session's
+ *  account and thread for the feed. */
+export type HostChatsForRolling = Pick<
+  HostChats,
+  'has' | 'info' | 'procOf' | 'spawn' | 'started' | 'kill' | 'deliver' | 'hasOpenRequest' | 'chosenModelOf' | 'bypassedOf' | 'subscribe'
+>
 
 /** The three spawner members rolling needs; `HostSpawner` implements them (Task 10). */
 export interface HostRollSpawner {
@@ -82,6 +99,12 @@ export interface HostRollingDeps {
   log?(m: string): void
   logCodex?(m: string): void
   watchHooks?: boolean
+  /** The Host's chat sessions (chat takeover Task 6). Absent: chat chains are not this Host's. */
+  chats?: HostChatsForRolling | null
+  /** R1 for a chat proc: every holder yielded chat-takeover (the wiring asks hostMayAct). */
+  chatMayAct?(procId: string): boolean
+  /** Test seam; default findClaudeTranscript. */
+  findTranscript?(configDir: string, threadId: string): Promise<string | null>
 }
 
 export interface HostRolling {
@@ -155,7 +178,17 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
   const configsLoaded = configs.load().catch(() => ({ recovered: true }))
   const blocks = new BlockRegistry()
   const ptyOf = (sessionId: string): string | null => d.registry.sessionPty(sessionId)
+  const chats = d.chats ?? null
+  /** A chat session the Host holds an adapter for: every route below sends it to `chats`, never a pty. */
+  const isChat = (id: string): boolean => chats?.has(id) ?? false
   const write = (id: string, data: string): void => {
+    if (isChat(id)) {
+      // A chat session takes a turn, not keys: the text goes through the writer (the Host adapter, or the
+      // app's chatSend), and the Enter that follows it on a pty is a no-op (the turn already went).
+      if (data === '\r') return
+      chats!.deliver(id, data)
+      return
+    }
     const p = ptyOf(id)
     if (!p) return
     try {
@@ -165,11 +198,21 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
     }
   }
   const kill = (id: string): void => {
+    if (isChat(id)) {
+      chats!.kill(id)
+      return
+    }
     const p = ptyOf(id)
     if (p) d.registry.kill(p)
   }
-  /** A session with no live pty here is not this Host's to act on. */
+  /** A session with no live pty here is not this Host's to act on. A chat session acts only while every
+   *  holder of its proc yielded chat-takeover and no prompt is open (spec §3.5: while a prompt is open the
+   *  chain neither resumes in place nor rolls; the S6 requeue looks again every tick). */
   const mayAct = (id: string): boolean => {
+    if (isChat(id)) {
+      const proc = chats!.procOf(id)
+      return proc !== null && (d.chatMayAct?.(proc) ?? false) && !chats!.hasOpenRequest(id)
+    }
     const p = ptyOf(id)
     return p !== null && d.mayAct(p)
   }
@@ -190,7 +233,16 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
             log(`the rolled session's rollout could not be noted session=${p.info.id}: ${String(err)}`)
           }
         }
-        d.onEvent({ t: 'session-rolled', oldSessionId: p.oldSessionId, info: p.info, ...(p.dest !== undefined ? { dest: p.dest } : {}) })
+        const event: HostRollEvent = { t: 'session-rolled', oldSessionId: p.oldSessionId, info: p.info, ...(p.dest !== undefined ? { dest: p.dest } : {}) }
+        if (isChat(p.info.id)) {
+          // P5: a Host-spawned chat proc is announced once its handshake and carry-on settled, so an
+          // app adopting it never becomes its writer mid-handshake. started() never rejects; the catch
+          // is the net under onEvent (R3).
+          chats!
+            .started(p.info.id)
+            .then(() => d.onEvent(event))
+            .catch((err: unknown) => log(`the chat roll could not be announced session=${p.info.id}: ${String(err)}`))
+        } else d.onEvent(event)
       } else {
         d.tap.onRollState(payload as RollStateEvent)
         d.onEvent({ t: 'roll-state', event: payload as RollStateEvent })
@@ -199,9 +251,30 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
       log(`a roll event could not be delivered: ${String(err)}`)
     }
   }
-  /** The respawn is this Host's spawn, marked as its own (R6). */
-  const rollSpawn = (o: RollSpawnOpts): SessionInfo =>
-    d.spawner.rollSpawn({ ...o, ...(o.restoreExtra ? { restoreExtra: { ...o.restoreExtra, rolledBy: 'host' } } : {}) })
+  /** The respawn is this Host's spawn, marked as its own (R6). A chat chain's goes to the Host's chat
+   *  sessions and never opens a pty (Task 5 review hard carry). Its bypass is the session's own choice
+   *  (`o.bypassPermissions`), never the settings file. */
+  const rollSpawn = (o: RollSpawnOpts): SessionInfo => {
+    const restoreExtra = o.restoreExtra ? { restoreExtra: { ...o.restoreExtra, rolledBy: 'host' as const } } : {}
+    if (o.kind === 'chat') {
+      if (!chats) throw new Error('a chat chain cannot be respawned: this Host holds no chat sessions')
+      return chats.spawn({
+        account: o.account,
+        cwd: o.cwd,
+        ...(o.resumeSessionId !== undefined ? { resumeSessionId: o.resumeSessionId } : {}),
+        ...(o.initialPrompt !== undefined ? { initialPrompt: o.initialPrompt } : {}),
+        ...(o.rollAccountIds !== undefined ? { rollAccountIds: o.rollAccountIds } : {}),
+        ...(o.rollPrompt !== undefined ? { rollPrompt: o.rollPrompt } : {}),
+        ...(o.slackNotify !== undefined ? { slackNotify: o.slackNotify } : {}),
+        bypassPermissions: o.bypassPermissions ?? false,
+        ...(o.title !== undefined ? { title: o.title } : {}),
+        ...(o.model !== undefined ? { model: o.model } : {}),
+        ...(o.startWithBypass !== undefined ? { startWithBypass: o.startWithBypass } : {}),
+        ...restoreExtra
+      })
+    }
+    return d.spawner.rollSpawn({ ...o, ...restoreExtra })
+  }
   const common = {
     // Its async half is done first, while the old session lives (R5). Left rejecting (see `safe`).
     prepareSpawn: (account: Account, cwd: string) => d.spawner.prepareRollSpawn(account, cwd),
@@ -239,12 +312,16 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
     resumeText: safe('resume text', (sessionId: string, form: 'handover' | 'update') => d.resumeText(sessionId, form), null),
     resumeStrategy: () => strategy,
     mayAct,
+    // What a chat roll carries, read off the session before its kill (the chat manager holds both).
+    bypassedOf: (id: string) => (isChat(id) ? chats!.bypassedOf(id) : false),
     ...(d.copy ? { copy: d.copy } : {})
   }
   const claude = new RollingCoordinator({
     ...common,
     spawn: rollSpawn,
-    readStatusPayload: safe('statusline read', (id: string) => d.spawner.statusLinePayload(id), null),
+    chosenModelOf: (id) => (isChat(id) ? chats!.chosenModelOf(id) : null),
+    // A chat session writes no statusline (as in the app): its facts come in through the feed.
+    readStatusPayload: safe('statusline read', (id: string) => (isChat(id) ? Promise.resolve(null) : d.spawner.statusLinePayload(id)), null),
     readUsage: safe('usage lookup', fetchUsage, null),
     log
   })
@@ -254,7 +331,29 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
     log: logCodex
   })
 
-  // R20: session ptys only, by the session id in the note.
+  // The chat twin of the pty feed below: the Host's chat adapters' events, as ipc.ts feeds the app's.
+  // Proc exits reach the coordinators through its `exit` branch.
+  const accountOf = (id: string): Account | null => {
+    const i = chats?.info(id)
+    return i ? (accounts.find((x) => x.id === i.accountId) ?? null) : null
+  }
+  const stopChatFeed =
+    chats?.subscribe(
+      createChatRollFeed({
+        claude,
+        codex,
+        providerOf: (id) => {
+          const a = accountOf(id)
+          return a ? providerOf(a) : null
+        },
+        accountOf,
+        threadOf: (id) => chats.info(id)?.threadId ?? null,
+        findTranscript: d.findTranscript ?? findClaudeTranscript,
+        log
+      })
+    ) ?? null
+
+  // Session ptys, by the session id in the note (chat procs come in through the chat feed above).
   d.registry.onData((ptyId, data) => {
     const m = d.registry.metaOf(ptyId)
     if (m?.kind !== 'session') return
@@ -323,6 +422,11 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
     accountsRead: () => accountsRead,
     onHookEvent: (sid, p) => claude.onHookEvent(sid, p),
     dispose: () => {
+      try {
+        stopChatFeed?.()
+      } catch (err) {
+        log(`the chat feed could not be stopped: ${String(err)}`)
+      }
       hooks?.stop()
       claude.stop()
       codex.stop()
