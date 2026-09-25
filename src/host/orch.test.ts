@@ -43,6 +43,9 @@ import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { HostRetiring } from '../core/host/hostRetiring'
 import { pendingReportFileName, pendingReportsDirIn, serializePendingReport } from '../core/orchestration/pendingReports'
 import { createHostProjectRoots } from './projectRoots'
+import { createHostExits } from './exits'
+import { createHostRollTap } from './rollTapHost'
+import { EXIT_DEFER_MS } from '../core/orchestration/exec/exitOwner'
 
 const NOW = '2026-09-22T00:00:00.000Z'
 /** 이 Host 가 선 시각. `now` 보다 **앞**이어야 하는 값이다 — `requests show` 가 이것을 실어 주는
@@ -2746,6 +2749,104 @@ describe('the Host handles exits (S2)', () => {
     const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
     await orch.ready()
     expect(orch.orphanedSessions(() => false)).toEqual(['ses_c'])
+  })
+
+  it('rekeys to the session a live pty says was rolled from this one, instead of closing (S6 R7, Review Focus 2)', async () => {
+    const { state } = withDispatches(['ses_old'])
+    await write(state)
+    const rekeyRolled = vi.fn(async () => {})
+    const orch = orchOver({
+      hasApp: () => false,
+      act: vi.fn(),
+      aliveSessionIds: () => new Set(['ses_old']),
+      rolledInto: (id) => (id === 'ses_old' ? { id: 'ses_new', accountId: 'acc2' } : null),
+      rekeyRolled
+    })
+    await orch.sessionExited({ sessionId: 'ses_old', exitCode: 1 })
+    expect(rekeyRolled).toHaveBeenCalledWith('ses_old', { id: 'ses_new', accountId: 'acc2' })
+    expect(orch.state().dispatches.find((x) => x.sessionId === 'ses_old')?.endedAt).toBeUndefined()
+  })
+  it('with nothing rolled from it, the exit closes the Dispatch as before', async () => {
+    const { state } = withDispatches(['ses_x'])
+    await write(state)
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), aliveSessionIds: () => new Set(['ses_x']), rolledInto: () => null, rekeyRolled: vi.fn() })
+    await orch.sessionExited({ sessionId: 'ses_x', exitCode: 1 })
+    expect(orch.state().dispatches[0].endedAt).toBe(NOW)
+  })
+
+  // S6 R14, the Host half: a real coordinator exit empties its slot by the app's rule
+  // (`coordinatorReleaseOf`), and only after the exit defer, which host/exits.ts owns: the Host's
+  // `sessionExited` is that defer's callback, so a roll's rekey always lands first.
+  it('a real Host coordinator exit releases the slot only after the exit defer (S6 R14)', async () => {
+    const { state, runId } = withDispatches([])
+    const attached = attachCoordinator(state, { runId, sessionId: 'ses_c' }); if (!attached.ok) throw new Error(attached.error)
+    await write(attached.state)
+    const orch = orchOver({ hasApp: () => false, act: vi.fn(), aliveSessionIds: () => new Set(['ses_c']), rolledInto: () => null, rekeyRolled: vi.fn() })
+    await orch.ready()
+    let exitPty: (code: number) => void = () => {}
+    const registry = new PtyRegistry({
+      spawn: () => ({ pid: 1, onData() {}, onExit(cb) { exitPty = (exitCode) => cb({ exitCode }) }, write() {}, resize() {}, kill() {}, pause() {}, resume() {} }),
+      log: () => {}
+    })
+    createHostExits({ registry, sessionExited: (e) => orch.sessionExited(e), orphanedSessions: () => [], log: () => {} })
+    const opened = registry.open({ id: 'pc', file: 'cmd.exe', args: [], opts: { cwd: 'D:/p', cols: 80, rows: 24, env: {} }, meta: { kind: 'session', id: 'ses_c', restore: {} } })
+    if (!opened.ok) throw new Error(opened.error)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      exitPty(0)
+      await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS - 1)
+      expect(orch.state().runs.find((r) => r.id === runId)?.coordinatorSessionId).toBe('ses_c')
+      await vi.advanceTimersByTimeAsync(1)
+    } finally {
+      vi.useRealTimers()
+    }
+    // The store moves memory before the disk write the log line waits on, so both are waited for.
+    await vi.waitFor(() => expect(logs).toContain(`coordinator gone run=${runId} session=ses_c — restart it from the Jobs list`))
+    expect(orch.state().runs.find((r) => r.id === runId)?.coordinatorSessionId).toBeUndefined()
+  })
+
+  // S6 R14 with R7: the slot follows the roll, through the Host's own roll tap. Never released.
+  it('a coordinator a live pty says was rolled from this one keeps its slot: rekeyed, not released (S6 R14, R7)', async () => {
+    const { state, runId } = withDispatches([])
+    const attached = attachCoordinator(state, { runId, sessionId: 'ses_c' }); if (!attached.ok) throw new Error(attached.error)
+    await write(attached.state)
+    const box: { orch?: ReturnType<typeof orchOver> } = {}
+    const tap = createHostRollTap({ orch: () => box.orch!, retarget: vi.fn(), log: (m) => logs.push(m), now: () => NOW })
+    box.orch = orchOver({
+      hasApp: () => false,
+      act: vi.fn(),
+      aliveSessionIds: () => new Set(['ses_c']),
+      rolledInto: (id) => (id === 'ses_c' ? { id: 'ses_c2', accountId: 'acc2' } : null),
+      rekeyRolled: (old, info) => tap.onRolled(old, info)
+    })
+    await box.orch.sessionExited({ sessionId: 'ses_c', exitCode: 1 })
+    expect(box.orch.state().runs.find((r) => r.id === runId)?.coordinatorSessionId).toBe('ses_c2')
+    expect(logs.some((m) => m.startsWith('coordinator gone'))).toBe(false)
+    expect(logs).toContain('session ses_c was rolled into ses_c2 — rekeyed, not closed')
+  })
+
+  // Preflight C13: every Host respawn carries rolledFrom, so the old pty's exit reaches the rolledFrom
+  // branch after the Host's own tap already rekeyed. The second call finds nothing on the old id.
+  it('after the Host’s own roll already rekeyed, the old pty’s exit rekeys nothing again and says so (preflight C13)', async () => {
+    const { state, runId } = withDispatches(['ses_w2'])
+    const attached = attachCoordinator(state, { runId, sessionId: 'ses_c2' }); if (!attached.ok) throw new Error(attached.error)
+    await write(attached.state)
+    const rekeyRolled = vi.fn(async () => {})
+    const orch = orchOver({
+      hasApp: () => false,
+      act: vi.fn(),
+      aliveSessionIds: () => new Set(['ses_c2', 'ses_w2']),
+      rolledInto: (id) => (id === 'ses_c' ? { id: 'ses_c2', accountId: 'acc2' } : id === 'ses_w' ? { id: 'ses_w2', accountId: 'acc2' } : null),
+      rekeyRolled
+    })
+    await orch.sessionExited({ sessionId: 'ses_c', exitCode: 1 })
+    await orch.sessionExited({ sessionId: 'ses_w', exitCode: 1 })
+    expect(rekeyRolled).not.toHaveBeenCalled()
+    expect(orch.state().runs.find((r) => r.id === runId)?.coordinatorSessionId).toBe('ses_c2')
+    expect(orch.state().dispatches[0].endedAt).toBeUndefined()
+    expect(logs.some((m) => m.includes('rekeyed, not closed'))).toBe(false)
+    expect(logs).toContain('session ses_c was rolled into ses_c2 — already rekeyed, nothing left on the old id')
+    expect(logs).toContain('session ses_w was rolled into ses_w2 — already rekeyed, nothing left on the old id')
   })
 })
 

@@ -8,8 +8,9 @@
 //
 // **Why "held", not "is an app attached".** An attached app sees only the sessions it holds. A worker
 // the Host spawned for a coordinator's `worker-start` is unknown to it until it adopts it, and an older
-// app never adopts it at all. Rolling, the one reason to wait before closing a Dispatch, runs only on
-// sessions the app holds, so the Host's own exits need the defer only to match the app's window.
+// app never adopts it at all. Rolling runs in both processes since S6: the app rolls the ptys it owns,
+// the Host the ones it spawned or took over; each defers its own exits by this window so its own roll
+// tap rekeys first.
 
 /** How long an exit waits before it is handled.
  *

@@ -7,11 +7,11 @@ import { handleCommand, handleExit, type OrchServerDeps } from '../core/orchestr
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
 import { applyPendingReports, readPendingReports, type QueuedReport } from '../core/orchestration/pendingDrain'
 import { dispatchesHeldOnlyByReport, pendingReportsDirIn, reportedDispatchIdsOf } from '../core/orchestration/pendingReports'
-import { detachCoordinator, writeOffDispatch, type OrchState } from '../core/orchestration/state'
+import { writeOffDispatch, type OrchState } from '../core/orchestration/state'
 import { runningRunCount } from '../core/orchestration/running'
 import { isPlaceholderSessionId } from '../core/orchestration/types'
 import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
-import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
+import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { HOST_CALLER, type Driver } from '../core/host/driver'
 import { hostOrchDeps } from './orchDeps'
@@ -293,8 +293,9 @@ export interface HostOrch extends OrchCall {
    *  a command already behind `ready()`, so it never triggers or races the load. */
   state(): OrchState
   /** A session this Host holds has ended and no app handles it (host/exits.ts): closes its open
-   *  Dispatch through `handleExit`, the app's own path, then empties a coordinator slot it held. Waits
-   *  for the load, as every command does. */
+   *  Dispatch through `handleExit`, the app's own path, then empties a coordinator slot it held. A
+   *  session a live pty says was rolled from it is rekeyed instead, and nothing is closed (S6 R7).
+   *  Waits for the load, as every command does. */
   sessionExited(e: { sessionId: string; exitCode: number }): Promise<void>
   /** The sessions the state still counts on that `isAlive` says are gone: open Dispatches (never a
    *  `pending:` one, which has no session yet) and coordinator slots, each id once. **Empty before
@@ -372,6 +373,10 @@ export function createHostOrch(a: {
    *  the other two members are for the roll tap and the app's calls (Tasks 11 and 13). Absent:
    *  `unregisterRolling` only forwards to the app, as before. */
   rolling?: Pick<HostRolling, 'unregister' | 'stateOf' | 'forceRoll'> | null
+  /** R7: the live session a pty note says was rolled from this one, or null. */
+  rolledInto?(sessionId: string): { id: string; accountId: string } | null
+  /** R7: rekeys through the Host's roll tap instead of closing. */
+  rekeyRolled?(oldSessionId: string, info: { id: string; accountId: string }): Promise<void>
   /** `validation-stop`: the app's stop button on a validation run this Host started (S4+S5 §5.1).
    *  Marks the run stopped and kills it, so its exit reads as "not proven" rather than a failure;
    *  true when `runId` was such a run. Absent: the call answers 501. */
@@ -1040,22 +1045,35 @@ export function createHostOrch(a: {
     state: () => store.get(),
     sessionExited: async (e) => {
       await ready()
+      // S6 R7: a session some live pty says it was rolled from is not dead work — an app that died
+      // between its roll's spawn and its tap's commit left the Dispatch on this id. Rekey, do not close.
+      const into = a.rolledInto?.(e.sessionId) ?? null
+      if (into && a.rekeyRolled) {
+        // Every Host respawn carries rolledFrom, so this also runs after the Host's own rolls, whose tap
+        // rekeyed already: then there is nothing left on the old id, and it says so (preflight C13).
+        const st = store.get()
+        const left = st.dispatches.some((x) => x.sessionId === e.sessionId && !x.endedAt) || st.runs.some((r) => r.coordinatorSessionId === e.sessionId)
+        if (left) {
+          await a.rekeyRolled(e.sessionId, into)
+          a.log(`session ${e.sessionId} was rolled into ${into.id} — rekeyed, not closed`)
+        } else {
+          a.log(`session ${e.sessionId} was rolled into ${into.id} — already rekeyed, nothing left on the old id`)
+        }
+        return
+      }
       // Marks nobody reads: this is not a command, so there is no reply to correct and no receipt.
       const deps = depsFor(throwaway())
       await handleExit(deps, e)
-      // The slot rule is `releaseCoordinator`'s in the app, whole: an exit that only says the session
-      // was lost sight of keeps the slot, as `handleExit` keeps the Dispatch. The Host's own registry
-      // never delivers one today (§2.6), so this keeps the two rules identical rather than guarding a
-      // path that is reached.
-      if (e.exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
+      // The slot rule is `releaseCoordinator`'s in the app, whole, and the same function
+      // (`coordinatorReleaseOf`, S6 R14): an exit that only says the session was lost sight of keeps
+      // the slot, as `handleExit` keeps the Dispatch. **No second defer**, unlike the app's
+      // `PendingCoordinatorReleases`: this handler already runs EXIT_DEFER_MS after the exit
+      // (host/exits.ts), the same window the app's release waits, so a roll's rekey has landed by now.
       // Read after `handleExit`, which commits.
-      const st = store.get()
-      const run = st.runs.find((r) => r.coordinatorSessionId === e.sessionId)
-      if (!run) return
-      const detached = detachCoordinator(st, { runId: run.id })
-      if (!detached.ok) return
-      await deps.setState(detached.state)
-      a.log(`coordinator gone run=${run.id} session=${e.sessionId} — restart it from the Jobs list`)
+      const released = coordinatorReleaseOf(store.get(), e.sessionId, e.exitCode)
+      if (!released) return
+      await deps.setState(released.state)
+      a.log(`coordinator gone run=${released.run.id} session=${e.sessionId} — restart it from the Jobs list`)
     },
     orphanedSessions: (isAlive) => {
       if (!loaded) return []
