@@ -1206,11 +1206,19 @@ A83 and A84). This list is the record, in A1's form; A56 and D2 point back here.
   "coordinator busy or unknown, skipped"). A finished Run needs no such check. The waits are recorded
   where `check --wait` is served: every CLI call reaches the Host, so the Host's command server holds one
   tracker for its life (`checkWaits.ts`, wired through `hostOrchDeps`), and a fire or loop stop the Host
-  drives reads it. The app serves no session's `check` and wires neither dep, so when the app drives it
-  answers unknown and skips. Also: a replaced Run is paused even when the exit release emptied its slot
+  drives reads it. The app serves no session's `check`, so it records nothing. **When the app drives it
+  asks the Host (final round 3):** its `coordinatorIdle` is a Promise that sends the new app-only
+  orch-call `coordinator-idle { runId, sessionId }`, answered `{ idle }` from the Host's tracker beside
+  `roll-state` (403 to anyone but the app, never a command layer command, never a receipt). It is
+  gated on the new `HOST_FEATURE_COORDINATOR_IDLE`, which every Host announces, spawner or not
+  (`hostFeatures`), read live at each ask (`hostSpeaksCoordinatorIdle`, `src/main/host/outdated.ts`).
+  An older Host, one that is not connected, a call that fails or runs out the orch-call deadline
+  (`HOST_UNRESPONSIVE_MS`), and any other answer read as unknown, so the fire skips
+  (`src/main/host/coordinatorIdle.ts`). HOST_PROTOCOL stays 3. Also: a replaced Run is paused even when the exit release emptied its slot
   during the stop, and `run-coordinator-stop` asks `runMoves` again on the state after the stop and
   writes nothing (409) when the Run gained work meanwhile. Pinned by `command.test.ts`, `view.test.ts`,
-  `dispatchLoop.test.ts`, `checkWaits.test.ts` and `host/orch.test.ts` (final-fix-report.md).
+  `dispatchLoop.test.ts`, `checkWaits.test.ts`, `host/orch.test.ts`, `host/features.test.ts` and
+  `main/host/coordinatorIdle.test.ts` (final-fix-report.md).
 
 ## Known limits after S3
 
@@ -1508,11 +1516,12 @@ reason. Checked at `bf479b4e`.
   a restart.
 - **A Run with only its coordinator left is replaced only while that coordinator is parked.**
   (Amendments A84, the idle rule) A fire that finds the coordinator between two `check --wait` calls, or
-  thinking, skips; so does every fire while the app drives, since the app cannot see the Host's waits.
-  So with Astera driving in front of a Host, an objective-only scheduled Job whose coordinator never
-  ends is skipped at each fire, as before U4, until its Run is stopped by hand. With the Host driving, a
-  coordinator that parks in `check --wait` between turns is replaced at the first fire that meets it
-  parked. The same goes for `run-coordinator-stop` on a Run with no Tasks.
+  thinking, skips. Whichever process drives, a coordinator that parks in `check --wait` between turns
+  is replaced at the first fire that meets it parked: the Host reads its own record, and the app asks
+  the Host. An app in front of a Host too old to announce `coordinator-idle`, or one that does not
+  answer within the orch-call deadline, reads the answer as unknown and skips, so there an objective-only
+  scheduled Job whose coordinator never ends is skipped at each fire, as before U4, until its Run is
+  stopped by hand. The same goes for `run-coordinator-stop` on a Run with no Tasks.
 - **`jobs run` does not ask the idle rule.** (Amendments A83, A84) A Run with only its coordinator left
   does not count as running whether or not that coordinator is busy, so `jobs run` starts the next Run
   beside a coordinator that may still be doing the work itself. It stops nothing, so nothing is lost,

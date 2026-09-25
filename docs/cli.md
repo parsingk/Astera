@@ -244,9 +244,10 @@ open question, no check under way and no task its coordinator can still start, a
 an objective alone. It is replaced only while its coordinator is parked in `check --wait`, which is the
 one sure sign that the coordinator is waiting rather than doing the work itself; the Host sees that
 wait, because every CLI call reaches the Host. Then its coordinator is stopped, the run is paused the
-way `runs stop` pauses one, and the new run starts. `runs resume` takes the old run back. When the
-coordinator is busy, or when the process that fires cannot tell, which is Astera driving in front of a
-Host, the fire is skipped and logged as before. A run that is still working is skipped as well.
+way `runs stop` pauses one, and the new run starts. `runs resume` takes the old run back. When Astera
+drives the fire itself, it asks the Host whether that coordinator is parked. When the coordinator is
+busy, or the answer cannot be had (a Host too old to answer, or one that does not answer in time), the
+fire is skipped and logged as before. A run that is still working is skipped as well.
 
 **The Host runs the checks itself.** A task added with `--validate` or `--review` moves on after its
 worker reports done, with Astera open or closed. A validation run the Host starts appears in Astera's
