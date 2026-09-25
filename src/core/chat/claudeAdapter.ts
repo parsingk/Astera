@@ -128,6 +128,10 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
         if (effect.turnId === null) endOpenRequests()
         // The first thing that is definite about the turn ends the guess a truncated replay left behind.
         core.patch({ truncated: false })
+        // A turn beginning retires the last one's failure, as `doSend` does for a turn this adapter
+        // wrote. The turn may have been written by another process (the Host while the app was away,
+        // or the app while this Host adapter only reads), and its `system/init` is the only sign of it.
+        if (effect.turnId !== null) core.patch({ error: null })
         break
       case 'resolvedTool': {
         for (const [id, toolUseId] of openTools) if (toolUseId === effect.toolUseId) openTools.delete(id)

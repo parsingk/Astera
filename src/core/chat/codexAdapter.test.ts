@@ -434,3 +434,23 @@ describe('createCodexAdapter — the mode list after adoption', () => {
     expect(await asking).toEqual([])
   })
 })
+
+// Chat takeover e2e (Task 12): the reopened app kept "the turn failed" over a codex session whose
+// Host-sent resume in place had run to the end. A turn this adapter did not send has to retire the last
+// turn's failure the way its own send does.
+describe('createCodexAdapter — a turn started elsewhere', () => {
+  it('clears the last turn’s failure', async () => {
+    const { p, a } = await started()
+    const threadId = '01a0a6cb-43a2-7d71-994f-72e53764fbc1'
+    p.feed(JSON.stringify({ method: 'turn/started', params: { threadId, turn: { id: 't1' } } }))
+    p.feed(JSON.stringify({ method: 'turn/completed', params: { threadId, turn: { id: 't1', status: 'failed', error: { message: 'limit' } } } }))
+    await tick()
+    expect(a.state()).toMatchObject({ status: 'idle', error: 'limit' })
+    p.feed(JSON.stringify({ method: 'turn/started', params: { threadId, turn: { id: 't2' } } }))
+    await tick()
+    expect(a.state()).toMatchObject({ status: 'working', error: null })
+    p.feed(F.TURN_COMPLETED_OK)
+    await tick()
+    expect(a.state().error).toBeNull()
+  })
+})

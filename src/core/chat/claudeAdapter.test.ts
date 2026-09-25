@@ -332,6 +332,22 @@ describe('createClaudeAdapter — a turn with a question', () => {
     expect(a.state()).toMatchObject({ status: 'working', error: null })
   })
 
+  // Chat takeover e2e (Task 12): a turn this adapter did not send (the Host sent it while this app was
+  // away, or the app sent it while this Host adapter only read) must retire the last turn's failure
+  // too. The reopened app kept "the turn failed" over a session whose next turn had run to the end.
+  it('a turn another process started clears the last turn’s failure', async () => {
+    const { p, a } = await started()
+    void a.send('do it')
+    await tick()
+    p.feed(F.SYSTEM_INIT)
+    p.feed(JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, terminal_reason: 'completed', session_id: SESSION_ID }))
+    await tick()
+    expect(a.state()).toMatchObject({ status: 'idle', error: 'error_max_turns' })
+    p.feed(F.SYSTEM_INIT)
+    await tick()
+    expect(a.state()).toMatchObject({ status: 'working', error: null })
+  })
+
   it('a request that arrives before the first init still counts as a running turn', async () => {
     const { p, a } = await started()
     void a.send('write a file')

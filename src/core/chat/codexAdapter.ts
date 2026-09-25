@@ -96,6 +96,10 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
         // The first thing that is definite about the turn ends the guess a truncated replay left
         // behind — without this the flag never cleared and the pane said "확인하는 중" for ever.
         core.patch({ truncated: false })
+        // A turn beginning retires the last one's failure, as `doSend` does for a turn this adapter
+        // sent. The turn may have been sent by another process (the Host while the app was away, or
+        // the app while this Host adapter only reads), and `turn/started` is the only sign of it.
+        if (effect.turnId !== null) core.patch({ error: null })
         break
       case 'resolved':
         core.resolveRequest(String(effect.requestId))
