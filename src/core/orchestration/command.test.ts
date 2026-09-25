@@ -5569,6 +5569,11 @@ describe('jobs run / questions answer', () => {
     expect(r.status).toBe(409)
     expect(JSON.stringify(r.body)).toContain(runId)
     expect(byCoordinator.getState().runs).toHaveLength(1)
+    // A fire asks the same question (run-spawn --unless-running, the user's ruling of 2026-09-25).
+    const skipped = await call(byCoordinator, 'run-spawn', { run: jobId, unlessRunning: true })
+    expect(skipped.status).toBe(409)
+    expect(skipped.body).toMatchObject({ jobId, running: runId })
+    expect(byCoordinator.getState().runs).toHaveLength(1)
 
     const byWorkers = makeDeps()
     await call(byWorkers, 'run-create', { objective: 'o', cwd: 'D:/p' })
@@ -5591,7 +5596,10 @@ describe('jobs run / questions answer', () => {
     })
     expect((await call(byWorkers, 'runs-wait', { id: wRun, timeoutMs: 500 })).body).toMatchObject({ state: 'limited' })
     expect((await call(byWorkers, 'jobs-run', { id: wJob })).status).toBe(409)
+    expect((await call(byWorkers, 'run-spawn', { run: wJob, unlessRunning: true })).status).toBe(409)
     expect(byWorkers.getState().runs).toHaveLength(1)
+    // Without the flag run-spawn makes the run as before (jobs run's own later-run path checks first).
+    expect((await call(byWorkers, 'run-spawn', { run: wJob })).status).toBe(200)
   })
 
   // Final review I1: once every Task is terminal the Run is over, whatever its coordinator waits for.

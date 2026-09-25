@@ -156,6 +156,7 @@ type StartArgs = Parameters<OrchServerDeps['startWorker']>[0]
 function rig(o: RigOpts = {}) {
   let state = fixture(o)
   const cmds: string[] = []
+  const logs: string[] = []
   const typed: string[] = []
   const reaped: string[] = []
   const forked: { repoPath: string; name: string }[] = []
@@ -221,7 +222,9 @@ function rig(o: RigOpts = {}) {
       typed.push(text)
     },
     mayStart: () => true,
-    log: () => {},
+    log: (m) => {
+      logs.push(m)
+    },
     nowMs: () => h.clock
   }
 
@@ -246,11 +249,16 @@ function rig(o: RigOpts = {}) {
     real,
     startWorker,
     startCoordinator,
+    logs,
     typed,
     reaped,
     forked,
     templateRunId: TEMPLATE_ID,
     state: () => state,
+    /** Replaces the state outside any command, as a change nobody commits through the loop would. */
+    setState: (next: OrchState): void => {
+      state = next
+    },
     handled: () => [...cmds],
     /** 떠 있는 run() 이 없을 때까지 — 마지막 handle 이 풀린 뒤 두 macrotask. */
     settle: async (): Promise<void> => {
@@ -542,5 +550,55 @@ describe('a fired Run starts the way `jobs run` starts one (U1)', () => {
     const copied = h.state().tasks.find((t) => t.runId === childId)!
     expect(copied.status).toBe('ready')
     expect(h.startWorker.mock.calls.map((c) => c[0].taskId)).not.toContain(copied.id)
+  })
+})
+
+// User ruling 2026-09-25 on Task 1's concern 2: a fire behaves like `jobs run` here too. While the
+// latest Run of the Job still runs (`limited` counts), the fire is skipped and consumed.
+describe('a fire while the Job’s latest Run still runs', () => {
+  const runsOf = (h: ReturnType<typeof rig>) => h.state().runs.filter((r) => r.jobId === TEMPLATE_ID)
+  const skips = (h: ReturnType<typeof rig>) => h.logs.filter((m) => /scheduled fire skipped/.test(m))
+
+  it('is skipped: no Run, one log line, and not retried on a later tick of the same fire time', async () => {
+    const h = rig({ schedule: { every: 'minute' }, scheduleTask: true })
+    await h.loop.fireTick() // arms
+    h.clock += 61_000
+    await h.loop.fireTick() // fires the first Run, which the pass places: it runs
+    await h.settle()
+    expect(runsOf(h)).toHaveLength(1)
+    h.clock += 61_000
+    await h.loop.fireTick() // due again while the first still runs
+    await h.settle()
+    expect(runsOf(h)).toHaveLength(1)
+    expect(skips(h)).toHaveLength(1)
+    expect(skips(h)[0]).toContain(runsOf(h)[0].id)
+    h.clock += 15_000 // the next tick, same fire time: consumed, nothing to retry
+    await h.loop.fireTick()
+    expect(skips(h)).toHaveLength(1)
+    expect(h.handled().filter((c) => c === 'run-spawn')).toHaveLength(2)
+  })
+
+  it('fires again at the next fire time once that Run has ended', async () => {
+    const h = rig({ schedule: { every: 'minute' }, scheduleTask: true })
+    await h.loop.fireTick()
+    h.clock += 61_000
+    await h.loop.fireTick()
+    await h.settle()
+    h.clock += 61_000
+    await h.loop.fireTick() // skipped
+    await h.settle()
+    // The first Run ends: its one Task completes and its worker is gone.
+    const first = runsOf(h)[0]
+    const s = h.state()
+    const done = s.tasks.map((t) => (t.runId === first.id ? { ...t, status: 'completed' as const } : t))
+    const closed = s.dispatches.map((d) =>
+      done.some((t) => t.id === d.taskId && t.runId === first.id) ? { ...d, outcome: 'succeeded' as const, endedAt: new Date(h.clock).toISOString() } : d
+    )
+    h.setState({ ...s, tasks: done, dispatches: closed })
+    h.clock += 61_000
+    await h.loop.fireTick()
+    await h.settle()
+    expect(runsOf(h)).toHaveLength(2)
+    expect(skips(h)).toHaveLength(1)
   })
 })

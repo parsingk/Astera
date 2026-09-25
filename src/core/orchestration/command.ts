@@ -517,6 +517,20 @@ const derivedFor = (
 const latestRunOf = (s: OrchState, job: Job): JobRun | undefined =>
   s.runs.filter((r) => r.jobId === job.id).sort((a, b) => a.ordinal - b.ordinal).at(-1)
 
+/** The Job's latest Run **while it still runs**, else undefined. `jobs run` refuses on it, and a fire
+ *  skips on it (`run-spawn --unless-running`; the user's ruling of 2026-09-25 on U1): the same test in
+ *  both, so a schedule never starts a second Run of a Job beside one `jobs run` would count as running.
+ *
+ *  **`limited` still runs** (Task 1 review Minor 3). It ends `runs wait` so a script can stop holding
+ *  on, but nothing about the Run is over: its agents resume by themselves at the reset. `waiting` and
+ *  `paused` need a person, so they do not count. */
+const runningRunOf = (s: OrchState, job: Job, now: string): JobRun | undefined => {
+  const latest = latestRunOf(s, job)
+  if (!latest) return undefined
+  const ending = waitEndingFor(s, latest.id, now)
+  return ending === null || ending.state === 'limited' ? latest : undefined
+}
+
 /** 회차가 없으면 계획의 정의 Task 를 센다 — tasksOwnedBy 가 두 id 를 다 받는다(view.ts). */
 const jobView = (s: OrchState, job: Job, run: JobRun | undefined): Record<string, unknown> => ({
   ...job,
@@ -1181,14 +1195,11 @@ export async function handleCommand(
       const job = s.jobs.find((j) => j.id === id)
       if (!job) return notFound(`unknown job: ${id}`)
       const latest = latestRunOf(s, job)
-      // **`limited` still runs** (Task 1 review Minor 3). It ends `runs wait` so a script can stop
-      // holding on, but nothing about the Run is over: its agents resume by themselves at the reset.
-      // Reading it as "not running" let a cron `jobs run` during a usage wait start a second Run of the
-      // same Job beside the first, the thing this refusal exists to prevent. `waiting` and `paused`
-      // need a person, so they stay as they were.
-      const ending = latest ? waitEndingFor(s, latest.id, deps.now?.() ?? new Date().toISOString()) : undefined
-      if (latest && (ending === null || ending?.state === 'limited'))
-        return conflict(`job ${id} is already running (run ${latest.id}) — wait for it or stop it first`)
+      // Reading `limited` as "not running" let a cron `jobs run` during a usage wait start a second Run
+      // of the same Job beside the first, the thing this refusal exists to prevent (runningRunOf).
+      const running = runningRunOf(s, job, now)
+      if (running)
+        return conflict(`job ${id} is already running (run ${running.id}) — wait for it or stop it first`)
       // **예약은 무장을 건드리지 않는다.** "지금 돌려라" 는 한 회차를 지금 만들라는 말이지
       // "이 예약을 켜라" 가 아니다 — 켜는 것은 발화 시각마다 도는 것을 뜻하고, 사람이 그것까지
       // 원했다면 사이드바의 '실행' 이 그 버튼이다.
@@ -1692,6 +1703,19 @@ export async function handleCommand(
     case 'run-spawn': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
+      // **`--unless-running` is the fire's** (the user's ruling of 2026-09-25): a fire behaves like
+      // `jobs run`, which refuses while the Job's latest Run still runs, so the fire is skipped then.
+      // Answered 409 with `running`, the Run it was skipped for. The fire does not retry it: its arming
+      // moved on to the next fire time before it asked (dispatchLoop.ts's orchFireTick).
+      if (args.unlessRunning === true) {
+        const job = s.jobs.find((j) => j.id === id)
+        const running = job && runningRunOf(s, job, now)
+        if (running)
+          return {
+            status: 409,
+            body: { error: `job ${id} is still running (run ${running.id}); this run was not made`, jobId: id, running: running.id }
+          }
+      }
       const spawned = startJobRun(s, id, now)
       const reply = await commit(spawned)
       if (!spawned.ok || reply.status >= 300) return reply

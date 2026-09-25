@@ -549,9 +549,18 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       // 템플릿 하나의 실패가 나머지를 막아서는 안 된다 — 무장은 이미 다음 시각으로 넘어갔으므로,
       // 여기서 멈추면 뒤의 템플릿들은 이번 tick 에서 조용히 건너뛰어진다(재시도가 아니라 누락이다).
       try {
+        // **Skipped while the Job's latest Run still runs**, as `jobs run` refuses then (the user's ruling
+        // of 2026-09-25 on U1). The fire is consumed: `armed` already holds the next fire time, so this
+        // one is neither retried on the next tick nor fired late, and the skip is logged once.
         const reply = await c.handle('run-spawn', {
-          run: runId
+          run: runId,
+          unlessRunning: true
         })
+        const running = reply.status === 409 ? (reply.body as { running?: unknown } | null)?.running : undefined
+        if (typeof running === 'string') {
+          log(`scheduled fire skipped job=${runId} — its run ${running} is still running`)
+          continue
+        }
         // run-spawn 은 `jobs run` 이 회차를 시작하는 그대로 시작한다(U1): 코디네이터 계정이 있으면 그
         // 회차의 코디네이터를 띄운다. **그것만 실패했다면 회차는 이미 있다**(N7) — 답이 그 회차를
         // `runId` 로 싣는다. 잃은 발화가 아니므로 다르게 적는다: 사람이 그 회차 줄의 ▶ 로 다시 띄운다.

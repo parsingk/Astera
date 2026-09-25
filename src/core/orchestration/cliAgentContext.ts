@@ -116,7 +116,11 @@ const SESSION = {
   },
   'run-spawn': {
     summary: 'start one more run of a Job',
-    flags: [RUN_ARG('<jobId>', 'the Job to run again')]
+    detail: "It starts the run's coordinator when the Job has a coordinator account.",
+    flags: [
+      RUN_ARG('<jobId>', 'the Job to run again'),
+      { name: 'unless-running', about: "make no run while the Job's latest run still runs (409); a schedule's fire sends it" }
+    ]
   },
   'run-merge': {
     summary: "merge this run's worktrees back into the project",
