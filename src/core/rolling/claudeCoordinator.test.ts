@@ -3896,8 +3896,43 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await flush()
     await flush()
-    const extra = h.spawnedOpts[0].restoreExtra as { rolledFrom: string; roll: RollSnapshot }
+    const extra = h.spawnedOpts[0].restoreExtra!
     expect(extra.rolledFrom).toBe('s1')
     expect(parseRollSnapshot(extra.roll)).toMatchObject({ currentIndex: 1, awaitingPrompt: true, wait: null })
+  })
+
+  // The copy has its own disposed guard (roll() disposed 가드 above); the preparation is a second await
+  // and needs the same one after it, or a chain closed meanwhile is killed and respawned as a zombie.
+  it('a chain disposed while the respawn is being prepared kills nothing and spawns nothing', async () => {
+    const h = harness({
+      prepareSpawn: async () => {
+        h.events.push('prepare')
+        h.coord.unregister('s1')
+      }
+    })
+    h.payloads.set('s1', payload(100))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'prepare'])
+    expect(h.spawned).toEqual([])
+  })
+
+  // A blank-slate roll leaves the old conversation behind on purpose — the note must not name it, or a
+  // takeover would bring back the transcript the roll chose not to carry.
+  it('a smart roll’s snapshot names no session and no transcript', async () => {
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve('BRIEFING TEXT')
+    })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['kill:s1', 'spawn:s2:a2']) // the blank-slate path: no copy
+    const extra = h.spawnedOpts[0].restoreExtra!
+    expect(parseRollSnapshot(extra.roll)?.claude).toMatchObject({ sessionId: null, transcriptPath: null })
   })
 })

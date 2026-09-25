@@ -7,6 +7,7 @@ import { SessionManager, prependToPath } from './manager'
 import { buildClaudeCommand, buildCodexCommand } from './commands'
 import { makeDescriptors } from '../providers/descriptor'
 import { absPath, foldsCaseHere } from '../testPaths'
+import type { RollSnapshot, RollSpawnExtra } from '../rolling/snapshot'
 
 class FakePty implements PtyLike {
   pid = 4242
@@ -882,14 +883,21 @@ describe('SessionManager', () => {
   // own keys are written after, so nothing a caller slips in can rename the account the pty runs on.
   it('merges restoreExtra into the note after its own keys (S6 R6)', () => {
     const { manager, spawned } = setup()
+    const roll: RollSnapshot = {
+      v: 1, provider: 'claude', accountIds: ['a'], currentIndex: 0, streak: 0, recovery: [null], blocks: {},
+      wait: null, inPlaceUsed: false, rolledAt: null, awaitingPrompt: true,
+      claude: { sessionId: null, transcriptPath: null, tailOffset: null, tailSince: null }, writtenAt: 0
+    }
     manager.spawn({
       account,
       cwd: process.cwd(),
       rollAccountIds: ['a'],
-      restoreExtra: { rolledFrom: 's0', roll: { v: 1 }, accountId: 'forged' }
+      // The type refuses a manager key here; the cast is how this test forges one anyway, to pin the
+      // runtime precedence that still stands behind the type.
+      restoreExtra: { rolledFrom: 's0', roll, accountId: 'forged' } as RollSpawnExtra
     })
     const restore = spawned[0].opts.meta?.restore as Record<string, unknown>
-    expect(restore).toMatchObject({ rolledFrom: 's0', roll: { v: 1 } })
+    expect(restore).toMatchObject({ rolledFrom: 's0', roll: { v: 1, provider: 'claude' } })
     expect(restore.accountId).toBe(account.id) // the manager's own keys win
   })
 

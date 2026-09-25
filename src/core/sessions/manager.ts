@@ -11,6 +11,7 @@ import {
   type ProviderDescriptor
 } from '../providers/descriptor'
 import type { PtyFactory, PtyLike } from './pty'
+import type { RollSpawnExtra } from '../rolling/snapshot'
 import { cliEnvFor } from './cliEnv'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
@@ -125,7 +126,7 @@ export class SessionManager {
     /** Extra keys for the pty's note, merged into `meta.restore` **before** the manager's own keys so
      *  those always win (S6 R6). A rolling respawn carries `rolledFrom` and its chain's snapshot here, so
      *  a process that takes the session over before the rekey commits still knows what it is. */
-    restoreExtra?: Record<string, unknown>
+    restoreExtra?: RollSpawnExtra
   }): SessionInfo {
     if (!existsSync(opts.cwd)) throw new Error(`CWD_MISSING: ${opts.cwd}`)
     const d = descriptorOf(this.descriptors, opts.account)

@@ -30,6 +30,16 @@ export interface RollSnapshot {
   writtenAt: number
 }
 
+/** What a rolling respawn writes into its new pty's note beside the manager's own keys (S6 R6, design
+ *  §5): where it came from, the chain on its new account, and — for a roll the Host made — who made it.
+ *  A closed shape rather than a free record, so no caller can slip a manager key (resumeSessionId and
+ *  the like) into the note through it. */
+export interface RollSpawnExtra {
+  rolledFrom: string
+  roll: RollSnapshot
+  rolledBy?: 'host'
+}
+
 // Each reader below answers a fresh value built from the known fields only, or FAIL. Building rather than
 // casting is what makes the parse safe to hand on: extra fields are dropped, and nothing the caller
 // holds can reach back into the chain through a shared reference.

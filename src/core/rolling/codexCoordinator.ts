@@ -40,7 +40,7 @@ import {
   type CodexLimitState
 } from './codexSignal'
 import { t, type Lang } from '../i18n'
-import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot } from './snapshot'
+import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollSpawnExtra } from './snapshot'
 
 const TICK_MS = 15_000 // how often state is refreshed and the fallback trigger checked (mirrors rolling.ts)
 const LOCATE_POLL_MS = 1_000 // how often we poll to map the rollout
@@ -101,7 +101,7 @@ export interface CodexRollingDeps {
     startWithBypass?: boolean
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
-    restoreExtra?: Record<string, unknown>
+    restoreExtra?: RollSpawnExtra
   }): SessionInfo
   /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
    *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare. */

@@ -2598,7 +2598,7 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
   it('the respawn carries rolledFrom and a snapshot on the new index, its prompt already on the argv', async () => {
     const h = harness()
     await rollNow(h)
-    const extra = h.spawnedOpts[0].restoreExtra as { rolledFrom: string; roll: RollSnapshot }
+    const extra = h.spawnedOpts[0].restoreExtra!
     expect(extra.rolledFrom).toBe('s1')
     expect(parseRollSnapshot(extra.roll)).toMatchObject({
       currentIndex: 1,
@@ -2606,6 +2606,34 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
       wait: null,
       codex: { sessionId: 'cx-1', tailOffset: null, state: null }
     })
+    h.coord.stop()
+  })
+
+  // The copy has its own disposed guard; the preparation is a second await and needs the same one after
+  // it, or a chain closed meanwhile is killed and respawned as a zombie.
+  it('a chain disposed while the respawn is being prepared kills nothing and spawns nothing', async () => {
+    const h = harness({
+      prepareSpawn: async () => {
+        h.events.push('prepare')
+        h.coord.unregister('s1')
+      }
+    })
+    await rollNow(h)
+    expect(h.events).toEqual(['copy', 'prepare'])
+    expect(h.spawned).toEqual([])
+    h.coord.stop()
+  })
+
+  // A blank-slate roll leaves the old conversation behind on purpose — the note must not name it.
+  it('a smart roll’s snapshot names no session and no rollout', async () => {
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve('BRIEFING TEXT')
+    })
+    await rollNow(h)
+    expect(h.events).toEqual(['kill:s1', 'spawn:s2:c2']) // the blank-slate path: no copy
+    const extra = h.spawnedOpts[0].restoreExtra!
+    expect(parseRollSnapshot(extra.roll)?.codex).toMatchObject({ sessionId: null, rolloutPath: null })
     h.coord.stop()
   })
 })
