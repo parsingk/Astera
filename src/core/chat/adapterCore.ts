@@ -95,7 +95,10 @@ export interface AdapterCore {
   onExit(code: number, stderrTail?: string): void
 }
 
-const DEFAULT_TIMEOUT_MS = 30_000
+/** How long a client request waits for its reply. Exported for the Host's bound on a proc's start
+ *  (host/hostChats.ts CHAT_START_PUSH_MS), which has to sit above a handshake of such requests. */
+export const CHAT_REQUEST_TIMEOUT_MS = 30_000
+const DEFAULT_TIMEOUT_MS = CHAT_REQUEST_TIMEOUT_MS
 
 /** Why a client request's promise rejected, when the core is the one that rejected it: the process
  *  ended, or nothing answered in time. An error the CLI itself replied with carries no reason — it is

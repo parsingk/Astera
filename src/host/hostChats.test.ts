@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { ProcRegistry, type RegistryProc } from './procRegistry'
 import { createProcHolders } from './procHolders'
-import { createHostChats } from './hostChats'
+import { createHostChats, CHAT_START_PUSH_MS } from './hostChats'
+import { CHAT_REQUEST_TIMEOUT_MS } from '../core/chat/adapterCore'
 import * as F from '../core/chat/claudeFixtures'
 import type { Account } from '../core/types'
 import type { ChatEvent } from '../core/chat/types'
@@ -14,14 +15,32 @@ function fake(): RegistryProc & { sent: string[]; emit(c: string): void } {
 }
 const note = (over: Record<string, unknown> = {}) => ({ kind: 'chat' as const, id: 'c1', restore: { accountId: 'a1', cwd: 'D:/p', title: 't', provider: 'claude', threadId: 'th', unattendedPermission: 'hold', ...over } })
 
-const rig = (restore: Record<string, unknown> = {}) => {
+type CreateAdapter = NonNullable<Parameters<typeof createHostChats>[0]['createAdapter']>
+/** An adapter that does nothing on its own, for a test that drives its start and send by hand. */
+const stubAdapter = (over: Partial<ReturnType<CreateAdapter>> = {}): ReturnType<CreateAdapter> => ({
+  start: async () => {},
+  send: async () => {},
+  interrupt: async () => {},
+  answer: async () => {},
+  setModel: async () => {},
+  setPermissionMode: async () => {},
+  listPermissionModes: async () => [],
+  listModels: async () => [],
+  state: () => ({ status: 'idle', request: null, model: { model: null, effort: null, permissionMode: 'default' }, error: null, exitCode: null, errorDetail: null, outlivesApp: true, truncated: false, provider: 'claude' }),
+  pending: () => [],
+  on: () => () => {},
+  kill: () => {},
+  ...over
+})
+
+const rig = (restore: Record<string, unknown> = {}, createAdapter?: CreateAdapter) => {
   const procs: ReturnType<typeof fake>[] = []
   const registry = new ProcRegistry({ spawn: () => { const p = fake(); procs.push(p); return p }, log: () => {} })
   registry.open({ id: 'p1', file: 'claude', args: [], opts: { cwd: 'D:/p', env: {} }, meta: note(restore) })
   const holders = createProcHolders()
   const askApp = vi.fn(async () => ({ sent: true }))
   const logs: string[] = []
-  const chats = createHostChats({ procs: registry, holders, platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {}, askApp, log: (m) => logs.push(m) })
+  const chats = createHostChats({ procs: registry, holders, platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {}, askApp, log: (m) => logs.push(m), ...(createAdapter ? { createAdapter } : {}) })
   return { registry, procs, holders, chats, askApp, logs, entry: () => registry.list()[0] }
 }
 
@@ -136,14 +155,57 @@ describe('createHostChats — the writer rule (spec §3.2)', () => {
     expect(r.registry.list().find((x) => x.meta?.id === info.id)!.meta?.restore.hostStarting).toBeNull()
   })
 
-  it('started() gives up after CHAT_START_PUSH_MS and still clears the mark', async () => {
+  // Final review I1: a codex handshake is a chain of 30 s requests, so a slow machine can still be
+  // starting well past 45 s. The mark stays and no push goes until the start has really settled, and
+  // the carry-on the start sends goes out exactly once.
+  it('waits for a handshake slower than 45 s, keeps hostStarting meanwhile, and sends its carry-on once', async () => {
     vi.useFakeTimers()
     try {
-      const r = rig()
+      let finish: () => void = () => {}
+      const sent: string[] = []
+      const r = rig({}, ({ proc }) =>
+        stubAdapter({
+          start: () => new Promise<void>((res) => { finish = res }),
+          send: async (t) => { proc.write(t); sent.push(t) }
+        })
+      )
+      const info = r.chats.spawn({ account, cwd: 'D:/p', initialPrompt: 'carry on' })
+      const noteOf = () => r.registry.list().find((x) => x.meta?.id === info.id)!.meta!.restore
+      let settled: boolean | undefined
+      void r.chats.started(info.id).then((v) => { settled = v })
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(settled).toBeUndefined()
+      expect(noteOf().hostStarting).toBe(true)
+      expect(sent).toEqual([])
+      finish()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(settled).toBe(true)
+      expect(sent).toEqual(['carry on'])
+      expect(noteOf()).toMatchObject({ hostStarting: null, carrySent: true })
+      await vi.advanceTimersByTimeAsync(CHAT_START_PUSH_MS)
+      expect(sent).toEqual(['carry on'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the bound sits above the worst codex handshake: every request deadline in a row, with margin', () => {
+    // initialize, the two lists, thread/resume and the carry-on's turn/start.
+    expect(CHAT_START_PUSH_MS).toBeGreaterThan(5 * CHAT_REQUEST_TIMEOUT_MS)
+  })
+
+  it('a start that never settles within the bound is killed, not handed over: the mark stays, started() says false', async () => {
+    vi.useFakeTimers()
+    try {
+      const killed: string[] = []
+      const r = rig({}, () => stubAdapter({ start: () => new Promise<void>(() => {}), kill: () => { killed.push('kill') } }))
       const info = r.chats.spawn({ account, cwd: 'D:/p' })
       const s = r.chats.started(info.id)
-      await vi.advanceTimersByTimeAsync(45_000)
-      await expect(s).resolves.toBeUndefined()
+      await vi.advanceTimersByTimeAsync(CHAT_START_PUSH_MS)
+      await expect(s).resolves.toBe(false)
+      expect(killed).toEqual(['kill'])
+      expect(r.registry.list().find((x) => x.meta?.id === info.id)!.meta!.restore.hostStarting).toBe(true)
+      expect(r.logs.join(' ')).toMatch(/did not settle/)
     } finally {
       vi.useRealTimers()
     }

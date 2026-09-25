@@ -242,7 +242,13 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
           // is the net under onEvent (R3).
           chats!
             .started(p.info.id)
-            .then(() => {
+            .then((settled) => {
+              // A start that did not settle in time was ended there, with its mark left (final review
+              // I1): nothing to hand over.
+              if (!settled) {
+                log(`the chat roll is not announced: its new proc did not finish starting session=${p.info.id}`)
+                return
+              }
               // A proc that died between its spawn and its start leaves nothing to adopt: a push with
               // neither a pty nor a proc would name nothing, so it is not sent.
               if (chats!.procOf(p.info.id) === null) {

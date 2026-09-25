@@ -18,9 +18,15 @@ import type { ProcRegistry } from './procRegistry'
 import type { ProcHolders } from './procHolders'
 import { createHostProcs, type HostProcHandle, type HostProcsDeps } from './hostProcs'
 import { createChatPolicy } from './chatPolicy'
+import { CHAT_REQUEST_TIMEOUT_MS } from '../core/chat/adapterCore'
 
-/** How long `started()` waits for a Host-spawned proc's handshake and carry-on (plan ruling P5). */
-export const CHAT_START_PUSH_MS = 45_000
+/** How long `started()` waits for a Host-spawned proc's handshake and carry-on (plan ruling P5). A bound,
+ *  not a guess at a normal start: every step has its own deadline, so the start always settles on its
+ *  own, and this only catches one that did not. It sits above the worst chain of those deadlines (final
+ *  review I1): codex's `initialize`, `collaborationMode/list`, `model/list`, `thread/resume` and the
+ *  carry-on's `turn/start`, each `CHAT_REQUEST_TIMEOUT_MS`, counted as if none overlapped, plus one more
+ *  as margin. Claude's handshake is one request. */
+export const CHAT_START_PUSH_MS = 6 * CHAT_REQUEST_TIMEOUT_MS
 
 export interface HostChatsDeps {
   procs: Pick<ProcRegistry, 'open' | 'write' | 'kill' | 'note' | 'buffer' | 'onLine' | 'onExit' | 'list'>
@@ -43,9 +49,10 @@ export interface HostChats {
   adopt(entry: PtyEntry): SessionInfo | null
   /** A roll's respawn, synchronous; the new note says hostStarting until started() settles. */
   spawn(o: ChatRollSpawn): SessionInfo
-  /** Settles once the new proc's handshake and carry-on settled, or after CHAT_START_PUSH_MS; then
-   *  hostStarting is cleared in the note. Never rejects. */
-  started(sessionId: string): Promise<void>
+  /** True once the new proc's handshake and carry-on settled; hostStarting is then cleared in the note.
+   *  False when they did not settle within CHAT_START_PUSH_MS: the session is killed and the mark stays,
+   *  so no app takes over a start still under way (final review I1). Never rejects. */
+  started(sessionId: string): Promise<boolean>
   has(sessionId: string): boolean
   info(sessionId: string): SessionInfo | null
   procOf(sessionId: string): string | null
@@ -316,15 +323,28 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     },
     async started(id) {
       let cancel: () => void = () => {}
-      const timedOut = new Promise<void>((resolve) => {
-        cancel = after(CHAT_START_PUSH_MS, resolve)
+      const timedOut = new Promise<'timeout'>((resolve) => {
+        cancel = after(CHAT_START_PUSH_MS, () => resolve('timeout'))
       })
+      let outcome: 'settled' | 'timeout' = 'settled'
       try {
-        await Promise.race([manager.started(id), timedOut])
+        outcome = await Promise.race([manager.started(id).then(() => 'settled' as const), timedOut])
       } catch (err) {
         d.log(`chat ${id}: waiting for its start failed: ${errText(err)}`)
       } finally {
         cancel()
+      }
+      if (outcome === 'timeout') {
+        // Handing it over now would make an app its writer in the middle of the handshake, and the
+        // carry-on after it would be sent by nobody. Every step has a deadline, so this is a start that
+        // hangs past all of them: ended here, with the mark left, so nothing adopts it meanwhile.
+        d.log(`chat ${id}: its start did not settle within ${CHAT_START_PUSH_MS} ms, so it is ended and not handed over`)
+        try {
+          manager.kill(id)
+        } catch (err) {
+          d.log(`chat ${id}: ending a start that did not settle failed: ${errText(err)}`)
+        }
+        return false
       }
       try {
         const procId = procOf(id)
@@ -332,6 +352,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
       } catch (err) {
         d.log(`chat ${id}: clearing hostStarting failed: ${errText(err)}`)
       }
+      return true
     },
     has: (id) => manager.has(id),
     info: (id) => manager.info(id),

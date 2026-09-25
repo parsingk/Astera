@@ -393,7 +393,7 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
   afterEach(() => { for (const d of disposers.splice(0)) d() })
   const fakeChats = (open = false) => ({
     has: (id: string) => id === 'c1', procOf: () => 'p1', info: () => null, spawn: vi.fn(() => ({ id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' }) as SessionInfo),
-    started: vi.fn(async () => {}), kill: vi.fn(), deliver: vi.fn(), hasOpenRequest: () => open,
+    started: vi.fn(async () => true), kill: vi.fn(), deliver: vi.fn(), hasOpenRequest: () => open,
     chosenModelOf: () => 'opus', bypassedOf: () => false, subscribe: () => () => {}
   })
   it('routes a chat chain’s write through the writer, drops the Enter, and kills through chats', () => {
@@ -427,9 +427,19 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
     await Promise.resolve()
     expect(h.events.filter((e) => e.t === 'session-rolled')).toEqual([])
   })
+  // Final review I1: a start that did not settle within the bound was ended with its mark left.
+  it('does not announce a chat roll whose start did not settle in time', async () => {
+    const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', started: vi.fn(async () => false) }
+    const h = harness({ chats, chatMayAct: () => true })
+    h.sendDep('session:rolled', { oldSessionId: 'c1', info: { id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' } })
+    await vi.waitFor(() => expect(chats.started).toHaveBeenCalledWith('c2'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(h.events.filter((e) => e.t === 'session-rolled')).toEqual([])
+  })
   it('announces a chat roll only once the new proc has started (P5)', async () => {
     let started: () => void = () => {}
-    const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', started: vi.fn(() => new Promise<void>((r) => { started = r })) }
+    const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', started: vi.fn(() => new Promise<boolean>((r) => { started = () => r(true) })) }
     const h = harness({ chats, chatMayAct: () => true })
     h.sendDep('session:rolled', { oldSessionId: 'c1', info: { id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' } })
     await Promise.resolve()
