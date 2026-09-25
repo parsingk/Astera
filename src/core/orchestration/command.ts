@@ -565,7 +565,8 @@ const coordinatorResetOf = (run: JobRun, now: string): string | null => {
   return at
 }
 
-/** The earliest reset every agent of the Run is waiting for, or null when any of them is not.
+/** The earliest reset every agent of the Run is waiting for, or null when any of them is not, or when
+ *  the Run is no longer running (its outcome is completed or failed).
  *
  *  **`limited` means "nothing moves on its own before the reset"**, not "nothing can move". A person can
  *  still start a ready Task by hand (RunDetail's start button, or `worker-start`), the same way a person
@@ -581,6 +582,11 @@ const coordinatorResetOf = (run: JobRun, now: string): string | null => {
  *  app-driven (`appDriven`, schedule.ts): then no loop dispatches it (`slotsToFill` only fills app-driven
  *  Runs) and only the coordinator starts it, which is stopped. */
 const limitedUntil = (s: OrchState, runId: string, now: string): string | null => {
+  // **Only a Run still running can be limited** (final review I1). A finished Run keeps its
+  // coordinatorSessionId (the isRunCoordinator note in handleCommand), so a coordinator that hits a limit
+  // after writing its closing summary would otherwise turn `completed` into `limited`, and `jobs run`
+  // would refuse the Job until the reset. The Run is over; its real outcome is the answer.
+  if (outcomeOf(s, runId) !== 'running') return null
   const run = s.runs.find((r) => r.id === runId)
   const coordinator = run ? coordinatorResetOf(run, now) : null
   const readyHolds = coordinator === null || (run !== undefined && appDriven(s, run))

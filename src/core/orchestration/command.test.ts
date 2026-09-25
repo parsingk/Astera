@@ -5317,6 +5317,15 @@ describe('jobs wait / runs wait', () => {
     await coordinatorStops(recent.deps, recent.runId, '2026-08-03T23:55:00.000Z')
     expect((await call(recent.deps, 'runs-wait', { id: recent.runId, timeoutMs: 500 })).body).toMatchObject({ state: 'limited' })
   })
+  // Final review I1: a finished Run keeps its coordinatorSessionId, so a coordinator that hits a limit
+  // after its closing summary must not turn the Run's real outcome into `limited`.
+  it('a finished Run ends with its outcome even while its coordinator waits for a reset', async () => {
+    const { deps, runId, jobId, taskId } = await seeded()
+    await call(deps, 'task-update', { id: taskId, status: 'completed' })
+    await coordinatorStops(deps, runId, '2026-08-04T03:00:00.000Z')
+    expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 500 })).body).toMatchObject({ state: 'completed', runId })
+    expect((await call(deps, 'jobs-wait', { id: jobId, timeoutMs: 500 })).body).toMatchObject({ state: 'completed' })
+  })
   it('an open question still comes first', async () => {
     const { deps, runId } = await waitingOnReset('2026-09-25T15:00:00.000Z')
     // createGate refuses a Task with an open Dispatch (state.ts, A58), so the question is on a second Task.
@@ -5581,6 +5590,24 @@ describe('jobs run / questions answer', () => {
     expect((await call(byWorkers, 'runs-wait', { id: wRun, timeoutMs: 500 })).body).toMatchObject({ state: 'limited' })
     expect((await call(byWorkers, 'jobs-run', { id: wJob })).status).toBe(409)
     expect(byWorkers.getState().runs).toHaveLength(1)
+  })
+
+  // Final review I1: once every Task is terminal the Run is over, whatever its coordinator waits for.
+  it('a finished Run whose coordinator waits for a reset does not block the next run', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const jobId = deps.getState().jobs[0].id
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    await call(deps, 'task-update', { id: (t.body as { id: string }).id, status: 'completed' })
+    const cur = deps.getState()
+    await deps.setState({
+      ...cur,
+      runs: cur.runs.map((r) => ({ ...r, coordinatorSessionId: 'coord1', coordinatorStop: { since: NOW, resetsAt: '2026-08-04T03:00:00.000Z' } }))
+    })
+    const r = await call(deps, 'jobs-run', { id: jobId })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs).toHaveLength(2)
   })
 
   it('없는 계획은 404, id 가 없으면 400 이다', async () => {
