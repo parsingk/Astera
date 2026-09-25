@@ -47,8 +47,9 @@ export function createBlockSync(d: {
     pushed: (m) => {
       try {
         if (m?.t !== 'blocks') return
-        const p = parseBlocks(m)
-        if (p) absorbBlocks(d.blocks, p, d.now())
+        const now = d.now()
+        const p = parseBlocks(m, now)
+        if (p) absorbBlocks(d.blocks, p, now)
       } catch (err) {
         log(`host: a blocks push could not be absorbed: ${String(err)}`)
       }

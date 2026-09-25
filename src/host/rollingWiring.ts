@@ -269,6 +269,8 @@ export function composeHostRolling(a: {
         log(`the app-gone watch could not take an app attaching or leaving: ${String(err)}`)
       }
     },
+    // Date.now() is the rolling's own clock here: createHostRolling passes no `now` to its coordinators,
+    // so they read Date.now() too, and the wiring carries only the ISO `nowIso`. One clock either way.
     appGreeted: (send) => {
       try {
         send({ t: 'blocks', ...rolling.blocks.snapshot(Date.now()) })
@@ -278,8 +280,9 @@ export function composeHostRolling(a: {
     },
     blocksFromApp: (m) => {
       try {
-        const p = parseBlocks(m)
-        if (p) absorbBlocks(rolling.blocks, p, Date.now())
+        const now = Date.now()
+        const p = parseBlocks(m, now)
+        if (p) absorbBlocks(rolling.blocks, p, now)
       } catch (err) {
         log(`an app's block records could not be absorbed: ${String(err)}`)
       }

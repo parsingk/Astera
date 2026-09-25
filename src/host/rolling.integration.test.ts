@@ -21,6 +21,11 @@ import { EXIT_DEFER_MS } from '../core/orchestration/exec/exitOwner'
 import { ROLL_SNAPSHOT_VERSION, type RollSnapshot } from '../core/rolling/snapshot'
 import type { HostMessage } from '../core/host/protocol'
 import type { Account, SessionInfo } from '../core/types'
+import { BlockRegistry } from '../core/rolling/blockRegistry'
+import type { ClientMessage } from '../core/host/protocol'
+import { createBlockSync } from '../main/host/blockSync'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 const NOW = '2026-09-25T00:00:00.000Z'
 const LIMIT = 'Claude usage limit ' + 'reached ∙ resets 3am' // constraint 14
@@ -460,9 +465,51 @@ describe('block records between the Host and the app (S6 Task 3)', () => {
     expect(h.blocks().snapshot(h.now())).toEqual({ records: {}, cleared: [] })
     expect(blockPushes(h)).toEqual([])
   })
+  it('end to end: a Host block reaches the app registry through blockSync, and nothing goes back (fix round 1, 1)', async () => {
+    const h = await rig()
+    const app = new BlockRegistry()
+    const toHost: ClientMessage[] = []
+    const sync = createBlockSync({
+      blocks: app,
+      status: () => ({ connected: true, features: ['spawn', 'rolling', 'blocks'] }),
+      send: (m) => { toHost.push(m); return true },
+      now: () => h.now(),
+      log: () => {}
+    })
+    await h.spawnWorker('p1', 's1', ['a1', 'a2'])
+    h.limit('p1', 's1')
+    await h.settle()
+    await vi.waitFor(() => expect(blockPushes(h).length).toBeGreaterThan(0))
+    for (const m of h.broadcasts) sync.pushed(m) // every push the app would hear, not only `blocks`
+    expect(app.get('a1', h.now())).toEqual(h.blocks().get('a1', h.now()))
+    expect(app.get('a1', h.now())).not.toBeNull()
+    expect(toHost).toEqual([])
+    // And the other way: the app's own clear reaches the Host, which absorbs it and broadcasts nothing.
+    const before = blockPushes(h).length
+    app.clear('a1', h.now() + 1)
+    expect(toHost).toHaveLength(1)
+    h.blocksFromApp(toHost[0])
+    expect(h.blocks().get('a1', h.now())).toBeNull()
+    expect(blockPushes(h)).toHaveLength(before)
+    sync.dispose()
+  })
   it('a greeting that throws is logged and costs nothing', async () => {
     const h = await rig()
     expect(() => h.appGreeted(() => { throw new Error('socket gone') })).not.toThrow()
     expect(h.logs.some((m) => m.includes('socket gone'))).toBe(true)
+  })
+})
+
+// Fix round 1, 2: the rig never runs index.ts, so these lines are guarded by their text (the
+// driving.integration.test.ts pattern).
+describe('index.ts wires the blocks exchange (S6 Task 3)', () => {
+  const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
+  const serverAt = src.indexOf('startHostServer({')
+  const serverCall = src.slice(serverAt, src.indexOf('ADDRESS_TAKEN', serverAt))
+  it('routes a greeted app’s blocks to the rolling', () => {
+    expect(serverCall).toMatch(/if \(m\.t === 'blocks' && rollingWiring\) \{\s*if \(from\.greeted && from\.role === 'app'\) rollingWiring\.blocksFromApp\(m\)\s*return true/)
+  })
+  it('sends a newly greeted app the whole registry', () => {
+    expect(serverCall).toMatch(/onAppGreeted: \(send\) => rollingWiring\?\.appGreeted\(send\)/)
   })
 })

@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { BlockRegistry } from '../../core/rolling/blockRegistry'
 import type { BlockRecord } from '../../core/rolling/retry'
 import type { ClientMessage, HostMessage } from '../../core/host/protocol'
@@ -87,5 +90,27 @@ describe('createBlockSync (S6 Task 3)', () => {
     h.sync.dispose()
     h.blocks.record('a', rec(5_000, 10), 10)
     expect(h.sent).toEqual([])
+  })
+})
+
+// Fix round 1, 2: registerIpc cannot run without Electron, so its wiring is guarded by its text.
+describe('ipc.ts wires blockSync (S6 Task 3)', () => {
+  const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ipc.ts'), 'utf8')
+  const at = src.indexOf('const blockSync = createBlockSync({')
+  const wiring = src.slice(at, at + 600)
+  it('builds it over the index.ts registry', () => {
+    expect(at).toBeGreaterThan(-1)
+    expect(wiring).toMatch(/blocks: hostWiring\.blocks/)
+  })
+  it('hands every Host push to pushed', () => {
+    expect(wiring).toMatch(/client\.onMessage\(\(m\) => blockSync\.pushed\(m\)\)/)
+  })
+  it('sends the whole registry on every handshake', () => {
+    expect(wiring).toMatch(/client\.onConnect\(\(\) => blockSync\.connected\(\)\)/)
+  })
+  it('index.ts passes its shared registry into the Host wiring', () => {
+    const index = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.ts'), 'utf8')
+    const hostWiring = index.slice(index.indexOf('log: hostLog,'), index.indexOf('onHostClientReady'))
+    expect(hostWiring).toMatch(/^\s*blocks,\s*$/m)
   })
 })
