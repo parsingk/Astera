@@ -20,6 +20,7 @@ import { PtyRegistry } from './registry'
 import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
+import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
 import { HOST_PROTOCOL, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostOrch } from './orch'
@@ -103,6 +104,10 @@ async function main(): Promise<void> {
     log: (m) => log.write(m)
   })
   let handleProc: ReturnType<typeof attachProcHost> | null = null
+  // Which app sockets hold which chat proc (chat takeover, constraint 3): the Host is a chat proc's
+  // writer only while no app socket holds it. Fed by the server hooks below; an ended proc drops its holds.
+  const procHolders = createProcHolders({ log: (m) => log.write(m) })
+  procs.onExit((id) => procHolders.ended(id))
 
   let server: Awaited<ReturnType<typeof startHostServer>>
   /** Declared here and assigned below `createHostOrch` (S6 final review M3): the rolling wiring's
@@ -244,6 +249,9 @@ async function main(): Promise<void> {
           profileDir,
           platform: process.platform,
           registry,
+          procs,
+          procHolders,
+          version: hostVersion,
           spawner,
           // No exits yet means no app has attached, so no app holds any pty: the holders are empty.
           exits: () => exits ?? { holdersOf: () => [] },
@@ -345,6 +353,10 @@ async function main(): Promise<void> {
         // `ptyHeldBy` for the apps that declare none. Only a greeted socket, which close releases.
         const held = ptyHeldBy(m, from)
         if (exits && held !== null) exits.heldBy(held, from.socket)
+        // The chat twin (chat takeover Task 5): a greeted socket's proc-spawn or proc-attach makes it the
+        // proc's writer, before the proc handler can answer.
+        const heldProc = procHeldBy(m, from)
+        if (heldProc !== null) procHolders.heldBy(heldProc, from.socket)
         // S6 D4: an app's block records, absorbed into the rolling's registry and never broadcast back.
         // Only from a greeted app (a CLI has no registry to share), and only when this Host rolls: one
         // without `rolling` never announced `blocks`, so no app sends it, and the line stays unknown.
@@ -357,7 +369,10 @@ async function main(): Promise<void> {
       // Released by the socket number whatever role the socket gave last: a second `hello` can change
       // it, and marks made as an app must still go when that socket closes. A socket that never held a
       // pty, which is every CLI call, runs no sweep (exits.ts).
-      onClientGone: (from) => exits?.appGone(from.socket),
+      onClientGone: (from) => {
+        exits?.appGone(from.socket)
+        procHolders.appGone(from.socket)
+      },
       // **Both halves are real now** (ruling F57). The Host owns the state, so it can answer the
       // question `docs/cli.md` already promises `astera host stop` answers: how many Runs have work
       // in flight. The rule is `runningRunCount`'s, which is the sidebar's rule over the state rather

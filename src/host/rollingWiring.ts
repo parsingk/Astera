@@ -17,7 +17,9 @@
 // quieted (`mayAct` answers retiring), and the coordinators' own timers stop.
 //
 // Imports only core modules, node builtins and the Host's own modules: this bundles into the Host.
+import os from 'node:os'
 import { liveAppPid } from '../core/host/pidFile'
+import { hostWorkerBaseEnv } from '../core/host/spawn'
 import { hostMayAct } from '../core/host/rollOwner'
 import type { HostMessage } from '../core/host/protocol'
 import { buildResumeNote, buildResumePacket } from '../core/orchestration/exec/resumePacket'
@@ -25,15 +27,18 @@ import { absorbBlocks, blocksOfChange, parseBlocks } from '../core/rolling/block
 import { bindNativeSession } from '../core/orchestration/state'
 import type { Lang } from '../core/i18n'
 import { createAppGoneWatch } from './appGone'
+import { createHostChats, type HostChats, type HostChatsDeps } from './hostChats'
 import type { HostExits } from './exits'
 import type { HostOrch } from './orch'
+import type { ProcHolders } from './procHolders'
+import type { ProcRegistry } from './procRegistry'
 import type { PtyRegistry } from './registry'
 import { createHostRolling, type HostRolling, type HostRollingDeps } from './rolling'
 import { createHostRollTap, type HostRollTap } from './rollTapHost'
 import { createRollJournal, rollJournalPath, type RollJournal } from './rollJournal'
 import type { HostServer } from './server'
 import type { HostSpawner } from './spawner'
-import { takeOverSessions } from './takeover'
+import { takeOverChats, takeOverSessions } from './takeover'
 
 /** How often the accounts and the resume strategy are read again, and the app-gone watch ticks (R13). */
 export const ROLLING_TICK_MS = 15_000
@@ -41,6 +46,9 @@ export const ROLLING_TICK_MS = 15_000
 export interface HostRollingWiring {
   rolling: HostRolling
   tap: HostRollTap
+  /** The Host's chat sessions (chat takeover Task 5): the adapters the takeover takes on a gone app's
+   *  chat procs. Disposed with the wiring. */
+  chats: HostChats
   /** Spread into createHostOrch's deps. */
   orchHooks: {
     rolling: HostRolling
@@ -64,9 +72,13 @@ export function composeHostRolling(a: {
   profileDir: string
   platform: NodeJS.Platform
   registry: PtyRegistry
+  /** The line processes and which app sockets hold them (chat takeover Task 5). */
+  procs: ProcRegistry
+  procHolders: ProcHolders
+  version: string
   spawner: HostSpawner
   exits(): Pick<HostExits, 'holdersOf'>
-  server(): Pick<HostServer, 'hasApp' | 'yieldsOf' | 'broadcast'>
+  server(): Pick<HostServer, 'hasApp' | 'yieldsOf' | 'broadcast' | 'act'>
   orch(): Pick<HostOrch, 'ready' | 'state' | 'internalDeps'>
   lang(): Lang
   log(m: string): void
@@ -76,6 +88,7 @@ export function composeHostRolling(a: {
   after?(ms: number, fn: () => void): () => void
   appPid?(): number | null
   rollingDeps?: Partial<HostRollingDeps>
+  chatsDeps?: Partial<HostChatsDeps>
 }): HostRollingWiring {
   /** A log line never throws (constraint 14). */
   const log = (m: string): void => {
@@ -160,6 +173,20 @@ export function composeHostRolling(a: {
     ...a.rollingDeps
   })
 
+  // Chat takeover Task 5: the Host's chat adapters, over the same proc registry and holders the server
+  // feeds. A turn while the app is the writer goes to the app's chatSend (server.act), read at the call.
+  const chats = createHostChats({
+    procs: a.procs,
+    holders: a.procHolders,
+    platform: a.platform,
+    homeDir: os.homedir(),
+    version: a.version,
+    baseEnv: hostWorkerBaseEnv(process.env),
+    askApp: (n, args) => a.server().act(n, args),
+    log,
+    ...a.chatsDeps
+  })
+
   // S6 D4: every change of the Host's block registry goes to the greeted clients. An absorb() fires no
   // change, so what an app sent is never broadcast back to it. After retire starts nothing is sent.
   const stopBlocks = rolling.blocks.onChange((e) => {
@@ -203,7 +230,22 @@ export function composeHostRolling(a: {
       restore: (info, snap) => rolling.restore(info, snap),
       log
     })
-    for (const s of skipped) {
+    // The chat twin (spec §3.3), in the same pass: a gone app's chat procs, with or without a chain.
+    const chatPass = takeOverChats({
+      hasApp: () => a.server().hasApp(),
+      announces: () => true,
+      retiring: () => disposed || a.spawner.isRetiring(),
+      entries: () => a.procs.list(),
+      holdersOf: (p) => a.procHolders.holdersOf(p),
+      note: (p, patch) => a.procs.note(p, patch),
+      hasChain: (id) => rolling.has(id),
+      held: (id) => chats.has(id),
+      restore: (info, snap) => rolling.restore(info, snap),
+      unregister: (id) => rolling.unregister(id),
+      adopt: (e) => chats.adopt(e) !== null,
+      log
+    })
+    for (const s of [...skipped, ...chatPass.skipped]) {
       const key = `${s.sessionId} ${s.why}`
       if (skipsLogged.has(key)) continue
       skipsLogged.add(key)
@@ -260,6 +302,7 @@ export function composeHostRolling(a: {
   return {
     rolling,
     tap,
+    chats,
     orchHooks: {
       rolling,
       // R7: the live session whose note says it was rolled from this one.
@@ -308,6 +351,11 @@ export function composeHostRolling(a: {
       stopTick()
       watch.dispose()
       rolling.dispose()
+      try {
+        chats.dispose()
+      } catch (err) {
+        log(`the Host's chat sessions could not be disposed: ${String(err)}`)
+      }
     }
   }
 }

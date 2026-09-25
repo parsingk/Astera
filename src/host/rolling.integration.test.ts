@@ -15,6 +15,8 @@ import { composeHostRolling, type HostRollingWiring } from './rollingWiring'
 import { createHostOrch } from './orch'
 import { createHostExits } from './exits'
 import { PtyRegistry, type RegistryPty } from './registry'
+import { ProcRegistry } from './procRegistry'
+import { createProcHolders } from './procHolders'
 import { tempDir } from '../core/worktrees/testRepo'
 import { createJob, startJobRun, createTask, openDispatch, attachCoordinator, emptyState, type OrchState } from '../core/orchestration/state'
 import { EXIT_DEFER_MS } from '../core/orchestration/exec/exitOwner'
@@ -93,7 +95,7 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
   let appPid = o.appPid ?? null
   const apps = new Map<number, Set<string>>() // socket → yields
   const broadcasts: HostMessage[] = []
-  const server = { hasApp: () => apps.size > 0, yieldsOf: (s: number) => apps.get(s) ?? null, broadcast: (m: HostMessage) => { broadcasts.push(m) } }
+  const server = { hasApp: () => apps.size > 0, yieldsOf: (s: number) => apps.get(s) ?? null, broadcast: (m: HostMessage) => { broadcasts.push(m) }, act: async () => null }
 
   const payloads = new Map<string, unknown>()
   let seq = 1
@@ -119,7 +121,8 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
   // them runs only once both do (preflight B2).
   const box: { orch?: ReturnType<typeof createHostOrch>; exits?: ReturnType<typeof createHostExits> } = {}
   const wiring: HostRollingWiring = composeHostRolling({
-    profileDir, platform: process.platform, registry, spawner: spawner as never, exits: () => box.exits!, server: () => server,
+    profileDir, platform: process.platform, registry, spawner: spawner as never,
+    procs: new ProcRegistry({ spawn: () => { throw new Error('no chat proc in this rig') }, log: () => {} }), procHolders: createProcHolders(), version: '0.0.0', exits: () => box.exits!, server: () => server,
     orch: () => box.orch!, lang: () => 'en', log: (m) => logs.push(m), nowIso: () => new Date().toISOString(),
     after: (_ms, fn) => { afters.push(fn); return () => { const i = afters.indexOf(fn); if (i >= 0) afters.splice(i, 1) } },
     appPid: () => appPid,
@@ -210,6 +213,9 @@ function composeWithoutServer(): void {
     profileDir: path.join(os.tmpdir(), 'astera-s6-no-server-never-created'),
     platform: process.platform,
     registry,
+    procs: new ProcRegistry({ spawn: () => { throw new Error('no chat proc here') }, log: () => {} }),
+    procHolders: createProcHolders(),
+    version: '0.0.0',
     spawner: { prepareRollSpawn: async () => {}, rollSpawn: () => { throw new Error('no') }, statusLinePayload: async () => null, onSpawned: () => {}, onRolloutLocated: () => {}, retarget: () => {}, isRetiring: () => false } as never,
     exits: () => undefined as never,
     server: () => undefined as never,

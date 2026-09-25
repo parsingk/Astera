@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { takeOverSessions } from './takeover'
+import { takeOverSessions, takeOverChats } from './takeover'
 import type { PtyEntry } from '../core/host/protocol'
 import type { RollSnapshot } from '../core/rolling/snapshot'
 
@@ -77,5 +77,66 @@ describe('takeOverSessions (S6 R2, design §3A.3)', () => {
   it('records a snapshot on another account than the note as skipped, with its reason (fix round 1)', () => {
     const { r } = rig([entry('s1', { roll: snap({ currentIndex: 1 }) })])
     expect(r.skipped).toEqual([{ sessionId: 's1', why: expect.stringMatching(/account/) }])
+  })
+})
+
+const chatEntry = (id: string, restore: Record<string, unknown>, alive = true) =>
+  entry(id, { provider: 'claude', unattendedPermission: 'hold', ...restore }, alive, 'chat')
+
+const chatRig = (entries: PtyEntry[], over: { hasApp?: boolean; holders?: Record<string, number[]>; chains?: string[]; held?: string[]; restoreOk?: boolean; adoptOk?: boolean } = {}) => {
+  const order: string[] = []
+  const r = takeOverChats({
+    hasApp: () => over.hasApp ?? false, announces: () => true, retiring: () => false,
+    entries: () => entries,
+    holdersOf: (p) => over.holders?.[p] ?? [],
+    note: (p, patch) => order.push(`note ${p} ${JSON.stringify(patch)}`),
+    hasChain: (id) => (over.chains ?? []).includes(id),
+    held: (id) => (over.held ?? []).includes(id),
+    restore: (info) => { order.push(`restore ${info.id} ${info.kind}`); return over.restoreOk ?? true },
+    unregister: (id) => order.push(`unregister ${id}`),
+    adopt: (e) => { order.push(`adopt ${e.id}`); return over.adoptOk ?? true },
+    log: () => {}
+  })
+  return { r, order }
+}
+
+describe('takeOverChats (chat takeover spec §3.3)', () => {
+  it('marks, restores the chain as a chat chain, then adopts, in that order', () => {
+    const { r, order } = chatRig([chatEntry('c1', { roll: snap() })])
+    expect(r.taken).toEqual(['c1'])
+    expect(r.adopted).toEqual(['c1'])
+    expect(order).toEqual(['note p-c1 {"rolledBy":"host"}', 'restore c1 chat', 'adopt p-c1'])
+  })
+  it('adopts a proc with no chain, and writes no mark (P3)', () => {
+    const { r, order } = chatRig([chatEntry('c1', { rollAccountIds: undefined })])
+    expect(r.taken).toEqual([])
+    expect(r.adopted).toEqual(['c1'])
+    expect(order).toEqual(['adopt p-c1'])
+  })
+  it('adopts but restores nothing when the snapshot is missing, and logs why', () => {
+    const { r, order } = chatRig([chatEntry('c1', {})])
+    expect(order).toEqual(['adopt p-c1'])
+    expect(r.skipped[0].why).toMatch(/snapshot/)
+  })
+  it.each([
+    ['an app is attached', [chatEntry('c1', { roll: snap() })], { hasApp: true }],
+    ['an app from before chat takeover wrote the note (no unattendedPermission)', [entry('c1', { provider: 'claude', roll: snap() }, true, 'chat')], {}],
+    ['a socket still holds it', [chatEntry('c1', { roll: snap() })], { holders: { 'p-c1': [3] } }],
+    ['the Host already holds an adapter on it', [chatEntry('c1', { roll: snap() })], { held: ['c1'] }],
+    ['it has ended', [chatEntry('c1', { roll: snap() }, false)], {}]
+  ])('takes nothing when %s', (_why, entries, over) => {
+    const { r, order } = chatRig(entries as PtyEntry[], over)
+    expect(r.taken).toEqual([])
+    expect(r.adopted).toEqual([])
+    expect(order).toEqual([])
+  })
+  it('takes the mark back and drops the chain when the adopt fails after a restore', () => {
+    const { r, order } = chatRig([chatEntry('c1', { roll: snap() })], { adoptOk: false })
+    expect(r.taken).toEqual([])
+    expect(order).toEqual(['note p-c1 {"rolledBy":"host"}', 'restore c1 chat', 'adopt p-c1', 'unregister c1', 'note p-c1 {"rolledBy":null}'])
+  })
+  it('restores no second chain for a proc the Host already rolls, but still adopts it', () => {
+    const { order } = chatRig([chatEntry('c1', { roll: snap(), rolledBy: 'host' })], { chains: ['c1'] })
+    expect(order).toEqual(['adopt p-c1'])
   })
 })

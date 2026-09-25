@@ -769,6 +769,11 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     expect(serverCall).toMatch(/rollingWiring\?\.onAppsChanged\(\)/)
     const leave = src.slice(src.indexOf('const leave = '), src.indexOf('const hostVersion'))
     expect(leave).toMatch(/rollingWiring\?\.dispose\(\)/)
+    // Chat takeover Task 5: the proc holders are fed by the same two server hooks the pty marks are, and
+    // the rolling is handed them. The chat rig builds its own server, so only this sees index.ts.
+    expect(src).toMatch(/procHeldBy\(m, from\)/)
+    expect(src).toMatch(/procHolders\.appGone\(from\.socket\)/)
+    expect(src.slice(src.indexOf('composeHostRolling('))).toMatch(/procHolders,/)
     // S6 final review M3: the rolling's `exits` getter reads a binding declared above it, never a
     // `const` in its temporal dead zone.
     expect(src.indexOf('let exits: HostExits | null = null')).toBeGreaterThan(-1)

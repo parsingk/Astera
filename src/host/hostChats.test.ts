@@ -183,6 +183,27 @@ describe('createHostChats — the gate is the holders (Task 3 review)', () => {
   })
 })
 
+describe('createHostChats — the carry-on on adopt (P4, Review Focus 3)', () => {
+  it('sends an unsent carry-on once, marking it sent before the write, and never again on a later pass', async () => {
+    const r = rig({ carryOn: 'carry on with the work', carrySent: false })
+    const order: string[] = []
+    const realNote = r.registry.note.bind(r.registry)
+    r.registry.note = (id, patch) => { order.push(`note ${JSON.stringify(patch)}`); realNote(id, patch) }
+    const realWrite = r.procs[0].write
+    r.procs[0].write = (d) => { order.push('write'); realWrite(d) }
+    r.chats.adopt(r.entry())
+    await vi.waitFor(() => expect(order).toContain('write'))
+    expect(order.indexOf('note {"carrySent":true}')).toBeLessThan(order.indexOf('write'))
+    r.chats.adopt(r.entry())
+    expect(r.procs[0].sent.filter((s) => s.includes('carry on with the work'))).toHaveLength(1)
+  })
+  it('does not send a carry-on the note says was sent', () => {
+    const r = rig({ carryOn: 'carry on', carrySent: true })
+    r.chats.adopt(r.entry())
+    expect(r.procs[0].sent.join('')).not.toContain('carry on')
+  })
+})
+
 describe('createHostChats — the handles it keeps (Task 3 review)', () => {
   function exiting(): RegistryProc & { sent: string[]; emit(c: string): void; exit(code: number): void } {
     let onData: (c: string) => void = () => {}

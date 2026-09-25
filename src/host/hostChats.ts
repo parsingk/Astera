@@ -173,6 +173,17 @@ export function createHostChats(d: HostChatsDeps): HostChats {
       }
       keep(meta.id, h)
       h.replay()
+      // P4 (Review Focus 3): a roll's carry-on the note says was never sent is sent once, by the writer
+      // only, and marked sent before the write, so a later writer change never types it twice. A second
+      // adopt of the same session returns above and sends nothing.
+      const restore = meta.restore
+      if (typeof restore.carryOn === 'string' && restore.carrySent !== true && isWriter(meta.id)) {
+        const text = restore.carryOn
+        d.procs.note(entry.id, { carrySent: true })
+        void (async () => manager.send(meta.id, text))().catch((err: unknown) =>
+          d.log(`chat ${meta.id}: the carry-on could not be sent after the takeover: ${errText(err)}`)
+        )
+      }
       return info
     },
     spawn(o) {
