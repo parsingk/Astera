@@ -9,7 +9,7 @@
 //
 // Classification and conversion live in core/slack/inbound.ts (pure functions); this file only does
 // the SDK wiring. The app token is never written to the log.
-import { SocketModeClient } from '@slack/socket-mode'
+// Lives in core since Slack in the Host (Task 1), so the Host runs the same notifier the app does.
 import {
   classifyInbound,
   toSessionInput,
@@ -18,11 +18,11 @@ import {
   MAX_INJECT_CHARS,
   type InboundMessage,
   type ChoiceShape
-} from '../core/slack/inbound'
-import { questionAnswerOf, approvalDecisionOf } from '../core/slack/chatRequest'
-import type { ChatRequest, ChatAnswer } from '../core/chat/types'
-import { botErrorReason } from './slackTransport'
-import { t, type Lang } from '../core/i18n'
+} from './inbound'
+import { questionAnswerOf, approvalDecisionOf } from './chatRequest'
+import type { ChatRequest, ChatAnswer } from '../chat/types'
+import { botErrorReason } from './transport'
+import { t, type Lang } from '../i18n'
 
 // Gap between individual choice keys. Same value and same reasoning as ENTER_DELAY_MS. Written glued
 // together in one go, the TUI receives them as a clump and they no longer match its digit test
@@ -83,11 +83,6 @@ export interface SocketClient {
   disconnect(): Promise<void>
 }
 
-/** Confines SDK construction to one place — so no other file imports @slack/socket-mode. */
-export function createSocketClient(appToken: string): SocketClient {
-  return new SocketModeClient({ appToken }) as unknown as SocketClient
-}
-
 /** message event payload — the SDK emits events_api as `emit(event.type, { ack, event, body })`.
  *  Without an ack() call, Slack redelivers the same event. */
 interface MessageEnvelope {
@@ -117,7 +112,7 @@ export class SlackInbox {
       await client.start()
     } catch (err) {
       // botErrorReason pulls only err.name, err.code and err.data?.error — err.message is never used
-      // because the app token can be mixed into it (slackTransport.ts; the docs point at invalid_auth
+      // because the app token can be mixed into it (transport.ts; the docs point at invalid_auth
       // and the like as what to look for)
       this.deps.log(`slack socket start failed(${botErrorReason(err)})`)
     }

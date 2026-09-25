@@ -3,7 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile, appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
-import type { Account, SessionInfo } from '../core/types'
+import type { Account, SessionInfo } from '../types'
 
 const TICK = 1_000
 

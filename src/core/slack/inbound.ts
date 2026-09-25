@@ -1,6 +1,6 @@
 // The pure decisions and conversions that turn a Slack thread reply into session input.
 //
-// Everything that touches the SDK (@slack/socket-mode) is main/slackInbox.ts's job; only "should this
+// Everything that touches the SDK (@slack/socket-mode) is core/slack/inbox.ts's job; only "should this
 // message be injected" and "what should be written" live here — those two questions are where this
 // feature's risk is concentrated (infinite loops, the wrong channel, newline handling), and being pure
 // functions they can all be tested without a real connection.

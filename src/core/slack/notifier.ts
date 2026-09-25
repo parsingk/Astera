@@ -1,44 +1,46 @@
 // Slack progress notifications. Hook events (Stop, Notification), a chat session's own protocol events
 // (onChatEvent), rolling state, non-rolling limits, and session exits are sent through either an Incoming
 // Webhook or a Slack bot (chat.postMessage) — both are abstracted behind SlackTransport in
-// slackTransport.ts, so this file does not know which implementation it has. As with RollingCoordinator,
+// transport.ts, so this file does not know which implementation it has. As with RollingCoordinator,
 // every side effect is injected through deps — no electron dependency, verified with vitest. The wiring
 // is in ipc.ts and index.ts. The Webhook URL and bot token are never written to the log.
+// Lives in core since Slack in the Host (Task 1), so the Host runs the same notifier the app does.
 import { promises as fs } from 'node:fs'
-import type { Account, SessionInfo, RollStateEvent } from '../core/types'
-import { OutputScanner } from '../core/rolling/detect'
-import { CodexLimitScanner } from '../core/rolling/codexSignal'
-import { PROVIDER_META, providerOf, type Provider } from '../core/providers/meta'
-import { parseStatusLinePayload } from '../core/usage/statusline'
+import type { Account, SessionInfo, RollStateEvent } from '../types'
+import { OutputScanner } from '../rolling/detect'
+import { CodexLimitScanner } from '../rolling/codexSignal'
+import { PROVIDER_META, providerOf, type Provider } from '../providers/meta'
+import { parseStatusLinePayload } from '../usage/statusline'
 import {
   describePendingToolUse,
   extractLastTurnAssistantText,
   extractPendingToolUse
-} from '../core/slack/transcript'
-import type { ChoiceShape } from '../core/slack/inbound'
-import { extractLastAgentMessage } from '../core/slack/codexTranscript'
-import { describeChatRequest } from '../core/slack/chatRequest'
-import type { ChatEvent, ChatRequest, ChatStatus } from '../core/chat/types'
+} from './transcript'
+import type { ChoiceShape } from './inbound'
+import { extractLastAgentMessage } from './codexTranscript'
+import { describeChatRequest } from './chatRequest'
+import type { ChatEvent, ChatRequest, ChatStatus } from '../chat/types'
 import {
   isIdleNotification,
   isNonPromptNotification,
   isUnknownNotificationType,
   type NotificationPayload
-} from '../core/hooks/notification'
-import type { SlackTransportConfig } from '../core/slack/ready'
-import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
-import { sessionKindOf } from '../core/sessions/kind'
-import { happenedBefore, hookEventAt } from '../core/hooks/eventTime'
-import { sanitize } from '../core/orchestration/checkpoint'
-import { t, type Lang } from '../core/i18n'
+} from '../hooks/notification'
+import type { SlackTransportConfig } from './ready'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
+import { sessionKindOf } from '../sessions/kind'
+import { happenedBefore, hookEventAt } from '../hooks/eventTime'
+import { sanitize } from '../orchestration/checkpoint'
+import { t, type Lang } from '../i18n'
 import {
   BotTransport,
-  createWebClient,
   SlackPostError,
   WebhookTransport,
   type SlackPoster,
   type SlackTransport
-} from './slackTransport'
+} from './transport'
+
+export type { SlackConfig } from './config'
 
 const GATE_PCT = 90 // the bar for choosing which window's reset to show — no longer used as a gate for accepting a limit phrase
 const DEDUP_MS = 10 * 60_000 // the window in which identical text is not re-sent (guards against a repeated excerpt or state)
@@ -81,7 +83,7 @@ export interface SlackDeps {
   readFileTail?: (filePath: string, maxBytes: number) => Promise<string | null> // for test injection
   fetchFn?: typeof fetch // for test injection — defaults to the global fetch
   now?: () => number
-  createPoster?: (token: string) => SlackPoster // for test injection — defaults to createWebClient
+  createPoster?: (token: string) => SlackPoster // supplied by the caller (the app's createWebClient, main/slackSdk.ts); with none, a bot config selects no transport (P3)
   wait?: (ms: number) => Promise<void> // test injection for sendChatTurnSummary's re-read window; default setTimeout
 }
 
@@ -164,115 +166,6 @@ export async function readFileTail(filePath: string, maxBytes: number): Promise<
   }
 }
 
-export interface SlackConfig {
-  webhookUrl: string | null
-  botToken: string | null // xoxb-
-  channelId: string | null // the channel the session thread is posted in
-  // xapp-. It is for Socket Mode receiving only and plays no part in choosing the transport (applyConfig) —
-  // the actual consumer is the inbox. It is stored ahead of time so the settings screen is only touched once.
-  appToken: string | null
-  // The one Slack Member ID (U…) whose thread replies are injected into sessions. Receiving-side
-  // permission only — it plays no part in choosing the transport either, so sending keeps working
-  // without it while every reply is blocked (see classifyInbound in core/slack/inbound.ts). A missing
-  // value blocks everyone rather than allowing everyone, so an old slack.json with no such field
-  // converges on the safe side with no migration.
-  memberId: string | null
-}
-
-const EMPTY_CONFIG: SlackConfig = {
-  webhookUrl: null,
-  botToken: null,
-  channelId: null,
-  appToken: null,
-  memberId: null
-}
-
-const norm = (v: unknown): string | null =>
-  typeof v === 'string' && v.trim() !== '' ? v.trim() : null
-
-/** Settings storage (userData/slack.json). A missing or corrupt file falls back to defaults — it does not
- *  block the app. Tokens never leave this file: they are not put in logs or error messages. */
-// The file is the only copy of the credentials, so the read paths distinguish "nothing stored" from
-// "could not be read" — see read() for why, and patch() for what depends on it.
-export class SlackConfigStore {
-  constructor(private filePath: string) {}
-
-  /** The stored values, or null when the file is there but could not be read — a state that is not the same
-   *  as "nothing is stored" and must not be collapsed into one. A missing file (ENOENT) is a fresh install
-   *  and gives defaults; an unparseable file gives defaults too, because that damage does not heal on a
-   *  retry and the settings screen has to stay able to overwrite it. Anything else — EPERM or EBUSY while
-   *  another process holds the file on Windows, EMFILE under fd pressure — is transient, and the values it
-   *  hides are still on disk. */
-  private async read(): Promise<SlackConfig | null> {
-    let text: string
-    try {
-      text = await fs.readFile(this.filePath, 'utf8')
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { ...EMPTY_CONFIG }
-      return null
-    }
-    try {
-      const raw = JSON.parse(text) as Record<string, unknown>
-      return {
-        webhookUrl: norm(raw.webhookUrl),
-        botToken: norm(raw.botToken),
-        channelId: norm(raw.channelId),
-        appToken: norm(raw.appToken),
-        memberId: norm(raw.memberId)
-      }
-    } catch {
-      return { ...EMPTY_CONFIG }
-    }
-  }
-
-  /** Reading is deliberately forgiving: an unreadable file leaves Slack looking unconfigured rather than
-   *  keeping the app from starting. Writers must not inherit that forgiveness — see patch(). */
-  async load(): Promise<SlackConfig> {
-    return (await this.read()) ?? { ...EMPTY_CONFIG }
-  }
-
-  /** Returns the normalised value — so the caller does not have to write and then read it back. */
-  async save(cfg: SlackConfig): Promise<SlackConfig> {
-    const normalized: SlackConfig = {
-      webhookUrl: norm(cfg.webhookUrl),
-      botToken: norm(cfg.botToken),
-      channelId: norm(cfg.channelId),
-      appToken: norm(cfg.appToken),
-      memberId: norm(cfg.memberId)
-    }
-    await fs.writeFile(this.filePath, JSON.stringify(normalized, null, 2), 'utf8')
-    return normalized
-  }
-
-  /** A partial update. Passing an object holding only some fields straight to save() has save() normalise
-   *  each missing field to norm(undefined)=null, silently erasing values that were already in slack.json in
-   *  one save. patch() reads the existing values first, preserves the fields that were not sent
-   *  (undefined), and overwrites only those that were. One load() plus one save() is the whole thing, so
-   *  the caller needs no separate "re-read after saving".
-   *
-   *  The settings modal now sends all five fields, but patch is kept — partial updates have to work so that
-   *  a future caller touching a single field leaves the rest alive.
-   *
-   *  Merging is only safe when the current values are actually known. load()'s all-null fallback would turn
-   *  a failed read into "nothing was stored", and one save later the tokens on disk are gone — so a read
-   *  failure throws here instead, leaving the file untouched. The save fails visibly and the values survive
-   *  to be read on the next attempt. */
-  async patch(partial: Partial<SlackConfig>): Promise<SlackConfig> {
-    const current = await this.read()
-    if (!current)
-      throw new Error(
-        `slack.json could not be read; refusing to save over values that may still be there: ${this.filePath}`
-      )
-    return this.save({
-      webhookUrl: partial.webhookUrl !== undefined ? partial.webhookUrl : current.webhookUrl,
-      botToken: partial.botToken !== undefined ? partial.botToken : current.botToken,
-      channelId: partial.channelId !== undefined ? partial.channelId : current.channelId,
-      appToken: partial.appToken !== undefined ? partial.appToken : current.appToken,
-      memberId: partial.memberId !== undefined ? partial.memberId : current.memberId
-    })
-  }
-}
-
 export class SlackNotifier {
   private records = new Map<string, SlackRecord>() // liveId → record
   // Root message ts → liveId. This is the index for tracing which session a thread reply should be
@@ -329,10 +222,20 @@ export class SlackNotifier {
    *  NewSessionDialog.tsx gates the notification checkbox on that function, so changing only one side
    *  brings back "it is configured but the checkbox will not turn on" — isSlackReady() is not reused here
    *  because it returns a plain bool, whereas this code has to actually narrow botToken and channelId to
-   *  pass them to the BotTransport constructor, and a helper call does not narrow the types. */
+   *  pass them to the BotTransport constructor, and a helper call does not narrow the types.
+   *
+   *  There is no default SDK constructor in core (P1: the SDK never enters core) — this.deps.createPoster
+   *  is supplied by whichever process applies the config (the app's createWebClient, or the Host's own).
+   *  With a bot config and no createPoster, nothing can be built: it is logged and the transport becomes
+   *  null rather than silently falling back to the webhook (P3). Every real caller passes one. */
   applyConfig(cfg: SlackTransportConfig): void {
     if (cfg.botToken && cfg.channelId) {
-      const create = this.deps.createPoster ?? createWebClient
+      const create = this.deps.createPoster
+      if (!create) {
+        this.deps.log('slack: no poster for bot mode')
+        this.replaceTransport(null)
+        return
+      }
       this.replaceTransport(new BotTransport(create(cfg.botToken), cfg.channelId))
       return
     }

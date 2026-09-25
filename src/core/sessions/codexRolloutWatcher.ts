@@ -14,14 +14,15 @@
 // Bolting it onto CodexRollingCoordinator would create a responsibility mismatch — "the rolling coordinator tracks
 // sessions that are not rolling" — and clash with the existing rolling design. When rolling is on, two tails run
 // over the same file, which is negligible because reads are incremental by offset.
-import type { Account, SessionInfo, SessionUsage } from '../core/types'
-import { JsonlTail } from '../core/rolling/jsonlTail'
-import { findRollout } from '../core/rolling/codexLocate'
-import { limitStateFromLines, type CodexLimitState } from '../core/rolling/codexSignal'
-import { tailLines } from '../core/rolling/tailLines'
-import { contextFromLines, sessionUsageOf } from '../core/usage/codex'
+// Lives in core since Slack in the Host (Task 1), so the Host runs the same notifier the app does.
+import type { Account, SessionInfo, SessionUsage } from '../types'
+import { JsonlTail } from '../rolling/jsonlTail'
+import { findRollout } from '../rolling/codexLocate'
+import { limitStateFromLines, type CodexLimitState } from '../rolling/codexSignal'
+import { tailLines } from '../rolling/tailLines'
+import { contextFromLines, sessionUsageOf } from '../usage/codex'
 import path from 'node:path'
-import { comparablePath } from '../core/files/tree'
+import { comparablePath } from '../files/tree'
 
 // Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 

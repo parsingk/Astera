@@ -38,14 +38,16 @@ import type { RollSnapshot } from '../core/rolling/snapshot'
 import { chatSpawnOptsOf } from '../core/chat/respawn'
 import { writeRollSnapshotTo } from './rollSnapshotSink'
 import { memoiseLoginStatus } from '../core/accounts/loginStatusCache'
-import { SlackNotifier, SlackConfigStore } from './slack'
-import { SlackInboxController, createSocketClient } from './slackInbox'
+import { SlackNotifier } from '../core/slack/notifier'
+import { SlackConfigStore } from './slackConfigStore'
+import { SlackInboxController } from '../core/slack/inbox'
+import { createSocketClient, createWebClient } from './slackSdk'
 import { HookEventWatcher } from '../core/hooks/eventWatcher'
 import { fanOutHookEvent } from './hookFanOut'
 import { DesktopNotifier } from './desktopNotifier'
 import { createAttentionState } from './attention'
 import { createPendingPromptState } from './pendingPrompt'
-import { CodexRolloutWatcher } from './codexRolloutWatcher'
+import { CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
 import {
@@ -430,7 +432,10 @@ app.whenReady().then(async () => {
     },
     readStatusPayload: (id) => core!.statusLinePayload(id),
     lang: () => core!.lang,
-    log: slackLog
+    log: slackLog,
+    // core has no default SDK constructor (P1) — the app supplies it explicitly, where it always did
+    // before this was the default.
+    createPoster: createWebClient
   })
   // The one attention verdict (main/attention.ts): is a session working, or waiting for a person,
   // decided from the same hook stream Slack and the desktop sink already read. Constructed here,

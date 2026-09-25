@@ -6,9 +6,9 @@ import {
   type SlackInboxDeps,
   type SlackInboxControllerDeps,
   type SocketClient
-} from './slackInbox'
-import { MAX_INJECT_CHARS } from '../core/slack/inbound'
-import type { ChatRequest } from '../core/chat/types'
+} from './inbox'
+import { MAX_INJECT_CHARS } from './inbound'
+import type { ChatRequest } from '../chat/types'
 
 const CH = 'C-target'
 const ME = 'U-owner' // 허용된 Member ID — Slack은 메시지 이벤트의 user 필드로 보낸다

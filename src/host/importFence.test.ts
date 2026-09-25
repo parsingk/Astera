@@ -132,4 +132,24 @@ describe('the Host import fence (constraint 10)', () => {
     expect(existsSync(path.join(srcRoot, 'main', 'chat', 'nodeProcFactory.ts'))).toBe(true)
     expect(fenceViolations(srcRoot, moved)).toEqual([])
   })
+
+  // Slack in the Host Task 1 (spec §3.1): the notifier, the inbox, the transports and the codex rollout
+  // watcher live in core, inside the fence, and none of them imports the Slack SDK (plan ruling P1).
+  it('the Slack notifier, inbox, transports and codex rollout watcher live in core, without the SDK', () => {
+    const moved = [
+      path.join(srcRoot, 'core', 'slack', 'notifier.ts'),
+      path.join(srcRoot, 'core', 'slack', 'config.ts'),
+      path.join(srcRoot, 'core', 'slack', 'inbox.ts'),
+      path.join(srcRoot, 'core', 'slack', 'transport.ts'),
+      path.join(srcRoot, 'core', 'sessions', 'codexRolloutWatcher.ts')
+    ]
+    for (const f of moved) expect(existsSync(f), f).toBe(true)
+    for (const gone of ['slack.ts', 'slackInbox.ts', 'slackTransport.ts', 'codexRolloutWatcher.ts'])
+      expect(existsSync(path.join(srcRoot, 'main', gone)), gone).toBe(false)
+    // The SDK constructors and the slack.json writer stay with the app (P1, P2).
+    expect(existsSync(path.join(srcRoot, 'main', 'slackSdk.ts'))).toBe(true)
+    expect(existsSync(path.join(srcRoot, 'main', 'slackConfigStore.ts'))).toBe(true)
+    expect(fenceViolations(srcRoot, moved)).toEqual([])
+    for (const f of moved) expect(readFileSync(f, 'utf8'), f).not.toMatch(/from\s+['"]@slack\//)
+  })
 })

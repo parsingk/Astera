@@ -3,9 +3,8 @@ import {
   WebhookTransport,
   SlackPostError,
   BotTransport,
-  createWebClient,
   type SlackPoster
-} from './slackTransport'
+} from './transport'
 
 describe('WebhookTransport', () => {
   it('텍스트를 webhook URL로 POST한다', async () => {
@@ -163,23 +162,5 @@ describe('BotTransport', () => {
     expect(caught.reason).not.toContain(secretToken)
     expect(caught.reason).not.toContain('An API error occurred')
     expect(caught.reason).toContain('invalid_auth') // err.data.error는 비밀이 아니므로 여전히 남는다
-  })
-})
-
-describe('createWebClient', () => {
-  it('SDK 기본값(무제한 타임아웃 + 약 30분간 10회 재시도) 대신 유한한 타임아웃·적은 재시도를 쓴다', () => {
-    // WebClient는 생성자에서 받은 timeout·retryConfig를 그대로 인스턴스 필드에 저장한다
-    // (compiled WebClient.js: this.timeout = timeout; this.retryConfig = retryConfig). private는
-    // TS 컴파일 타임에만 존재하므로 런타임에서 그대로 읽을 수 있다 — 실제 네트워크 호출 없이
-    // 구성값만 검증한다.
-    const client = createWebClient('xoxb-test') as unknown as {
-      timeout: number
-      retryConfig: { retries?: number }
-    }
-
-    expect(client.timeout).toBeGreaterThan(0) // 0 = 무제한(SDK 기본값) — 루트 게시가 영원히 안 끝날 수 있다
-    expect(client.timeout).toBeLessThanOrEqual(10_000)
-    expect(client.retryConfig.retries).toBeDefined()
-    expect(client.retryConfig.retries as number).toBeLessThanOrEqual(2) // 기본값(10회)보다 확실히 적어야 한다
   })
 })

@@ -118,7 +118,7 @@ const REDACTED_KEYS = new Set(['content', 'old_string', 'new_string'])
  * Hint on the reply format for a choice prompt.
  *
  * The injection layer turns the reply into a key sequence and carries it through Submit
- * (buildChoiceKeys in main/slackInbox.ts), so the hint is about the **format**, not "go do it in the
+ * (buildChoiceKeys in core/slack/inbox.ts), so the hint is about the **format**, not "go do it in the
  * terminal". When the format is off, no key is pressed and only the reason is left in the thread, so
  * saying the format up front is what cuts wasted round trips the most.
  *
@@ -210,7 +210,7 @@ export function extractPendingToolUse(tail: string): PendingToolUse | null {
  * that were inside it at capture time out of view. The count then stopped growing, or even shrank, so a
  * call that had already finished stayed marked "pending" and an idle notification went out as "input
  * needed". The verdict was replaced by whether the tool_use_id appears (see the SlackRecord.pendingTool
- * comment in main/slack.ts).
+ * comment in core/slack/notifier.ts).
  *
  * It is kept because this comment is the only place holding the measurement above — that Claude Code does
  * not flush assistant messages while waiting for interaction — and that fact is what explains both the

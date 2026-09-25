@@ -1,7 +1,7 @@
 // Decides whether Slack notifications are "ready".
 //
 // The condition NewSessionDialog.tsx (renderer) uses to gate the Slack notification checkbox and the
-// condition SlackNotifier.applyConfig() (src/main/slack.ts) uses to pick a transport were judged
+// condition SlackNotifier.applyConfig() (src/core/slack/notifier.ts) uses to pick a transport were judged
 // separately in different files and drifted apart — the checkbox only looked at webhookUrl, so a user
 // who had configured only botToken+channelId could not tick it even though the bot transport really
 // was on. Having both renderer and main look at this single function in core keeps them from drifting
