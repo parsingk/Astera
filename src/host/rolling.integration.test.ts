@@ -50,7 +50,10 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
   vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
   const profileDir = await tempDir('astera-s6-rig-')
   dirs.push(profileDir)
-  const accounts: Account[] = ['a1', 'a2'].map((id) => ({ id, label: id, configDir: path.join(profileDir, id), color: '#fff', createdAt: NOW }))
+  const accounts: Account[] = [
+    ...['a1', 'a2'].map((id) => ({ id, label: id, configDir: path.join(profileDir, id), color: '#fff', createdAt: NOW })),
+    ...['x1', 'x2'].map((id) => ({ id, label: id, configDir: path.join(profileDir, id), color: '#fff', createdAt: NOW, provider: 'codex' as const }))
+  ]
   // One Job, one Run, one Task with an open Dispatch on s1 (and a coordinator slot when asked).
   const job = createJob(emptyState(), { objective: 'o', cwd: profileDir }, NOW); if (!job.ok) throw new Error(job.error)
   const run = startJobRun(job.state, job.value.id, NOW); if (!run.ok) throw new Error(run.error)
@@ -90,6 +93,7 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
   const payloads = new Map<string, unknown>()
   let seq = 1
   const onSpawned: Array<(i: SessionInfo, a: Account) => void> = []
+  const onLocated: Array<(s: string, c: string, p: string) => void> = []
   const spawner = {
     prepareRollSpawn: async () => {},
     rollSpawn: (x: { account: Account; cwd: string; rollAccountIds?: string[]; restoreExtra?: Record<string, unknown> }) => {
@@ -99,7 +103,7 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
     },
     statusLinePayload: async (id: string) => payloads.get(id) ?? null,
     onSpawned: (cb: (i: SessionInfo, a: Account) => void) => { onSpawned.push(cb) },
-    onRolloutLocated: () => {},
+    onRolloutLocated: (cb: (s: string, c: string, p: string) => void) => { onLocated.push(cb) },
     retarget: () => {},
     isRetiring: () => false
   }
@@ -153,7 +157,10 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
     broadcasts,
     logs,
     now: () => Date.now(),
-    spawnWorker: (p: string, s: string, ids: string[]) => { open(p, s, { accountId: ids[0], cwd: profileDir, title: 't', rollAccountIds: ids, rolledBy: 'host' }); for (const cb of onSpawned) cb({ id: s, accountId: ids[0], cwd: profileDir, status: 'running', title: 't', rollAccountIds: ids }, accounts[0]); return orch.ready() },
+    spawnWorker: (p: string, s: string, ids: string[]) => { open(p, s, { accountId: ids[0], cwd: profileDir, title: 't', rollAccountIds: ids, rolledBy: 'host' }); for (const cb of onSpawned) cb({ id: s, accountId: ids[0], cwd: profileDir, status: 'running', title: 't', rollAccountIds: ids }, accounts.find((a) => a.id === ids[0])!); return orch.ready() },
+    /** The spawner's locate found a fresh codex session's rollout (R12). */
+    rolloutLocated: (s: string, thread: string, file: string) => { for (const cb of onLocated) cb(s, thread, file) },
+    profileDir,
     spawnAppWorker: (p: string, s: string, ids: string[]) => { open(p, s, { accountId: ids[0], cwd: profileDir, title: 't', rollAccountIds: ids, roll: snapOf(ids, {}) }); return orch.ready() },
     openAppSession: (p: string, s: string, ids: string[], over: Partial<RollSnapshot>, x: { withoutSnapshot?: boolean } = {}) => {
       open(p, s, { accountId: ids[0], cwd: profileDir, title: 't', rollAccountIds: ids, ...(x.withoutSnapshot ? {} : { roll: snapOf(ids, over) }) })
@@ -280,6 +287,23 @@ describe('the Host rolls, with and without an app (S6 rig)', () => {
     expect(h.logs.filter((m) => m.includes('accounts.json was never read'))).toHaveLength(1)
     await h.tick() // the tick reads again, and this time the read succeeds
     expect(h.note('p9').rolledBy).toBe('host')
+  })
+  it('a takeover restore reports the chain’s native id, and the Dispatch records it (Task 16 review, M11)', async () => {
+    const h = await rig({ appPid: 100 })
+    h.attachApp(3, ['worktrees', 'dispatch', 'rolling'], [])
+    await h.openAppSession('p1', 's1', ['a1'], {}) // the snapshot names claude session 'cs'; the Dispatch is on s1
+    h.detachApp(3)
+    h.setAppPid(null)
+    h.graceEnds()
+    expect(h.note('p1').rolledBy).toBe('host')
+    await vi.waitFor(() => expect(h.dispatch().nativeSessionId).toBe('cs'))
+  })
+  it('a codex session the spawner located is mapped: its thread id reaches the note and the Dispatch (Task 16 review, M14)', async () => {
+    const h = await rig()
+    await h.spawnWorker('p1', 's1', ['x1', 'x2'])
+    h.rolloutLocated('s1', 'thread-1', path.join(h.profileDir, 'x1', 'sessions', 'rollout-thread-1.jsonl'))
+    expect(h.note('p1').nativeSessionId).toBe('thread-1')
+    await vi.waitFor(() => expect(h.dispatch().nativeSessionId).toBe('thread-1'))
   })
   it('a dropped socket whose app lives takes nothing, however long it stays away (Review Focus 1)', async () => {
     const h = await rig({ appPid: 100 })
