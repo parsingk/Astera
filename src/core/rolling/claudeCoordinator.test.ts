@@ -10,7 +10,7 @@ import { parseResetTime } from './resetTime'
 import { BlockRegistry } from './blockRegistry'
 import type { RollConfig } from './config'
 import { RollingCoordinator, type RollingDeps } from './claudeCoordinator'
-import type { RollSnapshot } from './snapshot'
+import { parseRollSnapshot, type RollSnapshot } from './snapshot'
 
 const acc = (id: string, label: string): Account => ({
   id,
@@ -3853,5 +3853,51 @@ describe('logged-out accounts', () => {
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }) // ordinary roll to a2 still happens
     await flush()
     expect(h.events).toContain('spawn:s2:a2')
+  })
+})
+
+describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
+  it('awaits prepareSpawn after the copy and before the kill', async () => {
+    const h = harness({
+      prepareSpawn: async () => {
+        h.events.push('prepare')
+      }
+    })
+    h.payloads.set('s1', payload(100))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy', 'prepare', 'kill:s1', 'spawn:s2:a2'])
+  })
+
+  it('a refused respawn kills nothing, spawns nothing, and reschedules a visible wait (Review Focus 3)', async () => {
+    const logs: string[] = []
+    const h = harness({
+      prepareSpawn: async () => {
+        throw new Error('app-settings.json cannot be read')
+      },
+      log: (m) => logs.push(m)
+    })
+    h.payloads.set('s1', payload(100))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy'])
+    expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'waiting' })
+    expect(logs.join('\n')).toMatch(/spawn refused: app-settings\.json cannot be read/)
+  })
+
+  it('the respawn carries rolledFrom and a snapshot on the new index awaiting its prompt', async () => {
+    const h = harness()
+    h.payloads.set('s1', payload(100))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    const extra = h.spawnedOpts[0].restoreExtra as { rolledFrom: string; roll: RollSnapshot }
+    expect(extra.rolledFrom).toBe('s1')
+    expect(parseRollSnapshot(extra.roll)).toMatchObject({ currentIndex: 1, awaitingPrompt: true, wait: null })
   })
 })

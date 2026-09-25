@@ -127,7 +127,13 @@ export interface RollingDeps {
      *  straight off `core.bypassSignalFor`, since it already has the target account in hand and that
      *  fact is about this machine's PATH, not about the chain. */
     startWithBypass?: boolean
+    /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
+     *  account. The manager merges them into `meta.restore` under its own keys. */
+    restoreExtra?: Record<string, unknown>
   }): SessionInfo
+  /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
+   *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare. */
+  prepareSpawn?(account: Account, cwd: string): Promise<void>
   /** The model the person picked in this session, or null when they picked none.
    *
    *  A roll has to carry it because Claude's model is argv and nothing about it survives the process —
@@ -1627,6 +1633,24 @@ export class RollingCoordinator {
           return
         }
       }
+      // S6 R5: what a respawn can wait for or be refused over happens while the old session lives —
+      // the kill below starts the await-free stretch (constraint 12).
+      if (this.deps.prepareSpawn) {
+        try {
+          await this.deps.prepareSpawn(target, chain.cwd)
+        } catch (err) {
+          const why = err instanceof Error ? err.message : String(err)
+          this.deps.log(`roll aborted — the respawn would be refused: ${why} session=${chain.liveId}`)
+          this.rescheduleAbortedRoll(chain, `spawn refused: ${why}`)
+          return
+        }
+        if (chain.disposed) {
+          this.deps.log(`roll aborted — chain disposed while preparing the respawn session=${chain.liveId}`)
+          return
+        }
+      }
+      // ── The last await before the kill is behind us. Anything that must be re-checked after it (S6
+      // Task 9's mayAct gate) goes here, in this one place — from the next line on there is no await. ──
       // ② kill the existing PTY → ③ respawn under the same ID. There is no await from here until
       // re-keying — even if the exit event arrives under the old key, the chain has already moved to the
       // new one, so disposeChain does not misfire. A blank-slate roll omits resumeSessionId entirely —
@@ -1661,7 +1685,25 @@ export class RollingCoordinator {
         // Carried so the chain keeps running on what the person chose. The respawned session records it
         // as its own choice, so the roll after this one reads it back the same way.
         model: chosenModel,
-        startWithBypass: wasBypassed
+        startWithBypass: wasBypassed,
+        // S6 R6: the new pty is born with what a takeover needs if this process dies before the
+        // rekey commits: where it came from, and the chain on its new account awaiting its prompt.
+        restoreExtra: {
+          rolledFrom: chain.liveId,
+          roll: {
+            ...this.snapshotOf(chain),
+            currentIndex: toIndex,
+            wait: null,
+            rolledAt: this.now(),
+            awaitingPrompt: chain.kind !== 'chat',
+            claude: {
+              sessionId: smart ? null : sessionId,
+              transcriptPath: dest ?? null,
+              tailOffset: null,
+              tailSince: this.now()
+            }
+          } satisfies RollSnapshot
+        }
       })
       this.chains.delete(oldId)
       chain.liveId = info.id

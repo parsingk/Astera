@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Account, SessionInfo } from '../types'
 import { BlockRegistry } from './blockRegistry'
 import { CodexRollingCoordinator, type CodexRollingDeps } from './codexCoordinator'
-import type { RollSnapshot } from './snapshot'
+import { parseRollSnapshot, type RollSnapshot } from './snapshot'
 
 let tmp: string
 
@@ -2554,5 +2554,58 @@ describe('codex snapshots and restore (S6 R4)', () => {
       recovery: h.info1.rollAccountIds!.map(() => null), blocks: {}, wait: null, inPlaceUsed: false, rolledAt: null,
       awaitingPrompt: false, writtenAt: 0
     })).toBe(false)
+  })
+})
+
+describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
+  // Brought to the point of a roll the same way the first test above is: a mapped rollout, its structured
+  // limit error, then the phrase.
+  const rollNow = async (h: ReturnType<typeof harness>): Promise<void> => {
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-1', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+  }
+
+  it('awaits prepareSpawn after the copy and before the kill', async () => {
+    const h = harness({
+      prepareSpawn: async () => {
+        h.events.push('prepare')
+      }
+    })
+    await rollNow(h)
+    expect(h.events).toEqual(['copy', 'prepare', 'kill:s1', 'spawn:s2:c2'])
+    h.coord.stop()
+  })
+
+  it('a refused respawn kills nothing, spawns nothing, and reschedules a visible wait (Review Focus 3)', async () => {
+    const logs: string[] = []
+    const h = harness({
+      prepareSpawn: async () => {
+        throw new Error('app-settings.json cannot be read')
+      },
+      log: (m) => logs.push(m)
+    })
+    await rollNow(h)
+    expect(h.events).toEqual(['copy'])
+    expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'waiting' })
+    expect(logs.join('\n')).toMatch(/spawn refused: app-settings\.json cannot be read/)
+    h.coord.stop()
+  })
+
+  it('the respawn carries rolledFrom and a snapshot on the new index, its prompt already on the argv', async () => {
+    const h = harness()
+    await rollNow(h)
+    const extra = h.spawnedOpts[0].restoreExtra as { rolledFrom: string; roll: RollSnapshot }
+    expect(extra.rolledFrom).toBe('s1')
+    expect(parseRollSnapshot(extra.roll)).toMatchObject({
+      currentIndex: 1,
+      awaitingPrompt: false,
+      wait: null,
+      codex: { sessionId: 'cx-1', tailOffset: null, state: null }
+    })
+    h.coord.stop()
   })
 })

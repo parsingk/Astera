@@ -99,7 +99,13 @@ export interface CodexRollingDeps {
      *  here either, for the same reason rolling.ts's own comment gives: the wiring's `spawn` callback
      *  computes it itself from `core.bypassSignalFor`. */
     startWithBypass?: boolean
+    /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
+     *  account. The manager merges them into `meta.restore` under its own keys. */
+    restoreExtra?: Record<string, unknown>
   }): SessionInfo
+  /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
+   *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare. */
+  prepareSpawn?(account: Account, cwd: string): Promise<void>
   kill(sessionId: string): void
   /** Writes into a live session's PTY. Used only to dismiss the model-switch prompt (answerModelChoice). */
   write(sessionId: string, data: string): void
@@ -1544,6 +1550,24 @@ export class CodexRollingCoordinator {
           return
         }
       }
+      // S6 R5: what a respawn can wait for or be refused over happens while the old session lives —
+      // the kill below starts the await-free stretch (the claude side's roll() has the same block).
+      if (this.deps.prepareSpawn) {
+        try {
+          await this.deps.prepareSpawn(target, chain.cwd)
+        } catch (err) {
+          const why = err instanceof Error ? err.message : String(err)
+          this.deps.log(`codex roll aborted — the respawn would be refused: ${why} session=${chain.liveId}`)
+          this.rescheduleAbortedRoll(chain, `spawn refused: ${why}`)
+          return
+        }
+        if (chain.disposed) {
+          this.deps.log(`codex roll aborted — chain disposed while preparing the respawn session=${chain.liveId}`)
+          return
+        }
+      }
+      // ── The last await before the kill is behind us. Anything that must be re-checked after it (S6
+      // Task 9's mayAct gate) goes here, in this one place — from the next line on there is no await. ──
       // ② kill → ③ respawn in the same slot. The prompt is a CLI argument, so there is no PTY typing.
       // A blank-slate roll passes neither resumeSessionId nor resumePrompt — the new process is a fresh
       // `codex`, not a `codex resume`, and the briefing rides as initialPrompt instead (see the spawn dep's
@@ -1596,7 +1620,26 @@ export class CodexRollingCoordinator {
         title: chain.liveInfo.title,
         orchEnv: this.deps.orchEnv?.(),
         rollPrompt: chain.liveInfo.rollPrompt,
-        startWithBypass: wasBypassed
+        startWithBypass: wasBypassed,
+        // S6 R6: the new pty is born with what a takeover needs if this process dies before the rekey
+        // commits — the claude side's field, same contract. awaitingPrompt is false: the carry-on
+        // prompt rides this spawn (argv or first chat turn), so nothing is left to type. The tail starts
+        // over on the new rollout (attachRollout starts it at the end), so no offset or state carries.
+        restoreExtra: {
+          rolledFrom: chain.liveId,
+          roll: {
+            ...this.snapshotOf(chain),
+            currentIndex: toIndex,
+            wait: null,
+            awaitingPrompt: false,
+            codex: {
+              sessionId: smart ? null : codexSessionId,
+              rolloutPath: dest ?? null,
+              tailOffset: null,
+              state: null
+            }
+          } satisfies RollSnapshot
+        }
       })
       this.chains.delete(oldId)
       chain.liveId = info.id

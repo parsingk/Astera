@@ -122,6 +122,10 @@ export class SessionManager {
     /** Sets the tab title explicitly — orchestration worker tabs use task.title.
      *  Omitted, the existing behavior (cwd basename) applies. */
     title?: string
+    /** Extra keys for the pty's note, merged into `meta.restore` **before** the manager's own keys so
+     *  those always win (S6 R6). A rolling respawn carries `rolledFrom` and its chain's snapshot here, so
+     *  a process that takes the session over before the rekey commits still knows what it is. */
+    restoreExtra?: Record<string, unknown>
   }): SessionInfo {
     if (!existsSync(opts.cwd)) throw new Error(`CWD_MISSING: ${opts.cwd}`)
     const d = descriptorOf(this.descriptors, opts.account)
@@ -219,6 +223,7 @@ export class SessionManager {
         // restore) — restore carries slackNotify and rollAccountIds only because they also decide
         // whether toolHooks get installed.
         restore: {
+          ...(opts.restoreExtra ?? {}),
           accountId: opts.account.id,
           cwd: opts.cwd,
           title: opts.title ?? defaultSessionTitle(opts.cwd),

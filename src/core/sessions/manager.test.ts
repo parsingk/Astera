@@ -878,6 +878,21 @@ describe('SessionManager', () => {
     })
   })
 
+  // A rolling respawn is born with where it came from and its chain's snapshot (S6 R6). The manager's
+  // own keys are written after, so nothing a caller slips in can rename the account the pty runs on.
+  it('merges restoreExtra into the note after its own keys (S6 R6)', () => {
+    const { manager, spawned } = setup()
+    manager.spawn({
+      account,
+      cwd: process.cwd(),
+      rollAccountIds: ['a'],
+      restoreExtra: { rolledFrom: 's0', roll: { v: 1 }, accountId: 'forged' }
+    })
+    const restore = spawned[0].opts.meta?.restore as Record<string, unknown>
+    expect(restore).toMatchObject({ rolledFrom: 's0', roll: { v: 1 } })
+    expect(restore.accountId).toBe(account.id) // the manager's own keys win
+  })
+
   describe('adopt', () => {
     // After a restart the process is already running; adopt rebuilds only the app's own record of it.
     it('adopts a running pty and puts the session back in the list', () => {
