@@ -19,6 +19,10 @@ export interface ProcLike {
   /** Merges keys into the note this process was spawned with. Absent on the fallback for the reason
    *  PtyLike.remember is: only a Host-owned process has anywhere to keep a note. */
   remember?(patch: Record<string, unknown>): void
+  /** Whether a write from this handle reaches the process now. Only the Host's handle has it
+   *  (host/hostProcs.ts): it is false while an app socket holds the proc (chat takeover, the one-writer
+   *  rule), and a write then throws. Absent means always. */
+  mayWrite?(): boolean
   /** Whether the process keeps running after the app quits — stamped by createProcRouter, exactly as
    *  createPtyRouter stamps PtyLike. */
   outlivesApp?: boolean

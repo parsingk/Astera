@@ -273,9 +273,11 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
     // Nothing would ever answer a turn written to a process that has gone, and a user frame gets no
     // reply to time out on — so this says the same thing the core says to a request made after exit.
     if (core.ended) throw requestError('exit', 'process ended')
+    // Written first: a write that throws (a pipe that has gone, or the Host's handle while the app is
+    // the writer) never reached the CLI, so no turn may be marked as running.
+    proc.write(encodeUserTurn(text))
     core.patch({ error: null, status: 'working' })
     core.setTurn(PENDING_TURN)
-    proc.write(encodeUserTurn(text))
   }
 
   async function doAnswer(requestId: string, answer: ChatAnswer): Promise<void> {

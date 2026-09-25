@@ -1052,6 +1052,34 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
     expect(order).toEqual(['note {"carrySent":true}', 'send carry on'])
   })
 
+  // Task 3 review, Important 3: a proc whose handle says it may not write (the Host's, while an app
+  // holds it) gets neither the mark nor the turn, so the real writer still sends the carry-on once.
+  it('neither marks nor sends the carry-on through a proc that may not write (P4)', async () => {
+    const order: string[] = []
+    const factory: ProcFactory = () => {
+      const p = new FakeProc()
+      p.remember = (patch) => order.push(`note ${JSON.stringify(patch)}`)
+      Object.assign(p, { mayWrite: () => false })
+      return p
+    }
+    const createAdapter: NonNullable<ChatManagerDeps['createAdapter']> = (a) => {
+      a.proc.onLine(() => {})
+      return {
+        start: () => Promise.resolve(),
+        send: (text) => { order.push(`send ${text}`); return Promise.resolve() },
+        interrupt: () => Promise.resolve(), answer: () => Promise.resolve(), setModel: () => Promise.resolve(),
+        setPermissionMode: () => Promise.resolve(), listPermissionModes: () => Promise.resolve([]),
+        listModels: () => Promise.resolve([]), state: () => ({}) as ChatState, on: () => () => {}, kill: () => {}
+      }
+    }
+    const logs: string[] = []
+    const manager = new ChatSessionManager({ factory, descriptors: makeDescriptors('win32'), homeDir: 'C:\\Users\\tester', platform: 'win32', version: '1.0.0', log: (m) => logs.push(m), createAdapter })
+    const info = manager.spawn({ account: claudeAccount, cwd: 'D:/p', initialPrompt: 'carry on' })
+    await manager.started(info.id)
+    expect(order).toEqual([])
+    expect(logs.some((l) => l.includes('carry-on') && l.includes(info.id))).toBe(true)
+  })
+
   it('records the carry-on and that it is unsent in the new note', () => {
     const { manager, spawned } = setup()
     manager.spawn({ account: claudeAccount, cwd: 'D:/p', initialPrompt: 'carry on' })

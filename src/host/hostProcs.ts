@@ -1,10 +1,12 @@
 // The Host's own handle on a line process, for a Host-side chat adapter (chat takeover Task 3): the
 // ProcLike the app's procFactory.ts gives the app, built straight over the ProcRegistry instead of
 // over a socket. Two things set it apart from the app's:
-//  - The one-writer rule (constraint 3). Every `write` and `remember` asks `mayWrite` first and is
-//    dropped, with a log line, while an app socket holds the proc. Reading is free, so an adapter in
-//    the reader role still decodes every line; it just cannot answer on the wire. `kill` is never
-//    gated: killing is the roller's act (spec §3.4), not a writer's.
+//  - The one-writer rule (constraint 3). Every `write` and `remember` asks `mayWrite` first while an
+//    app socket holds the proc, with a log line: a write **throws** `NotWriterError`, so the adapter's
+//    own error paths keep its state honest (adapterCore's takeRequest leaves the card open, a turn is
+//    not marked running); a note is only dropped. Reading is free, so an adapter in the reader role
+//    still decodes every line; it just cannot answer on the wire. `kill` is never gated: killing is
+//    the roller's act (spec §3.4), not a writer's.
 //  - `release()`: the Host dropping a session (forget, dispose) cuts the handle off the registry, so
 //    an adapter nobody holds any more decodes no further line (Task 2 review carry).
 //
@@ -23,8 +25,20 @@ export interface HostProcHandle extends ProcLike {
   /** Drops the handle's listeners and cuts it off the registry. Every later line and exit is unheard.
    *  Idempotent. */
   release(): void
+  /** The one-writer rule, asked now. */
+  mayWrite(): boolean
   onLine(cb: (line: string) => void): () => void
   onExit(cb: (e: { exitCode: number; stderrTail?: string }) => void): () => void
+}
+
+/** A write the one-writer rule refused: the app is the proc's writer. */
+export class NotWriterError extends Error {
+  readonly procId: string
+  constructor(procId: string) {
+    super(`chat proc ${procId}: not the writer, the app is`)
+    this.name = 'NotWriterError'
+    this.procId = procId
+  }
 }
 
 type Exit = { exitCode: number; stderrTail?: string }
@@ -50,13 +64,22 @@ export interface HostProcs {
 
 export function createHostProcs(d: HostProcsDeps): HostProcs {
   const sinks = new Map<string, Set<Sink>>()
+  /** One sink's listener that throws costs the others nothing. A refused write is already logged at the
+   *  gate, so it is not logged twice (a reader adapter refusing an unreadable request lands here). */
+  const guarded = (procId: string, what: string, run: () => void): void => {
+    try {
+      run()
+    } catch (err) {
+      if (!(err instanceof NotWriterError)) d.log(`chat proc ${procId}: a ${what} listener threw: ${String(err)}`)
+    }
+  }
   const offLine = d.registry.onLine((id, seq, line) => {
-    for (const s of [...(sinks.get(id) ?? [])]) s.line(seq, line)
+    for (const s of [...(sinks.get(id) ?? [])]) guarded(id, 'line', () => s.line(seq, line))
   })
   const offExit = d.registry.onExit((id, exitCode, stderrTail) => {
     const all = [...(sinks.get(id) ?? [])]
     sinks.delete(id)
-    for (const s of all) s.exit({ exitCode, ...(stderrTail !== undefined ? { stderrTail } : {}) })
+    for (const s of all) guarded(id, 'exit', () => s.exit({ exitCode, ...(stderrTail !== undefined ? { stderrTail } : {}) }))
   })
 
   const handle = (procId: string, pid: number, replaying: boolean): HostProcHandle => {
@@ -111,8 +134,9 @@ export function createHostProcs(d: HostProcsDeps): HostProcs {
           if (onExit === cb) onExit = null
         }
       },
+      mayWrite: () => d.mayWrite(procId),
       write(line) {
-        if (!gate('write')) return
+        if (!gate('write')) throw new NotWriterError(procId)
         d.registry.write(procId, line)
       },
       kill() {
@@ -125,13 +149,14 @@ export function createHostProcs(d: HostProcsDeps): HostProcs {
       replay() {
         if (replayed || released) return
         replayed = true
-        for (const l of d.registry.buffer(procId)) deliver(l.seq, l.line)
+        // Each line guarded as a live one is: one the adapter throws on must not cut the replay short.
+        for (const l of d.registry.buffer(procId)) guarded(procId, 'line', () => deliver(l.seq, l.line))
         heldLines.sort((x, y) => x.seq - y.seq)
-        for (const l of heldLines) deliver(l.seq, l.line)
+        for (const l of heldLines) guarded(procId, 'line', () => deliver(l.seq, l.line))
         heldLines.length = 0
         const e = heldExit
         heldExit = null
-        if (e) onExit?.(e)
+        if (e) guarded(procId, 'exit', () => onExit?.(e))
       },
       release() {
         if (released) return

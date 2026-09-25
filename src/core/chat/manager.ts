@@ -291,6 +291,12 @@ export class ChatSessionManager {
         // of the initialize it is still answering. The note carries it only with its sent-marker (P4):
         // marked sent before the write, so a writer change never types it twice.
         if (initialPrompt === undefined) return
+        // Only the writer marks and sends it (P4): a proc another process writes to gets neither, so
+        // `carrySent` stays false in the note and that writer sends it.
+        if (proc.mayWrite?.() === false) {
+          this.deps.log(`chat carry-on left for the writer session=${id}: this process may not write to it`)
+          return
+        }
         this.remember(id, { carrySent: true })
         return adapter.send(initialPrompt).catch((err: unknown) => {
           this.deps.log(`chat initial prompt failed session=${id}: ${err instanceof Error ? err.message : String(err)}`)
@@ -754,6 +760,10 @@ export class ChatSessionManager {
         // because it worked: the bypass may have started a version other than the one pinned here (S7).
         this.handleEvent(id, { type: 'notice', key: 'bypassed' })
         if (materials.initialPrompt === undefined) return
+        if (proc.mayWrite?.() === false) {
+          this.deps.log(`chat carry-on left for the writer session=${id}: this process may not write to it`)
+          return
+        }
         // The only delivery channel a chat chain's handover briefing has (claudeCoordinator.ts / codexCoordinator.ts
         // both skip their own auto-prompt for chat, saying the spawn carries it). The original
         // `spawn()` continuation never ran this — its `adapter.start` rejected instead of resolving —
