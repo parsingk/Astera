@@ -98,7 +98,11 @@ export interface ChatPromptList {
 /** What `astera chats answer` got back. `not-open`: no such prompt (answered already, or never was).
  *  `not-held`: this side is not the session's writer. `question`: a question card, answered only in
  *  Astera (plan ruling P6). */
-export type ChatAnswerResult = { answered: true } | { answered: false; reason: 'not-open' | 'not-held' | 'question' }
+export type ChatAnswerResult =
+  | { answered: true }
+  /** `detail`, when given, is the sentence the command answers with (the Host's, for an app it will not
+   *  forward to: Task 8 fix round 1). */
+  | { answered: false; reason: 'not-open' | 'not-held' | 'question'; detail?: string }
 
 /** Every open request of one session as prompt rows, in the order given (the one on screen first). */
 export function chatPromptsOf(sessionId: string, requests: readonly ChatRequest[]): ChatPrompt[] {

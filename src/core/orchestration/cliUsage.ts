@@ -321,7 +321,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'chats-answer': {
     summary: 'allow or deny one permission prompt a chat session is waiting on',
     detail:
-      'The session that holds the prompt answers it, whether Astera or the Host writes to it, and the turn goes on. Exactly one of --allow and --deny. A question is not a permission prompt and is refused with 6: answer it in Astera. A prompt that is no longer open is refused with 6 and nothing is answered. A prompt id is per session, so an id open in two sessions needs --session (2 otherwise). With --request-id a retry is not answered twice.',
+      'The session that holds the prompt answers it, whether Astera or the Host writes to it, and the turn goes on. Exactly one of --allow and --deny. A question is not a permission prompt and is refused with 6: answer it in Astera. A prompt that is no longer open is refused with 6 and nothing is answered. A prompt id is per session, so an id open in two sessions needs --session (2 otherwise). It is for a person: run from inside an agent session (where ASTERA_SESSION is set) it is refused with 5. With --request-id a retry is not answered twice.',
     flags: [
       ID('<promptId>', 'the prompt to answer (from `chats pending`)'),
       { name: 'allow', about: 'let the tool run' },

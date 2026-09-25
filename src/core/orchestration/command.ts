@@ -756,10 +756,6 @@ const runView = (s: OrchState, run: JobRun): Record<string, unknown> => ({
  *  the body of a status message), and the spec and results of other Tasks. The remaining read
  *  commands (worker-show, worker-read, tasks-list, questions-list, accounts, jobs-list, jobs-get,
  *  dispatch-show) do not carry another worker's private conversation, so they are not blocked. */
-/* `chats-answer` joined in chat takeover Task 8 (a ruling: the brief was silent on roles). Approving
- * or refusing a tool run in a chat session is a call for the person, the app or a coordinator, never for
- * a worker. `chats-pending` is a read and stays open to every caller, as the `sessions` commands are.
- * (Kept out of the set literal: cliAgentContext.test.ts reads the quoted names inside it.) */
 const COORDINATOR_ONLY = new Set([
   'run-create',
   'run-use',
@@ -783,8 +779,7 @@ const COORDINATOR_ONLY = new Set([
   'reply',
   'reset',
   'check',
-  'inbox',
-  'chats-answer'
+  'inbox'
 ])
 
 /** Session-task commands answer to the work-unit tracking toggle, not the orchestration one. They
@@ -3282,6 +3277,12 @@ export async function handleCommand(
      */
     case 'chats-pending':
     case 'chats-answer': {
+      // **An answer is for a person** (Task 8 fix round 1, the controller's ruling). Letting a tool run
+      // is the decision the prompt exists to put to someone, so every caller inside an agent session is
+      // refused: a worker, a coordinator and a plain tab alike. The shell's CLI has no ASTERA_SESSION
+      // and calls with an empty session id. `chats pending` is a read and stays open to every caller.
+      if (routed === 'chats-answer' && caller.sessionId !== '')
+        return denied('chats answer is for a person: run it from a shell, not from inside an agent session')
       if (!deps.chatPrompts || !deps.chatAnswer)
         return conflict('chat prompts are answered by the Astera Host, and this caller is not one')
       const session = args.session === undefined ? undefined : str(args.session)
@@ -3307,11 +3308,13 @@ export async function handleCommand(
       const r = await deps.chatAnswer(target.sessionId, id, decision)
       if (!r.answered)
         return conflict(
-          r.reason === 'not-held'
-            ? `nothing holds ${target.sessionId} right now (Astera may still be taking its sessions back); nothing was answered, try again in a moment`
-            : r.reason === 'question'
-              ? `${id} is a question, not a permission prompt; answer it in Astera`
-              : `prompt ${id} is no longer open; nothing was answered`
+          r.detail !== undefined
+            ? r.detail
+            : r.reason === 'not-held'
+              ? `nothing holds ${target.sessionId} right now (Astera may still be taking its sessions back); nothing was answered, try again in a moment`
+              : r.reason === 'question'
+                ? `${id} is a question, not a permission prompt; answer it in Astera`
+                : `prompt ${id} is no longer open; nothing was answered`
         )
       return okBody({ sessionId: target.sessionId, id, decision, answered: true })
     }

@@ -7432,15 +7432,24 @@ describe('handleCommand — chats pending and chats answer (chat takeover §3.5)
   it('is 409 where no Host answers', async () => {
     expect((await call(makeDeps(), 'chats-pending', {}, '')).status).toBe(409)
   })
-  // Ruling (task 8): the brief is silent on roles. A worker session is refused `chats answer` (it would
-  // approve its own or another session's tool run); the shell, the app and a coordinator are not.
-  // `chats pending` is a read and stays open to every caller, like `sessions list`.
-  it('refuses chats answer from a worker session with 403, and lets it list', async () => {
+  // Task 8 fix round 1, the controller's ruling: an answer is for a person. Every caller inside an agent
+  // session is refused (a worker, a coordinator, a plain tab); the shell calls with an empty session id.
+  it('refuses chats answer from inside any agent session with 403, and answers the shell', async () => {
     const state = { ...emptyState(), dispatches: [{ id: 'd1', sessionId: 'w1', taskId: 't1', runId: 'r1', startedAt: NOW }] } as unknown as OrchState
     const { deps, answered } = withChats([p('c1', 'r1')], { answered: true }, true, state)
-    expect((await call(deps, 'chats-answer', { id: 'r1', allow: true }, 'w1')).status).toBe(403)
+    for (const caller of ['w1', 'coordinator', 'plain-tab']) {
+      const r = await call(deps, 'chats-answer', { id: 'r1', allow: true }, caller)
+      expect(r.status, caller).toBe(403)
+      expect(JSON.stringify(r.body)).toMatch(/for a person/)
+      expect((await call(deps, 'chats-pending', {}, caller)).status, caller).toBe(200)
+    }
     expect(answered).toEqual([])
-    expect((await call(deps, 'chats-pending', {}, 'w1')).status).toBe(200)
-    expect((await call(deps, 'chats-answer', { id: 'r1', allow: true }, 'coordinator')).status).toBe(200)
+    expect((await call(deps, 'chats-answer', { id: 'r1', allow: true }, '')).status).toBe(200)
+    expect(answered).toEqual([['c1', 'r1', 'allow']])
+  })
+  it('answers 409 with the Host detail when the answer carries one', async () => {
+    const detail = 'c1 is written by an Astera too old to be asked; answer it in Astera'
+    const r = await call(withChats([p('c1', 'r1')], { answered: false, reason: 'not-held', detail }).deps, 'chats-answer', { id: 'r1', allow: true }, '')
+    expect(r).toEqual({ status: 409, body: { error: detail } })
   })
 })
