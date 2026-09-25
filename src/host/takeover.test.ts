@@ -13,7 +13,8 @@ const entry = (id: string, restore: Record<string, unknown>, alive = true, kind:
   id: `p-${id}`, pid: 1, alive, meta: { kind, id, restore: { accountId: 'a1', cwd: 'D:/p', title: 't', rollAccountIds: ['a1', 'a2'], ...restore } }
 })
 
-const rig = (entries: PtyEntry[], over: { hasApp?: boolean; holders?: Record<string, number[]>; chains?: string[]; restoreOk?: boolean } = {}) => {
+const rig = (entries: PtyEntry[], over: { hasApp?: boolean; holders?: Record<string, number[]>; chains?: string[]; restoreOk?: boolean; restoreThrows?: boolean } = {}) => {
+  const logs: string[] = []
   const order: string[] = []
   const r = takeOverSessions({
     resume: (p) => order.push(`resume ${p}`),
@@ -24,10 +25,14 @@ const rig = (entries: PtyEntry[], over: { hasApp?: boolean; holders?: Record<str
     holdersOf: (p) => over.holders?.[p] ?? [],
     note: (p, patch) => order.push(`note ${p} ${JSON.stringify(patch)}`),
     hasChain: (id) => (over.chains ?? []).includes(id),
-    restore: (info) => { order.push(`restore ${info.id}`); return over.restoreOk ?? true },
-    log: () => {}
+    restore: (info) => {
+      order.push(`restore ${info.id}`)
+      if (over.restoreThrows) throw new Error('boom')
+      return over.restoreOk ?? true
+    },
+    log: (m) => logs.push(m)
   })
-  return { r, order }
+  return { r, order, logs }
 }
 
 describe('takeOverSessions (S6 R2, design §3A.3)', () => {
@@ -42,6 +47,7 @@ describe('takeOverSessions (S6 R2, design §3A.3)', () => {
     ['the Host already owns it', [entry('s1', { roll: snap(), rolledBy: 'host' })], {}],
     ['a pre-S6 app wrote no snapshot', [entry('s1', {})], {}],
     ['the snapshot names other accounts', [entry('s1', { roll: snap({ accountIds: ['a1', 'a9'] }) })], {}],
+    ['the snapshot sits on another account than the note (restore would refuse it)', [entry('s1', { roll: snap({ currentIndex: 1 }) })], {}],
     ['a socket still holds it', [entry('s1', { roll: snap() })], { holders: { 'p-s1': [4] } }],
     ['the Host has a chain for it', [entry('s1', { roll: snap() })], { chains: ['s1'] }],
     ['it has exited', [entry('s1', { roll: snap() }, false)], {}]
@@ -60,5 +66,16 @@ describe('takeOverSessions (S6 R2, design §3A.3)', () => {
     const { r, order } = rig([entry('s1', { roll: snap() })], { restoreOk: false })
     expect(r.taken).toEqual([])
     expect(order).toEqual(['resume p-s1', 'note p-s1 {"rolledBy":"host"}', 'restore s1', 'note p-s1 {"rolledBy":null}'])
+  })
+  it('a restore that throws after the mark takes the mark back, and says so (fix round 1)', () => {
+    const { r, order, logs } = rig([entry('s1', { roll: snap() })], { restoreThrows: true })
+    expect(r.taken).toEqual([])
+    expect(r.skipped.map((x) => x.sessionId)).toEqual(['s1'])
+    expect(order).toEqual(['resume p-s1', 'note p-s1 {"rolledBy":"host"}', 'restore s1', 'note p-s1 {"rolledBy":null}'])
+    expect(logs.join('\n')).toMatch(/boom/)
+  })
+  it('records a snapshot on another account than the note as skipped, with its reason (fix round 1)', () => {
+    const { r } = rig([entry('s1', { roll: snap({ currentIndex: 1 }) })])
+    expect(r.skipped).toEqual([{ sessionId: 's1', why: expect.stringMatching(/account/) }])
   })
 })

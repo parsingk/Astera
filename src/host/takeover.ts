@@ -42,6 +42,12 @@ export function takeOverSessions(d: {
       skip('the snapshot names other accounts than the note')
       continue
     }
+    // Fix round 1: restore refuses a snapshot whose current account is not the note's (both coordinators
+    // check it), so such a pty would be resumed, marked and unmarked on every tick for nothing.
+    if (snap.accountIds[snap.currentIndex] !== info.accountId) {
+      skip('the snapshot sits on another account than the note — restore would refuse it')
+      continue
+    }
     if (d.holdersOf(e.id).length > 0) {
       skip('a socket still holds it')
       continue
@@ -51,7 +57,16 @@ export function takeOverSessions(d: {
     // in the Host releases it (SessionManager.adopt does it for the app). Released before the mark.
     d.resume(e.id)
     d.note(e.id, { rolledBy: 'host' })
-    if (!d.restore(info, snap)) {
+    // A restore that throws is taken as one that refused (fix round 1): the mark comes back either way,
+    // so no pty is left marked with no chain.
+    let ok: boolean
+    try {
+      ok = d.restore(info, snap)
+    } catch (err) {
+      d.log(`takeover: restoring ${id} threw — the mark is taken back: ${String(err)}`)
+      ok = false
+    }
+    if (!ok) {
       d.note(e.id, { rolledBy: null })
       skip('the chain could not be restored from its snapshot')
       continue
