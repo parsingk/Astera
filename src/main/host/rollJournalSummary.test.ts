@@ -58,7 +58,7 @@ describe('chainText (S6 Task 5, D6)', () => {
       { lang: 'en', now: NOW, liveLabel: 'work' }
     )
     // Two waits in a row are one limit, with the later reset time.
-    expect(text).toBe('🕘 While Astera was closed: hit the limit at 10:00 (resuming 15:30), switched to work, resumed at 15:31')
+    expect(text).toBe('🕘 While Astera was away from the Host: hit the limit at 10:00 (resuming 15:30), switched to work, resumed at 15:31')
   })
 
   it('names a switch with no label by the live account when it is the last one', () => {
@@ -66,12 +66,12 @@ describe('chainText (S6 Task 5, D6)', () => {
       [st('a', 'switching', '10:00'), rolled('a', 'b', '10:01'), st('b', 'switching', '11:00'), rolled('b', 'c', '11:01')],
       { lang: 'en', now: NOW, liveLabel: 'home' }
     )
-    expect(text).toBe('🕘 While Astera was closed: switched account, switched to home')
+    expect(text).toBe('🕘 While Astera was away from the Host: switched account, switched to home')
   })
 
   it('says stalled, and a day that is not today', () => {
     const text = chainText([st('a', 'stalled', '10:00')], { lang: 'ko', now: NOW + 86_400_000 })
-    expect(text).toBe('🕘 Astera 가 닫혀 있는 동안: 9/25 10:00 멈춤, 확인 필요')
+    expect(text).toBe('🕘 Astera 가 Host 와 끊겨 있던 사이: 9/25 10:00 멈춤, 확인 필요')
   })
 
   it('has nothing to say for a chain of roll links alone', () => {
@@ -84,7 +84,8 @@ describe('summarizeRollJournal (S6 Task 5, D6)', () => {
     st('a', 'waiting', '10:00', { nextRetryAt: at('15:00') }),
     rolled('a', 'b', '10:02'),
     st('gone', 'stalled', '11:00'),
-    rolled('q', 'r', '11:30')
+    rolled('q', 'r', '11:30'),
+    st('s', 'switching', '12:00', { accountLabel: 'home' })
   ]
   it('keeps a chain whose newest id is live for Slack, and counts only chains that met a limit for the desktop', () => {
     const e = entries()
@@ -94,11 +95,12 @@ describe('summarizeRollJournal (S6 Task 5, D6)', () => {
       lang: 'en',
       now: NOW
     })
-    expect(s.sessions).toEqual([{ sessionId: 'b', text: '🕘 While Astera was closed: hit the limit at 10:00 (resuming 15:00)', seq: e[1].seq }])
-    // 'gone' only stalled: not a limit, and not live, so nowhere. 'r' has nothing to say but did roll.
+    expect(s.sessions).toEqual([{ sessionId: 'b', text: '🕘 While Astera was away from the Host: hit the limit at 10:00 (resuming 15:00)', seq: e[1].seq }])
+    // 'gone' only stalled: not a limit, and not live, so nowhere. 'r' only rolled, with no switching: a
+    // same-account respawn, silent on the desktop as in Slack (final review M3). 's' switched: a limit.
     expect(s.limited).toEqual([
       { sessionId: 'b', seq: e[1].seq },
-      { sessionId: 'r', seq: e[3].seq }
+      { sessionId: 's', seq: e[4].seq }
     ])
   })
 

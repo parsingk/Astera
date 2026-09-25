@@ -99,8 +99,10 @@ export interface RollJournalSummary {
   /** One line per chain whose newest id is a live session of this app, for its Slack thread. `seq` is
    *  the chain's newest entry, so a caller can tell a line it already posted from one with news. */
   sessions: { sessionId: string; text: string; seq: number }[]
-  /** Every chain that met a limit (a `waiting`, `switching` or `rolled` entry), live or not: what the
-   *  desktop notice counts (fix round 1, M4). A chain that only stalled is not a limit. */
+  /** Every chain that met a limit (a `waiting` or `switching` entry), live or not: what the desktop
+   *  notice counts (fix round 1, M4). A chain that only stalled is not a limit, and neither is one that
+   *  only rolled: a `rolled` with no `switching` is a same-account respawn, which the Task 5 ruling keeps
+   *  silent (final review M3). A respawn a limit drove journals its `waiting` as well. */
   limited: { sessionId: string; seq: number }[]
 }
 
@@ -112,7 +114,7 @@ export function summarizeRollJournal(
   const limited: RollJournalSummary['limited'] = []
   for (const chain of foldRollChains(entries)) {
     const seq = chain.entries[chain.entries.length - 1].seq
-    if (chain.entries.some((e) => e.kind === 'rolled' || e.state === 'waiting' || e.state === 'switching'))
+    if (chain.entries.some((e) => e.state === 'waiting' || e.state === 'switching'))
       limited.push({ sessionId: chain.sessionId, seq })
     const live = o.isLive(chain.sessionId)
     if (!live) continue
