@@ -480,7 +480,7 @@ export function waitEnd(body: unknown): CliError | null {
     case 'limited':
       return {
         code: 'WAITING_FOR_INPUT',
-        message: `every worker is waiting for a usage limit to reset at ${String(b.resetsAt)}; they resume by themselves then`,
+        message: `its agents are waiting for a usage limit to reset at ${String(b.resetsAt)}; they resume by themselves then`,
         details: { ...at(), state: 'limited', resetsAt: b.resetsAt ?? null }
       }
     case 'timeout':
