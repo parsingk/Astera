@@ -548,10 +548,12 @@ const waitEndingFor = (s: OrchState, runId: string): Record<string, unknown> | n
 }
 
 /** The earliest reset every open Dispatch of the Run is waiting for, or null when any open one is not
- *  waiting on a known reset, or a check is running, or nothing is open. */
+ *  waiting on a known reset, a check is running, a Task is ready to start (the loop may still dispatch
+ *  it), or nothing is open. */
 const limitedUntil = (s: OrchState, runId: string): string | null => {
   const tasks = new Set(s.tasks.filter((t) => t.runId === runId).map((t) => t.id))
-  if (s.tasks.some((t) => tasks.has(t.id) && (t.status === 'validating' || t.status === 'reviewing'))) return null
+  if (s.tasks.some((t) => tasks.has(t.id) && (t.status === 'validating' || t.status === 'reviewing' || t.status === 'ready')))
+    return null
   const open = s.dispatches.filter((d) => tasks.has(d.taskId) && !d.endedAt && !d.outcome)
   if (open.length === 0) return null
   let earliest: string | null = null

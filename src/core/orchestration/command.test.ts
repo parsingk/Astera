@@ -5235,6 +5235,11 @@ describe('jobs wait / runs wait', () => {
     const resumed = await waitingOnReset('2026-09-25T15:00:00.000Z', true)
     expect((await call(resumed.deps, 'runs-wait', { id: resumed.runId, timeoutMs: 120 })).body).toMatchObject({ state: 'timeout' })
   })
+  it('keeps waiting while another Task of the Run is ready to start', async () => {
+    const { deps, runId } = await waitingOnReset('2026-09-25T15:00:00.000Z')
+    await call(deps, 'task-create', { run: runId, title: 't2', spec: 's', account: 'acc1' })
+    expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 120 })).body).toMatchObject({ state: 'timeout' })
+  })
   it('an open question still comes first', async () => {
     const { deps, runId } = await waitingOnReset('2026-09-25T15:00:00.000Z')
     // createGate refuses a Task with an open Dispatch (state.ts, A58), so the question is on a second Task.
