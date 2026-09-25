@@ -94,6 +94,27 @@ export interface BlocksBody {
   cleared: Array<{ accountId: string; at: number }>
 }
 
+/** The Host keeps a journal of the roll events that happen while no app is attached (S6 limits D5), in
+ *  `<profile>/host/roll-journal.json`, and answers the app-only orch-call `roll-journal { ack? }` with
+ *  the entries after `ack`, pruning the acknowledged ones. Announced with `rolling`. An app sends
+ *  nothing to a Host without it. Additive, so HOST_PROTOCOL stays 3. */
+export const HOST_FEATURE_ROLL_JOURNAL = 'roll-journal'
+
+/** One entry of the roll journal (D5). `seq` rises across the Host's restarts; `at` is ISO. A `rolled`
+ *  entry names the new session in `sessionId` and the one it rolled from in `oldSessionId`, which is how
+ *  a reader folds a chain onto its live id. A `state` entry carries the roll state and its fields. */
+export interface RollJournalEntry {
+  seq: number
+  at: string
+  kind: 'rolled' | 'state'
+  sessionId: string
+  oldSessionId?: string
+  state?: 'waiting' | 'switching' | 'nudged' | 'stalled'
+  accountLabel?: string
+  nextRetryAt?: string
+  scope?: 'session' | 'weekly'
+}
+
 /** worktrees.json as the Host holds it, stamped with where it stands in this Host's changes. The
  *  `worktrees-state` push carries it, and so does the body of **every** `worktree-*` orch-call reply
  *  (`worktree-add`, `worktree-remove`, `worktree-root`, `worktree-list`), so a receiver can order a
