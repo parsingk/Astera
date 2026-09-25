@@ -39,6 +39,8 @@ import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
 import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling } from './host/outdated'
+import { createBlockSync } from './host/blockSync'
+import type { BlockRegistry } from '../core/rolling/blockRegistry'
 import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced, announcesAdopted } from './host/hostRollView'
 import { findHostHeldNative, nativeOfForwardedRekey } from './host/hostNativeGuard'
 import { applyAdoptRolling } from './host/adoptRolling'
@@ -293,6 +295,9 @@ export interface HostWiring {
     payload: unknown,
     opts: { orchestration: boolean; codex: boolean }
   ) => void
+  /** The app's one block registry, shared by both coordinators (index.ts). Exchanged with a Host that
+   *  announces `blocks` (S6 D4, blockSync.ts). Optional so a test wiring can omit it. */
+  blocks?: BlockRegistry
   /** Hands over the shutdown handle once the client is built. Called from inside `registerIpc`, not
    *  from a boot path — the same shape as `OrchWiring.onTabResumeReady` — and read from will-quit.
    *  Not called at all when there is no Host bundle to talk to: there is then nothing to stop. */
@@ -5582,6 +5587,21 @@ export function registerIpc(
       }
     })
     hostClient = client
+
+    // S6 D4: the block records this app's coordinators found go to a Host that speaks `blocks`, whole
+    // after each handshake, and the Host's come back as `blocks` pushes. Sends nothing to an older Host.
+    // Neither callback throws (blockSync.ts).
+    if (hostWiring?.blocks) {
+      const blockSync = createBlockSync({
+        blocks: hostWiring.blocks,
+        status: () => client.status(),
+        send: (m) => client.send(m),
+        now: () => Date.now(),
+        log: hostLog
+      })
+      client.onMessage((m) => blockSync.pushed(m))
+      client.onConnect(() => blockSync.connected())
+    }
 
     // Host S3: the app's worktree registry writes through the Host once it announces it owns
     // worktrees.json, and mirrors the file it pushes back (ruling R1, R3); a merge the Host runs is

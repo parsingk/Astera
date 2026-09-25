@@ -11,7 +11,8 @@ import {
   HOST_FEATURE_SPAWN,
   HOST_FEATURE_WORKTREES,
   HOST_FEATURE_DISPATCH,
-  HOST_FEATURE_ROLLING
+  HOST_FEATURE_ROLLING,
+  HOST_FEATURE_BLOCKS
 } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
@@ -85,4 +86,15 @@ export function hostSpeaksRolling(status: {
   features: readonly string[]
 }): boolean {
   return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_ROLLING)
+}
+
+/** The connected Host exchanges usage-limit block records (S6 D4): the app sends its registry's changes
+ *  and absorbs the Host's `blocks` pushes. Read live, by hostSpeaksRolling's rule: an unresponsive Host
+ *  still rolls, so what it is told still matters to it once it answers. An older Host is sent nothing. */
+export function hostSpeaksBlocks(status: {
+  connected: boolean
+  unresponsive?: boolean
+  features: readonly string[]
+}): boolean {
+  return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_BLOCKS)
 }

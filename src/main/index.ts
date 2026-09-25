@@ -1081,6 +1081,8 @@ app.whenReady().then(async () => {
     agentGuests,
     {
       log: hostLog,
+      // S6 D4: the same registry both coordinators share, exchanged with a Host that speaks `blocks`.
+      blocks,
       // A roll the Host made and pushed (S6 §3.4) costs the app what its own rolls cost, except the
       // orchestration tap: the Host already rekeyed the Dispatch, and hostRollView (ipc.ts) passes
       // `orchestration: false` — pinned by its tests rather than here.
