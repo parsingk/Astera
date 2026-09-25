@@ -51,6 +51,31 @@ describe('parseRollSnapshot (S6 R4)', () => {
     expect(parseRollSnapshot(codex({ primary: null }))).toBeNull()
     expect(parseRollSnapshot(codex({ ...state, primary: { usedPercent: '100', resetsAt: null } }))).toBeNull()
   })
+  it.each([
+    ['a claude snapshot carrying a codex block', { codex: { sessionId: null, rolloutPath: null, tailOffset: null, state: null } }],
+    ['a claude snapshot without its claude block', { claude: undefined }],
+    ['a codex snapshot without its codex block', { provider: 'codex', claude: undefined }],
+    ['a codex snapshot carrying a claude block', { provider: 'codex', codex: { sessionId: null, rolloutPath: null, tailOffset: null, state: null } }]
+  ])('refuses %s (review M1)', (_why, patch) => {
+    expect(parseRollSnapshot({ ...good(), ...patch })).toBeNull()
+  })
+  it('answers a fresh object of the known fields only, sharing nothing with its input (review M1)', () => {
+    const input = { ...good(), extra: 'x', claude: { ...good().claude!, junk: 1 } } as Record<string, unknown>
+    const out = parseRollSnapshot(input)
+    expect(out).toEqual(good())
+    expect(out).not.toHaveProperty('extra')
+    expect(out!.claude).not.toHaveProperty('junk')
+    ;(input.accountIds as string[]).push('a9')
+    ;(input.recovery as ({ at: number } | null)[])[0]!.at = 1
+    ;(input.blocks as Record<string, { at: number }>).a1.at = 1
+    expect(out).toEqual(good())
+  })
+  it('refuses a wait more than 8 days past writtenAt — setTimeout would overflow (review M2)', () => {
+    const day = 24 * 60 * 60_000
+    const at = (retryAt: number): unknown => ({ ...good(), wait: { retryAt, target: 0, weekly: true } })
+    expect(parseRollSnapshot(at(600 + 8 * day))).not.toBeNull()
+    expect(parseRollSnapshot(at(600 + 8 * day + 1))).toBeNull()
+  })
   it('refuses what is not an object at all', () => {
     for (const v of [null, undefined, 'x', 3, []]) expect(parseRollSnapshot(v)).toBeNull()
   })

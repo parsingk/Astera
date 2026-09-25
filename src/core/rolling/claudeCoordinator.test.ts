@@ -2148,6 +2148,60 @@ describe('transcript 한도 감지', () => {
       expect(blocks.get('a2', Date.now())?.at).toBe(until)
     })
 
+    const waitSnap = (at: number): RollSnapshot => ({
+      v: 1, provider: 'claude', accountIds: ['a1'], currentIndex: 0, streak: 1, recovery: [null], blocks: {},
+      wait: { retryAt: at, target: 0, weekly: false }, inPlaceUsed: false, rolledAt: null, awaitingPrompt: false,
+      claude: { sessionId: 'claude-sess', transcriptPath: tPath, tailOffset: null, tailSince: null }, writtenAt: Date.now()
+    })
+
+    it('restore refuses a second restore of the same session: one prompt and one Enter when the wait fires (review I1)', async () => {
+      const h = harness()
+      const info = { ...h.info1, rollAccountIds: ['a1'] }
+      const at = Date.now() + 30_000
+      expect(h.coord.restore(info, waitSnap(at))).toBe(true)
+      expect(h.coord.restore(info, waitSnap(at))).toBe(false)
+      await advanceIo(31_000)
+      await advanceIo(1_000)
+      expect(h.written.filter((w) => w.data === '\r')).toHaveLength(1)
+      expect(h.written.filter((w) => w.data !== '\r')).toHaveLength(1)
+      expect(h.sent.filter((x) => x.payload.state === 'waiting')).toHaveLength(1)
+    })
+
+    it('restore onto a session whose chain has an armed wait publishes nothing and arms no timer (review I1)', async () => {
+      const h = harness()
+      const info = { ...h.info1, rollAccountIds: ['a1'] }
+      h.payloads.set('s1', payload(100))
+      h.coord.register(info)
+      h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '3pm') })
+      await flush()
+      const waits = h.sent.filter((x) => x.payload.state === 'waiting').length
+      expect(waits).toBe(1)
+      const timers = vi.getTimerCount()
+      expect(h.coord.restore(info, waitSnap(Date.now() + 5_000))).toBe(false)
+      expect(vi.getTimerCount()).toBe(timers)
+      expect(h.sent.filter((x) => x.payload.state === 'waiting')).toHaveLength(waits)
+      await advanceIo(10_000)
+      expect(h.written).toHaveLength(0) // the refused snapshot's 5s wait never fires
+    })
+
+    it('a respawn whose prompt times out writes awaitingPrompt false into the snapshot (review M4)', async () => {
+      const got: RollSnapshot[] = []
+      const h = harness({ snapshot: (_id, s) => got.push(s) })
+      const info = { ...h.info1, id: 's9', accountId: 'a2' }
+      expect(h.coord.restore(info, {
+        v: 1, provider: 'claude', accountIds: ['a1', 'a2', 'a3'], currentIndex: 1, streak: 1, recovery: [null, null, null],
+        blocks: {}, wait: null, inPlaceUsed: false, rolledAt: Date.now(), awaitingPrompt: true,
+        claude: { sessionId: 'claude-sess', transcriptPath: tPath, tailOffset: null, tailSince: Date.now() }, writtenAt: Date.now()
+      })).toBe(true)
+      expect(got.at(-1)?.awaitingPrompt).toBe(true)
+      // A trust dialog blocks the 30-second fallback, so only the 120-second timeout ends the wait.
+      h.coord.handleData({ sessionId: 's9', data: 'Do you trust the files in this folder?' })
+      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(125_000)
+      expect(h.sent.some((x) => x.payload.state === 'stalled')).toBe(true)
+      expect(got.at(-1)?.awaitingPrompt).toBe(false)
+    })
+
     it.each([
       ['another provider', { provider: 'codex' as const }],
       ['other accounts', { accountIds: ['a1', 'a9', 'a3'] }],

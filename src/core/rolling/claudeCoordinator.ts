@@ -524,8 +524,10 @@ export class RollingCoordinator {
 
   /** Carries on a chain another process wrote down (S6 R4, design §3A.2): the Host taking over an app's
    *  session, or a new app instance taking over a gone one's. False, with nothing registered, when the
-   *  snapshot does not describe this session. Synchronous: the takeover's mark and this restore share a
-   *  turn (R2).
+   *  snapshot does not describe this session, and **false when a chain for this session already exists**
+   *  — that chain is left exactly as it is. Registering over it would orphan its timers (a second wait
+   *  firing, a second prompt typed), so a restore only ever lands on a session with no chain. Synchronous:
+   *  the takeover's mark and this restore share a turn (R2).
    *
    *  It starts no second chain and repeats nothing already done. An armed wait is re-armed as a
    *  re-publish (`reattach: true`, preflight R5) — the stop was already announced by the process that
@@ -538,6 +540,10 @@ export class RollingCoordinator {
    *  anything partial, and registers from zero when that answers null. */
   restore(info: SessionInfo, snap: RollSnapshot): boolean {
     const ids = info.rollAccountIds ?? []
+    if (this.chains.has(info.id)) {
+      this.deps.log(`chain restore refused — a chain already exists session=${info.id}`)
+      return false
+    }
     if (snap.provider !== 'claude') return false
     if (ids.length !== snap.accountIds.length || ids.some((id, i) => id !== snap.accountIds[i])) return false
     if (ids[snap.currentIndex] !== info.accountId) return false
@@ -1223,7 +1229,12 @@ export class RollingCoordinator {
       () => {
         chain.waitTimer = null
         chain.waitPlan = null
-        void this.resumeAfterWait(chain, plan.target)
+        // Written twice: once for what the resume changed synchronously (the wait gone, the in-place
+        // latch, a rebuilt tail), once when it settles (a roll's re-key or its own new wait). The key
+        // dedup drops whichever says nothing new.
+        const resumed = this.resumeAfterWait(chain, plan.target)
+        this.snap(chain)
+        void resumed.finally(() => this.snap(chain))
       },
       Math.max(0, plan.retryAt - this.now())
     )
@@ -1813,6 +1824,7 @@ export class RollingCoordinator {
         // this point 120 seconds have passed, so the replay is most likely already over and even that
         // false positive is unlikely.
         chain.awaitingReady = false
+        this.snap(chain)
         this.deps.log(`auto-prompt timeout session=${liveId}`)
         // Published as 'stalled' rather than 'none' — auto-resume having finally failed is an event a
         // person has to see, and 'none' is indistinguishable from normal in the UI. That is exactly what
@@ -1990,7 +2002,13 @@ export class RollingCoordinator {
     }
     void this.idleNudgeCheck(chain) // independent of statusLine — does not wait for a payload
     const payload = await this.deps.readStatusPayload(chain.liveId)
-    if (!payload || chain.disposed) return
+    if (chain.disposed) return
+    if (!payload) {
+      // A chain with no statusline (a chat session, or one halted where the hook never runs) still moved
+      // its tail offset on this tick; that is what a restore reads, so it is written.
+      this.snap(chain)
+      return
+    }
     const u = parseStatusLinePayload(payload)
     // The tail state is read *before* applyMeta. applyMeta creates a fresh limitTail when it first learns
     // the transcript path, and that object has never had read() called on it while readFailed starts as
@@ -2261,17 +2279,19 @@ export class RollingCoordinator {
     const blocks: Record<string, BlockRecord> = {}
     for (const id of chain.accountIds) {
       const b = this.deps.blocks.get(id, now)
-      if (b) blocks[id] = b
+      if (b) blocks[id] = { ...b }
     }
     return {
       v: ROLL_SNAPSHOT_VERSION,
       provider: 'claude',
-      accountIds: chain.accountIds,
+      // Copies, not the chain's own arrays: the snapshot is handed to the wiring, and neither side may
+      // change the other's by holding on to it (review M3).
+      accountIds: [...chain.accountIds],
       currentIndex: chain.cycle.currentIndex,
       streak: chain.cycle.streakCount,
-      recovery: chain.recovery,
+      recovery: chain.recovery.map((r) => (r ? { ...r } : null)),
       blocks,
-      wait: chain.waitPlan,
+      wait: chain.waitPlan ? { ...chain.waitPlan } : null,
       inPlaceUsed: chain.inPlaceUsed,
       rolledAt: chain.rolledAt,
       awaitingPrompt: chain.kind !== 'chat' && chain.awaitingReady,

@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Account, SessionInfo } from '../types'
 import { BlockRegistry } from './blockRegistry'
 import { CodexRollingCoordinator, type CodexRollingDeps } from './codexCoordinator'
+import type { RollSnapshot } from './snapshot'
 
 let tmp: string
 
@@ -2500,6 +2501,50 @@ describe('codex snapshots and restore (S6 R4)', () => {
     await vi.advanceTimersByTimeAsync(61_000)
     expect(logs.join('\n')).not.toMatch(/rollout located|not found within/)
     expect(h.sent.some((x) => x.payload.state === 'adopted')).toBe(false)
+  })
+
+  it('restore starts no locate even when a findable rollout exists: a null rolloutPath stays unmapped (review I2)', async () => {
+    const h = harness()
+    const info = { ...h.info1, id: 's7', rollAccountIds: ['c1'], accountId: 'c1' }
+    expect(h.coord.restore(info, {
+      v: 1, provider: 'codex', accountIds: ['c1'], currentIndex: 0, streak: 0, recovery: [null], blocks: {}, wait: null,
+      inPlaceUsed: false, rolledAt: null, awaitingPrompt: false,
+      codex: { sessionId: null, rolloutPath: null, tailOffset: null, state: null }, writtenAt: Date.now()
+    })).toBe(true)
+    // Written after the restore, the way a fresh spawn's rollout appears — a locate poll would claim it.
+    await writeRollout({ accountId: 'c1', uuid: 'cx-findable', cwd: info.cwd, primary: 10 })
+    await advance(61_000)
+    expect(h.coord.rolloutPathFor('s7')).toBeNull()
+  })
+
+  const codexWaitSnap = (at: number): RollSnapshot => ({
+    v: 1, provider: 'codex', accountIds: ['c1'], currentIndex: 0, streak: 1, recovery: [null], blocks: {},
+    wait: { retryAt: at, target: 0, weekly: false }, inPlaceUsed: false, rolledAt: null, awaitingPrompt: false,
+    codex: { sessionId: 'thread-1', rolloutPath: rolloutFile, tailOffset: 0, state: null }, writtenAt: Date.now()
+  })
+
+  it('restore refuses a second restore of the same session: one prompt and one Enter when the wait fires (review I1)', async () => {
+    const h = harness()
+    const info = { ...h.info1, rollAccountIds: ['c1'], accountId: 'c1' }
+    const at = Date.now() + 30_000
+    expect(h.coord.restore(info, codexWaitSnap(at))).toBe(true)
+    expect(h.coord.restore(info, codexWaitSnap(at))).toBe(false)
+    await advanceIntoResume(31_000)
+    expect(h.written.filter(([, d]) => d === '\r')).toHaveLength(1)
+    expect(h.written.filter(([, d]) => d !== '\r')).toHaveLength(1)
+    expect(h.sent.filter((x) => x.payload.state === 'waiting')).toHaveLength(1)
+  })
+
+  it('restore onto a session whose chain has an armed wait publishes nothing and arms no timer (review I1)', async () => {
+    const h = harness()
+    const info = { ...h.info1, rollAccountIds: ['c1'], accountId: 'c1' }
+    expect(h.coord.restore(info, codexWaitSnap(Date.now() + 60_000))).toBe(true)
+    const timers = vi.getTimerCount()
+    expect(h.coord.restore(info, codexWaitSnap(Date.now() + 5_000))).toBe(false)
+    expect(vi.getTimerCount()).toBe(timers)
+    expect(h.sent.filter((x) => x.payload.state === 'waiting')).toHaveLength(1)
+    await advance(10_000)
+    expect(h.written).toHaveLength(0) // the refused snapshot's 5s wait never fires
   })
 
   it('restore refuses a claude snapshot', () => {

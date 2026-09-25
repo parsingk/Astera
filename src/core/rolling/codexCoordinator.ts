@@ -500,8 +500,9 @@ export class CodexRollingCoordinator {
   }
 
   /** Carries on a chain another process wrote down (S6 R4, design §3A.2) — the claude side's `restore`,
-   *  same contract: false with nothing registered when the snapshot does not describe this session, and
-   *  nothing already done is done again (a restored wait is a re-publish, preflight R5).
+   *  same contract: false with nothing registered when the snapshot does not describe this session,
+   *  **false when a chain for this session already exists** (left untouched — registering over it would
+   *  orphan its timers), and nothing already done is done again (a restored wait is a re-publish, preflight R5).
    *
    *  **It registers unmapped and maps from the snapshot itself (preflight R6).** `register(info,
    *  undefined, false, false)` takes the branch that starts no `findRollout` poll — a scan here could
@@ -512,6 +513,10 @@ export class CodexRollingCoordinator {
    *  a from-zero snapshot a moment before the real one, in the same turn; the last write wins. */
   restore(info: SessionInfo, snap: RollSnapshot): boolean {
     const ids = info.rollAccountIds ?? []
+    if (this.chains.has(info.id)) {
+      this.deps.log(`codex chain restore refused — a chain already exists session=${info.id}`)
+      return false
+    }
     if (snap.provider !== 'codex') return false
     if (ids.length !== snap.accountIds.length || ids.some((id, i) => id !== snap.accountIds[i])) return false
     if (ids[snap.currentIndex] !== info.accountId) return false
@@ -1130,7 +1135,11 @@ export class CodexRollingCoordinator {
       () => {
         chain.waitTimer = null
         chain.waitPlan = null
-        void this.resumeAfterWait(chain, plan.target)
+        // Written now for what the resume changed synchronously, and again when it settles (the claude
+        // side's armWait says why); the key dedup drops whichever says nothing new.
+        const resumed = this.resumeAfterWait(chain, plan.target)
+        this.snap(chain)
+        void resumed.finally(() => this.snap(chain))
       },
       Math.max(0, plan.retryAt - this.now())
     )
@@ -1761,17 +1770,18 @@ export class CodexRollingCoordinator {
     const blocks: Record<string, BlockRecord> = {}
     for (const id of chain.accountIds) {
       const b = this.deps.blocks.get(id, now)
-      if (b) blocks[id] = b
+      if (b) blocks[id] = { ...b }
     }
     return {
       v: ROLL_SNAPSHOT_VERSION,
       provider: 'codex',
-      accountIds: chain.accountIds,
+      // Copies, not the chain's own arrays and objects (review M3) — the claude side's snapshotOf says why.
+      accountIds: [...chain.accountIds],
       currentIndex: chain.cycle.currentIndex,
       streak: chain.cycle.streakCount,
-      recovery: chain.recovery,
+      recovery: chain.recovery.map((r) => (r ? { ...r } : null)),
       blocks,
-      wait: chain.waitPlan,
+      wait: chain.waitPlan ? { ...chain.waitPlan } : null,
       inPlaceUsed: chain.inPlaceUsed,
       rolledAt: null,
       awaitingPrompt: false,
@@ -1779,7 +1789,7 @@ export class CodexRollingCoordinator {
         sessionId: chain.codexSessionId,
         rolloutPath: chain.rolloutPath,
         tailOffset: chain.tail?.offset ?? null,
-        state: chain.state
+        state: chain.state ? structuredClone(chain.state) : null
       },
       writtenAt: now
     }
