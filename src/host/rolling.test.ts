@@ -221,6 +221,24 @@ describe('createHostRolling (S6 Task 9)', () => {
     r.rolling.dispose()
   })
 
+  it('a second adoptSpawned of the same session is a no-op, so the chain keeps its timers (fix round 1)', async () => {
+    const r = await rig()
+    await r.rolling.refresh()
+    r.open('p1', 's1', { accountId: 'a1', cwd: os.tmpdir(), title: 't', rollAccountIds: ['a1', 'a2'] })
+    r.rolling.adoptSpawned(info('s1'), accounts[0])
+    r.payloads.set('s1', payload(100))
+    r.ptys.get('p1')!.emit(LIMIT)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(r.spawned).toHaveLength(1) // rolled to s2 on a2
+    // The rolled session handed to adoptSpawned again (a late onSpawned, say) must not start a new chain
+    // over the live one, which sits at index 1 with its own timers.
+    const timers = vi.getTimerCount()
+    r.rolling.adoptSpawned(info('s2', 'a2'), accounts[1])
+    expect(vi.getTimerCount()).toBe(timers)
+    expect(r.rolling.stateOf('s2')?.state).toBe('switching')
+    r.rolling.dispose()
+  })
+
   it('feeds only session ptys, and a session exit disposes its chain', async () => {
     const r = await rig()
     await r.rolling.refresh()

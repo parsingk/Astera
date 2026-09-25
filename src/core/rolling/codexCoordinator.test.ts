@@ -2568,6 +2568,17 @@ describe('codex snapshots and restore (S6 R4)', () => {
     expect(h.coord.rolloutPathFor(h.info1.id)).toBe(rolloutFile) // an already-mapped chain keeps its file
     h.coord.stop()
   })
+
+  it('attachFresh tails from the start of the file: a record already in it is read (S6 R12, fix round 1)', async () => {
+    const snaps: RollSnapshot[] = []
+    const h = harness({ snapshot: (_id, s) => snaps.push(s) })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'thread-fresh', cwd: h.info1.cwd, primary: 60 })
+    h.coord.register(h.info1, undefined, false, false)
+    h.coord.attachFresh(h.info1.id, 'thread-fresh', file)
+    await advance(15_000) // one tick reads the tail
+    expect(snaps.at(-1)?.codex?.state?.primary?.usedPercent).toBe(60)
+    h.coord.stop()
+  })
 })
 
 describe('the respawn’s preparation and its note (S6 R5, R6)', () => {

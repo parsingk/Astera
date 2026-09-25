@@ -605,6 +605,7 @@ describe('the roll spawn (S6 R5, R6)', () => {
     return {
       spawner: h.spawner!,
       registry: h.registry,
+      spawned: h.spawned,
       accounts,
       cwd: repo,
       profileDir: profile,
@@ -647,5 +648,34 @@ describe('the roll spawn (S6 R5, R6)', () => {
     h.spawner.retarget({ dispatchId: h.dispatchId, sessionId: 's-new', previousSessionId: r.sessionId })
     h.setDispatchSession(h.dispatchId, 's-new')
     expect(h.spawner.owns('readWorker', [{ dispatchId: h.dispatchId }])).toBe(true)
+    // The rolled session's output is the Dispatch's now: the tail follows it (fix round 1).
+    h.registry.open({ id: 'pty_new', file: 'claude', args: [], opts: { cwd: repo, cols: 120, rows: 30, env: {} },
+      meta: { kind: 'session', id: 's-new', restore: { accountId: 'acc1' } } })
+    h.spawned[1].pty.emit('after the roll\n')
+    expect(await h.spawner.readWorker({ dispatchId: h.dispatchId })).toContain('after the roll')
+  })
+  it('prepareRollSpawn refuses a folder that is gone, as CWD_MISSING (fix round 1)', async () => {
+    const h = await spawnerRig()
+    await expect(h.spawner.prepareRollSpawn(h.accounts[0], path.join(dir, 'gone'))).rejects.toThrow(/CWD_MISSING/)
+  })
+  it('prepareRollSpawn refuses an account dropped from accounts.json since the chain was made (fix round 1)', async () => {
+    const h = await spawnerRig()
+    await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [] }))
+    await expect(h.spawner.prepareRollSpawn(h.accounts[0], h.cwd)).rejects.toThrow(/unknown account: acc1/)
+  })
+  it('rollSpawn refuses once the Host is retiring, even after a prepare that succeeded (fix round 1)', async () => {
+    const h = await spawnerRig()
+    const account = h.accounts[0]
+    await h.spawner.prepareRollSpawn(account, h.cwd)
+    await h.spawner.closeAndSettle(0)
+    expect(() => h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id] })).toThrow(/retir/i)
+    expect(h.registry.list()).toHaveLength(0)
+  })
+  it("hands a codex session's located rollout to onRolloutLocated (R12, fix round 1)", async () => {
+    const h = rigWith({ findRollout: async () => ({ path: 'C:/cx/rollout-9.jsonl', sessionId: 'cx-9' }), locatePollMs: 5 })
+    const seen: [string, string, string][] = []
+    h.spawner!.onRolloutLocated((sid, thread, p) => seen.push([sid, thread, p]))
+    const r = await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
+    await vi.waitFor(() => expect(seen).toEqual([[r.sessionId, 'cx-9', 'C:/cx/rollout-9.jsonl']]))
   })
 })

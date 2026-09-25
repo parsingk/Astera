@@ -1062,4 +1062,13 @@ describe('HOST_ROLLS (S6 R8)', () => {
     expect(() => deps.unregisterRolling?.('s1')).not.toThrow()
     expect(unregister).toHaveBeenCalledWith('s1')
   })
+  it('unregisterRolling still forwards, and throws nothing, when the Host’s disposal throws (fix round 1)', async () => {
+    const logs: string[] = []
+    const unregister = vi.fn(() => { throw new Error('boom') })
+    const act = vi.fn().mockResolvedValue(undefined)
+    const deps = build({ hasApp: () => true, act, rolling: { unregister }, log: (m) => logs.push(m) })
+    expect(() => deps.unregisterRolling?.('s1')).not.toThrow()
+    await vi.waitFor(() => expect(act).toHaveBeenCalledWith('unregisterRolling', ['s1']))
+    expect(logs.some((l) => l.includes('unregisterRolling') && l.includes('boom'))).toBe(true)
+  })
 })

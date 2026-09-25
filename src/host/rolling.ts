@@ -269,6 +269,12 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
   return {
     adoptSpawned: (info, account) => {
       if ((info.rollAccountIds?.length ?? 0) < 1) return
+      // register() replaces a chain outright, so a second hand-off of the same session would orphan the
+      // live chain's timers (a held roll, a wait, the healthy timer). The first registration stands.
+      if (claude.has(info.id) || codex.has(info.id)) {
+        log(`adoptSpawned: session=${info.id} already has a chain — left as it is`)
+        return
+      }
       // R12: a codex chain is attached by the spawner's own locate (attachFresh), never by a second scan.
       if (providerOf(account) === 'codex') codex.register(info, undefined, false, false)
       else claude.register(info)
