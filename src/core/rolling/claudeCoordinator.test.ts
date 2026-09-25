@@ -3971,19 +3971,31 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     expect(smartSnap).toMatchObject({ awaitingPrompt: true, claude: { promptKind: 'briefing' } })
     h.coord.stop() // the app dies before the new session's statusline, so the briefing was never typed
 
-    // In another process: the tab briefing comes only with tabFallback, as roll() asked for it.
-    const restoreIn = async (snap: RollSnapshot): Promise<string[]> => {
-      const h2 = harness({ resumeText: (_id, _form, tab) => Promise.resolve(tab ? 'BRIEFING TEXT' : null) })
+    // In another process. What a tab briefing would be rebuilt from now is the new, blank session — not the
+    // conversation roll() briefed from — so a rebuild answers something else (fix round 1, IMPORTANT 1).
+    const restoreIn = async (snap: RollSnapshot): Promise<{ typed: string[]; asked: number }> => {
+      let asked = 0
+      const h2 = harness({
+        resumeText: (_id, _form, tab) => {
+          asked++
+          return Promise.resolve(tab ? 'REBUILT FROM THE BLANK SESSION' : null)
+        }
+      })
       const info = { ...h2.info1, id: 's2', accountId: 'a2', rollPrompt: 'carry on' }
       expect(h2.coord.restore(info, snap)).toBe(true)
       h2.payloads.set('s2', payload(20))
       await advanceIo(2_000)
       h2.coord.stop()
-      return h2.written.filter((w) => w.data !== '\r').map((w) => w.data)
+      return { typed: h2.written.filter((w) => w.data !== '\r').map((w) => w.data), asked }
     }
-    expect(await restoreIn(smartSnap)).toEqual(['BRIEFING TEXT'])
-    const { promptKind: _k, ...plainClaude } = smartSnap.claude!
-    expect(await restoreIn({ ...smartSnap, claude: plainClaude })).toEqual(['carry on'])
+    // The stored briefing is typed as it is, and resumeText is not run again.
+    expect(smartSnap.claude?.prompt).toBe('BRIEFING TEXT')
+    expect(await restoreIn(smartSnap)).toEqual({ typed: ['BRIEFING TEXT'], asked: 0 })
+    // A briefing snapshot without its text falls back to asking, the way roll() asked.
+    const { prompt: _p, ...noText } = smartSnap.claude!
+    expect((await restoreIn({ ...smartSnap, claude: noText })).typed).toEqual(['REBUILT FROM THE BLANK SESSION'])
+    const { promptKind: _k, ...plainClaude } = noText
+    expect((await restoreIn({ ...smartSnap, claude: plainClaude })).typed).toEqual(['carry on'])
   })
 })
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseRollSnapshot, snapshotKey, ROLL_SNAPSHOT_VERSION, type RollSnapshot } from './snapshot'
+import { parseRollSnapshot, snapshotKey, ROLL_SNAPSHOT_VERSION, MAX_SNAPSHOT_PROMPT_CHARS, type RollSnapshot } from './snapshot'
 
 const good = (): RollSnapshot => ({
   v: ROLL_SNAPSHOT_VERSION,
@@ -111,6 +111,15 @@ describe('the claude block’s promptKind (S6 Task 12, carry C-c)', () => {
     expect(parseRollSnapshot(good())?.claude).not.toHaveProperty('promptKind')
     expect(parseRollSnapshot(withKind('briefing'))?.claude?.promptKind).toBe('briefing')
     expect(parseRollSnapshot(withKind('handover'))?.claude?.promptKind).toBe('handover')
+  })
+  it('keeps a stored briefing text up to 16 KB, and refuses a longer one or a non-string (fix round 1)', () => {
+    const withPrompt = (prompt: unknown): unknown => ({ ...good(), claude: { ...good().claude, promptKind: 'briefing', prompt } })
+    expect(parseRollSnapshot(good())?.claude).not.toHaveProperty('prompt')
+    expect(parseRollSnapshot(withPrompt('Read D:/x/briefing.md'))?.claude?.prompt).toBe('Read D:/x/briefing.md')
+    expect(parseRollSnapshot(withPrompt('x'.repeat(MAX_SNAPSHOT_PROMPT_CHARS)))?.claude?.prompt).toHaveLength(MAX_SNAPSHOT_PROMPT_CHARS)
+    expect(parseRollSnapshot(withPrompt('x'.repeat(MAX_SNAPSHOT_PROMPT_CHARS + 1)))).toBeNull()
+    expect(parseRollSnapshot(withPrompt(7))).toBeNull()
+    expect(parseRollSnapshot(withPrompt(null))).toBeNull()
   })
   it('refuses any other kind', () => {
     expect(parseRollSnapshot(withKind('update'))).toBeNull()

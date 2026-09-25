@@ -49,8 +49,14 @@ import {
 } from '../hooks/notification'
 import { t, type Lang } from '../i18n'
 import { ClaudeTranscriptTail } from './claudeSignal'
-import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
+import { ROLL_SNAPSHOT_VERSION, MAX_SNAPSHOT_PROMPT_CHARS, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
 import { parseResetTime } from './resetTime'
+
+/** A blank-slate respawn's note: owed the briefing, and the briefing's text (Task 12 fix round 1). A text
+ *  past the parser's bound is left out rather than written — parseRollSnapshot would refuse the whole
+ *  snapshot over it — and the restore then asks for the briefing again, as it did before the text was kept. */
+const briefingNote = (prompt: string): { promptKind: 'briefing'; prompt?: string } =>
+  prompt.length <= MAX_SNAPSHOT_PROMPT_CHARS ? { promptKind: 'briefing', prompt } : { promptKind: 'briefing' }
 
 const GATE_PCT = 90 // The bar for choosing which window goes into a block record — only the reset of a window exhausted at or above this is kept by recordRecovery (it is no longer used as a gate for accepting a limit phrase)
 const FALLBACK_SILENCE_MS = 30_000 // the fallback trigger: five_hour at 100% plus this long with no output
@@ -276,6 +282,9 @@ interface Chain {
   /** Which prompt the respawn awaiting it is owed (S6 Task 12, carry C-c): 'briefing' after a blank-slate
    *  roll, 'handover' otherwise. Read only while awaitingReady holds; written into the snapshot for it. */
   promptKind: 'handover' | 'briefing'
+  /** The briefing text itself while promptKind is 'briefing' (Task 12 fix round 1): a takeover types it
+   *  as it is, because it cannot be rebuilt from the new, blank session. */
+  briefingPrompt: string | null
   trustSeen: boolean
   /** The most recent stripped screen text. The automatic prompt's fallback reads it to see whether a
    *  dialog is still waiting, and logs it when it types anyway — a trust prompt we fail to recognise
@@ -499,6 +508,7 @@ export class RollingCoordinator {
       rolling: false,
       awaitingReady: false, // the first session — the user answers the trust prompt themselves
       promptKind: 'handover',
+      briefingPrompt: null,
       trustSeen: false,
       lastScreen: '',
       waitTimer: null,
@@ -606,7 +616,10 @@ export class RollingCoordinator {
       // Carry C-c: a blank-slate respawn is owed its briefing, which the writer never got to type and
       // the snapshot does not carry — so it is asked for again, the way roll() asked for it.
       chain.promptKind = c?.promptKind ?? 'handover'
-      this.scheduleAutoPrompt(chain, undefined, chain.promptKind)
+      // Fix round 1: the stored text when there is one, typed as it is — asking again would read the new,
+      // blank session's transcript for a tab, and re-run resumeText's side effect for a Job.
+      chain.briefingPrompt = chain.promptKind === 'briefing' ? (c?.prompt ?? null) : null
+      this.scheduleAutoPrompt(chain, chain.briefingPrompt ?? undefined, chain.promptKind)
     }
     this.snap(chain)
     return true
@@ -1802,7 +1815,7 @@ export class RollingCoordinator {
               tailOffset: null,
               tailSince: this.now(),
               // Carry C-c: the blank slate is owed the briefing, not the handover line.
-              ...(smart ? { promptKind: 'briefing' as const } : {})
+              ...(smart && briefing ? briefingNote(briefing.prompt) : {})
             }
           } satisfies RollSnapshot
         }
@@ -1838,6 +1851,7 @@ export class RollingCoordinator {
       chain.trustSeen = false
       chain.awaitingReady = true
       chain.promptKind = smart ? 'briefing' : 'handover'
+      chain.briefingPrompt = smart && briefing ? briefing.prompt : null
       chain.lastScreen = '' // kill wiped the screen — the old session's dialog must not gate the new one's prompt
       // The reference point of the replay grace. A new roll has to be able to report its grace again, so
       // the throttle is released too. The choice watch is dropped — kill removed the old screen, so that
@@ -2494,7 +2508,11 @@ export class RollingCoordinator {
         transcriptPath: chain.transcriptPath,
         tailOffset: chain.limitTail?.offset ?? null,
         tailSince: chain.limitTail?.sinceMs ?? null,
-        ...(chain.kind !== 'chat' && chain.awaitingReady && chain.promptKind === 'briefing' ? { promptKind: 'briefing' as const } : {})
+        ...(chain.kind !== 'chat' && chain.awaitingReady && chain.promptKind === 'briefing'
+          ? chain.briefingPrompt !== null
+            ? briefingNote(chain.briefingPrompt)
+            : { promptKind: 'briefing' as const }
+          : {})
       },
       writtenAt: now
     }

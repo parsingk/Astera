@@ -10,6 +10,10 @@ export const ROLL_SNAPSHOT_VERSION = 1
  *  overflows and fires at once, which would resume a chain that is still blocked. */
 export const MAX_WAIT_AHEAD_MS = 8 * 24 * 60 * 60_000
 
+/** The longest stored briefing (claude `prompt`) a snapshot may carry. The briefing is a short pointer to
+ *  a file, far under this; anything longer is not one any coordinator wrote. */
+export const MAX_SNAPSHOT_PROMPT_CHARS = 16 * 1024
+
 export interface RollSnapshot {
   v: 1
   provider: 'claude' | 'codex'
@@ -34,6 +38,10 @@ export interface RollSnapshot {
      *  blank-slate (smart) roll, whose new session knows nothing and must be briefed, 'handover' — the
      *  meaning of an absent field — for an ordinary `--resume` roll. */
     promptKind?: 'handover' | 'briefing'
+    /** The briefing text roll() typed, stored with promptKind 'briefing' (Task 12 fix round 1). It cannot
+     *  be rebuilt after the handover: a tab briefing is read from the session's transcript, and the live
+     *  session is the new, blank one. At most MAX_SNAPSHOT_PROMPT_CHARS. */
+    prompt?: string
   }
   codex?: {
     sessionId: string | null
@@ -115,7 +123,16 @@ const readClaude = (v: unknown): R<NonNullable<RollSnapshot['claude']>> => {
   // Optional, and kept absent when absent (an older writer's note reads as it always did).
   const pk = v.promptKind
   if (pk !== undefined && pk !== 'handover' && pk !== 'briefing') return FAIL
-  return { sessionId, transcriptPath, tailOffset, tailSince, ...(pk !== undefined ? { promptKind: pk } : {}) }
+  const pr = v.prompt
+  if (pr !== undefined && (typeof pr !== 'string' || pr.length > MAX_SNAPSHOT_PROMPT_CHARS)) return FAIL
+  return {
+    sessionId,
+    transcriptPath,
+    tailOffset,
+    tailSince,
+    ...(pk !== undefined ? { promptKind: pk } : {}),
+    ...(pr !== undefined ? { prompt: pr } : {})
+  }
 }
 /** writtenAt bounds locateSince: a spawn time after the snapshot was written is not one any writer saw. */
 const readCodex = (v: unknown, writtenAt: number): R<NonNullable<RollSnapshot['codex']>> => {
