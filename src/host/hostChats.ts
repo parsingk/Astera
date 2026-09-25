@@ -13,7 +13,7 @@ import { makeDescriptors } from '../core/providers/descriptor'
 import { ChatSessionManager, type ChatManagerDeps } from '../core/chat/manager'
 import { chatSpawnOptsOf, type ChatRollSpawn } from '../core/chat/respawn'
 import { isUnattendedPermission, type ChatEvent, type ChatRequest, type UnattendedPermission } from '../core/chat/types'
-import { chatPromptsOf, type ChatAnswerResult, type ChatPrompt } from '../core/sessions/chatRead'
+import { chatAnswerFailureOf, chatPromptsOf, type ChatAnswerResult, type ChatPrompt } from '../core/sessions/chatRead'
 import type { ProcRegistry } from './procRegistry'
 import type { ProcHolders } from './procHolders'
 import { createHostProcs, type HostProcHandle, type HostProcsDeps } from './hostProcs'
@@ -423,9 +423,9 @@ export function createHostChats(d: HostChatsDeps): HostChats {
           d.log(`chat ${id}: ${requestId} was answered, then: ${m}`)
           return { answered: true }
         }
-        if (m.startsWith('no open request')) return { answered: false, reason: 'not-open' }
-        d.log(`chat ${id}: answering ${requestId} failed: ${m}`)
-        return { answered: false, reason: 'not-held' }
+        const failed = chatAnswerFailureOf(err)
+        if (failed.answered === false && failed.reason === 'not-held') d.log(`chat ${id}: answering ${requestId} failed: ${m}`)
+        return failed
       }
     },
     unattendedOf,

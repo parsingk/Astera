@@ -104,6 +104,15 @@ export type ChatAnswerResult =
    *  forward to: Task 8 fix round 1). */
   | { answered: false; reason: 'not-open' | 'not-held' | 'question'; detail?: string }
 
+/** An answer that threw before its line went out (final review M3). Only the adapter's own "no open
+ *  request" means the prompt closed; anything else (a pipe that has gone, a refused write) means this side
+ *  could not answer and nothing was, which is `not-held`, never "no longer open". Both the app's
+ *  `chatAnswer` and the Host's read a failure this way. */
+export function chatAnswerFailureOf(err: unknown): ChatAnswerResult {
+  const m = err instanceof Error ? err.message : String(err)
+  return { answered: false, reason: m.startsWith('no open request') ? 'not-open' : 'not-held' }
+}
+
 /** Every open request of one session as prompt rows, in the order given (the one on screen first). */
 export function chatPromptsOf(sessionId: string, requests: readonly ChatRequest[]): ChatPrompt[] {
   return requests.map((r) => ({

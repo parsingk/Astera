@@ -100,6 +100,19 @@ describe('ipc.ts wires the chat adopter (chat takeover Task 9)', () => {
   })
 })
 
+// Final review M3: the app's chatAnswer reads a failure as the Host does. Mutation: put back the bare
+// catch that answered not-open for every failure.
+describe('ipc.ts maps a failed chat answer by its cause (final review M3)', () => {
+  const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'ipc.ts'), 'utf8')
+  it('answers not-open only through chatAnswerFailureOf', () => {
+    const start = src.indexOf('chatAnswer: async (sid, rid, decision) => {')
+    const body = src.slice(start, src.indexOf('chatSend: async (sessionId, text) => {', start))
+    expect(start).toBeGreaterThan(-1)
+    expect(body).toMatch(/\} catch \(err\) \{[\s\S]*const failed = chatAnswerFailureOf\(err\)[\s\S]*return failed/)
+    expect(body.split("reason: 'not-open'").length - 1).toBe(1)
+  })
+})
+
 // spawnSession is the same unreachable registerIpc closure (see above), and its chat branch carries a
 // freshly spawned session's unattended-permission pick from the raw IPC opts into core.chat.spawn.
 // Guarded by text for the same reason: dropping this ternary (or hardcoding 'hold') would make every

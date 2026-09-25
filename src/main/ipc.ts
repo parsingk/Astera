@@ -121,7 +121,7 @@ import {
   writeOffDispatch
 } from '../core/orchestration/state'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
-import { chatPendingOf, chatPromptsOf } from '../core/sessions/chatRead'
+import { chatAnswerFailureOf, chatPendingOf, chatPromptsOf } from '../core/sessions/chatRead'
 import type { ChatAnswer, ChatContextUsage, RateLimitInfo } from '../core/chat/types'
 import { chatSessionUsage } from '../core/usage/chatSession'
 import { isPermissionMode, isUnattendedPermission } from '../core/chat/types'
@@ -3264,8 +3264,12 @@ export function registerIpc(
         try {
           await core.chat.answer(sid, rid, { kind: 'approval', decision: decision === 'allow' ? 'accept' : 'decline' })
           return { answered: true }
-        } catch {
-          return { answered: false, reason: 'not-open' }
+        } catch (err) {
+          // Final review M3: only "no open request" is not-open; an EPIPE or a refused write is not-held.
+          const failed = chatAnswerFailureOf(err)
+          if (failed.answered === false && failed.reason === 'not-held')
+            hostLog(`host: chat ${sid}: answering ${rid} failed: ${String(err)}`)
+          return failed
         }
       },
       chatSend: async (sessionId, text) => {

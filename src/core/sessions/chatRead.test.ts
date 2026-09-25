@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, copyFileSync, writeFileSync, appendFileSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { chatTurnOf, chatPendingOf, chatPromptsOf, readChatTurns, CHAT_TURNS_MAX } from './chatRead'
+import { chatTurnOf, chatPendingOf, chatPromptsOf, readChatTurns, CHAT_TURNS_MAX, chatAnswerFailureOf } from './chatRead'
 import { findClaudeTranscript } from '../history/strategies/claude'
 
 const FIXTURES = path.join(__dirname, '..', 'history', 'fixtures')
@@ -165,5 +165,18 @@ describe('chatPromptsOf', () => {
       { sessionId: 'c1', id: 'r1', kind: 'approval', tool: 'Bash', summary: 'Bash: rm -rf out' },
       { sessionId: 'c1', id: 'r2', kind: 'question', tool: null, summary: 'Which?' }
     ])
+  })
+})
+
+describe('chatAnswerFailureOf (final review M3)', () => {
+  it('is not-open only for the adapter saying the request is not open', () => {
+    expect(chatAnswerFailureOf(new Error('no open request: 7'))).toEqual({ answered: false, reason: 'not-open' })
+  })
+  it.each([
+    ['a pipe that has gone', new Error('write EPIPE')],
+    ['a refused write', Object.assign(new Error('this process may not write to proc p1'), { name: 'NotWriterError' })],
+    ['something that is not an Error', 'boom']
+  ])('is not-held for %s: this side could not answer, and nothing was', (_why, err) => {
+    expect(chatAnswerFailureOf(err)).toEqual({ answered: false, reason: 'not-held' })
   })
 })
