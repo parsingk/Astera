@@ -29,7 +29,7 @@ import { hostFeatures } from './features'
 import { createHostSpawner } from './spawner'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
-import { createHostExits, ptyHeldBy } from './exits'
+import { createHostExits, ptyHeldBy, type HostExits } from './exits'
 import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
 import { readAccountEntries } from '../core/accounts/accountsFile'
@@ -105,6 +105,10 @@ async function main(): Promise<void> {
   let handleProc: ReturnType<typeof attachProcHost> | null = null
 
   let server: Awaited<ReturnType<typeof startHostServer>>
+  /** Declared here and assigned below `createHostOrch` (S6 final review M3): the rolling wiring's
+   *  `exits` getter reads it, and a `const` below that getter would throw in its temporal dead zone if a
+   *  chain ever decided before the assignment. Null until then, and null for good without a spawner. */
+  let exits: HostExits | null = null
   /** Every way out goes through here, and it ends the process whatever happened on the way. An earlier
    *  version put `process.exit(0)` after `killAll()` inside a `.then()` that nothing caught, and on
    *  win32 that was not theoretical: node-pty's ConPTY kill runs a helper process to enumerate the
@@ -241,7 +245,8 @@ async function main(): Promise<void> {
           platform: process.platform,
           registry,
           spawner,
-          exits: () => exits!,
+          // No exits yet means no app has attached, so no app holds any pty: the holders are empty.
+          exits: () => exits ?? { holdersOf: () => [] },
           server: () => server,
           orch: () => orch,
           lang: () => wiring.checks.langNow(),
@@ -320,7 +325,7 @@ async function main(): Promise<void> {
   // emptying their coordinator slots, and the handover sweep when an app leaves. **Only with a
   // spawner**, because the feature and the duty are one fact: without one the Host starts no session
   // of its own, every agent session was the app's, and the app handles its exits as it always has.
-  const exits = spawner
+  exits = spawner
     ? createHostExits({
         registry,
         sessionExited: (e) => orch.sessionExited(e),
