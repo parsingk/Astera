@@ -56,13 +56,17 @@ export interface HostChats {
   forget(sessionId: string): void
   /** A turn by whichever process is the writer: the Host adapter, or the app's chatSend. Never rejects. */
   deliver(sessionId: string, text: string): void
-  /** A turn by the Host adapter; rejects when the Host is not the writer or the adapter refuses. */
-  send(sessionId: string, text: string, beforeWrite?: () => void): Promise<void>
+  /** A turn by the Host adapter; rejects when the Host is not the writer or the adapter refuses.
+   *  `wrote` runs once a line of the turn reached the proc, in the same synchronous step as the write
+   *  (Task 8 fix round 1, D4 I1): a send refused before the wire marks nothing. */
+  send(sessionId: string, text: string, wrote?: () => void): Promise<void>
   requests(sessionId: string): ChatRequest[]
   hasOpenRequest(sessionId: string): boolean
   /** The open prompts of the sessions the Host is the writer of, minus the ids the note lists answered. */
   prompts(sessionId?: string): ChatPrompt[]
-  answer(sessionId: string, requestId: string, decision: 'allow' | 'deny', beforeWrite?: () => void): Promise<ChatAnswerResult>
+  /** `wrote` as for `send`: only once the answer's line reached the proc. A failure other than "no open
+   *  request" (a NotWriterError, a pipe that has gone) is `not-held`: this side could not answer. */
+  answer(sessionId: string, requestId: string, decision: 'allow' | 'deny', wrote?: () => void): Promise<ChatAnswerResult>
   unattendedOf(sessionId: string): UnattendedPermission
   /** The note's `answered` ids (the app writes them, claudeAdapter's rememberAnswered). */
   answeredOf(sessionId: string): string[]
@@ -239,10 +243,24 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     }
   })
 
-  const send = async (id: string, text: string, beforeWrite?: () => void): Promise<void> => {
+  /** Runs `act` and calls `wrote` if a line reached the proc during its synchronous part, which is where
+   *  both adapters write a turn or an answer (see carryOnAfterAdopt). A throw is turned into a rejection,
+   *  after the count was read. */
+  const markIfWritten = <T>(procId: string | null, act: () => Promise<T>, wrote?: () => void): Promise<T> => {
+    const before = procId === null ? 0 : writesTo(procId)
+    let done: Promise<T>
+    try {
+      done = act()
+    } catch (err) {
+      done = Promise.reject(err)
+    }
+    if (procId !== null && writesTo(procId) > before) wrote?.()
+    return done
+  }
+
+  const send = async (id: string, text: string, wrote?: () => void): Promise<void> => {
     if (!isWriter(id)) throw new Error('not the writer')
-    beforeWrite?.()
-    await manager.send(id, text)
+    await markIfWritten(procOf(id), () => manager.send(id, text), wrote)
   }
 
   return {
@@ -345,19 +363,33 @@ export function createHostChats(d: HostChatsDeps): HostChats {
       }
       return out
     },
-    async answer(id, requestId, decision, beforeWrite) {
+    async answer(id, requestId, decision, wrote) {
       if (!isWriter(id)) return { answered: false, reason: 'not-held' }
       const r = manager.pendingOf(id).find((x) => x.id === requestId)
       if (!r) return { answered: false, reason: 'not-open' }
       if (r.kind === 'question') return { answered: false, reason: 'question' }
+      const procId = procOf(id)
+      let written = false
       try {
-        beforeWrite?.()
-        await manager.answer(id, requestId, { kind: 'approval', decision: decision === 'allow' ? 'accept' : 'decline' })
-        return { answered: true }
+        await markIfWritten(
+          procId,
+          () => manager.answer(id, requestId, { kind: 'approval', decision: decision === 'allow' ? 'accept' : 'decline' }),
+          () => {
+            written = true
+            wrote?.()
+          }
+        )
+        return written ? { answered: true } : { answered: false, reason: 'not-open' }
       } catch (err) {
         const m = errText(err)
-        if (!m.startsWith('no open request')) d.log(`chat ${id}: answering ${requestId} failed: ${m}`)
-        return { answered: false, reason: 'not-open' }
+        // The answer's line went out and something after it failed: it was answered all the same.
+        if (written) {
+          d.log(`chat ${id}: ${requestId} was answered, then: ${m}`)
+          return { answered: true }
+        }
+        if (m.startsWith('no open request')) return { answered: false, reason: 'not-open' }
+        d.log(`chat ${id}: answering ${requestId} failed: ${m}`)
+        return { answered: false, reason: 'not-held' }
       }
     },
     unattendedOf,

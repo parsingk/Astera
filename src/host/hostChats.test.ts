@@ -89,6 +89,43 @@ describe('createHostChats — the writer rule (spec §3.2)', () => {
     expect(await r.chats.answer('nope', write.id, 'allow')).toEqual({ answered: false, reason: 'not-held' })
   })
 
+  // Task 8 fix round 1 (D4 I1): a send the adapter could not put on the wire leaves no receipt.
+  it('a send that throws before any line reached the proc never calls its mark', async () => {
+    const r = rig()
+    r.chats.adopt(r.entry())
+    r.procs[0].write = () => {
+      throw new Error('EPIPE')
+    }
+    const mark = vi.fn()
+    await expect(r.chats.send('c1', 'hi', mark)).rejects.toThrow()
+    expect(mark).not.toHaveBeenCalled()
+  })
+
+  it('a send that reached the proc calls its mark once', async () => {
+    const r = rig()
+    r.chats.adopt(r.entry())
+    const mark = vi.fn()
+    await r.chats.send('c1', 'hi', mark).catch(() => {})
+    expect(r.procs[0].sent.join('')).toContain('"text":"hi"')
+    expect(mark).toHaveBeenCalledTimes(1)
+  })
+
+  // Task 8 fix round 1 (Minor 1): the same rule for an answer, and a failure that is not "no open
+  // request" means this side could not answer (not-held), not that the prompt closed.
+  it('an answer whose write throws is not-held and never calls its mark', async () => {
+    const r = rig()
+    r.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n`)
+    r.chats.adopt(r.entry())
+    const [write] = r.chats.prompts()
+    r.procs[0].write = () => {
+      throw new Error('EPIPE')
+    }
+    const mark = vi.fn()
+    expect(await r.chats.answer('c1', write.id, 'allow', mark)).toEqual({ answered: false, reason: 'not-held' })
+    expect(mark).not.toHaveBeenCalled()
+    expect(r.chats.prompts().map((p) => p.id)).toEqual([write.id])
+  })
+
   it('spawns a roll respawn marked hostStarting, and clears the mark once started', async () => {
     const r = rig()
     const info = r.chats.spawn({ account, cwd: 'D:/p', resumeSessionId: 'th', restoreExtra: { rolledFrom: 'c1' } })
