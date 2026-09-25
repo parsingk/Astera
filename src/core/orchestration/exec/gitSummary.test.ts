@@ -4,8 +4,8 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { readGitSummary } from './gitSummary'
-import { git, type GitResult } from '../core/worktrees/git'
-import { gitSync } from '../core/worktrees/testRepo'
+import { git, type GitResult } from '../../worktrees/git'
+import { gitSync } from '../../worktrees/testRepo'
 
 // git.test.ts(src/core/worktrees)의 makeRepo와 같은 문제를 겪는다 — 전역 user.email/user.name에
 // 기대면 CI/새 머신에서 커밋이 실패한다. 그래서 매 저장소마다 로컬 config를 직접 심는다.

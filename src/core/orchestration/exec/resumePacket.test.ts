@@ -3,15 +3,15 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './resumePacket'
-import type { TranscriptResumeMaterial } from '../../core/history/parser'
-import type { Handoff } from '../../core/handoff/types'
-import { LAUNCH_FORBIDDEN } from '../../core/orchestration/exec/coordinator'
-import * as checkpointModule from '../../core/orchestration/checkpoint'
+import type { TranscriptResumeMaterial } from '../../history/parser'
+import type { Handoff } from '../../handoff/types'
+import { LAUNCH_FORBIDDEN } from './coordinator'
+import * as checkpointModule from '../checkpoint'
 import { emptyState, createJob,
-  startJobRun, createTask, openDispatch } from '../../core/orchestration/state'
-import type { OrchState } from '../../core/orchestration/state'
-import type { GitResult } from '../../core/worktrees/git'
-import { git } from '../../core/worktrees/git'
+  startJobRun, createTask, openDispatch } from '../state'
+import type { OrchState } from '../state'
+import type { GitResult } from '../../worktrees/git'
+import { git } from '../../worktrees/git'
 
 /** 예전의 createRun 한 번 — 이제 계획을 만들고 그 1회차를 시작하는 두 걸음이다. */
 const seedRun = (over: Parameters<typeof createJob>[1], now: string) => {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { HookEventWatcher } from './hookEvents'
+import { HookEventWatcher } from './eventWatcher'
 
 describe('HookEventWatcher', () => {
   let dir: string
@@ -182,5 +182,22 @@ describe('HookEventWatcher', () => {
       await new Promise((r) => setTimeout(r, 200)) // 주기의 열 배
       expect(spy.mock.calls.length).toBe(afterStop)
     })
+  })
+
+  it('with startAtEnd, skips what the files already held and delivers what is appended after start (S6 R13)', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hookw-'))
+    try {
+      await fs.writeFile(path.join(dir, 's1.jsonl'), JSON.stringify({ hook_event_name: 'Notification', old: true }) + '\n')
+      const got: unknown[] = []
+      const w = new HookEventWatcher(dir, (_sid, p) => got.push(p), () => {}, 50, { startAtEnd: true })
+      w.start()
+      await new Promise((r) => setTimeout(r, 120))
+      expect(got).toEqual([])
+      await fs.appendFile(path.join(dir, 's1.jsonl'), JSON.stringify({ hook_event_name: 'Notification', fresh: true }) + '\n')
+      await vi.waitFor(() => expect(got).toEqual([{ hook_event_name: 'Notification', fresh: true }]), { timeout: 2000 })
+      w.stop()
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
   })
 })

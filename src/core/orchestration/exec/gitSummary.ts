@@ -4,8 +4,8 @@
 // git.ts(core/worktrees)의 execFile 어댑터를 그대로 쓴다 — shell 없이 실행하고(따옴표 문제 회피),
 // 실패는 던지지 않고 ok:false로 돌아온다. gitWatcher.ts가 같은 모듈에서 gitDir을 가져다 쓰는 것과
 // 같은 관례다: main 레이어가 git을 새로 배선하지 않고 core의 어댑터를 재사용한다.
-import { git } from '../core/worktrees/git'
-import type { GitSummary } from '../core/orchestration/checkpoint'
+import { git } from '../../worktrees/git'
+import type { GitSummary } from '../../orchestration/checkpoint'
 
 export interface GitSummaryDeps {
   /** git 실행 어댑터. RollingDeps(main/rolling.ts)의 copy?/probeActivity? 와 같은 관례 — 테스트

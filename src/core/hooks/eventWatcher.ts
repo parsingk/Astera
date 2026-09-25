@@ -1,7 +1,7 @@
 // Hook event file watcher. Reads the hook payloads astera-hook-capture.cjs appended to
 // hook-events/<sessionId>.jsonl, starting from each file's own offset, and hands them to the callback (SlackNotifier.onHookEvent).
 // Watcher errors and parse failures are only logged — a failed Slack notification must not block the session.
-import { watch, type FSWatcher } from 'node:fs'
+import { watch, readdirSync, statSync, type FSWatcher } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
@@ -28,10 +28,23 @@ export class HookEventWatcher {
     private cb: (sessionId: string, payload: unknown) => void,
     private log: (message: string) => void,
     /** Injectable so a test can use a period it can wait out. */
-    private sweepMs: number = HOOK_SWEEP_MS
+    private sweepMs: number = HOOK_SWEEP_MS,
+    /** Start every file already in `dir` at its current end, so events written before this watcher
+     *  existed are not delivered (the Host, S6 R13). Files that appear later are read from 0. */
+    private opts: { startAtEnd?: boolean } = {}
   ) {}
 
   start(): void {
+    if (this.opts.startAtEnd) {
+      // S6 R13: the Host starts long after these files were written; their old idle Notifications are
+      // not new stalls. Measured once, here, like JsonlTail's startAtEnd.
+      try {
+        for (const f of readdirSync(this.dir))
+          if (f.endsWith('.jsonl')) this.offsets.set(path.join(this.dir, f), statSync(path.join(this.dir, f)).size)
+      } catch (err) {
+        this.log(`hook watcher could not read ${this.dir} at start: ${String(err)}`)
+      }
+    }
     try {
       this.watcher = watch(this.dir, (_ev, filename) => {
         if (filename && filename.endsWith('.jsonl')) void this.drain(path.join(this.dir, filename))

@@ -9,7 +9,7 @@ import { buildCheckpoint } from '../../core/orchestration/checkpoint'
 import { deriveEvents, type ContinuityEvent, type ContinuityEventType } from '../../core/continuity/events'
 import { checkpointsFor, type CheckpointKind } from '../../core/continuity/checkpointPolicy'
 import type { HandoffLookup } from '../../core/handoff/types'
-import { readGitSummary, type GitSummaryDeps } from '../gitSummary'
+import { readGitSummary, type GitSummaryDeps } from '../../core/orchestration/exec/gitSummary'
 import type { CheckpointRow, JournalEventRow, NewCheckpointRow } from './journal'
 
 /** What the recorder needs from the journal. ContinuityJournal satisfies it; tests hand in a fake. */
