@@ -2744,3 +2744,68 @@ describe('mayAct quiets a chain (S6 R1, Review Focus 4)', () => {
     h.coord.stop()
   })
 })
+
+describe('a held roll (S6 Task 9, fix round 1)', () => {
+  const heldRig = async (over: Partial<CodexRollingDeps>, gate: { may: boolean }) => {
+    let first = true
+    const h = harness({
+      mayAct: () => gate.may,
+      prepareSpawn: async () => {
+        if (first) {
+          first = false
+          gate.may = false
+        }
+      },
+      ...over
+    })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-held', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    return { h, src }
+  }
+
+  it('the pre-kill gate takes the switching banner down again', async () => {
+    const gate = { may: true }
+    const { h } = await heldRig({}, gate)
+    expect(h.events).toEqual(['copy'])
+    const states = h.sent.filter((s) => s.channel === 'session:rollState').map((s) => s.payload.state)
+    expect(states).toContain('switching')
+    expect(states.at(-1)).toBe('none')
+    h.coord.stop()
+  })
+
+  it('while held, the tick still reads the rollout', async () => {
+    const gate = { may: true }
+    const snaps: RollSnapshot[] = []
+    const { h, src } = await heldRig({ snapshot: (_id, s) => snaps.push(s) }, gate)
+    expect(h.events).toEqual(['copy'])
+    await appendTokenCount(src, { primary: 60 })
+    await advance(15_000)
+    expect(snaps.at(-1)?.codex?.state?.primary?.usedPercent).toBe(60)
+    h.coord.stop()
+  })
+
+  it('held, then output, then the gate opens: the roll is dropped — someone already resumed the session', async () => {
+    const gate = { may: true }
+    const { h } = await heldRig({}, gate)
+    await advance(15_000) // a quiet tick: it reads the rollout and drops the limit already seen (R27)
+    h.coord.handleData({ sessionId: 's1', data: 'working on it again' })
+    gate.may = true
+    await advance(16_000)
+    expect(h.events).toEqual(['copy'])
+    h.coord.stop()
+  })
+
+  it('held, no output, then the gate opens: the roll proceeds', async () => {
+    const gate = { may: true }
+    const { h } = await heldRig({}, gate)
+    await advance(15_000)
+    gate.may = true
+    await advance(16_000)
+    expect(h.events).toEqual(['copy', 'copy', 'kill:s1', 'spawn:s2:c2'])
+    h.coord.stop()
+  })
+})

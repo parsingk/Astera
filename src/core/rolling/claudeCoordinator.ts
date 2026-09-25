@@ -374,6 +374,9 @@ interface Chain {
   // The wait armWait armed, for the snapshot (S6 R4): when it fires, the account it aims at and the limit
   // it waits out. null whenever no wait is armed — cleared the moment the timer fires.
   waitPlan: { retryAt: number; target: number; weekly: boolean } | null
+  // A roll held while another process holds the pty (S6 R26, requeueRoll). Its own timer, not waitTimer:
+  // the tick skips a waiting chain, and a held one must go on reading its tails (R27).
+  heldTimer: ReturnType<typeof setTimeout> | null
   // snapshotKey of the last snapshot written, so an unchanged chain is not written again on every tick.
   snapKey: string
 }
@@ -525,6 +528,7 @@ export class RollingCoordinator {
       chatPrevStatus: 'idle',
       chatValveSpent: false,
       waitPlan: null,
+      heldTimer: null,
       snapKey: ''
     })
     this.ensureTicker()
@@ -1552,6 +1556,8 @@ export class RollingCoordinator {
     // 것은 "60초 동안 한도가 감지되지 않았다"에 "statusLine 이 돌아왔다"가 더해진 것이고, 그래서
     // 공유 기록도 함께 지운다 — declareHealthy 가 그 네 문장을 그대로 들고 있다(Ruling 4d-8: 여기에
     // 다시 적어 두면 둘이 갈라진다). pty 전용 자리이므로 clearShared 는 기본값 그대로다.
+    // Quiet (S6 R1): a health verdict clears shared state, so it is the holding process's to make.
+    if (!this.acts(chain)) return
     this.declareHealthy(chain)
   }
 
@@ -1610,6 +1616,11 @@ export class RollingCoordinator {
     if (chain.rolling || chain.disposed) return
     // S6 R26: settleInPlace, resumeAfterWait and forceRoll reach here without passing onLimit.
     if (!this.acts(chain)) return this.requeueRoll(chain, toIndex, 'quiet at entry')
+    // A roll that goes ahead supersedes one held earlier (a fresh limit verdict, or the hold's own fire).
+    if (chain.heldTimer) {
+      clearTimeout(chain.heldTimer)
+      chain.heldTimer = null
+    }
     chain.rolling = true
     if (chain.promptTimer) {
       clearTimeout(chain.promptTimer)
@@ -1715,7 +1726,10 @@ export class RollingCoordinator {
       // here, in this one place — from the next line on there is no await. ──
       // The copy and prepareSpawn were awaited, and an older app may have attached the pty in between
       // (S6 R26): the roll is looked at again in a tick instead of killing a pty another process holds.
+      // The 'switching' published above is taken down: nothing switches now, and a 'waiting' would promise
+      // a retry time that nothing has planned.
       if (!this.acts(chain)) {
+        this.pushState(chain, 'none')
         this.requeueRoll(chain, toIndex, 'quiet before the kill')
         return
       }
@@ -1870,15 +1884,32 @@ export class RollingCoordinator {
     }
   }
 
-  /** A roll the chain may not make now (S6 R26): looked at again in a tick, with no banner, no record and
-   *  no kill. Called from inside roll(), whose finally clears `rolling` before the tick fires. */
+  /** A roll the chain may not make now (S6 R26): looked at again every tick, with no banner, no record
+   *  and no kill, on its own timer so the tick goes on reading the chain meanwhile (R27). Called from
+   *  inside roll(), whose finally clears `rolling` before the timer fires.
+   *
+   *  **The decision is stale by the time the gate opens.** A session sitting at its limit prints nothing,
+   *  so output since the hold began means the process that held the pty resumed it — the roll is dropped
+   *  then, not made: killing a session that is working again is the one thing this must not do. If it is
+   *  still limited, the tail, the phrase or the fallback finds that again. */
   private requeueRoll(chain: Chain, toIndex: number, why: string): void {
-    if (chain.waitTimer || chain.disposed) return
+    if (chain.heldTimer || chain.disposed) return
     this.deps.log(`roll held — another process holds this pty (${why}) session=${chain.liveId}`)
-    chain.waitTimer = setTimeout(() => {
-      chain.waitTimer = null
+    const outputAt = chain.lastOutputAt
+    const fire = (): void => {
+      chain.heldTimer = null
+      if (chain.disposed) return
+      if (!this.acts(chain)) {
+        chain.heldTimer = setTimeout(fire, TICK_MS)
+        return
+      }
+      if (chain.lastOutputAt > outputAt) {
+        this.deps.log(`held roll dropped — the session printed output while held session=${chain.liveId}`)
+        return
+      }
       void this.roll(chain, toIndex).catch((err) => this.deps.log(`requeued roll failed: ${String(err)}`))
-    }, TICK_MS)
+    }
+    chain.heldTimer = setTimeout(fire, TICK_MS)
   }
 
   /** Polls for the ready signal after a respawn (the first statusline record) and then sends the carry-on
@@ -2553,7 +2584,7 @@ export class RollingCoordinator {
   private disposeChain(chain: Chain): void {
     if (chain.disposed) return
     chain.disposed = true
-    for (const t of [chain.waitTimer, chain.healthyTimer, chain.promptTimer, chain.trustTimer, chain.resetTimer])
+    for (const t of [chain.waitTimer, chain.healthyTimer, chain.promptTimer, chain.trustTimer, chain.resetTimer, chain.heldTimer])
       if (t) clearTimeout(t)
     this.chains.delete(chain.liveId)
     this.pushState(chain, 'none')

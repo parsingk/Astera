@@ -279,6 +279,9 @@ interface Chain {
   chatValveSpent: boolean
   // The wait armWait armed, for the snapshot (S6 R4) — null whenever no wait is armed.
   waitPlan: { retryAt: number; target: number; weekly: boolean } | null
+  // A roll held while another process holds the pty (S6 R26, requeueRoll). Its own timer, not waitTimer:
+  // the tick skips a waiting chain, and a held one must go on reading its tails (R27).
+  heldTimer: ReturnType<typeof setTimeout> | null
   // snapshotKey of the last snapshot written, so an unchanged chain is not written again on every tick.
   snapKey: string
 }
@@ -427,6 +430,7 @@ export class CodexRollingCoordinator {
       chatPrevStatus: 'idle',
       chatValveSpent: false,
       waitPlan: null,
+      heldTimer: null,
       snapKey: ''
     }
     this.chains.set(info.id, chain)
@@ -1442,6 +1446,8 @@ export class CodexRollingCoordinator {
     // other chain off the account until its recorded reset time passes (blockRegistry.clear). Those are
     // exactly declareHealthy's four statements, and writing them out again here is how the two drift
     // (Ruling 4d-8). A pty-only site, so clearShared keeps its default.
+    // Quiet (S6 R1): a health verdict clears shared state, so it is the holding process's to make.
+    if (!this.acts(chain)) return
     this.declareHealthy(chain)
   }
 
@@ -1498,6 +1504,11 @@ export class CodexRollingCoordinator {
     if (chain.rolling || chain.disposed) return
     // S6 R26: settleInPlace, resumeAfterWait and forceRoll reach here without passing onLimit.
     if (!this.acts(chain)) return this.requeueRoll(chain, toIndex, 'quiet at entry')
+    // A roll that goes ahead supersedes one held earlier (a fresh limit verdict, or the hold's own fire).
+    if (chain.heldTimer) {
+      clearTimeout(chain.heldTimer)
+      chain.heldTimer = null
+    }
     chain.rolling = true
     try {
       const target = this.deps.getAccount(chain.accountIds[toIndex])
@@ -1617,7 +1628,10 @@ export class CodexRollingCoordinator {
       // here, in this one place — from the next line on there is no await. ──
       // The prompt, the copy and prepareSpawn were awaited, and an older app may have attached the pty in
       // between (S6 R26): the roll is looked at again in a tick instead of killing a pty another holds.
+      // The 'switching' published above is taken down: nothing switches now, and a 'waiting' would promise
+      // a retry time that nothing has planned.
       if (!this.acts(chain)) {
+        this.pushState(chain, 'none')
         this.requeueRoll(chain, toIndex, 'quiet before the kill')
         return
       }
@@ -1776,15 +1790,27 @@ export class CodexRollingCoordinator {
     }
   }
 
-  /** A roll the chain may not make now (S6 R26) — the claude side's `requeueRoll`: looked at again in a
-   *  tick, with no record and no kill. Called from inside roll(), whose finally clears `rolling` first. */
+  /** A roll the chain may not make now (S6 R26) — the claude side's `requeueRoll`, same contract: its own
+   *  timer so the tick keeps reading (R27), and dropped rather than made when the session printed output
+   *  while held, because someone resumed it. Called from inside roll(), whose finally clears `rolling`. */
   private requeueRoll(chain: Chain, toIndex: number, why: string): void {
-    if (chain.waitTimer || chain.disposed) return
+    if (chain.heldTimer || chain.disposed) return
     this.deps.log(`codex roll held — another process holds this pty (${why}) session=${chain.liveId}`)
-    chain.waitTimer = setTimeout(() => {
-      chain.waitTimer = null
+    const outputAt = chain.lastOutputAt
+    const fire = (): void => {
+      chain.heldTimer = null
+      if (chain.disposed) return
+      if (!this.acts(chain)) {
+        chain.heldTimer = setTimeout(fire, TICK_MS)
+        return
+      }
+      if (chain.lastOutputAt > outputAt) {
+        this.deps.log(`codex held roll dropped — the session printed output while held session=${chain.liveId}`)
+        return
+      }
       void this.roll(chain, toIndex).catch((err) => this.deps.log(`codex requeued roll failed: ${String(err)}`))
-    }, TICK_MS)
+    }
+    chain.heldTimer = setTimeout(fire, TICK_MS)
   }
 
   /** Refreshes `chain.loggedOut` from the login probe. Fire-and-forget from the tick: the verdict is a
@@ -1946,7 +1972,7 @@ export class CodexRollingCoordinator {
   private disposeChain(chain: Chain): void {
     if (chain.disposed) return
     chain.disposed = true
-    for (const t of [chain.locateTimer, chain.waitTimer, chain.healthyTimer]) if (t) clearTimeout(t)
+    for (const t of [chain.locateTimer, chain.waitTimer, chain.healthyTimer, chain.heldTimer]) if (t) clearTimeout(t)
     this.chains.delete(chain.liveId)
     this.pushState(chain, 'none')
     this.deps.log(`codex chain disposed session=${chain.liveId}`)

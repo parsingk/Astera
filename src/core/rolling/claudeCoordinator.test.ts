@@ -4063,3 +4063,144 @@ describe('stop (S6, the Host)', () => {
     expect(h.events).toEqual([])
   })
 })
+
+describe('a held roll (S6 Task 9, fix round 1)', () => {
+  it('the pre-kill gate takes the switching banner down again', async () => {
+    let may = true
+    const h = harness({ mayAct: () => may, prepareSpawn: async () => { may = false } })
+    h.payloads.set('s1', payload(100))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy'])
+    const states = h.sent.filter((s) => s.channel === 'session:rollState').map((s) => s.payload.state)
+    expect(states).toContain('switching')
+    expect(states.at(-1)).toBe('none')
+  })
+
+  it('while held, the tick still reads: identity is learned', async () => {
+    let may = true
+    const h = harness({ mayAct: () => may, prepareSpawn: async () => { may = false } })
+    // No statusline yet: the seed lets the roll reach its copy, and the identity arrives while held.
+    h.coord.register({ ...h.info1, resumeSessionId: 'cs-seed' }, path.join(os.tmpdir(), 'astera-seed.jsonl'))
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy'])
+    h.payloads.set('s1', payload(20, 'learned-sess'))
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(h.persisted.map((p) => p.key)).toContain('learned-sess')
+  })
+
+  it('held, then output, then the gate opens: the roll is dropped — someone already resumed the session', async () => {
+    let may = true
+    let first = true
+    const h = harness({ mayAct: () => may, prepareSpawn: async () => { if (first) { first = false; may = false } } })
+    h.payloads.set('s1', payload(100))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy'])
+    await vi.advanceTimersByTimeAsync(1_000)
+    h.coord.handleData({ sessionId: 's1', data: 'working on it again' })
+    may = true
+    await vi.advanceTimersByTimeAsync(16_000)
+    expect(h.events).toEqual(['copy'])
+  })
+
+  it('held, no output, then the gate opens: the roll proceeds', async () => {
+    let may = true
+    let first = true
+    const h = harness({ mayAct: () => may, prepareSpawn: async () => { if (first) { first = false; may = false } } })
+    h.payloads.set('s1', payload(100))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    may = true
+    await vi.advanceTimersByTimeAsync(16_000)
+    expect(h.events).toEqual(['copy', 'copy', 'kill:s1', 'spawn:s2:a2'])
+  })
+
+  it('a settle while quiet declares no health (the block record stays)', async () => {
+    vi.setSystemTime(new Date(Date.UTC(2026, 7, 3, 0, 0))) // 11am (Asia/Seoul) inside the 5-hour window
+    let may = true
+    const snaps: RollSnapshot[] = []
+    const h = harness({ mayAct: () => may, snapshot: (_id, s) => snaps.push(s) })
+    h.payloads.set('s1', payload(20))
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '11am') })
+    await flush()
+    const retryAt = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    await vi.advanceTimersByTimeAsync(retryAt - Date.now() + 1_000) // the resume in place
+    expect(snaps.at(-1)?.recovery[0]).not.toBeNull()
+    may = false
+    await vi.advanceTimersByTimeAsync(61_000) // settleInPlace: the metadata is there, so it would declare health
+    expect(snaps.at(-1)?.recovery[0]).not.toBeNull()
+  })
+})
+
+describe('the idle nudge while quiet (S6 Task 9, fix round 1)', () => {
+  const MIN = 60_000
+  const nudgeRig = (over: Partial<RollingDeps>) => {
+    const h = harness({
+      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
+      readPending: () => Promise.resolve(null),
+      ...over
+    })
+    h.payloads.set('s1', payload(95))
+    h.coord.register(h.info1)
+    h.coord.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'idle_prompt' })
+    return h
+  }
+
+  // Each gate is tested on its own by opening or closing the gate between two of them: a chain quiet
+  // throughout is stopped by whichever gate comes first, and would prove nothing about the others.
+  it('types nothing when quiet at the tick, even if the gate opens during the activity probe', async () => {
+    let may = false
+    const h = nudgeRig({
+      mayAct: () => may,
+      probeActivity: () => {
+        may = true
+        return Promise.resolve(Date.now() - 20 * MIN)
+      }
+    })
+    await advanceIo(11 * MIN)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(h.written).toEqual([])
+  })
+
+  it('types nothing when the chain turns quiet during the activity probe', async () => {
+    let may = true
+    const h = nudgeRig({
+      mayAct: () => may,
+      probeActivity: () => {
+        may = false
+        return Promise.resolve(Date.now() - 20 * MIN)
+      },
+      resumeText: () => {
+        may = true // open again before the last gate, so only the one after the probe can stop it
+        return Promise.resolve(null)
+      }
+    })
+    await advanceIo(11 * MIN)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(h.written).toEqual([])
+  })
+
+  it('types nothing when the chain turns quiet while the prompt is built', async () => {
+    let may = true
+    const h = nudgeRig({
+      mayAct: () => may,
+      resumeText: () => {
+        may = false
+        return Promise.resolve(null)
+      }
+    })
+    await advanceIo(11 * MIN)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(h.written).toEqual([])
+  })
+})
