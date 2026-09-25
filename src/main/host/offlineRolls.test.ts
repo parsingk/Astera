@@ -64,8 +64,8 @@ describe('createOfflineRolls (S6 Task 5, D6)', () => {
     expect(h.trail[0]).toBe('fetch')
     expect(h.trail.filter((x) => x.startsWith('slack')).map((x) => x.split(' ')[1])).toEqual(['b', 'c'])
     expect(h.trail[1]).toMatch(/^slack b 🕘 While Astera was closed: hit the limit at .* \(resuming .*\), switched to home$/)
-    // 'gone' is not live: no Slack, but counted.
-    expect(h.trail.slice(-2)).toEqual(['desktop 3 b', 'ack 8'])
+    // Counted: b and c met a limit; 'gone' only stalled, so it is not (fix round 1, M4).
+    expect(h.trail.slice(-2)).toEqual(['desktop 2 b', 'ack 8'])
     expect(h.calls).toEqual([{}, { ack: 8 }])
   })
 
@@ -83,12 +83,59 @@ describe('createOfflineRolls (S6 Task 5, D6)', () => {
     expect(h.trail).toEqual([])
   })
 
-  it('does not ack when a Slack send fails, or the desktop notice throws', async () => {
-    for (const r of [rig({ slackFails: true }), rig({ desktopThrows: true })]) {
-      await r.rolls.swept('at startup', swept)
-      expect(r.trail.some((x) => x.startsWith('ack'))).toBe(false)
-      expect(r.logs.join('\n')).toMatch(/stays for the next attach/)
-    }
+  it('a Slack failure still shows the desktop notice and withholds the ack (fix round 1, I1)', async () => {
+    const h = rig({ slackFails: true })
+    await h.rolls.swept('at startup', swept)
+    expect(h.trail).toEqual(['fetch', 'desktop 2 b'])
+    expect(h.logs.join('\n')).toMatch(/stays un-acked until Slack can post/)
+  })
+
+  it('retries once Slack can post, without a second desktop notice or a repeat of lines already posted', async () => {
+    let fail = new Set(['c'])
+    const trail: string[] = []
+    const rolls = createOfflineRolls({
+      status: () => ({ connected: true, features: ['roll-journal'] }),
+      call: async (m) => {
+        trail.push('ack' in m.args ? `ack ${String(m.args.ack)}` : 'fetch')
+        return { status: 200, body: { entries: ENTRIES, lastSeq: 8 } }
+      },
+      isLive: (id) => id === 'b' || id === 'c',
+      accountLabel: () => 'home',
+      lang: () => 'en',
+      now: () => Date.parse('2026-09-25T04:00:00.000Z'),
+      slack: {
+        announceOffline: async (id) => {
+          if (fail.has(id)) throw new Error('no transport yet')
+          trail.push(`slack ${id}`)
+          return true
+        }
+      },
+      desktop: { announceOffline: (n) => trail.push(`desktop ${n}`) },
+      log: () => undefined
+    })
+    await rolls.slackReady() // nothing failed yet: nothing to retry
+    expect(trail).toEqual([])
+    await rolls.swept('at startup', swept)
+    expect(trail).toEqual(['fetch', 'slack b', 'desktop 2'])
+    fail = new Set()
+    await rolls.slackReady()
+    expect(trail.slice(3)).toEqual(['fetch', 'slack c', 'ack 8'])
+    await rolls.slackReady() // acked: no retry left
+    expect(trail.length).toBe(6)
+  })
+
+  it('a desktop notice that throws is logged and does not hold the ack', async () => {
+    const h = rig({ desktopThrows: true })
+    await h.rolls.swept('at startup', swept)
+    expect(h.trail[h.trail.length - 1]).toBe('ack 8')
+    expect(h.logs.join('\n')).toMatch(/desktop notice could not be shown/)
+  })
+
+  it('attached fetches with no sweep result (a replacing Host, a late first handshake; fix round 1, M2)', async () => {
+    const h = rig()
+    await h.rolls.attached('a different Host answered')
+    expect(h.trail[0]).toBe('fetch')
+    expect(h.trail[h.trail.length - 1]).toBe('ack 8')
   })
 
   it('does not ack a failed or empty fetch', async () => {
@@ -140,6 +187,16 @@ describe('ipc.ts wires offlineRolls (S6 Task 5)', () => {
     expect(wiring).toMatch(/call: orchCall/)
     expect(wiring).toMatch(/slack: slack\?\.notifier/)
     expect(wiring).toMatch(/desktop,/)
+  })
+  it('fetches on a replacing Host and on a first handshake after the startup chain gave up (fix round 1, M2)', () => {
+    expect(src).toMatch(/if \(means === 'first'\) \{\s*if \(startupGaveUp\) void offlineRolls\.attached\(/)
+    const other = src.slice(src.indexOf("if (means === 'other-host') {"), src.indexOf("if (means === 'other-host') {") + 1200)
+    expect(other).toMatch(/void offlineRolls\.attached\('a different Host answered'\)/)
+    // Set once, where the startup chain finds no connected Host (both of its no-sweep answers).
+    expect(src).toMatch(/if \(!hostClient\?\.status\(\)\.connected\) \{\s*(\/\/.*\s*)*startupGaveUp = true/)
+  })
+  it('retries on Slack coming up', () => {
+    expect(src).toMatch(/slack\?\.notifier\.onTransportReady\(\(\) => void offlineRolls\.slackReady\(\)\)/)
   })
   it('runs after the startup sweep and after the reconnect sweep', () => {
     expect(src).toMatch(/takeSessionsBack\('at startup'\)\.then\(\(r\) => \{\s*void offlineRolls\.swept\('at startup', r\)/)

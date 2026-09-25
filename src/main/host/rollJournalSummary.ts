@@ -96,10 +96,12 @@ export function chainText(entries: readonly RollJournalEntry[], o: { lang: Lang;
 }
 
 export interface RollJournalSummary {
-  /** One line per chain whose newest id is a live session of this app, for its Slack thread. */
-  sessions: { sessionId: string; text: string }[]
-  /** Every chain worth saying, live or not: the desktop notice's count. */
-  total: number
+  /** One line per chain whose newest id is a live session of this app, for its Slack thread. `seq` is
+   *  the chain's newest entry, so a caller can tell a line it already posted from one with news. */
+  sessions: { sessionId: string; text: string; seq: number }[]
+  /** Every chain that met a limit (a `waiting`, `switching` or `rolled` entry), live or not: what the
+   *  desktop notice counts (fix round 1, M4). A chain that only stalled is not a limit. */
+  limited: { sessionId: string; seq: number }[]
 }
 
 export function summarizeRollJournal(
@@ -107,13 +109,15 @@ export function summarizeRollJournal(
   o: { isLive(sessionId: string): boolean; accountLabel(sessionId: string): string | undefined; lang: Lang; now: number }
 ): RollJournalSummary {
   const sessions: RollJournalSummary['sessions'] = []
-  let total = 0
+  const limited: RollJournalSummary['limited'] = []
   for (const chain of foldRollChains(entries)) {
+    const seq = chain.entries[chain.entries.length - 1].seq
+    if (chain.entries.some((e) => e.kind === 'rolled' || e.state === 'waiting' || e.state === 'switching'))
+      limited.push({ sessionId: chain.sessionId, seq })
     const live = o.isLive(chain.sessionId)
-    const text = chainText(chain.entries, { lang: o.lang, now: o.now, liveLabel: live ? o.accountLabel(chain.sessionId) : undefined })
-    if (text === null) continue
-    total++
-    if (live) sessions.push({ sessionId: chain.sessionId, text })
+    if (!live) continue
+    const text = chainText(chain.entries, { lang: o.lang, now: o.now, liveLabel: o.accountLabel(chain.sessionId) })
+    if (text !== null) sessions.push({ sessionId: chain.sessionId, text, seq })
   }
-  return { sessions, total }
+  return { sessions, limited }
 }

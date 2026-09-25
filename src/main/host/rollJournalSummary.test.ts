@@ -86,22 +86,26 @@ describe('summarizeRollJournal (S6 Task 5, D6)', () => {
     st('gone', 'stalled', '11:00'),
     rolled('q', 'r', '11:30')
   ]
-  it('keeps a chain whose newest id is live for Slack, and counts every chain worth saying for the desktop', () => {
-    const s = summarizeRollJournal(entries(), {
+  it('keeps a chain whose newest id is live for Slack, and counts only chains that met a limit for the desktop', () => {
+    const e = entries()
+    const s = summarizeRollJournal(e, {
       isLive: (id) => id === 'b',
       accountLabel: () => 'work',
       lang: 'en',
       now: NOW
     })
-    expect(s.sessions).toEqual([{ sessionId: 'b', text: '🕘 While Astera was closed: hit the limit at 10:00 (resuming 15:00)' }])
-    // 'gone' is not live: dropped from Slack, counted here. 'r' has nothing to say.
-    expect(s.total).toBe(2)
+    expect(s.sessions).toEqual([{ sessionId: 'b', text: '🕘 While Astera was closed: hit the limit at 10:00 (resuming 15:00)', seq: e[1].seq }])
+    // 'gone' only stalled: not a limit, and not live, so nowhere. 'r' has nothing to say but did roll.
+    expect(s.limited).toEqual([
+      { sessionId: 'b', seq: e[1].seq },
+      { sessionId: 'r', seq: e[3].seq }
+    ])
   })
 
   it('an empty journal is nothing', () => {
     expect(summarizeRollJournal([], { isLive: () => true, accountLabel: () => undefined, lang: 'en', now: NOW })).toEqual({
       sessions: [],
-      total: 0
+      limited: []
     })
   })
 })

@@ -5,15 +5,22 @@
 //   Host is sent nothing, and the app behaves exactly as before.
 // - Only after a sweep that answered: a sweep that could not list the Host's ptys ('unknown', or no
 //   Host) adopted nothing, so every chain would miss its Slack thread and still be acked.
-// - The ack goes out only after every send. A failed fetch, send or ack is logged and leaves the journal
-//   as it is, so the next attach says it again: at least once, never lost.
+// - The desktop notice is local and always shown (fix round 1, I1); the ack goes out only when every
+//   Slack line went out. A failed fetch, Slack send or ack is logged and leaves the journal as it is,
+//   so it is said again: on the next swap to a Slack transport that can post (slackReady, which covers
+//   slack.json loading after the sweep, M1) or at the next attach. At least once, never lost.
+// - A retry does not repeat what this app run already told: a Slack line whose chain has no newer entry
+//   than the one already posted, or a desktop count for a chain already counted, is skipped. Kept in
+//   memory only.
 // - The ack is never persisted (Task 4 review): the Host's seq restarts on a damaged file, so the only
 //   ack this sends is the lastSeq the same fetch just answered.
 // - One run at a time. A sweep that ends while a run is in flight (a startup and a reconnect
 //   overlapping) queues one more run after it rather than a second fetch beside it.
 //
 // ipc.ts only wires it: `swept(why, result)` after each takeSessionsBack that the startup chain and the
-// reconnect handler run.
+// reconnect handler run, `attached(why)` on a handshake that runs no sweep (a replacing Host, or a first
+// handshake after the startup chain gave up; fix round 1, M2), and `slackReady()` on Slack's
+// onTransportReady.
 import type { RollJournalEntry } from '../../core/host/protocol'
 import type { Lang } from '../../core/i18n'
 import { hostSpeaksRollJournal } from './outdated'
@@ -22,6 +29,11 @@ import { summarizeRollJournal } from './rollJournalSummary'
 export interface OfflineRolls {
   /** A sweep finished with `result` (a ReattachResult, 'unknown' or null). Never rejects. */
   swept(why: string, result: unknown): Promise<void>
+  /** A handshake that runs no sweep: fetch anyway (nothing is adopted, so nothing reaches Slack, and the
+   *  desktop notice still counts it). Never rejects. */
+  attached(why: string): Promise<void>
+  /** Slack can post now: retry a run whose Slack lines did not go out. Nothing otherwise. Never rejects. */
+  slackReady(): Promise<void>
 }
 
 export function createOfflineRolls(d: {
@@ -43,6 +55,11 @@ export function createOfflineRolls(d: {
       /* nowhere to say it */
     }
   }
+
+  /** Per chain id, the newest seq this app run already posted to Slack / counted on the desktop. */
+  const postedThrough = new Map<string, number>()
+  const countedThrough = new Map<string, number>()
+  let retryOnSlack = false
 
   const once = async (why: string): Promise<void> => {
     if (!hostSpeaksRollJournal(d.status())) return
@@ -66,12 +83,40 @@ export function createOfflineRolls(d: {
       now: d.now()
     })
     let posted = 0
-    for (const s of summary.sessions) if (await d.slack?.announceOffline(s.sessionId, s.text)) posted++
-    if (summary.total > 0) d.desktop?.announceOffline(summary.total, summary.sessions[0]?.sessionId)
+    let slackFailed = false
+    for (const one of summary.sessions) {
+      if ((postedThrough.get(one.sessionId) ?? -1) >= one.seq) continue
+      try {
+        if (await d.slack?.announceOffline(one.sessionId, one.text)) {
+          posted++
+          postedThrough.set(one.sessionId, one.seq)
+        }
+      } catch (err) {
+        slackFailed = true
+        log(`host: the offline summary of ${one.sessionId} did not reach Slack: ${String(err)}`)
+      }
+    }
+    // Local, so shown whatever Slack did. Counts only the chains this app run has not counted yet.
+    const fresh = summary.limited.filter((c) => (countedThrough.get(c.sessionId) ?? -1) < c.seq)
+    if (fresh.length > 0) {
+      for (const c of fresh) countedThrough.set(c.sessionId, c.seq)
+      const click = fresh.find((c) => d.isLive(c.sessionId))?.sessionId
+      try {
+        d.desktop?.announceOffline(fresh.length, click)
+      } catch (err) {
+        log(`host: the offline desktop notice could not be shown: ${String(err)}`)
+      }
+    }
+    if (slackFailed) {
+      retryOnSlack = true
+      log(`host: the roll journal stays un-acked until Slack can post, or the next attach (${why})`)
+      return
+    }
+    retryOnSlack = false
     const ack = await d.call({ cmd: 'roll-journal', args: { ack: lastSeq }, sessionId: '' })
     if (ack.status !== 200) log(`host: the roll journal ack was refused (${ack.status}); it will be said again`)
     log(
-      `host: the Host rolled ${summary.total} session(s) while the app was closed — ${posted} Slack message(s), ${entries.length} entries acked to ${lastSeq} (${why})`
+      `host: the Host rolled ${summary.limited.length} session(s) into a limit while the app was closed — ${posted} Slack message(s), ${entries.length} entries acked to ${lastSeq} (${why})`
     )
   }
 
@@ -104,6 +149,8 @@ export function createOfflineRolls(d: {
     swept: (why, result) => {
       if (result === null || typeof result !== 'object') return Promise.resolve()
       return run(why)
-    }
+    },
+    attached: (why) => run(why),
+    slackReady: () => (retryOnSlack ? run('Slack can post now') : Promise.resolve())
   }
 }

@@ -5621,6 +5621,12 @@ export function registerIpc(
       desktop,
       log: hostLog
     })
+    // Fix round 1 (I1, M1): a run whose Slack lines could not go out (slack.json not loaded yet, or a
+    // failed post) is retried when Slack next has a transport. The subscription lives as long as the app.
+    slack?.notifier.onTransportReady(() => void offlineRolls.slackReady())
+    /** The startup chain settled without a sweep (no Host answered in time). A first handshake that lands
+     *  later then runs no sweep either, so it fetches the journal itself (fix round 1, M2). */
+    let startupGaveUp = false
 
     // Host S3: the app's worktree registry writes through the Host once it announces it owns
     // worktrees.json, and mirrors the file it pushes back (ruling R1, R3); a merge the Host runs is
@@ -6395,12 +6401,18 @@ export function registerIpc(
       // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
       // that chain has already given up before a peer ever said hello — a handshake that outlasts its
       // deadline, fails, and succeeds on the retry.
-      if (means === 'first') return
+      if (means === 'first') {
+        if (startupGaveUp) void offlineRolls.attached('a first handshake after the startup chain gave up')
+        return
+      }
       if (means === 'other-host') {
         // The Host this app's ptys lived in really did die, and its successor's registry is empty.
         // Nothing to take back: the handles have already ended themselves through onHostGone and each
         // manager has marked its record exited, which is the path design §11 names for this case.
         hostLog(`host: a different Host answered (${answered}, was ${previous}) — the ptys the old one held are gone`)
+        // Its journal is the same file, so what it (or the one before it) rolled with no app is still
+        // there to tell (fix round 1, M2). Nothing was adopted: the desktop notice counts it.
+        void offlineRolls.attached('a different Host answered')
         return
       }
       // The same Host, still holding the ptys whose handles ended when the socket dropped. Take them
@@ -6425,6 +6437,7 @@ export function registerIpc(
           // says so — the pre-Host truth. Something did accept and then never finished the handshake,
           // or handshook and dropped: a Host is there, holding ptys we cannot enumerate, and `null`
           // there would have the cleanup close a live worker's Dispatch. `sawPeer` is the difference.
+          startupGaveUp = true
           if (!hostClient?.sawPeer()) {
             hostLog('host: no Host, so terminals stay in the app exactly as before')
             return null
