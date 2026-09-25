@@ -53,7 +53,7 @@ export interface HostRollSpawner {
 export interface HostRollingDeps {
   profileDir: string
   platform: NodeJS.Platform
-  registry: Pick<PtyRegistry, 'onData' | 'onExit' | 'metaOf' | 'sessionPty' | 'write' | 'kill' | 'note' | 'list'>
+  registry: Pick<PtyRegistry, 'onData' | 'onExit' | 'metaOf' | 'sessionPty' | 'write' | 'kill' | 'list'>
   spawner: HostRollSpawner
   /** R1 for the pty this session runs in (the wiring asks hostMayAct over exits and server). */
   mayAct(ptyId: string): boolean
@@ -189,7 +189,14 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
     persistConfig: (key: string, cfg: { accountIds: string[]; prompt?: string }) => {
       void configsLoaded.then(() => configs.set(key, cfg)).catch((err) => log(`roll config write failed: ${String(err)}`))
     },
-    onNativeSession: d.onNativeSession,
+    // Called inside the coordinators' own flow (applyMeta, a rekey), so a throw would cut that flow short.
+    onNativeSession: (sessionId: string, nativeSessionId: string) => {
+      try {
+        d.onNativeSession(sessionId, nativeSessionId)
+      } catch (err) {
+        log(`native session report failed session=${sessionId}: ${String(err)}`)
+      }
+    },
     // R22: the Job packet or note; a tab or a coordinator gets its own chain.prompt. The coordinators'
     // third argument (the tab fallback) has nothing to fall back to here: the Host has no tab briefing.
     resumeText: safe('resume text', (sessionId: string, form: 'handover' | 'update') => d.resumeText(sessionId, form), null),

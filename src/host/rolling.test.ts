@@ -187,6 +187,19 @@ describe('createHostRolling (S6 Task 9)', () => {
     }
   })
 
+  it('a late exit from an old pty of a session live in another pty leaves its chain (fix round 1)', async () => {
+    const r = await rig()
+    await r.rolling.refresh()
+    r.open('p1', 's1', { accountId: 'a1', cwd: os.tmpdir(), title: 't', rollAccountIds: ['a1', 'a2'] })
+    r.rolling.adoptSpawned(info('s1'), accounts[0])
+    r.open('p9', 's1', { accountId: 'a2', cwd: os.tmpdir(), title: 't', rollAccountIds: ['a1', 'a2'] })
+    r.ptys.get('p1')!.exit(1)
+    expect(r.rolling.has('s1')).toBe(true)
+    r.ptys.get('p9')!.exit(0)
+    expect(r.rolling.has('s1')).toBe(false)
+    r.rolling.dispose()
+  })
+
   it('feeds only session ptys, and a session exit disposes its chain', async () => {
     const r = await rig()
     await r.rolling.refresh()
