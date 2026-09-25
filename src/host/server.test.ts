@@ -716,6 +716,27 @@ describe('startHostServer', () => {
       await vi.waitFor(() => expect(h.s.yieldsOf(seen[0])).toBeNull())
     })
 
+    it('tells onMessage whether the sender has said hello (review of Task 1)', async () => {
+      const seen: boolean[] = []
+      const h = await server({
+        onMessage: (m, _send, from) => {
+          if (m.t === 'pty-list') seen.push(from.greeted)
+          return false
+        }
+      })
+      const sock = net.connect(h.address)
+      await new Promise((r) => sock.once('connect', r))
+      const ch = messageChannel(sock)
+      ch.send({ t: 'pty-list' })
+      await vi.waitFor(() => expect(seen).toHaveLength(1))
+      ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' } as ClientMessage)
+      await ch.next()
+      ch.send({ t: 'pty-list' })
+      await vi.waitFor(() => expect(seen).toHaveLength(2))
+      expect(seen).toEqual([false, true])
+      sock.end()
+    })
+
     it('forgets a socket by its number when it closes, greeted or not (S6 R1, review of Task 1)', async () => {
       const h = await server()
       expect(h.s.knownSockets()).toBe(0)

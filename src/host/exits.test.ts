@@ -178,7 +178,7 @@ describe('createHostExits', () => {
     const exited: unknown[] = []
     const h = rig({ sessionExited: async (e) => { exited.push(e) } })
     h.open('p1', { kind: 'session', id: 'ses_old', restore: {} })
-    const held = ptyHeldBy({ t: 'pty-attach', id: 'p1' })
+    const held = ptyHeldBy({ t: 'pty-attach', id: 'p1' }, { greeted: true })
     if (held) h.exits.heldBy(held, 5)
     h.exit('p1', 1)
     await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS * 2)
@@ -186,19 +186,32 @@ describe('createHostExits', () => {
   })
 
   it('holds a pty for a pty-spawn or a pty-attach and for nothing the CLI sends', () => {
+    const greeted = { greeted: true }
     const spawn: ClientMessage = { t: 'pty-spawn', id: 'p1', file: 'cmd.exe', args: [], opts }
-    expect(ptyHeldBy(spawn)).toBe('p1')
-    expect(ptyHeldBy({ t: 'pty-attach', id: 'p2' })).toBe('p2')
+    expect(ptyHeldBy(spawn, greeted)).toBe('p1')
+    expect(ptyHeldBy({ t: 'pty-attach', id: 'p2' }, greeted)).toBe('p2')
     const cli: ClientMessage[] = [
       { t: 'hello', protocol: 3, app: '1.4.0', role: 'cli' },
       { t: 'ping', seq: 1 },
       { t: 'orch-call', call: 'c1', cmd: 'worker-start', args: {} },
       { t: 'retire', reason: 'user' }
     ]
-    for (const m of cli) expect(ptyHeldBy(m)).toBeNull()
+    for (const m of cli) expect(ptyHeldBy(m, greeted)).toBeNull()
     // Asking about a pty is not holding it.
-    expect(ptyHeldBy({ t: 'pty-list' })).toBeNull()
-    expect(ptyHeldBy({ t: 'pty-kill', id: 'p1' })).toBeNull()
+    expect(ptyHeldBy({ t: 'pty-list' }, greeted)).toBeNull()
+    expect(ptyHeldBy({ t: 'pty-kill', id: 'p1' }, greeted)).toBeNull()
+  })
+
+  // Review of Task 1: close releases only a greeted socket's marks (`onClientGone` is never called for
+  // one that never said hello), so a mark made for a silent socket would never go, and `hostMayAct`,
+  // which wants every holder to yield rolling, would keep the Host's rolling quiet on that pty for good.
+  it('does not make a never-greeted socket a holder of the pty it attaches (review of Task 1)', () => {
+    const h = rig()
+    h.open('p1', { kind: 'session', id: 'ses_1', restore: {} })
+    const held = ptyHeldBy({ t: 'pty-attach', id: 'p1' }, { greeted: false })
+    if (held) h.exits.heldBy(held, 7)
+    expect(h.exits.holdersOf('p1')).toEqual([])
+    expect(ptyHeldBy({ t: 'pty-spawn', id: 'p2', file: 'cmd.exe', args: [], opts }, { greeted: false })).toBeNull()
   })
 
   // Review of Task 12, M8: the app reconnects on a new socket inside the handover's defer.

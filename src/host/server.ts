@@ -33,6 +33,9 @@ export const UNSAFE_ADDRESS_DIR = 'astera-host: the address directory is not pri
 export interface ClientRef {
   role: 'app' | 'cli'
   socket: number
+  /** Whether this socket has said hello on this protocol (review of Task 1). A mark made for one that
+   *  has not is never released: close runs `onClientGone` only for a greeted socket. */
+  greeted: boolean
 }
 
 export interface HostServerDeps {
@@ -405,7 +408,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           waiting.settle({ ok: m.ok, value: m.value, error: m.error, fromApp: true })
           return
         }
-        if (deps.onMessage?.(m, send, { role: roles.get(socket) ?? 'cli', socket: socketNo }) === true) return
+        if (deps.onMessage?.(m, send, { role: roles.get(socket) ?? 'cli', socket: socketNo, greeted: greetedSockets.has(socket) }) === true) return
         deps.log.write(`unknown message: ${JSON.stringify(v).slice(0, 200)}`)
       },
       onBadLine: (raw) => deps.log.write(`line that is not JSON, ignored: ${raw.slice(0, 200)}`),
@@ -438,7 +441,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       // holds; and even caught, it would skip the idle arming below and the Host would never leave.
       if (wasGreeted)
         try {
-          deps.onClientGone?.({ role, socket: socketNo })
+          deps.onClientGone?.({ role, socket: socketNo, greeted: true })
         } catch (err) {
           deps.log.write(`onClientGone failed for socket ${socketNo}: ${String(err)}`)
         }

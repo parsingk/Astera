@@ -28,9 +28,14 @@ export const ENDED_WITHOUT_A_CODE = -2
  *  socket, **whatever role it declared**: apps v1.3.17 to v1.3.25 send `hello` with no role and the
  *  server calls them 'cli', yet their ptys are theirs, and a Host that handled those exits would load
  *  and write orchestration.json behind an app that writes the file itself (review of Task 12, I1). The
- *  CLI never sends either message, so the role check excluded no one else. */
-export function ptyHeldBy(m: ClientMessage): string | null {
-  return m.t === 'pty-spawn' || m.t === 'pty-attach' ? m.id : null
+ *  CLI never sends either message, so the role check excluded no one else.
+ *
+ *  **But only from a greeted socket** (review of Task 1): close releases the marks through
+ *  `onClientGone`, which the server runs only for a socket that said hello, so a mark made for a silent
+ *  one would outlive it, and `hostMayAct` (every holder must yield rolling) would keep the Host's
+ *  rolling quiet on that pty for good. */
+export function ptyHeldBy(m: ClientMessage, from: { greeted: boolean }): string | null {
+  return from.greeted && (m.t === 'pty-spawn' || m.t === 'pty-attach') ? m.id : null
 }
 
 export interface HostExitsDeps {

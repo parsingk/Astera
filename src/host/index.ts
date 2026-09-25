@@ -314,8 +314,8 @@ async function main(): Promise<void> {
       onIdle: () => leave(),
       onMessage: (m, send, from) => {
         // Before the pty handler, so the mark is in place before a spawn can exit. Any role: see
-        // `ptyHeldBy` for the apps that declare none.
-        const held = ptyHeldBy(m)
+        // `ptyHeldBy` for the apps that declare none. Only a greeted socket, which close releases.
+        const held = ptyHeldBy(m, from)
         if (exits && held !== null) exits.heldBy(held, from.socket)
         return (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false)
       },

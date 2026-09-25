@@ -319,7 +319,7 @@ describe('reattachSessions — who handles the exit of a session the Host opened
         only: 'p_host',
         attach: () => ({ ...pty(), onExit: (cb: (e: { exitCode: number }) => void) => { const prev = exitPty; exitPty = (code) => { prev(code); cb({ exitCode: code }) } } }),
         sendAttach: (id: string) => {
-          const held = ptyHeldBy({ t: 'pty-attach', id })
+          const held = ptyHeldBy({ t: 'pty-attach', id }, { greeted: true })
           if (held !== null) exits.heldBy(held, APP_SOCKET)
         },
         adopters: { ...deps().d.adopters, session: (a: { pty: PtyLike }) => { a.pty.onExit((e) => onAppExit(e.exitCode)); return true } }
