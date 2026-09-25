@@ -6802,14 +6802,95 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect((await call(deps, 'jobs-run', { id: jobId })).status).toBe(200)
   })
 
-  it('C1: a Run whose coordinator is alive still blocks the fire, even with no Tasks', async () => {
+  // Inverted by U4 (the user, 2026-09-25): a live coordinator on a Run with no Task it can start is the
+  // only thing left, so the fire replaces that Run instead of being skipped for good.
+  it('U4: a Run with no Tasks and only a live coordinator is replaced at the fire', async () => {
     const deps = coordDeps()
     const jobId = await scheduledJob(deps)
     const first = (await fire(deps, jobId)).body as { id: string }
-    expect(deps.getState().runs.find((r) => r.id === first.id)?.coordinatorSessionId).toBeDefined()
+    expect(deps.getState().runs.find((r) => r.id === first.id)?.coordinatorSessionId).toBe(`coord-${first.id}`)
+    const r = await fire(deps, jobId)
+    expect(r.status).toBe(200)
+    const second = (r.body as { id: string }).id
+    expect(second).not.toBe(first.id)
+    expect(deps.stopped).toEqual([`coord-${first.id}`])
+    const old = deps.getState().runs.find((x) => x.id === first.id)!
+    expect(old).not.toHaveProperty('coordinatorSessionId')
+    // Ended the way `runs stop` ends a Run: paused, so `runs resume` can take it back.
+    expect(old.paused).toBe(true)
+    expect(deps.getState().runs.find((x) => x.id === second)?.coordinatorSessionId).toBe(`coord-${second}`)
+    expect(deps.logs.join('\n')).toContain(`coord-${first.id}`)
+  })
+
+  it('U4: a Run whose live coordinator can still start a Task is skipped, and its coordinator is left alone', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    await call(deps, 'task-create', { run: first.id, title: 't', spec: 's', account: 'accA' })
     const r = await fire(deps, jobId)
     expect(r.status).toBe(409)
     expect(r.body).toMatchObject({ running: first.id })
+    expect(deps.stopped).toEqual([])
+    expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorSessionId).toBe(`coord-${first.id}`)
+  })
+
+  it('U4: a finished Run whose coordinator is still attached has it stopped at the fire, and is not paused', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    const t = await call(deps, 'task-create', { run: first.id, title: 't', spec: 's', account: 'accA' })
+    await call(deps, 'task-update', { id: (t.body as { id: string }).id, status: 'completed' })
+    expect((await fire(deps, jobId)).status).toBe(200)
+    expect(deps.stopped).toEqual([`coord-${first.id}`])
+    const old = deps.getState().runs.find((x) => x.id === first.id)!
+    expect(old).not.toHaveProperty('coordinatorSessionId')
+    expect(old.paused).toBeUndefined()
+  })
+
+  it('U4: jobs run agrees: an idle-only Run does not count as running, and a manual Run keeps its coordinator', async () => {
+    const deps = coordDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, coordinatorAccount: 'accA' })
+    const jobId = deps.getState().jobs[0].id
+    const first = (await call(deps, 'jobs-run', { id: jobId })).body as { id: string }
+    expect(deps.getState().runs.find((r) => r.id === first.id)?.coordinatorSessionId).toBe(`coord-${first.id}`)
+    const r = await call(deps, 'jobs-run', { id: jobId })
+    expect(r.status).toBe(200)
+    expect(deps.stopped).toEqual([])
+    expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorSessionId).toBe(`coord-${first.id}`)
+  })
+
+  it('U4: a stop that throws is logged, and the Run is still replaced', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    Object.assign(deps, {
+      stopCoordinator: async () => {
+        throw new Error('pty gone')
+      }
+    })
+    expect((await fire(deps, jobId)).status).toBe(200)
+    expect(deps.getState().runs.find((x) => x.id === first.id)).not.toHaveProperty('coordinatorSessionId')
+    expect(deps.logs.join('\n')).toContain('pty gone')
+  })
+
+  it('U4: run-coordinator-stop stops a finished Run’s coordinator, and refuses while the Run still moves', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    const t = await call(deps, 'task-create', { run: first.id, title: 't', spec: 's', account: 'accA' })
+    const refused = await call(deps, 'run-coordinator-stop', { run: first.id })
+    expect(refused.status).toBe(409)
+    expect(deps.stopped).toEqual([])
+    await call(deps, 'task-update', { id: (t.body as { id: string }).id, status: 'completed' })
+    const r = await call(deps, 'run-coordinator-stop', { run: first.id })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ runId: first.id, stopped: `coord-${first.id}` })
+    expect(deps.stopped).toEqual([`coord-${first.id}`])
+    expect(deps.getState().runs.find((x) => x.id === first.id)).not.toHaveProperty('coordinatorSessionId')
+    // Nothing left to stop: 200, and nothing is stopped twice.
+    expect((await call(deps, 'run-coordinator-stop', { run: first.id })).body).toMatchObject({ stopped: null })
+    expect(deps.stopped).toHaveLength(1)
+    expect((await call(deps, 'run-coordinator-stop', { run: 'run_nope' })).status).toBe(404)
   })
 
   it('I1: the Run is committed marked as starting its coordinator, and the attach clears the mark', async () => {

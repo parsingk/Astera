@@ -33,6 +33,7 @@ import {
   jobOfRunId,
   runIdOf,
   attachCoordinator,
+  detachCoordinator,
   pauseSchedule,
   resumeSchedule,
   resumeRun,
@@ -539,15 +540,24 @@ const runningRunOf = (s: OrchState, job: Job, now: string): JobRun | undefined =
  *
  * Not running: a finished Run (every Task done), and a paused one (a person resumes it; unchanged from
  * before). Otherwise it runs when any of these holds:
- * - a coordinator is attached, or its start is in flight (`coordinatorStarting`, I1);
+ * - its coordinator's start is in flight (`coordinatorStarting`, I1);
  * - a worker is at work on it (an open Dispatch), a check is (a Task `validating` or `reviewing`),
  *   or it waits on a person (an open Gate);
  * - it is `limited`: its agents resume by themselves at the reset (Task 1 review Minor 3);
- * - the app places it (`placedByApp`) and its loop can still start one of its Tasks (`startable`).
+ * - its driver, a live coordinator or the app's loop (`placedByApp`), can still start one of its
+ *   Tasks (`startable`).
  *
- * **The last clause asks about the Tasks, not only the driver** (final review I1). An app-placed Run
- * with a Task that failed once, or a `pending` Task behind a dependency that failed for good, has an
- * unfinished Task that nothing will ever start, and it counted as running for ever.
+ * **The last clause asks about the Tasks, not only the driver** (final review I1, and the user's U4 of
+ * 2026-09-25). An app-placed Run with a Task that failed once, or a `pending` Task behind a dependency
+ * that failed for good, has an unfinished Task that nothing will ever start, and it counted as running
+ * for ever. A live coordinator on a Run with no Task it can start did the same: a Run made from an
+ * objective alone has no Task, and its coordinator is told not to make any (handover.ts).
+ *
+ * **Such a Run is "idle only", and one rule covers both callers.** `jobs run` does not count it as
+ * running and makes the next Run beside it, leaving its coordinator alone (a person may be reading
+ * that tab). A fire of a scheduled Job replaces it (`run-spawn --unless-running`, `retireCoordinator`):
+ * it stops that coordinator, ends the Run, and makes the next one. So a Run the fire would replace is
+ * never one `jobs run` refuses on, and a Run `jobs run` refuses on is never replaced.
  */
 const runMoves = (s: OrchState, job: Job, run: JobRun, now: string): boolean => {
   const tasks = s.tasks.filter((t) => t.runId === run.id)
@@ -559,9 +569,9 @@ const runMoves = (s: OrchState, job: Job, run: JobRun, now: string): boolean => 
   if (tasks.some((t) => t.status === 'validating' || t.status === 'reviewing')) return true
   if (s.gates.some((g) => g.status === 'open' && g.runId === run.id)) return true
   if (limitedUntil(s, run.id, now) !== null) return true
-  if (run.coordinatorSessionId !== undefined) return true
-  if (!placedByApp(job, run)) return false
-  return startable(tasks, false).size > 0
+  const coordinated = run.coordinatorSessionId !== undefined
+  if (!coordinated && !placedByApp(job, run)) return false
+  return startable(tasks, coordinated).size > 0
 }
 
 /**
@@ -727,6 +737,7 @@ const COORDINATOR_ONLY = new Set([
   'run-use',
   'run-delete',
   'run-spawn',
+  'run-coordinator-stop',
   'run-start',
   'run-worktree-set',
   'run-pause',
@@ -981,6 +992,40 @@ export async function handleCommand(
     if (!run || run.coordinatorStartingAt !== stamp) return
     const { coordinatorStartingAt: _mark, ...rest } = run
     await deps.setState({ ...current, runs: current.runs.map((r) => (r.id === runId ? rest : r)) })
+  }
+
+  /**
+   * **Stops a Run's coordinator that has nothing left to do, and empties its slot** (the user's U4 of
+   * 2026-09-25). Two callers: `run-coordinator-stop`, which the driving process's loop sends once a
+   * scheduled Job's Run has finished, and a fire that replaces an idle-only Run (`run-spawn
+   * --unless-running`), which also passes `pause` to end that unfinished Run the way `runs stop` does.
+   *
+   * **It never throws out of the command, and a stop that fails does not keep the slot** (R3). The
+   * stop is best effort, as it is for the hand-over's I2 discard: a slot kept after a failed stop would
+   * be asked again on every pass, and a replaced Run would keep its old coordinator in the slot beside
+   * nothing. The failure is logged; the session, if it still lives, is the one thing left behind.
+   *
+   * The slot is emptied on the state as it is after the stop (a long await), and only when it still
+   * names the session this call stopped: a ▶ may have started another coordinator on the Run meanwhile.
+   */
+  const retireCoordinator = async (runId: string, sessionId: string, why: string, pause: boolean): Promise<void> => {
+    try {
+      if (deps.stopCoordinator) await deps.stopCoordinator(sessionId)
+      else deps.log?.(`coordinator ${sessionId} of run ${runId} could not be stopped: nothing here can stop a session`)
+    } catch (e) {
+      deps.log?.(`coordinator ${sessionId} of run ${runId} could not be stopped: ${String(e)}`)
+    }
+    const current = deps.getState()
+    const run = current.runs.find((r) => r.id === runId)
+    if (!run || run.coordinatorSessionId !== sessionId) return
+    const detached = detachCoordinator(current, { runId })
+    if (!detached.ok) return
+    await deps.setState(
+      pause
+        ? { ...detached.state, runs: detached.state.runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) }
+        : detached.state
+    )
+    deps.log?.(`coordinator ${sessionId} of run ${runId} stopped: ${why}`)
   }
 
   /** The body of `handToCoordinator`: the worktree, the session, the attach. */
@@ -1867,6 +1912,14 @@ export async function handleCommand(
       // `jobs run`, which refuses while the Job's latest Run still runs, so the fire is skipped then.
       // Answered 409 with `running`, the Run it was skipped for. The fire does not retry it: its arming
       // moved on to the next fire time before it asked (dispatchLoop.ts's orchFireTick).
+      //
+      // **A latest Run that is not running but still has a coordinator is replaced** (the user's U4 of
+      // 2026-09-25), for a scheduled Job only. Either it finished and its coordinator was not stopped yet
+      // (the loop stops it once the Run finishes, `run-coordinator-stop`), or the coordinator is all it
+      // has left (idle only, runMoves). Its coordinator is stopped and its slot emptied; an unfinished Run
+      // is also paused, the way `runs stop` ends a Run, so `runs resume` takes it back. Then the new Run is
+      // made on the state as it is after that, not on `s`.
+      let base = s
       if (args.unlessRunning === true) {
         const job = s.jobs.find((j) => j.id === id)
         const running = job && runningRunOf(s, job, now)
@@ -1875,8 +1928,19 @@ export async function handleCommand(
             status: 409,
             body: { error: `job ${id} is still running (run ${running.id}); this run was not made`, jobId: id, running: running.id }
           }
+        const latest = job && latestRunOf(s, job)
+        if (job?.schedule !== undefined && latest?.coordinatorSessionId !== undefined && latest.paused !== true) {
+          const finished = outcomeOf(s, latest.id) !== 'running'
+          await retireCoordinator(
+            latest.id,
+            latest.coordinatorSessionId,
+            finished ? 'the run had finished' : `the run had nothing left but its coordinator; replaced by the fire of job ${id}`,
+            !finished
+          )
+          base = deps.getState()
+        }
       }
-      const made = startJobRun(s, id, now)
+      const made = startJobRun(base, id, now)
       // **The Run is committed already marked "coordinator starting"** when it will get one (I1): there
       // is no moment in which a ▶ sees it with neither a coordinator nor a start in flight.
       const willHandOver = made.ok && s.jobs.find((j) => j.id === id)?.coordinatorAccountId !== undefined && deps.startCoordinator !== undefined
@@ -1899,6 +1963,30 @@ export async function handleCommand(
         return withCoordinator ? okBody(withCoordinator) : reply
       }
       return { status: handed.status, body: { ...(handed.body as object), jobId: id, runId: run.id } }
+    }
+    /**
+     * **Stops a Run's coordinator once nothing is left for it to do** (the user's U4 of 2026-09-25).
+     * The loop of the process that drives sends it for each finished Run of a scheduled Job whose
+     * coordinator is still attached (dispatchLoop.ts), so a schedule does not leave one coordinator
+     * looping on `check --wait` per fire. A Run of a Job with no schedule is never sent: a person may
+     * be reading that coordinator's tab (the controller's ruling on U4's scope).
+     *
+     * Refused, 409, while the Run still moves (runMoves, the rule `jobs run` and a fire use), so this
+     * never stops a coordinator that has work. With no coordinator attached it answers 200 with
+     * `stopped: null`, so a repeat does nothing.
+     */
+    case 'run-coordinator-stop': {
+      const id = str(args.run)
+      if (!id) return bad('--run is required')
+      const run = s.runs.find((r) => r.id === id)
+      if (!run) return notFound(`unknown run: ${id}`)
+      const job = jobOf(s, run)
+      if (job && runMoves(s, job, run, now))
+        return conflict(`run ${id} still has work its coordinator can start; its coordinator was left running`)
+      const sessionId = run.coordinatorSessionId
+      if (sessionId === undefined) return okBody({ runId: id, stopped: null })
+      await retireCoordinator(id, sessionId, 'the run has nothing left for it to do', false)
+      return okBody({ runId: id, stopped: sessionId })
     }
     case 'task-create': {
       // `--run` 이 없으면 "가장 최근 Run" 이다. **그 뜻을 latestOrdinaryRun 이 정한다** — 예약

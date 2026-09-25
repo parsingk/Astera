@@ -180,6 +180,7 @@ const LISTING: Record<string, readonly string[]> = {
   'run-pause': ['astera jobs list'],
   'run-resume': ['astera jobs list'],
   'run-spawn': ['astera jobs list'],
+  'run-coordinator-stop': ['astera runs list'],
   'run-merge': ['astera runs list'],
   'run-worktree-set': ['astera runs list'],
   'run-use': ['astera runs list'],

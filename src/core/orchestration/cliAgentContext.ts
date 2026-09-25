@@ -122,6 +122,12 @@ const SESSION = {
       { name: 'unless-running', about: "make no run while the Job's latest run still runs (409); a schedule's fire sends it" }
     ]
   },
+  'run-coordinator-stop': {
+    summary: "stop a run's coordinator once nothing is left for it to do",
+    detail:
+      "Refused (409) while the run still has work its coordinator can start. The app sends it when a scheduled Job's run finishes.",
+    flags: [RUN_ARG('<runId>', 'the run whose coordinator to stop')]
+  },
   'run-merge': {
     summary: "merge this run's worktrees back into the project",
     detail: 'It does not remove the worktrees afterwards.',

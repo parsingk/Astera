@@ -38,6 +38,7 @@ import { reapableChildRuns } from '../reap'
 import { slotsToFill, tasksMissingAccounts } from '../schedule'
 import { jobOf, type OrchState } from '../state'
 import { DEFAULT_CONCURRENCY } from '../types'
+import { outcomeOf } from '../view'
 import type { Integration } from './integrateGit'
 
 /** 15초 — 세션 스케줄러의 TICK_MS 와 같은 값이다 */
@@ -137,6 +138,45 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         log(`scheduler: gate-create rejected task=${taskId} — ${JSON.stringify(gated.body)}`)
     } catch (e) {
       log(`scheduler: gate-create failed task=${taskId} — ${String(e)}`)
+    }
+  }
+
+  /** Coordinator sessions this process has asked to stop (U4), each asked once: a refusal, or a stop
+   *  that failed, is not sent again on every pass. A fire of the Job is the second chance, since it
+   *  stops the coordinator of a finished latest Run it finds still attached (run-spawn). */
+  const askedToStop = new Set<string>()
+
+  /**
+   * **A scheduled Job's Run that has finished gets its coordinator stopped** (the user's U4 of
+   * 2026-09-25). Otherwise every fire leaves one more coordinator looping on `check --wait` for good.
+   * A finished Run is one whose outcome is no longer `running` (every Task done, view.ts). Only a Job
+   * with a schedule: a manual `jobs run` Run keeps its coordinator, since a person may be reading its
+   * tab (the controller's ruling on U4's scope).
+   *
+   * **Only the process that drives does it.** The pass that calls this has asked `mayStart` just
+   * before, and it asks again before each stop, so the app and the Host never both stop one
+   * coordinator. The stop and the emptied slot are `run-coordinator-stop`'s, through the command
+   * layer like every other thing this loop does. A failure is logged and never thrown (R14).
+   */
+  const stopFinishedCoordinators = async (): Promise<void> => {
+    const s = c.getState()
+    for (const run of s.runs) {
+      const sessionId = run.coordinatorSessionId
+      if (sessionId === undefined || askedToStop.has(sessionId)) continue
+      if (jobOf(s, run)?.schedule === undefined) continue
+      if (outcomeOf(s, run.id) === 'running') continue
+      if (!c.mayStart()) return
+      askedToStop.add(sessionId)
+      try {
+        const r = await c.handle('run-coordinator-stop', { run: run.id })
+        log(
+          r.status >= 400
+            ? `scheduled run=${run.id} finished, and stopping its coordinator ${sessionId} was refused: ${JSON.stringify(r.body)}`
+            : `scheduled run=${run.id} finished — its coordinator ${sessionId} was stopped`
+        )
+      } catch (e) {
+        log(`scheduled run=${run.id} finished, and stopping its coordinator ${sessionId} failed: ${String(e)}`)
+      }
     }
   }
 
@@ -523,6 +563,9 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       // 프로세스로 넘어갔고, 그 새 운전자의 첫 바퀴가 같은 회차를 걷는다 — 두 프로세스가 같은 워크트리의
       // 세션을 닫고 `git worktree remove` 를 함께 돌리게 된다. 운전하지 않는 프로세스는 일을 하지 않는다.
       // 앱에서는 mayStart 가 언제나 참이므로(orch 는 한 번 서면 내려가지 않는다) 앱의 동작은 그대로다.
+      if (!c.mayStart()) return
+      // U4: 끝난 예약 회차의 코디네이터를 세운다(stopFinishedCoordinators). 회수보다 앞이다.
+      await stopFinishedCoordinators()
       if (!c.mayStart()) return
       // 앱이 등록한 워크트리인가 — 앱에서는 core.worktrees, Host 에서는 자기 레지스트리다(c.isRegisteredWorktree).
       for (const r of reapableChildRuns(c.getState(), (p) => c.isRegisteredWorktree(p)))

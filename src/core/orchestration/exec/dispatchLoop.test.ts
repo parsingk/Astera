@@ -171,6 +171,7 @@ function rig(o: RigOpts = {}) {
     return { sessionId: `s-${n}`, cwd: a.runCwd ?? 'x', specPath: 'x' }
   })
   const startCoordinator = vi.fn(async (a: { runId: string }) => ({ sessionId: `coord-${a.runId}` }))
+  const stopCoordinator = vi.fn(async (_sessionId: string): Promise<void> => {})
 
   const deps = {
     getState: () => state,
@@ -187,6 +188,7 @@ function rig(o: RigOpts = {}) {
     now: () => new Date(h.clock).toISOString(),
     startWorker,
     startCoordinator,
+    stopCoordinator,
     listAccounts: async () => [{ id: 'accA', label: 'accA', provider: 'claude' as const }],
     log: () => {},
     runningSessions: () => 0,
@@ -249,6 +251,7 @@ function rig(o: RigOpts = {}) {
     real,
     startWorker,
     startCoordinator,
+    stopCoordinator,
     logs,
     typed,
     reaped,
@@ -622,5 +625,77 @@ describe('orchFireTick asks mayStart between fires', () => {
     h.ctx.mayStart = () => allowed
     await h.loop.fireTick()
     expect(h.handled().filter((c) => c === 'run-spawn')).toHaveLength(1)
+  })
+})
+
+// The user's U4 (2026-09-25): a scheduled Job's Run that has finished gets its coordinator stopped, by
+// the process that drives only. A manual `jobs run` Run keeps its coordinator (the controller's ruling
+// on U4's scope): a person may be reading its tab.
+describe('a finished scheduled Run’s coordinator is stopped (U4)', () => {
+  const withCoordinator = (h: ReturnType<typeof rig>, runId: string, sessionId: string): void => {
+    const s = h.state()
+    h.setState({ ...s, runs: s.runs.map((r) => (r.id === runId ? { ...r, coordinatorSessionId: sessionId } : r)) })
+  }
+  const finish = (h: ReturnType<typeof rig>, runId: string): void => {
+    const s = h.state()
+    h.setState({ ...s, tasks: s.tasks.map((t) => (t.runId === runId ? { ...t, status: 'completed' as const } : t)) })
+  }
+
+  it('stops it once, through run-coordinator-stop, and empties the slot', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    await h.loop.run()
+    await h.settle()
+    expect(h.stopCoordinator.mock.calls).toEqual([['coord-rc']])
+    expect(h.handled()).toContain('run-coordinator-stop')
+    expect(h.state().runs.find((r) => r.id === 'run_rc')).not.toHaveProperty('coordinatorSessionId')
+    await h.loop.run()
+    await h.settle()
+    expect(h.stopCoordinator).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves a manual Run’s coordinator alone, finished or not', async () => {
+    const h = rig()
+    withCoordinator(h, 'run_1', 'coord-1')
+    finish(h, 'run_1')
+    await h.loop.run()
+    await h.settle()
+    expect(h.stopCoordinator).not.toHaveBeenCalled()
+    expect(h.state().runs.find((r) => r.id === 'run_1')?.coordinatorSessionId).toBe('coord-1')
+  })
+
+  it('leaves a scheduled Run that has not finished alone', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    const s = h.state()
+    h.setState({ ...s, tasks: s.tasks.map((t) => (t.id === 'tsk_rc' ? { ...t, status: 'ready' as const } : t)) })
+    await h.loop.run()
+    await h.settle()
+    expect(h.stopCoordinator).not.toHaveBeenCalled()
+  })
+
+  it('only the driving process stops it: the loop that may not start stops nothing', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    // The other process: same state, same command layer, but it does not drive.
+    const other = createDispatchLoop({ ...h.ctx, mayStart: () => false })
+    await other.run()
+    expect(h.stopCoordinator).not.toHaveBeenCalled()
+    await Promise.all([h.loop.run(), other.run()])
+    await h.settle()
+    expect(h.stopCoordinator).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refused or failed stop is logged, never thrown, and not sent again on every pass', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    h.ctx.handle = async (cmd, args) => {
+      if (cmd === 'run-coordinator-stop') throw new Error('socket closed')
+      return h.real(cmd, args)
+    }
+    await expect(h.loop.run()).resolves.toBeUndefined()
+    await h.loop.run()
+    expect(h.handled().filter((c) => c === 'run-coordinator-stop')).toHaveLength(1)
+    expect(h.logs.join('\n')).toContain('socket closed')
   })
 })
