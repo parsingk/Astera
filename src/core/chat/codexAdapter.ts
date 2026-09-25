@@ -286,6 +286,7 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
     listPermissionModes: () => safe(doListPermissionModes()),
     listModels: () => safe(doListModels()),
     state: () => core.snapshot(),
+    pending: () => core.openRequests(),
     on: (fn) => core.on(fn),
     kill: () => proc.kill()
   }

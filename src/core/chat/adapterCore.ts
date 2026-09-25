@@ -74,6 +74,8 @@ export interface AdapterCore {
   openRequest(id: string, entry: OpenRequest): void
   /** Drop by id and promote the next; an empty queue goes to working if a turn is running, else idle. */
   resolveRequest(id: string): void
+  /** Every open request in arrival order, `[0]` the one on screen. A fresh array each call. */
+  openRequests(): ChatRequest[]
   /** Same, for answer(): hands the entry to `write` — the adapter's own line for the reply — and drops
    *  it from the queue only once that write has returned. A write that throws takes nothing out: the
    *  card is still on screen, still answerable, and the throw reaches the caller. */
@@ -384,6 +386,7 @@ export function createAdapterCore(deps: AdapterCoreDeps, mode: AdapterMode, prov
     nextId: () => `${idPrefix}-${idCounter++}`,
     openRequest,
     resolveRequest,
+    openRequests: () => queue.map((id) => open.get(id)!.decoded.request),
     takeRequest,
     resolveByToolUse,
     setTurn: (turnId) => {

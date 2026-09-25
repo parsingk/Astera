@@ -39,6 +39,14 @@ export function isPermissionMode(v: unknown): v is PermissionMode {
   return v === 'default' || v === 'acceptEdits' || v === 'plan'
 }
 
+/** What a chat session does with a permission prompt while the Host is its writer and nobody answers
+ *  (chat takeover C3). 'hold' waits; 'deny-after-60s' answers deny once 60 s have passed. */
+export type UnattendedPermission = 'hold' | 'deny-after-60s'
+
+export function isUnattendedPermission(v: unknown): v is UnattendedPermission {
+  return v === 'hold' || v === 'deny-after-60s'
+}
+
 export interface ChatModel {
   model: string | null
   effort: string | null
@@ -86,6 +94,11 @@ export interface ChatState {
    *  `status: 'working'`, which for a retry carrying an `initialPrompt` can be within a second of the
    *  fact it announces. Optional for the same reason every other flag here is: absent reads as `false`. */
   bypassed?: boolean
+  /** chat takeover C3: what this session does with a permission prompt nobody answers while the Host
+   *  is its writer. The manager overlays it from its own record (the note carries it across a
+   *  restart); an adapter's own state has none. Optional for the same reason every flag above is:
+   *  absent reads the same as 'hold'. */
+  unattendedPermission?: UnattendedPermission
   /** The replay this state was rebuilt from had lost its head, so `status` is a guess until the next event. */
   truncated: boolean
   /** Which CLI this session is — set once at construction (adapterCore.ts), never patched. */
@@ -176,6 +189,10 @@ export interface ChatAdapter {
   listPermissionModes(): Promise<PermissionModeChoice[]>
   listModels(): Promise<ModelDescriptor[]>
   state(): ChatState
+  /** Every open server request, oldest (the one on screen) first. `state().request` is only the head;
+   *  a takeover and `astera chats pending` need the whole queue. Optional so a test's hand-built
+   *  adapter need not have it: the manager falls back to `state().request` alone. */
+  pending?(): ChatRequest[]
   on(fn: (e: ChatEvent) => void): () => void
   kill(): void
 }

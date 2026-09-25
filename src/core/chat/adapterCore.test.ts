@@ -103,6 +103,16 @@ describe('createAdapterCore — client requests', () => {
 })
 
 describe('createAdapterCore — the server-request queue', () => {
+  it('openRequests lists every open request in arrival order, the one on screen first', () => {
+    const core = createAdapterCore({ proc: fakeProc(), log: () => {} }, { mode: 'fresh' }, 'claude')
+    const req = (id: string): DecodedRequest => ({ request: { id, kind: 'approval', about: { tool: 'Bash', lines: [] }, decisions: ['accept', 'decline'] }, questionIds: null })
+    core.openRequest('r1', { decoded: req('r1'), wireId: 'r1' })
+    core.openRequest('r2', { decoded: req('r2'), wireId: 'r2' })
+    expect(core.openRequests().map((r) => r.id)).toEqual(['r1', 'r2'])
+    core.resolveRequest('r1')
+    expect(core.openRequests().map((r) => r.id)).toEqual(['r2'])
+  })
+
   it('shows the first, holds the second until the first is resolved, and emits one request event per change', async () => {
     const { c, events } = made()
     c.setTurn('t1')

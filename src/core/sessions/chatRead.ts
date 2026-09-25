@@ -77,6 +77,40 @@ export function chatPendingOf(request: ChatRequest | null): ChatPending | null {
   return { kind: 'question', summary: rest.length === 0 ? head : `${head} (+${rest.length} more)` }
 }
 
+/** One open permission prompt as `astera chats pending` lists it (chat takeover C3). `id` is the
+ *  request id, unique only per process (plan ruling P7), hence `sessionId` beside it. `tool` is the
+ *  approval's tool, null for a question. */
+export interface ChatPrompt {
+  sessionId: string
+  id: string
+  kind: 'approval' | 'question'
+  tool: string | null
+  summary: string
+}
+
+/** `complete` is false when some writer could not be asked (an app that did not answer), so the list
+ *  may be missing prompts rather than saying there are none. */
+export interface ChatPromptList {
+  prompts: ChatPrompt[]
+  complete: boolean
+}
+
+/** What `astera chats answer` got back. `not-open`: no such prompt (answered already, or never was).
+ *  `not-held`: this side is not the session's writer. `question`: a question card, answered only in
+ *  Astera (plan ruling P6). */
+export type ChatAnswerResult = { answered: true } | { answered: false; reason: 'not-open' | 'not-held' | 'question' }
+
+/** Every open request of one session as prompt rows, in the order given (the one on screen first). */
+export function chatPromptsOf(sessionId: string, requests: readonly ChatRequest[]): ChatPrompt[] {
+  return requests.map((r) => ({
+    sessionId,
+    id: r.id,
+    kind: r.kind,
+    tool: r.kind === 'approval' ? r.about.tool : null,
+    summary: chatPendingOf(r)!.summary
+  }))
+}
+
 /**
  * The last `n` turns of the file, oldest first. A missing file is `[]`: a Claude conversation's
  * transcript is written with its first turn, so a brand-new session has none yet.

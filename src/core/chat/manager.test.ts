@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import path from 'node:path'
 import type { Account, ScheduleConfig, SessionInfo } from '../types'
 import type { Provider } from '../providers/meta'
@@ -220,7 +220,8 @@ describe('ChatSessionManager.spawn', () => {
         cwd: 'D:/proj',
         title: 'proj',
         provider: 'codex',
-        bypassPermissions: false
+        bypassPermissions: false,
+        unattendedPermission: 'hold'
       }
     })
 
@@ -252,7 +253,8 @@ describe('ChatSessionManager.spawn', () => {
         cwd: 'D:/proj',
         title: 'proj',
         provider: 'claude',
-        bypassPermissions: false
+        bypassPermissions: false,
+        unattendedPermission: 'hold'
       }
     })
 
@@ -1000,5 +1002,103 @@ describe('command delegation', () => {
     await expect(manager.send('nope', 'hi')).resolves.toBeUndefined()
     await expect(manager.interrupt('nope')).resolves.toBeUndefined()
     await expect(manager.listModels('nope')).resolves.toEqual([])
+  })
+})
+
+describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', () => {
+  it('writes the unattended policy into every note, hold by default', () => {
+    const { manager, spawned } = setup()
+    manager.spawn({ account: claudeAccount, cwd: 'D:/p' })
+    manager.spawn({ account: claudeAccount, cwd: 'D:/p', unattendedPermission: 'deny-after-60s' })
+    expect(spawned[0].opts.meta?.restore.unattendedPermission).toBe('hold')
+    expect(spawned[1].opts.meta?.restore.unattendedPermission).toBe('deny-after-60s')
+  })
+
+  it('writes the chosen model at spawn and on every pick', async () => {
+    const { manager, spawned } = setup()
+    const info = manager.spawn({ account: claudeAccount, cwd: 'D:/p', model: 'opus' })
+    expect(spawned[0].opts.meta?.restore.chosenModel).toBe('opus')
+    await manager.setModel(info.id, 'sonnet', null)
+    expect(spawned[0].proc.notes).toContainEqual({ chosenModel: 'sonnet' })
+  })
+
+  it('carries a roll extra into the note: rolledFrom, the snapshot, the mark', () => {
+    const { manager, spawned } = setup()
+    const roll = { v: 1 } as never
+    manager.spawn({ account: claudeAccount, cwd: 'D:/p', restoreExtra: { rolledFrom: 'old', roll, rolledBy: 'host' } })
+    expect(spawned[0].opts.meta?.restore).toMatchObject({ rolledFrom: 'old', roll, rolledBy: 'host' })
+  })
+
+  it('marks the carry-on sent before it writes the turn (P4)', async () => {
+    const order: string[] = []
+    const factory: ProcFactory = () => {
+      const p = new FakeProc()
+      p.remember = (patch) => order.push(`note ${JSON.stringify(patch)}`)
+      return p
+    }
+    const createAdapter: NonNullable<ChatManagerDeps['createAdapter']> = (a) => {
+      a.proc.onLine(() => {})
+      return {
+        start: () => Promise.resolve(),
+        send: (text) => { order.push(`send ${text}`); return Promise.resolve() },
+        interrupt: () => Promise.resolve(), answer: () => Promise.resolve(), setModel: () => Promise.resolve(),
+        setPermissionMode: () => Promise.resolve(), listPermissionModes: () => Promise.resolve([]),
+        listModels: () => Promise.resolve([]), state: () => ({}) as ChatState, on: () => () => {}, kill: () => {}
+      }
+    }
+    const manager = new ChatSessionManager({ factory, descriptors: makeDescriptors('win32'), homeDir: 'C:\\Users\\tester', platform: 'win32', version: '1.0.0', log: () => {}, createAdapter })
+    const info = manager.spawn({ account: claudeAccount, cwd: 'D:/p', initialPrompt: 'carry on' })
+    await manager.started(info.id)
+    expect(order).toEqual(['note {"carrySent":true}', 'send carry on'])
+  })
+
+  it('records the carry-on and that it is unsent in the new note', () => {
+    const { manager, spawned } = setup()
+    manager.spawn({ account: claudeAccount, cwd: 'D:/p', initialPrompt: 'carry on' })
+    expect(spawned[0].opts.meta?.restore).toMatchObject({ carryOn: 'carry on', carrySent: false })
+  })
+
+  it('writes hostStarting when asked, and started() settles even when start rejects', async () => {
+    const { manager, spawned } = setup('win32', true)
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/p', hostStarting: true })
+    expect(spawned[0].opts.meta?.restore.hostStarting).toBe(true)
+    await expect(manager.started(info.id)).resolves.toBeUndefined()
+  })
+
+  it('adopts the chosen model and the policy back from the note (P14)', () => {
+    const { manager } = setup()
+    const info = manager.adopt({
+      id: 'c1', proc: new FakeProc(), truncated: false,
+      restore: { accountId: 'acc-cl', cwd: 'D:/p', title: 't', provider: 'claude', chosenModel: 'opus', unattendedPermission: 'deny-after-60s' }
+    })
+    expect(info?.kind).toBe('chat')
+    expect(manager.chosenModelOf('c1')).toBe('opus')
+    expect(manager.unattendedOf('c1')).toBe('deny-after-60s')
+    expect(manager.state('c1')?.unattendedPermission).toBe('deny-after-60s')
+  })
+
+  it('sets the policy, writes it, and refuses an unknown id', () => {
+    const { manager, spawned } = setup()
+    const info = manager.spawn({ account: claudeAccount, cwd: 'D:/p' })
+    expect(manager.setUnattendedPermission(info.id, 'deny-after-60s')).toBe(true)
+    expect(spawned[0].proc.notes).toContainEqual({ unattendedPermission: 'deny-after-60s' })
+    expect(manager.setUnattendedPermission('nope', 'hold')).toBe(false)
+    expect(manager.unattendedOf(undefined)).toBe('hold')
+  })
+
+  it('hands out every open request, and forgets a session', () => {
+    const { manager } = setup()
+    const info = manager.spawn({ account: claudeAccount, cwd: 'D:/p' })
+    expect(manager.pendingOf(info.id)).toEqual([])
+    manager.forget(info.id)
+    expect(manager.has(info.id)).toBe(false)
+    expect(manager.pendingOf(info.id)).toEqual([])
+  })
+
+  it('builds the child env from baseEnv when one is given', () => {
+    const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
+    const manager = new ChatSessionManager({ factory, descriptors: makeDescriptors('win32'), homeDir: 'C:\\Users\\tester', platform: 'win32', version: '1', log: () => {}, baseEnv: { ONLY_HERE: '1' }, createAdapter: makeAdapterFactory().createAdapter })
+    manager.spawn({ account: claudeAccount, cwd: 'D:/p' })
+    expect(factory.mock.calls[0][2].env.ONLY_HERE).toBe('1')
   })
 })

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, copyFileSync, writeFileSync, appendFileSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { chatTurnOf, chatPendingOf, readChatTurns, CHAT_TURNS_MAX } from './chatRead'
+import { chatTurnOf, chatPendingOf, chatPromptsOf, readChatTurns, CHAT_TURNS_MAX } from './chatRead'
 import { findClaudeTranscript } from '../history/strategies/claude'
 
 const FIXTURES = path.join(__dirname, '..', 'history', 'fixtures')
@@ -154,5 +154,16 @@ describe('findClaudeTranscript', () => {
     writeFileSync(path.join(cfg, 'projects', 'A', 'th-1.jsonl'), main.replaceAll('"isSidechain":false', '"isSidechain":true'))
     writeFileSync(path.join(cfg, 'projects', 'B', 'th-1.jsonl'), main)
     expect(await findClaudeTranscript(cfg, 'th-1')).toBe(path.join(cfg, 'projects', 'B', 'th-1.jsonl'))
+  })
+})
+
+describe('chatPromptsOf', () => {
+  it('names the session, the id, the kind, the tool and the one-line summary', () => {
+    const approval = { id: 'r1', kind: 'approval' as const, about: { tool: 'Bash', lines: ['rm -rf out'] }, decisions: ['accept' as const, 'decline' as const] }
+    const question = { id: 'r2', kind: 'question' as const, form: { questions: [{ question: 'Which?', options: [], multiSelect: false }] } as never }
+    expect(chatPromptsOf('c1', [approval, question])).toEqual([
+      { sessionId: 'c1', id: 'r1', kind: 'approval', tool: 'Bash', summary: 'Bash: rm -rf out' },
+      { sessionId: 'c1', id: 'r2', kind: 'question', tool: null, summary: 'Which?' }
+    ])
   })
 })

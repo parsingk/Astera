@@ -350,6 +350,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
       Promise.resolve(CLAUDE_PERMISSION_MODES.map((key) => ({ key, label: '' }))),
     listModels: () => safe(doListModels()),
     state: () => core.snapshot(),
+    pending: () => core.openRequests(),
     on: (fn) => core.on(fn),
     kill: () => proc.kill()
   }

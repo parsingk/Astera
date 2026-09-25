@@ -20,7 +20,10 @@ import type { ProcFactory, ProcLike } from '../sessions/proc'
 import { cliEnvFor } from '../sessions/cliEnv'
 import { buildCodexAppServerCommand, buildClaudeChatCommand } from '../sessions/commands'
 import type { PtyMeta } from '../host/protocol'
-import type { ChatAdapter, ChatAnswer, ChatEvent, ChatState, PermissionMode, PermissionModeChoice } from './types'
+import type { ChatAdapter, ChatAnswer, ChatEvent, ChatRequest, ChatState, PermissionMode, PermissionModeChoice, UnattendedPermission } from './types'
+import { isUnattendedPermission } from './types'
+import { MAX_SNAPSHOT_PROMPT_CHARS, type RollSpawnExtra } from '../rolling/snapshot'
+import { chatInfoFromNote } from '../sessions/noteInfo'
 import type { ModelDescriptor } from '../models/types'
 import { BYPASS_ENV, looksLikeRefusal, watchFirstLine, type BypassSignal } from '../sessions/retryBypass'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
@@ -38,7 +41,13 @@ export interface ChatManagerDeps {
   log(m: string): void
   /** Test injection; default createClaudeAdapter / createCodexAdapter, picked by provider. */
   createAdapter?(a: { proc: ProcLike; mode: AdapterMode; version: string; log(m: string): void; provider: Provider }): ChatAdapter
+  /** The environment a child's is built from. Default `process.env`; the Host passes its own, which is
+   *  not the app's. */
+  baseEnv?: NodeJS.ProcessEnv
 }
+
+/** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
+export type ChatSpawnOpts = Parameters<ChatSessionManager['spawn']>[0]
 
 /** What `respawnWithBypass` needs to spawn the exact same session again — everything `spawn()` built
  *  from its `opts` before those went out of scope, plus the arguments `adapter.start` was called with.
@@ -125,6 +134,12 @@ interface LiveChatSession {
    *  event already carried. Reset to `false` by every fresh `track()` — a session that is running
    *  again (whether from a confirmed retry or a plain new spawn) has nothing to offer a button about. */
   bypassOffer: boolean
+  /** chat takeover C3: what this session does with a prompt nobody answers while the Host is its
+   *  writer. Written into the note at spawn and on every change, read back by `adopt` (P14). */
+  unattended: UnattendedPermission
+  /** Settles once `adapter.start` and the carry-on send after it have settled, whichever way. Never
+   *  rejects: the Host waits on it before telling the app about a proc it spawned (P5). */
+  started: Promise<void>
 }
 
 export class ChatSessionManager {
@@ -165,6 +180,14 @@ export class ChatSessionManager {
      *  consent at the roll boundary is the same silent-override harm S7 forbids, just at a different
      *  door, and the person already said yes once for this chain. */
     startWithBypass?: boolean
+    /** chat takeover C3: the unattended policy, written into the note. Absent is 'hold'. */
+    unattendedPermission?: UnattendedPermission
+    /** Extra keys for the note, merged into `meta.restore` **before** the manager's own keys so those
+     *  always win (S6 R6, the pty manager's rule): a roll's `rolledFrom` and snapshot, the Host's mark. */
+    restoreExtra?: RollSpawnExtra
+    /** plan ruling P5: the Host spawned this proc and is its writer until its handshake and carry-on
+     *  settle. Written into the note as `hostStarting: true`; the Host clears it. */
+    hostStarting?: boolean
   }): SessionInfo {
     const provider = providerOf(opts.account)
     const descriptor = descriptorOf(this.deps.descriptors, opts.account)
@@ -176,13 +199,14 @@ export class ChatSessionManager {
     const resumeThreadId = opts.resumeThreadId
     const { schedule, slackNotify, rollAccountIds, rollPrompt } = opts
     const initialPrompt = opts.initialPrompt
+    const unattended: UnattendedPermission = opts.unattendedPermission ?? 'hold'
 
     // design F5 fix round 1: BYPASS_ENV rides here, not just on a manual retry's respawn — a rolling
     // respawn whose chain was already granted the bypass has to keep it (opts.startWithBypass, set by
     // index.ts's roll callbacks from `bypassedOf(oldId)`). Still never on a fresh, first spawn: that
     // path never passes `startWithBypass` at all, so S7's default holds exactly as before.
     const env = {
-      ...cliEnvFor({ base: process.env, account: opts.account, descriptor, homeDir: this.deps.homeDir }),
+      ...cliEnvFor({ base: this.deps.baseEnv ?? process.env, account: opts.account, descriptor, homeDir: this.deps.homeDir }),
       ...(opts.startWithBypass ? BYPASS_ENV : {})
     }
     // Codex resumes over the app-server protocol (thread/resume, sent by the adapter once the process is
@@ -196,6 +220,7 @@ export class ChatSessionManager {
       kind: 'chat',
       id,
       restore: {
+        ...(opts.restoreExtra ?? {}),
         accountId: opts.account.id,
         cwd: opts.cwd,
         title,
@@ -210,7 +235,17 @@ export class ChatSessionManager {
         ...(rollPrompt === undefined ? {} : { rollPrompt }),
         // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
         // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
-        ...(opts.startWithBypass ? { bypassedToolchain: true } : {})
+        ...(opts.startWithBypass ? { bypassedToolchain: true } : {}),
+        // chat takeover: what a Host needs to carry this session on. The policy is always written —
+        // its presence is how a Host tells a chat-takeover-aware app's proc from an older one's (P3).
+        unattendedPermission: unattended,
+        ...(typeof opts.model === 'string' ? { chosenModel: opts.model } : {}),
+        // P4: the carry-on and that it is not yet sent, so whoever writes it after a writer change
+        // writes it at most once. A prompt too long for the note is not carried (the snapshot's bound).
+        ...(initialPrompt !== undefined && initialPrompt.length <= MAX_SNAPSHOT_PROMPT_CHARS
+          ? { carryOn: initialPrompt, carrySent: false }
+          : {}),
+        ...(opts.hostStarting ? { hostStarting: true } : {})
       }
     }
     // Wrapped before the adapter ever sees it (design F5 / Task 7): `onLine` takes one subscriber, so
@@ -244,16 +279,19 @@ export class ChatSessionManager {
       sawLine: watched.sawLine,
       retry: { file, args, cwd: opts.cwd, env, meta, provider, startArgs, ...(initialPrompt === undefined ? {} : { initialPrompt }) },
       managerSignal: opts.bypassSignal ?? null,
-      bypassed: opts.startWithBypass === true
+      bypassed: opts.startWithBypass === true,
+      unattended
     })
-    void adapter
+    const started = adapter
       .start(startArgs)
       .then(() => {
         // A rolling respawn's carry-on prompt (spec §8.2): the first turn, sent only once the handshake
         // has settled — Claude's `initialize`, Codex's `thread/start` or `thread/resume` — because
         // Codex refuses a turn before its thread exists and Claude would otherwise take the frame ahead
-        // of the initialize it is still answering. Never on the note: a restart must not re-send it.
+        // of the initialize it is still answering. The note carries it only with its sent-marker (P4):
+        // marked sent before the write, so a writer change never types it twice.
         if (initialPrompt === undefined) return
+        this.remember(id, { carrySent: true })
         return adapter.send(initialPrompt).catch((err: unknown) => {
           this.deps.log(`chat initial prompt failed session=${id}: ${err instanceof Error ? err.message : String(err)}`)
         })
@@ -261,6 +299,12 @@ export class ChatSessionManager {
       .catch((err: unknown) => {
         this.deps.log(`chat adapter start failed: ${err instanceof Error ? err.message : String(err)}`)
       })
+      .then(
+        () => undefined,
+        () => undefined
+      )
+    const live = this.sessions.get(id)
+    if (live) live.started = started
     return { ...info }
   }
 
@@ -268,12 +312,10 @@ export class ChatSessionManager {
    *  an invented session would be worse than one the app admits it lost (mirrors SessionManager.adopt's
    *  own reasoning). */
   adopt(a: { id: string; proc: ProcLike; restore: Record<string, unknown>; truncated: boolean }): SessionInfo | null {
+    const info = chatInfoFromNote({ kind: 'chat', id: a.id, restore: a.restore })
+    if (!info) return null
     const r = a.restore
     const str = (k: string): string | undefined => (typeof r[k] === 'string' ? (r[k] as string) : undefined)
-    const accountId = str('accountId')
-    const cwd = str('cwd')
-    const title = str('title')
-    if (!accountId || !cwd || !title) return null
     const threadId = str('threadId') ?? null
     const rolloutPath = str('rolloutPath') ?? null
     // A note written before Claude support (slice 3) carries no `provider` at all — every one of those
@@ -288,36 +330,12 @@ export class ChatSessionManager {
     // whatever a Host wrote, possibly an older build's, and a shape this one cannot use is no ids at all
     // rather than a reason to lose the session.
     const answered = Array.isArray(r.answered) ? r.answered.filter((v): v is string => typeof v === 'string') : []
-
-    const info: SessionInfo = {
-      id: a.id,
-      accountId,
-      cwd,
-      status: 'running',
-      title,
-      kind: 'chat',
-      // The bypass box the session was started with. It is in the note (spawn writes it), and without
-      // it a session taken back after a restart reads as "asks for permission" in every place that
-      // shows the flag — a promise the running process is not keeping.
-      ...(typeof r.bypassPermissions === 'boolean' ? { bypassPermissions: r.bypassPermissions } : {}),
-      // resumeSessionId is the codex-side id the rest of the app keys on (the scheduler's store key,
-      // the rollout watcher). `ready` sets both for a thread that is still starting; a note that
-      // already names the thread must not have to wait for that to say what it is.
-      ...(threadId ? { threadId, resumeSessionId: threadId } : {}),
-      ...(typeof r.slackNotify === 'boolean' ? { slackNotify: r.slackNotify } : {}),
-      // A chain with a non-string member is dropped whole rather than filtered — a chain is an ordered
-      // promise, and half of one is a different promise.
-      ...(Array.isArray(r.rollAccountIds) && r.rollAccountIds.every((x) => typeof x === 'string')
-        ? { rollAccountIds: [...(r.rollAccountIds as string[])] }
-        : {}),
-      ...(typeof r.rollPrompt === 'string' ? { rollPrompt: r.rollPrompt } : {})
-    }
+    // P14: the person's model pick and the unattended policy, read back from the note (spawn and every
+    // change write them). A note from before either existed reads as no pick and 'hold'.
+    const chosenModel = typeof r.chosenModel === 'string' ? r.chosenModel : null
+    const unattended: UnattendedPermission = isUnattendedPermission(r.unattendedPermission) ? r.unattendedPermission : 'hold'
 
     const adapter = this.makeAdapter(a.proc, { mode: 'adopt', threadId, rolloutPath, truncated: a.truncated, answered }, provider)
-    // Null, not a guess: an adopted session is one the app found already running after a restart, and
-    // nothing it left behind says which model a person picked in it. A roll from here starts the next
-    // process on the CLI's default, which is what it did for every session before this existed.
-    //
     // design F5 fix round 1 (Critical 2): `bypassedToolchain` is read back the same defensive way
     // every other note field on this method is — a note is whatever a Host wrote, possibly an older
     // build's that never had this key at all, and an absent key must read as `false`, never a guess.
@@ -325,16 +343,18 @@ export class ChatSessionManager {
     // running when this app found it, so the offer's own preconditions (§ its own doc) can never hold
     // for it either way — there is nothing here for the durable mark to interact with beyond staying
     // visible to someone reading this session's results later.
-    this.track(a.id, info, a.proc, adapter, null, {
+    this.track(a.id, info, a.proc, adapter, chosenModel, {
       spawnAt: Date.now(),
       sawLine: () => true,
       retry: null,
       managerSignal: null,
-      bypassed: r.bypassedToolchain === true
+      bypassed: r.bypassedToolchain === true,
+      unattended
     })
     // Adopt mode's start() resolves at once (see codexAdapter.ts's doStart) — bypass is meaningless
     // here (a running thread was not just started with a bypass flag) so a neutral false is passed.
-    void adapter.start({ cwd, bypass: false }).catch((err: unknown) => {
+    // `started` stays the resolved promise `track` gave it: an adopted session carries no carry-on.
+    void adapter.start({ cwd: info.cwd, bypass: false }).catch((err: unknown) => {
       this.deps.log(`chat adapter adopt failed: ${err instanceof Error ? err.message : String(err)}`)
     })
     return { ...info }
@@ -422,6 +442,8 @@ export class ChatSessionManager {
     // call is still in flight is still the person's choice. A refusal leaves it set, which is the
     // lesser wrong — the alternative loses a choice the CLI may well have taken.
     live.chosenModel = model
+    // P14: into the note too, so an app restart (adopt) or a Host takeover still knows the pick.
+    live.proc.remember?.({ chosenModel: model })
     return live.adapter.setModel(model, effort)
   }
 
@@ -463,6 +485,7 @@ export class ChatSessionManager {
       ...live.adapter.state(),
       outlivesApp: live.proc.outlivesApp === true,
       notice: live.notice,
+      unattendedPermission: live.unattended,
       ...(live.bypassed ? { bypassed: true } : {}),
       ...(live.bypassOffer ? { bypassOffer: true, ...(live.managerSignal ? { bypassSignal: live.managerSignal } : {}) } : {})
     }
@@ -499,6 +522,7 @@ export class ChatSessionManager {
       retry: RetryMaterials | null
       managerSignal: BypassSignal
       bypassed: boolean
+      unattended?: UnattendedPermission
     }
   ): void {
     const off = adapter.on((e) => this.handleEvent(id, e))
@@ -515,7 +539,10 @@ export class ChatSessionManager {
       sawLine: retryState?.sawLine ?? (() => true),
       retry: retryState?.retry ?? null,
       managerSignal: retryState?.managerSignal ?? null,
-      bypassed: retryState?.bypassed ?? false
+      bypassed: retryState?.bypassed ?? false,
+      unattended: retryState?.unattended ?? 'hold',
+      // Replaced by `spawn` and `respawnWithBypass` with their own start chain right after this.
+      started: Promise.resolve()
     })
   }
 
@@ -532,6 +559,50 @@ export class ChatSessionManager {
    *  session that is not here, mirroring `chosenModelOf`'s own null. */
   bypassedOf(id: string): boolean {
     return this.sessions.get(id)?.bypassed ?? false
+  }
+
+  /** Merges `patch` into the session's note. Unknown id: no-op. */
+  remember(id: string, patch: Record<string, unknown>): void {
+    this.sessions.get(id)?.proc.remember?.(patch)
+  }
+
+  /** Drops the session without touching its process: its adapter stops being heard and the id is no
+   *  longer known here. For a caller handing the proc on to someone else. Unknown id: no-op. */
+  forget(id: string): void {
+    const live = this.sessions.get(id)
+    if (!live) return
+    live.off()
+    this.sessions.delete(id)
+  }
+
+  /** Every open server request of the session, the one on screen first. Empty for an unknown id. An
+   *  adapter without `pending` (a test's) answers its one visible request. */
+  pendingOf(id: string): ChatRequest[] {
+    const live = this.sessions.get(id)
+    if (!live) return []
+    if (live.adapter.pending) return live.adapter.pending()
+    const request = live.adapter.state().request
+    return request ? [request] : []
+  }
+
+  /** The session's unattended policy: 'hold', the safe default, for an unknown id or none. */
+  unattendedOf(id: string | undefined): UnattendedPermission {
+    return id === undefined ? 'hold' : (this.sessions.get(id)?.unattended ?? 'hold')
+  }
+
+  /** Sets the unattended policy and writes it into the note. False for an unknown id. */
+  setUnattendedPermission(id: string, v: UnattendedPermission): boolean {
+    const live = this.sessions.get(id)
+    if (!live) return false
+    live.unattended = v
+    live.proc.remember?.({ unattendedPermission: v })
+    return true
+  }
+
+  /** Settles once the session's `start` and carry-on send have settled; at once for an unknown id or an
+   *  adopted session. Never rejects. */
+  started(id: string): Promise<void> {
+    return this.sessions.get(id)?.started ?? Promise.resolve()
   }
 
   private handleEvent(id: string, e: ChatEvent): void {
@@ -670,9 +741,10 @@ export class ChatSessionManager {
       // not once `adapter.start()` resolves below — `bypassedOf()` and a remount both have to see it
       // immediately, and it is what stops this same attempt from offering the button again if it too
       // dies in silence (`handleEvent`'s own comment on the `bypassOffer` computation).
-      bypassed: true
+      bypassed: true,
+      unattended: live.unattended
     })
-    void adapter
+    const started = adapter
       .start(materials.startArgs)
       .then(() => {
         const now = this.sessions.get(id)
@@ -685,7 +757,8 @@ export class ChatSessionManager {
         // The only delivery channel a chat chain's handover briefing has (claudeCoordinator.ts / codexCoordinator.ts
         // both skip their own auto-prompt for chat, saying the spawn carries it). The original
         // `spawn()` continuation never ran this — its `adapter.start` rejected instead of resolving —
-        // so this is not a re-send, it is the only send.
+        // so this is not a re-send, it is the only send. Marked sent first, as `spawn` does (P4).
+        this.remember(id, { carrySent: true })
         return adapter.send(materials.initialPrompt).catch((err: unknown) => {
           this.deps.log(`chat initial prompt failed session=${id}: ${err instanceof Error ? err.message : String(err)}`)
         })
@@ -693,5 +766,11 @@ export class ChatSessionManager {
       .catch((err: unknown) => {
         this.deps.log(`chat adapter bypass retry failed: ${err instanceof Error ? err.message : String(err)}`)
       })
+      .then(
+        () => undefined,
+        () => undefined
+      )
+    const now = this.sessions.get(id)
+    if (now) now.started = started
   }
 }
