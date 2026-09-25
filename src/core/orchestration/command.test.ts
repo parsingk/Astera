@@ -844,9 +844,37 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
       account: 'acc1',
       worktree: 'current'
     })
-    expect(r.status).toBe(404)
+    // 400, not 404: the Task named is there, only its Run is not (the same answer `send` gives)
+    expect(r.status).toBe(400)
     expect(JSON.stringify(r.body)).toContain('unknown run')
     expect(startWorkerCalls).toBe(0)
+  })
+
+  // The Task is there, the Run it points at is not (orchestration.json is edited by hand). `send`
+  // answers this with 400 (applyWorkerDone's refusal is not marked missing); worker-start answered 404
+  // until 2026-09-25, so the same fact exited 4 from one command and 2 from the other.
+  it('Task 가 가리키는 회차가 없으면 worker-start 는 400 으로 거절하고 startWorker 를 부르지 않는다', async () => {
+    let startWorkerCalls = 0
+    const deps = {
+      ...makeDeps(),
+      startWorker: async () => {
+        startWorkerCalls++
+        return { sessionId: 'sessX', cwd: 'D:/p', specPath: 'D:/p/orch/specs/a.md' }
+      }
+    }
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await deps.setState({
+      ...deps.getState(),
+      tasks: deps.getState().tasks.map((t) => (t.id === taskId ? { ...t, runId: 'run_gone' } : t))
+    })
+    const before = deps.getState()
+    const r = await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    expect(r).toEqual({ status: 400, body: { error: `unknown run for task: ${taskId}` } })
+    expect(startWorkerCalls).toBe(0)
+    expect(deps.getState()).toBe(before)
   })
 
   // 회차는 운영이 되어야 한다(설계 2절) — 위의 거절이 회차까지 막으면 예약은 아무것도 돌리지 못한다
