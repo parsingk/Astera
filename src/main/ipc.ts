@@ -3268,7 +3268,7 @@ export function registerIpc(
           // Final review M3: only "no open request" is not-open; an EPIPE or a refused write is not-held.
           const failed = chatAnswerFailureOf(err)
           if (failed.answered === false && failed.reason === 'not-held')
-            hostLog(`host: chat ${sid}: answering ${rid} failed: ${String(err)}`)
+            orchLog(`chat ${sid}: answering ${rid} failed: ${String(err)}`)
           return failed
         }
       },
