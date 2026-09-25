@@ -2,7 +2,7 @@
 // `status()`: nothing else in slice 1 depends on the Host being there, and every failure ends here,
 // as a sentence somebody can read, rather than reaching a caller.
 import net from 'node:net'
-import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, type ClientMessage, type HostMessage } from '../../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, type ClientMessage, type HostMessage } from '../../core/host/protocol'
 import { HOST_UNRESPONSIVE_MS, PING_MS } from '../../core/host/unresponsive'
 import { hostIsOutdated, hostSpeaksPing } from './outdated'
 import { encodeLine, createLineReader } from '../../host/framing'
@@ -505,14 +505,15 @@ export class HostClient {
     // `yields` hands the Host the Job worktrees (host S3 ruling R4): this app writes worktrees.json
     // through a Host that announces `worktrees` and understands `git-op`. `dispatch` (S4+S5 §4.2)
     // hands it the Jobs: a Host that announces `dispatch` drives them, and this app's scheduler stands
-    // down in front of it (ipc.ts's `hostDrives`). An older Host ignores the name, and this app goes on
+    // down in front of it (ipc.ts's `hostDrives`). `rolling` (S6): a Host that announces it rolls the
+    // sessions it owns, and this app shows them. An older Host ignores the names, and this app goes on
     // driving in front of it (D5).
     this.send({
       t: 'hello',
       protocol: this.deps.protocol ?? HOST_PROTOCOL,
       app: this.deps.appVersion,
       role: 'app',
-      yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH]
+      yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING]
     })
   }
 

@@ -10,7 +10,8 @@ import {
   HOST_FEATURE_PING,
   HOST_FEATURE_SPAWN,
   HOST_FEATURE_WORKTREES,
-  HOST_FEATURE_DISPATCH
+  HOST_FEATURE_DISPATCH,
+  HOST_FEATURE_ROLLING
 } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
@@ -73,4 +74,15 @@ export function hostSpeaksDispatch(status: {
   features: readonly string[]
 }): boolean {
   return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_DISPATCH)
+}
+
+/** The connected Host rolls the sessions it owns (S6). Read live, as hostSpeaksDispatch, and by the same
+ *  rule: an unresponsive Host still rolls what it took, so the app keeps leaving those chains alone
+ *  until it answers, is replaced, or the connection drops. */
+export function hostSpeaksRolling(status: {
+  connected: boolean
+  unresponsive?: boolean
+  features: readonly string[]
+}): boolean {
+  return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_ROLLING)
 }

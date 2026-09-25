@@ -157,14 +157,15 @@ describe('HostClient', () => {
     await host.close()
   })
 
-  // S4 (§4.2): the app hands the Host dispatch as well. An older Host ignores the name (D5).
-  it('says it yields dispatch as well as worktrees', async () => {
+  // S4 (§4.2): the app hands the Host dispatch as well, and S6 (R3) rolling. An older Host ignores
+  // the names (D5).
+  it('says it yields dispatch and rolling as well as worktrees', async () => {
     const addr = addressFor('yields-dispatch')
     const host = await rawHost(addr, [])
     const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
     c.start()
     await waitFor(() => host.got.some((m) => m.t === 'hello'))
-    expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toEqual(['worktrees', 'dispatch'])
+    expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toEqual(['worktrees', 'dispatch', 'rolling'])
     await c.stop()
     await host.close()
   })

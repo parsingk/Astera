@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch } from './outdated'
+import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling } from './outdated'
 
 describe('hostIsOutdated', () => {
   it('is true when the Host is strictly older than the app', () => {
@@ -85,5 +85,19 @@ describe('hostSpeaksDispatch', () => {
     expect(hostSpeaksDispatch({ connected: false, unresponsive: true, features: ['spawn', 'worktrees', 'dispatch'] })).toBe(true)
     expect(hostSpeaksDispatch({ connected: false, unresponsive: true, features: ['spawn', 'worktrees'] })).toBe(false)
     expect(hostSpeaksDispatch({ connected: false, unresponsive: false, features: ['spawn', 'worktrees', 'dispatch'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksRolling', () => {
+  it('hostSpeaksRolling needs a connected Host that announced rolling', () => {
+    expect(hostSpeaksRolling({ connected: true, features: ['spawn', 'worktrees', 'dispatch', 'rolling'] })).toBe(true)
+    expect(hostSpeaksRolling({ connected: true, features: ['spawn', 'worktrees', 'dispatch'] })).toBe(false) // an S4+S5 Host
+    expect(hostSpeaksRolling({ connected: false, features: ['rolling'] })).toBe(false)
+  })
+  // The hostSpeaksDispatch rule: an unresponsive Host still rolls what it owns, so the app keeps yielding.
+  it('hostSpeaksRolling stays true while a Host that announced rolling is unresponsive', () => {
+    expect(hostSpeaksRolling({ connected: false, unresponsive: true, features: ['rolling'] })).toBe(true)
+    expect(hostSpeaksRolling({ connected: false, unresponsive: true, features: ['dispatch'] })).toBe(false)
+    expect(hostSpeaksRolling({ connected: false, unresponsive: false, features: ['rolling'] })).toBe(false)
   })
 })
