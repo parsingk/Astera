@@ -5509,13 +5509,15 @@ describe('jobs run / questions answer', () => {
     const runs = deps.getState().runs.filter((x) => x.jobId === jobId)
     expect(runs).toHaveLength(2)
     expect(runs[1].coordinatorSessionId).toBeUndefined()
-    expect((r.body as { error: string }).error).toContain(`astera run-start --run ${jobId}`)
+    // The Run's own id (U1): `run-start` takes it as that Run's ▶, and a scheduled Job's id would only
+    // release its gate.
+    expect((r.body as { error: string }).error).toContain(`astera run-start --run ${runs[1].id}`)
     // M6 (final review): one instruction. `jobs run` again is refused while this run is running.
     expect((r.body as { error: string }).error).toMatch(/not run `jobs run` again/)
     expect(r.body).toMatchObject({ jobId, runId: runs[1].id })
 
     // 그 오류가 말하는 재시도가 실제로 이 회차를 다시 겨눈다
-    const again = await call(deps, 'run-start', { run: jobId })
+    const again = await call(deps, 'run-start', { run: runs[1].id })
     expect(again.status).toBe(200)
     expect(deps.getState().runs.find((x) => x.id === runs[1].id)?.coordinatorSessionId).toBeDefined()
   })
@@ -6541,5 +6543,141 @@ describe('stopping a worker that is still starting', () => {
     expect((await call(deps, 'run-pause', { run: templateId })).status).toBe(200)
     expect(released).toEqual([])
     expect(deps.getState().dispatches[0].endedAt).toBeDefined()
+  })
+})
+
+// F65 and U1: a schedule firing behaves exactly like `jobs run` of that Job, and the ▶ on a Run row
+// (App.tsx's restartCoordinator) sends that Run's id to `run-start`.
+describe('a fired Run and the ▶ on a Run row (U1)', () => {
+  const coordDeps = (): OrchServerDeps & { state: OrchState; startCoordinator: ReturnType<typeof vi.fn> } => {
+    const startCoordinator = vi.fn(async (a: { runId: string }) => ({ sessionId: `coord-${a.runId}` }))
+    return Object.assign(makeDeps(), {
+      listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }],
+      startCoordinator
+    }) as never
+  }
+  /** A scheduled Job as the sidebar makes it (a coordinator account, `auto`), started once. */
+  const scheduled = async (deps: OrchServerDeps, coordinatorAccount?: string): Promise<string> => {
+    const r = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      auto: true,
+      schedule: { kind: 'daily', time: '09:00' },
+      ...(coordinatorAccount ? { coordinatorAccount } : {})
+    })
+    const jobId = (r.body as { id: string }).id
+    await call(deps, 'run-start', { run: jobId })
+    return jobId
+  }
+  const coordinatorOf = (deps: OrchServerDeps, runId: string): string | undefined =>
+    deps.getState().runs.find((r) => r.id === runId)?.coordinatorSessionId
+
+  it('run-spawn of a scheduled Job with a coordinator account starts that Run’s coordinator', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduled(deps, 'accA')
+    expect(deps.startCoordinator).not.toHaveBeenCalled() // '실행' only releases the gate
+    const r = await call(deps, 'run-spawn', { run: jobId })
+    expect(r.status).toBe(200)
+    const runId = (r.body as { id: string }).id
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(1)
+    expect(coordinatorOf(deps, runId)).toBe(`coord-${runId}`)
+  })
+
+  it('jobs run of a scheduled Job with a coordinator account does the same', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduled(deps, 'accA')
+    const r = await call(deps, 'jobs-run', { id: jobId })
+    expect(r.status).toBe(200)
+    const runId = (r.body as { id: string }).id
+    expect(coordinatorOf(deps, runId)).toBe(`coord-${runId}`)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(1)
+  })
+
+  it('a fired Run whose coordinator cannot start stays, and the answer names it', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduled(deps, 'accA')
+    deps.startCoordinator.mockRejectedValueOnce(new Error('spawn refused'))
+    const r = await call(deps, 'run-spawn', { run: jobId })
+    expect(r.status).toBe(400)
+    const runs = deps.getState().runs.filter((x) => x.jobId === jobId)
+    expect(runs).toHaveLength(1)
+    expect(runs[0].coordinatorSessionId).toBeUndefined()
+    expect(r.body).toMatchObject({ jobId, runId: runs[0].id })
+    expect((r.body as { error: string }).error).toMatch(/spawn refused/)
+  })
+
+  it('▶ on a fired Run’s row starts that Run’s coordinator (run-start takes a Run id)', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduled(deps, 'accA')
+    deps.startCoordinator.mockRejectedValueOnce(new Error('spawn refused'))
+    await call(deps, 'run-spawn', { run: jobId })
+    const runId = deps.getState().runs.find((x) => x.jobId === jobId)!.id
+    const r = await call(deps, 'run-start', { run: runId })
+    expect(r.status).toBe(200)
+    expect(coordinatorOf(deps, runId)).toBe(`coord-${runId}`)
+    // Pressed twice, it starts no second coordinator.
+    expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(2)
+  })
+
+  it('▶ on an older Run’s row of a Job with several Runs starts that Run’s coordinator, not the latest’s', async () => {
+    const deps = coordDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, coordinatorAccount: 'accA' })
+    const jobId = deps.getState().jobs[0].id
+    await call(deps, 'run-start', { run: jobId })
+    await call(deps, 'run-spawn', { run: jobId })
+    const [older, latest] = deps.getState().runs.filter((x) => x.jobId === jobId)
+    // Both coordinators gone (their tabs closed).
+    const s = deps.getState()
+    await deps.setState({ ...s, runs: s.runs.map(({ coordinatorSessionId: _gone, ...r }) => r) })
+    deps.startCoordinator.mockClear()
+    const r = await call(deps, 'run-start', { run: older.id })
+    expect(r.status).toBe(200)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(1)
+    expect(deps.startCoordinator.mock.calls[0][0]).toMatchObject({ runId: older.id })
+    expect(coordinatorOf(deps, older.id)).toBe(`coord-${older.id}`)
+    expect(coordinatorOf(deps, latest.id)).toBeUndefined()
+  })
+
+  it('run-start with a Run id of a Job that has no coordinator account starts nothing and answers 200', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduled(deps)
+    const r = await call(deps, 'run-spawn', { run: jobId })
+    const runId = (r.body as { id: string }).id
+    expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
+    expect(deps.startCoordinator).not.toHaveBeenCalled()
+  })
+})
+
+// A fire hands its Run to a coordinator while the rest of the state keeps moving: the loop places other
+// Runs, workers report. The coordinator's start is a long await, so the hand-over must land on the
+// state as it is by then, not on the one it read before.
+describe('the hand-over of a fired Run lands on the current state', () => {
+  it('a commit made while the coordinator starts is kept', async () => {
+    const deps = makeDeps()
+    const startCoordinator = vi.fn(async (a: { runId: string }) => {
+      // Something else commits in the meantime.
+      const s = deps.getState()
+      await deps.setState({ ...s, jobs: s.jobs.map((j) => ({ ...j, objective: 'changed meanwhile' })) })
+      return { sessionId: `coord-${a.runId}` }
+    })
+    Object.assign(deps, {
+      listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }],
+      startCoordinator
+    })
+    const c = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      auto: true,
+      coordinatorAccount: 'accA',
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const jobId = (c.body as { id: string }).id
+    await call(deps, 'run-start', { run: jobId })
+    const r = await call(deps, 'run-spawn', { run: jobId })
+    expect(r.status).toBe(200)
+    const runId = (r.body as { id: string }).id
+    expect(deps.getState().runs.find((x) => x.id === runId)?.coordinatorSessionId).toBe(`coord-${runId}`)
+    expect(deps.getState().jobs.find((j) => j.id === jobId)?.objective).toBe('changed meanwhile')
   })
 })

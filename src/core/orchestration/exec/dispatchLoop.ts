@@ -552,9 +552,18 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         const reply = await c.handle('run-spawn', {
           run: runId
         })
+        // run-spawn 은 `jobs run` 이 회차를 시작하는 그대로 시작한다(U1): 코디네이터 계정이 있으면 그
+        // 회차의 코디네이터를 띄운다. **그것만 실패했다면 회차는 이미 있다**(N7) — 답이 그 회차를
+        // `runId` 로 싣는다. 잃은 발화가 아니므로 다르게 적는다: 사람이 그 회차 줄의 ▶ 로 다시 띄운다.
+        const child = (reply.body as { runId?: unknown } | null)?.runId
+        if (reply.status >= 400 && typeof child === 'string')
+          log(
+            `scheduled run=${child} of job=${runId} has no coordinator — ${JSON.stringify(reply.body)}; ` +
+              'restart it from the Jobs list'
+          )
         // 실패한 발화는 잃는다 — 무장은 이미 다음 시각으로 옮겨졌으므로 다음 시각에 다시 시도한다.
         // 디스크가 찼거나 win32 에서 rename 이 잠긴 경우가 이 갈래다.
-        if (reply.status >= 400) log(`scheduled spawn failed run=${runId} status=${reply.status}`)
+        else if (reply.status >= 400) log(`scheduled spawn failed run=${runId} status=${reply.status}`)
         else log(`scheduled spawn run=${runId} child=${JSON.stringify(reply.body)}`)
       } catch (e) {
         log(`scheduled spawn failed run=${runId}: ${String(e)}`)

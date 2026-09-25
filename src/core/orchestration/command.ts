@@ -37,6 +37,7 @@ import {
   resumeSchedule,
   resumeRun,
   setRunWorktree,
+  placedByApp,
   type OrchState,
   type RepairTarget,
   type Res
@@ -818,6 +819,142 @@ export async function handleCommand(
     return okBody(r.value)
   }
 
+  /**
+   * Hands `target` to a coordinator started on `accountId` (U1): the Run worktree first, then the
+   * session, then **one** commit of `base` with the worktree recorded, the Job's `autoDispatch` dropped
+   * and the slot attached.
+   *
+   * **The one way a Run gets its coordinator.** `run-start` calls it for the sidebar's '실행' and for
+   * the ▶ on a Run row; `run-spawn` calls it for a fire and a later `jobs run`. A fire used to start no
+   * coordinator at all (F65) because that path had a copy of none of this; one body keeps the next
+   * path from being the one that forgets.
+   *
+   * **A failure commits nothing of `base`**, removes the worktree it just made, and answers 400. What
+   * `base` holds is the caller's: `run-start` passes its uncommitted release so a failure leaves
+   * `pendingStart` in place; `run-spawn` passes the state its Run is already committed in.
+   *
+   * **`rebase` puts the hand-over on the state as it is once the coordinator is up**, not on `base`.
+   * The start is a long await (a spawn deadline, the idle wait before the prompt), and the rest of the
+   * state keeps moving under it: the loop places other Runs, workers report. Committing `base` then
+   * would erase all of that. A caller whose `base` holds nothing uncommitted passes it: `run-spawn`,
+   * which a fire calls every time a schedule is due, and the ▶ on a Run row, and a Job-id `run-start`
+   * that has nothing to release. One that releases a gate or makes the first Run cannot, since those
+   * exist only in `base`, and keeps committing `base` as before.
+   */
+  const handToCoordinator = async (
+    base: OrchState,
+    job: Job,
+    target: JobRun,
+    accountId: string,
+    rebase = false
+  ): Promise<Reply> => {
+    // Both callers ask first and take their own no-coordinator path; this is for the compiler.
+    if (!deps.startCoordinator) return bad('starting a coordinator is not available in this build')
+    // **워크트리를 먼저 만든다.** 코디네이터를 띄운 뒤에 만들면 그 세션이 첫 명령을 부르는 사이에
+    // 워크트리 없는 Run 을 보게 된다. 실패하면 아래 spawn 실패와 같은 처리다 — 아무것도 바꾸지
+    // 않고 거절한다(run-start 라면 `pendingStart` 가 남는다).
+    let withWorktree = base
+    // **고아가 되지 않는다.** 아래에서 코디네이터가 못 뜨면 상태는 하나도 안 바뀌므로(주석대로),
+    // 방금 여기서 만든 폴더만 실제로 남는다 — 그 회차는 그 폴더를 다시 볼 길이 없다. 그래서 기억해
+    // 두었다가 코디네이터 실패에서 지운다(Host S3, risk 6).
+    let freshWorktree: string | null = null
+    if (!target.worktree && deps.makeRunWorktree) {
+      try {
+        const created = await deps.makeRunWorktree({
+          repoPath: job.cwd,
+          name: nameForRun({ id: job.id, objective: job.objective })
+        })
+        const recorded = setRunWorktree(withWorktree, target.id, created)
+        if (!recorded.ok) return bad(recorded.error)
+        withWorktree = recorded.state
+        freshWorktree = created
+      } catch (e) {
+        return bad(`could not create the run worktree: ${String(e)}`)
+      }
+    }
+    let sessionId: string
+    try {
+      const spawned = await deps.startCoordinator({
+        runId: target.id,
+        cwd: job.cwd,
+        accountId,
+        brief: buildHandoverPrompt({
+          runId: target.id,
+          objective: job.objective,
+          concurrency: job.concurrency ?? DEFAULT_CONCURRENCY,
+          // 같은 이유로 `s` 가 아니다 — '실행' 이 방금 베껴 넣은 Task 들이 그 스냅샷에는 없다.
+          taskCount: base.tasks.filter((t) => t.runId === target.id).length,
+          // policyOf 로 판정한다, target.convergence !== undefined 가 아니다 — 손으로 고친
+          // "convergence": null 은 !== undefined 로는 정책이 있다고 잘못 읽혀 코디네이터 브리핑이
+          // "수렴 중인 Task 는 건드리지 말라"는 문단을 얻는데, 다른 모든 관문(reconciler.ts,
+          // core/orchestration/exec/validation.ts 의 startValidation)은 이미 이 실수를 policyOf 로 고쳐 두었다 — 여기만 남아
+          // 있었다(전체 브랜치 리뷰, Finding 2).
+          // **`s` 가 아니라 방금 만든 회차가 들어 있는 상태로 묻는다.** `s` 는 명령 진입 시점의
+          // 스냅샷이라 이 회차가 없고, 그러면 policyOf 가 회차를 찾지 못해 정책이 걸린 Job 도
+          // "정책 없음" 으로 읽힌다 — 코디네이터가 수렴 절 없는 브리핑을 받는다.
+          convergence: policyOf(base, { runId: target.id }) !== null
+        })
+      })
+      sessionId = spawned.sessionId
+    } catch (e) {
+      // **`pendingStart` 를 그대로 둔다.** 걷어 버리면 실행 버튼이 사라져 사람이 다시 누를 수
+      // 없고, 운전자도 없는 Run 이 남는다 — 아무것도 돌지 않는데 화면은 시작한 것처럼 보인다.
+      // 그래서 이 실패는 상태를 하나도 바꾸지 않는다.
+      //
+      // **방금 만든 워크트리는 예외다 — 상태가 아니라 디스크에 남는다.** 상태를 안 바꾸므로 이
+      // 회차는 그 경로를 다시 보지 못하고, 그러면 `run-delete removeWorktrees` 도 결코 이 폴더를
+      // 겨누지 않는다: 아무도 지우지 않는 고아 워크트리다.
+      //
+      // **지우는 것 자체가 거절되거나 실패해도 이 400 은 절대 바뀌지 않는다**(fix round 1, I1).
+      // `deps.discardRunWorktree` 가 있으면 그것만 쓴다 — Host 쪽 배선은 그 실패를 결코
+      // `onAppRequired` 로 표시하지 않아, "코디네이터를 못 띄웠다"는 이 실패가 "앱이 필요하다"는
+      // 409 로 둔갑하지 않는다. 없으면(예: 앱이 직접 도는 옛 배선) `removeWorktrees` 로 대신한다 —
+      // 그쪽에는 그런 표시가 없으니 안전하다. 어느 쪽이든 실패는 로그만 남기고, 고아가 남았다는
+      // 말은 이 400 자신의 문구에 싣는다 — 사람이 볼 자연스러운 자리가 그것뿐이다.
+      let orphanNote = ''
+      if (freshWorktree) {
+        const orphan = freshWorktree
+        if (deps.discardRunWorktree) {
+          const { removed, inUse } = await deps.discardRunWorktree(orphan)
+          if (!removed)
+            orphanNote = inUse
+              ? ` — its fresh run worktree ${orphan} is still in use and was left behind`
+              : ` — its fresh run worktree ${orphan} could not be removed and was left behind`
+        } else if (deps.removeWorktrees) {
+          try {
+            const { failed } = await deps.removeWorktrees([orphan])
+            if (failed.length > 0) {
+              deps.log?.(`orphaned run worktree ${orphan} is still in use — left in place`)
+              orphanNote = ` — its fresh run worktree ${orphan} is still in use and was left behind`
+            }
+          } catch (removeErr) {
+            deps.log?.(`orphaned run worktree ${orphan} could not be removed: ${String(removeErr)}`)
+            orphanNote = ` — its fresh run worktree ${orphan} could not be removed and was left behind`
+          }
+        }
+      }
+      return bad(`could not start the coordinator: ${String(e)}${orphanNote}`)
+    }
+    // autoDispatch 는 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이
+    // 코드베이스는 해당 없는 칸을 두지 않는다(startRun 이 pendingStart 를 지우는 것과 같다). 계획의
+    // 칸이므로 Job 에서 지운다. 예약 Job 에는 처음부터 없다(run-create 가 주지 않는다).
+    let onto = withWorktree
+    if (rebase) {
+      onto = deps.getState()
+      if (freshWorktree) {
+        const recorded = setRunWorktree(onto, target.id, freshWorktree)
+        if (recorded.ok) onto = recorded.state
+        else deps.log?.(`run ${target.id}: its fresh run worktree ${freshWorktree} was not recorded: ${recorded.error}`)
+      }
+    }
+    const handed = onto.jobs.map((j) => {
+      if (j.id !== job.id) return j
+      const { autoDispatch: _drop, ...rest } = j
+      return rest
+    })
+    return commit(attachCoordinator({ ...onto, jobs: handed }, { runId: target.id, sessionId }))
+  }
+
   // **이 캐스트가 아래 표를 `astera agent-context` 의 명령 목록에 못 박는다**(cliAgentContext.ts).
   // `cmd` 는 여전히 아무 문자열이나 될 수 있고 — 모르는 명령은 아래 `default` 가 501 로 답한다 —
   // 좁힌 이름으로 가르는 것은 **이 switch 가 무엇을 다루기로 했는가** 쪽이다. 그래서 두 방향이 다
@@ -958,18 +1095,11 @@ export async function handleCommand(
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
             // 않는다** — 템플릿 자신은 돌지 않기 때문이다.
             //
-            // **자식 회차도 함께 못 돈다는 것이 이 줄의 오늘 결과다.** `autoDispatch` 는 이제 회차가
-            // 아니라 계획의 칸이고(types.ts — 회차마다 복사하던 `spawnScheduledRun` 은 없어졌다),
-            // 발화가 만든 회차는 이 템플릿 Job 을 그대로 쓰므로 `appDriven` 이 거짓이다. 이 주석은
-            // 한때 "자식은 spawnScheduledRun 이 켠다" 고 적고 있었는데, 그 함수와 함께 사실이 아니게
-            // 됐다.
-            //
-            // **여기를 바꾸려는 사람에게**(ruling F65): 예약 Job 에 `autoDispatch` 를 주면
-            // `state.ts` 의 `runGatedForTask` 에 있는 `job.schedule !== undefined` 가 그때부터 실제로
-            // 동작한다 — 그 줄이 거르는 것은 템플릿이 아니라 **발화가 만든 자식 회차**다(자식의
-            // `jobId` 가 템플릿의 것이므로). 그러면 그 회차의 검토가 `refuseIfRunGated` 로 가고,
-            // 사람이 읽는 Gate 문구는 "paused, a schedule template, or not yet started" 인데 셋 다
-            // 그 회차에 대해 거짓이다. 그 줄과 그 문구를 함께 손봐야 한다.
+            // **그래도 발화가 만든 회차는 돈다**(U1, F65). 누가 그 회차를 모는지는 여기가 아니라
+            // 회차를 만드는 순간에 정한다: 코디네이터 계정이 있으면 run-spawn 이 그 회차의 코디네이터를
+            // 띄우고, 없으면 startJobRun 이 그 회차에 `autoDispatch` 를 찍는다(JobRun.autoDispatch). 이
+            // 칸을 계획에 주지 않는 것은 그대로다. 디스크에 있는 예약 Job 들에는 이 칸이 없으므로,
+            // 계획의 칸에 기대는 규칙은 옮겨 적기 없이는 그 Job 들에 듣지 않는다(R2).
             ...(args.auto === true && schedule === undefined ? { autoDispatch: true } : {}),
             ...(schedule !== undefined ? { schedule } : {}),
             // `--auto` 는 "앱이 돌린다" 이고, 그 시작 시점은 사람이 정한다 — Task 를 하나 만드는
@@ -1064,41 +1194,35 @@ export async function handleCommand(
       // 원했다면 사이드바의 '실행' 이 그 버튼이다.
       const first = job.schedule === undefined && (job.pendingStart === true || latest === undefined)
       const reply = await handleCommand(deps, caller, first ? 'run-start' : 'run-spawn', { run: id })
-      if (reply.status < 200 || reply.status >= 300) return reply
-      // **carry 4 (R18, 사용자의 Q2): 뒤 회차도 앞 회차와 같이 코디네이터를 띄운다.** `first` 가
-      // 거짓이면 방금 부른 것은 `run-spawn` 뿐이라 회차만 생기고 아무도 그것을 몰지 않는다 —
-      // `run-start` 가 그 회차를 몰기 시작하는 자리이고, 앞 회차는 `first` 분기에서 이미 그것을
-      // 거쳤다. 이 계정·예약 조건은 `run-start` 자신이 코디네이터를 붙일지 거르는 조건과 같다
-      // (`accountId` 절) — 여기서 다시 걸러 두는 이유는 조건이 거짓일 때 `run-start` 를 괜히
-      // 다시 부르지 않기 위해서다(예약 템플릿의 게이트를 다시 걷는 것 자체는 무해하지만, 이
-      // 계획에는 걷힐 게이트가 없다).
+      // **carry 4 (R18, 사용자의 Q2), 그리고 U1: 뒤 회차도 앞 회차와 같이 코디네이터를 띄운다.** 그
+      // 일은 이제 `run-spawn` 자신이 한다(handToCoordinator) — 발화가 같은 명령을 부르므로, 예약의
+      // 회차와 `jobs run` 의 회차가 같은 몸통으로 시작한다. 예전에는 이 자리가 `run-spawn` 뒤에
+      // `run-start` 를 한 번 더 불렀고, 예약 Job 은 거기서 빠졌다.
       //
       // **N7 — 뒤 회차의 실패는 첫 회차의 실패가 아니다.** `run-spawn` 이 이미 그 회차를 커밋한
-      // 뒤이므로, 여기서 `run-start` 가 실패해도(코디네이터를 못 띄우거나 워크트리를 못 만들거나)
-      // 그 회차는 코디네이터 없이 그대로 남는다 — `run-start` 자신의 실패가 아무것도 커밋하지
-      // 않는 것과 다르다(그 케이스의 주석대로). 그래서 실패 문구에 재시도할 명령을 직접 박아
-      // 둔다: CLI 의 `nextSteps` 표는 명령이 아니라 종료 코드로 갈라(cliOutput.ts) 이 명령만의
-      // 다음 걸음을 싣지 못하고, `run-start` 는 언제나 그 계획의 최신 회차(방금 `run-spawn` 이
-      // 커밋한 그 회차)를 목표로 삼으므로 이 문구가 말하는 재시도는 실제로 이 회차를 다시 겨눈다.
-      if (!first && job.coordinatorAccountId && job.schedule === undefined && deps.startCoordinator) {
-        const runId = (reply.body as { id: string }).id
-        const coordReply = await handleCommand(deps, caller, 'run-start', { run: id })
-        if (coordReply.status < 200 || coordReply.status >= 300) {
-          const failed = coordReply.body as { error?: string }
-          return {
-            status: coordReply.status,
-            body: {
-              ...failed,
-              error:
-                // One instruction (final review M6): a refusal from a retiring Host also says "start
-                // it again", and the CLI's own step for such a refusal is the same command. Here the
-                // same command does not help: the new run has Tasks, so it counts as running and a
-                // second `jobs run` is refused as already running. The message names the one that works.
-                `${failed.error ?? ''}. The new run ${runId} has no coordinator. Do not run \`jobs run\` ` +
-                `again, which is refused while this run is running; start this one with: astera run-start --run ${id}`,
-              jobId: id,
-              runId
-            }
+      // 뒤이므로, 코디네이터를 못 띄워도(세션이 거절되거나 워크트리를 못 만들어도) 그 회차는
+      // 코디네이터 없이 그대로 남는다 — `run-start` 자신의 실패가 아무것도 커밋하지 않는 것과
+      // 다르다. 그 답은 회차를 `runId` 로 싣고(run-spawn), 여기서 실패 문구에 재시도할 명령을 직접
+      // 박아 둔다: CLI 의 `nextSteps` 표는 명령이 아니라 종료 코드로 갈라(cliOutput.ts) 이 명령만의
+      // 다음 걸음을 싣지 못한다. 재시도는 **회차 id** 를 겨눈다 — `run-start` 가 회차 id 를 그 회차의
+      // 관리자로 받고(▶ 와 같은 길), 예약 Job 의 id 로는 게이트만 걷어 이 회차에 닿지 않는다.
+      if (reply.status < 200 || reply.status >= 300) {
+        const failed = reply.body as { error?: string; runId?: unknown }
+        if (first || typeof failed?.runId !== 'string') return reply
+        const runId = failed.runId
+        return {
+          status: reply.status,
+          body: {
+            ...failed,
+            error:
+              // One instruction (final review M6): a refusal from a retiring Host also says "start
+              // it again", and the CLI's own step for such a refusal is the same command. Here the
+              // same command does not help: the new run has Tasks, so it counts as running and a
+              // second `jobs run` is refused as already running. The message names the one that works.
+              `${failed.error ?? ''}. The new run ${runId} has no coordinator. Do not run \`jobs run\` ` +
+              `again, which is refused while this run is running; start this one with: astera run-start --run ${runId}`,
+            jobId: id,
+            runId
           }
         }
       }
@@ -1412,17 +1536,24 @@ export async function handleCommand(
         ...(worktreesFailed.length > 0 ? { worktreesFailed } : {})
       })
     }
-    // 예약 템플릿의 한 회차를 만든다. **부르는 것은 예약의 발화와 jobs-run 의 뒤 회차뿐이다** — 발화는
-    // core/orchestration/exec/dispatchLoop.ts 의 fireTick 이고, 앱의 타이머(src/main/ipc.ts)와 앱이
-    // 붙어 있을 때의 Host tick(src/host/driving.ts)이 그것을 돌린다. 코디네이터에게는 이 명령을
-    // 광고하지 않는다. 그래도 명령으로 두는 이유는 이 파일이 지키는
-    // 규율이다: 상태를 쓰는 문은 하나이고, 그 문이 검증·커밋·감사 로그를 함께 지난다.
-    // 사람이 '실행' 을 눌렀다. **부르는 것은 UI 뿐이다** — 코디네이터 Run 에는 pendingStart 가
-    // 없으므로 이 명령이 할 일도 없다(startRun 이 그때 아무것도 바꾸지 않는다).
+    // 사람이 '실행' 을 눌렀거나, Run 줄의 ▶ 로 사라진 코디네이터를 다시 띄운다. 부르는 것은 UI 와
+    // `jobs run` 이다.
     case 'run-start': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
-      // **id 는 Job 이다.** '실행' 은 계획을 푸는 일이고, 회차는 그 결과로 생긴다.
+      // **회차 id 는 그 회차 줄의 ▶ 다**(App.tsx 의 restartCoordinator). 펼쳐진 줄은 회차의 id 를
+      // 싣는다(view.ts 의 rowFor): 예약 Job 의 회차와, 회차가 둘 이상인 Job 의 회차가 그렇다. 뜻은
+      // "이 회차에 관리자가 있게 하라" 하나이고, 계획의 게이트는 건드리지 않는다. 한때 이 명령은
+      // Job id 만 받아 그 줄의 ▶ 가 언제나 404 로 끝났다.
+      const namedRun = s.runs.find((r) => r.id === id)
+      if (namedRun) {
+        const runJob = jobOf(s, namedRun)
+        if (!runJob) return notFound(`unknown job for run: ${id}`)
+        if (namedRun.coordinatorSessionId || !runJob.coordinatorAccountId || !deps.startCoordinator)
+          return okBody(namedRun)
+        return handToCoordinator(s, runJob, namedRun, runJob.coordinatorAccountId, true)
+      }
+      // **그 밖의 id 는 Job 이다.** '실행' 은 계획을 푸는 일이고, 회차는 그 결과로 생긴다.
       const job = s.jobs.find((j) => j.id === id)
       if (!job) return notFound(`unknown job: ${id}`)
       // **Not reachable today.** releaseJob and startJobRun refuse only `unknown job: <id>` — the id
@@ -1447,113 +1578,19 @@ export async function handleCommand(
       //
       // 계정 지정이 없거나 배선이 이 기능을 주입하지 않으면 옛 동작이다: 앱이 돌리고, 워커의
       // 질문은 앱의 그물이 풀어 준다(core/orchestration/inbox.ts).
-      // **예약 템플릿에는 코디네이터를 붙이지 않는다.** 템플릿은 자신이 돌지 않고 발화가 만든
-      // 회차가 돈다(Run.schedule) — 붙이면 아무 Task 도 없는 Run 을 관리하는 세션이 떠서 할당량만
-      // 쓴다. 회차는 `coordinatorAccountIds` 를 물려받으므로(spawnScheduledRun) 관리자는 그쪽에
-      // 붙는다. worker-start 가 템플릿의 Task 를 거절하는 것과 같은 이유다.
+      // **예약 Job 을 지목하면 게이트만 걷는다.** 예약의 계획은 스스로 돌지 않는다 — 회차마다 제
+      // 코디네이터를 발화가 띄운다(run-spawn 이 handToCoordinator 를 부른다, U1). 여기서 가장 최근
+      // 회차에 붙이면 '실행' 한 번이 이미 끝났을 수도 있는 회차에 관리자를 띄운다. 한 회차의 관리자가
+      // 사라졌다면 그 회차 줄의 ▶ 가 회차 id 로 이 명령을 부른다(위).
       // **이미 관리자가 있으면 아무것도 하지 않는다.** 이 명령은 사이드바의 '실행' 과 코디네이터를
       // 다시 띄우는 버튼이 함께 쓴다 — 뜻은 "이 Run 에 관리자가 있게 하라" 이고, 두 번 눌러도 두
       // 세션이 뜨지 않아야 한다.
       if (target.coordinatorSessionId) return commit(started)
       const accountId = job.schedule ? undefined : job.coordinatorAccountId
       if (!accountId || !deps.startCoordinator) return commit(started)
-      // **워크트리를 먼저 만든다.** 코디네이터를 띄운 뒤에 만들면 그 세션이 첫 명령을 부르는 사이에
-      // 워크트리 없는 Run 을 보게 된다. 실패하면 아래 spawn 실패와 같은 처리다 — 아무것도 바꾸지
-      // 않고 거절해서 `pendingStart` 를 남긴다.
-      let withWorktree = started.state
-      // **고아가 되지 않는다.** 아래에서 코디네이터가 못 뜨면 상태는 하나도 안 바뀌므로(주석대로),
-      // 방금 여기서 만든 폴더만 실제로 남는다 — 그 회차는 그 폴더를 다시 볼 길이 없다. 그래서 기억해
-      // 두었다가 코디네이터 실패에서 지운다(Host S3, risk 6).
-      let freshWorktree: string | null = null
-      if (!target.worktree && deps.makeRunWorktree) {
-        try {
-          const created = await deps.makeRunWorktree({
-            repoPath: job.cwd,
-            name: nameForRun({ id: job.id, objective: job.objective })
-          })
-          const recorded = setRunWorktree(withWorktree, target.id, created)
-          if (!recorded.ok) return bad(recorded.error)
-          withWorktree = recorded.state
-          freshWorktree = created
-        } catch (e) {
-          return bad(`could not create the run worktree: ${String(e)}`)
-        }
-      }
-      let sessionId: string
-      try {
-        const spawned = await deps.startCoordinator({
-          runId: target.id,
-          cwd: job.cwd,
-          accountId,
-          brief: buildHandoverPrompt({
-            runId: target.id,
-            objective: job.objective,
-            concurrency: job.concurrency ?? DEFAULT_CONCURRENCY,
-            // 같은 이유로 `s` 가 아니다 — '실행' 이 방금 베껴 넣은 Task 들이 그 스냅샷에는 없다.
-            taskCount: started.state.tasks.filter((t) => t.runId === target.id).length,
-            // policyOf 로 판정한다, target.convergence !== undefined 가 아니다 — 손으로 고친
-            // "convergence": null 은 !== undefined 로는 정책이 있다고 잘못 읽혀 코디네이터 브리핑이
-            // "수렴 중인 Task 는 건드리지 말라"는 문단을 얻는데, 다른 모든 관문(reconciler.ts,
-            // core/orchestration/exec/validation.ts 의 startValidation)은 이미 이 실수를 policyOf 로 고쳐 두었다 — 여기만 남아
-            // 있었다(전체 브랜치 리뷰, Finding 2).
-            // **`s` 가 아니라 방금 만든 회차가 들어 있는 상태로 묻는다.** `s` 는 명령 진입 시점의
-            // 스냅샷이라 이 회차가 없고, 그러면 policyOf 가 회차를 찾지 못해 정책이 걸린 Job 도
-            // "정책 없음" 으로 읽힌다 — 코디네이터가 수렴 절 없는 브리핑을 받는다.
-            convergence: policyOf(started.state, { runId: target.id }) !== null
-          })
-        })
-        sessionId = spawned.sessionId
-      } catch (e) {
-        // **`pendingStart` 를 그대로 둔다.** 걷어 버리면 실행 버튼이 사라져 사람이 다시 누를 수
-        // 없고, 운전자도 없는 Run 이 남는다 — 아무것도 돌지 않는데 화면은 시작한 것처럼 보인다.
-        // 그래서 이 실패는 상태를 하나도 바꾸지 않는다.
-        //
-        // **방금 만든 워크트리는 예외다 — 상태가 아니라 디스크에 남는다.** 상태를 안 바꾸므로 이
-        // 회차는 그 경로를 다시 보지 못하고, 그러면 `run-delete removeWorktrees` 도 결코 이 폴더를
-        // 겨누지 않는다: 아무도 지우지 않는 고아 워크트리다.
-        //
-        // **지우는 것 자체가 거절되거나 실패해도 이 400 은 절대 바뀌지 않는다**(fix round 1, I1).
-        // `deps.discardRunWorktree` 가 있으면 그것만 쓴다 — Host 쪽 배선은 그 실패를 결코
-        // `onAppRequired` 로 표시하지 않아, "코디네이터를 못 띄웠다"는 이 실패가 "앱이 필요하다"는
-        // 409 로 둔갑하지 않는다. 없으면(예: 앱이 직접 도는 옛 배선) `removeWorktrees` 로 대신한다 —
-        // 그쪽에는 그런 표시가 없으니 안전하다. 어느 쪽이든 실패는 로그만 남기고, 고아가 남았다는
-        // 말은 이 400 자신의 문구에 싣는다 — 사람이 볼 자연스러운 자리가 그것뿐이다.
-        let orphanNote = ''
-        if (freshWorktree) {
-          const orphan = freshWorktree
-          if (deps.discardRunWorktree) {
-            const { removed, inUse } = await deps.discardRunWorktree(orphan)
-            if (!removed)
-              orphanNote = inUse
-                ? ` — its fresh run worktree ${orphan} is still in use and was left behind`
-                : ` — its fresh run worktree ${orphan} could not be removed and was left behind`
-          } else if (deps.removeWorktrees) {
-            try {
-              const { failed } = await deps.removeWorktrees([orphan])
-              if (failed.length > 0) {
-                deps.log?.(`orphaned run worktree ${orphan} is still in use — left in place`)
-                orphanNote = ` — its fresh run worktree ${orphan} is still in use and was left behind`
-              }
-            } catch (removeErr) {
-              deps.log?.(`orphaned run worktree ${orphan} could not be removed: ${String(removeErr)}`)
-              orphanNote = ` — its fresh run worktree ${orphan} could not be removed and was left behind`
-            }
-          }
-        }
-        return bad(`could not start the coordinator: ${String(e)}${orphanNote}`)
-      }
-      // autoDispatch 는 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이
-      // 코드베이스는 해당 없는 칸을 두지 않는다(startRun 이 pendingStart 를 지우는 것과 같다).
-      // autoDispatch 는 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이
-      // 코드베이스는 해당 없는 칸을 두지 않는다. 계획의 칸이므로 Job 에서 지운다.
-      const handed = withWorktree.jobs.map((j) => {
-        if (j.id !== id) return j
-        const { autoDispatch: _drop, ...rest } = j
-        return rest
-      })
-      return commit(
-        attachCoordinator({ ...withWorktree, jobs: handed }, { runId: target.id, sessionId })
-      )
+      // Rebased when this call changes nothing on its own (no gate to release, no first Run): the ▶
+      // on a Job row restarting its latest Run's coordinator (handToCoordinator's `rebase`).
+      return handToCoordinator(started.state, job, target, accountId, started.state === s)
     }
     case 'run-pause': {
       const id = str(args.run)
@@ -1638,10 +1675,36 @@ export async function handleCommand(
       // "일이 다 옮겨졌다" 로 읽고 폴더를 지운다.
       return okBody({ merged: merged.merged, uncommitted: merged.uncommitted })
     }
+    // 계획의 회차를 하나 더 만들고 **`jobs run` 이 한 회차를 시작하는 그대로 시작한다**(U1, F65).
+    // 부르는 것은 예약의 발화(core/orchestration/exec/dispatchLoop.ts 의 fireTick: 앱의 타이머와,
+    // 운전하는 Host 의 tick)와 jobs-run 의 뒤 회차다. 코디네이터에게는 광고하지 않지만 명령으로 두는
+    // 이유는 이 파일이 지키는 규율이다: 상태를 쓰는 문은 하나이고, 그 문이 검증·커밋·감사 로그를
+    // 함께 지난다. 발화가 이 문을 지나므로 발화와 `jobs run` 이 다른 길로 갈라질 자리가 없다.
+    //
+    // **시작은 둘 중 하나다.** 계획에 코디네이터 계정이 있으면 이 회차의 코디네이터를 띄운다
+    // (handToCoordinator, run-start 와 같은 몸통). 없으면 회차를 만드는 것으로 끝이고, 배치는 루프가
+    // 한다: 예약 Job 의 회차라면 startJobRun 이 그 회차에 autoDispatch 를 찍고(R2), 아니면 계획의
+    // autoDispatch 가 정한다.
+    //
+    // **N7 — 코디네이터의 실패는 회차의 실패가 아니다.** 회차는 먼저 커밋되고 그대로 남는다. 실패한
+    // 답은 그 회차를 `runId` 로 싣는다: jobs-run 이 재시도 명령을 적고, 발화는 로그에 남기며, 사람은
+    // 그 회차 줄의 ▶ 로 다시 띄운다.
     case 'run-spawn': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
-      return commit(startJobRun(s, id, now))
+      const spawned = startJobRun(s, id, now)
+      const reply = await commit(spawned)
+      if (!spawned.ok || reply.status >= 300) return reply
+      const after = deps.getState()
+      const job = after.jobs.find((j) => j.id === id)
+      const run = after.runs.find((r) => r.id === spawned.value.id)
+      if (!job?.coordinatorAccountId || !deps.startCoordinator || !run) return reply
+      const handed = await handToCoordinator(after, job, run, job.coordinatorAccountId, true)
+      if (handed.status >= 200 && handed.status < 300) {
+        const withCoordinator = deps.getState().runs.find((r) => r.id === run.id)
+        return withCoordinator ? okBody(withCoordinator) : reply
+      }
+      return { status: handed.status, body: { ...(handed.body as object), jobId: id, runId: run.id } }
     }
     case 'task-create': {
       // `--run` 이 없으면 "가장 최근 Run" 이다. **그 뜻을 latestOrdinaryRun 이 정한다** — 예약
@@ -1970,7 +2033,7 @@ export async function handleCommand(
       // 워크트리를 미리 만들어 두는 것이고, 그것은 별개 작업이다.
       if (
         str(args.worktree) === null &&
-        (runJob?.autoDispatch || runJob?.coordinatorAccountId !== undefined) &&
+        (placedByApp(runJob, run) || runJob?.coordinatorAccountId !== undefined) &&
         !run.worktree
       )
         return conflict(

@@ -315,10 +315,11 @@ const STEPS: Record<
           //
           // **Except a later `jobs run` whose coordinator was refused** (final review M6): its run is
           // already made, and the same command again would make another. Its message names
-          // `run-start` for the Job, and so does this, once a Host is up.
+          // `run-start` for that run (U1: run-start takes a run id as that run's restart), and so does
+          // this, once a Host is up.
           typeof details.retry === 'string'
           ? typeof details.runId === 'string' && typeof details.jobId === 'string'
-            ? ['astera host status', `astera run-start --run ${details.jobId}`]
+            ? ['astera host status', `astera run-start --run ${details.runId}`]
             : [...(typeof details.retryCommand === 'string' ? [details.retryCommand] : []), 'astera host status']
           : [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
   // 시한을 넘긴 것과 Host 가 살아서 답하지 않는 것이 같은 코드다(run.ts 의 SILENT_HOST_CODE).

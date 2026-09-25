@@ -58,6 +58,10 @@ interface RigOpts {
   noAccountTask?: boolean
   /** 예약 템플릿 Job 하나가 더 있다. */
   schedule?: { every: 'minute' }
+  /** 그 템플릿에 계정이 있는 정의 Task 하나. 발화가 그것을 회차로 복사한다. */
+  scheduleTask?: boolean
+  /** 그 템플릿의 코디네이터 계정. */
+  scheduleCoordinator?: string
   /** 코디네이터가 있는 Run 에, 오래전에 온 읽지 않은 상향 메일이 있다. */
   coordinatorMail?: boolean
   /** Run 워크트리가 아직 없다 — 루프가 게으르게 만든다. */
@@ -80,8 +84,22 @@ function fixture(o: RigOpts): OrchState {
     }
   ]
   // 발화 판정이 보는 것은 Job 의 schedule 이다(fire.ts). 1분 간격 — fire.test.ts 의 규칙 모양이다.
-  if (o.schedule) jobs.push({ id: TEMPLATE_ID, objective: 'every minute', cwd: '/p', createdAt: NOW, schedule: { kind: 'interval', minutes: 1 } })
+  // **디스크에서 읽은 옛 예약 Job 과 같은 모양이다** — autoDispatch 도 pendingStart 도 없다(R2).
+  if (o.schedule)
+    jobs.push({
+      id: TEMPLATE_ID,
+      objective: 'every minute',
+      cwd: '/p',
+      createdAt: NOW,
+      schedule: { kind: 'interval', minutes: 1 },
+      ...(o.scheduleCoordinator ? { coordinatorAccountId: o.scheduleCoordinator } : {})
+    })
   const tasks = [task({ id: 'tsk_1' }), task({ id: 'tsk_2' })]
+  // 정의 Task — runId 가 없고 jobId 만 있다(task-create 가 Job 을 지목받았을 때의 모양).
+  if (o.scheduleTask) {
+    const { runId: _none, ...def } = task({ id: 'tsk_def', jobId: TEMPLATE_ID, status: 'pending' })
+    tasks.push(def as Task)
+  }
   if (o.noAccountTask) tasks.push(task({ id: 'tsk_na', accountIds: [] }))
   const state: OrchState = {
     ...emptyState(),
@@ -151,6 +169,7 @@ function rig(o: RigOpts = {}) {
     if (o.startFailsFor === 'all' || o.startFailsFor === n) throw new Error(`spawn ${n} failed`)
     return { sessionId: `s-${n}`, cwd: a.runCwd ?? 'x', specPath: 'x' }
   })
+  const startCoordinator = vi.fn(async (a: { runId: string }) => ({ sessionId: `coord-${a.runId}` }))
 
   const deps = {
     getState: () => state,
@@ -166,6 +185,7 @@ function rig(o: RigOpts = {}) {
     },
     now: () => new Date(h.clock).toISOString(),
     startWorker,
+    startCoordinator,
     listAccounts: async () => [{ id: 'accA', label: 'accA', provider: 'claude' as const }],
     log: () => {},
     runningSessions: () => 0,
@@ -225,6 +245,7 @@ function rig(o: RigOpts = {}) {
     loop,
     real,
     startWorker,
+    startCoordinator,
     typed,
     reaped,
     forked,
@@ -483,5 +504,43 @@ describe('createDispatchLoop', () => {
     await h.settle()
     expect(h.handled()).toEqual(['worker-start'])
     expect(h.reaped).toEqual([])
+  })
+})
+
+// F65 and U1: a schedule firing behaves exactly like `jobs run` of that Job. The template here has no
+// `autoDispatch` and no `pendingStart`, the shape every scheduled Job on disk has (R2): nothing is
+// migrated, the fire decides from `schedule` and `coordinatorAccountId`.
+describe('a fired Run starts the way `jobs run` starts one (U1)', () => {
+  /** Arms the template, then fires it once, and lets the commits it causes run their passes. */
+  const fireOnce = async (h: ReturnType<typeof rig>): Promise<string> => {
+    await h.loop.fireTick()
+    h.clock += 61_000
+    await h.loop.fireTick()
+    await h.settle()
+    await h.settle()
+    const child = h.state().runs.find((r) => r.jobId === TEMPLATE_ID)
+    if (!child) throw new Error('the fire made no run')
+    return child.id
+  }
+
+  it('with no coordinator account, the fired Run is placed by the next pass', async () => {
+    const h = rig({ schedule: { every: 'minute' }, scheduleTask: true })
+    const childId = await fireOnce(h)
+    const copied = h.state().tasks.find((t) => t.runId === childId)!
+    expect(copied.status).toBe('dispatched')
+    expect(h.startWorker.mock.calls.map((c) => c[0].taskId)).toContain(copied.id)
+    expect(h.startCoordinator).not.toHaveBeenCalled()
+  })
+
+  it('with a coordinator account, the fire starts that Run’s own coordinator and the loop leaves it alone', async () => {
+    const h = rig({ schedule: { every: 'minute' }, scheduleTask: true, scheduleCoordinator: 'accA' })
+    const childId = await fireOnce(h)
+    expect(h.startCoordinator).toHaveBeenCalledTimes(1)
+    expect(h.startCoordinator.mock.calls[0][0]).toMatchObject({ runId: childId, accountId: 'accA' })
+    expect(h.state().runs.find((r) => r.id === childId)?.coordinatorSessionId).toBe(`coord-${childId}`)
+    // One driver per Run: the coordinator places this Run's Tasks, not the loop.
+    const copied = h.state().tasks.find((t) => t.runId === childId)!
+    expect(copied.status).toBe('ready')
+    expect(h.startWorker.mock.calls.map((c) => c[0].taskId)).not.toContain(copied.id)
   })
 })

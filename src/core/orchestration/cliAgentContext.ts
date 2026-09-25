@@ -102,8 +102,9 @@ const SESSION = {
     flags: [req('id', '<runId>', 'the run to check')]
   },
   'run-start': {
-    summary: "clear a Job's start gate and run it",
-    flags: [RUN_ARG('<jobId>', 'the Job to start')]
+    summary: "clear a Job's start gate and run it, or restart a run's coordinator",
+    detail: "Given a run id, it only starts that run's coordinator when it has none; the Job's gate is left alone.",
+    flags: [RUN_ARG('<jobId|runId>', 'the Job to start, or the run whose coordinator to restart')]
   },
   'run-pause': {
     summary: 'hold a scheduled Job so it fires no more runs',
