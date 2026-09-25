@@ -102,6 +102,9 @@ export interface HostRolling {
    *  restore would map nothing (Task 16 review): the wiring holds the takeover until this is true. */
   accountsRead(): boolean
   onHookEvent(sessionId: string, payload: unknown): void
+  /** The one block registry both coordinators share (S6 D3). The wiring sends its changes to the apps
+   *  and absorbs theirs into it (Task 3). */
+  readonly blocks: BlockRegistry
   dispose(): void
 }
 
@@ -282,6 +285,7 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
   hooks?.start()
 
   return {
+    blocks,
     adoptSpawned: (info, account) => {
       if ((info.rollAccountIds?.length ?? 0) < 1) return
       // register() replaces a chain outright, so a second hand-off of the same session would orphan the

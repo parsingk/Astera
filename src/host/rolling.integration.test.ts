@@ -188,6 +188,10 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
     /** `runs wait` over the Run, probed once (timeout 0): its ending now, or `timeout`. */
     runsWait: () => orch.handle('runs-wait', { id: orch.state().runs[0].id, timeoutMs: 0 }),
     note: (p: string) => registry.metaOf(p)?.restore ?? {},
+    /** The Host's block registry (Task 3), and the wiring's two ends of the `blocks` exchange. */
+    blocks: () => wiring.rolling.blocks,
+    appGreeted: (send: (m: HostMessage) => void) => wiring.appGreeted(send),
+    blocksFromApp: (m: unknown) => wiring.blocksFromApp(m),
     typedInto: (p: string) => ptys.get(p)?.typed ?? []
   }
 }
@@ -412,5 +416,53 @@ describe('the Host rolls, with and without an app (S6 rig)', () => {
   })
   it('composes before the server exists, as index.ts does (preflight B2)', () => {
     expect(() => composeWithoutServer()).not.toThrow()
+  })
+})
+
+// S6 Task 3 (D3, D4): the Host's block registry travels to the apps, and the app's comes back, with no echo.
+describe('block records between the Host and the app (S6 Task 3)', () => {
+  const blockPushes = (h: { broadcasts: HostMessage[] }) => h.broadcasts.filter((m) => m.t === 'blocks')
+  it('a block the Host records at a limit is broadcast', async () => {
+    const h = await rig()
+    await h.spawnWorker('p1', 's1', ['a1', 'a2'])
+    h.limit('p1', 's1')
+    await h.settle()
+    await vi.waitFor(() => expect(blockPushes(h).some((m) => m.t === 'blocks' && 'a1' in m.records)).toBe(true))
+  })
+  it('a clear the Host makes is broadcast with its time', async () => {
+    const h = await rig()
+    h.blocks().clear('a1', 1234)
+    expect(blockPushes(h)).toEqual([{ t: 'blocks', records: {}, cleared: [{ accountId: 'a1', at: 1234 }] }])
+  })
+  it('what an app sends is absorbed and not broadcast back', async () => {
+    const h = await rig()
+    const until = h.now() + 3_600_000
+    h.blocksFromApp({ t: 'blocks', records: { a2: { at: until, weekly: false, since: h.now() } }, cleared: [] })
+    expect(h.blocks().get('a2', h.now())).toEqual({ at: until, weekly: false, since: h.now() })
+    h.blocksFromApp({ t: 'blocks', records: {}, cleared: [{ accountId: 'a2', at: h.now() + 1 }] })
+    expect(h.blocks().get('a2', h.now())).toBeNull()
+    expect(blockPushes(h)).toEqual([])
+  })
+  it('a newly greeted app is sent the whole registry once', async () => {
+    const h = await rig()
+    const until = h.now() + 3_600_000
+    h.blocks().record('a1', { at: until, weekly: true, since: h.now() }, h.now())
+    h.blocks().clear('x1', 50)
+    const sent: HostMessage[] = []
+    h.appGreeted((m) => sent.push(m))
+    expect(sent).toEqual([{ t: 'blocks', records: { a1: { at: until, weekly: true, since: h.now() } }, cleared: [{ accountId: 'x1', at: 50 }] }])
+  })
+  it('a malformed message is ignored, never thrown', async () => {
+    const h = await rig()
+    for (const bad of [null, 7, 'blocks', { t: 'blocks', records: { a1: { at: 'soon', weekly: 1, since: null } }, cleared: [{ accountId: 'a2' }] }, { t: 'blocks', records: 5, cleared: {} }])
+      expect(() => h.blocksFromApp(bad)).not.toThrow()
+    expect(h.blocks().size).toBe(0)
+    expect(h.blocks().snapshot(h.now())).toEqual({ records: {}, cleared: [] })
+    expect(blockPushes(h)).toEqual([])
+  })
+  it('a greeting that throws is logged and costs nothing', async () => {
+    const h = await rig()
+    expect(() => h.appGreeted(() => { throw new Error('socket gone') })).not.toThrow()
+    expect(h.logs.some((m) => m.includes('socket gone'))).toBe(true)
   })
 })

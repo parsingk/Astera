@@ -35,6 +35,7 @@ const server = async (
     features?: HostServerDeps['features']
     onClientGone?: HostServerDeps['onClientGone']
     onAppsChanged?: HostServerDeps['onAppsChanged']
+    onAppGreeted?: HostServerDeps['onAppGreeted']
   } = {}
 ): Promise<{
   s: HostServer
@@ -63,6 +64,7 @@ const server = async (
     features: over.features,
     onClientGone: over.onClientGone,
     onAppsChanged: over.onAppsChanged,
+    onAppGreeted: over.onAppGreeted,
     log: { write: (m) => logs.push(m), close: () => {} }
   })
   open.push(s)
@@ -928,5 +930,48 @@ describe.runIf(process.platform !== 'win32')('a socket file left behind', () => 
     expect(logs.some((l) => l.includes(addr.dirToPrepare!))).toBe(true)
     // Nothing was bound: the refusal happens before listen.
     await expect(fs.stat(addr.address)).rejects.toThrow()
+  })
+})
+
+// S6 Task 3 (D4): the Host sends a newly greeted app its whole block registry, right after the hello.
+describe('onAppGreeted', () => {
+  const hello = async (address: string, role?: 'app' | 'cli') => {
+    const sock = net.connect(address)
+    await new Promise((r) => sock.once('connect', r))
+    const ch = messageChannel(sock)
+    ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', ...(role ? { role } : {}) } as ClientMessage)
+    return { sock, ch }
+  }
+
+  it('an app hears what it sends after its own hello, and only that socket does', async () => {
+    const h = await server({ onAppGreeted: (send) => send({ t: 'blocks', records: {}, cleared: [{ accountId: 'a', at: 1 }] }) })
+    const cli = await hello(h.address, 'cli')
+    expect(await cli.ch.next()).toMatchObject({ t: 'hello' })
+    const app = await hello(h.address, 'app')
+    expect(await app.ch.next()).toMatchObject({ t: 'hello' })
+    expect(await app.ch.next()).toEqual({ t: 'blocks', records: {}, cleared: [{ accountId: 'a', at: 1 }] })
+    expect(await cli.ch.next(200)).toBeUndefined()
+    cli.sock.end()
+    app.sock.end()
+  })
+
+  it('is not called for a CLI, nor for a hello with no role', async () => {
+    const onAppGreeted = vi.fn()
+    const h = await server({ onAppGreeted })
+    for (const role of ['cli', undefined] as const) {
+      const c = await hello(h.address, role)
+      expect(await c.ch.next()).toMatchObject({ t: 'hello' })
+      c.sock.end()
+    }
+    expect(onAppGreeted).not.toHaveBeenCalled()
+  })
+
+  it('a throwing onAppGreeted is logged and costs the handshake nothing', async () => {
+    const h = await server({ onAppGreeted: () => { throw new Error('greet boom') } })
+    const app = await hello(h.address, 'app')
+    expect(await app.ch.next()).toMatchObject({ t: 'hello' })
+    expect(h.logs.join(' ')).toMatch(/greet boom/)
+    expect(h.s.hasApp()).toBe(true)
+    app.sock.end()
   })
 })

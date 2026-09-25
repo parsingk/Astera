@@ -21,6 +21,7 @@ import { liveAppPid } from '../core/host/pidFile'
 import { hostMayAct } from '../core/host/rollOwner'
 import type { HostMessage } from '../core/host/protocol'
 import { buildResumeNote, buildResumePacket } from '../core/orchestration/exec/resumePacket'
+import { absorbBlocks, blocksOfChange, parseBlocks } from '../core/rolling/blockWire'
 import { bindNativeSession } from '../core/orchestration/state'
 import type { Lang } from '../core/i18n'
 import { createAppGoneWatch } from './appGone'
@@ -47,6 +48,12 @@ export interface HostRollingWiring {
   }
   /** Chained with the driving's onAppsChanged in index.ts. */
   onAppsChanged(): void
+  /** An app was just answered its hello (server `onAppGreeted`): it is sent this Host's whole block
+   *  registry, once (S6 D4). Never throws. */
+  appGreeted(send: (m: HostMessage) => void): void
+  /** A `blocks` message from a greeted app: absorbed, never broadcast back (no echo; D3). A malformed
+   *  one is ignored (R3). Never throws. */
+  blocksFromApp(m: unknown): void
   dispose(): void
 }
 
@@ -138,6 +145,17 @@ export function composeHostRolling(a: {
     },
     lang: () => a.lang(),
     ...a.rollingDeps
+  })
+
+  // S6 D4: every change of the Host's block registry goes to the greeted clients. An absorb() fires no
+  // change, so what an app sent is never broadcast back to it. After retire starts nothing is sent.
+  const stopBlocks = rolling.blocks.onChange((e) => {
+    if (disposed) return
+    try {
+      a.server().broadcast({ t: 'blocks', ...blocksOfChange(e) })
+    } catch (err) {
+      log(`a block change could not be broadcast: ${String(err)}`)
+    }
   })
 
   a.spawner.onSpawned((info, account) => {
@@ -251,9 +269,25 @@ export function composeHostRolling(a: {
         log(`the app-gone watch could not take an app attaching or leaving: ${String(err)}`)
       }
     },
+    appGreeted: (send) => {
+      try {
+        send({ t: 'blocks', ...rolling.blocks.snapshot(Date.now()) })
+      } catch (err) {
+        log(`the block registry could not be sent to an app: ${String(err)}`)
+      }
+    },
+    blocksFromApp: (m) => {
+      try {
+        const p = parseBlocks(m)
+        if (p) absorbBlocks(rolling.blocks, p, Date.now())
+      } catch (err) {
+        log(`an app's block records could not be absorbed: ${String(err)}`)
+      }
+    },
     dispose: () => {
       if (disposed) return
       disposed = true
+      stopBlocks()
       stopTick()
       watch.dispose()
       rolling.dispose()

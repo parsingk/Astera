@@ -65,6 +65,11 @@ export interface HostServerDeps {
    *  new state already in place. A throw is caught and logged; the handshake or close it rode in on
    *  is not affected. */
   onAppsChanged?(): void
+  /** A socket that called itself the app has just been answered its `hello` (S6 D4). `send` reaches
+   *  that socket alone, after the hello reply, so what it sends is read with the features already
+   *  known. Not called for a CLI, nor for a hello with no role (an app that old reads no new push). A
+   *  throw is caught and logged, as `onAppsChanged`'s is. */
+  onAppGreeted?(send: (h: HostMessage) => void): void
   /** Feature names announced in `hello` after the built-in ones. Given only by a caller that serves
    *  them: advertising a feature and being able to serve it are the same fact, as the `orch`
    *  condition below says. */
@@ -336,6 +341,13 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
               ...(deps.features ?? [])
             ]
           })
+          if (roles.get(socket) === 'app') {
+            try {
+              deps.onAppGreeted?.(send)
+            } catch (err) {
+              deps.log.write(`onAppGreeted failed: ${String(err)}`)
+            }
+          }
           return
         }
         if (m?.t === 'ping') {

@@ -345,6 +345,13 @@ async function main(): Promise<void> {
         // `ptyHeldBy` for the apps that declare none. Only a greeted socket, which close releases.
         const held = ptyHeldBy(m, from)
         if (exits && held !== null) exits.heldBy(held, from.socket)
+        // S6 D4: an app's block records, absorbed into the rolling's registry and never broadcast back.
+        // Only from a greeted app (a CLI has no registry to share), and only when this Host rolls: one
+        // without `rolling` never announced `blocks`, so no app sends it, and the line stays unknown.
+        if (m.t === 'blocks' && rollingWiring) {
+          if (from.greeted && from.role === 'app') rollingWiring.blocksFromApp(m)
+          return true
+        }
         return (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false)
       },
       // Released by the socket number whatever role the socket gave last: a second `hello` can change
@@ -373,6 +380,8 @@ async function main(): Promise<void> {
         wiring?.serverHooks.onAppsChanged()
         rollingWiring?.onAppsChanged()
       },
+      // S6 D4: a newly greeted app gets the Host's whole block registry once, after its hello.
+      onAppGreeted: (send) => rollingWiring?.appGreeted(send),
       log
     })
   } catch (err) {
