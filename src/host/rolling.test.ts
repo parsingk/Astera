@@ -418,6 +418,15 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
     // Task 5 review hard carry: a chat chain never opens a pty.
     expect(h.spawned).toHaveLength(0)
   })
+  it('does not announce a chat roll whose new proc ended before it started (review M2)', async () => {
+    const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', procOf: (id: string) => (id === 'c2' ? null : 'p1') }
+    const h = harness({ chats, chatMayAct: () => true })
+    h.sendDep('session:rolled', { oldSessionId: 'c1', info: { id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' } })
+    await vi.waitFor(() => expect(chats.started).toHaveBeenCalledWith('c2'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(h.events.filter((e) => e.t === 'session-rolled')).toEqual([])
+  })
   it('announces a chat roll only once the new proc has started (P5)', async () => {
     let started: () => void = () => {}
     const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', started: vi.fn(() => new Promise<void>((r) => { started = r })) }

@@ -211,6 +211,8 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
   const mayAct = (id: string): boolean => {
     if (isChat(id)) {
       const proc = chats!.procOf(id)
+      // A limit that arrives while a prompt is open is dropped here, not deferred: the CLI reports the
+      // limit again on its next call once the prompt is answered.
       return proc !== null && (d.chatMayAct?.(proc) ?? false) && !chats!.hasOpenRequest(id)
     }
     const p = ptyOf(id)
@@ -240,7 +242,15 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
           // is the net under onEvent (R3).
           chats!
             .started(p.info.id)
-            .then(() => d.onEvent(event))
+            .then(() => {
+              // A proc that died between its spawn and its start leaves nothing to adopt: a push with
+              // neither a pty nor a proc would name nothing, so it is not sent.
+              if (chats!.procOf(p.info.id) === null) {
+                log(`the chat roll is not announced: its new proc ended before it started session=${p.info.id}`)
+                return
+              }
+              d.onEvent(event)
+            })
             .catch((err: unknown) => log(`the chat roll could not be announced session=${p.info.id}: ${String(err)}`))
         } else d.onEvent(event)
       } else {

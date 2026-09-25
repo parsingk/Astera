@@ -232,6 +232,20 @@ describe('the chat rig (chat takeover spec §5)', () => {
     expect(turns(h.proc('pa'), '')).toBe(0)
   })
 
+  it('an app that yields rolling but not chat-takeover and holds the proc quiets the chain (review I1)', async () => {
+    const h = await rig()
+    const transcript = path.join(h.profileDir, 'th1.jsonl'); await fs.writeFile(transcript, '')
+    appChat(h, { transcript })
+    h.appAttach(1, [HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER]); h.appLeave(1); h.fireAfters()
+    await vi.waitFor(() => expect(h.wiring.chats.has('c1')).toBe(true))
+    h.appAttach(2, [HOST_YIELD_ROLLING]); h.holders.heldBy('pa', 2)
+    h.proc('pa').say(rejected(Date.now() + 3_600_000))
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(h.proc('pa').killed).toBe(false)
+    expect(h.procsOpened()).toEqual(['pa'])
+    expect(h.broadcasts.filter((m) => m.t === 'session-rolled')).toEqual([])
+  })
+
   it('does not roll while a permission prompt is open', async () => {
     const h = await rig()
     const transcript = path.join(h.profileDir, 'th1.jsonl'); await fs.writeFile(transcript, '')
