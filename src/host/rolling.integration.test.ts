@@ -344,6 +344,16 @@ describe('the Host rolls, with and without an app (S6 rig)', () => {
     // Preflight C5: one exact check. The rig's fake spawner names the respawn s2.
     await vi.waitFor(() => expect(h.run().coordinatorSessionId).toBe('s2'))
   })
+  it('a Host coordinator that waits for its reset makes runs wait end limited (S6 limits D2)', async () => {
+    const h = await rig({ coordinator: 'c1' })
+    await h.spawnWorker('pc', 'c1', ['a1']) // one account: the limit is a wait for the reset, not a roll
+    expect((await h.runsWait()).body).toMatchObject({ state: 'timeout' })
+    h.limit('pc', 'c1')
+    await h.settle()
+    await vi.waitFor(() => expect(h.run().coordinatorStop?.resetsAt).toBeDefined())
+    expect(h.run().coordinatorSessionId).toBe('c1')
+    expect((await h.runsWait()).body).toMatchObject({ state: 'limited', resetsAt: h.run().coordinatorStop?.resetsAt })
+  })
   it('a restored wait is not recorded as a second stop (preflight R5)', async () => {
     const h = await rig({ appPid: 100, openStop: true }) // the Dispatch on s1 already has the app's open stop
     h.attachApp(3, ['worktrees', 'dispatch', 'rolling'], [])

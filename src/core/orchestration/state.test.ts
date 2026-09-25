@@ -29,6 +29,8 @@ import {
   attachCoordinator,
   rekeyCoordinator,
   detachCoordinator,
+  recordCoordinatorStop,
+  clearCoordinatorStop,
   bindNativeSession,
   beginValidation,
   writeOffDispatch,
@@ -2851,6 +2853,58 @@ describe('코디네이터 세션 붙이기·떼기', () => {
   it('모르는 Run 이면 거절한다', () => {
     expect(attachCoordinator(emptyState(), { runId: 'nope', sessionId: 's' }).ok).toBe(false)
     expect(detachCoordinator(emptyState(), { runId: 'nope' }).ok).toBe(false)
+  })
+
+  // S6 limits D1: a coordinator's stop lives on its Run slot and follows the slot.
+  describe('the coordinator stop', () => {
+    const RESET = '2026-08-04T05:00:00.000Z'
+    const attached = () => {
+      const { s, runId } = withRun()
+      return { s: unwrap<{ id: string }>(attachCoordinator(s, { runId, sessionId: 'coord1' }) as never).state, runId }
+    }
+
+    it('is set by session or by Run, and a repeat only patches the reset, keeping since', () => {
+      const { s, runId } = attached()
+      const bySession = recordCoordinatorStop(s, { sessionId: 'coord1' }, NOW)
+      if (!bySession.ok) throw new Error(bySession.error)
+      expect(bySession.state.runs[0].coordinatorStop).toEqual({ since: NOW })
+      const patched = recordCoordinatorStop(bySession.state, { runId, resetsAt: RESET }, LATER)
+      if (!patched.ok) throw new Error(patched.error)
+      expect(patched.state.runs[0].coordinatorStop).toEqual({ since: NOW, resetsAt: RESET })
+      // Nothing new to say: no commit.
+      const again = recordCoordinatorStop(patched.state, { sessionId: 'coord1', resetsAt: RESET }, LATER)
+      expect(again.ok && again.value).toBe(null)
+      const bare = recordCoordinatorStop(patched.state, { sessionId: 'coord1' }, LATER)
+      expect(bare.ok && bare.value).toBe(null)
+    })
+
+    it('is nobody’s for a session that is no Run’s coordinator, or a Run with none', () => {
+      const { s, runId } = withRun()
+      expect(recordCoordinatorStop(s, { sessionId: 'tab1' }, NOW)).toMatchObject({ ok: true, value: null })
+      expect(recordCoordinatorStop(s, { runId }, NOW)).toMatchObject({ ok: true, value: null })
+    })
+
+    it('is cleared by its session, and clearing none commits nothing', () => {
+      const { s } = attached()
+      const set = recordCoordinatorStop(s, { sessionId: 'coord1', resetsAt: RESET }, NOW)
+      if (!set.ok) throw new Error(set.error)
+      const cleared = clearCoordinatorStop(set.state, { sessionId: 'coord1' })
+      if (!cleared.ok) throw new Error(cleared.error)
+      expect(cleared.state.runs[0]).not.toHaveProperty('coordinatorStop')
+      expect(clearCoordinatorStop(cleared.state, { sessionId: 'coord1' })).toMatchObject({ ok: true, value: null })
+    })
+
+    it('goes with the slot on a rekey, is dropped on detach, and a new attach starts without it', () => {
+      const { s, runId } = attached()
+      const set = recordCoordinatorStop(s, { sessionId: 'coord1', resetsAt: RESET }, NOW)
+      if (!set.ok) throw new Error(set.error)
+      const moved = unwrap<{ id: string }>(rekeyCoordinator(set.state, { oldSessionId: 'coord1', newSessionId: 'coord2' }) as never).state
+      expect(moved.runs[0].coordinatorStop).toEqual({ since: NOW, resetsAt: RESET })
+      const reattached = unwrap<{ id: string }>(attachCoordinator(moved, { runId, sessionId: 'coord3' }) as never).state
+      expect(reattached.runs[0]).not.toHaveProperty('coordinatorStop')
+      const detached = unwrap<{ id: string }>(detachCoordinator(moved, { runId }) as never).state
+      expect(detached.runs[0]).not.toHaveProperty('coordinatorStop')
+    })
   })
 
   // 회차는 자신이 도는 Run 이므로 관리자가 필요하고, 누구로 할지는 템플릿을 만든 사람이 정했다.

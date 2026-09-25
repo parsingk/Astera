@@ -199,6 +199,15 @@ export interface JobRun {
    *  않는다). 대신 사이드바의 Job 줄에 다시 띄우는 버튼이 나온다(JobRow.coordinatorMissing).
    *  그동안 워커의 질문은 앱의 그물이 풀어 준다(inbox.ts). */
   coordinatorSessionId?: string
+  /** The coordinator named by `coordinatorSessionId` is stopped at a usage limit (S6 limits D1).
+   *  `since` is when the roll tap first heard the stop; `resetsAt` is the reset it waits for, absent
+   *  while the stop is a switch to another account (no reset to wait for).
+   *
+   *  **It lives on the slot because a coordinator has no Dispatch**, which is where a worker's stop is
+   *  recorded (`Dispatch.resumes`). It follows the slot: `rekeyCoordinator` carries it, `attachCoordinator`
+   *  starts without it and `detachCoordinator` drops it. The roll tap clears it on every resume or leave
+   *  path (exec/rollTap.ts), and `runs wait` reads it (command.ts, limitedUntil). */
+  coordinatorStop?: { since: string; resetsAt?: string }
   /** 이 회차의 워커들이 일하는 워크트리. **없으면 아직 만들어지지 않았다** — 첫 워커를 띄우기
    *  직전에 만들고 기록한다: 예약의 게으른 포크는 배선이 `run-worktree-set` 으로(src/main/ipc.ts),
    *  코디네이터가 있는 Job 의 첫 실행은 command.ts 가 직접(Host 도 만든다, Host S3).

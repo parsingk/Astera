@@ -66,7 +66,10 @@ const RUN_FIELDS = [
   'worktree',
   'paused'
 ] as const
-type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, []>>
+/** Held back like TASK_HIDDEN: the roll tap's bookkeeping of a stopped coordinator. What a script
+ *  needs from it, that the Run waits for a reset and until when, is the `limited` ending of `runs wait`. */
+const RUN_HIDDEN = ['coordinatorStop'] as const
+type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, typeof RUN_HIDDEN>>
 const RUN = [...RUN_FIELDS, ...DERIVED]
 
 const TASK_FIELDS = [

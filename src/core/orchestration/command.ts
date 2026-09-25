@@ -73,6 +73,7 @@ import { isValidRule, type ScheduleRule } from '../scheduler/rule'
 import { parseCheckFlag } from '../workUnit/verification'
 import { outcomeOf, progressOf } from './view'
 import { runningRunCount } from './running'
+import { appDriven } from './schedule'
 import type { RunOutcome } from '../types'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
@@ -531,7 +532,7 @@ const jobView = (s: OrchState, job: Job, run: JobRun | undefined): Record<string
  * 질문을 먼저 본다. 열린 질문이 있는 회차는 Task 가 전부 terminal 이어도 아직 사람을 기다리는
  * 중이고, 그쪽이 스크립트가 먼저 알아야 하는 사실이다.
  */
-const waitEndingFor = (s: OrchState, runId: string): Record<string, unknown> | null => {
+const waitEndingFor = (s: OrchState, runId: string, now: string): Record<string, unknown> | null => {
   const run = s.runs.find((r) => r.id === runId)
   if (!run) return null
   const job = s.jobs.find((j) => j.id === run.jobId)
@@ -541,22 +542,55 @@ const waitEndingFor = (s: OrchState, runId: string): Record<string, unknown> | n
   if (run.paused === true || job?.paused === true) return { ...base, state: 'paused' }
   // Q3 (S6): every worker of this Run waits for a usage limit to reset, so nothing moves before then.
   // The worker resumes by itself at the reset; this only lets a script stop holding on. No Gate (A58).
-  const limited = limitedUntil(s, runId)
+  // The coordinator's own wait counts as well (S6 limits D2, limitedUntil).
+  const limited = limitedUntil(s, runId, now)
   if (limited) return { ...base, state: 'limited', resetsAt: limited }
   const outcome = outcomeOf(s, runId)
   return outcome === 'running' ? null : { ...base, state: outcome }
 }
 
-/** The earliest reset every open Dispatch of the Run is waiting for, or null when any open one is not
- *  waiting on a known reset, a check is running, a Task is ready to start (the loop may still dispatch
- *  it), or nothing is open. */
-const limitedUntil = (s: OrchState, runId: string): string | null => {
+/** How long past its reset a coordinator's stop still counts (S6 limits D2). A stop that should have
+ *  been cleared by now (a clear that never came: a lost 'none', a tap that went away mid-episode) must
+ *  not end every `runs wait` at once, forever. Ten minutes is past any reset the chain waits out and
+ *  resumes after (the resume lands within a minute of the reset). */
+const STALE_COORDINATOR_STOP_MS = 10 * 60_000
+
+/** The reset the Run's coordinator is stopped for, or null when it is not stopped, its stop knows no
+ *  reset (a switch to another account), or that reset is stale (STALE_COORDINATOR_STOP_MS). */
+const coordinatorResetOf = (run: JobRun, now: string): string | null => {
+  const at = run.coordinatorSessionId !== undefined ? run.coordinatorStop?.resetsAt : undefined
+  if (at === undefined) return null
+  const t = Date.parse(at)
+  if (!Number.isFinite(t) || t < Date.parse(now) - STALE_COORDINATOR_STOP_MS) return null
+  return at
+}
+
+/** The earliest reset every agent of the Run is waiting for, or null when any of them is not.
+ *
+ *  Workers: every open Dispatch waits on a known reset. Null when any open one does not, a check is
+ *  running, a Task is ready to start (the loop may still dispatch it), or nothing is open.
+ *
+ *  **The coordinator counts too** (S6 limits D2). Stopped with a known reset (coordinatorResetOf), it
+ *  makes the Run limited when every open Dispatch is also limited or none is open, and the earliest
+ *  reset of them all is the answer. A `ready` Task does not hold that off when the Run is not
+ *  app-driven (`appDriven`, schedule.ts): then no loop dispatches it (`slotsToFill` only fills app-driven
+ *  Runs) and only the coordinator starts it, which is stopped. */
+const limitedUntil = (s: OrchState, runId: string, now: string): string | null => {
+  const run = s.runs.find((r) => r.id === runId)
+  const coordinator = run ? coordinatorResetOf(run, now) : null
+  const readyHolds = coordinator === null || (run !== undefined && appDriven(s, run))
   const tasks = new Set(s.tasks.filter((t) => t.runId === runId).map((t) => t.id))
-  if (s.tasks.some((t) => tasks.has(t.id) && (t.status === 'validating' || t.status === 'reviewing' || t.status === 'ready')))
+  if (
+    s.tasks.some(
+      (t) =>
+        tasks.has(t.id) &&
+        (t.status === 'validating' || t.status === 'reviewing' || (t.status === 'ready' && readyHolds))
+    )
+  )
     return null
   const open = s.dispatches.filter((d) => tasks.has(d.taskId) && !d.endedAt && !d.outcome)
-  if (open.length === 0) return null
-  let earliest: string | null = null
+  if (open.length === 0) return coordinator
+  let earliest: string | null = coordinator
   for (const d of open) {
     const last = d.resumes?.[d.resumes.length - 1]
     if (!last || last.resumedAt !== undefined || last.resetsAt === undefined) return null
@@ -1006,7 +1040,7 @@ export async function handleCommand(
       const job = s.jobs.find((j) => j.id === id)
       if (!job) return notFound(`unknown job: ${id}`)
       const latest = latestRunOf(s, job)
-      if (latest && waitEndingFor(s, latest.id) === null)
+      if (latest && waitEndingFor(s, latest.id, deps.now?.() ?? new Date().toISOString()) === null)
         return conflict(`job ${id} is already running (run ${latest.id}) — wait for it or stop it first`)
       // **예약은 무장을 건드리지 않는다.** "지금 돌려라" 는 한 회차를 지금 만들라는 말이지
       // "이 예약을 켜라" 가 아니다 — 켜는 것은 발화 시각마다 도는 것을 뜻하고, 사람이 그것까지
@@ -1136,10 +1170,11 @@ export async function handleCommand(
       }
       const probe = (): Record<string, unknown> | null => {
         const cur = deps.getState()
-        if (!byJob) return waitEndingFor(cur, id)
+        const now = deps.now?.() ?? new Date().toISOString()
+        if (!byJob) return waitEndingFor(cur, id, now)
         const job = cur.jobs.find((j) => j.id === id)
         const run = job && latestRunOf(cur, job)
-        return run ? waitEndingFor(cur, run.id) : null
+        return run ? waitEndingFor(cur, run.id, now) : null
       }
       const timeoutMs =
         typeof args.timeoutMs === 'number' ? args.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS

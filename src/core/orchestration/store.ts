@@ -421,6 +421,11 @@ export class OrchestrationStore {
     // **detachCoordinator does the emptying**, not a `delete` written here — the same discipline the
     // `deleteRuns` note below states. The rule for what leaving a coordinator means belongs in one
     // place, and `releaseCoordinator` already goes through it.
+    //
+    // **That includes a coordinator's stop** (S6 limits D2): `detachCoordinator` drops
+    // `coordinatorStop` with the slot, so a stop recorded for a session that did not survive cannot
+    // make `runs wait` end `limited` on a Run with nobody left to wait. A slot kept here keeps its stop:
+    // the session lives, and its chain's restored wait picks the stop up (OrchRollTap.lastStopOpen).
     let coordinatorsLost = 0
     let swept: OrchState = withGates
     for (const r of withGates.runs) {

@@ -885,6 +885,23 @@ describe('a coordinator that did not survive the restart', () => {
     expect(store.get().runs[0].coordinatorSessionId).toBeUndefined()
   })
 
+  // S6 limits D2: a stop left on a slot whose session died would end every `runs wait` limited.
+  it('drops a coordinator stop with the slot, and keeps it with a slot the Host handed back', async () => {
+    const stopped = (): OrchState => {
+      const s = withCoordinator()
+      return { ...s, runs: s.runs.map((r) => ({ ...r, coordinatorStop: { since: NOW, resetsAt: NOW } })) }
+    }
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(stopped()), 'utf8')
+    const gone = new OrchestrationStore(file)
+    await gone.load({ aliveSessionIds: new Set(['someone-else']) })
+    expect(gone.get().runs[0].coordinatorStop).toBeUndefined()
+    await fs.writeFile(file, JSON.stringify(stopped()), 'utf8')
+    const kept = new OrchestrationStore(file)
+    await kept.load({ aliveSessionIds: new Set(['coord1']) })
+    expect(kept.get().runs[0].coordinatorStop).toEqual({ since: NOW, resetsAt: NOW })
+  })
+
   it('says nothing happened for a Run that never had a coordinator', async () => {
     const file = path.join(dir, 'orchestration.json')
     await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')

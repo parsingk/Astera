@@ -1961,7 +1961,9 @@ export function attachCoordinator(
 ): Res<JobRun> {
   const run = s.runs.find((r) => r.id === a.runId)
   if (!run) return err(`unknown run: ${a.runId}`)
-  const next: JobRun = { ...run, coordinatorSessionId: a.sessionId }
+  // A new coordinator starts with no stop on record: a stop belonged to the session that had it.
+  const { coordinatorStop: _stop, ...rest } = run
+  const next: JobRun = { ...rest, coordinatorSessionId: a.sessionId }
   return ok({ ...s, runs: replace(s.runs, next) }, next)
 }
 
@@ -1972,6 +1974,8 @@ export function rekeyCoordinator(
 ): Res<JobRun | null> {
   const run = s.runs.find((r) => r.coordinatorSessionId === a.oldSessionId)
   if (!run) return ok(s, null)
+  // The spread carries `coordinatorStop` on purpose: the stop is the episode's, and the episode goes on
+  // in the new session. The roll tap clears it once the rekey is committed (OrchRollTap.onRolled).
   const next: JobRun = { ...run, coordinatorSessionId: a.newSessionId }
   return ok({ ...s, runs: replace(s.runs, next) }, next)
 }
@@ -1984,5 +1988,42 @@ export function detachCoordinator(s: OrchState, a: { runId: string }): Res<JobRu
   if (!run) return err(`unknown run: ${a.runId}`)
   const next: JobRun = { ...run }
   delete next.coordinatorSessionId
+  // With no coordinator there is nobody stopped: a stop left behind would make `runs wait` end
+  // `limited` on a Run whose coordinator is gone (S6 limits D2).
+  delete next.coordinatorStop
+  return ok({ ...s, runs: replace(s.runs, next) }, next)
+}
+
+/** The coordinator of a Run stopped at a usage limit (S6 limits D1). The Run is found by `runId`, or by
+ *  the session its slot names. **Sets the stop when there is none, and otherwise only patches its
+ *  `resetsAt`** (when one is given): a repeat 'waiting' in the same episode carries a fresher reset, and
+ *  the episode is still one stop, so `since` stays the first one. The same rule as `updateStopReset`
+ *  for a worker's stop. Null when no Run matches or nothing changes. */
+export function recordCoordinatorStop(
+  s: OrchState,
+  a: ({ runId: string; sessionId?: undefined } | { sessionId: string; runId?: undefined }) & { resetsAt?: string },
+  now: string
+): Res<JobRun | null> {
+  const run =
+    a.runId !== undefined
+      ? s.runs.find((r) => r.id === a.runId && r.coordinatorSessionId !== undefined)
+      : s.runs.find((r) => r.coordinatorSessionId === a.sessionId)
+  if (!run) return ok(s, null)
+  const prev = run.coordinatorStop
+  if (prev && (a.resetsAt === undefined || prev.resetsAt === a.resetsAt)) return ok(s, null)
+  const stop = prev
+    ? { ...prev, resetsAt: a.resetsAt! }
+    : { since: now, ...(a.resetsAt !== undefined ? { resetsAt: a.resetsAt } : {}) }
+  const next: JobRun = { ...run, coordinatorStop: stop }
+  return ok({ ...s, runs: replace(s.runs, next) }, next)
+}
+
+/** The coordinator on `sessionId` is working again, or its chain let go (S6 limits D1). Null when that
+ *  session is no Run's coordinator or has no stop on record, so a caller commits nothing. */
+export function clearCoordinatorStop(s: OrchState, a: { sessionId: string }): Res<JobRun | null> {
+  const run = s.runs.find((r) => r.coordinatorSessionId === a.sessionId && r.coordinatorStop !== undefined)
+  if (!run) return ok(s, null)
+  const next: JobRun = { ...run }
+  delete next.coordinatorStop
   return ok({ ...s, runs: replace(s.runs, next) }, next)
 }

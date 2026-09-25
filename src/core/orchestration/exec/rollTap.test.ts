@@ -706,3 +706,104 @@ describe('a roll that respawns a coordinator (S6 R14, a pre-existing defect)', (
     expect(deps.state().runs[0].coordinatorSessionId).toBe('coord-new')
   })
 })
+
+// S6 limits D1: a coordinator has no Dispatch, so its stop goes on its Run slot. Each path that ends a
+// worker's stop ends the coordinator's too.
+describe('a coordinator’s stop (S6 limits D1)', () => {
+  const RESET = '2026-08-25T03:00:00.000Z'
+  const coordinated = () => {
+    const run = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
+    const attached = unwrap<{ id: string }>(attachCoordinator(run.state, { runId: run.value.id, sessionId: 'coord1' }) as never)
+    return makeDeps(attached.state)
+  }
+  const stopOf = (deps: { state: () => OrchState }) => deps.state().runs[0].coordinatorStop
+
+  it("records a 'waiting' on the Run slot, with its reset, and reads no git", async () => {
+    const deps = coordinated()
+    const g = fakeGit(['never'])
+    new OrchRollTap(deps, { git: g.git }).onRollState(rollState({ sessionId: 'coord1', state: 'waiting', nextRetryAt: RESET }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopOf(deps)).toEqual({ since: NOW, resetsAt: RESET })
+    expect(g.calls).toBe(0)
+  })
+
+  it("patches the reset of a repeat 'waiting' in the same episode, and a 'switching' then 'waiting' gains one", async () => {
+    const deps = coordinated()
+    const tap = new OrchRollTap(deps)
+    tap.onRollState(rollState({ sessionId: 'coord1', state: 'switching' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopOf(deps)).toEqual({ since: NOW })
+    tap.onRollState(rollState({ sessionId: 'coord1', state: 'waiting', nextRetryAt: RESET }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopOf(deps)).toEqual({ since: NOW, resetsAt: RESET })
+    tap.onRollState(rollState({ sessionId: 'coord1', state: 'waiting', nextRetryAt: '2026-08-25T03:15:00.000Z' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopOf(deps)).toEqual({ since: NOW, resetsAt: '2026-08-25T03:15:00.000Z' })
+  })
+
+  for (const end of ['nudged', 'none', 'stalled'] as const) {
+    it(`clears the stop on '${end}', and records the next stop afresh`, async () => {
+      const deps = coordinated()
+      const tap = new OrchRollTap(deps)
+      tap.onRollState(rollState({ sessionId: 'coord1', state: 'waiting', nextRetryAt: RESET }))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(stopOf(deps)).toBeDefined()
+      tap.onRollState(rollState({ sessionId: 'coord1', state: end }))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(stopOf(deps)).toBeUndefined()
+      tap.onRollState(rollState({ sessionId: 'coord1', state: 'waiting', nextRetryAt: RESET }))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(stopOf(deps)).toEqual({ since: NOW, resetsAt: RESET })
+    })
+  }
+
+  it('clears the stop on a roll, with the slot on the new session, and the new session’s next stop is recorded', async () => {
+    const deps = coordinated()
+    const tap = new OrchRollTap(deps)
+    tap.onRollState(rollState({ sessionId: 'coord1', state: 'switching' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopOf(deps)).toBeDefined()
+    await tap.onRolled('coord1', { id: 'coord2', accountId: 'acc2' })
+    expect(deps.state().runs[0].coordinatorSessionId).toBe('coord2')
+    expect(stopOf(deps)).toBeUndefined()
+    // No 'none' came (the auto-prompt window can skip it): the mark must not have moved onto coord2.
+    tap.onRollState(rollState({ sessionId: 'coord2', state: 'waiting', nextRetryAt: RESET }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopOf(deps)).toEqual({ since: NOW, resetsAt: RESET })
+  })
+
+  it("a restored 'waiting' (reattach) lets the later 'nudged' clear the stop another owner recorded", async () => {
+    const deps = coordinated()
+    const first = new OrchRollTap(deps)
+    first.onRollState(rollState({ sessionId: 'coord1', state: 'waiting', nextRetryAt: RESET }))
+    await vi.advanceTimersByTimeAsync(0)
+    first.dispose()
+    const next = new OrchRollTap(deps)
+    next.onRollState(rollState({ sessionId: 'coord1', state: 'waiting', nextRetryAt: RESET, reattach: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopOf(deps)).toEqual({ since: NOW, resetsAt: RESET }) // nothing new recorded
+    next.onRollState(rollState({ sessionId: 'coord1', state: 'nudged' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopOf(deps)).toBeUndefined()
+  })
+
+  it("a restored 'waiting' with no stop on record records none, and its 'nudged' commits nothing", async () => {
+    const deps = coordinated()
+    const before = deps.state()
+    const tap = new OrchRollTap(deps)
+    tap.onRollState(rollState({ sessionId: 'coord1', state: 'waiting', nextRetryAt: RESET, reattach: true }))
+    tap.onRollState(rollState({ sessionId: 'coord1', state: 'nudged' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deps.state()).toBe(before)
+  })
+
+  it('a user tab session’s stop and its end commit nothing', async () => {
+    const deps = coordinated()
+    const before = deps.state()
+    const tap = new OrchRollTap(deps)
+    tap.onRollState(rollState({ sessionId: 'tab1', state: 'waiting', nextRetryAt: RESET }))
+    tap.onRollState(rollState({ sessionId: 'tab1', state: 'none' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deps.state()).toBe(before)
+  })
+})

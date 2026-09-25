@@ -5240,6 +5240,83 @@ describe('jobs wait / runs wait', () => {
     await call(deps, 'task-create', { run: runId, title: 't2', spec: 's', account: 'acc1' })
     expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 120 })).body).toMatchObject({ state: 'timeout' })
   })
+  // S6 limits D2: the coordinator's own wait counts. NOW here is 2026-08-04T00:00Z.
+  const coordinatorStops = async (
+    deps: OrchServerDeps & { state: OrchState },
+    runId: string,
+    resetsAt: string | undefined
+  ): Promise<void> => {
+    const cur = deps.getState()
+    await deps.setState({
+      ...cur,
+      runs: cur.runs.map((r) =>
+        r.id === runId
+          ? { ...r, coordinatorSessionId: 'coord1', coordinatorStop: { since: NOW, ...(resetsAt ? { resetsAt } : {}) } }
+          : r
+      )
+    })
+  }
+  it('ends limited when the coordinator waits for a reset and the Run has no worker (S6 limits D2)', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    await coordinatorStops(deps, runId, '2026-08-04T03:00:00.000Z')
+    expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 500 })).body).toMatchObject({
+      state: 'limited',
+      runId,
+      resetsAt: '2026-08-04T03:00:00.000Z'
+    })
+    const jobId = deps.getState().jobs[0].id
+    expect((await call(deps, 'jobs-wait', { id: jobId, timeoutMs: 500 })).body).toMatchObject({ state: 'limited' })
+  })
+  it('keeps waiting on a coordinator stop with no known reset (a switch to another account)', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    await coordinatorStops(deps, runId, undefined)
+    expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 120 })).body).toMatchObject({ state: 'timeout' })
+  })
+  it('with a coordinator and a worker both waiting, names the earliest reset', async () => {
+    const workerFirst = await waitingOnReset('2026-08-04T02:00:00.000Z')
+    await coordinatorStops(workerFirst.deps, workerFirst.runId, '2026-08-04T03:00:00.000Z')
+    expect((await call(workerFirst.deps, 'runs-wait', { id: workerFirst.runId, timeoutMs: 500 })).body).toMatchObject({
+      state: 'limited',
+      resetsAt: '2026-08-04T02:00:00.000Z'
+    })
+    const coordinatorFirst = await waitingOnReset('2026-08-04T04:00:00.000Z')
+    await coordinatorStops(coordinatorFirst.deps, coordinatorFirst.runId, '2026-08-04T03:00:00.000Z')
+    expect((await call(coordinatorFirst.deps, 'runs-wait', { id: coordinatorFirst.runId, timeoutMs: 500 })).body).toMatchObject({
+      state: 'limited',
+      resetsAt: '2026-08-04T03:00:00.000Z'
+    })
+  })
+  it('keeps waiting while a worker works, however long the coordinator waits', async () => {
+    const working = await waitingOnReset('2026-08-04T02:00:00.000Z', true)
+    await coordinatorStops(working.deps, working.runId, '2026-08-04T03:00:00.000Z')
+    expect((await call(working.deps, 'runs-wait', { id: working.runId, timeoutMs: 120 })).body).toMatchObject({ state: 'timeout' })
+  })
+  // Only the stopped coordinator starts a ready Task of a Run the app does not drive: nothing moves.
+  it('a ready Task does not hold off limited when only the coordinator starts it, and does when the app drives the Run', async () => {
+    const { deps, runId, jobId } = await seeded()
+    expect(deps.getState().tasks[0].status).toBe('ready')
+    await coordinatorStops(deps, runId, '2026-08-04T03:00:00.000Z')
+    expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 500 })).body).toMatchObject({
+      state: 'limited',
+      resetsAt: '2026-08-04T03:00:00.000Z'
+    })
+    const cur = deps.getState()
+    await deps.setState({ ...cur, jobs: cur.jobs.map((j) => (j.id === jobId ? { ...j, autoDispatch: true } : j)) })
+    expect((await call(deps, 'runs-wait', { id: runId, timeoutMs: 120 })).body).toMatchObject({ state: 'timeout' })
+  })
+  // A clear that never came must not end every wait at once, forever.
+  it('ignores a coordinator stop whose reset is more than ten minutes past', async () => {
+    const stale = await seeded()
+    await coordinatorStops(stale.deps, stale.runId, '2026-08-03T23:49:00.000Z')
+    expect((await call(stale.deps, 'runs-wait', { id: stale.runId, timeoutMs: 120 })).body).toMatchObject({ state: 'timeout' })
+    const recent = await seeded()
+    await coordinatorStops(recent.deps, recent.runId, '2026-08-03T23:55:00.000Z')
+    expect((await call(recent.deps, 'runs-wait', { id: recent.runId, timeoutMs: 500 })).body).toMatchObject({ state: 'limited' })
+  })
   it('an open question still comes first', async () => {
     const { deps, runId } = await waitingOnReset('2026-09-25T15:00:00.000Z')
     // createGate refuses a Task with an open Dispatch (state.ts, A58), so the question is on a second Task.

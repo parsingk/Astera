@@ -20,6 +20,8 @@
 // core/rolling/retry.ts 머리말이 "타이머 수명을 공통 부모로 올리는 것은 이 앱에서 버그를 가장 많이
 // 낸 축" 이라고 적어 두었고, 두 구독자가 각자 자기 타이머를 갖는 것이 그 경고를 지키는 모양이다.
 import {
+  clearCoordinatorStop,
+  recordCoordinatorStop,
   recordResume,
   recordStopHead,
   recordStopSnapshot,
@@ -75,7 +77,8 @@ export class OrchRollTap {
    *  (~146행). 그 셋 다 Dispatch 는 새 id 로 재키잉되지 않은 채 남으므로, 새 id 로 오는 다음 정지는
    *  거기 붙일 Dispatch 를 아예 찾지 못해(recordStop 이 조용히 넘어간다) 표시가 새 id 에 남아도
    *  잃는 기록이 없다. 사용자 탭 세션(~133행)의 표시도 같은 이유로 dispose() 까지 그저 남아 있을
-   *  뿐이다.
+   *  뿐이다. A coordinator's mark is not among them: its stops are recorded on the Run slot now
+   *  (S6 limits D1), so onRolled deletes its mark once the slot rekey is committed.
    *
    *  **`'nudged'` 를 재개로 볼지 가르는 판별자도 겸한다** — onRollState 의 'nudged' 처리를 보라.
    *  이 세션에 정지가 기록돼 있을 때만 재개도 기록한다. */
@@ -136,10 +139,19 @@ export class OrchRollTap {
     if (this.stopped.delete(oldSessionId)) this.stopped.add(newInfo.id)
     // A coordinator's slot follows the roll too (S6 R14). Before the Dispatch branch, whose "not a
     // worker" return every coordinator takes, and committed on its own: nothing below depends on it.
+    //
+    // **The roll ends the coordinator's stop, in the same commit** (S6 limits D1): the session runs
+    // again on its new id, which is what the Dispatch branch below says of a worker by closing its
+    // `resumes` entry. The rekey carries the stop over and this clears it, so no state ever has the
+    // new session stopped. The episode mark goes too, once the commit holds, for the reason the
+    // Dispatch branch deletes it: a coordinator's stops are recorded now, and a mark left on the new
+    // id would drop its next stop.
     const slot = rekeyCoordinator(this.deps.getState(), { oldSessionId, newSessionId: newInfo.id })
     if (slot.ok && slot.value) {
+      const cleared = clearCoordinatorStop(slot.state, { sessionId: newInfo.id })
       try {
-        await this.deps.setState(slot.state)
+        await this.deps.setState(cleared.ok ? cleared.state : slot.state)
+        this.stopped.delete(newInfo.id)
         this.deps.log?.(`coordinator slot run=${slot.value.id} rekeyed ${oldSessionId} -> ${newInfo.id}`)
       } catch (err) {
         this.deps.log?.(`coordinator slot rekey commit failed run=${slot.value.id}: ${String(err)}`)
@@ -247,6 +259,12 @@ export class OrchRollTap {
   onRollState(e: RollStateEvent): void {
     if (e.state === 'none' || e.state === 'stalled') {
       this.stopped.delete(e.sessionId)
+      // A coordinator's stop ends with the episode (S6 limits D1). A worker's `resumes` entry is left
+      // for its resume to close, since it is history; the coordinator's is only "stopped now", and
+      // after 'none' or 'stalled' that is no longer known to be true.
+      void this.clearCoordinator(e.sessionId).catch((err) =>
+        this.deps.log?.(`coordinator stop clear failed session=${e.sessionId}: ${String(err)}`)
+      )
       return
     }
     // 'nudged' = 같은 계정에서 제자리 재개했다(claude 의 resumeInPlace, codex 의 resumeInPlace).
@@ -326,7 +344,10 @@ export class OrchRollTap {
   ): Promise<void> {
     const state = this.deps.getState()
     const dispatch = state.dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
-    if (!dispatch) return // Job 워커가 아니다(사용자 탭 세션) — 잡을 것이 없다
+    // No Dispatch: a Run's coordinator, or a user tab session. The coordinator's stop goes on its Run
+    // slot (S6 limits D1), with no HEAD: nothing briefs a coordinator from a Checkpoint. A user tab
+    // session is no Run's coordinator either, so nothing is recorded for it.
+    if (!dispatch) return this.recordCoordinator(sessionId, nextRetryAt)
     const r = recordStopSnapshot(
       state,
       {
@@ -351,18 +372,48 @@ export class OrchRollTap {
     await this.deps.setState(patched.state)
   }
 
-  /** Whether the session's open Dispatch has a last `resumes` entry with no resumedAt, which is a
-   *  stop some owner recorded and nobody closed yet. A coordinator has no Dispatch, so no entry: its
-   *  stops are never recorded (recordStop looks for a Dispatch too), and there is nothing to close. */
+  /** Whether a stop some owner recorded for this session is still open: the open Dispatch's last
+   *  `resumes` entry has no resumedAt, or, for a coordinator, its Run slot has a `coordinatorStop`
+   *  (S6 limits D1). A restored wait then enters the episode, so the resume that follows closes it. */
   private lastStopOpen(sessionId: string): boolean {
-    const dispatch = this.deps.getState().dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
-    const last = dispatch?.resumes?.[dispatch.resumes.length - 1]
+    const state = this.deps.getState()
+    const dispatch = state.dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
+    if (!dispatch) return this.lastCoordinatorStop(sessionId)
+    const last = dispatch.resumes?.[dispatch.resumes.length - 1]
     return last !== undefined && last.resumedAt === undefined
+  }
+
+  /** A coordinator's stop, set on its Run slot, or its reset patched when the slot already has one. */
+  private async recordCoordinator(sessionId: string, resetsAt: string | undefined): Promise<void> {
+    const r = recordCoordinatorStop(
+      this.deps.getState(),
+      { sessionId, ...(resetsAt !== undefined ? { resetsAt } : {}) },
+      this.deps.now?.() ?? new Date().toISOString()
+    )
+    if (!r.ok || r.value === null) return
+    await this.deps.setState(r.state)
+  }
+
+  /** The coordinator on this session is no longer stopped. Commits nothing when it had no stop. */
+  private async clearCoordinator(sessionId: string): Promise<void> {
+    const r = clearCoordinatorStop(this.deps.getState(), { sessionId })
+    if (!r.ok || r.value === null) return
+    await this.deps.setState(r.state)
+  }
+
+  /** Whether this session is a Run's coordinator (no Dispatch) with a stop on record. */
+  private lastCoordinatorStop(sessionId: string): boolean {
+    const state = this.deps.getState()
+    if (state.dispatches.some((d) => d.sessionId === sessionId && !d.endedAt)) return false
+    return state.runs.some((r) => r.coordinatorSessionId === sessionId && r.coordinatorStop !== undefined)
   }
 
   /** 같은 에피소드 안에서 갱신된 리셋 시각을 이미 있는 항목에 적어 넣는다 — 새 항목을 쌓지 않는다.
    *  updateStopReset(core/orchestration/state.ts) 의 머리말에 이유가 있다. */
   private async recordStopReset(sessionId: string, resetsAt: string): Promise<void> {
+    // A coordinator's stop is patched the same way, and only when one is on record: this is a patch
+    // of the episode's stop, never a new one (S6 limits D1).
+    if (this.lastCoordinatorStop(sessionId)) return this.recordCoordinator(sessionId, resetsAt)
     const r = updateStopReset(this.deps.getState(), { sessionId, resetsAt })
     if (!r.ok || r.value === null) return
     await this.deps.setState(r.state)
@@ -373,7 +424,9 @@ export class OrchRollTap {
   private async recordResumed(sessionId: string): Promise<void> {
     const state = this.deps.getState()
     const dispatch = state.dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
-    if (!dispatch) return // Job 워커가 아니다(사용자 탭 세션) — 잡을 것이 없다
+    // No Dispatch: a coordinator resumed in place, so its stop ends (S6 limits D1). A user tab session
+    // has none, and nothing is committed.
+    if (!dispatch) return this.clearCoordinator(sessionId)
     const r = recordResume(
       state,
       { sessionId, accountId: dispatch.accountId },
