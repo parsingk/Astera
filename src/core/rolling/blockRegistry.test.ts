@@ -169,3 +169,20 @@ describe('BlockRegistry — snapshot (Task 3)', () => {
     expect(new BlockRegistry().snapshot(0)).toEqual({ records: {}, cleared: [] })
   })
 })
+
+describe('BlockRegistry — noteCleared (Task 3 수정 1차)', () => {
+  it('기록은 지우지 않고 clear 시각만 더 늦은 쪽으로 올린다', () => {
+    const r = new BlockRegistry()
+    r.record('a', rec(5_000, 50), 50)
+    const heard: unknown[] = []
+    r.onChange((e) => heard.push(e))
+    r.noteCleared('a', 20)
+    expect(r.get('a', 60)).toEqual(rec(5_000, 50))
+    expect(r.snapshot(60).cleared).toEqual([{ accountId: 'a', at: 20 }])
+    r.noteCleared('a', 10) // 더 이른 시각은 내리지 않는다
+    expect(r.snapshot(60).cleared).toEqual([{ accountId: 'a', at: 20 }])
+    r.absorb('a', rec(9_000, 15), 60) // 15 <= 20: 무시된다
+    expect(r.get('a', 60)).toEqual(rec(5_000, 50))
+    expect(heard).toEqual([])
+  })
+})

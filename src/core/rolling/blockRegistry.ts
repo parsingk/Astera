@@ -146,6 +146,14 @@ export class BlockRegistry {
     this.merge(accountId, rec, now)
   }
 
+  /** Remembers a remote clear time without clearing (Task 3 fix round 1): the clear arrived after this
+   *  side recorded a newer block, so the block stands, but a remote record observed before that clear
+   *  must still be ignored by absorb(). Only ever raises the remembered time. Fires nothing. */
+  noteCleared(accountId: string, at: number): void {
+    const held = this.clearedAt.get(accountId)
+    if (held === undefined || at > held) this.clearedAt.set(accountId, at)
+  }
+
   /** Clears because the other process cleared, without firing onChange (same no-echo reasoning as
    *  absorb()). Remembers `at` as this account's clear time exactly like a local clear() does, so a
    *  remote record older than it is ignored by absorb() regardless of which side did the clearing. */
