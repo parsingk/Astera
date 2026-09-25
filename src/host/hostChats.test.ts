@@ -343,3 +343,69 @@ describe('createHostChats — the handles it keeps (Task 3 review)', () => {
     expect(r.chats.handleCount()).toBe(0)
   })
 })
+
+describe('createHostChats — the unattended permission policy (Task 7)', () => {
+  it('denies a held approval after 60 s under deny-after-60s while the Host writes, and holds by default', async () => {
+    vi.useFakeTimers()
+    try {
+      const r = rig({ unattendedPermission: 'deny-after-60s' })
+      r.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n`)
+      r.chats.adopt(r.entry())
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(r.procs[0].sent.join('')).toContain('"behavior":"deny"')
+      expect(r.logs.join('\n')).toMatch(/unattended: denied \S+ in session c1 after 60 s \(policy deny-after-60s\)/)
+      const held = rig()
+      held.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n`)
+      held.chats.adopt(held.entry())
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      expect(held.procs[0].sent.join('')).not.toContain('"behavior":"deny"')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Review Focus 4 through the real holders: the app attaching at 59 s stops the deny.
+  it('does not deny once an app attaches before the 60 s are up, and counts again from its leave', async () => {
+    vi.useFakeTimers()
+    try {
+      const r = rig({ unattendedPermission: 'deny-after-60s' })
+      r.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n`)
+      r.chats.adopt(r.entry())
+      await vi.advanceTimersByTimeAsync(59_000)
+      r.holders.heldBy('p1', 1)
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      expect(r.procs[0].sent.join('')).not.toContain('"behavior":"deny"')
+      r.holders.appGone(1)
+      await vi.advanceTimersByTimeAsync(59_000)
+      expect(r.procs[0].sent.join('')).not.toContain('"behavior":"deny"')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(r.procs[0].sent.join('')).toContain('"behavior":"deny"')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // A forgotten or disposed session's armed timer never denies: the forget cancels it and the fire asks
+  // again (so no single mutation here makes this fail; chatPolicy.test.ts covers each half).
+  it('arms nothing after a forget or a dispose', async () => {
+    vi.useFakeTimers()
+    try {
+      const kept = rig({ unattendedPermission: 'deny-after-60s' })
+      const gone = rig({ unattendedPermission: 'deny-after-60s' })
+      const disposed = rig({ unattendedPermission: 'deny-after-60s' })
+      for (const r of [kept, gone, disposed]) {
+        r.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n`)
+        r.chats.adopt(r.entry())
+      }
+      await vi.advanceTimersByTimeAsync(30_000)
+      gone.chats.forget('c1')
+      disposed.chats.dispose()
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      expect(kept.procs[0].sent.join('')).toContain('"behavior":"deny"')
+      expect(gone.procs[0].sent.join('')).not.toContain('"behavior":"deny"')
+      expect(disposed.procs[0].sent.join('')).not.toContain('"behavior":"deny"')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

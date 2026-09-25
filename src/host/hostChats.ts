@@ -17,6 +17,7 @@ import { chatPromptsOf, type ChatAnswerResult, type ChatPrompt } from '../core/s
 import type { ProcRegistry } from './procRegistry'
 import type { ProcHolders } from './procHolders'
 import { createHostProcs, type HostProcHandle, type HostProcsDeps } from './hostProcs'
+import { createChatPolicy } from './chatPolicy'
 
 /** How long `started()` waits for a Host-spawned proc's handshake and carry-on (plan ruling P5). */
 export const CHAT_START_PUSH_MS = 45_000
@@ -142,7 +143,22 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})
   })
 
+  // Task 7: the unattended permission policy, built before anything can call forget. Its callbacks read
+  // the functions below only when a review or a fire runs, never at build time.
+  const policy = createChatPolicy({
+    policyOf: (id) => unattendedOf(id),
+    isWriter: (id) => isWriter(id),
+    open: (id) => manager.pendingOf(id),
+    answered: (id) => answeredOf(id),
+    // Through the adapter's normal answer path, so its state stays honest; a NotWriterError (an app took
+    // the proc between the check and the write) rejects here and the policy logs it.
+    deny: (sid, rid) => manager.answer(sid, rid, { kind: 'approval', decision: 'decline' }),
+    log: d.log,
+    ...(d.after ? { after: d.after } : {})
+  })
+
   const forget = (id: string): void => {
+    policy.forget(id)
     manager.forget(id)
     handles.get(id)?.release()
     handles.delete(id)
@@ -165,6 +181,11 @@ export function createHostChats(d: HostChatsDeps): HostChats {
   }
 
   const noteOf = (id: string): Record<string, unknown> => entryOf(id)?.meta?.restore ?? {}
+  /** The note's policy (the app's setUnattendedPermission lands there), else the manager's. */
+  const unattendedOf = (id: string): UnattendedPermission => {
+    const v = noteOf(id).unattendedPermission
+    return isUnattendedPermission(v) ? v : manager.unattendedOf(id)
+  }
   const answeredOf = (id: string): string[] => {
     const a = noteOf(id).answered
     return Array.isArray(a) ? a.filter((v): v is string => typeof v === 'string') : []
@@ -200,6 +221,24 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     sent.catch((err: unknown) => d.log(`chat ${id}: the carry-on could not be sent after the takeover: ${errText(err)}`))
   }
 
+  // Task 7: every request and status event reviews its session, every writer change reviews them all
+  // (P12), and an exit forgets it. A throw here must not reach the adapter that emitted the event.
+  const offEvents = manager.subscribe((id, e) => {
+    try {
+      if (e.type === 'exit') policy.forget(id)
+      else if (e.type === 'request' || e.type === 'status') policy.review(id)
+    } catch (err) {
+      d.log(`chat ${id}: the unattended policy failed on a ${e.type} event: ${errText(err)}`)
+    }
+  })
+  const offWriter = d.holders.onChange(() => {
+    try {
+      policy.reviewAll(manager.list().map((i) => i.id))
+    } catch (err) {
+      d.log(`the unattended policy failed on a writer change: ${errText(err)}`)
+    }
+  })
+
   const send = async (id: string, text: string, beforeWrite?: () => void): Promise<void> => {
     if (!isWriter(id)) throw new Error('not the writer')
     beforeWrite?.()
@@ -229,6 +268,8 @@ export function createHostChats(d: HostChatsDeps): HostChats {
       try {
         h.replay()
         carryOnAfterAdopt(entry.id, meta.id, meta.restore)
+        // A prompt the replay opened is covered at once.
+        policy.review(meta.id)
       } catch (err) {
         forget(meta.id)
         throw err
@@ -319,10 +360,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
         return { answered: false, reason: 'not-open' }
       }
     },
-    unattendedOf(id) {
-      const v = noteOf(id).unattendedPermission
-      return isUnattendedPermission(v) ? v : manager.unattendedOf(id)
-    },
+    unattendedOf,
     answeredOf,
     chosenModelOf: (id) => manager.chosenModelOf(id),
     bypassedOf: (id) => manager.bypassedOf(id),
@@ -330,7 +368,10 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     onWriterChange: (fn) => d.holders.onChange(fn),
     handleCount: () => handles.size,
     dispose() {
+      offEvents()
+      offWriter()
       for (const s of manager.list()) forget(s.id)
+      policy.dispose()
       hostProcs.dispose()
     }
   }
