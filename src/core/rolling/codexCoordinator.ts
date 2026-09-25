@@ -742,11 +742,12 @@ export class CodexRollingCoordinator {
   }
 
   /** A dev hook — forces a roll as if a real limit had hit, bypassing the gates (mirrors forceRoll in claudeCoordinator.ts) */
-  async forceRoll(sessionId?: string): Promise<void> {
+  async forceRoll(sessionId?: string): Promise<boolean> {
     const chain = sessionId ? this.chains.get(sessionId) : [...this.chains.values()][0]
     if (!chain || chain.disposed) throw new Error('no active codex rolling chain')
     await this.refresh(chain)
-    this.onLimit(chain, 'force')
+    // Whether the chain acted (S6 final review M1), as on the claude side.
+    return this.onLimit(chain, 'force')
   }
 
   /** The roll banner's snapshot, read once as the renderer adopts a session — session:rollState is
@@ -1123,17 +1124,18 @@ export class CodexRollingCoordinator {
     this.snap(chain)
   }
 
-  private onLimit(chain: Chain, reason: LimitReason): void {
-    if (chain.rolling || chain.waitTimer || chain.disposed) return
+  /** True when the chain acted on the limit (a roll or a wait), false when a guard below declined it. */
+  private onLimit(chain: Chain, reason: LimitReason): boolean {
+    if (chain.rolling || chain.waitTimer || chain.disposed) return false
     // Quiet (S6 R1): no verdict, no shared record, no roll or wait. forceRoll reaches here too.
-    if (!this.acts(chain)) return
+    if (!this.acts(chain)) return false
     if (!chain.codexSessionId || !chain.rolloutPath) {
       // An unmapped state does not resolve itself — logging on every repeat detection fills the log with the same line
       if (!chain.unmappedWarned) {
         chain.unmappedWarned = true
         this.deps.log(`codex roll skipped — rollout unmapped session=${chain.liveId} reason=${reason}`)
       }
-      return
+      return false
     }
     if (chain.healthyTimer) {
       clearTimeout(chain.healthyTimer)
@@ -1192,6 +1194,7 @@ export class CodexRollingCoordinator {
       void this.roll(chain, target)
     }
     this.snap(chain)
+    return true
   }
 
   /** Arms a planned wait: the banner, the timer, and the plan a snapshot carries (S6 R4). The claude

@@ -181,3 +181,15 @@ export function orchHoldsSession(state: OrchState | null, sessionId: string): bo
     state.runs.some((r) => r.coordinatorSessionId === sessionId)
   )
 }
+
+/** S6 final review M1: the Host's `roll-force` answer (always 200) read as whether the chain acted.
+ *  `forced: false` is "nothing happened" (the chain was rolling, waiting, settling or quiet), logged
+ *  with the Host's reason and not thrown: the dev hook asked for a roll and there was none to force.
+ *  An older Host answered `{ forced: true }` for a no-op too, so anything but an explicit false counts
+ *  as forced, as it did before. */
+export function hostForced(body: unknown, sessionId: string, log: (m: string) => void): boolean {
+  const b = body as { forced?: unknown; why?: unknown } | null
+  if (b?.forced !== false) return true
+  log(`roll-force on ${sessionId}: nothing happened (${typeof b.why === 'string' ? b.why : 'no reason given'})`)
+  return false
+}

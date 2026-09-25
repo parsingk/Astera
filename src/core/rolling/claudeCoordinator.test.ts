@@ -304,7 +304,8 @@ describe('RollingCoordinator', () => {
     h.payloads.set('s2', payload(97, 'claude-sess')) // a2도 이미 한도 임박한 낡은/실제 payload
     // onLimitCandidate·tick 폴백·forceRoll 전부 onLimit이라는 같은 choke point를 거친다 —
     // forceRoll로 그 choke point를 직접 구동해 awaitingReady 가드 하나로 셋 다 지켜지는지 확인한다.
-    await h.coord.forceRoll('s2')
+    // It also says so (S6 final review M1): a declined force resolves false.
+    expect(await h.coord.forceRoll('s2')).toBe(false)
     await flush()
     expect(h.spawned).toHaveLength(1) // 재롤 없음 — awaitingReady 가드가 막는다
   })
@@ -2338,7 +2339,7 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }) // 조회 시작 — 아직 안 끝난다
     await flush()
     expect(h.events).toEqual([]) // 조회가 미결이라 아직 아무 일도 없다
-    await h.coord.forceRoll('s1') // 다른 경로가 먼저 롤을 끝낸다
+    expect(await h.coord.forceRoll('s1')).toBe(true) // 다른 경로가 먼저 롤을 끝낸다 (it acted: S6 final review M1)
     await vi.advanceTimersByTimeAsync(1_200) // 준비 폴링 → 자동 프롬프트 → awaitingReady 해제
     const after = h.events.length
     resolveUsage(peak(100)) // 뒤늦게 도착한 옛 세션의 판정

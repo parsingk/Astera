@@ -1104,9 +1104,18 @@ describe('CodexRollingCoordinator', () => {
     await writeRollout({ accountId: 'c1', uuid: 'cx-5', cwd: h.info1.cwd, primary: 3 })
     h.coord.register(h.info1)
     await advance(1_500)
-    await h.coord.forceRoll('s1')
+    expect(await h.coord.forceRoll('s1')).toBe(true) // it acted (S6 final review M1)
     await advance(100)
     expect(h.events).toContain('spawn:s2:c2')
+    h.coord.stop()
+  })
+
+  it('forceRoll on a chain that declines (rollout not mapped yet) resolves false and spawns nothing (S6 final review M1)', async () => {
+    const h = harness()
+    h.coord.register(h.info1) // no rollout written, so the chain stays unmapped
+    expect(await h.coord.forceRoll('s1')).toBe(false)
+    await advance(100)
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toHaveLength(0)
     h.coord.stop()
   })
 

@@ -898,12 +898,14 @@ export class RollingCoordinator {
     if (chain) this.disposeChain(chain)
   }
 
-  /** A dev hook — forces a roll as if a real limit had hit, bypassing the gates (for manual end-to-end checks) */
-  async forceRoll(sessionId?: string): Promise<void> {
+  /** A dev hook — forces a roll as if a real limit had hit, bypassing the gates (for manual end-to-end checks).
+   *  Resolves with whether the chain acted: false when it was rolling, waiting, settling after a roll, or
+   *  quiet (S6 final review M1), so the caller does not report a no-op as a forced roll. */
+  async forceRoll(sessionId?: string): Promise<boolean> {
     const chain = sessionId ? this.chains.get(sessionId) : [...this.chains.values()][0]
     if (!chain || chain.disposed) throw new Error('no active rolling chain')
     await this.refreshMeta(chain)
-    this.onLimit(chain)
+    return this.onLimit(chain)
   }
 
   /** The roll banner's snapshot, read once as the renderer adopts a session — session:rollState is
@@ -1210,7 +1212,8 @@ export class RollingCoordinator {
     chain.recovery[chain.cycle.currentIndex] = record
   }
 
-  private onLimit(chain: Chain): void {
+  /** True when the chain acted on the limit (a roll or a wait), false when a guard below declined it. */
+  private onLimit(chain: Chain): boolean {
     // The awaitingReady (post-switch cooldown) guard — onLimitCandidate, the tick's fallback .then, and
     // forceRoll all come through here, so this one line protects all three at once. Without it, within a
     // single tick limitTailCheck could finish a roll first (setting awaitingReady=true) and then the
@@ -1219,9 +1222,9 @@ export class RollingCoordinator {
     // immediately (a2→a3) — replacing a healthy account we had just switched to, for no reason. This
     // mirrors the same cooldown the PTY path in handleData already applies (the !chain.awaitingReady in
     // the hit.limit branch above).
-    if (chain.rolling || chain.waitTimer || chain.disposed || chain.awaitingReady) return
+    if (chain.rolling || chain.waitTimer || chain.disposed || chain.awaitingReady) return false
     // Quiet (S6 R1): no verdict, no shared record, no roll or wait. forceRoll and the tick reach here too.
-    if (!this.acts(chain)) return
+    if (!this.acts(chain)) return false
     if (chain.healthyTimer) {
       clearTimeout(chain.healthyTimer)
       chain.healthyTimer = null
@@ -1285,6 +1288,7 @@ export class RollingCoordinator {
       void this.roll(chain, target)
     }
     this.snap(chain)
+    return true
   }
 
   /** Arms a planned wait: the banner, the timer, and the plan a snapshot carries (S6 R4). */

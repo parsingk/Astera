@@ -2482,14 +2482,20 @@ describe('Host-local spawn (S2)', () => {
   })
   it('answers roll-state and roll-force for the app only (S6 §3.4)', async () => {
     const event = { sessionId: 's1', state: 'waiting' as const, nextRetryAt: '2026-09-25T10:00:00.000Z' }
-    const rolling = { unregister: vi.fn(), stateOf: vi.fn((id: string) => (id === 's1' ? event : null)), forceRoll: vi.fn(async () => {}), has: (id: string) => id === 's1' }
+    const rolling = { unregister: vi.fn(), stateOf: vi.fn((id: string) => (id === 's1' ? event : null)), forceRoll: vi.fn(async (_id: string) => false), has: (id: string) => id === 's1' }
     const orch = orchOver({ rolling })
     const app = { role: 'app' as const, toOthers: () => {} }
     const cli = { role: 'cli' as const, toOthers: () => {} }
     expect((await orch.call({ cmd: 'roll-state', args: { sessionId: 's1' }, sessionId: '', from: app })).body).toEqual({ state: event })
     expect((await orch.call({ cmd: 'roll-state', args: { sessionId: 's2' }, sessionId: '', from: app })).body).toEqual({ state: null })
     expect((await orch.call({ cmd: 'roll-state', args: { sessionId: 's1' }, sessionId: '', from: cli })).status).toBe(403)
+    rolling.forceRoll.mockResolvedValueOnce(true)
     expect((await orch.call({ cmd: 'roll-force', args: { sessionId: 's1' }, sessionId: '', from: app })).body).toEqual({ forced: true })
+    // A chain that declined (here it waits) answers 200 with forced:false and why (S6 final review M1).
+    rolling.forceRoll.mockResolvedValueOnce(false)
+    const quiet = await orch.call({ cmd: 'roll-force', args: { sessionId: 's1' }, sessionId: '', from: app })
+    expect(quiet.status).toBe(200)
+    expect(quiet.body).toMatchObject({ forced: false, why: expect.stringContaining('roll state: waiting') })
     expect((await orch.call({ cmd: 'roll-force', args: { sessionId: 's9' }, sessionId: '', from: app })).status).toBe(404)
     expect((await orchOver().call({ cmd: 'roll-state', args: { sessionId: 's1' }, sessionId: '', from: app })).status).toBe(501)
     expect((await orch.call({ cmd: 'roll-state', args: {}, sessionId: '', from: app })).status).toBe(400)

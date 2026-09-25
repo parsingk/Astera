@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createHostRollView, withHostRollHold, orchHoldsSession } from './hostRollView'
+import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced } from './hostRollView'
 import type { OrchState } from '../../core/orchestration/state'
 import type { HostMessage } from '../../core/host/protocol'
 
@@ -170,5 +170,20 @@ describe('withHostRollHold', () => {
     onExit({ sessionId: 's1', exitCode: 1 })
     expect(seen).toEqual(['s9'])
     await vi.waitFor(() => expect(seen).toEqual(['s9', 's1']))
+  })
+})
+
+describe('hostForced (S6 final review M1)', () => {
+  it('reads forced:false as nothing happened, logs the reason and does not throw', () => {
+    const logs: string[] = []
+    expect(hostForced({ forced: false, why: 'the chain did not act (roll state: waiting)' }, 's1', (m) => logs.push(m))).toBe(false)
+    expect(logs).toEqual(['roll-force on s1: nothing happened (the chain did not act (roll state: waiting))'])
+  })
+  it('reads forced:true, and an older Host’s answer with no flag, as forced', () => {
+    const log = vi.fn()
+    expect(hostForced({ forced: true }, 's1', log)).toBe(true)
+    expect(hostForced({}, 's1', log)).toBe(true)
+    expect(hostForced(null, 's1', log)).toBe(true)
+    expect(log).not.toHaveBeenCalled()
   })
 })

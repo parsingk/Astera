@@ -1195,8 +1195,17 @@ export function createHostOrch(a: {
           if (typeof sessionId !== 'string' || sessionId === '') return { status: 400, body: { error: `${cmd} needs a sessionId` } }
           if (cmd === 'roll-state') return { status: 200, body: { state: a.rolling.stateOf(sessionId) } }
           if (!a.rolling.has(sessionId)) return { status: 404, body: { error: `no Host rolling chain for session ${sessionId}` } }
-          await a.rolling.forceRoll(sessionId)
-          return { status: 200, body: { forced: true } }
+          // 200 either way (S6 final review M1): a chain that declined is not an error, and the app reads
+          // `forced: false` as "nothing happened" rather than throwing on a status.
+          if (await a.rolling.forceRoll(sessionId)) return { status: 200, body: { forced: true } }
+          const now = a.rolling.stateOf(sessionId)?.state ?? 'none'
+          return {
+            status: 200,
+            body: {
+              forced: false,
+              why: `the chain did not act (roll state: ${now}): it forces only when it is not rolling, waiting or settling after a roll, and no other process holds its pty`
+            }
+          }
         }
         // **Request receipts, and still the same synchronous step the call entered in** — nothing
         // above has awaited on this path, so the lookup and the claim cannot be split by a second

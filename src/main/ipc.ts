@@ -39,7 +39,7 @@ import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
 import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling } from './host/outdated'
-import { createHostRollView, withHostRollHold, orchHoldsSession } from './host/hostRollView'
+import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced } from './host/hostRollView'
 import { findHostHeldNative, nativeOfForwardedRekey } from './host/hostNativeGuard'
 import { applyAdoptRolling } from './host/adoptRolling'
 import { reattachSessions, type ReattachResult } from './host/reattach'
@@ -6931,6 +6931,8 @@ export function registerIpc(
     ipcMain.handle('rolling.forceRoll', async (_e, sessionId?: string) => {
       // A chain neither coordinator here holds is the Host's when the Host rolls (S6 §3.4): it is asked
       // to force it, and a refusal (404: not its chain either; 501: a Host too old) is thrown to the caller.
+      // A chain that declined (rolling, waiting, settling or quiet) answers 200 with `forced: false`: that
+      // resolves false, "nothing happened", as a local chain that declines does (S6 final review M1).
       if (
         sessionId &&
         !rolling?.has(sessionId) &&
@@ -6939,17 +6941,16 @@ export function registerIpc(
       ) {
         const r = await orchCall({ cmd: 'roll-force', args: { sessionId }, sessionId: '' })
         if (r.status !== 200) throw new Error(`the Host refused roll-force (${r.status}): ${JSON.stringify(r.body)}`)
-        return
+        return hostForced(r.body, sessionId, (m) => hostWiring?.log(`host: ${m}`))
       }
       // We do not know which coordinator holds that session, so try codex first and fall back to claude (dev hook)
       if (codexRolling) {
         try {
-          await codexRolling.forceRoll(sessionId)
-          return
+          return await codexRolling.forceRoll(sessionId)
         } catch {
           /* Not a codex chain — try claude */
         }
       }
-      await rolling?.forceRoll(sessionId)
+      return (await rolling?.forceRoll(sessionId)) ?? false
     })
 }

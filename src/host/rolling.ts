@@ -94,7 +94,8 @@ export interface HostRolling {
   has(sessionId: string): boolean
   unregister(sessionId: string): void
   stateOf(sessionId: string): RollStateEvent | null
-  forceRoll(sessionId: string): Promise<void>
+  /** The dev hook: whether the chain acted, false when it was rolling, waiting, settling or quiet. */
+  forceRoll(sessionId: string): Promise<boolean>
   /** The accounts snapshot and the resume strategy, read again (the tick, and at start). */
   refresh(): Promise<void>
   /** Whether accounts.json has ever been read (R23). Until it has, no account resolves, and a takeover's

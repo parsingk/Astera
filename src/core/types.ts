@@ -1421,7 +1421,8 @@ export interface UpdateApi {
  *  registered in every build: the roll banner's one-shot snapshot, read as the renderer adopts a session
  *  (`session:rollState` is pushed on changes only). */
 export interface RollingApi {
-  forceRoll(sessionId?: string): Promise<void>
+  /** Whether a chain acted: false when it was rolling, waiting, settling or quiet (nothing happened). */
+  forceRoll(sessionId?: string): Promise<boolean>
   state(sessionId: string): Promise<RollStateEvent | null>
 }
 
