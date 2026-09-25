@@ -39,8 +39,9 @@ import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
 import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling } from './host/outdated'
-import { createHostRollView } from './host/hostRollView'
-import { adoptRollingOf, adoptForkOf } from './host/adoptRolling'
+import { createHostRollView, withHostRollHold, orchHoldsSession } from './host/hostRollView'
+import { findHostHeldNative, nativeOfForwardedRekey } from './host/hostNativeGuard'
+import { applyAdoptRolling } from './host/adoptRolling'
 import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute } from './host/worktreeRoute'
 import { createHostGitOps } from './host/hostGitOps'
@@ -283,10 +284,15 @@ export interface HostWiring {
    *  slack.log and orchestration.log. The Host keeps host/host.log from its own end; this is the
    *  app's end of the same conversation. */
   log: (message: string) => void
-  /** index.ts's roll fan-out without its orchestration tap (S6 §3.4): what a roll the Host made and
-   *  pushed costs this app — the renderer, the Work Unit fork, the scheduler, Slack and the desktop
-   *  sink. `codex` adds the codex rollout watcher's re-register. Optional so a test wiring can omit it. */
-  fanOutRollEvent?: (channel: 'session:rolled' | 'session:rollState', payload: unknown, codex: boolean) => void
+  /** index.ts's roll fan-out, for a roll the Host made and pushed (S6 §3.4): what it costs this app —
+   *  the renderer, the Work Unit fork, the scheduler, Slack and the desktop sink. hostRollView always
+   *  passes `orchestration: false` (the Host rekeyed); `codex` adds the codex rollout watcher's
+   *  re-register. Optional so a test wiring can omit it. */
+  fanOutRollEvent?: (
+    channel: 'session:rolled' | 'session:rollState',
+    payload: unknown,
+    opts: { orchestration: boolean; codex: boolean }
+  ) => void
   /** Hands over the shutdown handle once the client is built. Called from inside `registerIpc`, not
    *  from a boot path — the same shape as `OrchWiring.onTabResumeReady` — and read from will-quit.
    *  Not called at all when there is no Host bundle to talk to: there is then nothing to stop. */
@@ -1044,6 +1050,27 @@ export function registerIpc(
     }
     return null
   }
+  /** Fix round 1, I1a: the same question put to the Host's own pty notes when the local indexes miss —
+   *  a session a Host roll created while this app was attached was adopted before its native id was
+   *  known. Only in front of a Host that rolls, bounded by the pty list's own deadline, and null on any
+   *  failure: the guard then behaves as before rather than blocking the resume. */
+  const liveByHostNative = async (native: string): Promise<SessionInfo | null> => {
+    const id = await findHostHeldNative(
+      {
+        hostRolls: hostSpeaksRolling(hostClient?.status() ?? { connected: false, features: [] }),
+        list: hostPtyList,
+        isCodexAccount: (accountId) => {
+          try {
+            return providerOf(core.accounts.get(accountId)) === 'codex'
+          } catch {
+            return false
+          }
+        }
+      },
+      native
+    )
+    return id ? (core.sessions.list().find((x) => x.id === id && x.status === 'running') ?? null) : null
+  }
   /** The app's view of the Host's rolls (S6 §3.4) — the two pushes, turned into the app's own roll
    *  fan-out without its orchestration tap. Built here rather than in `startHostClient` because the
    *  exit path, `rolling.state` and the adopter all read it, and they are wired long before the Host
@@ -1061,9 +1088,23 @@ export function registerIpc(
     adopt: async (ptyId) => {
       if (ptyId && takeBackRolledPty) await takeBackRolledPty(ptyId)
     },
-    forward: (channel, payload) => hostWiring?.fanOutRollEvent?.(channel, payload, isCodexPayload(channel, payload)),
-    log: (m) => hostWiring?.log(`host: ${m}`)
+    forward: (channel, payload, opts) => {
+      const codex = isCodexPayload(channel, payload)
+      hostWiring?.fanOutRollEvent?.(channel, payload, { ...opts, codex })
+      // Fix round 1, I1b: a codex roll resumes the same thread, so the history guard knows the new
+      // session by it at once — its note gains a nativeSessionId only after this adoption.
+      const n = nativeOfForwardedRekey(channel, payload, codex)
+      if (n) adoptedNative.set(n.sessionId, n.native)
+    },
+    log: (m) => hostWiring?.log(`host: ${m}`),
+    // Fix round 1, I2: the old session's exit waits until the mirror no longer names it.
+    orchHolds: (id) => orchHoldsSession(orchMirror.loaded() ? orchMirror.getState() : null, id),
+    // Fix round 1, 3: a rekey whose new session was not adopted leaves its forkSeen for the adopter.
+    isAdopted: (id) => core.sessions.list().some((x) => x.id === id)
   })
+  /** Sessions whose note says the Host rolls them (fix round 1, 4), beside the ones hostRollView has
+   *  heard about: the only sessions `rolling.state` asks the Host for. Cleared on exit. */
+  const hostOwned = new Set<string>()
   /** One reply to one `orch-call` — today's HTTP status and body, unchanged (design §5). */
   type OrchReply = { status: number; body: unknown }
   let orchCallSeq = 0
@@ -1450,12 +1491,12 @@ export function registerIpc(
    *  genuinely per-kind are NOT here: the pty's own cleanup (busy scanners, the rolling coordinators)
    *  is harmless for a chat id and is left where it was, and the chat's own (attention, the rollout
    *  watcher) lives in the chat subscriber below, next to the events that set them up. */
-  const onSessionExit = (e: { sessionId: string; exitCode: number }): void => {
-    // The exit of a session a Host roll is replacing waits until the new session is adopted and the
-    // rekey forwarded (S6 §3.4), so the renderer replaces the old tab rather than closing it. Re-entered
-    // with the same event once released, when `holds` is false.
-    if (hostRollView.holds(e.sessionId)) return hostRollView.hold(e, onSessionExit)
+  // The exit of a session a Host roll is replacing waits until the new session is adopted, the rekey
+  // forwarded and the mirror moved (S6 §3.4, withHostRollHold), so the renderer replaces the old tab
+  // rather than closing it, and the app's orchestration tap finds the Dispatch already rekeyed.
+  const onSessionExit = withHostRollHold(hostRollView, (e: { sessionId: string; exitCode: number }): void => {
     adoptedNative.delete(e.sessionId)
+    hostOwned.delete(e.sessionId)
     batcher.flush()
     // Before the renderer hears about it, because that is what closes the tab. A run outlives its
     // session by up to the whole script deadline, and its next open() would find no guest, ask for a
@@ -1522,7 +1563,7 @@ export function registerIpc(
     if (orchRollTap) orchRollTap.onExit(e)
     else if (exitsBeforeTap.hold(e) === 'full')
       orchLog(`exit of session=${e.sessionId} dropped: too many exits arrived before orchestration started`)
-  }
+  })
   core.sessions.onExit = onSessionExit
   core.chat.onExit = onSessionExit
   /** Chat sessions' own log line, as this wiring block sees it. They are the Host's line processes, so
@@ -1755,7 +1796,7 @@ export function registerIpc(
     // The same guard for a session the Host rolls (S6 Task 14): no coordinator here holds its chain, so
     // the two indexes above do not know it — the native id its note carried when it was adopted does.
     if (opts.resumeSessionId) {
-      const live = liveByAdoptedNative(opts.resumeSessionId)
+      const live = liveByAdoptedNative(opts.resumeSessionId) ?? (await liveByHostNative(opts.resumeSessionId))
       if (live) return live
     }
     // The same guard for the resume path a 대화 has of its own. The two checks above read
@@ -1771,7 +1812,10 @@ export function registerIpc(
     if (opts.resumeThreadId) {
       const liveChat = liveChatOnThread(opts.resumeThreadId, core.chat.list())
       if (liveChat) return liveChat
-      const liveTerminal = codexRolling?.findLiveByCodexSession(opts.resumeThreadId) ?? liveByAdoptedNative(opts.resumeThreadId)
+      const liveTerminal =
+        codexRolling?.findLiveByCodexSession(opts.resumeThreadId) ??
+        liveByAdoptedNative(opts.resumeThreadId) ??
+        (await liveByHostNative(opts.resumeThreadId))
       if (liveTerminal) return liveTerminal
     }
     // Resuming re-stamps updatedAt when it revives a schedule. register() already knows the sessionKey,
@@ -3720,10 +3764,14 @@ export function registerIpc(
   // The roll banner's snapshot, read once per session as the renderer adopts it — the mirror of
   // scheduler.state. A session is in at most one coordinator; ask claude first, codex second.
   // A session the Host rolls is in neither (S6 §3.4): the last state it pushed, and failing that — a
-  // renderer that mounted before this app heard any push — the Host is asked. Any failure is null.
+  // renderer that mounted before this app heard any push — the Host is asked, for a session this app
+  // knows is the Host's. Any failure is null.
   ipcMain.handle('rolling.state', async (_e, sessionId: string): Promise<RollStateEvent | null> => {
     const known = rolling?.stateOf(sessionId) ?? codexRolling?.stateOf(sessionId) ?? hostRollView.stateOf(sessionId)
     if (known) return known
+    // Only a session the Host owns by this app's knowledge (fix round 1, 4): a plain app session is
+    // answered here, with no round trip to a Host that may not be answering.
+    if (!hostOwned.has(sessionId) && !hostRollView.knows(sessionId)) return null
     if (!hostSpeaksRolling(hostClient?.status() ?? { connected: false, features: [] })) return null
     try {
       const r = await orchCall({ cmd: 'roll-state', args: { sessionId }, sessionId: '' })
@@ -5977,57 +6025,49 @@ export function registerIpc(
                 )
               else if (coordinator === 'rolling') rolling?.register(info)
             }
-            // R18 (design §3A.5): who rolls this session, from its note and the Host's features. `has` on
-            // the session's own coordinator first (carry C-I1): a chain this app still holds is left as it
-            // is — never restored over, and never registered a second time as a refused restore's fallback.
-            const holdsChain =
-              coordinator === 'codexRolling'
-                ? (codexRolling?.has(info.id) ?? false)
-                : coordinator === 'rolling'
-                  ? (rolling?.has(info.id) ?? false)
-                  : false
-            const decision = adoptRollingOf({
-              restore: a.restore,
-              hostRolls: hostSpeaksRolling(client.status()),
-              rollAccounts: info.rollAccountIds?.length ?? 0,
-              hasChain: holdsChain
-            })
-            if (decision.kind === 'restore') {
-              // `report` only for a chain the Host last ran (a Host-marked note in front of a Host that no
-              // longer rolls): its native id and roll config went into the Host's state, not this app's.
-              // A snapshot this app (or its earlier instance, which shares the state) wrote needs neither.
-              const report = a.restore.rolledBy === 'host'
-              const ok =
-                coordinator === 'codexRolling'
-                  ? (codexRolling?.restore(info, decision.snap, { report }) ?? false)
-                  : coordinator === 'rolling'
-                    ? (rolling?.restore(info, decision.snap, { report }) ?? false)
-                    : false
-              // A refused restore (the snapshot does not describe this session) registers from zero —
-              // unless a chain exists by now after all, which a restore also refuses (C-I1).
-              const holdsNow = coordinator === 'codexRolling' ? codexRolling?.has(info.id) : rolling?.has(info.id)
-              if (!ok && !holdsNow) registerAsBefore()
-            } else if (decision.kind === 'register') registerAsBefore()
-            else if (decision.kind === 'host') {
-              // 'host': the Host rolls it; this app shows it through hostRollView (S6 R3, ruling R8). The
-              // belt (preflight R11): a chain this app still held from before a socket drop (it was
-              // mid-roll then) goes now.
-              rolling?.unregister(info.id)
-              codexRolling?.unregister(info.id)
-            }
-            // 'keep' and 'none' touch nothing.
-            // The Work Unit fork, once per roll (preflight C10) — adoptForkOf has the rule. The fork of a
-            // roll this app saw happen (its own, or a pushed Host roll's forwarded rekey) was already
-            // made, and index.ts's fan-out wrote forkSeen for it.
-            const forkFrom = adoptForkOf({ restore: a.restore, adopting: hostRollView.adopting(info.id) })
-            if (forkFrom) {
-              try {
-                workUnitCollector.onSessionForked(info.id, undefined, forkFrom)
-                core.sessions.remember(info.id, { forkSeen: forkFrom })
-              } catch (err) {
-                hostLog(`host: the Work Unit fork of adopted session ${info.id} failed: ${String(err)}`)
+            // R18 (design §3A.5): who rolls this session, from its note and the Host's features, and its
+            // Work Unit fork (preflight C10) — applyAdoptRolling has every decision; these are its acts.
+            // `has` on the session's own coordinator (carry C-I1): a chain this app still holds is left as
+            // it is — never restored over, and never registered a second time as a refused restore's
+            // fallback. A coordinator of null (the account is gone) holds, restores and registers nothing.
+            applyAdoptRolling(
+              {
+                restore: a.restore,
+                hostRolls: hostSpeaksRolling(client.status()),
+                rollAccounts: info.rollAccountIds?.length ?? 0,
+                adopting: hostRollView.adopting(info.id),
+                pendingFork: hostRollView.takePendingFork(info.id)
+              },
+              {
+                has: () =>
+                  coordinator === 'codexRolling'
+                    ? (codexRolling?.has(info.id) ?? false)
+                    : coordinator === 'rolling'
+                      ? (rolling?.has(info.id) ?? false)
+                      : false,
+                restore: (snap, report) =>
+                  coordinator === 'codexRolling'
+                    ? (codexRolling?.restore(info, snap, { report }) ?? false)
+                    : coordinator === 'rolling'
+                      ? (rolling?.restore(info, snap, { report }) ?? false)
+                      : false,
+                registerAsBefore,
+                unregister: () => {
+                  rolling?.unregister(info.id)
+                  codexRolling?.unregister(info.id)
+                },
+                fork: (from) => {
+                  try {
+                    workUnitCollector.onSessionForked(info.id, undefined, from)
+                  } catch (err) {
+                    hostLog(`host: the Work Unit fork of adopted session ${info.id} failed: ${String(err)}`)
+                  }
+                },
+                rememberForkSeen: (from) => core.sessions.remember(info.id, { forkSeen: from })
               }
-            }
+            )
+            // What rolling.state may ask the Host about (fix round 1, 4): a session its note says the Host rolls.
+            if (a.restore.rolledBy === 'host') hostOwned.add(info.id)
             // The history guard's view of it (Task 13 wrote the native id into the note).
             if (typeof a.restore.nativeSessionId === 'string') adoptedNative.set(info.id, a.restore.nativeSessionId)
             // codexRollout is registered from the note when the note has a mapping, and left to

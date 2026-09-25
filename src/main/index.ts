@@ -1082,8 +1082,9 @@ app.whenReady().then(async () => {
     {
       log: hostLog,
       // A roll the Host made and pushed (S6 §3.4) costs the app what its own rolls cost, except the
-      // orchestration tap: the Host already rekeyed the Dispatch (hostRollView in ipc.ts).
-      fanOutRollEvent: (channel, payload, codex) => fanOutRollEvent(channel, payload, { orchestration: false, codex }),
+      // orchestration tap: the Host already rekeyed the Dispatch, and hostRollView (ipc.ts) passes
+      // `orchestration: false` — pinned by its tests rather than here.
+      fanOutRollEvent,
       // Handed over as soon as the client exists, whether or not a Host is ever reached — the same
       // shape as onTabResumeReady above. Read from will-quit.
       onHostClientReady: ({ stop, retire, survivesUpdate }) => {
