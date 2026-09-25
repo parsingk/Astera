@@ -199,7 +199,9 @@ describe('createHostSpawner', () => {
     const initialPrompt = (h.spawned[0].args as string[]).at(-1)
     const info = m.spawn({ account, cwd: repo, bypassPermissions: true, initialPrompt, title: 'Write hello', rollAccountIds: ['acc1'],
       rollPrompt: (h.registry.list()[0].meta!.restore as { rollPrompt: string }).rollPrompt, rollProviders: ['claude'],
-      orchEnv: { cliPath: path.join(profile, 'orch', process.platform === 'win32' ? 'astera.cmd' : 'astera'), skillsPath: path.join(dir, 'skills'), profileDir: profile } })
+      orchEnv: { cliPath: path.join(profile, 'orch', process.platform === 'win32' ? 'astera.cmd' : 'astera'), skillsPath: path.join(dir, 'skills'), profileDir: profile },
+      // S6 R6: the one key the Host's note adds, that the Host started it; everything else stays equal.
+      restoreExtra: { rolledBy: 'host' } })
     const norm = (x: unknown, id: string) => JSON.parse(JSON.stringify(x).split(id).join('<id>'))
     expect(norm(h.spawned[0].file, r.sessionId)).toEqual(norm(app[0].file, info.id))
     expect(norm(h.spawned[0].args, r.sessionId)).toEqual(norm(app[0].args, info.id))
@@ -587,5 +589,63 @@ describe('createHostSpawner — the loop’s session doors', () => {
     const settling = h.spawner!.closeAndSettle(1_000)
     expect(h.spawner!.isRetiring()).toBe(true)
     await settling
+  })
+})
+
+// S6 R5, R6: the roll's respawn, over the same SessionManager; R6: every session this Host starts is
+// marked as its own; R19: a Host roll moves the Dispatch's tail with it.
+describe('the roll spawn (S6 R5, R6)', () => {
+  /** rig, plus what these tests name: the accounts fixture, the profile, a folder to spawn in, and a
+   *  seeded Dispatch whose session can be moved. */
+  const spawnerRig = async () => {
+    const accounts = JSON.parse(await fs.readFile(path.join(profile, 'accounts.json'), 'utf8')).accounts
+    const seed = seeded()
+    const box = { state: seed.s }
+    const h = rig({ state: () => box.state })
+    return {
+      spawner: h.spawner!,
+      registry: h.registry,
+      accounts,
+      cwd: repo,
+      profileDir: profile,
+      dispatchId: seed.dispatchId,
+      workerArgs: () => startArgs(seed.taskId, seed.dispatchId),
+      setDispatchSession: (dispatchId: string, sessionId: string) => {
+        box.state = { ...box.state, dispatches: box.state.dispatches.map((x) => (x.id === dispatchId ? { ...x, sessionId } : x)) }
+      }
+    }
+  }
+  it('rollSpawn throws until prepareRollSpawn has run, and then spawns synchronously with the note it was given', async () => {
+    const h = await spawnerRig()
+    const account = h.accounts[0]
+    expect(() => h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id] })).toThrow(/prepare/)
+    await h.spawner.prepareRollSpawn(account, h.cwd)
+    const info = h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], restoreExtra: { rolledBy: 'host', rolledFrom: 's0' } })
+    const pty = h.registry.sessionPty(info.id)!
+    expect(h.registry.metaOf(pty)?.restore).toMatchObject({ rolledBy: 'host', rolledFrom: 's0', accountId: account.id })
+  })
+  it('prepareRollSpawn refuses a retiring Host and a damaged settings file, before anything is spawned', async () => {
+    const h = await spawnerRig()
+    await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), '{ damaged')
+    await expect(h.spawner.prepareRollSpawn(h.accounts[0], h.cwd)).rejects.toThrow(/app-settings\.json/)
+    await h.spawner.closeAndSettle(0)
+    await expect(h.spawner.prepareRollSpawn(h.accounts[0], h.cwd)).rejects.toThrow(/retir/i)
+    expect(h.registry.list()).toHaveLength(0)
+  })
+  it('a worker it starts is marked rolledBy host and handed to onSpawned', async () => {
+    const h = await spawnerRig()
+    const seen: string[] = []
+    h.spawner.onSpawned((info) => seen.push(info.id))
+    const r = await h.spawner.startWorker(h.workerArgs())
+    const pty = h.registry.sessionPty(r.sessionId)!
+    expect(h.registry.metaOf(pty)?.restore.rolledBy).toBe('host')
+    expect(seen).toEqual([r.sessionId])
+  })
+  it('retarget moves the tail and readWorker ownership to the rolled session (R19)', async () => {
+    const h = await spawnerRig()
+    const r = await h.spawner.startWorker(h.workerArgs())
+    h.spawner.retarget({ dispatchId: h.dispatchId, sessionId: 's-new', previousSessionId: r.sessionId })
+    h.setDispatchSession(h.dispatchId, 's-new')
+    expect(h.spawner.owns('readWorker', [{ dispatchId: h.dispatchId }])).toBe(true)
   })
 })

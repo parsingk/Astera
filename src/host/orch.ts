@@ -20,6 +20,7 @@ import { readRunConfigsFile } from '../core/run/runConfigsFile'
 import type { HostChecks } from './checks'
 import type { HostSessions } from './sessions'
 import type { HostLocal } from './spawner'
+import type { HostRolling } from './rolling'
 import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
 
 /** One reply — today's HTTP status and body, the shape `OrchCall.call` already answers with. Named
@@ -367,6 +368,10 @@ export function createHostOrch(a: {
   /** The Host's own project-root resolver (orchDeps' HOST_RESOLVES, `host/projectRoots.ts`), passed
    *  through to `hostOrchDeps`. Absent: `resolveProjectRoot` is forwarded to the app as before. */
   resolveProjectRoot?(cwd: string): Promise<string>
+  /** The Host's own rolling (S6): `unregister` is passed through to `hostOrchDeps` (HOST_ROLLS, R8);
+   *  the other two members are for the roll tap and the app's calls (Tasks 11 and 13). Absent:
+   *  `unregisterRolling` only forwards to the app, as before. */
+  rolling?: Pick<HostRolling, 'unregister' | 'stateOf' | 'forceRoll'> | null
   /** `validation-stop`: the app's stop button on a validation run this Host started (S4+S5 §5.1).
    *  Marks the run stopped and kills it, so its exit reads as "not proven" rather than a failure;
    *  true when `runId` was such a run. Absent: the call answers 501. */
@@ -535,6 +540,7 @@ export function createHostOrch(a: {
       local: a.local ?? null,
       drive: a.drive ?? null,
       resolveProjectRoot: a.resolveProjectRoot,
+      rolling: a.rolling ?? null,
       onEffect: () => {
         marks.effects += 1
       },

@@ -1045,3 +1045,21 @@ describe('HOST_RESOLVES', () => {
     expect(effects).toBe(0)
   })
 })
+
+describe('HOST_ROLLS (S6 R8)', () => {
+  const build = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): ReturnType<typeof hostOrchDeps> => hostOrchDeps(base(over))
+  it('unregisterRolling disposes the Host’s own chain, then forwards to an attached app (S6 R8)', async () => {
+    const unregister = vi.fn()
+    const act = vi.fn().mockResolvedValue(undefined)
+    const deps = build({ hasApp: () => true, act, rolling: { unregister } })
+    deps.unregisterRolling?.('s1')
+    expect(unregister).toHaveBeenCalledWith('s1')
+    await vi.waitFor(() => expect(act).toHaveBeenCalledWith('unregisterRolling', ['s1']))
+  })
+  it('unregisterRolling with no app still disposes the Host’s chain and throws nothing', () => {
+    const unregister = vi.fn()
+    const deps = build({ hasApp: () => false, act: vi.fn(), rolling: { unregister } })
+    expect(() => deps.unregisterRolling?.('s1')).not.toThrow()
+    expect(unregister).toHaveBeenCalledWith('s1')
+  })
+})

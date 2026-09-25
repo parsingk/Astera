@@ -245,7 +245,18 @@ async function rig(o: RigOpts) {
     trackedSessions: () => spawns.length,
     sessionBusy: () => null,
     typeInto: () => false,
-    isRetiring: () => retiring
+    isRetiring: () => retiring,
+    // S6 (Task 10): this rig drives no roll, so the roll spawn and its listeners are inert.
+    prepareRollSpawn: async () => {
+      throw new Error('not in this rig')
+    },
+    rollSpawn: () => {
+      throw new Error('not in this rig')
+    },
+    statusLinePayload: async () => null,
+    onSpawned: () => {},
+    onRolloutLocated: () => {},
+    retarget: () => {}
   } satisfies HostSpawner
 
   const wiring = composeHostDriving({

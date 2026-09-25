@@ -2555,6 +2555,19 @@ describe('codex snapshots and restore (S6 R4)', () => {
       awaitingPrompt: false, writtenAt: 0
     })).toBe(false)
   })
+
+  it('attachFresh maps an unmapped chain from the start of its file and persists once (S6 R12)', async () => {
+    // The codex harness records no persisted configs (preflight C3): collect them through the override.
+    const persisted: { key: string }[] = []
+    const h = harness({ persistConfig: (key) => persisted.push({ key }) })
+    h.coord.register(h.info1, undefined, false, false)
+    h.coord.attachFresh(h.info1.id, 'thread-9', rolloutFile)
+    expect(h.coord.rolloutPathFor(h.info1.id)).toBe(rolloutFile)
+    expect(persisted.map((p) => p.key)).toEqual(['thread-9'])
+    h.coord.attachFresh(h.info1.id, 'thread-other', rolloutFile + '.2')
+    expect(h.coord.rolloutPathFor(h.info1.id)).toBe(rolloutFile) // an already-mapped chain keeps its file
+    h.coord.stop()
+  })
 })
 
 describe('the respawn’s preparation and its note (S6 R5, R6)', () => {

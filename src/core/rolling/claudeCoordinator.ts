@@ -49,7 +49,7 @@ import {
 } from '../hooks/notification'
 import { t, type Lang } from '../i18n'
 import { ClaudeTranscriptTail } from './claudeSignal'
-import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollSpawnExtra } from './snapshot'
+import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
 import { parseResetTime } from './resetTime'
 
 const GATE_PCT = 90 // The bar for choosing which window goes into a block record — only the reset of a window exhausted at or above this is kept by recordRecovery (it is no longer used as a gate for accepting a limit phrase)
@@ -129,7 +129,7 @@ export interface RollingDeps {
     startWithBypass?: boolean
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
-    restoreExtra?: RollSpawnExtra
+    restoreExtra?: RollRespawnExtra
   }): SessionInfo
   /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
    *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare. */

@@ -30,15 +30,19 @@ export interface RollSnapshot {
   writtenAt: number
 }
 
-/** What a rolling respawn writes into its new pty's note beside the manager's own keys (S6 R6, design
- *  §5): where it came from, the chain on its new account, and — for a roll the Host made — who made it.
- *  A closed shape rather than a free record, so no caller can slip a manager key (resumeSessionId and
- *  the like) into the note through it. */
+/** What a spawn may write into its new pty's note beside the manager's own keys (S6 R6, design §5):
+ *  for a roll, where it came from and the chain on its new account; for any session the Host started,
+ *  that the Host started it. A closed shape rather than a free record, so no caller can slip a manager
+ *  key (resumeSessionId and the like) into the note through it. Every key is optional because a Host
+ *  worker's spawn carries `rolledBy` alone; a roll's respawn carries at least `RollRespawnExtra`. */
 export interface RollSpawnExtra {
-  rolledFrom: string
-  roll: RollSnapshot
+  rolledFrom?: string
+  roll?: RollSnapshot
   rolledBy?: 'host'
 }
+
+/** What a coordinator's respawn always writes: where it came from and the chain on its new account. */
+export type RollRespawnExtra = RollSpawnExtra & { rolledFrom: string; roll: RollSnapshot }
 
 // Each reader below answers a fresh value built from the known fields only, or FAIL. Building rather than
 // casting is what makes the parse safe to hand on: extra fields are dropped, and nothing the caller

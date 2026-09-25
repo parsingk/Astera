@@ -11,6 +11,7 @@ import { HostRetiring } from '../core/host/hostRetiring'
 import type { HostChecks } from './checks'
 import type { HostSessions } from './sessions'
 import type { HostLocal, HostLocalName } from './spawner'
+import type { HostRolling } from './rolling'
 
 /** What the Host answers out of itself. `runningSessions` and `appVersion` look like app questions
  *  and are not: the Host knows its own version and its own session registry, and `status` and
@@ -121,7 +122,17 @@ const HOST_RESOLVES = ['resolveProjectRoot'] as const
  * Swallowing is what these call sites already expect of an absent dependency, but it is logged here,
  * never silent — and it does not decide the status either, for SWALLOWED's reason.
  */
-const FIRE_AND_FORGET = ['unregisterRolling', 'onDispatchLost'] as const
+const FIRE_AND_FORGET = ['onDispatchLost'] as const
+
+/**
+ * **The Host's own chain first, synchronously and never throwing, then FIRE_AND_FORGET's route to an
+ * attached app, which ignores an unknown id** (S6 R8). A worker the Host rolled is in the Host's own
+ * rolling (`host/rolling.ts`), not the app's, so forwarding alone would leave that chain rolling a
+ * session whose Dispatch has ended; an app-spawned worker's chain is the app's, so the forward stays.
+ * Still `(sessionId): void` and still a bare statement at its call sites, for FIRE_AND_FORGET's reason:
+ * a throw from the Host's own disposal is logged, never thrown into the command.
+ */
+const HOST_ROLLS = ['unregisterRolling'] as const
 
 /**
  * **Answered by the Host's own checks while the Host drives, and by the app otherwise** (S4+S5
@@ -347,7 +358,7 @@ const MARKS_AFTER_ACTING = new Set<HostLocalName>(['removeWorktrees', 'makeRunWo
 const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending'])
 
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
-const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ...FIRE_AND_FORGET, ...HOST_DRIVES, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
+const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ...FIRE_AND_FORGET, ...HOST_ROLLS, ...HOST_DRIVES, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT]
 
 /** Not forwarded through the generic funnel at all (fix round 1, I1): `discardRunWorktree` is built by
  *  hand inside `hostOrchDeps` (its own `const discardRunWorktree`, further down, right before it is
@@ -365,6 +376,7 @@ type Classified =
   | (typeof SWALLOWED)[number]
   | (typeof HOST_RESOLVES)[number]
   | (typeof FIRE_AND_FORGET)[number]
+  | (typeof HOST_ROLLS)[number]
   | HostDrivesName
   | keyof typeof NESTED
   | keyof typeof DEGRADES
@@ -418,8 +430,9 @@ const EFFECTFUL: Record<Classified, boolean> = {
   resolveProjectRoot: false,
   // FIRE_AND_FORGET — every one of them starts or ends something, which is why nobody holds the
   // result. That the caller does not wait for them does not make them free to do twice.
-  unregisterRolling: true,
   onDispatchLost: true,
+  // HOST_ROLLS — the chain it drops, on either side, does not come back.
+  unregisterRolling: true,
   // HOST_DRIVES: the values these names had in FIRE_AND_FORGET and DEGRADES before S5, on either
   // route. The three starts and the retry act; the target and the language are reads.
   startValidation: true,
@@ -535,6 +548,9 @@ export function hostOrchDeps(a: {
   /** The Host's own project-root resolver (HOST_RESOLVES, `host/projectRoots.ts`). Absent: the name
    *  is forwarded as before, by SWALLOWED's route. */
   resolveProjectRoot?: (cwd: string) => Promise<string>
+  /** The Host's own rolling (HOST_ROLLS, `host/rolling.ts`). Null or absent: `unregisterRolling` only
+   *  forwards, as before S6. */
+  rolling?: Pick<HostRolling, 'unregister'> | null
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -828,6 +844,20 @@ export function hostOrchDeps(a: {
       if ((HOST_RESOLVES as readonly string[]).includes(name))
         return [name, hostResolves(name as (typeof HOST_RESOLVES)[number])]
       if ((FIRE_AND_FORGET as readonly string[]).includes(name)) return [name, forgetful(name)]
+      if ((HOST_ROLLS as readonly string[]).includes(name)) {
+        const forget = forgetful(name)
+        return [
+          name,
+          (sessionId: string): void => {
+            try {
+              a.rolling?.unregister(sessionId)
+            } catch (err) {
+              a.log(`unregisterRolling: the Host's chain could not be disposed: ${String(err)}`)
+            }
+            forget(sessionId)
+          }
+        ]
+      }
       if ((HOST_DRIVES as readonly string[]).includes(name)) return [name, hostDrives(name as HostDrivesName)]
       if (name in DEGRADES) return [name, degrading(name, DEGRADES[name as keyof typeof DEGRADES])]
       if (name === 'listAccounts') return [name, localWhenAbsent(name, a.readAccounts)]

@@ -41,8 +41,9 @@ import type { PtyFactory, PtyLike } from '../core/sessions/pty'
 import { StatusLineManager, resolveNodePath } from '../core/sessions/statusline'
 import { BusyScanner } from '../core/terminal/busy'
 import { previewShotsDir } from '../core/preview/shotsDir'
-import type { Account } from '../core/types'
+import type { Account, SessionInfo } from '../core/types'
 import type { PtyRegistry } from './registry'
+import type { HostRollSpawner, RollSpawnOpts } from './rolling'
 import type { HostWorktrees } from './worktrees'
 
 export type HostLocalName =
@@ -97,7 +98,9 @@ export interface HostSpawnerDeps {
   readAccounts?: (file: string) => Promise<Account[]>
 }
 
-export interface HostSpawner extends HostLocal {
+/** HostRollSpawner's three (prepareRollSpawn, rollSpawn, statusLinePayload) are the S6 roll's respawn
+ *  (R5, R6, preflight C12); their JSDoc is on that interface. */
+export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** How many worker and coordinator starts are under way right now. */
   inFlight(): number
   /** From now on startWorker/startCoordinator reject with "the Host is retiring…"; resolves when every
@@ -113,6 +116,12 @@ export interface HostSpawner extends HostLocal {
   typeInto(sessionId: string, text: string): boolean
   /** True from the moment `closeAndSettle` is called (R15): the driver starts nothing after that. */
   isRetiring(): boolean
+  /** Every session this spawner starts for a command, after its pty opened (Task 9's adoptSpawned). */
+  onSpawned(cb: (info: SessionInfo, account: Account) => void): void
+  /** R12: a fresh codex session's rollout was located. */
+  onRolloutLocated(cb: (sessionId: string, codexSessionId: string, rolloutPath: string) => void): void
+  /** R19: a Host roll moved a Dispatch to another session; the tail and `readWorker` follow it. */
+  retarget(a: { dispatchId: string; sessionId: string; previousSessionId: string }): void
 }
 
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
@@ -229,6 +238,19 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   /** ptyId → the codex sessions still looking for their rollout, in start order (`seq`). */
   const looking = new Map<string, { accountId: string; cwd: string; seq: number }>()
   let lookSeq = 0
+  const spawnedCbs: Array<(info: SessionInfo, account: Account) => void> = []
+  const locatedCbs: Array<(sessionId: string, codexSessionId: string, rolloutPath: string) => void> = []
+  /** Each listener on its own: one that throws must not keep the others from hearing, nor fail a spawn
+   *  whose pty is already running. */
+  const tell = <A extends unknown[]>(what: string, cbs: Array<(...a: A) => void>, ...a: A): void => {
+    for (const cb of cbs) {
+      try {
+        cb(...a)
+      } catch (err) {
+        log(`${what} listener failed: ${String(err)}`)
+      }
+    }
+  }
 
   /** How many ptys this spawner has opened. Read around `sessions.spawn`, which is synchronous, so the
    *  count can only move there by that call's own pty (A36's "was a process started"). */
@@ -329,6 +351,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         if (found && !claimed(ptyId).includes(found.path)) {
           registry.note(ptyId, { rolloutPath: found.path, codexSessionId: found.sessionId })
           log(`codex rollout mapped session=${sessionId} path=${found.path}`)
+          tell('rollout-located', locatedCbs, sessionId, found.sessionId, found.path)
           return stop()
         }
       }
@@ -399,7 +422,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       resumeSessionId: o.resumeSessionId,
       resumePrompt: o.resumePrompt,
       rollProviders,
-      orchEnv: { cliPath, skillsPath: cli.skills, profileDir }
+      orchEnv: { cliPath, skillsPath: cli.skills, profileDir },
+      // R6: a session this Host started is the Host's own, whichever process later holds its tab.
+      restoreExtra: { rolledBy: 'host' }
       })
     } finally {
       // Whether it returned or threw, a moved count means a process is running (A36). A throw before
@@ -411,7 +436,49 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       const ptyId = registry.sessionPty(info.id)
       if (ptyId) locateRollout(ptyId, info.id, account, info.cwd, Date.now())
     }
+    tell('spawned', spawnedCbs, info, account)
     return info
+  }
+
+  /** The roll's respawn, in two halves (R5, preflight C12): everything that can wait or refuse, while
+   *  the old session still lives, then the synchronous spawn after the kill. */
+  let preparedShuttle: string | null = null
+  let preparedBypass: boolean | null = null
+  let preparedAccounts: Account[] = []
+  const prepareRollSpawn = async (account: Account, cwd: string): Promise<void> => {
+    if (retiring) throw new HostRetiring()
+    const accounts = await readAccounts(accountsPath) // RepairNeeded on a damaged file (A10)
+    accountIn(accounts, account.id)
+    preparedAccounts = accounts
+    if (!existsSync(cwd)) throw new Error(`CWD_MISSING: ${cwd}`)
+    preparedBypass = await bypassFromSettings() // RepairNeeded on a damaged settings file (A10)
+    await preTrustWorkspace({ account, cwd, homeDir, descriptors, log })
+    await ensured()
+    preparedShuttle = await shuttlePath()
+  }
+  const rollSpawn = (o: RollSpawnOpts): SessionInfo => {
+    // One slot for the process, on purpose (preflight C12): the shuttle path is the profile's, the same for
+    // every roll, so "prepared" means "a prepareRollSpawn has succeeded once"; every roll still awaits its
+    // own prepareRollSpawn first, which re-checks the account, the folder and the settings.
+    if (preparedShuttle === null) throw new Error('rollSpawn before prepareRollSpawn: nothing was prepared')
+    if (retiring) throw new HostRetiring()
+    // The mixed-chain check spawnSession makes (preflight C12), over the accounts prepareRollSpawn read.
+    const rollProviders = (o.rollAccountIds ?? []).map((rid) => providerOf(preparedAccounts.find((x) => x.id === rid) ?? o.account))
+    return sessions.spawn({
+      rollProviders,
+      account: o.account,
+      cwd: o.cwd,
+      bypassPermissions: o.bypassPermissions ?? preparedBypass ?? false,
+      initialPrompt: o.initialPrompt,
+      title: o.title,
+      rollAccountIds: o.rollAccountIds,
+      rollPrompt: o.rollPrompt,
+      resumeSessionId: o.resumeSessionId,
+      resumePrompt: o.resumePrompt,
+      slackNotify: o.slackNotify,
+      orchEnv: { cliPath: preparedShuttle, skillsPath: cli.skills, profileDir },
+      restoreExtra: o.restoreExtra
+    })
   }
 
   const coordinatorFor = (accounts: Account[], trace?: StartTrace): OrchCoordinator =>
@@ -660,6 +727,22 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         return false
       }
     },
-    isRetiring: () => retiring
+    isRetiring: () => retiring,
+    prepareRollSpawn,
+    rollSpawn,
+    statusLinePayload: (sid) => statusLine.read(sid),
+    onSpawned: (cb) => {
+      spawnedCbs.push(cb)
+    },
+    onRolloutLocated: (cb) => {
+      locatedCbs.push(cb)
+    },
+    retarget: ({ dispatchId, sessionId, previousSessionId }) => {
+      startedOn.set(dispatchId, sessionId)
+      tails.start({ dispatchId, sessionId, previousSessionId }, (id) => {
+        const x = d.getState().dispatches.find((y) => y.id === id)
+        return x === undefined || x.endedAt !== undefined || x.outcome !== undefined
+      })
+    }
   }
 }

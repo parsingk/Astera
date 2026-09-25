@@ -40,7 +40,7 @@ import {
   type CodexLimitState
 } from './codexSignal'
 import { t, type Lang } from '../i18n'
-import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollSpawnExtra } from './snapshot'
+import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
 
 const TICK_MS = 15_000 // how often state is refreshed and the fallback trigger checked (mirrors rolling.ts)
 const LOCATE_POLL_MS = 1_000 // how often we poll to map the rollout
@@ -101,7 +101,7 @@ export interface CodexRollingDeps {
     startWithBypass?: boolean
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
-    restoreExtra?: RollSpawnExtra
+    restoreExtra?: RollRespawnExtra
   }): SessionInfo
   /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
    *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare. */
@@ -643,6 +643,22 @@ export class CodexRollingCoordinator {
     for (const chain of this.chains.values())
       if (!chain.disposed && chain.codexSessionId === codexSessionId) return chain.liveInfo
     return null
+  }
+
+  /** R12: a fresh session's rollout found by someone else's scan (the Host spawner's locate). Attaches
+   *  the tail from the start of the file (it is this session's own new file) and persists the config.
+   *  Ignored for an unknown or already-mapped chain. */
+  attachFresh(sessionId: string, codexSessionId: string, rolloutPath: string): void {
+    const chain = this.chains.get(sessionId)
+    if (!chain || chain.disposed || chain.rolloutPath) return
+    chain.rolloutPath = rolloutPath
+    if (chain.codexSessionId !== codexSessionId) this.deps.onNativeSession?.(chain.liveId, codexSessionId)
+    chain.codexSessionId = codexSessionId
+    chain.tail = new CodexRolloutTail(rolloutPath, this.now) // a fresh file: from its start, as startLocate's hit
+    chain.unmappedWarned = false
+    this.deps.persistConfig?.(codexSessionId, { accountIds: chain.accountIds, prompt: chain.prompt })
+    this.deps.log(`codex rollout attached from the Host's locate session=${sessionId} id=${codexSessionId}`)
+    this.snap(chain)
   }
 
   /** The rollout file this live session is currently tailing, or null when it is not part of an active

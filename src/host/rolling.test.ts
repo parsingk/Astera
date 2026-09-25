@@ -12,6 +12,10 @@ const accounts: Account[] = [
   { id: 'a1', label: 'A', configDir: cfg('a1'), color: '#fff', createdAt: '2026-09-25T00:00:00Z' },
   { id: 'a2', label: 'B', configDir: cfg('a2'), color: '#fff', createdAt: '2026-09-25T00:00:00Z' }
 ]
+const codexAccounts: Account[] = [
+  { id: 'c1', label: 'C', configDir: cfg('c1'), color: '#fff', createdAt: '2026-09-25T00:00:00Z', provider: 'codex' },
+  { id: 'c2', label: 'D', configDir: cfg('c2'), color: '#fff', createdAt: '2026-09-25T00:00:00Z', provider: 'codex' }
+]
 
 const fakePty = (): RegistryPty & { emit(d: string): void; exit(c: number): void; killed: boolean } => {
   let onData: (d: string) => void = () => {}
@@ -76,7 +80,7 @@ const rig = async (over: Over = {}) => {
         spawned.push(o)
         const id = `s${++seq}`
         open(`p${seq}`, id, { accountId: o.account.id, cwd: o.cwd, title: 't', rollAccountIds: o.rollAccountIds, ...(o.restoreExtra ?? {}) })
-        return { id, accountId: o.account.id, cwd: o.cwd, status: 'running', title: 't', rollAccountIds: o.rollAccountIds } as SessionInfo
+        return { id, accountId: o.account.id, cwd: o.cwd, status: 'running', title: 't', rollAccountIds: o.rollAccountIds, resumeSessionId: o.resumeSessionId } as SessionInfo
       },
       statusLinePayload: over.statusLinePayload ?? (async (id) => payloads.get(id) ?? null)
     },
@@ -86,7 +90,7 @@ const rig = async (over: Over = {}) => {
     onNativeSession: () => {},
     onEvent: (e) => events.push(e),
     lang: () => 'en',
-    readAccounts: async () => accounts,
+    readAccounts: async () => [...accounts, ...codexAccounts],
     readStrategy: async () => 'original',
     isLoggedIn: over.isLoggedIn ?? (async () => true),
     fetchUsage: over.fetchUsage ?? (async () => null), // no network in a unit test; null is "unavailable"
@@ -197,6 +201,23 @@ describe('createHostRolling (S6 Task 9)', () => {
     expect(r.rolling.has('s1')).toBe(true)
     r.ptys.get('p9')!.exit(0)
     expect(r.rolling.has('s1')).toBe(false)
+    r.rolling.dispose()
+  })
+
+  it('a codex roll notes the copy it resumes on, and the thread id, on the new pty', async () => {
+    const r = await rig()
+    await r.rolling.refresh()
+    const rollout = path.join(os.tmpdir(), `astera-hr-rollout-${process.pid}.jsonl`)
+    await fs.writeFile(rollout, '')
+    r.open('p1', 's1', { accountId: 'c1', cwd: os.tmpdir(), title: 't', rollAccountIds: ['c1', 'c2'] })
+    r.rolling.adoptSpawned({ ...info('s1', 'c1'), rollAccountIds: ['c1', 'c2'] }, codexAccounts[0])
+    r.rolling.attachFresh('s1', 'thread-1', rollout)
+    await r.rolling.forceRoll('s1')
+    await vi.advanceTimersByTimeAsync(100)
+    const note = r.registry.metaOf('p2')?.restore ?? {}
+    expect(note.codexSessionId).toBe('thread-1')
+    expect(typeof note.rolloutPath).toBe('string')
+    await fs.rm(rollout, { force: true })
     r.rolling.dispose()
   })
 

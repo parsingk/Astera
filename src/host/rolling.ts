@@ -45,15 +45,21 @@ export interface RollSpawnOpts {
 
 /** The three spawner members rolling needs; `HostSpawner` implements them (Task 10). */
 export interface HostRollSpawner {
+  /** Everything a roll's respawn can wait on or be refused by, done while the old session still lives
+   *  (R5). Rejects with HostRetiring, a RepairNeeded settings or accounts file, CWD_MISSING, or an
+   *  unknown account. */
   prepareRollSpawn(account: Account, cwd: string): Promise<void>
+  /** The respawn itself, synchronous (constraint 12). Throws until the first prepareRollSpawn has
+   *  succeeded. */
   rollSpawn(opts: RollSpawnOpts): SessionInfo
+  /** The session's last statusline capture, or null when there is none. */
   statusLinePayload(sessionId: string): Promise<unknown | null>
 }
 
 export interface HostRollingDeps {
   profileDir: string
   platform: NodeJS.Platform
-  registry: Pick<PtyRegistry, 'onData' | 'onExit' | 'metaOf' | 'sessionPty' | 'write' | 'kill' | 'list'>
+  registry: Pick<PtyRegistry, 'onData' | 'onExit' | 'metaOf' | 'sessionPty' | 'write' | 'kill' | 'list' | 'note'>
   spawner: HostRollSpawner
   /** R1 for the pty this session runs in (the wiring asks hostMayAct over exits and server). */
   mayAct(ptyId: string): boolean
@@ -83,6 +89,8 @@ export interface HostRolling {
   adoptSpawned(info: SessionInfo, account: Account): void
   /** A snapshotted session taken over (Task 12). */
   restore(info: SessionInfo, snap: RollSnapshot): boolean
+  /** A fresh codex session's rollout, found by the spawner's locate (R12). */
+  attachFresh(sessionId: string, codexSessionId: string, rolloutPath: string): void
   has(sessionId: string): boolean
   unregister(sessionId: string): void
   stateOf(sessionId: string): RollStateEvent | null
@@ -164,6 +172,17 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
       if (channel === 'session:rolled') {
         const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
         void d.tap.onRolled(p.oldSessionId, { id: p.info.id, accountId: p.info.accountId }).catch((err) => log(`roll tap failed: ${String(err)}`))
+        // R30 (preflight R7): a codex roll resumes on the copy it made, so the new pty's note names it —
+        // the spawner's claimed() then keeps it out of a later fresh scan, and a returning app's watcher
+        // can attach to it. A blank-slate respawn carries no dest and re-locates through its own chain.
+        if (p.dest !== undefined) {
+          try {
+            const pty = ptyOf(p.info.id)
+            if (pty) d.registry.note(pty, { rolloutPath: p.dest, codexSessionId: p.info.resumeSessionId })
+          } catch (err) {
+            log(`the rolled session's rollout could not be noted session=${p.info.id}: ${String(err)}`)
+          }
+        }
         d.onEvent({ t: 'session-rolled', oldSessionId: p.oldSessionId, info: p.info, ...(p.dest !== undefined ? { dest: p.dest } : {}) })
       } else {
         d.tap.onRollState(payload as RollStateEvent)
@@ -255,6 +274,7 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
       else claude.register(info)
     },
     restore: (info, snap) => (snap.provider === 'codex' ? codex.restore(info, snap) : claude.restore(info, snap)),
+    attachFresh: (s, c, p) => codex.attachFresh(s, c, p),
     has: (id) => claude.has(id) || codex.has(id),
     unregister: (id) => {
       claude.unregister(id)
