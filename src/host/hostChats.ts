@@ -16,7 +16,7 @@ import { isUnattendedPermission, type ChatEvent, type ChatRequest, type Unattend
 import { chatPromptsOf, type ChatAnswerResult, type ChatPrompt } from '../core/sessions/chatRead'
 import type { ProcRegistry } from './procRegistry'
 import type { ProcHolders } from './procHolders'
-import { createHostProcs, type HostProcHandle } from './hostProcs'
+import { createHostProcs, type HostProcHandle, type HostProcsDeps } from './hostProcs'
 
 /** How long `started()` waits for a Host-spawned proc's handshake and carry-on (plan ruling P5). */
 export const CHAT_START_PUSH_MS = 45_000
@@ -96,7 +96,29 @@ export function createHostChats(d: HostChatsDeps): HostChats {
   }
   const held = (procId: string): boolean => d.holders.holdersOf(procId).length > 0
 
-  const hostProcs = createHostProcs({ registry: d.procs, mayWrite: (procId) => !held(procId), log: d.log })
+  // Fix round 1 (Important 2): every line that reached a proc is counted, so the carry-on on adopt can
+  // tell a send the adapter refused before the wire (codex with no thread, a NotWriterError) from one
+  // whose line went out. Only a registry write that returned counts.
+  const writes = new Map<string, number>()
+  const counted: HostProcsDeps['registry'] = {
+    open: (o) => d.procs.open(o),
+    write: (procId, line) => {
+      d.procs.write(procId, line)
+      writes.set(procId, (writes.get(procId) ?? 0) + 1)
+    },
+    kill: (procId) => d.procs.kill(procId),
+    note: (procId, patch) => d.procs.note(procId, patch),
+    buffer: (procId) => d.procs.buffer(procId),
+    onLine: (cb) => d.procs.onLine(cb),
+    onExit: (cb) =>
+      d.procs.onExit((procId, code, tail) => {
+        writes.delete(procId)
+        cb(procId, code, tail)
+      })
+  }
+  const writesTo = (procId: string): number => writes.get(procId) ?? 0
+
+  const hostProcs = createHostProcs({ registry: counted, mayWrite: (procId) => !held(procId), log: d.log })
   /** sessionId → the handle its adapter reads, released when the Host drops the session. */
   const handles = new Map<string, HostProcHandle>()
   const keep = (sessionId: string, h: HostProcHandle): void => {
@@ -148,6 +170,36 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     return Array.isArray(a) ? a.filter((v): v is string => typeof v === 'string') : []
   }
 
+  /** P4 (Review Focus 3): a roll's carry-on the note says was never sent is sent once, by the writer only,
+   *  and marked sent before the write, so a later writer change never types it twice. A second adopt of
+   *  the same session returns before this and sends nothing. The path from `manager.send` to the wire is
+   *  synchronous for both adapters (claude writes first thing; codex checks its thread, then its core's
+   *  request writes inside the promise executor), so the count read right after the call says whether a
+   *  line went out. None did: the mark goes back to false, for the next writer. One did: it stays true
+   *  whatever the request does later (at most once; a lost reply is the P4 known limit). */
+  const carryOnAfterAdopt = (procId: string, id: string, restore: Record<string, unknown>): void => {
+    if (typeof restore.carryOn !== 'string' || restore.carrySent === true || !isWriter(id)) return
+    const text = restore.carryOn
+    d.procs.note(procId, { carrySent: true })
+    const before = writesTo(procId)
+    let sent: Promise<void>
+    try {
+      sent = manager.send(id, text)
+    } catch (err) {
+      sent = Promise.reject(err)
+    }
+    if (writesTo(procId) === before) {
+      d.procs.note(procId, { carrySent: false })
+      const left = `chat ${id}: the carry-on was left for the next writer, nothing reached the proc`
+      sent.then(
+        () => d.log(left),
+        (err: unknown) => d.log(`${left}: ${errText(err)}`)
+      )
+      return
+    }
+    sent.catch((err: unknown) => d.log(`chat ${id}: the carry-on could not be sent after the takeover: ${errText(err)}`))
+  }
+
   const send = async (id: string, text: string, beforeWrite?: () => void): Promise<void> => {
     if (!isWriter(id)) throw new Error('not the writer')
     beforeWrite?.()
@@ -172,17 +224,14 @@ export function createHostChats(d: HostChatsDeps): HostChats {
         return null
       }
       keep(meta.id, h)
-      h.replay()
-      // P4 (Review Focus 3): a roll's carry-on the note says was never sent is sent once, by the writer
-      // only, and marked sent before the write, so a later writer change never types it twice. A second
-      // adopt of the same session returns above and sends nothing.
-      const restore = meta.restore
-      if (typeof restore.carryOn === 'string' && restore.carrySent !== true && isWriter(meta.id)) {
-        const text = restore.carryOn
-        d.procs.note(entry.id, { carrySent: true })
-        void (async () => manager.send(meta.id, text))().catch((err: unknown) =>
-          d.log(`chat ${meta.id}: the carry-on could not be sent after the takeover: ${errText(err)}`)
-        )
+      // Fix round 1 (Minor 2): a throw from here on would leave an adapter in the manager for a session
+      // the caller is told was not adopted, so the session is forgotten before the throw goes on.
+      try {
+        h.replay()
+        carryOnAfterAdopt(entry.id, meta.id, meta.restore)
+      } catch (err) {
+        forget(meta.id)
+        throw err
       }
       return info
     },

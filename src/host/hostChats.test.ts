@@ -204,6 +204,89 @@ describe('createHostChats — the carry-on on adopt (P4, Review Focus 3)', () =>
   })
 })
 
+describe('createHostChats — the carry-on on adopt, fix round 1', () => {
+  const carrySentOf = (r: ReturnType<typeof rig>) => r.registry.list()[0].meta?.restore.carrySent
+
+  // Important 2. A carry-on the adapter refused before anything reached the wire is left for the next
+  // writer: the mark goes back to false.
+  it('leaves carrySent false when the codex adapter refuses the carry-on (no thread yet)', async () => {
+    const r = rig({ provider: 'codex', threadId: undefined, carryOn: 'carry on', carrySent: false })
+    r.chats.adopt(r.entry())
+    expect(r.procs[0].sent).toEqual([])
+    expect(carrySentOf(r)).toBe(false)
+    await vi.waitFor(() => expect(r.logs.join('\n')).toMatch(/left for the next writer/))
+  })
+
+  it('leaves carrySent false when the write is refused as NotWriterError (an app took the proc mid-send)', () => {
+    const r = rig({ carryOn: 'carry on', carrySent: false })
+    const realNote = r.registry.note.bind(r.registry)
+    r.registry.note = (id, patch) => {
+      realNote(id, patch)
+      if (patch.carrySent === true) r.holders.heldBy('p1', 1)
+    }
+    r.chats.adopt(r.entry())
+    expect(r.procs[0].sent).toEqual([])
+    expect(carrySentOf(r)).toBe(false)
+  })
+
+  it('keeps carrySent true once the carry-on line was written, even when its request later rejects', async () => {
+    const r = rig({ provider: 'codex', carryOn: 'carry on', carrySent: false })
+    r.chats.adopt(r.entry())
+    expect(r.procs[0].sent.join('')).toContain('carry on')
+    const id = JSON.parse(r.procs[0].sent[0]).id
+    r.procs[0].emit(`${JSON.stringify({ id, error: { code: -1, message: 'boom' } })}\n`)
+    await vi.waitFor(() => expect(r.logs.join('\n')).toMatch(/carry-on could not be sent after the takeover: .*boom/))
+    expect(carrySentOf(r)).toBe(true)
+  })
+
+  // Minor 3, M11: while a socket holds the proc the Host is not the writer, so it neither marks nor sends.
+  it('sends no carry-on and leaves the mark alone while a socket holds the proc', () => {
+    const r = rig({ carryOn: 'carry on', carrySent: false })
+    const notes: string[] = []
+    const realNote = r.registry.note.bind(r.registry)
+    r.registry.note = (id, patch) => { notes.push(JSON.stringify(patch)); realNote(id, patch) }
+    r.holders.heldBy('p1', 1)
+    r.chats.adopt(r.entry())
+    expect(r.procs[0].sent).toEqual([])
+    expect(carrySentOf(r)).toBe(false)
+    // Not even for a moment: the app, the writer, may read the note meanwhile.
+    expect(notes.filter((n) => n.includes('carrySent'))).toEqual([])
+  })
+
+  // Minor 2: a throw after the adapter was made leaves no session behind, so the takeover's failure
+  // path (which drops the chain) tells the truth.
+  it('forgets the session and rethrows when adopt throws after the adapter was made', () => {
+    const r = rig({ carryOn: 'carry on', carrySent: false })
+    r.registry.note = () => { throw new Error('note failed') }
+    expect(() => r.chats.adopt(r.entry())).toThrow('note failed')
+    expect(r.chats.has('c1')).toBe(false)
+    expect(r.chats.handleCount()).toBe(0)
+  })
+
+  // Minor 3, M2b: a second adopt of the same proc is a no-op: one adapter, one handle.
+  it('a second adopt of the same proc makes no second adapter', () => {
+    const r = rig()
+    let made = 0
+    const chats = createHostChats({
+      procs: r.registry, holders: r.holders, platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {},
+      askApp: async () => ({ sent: true }), log: () => {},
+      createAdapter: () => {
+        made++
+        return {
+          start: async () => {}, send: async () => {}, interrupt: async () => {}, answer: async () => {}, setModel: async () => {},
+          setPermissionMode: async () => {}, listPermissionModes: async () => [], listModels: async () => [],
+          state: () => ({ status: 'idle', request: null, model: { model: null, effort: null, permissionMode: 'default' }, error: null, exitCode: null, errorDetail: null, outlivesApp: true, truncated: false, provider: 'claude' }),
+          pending: () => [], on: () => () => {}, kill: () => {}
+        }
+      }
+    })
+    expect(chats.adopt(r.entry())?.id).toBe('c1')
+    expect(chats.adopt(r.entry())?.id).toBe('c1')
+    expect(made).toBe(1)
+    expect(chats.handleCount()).toBe(1)
+  })
+})
+
 describe('createHostChats — the handles it keeps (Task 3 review)', () => {
   function exiting(): RegistryProc & { sent: string[]; emit(c: string): void; exit(code: number): void } {
     let onData: (c: string) => void = () => {}
