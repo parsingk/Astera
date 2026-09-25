@@ -7025,3 +7025,91 @@ describe('handleCommand — 404 는 missing 표시로만 난다 (R4)', () => {
     expect((await call(deps, 'run-worktree-set', { run: 'run_nope', worktree: 'D:/w' })).status).toBe(404)
   })
 })
+
+// A worker names only its own dispatches. A dispatch that is not there and one that belongs to another
+// session get the same 403, before anything else is looked at: the answer must not tell a worker which
+// dispatch ids exist, and nothing may be written either way.
+describe('handleCommand — 워커가 남의 dispatch 나 없는 dispatch 를 지목하면 403 이고 아무것도 쓰지 않는다', () => {
+  const seedWorkerWithForeign = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    taskId: string
+    foreignTaskId: string
+  }> => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    const other = await call(deps, 'task-create', { account: 'acc1', runId, title: 't2', spec: 's2' })
+    const foreignTaskId = (other.body as { id: string }).id
+    await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    expect(deps.getState().dispatches.map((d) => d.sessionId)).toEqual(['sess1']) // sess1 is a worker
+    await deps.setState({
+      ...deps.getState(),
+      dispatches: [
+        ...deps.getState().dispatches,
+        {
+          id: 'dsp_foreign',
+          taskId: foreignTaskId,
+          provider: 'codex' as const,
+          accountId: 'acc1',
+          sessionId: 'sess2',
+          cwd: 'D:/p2',
+          specPath: 'D:/p2/orch/specs/a.md',
+          startedAt: NOW,
+          workerState: 'ready' as const,
+          retained: false
+        }
+      ]
+    })
+    return { deps, taskId, foreignTaskId }
+  }
+
+  for (const target of ['dsp_nope', 'dsp_foreign'] as const) {
+    it(`send worker_done 이 ${target} 를 지목하면 403`, async () => {
+      const { deps, taskId, foreignTaskId } = await seedWorkerWithForeign()
+      const before = deps.getState()
+      const r = await call(
+        deps,
+        'send',
+        {
+          type: 'worker_done',
+          taskId: target === 'dsp_foreign' ? foreignTaskId : taskId,
+          dispatchId: target,
+          outcome: 'succeeded',
+          subject: 'a',
+          body: 'b'
+        },
+        'sess1'
+      )
+      expect(r).toEqual({ status: 403, body: { error: 'cannot report for another dispatch' } })
+      expect(deps.getState()).toBe(before)
+    })
+
+    it(`send status 가 ${target} 를 지목하면 403`, async () => {
+      const { deps, taskId, foreignTaskId } = await seedWorkerWithForeign()
+      const before = deps.getState()
+      const r = await call(
+        deps,
+        'send',
+        { type: 'status', taskId: target === 'dsp_foreign' ? foreignTaskId : taskId, dispatchId: target, subject: 's', body: 'b' },
+        'sess1'
+      )
+      expect(r).toEqual({ status: 403, body: { error: 'cannot send for another dispatch' } })
+      expect(deps.getState()).toBe(before)
+    })
+
+    it(`ask 가 ${target} 를 지목하면 403`, async () => {
+      const { deps, taskId, foreignTaskId } = await seedWorkerWithForeign()
+      const before = deps.getState()
+      const r = await call(
+        deps,
+        'ask',
+        { taskId: target === 'dsp_foreign' ? foreignTaskId : taskId, dispatchId: target, question: 'q?', timeoutMs: 50 },
+        'sess1'
+      )
+      expect(r).toEqual({ status: 403, body: { error: 'cannot ask for another dispatch' } })
+      expect(deps.getState()).toBe(before)
+    })
+  }
+})
