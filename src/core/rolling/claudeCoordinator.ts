@@ -2094,7 +2094,7 @@ export class RollingCoordinator {
     // The shared record goes with it because a false one keeps every other chain off the account until
     // its recorded reset time passes; the price is that a *true* record another chain wrote inside this
     // window is erased by a session that has not produced any work of its own yet (blockRegistry.clear).
-    if (clearShared) this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
+    if (clearShared) this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex], this.now())
     // 플래그는 *이전* 계정의 차단 에피소드를 가리킨다. 남겨 두면 새 계정에서의 첫 대기가
     // 제자리 재개를 건너뛰고 쓸데없이 respawn 한다. codex 쪽도 같은 자리에서 무조건 해제한다.
     chain.inPlaceUsed = false

@@ -78,6 +78,22 @@ export const HOST_FEATURE_DISPATCH = 'dispatch'
  *  HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_ROLLING = 'rolling'
 
+/** The Host and the app exchange their usage-limit block records (S6 D3, D4): the Host pushes `blocks`
+ *  on every change of its registry and once, whole, after an app's hello; the app sends `blocks` for
+ *  its own changes and, whole, after each handshake. Each side absorbs what it receives and never sends
+ *  it back. Announced with `rolling` (the registry is the rolling's). An app sends nothing to a Host
+ *  without it. Additive, so HOST_PROTOCOL stays 3. */
+export const HOST_FEATURE_BLOCKS = 'blocks'
+
+/** A `blocks` message's body, both directions: records to merge and clears to apply, by account. The
+ *  record is core/rolling/retry.ts's BlockRecord, written out here because the renderer's project
+ *  compiles this file and not core/rolling; the two are the same shape, so BlockRegistry's
+ *  BlocksPayload is assignable to this. The receiver still validates every field (blockWire.ts). */
+export interface BlocksBody {
+  records: Record<string, { at: number | null; weekly: boolean; since: number }>
+  cleared: Array<{ accountId: string; at: number }>
+}
+
 /** worktrees.json as the Host holds it, stamped with where it stands in this Host's changes. The
  *  `worktrees-state` push carries it, and so does the body of **every** `worktree-*` orch-call reply
  *  (`worktree-add`, `worktree-remove`, `worktree-root`, `worktree-list`), so a receiver can order a
@@ -230,6 +246,9 @@ export type ClientMessage =
   | { t: 'proc-list' }
   /** Replays the buffered lines to the client that asked, as one proc-attached. */
   | { t: 'proc-attach'; id: string }
+  /** The app's block records (HOST_FEATURE_BLOCKS): one change, or its whole registry after a
+   *  handshake. Taken only from a greeted app; the Host absorbs it and does not broadcast it back. */
+  | ({ t: 'blocks' } & BlocksBody)
 
 export type HostMessage =
   | {
@@ -339,3 +358,6 @@ export type HostMessage =
   /** A Host roll re-keyed a session (S6 §3.4). `ptyId` is the new session's pty, for the app to adopt
    *  before it forwards the rekey. `dest` is the codex copy the respawn appends to. Additive. */
   | { t: 'session-rolled'; oldSessionId: string; info: SessionInfo; ptyId: string | null; dest?: string }
+  /** The Host's block records (HOST_FEATURE_BLOCKS): one change of its registry, broadcast, or the whole
+   *  registry, sent once to an app right after its hello. The app absorbs it. Additive. */
+  | ({ t: 'blocks' } & BlocksBody)

@@ -155,3 +155,17 @@ describe('BlockRegistry — onChange / absorb / absorbClear', () => {
     expect(calls.length).toBe(1)
   })
 })
+
+describe('BlockRegistry — snapshot (Task 3)', () => {
+  it('살아 있는 기록과 기억하는 clear 시각을 모두 돌려준다', () => {
+    const r = new BlockRegistry()
+    r.record('a', rec(5_000, 10), 0)
+    r.record('b', rec(1_000, 10), 0)
+    r.clear('c', 20)
+    expect(r.snapshot(2_000)).toEqual({ records: { a: rec(5_000, 10) }, cleared: [{ accountId: 'c', at: 20 }] })
+  })
+
+  it('비어 있으면 빈 값을 돌려준다', () => {
+    expect(new BlockRegistry().snapshot(0)).toEqual({ records: {}, cleared: [] })
+  })
+})

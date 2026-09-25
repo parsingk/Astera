@@ -1119,7 +1119,7 @@ export class CodexRollingCoordinator {
   private declareHealthy(chain: Chain, clearShared = true): void {
     chain.cycle.onHealthy()
     chain.recovery[chain.cycle.currentIndex] = null
-    if (clearShared) this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
+    if (clearShared) this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex], this.now())
     chain.inPlaceUsed = false
     this.snap(chain)
   }

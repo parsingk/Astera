@@ -17,6 +17,13 @@ import { blockedUntil, laterBlock, type BlockRecord } from './retry'
  *  the change happened. Also the shape of the client message Task 3 exchanges between app and Host. */
 export type BlockChangeEvent = { accountId: string; rec: BlockRecord | null; at: number }
 
+/** What travels between the app and the Host (S6 D4): records to merge and clears to apply, keyed by
+ *  account. One change is one entry in one of the two; a whole registry is `snapshot()`. */
+export interface BlocksPayload {
+  records: Record<string, BlockRecord>
+  cleared: Array<{ accountId: string; at: number }>
+}
+
 export class BlockRegistry {
   private byAccount = new Map<string, BlockRecord>()
   // Remembers when each account was last cleared, local or absorbed. Its only job is absorb()'s
@@ -76,6 +83,15 @@ export class BlockRegistry {
     const rec = this.byAccount.get(accountId)
     if (!rec) return null
     return blockedUntil(rec) <= now ? null : rec
+  }
+
+  /** Everything this registry knows, for a peer that has just attached (Task 3): the live records and
+   *  every remembered clear time. The clears go too, so the peer drops its own copy of a block this
+   *  side already knows is over. */
+  snapshot(now: number): BlocksPayload {
+    const records: Record<string, BlockRecord> = {}
+    for (const [id, rec] of this.byAccount) if (blockedUntil(rec) > now) records[id] = rec
+    return { records, cleared: [...this.clearedAt].map(([accountId, at]) => ({ accountId, at })) }
   }
 
   /** The account was observed working, so whatever was recorded about it is wrong or spent.
