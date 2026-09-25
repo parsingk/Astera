@@ -45,4 +45,12 @@ describe('RollCycle', () => {
     c.advanceTo(0)
     expect(c.onLimit().type).toBe('wait') // 리셋 후 2연속 = 계정 수
   })
+
+  it('restore puts the index and the streak back (S6 R4)', () => {
+    const c = new RollCycle(3)
+    c.restore(2, 2)
+    expect(c.currentIndex).toBe(2)
+    expect(c.streakCount).toBe(2)
+    expect(c.onLimit()).toEqual({ type: 'wait', retryAt: expect.any(Number) }) // 3 % 3 === 0: a whole lap blocked
+  })
 })

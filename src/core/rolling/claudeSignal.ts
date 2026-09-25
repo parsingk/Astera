@@ -142,11 +142,29 @@ export class ClaudeTranscriptTail {
   // at least once.
   private failed = false
 
+  /** `opts.offset` continues a tail another process was reading (a restored rolling snapshot, S6 R4):
+   *  reading starts at that byte rather than at the file's end as of now. */
   constructor(
     filePath: string,
-    private since: number
+    private since: number,
+    opts: { offset?: number } = {}
   ) {
-    this.tail = new JsonlTail(filePath, { startAtEnd: true })
+    this.tail = new JsonlTail(filePath, opts.offset !== undefined ? { offset: opts.offset } : { startAtEnd: true })
+  }
+
+  /** The next byte to read, or null while the startAtEnd stat is pending (S6 R4). */
+  get offset(): number | null {
+    return this.tail.position
+  }
+
+  /** Settles once `offset` is known (JsonlTail.positioned). Never rejects. */
+  get positioned(): Promise<void> {
+    return this.tail.positioned
+  }
+
+  /** The time before which a limit entry is ignored (S6 R4). */
+  get sinceMs(): number {
+    return this.since
   }
 
   /** The latest of the limit entries that have appeared since the last call. null when there is none.

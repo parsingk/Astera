@@ -49,6 +49,7 @@ import {
 } from '../hooks/notification'
 import { t, type Lang } from '../i18n'
 import { ClaudeTranscriptTail } from './claudeSignal'
+import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot } from './snapshot'
 import { parseResetTime } from './resetTime'
 
 const GATE_PCT = 90 // The bar for choosing which window goes into a block record — only the reset of a window exhausted at or above this is kept by recordRecovery (it is no longer used as a gate for accepting a limit phrase)
@@ -229,6 +230,11 @@ export interface RollingDeps {
    *  show (spec §15.2). It is asked on the tick rather than on the limit path: it is a file read per
    *  account, and a filter that is one tick stale is worth more than a file read inside a limit verdict. */
   loginStatus?: (accountId: string) => Promise<boolean>
+  /** Where a chain's snapshot goes (S6 R4, design §3A.2): the wiring writes it into the session's pty
+   *  note, so another process — the Host when the app closes — can carry the chain on with `restore`
+   *  instead of starting it from zero. Called only when something a restore reads changed (snapshotKey).
+   *  Optional: without it nothing is written and a takeover registers from zero, as before. */
+  snapshot?(sessionId: string, snap: RollSnapshot): void
 }
 
 interface Chain {
@@ -354,6 +360,11 @@ interface Chain {
   // roll, and an in-place resume — and read only at the tick's chat consumption site, so the pty timer
   // path is untouched. The per-chain half of a health declaration still runs on every clean turn.
   chatValveSpent: boolean
+  // The wait armWait armed, for the snapshot (S6 R4): when it fires, the account it aims at and the limit
+  // it waits out. null whenever no wait is armed — cleared the moment the timer fires.
+  waitPlan: { retryAt: number; target: number; weekly: boolean } | null
+  // snapshotKey of the last snapshot written, so an unchanged chain is not written again on every tick.
+  snapKey: string
 }
 
 /** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts).
@@ -501,10 +512,65 @@ export class RollingCoordinator {
       chatTurnDone: false,
       chatLimitInTurn: false,
       chatPrevStatus: 'idle',
-      chatValveSpent: false
+      chatValveSpent: false,
+      waitPlan: null,
+      snapKey: ''
     })
     this.ensureTicker()
     this.deps.log(`chain registered session=${info.id} accounts=${ids.join(',')}`)
+    const chain = this.chains.get(info.id)
+    if (chain) this.snap(chain)
+  }
+
+  /** Carries on a chain another process wrote down (S6 R4, design §3A.2): the Host taking over an app's
+   *  session, or a new app instance taking over a gone one's. False, with nothing registered, when the
+   *  snapshot does not describe this session. Synchronous: the takeover's mark and this restore share a
+   *  turn (R2).
+   *
+   *  It starts no second chain and repeats nothing already done. An armed wait is re-armed as a
+   *  re-publish (`reattach: true`, preflight R5) — the stop was already announced by the process that
+   *  wrote it — and a wait whose time passed during the handover fires at once, once. A respawn whose
+   *  carry-on prompt had not gone out yet goes back to waiting for its statusline; one that had is not
+   *  prompted again, because `awaitingPrompt` was cleared the moment it was sent. The transcript tail
+   *  picks up at the byte the writer had reached, so a limit record already acted on is not read twice.
+   *
+   *  The snapshot is taken as given — the caller parses it with parseRollSnapshot, which refuses
+   *  anything partial, and registers from zero when that answers null. */
+  restore(info: SessionInfo, snap: RollSnapshot): boolean {
+    const ids = info.rollAccountIds ?? []
+    if (snap.provider !== 'claude') return false
+    if (ids.length !== snap.accountIds.length || ids.some((id, i) => id !== snap.accountIds[i])) return false
+    if (ids[snap.currentIndex] !== info.accountId) return false
+    this.register(info)
+    const chain = this.chains.get(info.id)
+    if (!chain) return false
+    const now = this.now()
+    chain.cycle.restore(snap.currentIndex, snap.streak)
+    chain.recovery = ids.map((_, i) => snap.recovery[i] ?? null)
+    for (const [id, rec] of Object.entries(snap.blocks)) if (ids.includes(id)) this.deps.blocks.record(id, rec, now)
+    chain.inPlaceUsed = snap.inPlaceUsed
+    chain.rolledAt = snap.rolledAt
+    const c = snap.claude
+    if (c) {
+      chain.claudeSessionId = c.sessionId
+      chain.transcriptPath = c.transcriptPath
+      if (c.transcriptPath)
+        chain.limitTail =
+          c.tailOffset !== null
+            ? new ClaudeTranscriptTail(c.transcriptPath, c.tailSince ?? now, { offset: c.tailOffset })
+            : this.newLimitTail(chain, c.transcriptPath, now)
+    }
+    this.deps.log(
+      `chain restored session=${info.id} index=${snap.currentIndex} wait=${snap.wait ? new Date(snap.wait.retryAt).toISOString() : '-'} ` +
+        `awaitingPrompt=${snap.awaitingPrompt} age=${now - snap.writtenAt}ms`
+    )
+    if (snap.wait) this.armWait(chain, snap.wait, { reattach: true })
+    else if (snap.awaitingPrompt && chain.kind !== 'chat') {
+      chain.awaitingReady = true
+      this.scheduleAutoPrompt(chain)
+    }
+    this.snap(chain)
+    return true
   }
 
   /** Whether this is the conversation of an active rolling chain — the history resume guard */
@@ -1130,23 +1196,38 @@ export class RollingCoordinator {
       // Reset-time-based targeted retry: schedules the account that recovers soonest at that time, and on
       // firing rolls straight to that account rather than to the next in the round robin. RollCycle's
       // retryAt and onWaitElapsed are unused.
-      const plan = planRetry(retryState(chain, this.deps.blocks, now), now)
-      this.pushState(chain, 'waiting', {
-        nextRetryAt: new Date(plan.retryAt).toISOString(),
-        scope: plan.weekly ? 'weekly' : 'session'
-      })
-      chain.waitTimer = setTimeout(
-        () => {
-          chain.waitTimer = null
-          // The records are not cleared — the target account's record expires naturally once its reset
-          // passes, and the blocks still standing on other accounts (weekly and so on) have to stay valid.
-          void this.resumeAfterWait(chain, plan.target)
-        },
-        Math.max(0, plan.retryAt - this.now())
-      )
+      // The records are not cleared when it fires — the target account's record expires naturally once
+      // its reset passes, and the blocks still standing on other accounts (weekly and so on) have to stay valid.
+      this.armWait(chain, planRetry(retryState(chain, this.deps.blocks, now), now))
     } else {
       void this.roll(chain, target)
     }
+    this.snap(chain)
+  }
+
+  /** Arms a planned wait: the banner, the timer, and the plan a snapshot carries (S6 R4). */
+  private armWait(
+    chain: Chain,
+    plan: { target: number; retryAt: number; weekly: boolean },
+    opts: { reattach?: boolean } = {}
+  ): void {
+    chain.waitPlan = { retryAt: plan.retryAt, target: plan.target, weekly: plan.weekly }
+    this.pushState(chain, 'waiting', {
+      nextRetryAt: new Date(plan.retryAt).toISOString(),
+      scope: plan.weekly ? 'weekly' : 'session',
+      // A restored wait is the same stop another process already published (preflight R5): marked as a
+      // re-publish, so the roll tap (it skips reattach) and Slack do not record it a second time.
+      ...(opts.reattach ? { reattach: true } : {})
+    })
+    chain.waitTimer = setTimeout(
+      () => {
+        chain.waitTimer = null
+        chain.waitPlan = null
+        void this.resumeAfterWait(chain, plan.target)
+      },
+      Math.max(0, plan.retryAt - this.now())
+    )
+    this.snap(chain)
   }
 
   /** Resuming once the wait expires. There is no reason to kill the process when the account is not
@@ -1254,7 +1335,7 @@ export class RollingCoordinator {
     // creation time (much earlier), so the first tick after the resume would read the very record that
     // caused this wait and fire the limit again. roll() already does this for the same reason, on the copy.
     if (chain.transcriptPath) {
-      chain.limitTail = new ClaudeTranscriptTail(chain.transcriptPath, this.now())
+      chain.limitTail = this.newLimitTail(chain, chain.transcriptPath, this.now())
       chain.limitTailReadFailWarned = false
     }
     // The same refresh roll() does after a respawn. Without it the first tick after the resume sees
@@ -1277,6 +1358,7 @@ export class RollingCoordinator {
     const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
+    this.snap(chain)
     setTimeout(() => {
       if (!chain.disposed && chain.liveId === liveId) {
         this.deps.write(liveId, '\r')
@@ -1440,17 +1522,7 @@ export class RollingCoordinator {
     this.deps.log(
       `roll retry scheduled after abort (${why}) at=${new Date(plan.retryAt).toISOString()} session=${chain.liveId}`
     )
-    this.pushState(chain, 'waiting', {
-      nextRetryAt: new Date(plan.retryAt).toISOString(),
-      scope: plan.weekly ? 'weekly' : 'session'
-    })
-    chain.waitTimer = setTimeout(
-      () => {
-        chain.waitTimer = null
-        void this.resumeAfterWait(chain, plan.target)
-      },
-      Math.max(0, plan.retryAt - this.now())
-    )
+    this.armWait(chain, plan)
   }
 
   /** Executing a roll: copy → kill → respawn under the same ID → schedule the automatic prompt (the
@@ -1590,7 +1662,7 @@ export class RollingCoordinator {
         // Leaving this to applyMeta alone would have it decide "the path has not changed" when the new
         // account's statusLine reports the same path, and keep the old tail — and that tail is looking at
         // the old account's file, so it reads nothing.
-        chain.limitTail = new ClaudeTranscriptTail(dest, this.now())
+        chain.limitTail = this.newLimitTail(chain, dest, this.now())
         chain.limitTailReadFailWarned = false // a failure on the new path is reported again
       } else {
         // 백지 재개 — 새 세션은 다른 대화다. 신원 필드를 비운다: 비우지 않으면 다음 롤이 지금
@@ -1624,6 +1696,7 @@ export class RollingCoordinator {
       chain.lastUsagePct = null
       chain.cycle.advanceTo(toIndex)
       this.chains.set(info.id, chain)
+      this.snap(chain)
       this.deps.send('session:rolled', { oldSessionId: oldId, info })
       // A re-publish that reattaches the banner to the new sessionId — not a new switch, so Slack does not announce it
       this.pushState(chain, 'switching', { accountLabel: target.label, reattach: true })
@@ -1715,6 +1788,7 @@ export class RollingCoordinator {
         }
       }, ENTER_DELAY_MS)
       chain.awaitingReady = false
+      this.snap(chain)
       this.deps.log(`auto-prompt sent session=${liveId}`)
       this.armHealthy(chain)
     }
@@ -1818,6 +1892,7 @@ export class RollingCoordinator {
     // 플래그는 *이전* 계정의 차단 에피소드를 가리킨다. 남겨 두면 새 계정에서의 첫 대기가
     // 제자리 재개를 건너뛰고 쓸데없이 respawn 한다. codex 쪽도 같은 자리에서 무조건 해제한다.
     chain.inPlaceUsed = false
+    this.snap(chain)
   }
 
   /** The 15-second tick — refreshes session metadata, evaluates the fallback trigger (five_hour or
@@ -1974,6 +2049,7 @@ export class RollingCoordinator {
       this.recordRecovery(chain, payload, undefined, undefined, queried)
       this.onLimit(chain)
     }
+    this.snap(chain)
   }
 
   /** Transcript limit detection. This is the primary signal, independent of the statusLine snapshot —
@@ -2148,7 +2224,7 @@ export class RollingCoordinator {
       // Create one when the path has just been settled or there is no tail yet. since is now — entries
       // before this point were already there before this chain saw them, and in a copy they include the old limit error.
       if (chain.transcriptPath !== meta.transcriptPath || chain.limitTail === null) {
-        chain.limitTail = new ClaudeTranscriptTail(meta.transcriptPath, this.now())
+        chain.limitTail = this.newLimitTail(chain, meta.transcriptPath, this.now())
         chain.limitTailReadFailWarned = false // a failure on the new path is reported again
       }
       chain.transcriptPath = meta.transcriptPath
@@ -2165,6 +2241,64 @@ export class RollingCoordinator {
     chain.lastUsagePct = pcts.length ? Math.max(...pcts) : null
     // The single-account blind spot (3-b): schedules a retrospective verdict at the snapshot's resets_at
     if (chain.accountIds.length === 1 && u) this.armResetCheck(chain, u)
+    this.snap(chain)
+  }
+
+  /** A transcript tail that starts at the file's end, and a snapshot once that end is known. The offset
+   *  is null until the constructor's stat lands; writing again then records the real byte rather than
+   *  leaving the null for the next tick to turn into a number (S6 R4). */
+  private newLimitTail(chain: Chain, filePath: string, since: number): ClaudeTranscriptTail {
+    const tail = new ClaudeTranscriptTail(filePath, since)
+    void tail.positioned.then(() => {
+      if (chain.limitTail === tail) this.snap(chain)
+    })
+    return tail
+  }
+
+  /** What this chain is, for another process to carry on (S6 R4). */
+  private snapshotOf(chain: Chain): RollSnapshot {
+    const now = this.now()
+    const blocks: Record<string, BlockRecord> = {}
+    for (const id of chain.accountIds) {
+      const b = this.deps.blocks.get(id, now)
+      if (b) blocks[id] = b
+    }
+    return {
+      v: ROLL_SNAPSHOT_VERSION,
+      provider: 'claude',
+      accountIds: chain.accountIds,
+      currentIndex: chain.cycle.currentIndex,
+      streak: chain.cycle.streakCount,
+      recovery: chain.recovery,
+      blocks,
+      wait: chain.waitPlan,
+      inPlaceUsed: chain.inPlaceUsed,
+      rolledAt: chain.rolledAt,
+      awaitingPrompt: chain.kind !== 'chat' && chain.awaitingReady,
+      claude: {
+        sessionId: chain.claudeSessionId,
+        transcriptPath: chain.transcriptPath,
+        tailOffset: chain.limitTail?.offset ?? null,
+        tailSince: chain.limitTail?.sinceMs ?? null
+      },
+      writtenAt: now
+    }
+  }
+
+  /** Writes the snapshot when something a restore reads changed. Never throws: a note that could not be
+   *  written costs a takeover its freshness, never a roll. */
+  private snap(chain: Chain): void {
+    const write = this.deps.snapshot
+    if (!write || chain.disposed) return
+    const s = this.snapshotOf(chain)
+    const key = snapshotKey(s)
+    if (key === chain.snapKey) return
+    chain.snapKey = key
+    try {
+      write(chain.liveId, s)
+    } catch (err) {
+      this.deps.log(`snapshot write failed session=${chain.liveId}: ${String(err)}`)
+    }
   }
 
   /** Schedules the verdict timer at the earliest future resets_at (+GRACE). The same time is not

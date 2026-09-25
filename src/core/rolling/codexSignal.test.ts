@@ -581,3 +581,14 @@ describe('rolloutSize', () => {
     expect(await rolloutSize(path.join(dir, 'nope.jsonl'))).toBeNull()
   })
 })
+
+describe('CodexRolloutTail snapshot getters (S6)', () => {
+  it('CodexRolloutTail starts from its initial state and reports its offset (S6)', async () => {
+    const f = path.join(dir, 'r.jsonl')
+    await fs.writeFile(f, '')
+    const initial = { primary: null, secondary: null, reachedType: null, error: null, priorReset: null, at: 1 }
+    const t = new CodexRolloutTail(f, () => 5, { offset: 0, initial })
+    expect(t.offset).toBe(0)
+    expect(await t.read()).toEqual(initial) // no new lines: the state stands
+  })
+})

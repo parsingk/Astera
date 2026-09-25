@@ -290,4 +290,15 @@ describe('ClaudeTranscriptTail', () => {
     expect(hit).not.toBeNull()
     expect(hit!.text.length).toBeLessThanOrEqual(201) // 200 + '…'
   })
+
+  it('ClaudeTranscriptTail reads from a given offset and reports it, and its since (S6)', async () => {
+    const f = path.join(dir, 't.jsonl')
+    await fs.writeFile(f, 'x\n')
+    const t = new ClaudeTranscriptTail(f, 1234, { offset: 2 })
+    expect(t.offset).toBe(2)
+    expect(t.sinceMs).toBe(1234)
+    await fs.appendFile(f, 'y\n')
+    await t.read()
+    expect(t.offset).toBe(4)
+  })
 })

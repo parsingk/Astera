@@ -34,13 +34,41 @@ export class JsonlTail {
   // it late here would skip a real hit that arrived in between. If the file does not exist yet (stat
   // fails) we start at 0 — meaning there is no existing content to skip.
   private startOffset: Promise<number> | null = null
+  // What that stat answered, once it has — so `position` can report it before the first read() folds it
+  // into `offset`. Undefined while the stat is still in flight.
+  private resolvedStart: number | undefined = undefined
+  /** Settles once `position` is known: at once for an ordinary tail, when the startAtEnd stat lands for
+   *  one that skips existing content. A rolling snapshot waits on it to record the real offset (S6 R4)
+   *  rather than a null that the first read() would then turn into a number — a change nothing a
+   *  restore reads actually went through. Never rejects. */
+  readonly positioned: Promise<void>
 
   constructor(
     private filePath: string,
     opts: JsonlTailOptions = {}
   ) {
-    if (opts.startAtEnd) this.startOffset = stat(filePath).then((s) => s.size).catch(() => 0)
-    else if (opts.offset !== undefined) this.offset = opts.offset
+    if (opts.startAtEnd) {
+      this.startOffset = stat(filePath)
+        .then((s) => s.size)
+        .catch(() => 0)
+        .then((n) => {
+          this.resolvedStart = n
+          return n
+        })
+      this.positioned = this.startOffset.then(() => undefined)
+    } else {
+      if (opts.offset !== undefined) this.offset = opts.offset
+      this.positioned = Promise.resolve()
+    }
+  }
+
+  /** The next byte to read, or null while a startAtEnd stat is pending. A rolling snapshot writes it so
+   *  another process can pick the tail up exactly here (S6 R4). A carried partial line counts as unread:
+   *  the position is the start of that line, so a tail resumed from it reads the line whole instead of
+   *  only its remainder (which would parse as garbage and be dropped). */
+  get position(): number | null {
+    if (this.startOffset) return this.resolvedStart ?? null
+    return this.offset - Buffer.byteLength(this.carry, 'utf8')
   }
 
   /** The lines newly **completed** since the last call (blank lines excluded).

@@ -10,6 +10,7 @@ import { parseResetTime } from './resetTime'
 import { BlockRegistry } from './blockRegistry'
 import type { RollConfig } from './config'
 import { RollingCoordinator, type RollingDeps } from './claudeCoordinator'
+import type { RollSnapshot } from './snapshot'
 
 const acc = (id: string, label: string): Account => ({
   id,
@@ -2031,6 +2032,137 @@ describe('transcript 한도 감지', () => {
     await advanceIo(20_000) // 새 경로의 실패
     const second = logs.filter((m) => m.includes('transcript tail read failed')).length
     expect(second).toBe(2)
+  })
+
+  describe('snapshots and restore (S6 R4, design §3A.2)', () => {
+    const snaps = (): { id: string; s: RollSnapshot }[] => []
+    it('writes a snapshot when a chain registers, and again only when something a restore reads changed', async () => {
+      const got = snaps()
+      const h = harness({ snapshot: (id, s) => got.push({ id, s }) })
+      h.payloads.set('s1', payloadAt(tPath))
+      h.coord.register(h.info1)
+      expect(got).toHaveLength(1)
+      expect(got[0]).toMatchObject({ id: 's1', s: { provider: 'claude', accountIds: ['a1', 'a2', 'a3'], currentIndex: 0, wait: null } })
+      await advanceIo(20_000) // the first tick learns the identity
+      expect(got.at(-1)?.s.claude).toMatchObject({ sessionId: 'claude-sess', transcriptPath: tPath })
+      const n = got.length
+      await advanceIo(20_000) // nothing changed
+      expect(got).toHaveLength(n)
+    })
+
+    it('a single-account limit writes the planned wait into the snapshot', async () => {
+      const got = snaps()
+      const h = harness({ snapshot: (id, s) => got.push({ id, s }) })
+      h.payloads.set('s1', payload(100))
+      h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+      h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '3pm') })
+      await flush()
+      const w = got.at(-1)?.s.wait
+      expect(w).not.toBeNull()
+      expect(w?.target).toBe(0)
+      expect(w!.retryAt).toBeGreaterThan(Date.now())
+    })
+
+    it('restore re-arms a wait in the future and resumes in place when it fires, once', async () => {
+      const h = harness()
+      const info = { ...h.info1, rollAccountIds: ['a1'] }
+      const at = Date.now() + 60_000
+      const ok = h.coord.restore(info, {
+        v: 1, provider: 'claude', accountIds: ['a1'], currentIndex: 0, streak: 1,
+        recovery: [{ at, weekly: false, since: Date.now() }], blocks: {}, wait: { retryAt: at, target: 0, weekly: false },
+        inPlaceUsed: false, rolledAt: null, awaitingPrompt: false,
+        claude: { sessionId: 'claude-sess', transcriptPath: tPath, tailOffset: null, tailSince: null }, writtenAt: Date.now()
+      })
+      expect(ok).toBe(true)
+      // A re-publish, not a new stop (preflight R5): the tap and Slack skip reattach.
+      expect(h.sent.find((x) => x.channel === 'session:rollState')?.payload).toMatchObject({ sessionId: 's1', state: 'waiting', reattach: true })
+      await advanceIo(59_000)
+      expect(h.written).toHaveLength(0)
+      await advanceIo(2_000)
+      expect(h.written.map((w) => w.data).join('')).toContain('\r')
+      const typed = h.written.length
+      await advanceIo(60_000)
+      expect(h.written.length).toBe(typed) // one resume, not a second wait rediscovered (Review Focus 5)
+    })
+
+    it('restore fires a wait that expired during the grace at once, exactly once (Review Focus 5)', async () => {
+      const h = harness()
+      const ok = h.coord.restore({ ...h.info1, rollAccountIds: ['a1'] }, {
+        v: 1, provider: 'claude', accountIds: ['a1'], currentIndex: 0, streak: 1, recovery: [null], blocks: {},
+        wait: { retryAt: Date.now() - 1_000, target: 0, weekly: false }, inPlaceUsed: false, rolledAt: null,
+        awaitingPrompt: false, claude: { sessionId: 'claude-sess', transcriptPath: tPath, tailOffset: null, tailSince: null },
+        writtenAt: Date.now() - 6_000
+      })
+      expect(ok).toBe(true)
+      await advanceIo(1_000)
+      const enters = h.written.filter((w) => w.data === '\r').length
+      expect(enters).toBe(1)
+      await advanceIo(30_000)
+      expect(h.written.filter((w) => w.data === '\r').length).toBe(1)
+      expect(h.sent.filter((x) => x.payload.state === 'waiting')).toHaveLength(1)
+    })
+
+    it('restore of a respawn awaiting its prompt types the prompt once the statusline appears', async () => {
+      const h = harness()
+      const info = { ...h.info1, id: 's9', accountId: 'a2' }
+      expect(h.coord.restore(info, {
+        v: 1, provider: 'claude', accountIds: ['a1', 'a2', 'a3'], currentIndex: 1, streak: 1, recovery: [null, null, null],
+        blocks: {}, wait: null, inPlaceUsed: false, rolledAt: Date.now(), awaitingPrompt: true,
+        claude: { sessionId: 'claude-sess', transcriptPath: tPath, tailOffset: null, tailSince: Date.now() }, writtenAt: Date.now()
+      })).toBe(true)
+      await advanceIo(3_000)
+      expect(h.written).toHaveLength(0) // no statusline yet
+      h.payloads.set('s9', payloadAt(tPath, 5))
+      await advanceIo(2_000)
+      expect(h.written.map((w) => w.id)).toEqual(['s9', 's9'])
+      expect(h.written[1].data).toBe('\r')
+    })
+
+    it('restore continues the transcript tail at its offset: a record after it rolls, one before it does not', async () => {
+      await fsp.writeFile(tPath, limitLine(Date.now() - 10_000) + '\n', 'utf8')
+      const offset = (await fsp.stat(tPath)).size
+      const h = harness()
+      h.payloads.set('s1', payloadAt(tPath))
+      expect(h.coord.restore(h.info1, {
+        v: 1, provider: 'claude', accountIds: ['a1', 'a2', 'a3'], currentIndex: 0, streak: 0, recovery: [null, null, null],
+        blocks: {}, wait: null, inPlaceUsed: false, rolledAt: null, awaitingPrompt: false,
+        claude: { sessionId: 'claude-sess', transcriptPath: tPath, tailOffset: offset, tailSince: Date.now() - 60_000 },
+        writtenAt: Date.now()
+      })).toBe(true)
+      await advanceIo(20_000)
+      expect(h.events).toEqual([]) // the old record is behind the offset
+      await fsp.appendFile(tPath, limitLine(Date.now() + 1000) + '\n', 'utf8')
+      await advanceIo(20_000)
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+    })
+
+    it('restore records the snapshot’s blocks in the shared registry, so the roll skips a blocked account', async () => {
+      const blocks = new BlockRegistry()
+      const h = harness({ blocks })
+      const until = Date.now() + 3_600_000
+      expect(h.coord.restore(h.info1, {
+        v: 1, provider: 'claude', accountIds: ['a1', 'a2', 'a3'], currentIndex: 0, streak: 0, recovery: [null, null, null],
+        blocks: { a2: { at: until, weekly: false, since: Date.now() } }, wait: null, inPlaceUsed: false, rolledAt: null,
+        awaitingPrompt: false, claude: { sessionId: null, transcriptPath: null, tailOffset: null, tailSince: null }, writtenAt: Date.now()
+      })).toBe(true)
+      expect(blocks.get('a2', Date.now())?.at).toBe(until)
+    })
+
+    it.each([
+      ['another provider', { provider: 'codex' as const }],
+      ['other accounts', { accountIds: ['a1', 'a9', 'a3'] }],
+      ['an index that is not the session’s account', { currentIndex: 2 }]
+    ])('restore refuses a snapshot with %s, and registers nothing', (_w, patch) => {
+      const h = harness()
+      const base: RollSnapshot = {
+        v: 1, provider: 'claude', accountIds: ['a1', 'a2', 'a3'], currentIndex: 0, streak: 0, recovery: [null, null, null],
+        blocks: {}, wait: null, inPlaceUsed: false, rolledAt: null, awaitingPrompt: false, writtenAt: 0
+      }
+      expect(h.coord.restore(h.info1, { ...base, ...patch })).toBe(false)
+      expect(h.coord.stateOf('s1')).toBeNull()
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      expect(h.events).toEqual([])
+    })
   })
 })
 

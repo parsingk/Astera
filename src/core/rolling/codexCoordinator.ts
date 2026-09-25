@@ -40,6 +40,7 @@ import {
   type CodexLimitState
 } from './codexSignal'
 import { t, type Lang } from '../i18n'
+import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot } from './snapshot'
 
 const TICK_MS = 15_000 // how often state is refreshed and the fallback trigger checked (mirrors rolling.ts)
 const LOCATE_POLL_MS = 1_000 // how often we poll to map the rollout
@@ -173,6 +174,10 @@ export interface CodexRollingDeps {
    *  not after": the manager drops the session together with its process). Optional so a wiring that
    *  predates this behaves exactly as before (no bypass ever inherited). */
   bypassedOf?(sessionId: string): boolean
+  /** Where a chain's snapshot goes (S6 R4, design §3A.2) — the claude side's dep of the same name, same
+   *  contract: written into the session's pty note so another process can `restore` the chain rather
+   *  than start it from zero, and only when something a restore reads changed. Optional. */
+  snapshot?(sessionId: string, snap: RollSnapshot): void
 }
 
 interface Chain {
@@ -261,6 +266,10 @@ interface Chain {
   // roll, and an in-place resume — and read only at the tick's chat consumption site, so the pty timer
   // path is untouched. The per-chain half of a health declaration still runs on every clean turn.
   chatValveSpent: boolean
+  // The wait armWait armed, for the snapshot (S6 R4) — null whenever no wait is armed.
+  waitPlan: { retryAt: number; target: number; weekly: boolean } | null
+  // snapshotKey of the last snapshot written, so an unchanged chain is not written again on every tick.
+  snapKey: string
 }
 
 /** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts).
@@ -405,7 +414,9 @@ export class CodexRollingCoordinator {
       chatTurnDone: false,
       chatLimitInTurn: false,
       chatPrevStatus: 'idle',
-      chatValveSpent: false
+      chatValveSpent: false,
+      waitPlan: null,
+      snapKey: ''
     }
     this.chains.set(info.id, chain)
     // **Where in the chain this session already is** — the same rule, and the same reasoning, as
@@ -485,6 +496,52 @@ export class CodexRollingCoordinator {
     }
     this.ensureTicker()
     this.deps.log(`codex chain registered session=${info.id} accounts=${ids.join(',')}`)
+    this.snap(chain)
+  }
+
+  /** Carries on a chain another process wrote down (S6 R4, design §3A.2) — the claude side's `restore`,
+   *  same contract: false with nothing registered when the snapshot does not describe this session, and
+   *  nothing already done is done again (a restored wait is a re-publish, preflight R5).
+   *
+   *  **It registers unmapped and maps from the snapshot itself (preflight R6).** `register(info,
+   *  undefined, false, false)` takes the branch that starts no `findRollout` poll — a scan here could
+   *  claim another session's newer file, which is the hazard `locate = false` exists for — and publishes
+   *  no 'adopted' banner. The attach branch would publish one, and attach at the file's end besides; the
+   *  snapshot knows better on both counts: the byte the writer had reached and the state it last read
+   *  there, so the limit verdicts carry on as if the tail had never stopped. The unmapped register writes
+   *  a from-zero snapshot a moment before the real one, in the same turn; the last write wins. */
+  restore(info: SessionInfo, snap: RollSnapshot): boolean {
+    const ids = info.rollAccountIds ?? []
+    if (snap.provider !== 'codex') return false
+    if (ids.length !== snap.accountIds.length || ids.some((id, i) => id !== snap.accountIds[i])) return false
+    if (ids[snap.currentIndex] !== info.accountId) return false
+    this.register(info, undefined, false, false)
+    const chain = this.chains.get(info.id)
+    if (!chain) return false
+    const now = this.now()
+    chain.cycle.restore(snap.currentIndex, snap.streak)
+    chain.recovery = ids.map((_, i) => snap.recovery[i] ?? null)
+    for (const [id, rec] of Object.entries(snap.blocks)) if (ids.includes(id)) this.deps.blocks.record(id, rec, now)
+    chain.inPlaceUsed = snap.inPlaceUsed
+    const c = snap.codex
+    if (c) {
+      chain.codexSessionId = c.sessionId
+      chain.rolloutPath = c.rolloutPath
+      chain.state = c.state
+      if (c.rolloutPath)
+        chain.tail =
+          c.tailOffset !== null
+            ? new CodexRolloutTail(c.rolloutPath, this.now, { offset: c.tailOffset, initial: c.state })
+            : this.newTail(chain, c.rolloutPath, { startAtEnd: true, initial: c.state })
+    }
+    this.deps.log(
+      `codex chain restored session=${info.id} index=${snap.currentIndex} ` +
+        `wait=${snap.wait ? new Date(snap.wait.retryAt).toISOString() : '-'} ` +
+        `mapped=${chain.rolloutPath ? 'yes' : 'no'} age=${now - snap.writtenAt}ms`
+    )
+    if (snap.wait) this.armWait(chain, snap.wait, { reattach: true })
+    this.snap(chain)
+    return true
   }
 
   /** A chat session's `ready` event: the thread id codex gave this conversation and, when it named
@@ -683,7 +740,7 @@ export class CodexRollingCoordinator {
     chain.rolloutPath = rolloutPath
     if (chain.codexSessionId !== codexSessionId) this.deps.onNativeSession?.(chain.liveId, codexSessionId)
     chain.codexSessionId = codexSessionId
-    chain.tail = new CodexRolloutTail(rolloutPath, this.now, { startAtEnd: true })
+    chain.tail = this.newTail(chain, rolloutPath, { startAtEnd: true })
     chain.unmappedWarned = false // it is mapped now — a future unmapped state gets to report itself again
     // **Attaching never recovers the block; only register()'s resume branch asks for it.** The other
     // two callers attach to a file whose limit record must not be believed. resumeInPlace re-anchors on
@@ -699,6 +756,22 @@ export class CodexRollingCoordinator {
     // `undefined` leaves the verdict unconsulted, which is exactly the previous behaviour of both paths.
     chain.priorReset = undefined
     chain.priorAsked = false
+    this.snap(chain)
+  }
+
+  /** A rollout tail, and a snapshot once its offset is known — null until a startAtEnd stat lands, and
+   *  writing again then records the real byte rather than leaving the null for the next read to turn
+   *  into a number (S6 R4). */
+  private newTail(
+    chain: Chain,
+    rolloutPath: string,
+    opts: { startAtEnd?: boolean; initial?: CodexLimitState | null } = {}
+  ): CodexRolloutTail {
+    const tail = new CodexRolloutTail(rolloutPath, this.now, opts)
+    void tail.positioned.then(() => {
+      if (chain.tail === tail) this.snap(chain)
+    })
+    return tail
   }
 
   /** Asks the rollout what block this conversation already ended on, and hands the answer to the chain.
@@ -785,6 +858,7 @@ export class CodexRollingCoordinator {
           prompt: chain.prompt
         })
         this.deps.log(`codex rollout located session=${liveId} id=${found.sessionId}`)
+        this.snap(chain)
         return
       }
       if (this.now() - since >= LOCATE_TIMEOUT_MS) {
@@ -965,6 +1039,7 @@ export class CodexRollingCoordinator {
     chain.recovery[chain.cycle.currentIndex] = null
     if (clearShared) this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
     chain.inPlaceUsed = false
+    this.snap(chain)
   }
 
   private onLimit(chain: Chain, reason: LimitReason): void {
@@ -1029,21 +1104,37 @@ export class CodexRollingCoordinator {
         `action=${JSON.stringify(action)}${detour}`
     )
     if (target === null) {
-      const plan = planRetry(retryState(chain, this.deps.blocks, now), now)
-      this.pushState(chain, 'waiting', {
-        nextRetryAt: new Date(plan.retryAt).toISOString(),
-        scope: plan.weekly ? 'weekly' : 'session'
-      })
-      chain.waitTimer = setTimeout(
-        () => {
-          chain.waitTimer = null
-          void this.resumeAfterWait(chain, plan.target)
-        },
-        Math.max(0, plan.retryAt - this.now())
-      )
+      this.armWait(chain, planRetry(retryState(chain, this.deps.blocks, now), now))
     } else {
       void this.roll(chain, target)
     }
+    this.snap(chain)
+  }
+
+  /** Arms a planned wait: the banner, the timer, and the plan a snapshot carries (S6 R4). The claude
+   *  side's function of the same name, same shape. */
+  private armWait(
+    chain: Chain,
+    plan: { target: number; retryAt: number; weekly: boolean },
+    opts: { reattach?: boolean } = {}
+  ): void {
+    chain.waitPlan = { retryAt: plan.retryAt, target: plan.target, weekly: plan.weekly }
+    this.pushState(chain, 'waiting', {
+      nextRetryAt: new Date(plan.retryAt).toISOString(),
+      scope: plan.weekly ? 'weekly' : 'session',
+      // A restored wait is the same stop another process already published (preflight R5): marked as a
+      // re-publish, so the roll tap (it skips reattach) and Slack do not record it a second time.
+      ...(opts.reattach ? { reattach: true } : {})
+    })
+    chain.waitTimer = setTimeout(
+      () => {
+        chain.waitTimer = null
+        chain.waitPlan = null
+        void this.resumeAfterWait(chain, plan.target)
+      },
+      Math.max(0, plan.retryAt - this.now())
+    )
+    this.snap(chain)
   }
 
   /** 재개 자리에 실을 텍스트를 정한다. **어느 모양을 물을지는 이 함수를 부르는 자리가 정한다** —
@@ -1207,6 +1298,7 @@ export class CodexRollingCoordinator {
       if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as the claude side
       this.deps.write(liveId, prompt)
+      this.snap(chain)
       setTimeout(() => {
         if (chain.disposed || chain.liveId !== liveId) return
         this.deps.write(liveId, '\r')
@@ -1336,17 +1428,7 @@ export class CodexRollingCoordinator {
     this.deps.log(
       `codex roll retry scheduled after abort (${why}) at=${new Date(plan.retryAt).toISOString()} session=${chain.liveId}`
     )
-    this.pushState(chain, 'waiting', {
-      nextRetryAt: new Date(plan.retryAt).toISOString(),
-      scope: plan.weekly ? 'weekly' : 'session'
-    })
-    chain.waitTimer = setTimeout(
-      () => {
-        chain.waitTimer = null
-        void this.resumeAfterWait(chain, plan.target)
-      },
-      Math.max(0, plan.retryAt - this.now())
-    )
+    this.armWait(chain, plan)
   }
 
   /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume. When Smart
@@ -1517,6 +1599,7 @@ export class CodexRollingCoordinator {
       chain.modelChoice = new CodexModelChoiceScanner() // same reason — a half-drawn prompt must not join the new session's output
       chain.cycle.advanceTo(toIndex)
       this.chains.set(info.id, chain)
+      this.snap(chain)
       if (dest !== undefined) {
         // The respawned codex resumes, so it appends to dest rather than creating a new rollout — there is
         // nothing to search for, and searching was exactly what broke here (see attachRollout). dest holds
@@ -1667,7 +1750,54 @@ export class CodexRollingCoordinator {
           this.declareHealthy(chain, !chain.chatValveSpent)
           chain.chatValveSpent = true
         }
+        this.snap(chain)
       })
+    }
+  }
+
+  /** What this chain is, for another process to carry on (S6 R4). */
+  private snapshotOf(chain: Chain): RollSnapshot {
+    const now = this.now()
+    const blocks: Record<string, BlockRecord> = {}
+    for (const id of chain.accountIds) {
+      const b = this.deps.blocks.get(id, now)
+      if (b) blocks[id] = b
+    }
+    return {
+      v: ROLL_SNAPSHOT_VERSION,
+      provider: 'codex',
+      accountIds: chain.accountIds,
+      currentIndex: chain.cycle.currentIndex,
+      streak: chain.cycle.streakCount,
+      recovery: chain.recovery,
+      blocks,
+      wait: chain.waitPlan,
+      inPlaceUsed: chain.inPlaceUsed,
+      rolledAt: null,
+      awaitingPrompt: false,
+      codex: {
+        sessionId: chain.codexSessionId,
+        rolloutPath: chain.rolloutPath,
+        tailOffset: chain.tail?.offset ?? null,
+        state: chain.state
+      },
+      writtenAt: now
+    }
+  }
+
+  /** Writes the snapshot when something a restore reads changed. Never throws: a note that could not be
+   *  written costs a takeover its freshness, never a roll. */
+  private snap(chain: Chain): void {
+    const write = this.deps.snapshot
+    if (!write || chain.disposed) return
+    const s = this.snapshotOf(chain)
+    const key = snapshotKey(s)
+    if (key === chain.snapKey) return
+    chain.snapKey = key
+    try {
+      write(chain.liveId, s)
+    } catch (err) {
+      this.deps.log(`codex snapshot write failed session=${chain.liveId}: ${String(err)}`)
     }
   }
 

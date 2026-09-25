@@ -2469,3 +2469,45 @@ describe('logged-out accounts', () => {
     h.coord.stop()
   })
 })
+
+describe('codex snapshots and restore (S6 R4)', () => {
+  let rolloutFile: string
+  beforeEach(async () => {
+    rolloutFile = await writeRollout({ accountId: 'c1', uuid: 'thread-1', cwd: path.join(tmp, 'work', 'p') })
+  })
+
+  it('restore attaches the rollout at the snapshot’s offset with its last state, and a wait fires once', async () => {
+    const h = harness()
+    const at = Date.now() + 30_000
+    expect(h.coord.restore({ ...h.info1, rollAccountIds: ['c1'], accountId: 'c1' }, {
+      v: 1, provider: 'codex', accountIds: ['c1'], currentIndex: 0, streak: 1, recovery: [{ at, weekly: false, since: Date.now() }],
+      blocks: {}, wait: { retryAt: at, target: 0, weekly: false }, inPlaceUsed: false, rolledAt: null, awaitingPrompt: false,
+      codex: { sessionId: 'thread-1', rolloutPath: rolloutFile, tailOffset: 0, state: null }, writtenAt: Date.now()
+    })).toBe(true)
+    expect(h.coord.rolloutPathFor(h.info1.id)).toBe(rolloutFile)
+    await vi.advanceTimersByTimeAsync(31_000)
+    expect(h.sent.filter((x) => x.payload.state === 'waiting')).toHaveLength(1)
+  })
+
+  it('restore starts no locate and publishes no adopted banner (preflight R6)', async () => {
+    const logs: string[] = []
+    const h = harness({ log: (m) => logs.push(m) })
+    expect(h.coord.restore({ ...h.info1, rollAccountIds: ['c1'], accountId: 'c1' }, {
+      v: 1, provider: 'codex', accountIds: ['c1'], currentIndex: 0, streak: 0, recovery: [null], blocks: {}, wait: null,
+      inPlaceUsed: false, rolledAt: null, awaitingPrompt: false,
+      codex: { sessionId: 'thread-1', rolloutPath: rolloutFile, tailOffset: 0, state: null }, writtenAt: Date.now()
+    })).toBe(true)
+    await vi.advanceTimersByTimeAsync(61_000)
+    expect(logs.join('\n')).not.toMatch(/rollout located|not found within/)
+    expect(h.sent.some((x) => x.payload.state === 'adopted')).toBe(false)
+  })
+
+  it('restore refuses a claude snapshot', () => {
+    const h = harness()
+    expect(h.coord.restore(h.info1, {
+      v: 1, provider: 'claude', accountIds: h.info1.rollAccountIds!, currentIndex: 0, streak: 0,
+      recovery: h.info1.rollAccountIds!.map(() => null), blocks: {}, wait: null, inPlaceUsed: false, rolledAt: null,
+      awaitingPrompt: false, writtenAt: 0
+    })).toBe(false)
+  })
+})

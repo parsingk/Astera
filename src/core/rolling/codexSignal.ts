@@ -250,14 +250,28 @@ export class CodexRolloutTail {
   // it stood at attach time, and the first read() can be a whole tick later.
   private seed: Promise<{ at: number; weekly: boolean } | null> | null = null
 
+  /** `opts.initial` is the last state another process read from this same file (a restored rolling
+   *  snapshot, S6 R4) — with `opts.offset` it carries that tail on as if it had never stopped. */
   constructor(
     filePath: string,
     private now: () => number = Date.now,
-    opts: JsonlTailOptions = {}
+    opts: JsonlTailOptions & { initial?: CodexLimitState | null } = {}
   ) {
-    this.tail = new JsonlTail(filePath, opts)
+    const { initial, ...tailOpts } = opts
+    this.last = initial ?? null
+    this.tail = new JsonlTail(filePath, tailOpts)
     // Only when skipping the existing content — reading from offset 0 already sees those turns
-    if (opts.startAtEnd) this.seed = readPriorReset(filePath)
+    if (tailOpts.startAtEnd) this.seed = readPriorReset(filePath)
+  }
+
+  /** The next byte to read, or null while a startAtEnd stat is pending (S6 R4). */
+  get offset(): number | null {
+    return this.tail.position
+  }
+
+  /** Settles once `offset` is known (JsonlTail.positioned). Never rejects. */
+  get positioned(): Promise<void> {
+    return this.tail.positioned
   }
 
   /** With no new lines, returns the previous state unchanged (state does not disappear). Missing file or error gives null. */

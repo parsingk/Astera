@@ -106,4 +106,27 @@ describe('JsonlTail', () => {
     expect(result?.restarted).toBe(true)
     expect(result?.lines).toEqual(['{"z":9}'])
   })
+
+  it('position is null while startAtEnd is pending, then the next byte to read (S6 R4)', async () => {
+    const f = path.join(dir, 'p.jsonl')
+    await writeFile(f, 'a\nb\n')
+    const t = new JsonlTail(f, { startAtEnd: true })
+    expect(t.position).toBeNull()
+    await t.read()
+    expect(t.position).toBe(4)
+    const u = new JsonlTail(f, { offset: 2 })
+    expect(u.position).toBe(2)
+    expect((await u.read())?.lines).toEqual(['b'])
+  })
+
+  it('position counts a carried partial line as unread, so a tail resumed there reads it whole (S6 R4)', async () => {
+    const f = path.join(dir, 'q.jsonl')
+    await writeFile(f, 'a\n{"b":')
+    const t = new JsonlTail(f)
+    await t.read()
+    expect(t.position).toBe(2)
+    await appendFile(f, '1}\n')
+    const u = new JsonlTail(f, { offset: t.position! })
+    expect((await u.read())?.lines).toEqual(['{"b":1}'])
+  })
 })
