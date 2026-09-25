@@ -6962,6 +6962,68 @@ describe('fix round 2: each clause of what counts as running', () => {
   })
 })
 
+// Final review I1 (2026-09-25): an app-placed Run counts as running only while the loop can still place
+// or start something. Nothing retries a failed Task in a Run the app places (slotsToFill takes `ready`
+// only, and recovery acts on open Dispatches), and recomputeReady never frees a Task behind a
+// dependency that failed for good. A coordinator retries a failed Task (`worker-start --retry-of`).
+describe('final review I1: an app-placed Run that nothing can move does not block the fire', () => {
+  const noCoordDeps = () =>
+    Object.assign(makeDeps(), { listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }] })
+  const firedRun = async (deps: OrchServerDeps, titles: string[]): Promise<{ jobId: string; runId: string }> => {
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, schedule: { kind: 'daily', time: '09:00' } })
+    const jobId = (c.body as { id: string }).id
+    for (const title of titles) await call(deps, 'task-create', { run: jobId, title, spec: 's', account: 'accA' })
+    await call(deps, 'run-start', { run: jobId })
+    const first = await call(deps, 'run-spawn', { run: jobId, unlessRunning: true })
+    expect(first.status).toBe(200)
+    return { jobId, runId: (first.body as { id: string }).id }
+  }
+  const setTasks = async (deps: OrchServerDeps, runId: string, f: (t: OrchState['tasks'][number], i: number) => OrchState['tasks'][number]): Promise<void> => {
+    const s = deps.getState()
+    let i = 0
+    await deps.setState({ ...s, tasks: s.tasks.map((t) => (t.runId === runId ? f(t, i++) : t)) })
+  }
+
+  it('a Task that failed once and that nothing retries no longer blocks the fire', async () => {
+    const deps = noCoordDeps()
+    const { jobId, runId } = await firedRun(deps, ['t'])
+    await setTasks(deps, runId, (t) => ({ ...t, status: 'failed', consecutiveFailures: 1 }))
+    const r = await call(deps, 'run-spawn', { run: jobId, unlessRunning: true })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs.filter((x) => x.jobId === jobId)).toHaveLength(2)
+  })
+
+  it('a pending Task behind a dependency that failed for good no longer blocks the fire', async () => {
+    const deps = noCoordDeps()
+    const { jobId, runId } = await firedRun(deps, ['a', 'b'])
+    const [a] = deps.getState().tasks.filter((t) => t.runId === runId)
+    await setTasks(deps, runId, (t, i) =>
+      i === 0 ? { ...t, status: 'failed', consecutiveFailures: FAILURE_LIMIT } : { ...t, status: 'pending', deps: [a.id] }
+    )
+    const r = await call(deps, 'run-spawn', { run: jobId, unlessRunning: true })
+    expect(r.status).toBe(200)
+  })
+
+  it('a pending Task behind a ready one still blocks the fire: the loop places the ready one', async () => {
+    const deps = noCoordDeps()
+    const { jobId, runId } = await firedRun(deps, ['a', 'b'])
+    const [a] = deps.getState().tasks.filter((t) => t.runId === runId)
+    await setTasks(deps, runId, (t, i) => (i === 0 ? t : { ...t, status: 'pending', deps: [a.id] }))
+    expect((await call(deps, 'run-spawn', { run: jobId, unlessRunning: true })).status).toBe(409)
+  })
+
+  it('a coordinator Run with a Task that failed once still counts as running: the coordinator retries it', async () => {
+    const deps = noCoordDeps()
+    Object.assign(deps, { startCoordinator: vi.fn(async (a: { runId: string }) => ({ sessionId: `coord-${a.runId}` })) })
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, coordinatorAccount: 'accA' })
+    const jobId = deps.getState().jobs[0].id
+    const first = (await call(deps, 'jobs-run', { id: jobId })).body as { id: string }
+    await call(deps, 'task-create', { run: first.id, title: 't', spec: 's', account: 'accA' })
+    await setTasks(deps, first.id, (t) => ({ ...t, status: 'failed', consecutiveFailures: 1 }))
+    expect((await call(deps, 'jobs-run', { id: jobId })).status).toBe(409)
+  })
+})
+
 // R4 (2026-09-25): a pure-layer refusal is a 404 only when state.ts marks it `missing`. commit() used
 // to answer 404 to any refusal whose words began `unknown `.
 describe('handleCommand — 404 는 missing 표시로만 난다 (R4)', () => {

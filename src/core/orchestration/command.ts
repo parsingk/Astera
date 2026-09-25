@@ -540,22 +540,75 @@ const runningRunOf = (s: OrchState, job: Job, now: string): JobRun | undefined =
  * Not running: a finished Run (every Task done), and a paused one (a person resumes it; unchanged from
  * before). Otherwise it runs when any of these holds:
  * - a coordinator is attached, or its start is in flight (`coordinatorStarting`, I1);
- * - the app places it (`placedByApp`) and a Task is unfinished, so the loop will pick it up;
  * - a worker is at work on it (an open Dispatch), a check is (a Task `validating` or `reviewing`),
  *   or it waits on a person (an open Gate);
- * - it is `limited`: its agents resume by themselves at the reset (Task 1 review Minor 3).
+ * - it is `limited`: its agents resume by themselves at the reset (Task 1 review Minor 3);
+ * - the app places it (`placedByApp`) and its loop can still start one of its Tasks (`startable`).
+ *
+ * **The last clause asks about the Tasks, not only the driver** (final review I1). An app-placed Run
+ * with a Task that failed once, or a `pending` Task behind a dependency that failed for good, has an
+ * unfinished Task that nothing will ever start, and it counted as running for ever.
  */
 const runMoves = (s: OrchState, job: Job, run: JobRun, now: string): boolean => {
   const tasks = s.tasks.filter((t) => t.runId === run.id)
   if (tasks.length > 0 && tasks.every(taskFinished)) return false
   if (run.paused === true || job.paused === true) return false
-  if (run.coordinatorSessionId !== undefined || coordinatorStarting(run, Date.parse(now))) return true
-  if (placedByApp(job, run) && tasks.some((t) => !taskFinished(t))) return true
+  if (coordinatorStarting(run, Date.parse(now))) return true
   const ids = new Set(tasks.map((t) => t.id))
   if (s.dispatches.some((d) => ids.has(d.taskId) && !d.outcome && !d.endedAt)) return true
   if (tasks.some((t) => t.status === 'validating' || t.status === 'reviewing')) return true
   if (s.gates.some((g) => g.status === 'open' && g.runId === run.id)) return true
-  return limitedUntil(s, run.id, now) !== null
+  if (limitedUntil(s, run.id, now) !== null) return true
+  if (run.coordinatorSessionId !== undefined) return true
+  if (!placedByApp(job, run)) return false
+  return startable(tasks, false).size > 0
+}
+
+/**
+ * The Tasks of one Run its driver can still start, by id (final review I1). The driver is a live
+ * coordinator when `coordinated`, else the app's loop.
+ * - `ready` under the circuit break: the loop places it (slotsToFill), or opens a Gate on it when it
+ *   has no account (tasksMissingAccounts); a coordinator starts it.
+ * - `failed` under the circuit break, and `dispatched` with its Dispatch closed: **only a coordinator**
+ *   starts them again (`worker-start --retry-of`). Nothing in the app does: slotsToFill takes `ready`
+ *   only, and recovery acts on open Dispatches alone.
+ * - `pending`: when each of its dependencies can still complete (`canComplete`), since recomputeReady
+ *   frees it only once they are all `completed`.
+ */
+const startable = (tasks: readonly Task[], coordinated: boolean): Set<string> => {
+  const byId = new Map(tasks.map((t) => [t.id, t]))
+  const memo = new Map<string, boolean>()
+  /** Whether this Task can still reach `completed`. A Task under way or with a person (`validating`,
+   *  `reviewing`, `blocked`) can. A cycle, or a dependency outside this Run, cannot. */
+  const canComplete = (id: string): boolean => {
+    const known = memo.get(id)
+    if (known !== undefined) return known
+    memo.set(id, false)
+    const t = byId.get(id)
+    const answer =
+      t !== undefined &&
+      (t.status === 'completed' ||
+        t.status === 'validating' ||
+        t.status === 'reviewing' ||
+        t.status === 'blocked' ||
+        canStart(t))
+    memo.set(id, answer)
+    return answer
+  }
+  const canStart = (t: Task): boolean => {
+    switch (t.status) {
+      case 'ready':
+        return t.consecutiveFailures < FAILURE_LIMIT
+      case 'failed':
+      case 'dispatched':
+        return coordinated && t.consecutiveFailures < FAILURE_LIMIT
+      case 'pending':
+        return t.deps.every(canComplete)
+      default:
+        return false
+    }
+  }
+  return new Set(tasks.filter(canStart).map((t) => t.id))
 }
 
 /** 회차가 없으면 계획의 정의 Task 를 센다 — tasksOwnedBy 가 두 id 를 다 받는다(view.ts). */
