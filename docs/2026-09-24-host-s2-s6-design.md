@@ -18,7 +18,7 @@ reasoning; this list is what was chosen.
 | | Decision | Chosen | By |
 |---|---|---|---|
 | D1 | The S5 trap | S5 (validation, review, repair) moves **with** S4, in the same release | user |
-| D2 | Scheduled Jobs with the app closed | Fire only while an app is attached, as today | user |
+| D2 | Scheduled Jobs with the app closed | Fire only while an app is attached, as today (superseded 2026-09-25, see Amendments A80: the Host now fires whenever it drives, app or not) | user |
 | D3 | Owner of `worktrees.json` | The Host; the app writes through it | controller, the draft's recommendation |
 | D4 | Worker environment | The Host's own environment minus a documented strip list | user |
 | D5 | New app, old Host holding work | The app keeps today's loop until that Host is replaced | controller |
@@ -653,7 +653,8 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
   not placed by the loop, because `appDriven` needs `job.autoDispatch` (`src/core/orchestration/schedule.ts:33-44`)
   and a schedule never carries it. That is the app's behaviour too, and is unchanged. Pinned by
   `src/host/driving.test.ts`, `src/main/orchestration/yieldDispatch.test.ts` and
-  `src/core/orchestration/exec/dispatchLoop.test.ts`.
+  `src/core/orchestration/exec/dispatchLoop.test.ts`. **Closed 2026-09-25, see Amendments A79:** a fired
+  run now starts the way `jobs run` starts one.
 - **A57. Carry 4, a later `jobs run` of a coordinator Job (R18, the user's Q2, N7).** The S3 known limit
   said such a run is not driven until S4 moves the loop. The loop would not drive it either:
   `run-start` deletes `autoDispatch` when it attaches a coordinator, and a later run went to
@@ -1097,6 +1098,70 @@ the S6 limits follow-up".
   `src/main/host/rollJournalSummary.test.ts`, `src/main/slack.test.ts`, `src/main/desktopNotifier.test.ts`,
   `src/main/host/offlineRolls.test.ts` and `src/main/host/outdated.test.ts`.
 
+## Amendments (control plane follow-ups, 2026-09-25)
+
+The follow-up plan `.superpowers/sdd/2026-09-25-cp-followups/plan.md` (Decisions U1, R1 to R5, in that
+plan's own numbering) closed the F65 gap A56 above found: a fired run of a scheduled Job started no
+coordinator, and nobody placed its Tasks. Its execution ledger is `progress.md` in the same folder, and
+its two tasks' reports are `task-1-report.md` and `task-2-report.md`. Landed on `develop` from
+`8296d9ba` through `bf479b4e`. This list is the record, in A1's form; A56 and D2 point back here.
+
+- **A79. U1: a schedule's fire runs a Job exactly the way `jobs run` runs one (plan U1, R1, R2).** The
+  gap A56 found: `appDriven` needed `job.autoDispatch`, and a schedule never carried it, so a fired run
+  started no coordinator and nobody placed its Tasks. What shipped: the coordinator hand-over that
+  `run-start` and `jobs-run` already had moved into one closure, `handToCoordinator` (`command.ts`); the
+  fire's own `run-spawn` calls it too, so a Job with a coordinator account gets one for every run its
+  schedule fires, at the cost of one coordinator's usage per fire. A Job with no coordinator account has
+  its fired run's `autoDispatch` stamped on the **Run itself**, not the Job, by `startJobRun` at fire
+  time (`state.ts`); `placedByApp(job, run)` reads either field, and every "who drives this Run" question
+  now goes through it. Stamping the Run rather than deriving the answer from the Job means an old
+  on-disk scheduled Job needs no migration: only Runs fired from now on are placed, not the Runs a Job
+  already fired before the fix, which would otherwise have started all at once with `ready` Tasks nobody
+  had ever placed. R1: the `job.schedule !== undefined` clause left `runGatedForTask`, since a definition
+  Task has no Run and `!run` already refuses it there; the review Gate's text no longer mentions a
+  schedule template. Pinned by `dispatchLoop.test.ts`, `state.test.ts`, `reviewGate.test.ts` and
+  `command.test.ts` (task-1-report.md).
+- **A80. D2 replaced: the driving Host fires with no app attached (plan R5; the user's ruling U2).** D2
+  said a schedule fires only while an app is attached, as today. R5, a controller ruling during Task 1,
+  found that reasoning already overtaken by S4 and S5: a driving Host always has a spawner, so it can
+  start coordinators and place workers with no app either way, and nothing left needs the old rule. The
+  user confirmed it as U2, which replaces D2's choice: the Host fires whenever it drives, with or without
+  Astera attached. D2's other reason is untouched: a Host with no client and no running work still leaves
+  a minute after its last one, and an armed schedule alone is not "running work," so with Astera closed a
+  schedule only fires while some Host happens to be up. What shipped: `driving.ts` fires on `mayStart()`
+  alone; `hasApp()` is no longer asked. Pinned by `driving.test.ts`, replacing the old D2 test.
+- **A81. U3: a fire is skipped, once, while the Job's latest run is still running.** `jobs run` already
+  refuses a Job that is already running; a fire did not, so a cron-driven schedule could start a second
+  run beside one still going. The user's ruling: skip the fire the same way, and log it, rather than
+  double-running or silently doing nothing. What shipped: `run-spawn --run <jobId> --unless-running`
+  answers `409 { error, jobId, running: <runId> }` and makes no Run; without the flag it behaves as
+  before. `orchFireTick` sends the flag for every fire, logs `scheduled fire skipped job=<id>, its run
+  <runId> is still running` once, and moves on. The skipped fire time is not retried: `firesDue` had
+  already re-armed at `nextFireAt(rule, now)` before the skip is decided, so a skipped fire is neither
+  retried on the next tick nor fired late. Pinned by `dispatchLoop.test.ts` and `command.test.ts`.
+- **A82. One "moveable" rule for what counts as running, superseding A74's null-or-`limited` test
+  (review ruling C1, plan U3).** A74 shipped `jobs-run` refusing when `waitEndingFor(...)` is `null` or
+  `limited`. Review of this follow-up found that test both too broad and too narrow: a Run with no
+  Tasks, or one whose coordinator died leaving `ready` Tasks nobody placed, is never `isTerminal`, so it
+  read as running forever and every later fire or `jobs run` was refused for good; a Run only waiting on
+  a Gate answered `null` and so read as not running, though nothing could move it without a person. What
+  shipped: `runMoves(s, job, run, now)`, behind `runningRunOf(s, job, now)` (`command.ts`), used by both
+  `jobs run` and a fire's `--unless-running`. A Run is not running once every Task is `isTerminal` (now
+  exported from `view.ts`) or the Run or its Job is paused; otherwise it is running while any of these
+  holds: a coordinator slot is attached, or its start is in flight; `placedByApp` is true and some Task
+  is unfinished; a Dispatch is open; a Gate is open; a Task is `validating` or `reviewing`; the Run is
+  `limited`. **Behaviour change:** a Run only waiting on a Gate now counts as running, so `jobs run`
+  refuses it, where it used to allow it; a Run nothing can move (no coordinator, nothing placed, nothing
+  open) does not count as running even with unfinished Tasks, where the A74 test would have refused
+  `jobs run` on it forever. The coordinator-start half needed a new persisted marker,
+  `JobRun.coordinatorStartingAt` (hidden from the public CLI's `RUN_FIELDS`, in `RUN_HIDDEN`): a fire or
+  a rebased hand-over (▶, or a Job-id restart with nothing to release) sets it before the coordinator
+  starts, `coordinatorStarting(run, nowMs)` treats it as live for `COORDINATOR_START_WINDOW_MS` (2
+  minutes, `state.ts`), and a failure or the attach itself drops it. While it is live, a second ▶ or fire
+  for the same Run answers 200 and starts nothing; a finished Run's ▶ does the same, since there is
+  nothing left for a coordinator to manage. Pinned by `command.test.ts`, `view.test.ts`,
+  `dispatchLoop.test.ts` and `orchDeps.test.ts` (task-1-report.md, fix rounds 1 and 2).
+
 ## Known limits after S3
 
 - **`refresh()` does not retry a Windows rename-busy read.** (resolved in S4+S5, see Amendments A60)
@@ -1359,6 +1424,30 @@ Checked at `5338222f`.
   means nothing moves on its own before the reset, not that nothing can: the same as `waiting` and
   `paused`, a person may start a ready Task from RunDetail or `worker-start`, and that does not end the
   `limited` state early or contradict it.
+
+## Known limits after the control plane follow-ups
+
+Each was found while building or reviewing the control plane follow-ups and left as it is, with its
+reason. Checked at `bf479b4e`.
+
+- **The Host's tick waits for a coordinator start before it moves to the next due schedule.**
+  (Amendments A79, A82) `orchFireTick` calls its due fires one at a time, in order, and
+  `handToCoordinator`'s own start is a long await, so a second schedule due in the same tick sits behind
+  the first's coordinator start rather than firing alongside it. If the driving process changes while
+  that await is in flight, the fire loop drops the later fire in the same tick rather than retry it, on
+  the same reasoning as the rest of the loop: losing one fire is safer than two processes firing the same
+  schedule at once.
+- **A stale `coordinatorStartingAt` marker is ignored, but nothing clears it from the state.**
+  (Amendments A82) Past `COORDINATOR_START_WINDOW_MS` the marker is read as a start that died with its
+  process, so a ▶ or a later fire is free to try again, but the field itself stays on the Run until
+  something else writes over it, a later hand-over or a failure. The sidebar reads it live, so ▶
+  reappears only on the first commit after the window has passed, not the moment it does.
+- **The window can be outlived by a start that is still genuinely running.**
+  (Amendments A82) `COORDINATOR_START_WINDOW_MS` is two minutes, bounded by the spawn deadline plus the
+  Run worktree the hand-over makes first; a very large repository's worktree creation can still take
+  longer than that. So can, on a Host with no local spawner of its own, a `startCoordinator` call that
+  Host forwards to an attached app whose own reply never comes. Either way the marker goes stale while
+  its start is still in flight, and a second start can then be begun beside the first.
 
 ## 0. The problem, measured
 

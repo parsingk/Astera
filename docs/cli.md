@@ -143,23 +143,24 @@ about, so they exit 3.
 
 **With Astera closed, the Host starts and stops workers itself.** These coordinator commands work from a
 shell with only a Host running: `worker-start`, `worker-start --worktree new`, `worker-stop`,
-`worker-release` and `worker-read`. So does `run-start`, which starts a Job's coordinator again, and
-`jobs run` of a Job with a coordinator account and no schedule, which starts the new run's coordinator,
-for the first run and for every later one. If a later run's coordinator fails to start, that run stays
-without one, and the error names `astera run-start --run <jobId>`, which starts it. Running `jobs run`
-again does not help, because it is refused while that run is running. Either way, the Host
-makes the run's worktree itself if it does not have one yet. If the coordinator then fails to start, the
-Host removes that worktree again, and the failed start still answers the same way it always did. A
-`worker-start --worktree new` whose worker then fails to start has its new worktree removed the same
-way. A failed start that leaves nothing behind keeps no receipt: no agent started, and any new worktree
-it made was removed by the Host itself. Once the cause is fixed, such as a damaged `app-settings.json`,
-the same command with the same `--request-id` really starts. A failed start that left its worktree in
-place, because something was still using it, keeps its receipt and replays its answer. So does one whose
-worktree an older Astera removed, one that still makes and removes worktrees itself: the worktree is
-gone, but the receipt is kept, so use a new `--request-id` for the retry. They are the commands a
-coordinator session uses, and `astera help` describes them. The Host starts the agent in a session it
-holds, keeps its output, and ends it when asked. When such a worker ends on its own, its Dispatch is
-closed all the same: by the Host while Astera is closed, and by Astera once it has taken the session
+`worker-release` and `worker-read`. So does `run-start`, which starts a Job's coordinator again, or,
+given a run id instead of a Job id, restarts that one run's coordinator without touching the Job's gate.
+So does `jobs run` of a Job with a coordinator account, scheduled or not, which starts the new run's
+coordinator, for the first run and for every later one. If a later run's coordinator fails to start,
+that run stays without one, and the error names `astera run-start --run <runId>`, which starts it.
+Running `jobs run` again does not help, because it is refused while that run is running. Either way, the
+Host makes the run's worktree itself if it does not have one yet. If the coordinator then fails to
+start, the Host removes that worktree again, and the failed start still answers the same way it always
+did. A `worker-start --worktree new` whose worker then fails to start has its new worktree removed the
+same way. A failed start that leaves nothing behind keeps no receipt: no agent started, and any new
+worktree it made was removed by the Host itself. Once the cause is fixed, such as a damaged
+`app-settings.json`, the same command with the same `--request-id` really starts. A failed start that
+left its worktree in place, because something was still using it, keeps its receipt and replays its
+answer. So does one whose worktree an older Astera removed, one that still makes and removes worktrees
+itself: the worktree is gone, but the receipt is kept, so use a new `--request-id` for the retry. They
+are the commands a coordinator session uses, and `astera help` describes them. The Host starts the agent
+in a session it holds, keeps its output, and ends it when asked. When such a worker ends on its own, its
+Dispatch is closed all the same: by the Host while Astera is closed, and by Astera once it has taken the session
 back. Open Astera later and it shows those workers as tabs. With Astera open, a worker the Host starts
 gets its tab at once.
 
@@ -219,10 +220,18 @@ and `worker-release` still work on it.
 runs with Astera closed. The Host places its workers, merges their worktrees, and runs the `--validate`
 checks, the `--review` reviews and, in a `--convergence` Job, the repairs. So `runs wait` ends
 `completed`, or `waiting` (8) when a question needs a person, or `limited` (8) when every worker is
-waiting for a usage limit to reset (see below). Scheduled Jobs still fire only while
-Astera is open, and a run that a schedule fires is not placed automatically. With a Host that does not
-announce `dispatch`, no worker is placed while Astera is closed, and a `runs wait` holds until its
-deadline and ends with 7.
+waiting for a usage limit to reset (see below). With a Host that does not announce `dispatch`, no worker
+is placed while Astera is closed, and a `runs wait` holds until its deadline and ends with 7.
+
+**A schedule's fire runs a Job exactly the way `jobs run` does.** A Job with a coordinator account gets
+a fresh coordinator for every run its schedule fires, at the cost of one coordinator's usage per fire. A
+Job with none has each fired run placed the same way `jobs run` places one: by the Host when it
+announces `dispatch`, or by Astera otherwise. The Host fires whenever it drives, whether or not Astera
+is attached, so with Astera closed a schedule keeps firing as long as some Host is up; a Host with no
+client and no work still leaves a minute after the last one, so an armed schedule by itself does not
+keep a Host running. A fire is skipped, and logged once, while the Job's latest run is still running,
+the same rule that makes `jobs run` refuse a Job that is already going (see "the still running rule"
+below).
 
 **The Host runs the checks itself.** A task added with `--validate` or `--review` moves on after its
 worker reports done, with Astera open or closed. A validation run the Host starts appears in Astera's
@@ -423,10 +432,17 @@ has no runs". `nextSteps` is the list that gives the missing kind of id, `astera
 `astera runs list` respectively. `runs list --job` given no value (`--job ""`, as a script whose id
 came back empty would send) is a 2, not the list of every run.
 
-**`jobs run` refuses a Job that is already running** and names the run that is going. A run that just
-ended `limited` still counts as going: its agents resume by themselves at the reset, so `jobs run`
-refuses it the same way rather than starting a second run beside it. It returns the run it started,
-which is the id to pass to `runs wait`.
+**`jobs run` refuses a Job that is already running** and names the run that is going. It returns the
+run it started, which is the id to pass to `runs wait`.
+
+**The still running rule.** A run counts as running while something can still move it: a coordinator
+attached to it, or one still starting; a run the app or the Host places that has a task still
+unfinished; an open Dispatch or an open Gate; a task under check, `validating` or `reviewing`; or a run
+that just ended `limited`, since its agents resume by themselves at the reset. A paused run does not
+count, and neither does a run nothing can move at all. The same rule decides whether a schedule's fire
+is skipped, above, so `jobs run` and a fire both refuse to start beside a run it still calls running. A
+run only waiting on a Gate now counts as running, so `jobs run` refuses it, where it once allowed it; a
+run nothing can move does not count, so `jobs run` is free to start over one.
 
 **`jobs create` makes a plan and runs nothing.** It returns the Job, marked `pendingStart`, with no
 run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in
@@ -771,7 +787,7 @@ opened is rolled back. `error.details.retry` is `host-retiring`, and the step is
 again once a Host is up: `error.nextSteps` offers `astera host status`. One command is the exception.
 A later `jobs run` whose coordinator was refused has already made its run, so the same command again
 would make another. Its `error.details` carries `runId`, and its steps are `astera host status` and then
-`astera run-start --run <jobId>`. A leaving Host takes no new
+`astera run-start --run <runId>`. A leaving Host takes no new
 connections, so a retry made while it is still on its way out ends with 3 rather than this 6 again.
 Once it has gone, the same command with the same `--request-id` reaches the next Host, which answers
 it fresh.

@@ -391,6 +391,9 @@ accounts [--agent <claude|codex>] [--json]
   and `worker-start` is refused the ordinary way instead (`400 dispatch already open: <id>`) — either
   way it is refused, only the message differs. Read section 11 in full before driving a convergence
   Run; this bullet is the pointer, not the reference.
+- **A Task whose Run does not exist is refused `400 unknown run for task: <id>`**, the same code `send`
+  already answers for it: a definition Task of a scheduled Job's template has no Run of its own, and a
+  dangling id is the other way there. A Task the app or a coordinator gave you always has one.
 - `--terminal <sessionId>` reuses an existing worker session. This is the only case where a new Task
   can be handed to the same session without `--retry-of` (see the example in section 5). The session
   must belong to a worker of the **same Run** as the Task being started; a session of another Run is
@@ -447,6 +450,9 @@ help [--skills-dir <p>]
   its own Dispatch.
 - `ask --resume <questionId>` keeps waiting on that question id alone, with no `--task-id`,
   `--dispatch-id`, or `--question` (section 8).
+- **`reply --id` names a `question` message, not any message.** An id that does not exist is `404`; an
+  id that exists but is not a `question` (a `status`, a `worker_done`, and so on) is `400 not a
+  question: <id>`. Only a `question` can be replied to.
 - `help` takes no arguments. It works with no Host running. It reads this document from
   `--skills-dir` when given, else from `ASTERA_SKILLS`, else from the `resources/skills` folder of
   the Astera build the command belongs to, so it also works in a shell Astera did not start.
@@ -719,6 +725,10 @@ A timeout you expected is `--resume`; an answer you lost is the key.
   the same batch back with no messages lost.
 - **Ack only after handling every message in the batch.** Acking after reading only part of it loses
   the rest for good (replay is per batch, not per message).
+- **`--ack <deliveryId>` naming a batch that is not there** (already acked, or never issued) is refused
+  `404`, and the body carries `runId`, the Run it was checked against, so call `check --run <runId>`
+  next: it hands back whatever batch is still unacknowledged, with its current `deliveryId`, so you are
+  not guessing which one to ack.
 - `--types <t,…>` **only decides when a new batch gets created** — the batch that comes back is always
   every undelivered message. And **if an unacknowledged batch already exists, it is returned as-is
   regardless of `--types`** — you have to work through the backlog before the next `--types` filter
@@ -768,6 +778,12 @@ server blocks `check` and `inbox` as coordinator-only (403).
   A timeout is not a failure — nothing about the question changed, only this call gave up waiting on
   it. If `data.nextSteps` is empty, `data.cannotResume` says why (section 4.8); guessing an id from
   there waits on somebody else's question.
+- **A worker's `ask --resume <id>` only ever reaches its own dispatch's question.** An id that does not
+  exist and an id that belongs to another dispatch come back the same way, `403 cannot resume a question
+  for another dispatch`, before the message's type is even looked at; the answer does not say which one
+  it was, so guessing at the id from the reply tells you nothing. Only an id that is your own dispatch's
+  and is not a `question` still comes back `400 not a question: <id>`. A coordinator or a shell calling
+  `--resume` keeps the plain `404`/`400` split instead.
 - **When ownership is still valid and the coordinator should step in but it is not blocking, use
   `escalation`** (non-blocking):
   ```bash
