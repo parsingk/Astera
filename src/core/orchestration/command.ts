@@ -567,6 +567,11 @@ const coordinatorResetOf = (run: JobRun, now: string): string | null => {
 
 /** The earliest reset every agent of the Run is waiting for, or null when any of them is not.
  *
+ *  **`limited` means "nothing moves on its own before the reset"**, not "nothing can move". A person can
+ *  still start a ready Task by hand (RunDetail's start button, or `worker-start`), the same way a person
+ *  answers a `waiting` Run's question or resumes a `paused` one. Like those, it ends the wait because
+ *  holding on would change nothing by itself.
+ *
  *  Workers: every open Dispatch waits on a known reset. Null when any open one does not, a check is
  *  running, a Task is ready to start (the loop may still dispatch it), or nothing is open.
  *
@@ -1040,7 +1045,13 @@ export async function handleCommand(
       const job = s.jobs.find((j) => j.id === id)
       if (!job) return notFound(`unknown job: ${id}`)
       const latest = latestRunOf(s, job)
-      if (latest && waitEndingFor(s, latest.id, deps.now?.() ?? new Date().toISOString()) === null)
+      // **`limited` still runs** (Task 1 review Minor 3). It ends `runs wait` so a script can stop
+      // holding on, but nothing about the Run is over: its agents resume by themselves at the reset.
+      // Reading it as "not running" let a cron `jobs run` during a usage wait start a second Run of the
+      // same Job beside the first, the thing this refusal exists to prevent. `waiting` and `paused`
+      // need a person, so they stay as they were.
+      const ending = latest ? waitEndingFor(s, latest.id, deps.now?.() ?? new Date().toISOString()) : undefined
+      if (latest && (ending === null || ending?.state === 'limited'))
         return conflict(`job ${id} is already running (run ${latest.id}) — wait for it or stop it first`)
       // **예약은 무장을 건드리지 않는다.** "지금 돌려라" 는 한 회차를 지금 만들라는 말이지
       // "이 예약을 켜라" 가 아니다 — 켜는 것은 발화 시각마다 도는 것을 뜻하고, 사람이 그것까지

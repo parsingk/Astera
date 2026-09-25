@@ -5541,6 +5541,48 @@ describe('jobs run / questions answer', () => {
     expect(JSON.stringify(r.body)).toContain(runId)
   })
 
+  // Task 1 review Minor 3: `limited` ends `runs wait`, but the Run still runs. It resumes by itself at
+  // the reset, so a cron `jobs run` in between must not start a second Run beside it.
+  it('a Run limited by its coordinator or its workers still counts as running', async () => {
+    const byCoordinator = makeDeps()
+    await call(byCoordinator, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const jobId = byCoordinator.getState().jobs[0].id
+    const runId = byCoordinator.getState().runs[0].id
+    const cur = byCoordinator.getState()
+    await byCoordinator.setState({
+      ...cur,
+      runs: cur.runs.map((r) => ({ ...r, coordinatorSessionId: 'coord1', coordinatorStop: { since: NOW, resetsAt: '2026-08-04T03:00:00.000Z' } }))
+    })
+    expect((await call(byCoordinator, 'runs-wait', { id: runId, timeoutMs: 500 })).body).toMatchObject({ state: 'limited' })
+    const r = await call(byCoordinator, 'jobs-run', { id: jobId })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain(runId)
+    expect(byCoordinator.getState().runs).toHaveLength(1)
+
+    const byWorkers = makeDeps()
+    await call(byWorkers, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const wJob = byWorkers.getState().jobs[0].id
+    const wRun = byWorkers.getState().runs[0].id
+    const t = await call(byWorkers, 'task-create', { run: wRun, title: 't', spec: 's', account: 'acc1' })
+    const taskId = (t.body as { id: string }).id
+    const w = byWorkers.getState()
+    await byWorkers.setState({
+      ...w,
+      tasks: w.tasks.map((x) => (x.id === taskId ? { ...x, status: 'dispatched' as const } : x)),
+      dispatches: [
+        ...w.dispatches,
+        {
+          id: 'dsp_w', taskId, provider: 'claude' as const, accountId: 'acc1', sessionId: 's1', cwd: 'D:/p', specPath: 'D:/p/s.md',
+          startedAt: NOW, workerState: 'ready' as const, retained: false,
+          resumes: [{ stoppedAt: NOW, reason: 'waiting' as const, fromAccountId: 'acc1', resetsAt: '2026-08-04T03:00:00.000Z' }]
+        }
+      ]
+    })
+    expect((await call(byWorkers, 'runs-wait', { id: wRun, timeoutMs: 500 })).body).toMatchObject({ state: 'limited' })
+    expect((await call(byWorkers, 'jobs-run', { id: wJob })).status).toBe(409)
+    expect(byWorkers.getState().runs).toHaveLength(1)
+  })
+
   it('없는 계획은 404, id 가 없으면 400 이다', async () => {
     const deps = makeDeps()
     expect((await call(deps, 'jobs-run', { id: 'nope' })).status).toBe(404)
