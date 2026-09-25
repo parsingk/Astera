@@ -12,7 +12,8 @@ import {
   HOST_FEATURE_WORKTREES,
   HOST_FEATURE_DISPATCH,
   HOST_FEATURE_ROLLING,
-  HOST_FEATURE_BLOCKS
+  HOST_FEATURE_BLOCKS,
+  HOST_FEATURE_ROLL_JOURNAL
 } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
@@ -97,4 +98,12 @@ export function hostSpeaksBlocks(status: {
   features: readonly string[]
 }): boolean {
   return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_BLOCKS)
+}
+
+/** The connected Host keeps a journal of the rolls it made while no app was attached and answers the
+ *  app-only `roll-journal` call (S6 D5, D6). **Connected only**, unlike hostSpeaksRolling: the journal
+ *  is fetched by a call that needs an answer, and an unresponsive Host would only run it out. An older
+ *  Host is never asked. */
+export function hostSpeaksRollJournal(status: { connected: boolean; features: readonly string[] }): boolean {
+  return status.connected && status.features.includes(HOST_FEATURE_ROLL_JOURNAL)
 }

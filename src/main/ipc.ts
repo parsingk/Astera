@@ -40,6 +40,7 @@ import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
 import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling } from './host/outdated'
 import { createBlockSync } from './host/blockSync'
+import { createOfflineRolls } from './host/offlineRolls'
 import type { BlockRegistry } from '../core/rolling/blockRegistry'
 import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced, announcesAdopted } from './host/hostRollView'
 import { findHostHeldNative, nativeOfForwardedRekey } from './host/hostNativeGuard'
@@ -5603,6 +5604,24 @@ export function registerIpc(
       client.onConnect(() => blockSync.connected())
     }
 
+    // S6 D6: what the Host rolled while no app was attached, told once after each adoption sweep (the
+    // startup chain and the reconnect handler below) and then acked. Asks nothing of a Host that does not
+    // announce `roll-journal`; never rejects (offlineRolls.ts).
+    const offlineRolls = createOfflineRolls({
+      status: () => client.status(),
+      call: orchCall,
+      isLive: (id) => allSessions().some((x) => x.id === id && x.status === 'running'),
+      accountLabel: (id) => {
+        const info = allSessions().find((x) => x.id === id)
+        return info ? core.accounts.get(info.accountId)?.label : undefined
+      },
+      lang: () => core.lang,
+      now: () => Date.now(),
+      slack: slack?.notifier,
+      desktop,
+      log: hostLog
+    })
+
     // Host S3: the app's worktree registry writes through the Host once it announces it owns
     // worktrees.json, and mirrors the file it pushes back (ruling R1, R3); a merge the Host runs is
     // registered as this app's own Work Unit operation the same way (ruling R7, §3.3).
@@ -6388,9 +6407,9 @@ export function registerIpc(
       // back by id: `reattachSessions` rebuilds each manager's record over the exited one and the ring
       // buffer covers the gap (design §11). The result is not reported to `hostSessionsTakenBack` —
       // that promise answers the boot cleanup's one question and has long since settled.
-      void takeSessionsBack('after a reconnect').catch((e) =>
-        hostLog(`host: taking sessions back after a reconnect failed: ${String(e)}`)
-      )
+      void takeSessionsBack('after a reconnect')
+        .then((r) => offlineRolls.swept('after a reconnect', r))
+        .catch((e) => hostLog(`host: taking sessions back after a reconnect failed: ${String(e)}`))
     })
 
     // Reported, not merely done: `bootOrch`'s restart cleanup waits on the outcome of this to learn
@@ -6423,7 +6442,11 @@ export function registerIpc(
         }
         // The routers are already on the Host: `routeByStatus` moved them the moment the handshake
         // landed, which is what makes `status().connected` true here in the first place.
-        return takeSessionsBack('at startup')
+        // Not awaited: the boot cleanup waits on this answer, not on Slack.
+        return takeSessionsBack('at startup').then((r) => {
+          void offlineRolls.swept('at startup', r)
+          return r
+        })
       })
       // Settles rather than rejecting, so `bootOrch` can await this without a try and nothing from
       // the Host throws into the app. `'unknown'`, not null: a reattach that blew up cannot say which

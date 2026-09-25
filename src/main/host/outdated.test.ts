@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks } from './outdated'
+import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal } from './outdated'
 
 describe('hostIsOutdated', () => {
   it('is true when the Host is strictly older than the app', () => {
@@ -108,5 +108,13 @@ describe('hostSpeaksBlocks', () => {
     expect(hostSpeaksBlocks({ connected: true, features: ['spawn', 'worktrees', 'dispatch', 'rolling'] })).toBe(false) // an S6 Host before Task 3
     expect(hostSpeaksBlocks({ connected: false, features: ['blocks'] })).toBe(false)
     expect(hostSpeaksBlocks({ connected: false, unresponsive: true, features: ['blocks'] })).toBe(true)
+  })
+})
+
+describe('hostSpeaksRollJournal', () => {
+  it('needs a connected Host that announced roll-journal; an unresponsive one is not asked', () => {
+    expect(hostSpeaksRollJournal({ connected: true, features: ['rolling', 'blocks', 'roll-journal'] })).toBe(true)
+    expect(hostSpeaksRollJournal({ connected: true, features: ['rolling', 'blocks'] })).toBe(false) // an S6 Host before Task 4
+    expect(hostSpeaksRollJournal({ connected: false, features: ['roll-journal'] })).toBe(false)
   })
 })
