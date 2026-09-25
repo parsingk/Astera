@@ -78,3 +78,17 @@ describe('ipc.ts wires the chat adopter (chat takeover Task 9)', () => {
     expect(src).toMatch(/core\.chat\.list\(\)\.find\(\(x\) => x\.id === id && x\.status === 'running'\)/)
   })
 })
+
+// spawnSession is the same unreachable registerIpc closure (see above), and its chat branch carries a
+// freshly spawned session's unattended-permission pick from the raw IPC opts into core.chat.spawn.
+// Guarded by text for the same reason: dropping this ternary (or hardcoding 'hold') would make every
+// chat session spawned through the New Session dialog ignore the person's pick — silently, since 'hold'
+// is a valid policy on its own and nothing would throw (fix round, chat takeover Task 10).
+describe("ipc.ts carries the unattended-permission pick into core.chat.spawn (chat takeover Task 10 fix)", () => {
+  const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'ipc.ts'), 'utf8')
+  it('forwards a valid pick from opts, defaulting a missing or invalid one to hold', () => {
+    expect(src).toMatch(
+      /unattendedPermission: isUnattendedPermission\(opts\.unattendedPermission\) \? opts\.unattendedPermission : 'hold'/
+    )
+  })
+})

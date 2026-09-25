@@ -898,6 +898,9 @@ export interface CoreApi {
       schedule?: ScheduleConfig // recurring command schedule
       kind?: SessionKind // default 'terminal'
       resumeThreadId?: string // chat only: resume this protocol thread instead of starting one
+      /** chat takeover P8: the new chat session's unattended-permission policy (hold, the default, or
+       *  deny after 60 s). Ignored for a terminal session, which has no such policy. */
+      unattendedPermission?: UnattendedPermission
     }): Promise<SessionInfo>
     write(id: string, data: string): void
     resize(id: string, cols: number, rows: number): void

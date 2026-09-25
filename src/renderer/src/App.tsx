@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Account, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo, InstallOutcome } from '../../core/types'
+import type { UnattendedPermission } from '../../core/chat/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -1482,6 +1483,9 @@ export default function App(): React.JSX.Element {
     rollPrompt?: string
     slackNotify?: boolean
     bypassPermissions?: boolean
+    /** chat takeover P8: the New Session dialog's pick for a chat session, forwarded to sessions.spawn
+     *  unchanged. Absent for a terminal session, which has no such policy at all. */
+    unattendedPermission?: UnattendedPermission
     useWorktree?: boolean
     worktreeName?: string
     worktreeBaseRef?: string
@@ -1523,6 +1527,7 @@ export default function App(): React.JSX.Element {
         rollPrompt: rolling ? opts.rollPrompt : undefined,
         slackNotify: opts.slackNotify, // Slack progress notifications
         bypassPermissions: opts.bypassPermissions, // start without permission prompts
+        unattendedPermission: opts.unattendedPermission, // chat takeover P8: hold, or deny after 60 s
         schedule: opts.schedule
       })
       // The default account mapping is keyed on the original repo — a worktree path is new every time and mappings must not pile up
