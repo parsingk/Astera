@@ -30,6 +30,7 @@ import type { HostOrch } from './orch'
 import type { PtyRegistry } from './registry'
 import { createHostRolling, type HostRolling, type HostRollingDeps } from './rolling'
 import { createHostRollTap, type HostRollTap } from './rollTapHost'
+import { createRollJournal, rollJournalPath, type RollJournal } from './rollJournal'
 import type { HostServer } from './server'
 import type { HostSpawner } from './spawner'
 import { takeOverSessions } from './takeover'
@@ -45,6 +46,8 @@ export interface HostRollingWiring {
     rolling: HostRolling
     rolledInto(sessionId: string): { id: string; accountId: string } | null
     rekeyRolled(oldSessionId: string, info: { id: string; accountId: string }): Promise<void>
+    /** The roll journal (S6 limits D5), for the app's `roll-journal` call. */
+    rollJournal: RollJournal
   }
   /** Chained with the driving's onAppsChanged in index.ts. */
   onAppsChanged(): void
@@ -100,6 +103,9 @@ export function composeHostRolling(a: {
     now: () => a.nowIso()
   })
 
+  // S6 limits D5: what rolls while no app is attached is journaled, for the next app to announce.
+  const journal = createRollJournal({ filePath: rollJournalPath(a.profileDir), log, nowIso: () => a.nowIso() })
+
   const rolling = createHostRolling({
     profileDir: a.profileDir,
     platform: a.platform,
@@ -139,9 +145,16 @@ export function composeHostRolling(a: {
     },
     // Both pushes go to every greeted app (Task 13). `session-rolled` carries the new session's pty, which
     // the app adopts before it forwards the rekey (Task 14).
+    // With no app attached, the event is journaled too (D5): nobody else hears it. Its own try, after the
+    // broadcast, so neither costs the other.
     onEvent: (e) => {
       const m: HostMessage = e.t === 'session-rolled' ? { ...e, ptyId: a.registry.sessionPty(e.info.id) } : e
       a.server().broadcast(m)
+      try {
+        if (!a.server().hasApp()) journal.append(e)
+      } catch (err) {
+        log(`a roll event could not be journaled: ${String(err)}`)
+      }
     },
     lang: () => a.lang(),
     ...a.rollingDeps
@@ -258,7 +271,8 @@ export function composeHostRolling(a: {
         }
         return null
       },
-      rekeyRolled: (oldSessionId, info) => tap.onRolled(oldSessionId, info)
+      rekeyRolled: (oldSessionId, info) => tap.onRolled(oldSessionId, info),
+      rollJournal: journal
     },
     // Isolated (constraint 14): this runs inside a hello or a socket close, and a throw must cost neither.
     onAppsChanged: () => {

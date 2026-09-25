@@ -197,7 +197,9 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
     blocks: () => wiring.rolling.blocks,
     appGreeted: (send: (m: HostMessage) => void) => wiring.appGreeted(send),
     blocksFromApp: (m: unknown) => wiring.blocksFromApp(m),
-    typedInto: (p: string) => ptys.get(p)?.typed ?? []
+    typedInto: (p: string) => ptys.get(p)?.typed ?? [],
+    /** The app's `roll-journal` call (S6 limits D5), over the orch index.ts builds. */
+    journal: (ack?: number) => orch.call({ cmd: 'roll-journal', args: ack === undefined ? {} : { ack }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
   }
 }
 
@@ -497,6 +499,36 @@ describe('block records between the Host and the app (S6 Task 3)', () => {
     const h = await rig()
     expect(() => h.appGreeted(() => { throw new Error('socket gone') })).not.toThrow()
     expect(h.logs.some((m) => m.includes('socket gone'))).toBe(true)
+  })
+})
+
+describe('the Host journals the rolls no app saw (S6 limits Task 4, D5)', () => {
+  type Journal = { entries: Array<{ seq: number; kind: string; sessionId: string; oldSessionId?: string; state?: string }>; lastSeq: number }
+  it('no app: the roll and its switch are journaled, and an ack prunes them', async () => {
+    const h = await rig()
+    await h.spawnWorker('p1', 's1', ['a1', 'a2'])
+    h.limit('p1', 's1')
+    await h.settle()
+    await vi.waitFor(async () => {
+      const r = await h.journal()
+      expect(r.status).toBe(200)
+      expect((r.body as Journal).entries.some((e) => e.kind === 'rolled' && e.oldSessionId === 's1' && e.sessionId === 's2')).toBe(true)
+    })
+    const body = (await h.journal()).body as Journal
+    expect(body.entries.some((e) => e.kind === 'state' && e.state === 'switching' && e.sessionId === 's1')).toBe(true)
+    expect(body.lastSeq).toBe(body.entries[body.entries.length - 1].seq)
+    expect(((await h.journal(body.lastSeq)).body as Journal).entries).toEqual([])
+    const onDisk = JSON.parse(await fs.readFile(path.join(h.profileDir, 'host', 'roll-journal.json'), 'utf8'))
+    expect(onDisk).toMatchObject({ lastSeq: body.lastSeq, entries: [] })
+  })
+  it('an app attached: the same roll is told to the app and not journaled', async () => {
+    const h = await rig()
+    await h.spawnWorker('p1', 's1', ['a1', 'a2'])
+    h.attachApp(3, ['worktrees', 'dispatch', 'rolling'], ['p1'])
+    h.limit('p1', 's1')
+    await h.settle()
+    await vi.waitFor(() => expect(h.broadcasts.some((m) => m.t === 'session-rolled' && m.oldSessionId === 's1')).toBe(true))
+    expect((await h.journal()).body).toEqual({ entries: [], lastSeq: 0 })
   })
 })
 

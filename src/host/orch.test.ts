@@ -2500,6 +2500,25 @@ describe('Host-local spawn (S2)', () => {
     expect((await orchOver().call({ cmd: 'roll-state', args: { sessionId: 's1' }, sessionId: '', from: app })).status).toBe(501)
     expect((await orch.call({ cmd: 'roll-state', args: {}, sessionId: '', from: app })).status).toBe(400)
   })
+  it('answers roll-journal for the app only, with the entries after the ack (S6 limits D5)', async () => {
+    const entry = { seq: 3, at: '2026-09-25T00:00:00.000Z', kind: 'rolled' as const, sessionId: 's2', oldSessionId: 's1' }
+    const rollJournal = { take: vi.fn(async (_ack?: number) => ({ entries: [entry], lastSeq: 3 })) }
+    const orch = orchOver({ rollJournal })
+    const app = { role: 'app' as const, toOthers: () => {} }
+    const cli = { role: 'cli' as const, toOthers: () => {} }
+    const got = await orch.call({ cmd: 'roll-journal', args: {}, sessionId: '', from: app })
+    expect(got).toMatchObject({ status: 200, body: { entries: [entry], lastSeq: 3 } })
+    expect(rollJournal.take).toHaveBeenLastCalledWith(undefined)
+    expect((await orch.call({ cmd: 'roll-journal', args: { ack: 2 }, sessionId: '', from: app })).status).toBe(200)
+    expect(rollJournal.take).toHaveBeenLastCalledWith(2)
+    expect((await orch.call({ cmd: 'roll-journal', args: {}, sessionId: '', from: cli })).status).toBe(403)
+    expect((await orch.call({ cmd: 'roll-journal', args: {}, sessionId: '' })).status).toBe(403)
+    expect((await orchOver().call({ cmd: 'roll-journal', args: {}, sessionId: '', from: app })).status).toBe(501)
+    for (const ack of [-1, 1.5, '2', null, Number.NaN])
+      expect((await orch.call({ cmd: 'roll-journal', args: { ack }, sessionId: '', from: app })).status).toBe(400)
+    expect((await orch.call({ cmd: 'roll-journal', args: {}, sessionId: '', from: app, request: 'q1' })).status).toBe(400)
+    expect(rollJournal.take).toHaveBeenCalledTimes(2)
+  })
   // Review M2 of Task 9: a worker whose pty is app-local is the app's to kill. With no app the stop is
   // refused, and the Dispatch is not marked stopped over a worker that is still running.
   it('forwards the stop of a worker the Host does not hold, and refuses it honestly with no app', async () => {
