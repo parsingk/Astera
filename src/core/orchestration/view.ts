@@ -14,7 +14,7 @@ import { findProject, findProjectByPath } from './projects'
 import { runsWorkingIn, runWorktrees } from './integrate'
 import type { JobRow, JobTask, OrchSnapshot, RunOutcome, WorktreeInfo } from '../types'
 import { repoPathOf } from '../worktrees/repo'
-import type { OrchState } from './state'
+import { coordinatorStarting, type OrchState } from './state'
 import { eventCountFor } from './timeline'
 import { FAILURE_LIMIT } from './types'
 import { policyOf, repairCountOf, reviewRoundOf } from './convergence'
@@ -87,7 +87,7 @@ export function progressOf(state: OrchState, runId: string): { done: number; tot
  *  가 말하듯 실패한 Task 는 재시도되고, 그것이 FAILURE_LIMIT 까지의 정상 흐름이다. 바로 위
  *  progressOf 가 같은 이유로 failed 를 완료로 세지 않는다. 재시도가 소진되어야(연속 실패가
  *  FAILURE_LIMIT) 더 움직이지 않는다. */
-const isTerminal = (t: Task): boolean =>
+export const isTerminal = (t: Task): boolean =>
   t.status === 'completed' || (t.status === 'failed' && t.consecutiveFailures >= FAILURE_LIMIT)
 
 /** Run 이 끝났는지, 끝났다면 성공인지 실패인지.
@@ -275,7 +275,10 @@ export function snapshotFor(
    *  레지스트리가 아니라 **존재**를 묻는다. 레지스트리는 앱이 만든 것만 알아서, 오케스트레이터가
    *  직접 만들어 워커를 넣은 워크트리를 빠뜨린다 — 그것도 사람이 지우고 합칠 수 있는 폴더다.
    *  isKnownSession·nextFireOf 와 같은 갈래로 주입받는다(이 층은 fs 를 만지지 않는다). */
-  exists: (path: string) => boolean
+  exists: (path: string) => boolean,
+  /** Now, for the one time-bound fact a row reads: whether a coordinator start is still in flight
+   *  (`coordinatorStarting`, Task 1 fix round 1 I1). Defaults to the clock; tests pass one. */
+  nowMs: number = Date.now()
 ): OrchSnapshot {
   // 폴더 사실을 **한 번만** 센다 — Run 마다 다시 세면 같은 순회가 Run 수만큼 돌고, 그보다 나쁜
   // 것은 두 값(폴더 수준과 Run 수준)이 다른 순간의 상태를 볼 수 있다는 것이다.
@@ -305,9 +308,13 @@ export function snapshotFor(
       // 한 Run 에 하나의 값이 없다(JobRow 의 주석).
       // 빈 값은 싣지 않는다 — 거짓을 실으면 sameSnapshot 의 문자열을 이유 없이 늘린다(아래
       // worktrees·pendingStart 와 같은 관례)
+      // Not while its start is in flight (I1: a second ▶ would start a second coordinator), and not on a
+      // finished Run (I3: there is nothing left to manage). run-start refuses both the same way.
       ...(job.coordinatorAccountId !== undefined &&
       run !== undefined &&
-      run.coordinatorSessionId === undefined
+      run.coordinatorSessionId === undefined &&
+      !coordinatorStarting(run, nowMs) &&
+      outcomeOf(state, run.id) === 'running'
         ? { coordinatorMissing: true }
         : {}),
       concurrency: job.concurrency,

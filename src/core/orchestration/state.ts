@@ -133,6 +133,19 @@ export function runGatedForTask(s: OrchState, task: Pick<Task, 'runId'>): boolea
   return run.paused === true || job.paused === true || job.pendingStart === true
 }
 
+/** How long a `coordinatorStartingAt` mark holds (I1). A start waits at most a spawn deadline plus the
+ *  coordinator's idle wait before its prompt, plus trust and account reads; the same two minutes as
+ *  `PENDING_START_WINDOW_MS` (command.ts) gives a worker's start in flight, for the same reason. Past
+ *  it the mark is a start that died with its process. */
+export const COORDINATOR_START_WINDOW_MS = 2 * 60_000
+
+/** Whether a coordinator start for this Run is in flight: its mark is set and younger than the window. */
+export function coordinatorStarting(run: JobRun, nowMs: number): boolean {
+  if (run.coordinatorStartingAt === undefined) return false
+  const at = Date.parse(run.coordinatorStartingAt)
+  return Number.isFinite(at) && nowMs - at < COORDINATOR_START_WINDOW_MS
+}
+
 /** Whether the app (or the Host) places this Run's Tasks itself, rather than a coordinator: the Job's
  *  `autoDispatch`, or the Run's own, which `startJobRun` stamps on a Run of a scheduled Job with no
  *  coordinator account (U1). **Every reader of "who drives this Run" asks this**, so the two fields
@@ -1961,8 +1974,10 @@ export function attachCoordinator(
 ): Res<JobRun> {
   const run = s.runs.find((r) => r.id === a.runId)
   if (!run) return err(`unknown run: ${a.runId}`)
-  // A new coordinator starts with no stop on record: a stop belonged to the session that had it.
-  const { coordinatorStop: _stop, ...rest } = run
+  // A new coordinator starts with no stop on record: a stop belonged to the session that had it. Its
+  // start is over, so the mark goes (I1), and so does the Run's own `autoDispatch` (fix round 1 M4): one
+  // driver per Run, as the hand-over drops the Job's.
+  const { coordinatorStop: _stop, coordinatorStartingAt: _starting, autoDispatch: _placed, ...rest } = run
   const next: JobRun = { ...rest, coordinatorSessionId: a.sessionId }
   return ok({ ...s, runs: replace(s.runs, next) }, next)
 }

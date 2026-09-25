@@ -68,9 +68,10 @@ const RUN_FIELDS = [
   // Public like the Job's own: a script can read who places this Run (U1, JobRun.autoDispatch).
   'autoDispatch'
 ] as const
-/** Held back like TASK_HIDDEN: the roll tap's bookkeeping of a stopped coordinator. What a script
- *  needs from it, that the Run waits for a reset and until when, is the `limited` ending of `runs wait`. */
-const RUN_HIDDEN = ['coordinatorStop'] as const
+/** Held back like TASK_HIDDEN: the roll tap's bookkeeping of a stopped coordinator, and the mark of a
+ *  coordinator start in flight (I1). What a script needs from the first, that the Run waits for a reset
+ *  and until when, is the `limited` ending of `runs wait`. */
+const RUN_HIDDEN = ['coordinatorStop', 'coordinatorStartingAt'] as const
 type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, typeof RUN_HIDDEN>>
 const RUN = [...RUN_FIELDS, ...DERIVED]
 

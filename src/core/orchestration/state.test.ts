@@ -3478,3 +3478,19 @@ describe('a fired Run of a scheduled Job', () => {
     expect(state.runs.find((r) => r.id === run.id)).not.toHaveProperty('autoDispatch')
   })
 })
+
+// Task 1 fix round 1, M4 and I1: the attach ends the start, and a Run has one driver.
+describe('attachCoordinator — fix round 1', () => {
+  it('drops the Run’s own autoDispatch and its start mark', () => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
+    const s: OrchState = {
+      ...state,
+      runs: state.runs.map((r) => (r.id === run.id ? { ...r, autoDispatch: true, coordinatorStartingAt: NOW } : r))
+    }
+    const { state: after } = unwrap<{ id: string }>(attachCoordinator(s, { runId: run.id, sessionId: 'c1' }) as never)
+    const attached = after.runs.find((r) => r.id === run.id)!
+    expect(attached.coordinatorSessionId).toBe('c1')
+    expect(attached).not.toHaveProperty('autoDispatch')
+    expect(attached).not.toHaveProperty('coordinatorStartingAt')
+  })
+})

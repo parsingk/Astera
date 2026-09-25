@@ -441,6 +441,24 @@ describe('snapshotFor', () => {
     expect(r).not.toHaveProperty('coordinatorMissing')
   })
 
+  // Task 1 fix round 1, I1: a coordinator start in flight shows no ▶, until its mark is past the window.
+  it('코디네이터가 뜨는 중이면 그 칸이 없고, 표시가 창을 넘으면 다시 생긴다', () => {
+    const base = withRuns([{ ...run('r1', absPath('p')), coordinatorAccountId: 'acc1' }])
+    const at = '2026-08-18T01:00:00.000Z'
+    const s: OrchState = { ...base, runs: base.runs.map((r) => ({ ...r, coordinatorStartingAt: at })) }
+    const within = Date.parse(at) + 60_000
+    const past = Date.parse(at) + 3 * 60_000
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist, within).runs[0]).not.toHaveProperty('coordinatorMissing')
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist, past).runs[0].coordinatorMissing).toBe(true)
+  })
+
+  // I3: a finished Run has nothing left for a coordinator to manage — no ▶.
+  it('끝난 Run 에는 그 칸이 없다', () => {
+    const s = withRuns([{ ...run('r1', absPath('p')), coordinatorAccountId: 'acc1' }], [task('t1', 'r1', 'completed')])
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
+    expect(r).not.toHaveProperty('coordinatorMissing')
+  })
+
   // 계정 지정이 없는 Run(옛 Run·CLI Run)은 애초에 관리자를 기대하지 않는다
   it('코디네이터 계정이 없으면 그 칸이 없다', () => {
     const s = withRuns([run('r1', absPath('p'))])
