@@ -950,7 +950,7 @@ export const ja: Catalog = {
   'terminal.tab.new': '新しいターミナル',
   'terminal.tab.close': 'ターミナルを閉じる',
   'terminal.open.failed': 'ターミナルの起動に失敗しました: {detail}',
-  // rolling.ts and codexRolling.ts — the default resume prompt sent after a limit.
+  // claudeCoordinator.ts and codexCoordinator.ts — the default resume prompt sent after a limit.
   // Must stay identical to session.new.rollPromptPlaceholder, which shows this value as its placeholder.
   'rolling.continuePrompt': '続けて作業を進めて',
   // slack.ts — the notification text that goes out to Slack. Follows the app language.

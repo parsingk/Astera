@@ -12,7 +12,7 @@
 //
 // **Why the app writes the file instead of answering the menu.** Answering means recognising a
 // screen and typing into it, which is what the rolling coordinator does for its own respawn window
-// (rolling.ts's trustSeen) and it is the fragile half of that code — a menu whose wording changes
+// (claudeCoordinator.ts's trustSeen) and it is the fragile half of that code — a menu whose wording changes
 // leaves no trace of why nothing happened. The file is the same artifact codex writes itself once a
 // person accepts, so pre-writing it is indistinguishable from having accepted.
 //

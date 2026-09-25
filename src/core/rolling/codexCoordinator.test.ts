@@ -214,7 +214,7 @@ const MODEL_PROMPT = [
 // fs I/O 완료 콜백이 돌지 않아, 타이머만 진행시키면 폴링이 파일을 못 본 채로 끝난다. 그래서 fake
 // 타이머를 진행시킨 뒤 실제 타이머로 이벤트 루프에 시간을 줘서 I/O를 정착시킨다.
 const realSetTimeout = setTimeout
-// 하네스가 등록하는 "지금까지 기록된 이벤트 수" 프로브 — rolling.test.ts와 같은 처방이다
+// 하네스가 등록하는 "지금까지 기록된 이벤트 수" 프로브 — claudeCoordinator.test.ts와 같은 처방이다
 const ioProbes: (() => number)[] = []
 const ioActivity = (): number => ioProbes.reduce((n, p) => n + p(), 0)
 
@@ -1067,7 +1067,7 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
-  // rolling.test.ts 의 '상태 세대 가드' 두 테스트와 같은 성질. codex 는 제자리 재개가 생기면서
+  // claudeCoordinator.test.ts 의 '상태 세대 가드' 두 테스트와 같은 성질. codex 는 제자리 재개가 생기면서
   // 처음으로 **지연 게시**를 갖게 됐다 — 엔터 뒤의 'none' 이 150ms 타이머 안에 있으므로, 그 사이에
   // 게시된 'waiting'·'switching' 을 덮어쓴다. 덮으면 스케줄러의 억제가 풀리고 오케스트레이션 정지
   // 표식이 일찍 지워진다.
@@ -1880,7 +1880,7 @@ describe('CodexRollingCoordinator', () => {
 
 // 롤이 중간에 포기하면 예전에는 'none' 을 게시하고 반환했다 — 아무것도 예약하지 않는다. 세션은
 // 한도에 그대로 막혀 있고 그 한도는 신호로 이미 소비됐으므로 다시 감지될 일이 없어, 사람이
-// 알아챌 때까지 워커가 유휴로 남는다. rolling.ts 의 같은 이름 describe 와 같은 성질이며, 단언의
+// 알아챌 때까지 워커가 유휴로 남는다. claudeCoordinator.ts 의 같은 이름 describe 와 같은 성질이며, 단언의
 // 핵심도 같은 셋이다: 'waiting' 이 게시된다, nextRetryAt 이 실려 있다, **그 시각에 실제로 다시
 // 시도한다**. 세 번째가 요점이다 — 상태만 게시하고 타이머를 안 걸면 고치기 전과 똑같다.
 //
@@ -1972,7 +1972,7 @@ describe('chat chains', () => {
   })
 
   // design F5 fix round 1 (Important 3): a chain a person already granted the toolchain bypass to
-  // must not silently lose it at a roll — read before the kill (rolling.ts's own dep, same contract),
+  // must not silently lose it at a roll — read before the kill (claudeCoordinator.ts's own dep, same contract),
   // since the manager drops the session together with its process and the fact lives only there.
   it('inherits the toolchain bypass the chain had already been granted', async () => {
     const h = harness({ bypassedOf: () => true })
@@ -2235,7 +2235,7 @@ describe('chat chains', () => {
   })
 })
 
-// Mirrors the same-named describe block in rolling.ts (spec §15.1-§15.3) — the codex coordinator gets
+// Mirrors the same-named describe block in claudeCoordinator.ts (spec §15.1-§15.3) — the codex coordinator gets
 // the same login-aware filter, applied at the same three sites (retryState's merge, onLimit's detour
 // log and resumeAfterWait's guard).
 describe('logged-out accounts', () => {

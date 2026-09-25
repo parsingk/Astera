@@ -250,7 +250,7 @@ export async function parseTranscriptTail(
   }
 }
 
-/** 탭 세션용 재개 브리핑의 재료. `buildTabResumeText`(main/orchestration/resumePacket.ts)가 대화
+/** 탭 세션용 재개 브리핑의 재료. `buildTabResumeText`(core/orchestration/exec/resumePacket.ts)가 대화
  *  파일 하나에서 이 넷을 **한 번의 읽기로** 뽑는다 — 따로따로 읽으면 같은(어쩌면 수십 MB짜리)
  *  파일을 네 번 훑는다. 무엇을 메모에 얼마나 실을지(개수·길이 상한)는 포매터
  *  (core/orchestration/tabResume.ts)가 정한다 — 이 함수는 재료만 모은다. */

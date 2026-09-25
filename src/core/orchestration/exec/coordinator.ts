@@ -58,7 +58,7 @@ export interface CoordinatorDeps {
     /** 이 워커 세션의 롤링 체인 — **첫 원소가 그 Dispatch 가 실제로 쓰는 계정**이고, 나머지는
      *  한도에 걸렸을 때 갈아탈 순서다(원천은 Task.accountIds).
      *  이 필드는 프로바이더에 무관하고, 이제 둘의 동작도 같은 모양이다. 양쪽 다 한 원소 체인에서는
-     *  계정을 갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서 재개한다(rolling.ts·codexRolling.ts 의
+     *  계정을 갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서 재개한다(claudeCoordinator.ts·codexCoordinator.ts 의
      *  resumeInPlace). 각각 세션을 죽이는 경로로 되돌아가는 예외가 있다 — claude 는 한도 선택지
      *  목록이 아직 화면에 남아 있을 때(choicePending), codex 는 응답 못한 모델 전환 목록이 남아
      *  있을 때와 직전 제자리 재개가 턴을 만들지 못했을 때다. 계정이 바뀌는 재개는 양쪽 다 세션을

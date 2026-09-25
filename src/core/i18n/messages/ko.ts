@@ -1173,7 +1173,7 @@ export const ko = {
   'terminal.tab.new': '새 터미널',
   'terminal.tab.close': '터미널 닫기',
   'terminal.open.failed': '터미널 열기 실패: {detail}',
-  // rolling.ts and codexRolling.ts — the default resume prompt main writes straight into the Claude PTY,
+  // claudeCoordinator.ts and codexCoordinator.ts — the default resume prompt main writes straight into the Claude PTY,
   // or passes as a Codex CLI argument, when rolling resumes after a limit. It is also the default for the
   // user's rollPrompt setting (session.new.rollPromptPlaceholder shows this value as its placeholder). It is
   // an instruction sent to a CLI, but it follows the app language by decision.

@@ -1548,7 +1548,7 @@ describe('idle nudge', () => {
     // (tick 의 waitTimer 가드) idleNudgeCheck 가 아예 호출되지 않으므로, nudge 의 전제 조건을
     // 차려 놓아도 이 테스트에서는 아무것도 달라지지 않는다.
     const h = harness({
-      // a2를 못 찾게 해 롤을 중단시킨다 → 중단이 재시도를 예약한다(rolling.ts 의 rescheduleAbortedRoll)
+      // a2를 못 찾게 해 롤을 중단시킨다 → 중단이 재시도를 예약한다(claudeCoordinator.ts 의 rescheduleAbortedRoll)
       getAccount: (id) => (id === 'a1' ? acc('a1', '계정A') : null)
     })
     h.payloads.set('s1', payload(30)) // 스냅샷은 게이트 미달 — 차단 기록만이 증거다
@@ -1656,7 +1656,7 @@ describe('roll() disposed 가드', () => {
   })
 })
 
-// codexRolling.test.ts가 같은 문제(진짜 rollout 파일 + fake timer)에서 쓴 것과 동일한 처방이다.
+// codexCoordinator.test.ts가 같은 문제(진짜 rollout 파일 + fake timer)에서 쓴 것과 동일한 처방이다.
 // fake 타이머를 진행시킨 뒤 실제 타이머로 이벤트 루프에 시간을 줘서 I/O를 정착시킨다.
 const realSetTimeout = setTimeout
 // 하네스가 등록하는 "지금까지 기록된 이벤트 수" 프로브. 여러 하네스가 살아 있을 수 있으니 배열이다
@@ -1786,8 +1786,8 @@ describe('transcript 한도 감지', () => {
   })
 
   it('폴백 트리거 로그에 전사 식별자와 tail 상태를 담는다 — ①의 커버리지 사후 측정용', async () => {
-    // tickChain이 이제 limitTailCheck(①)를 await한 뒤에야 폴백을 평가하므로(rolling.ts의
-    // 수정, rolling.ts) ②가 발화했다는 것은 그 시점 ①이 잡지 못했다는 뜻이 실제로 보장된다. 그
+    // tickChain이 이제 limitTailCheck(①)를 await한 뒤에야 폴백을 평가하므로(claudeCoordinator.ts의
+    // 수정, claudeCoordinator.ts) ②가 발화했다는 것은 그 시점 ①이 잡지 못했다는 뜻이 실제로 보장된다. 그
     // "못 잡음"이 놓친 것인지(기록이 이미 있었는데 못 읽음) 아직 없던 것인지(기록이 몇 초 뒤에
     // 쓰임) 갈리려면 어느 전사를 보던 체인인지 알아야 한다 — 로그의 session=은 앱 내부 id라 사후
     // 대조가 불가능하다.
@@ -2720,7 +2720,7 @@ describe('Smart Resume — 백지 재개', () => {
     expect(h.written.some((w) => w.id === 's2' && w.data === 'BRIEFING TEXT')).toBe(true)
   })
 
-  // fix round 2 의 관례(codexRolling.test.ts)와 같은 이유: resumeText 는 spec 파일에 쓰는 부수
+  // fix round 2 의 관례(codexCoordinator.test.ts)와 같은 이유: resumeText 는 spec 파일에 쓰는 부수
   // 효과가 있으므로, roll() 이 smart 여부를 가리려고 미리 물은 값을 sendPrompt 가 다시 묻는다면
   // 매 롤마다 두 번 쓰는 것이 된다. 이 테스트는 그 값이 실제로 아래로 전달되어 다시 묻지 않는지를
   // 호출 횟수로 확인한다.

@@ -28,7 +28,7 @@ import { t, type Lang } from '../core/i18n'
 // together in one go, the TUI receives them as a clump and they no longer match its digit test
 // (`/^[0-9]$/`) — measured proof: sending "1,3" only ever checked item 1.
 const KEY_DELAY_MS = 150
-const ENTER_DELAY_MS = 150 // text -> Enter gap (same convention as scheduler.ts and rolling.ts —
+const ENTER_DELAY_MS = 150 // text -> Enter gap (same convention as scheduler.ts and claudeCoordinator.ts —
 // time for the TUI to digest the paste). Writing the text and Enter in one go can submit before the
 // TUI has finished digesting the paste, which can submit empty or truncated input.
 const PROCESSED_TS_LIMIT = 500 // suppresses redelivery from a failed ack — capped so it cannot grow forever
@@ -229,7 +229,7 @@ export class SlackInbox {
     this.deps.log(`slack inbound -> injected into session=${sessionId} chars=${decision.text.length}`)
     if (input.submit) {
       // The text and Enter are not written in one go — this follows the ENTER_DELAY_MS convention
-      // from scheduler.ts and rolling.ts. If the session dies during the delay, deps.write returns
+      // from scheduler.ts and claudeCoordinator.ts. If the session dies during the delay, deps.write returns
       // false on its own and writes nothing — write()'s contract is to re-check liveness on every
       // call, so there is no need for a separate disposed flag here (see the SlackInboxDeps.write
       // contract above).

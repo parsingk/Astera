@@ -211,7 +211,7 @@ export interface RollingDeps {
    *  **sessionId 로 열린 Job Dispatch 를 찾으면 그 packet 을 돌린다. 못 찾으면(사용자 탭 세션)
    *  `tabFallback` 이 참일 때만 탭 브리핑으로 저하하고, 거짓이면 곧바로 `null` 이다.** Job 도 탭도
    *  못 찾거나 만들지 못하면 `null` 이다. `null` 이면 `chain.prompt` 를 그대로 쓴다 — 주입되지
-   *  않아도 기존 동작 그대로다. 구현은 `main/orchestration/resumePacket.ts`, 그 자체는 절대
+   *  않아도 기존 동작 그대로다. 구현은 `core/orchestration/exec/resumePacket.ts`, 그 자체는 절대
    *  던지지 않는다(계약). 그래도 이 dep 을 부르는 자리는 그 위에 자기 자신의 try/catch 를 또
    *  두른다(`resumePromptFor`) — 이 자리를 부르는 쪽이 전부 fire-and-forget 이라, 언젠가 이 계약이
    *  깨지면 처리되지 않는 예외가 되는 대신 로그로만 남고 고정 문장으로 저하하게 하려는 것이다
@@ -234,7 +234,7 @@ export interface RollingDeps {
    *
    *  `'smart'` 라고 곧바로 백지 재개가 되는 것은 아니다 — `resumeText` 가 브리핑을 만들어 줄 때만
    *  적용된다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다). `roll()` 을 보라.
-   *  codexRolling.ts 의 같은 이름 dep 과 같은 계약이다. */
+   *  codexCoordinator.ts 의 같은 이름 dep 과 같은 계약이다. */
   resumeStrategy?(): ResumeStrategy
   /** Is this account logged in right now. Optional: without it a chain behaves exactly as it did before
    *  this was added — every account is treated as usable and only block records steer the choice. The
@@ -356,7 +356,7 @@ interface Chain {
   // When the path changes (a roll) it is rebuilt with a new since — so it does not bite on old errors in the copy.
   limitTail: ClaudeTranscriptTail | null
   // Throttles the limitTail read-failure log to once per chain — the same convention as unmappedWarned
-  // (codexRolling.ts). A path that fails keeps failing, so there is no reason to log it again every 15-second tick.
+  // (codexCoordinator.ts). A path that fails keeps failing, so there is no reason to log it again every 15-second tick.
   limitTailReadFailWarned: boolean
   // Throttles onChatLimit's "not rejected" log to once per chain — the same convention as the two flags
   // above. A chat session reports its rate limit on every turn, so the warning-level statuses ('allowed',
@@ -1406,7 +1406,7 @@ export class RollingCoordinator {
    *  저하하므로, 돌려주는 문자열 하나만으로는 호출한 쪽이 "브리핑이 있었는가"를 알 수 없다 — 실패해서
    *  고정 문장이 된 것과 원래 고정 문장을 쓰려 한 것이 같은 모양이 되어 버린다. `roll()` 은 바로 그
    *  사실로 백지 재개 여부를 가른다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다).
-   *  codexRolling.ts 의 같은 이름 함수와 같은 계약이다.
+   *  codexCoordinator.ts 의 같은 이름 함수와 같은 계약이다.
    *
    *  **빈 문자열도 같은 저하를 탄다.** 오늘 어떤 producer 도 `''`를 돌리지 않지만, 돌린다면 백지
    *  재개가 빈 프롬프트로 새 프로세스를 띄우는 꼴이 된다 — 그래서 `null`/`undefined` 와 같은 취급이다:
@@ -1718,7 +1718,7 @@ export class RollingCoordinator {
           return
         }
       }
-      // Published only once both aborts above are behind us — matches codexRolling.ts. Publishing this
+      // Published only once both aborts above are behind us — matches codexCoordinator.ts. Publishing this
       // before the metadata check announced a switch to Slack that never happens, and it also claimed the
       // stop episode in the orchestration tap with reason 'switching' (no reset time), so the reschedule's
       // own 'waiting' publication just below was then ignored as a repeat of the same stop.
@@ -2279,7 +2279,7 @@ export class RollingCoordinator {
       // path is wrong or becomes inaccessible, and it used to be logged only when there was a hit, so
       // rolling.log could never report this death (exactly the silent failure shape this line of work set
       // out to eliminate). A path that fails once keeps failing (unless the file reappears), so it is
-      // recorded once per chain — the same convention as unmappedWarned in codexRolling.ts. Filling it in
+      // recorded once per chain — the same convention as unmappedWarned in codexCoordinator.ts. Filling it in
       // every 15 seconds would render the log meaningless.
       if (chain.limitTail.readFailed && !chain.limitTailReadFailWarned) {
         chain.limitTailReadFailWarned = true

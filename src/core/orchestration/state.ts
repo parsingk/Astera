@@ -1502,7 +1502,7 @@ export function writeOffDispatch(
  *  **왜 필요한가.** `Dispatch.sessionId` 는 worker_done 을 되돌려 묶는 **유일한** 키다 —
  *  closeDispatch 가 그것으로 Dispatch 를 찾고, handleCommand 의 호출자 식별과 사이드바가 탭을 여는
  *  값(JobTask.sessionId)도 같은 값에 걸려 있다. 롤은 세션을 죽이고 새 id 로 다시 띄우므로
- *  (rolling.ts 의 liveId: "changes on every roll"), 옮겨 주지 않으면 살아 있는 워커의 보고가 갈 곳을
+ *  (claudeCoordinator.ts 의 liveId: "changes on every roll"), 옮겨 주지 않으면 살아 있는 워커의 보고가 갈 곳을
  *  잃는다.
  *
  *  **Task 는 건드리지 않는다.** 상태도 consecutiveFailures 도 그대로다 — 세션이 죽은 것이 아니라
@@ -1650,8 +1650,8 @@ export function recordStopHead(
 }
 
 /** A later `'waiting'` publication inside a stop episode already on record carries a fresher retry
- *  time than the one on file — the retry loop that follows an aborted roll (rolling.ts,
- *  codexRolling.ts) republishes `'waiting'` every round, each with its own `nextRetryAt`. The
+ *  time than the one on file — the retry loop that follows an aborted roll (claudeCoordinator.ts,
+ *  codexCoordinator.ts) republishes `'waiting'` every round, each with its own `nextRetryAt`. The
  *  episode itself is deduped by the caller (core/orchestration/exec/rollTap.ts's `stopped`), so this only
  *  ever runs for a dispatch that already has an open entry — dropping the new time instead of
  *  recording it left the Jobs row and Checkpoint quoting the very first retry forever.

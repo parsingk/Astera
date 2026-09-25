@@ -1,5 +1,5 @@
 // The codex account rolling coordinator. Limit detection → rollout copy → kill → `codex resume <id>
-// "<prompt>"` on the next account. The skeleton is the same as the claude coordinator (rolling.ts) but
+// "<prompt>"` on the next account. The skeleton is the same as the claude coordinator (claudeCoordinator.ts) but
 // it is far shorter because none of the statusLine-specific problems (a stale snapshot, readiness
 // polling, auto-accepting trust) apply. Every side effect is injected through deps — it does not depend
 // on electron, so it is verified with vitest. The app's wiring is in src/main/index.ts; the Host's in
@@ -42,11 +42,11 @@ import {
 import { t, type Lang } from '../i18n'
 import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
 
-const TICK_MS = 15_000 // how often state is refreshed and the fallback trigger checked (mirrors rolling.ts)
+const TICK_MS = 15_000 // how often state is refreshed and the fallback trigger checked (mirrors claudeCoordinator.ts)
 const LOCATE_POLL_MS = 1_000 // how often we poll to map the rollout
 const LOCATE_TIMEOUT_MS = 60_000 // the deadline for giving up on mapping — after this the chain has rolling disabled
 const FALLBACK_SILENCE_MS = 30_000 // the fallback verdict ③: 100% plus this long with no output
-const ENTER_DELAY_MS = 150 // the gap between the choice number and Enter (same as rolling.ts)
+const ENTER_DELAY_MS = 150 // the gap between the choice number and Enter (same as claudeCoordinator.ts)
 const HEALTHY_MS = 60_000 // no limit detected for this long after a switch → reset the consecutive block count
 
 /** Which grounds the limit verdict fired on — a log label. `errorInfo` is the one that actually fires
@@ -95,8 +95,8 @@ export interface CodexRollingDeps {
     orchEnv?: { cliPath: string; skillsPath: string; profileDir: string }
     /** design F5 fix round 1 (Important 3, the roll-inheritance fix): start the respawned process
      *  with the toolchain bypass already applied, because the chain being rolled had already been
-     *  granted it (rolling.ts's own field, same contract). `bypassSignal` is not threaded through
-     *  here either, for the same reason rolling.ts's own comment gives: the wiring's `spawn` callback
+     *  granted it (claudeCoordinator.ts's own field, same contract). `bypassSignal` is not threaded through
+     *  here either, for the same reason claudeCoordinator.ts's own comment gives: the wiring's `spawn` callback
      *  computes it itself from `core.bypassSignalFor`. */
     startWithBypass?: boolean
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
@@ -144,13 +144,13 @@ export interface CodexRollingDeps {
    *
    *  주입되지 않으면 아무것도 실리지 않는다(기존 동작) — now?/log? 와 같은 관례다. */
   orchEnv?(): { cliPath: string; skillsPath: string; profileDir: string } | undefined
-  /** 재개 직전에 쓸 프롬프트를 물어본다. rolling.ts 의 같은 필드와 동일한 계약 — `chain.prompt` 가
+  /** 재개 직전에 쓸 프롬프트를 물어본다. claudeCoordinator.ts 의 같은 필드와 동일한 계약 — `chain.prompt` 가
    *  register 시점에 고정되는 정적 값이라서 필요하다.
    *
    *  **sessionId 로 열린 Job Dispatch 를 찾으면 그 packet 을 돌린다. 못 찾으면(사용자 탭 세션)
    *  `tabFallback` 이 참일 때만 탭 브리핑으로 저하하고, 거짓이면 곧바로 `null` 이다.** `null` 이면
    *  `chain.prompt` 를 그대로 쓴다. codex 는 이 프롬프트를 spawn 인자로 넘기므로 **kill·spawn
-   *  전에** 물어야 한다(roll() 의 호출 자리 참고). 구현은 `main/orchestration/resumePacket.ts`.
+   *  전에** 물어야 한다(roll() 의 호출 자리 참고). 구현은 `core/orchestration/exec/resumePacket.ts`.
    *
    *  **이 코디네이터는 두 모양을 다 묻는다.** 계정이 바뀌는 재개는 kill 하고 `--resume` 으로 다시
    *  띄우므로 'handover' 이고(roll), 같은 계정으로 이어가는 재개는 세션을 살려 두므로 'update' 다
@@ -176,7 +176,7 @@ export interface CodexRollingDeps {
    *  account, and a filter that is one tick stale is worth more than a file read inside a limit verdict. */
   loginStatus?: (accountId: string) => Promise<boolean>
   /** design F5 fix round 1 (Important 3): whether the session being rolled away from had already
-   *  been granted the toolchain bypass — rolling.ts's own dep, same contract ("read before the kill,
+   *  been granted the toolchain bypass — claudeCoordinator.ts's own dep, same contract ("read before the kill,
    *  not after": the manager drops the session together with its process). Optional so a wiring that
    *  predates this behaves exactly as before (no bypass ever inherited). */
   bypassedOf?(sessionId: string): boolean
@@ -254,7 +254,7 @@ interface Chain {
   // resumeInPlace (its 150ms Enter timer) captures the generation at scheduling time; on firing it
   // publishes only if the generation is unchanged, and skips as stale if a 'waiting' or 'switching'
   // has published something more recent in the meantime. Same mechanism and same reason as the claude
-  // side (rolling.ts) — codex got its first deferred publish with the in-place resume.
+  // side (claudeCoordinator.ts) — codex got its first deferred publish with the in-place resume.
   stateSeq: number
   // The last lasting rollState payload pushState published — null once it was 'none' (or nothing has
   // published yet). Read back by stateOf for a renderer that mounts after the push already happened.
@@ -664,7 +664,7 @@ export class CodexRollingCoordinator {
     if (!chain.chatLimitInTurn) chain.chatTurnDone = true
   }
 
-  /** Whether this conversation belongs to an active rolling chain — the history resume guard (mirrors findLiveByClaudeSession in rolling.ts) */
+  /** Whether this conversation belongs to an active rolling chain — the history resume guard (mirrors findLiveByClaudeSession in claudeCoordinator.ts) */
   findLiveByCodexSession(codexSessionId: string): SessionInfo | null {
     for (const chain of this.chains.values())
       if (!chain.disposed && chain.codexSessionId === codexSessionId) return chain.liveInfo
@@ -730,7 +730,7 @@ export class CodexRollingCoordinator {
     if (chain && !chain.rolling) this.disposeChain(chain)
   }
 
-  /** 세션은 살려 둔 채 그 세션의 체인만 버린다 — **kill 하지 않는다.** rolling.ts 의 같은 이름과
+  /** 세션은 살려 둔 채 그 세션의 체인만 버린다 — **kill 하지 않는다.** claudeCoordinator.ts 의 같은 이름과
    *  같은 계약이다(그 JSDoc 이 이유를 적고 있다). codex 쪽 위험은 더 넓다: 여기서 닫힌 Dispatch 의
    *  세션을 집어 가는 것은 유휴 알림이 필요 없는 tick 의 폴백 판정(maxed+silent — 100% 로 굳은
    *  스냅숏과 30초 침묵만으로 충분하다)이고, 그 끝은 프롬프트 한 줄이 아니라 kill + 재spawn 이다.
@@ -741,7 +741,7 @@ export class CodexRollingCoordinator {
     if (chain) this.disposeChain(chain)
   }
 
-  /** A dev hook — forces a roll as if a real limit had hit, bypassing the gates (mirrors forceRoll in rolling.ts) */
+  /** A dev hook — forces a roll as if a real limit had hit, bypassing the gates (mirrors forceRoll in claudeCoordinator.ts) */
   async forceRoll(sessionId?: string): Promise<void> {
     const chain = sessionId ? this.chains.get(sessionId) : [...this.chains.values()][0]
     if (!chain || chain.disposed) throw new Error('no active codex rolling chain')
@@ -1021,7 +1021,7 @@ export class CodexRollingCoordinator {
     return `primary=${primary?.usedPercent ?? 'n/a'}%, secondary=${secondary?.usedPercent ?? 'n/a'}%`
   }
 
-  /** The block record for the current account — the latest reset among the windows at or above the gate (mirrors recordRecovery in rolling.ts) */
+  /** The block record for the current account — the latest reset among the windows at or above the gate (mirrors recordRecovery in claudeCoordinator.ts) */
   private recordRecovery(chain: Chain): void {
     const worst = worstResetAt(chain.state)
     chain.recovery[chain.cycle.currentIndex] = {
@@ -1267,7 +1267,7 @@ export class CodexRollingCoordinator {
    *  결정해도 되는 것은 인계 문장의 내용까지고, 가드가 없으면 대신 소진된 계정에 앉은 채 재시도
    *  간격(리셋 시각, 모르면 15분)을 한 번 더 기다린다 — 그것이 이 함수가 막는 실제 대가다.
    *  resumeText 는 던지지 않는다는 계약이지만(resumePacket.ts) 그 계약이 깨질 때 잃는 것이 이만큼
-   *  크므로 로그를 남기고 기존 고정 문장으로 저하한다. rolling.ts 의 같은 이름 함수와 같은 모양이다.
+   *  크므로 로그를 남기고 기존 고정 문장으로 저하한다. claudeCoordinator.ts 의 같은 이름 함수와 같은 모양이다.
    *
    *  **`briefed` 를 함께 돌려주는 이유.** `text` 가 `null`/`undefined` 면 이 함수는 `chain.prompt` 로
    *  저하하므로, 돌려주는 문자열 하나만으로는 호출한 쪽이 "브리핑이 있었는가"를 알 수 없다 — 실패해서
@@ -1297,7 +1297,7 @@ export class CodexRollingCoordinator {
   }
 
   /** What to resume with once the wait ends — the codex counterpart of the claude side's
-   *  `resumeAfterWait` (rolling.ts).
+   *  `resumeAfterWait` (claudeCoordinator.ts).
    *
    *  If the account changes, a new process is unavoidable. If it does not change, there is no reason
    *  to kill — the session id is kept, so moving the schedule, Slack, turn notifications and
@@ -1606,7 +1606,7 @@ export class CodexRollingCoordinator {
       // fix wave 7, finding 2 (HIGH): the third conjunct is what stops a mangled pointer from being
       // handed to a session with nothing else to fall back on. `prompt` here is not conversation
       // prose — since Task 7 it is a short line that names a filesystem path (buildTabResumeText's
-      // 'handover'/resumeLine, orchestration/resumePacket.ts). codex's argv sanitizer
+      // 'handover'/resumeLine, exec/resumePacket.ts). codex's argv sanitizer
       // (sanitizeResumePrompt, core/sessions/commands.ts) blanks `["&|<>^%]` and folds runs of
       // whitespace to one space, so a path carrying any of those characters — or two consecutive
       // spaces, plausible in a Windows folder name — comes back pointing at a file that does not
@@ -1710,7 +1710,7 @@ export class CodexRollingCoordinator {
       // makes `mangled` a pty concern from end to end, which is why the branch above does not ask it
       // of a chat chain at all — neither the text nor the blank slate is decided by a sanitizer that
       // never runs on this path.
-      // design F5 fix round 1 (Important 3): same "read before the kill" rule rolling.ts's own
+      // design F5 fix round 1 (Important 3): same "read before the kill" rule claudeCoordinator.ts's own
       // comment gives — the manager drops the session together with its process.
       const wasBypassed = this.deps.bypassedOf?.(chain.liveId) ?? false
       this.deps.kill(chain.liveId)
@@ -1731,7 +1731,7 @@ export class CodexRollingCoordinator {
               initialPrompt: smart ? sanitizeResumePrompt(prompt) : undefined
             }),
         rollAccountIds: chain.accountIds,
-        slackNotify: chain.liveInfo.slackNotify, // the Slack notification is kept per chain (mirrors rolling.ts)
+        slackNotify: chain.liveInfo.slackNotify, // the Slack notification is kept per chain (mirrors claudeCoordinator.ts)
         bypassPermissions: chain.liveInfo.bypassPermissions,
         // Kept per chain, like the two above: a roll is the same work on another account, so a
         // name the person gave the tab survives it.

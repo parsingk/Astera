@@ -688,7 +688,7 @@ export class WorkUnitCollector {
     return Promise.resolve()
   }
 
-  /** A session was continued — either rolled after a usage limit (rolling.ts) or reopened by the
+  /** A session was continued — either rolled after a usage limit (claudeCoordinator.ts) or reopened by the
    *  person from a past record (ipc.ts's resume path).
    *
    *  **Why the file end.** `--resume` rewrites the whole prior conversation, and the replayed
@@ -726,7 +726,7 @@ export class WorkUnitCollector {
    *  `/astera-task` on would invent a continuation. So history resume never passes this argument,
    *  and nothing here moves unless a roll hands one over.
    *
-   *  **The ordering this relies on:** `rolling.ts`'s `roll()` calls `kill(old)` then `spawn(new)`
+   *  **The ordering this relies on:** `claudeCoordinator.ts`'s `roll()` calls `kill(old)` then `spawn(new)`
    *  then `send('session:rolled', ...)` with no `await` in between (its own comment notes the old
    *  session's exit event may arrive later, "even if... under the old key"). A PTY's exit is
    *  inherently asynchronous — Node cannot deliver it in the middle of that synchronous run — so this
@@ -1281,7 +1281,7 @@ export class WorkUnitCollector {
    *
    *  **0 이 증명되는 경우는 하나뿐이다: 세션 id 도 파일도 지금 처음 본다.** 이미 커서를 가진
    *  세션이 다른 파일을 보게 됐다면 그 파일의 앞부분은 우리가 본 적 없는 대화이지 "그 세션의
-   *  시작"이 아니다. 이 저장소는 같은 물음에 이미 같은 답을 냈다 — rolling.ts 의 `applyMeta` 는
+   *  시작"이 아니다. 이 저장소는 같은 물음에 이미 같은 답을 냈다 — claudeCoordinator.ts 의 `applyMeta` 는
    *  경로가 바뀌면 `since = now` 로 tail 을 새로 세우고, 그 이유를 "그 앞의 것들은 이 체인이 보기
    *  전에 이미 거기 있었다"라고 적어 두었다.
    *

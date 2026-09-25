@@ -25,7 +25,7 @@ import { comparablePath } from '../core/files/tree'
 
 // Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
-const POLL_MS = 1_000 // Same value as LOCATE_POLL_MS in codexRolling.ts (which is not exported there)
+const POLL_MS = 1_000 // Same value as LOCATE_POLL_MS in codexCoordinator.ts (which is not exported there)
 
 /** How often a session that already has a rollout looks for a newer one. Coarser than the poll: `/new`
  *  is a person's keystroke, so seconds of lag costs nothing, and this is the one step here that walks a

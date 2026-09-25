@@ -69,7 +69,7 @@ export function buildClaudeCommand(platform: NodeJS.Platform): CommandBuilder {
  *  a different sentence reaches codex.
  *
  *  Exported so a second argv call site can reuse the same rule instead of inventing its own — see
- *  codexRolling.ts's blank-slate roll, which sanitizes a conversation briefing before it becomes
+ *  codexCoordinator.ts's blank-slate roll, which sanitizes a conversation briefing before it becomes
  *  initialPrompt (the initialPrompt field above deliberately does not sanitize on its own). */
 export function sanitizeResumePrompt(prompt: string): string {
   return prompt

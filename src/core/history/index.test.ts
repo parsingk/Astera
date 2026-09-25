@@ -212,7 +212,7 @@ describe('HistoryIndex (lazy)', () => {
      *  전량 재읽기를 만들지 않는다" 로 잘못 적어 두었다가 macOS CI 가 codex: 3 을 냈다.
      *
      *  기다림을 고정 시간이 아니라 **활동이 멎는 것**으로 판정한다. 고정 예산은 한가한 머신에서만
-     *  충분해서 2코어 CI 러너에서 모자랐던 선례가 있다(main/codexRolling.test.ts 의 settleIo). */
+     *  충분해서 2코어 CI 러너에서 모자랐던 선례가 있다(core/rolling/codexCoordinator.test.ts 의 settleIo). */
     const drainWatcher = async (dirs: string[]): Promise<void> => {
       let hits = 0
       index!.onUpdated = (): void => {

@@ -1,7 +1,7 @@
 // Session activity signals used for blind-spot detection. The main transcript does not record
 // subagent activity in real time, so we look at the mtime of the subagent file tree together with the
 // pendingWorkflowCount of the last turn_duration. Like transcript.ts, this uses node:fs directly from
-// core — main (rolling.ts) uses it as the default for injected deps, and tests inject fakes.
+// core — the claude coordinator (claudeCoordinator.ts) uses it as the default for injected deps, and tests inject fakes.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 

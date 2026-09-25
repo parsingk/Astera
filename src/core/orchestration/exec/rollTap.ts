@@ -176,12 +176,12 @@ export class OrchRollTap {
     // 위에서 옮겨 온 정지 표시를 **여기서 지운다.** `session:rolled` 는 워커가 새 id 로 다시 돌기
     // 시작했다는 뜻이고, 그 표시가 말하던 정지 에피소드는 그것으로 끝난다. 표시를 지우는 다른 유일한
     // 사건인 'none' 에만 맡길 수 없다: 롤 뒤 auto-prompt 의 150ms Enter 창 안에 다른 게시가 끼면 그
-    // 'none' 은 건너뛰어지고(rolling.ts 의 scheduleAutoPrompt), 그러면 표시가 새 세션에 영구히 남아
+    // 'none' 은 건너뛰어지고(claudeCoordinator.ts 의 scheduleAutoPrompt), 그러면 표시가 새 세션에 영구히 남아
     // **그 뒤의 모든 정지가 기록되지 않는다** — 몇 시간짜리 한도조차.
     //
     // **다시 걸려 붙을 수 없다.** 표시를 만드는 것은 'waiting'/'switching' 게시뿐이고, 그 게시는
     // 새 정지를 뜻한다. 롤 직후에 정말로 'waiting' 이 게시되면 그 체인은 실제로 기다리는 중이다
-    // (rolling.ts 가 그 자리에 적어 둔 판단이다) — 새 항목으로 기록하는 것이 옳다.
+    // (claudeCoordinator.ts 가 그 자리에 적어 둔 판단이다) — 새 항목으로 기록하는 것이 옳다.
     this.stopped.delete(newInfo.id)
     // 계정이 바뀌는 재개다 — 세션 id 도 새것으로 옮겨졌으므로 이력은 새 세션 id·새 계정으로 닫는다.
     // recordResume 안에 넣지 않은 이유는 이 함수의 머리말과 같다: 그 함수는 순수 core 이고 시각을
@@ -221,7 +221,7 @@ export class OrchRollTap {
    *     리셋 앵커는 Enter 뒤, claude 롤은 auto-prompt 뒤, codex 롤은 롤 끝에서). 포기하는 갈래에서도
    *     게시한다(롤 중단·롤 실패·체인 dispose).
    *   - 'stalled' — 재개가 듣지 않았다는 **판정**이다. 그 회복 시도는 그것으로 끝나고 **뒤에 'none'
-   *     이 오지 않는다** — rolling.ts 의 두 게시 자리(scheduleAutoPrompt 의 auto-prompt 타임아웃,
+   *     이 오지 않는다** — claudeCoordinator.ts 의 두 게시 자리(scheduleAutoPrompt 의 auto-prompt 타임아웃,
    *     idleNudgeCheck 의 nudge 후 재정지)가 모두 'stalled' 를 게시하고 곧바로 return 한다. 앞쪽은
    *     **롤 경로**다: kill·respawn 까지 갔는데 ready 신호가 끝내 오지 않은 경우다. 이것을 끝으로
    *     세지 않으면 그 세션의 표시가 영구히 남아, **다음 정지가
@@ -271,7 +271,7 @@ export class OrchRollTap {
     if (this.stopped.has(e.sessionId)) {
       // Still the same episode. A repeat 'switching' carries nothing new (no reset time) and stays
       // dropped, same as before. A repeat 'waiting' can carry a fresher nextRetryAt — the aborted-roll
-      // retry loop (rolling.ts/codexRolling.ts) republishes 'waiting' every round — so patch the reset
+      // retry loop (claudeCoordinator.ts/codexCoordinator.ts) republishes 'waiting' every round — so patch the reset
       // time already on record instead of losing it; the episode is still one stop, not a second one.
       if (e.state === 'waiting' && e.nextRetryAt !== undefined) {
         void this.recordStopReset(e.sessionId, e.nextRetryAt).catch((err) =>

@@ -52,7 +52,7 @@ interface RetryMaterials {
   provider: Provider
   startArgs: { cwd: string; resumeThreadId?: string; bypass: boolean }
   /** The handover briefing a rolling respawn carries — for a chat chain it is the *only* delivery
-   *  channel (rolling.ts / codexRolling.ts both skip their own auto-prompt for chat, saying the spawn
+   *  channel (claudeCoordinator.ts / codexCoordinator.ts both skip their own auto-prompt for chat, saying the spawn
    *  carries it). The original `spawn()` continuation only sends this once its `adapter.start`
    *  resolves; a silent death means that promise rejects instead, so the send never ran and the
    *  prompt would otherwise be lost, not merely deferred. Carried here so a later, confirmed retry's
@@ -681,7 +681,7 @@ export class ChatSessionManager {
         // because it worked: the bypass may have started a version other than the one pinned here (S7).
         this.handleEvent(id, { type: 'notice', key: 'bypassed' })
         if (materials.initialPrompt === undefined) return
-        // The only delivery channel a chat chain's handover briefing has (rolling.ts / codexRolling.ts
+        // The only delivery channel a chat chain's handover briefing has (claudeCoordinator.ts / codexCoordinator.ts
         // both skip their own auto-prompt for chat, saying the spawn carries it). The original
         // `spawn()` continuation never ran this — its `adapter.start` rejected instead of resolving —
         // so this is not a re-send, it is the only send.

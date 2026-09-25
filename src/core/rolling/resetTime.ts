@@ -34,7 +34,7 @@ const YEAR_ROLLOVER_MS = 180 * 86_400_000
 
 // Ceiling for the date-omitted branch only — if that branch resolves further out than its own window
 // length it contradicts itself, so reject it. When now is properly anchored to the phrase's own
-// timestamp (refAt in recordRecovery, rolling.ts below) this ceiling never fires in practice — it is
+// timestamp (refAt in recordRecovery, claudeCoordinator.ts below) this ceiling never fires in practice — it is
 // a second line of defence, so that a future clock skew or timestamp format change degrades safely
 // into this fallback (snapshot -> 15 minutes) instead of stranding us for 24 hours.
 const SESSION_MAX_AHEAD_MS = 5 * 3_600_000 // the session window is 5 hours by definition — measured max 2.7h

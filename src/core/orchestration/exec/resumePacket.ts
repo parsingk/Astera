@@ -1,6 +1,6 @@
 // 롤링이 재개 직전에 물어보는 훅(RollingDeps.resumeText/CodexRollingDeps.resumeText)의 구현.
 //
-// **packet 을 프롬프트 자리에 직접 실을 수 없는 이유는 배선(rolling.ts/codexRolling.ts) 쪽에 있다.**
+// **packet 을 프롬프트 자리에 직접 실을 수 없는 이유는 배선(claudeCoordinator.ts/codexCoordinator.ts) 쪽에 있다.**
 // codex 는 프롬프트를 CLI 인자로 넘기고 sanitizeResumePrompt(core/sessions/commands.ts)가
 // `["&|<>^%]`를 지운 뒤 모든 공백을 하나로 접어, 여러 줄 packet 이 뭉개진 한 줄이 된다. claude 는
 // PTY 에 타이핑하므로 줄바꿈마다 Enter 가 눌려 packet 이 중간에 스스로 제출된다. 그래서 packet 은
@@ -25,7 +25,7 @@ import { parseTranscriptForResume, type TranscriptResumeMaterial } from '../../h
 import { parseCodexForResume } from '../../history/codexParser'
 
 export interface ResumePacketDeps {
-  /** git 실행 어댑터. readGitSummary(main/gitSummary.ts)의 GitSummaryDeps.git 을 그대로 통과시킨다 —
+  /** git 실행 어댑터. readGitSummary(core/orchestration/exec/gitSummary.ts)의 GitSummaryDeps.git 을 그대로 통과시킨다 —
    *  테스트 주입용이고, 넘기지 않으면 실제 git 을 쓴다. */
   git?: GitSummaryDeps['git']
   /** 현재 시각(ISO). 넘기지 않으면 실제 시계를 쓴다 — 결정론이 필요한 테스트만 주입한다. */
@@ -120,7 +120,7 @@ function resumeLine(a: { taskId: string; dispatchId: string }): string {
  * 프롬프트 자리에 실을 한 줄을 돌려준다.
  *
  * **실패는 전부 null 로 저하한다 — 절대 던지지 않는다.** 이 함수가 null 을 돌리면 부르는 쪽
- * (rolling.ts/codexRolling.ts)은 그 자리에서 이미 쓰던 고정 문장(chain.prompt)으로 재개한다 —
+ * (claudeCoordinator.ts/codexCoordinator.ts)은 그 자리에서 이미 쓰던 고정 문장(chain.prompt)으로 재개한다 —
  * packet 을 못 만들었다고 재개 자체를 막지 않는다: 인계가 얇은 것은 작은 손해이고, 재개가 죽는 것은
  * 큰 손해다. `readGitSummary` 뒤부터 반환까지 전체를 하나의 try 로 감싸는 이유가 이것이다 —
  * `buildCheckpoint`·`formatResumeSection`(core/orchestration 의 순수 모듈)이 오늘 던지지 않는다는
@@ -231,8 +231,8 @@ export async function buildResumeNote(
     // 이름을 담는다** — `docs/R&D notes.md` 하나가 저장소에 있으면 `&` 때문에 검사가 걸리고, 노트가
     // 통째로 버려진다. 그 저장소에서는 이 Phase 의 claude 쪽 가치 전부가 흔적도 없이 사라진다.
     //
-    // 검사가 지킬 것도 이 경로에는 없다: 'update' 를 묻는 자리는 네 곳이고(rolling.ts 의
-    // resumeInPlace · idle nudge · 리셋 앵커, 그리고 codexRolling.ts 의 resumeInPlace) **넷 다
+    // 검사가 지킬 것도 이 경로에는 없다: 'update' 를 묻는 자리는 네 곳이고(claudeCoordinator.ts 의
+    // resumeInPlace · idle nudge · 리셋 앵커, 그리고 codexCoordinator.ts 의 resumeInPlace) **넷 다
     // 살아 있는 PTY 에 타이핑한다.** codex 쪽 자리가 생겼어도 결론이 그대로인 이유가 그것이다 —
     // 이 문자열은 argv 로 가지 않으므로 codex 의 인자 sanitizer(sanitizeResumePrompt)가 도는 자리가
     // 아니다. 지키는 것 없이 파일 이름 한 글자로 기능을 끄는 검사는 순손실이다.
@@ -341,7 +341,7 @@ export interface TabResumeDeps {
  * 문자열을 `initialPrompt` 로도 실어 보내면서 두 번째 자리가 생겼는데, `buildCodexCommand` 는
  * `initialPrompt` 를 스스로 sanitize 하지 않는다(그 필드의 JSDoc 이 이유를 적어 둔다 — 다른
  * caller 인 오케스트레이션 코디네이터는 자신이 만든 spec 파일 포인터가 조용히 망가지지 않도록
- * 거부로 그 경계를 지킨다). 그래서 그 자리의 호출부(codexRolling.ts 의 백지 재개)가 넘기기
+ * 거부로 그 경계를 지킨다). 그래서 그 자리의 호출부(codexCoordinator.ts 의 백지 재개)가 넘기기
  * 직전에 sanitizeResumePrompt 를 스스로 적용한다 — "이미 갖고 있다"가 아니라 그 호출부가 새로
  * 갖췄다는 차이는 있지만, 이 함수가 미리 검사해 통째로 버릴 이유가 아니라는 결론은 그대로다.
  * **'handover' 의 새 포인터 한 줄에서 이 sanitize 가 실제로 하는 일은 연속 공백을 하나로 접는

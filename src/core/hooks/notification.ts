@@ -1,4 +1,4 @@
-// Decides what kind of Claude Code Notification hook fired. rolling.ts and slack.ts both have to answer
+// Decides what kind of Claude Code Notification hook fired. claudeCoordinator.ts and slack.ts both have to answer
 // the same question ("is this notification a plain idle wait?"), so it lives here in one place. A pure
 // function — no side effects.
 //

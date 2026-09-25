@@ -41,7 +41,7 @@ export interface CodexLimitState {
   at: number // when this state was read (ms)
 }
 
-const GATE_PCT = 90 // how worstResetAt picks which window's reset to report — not used as a gate for accepting the phrase (same role as GATE_PCT in rolling.ts and slack.ts)
+const GATE_PCT = 90 // how worstResetAt picks which window's reset to report — not used as a gate for accepting the phrase (same role as GATE_PCT in claudeCoordinator.ts and slack.ts)
 
 function parseWindow(v: unknown): CodexWindow | null {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return null
@@ -370,7 +370,7 @@ export class CodexLimitScanner {
 //   Press enter to confirm or esc to go back
 //
 // Left unanswered it stops the session at an input prompt — for an unattended worker, forever. The
-// same problem the claude side solves by pressing the wait item (answerLimitChoice in rolling.ts).
+// same problem the claude side solves by pressing the wait item (answerLimitChoice in claudeCoordinator.ts).
 //
 // **Which item we press is a product decision, so it is written down here.** We press "Keep current
 // model": switching the model changes the work product behind the user's back, and the "never show
@@ -428,7 +428,7 @@ const windows = (s: CodexLimitState): CodexWindow[] =>
  *
  *  **What a false positive cost, measured.** Three of the five landed within two minutes of a legitimate
  *  in-place resume. Two of those had to respawn: the resume just before them had already spent that
- *  episode's one in-place attempt (inPlaceUsed in codexRolling.ts), so resumeAfterWait took the kill
+ *  episode's one in-place attempt (inPlaceUsed in codexCoordinator.ts), so resumeAfterWait took the kill
  *  path and the log reads `did not recover — falling back to respawn` then `codex rolled`. The other
  *  three typed the resume line into a session that was working. So the cost was not a wasted timer.
  *
@@ -436,10 +436,10 @@ const windows = (s: CodexLimitState): CodexWindow[] =>
  *  those are recorded only once a turn completes. When the limit rejects a request no new token_count
  *  comes out, so usage stops at a low value — and a gate would then block the legitimate structured
  *  signal at exactly that moment. Claude's statusLine is no different: the instant the limit blocks,
- *  statusLine itself stops updating (measured: 0 updates over 88s of idle). GATE_PCT in rolling.ts was
+ *  statusLine itself stops updating (measured: 0 updates over 88s of idle). GATE_PCT in claudeCoordinator.ts was
  *  removed as a phrase gate for that same reason. The two providers are **no longer symmetric** on the
  *  phrase, though: codex does not accept one at all, while claude still does — gated on a direct
- *  account-usage lookup rather than on a snapshot (see onLimitCandidate in rolling.ts, which explains
+ *  account-usage lookup rather than on a snapshot (see onLimitCandidate in claudeCoordinator.ts, which explains
  *  why claude cannot retire the phrase: a subagent limit has no structured field to fall back on).
  *
  *  What is no longer true is the old closing claim that false-positive defence was carried by the
@@ -447,7 +447,7 @@ const windows = (s: CodexLimitState): CodexWindow[] =>
  *  came through the scanner.
  *
  *  **A grace window was measured, not assumed, and it does not fit.** Anchoring a 60-second window on
- *  the resume (the size of rolling.ts's REPLAY_GRACE_MS) would have suppressed 2 of the 5: the two that
+ *  the resume (the size of claudeCoordinator.ts's REPLAY_GRACE_MS) would have suppressed 2 of the 5: the two that
  *  arrived 27 and 37 seconds after an in-place resume. It would have missed the third resume-adjacent
  *  one at 118 seconds, and both of the two that followed a rollout *attach* rather than a resume (44
  *  seconds and ~18 minutes) — a window anchored on a resume never opens for those. inReplayGrace's
@@ -461,7 +461,7 @@ const windows = (s: CodexLimitState): CodexWindow[] =>
  *  conversation whose file records no block at all has nothing else to go on, and that function's own
  *  comment already calls it the weakest evidence in the design. Retiring decision (2) did not touch it,
  *  and it is the one remaining way a phrase can reach onLimit. And an ignored phrase still logs (see
- *  evaluate's `if (chain.textHit)` branch in codexRolling.ts), so the distribution stays visible to
+ *  evaluate's `if (chain.textHit)` branch in codexCoordinator.ts), so the distribution stays visible to
  *  whoever next has reason to revisit this.
  *
  *  **A null state means "unknown," not "not limited."** That is the normal condition of a session
@@ -489,7 +489,7 @@ export function maxedOut(state: CodexLimitState | null): boolean {
  *  already knew about before the session attached — when no window answers, which is the normal case
  *  for a resumed session: the snapshot carrying the reset was written before it attached, and the only
  *  snapshot it sees afterwards is the window-less credit record.
- *  (the codex counterpart of recordRecovery in rolling.ts) */
+ *  (the codex counterpart of recordRecovery in claudeCoordinator.ts) */
 export function worstResetAt(
   state: CodexLimitState | null,
   gatePct = GATE_PCT
@@ -554,6 +554,6 @@ export function priorLimitVerdict(
   // the premise covers codex's own error line, but the scanner reads the whole redraw, so an agent's own
   // output or a quoted log carrying a limit-shaped sentence lands here too. That is why its consumer
   // keeps a verdict with at === null out of the shared block registry — the wait is this chain's alone
-  // (judgedByPriorBlock in codexRolling.ts).
+  // (judgedByPriorBlock in codexCoordinator.ts).
   return opts.textHit ? { kind: 'limited', at: null, weekly: false } : { kind: 'none' }
 }

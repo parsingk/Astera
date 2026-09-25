@@ -698,7 +698,7 @@ describe('WorkUnitCollector — 한도로 굴렀을 때 열린 작업이 살아�
     const started = await collector.startTask('s1', '한도 전에 하던 작업')
     expect(started.ok).toBe(true)
 
-    // rolling.ts's roll() goes kill → spawn → send('session:rolled') with no await in between —
+    // claudeCoordinator.ts's roll() goes kill → spawn → send('session:rolled') with no await in between —
     // the old session's real (asynchronous) exit event is guaranteed to arrive after this
     // notification. Passing oldSessionId relies on exactly that ordering (see onSessionForked's doc).
     collector.onSessionForked('s2', undefined, 's1')
@@ -2017,7 +2017,7 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     )
     await collector.flush() // opens the unit under s1
 
-    // rolling.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
+    // claudeCoordinator.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
     // the old session's own exit event is guaranteed to arrive after this notification.
     collector.onSessionForked('s2', undefined, 's1')
     fake.sessions = [session({ sessionId: 's2' })] // s1 is already dead
@@ -2161,7 +2161,7 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     await collector.flush() // blocked — deferred under s1
     expect(ignored).toHaveLength(1)
 
-    // rolling.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
+    // claudeCoordinator.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
     // the old session's own exit event is guaranteed to arrive after this notification.
     collector.onSessionForked('s2', undefined, 's1')
     fake.sessions = [session({ sessionId: 's2' })] // s1 is already dead
@@ -2207,7 +2207,7 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     await collector.cancelTaskById(projectPath, started.id)
     expect(store.get(projectPath)!.units.filter((u) => u.status === 'active')).toHaveLength(0)
 
-    // rolling.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
+    // claudeCoordinator.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
     // the old session's own exit event is guaranteed to arrive after this notification.
     collector.onSessionForked('s2', undefined, 's1')
     fake.sessions = [session({ sessionId: 's2' })] // s1 is already dead

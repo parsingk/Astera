@@ -689,14 +689,14 @@ app.whenReady().then(async () => {
     // 세션의 트랜스크립트에 이전 대화를 통째로 다시 적는다 — 알리지 않으면 수집기가 처음 보는
     // 세션으로 여겨 그 파일을 0 부터 읽고, 그것이 곧 켜기 전의 대화다(스펙 §16.1).
     // **claude 에서는 경로를 건네지 않는다.** 이 게시의 payload 에는 없고, 굴려서 띄운 프로세스가
-    // 어느 파일을 쓸지는 그 세션의 statusLine 이 도착해야 정해진다(rolling.ts 의 applyMeta 가 그것을
+    // 어느 파일을 쓸지는 그 세션의 statusLine 이 도착해야 정해진다(claudeCoordinator.ts 의 applyMeta 가 그것을
     // 기다린다). 추측 대신 세션 id 만 알리고, 파일 끝을 잡는 일은 수집기가 그 세션을 처음 보는
     // 회차로 미룬다. **codex 에서는 건네줄 수 있다**: 재개된 codex 는 새 파일을 만들지 않고 바로 이
     // dest 에 이어 쓰므로(아래 주석) 그 순간의 파일 끝이 곧 되쓰기가 끝난 자리다. 빈 대화로 굴릴 때는
     // `undefined` 이고, 그때는 claude 쪽처럼 수집기가 다음 회차에 끝을 잡는다.
     // **`oldSessionId` goes along too (Important 3).** The killed session's open task has to be
     // re-keyed onto the new one, or that session's exit event — which follows this — would
-    // interrupt it for no reason: a usage limit is not a completion. rolling.ts's roll() goes
+    // interrupt it for no reason: a usage limit is not a completion. claudeCoordinator.ts's roll() goes
     // kill → spawn → this publish with no await in between, so the killed session's real
     // (asynchronous) exit event is guaranteed to arrive after this notification. (A Host roll's exit
     // is held until this has run — hostRollView.) **codex sessions do not create a Unit today** (see
@@ -737,7 +737,7 @@ app.whenReady().then(async () => {
           // at the end of it so the turns from before the roll are not reported again. **`undefined` on
           // a blank-slate roll (Smart Resume)** — that respawn is a fresh `codex` with no rollout to
           // copy or hand over yet, so `register` below falls back to its own search, the same path a
-          // brand-new session already takes (codexRolling.ts's `roll()` documents the same fallback at
+          // brand-new session already takes (codexCoordinator.ts's `roll()` documents the same fallback at
           // its own `send('session:rolled', ...)` call).
           //
           // When rolling switches accounts the session respawns under a new sessionId and a new
@@ -855,7 +855,7 @@ app.whenReady().then(async () => {
             // design F5 fix round 1 (Important 2/3): computed here, the same way ipc.ts's own
             // spawnSession does — synchronously, off the cache core.ts warms once at startup — rather
             // than threaded through RollingDeps.spawn's opts: this is a fact about the *target*
-            // account's CLI on this machine's PATH, not about the chain rolling.ts is tracking.
+            // account's CLI on this machine's PATH, not about the chain claudeCoordinator.ts is tracking.
             bypassSignal: core!.bypassSignalFor(providerOf(opts.account)),
             startWithBypass: opts.startWithBypass
           })
@@ -945,7 +945,7 @@ app.whenReady().then(async () => {
     // Routed by kind exactly as the claude coordinator's is, and for the same reason — see its own
     // comment. `resumePrompt` has no counterpart here: it is the argument behind `codex resume <id>`,
     // and a chat session is not started from a command line, so a chat roll carries its prompt as
-    // `initialPrompt` (codexRolling.ts's roll() sends only that one for a chat chain).
+    // `initialPrompt` (codexCoordinator.ts's roll() sends only that one for a chat chain).
     spawn: (opts) =>
       opts.kind === 'chat'
         ? core!.chat.spawn({
@@ -963,7 +963,7 @@ app.whenReady().then(async () => {
             startWithBypass: opts.startWithBypass
           })
         : core!.sessions.spawn(opts),
-    // design F5 fix round 1 (Important 3): rolling.ts's own dep, same contract.
+    // design F5 fix round 1 (Important 3): claudeCoordinator.ts's own dep, same contract.
     bypassedOf: (id) => core!.chat.bypassedOf(id),
     kill: (id) => (core!.chat.has(id) ? core!.chat.kill(id) : core!.sessions.kill(id)),
     write: (id, d) => {
@@ -1012,7 +1012,7 @@ app.whenReady().then(async () => {
     orchEnv: () => orchRef?.orchEnv(),
     // Job Continuity: binds the native session id to the open Dispatch as soon as the coordinator learns it.
     onNativeSession: (sid, native) => orchRef?.onNativeSession(sid, native),
-    // Job 워커의 재개 packet(Task 4b/4c) — rolling.ts 의 같은 필드, 같은 resumeTextDep 이다.
+    // Job 워커의 재개 packet(Task 4b/4c) — claudeCoordinator.ts 의 같은 필드, 같은 resumeTextDep 이다.
     resumeText: resumeTextDep,
     // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이
     // 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그보다 먼저 만들어진다.

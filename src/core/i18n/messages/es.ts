@@ -960,7 +960,7 @@ export const es: Catalog = {
   'terminal.tab.new': 'Terminal nuevo',
   'terminal.tab.close': 'Cerrar el terminal',
   'terminal.open.failed': 'Error al abrir el terminal: {detail}',
-  // rolling.ts and codexRolling.ts — the default resume prompt. Must stay identical to
+  // claudeCoordinator.ts and codexCoordinator.ts — the default resume prompt. Must stay identical to
   // session.new.rollPromptPlaceholder, which shows this value as its placeholder.
   'rolling.continuePrompt': 'Continúa con el trabajo',
   // slack.ts — the notification text that goes out to Slack

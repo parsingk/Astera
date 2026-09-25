@@ -8,7 +8,7 @@ import { git } from '../../worktrees/git'
 import type { GitSummary } from '../../orchestration/checkpoint'
 
 export interface GitSummaryDeps {
-  /** git 실행 어댑터. RollingDeps(main/rolling.ts)의 copy?/probeActivity? 와 같은 관례 — 테스트
+  /** git 실행 어댑터. RollingDeps(core/rolling/claudeCoordinator.ts)의 copy?/probeActivity? 와 같은 관례 — 테스트
    *  주입용이고, 넘기지 않으면 실제 git(core/worktrees/git.ts)을 쓴다. 모든 기존 호출부는
    *  이 인자를 생략하므로 그대로다. */
   git?: typeof git

@@ -14,7 +14,7 @@ export const coordinatorBriefName = (runId: string): string => `coordinator-${ru
  * the thing that was told to read it is.** Two kinds live here.
  *
  * - A worker's spec, kept while its Dispatch is open. The worker was launched with "read this path
- *   and follow it", and `buildResumePacket` (orchestration/resumePacket.ts) writes the resume
+ *   and follow it", and `buildResumePacket` (exec/resumePacket.ts) writes the resume
  *   briefing back into that same file, acting only on an open Dispatch.
  *   **Open, not alive.** A Dispatch left open because its worker really is gone is one recovery may
  *   resume, and resuming reads the original spec — so keeping it is right there too, not lenient.

@@ -62,7 +62,7 @@ export function claudeKeychainServices(configDir: string | null): string[] {
  * this has to special-case that directory to the unsuffixed name rather than hashing it like any other
  * configDir.
  *
- * Pulled out of loginStatus.ts's claudeLoginProbe once a second caller (usage.ts's readAccessToken)
+ * Pulled out of loginStatus.ts's claudeLoginProbe once a second caller (rateLimitFetcher.ts's readAccessToken)
  * needed the exact same rule — inlining it twice would have let the two drift apart silently.
  */
 export function claudeKeychainServicesFor(configDir: string, homeDir: string): string[] {

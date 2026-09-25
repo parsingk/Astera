@@ -14,7 +14,7 @@ import { matchesLimitPhrase } from './detect'
 const EXCERPT_MAX = 200 // the cap on the excerpt used for logs — the full original is never leaked into the log
 
 /** The limit-hit signal read from a transcript. It does not carry the reset time or scope — the
- *  statusLine path (recordRecovery in rolling.ts) already does that, and it is sturdier than parsing a
+ *  statusLine path (recordRecovery in claudeCoordinator.ts) already does that, and it is sturdier than parsing a
  *  time out of the phrase. */
 export interface ClaudeLimitHit {
   at: number // the entry's timestamp (ms)

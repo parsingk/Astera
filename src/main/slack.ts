@@ -62,7 +62,7 @@ const OWN_TS_LIMIT = 500 // the cap on remembering ts values we posted (the seco
 // really does contain an unanswered tool_use (a pending question or approval), it is sent even when idle —
 // with that condition attached it is not a false positive but a screen genuinely waiting for an answer.
 // The verdict is split between core/hooks/notification and core/slack/transcript
-// (extractPendingToolUse) — rolling.ts has to answer the same idle question, and the reason for splitting
+// (extractPendingToolUse) — claudeCoordinator.ts has to answer the same idle question, and the reason for splitting
 // on type rather than on wording is written there.
 const TAIL_BYTES = 256 * 1024 // how much of the transcript tail to read (the same as parseTranscriptTail in history)
 // The working→idle edge can arrive a beat before the CLI has finished writing that turn's text — so the
@@ -1089,13 +1089,13 @@ export class SlackNotifier {
   }
 
   /** Limit phrase → notification. When both are blocked, the later reset is shown (the same max rule as
-   *  recordRecovery in rolling.ts).
+   *  recordRecovery in claudeCoordinator.ts).
    *
    *  There is deliberately no usage-percentage gate. By the moment a limit blocks the session statusLine has
    *  stopped updating, so only a stale snapshot is visible, and the gate only ever worked in the direction
    *  of blocking legitimate limit phrases. This side is for non-rolling sessions, which have no way to
    *  recover on their own, so a blocked notification means the user never finds out at all — the damage is
-   *  greater than in rolling.ts. Defence against false positives is the job of the scanners, narrowed to
+   *  greater than in claudeCoordinator.ts. Defence against false positives is the job of the scanners, narrowed to
    *  per-provider measured phrasing (CodexLimitScanner on the codex side).
    *
    *  statusLine is still read — not as a gate, but to obtain the reset time (worst) to put in the message.
@@ -1111,7 +1111,7 @@ export class SlackNotifier {
         const seven = u?.weekly?.usedPercent
         // Only windows that are genuinely exhausted are eligible for the reset display — this GATE_PCT is
         // not about accepting the phrase but about choosing "whose reset to show" (the same role as
-        // recordRecovery in rolling.ts)
+        // recordRecovery in claudeCoordinator.ts)
         const cand: { at: number; weekly: boolean }[] = []
         if (typeof five === 'number' && five >= GATE_PCT && u?.session?.resetsAt) {
           const at = Date.parse(u.session.resetsAt)

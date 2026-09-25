@@ -40,7 +40,7 @@ export class RollCycle {
    *  this, it waits again at the next multiple).
    *  Note: the coordinator now decides the target and the time itself via planRetry, based on the reset
    *  time, so this method and the retryAt/waitMs arguments of the wait action are not called from
-   *  rolling.ts. They are kept to document and test the unit contract (the streak cycling rule). */
+   *  claudeCoordinator.ts. They are kept to document and test the unit contract (the streak cycling rule). */
   onWaitElapsed(): CycleAction {
     return { type: 'roll', toIndex: (this.idx + 1) % this.count }
   }

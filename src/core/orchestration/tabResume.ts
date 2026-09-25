@@ -3,7 +3,7 @@
 // taskId 도 없다 — 그래서 별도 포매터다(계획 문서의 "브리핑이 실제로 어떻게 생기는가").
 //
 // 이 파일도 순수하다 — fs 를 만지지 않는다. 대화 파일을 읽어 여기 넣을 재료를 만드는 일은
-// main/orchestration/resumePacket.ts 의 buildTabResumeText 가 한다.
+// core/orchestration/exec/resumePacket.ts 의 buildTabResumeText 가 한다.
 import { sanitize } from './checkpoint'
 import type { GitSummary } from './checkpoint'
 import type { LastCommand, TranscriptMessage } from '../types'
@@ -50,7 +50,7 @@ export interface TabResumeInput {
   /** The last handoff memo the previous agent left, or why there is none. `found` renders the memo
    *  under CURRENT STATE; `none` says so in one line; `unknown` (the store could not be read, or
    *  this caller has none) renders nothing — an unknown is never dressed up as "none was left".
-   *  Read by main (resumePacket.ts) and handed in here like everything else. */
+   *  Read by resumePacket.ts and handed in here like everything else. */
   handoff: HandoffLookup
 }
 
@@ -85,7 +85,7 @@ const REQUESTS_MAX = 5
  *  상한을 두어도 절의 수만큼 곱해지므로 마지막 방어선을 하나 둔다.
  *
  *  **Task 7 이후에도 유효한 근거.** 'handover' 의 이 문자열은 이제 프롬프트 자리에 직접 실리지
- *  않고 파일로 옮겨 간다(main/orchestration/resumePacket.ts 의 buildTabResumeText). 그래도 이
+ *  않고 파일로 옮겨 간다(core/orchestration/exec/resumePacket.ts 의 buildTabResumeText). 그래도 이
  *  상한이 재는 것은 원래 "터미널 한 줄의 길이"가 아니라 §9.3 이 금지한 것 — diff 본문·소스 내용을
  *  담지 않는 것 — 이었으므로 근거는 그대로다: 새 세션이 이 파일을 읽는 비용이 곧 그 세션의
  *  할당량에서 나가고, 그 값을 작게 유지하는 것이 이 상한의 일이다. */

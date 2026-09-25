@@ -40,7 +40,7 @@ function accessTokenFrom(raw: string): string | null {
 
 /** Reads the accessToken for a codex configDir (CODEX_HOME), or null when there is none.
  *
- *  One file and no Keychain branch, unlike readAccessToken in usage.ts: codex writes auth.json on every
+ *  One file and no Keychain branch, unlike readAccessToken in core/usage/rateLimitFetcher.ts: codex writes auth.json on every
  *  platform, which is already what loginStatus.ts's codex probe keys off. A module-level function for
  *  the same reason that one is — a test can call it with a real temp file and never touch the network.
  */

@@ -267,7 +267,7 @@ export async function parseCodexPreview(
  *  제목 레코드)나 `file-history-snapshot`(손댄 파일 스냅숏)에 해당하는 레코드가 없다 — 있지도 않은
  *  것을 첫 사용자 메시지 등으로 대신 채우면 "어느 메시지가 작업인지 판정하지 않는다"는 계획의
  *  규칙을 이 provider 에서만 깨는 것이 된다. 그래서 `title` 은 항상 `null`, `editedFiles` 는 항상
- *  빈 배열이다 — 후자는 buildTabResumeText(main/orchestration/resumePacket.ts)가 이미 git 변경
+ *  빈 배열이다 — 후자는 buildTabResumeText(core/orchestration/exec/resumePacket.ts)가 이미 git 변경
  *  목록으로 내려가는 경로를 갖고 있어 손실이 없다. `lastCommand` 도 같은 이유로 항상 `null` 이다 —
  *  codex 의 실행 기록(`function_call`/`function_call_output`, 도구 이름 `exec_command`)은 claude 의
  *  `tool_use`(Bash)/`tool_result`(`is_error`) 와 필드 모양이 다르고 그쪽은 측정한 적이 없다. 있지도

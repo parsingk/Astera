@@ -236,7 +236,7 @@ export function NewSessionDialog({
   // per-folder probe failed, Start stayed dead, nothing ever spawned, so the fix never ran. Kept out
   // of this flag on purpose now: primaryRunsHere still drives the cliFailsHere warning below (the
   // true, more specific statement) and F5 gets its chance. Still checked broadly, not just for a
-  // plain single-account session — rolling supports codex too (codexRolling.ts) and so do Slack
+  // plain single-account session — rolling supports codex too (codexCoordinator.ts) and so do Slack
   // notifications (turn completion is detected from rollout's task_complete), so this flag must not
   // hide either of those.
   const primaryCliMissing = !primaryInstalled
@@ -523,7 +523,7 @@ export function NewSessionDialog({
         </label>
         {rollChecked && (
           <div className="field roll-prompt-field">
-            {/* Keep the placeholder in sync with the actual default rolling.ts and codexRolling.ts send
+            {/* Keep the placeholder in sync with the actual default claudeCoordinator.ts and codexCoordinator.ts send
                 (the rolling.continuePrompt key) — that key follows the app language too, so in both ko
                 and en, session.new.rollPromptPlaceholder and rolling.continuePrompt must hold the same value. */}
             <input

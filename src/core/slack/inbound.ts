@@ -138,7 +138,7 @@ function unescapeSlackText(text: string): string {
 }
 
 /** The result of converting reply text into the form to write to the PTY. Enter (submit) itself is not
- *  part of text — by the same convention as scheduler.ts and rolling.ts, SlackInbox has to send it
+ *  part of text — by the same convention as scheduler.ts and claudeCoordinator.ts, SlackInbox has to send it
  *  separately ENTER_DELAY_MS (150ms) after writing the text so the TUI has digested the whole paste
  *  before it submits. */
 export interface SessionInput {
@@ -214,7 +214,7 @@ export type ChoiceKeysResult = { ok: true; keys: string[] } | { ok: false; reaso
  *
  * If the format is off, nothing is injected and the reason is returned. A wrongly sent sequence commits
  * items that were not intended and cannot be undone, so when it is ambiguous, pressing nothing is the
- * right call (the same rule as answerLimitChoice in rolling.ts).
+ * right call (the same rule as answerLimitChoice in claudeCoordinator.ts).
  */
 export function buildChoiceKeys(text: string, shape: ChoiceShape[]): ChoiceKeysResult {
   if (shape.length === 0) return { ok: false, reason: { key: 'slack.choice.noShape' } }

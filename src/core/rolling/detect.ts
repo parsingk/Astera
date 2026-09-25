@@ -116,7 +116,7 @@ export class OutputScanner {
     //
     // Two conditions together, which is what keeps it narrow: the wait item's label is present, and
     // something is actually waiting for input. Prose that merely quotes the label — a document, a
-    // tool's output — draws no dialog. That is the same reasoning the usage gate in rolling.ts
+    // tool's output — draws no dialog. That is the same reasoning the usage gate in claudeCoordinator.ts
     // already relies on, where the dialog outranks the account's own usage figure.
     const limit =
       LIMIT_RE.test(this.tail) ||

@@ -172,7 +172,7 @@ describe('SchedulerCoordinator', () => {
 
   it('nudged suppresses firing (idle still does not send) — the next tick after none sends once', async () => {
     // 당시엔 nudged 뒤에 'none'이 뒤따르지 않아 억제가 영구 latch될 위험 때문에
-    // nudged를 억제 대상에서 제외했었다. rolling.ts의 resetAnchorCheck가 이제 Enter 전송 직후
+    // nudged를 억제 대상에서 제외했었다. claudeCoordinator.ts의 resetAnchorCheck가 이제 Enter 전송 직후
     // 'none'을 게시하도록 고쳐져 그 위험이 없어졌으므로, switching/trust/waiting과
     // 동일하게 억제하고 동일하게 해제되는지 검증한다.
     const h = harness()

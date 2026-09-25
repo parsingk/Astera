@@ -25,7 +25,7 @@ export interface AccountUsageDeps {
    *  belongs on the provider's side of the line, not here. */
   codexFetcher: UsageFetcher
   /** Structural, not the concrete class: the service only ever calls `get` and `remember` (below).
-   *  Kept narrow for the same reason readAccessToken in usage.ts is a plain function rather than a
+   *  Kept narrow for the same reason readAccessToken in core/usage/rateLimitFetcher.ts is a plain function rather than a
    *  private class method — a test can hand in an in-memory double instead of a real file, because
    *  the real store's `persist()` write cannot settle inside vi.advanceTimersByTimeAsync's bounded
    *  event-loop yields. */

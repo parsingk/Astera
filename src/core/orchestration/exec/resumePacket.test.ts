@@ -191,7 +191,7 @@ describe('buildResumePacket', () => {
   it('Checkpoint 조립이 던져도 거부된 Promise 가 아니라 null 을 돌린다', async () => {
     // fix round 1 — Finding 2: 이전 구현은 fs 읽기/쓰기만 try 로 감쌌다. buildCheckpoint/
     // formatResumeSection(core/orchestration 의 순수 모듈)은 오늘은 던지지 않지만, 이 파일이 그것을
-    // "이 함수가 절대 던지지 않는다"는 계약의 근거로 삼을 수는 없다 — rolling.ts 의 네 자리는 모두
+    // "이 함수가 절대 던지지 않는다"는 계약의 근거로 삼을 수는 없다 — claudeCoordinator.ts 의 네 자리는 모두
     // fire-and-forget(`void this.resumeInPlace(...)` 등)으로 부르므로, 여기서 거부된 Promise 가
     // 나가면 처리되지 않는 예외가 된다. 순수 모듈을 고칠 수는 없으니(이 라운드의 허용 파일 밖) 여기서
     // spy 로 던지게 만들어, 그 경우에도 이 함수가 null 로 저하하고 원본 spec 파일은 그대로 두는지

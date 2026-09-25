@@ -217,7 +217,7 @@ import { fillFromCommits } from '../core/github/fill'
  *  **stop 은 동기다** — will-quit 에서 불리므로 비동기 정리는 프로세스가 끝나기 전에 완료될 보장이
  *  없다. onRolled 도 같은 이유로 void 를 돌려준다: 롤링의 send 탭은 동기이고, 그 자리에서 기다릴 수
  *  없다. orchEnv 는 두 롤링 코디네이터가 읽는 세 번째 값이다 — 롤로 띄우는 워커 세션에 astera CLI
- *  환경을 실어야 롤 뒤의 워커가 완료를 보고할 수 있다(rolling.ts/codexRolling.ts 의 orchEnv dep).
+ *  환경을 실어야 롤 뒤의 워커가 완료를 보고할 수 있다(claudeCoordinator.ts/codexCoordinator.ts 의 orchEnv dep).
  *
  *  **onRollState 도 롤링의 send 탭에서 부른다 — 그래서 역시 void 다.** `RollStateEvent` 를 통째로
  *  넘기고, 그 중 어떤 게시가 정지 에피소드의 시작인지 가르는 일과 정지 스냅샷을 남기는 일은
@@ -227,7 +227,7 @@ import { fillFromCommits } from '../core/github/fill'
  *
  *  **resumeText 는 두 롤링 코디네이터가 읽는 네 번째 값이다** — RollingDeps/CodexRollingDeps 의
  *  resumeText dep 구현이고, sessionId 로 열린 Job Dispatch 를 찾아 재개 packet 을 spec 파일에 적어
- *  넣은 뒤 그 자리에 쓸 한 줄을 돌려준다(main/orchestration/resumePacket.ts). Job 워커가 아니면(그리고
+ *  넣은 뒤 그 자리에 쓸 한 줄을 돌려준다(core/orchestration/exec/resumePacket.ts). Job 워커가 아니면(그리고
  *  `tabFallback` 이 참이면) 탭 브리핑으로 저하한다 — 그 저하는 `tabResumeTextFor` 를 그대로 감쌀
  *  뿐이라 서버가 서 있을 때만 쓸 수 있는 자원(OrchState)에 기대지 않는다. **이 handle 자체가 서버가
  *  선 뒤에만 존재한다는 점은 그대로다** — `orchRef` 가 null 인 경우의 탭 폴백은 index.ts 가 별도로
@@ -662,7 +662,7 @@ export { coordinatorBriefName, staleSpecFiles } from '../core/orchestration/exec
 
 /**
  * 사이드바 히스토리 재개가 백지 재개로 갈지 정한다. `SPEC §11.5` 가 `--resume` 발원지로 꼽은 셋
- * 중 세 번째 자리이고, 앞의 둘(`rolling.ts`·`codexRolling.ts` 의 `roll()`)이 쓰는 규칙과 같다.
+ * 중 세 번째 자리이고, 앞의 둘(`claudeCoordinator.ts`·`codexCoordinator.ts` 의 `roll()`)이 쓰는 규칙과 같다.
  *
  * **판정을 `spawnSession` 안에 두지 않는 이유는 위 세 헬퍼와 같다** — 그 함수는 `registerIpc` 안의
  * 클로저라 electron 하네스 없이는 테스트가 닿을 수 없다.
@@ -671,7 +671,7 @@ export { coordinatorBriefName, staleSpecFiles } from '../core/orchestration/exec
  *   대화까지 버리면 새 세션에 남는 것이 없다.
  * - codex 는 이 줄을 argv 로 싣고 `sanitizeResumePrompt` 가 `["&|<>^%]` 와 연속 공백을 지운다.
  *   그 변환에 걸리는 경로면 포인터가 없는 파일을 가리키게 되는데 **백지 세션에는 돌아갈 대화도
- *   없다** — 그래서 백지를 포기한다(`codexRolling.ts` 의 fix wave 7, finding 2 와 같은 판단).
+ *   없다** — 그래서 백지를 포기한다(`codexCoordinator.ts` 의 fix wave 7, finding 2 와 같은 판단).
  *   `mangled` 를 따로 돌리는 것은 그 거부가 로그 없이 영구화되지 않게 하기 위해서다(같은 파일의 F6).
  * - claude 는 그 sanitizer 를 지나지 않으므로 같은 경로에서도 백지로 간다.
  */
@@ -846,7 +846,7 @@ export function registerIpc(
   const allSessions = (): SessionInfo[] => [...core.sessions.list(), ...core.chat.list()]
 
   // The conversation view: one follow per open session, polling only while at least one is open (see
-  // conversation.ts's own doc). transcriptPathFor reads the same statusLine payload rolling.ts,
+  // conversation.ts's own doc). transcriptPathFor reads the same statusLine payload claudeCoordinator.ts,
   // scheduler.ts and slack.ts already read for a claude session's transcript path, and answers null for
   // a codex one exactly the way it answers null for a claude session with no status line yet — codex
   // never writes one, so this needs no provider branch of its own. A claude *chat* session writes no
@@ -962,7 +962,7 @@ export function registerIpc(
    *  never be reached (`bootOrch` does not run). */
   const orchLogFile = orchWiring?.logPath ?? ''
   /** Task 7 — the directory a tab session's 'handover' briefing is written into (see
-   *  buildTabResumeText's JSDoc, main/orchestration/resumePacket.ts). Same convention as
+   *  buildTabResumeText's JSDoc, core/orchestration/exec/resumePacket.ts). Same convention as
    *  `specsDir` below (userData, never the project folder — the briefing's own "inspect git status"
    *  instruction would otherwise pick up this app-owned file as evidence). Declared at this outer
    *  scope, not inside bootOrch the way specsDir is, because `tabResumeTextFor` (below) closes over
@@ -979,7 +979,7 @@ export function registerIpc(
    *  (`core.sessions.onExit`), keyed to the id that was actually exiting — that was the bug this
    *  startup sweep replaces. A smart-resume roll writes the briefing under the *old*,
    *  about-to-die session's id and hands the *new* session a pointer to that exact path before the
-   *  kill (roll() in rolling.ts/codexRolling.ts). The producer's id and the consumer's id are never
+   *  kill (roll() in claudeCoordinator.ts/codexCoordinator.ts). The producer's id and the consumer's id are never
    *  the same id, so deleting the file the moment the producer exits removed it out from under a
    *  consumer that had not even booted yet — not as a rare race, but as the expected outcome of every
    *  smart resume. A startup sweep has no such mismatch: it runs before any session of this app run
@@ -994,8 +994,8 @@ export function registerIpc(
   })().catch((err) => orchLog(`tab resume dir create failed: ${String(err)}`))
   // fix wave 최종, F6: specsDir 아래의 같은 검사(이 파일 뒤쪽, bootOrch)와 같은 이유다. 탭
   // handover 의 포인터 한 줄은 이 디렉터리 아래 파일을 가리키므로, 이 경로에 금지 문자가 있으면
-  // codex 의 인자 sanitizer(sanitizeResumePrompt, codexRolling.ts 의 roll())가 그 포인터를
-  // 영구히 망가뜨린다 — 매 롤마다 codexRolling.ts 가 로그를 남기긴 하지만(F6 의 나머지 절반),
+  // codex 의 인자 sanitizer(sanitizeResumePrompt, codexCoordinator.ts 의 roll())가 그 포인터를
+  // 영구히 망가뜨린다 — 매 롤마다 codexCoordinator.ts 가 로그를 남기긴 하지만(F6 의 나머지 절반),
   // 그 로그는 실제로 롤이 일어나야만 나온다. 시작하자마자 원인을 알 수 있도록 여기서도 한 번
   // 경고한다. 시작은 막지 않는다 — specsDir 과 같은 태도.
   if (LAUNCH_FORBIDDEN.test(tabResumeDir))
@@ -1888,7 +1888,7 @@ export function registerIpc(
     // believed for the account that produced them.
     let resumeSameAccount = false
     // Smart Resume — `SPEC §11.5` 가 `--resume` 발원지로 꼽은 셋 중 **세 번째** 자리다(앞의 둘은
-    // `rolling.ts`·`codexRolling.ts` 의 `roll()`). 설정이 켜져 있고 브리핑이 실제로 만들어지면 대화를
+    // `claudeCoordinator.ts`·`codexCoordinator.ts` 의 `roll()`). 설정이 켜져 있고 브리핑이 실제로 만들어지면 대화를
     // 복사하지도 `--resume` 하지도 않는다: 백지 세션을 띄우고 그 브리핑을 가리키는 한 줄만 싣는다.
     //
     // **복사보다 먼저 묻는다.** 브리핑은 원본 대화 파일을 읽어야 하는데(읽기만 한다), 백지로 갈지
@@ -1897,7 +1897,7 @@ export function registerIpc(
     //
     // **설정이 꺼져 있으면 브리핑을 아예 만들지 않는다.** `buildTabResumeText` 의 'handover' 는
     // 파일을 쓰는 부수 효과가 있다 — 쓰지도 않을 브리핑 파일을 재개할 때마다 남길 이유가 없다
-    // (codexRolling.ts 의 `tabFallback = strategy === 'smart'` 와 같은 판단).
+    // (codexCoordinator.ts 의 `tabFallback = strategy === 'smart'` 와 같은 판단).
     //
     // **A chat resume is deliberately not offered this.** The condition stays on `opts.resumeSessionId`,
     // which only a pty resume sets — a chat resume carries `opts.resumeThreadId` instead. It is out of
@@ -1927,7 +1927,7 @@ export function registerIpc(
       const plan = historyResumePlan({ strategy, provider, briefing })
       // 뭉개짐 거부는 로그가 없으면 조용히 영구화된다 — userData 경로에 `["&|<>^%]` 가 하나 있으면
       // 이 설치본의 codex 사이드바 재개는 매번 여기서 거부되는데, 그 사실이 어디에도 남지 않는다
-      // (codexRolling.ts 의 F6 이 같은 자리에서 고친 것과 같은 사고).
+      // (codexCoordinator.ts 의 F6 이 같은 자리에서 고친 것과 같은 사고).
       if (plan.mangled)
         orchLog(
           `history resume — smart resume refused, the briefing pointer would be mangled by the argv sanitizer, falling back to --resume session=${opts.resumeSessionId}`
@@ -2226,12 +2226,12 @@ export function registerIpc(
   }
 
   /** resumeText 가 Dispatch 를 못 찾았을 때(탭 세션 — Job 워커가 아니다) 저하하는 자리.
-   *  buildTabResumeText(main/orchestration/resumePacket.ts) 자신은 cwd·provider·transcript 경로를
+   *  buildTabResumeText(core/orchestration/exec/resumePacket.ts) 자신은 cwd·provider·transcript 경로를
    *  인자로만 받는다 — 코디네이터 체인을 들여다보지 않기 위해서다(그 함수의 JSDoc). 그 값을 실제로
    *  찾는 것은 이 배선의 몫이다: cwd 는 core.sessions.list() 에서 얻는다.
    *
    *  **대화 파일 경로는 provider 마다 자리가 다르다.** claude 는 statusLine 페이로드에서 얻는다
-   *  (rolling.ts 의 refreshMeta·scheduler.ts·slack.ts 가 이미 같은 페이로드로 같은 값을 얻는 것과
+   *  (claudeCoordinator.ts 의 refreshMeta·scheduler.ts·slack.ts 가 이미 같은 페이로드로 같은 값을 얻는 것과
    *  같은 자리). codex 는 statusLine 이 없다(usesStatusLine=false) — 그 값을 아는 유일한 쪽은
    *  rollout 파일을 파일시스템 스캔으로 찾아 둔 codexRolling 코디네이터뿐이라, 그쪽의
    *  rolloutPathFor 를 대신 묻는다. 어느 쪽도 찾지 못하면(등록되지 않은 체인, 매핑 전) null 이고,
@@ -2708,7 +2708,7 @@ export function registerIpc(
     // 그쪽 지연은 그대로다.
     //
     // 그래도 지금 이 조합을 그대로 두는 이유: 롤링의 idle nudge 는 Notification 훅을 정지 신호로
-    // 쓴다(rolling.ts 의 onHookEvent) — 훅을 떼면 그 갈래가 워커에게만 사라진다.
+    // 쓴다(claudeCoordinator.ts 의 onHookEvent) — 훅을 떼면 그 갈래가 워커에게만 사라진다.
     // **wantHooks 에 체인과 별개인 자기 입력을 주는 일은 나중으로 남긴다.**
     // Folder trust before an orchestration spawn — the reasoning lives on preTrustWorkspace in
     // core/orchestration/exec/workerStart.ts, which the Host will call (Task 9).
@@ -3678,7 +3678,7 @@ export function registerIpc(
       // 금지한 전체 인계가 아니라, 그 절이 이미 허용한 한 줄이다. Job 워커의 함수가 다른 이유(spec
       // 쓰기 실패 등)로 null 을 돌린 경우도 `tabFallback` 이 참이면 같은 이유로 이쪽으로 내려간다 —
       // 구조화된 Job 인계를 못 만들었다고 git+대화 기반의 일반 브리핑까지 포기할 이유는 없다.
-      // `tabFallback` 이 거짓이면(rolling.ts/codexRolling.ts 의 ordinary-path 'handover' 호출,
+      // `tabFallback` 이 거짓이면(claudeCoordinator.ts/codexCoordinator.ts 의 ordinary-path 'handover' 호출,
       // F3) 탭 세션에 대해서는 Job 과 마찬가지로 그냥 `null` 이다 — 부르는 쪽이 `chain.prompt` 로
       // 저하한다.
       resumeText: (sessionId, form, tabFallback) =>

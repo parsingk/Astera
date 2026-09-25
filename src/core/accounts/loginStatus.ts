@@ -70,7 +70,7 @@ export function claudeLoginProbe(opts: {
     }
     if (opts.platform !== 'darwin') return false
     // The ambient-directory special case (no CLAUDE_CONFIG_DIR → no suffix in the keychain item) lives
-    // in claudeKeychainServicesFor now — see its docstring in keychain.ts. usage.ts's readAccessToken
+    // in claudeKeychainServicesFor now — see its docstring in keychain.ts. rateLimitFetcher.ts's readAccessToken
     // needs the identical rule, so it was pulled out here rather than kept inline.
     const services = claudeKeychainServicesFor(configDir, opts.homeDir)
     for (const service of services) {

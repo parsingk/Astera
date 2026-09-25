@@ -653,7 +653,7 @@ describe('SlackNotifier codex 턴 완료', () => {
 
 describe('SlackNotifier 롤링·한도·종료', () => {
   // 접합으로 쪼갠다 — 통짜면 이 파일이 롤링 세션의 화면으로 흐를 때 스캐너가 물어 실제 롤을
-  // 유발한다. 런타임 값은 같다 (rolling.test.ts와 같은 관례).
+  // 유발한다. 런타임 값은 같다 (claudeCoordinator.test.ts와 같은 관례).
   const LIMIT_TEXT = 'Claude usage limit ' + 'reached ∙ resets 3am'
 
   it('rollState waiting(5시간) → 재개 예정 알림 (HH:MM)', async () => {

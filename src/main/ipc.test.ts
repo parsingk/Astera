@@ -221,7 +221,7 @@ describe('accountRemovalBlockers', () => {
 // registerIpc 안의 클로저라 electron 하네스 없이는 닿을 수 없다 — 위 세 헬퍼(providerOfSession,
 // parseAllowedExternalUrl, accountRemovalBlockers)가 ipc.ts 에서 export 되어 있는 이유와 같다.
 //
-// 규칙의 원본은 rolling.ts 와 codexRolling.ts 의 roll() 이다(SPEC §11.5 가 `--resume` 발원지로
+// 규칙의 원본은 claudeCoordinator.ts 와 codexCoordinator.ts 의 roll() 이다(SPEC §11.5 가 `--resume` 발원지로
 // 꼽은 셋 중 둘). 세 번째가 여기다.
 describe('historyResumePlan — 사이드바 재개의 백지 재개 판정', () => {
   // 경로는 String.raw 로 적는다 — 이 줄이 담는 것은 실제 파일시스템 경로이고, 평범한 문자열
@@ -250,14 +250,14 @@ describe('historyResumePlan — 사이드바 재개의 백지 재개 판정', ()
   })
 
   // codex 는 이 줄을 argv 로 싣는다 — buildCodexCommand 가 아니라 호출부가 sanitize 한다
-  // (codexRolling.ts 의 백지 재개와 같은 자리, 같은 이유).
+  // (codexCoordinator.ts 의 백지 재개와 같은 자리, 같은 이유).
   it('codex 는 sanitize 를 통과한 값을 싣는다', () => {
     const plan = historyResumePlan({ strategy: 'smart', provider: 'codex', briefing: line() })
     expect(plan.blankSlate).toBe(true)
     expect(plan.initialPrompt).toBe(sanitizeResumePrompt(line()))
   })
 
-  // codexRolling.ts 의 fix wave 7, finding 2 와 같은 사고를 막는다: 경로에 `["&|<>^%]` 가 있으면
+  // codexCoordinator.ts 의 fix wave 7, finding 2 와 같은 사고를 막는다: 경로에 `["&|<>^%]` 가 있으면
   // sanitizer 가 그것을 지워 없는 파일을 가리키게 되는데, 백지 세션에는 돌아갈 대화조차 없다.
   // 그럴 때는 백지를 포기하고 복사 + `--resume` 으로 내려간다 — 뭉개진 힌트가 온전한 대화와 함께
   // 도착하면 작은 손해로 끝난다.

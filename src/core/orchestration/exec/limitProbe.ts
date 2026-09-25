@@ -5,7 +5,7 @@
 //   - claude: the lift time sits inside the limit phrase text (the phrase is pulled out of a transcript
 //     entry and parsed).
 // Both reuse only pieces of the pure verdict modules (claudeSignal, codexSignal, resetTime,
-// codexLocate) — RollingCoordinator, rolling.ts and codexRolling.ts are not used directly here.
+// codexLocate) — RollingCoordinator, claudeCoordinator.ts and codexCoordinator.ts are not used directly here.
 // Worker sessions are attached to those coordinators now (ipc.ts's spawnSession passes
 // rollAccountIds through), and the two do not collide: rolling owns the session's lifetime end to
 // end, and orchestration only listens for session:rolled to move the Dispatch to follow the new

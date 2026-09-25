@@ -62,7 +62,7 @@ async function makeRollout(configDir: string, uuid: string, sessionId: string, c
 }
 
 // 워쳐는 진짜 파일을 읽는다(findRollout·JsonlTail). fake timer가 걸린 동안에는 실제 fs I/O 완료
-// 콜백이 돌지 않아, 타이머만 진행시키면 폴링이 파일을 못 본 채로 끝난다(codexRolling.test.ts와 같은
+// 콜백이 돌지 않아, 타이머만 진행시키면 폴링이 파일을 못 본 채로 끝난다(codexCoordinator.test.ts와 같은
 // 문제, 같은 해법). fake 타이머를 진행시킨 뒤 실제 타이머로 이벤트 루프에 시간을 줘서 I/O를 정착시킨다.
 const realSetTimeout = setTimeout
 const settleIo = async (): Promise<void> => {

@@ -1,4 +1,4 @@
-// 목(mock) 계정으로 돌리는 롤링 시나리오 테스트. rolling.test.ts가 규약을 단위로 쪼개 검증한다면
+// 목(mock) 계정으로 돌리는 롤링 시나리오 테스트. claudeCoordinator.test.ts가 규약을 단위로 쪼개 검증한다면
 // 이 파일은 진짜 RollingCoordinator에 가짜 계정·가짜 statusline을 물려 "한도 → 전환/대기 → 재개"가
 // 처음부터 끝까지 어떤 순서로 일어나는지를 타임라인으로 찍어 눈으로 확인하기 위한 것이다.
 // 부작용(spawn/kill/copy/write/state/log)은 전부 주입된 deps로 기록만 하고 실제로는 아무것도 하지 않는다.
@@ -19,7 +19,7 @@ const acc = (id: string, label: string): Account => ({
   createdAt: '2026-08-01T00:00:00Z'
 })
 
-// 통짜 리터럴 금지 관례는 rolling.test.ts와 동일 — 이 파일이 롤링 세션 PTY로 흘러가도 스캐너를 물리지 않는다.
+// 통짜 리터럴 금지 관례는 claudeCoordinator.test.ts와 동일 — 이 파일이 롤링 세션 PTY로 흘러가도 스캐너를 물리지 않는다.
 const LIMIT_TEXT = 'Claude usage limit ' + 'reached ∙ resets 3am'
 
 const mkPayload = (o: {

@@ -124,7 +124,7 @@ describe('parseResetTime', () => {
     // 실측: rate_limit 기록이 자기 reset 시각보다 7.2s·9s 전에 쓰였다(문구가 "몇 초 뒤 reset"을
     // 말한다). recordRecovery가 이 기록을 처리하는 시점(this.now())은 15초 틱 + I/O 대기 뒤라 이미
     // stated 시각을 지나 있을 수 있다 — 그 지연된 시각을 now로 넘기면(버그) 오늘이 이미 지났다고
-    // 오판해 하루를 더한다. 기록 자신의 시각(hit.at, rolling.ts의 refAt)을 넘기면(수정) 그 시점엔
+    // 오판해 하루를 더한다. 기록 자신의 시각(hit.at, claudeCoordinator.ts의 refAt)을 넘기면(수정) 그 시점엔
     // 아직 stated 시각 전이므로 day-roll이 트리거되지 않고 당일로 정확히 남는다.
     const statedAt = KST(2026, 7, 3, 11, 0)
     const hitAt = statedAt - 7_000 // 기록이 stated 시각보다 7초 전에 쓰였다 — 실측 사례
