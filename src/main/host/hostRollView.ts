@@ -43,8 +43,9 @@ export interface HostRollView {
 }
 
 export function createHostRollView(d: {
-  /** Adopts the new session's pty (ipc.ts's takeSessionsBack with that pty id). */
-  adopt(ptyId: string | null): Promise<void>
+  /** Adopts the new session: its pty (ipc.ts's takeSessionsBack with that pty id) or, for a chat roll,
+   *  its line process (`session-rolled.procId`, chat takeover). */
+  adopt(ptyId: string | null, procId: string | null): Promise<void>
   /** The app's fan-out (index.ts fanOutRollEvent). Always without orchestration: the Host rekeyed. */
   forward(channel: 'session:rolled' | 'session:rollState', payload: unknown, opts: { orchestration: false }): void
   log(m: string): void
@@ -129,7 +130,7 @@ export function createHostRollView(d: {
       inFlight.set(m.info.id, m.oldSessionId)
       // Wrapped so a synchronous throw from adopt is the same failed adoption as a rejection.
       void Promise.resolve()
-        .then(() => d.adopt(m.ptyId))
+        .then(() => d.adopt(m.ptyId, m.procId ?? null))
         .catch((err) => d.log(`host roll view: the rolled session ${m.info.id} could not be adopted first: ${String(err)}`))
         .then(() => {
           const was = last.get(m.oldSessionId)

@@ -24,21 +24,46 @@ export function hostSessionByNative(
   return null
 }
 
-/** Asks the Host (its `pty-list`, bounded by that call's own deadline) only when it rolls. Any failure —
- *  no list, no answer, a throw — is null: the guard then behaves as it did before, rather than blocking
- *  a resume on a Host that is not there. */
+/** Chat takeover (Task 9 carry): the session id of the live chat proc whose note carries this native id.
+ *  A chat note's `threadId` is its native id for both providers (claude's session id, codex's thread),
+ *  kept current by whichever adapter is the proc's writer; `nativeSessionId` is accepted as well. The app
+ *  registers no chain for a chat the Host rolls (R8), so no coordinator index here knows it. */
+export function hostChatByNative(entries: readonly PtyEntry[], native: string): string | null {
+  for (const e of entries) {
+    if (!e.alive || e.meta?.kind !== 'chat') continue
+    const r = e.meta.restore
+    if (r.threadId === native || r.nativeSessionId === native) return e.meta.id
+  }
+  return null
+}
+
+/** Asks the Host (its `pty-list`, and its `proc-list` when `listProcs` is given, each bounded by that
+ *  call's own deadline) only when it rolls. Any failure — no list, no answer, a throw — is null: the guard
+ *  then behaves as it did before, rather than blocking a resume on a Host that is not there. */
 export async function findHostHeldNative(
   d: {
     hostRolls: boolean
     list: (() => Promise<PtyEntry[] | null>) | null
+    /** The Host's line processes; given only in front of a Host that takes chats over. */
+    listProcs?: (() => Promise<PtyEntry[] | null>) | null
     isCodexAccount: (accountId: string) => boolean
   },
   native: string
 ): Promise<string | null> {
-  if (!d.hostRolls || !d.list) return null
+  if (!d.hostRolls) return null
+  let found: string | null = null
+  if (d.list) {
+    try {
+      const entries = await d.list()
+      found = entries ? hostSessionByNative(entries, native, d.isCodexAccount) : null
+    } catch {
+      found = null
+    }
+  }
+  if (found !== null || !d.listProcs) return found
   try {
-    const entries = await d.list()
-    return entries ? hostSessionByNative(entries, native, d.isCodexAccount) : null
+    const procs = await d.listProcs()
+    return procs ? hostChatByNative(procs, native) : null
   } catch {
     return null
   }

@@ -235,6 +235,41 @@ describe('reattachSessions — line processes', () => {
     const h = deps({ list: async () => [], listProcs: async () => [procEntry({ alive: false })] })
     expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 0, sessions: [], chats: [] })
   })
+  // Review Focus 2.
+  it('defers a chat proc the Host is still starting: neither adopted nor killed, and counted as live', async () => {
+    const chat = vi.fn(() => true)
+    const h = deps({
+      list: async () => [],
+      listProcs: async () => [{ id: 'p9', pid: 1, alive: true, meta: { kind: 'chat', id: 'c9', restore: { hostStarting: true } } }],
+      deferProc: (e: PtyEntry) => e.meta?.restore.hostStarting === true
+    })
+    h.d.adopters.chat = chat
+    const r = await reattachSessions(h.d as never)
+    expect(chat).not.toHaveBeenCalled()
+    expect(h.killedProcs).toEqual([])
+    expect(h.attachedProcs).toEqual([]) // no proc-attach: the Host stays the writer through its handshake
+    expect(r.chats).toEqual(['c9'])
+    expect(r.refused).toBe(0)
+  })
+  it('onlyProc takes back that one line process and lists no pty', async () => {
+    const list = vi.fn(async () => [entry()])
+    const chat = vi.fn((_a: { id: string }) => true)
+    const h = deps({
+      list,
+      listProcs: async () => [
+        { id: 'p1', pid: 1, alive: true, meta: { kind: 'chat', id: 'c1', restore: {} } },
+        { id: 'p2', pid: 2, alive: true, meta: { kind: 'chat', id: 'c2', restore: {} } },
+        { id: 'p3', pid: 3, alive: true, meta: null }
+      ],
+      onlyProc: 'p2'
+    })
+    h.d.adopters.chat = chat
+    const r = await reattachSessions(h.d as never)
+    expect(list).not.toHaveBeenCalled()
+    expect(chat.mock.calls.map((c) => c[0].id)).toEqual(['c2'])
+    expect(h.killedProcs).toEqual([]) // p3 is not this sweep's
+    expect(r).toEqual({ adopted: 1, refused: 0, sessions: [], chats: ['c2'] })
+  })
   it('without listProcs there is no proc sweep', async () => {
     const h = deps({ list: async () => [] })
     delete (h.d as { listProcs?: unknown }).listProcs

@@ -64,6 +64,12 @@ export interface ReattachDeps {
   /** Take back only the pty with this Host id — the entry a `pty-opened` named. Other entries are
    *  left exactly as they are: not adopted, not killed, not counted. Line processes are not listed. */
   only?: string
+  /** Take back only the line process with this Host id (a chat roll's `session-rolled.procId`); ptys are
+   *  not listed, and every other line process is left exactly as it is. */
+  onlyProc?: string
+  /** A chat proc this sweep must leave alone for now: neither adopted nor killed, no proc-attach sent,
+   *  and reported live (chat takeover P5: the Host is still in its handshake and carry-on). */
+  deferProc?(e: PtyEntry): boolean
 }
 
 export interface ReattachResult {
@@ -86,7 +92,8 @@ export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResu
   let adopted = 0
   let refused = 0
   const sessions: string[] = []
-  for (const e of await deps.list()) {
+  // A chat roll's push names one line process; the pty list is not this sweep's at all.
+  for (const e of deps.onlyProc !== undefined ? [] : await deps.list()) {
     // Not this sweep's: a `pty-opened` names one session the Host started, and every other entry is
     // one the app took back already, or one the next full sweep decides about. Killing a note-less
     // entry from here would be a verdict this sweep was never asked to give.
@@ -140,6 +147,8 @@ export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResu
   // A pty-opened is about a pty, never a line process, so a sweep limited to one skips them all.
   if (deps.only === undefined && deps.listProcs && deps.attachProc && deps.sendAttachProc && deps.killProc) {
     for (const e of await deps.listProcs()) {
+      // Not this sweep's, as with `only` for ptys: every other entry is left exactly as it is.
+      if (deps.onlyProc !== undefined && e.id !== deps.onlyProc) continue
       if (!e.alive) continue
       if (!e.meta) {
         deps.log(`proc ${e.id} has no note saying what it is — killing it rather than leaving it ownerless`)
@@ -151,6 +160,14 @@ export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResu
         deps.log(`proc ${e.id} carries a ${e.meta.kind} note, which is not a line process — killing it`)
         deps.killProc(e.id)
         refused += 1
+        continue
+      }
+      // P5: the Host owns this proc's handshake and carry-on until its note drops `hostStarting`. A
+      // proc-attach now would make this app the writer mid-handshake, and a refusal would kill it. Live,
+      // though: the boot cleanup must not write it off.
+      if (deps.deferProc?.(e)) {
+        deps.log(`proc ${e.id}: the Host is still starting it — left for its push`)
+        chats.push(e.meta.id)
         continue
       }
       if (deps.heldLive({ kind: 'chat', id: e.meta.id })) {

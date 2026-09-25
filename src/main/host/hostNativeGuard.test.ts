@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { hostSessionByNative, findHostHeldNative, nativeOfForwardedRekey } from './hostNativeGuard'
+import { hostSessionByNative, hostChatByNative, findHostHeldNative, nativeOfForwardedRekey } from './hostNativeGuard'
 import type { PtyEntry } from '../../core/host/protocol'
 
 const entry = (id: string, restore: Record<string, unknown>, o: { alive?: boolean; kind?: 'session' | 'chat' } = {}): PtyEntry => ({
@@ -42,6 +42,35 @@ describe('findHostHeldNative (S6 Task 14 fix I1a)', () => {
     expect(
       await findHostHeldNative({ hostRolls: true, list: async () => { throw new Error('gone') }, isCodexAccount: codexAccounts }, 'n1')
     ).toBeNull()
+  })
+})
+
+// Chat takeover Task 9 (carry: native id). The app registers no chain for a chat the Host rolls (R8), so
+// neither coordinator index knows its native id; the proc note's `threadId` (the writer's adapter keeps it:
+// claude's session id, codex's thread) is where the guard finds it.
+describe('hostChatByNative (chat takeover, the history guard)', () => {
+  it('finds the live chat whose proc note carries that thread or session id', () => {
+    const entries = [entry('c1', { accountId: 'a1', threadId: 'th1' }, { kind: 'chat' }), entry('c2', { accountId: 'cx', threadId: 'th2' }, { kind: 'chat' })]
+    expect(hostChatByNative(entries, 'th2')).toBe('c2')
+    expect(hostChatByNative([entry('c3', { accountId: 'a1', nativeSessionId: 'n3' }, { kind: 'chat' })], 'n3')).toBe('c3')
+  })
+  it('skips dead procs, pty notes and notes that name nothing', () => {
+    const entries = [
+      entry('c1', { threadId: 'th1' }, { kind: 'chat', alive: false }),
+      entry('s1', { threadId: 'th1' }),
+      { id: 'proc-x', pid: 1, alive: true, meta: null }
+    ]
+    expect(hostChatByNative(entries, 'th1')).toBeNull()
+  })
+  it('findHostHeldNative asks the proc list too, and refuses a history resume of a Host-rolled chat', async () => {
+    const listProcs = vi.fn(async () => [entry('c2', { accountId: 'a1', threadId: 'th2', rolledBy: 'host' }, { kind: 'chat' })])
+    expect(await findHostHeldNative({ hostRolls: true, list: async () => [], listProcs, isCodexAccount: codexAccounts }, 'th2')).toBe('c2')
+    // A proc list that does not answer, or throws, is today's null; a Host that does not roll is not asked.
+    expect(await findHostHeldNative({ hostRolls: true, list: async () => [], listProcs: async () => null, isCodexAccount: codexAccounts }, 'th2')).toBeNull()
+    expect(
+      await findHostHeldNative({ hostRolls: true, list: async () => [], listProcs: async () => { throw new Error('gone') }, isCodexAccount: codexAccounts }, 'th2')
+    ).toBeNull()
+    expect(await findHostHeldNative({ hostRolls: false, list: async () => [], listProcs, isCodexAccount: codexAccounts }, 'th2')).toBeNull()
   })
 })
 

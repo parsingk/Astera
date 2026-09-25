@@ -38,7 +38,7 @@ import { hostPidFilePath, parseHostPidFile } from '../core/host/pidFile'
 import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
-import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling } from './host/outdated'
+import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksChatTakeover } from './host/outdated'
 import { askHostCoordinatorIdle } from './host/coordinatorIdle'
 import { createBlockSync } from './host/blockSync'
 import { createOfflineRolls } from './host/offlineRolls'
@@ -46,6 +46,7 @@ import type { BlockRegistry } from '../core/rolling/blockRegistry'
 import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced, announcesAdopted } from './host/hostRollView'
 import { findHostHeldNative, nativeOfForwardedRekey } from './host/hostNativeGuard'
 import { applyAdoptRolling } from './host/adoptRolling'
+import { chatAdoptPlan, hostStartingDefers } from './chatAdopt'
 import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute } from './host/worktreeRoute'
 import { createHostGitOps } from './host/hostGitOps'
@@ -120,10 +121,10 @@ import {
   writeOffDispatch
 } from '../core/orchestration/state'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
-import { chatPendingOf } from '../core/sessions/chatRead'
+import { chatPendingOf, chatPromptsOf } from '../core/sessions/chatRead'
 import type { ChatAnswer, ChatContextUsage, RateLimitInfo } from '../core/chat/types'
 import { chatSessionUsage } from '../core/usage/chatSession'
-import { isPermissionMode } from '../core/chat/types'
+import { isPermissionMode, isUnattendedPermission } from '../core/chat/types'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
 import { sameSnapshot, snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
 import { ensureProject } from '../core/orchestration/projects'
@@ -1044,6 +1045,9 @@ export function registerIpc(
   /** Takes back the one pty a Host roll respawned into (`takeSessionsBack` with its id). Null until
    *  `startHostClient` has built the sweep queue, and then for good: nothing is pushed before then. */
   let takeBackRolledPty: ((ptyId: string) => Promise<unknown>) | null = null
+  /** Chat takeover: the same for the one line process a Host chat roll respawned into
+   *  (`session-rolled.procId`). Null until `startHostClient` has built the sweep queue. */
+  let takeBackRolledProc: ((procId: string) => Promise<unknown>) | null = null
   /** The native session id (claude's session, codex's thread) each adopted session's note carried
    *  (S6 Task 13), by session id — the history guard's view of a session the Host rolls, which no
    *  coordinator here holds. Filled by the pty adopter, cleared on exit. */
@@ -1066,6 +1070,9 @@ export function registerIpc(
       {
         hostRolls: hostSpeaksRolling(hostClient?.status() ?? { connected: false, features: [] }),
         list: hostPtyList,
+        // Chat takeover (Task 9 carry): a chat the Host rolls has no chain here (R8), so its native id is
+        // looked for in the proc notes too, whose `threadId` the writer's adapter keeps current.
+        listProcs: hostSpeaksChatTakeover(hostClient?.status() ?? { connected: false, features: [] }) ? hostProcList : null,
         isCodexAccount: (accountId) => {
           try {
             return providerOf(core.accounts.get(accountId)) === 'codex'
@@ -1076,7 +1083,12 @@ export function registerIpc(
       },
       native
     )
-    return id ? (core.sessions.list().find((x) => x.id === id && x.status === 'running') ?? null) : null
+    if (!id) return null
+    return (
+      core.sessions.list().find((x) => x.id === id && x.status === 'running') ??
+      core.chat.list().find((x) => x.id === id && x.status === 'running') ??
+      null
+    )
   }
   /** The app's view of the Host's rolls (S6 §3.4) — the two pushes, turned into the app's own roll
    *  fan-out without its orchestration tap. Built here rather than in `startHostClient` because the
@@ -1092,8 +1104,11 @@ export function registerIpc(
     return providerOfSession(id, sessions, (x) => core.accounts.get(x)) === 'codex'
   }
   const hostRollView = createHostRollView({
-    adopt: async (ptyId) => {
+    adopt: async (ptyId, procId) => {
       if (ptyId && takeBackRolledPty) await takeBackRolledPty(ptyId)
+      // A chat roll's new half is a line process (chat takeover): the push comes only after its
+      // handshake, so its note no longer says hostStarting and the sweep adopts it.
+      else if (procId && takeBackRolledProc) await takeBackRolledProc(procId)
     },
     forward: (channel, payload, opts) => {
       const codex = isCodexPayload(channel, payload)
@@ -1107,7 +1122,8 @@ export function registerIpc(
     // Fix round 1, I2: the old session's exit waits until the mirror no longer names it.
     orchHolds: (id) => orchHoldsSession(orchMirror.loaded() ? orchMirror.getState() : null, id),
     // Fix round 1, 3: a rekey whose new session was not adopted leaves its forkSeen for the adopter.
-    isAdopted: (id) => core.sessions.list().some((x) => x.id === id)
+    // A chat roll's new half is a chat session (chat takeover): held too, so no fork is left pending.
+    isAdopted: (id) => core.sessions.list().some((x) => x.id === id) || core.chat.has(id)
   })
   /** Sessions whose note says the Host rolls them (fix round 1, 4), beside the ones hostRollView has
    *  heard about: the only sessions `rolling.state` asks the Host for. Cleared on exit. */
@@ -2002,6 +2018,8 @@ export function registerIpc(
         slackNotify: opts.slackNotify === true,
         rollAccountIds: opts.rollAccountIds,
         rollPrompt: opts.rollPrompt,
+        // Chat takeover: what a Host does with a prompt nobody is there to answer. Hold unless asked.
+        unattendedPermission: isUnattendedPermission(opts.unattendedPermission) ? opts.unattendedPermission : 'hold',
         bypassSignal
       })
       // The schedule is the one feature this slice attaches to a chat session (chat-sessions slice 4
@@ -3228,6 +3246,28 @@ export function registerIpc(
       // 넘겨 앱의 턴 상태가 제 것으로 남는다. 카드가 열려 있으면 치지 않고 그 카드를 돌려준다 —
       // 답은 앱에서 사람이 한다(R4.3). Slack 은 여기서 카드에 답하지만, 셸에서 온 글자를 승인이나
       // 질문의 답으로 읽는 것은 이 명령의 약속이 아니다.
+      // Chat takeover C3: the open permission prompts of the chat sessions this app holds (it is their
+      // writer), and an answer to one of them. The Host forwards these only to an app that yields
+      // chat-takeover (Task 8). A question is answered in Astera only (P6).
+      chatPrompts: async (sid) => ({
+        prompts: core.chat
+          .list()
+          .filter((i) => !sid || i.id === sid)
+          .flatMap((i) => chatPromptsOf(i.id, core.chat.pendingOf(i.id))),
+        complete: true
+      }),
+      chatAnswer: async (sid, rid, decision) => {
+        if (!core.chat.has(sid)) return { answered: false, reason: 'not-held' }
+        const r = core.chat.pendingOf(sid).find((x) => x.id === rid)
+        if (!r) return { answered: false, reason: 'not-open' }
+        if (r.kind === 'question') return { answered: false, reason: 'question' }
+        try {
+          await core.chat.answer(sid, rid, { kind: 'approval', decision: decision === 'allow' ? 'accept' : 'decline' })
+          return { answered: true }
+        } catch {
+          return { answered: false, reason: 'not-open' }
+        }
+      },
       chatSend: async (sessionId, text) => {
         // 아직 되찾지 않은 세션 — 지금 상태 때문이다. 오류(1)가 아니라 거절(6)로 돌려준다.
         if (!core.chat.has(sessionId)) return { sent: false, reason: 'not-held' }
@@ -5978,8 +6018,8 @@ export function registerIpc(
      *  to replay the scrollback again. Queued rather than deduplicated: a sweep that came back with
      *  nothing is not an answer the next one can reuse. */
     let sweeps: Promise<unknown> = Promise.resolve()
-    const takeSessionsBack = (why: string, only?: string): Promise<SessionsTakenBack> => {
-      const next = sweeps.then(() => sweep(why, only))
+    const takeSessionsBack = (why: string, only?: string, onlyProc?: string): Promise<SessionsTakenBack> => {
+      const next = sweeps.then(() => sweep(why, only, onlyProc))
       // The queue must not break on a sweep that threw — the caller keeps that rejection.
       sweeps = next.catch(() => undefined)
       return next
@@ -5989,16 +6029,20 @@ export function registerIpc(
     // sweep that push queued usually adopts it first and this one finds it held — either way the pty is
     // adopted before the rekey goes out, and hostRollView.adopting is already true when the adopter runs.
     takeBackRolledPty = (ptyId) => takeSessionsBack('the Host rolled a session', ptyId)
+    // Chat takeover: a Host chat roll's new line process, the same way, limited to that one proc.
+    takeBackRolledProc = (procId) => takeSessionsBack('the Host rolled a chat session', undefined, procId)
     // The two roll pushes. `pushed` never throws.
     client.onMessage((m) => hostRollView.pushed(m))
     /** `only`: the Host id of the one pty a `pty-opened` named. Every other entry is left alone, and
-     *  line processes are not asked for (`ReattachDeps.only`). */
-    const sweep = async (why: string, only?: string): Promise<SessionsTakenBack> => {
+     *  line processes are not asked for (`ReattachDeps.only`). `onlyProc`: the Host id of the one line
+     *  process a chat roll's `session-rolled` named; the pty list is then not asked for
+     *  (`ReattachDeps.onlyProc`). */
+    const sweep = async (why: string, only?: string, onlyProc?: string): Promise<SessionsTakenBack> => {
       // Asked here rather than from inside reattach's `list` dep so the unanswered case can be its
       // own answer: reattach has no way to say "I was told nothing", and an empty list would have
       // it adopt nothing and report nothing adopted, which reads identically to a Host that really
       // is holding nothing.
-      const entries = await listPtys(transport)
+      const entries = onlyProc !== undefined ? [] : await listPtys(transport)
       if (entries === null) {
         hostLog(
           'host: the Host did not answer the pty list — nothing was taken back, and what it is still running is unknown, so no worker is written off'
@@ -6250,6 +6294,17 @@ export function registerIpc(
           chat: (a) => {
             const info = core.chat.adopt(a)
             if (!info) return false
+            // Chat takeover (Task 9): who rolls it (R8) and whether its tab is announced. `defer` is
+            // already answered: reattach's `deferProc` never hands this adopter a proc the Host is
+            // still starting.
+            const plan = chatAdoptPlan({
+              restore: a.restore,
+              hostSpeaksChatTakeover: hostSpeaksChatTakeover(client.status()),
+              rollAccounts: info.rollAccountIds?.length ?? 0,
+              adopting: hostRollView.adopting(info.id),
+              appHoldsOld: (old) => core.chat.has(old),
+              rolledFrom: hostRollView.rolledFrom(info.id)
+            })
             const rolloutPath = typeof a.restore.rolloutPath === 'string' ? a.restore.rolloutPath : undefined
             const threadId = typeof a.restore.threadId === 'string' ? a.restore.threadId : undefined
             // Everything but a thread-bearing note is registered here. A thread-bearing one makes
@@ -6282,11 +6337,52 @@ export function registerIpc(
             // calls find no chain and return. codex is handed the pair here instead; claude's arrives
             // just after, from the transcript lookup that same `ready` started — it resolves on a later
             // microtask, so it cannot run before this line.
+            //
+            // Chat takeover (Task 9, R8): a chain the Host marked (`rolledBy: 'host'`) in front of a Host
+            // that takes chats over stays the Host's — no chain here, and one this app still held from
+            // before a socket drop goes. Otherwise applyAdoptRolling decides as it does for a pty: the
+            // snapshot the note carries is restored (a Host-marked one in front of an older Host too,
+            // reported, since that Host ran it), and a note without one registers as before. Chat
+            // sessions make no Work Unit, so the fork acts are no-ops.
             if ((info.rollAccountIds?.length ?? 0) >= 1) {
               try {
                 const coordinator = rollCoordinatorForSession(info.id, core.chat.list(), (id) => core.accounts.get(id))
-                if (coordinator === 'codexRolling') codexRolling?.register(info, rolloutPath, false, false, threadId)
-                else if (coordinator === 'rolling') rolling?.register(info)
+                const unregister = (): void => {
+                  rolling?.unregister(info.id)
+                  codexRolling?.unregister(info.id)
+                }
+                if (plan.rolling === 'host') unregister()
+                else
+                  applyAdoptRolling(
+                    {
+                      restore: a.restore,
+                      hostRolls: hostSpeaksChatTakeover(client.status()),
+                      rollAccounts: info.rollAccountIds?.length ?? 0,
+                      adopting: hostRollView.adopting(info.id),
+                      pendingFork: hostRollView.takePendingFork(info.id)
+                    },
+                    {
+                      has: () =>
+                        coordinator === 'codexRolling'
+                          ? (codexRolling?.has(info.id) ?? false)
+                          : coordinator === 'rolling'
+                            ? (rolling?.has(info.id) ?? false)
+                            : false,
+                      restore: (snap, report) =>
+                        coordinator === 'codexRolling'
+                          ? (codexRolling?.restore(info, snap, { report }) ?? false)
+                          : coordinator === 'rolling'
+                            ? (rolling?.restore(info, snap, { report }) ?? false)
+                            : false,
+                      registerAsBefore: () => {
+                        if (coordinator === 'codexRolling') codexRolling?.register(info, rolloutPath, false, false, threadId)
+                        else if (coordinator === 'rolling') rolling?.register(info)
+                      },
+                      unregister,
+                      fork: () => {},
+                      rememberForkSeen: () => {}
+                    }
+                  )
               } catch (err) {
                 /* A failed rolling registration does not block taking the session back */
                 hostLog(`host: chat ${info.id} rolling registration failed: ${String(err)}`)
@@ -6314,16 +6410,26 @@ export function registerIpc(
                 /* A failed Slack registration does not block taking the session back */
               }
             }
-            try {
-              send('session:created', info)
-            } catch (err) {
-              hostLog(`host: session:created emit failed chat=${info.id}: ${String(err)}`)
+            // What rolling.state may ask the Host about, as for a pty: a chat its note says the Host rolls.
+            if (plan.rolling === 'host') hostOwned.add(info.id)
+            // The new half of a Host chat roll gets its tab from the forwarded `session:rolled`, which
+            // re-points the old one (Review Focus 1); a created event here would put a second tab beside it.
+            if (plan.announce) {
+              try {
+                send('session:created', info)
+              } catch (err) {
+                hostLog(`host: session:created emit failed chat=${info.id}: ${String(err)}`)
+              }
             }
             return true
           }
         },
         log: (m) => hostLog(`host: ${m}`),
-        only
+        // P5: a chat proc the Host is still starting (its handshake and carry-on) is left to it; the
+        // `session-rolled` push, which comes only after the key is cleared, takes it back.
+        deferProc: (e) => e.meta?.kind === 'chat' && hostStartingDefers(e.meta.restore, hostSpeaksChatTakeover(client.status())),
+        only,
+        onlyProc
       })
       // procEntries === null here means a speaking Host did not answer the proc list: chats is then
       // not a fact, the same reason a null pty list returns 'unknown' above rather than an empty list.
@@ -6717,6 +6823,12 @@ export function registerIpc(
     // three is a bug rather than a choice — refused here rather than forwarded to the CLI.
     if (!isPermissionMode(mode)) throw new Error(`INVALID_PERMISSION_MODE: ${String(mode)}`)
     return core.chat.setPermissionMode(sessionId, mode)
+  })
+  // Chat takeover: the session's unattended permission policy (hold, or deny after 60 s), written into
+  // its note so a Host carrying it on reads it. A value that is not one of the two is a bug.
+  ipcMain.handle('chat.setUnattendedPermission', (_e, sid: string, v: unknown) => {
+    if (!isUnattendedPermission(v)) throw new Error(`INVALID_UNATTENDED_PERMISSION: ${String(v)}`)
+    return core.chat.setUnattendedPermission(sid, v)
   })
   ipcMain.handle('chat.listPermissionModes', (_e, sessionId: string) =>
     core.chat.listPermissionModes(sessionId)

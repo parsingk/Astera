@@ -23,6 +23,16 @@ describe('createHostRollView (S6 §3.4)', () => {
     expect(v.holds('s1')).toBe(false)
     expect(v.adopting('s2')).toBe(false)
   })
+  it('adopts the new chat proc of a pushed chat roll before it forwards the rekey', async () => {
+    const order: string[] = []
+    const view = createHostRollView({
+      adopt: async (ptyId, procId) => { order.push(`adopt ${ptyId} ${procId}`) },
+      forward: (channel) => order.push(`forward ${channel}`),
+      log: () => {}
+    })
+    view.pushed({ t: 'session-rolled', oldSessionId: 'c1', info: { id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' }, ptyId: null, procId: 'p2' })
+    await vi.waitFor(() => expect(order).toEqual(['adopt null p2', 'forward session:rolled']))
+  })
   it('keeps the last lasting state per session, clears it on none, and follows a rekey', async () => {
     const v = createHostRollView({ adopt: async () => {}, forward: () => {}, log: () => {} })
     v.pushed({ t: 'roll-state', event: { sessionId: 's1', state: 'waiting', nextRetryAt: 'x' } })
