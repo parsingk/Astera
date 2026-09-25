@@ -1271,8 +1271,8 @@ over" entry under "Known limits after S6" points back here.
   written. A note write is not gated on the `chat-takeover` feature (P9): it is storage, so an older Host
   merges it and never reads it, and the no-Host fallback simply has no note; only the calls
   (`chatPrompts`, `chatAnswer`, the deferred adoption) are gated. `ChatSessionManager.spawn` writes
-  `carryOn` (truncated to `MAX_SNAPSHOT_PROMPT_CHARS`, as a pty roll's briefing already is) and
-  `carrySent: false`; whoever sends it marks `carrySent: true` before writing the turn, at most once, so a
+  `carryOn` and `carrySent: false` when the prompt fits in `MAX_SNAPSHOT_PROMPT_CHARS` (the snapshot's
+  bound); a longer prompt is not carried in the note at all, and neither key is written; whoever sends it marks `carrySent: true` before writing the turn, at most once, so a
   writer change across a roll cannot type the prompt twice (P4). A carry-on lost between that mark and
   its write, a crash in between with nobody left to notice, is not re-sent (known limit, below).
   `ChatSessionManager.adopt` now reads `chosenModel` back out of the note (P14): before this, an adopted
@@ -1325,16 +1325,16 @@ over" entry under "Known limits after S6" points back here.
   the pty spawner (the Task 5 review's hard carry). A Host-spawned chat proc's note says
   `hostStarting: true` until its handshake and carry-on settle (P5): `HostChats.spawn` writes it, and
   `HostChats.started(id)`, awaited by the roll's push before it announces `session-rolled`, clears it
-  directly through the proc note once the manager's own `started` chain resolves, or a short timeout
-  passes, so an app can never adopt a proc mid handshake and become its writer partway through a codex
-  `thread/resume`. The push itself now carries `procId` (A93), for the app to adopt before it forwards the
+  directly through the proc note once the manager's own `started` chain resolves, so an app can never
+  adopt a proc mid handshake and become its writer partway through a codex `thread/resume` (A94 on the
+  bound). The push itself now carries `procId` (A93), for the app to adopt before it forwards the
   rekey, exactly as a pty roll's `ptyId` is adopted first, and is skipped with a log line if the new proc
   had already ended before it started. `hostMayAct` (`src/core/host/rollOwner.ts`) took an optional
   `yieldName`, so a chat chain's holders are asked for `HOST_YIELD_CHAT_TAKEOVER` rather than plain
   `HOST_YIELD_ROLLING` (P11): an app that yields rolling but not chat-takeover, and holds the proc, quiets
   the Host's chat chain the same way an older app quiets a pty chain, without touching its rolling of
-  ptys. Pinned by `src/host/chatRollFeed.test.ts`, `rolling.test.ts` and `rolling.integration.test.ts`,
-  the chat rig.
+  ptys. Pinned by `src/host/chatRollFeed.test.ts`, `rolling.test.ts` and
+  `chatRolling.integration.test.ts`, the chat rig.
 - **A90. The unattended permission policy (Task 7, plan P6, P12).** Spec §3.5 and C3: per session,
   `unattendedPermission` is `hold` (wait) or `deny-after-60s` (answer deny and let the turn continue), and
   it applies only while the Host is the writer. What shipped, `src/host/chatPolicy.ts`
@@ -1372,7 +1372,9 @@ over" entry under "Known limits after S6" points back here.
   refuses a send the same way the app does, naming the card, rather than typing behind it. `chats answer`
   is for a person (the controller's ruling, fix round 1): every caller inside an agent session, worker or
   coordinator alike, is refused 403, "run it from a shell, not from inside an agent session"; the shell
-  (no `ASTERA_SESSION`, so an empty session id) and the app may call it. `chats pending` stays open to
+  (no `ASTERA_SESSION`, so an empty session id) and the app may call it. The check reads the caller's
+  environment, and a chat CLI gets `ASTERA_SESSION` too since A94, so it is a guard against an agent
+  answering by accident, not a boundary (known limit, below). `chats pending` stays open to
   every caller, as `sessions` does. An app holding the proc without the `chat-takeover` yield is not asked
   (fix round 1, Minor 2): forwarding to it would only fail as the Host's own generic error, after the
   funnel had already marked the answer as an effect, so it is refused `not-held` with "held by an Astera
@@ -1381,7 +1383,7 @@ over" entry under "Known limits after S6" points back here.
   count the proc's writes around the synchronous part of the call and only fire their mark once that
   count actually grew, so a send or an answer that reached nothing leaves no receipt to retry against.
   Pinned by `src/core/orchestration/command.test.ts`, `src/host/orchDeps.test.ts`,
-  `src/cli/cliPublic.test.ts` and `cliHuman.test.ts`.
+  `src/core/orchestration/cliPublic.test.ts` and `cliHuman.test.ts`.
 - **A92. The app side: adopting a Host-rolled chat proc, and R8 for chats (Task 9).** What shipped,
   `src/main/chatAdopt.ts` (`chatAdoptPlan`) and its wiring in `src/main/ipc.ts`,
   `src/main/host/reattach.ts`, `hostRollView.ts` and `hostNativeGuard.ts`: a note marked
@@ -1424,6 +1426,42 @@ over" entry under "Known limits after S6" points back here.
   `orch-act`s, Host to an attached app, role app only, `chatPrompts` and `chatAnswer` (`HOST_CHATS`, A91);
   and the note keys `unattendedPermission`, `chosenModel`, `carryOn`, `carrySent` and `hostStarting` (A87,
   A89), read and written by whichever side is the writer. See the row added to §7.2's table below.
+- **A94. After the final review and the end to end run.** What changed, each with a test that failed
+  first:
+  - *The start bound (I1).* `HostChats.started` no longer gives up after 45 s. A codex handshake is a
+    chain of requests, each allowed `CHAT_REQUEST_TIMEOUT_MS` (30 s), so a slow machine could still be
+    starting when the old bound cleared `hostStarting` and pushed the roll, and the carry-on was then
+    left for a writer that never sent it. The bound is now `CHAT_START_PUSH_MS`, six request deadlines
+    (initialize, the two lists, `thread/resume` and the carry-on's `turn/start`, plus one as margin).
+    Until the start settles the mark stays and nothing is pushed; a start that has not settled by then
+    is killed, the mark is left, and the roll is not announced.
+  - *The app sends a carry-on the Host left (I1).* `ChatSessionManager.sendCarryOn` sends an adopted
+    note's `carryOn` whose `carrySent` is false, not while `hostStarting`, by P4's rule: marked sent
+    before the write, the mark taken back when no line reached the proc. The app calls it through
+    reattach's `afterAttachProc`, right after its `proc-attach`, only for a Host-rolled note in front of
+    a Host that speaks `chat-takeover` (`hostCarryOnIsOurs`).
+  - *A Host roll reads the note (I2).* The respawn's unattended policy and `chosenModelOf` read the note
+    first, as `unattendedOf` already did: while the app is the writer, the person's changes reach only
+    the note.
+  - *`ASTERA_SESSION` for chat CLIs (I3).* `ChatSessionManager.spawn` sets it to the session id in both
+    the app and the Host, as a pty session has it, whether or not orchestration is on. Nothing relied on
+    a chat agent reading as the shell.
+  - *Takeover of a held, chainless proc (M1).* A proc the Host already holds an adapter on, with a chain
+    it does not roll, gets the chain part again (mark and restore from the snapshot), without a second
+    adopt. The restored chain starts from the snapshot alone, as a pty restore does.
+  - *The answered filter (M2).* `HostChats.requests` and `hasOpenRequest` leave out the ids the note
+    lists as answered, as `prompts` does.
+  - *The app's `chatAnswer` failures (M3).* Only "no open request" is `not-open`; any other failure is
+    `not-held` (`chatAnswerFailureOf`, shared with the Host).
+  - *The chat roll push (M4).* A `session-rolled` carrying `procId` goes only to the sockets whose hello
+    yields `chat-takeover`. An older app is not sent it.
+  - *`chatSend` routes like `chatPending` (M5).* A session the Host writes to is sent through the Host
+    adapter even with an app attached.
+  - *`rolling.json` writes (E1).* One write at a time per file, a set made while a write waits rides along
+    with it, and a rename refused with EPERM, EBUSY or EACCES is tried again up to five times.
+  - *The unattended deny's words (E2).* The CLI is told that no one answered within 60 seconds and Astera
+    denied the prompt automatically (`UNATTENDED_DENY_MESSAGE`), not "User declined in Astera". Codex's
+    answer carries no text.
 
 ## Known limits after S3
 
@@ -1764,10 +1802,11 @@ at `3db032df`.
 - **A resume in place forwarded to the app is not retried if the app refuses it.** `chats.deliver` logs
   that the app's `chatSend` did not deliver the turn and does not resend it; the same session's next roll
   or reset still resumes normally.
-- **A prompt the app answered while the Host was a reader can stay in the Host's own view until its
-  echo.** The Host filters a listed prompt against the note's `answered` ids, which claude's adapter
-  writes on every answer, but a live reader adapter's own open-request queue clears only on the CLI's own
-  echo, a `tool_result` line for claude or `serverRequest/resolved` for codex, which settles at once.
+- **A prompt the app answered while the Host was a reader stays in the Host adapter's queue until its
+  echo.** Every Host view of it (`prompts`, `requests`, `hasOpenRequest`, the deny policy) filters the
+  note's `answered` ids, which claude's adapter writes on every answer (A94). The queue itself clears
+  only on the CLI's own echo, a `tool_result` line for claude or `serverRequest/resolved` for codex. A
+  codex answer writes no `answered` id, so for codex the echo is the only thing that clears it.
 - **A failed auto-deny is retried only on the next review trigger** (Task 7 review), not on a timer of
   its own: a request or status event, a writer change, or an adopt, not immediately.
 - **A limit that arrives while a prompt is open is dropped, not deferred** (Task 6 fix round 1). The
@@ -1776,9 +1815,28 @@ at `3db032df`.
 - **The history guard only returns a chat the app holds.** A Host chat proc the app has not adopted yet,
   deferred or simply never adopted, is found in its note, but there is no live `SessionInfo` to hand back,
   so a resume by history id goes ahead unguarded. The pty guard has the same limit.
-- **`chats answer` is for a person; an agent session gets 403** (the controller's ruling, Task 8 fix
-  round 1). A worker or a coordinator calling it from inside its own session is refused; only the shell
-  and the app may call it. `chats pending` stays open to every caller.
+- **`chats answer` is for a person; an agent session gets 403, by its environment** (the controller's
+  ruling, Task 8 fix round 1; A94). A worker, a coordinator or a chat agent calling it from inside its own
+  session is refused; only the shell and the app may call it. `chats pending` stays open to every caller.
+  The check reads `ASTERA_SESSION`, which every terminal and chat session gets, so it stops an agent from
+  answering by accident but is not a boundary: an agent that clears its own environment
+  (`ASTERA_SESSION= astera chats answer ...`) reads as the shell and gets past it, as it can past every
+  role check in this CLI. A real boundary needs a secret the agent cannot read, which is out of scope.
+- **A Host-spawned chat proc whose start outlives the bound is ended, not handed over** (A94). Every step
+  of a start has its own deadline, so this takes a start that hangs past all of them; the roll's new
+  session is then gone and the chain is left with it, as after any failed respawn.
+- **The Host inherits handles the app marked inheritable** (the end to end run). The app starts the
+  Host with Node's `spawn`, `detached`, `stdio: 'ignore'` and `windowsHide` (`src/core/host/spawn.ts`).
+  On Windows, libuv's process spawn passes `bInheritHandles` as true, as it must to hand any stdio over,
+  and Node offers no way to name the handles a child may take, so every handle the app holds marked
+  inheritable goes to the Host and lives as long as it does. Node's own handles are not (libuv creates
+  its sockets, pipes and files non-inheritable); the one seen was Electron's DevTools socket: after an
+  app started with `--remote-debugging-port=9451` quit, the port stayed listening until the Host it had
+  started stopped, so the next app on that port had no DevTools. No other leak was looked for, and a
+  packaged app never opens that port. A spawn with a handle allow list, or through a launcher that does
+  not inherit, needs native code or a shell hop the app does not have; not done. Relaunch a debug app on
+  a fresh port.
+
 - **An app without the `chat-takeover` yield is not forwarded an answer.** Such an app has no
   `chatAnswer` to answer with, so the call is refused `not-held`, "answer it in Astera", instead of being
   forwarded to fail there.

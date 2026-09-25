@@ -303,7 +303,10 @@ required. A question is not a permission prompt, and answering one needs Astera 
 only within its own session, so an id open in more than one at once needs `--session`, or the call is
 refused with 2. A prompt that is no longer open, because it was already answered or the session has moved
 on, is refused with 6 and nothing is answered. Answering is for a person: called from inside an agent
-session, where `ASTERA_SESSION` is set, it is refused with 5. `chats pending` takes any caller and works
+session, terminal or chat, where `ASTERA_SESSION` is set, it is refused with 5. The check reads that
+variable from the caller's environment, so it keeps an agent from answering by accident but is not a
+boundary: an agent that clears its own environment reads as a shell and gets past it, as with every role
+check in this CLI. `chats pending` takes any caller and works
 from a shell alone, with Astera closed.
 
 **While Astera shows the Host as not answering, Jobs wait.** Astera does not take over from a Host
