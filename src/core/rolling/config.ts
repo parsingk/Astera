@@ -17,6 +17,22 @@ function isValidMap(obj: unknown): obj is Record<string, RollConfig> {
   return Object.values(obj).every(isValidConfig)
 }
 
+/** Where the Host keeps the roll configs of the chains it owns (S6 R9): one writer per file. */
+export function hostRollConfigPath(profileDir: string): string {
+  return path.join(profileDir, 'host', 'rolling.json')
+}
+
+/** One key out of a roll config file, read fresh; null when the file or the key is missing or damaged. */
+export async function readRollConfigKey(filePath: string, key: string): Promise<RollConfig | null> {
+  try {
+    const parsed: unknown = JSON.parse(await fs.readFile(filePath, 'utf8'))
+    if (!isValidMap(parsed)) return null
+    return parsed[key] ?? null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Store for the rolling config. Key = claude session id, value = RollConfig.
  * Corruption recovery follows the ProjectSettings pattern; atomic writes (tmp+rename) follow the

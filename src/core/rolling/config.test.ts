@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { RollConfigStore } from './config'
+import { RollConfigStore, hostRollConfigPath, readRollConfigKey } from './config'
+import { isSamePath } from '../files/tree'
 
 let tmp: string
 let store: RollConfigStore
@@ -51,5 +52,24 @@ describe('RollConfigStore', () => {
     const { recovered } = await fresh.load()
     expect(recovered).toBe(false)
     expect(fresh.get('any')).toBeNull()
+  })
+})
+
+describe('the Host’s roll config file (S6 R9)', () => {
+  it('lives under host/ in the profile, and one key reads back fresh', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-rollcfg-'))
+    try {
+      const file = hostRollConfigPath(dir)
+      expect(isSamePath(path.dirname(file), path.join(dir, 'host'))).toBe(true)
+      expect(await readRollConfigKey(file, 'k')).toBeNull()
+      const store = new RollConfigStore(file)
+      await store.load()
+      await store.set('k', { accountIds: ['a1', 'a2'], prompt: 'go on' })
+      expect(await readRollConfigKey(file, 'k')).toEqual({ accountIds: ['a1', 'a2'], prompt: 'go on' })
+      await fs.writeFile(file, '{ damaged')
+      expect(await readRollConfigKey(file, 'k')).toBeNull()
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -44,6 +44,7 @@ import { createWorktreeRoute } from './host/worktreeRoute'
 import { createHostGitOps } from './host/hostGitOps'
 import { appPathInUse } from './host/localPathInUse'
 import { HOST_PROTOCOL, HOST_ACT_PATH_IN_USE, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
+import { hostRollConfigPath, readRollConfigKey } from '../core/rolling/config'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchHostGate, OrchSnapshot, Provider, RateLimitWindow, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
@@ -3649,8 +3650,11 @@ export function registerIpc(
   // down as spawn opts.
   // The key is the per-provider CLI session id (claude=claudeSessionId, codex=rollout sessionId) — both
   // coordinators store under that id in the same rolling.json.
-  ipcMain.handle('sessions.resumeDefaults', (_e, sessionId: string) => ({
-    roll: core.rollConfig.get(sessionId),
+  ipcMain.handle('sessions.resumeDefaults', async (_e, sessionId: string) => ({
+    // S6 R9: a chain the Host owns keeps its config in the Host's own file; this app's file first.
+    roll:
+      core.rollConfig.get(sessionId) ??
+      (await readRollConfigKey(hostRollConfigPath(app.getPath('userData')), sessionId)),
     schedule: core.schedulerConfig.get(sessionId)
   }))
 
