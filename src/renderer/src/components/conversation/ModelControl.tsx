@@ -4,7 +4,9 @@ import { useState, type ReactNode } from "react";
 import { Loader2Icon } from "lucide-react";
 import { ContextMenu, type MenuItem } from "../ContextMenu";
 import { useI18n } from "../../i18n/I18nProvider";
-import type { PermissionMode, PermissionModeChoice } from "../../../../core/chat/types";
+import type { MessageKey } from "../../../../core/i18n";
+import type { PermissionMode, PermissionModeChoice, UnattendedPermission } from "../../../../core/chat/types";
+import { unattendedRows } from "./unattendedMenu";
 
 /** One row of the model menu. `key` is whatever the pane needs to act on it — an alias for Claude, a
  *  position in the CLI's own picker for codex — and this component never looks inside it. */
@@ -50,6 +52,11 @@ export interface ModelControlProps {
   /** A small mode button is drawn beside the line when this is given. Absent for a caller with no mode
    *  to offer, and then the button is not drawn at all. */
   onPickPermissionMode?: (mode: PermissionMode) => void;
+  /** chat takeover P8: this session's policy for a permission prompt nobody can answer — hold, or
+   *  deny after 60 s. Present only for a chat session that is not already running with permissions
+   *  bypassed. When given, the mode menu adds a heading row and the two rows below a separator; the
+   *  mode button stays the only button (unattendedMenu.ts). */
+  unattended?: { value: UnattendedPermission; onPick(v: UnattendedPermission): void };
 }
 
 /** What to write on the mode button: the same word its own row carries, so the two never disagree. A
@@ -72,7 +79,8 @@ export function ModelControl({
   busy = false,
   permissionMode = "default",
   permissionModes = [],
-  onPickPermissionMode
+  onPickPermissionMode,
+  unattended
 }: ModelControlProps): ReactNode {
   const { t } = useI18n();
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
@@ -131,7 +139,7 @@ export function ModelControl({
             aria-pressed={permissionMode !== "default"}
             aria-label={t("chat.mode.aria")}
             title={t("chat.mode.aria")}
-            disabled={permissionModes.length === 0}
+            disabled={permissionModes.length === 0 && !unattended}
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
               setModeAt({ x: Math.round(r.left), y: Math.round(r.top) });
@@ -143,14 +151,30 @@ export function ModelControl({
         )}
       </div>
       {at && openable && <ContextMenu x={at.x} y={at.y} items={items} onClose={() => setAt(null)} />}
-      {modeAt && onPickPermissionMode && permissionModes.length > 0 && (
+      {modeAt && onPickPermissionMode && (permissionModes.length > 0 || unattended) && (
         <ContextMenu
           x={modeAt.x}
           y={modeAt.y}
-          items={permissionModes.map((choice): MenuItem => ({
-            label: choice.key === permissionMode ? `✓ ${choice.label}` : choice.label,
-            onSelect: () => onPickPermissionMode(choice.key)
-          }))}
+          items={[
+            ...permissionModes.map((choice): MenuItem => ({
+              label: choice.key === permissionMode ? `✓ ${choice.label}` : choice.label,
+              onSelect: () => onPickPermissionMode(choice.key)
+            })),
+            // chat takeover P8: the unattended-policy section, under a separator and a disabled
+            // heading row — the same ✓ prefix the mode rows above use for the one already picked.
+            ...(unattended
+              ? ([
+                  "separator",
+                  { label: t("chat.unattended.heading"), disabled: true, onSelect: () => {} },
+                  ...unattendedRows(unattended.value, (key) => t(key as MessageKey)).map(
+                    (row): MenuItem => ({
+                      label: row.checked ? `✓ ${row.label}` : row.label,
+                      onSelect: () => unattended.onPick(row.key)
+                    })
+                  )
+                ] as MenuItem[])
+              : [])
+          ]}
           onClose={() => setModeAt(null)}
         />
       )}

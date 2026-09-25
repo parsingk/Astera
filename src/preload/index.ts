@@ -345,6 +345,8 @@ const api = {
     answer: invoke('chat.answer'),
     setModel: invoke('chat.setModel'),
     setPermissionMode: invoke('chat.setPermissionMode'),
+    // chat takeover P8: the session's unattended permission policy.
+    setUnattendedPermission: invoke('chat.setUnattendedPermission'),
     listPermissionModes: invoke('chat.listPermissionModes'),
     listModels: invoke('chat.listModels'),
     configuredModel: invoke('chat.configuredModel'),

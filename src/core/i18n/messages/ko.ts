@@ -1689,5 +1689,11 @@ export const ko = {
   'chat.mode.aria': '권한 모드',
   'chat.mode.default': '기본',
   'chat.mode.acceptEdits': '편집 자동 승인',
-  'chat.mode.plan': '플랜'
+  'chat.mode.plan': '플랜',
+  // chat takeover Task 10 — the mode menu's unattended-policy section and the New Session dialog's
+  // matching control (P8): what a chat session does with a permission prompt nobody answers while a
+  // Host holds the process as its writer.
+  'chat.unattended.heading': '자리에 아무도 없을 때',
+  'chat.unattended.hold': '질문을 붙잡아 둔다',
+  'chat.unattended.deny60': '60초 뒤 거절한다'
 } as const

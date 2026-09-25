@@ -29,7 +29,14 @@ import type { TerminalFont } from './terminal/font'
 import type { GeneratorSettings } from './understanding/generatorSettings'
 import type { DesktopNotifySettings } from './notify/settings'
 import type { ModelDescriptor, ModelListResult } from './models/types'
-import type { ChatAnswer, ChatEvent, ChatState, PermissionMode, PermissionModeChoice } from './chat/types'
+import type {
+  ChatAnswer,
+  ChatEvent,
+  ChatState,
+  PermissionMode,
+  PermissionModeChoice,
+  UnattendedPermission
+} from './chat/types'
 import type { ThemeId } from './theme/themes'
 import type { ConvTurn } from './history/convTypes'
 export type { ConvTurn } from './history/convTypes'
@@ -1698,6 +1705,10 @@ export type RendererApi = CoreApi & {
     answer(sessionId: string, requestId: string, answer: ChatAnswer): Promise<void>
     setModel(sessionId: string, model: string, effort: string | null): Promise<void>
     setPermissionMode(sessionId: string, mode: PermissionMode): Promise<void>
+    /** chat takeover P8: what this session does with a permission prompt nobody answers while a Host
+     *  holds it as the writer — hold (the default) or deny after 60 s. `false` for an id the chat
+     *  manager does not hold. */
+    setUnattendedPermission(sessionId: string, value: UnattendedPermission): Promise<boolean>
     /** The rows the composer's mode menu draws for this session. Empty for a session whose CLI never
      *  answered a list (codex, when `collaborationMode/list` was refused) — the control then has
      *  nothing to open. */

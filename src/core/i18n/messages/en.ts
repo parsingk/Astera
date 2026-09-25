@@ -1441,5 +1441,11 @@ export const en: Record<keyof typeof ko, string> = {
   'chat.mode.aria': 'Permission mode',
   'chat.mode.default': 'Default',
   'chat.mode.acceptEdits': 'Accept edits',
-  'chat.mode.plan': 'Plan'
+  'chat.mode.plan': 'Plan',
+  // chat takeover Task 10 — the mode menu's unattended-policy section and the New Session dialog's
+  // matching control (P8): what a chat session does with a permission prompt nobody answers while a
+  // Host holds the process as its writer.
+  'chat.unattended.heading': 'With nobody there',
+  'chat.unattended.hold': 'Hold the prompt',
+  'chat.unattended.deny60': 'Deny after 60 s'
 }

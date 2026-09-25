@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Account, BranchRef, ScheduleConfig, SessionKind, Provider } from '../../../core/types'
+import type { UnattendedPermission } from '../../../core/chat/types'
 import { providerOf } from '../../../core/providers/meta'
 import { rollChainCandidates } from '../../../core/resume'
 import { isSlackReady } from '../../../core/slack/ready'
@@ -46,6 +47,9 @@ export function NewSessionDialog({
     rollPrompt?: string
     slackNotify: boolean
     bypassPermissions: boolean
+    /** chat takeover P8: the new chat session's unattended-permission policy. Absent for a terminal
+     *  session, which has no such policy at all. */
+    unattendedPermission?: UnattendedPermission
     useWorktree: boolean
     worktreeName?: string
     worktreeBaseRef?: string
@@ -72,6 +76,10 @@ export function NewSessionDialog({
   // 체크박스가 꺼진 채 잠깐 보였다가 켜진다. 사람이 이 모달에서 끄면 그 세션에만 적용되고 전역
   // 설정은 그대로다: 이 체크박스는 언제나 "이번 세션"을 말한다.
   const [bypassPermissions, setBypassPermissions] = useState(true) // start without permission prompts
+  // chat takeover P8: the new chat session's policy for a permission prompt nobody answers while a
+  // Host holds it as the writer. Meaningless once bypassPermissions is on — that session never holds a
+  // prompt at all — so the control offering this is hidden then (see the checkbox below).
+  const [unattended, setUnattended] = useState<UnattendedPermission>('hold')
   const [slackReady, setSlackReady] = useState(false) // whether a webhook URL is configured — the checkbox is disabled when it is not
   // Both CLIs, because either one can be the missing one — the app opens with just one installed.
   // Two different questions live here, asked two different ways (design D3, fix round 2):
@@ -316,6 +324,7 @@ export function NewSessionDialog({
         rollPrompt: rollChecked ? rollPrompt.trim() || undefined : undefined,
         slackNotify: slackReady && slackNotify,
         bypassPermissions,
+        ...(kind === 'chat' ? { unattendedPermission: unattended } : {}),
         useWorktree: withWorktree,
         worktreeName: wtName.trim() || undefined,
         worktreeBaseRef: wtBaseRef || undefined,
@@ -573,6 +582,29 @@ export function NewSessionDialog({
           />
           {t('session.new.bypassPermissions')}
         </label>
+        {/* chat takeover P8: only meaningful for a chat session that is not already bypassing every
+            prompt — a bypassed one never holds a prompt for this policy to apply to. */}
+        {kind === 'chat' && !bypassPermissions && (
+          <div className="field">
+            <label>{t('chat.unattended.heading')}</label>
+            <div className="kind-segmented">
+              <button
+                type="button"
+                className={`segmented${unattended === 'hold' ? ' active' : ''}`}
+                onClick={() => setUnattended('hold')}
+              >
+                {t('chat.unattended.hold')}
+              </button>
+              <button
+                type="button"
+                className={`segmented${unattended === 'deny-after-60s' ? ' active' : ''}`}
+                onClick={() => setUnattended('deny-after-60s')}
+              >
+                {t('chat.unattended.deny60')}
+              </button>
+            </div>
+          </div>
+        )}
         {/* checkCli now runs in the chosen folder, not the app's own cwd, so a toolchain manager that
             refuses this folder's manifest gets caught here instead of killing the session after Start
             (design D3). Gated on primaryInstalled — the dedicated existence probe above — rather than

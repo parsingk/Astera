@@ -44,7 +44,7 @@ import {
   type PendingSend
 } from "../../../../core/history/pendingSends";
 import { ChatRequestCard } from "./ChatRequestCard";
-import type { PermissionModeChoice } from "../../../../core/chat/types";
+import type { PermissionModeChoice, UnattendedPermission } from "../../../../core/chat/types";
 import type { MessageKey } from "../../../../core/i18n";
 import { useChatState } from "../../hooks/useChatState";
 import { toast } from "../../lib/toast";
@@ -1153,6 +1153,43 @@ export function ConversationPane({
     };
   }, [sessionId]);
 
+  // chat takeover P8: whether this session was started with permissions already bypassed
+  // (--dangerously-skip-permissions and its codex twin). Asked once per session, the same "asked once
+  // on mount" pattern as the model list above — the flag is chosen at spawn and never changes while
+  // the session runs. A bypassed session never holds a permission prompt at all, so the unattended
+  // control below is not offered for one.
+  const [bypassPermissions, setBypassPermissions] = useState(false);
+  useEffect(() => {
+    let current = true;
+    setBypassPermissions(false);
+    void window.api.sessions
+      .list()
+      .then((list) => {
+        if (current) setBypassPermissions(list.find((s) => s.id === sessionId)?.bypassPermissions === true);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [sessionId]);
+
+  // chat takeover P8: this session's unattended-permission policy, mirrored from `chat.state` — kept
+  // apart from `chat` itself because no `chat:event` carries a change to it (unlike the permission
+  // mode, which the CLI echoes back as a `model` event), so a pick has to re-pull `chat.state` rather
+  // than wait for the stream to catch up.
+  const [unattendedPermission, setUnattendedPermission] = useState<UnattendedPermission>("hold");
+  useEffect(() => {
+    setUnattendedPermission(chat?.unattendedPermission ?? "hold");
+  }, [sessionId, chat?.unattendedPermission]);
+  const refreshChatState = useCallback((): void => {
+    void window.api.chat
+      .state(sessionId)
+      .then((s) => {
+        if (s) setUnattendedPermission(s.unattendedPermission ?? "hold");
+      })
+      .catch(() => {});
+  }, [sessionId]);
+
   /** How much this session's CLI may do without asking, right now. */
   const permissionMode = chat === null ? "default" : chat.model.permissionMode;
   /** The rows its mode menu offers. Asked once per session beside the model list — Claude answers a
@@ -1225,9 +1262,35 @@ export function ConversationPane({
               ...choice,
               label: choice.label === "" ? t(`chat.mode.${choice.key}` as MessageKey) : choice.label
             })),
-            onPickPermissionMode: (mode) => sayIfFailed(window.api.chat.setPermissionMode(sessionId, mode))
+            onPickPermissionMode: (mode) => sayIfFailed(window.api.chat.setPermissionMode(sessionId, mode)),
+            // chat takeover P8: not offered for a session already running with permissions bypassed —
+            // it never holds a prompt for the policy to apply to.
+            ...(bypassPermissions
+              ? {}
+              : {
+                  unattended: {
+                    value: unattendedPermission,
+                    onPick: (v: UnattendedPermission) =>
+                      sayIfFailed(
+                        window.api.chat.setUnattendedPermission(sessionId, v).then(() => refreshChatState())
+                      )
+                  }
+                })
           }),
-    [permissionMode, permissionModes, modelLine, modelInfo.model, modelInfo.effort, modelInfo.cli, models, sessionId, t]
+    [
+      permissionMode,
+      permissionModes,
+      modelLine,
+      modelInfo.model,
+      modelInfo.effort,
+      modelInfo.cli,
+      models,
+      sessionId,
+      t,
+      bypassPermissions,
+      unattendedPermission,
+      refreshChatState
+    ]
   );
 
   // An answer that is actually being waited on outranks everything; after that, a list being typed
