@@ -1138,6 +1138,20 @@ describe('hostOrchDeps — HOST_CHATS (chat takeover §3.5)', () => {
     await deps.chatAnswer?.('c2', 'r1', 'allow')
     expect(act).toHaveBeenCalledWith('chatAnswer', ['c2', 'r1', 'allow'])
   })
+  // Task 8 fix round 1 (Minor 2): an app holding the proc without the chat-takeover yield has no
+  // chatAnswer; it is not asked, nothing is marked, and the answer says to answer in Astera.
+  it('does not forward an answer to an app that cannot give one, and marks nothing', async () => {
+    const onEffect = vi.fn()
+    const act = vi.fn().mockResolvedValue({ answered: true })
+    const deps = hostOrchDeps(base({ act, onEffect, chats: chats([]), chatAppAnswers: (id) => id !== 'old' }))
+    const r = await deps.chatAnswer?.('old', 'r1', 'allow')
+    expect(r).toMatchObject({ answered: false, reason: 'not-held' })
+    expect((r as { detail?: string }).detail).toMatch(/answer it in Astera/)
+    expect(act).not.toHaveBeenCalled()
+    expect(onEffect).not.toHaveBeenCalled()
+    await deps.chatAnswer?.('new', 'r1', 'allow')
+    expect(act).toHaveBeenCalledWith('chatAnswer', ['new', 'r1', 'allow'])
+  })
   it('answers not-held with no writer anywhere', async () => {
     const deps = hostOrchDeps(base({ hasApp: () => false, chats: chats([]) }))
     expect(await deps.chatAnswer?.('c9', 'r1', 'allow')).toEqual({ answered: false, reason: 'not-held' })

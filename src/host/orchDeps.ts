@@ -300,10 +300,15 @@ const HOST_WHEN_ABSENT = ['chatSend'] as const
  * answer cannot be degraded: nothing was answered, so a forwarded `chatAnswer` that fails is refused as
  * PROPAGATES is. With no app and no Host writer, it is `not-held`.
  *
- * **The effect mark.** `chatAnswer` is an effect on either route: the Host adapter marks it right
- * before its write (`HostChats.answer`'s `beforeWrite`, after its own not-held, not-open and question
- * checks, so a refusal keeps no receipt), and the forward is marked by the funnel. `chatPrompts` is a
- * read.
+ * **An app that holds the proc without the `chat-takeover` yield is not asked** (Task 8 fix round 1,
+ * Minor 2). Such an app has no `chatAnswer` to answer with, so forwarding would only fail as the Host's
+ * generic error after the funnel had marked an effect. It is `not-held` with a sentence that says to
+ * answer in Astera, marked nothing, and the command answers 409 with that sentence.
+ *
+ * **The effect mark.** `chatAnswer` is an effect on either route. The Host adapter marks it once the
+ * answer's line reached the proc (`HostChats.answer`'s `wrote`, after its own not-held, not-open and
+ * question checks, so a refusal keeps no receipt), and the forward is marked by the funnel.
+ * `chatPrompts` is a read.
  */
 const HOST_CHATS = ['chatPrompts', 'chatAnswer'] as const
 
@@ -597,6 +602,9 @@ export function hostOrchDeps(a: {
    *  `chatSend`). Null or absent: the Host writes to no chat session, so both HOST_CHATS names only
    *  forward, and `chatPending`/`chatSend` keep their D4 routes. */
   chats?: Pick<HostChats, 'prompts' | 'isWriter' | 'answer' | 'requests' | 'send'> | null
+  /** False when an app holds this session's chat proc without the `chat-takeover` yield, so it cannot
+   *  answer a forwarded `chatAnswer` (HOST_CHATS). Absent: every app is asked. */
+  chatAppAnswers?(sessionId: string): boolean
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -761,7 +769,8 @@ export function hostOrchDeps(a: {
         }
         // P10: a session the Host writes to goes through the Host adapter, so a turn never lands around
         // a card the adapter holds and the adapter's turn state moves with the write. An open card
-        // refuses before anything is marked, as the app route does.
+        // refuses before anything is marked, as the app route does, and the mark is made only once a
+        // line of the turn reached the proc (fix round 1: a send refused before the wire keeps no receipt).
         const chats = a.chats
         if (chats && chats.isWriter(id)) {
           const card = chats.requests(id)[0]
@@ -817,8 +826,14 @@ export function hostOrchDeps(a: {
       return chats.answer(sessionId, requestId, decision, () => {
         if (EFFECTFUL.chatAnswer) a.onEffect?.()
       })
-    if (a.hasApp()) return forwardAnswer(sessionId, requestId, decision)
-    return { answered: false, reason: 'not-held' }
+    if (!a.hasApp()) return { answered: false, reason: 'not-held' }
+    if (a.chatAppAnswers && !a.chatAppAnswers(sessionId))
+      return {
+        answered: false,
+        reason: 'not-held',
+        detail: `${sessionId} is held by an Astera too old to be answered from the CLI; nothing was answered, answer it in Astera`
+      }
+    return forwardAnswer(sessionId, requestId, decision)
   }
 
   /** HOST_SESSIONS: the Host's own answer, marked as an effect before it runs when it is one. */

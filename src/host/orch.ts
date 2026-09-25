@@ -381,6 +381,9 @@ export function createHostOrch(a: {
    *  HOST_CHATS and the Host-writer routes of `chatPending` and `chatSend` (P10). Absent: the Host
    *  answers no chat prompt of its own and forwards both names to the app. */
   chats?: Pick<HostChats, 'prompts' | 'isWriter' | 'answer' | 'requests' | 'send'> | null
+  /** Whether the apps holding a session's chat proc all yield `chat-takeover` (HOST_CHATS), passed
+   *  through to `hostOrchDeps`. Absent: every app is asked. */
+  chatAppAnswers?(sessionId: string): boolean
   /** The Host's roll journal (S6 limits D5; rollJournal.ts), for the app's `roll-journal` call. Absent
    *  exactly when there is no rolling: the call then answers 501. */
   rollJournal?: Pick<RollJournal, 'take'> | null
@@ -562,6 +565,7 @@ export function createHostOrch(a: {
       resolveProjectRoot: a.resolveProjectRoot,
       rolling: a.rolling ?? null,
       chats: a.chats ?? null,
+      chatAppAnswers: a.chatAppAnswers,
       onEffect: () => {
         marks.effects += 1
       },

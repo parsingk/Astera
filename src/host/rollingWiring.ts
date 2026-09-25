@@ -58,6 +58,9 @@ export interface HostRollingWiring {
     rollJournal: RollJournal
     /** The Host's chat sessions, for `chats pending`/`chats answer` and P10's Host-writer routes. */
     chats: HostChats
+    /** True unless a socket holds the session's chat proc without the chat-takeover yield (an older app,
+     *  which has no chatAnswer). A session with no live proc here is left to the app to answer. */
+    chatAppAnswers(sessionId: string): boolean
   }
   /** Chained with the driving's onAppsChanged in index.ts. */
   onAppsChanged(): void
@@ -338,7 +341,14 @@ export function composeHostRolling(a: {
       },
       rekeyRolled: (oldSessionId, info) => tap.onRolled(oldSessionId, info),
       rollJournal: journal,
-      chats
+      chats,
+      chatAppAnswers: (sessionId) => {
+        const procId = chats.procOf(sessionId)
+        if (procId === null) return true
+        return a.procHolders
+          .holdersOf(procId)
+          .every((s) => a.server().yieldsOf(s)?.has(HOST_YIELD_CHAT_TAKEOVER) === true)
+      }
     },
     // Isolated (constraint 14): this runs inside a hello or a socket close, and a throw must cost neither.
     onAppsChanged: () => {

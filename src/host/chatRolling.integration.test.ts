@@ -246,6 +246,19 @@ describe('the chat rig (chat takeover spec §5)', () => {
     expect(h.broadcasts.filter((m) => m.t === 'session-rolled')).toEqual([])
   })
 
+  // Task 8 fix round 1 (Minor 2): the wiring's chatAppAnswers reads the proc's holders and their yields.
+  it('says an app without the chat-takeover yield that holds the proc cannot answer its prompts', async () => {
+    const h = await rig()
+    const transcript = path.join(h.profileDir, 'th1.jsonl'); await fs.writeFile(transcript, '')
+    appChat(h, { transcript })
+    expect(h.wiring.orchHooks.chatAppAnswers('c1')).toBe(true)
+    h.appAttach(2, [HOST_YIELD_ROLLING]); h.holders.heldBy('pa', 2)
+    expect(h.wiring.orchHooks.chatAppAnswers('c1')).toBe(false)
+    h.appAttach(3, [HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER]); h.appLeave(2); h.holders.heldBy('pa', 3)
+    expect(h.wiring.orchHooks.chatAppAnswers('c1')).toBe(true)
+    expect(h.wiring.orchHooks.chatAppAnswers('nobody')).toBe(true)
+  })
+
   it('does not roll while a permission prompt is open', async () => {
     const h = await rig()
     const transcript = path.join(h.profileDir, 'th1.jsonl'); await fs.writeFile(transcript, '')
