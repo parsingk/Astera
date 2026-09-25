@@ -275,18 +275,36 @@ ends with its own outcome, even if its coordinator then waits for a reset.
 The workers and the coordinator still resume by themselves then, so waiting again after that time can
 still end `completed`.
 
-**Once Astera has quit, the Host takes over Astera's own sessions too**, tabs included: every session
-Astera itself was rolling, such as a tab with account rolling turned on. The
-Host waits about five seconds after Astera's last connection closes and takes nothing while Astera is
-still running, so a dropped connection that Astera reconnects keeps its sessions with Astera. **A
-session the Host has taken stays the Host's**, even after Astera opens again. Astera shows it as it
-shows any session the Host started: the same tab, the same banner while it waits, the same history.
-A tab the Host moves to another account restarts under the Host's environment (see Security), with its
-name and its permission choice kept. Three kinds of session are not taken over: chat sessions, the
-sessions of an Astera older than this version, and sessions Astera ran inside itself because it could
-not reach the Host (those end with Astera). While Astera is closed, a session the Host moves sends no
-Slack message and no desktop notice; those come only while Astera is open. With an older Astera open,
-that Astera moves the sessions it has open, and the Host leaves those alone until it closes.
+**Once Astera has quit, the Host takes over Astera's own sessions too**, tabs and chat sessions alike:
+every session Astera itself was rolling, such as a tab with account rolling turned on, and every open
+conversation window. The Host waits about five seconds after Astera's last connection closes and takes
+nothing while Astera is still running, so a dropped connection that Astera reconnects keeps its sessions
+with Astera. **A session the Host has taken stays the Host's**, even after Astera opens again. Astera
+shows it as it shows any session the Host started: the same tab, the same banner while it waits, the
+same history. A tab the Host moves to another account restarts under the Host's environment (see
+Security), with its name and its permission choice kept. **A chat session the Host takes keeps
+working**: its current turn and the messages queued behind it run on, and at a usage limit it moves to
+the next account or waits for a reset, the same as a tab. Its permission prompts can still be answered
+from the CLI, with `astera chats answer` (see below); a session set to deny after 60 seconds is answered
+deny by the Host once 60 seconds pass with nobody able to answer from Astera. Two kinds of session are
+not taken over: the sessions of an Astera older than this version, and sessions Astera ran inside itself
+because it could not reach the Host (those end with Astera). While Astera is closed, a session the Host
+moves sends no Slack message and no desktop notice, and a chat session sends nothing to Slack at all
+until an app attaches; those come only while Astera is open. With an older Astera open, that Astera moves
+the sessions it has open, and the Host leaves those alone until it closes.
+
+**Chat prompts with Astera closed.** `astera chats pending` lists the permission prompts and questions
+every chat session is waiting on, from whichever process writes to it, the Host or Astera: each with its
+session, its prompt id, its kind (approval or question), the tool it asks about and a one-line summary;
+`--session` narrows it to one session. Its `complete` field is false when Astera is open but could not be
+asked, so the list may be short. `astera chats answer --id <promptId> --allow` answers one of them and the
+turn goes on, whichever process holds it; `--deny` refuses it instead, and exactly one of the two is
+required. A question is not a permission prompt, and answering one needs Astera open, refused with 6. A prompt id is unique
+only within its own session, so an id open in more than one at once needs `--session`, or the call is
+refused with 2. A prompt that is no longer open, because it was already answered or the session has moved
+on, is refused with 6 and nothing is answered. Answering is for a person: called from inside an agent
+session, where `ASTERA_SESSION` is set, it is refused with 5. `chats pending` takes any caller and works
+from a shell alone, with Astera closed.
 
 **While Astera shows the Host as not answering, Jobs wait.** Astera does not take over from a Host
 that announced `dispatch`, even while that Host is not answering, because the Host may still be
@@ -564,7 +582,7 @@ older Astera, and two lines with the same time are taken in the order they were 
 Everything else is `unknown`:
 
 - **Codex sessions.** Codex runs without the hooks, so it has no event file.
-- **Chat sessions.** Their status is in the chat protocol, which only the app reads.
+- **Chat sessions.** Their status is in the chat protocol, not in this field.
 - **Ended sessions.**
 - **Sessions with no event yet.** Claude Code writes no event when a session starts, and the app
   clears the folder each time it launches. A session reads `unknown` until its first event after that.
@@ -641,12 +659,12 @@ belongs to terminal sessions and `--turns` to chat sessions; giving a session th
   "pending":{"kind":"approval","summary":"Bash: npm test"}}}
 ```
 
-**`data.pending` is there only while Astera is open.** A chat session asks for approvals and
-questions through cards, and only the app holds them. With Astera open, `pending` is the card the
-session is waiting on (`kind` is `approval` or `question`, and `summary` is one line about it), or
-`null` when there is none; it is left out for a session Astera has not taken back yet after it
-starts. With Astera closed the field is left out, because the Host cannot see cards: a session
-waiting on one then looks like any other. `--human` prints each turn under its
+**`data.pending` comes from whichever process is the session's writer** (chat sessions taken over).
+The Host's own adapter answers it directly for a session it writes to, Astera closed included; Astera
+answers it for a session it holds instead. `pending` is the card the session is waiting on (`kind` is
+`approval` or `question`, and `summary` is one line about it), or `null` when there is none; it is left
+out for a session Astera has not taken back yet after it starts, and for one neither side can say a
+card of, in which case it reads the same as one with no card. `--human` prints each turn under its
 role, the tools as `[tool]` lines, and the card last.
 
 `sessions send` types `--text` into a terminal session and presses Enter 150ms later, which is how
@@ -662,21 +680,23 @@ rather than typed a second time.
 **To a chat session, `sessions send` is one turn**, and it answers `{"id":…,"sent":true}`.
 `--no-enter` belongs to terminal sessions and is a 2 here. Sends to one session go one at a time.
 
-- **With Astera open, the app delivers the turn**, the same way it delivers a scheduled message, so
-  the conversation view shows it as usual. If the session is waiting on a card (an approval or a
-  question), the send is a 6 whose message names the card. `sessions send` does not answer cards:
-  open Astera and answer it there. Nothing was sent then, so the same `--request-id` can be used again
-  once the card is answered. For a few seconds after Astera starts, a session it has not taken back
-  yet is a 6 too, with nothing sent; try again in a moment.
-- **With Astera closed, the Host writes the turn to the agent itself.** For a Claude session that is
-  the same line the app would write. For a Codex session the Host sends only the text on the
-  session's thread: no model, reasoning effort or plan mode, so whatever the thread currently has
-  applies, not what is picked in Astera's composer. The Host cannot see cards, so a turn sent while
-  the session waits on one queues behind it in the agent and runs once the card is answered. When
-  Astera opens again it rebuilds the session from the agent's output and transcript, and the turn
-  is there. A Codex session that has not started its first thread yet cannot take a turn from the
-  Host, and that is a 6 that says so; nothing was sent, so the same `--request-id` works once the
-  thread exists.
+- **With Astera open and holding the session, the app delivers the turn**, the same way it delivers a
+  scheduled message, so the conversation view shows it as usual. If the session is waiting on a card (an
+  approval or a question), the send is a 6 whose message names the card. `sessions send` does not answer
+  cards: open Astera and answer it there, or run `astera chats answer`. Nothing was sent then, so the
+  same `--request-id` can be used again once the card is answered. For a few seconds after Astera starts,
+  a session it has not taken back yet is a 6 too, with nothing sent; try again in a moment.
+- **Otherwise the session's own writer delivers the turn**, whichever process that is (chat sessions
+  taken over): the Host's own adapter once it holds one for that session, Astera closed or not yet taken
+  back included. For a Claude session that is the same line the app would write. For a Codex session the
+  Host sends only the text on the session's thread: no model, reasoning effort or plan mode, so whatever
+  the thread currently has applies, not what is picked in Astera's composer. A session waiting on a card
+  is refused the same way as with Astera open, naming the card: answer it with `astera chats answer`, or
+  open Astera. A session the Host holds no adapter for still takes the turn as a blind write that queues
+  behind any card in the agent and runs once the card is answered. When Astera opens again it rebuilds
+  the session from the agent's output and transcript, and the turn is there. A Codex session that has not
+  started its first thread yet cannot take a turn from the Host, and that is a 6 that says so; nothing was
+  sent, so the same `--request-id` works once the thread exists.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
 dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
