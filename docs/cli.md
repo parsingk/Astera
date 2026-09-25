@@ -31,7 +31,9 @@ for shells the app did not start.
 
 Commands are answered by the **Astera Host**, a background process that owns the orchestration
 state. The Host outlives the app: quit Astera and your workers keep running, and `astera` keeps
-answering.
+answering. The Host also rolls the sessions it started to another account at a usage limit, and once
+Astera has quit it takes over Astera's own sessions and rolls them too (see "Workers with Astera
+closed").
 
 ```bash
 astera host status     # is a Host running, and on which profile
@@ -172,7 +174,8 @@ the merge has already happened.
 **`astera host status` says whether this Host can do this.** `spawn` in `data.features` means it can
 start and stop workers, and `worktrees` in `data.features` means it can make, merge and remove them
 itself. `dispatch` means it also places the workers of a Job with no coordinator and runs their checks
-(see below). A Host started by an older Astera does not have these, and neither does one whose starter
+(see below), and `rolling` means it moves its sessions to another account at a usage limit and takes
+over Astera's sessions once Astera has quit (see below). A Host started by an older Astera does not have these, and neither does one whose starter
 could not name the files a worker needs. With such a Host, these commands need the app as they did
 before.
 
@@ -215,7 +218,8 @@ and `worker-release` still work on it.
 **Jobs run with Astera closed.** With a Host that announces `dispatch`, a Job with no coordinator
 runs with Astera closed. The Host places its workers, merges their worktrees, and runs the `--validate`
 checks, the `--review` reviews and, in a `--convergence` Job, the repairs. So `runs wait` ends
-`completed`, or `waiting` (8) when a question needs a person. Scheduled Jobs still fire only while
+`completed`, or `waiting` (8) when a question needs a person, or `limited` (8) when every worker is
+waiting for a usage limit to reset (see below). Scheduled Jobs still fire only while
 Astera is open, and a run that a schedule fires is not placed automatically. With a Host that does not
 announce `dispatch`, no worker is placed while Astera is closed, and a `runs wait` holds until its
 deadline and ends with 7.
@@ -232,10 +236,28 @@ Astera is closed, in a run with no coordinator session, the Host opens a questio
 otherwise have started again by itself when it next opened. A run with a coordinator leaves the lost
 worker to the coordinator.
 
-**A worker that hits its usage limit while Astera is closed waits.** Its session stays open and its
-task stays in progress, so `runs wait` ends at its deadline with 7. When Astera opens, it takes the
-session back and moves it to the next account the task lists. Only Astera moves a session to another
-account. A task can list several accounts, in the order to move through: `tasks add --account a,b`.
+**A worker that hits its usage limit moves on, with Astera open or closed.** The Host rolls the
+sessions it started (every worker, reviewer, repair worker and coordinator) for as long as they live:
+at a usage limit it moves the session to the next usable account the task lists, and when none is
+usable it waits, and resumes the session on whichever of its accounts resets first. A
+task can list several accounts, in the order to move through: `tasks add --account a,b`. The Dispatch
+follows the session, so the task stays in progress and `runs wait` goes on waiting. When every worker
+of a run is waiting for a reset, `runs wait` ends with 8 and `error.details.state` `limited`, naming
+the reset time in `error.details.resetsAt` (see Exit codes). The workers still resume by themselves
+then, so waiting again after that time can still end `completed`.
+
+**Once Astera has quit, the Host takes over Astera's own sessions too**, tabs included: every session
+Astera itself was rolling, such as a tab with account rolling turned on. The
+Host waits about five seconds after Astera's last connection closes and takes nothing while Astera is
+still running, so a dropped connection that Astera reconnects keeps its sessions with Astera. **A
+session the Host has taken stays the Host's**, even after Astera opens again. Astera shows it as it
+shows any session the Host started: the same tab, the same banner while it waits, the same history.
+A tab the Host moves to another account restarts under the Host's environment (see Security), with its
+name and its permission choice kept. Three kinds of session are not taken over: chat sessions, the
+sessions of an Astera older than this version, and sessions Astera ran inside itself because it could
+not reach the Host (those end with Astera). While Astera is closed, a session the Host moves sends no
+Slack message and no desktop notice; those come only while Astera is open. With an older Astera open,
+that Astera moves the sessions it has open, and the Host leaves those alone until it closes.
 
 **While Astera shows the Host as not answering, Jobs wait.** Astera does not take over from a Host
 that announced `dispatch`, even while that Host is not answering, because the Host may still be
@@ -613,9 +635,10 @@ rather than typed a second time.
 dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
 held open on purpose.
 
-**`wait` has four endings**, and two of them are a person: the work finished well, the work failed,
-a question is open, or the run is paused. The exit code says which. The default deadline is one
-hour; `--timeout-ms` changes it, and reaching it is exit 7 with the progress so far, not a failure
+**`wait` has five endings**, and two of them are a person: the work finished well, the work failed,
+a question is open, the run is paused, or every worker is waiting for a usage limit to reset. The
+exit code says which, and for the three that share 8, `error.details` does (see Exit codes). The
+default deadline is one hour; `--timeout-ms` changes it, and reaching it is exit 7 with the progress so far, not a failure
 of the Job.
 
 **A command can fail without telling you whether it landed**: exit 3 when the connection dropped
@@ -824,7 +847,7 @@ channel.
 | 5 | Refused for this caller |
 | 6 | Refused because of current state, such as a Job that is already running |
 | 7 | A deadline elapsed, or the Host is running and not answering |
-| 8 | A `wait` stopped because a person is needed: a question is open, or the run is paused |
+| 8 | A `wait` stopped before the work ended: a question is open, the run is paused, or every worker is waiting for a usage limit to reset |
 | 9 | The command exists here but not in the running build |
 | 10 | A `wait` ended with the Job or run in failure |
 
@@ -838,6 +861,17 @@ that says what became of it.
 
 **8 and 10 are the two that matter in CI.** A pipeline needs to tell "it finished badly" from "it is
 waiting for a person", and both are legitimate non-zero endings of a wait.
+
+**An 8 has three causes, and `error.details` says which.** A question is open when
+`error.details.questionId` is set. The run is paused when `error.details.state` is `paused`. The third
+needs nobody: `error.details.state` is `limited` when every worker of the run is waiting for a usage
+limit to reset, and `error.details.resetsAt` says when (the earliest reset among the waiting workers).
+The workers resume by themselves at that time, so waiting again after it can still end `completed`;
+this ending only lets a script stop holding on. Its `nextSteps` are `astera runs wait --id <runId>` and
+`astera runs get --id <runId>`, not `questions answer` or `runs resume`. A run ends `limited` only when
+no task of it is ready to start and none is being validated or reviewed, since either could still move
+before the reset. A run whose coordinator, not a worker, is the one waiting for a reset is not seen by
+this rule and waits to its deadline (7).
 
 **9 means two different builds.** The command on your `PATH` and the running Host came from
 different versions of Astera. Report it rather than working around it.
@@ -871,7 +905,7 @@ Branch on how the wait ended:
 astera runs wait --id "$run"
 case $? in
   0)  echo "done" ;;
-  8)  echo "a person is needed"; astera questions list --status open ;;
+  8)  echo "a question, a pause, or a usage limit"; astera questions list --status open ;;
   10) echo "the run failed"; astera tasks list --run "$run" --status failed ;;
   7)  echo "still going when the deadline passed" ;;
   *)  echo "could not wait"; exit 1 ;;

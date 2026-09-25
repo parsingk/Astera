@@ -23,7 +23,7 @@ reasoning; this list is what was chosen.
 | D4 | Worker environment | The Host's own environment minus a documented strip list | user |
 | D5 | New app, old Host holding work | The app keeps today's loop until that Host is replaced | controller |
 | D6 | A worker lost to a Host restart with no journal | Open a Gate at load | controller |
-| D7 | A usage limit with no app | A Gate carrying the reset time, so `runs wait` ends with 8 (left out of S4+S5 by the user; S6, see Amendments A58) | controller |
+| D7 | A usage limit with no app | A Gate carrying the reset time, so `runs wait` ends with 8 (left out of S4+S5 by the user; S6, see Amendments A58; replaced in S6 by the `limited` ending with no Gate, see Amendments A68) | controller |
 | D8 | Journal and reconciler | Stay in the app | controller |
 | D9 | A second app | Left as S1 recorded it | controller |
 | D10 | Release shape | S2 and S3 merge separately; S4 and S5 release together | controller |
@@ -54,6 +54,8 @@ entry gives the section, what it said, what shipped, why, and the tests that pin
   `orchestration.json` behind an app that writes it too. Rolls still happen only on ptys an app
   holds, so the safety reason of §2.6 stands. A coordinator slot is not cleared on a `-1` exit.
   Pinned by `src/host/exits.test.ts` and `src/core/orchestration/exec/exitOwner.test.ts`.
+  (amended for S6, see Amendments A69: rolls now happen in the Host too; and A72: an exit that a roll
+  caused)
 - **A2. §2.6, the handover sweep.** It said: each time ownership passes to the Host, every open
   Dispatch whose session is not alive in its registry goes through `handleExit`. What shipped runs
   the sweep only when a socket that has held a pty closes (a CLI socket never runs one), after the
@@ -88,7 +90,8 @@ entry gives the section, what it said, what shipped, why, and the tests that pin
   answers it only for a Dispatch it started, while that Dispatch still names the session it started
   on (or a `pending:` id). Once a roll has moved the Dispatch to another session, the call goes to
   the app, which holds the tail that followed the roll. Why: the Host's tail stops at the roll, and
-  reads of it froze (reproduced). Pinned by `src/host/spawner.test.ts`.
+  reads of it froze (reproduced). Pinned by `src/host/spawner.test.ts`. (amended for S6, see
+  Amendments A70: the Host's tail now follows the rolls the Host makes)
 - **A6. §2.3, how the app takes a `pty-opened` session.** It said the handler is the reattach
   sweep's per-entry body applied to `m.entry`. What shipped queues a sweep limited to that one pty
   id, over a fresh `pty-list`, through the same queue as every other sweep. Why: an exit that lands
@@ -756,6 +759,184 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
   `src/core/history/projects.test.ts`, `src/core/history/sessionCwdCache.test.ts`,
   `src/host/projectRoots.test.ts`, `src/host/orchDeps.test.ts` and `src/host/orch.test.ts`.
 
+## Amendments (S6 as shipped)
+
+S6 landed on `develop` from `b753c537` through Task 16 at `2d426dcb`. Its design
+(`.superpowers/sdd/2026-09-25-host-s6/design.md`, which reads this document as binding), its plan
+(`plan.md` in the same folder, rulings R1 to R35), the pre-flight scan of that plan (`preflight.md`,
+findings B1 to B3, R1 to R13 and C1 to C17) and its execution ledger (`progress.md`) changed or added to
+some statements above, and this list is the record, in A1's form. "Plan R" names a ruling of that plan
+and "preflight" a finding of the scan; neither is one of this document's own rulings. The user's answers
+for S6 (Q1 to Q5) are in `decisions.md` in the same folder. Files are cited by symbol, not by line. §6,
+D7, A1, A5, §7.2 and the usage-limit entry of "Known limits after S4+S5" each carry a short note
+pointing here. What is still open is under "Known limits after S6".
+
+**What S6 is, and what §6 got wrong**
+
+- **A67. §6, the slice (the S6 design's §8).** It said: S6 is not needed for the goal and moves
+  `rolling.ts`, `codexRolling.ts`, `rollTap.ts`, the coordinator wiring and `codexRolloutWatcher.ts`; a
+  worker at its limit stalls until an app opens, whose adopter "detects the stall and rolls or nudges as
+  it does for any session"; and the Host "already runs the limit probe locally" and could open a Gate
+  when a worker's statusline shows a limit. That was wrong in four places. Step 4 is false for codex: the
+  adopter registers an adopted codex chain unmapped (`sameAccount` and `locate` both false), and such a
+  chain does not roll until codex writes a limit record of its own, which a blocked turn never does. So a
+  codex worker stalled at its limit stayed stalled after the app opened. The limit probe is a verdict on
+  an exit (`limitProbe.ts`, called from `handleExit` and `worker_done --outcome failed`). A stalled worker
+  does not exit, and the probe reads the transcript or rollout, not the statusline. The size list missed
+  the usage fetcher's `net.fetch`, the resume packet and git summary, the hook events watcher, the
+  `rolling.json` double writer, the per-process block registry, the Host's asynchronous spawn against a
+  roll's await-free kill, and the coordinator slot (A72). It also named `codexRolloutWatcher.ts`, which
+  did not need to move: its one headless duty, the rollout mapping in the note, the Host's spawner
+  already did. And it left out coordinators, each of which is a single-account chain that is waited out
+  and resumed in place. What shipped: the two coordinators moved with no logic change to
+  `src/core/rolling/claudeCoordinator.ts` and `codexCoordinator.ts`; the roll tap, the resume packet and
+  the git summary to `src/core/orchestration/exec/`; the hook watcher to `src/core/hooks/eventWatcher.ts`,
+  with a `startAtEnd` option the Host passes (plan R13); and the usage fetcher and its cache to
+  `src/core/usage/` with an injected `fetch`. The app passes `net.fetch`; the Host passes nothing and gets
+  the global one (plan R11). The Host builds its own two coordinators over its own registry, statusline
+  files, hook events, `accounts.json` snapshot (read again on each 15 s tick) and login memo
+  (`createHostRolling`, `src/host/rolling.ts`). They are composed once, in `src/host/rollingWiring.ts`,
+  which `index.ts` and the S6 rig (`src/host/rolling.integration.test.ts`, in process) both use. The Host
+  asks for account usage itself, as the app does, and a lookup that fails accepts the limit (Q4, plan R28,
+  preflight R1). It keeps its own block registry, writes its roll config to `profile/host/rolling.json`
+  (the app reads its own file first, then the Host's, plan R9), and appends `[host]` and `[host][codex]`
+  lines to the profile's `rolling.log` (plan R10). A roll's respawn is split in two (plan R5).
+  `prepareRollSpawn`, awaited before the kill, does every await and every refusal the Host's spawn has:
+  a retiring Host, a damaged settings or accounts file, a missing folder, an unknown account. `rollSpawn`,
+  inside the await-free stretch, is synchronous. A refusal reschedules the roll visibly and leaves the old
+  session alive. The new pty's note is written in the same `registry.open` that makes it (`restoreExtra`,
+  plan R6). The spawner locates each codex session the Host starts, once, and hands the result to the
+  chain (`attachFresh`, plan R12), so a Host codex chain is never adopted unjudged. `roll()` asks the owner
+  rule (A69) at entry and again right before the kill (preflight B1). A chain that rule quiets keeps
+  reading its tails and statusline and takes no action (preflight R2, plan R27). No dependency the Host
+  hands a coordinator rejects unheld, because the Host has no `unhandledRejection` handler (preflight R3,
+  plan R29); `prepareSpawn` and `copy` still reject, inside `roll()`'s own catch. The Host rolls pty
+  sessions only, and keeps all three kinds of unattended typing: the resume in place at a reset, the idle
+  nudge and the reset anchor (Q5, plan R21). When retire starts, the Host's rolling is disposed with its
+  driving (A50): no new roll, no takeover, and nothing waits for a roll in flight, because `leave()` kills
+  every pty (plan R16). Pinned by `src/host/rolling.test.ts`, `src/host/spawner.test.ts`,
+  `src/host/importFence.test.ts`, `src/host/rolling.integration.test.ts` and the two coordinators' tests.
+- **A68. D7 and A58, a usage limit with no app (Q3).** D7 said: a Gate carrying the reset time, so
+  `runs wait` ends with 8. A58 moved it to S6, because `createGate` refuses a Task with an open Dispatch.
+  What shipped instead, as the user decided: **no Gate**. A worker at its limit rolls or waits in the Host
+  (A67), and the Host's roll tap records the stop and its reset time on the Dispatch, as the app's does.
+  `runs wait` and `jobs wait` end with 8 in a new state, `limited`, when the Run has at least one open
+  Dispatch, every open Dispatch of the Run is in a stop whose reset time is known (its last `resumes`
+  entry has `resetsAt` and no `resumedAt`), and no Task of the Run is `validating`, `reviewing` or
+  `ready` (`limitedUntil` in `src/core/orchestration/command.ts`, asked after the open Gate and the
+  pause). `ready` was added in the controller's review of Task 15: a Run with a Task ready to start can
+  still move before the reset, because the loop may dispatch it. The envelope is `WAITING_FOR_INPUT` with
+  `details: { runId, progress, state: 'limited', resetsAt }`, where `resetsAt` is the earliest reset
+  among the waiting workers. Its `nextSteps` are `astera runs wait --id <runId>` and `astera runs get
+  --id <runId>`, not `questions answer` or `runs resume` (`src/core/orchestration/cliOutput.ts`). The
+  workers still resume by themselves, so a later `runs wait` can end `completed`. A restored wait is
+  published as a re-publish (`reattach: true`), so a takeover does not record the app's stop a second
+  time (preflight R5, plan R32). Why no Gate: it was reachable only by ending the worker, and the ending
+  tells a script the one true thing, that nothing in the Run moves before that time. A Run whose waiting
+  session is its coordinator is not seen by this rule (known limits). Pinned by
+  `src/core/orchestration/command.test.ts`, `src/core/orchestration/cliOutput.test.ts` and
+  `src/host/rolling.integration.test.ts`.
+
+**Who rolls a session**
+
+- **A69. A1 and `exitOwner.ts`, "rolls happen only on ptys an app holds" (Q1, Q2; plan R1 to R3, R18,
+  R25, R31, R33).** A1 said: rolls still happen only on ptys an app holds, so the safety reason of §2.6
+  stands; `exitOwner.ts` said the same. Both are false since S6. What shipped is one owner per session,
+  which starts as the process that spawned it (Q1). Every session the Host spawns is marked
+  `rolledBy: 'host'` in its note at the spawn and is rolled by the Host for its life, with or without an
+  app attached. A new app says `yields: [..., 'rolling']` in its hello to a Host that announces
+  `rolling`, and its adopter skips a note so marked. The Host acts on a chain only while every socket
+  that holds that pty yielded `rolling` (`hostMayAct`, `src/core/host/rollOwner.ts`, over
+  `exits.holdersOf` and `server.yieldsOf`). It reads holders, not roles, so an older or role-less app
+  that holds a pty quiets the Host's chain for that pty; only a socket that said hello counts as a holder
+  (the Task 1 review). A session the app spawned (a person's tab with rolling on, the app's `retry-once`
+  repair) is rolled by the app while it lives, and by the Host once the app is gone (Q2). The app writes
+  a `RollSnapshot` of each chain into the pty's note whenever the chain's durable state changes
+  (`src/core/rolling/snapshot.ts`), and the Host restores the chain from it (`takeOverSessions`,
+  `src/host/takeover.ts`). The takeover runs in one synchronous turn with no app attached, while the Host
+  announces `rolling` and is not retiring. It takes each live session pty that has no `rolledBy`, a
+  snapshot that parses, whose accounts equal the note's `rollAccountIds` and whose current account is the
+  note's, no socket holding it, and no Host chain on its id. In that turn it resumes a paused pty
+  (preflight R4), writes the mark, then restores, and takes the mark back if the restore refuses or
+  throws. `src/host/appGone.ts` decides that the app is gone with the driver's rule (`APP_LEFT_GRACE_MS`,
+  `app.pid`, a kept pid asked again on every tick) and one difference: an app that attaches within the
+  grace cancels the takeover whatever its pid, because a new instance restores the old one's chains
+  itself. After a gone decision the pass runs again on every 15 s tick with no app attached (preflight
+  R13), and it waits until `accounts.json` has been read once with success (the Task 16 review). **Why the
+  same live pid keeps its sessions** (corrected, preflight R10): not because a dropped app's chains keep
+  running while its socket is down. They do not. The drop ends every Host-backed handle with
+  `PTY_LOST_SIGHT_EXIT_CODE`, `onSessionExit` hands that exit to `rolling.handleExit`, and every chain
+  that is not mid-roll is disposed. So such an app holds no chain that could be a second owner, and its
+  reconnect **restores** each chain from the note's snapshot instead of registering it from zero (the S6
+  design's §3A.3 rule 2). The app's adopter has three branches (plan R18): a Host mark in front of a Host
+  that rolls is skipped, and any chain the app still holds for it is unregistered (preflight R11); a
+  snapshot is restored; anything else registers as before. **Ownership does not come back** (controller
+  ruling, preflight R8, `progress.md`): a session the Host took stays the Host's when an app returns. The
+  four reasons are in the S6 design's §3A.1: one handover point instead of two; the chain's memory stays
+  where it is; the display path already exists; and it is Q1's rule, applied once. `exitOwner.ts`'s
+  header now says rolling runs in both processes, the app for the ptys it owns and the Host for the ones
+  it spawned or took over, each deferring its own exits so its own roll tap rekeys first. The exit owner
+  itself is unchanged. Pinned by `src/core/host/rollOwner.test.ts`, `src/host/takeover.test.ts`,
+  `src/host/appGone.test.ts`, `src/host/exits.test.ts`, `src/main/host/adoptRolling.test.ts` and
+  `src/host/rolling.integration.test.ts`.
+- **A70. A5, `readWorker` after a roll (plan R19).** A5 said: once a roll has moved the Dispatch to
+  another session, the call goes to the app, which holds the tail that followed the roll. The Host now
+  rolls its own workers, so its tail follows them. On a rekeyed Dispatch, the Host's roll tap sets the
+  spawner's `startedOn` to the new session and restarts `WorkerTails` on it with `previousSessionId`
+  (`retarget` in `src/host/spawner.ts`, called from `src/host/rollTapHost.ts`). A5's rule now holds only
+  for a session the app rolled. A Dispatch the app started and the Host rolled after a takeover is
+  retargeted too, so from then on the Host answers `worker-read` for it, with only the output since that
+  roll (known limits). Pinned by `src/host/rollTapHost.test.ts`, `src/host/spawner.test.ts` and
+  `src/host/rolling.integration.test.ts`.
+- **A71. §7.2, the S6 additions (plan R17, R30; the S6 design's §3.4).** The table has no S6 rows. What
+  shipped, none of it a protocol bump (`HOST_PROTOCOL` stays 3): the feature `rolling` in the Host's
+  hello, announced exactly when `spawn` is (`hostFeatures`, `src/host/features.ts`); the `hello.yields`
+  value `rolling`, from an app; two pushes to every greeted client, `{ t: 'roll-state', event }` (a Host
+  chain's banner state) and `{ t: 'session-rolled', oldSessionId, info, ptyId, dest? }` (a Host roll
+  rekeyed a session, and `ptyId` is the new session's pty); two internal `orch-call`s, role app only and
+  answered 501 by a Host that does not roll, `roll-state` `{ sessionId }` answering `{ state }` and
+  `roll-force` `{ sessionId }` answering `{ forced: true }`, or 404 for a session the Host does not roll;
+  the note keys `rolledBy`, `rolledFrom`, `roll` (the snapshot), `forkSeen` and `nativeSessionId`, plus
+  the existing `rolloutPath` and `codexSessionId`, which the Host now writes on a codex roll's respawn;
+  and one profile file, `host/rolling.json`. The app adopts the new pty of a `session-rolled` before it
+  forwards the rekey, and holds the old session's exit until then and until its orchestration mirror
+  shows the rekey, at most 15 s (`src/main/host/hostRollView.ts`, the Task 14 review). It keeps the last
+  lasting `roll-state` per session for a renderer that mounts later. Its history resume guard asks the
+  Host's notes for a native id its own indexes miss while the Host rolls
+  (`src/main/host/hostNativeGuard.ts`). The Work Unit collector forks once per roll, through `forkSeen`
+  (preflight C10). Pinned by `src/host/features.test.ts`, `src/host/orch.test.ts`,
+  `src/host/rolling.test.ts`, `src/main/host/hostRollView.test.ts`,
+  `src/main/host/hostNativeGuard.test.ts` and `src/main/host/adoptRolling.test.ts`.
+
+**Exits a roll causes, and the one name that changed group**
+
+- **A72. A1 and A2, an exit that a roll caused (plan R7, R14).** A1 said `releaseCoordinator` follows
+  the exit owner, and A2 that the handover sweep hands every open Dispatch whose session ended to
+  `handleExit`. Two kinds of exit must not be handled that way. First, a roll that respawns a coordinator
+  (a single-account chain's in-place fallback) kills the session the Run's `coordinatorSessionId` names,
+  and both processes detached that slot on the exit, because `rekeyDispatch` moves Dispatches only. That
+  defect was older than S6 (the S6 design's §2.4). What shipped: a pure `rekeyCoordinator`
+  (`src/core/orchestration/state.ts`), applied by the moved roll tap before its Dispatch branch, and so
+  used by both processes. The app's release of the slot now waits `EXIT_DEFER_MS` as well, and a release
+  still pending when orchestration stops is cancelled (`PendingCoordinatorReleases` and
+  `coordinatorReleaseOf`, `src/core/orchestration/exec/releaseDefer.ts`). The Host's exit handler already
+  runs after that defer and applies the same `coordinatorReleaseOf`. Second, an app that dies between its
+  roll's spawn and its tap's rekey commit leaves a live new pty whose note says `rolledFrom: <old id>`,
+  and an open Dispatch on the dead id, which the sweep would close. Before the Host handles an exit it now
+  looks for a live session pty whose note names that session as `rolledFrom` (`rolledInto`), and when
+  there is one it rekeys the Dispatch and the slot through its own roll tap instead (`sessionExited`,
+  `src/host/orch.ts`). The takeover then restores the chain, which types the carry-on prompt. A pre-S6
+  app writes no `rolledFrom`, and its case stays as it was (A51). Pinned by
+  `src/core/orchestration/exec/rollTap.test.ts`, `src/core/orchestration/state.test.ts`,
+  `src/core/orchestration/exec/releaseDefer.test.ts`, `src/host/orch.test.ts`,
+  `src/host/rollTapHost.test.ts` and `src/host/rolling.integration.test.ts`.
+- **A73. §1.4, `unregisterRolling`'s group (plan R8).** It was FIRE_AND_FORGET: forwarded to an attached
+  app, swallowed with none. A Dispatch closed while its session lives would then leave a Host chain
+  rolling a session its Task no longer wants. What shipped: a group of its own, HOST_ROLLS
+  (`src/host/orchDeps.ts`). The wrapper disposes the Host's own chain first, synchronously and never
+  throwing, then takes FIRE_AND_FORGET's route to an attached app, which ignores an unknown id. EFFECTFUL
+  stays `true`, and the classification test names the group. Pinned by `src/host/orchDeps.test.ts`.
+
 ## Known limits after S3
 
 - **`refresh()` does not retry a Windows rename-busy read.** (resolved in S4+S5, see Amendments A60)
@@ -838,7 +1019,8 @@ Each was found while building or reviewing S4+S5 and left as it is, with its rea
 - **A lost worker is gated even when the app journalled it** (A51, N5). While the Host drives with no
   app attached, a worker lost in a Run with no coordinator gets a Gate, including one the app's
   reconciler could have resumed at its next start.
-- **A worker at its usage limit with no app open stalls** (A58). `runs wait` ends at its deadline with 7,
+- **A worker at its usage limit with no app open stalls** (A58). (resolved in S6, see Amendments A67
+  and A68: the Host rolls it, and `runs wait` ends `limited` when every worker waits for a reset) `runs wait` ends at its deadline with 7,
   and the app rolls the worker when it opens. Rolling stays in the app until S6.
 - **A `--terminal` start waits up to about 30 s before its Dispatch commits.** Repair's same-session
   branch and a coordinator's `--terminal` start await `waitUntilIdle` (`DEFAULT_IDLE_WAIT_TIMEOUT_MS`,
@@ -868,6 +1050,106 @@ Each was found while building or reviewing S4+S5 and left as it is, with its rea
   (Task 12 review m2).
 - **Carried from S3, unchanged:** the ~2 s replacement window for the app's worktree writes, the conhost
   per self-exiting pty (A17), and a pre-S3 app that writes no `app.pid` (A63).
+
+## Known limits after S6
+
+Each was found while building or reviewing S6 and left as it is, with its reason. Checked at
+`2d426dcb`. The names in parentheses are the S6 pre-flight findings and plan rulings (see the
+Amendments (S6 as shipped) preamble).
+
+**Who rolls, and who is told**
+
+- **Block knowledge is per process** (the S6 design's §4.8). The app's chains and the Host's do not
+  share a `BlockRegistry`. A tab rolling off an account does not tell the Host's workers, so each side
+  pays one kill and respawn per account to learn a block the other knew. It costs efficiency, not
+  correctness. A takeover carries the chain's own accounts' blocks in its snapshot.
+- **An older app's sessions are not taken over.** An app from before S6 writes no snapshot, so its
+  sessions stall at a limit once it is gone, as before (the S6 design's §3A.2). So does a session an
+  older app rolled away from a Host chain: its respawn is the app's, and nobody rolls it once that app
+  leaves.
+- **Chat sessions are not taken over.** They are line processes whose protocol adapter lives in the
+  app, so with the app gone nothing can drive a turn (plan R20).
+- **A Host roll is silent in Slack and in desktop notices until an app attaches.** Both live in the app.
+  An attached app forwards the Host's pushes to them; a roll made with no app attached announces nothing
+  there, then or later.
+- **A tab the Host respawns runs in D4's environment**, the Host's own minus the strip list, not the
+  app's (the S6 design's §3A.6). It keeps its title, Slack choice, permission choice and rolling
+  accounts. Its schedules do not fire until the app returns (D2).
+- **The app-gone rule has two watchers**, `driving.ts` for the app-left steps and `appGone.ts` for the
+  takeover (plan R25). They share `APP_LEFT_GRACE_MS` and `liveAppPid` and differ on purpose in one
+  point (A69), but a change to one must be made to the other by hand.
+- **A missing `app.pid` makes a live app look gone** (preflight R11). `markAppRunning` swallows a failed
+  write, so a live app whose socket stays down past the 5 s grace is judged gone, and its sessions are
+  taken. That is safe because the drop already disposed its chains (A69, preflight R10); the chain in the
+  next entry is the exception.
+- **A chain that was mid-roll when its app's socket dropped is not disposed by the drop** (preflight
+  R10). It finishes its roll inside the app. If the Host then owns the pty, the adopter's unregister belt
+  drops that chain when the app returns (A69, preflight R11).
+- **A role-less older app (v1.3.17 to v1.3.25) counts as `cli`** (preflight C17), so `hasApp()` is false
+  while it is attached and a takeover can run beside it. The holders check protects every pty it has
+  attached; a pty it is about to attach, with its `pty-list` answer still in flight, is not protected.
+- **An older app that attaches while a Host roll is past its last gate sees that roll finish beside
+  it** (the residue of preflight B1). The gate in `roll()` is asked last after `prepareSpawn`, just before
+  the kill. A roll past that point kills and respawns, and the older app's own chain for the old pty dies
+  with the kill.
+- **If the app dies after a roll decision and before the kill, a claude roll in flight can be lost.**
+  There is never a second action, and the fallback trigger recovers it on the Host's side (the Task 6
+  review, parked).
+
+**The snapshot and the takeover**
+
+- **A snapshot one change stale can type a carry-on prompt twice** (preflight C16): `awaitingPrompt: true`
+  was written at the spawn and the later `false` write was lost. It is a second prompt, not a second
+  roller.
+- **A briefing longer than 16 KB is not stored in the snapshot** (`MAX_SNAPSHOT_PROMPT_CHARS`), so a
+  takeover asks for it again. For a tab session the Host has no tab briefing, so that yields the plain
+  carry-on line.
+- **A codex chain snapshotted before its rollout was found, with no `locateSince`, is restored unmapped**
+  and cannot roll (preflight R6, the Task 6 review). Only a blank-slate respawn records
+  `locateSince`.
+- **If the first accounts read fails, the takeover is held until a read succeeds**, which is up to one
+  15 s tick later (the Task 16 review). A takeover with no accounts would map nothing.
+- **A Dispatch the app started and the Host rolled after a takeover** gets a Host tail from that roll on
+  (A70). `worker-read` then answers from the Host with only the output since the roll; the earlier
+  output stayed with the app's tail.
+
+**Codex rollouts**
+
+- **A codex blank-slate respawn's own locate does not exclude rollouts other notes claim** (preflight
+  R7). Two fresh codex sessions in one folder and account at the same instant could swap, as A16's case
+  can.
+- **A rollout search skips only rollouts claimed within the same coordinator.** Two blank-slate rolls of
+  one account in one folder within 60 s may cross, the same as they can live.
+- **A codex rollout search that times out keeps `locateSince`**, and the search scans only today's and
+  yesterday's folders. So a takeover days later finds nothing for a blank-slate codex respawn, and that
+  chain stays unmapped.
+
+**The app beside a Host that rolls**
+
+- **A rekey is forwarded to the renderer even when adopting the new pty failed.** The renderer catches
+  up at the next sweep.
+- **A history resume that misses the app's local indexes while the Host rolls costs one `pty-list`
+  round trip**, up to 5 s (`hostNativeGuard.ts`).
+- **The app holds the old session's exit for up to 15 s** until its orchestration mirror shows the rekey
+  (`HOST_ROLL_SETTLE_MS`). After 15 s it delivers the exit anyway.
+- **The ordering hold's wiring in `ipc.ts` is not pinned by a test.** The `withHostRollHold` wrapper is
+  tested alone; the swap that puts it in front of the exit handler needs a `registerIpc` harness (the
+  Task 14 re-review).
+
+**`runs wait` and the usage lookup**
+
+- **A coordinator's own wait is not a `limited` ending.** The rule looks at open Dispatches, and a
+  coordinator is a Run's slot, not a Dispatch, so such a Run waits to its deadline (7).
+- **`runs wait` ends `limited` only when no Task of the Run is ready to start and no check is running.**
+  The reset it names is the earliest among the waiting workers (A68).
+- **The Host's usage lookup goes without the system proxy and the OS certificate store.** Node's
+  `fetch` honours neither by default, so behind a corporate proxy the lookup fails, and a failed lookup
+  accepts the limit (Q4): detection is kept, and the brake against a false roll is weaker, as in the app
+  when its lookup fails.
+- **The Host's usage lookup under plain Node is unmeasured.** Task 18 does not measure it with a real
+  account: the standing rule forbids copying a person's accounts or credentials into a scratch profile.
+- **The Host's usage gate reads the claude credentials file or Keychain for the usage lookup**, the same
+  as the app does (preflight R1, plan R28, the S6 design's §2.1).
 
 ## 0. The problem, measured
 
@@ -1477,6 +1759,9 @@ with `--validate` or convergence never complete headless until S5 ships.
 
 ## 6. S6: rolling and usage limits
 
+(amended for S6, see Amendments A67: S6 shipped, and this section was wrong in four places; and A68,
+which replaces D7's Gate)
+
 **Not needed for the goal, and it should follow later.** It is the largest slice by far:
 `src/main/rolling.ts` 2,273 lines, `src/main/codexRolling.ts` 1,704, `rollTap.ts` 359, the
 coordinator wiring in `src/main/index.ts:572-1040` (about 470 lines), `codexRolloutWatcher.ts` 400.
@@ -1496,7 +1781,8 @@ That is a stall, not a corruption. What is worth adding in S4 without S6 is maki
 (D7): the Host already runs the limit probe locally after S2, and can open a Gate "the worker hit its
 usage limit; it resets at <time>; open Astera to roll it to another account" when a worker's
 statusline shows a limit and no app is attached. `runs wait` then ends `waiting` with a reason instead
-of timing out. (D7 left out of S4+S5 by the user; S6. See Amendments A58)
+of timing out. (D7 left out of S4+S5 by the user; S6. See Amendments A58. Replaced in S6 by the
+`limited` ending, see Amendments A68)
 
 ## 7. Protocol
 
@@ -1529,6 +1815,8 @@ Host. No change here needs a bump:
 (amended 2026-09-24, see Amendments A20: the S3 rows are not the whole mechanism; an internal
 `orch-call` `worktree-list` (app to Host, role app only) and a push `{ t: 'worktrees-state', seq, file
 }` (Host to all greeted clients) are additive too)
+
+(amended for S6, see Amendments A71: the S6 additions, none of which bumps the protocol)
 
 ### 7.3 Version skew
 
