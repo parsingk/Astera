@@ -459,6 +459,15 @@ describe('snapshotFor', () => {
     expect(r).not.toHaveProperty('coordinatorMissing')
   })
 
+  // A paused Run (a fire replaced it, or `runs stop` ended it) is taken back with `runs resume`, not ▶:
+  // a ▶ there would start a coordinator nobody wants.
+  it('세워 둔 Run 에는 그 칸이 없다', () => {
+    const s = withRuns([{ ...run('r1', absPath('p')), coordinatorAccountId: 'acc1', paused: true }])
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
+    expect(r.paused).toBe(true)
+    expect(r).not.toHaveProperty('coordinatorMissing')
+  })
+
   // 계정 지정이 없는 Run(옛 Run·CLI Run)은 애초에 관리자를 기대하지 않는다
   it('코디네이터 계정이 없으면 그 칸이 없다', () => {
     const s = withRuns([run('r1', absPath('p'))])

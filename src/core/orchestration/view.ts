@@ -309,10 +309,12 @@ export function snapshotFor(
       // 빈 값은 싣지 않는다 — 거짓을 실으면 sameSnapshot 의 문자열을 이유 없이 늘린다(아래
       // worktrees·pendingStart 와 같은 관례)
       // Not while its start is in flight (I1: a second ▶ would start a second coordinator), and not on a
-      // finished Run (I3: there is nothing left to manage). run-start refuses both the same way.
+      // finished Run (I3: there is nothing left to manage), and not on a paused one (`runs resume` takes
+      // it back; a Run a fire replaced is paused, U4). run-start answers all three the same way.
       ...(job.coordinatorAccountId !== undefined &&
       run !== undefined &&
       run.coordinatorSessionId === undefined &&
+      run.paused !== true &&
       !coordinatorStarting(run, nowMs) &&
       outcomeOf(state, run.id) === 'running'
         ? { coordinatorMissing: true }

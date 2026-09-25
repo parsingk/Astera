@@ -1758,9 +1758,11 @@ export async function handleCommand(
         // **A finished Run gets no coordinator** (fix round 1, I3): there is nothing left for one to
         // manage, and starting it spends an account on a session that only reads a closed Run. The view
         // shows no ▶ for it either (view.ts's rowFor). A start in flight is answered the same way, by
-        // handToCoordinator (I1).
+        // handToCoordinator (I1). **So does a paused Run**: `runs resume` takes it back, not ▶, and a Run
+        // a fire replaced (U4) is paused with its coordinator stopped on purpose. The view shows no ▶ on it.
         if (
           namedRun.coordinatorSessionId ||
+          namedRun.paused === true ||
           !runJob.coordinatorAccountId ||
           !deps.startCoordinator ||
           outcomeOf(s, namedRun.id) !== 'running'

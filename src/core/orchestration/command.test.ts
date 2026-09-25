@@ -6978,6 +6978,22 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect((await call(deps, 'run-start', { run: run.id })).status).toBe(200)
     expect(deps.startCoordinator).not.toHaveBeenCalled()
   })
+
+  // A paused Run is taken back with `runs resume`, not ▶. The view shows no ▶ on it (view.ts), and the
+  // CLI path matches: a fire's replaced Run is paused and must not get a coordinator nobody wants.
+  it('▶ on a paused Run answers 200 and starts nothing', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    // The next fire replaces it: coordinator stopped, Run paused (U4).
+    expect((await fire(deps, jobId)).status).toBe(200)
+    expect(deps.getState().runs.find((r) => r.id === first.id)?.paused).toBe(true)
+    deps.startCoordinator.mockClear()
+    const r = await call(deps, 'run-start', { run: first.id })
+    expect(r.status).toBe(200)
+    expect(deps.startCoordinator).not.toHaveBeenCalled()
+    expect(deps.getState().runs.find((x) => x.id === first.id)).not.toHaveProperty('coordinatorSessionId')
+  })
 })
 
 // Task 1 small round 2: the clauses of runMoves each pinned, and a start drops only its own mark.

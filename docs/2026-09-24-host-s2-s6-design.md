@@ -1195,7 +1195,9 @@ A83 and A84). This list is the record, in A1's form; A56 and D2 point back here.
   only scheduled Jobs. A Run that `jobs run` starts for a Job with no schedule keeps its coordinator
   when it finishes, because a person may be reading its tab. **One rule for both callers:** a Run the
   fire would replace is one A83 already calls not running, so `jobs run` does not refuse on it either;
-  it starts the next Run beside it and leaves that coordinator alone. Pinned by `command.test.ts` and
+  it starts the next Run beside it and leaves that coordinator alone. **A paused Run shows no ▶**, and
+  `run-start --run` on one answers 200 and starts nothing, so a replaced Run gets no coordinator by
+  accident; `runs resume` takes it back. Pinned by `command.test.ts`, `view.test.ts` and
   `dispatchLoop.test.ts` (final-fix-report.md).
 
 ## Known limits after S3
@@ -1484,11 +1486,6 @@ reason. Checked at `bf479b4e`.
   longer than that. So can, on a Host with no local spawner of its own, a `startCoordinator` call that
   Host forwards to an attached app whose own reply never comes. Either way the marker goes stale while
   its start is still in flight, and a second start can then be begun beside the first.
-- **A replaced or finished Run can still show ▶.** (Amendments A84) The Jobs list shows ▶ on a Run of a
-  coordinator Job that has no coordinator and whose outcome is `running`. A Run the fire replaced is
-  paused but, with no Task finished, still reads `running`, so its row keeps ▶, and pressing it starts
-  a coordinator on a Run nobody means to go on with. Old fired Runs from before A84 show ▶ the same way
-  (final review M3).
 - **A coordinator stop that fails leaves the session alive, with no slot.** (Amendments A84) The stop is
   best effort: a Host that does not hold the pty and has no app attached cannot stop it, and logs that.
   The slot is emptied anyway, so nothing asks again. The session then loops on `check --wait` on a
