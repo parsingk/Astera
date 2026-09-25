@@ -192,10 +192,17 @@ export function createHostChats(d: HostChatsDeps): HostChats {
   }
 
   const noteOf = (id: string): Record<string, unknown> => entryOf(id)?.meta?.restore ?? {}
-  /** The note's policy (the app's setUnattendedPermission lands there), else the manager's. */
+  /** The note's policy (the app's setUnattendedPermission lands there), else the manager's. A roll's
+   *  respawn asks this too, never the manager's copy from the adopt (final review I2). */
   const unattendedOf = (id: string): UnattendedPermission => {
     const v = noteOf(id).unattendedPermission
     return isUnattendedPermission(v) ? v : manager.unattendedOf(id)
+  }
+  /** The note's model pick first, as for the policy (final review I2): while the app is the writer, its
+   *  setModel lands only in the note, and the manager's copy is the one read at adopt. */
+  const chosenModelOf = (id: string): string | null => {
+    const v = noteOf(id).chosenModel
+    return typeof v === 'string' ? v : manager.chosenModelOf(id)
   }
   const answeredOf = (id: string): string[] => {
     const a = noteOf(id).answered
@@ -307,7 +314,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
         return manager.spawn(
           chatSpawnOptsOf(
             { ...o, restoreExtra: { ...o.restoreExtra, rolledBy: 'host' } },
-            { unattendedOf: (x) => manager.unattendedOf(x), bypassSignal: null, hostStarting: true }
+            { unattendedOf: (x) => (x === undefined ? 'hold' : unattendedOf(x)), bypassSignal: null, hostStarting: true }
           )
         )
       } catch (err) {
@@ -415,7 +422,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     },
     unattendedOf,
     answeredOf,
-    chosenModelOf: (id) => manager.chosenModelOf(id),
+    chosenModelOf,
     bypassedOf: (id) => manager.bypassedOf(id),
     subscribe: (fn) => manager.subscribe(fn),
     onWriterChange: (fn) => d.holders.onChange(fn),

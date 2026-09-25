@@ -212,6 +212,28 @@ describe('createHostChats — the writer rule (spec §3.2)', () => {
   })
 })
 
+describe('createHostChats — a roll reads the note, not the copy taken at adopt (final review I2)', () => {
+  // While the app is the writer, setModel and setUnattendedPermission reach only the note.
+  it.each([
+    ['hold', 'deny-after-60s'],
+    ['deny-after-60s', 'hold']
+  ])('rolls with the model and the policy the note has now (%s, then %s)', (was, now) => {
+    const r = rig({ chosenModel: 'opus', unattendedPermission: was })
+    r.chats.adopt(r.entry())
+    r.registry.note('p1', { chosenModel: 'sonnet', unattendedPermission: now })
+    expect(r.chats.chosenModelOf('c1')).toBe('sonnet')
+    const info = r.chats.spawn({ account, cwd: 'D:/p', restoreExtra: { rolledFrom: 'c1' } })
+    expect(r.registry.list().find((x) => x.meta?.id === info.id)!.meta!.restore.unattendedPermission).toBe(now)
+  })
+
+  it('falls back to the adopted pick when the note has none', () => {
+    const r = rig({ chosenModel: 'opus' })
+    r.chats.adopt(r.entry())
+    r.registry.note('p1', { chosenModel: null })
+    expect(r.chats.chosenModelOf('c1')).toBe('opus')
+  })
+})
+
 describe('createHostChats — a dropped session hears nothing (Task 2 review carry)', () => {
   const heardRig = () => {
     const procs: ReturnType<typeof fake>[] = []
