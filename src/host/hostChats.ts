@@ -69,6 +69,8 @@ export interface HostChats {
   bypassedOf(sessionId: string): boolean
   subscribe(fn: (sessionId: string, e: ChatEvent) => void): () => void
   onWriterChange(fn: () => void): () => void
+  /** How many proc handles the Host keeps for its sessions. For tests and diagnostics. */
+  handleCount(): number
   dispose(): void
 }
 
@@ -174,12 +176,24 @@ export function createHostChats(d: HostChatsDeps): HostChats {
       return info
     },
     spawn(o) {
-      return manager.spawn(
-        chatSpawnOptsOf(
-          { ...o, restoreExtra: { ...o.restoreExtra, rolledBy: 'host' } },
-          { unattendedOf: (x) => manager.unattendedOf(x), bypassSignal: null, hostStarting: true }
+      const before = new Set(handles.keys())
+      try {
+        return manager.spawn(
+          chatSpawnOptsOf(
+            { ...o, restoreExtra: { ...o.restoreExtra, rolledBy: 'host' } },
+            { unattendedOf: (x) => manager.unattendedOf(x), bypassSignal: null, hostStarting: true }
+          )
         )
-      )
+      } catch (err) {
+        // The factory opened a proc and kept its handle before the manager threw (an adapter that could
+        // not be made): the session never existed, so its handle must not go on hearing lines.
+        for (const [id, h] of handles) {
+          if (before.has(id) || manager.has(id)) continue
+          h.release()
+          handles.delete(id)
+        }
+        throw err
+      }
     },
     async started(id) {
       let cancel: () => void = () => {}
@@ -254,6 +268,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     bypassedOf: (id) => manager.bypassedOf(id),
     subscribe: (fn) => manager.subscribe(fn),
     onWriterChange: (fn) => d.holders.onChange(fn),
+    handleCount: () => handles.size,
     dispose() {
       for (const s of manager.list()) forget(s.id)
       hostProcs.dispose()

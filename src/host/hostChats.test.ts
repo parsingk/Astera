@@ -4,6 +4,7 @@ import { createProcHolders } from './procHolders'
 import { createHostChats } from './hostChats'
 import * as F from '../core/chat/claudeFixtures'
 import type { Account } from '../core/types'
+import type { ChatEvent } from '../core/chat/types'
 
 const account: Account = { id: 'a1', label: 'a1', configDir: 'C:\\c1', color: '#fff', createdAt: '2026-09-26T00:00:00Z' }
 function fake(): RegistryProc & { sent: string[]; emit(c: string): void } {
@@ -135,7 +136,7 @@ describe('createHostChats — a dropped session hears nothing (Task 2 review car
         kill: () => {}
       }
     }
-    const chats = createHostChats({ procs: registry, holders: createProcHolders(), platform: 'win32', homeDir: 'C:\Users\t', version: '0.0.0', baseEnv: {}, askApp: async () => ({ sent: true }), log: () => {}, createAdapter })
+    const chats = createHostChats({ procs: registry, holders: createProcHolders(), platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {}, askApp: async () => ({ sent: true }), log: () => {}, createAdapter })
     chats.adopt(registry.list()[0])
     return { procs, chats, heard }
   }
@@ -154,5 +155,87 @@ describe('createHostChats — a dropped session hears nothing (Task 2 review car
     r.chats.dispose()
     r.procs[0].emit('b\n')
     expect(r.heard).toEqual([])
+  })
+})
+
+describe('createHostChats — the gate is the holders (Task 3 review)', () => {
+  // Important 1. Mutation: hand createHostProcs `mayWrite: () => true`; this test must fail.
+  it('a reader-role Host adapter writes nothing once an app holds the proc', () => {
+    const r = rig()
+    r.chats.adopt(r.entry())
+    r.holders.heldBy('p1', 1)
+    r.procs[0].emit('{"type":"control_request","request_id":"q1","request":{"subtype":"no_such_thing"}}\n')
+    expect(r.procs[0].sent).toEqual([])
+  })
+
+  // Important 3. P4: the carry-on goes only through the writer. While the app holds the new proc, the
+  // Host neither marks it sent nor writes it, so the real writer sends it later.
+  it('leaves a carry-on unsent and unmarked while the Host is not the writer', async () => {
+    const r = rig()
+    const info = r.chats.spawn({ account, cwd: 'D:/p', initialPrompt: 'carry on' })
+    const procId = r.chats.procOf(info.id)!
+    r.holders.heldBy(procId, 1)
+    r.procs[1].emit(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: JSON.parse(r.procs[1].sent[0]).request_id, response: {} } })}\n`)
+    await r.chats.started(info.id)
+    expect(r.registry.list().find((x) => x.id === procId)!.meta?.restore.carrySent).toBe(false)
+    expect(r.procs[1].sent).toHaveLength(1)
+    expect(r.procs[1].sent.join('')).not.toContain('carry on')
+  })
+})
+
+describe('createHostChats — the handles it keeps (Task 3 review)', () => {
+  function exiting(): RegistryProc & { sent: string[]; emit(c: string): void; exit(code: number): void } {
+    let onData: (c: string) => void = () => {}
+    let onExit: (e: { exitCode: number }) => void = () => {}
+    const p = { pid: 9, sent: [] as string[], onData: (cb: typeof onData) => { onData = cb }, onExit: (cb: typeof onExit) => { onExit = cb }, write: (d: string) => { p.sent.push(d) }, kill: () => {}, emit: (c: string) => onData(c), exit: (code: number) => onExit({ exitCode: code }) }
+    return p
+  }
+  const keptRig = (o: { throwOnCreate?: boolean } = {}) => {
+    const procs: ReturnType<typeof exiting>[] = []
+    const registry = new ProcRegistry({ spawn: () => { const p = exiting(); procs.push(p); return p }, log: () => {} })
+    registry.open({ id: 'p1', file: 'claude', args: [], opts: { cwd: 'D:/p', env: {} }, meta: note() })
+    const heard: string[] = []
+    const createAdapter: NonNullable<Parameters<typeof createHostChats>[0]['createAdapter']> = ({ proc }) => {
+      proc.onLine((l) => heard.push(l))
+      if (o.throwOnCreate) throw new Error('no adapter')
+      let emit: ((e: ChatEvent) => void) | null = null
+      proc.onExit(({ exitCode }) => emit?.({ type: 'exit', code: exitCode, errorDetail: null }))
+      return {
+        start: async () => {},
+        send: async () => {},
+        interrupt: async () => {},
+        answer: async () => {},
+        setModel: async () => {},
+        setPermissionMode: async () => {},
+        listPermissionModes: async () => [],
+        listModels: async () => [],
+        state: () => ({ status: 'idle', request: null, model: { model: null, effort: null, permissionMode: 'default' }, error: null, exitCode: null, errorDetail: null, outlivesApp: true, truncated: false, provider: 'claude' }),
+        pending: () => [],
+        on: (fn) => { emit = fn; return () => { emit = null } },
+        kill: () => {}
+      }
+    }
+    const chats = createHostChats({ procs: registry, holders: createProcHolders(), platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {}, askApp: async () => ({ sent: true }), log: () => {}, createAdapter })
+    return { registry, procs, chats, heard }
+  }
+
+  // Important 2. Mutation: drop the forget from manager.onExit; this test must fail.
+  it('forgets a session and its handle once its proc has exited', async () => {
+    const r = keptRig()
+    r.chats.adopt(r.registry.list()[0])
+    r.procs[0].exit(0)
+    expect(r.chats.has('c1')).toBe(true) // every listener hears the exit first
+    await Promise.resolve()
+    expect(r.chats.has('c1')).toBe(false)
+    expect(r.chats.handleCount()).toBe(0)
+  })
+
+  // Minor: a spawn that throws after its proc opened leaves no handle behind that still hears lines.
+  it('releases the handle of a spawn that throws', () => {
+    const r = keptRig({ throwOnCreate: true })
+    expect(() => r.chats.spawn({ account, cwd: 'D:/p' })).toThrow('no adapter')
+    r.procs[1].emit('late\n')
+    expect(r.heard).toEqual([])
+    expect(r.chats.handleCount()).toBe(0)
   })
 })
