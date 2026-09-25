@@ -257,3 +257,21 @@ describe('ProcRegistry — what each live process runs in, and how many ended on
     expect(ids).toHaveLength(DEAD_ENTRIES_KEPT)
   })
 })
+
+describe('ProcRegistry — listeners (chat takeover P13)', () => {
+  it('every onLine and onExit listener hears, and one that throws costs the others nothing', () => {
+    const h = harness()
+    const seen: string[] = []
+    h.registry.onLine(() => { throw new Error('boom') })
+    const off = h.registry.onLine((id, _s, line) => seen.push(`${id} ${line}`))
+    h.registry.onExit((id, code) => seen.push(`exit ${id} ${code}`))
+    h.open()
+    h.procs[0].emit('a\n')
+    off()
+    h.procs[0].emit('b\n')
+    h.procs[0].exit(0)
+    expect(seen).toEqual(['p1 a', 'exit p1 0'])
+    expect(h.lines.map((l) => l[2])).toEqual(['a', 'b'])
+    expect(h.logs.some((l) => l.includes('boom'))).toBe(true)
+  })
+})

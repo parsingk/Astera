@@ -59,8 +59,10 @@ export class ProcRegistry {
   private readonly entries = new Map<string, Entry>()
   /** The ended entries that are not chats, oldest ending first (`pruneEnded`). */
   private readonly endedOrder = new Set<string>()
-  private lineCb: (id: string, seq: number, line: string) => void = () => {}
-  private exitCb: (id: string, exitCode: number, stderrTail?: string) => void = () => {}
+  /** Every listener hears (chat takeover P13): the app bridge (procHost.ts), the Host's chats and the
+   *  proc holders. Each is called in its own `try`, so one that throws costs the others nothing. */
+  private readonly lineCbs = new Set<(id: string, seq: number, line: string) => void>()
+  private readonly exitCbs = new Set<(id: string, exitCode: number, stderrTail?: string) => void>()
   private readonly deps: ProcRegistryDeps
   private readonly cap: number
 
@@ -69,12 +71,20 @@ export class ProcRegistry {
     this.cap = Math.max(1, deps.bufferChars ?? PROC_BUFFER_CHARS)
   }
 
-  onLine(cb: (id: string, seq: number, line: string) => void): void {
-    this.lineCb = cb
+  /** Adds a listener; the returned function removes it. */
+  onLine(cb: (id: string, seq: number, line: string) => void): () => void {
+    this.lineCbs.add(cb)
+    return () => {
+      this.lineCbs.delete(cb)
+    }
   }
 
-  onExit(cb: (id: string, exitCode: number, stderrTail?: string) => void): void {
-    this.exitCb = cb
+  /** Adds a listener; the returned function removes it. */
+  onExit(cb: (id: string, exitCode: number, stderrTail?: string) => void): () => void {
+    this.exitCbs.add(cb)
+    return () => {
+      this.exitCbs.delete(cb)
+    }
   }
 
   open(a: { id: string; file: string; args: string[]; opts: ProcOpenOptions; meta?: PtyMeta }): { ok: true; pid: number } | { ok: false; error: string } {
@@ -113,10 +123,16 @@ export class ProcRegistry {
       entry.lines = []
       entry.chars = 0
       this.deps.log(`proc ${a.id} exited ${exitCode}`)
-      // Before the listener, which is a single slot nothing isolates: a throw there must not leave
-      // this entry uncounted. It is the newest ended one, so the listener still finds it.
+      // Before the listeners, kept from before they were isolated: the entry is counted whatever a
+      // listener does. It is the newest ended one, so every listener still finds it.
       if (entry.meta?.kind !== 'chat') this.pruneEnded(a.id)
-      this.exitCb(a.id, exitCode, stderrTail)
+      for (const cb of [...this.exitCbs]) {
+        try {
+          cb(a.id, exitCode, stderrTail)
+        } catch (err) {
+          this.deps.log(`proc ${a.id}: an exit listener threw: ${String(err)}`)
+        }
+      }
     })
     this.deps.log(`proc ${a.id} started, pid ${proc.pid}`)
     return { ok: true, pid: proc.pid }
@@ -130,7 +146,7 @@ export class ProcRegistry {
     const seq = entry.seq
     // **Kept only while alive**: the exit can come from nodeProc's grace timer while a grandchild
     // still holds stdout, and an ended chat is kept for good, so lines stored after the exit would
-    // sit here for the rest of the Host's life with no reader. The listener still hears them.
+    // sit here for the rest of the Host's life with no reader. The listeners still hear them.
     if (entry.alive) {
       entry.lines.push({ seq, line })
       entry.chars += line.length + 1
@@ -140,7 +156,13 @@ export class ProcRegistry {
         entry.truncated = true
       }
     }
-    this.lineCb(entry.id, seq, line)
+    for (const cb of [...this.lineCbs]) {
+      try {
+        cb(entry.id, seq, line)
+      } catch (err) {
+        this.deps.log(`proc ${entry.id}: a line listener threw: ${String(err)}`)
+      }
+    }
   }
 
   /** PtyRegistry.pruneEnded's rule: by ending order, Set and Map operations only. */

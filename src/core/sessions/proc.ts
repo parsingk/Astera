@@ -6,12 +6,13 @@ import type { PtyMeta } from '../host/protocol'
 export interface ProcLike {
   /** 0 until the Host has answered the spawn (procFactory.ts); the real pid on the fallback. */
   pid: number
-  /** One complete stdout line, newline removed. */
-  onLine(cb: (line: string) => void): void
+  /** One complete stdout line, newline removed. One listener: a second call takes the first one's
+   *  place. A handle may return an unsubscribe (the Host's, hostProcs.ts); the app's return nothing. */
+  onLine(cb: (line: string) => void): void | (() => void)
   /** The exit, and the process's last words on stderr when anyone collected them. `stderrTail` is
    *  absent when nothing was collected — an older Host does not send it (design S4) — and that is
    *  different from a process that simply printed nothing. */
-  onExit(cb: (e: { exitCode: number; stderrTail?: string }) => void): void
+  onExit(cb: (e: { exitCode: number; stderrTail?: string }) => void): void | (() => void)
   /** One line to stdin; the newline is added. */
   write(line: string): void
   kill(): void
