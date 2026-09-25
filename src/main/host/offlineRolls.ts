@@ -8,7 +8,9 @@
 // - The desktop notice is local and always shown (fix round 1, I1); the ack goes out only when every
 //   Slack line went out. A failed fetch, Slack send or ack is logged and leaves the journal as it is,
 //   so it is said again: on the next swap to a Slack transport that can post (slackReady, which covers
-//   slack.json loading after the sweep, M1) or at the next attach. At least once, never lost.
+//   slack.json loading after the sweep, M1) or at the next attach. At least once, never lost. Slack
+//   turned off is not a failure: once a config has been applied, announceOffline answers false and the
+//   journal is acked (final review I2).
 // - A retry does not repeat what this app run already told: a Slack line whose chain has no newer entry
 //   than the one already posted, or a desktop count for a chain already counted, is skipped. Kept in
 //   memory only.

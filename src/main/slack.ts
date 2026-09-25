@@ -285,6 +285,9 @@ export class SlackNotifier {
   // empty, events arriving with a ts we wrote can still be filtered out through this index.
   private ownTs = new Set<string>()
   private transport: SlackTransport | null = null
+  // Whether any transport choice has been made yet, including one that turns Slack off (final review
+  // I2). Before it, a null transport means slack.json has not loaded; after it, it means Slack is off.
+  private configured = false
   private readonly fetchFn: typeof fetch
   private readonly readTail: (filePath: string, maxBytes: number) => Promise<string | null>
   private readonly now: () => number
@@ -346,6 +349,7 @@ export class SlackNotifier {
    *  thread===null (see send() below). */
   private replaceTransport(transport: SlackTransport | null): void {
     this.transport = transport
+    this.configured = true
     for (const record of this.records.values()) record.thread = null
     if (transport) for (const fn of [...this.transportReady]) {
       try {
@@ -799,11 +803,18 @@ export class SlackNotifier {
    *  True when it went out (or the same line went out moments ago), false when the session has no record
    *  (Slack is off for it). Rejects when the post failed **or there is no transport yet** (fix round 1,
    *  M1: slack.json loads asynchronously, and a fetch that ran first must not ack a line nobody could
-   *  post), so the caller leaves the journal un-acked and retries on onTransportReady. */
+   *  post), so the caller leaves the journal un-acked and retries on onTransportReady.
+   *
+   *  "Yet" means before any config has been applied. Once one has, a null transport is a user who
+   *  turned Slack off, and no transport is coming: that is false like a session with no record, or the
+   *  journal would never be acked and the desktop notice would repeat on every start (final review I2). */
   async announceOffline(sessionId: string, text: string): Promise<boolean> {
     const record = this.records.get(sessionId)
     if (!record) return false
-    if (!this.transport) throw new Error(`slack: no transport yet for the offline summary of ${sessionId}`)
+    if (!this.transport) {
+      if (this.configured) return false
+      throw new Error(`slack: no transport yet for the offline summary of ${sessionId}`)
+    }
     const r = await this.send(record, text)
     if (r === 'failed') throw new Error(`slack: the offline summary for ${sessionId} could not be posted`)
     return r !== 'none'

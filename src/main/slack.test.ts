@@ -2408,4 +2408,25 @@ describe('SlackNotifier — the restored wait and the offline summary (S6 Task 5
     notifier.applyConfig({ webhookUrl: 'https://hooks.slack.com/services/T/B/x', botToken: null, channelId: null })
     expect(ready).toBe(1)
   })
+
+  // Final review I2: a user who removed Slack keeps slackNotify on their tabs. Throwing there forever
+  // kept the journal un-acked and repeated the desktop notice on every start.
+  it('announceOffline answers false, not a rejection, once a config that turns Slack off has been applied', async () => {
+    const notifier = new SlackNotifier({
+      getAccount: () => account,
+      readStatusPayload: async () => null,
+      lang: () => 'ko',
+      log: () => undefined,
+      readFileTail: async () => null,
+      now: () => 1_000_000
+    })
+    notifier.register(info())
+    await expect(notifier.announceOffline('s-1', 'x')).rejects.toThrow(/no transport/)
+    notifier.applyConfig({ webhookUrl: null, botToken: null, channelId: null })
+    expect(await notifier.announceOffline('s-1', 'x')).toBe(false)
+    // Slack turned off after it was on: the same answer.
+    notifier.applyConfig({ webhookUrl: 'https://hooks.slack.com/services/T/B/x', botToken: null, channelId: null })
+    notifier.applyConfig({ webhookUrl: null, botToken: null, channelId: null })
+    expect(await notifier.announceOffline('s-1', 'x')).toBe(false)
+  })
 })
