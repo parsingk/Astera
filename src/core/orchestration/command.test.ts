@@ -25,6 +25,7 @@ import { parseArgs } from './cliArgs'
 import { runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
 import { checkConfigIdsOf } from './convergence'
+import { createCheckWaits } from './checkWaits'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -6737,9 +6738,13 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     const logs: string[] = []
     const deps = makeDeps()
     const startCoordinator = vi.fn(async (a: { runId: string }) => ({ sessionId: `coord-${a.runId}` }))
+    // Final round 2, I-A: the check waits this process serves, as the Host's command server holds them.
+    const waits = createCheckWaits()
     Object.assign(deps, {
       listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }],
       startCoordinator,
+      enterCheckWait: (runId: string, sessionId: string) => waits.enter(runId, sessionId),
+      coordinatorIdle: (runId: string, sessionId: string) => waits.parked(runId, sessionId),
       stopCoordinator: async (sessionId: string) => {
         stopped.push(sessionId)
       },
@@ -6767,6 +6772,14 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     await deps.setState({ ...s, runs: s.runs.map((r) => (r.id === runId ? f(r) : r)) })
   }
   const detach = ({ coordinatorSessionId: _gone, ...r }: JobRun): JobRun => r
+  /** The Run's coordinator parks in `check --wait` (I-A). Resolves once the wait is in flight; the
+   *  returned promise is the wait itself, which ends on its short deadline. */
+  const park = async (deps: OrchServerDeps, runId: string): Promise<{ done: Promise<unknown> }> => {
+    const waiting = call(deps, 'check', { run: runId, wait: true, timeoutMs: 300 }, `coord-${runId}`)
+    await new Promise((r) => setTimeout(r, 20))
+    // Wrapped: an async function returning a promise would adopt it, and so wait out the check.
+    return { done: waiting }
+  }
 
   it('C1(a): a fire after the coordinator failed to start still makes the next Run', async () => {
     const deps = coordDeps()
@@ -6815,7 +6828,10 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     const jobId = await scheduledJob(deps)
     const first = (await fire(deps, jobId)).body as { id: string }
     expect(deps.getState().runs.find((r) => r.id === first.id)?.coordinatorSessionId).toBe(`coord-${first.id}`)
+    // I-A: replaced only because its coordinator is parked in `check --wait`.
+    const waiting = await park(deps, first.id)
     const r = await fire(deps, jobId)
+    await waiting.done
     expect(r.status).toBe(200)
     const second = (r.body as { id: string }).id
     expect(second).not.toBe(first.id)
@@ -6874,7 +6890,9 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
         throw new Error('pty gone')
       }
     })
+    const waiting = await park(deps, first.id)
     expect((await fire(deps, jobId)).status).toBe(200)
+    await waiting.done
     expect(deps.getState().runs.find((x) => x.id === first.id)).not.toHaveProperty('coordinatorSessionId')
     expect(deps.logs.join('\n')).toContain('pty gone')
   })
@@ -6897,6 +6915,93 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect((await call(deps, 'run-coordinator-stop', { run: first.id })).body).toMatchObject({ stopped: null })
     expect(deps.stopped).toHaveLength(1)
     expect((await call(deps, 'run-coordinator-stop', { run: 'run_nope' })).status).toBe(404)
+  })
+
+  it('I-A: a coordinator with no check wait in flight is not replaced, and the fire is skipped', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    const r = await fire(deps, jobId)
+    expect(r.status).toBe(409)
+    expect(r.body).toMatchObject({ jobId, running: first.id })
+    expect(deps.stopped).toEqual([])
+    expect(deps.getState().runs.filter((x) => x.jobId === jobId)).toHaveLength(1)
+    expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorSessionId).toBe(`coord-${first.id}`)
+    expect(deps.logs.join('\n')).toContain('coordinator busy or unknown, skipped')
+  })
+
+  it('I-A: with no coordinatorIdle dep the answer is unknown, and the fire is skipped', async () => {
+    const deps = coordDeps()
+    Object.assign(deps, { coordinatorIdle: undefined })
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    const waiting = await park(deps, first.id)
+    const r = await fire(deps, jobId)
+    await waiting.done
+    expect(r.status).toBe(409)
+    expect(deps.stopped).toEqual([])
+  })
+
+  it('I-A: run-coordinator-stop on a Run with no Tasks needs its coordinator parked in check --wait', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    expect((await call(deps, 'run-coordinator-stop', { run: first.id })).status).toBe(409)
+    expect(deps.stopped).toEqual([])
+    const waiting = await park(deps, first.id)
+    const r = await call(deps, 'run-coordinator-stop', { run: first.id })
+    await waiting.done
+    expect(r.status).toBe(200)
+    expect(deps.stopped).toEqual([`coord-${first.id}`])
+  })
+
+  // Mutation M1a: the replacement is for a scheduled Job's fire only.
+  it('U4: run-spawn --unless-running on a Job with no schedule replaces nothing, even with its coordinator parked', async () => {
+    const deps = coordDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, coordinatorAccount: 'accA' })
+    const jobId = deps.getState().jobs[0].id
+    const first = (await call(deps, 'jobs-run', { id: jobId })).body as { id: string }
+    const waiting = await park(deps, first.id)
+    const r = await fire(deps, jobId)
+    await waiting.done
+    expect(r.status).toBe(200)
+    expect(deps.stopped).toEqual([])
+    const old = deps.getState().runs.find((x) => x.id === first.id)!
+    expect(old.coordinatorSessionId).toBe(`coord-${first.id}`)
+    expect(old.paused).toBeUndefined()
+  })
+
+  // Minor 3: the exit release may empty the slot during the stop; the replaced Run is still paused.
+  it('U4: a replaced Run is paused even when the exit release emptied its slot during the stop', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    Object.assign(deps, {
+      stopCoordinator: async () => {
+        await patchRun(deps, first.id, detach)
+      }
+    })
+    const waiting = await park(deps, first.id)
+    expect((await fire(deps, jobId)).status).toBe(200)
+    await waiting.done
+    expect(deps.getState().runs.find((x) => x.id === first.id)?.paused).toBe(true)
+  })
+
+  // Minor 4: the Run gained work while its coordinator was being stopped; nothing is detached.
+  it('run-coordinator-stop re-checks the Run after the stop, and leaves the slot when the Run now moves', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    Object.assign(deps, {
+      stopCoordinator: async () => {
+        await call(deps, 'task-create', { run: first.id, title: 't', spec: 's', account: 'accA' })
+      }
+    })
+    const waiting = await park(deps, first.id)
+    const r = await call(deps, 'run-coordinator-stop', { run: first.id })
+    await waiting.done
+    expect(r.status).toBe(409)
+    expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorSessionId).toBe(`coord-${first.id}`)
   })
 
   it('I1: the Run is committed marked as starting its coordinator, and the attach clears the mark', async () => {
@@ -6986,7 +7091,9 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     const jobId = await scheduledJob(deps)
     const first = (await fire(deps, jobId)).body as { id: string }
     // The next fire replaces it: coordinator stopped, Run paused (U4).
+    const waiting = await park(deps, first.id)
     expect((await fire(deps, jobId)).status).toBe(200)
+    await waiting.done
     expect(deps.getState().runs.find((r) => r.id === first.id)?.paused).toBe(true)
     deps.startCoordinator.mockClear()
     const r = await call(deps, 'run-start', { run: first.id })

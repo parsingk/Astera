@@ -3,6 +3,7 @@
 // **The command layer never learns which is which.** That is the whole point of the split (host
 // control plane design §5) — S2 made startWorker local (HOST_LOCAL), and this file changed while
 // `handleCommand` did not.
+import type { CheckWaits } from '../core/orchestration/checkWaits'
 import type { OrchAccount, OrchRunConfig, OrchServerDeps } from '../core/orchestration/command'
 import type { Provider } from '../core/types'
 import { AppUnreachable, leftNothingBehind, wasRefusedBeforeActing } from '../core/host/orchProtocol'
@@ -364,7 +365,7 @@ const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ..
  *  hand inside `hostOrchDeps` (its own `const discardRunWorktree`, further down, right before it is
  *  added to the returned object), so that its own failure can never reach `onAppRequired`. Declared
  *  here only for the compiler check below. */
-const NOT_FORWARDED = ['discardRunWorktree', 'stopCoordinator'] as const
+const NOT_FORWARDED = ['discardRunWorktree', 'stopCoordinator', 'enterCheckWait', 'coordinatorIdle'] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
  *  synchronous getters became `T | Promise<T>` in `command.ts` and are awaited at their one call site
@@ -468,7 +469,11 @@ const EFFECTFUL: Record<Classified, boolean> = {
   discardRunWorktree: false,
   // NOT_FORWARDED as well (Task 1 fix round 1, I2): built by hand below. It stops a session its own
   // command's `startCoordinator` just opened, which that call has already marked.
-  stopCoordinator: false
+  stopCoordinator: false,
+  // NOT_FORWARDED (final round 2, I-A): the Host's own in-memory record of the `check --wait` calls it
+  // serves. A record in memory and a read of it; neither leaves anything outside the call.
+  enterCheckWait: false,
+  coordinatorIdle: false
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -504,6 +509,10 @@ export function hostOrchDeps(a: {
   backup(): Promise<void>
   act(name: string, args: unknown[]): Promise<unknown>
   hasApp(): boolean
+  /** The `check --wait` long-polls this Host serves, one tracker for the Host's life (final round 2,
+   *  I-A). Every CLI call reaches the Host, so this is where a coordinator's wait is seen. Optional:
+   *  without it the two deps below are absent and a coordinator's idleness reads as unknown. */
+  checkWaits?: CheckWaits
   /** The Host's log. Passed on as `OrchServerDeps.log` as well, so that every `deps.log?.()` the
    *  command layer already writes — the limit probe that could not run, a task-update that bypassed
    *  the transition table — lands somewhere a person can read it. Without it the Host's command layer
@@ -913,6 +922,12 @@ export function hostOrchDeps(a: {
     readChat: own('readChat'),
     discardRunWorktree,
     stopCoordinator,
+    ...(a.checkWaits
+      ? {
+          enterCheckWait: (runId: string, sessionId: string) => a.checkWaits!.enter(runId, sessionId),
+          coordinatorIdle: (runId: string, sessionId: string) => a.checkWaits!.parked(runId, sessionId)
+        }
+      : {}),
     ...remote,
     ...nested
   } as unknown as OrchServerDeps

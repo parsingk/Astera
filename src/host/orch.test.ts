@@ -3099,3 +3099,33 @@ describe('the driver’s hooks (R3–R6)', () => {
     expect(await orch.drainOnce()).toBe(true)
   })
 })
+
+// Final round 2, I-A: every CLI call reaches the Host, so the Host's command server holds the one record
+// of the `check --wait` calls in flight, for its whole life. The driver's own command (a fire, or the
+// loop's run-coordinator-stop, under HOST_CALLER) reads the wait a coordinator's call entered.
+describe('the Host sees a coordinator parked in check --wait (I-A)', () => {
+  it('stops a Run-with-no-Tasks coordinator only while its check --wait is in flight', async () => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const state = {
+      ...run.state,
+      jobs: run.state.jobs.map((j) => ({ ...j, schedule: { kind: 'daily' as const, time: '09:00' }, coordinatorAccountId: 'accA' })),
+      runs: run.state.runs.map((r) => ({ ...r, coordinatorSessionId: 'ses_c' }))
+    }
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(state, null, 2), 'utf8')
+    const act = vi.fn(async () => ({}))
+    // Alive, so the load's sweep keeps the slot.
+    const orch = orchOver({ act, aliveSessionIds: () => new Set(['ses_c']) })
+    await orch.ready()
+    const runId = run.value.id
+    expect((await orch.handle('run-coordinator-stop', { run: runId })).status).toBe(409)
+    const waiting = orch.call({ cmd: 'check', args: { run: runId, wait: true, timeoutMs: 300 }, sessionId: 'ses_c' })
+    await new Promise((r) => setTimeout(r, 30))
+    const r = await orch.handle('run-coordinator-stop', { run: runId })
+    await waiting
+    expect(r.status).toBe(200)
+    expect(act).toHaveBeenCalledWith('stopCoordinator', ['ses_c'])
+  })
+})

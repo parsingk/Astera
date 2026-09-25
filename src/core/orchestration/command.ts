@@ -253,6 +253,15 @@ export interface OrchServerDeps {
    *  already in the Run's slot (Task 1 fix round 1, I2). Optional: without it that session is left
    *  running and the command says so in the log. */
   stopCoordinator?(sessionId: string): Promise<void>
+  /** Records a `check --wait` long-poll entering, for this Run and caller session; the returned
+   *  function records its exit (final round 2, I-A; checkWaits.ts). Optional: the Host's command server,
+   *  where every CLI call is served, wires it; the app serves no session's `check` and does not. */
+  enterCheckWait?(runId: string, sessionId: string): () => void
+  /** Whether a Run's coordinator is parked: `true` only while that session has a `check --wait` for that
+   *  Run in flight in the process that serves it (I-A). `false` or `null` (cannot tell) otherwise. Absent
+   *  means `null`. A fire replaces an idle-only Run, and `run-coordinator-stop` stops an unfinished one,
+   *  only on `true`: nothing else tells "parked in check --wait" from "thinking". */
+  coordinatorIdle?(runId: string, sessionId: string): boolean | null
   /** 이 Run 이 일할 워크트리를 하나 만들고 그 경로를 낸다. **`startCoordinator` 와 같은 꼴** —
    *  배선이 채우고, 디스크만 만들고 OrchState 는 건드리지 않는다(기록은 setRunWorktree 가 한다).
    *
@@ -1005,10 +1014,23 @@ export async function handleCommand(
    * be asked again on every pass, and a replaced Run would keep its old coordinator in the slot beside
    * nothing. The failure is logged; the session, if it still lives, is the one thing left behind.
    *
-   * The slot is emptied on the state as it is after the stop (a long await), and only when it still
-   * names the session this call stopped: a ▶ may have started another coordinator on the Run meanwhile.
+   * The Run is written on the state as it is after the stop (a long await). The slot is emptied only
+   * when it still names the session this call stopped: a ▶ may have started another coordinator on the
+   * Run meanwhile, and then nothing is written. **`pause` holds even when the slot is already empty**
+   * (final round 2, Minor 3): the exit release may have emptied it during the stop, and the replaced Run
+   * must still end paused.
+   *
+   * `still` is asked on that fresh state before anything is written (Minor 4, `run-coordinator-stop`):
+   * when it answers false, nothing is written and the answer is `'moved'`. The session is already
+   * stopped by then, and its exit release empties the slot the ordinary way.
    */
-  const retireCoordinator = async (runId: string, sessionId: string, why: string, pause: boolean): Promise<void> => {
+  const retireCoordinator = async (
+    runId: string,
+    sessionId: string,
+    why: string,
+    pause: boolean,
+    still: (current: OrchState) => boolean = () => true
+  ): Promise<'retired' | 'moved' | 'gone'> => {
     try {
       if (deps.stopCoordinator) await deps.stopCoordinator(sessionId)
       else deps.log?.(`coordinator ${sessionId} of run ${runId} could not be stopped: nothing here can stop a session`)
@@ -1017,15 +1039,21 @@ export async function handleCommand(
     }
     const current = deps.getState()
     const run = current.runs.find((r) => r.id === runId)
-    if (!run || run.coordinatorSessionId !== sessionId) return
-    const detached = detachCoordinator(current, { runId })
-    if (!detached.ok) return
-    await deps.setState(
-      pause
-        ? { ...detached.state, runs: detached.state.runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) }
-        : detached.state
-    )
+    if (!run) return 'gone'
+    if (run.coordinatorSessionId !== undefined && run.coordinatorSessionId !== sessionId) return 'gone'
+    if (!still(current)) {
+      deps.log?.(`coordinator ${sessionId} of run ${runId} was stopped, but the run gained work meanwhile; its slot is left to the exit release`)
+      return 'moved'
+    }
+    let next = current
+    if (run.coordinatorSessionId === sessionId) {
+      const detached = detachCoordinator(current, { runId })
+      if (detached.ok) next = detached.state
+    }
+    if (pause) next = { ...next, runs: next.runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) }
+    if (next !== current) await deps.setState(next)
     deps.log?.(`coordinator ${sessionId} of run ${runId} stopped: ${why}`)
+    return 'retired'
   }
 
   /** The body of `handToCoordinator`: the worktree, the session, the attach. */
@@ -1934,6 +1962,20 @@ export async function handleCommand(
         const latest = job && latestRunOf(s, job)
         if (job?.schedule !== undefined && latest?.coordinatorSessionId !== undefined && latest.paused !== true) {
           const finished = outcomeOf(s, latest.id) !== 'running'
+          // **An unfinished Run is replaced only while its coordinator is parked in `check --wait`**
+          // (final round 2, I-A): state alone cannot tell that from a coordinator doing the work itself on
+          // an objective-only Job. Busy or unknown (`false`, `null`, no dep), the plain U3 skip.
+          if (!finished && deps.coordinatorIdle?.(latest.id, latest.coordinatorSessionId) !== true) {
+            deps.log?.(`scheduled fire of job ${id}: run ${latest.id} has only its coordinator left, coordinator busy or unknown, skipped`)
+            return {
+              status: 409,
+              body: {
+                error: `job ${id}'s run ${latest.id} has only its coordinator left, and it is busy or its state is unknown; this run was not made`,
+                jobId: id,
+                running: latest.id
+              }
+            }
+          }
           await retireCoordinator(
             latest.id,
             latest.coordinatorSessionId,
@@ -1988,7 +2030,19 @@ export async function handleCommand(
         return conflict(`run ${id} still has work its coordinator can start; its coordinator was left running`)
       const sessionId = run.coordinatorSessionId
       if (sessionId === undefined) return okBody({ runId: id, stopped: null })
-      await retireCoordinator(id, sessionId, 'the run has nothing left for it to do', false)
+      // **An unfinished Run's coordinator is stopped only while parked in `check --wait`** (final round 2,
+      // I-A): a Run with no Tasks, whose coordinator may be doing the work itself. A finished Run (every
+      // Task terminal) needs no such check: there is nothing left for it to do.
+      if (outcomeOf(s, id) === 'running' && deps.coordinatorIdle?.(id, sessionId) !== true)
+        return conflict(`run ${id}'s coordinator is busy or its state is unknown; it was left running`)
+      // **Asked again on the state after the stop** (Minor 4): the Run may have gained work meanwhile.
+      const moved = (current: OrchState): boolean => {
+        const r = current.runs.find((x) => x.id === id)
+        const j = r && jobOf(current, r)
+        return r !== undefined && j !== undefined && runMoves(current, j, r, now)
+      }
+      const retired = await retireCoordinator(id, sessionId, 'the run has nothing left for it to do', false, (c) => !moved(c))
+      if (retired === 'moved') return conflict(`run ${id} gained work while its coordinator was being stopped; its slot is left to the exit release`)
       return okBody({ runId: id, stopped: sessionId })
     }
     case 'task-create': {
@@ -2902,7 +2956,15 @@ export async function handleCommand(
       }
       const timeoutMs =
         typeof args.timeoutMs === 'number' ? args.timeoutMs : DEFAULT_CHECK_TIMEOUT_MS
-      const waited = await pollUntil(take, timeoutMs)
+      // **The wait is recorded while it is in flight** (final round 2, I-A): it is the one sure sign that
+      // a coordinator is parked rather than thinking, which a fire asks before it replaces its Run.
+      const leave = deps.enterCheckWait?.(runId, caller.sessionId)
+      let waited: Awaited<ReturnType<typeof pollUntil<Taken>>>
+      try {
+        waited = await pollUntil(take, timeoutMs)
+      } finally {
+        leave?.()
+      }
       if ('value' in waited) return commitTaken(waited.value)
       return okBody({ count: 0, messages: [], timedOut: true })
     }

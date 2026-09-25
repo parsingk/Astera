@@ -15,6 +15,7 @@ import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { HOST_CALLER, type Driver } from '../core/host/driver'
 import { hostOrchDeps } from './orchDeps'
+import { createCheckWaits } from '../core/orchestration/checkWaits'
 import { readAccountsFile } from '../core/accounts/accountsFile'
 import { readRunConfigsFile } from '../core/run/runConfigsFile'
 import type { HostChecks } from './checks'
@@ -514,8 +515,12 @@ export function createHostOrch(a: {
 
   /** **Built per call**, because the marks above are. One object literal per call costs nothing
    *  beside running a command. */
+  /** The `check --wait` calls this Host serves, for its whole life (final round 2, I-A): built once, not
+   *  per call like the deps below, since a wait entered by one call is asked about by another. */
+  const checkWaits = createCheckWaits()
   const depsFor = (marks: CallMarks): OrchServerDeps =>
     hostOrchDeps({
+      checkWaits,
       getState: () => store.get(),
       setState: async (next, how) => {
         // Reserved before the write, for `reserveVersion`'s reason and for one that is this path's

@@ -699,3 +699,30 @@ describe('a finished scheduled Run’s coordinator is stopped (U4)', () => {
     expect(h.logs.join('\n')).toContain('socket closed')
   })
 })
+
+// Mutation M3a: the drive can move between two stops of one pass; the loop asks before each one.
+describe('stopFinishedCoordinators asks mayStart before each stop', () => {
+  it('stops no further coordinator once the drive has moved', async () => {
+    const h = rig({ reapableChild: true })
+    const s = h.state()
+    h.setState({
+      ...s,
+      jobs: [...s.jobs, { id: 'job_rc2', objective: 'scheduled', cwd: '/p', createdAt: NOW, schedule: { kind: 'interval', minutes: 60 } }],
+      runs: [
+        ...s.runs.map((r) => (r.id === 'run_rc' ? { ...r, coordinatorSessionId: 'coord-rc' } : r)),
+        { id: 'run_rc2', jobId: 'job_rc2', ordinal: 1, createdAt: NOW, coordinatorSessionId: 'coord-rc2' }
+      ],
+      tasks: [...s.tasks, { ...s.tasks.find((t) => t.id === 'tsk_rc')!, id: 'tsk_rc2', runId: 'run_rc2', jobId: 'job_rc2' }]
+    })
+    let allowed = true
+    h.ctx.handle = async (cmd, args) => {
+      const r = await h.real(cmd, args)
+      if (cmd === 'run-coordinator-stop') allowed = false // the drive moves after the first stop
+      return r
+    }
+    h.ctx.mayStart = () => allowed
+    await h.loop.run()
+    expect(h.handled().filter((c) => c === 'run-coordinator-stop')).toHaveLength(1)
+    expect(h.stopCoordinator).toHaveBeenCalledTimes(1)
+  })
+})
