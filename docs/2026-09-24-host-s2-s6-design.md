@@ -1074,7 +1074,11 @@ Amendments (S6 as shipped) preamble).
   there, then or later.
 - **A tab the Host respawns runs in D4's environment**, the Host's own minus the strip list, not the
   app's (the S6 design's §3A.6). It keeps its title, Slack choice, permission choice and rolling
-  accounts. Its schedules do not fire until the app returns (D2).
+  accounts. Its schedules do not fire until the app returns (D2). With Smart Resume on, the Host never
+  rolls a taken-over tab blank-slate. It has no tab briefing (`resumeText` answers null for a session
+  with no Dispatch), and `roll()` makes no blank-slate respawn without a briefing, so the tab always
+  respawns with `--resume`. That is safe, but it differs from the app, which can brief a tab (the S6
+  final review, M2).
 - **The app-gone rule has two watchers**, `driving.ts` for the app-left steps and `appGone.ts` for the
   takeover (plan R25). They share `APP_LEFT_GRACE_MS` and `liveAppPid` and differ on purpose in one
   point (A69), but a change to one must be made to the other by hand.
