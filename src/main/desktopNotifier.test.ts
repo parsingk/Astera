@@ -381,15 +381,15 @@ describe('DesktopNotifier — the restored wait and the offline notice (S6 Task 
     ])
   })
 
-  it('shows nothing for zero, or with both limit events off', () => {
+  it('shows nothing for zero, or with limitWaiting off whatever accountSwitched says (fix round 1, M3)', () => {
     const h = harness()
     h.notifier.announceOffline(0)
     expect(h.shown).toEqual([])
-    const off = harness({ limitWaiting: false, accountSwitched: false })
-    off.notifier.announceOffline(2)
-    expect(off.shown).toEqual([])
     const switchOnly = harness({ limitWaiting: false, accountSwitched: true })
     switchOnly.notifier.announceOffline(2)
-    expect(switchOnly.shown.length).toBe(1)
+    expect(switchOnly.shown).toEqual([])
+    const waitOnly = harness({ limitWaiting: true, accountSwitched: false })
+    waitOnly.notifier.announceOffline(2)
+    expect(waitOnly.shown.length).toBe(1)
   })
 })

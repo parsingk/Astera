@@ -115,13 +115,13 @@ export class DesktopNotifier {
       this.fire('accountSwitched', ev.sessionId, ev.accountLabel)
   }
 
-  /** The one notice for everything the Host rolled while the app was closed (S6 D6): `count` sessions,
-   *  live or not. Shown when either limit event is on, and not held back by focus: nobody at this
-   *  window saw any of it. `sessionId` is the tab a click opens (the first live one), or none. */
+  /** The one notice for everything the Host rolled while the app was closed (S6 D6): `count` sessions
+   *  that met a limit, live or not. Gated on limitWaiting alone (fix round 1, M3): it says the work met
+   *  a limit, which is that event. Not held back by focus: nobody at this window saw any of it.
+   *  `sessionId` is the tab a click opens (the first live one), or none. */
   announceOffline(count: number, sessionId?: string): void {
     if (!(count > 0)) return
-    const flags = this.deps.settings.getDesktopNotify()
-    if (!flags.limitWaiting && !flags.accountSwitched) return
+    if (!this.deps.settings.getDesktopNotify().limitWaiting) return
     const lang = this.deps.lang()
     this.deps.show({
       event: 'limitWaiting',

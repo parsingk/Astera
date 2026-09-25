@@ -289,6 +289,15 @@ export class SlackNotifier {
   private readonly readTail: (filePath: string, maxBytes: number) => Promise<string | null>
   private readonly now: () => number
 
+  private readonly transportReady = new Set<() => void>()
+
+  /** Called after every swap to a transport that can post (applyConfig, setWebhookUrl, setTransport).
+   *  The offline summary retries on it (S6 Task 5 fix round 1, I1). Returns the unsubscribe. */
+  onTransportReady(fn: () => void): () => void {
+    this.transportReady.add(fn)
+    return () => this.transportReady.delete(fn)
+  }
+
   constructor(private deps: SlackDeps) {
     this.fetchFn = deps.fetchFn ?? fetch
     this.readTail = deps.readFileTail ?? readFileTail
@@ -338,6 +347,13 @@ export class SlackNotifier {
   private replaceTransport(transport: SlackTransport | null): void {
     this.transport = transport
     for (const record of this.records.values()) record.thread = null
+    if (transport) for (const fn of [...this.transportReady]) {
+      try {
+        fn()
+      } catch {
+        /* a listener must not break the swap */
+      }
+    }
     // A ts from the old channel or workspace is no longer valid — left in place, replies arriving with that
     // ts would still be injected into live sessions even after bot mode is turned off (token and channel
     // deleted). It is the same reason record.thread is reset, and both have to be cleared at the same time
@@ -780,12 +796,14 @@ export class SlackNotifier {
   }
 
   /** What the Host rolled for this session while the app was closed (S6 D6), as one line in its thread.
-   *  True when it went out (or the same line went out moments ago), false when there is nowhere to post
-   *  it: no record for the session (Slack is off for it) or no transport. Rejects when the post itself
-   *  failed, so the caller leaves the journal un-acked and the next attach tries again. */
+   *  True when it went out (or the same line went out moments ago), false when the session has no record
+   *  (Slack is off for it). Rejects when the post failed **or there is no transport yet** (fix round 1,
+   *  M1: slack.json loads asynchronously, and a fetch that ran first must not ack a line nobody could
+   *  post), so the caller leaves the journal un-acked and retries on onTransportReady. */
   async announceOffline(sessionId: string, text: string): Promise<boolean> {
     const record = this.records.get(sessionId)
-    if (!record || !this.transport) return false
+    if (!record) return false
+    if (!this.transport) throw new Error(`slack: no transport yet for the offline summary of ${sessionId}`)
     const r = await this.send(record, text)
     if (r === 'failed') throw new Error(`slack: the offline summary for ${sessionId} could not be posted`)
     return r !== 'none'

@@ -2389,7 +2389,7 @@ describe('SlackNotifier — the restored wait and the offline summary (S6 Task 5
     await expect(notifier.announceOffline('s-1', 'x')).rejects.toThrow()
   })
 
-  it('announceOffline says false with no transport at all', async () => {
+  it('announceOffline rejects before the transport is up, and onTransportReady fires when it comes up (fix round 1, M1, I1)', async () => {
     const notifier = new SlackNotifier({
       getAccount: () => account,
       readStatusPayload: async () => null,
@@ -2399,6 +2399,13 @@ describe('SlackNotifier — the restored wait and the offline summary (S6 Task 5
       now: () => 1_000_000
     })
     notifier.register(info())
-    expect(await notifier.announceOffline('s-1', 'x')).toBe(false)
+    let ready = 0
+    notifier.onTransportReady(() => ready++)
+    await expect(notifier.announceOffline('s-1', 'x')).rejects.toThrow(/no transport/)
+    expect(await notifier.announceOffline('nobody', 'x')).toBe(false)
+    notifier.applyConfig({ webhookUrl: null, botToken: null, channelId: null })
+    expect(ready).toBe(0) // still nothing to post with
+    notifier.applyConfig({ webhookUrl: 'https://hooks.slack.com/services/T/B/x', botToken: null, channelId: null })
+    expect(ready).toBe(1)
   })
 })
