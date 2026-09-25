@@ -71,6 +71,11 @@ export async function findRollout(opts: {
   // second session in the same folder would otherwise mislead. Absent keeps the newest-wins rule, which
   // is every pty caller.
   sessionId?: string
+  // When set, a file born after this (less the same skew margin) is not a candidate either. A restore
+  // looking for a blank-slate respawn's rollout long after that spawn (S6 Task 12, carry C-b) passes
+  // the moment the spawn's own locate would have given up, so a session started later in the same
+  // folder is not taken for it. Absent keeps every file born after since, which is every live locate.
+  bornBefore?: number
 }): Promise<{ path: string; sessionId: string } | null> {
   const now = (opts.now ?? Date.now)()
   const root = path.join(opts.configDir, 'sessions')
@@ -94,6 +99,7 @@ export async function findRollout(opts: {
       continue
     }
     if (bornAt < opts.since - CLOCK_SKEW_MS) continue
+    if (opts.bornBefore !== undefined && bornAt > opts.bornBefore + CLOCK_SKEW_MS) continue
     let meta
     try {
       meta = await parseCodexMeta(file)

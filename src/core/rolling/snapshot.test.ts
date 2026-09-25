@@ -84,3 +84,36 @@ describe('parseRollSnapshot (S6 R4)', () => {
     expect(snapshotKey({ ...good(), streak: 2 })).not.toBe(snapshotKey(good()))
   })
 })
+
+describe('the codex block’s locateSince (S6 Task 12, carry C-b)', () => {
+  const codexSnap = (extra: Record<string, unknown>): Record<string, unknown> => {
+    const { claude: _c, ...rest } = good()
+    return { ...rest, provider: 'codex', codex: { sessionId: null, rolloutPath: null, tailOffset: null, state: null, ...extra } }
+  }
+  it('is optional: absent stays absent, and a time at or before writtenAt is kept', () => {
+    expect(parseRollSnapshot(codexSnap({}))?.codex).not.toHaveProperty('locateSince')
+    expect(parseRollSnapshot(codexSnap({ locateSince: 590 }))?.codex?.locateSince).toBe(590)
+    expect(parseRollSnapshot(codexSnap({ locateSince: 600 }))?.codex?.locateSince).toBe(600)
+    expect(parseRollSnapshot(codexSnap({ locateSince: null }))?.codex?.locateSince).toBeNull()
+  })
+  it.each([
+    ['after writtenAt', 601],
+    ['not finite', Number.NaN],
+    ['not a number', '590']
+  ])('refuses one %s', (_why, locateSince) => {
+    expect(parseRollSnapshot(codexSnap({ locateSince }))).toBeNull()
+  })
+})
+
+describe('the claude block’s promptKind (S6 Task 12, carry C-c)', () => {
+  const withKind = (promptKind: unknown): unknown => ({ ...good(), claude: { ...good().claude, promptKind } })
+  it('is optional, and keeps either kind', () => {
+    expect(parseRollSnapshot(good())?.claude).not.toHaveProperty('promptKind')
+    expect(parseRollSnapshot(withKind('briefing'))?.claude?.promptKind).toBe('briefing')
+    expect(parseRollSnapshot(withKind('handover'))?.claude?.promptKind).toBe('handover')
+  })
+  it('refuses any other kind', () => {
+    expect(parseRollSnapshot(withKind('update'))).toBeNull()
+    expect(parseRollSnapshot(withKind(null))).toBeNull()
+  })
+})

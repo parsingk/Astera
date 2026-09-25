@@ -2517,6 +2517,80 @@ describe('codex snapshots and restore (S6 R4)', () => {
     expect(h.coord.rolloutPathFor('s7')).toBeNull()
   })
 
+  // Carry C-b: a blank-slate (smart) roll's respawn has no rollout yet, so its snapshot says when it was
+  // spawned instead — a restore looks for that session's file, and only among files born after it.
+  const blankSnap = (locateSince: number, writtenAt = Date.now()): RollSnapshot => ({
+    v: 1, provider: 'codex', accountIds: ['c1'], currentIndex: 0, streak: 0, recovery: [null], blocks: {}, wait: null,
+    inPlaceUsed: false, rolledAt: null, awaitingPrompt: false,
+    codex: { sessionId: null, rolloutPath: null, tailOffset: null, state: null, locateSince }, writtenAt
+  })
+
+  it('a snapshot with locateSince and no rollout locates the session’s new rollout on restore (carry C-b)', async () => {
+    const natives: string[] = []
+    const persisted: string[] = []
+    const h = harness({ onNativeSession: (s, n) => natives.push(`${s}=${n}`), persistConfig: (k) => persisted.push(k) })
+    const info = { ...h.info1, id: 's7', cwd: path.join(tmp, 'work', 'blank'), rollAccountIds: ['c1'], accountId: 'c1' }
+    expect(h.coord.restore(info, blankSnap(Date.now() - 5_000))).toBe(true)
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-blank-new', cwd: info.cwd, primary: 10 })
+    await advance(1_500)
+    expect(h.coord.rolloutPathFor('s7')).toBe(file)
+    expect(natives).toEqual(['s7=cx-blank-new'])
+    expect(persisted).toEqual(['cx-blank-new'])
+    h.coord.stop()
+  })
+
+  it('the locate from a snapshot claims no rollout born before locateSince (carry C-b)', async () => {
+    const logs: string[] = []
+    const h = harness({ log: (m) => logs.push(m) })
+    const info = { ...h.info1, id: 's7', cwd: path.join(tmp, 'work', 'blank'), rollAccountIds: ['c1'], accountId: 'c1' }
+    await writeRollout({ accountId: 'c1', uuid: 'cx-blank-old', cwd: info.cwd, primary: 10 })
+    const since = Date.now() + 10_000 // the older file above was born well before this
+    expect(h.coord.restore(info, blankSnap(since, since))).toBe(true)
+    await advance(61_000)
+    expect(h.coord.rolloutPathFor('s7')).toBeNull()
+    expect(logs.join('\n')).toMatch(/not found within/) // it looked, and passed the older file over
+    h.coord.stop()
+  })
+
+  it('nor one born long after the locate that spawned the session had given up (carry C-b)', async () => {
+    const logs: string[] = []
+    const h = harness({ log: (m) => logs.push(m) })
+    const info = { ...h.info1, id: 's7', cwd: path.join(tmp, 'work', 'blank'), rollAccountIds: ['c1'], accountId: 'c1' }
+    // Another session started in the same folder an hour after the blank-slate respawn is not its rollout.
+    expect(h.coord.restore(info, blankSnap(Date.now() - 60 * 60_000))).toBe(true)
+    await writeRollout({ accountId: 'c1', uuid: 'cx-blank-later', cwd: info.cwd, primary: 10 })
+    await advance(61_000)
+    expect(h.coord.rolloutPathFor('s7')).toBeNull()
+    expect(logs.join('\n')).toMatch(/not found within/)
+    h.coord.stop()
+  })
+
+  it('a smart roll’s own snapshot restores in another process and maps the new session’s rollout (carry C-b)', async () => {
+    const snaps: { id: string; s: RollSnapshot }[] = []
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve('BRIEFING TEXT'),
+      snapshot: (id, s) => snaps.push({ id, s })
+    })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-1', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500)
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toContain('spawn:s2:c2')
+    h.coord.stop() // the app dies before its own locate finds the new file
+    const last = parseRollSnapshot(JSON.parse(JSON.stringify(snaps.filter((x) => x.id === 's2').at(-1)!.s)))!
+    expect(last.codex).toMatchObject({ sessionId: null, rolloutPath: null })
+    expect(typeof last.codex?.locateSince).toBe('number')
+    const born = await writeRollout({ accountId: 'c2', uuid: 'cx-2', cwd: h.info1.cwd, primary: 5 })
+    const h2 = harness()
+    expect(h2.coord.restore({ ...h.info1, id: 's2', accountId: 'c2' }, last)).toBe(true)
+    await advance(1_500)
+    expect(h2.coord.rolloutPathFor('s2')).toBe(born)
+    h2.coord.stop()
+  })
+
   const codexWaitSnap = (at: number): RollSnapshot => ({
     v: 1, provider: 'codex', accountIds: ['c1'], currentIndex: 0, streak: 1, recovery: [null], blocks: {},
     wait: { retryAt: at, target: 0, weekly: false }, inPlaceUsed: false, rolledAt: null, awaitingPrompt: false,

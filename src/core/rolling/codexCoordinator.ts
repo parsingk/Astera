@@ -231,6 +231,9 @@ interface Chain {
   lastOutputAt: number
   rolling: boolean
   locateTimer: ReturnType<typeof setTimeout> | null
+  /** When a blank-slate roll spawned the live session, until its rollout is found (S6 Task 12, carry
+   *  C-b): written into the snapshot while rolloutPath is null, so a restore can look for that file. */
+  locateSince: number | null
   waitTimer: ReturnType<typeof setTimeout> | null
   healthyTimer: ReturnType<typeof setTimeout> | null
   disposed: boolean
@@ -416,6 +419,7 @@ export class CodexRollingCoordinator {
       lastOutputAt: this.now(),
       rolling: false,
       locateTimer: null,
+      locateSince: null,
       waitTimer: null,
       healthyTimer: null,
       disposed: false,
@@ -562,6 +566,19 @@ export class CodexRollingCoordinator {
           c.tailOffset !== null
             ? new CodexRolloutTail(c.rolloutPath, this.now, { offset: c.tailOffset, initial: c.state })
             : this.newTail(chain, c.rolloutPath, { startAtEnd: true, initial: c.state })
+      else if (typeof c.locateSince === 'number') {
+        // **Carry C-b: a blank-slate roll's respawn, written down before its rollout was found.** Without
+        // this the chain stays unmapped for good and never rolls again. What made R6 refuse a locate is
+        // a scan that could claim another session's newer file; this one is bounded to the files born in
+        // the window the respawn's own locate searched — from its spawn to that locate's deadline — so a
+        // rollout older than the respawn, or a session started in the folder later, is never taken for it.
+        // A snapshot with no rolloutPath and no locateSince stays unmapped, as R6 has it.
+        chain.locateSince = c.locateSince
+        this.startLocate(chain, this.deps.getAccount(ids[snap.currentIndex]), {
+          since: c.locateSince,
+          bornBefore: c.locateSince + LOCATE_TIMEOUT_MS
+        })
+      }
     }
     this.deps.log(
       `codex chain restored session=${info.id} index=${snap.currentIndex} ` +
@@ -870,12 +887,16 @@ export class CodexRollingCoordinator {
    *  fresh `codex` with no `--resume`, so it has no known rollout either, and roll() calls this the
    *  same way register() does for a brand-new chain. The exclude list the re-locate after an ordinary
    *  (non-blank-slate) roll used to need went away with that roll's `attachRollout` call instead. */
-  private startLocate(chain: Chain, account: Account | null): void {
+  private startLocate(chain: Chain, account: Account | null, bound?: { since: number; bornBefore?: number }): void {
     if (!account) {
       this.deps.log(`codex locate aborted — no such account session=${chain.liveId}`)
       return
     }
-    const since = this.now()
+    // The deadline runs from now; the files looked at are born from `since` on — the same moment for a
+    // live spawn, the spawn's own time for a restore (carry C-b), which may be long past.
+    const startedAt = this.now()
+    const since = bound?.since ?? startedAt
+    const bornBefore = bound?.bornBefore
     const liveId = chain.liveId
     const tick = async (): Promise<void> => {
       if (chain.disposed || chain.liveId !== liveId) return
@@ -883,6 +904,7 @@ export class CodexRollingCoordinator {
         configDir: account.configDir,
         cwd: chain.cwd,
         since,
+        ...(bornBefore !== undefined ? { bornBefore } : {}),
         now: this.now,
         excludePaths: this.claimedRollouts(chain),
         sessionId: chain.codexSessionId ?? undefined
@@ -908,6 +930,7 @@ export class CodexRollingCoordinator {
         if (chain.codexSessionId !== found.sessionId) this.deps.onNativeSession?.(chain.liveId, found.sessionId)
         chain.codexSessionId = found.sessionId
         chain.tail = new CodexRolloutTail(found.path, this.now)
+        chain.locateSince = null
         chain.unmappedWarned = false
         chain.preemptWarned = false
         this.deps.persistConfig?.(found.sessionId, {
@@ -918,7 +941,7 @@ export class CodexRollingCoordinator {
         this.snap(chain)
         return
       }
-      if (this.now() - since >= LOCATE_TIMEOUT_MS) {
+      if (this.now() - startedAt >= LOCATE_TIMEOUT_MS) {
         this.deps.log(
           `codex rollout not found within ${LOCATE_TIMEOUT_MS}ms — rolling disabled session=${liveId}`
         )
@@ -1693,6 +1716,9 @@ export class CodexRollingCoordinator {
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const chat = chain.kind === 'chat'
+      // A blank-slate respawn's rollout is born after this; its locate (below, and a restore's, carry C-b)
+      // looks from here.
+      const spawnAt = this.now()
       const info = this.deps.spawn({
         account: target,
         cwd: chain.cwd,
@@ -1728,7 +1754,9 @@ export class CodexRollingCoordinator {
               sessionId: smart ? null : codexSessionId,
               rolloutPath: dest ?? null,
               tailOffset: null,
-              state: null
+              state: null,
+              // Carry C-b: the blank slate has no rollout to name yet, so it names when to look from.
+              ...(smart ? { locateSince: spawnAt } : {})
             }
           } satisfies RollSnapshot
         }
@@ -1743,7 +1771,6 @@ export class CodexRollingCoordinator {
       chain.modelChoice = new CodexModelChoiceScanner() // same reason — a half-drawn prompt must not join the new session's output
       chain.cycle.advanceTo(toIndex)
       this.chains.set(info.id, chain)
-      this.snap(chain)
       if (dest !== undefined) {
         // The respawned codex resumes, so it appends to dest rather than creating a new rollout — there is
         // nothing to search for, and searching was exactly what broke here (see attachRollout). dest holds
@@ -1765,11 +1792,16 @@ export class CodexRollingCoordinator {
         chain.priorAsked = false
         chain.unmappedWarned = false
         chain.preemptWarned = false
-        this.startLocate(chain, target)
+        chain.locateSince = spawnAt
+        this.startLocate(chain, target, { since: spawnAt })
         this.deps.log(
           `codex smart resume — rolled ${oldId} into a blank-slate session ${info.id} account=${target.label}`
         )
       }
+      // Written once the new session's identity is settled, not before (carry C-b): written right after
+      // the re-key it still named the old conversation's rollout and thread — a takeover in that window
+      // would have tailed a file this chain had just left, and a blank slate would never have been found.
+      this.snap(chain)
       // dest is sent along too, so the CodexRolloutWatcher re-registration (index.ts) can drop this copy from
       // its candidates. CoreEvents['session:rolled'] does not declare this field, but send()'s payload is
       // unknown so the extra field rides along safely — the renderer just ignores it. On a blank-slate roll
@@ -1957,7 +1989,8 @@ export class CodexRollingCoordinator {
         sessionId: chain.codexSessionId,
         rolloutPath: chain.rolloutPath,
         tailOffset: chain.tail?.offset ?? null,
-        state: chain.state ? structuredClone(chain.state) : null
+        state: chain.state ? structuredClone(chain.state) : null,
+        ...(chain.rolloutPath === null && chain.locateSince !== null ? { locateSince: chain.locateSince } : {})
       },
       writtenAt: now
     }

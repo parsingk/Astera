@@ -25,8 +25,26 @@ export interface RollSnapshot {
   rolledAt: number | null
   /** A respawn whose carry-on prompt has not gone out yet (claude pty chains). */
   awaitingPrompt: boolean
-  claude?: { sessionId: string | null; transcriptPath: string | null; tailOffset: number | null; tailSince: number | null }
-  codex?: { sessionId: string | null; rolloutPath: string | null; tailOffset: number | null; state: CodexLimitState | null }
+  claude?: {
+    sessionId: string | null
+    transcriptPath: string | null
+    tailOffset: number | null
+    tailSince: number | null
+    /** Which carry-on prompt an `awaitingPrompt` respawn is owed (S6 Task 12, carry C-c): 'briefing' for a
+     *  blank-slate (smart) roll, whose new session knows nothing and must be briefed, 'handover' — the
+     *  meaning of an absent field — for an ordinary `--resume` roll. */
+    promptKind?: 'handover' | 'briefing'
+  }
+  codex?: {
+    sessionId: string | null
+    rolloutPath: string | null
+    tailOffset: number | null
+    state: CodexLimitState | null
+    /** When a blank-slate (smart) roll spawned this session, while its rollout is not found yet (S6 Task
+     *  12, carry C-b). A restore with no rolloutPath looks for the file only when this is set, and only
+     *  among files born from then on — never before it (preflight R6). */
+    locateSince?: number | null
+  }
   writtenAt: number
 }
 
@@ -94,16 +112,22 @@ const readClaude = (v: unknown): R<NonNullable<RollSnapshot['claude']>> => {
   const tailOffset = offOrNull(v.tailOffset)
   const tailSince = numOrNull(v.tailSince)
   if (sessionId === FAIL || transcriptPath === FAIL || tailOffset === FAIL || tailSince === FAIL) return FAIL
-  return { sessionId, transcriptPath, tailOffset, tailSince }
+  // Optional, and kept absent when absent (an older writer's note reads as it always did).
+  const pk = v.promptKind
+  if (pk !== undefined && pk !== 'handover' && pk !== 'briefing') return FAIL
+  return { sessionId, transcriptPath, tailOffset, tailSince, ...(pk !== undefined ? { promptKind: pk } : {}) }
 }
-const readCodex = (v: unknown): R<NonNullable<RollSnapshot['codex']>> => {
+/** writtenAt bounds locateSince: a spawn time after the snapshot was written is not one any writer saw. */
+const readCodex = (v: unknown, writtenAt: number): R<NonNullable<RollSnapshot['codex']>> => {
   if (!isObj(v)) return FAIL
   const sessionId = strOrNull(v.sessionId)
   const rolloutPath = strOrNull(v.rolloutPath)
   const tailOffset = offOrNull(v.tailOffset)
   const state = readState(v.state)
   if (sessionId === FAIL || rolloutPath === FAIL || tailOffset === FAIL || state === FAIL) return FAIL
-  return { sessionId, rolloutPath, tailOffset, state }
+  const ls = v.locateSince
+  if (ls !== undefined && ls !== null && !(num(ls) && ls <= writtenAt)) return FAIL
+  return { sessionId, rolloutPath, tailOffset, state, ...(ls !== undefined ? { locateSince: ls } : {}) }
 }
 
 /** Null for anything that is not a v1 snapshot every field of which has the right type. All or nothing:
@@ -171,7 +195,7 @@ export function parseRollSnapshot(v: unknown): RollSnapshot | null {
     return { ...base, claude, writtenAt }
   }
   if (v.claude !== undefined) return null
-  const codex = readCodex(v.codex)
+  const codex = readCodex(v.codex, writtenAt)
   if (codex === FAIL) return null
   return { ...base, codex, writtenAt }
 }
