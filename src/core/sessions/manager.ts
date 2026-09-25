@@ -12,6 +12,7 @@ import {
 } from '../providers/descriptor'
 import type { PtyFactory, PtyLike } from './pty'
 import type { RollSpawnExtra } from '../rolling/snapshot'
+import { sessionInfoFromNote } from './noteInfo'
 import { cliEnvFor } from './cliEnv'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
@@ -326,33 +327,9 @@ export class SessionManager {
    *  for a completion nobody will send. The Host's entry carries an `alive` flag; filtering on it is the
    *  caller's job. */
   adopt(a: { kind: string; id: string; pty: PtyLike; restore: Record<string, unknown> }): SessionInfo | null {
-    // Checked before any field, because the kinds' readable shapes overlap: a note of another kind can
-    // satisfy the fields below and would come back rebuilt as the wrong thing.
-    if (a.kind !== 'session') return null
-    const r = a.restore
-    const str = (k: string): string | undefined => (typeof r[k] === 'string' ? (r[k] as string) : undefined)
-    const accountId = str('accountId')
-    const cwd = str('cwd')
-    const title = str('title')
-    if (!accountId || !cwd || !title) return null
-    const info: SessionInfo = {
-      id: a.id,
-      accountId,
-      cwd,
-      status: 'running',
-      title,
-      // Spread rather than assigned, because the note omits what was absent at spawn rather than
-      // carrying an undefined — so an absent key must stay absent here too.
-      ...(str('resumeSessionId') ? { resumeSessionId: str('resumeSessionId') } : {}),
-      // Elements checked, not just the array: the roll coordinators index accounts by these, and one
-      // non-string in a list that crossed a process boundary would surface far from here.
-      ...(Array.isArray(r.rollAccountIds) && r.rollAccountIds.every((x) => typeof x === 'string')
-        ? { rollAccountIds: r.rollAccountIds as string[] }
-        : {}),
-      ...(str('rollPrompt') ? { rollPrompt: str('rollPrompt') } : {}),
-      ...(typeof r.slackNotify === 'boolean' ? { slackNotify: r.slackNotify } : {}),
-      ...(typeof r.bypassPermissions === 'boolean' ? { bypassPermissions: r.bypassPermissions } : {})
-    }
+    // The note is read by the rule the Host's takeover shares (noteInfo.ts).
+    const info = sessionInfoFromNote(a)
+    if (!info) return null
     // An adopted pty is resumed rather than assumed to be flowing. pause() travels to the Host and
     // nothing there releases it when the app goes away, so an app that died inside a backpressure pause
     // left the child blocked on a full pipe — and the record built here says paused:false, which is what
