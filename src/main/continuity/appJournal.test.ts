@@ -190,6 +190,38 @@ describe('createAppJournal', () => {
     expect(calls.map((c) => c.cmd)).toEqual(['journal-reload'])
   })
 
+  // Final review I1: a setting changed while the socket is down sends a journal-reload that cannot arrive.
+  // Every greeting of a journal Host sends it again, so the Host follows the setting after the reconnect.
+  it('after a reconnect to a journal Host, it sends journal-reload again; to an older Host it sends nothing', async () => {
+    const box = { up: true }
+    const { j, calls, box: status } = make(JOURNAL_HOST, {
+      call: async (cmd, args) => {
+        if (!box.up) throw new Error('no connection to the Host')
+        calls.push({ cmd, args })
+        return { status: 200, body: { enabled: true, writer: true } }
+      }
+    })
+    box.up = false
+    status.status = { connected: false, features: [] }
+    j.settingsChanged()
+    await j.settled()
+    expect(calls).toEqual([])
+    box.up = true
+    status.status = JOURNAL_HOST
+    j.greeted()
+    await j.settled()
+    expect(calls.map((c) => c.cmd)).toEqual(['journal-reload'])
+    // Off, too: the Host must hear that it was turned off.
+    j.close()
+    j.greeted()
+    await j.settled()
+    expect(calls.map((c) => c.cmd)).toEqual(['journal-reload', 'journal-reload'])
+    const older = make(OLDER_HOST)
+    older.j.greeted()
+    await older.j.settled()
+    expect(older.calls).toEqual([])
+  })
+
   it('in front of an older Host, turning on writes the baseline here and asks the Host for nothing', async () => {
     const { j, calls } = make(OLDER_HOST)
     const working = stateFromLegacy({
@@ -244,6 +276,9 @@ describe('ipc.ts journals through appJournal only (Host journal Task 7)', () => 
     // the handles closed.
     const toggle = src.slice(src.indexOf("ipcMain.handle('settings.setJobContinuityEnabled'"))
     expect(toggle.slice(0, toggle.indexOf('return r'))).toMatch(/closeContinuity\(\)\s*appJournal\.settingsChanged\(\)/)
+    // Final review I1: every greeting of a Host, beside the mirror's refill.
+    const connect = src.slice(src.indexOf('hostClient.onConnect((h) => {'))
+    expect(connect.slice(0, connect.indexOf("if (means === 'first')"))).toMatch(/remirrorOrchState\?\.\(\)\s*appJournal\.greeted\(\)/)
     const strategy = src.slice(src.indexOf("ipcMain.handle('settings.setResumeStrategy'"))
     expect(strategy.slice(0, strategy.indexOf('ipcMain.handle(', 10))).toMatch(/appJournal\.settingsChanged\(\)/)
   })

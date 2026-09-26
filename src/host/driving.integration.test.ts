@@ -861,5 +861,8 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     expect(src).toMatch(/onPromptWrite:\s*\(e\)\s*=>\s*hostJournal\.promptWrite\(e, orch\.state\(\)\)/)
     expect(src).toMatch(/journal:\s*hostJournal/)
     expect(src).toMatch(/hostJournal\.close\(\)/)
+    // Final review I1: every app greeting re-reads the setting, with the state only once it is loaded.
+    const greeted = src.slice(src.indexOf('onAppGreeted: (send) => {'))
+    expect(greeted.slice(0, greeted.indexOf('},'))).toMatch(/void hostJournal\.appGreeted\(\(\) => \(orch\.loaded\(\) \? orch\.state\(\) : null\)\)/)
   })
 })

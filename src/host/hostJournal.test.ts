@@ -272,6 +272,53 @@ describe('createHostJournal', () => {
     })
   })
 
+  // Final review I1: a toggle changed while the app's socket was down sent a journal-reload nobody heard.
+  // The Host re-reads app-settings.json whenever an app greets it, so it follows the setting either way.
+  describe('an app greeting re-reads the setting', () => {
+    const noGit: HostJournalDeps['git'] = async () => ({ ok: false, stdout: '', stderr: 'no git in this test' })
+    const withOpen = (paused = false): OrchState =>
+      stateFromLegacy({
+        runs: [{ ...run, paused }],
+        tasks: [{ id: 'tsk_1', runId: 'run_1', title: 't', spec: 's', deps: [], status: 'dispatched', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }],
+        dispatches: [{ id: 'dsp_1', taskId: 'tsk_1', provider: 'claude', accountId: 'acc', sessionId: 'ses_1', cwd: dir, specPath: 's', startedAt: NOW, workerState: 'ready', retained: false }]
+      })
+    // The baseline's own checkpoint row is not what these tests are about.
+    const types = (): string[] => (existsSync(journalFile()) ? rows().map((e) => e.type).filter((t) => t !== 'CHECKPOINT_CREATED') : [])
+
+    it('turned on while no app was connected: the Host journals after the greeting, and off again stops it', async () => {
+      const { j } = make({ git: noGit })
+      await j.start()
+      j.committed({ prev: withOpen(), next: withOpen(true), version: 1, actor: cli })
+      expect(types()).toEqual([])
+      // The app turned Job Continuity on while its socket was down: its journal-reload was lost.
+      await settings({ jobContinuityEnabled: true })
+      await j.appGreeted(() => withOpen(true))
+      expect(types()).toEqual(['CONTINUITY_ENABLED'])
+      j.committed({ prev: withOpen(true), next: withOpen(), version: 2, actor: cli })
+      expect(types()).toEqual(['CONTINUITY_ENABLED', 'JOB_RUN_RESUMED'])
+      // And off, the same way.
+      await settings({ jobContinuityEnabled: false })
+      await j.appGreeted(() => withOpen())
+      j.committed({ prev: withOpen(), next: withOpen(true), version: 3, actor: cli })
+      expect(types()).toEqual(['CONTINUITY_ENABLED', 'JOB_RUN_RESUMED'])
+    })
+
+    it('a greeting before the Host holds any state owes the baseline, and the first write pays it', async () => {
+      const { j } = make({ git: noGit })
+      await j.start()
+      await settings({ jobContinuityEnabled: true })
+      // The same thunk index.ts hands in: null until the load, the state after it.
+      let loaded = false
+      await j.appGreeted(() => (loaded ? withOpen() : null))
+      loaded = true
+      j.committed({ prev: withOpen(), next: withOpen(true), version: 1, actor: cli })
+      expect(rows().filter((e) => e.type !== 'CHECKPOINT_CREATED').map((e) => [e.type, e.actor])).toEqual([
+        ['CONTINUITY_ENABLED', { surface: 'desktop' }],
+        ['JOB_RUN_PAUSED', cli]
+      ])
+    })
+  })
+
   // Review 4-5 M-1: two reloads that overlap must not both see journaling as off and both write the
   // baseline (the clock moves between them, so their keys differ and both would land).
   it('two overlapping reloads that turn journaling on write the baseline once', async () => {

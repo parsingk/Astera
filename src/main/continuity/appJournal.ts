@@ -57,6 +57,9 @@ export interface AppJournal {
   turnedOn(state: OrchState): Promise<void>
   /** A setting the Host reads changed (the toggle off, the resume strategy): `journal-reload` when the Host writes. */
   settingsChanged(): void
+  /** A Host was just greeted (final review I1): `journal-reload` when it writes the journal, on or off,
+   *  since a setting changed while the socket was down sent a reload that never arrived. */
+  greeted(): void
   /** Test seam: the `journal-append` queue drained. */
   settled(): Promise<void>
 }
@@ -242,6 +245,11 @@ export function createAppJournal(d: AppJournalDeps): AppJournal {
     },
     // Even while off: the Host reads the toggle only at start and on reload, so it must hear it go off.
     settingsChanged: () => {
+      if (hostWrites()) send('journal-reload', {})
+    },
+    // The Host also reads the settings at every greeting; both are cheap and idempotent, and either one
+    // alone closes the gap.
+    greeted: () => {
       if (hostWrites()) send('journal-reload', {})
     },
     settled: () => tail

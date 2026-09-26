@@ -508,9 +508,12 @@ async function main(): Promise<void> {
       },
       // S6 D4: a newly greeted app gets the Host's whole block registry once, after its hello. Limits L3:
       // and who drives, so its Jobs sidebar can say why a parked Host starts nothing. Each isolates itself.
+      // Final review I1: and the journal reads app-settings.json again, since a journal-reload the app sent
+      // while its socket was down never arrived. Never a load: before one, the state is null.
       onAppGreeted: (send) => {
         rollingWiring?.appGreeted(send)
         wiring?.appGreeted(send)
+        void hostJournal.appGreeted(() => (orch.loaded() ? orch.state() : null))
       },
       log
     })

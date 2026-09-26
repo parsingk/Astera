@@ -49,6 +49,11 @@ export interface HostJournal {
   append(ops: JournalOp[]): { status: number; body: unknown }
   /** journal-reload (P7). Never rejects. */
   reload(state: () => OrchState): Promise<{ enabled: boolean; writer: boolean }>
+  /** An app said hello (final review I1): app-settings.json is read again, exactly as a journal-reload
+   *  reads it, since a reload the app sent while its socket was down never arrived. `state` answers null
+   *  while this Host holds no state yet; a baseline turning on owes is then paid at the first write.
+   *  Never rejects. */
+  appGreeted(state: () => OrchState | null): Promise<void>
   /** J7: the rows the timeline shows, read through a JournalReader; [] when off. Never throws. */
   timeline(runId: string, state: OrchState): JobEvent[]
   close(): void
@@ -81,7 +86,7 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
    *  on while an attached app kept the journal, so neither side wrote CONTINUITY_ENABLED. Paid at the
    *  first write once this Host is the writer, unless the file got one since `since` (an older app that
    *  could still open the file wrote its own); dropped by a reload that turns journaling off. */
-  let owed: { since: string; state: () => OrchState } | null = null
+  let owed: { since: string; state: () => OrchState | null } | null = null
 
   const readSettings = async (): Promise<ContinuitySettingsRead> => {
     try {
@@ -132,15 +137,18 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
     }
   }
   /** Pays `owed` once: the moment this Host writes for the first time after the reload that owed it. */
-  const payOwed = (w: { journal: ContinuityJournal; recorder: ContinuityRecorder }, o: { since: string; state: () => OrchState }): void => {
-    owed = null
+  const payOwed = (w: { journal: ContinuityJournal; recorder: ContinuityRecorder }, o: { since: string; state: () => OrchState | null }): void => {
     try {
       const state = o.state()
+      // No state yet (a greeting before the load): still owed, and asked again at the next write.
+      if (!state) return
+      owed = null
       const already = state.runs.some((r) => w.journal.eventsFor(r.id).some((e) => e.type === 'CONTINUITY_ENABLED' && e.at >= o.since))
       if (already) return
       // The toggle was the app's (P7), whenever it lands.
       void w.recorder.enable(state, DESKTOP_ACTOR).catch((e) => d.log(`continuity: enable failed: ${String(e)}`))
     } catch (err) {
+      owed = null
       d.log(`continuity: the baseline owed since ${o.since} could not be written: ${String(err)}`)
     }
   }
@@ -184,7 +192,7 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
 
   /** The reload in progress, which the next one waits for. Never rejects. */
   let reloading: Promise<unknown> = Promise.resolve()
-  const reloadNow = async (state: () => OrchState): Promise<{ enabled: boolean; writer: boolean }> => {
+  const reloadNow = async (state: () => OrchState | null): Promise<{ enabled: boolean; writer: boolean }> => {
     const was = settings.enabled
     settings = await readSettings()
     if (!settings.enabled) {
@@ -193,10 +201,18 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
       return { enabled: false, writer: isWriter() }
     }
     const w = writing()
-    if (!was && w) await w.recorder.enable(state(), DESKTOP_ACTOR).catch((e) => d.log(`continuity: enable failed: ${String(e)}`))
-    // Turned on while an attached app keeps the journal: nobody writes the baseline now, so it is owed.
-    else if (!was && !w && !openFailed) owed = { since: d.now(), state }
+    const now = !was && w ? state() : null
+    if (now && w) await w.recorder.enable(now, DESKTOP_ACTOR).catch((e) => d.log(`continuity: enable failed: ${String(e)}`))
+    // Turned on while an attached app keeps the journal, or before this Host holds any state: nobody
+    // writes the baseline now, so it is owed.
+    else if (!was && !openFailed) owed = { since: d.now(), state }
     return { enabled: true, writer: w !== null }
+  }
+
+  const queueReload = (state: () => OrchState | null): Promise<{ enabled: boolean; writer: boolean }> => {
+    const run = reloading.then(() => reloadNow(state))
+    reloading = run.catch(() => {})
+    return run
   }
 
   /** journal-append (J3, P14), timed by its caller. */
@@ -267,10 +283,13 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
     append: (ops) => timed('journal-append', () => appendNow(ops)),
     // Review 4-5 M-1: one reload at a time. Two that overlapped would both read `was` as off before
     // either finished, and both write the baseline under keys a moving clock keeps apart.
-    reload: (state) => {
-      const run = reloading.then(() => reloadNow(state))
-      reloading = run.catch(() => {})
-      return run
+    reload: (state) => queueReload(state),
+    appGreeted: async (state) => {
+      try {
+        await queueReload(state)
+      } catch (err) {
+        d.log(`continuity: re-reading the settings at an app's greeting failed: ${String(err)}`)
+      }
     },
     timeline: (runId, state) => {
       if (!settings.enabled) return []

@@ -6616,7 +6616,12 @@ export function registerIpc(
       // what this app holds is stale in exactly the same way either way. `remirrorOrchState` is null
       // until `bootOrch` has filled the mirror itself, which is what keeps the first handshake from
       // asking twice.
+      //
+      // And the journal's settings, again (final review I1): a Job Continuity setting changed while the
+      // socket was down sent a journal-reload that never arrived, so every greeting of a journal Host
+      // sends one. Idempotent, and cheap.
       remirrorOrchState?.()
+      appJournal.greeted()
       // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this
       // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
       // that chain has already given up before a peer ever said hello — a handshake that outlasts its
